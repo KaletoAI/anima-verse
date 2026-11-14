@@ -5179,6 +5179,8 @@
     "nothing becomes due": "nichts wird fällig",
     "Saving runs nothing: Run all or the Build makes what is due.": "Speichern startet nichts: „Alles ausführen“ oder der Build erstellt, was fällig ist.",
     "Now due": "Jetzt fällig",
+    "Checking…": "Wird geprüft …",
+    "Checking against the current gate…": "Wird mit der aktuellen Prüfung geprüft …",
     "Added part reach": "Reichweite hinzugefügter Teile",
     "Outfit model": "Outfit-Modell",
     "3D": "3D",

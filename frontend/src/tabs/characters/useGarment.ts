@@ -1,5 +1,6 @@
 /**
- * useGarment — one garment info route, polled while a garment run goes:
+ * useGarment — one garment info route, polled while a garment run goes (and, Ruling A46b, while accepted
+ * images are re-gated under the current gate version):
  * the hair row's `GET /characters/{name}/hair` or the Wardrobe's
  * `GET /characters/{name}/garments/{item}` (`app/routes/characters.py` →
  * `garments.garment_info` under the payload's `garment`). Same poll pattern
@@ -235,6 +236,9 @@ export interface PieceViewInfo extends Partial<PieceViewOption> {
   options?: Record<PieceViewChoice, PieceViewOption>
   /** The view is not made (an empty drafted back). */
   skipped?: boolean
+  /** Ruling A46b: its accepted image is being re-gated under the current gate version — the source shown is the
+   *  stored verdict's until the next poll ("Checking…"). */
+  checking?: boolean
 }
 
 export interface GarmentInfo {
@@ -281,6 +285,9 @@ export interface GarmentInfo {
   preview_freshness?: Freshness | null
   /** Ruling A46: where each piece-only view comes from; null/absent for a piece without the choice. */
   piece_views?: Partial<Record<GarmentView, PieceViewInfo>> | null
+  /** Ruling A46b: accepted images gated under an older gate version, being re-gated in the background now
+   *  (`garments.regate_shown`); the panel polls until it is empty. */
+  regate_checking?: Array<{ step: string; view: GarmentView }>
 }
 
 /** The run state every garment panel carries (clothing, hair and footwear alike): what the run
@@ -658,6 +665,9 @@ export interface GarmentItemInfo {
 /** A step runs or the item waits in the character's garment queue
  *  (`running_step` is `queued` from the click until its first step). */
 export const garmentRunning = (d: { garment?: GarmentInfo | null } | null | undefined) => !!d?.garment?.running_step
+/** Ruling A46b: accepted images are being re-gated under the current gate version (the poll goes on). */
+export const garmentChecking = (d: { garment?: GarmentInfo | null } | null | undefined) =>
+  !!d?.garment?.regate_checking?.length
 
 export function useGarment<T extends { garment?: GarmentInfo | null }>(url: string | null) {
   const [info, setInfo] = useState<T | null>(null)
@@ -686,7 +696,7 @@ export function useGarment<T extends { garment?: GarmentInfo | null }>(url: stri
         }
         if (pollIdRef.current !== id) return
         setInfo(d)
-        if (!garmentRunning(d)) return
+        if (!garmentRunning(d) && !garmentChecking(d)) return
         n += 1
         timerRef.current = setTimeout(tick, n >= POLL_SLOW_AFTER ? POLL_SLOW_MS : POLL_MS)
       }

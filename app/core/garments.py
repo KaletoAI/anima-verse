@@ -28,7 +28,9 @@ downstream); one that was served from the cache does not.
   accepted images of the kind's ``REGATE_ACCEPTED_STEPS`` are re-gated from
   their files when their record predates the gate (``_regate_accepted``);
   one the current gate refuses is stale (``garment_images.stale_accepted``),
-  never done and rendered again. The kind's ``front_hints`` give the
+  never done and rendered again. Ruling A46b: the garment payload re-gates
+  them as well, once and in the background (``regate_shown``), so the
+  Wardrobe and Auto follow the current verdict before any run. The kind's ``front_hints`` give the
   front edit what the back shows (clothing: nothing);
 - every image step checks after each view that the run's inputs (base views,
   the kind's description: ``garment_fsig``) did not change meanwhile — a base view
@@ -429,6 +431,114 @@ def _regate_accepted(character_name: str, item_id: str, kind: str, fsig: str, st
             except Exception as e:  # noqa: BLE001 — the step itself reports a missing input
                 logger.warning("Garment %s/%s: re-gating the accepted %s %s failed: %s", character_name, item_id,
                                step, v, e)
+
+
+# --- Ruling A46b: an accepted image gated under an older version is re-gated when it is shown ---------------
+#
+# A gate version change (A46: 6 -> 7, added parts) used to reach an accepted image only when a run started
+# (``_regate_accepted``), so the Wardrobe showed the old verdict meanwhile — and Auto, which follows the
+# verdict (``garment_from_worn.resolve``), kept naming the generated view of a view the current gate refuses.
+# Now the garment payload (``garment_info``) asks ``regate_shown``: an accepted image of the kind's
+# ``REGATE_ACCEPTED_STEPS`` whose record predates the gate is gated again ONCE, on a background thread — a
+# re-gate is CPU image work (Glut's scale top, 2026-11-14, copies: 0.40-0.68 s per view with the cached masks,
+# 25-35 s with a cold mask cache), too slow for a GET. The new record carries the current ``gate_version``,
+# so it is never judged again; the payload names the views in ``regate_checking`` (the UI: "Checking…") until
+# it is written. Nothing is rendered and no image changes: a record the hem snap would correct is left for the
+# next run (``regate_accepted(snap=False)``), and so is any view while a run of the item holds its lock (the
+# run re-gates it first).
+_regate_lock = threading.Lock()
+# (character, item, fsig) whose re-gate is queued or running.
+_regate_pending: set = set()
+# (character, item, fsig, step, view) -> the sidecar stamp a re-gate left unchanged (a hem snap left for the
+# run, a missing input, a failure): not asked again until the sidecar changes or the server restarts.
+_regate_left: Dict[Tuple[str, str, str, str, str], Tuple[int, int]] = {}
+_regate_worker = None
+
+
+def _sidecar_stamp(path: Path) -> Tuple[int, int]:
+    try:
+        st = path.with_suffix(".json").stat()
+        return st.st_mtime_ns, st.st_size
+    except OSError:
+        return 0, 0
+
+
+def _regate_wanted(character_name: str, item_id: str, kind: str, fsig: str) -> List[Tuple[str, str]]:
+    """``[(step, view)]`` whose accepted image ``regate_shown`` would gate again (``garment_images.regate_due``,
+    minus the ones a re-gate left unchanged at the same sidecar). Sidecar reads only."""
+    from app.core import garment_images
+    from app.core.garment_store import GARMENT_VIEWS
+    out: List[Tuple[str, str]] = []
+    for step in getattr(_kind_module(kind), "REGATE_ACCEPTED_STEPS", ()) or ():
+        for view in GARMENT_VIEWS:
+            if not garment_images.regate_due(character_name, item_id, fsig, step, view):
+                continue
+            stamp = _sidecar_stamp(_image(character_name, item_id, fsig, step, view))
+            with _regate_lock:
+                if _regate_left.get((character_name, item_id, fsig, step, view)) == stamp:
+                    continue
+            out.append((step, view))
+    return out
+
+
+def _regate_shown_task(character_name: str, item_id: str, kind: str, fsig: str) -> None:
+    """The background half of ``regate_shown``: under the item's run lock (taken without waiting — a run that
+    holds it re-gates on its own), for the image group that is still the item's current one."""
+    from app.core import garment_images
+    from app.core.garment_store import garment_fsig, run_item_lock
+    key = (character_name, item_id, fsig)
+    lock = run_item_lock(character_name, item_id)
+    try:
+        if not lock.acquire(blocking=False):
+            return
+        try:
+            try:
+                current = garment_fsig(character_name, item_id)
+            except ValueError:
+                current = None
+            if current != fsig:
+                return
+            for step, view in _regate_wanted(character_name, item_id, kind, fsig):
+                final = _image(character_name, item_id, fsig, step, view)
+                try:
+                    record = garment_images.regate_accepted(character_name, item_id, fsig, step, view, snap=False)
+                except Exception as e:  # noqa: BLE001 — shown as it was; the next run re-gates and reports
+                    logger.warning("Garment %s/%s: re-gating the shown %s %s failed: %s", character_name, item_id,
+                                   step, view, e)
+                    record = None
+                if record is None:
+                    with _regate_lock:
+                        _regate_left[(character_name, item_id, fsig, step, view)] = _sidecar_stamp(final)
+        finally:
+            lock.release()
+    finally:
+        with _regate_lock:
+            _regate_pending.discard(key)
+
+
+def regate_shown(character_name: str, item_id: str, kind: str, fsig: Optional[str]) -> List[Dict[str, str]]:
+    """Ruling A46b (the block above): the accepted images of the item whose gate record predates the gate,
+    queued for one re-gate on the background worker; returns them as ``[{step, view}]`` — the payload's
+    ``regate_checking`` ([] when none is due). Called by every garment payload; cheap when nothing is due."""
+    if not fsig or not getattr(_kind_module(kind), "REGATE_ACCEPTED_STEPS", None):
+        return []
+    try:
+        wanted = _regate_wanted(character_name, item_id, kind, fsig)
+    except Exception:  # noqa: BLE001 — the payload still shows the stored records
+        logger.exception("Garment %s/%s: reading the records to re-gate failed", character_name, item_id)
+        return []
+    if not wanted:
+        return []
+    key = (character_name, item_id, fsig)
+    with _regate_lock:
+        if key not in _regate_pending:
+            global _regate_worker
+            if _regate_worker is None:
+                from concurrent.futures import ThreadPoolExecutor
+                _regate_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="garment-regate")
+            _regate_pending.add(key)
+            _regate_worker.submit(_regate_shown_task, character_name, item_id, kind, fsig)
+    return [{"step": step, "view": view} for step, view in wanted]
 
 
 def _front_hints(character_name: str, item_id: str, fsig: str, kind: str, step: str,
@@ -4296,15 +4406,18 @@ def _piece_view_due(view: str, source: str, made: Optional[str]) -> List[Dict[st
 
 
 def piece_views_info(character_name: str, item_id: str, fsig: str,
-                     item: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Dict[str, Any]]]:
+                     item: Optional[Dict[str, Any]] = None, *,
+                     checking: Optional[List[Dict[str, str]]] = None) -> Optional[Dict[str, Dict[str, Any]]]:
     """Ruling A46, the Wardrobe's "Piece-only views from" per view: ``{view: {choice, source, reason, auto,
     made_from, due, options}}`` — ``choice`` the setting (auto / generated / worn), ``source`` what the view
     is made from now and ``why`` / ``detail`` / ``reason`` why (``garment_from_worn.resolve``), ``made_from`` the
     source of the accepted piece-only image (None without one), ``due`` what is due because they differ
     (``_piece_view_due``: ``[{step, view?, jobs}]``), ``options`` the same for every choice
     (``{choice: {source, why, detail, reason, due}}`` — what a change would make due, before it is saved); ``skipped`` for
-    a view that is not made (an empty drafted back). None for a kind without the choice. Read from the files
-    and the item only."""
+    a view that is not made (an empty drafted back); ``checking`` True while its accepted image is re-gated under
+    the current gate version (Ruling A46b, ``regate_shown`` — asked here unless the caller passes ``checking``):
+    the source shown is the stored verdict's until then. None for a kind without the choice. Read from the
+    files and the item only."""
     from app.core import garment_from_worn as fw
     from app.core import garment_images
     from app.core.garment_store import GARMENT_VIEWS, read_record
@@ -4312,6 +4425,9 @@ def piece_views_info(character_name: str, item_id: str, fsig: str,
     if getattr(_kind_module(garment_images._item_kind(item_id)), "FROM_WORN_STEP", None) != fw.STEP:
         return None
     item = item if item is not None else (get_item(item_id) or {})
+    if checking is None:
+        checking = regate_shown(character_name, item_id, garment_images._item_kind(item_id), fsig)
+    checked = {c["view"] for c in checking if c.get("step") == fw.STEP}
     out: Dict[str, Dict[str, Any]] = {}
     for view in GARMENT_VIEWS:
         skipped = garment_images.skipped_view(character_name, item_id, fsig, fw.STEP, view)
@@ -4333,7 +4449,7 @@ def piece_views_info(character_name: str, item_id: str, fsig: str,
                                "reason": r["reason"], "due": _piece_view_due(view, r["source"], made)}
         now = fw.resolve(character_name, item_id, fsig, view, item=item)
         out[view] = {**now, "made_from": made, "due": _piece_view_due(view, now["source"], made),
-                     "options": options}
+                     "options": options, "checking": view in checked}
     return out
 
 
@@ -4395,6 +4511,8 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     hsig = gs.garment_hsig(character_name, item_id, profile=profile) if fsig and method == gs.HAIRDECK else None
     ssig = gs.garment_ssig(character_name, item_id, profile=profile) if fsig and method == gs.HAAR else None
     base = base_body.current_base(character_name, profile=profile) or ("", "")
+    # Ruling A46b: accepted images gated under an older version are re-gated in the background (once).
+    checking = regate_shown(character_name, item_id, kind, fsig) if fsig and method == gs.EDIT_CHAIN else []
     steps: Dict[str, Any] = {}
     if fsig:
         for step in gs.steps_for(kind, method):
@@ -4506,8 +4624,10 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
         "preview_built_at": model_overview.built_at(preview) if preview_url else None,
         "served_fsig": served_fsig, "refit": refit,
         # Ruling A46: where each piece-only view comes from (the setting, the reason, what is due).
-        "piece_views": (piece_views_info(character_name, item_id, fsig, _item_)
+        "piece_views": (piece_views_info(character_name, item_id, fsig, _item_, checking=checking)
                         if fsig and method == gs.EDIT_CHAIN and kind == _clothing() else None),
+        # Ruling A46b: the accepted images being re-gated under the current gate version now ([{step, view}]).
+        "regate_checking": checking,
         "body": body, "body_id": body["body_id"] if body else None})
 
 def hair_summary(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:

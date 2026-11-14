@@ -233,6 +233,9 @@ const NEED_TEXT: Record<ViewNeed, string> = {
   pair: 'The front takes its length from the back.',
 }
 
+/** Ruling A46b: an accepted image gated under an older gate version, being re-gated in the background. */
+const CHECKING_TEXT = 'Checking against the current gate…'
+
 function dueJobs(due: PieceViewDue[]): number {
   return due.reduce((n, d) => n + d.jobs, 0)
 }
@@ -248,9 +251,13 @@ function PieceViewSourcePicker({ info, label, disabled, onSet }: {
   const { t } = useI18n()
   const options = info.options
   if (!options) return null
+  // Ruling A46b: while the accepted image is re-gated under the current gate version, Auto names no source yet.
+  const checking = !!info.checking
   const text = (choice: PieceViewChoice) => {
     const o = options[choice]
-    const name = choice === 'auto' ? `${t('Auto')} (→ ${t(PIECE_VIEW_SOURCE[o.source])})` : t(PIECE_VIEW_SOURCE[choice])
+    const name = choice === 'auto'
+      ? `${t('Auto')} (→ ${checking ? t('Checking…') : t(PIECE_VIEW_SOURCE[o.source])})`
+      : t(PIECE_VIEW_SOURCE[choice])
     if (choice === info.choice || !o.due.length) return name
     return `${name} · ${t('then {n}').replace('{n}', upToText(dueJobs(o.due), t))} + ${t('fit')}`
   }
@@ -258,7 +265,7 @@ function PieceViewSourcePicker({ info, label, disabled, onSet }: {
   const due = info.due || []
   const title = [
     `${t('Piece-only views from')} · ${label}`,
-    reason,
+    checking ? t(CHECKING_TEXT) : reason,
     ...(['auto', 'generated', 'worn'] as PieceViewChoice[]).map((c) => {
       const o = options[c]
       return `${text(c)}${o.due.length ? ` — ${t('makes due')}: ${pieceViewDueText(o.due, t)}` : ` — ${t('nothing becomes due')}`}`
@@ -278,7 +285,9 @@ function PieceViewSourcePicker({ info, label, disabled, onSet }: {
           ))}
         </select>
       </label>
-      {due.length ? (
+      {checking ? (
+        <div className="ga-hint" style={{ fontSize: '0.7em' }}>{t(CHECKING_TEXT)}</div>
+      ) : due.length ? (
         <div className="ga-hint" style={{ fontSize: '0.7em', color: 'var(--warning, #d29922)' }} title={reason}>
           {t('Now due')}: {pieceViewDueText(due, t)}
         </div>
@@ -371,15 +380,18 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
       ? 'var(--accent, #6aa9ff)' : null
     // Ruling A46: where a piece-only view comes from, and why — in the cell's light.
     const pieceView = step === 'ghost' && !img?.skipped ? garment?.piece_views?.[view] : undefined
+    // Ruling A46b: re-gated under the current gate version now — the stored verdict's source and reason wait.
+    const checking = !!garment?.regate_checking?.some((c) => c.step === step && c.view === view)
     const sourceLines = pieceView?.why ? [
       pieceView.made_from ? t(PIECE_VIEW_MADE[pieceView.made_from]) : '',
-      pieceView.made_from && pieceView.source && pieceView.source !== pieceView.made_from
+      !checking && pieceView.made_from && pieceView.source && pieceView.source !== pieceView.made_from
         ? t('Due: made again from {source}').replace('{source}', t(PIECE_VIEW_FROM[pieceView.source])) : '',
-      pieceViewReason(pieceView as PieceViewOption, t),
+      checking ? '' : pieceViewReason(pieceView as PieceViewOption, t),
     ].filter(Boolean) : []
     const stateLines = [
       label,
       img?.url ? (img.accepted ? t('Accepted') : t('Not accepted')) : img?.skipped ? t('Not made: nothing of the piece shows from behind') : t('No render yet'),
+      checking ? t(CHECKING_TEXT) : '',
       ...sourceLines,
       img?.empty ? t('Nothing of the piece shows from behind — the base back unchanged') : '',
       img?.created_at ? formatDateTime(img.created_at, clockSettings()) : '',

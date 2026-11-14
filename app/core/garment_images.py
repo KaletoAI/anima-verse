@@ -948,8 +948,49 @@ def _stale_keys(kind, step: str) -> Tuple[str, ...]:
     return tuple((getattr(kind, "REGATE_ACCEPTED_STEPS", None) or {}).get(step) or ())
 
 
+def _regate_target(character_name: str, item_id: str, fsig: str, step: str, view: str):
+    """``(kind, final, sidecar, ordinal, old record)`` of the accepted image of ``view`` that
+    ``regate_accepted`` would gate again — None when nothing is due (the kind does not re-gate the step, an
+    edit of the base view, not accepted, the closed state's back, taken by the user, made from the worn view,
+    a current record). Reads the sidecar only."""
+    from app.core.garment_store import garment_path, read_record
+    kind = _kind_module(item_id)
+    if not _stale_keys(kind, step) or step not in kind.EDIT_STEPS:
+        return None
+    if kind.EDIT_STEPS[step]["source"] == "base":
+        return None  # an edit of the base view: nothing to regate against here
+    final = garment_path(character_name, item_id, fsig, "image", step=step, view=view)
+    if not _accepted(final):
+        return None
+    sidecar = read_record(final.with_suffix(".json"))
+    if isinstance(sidecar.get("copied_from"), dict):
+        return None  # the closed state's back: re-gated by the closed group's run
+    if isinstance(sidecar.get("user_accepted"), dict):
+        return None  # Ruling A37: taken by the user against its gate — never judged again
+    if sidecar.get("source") == "worn_minus_base":
+        return None  # Ruling A46: made from the worn view — the same image again on every run, never judged again
+    try:
+        ordinal = _ORDINALS[int(sidecar.get("attempt") or 1) - 1]
+    except (IndexError, TypeError, ValueError):
+        return None
+    old = (sidecar.get("gates") or {}).get(ordinal)
+    if not isinstance(old, dict) or old.get("empty") or not _stale_gate(kind, step, old):
+        return None
+    return kind, final, sidecar, ordinal, old
+
+
+def regate_due(character_name: str, item_id: str, fsig: str, step: str, view: str) -> bool:
+    """Ruling A46b: whether the accepted image of ``view`` of ``step`` carries a gate record older than the
+    step's gate version that ``regate_accepted`` would judge again (``_regate_target``). Reads the sidecar
+    only — cheap enough for every poll of the Wardrobe."""
+    try:
+        return _regate_target(character_name, item_id, fsig, step, view) is not None
+    except ValueError:
+        return False
+
+
 def regate_accepted(character_name: str, item_id: str, fsig: str, step: str, view: str, *,
-                    state: Optional[str] = None) -> Optional[Dict[str, Any]]:
+                    state: Optional[str] = None, snap: bool = True) -> Optional[Dict[str, Any]]:
     """Ruling A17 (d): gate the ACCEPTED image of ``view`` again when its
     gate record predates the step's gate version (``_stale_gate``) and the
     kind names the step in ``REGATE_ACCEPTED_STEPS`` (clothing ``ghost``).
@@ -966,35 +1007,20 @@ def regate_accepted(character_name: str, item_id: str, fsig: str, step: str, vie
     Returns the new record, None when
     nothing was due (not accepted, a copy of the closed state's back, a
     current record, no accepted source). Reads files and masks only: never
-    renders. ``state``: the run's open / closed state (``run_edit_step``)."""
+    renders. ``state``: the run's open / closed state (``run_edit_step``).
+    ``snap`` False (Ruling A46b, the re-gate when the Wardrobe shows the piece): a record the hem snap would
+    correct is left as it is — None, nothing written — so only a run ever rewrites an image or drops its later
+    images."""
     from app.core import base_body
-    from app.core.garment_store import garment_path, read_record, write_record
+    from app.core.garment_store import garment_path, write_record
     from app.core.model_refs import find_ref_image, get_model_refs_dir
     from app.models.character import get_character_profile
-    kind = _kind_module(item_id)
-    if not _stale_keys(kind, step) or step not in kind.EDIT_STEPS:
+    target = _regate_target(character_name, item_id, fsig, step, view)
+    if target is None:
         return None
-    final = garment_path(character_name, item_id, fsig, "image", step=step, view=view)
-    if not _accepted(final):
-        return None
-    sidecar = read_record(final.with_suffix(".json"))
-    if isinstance(sidecar.get("copied_from"), dict):
-        return None  # the closed state's back: re-gated by the closed group's run
-    if isinstance(sidecar.get("user_accepted"), dict):
-        return None  # Ruling A37: taken by the user against its gate — never judged again
-    if sidecar.get("source") == "worn_minus_base":
-        return None  # Ruling A46: made from the worn view — the same image again on every run, never judged again
-    try:
-        ordinal = _ORDINALS[int(sidecar.get("attempt") or 1) - 1]
-    except (IndexError, TypeError, ValueError):
-        return None
+    kind, final, sidecar, ordinal, old = target
     gates = sidecar.get("gates") or {}
-    old = gates.get(ordinal)
-    if not isinstance(old, dict) or old.get("empty") or not _stale_gate(kind, step, old):
-        return None
     source_step = kind.EDIT_STEPS[step]["source"]
-    if source_step == "base":
-        return None  # an edit of the base view: nothing to regate against here
     source = garment_path(character_name, item_id, fsig, "image", step=source_step, view=view)
     if not _accepted(source):
         return None
@@ -1013,6 +1039,13 @@ def regate_accepted(character_name: str, item_id: str, fsig: str, step: str, vie
     mask = _mask(final, base_size)
     record = kind.gate(step, view, edit_rgb=_rgb(final, base_size), edit_mask=mask, **gate_args)
     record.update({k: old[k] for k in ("registration", "reg_shift", "reg_scale", "registered") if k in old})
+    snap_of = getattr(kind, "hem_snap", None)
+    if (not snap and snap_of is not None and position is not None
+            and snap_of(step, view, record, ghost_mask=mask, region=position,
+                        base_mask=gate_args["base_mask"]) is not None):
+        logger.info("Garment %s %s %s (accepted): the current gate would snap its hem — left for the next run",
+                    character_name, step, view)
+        return None
     # Ruling A27: refused by its hem alone -> the final itself snapped (no raw sibling beside a final); its
     # later images were made from the file as it was and go.
     record = _snap_hem(kind, step, view, final, base_size, gate_args, position, mask, record, None, keep_raw=False)

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Ruling A46 — a piece-only view from the worn view minus the body, the "Piece-only views from" setting
 and the ghost gate's added parts (app/core/garment_from_worn.py, garment_gates.added_parts,
-garments.run_estimate / piece_views_info).
+garments.run_estimate / piece_views_info); Ruling A46b — an accepted ghost gated under an older version is
+re-gated when the piece is shown (garments.regate_shown, garment_images.regate_due).
 
 Usage:
     ./.venv/bin/python scripts/smoke_piece_from_worn.py
@@ -62,6 +63,30 @@ G = 120 + (y - 100) // 100, B = 90. The worn view = the base with a BAND x 120..
 [6] Fails on the old code (efcb9e4a9793dc23a5693528959e957a56abaeb0): ``app/core/garment_from_worn.py``
     does not exist there, and its ``ghost_clothing_gate`` passes the strap of [4] (ok True, no
     ``added_reach``).
+[7] Ruling A46b — an accepted ghost gated under an OLDER version is re-gated when the piece is shown
+    (``garments.regate_shown``, asked by ``garment_info`` / ``piece_views_info``). The character's base views
+    (front and back) are the base of [1]; a close-fitting "Strap top" (slot underwear_top) has its worn front
+    (the base with the band, accepted) and as its accepted ghost front the band plus the strap of [4] on grey
+    (``garment_images.run_rembg`` stubbed: every pixel more than 2 away from the grey is the figure), stamped
+    ``gate_version`` 6, ok — as stored before A46. The masks are the base's skin rectangle, the worn view's the
+    same, the ghost's band + strap; the garment region of base and worn view is the band (every band pixel is
+    more than 20 from the skin). So the current gate measures what [4] measured: the strap reaches
+    100 / 1399 = 0.0715 Hb past it, thickness 0.0026 -> refused, ``added_refused``.
+    - Before: ``regate_due`` True; Auto reads the stored v6 record -> ("generated", "passes"), nothing due.
+    - Shown while the background worker is busy (a blocker queued first): ``regate_shown`` names
+      [ghost front] and queues ONE task (a second call while it is pending queues none); ``piece_views_info``
+      front ``checking`` True, the back (no accepted ghost) False.
+    - After the worker: the sidecar's record is version 7, ``regated_from`` 6, ok False, ``added_refused``,
+      reach 0.0715; the gate ran once (1 call); the file is unchanged (same bytes) and still accepted.
+    - Auto now: ("worn", "added", "0.0715"), made from generated -> due [ghost front 0, cutout front 1, mesh 1,
+      fit 0]; ``checking`` False.
+    - A second read: ``regate_due`` False, ``regate_shown`` [], no task, the gate still called once; the
+      garment payload (``garment_info``) has ``regate_checking`` [], the front from the worn view, its ghost
+      front's record ``added_refused``.
+    - Fails on the old code (ff9cbd7aea2e2b94b4a0f35e6c87ae13afa82d7a, A46): its ``garments.py`` has no
+      ``regate_shown`` and its ``garment_info`` / ``piece_views_info`` re-gate nothing, its ``garment_images.py`` no
+      ``regate_due`` — the payload kept the stored v6 verdict, which Auto reads as ("generated", "passes")
+      (the "Before" check above) until a run.
 """
 import importlib.util
 import json
@@ -78,6 +103,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 OLD = "efcb9e4a9793dc23a5693528959e957a56abaeb0"
+OLD_A46 = "ff9cbd7aea2e2b94b4a0f35e6c87ae13afa82d7a"
 FAILS = []
 W, H = 400, 1536
 GREY = 128
@@ -334,6 +360,129 @@ def world_parts():
     check("back Auto: nothing due", est(), (["fit"], 0, "no hub job"))
 
 
+def png_bytes(arr) -> bytes:
+    import io
+    from PIL import Image
+    out = io.BytesIO()
+    Image.fromarray(arr).save(out, format="PNG")
+    return out.getvalue()
+
+
+def rembg_stub(data, model="u2net", **kwargs):
+    """Every pixel more than 2 away from the grey is the figure (no model)."""
+    import io
+    from PIL import Image
+    with Image.open(io.BytesIO(data)) as im:
+        rgb = np.asarray(im.convert("RGB")).astype(np.int16)
+    mask = ((np.abs(rgb - GREY) > 2).any(2) * 255).astype(np.uint8)
+    return png_bytes(mask) if kwargs.get("only_mask") else png_bytes(np.dstack([rgb.astype(np.uint8), mask]))
+
+
+def regate_part():
+    import ast
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from app.core import base_body, garment_clothing, garment_from_worn as fw, garment_images, garments
+    from app.core import garment_store as gs
+    from app.models import character as charmod
+    from app.models import inventory
+    from app.models.character import get_character_dir
+    print("[7] an accepted ghost gated under an older version is re-gated when shown (A46b)")
+    charmod.run_rembg = rembg_stub
+    base, _figure = base_view()
+    refs = get_character_dir("Demo") / "model_refs"
+    refs.mkdir(parents=True, exist_ok=True)
+    bsig = base_body.base_signature("Demo")
+    for v in base_body.BASE_VIEWS:
+        stem = f"tpose_{bsig}" if v == "front" else f"tpose_{v}_{bsig}"
+        (refs / f"{stem}.png").write_bytes(png_bytes(base))
+        (refs / f"{stem}.json").write_text(json.dumps({"base_signature": bsig}))
+    iid = inventory.add_item(name="Strap top", category="outfit_piece", prompt_fragment="a blue band top",
+                             outfit_piece={"slots": ["underwear_top"], "outfit_types": ["casual"],
+                                           "mesh_mode": "own_mesh"})["id"]
+    check("inventory Strap top", inventory.add_to_inventory("Demo", iid), True)
+    check("equip Strap top", inventory.equip_piece("Demo", iid, source="smoke")["status"], "ok")
+    fsig = gs.garment_fsig("Demo", iid)
+    _b, _f, _region, ghost, _ghost_m, worn = gate_inputs(ghost_extra=strap(500))
+    for step, arr in (("worn", worn), ("ghost", ghost)):
+        path = gs.garment_path("Demo", iid, fsig, "image", step=step, view="front")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(png_bytes(arr))
+        gs.write_record(path.with_suffix(".json"), {
+            "accepted": True, "attempt": 1, "created_at": "2026-11-14T10:00:00+00:00",
+            "gates": {"first": {"view": "front", "ok": True, "reasons": [], "gate_version": 6, "attempt": 1}}})
+    final = gs.garment_path("Demo", iid, fsig, "image", step="ghost", view="front")
+    stored = final.read_bytes()
+
+    calls = []
+    real_gate = garment_clothing.gate
+
+    def counted(*a, **k):
+        calls.append(a[:2])
+        return real_gate(*a, **k)
+
+    garment_clothing.gate = counted
+
+    def brief(view="front"):
+        r = fw.resolve("Demo", iid, fsig, view)
+        return (r["source"], r["why"], r["detail"])
+
+    check("before: due, Auto reads the stored v6 record",
+          (garment_images.regate_due("Demo", iid, fsig, "ghost", "front"), brief(),
+           garments.piece_views_info("Demo", iid, fsig, checking=[])["front"]["due"]),
+          (True, ("generated", "passes", ""), []))
+
+    gate_open = threading.Event()
+    garments._regate_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="smoke-regate")
+    garments._regate_worker.submit(gate_open.wait, 30)
+    first = garments.regate_shown("Demo", iid, "clothing", fsig)
+    again = garments.regate_shown("Demo", iid, "clothing", fsig)
+    info = garments.piece_views_info("Demo", iid, fsig)
+    check("shown: [ghost front] named, one task queued, front checking",
+          (first, again, garments._regate_worker._work_queue.qsize(), info["front"]["checking"],
+           info["back"].get("checking")),
+          ([{"step": "ghost", "view": "front"}], [{"step": "ghost", "view": "front"}], 1, True, False))
+    gate_open.set()
+    garments._regate_worker.submit(lambda: None).result(timeout=60)
+    record = gs.read_record(final.with_suffix(".json"))
+    g = record["gates"]["first"]
+    check("re-gated: version 7 from 6, refused for the strap",
+          (g.get("gate_version"), g.get("regated_from"), g.get("ok"), g.get("added_refused"), g.get("added_reach")),
+          (7, 6, False, True, round(100 / 1399, 4)))
+    check("the gate ran once; the file unchanged and still accepted",
+          (len(calls), final.read_bytes() == stored, record.get("accepted")), (1, True, True))
+    info = garments.piece_views_info("Demo", iid, fsig)
+    front = info["front"]
+    check("Auto now: from the worn view, the added part",
+          (front["source"], front["why"], front["detail"], front["made_from"], front["checking"]),
+          ("worn", "added", str(round(100 / 1399, 4)), "generated", False))
+    check("due: the view from the worn view, its cut-out, the mesh, the fit",
+          front["due"], [{"step": "ghost", "view": "front", "jobs": 0}, {"step": "cutout", "view": "front", "jobs": 1},
+                         {"step": "mesh", "jobs": 1}, {"step": "fit", "jobs": 0}])
+    check("a second read re-gates nothing",
+          (garment_images.regate_due("Demo", iid, fsig, "ghost", "front"),
+           garments.regate_shown("Demo", iid, "clothing", fsig), garments._regate_worker._work_queue.qsize(),
+           len(calls)), (False, [], 0, 1))
+    payload = garments.garment_info("Demo", iid)
+    check("the garment payload: nothing checking, Auto from the worn view, the ghost front refused",
+          (payload["regate_checking"], payload["piece_views"]["front"]["source"],
+           (payload["steps"]["ghost"]["front"].get("gates") or {}).get("first", {}).get("added_refused"), len(calls)),
+          ([], "worn", True, 1))
+    garment_clothing.gate = real_gate
+
+    print("  fails on the old code (" + OLD_A46[:9] + ")")
+    old_garments = subprocess.run(["git", "-C", str(ROOT), "show", f"{OLD_A46}:app/core/garments.py"],
+                                  capture_output=True, text=True, check=True).stdout
+    old_images = subprocess.run(["git", "-C", str(ROOT), "show", f"{OLD_A46}:app/core/garment_images.py"],
+                                capture_output=True, text=True, check=True).stdout
+    tree = ast.parse(old_garments)
+    bodies = {n.name: ast.get_source_segment(old_garments, n) for n in tree.body if isinstance(n, ast.FunctionDef)}
+    check("old: no regate_shown / regate_due; garment_info and piece_views_info re-gate nothing",
+          ("regate_shown" in bodies, "def regate_due" in old_images,
+           "regate" in bodies["garment_info"], "regate" in bodies["piece_views_info"]),
+          (False, False, False, False))
+
+
 def main() -> int:
     scratch = setup()
     try:
@@ -341,6 +490,7 @@ def main() -> int:
         part_gate()
         part_old_code()
         world_parts()
+        regate_part()
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     print("\nFAILED: " + ", ".join(FAILS) if FAILS else "\nall passed")
