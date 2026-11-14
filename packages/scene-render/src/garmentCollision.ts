@@ -69,6 +69,11 @@
  * original materials and hooks back and frees exactly those clones (never a
  * shared template material, never a texture).
  *
+ * EXCLUSION. `excludeMesh(mesh, true)` takes one patched mesh out of the
+ * push for a while (its original materials back, no uniform update) and
+ * `false` puts the same patched clones back — the strand hair, whose sim
+ * collides by itself (strand-hair spec § 6.2.2).
+ *
  * INERT. No collision payload, no capsule bound, or no skinned garment mesh
  * → `createGarmentCollision` returns null: nothing patched, no hook, no
  * per-frame work.
@@ -383,6 +388,14 @@ export interface GarmentCollision {
   readonly entries: readonly GarmentCollisionEntry[]
   /** Recompute from the CURRENT matrices now (the render hooks do this by themselves once per frame). */
   update(): void
+  /**
+   * Leave one patched mesh out of the push (`on`) or put it back: excluded, it wears its ORIGINAL material and depth
+   * materials again (the template's, unpatched) and its hooks skip the uniform update; back in, it wears this
+   * handle's patched clones again (kept, not rebuilt). A mesh this handle did not patch is ignored. The strand hair
+   * (`hairSim.ts`) uses it — its sim collides itself, and the push's bind rule assumes the static bind mesh
+   * (strand-hair spec § 6.2.2).
+   */
+  excludeMesh(mesh: SkinnedMesh, on: boolean): void
   /** Restore the original materials and hooks, free the owned clones. */
   dispose(): void
 }
@@ -410,6 +423,9 @@ export function createGarmentCollision(three: Three, root: Object3D,
     beforeRender: SkinnedMesh['onBeforeRender']
     beforeShadow: SkinnedMesh['onBeforeShadow']
     frame: number
+    /** The patched material(s) and depth materials this handle put on (`excludeMesh` swaps them back in). */
+    patched: { material: Material | Material[]; depth: Material; distance: Material }
+    excluded: boolean
   }
   const DEFAULT_CACHE_KEY = three.Material.prototype.customProgramCacheKey
   // `source` = the material `mat` was cloned from: `Material.clone()` copies neither `onBeforeCompile` nor
@@ -503,17 +519,18 @@ export function createGarmentCollision(three: Three, root: Object3D,
       depth: mesh.customDepthMaterial, distance: mesh.customDistanceMaterial,
       ownHooks: { render: Object.prototype.hasOwnProperty.call(mesh, 'onBeforeRender'), shadow: Object.prototype.hasOwnProperty.call(mesh, 'onBeforeShadow') },
       beforeRender: mesh.onBeforeRender, beforeShadow: mesh.onBeforeShadow, frame: -1,
+      patched: { material: mesh.material, depth, distance }, excluded: false,
     }
     mesh.customDepthMaterial = depth
     mesh.customDistanceMaterial = distance
     const prevRender = state.beforeRender
     const prevShadow = state.beforeShadow
     mesh.onBeforeRender = function (renderer, scene, camera, geometry, material, group) {
-      frameUpdate(state, renderer.info.render.frame)
+      if (!state.excluded) frameUpdate(state, renderer.info.render.frame)
       prevRender.call(this, renderer, scene, camera, geometry, material, group)
     }
     mesh.onBeforeShadow = function (renderer, object, camera, shadowCamera, geometry, depthMaterial, group) {
-      frameUpdate(state, renderer.info.render.frame)
+      if (!state.excluded) frameUpdate(state, renderer.info.render.frame)
       prevShadow.call(this, renderer, object, camera, shadowCamera, geometry, depthMaterial, group)
     }
     writeUniforms(state)
@@ -527,6 +544,15 @@ export function createGarmentCollision(three: Three, root: Object3D,
     update() {
       binding.update()
       for (const state of states) writeUniforms(state)
+    },
+    excludeMesh(mesh: SkinnedMesh, on: boolean) {
+      const state = states.find(s => s.entry.mesh === mesh)
+      if (!state || state.excluded === on) return
+      state.excluded = on
+      mesh.material = on ? state.original : state.patched.material
+      mesh.customDepthMaterial = on ? state.depth : state.patched.depth
+      mesh.customDistanceMaterial = on ? state.distance : state.patched.distance
+      if (!on) state.frame = -1   // the next render writes the uniforms from the current matrices
     },
     dispose() {
       for (const state of states) {

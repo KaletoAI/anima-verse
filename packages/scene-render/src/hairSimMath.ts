@@ -773,3 +773,33 @@ export function scalpExposure(tris: Float32Array, scalp: Float32Array, cams: rea
     return total ? seen / total : 0
   })
 }
+
+// --- the figure budget (spec § 6.2.2) ----------------------------------------------------------------------------
+
+/** Who runs per strand: at most `maxFigures`, within `cutoffM` of the camera (a running one leaves only beyond
+ *  `leaveM`), admitted while the measured cost sum stays ≤ `budgetMs` (spec § 6.2.2). */
+export const STRAND_LIMITS = { maxFigures: 2, cutoffM: 8, leaveM: 9, budgetMs: 8 } as const
+export type StrandLimits = { maxFigures: number; cutoffM: number; leaveM: number; budgetMs: number }
+
+/** One full-tier figure with a strand record: its camera distance (m), its sim + rebuild cost per frame (ms, the
+ *  EMA of `StrandHair.costMs`) and whether it runs per strand now. */
+export interface StrandCandidate { name: string; distance: number; costMs: number; running: boolean }
+
+/**
+ * The figures that run per strand this frame (spec § 6.2.2), pure: nearest first (ties by name); a candidate is in
+ * range within `leaveM` when it is running, else within `cutoffM`. The nearest in range is always admitted, whatever
+ * its cost; the next only while the cost sum stays ≤ `budgetMs` and the count ≤ `maxFigures`; the first that does
+ * not fit ends the list (no farther, cheaper figure jumps it).
+ */
+export function pickStrandFigures(c: readonly StrandCandidate[], limits: StrandLimits = STRAND_LIMITS): Set<string> {
+  const inRange = c.filter(x => x.distance <= (x.running ? limits.leaveM : limits.cutoffM))
+    .sort((a, b) => a.distance - b.distance || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+  const out = new Set<string>()
+  let sum = 0
+  for (const x of inRange) {
+    if (out.size && (out.size + 1 > limits.maxFigures || sum + x.costMs > limits.budgetMs)) break
+    out.add(x.name)
+    sum += x.costMs
+  }
+  return out
+}

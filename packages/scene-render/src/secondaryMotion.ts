@@ -214,6 +214,26 @@ export function hairChainCapsules<T extends { capsule: { region?: string } }>(bo
   return bound.filter(entry => HAIR_REGIONS.includes(entry.capsule.region ?? ''))
 }
 
+const WITHOUT_HAIR = new WeakMap<SecondaryMotionPayload, SecondaryMotionPayload>()
+
+/**
+ * The payload of a figure whose hair runs per strand (strand-hair spec § 6.2.2): every group with `hair: true`
+ * dropped — its chains are not solved, the strand sim (`hairSim.ts`) moves the hair — and `rev` suffixed with
+ * `:strands`, so a caller comparing revs reconfigures on the switch both ways. The same input object gives the
+ * same output object (cached), so a per-frame call allocates nothing. Pure; undefined stays undefined.
+ */
+export function withoutHairGroups(payload: SecondaryMotionPayload | undefined): SecondaryMotionPayload | undefined {
+  if (!payload) return payload
+  let out = WITHOUT_HAIR.get(payload)
+  if (!out) {
+    const groups: Record<string, MotionGroup> = {}
+    for (const [id, group] of Object.entries(payload.groups ?? {})) if (!group.hair) groups[id] = group
+    out = { ...payload, rev: `${payload.rev}:strands`, groups }
+    WITHOUT_HAIR.set(payload, out)
+  }
+  return out
+}
+
 /**
  * The bind rule of one tip: per capsule the factor (0..1] its current radius
  * is multiplied by — `min(1, d0 / r_bind)`, `d0` the tip's distance to the

@@ -151,7 +151,7 @@ export type {
 } from './types'
 
 export { createSecondaryMotion, stepSecondaryParticle, softMotionAngle, blendMotionParams, extensionCapsules, hairChainCapsules,
-  tipBindFactors } from './secondaryMotion'
+  tipBindFactors, withoutHairGroups } from './secondaryMotion'
 export type { MotionGroup, MotionAttributeProfiles, ExtensionRigDeclaration, SecondaryMotionPayload, SecondaryMotion } from './secondaryMotion'
 
 export { installSkinnedNormalCorrection } from './skinnedNormals'
@@ -192,8 +192,13 @@ export type { CollideCapsule, GarmentCollision, GarmentCollisionEntry } from './
 
 export { STRAND_ROWS, StrandMismatch, StrandSim, bindStrands, boxDepth, decodeStrandSdf, eyePointsEntered,
   invertAffine, limitSegmentAngle, maxSdfDepthMm, restInsideBox, scalpCameras, scalpExposure, SCALP_CAMERA_FOV_DEG,
-  strandCapsules, strandParams, strandSdfAt, strandTargets } from './hairSimMath'
-export type { HairStrandRecord, StrandBinding, StrandFrame, StrandParams, StrandSdf } from './hairSimMath'
+  strandCapsules, strandParams, strandSdfAt, strandTargets, STRAND_LIMITS, pickStrandFigures } from './hairSimMath'
+export type { HairStrandRecord, StrandBinding, StrandFrame, StrandParams, StrandSdf, StrandCandidate,
+  StrandLimits } from './hairSimMath'
+
+export { createStrandHair, STRAND_DT, STRAND_MAX_STEPS, STRAND_RESET_DELTA_S, STRAND_RESET_JUMP_M,
+  STRAND_MS_PER_CARD } from './hairSim'
+export type { StrandHair } from './hairSim'
 
 export { FOOT_POSE_VERSION, SEAT_FADE_M, applyFootPose, applyFootPoseToPose, footPoseLiftM, footPoseMatches,
   footContactsNow, footPoseRest, seatRaise, seatFootLift } from './footPose'
