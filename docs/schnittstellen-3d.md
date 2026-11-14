@@ -12380,9 +12380,13 @@ the near-horizontal flyaways.
 figure's hair mesh (`null` without the two attributes or on `StrandMismatch`) and keeps its colliders: the record's
 capsules WITHOUT the head capsule (Ruling H-R7 — the head is the SDF's), taken into the hair mesh's bind space per
 frame. `update(realDelta, {frozen})` runs after the mixer and `updateMatrixWorld`, before the secondary motion:
-fixed `STRAND_DT` steps (at most `STRAND_MAX_STEPS`), a reset to the targets after a delta over
+fixed `STRAND_DT` steps at any frame rate (Ruling H-R11: the steps that fit into the delta plus the carried remainder,
+at most `STRAND_MAX_STEPS`; each step at the pose of its own time between the last frame's and this one's — follow
+matrices and head slerped by `lerpFrame`, capsule ends linear; a longer frame takes its last 4/60 s and carries the
+head's motion before them rigidly), a reset to the targets after a delta over
 `STRAND_RESET_DELTA_S` or a head jump over `STRAND_RESET_JUMP_M` (teleport, model swap, unfreeze), none while
-frozen, the rebuild only on a frame with a step; `costMs` is the measured sim + rebuild per frame (EMA). While a
+frozen, the rebuild once per frame with a step, through the head of its last step; `costMs` is the measured whole
+`update` of a stepping frame, every step included (EMA), so a slow client admits fewer figures. While a
 figure runs per strand its hair mesh leaves the garment push (`GarmentCollision.excludeMesh`) and its hair groups
 leave the spring chains (`secondaryMotion.withoutHairGroups`); off, both come back. `pickStrandFigures` admits per
 frame, nearest first, at most `STRAND_LIMITS.maxFigures` (2) figures within `enterM` (8 m; a running one leaves

@@ -152,6 +152,74 @@ export function invertAffine(m: Mat4): number[] {
   return r
 }
 
+/** The unit quaternion [x, y, z, w] of the rotation in a column-major 3×3 whose columns are unit length (three's
+ *  `Quaternion.setFromRotationMatrix`). */
+function quatOf(m: ArrayLike<number>): [number, number, number, number] {
+  const m11 = m[0], m12 = m[4], m13 = m[8], m21 = m[1], m22 = m[5], m23 = m[9], m31 = m[2], m32 = m[6], m33 = m[10]
+  const tr = m11 + m22 + m33
+  if (tr > 0) {
+    const s = 0.5 / Math.sqrt(tr + 1)
+    return [(m32 - m23) * s, (m13 - m31) * s, (m21 - m12) * s, 0.25 / s]
+  }
+  if (m11 > m22 && m11 > m33) {
+    const s = 2 * Math.sqrt(1 + m11 - m22 - m33)
+    return [0.25 * s, (m12 + m21) / s, (m13 + m31) / s, (m32 - m23) / s]
+  }
+  if (m22 > m33) {
+    const s = 2 * Math.sqrt(1 + m22 - m11 - m33)
+    return [(m12 + m21) / s, 0.25 * s, (m23 + m32) / s, (m13 - m31) / s]
+  }
+  const s = 2 * Math.sqrt(1 + m33 - m11 - m22)
+  return [(m13 + m31) / s, (m23 + m32) / s, 0.25 * s, (m21 - m12) / s]
+}
+
+/**
+ * Ruling H-R11: the frame of a joint between two frames, for the strand sim's substeps (`createStrandHair` steps at a
+ * fixed 60 Hz, so a 20 fps frame takes three steps between the pose of the last frame and this one). `a` and `b` are
+ * affine column-major matrices without shear (a joint's bind→world: rotation × per-axis scale + translation); the
+ * result into `out`: the rotation slerped, each column's scale and the translation linear in `s`. `s` ≤ 0 gives `a`,
+ * `s` ≥ 1 gives `b` exactly (element copies). A linear blend of the matrices would shrink a turning frame (a 20°
+ * turn by 1.5 % at its middle) and with it the head SDF and the rows' targets.
+ */
+export function lerpFrame(a: Mat4, b: Mat4, s: number, out: number[]): number[] {
+  if (s <= 0 || s >= 1) {
+    const src = s <= 0 ? a : b
+    for (let i = 0; i < 16; i++) out[i] = src[i]
+    return out
+  }
+  const sa = [0, 0, 0], sb = [0, 0, 0], ra = new Array<number>(11).fill(0), rb = new Array<number>(11).fill(0)
+  for (let c = 0; c < 3; c++) {
+    sa[c] = Math.hypot(a[4 * c], a[4 * c + 1], a[4 * c + 2]) || 1
+    sb[c] = Math.hypot(b[4 * c], b[4 * c + 1], b[4 * c + 2]) || 1
+    for (let r = 0; r < 3; r++) { ra[4 * c + r] = a[4 * c + r] / sa[c]; rb[4 * c + r] = b[4 * c + r] / sb[c] }
+  }
+  const qa = quatOf(ra), qb = quatOf(rb)
+  let dot = qa[0] * qb[0] + qa[1] * qb[1] + qa[2] * qb[2] + qa[3] * qb[3]
+  if (dot < 0) { dot = -dot; for (let k = 0; k < 4; k++) qb[k] = -qb[k] }
+  let wa = 1 - s, wb = s
+  if (dot < 0.9995) {      // slerp; nearly equal rotations: the normalised linear blend below
+    const th = Math.acos(Math.min(1, dot)), sn = Math.sin(th)
+    wa = Math.sin((1 - s) * th) / sn
+    wb = Math.sin(s * th) / sn
+  }
+  let x = wa * qa[0] + wb * qb[0], y = wa * qa[1] + wb * qb[1], z = wa * qa[2] + wb * qb[2], w = wa * qa[3] + wb * qb[3]
+  const l = Math.hypot(x, y, z, w) || 1
+  x /= l; y /= l; z /= l; w /= l
+  const rot = [1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y),
+    2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x),
+    2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)]
+  for (let c = 0; c < 3; c++) {
+    const sc = sa[c] + (sb[c] - sa[c]) * s
+    out[4 * c] = rot[3 * c] * sc; out[4 * c + 1] = rot[3 * c + 1] * sc; out[4 * c + 2] = rot[3 * c + 2] * sc
+    out[4 * c + 3] = 0
+  }
+  out[12] = a[12] + (b[12] - a[12]) * s
+  out[13] = a[13] + (b[13] - a[13]) * s
+  out[14] = a[14] + (b[14] - a[14]) * s
+  out[15] = 1
+  return out
+}
+
 /** Parallel-transport frames along one centreline `C[base .. base + 17·3)` (tangents = forward segments),
  *  from the root normal `n0`: per row 9 numbers (tangent, normal, binormal) into `out`. */
 function frameAt(C: ArrayLike<number>, base: number, out: Float64Array, n0x: number, n0y: number, n0z: number): void {

@@ -64,6 +64,40 @@
  *     at 3 m). With the shifted ends the rule saw those rows far outside, kept r = 0.12 and pushed them out by
  *     ≈ 15.6 mm. The garment push has the same bind rule: `entries[0].local[torso].bind` of the placed figure
  *     equals the one at the origin within 1e-9.
+ * [10] Ruling H-R11, 20 fps swings like 60 fps. The sim steps at a fixed 60 Hz; a 20 fps frame takes three steps,
+ *     each at the pose of its own time between the last frame's and this one's (follow matrices and head slerped,
+ *     capsule ends linear). MOTION, per 20 fps frame k (t from (k − 1)/20 to k/20 s): the figure turns about +Y at
+ *     ω_k rad/s and walks along world +z at v_k m/s, both constant within the frame — ω_k = v_k = 0.02·k for
+ *     k ≤ 30, 0.02·(60 − k) for 30 < k ≤ 60, 0 for k 61..100 (a turning walk up to 0.6 rad/s · 0.6 m/s, then 2 s
+ *     of Stop); yaw and z are the integrals, piecewise linear in t with their kinks on the 20 fps frame ends. The
+ *     60 fps run takes the same functions at j/60.
+ *     WHY THEY AGREE: within a frame the figure's root is T(0, 0, z(t)) · Ry(yaw(t)), linear z and yaw — the slerp of
+ *     the two frame-end matrices at s = 1/3, 2/3 IS the 60 fps frame's matrix (constant angular rate about a fixed
+ *     axis, linear translation), so all three steps see the 60 fps run's targets, head and capsules. `RootInertia`
+ *     carries the identity in both runs: its felt velocity reaches the real one when a change stays within
+ *     accel · dt (2.4674/60 = 0.0411 m/s at 60 fps) and angAccel · dt (2.5839/60 = 0.0431 rad/s); here a frame
+ *     changes v by 0.02 plus the turn of its direction in the root's frame, |v|·ω·dt ≤ 0.6 · 0.6 / 60 = 0.006 m/s,
+ *     and ω by 0.02 — inside at 60 fps, and at 20 fps (three times the room, the same changes plus 0.018). So the two
+ *     runs make the same arithmetic up to rounding: at every 20 fps frame end every row of the 20 fps run is within
+ *     1 mm of the 60 fps run's at that time. ROUNDING: float32 rows, and the sim's thresholds (tether radius, angle
+ *     limit, length clamp) turn a rounding difference into a different branch — measured on this fixture, the 60 fps
+ *     walk of [11] started 1 m further along z (the same arithmetic, other roundings) ends 0.41 mm off the original
+ *     after 2 s; 1 mm leaves room for that, not for a swing (b60293bd2: 13.9 mm here, 37.7 mm in [11]). The case is
+ *     real: the free tips leave their targets > 5 mm in the walk. Fails on b60293bd2 (the frame-end pose held for
+ *     all three steps).
+ * [11] Ruling H-R11, a 10 fps frame (6/60 s) takes 4 steps over its last 4/60 s, the head's motion before them
+ *     carried rigidly. The figure walks along +z at a constant 1 m/s from its first frame (reset on a 1 s frame),
+ *     no turn. Per 10 fps frame: the head's first 2/60 s (0.0333 m) carry X, Xp and the last step's targets by the
+ *     same translation — nothing relative to the targets changes (the step is Verlet in the target's frame, the
+ *     colliders ride the head) — then 4 steps whose targets move 1/60 m each, exactly as 4 steps at 60 fps. So the
+ *     10 fps run is the 60 fps run with a third of its time cut out: after 30 frames (3 s, 120 steps) every row's
+ *     offset from its target X − T equals the 60 fps run's after 120 frames (2 s, 120 steps) within 1 mm (the
+ *     rounding of [10]: rows at z ≈ 3 m against 2 m). The start
+ *     swings (rows at rest, targets already moving): > 1 mm left after 2 s at 60 fps, so the case is real. Fails
+ *     on b60293bd2: the frame's whole 0.1 m of target motion went into its first step and none into the other
+ *     three, a kick every frame.
+ * [12] A frame of 0.3 s (> STRAND_RESET_DELTA_S 0.25, a stalled tab) still resets: after it every row equals its
+ *     target exactly.
  * [7] createGarmentCollision over the fixture: the hair mesh wears a patched clone; excludeMesh(hair, true) →
  *     hair.material IS the original (unpatched) object again; excludeMesh(hair, false) → the same patched clone as
  *     before (identity), its depth material the patched one.
@@ -330,6 +364,89 @@ const NCARD = 2 * R * 2
   check('[9] the garment bind rule: the placed torso bind ends = the ones at the origin (0, 1.30, 0) → (0, 1.45, 0)',
     d <= 1e-9 && Math.abs(atOrigin[1] - 1.30) < 1e-6 && Math.abs(atOrigin[4] - 1.45) < 1e-6 && Math.abs(atOrigin[0]) < 1e-9,
     `${atOrigin.map(v => +v.toFixed(4))} vs ${placed.map(v => +v.toFixed(4))}`)
+}
+
+// [10] .. [12] Ruling H-R11: the fixed 60 Hz step
+{
+  /** ω_k = v_k of 20 fps frame k (docstring [10]). */
+  const rate = k => (k <= 30 ? 0.02 * k : k <= 60 ? 0.02 * (60 - k) : 0)
+  /** yaw / z at time t: the integral of the piecewise-constant rate (kinks on the 20 fps frame ends). */
+  const integral = t => {
+    let sum = 0
+    for (let k = 1; k <= 100; k++) {
+      const a = (k - 1) / 20, b = k / 20
+      if (t <= a) break
+      sum += rate(k) * (Math.min(t, b) - a)
+    }
+    return sum
+  }
+  const run = fps => {
+    const { fig } = figure()
+    const h = createStrandHair(THREE, fig, record())
+    h.setEnabled(true)
+    h.update(1)
+    const ends = []
+    let tip = 0
+    const frames = 100 * fps / 20
+    for (let f = 1; f <= frames; f++) {
+      const t = f / fps
+      fig.rotation.y = integral(t)
+      fig.position.z = integral(t)
+      fig.updateMatrixWorld(true)
+      h.update(1 / fps)
+      for (let c = 0; c < 2; c++) {
+        const q = 3 * (c * R + R - 1)
+        tip = Math.max(tip, Math.hypot(h.sim.X[q] - h.targets[q], h.sim.X[q + 1] - h.targets[q + 1], h.sim.X[q + 2] - h.targets[q + 2]))
+      }
+      if (f % (fps / 20) === 0) ends.push(Float32Array.from(h.sim.X))
+    }
+    h.dispose()
+    return { ends, tip }
+  }
+  const r60 = run(60), r20 = run(20)
+  let worst = 0
+  r20.ends.forEach((x, i) => { for (let q = 0; q < x.length; q++) worst = Math.max(worst, Math.abs(x[q] - r60.ends[i][q])) })
+  check('[10] the turning walk swings the tips > 5 mm off their targets (the case is real)', r60.tip > 0.005,
+    `${(r60.tip * 1000).toFixed(1)} mm`)
+  check('[10] 20 fps = 60 fps: every row at every 20 fps frame end within 1 mm', worst <= 1e-3,
+    `max ${worst.toExponential(2)} m`)
+
+  /** The rows' offsets from their targets (X − T) after `seconds` of the 1 m/s walk at `fps`. */
+  const walk = (fps, seconds) => {
+    const { fig } = figure()
+    const h = createStrandHair(THREE, fig, record())
+    h.setEnabled(true)
+    h.update(1)
+    for (let f = 1; f <= seconds * fps; f++) {
+      fig.position.z = f / fps
+      fig.updateMatrixWorld(true)
+      h.update(1 / fps)
+    }
+    const off = h.sim.X.map((x, q) => x - h.targets[q])
+    h.dispose()
+    return off
+  }
+  const w60 = walk(60, 2), w10 = walk(10, 3)
+  let lag = 0, diff = 0
+  for (let q = 0; q < w60.length; q += 3) {
+    lag = Math.max(lag, Math.hypot(w60[q], w60[q + 1], w60[q + 2]))
+    diff = Math.max(diff, Math.abs(w10[q] - w60[q]), Math.abs(w10[q + 1] - w60[q + 1]), Math.abs(w10[q + 2] - w60[q + 2]))
+  }
+  check('[11] 60 fps after 2 s: the start still swings > 1 mm (the case is real)', lag > 0.001, `${(lag * 1000).toFixed(3)} mm`)
+  check('[11] 10 fps after 3 s (4 steps + the rigid carry per frame) = 60 fps after 2 s: X − T within 1 mm',
+    diff <= 1e-3, `max ${diff.toExponential(2)} m`)
+
+  const { fig } = figure()
+  const h = createStrandHair(THREE, fig, record())
+  h.setEnabled(true)
+  for (let f = 1; f <= 30; f++) { fig.position.z = f / 60; fig.updateMatrixWorld(true); h.update(1 / 60) }
+  fig.position.z += 0.3
+  fig.updateMatrixWorld(true)
+  h.update(0.3)
+  let off = 0
+  for (let q = 0; q < h.sim.X.length; q++) off = Math.max(off, Math.abs(h.sim.X[q] - h.targets[q]))
+  check('[12] a 0.3 s frame resets: every row == its target', off === 0, `max ${off}`)
+  h.dispose()
 }
 
 // [6] withoutHairGroups

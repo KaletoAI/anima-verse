@@ -6,17 +6,25 @@
  *
  * Usage:
  *   node scripts/check_hair_sim.mjs ASSEMBLED.glb STRANDS.json [--clips sit,celebrating,walk] [--json FILE]
- *        [--set female] [--loops 2] [--every 6] [--game] [--snap] [--ref REF_STRANDS.json]
+ *        [--set female] [--loops 2] [--every 6] [--game] [--snap] [--ref REF_STRANDS.json] [--fps 20,30,60]
+ *        [--stop 2]
  *   ASSEMBLED.glb = a skinned figure whose hair primitive carries `_STRAND_CARD` / `_STRAND_U` (the full tier, or
  *   the Hairstyles preview / `scripts/hair_strands_export.py`'s `<fit>.strands.glb`); STRANDS.json its record.
  *   Clips come from ANIMATION_CLIPS_DIR (default shared/models/clips), the retarget reference from
  *   ANIMATION_RIG_FILE (default shared/models/rig/reference.fbx) — read only. Self-bundling via esbuild; no server,
- *   no world. `--loops` loops per clip at 60 fps, `--every` frames between scalp-exposure samples.
+ *   no world. `--loops` loops per clip, `--every` 60 fps frames between scalp-exposure samples.
  *
  * THE POSE is the 3D client's, as in `scripts/check_garment_collision.mjs`: client3d's `adaptExternalClips` (rest
  * corrections against the reference rig, hips height), a three AnimationMixer, `updateMatrixWorld`, then the strand
- * handle's `update(1/60)` — the frame order of `Figure.update` (after the mixer, before the secondary motion). The
+ * handle's `update(1/fps)` — the frame order of `Figure.update` (after the mixer, before the secondary motion). The
  * sim starts reset on the clip's first frame (a long delta); the first second is not measured.
+ *
+ * `--fps` (Ruling H-R11; default 60): the frame rates every clip runs at — the same motion (clip time, game motion)
+ * stepped in frames of 1/fps s; the handle substeps at its fixed 60 Hz. `--stop S` (default 0): after the motion, S
+ * seconds of Stop — the root holds where it is and the mixer holds the pose (the figure stands still); reported is
+ * the tip offset at the end of it (`stop_tip_mm`: the largest distance of a card's tip row from its target, the
+ * Hairstyles preview's "tips … mm from rest") and its peak over the Stop. The Stop frames count for every other number
+ * too. The JSON keys the runs `<clip>` at 60 fps alone, `<clip>@<fps>` otherwise.
  *
  * NUMBERS per clip (spec § 6.4, measured every frame unless said otherwise):
  *  - eye: the most rows inside the eye box that were outside it at rest (`eyePointsEntered`; criterion 0);
@@ -57,7 +65,7 @@ const REPO = process.env.HAIR_SIM_CHECK_BUNDLED ? process.cwd() : path.join(__di
 
 function parseArgs(argv) {
   const opts = { files: [], clips: ['sit', 'celebrating', 'walk'], set: '', loops: 2, every: 6, game: false,
-    snap: false, ref: '' }
+    snap: false, ref: '', fps: [60], stop: 0 }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--clips') opts.clips = argv[++i].split(',').filter(Boolean)
@@ -68,6 +76,8 @@ function parseArgs(argv) {
     else if (a === '--game') opts.game = true
     else if (a === '--snap') opts.snap = true
     else if (a === '--ref') opts.ref = argv[++i]
+    else if (a === '--fps') opts.fps = argv[++i].split(',').map(Number).filter((v) => v > 0)
+    else if (a === '--stop') opts.stop = Math.max(0, Number(argv[++i]))
     else if (a.startsWith('--')) throw new Error(`unknown option ${a}`)
     else opts.files.push(a)
   }
@@ -307,8 +317,7 @@ async function main() {
     return [front * 1000, back * 1000]
   }
 
-  /** The root motion of `--game` (module docstring): per frame the root's yaw and position. */
-  const DT = 1 / 60
+  /** The root motion of `--game` (module docstring): per frame of `DT` seconds the root's yaw and position. */
   const gameMotion = (kind) => {
     const turns = [45, -90, 135, -180, 90, -45]
     const st = { x: 0, z: 0, yaw: 0, target: 0, t: 0, leg: 0, way: [], snaps: 0 }
@@ -321,7 +330,7 @@ async function main() {
       }
       if (opts.snap) { st.yaw = Math.PI; st.target = Math.PI }    // facing back: the walk starts with a snap
     }
-    return () => {
+    return (DT) => {
       st.t += DT
       if (kind === 'walk') {
         let w = st.way[st.leg]
@@ -359,7 +368,18 @@ async function main() {
     cards: record.cards,
     rows: sim.n, colliders: handle.capsuleIds, clip_files: clipFiles, bind_exposure_pct: bindExposure.map(pct),
     clips: {} }
-  for (const clip of adapted) {
+  const tipOffset = () => {
+    const X = sim.X, T = handle.targets
+    let tip = 0
+    for (let c = 0; c < S; c++) {
+      const q = 3 * (c * R + R - 1)
+      tip = Math.max(tip, Math.hypot(X[q] - T[q], X[q + 1] - T[q + 1], X[q + 2] - T[q + 2]))
+    }
+    return tip
+  }
+  const keyed = opts.fps.length > 1 || opts.fps[0] !== 60
+  for (const fps of opts.fps) for (const clip of adapted) {
+    const DT = 1 / fps
     const mixer = new THREE.AnimationMixer(template)
     const action = mixer.clipAction(clip)
     action.play()
@@ -369,20 +389,29 @@ async function main() {
     const move = opts.game ? gameMotion(clip.name) : null
     holder.updateMatrixWorld(true)
     handle.update(1)   // a long delta: reset to this pose
-    const frames = Math.max(opts.game ? 900 : 120, Math.round(clip.duration * opts.loops / DT))
+    const moving = Math.max(opts.game ? 900 : 120, Math.round(clip.duration * opts.loops * 60)) / 60
+    const frames = Math.round((moving + opts.stop) * fps), stopAt = Math.round(moving * fps)
+    const every = Math.max(1, Math.round(opts.every * fps / 60))
+    let stopTip = 0, stopPeak = 0
     let eye = 0, depth = 0, skinDeep = 0, where = null, above = 0
     let stretch = { ratio: 0, card: -1, frame: 0 }, fly = { count: 0, cards: [], frame: 0 }, flyFrames = 0
     const band = [0, 0], skinBand = [0, 0]
     const series = [[], [], []]
     const peakBind = [0, 0, 0], peakSkin = [-1, -1, -1], peakAbs = [0, 0, 0], ms = []
     for (let f = 1; f <= frames; f++) {
-      move?.()
-      mixer.update(DT)
+      if (f <= stopAt) {
+        move?.(DT)
+        mixer.update(DT)
+      }
       holder.updateMatrixWorld(true)
       const t0 = performance.now()
       handle.update(DT)
       ms.push(performance.now() - t0)
-      if (f < 60) continue
+      if (f > stopAt) {
+        stopTip = tipOffset()
+        stopPeak = Math.max(stopPeak, stopTip)
+      }
+      if (f < fps) continue
       const st = cardStretch()
       if (st.ratio > stretch.ratio) stretch = { ...st, frame: f }
       const fl = flyaways()
@@ -399,7 +428,7 @@ async function main() {
       above = Math.max(above, w.above_ear_mm)
       if (d > depth) { depth = d; where = w }
       skinDeep = Math.max(skinDeep, skinDepth(head))
-      if (f % opts.every) continue
+      if (f % every) continue
       const now = scalpExposure(trisOf(posAttr()), scalp, cams)
       const skin = skinExposure(head)
       for (let c = 0; c < 3; c++) {
@@ -412,7 +441,7 @@ async function main() {
     mixer.stopAllAction()
     mixer.uncacheRoot(template)
     const mean = ms.reduce((a, b) => a + b, 0) / ms.length
-    const row = { frames, eye_rows_entered: eye, max_sdf_depth_mm: +depth.toFixed(2),
+    const row = { fps, frames, eye_rows_entered: eye, max_sdf_depth_mm: +depth.toFixed(2),
       skin_sdf_depth_mm: +skinDeep.toFixed(2), above_ear_depth_mm: +above.toFixed(2),
       delta_bind_p95_pp: series.map((xs) => pct(quantile(xs, 0.95))),
       deepest_row: where && { free_frac: +where.frac.toFixed(2), above_ear_cm: +where.above_ear_cm.toFixed(1) },
@@ -421,15 +450,19 @@ async function main() {
       cost_ema_ms: +handle.costMs.toFixed(2),
       max_card_stretch: +stretch.ratio.toFixed(3), stretch_card: stretch.card, stretch_frame: stretch.frame,
       max_flyaways: fly.count, flyaway_cards: fly.cards, flyaway_frame: fly.frame, flyaway_frames: flyFrames,
+      ...(opts.stop ? { stop_s: opts.stop, stop_tip_mm: +(stopTip * 1000).toFixed(1),
+        stop_tip_peak_mm: +(stopPeak * 1000).toFixed(1) } : {}),
       ...(ref ? { below_ear_front_mm: +band[0].toFixed(2), below_ear_back_mm: +band[1].toFixed(2),
         skin_below_ear_front_mm: +skinBand[0].toFixed(2), skin_below_ear_back_mm: +skinBand[1].toFixed(2) } : {}) }
-    report.clips[clip.name] = row
-    console.log(`   ${clip.name.padEnd(12)} eye ${eye}  depth ${row.max_sdf_depth_mm} mm (above the ear line ${row.above_ear_depth_mm}; skin ${row.skin_sdf_depth_mm}`
+    report.clips[keyed ? `${clip.name}@${fps}` : clip.name] = row
+    console.log(`   ${(keyed ? `${clip.name}@${fps}` : clip.name).padEnd(15)} eye ${eye}  depth ${row.max_sdf_depth_mm} mm (above the ear line ${row.above_ear_depth_mm}; skin ${row.skin_sdf_depth_mm}`
       + `${where ? `, deepest at frac ${row.deepest_row.free_frac}, ${row.deepest_row.above_ear_cm} cm above the ear line` : ''})  `
       + `Δ bind ${row.delta_bind_pp.join(' / ')} pp (p95 ${row.delta_bind_p95_pp.join(' / ')})  Δ skin ${row.delta_skin_pp.join(' / ')} pp  `
       + `${row.ms_per_frame_mean} ms/frame (p95 ${row.ms_per_frame_p95})`)
-    console.log(`   ${''.padEnd(12)} stretch ${row.max_card_stretch} (card ${row.stretch_card}, frame ${row.stretch_frame})  `
+    console.log(`   ${''.padEnd(15)} stretch ${row.max_card_stretch} (card ${row.stretch_card}, frame ${row.stretch_frame})  `
       + `flyaways ${row.max_flyaways} (frame ${row.flyaway_frame}, ${row.flyaway_frames} frames; cards ${row.flyaway_cards.join(',')})`
+      + (opts.stop ? `  after ${opts.stop} s of Stop: tips ${row.stop_tip_mm} mm (peak ${row.stop_tip_peak_mm})` : '')
+      + `  cost EMA ${row.cost_ema_ms} ms`
       + (ref ? `  below the ear line in the reference SDF: front ${row.below_ear_front_mm} / back ${row.below_ear_back_mm} mm`
         + ` (skin ${row.skin_below_ear_front_mm} / ${row.skin_below_ear_back_mm})` : ''))
   }

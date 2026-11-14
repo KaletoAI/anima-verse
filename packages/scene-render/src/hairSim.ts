@@ -26,19 +26,33 @@
  * the hair primitive's geometry space once (the bind-rule reference, kept as the same objects every frame —
  * `StrandSim` caches its per-row factors on them).
  *
- * THE CLOCK (spec § 6.2.2). A fixed step of 1/60 s with an accumulator of at most 4 steps per frame; a frame
- * delta > 0.25 s or a head jump > 0.5 m (teleport, rebuild) resets the sim to the targets; `frozen` holds it
- * still (nothing is written). The rebuild runs once per frame that stepped; a frame without a step leaves the
- * hair where the last one put it, carried by the head.
+ * THE CLOCK (spec § 6.2.2, Ruling H-R11). The sim steps at a fixed 60 Hz whatever the frame rate: a frame of
+ * `realDelta` seconds takes the 1/60 s steps that fit into it plus the remainder the last frame carried over (1–4 at
+ * 15–60 fps), the new remainder waits for the next frame. Every step sees the figure AT ITS OWN TIME: the follow
+ * matrices and the head frame between the last frame's pose and this one's (`lerpFrame`: slerped, so a turning head
+ * keeps its size), the capsule ends linear, the targets rebuilt from those matrices. Holding them at the frame's end
+ * pose (before H-R11) gave a 20 fps frame one step with the whole frame's target motion and two with none: the rows
+ * took three steps' velocity in one, and a walk threw up to 69 cards out (60 fps: none) and left 140 mm after Stop.
+ *  - A frame longer than `STRAND_MAX_STEPS` steps (below 15 fps) takes 4 steps over its LAST 4/60 s; what the head
+ *    did before that is carried rigidly (`StrandSim.carry`, the head's motion from the last frame to the first
+ *    step's start), and no remainder is kept: the hair keeps its shape on the head, never a swing the sim did not
+ *    see.
+ *  - A delta > 0.25 s (a stalled tab) or a head jump > 0.5 m (teleport, rebuild) resets the sim to the targets.
+ *  - `frozen` holds it still (nothing is written).
+ * The rebuild runs once per frame that stepped, after its last step, through the head frame OF that step (the rows
+ * and the head of one moment; the remainder never shows as a lag behind the head); a frame without a step leaves
+ * the hair where the last one put it, carried by the head.
  *
  * THE ROOT'S MOTION (Ruling H-R10). Before the steps of a frame the simulated rows are carried by the part of the
  * root's (`root`, the figure instance) motion the strands do not feel (`RootInertia`, `STRAND_ROOT_LIMITS`): the
  * game's 10/s turn ease, its snaps and its walk starts at full speed in one frame flung the free rows out
- * horizontally; within the spike's tuning motions everything is felt as before.
+ * horizontally; within the spike's tuning motions everything is felt as before. The last frame's pose the steps
+ * start from is carried with them.
  *
- * COST. `costMs` is an EMA of the measured sim + rebuild milliseconds per stepping frame — what the figure
- * budget (`pickStrandFigures`) adds up. Before the first run it is an estimate from the card count
- * (`STRAND_MS_PER_CARD`).
+ * COST. `costMs` is an EMA of the measured milliseconds of a whole stepping frame's `update` (the pose, every
+ * step, the rebuild) — what the figure budget (`pickStrandFigures`) adds up, so a slow client paying 3–4 steps a
+ * frame admits fewer figures by itself. Before the first run it is an estimate from the card count
+ * (`STRAND_MS_PER_CARD`, one step a frame).
  *
  * `three` is injected, never imported.
  */
@@ -48,7 +62,7 @@ import { bindCollision, jointNowFrom } from './collision'
 import type { CollisionBinding, Mat4, Vec3 } from './collision'
 import { capsuleInFrame } from './garmentCollision'
 import type { CollideCapsule } from './garmentCollision'
-import { bindStrands, invertAffine, RootInertia, StrandMismatch, strandCapsules, strandParams, StrandSim,
+import { bindStrands, invertAffine, lerpFrame, RootInertia, StrandMismatch, strandCapsules, strandParams, StrandSim,
   strandTargets } from './hairSimMath'
 import type { HairStrandRecord, StrandParams } from './hairSimMath'
 
@@ -56,7 +70,7 @@ type Three = typeof import('three')
 
 /** The fixed step (s). */
 export const STRAND_DT = 1 / 60
-/** Steps one frame may take at most. */
+/** Steps one frame may take at most (a longer frame: its last 4/60 s; module docstring). */
 export const STRAND_MAX_STEPS = 4
 /** A frame delta above this (s) resets the sim. */
 export const STRAND_RESET_DELTA_S = 0.25
@@ -76,20 +90,21 @@ export interface StrandHair {
   readonly mesh: SkinnedMesh
   /** The pure sim (inspection: checks, debug). */
   readonly sim: StrandSim
-  /** The targets of the last frame (world, cards · 17 · 3). */
+  /** The targets of the last step (world, cards · 17 · 3; carried with the rows by a later frame's root carry). */
   readonly targets: Float32Array
   /** The ids of the capsules the sim collides with (the record's hair capsules without the head, Ruling H-R7). */
   readonly capsuleIds: readonly string[]
   /** Running per strand now. */
   readonly enabled: boolean
-  /** EMA of the sim + rebuild ms per stepping frame (an estimate before the first run). */
+  /** EMA of a stepping frame's whole `update` in ms, every step included (an estimate before the first run). */
   readonly costMs: number
   /** On: owned geometry clone, Head-only skin on the card vertices, reset to the targets. Off: the template's
    *  geometry object back, the clone freed. */
   setEnabled(on: boolean): void
   /** The Stiffness slider: × the record's `params.stiffness`. */
   setStiffness(factor: number): void
-  /** Step the frame (fixed 1/60 s, ≤ 4 steps; resets on a long frame or a head jump; `frozen` holds still). */
+  /** Step the frame (fixed 1/60 s with the remainder carried, ≤ 4 steps over the pose interpolated from the last
+   *  frame; resets on a delta > 0.25 s or a head jump; `frozen` holds still). */
   update(realDelta: number, opts?: { frozen?: boolean }): void
   /** Off, and nothing of this handle left. */
   dispose(): void
@@ -169,23 +184,93 @@ export function createStrandHair(three: Three, root: Object3D, record: HairStran
   })
   const frameCaps: CollideCapsule[] = binds.map(bind => ({ a: [0, 0, 0] as Vec3, b: [0, 0, 0] as Vec3, r: 0, bind }))
 
+  // The pose of this frame (`now*`), of the last one (`from*`, carried by the root carry) and of the step (`step*`,
+  // `targets`, `frameCaps`) — Ruling H-R11, module docstring "THE CLOCK".
+  const mat = (): number[] => new Array<number>(16).fill(0)
   const targets = new Float32Array(sim.n * 3)
-  const followMats: Mat4[] = follow.map(() => new Array<number>(16).fill(0))
-  let headMat: Mat4 = new Array<number>(16).fill(0)
+  const nowFollow = follow.map(mat), fromFollow = follow.map(mat), stepFollow = follow.map(mat)
+  const nowHead = mat(), fromHead = mat(), stepHead = mat()
+  const capEnds = () => binds.map(() => ({ a: [0, 0, 0] as Vec3, b: [0, 0, 0] as Vec3, r: 0 }))
+  const nowCaps = capEnds(), fromCaps = capEnds()
+  const copy = (src: Mat4, out: number[]) => { for (let i = 0; i < 16; i++) out[i] = src[i] }
   const jointNow = (i: number): Mat4 => jointNowFrom(mesh.matrixWorld.elements, mesh.bindMatrixInverse.elements,
     bones[i].matrixWorld.elements, mesh.skeleton.boneInverses[i].elements, mesh.bindMatrix.elements).bindToWorld
-  /** The frame now: follow matrices, head, targets, capsules. */
+  /** The pose now: follow matrices, head, capsules. */
   const sample = () => {
-    follow.forEach((b, k) => { followMats[k] = jointNow(b) })
-    headMat = jointNow(head)
-    strandTargets(record, followMats, targets)
+    follow.forEach((b, k) => copy(jointNow(b), nowFollow[k]))
+    copy(jointNow(head), nowHead)
     if (collision) {
       collision.update()
       collision.capsules.forEach((c, i) => {
-        const fc = frameCaps[i]
-        fc.a = c.now.a; fc.b = c.now.b; fc.r = c.now.r
+        const n = nowCaps[i]
+        for (let d = 0; d < 3; d++) { n.a[d] = c.now.a[d]; n.b[d] = c.now.b[d] }
+        n.r = c.now.r
       })
     }
+  }
+  /** The pose of a step at fraction `s` of the frame (0 the last frame's, 1 this one's): the follow matrices and
+   *  the head slerped, the capsule ends linear, the targets from the follow matrices. */
+  const poseAt = (s: number) => {
+    const t = s >= 1 - 1e-9 ? 1 : s
+    follow.forEach((_, k) => lerpFrame(fromFollow[k], nowFollow[k], t, stepFollow[k]))
+    lerpFrame(fromHead, nowHead, t, stepHead)
+    strandTargets(record, stepFollow, targets)
+    frameCaps.forEach((fc, i) => {
+      const a = fromCaps[i], b = nowCaps[i]
+      for (let d = 0; d < 3; d++) {
+        fc.a[d] = a.a[d] + (b.a[d] - a.a[d]) * t
+        fc.b[d] = a.b[d] + (b.b[d] - a.b[d]) * t
+      }
+      fc.r = a.r + (b.r - a.r) * t
+    })
+  }
+  /** This frame's pose becomes the next frame's start. */
+  const keepPose = () => {
+    follow.forEach((_, k) => copy(nowFollow[k], fromFollow[k]))
+    copy(nowHead, fromHead)
+    nowCaps.forEach((n, i) => {
+      const f = fromCaps[i]
+      for (let d = 0; d < 3; d++) { f.a[d] = n.a[d]; f.b[d] = n.b[d] }
+      f.r = n.r
+    })
+  }
+  /** `m · p` for a point, in place. */
+  const movePoint = (m: Mat4, p: number[] | Float32Array, o = 0) => {
+    const x = p[o], y = p[o + 1], z = p[o + 2]
+    p[o] = m[0] * x + m[4] * y + m[8] * z + m[12]
+    p[o + 1] = m[1] * x + m[5] * y + m[9] * z + m[13]
+    p[o + 2] = m[2] * x + m[6] * y + m[10] * z + m[14]
+  }
+  const scratch = mat()
+  /** `a · b` (column-major 4×4) into `out` (which may be `b`). */
+  const mul4 = (a: Mat4, b: Mat4, out: number[]) => {
+    const r = scratch
+    for (let c = 0; c < 4; c++) {
+      for (let k = 0; k < 4; k++) {
+        r[4 * c + k] = a[k] * b[4 * c] + a[4 + k] * b[4 * c + 1] + a[8 + k] * b[4 * c + 2] + a[12 + k] * b[4 * c + 3]
+      }
+    }
+    copy(r, out)
+    return out
+  }
+  /** A world → world carry of the rows (`sim.carry`) and the targets; `pose` also the last frame's pose. */
+  const carryAll = (m: Mat4, pose: boolean) => {
+    sim.carry(m)
+    for (let o = 0; o < targets.length; o += 3) movePoint(m, targets, o)
+    if (!pose) return
+    fromFollow.forEach(f => mul4(m, f, f))
+    mul4(m, fromHead, fromHead)
+    fromCaps.forEach(c => { movePoint(m, c.a); movePoint(m, c.b) })
+  }
+  /** The step's pose becomes the start of the rest of the frame (a long frame, after its untaken part). */
+  const startAtStep = () => {
+    follow.forEach((_, k) => copy(stepFollow[k], fromFollow[k]))
+    copy(stepHead, fromHead)
+    frameCaps.forEach((fc, i) => {
+      const f = fromCaps[i]
+      for (let d = 0; d < 3; d++) { f.a[d] = fc.a[d]; f.b[d] = fc.b[d] }
+      f.r = fc.r
+    })
   }
 
   let owned: BufferGeometry | null = null
@@ -197,13 +282,17 @@ export function createStrandHair(three: Three, root: Object3D, record: HairStran
   let costRan = false
   const inertia = new RootInertia()
 
+  /** The rows into head-bind space through the head of the last step (`stepHead`). */
   const rebuild = () => {
     if (!posOut || !nrmOut) return
-    sim.rebuild(invertAffine(headMat), posOut.array as Float32Array, nrmOut.array as Float32Array)
+    sim.rebuild(invertAffine(stepHead), posOut.array as Float32Array, nrmOut.array as Float32Array)
     posOut.needsUpdate = true
     nrmOut.needsUpdate = true
   }
+  /** Every row on its target of this frame's pose. */
   const reset = () => {
+    keepPose()
+    poseAt(1)
     sim.reset(targets)
     acc = 0
     inertia.reset()
@@ -238,7 +327,7 @@ export function createStrandHair(three: Three, root: Object3D, record: HairStran
         mesh.geometry = g
         root.updateWorldMatrix(true, true)
         sample()
-        lastHead = [headMat[12], headMat[13], headMat[14]]
+        lastHead = [nowHead[12], nowHead[13], nowHead[14]]
         reset()
       } else {
         mesh.geometry = template
@@ -257,19 +346,34 @@ export function createStrandHair(three: Three, root: Object3D, record: HairStran
       if (!owned || opts.frozen) return
       const t0 = performance.now()
       sample()
-      const h: Vec3 = [headMat[12], headMat[13], headMat[14]]
+      const h: Vec3 = [nowHead[12], nowHead[13], nowHead[14]]
       const jump = lastHead ? Math.hypot(h[0] - lastHead[0], h[1] - lastHead[1], h[2] - lastHead[2]) : 0
       lastHead = h
       if (!(realDelta <= STRAND_RESET_DELTA_S) || jump > STRAND_RESET_JUMP_M) { reset(); return }
       const carry = inertia.update(root.matrixWorld.elements, realDelta)
-      if (carry) sim.carry(carry)
-      acc = Math.min(acc + Math.max(0, realDelta), STRAND_MAX_STEPS * STRAND_DT)
-      let steps = 0
-      while (acc >= STRAND_DT - 1e-9 && steps < STRAND_MAX_STEPS) {
-        sim.step(STRAND_DT, { targets, head: headMat, capsules: frameCaps }, params)
-        acc -= STRAND_DT
-        steps++
+      if (carry) carryAll(carry, true)
+      // Ruling H-R11 (module docstring "THE CLOCK"): step k of this frame ends k/60 s after the sim's last step,
+      // i.e. at (k·dt − acc) / delta of the frame; beyond 4 steps the frame's last 4/60 s, the head's motion before
+      // them carried rigidly.
+      const delta = Math.max(0, realDelta)
+      let steps = Math.floor((acc + delta) / STRAND_DT + 1e-6)
+      let start = -acc, span = delta     // step k at (start + k·dt) / span of what is left of the frame
+      if (steps > STRAND_MAX_STEPS) {
+        steps = STRAND_MAX_STEPS
+        poseAt(1 - steps * STRAND_DT / delta)
+        carryAll(mul4(stepHead, invertAffine(fromHead), mat()), false)
+        startAtStep()
+        start = 0
+        span = steps * STRAND_DT
+        acc = 0
+      } else {
+        acc = Math.max(0, acc + delta - steps * STRAND_DT)
       }
+      for (let k = 1; k <= steps; k++) {
+        poseAt((start + k * STRAND_DT) / span)
+        sim.step(STRAND_DT, { targets, head: stepHead, capsules: frameCaps }, params)
+      }
+      keepPose()
       if (!steps) return
       rebuild()
       const ms = performance.now() - t0
