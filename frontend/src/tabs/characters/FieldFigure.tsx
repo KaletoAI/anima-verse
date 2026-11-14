@@ -1,60 +1,47 @@
 /**
  * FieldFigure — the Figure tab (template tab `figure_tab`, section `figure`,
  * humanoid only; plan docs/superpowers/plans/2026-11-12-unified-worn-pieces.md
- * Task 10, spec "The UI" + "Rules for the buttons", ruling 8).
+ * Task 10, spec "The UI" + "Rules for the buttons", ruling 8; laid out to the
+ * user's tab checklist in Task UI5, the way the Hairstyles tab is).
  *
- * One preview, one Build:
- * - the preview is the figure DELIVERED now (`served_url`, the interim rule
- *   applied — never a half step);
- * - the status line (`headerLine`: "Status: up to date" or "2 changes · Build
- *   (7 hub jobs)"), the ONE primary button Build (POST …/figure/build, its
- *   cost on it, disabled with its reason written under it — a running Build
- *   is no disable, a click queues the next one) and the "Build
- *   automatically" checkbox (POST …/figure/auto-build); what the Build would
- *   run, collapsed;
- * - "Worn now (outfit …)": the worn hairstyle first (its name · its mode · ↗Hairstyles — Task 14, where
- *   hairstyles are worn, made and set), then every worn piece — name · mode ·
- *   ↗Wardrobe (the mode lives on the item and is edited there, ruling P4) ·
- *   state ("✓ ready", "⏳ mesh · 3 hub jobs" + "in the body until its own
- *   mesh is ready" — ruling A11, an in-body piece "shown painted until
- *   ready", "left out: …", "failed — reason" with Retry = the Build, "Fits the
- *   plain body — refused on the body shape (…): reason" (Ruling A31 wording, the
- *   measured reasons on hover) with its single steps Re-fit (POST …/figure/refit
- *   {item_id}: that piece's CPU fit and the CPU assembly only, hub steps stay due
- *   for the Build — Ruling FR-I2; 409 while a Build runs) and — only when the
- *   reason points at the piece itself (`piece_broken`) — Regenerate mesh (POST
- *   …/garments/{item}/run {step: "mesh", force, chain}, its cost the server's
- *   `regenerate_jobs`) — Ruling A23; "✓ ready — Accepted by you" in green when
- *   the fit it uses was refused by its checks and accepted by the user, Ruling
- *   A31); an own-mesh
- *   piece's details open its chain dialog (GarmentPieceDialog — a WORN
- *   piece's only entry, the Wardrobe hides its "Mesh steps"; opened here
- *   without its "Run all", Ruling 10a); a closable piece has the toggle
- *   Closed / Open under its mode (PieceStateToggle, the one piece-state
- *   route, saved at once — Task 11b), and an own-mesh closable piece, under
- *   Details, the single action that builds its OTHER state's mesh
- *   ("Build the open mesh — 6 hub jobs", POST …/garments/{item}/run
- *   {state}; the Build only ever makes the worn state's);
- * - "Body:" (plain body · shape · texture), one line on the base body with
- *   "Open Base body tab" (its views, model, face and rig steps and their
- *   settings live in the Base body tab since Task UI1 — FieldBaseBody) and the
- *   stored bodies and textures collapsed (FigureStored, Delete).
+ * One flow, one Build:
+ * - the flow head: the status light with its words (`statusLight` / `headerLine`: "Up to date", "2 changes",
+ *   "1 change · a step failed", "Building · 2 changes"), the ONE primary button Build (POST …/figure/build) with
+ *   its cost on it — "Everything is current", disabled, when nothing is due —, its disabled reason written under
+ *   it (a running Build is no disable, a click queues the next one); "Build automatically" (POST
+ *   …/figure/auto-build, saved at once, runs nothing, what it means beside it) and "Pause automatic generation"
+ *   (Ruling A42, GenerationPausePanel: while paused the light with its reason, what runs and finishes, "Resume —
+ *   N hub jobs start" (POST …/figure/generation-pause {paused}) and the waiting jobs, each with Cancel behind an
+ *   in-app confirmation (POST …/figure/waiting/cancel {id})); the pending changes with their cost, a failure;
+ * - left: the figure DELIVERED now (`served_url`, the interim rule applied — never a half step), "Built <time>"
+ *   in its corner; the mouse turns the figure;
+ * - right: sub-tabs instead of scrolling —
+ *   - "Worn now": the worn hairstyle first (name · mode, ↗ Hairstyles — where hairstyles are worn, made and set,
+ *     Task 14), then every worn piece (name · mode, ↗ Wardrobe — the mode lives on the item, ruling P4), each a
+ *     step row: its light, the state ("Ready", "Due: own mesh · 3 hub jobs", "Waits for the Build", "Building",
+ *     "Failed", "Refused on the body shape" — Ruling A31 wording, the measured reasons and what each button does
+ *     on mouse-over; "Ready — Accepted by you" when the fit it uses was refused by its checks and accepted by the
+ *     user), the reason in plain words and its single steps with their cost: Retry (the Build, which retries a
+ *     cached chain failure, ruling 7a), Re-fit — no hub job (POST …/figure/refit {item_id}: that piece's CPU fit
+ *     and the CPU assembly only, hub steps stay due for the Build — Ruling FR-I2; 409 while a Build runs),
+ *     Regenerate mesh (POST …/garments/{item}/run {step: "mesh", force, chain}, only when the refusal points at
+ *     the piece itself — Ruling A23), Details (an own-mesh piece's chain dialog, GarmentPieceDialog — a WORN
+ *     piece's only entry, opened without its "Run all", Ruling 10a); a closable piece has Closed / Open
+ *     (PieceStateToggle, saved at once — Task 11b) with what the switch starts and costs beside it, and an
+ *     own-mesh closable piece the single action that builds its OTHER state's mesh ("Build the open mesh — 6
+ *     hub jobs", POST …/garments/{item}/run {state}; the Build only ever makes the worn state's);
+ *   - "Build plan": what the Build runs, one row per step with its light and cost;
+ *   - "Body": the plain body (its views, model, face and rig live in the Base body tab — one line and "Open Base
+ *     body tab"), the body shape and the texture as step rows, and the stored bodies and textures (FigureStored,
+ *     Delete behind an in-app confirmation).
  *
- * - "Pause automatic generation" (Ruling A42, GenerationPausePanel): the switch beside "Build automatically",
- *   while paused the status light with its reason, what runs now and finishes, "Resume — N hub jobs start"
- *   (POST …/figure/generation-pause {paused}) and the waiting jobs, each with Cancel behind an in-app
- *   confirmation (POST …/figure/waiting/cancel {id}). The tab re-reads on the push topic `generation`.
- *
- * Nothing here starts a chain except Build and Retry (both POST
- * …/figure/build — a manual Build, which retries a cached chain failure,
- * ruling 7a) and the other state's single action. Every humanoid is on the
- * figure pipeline (Ruling A13 — the "Use base body pipeline" switch is gone);
- * one without a plain body yet keeps the model it has and the button reads
- * "Build base body (N hub jobs)" with NO_BASE_BODY_NOTE under it. Polls GET
- * …/figure while a Build runs (useFigure).
+ * Nothing here starts a chain except Build and Retry (both POST …/figure/build — a manual Build) and the single
+ * steps of a piece. Every humanoid is on the figure pipeline (Ruling A13); one without a plain body yet keeps the
+ * model it has and the button reads "Build base body (N hub jobs)" with NO_BASE_BODY_NOTE under it. Polls GET
+ * …/figure while a Build runs (useFigure); the tab re-reads on the push topic `generation`.
  */
 import { useCallback, useState } from 'react'
-import type { CSSProperties, ReactNode } from 'react'
+import type { CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -62,33 +49,26 @@ import { Model3DViewer } from './Model3DViewer'
 import { GarmentPieceDialog, PieceStateToggle } from './WardrobeGarment'
 import { FigureStored } from './FigureStored'
 import { GenerationPausePanel, GenerationPauseSwitch } from './GenerationPausePanel'
+import { StepLight, StepRowView, SubTabs } from './StepRows'
+import { LIGHT_COLOR, PANEL } from './stepStyle'
 import { useFigure } from './useFigure'
 import {
-  BUILD_DEFERRED_NOTE, BUILD_RUNNING_NOTE, BUILD_STATUS, ESTIMATE_NOTE, HAIR_MODE_LABELS, MESH_MODE_LABELS, NO_BASE_BODY_NOTE, baseBodyLine, bodyLine,
-  buildButton, changeLine, hairState, headerLine, noBaseBody, regenerateMeshLabel, stateMeshAction, wornState,
+  BUILD_DEFERRED_NOTE, BUILD_RUNNING_NOTE, BUILD_STATUS, ESTIMATE_NOTE, HAIR_MODE_LABELS, MESH_MODE_LABELS,
+  NO_BASE_BODY_NOTE, REFIT_LABEL, autoBuildNote, baseBodyLine, bodyRows, buildButton, changeLine, hairState,
+  headerLine, noBaseBody, planRows, regenerateMeshLabel, retryLabel, stateMeshAction, stateToggleNote, statusLight,
+  wornState,
 } from './figureModel'
 import type { FigurePayload, FigureWornRow, GenerationPause, HairMode, PieceState, WaitingJob } from './figureModel'
 
-const ERROR_STYLE: CSSProperties = { color: 'var(--danger, #f85149)', overflowWrap: 'anywhere' }
-/** A fit the user accepted although its checks refused it (Ruling A31): the green of an accepted light. */
-const ACCEPTED_STYLE: CSSProperties = { color: 'var(--success, #3fb950)' }
+const ERROR_STYLE: CSSProperties = { color: LIGHT_COLOR.red, overflowWrap: 'anywhere' }
 
 /** The answers of POST …/figure/refit (Ruling FR-I2) besides the Build's own. */
 const REFIT_STATUS: Record<string, string> = { started: 'Re-fit started (CPU only)' }
-const CELL: CSSProperties = { padding: '4px 6px', verticalAlign: 'top' }
-
-/** A collapsed block whose content mounts only while open (no fetch, no poll while closed). */
-function Collapsed({ summary, children }: { summary: string; children: () => ReactNode }) {
-  const [open, setOpen] = useState(false)
-  return (
-    <details open={open} onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
-      <summary style={{ cursor: 'pointer' }}>{summary}</summary>
-      {open ? <div style={{ marginTop: 6 }}>{children()}</div> : null}
-    </details>
-  )
-}
+const BUTTONS: CSSProperties = { display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }
 
 const noop = () => undefined
+
+type Sub = 'worn' | 'plan' | 'body'
 
 export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpenBaseBody }: {
   character: string
@@ -101,10 +81,12 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
-  const enc = encodeURIComponent(character)
   const { data, error, startPoll } = useFigure(character)
   const [posting, setPosting] = useState(false)
   const [openPiece, setOpenPiece] = useState<{ id: string; name: string } | null>(null)
+  const [sub, setSub] = useState<Sub>('worn')
+  const [autoSaved, setAutoSaved] = useState(false)
+  const enc = encodeURIComponent(character)
 
   const post = useCallback(async (path: string, body: unknown, ok?: (d: Record<string, unknown>) => void) => {
     if (posting) return
@@ -153,6 +135,10 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
       toast(d.started ? t('Started') : t('Queued'), 'success')
     }), [post, t, toast])
 
+  const setAutoBuild = useCallback((enabled: boolean) => post('figure/auto-build', { enabled }, () => {
+    setAutoSaved(true)
+  }), [post])
+
   if (!data) {
     return error ? <div className="ga-hint" style={ERROR_STYLE}>{error}</div>
       : <div className="ga-hint">{t('Loading…')}</div>
@@ -163,33 +149,49 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
     return <div className="ga-hint">{t('A temporary NPC has no figure — its 3D model is made from its T-pose picture.')}</div>
   }
 
+  const wornCount = data.worn.length + (data.hair ? 1 : 0)
+  const tabs = [
+    { id: 'worn' as const, label: `${t('Worn now')} (${wornCount})` },
+    { id: 'plan' as const, label: `${t('Build plan')} (${data.cost.steps.length})`,
+      title: t('What the Build runs') },
+    { id: 'body' as const, label: t('Body') },
+  ]
+
   return (
-    <div className="ga-split ga-split-views ga-split-figure">
-      <div className="ga-split-col">
-        {/* The figure gets the wider column and no tilt toolbar (user 2026-11-13): the canvas fills the column. */}
-        {data.served_url ? (
-          <Model3DViewer key={data.served_url} url={data.served_url} format="glb" height={600} subject="figure"
-            builtAt={data.served_built_at} />
-        ) : (
-          <div className="ga-hint" style={{ height: 200, display: 'flex', alignItems: 'center',
-            justifyContent: 'center', border: '1px solid var(--border, #30363d)', borderRadius: 6 }}>
-            {t('No figure yet — Build makes it')}
-          </div>
-        )}
-      </div>
-      <div className="ga-split-col">
-        <FigureHeader data={data} posting={posting} onBuild={build}
-          onAutoBuild={(enabled) => { void post('figure/auto-build', { enabled }) }}
-          onPause={() => { void setPaused(true) }} />
-        {data.generation_pause ? (
-          <GenerationPausePanel gp={data.generation_pause} busy={posting} onResume={() => { void setPaused(false) }}
-            onCancel={(job) => { void cancelWaiting(job) }} />
-        ) : null}
-        <WornTable data={data} character={character} busy={posting} onRetry={build} onOpenWardrobe={onOpenWardrobe}
-          onOpenHairstyles={onOpenHairstyles}
-          onOpenPiece={(id, name) => setOpenPiece({ id, name })} onStateMesh={buildStateMesh} onChanged={reload}
-          onRefit={refit} onRegenerateMesh={regenerateMesh} />
-        <BodySection data={data} character={character} onChanged={reload} onOpenBaseBody={onOpenBaseBody} />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0, fontSize: 13 }}>
+      <FigureHeader data={data} posting={posting} autoSaved={autoSaved} onBuild={build}
+        onAutoBuild={(enabled) => { void setAutoBuild(enabled) }}
+        onPause={() => { void setPaused(true) }} />
+      {data.generation_pause ? (
+        <GenerationPausePanel gp={data.generation_pause} busy={posting} onResume={() => { void setPaused(false) }}
+          onCancel={(job) => { void cancelWaiting(job) }} />
+      ) : null}
+      <div className="ga-split ga-split-views ga-split-figure">
+        <div className="ga-split-col">
+          {/* The figure gets the wider column and no tilt toolbar (user 2026-11-13): the canvas fills the column. */}
+          {data.served_url ? (
+            <Model3DViewer key={data.served_url} url={data.served_url} format="glb" height={600} subject="figure"
+              builtAt={data.served_built_at} />
+          ) : (
+            <div className="ga-hint" style={{ height: 200, display: 'flex', alignItems: 'center',
+              justifyContent: 'center', border: '1px solid var(--border, #30363d)', borderRadius: 6 }}>
+              {t('No figure yet — Build makes it')}
+            </div>
+          )}
+        </div>
+        <div className="ga-split-col" style={PANEL}>
+          <SubTabs tabs={tabs} value={sub} onChange={setSub} />
+          {sub === 'worn' ? (
+            <WornRows data={data} character={character} busy={posting} onRetry={build} onOpenWardrobe={onOpenWardrobe}
+              onOpenHairstyles={onOpenHairstyles}
+              onOpenPiece={(id, name) => setOpenPiece({ id, name })} onStateMesh={buildStateMesh} onChanged={reload}
+              onRefit={refit} onRegenerateMesh={regenerateMesh} />
+          ) : sub === 'plan' ? (
+            <PlanRows data={data} />
+          ) : (
+            <BodySection data={data} character={character} onChanged={reload} onOpenBaseBody={onOpenBaseBody} />
+          )}
+        </div>
       </div>
       {openPiece ? (
         <GarmentPieceDialog character={character} itemId={openPiece.id} name={openPiece.name} noRunAll
@@ -203,9 +205,11 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
 const NOT_PAUSED: GenerationPause = { paused: false, since: null, waiting: [], running: [], resume_jobs: 0,
   resume_unknown: 0 }
 
-function FigureHeader({ data, posting, onBuild, onAutoBuild, onPause }: {
+function FigureHeader({ data, posting, autoSaved, onBuild, onAutoBuild, onPause }: {
   data: FigurePayload
   posting: boolean
+  /** "Build automatically" was saved in this visit: its note says so. */
+  autoSaved: boolean
   onBuild: () => void
   onAutoBuild: (enabled: boolean) => void
   /** Ruling A42: "Pause automatic generation" (no jobs). */
@@ -215,14 +219,18 @@ function FigureHeader({ data, posting, onBuild, onAutoBuild, onPause }: {
   const button = buildButton(data, t)
   const running = data.build.running
   const step = data.build.step
-  const failed = Object.entries(data.build.failed || {})
-  const steps = data.cost.steps
+  // A worn piece's failure is written in its own row; the head names only the others (an assembly, a texture).
+  const wornIds = new Set(data.worn.map((r) => r.item_id))
+  const failed = Object.entries(data.build.failed || {}).filter(([, f]) => !f.item_id || !wornIds.has(f.item_id))
+  const light = statusLight(data.status)
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <div className="ga-face-actions-row" style={{ alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <strong>{headerLine(data.status, data.changes.length, data.cost.hub_jobs, t)}</strong>
-        <button type="button" className="ga-btn ga-btn-primary" disabled={posting || !!button.disabled}
-          title={t(data.cost.note)} onClick={onBuild}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', minHeight: 30 }}>
+        <StepLight light={light} />
+        <strong style={{ color: LIGHT_COLOR[light] }}>{headerLine(data.status, data.changes.length, t)}</strong>
+        <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={posting || !!button.disabled}
+          title={[t('Runs every step that is missing or out of date, in order, and skips what is current'),
+            data.cost.hub_jobs ? t(ESTIMATE_NOTE) : ''].filter(Boolean).join(' — ')} onClick={onBuild}>
           {button.label}
         </button>
         <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}
@@ -231,13 +239,16 @@ function FigureHeader({ data, posting, onBuild, onAutoBuild, onPause }: {
             onChange={(e) => onAutoBuild(e.target.checked)} />
           <span>{t('Build automatically')}</span>
         </label>
+        <span className="ga-hint" style={autoSaved ? { color: LIGHT_COLOR.yellow } : undefined}>
+          {autoSaved ? autoBuildNote(data.auto_build, t)
+            : data.auto_build ? t('Changes start the Build by themselves') : t('Changes wait for Build')}
+        </span>
         <GenerationPauseSwitch gp={data.generation_pause ?? NOT_PAUSED} busy={posting} onPause={onPause} />
       </div>
-      {button.disabled ? <div className="ga-hint">{button.disabled}</div>
-        : data.cost.hub_jobs ? <div className="ga-hint">{t(ESTIMATE_NOTE)}</div> : null}
+      {button.disabled && button.disabled !== button.label ? <div className="ga-hint">{button.disabled}</div> : null}
       {noBaseBody(data) && !running ? <div className="ga-hint">{t(NO_BASE_BODY_NOTE)}</div> : null}
       {running ? (
-        <div className="ga-hint">
+        <div className="ga-hint" style={{ color: LIGHT_COLOR.blue }}>
           {step ? `${t('Running')}: ${step.index && step.count ? `${step.index}/${step.count} ` : ''}${step.label}` : t('Running')}
           {' — '}{t(BUILD_RUNNING_NOTE)}
         </div>
@@ -247,8 +258,8 @@ function FigureHeader({ data, posting, onBuild, onAutoBuild, onPause }: {
         <div className="ga-hint">{t('Paused before {step} — Resume builds the rest').replace('{step}', data.build.paused.label)}</div>
       ) : null}
       {data.changes.length ? (
-        <div className="ga-hint">
-          {data.changes.map((c) => changeLine(c, t)).join(' · ')}
+        <div className="ga-hint" style={{ color: LIGHT_COLOR.yellow }}>
+          {t('Due')}: {data.changes.map((c) => changeLine(c, t)).join(' · ')}
         </div>
       ) : null}
       {!running && failed.length ? (
@@ -256,26 +267,11 @@ function FigureHeader({ data, posting, onBuild, onAutoBuild, onPause }: {
           {failed.map(([name, f]) => `${name}: ${f.error}`).join(' · ')}
         </div>
       ) : null}
-      {steps.length ? (
-        <details>
-          <summary style={{ cursor: 'pointer' }} className="ga-hint">{t('What the Build runs')}</summary>
-          <ol style={{ margin: '4px 0 0 18px', padding: 0 }} className="ga-hint">
-            {steps.map((s, i) => (
-              <li key={`${s.name}:${s.item_id}:${i}`}>
-                {s.label}
-                {s.jobs === null ? ` — ${t('cost unknown')}` : s.jobs ? ` — ${s.jobs === 1 ? t('1 hub job')
-                  : t('{n} hub jobs').replace('{n}', String(s.jobs))}` : ''}
-                {s.manual ? ` — ${t(s.manual)}` : ''}
-              </li>
-            ))}
-          </ol>
-        </details>
-      ) : null}
     </div>
   )
 }
 
-function WornTable({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairstyles, onOpenPiece, onStateMesh,
+function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairstyles, onOpenPiece, onStateMesh,
   onChanged, onRefit, onRegenerateMesh }: {
   data: FigurePayload
   character: string
@@ -303,100 +299,102 @@ function WornTable({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairs
   ) : null
   const retry = (
     <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={onRetry}
-      title={t('Runs the Build: the failed step again, then what depends on it')}>{t('Retry')}</button>
+      title={t('Runs the Build: the failed step again, then what depends on it')}>
+      {retryLabel(data.cost.hub_jobs, t)}
+    </button>
   )
-  const title = data.outfit ? t('Worn now (outfit “{name}”)').replace('{name}', data.outfit) : t('Worn now')
   const hair = data.hair
   const hairCell = hair ? hairState(hair, t) : null
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <span className="ga-fieldset-title" style={{ margin: 0 }}>{title}</span>
-      <table style={{ borderCollapse: 'collapse', width: '100%' }}>
-        <tbody>
-          {hair && hairCell ? (
-            <tr style={{ borderTop: '1px solid var(--border, #30363d)' }}>
-              <td style={CELL}>{hair.name || t('Hair')}</td>
-              <td style={CELL}>{t(HAIR_MODE_LABELS[hair.mode as HairMode] || hair.mode)}</td>
-              <td style={CELL}>{hairstyles}</td>
-              <td style={CELL}>
-                <div style={hair.state === 'failed' ? ERROR_STYLE : undefined}>{hairCell.text}</div>
-                {hairCell.sub ? <div className="ga-hint">{hairCell.sub}</div> : null}
-                {hair.state === 'failed' ? retry : null}
-              </td>
-            </tr>
-          ) : null}
-          {data.worn.map((row) => {
-            const cell = wornState(row, t)
-            const note = row.note && !row.interim && !row.in_body_until && row.state !== 'left_out'
-              && row.state !== 'failed' && row.state !== 'fit_refused' ? row.note : ''
-            const other: PieceState | null = row.piece_state ? (row.piece_state === 'open' ? 'closed' : 'open') : null
-            return (
-              <tr key={row.item_id} style={{ borderTop: '1px solid var(--border, #30363d)' }}>
-                <td style={CELL}>
-                  <div>{row.name}</div>
-                  {row.mode === 'own_mesh' ? (
-                    <button type="button" className="ga-btn ga-btn-sm" aria-haspopup="dialog"
-                      onClick={() => onOpenPiece(row.item_id, row.name)}>{t('Details')}</button>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <span className="ga-hint">
+        {data.outfit ? t('Worn now (outfit “{name}”)').replace('{name}', data.outfit) : t('Worn now')}
+      </span>
+      {hair && hairCell ? (
+        <StepRowView row={{ name: hair.name || t('Hair'), light: hairCell.light, state: hairCell.text,
+          reason: hairCell.sub || '' }}
+          aside={<span className="ga-hint">· {t(HAIR_MODE_LABELS[hair.mode as HairMode] || hair.mode)}</span>}>
+          <div style={BUTTONS}>
+            {hairstyles}
+            {hair.state === 'failed' ? retry : null}
+          </div>
+        </StepRowView>
+      ) : null}
+      {data.worn.map((row) => {
+        const cell = wornState(row, t)
+        const note = row.note && !row.interim && !row.in_body_until && row.state !== 'left_out'
+          && row.state !== 'failed' && row.state !== 'fit_refused' ? t(row.note) : ''
+        const other: PieceState | null = row.piece_state ? (row.piece_state === 'open' ? 'closed' : 'open') : null
+        return (
+          <StepRowView key={row.item_id}
+            row={{ name: row.name, light: cell.light, state: cell.text, detail: cell.detail,
+              reason: [cell.sub, note].filter(Boolean).join(' · ') }}
+            aside={<span className="ga-hint">· {t(MESH_MODE_LABELS[row.mode] || row.mode)}</span>}>
+            <div style={BUTTONS}>
+              {wardrobe}
+              {row.mode === 'own_mesh' ? (
+                <button type="button" className="ga-btn ga-btn-sm" aria-haspopup="dialog"
+                  title={row.state === 'fit_refused'
+                    ? t('Details shows the refused fit on each body, marked where it fails, and can accept it.')
+                    : t('The piece’s mesh steps, each redone on its own, with their cost')}
+                  onClick={() => onOpenPiece(row.item_id, row.name)}>{t('Details')}</button>
+              ) : null}
+              {row.state === 'failed' ? retry : null}
+              {row.state === 'fit_refused' ? (
+                <>
+                  <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={() => onRefit(row)}
+                    title={t('Fits this piece on the body shape again and assembles the figure — CPU only, no hub job; steps that need hub jobs stay due for the next Build')}>
+                    {t(REFIT_LABEL)}
+                  </button>
+                  {row.piece_broken ? (
+                    <button type="button" className="ga-btn ga-btn-sm" disabled={busy}
+                      onClick={() => onRegenerateMesh(row)}
+                      title={t('Makes the piece’s mesh anew, then fits it')}>
+                      {regenerateMeshLabel(row.regenerate_jobs, t)}
+                    </button>
                   ) : null}
-                  {row.mode === 'own_mesh' && other ? (
-                    row.other_state_jobs === 0 ? (
-                      <div className="ga-hint">{stateMeshAction(other, 0, t)}</div>
-                    ) : (
-                      <div>
-                        <button type="button" className="ga-btn ga-btn-sm" disabled={busy}
-                          title={t('Only this piece’s chain; the Build makes only the worn state’s mesh')}
-                          onClick={() => onStateMesh(row, other)}>
-                          {stateMeshAction(other, row.other_state_jobs, t)}
-                        </button>
-                      </div>
-                    )
-                  ) : null}
-                </td>
-                <td style={CELL}>
-                  <div>{t(MESH_MODE_LABELS[row.mode] || row.mode)}</div>
-                  {row.piece_state ? (
-                    <PieceStateToggle character={character} itemId={row.item_id} state={row.piece_state}
-                      autoBuild={data.auto_build} disabled={busy} onChanged={onChanged} />
-                  ) : null}
-                </td>
-                <td style={CELL}>{wardrobe}</td>
-                <td style={CELL}>
-                  <div style={row.state === 'failed' || row.state === 'fit_refused' ? ERROR_STYLE
-                    : row.accepted_by_user ? ACCEPTED_STYLE : undefined}
-                    title={row.state === 'fit_refused' ? row.fit_refused_detail || undefined
-                      : row.accepted_by_user?.detail || undefined}>
-                    {cell.text}
-                  </div>
-                  {cell.sub ? <div className="ga-hint">{cell.sub}</div> : null}
-                  {note ? <div className="ga-hint">{t(note)}</div> : null}
-                  {row.state === 'failed' ? retry : null}
-                  {row.state === 'fit_refused' ? (
-                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                      <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={() => onRefit(row)}
-                        title={t('Fits this piece on the body shape again and assembles the figure — CPU only, no hub job; steps that need hub jobs stay due for the next Build')}>
-                        {t('Re-fit')}
-                      </button>
-                      {row.piece_broken ? (
-                        <button type="button" className="ga-btn ga-btn-sm" disabled={busy}
-                          onClick={() => onRegenerateMesh(row)}
-                          title={t('Makes the piece’s mesh anew, then fits it')}>
-                          {regenerateMeshLabel(row.regenerate_jobs, t)}
-                        </button>
-                      ) : null}
-                      <span className="ga-hint">
-                        {t('Details shows the refused fit on each body, marked where it fails, and can accept it.')}
-                      </span>
-                    </div>
-                  ) : null}
-                </td>
-              </tr>
-            )
-          })}
-          {!data.worn.length && !hair ? (
-            <tr><td style={CELL} className="ga-hint">{t('Nothing worn')}</td></tr>
-          ) : null}
-        </tbody>
-      </table>
+                </>
+              ) : null}
+            </div>
+            {row.piece_state ? (
+              <div style={BUTTONS}>
+                {/* Its own "then Build runs automatically" stays off: the note beside it names the cost too. */}
+                <PieceStateToggle character={character} itemId={row.item_id} state={row.piece_state}
+                  autoBuild={false} disabled={busy} onChanged={onChanged} />
+                <span className="ga-hint">{stateToggleNote(row, data.auto_build, t)}</span>
+              </div>
+            ) : null}
+            {row.mode === 'own_mesh' && other ? (
+              row.other_state_jobs === 0 ? (
+                <div className="ga-hint">{stateMeshAction(other, 0, t)}</div>
+              ) : (
+                <div>
+                  <button type="button" className="ga-btn ga-btn-sm" disabled={busy}
+                    title={t('Only this piece’s chain; the Build makes only the worn state’s mesh')}
+                    onClick={() => onStateMesh(row, other)}>
+                    {stateMeshAction(other, row.other_state_jobs, t)}
+                  </button>
+                </div>
+              )
+            ) : null}
+          </StepRowView>
+        )
+      })}
+      {!data.worn.length && !hair ? <div className="ga-hint">{t('Nothing worn')}</div> : null}
+    </div>
+  )
+}
+
+function PlanRows({ data }: { data: FigurePayload }) {
+  const { t } = useI18n()
+  const rows = planRows(data, t)
+  if (!rows.length) return <div className="ga-hint">{t('Nothing to build — every step is current.')}</div>
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <span className="ga-hint">
+        {t('The Build runs these in order and skips what is current; Build above starts them.')}
+      </span>
+      {rows.map((r) => <StepRowView key={r.key} row={r} />)}
     </div>
   )
 }
@@ -408,26 +406,25 @@ function BodySection({ data, character, onChanged, onOpenBaseBody }: {
   onOpenBaseBody?: () => void
 }) {
   const { t } = useI18n()
-  if (!data.body) return null
+  if (!data.body) return <div className="ga-hint">{t('No body yet — Build makes it')}</div>
   const names = (state: string) => data.worn.filter((r) => r.mode === state && r.state !== 'left_out').map((r) => r.name)
   const shapeNames = [...(data.hair?.mode === 'body' ? [t('hair')] : []), ...names('in_body')]
   const plainNote = data.changes.find((c) => c.key === 'body')?.note
+  const rows = bodyRows(data.body, shapeNames, names('painted'), t)
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <div>
-        <span className="ga-fieldset-title" style={{ margin: 0 }}>{t('Body')}:</span>{' '}
-        {bodyLine(data.body, shapeNames, names('painted'), t)}
-      </div>
-      {plainNote ? <div className="ga-hint">{t(plainNote)}</div> : null}
-      <div className="ga-face-actions-row" style={{ alignItems: 'center', gap: 8 }}>
-        <span className="ga-hint">{baseBodyLine(data.body.plain.state, t)}</span>
-        {onOpenBaseBody ? (
-          <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBaseBody}>{t('Open Base body tab')}</button>
-        ) : null}
-      </div>
-      <Collapsed summary={t('Stored bodies and textures')}>
-        {() => <FigureStored character={character} onDeleted={onChanged} />}
-      </Collapsed>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {rows.map((r) => (
+        <StepRowView key={r.key} row={{ ...r, reason: r.key === 'plain' && plainNote ? `${r.reason} · ${t(plainNote)}` : r.reason }}>
+          {r.key === 'plain' && onOpenBaseBody ? (
+            <div style={BUTTONS}>
+              <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBaseBody}
+                title={baseBodyLine(data.body?.plain.state || 'ready', t)}>{t('Open Base body tab')}</button>
+            </div>
+          ) : null}
+        </StepRowView>
+      ))}
+      <span className="ga-fieldset-title" style={{ margin: '6px 0 0' }}>{t('Stored bodies and textures')}</span>
+      <FigureStored character={character} onDeleted={onChanged} />
     </div>
   )
 }

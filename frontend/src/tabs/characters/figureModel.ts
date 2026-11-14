@@ -10,6 +10,7 @@
  * Build (one per character) makes what is missing. Returned strings are
  * English; the components put them through `t()`.
  */
+import type { Light } from './hairstylesModel'
 
 /** How an outfit piece reaches the figure (`garment_set.MESH_MODES`). */
 export type MeshMode = 'own_mesh' | 'painted' | 'in_body'
@@ -366,15 +367,19 @@ export function changeLine(c: FigureChange, t: Tr = EN): string {
   return cost ? `${head} (${cost})` : head
 }
 
-/** The header's status line (spec sketch): "Status: up to date" or "2 changes · Build (7 hub jobs)". */
-export function headerLine(status: FigureStatus, changes: number, hubJobs: number | null, t: Tr = EN): string {
-  if (status === 'up_to_date') return t('Status: up to date')
-  if (status === 'building') {
-    return changes > 0 ? `${t('Status: building')} · ${changesText(changes, t)}` : t('Status: building')
-  }
-  const build = t('Build ({cost})').replace('{cost}', jobsTr(hubJobs, t))
+/** The flow head's status words beside its light (Task UI5): what holds — the Build button beside it names the cost,
+ *  so the line does not repeat it. "Up to date" · "2 changes" · "Out of date" (steps without a change of a piece) ·
+ *  "1 change · a step failed" · "Building · 2 changes". */
+export function headerLine(status: FigureStatus, changes: number, t: Tr = EN): string {
+  if (status === 'up_to_date') return t('Up to date')
+  if (status === 'building') return changes > 0 ? `${t('Building now')} · ${changesText(changes, t)}` : t('Building now')
   const head = changes > 0 ? changesText(changes, t) : t('Out of date')
-  return status === 'failed' ? `${head} · ${t('a step failed')} · ${build}` : `${head} · ${build}`
+  return status === 'failed' ? `${head} · ${t('a step failed')}` : head
+}
+
+/** The flow head's light (checklist 8): green up to date · yellow changes · red a step failed · blue building. */
+export function statusLight(status: FigureStatus): Light {
+  return status === 'up_to_date' ? 'green' : status === 'building' ? 'blue' : status === 'failed' ? 'red' : 'yellow'
 }
 
 /** The ONE primary button (rule 2): its label with the cost, and why it is disabled — written under it.
@@ -388,9 +393,13 @@ export function buildButton(f: Pick<FigurePayload, 'cost' | 'build' | 'body'>, t
   const cost = jobsTr(f.cost.hub_jobs, t)
   const label = noBaseBody(f) ? t('Build base body ({cost})').replace('{cost}', cost)
     : t('Build ({cost})').replace('{cost}', cost)
-  if (!f.cost.steps.length && !f.build.running) return { label, disabled: t('Nothing to build') }
+  // Checklist 1: nothing due → the flow's button says so ("Everything is current", disabled).
+  if (!f.cost.steps.length && !f.build.running) return { label: t(EVERYTHING_CURRENT), disabled: t(EVERYTHING_CURRENT) }
   return { label, disabled: null }
 }
+
+/** The Build's label when nothing is due (checklist 1). */
+export const EVERYTHING_CURRENT = 'Everything is current'
 
 /** The humanoid has no plain body yet: its figure starts with "Build base body" (Ruling A13). */
 export function noBaseBody(f: Pick<FigurePayload, 'body'>): boolean {
@@ -454,40 +463,46 @@ export const FIT_REFUSED_NOTE = 'Still shown: the figure built before. Re-fit tr
 /** The status light's words of a fit the user accepted although its checks refused it (Ruling A31). */
 export const ACCEPTED_BY_YOU = 'Accepted by you'
 
-/** The state column of a worn row (spec sketch) and the line under it. */
+/** A worn row as a step (checklist 8): its light, the state on the right, the reason in plain words under it and
+ *  the mouse-over. Green ready (or accepted by you) · yellow due (waits for the Build, its own mesh missing) ·
+ *  blue building · red failed or refused · grey left out. */
 export function wornState(row: Pick<FigureWornRow, 'state' | 'mode' | 'jobs' | 'failure' | 'left_out' | 'note' | 'interim'
-  | 'in_body_until' | 'fit_refused' | 'refused_on' | 'accepted_by_user'>, t: Tr = EN): { text: string; sub: string | null } {
+  | 'in_body_until' | 'fit_refused' | 'refused_on' | 'accepted_by_user' | 'fit_refused_detail'>, t: Tr = EN): {
+  light: Light; text: string; sub: string | null; detail: string
+} {
   const sub = row.in_body_until === 'mesh' ? t(IN_BODY_UNTIL_MESH)
     : row.in_body_until === 'build' ? t(IN_BODY_UNTIL_BUILD)
       : row.interim ? t(IN_BODY_UNTIL_SHAPE) : null
   if (row.in_body_until === 'build' && row.state !== 'failed') {
-    return { text: row.state === 'building' ? t('⏳ building') : t('⏳ waiting for the Build'), sub }
+    return row.state === 'building' ? { light: 'blue', text: t('Building now'), sub, detail: '' }
+      : { light: 'yellow', text: t('Waits for the Build'), sub, detail: '' }
   }
   switch (row.state) {
     case 'ready': return row.accepted_by_user
       ? {
-        text: t('✓ ready — {accepted}').replace('{accepted}', t(ACCEPTED_BY_YOU)),
+        light: 'green',
+        text: t('Ready — {accepted}').replace('{accepted}', t(ACCEPTED_BY_YOU)),
         sub: t('{body}: its checks refused it — {reason}').replace('{body}', bodyWords(row.accepted_by_user.on, t))
           .replace('{reason}', row.accepted_by_user.reason),
+        detail: row.accepted_by_user.detail || '',
       }
-      : { text: t('✓ ready'), sub: null }
-    case 'failed': return { text: t('failed — {reason}').replace('{reason}', row.failure || row.note), sub: null }
+      : { light: 'green', text: t('Ready'), sub: null, detail: '' }
+    case 'failed': return { light: 'red', text: t('Failed'), sub: row.failure || row.note, detail: '' }
     case 'fit_refused': return {
-      text: (row.refused_on
+      light: 'red',
+      text: t('Refused on the body shape'),
+      sub: (row.refused_on
         ? t('Fits the plain body — refused on the body shape ({pieces}): {reason}').replace('{pieces}', row.refused_on)
         : t('Fits the plain body — refused on the body shape: {reason}'))
         .replace('{reason}', row.fit_refused || row.note),
-      sub: t(FIT_REFUSED_NOTE),
+      detail: [t(FIT_REFUSED_NOTE), row.fit_refused_detail || ''].filter(Boolean).join('\n'),
     }
-    case 'left_out': return { text: t('left out: {reason}').replace('{reason}', row.left_out || row.note), sub: null }
-    case 'building': return { text: t('⏳ building'), sub }
+    case 'left_out': return { light: 'grey', text: t('Left out'), sub: row.left_out || row.note, detail: '' }
+    case 'building': return { light: 'blue', text: t('Building now'), sub, detail: '' }
     default:
-      return {
-        text: row.mode === 'own_mesh'
-          ? t('⏳ mesh · {cost}').replace('{cost}', jobsTr(row.jobs, t))
-          : t('⏳ waiting for the Build'),
-        sub,
-      }
+      return row.mode === 'own_mesh'
+        ? { light: 'yellow', text: t('Due: own mesh · {cost}').replace('{cost}', jobsTr(row.jobs, t)), sub, detail: '' }
+        : { light: 'yellow', text: t('Waits for the Build'), sub, detail: '' }
   }
 }
 
@@ -536,34 +551,98 @@ export function showBodySwitch(bodies: FitBody[] | undefined): boolean {
   return !!bodies && (bodies.length > 1 || bodies.some((b) => b.status !== 'accepted'))
 }
 
-/** The state column of the hair row. */
-export function hairState(hair: FigureHairRow, t: Tr = EN): { text: string; sub: string | null } {
+/** The hair row as a step (checklist 8): light, state, the line under it. */
+export function hairState(hair: FigureHairRow, t: Tr = EN): { light: Light; text: string; sub: string | null } {
   const sub = hair.note && hair.state !== 'failed' ? t(hair.note) : null
   switch (hair.state) {
-    case 'ready': return { text: t('✓ ready'), sub: null }
-    case 'failed': return { text: t('failed — {reason}').replace('{reason}', hair.note), sub: null }
-    case 'building': return { text: t('⏳ building'), sub }
+    case 'ready': return { light: 'green', text: t('Ready'), sub: null }
+    case 'failed': return { light: 'red', text: t('Failed'), sub: hair.note }
+    case 'building': return { light: 'blue', text: t('Building now'), sub }
     default:
       return {
+        light: 'yellow',
         text: hair.rebuild
-          ? t('⏳ plain body rebuild · {cost}').replace('{cost}', jobsTr(hair.jobs, t))
-          : t('⏳ HairDeck · {cost}').replace('{cost}', jobsTr(hair.jobs, t)),
+          ? t('Due: plain body rebuild · {cost}').replace('{cost}', jobsTr(hair.jobs, t))
+          : t('Due: {mode} · {cost}').replace('{mode}', t(HAIR_MODE_LABELS[hair.mode as HairMode] || hair.mode))
+            .replace('{cost}', jobsTr(hair.jobs, t)),
         sub,
       }
   }
 }
 
-/** The "Body:" line — plain body · shape · texture (spec sketch), with the pieces' names. */
-export function bodyLine(body: NonNullable<FigurePayload['body']>, shapeNames: string[], textureNames: string[],
+/** The body the pieces are worn on as three steps (checklist 8): the plain body (its flow is the Base body tab),
+ *  the body shape (what is in the body, meshed by the Build) and the texture (what is painted, painted by the
+ *  Build). */
+export function bodyRows(body: NonNullable<FigurePayload['body']>, shapeNames: string[], textureNames: string[],
+  t: Tr = EN): Array<{ key: 'plain' | 'shape' | 'texture'; name: string; light: Light; state: string; reason: string }> {
+  const plain = body.plain.state
+  const names = (list: string[]) => list.join(', ')
+  return [
+    {
+      key: 'plain', name: t('Plain body'),
+      light: plain === 'ready' ? 'green' : 'yellow',
+      state: plain === 'ready' ? t('Current') : plain === 'missing' ? t('None yet') : t('Outdated'),
+      reason: baseBodyLine(plain, t),
+    },
+    body.shape.state === 'plain'
+      ? { key: 'shape', name: t('Body shape'), light: 'grey', state: t('Not needed'), reason: t('Nothing is worn in the body') }
+      : {
+        key: 'shape', name: t('Body shape'),
+        light: body.shape.state === 'ready' ? 'green' : 'yellow',
+        state: body.shape.state === 'ready' ? t('Current') : t('Due'),
+        reason: (body.shape.state === 'ready' ? t('In the body: {names}') : t('In the body: {names} — the Build meshes it'))
+          .replace('{names}', names(shapeNames) || '–'),
+      },
+    body.texture.state === 'none'
+      ? { key: 'texture', name: t('Texture'), light: 'grey', state: t('Not needed'), reason: t('Nothing is painted') }
+      : {
+        key: 'texture', name: t('Texture'),
+        light: body.texture.state === 'ready' ? 'green' : 'yellow',
+        state: body.texture.state === 'ready' ? t('Current') : t('Due'),
+        reason: (body.texture.state === 'ready' ? t('Painted: {names}') : t('Painted: {names} — the Build paints it'))
+          .replace('{names}', names(textureNames) || '–'),
+      },
+  ]
+}
+
+/** The Build's planned steps as rows (checklist 8): red a chain that failed for its input (a manual Build retries
+ *  it), blue the step in flight, yellow due; the cost on the right. */
+export function planRows(f: Pick<FigurePayload, 'cost' | 'build'>, t: Tr = EN): Array<{
+  key: string; name: string; light: Light; state: string; reason: string
+}> {
+  const running = f.build.running ? f.build.step : null
+  return f.cost.steps.map((s, i) => ({
+    key: `${s.name}:${s.item_id}:${i}`,
+    name: s.label,
+    light: running && running.name === s.name && running.item_id === s.item_id ? 'blue' : s.failed ? 'red' : 'yellow',
+    state: s.jobs === null ? t('cost unknown') : s.jobs ? jobsTr(s.jobs, t) : t('no hub job'),
+    reason: [s.failed ? `${t('Failed')}: ${s.failed}` : '', s.manual ? t(s.manual) : ''].filter(Boolean).join(' · '),
+  }))
+}
+
+/** Beside a closable piece's Closed / Open (checklist 2, 9): the switch is saved at once; what it starts and costs —
+ *  with Build automatically on the Build follows by itself, its cost the other state's mesh of an own-mesh piece
+ *  (`other_state_jobs`, 0 = built); else it only becomes due. */
+export function stateToggleNote(row: Pick<FigureWornRow, 'mode' | 'other_state_jobs'>, autoBuild: boolean,
   t: Tr = EN): string {
-  const named = (what: string, names: string[]) => names.length ? `${what} "${names.join(', ')}"` : what
-  const plain = body.plain.state === 'ready' ? t('plain body ✓')
-    : body.plain.state === 'missing' ? t('plain body: none yet') : t('plain body: older prompts')
-  const shape = body.shape.state === 'plain' ? t('no shape (nothing in the body)')
-    : `${named(t('shape'), shapeNames)} ${body.shape.state === 'ready' ? '✓' : '⏳'}`
-  const texture = body.texture.state === 'none' ? t('nothing painted')
-    : `${named(t('texture'), textureNames)} ${body.texture.state === 'ready' ? '✓' : '⏳'}`
-  return [plain, shape, texture].join(' · ')
+  if (!autoBuild) return t('Saved at once — nothing runs; the change waits for Build')
+  if (row.mode === 'own_mesh' && row.other_state_jobs !== null) {
+    return row.other_state_jobs === 0 ? t('Switching starts the Build — no hub job (that mesh is built)')
+      : t('Switching starts the Build — {cost} for that mesh').replace('{cost}', jobsTr(row.other_state_jobs, t))
+  }
+  return t('Switching starts the Build — cost unknown')
+}
+
+/** "Build automatically" beside its checkbox (checklist 2): saved at once, never runs anything itself. */
+export function autoBuildNote(on: boolean, t: Tr = EN): string {
+  return on ? t('Saved — changes start the Build by themselves')
+    : t('Saved — changes wait for Build')
+}
+
+/** A piece's single steps on the Figure tab with their cost (checklist 9). */
+export const REFIT_LABEL = 'Re-fit — no hub job'
+export function retryLabel(hubJobs: number | null, t: Tr = EN): string {
+  return t('Retry — {cost}').replace('{cost}', jobsTr(hubJobs, t))
 }
 
 /** The Figure tab's one line on the base body (Task UI1 — its steps live in the Base body tab). */

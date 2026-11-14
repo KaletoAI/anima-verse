@@ -14,7 +14,7 @@
 import { useState } from 'react'
 import { ConfirmDialog } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
-import { StepLight } from './FieldHairstyles'
+import { StepLight } from './StepRows'
 import { PAUSE_REASON, pauseLine, resumeLabel, waitingLine } from './figureModel'
 import type { GenerationPause, WaitingJob } from './figureModel'
 

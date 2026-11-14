@@ -44,21 +44,23 @@
  *     height scale is only for a closed toe box, only as a second try).
  *
  * Task 10 — the Figure tab (spec "The UI" sketch and "Rules for the buttons", rulings 8, 7a, 8a):
- * [8] headerLine(status, changes, hubJobs), verbatim from the plan:
- *       ('up_to_date', 0, 0) → "Status: up to date"
- *       ('changes', 2, 7)    → "2 changes · Build (7 hub jobs)"
- *       ('changes', 1, 1)    → "1 change · Build (1 hub job)" (singular both ways)
- *       ('changes', 0, 0)    → "Out of date · Build (0 hub jobs)" (plan has steps — an assembly or a fit —
- *                              without a pending change of a piece: still a Build, said as such)
- *       ('failed', 1, null)  → "1 change · a step failed · Build (cost unknown)"
- *       ('building', 2, 7)   → "Status: building · 2 changes";  ('building', 0, 0) → "Status: building"
+ * [8] headerLine(status, changes) — the flow head's words beside its light (Task UI5: the Build button beside it
+ *     names the cost, so the line no longer repeats "Build (N hub jobs)"):
+ *       ('up_to_date', 0) → "Up to date"
+ *       ('changes', 2)    → "2 changes";  ('changes', 1) → "1 change" (singular)
+ *       ('changes', 0)    → "Out of date" (plan has steps — an assembly or a fit — without a pending change of a
+ *                           piece: still due, said as such)
+ *       ('failed', 1)     → "1 change · a step failed"
+ *       ('building', 2)   → "Building now · 2 changes";  ('building', 0) → "Building now"
+ *     statusLight: up_to_date green · changes yellow · failed red · building blue.
  * [9] buildButton(f) — rule 2, the disabled reason written under it (Task 11h, Ruling A13: every humanoid is
  *     on the pipeline, the "Off the figure pipeline" case is gone with the switch):
  *       no plain body yet (body.plain.state "missing"), steps costing 9 → label "Build base body (9 hub jobs)",
  *                                          disabled null; noBaseBody → true; with plain "ready" → false;
  *       no body block (null)             → noBaseBody false, label "Build (…)";
  *       BUILD_STATUS.off = "No figure — humanoid characters that are not temporary NPCs only";
- *       no planned step, no run          → label "Build (0 hub jobs)", disabled "Nothing to build"
+ *       no planned step, no run          → label "Everything is current", disabled "Everything is current"
+ *                                          (checklist 1, Task UI5; the tab writes no reason equal to the label)
  *       no planned step, a run goes      → disabled null (a click queues the next one — NOT a disable)
  *       steps costing 7, run or not      → label "Build (7 hub jobs)", disabled null
  *     BUILD_RUNNING_NOTE = "A Build is running — the next one is queued".
@@ -73,19 +75,22 @@
  *     "Made without the base body — the Figure tab’s Build replaces it"; 'outfit_body' → "Built on an older body
  *     shape — rebuild it"; 'figure' → "Built as another figure than the worn pieces show now — rebuild it";
  *     null / 'older_base' → "Built on an older base body — rebuild it".
- * [11] wornState(row) / bodyLine — the sketch's state column and Body line:
- *       ready → "✓ ready"; own_mesh interim with 3 jobs, in_body_until 'mesh' (ruling A11, task 11c-2: in the
- *       body until its mesh is ready; was "shown painted until ready") → "⏳ mesh · 3 hub jobs" + "in the body
- *       until its own mesh is ready"; own_mesh pending, in_body_until 'build' (its mesh ready, the next Build
- *       takes it out of the shape) → "⏳ waiting for the Build" + "own mesh ready — in the body until the next
- *       Build", building → "⏳ building" + the same line; in_body interim (no in_body_until) → the sub
- *       "not in the 3D figure until its body shape is built" (its shape not built yet; Ruling C4 of Task 11g
- *       fix round 2: nothing is painted in its place any more — was "shown painted until ready");
- *       failed "mesh — refused" → "failed — mesh — refused"; left_out "no fit yet" → "left out: no fit yet";
- *       in_body pending → "⏳ waiting for the Build" (no line under it: not interim).
- *       bodyLine(all ready, ['hair'], ['Black Blazer']) → 'plain body ✓ · shape "hair" ✓ · texture "Black Blazer" ✓';
- *       (plain older_prompts, shape plain, texture missing, [], ['Blazer'])
- *         → 'plain body: older prompts · no shape (nothing in the body) · texture "Blazer" ⏳'.
+ * [11] wornState(row) — a worn row as a step (Task UI5: a light instead of the ✓ / ⏳ glyphs, the state short, the
+ *       reason under it, the refusal's guidance on mouse-over):
+ *       ready → {green, "Ready", no line}; own_mesh interim with 3 jobs, in_body_until 'mesh' (ruling A11) →
+ *       {yellow, "Due: own mesh · 3 hub jobs", "in the body until its own mesh is ready"}; own_mesh pending,
+ *       in_body_until 'build' (its mesh ready, the next Build takes it out of the shape) → {yellow, "Waits for the
+ *       Build", "own mesh ready — in the body until the next Build"}, building → {blue, "Building now", the same
+ *       line}; in_body interim (no in_body_until) → the line "not in the 3D figure until its body shape is
+ *       built" (Ruling C4); failed "mesh — refused" → {red, "Failed", "mesh — refused"}; left_out "no fit yet" →
+ *       {grey, "Left out", "no fit yet"}; in_body pending → {yellow, "Waits for the Build", no line};
+ *       fit_refused "sole sinks" on "T-shirt" with detail "d" → {red, "Refused on the body shape", "Fits the plain
+ *       body — refused on the body shape (T-shirt): sole sinks", mouse-over FIT_REFUSED_NOTE + "\n" + "d"}.
+ *       bodyRows(all ready, ['hair'], ['Black Blazer']) → plain {green, "Current"}, shape {green, "Current",
+ *       "In the body: hair"}, texture {green, "Current", "Painted: Black Blazer"};
+ *       (plain older_prompts, shape plain, texture missing, [], ['Blazer']) → plain {yellow, "Outdated"}, shape
+ *       {grey, "Not needed", "Nothing is worn in the body"}, texture {yellow, "Due", "Painted: Blazer — the Build
+ *       paints it"}; plain missing → {yellow, "None yet"}.
  * [12] Source greps: the Wardrobe's "Mesh steps" opens only on a row that is NOT worn on the pipeline (T9
  *      concern 2 — a worn piece's only entry is the Figure tab); the Base body tab (FieldBaseBody — was
  *      FigureBodyDetails inside the Figure tab until Task UI1) writes staleBaseNote under "Run skin step"; FieldFigure starts nothing but the Build (its POSTs, all through its one
@@ -120,10 +125,10 @@
  *         → "Black Lederjacket worn open — open mesh missing (6 hub jobs)" (F13 b: ONE row, the name first)
  *       {key 'j', name 'Shirt', note 'x', jobs 0} → "Shirt: x" (nothing planned: no cost)
  *       {key 'j', name 'Shirt', jobs null} → "Shirt (cost unknown)" · without `jobs` → "Shirt"
- *     hairState({state 'pending', rebuild true, jobs 9, note n}) → text "⏳ plain body rebuild · 9 hub jobs",
- *     sub n; without `rebuild` → "⏳ HairDeck · 9 hub jobs". ESTIMATE_NOTE = "Hub jobs are an estimate —
- *     retries extra" (F13 c) and FieldFigure renders it under the Build button and the changes through
- *     changeLine.
+ *     hairState({state 'pending', rebuild true, jobs 9, note n}) → {yellow, "Due: plain body rebuild · 9 hub
+ *     jobs", n}; without `rebuild` → "Due: HairDeck · 9 hub jobs", mode haar → "Due: HAAR · 9 hub jobs" (the mode
+ *     named, Task UI5); ready → {green, "Ready"}. ESTIMATE_NOTE = "Hub jobs are an estimate — retries extra"
+ *     (F13 c) and FieldFigure puts it on the Build button (its mouse-over) and the changes through changeLine.
  * [17] Ruling A13b (source greps): FigureBuildButton posts only figure/build and labels itself with
  *       buildButton (the Figure tab's "Build (N jobs)"); BaseBodyOutfitStatus (Pose tab) and FieldModel3D (3D tab)
  *       render it instead of "Rebuild outfit model" / "Rebuild from base body" (no model3d/generate); the
@@ -177,6 +182,20 @@
  *        → "… — no hub job".
  *      Source greps: the panel's Cancel opens ConfirmDialog (no native dialog); FieldFigure posts
  *      `figure/generation-pause` and `figure/waiting/cancel`; useFigure re-reads on the topic `generation`.
+ * [21] Task UI5 — the Figure tab follows the tab checklist:
+ *      planRows: steps [{pieces "Own mesh · Blazer", 3}, {fits, 0}, {texture, null}] while nothing runs →
+ *        [yellow "3 hub jobs", yellow "no hub job", yellow "cost unknown"]; a step with failed "x" → red, its reason
+ *        "Failed: x"; a step with manual "m" → reason "m"; the step in flight (build.running, step {pieces, item a})
+ *        → blue.
+ *      stateToggleNote (beside Closed / Open, checklist 2 and 9): auto off → "Saved at once — nothing runs; the
+ *        change waits for Build"; auto on, own mesh with other_state_jobs 6 → "Switching starts the Build — 6 hub
+ *        jobs for that mesh", 1 → "… — 1 hub job for that mesh", 0 → "Switching starts the Build — no hub job (that
+ *        mesh is built)"; auto on, in_body (other_state_jobs null) → "Switching starts the Build — cost unknown".
+ *      autoBuildNote(true) → "Saved — changes start the Build by themselves"; (false) → "Saved — changes wait for
+ *        Build". retryLabel(3) → "Retry — 3 hub jobs", (null) → "Retry — cost unknown"; REFIT_LABEL = "Re-fit — no
+ *        hub job".
+ *      Source greps: FieldFigure draws its rows with StepRowView, its panel with SubTabs (Worn now · Build plan ·
+ *      Body), the viewer with `builtAt`; neither it nor figureModel writes a ✓ or ⏳ glyph any more.
  */
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -300,13 +319,15 @@ check('[7] footwear hint: no flat ×1.50 high claim',
   src('frontend/src/tabs/characters/FootwearSteps.tsx').includes('×1.50 high'), false);
 
 // [8]
-check('[8] up to date', m.headerLine('up_to_date', 0, 0), 'Status: up to date');
-check('[8] 2 changes', m.headerLine('changes', 2, 7), '2 changes · Build (7 hub jobs)');
-check('[8] 1 change', m.headerLine('changes', 1, 1), '1 change · Build (1 hub job)');
-check('[8] 0 changes', m.headerLine('changes', 0, 0), 'Out of date · Build (0 hub jobs)');
-check('[8] failed', m.headerLine('failed', 1, null), '1 change · a step failed · Build (cost unknown)');
-check('[8] building 2', m.headerLine('building', 2, 7), 'Status: building · 2 changes');
-check('[8] building 0', m.headerLine('building', 0, 0), 'Status: building');
+check('[8] up to date', m.headerLine('up_to_date', 0), 'Up to date');
+check('[8] 2 changes', m.headerLine('changes', 2), '2 changes');
+check('[8] 1 change', m.headerLine('changes', 1), '1 change');
+check('[8] 0 changes', m.headerLine('changes', 0), 'Out of date');
+check('[8] failed', m.headerLine('failed', 1), '1 change · a step failed');
+check('[8] building 2', m.headerLine('building', 2), 'Building now · 2 changes');
+check('[8] building 0', m.headerLine('building', 0), 'Building now');
+check('[8] lights', ['up_to_date', 'changes', 'failed', 'building'].map((x) => m.statusLight(x)),
+  ['green', 'yellow', 'red', 'blue']);
 
 // [9]
 const step = (jobs) => ({ name: 'pieces', label: 'x', jobs, item_id: 'a', failed: '', manual: '' });
@@ -321,7 +342,7 @@ check('[9] noBaseBody', [m.noBaseBody(fig('missing', [], false)), m.noBaseBody(f
 check('[9] no body block', m.buildButton(fig(null, [step(2)], false)).label, 'Build (2 hub jobs)');
 check('[9] off status', m.BUILD_STATUS.off, 'No figure — humanoid characters that are not temporary NPCs only');
 check('[9] nothing to build', m.buildButton(fig('ready', [], false)),
-  { label: 'Build (0 hub jobs)', disabled: 'Nothing to build' });
+  { label: 'Everything is current', disabled: 'Everything is current' });
 check('[9] running, nothing planned: not disabled', m.buildButton(fig('ready', [], true)).disabled, null);
 check('[9] 7 jobs', m.buildButton(fig('ready', [step(3), step(4)], false)),
   { label: 'Build (7 hub jobs)', disabled: null });
@@ -345,27 +366,35 @@ check('[10] stale model texts', ['before_pipeline', 'outfit_body', 'figure', nul
 // [11]
 const row = (o) => ({ state: 'pending', mode: 'painted', jobs: 0, failure: '', left_out: '', note: '',
   interim: false, ...o });
-check('[11] ready', m.wornState(row({ state: 'ready' })), { text: '✓ ready', sub: null });
-check('[11] interim own mesh', m.wornState(row({ state: 'interim', mode: 'own_mesh', jobs: 3, interim: true,
-  in_body_until: 'mesh' })), { text: '⏳ mesh · 3 hub jobs', sub: 'in the body until its own mesh is ready' });
-check('[11] own mesh ready, in the body until the Build', m.wornState(row({ mode: 'own_mesh', in_body_until: 'build' })),
-  { text: '⏳ waiting for the Build', sub: 'own mesh ready — in the body until the next Build' });
-check('[11] ... while the Build runs', m.wornState(row({ state: 'building', mode: 'own_mesh', in_body_until: 'build' })),
-  { text: '⏳ building', sub: 'own mesh ready — in the body until the next Build' });
-check('[11] in_body interim keeps its line', m.wornState(row({ state: 'interim', mode: 'in_body', interim: true })).sub,
+const ws = (o) => { const w = m.wornState(row(o)); return [w.light, w.text, w.sub]; };
+check('[11] ready', ws({ state: 'ready' }), ['green', 'Ready', null]);
+check('[11] interim own mesh', ws({ state: 'interim', mode: 'own_mesh', jobs: 3, interim: true, in_body_until: 'mesh' }),
+  ['yellow', 'Due: own mesh · 3 hub jobs', 'in the body until its own mesh is ready']);
+check('[11] own mesh ready, in the body until the Build', ws({ mode: 'own_mesh', in_body_until: 'build' }),
+  ['yellow', 'Waits for the Build', 'own mesh ready — in the body until the next Build']);
+check('[11] ... while the Build runs', ws({ state: 'building', mode: 'own_mesh', in_body_until: 'build' }),
+  ['blue', 'Building now', 'own mesh ready — in the body until the next Build']);
+check('[11] in_body interim keeps its line', ws({ state: 'interim', mode: 'in_body', interim: true })[2],
   'not in the 3D figure until its body shape is built');
-check('[11] failed', m.wornState(row({ state: 'failed', failure: 'mesh — refused' })),
-  { text: 'failed — mesh — refused', sub: null });
-check('[11] left out', m.wornState(row({ state: 'left_out', left_out: 'no fit yet' })),
-  { text: 'left out: no fit yet', sub: null });
-check('[11] in body pending', m.wornState(row({ mode: 'in_body' })),
-  { text: '⏳ waiting for the Build', sub: null });
+check('[11] failed', ws({ state: 'failed', failure: 'mesh — refused' }), ['red', 'Failed', 'mesh — refused']);
+check('[11] left out', ws({ state: 'left_out', left_out: 'no fit yet' }), ['grey', 'Left out', 'no fit yet']);
+check('[11] in body pending', ws({ mode: 'in_body' }), ['yellow', 'Waits for the Build', null]);
+const refusedRow = m.wornState(row({ state: 'fit_refused', mode: 'own_mesh', fit_refused: 'sole sinks', refused_on: 'T-shirt',
+  fit_refused_detail: 'd' }));
+check('[11] fit refused', [refusedRow.light, refusedRow.text, refusedRow.sub, refusedRow.detail],
+  ['red', 'Refused on the body shape', 'Fits the plain body — refused on the body shape (T-shirt): sole sinks',
+    `${m.FIT_REFUSED_NOTE}\nd`]);
 const part = (state) => ({ key: 'k', state });
-check('[11] body line ready', m.bodyLine({ plain: part('ready'), shape: part('ready'), texture: part('ready') },
-  ['hair'], ['Black Blazer']), 'plain body ✓ · shape "hair" ✓ · texture "Black Blazer" ✓');
-check('[11] body line mixed', m.bodyLine({ plain: part('older_prompts'), shape: part('plain'),
-  texture: part('missing') }, [], ['Blazer']),
-  'plain body: older prompts · no shape (nothing in the body) · texture "Blazer" ⏳');
+const br = (body, shape, tex) => m.bodyRows(body, shape, tex).map((r) => [r.key, r.light, r.state, r.reason]);
+check('[11] body rows ready', br({ plain: part('ready'), shape: part('ready'), texture: part('ready') }, ['hair'],
+  ['Black Blazer']), [['plain', 'green', 'Current', m.baseBodyLine('ready')], ['shape', 'green', 'Current', 'In the body: hair'],
+  ['texture', 'green', 'Current', 'Painted: Black Blazer']]);
+check('[11] body rows mixed', br({ plain: part('older_prompts'), shape: part('plain'), texture: part('missing') }, [],
+  ['Blazer']), [['plain', 'yellow', 'Outdated', m.baseBodyLine('older_prompts')],
+  ['shape', 'grey', 'Not needed', 'Nothing is worn in the body'],
+  ['texture', 'yellow', 'Due', 'Painted: Blazer — the Build paints it']]);
+check('[11] body rows: no plain body', br({ plain: part('missing'), shape: part('plain'), texture: part('none') }, [], [])[0]
+  .slice(1, 3), ['yellow', 'None yet']);
 
 // [12]
 const wardrobe = src('frontend/src/tabs/characters/WardrobeTab.tsx');
@@ -415,7 +444,7 @@ const modeRow = wardrobe.split('<MeshModeSelect')[1] || '';
 check('[15] Wardrobe: checkbox next to the mode', /^[\s\S]{0,600}<ClosableCheckbox\b/.test(modeRow), true);
 check('[15] Wardrobe: toggle only on a worn closable row',
   /it\.equipped && garments\.closable\?\.\[it\.item_id\][^\n]*\n\s*<PieceStateToggle\b/.test(wardrobe), true);
-check('[15] Figure tab: toggle on a closable row', /row\.piece_state \? \(\s*<PieceStateToggle\b/.test(fieldFigure), true);
+check('[15] Figure tab: toggle on a closable row', /row\.piece_state \? \([\s\S]{0,200}<PieceStateToggle\b/.test(fieldFigure), true);
 check('[15] Figure tab: state-mesh action', /stateMeshAction\(other, row\.other_state_jobs, t\)/.test(fieldFigure), true);
 const toggleSrc = (garmentSrc.split('export function PieceStateToggle')[1] || '').split('\nexport function')[0];
 check('[15] toggle posts only through setPieceState', [/setPieceState\(character, itemId, next\)/.test(toggleSrc),
@@ -443,9 +472,12 @@ check('[16] unknown', m.changeLine({ key: 'j', name: 'Shirt', wanted: 'own', del
   'Shirt (cost unknown)');
 check('[16] no jobs field', m.changeLine({ key: 'j', name: 'Shirt', wanted: 'own', delivered: 'painted' }), 'Shirt');
 check('[16] hair state rebuild', m.hairState({ mode: 'body', state: 'pending', note: 'n', jobs: 9, rebuild: true }),
-  { text: '⏳ plain body rebuild · 9 hub jobs', sub: 'n' });
-check('[16] hair state HairDeck', m.hairState({ mode: 'hairdeck', state: 'pending', note: '', jobs: 9 }).text,
-  '⏳ HairDeck · 9 hub jobs');
+  { light: 'yellow', text: 'Due: plain body rebuild · 9 hub jobs', sub: 'n' });
+check('[16] hair state HairDeck / HAAR / ready', [
+  m.hairState({ mode: 'hairdeck', state: 'pending', note: '', jobs: 9 }).text,
+  m.hairState({ mode: 'haar', state: 'pending', note: '', jobs: 9 }).text,
+  m.hairState({ mode: 'haar', state: 'ready', note: '', jobs: 0 })],
+  ['Due: HairDeck · 9 hub jobs', 'Due: HAAR · 9 hub jobs', { light: 'green', text: 'Ready', sub: null }]);
 check('[16] estimate note', m.ESTIMATE_NOTE, 'Hub jobs are an estimate — retries extra');
 check('[16] FieldFigure uses them', [/t\(ESTIMATE_NOTE\)/.test(fieldFigure),
   /data\.changes\.map\(\(c\) => changeLine\(c, t\)\)/.test(fieldFigure)], [true, true]);
@@ -536,8 +568,9 @@ check('[19] R3: placement, colour and Swing saved with item_id, no run', [
   /post\('placement', \{ forward_m: /.test(liveSrc), /post\('colour', \{ hex: /.test(liveSrc),
   /post\('motion', \{ swing: e\.target\.checked, stiffness: /.test(liveSrc), /garments\//.test(liveSrc)],
   [true, true, true, true, false]);
-check('[19] Figure tab hair row: name + mode, link to Hairstyles', [/\{hair\.name \|\| t\('Hair'\)\}/.test(fieldFigure),
-  /<td style=\{CELL\}>\{hairstyles\}<\/td>/.test(fieldFigure)], [true, true]);
+check('[19] Figure tab hair row: name + mode, link to Hairstyles', [/name: hair\.name \|\| t\('Hair'\)/.test(fieldFigure),
+  /HAIR_MODE_LABELS\[hair\.mode as HairMode\]/.test(fieldFigure),
+  /<div style=\{BUTTONS\}>\s*\{hairstyles\}/.test(fieldFigure)], [true, true, true]);
 
 // [20] Ruling A42: "Pause automatic generation".
 const gp = (n, jobs, unknown) => ({ paused: true, since: 's', running: [], resume_jobs: jobs, resume_unknown: unknown,
@@ -563,6 +596,30 @@ check('[20] Cancel behind ConfirmDialog, posts, push topic', [
   /post\('figure\/generation-pause', \{ paused \}/.test(fieldFigure),
   /post\('figure\/waiting\/cancel', \{ id: job\.id \}/.test(fieldFigure),
   /onTopics\(\['generation'\]/.test(useFigureSrc)], [true, false, true, true, true]);
+
+// [21] Task UI5.
+const pst = (name, jobs, extra = {}) => ({ name, label: name, jobs, item_id: name === 'pieces' ? 'a' : '', failed: '',
+  manual: '', ...extra });
+const plan = (steps, running = false, step = null) => m.planRows({ cost: { hub_jobs: 0, note: '', steps },
+  build: { running, step } }).map((r) => [r.light, r.state, r.reason]);
+check('[21] plan rows', plan([pst('pieces', 3), pst('fits', 0), pst('texture', null)]),
+  [['yellow', '3 hub jobs', ''], ['yellow', 'no hub job', ''], ['yellow', 'cost unknown', '']]);
+check('[21] plan rows: failed, manual, running', [plan([pst('pieces', 3, { failed: 'x' })])[0],
+  plan([pst('plain_body', 9, { manual: 'm' })])[0], plan([pst('pieces', 3)], true, { name: 'pieces', item_id: 'a' })[0][0]],
+  [['red', '3 hub jobs', 'Failed: x'], ['yellow', '9 hub jobs', 'm'], 'blue']);
+check('[21] state toggle notes', [m.stateToggleNote({ mode: 'own_mesh', other_state_jobs: 6 }, false),
+  m.stateToggleNote({ mode: 'own_mesh', other_state_jobs: 6 }, true), m.stateToggleNote({ mode: 'own_mesh', other_state_jobs: 1 }, true),
+  m.stateToggleNote({ mode: 'own_mesh', other_state_jobs: 0 }, true), m.stateToggleNote({ mode: 'in_body', other_state_jobs: null }, true)],
+  ['Saved at once — nothing runs; the change waits for Build', 'Switching starts the Build — 6 hub jobs for that mesh',
+    'Switching starts the Build — 1 hub job for that mesh', 'Switching starts the Build — no hub job (that mesh is built)',
+    'Switching starts the Build — cost unknown']);
+check('[21] auto-build notes, retry, re-fit', [m.autoBuildNote(true), m.autoBuildNote(false), m.retryLabel(3), m.retryLabel(null),
+  m.REFIT_LABEL], ['Saved — changes start the Build by themselves', 'Saved — changes wait for Build', 'Retry — 3 hub jobs',
+  'Retry — cost unknown', 'Re-fit — no hub job']);
+const figureModelSrc = src('frontend/src/tabs/characters/figureModel.ts');
+check('[21] Figure tab source', [/<StepRowView\b/.test(fieldFigure), /<SubTabs\b/.test(fieldFigure),
+  /builtAt=\{data\.served_built_at\}/.test(fieldFigure), /[✓⏳]/.test(fieldFigure), /[✓⏳]/.test(figureModelSrc)],
+  [true, true, true, false, false]);
 
 if (failures.length) {
   console.error(`\nFAIL (${failures.length})`);

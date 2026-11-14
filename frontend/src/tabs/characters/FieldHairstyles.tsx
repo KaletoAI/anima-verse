@@ -28,7 +28,6 @@
  * A temporary NPC has no figure: the list and the settings stay, no step runs.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { STRAND_RECORD_VERSION } from '@anima/scene-render'
 import type { HairStrandRecord } from '@anima/scene-render'
@@ -46,8 +45,10 @@ import {
   HAAR_NO_ROUTE, ROUTING_URL, colourTint, fittedPlacement, haarRunCost, haarVariantRows, hairStepRows, jobsLabel,
   listLight, listReason, placementIdentity, placementMap, placementRuler, strandPreviewState, variantAction, wearButton,
 } from './hairstylesModel'
-import type { HaarPanel, Light, StepRow, Vec3, VariantLight } from './hairstylesModel'
+import type { HaarPanel, Light, Vec3, VariantLight } from './hairstylesModel'
 import { Model3DViewer } from './Model3DViewer'
+import { StepLight, StepRowView } from './StepRows'
+import { LIGHT_COLOR, PANEL } from './stepStyle'
 import { RefImage } from './RefImage'
 import {
   ESTIMATE_NOTE, HAIR_MODES, HAIR_MODE_HINTS, HAIR_MODE_LABELS, hairModeDisabled, hairstyleActions, hairstyleRows,
@@ -73,27 +74,6 @@ type HairDetail = HairInfo & {
 }
 
 const VIEWER_HEIGHT = 580
-const LIGHT_COLOR: Record<Light, string> = {
-  green: 'var(--success, #3fb950)',
-  yellow: 'var(--warning, #d29922)',
-  red: 'var(--danger, #f85149)',
-  grey: 'var(--text-muted, #6e7681)',
-  blue: 'var(--accent, #58a6ff)',
-}
-const PANEL: CSSProperties = {
-  border: '1px solid var(--border, #30363d)', borderRadius: 8, padding: 10, display: 'flex',
-  flexDirection: 'column', gap: 8, minWidth: 0,
-}
-
-export function StepLight({ light, title }: { light: Light; title?: string }) {
-  return (
-    <span aria-hidden title={title} style={{
-      flex: '0 0 10px', width: 10, height: 10, borderRadius: '50%', background: LIGHT_COLOR[light],
-      boxShadow: light === 'blue' ? '0 0 0 3px rgba(88,166,255,0.25)' : undefined, display: 'inline-block',
-    }} />
-  )
-}
-
 /** The "New hairstyle" dialog: description + mode (every mode the server lists as built). Create starts
  *  nothing; the new hairstyle is not worn (except a character's first one — the server decides). */
 function NewHairstyleDialog({ character, defaultMode, built, onClose, onCreated }: {
@@ -161,23 +141,6 @@ function NewHairstyleDialog({ character, defaultMode, built, onClose, onCreated 
       </div>
     </div>,
     document.body,
-  )
-}
-
-/** One step: light, name, state; the reason (mouse-over: the numbers); its single button. */
-function StepRowView({ row, children }: { row: StepRow; children?: ReactNode }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 3, paddingBottom: 6,
-      borderBottom: '1px solid var(--border, #30363d)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }} title={row.detail || undefined}>
-        <StepLight light={row.light} />
-        <strong style={{ fontSize: 13 }}>{row.name}</strong>
-        <span className="ga-hint" style={{ marginLeft: 'auto', color: LIGHT_COLOR[row.light] }}>{row.state}</span>
-      </div>
-      <div className="ga-hint" style={{ overflowWrap: 'anywhere' }} title={row.detail || undefined}>{row.reason}</div>
-      {children}
-      {row.button?.disabled ? <div className="ga-hint">{row.button.disabled}</div> : null}
-    </div>
   )
 }
 
