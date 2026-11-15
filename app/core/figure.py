@@ -1098,7 +1098,8 @@ def pending_changes(character_name: str, *, profile: Optional[Dict[str, Any]] = 
     is delivered as wanted), then ``body`` when the plain body is missing or was
     rendered with older prompts (``base_body.OLDER_PROMPTS``) or its front
     from another reference (``base_body.front_reference_state``, Ruling A74b;
-    its ``note`` = ``BASE_MISSING`` / ``BASE_OUTDATED``, ruling 8a), then ``hair`` (named
+    its ``note`` = ``BASE_MISSING`` / ``BASE_OUTDATED``, ruling 8a; the front's entry also carries ``front``, the
+    method the front is made from now — ``reference`` / ``text``, Ruling A86), then ``hair`` (named
     after the worn hairstyle) when the hair is not delivered as its mode says
     or another hairstyle than the worn one is shown. Read-only.
 
@@ -1176,8 +1177,10 @@ def _pending(character_name: str, wanted: "Figure", delivered: "Figure",
     elif not hair_rebuild and not (front_ref := base_body.front_reference_state(
             character_name, wanted.bsig, profile=profile))["current"]:
         # Ruling A74b: the front was made from another reference — only a Build you start refreshes it (8a).
+        # Ruling A86: ``front`` = what the front is made from now — the Figure tab offers the front's Regenerate.
         out.append({"key": BODY_KEY, "name": "Plain body", "wanted": "built",
-                    "delivered": front_ref["reason"], "note": BASE_OUTDATED})
+                    "delivered": front_ref["reason"], "note": BASE_OUTDATED,
+                    "front": front_ref["wanted"]["method"]})
     from app.core.garment_hair import worn_hairstyle
     hairstyle = worn_hairstyle(character_name, profile)
     hair_name = str((hairstyle or {}).get("name") or "Hair")

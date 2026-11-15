@@ -30,7 +30,8 @@
  * right one panel with sub-tabs instead of scrolling —
  * - Views (4): what the front is made from above them (Ruling A74b, `FrontReferenceRow`: the profile image small,
  *   "Reference: profile image" — the front is an edit of it — or the line that there is none and the front is made
- *   from text; a front made from another picture is outdated, said there and on its tile), then the four views two
+ *   from text; a front made from another picture is outdated, said there and on its tile — and right beside the
+ *   reason the front's Regenerate with its cost, the tile's own action, Ruling A86: `frontRegenerate`), then the four views two
  *   by two, small (a click enlarges one), each with its light and state in the label
  *   (`baseViewRow`), its Regenerate with the cost under it, the skin detail step under the front;
  * - Base model: its step row (`baseModelRow`) with "Regenerate the plain body's mesh — N hub jobs", the model's steps
@@ -107,7 +108,8 @@ import { useModel3DStatus } from './useModel3DStatus'
 import type { CollisionPayload, SecondaryMotionPayload } from '@anima/scene-render'
 import { BASE_VIEWS, modelRunning, tipsRunning, useBaseBody, viewsRunning } from './useBaseBody'
 import type { BaseActivity, BaseBodyInfo, BaseFrontReference, BaseView, ExtensionTipPanelInfo } from './useBaseBody'
-import { AUTO_BUILD_NOTE, BUILD_RUNNING_NOTE, ESTIMATE_NOTE, modelFollowup, singleAction, staleBaseNote } from './figureModel'
+import { AUTO_BUILD_NOTE, BUILD_RUNNING_NOTE, ESTIMATE_NOTE, FRONT_WAITS_FOR_BUILD, frontRegenerate, modelFollowup,
+  singleAction, staleBaseNote } from './figureModel'
 import type { ModelFollowup } from './figureModel'
 import { EXT_DUE_GROUPS_NOTE, RUN_ALL_STATUS, TIP_DUE_NOTE, TIP_REBUILD_LABEL, baseHead, baseModelRow, baseViewRow, faceDueLine,
   runAllButton, runAllPlanLine, runAllWhat, stateMotionUrl, statePicker, viewerStateMotion } from './baseBodyModel'
@@ -231,11 +233,21 @@ function ViewTile({ info, view, label, busy, jobs, onRender, onSkinStep }: {
 
 /** Above the four views (Ruling A74b): what the front is made from — the profile image, small (a click enlarges
  *  it), labelled "Reference: profile image", or the line that there is none and the front is made from text. A
- *  stored front made from something else says why it is outdated; only Regenerate / Run all re-renders it. */
-function FrontReferenceRow({ reference }: { reference: BaseFrontReference | null | undefined }) {
+ *  stored front made from something else says why it is outdated, and right beside the reason the front's
+ *  Regenerate with its cost (Ruling A86 — the front tile's own action, `onRegenerate`); Run all re-renders it too. */
+function FrontReferenceRow({ reference, jobs, busy, buildRunning, onRegenerate }: {
+  reference: BaseFrontReference | null | undefined
+  jobs: PlainBodyJobs | undefined
+  /** A click is in flight or a view renders. */
+  busy: boolean
+  /** A Build of the character runs: the server refuses the front (409) until it has ended. */
+  buildRunning: boolean
+  onRegenerate: () => void
+}) {
   const { t } = useI18n()
   if (!reference) return null
   const outdated = !reference.current && reference.reason
+  const action = frontRegenerate(reference.method, jobs, t)
   return (
     <div className="ga-face-actions-row" style={{ alignItems: 'center', gap: 8 }}>
       {reference.method === 'reference' && reference.url ? (
@@ -254,9 +266,21 @@ function FrontReferenceRow({ reference }: { reference: BaseFrontReference | null
             : t(reference.note)}
         </span>
         {outdated ? (
-          <span className="ga-hint" style={{ color: LIGHT_COLOR.yellow, overflowWrap: 'anywhere' }}>
-            {t(reference.reason)}
-          </span>
+          <>
+            <span className="ga-hint" style={{ display: 'flex', gap: 6, alignItems: 'baseline',
+              color: LIGHT_COLOR.yellow, overflowWrap: 'anywhere' }}>
+              <StepLight light="yellow" />
+              <span>{t('Outdated')}: {t(reference.reason)}</span>
+            </span>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <button type="button" className="ga-btn ga-btn-sm" disabled={busy || buildRunning} onClick={onRegenerate}
+                title={t('Renders the front again — the same as the front view’s Regenerate below')}>
+                {action.label}
+              </button>
+            </div>
+            {buildRunning ? <span className="ga-hint">{t(FRONT_WAITS_FOR_BUILD)}</span> : null}
+            {action.note ? <span className="ga-hint">{action.note}</span> : null}
+          </>
         ) : null}
       </div>
     </div>
@@ -695,7 +719,9 @@ export function FieldBaseBody({ character, onOpenFigure }: {
         <SubTabs tabs={tabs} value={sub} onChange={setSub} />
         {sub === 'views' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <FrontReferenceRow reference={info.front_reference} />
+            <FrontReferenceRow reference={info.front_reference} jobs={jobs} busy={posting || viewsRunning(info)}
+              buildRunning={!!figure?.build.running}
+              onRegenerate={() => { void post('images', { view: 'front', force: true }) }} />
             <div className="ga-basebody-views">
               {BASE_VIEWS.map((view) => (
                 <ViewTile key={view} info={info} view={view} label={viewLabel(view)} jobs={jobs}

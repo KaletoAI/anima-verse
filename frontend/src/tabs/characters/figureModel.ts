@@ -281,6 +281,9 @@ export interface FigureChange {
   note?: string
   /** Hub jobs of the plan step that builds it (0 = none planned, null = unknown). */
   jobs?: number | null
+  /** Ruling A86: on the plain body's change whose front was made from another reference (`delivered` the reason) —
+   *  what the front is made from now (`reference` = the profile image, `text`); absent otherwise. */
+  front?: 'reference' | 'text'
 }
 
 export interface FigureBodyPart {
@@ -542,6 +545,41 @@ export function staleBaseNote(jobs: number | null, t: Tr = EN): string {
   return t('Makes the base model stale — the next Build you start rebuilds it ({cost})')
     .replace('{cost}', jobsTr(jobs, t))
 }
+
+/** The single actions' costs of the plain body (`figure_build._plain_jobs`, GET …/figure `body.plain.jobs`). */
+export type PlainJobs = NonNullable<NonNullable<FigurePayload['body']>['plain']['jobs']>
+
+/** Ruling A86: the front's Regenerate where its outdated reason is written — the Base body tab's reference row and
+ *  the Figure tab's plain-body change. The same action as the front tile's Regenerate (POST …/base-body/images
+ *  {view: "front", force: true}). `method` is what the front is made from now (`reference` = the profile image).
+ *  The cost is on the button before the click: the front's image jobs, plus — while a base model is stored
+ *  (`model_followup`) — what the new front makes due, the other three views and the base model, which the next
+ *  Build you start rebuilds (`after_front`, the same count as the front tile's). `note` says that in a sentence
+ *  (`staleBaseNote`), "" when nothing goes stale. */
+export function frontRegenerate(method: string | undefined, jobs: PlainJobs | undefined, t: Tr = EN): {
+  label: string; note: string
+} {
+  const action = method === 'text' ? t('Regenerate front from text') : t('Regenerate front from the profile image')
+  if (!jobs) return { label: action, note: '' }
+  const now = imageJobsTr(jobs.front, t)
+  if (!jobs.model_followup) return { label: `${action} — ${now}`, note: '' }
+  return {
+    label: t('{action} — {now} + {later} at the next Build').replace('{action}', action).replace('{now}', now)
+      .replace('{later}', jobsTr(jobs.after_front, t)),
+    note: staleBaseNote(jobs.after_front, t),
+  }
+}
+
+/** Ruling A86: beside the front's Regenerate on the Figure tab — the Build covers the change too, in one go, its
+ *  count the plan's plain-body step (`FigureChange.jobs`); "" when the plan has no such step. */
+export function frontBuildCovers(jobs: number | null | undefined, t: Tr = EN): string {
+  if (jobs === 0 || jobs === undefined) return ''
+  return t('Or Build: it renders the front, the other views and the base model in one go — {cost}')
+    .replace('{cost}', jobsTr(jobs, t))
+}
+
+/** Ruling A86: the front's Regenerate refused while a Build of the character runs (the server answers 409). */
+export const FRONT_WAITS_FOR_BUILD = 'A Build runs for this character — regenerating the front waits until it has ended'
 
 /** Under the state of an own-mesh piece in the body shape until its mesh is ready (ruling A11). */
 export const IN_BODY_UNTIL_MESH = 'in the body until its own mesh is ready'

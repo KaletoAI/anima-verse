@@ -97,7 +97,8 @@
  *      `post()` helper — `apiPost` named twice: import + that call: figure/build, figure/auto-build,
  *      (base-body/pipeline until Task 11h removed the switch) and since Task 11b the other state's single
  *      action garments/{item}/run (also the refused piece's Regenerate mesh), and since Ruling A23 b the CPU-only
- *      Re-fit figure/refit (Ruling FR-I2: never a hub step) — a
+ *      Re-fit figure/refit (Ruling FR-I2: never a hub step), and since Ruling A86 the front's Regenerate
+ *      base-body/images on the plain body's change (the Base body tab's front tile's action) — a
  *      template-literal path, written with its `${…}` as `{}`); the template has tab `figure_tab` {Figure, Figur} with the
  *      humanoid-only section `figure` (special "figure"), and CharactersTab renders the slot `figure`.
  * [13] Task 11 source greps: the Figure tab opens GarmentPieceDialog with `noRunAll`, and the dialog's
@@ -287,6 +288,26 @@
  *        piece line is "Jeans: Seine Anpassung an den Grundkörper wurde abgelehnt";
  *      every English key the server sends (figure_build SERVED_* / PIECE_* / NOT_ON_FIGURE) has a de.json entry;
  *      FieldFigure renders <ServedStateNote state={data.served_state} /> in the viewer column.
+ * [28] Ruling A86 — the front's Regenerate where its outdated reason is written, frontRegenerate(method, jobs):
+ *      jobs J = {view 1, front 2, model 4, after_front 7, model_followup {jobs 4, stages [mesh, upscale, face, rig]}}
+ *      (a stored base model; the front 1 view + 1 skin step, after it the 3 other views + the 4 model stages):
+ *        ("reference", J) → label "Regenerate front from the profile image — 2 image jobs + 7 hub jobs at the next
+ *        Build", note "Makes the base model stale — the next Build you start rebuilds it (7 hub jobs)";
+ *        ("text", J with front 1) → "Regenerate front from text — 1 image job + 7 hub jobs at the next Build";
+ *        ("reference", J without model_followup) → "Regenerate front from the profile image — 2 image jobs", note "";
+ *        ("reference", J with after_front null) → "… — 2 image jobs + cost unknown at the next Build";
+ *        ("reference", undefined) → "Regenerate front from the profile image", note "".
+ *      Translated with de.json the first label is "Vorderansicht aus dem Profilbild neu erzeugen — 2 Bild-Jobs + 7
+ *      Hub-Jobs beim nächsten Build".
+ *      frontBuildCovers: 9 → "Or Build: it renders the front, the other views and the base model in one go — 9 hub
+ *      jobs"; null → "… — cost unknown"; 0 and undefined → "".
+ *      The reasons (base_body FRONT_MADE_FROM_TEXT / FRONT_OTHER_REFERENCE / FRONT_OTHER_EDIT_TEXT /
+ *      FRONT_NO_PROFILE_NOW): 4 found, none names the button ("Regenerate"), each has a de.json entry, and the
+ *      German one names no button either („Neu generieren“).
+ *      Source greps: figure.py puts `"front": front_ref["wanted"]["method"]` on the plain body's change; FieldFigure
+ *      leaves that change out of the one-line list (`c !== frontChange`), renders <FrontChangeRow and posts
+ *      'base-body/images', { view: 'front', force: true }; FieldBaseBody's FrontReferenceRow gets the cost and posts
+ *      'images', { view: 'front', force: true }.
  */
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -554,10 +575,11 @@ check('[12] skin step: stale-base note under the button', /staleBaseNote\(/.test
 const fieldFigure = src('frontend/src/tabs/characters/FieldFigure.tsx');
 // Every POST of the tab goes through its one `post(path, …)` helper (one apiPost call).
 const posts = [...fieldFigure.matchAll(/\bpost\(\s*['`]([^'`]+)['`]/g)].map((x) => x[1].replace(/\$\{[^}]*\}/g, '{}'));
-// Ruling A42 adds the pause (spends nothing; Resume releases what the user already let wait) and Cancel.
-check('[12] FieldFigure starts only the Build (+ the other state\'s mesh, the CPU Re-fit)', [[...new Set(posts)].sort(),
+// Ruling A42 adds the pause (spends nothing; Resume releases what the user already let wait) and Cancel; Ruling A86
+// the front's Regenerate on the plain body's change (the Base body tab's own action).
+check('[12] FieldFigure starts only the Build (+ the other state\'s mesh, the CPU Re-fit, the front)', [[...new Set(posts)].sort(),
   (fieldFigure.match(/\bapiPost\b/g) || []).length],
-  [['figure/auto-build', 'figure/build', 'figure/generation-pause', 'figure/refit', 'figure/waiting/cancel',
+  [['base-body/images', 'figure/auto-build', 'figure/build', 'figure/generation-pause', 'figure/refit', 'figure/waiting/cancel',
     'garments/{}/run'], 2]);
 const tmpl = JSON.parse(src('shared/templates/character/base-character.json') || '{"tabs":[],"sections":[]}');
 const tab = tmpl.tabs.find((x) => x.id === 'figure_tab') || {};
@@ -627,7 +649,7 @@ check('[16] hair state HairDeck / HAAR / ready', [
   ['Due: HairDeck · 9 hub jobs', 'Due: HAAR · 9 hub jobs', { light: 'green', text: 'Ready', sub: null }]);
 check('[16] estimate note', m.ESTIMATE_NOTE, 'Hub jobs are an estimate — retries extra');
 check('[16] FieldFigure uses them', [/t\(ESTIMATE_NOTE\)/.test(fieldFigure),
-  /data\.changes\.map\(\(c\) => changeLine\(c, t\)\)/.test(fieldFigure)], [true, true]);
+  /listed\.map\(\(c\) => changeLine\(c, t\)\)/.test(fieldFigure)], [true, true]);
 
 // [17] Ruling A13b: the 3D tab's rebuild button is the Figure tab's Build (the Pose tab's went with it, Ruling A70).
 const fbb = src('frontend/src/tabs/characters/FigureBuildButton.tsx');
@@ -1133,6 +1155,45 @@ check('[25] the Wardrobe chip\'s fit', m.acceptedWhat({ step: 'fit', on: '', rea
   check('[27] server keys translated', keys.filter((k) => !(k in de)), []);
   check('[27] FieldFigure renders it',
     /<ServedStateNote state=\{data\.served_state\} \/>/.test(src('frontend/src/tabs/characters/FieldFigure.tsx')), true);
+}
+
+// [28] Ruling A86 — the front's Regenerate beside its outdated reason.
+{
+  const J = { view: 1, front: 2, model: 4, after_front: 7, model_followup: { jobs: 4, stages: ['mesh', 'upscale', 'face', 'rig'] } };
+  check('[28] from the profile image', m.frontRegenerate('reference', J), {
+    label: 'Regenerate front from the profile image — 2 image jobs + 7 hub jobs at the next Build',
+    note: 'Makes the base model stale — the next Build you start rebuilds it (7 hub jobs)' });
+  check('[28] from text', m.frontRegenerate('text', { ...J, front: 1 }).label,
+    'Regenerate front from text — 1 image job + 7 hub jobs at the next Build');
+  check('[28] no base model stored', m.frontRegenerate('reference', { ...J, model_followup: null }),
+    { label: 'Regenerate front from the profile image — 2 image jobs', note: '' });
+  check('[28] follow-up unknown', m.frontRegenerate('reference', { ...J, after_front: null }).label,
+    'Regenerate front from the profile image — 2 image jobs + cost unknown at the next Build');
+  check('[28] no counts', m.frontRegenerate('reference', undefined),
+    { label: 'Regenerate front from the profile image', note: '' });
+  const de = JSON.parse(src('shared/languages/de.json')).translations;
+  const tde = (k) => de[k] ?? k;
+  check('[28] German', m.frontRegenerate('reference', J, tde).label,
+    'Vorderansicht aus dem Profilbild neu erzeugen — 2 Bild-Jobs + 7 Hub-Jobs beim nächsten Build');
+  check('[28] Build covers it', [m.frontBuildCovers(9), m.frontBuildCovers(null), m.frontBuildCovers(0),
+    m.frontBuildCovers(undefined)], ['Or Build: it renders the front, the other views and the base model in one go — 9 hub jobs',
+    'Or Build: it renders the front, the other views and the base model in one go — cost unknown', '', '']);
+  const reasons = [...src('app/core/base_body.py').matchAll(/^FRONT_(?:MADE_FROM_TEXT|OTHER_REFERENCE|OTHER_EDIT_TEXT|NO_PROFILE_NOW) = ("(?:[^"\\]|\\.)*")/gm)]
+    .map((x) => JSON.parse(x[1]));
+  check('[28] reasons found', reasons.length, 4);
+  check('[28] reasons name no button', reasons.filter((r) => /Regenerate/.test(r)), []);
+  check('[28] reasons translated', reasons.filter((r) => !(r in de)), []);
+  check('[28] German reasons name no button', reasons.filter((r) => /Neu generieren/.test(de[r] || '')), []);
+  const fig = src('frontend/src/tabs/characters/FieldFigure.tsx');
+  const base = src('frontend/src/tabs/characters/FieldBaseBody.tsx');
+  check('[28] wiring', [
+    /"front": front_ref\["wanted"\]\["method"\]/.test(src('app/core/figure.py')),
+    /data\.changes\.filter\(\(c\) => c !== frontChange\)/.test(fig),
+    /<FrontChangeRow /.test(fig),
+    /post\('base-body\/images', \{ view: 'front', force: true \}/.test(fig),
+    /<FrontReferenceRow reference=\{info\.front_reference\} jobs=\{jobs\}/.test(base),
+    /onRegenerate=\{\(\) => \{ void post\('images', \{ view: 'front', force: true \}\) \}\}/.test(base),
+  ], [true, true, true, true, true, true]);
 }
 
 if (failures.length) {

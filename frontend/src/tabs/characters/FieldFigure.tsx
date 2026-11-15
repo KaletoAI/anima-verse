@@ -13,6 +13,11 @@
  *   (Ruling A42, GenerationPausePanel: while paused the light with its reason, what runs and finishes, "Resume —
  *   N hub jobs start" (POST …/figure/generation-pause {paused}) and the waiting jobs, each with Cancel behind an
  *   in-app confirmation (POST …/figure/waiting/cancel {id})); the pending changes with their cost, a failure;
+ *   the plain body's change whose front was made from another reference (Ruling A86, `FrontChangeRow`) as its own
+ *   row under them: its light, the reason in plain words, the front's Regenerate with its cost on the button — the
+ *   front's image jobs plus what the new front makes due at the next Build (`frontRegenerate`, the Base body tab's
+ *   count; POST …/base-body/images {view: "front", force: true}, the front tile's own action, 409 while a Build
+ *   runs), "Open Base body tab", and that Build covers it in one go with the plan step's count (`frontBuildCovers`);
  * - left: the figure DELIVERED now (`served_url`, the interim rule applied — never a half step), "Built <time>"
  *   in its corner; the mouse turns the figure; no extension-bone note (Ruling A73 — the 3D tab keeps it); over it
  *   what that figure is against the outfit worn now (Ruling A75, `served_state`): its light and reason, one line
@@ -74,11 +79,11 @@ import { useFigure } from './useFigure'
 import { imageRefusal } from './refusedAttemptsModel'
 import {
   BUILD_DEFERRED_NOTE, BUILD_RUNNING_NOTE, BUILD_STATUS, ESTIMATE_NOTE, HAIR_MODE_LABELS, MESH_MODE_LABELS,
-  NO_BASE_BODY_NOTE, REFIT_LABEL, autoBuildNote, baseBodyLine, bodyRows, buildButton, changeLine, hairState,
-  headerLine, noBaseBody, planRows, regenerateMeshLabel, retryLabel, servedLines, stateMeshAction, stateToggleNote,
-  statusLight, wornState,
+  FRONT_WAITS_FOR_BUILD, NO_BASE_BODY_NOTE, REFIT_LABEL, autoBuildNote, baseBodyLine, bodyRows, buildButton,
+  changeLine, frontBuildCovers, frontRegenerate, hairState, headerLine, noBaseBody, planRows, regenerateMeshLabel,
+  retryLabel, servedLines, stateMeshAction, stateToggleNote, statusLight, wornState,
 } from './figureModel'
-import type { FigurePayload, FigureWornRow, GenerationPause, HairMode, PieceState, WaitingJob } from './figureModel'
+import type { FigureChange, FigurePayload, FigureWornRow, GenerationPause, HairMode, PieceState, WaitingJob } from './figureModel'
 
 const ERROR_STYLE: CSSProperties = { color: LIGHT_COLOR.red, overflowWrap: 'anywhere' }
 
@@ -138,6 +143,11 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
   }), [post, t, toast])
 
   const reload = useCallback(() => startPoll(0), [startPoll])
+
+  /** Ruling A86: the front's Regenerate on the plain body's change — the front tile's own action (Base body tab). */
+  const regenerateFront = useCallback(() => post('base-body/images', { view: 'front', force: true }, () => {
+    toast(t('Started — the front renders; the Base body tab shows it'), 'success')
+  }), [post, t, toast])
   /** Bumped by a saved outfit reference (Ruling A74b): the dressed views read again and show as due. */
   const [refVersion, setRefVersion] = useState(0)
 
@@ -196,7 +206,8 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0, fontSize: 13 }}>
       <FigureHeader data={data} posting={posting} autoSaved={autoSaved} onBuild={build}
         onAutoBuild={(enabled) => { void setAutoBuild(enabled) }}
-        onPause={() => { void setPaused(true) }} />
+        onPause={() => { void setPaused(true) }} onRegenerateFront={() => { void regenerateFront() }}
+        onOpenBaseBody={onOpenBaseBody} />
       {data.generation_pause ? (
         <GenerationPausePanel gp={data.generation_pause} busy={posting} onResume={() => { void setPaused(false) }}
           onCancel={(job) => { void cancelWaiting(job) }} />
@@ -276,7 +287,8 @@ function ServedStateNote({ state }: { state: FigurePayload['served_state'] }) {
 const NOT_PAUSED: GenerationPause = { paused: false, since: null, waiting: [], running: [], resume_jobs: 0,
   resume_unknown: 0 }
 
-function FigureHeader({ data, posting, autoSaved, onBuild, onAutoBuild, onPause }: {
+function FigureHeader({ data, posting, autoSaved, onBuild, onAutoBuild, onPause, onRegenerateFront,
+  onOpenBaseBody }: {
   data: FigurePayload
   posting: boolean
   /** "Build automatically" was saved in this visit: its note says so. */
@@ -285,6 +297,9 @@ function FigureHeader({ data, posting, autoSaved, onBuild, onAutoBuild, onPause 
   onAutoBuild: (enabled: boolean) => void
   /** Ruling A42: "Pause automatic generation" (no jobs). */
   onPause: () => void
+  /** Ruling A86: the front's Regenerate (POST …/base-body/images {view: "front", force: true}). */
+  onRegenerateFront: () => void
+  onOpenBaseBody?: () => void
 }) {
   const { t } = useI18n()
   const button = buildButton(data, t)
@@ -296,6 +311,10 @@ function FigureHeader({ data, posting, autoSaved, onBuild, onAutoBuild, onPause 
   // The step the problem box says in full is not repeated in the one-line list.
   const others = failed.filter(([name]) => name !== data.problem?.step)
   const light = statusLight(data.status)
+  // Ruling A86: the plain body's front made from another reference is its own row with its action (below), not a
+  // part of the one-line list.
+  const frontChange = data.changes.find((c) => c.key === 'body' && c.front)
+  const listed = data.changes.filter((c) => c !== frontChange)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', minHeight: 30 }}>
@@ -330,10 +349,14 @@ function FigureHeader({ data, posting, autoSaved, onBuild, onAutoBuild, onPause 
       {!running && data.build.paused ? (
         <div className="ga-hint">{t('Paused before {step} — Resume builds the rest').replace('{step}', data.build.paused.label)}</div>
       ) : null}
-      {data.changes.length ? (
+      {listed.length ? (
         <div className="ga-hint" style={{ color: LIGHT_COLOR.yellow }}>
-          {t('Due')}: {data.changes.map((c) => changeLine(c, t)).join(' · ')}
+          {t('Due')}: {listed.map((c) => changeLine(c, t)).join(' · ')}
         </div>
+      ) : null}
+      {frontChange ? (
+        <FrontChangeRow change={frontChange} jobs={data.body?.plain.jobs} busy={posting} buildRunning={running}
+          onRegenerate={onRegenerateFront} onOpenBaseBody={onOpenBaseBody} />
       ) : null}
       {/* Ruling A61: the failed step said in full — the step, the reason, the view, the fix with its cost. */}
       {!running && data.problem ? <BuildProblemView problem={data.problem} busy={posting} onRun={onBuild} /> : null}
@@ -342,6 +365,41 @@ function FigureHeader({ data, posting, autoSaved, onBuild, onAutoBuild, onPause 
           {others.map(([name, f]) => `${name}: ${f.error}`).join(' · ')}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+/** Ruling A86: the plain body's change whose front was made from another reference — the light, the reason in plain
+ *  words, and right on it the front's Regenerate with its cost (the front's image jobs plus what the new front makes
+ *  due at the next Build), "Open Base body tab", and that the Build covers it in one go with its count. */
+function FrontChangeRow({ change, jobs, busy, buildRunning, onRegenerate, onOpenBaseBody }: {
+  change: FigureChange
+  jobs: NonNullable<FigurePayload['body']>['plain']['jobs']
+  busy: boolean
+  /** A Build of the character runs: the server refuses the front (409) until it has ended. */
+  buildRunning: boolean
+  onRegenerate: () => void
+  onOpenBaseBody?: () => void
+}) {
+  const { t } = useI18n()
+  const action = frontRegenerate(change.front, jobs, t)
+  const covers = frontBuildCovers(change.jobs, t)
+  return (
+    <div className="ga-front-change" style={{ ...PANEL, marginTop: 2 }}>
+      <StepRowView row={{ name: t(change.name), light: 'yellow', state: t('Outdated'), reason: t(change.delivered) }}>
+        <div style={BUTTONS}>
+          <button type="button" className="ga-btn ga-btn-sm" disabled={busy || buildRunning} onClick={onRegenerate}
+            title={t('Renders the plain body’s front again — the same as the front view’s Regenerate in the Base body tab')}>
+            {action.label}
+          </button>
+          {onOpenBaseBody ? (
+            <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBaseBody}>↗ {t('Open Base body tab')}</button>
+          ) : null}
+        </div>
+        {buildRunning ? <div className="ga-hint">{t(FRONT_WAITS_FOR_BUILD)}</div> : null}
+        {action.note ? <div className="ga-hint">{action.note}</div> : null}
+        {covers ? <div className="ga-hint">{covers}</div> : null}
+      </StepRowView>
     </div>
   )
 }

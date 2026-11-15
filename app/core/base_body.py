@@ -631,11 +631,12 @@ BASE_FRONT_EDIT_USE_CASE = "base_front_edit"
 #: ``front_reference["method"]``.
 FRONT_FROM_REFERENCE = "reference"
 FRONT_FROM_TEXT = "text"
-#: The front tile's reasons (``front_reference_state``), plain words for the UI.
-FRONT_MADE_FROM_TEXT = "Made from text alone — Regenerate makes the front from the profile image"
-FRONT_OTHER_REFERENCE = "Made from another profile image — Regenerate makes the front from the current one"
-FRONT_OTHER_EDIT_TEXT = "Made with an older edit text — Regenerate makes the front with the current one"
-FRONT_NO_PROFILE_NOW = "Made from a profile image there is none of now — Regenerate makes the front from text"
+#: The front tile's reasons (``front_reference_state``), plain words for the UI. They name no button (Ruling A86):
+#: they are also written where the front's Regenerate is not right beside them (the Figure tab's change).
+FRONT_MADE_FROM_TEXT = "Made from text alone — regenerating the front makes it from the profile image"
+FRONT_OTHER_REFERENCE = "Made from another profile image — regenerating the front makes it from the current one"
+FRONT_OTHER_EDIT_TEXT = "Made with an older edit text — regenerating the front makes it with the current one"
+FRONT_NO_PROFILE_NOW = "Made from a profile image there is none of now — regenerating the front makes it from text"
 #: The Base body tab's line when there is no profile image (decision 2 of the brief).
 NO_PROFILE_IMAGE_NOTE = "No profile image — the front is made from text alone. Set a profile image to make it from that picture."
 
