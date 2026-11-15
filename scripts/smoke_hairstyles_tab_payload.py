@@ -28,7 +28,9 @@ THE CASES, DERIVED BY HAND
         worn mesh piece kept: ``feet`` stays ``boot_1``), the stored profile unchanged;
       - "Build automatically" on → an automatic plan (``explicit`` False) and ``automatic`` True; off → the
         manual plan (``explicit`` True), ``automatic`` False;
-      - ``hub_jobs`` / ``note`` are the planner's cost of that plan (stub: 9 → 9, None → None);
+      - ``hub_jobs`` / ``note`` are the planner's cost of that plan (stub: 9 → 9, None → None); ``due_now`` the
+        cost of the stored profile's plan (stub: 4 for the stored profile) and ``extra`` = 9 − 4 = 5 (None when
+        either is None);
       - the worn hairstyle ``hs_a`` → None; off the pipeline → None; a planner that raises → None.
 [3] The hair GET names each step's hub jobs from ``garments.HUB_JOBS`` (the buttons' "1 hub job" / "no hub
     job"): HUB_JOBS["hair:hairdeck"] = {hairdeck: 1, fit: 0} and HUB_JOBS["hair:body"] = {}; the route
@@ -96,11 +98,12 @@ def fake_plan(name, *, profile=None, explicit=True, resolved=None):
     if state["raise"]:
         raise RuntimeError("planner down")
     calls.append((name, profile, explicit))
-    return ["step"]
+    return ["trial"] if (profile or {}).get("equipped_mesh_pieces", {}).get("hair") == "hs_b" else ["stored"]
 
 
 def fake_cost(name, steps=None):
-    return {"hub_jobs": state["jobs"], "steps": [], "note": f"cost {state['jobs']}"}
+    jobs = state["jobs"] if steps == ["trial"] or state["jobs"] is None else 4
+    return {"hub_jobs": jobs, "steps": [], "note": f"cost {jobs}"}
 
 
 figure_build.on_pipeline = lambda name, profile=None: state["pipeline"]
@@ -109,13 +112,13 @@ figure_build.plan = fake_plan
 figure_build.cost = fake_cost
 
 got = garment_hair.wear_estimate("Demo", "hs_b", profile=stored)
-check("[2] automatic", got, {"hub_jobs": 9, "automatic": True, "note": "cost 9"})
-check("[2] plan of the trial profile", calls[-1][1].get("equipped_mesh_pieces"), {"hair": "hs_b", "feet": "boot_1"})
-check("[2] automatic plan", calls[-1][2], False)
+check("[2] automatic", got, {"hub_jobs": 9, "due_now": 4, "extra": 5, "automatic": True, "note": "cost 9"})
+check("[2] plan of the trial profile", calls[-2][1].get("equipped_mesh_pieces"), {"hair": "hs_b", "feet": "boot_1"})
+check("[2] automatic plan", (calls[-2][2], calls[-1][2]), (False, False))
 check("[2] stored profile unchanged", stored, {"equipped_mesh_pieces": {"hair": "hs_a", "feet": "boot_1"}})
 state.update(auto=False, jobs=None)
 got = garment_hair.wear_estimate("Demo", "hs_b", profile=stored)
-check("[2] manual", got, {"hub_jobs": None, "automatic": False, "note": "cost None"})
+check("[2] manual", got, {"hub_jobs": None, "due_now": None, "extra": None, "automatic": False, "note": "cost None"})
 check("[2] manual plan", calls[-1][2], True)
 check("[2] worn one", garment_hair.wear_estimate("Demo", "hs_a", profile=stored), None)
 state.update(pipeline=False)

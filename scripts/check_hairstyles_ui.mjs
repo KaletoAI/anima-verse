@@ -281,9 +281,15 @@ check('[8] colourTint', [m.colourTint('#808080', '#ffffff'), m.colourTint('#ffff
 // [9]
 check('[9] wearButton', [m.wearButton(null).label, m.wearButton({ hub_jobs: 9, automatic: true }).label,
   m.wearButton({ hub_jobs: 0, automatic: true }).label, m.wearButton({ hub_jobs: 9, automatic: false }).label,
-  m.wearButton({ hub_jobs: 9, automatic: false }).title],
-['Wear', 'Wear · Build 9 hub jobs', 'Wear · no hub job', 'Wear · no job now',
-  'Nothing runs on the click; the Build you start then costs 9 hub jobs']);
+  m.wearButton({ hub_jobs: 9, automatic: false }).title,
+  m.wearButton({ hub_jobs: 11, due_now: 9, extra: 2, automatic: true }).label,
+  m.wearButton({ hub_jobs: 11, due_now: 9, extra: 2, automatic: true }).title,
+  m.wearButton({ hub_jobs: 9, due_now: 9, extra: 0, automatic: true }).label],
+['Wear', 'Wear · +9 hub jobs', 'Wear · no extra hub job', 'Wear · no job now',
+  'Nothing runs on the click; wearing it adds 9 hub jobs to the Build you start then.',
+  'Wear · +2 hub jobs',
+  'Build automatically is on: wearing it adds 2 hub jobs to the Build after the click. The Build also does what is due anyway (9 hub jobs).',
+  'Wear · no extra hub job']);
 
 // [10]
 const dir = join(ROOT, 'frontend/src/tabs/characters');

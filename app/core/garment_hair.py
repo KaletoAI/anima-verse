@@ -794,10 +794,12 @@ def wear_outfit_hairstyle(character_name: str, outfit: Dict[str, Any]) -> bool:
 def wear_estimate(character_name: str, item_id: str, *,
                   profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """What wearing the hairstyle ``item_id`` spends after the click (the Hairstyles tab's Wear button, the
-    user's rule "every button names the hub jobs it causes"): ``{hub_jobs, automatic, note}`` — the Build plan
+    user's rule "every button names the hub jobs it causes"): ``{hub_jobs, due_now, extra, automatic, note}`` —
+    ``hub_jobs`` the Build plan
     of the profile with ``item_id`` worn instead (``figure_build.plan`` of that profile, ``figure_build.cost``):
     an automatic Build when "Build automatically" is on (``automatic`` True: the Build starts by itself), else
-    the manual Build the user starts later. ``hub_jobs`` None when a step's cost is unknown. None off the
+    the manual Build the user starts later; ``due_now`` the same plan's cost for the profile as it is (due anyway),
+    ``extra`` what wearing adds (``hub_jobs - due_now``, at least 0). Each None when a step's cost is unknown. None off the
     figure pipeline, for the worn hairstyle, or when the plan cannot be made. Read-only: the profile is copied,
     nothing is stored or started."""
     from app.core import figure_build
@@ -813,10 +815,16 @@ def wear_estimate(character_name: str, item_id: str, *,
         trial = {**profile, "equipped_mesh_pieces": {**worn, HAIR_KIND: item_id}}
         steps = figure_build.plan(character_name, profile=trial, explicit=not automatic)
         cost = figure_build.cost(character_name, steps)
+        # What is due WITHOUT the change (the same kind of plan of the profile as it is): the button names only
+        # the difference, the rest is the Build that is due anyway.
+        now = figure_build.cost(character_name, figure_build.plan(character_name, profile=profile,
+                                                                   explicit=not automatic))
     except Exception:  # noqa: BLE001 — a label, never a failure of the list
         logger.exception("Wear estimate of %s for %s failed", item_id, character_name)
         return None
-    return {"hub_jobs": cost["hub_jobs"], "automatic": automatic, "note": cost["note"]}
+    total, due = cost["hub_jobs"], now["hub_jobs"]
+    extra = max(0, total - due) if total is not None and due is not None else None
+    return {"hub_jobs": total, "due_now": due, "extra": extra, "automatic": automatic, "note": cost["note"]}
 
 
 def hairstyle_list(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:

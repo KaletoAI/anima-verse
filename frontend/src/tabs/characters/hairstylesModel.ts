@@ -697,22 +697,29 @@ export function colourTint(shown: string | null | undefined, draft: string | nul
   return [0, 1, 2].map((i) => Math.max(0, Math.min(4, b[i] / Math.max(a[i], 1e-4)))) as Vec3
 }
 
-/** The Wear button (GET …/hairstyles `wear`): its label with what the Build after it costs, and the line under
- *  it. "Build automatically" on → the Build starts by itself: "Wear · Build 9 hub jobs"; off → nothing runs on
- *  the click: "Wear · no job now", the line names the Build the user starts later. */
-export function wearButton(wear: { hub_jobs: number | null; automatic: boolean } | null | undefined,
-  t: Tr = EN): { label: string; title: string } {
+/** The Wear button (GET …/hairstyles `wear`): its label names only what WEARING adds (`extra`), never the Build
+ *  that is due anyway (`due_now`) — that one goes into the mouse-over. "Build automatically" on → the Build
+ *  starts by itself: "Wear · +5 hub jobs" / "Wear · no extra hub job"; off → nothing runs on the click:
+ *  "Wear · no job now", the line names what the Build the user starts later adds. A payload without `extra`
+ *  (older server) counts the whole Build as before. */
+export function wearButton(wear: { hub_jobs: number | null; automatic: boolean; extra?: number | null;
+  due_now?: number | null } | null | undefined, t: Tr = EN): { label: string; title: string } {
   if (!wear) return { label: t('Wear'), title: t('Wearing it is an outfit change') }
-  if (wear.automatic && wear.hub_jobs === 0) {
-    return { label: t('Wear · no hub job'), title: t('Build automatically is on: the Build after the click needs no hub job') }
+  const extra = wear.extra === undefined ? wear.hub_jobs : wear.extra
+  const due = wear.due_now ? ' ' + t('The Build also does what is due anyway ({cost}).')
+    .replace('{cost}', jobsLabel(wear.due_now, t)) : ''
+  if (wear.automatic && extra === 0) {
+    return { label: t('Wear · no extra hub job'),
+      title: t('Build automatically is on: wearing it adds no hub job to the Build after the click.') + due }
   }
   if (wear.automatic) {
-    return { label: t('Wear · Build {cost}').replace('{cost}', jobsLabel(wear.hub_jobs, t)),
-      title: t('Build automatically is on: the Build starts after the click ({cost})')
-        .replace('{cost}', jobsLabel(wear.hub_jobs, t)) }
+    return { label: t('Wear · +{cost}').replace('{cost}', jobsLabel(extra, t)),
+      title: t('Build automatically is on: wearing it adds {cost} to the Build after the click.')
+        .replace('{cost}', jobsLabel(extra, t)) + due }
   }
   return { label: t('Wear · no job now'),
-    title: t('Nothing runs on the click; the Build you start then costs {cost}').replace('{cost}', jobsLabel(wear.hub_jobs, t)) }
+    title: t('Nothing runs on the click; wearing it adds {cost} to the Build you start then.')
+      .replace('{cost}', jobsLabel(extra, t)) + due }
 }
 
 
