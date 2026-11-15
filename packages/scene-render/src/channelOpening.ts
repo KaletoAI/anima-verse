@@ -54,6 +54,11 @@ export const OPENING_POSE_SLACK_M = 0.01
 export interface OpeningSegment { a: Vec3; b: Vec3; r: number }
 export interface OpeningOptions { margin?: number; falloff?: number; band?: number }
 
+/** A102b: an opening is recomputed only when its inputs moved more than this (metres) … */
+export const OPENING_SKIP_M = 0.001
+/** … or turned more than this (degrees) since the last apply (`ChannelOpeningBinding.changed`). */
+export const OPENING_SKIP_DEG = 0.5
+
 /** A push at or below this (metres) does not move the point. */
 const OPENING_EPS_M = 1e-6
 
@@ -226,6 +231,12 @@ export interface ChannelOpeningBinding {
    *  candidates the per-frame narrowing kept. */
   apply(ch: ChannelNow, segments: readonly OpeningSegment[], options?: OpeningOptions): { maxPush: number; moved: number;
     visited: number }
+  /** Has anything the last `apply` read moved beyond the tolerance since (A102b)? True before the first apply, after
+   *  `restore()`, when the segment count changed, when a segment end moved more than `tolM` or its radius more than
+   *  `tolM`, when the channel's opening moved more than `tolM` or its axis turned more than `tolDeg`, or when a bone the
+   *  candidates are skinned to moved more than `tolM` or turned more than `tolDeg` (world). False = the last result
+   *  still holds; the caller may skip the apply. */
+  changed(ch: ChannelNow, segments: readonly OpeningSegment[], tolM?: number, tolDeg?: number): boolean
   /** Every candidate back to its rest and the original geometry back on its mesh (exactly as before). */
   restore(): void
   /** `restore()` and free the cloned geometries. */
@@ -330,6 +341,56 @@ export function bindChannelOpening(three: Three, root: Object3D, ch: ChannelNow,
     return out
   }
   const disp = new Float64Array(3)
+  // --- A102b: what the last apply read, to skip unchanged frames ---
+  /** The segments (a, b, r: 7 per segment) and the channel (o, u) of the last apply; null = none yet. */
+  let lastSegs: Float64Array | null = null
+  const lastCh = new Float64Array(6)
+  /** Per mesh: the world matrices of its used bones at the last apply (16 per used bone, usedBones order). */
+  const lastBones = new Map<MeshEntry, Float64Array>()
+  const snapshot = (now: ChannelNow, segments: readonly OpeningSegment[]) => {
+    lastSegs = new Float64Array(segments.length * 7)
+    segments.forEach((seg, k) => { lastSegs!.set([...seg.a, ...seg.b, seg.r], 7 * k) })
+    lastCh.set([...now.o, ...now.u])
+    for (const e of entries) {
+      const bones = e.mesh.skeleton.bones
+      let arr = lastBones.get(e)
+      if (!arr) { arr = new Float64Array(e.usedBones.length * 16); lastBones.set(e, arr) }
+      e.usedBones.forEach((b, k) => { if (bones[b]) arr!.set(bones[b].matrixWorld.elements, 16 * k) })
+    }
+  }
+  /** Did a world matrix move more than tolM or turn more than tolDeg against `prev` (16 at `off`)? The turn is read off
+   *  the largest change of a unit basis column (|Δcolumn| ≈ angle for small angles). */
+  const matrixMoved = (m: ArrayLike<number>, prev: Float64Array, off: number, tolM: number, tolRad: number) => {
+    if (Math.hypot(m[12] - prev[off + 12], m[13] - prev[off + 13], m[14] - prev[off + 14]) > tolM) return true
+    for (let c = 0; c < 3; c++) {
+      const len = Math.hypot(m[4 * c], m[4 * c + 1], m[4 * c + 2]) || 1
+      const d = Math.hypot(m[4 * c] - prev[off + 4 * c], m[4 * c + 1] - prev[off + 4 * c + 1], m[4 * c + 2] - prev[off + 4 * c + 2])
+      if (d / len > tolRad) return true
+    }
+    return false
+  }
+  const changed = (now: ChannelNow, segments: readonly OpeningSegment[], tolM: number, tolDeg: number): boolean => {
+    if (!active || !lastSegs || lastSegs.length !== segments.length * 7) return true
+    const tolRad = 2 * Math.sin((tolDeg * Math.PI) / 360)
+    for (let k = 0; k < segments.length; k++) {
+      const seg = segments[k], o = 7 * k
+      if (Math.hypot(seg.a[0] - lastSegs[o], seg.a[1] - lastSegs[o + 1], seg.a[2] - lastSegs[o + 2]) > tolM) return true
+      if (Math.hypot(seg.b[0] - lastSegs[o + 3], seg.b[1] - lastSegs[o + 4], seg.b[2] - lastSegs[o + 5]) > tolM) return true
+      if (Math.abs(seg.r - lastSegs[o + 6]) > tolM) return true
+    }
+    if (Math.hypot(now.o[0] - lastCh[0], now.o[1] - lastCh[1], now.o[2] - lastCh[2]) > tolM) return true
+    if (Math.hypot(now.u[0] - lastCh[3], now.u[1] - lastCh[4], now.u[2] - lastCh[5]) > tolRad) return true
+    for (const e of entries) {
+      const prev = lastBones.get(e)
+      if (!prev) return true
+      const bones = e.mesh.skeleton.bones
+      for (let k = 0; k < e.usedBones.length; k++) {
+        const bone = bones[e.usedBones[k]]
+        if (bone && matrixMoved(bone.matrixWorld.elements, prev, 16 * k, tolM, tolRad)) return true
+      }
+    }
+    return false
+  }
   let active = false
   const putBack = () => {
     for (const e of entries) {
@@ -447,8 +508,10 @@ export function bindChannelOpening(three: Three, root: Object3D, ch: ChannelNow,
         }
       }
       active = true
+      snapshot(now, segments)
       return { maxPush, moved, visited }
     },
+    changed(now, segments, tolM = OPENING_SKIP_M, tolDeg = OPENING_SKIP_DEG) { return changed(now, segments, tolM, tolDeg) },
     restore() { if (active) putBack() },
     dispose() {
       putBack()

@@ -282,6 +282,8 @@ export interface PairPlay {
 
 /** A figure that reads no partner this frame (phase B, `tickSecondary`). */
 const NO_PARTNERS: readonly PartnerSnapshot[] = [];
+/** A102b: opening recomputes (or first binds) per frame across all figures. */
+const OPENING_BUDGET = 1;
 
 /** Scratch for the goal `update()` writes (one figure at a time). */
 const _goal = new THREE.Vector3();
@@ -333,6 +335,8 @@ const PLAIN_FLOOR_MOVE: GroundMove = { movement: 'walk_run', scope: 'wilderness'
 const STRAND_SCRATCH = new THREE.Vector3();
 
 export class NpcManager {
+  /** A102b: the rotating start of the opening pass (`tickSecondary`). */
+  private openingTurn = 0;
   onPropEntryError: ((message: string) => void) | null = null;
   group = new THREE.Group();
   /** Photo mode holds only the avatar; all other figures keep their world tick. */
@@ -2342,7 +2346,15 @@ export class NpcManager {
         occupied.set(occ.partner, list);
       }
     }
-    for (const npc of this.npcs.values()) npc.figure?.applyChannelOpenings(occupied.get(npc.name) ?? []);
+    // A102b: at most OPENING_BUDGET opening recomputes per frame (unchanged ones are skipped by the figure); the
+    // receivers are visited from a rotating start so a starved one gets the next frame's budget.
+    const receivers = [...this.npcs.values()];
+    const budget = { left: OPENING_BUDGET };
+    const start = receivers.length ? this.openingTurn++ % receivers.length : 0;
+    for (let k = 0; k < receivers.length; k++) {
+      const npc = receivers[(start + k) % receivers.length];
+      npc.figure?.applyChannelOpenings(occupied.get(npc.name) ?? [], budget);
+    }
     // The GPU hair push: the same selection, the partners re-read after every phase B.
     const fresh = new Map<string, PartnerSnapshot | null>();
     for (const npc of this.npcs.values()) {

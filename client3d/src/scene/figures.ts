@@ -3281,8 +3281,12 @@ export class Figure {
 
   /** THE OPENING (Ruling A102), after every figure's phase B: the other figures' chains engaged in THIS figure's
    *  channels (`occupants`, world segments with w) open its surface — each segment's radius × w, so the opening
-   *  ramps with the engagement. A channel without occupant is restored; none at all costs nothing. */
-  applyChannelOpenings(occupants: readonly { channel: string; w: number; segments: readonly OpeningSegment[] }[]): void {
+   *  ramps with the engagement. A channel without occupant is restored; none at all costs nothing.
+   *  A102b: an occupied opening is recomputed only when its segments, the channel or a bone its region is skinned to
+   *  moved beyond `OPENING_SKIP_M` / `OPENING_SKIP_DEG` since its last apply (`changed`), and only while the frame's
+   *  `budget` lasts (each recompute or first bind takes one); otherwise it keeps its last result. */
+  applyChannelOpenings(occupants: readonly { channel: string; w: number; segments: readonly OpeningSegment[] }[],
+    budget: { left: number } = { left: Infinity }): void {
     if (!occupants.length && !this.openings.size) return;
     const inst = this.root.children[0] ?? null;
     const channels = this.partnerChannels;
@@ -3299,11 +3303,16 @@ export class Figure {
         for (const seg of occ.segments) segments.push({ a: seg.a, b: seg.b, r: seg.r * occ.w });
       }
       let binding = this.openings.get(ch.id);
-      if (binding === undefined && segments.length) {
+      if (!segments.length) { binding?.restore(); continue; }
+      if (binding === undefined) {
+        if (!(budget.left > 0)) continue;
+        budget.left--;
         binding = bindChannelOpening(THREE, inst, ch);
         this.openings.set(ch.id, binding);
       }
-      binding?.apply(ch, segments);
+      if (!binding || !binding.changed(ch, segments) || !(budget.left > 0)) continue;
+      budget.left--;
+      binding.apply(ch, segments);
     }
   }
 

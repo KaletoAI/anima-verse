@@ -12576,6 +12576,13 @@ rule exists once, in `packages/scene-render/src/channelOpening.ts` (numbers: `sc
 - Cost (headless Chromium, SwiftShader host under load 20): 4–6 ms per apply on 12–21 k visited vertices of the two
   stored base models (r 20 / 50 mm). That is above the 1.5 ms target: the vertices really move (9–20 k), see the
   A102 report.
+- Skipping and budget (A102b): the client recomputes an occupied opening only when `changed()` reports that its segments,
+  the channel or a bone its region is skinned to moved more than `OPENING_SKIP_M` (1 mm) or turned more than
+  `OPENING_SKIP_DEG` (0.5°) since its last apply; otherwise the last result stays. At most ONE recompute (or first
+  bind) runs per frame across all figures (`OPENING_BUDGET` in `npcs.ts`), and the receivers are visited from a
+  rotating start, so with n changed receivers each waits at most n − 1 frames. Measured by
+  `scripts/bench_channel_opening.mjs` (node, 20 480-vertex synthetic region): held pose 0.006 ms/frame, walk about
+  4.3 ms/frame for 1 or 3 receivers (3 receivers without the budget: about 13.8 ms).
 - 3D client: after every figure's phase B, `NpcManager.tickSecondary` collects each figure's `channelOccupants()` by
   partner and calls `Figure.applyChannelOpenings` on the receiving figure. No occupant → nothing to do; an empty
   channel restores; a model swap or dispose drops the openings.
