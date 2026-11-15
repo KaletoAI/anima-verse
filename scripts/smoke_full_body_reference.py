@@ -32,9 +32,9 @@ hub job c265fd78: that output → the A-pose front, A74b's edit prompt):
 [2] Generate the plain body's reference (generate_base(Demo)): ONE render — occasion "base_reference", use case
     "base_reference", reference a frozen copy named Demo_1.png in model_refs/.editref_*, require_reference True,
     postprocess False, no equipped pieces;
-      style_character = "female, 30 years old, freckles, green eyes, olive skin, average height, athletic build,
-        completely bald with a smooth bare scalp, " + BODY_TEXT  (the appearance text resolved, its hair clause
-        "long dark hair" left out — a bald plain body —, the slots, then the base views' own state words);
+      style_character = "female, 30 years old, freckles, long dark hair, green eyes, olive skin, average height,
+        athletic build"  (the appearance text resolved, hair included, then the slots — the attribute block
+        alone, no body-state words: those belong to the A-pose edit, Ruling A87b);
       composed prompt = that + ", the whole figure from head to feet inside the frame" (no edit prefix, no pose,
         no light words — the shape of job 5086b496);
       extra_negative = base_prompt(Demo, front)[1] (the base negative as it is now).
@@ -302,8 +302,7 @@ def main() -> int:
         expression_regen.render_character_image = recorder
 
         print("[2] generate the plain body's full-body reference")
-        want_block = ("female, 30 years old, freckles, green eyes, olive skin, average height, athletic build, "
-                      + base_body.BALD_HEAD + ", " + base_body.BODY_TEXT)
+        want_block = "female, 30 years old, freckles, long dark hair, green eyes, olive skin, average height, athletic build"
         check("tile prompt before the click", fbr.base_tile("Demo")["generate"]["prompt"], want_block + ", " + FRAMING)
         record = fbr.generate_base("Demo")
         one = CALLS[0] if len(CALLS) == 1 else {}

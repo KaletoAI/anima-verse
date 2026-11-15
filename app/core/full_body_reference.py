@@ -30,9 +30,9 @@ the frame"``) — no edit prefix, no pose, no light words.
   body slots), in the neutral state (no state modifier), plus the height phrase
   when the appearance does not carry it (the rule of ``base_body.base_appearance``).
 * Plain body (``base_block``): the description of the UNDRESSED figure (nothing
-  worn), its hair clauses left out, then the base views' own words for the body
-  state — the plain body's head (its hair text, else ``BALD_HEAD``),
-  ``BODY_TEXT`` and the packages' base-body texts (``base_body.edit_character``).
+  worn), hair included — the attribute block alone, as in the chain the user
+  validated (Ruling A87b). The plain body's head and body state belong to the
+  A-pose edit (step 2, ``base_body.edit_character``), which carries them.
   Negative: the use case's (``_NEG_TPOSE``) plus the base front's
   (``base_body.base_prompt(front)``) — what the base views keep out.
 * Outfit (``outfit_block``): the description of the figure as dressed in the
@@ -68,7 +68,7 @@ import tempfile
 import threading
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import quote
 
 from app.core.log import get_logger
@@ -261,10 +261,6 @@ def store_in_gallery(character_name: str, data: bytes, suffix: str, tag: str = "
 
 # --- The prompts -------------------------------------------------------------------------------------------------
 
-def _segments(text: str) -> List[str]:
-    return [seg.strip() for seg in (text or "").split(",") if seg.strip()]
-
-
 def _attributes(character_name: str, profile: Dict[str, Any]) -> str:
     """THE person description of the image prompts (``person_description``) of ``profile`` as it is (its worn
     pieces decide which body-slot texts show), neutral (no state modifier), plus the height phrase when the
@@ -287,19 +283,10 @@ def _undressed(profile: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def base_block(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
-    """The plain body's attribute block (module docstring): the undressed figure's description without its hair
-    clauses, then the base views' words for the body state (``base_body.edit_character``: the plain body's head,
-    ``BODY_TEXT``, the packages' base-body texts), each clause once."""
-    from app.core import base_body
+    """The plain body's attribute block (module docstring): the undressed figure's description, hair included —
+    no body-state words (the A-pose edit carries those)."""
     profile = _profile_of(character_name, profile)
-    bare = _undressed(profile)
-    attributes = [seg for seg in _segments(_attributes(character_name, bare)) if not base_body._HAIR_RE.search(seg)]
-    state = _segments(base_body.edit_character(character_name, profile=bare))
-    out: List[str] = []
-    for seg in attributes + state:
-        if seg not in out:
-            out.append(seg)
-    return ", ".join(out)
+    return _attributes(character_name, _undressed(profile))
 
 
 def outfit_block(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
