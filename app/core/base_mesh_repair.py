@@ -22,6 +22,24 @@ continues the surrounding curvature (Liepa 2003, "Filling holes in meshes"). Eve
 new vertices (UVs, colours, morph-target deltas, tangents) is the harmonic interpolation of the rim's values; skin
 weights too, per joint over the rim's joints, then the four largest, renormalised to sum 1; normals are the
 filled surface's own. A closed body comes back unchanged, byte for byte.
+
+**Matte floor** (``matte_floor``, Ruling A97). The mesher predicts a metallic-roughness texture for the body
+(glTF: G = roughness) and paints hair, a beard or brows it modelled INTO the body far glossier than the skin around
+them (Rurik ``basee46edcf9``: those texels at roughness 0.16 .. 0.33, the skin at 0.55; Kai ``base634402e5``: the
+darkest texels at 0.01) — they glint like wet plastic under a grazing light. No region of an unclothed body is meant
+to be glossier than its skin, so every body material gets a floor: the body's own skin roughness — the median
+roughness under the body's vertices (a base body is unclothed, so most of its surface is skin) — less
+``MATTE_MARGIN``. Texels at or above the floor keep their value, so the skin keeps the generator's roughness and its
+fine variation. A texel below it is MIRRORED about it (``r' = min(1, 2 * floor - r)``): continuous at the floor (a
+skin texel just below it barely moves), and the glossier the mesher made a region, the rougher it ends — Rurik's
+hair and beard at 0.16 .. 0.33 end at 0.67 .. 0.84, Kai's hair at 0.01 at 0.86: matte like hair. Clamping to the
+floor instead was rendered too (Ruling A97, Blender, grazing light): the glints go, but the hair keeps the skin's
+broad sheen and reads grey and plastic; mirrored it reads matte. The floor is relative on purpose: the mesher gives
+one body skin at 0.38 and another at 0.57, so any fixed number either leaves hair glossy or turns a skin matte. The
+image is re-encoded in its own format (JPEG at quality 95 without chroma subsampling, PNG / WebP lossless); a
+body whose texels are all at or above the floor, or one without a metallic-roughness texture, comes back
+unchanged. It runs whether the hole fill is switched on or off — it is not a hole repair — and its record is
+``mesh_repair["matte"]``.
 """
 from __future__ import annotations
 
@@ -34,7 +52,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import numpy as np
 
 #: Bump when the repair changes what it produces: every stored base body is then repaired again (on the CPU).
-VERSION = 1
+#: 2: the matte floor of the body's roughness (Ruling A97).
+VERSION = 2
 #: Metres: positional copies (UV seams, creases) within this distance are one surface point
 #: (``extension_bones.COINCIDENT_EPSILON_M``).
 WELD_M = 1e-5
@@ -43,6 +62,10 @@ DEFAULT_MAX_HOLE_CM = 4.0
 MAX_HOLE_CM_RANGE = (0.5, 20.0)
 #: A fill edge longer than this many mean rim edges is split (the patch gets the rim's own resolution).
 REFINE_FACTOR = 1.5
+#: The matte floor sits this far below the body's median roughness (``matte_floor``): measured over every stored base
+#: body of the test world, the skin's 10th percentile lies within 0.04 of that median (Rosi 0.38 / 0.40, Lirien
+#: 0.53 / 0.53, Rurik 0.53 / 0.55, Kai 0.45 / 0.49), so the skin stays as it is while hair at 0.01 .. 0.33 rises.
+MATTE_MARGIN = 0.05
 
 
 # --- Settings --------------------------------------------------------------------------------------------------
@@ -520,24 +543,146 @@ def fill_holes(prims: List[Any], *, max_hole_m: float) -> Dict[str, Any]:
     return report
 
 
+# --- Matte floor ----------------------------------------------------------------------------------------------
+
+def _texture_images(gltf: dict, texture_index: int) -> List[int]:
+    """Every image a texture names: its core ``source`` and any extension source (``EXT_texture_webp`` …)."""
+    texture = gltf["textures"][texture_index]
+    found = [texture["source"]] if isinstance(texture.get("source"), int) else []
+    for extension in (texture.get("extensions") or {}).values():
+        if isinstance(extension, dict) and isinstance(extension.get("source"), int):
+            found.append(extension["source"])
+    return sorted(set(found))
+
+
+def _decode(payload: bytes) -> np.ndarray:
+    from PIL import Image
+    import io
+    image = Image.open(io.BytesIO(payload))
+    image.load()
+    return np.asarray(image.convert("RGBA" if "A" in image.getbands() else "RGB")).copy()
+
+
+def _encode_like(array: np.ndarray, mime: str) -> bytes:
+    """``array`` in the format of ``mime``: JPEG at quality 95 without chroma subsampling (the roughness channel is
+    not blurred into its neighbours), WebP / PNG lossless."""
+    from PIL import Image
+    import io
+    out = io.BytesIO()
+    image = Image.fromarray(array)
+    if mime == "image/jpeg":
+        image.convert("RGB").save(out, "JPEG", quality=95, subsampling=0)
+    elif mime == "image/webp":
+        image.save(out, "WEBP", lossless=True)
+    else:
+        image.save(out, "PNG")
+    return out.getvalue()
+
+
+def matte_floor(glb: bytes, *, margin: float = MATTE_MARGIN) -> Tuple[bytes, Dict[str, Any]]:
+    """``(bytes, record)``: ``glb`` with the roughness (G) of every body material's metallic-roughness texture below
+    ``floor = median roughness under the body's vertices - margin`` mirrored about that floor (``min(1, 2 * floor -
+    r)``; module docstring, Ruling A97). The record:
+    ``status`` ``applied`` | ``unchanged`` | ``skipped`` (no metallic-roughness texture), ``anchor`` (the median),
+    ``floor``, ``lifted`` (the share of body vertices whose roughness was below the floor), ``p10_before`` /
+    ``p10_after`` (their 10th percentile). Roughness counts with the material's ``roughnessFactor``. Garment
+    primitives are no body (``glb_mesh._body_prims``) and keep their map (Ruling A36)."""
+    from app.core import glb_mesh
+    from app.core.face_cleanup import _replace_image
+    parsed = glb_mesh._parse(glb, "Base")
+    gltf = parsed["gltf"]
+    by_texture: Dict[int, List[Tuple[np.ndarray, float]]] = {}
+    for primitive in glb_mesh._body_prims(parsed):
+        if "material" not in primitive:
+            continue
+        pbr = gltf["materials"][primitive["material"]].get("pbrMetallicRoughness") or {}
+        info = pbr.get("metallicRoughnessTexture")
+        if not isinstance(info, dict):
+            continue
+        uv_key = f"TEXCOORD_{int(info.get('texCoord', 0))}"
+        if uv_key not in primitive.get("attributes", {}):
+            continue
+        uvs = glb_mesh.accessor_array(parsed, primitive["attributes"][uv_key]).astype(np.float64)
+        by_texture.setdefault(int(info["index"]), []).append((uvs, float(pbr.get("roughnessFactor", 1.0))))
+    if not by_texture:
+        return glb, {"status": "skipped", "reason": "no metallic-roughness texture"}
+    binary = bytearray(parsed["bin"])
+    record: Dict[str, Any] = {"status": "unchanged", "margin": margin}
+    before_all, after_all, below, anchors, floors = [], [], [], [], []
+    changed = False
+    for texture_index, uses in sorted(by_texture.items()):
+        images = _texture_images(gltf, texture_index)
+        decoded = {}
+        for image_index in images:
+            if "bufferView" not in gltf["images"][image_index]:
+                raise ValueError("The metallic-roughness image is not embedded")
+            view = gltf["bufferViews"][gltf["images"][image_index]["bufferView"]]
+            start = int(view.get("byteOffset", 0))
+            decoded[image_index] = _decode(bytes(binary[start:start + int(view["byteLength"])]))
+        # The values are read from the image the renderers load (the preferred one, ``texture_image_index``).
+        from app.core.model_validate import texture_image_index
+        main = decoded[texture_image_index(gltf, gltf["textures"][texture_index])]
+        height, width = main.shape[:2]
+        samples = []
+        for uvs, factor in uses:
+            u = np.clip((np.mod(uvs[:, 0], 1.0) * width).astype(int), 0, width - 1)
+            v = np.clip((np.mod(uvs[:, 1], 1.0) * height).astype(int), 0, height - 1)
+            samples.append((main[v, u, 1].astype(np.float64) / 255.0) * factor)
+        rough = np.concatenate(samples)
+        factor = max(f for _uvs, f in uses)
+        anchor = float(np.median(rough))
+        floor = anchor - margin
+        anchors.append(anchor)
+        floors.append(floor)
+        before_all.append(rough)
+        after_all.append(np.where(rough < floor, np.minimum(1.0, 2.0 * floor - rough), rough))
+        below.append(rough < floor)
+        if floor <= 0 or factor <= 0 or not (rough < floor).any():
+            continue
+        level = int(math.ceil(min(1.0, floor / factor) * 255.0))
+        for image_index, array in decoded.items():
+            if not (array[..., 1] < level).any():
+                continue
+            g = array[..., 1].astype(np.int32)
+            array[..., 1] = np.where(g < level, np.minimum(255, 2 * level - g), g).astype(np.uint8)
+            mime = gltf["images"][image_index].get("mimeType") or "image/png"
+            binary = _replace_image(parsed, binary, image_index, _encode_like(array, mime))
+            changed = True
+    before, after = np.concatenate(before_all), np.concatenate(after_all)
+    record.update(anchor=round(min(anchors), 3), floor=round(min(floors), 3),
+                  lifted=round(float(np.concatenate(below).mean()), 3),
+                  p10_before=round(float(np.percentile(before, 10)), 3),
+                  p10_after=round(float(np.percentile(after, 10)), 3))
+    if not changed:
+        return glb, record
+    record["status"] = "applied"
+    return glb_mesh.pack_glb(gltf, bytes(binary)), record
+
+
 def repair_glb(glb: bytes, settings: Optional[Dict[str, Any]] = None) -> Tuple[bytes, Dict[str, Any]]:
-    """``(bytes, record)``: ``glb`` with the holes of its body primitives filled (``fill_holes``) and the record
-    a model stores (``mesh_repair``: version, settings fingerprint, status ``applied`` | ``skipped``, the
-    numbers). A closed body — or the repair switched off — returns ``glb`` itself, unchanged."""
+    """``(bytes, record)``: ``glb`` with the holes of its body primitives filled (``fill_holes``), then its body
+    roughness lifted to the matte floor (``matte_floor``, also when the hole fill is switched off), and the record a
+    model stores (``mesh_repair``: version, settings fingerprint, status ``applied`` | ``skipped`` of the hole fill,
+    the numbers, ``matte``). A closed body without a glossy texel returns ``glb`` itself, unchanged."""
     from app.core import glb_mesh
     settings = validated_settings(settings)
     record: Dict[str, Any] = {"version": VERSION, "settings": settings_fingerprint(settings),
                               "max_hole_cm": settings["max_hole_cm"]}
+    out = glb
     if not settings["enabled"]:
-        return glb, {**record, "status": "skipped", "reason": "switched off"}
-    prims = glb_mesh.body_primitive_arrays(glb)
-    report = fill_holes(prims, max_hole_m=settings["max_hole_cm"] / 100.0)
-    changed = report.pop("changed")
-    record.update(status="applied", **report)
-    if not changed:
-        return glb, record
-    out = glb_mesh.rewrite_body_primitives(glb, {i: prims[i] for i in changed})
-    record["open_edges_after"] = open_edge_count(*_concat(glb_mesh.body_primitive_arrays(out)))
+        record.update(status="skipped", reason="switched off")
+    else:
+        prims = glb_mesh.body_primitive_arrays(glb)
+        report = fill_holes(prims, max_hole_m=settings["max_hole_cm"] / 100.0)
+        changed = report.pop("changed")
+        record.update(status="applied", **report)
+        if changed:
+            out = glb_mesh.rewrite_body_primitives(glb, {i: prims[i] for i in changed})
+            record["open_edges_after"] = open_edge_count(*_concat(glb_mesh.body_primitive_arrays(out)))
+    try:
+        out, record["matte"] = matte_floor(out)
+    except Exception as exc:  # noqa: BLE001 — the holes stay filled; the body keeps the mesher's roughness
+        record["matte"] = {"status": "failed", "error": f"Matte floor failed: {exc}"}
     return out, record
 
 
