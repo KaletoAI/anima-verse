@@ -16,9 +16,9 @@
  * [1] facingLine(f, pair, view) — a line only when the view needs a look:
  *       f null                                        → null
  *       right, state ok, pair {same false}            → null (a correct view says nothing — A90's quiet tile)
- *       right, state wrong, facing left               → red, "Faces wrong way", title
+ *       right, state wrong, facing left               → red, "Wrong way", title
  *         "A right view faces the right edge of the image — this one faces the left edge. Mirror it (no image job)."
- *       left, state ok, pair {same true, facing left} → yellow, "Same as the other", title
+ *       left, state ok, pair {same true, facing left} → yellow, "Same as other", title
  *         "Both side views face the left edge of the image — one of them must be mirrored."
  *       right, state wrong + the same pair            → red wins (the sure verdict names the culprit)
  *       left, state unsure, facing null               → yellow, "Facing unsure", title "The facing check is not sure which way this view faces (it reads the feet). A left view
@@ -48,7 +48,7 @@
  *     inside the `ga-view-actions` box after "↻", and the notice text once; without either, no "⇋" and no notice.
  * [4] Rendered FieldModelRefs layout "steps" on the pipeline, left + right on, the right view wrong and mirrored by
  *     hand, the pair the same: two "⇋" buttons (left + right, none on the front view), one aria-pressed="true"
- *     (the right one), the red line "Faces wrong way" once and the same-pair line once (the left
+ *     (the right one), the red line "Wrong way" once and the same-pair line once (the left
  *     view); with dressed_source.source "shape" (copies) both buttons are disabled with the copy reason.
  * [5] de.json carries every new English string of viewFacingModel.ts (FACING_*, MIRROR*, TURN_BACK_TITLE,
  *     FOLLOWUP_TEXT values, DRESSED_FOLLOW, "Turn back") — shared/languages/de.json `translations`.
@@ -124,10 +124,10 @@ const tile = (expected, state, facing, mirrored = null, followup = undefined) =>
 check('[1] null', m.facingLine(null, null, 'right'), null);
 check('[1] ok', m.facingLine(tile('right', 'ok', 'right'), { same: false, facing: null }, 'right'), null);
 check('[1] wrong', m.facingLine(tile('right', 'wrong', 'left'), { same: false, facing: null }, 'right'), {
-  light: 'red', text: 'Faces wrong way',
+  light: 'red', text: 'Wrong way',
   title: 'A right view faces the right edge of the image — this one faces the left edge. Mirror it (no image job).' });
 check('[1] same pair', m.facingLine(tile('left', 'ok', 'left'), { same: true, facing: 'left' }, 'left'), {
-  light: 'yellow', text: 'Same as the other',
+  light: 'yellow', text: 'Same as other',
   title: 'Both side views face the left edge of the image — one of them must be mirrored.' });
 check('[1] wrong beats same', m.facingLine(tile('right', 'wrong', 'left'), { same: true, facing: 'left' }, 'right')?.light,
   'red');
@@ -177,7 +177,7 @@ const actions = withMirror.slice(withMirror.indexOf('ga-view-actions'));
 check('[3] ⇋ after ↻ in the actions box', actions.indexOf('↻') >= 0 && actions.indexOf('⇋') > actions.indexOf('↻'), true);
 check('[3] pressed false', /ga-view-mirror"[^>]*aria-pressed="false"/.test(withMirror), true);
 check('[3] title', withMirror.includes(esc(b1.title)), true);
-check('[3] notice once', count(withMirror, 'Faces wrong way'), 1);
+check('[3] notice once', count(withMirror, 'Wrong way'), 1);
 const plain = m.render(m.h(m.ViewRenderTile, { label: 'Front', url: '/x.png', height: 120, running: false,
   disabled: false, onRender: () => undefined }));
 check('[3] plain: no ⇋, no notice', [plain.includes('⇋'), plain.includes('ga-view-notice')], [false, false]);
@@ -199,14 +199,14 @@ const html = m.render(m.h(m.FieldModelRefs, { character: 'demo', kinds: ['tpose'
   initialInfo: refs('edit') }));
 check('[4] two ⇋', count(html, '>⇋<'), 2);
 check('[4] one pressed', count(html, 'aria-pressed="true"'), 1);
-check('[4] same pair line', count(html, 'Same as the other'), 2);
+check('[4] same pair line', count(html, 'Same as other'), 2);
 const wrongRefs = refs('edit');
 wrongRefs.views.right.info.facing = tile('right', 'wrong', 'left');
 wrongRefs.facing_pair = { same: true, facing: 'left' };
 const html2 = m.render(m.h(m.FieldModelRefs, { character: 'demo', kinds: ['tpose'], layout: 'steps',
   initialInfo: wrongRefs }));
-check('[4] wrong line once', count(html2, 'Faces wrong way'), 1);
-check('[4] same line on the left one', count(html2, 'Same as the other'), 1);
+check('[4] wrong line once', count(html2, 'Wrong way'), 1);
+check('[4] same line on the left one', count(html2, 'Same as other'), 1);
 const copies = m.render(m.h(m.FieldModelRefs, { character: 'demo', kinds: ['tpose'], layout: 'steps',
   initialInfo: refs('shape') }));
 const mirrorTags = copies.match(/<button[^>]*ga-view-mirror[^>]*>/g) || [];

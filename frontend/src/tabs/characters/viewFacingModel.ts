@@ -51,13 +51,13 @@ export interface FacingPair {
   facing: Side | null
 }
 
-export const FACING_WRONG = 'Faces wrong way'
+export const FACING_WRONG = 'Wrong way'
 export const FACING_WRONG_REASON = 'A {view} view faces the {view} edge of the image — this one faces the {side} '
   + 'edge. Mirror it (no image job).'
 export const FACING_UNSURE = 'Facing unsure'
 export const FACING_UNSURE_REASON = 'The facing check is not sure which way this view faces (it reads the feet). '
   + 'A {view} view faces the {view} edge of the image — check it and mirror it if needed.'
-export const FACING_SAME = 'Same as the other'
+export const FACING_SAME = 'Same as other'
 export const FACING_SAME_REASON = 'Both side views face the {side} edge of the image — one of them must be mirrored.'
 export const MIRRORED_AUTO = 'Mirrored automatically: it faced the other way ({pct} % sure).'
 export const MIRRORED_HAND = 'Mirrored by hand.'
@@ -69,8 +69,8 @@ function fill(text: string, view: Side, side: Side | null, t: Tr): string {
 }
 
 /**
- * The tile's facing line — only when something needs a look: a sure wrong view → red "Faces wrong way"; both
- * sides facing the same edge → yellow "Same as the other"; an unsure view → yellow "Facing unsure". Short, the
+ * The tile's facing line — only when something needs a look: a sure wrong view → red "Wrong way"; both
+ * sides facing the same edge → yellow "Same as other"; an unsure view → yellow "Facing unsure". Short, the
  * tile is narrow: the whole reason (what is wrong, what fixes it — the Mirror, no image job) is the line's
  * mouse-over. Null for a view that faces the right way (or has no facing).
  */
