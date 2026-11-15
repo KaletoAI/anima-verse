@@ -74,7 +74,8 @@ measured on Kira's record (``hair_kira_3f3e184afa64.json``) and on her base ``ba
     shell): auto finds no landmarks -> tilt 0 "no_landmarks", forward 0.006 "default", hairline_target_y None,
     metrics forward_m 0.006 / tilt_deg 0; the head match itself is unchanged (icp_scale 2.0 +- 0.01). The shell's
     lowest ring stays at y 0.8 + 2 * 0.41 = 1.62 (a shift along z moves no y): hairline_unadjusted_y ==
-    hairline_placed_y == 1.62 +- 1e-4. A manual tilt 15.5 or forward 0.031 is a ValueError (bounds 15 / 0.03).
+    hairline_placed_y == 1.62 +- 1e-4. A manual tilt 30.5 or -15.5, forward 0.031 or up/down 0.031 is a ValueError
+    (bounds -15..30 since Ruling A85 / 0.03 / 0.03).
     landmark_source "none" (no face, nothing rejected).
 [8] Landmark plausibility (Kai 2026-11-09, base634402e5 with the beard modelled: the auto tilt 13.3 deg pulled the
     hairline 2-3 cm below his brow). Eye line = chin + 0.5 * (crown - chin); brow 8-13 cm below the crown and above
@@ -318,7 +319,8 @@ def main() -> int:
         check(near(res.metrics["icp_scale"], 2.0, 0.01), f"head match unchanged ({res.metrics['icp_scale']})")
         check(near(pl["hairline_unadjusted_y"], 1.62, 1e-4) and near(pl["hairline_placed_y"], 1.62, 1e-4),
               f"forward moves no y: {pl['hairline_unadjusted_y']} / {pl['hairline_placed_y']}")
-        for kwargs in ({"tilt_deg": 15.5}, {"forward_m": 0.031}, {"tilt_deg": float("nan")}):
+        for kwargs in ({"tilt_deg": 30.5}, {"tilt_deg": -15.5}, {"forward_m": 0.031}, {"up_m": 0.031},
+                       {"up_m": -0.031}, {"tilt_deg": float("nan")}):
             try:
                 gh.fit_hairdeck(nohead, proxy, body_glb, colour_target=None, **kwargs)
                 check(False, f"{kwargs} refused")

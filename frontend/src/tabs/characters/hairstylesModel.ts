@@ -12,9 +12,9 @@
  *   tile per seed with its light, its reason and its numbers, "In use" or "Use this — no hub job, CPU refit" — and
  *   the cost line beside a HAAR Run all.
  * - `settingDue`: what a saved setting made due, written next to it.
- * - `placementMap` / `placementRuler`: the live placement preview — the fitted hair turned and moved by the
- *   difference between the dragged values and the ones the fit used, about the fit's own pivot — and the
- *   centimetre ruler with the forward shift drawn at the head.
+ * - `placementMap` / `placementRuler` / `upRuler`: the live placement preview — the fitted hair turned and moved by
+ *   the difference between the dragged values and the ones the fit used, about the fit's own pivot — and the
+ *   centimetre rulers with the forward shift (along z) or the up/down shift (along y) drawn at the head.
  * - `strandPreviewState` / `previewRootPose`: the per-strand preview (strand-hair spec § 6.2.5, ruling H-R2) — whether
  *   the hair swings, the drag turn and the motion buttons' root motion (Sway, Walk, Turn).
  * - `colourTint`: the live colour preview — a multiplier of the hair's vertex colours.
@@ -510,50 +510,55 @@ export function settingDue(kind: 'placement' | 'colour' | 'swing' | 'stiffness' 
 
 export type Vec3 = [number, number, number]
 
-/** Placement values: forward shift (m), forward tilt (°), hair width (×). */
-export interface PlacementValues { forward_m: number; tilt_deg: number; width_scale: number }
+/** Placement values: forward shift (m), forward tilt (°), hair width (×), up/down shift (m, Ruling A85; absent = 0). */
+export interface PlacementValues { forward_m: number; tilt_deg: number; width_scale: number; up_m?: number }
 
 /** The vertex map of the live placement preview. The fit placed every hair point Q as
- *  `R(a0)(Q − p) + p + f0·z` (pitched forward by `a0` about the x axis through the pivot `p`, +z down-front:
- *  (0, 0, r) → (0, −r·sin a, r·cos a); then moved `f0` along +z — `garment_hairdeck.adjust_placement`), then
- *  scaled the sides' reach beyond the head half width `h` by `w0` about the mid plane `cx`
- *  (`narrow_sides`: |x − cx| = h + (a − h)·w0 beyond h). The preview undoes the fitted values and applies the
- *  dragged ones: y/z turn by `a1 − a0` about `p` after removing `f0` and gain `f1`; x beyond `h` scales by
- *  `w1 / w0`. The push-out of the fit is not redone (an approximation the reason line says). */
+ *  `R(a0)(Q − p) + p + f0·z + u0·y` (pitched forward by `a0` about the x axis through the pivot `p`, +z
+ *  down-front: (0, 0, r) → (0, −r·sin a, r·cos a); then moved `f0` along +z and `u0` along +y —
+ *  `garment_hairdeck.adjust_placement`), then scaled the sides' reach beyond the head half width `h` by `w0` about
+ *  the mid plane `cx` (`narrow_sides`: |x − cx| = h + (a − h)·w0 beyond h). The preview undoes the fitted values and
+ *  applies the dragged ones: y/z turn by `a1 − a0` about `p` after removing `f0` / `u0` and gain `f1` / `u1`; x
+ *  beyond `h` scales by `w1 / w0`. The push-out of the fit is not redone (an approximation the reason line says). */
 export function placementMap(pivot: Vec3, fitted: PlacementValues, draft: PlacementValues, cx: number,
   halfWidth: number): (p: Vec3) => Vec3 {
   const da = ((draft.tilt_deg - fitted.tilt_deg) * Math.PI) / 180
   const cos = Math.cos(da)
   const sin = Math.sin(da)
   const ratio = fitted.width_scale > 0 ? draft.width_scale / fitted.width_scale : 1
+  const u0 = fitted.up_m ?? 0
+  const u1 = draft.up_m ?? 0
   return ([x, y, z]) => {
-    const dy = y - pivot[1]
+    const dy = y - u0 - pivot[1]
     const dz = z - fitted.forward_m - pivot[2]
     const off = x - cx
     const a = Math.abs(off)
     const nx = a > halfWidth ? cx + Math.sign(off) * (halfWidth + (a - halfWidth) * ratio) : x
-    return [nx, pivot[1] + dy * cos - dz * sin, pivot[2] + dy * sin + dz * cos + draft.forward_m]
+    return [nx, pivot[1] + dy * cos - dz * sin + u1, pivot[2] + dy * sin + dz * cos + draft.forward_m]
   }
 }
 
 /** The placement the fit used (its record) or, without a fit, what the next fit uses (GET …/hair
  *  `hairdeck.placement`: stored values, null = automatic). */
 export function fittedPlacement(p: {
-  forward_m: number | null; tilt_deg: number | null; width_scale: number | null; default_forward_m: number
-  fitted?: { forward_m?: number | null; tilt_deg?: number | null; width_scale?: number | null } | null
+  forward_m: number | null; tilt_deg: number | null; width_scale: number | null; up_m?: number | null
+  default_forward_m: number
+  fitted?: { forward_m?: number | null; tilt_deg?: number | null; width_scale?: number | null; up_m?: number | null } | null
 }): PlacementValues {
   const f = p.fitted
   return {
     forward_m: f?.forward_m ?? p.forward_m ?? p.default_forward_m,
     tilt_deg: f?.tilt_deg ?? p.tilt_deg ?? 0,
     width_scale: f?.width_scale ?? p.width_scale ?? 1,
+    // a fit from before Ruling A85 recorded no up/down: it had none
+    up_m: f ? (f.up_m ?? 0) : (p.up_m ?? 0),
   }
 }
 
 /** True when the map changes nothing (the dragged values are the fitted ones). */
 export function placementIdentity(fitted: PlacementValues, draft: PlacementValues): boolean {
   return Math.abs(fitted.forward_m - draft.forward_m) < 1e-6 && Math.abs(fitted.tilt_deg - draft.tilt_deg) < 1e-6
-    && Math.abs(fitted.width_scale - draft.width_scale) < 1e-6
+    && Math.abs(fitted.width_scale - draft.width_scale) < 1e-6 && Math.abs((fitted.up_m ?? 0) - (draft.up_m ?? 0)) < 1e-6
 }
 
 /** The metre reference of the forward shift (the user's rule: a value in metres is seen at its distance): a
@@ -583,6 +588,29 @@ export function placementRuler(pivot: Vec3, x: number, y: number, forwardM: numb
     lines.push({ points: [[x, ys - 0.006, pivot[2]], [x, ys + 0.008, pivot[2]]], color: SHIFT_COLOUR })
     lines.push({ points: [[x, ys - 0.006, pivot[2] + forwardM], [x, ys + 0.008, pivot[2] + forwardM]],
       color: SHIFT_COLOUR })
+  }
+  return lines
+}
+
+/** The metre reference of the up/down shift (Ruling A85; same rule as `placementRuler`): a centimetre ruler along
+ *  +y beside the head at side `x` and depth `z` — from 4 cm below the hairline height `y` to 4 cm above it, a tick
+ *  per cm (6 mm along −z, the one at the hairline 12 mm) — and, 12 mm in front of it, the shift itself from `y` to
+ *  `y + upM` in cyan, drawn twice 2 mm apart, with a bar at each end. Model space, metres. */
+export function upRuler(x: number, y: number, z: number, upM: number): Array<{ points: Vec3[]; color: string }> {
+  const y0 = y - 0.04
+  const lines: Array<{ points: Vec3[]; color: string }> = [{ points: [[x, y0, z], [x, y + 0.04, z]], color: '#c9d1d9' }]
+  for (let cm = 0; cm <= 8; cm++) {
+    const yy = y0 + cm / 100
+    const len = cm === 4 ? 0.012 : 0.006
+    lines.push({ points: [[x, yy, z], [x, yy, z - len]], color: '#c9d1d9' })
+  }
+  if (Math.abs(upM) > 1e-5) {
+    const zs = z + 0.012
+    for (const dz of [0, 0.002]) {
+      lines.push({ points: [[x, y, zs + dz], [x, y + upM, zs + dz]], color: SHIFT_COLOUR })
+    }
+    lines.push({ points: [[x, y, zs - 0.006], [x, y, zs + 0.008]], color: SHIFT_COLOUR })
+    lines.push({ points: [[x, y + upM, zs - 0.006], [x, y + upM, zs + 0.008]], color: SHIFT_COLOUR })
   }
   return lines
 }

@@ -222,14 +222,16 @@ def blob(res, drop_xpbd=False):
 
 def base_comparable(res):
     """``blob(res)`` without what FIT hair 14 added to the report (``fill``, ``vertices.fill``, the automatic width's
-    ``placement.width_auto`` and ``width_source`` "auto" for the base's "default", the drape's ``torn``) — the
-    base commit has none of it."""
+    ``placement.width_auto`` and ``width_source`` "auto" for the base's "default", the drape's ``torn``; Ruling A85's
+    ``placement.up_m`` / ``up_source`` / ``hairline_image_y``) — the base commit has none of it."""
     arrays, rest, metrics, ok, reasons, rep = blob(res)
     rep = json.loads(rep)
     rep.pop("fill", None)
     rep.get("vertices", {}).pop("fill", None)
     pl = rep.get("placement", {})
     pl.pop("width_auto", None)
+    for key in ("up_m", "up_source", "hairline_image_y"):
+        pl.pop(key, None)
     if pl.get("width_source") == "auto":
         pl["width_source"] = "default"
     if isinstance(rep.get("push", {}).get("drape_xpbd"), dict):

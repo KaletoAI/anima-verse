@@ -9,8 +9,10 @@
  * with its group's Save — saving runs nothing. What a save made due is written in the group
  * (`settingDue`: "Saved, not applied — Re-fit applies it (no hub job)").
  *
- * - Placement: forward shift (mm), forward tilt (°), hair width (×); Automatic clears all three
- *   (POST /characters/{n}/hair/placement {forward_m, tilt_deg, width_scale, item_id}, null = automatic).
+ * - Placement: forward shift (mm), up/down (mm, Ruling A85), forward tilt (°; back −15 … forward +30), hair width (×);
+ *   each row's Auto clears that value, Automatic clears all four (POST /characters/{n}/hair/placement
+ *   {forward_m, tilt_deg, width_scale, up_m, item_id}, null = automatic). Hovering a shift slider draws its
+ *   centimetre ruler and the shift in the preview (`onRuler('forward' | 'up')`).
  * - Colour: a manual hair colour, Automatic clears it (POST …/hair/colour {hex, item_id}).
  * - Cut (HAAR only, Ruling A71): Length — the whole length, a maximum length (cm) or where the hair ends on the body
  *   (chin / shoulder / shoulder blades / mid back / waist) — and Ends, the soft tip (cm; Auto = the fit's default).
@@ -27,7 +29,7 @@ import type { CSSProperties, ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { CUT_AT_LABELS, STRAND_PREVIEW_HINTS, cutLabel, fittedPlacement, settingDue } from './hairstylesModel'
+import { CUT_AT_LABELS, STRAND_PREVIEW_HINTS, cutLabel, fittedPlacement, jobsLabel, settingDue } from './hairstylesModel'
 import type { PlacementValues, StepInput, StrandPreviewState } from './hairstylesModel'
 import { cutEqual, cutPostBody, normaliseCut } from './hairCut'
 import type { HaarCutPanel, HairCut } from './hairCut'
@@ -47,7 +49,8 @@ const GROUP: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 2,
 const BTN_ROW: CSSProperties = { display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }
 const DUE: CSSProperties = { color: 'var(--warning, #d29922)', fontSize: 10, overflowWrap: 'anywhere' }
 
-function Slider({ label, value, shown, min, max, step, disabled, title, onChange, onFocus, onBlur }: {
+function Slider({ label, value, shown, min, max, step, disabled, title, onChange, onFocus, onBlur, onAuto,
+  autoLabel = 'Auto', autoTitle }: {
   label: string
   value: number
   shown: string
@@ -59,12 +62,24 @@ function Slider({ label, value, shown, min, max, step, disabled, title, onChange
   onChange: (v: number) => void
   onFocus?: () => void
   onBlur?: () => void
+  /** The row's own "Auto" (back to automatic for this value only); absent = no button, null = shown disabled. */
+  onAuto?: (() => void) | null
+  autoLabel?: string
+  autoTitle?: string
 }) {
   return (
     <label className="ga-model3d-slider" title={title} style={{ gap: 0, fontSize: 10 }}
       onMouseEnter={onFocus} onMouseLeave={onBlur}>
-      <span style={{ display: 'flex', justifyContent: 'space-between', gap: 4 }}>
-        <span>{label}</span><span style={{ fontVariantNumeric: 'tabular-nums' }}>{shown}</span>
+      <span style={{ display: 'flex', justifyContent: 'space-between', gap: 4, alignItems: 'center' }}>
+        <span>{label}</span>
+        <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          <span style={{ fontVariantNumeric: 'tabular-nums' }}>{shown}</span>
+          {onAuto !== undefined ? (
+            <button type="button" className="ga-btn ga-btn-sm" disabled={disabled || !onAuto} title={autoTitle}
+              style={{ fontSize: 9, padding: '0 4px', lineHeight: '14px' }}
+              onClick={(e) => { e.preventDefault(); onAuto?.() }}>{autoLabel}</button>
+          ) : null}
+        </span>
       </span>
       <input type="range" min={min} max={max} step={step} value={value} disabled={disabled}
         onFocus={onFocus} onBlur={onBlur} onChange={(e) => onChange(Number(e.target.value))} />
@@ -103,8 +118,8 @@ export function HairLiveControls({ character, itemId, mode = 'hairdeck', hd, inf
   /** The preview can cut live (the uncut cards of the shown fit are loaded). */
   cutLive?: boolean
   onDraft: (d: HairDrafts) => void
-  /** The forward-shift ruler is wanted in the preview (the slider is hovered or focused). */
-  onRuler: (on: boolean) => void
+  /** A shift ruler is wanted in the preview (its slider is hovered or focused): forward, up/down or none. */
+  onRuler: (which: 'forward' | 'up' | null) => void
   onSaved: () => void
 }) {
   const { t } = useI18n()
@@ -117,6 +132,7 @@ export function HairLiveControls({ character, itemId, mode = 'hairdeck', hd, inf
     forward_m: p.forward_m ?? (p.fitted?.forward_source === 'default' ? fitted.forward_m : p.default_forward_m),
     tilt_deg: p.tilt_deg ?? fitted.tilt_deg,
     width_scale: p.width_scale ?? fitted.width_scale,
+    up_m: p.up_m ?? 0,
   }
   const [placement, setPlacement] = useState<PlacementValues | null>(null)
   // Which placement values were dragged: an untouched one keeps its stored value (automatic stays automatic).
@@ -131,7 +147,7 @@ export function HairLiveControls({ character, itemId, mode = 'hairdeck', hd, inf
 
   // A new server answer: the drafts restart from it.
   const cutSaved = normaliseCut(cutPanel?.saved)
-  const serverKey = `${itemId}|${p.forward_m}|${p.tilt_deg}|${p.width_scale}|${hd.colour.target}|${chains?.stiffness}`
+  const serverKey = `${itemId}|${p.forward_m}|${p.tilt_deg}|${p.width_scale}|${p.up_m}|${hd.colour.target}|${chains?.stiffness}`
     + `|${JSON.stringify(cutSaved)}`
   useEffect(() => {
     setPlacement(null); setTouched({}); setColour(null); setStiffness(null); setCut(null)
@@ -155,13 +171,30 @@ export function HairLiveControls({ character, itemId, mode = 'hairdeck', hd, inf
 
   const cur = placement ?? stored
   const lim = p.limits
-  const manual = p.forward_m !== null || p.tilt_deg !== null || p.width_scale !== null
+  const manual = p.forward_m !== null || p.tilt_deg !== null || p.width_scale !== null || p.up_m !== null
   const edit = (patch: Partial<PlacementValues>) => {
     setPlacement({ ...cur, ...patch })
     setTouched((prev) => ({ ...prev, ...Object.fromEntries(Object.keys(patch).map((k) => [k, true])) }))
   }
   /** The value a Save sends: the dragged one, else the stored one (null = automatic). */
-  const sent = (key: keyof PlacementValues) => (touched[key] && placement ? placement[key] : p[key])
+  const sent = (key: keyof PlacementValues) => (touched[key] && placement ? placement[key] ?? null : p[key])
+  const KEYS: Array<keyof PlacementValues> = ['forward_m', 'tilt_deg', 'width_scale', 'up_m']
+  /** A row's Auto: a stored manual value is cleared at once (the others keep their stored values, nothing runs);
+   *  a value only dragged goes back to its stored one. null when the row is automatic and untouched. */
+  const autoOf = (key: keyof PlacementValues): (() => void) | null => {
+    if (p[key] !== null) {
+      return () => { void post('placement', Object.fromEntries(KEYS.map((k) => [k, k === key ? null : p[k]]))) }
+    }
+    if (!touched[key] || !placement) return null
+    return () => {
+      const next = { ...placement, [key]: stored[key] }
+      const left = { ...touched, [key]: false }
+      setTouched(left)
+      setPlacement(KEYS.some((k) => left[k]) ? next : null)
+    }
+  }
+  const autoTitle = t('This value back to automatic — saved at once, nothing runs')
+  const autoLabel = t('Auto')
   const placementDue = settingDue('placement', info, t)
   const colourDue = settingDue('colour', info, t)
   const swingDue = settingDue('swing', info, t)
@@ -194,32 +227,42 @@ export function HairLiveControls({ character, itemId, mode = 'hairdeck', hd, inf
             shown={mm(cur.forward_m) + (touched.forward_m ? '' : autoMark(p.forward_m !== null))}
             min={-Math.round(lim.forward_m * 1000)} max={Math.round(lim.forward_m * 1000)} step={1} disabled={off}
             title={t('Moves the hair forward (+) or back (−). The cyan line in the preview is this shift, the ruler beside it has a tick per centimetre.')}
-            onChange={(v) => edit({ forward_m: v / 1000 })} onFocus={() => onRuler(true)} onBlur={() => onRuler(false)} />
+            onChange={(v) => edit({ forward_m: v / 1000 })} onFocus={() => onRuler('forward')} onBlur={() => onRuler(null)}
+            onAuto={autoOf('forward_m')} autoLabel={autoLabel} autoTitle={autoTitle} />
+          <Slider label={t('Up / down')} value={Math.round((cur.up_m ?? 0) * 1000)}
+            shown={mm(cur.up_m ?? 0) + (touched.up_m ? '' : autoMark(p.up_m !== null))}
+            min={-Math.round(lim.up_m * 1000)} max={Math.round(lim.up_m * 1000)} step={1} disabled={off}
+            title={t('Moves the hair up (+) or down (−). The cyan line in the preview is this shift, the ruler beside it has a tick per centimetre. Automatic = no shift.')}
+            onChange={(v) => edit({ up_m: v / 1000 })} onFocus={() => onRuler('up')} onBlur={() => onRuler(null)}
+            onAuto={autoOf('up_m')} autoLabel={autoLabel} autoTitle={autoTitle} />
           <Slider label={t('Forward tilt')} value={cur.tilt_deg}
             shown={`${cur.tilt_deg.toFixed(1)}°` + (touched.tilt_deg ? '' : autoMark(p.tilt_deg !== null))}
-            min={-lim.tilt_deg} max={lim.tilt_deg} step={0.5} disabled={off}
-            title={t('Pitches the hair forward (+) about the point the fit turned it about. Automatic brings the front hairline to the brow line.')}
-            onChange={(v) => edit({ tilt_deg: v })} />
+            min={lim.tilt_deg[0]} max={lim.tilt_deg[1]} step={0.5} disabled={off}
+            title={t('Pitches the hair forward (+, up to 30°) or back (−, up to 15°) about the point the fit turned it about. Automatic brings the front hairline to the brow line.')}
+            onChange={(v) => edit({ tilt_deg: v })} onAuto={autoOf('tilt_deg')} autoLabel={autoLabel} autoTitle={autoTitle} />
           <Slider label={t('Hair width')} value={cur.width_scale}
             shown={`${cur.width_scale.toFixed(2)}×` + (touched.width_scale ? '' : autoMark(p.width_scale !== null))}
             min={lim.width_scale[0]} max={lim.width_scale[1]} step={0.05} disabled={off}
             title={t('Scales how far the hair reaches out beyond the sides of the head; 1 = as generated. The hairline stays.')}
-            onChange={(v) => edit({ width_scale: v })} />
+            onChange={(v) => edit({ width_scale: v })} onAuto={autoOf('width_scale')} autoLabel={autoLabel} autoTitle={autoTitle} />
           <div style={BTN_ROW}>
             <button type="button" className="ga-btn ga-btn-sm" disabled={off || !placement}
               title={t('Saves the placement — nothing runs')}
               onClick={() => { if (placement) void post('placement', { forward_m: sent('forward_m'),
-                tilt_deg: sent('tilt_deg'), width_scale: sent('width_scale') }) }}>
+                tilt_deg: sent('tilt_deg'), width_scale: sent('width_scale'), up_m: sent('up_m') }) }}>
               {t('Save')}
             </button>
             <button type="button" className="ga-btn ga-btn-sm" disabled={off || (!manual && !placement)}
               title={t('Back to automatic — saved at once, nothing runs')}
-              onClick={() => { if (manual) void post('placement', { forward_m: null, tilt_deg: null, width_scale: null })
+              onClick={() => { if (manual) void post('placement', { forward_m: null, tilt_deg: null, width_scale: null,
+                up_m: null })
                 else { setPlacement(null); setTouched({}) } }}>
               {t('Automatic')}
             </button>
           </div>
-          {placement ? <span className="ga-hint" style={{ fontSize: 10 }}>{t('Preview only — Save keeps it')}</span>
+          {placement ? <span className="ga-hint" style={{ fontSize: 10 }}>
+            {t('Preview only (without the push-out) — Save stores it, Re-fit applies it ({cost})')
+              .replace('{cost}', jobsLabel(info.step_jobs?.fit ?? 0, t))}</span>
             : placementDue ? <span style={DUE}>{placementDue}</span> : null}
         </Group>
       )}

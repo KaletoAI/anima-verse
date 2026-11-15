@@ -97,13 +97,14 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     hairdeck panel seed 44, job_seed 44, seeds_tried 3.
 [9] Placement (user test 2026-11-09, finding 5): the panel shows
     hairdeck.placement {forward_m None, tilt_deg None, default_forward_m
-    0.006 (garment_hairdeck.DEFAULT_FORWARD_M), limits {0.03, 15.0, width
-    [0.5, 1.5]}} and the newest fit's placement as the stub reported it
-    (auto: forward 0.006 default, tilt 2.5 auto, hairline 1.636 against
-    1.635, landmark_source "profile"; no width in the stub's report -> width
-    None). forward "abc", 0.031 (> 0.03), tilt 15.5 (> 15), true, "nan",
-    width 0.4 (< 0.5) -> 400 each, nothing stored. {forward_m 0.004,
-    tilt_deg "3"} -> 200 {width None, 0.004, 3.0}, the hairstyle's
+    0.006 (garment_hairdeck.DEFAULT_FORWARD_M), limits {forward 0.03, tilt
+    [-15, 30] (Ruling A85), up 0.03, width [0.5, 1.5]}} and the newest fit's
+    placement as the stub reported it (auto: forward 0.006 default, tilt 2.5
+    auto, hairline 1.636 against 1.635, landmark_source "profile"; no width
+    and no up/down in the stub's report -> None). forward "abc", 0.031
+    (> 0.03), tilt 30.5 (> 30), -15.5 (< -15), true, "nan", width 0.4
+    (< 0.5), up 0.031 (> 0.03) -> 400 each, nothing stored. {forward_m
+    0.004, tilt_deg "3"} -> 200 {width None, up None, 0.004, 3.0}, the hairstyle's
     hair_forward_m 0.004 / hair_tilt_deg 3.0; fsig F3 (neither F1 nor F2),
     hsig unchanged, fit "missing", stale ["placement_changed"], F1 served.
     POST run {} -> no HairDeck call, one fit per stored seed (42, 43, 44 ->
@@ -112,7 +113,7 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     and placement.tilt_source "manual"; stale []. All three pass with the
     stub's push 0.01 -> the tie goes to the lower seed: F3's inputs.seed 42,
     panel seed 42, job_seed 44, seeds_tried 3. Reset {null, null} -> {None,
-    None}, both keys gone from the hairstyle, fsig F1 again — still "accepted": the F1
+    None} (width / up None), both keys gone from the hairstyle, fsig F1 again — still "accepted": the F1
     fit (seed 44) stays fresh, its own seed file is unchanged.
 """
 import hashlib
@@ -492,19 +493,22 @@ def main() -> int:
             pl = (hair().get("hairdeck") or {}).get("placement") or {}
             check("placement auto", (pl.get("forward_m"), pl.get("tilt_deg"), pl.get("default_forward_m"),
                                      pl.get("limits")),
-                  (None, None, 0.006, {"forward_m": 0.03, "tilt_deg": 15.0, "width_scale": [0.5, 1.5]}))
+                  (None, None, 0.006, {"forward_m": 0.03, "tilt_deg": [-15.0, 30.0], "up_m": 0.03,
+                                       "width_scale": [0.5, 1.5]}))
             check("fitted (auto)", pl.get("fitted"),
                   {"forward_m": 0.006, "forward_source": "default", "tilt_deg": 2.5, "tilt_source": "auto",
                    "tilt_solve": "solved", "hairline_target_y": 1.635, "hairline_y": 1.636,
-                   "landmark_source": "profile", "width_scale": None, "width_source": None})
-            for bad in ({"forward_m": "abc"}, {"forward_m": 0.031}, {"tilt_deg": 15.5}, {"tilt_deg": True},
-                        {"tilt_deg": "nan"}, {"width_scale": 0.4}):
+                   "landmark_source": "profile", "width_scale": None, "width_source": None,
+                   "up_m": None, "up_source": None})
+            for bad in ({"forward_m": "abc"}, {"forward_m": 0.031}, {"tilt_deg": 30.5}, {"tilt_deg": -15.5},
+                        {"tilt_deg": True}, {"tilt_deg": "nan"}, {"width_scale": 0.4}, {"up_m": 0.031}):
                 r = client.post("/characters/Demo/hair/placement", json=bad)
                 check(f"placement {bad} 400", r.status_code, 400)
-            check("nothing stored", ("hair_forward_m" in style(), "hair_tilt_deg" in style()), (False, False))
+            check("nothing stored", ("hair_forward_m" in style(), "hair_tilt_deg" in style(), "hair_up_m" in style()),
+                  (False, False, False))
             r = client.post("/characters/Demo/hair/placement", json={"forward_m": 0.004, "tilt_deg": "3"})
             check("placement 200", (r.status_code, r.json()),
-                  (200, {"width_scale": None, "forward_m": 0.004, "tilt_deg": 3.0}))
+                  (200, {"width_scale": None, "up_m": None, "forward_m": 0.004, "tilt_deg": 3.0}))
             check("stored placement", (style().get("hair_forward_m"), style().get("hair_tilt_deg")), (0.004, 3.0))
             h = hair()
             g = h.get("garment") or {}
@@ -535,7 +539,7 @@ def main() -> int:
                                         hd.get("seeds_tried")), (42, 42, 44, 3))
             r = client.post("/characters/Demo/hair/placement", json={"forward_m": None, "tilt_deg": None})
             check("placement reset", (r.status_code, r.json()),
-                  (200, {"width_scale": None, "forward_m": None, "tilt_deg": None}))
+                  (200, {"width_scale": None, "up_m": None, "forward_m": None, "tilt_deg": None}))
             check("reset: keys gone", ("hair_forward_m" in style(), "hair_tilt_deg" in style()), (False, False))
             g = hair().get("garment") or {}
             check("back to F1", (g.get("fsig"), (g.get("steps") or {}).get("fit", {}).get("status")), (f1, "accepted"))

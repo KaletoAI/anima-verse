@@ -1987,6 +1987,7 @@ class HairPlacementRequest(BaseModel):
     forward_m: Any = None
     tilt_deg: Any = None
     width_scale: Any = None
+    up_m: Any = None
     item_id: str = ""
 
 
@@ -2575,10 +2576,11 @@ def set_character_hair_colour(character_name: str, body: HairColourRequest,
 def set_character_hair_placement(character_name: str, body: HairPlacementRequest,
                                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Set a hairstyle's (``item_id`` "" = the worn one) HairDeck placement:
-    ``forward_m`` (metres along +z), ``tilt_deg`` (forward pitch, degrees)
-    and ``width_scale`` (the sides' reach beyond the head), each a number or
-    null for automatic (forward ``garment_hairdeck.DEFAULT_FORWARD_M``, tilt
-    solved to the brow line, width 1). 400 for a non-number or a value
+    ``forward_m`` (metres along +z), ``tilt_deg`` (forward pitch, degrees;
+    -15..+30), ``width_scale`` (the sides' reach beyond the head) and ``up_m``
+    (metres along +y, Ruling A85), each a number or null for automatic
+    (forward ``garment_hairdeck.DEFAULT_FORWARD_M``, tilt solved to the brow
+    line, width 1, no up/down). 400 for a non-number or a value
     beyond its limit. Only the fit fingerprint changes: the next run re-fits
     from the cached HairDeck job, without a HairDeck call (no run starts
     here)."""
@@ -2588,12 +2590,12 @@ def set_character_hair_placement(character_name: str, body: HairPlacementRequest
     item_id = _hairstyle_id(character_name, body.item_id)
     try:
         saved = garment_hair.set_hair_placement(character_name, item_id, body.forward_m, body.tilt_deg,
-                                                body.width_scale)
+                                                body.width_scale, body.up_m)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not saved:
         raise HTTPException(status_code=500, detail="Saving the hairstyle failed")
-    return {"width_scale": None,
+    return {"width_scale": None, "up_m": None,
             **garment_hair.hair_placement(garment_hair.hairstyle_settings(get_item(item_id)))}
 
 

@@ -37,6 +37,15 @@
  *         z = 0.03 + 0.1·0.5 + 0.016 = 0.096.
  *       x = ±0.1 (beyond h): ±(0.08 + 0.02·1.5) = ±0.11; x = 0.05 (inside h) stays 0.05.
  *     placementIdentity true for equal values, false for a 1 mm shift.
+ *     Up/down (Ruling A85): fitted u0 = 10 mm, dragged u1 = 20 mm, the rest as above: Q = (0, 1.67, 0.036):
+ *       dy = 1.67 − 0.01 − 1.56 = 0.1, dz = 0 → y = 1.56 + 0.0866025 + 0.02 = 1.6666025, z = 0.096.
+ *     The parity case of scripts/smoke_hairdeck_up_tilt.py [2] (same numbers through Python's adjust_placement):
+ *       raw Q = p + (0, 0.1, 0) = (0, 1.66, 0.03); fitted f0 6 mm, a0 0, u0 0 → placed (0, 1.66, 0.036); dragged
+ *       f1 6 mm, a1 30°, u1 10 mm → (0, 1.56 + 0.1·cos 30° + 0.01, 0.03 + 0.1·sin 30° + 0.006) = (0, 1.6566025, 0.086).
+ *     placementIdentity false for a 1 mm up shift; a fitted record without up_m reads as up 0.
+ * [6b] upRuler(x 0.12, y 1.6, z 0.05, up 10 mm): 1 rail (y 1.56 … 1.64) + 9 ticks (cm 0 … 8; the hairline's, cm 4,
+ *     12 mm long along −z, the others 6 mm) + 4 cyan lines (the shift twice at z 0.062 / 0.064 from y 1.6 to 1.61, and
+ *     two end bars) = 14; up 0 → 10 lines.
  * [6] placementRuler, pivot z 0.03, forward 14 mm: 1 rail + 16 ticks (−5 … +10 cm) + 4 cyan lines (the shift
  *     twice, 2 mm apart, and two end bars) = 21; the rail runs z −0.02 … 0.13; the tick at the pivot (cm 5) is
  *     12 mm long, cm 6 is 6 mm; the shift runs z 0.03 … 0.044. Forward 0 → 17 lines (no shift drawn).
@@ -222,6 +231,18 @@ check('[5] width beyond the head', [map([0.1, 1.56, 0.036])[0], map([-0.1, 1.56,
   .map(r7), [0.11, -0.11, 0.05]);
 check('[5] identity', [m.placementIdentity(fitted, { ...fitted }),
   m.placementIdentity(fitted, { ...fitted, forward_m: 0.007 })], [true, false]);
+{
+  const up = m.placementMap(pivot, { ...fitted, up_m: 0.01 },
+    { forward_m: 0.016, tilt_deg: 34.5, width_scale: 1.5, up_m: 0.02 }, 0, 0.08);
+  check('[5] up/down: turned, shifted and lifted', up([0, 1.67, 0.036]).map(r7), [0, 1.6666025, 0.096]);
+  const par = m.placementMap(pivot, { forward_m: 0.006, tilt_deg: 0, width_scale: 1, up_m: 0 },
+    { forward_m: 0.006, tilt_deg: 30, width_scale: 1, up_m: 0.01 }, 0, 0.08);
+  check('[5] parity case (smoke_hairdeck_up_tilt [2])', par([0, 1.66, 0.036]).map(r7), [0, 1.6566025, 0.086]);
+  check('[5] up identity', [m.placementIdentity(fitted, { ...fitted, up_m: 0.001 }),
+    m.placementIdentity(fitted, { ...fitted, up_m: 0 })], [false, true]);
+  check('[5] fittedPlacement without up_m', m.fittedPlacement({ forward_m: null, tilt_deg: null, width_scale: null,
+    default_forward_m: 0.006, fitted: { forward_m: 0.006, tilt_deg: 2, width_scale: 1 } }).up_m, 0);
+}
 
 // [6]
 const ruler = m.placementRuler(pivot, 0.12, 1.6, 0.014);
@@ -229,6 +250,13 @@ check('[6] ruler lines', [ruler.length, ruler[0].points.map((p) => r7(p[2])), r7
   r7(ruler[7].points[0][1] - ruler[7].points[1][1]), ruler[17].points.map((p) => r7(p[2])), ruler[17].color],
 [21, [-0.02, 0.13], 0.012, 0.006, [0.03, 0.044], '#00e5ff']);
 check('[6] no shift drawn at 0', m.placementRuler(pivot, 0.12, 1.6, 0).length, 17);
+{
+  const ur = m.upRuler(0.12, 1.6, 0.05, 0.01);
+  check('[6b] up ruler', [ur.length, ur[0].points.map((p) => r7(p[1])), r7(ur[5].points[0][2] - ur[5].points[1][2]),
+    r7(ur[6].points[0][2] - ur[6].points[1][2]), ur[10].points.map((p) => r7(p[1])), r7(ur[10].points[0][2]),
+    r7(ur[11].points[0][2]), ur[10].color], [14, [1.56, 1.64], 0.012, 0.006, [1.6, 1.61], 0.062, 0.064, '#00e5ff']);
+  check('[6b] no shift drawn at 0', m.upRuler(0.12, 1.6, 0.05, 0).length, 10);
+}
 
 // [7]
 {

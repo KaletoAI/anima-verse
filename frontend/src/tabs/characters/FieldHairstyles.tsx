@@ -13,7 +13,8 @@
  *   - the 3D preview (the hair fitted on the plain body, "Built <time>" in its corner, framed on the head) with
  *     the settings that change it BESIDE it (HairLiveControls): placement, colour, Swing / Stiffness — each acts
  *     live while dragged (a vertex map, a colour tint, the strands' stiffness) and is saved on its own, nothing
- *     runs; the forward shift shows a centimetre ruler and the shift itself in the preview while hovered;
+ *     runs; the forward shift and the up/down shift (Ruling A85) each show a centimetre ruler and the shift
+ *     itself in the preview while hovered;
  *   - the preview runs the game's per-strand sim on the previewed fit's strand record (`preview_strands_url`,
  *     strand-hair spec § 6.2.5, ruling H-R2): a drag turns the figure so the hair reacts, Sway / Walk / Turn /
  *     Stop beside the viewer; with Swing off, or without a record, the hair stays still and says why;
@@ -51,7 +52,7 @@ import { FigureBuildLine } from './HairstyleParts'
 import {
   HAAR_NO_ROUTE, NONE_SELECTED, ROUTING_URL, afterDeleteSelection, colourTint, deleteSummary, fittedPlacement,
   haarRunCost, haarVariantRows, hairStepRows, jobsLabel, listLight, listReason, newHairstyleText, placementIdentity,
-  placementMap, placementRuler, standardHairText, strandPreviewState, variantAction, wearButton,
+  placementMap, placementRuler, standardHairText, upRuler, strandPreviewState, variantAction, wearButton,
 } from './hairstylesModel'
 import type { DeletePreview, HaarPanel, Light, Vec3, VariantLight } from './hairstylesModel'
 import { Model3DViewer } from './Model3DViewer'
@@ -434,7 +435,7 @@ function HairstyleDetail({ character, entry, built, onChanged, onRunEnded, onOpe
   const [posting, setPosting] = useState(false)
   const [sub, setSub] = useState<'steps' | 'settings' | 'images'>('steps')
   const [drafts, setDrafts] = useState<HairDrafts>({ placement: null, colour: null, stiffness: null, cut: null })
-  const [ruler, setRuler] = useState(false)
+  const [ruler, setRuler] = useState<'forward' | 'up' | null>(null)
   const [side, setSide] = useState(false)
   const [modeSaved, setModeSaved] = useState(0)
   const wasRunning = useRef(false)
@@ -490,7 +491,7 @@ function HairstyleDetail({ character, entry, built, onChanged, onRunEnded, onOpe
     const tint = drafts.colour ? colourTint(shown, drafts.colour) : null
     const cut = isHaar ? cutAdjust : null
     return map || tint || cut ? { match: `garment_hair_${info.item_id}`, map, tint, cut } : null
-  }, [hd, isHaar, info?.item_id, pivot, fitted?.forward_m, fitted?.tilt_deg, fitted?.width_scale, drafts.placement, // eslint-disable-line react-hooks/exhaustive-deps
+  }, [hd, isHaar, info?.item_id, pivot, fitted?.forward_m, fitted?.tilt_deg, fitted?.width_scale, fitted?.up_m, drafts.placement, // eslint-disable-line react-hooks/exhaustive-deps
     drafts.colour, halfWidth, cutAdjust])
   // The per-strand preview (strand-hair spec § 6.2.5): the previewed fit's record, fetched once per previewed fit
   // while Swing is on; the dragged Stiffness goes to the sim live.
@@ -520,11 +521,16 @@ function HairstyleDetail({ character, entry, built, onChanged, onRunEnded, onOpe
       const lines = cutRuler(cutSource.source, cutSource.rails, drafts.cut)
       return lines.length ? lines : undefined
     }
-    return ruler && pivot && hairlineY !== null
-      ? placementRuler(pivot, pivot[0] + halfWidth + 0.03, hairlineY,
-        drafts.placement?.forward_m ?? fitted?.forward_m ?? 0)
-      : undefined
-  }, [ruler, pivot, hairlineY, halfWidth, drafts.placement?.forward_m, fitted?.forward_m, isHaar, drafts.cut, cutSource])
+    if (!ruler || !pivot || hairlineY === null) return undefined
+    if (ruler === 'up') {
+      // the up/down ruler stands beside the head at the hairline; the cyan shift is the dragged value
+      return upRuler(pivot[0] + halfWidth + 0.03, hairlineY - (fitted?.up_m ?? 0), pivot[2] + 0.06,
+        drafts.placement?.up_m ?? fitted?.up_m ?? 0)
+    }
+    return placementRuler(pivot, pivot[0] + halfWidth + 0.03, hairlineY,
+      drafts.placement?.forward_m ?? fitted?.forward_m ?? 0)
+  }, [ruler, pivot, hairlineY, halfWidth, drafts.placement?.forward_m, drafts.placement?.up_m, fitted?.forward_m,
+    fitted?.up_m, isHaar, drafts.cut, cutSource])
   const focus = useMemo(() => (pivot ? { center: [pivot[0], pivot[1] - 0.04, pivot[2] - 0.02] as Vec3,
     radius: 0.24, side } : null), [pivot, side])
 
@@ -748,7 +754,7 @@ function HairstyleDetail({ character, entry, built, onChanged, onRunEnded, onOpe
                   <div className="ga-hint">
                     <span className="ga-form-hint">{t('Last fit')}</span><br />
                     {hd.placement.fitted && hd.placement.fitted.forward_m !== null
-                      ? `${(hd.placement.fitted.forward_m * 1000).toFixed(1)} mm · ${(hd.placement.fitted.tilt_deg ?? 0).toFixed(1)}° · ${(hd.placement.fitted.width_scale ?? 1).toFixed(2)}×`
+                      ? `${(hd.placement.fitted.forward_m * 1000).toFixed(1)} mm · ${t('Up / down')} ${((hd.placement.fitted.up_m ?? 0) * 1000).toFixed(1)} mm · ${(hd.placement.fitted.tilt_deg ?? 0).toFixed(1)}° · ${(hd.placement.fitted.width_scale ?? 1).toFixed(2)}×`
                       : t('No fit yet')}
                     {hd.placement.fitted?.hairline_y != null
                       ? ` · ${t('Hairline')} ${hd.placement.fitted.hairline_y.toFixed(3)} m` : ''}

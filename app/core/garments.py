@@ -1556,7 +1556,7 @@ def _placement_summary(placement: Any) -> Optional[Dict[str, Any]]:
     if not isinstance(placement, dict):
         return None
     keys = ("forward_m", "forward_source", "tilt_deg", "tilt_source", "tilt_solve", "width_scale", "width_source",
-            "hairline_target_y", "landmark_source")
+            "up_m", "up_source", "hairline_target_y", "landmark_source")
     return {**{k: placement.get(k) for k in keys}, "hairline_y": placement.get("hairline_pushed_y")}
 
 
@@ -4733,7 +4733,7 @@ def hairdeck_panel(character_name: str, item_id: str, *,
       (None without), ``profile`` ``{name, hex}`` of the named colour (None
       without), ``fitted`` the newest HairDeck fit's record ``colour``
       (``_hairdeck_colour``; None without a fit);
-    - ``placement``: ``{forward_m, tilt_deg, width_scale, default_forward_m,
+    - ``placement``: ``{forward_m, tilt_deg, width_scale, up_m, default_forward_m,
       limits, fitted}`` — the manual values (None = automatic,
       ``garment_hair.hair_placement``), the automatic forward shift, the
       bounds of a manual value and what the newest HairDeck fit applied
@@ -4780,7 +4780,7 @@ def hairdeck_panel(character_name: str, item_id: str, *,
               "source": "override" if override else ("profile" if named else "hairdeck"),
               "auto": _rgb_hex(info.get("hair_color")) if isinstance(info, dict) else None,
               "profile": named, "fitted": newest[1].get("colour") if newest else None}
-    placement = {"width_scale": None, **garment_hair.hair_placement(settings),
+    placement = {"width_scale": None, "up_m": None, **garment_hair.hair_placement(settings),
                  "default_forward_m": garment_hairdeck.DEFAULT_FORWARD_M,
                  "limits": garment_hair.placement_limits(),
                  "fitted": newest[1].get("placement") if newest else None,

@@ -95,7 +95,8 @@ re-fits from the cached job. A character with facial hair adds
 ``garment_beard.hsig_inputs`` (HairDeck gets a beard-free copy of the picture,
 cached in the job folder as ``beard_free.png``). The HairDeck fsig is the
 edit-chain payload (``_edit_payload``) plus ``method``, ``hsig``, the colour override (the hairstyle's
-``hair_colour``) and the placement (its ``hair_forward_m`` / ``hair_tilt_deg``). The fit is the same ``{item}_{fsig}.glb`` +
+``hair_colour``) and the placement (its ``hair_forward_m`` / ``hair_tilt_deg``; ``hair_width_scale`` and ``hair_up_m``
+only when set, so a hairstyle without them keeps its fsig). The fit is the same ``{item}_{fsig}.glb`` +
 record (its record says ``method: "hairdeck"``; a record without ``method`` is an edit-chain fit — of hair, one of
 the removed method, never served); ``prepared/`` is not used by HairDeck.
 
