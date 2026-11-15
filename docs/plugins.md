@@ -1058,6 +1058,114 @@ fractions. `chain_split` is required even for a single link (`[]`). Test pose me
 | `test_rotation_decay` | `0.4` |
 | `test_scale` | `[1, 1, 1]` |
 
+#### Optional `regions` declaration (channels)
+
+A slot may list `regions:` next to its `rigs:`. The core knows one kind, `channel`. A channel is an inside capsule of
+this body that another figure's accepted chain may enter during a running pair interaction, instead of being pushed
+out of the body. The server resolves it per model into the collision record (collision version 7). The renderers
+guide the entering chain through it. The contract, the payload and the guidance rule are in
+`docs/schnittstellen-3d.md` "Channels (version 7)". The core never names a region, a slot, an op or an interaction
+kind: it compares the declared strings.
+
+```yaml
+body_slots:
+  - id: example_slot
+    covered_by: [bottom]
+    attributes:
+      example_size: {type: select, options: [small, medium, large]}
+    rigs:
+      - id: example_part
+        op: inset_part
+        chains: []
+        # params: … (all operation params, see "Procedural mesh parts")
+    regions:
+      - id: example_channel
+        kind: channel
+        bone: Hips                       # owning base joint
+        offset: [0.0, -0.06, 0.05]       # opening centre: side, up, front (m) from the joint
+        axis: [0.0, 1.0, 0.0]            # inward, same frame; normalised by the server
+        from_rig: example_part           # optional: the rig's reported opening replaces offset/axis
+        depth: 0.12
+        radius: 0.02
+        cone_deg: 30
+        funnel: 0.05
+        accepts: {ops: [appendage_chain, attached_part]}
+        min_length: 1.0
+        compress_min: 0.8
+        exposed_only: true
+        interaction_kinds: [example_kind]
+        attribute_params:
+          radius: {attribute: example_size, values: {small: 0.8, large: 1.2}}
+          depth: {attribute: example_size, values: {small: 0.8, large: 1.2}}
+        applies_to:
+          example_profile_field: [enabled]
+```
+
+| Key | Validation, default and meaning |
+|---|---|
+| `id` | Required, a non-empty string, unique within the package. The payload id is `<package>:<id>`. |
+| `kind` | Required: `channel`. |
+| `bone` | Required: the owning joint, a base joint of `shared/models/rig/joints.json` (the `mixamorig:` prefix is accepted). The channel's endpoints are fixed to it. |
+| `offset` | Required: three finite numbers. The opening centre in metres, relative to `bone`, in the body frame [side, up, front]. |
+| `axis` | Required: three finite numbers, not all zero. The inward direction in the same frame. The server normalises it. |
+| `depth`, `radius`, `funnel` | Required: finite numbers above 0, in metres. `funnel` is the length of the entry funnel in front of the opening. |
+| `cone_deg` | Required: within (0, 60]. The funnel half-angle. |
+| `accepts` | Required: exactly `{ops: [...]}`, a non-empty list of non-empty core op names whose chains may enter (e.g. `appendage_chain`, `attached_part`). Rig ids are not offered. |
+| `min_length` | Default 1.0, within [0.25, 4]. The entering chain's effective state `length` must be at least this for the channel to engage. |
+| `compress_min` | Default 1.0 (no compression), within (0, 1]. The least depth scale k. |
+| `exposed_only` | Default `true`, a boolean. The channel exists only on a model whose worn pieces leave the slot uncovered; a base model is uncovered. A piece with `outfit_piece.exposed_detail: true` shows it through, and the item editor offers that switch for the slot's `covered_by` slots. |
+| `interaction_kinds` | Optional: a non-empty list of non-empty strings. When given, the channel engages only within a running pair interaction of one of these kinds. When absent, any running pair interaction counts. |
+| `from_rig` | Optional: the id of a rig of the SAME slot (see below). |
+| `templates` | As `rigs[].templates`: `*`, a list of template names, or `{feature: …}`. When absent, the slot decides. |
+| `applies_to` | As `rigs[].applies_to`: profile fields or `attributes.<key>` mapped to non-empty scalar lists. `apply_to` is refused. |
+| `attribute_params` | Optional: `{radius \| depth: {attribute: <declared slot attribute>, values: {<declared option>: <factor > 0>}}}`. It multiplies `radius` / `depth` by the factor of the character's stored value. A value without an entry, or no value, counts as × 1. |
+
+**Body frame.** The frame is read from the model's bind joints:
+- `up` = unit(Head − Hips);
+- `side` = unit(LeftArm − RightArm, without its component along `up`);
+- `front` = side × up, turned to agree with the feet (LeftFoot → LeftToeBase).
+
+A region applies by the same rules as a rig of its slot: the package/template and slot filters, the region's
+`applies_to`, and a `templates` selector that replaces those filters.
+`app.core.extension_rig.region_declarations_for(character_name, profile=None)` lists the applicable regions of a
+character. It gives `radius` / `depth` with the attribute factors applied and `accepts` as the plain op list. It
+decides no exposure.
+
+**`from_rig` and the `opening` metric.**
+- The op that builds a region's geometry knows where its opening is. With `from_rig`, the opening that rig reports in
+  its build metrics replaces `offset` / `axis`. The metric is `extension_rig.metrics[<rig id>].opening` =
+  `{centre: [x, y, z], axis: [x, y, z]}`: the bind (glTF) space of the model, with a unit axis pointing inward.
+- Today only `inset_part` reports it (`PART_BUILDS["inset_part"]` 7):
+  - `centre` is the levelled skin on the midline at the middle of the pocket's interval
+    s_mid = (s0 + min(s1, s_end − fall/2))/2. When levelling shortens the part (`part_end_s`), the interval is
+    clipped to the built pocket. With no interval left, the op writes no `opening`.
+  - `axis` is the negated surface normal there.
+- `offset` / `axis` stay required with `from_rig`, but they are never used as a fallback. A model on which the rig is
+  not built (`Rig <id> is not built on this model`), or whose build reports no opening (an inset model built before
+  build 7, or no pocket left after levelling), gets NO channel. The reason shows in the Channels panel and in the
+  record's `channels_skipped`. A local rebuild of the extension rig (0 hub jobs) adds the metric.
+
+**Per character.** The Base body tab's Channels panel stores an override per channel in
+`model3d_opts.collision_channels`:
+- an offset of ±50 mm per frame axis;
+- the radius × and the depth ×, each 0.5–2;
+- the cone.
+
+Saving only stores the override. The collision step then shows Due until "Recompute collision capsules", the
+Figure Build or the Improvements queue applies it.
+
+**A malformed region rejects the whole package (ruling R3).** The loader logs ONE error and does not load the
+package. A malformed rig, by contrast, is only dropped with a warning. All of these are malformed:
+- a `regions` value that is not a list;
+- any key outside the table above;
+- a value outside its range;
+- a duplicate id within the package;
+- a `from_rig` that names no rig of the slot, or a rig that the cross-package conflict resolution drops.
+
+Because an unknown key or kind rejects the package, **the core must land before a pack sets a new key**. A pack that
+uses a region key (or a `kind`) that the running core does not know is not loaded at all, not even its other slots
+and verbs.
+
 ### State-Flags
 
 Der zentrale Flag-Lifecycle-Executor (`app/core/flag_lifecycle.py`) rendert für
@@ -1949,7 +2057,9 @@ beneath fades out instead of being lifted; defaults and the measurements
 behind them in `inset_part.py`). The record carries `source_smooth` and
 `source_level` (`bump_mm` [before, after] above the fitted surface, like the
 tip's; `angle_deg` shows where the levelled region ends, `part_end_s` where a
-shortened part ends). Faces the levelling turned over are mended, slivers of
+shortened part ends). Since build 7 the group metrics also carry the pocket's `opening` (centre and
+inward axis, glTF bind space) that a `regions` entry with `from_rig` reads ("Optional `regions` declaration
+(channels)" above). Faces the levelling turned over are mended, slivers of
 the levelled skin are flipped, and slivers of the displaced patch are flipped
 or collapsed before it is placed. Body meshes remain first, and
 face texture preservation checks ignore marked nodes and material primitives.

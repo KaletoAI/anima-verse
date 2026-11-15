@@ -1427,6 +1427,14 @@ declaration.
 - `extension_metadata(character_name, profile=None)` returns the reserved
   sidecar shape `{fingerprint, groups, status, reason, metrics, per_tier}`. It does not
   run an operation or claim `applied`; its `attempted` flag is false.
+- `app.core.extension_rig.region_declarations_for(character_name, profile=None)` returns the
+  applicable `regions` declarations (channels, [plugin reference](plugins.md#optional-regions-declaration-channels))
+  in declaration order, by the rig rules: `{id: "<package>:<id>", slot, bone, offset, axis, depth,
+  radius, cone_deg, funnel, accepts, min_length, compress_min, exposed_only, interaction_kinds,
+  from_rig, covered_by}`. `radius` / `depth` already carry the `attribute_params` factors and `accepts`
+  is the plain op list. Read-only; it decides no exposure (a region under clothing stays listed) and
+  places nothing — the bind-space channel is the collision record's (`docs/schnittstellen-3d.md`
+  "Channels (version 7)").
 
 `app.core.model3d` provides synchronous retrofit callables:
 

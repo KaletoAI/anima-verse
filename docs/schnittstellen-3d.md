@@ -12166,12 +12166,15 @@ by `/characters/{name}/model/meta`, next to `extension_rig` (not in the worldmap
 model meta when `model_sig` changes). `null` for a model that gets none.
 
 ```
-{"version": 6,
+{"version": 7,
  "capsules": [{"id", "a", "b", "r", "region", "a_pos"?, "b_pos"?}],
  "skipped":  [{"id", "a", "b", "reason"}],
  "scales": {"leg", "arm", "torso", "head", "shoulder_hair", "chest", "chest_hair", "attached_part", "appendage",
             "outer_trunk"},
- "source": "own" | "base",
+ "channels": [ChannelRecord],               // version 7, "Channels (version 7)" below; [] = none
+ "channels_skipped": [{"id", "reason"}],    // version 7
+ "channels_sig": "<sha256>",                // version 7, the server's currency
+ "source": "own" | "base" | "body",
  "base_signature"?, "sha256", "computed_at", "error"?}
 ```
 
@@ -12221,7 +12224,8 @@ model meta when `model_sig` changes). `null` for a model that gets none.
   joint). `a == b` positions are a sphere.
 - A capsule that could not be fitted (missing joint, too few vertices) is listed in `skipped`, never in
   `capsules`; `error` = the fit failed, `capsules` is empty.
-- An outfit model on the base-body pipeline carries the set of the base body it was built on (`source "base"`).
+- An outfit model on the base-body pipeline carries the set of the base body it was built on (`source "base"`);
+  one on a meshed shape (an outfit body) carries that body's set (`source "body"`).
 - Renderers read the capsules in the current frame through `bindCollision` / `capsuleNow` of
   `packages/scene-render/src/collision.ts` — the endpoint rule exists once (check:
   `scripts/smoke_collision_endpoints.mjs`); the admin viewer's "Collision capsules" toggle draws them with
@@ -12285,8 +12289,8 @@ model meta when `model_sig` changes). `null` for a model that gets none.
 
 Stage 1 of the cross-person collision (spec `docs/superpowers/specs/2026-11-13-cross-person-collision-design.md`
 Parts 1–3, plan `docs/superpowers/plans/2026-11-14-cross-person-collision.md`): a figure's hair and extension chains
-are also kept out of OTHER figures' capsules. The payload is unchanged (collision version 6; the partner-only
-`outer_trunk` set above is its only server part); the rules live once in `packages/scene-render/src/partnerContact.ts`
+are also kept out of OTHER figures' capsules. Stage 1 changes no payload field (the partner-only `outer_trunk` set
+of version 6 above is its only server part; version 7 belongs to stage 2, "Channels (version 7)" below); the rules live once in `packages/scene-render/src/partnerContact.ts`
 and both renderers apply them (the 3D client to the figures on the map, the admin viewer to its probe,
 `partnerProbe.ts`).
 
@@ -12370,6 +12374,198 @@ and both renderers apply them (the 3D client to the figures on the map, the admi
   `scripts/smoke_partner_probe.mjs`, `scripts/smoke_partner_hair_push.mjs` (hand-derived);
   `scripts/smoke_partner_cull_parity.mjs` (the shared cull against the code before it, bit for bit);
   `scripts/check_partner_collision.mjs` (the numbers above, on read-only copies of two models and a pair clip).
+
+#### Channels (version 7)
+
+Stage 2 of the cross-person collision (spec `docs/superpowers/specs/2026-11-13-cross-person-collision-design.md`
+Part 4, plan Tasks 10–15). A package may declare `channel` regions on a body slot (`docs/plugins.md` "Optional
+`regions` declaration (channels)"). A channel is an inside capsule of a RECEIVING body that another figure's accepted
+chain may enter during a running pair interaction, instead of being pushed out of the body. The server resolves each
+applicable channel per model into the bind space of the collision record (`app/core/collision_channels.py`). The
+guidance rule exists once, in `packages/scene-render/src/channels.ts`. The 3D client applies it to the figures on
+the map (`secondaryMotion.ts`, phase B). The admin viewer draws it and drives a test rod through it. No package in
+this repository declares a region, so every record here carries `channels: []`.
+
+**The record** (`ChannelRecord` / `ChannelOverride` in `packages/scene-render/src/collision.ts`):
+
+```
+"channels": [{"id": "<package>:<region id>", "kind": "channel",
+              "a": "<owning joint>", "b": "<owning joint>", "a_pos": [x, y, z], "b_pos": [x, y, z],
+              "r", "cone_deg", "funnel", "accepts": ["<op>", …], "min_length", "compress_min",
+              "interaction_kinds"?: ["<kind>", …], "suppress": ["<capsule id>", …],
+              "frame": {"side": [x, y, z], "up": [x, y, z], "front": [x, y, z]},
+              "placement": "declared" | "rig",
+              "applied": {"offset_mm": [side, up, front], "radius_scale", "depth_scale", "cone_deg"} | null}],
+"channels_skipped": [{"id": "<package>:<region id>", "reason"}],
+"channels_sig": "<sha256 of the wanted channels>"
+```
+
+- `a` = `b` = the owning joint (the region's `bone`, named as in the model). `a_pos` is the opening centre O.
+  `b_pos` is the bottom, O + axis · depth. Both are bind-space points fixed to the owning joint (the endpoint rule
+  above). The depth D and the axis u follow from the two points.
+- `r` is the radius R in metres. `cone_deg` is the funnel half-angle α. `funnel` is the funnel length F in front of
+  the opening, in metres.
+- `accepts` lists the core ops whose chains may enter. `min_length` is the least state `length` of the entering
+  chain. `compress_min` is the least depth scale. `interaction_kinds` is absent when any running pair interaction
+  counts.
+- **`frame`** is the body frame the offsets are read in, from the bind joints (names compared after
+  `norm_bone_name`):
+  - `up` = unit(Head − Hips);
+  - `side` = unit(LeftArm − RightArm, without its component along `up`);
+  - `front` = side × up, negated when its dot with LeftToeBase − LeftFoot is negative.
+- **`placement`:**
+  - `declared`: O = the owning joint + `offset` · [side, up, front], and u = `axis` in that frame, normalised.
+  - `rig`: O and u are the `opening` that the region's `from_rig` op reports in its build metrics
+    (`extension_rig.metrics[<rig id>].opening` = `{centre, axis}`, bind space; today only `inset_part`, build 7).
+  - A `from_rig` region gets NO channel when its rig is not built on the model or reports no opening. It never falls
+    back to the declared offset. The reason goes into `channels_skipped`.
+- **`applied`** is the per-character override used (null without one), stored in
+  `model3d_opts.collision_channels[<channel id>]`. All four keys are required:
+  - `offset_mm`: added to O along [side, up, front], each value within ±50 mm;
+  - `radius_scale` and `depth_scale`: multiply R and D, each within [0.5, 2];
+  - `cone_deg`: replaces α, within (0, 60].
+
+  An id that no declaration names any more is kept. An invalid stored map counts as no overrides.
+- **`suppress`** lists, in payload order, the capsules of the same set that an engaged link tip inside C skips:
+  - every capsule whose bind-pose segment comes within its own r + R of the channel segment `a_pos → b_pos`;
+  - every capsule whose start joint is the owning joint. A Hips channel therefore lists `hips`, `outer_hips` and
+    `outer_waist`.
+- **`channels_skipped`** lists every wanted channel that the model does not carry, with one of these reasons:
+  - "Covered by the worn outfit";
+  - "joint <bone> missing";
+  - "No body frame: …";
+  - "Rig <id> is not built on this model";
+  - "Rig <id> reports no opening (an older build, or no pocket left after levelling)".
+- **Exposure.** A channel with `exposed_only` (the default) exists only on a model whose worn pieces leave its slot
+  uncovered (`extension_rig.hides_exposed_detail`). A piece with `outfit_piece.exposed_detail: true` shows it through.
+  The item editor offers that switch for slots with an `exposed_only` rig or region. A base model is exposed, and so
+  is a model without worn pieces. Exposure is identity: it is applied at every fit, relabel and apply, and it is NOT
+  part of `channels_sig`.
+- **Currency.**
+  - `channels_sig` is the sha256 of the wanted channels: the applicable declarations with their resolved attribute
+    values, the override, and for `from_rig` the reported opening (or the reason there is none).
+  - A record's capsules are current when `version`, `sha256` and `scales` match. Its channels are current when
+    `channels_sig` matches as well (`collision.channels_current`).
+  - Every capsule refit resolves the channels too.
+  - An inherited record (an outfit model, `source "base"` / `"body"`) re-filters the base's channels by THIS model's
+    exposure and keeps only the `suppress` ids of its own capsules.
+  - A renderer binds only `COLLISION_VERSION` 7. An older record is ignored until the server refits it on its next
+    read (CPU only, 0 hub jobs).
+
+**Save ≠ execute (ruling R4).**
+- `POST /characters/{name}/model3d/collision/channels` (admin) takes exactly `{"channels": {<channel id>: override}}`,
+  the whole map (`{}` clears it). It stores `model3d_opts.collision_channels` ONLY and returns `{channels, due}`. An
+  invalid body gives 400. It never fits.
+- A record whose capsules are current but whose `channels_sig` differs is served UNCHANGED. Its model's collision
+  step shows the status `due`: "Channel settings changed — recompute to apply".
+- Four actions apply the overrides, all local, CPU only and 0 hub jobs:
+  - the explicit `POST /characters/{name}/model3d/collision` (`apply_channels`);
+  - the Improvements type `collision_capsules` (done = capsules AND channels current);
+  - the Figure tab's Build step `collision`, which runs when `collision.channels_due` is true;
+  - the Base body tab's Run all kind `collision`.
+- What the panels read:
+  - `GET /characters/{name}/figure?plain=1` → `plain_body` carries `collision_channels` (the stored overrides) and
+    `channel_declarations`;
+  - `GET /characters/{name}/model3d` carries `model.channel_declarations` (beside `model.collision`), and the overrides in
+    `options.collision_channels`.
+  - `channel_declarations` = `[{id, bone, offset, axis, depth, radius, cone_deg, funnel, accepts, min_length,
+    compress_min, exposed_only, from_rig, placement, reason}]`. `placement` is `declared` / `rig` from the stored
+    record, or null with the reason ("Not computed" before the record has channels). Without a base model, the
+    reason of every entry is "No base model yet".
+
+**The guidance rule** (`channels.ts`; numbers in metres, angles as named).
+- **Frame and zones.** A point P has the axial coordinate s = (P − O)·u and the radial distance ρ = |P − O − s·u|
+  (`channelCoords`).
+  - Cylinder C: 0 ≤ s ≤ D and ρ ≤ R.
+  - Funnel Φ: −F ≤ s < 0 and ρ ≤ R + (−s)·tan α.
+- **Binding.** `bindChannels` follows the endpoint rule of `collision.ts`. R and F scale with the owning joint's
+  bind→world matrix, as a capsule radius does. A figure reads channels only from its partners' snapshots
+  (`PartnerSnapshot.channels`, taken in the same two-phase frame as the capsules). A figure's own chains never enter
+  its own channels.
+- **The interaction condition** (`channelGate`), per entering chain and partner channel. All of the following must
+  hold:
+  - the chain's `MotionGroup.op` is in `accepts`. This is the effective op of the motion payload, so a mesh part
+    that is switched on turns `appendage_chain` into `attached_part`;
+  - its state `length` is at least `min_length`;
+  - the reader and the partner are in the SAME running pair interaction: both have an `interaction`, with equal `id`
+    (§ A8a);
+  - when the channel names `interaction_kinds`, the interaction's `kind` is among them.
+
+  A passer-by, or a figure in another interaction, is pushed out normally (Parts 1–3 above).
+- **Engagement** (`stepEngagement`). It is evaluated once per update, before the solve, on the zone of the chain's
+  link tips as rendered at the end of the previous update.
+  - A chain ENGAGES when the gate passes, a link tip lies in Φ ∪ C, and that link's lever is within α of u.
+  - It RELEASES when the gate fails, or when no link tip lies in the grown zone `CHANNEL_GROW`: F + h, R + h and
+    α + δ, with h = `CHANNEL_HYST_M` 0.005 and δ = `CHANNEL_HYST_DEG` 10.
+  - D is not grown. But while the chain is engaged, a tip PAST the bottom (s > D, ρ ≤ R + h) counts as inside the
+    grown zone (`pastBottom`). The depth scale already compresses it, and releasing there would drop the guidance
+    exactly where it is deepest.
+  - The weight w ramps 0 → 1 on engagement and 1 → 0 on release over `CHANNEL_BLEND_S` 0.2 s. Guidance never snaps.
+- **Radial guidance** runs per link, root to tip, after the link's dynamics and before the contact turn
+  (`radialGuidanceAngle`, `allowedRadius`).
+  - r_c = the link's own extension capsule radius (region `chest` / `attached_part` / `appendage`, start joint = the
+    link) × the linear scale of the body joint its chain hangs from × the state girth.
+  - The allowed radius is R' = max(0, R − r_c) for s ≥ 0, including past the bottom, and
+    R'(s) = max(0, R + (−s)·tan α − r_c) in the funnel.
+  - A tip with ρ > R' turns about its joint by the smallest angle that gives ρ = R'. The turn lies in the plane of
+    the lever and the radial direction.
+  - When no turn within a half turn reaches R', the turn of the closest approach is used.
+  - A tip in front of the funnel (s < −F) is not guided.
+  - The turn is multiplied by w and capped by the link's swing budget. That cap is applied on its own, separately
+    from the contact turn's cap. Over the cap, the link stays where the cap leaves it.
+- **Suppression** (`suppressedIds`). Where the guided tip lies in C, the partner's `suppress` capsules keep
+  radius × (1 − w) in THAT partner's list, and they are dropped at w = 1.
+  - Outside C, the funnel included, every capsule pushes.
+  - Suppression acts on the engaged entering chain only. The receiving body's own garments and chains never change.
+  - The receiving body is never deformed.
+- **Depth** (`depthJoint`, `depthScale`), after the chain's last link.
+  - s_tip is the axial position of the last tip.
+  - s_e is the link joint nearest the opening: the first one at s ≥ 0. When no joint lies inside, it is the one
+    closest before the opening (the largest s < 0, so s_e < 0). This way a one-link chain hanging from outside the
+    opening is still shortened about its joint.
+  - When s_tip > D − r_c, k = max(`compress_min`, (D − r_c − s_e)/(s_tip − s_e)); otherwise k = 1. k is blended
+    1 → k by w.
+  - The levers of the links from s_e on are scaled by k along their tips, about that joint. The tip lands at
+    s_e + k·(s_tip − s_e). Whatever k cannot absorb stays past the bottom: no folding, no push.
+  - A chain that grows (its state `length`) reaches deeper until the depth rule takes over.
+- Everything acts on the RENDERED frame only. The spring state never sees it, so a released chain is exactly where
+  the free one would be.
+- `contactTips()` rows of a guided chain carry `channel: {id, w, k}`.
+- With no channel on any partner, nothing of this runs and nothing allocates. The frame is bit-identical to the
+  frame without channels (`scripts/smoke_channel_engagement.mjs` [7]).
+
+**Admin viewer.** The toggles "Channels" and "Test rod" appear only when the payload carries channels, and both start
+off.
+- "Channels" draws one wireframe per channel through the body (`channelWireframe`, colour
+  `CAPSULE_REGION_COLORS.channel`), with a 20 cm grid of 1 cm cells in the chosen channel's opening plane.
+- "Test rod" runs `guideRod` (w = 1, swing budget 30°) every frame. The rod's controls are length, radius, links,
+  insertion along the axis (negative = in front of the opening) and tilt. The readout shows the turn per link, k,
+  the distance past the bottom, the skipped capsules and w.
+- The Channels panel sits beside "Collision scales" in the Base body tab's collision sub-tab. It has six sliders
+  (side / up / front ±50 mm, radius × and depth × 0.5–2, cone).
+  - Its live preview (`previewChannel`) is the same mapping as the server's resolution.
+  - Save stores only. The panel then shows the step as Due, with a link to "Recompute collision capsules".
+
+**Measured** (`scripts/check_partner_collision.mjs --channels`, read-only copies of two models, a pair clip and one
+SYNTHETIC channel on a one-link chain; no real model declares one yet):
+
+| Reading | Value |
+|---|---|
+| Engaged / w = 1 | 76.9 % / 67.8 % of the frames |
+| ρ excess p95 / max | 0 / 26.81 mm (the max comes from frames where the needed turn exceeds the swing budget) |
+| Past the bottom, max | 0.13 mm (11.94 mm with s_e limited to joints inside) |
+| k_min | 0.8835 |
+| Added time | +0.002 ms per frame |
+
+Checks:
+- `scripts/smoke_region_declarations.py` (manifest);
+- `scripts/smoke_collision_channels.py` (resolution, suppress, sig);
+- `scripts/smoke_collision_scales_route.py` [5]–[6] (route);
+- `scripts/smoke_channel_guidance.mjs` (the rule, hand-derived);
+- `scripts/smoke_channel_engagement.mjs` (solver, parity);
+- `scripts/smoke_partner_frame.mjs` [7] (snapshots);
+- `scripts/smoke_channels_flow.py` (Build, Run all, outfit rows);
+- `scripts/check_base_body_ui.mjs` [15] (panel).
 
 ### Hair strands (`hair_strands`)
 
