@@ -30,12 +30,14 @@ the frame"``) — no edit prefix, no pose, no light words.
   body slots), in the neutral state (no state modifier), plus the height phrase
   when the appearance does not carry it (the rule of ``base_body.base_appearance``).
   It is the ORDINARY image description, never the mesh-input one (Ruling A93): the
-  reference is an appearance picture, no mesh input — a slot with an active mesh
-  part keeps its slot text and its LoRAs here (A74a drops them on the mesh inputs
-  proper: the A-pose front and every view), and no mesh-input line is added (the
-  front's pose text places the hair itself, ``TPOSE_FRONT_HAIR_CLAUSE``).
-  The occasions stay mesh-input occasions for the tpose LoRAs and the unfolded
-  negative (``imagegen.occasions.APPEARANCE_REFERENCE_OCCASIONS``).
+  reference is an appearance picture — no mesh-input line is added (the front's
+  pose text places the hair itself, ``TPOSE_FRONT_HAIR_CLAUSE``). But a slot that
+  declares a ``mesh_part`` names nothing here and its LoRAs are dropped, whether
+  its switch is on or off (Ruling A93b — a clean mesh cannot be made from a
+  reference that shows it; ``person_description(appearance_reference=True)``,
+  ``body_slots.filter_appearance_reference_loras``). The occasions stay mesh-input
+  occasions for the tpose LoRAs and the unfolded negative
+  (``imagegen.occasions.APPEARANCE_REFERENCE_OCCASIONS``).
 * Plain body (``base_block``): the description of the UNDRESSED figure (nothing
   worn), hair included — the attribute block alone, as in the chain the user
   validated (Ruling A87b). The plain body's head and body state belong to the
@@ -272,11 +274,11 @@ def _attributes(character_name: str, profile: Dict[str, Any]) -> str:
     """THE person description of the image prompts (``person_description``) of ``profile`` as it is (its worn
     pieces decide which body-slot texts show), neutral (no state modifier), plus the height phrase when the
     description does not carry it (``base_body.base_appearance``'s rule). The ordinary description, not the
-    mesh-input one (Ruling A93, module docstring)."""
+    mesh-input one (Ruling A93), without the mesh-part slots (A93b, module docstring)."""
     from app.core.height import height_phrase
     from app.core.prompt_builder import person_description
     text = person_description(character_name, apply_state_modifiers=False, mesh_input=False, body_profile=profile,
-                              neutral_state=True)
+                              neutral_state=True, appearance_reference=True)
     height = height_phrase(profile, character_name)
     if height and height not in text:
         text = ", ".join(p for p in (text, height) if p)

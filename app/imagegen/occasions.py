@@ -274,10 +274,11 @@ MESH_INPUT_OCCASIONS: Tuple[str, ...] = (
 #: positive text at the front of the prompt.
 NO_FOLD_OCCASIONS: Tuple[str, ...] = MESH_INPUT_OCCASIONS + ("garment_view", "footwear_empty")
 
-#: Ruling A93: the mesh-input occasions whose SLOT TEXTS and LoRAs are those of an ordinary image — the full-body
-#: references are appearance pictures (``app/core/full_body_reference.py``), no mesh input: an active mesh part
-#: keeps its slot's text and its LoRAs there, and no mesh-input line is added. Everything else of
-#: ``MESH_INPUT_OCCASIONS`` (the tpose LoRAs, no negative fold) stays.
+#: Ruling A93: the mesh-input occasions whose SLOT TEXTS are those of an ordinary image — the full-body
+#: references are appearance pictures (``app/core/full_body_reference.py``): no mesh-input line is added. Ruling
+#: A93b: a slot that declares a ``mesh_part`` names nothing there and its LoRAs are dropped, whether its switch is
+#: on or off (``body_slots.filter_appearance_reference_loras``). Everything else of ``MESH_INPUT_OCCASIONS`` (the
+#: tpose LoRAs, no negative fold) stays.
 APPEARANCE_REFERENCE_OCCASIONS: Tuple[str, ...] = ("base_reference", "outfit_reference")
 
 

@@ -342,7 +342,8 @@ def prompt_fragments(character_name: str,
                      mesh_input: bool = False,
                      neutral_state: bool = False,
                      portrait_only: bool = False,
-                     base_body: bool = False) -> Dict[str, List[str]]:
+                     base_body: bool = False,
+                     appearance_reference: bool = False) -> Dict[str, List[str]]:
     """Prompt fragments for all applicable slots.
 
     Returns ``{"general": [...], "exposed": [...]}`` — general carries
@@ -363,8 +364,13 @@ def prompt_fragments(character_name: str,
     only their ``always`` fragment (into ``general``) in the neutral state —
     the base body is unclothed, so covered/exposed texts and state flags
     never apply to it.
+    ``appearance_reference`` (the full-body references, Ruling A93b) leaves
+    out every slot that declares a ``mesh_part`` — none of its texts, whether
+    its switch is on or off: a mesh is made from what the reference shows.
     """
     specs = slots_for_character(character_name, profile=profile)
+    if appearance_reference:
+        specs = [s for s in specs if not s.mesh_part]
     if base_body:
         specs = [s for s in specs if getattr(s, "base_body", False)]
         neutral_state = True
@@ -739,7 +745,8 @@ def appearance_suffix(character_name: str, face_only: bool = False,
                       mesh_input: bool = False,
                       include_exposed: bool = True,
                       neutral_state: bool = False,
-                      portrait_only: bool = False) -> str:
+                      portrait_only: bool = False,
+                      appearance_reference: bool = False) -> str:
     """Combined fragment text appended to the character's appearance
     (PromptBuilder; face_only for portrait/expression prompts; ``profile``
     overrides the stored profile for dry-run previews). Empty without
@@ -748,10 +755,12 @@ def appearance_suffix(character_name: str, face_only: bool = False,
     ``back_view=True`` is a render seen from behind: only exposed fragments
     of slots declared ``back: true`` survive. ``include_exposed=False``
     leaves the exposed fragments out for a caller that names them on their
-    own (the "uncovered:" part of what a character sees of the others)."""
+    own (the "uncovered:" part of what a character sees of the others).
+    ``appearance_reference``: ``prompt_fragments``' (Ruling A93b)."""
     frags = prompt_fragments(character_name, face_only=face_only,
                              profile=profile, back_view=back_view, mesh_input=mesh_input,
-                             neutral_state=neutral_state, portrait_only=portrait_only)
+                             neutral_state=neutral_state, portrait_only=portrait_only,
+                             appearance_reference=appearance_reference)
     parts = frags["general"] + (frags["exposed"] if include_exposed else [])
     return ", ".join(parts)
 
@@ -815,6 +824,25 @@ def silhouette_for_character(character_name: str) -> Optional[Dict[str, Any]]:
                     "dir": str(pkg.dir),
                     **{k: v for k, v in pkg.silhouette.items() if k != "asset"}}
     return None
+
+
+def filter_appearance_reference_loras(loras, profile):
+    """The full-body references (Ruling A93b): drop the LoRAs matching the ``lora_patterns`` of EVERY applicable
+    slot that declares a ``mesh_part`` — whether its switch is on or off and whether it is covered (the reference
+    names nothing of such a slot, ``prompt_fragments(appearance_reference=True)``)."""
+    import fnmatch
+    patterns = [pattern.casefold()
+                for slot in slots_for_character("", profile=profile)
+                if slot.mesh_part
+                for pattern in slot.mesh_part.lora_patterns]
+    kept = []
+    for lora in loras:
+        name = str(lora.get("name", ""))
+        if any(fnmatch.fnmatchcase(name.casefold(), pattern) for pattern in patterns):
+            logger.info("Full-body reference dropped LoRA %s", name)
+        else:
+            kept.append(lora)
+    return kept
 
 
 def filter_mesh_input_loras(loras, profile):

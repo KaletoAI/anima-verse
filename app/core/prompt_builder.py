@@ -245,7 +245,8 @@ def person_description(name: str, *,
                        body_profile: Optional[Dict[str, Any]] = None,
                        include_exposed: bool = True,
                        neutral_state: bool = False,
-                       for_llm: bool = False) -> str:
+                       for_llm: bool = False,
+                       appearance_reference: bool = False) -> str:
     """THE text description of a person for image prompts.
 
     Every path that describes a person — PromptBuilder (chat images,
@@ -266,7 +267,11 @@ def person_description(name: str, *,
     ``for_llm``: the description is read by an LLM (``thought_context.
     present_people_details``), so the outfit line names the state of every
     worn closable piece (``render_outfit(for_llm=True)``, ruling A9) — never
-    set for an image or mesh prompt."""
+    set for an image or mesh prompt.
+
+    ``appearance_reference``: a full-body reference (Ruling A93b) — a body
+    slot that declares a ``mesh_part`` names nothing
+    (``body_slots.prompt_fragments``)."""
     from app.models.character import get_character_appearance, get_character_profile
     from app.models.character_template import get_template, resolve_profile_tokens
     appearance = ((body_profile or {}).get("character_appearance", "")
@@ -289,7 +294,8 @@ def person_description(name: str, *,
         from app.core.body_slots import appearance_suffix
         suffix = appearance_suffix(name, profile=body_profile, back_view=back_view,
                                    mesh_input=mesh_input, include_exposed=include_exposed,
-                                   neutral_state=neutral_state)
+                                   neutral_state=neutral_state,
+                                   appearance_reference=appearance_reference)
     except Exception:
         suffix = ""
     if suffix:
@@ -330,7 +336,8 @@ class PromptBuilder:
                  back_view: bool = False,
                  mesh_input: bool = False,
                  body_profile: Optional[Dict[str, Any]] = None,
-                 neutral_state: bool = False):
+                 neutral_state: bool = False,
+                 appearance_reference: bool = False):
         self.user_id = ""
         self.character_name = character_name
         # State-triggered image_modifier directives rewrite the person
@@ -343,6 +350,8 @@ class PromptBuilder:
         self.mesh_input = mesh_input
         self.body_profile = body_profile
         self.neutral_state = neutral_state
+        # A full-body reference (Ruling A93b): a mesh-part slot names nothing.
+        self.appearance_reference = appearance_reference
 
     # ------------------------------------------------------------------
     # Step 1: detect people.
@@ -519,7 +528,8 @@ class PromptBuilder:
             name, apply_state_modifiers=self.apply_state_modifiers,
             back_view=self.back_view, mesh_input=self.mesh_input,
             body_profile=self.body_profile if name == self.character_name else None,
-            neutral_state=self.neutral_state)
+            neutral_state=self.neutral_state,
+            appearance_reference=self.appearance_reference and name == self.character_name)
 
     def _assign_actor_labels(self, persons: List[Person]) -> None:
         """Set actor_label to the actual character name."""
