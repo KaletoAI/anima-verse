@@ -7,8 +7,10 @@
  * pipeline in the 3D tab — so both tabs render the same component. The
  * 3D tab keeps its own overview for a model of the old path (no `steps`).
  *
- * One line per step: dot + label + short state (done green · warning
- * yellow · failed red · skipped and missing (nothing recorded) grey).
+ * One line per step: dot + label + short state (done green · warning and
+ * due yellow · failed red · skipped and missing (nothing recorded) grey).
+ * `due`: a saved setting waits for the step's own run (Save never executes —
+ * e.g. the collision step after a Channels save); `detail` says which.
  * `label` is a fixed English phrase (translated); `detail` (server text with
  * the numbers in it) and `numbers` (the raw values) are the row's tooltip.
  */
@@ -17,7 +19,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 export interface ModelStep {
   id: string
   label: string
-  status: 'done' | 'skipped' | 'warning' | 'failed' | 'missing'
+  status: 'done' | 'skipped' | 'warning' | 'failed' | 'missing' | 'due'
   detail: string
   numbers: Record<string, number | string>
 }
@@ -28,6 +30,7 @@ const DOT: Record<ModelStep['status'], string> = {
   failed: 'red',
   skipped: 'grey',
   missing: 'grey',
+  due: 'yellow',
 }
 
 const STATUS_LABEL: Record<ModelStep['status'], string> = {
@@ -36,6 +39,7 @@ const STATUS_LABEL: Record<ModelStep['status'], string> = {
   failed: 'Failed',
   skipped: 'Skipped',
   missing: 'Not recorded',
+  due: 'Due',
 }
 
 const formatNumber = (value: number | string) =>

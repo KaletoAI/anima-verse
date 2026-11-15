@@ -7,7 +7,7 @@ once per model and applied by both renderers every frame (``@anima/scene-render`
 
 PAYLOAD (sidecar key ``collision``, delivered next to ``extension_rig``)::
 
-    {"version": 6,
+    {"version": 7,
      "capsules": [{"id": "left_thigh", "a": "mixamorig:LeftUpLeg", "b": "mixamorig:LeftLeg",
                    "r": 0.1, "region": "leg"},
                   {"id": "head", "a": "mixamorig:Head", "b": "mixamorig:Head",
@@ -18,6 +18,13 @@ PAYLOAD (sidecar key ``collision``, delivered next to ``extension_rig``)::
                    "reason": "joint LeftFoot missing"}],
      "scales":   {"leg": 1.0, "arm": 1.0, "torso": 1.0, "head": 1.0, "shoulder_hair": 1.0, "chest": 1.0,
                  "chest_hair": 1.0, "attached_part": 1.0, "appendage": 1.0, "outer_trunk": 1.0},
+     "channels": [{"id": "<package>:<region>", "kind": "channel", "a": "mixamorig:Hips", "b": "mixamorig:Hips",
+                   "a_pos": [...], "b_pos": [...], "r": 0.02, "cone_deg": 30.0, "funnel": 0.03,
+                   "accepts": ["appendage_chain"], "min_length": 1.0, "compress_min": 1.0,
+                   "suppress": ["hips", "outer_hips", "outer_waist"],
+                   "frame": {"side": [...], "up": [...], "front": [...]}, "placement": "declared", "applied": None}],
+     "channels_skipped": [{"id": "<package>:<region>", "reason": "Covered by the worn outfit"}],
+     "channels_sig": "<sha256 of the wanted channels>",
      "source":   "own" | "base",       # fitted on this file / the base body it was built on
      "base_signature": "<bsig>",       # only with source "base"
      "sha256":   "<file the set describes>",
@@ -47,9 +54,14 @@ capsules of every group the outfit does not carry built (a part the base shows a
 model on a MESHED SHAPE (an outfit body, sidecar ``body_id`` = ``ob…``) carries that body's set the same way
 (``source "body"``, ``sha256`` = its ``body_sha256``).
 
-A record is CURRENT when ``version``, ``sha256`` (the identity above) and ``scales`` (the character's region
-scales, ``model3d_opts.collision_scales``) all match. ``ensure`` / ``ensure_path`` recompute and store anything
-else; the post-rig chain (``model3d._auto_collision``) refreshes it right after the extension rig.
+A record's CAPSULES are current when ``version``, ``sha256`` (the identity above) and ``scales`` (the character's
+region scales, ``model3d_opts.collision_scales``) all match (``is_current``); its CHANNELS are current when its
+``channels_sig`` matches as well (``channels_current``, version 7). ``ensure`` / ``ensure_path`` refit and store a
+record whose capsules are not current — every refit resolves the channels too; the post-rig chain
+(``model3d._auto_collision``) refreshes it right after the extension rig. A record whose capsules are current but
+whose ``channels_sig`` differs is returned UNCHANGED (ruling R4, Save never executes: the Channels panel only stores
+the override and the step shows "due") unless ``apply_channels`` or ``force`` is set — the explicit recompute
+(``POST /characters/{c}/model3d/collision``), the Improvements queue and the Figure tab's whole flow apply it.
 
 EXTENSION CAPSULES (version 2). The spring-driven extension bones a package declares get capsules too — one per
 chain bone of every group whose OP is in ``EXTENSION_CAPSULES`` (never by group or bone name), region by op
@@ -78,6 +90,29 @@ another figure reads them (``collision.ts`` ``PARTNER_ONLY_REGIONS``): the figur
 extension-bone contact never do — the circle reaches past the trunk sides of its own body. OUTER_MEASURED has the
 numbers.
 
+PARTNER CONTACT (cross-person collision, spec ``2026-11-13-cross-person-collision-design.md`` Parts 1–3; no
+payload change of its own). Another figure's hair and extension chains read this same set as a push-only collider
+(``partnerContact.ts`` ``partnerCapsules``: hair every region, extension chains all but the hair-only ones, both
+without ``torso`` where the set has the ``outer_trunk`` capsules of version 6; nearest first under each consumer's
+cap). A partner record of another version is skipped for that frame — both renderers bind only
+``COLLISION_VERSION``.
+
+CHANNELS (version 7; ``collision_channels.py``). A package may declare ``channel`` regions on a body slot
+(``extension_rig.region_declarations_for``): an inside capsule another figure's accepted chain may slide into instead
+of being pushed out. Each applicable, exposed channel is resolved into this record's bind space (``channels``):
+``a`` = ``b`` = the owning joint as in the model, ``a_pos`` = the opening centre, ``b_pos`` = the bottom (opening +
+axis · depth), both fixed to that joint (the ENDPOINT RULE); ``r`` the channel radius, ``cone_deg`` / ``funnel`` the
+entry funnel, ``accepts`` the ops whose chains may enter, ``min_length`` / ``compress_min`` / ``interaction_kinds``
+the declaration's gates, ``suppress`` the ids of this set's capsules an engaged link tip inside the channel skips
+(bind-pose overlap with the channel cylinder, plus every capsule starting at the owning joint), ``frame`` the body
+frame the offsets were read in, ``placement`` ``declared`` (joint + offset) or ``rig`` (the ``opening`` the
+``from_rig`` op reports), ``applied`` the per-character override (``model3d_opts.collision_channels``). A channel the
+model does not carry is listed in ``channels_skipped`` with its reason (covered by the worn outfit — an
+``exposed_only`` channel never exists under clothing; a missing joint; a ``from_rig`` rig that reports no opening).
+``channels_sig`` hashes the wanted declarations, their resolved attribute values, the overrides and the opening —
+not the exposure, which is identity: applied at every fit, relabel and apply. An inherited record (the relabel path)
+re-filters the base's channels by THIS model's exposure.
+
 FITTING (``fit_capsules``) — the S1 spike's method: for each capsule the body vertices whose DOMINANT skin
 weight is the capsule's start bone, their distances to the bone segment ``a→b`` (bind pose; joint positions =
 inverse bind matrices), radius = quantile of those distances + margin, times the region scale. No normals: the
@@ -95,7 +130,7 @@ from app.core.log import get_logger
 
 logger = get_logger("collision")
 
-VERSION = 6
+VERSION = 7
 #: The fixed table's regions, then the extension regions (``EXTENSION_CAPSULES``), then the partner-only table
 #: region (version 6).
 REGIONS = ("leg", "arm", "torso", "head", "shoulder_hair", "chest", "chest_hair", "attached_part", "appendage",
@@ -688,8 +723,28 @@ def identity(path: Path, meta: Dict[str, Any]) -> Tuple[str, str]:
 
 
 def is_current(record: Any, sha256: str, scales: Dict[str, float]) -> bool:
+    """Whether a record's CAPSULES describe the file of identity ``sha256`` at ``scales`` (module docstring)."""
     return (isinstance(record, dict) and record.get("version") == VERSION and bool(sha256)
             and record.get("sha256") == sha256 and record.get("scales") == scales)
+
+
+def channels_current(record: Any, channels_sig: str) -> bool:
+    """Whether a record's CHANNELS were resolved from the wanted channels of signature ``channels_sig``
+    (``collision_channels.wanted_channels``)."""
+    return isinstance(record, dict) and bool(channels_sig) and record.get("channels_sig") == channels_sig
+
+
+def record_state(character_name: str, path: Path, meta: Dict[str, Any], *,
+                 profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """``{current, channels_current}`` of the stored record of the model ``path`` (sidecar ``meta``) — the capsules
+    (``is_current``) and the channels (``channels_current``) separately, for the model overview and the Improvements
+    queue. Both False without a record. Reads only."""
+    from app.core import collision_channels
+    profile = collision_channels._profile(character_name, profile)
+    record = meta.get("collision")
+    current = is_current(record, identity(path, meta)[1], character_scales(character_name, profile=profile))
+    _wanted, sig = collision_channels.wanted_channels(character_name, path, meta, profile=profile)
+    return {"current": current, "channels_current": channels_current(record, sig)}
 
 
 def applies(path: Optional[Path], meta: Dict[str, Any]) -> bool:
@@ -706,24 +761,60 @@ def _record(fitted: Dict[str, Any], *, source: str, sha256: str, meta: Dict[str,
     return record
 
 
+def _with_channels(record: Dict[str, Any], data: bytes, wanted: List[Dict[str, Any]], sig: str,
+                   exposed) -> Dict[str, Any]:
+    """``record`` with its channels resolved on the model bytes ``data`` (``collision_channels.resolve_channels``
+    over the record's capsules) and ``channels_sig``. A record with an ``error`` or a file the resolver cannot read
+    gets no channels (every wanted one in ``channels_skipped`` with the reason)."""
+    from app.core import collision_channels
+    channels: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    if record.get("error"):
+        skipped = [{"id": str(entry["id"]), "reason": "No capsule set"} for entry in wanted]
+    elif wanted:
+        try:
+            channels, skipped = collision_channels.resolve_channels(data, record.get("capsules") or [], wanted,
+                                                                    exposed=exposed)
+        except Exception as exc:  # noqa: BLE001 — a model without channels is still a model
+            logger.warning("Collision channels failed: %s", exc)
+            skipped = [{"id": str(entry["id"]), "reason": str(exc)} for entry in wanted]
+    return {**record, "channels": channels, "channels_skipped": skipped, "channels_sig": sig}
+
+
 def refresh(character_name: str, path: Path, meta: Dict[str, Any], *,
-            scales: Optional[Dict[str, float]] = None, force: bool = False) -> bool:
+            scales: Optional[Dict[str, float]] = None, force: bool = False, apply_channels: bool = False,
+            profile: Optional[Dict[str, Any]] = None) -> bool:
     """Bring ``meta["collision"]`` of the model file ``path`` up to date IN MEMORY (the caller publishes the
     sidecar — the post-rig chain). Returns True when the record changed. Never raises: a failed fit is stored
-    as a record with ``error`` and no capsules (so a poll does not refit it), a non-humanoid model drops it."""
+    as a record with ``error`` and no capsules (so a poll does not refit it), a non-humanoid model drops it.
+    Capsules current but ``channels_sig`` changed: unchanged unless ``apply_channels`` (ruling R4; module
+    docstring); ``force`` refits everything."""
     if not applies(path, meta):
         return meta.pop("collision", None) is not None
+    from app.core import collision_channels
+    profile = collision_channels._profile(character_name, profile)
     if scales is None:
-        scales = character_scales(character_name)
+        scales = character_scales(character_name, profile=profile)
     source, sha = identity(path, meta)
+    wanted, sig = collision_channels.wanted_channels(character_name, path, meta, profile=profile)
+    exposed = collision_channels.exposure(meta)
     record = meta.get("collision")
     if not force and is_current(record, sha, scales):
         if record.get("source") == source and (source != "base"
                                                or record.get("base_signature") == meta.get("base_signature")):
-            return False
+            if channels_current(record, sig) or not apply_channels:
+                return False
+            try:
+                data = path.read_bytes()
+            except OSError as exc:
+                logger.warning("Collision channels of %s (%s) not applied: %s", character_name, path.name, exc)
+                return False
+            meta["collision"] = _with_channels(record, data, wanted, sig, exposed)
+            return True
         # The base body's record copied with the base meta: the same set, labelled as inherited — without the
         # capsules of extension groups this model does not carry built (Ruling A49: the base shows the part an
-        # outfit covering the slot leaves out, so its bones are not in the outfit's file).
+        # outfit covering the slot leaves out, so its bones are not in the outfit's file) and without the channels
+        # THIS model's worn pieces cover (exposure is identity, never deferred).
         relabelled = {k: v for k, v in record.items() if k != "base_signature"}
         relabelled["source"] = source
         if source == "base":
@@ -732,22 +823,37 @@ def refresh(character_name: str, path: Path, meta: Dict[str, Any], *,
             relabelled["capsules"] = [c for c in record.get("capsules") or []
                                       if ":" not in str(c.get("id") or "")
                                       or str(c.get("id")).split(":", 1)[0] in carried]
+        resolved = False
+        if apply_channels and not channels_current(record, sig):
+            try:
+                relabelled = _with_channels(relabelled, path.read_bytes(), wanted, sig, exposed)
+                resolved = True
+            except OSError as exc:
+                logger.warning("Collision channels of %s (%s) not applied: %s", character_name, path.name, exc)
+        if not resolved:
+            # The inherited channels (their sig kept: a changed one stays due until applied), re-filtered.
+            relabelled["channels"], relabelled["channels_skipped"] = collision_channels.filter_exposed(
+                relabelled, wanted, exposed)
         meta["collision"] = relabelled
         return True
     try:
-        fitted = fit_capsules(path.read_bytes(), scales=scales, extension=extension_chains(meta))
+        data = path.read_bytes()
+        fitted = fit_capsules(data, scales=scales, extension=extension_chains(meta))
     except Exception as exc:  # noqa: BLE001 — a model without capsules is still a model
         logger.warning("Collision capsules of %s (%s) failed: %s", character_name, path.name, exc)
+        data = b""
         fitted = {"version": VERSION, "capsules": [], "skipped": [], "scales": scales, "error": str(exc)}
-    meta["collision"] = _record(fitted, source=source, sha256=sha, meta=meta)
+    meta["collision"] = _with_channels(_record(fitted, source=source, sha256=sha, meta=meta), data, wanted, sig,
+                                       exposed)
     return True
 
 
 def ensure_path(character_name: str, path: Optional[Path], *, scales: Optional[Dict[str, float]] = None,
-                force: bool = False) -> Optional[Dict[str, Any]]:
+                force: bool = False, apply_channels: bool = False) -> Optional[Dict[str, Any]]:
     """The current capsule record of the stored model file ``path`` — computed and written into its sidecar
-    when missing or stale (``force``: always). None for a model that gets none (``applies``) or one replaced
-    while it was being fitted (the next call fits the new file)."""
+    when missing or stale (``force``: always). A record whose capsules are current but whose channels are not is
+    returned UNCHANGED unless ``apply_channels`` (``refresh``). None for a model that gets none (``applies``) or one
+    replaced while it was being fitted (the next call fits the new file)."""
     from app.core.keyed_lock import keyed_lock
     from app.core.model3d import _publish_sidecar, _read_sidecar
     if path is None or not path.is_file():
@@ -755,11 +861,14 @@ def ensure_path(character_name: str, path: Optional[Path], *, scales: Optional[D
     meta = _read_sidecar(path)
     if not applies(path, meta):
         return None
+    from app.core.collision_channels import _profile
+    profile = _profile(character_name, None)
     if scales is None:
-        scales = character_scales(character_name)
+        scales = character_scales(character_name, profile=profile)
     before = meta.get("collision")
     sha_before = _file_sha256(path)
-    if not refresh(character_name, path, meta, scales=scales, force=force):
+    if not refresh(character_name, path, meta, scales=scales, force=force, apply_channels=apply_channels,
+                   profile=profile):
         return before
     record = meta["collision"]
     with keyed_lock("model3d_publication", str(path.parent)):
@@ -774,40 +883,48 @@ def ensure_path(character_name: str, path: Optional[Path], *, scales: Optional[D
         before_revision = bare_revision(path)
         _publish_sidecar(path, current)
         carry_sidecar_key(path, before_revision, "collision", record)
-    logger.info("Collision capsules %s (%s): %d capsules, %d skipped, source %s", character_name, path.name,
-                len(record.get("capsules") or []), len(record.get("skipped") or []), record["source"])
+    logger.info("Collision capsules %s (%s): %d capsules, %d skipped, %d channels, source %s", character_name,
+                path.name, len(record.get("capsules") or []), len(record.get("skipped") or []),
+                len(record.get("channels") or []), record["source"])
     return record
 
 
-def ensure(character_name: str, signature: str, *, force: bool = False) -> Optional[Dict[str, Any]]:
+def ensure(character_name: str, signature: str, *, force: bool = False,
+           apply_channels: bool = False) -> Optional[Dict[str, Any]]:
     """``ensure_path`` for the stored full-tier model ``model3d/<signature>.glb`` of a character."""
     from app.core.face_retexture import safe_signature
     from app.core.model3d import get_model3d_dir
     signature = safe_signature(signature)
-    return ensure_path(character_name, get_model3d_dir(character_name) / f"{signature}.glb", force=force)
+    return ensure_path(character_name, get_model3d_dir(character_name) / f"{signature}.glb", force=force,
+                       apply_channels=apply_channels)
 
 
-def recompute_character(character_name: str) -> Dict[str, Any]:
-    """After a region-scale change (``model3d_opts.collision_scales``): bring the capsule set of every stored
-    full-tier model of the character (``model3d/*.glb``; retired state forks, the distance tier and the covered
-    variant carry none) up to date with the character's scales. On the base-body pipeline the CURRENT base model
-    goes first — it owns the set — then every outfit model, whose inherited set is refitted under the base identity
-    (``refresh``: body nodes only = the base body it was built on). Only the sidecar key ``collision`` is written;
-    the model files, renders and every other sidecar key stay as they are.
-
-    Returns ``{"scales": {...}, "models": {signature: {"ok", "count", "skipped", "source"} | {"ok", "error"}}}``;
-    a model that gets no set (not a humanoid GLB) reports ``{"ok": True, "count": 0, "none": True}``."""
+def _character_models(character_name: str) -> List[Path]:
+    """Every stored full-tier model of the character (``model3d/*.glb``; retired state forks, the distance tier and
+    the covered variant carry no set), the CURRENT base model first — it owns the set its outfits inherit."""
     from app.core.model3d import _current_base, get_model3d_dir
     from app.core.model_refs import is_state_fork
-    scales = character_scales(character_name)
     current = _current_base(character_name)
     directory = get_model3d_dir(character_name)
-    paths = sorted((path for path in directory.glob("*.glb") if not is_state_fork(path.stem)),
-                   key=lambda path: (not current or path.stem != current[0], path.stem))
+    return sorted((path for path in directory.glob("*.glb") if not is_state_fork(path.stem)),
+                  key=lambda path: (not current or path.stem != current[0], path.stem))
+
+
+def recompute_character(character_name: str, *, apply_channels: bool = False) -> Dict[str, Any]:
+    """After a region-scale change (``model3d_opts.collision_scales``): bring the capsule set of every stored
+    full-tier model of the character (``_character_models``) up to date with the character's scales. On the
+    base-body pipeline the CURRENT base model goes first — it owns the set — then every outfit model, whose inherited
+    set is refitted under the base identity (``refresh``: body nodes only = the base body it was built on). Every
+    refit resolves the channels too; ``apply_channels`` also applies changed channels on a current set. Only the
+    sidecar key ``collision`` is written; the model files, renders and every other sidecar key stay as they are.
+
+    Returns ``{"scales": {...}, "models": {signature: {"ok", "count", "skipped", "channels", "source"} | {"ok",
+    "error"}}}``; a model that gets no set (not a humanoid GLB) reports ``{"ok": True, "count": 0, "none": True}``."""
+    scales = character_scales(character_name)
     models: Dict[str, Any] = {}
-    for path in paths:
+    for path in _character_models(character_name):
         try:
-            record = ensure_path(character_name, path, scales=scales)
+            record = ensure_path(character_name, path, scales=scales, apply_channels=apply_channels)
         except Exception as exc:  # noqa: BLE001 — one unreadable model does not stop the others
             logger.warning("Collision capsules of %s (%s) not recomputed: %s", character_name, path.name, exc)
             models[path.stem] = {"ok": False, "error": str(exc)}
@@ -818,12 +935,34 @@ def recompute_character(character_name: str) -> Dict[str, Any]:
             models[path.stem] = {"ok": False, "error": str(record["error"])}
         else:
             models[path.stem] = {"ok": True, "count": len(record.get("capsules") or []),
-                                 "skipped": len(record.get("skipped") or []), "source": record.get("source")}
+                                 "skipped": len(record.get("skipped") or []),
+                                 "channels": len(record.get("channels") or []), "source": record.get("source")}
     return {"scales": scales, "models": models}
 
 
+def channels_due(character_name: str) -> bool:
+    """Whether a stored model of the character carries a record whose channels are not current
+    (``channels_current``) — after a Channels save, what the explicit recompute then applies. Reads only."""
+    from app.core import collision_channels
+    from app.core.model3d import _read_sidecar
+    profile = collision_channels._profile(character_name, None)
+    for path in _character_models(character_name):
+        try:
+            meta = _read_sidecar(path)
+            record = meta.get("collision")
+            if not applies(path, meta) or not isinstance(record, dict) or record.get("error"):
+                continue
+            _wanted, sig = collision_channels.wanted_channels(character_name, path, meta, profile=profile)
+        except Exception as exc:  # noqa: BLE001 — one unreadable model does not decide the answer
+            logger.warning("Collision channels of %s (%s) not read: %s", character_name, path.name, exc)
+            continue
+        if not channels_current(record, sig):
+            return True
+    return False
+
+
 def summary(record: Any) -> Dict[str, Any]:
-    """Display numbers of a record: ``{count, skipped, radii: {region: [min, max] cm}}``."""
+    """Display numbers of a record: ``{count, skipped, channels, radii: {region: [min, max] cm}}``."""
     if not isinstance(record, dict):
         return {}
     radii: Dict[str, List[float]] = {}
@@ -832,15 +971,14 @@ def summary(record: Any) -> Dict[str, Any]:
         low, high = radii.get(capsule.get("region"), [r, r])
         radii[capsule.get("region")] = [min(low, r), max(high, r)]
     return {"count": len(record.get("capsules") or []), "skipped": len(record.get("skipped") or []),
+            "channels": len(record.get("channels") or []),
             "radii": {k: [round(v[0], 1), round(v[1], 1)] for k, v in radii.items()}}
 
 
-def bind_pose_capsules(rigged_glb: bytes, record: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """A stored set in the BIND POSE of its model (the admin viewer's partner probe, "Another character"):
-    ``[{id, region, a: [x, y, z], b: [x, y, z], r}]`` in payload order, in the space of the body's POSITION accessor
-    (the ENDPOINT RULE at rest: an endpoint without ``a_pos`` / ``b_pos`` is its joint's bind position, the inverse
-    of its inverse bind matrix; one with a position is that position as given). A capsule whose joint the file lacks
-    is left out, as ``bindCollision`` leaves it out. Pure; ValueError for a file without a skin."""
+def bind_joints(rigged_glb: bytes) -> Tuple[List[str], Dict[str, int], np.ndarray]:
+    """The bind skeleton of a rigged GLB: ``(names, index_of, positions)`` — the joint names as in the model (skin 0),
+    the first index per ``norm_bone_name`` key, and each joint's bind position (the inverse of its inverse bind
+    matrix), in the space of the body's POSITION accessor. ValueError for a file without a skin."""
     from app.core import glb_mesh
     from app.core.rig_contract import norm_bone_name
     parsed = glb_mesh._parse(rigged_glb, "Model")
@@ -852,25 +990,44 @@ def bind_pose_capsules(rigged_glb: bytes, record: Dict[str, Any]) -> List[Dict[s
     ibm = _matrices(parsed, skins[0]["inverseBindMatrices"])
     if len(ibm) != len(joints) or not joints:
         raise ValueError("The skin's inverse bind matrices do not match its joints")
-    positions = np.linalg.inv(ibm)[:, :3, 3]
+    names = [str(nodes[joint].get("name") or "") for joint in joints]
     index_of: Dict[str, int] = {}
-    for i, joint in enumerate(joints):
-        index_of.setdefault(norm_bone_name(str(nodes[joint].get("name") or "")), i)
+    for i, name in enumerate(names):
+        index_of.setdefault(norm_bone_name(name), i)
+    return names, index_of, np.linalg.inv(ibm)[:, :3, 3]
 
-    def endpoint(capsule: Dict[str, Any], end: str) -> Optional[List[float]]:
+
+def capsule_segment(capsule: Dict[str, Any], index_of: Dict[str, int],
+                    positions: np.ndarray) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """A capsule's segment in the bind pose (the ENDPOINT RULE at rest): an endpoint without ``a_pos`` / ``b_pos`` is
+    its joint's bind position, one with a position is that position as given. None when the file lacks a joint."""
+    from app.core.rig_contract import norm_bone_name
+    ends = []
+    for end in ("a", "b"):
         index = index_of.get(norm_bone_name(str(capsule.get(end) or "")))
         if index is None:
             return None
         given = capsule.get(f"{end}_pos")
-        if isinstance(given, (list, tuple)) and len(given) == 3:
-            return [float(v) for v in given]
-        return [round(float(v), 5) for v in positions[index]]
+        ends.append(np.asarray([float(v) for v in given], np.float64)
+                    if isinstance(given, (list, tuple)) and len(given) == 3 else positions[index])
+    return ends[0], ends[1]
 
+
+def bind_pose_capsules(rigged_glb: bytes, record: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """A stored set in the BIND POSE of its model (the admin viewer's partner probe, "Another character"):
+    ``[{id, region, a: [x, y, z], b: [x, y, z], r}]`` in payload order, in the space of the body's POSITION accessor
+    (``capsule_segment``; a joint position is rounded to 0.01 mm, a given position is passed as given). A capsule
+    whose joint the file lacks is left out, as ``bindCollision`` leaves it out. Pure; ValueError for a file without a
+    skin."""
+    _names, index_of, positions = bind_joints(rigged_glb)
     out: List[Dict[str, Any]] = []
     for capsule in (record or {}).get("capsules") or []:
-        a, b = endpoint(capsule, "a"), endpoint(capsule, "b")
-        if a is None or b is None or not float(capsule.get("r") or 0) > 0:
+        segment = capsule_segment(capsule, index_of, positions)
+        if segment is None or not float(capsule.get("r") or 0) > 0:
             continue
+        a, b = ([float(v) for v in capsule[f"{end}_pos"]]
+                if isinstance(capsule.get(f"{end}_pos"), (list, tuple)) and len(capsule[f"{end}_pos"]) == 3
+                else [round(float(v), 5) for v in point] for end, point in zip(("a", "b"), segment))
         out.append({"id": str(capsule.get("id") or ""), "region": str(capsule.get("region") or ""),
                     "a": a, "b": b, "r": float(capsule["r"])})
     return out

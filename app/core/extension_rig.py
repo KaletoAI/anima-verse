@@ -144,11 +144,16 @@ def region_declarations_for(character_name, profile=None):
 
 def exposed_only_slots():
     """Clothing slots that cover a body slot carrying an ``exposed_only`` rig
-    in any loaded package, sorted — the pieces the item editor offers the
-    ``exposed_detail`` switch for. Never names a group or a slot itself."""
+    or an ``exposed_only`` region (a channel exists only uncovered,
+    ``collision_channels.exposure``) in any loaded package, sorted — the
+    pieces the item editor offers the ``exposed_detail`` switch for: a piece
+    that shows the detail through keeps the channel as it keeps the group.
+    Never names a group or a slot itself."""
     from app.plugins.registry import packages
     return sorted({cover for package in packages() for slot in package.body_slots
-                   if any(rig.exposed_only for rig in slot.rigs) for cover in slot.covered_by})
+                   if any(rig.exposed_only for rig in slot.rigs)
+                   or any(region.exposed_only for region in slot.regions)
+                   for cover in slot.covered_by})
 
 
 def clothing_lift_slots():

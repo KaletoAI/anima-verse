@@ -35,7 +35,10 @@ Expected, derived by hand:
 [3] Save {"scales": {}} → profile without collision_scales, base left_thigh back to 0.066.
 [4] Refused (400) and nothing stored: {"scales": {"leg": 1.6}}, {"scales": {"tail": 1.0}}, {"scales": {"arm": "x"}},
     {} and {"scales": {}, "x": 1}; unknown character → 404.
-[5] The route is registered with ``require_admin`` as a dependency.
+[5] The route is registered with ``require_admin`` as a dependency; so is the channel override route
+    ``POST …/model3d/collision/channels`` (collision v7, ``scripts/smoke_collision_channels.py``), POST only.
+[6] The record of collision v7 carries ``channels_sig`` and, without any declared region, ``channels`` [] — the
+    answer per model counts them (``"channels": 0``).
 """
 import hashlib
 import importlib.util
@@ -210,6 +213,17 @@ def main() -> int:
                  if getattr(r, "path", "").endswith("/model3d/collision/scales"))
     check("require_admin dependency", any(dep.call is require_admin for dep in route.dependant.dependencies), True)
     check("POST only", route.methods, {"POST"})
+    route = next(r for r in routes.router.routes
+                 if getattr(r, "path", "").endswith("/model3d/collision/channels"))
+    check("channels: require_admin dependency",
+          any(dep.call is require_admin for dep in route.dependant.dependencies), True)
+    check("channels: POST only", route.methods, {"POST"})
+
+    print("[6] channels in the v7 record")
+    base_rec = json.loads(base.with_suffix(".json").read_text())["collision"]
+    check("no region declared: channels [] and a sig", (base_rec["version"], base_rec["channels"],
+                                                         len(base_rec["channels_sig"])), (collision.VERSION, [], 64))
+    check("answer counts the channels", out["models"]["base00000001"]["channels"], 0)
 
     print("FAIL" if FAILS else "OK", f"({len(FAILS)} failures)" if FAILS else "")
     return 1 if FAILS else 0

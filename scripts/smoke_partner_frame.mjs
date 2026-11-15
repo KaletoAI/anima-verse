@@ -26,7 +26,8 @@
  *   gravity 1, max_deg 25 (swinging); [3] runs them with gain 0 and gravity 0 (standing at the bind frame, so
  *   every turn is a contact).
  * [2] PHASE A / PHASE B against BASE (fe755a740, one `update` with the secondary motion inside), 40 frames, dt =
- *     realDelta = 1/60, the owner moving the root by 0.05·sin(0.3 k) in x: after the new `update(dt)` every bone
+ *     realDelta = 1/60, the owner moving the root by 0.05·sin(0.3 k) in x (BASE gets the same capsules under ITS
+ *     `COLLISION_VERSION` — a payload bump, e.g. v7's channels, adds keys and leaves the capsules as they are): after the new `update(dt)` every bone
  *     (driven ones included) has the same `matrix` / `matrixWorld` as BASE right BEFORE its `secondary.update`;
  *     after `updateSecondary([])` the same as BASE after its whole `update` — bit for bit. A second
  *     `updateSecondary` without a new phase A changes nothing (no-op).
@@ -111,7 +112,10 @@ async function loadClients() {
     for (const pkg of ['scene-render', 'player-ui']) {
       await symlink(join(base, 'packages', pkg), join(base, 'node_modules/@anima', pkg))
     }
-    const old = await bundle(dir, base, `export { Figure } from '${base}/client3d/src/scene/figures';`, false, 'base')
+    const old = await bundle(dir, base, [
+      `export { Figure } from '${base}/client3d/src/scene/figures';`,
+      `export { COLLISION_VERSION } from '@anima/scene-render';`,
+    ].join('\n'), false, 'base')
     return { client, old }
   } finally {
     await rm(dir, { recursive: true, force: true })
@@ -228,7 +232,8 @@ const firstDiff = (p, q) => { const i = p.findIndex((v, k) => !Object.is(v, q[k]
 // [2] phase A / phase B against BASE ------------------------------------------------------------------------------
 {
   const fig = seeded(() => new Figure(model()))
-  const ref = seeded(() => new old.Figure(model()))
+  // BASE reads its own payload version (v6 there): the capsules are the same, a later bump only adds keys.
+  const ref = seeded(() => new old.Figure(model({ version: old.COLLISION_VERSION })))
   let before = null
   const realUpdate = ref.secondary.update.bind(ref.secondary)
   ref.secondary.update = (dt, options) => { before = matrices(ref); realUpdate(dt, options) }

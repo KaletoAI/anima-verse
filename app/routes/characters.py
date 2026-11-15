@@ -4126,10 +4126,37 @@ def recompute_character_model3d_collision(
     if not signature:
         raise HTTPException(404, "No model")
     try:
-        record = collision.ensure(character_name, signature, force=True)
+        record = collision.ensure(character_name, signature, force=True, apply_channels=True)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": bool(record) and not record.get("error"), "signature": signature, "collision": record}
+
+
+@router.post("/{character_name}/model3d/collision/channels")
+async def set_character_collision_channels(character_name: str, request: Request,
+        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Per-character channel overrides (``collision_channels.validate_overrides``). Body: ``{"channels": {<channel
+    id>: {offset_mm: [side, up, front], radius_scale, depth_scale, cone_deg}}}`` — the whole map; ``{}`` clears it.
+    Stores ``model3d_opts.collision_channels`` ONLY — it never fits (Save never executes, ruling R4); ``POST
+    …/model3d/collision`` applies it. ``{channels: <stored>, due: <a stored model's channels are not current>}``."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_set_character_collision_channels_sync, character_name, body)
+
+
+def _set_character_collision_channels_sync(character_name: str, body: Any) -> Dict[str, Any]:
+    """The blocking body of ``set_character_collision_channels``."""
+    from app.core import collision
+    from app.core.model3d import set_model3d_options
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(404, "Character not found")
+    if not isinstance(body, dict) or set(body) != {"channels"}:
+        raise HTTPException(400, "channel overrides required")
+    try:
+        options = set_model3d_options(character_name, {"collision_channels": body["channels"]})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"channels": options["collision_channels"], "due": collision.channels_due(character_name)}
 
 
 @router.get("/{character_name}/model3d/collision/bind-pose")

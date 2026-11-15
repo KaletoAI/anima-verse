@@ -155,7 +155,9 @@ def _plain_body_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, A
     """What the plain-body details act on besides the views: the base
     model's face fields (``model3d.face_info``) and collision capsules
     (``collision.ensure`` — the set the outfit models inherit), the stored
-    region scales (``collision_scales``), the face cleanup of the base
+    region scales (``collision_scales``), the stored channel overrides (``collision_channels``) and the channels
+    the base model's declarations ask for with their placement or the reason there is none
+    (``channel_declarations``, ``collision_channels.declarations_info``), the face cleanup of the base
     source (``face_cleanup``, ``model3d.face_cleanup_state``), the base mesh
     repair (``mesh_repair``, ``model3d.mesh_repair_state``), the tip
     smoothing (``tip_smoothing``, ``extension_tip.tip_smoothing_state``,
@@ -169,8 +171,8 @@ def _plain_body_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, A
     all" plan (``run_all``, ``figure_build.base_run_all``) and what of the
     character's 3D work runs now, base-body work apart from outfit work
     (``activity``, ``figure_build.base_activity``, Ruling A55). Never raises."""
-    from app.core import collision, extension_tip, figure_build
-    from app.core.model3d import (face_cleanup_state, face_info, find_model3d, get_model3d_options,
+    from app.core import collision, collision_channels, extension_tip, figure_build
+    from app.core.model3d import (_read_sidecar, face_cleanup_state, face_info, find_model3d, get_model3d_options,
                                   mesh_repair_state, model_extension_state)
     try:
         bsig = info.get("signature") or ""
@@ -182,11 +184,15 @@ def _plain_body_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, A
         info["mesh_repair"] = None
         info["tip_smoothing"] = None
         info["extension"] = None
+        info["collision_channels"] = get_model3d_options(character_name).get("collision_channels") or {}
+        info["channel_declarations"] = []
         if path is not None and model.get("status") != "running":
             info["mesh_repair"] = mesh_repair_state(character_name, bsig)
             info["tip_smoothing"] = extension_tip.tip_smoothing_state(character_name, bsig)
             model.update(face_info(character_name, path))
             model["collision"] = collision.ensure(character_name, bsig)
+            info["channel_declarations"] = collision_channels.declarations_info(
+                character_name, path, {**_read_sidecar(path), "collision": model["collision"]})
             info["extension_tips"] = extension_tip.tip_panels(character_name, bsig)
             info["extension"] = _with_preview_states(model_extension_state(character_name, bsig))
             extension_tip.group_tip_settings(info["extension_tips"], info["extension"])

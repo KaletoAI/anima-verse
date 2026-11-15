@@ -5,7 +5,8 @@ a 3D model or an image, decided here on the server.
    list per model, ``[{id, label, status, detail, numbers}]``, built from the
    model's sidecar and the records next to it, so both tabs render the same
    component. ``status``: ``done`` / ``skipped`` / ``warning`` / ``failed`` /
-   ``missing`` (nothing recorded). ``label`` is a fixed English phrase the
+   ``missing`` (nothing recorded) / ``due`` (a stored setting waits for its
+   step: the collision capsules after a Channels save, ``CHANNELS_CHANGED``). ``label`` is a fixed English phrase the
    React tab translates; ``detail`` is server English with numbers in it;
    ``numbers`` are the raw values (``{name: number | str}``).
 
@@ -68,6 +69,11 @@ SKIPPED = "skipped"
 WARNING = "warning"
 FAILED = "failed"
 NOT_RECORDED = "missing"
+#: A setting was saved that only the step's own run applies (Save never executes) — the reason says which.
+DUE = "due"
+#: The collision step's reason when the stored record's channels no longer match the declarations, the
+#: per-character overrides or the opening (``collision.channels_current``).
+CHANNELS_CHANGED = "Channel settings changed — recompute to apply"
 
 # Freshness reasons — fixed English phrases (the React badge translates
 # each part of a `` · `` joined reason).
@@ -363,9 +369,12 @@ def _extension_step(state: Dict[str, Any], *, source: str = "") -> Dict[str, Any
     return step("extension_rig", "Extension rig", NOT_RECORDED, reason or "Not processed", numbers)
 
 
-def _collision_step(meta: Dict[str, Any], *, current: Optional[bool] = None) -> Dict[str, Any]:
-    """The collision capsules (``collision.py``): count and radius per region;
-    ``current`` False = the record no longer describes the file."""
+def _collision_step(meta: Dict[str, Any], *, current: Optional[bool] = None,
+                    channels_current: Optional[bool] = None) -> Dict[str, Any]:
+    """The collision capsules (``collision.py``): count and radius per region, the channels;
+    ``current`` False = the record no longer describes the file (the next read refits it);
+    ``channels_current`` False with current capsules = ``due`` (``CHANNELS_CHANGED``: only the
+    explicit recompute applies it)."""
     from app.core.collision import REGIONS, summary
     label = "Collision capsules"
     if (meta.get("rig") or "mixamo") != "mixamo":
@@ -386,16 +395,22 @@ def _collision_step(meta: Dict[str, Any], *, current: Optional[bool] = None) -> 
     skipped = [x for x in (record.get("skipped") or []) if isinstance(x, dict)]
     if skipped:
         parts.append("skipped " + ", ".join(f"{x.get('id')} ({x.get('reason')})" for x in skipped))
+    channels = [c for c in (record.get("channels") or []) if isinstance(c, dict)]
+    if channels:
+        parts.append(f"{len(channels)} channel" + ("s" if len(channels) != 1 else ""))
     if record.get("source") == "base":
         parts.append("from the base model")
     elif record.get("source") == "body":
         parts.append("from the body shape")
     if current is False:
         parts.append("outdated")
+    values = {"count": numbers.get("count"), "skipped": numbers.get("skipped"),
+              **({"channels": len(channels)} if channels else {}),
+              **{f"{region}_cm": radii[region][1] for region in REGIONS if region in radii}}
+    if current is not False and channels_current is False:
+        return step("collision", label, DUE, " · ".join([CHANNELS_CHANGED, *parts]), values)
     status = WARNING if skipped or current is False else DONE
-    return step("collision", label, status, " · ".join(parts),
-                {"count": numbers.get("count"), "skipped": numbers.get("skipped"),
-                 **{f"{region}_cm": radii[region][1] for region in REGIONS if region in radii}})
+    return step("collision", label, status, " · ".join(parts), values)
 
 
 def _texture_step(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -609,6 +624,7 @@ def _covered_step(record: Dict[str, Any], *, exists: bool, current: Optional[boo
 def base_model_steps(meta: Dict[str, Any], *, front_meta: Optional[Dict[str, Any]],
                      covered_exists: bool = False, covered_current: Optional[bool] = None,
                      collision_current: Optional[bool] = None,
+                     channels_current: Optional[bool] = None,
                      tip_smoothing: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """The steps of a base model (pure). ``meta``: its sidecar;
     ``front_meta``: the sidecar of the current base front image (its
@@ -616,7 +632,8 @@ def base_model_steps(meta: Dict[str, Any], *, front_meta: Optional[Dict[str, Any
     whether ``model3d/covered/<bsig>.glb`` exists and was built from the
     model's current clean prerig source (None = unknown);
     ``collision_current``: whether the stored capsule set still describes
-    the file (None = unknown); ``tip_smoothing``: the model's tip smoothing state
+    the file (None = unknown); ``channels_current``: whether its channels
+    still match the wanted ones (None = unknown); ``tip_smoothing``: the model's tip smoothing state
     (``extension_tip.tip_smoothing_state``, Ruling A43), None = no row."""
     blender = _dict(meta.get("blender"))
     rows = [_hand_gate_step(front_meta), _mesh_step(meta), _face_cleanup_step(meta),
@@ -628,7 +645,7 @@ def base_model_steps(meta: Dict[str, Any], *, front_meta: Optional[Dict[str, Any
                 _tip_smoothing_step(tip_smoothing),
                 _extension_step(_dict(meta.get("extension_rig"))),
                 _covered_step(_dict(meta.get("covered_variant")), exists=covered_exists, current=covered_current),
-                _collision_step(meta, current=collision_current),
+                _collision_step(meta, current=collision_current, channels_current=channels_current),
                 _texture_step(meta), _measure_step(meta)):
         if row is not None:
             rows.append(row)
@@ -747,7 +764,8 @@ def _body_parent_step(meta: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def outfit_body_steps(meta: Dict[str, Any], *,
-                      collision_current: Optional[bool] = None) -> List[Dict[str, Any]]:
+                      collision_current: Optional[bool] = None,
+                      channels_current: Optional[bool] = None) -> List[Dict[str, Any]]:
     """The steps of an outfit body of the mesh mode (pure): its parent
     record, then the old path's chain as on the base model — mesh, face
     cleanup, face retexture (+ black-eye check), rig, head twist, posture,
@@ -761,7 +779,8 @@ def outfit_body_steps(meta: Dict[str, Any], *,
                 _posture_match_step(blender),
                 _limb_weights_step(blender, str(meta.get("rig") or "")),
                 _extension_step(_dict(meta.get("extension_rig"))),
-                _collision_step(meta, current=collision_current), _texture_step(meta), _measure_step(meta)):
+                _collision_step(meta, current=collision_current, channels_current=channels_current),
+                _texture_step(meta), _measure_step(meta)):
         if row is not None:
             rows.append(row)
     return rows
@@ -1240,13 +1259,12 @@ def base_model_overview(character_name: str, bsig: str) -> Optional[Dict[str, An
                 covered_current = None
     from app.core import collision
     from app.core.extension_tip import tip_smoothing_state
+    state = collision.record_state(character_name, path, meta) if meta.get("collision") else {}
     steps = base_model_steps(meta, front_meta=_sidecar(front) if front else None,
                              tip_smoothing=tip_smoothing_state(character_name, bsig),
                              covered_exists=covered.is_file(), covered_current=covered_current,
-                             collision_current=(collision.is_current(meta.get("collision"),
-                                                                     collision.identity(path, meta)[1],
-                                                                     collision.character_scales(character_name))
-                                                if meta.get("collision") else None))
+                             collision_current=state.get("current"),
+                             channels_current=state.get("channels_current"))
     fresh = base_model_freshness(meta, _base_view_shas(character_name, bsig), _base_view_stamps(character_name, bsig))
     mismatch = base_body.mesh_view_mismatch(character_name, bsig) if fresh["state"] == CURRENT else None
     if mismatch is not None:
@@ -1267,10 +1285,9 @@ def outfit_body_overview(character_name: str, body_id: str) -> Optional[Dict[str
         return None
     meta = _sidecar(path)
     from app.core import collision
-    current = (collision.is_current(meta.get("collision"), collision.identity(path, meta)[1],
-                                    collision.character_scales(character_name))
-               if meta.get("collision") else None)
-    return {"steps": outfit_body_steps(meta, collision_current=current)}
+    state = collision.record_state(character_name, path, meta) if meta.get("collision") else {}
+    return {"steps": outfit_body_steps(meta, collision_current=state.get("current"),
+                                       channels_current=state.get("channels_current"))}
 
 
 def annotate_base_info(character_name: str, info: Dict[str, Any]) -> Dict[str, Any]:

@@ -1,4 +1,5 @@
-"""Fit the collision capsules of humanoid models that have none or an outdated set."""
+"""Fit the collision capsules of humanoid models that have none or an outdated set, and apply changed channels
+(declarations, per-character overrides — ``collision.channels_current``)."""
 from typing import Any, Dict, List
 
 from app.core.improvements.base import Candidate, CandidateBusy, ImprovementType, ParamField
@@ -42,8 +43,8 @@ class CollisionCapsules(ImprovementType):
         meta = read_sidecar(path)
         if not collision.applies(path, meta):
             return True
-        _source, sha = collision.identity(path, meta)
-        return collision.is_current(meta.get('collision'), sha, collision.character_scales(name))
+        state = collision.record_state(name, path, meta)
+        return state['current'] and state['channels_current']
 
     def apply(self, candidate: Candidate, params: Dict[str, Any], task_id: str) -> None:
         from app.core import collision, model3d
@@ -53,7 +54,7 @@ class CollisionCapsules(ImprovementType):
                 raise CandidateBusy(f'{name}: model generation already running')
         if self.is_done(candidate, params):
             return
-        record = collision.ensure(name, signature)
+        record = collision.ensure(name, signature, apply_channels=True)
         if record is None:
             raise CandidateBusy(f'{name}: model replaced while fitting')
         if record.get('error'):

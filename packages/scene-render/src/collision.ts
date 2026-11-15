@@ -47,11 +47,61 @@ export interface CollisionCapsule {
   b_pos?: Vec3
 }
 
+/**
+ * The per-character correction of one channel (`model3d_opts.collision_channels[<channel id>]`,
+ * server `app/core/collision_channels.py` `validate_overrides`): an offset of the opening in mm along the
+ * body frame `[side, up, front]` (each within ±50), the radius and depth scales (0.5–2) and the funnel
+ * half-angle `cone_deg` (0 < cone ≤ 60).
+ */
+export interface ChannelOverride {
+  offset_mm: [number, number, number]
+  radius_scale: number
+  depth_scale: number
+  cone_deg: number
+}
+
+/**
+ * One declared channel resolved into the model's bind space (collision v7, `app/core/collision.py` "CHANNELS"):
+ * an inside capsule another figure's accepted chain may enter. `a` = `b` = the owning joint (as in the model);
+ * `a_pos` the opening centre, `b_pos` the bottom (opening + axis · depth), both bind-space points fixed to that
+ * joint (THE ENDPOINT RULE); `r` the radius in metres; `cone_deg` / `funnel` the entry funnel's half-angle and
+ * length in front of the opening; `accepts` the core ops whose chains may enter; `min_length` the entering
+ * chain's least state length; `compress_min` the least depth scale; `interaction_kinds` the pair interactions it
+ * engages in (absent = any running pair interaction); `suppress` the ids of the SAME set's capsules an engaged
+ * link tip inside skips, in payload order; `frame` the body frame the offsets were read in; `placement`
+ * `declared` (joint + offset) or `rig` (the opening the package op reported); `applied` the override used.
+ */
+export interface ChannelRecord {
+  id: string
+  kind: 'channel'
+  a: string
+  b: string
+  a_pos: Vec3
+  b_pos: Vec3
+  r: number
+  cone_deg: number
+  funnel: number
+  accepts: readonly string[]
+  min_length: number
+  compress_min: number
+  interaction_kinds?: readonly string[]
+  suppress: readonly string[]
+  frame: { side: Vec3; up: Vec3; front: Vec3 }
+  placement: 'rig' | 'declared'
+  applied: ChannelOverride | null
+}
+
 /** The `collision` payload (model meta / model3d info). */
 export interface CollisionPayload {
   version: number
   capsules: CollisionCapsule[]
   skipped?: Array<{ id: string; a?: string; b?: string; reason: string }>
+  /** The declared channels the model carries (version 7); absent or empty = none. */
+  channels?: ChannelRecord[]
+  /** A declared channel the model does not carry, with the reason (covered, a missing joint, no opening). */
+  channels_skipped?: Array<{ id: string; reason: string }>
+  /** The hash of the wanted channels the record was resolved from (the server's currency, never compared here). */
+  channels_sig?: string
   scales?: Record<string, number>
   source?: 'own' | 'base' | 'body'
   base_signature?: string
@@ -75,11 +125,14 @@ export interface CollisionPayload {
  * halves — fitted to the trunk's cross-section: axis through the middle of
  * the front-to-back profile, moved off the joints by `a_pos`/`b_pos`;
  * `PARTNER_ONLY_REGIONS`).
+ * 7: the declared `channels` next to `capsules` (`ChannelRecord`, a package
+ * region of kind `channel` resolved per model; `channels_skipped`,
+ * `channels_sig`) — the capsules themselves are unchanged.
  * THE version: every reader compares against this constant (a record that
  * froze an older list, the strand hair's, binds it under this one — never
  * under its own number, `hairSim.ts`).
  */
-export const COLLISION_VERSION = 6
+export const COLLISION_VERSION = 7
 
 /**
  * Regions whose capsules are for HAIR only (`garmentCollision.ts`

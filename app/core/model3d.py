@@ -484,6 +484,10 @@ def get_model3d_options(character_name: str) -> Dict[str, Any]:
             # Collision-capsule radius scale per region (collision.py), all
             # four regions; an invalid stored map counts as the defaults.
             "collision_scales": _collision_scales_option(raw.get("collision_scales")),
+            # The per-character channel overrides (collision_channels.py), {channel id: override}; stored as
+            # given, applied only by an explicit collision recompute (Save never executes); an invalid stored map
+            # counts as none.
+            "collision_channels": _collision_channels_option(raw.get("collision_channels")),
             # The base mesh repair's settings (``base_mesh_repair.validated_settings``; Ruling A34): the switch
             # and the largest hole it fills; only deviations from the defaults are stored, an invalid stored
             # map counts as the defaults.
@@ -529,6 +533,14 @@ def face_settings_fingerprint(character_name: str) -> str:
                           "controls": {k: float(v) for k, v in controls.items()}},
                          sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _collision_channels_option(raw: Any) -> Dict[str, Any]:
+    from app.core.collision_channels import validate_overrides
+    try:
+        return validate_overrides(raw)
+    except ValueError:
+        return {}
 
 
 def _collision_scales_option(raw: Any) -> Dict[str, float]:
@@ -633,6 +645,15 @@ def set_model3d_options(character_name: str,
                 opts["collision_scales"] = scales
             else:
                 opts.pop("collision_scales", None)
+        if "collision_channels" in updates:
+            # Stored only: the records follow through an explicit recompute (``collision.ensure`` with
+            # ``apply_channels``), never on this save (ruling R4).
+            from app.core.collision_channels import validate_overrides
+            overrides = validate_overrides(updates["collision_channels"])
+            if overrides:
+                opts["collision_channels"] = overrides
+            else:
+                opts.pop("collision_channels", None)
         if "extension_motion" in updates:
             from app.core.extension_rig import validate_motion_overrides
             overrides = updates["extension_motion"]

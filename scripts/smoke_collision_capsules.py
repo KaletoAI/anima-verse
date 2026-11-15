@@ -648,6 +648,8 @@ def main() -> int:
 
     print("[10] the outer rule (collision v6)")
     check("payload version: v6 brought the outer set (later bumps keep it)", collision.VERSION >= 6, True)
+    check("payload version: v7 brought the declared channels (later bumps keep it; smoke_collision_channels.py)",
+          collision.VERSION >= 7, True)
     shifted = collision.fit_capsules(make_body(torso_shift=0.03))
     by_id = {c["id"]: c for c in shifted["capsules"]}
     for cid in OUTER:
