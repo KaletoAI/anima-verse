@@ -25,6 +25,15 @@ the gap. The hand/wrist ratio is recorded too; it separates less (forward
 The mask is resampled so the body is ``WORK_HEIGHT`` px tall first: the
 numbers are fractions of H, the work size only bounds the cost.
 
+FRAMING (Ruling A100): a front whose figure runs out of the image — figure
+pixels on its top or bottom row (``EDGE_CUT_PX`` or more: the head or the
+feet cut off) — never passes, whatever its hands, and ranks behind every
+attempt in frame (score + ``EDGE_CUT_PENALTY``): Ylva's re-render 2026-11-15
+kept the attempt without feet because it had the better hands. Measured on
+the stored mesh-input views of the test world: the views in frame keep a
+margin of 5 .. 135 rows; the cut ones carry 41 .. 406 figure pixels on the
+edge row.
+
 numpy/scipy/PIL only. An image that cannot be measured (no alpha, no
 figure, no arm end) passes with ``score None`` and a ``reason``: a re-render
 would not make it measurable.
@@ -50,6 +59,24 @@ BIN = 0.01
 WRIST_ZONE = (0.04, 0.16)
 #: A mask covering more than this share of the frame is no cut-out.
 MAX_FILL = 0.6
+
+
+#: Figure pixels on the top or bottom image row from which the figure counts as cut off (Ruling A100).
+EDGE_CUT_PX = 8
+#: Added to the score of a cut-off attempt so ``best_attempt`` keeps one in frame.
+EDGE_CUT_PENALTY = 1.0
+
+
+def edge_cut(alpha: np.ndarray) -> Optional[str]:
+    """"top" / "bottom" when the figure (alpha > 127) runs out of the image there, else None."""
+    alpha = np.asarray(alpha)
+    if alpha.ndim != 2 or alpha.shape[0] < 2:
+        return None
+    if int((alpha[-1] > 127).sum()) >= EDGE_CUT_PX:
+        return "bottom"
+    if int((alpha[0] > 127).sum()) >= EDGE_CUT_PX:
+        return "top"
+    return None
 
 
 def _unmeasurable(reason: str) -> Dict[str, Any]:
@@ -142,8 +169,18 @@ def measure_side(profile: np.ndarray) -> Optional[Dict[str, float]]:
 
 
 def hand_pose_gate_mask(alpha: np.ndarray) -> Dict[str, Any]:
-    """The gate on an alpha channel (``(H, W)``, 0..255). See the module
-    docstring; ``left``/``right`` are the image sides."""
+    """The gate on an alpha channel (``(H, W)``, 0..255): the hands, then the framing (module docstring);
+    ``left``/``right`` are the image sides, ``cut`` "top" / "bottom" for a figure out of the image."""
+    result = _hand_gate(alpha)
+    cut = edge_cut(np.asarray(alpha)) if np.asarray(alpha).ndim == 2 else None
+    if cut and float((np.asarray(alpha) > 127).mean()) <= MAX_FILL:
+        score = result.get("score")
+        result = {**result, "ok": False, "cut": cut,
+                  "score": round((score or 0.0) + EDGE_CUT_PENALTY, 4)}
+    return result
+
+
+def _hand_gate(alpha: np.ndarray) -> Dict[str, Any]:
     alpha = np.asarray(alpha)
     if alpha.ndim != 2 or alpha.size == 0:
         return _unmeasurable("no alpha channel")

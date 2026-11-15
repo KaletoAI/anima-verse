@@ -1131,10 +1131,13 @@ def check_renderable(character_name: str, *, view: Optional[str] = None,
 HAND_GATE_ATTEMPTS = 3
 
 
-def hand_gate_warning(attempts: int) -> str:
-    """The status warning of a front kept although no attempt passed."""
-    return (f"Palms may face the camera (hand check failed after {attempts} "
-            f"attempt{'' if attempts == 1 else 's'})")
+def hand_gate_warning(attempts: int, cut: str = "") -> str:
+    """The status warning of a front kept although no attempt passed (``cut``: the kept one runs out of the
+    image there, Ruling A100)."""
+    tries = f"{attempts} attempt{'' if attempts == 1 else 's'}"
+    if cut:
+        return f"The figure runs out of the image at the {cut} (no attempt in frame after {tries}) — regenerate it"
+    return f"Palms may face the camera (hand check failed after {tries})"
 
 
 def _publish_staged(staged: Path, final_stem: Path, record: Dict[str, Any],
@@ -1344,9 +1347,10 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
                         break
                     gate = base_body_gates.hand_pose_gate(path)
                     attempts.append((path, gate))
-                    logger.info("Base body %s (%s): front attempt %d hand gate %s (score %s, limit %s)",
+                    logger.info("Base body %s (%s): front attempt %d hand gate %s (score %s, limit %s%s)",
                                 character_name, bsig, n, "passed" if gate["ok"] else "failed",
-                                gate.get("score"), gate.get("limit"))
+                                gate.get("score"), gate.get("limit"),
+                                f", figure cut at the {gate['cut']}" if gate.get("cut") else "")
                     if gate["ok"]:
                         break
                 chosen, passed = base_body_gates.best_attempt([g for _p, g in attempts])
@@ -1355,7 +1359,8 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
                 stored = _publish_staged(attempts[chosen][0], final, record)
             if stored is None:
                 return None, None
-            return stored, None if passed else hand_gate_warning(len(attempts))
+            return stored, None if passed else hand_gate_warning(len(attempts),
+                                                                 str(attempts[chosen][1].get("cut") or ""))
 
         def render(v: str, reference: Optional[Path]) -> Optional[Path]:
             final = refs_dir / f"{_kind(v)}_{bsig}"
