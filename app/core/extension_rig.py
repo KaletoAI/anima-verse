@@ -173,7 +173,8 @@ def extension_bone_names(character_name, profile=None):
 # attached_part 7: the pods hang from the root instead of 3.5 cm below it (Ruling A65);
 # 8: the fillet and open borders land on the skin with the body's normals (Ruling A65b).
 # 9: open borders tuck under the skin on its weights; beyond the window the part stays closed (Ruling A65c).
-PART_BUILDS = {"attached_part": 9, "inset_part": 3}
+# 10: no seam normal from an opposite skin wall, a wider midline ridge (Ruling A65d).
+PART_BUILDS = {"attached_part": 10, "inset_part": 3}
 # The same for the other operations; pair_tip 1: a geometry apex (no colour
 # marker) is a tip suggestion too, and the tip override moves it.
 OP_BUILDS = {**PART_BUILDS, "pair_tip": 1}

@@ -66,14 +66,16 @@ def skin_y(z, ledge=True):
     return -.065 + .3 * (.997 - 1.0) + .065 * min(1., (.997 - z) / .012)
 
 
-def make_fixture(scripts, out, ledge=True, floor=None):
+def make_fixture(scripts, out, ledge=True, floor=None, wall=None):
     """Write the tilted synthetic body (see the docstring) to ``out``/fixture.glb.
 
     ``floor``: the height of an extra upward-facing skin quad under the pods
-    (x +-.06, y -.10 to -.01, in front of the receded skin). Returns the
+    (x +-.06, y -.10 to -.01, in front of the receded skin). ``wall``: the x
+    of an extra skin quad facing -x (y -.10 to -.01, z .93 to 1.0), a skin
+    wall beside the pods like a thigh. Returns the
     fixture path and the root and skin normal found by the builder's ray,
-    independently of the builder. Runs inside Blender; the seam and closed-shell
-    smokes share it."""
+    independently of the builder. Runs inside Blender; the seam, closed-shell
+    and shading smokes share it."""
     import bpy
     import numpy as np
     from mathutils import Vector
@@ -106,6 +108,10 @@ def make_fixture(scripts, out, ledge=True, floor=None):
     start = len(vertices)
     vertices.extend([(-.18, .065, .72), (.18, .065, .72), (.18, .065, 1.34), (-.18, .065, 1.34)])
     faces.append((start + 3, start + 2, start + 1, start))
+    if wall is not None:
+        start = len(vertices)
+        vertices.extend([(wall, -.10, .93), (wall, -.10, 1.0), (wall, -.01, 1.0), (wall, -.01, .93)])
+        faces.append((start, start + 1, start + 2, start + 3))
     if floor is not None:
         start = len(vertices)
         vertices.extend([(-.06, -.10, floor), (.06, -.10, floor), (.06, -.01, floor), (-.06, -.01, floor)])

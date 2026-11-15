@@ -2049,7 +2049,12 @@ the nearest skin. An edge standing on the skin showed as a dark serrated line
 smoke (`scripts/smoke_attached_part_seam.py`) derives the remaining crease by hand.
 Its normals turn to the body's interpolated corner normals over `seam.normal_band`,
 and by the same share its baked texels take the body's texel at the nearest
-outer-skin point (two extra EMIT bakes: share and position per texel).
+outer-skin point (two extra EMIT bakes: share and position per texel). The share
+is scaled by `s(clamp(2 (n . nb), 0, 1))` (`n` the part's own normal, `nb` the
+body's): only skin the part grows out of lends its normal. In a fold the nearest
+skin is the opposite wall facing the part, and its normal turned the part's
+underside inside out (Ruling A65d). The pods' midline ridge (`pods.folds.raphe`,
+`raphe_width` 0.005, both x pod scale) rises at most 4.9 degrees; at 0.0018 (13.4 degrees) it shaded as a thin line.
 The fillet's weights are the nearest body polygon's corner weights, interpolated by
 inverse distance (the nearest vertex alone stepped along the seam). Every open border
 and its strip take them too (share `max(fillet share, strip)`), `*UpLeg` included: on
@@ -2062,7 +2067,8 @@ material uses the single baked atlas at roughness .55.
 
 Per-group metrics include `status`, `reason`, `size_factor`, `protrusion_mm`,
 `flattened_vertices`, `reweighted_vertices`, `part_tris`, `skin_patch_px`,
-`skin_patch_cm`, `tip_vertices`, `border_vertices`, and `seam_vertices` (moved onto the
+`skin_patch_cm`, `tip_vertices`, `border_vertices`, `seam_opposed_normals` (seam
+vertices whose normal share an opposite skin wall reduced), and `seam_vertices` (moved onto the
 skin by the seam pass), `hole_border_vertices` (border vertices of holes the build
 closed) and `hole_border_vertices_left`. Geometry metrics use the
 final reduced mesh. `protrusion_mm` tells whether the generated body still carries a

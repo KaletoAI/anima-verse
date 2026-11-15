@@ -46,7 +46,9 @@ DEFAULTS = {
         # sunken sack, not a taut one), a crossing set for irregularity and the
         # midline seam. Lengths scale with the pods; free of folds near the root.
         'folds': {'depth': .0007, 'wavelength': .0075, 'width': .3, 'wobble': .003, 'wobble_wavelength': .021,
-                  'raphe': .0005, 'raphe_width': .0018, 'root_clear': .016, 'root_fall': .012, 'shade': .3}},
+                  # The raphe's flanks rise at most .86 raphe/raphe_width (4.9 degrees):
+                  # at 1.8 mm (13 degrees) it shaded as a thin dark line (Ruling A65d).
+                  'raphe': .0005, 'raphe_width': .005, 'root_clear': .016, 'root_fall': .012, 'shade': .3}},
     # The shaft-pods union widens near the root into a web of skin; along the
     # free shaft it stays tight so a lifted shaft does not drag the sack along.
     'pod_web': {'blend': .016, 'until': .4},
@@ -1085,15 +1087,25 @@ def build_part(group, companions, output):
     custom = []
     # The same share later wears the body's own texture (see the bake).
     seam_attribute = pme.attributes.new('seam', 'FLOAT', 'POINT')
+    opposed = 0
     for v in pme.vertices:
         i = v.index
         g = float(np.clip(1 - max(skin_height[i], 0) / seam['normal_band'], 0, 1))
         c = max(g * g * (3 - 2 * g), strip[i]) * seam_share[i]
         own = (normal_matrix @ v.normal).normalized()
+        # Only skin the part grows out of lends its normal. In a fold the
+        # nearest skin is the opposite wall, facing the part: its normal turned
+        # the pouch's underside inside out, a bright or black band from below
+        # (Ruling A65d). Full share from 60 degrees apart, none from 90.
+        a = float(np.clip(own.dot(body_normal[i]) / .5, 0, 1))
+        agree = a * a * (3 - 2 * a)
+        if c > 0 and agree < 1:
+            opposed += 1
+        c *= agree
         custom.append(tuple((inverse_normal_matrix @ own.lerp(body_normal[i], c)).normalized()))
         seam_attribute.data[i].value = c
     pme.normals_split_custom_set_from_vertices(custom)
-    print('seam vertices moved', seam_moved)
+    print('seam vertices moved', seam_moved, 'opposed normals', opposed)
 
     # Extract a clean skin square from the UV island at the root. Only texels
     # near the root's skin tone count: clothing painted onto the body (a top
@@ -1257,7 +1269,7 @@ def build_part(group, companions, output):
         'skin_patch_px': S_, 'skin_patch_cm': S_ * mpp * 100,
         'tip_vertices': tip_count,
         'border_vertices': len(final_border),
-        'seam_vertices': seam_moved,
+        'seam_vertices': seam_moved, 'seam_opposed_normals': opposed,
         'hole_border_vertices': len(hole_points), 'hole_border_vertices_left': holes_left,
         'cracked_seam_groups': int(seam_cracks), 'flatten_outward_m': flatten_outward,
         'inner_wall_faces': bvh.inner_wall_faces, 'stray_faces': stray_faces,
