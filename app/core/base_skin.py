@@ -56,6 +56,19 @@ the stored neutral without re-rendering the front.
 The world switch ``base_body.skin_detail_step`` (default on) turns it off;
 it is part of ``base_body.prompt_fingerprint`` (``fingerprint_part``) only
 while on, so a base built without it shows ``OLDER_PROMPTS`` once it is on.
+
+NOT FOR A FRONT MADE FROM THE FULL-BODY REFERENCE (Ruling A92). The step was
+made for fronts rendered from text, which looked plastic; a front that is an
+edit of the full-body reference (Ruling A87, ``front_reference.source ==
+"full_body"``) already has real skin. ``applies`` — the switch on AND the
+front not made from the full-body reference — decides at every place the
+step runs or is offered: the render (``after_front_render`` records ``OFF``
+with ``NOT_USED_FULL_BODY``), the plans and job counts
+(``base_body.base_rebuild_steps``, ``figure_build._plain_jobs``), the "Run
+skin step" route (409) and ``info`` (``enabled`` drives the button). Such a
+front's fingerprint has no skin part; a profile-image or text front keeps
+its fingerprint byte for byte, and the world switch is untouched — switching
+it would age every front made with the step.
 """
 from __future__ import annotations
 
@@ -115,6 +128,11 @@ MIN_DIRECT_IOU = 0.9
 
 #: ``skin_step.outcome`` values.
 APPLIED, OFF, BUSY, FAILED, REFUSED = "applied", "off", "busy", "failed", "refused"
+#: Why the step does not run on a front made from the full-body reference
+#: (Ruling A92): the front record's ``reason``, ``info``'s ``note`` and the
+#: "Run skin step" route's 409.
+NOT_USED_FULL_BODY = ("The skin detail step is not used for a front made from a full-body reference — that "
+                      "picture already has real skin")
 
 
 # --- Setting, prompt, fingerprint ------------------------------------------------
@@ -124,6 +142,37 @@ def enabled() -> bool:
     from app.core import config
     from app.core.config_schema import field_default
     return config.get("base_body.skin_detail_step", field_default("base_body", "skin_detail_step")) is True
+
+
+def front_source(character_name: str, bsig: Optional[str] = None, *,
+                 profile: Optional[Dict[str, Any]] = None) -> str:
+    """The source of the front the step belongs to: the stored front of
+    ``bsig`` (the current base when None) — its ``front_reference.source`` —
+    else, without a stored front, what the front is made from NOW
+    (``base_body.front_source_image``). ``"full_body"`` or ``""``."""
+    from app.core import base_body
+    profile = base_body._profile_of(character_name, profile)
+    bsig = bsig or base_body.base_signature(character_name, profile=profile)
+    stored = base_body.stored_front_reference(character_name, bsig)
+    if stored is not None:
+        return str(stored.get("source") or "")
+    return base_body.front_source_image(character_name, profile=profile)[1]
+
+
+def applies(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
+            source: Optional[str] = None) -> bool:
+    """Whether the step runs on (or is offered for) a front: the world switch
+    on (``enabled``) AND the front not made from the full-body reference
+    (Ruling A92). ``source`` None = what a front is made from NOW
+    (``base_body.front_source_image`` — the front a render or a plan makes);
+    pass ``front_source`` for the stored one."""
+    if not enabled():
+        return False
+    if source is None:
+        from app.core import base_body
+        source = base_body.front_source_image(character_name, profile=profile)[1]
+    from app.core.base_body import SOURCE_FULL_BODY
+    return source != SOURCE_FULL_BODY
 
 
 def _male(profile: Dict[str, Any]) -> bool:
@@ -142,11 +191,15 @@ def transfer_params() -> Dict[str, Any]:
             "face_width": FACE_WIDTH, "face_drop": FACE_DROP, "min_direct_iou": MIN_DIRECT_IOU}
 
 
-def fingerprint_part(profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def fingerprint_part(profile: Dict[str, Any], *, source: str = "") -> Optional[Dict[str, Any]]:
     """What the step adds to ``base_body.prompt_fingerprint`` — None while
     the switch is off (the fingerprint is then the one of a base without the
-    step, so switching it off again makes such a base current)."""
-    if not enabled():
+    step, so switching it off again makes such a base current) and for a
+    front made from the full-body reference (``source`` ``"full_body"``,
+    Ruling A92: the step does not run there). For any other ``source`` the
+    part is what it was before the ruling."""
+    from app.core.base_body import SOURCE_FULL_BODY
+    if not enabled() or source == SOURCE_FULL_BODY:
         return None
     return {"version": SKIN_STEP_VERSION, "occasion": SKIN_OCCASION, "prompt": skin_prompt(profile),
             "transfer": transfer_params()}
@@ -462,18 +515,26 @@ def run_step(character_name: str, front: Path, neutral: Path, *,
                 "error": str(e) or type(e).__name__, "at": utc_now_iso()}
 
 
-def after_front_render(character_name: str, front: Path, *, bsig: str, profile: Dict[str, Any]) -> Path:
+def after_front_render(character_name: str, front: Path, *, bsig: str, profile: Dict[str, Any],
+                       source: str = "") -> Path:
     """Right after a new base front landed on ``front`` (the hand-gated
-    render): keep it as the neutral front, then — with the switch on — run
-    the step (``run_step``) and record it in the front's sidecar. Returns
-    ``front``; never raises."""
+    render; ``source`` its ``front_reference.source``): keep it as the
+    neutral front, then — while the step ``applies`` (switch on, not made
+    from the full-body reference) — run the step (``run_step``) and record it
+    in the front's sidecar; else record ``OFF`` (with ``NOT_USED_FULL_BODY``
+    as ``reason`` for a full-body front). Returns ``front``; never raises."""
     import shutil
     try:
         stem = neutral_stem(front.parent, bsig)
         for old in front.parent.glob(f"{stem.name}.*"):
             old.unlink(missing_ok=True)
-        if not enabled():
-            _set_front_record(front, {"applied": False, "outcome": OFF})
+        if not applies(character_name, profile=profile, source=source):
+            record: Dict[str, Any] = {"applied": False, "outcome": OFF}
+            if enabled():
+                record["reason"] = NOT_USED_FULL_BODY
+                logger.info("Skin step %s (%s): not used — the front is made from the full-body reference",
+                            character_name, bsig)
+            _set_front_record(front, record)
             return front
         neutral = stem.with_suffix(".png")
         shutil.copyfile(front, neutral)
@@ -488,12 +549,27 @@ def after_front_render(character_name: str, front: Path, *, bsig: str, profile: 
     return front
 
 
+class NotUsed(ValueError):
+    """The step does not run on this front (Ruling A92: made from the
+    full-body reference)."""
+
+
+def refused(character_name: str, bsig: Optional[str] = None, *,
+            profile: Optional[Dict[str, Any]] = None) -> str:
+    """Why "Run skin step" is refused for the stored front of ``bsig`` (the
+    current base when None): ``NOT_USED_FULL_BODY`` when that front is made
+    from the full-body reference, else "" (Ruling A92)."""
+    from app.core.base_body import SOURCE_FULL_BODY
+    return NOT_USED_FULL_BODY if front_source(character_name, bsig, profile=profile) == SOURCE_FULL_BODY else ""
+
+
 def apply_skin_step(character_name: str) -> Dict[str, Any]:
     """Re-run the step on the stored neutral front of the CURRENT base,
     without re-rendering it (the Figure tab's "Run skin step"); a
     front without a stored neutral (rendered with the switch off) is taken
     as the neutral first. Blocking — call from a worker thread. Returns the
-    ``skin_step`` record; ``MissingInput`` without a front. The front keeps
+    ``skin_step`` record; ``MissingInput`` without a front, ``NotUsed`` for a
+    front made from the full-body reference (Ruling A92). The front keeps
     its ``created_at`` and ``prompt_fingerprint`` (the views stay current; the
     base model turns stale by the front's bytes)."""
     import shutil
@@ -505,6 +581,8 @@ def apply_skin_step(character_name: str) -> Dict[str, Any]:
         front = find_ref_image(character_name, "tpose", bsig)
         if front is None:
             raise base_body.MissingInput("No base front. Render the base body first")
+        if refused(character_name, bsig, profile=profile):
+            raise NotUsed(NOT_USED_FULL_BODY)
         neutral = neutral_path(character_name, bsig)
         if neutral is None:
             if step_record(character_name, bsig).get("applied"):
@@ -548,12 +626,20 @@ def start_skin_step(character_name: str) -> None:
 
 
 def info(character_name: str, bsig: str) -> Dict[str, Any]:
-    """``{enabled, neutral_url, neutral_meta, step}`` for the plain body's
-    front tile: the stored neutral front (URL with its mtime) and the front's
-    ``skin_step`` record (outcome, error)."""
+    """``{enabled, world_enabled, note, neutral_url, neutral_meta, step}``
+    for the plain body's front tile: ``enabled`` whether the step applies to
+    the stored front (``applies`` with ``front_source`` — it drives the "Run
+    skin step" button; false for a front made from the full-body reference,
+    Ruling A92), ``world_enabled`` the world switch, ``note``
+    ``NOT_USED_FULL_BODY`` or "", the stored neutral front (URL with its
+    mtime) and the front's ``skin_step`` record (outcome, error, reason)."""
     from urllib.parse import quote
     from app.core.model_refs import image_tile_meta
-    out: Dict[str, Any] = {"enabled": enabled(), "neutral_url": None, "neutral_meta": None, "step": None}
+    world = enabled()
+    used = applies(character_name, source=front_source(character_name, bsig or None)) if world else False
+    out: Dict[str, Any] = {"enabled": used, "world_enabled": world,
+                           "note": NOT_USED_FULL_BODY if world and not used else "",
+                           "neutral_url": None, "neutral_meta": None, "step": None}
     if not bsig:
         return out
     neutral = neutral_path(character_name, bsig)
@@ -567,5 +653,5 @@ def info(character_name: str, bsig: str) -> Dict[str, Any]:
             pass
     record = step_record(character_name, bsig)
     if record:
-        out["step"] = {k: record.get(k) for k in ("applied", "outcome", "error", "at")}
+        out["step"] = {k: record.get(k) for k in ("applied", "outcome", "error", "reason", "at")}
     return out

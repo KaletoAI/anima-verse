@@ -189,7 +189,8 @@ SECTIONS = {
                                "and side views are edits of this front and inherit the skin. Costs one extra "
                                "image job per base front; when the edit is busy or fails, the neutral front is "
                                "used. Changing this marks existing base bodies \"Built with older prompts\"; "
-                               "nothing is rebuilt automatically.",
+                               "nothing is rebuilt automatically. Not used for fronts made from a full-body "
+                               "reference.",
             },
         },
     },

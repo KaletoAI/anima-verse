@@ -381,7 +381,8 @@ def base_identity(character_name: str, *, profile: Optional[Dict[str, Any]] = No
     return "base" + digest[:8]
 
 
-def prompt_fingerprint(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
+def prompt_fingerprint(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
+                       source: Optional[str] = None) -> str:
     """12 hex over the four views' character blocks, prompts and negatives —
     the texts a base render is made with — and, while the world switch
     ``base_body.skin_detail_step`` is on, the front's skin detail step
@@ -389,12 +390,21 @@ def prompt_fingerprint(character_name: str, *, profile: Optional[Dict[str, Any]]
     left out while off, so a base without the step stays current then).
     Stored in every base view's sidecar; a stored base whose fingerprint
     differs from the current one is current but carries the
-    ``OLDER_PROMPTS`` note."""
+    ``OLDER_PROMPTS`` note.
+
+    Ruling A92: the skin part is also left out for a front made from the
+    full-body reference (``source`` ``SOURCE_FULL_BODY`` — the step does not
+    run there). ``source`` None = the source of the stored front of the
+    current base (the front a comparison judges), else what the front is made
+    from now; a front made from the profile image or from text keeps the
+    fingerprint it had before the ruling, byte for byte."""
     profile = _profile_of(character_name, profile)
     payload: Dict[str, Any] = {view: [base_character(character_name, view, profile=profile),
                                       *base_prompt(character_name, view, profile=profile)] for view in BASE_VIEWS}
     from app.core import base_skin
-    skin = base_skin.fingerprint_part(profile)
+    if source is None and base_skin.enabled():
+        source = base_skin.front_source(character_name, profile=profile)
+    skin = base_skin.fingerprint_part(profile, source=source or "")
     if skin is not None:
         payload["skin_step"] = skin
     return hashlib.md5(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
@@ -451,7 +461,8 @@ def _view_carried(character_name: str, view: str, meta: Dict[str, Any], profile:
     if not _drops_only(base_character(character_name, view, profile=profile), meta.get("final_prompt")):
         return False
     from app.core import base_skin
-    skin = base_skin.fingerprint_part(profile)
+    made_from = meta.get("front_reference") if isinstance(meta.get("front_reference"), dict) else {}
+    skin = base_skin.fingerprint_part(profile, source=str(made_from.get("source") or ""))
     record = meta.get("skin_step") if isinstance(meta.get("skin_step"), dict) else {}
     if skin is None:
         return not record.get("version")
@@ -466,7 +477,11 @@ def recorded_fingerprint(character_name: str, signature: str, view: str, meta: D
     texts, with the front's recorded fingerprint (one render's global inputs,
     the skin step among them) and a front that is carried itself."""
     recorded = str(meta.get("prompt_fingerprint") or "")
-    if not recorded or recorded == current or meta.get("prompt_rules"):
+    if not recorded or recorded == current:
+        return recorded
+    if _full_body_skin_carried(character_name, signature, recorded, profile):
+        return current
+    if meta.get("prompt_rules"):
         return recorded
     profile = _profile_of(character_name, profile)
     if view != "front":
@@ -476,6 +491,24 @@ def recorded_fingerprint(character_name: str, signature: str, view: str, meta: D
         if not _view_carried(character_name, "front", front, profile):
             return recorded
     return current if _view_carried(character_name, view, meta, profile) else recorded
+
+
+def _full_body_skin_carried(character_name: str, signature: str, recorded: str,
+                            profile: Optional[Dict[str, Any]]) -> bool:
+    """Ruling A92: whether a view of the stored base ``signature`` whose front
+    was made from the full-body reference — and rendered WITH the skin detail
+    step, before the ruling — counts as current: its recorded fingerprint is
+    today's with the skin part in it (``source`` "", the switch on). The step
+    only added fine skin detail the full-body picture already has; the front
+    is not older for it, and nothing re-renders it (the ``base_refresh``
+    improvement would, at idle time)."""
+    from app.core import base_skin
+    if not base_skin.enabled():
+        return False
+    stored = stored_front_reference(character_name, signature) or {}
+    if stored.get("source") != SOURCE_FULL_BODY:
+        return False
+    return recorded == prompt_fingerprint(character_name, profile=profile, source="")
 
 
 def _carried_front(meta: Dict[str, Any], appearance: str, profile_image: str) -> bool:
@@ -566,7 +599,8 @@ def prompts_current(character_name: str, signature: str, *, profile: Optional[Di
     meta = _front_sidecar(character_name, signature)
     if not meta:
         return False
-    current = prompt_fingerprint(character_name, profile=profile)
+    made_from = meta.get("front_reference") if isinstance(meta.get("front_reference"), dict) else {}
+    current = prompt_fingerprint(character_name, profile=profile, source=str(made_from.get("source") or ""))
     return recorded_fingerprint(character_name, signature, "front", meta, current=current,
                                 profile=profile) == current
 
@@ -1054,12 +1088,15 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
         profile = check_renderable(character_name, view=view)
         bsig = base_signature(character_name, profile=profile)
         identity = base_identity(character_name, profile=profile)
-        fingerprint = prompt_fingerprint(character_name, profile=profile)
         front_ref = front_reference(character_name, profile=profile)
         refs_dir = get_model_refs_dir(character_name)
         wanted = BASE_VIEWS if view is None else (view,)
         todo = [v for v in wanted
                 if force or find_ref_image(character_name, _kind(v), bsig) is None]
+        # Ruling A92: a new front is made from ``front_ref`` (its skin step follows that source); views
+        # rendered on the stored front record the fingerprint of that front's source.
+        fingerprint = prompt_fingerprint(character_name, profile=profile,
+                                         source=str(front_ref.get("source") or "") if "front" in todo else None)
         if not todo:
             logger.info("Base body %s (%s): already rendered", character_name, bsig)
             return {}
@@ -1170,7 +1207,8 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
                     path, warning = draw_front(final)
                     if path is not None:
                         from app.core import base_skin
-                        path = base_skin.after_front_render(character_name, path, bsig=bsig, profile=profile)
+                        path = base_skin.after_front_render(character_name, path, bsig=bsig, profile=profile,
+                                                            source=str(front_ref.get("source") or ""))
                 else:
                     path = draw(v, final, reference)
                 error = None if path else "render failed"
@@ -5711,8 +5749,9 @@ def base_refresh_plan(character_name: str, *, profile: Optional[Dict[str, Any]] 
 def base_rebuild_steps(character_name: str, plan: Dict[str, Any]) -> List[Tuple[str, int]]:
     """``(step, hub jobs on the first attempt)`` of what ``plan``
     (``base_refresh_plan``) runs, in run order: ``view <name>`` per view to
-    render — with the front, while the world switch is on, its ``skin
-    front`` step right after it (``base_skin``: one edit) — then, with the
+    render — with the front, while the world switch is on and the front is
+    not made from the full-body reference (``base_skin.applies``, Ruling
+    A92), its ``skin front`` step right after it (one edit) — then, with the
     model, the hub stages of a fresh base mesh run
     (``model3d.mesh_hub_stages``: mesh, [upscale, face], rig; normalize and
     the other Blender steps are CPU work)."""
@@ -5720,7 +5759,7 @@ def base_rebuild_steps(character_name: str, plan: Dict[str, Any]) -> List[Tuple[
     steps: List[Tuple[str, int]] = []
     for v in plan.get("views") or ():
         steps.append((f"view {v}", BASE_VIEW_JOBS))
-        if v == "front" and base_skin.enabled():
+        if v == "front" and base_skin.applies(character_name):
             steps.append(("skin front", SKIN_STEP_JOBS))
     if plan.get("model"):
         steps += [(stage, 1) for stage in model3d.mesh_hub_stages(character_name, plan["signature"])]

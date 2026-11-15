@@ -1910,8 +1910,9 @@ def rerun_character_base_body_skin_step(character_name: str,
     """Re-run the skin detail step of the base front from its stored neutral
     front, without re-rendering it (``base_skin.apply_skin_step``, a worker
     thread; one image edit). 400 for a non-humanoid, 409 without a front,
-    while a base view renders, or while a Build of the character runs
-    (Ruling A20)."""
+    while a base view renders, while a Build of the character runs
+    (Ruling A20), or for a front made from the full-body reference
+    (Ruling A92, ``base_skin.NOT_USED_FULL_BODY``)."""
     from app.core import base_body, base_skin
     _require_character(character_name)
     _refuse_during_build(character_name)
@@ -1923,6 +1924,9 @@ def rerun_character_base_body_skin_step(character_name: str,
         raise HTTPException(status_code=400, detail=str(e))
     if any(s.get("running") for s in base_body.base_status(character_name).values()):
         raise HTTPException(status_code=409, detail="A base view renders right now")
+    reason = base_skin.refused(character_name)
+    if reason:
+        raise HTTPException(status_code=409, detail=reason)
     base_skin.start_skin_step(character_name)
     return {"started": True}
 

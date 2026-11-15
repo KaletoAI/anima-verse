@@ -2281,7 +2281,11 @@ def _with_jobs(changes: List[Dict[str, Any]], steps: List[Step]) -> List[Dict[st
 def _plain_jobs(character_name: str, bsig: str) -> Dict[str, Any]:
     """What the single actions on the plain body cost (the Figure tab's Body
     details write it under each button): ``view`` (a side or back view),
-    ``front`` (with the skin detail step while it is on), ``model`` (its mesh
+    ``front`` (the front's Regenerate: with the skin detail step while it
+    applies to the front made now — ``base_skin.applies``, never for one made
+    from the full-body reference, Ruling A92), ``front_full_body`` (the same
+    for a front made from the full-body reference — what a new full-body
+    reference makes due), ``model`` (its mesh
     run, ``model3d.mesh_hub_stages``), ``after_front`` (what the next
     Build then rebuilds after a new front: the three other views, which edit
     the front, and the model) and ``model_followup`` (Ruling UI3c: what a
@@ -2296,7 +2300,11 @@ def _plain_jobs(character_name: str, bsig: str) -> Dict[str, Any]:
         model_steps = base_body.base_rebuild_steps(character_name, {"signature": bsig, "views": [], "model": True})
         stored = model3d.find_model3d(character_name, bsig) is not None
         return {"view": base_body.BASE_VIEW_JOBS,
-                "front": base_body.BASE_VIEW_JOBS + (base_body.SKIN_STEP_JOBS if base_skin.enabled() else 0),
+                "front": base_body.BASE_VIEW_JOBS + (base_body.SKIN_STEP_JOBS
+                                                     if base_skin.applies(character_name) else 0),
+                "front_full_body": base_body.BASE_VIEW_JOBS + (
+                    base_body.SKIN_STEP_JOBS if base_skin.applies(character_name, source=base_body.SOURCE_FULL_BODY)
+                    else 0),
                 "model": len(model3d.mesh_hub_stages(character_name, bsig)),
                 "after_front": sum(jobs for _step, jobs in base_body.base_rebuild_steps(
                     character_name, {"signature": bsig, "views": others, "model": True})),
@@ -2304,7 +2312,8 @@ def _plain_jobs(character_name: str, bsig: str) -> Dict[str, Any]:
                                     "stages": [step for step, _jobs in model_steps]} if stored else None)}
     except Exception:  # noqa: BLE001 — an estimate, never a failure
         logger.debug("Plain body job counts of %s not computable", character_name, exc_info=True)
-        return {"view": None, "front": None, "model": None, "after_front": None, "model_followup": None}
+        return {"view": None, "front": None, "front_full_body": None, "model": None, "after_front": None,
+                "model_followup": None}
 
 
 # --- The Base body tab's "Run all" (Task UI1, rule R1) ----------------------------------------------------------
