@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ruling A60 — the cut-out opens where the worn view shows the body through an enclosed opening of the piece
+"""Ruling A60 (+ A81) — the cut-out opens where the worn view shows the body through an enclosed opening of the piece
 (app/core/garment_openings.py; garment_images.cut_out, garments.cutout_openings_info / run_estimate, the setting
 "Openings from the worn view" on the item).
 
@@ -44,7 +44,9 @@ THE SCENE (a blazer with a V-neck, as Kira's ``item_5bfe0cbc``, in rectangles):
     shift [0, 0]. Collar line (``neck_base_row``): height 1400, search rows 100 + 84 = 184 .. 100 + 308 = 408; the
     narrowest row there is 184 (40 wide, the neck), the first row from it at least 1.5 x 40 = 60 wide is 260. The
     shown body inside G: the opening O (500 x 40 = 20 000) and the hem gap (20 x 40 = 800); opened by
-    ``garment_fit.OPEN_ERODE_PX`` 3 (a diamond: 6 pixels off each of the 4 corners) -> 19 976 and 776 px. The
+    ``garment_fit.OPEN_ERODE_PX`` 3 (a diamond: 6 pixels off each of the 4 corners) -> 19 976 and 776 px. Both differ
+    between the worn view and the piece-only view in every pixel (Ruling A81, ``differs``: skin R >= 170 against the
+    lining's 20 and the blue's 40, more than ``garment_fit.OPEN_DIFF`` 80) -> differs 1.0. The
     opening's ring (6) lies inside G (rows 170..199 above it are the collar) -> outline 0.0, an opening; the hem
     gap's ring reaches rows 900..905 below the piece (6 rows of a ring about 800 px: more than OPEN_SHOWN_OUTLINE_MAX
     0.25) -> no opening, it stays closed. The seed is cut at the collar line (rows 260..699), snapped as in [1]:
@@ -77,10 +79,29 @@ THE SCENE (a blazer with a V-neck, as Kira's ``item_5bfe0cbc``, in rectangles):
     before [fit] 0 jobs, after Off [cutout, mesh, fit] 1 job (the mesh; the cut-out reuses its colours). ``cut_out``
     again (not forced): due -> made again with 0 upscale calls, colours "reused", the opening found but not applied,
     alpha 255 at the V; nothing due. Auto again -> due, made again, alpha 0 at the V, 0 upscale calls. A record
-    without ``opening`` (made before A60) is not due under either choice; one of another rule version is.
+    without ``opening`` (made before A60) is not due under either choice; one of another rule version is — a record
+    of rule version 1 (before Ruling A81) reads due under either choice, so the chain makes it again.
 [7] Fails on the old code (e36fbe9066922ddd62312b73bc4791d93db0debb): ``app/core/garment_openings.py`` does not
     exist there, its ``piece_mask`` has no ``framing_vouched`` (the 77c4 blazer group, cost 12.69, gave no evidence),
     its ``cut_out`` writes no ``opening`` and its item model keeps no ``cutout_openings``.
+[8] Ruling A81 — a light, warm piece whose fold matches the skin is no opening. The scene of [3] with the piece
+    CREAM (225, 215, 200) and a FOLD F = rows 400..499 x 700..799 inside the torso part where the worn view shows
+    the base's own skin pixels (the strongest false evidence: the A46 mask matches it exactly), and the piece-only
+    view = the worn view inside G, the fold included (Ylva's linen blouse: the same fabric in both views). Framing:
+    the worn view differs from the base only in G minus F (199 200 - 10 000 = 189 200 px, fewer than the 10 % the
+    trimmed cost leaves out) -> cost 0.0. The A46 mask: every cream pixel differs from every reference pixel in its
+    5 px disc by more than GARMENT_DRGB 20 (mean |Δ| to the skin >= (36 + 81 + 110) / 3 = 75.7, to the grey
+    (97 + 87 + 72) / 3 = 85.3), F not at all (worn = base); the piece's colour is the cream, no cream pixel is
+    nearer the skin than the cream, so no skin is taken out; the closing (2) takes 3 px off each of F's 4 corners
+    (9 988 px; a hole of more than 0.001 x 380 400 = 380 px stays). The shown body in G: that hole, opened by 3 ->
+    the rectangle's own opening, 10 000 - 4 x 6 = 9 976 px (opening is increasing and idempotent), bbox
+    [700, 400, 799, 499]; its ring lies inside G -> outline 0.0 (enclosed, as A51 wants an opening). But the worn
+    view and the piece-only view are equal in every pixel of it -> differs 0.0 < ``DIFFERS_MIN_SHARE`` 0.5 -> no
+    opening: found False, reason "no opening: inside the piece the piece-only view shows what the worn view shows
+    (at most 0.0 of it differs)". The V of [3] still opens (differs 1.0) — the hand-derived V is [3] itself.
+[9] Fails on the old code (ea25128b1f55d95a14875eb631cb244e70155d44, before Ruling A81): its ``seed`` takes no
+    ``differ`` and its ``opening`` no piece-only colours, its ``VERSION`` is 1, and on the fold scene of [8] its
+    rule finds an opening: the same 9 976 px component, outline 0.0, opening True — the fold is cut.
 """
 import inspect
 import io
@@ -98,6 +119,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 OLD = "e36fbe9066922ddd62312b73bc4791d93db0debb"
+OLD_A81 = "ea25128b1f55d95a14875eb631cb244e70155d44"
+CREAM = (225, 215, 200)
 FAILS = []
 N = 1536
 GREY = 128
@@ -198,12 +221,12 @@ def part_opening():
     check("collar line", go.neck_base_row(fig), 260)
     record = {"bbox": [0, 0, N, N], "side": N, "size": [N, N]}
     check("crop", go.crop_of(record), ((0, 0, N, N), N, N))
-    cover, n = go.opening(worn, base, fig, g, ghost, g.astype(np.float32) * 255, record)
+    cover, n = go.opening(worn, base, fig, ghost, g, ghost, g.astype(np.float32) * 255, record)
     check("framing", (n["framing"]["shift"], n["framing"]["cost"], n["framing"]["ok"]), ([0, 0], 0.0, True))
     comps = n["components"]
     check("components: the opening, the hem gap",
-          [(c["pixels"], c["bbox"], c["opening"]) for c in comps],
-          [(19976, [748, 200, 787, 699], True), (776, [650, 880, 689, 899], False)])
+          [(c["pixels"], c["bbox"], c["differs"], c["opening"]) for c in comps],
+          [(19976, [748, 200, 787, 699], 1.0, True), (776, [650, 880, 689, 899], 1.0, False)])
     check("outlines", (comps[0]["outline"], comps[1]["outline"] > gf.OPEN_SHOWN_OUTLINE_MAX), (0.0, True))
     hole = cover > 0.5
     lining = rect(260, 699, 745, 790)
@@ -251,6 +274,50 @@ def part_vouch():
     check("drift 1.2 / xor beyond / refused / not accepted: no",
           [go.vouched_by_worn_gate(r) for r in (rec(outside_drift_px=1.2), rec(outside_xor=0.03), rec(ok=False),
                                                 rec(accepted=False))], [None, None, None, None])
+
+
+def fold_scene():
+    """(base rgb, figure, worn rgb, piece-only rgb, garment) of [8]: a cream piece with a skin-coloured fold."""
+    base, fig, _worn, _ghost, g = scene()
+    fold = rect(400, 499, 700, 799)
+    worn = base.copy()
+    worn[g & ~fold] = CREAM
+    ghost = np.full((N, N, 3), GREY, np.uint8)
+    ghost[g] = worn[g]
+    return base, fig, worn, ghost, g
+
+
+def part_fold():
+    from app.core import garment_openings as go
+    print("[8] a light, warm piece whose fold matches the skin (Ruling A81)")
+    base, fig, worn, ghost, g = fold_scene()
+    record = {"bbox": [0, 0, N, N], "side": N, "size": [N, N]}
+    cover, n = go.opening(worn, base, fig, ghost, g, ghost, g.astype(np.float32) * 255, record)
+    check("framing", (n["framing"]["shift"], n["framing"]["cost"]), ([0, 0], 0.0))
+    check("the fold: enclosed, but nothing differs",
+          [(c["pixels"], c["bbox"], c["outline"], c["differs"], c["opening"]) for c in n["components"]],
+          [(9976, [700, 400, 799, 499], 0.0, 0.0, False)])
+    check("no opening", (cover is None, n["found"], n["reason"]),
+          (True, False, "no opening: inside the piece the piece-only view shows what the worn view shows "
+                         "(at most 0.0 of it differs)"))
+    check("the rule version", go.VERSION, 2)
+
+
+def part_old_a81():
+    import types
+    print("[9] fails on the old code (" + OLD_A81[:9] + ", before Ruling A81)")
+    src = subprocess.run(["git", "-C", str(ROOT), "show", f"{OLD_A81}:app/core/garment_openings.py"],
+                         capture_output=True, text=True, check=True).stdout
+    old = types.ModuleType("old_garment_openings")
+    exec(compile(src, "old_garment_openings.py", "exec"), old.__dict__)
+    check("old seed: no differ, old VERSION",
+          ("differ" in inspect.signature(old.seed).parameters, old.VERSION), (False, 1))
+    base, fig, worn, ghost, g = fold_scene()
+    record = {"bbox": [0, 0, N, N], "side": N, "size": [N, N]}
+    _cover, n = old.opening(worn, base, fig, g, ghost, g.astype(np.float32) * 255, record)
+    check("old rule: the fold is cut",
+          (n["found"], [(c["pixels"], c["outline"], c["opening"]) for c in n["components"]]),
+          (True, [(9976, 0.0, True)]))
 
 
 def png_bytes(arr) -> bytes:
@@ -356,7 +423,7 @@ def part_chain():
           ([618, 170, 918, 900], 839, [1678, 1678]))
     fo, bo = rec["front"]["opening"], rec["back"]["opening"]
     check("front: found, applied (Auto)", (fo["version"], fo["choice"], fo["found"], fo["applied"]),
-          (1, "auto", True, True))
+          (2, "auto", True, True))
     check("back: none", (bo["found"], bo["applied"], bo["reason"]),
           (False, False, "the worn view shows no body inside the piece"))
 
@@ -413,6 +480,9 @@ def part_chain():
            go.due(made, "auto"), go.due(made, "off"),
            go.due({"opening": {"version": go.VERSION, "found": False, "applied": False}}, "auto")],
           [False, False, True, False, True, False])
+    v1 = {"opening": {"version": 1, "found": False, "applied": False}}
+    check("a record of rule version 1 (before A81): due under either choice", (go.due(v1, "auto"), go.due(v1, "off")),
+          (True, True))
 
 
 def part_old_code():
@@ -442,6 +512,8 @@ def main() -> int:
         part_vouch()
         part_chain()
         part_old_code()
+        part_fold()
+        part_old_a81()
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     print("\nFAILED: " + ", ".join(FAILS) if FAILS else "\nall passed")

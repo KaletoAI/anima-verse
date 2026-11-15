@@ -22,7 +22,14 @@ ghost frame cropped and scaled by ``final / side`` of the cut-out record):
 2. SEED (ghost frame): the components of evidence ∩ garment (the cut-out's alpha), opened by
    ``garment_fit.OPEN_ERODE_PX``, of at least ``garment_fit.OPEN_MIN_SHARE`` of the garment, whose ring of
    ``garment_fit.OPEN_RING_PX`` lies at most ``garment_fit.OPEN_SHOWN_OUTLINE_MAX`` outside the garment (A51's
-   ring rule: the garment encloses the opening — a gap at the hem or a notch at the edge stays closed).
+   ring rule: the garment encloses the opening — a gap at the hem or a notch at the edge stays closed) AND of which
+   at least ``DIFFERS_MIN_SHARE`` differs between the worn view and the piece-only view by more than
+   ``garment_fit.OPEN_DIFF`` in some channel (the A51 fit's own opening test, ``garment_source.opening_masks``):
+   through a real opening the worn view shows the body and the piece-only view its inside (Ruling A81). The
+   evidence alone is no proof: the A46 piece mask is lenient on purpose (a 5 px match disc, skin-hued areas taken
+   out), so the shaded folds of a light, warm piece match a skin pixel nearby and leave gaps in it — Ylva's linen
+   blouse got 7 holes cut in plain fabric (worn vs piece-only 4–28 per channel mean there; of an enclosed component
+   at most 0.161 past ``OPEN_DIFF`` on the front, 0.001 on the back; Kira's blazer V: 155 / 163, 0.994 / 0.987).
 3. COLLAR: nothing above the NECK BASE opens — the first row below the neck's narrowest row (searched in
    ``NECK_SEARCH`` of the figure's height) where the base figure is ``NECK_BASE_RATIO`` times as wide. The back of
    the collar the piece-only view shows behind the neck stays a closed band (the worn view shows the neck there,
@@ -57,13 +64,18 @@ from app.core.log import get_logger
 
 logger = get_logger("garment_openings")
 
-#: Version of the opening rule; a cut-out made under another reads due (``due``).
-VERSION = 1
+#: Version of the opening rule; a cut-out made under another reads due (``due``). 2 (Ruling A81): a component opens
+#: only where the piece-only view differs from the worn view (module docstring 2).
+VERSION = 2
 #: Key of the setting in the item's ``outfit_piece``: ``{view: "off"}``.
 SETTING_KEY = "cutout_openings"
 AUTO, OFF = "auto", "off"
 CHOICES = (AUTO, OFF)
 
+#: Share of a seed component that must differ between the worn view and the piece-only view by more than
+#: ``garment_fit.OPEN_DIFF`` (module docstring 2): the blazer's V 0.994 / 0.987, the false holes in Ylva's blouse at
+#: most 0.161.
+DIFFERS_MIN_SHARE = 0.5
 #: The worn gate's outline drift (px @1536) up to which it vouches for the framing (module docstring 1).
 VOUCH_DRIFT_PX = 1.0
 #: Share of the figure's height searched for the neck's narrowest row, from the figure's top.
@@ -227,13 +239,24 @@ def neck_base_row(figure) -> Optional[int]:
     return int(neck + wider[0]) if len(wider) else None
 
 
-def seed(shown, garment, *, collar_row: Optional[int]) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+def differs(worn_rgb, ghost_rgb) -> np.ndarray:
+    """Where the worn view and the piece-only view (one frame) differ by more than ``garment_fit.OPEN_DIFF`` in some
+    channel — the A51 fit's opening test (``garment_source.opening_masks``)."""
+    from app.core import garment_fit as gf
+    worn = np.asarray(worn_rgb)[..., :3].astype(np.int16)
+    ghost = np.asarray(ghost_rgb)[..., :3].astype(np.int16)
+    return np.abs(worn - ghost).max(2) > gf.OPEN_DIFF
+
+
+def seed(shown, garment, differ, *, collar_row: Optional[int]) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
     """``(seed, components)`` in the ghost frame (module docstring 2 + 3): the enclosed components of shown body in
-    the garment, cut below ``collar_row``. ``components``: ``[{pixels, outline, opening, bbox}]``."""
+    the garment of which at least ``DIFFERS_MIN_SHARE`` lies on ``differ`` (``differs``), cut below ``collar_row``.
+    ``components``: ``[{pixels, outline, differs, opening, bbox}]``."""
     from scipy import ndimage
     from app.core import garment_fit as gf
     gm = np.asarray(garment, bool)
     sh = np.asarray(shown, bool)
+    dm = np.asarray(differ, bool)
     op = ndimage.binary_opening(sh & gm, iterations=gf.OPEN_ERODE_PX) & gm
     labels, n = ndimage.label(op)
     sizes = np.bincount(labels.ravel(), minlength=n + 1)
@@ -245,10 +268,11 @@ def seed(shown, garment, *, collar_row: Optional[int]) -> Tuple[np.ndarray, List
         comp = labels == c
         ring = ndimage.binary_dilation(comp, iterations=gf.OPEN_RING_PX) & ~op
         outline = float((ring & ~gm).sum()) / max(float(ring.sum()), 1.0)
+        share = float((comp & dm).sum()) / max(float(sizes[c]), 1.0)
         ys, xs = np.nonzero(comp)
-        opening = outline <= gf.OPEN_SHOWN_OUTLINE_MAX
-        comps.append({"pixels": int(sizes[c]), "outline": round(outline, 3), "opening": opening,
-                      "bbox": [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())]})
+        opening = outline <= gf.OPEN_SHOWN_OUTLINE_MAX and share >= DIFFERS_MIN_SHARE
+        comps.append({"pixels": int(sizes[c]), "outline": round(outline, 3), "differs": round(share, 3),
+                      "opening": opening, "bbox": [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())]})
         if opening:
             keep |= comp
     if collar_row is not None:
@@ -442,17 +466,19 @@ def lining_left(rgb, garment, hole, inside_lum: float, ring_px: int) -> int:
 
 # --- The whole step ----------------------------------------------------------------------------------------------
 
-def opening(worn_rgb, base_rgb, figure, ghost_mask, cut_rgb, cut_alpha, record: Dict[str, Any], *,
+def opening(worn_rgb, base_rgb, figure, ghost_rgb, ghost_mask, cut_rgb, cut_alpha, record: Dict[str, Any], *,
             vouch: Optional[Dict[str, Any]] = None) -> Tuple[Optional[np.ndarray], Dict[str, Any]]:
     """``(cover, numbers)`` of a cut-out (module docstring): ``worn_rgb`` / ``base_rgb`` / ``figure`` /
-    ``ghost_mask`` in the ghost frame, ``cut_rgb`` / ``cut_alpha`` (0..255) the cut-out, ``record`` its crop
+    ``ghost_rgb`` (the piece-only view) / ``ghost_mask`` in the ghost frame, ``cut_rgb`` / ``cut_alpha`` (0..255)
+    the cut-out, ``record`` its crop
     (``crop_of``). ``cover`` (cut-out frame, 0..1: 1 = transparent) None when there is no opening; ``numbers``
     ``{found, reason?, px, share, components, collar_row, framing, snap, sawtooth_seed, sawtooth,
     lining_left_seed_px, lining_left_px}``."""
     worn = np.asarray(worn_rgb)
     height = worn.shape[0]
     numbers: Dict[str, Any] = {"found": False}
-    if np.asarray(base_rgb).shape != worn.shape or np.asarray(ghost_mask).shape != worn.shape[:2]:
+    if (np.asarray(base_rgb).shape != worn.shape or np.asarray(ghost_rgb)[..., :3].shape != worn.shape
+            or np.asarray(ghost_mask).shape != worn.shape[:2]):
         numbers["reason"] = "the worn view, the base view and the piece-only view differ in size"
         return None, numbers
     shown, evidence = shown_body(base_rgb, figure, worn, vouch=vouch)
@@ -464,11 +490,18 @@ def opening(worn_rgb, base_rgb, figure, ghost_mask, cut_rgb, cut_alpha, record: 
     if collar is not None and numbers["framing"]:
         collar += int(numbers["framing"]["shift"][1])
     numbers["collar_row"] = collar
-    seed_g, comps = seed(shown, ghost_mask, collar_row=collar)
+    seed_g, comps = seed(shown, ghost_mask, differs(worn, ghost_rgb), collar_row=collar)
     numbers["components"] = comps
     if not seed_g.any():
-        numbers["reason"] = ("no enclosed opening: the body the worn view shows inside the piece reaches its edge"
-                             if comps else "the worn view shows no body inside the piece")
+        from app.core import garment_fit as gf
+        enclosed = [c for c in comps if c["outline"] <= gf.OPEN_SHOWN_OUTLINE_MAX]
+        if enclosed:
+            # Ruling A81: enclosed, but the piece-only view shows the same there — the piece, not an opening.
+            numbers["reason"] = (f"no opening: inside the piece the piece-only view shows what the worn view shows "
+                                 f"(at most {max(c['differs'] for c in enclosed)} of it differs)")
+        else:
+            numbers["reason"] = ("no enclosed opening: the body the worn view shows inside the piece reaches its edge"
+                                 if comps else "the worn view shows no body inside the piece")
         return None, numbers
     crop, side, final = crop_of(record)
     scale = final / float(side)
@@ -555,10 +588,11 @@ def for_cutout(character_name: str, item_id: str, fsig: str, view: str, *, ghost
     try:
         base_rgb, figure, _from_alpha = fw._base_arrays(copy, get_model_refs_dir(character_name))
         worn_rgb = garment_images._rgb(worn)
+        ghost_rgb = garment_images._rgb(ghost)
         vouch = vouched_by_worn_gate(read_record(worn.with_suffix(".json")))
         cut_a = np.asarray(alpha, np.float32)
-        cover, numbers = opening(worn_rgb, base_rgb, figure, ghost_mask, np.asarray(colours.convert("RGB")), cut_a,
-                                 record, vouch=vouch)
+        cover, numbers = opening(worn_rgb, base_rgb, figure, ghost_rgb, ghost_mask, np.asarray(colours.convert("RGB")),
+                                 cut_a, record, vouch=vouch)
     except Exception as e:  # noqa: BLE001 — a later refinement never discards the cut-out (it stays as made)
         logger.warning("Cut-out %s %s %s: the opening search failed: %s", character_name, item_id, view, e)
         out["reason"] = f"the opening search failed: {e}"
