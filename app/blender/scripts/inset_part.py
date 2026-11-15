@@ -42,7 +42,8 @@ DEFAULTS = {
     'pocket': {'s0': .048, 's1': .094, 'hw': .0022, 'depth': .02, 'pow': .5},
     'tone': {'ridge': [.97, .9, .88], 'inner': [.82, .56, .6], 'folds': [.9, .66, .7], 'nub': [.92, .62, .66], 'pocket': [.45, .22, .26], 'centre': [.96, .9, .9]},
     'edge': [.0007, .0022, .005], 'bake': 512, 'fill_iterations': 1500,
-    'level': {'enabled': 1, 'sigma': .015, 'tukey': .004, 'wall_rise': .015, 'depth': [.06, .03], 'relax': 500},
+    'level': {'enabled': 1, 'sigma': .015, 'tukey': .004, 'wall_rise': .015, 'depth': [.06, .03], 'relax': 500,
+              'min_half_width': .006, 'under': .012},
 }
 
 
@@ -89,7 +90,7 @@ def parameters(raw):
     level = p['level']
     if level['enabled'] not in (0, 1) or not isinstance(level['relax'], int) or level['relax'] < 0:
         raise ValueError('Level: enabled is 0 or 1, relax a nonnegative integer')
-    if min(level['sigma'], level['tukey'], level['wall_rise'], *level['depth']) <= 0:
+    if min(level['sigma'], level['tukey'], level['wall_rise'], *level['depth']) <= 0 or min(level['min_half_width'], level['under']) < 0:
         raise ValueError('Level: expected positive lengths')
     if p['under'][0] >= p['under'][1]:
         raise ValueError('Invalid underside interval')
@@ -205,7 +206,17 @@ def surface_chart(body, arm, P):
 # * a levelled fold lies folded over itself on the surface: the levelled rows are spread over the surface again, each
 #   at the mean of its neighbours inside the fixed rest (``spread_evenly``, at most ``level.relax`` conjugate-gradient
 #   steps, in the chart; the height is the surface's; seam copies as one point); then the moved skin gets the
-#   surface's own normals (``extension_bones.refresh_normals``).
+#   surface's own normals (``extension_bones.refresh_normals``); a face the spread turned over against its source
+#   face (at the region's border a node slid past one that stayed) gets its spread nodes at their neighbours' mean.
+# * the back end (A77b, measured on the same model): where the legs close, the channel narrows to 1-5 mm half width
+#   and its skin runs on 25 mm below the surface, beneath the envelope. Levelled, that skin was lifted 26-28 mm
+#   within the fade — the faces between it and the skin around became 8,826 slivers (aspect over SLIVER_ASPECT) and
+#   168 folded faces, a spiky strip into the leg gap. So (1) the region ends ``fall`` before the first envelope row
+#   whose narrower half width is under ``level.min_half_width`` (``region_ends``), and the part ends there with it;
+#   (2) skin more than ``level.under`` below the surface fades out by that excess, as if it lay that far beyond the
+#   region, and is not spread; (3) the faces the subdivision cut on one or two edges get the shorter diagonals
+#   (``beautify_fill``). The mesher's skin past the end stays as it was modelled.
+SLIVER_ASPECT = 20.          # longest edge over its height: a face past it is a sliver (A77b)
 LEVEL_GRID_M = .0015
 LEVEL_FIT_ITERATIONS = 6
 
@@ -280,12 +291,33 @@ def region_walls(env, ug, cap, rise):
     return walls
 
 
+def region_ends(tg, walls, t0, t1, minimum, margin):
+    """The levelled region's ends (angles) inside [t0, t1] (A77b). From the region's widest envelope row outward, the
+    first row whose narrower half width (``walls``, per row of ``tg``) falls below ``minimum`` is where the legs close
+    over the channel: the skin left between them is too narrow to level or to build on. The region ends ``margin``
+    (an angle: the fade beyond the region) before that row, so its fade, too, stays out of the narrow channel; the
+    same toward the start. Nothing narrow, all narrow, or nothing left between the ends: [t0, t1] unchanged."""
+    rows = np.flatnonzero((tg >= t0) & (tg <= t1))
+    if not len(rows) or minimum <= 0:
+        return t0, t1
+    half = walls[rows].min(1)
+    if (half < minimum).all():
+        return t0, t1
+    widest = int(np.argmax(half))
+    after = np.flatnonzero(half[widest:] < minimum)
+    before = np.flatnonzero(half[:widest] < minimum)
+    end = min(t1, float(tg[rows[widest + after[0]]]) - margin) if len(after) else t1
+    start = max(t0, float(tg[rows[before[-1]]]) + margin) if len(before) else t0
+    return (start, end) if start < end else (t0, t1)
+
+
 def level_region(body, arm, P):
     """Level the skin of the region onto the surface around it before the part is built (module notes above).
     Returns the metrics ``{source_smooth: {radius_m, blend_m, iterations, moved, max_shift_mm,
     inner_wall_vertices}, source_level: {bump_mm: [before, after], bump_p95_mm: [before, after], fit_rms_mm,
     angle_deg, half_width_mm: [min, max], folded_faces: [before, after], normals_refreshed}}`` (bump: the outer skin
-    of the region above the fitted surface, mm — the tip's ``bump_mm``)."""
+    of the region above the fitted surface, mm — the tip's ``bump_mm``), and ``end_point``: the world point where the
+    region was cut short (``region_ends``), None where it was not — ``build_part`` ends the part there."""
     L, R = P['level'], P['region']
     ch = surface_chart(body, arm, P)
     M, Mi, Ni3, bvh, c, xm, th, S, prof = (ch[k] for k in ('M', 'Mi', 'Ni3', 'bvh', 'c', 'xm', 'th', 'S', 'prof'))
@@ -307,6 +339,9 @@ def level_region(body, arm, P):
                 q = M @ hit[0]
                 env[i, j] = math.hypot(q.y - c.y, q.z - c.z)
     walls = region_walls(env, ug, R['u'], L['wall_rise'])
+    nominal_end = t1
+    t0, t1 = region_ends(tg, walls, t0, t1, L['min_half_width'], R['fall'] / rho_nom)
+    span = (t1 - t0) * rho_nom
 
     def chart(points):
         """(a along the region, u, height above rho_nom, distance outside the region, valid, radial unit)."""
@@ -348,7 +383,14 @@ def level_region(body, arm, P):
     quads = [f for f in bm.faces if len(f.verts) > 3 and any(v.index >= source_count for v in f.verts)]
     if quads:
         bmesh.ops.triangulate(bm, faces=quads)
-        bm.to_mesh(body.data)
+    # A face the subdivision cut on one or two edges only (the window's border) is a bisected sliver where the mesher's
+    # faces are long and thin already — the channel past the region's end (A77b): the new faces get the shorter
+    # diagonals. Flat subdivision, so the flips keep the surface.
+    cut = [f for f in bm.faces if any(v.index >= source_count for v in f.verts)]
+    cut_set = set(cut)
+    bmesh.ops.beautify_fill(bm, faces=cut, edges=[e for e in {e for f in cut for e in f.edges}
+                                                  if len(e.link_faces) == 2 and all(f in cut_set for f in e.link_faces)])
+    bm.to_mesh(body.data)
     bm.free()
     V = np.array([tuple(M @ v.co) for v in body.data.vertices])
     Nn = np.array([tuple((M.to_3x3() @ v.normal).normalized()) for v in body.data.vertices])
@@ -371,6 +413,12 @@ def level_region(body, arm, P):
     support = ~inner & (outside[rows] <= 0) & (np.abs(h[rows] - Q) < L['tukey'])
     # Beyond the region the fade runs along the skin: a wall rising off the surface is that far away too.
     beyond = np.where(outside[rows] > 0, np.hypot(outside[rows], np.maximum(0, h[rows] - Q)), outside[rows])
+    # Skin lying further than ``under`` below the surface is the mesher's skin beneath the region (A77b: where the legs
+    # close it runs on, 25 mm down, under the envelope): it fades out by that excess as if it lay that far beyond the
+    # region — lifting it whole stretched the faces between it and the skin around into slivers. Continuous at the
+    # border (excess 0 = within the region).
+    under = np.maximum(0, Q - h[rows] - L['under'])
+    beyond = np.where(beyond > 0, np.hypot(beyond, under), np.where(under > 0, under, beyond))
     shift, stats = extension_bones.level_heights(h[rows], beyond, inner, full, lambda ring: Q,
                                                  tuple(L['depth']), inner_follows=True, ring=support)
     moved = 0
@@ -382,7 +430,7 @@ def level_region(body, arm, P):
     # Spread the levelled folds over the surface again (tangential; seam copies as one point).
     off = h[rows] - Q
     level = np.zeros(len(V), bool)
-    level[rows[(outside[rows] <= 0) & (off > -L['depth'][0]) & (off < L['depth'][1])]] = True
+    level[rows[(beyond <= 0) & (off > -L['depth'][0]) & (off < L['depth'][1])]] = True    # levelled whole
     count = group_of.max() + 1
     free = np.zeros(count, bool)
     free[group_of[level]] = True
@@ -409,8 +457,32 @@ def level_region(body, arm, P):
     na, nu = ga[group_of[spread]], gu[group_of[spread]]
     nt = na / rho_nom + t0
     nr = rho_nom + surface(na, nu) - np.where(is_inner[spread], extension_bones.NEUTRAL_GAP_M, 0.)
+    levelled = {int(i): body.data.vertices[int(i)].co.copy() for i in spread}
     for i, x, y, z in zip(spread, xm + nu, c.y - nr * np.cos(nt), c.z - nr * np.sin(nt)):
         body.data.vertices[int(i)].co = Mi @ Vector((x, y, z))
+    # A face the spread turned over (a node slid past a neighbour that stayed — the region's border, A77b) is mended
+    # by moving its spread nodes to the mean of their neighbours (seam copies together).
+    members = {}
+    for i in levelled:
+        members.setdefault(int(group_of[i]), []).append(i)
+    faces = [tuple(f.vertices) for f in body.data.polygons if any(v in levelled for v in f.vertices)]
+    def normal(points):
+        return (points[1] - points[0]).cross(points[2] - points[0])
+    source = {f: normal([Mi @ Vector(V[v]) for v in f]) for f in faces}
+    ring = {}
+    for e in body.data.edges:
+        i, j = e.vertices
+        ring.setdefault(int(group_of[i]), set()).add(j)
+        ring.setdefault(int(group_of[j]), set()).add(i)
+    for _ in range(20):
+        turned = {int(group_of[v]) for f in faces if normal([body.data.vertices[v].co for v in f]).dot(source[f]) <= 0
+                  for v in f if v in levelled}
+        if not turned:
+            break
+        mean = {g: sum((body.data.vertices[j].co for j in ring[g]), Vector()) / len(ring[g]) for g in turned}
+        for g, m in mean.items():
+            for i in members[g]:
+                body.data.vertices[i].co = m
     body.data.update()
     refreshed = extension_bones.refresh_normals(meshes, snapshot)
     after = rows[outside[rows] <= 0]
@@ -418,6 +490,7 @@ def level_region(body, arm, P):
     return {'source_smooth': {'radius_m': full, 'blend_m': extension_bones.NEUTRAL_BLEND * full,
                               'iterations': L['relax'], 'moved': moved, 'max_shift_mm': stats['max_shift_mm'],
                               'inner_wall_vertices': int(inner.sum())},
+            'end_point': [xm, c.y - rho_nom * math.cos(t1), c.z - rho_nom * math.sin(t1)] if t1 < nominal_end else None,
             'source_level': {'bump_mm': [stats['bump_before_mm'], stats['bump_after_mm']],
                              'bump_p95_mm': stats['bump_p95_mm'], 'fit_rms_mm': stats['fit_rms_mm'],
                              'angle_deg': [round(math.degrees(t0), 2), round(math.degrees(t1), 2)],
@@ -478,6 +551,89 @@ def folded_faces(body, vertices, c):
     return count
 
 
+def aspect(points):
+    """A triangle's longest edge over its height on that edge (1/2 sqrt 3 for an equilateral one; inf degenerate)."""
+    a, b, c = points
+    longest = max((b - a).length, (c - b).length, (a - c).length)
+    area = (b - a).cross(c - a).length / 2
+    return longest * longest / (2 * area) if area > 1e-16 else math.inf
+
+
+def flip_slivers(bm, flat, limit=SLIVER_ASPECT, passes=6, bend=.9):
+    """Mend the slivers (aspect over ``limit``) of the displaced patch ``bm`` (A77b) — the walls of the cleft and pocket
+    rise steeply over a few millimetres, and the flat subdivision's diagonals run across them. First the shared edge
+    of a sliver and a neighbour is flipped where the other diagonal gives both triangles a lower worst aspect and each
+    new face stays within ``bend`` (cosine) of the old faces' mean normal; then a needle's shortest edge is collapsed
+    onto its midpoint where no face around it turns or becomes a sliver. ``flat`` maps every vertex to its position
+    before the displacement; a collapse keeps it current (the merged vertex gets the flat midpoint), so the caller
+    places the mended patch again from it."""
+    for _ in range(passes):
+        flips = []
+        seen = set()
+        for f in bm.faces:
+            if len(f.verts) != 3 or f in seen or aspect([v.co for v in f.verts]) <= limit:
+                continue
+            best = None
+            for e in f.edges:
+                if e.is_boundary or len(e.link_faces) != 2 or e.seam:
+                    continue
+                g = e.link_faces[1] if e.link_faces[0] is f else e.link_faces[0]
+                if g in seen or len(g.verts) != 3:
+                    continue
+                p = next(v for v in f.verts if v not in e.verts)
+                q = next(v for v in g.verts if v not in e.verts)
+                a, b = e.verts
+                old = max(aspect([v.co for v in f.verts]), aspect([v.co for v in g.verts]))
+                t1, t2 = (p.co, q.co, a.co), (q.co, p.co, b.co)
+                new = max(aspect(t1), aspect(t2))
+                if new >= old:
+                    continue
+                normals = [(t[1] - t[0]).cross(t[2] - t[0]) for t in (t1, t2)]
+                if min(n.length for n in normals) < 1e-14:
+                    continue
+                ref = (f.normal + g.normal).normalized()
+                if any(abs(n.normalized().dot(ref)) < bend for n in normals):
+                    continue
+                if best is None or new < best[0]:
+                    best = (new, e, g)
+            if best:
+                flips.append(best[1])
+                seen.update((f, best[2]))
+        if not flips:
+            break
+        bmesh.ops.rotate_edges(bm, edges=flips, use_ccw=False)
+        bm.normal_update()
+    # What no flip mends is a needle: its shortest edge is collapsed onto its midpoint where that folds no face
+    # around it (inner vertices only — the border stays welded to the body).
+    for _ in range(passes):
+        done = False
+        for f in list(bm.faces):
+            if not f.is_valid or len(f.verts) != 3 or aspect([v.co for v in f.verts]) <= limit:
+                continue
+            e = min(f.edges, key=lambda e: e.calc_length())
+            a, b = e.verts
+            if a.is_boundary or b.is_boundary or e.is_boundary or e.seam:
+                continue
+            m = (a.co + b.co) / 2
+            ok = True
+            for g in set(a.link_faces) | set(b.link_faces):
+                if e in g.edges:
+                    continue
+                pts = [m if v in (a, b) else v.co for v in g.verts]
+                n = (pts[1] - pts[0]).cross(pts[2] - pts[0])
+                if n.length < 1e-14 or n.normalized().dot(g.normal) < bend or aspect(pts) > max(limit, aspect([v.co for v in g.verts])):
+                    ok = False
+                    break
+            if ok:
+                mid = (flat.pop(a) + flat.pop(b)) / 2
+                bmesh.ops.pointmerge(bm, verts=[a, b], merge_co=m)
+                flat[a if a.is_valid else b] = mid
+                done = True
+        bm.normal_update()
+        if not done:
+            return
+
+
 def build_part(group, output):
     """Build the accepted midline field, bake its texture and weld its border."""
     P = parameters(group.get('params', {}))
@@ -494,6 +650,12 @@ def build_part(group, output):
     c, xm, th, S, prof, pn, i0 = ch['c'], ch['xm'], ch['th'], ch['S'], ch['prof'], ch['pn'], ch['i0']
     arc, s_start, underside, scale, chart = ch['arc'], ch['s_start'], ch['underside'], ch['scale'], ch['chart']
     sstep = lambda x: (lambda y: y * y * (3 - 2 * y))(np.clip(x, 0, 1))
+    # Where the levelling cut its region short, the part ends there too (A77b): it fades out over the region's fall
+    # before that point and takes no skin beyond it — past it lies the mesher's skin between the closing legs, not a
+    # surface to build on.
+    end_point = level.pop('end_point') if level else None
+    s_end = float(chart(np.array([end_point]))[0][0]) if end_point is not None else None
+    end_fade = (lambda s: sstep((s_end - s) / P['region']['fall'])) if s_end is not None else (lambda s: 1.)
 
 
     def window(s, s0, s1, ramp):
@@ -531,9 +693,10 @@ def build_part(group, output):
         pocket_n = np.clip(1 - (u / np.maximum(phw, 1e-6)) ** 2, 0, 1) ** pk['pow'] * (phw > 1e-5)
         fill = np.maximum(hd['fill'] * hood_n, (nb['fill'] + .4 * nsc) * nub_n)
         h = h_env - cl['depth'] * gn * (1 - rise * inner_n) * (1 - fill) - pk['depth'] * pocket_n * gn
-        return dict(m=m, h_env=h_env, h=h, groove=gn, ridge=ridge_n, folds=gn * np.maximum(inner_n, hood_n),
-                    nub=gn * nub_n, pocket=pocket_n * gn,
-                    centre=window(s, cl['s0'] - .01, cl['s1'] + .005, .01) * np.exp(-(u / .012) ** 2))
+        e = end_fade(s)
+        return dict(m=m * e, h_env=h_env * e, h=h * e, groove=gn * e, ridge=ridge_n * e,
+                    folds=gn * np.maximum(inner_n, hood_n) * e, nub=gn * nub_n * e, pocket=pocket_n * gn * e,
+                    centre=window(s, cl['s0'] - .01, cl['s1'] + .005, .01) * np.exp(-(u / .012) ** 2) * e)
 
 
     # Body positions, normals, seam groups.
@@ -569,6 +732,8 @@ def build_part(group, output):
     near = (s_b > R['s0'] - R['fall'] - .01) & (s_b < R['s1'] + R['fall'] + .01) & (np.abs(u_b) < R['u'] + R['fall'] + .01) & (np.abs(r_b) < .04)
     near &= np.abs(u_b) < np.interp(s_b, WS, WA) + .01
     near &= fac_b > .2
+    if s_end is not None:
+        near &= s_b < s_end
     print('patch body verts', int(near.sum()))
 
     # Patch copy: body faces whose vertices are all near; welded, interior edges subdivided.
@@ -646,33 +811,41 @@ def build_part(group, output):
         print('  subdiv', len(long_), 'edges ->', len(bm.faces), 'tris')
     patch_tris = len(bm.faces)
     print('patch tris', patch_tris)
-    bm.verts.ensure_lookup_table()
-    bm.verts.index_update()
-    Q = np.array([tuple(v.co) for v in bm.verts])
-    border = np.array([v.is_boundary for v in bm.verts])
     gname = {g.index: g.name for g in body.vertex_groups}
     VW = [{gname[g.group]: g.weight for g in v.groups} for v in body.data.vertices]
-    qn, qw = [], []
-    for p in Q:
-        loc, _, fi, _ = bvh.find_nearest(Mi @ Vector(p))
-        vs = list(body.data.polygons[fi].vertices)
-        A, B, C_ = (Vector(V[v]) for v in vs[:3])
-        bc = barycentric_transform(M @ loc, A, B, C_, Vector((1, 0, 0)), Vector((0, 1, 0)), Vector((0, 0, 1)))
-        bc = np.clip(np.array(bc), 0, None); bc /= bc.sum() or 1
-        n = sum((Vector(Nn[v]) * bc[k] for k, v in enumerate(vs[:3])), Vector()).normalized()
-        w = {}
-        for k, v in enumerate(vs[:3]):
-            for g, x in VW[v].items():
-                w[g] = w.get(g, 0) + x * bc[k]
-        qn.append(tuple(n)); qw.append(w)
-    qn = np.array(qn)
-    s_q, u_q, r_q = chart(Q)
-    rq = np.stack([np.zeros(len(Q)), Q[:, 1] - c.y, Q[:, 2] - c.z], 1)
-    rq /= np.linalg.norm(rq, axis=1)[:, None] + 1e-12
-    FQ = fields(s_q, u_q, np.einsum('ij,ij->i', qn, rq), r_q)
-    hq = np.where(border, 0.0, FQ['h'])
-    for v, p in zip(bm.verts, Q + qn * hq[:, None]):
-        v.co = Vector(p)
+    # Twice: the displaced patch is mended (``flip_slivers``) and then placed again from the mended flat patch.
+    for mend in (True, False):
+        bm.verts.ensure_lookup_table()
+        bm.verts.index_update()
+        Q = np.array([tuple(v.co) for v in bm.verts])
+        border = np.array([v.is_boundary for v in bm.verts])
+        qn, qw = [], []
+        for p in Q:
+            loc, _, fi, _ = bvh.find_nearest(Mi @ Vector(p))
+            vs = list(body.data.polygons[fi].vertices)
+            A, B, C_ = (Vector(V[v]) for v in vs[:3])
+            bc = barycentric_transform(M @ loc, A, B, C_, Vector((1, 0, 0)), Vector((0, 1, 0)), Vector((0, 0, 1)))
+            bc = np.clip(np.array(bc), 0, None); bc /= bc.sum() or 1
+            n = sum((Vector(Nn[v]) * bc[k] for k, v in enumerate(vs[:3])), Vector()).normalized()
+            w = {}
+            for k, v in enumerate(vs[:3]):
+                for g, x in VW[v].items():
+                    w[g] = w.get(g, 0) + x * bc[k]
+            qn.append(tuple(n)); qw.append(w)
+        qn = np.array(qn)
+        s_q, u_q, r_q = chart(Q)
+        rq = np.stack([np.zeros(len(Q)), Q[:, 1] - c.y, Q[:, 2] - c.z], 1)
+        rq /= np.linalg.norm(rq, axis=1)[:, None] + 1e-12
+        FQ = fields(s_q, u_q, np.einsum('ij,ij->i', qn, rq), r_q)
+        hq = np.where(border, 0.0, FQ['h'])
+        for v, p in zip(bm.verts, Q + qn * hq[:, None]):
+            v.co = Vector(p)
+        if not mend:
+            break
+        flat = {v: Vector(q) for v, q in zip(bm.verts, Q)}
+        flip_slivers(bm, flat)
+        for v in bm.verts:
+            v.co = flat[v]
     # Source UVs per corner from the corner's own source face plane (seams keep their sides).
     uvl = bm.loops.layers.uv.new('body')
     for f in bm.faces:
@@ -848,7 +1021,8 @@ def build_part(group, output):
             'border_vertices': int(border.sum()), 'open_border_edges': open_left,
             'border_max_abs_h': float(np.abs(hq[border]).max()) if border.any() else 0.,
             'usable_half_width': float(np.interp((P['cleft']['s0'] + P['cleft']['s1']) / 2, WS, WA)),
-            'inner_scale': P['inner_scale'], 'nub_scale': P['nub_scale'], **(level or {})}
+            'inner_scale': P['inner_scale'], 'nub_scale': P['nub_scale'],
+            **({'part_end_s': round(s_end, 4)} if s_end is not None else {}), **(level or {})}
 
 
 def inset_part(args):

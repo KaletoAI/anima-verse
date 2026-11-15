@@ -236,8 +236,9 @@ def extension_bone_names(character_name, profile=None):
 # 10: no seam normal from an opposite skin wall, a wider midline ridge (Ruling A65d).
 # 11: the window blends out, an inner wall moves with it, a border beside its skin stays inside (Ruling A65e).
 # inset_part 4: the skin the mesher modelled in the region is levelled onto the surface around it before the part
-# is built (Ruling A77).
-PART_BUILDS = {"attached_part": 11, "inset_part": 4}
+# is built (Ruling A77). 5: the region and the part end before the channel between the legs closes, skin left deep
+# beneath fades out instead of being lifted, and slivers are mended (Ruling A77b).
+PART_BUILDS = {"attached_part": 11, "inset_part": 5}
 # The same for the other operations; pair_tip 1: a geometry apex (no colour
 # marker) is a tip suggestion too, and the tip override moves it.
 OP_BUILDS = {**PART_BUILDS, "pair_tip": 1}

@@ -1941,10 +1941,15 @@ skin the mesher modelled in the region is levelled onto the surface around it,
 the way a `pair_tip` part levels its source (`level`: `enabled`, the fit's
 `sigma` and `tukey` width, the `wall_rise` that ends the region beside the
 midline, the `depth` [below, above] that still counts as the region's skin, and
-the `relax` steps that spread levelled folds; defaults and the measurements
+the `relax` steps that spread levelled folds, the `min_half_width` under which
+the channel between the legs is too narrow to level — region and part end a
+fade before it — and the depth `under` the surface beyond which skin left
+beneath fades out instead of being lifted; defaults and the measurements
 behind them in `inset_part.py`). The record carries `source_smooth` and
 `source_level` (`bump_mm` [before, after] above the fitted surface, like the
-tip's). Body meshes remain first, and
+tip's; `angle_deg` shows where a shortened region ends, `part_end_s` where the
+part ends then). Slivers of the displaced patch are flipped or collapsed before
+it is placed. Body meshes remain first, and
 face texture preservation checks ignore marked nodes and material primitives.
 LOD decimates the joined inset body as one mesh, retaining its second material
 and baked texture. Each failed part operation keeps its incoming body, including
