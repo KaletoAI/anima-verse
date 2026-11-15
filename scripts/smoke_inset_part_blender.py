@@ -37,6 +37,14 @@ from the constant-tone check. Written RGB channels round to 8 bits, so the
 blend has at most .5/255 error per channel.
 UV coverage samples use strict triangle interiors, excluding shared edges;
 a height field has at most one covering triangle at every sampled texel.
+
+The opening (Task 11, round sphere, levelling off, so no part end): the pocket runs s = .07 (override) to .094
+(default), its midpoint s = .082 lies .032 m past the cleft midpoint s = .05 along the sphere (scale 1), at
+72.534 + .032/.15*180/pi = 84.757 degrees. The midline point is y = -.15*cos(84.757) = -.013706,
+z = 1.02 - .15*sin(84.757) = .870627; the inward normal points to the sphere centre, (0, cos, sin) =
+(0, .091372, .995817). The body's world matrix is the identity after the glTF import, so in glTF (x, z, -y):
+centre (0, .870627, .013706) within 2 mm (the profile's .5 degree sampling), axis (0, .995817, -.091372) within
+1 degree, |axis| = 1 within 1e-6. Every variant reports an opening with a unit axis.
 """
 import json
 import os
@@ -208,6 +216,13 @@ def probe(directory):
         assert np.max(abs(baked[covered]-expected[covered])) < .5/255 + 1e-6, ('blend error', np.max(abs(baked[covered]-expected[covered])))
         print('PASS stripe fill, constant interior within .025, raw border and clean ramp')
     assert metrics['inner_wall_faces_removed'] > 0, metrics
+    opening = metrics['opening']
+    assert set(opening) == {'centre', 'axis'} and len(opening['centre']) == len(opening['axis']) == 3, opening
+    assert abs(np.linalg.norm(opening['axis']) - 1) < 1e-6, opening
+    if not any(v in sys.argv for v in ('--short', '--fallback', '--tall')):
+        assert np.linalg.norm(np.array(opening['centre']) - [0, .870627, .013706]) < .002, opening
+        cosine = float(np.dot(opening['axis'], [0, .995817, -.091372]) / np.linalg.norm([0, .995817, -.091372]))
+        assert math.degrees(math.acos(min(1., cosine))) < 1., opening
     assert np.all(captured['fac_b'][captured['near']] > .2)
     assert np.max(np.abs(captured['r_b'][(np.abs(captured['u_b']) < 1e-6) & captured['near']])) < .001
     assert len(captured['inner_wall']) == metrics['inner_wall_faces_removed']

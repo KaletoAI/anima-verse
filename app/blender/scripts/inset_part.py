@@ -179,6 +179,33 @@ def surface_chart(body, arm, P):
             'pn': pn, 'i0': i0, 'arc': arc, 's_start': s_start, 'underside': underside, 'scale': scale, 'chart': chart}
 
 
+# The opening (cross-person collision, stage 2): a channel region declared with ``from_rig`` takes its placement from
+# the op that built the recess. The op reports the pocket's opening: the centre on the undisplaced chart midline (the
+# levelled skin, before the part's displacement) and the unit inward surface normal there, in glTF bind space (the
+# body's POSITION space). The interval is the pocket AS BUILT: where the levelling cut the part short (A77b), the
+# pocket's depth fades out over ``region.fall`` before ``s_end`` (smoothstep, half depth at s_end - fall/2), and the
+# levelled skin past that point is not part of it.
+def _gltf(v):
+    """Blender (x, y, z) -> glTF Y-up (x, z, -y), as plain floats."""
+    return [float(v[0]), float(v[2]), float(-v[1])]
+
+
+def opening_s(pocket, s_end, fall):
+    """The chart s of the opening's centre: the midpoint of the built pocket interval, None when none is built."""
+    s1 = pocket['s1'] if s_end is None else min(pocket['s1'], s_end - fall / 2)
+    return (pocket['s0'] + s1) / 2 if s1 > pocket['s0'] else None
+
+
+def opening_metric(prof, pn, S, s_mid, xm, Mi, Ni3):
+    """``{"centre", "axis"}`` at chart s = ``s_mid``: the midline point (x = ``xm``) and the unit inward normal
+    (-``pn`` interpolated over ``S``), through the inverse world matrix ``Mi`` / ``Ni3`` into glTF bind space."""
+    point = np.array([xm, np.interp(s_mid, S, prof[:, 1]), np.interp(s_mid, S, prof[:, 2]), 1.])
+    inward = -np.array([np.interp(s_mid, S, pn[:, k]) for k in range(3)])
+    centre = (np.array(Mi, float) @ point)[:3]
+    axis = np.array(Ni3, float) @ inward
+    return {'centre': _gltf(centre), 'axis': _gltf(axis / np.linalg.norm(axis))}
+
+
 # The levelling (Ruling A77): before the part is built, the skin the mesher modelled in the region (a groove, folds,
 # raised bumps — drawn although the mesh input asked for plain skin) is levelled onto the surface around it, as a tip
 # part levels its source bump (``extension_bones.level_heights``: k = 1 over the region, fading over NEUTRAL_BLEND x
@@ -1080,6 +1107,8 @@ def build_part(group, output):
                               export_yup=True, export_skins=True, export_animations=True,
                               export_morph=True, export_extras=True, export_all_influences=False)
     _common.body_meshes_first(output)
+    s_open = opening_s(P['pocket'], s_end, R['fall'])
+    opening = opening_metric(prof, pn, S, s_open, xm, Mi, Ni3) if s_open is not None else None
     return {'status': 'applied', 'reason': '', 'anchor': prof[i0].tolist(),
             'underside_m': underside, 'scale': scale, 'front_corner': prof[i0].tolist(),
             'inner_wall_faces_removed': len(inner_wall),
@@ -1088,7 +1117,8 @@ def build_part(group, output):
             'border_max_abs_h': float(np.abs(hq[border]).max()) if border.any() else 0.,
             'usable_half_width': float(np.interp((P['cleft']['s0'] + P['cleft']['s1']) / 2, WS, WA)),
             'inner_scale': P['inner_scale'], 'nub_scale': P['nub_scale'],
-            **({'part_end_s': round(s_end, 4)} if s_end is not None else {}), **(level or {})}
+            **({'part_end_s': round(s_end, 4)} if s_end is not None else {}),
+            **({'opening': opening} if opening is not None else {}), **(level or {})}
 
 
 def inset_part(args):

@@ -239,8 +239,9 @@ def extension_bone_names(character_name, profile=None):
 # is built (Ruling A77). 5: the region and the part end before the channel between the legs closes, skin left deep
 # beneath fades out instead of being lifted, and slivers are mended (Ruling A77b). 6: past the part's end the skin is
 # levelled on down the channel to where the legs close over it, turned faces and slivers of the levelled skin are
-# mended (Ruling A77c).
-PART_BUILDS = {"attached_part": 11, "inset_part": 6}
+# mended (Ruling A77c). 7: the op reports its opening (centre and inward axis in bind space) for a channel region
+# declared ``from_rig`` — a build-6 sidecar lacks it.
+PART_BUILDS = {"attached_part": 11, "inset_part": 7}
 # The same for the other operations; pair_tip 1: a geometry apex (no colour
 # marker) is a tip suggestion too, and the tip override moves it.
 OP_BUILDS = {**PART_BUILDS, "pair_tip": 1}
