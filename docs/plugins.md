@@ -2088,6 +2088,11 @@ the skin normal. With the defaults the union's top (the last ellipsoid: `down`
 the pods' upper front (Ruling A65).
 Ridge radii `r0`/`r1` are metres. `tip_offset` is a fraction subtracted from
 `tip_start`, and relief terms are `[amplitude, frequency, angular_phase, offset]`.
+The underside ridge (phase pi) starts at `t0` .5 and the web (`pod_web`: the sweep-pods
+union radius `k_tip_pods + blend*s*w^2(3-2w)`, `w = 1 - t/until`) reaches to `until` .55: with
+`t0` .1 and `until` .4 the ridge ran through the junction with the pouch and the web ended
+where the hanging sweep lies on the pouch, and a lifted chain turned both into a crest on the
+midline that shaded as a dark vertical band (Ruling A88).
 
 ```yaml
 anchor_bone: Hips
@@ -2113,7 +2118,7 @@ relief:
 ridges:
   - {t0: 0.12, tip_offset: 0.04, phase: 0.45, wobble: 0.25, freq: 1.4, offset: 0.5, r0: 0.0015, r1: 0.0008}
   - {t0: 0.2, tip_offset: 0.08, phase: -0.6, wobble: 0.2, freq: 1.1, offset: 2.1, r0: 0.0012, r1: 0.0007}
-  - {t0: 0.1, tip_offset: 0.02, phase: 3.141592653589793, wobble: 0.03, freq: 1, offset: 0, r0: 0.0007, r1: 0.0005}
+  - {t0: 0.5, tip_offset: 0.02, phase: 3.141592653589793, wobble: 0.03, freq: 1, offset: 0, r0: 0.0007, r1: 0.0005}
 ridge_blend: 0.0018
 pod_scale: 1.2
 pods:
@@ -2125,6 +2130,7 @@ pods:
     - {lateral: -0.012, down: 0.002, back: 0, radii: [0.014, 0.011, 0.024]}
     - {lateral: 0, down: 0.012, back: 0, radii: [0.016, 0.0095, 0.013]}
     - {lateral: 0, down: -0.008, back: 0.006, radii: [0.016, 0.012, 0.016]}
+pod_web: {blend: 0.016, until: 0.55} # sweep-pods blend radius near the root (blend scales with size_factor)
 pod_link: 0.7
 pod_link_distance: 0.03
 k_tip_pods: 0.004

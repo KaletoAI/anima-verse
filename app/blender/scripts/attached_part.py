@@ -30,7 +30,12 @@ DEFAULTS = {
     'ridges': [
         {'t0': .12, 'tip_offset': .04, 'phase': .45, 'wobble': .25, 'freq': 1.4, 'offset': .5, 'r0': .0015, 'r1': .0008},
         {'t0': .2, 'tip_offset': .08, 'phase': -.6, 'wobble': .2, 'freq': 1.1, 'offset': 2.1, 'r0': .0012, 'r1': .0007},
-        {'t0': .1, 'tip_offset': .02, 'phase': math.pi, 'wobble': .03, 'freq': 1., 'offset': 0., 'r0': .0007, 'r1': .0005}],
+        # The underside ridge (phase pi) faces the pouch. From .1 it ran into the
+        # junction with the pouch, which a lifted chain turns to the front: the
+        # union's crest there turned the normal by up to .85 rad across 8 mm of
+        # the midline and shaded as a dark vertical band (Ruling A88). From .5 on
+        # it stays on the free part of the sweep.
+        {'t0': .5, 'tip_offset': .02, 'phase': math.pi, 'wobble': .03, 'freq': 1., 'offset': 0., 'r0': .0007, 'r1': .0005}],
     'ridge_blend': .0018, 'pod_scale': 1.2,
     # The pods hang from the root: the union's top (the last ellipsoid, .008 up
     # and .016 tall, both x pod scale) sits at the root's height, the pod centre
@@ -51,7 +56,10 @@ DEFAULTS = {
                   'raphe': .0005, 'raphe_width': .005, 'root_clear': .016, 'root_fall': .012, 'shade': .3}},
     # The shaft-pods union widens near the root into a web of skin; along the
     # free shaft it stays tight so a lifted shaft does not drag the sack along.
-    'pod_web': {'blend': .016, 'until': .4},
+    # Until .4 the web ended where the hanging sweep lies on the pouch's front:
+    # the tight fillet there became a narrow crest on the midline once the
+    # chain lifted (Ruling A88); until .55 the junction stays a broad roll.
+    'pod_web': {'blend': .016, 'until': .55},
     'pod_link': .7, 'pod_link_distance': .03, 'k_tip_pods': .004, 'k_body': .016,
     # Beyond radius + fall the body field recedes `recede` metres per metre into
     # the body: there the part only touches skin and keeps its own closed
