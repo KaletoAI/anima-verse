@@ -2591,7 +2591,8 @@ def _auto_posture_match(character_name: str, path: Path, meta: Dict[str, Any], *
                               "applied_deg": 0.0, "status": "failed", "error": "", "at": utc_now_iso()}
     try:
         base = posture.base_target(character_name, bsig)
-        record.update(base_sha256=base["sha256"], target=base["lean"])
+        record.update(base_sha256=base["sha256"], target=base["lean"],
+                      **({"base_geometry_id": base["geometry"]} if base.get("geometry") else {}))
         before = posture.rest_lean(path.read_bytes())
         record.update(before=before, after=before)
         if posture.lean_delta(before, base["lean"]) < posture.TOLERANCE_DEG:

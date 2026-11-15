@@ -68,9 +68,10 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      1.1. A second run -> ran [] (nothing to do); a forced Re-fit (steps "fit", force) -> ran ["fit"], HUB still 0.
 [P2] fit_state(Demo, heels, F, sha(base)) "accepted"; prepared.glb replaced by other bytes -> "outdated"
      (restored -> "accepted"); the base model rewritten with other bytes (same geometry, another asset
-     generator) -> fit_state with the NEW sha "stale", info steps.fit {status stale, freshness reason "Body
-     changed — refit pending"}; the next run refits (ran ["fit"]) -> accepted on the new sha; fsig unchanged
-     (no base in it).
+     generator) -> fit_state with the NEW sha still "accepted" (Ruling A107: fits are keyed on the geometry
+     id, ``model_geometry``); then one of the highest body vertices moved 0.5 mm down (a geometry change, > the
+     0.1 mm tolerance, far from the feet) -> "stale", info steps.fit {status stale, freshness reason "Body changed — refit pending"};
+     the next run refits (ran ["fit"]) -> accepted on the new sha; fsig unchanged (no base in it).
 [P3] set_width_cap(Demo, heels, 1.02) -> True, profile footwear_width_cap {heels: 1.02}, fsig F2 != F; the run
      fits F2 with scale.width_factor = min(1.02, 1.0380) = 1.02 and width_cap 1.02, slim_needed 1 - 0.081888 x
      1.02 / 0.085 = 0.01735 (+-1e-3); F's fit stays on disk. The route: cap 1.2 -> 400, cap "wide" -> 400, cap
@@ -186,6 +187,16 @@ def repack(glb: bytes, *, generator: str = "", prefix: str = "") -> bytes:
             if "mesh" not in node:
                 node["name"] = prefix + node["name"]
     return glb_mesh.pack_glb(gltf, parsed["bin"])
+
+
+def nudged(glb: bytes, dy: float) -> bytes:
+    """The same GLB with one of its highest body vertices moved ``dy`` metres DOWN (a geometry change far from
+    the feet; the box top is kept by the other vertices at that height)."""
+    from app.core import glb_mesh
+    prims = glb_mesh.body_primitive_arrays(glb)
+    top = max(range(len(prims)), key=lambda i: prims[i].positions[:, 1].max())
+    prims[top].positions[int(prims[top].positions[:, 1].argmax()), 1] -= dy
+    return glb_mesh.rewrite_body_primitives(glb, dict(enumerate(prims)))
 
 
 def png_bytes(colour) -> bytes:
@@ -404,6 +415,8 @@ def main() -> int:
         check("P2 restored -> accepted", gf.fit_state("Demo", heels, F, base_sha), "accepted")
         new_sha = write_base(repack(base_glb, generator="another export"))
         check("P2 other base bytes", (new_sha != base_sha, base_body.current_base("Demo")), (True, (bsig, new_sha)))
+        check("P2 same geometry -> still accepted (A107)", gf.fit_state("Demo", heels, F, new_sha), "accepted")
+        new_sha = write_base(nudged(base_glb, 0.0005))
         check("P2 body bytes changed -> stale", gf.fit_state("Demo", heels, F, new_sha), "stale")
         fstep = garments.garment_info("Demo", heels)["steps"]["fit"]
         check("P2 info stale", (fstep["status"], fstep["freshness"]["reason"]),

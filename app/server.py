@@ -127,6 +127,19 @@ if _pm:
 from app.core.expression_sets_migration import migrate_catalog_metadata
 migrate_catalog_metadata()
 
+# Boot migration (2026-11-15, Ruling A107): fit records from before geometry ids are judged once per
+# character (``fit_geometry_migration``) — off the boot path, it reads GLBs; no refit, no hub job.
+def _judge_fit_geometry() -> None:
+    try:
+        from app.core.fit_geometry_migration import judge_world
+        judge_world()
+    except Exception as _fge:  # noqa: BLE001
+        logger.warning("Fit geometry judgement failed: %s", _fge)
+
+
+import threading as _threading  # noqa: E402
+_threading.Thread(target=_judge_fit_geometry, name="fit-geometry-judgement", daemon=True).start()
+
 # Decision models (plan-decision-models.md): the core's decision points
 # register at import. Nothing is asked unless decision.enabled is on.
 import app.core.decision_points  # noqa: E402,F401

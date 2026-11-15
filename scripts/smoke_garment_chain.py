@@ -99,13 +99,14 @@ FRAGMENT. Demo has hair text, the world's hair method is the default
     held by the smoke): status running_step "queued" and failed None at
     once. Released, the run rebuilds the mesh: failure None, prepared back.
 [5] Base model rewritten under the same B1 (other texture colour ->
-    new sha): after_base_model asks the Build (``figure_build.request``
+    new sha, SAME geometry): after_base_model asks the Build (``figure_build.request``
     "body_change", recorded — since Task 8 of plan
     2026-11-12-unified-worn-pieces every hook is a Build request); the
     Build's chain step (``build_chains``: its ``pieces`` steps through
-    ``run_queued``; was: after_base_model queued the chain itself) runs the
-    fit only: renders 0, mesh calls 0,
-    the fit record's base_model_sha256 = the new sha. Then, with the run
+    ``run_queued``) finds NOTHING to do (Ruling A107: the fit is keyed on
+    the geometry id, ``model_geometry``, and a texture-only rewrite keeps
+    it): renders 0, mesh calls 0, the fit record keeps the OLD
+    base_model_sha256 and ``_fit_state`` on the new sha is "accepted". Then, with the run
     lock held by the smoke: start_garment -> started (status "queued" at
     once); a second start_garment (the item is IN FLIGHT, waiting on the
     lock) is queued behind it: {started False, queued True, position 1,
@@ -657,12 +658,14 @@ def main() -> int:
         before = counts()
         check("after_base_model asks the Build", (garments.after_base_model("Demo"), REQUESTS[-1:]),
               (True, [("Demo", "body_change")]))
-        check("the Build's chain step runs", build_chains("Demo"), True)
+        check("the Build's chain step finds nothing (A107: same geometry)", build_chains("Demo"), False)
         check("idle", garments.wait_idle(120), True)
         after = counts()
         check("no render, no mesh", (after[0] - before[0], after[1] - before[1]), (0, 0))
         rec5 = fit_record(f1)
-        check("new fit record sha", (rec5.get("accepted"), rec5.get("base_model_sha256")), (True, new_sha))
+        check("fit record keeps its sha", (rec5.get("accepted"), rec5.get("base_model_sha256")),
+              (True, rec.get("base_model_sha256")))
+        check("fit accepted on the new sha", garments._fit_state("Demo", hid, f1, new_sha), "accepted")
         check("nothing more to do", build_chains("Demo"), False)
         lock = gs.char_lock("Demo")
         lock.acquire()

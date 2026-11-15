@@ -74,7 +74,9 @@ plan ``2026-11-09-base-body-phase5-mesh-items.md``: prompt fragment, slots,
 covers, partially covers, pronouns), ``GARMENT_VERSION[kind]``, the base
 signature and the content of the base front + back view. The base MODEL is not
 in it: a base model regenerated under the same base signature keeps images and
-mesh and only re-fits; the fit record's ``base_model_sha256`` decides that.
+mesh and only re-fits; the fit record decides that — by GEOMETRY (Ruling A107): a fit holds on the base
+file it names (``base_model_sha256``) and on every later base file of the same ``base_geometry_id``
+(``model_geometry``: a face retexture or matte floor rewrites only pixels and keeps the id).
 
 A hairstyle has its own mode (``garment_hair.hairstyle_mode``; spec
 ``2026-11-11-hair-from-body-design.md``, plan 2026-11-12-unified-worn-pieces
@@ -884,8 +886,9 @@ def _accepted_on(record: Dict[str, Any], base_model_sha: str) -> bool:
     ``garment_footwear.fit_state``, so the chain and the refit sweep replace
     it). Was R11 (plan
     2026-11-10-footwear-rigid-shoes Task 10 carry): never served."""
-    if record.get("accepted") is not True or record.get("base_model_sha256") != base_model_sha:
-        return False
+    from app.core.model_geometry import record_matches
+    if record.get("accepted") is not True or not record_matches(record, base_model_sha):
+        return False  # Ruling A107: judged by geometry — a texture-only base rewrite keeps the fit
     if not user_accept_holds(record):
         return False
     if str(record.get("kind") or "") == "footwear":
@@ -1042,12 +1045,14 @@ def record_failure(character_name: str, item_id: str, fsig: str, *, step: str, e
     """Persist the failure of a chain run of ``(item_id, fsig)``. ``stamp`` (a refused refit of the sweep,
     ``garment_refit.refusal_stamp``): ``{fit_version, inputs_id}`` merged into the record — the sweep does not
     try the same refit again (``garment_refit.held_refusal``, Ruling R7c)."""
+    from app.core import model_geometry
     from app.core.timeutils import utc_now
     path = garment_path(character_name, item_id, fsig, "failed")
     if not path.parent.parent.parent.is_dir():
         return  # never mint the folders of a vanished character
     record = {"item_id": item_id, "fsig": fsig, "step": step, "error": error,
-              "base_model_sha256": base_model_sha, "failed_at": _iso(utc_now())}
+              "base_model_sha256": base_model_sha, **model_geometry.stamp(base_model_sha),
+              "failed_at": _iso(utc_now())}
     if step == "fit":
         # Refused by a fit that already widens a too-small piece (``garment_refit`` retries one without).
         from app.core.garment_fit import SCALE_RETRY_VERSION
@@ -1123,7 +1128,8 @@ def chain_failure(character_name: str, item_id: str, fsig: str, *,
         return None
     if not record.get("step"):
         return None
-    if record.get("step") == "fit" and record.get("base_model_sha256") != base_model_sha:
+    from app.core.model_geometry import record_matches
+    if record.get("step") == "fit" and not record_matches(record, base_model_sha):
         return None
     return record
 

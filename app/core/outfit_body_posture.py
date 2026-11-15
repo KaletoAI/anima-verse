@@ -117,7 +117,8 @@ def base_model_file(character_name: str, bsig: str) -> Path:
 
 
 def base_target(character_name: str, bsig: str) -> Dict[str, Any]:
-    """``{lean, sha256}`` of the base model ``bsig``; ValueError without one."""
+    """``{lean, sha256, geometry}`` of the base model ``bsig`` (``geometry``: its geometry id, Ruling A107,
+    "" when unknown); ValueError without one."""
     from app.core.base_body import is_base_signature
     if not is_base_signature(bsig):
         raise ValueError("the outfit body names no base signature")
@@ -127,7 +128,10 @@ def base_target(character_name: str, bsig: str) -> Dict[str, Any]:
     except OSError:
         raise ValueError(f"the base model {bsig} is missing") from None
     import hashlib
-    return {"lean": rest_lean(data), "sha256": hashlib.sha256(data).hexdigest()}
+    from app.core import model_geometry
+    sha = hashlib.sha256(data).hexdigest()
+    return {"lean": rest_lean(data), "sha256": sha,
+            "geometry": model_geometry.stamp_on(character_name, bsig, sha).get(model_geometry.FIELD, "")}
 
 
 def record_of(meta: Dict[str, Any]) -> Dict[str, Any]:
@@ -155,8 +159,9 @@ def stale_reason(character_name: str, meta: Dict[str, Any]) -> str:
     from app.core.base_body import base_model_sha256
     bsig = str(parent.get("base_signature") or "")
     current = base_model_sha256(character_name, bsig) if bsig else ""
-    if current and record.get("base_sha256") != current:
-        return STALE_BASE
+    from app.core.model_geometry import record_matches
+    if current and not record_matches(record, current, sha_key="base_sha256"):
+        return STALE_BASE  # Ruling A107: another base GEOMETRY — a texture-only rewrite keeps the match
     return ""
 
 

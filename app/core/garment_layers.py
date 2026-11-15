@@ -216,8 +216,11 @@ def _valid(record: Dict[str, Any], *, lsig: str, base_sha: str, base_fit_sha: st
            inner: Dict[str, str], body: str = "") -> bool:
     if body and record.get("body_id") != body:
         return False
+    from app.core.model_geometry import record_matches
+    on_target = (_target_sha(record, body) == base_sha if body
+                 else record_matches(record, base_sha))  # Ruling A107: the base by geometry
     return (record.get("accepted") is True and record.get("lsig") == lsig
-            and _target_sha(record, body) == base_sha and record.get("base_fit_sha256") == base_fit_sha
+            and on_target and record.get("base_fit_sha256") == base_fit_sha
             and {k: (v or {}).get("sha256") for k, v in (record.get("inner") or {}).items()} == inner)
 
 
@@ -459,12 +462,14 @@ def _build(character_name: str, item_id: str, entry: Dict[str, Any], inner: Dict
     finally:
         tmp.unlink(missing_ok=True)
         tmp_low.unlink(missing_ok=True)
+    from app.core import model_geometry
     record = {
         "accepted": True, "kind": CLOTHING, "item_id": item_id, "fsig": fsig, "lsig": lsig,
         "layer_version": LAYER_VERSION,
         "base_signature": entry["record"].get("base_signature"),
         **({"body_id": body, "body_sha256": base_sha} if body
-           else {"base_model_sha256": base_sha, "body_id": entry["record"].get("base_signature"),
+           else {"base_model_sha256": base_sha, **model_geometry.stamp(base_sha),
+                 "body_id": entry["record"].get("base_signature"),
                  "body_sha256": base_sha}),
         "base_fit_sha256": base_fit_sha,
         "inner": {**{u: {"fsig": inner[u]["fsig"], "sha256": entry["inner"][u], "lsig": inner[u]["lsig"] or None}

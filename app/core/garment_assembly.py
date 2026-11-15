@@ -211,7 +211,8 @@ def built_on_fit_base(bare_meta: Dict[str, Any], record: Dict[str, Any]) -> bool
         return False  # a fit on an outfit body
     sha = str(bare_meta.get("base_model_sha256") or "")
     if sha:
-        return sha == str(record.get("base_model_sha256") or "")
+        from app.core.model_geometry import record_matches
+        return record_matches(record, sha)  # Ruling A107: same body geometry, any texture
     bsig = str(bare_meta.get("base_signature") or "")
     return bool(bsig) and bsig == str(record.get("base_signature") or "")
 

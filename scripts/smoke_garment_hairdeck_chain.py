@@ -55,8 +55,11 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     nothing. garment_info: method "hairdeck" (source "hairstyle": the mode is the item's), steps
     ["hairdeck", "fit"], hairdeck status "accepted", fit "accepted",
     served_fsig = fsig. A second run: ran [], no call.
-[3] Review Focus 2 — the base model rewritten under the same B1 (another
-    texture colour -> another sha): after_base_model asks the Build
+[3] Review Focus 2 — the base model rewritten under the same B1 with only
+    another texture colour (another sha, SAME geometry): the fit stays
+    accepted (Ruling A107, ``model_geometry``) — the Build's hair step finds
+    nothing, calls stay (1, 1). Then rewritten with its top vertex 0.5 mm
+    lower too (another geometry): after_base_model asks the Build
     ("body_change", recorded — Task 8 of plan 2026-11-12-unified-worn-pieces)
     and the Build's hair step (``build_chains``; was: after_base_model
     queued the chain itself) re-runs the fit only:
@@ -316,8 +319,14 @@ def main() -> int:
         cdir = get_character_dir("Demo")
         refs, mdir = cdir / "model_refs", cdir / "model3d"
 
-        def write_model(bsig, colour):
+        def write_model(bsig, colour, nudge=0.0):
             unrigged, rigged = cx.base_bodies(colour)
+            if nudge:  # a geometry change: one top vertex moved down
+                from app.core import glb_mesh
+                prims = glb_mesh.body_primitive_arrays(rigged)
+                top = max(range(len(prims)), key=lambda i: prims[i].positions[:, 1].max())
+                prims[top].positions[int(prims[top].positions[:, 1].argmax()), 1] -= nudge
+                rigged = glb_mesh.rewrite_body_primitives(rigged, {top: prims[top]})
             (mdir / "unrigged").mkdir(parents=True, exist_ok=True)
             (mdir / "unrigged" / f"{bsig}.glb").write_bytes(unrigged)
             tmpf = mdir / f".{bsig}.tmp"
@@ -437,8 +446,12 @@ def main() -> int:
         # --- [3] base change and colour override re-fit only ----------------------
         print("[3] base change / colour: fit only")
         write_model(b1, (120, 90, 80))
+        tex_sha = base_body.current_base("Demo")[1]
+        check("texture only: base sha changed", tex_sha != r.get("base_model_sha256"), True)
+        check("texture only: nothing to fit (A107)", (build_chains("Demo"), counts()), (False, (1, 1)))
+        write_model(b1, (120, 90, 80), nudge=0.0005)
         new_sha = base_body.current_base("Demo")[1]
-        check("base sha changed", new_sha != r.get("base_model_sha256"), True)
+        check("base sha changed", new_sha not in (r.get("base_model_sha256"), tex_sha), True)
         check("after_base_model asks the Build", (garments.after_base_model("Demo"), REQUESTS[-1:]),
               (True, [("Demo", "body_change")]))
         check("the Build's hair step runs", build_chains("Demo"), True)

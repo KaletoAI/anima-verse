@@ -177,6 +177,7 @@ from pathlib import Path
 from typing import Any, Deque, Dict, Iterable, List, Optional, Tuple, Union
 from urllib.parse import quote
 
+from app.core import model_geometry
 from app.core.log import get_logger
 
 logger = get_logger("garments")
@@ -622,8 +623,9 @@ def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str
     record = read_record(fit.with_suffix(".json"))
     if not fit.is_file() or record.get("accepted") is not True:
         return "missing"
-    if not base_model_sha or record.get("base_model_sha256") != base_model_sha:
-        return "stale"
+    from app.core.model_geometry import record_matches
+    if not base_model_sha or not record_matches(record, base_model_sha):
+        return "stale"  # Ruling A107: another body geometry — a texture-only rewrite keeps the fit
     from app.core.garment_fit import expected_fit_version
     if record.get("fit_version") != expected_fit_version(record):
         return "stale"  # fitted by an older fit algorithm: the chain re-runs the fit only
@@ -1196,20 +1198,23 @@ def _haar_cut_source(folder: Path, seed: int, result: Any) -> None:
 def _haar_result(fit: Dict[str, Any], base_sha: str) -> Dict[str, Any]:
     """The record's ``results[seed]`` of one fitted seed: ``{accepted, reasons, metrics, tile, length_class,
     base_model_sha256, fit_version, strands_sha256}`` (``tile`` the tile's name in the seed folder, None without)."""
+    from app.core import model_geometry
     from app.core.garment_haar import HAAR_FIT_VERSION
     from app.core.timeutils import utc_now_iso
     result = fit["result"]
     return {"accepted": bool(result.ok) if result is not None else False,
             "reasons": list(result.reasons) if result is not None else [fit["error"]],
             "metrics": dict(result.metrics) if result is not None else {}, "tile": fit.get("tile"),
-            "length_class": fit["length_class"], "base_model_sha256": base_sha, "fit_version": HAAR_FIT_VERSION,
+            "length_class": fit["length_class"], "base_model_sha256": base_sha,
+            **model_geometry.stamp(base_sha), "fit_version": HAAR_FIT_VERSION,
             "strands_sha256": fit["strands_sha256"], "fitted_at": utc_now_iso()}
 
 
 def _haar_result_current(result: Any, base_sha: str, strands_sha: str) -> bool:
     """A stored seed result still holds: made on ``base_sha`` by the current HAAR fit from these strands."""
     from app.core.garment_haar import HAAR_FIT_VERSION
-    return (isinstance(result, dict) and result.get("base_model_sha256") == base_sha
+    from app.core.model_geometry import record_matches
+    return (isinstance(result, dict) and record_matches(result, base_sha)
             and result.get("fit_version") == HAAR_FIT_VERSION and result.get("strands_sha256") == strands_sha)
 
 
@@ -1254,6 +1259,7 @@ def _haar_fit_step(character_name: str, item_id: str, kind: str, bsig: str, prof
         raise base_body.MissingInput("The HAAR strands are missing — run the haar step first")
     snapshot = base_body._snapshot_base_model(character_name, bsig)
     base_sha = hashlib.sha256(snapshot["rigged"]).hexdigest()
+    model_geometry.stamp_on(character_name, bsig, base_sha)  # judge its geometry before the verdicts are stamped
     due = _haar_due(character_name, item_id, ssig, base_sha)
     fits = _fit_haar_seeds(character_name, item_id, ssig, due, snapshot["rigged"], profile)
     record = _write_haar_record(character_name, item_id, ssig, lambda r: r.setdefault("results", {}).update(
@@ -1314,7 +1320,8 @@ def _publish_haar(character_name: str, item_id: str, kind: str, fsig: str, bsig:
     """Publish the served seed's fit on the base model (``_publish_fit``)."""
     rigged_sha = hashlib.sha256(snapshot["rigged"]).hexdigest()
     record = {**_haar_fit_record(character_name, item_id, kind, fsig, bsig, ssig, profile, fit, picked=picked),
-              "base_signature": bsig, "base_model_sha256": rigged_sha, "body_id": bsig, "body_sha256": rigged_sha,
+              "base_signature": bsig, "base_model_sha256": rigged_sha,
+              **model_geometry.stamp_on(character_name, bsig, rigged_sha), "body_id": bsig, "body_sha256": rigged_sha,
               "seeds": seeds}
     return _publish_fit(character_name, item_id, kind, fsig, bsig, snapshot["rigged"], fit["result"], record)
 
@@ -1376,7 +1383,8 @@ def _fit_locked(character_name: str, item_id: str, kind: str, fsig: str, bsig: s
     # on another base is registered onto it (``garment_source.fit_masks``).
     from app.core import fit_attempts
     attempt_base = {"kind": kind, "item_id": item_id, "fsig": fsig, "base_signature": bsig,
-                    "base_model_sha256": base_sha, "body_id": bsig, "body_sha256": base_sha,
+                    "base_model_sha256": base_sha, **model_geometry.stamp_on(character_name, bsig, base_sha),
+                    "body_id": bsig, "body_sha256": base_sha,
                     "fit_version": garment_fit.FIT_VERSION[kind]}
     try:
         bald_mask, ghost_mask, frame = garment_source.fit_masks(character_name, item_id, fsig,
@@ -1410,7 +1418,8 @@ def _fit_locked(character_name: str, item_id: str, kind: str, fsig: str, bsig: s
         return {
             "accepted": accepted, "kind": kind, "item_id": item_id, "fsig": fsig,
             "metrics": result.metrics, "gates": gates, "report": result.report,
-            "base_signature": bsig, "base_model_sha256": base_sha, "body_id": bsig, "body_sha256": base_sha,
+            "base_signature": bsig, "base_model_sha256": base_sha,
+            **model_geometry.stamp_on(character_name, bsig, base_sha), "body_id": bsig, "body_sha256": base_sha,
             "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
                        "base_images": base_images,
                        "prepared_sha256": hashlib.sha256(prepared_bytes).hexdigest(),
@@ -1681,6 +1690,7 @@ def _publish_hairdeck(character_name: str, item_id: str, kind: str, fsig: str, b
         "accepted": True, "kind": kind, "item_id": item_id, "fsig": fsig, "method": HAIRDECK,
         "metrics": result.metrics, "gates": gates, "report": result.report,
         "base_signature": bsig, "base_model_sha256": hashlib.sha256(snapshot["rigged"]).hexdigest(),
+        **model_geometry.stamp_on(character_name, bsig, hashlib.sha256(snapshot["rigged"]).hexdigest()),
         "body_id": bsig, "body_sha256": hashlib.sha256(snapshot["rigged"]).hexdigest(),
         "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
                    "base_images": {v: _sha(p) for v, p in base_views.items()},
@@ -5260,8 +5270,8 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
                        for v in gs.GARMENT_VIEWS} if base[0] else {})
             if record.get("base_signature") != base[0] or used_images != images:
                 stale.append("base_changed")
-            elif record.get("base_model_sha256") != base[1]:
-                stale.append("base_model_changed")
+            elif not model_geometry.record_matches(record, base[1]):
+                stale.append("base_model_changed")  # Ruling A107: geometry, not file bytes
             from app.core.garment_fit import expected_fit_version
             if record.get("fit_version") != expected_fit_version(record):
                 stale.append("fit_algorithm_updated")

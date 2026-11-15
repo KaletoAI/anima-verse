@@ -2172,9 +2172,18 @@ def base_model_sha256(character_name: str, bsig: str) -> str:
     """Content identity of the stored rigged base model of ``bsig`` (the
     REAL model directory, also from inside a staged run), "" without one.
     An outfit model records it: a regenerated base under the same signature
-    makes every outfit model built on the old one stale."""
+    makes every outfit model built on the old one stale. Also judges the
+    model's geometry id (``model_geometry.lineage_id``, Ruling A107) — what
+    the fits on it are keyed by."""
     from app.models.character import get_character_dir
-    return file_sha256(get_character_dir(character_name) / "model3d" / f"{bsig}.glb")
+    path = get_character_dir(character_name) / "model3d" / f"{bsig}.glb"
+    sha = file_sha256(path)
+    if sha and is_base_signature(bsig):
+        # Ruling A107: judge its geometry once per content, so the fit store can tell a texture-only
+        # rewrite (same geometry id) from a new body (``model_geometry``).
+        from app.core import model_geometry
+        model_geometry.lineage_id(character_name, bsig, path, sha)
+    return sha
 
 
 def current_base(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Optional[Tuple[str, str]]:

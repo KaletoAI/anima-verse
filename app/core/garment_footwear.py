@@ -50,6 +50,8 @@ from urllib.parse import quote
 
 import numpy as np
 
+from app.core import model_geometry
+
 from app.core.log import get_logger
 
 logger = get_logger("garment_footwear")
@@ -451,6 +453,7 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
         if not body:
             parents["base_model_sha256"] = body_sha
             record["base_model_sha256"] = body_sha
+            record.update(model_geometry.stamp_on(character_name, bsig, body_sha))
         elif base_fit is not None:
             parents["base_fit_sha256"] = record["base_fit_sha256"] = hashlib.sha256(base_fit[0]).hexdigest()
         if method:
@@ -471,7 +474,8 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
                            {"kind": kind, "item_id": item_id, "fsig": fsig, "body_id": body_id,
                             "body_sha256": body_sha, "fit_version": garment_fit.FIT_VERSION[kind],
                             **({"fit_method": method} if method else {}),
-                            **({"base_model_sha256": body_sha} if not body else {}),
+                            **({"base_model_sha256": body_sha,
+                                **model_geometry.stamp_on(character_name, bsig, body_sha)} if not body else {}),
                             **({"base_fit_sha256": hashlib.sha256(base_fit[0]).hexdigest()}
                                if base_fit is not None else {})},
                            error=error, gates=out["gates"], glb=tmp if attempt else None,
@@ -953,8 +957,8 @@ def fit_state(character_name: str, item_id: str, fsig: str, body_sha: str, *, bo
         # derived from the plain body's fit (Ruling A35): stale once that fit is replaced
         if record.get("base_fit_sha256") != _base_fit_sha(character_name, item_id, fsig):
             return "stale"
-    elif not body_sha or record.get("base_model_sha256") != body_sha:
-        return "stale"
+    elif not body_sha or not model_geometry.record_matches(record, body_sha):
+        return "stale"  # Ruling A107: another body geometry
     if record.get("fit_version") != FIT_VERSION.get(KIND):
         return "stale"
     source = (record.get("parents") or {}).get("source") or {}
@@ -1432,7 +1436,7 @@ def _preview(character_name: str, item_id: str,
         from app.models.character import get_character_profile
         base = base_body.current_base(character_name, profile=get_character_profile(character_name) or {})
         if (record.get("accepted") is not True or record.get("item_id") != item_id or not base
-                or record.get("base_model_sha256") != base[1]):
+                or not model_geometry.record_matches(record, base[1])):
             return None, None
         path, fsig = other, str(record.get("fsig") or "")
     try:
