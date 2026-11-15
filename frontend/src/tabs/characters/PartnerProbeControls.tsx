@@ -130,12 +130,13 @@ export function PartnerProbeControls({ value, onChange, onOtherCapsules, contact
       ) : null}
       <div style={GRID2}>
         <Slider label="x" value={value.x} shown={metres(value.x)} min={-1} max={1} step={0.01}
-          title={t('Sideways from the figure, in metres (the grid under the figure has 10 cm cells)')}
+          title={t('Sideways from the figure, in metres (the blue grid has 10 cm cells)')}
           onChange={(x) => set({ x })} />
         <Slider label="z" value={value.z} shown={metres(value.z)} min={-1} max={1} step={0.01}
-          title={t('In front of (+) or behind (−) the figure, in metres (the grid under the figure has 10 cm cells)')}
+          title={t('In front of (+) or behind (−) the figure, in metres (the blue grid has 10 cm cells)')}
           onChange={(z) => set({ z })} />
       </div>
+      <span className="ga-hint" style={{ fontSize: 10 }}>{t('x / z read against the blue grid — 10 cm cells')}</span>
       <Slider label={t('Yaw')} value={value.yaw} shown={`${value.yaw}°`} min={-180} max={180} step={5}
         title={t('Which way the probe faces: 0° the same way as the figure, 180° the opposite way')}
         onChange={(yaw) => set({ yaw })} />

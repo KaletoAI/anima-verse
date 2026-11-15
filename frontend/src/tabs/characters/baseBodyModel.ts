@@ -10,9 +10,10 @@ import type { ExtensionTipOverride, ExtensionTipPanelInfo } from './useBaseBody'
 /** What "Run all" runs now (`figure_build.base_run_all`): the plain body's refresh, the face cleanup of the
  *  stored base mesh, its missing or outdated face retexture, the base mesh repair after a saved repair setting or a
  *  new repair version (Ruling A34), the extension rebuild of a base whose tip smoothing is not recorded yet (Ruling
- *  A43), the extension rebuild after saved tip settings (Task UI2) — "" when every step is current. */
+ *  A43), the extension rebuild after saved tip settings (Task UI2), the collision capsules after saved channel settings
+ *  (cross-person collision Task 15) — "" when every step is current. */
 export type RunAllKind = '' | 'plain_body' | 'face_cleanup' | 'face_retexture' | 'mesh_repair' | 'tip_smoothing'
-  | 'extension_rig'
+  | 'extension_rig' | 'collision'
 
 /** `plain_body.run_all` of GET …/figure?plain=1. */
 export interface BaseRunAll {
@@ -63,6 +64,7 @@ export function runAllWhat(kind: RunAllKind, t: Tr = EN, faceDue: BaseRunAll['fa
     case 'mesh_repair': return t('The base mesh is not repaired with the saved settings: repairs it, then rebuilds the extension bones (local)')
     case 'tip_smoothing': return t('Tip smoothing not applied to this model yet: rebuilds the extension bones (local, no hub job)')
     case 'extension_rig': return t('Tip settings saved, not built yet: rebuilds the extension bones of the base model')
+    case 'collision': return t('Channel settings saved, not applied yet: recomputes the collision capsules of every stored model (local, no hub job)')
     default: return ''
   }
 }
@@ -92,6 +94,7 @@ export function runAllStep(name: string, t: Tr = EN): string {
     case 'repair': return t('Mesh repair (local)')
     case 'tip_smoothing': return t('Tip smoothing (local)')
     case 'extension': return t('Extension bones (local)')
+    case 'collision': return t('Collision capsules (local)')
     default: return name
   }
 }

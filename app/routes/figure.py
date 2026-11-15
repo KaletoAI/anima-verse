@@ -157,7 +157,8 @@ def _plain_body_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, A
     (``collision.ensure`` — the set the outfit models inherit), the stored
     region scales (``collision_scales``), the stored channel overrides (``collision_channels``) and the channels
     the base model's declarations ask for with their placement or the reason there is none
-    (``channel_declarations``, ``collision_channels.declarations_info``), the face cleanup of the base
+    (``channel_declarations``, ``collision_channels.declarations_info`` — without a base model the declarations
+    alone, reason "No base model yet"), the face cleanup of the base
     source (``face_cleanup``, ``model3d.face_cleanup_state``), the base mesh
     repair (``mesh_repair``, ``model3d.mesh_repair_state``), the tip
     smoothing (``tip_smoothing``, ``extension_tip.tip_smoothing_state``,
@@ -196,6 +197,8 @@ def _plain_body_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, A
             info["extension_tips"] = extension_tip.tip_panels(character_name, bsig)
             info["extension"] = _with_preview_states(model_extension_state(character_name, bsig))
             extension_tip.group_tip_settings(info["extension_tips"], info["extension"])
+        elif path is None and info.get("humanoid") and info.get("pipeline"):
+            info["channel_declarations"] = collision_channels.declarations_info(character_name, None, {})
     except Exception:  # noqa: BLE001 — the poll never fails on the extras
         logger.exception("Plain body extras of %s failed", character_name)
     info["run_all"] = figure_build.base_run_all(character_name)

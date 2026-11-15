@@ -48,6 +48,8 @@ CONE_DEG_MAX = 60.0
 FRAME_JOINTS = ("Hips", "Head", "LeftArm", "RightArm", "LeftFoot", "LeftToeBase")
 #: ``channels_skipped`` reason of an ``exposed_only`` channel a worn piece covers.
 COVERED = "Covered by the worn outfit"
+#: ``declarations_info``'s reason of every channel while the character has no base model to place it on.
+NO_MODEL = "No base model yet"
 
 
 def _unit(vector: np.ndarray, what: str) -> np.ndarray:
@@ -339,7 +341,8 @@ def declarations_info(character_name: str, path: Optional[Path], meta: Dict[str,
                       profile: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """What the Channels panel lists for the model ``path``: every wanted channel (``wanted_channels``) with
     ``placement`` ("rig" / "declared" from the stored record) or, without a channel on the model, the ``reason`` of
-    ``channels_skipped`` ("Not computed" before the record has channels). Never raises (empty list)."""
+    ``channels_skipped`` ("Not computed" before the record has channels). ``path`` None (no base model yet): the
+    declarations alone, each with ``reason`` ``NO_MODEL`` and no placement. Never raises (empty list)."""
     try:
         wanted, _sig = wanted_channels(character_name, path, meta, profile=profile)
     except Exception:  # noqa: BLE001 — the poll never fails on the panel
@@ -355,6 +358,7 @@ def declarations_info(character_name: str, path: Optional[Path], meta: Dict[str,
         info = {key: entry[key] for key in ("id", "bone", "offset", "axis", "depth", "radius", "cone_deg", "funnel",
                                             "accepts", "min_length", "compress_min", "exposed_only", "from_rig")}
         info["placement"] = channel.get("placement") if channel else None
-        info["reason"] = "" if channel else reasons.get(entry["id"], "Not computed")
+        info["reason"] = (NO_MODEL if path is None else "" if channel
+                          else reasons.get(entry["id"], "Not computed"))
         out.append(info)
     return out

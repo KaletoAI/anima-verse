@@ -2993,6 +2993,11 @@ a.ga-btn {
 /* Collision sliders in the viewer's side toolbar: label · slider · value. */
 .ga-collision-grid { display: grid; grid-template-columns: auto minmax(60px, 1fr) auto; gap: 2px 6px; align-items: center; font-size: 11px; }
 .ga-collision-grid input[type="range"] { width: 100%; margin: 0; }
+/* The Base body tab's collision sub-tab: the region scales and the Channels panel side by side, one column when narrow. */
+.ga-collision-sub { container-type: inline-size; }
+.ga-collision-panels { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; align-items: start; }
+.ga-collision-panels > * { margin: 0; min-width: 0; box-sizing: border-box; }
+@container (max-width: 520px) { .ga-collision-panels { grid-template-columns: minmax(0, 1fr); } }
 /* Two-column character tabs (Pose, Figure): images left, the 3D
    preview with its controls right. */
 .ga-split { display: grid; gap: 16px; align-items: start; }

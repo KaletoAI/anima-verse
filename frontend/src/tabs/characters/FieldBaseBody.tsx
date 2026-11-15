@@ -43,8 +43,12 @@
  *   box (ExtensionBonesBox, Ruling A45) for the groups WITHOUT a tip panel (`box_groups`), side by side in two equal
  *   columns — the box beside the first tip panel; without such groups there is no box, and a lone tip panel spans
  *   both columns;
- * - Collision capsules: the region sliders (live preview while dragging — the outfit models inherit the base body's
- *   set);
+ * - Collision capsules: the step row (its light, the reason in plain words, "Recompute collision capsules" — local,
+ *   no hub job, redoes it even when current: POST …/model3d/collision?signature=<base>) above two columns — the region
+ *   sliders (live preview while dragging — the outfit models inherit the base body's set) and the Channels panel
+ *   (CollisionChannels, cross-person collision Task 15: per declared channel its offset, radius, depth and cone, live
+ *   on the viewer's channel wire; Save stores only — the step then reads "Due", Run all and the Figure tab's Build
+ *   apply it). Without a base model the declarations are listed with "No base model yet";
  * - Settings (rule R3).
  * The sliders that change the 3D model sit in the panel beside the viewer and act on it live.
  *
@@ -88,6 +92,8 @@ import { ModelSteps } from './ModelSteps'
 import { ViewRenderTile } from './ViewRenderTile'
 import { RefImage } from './RefImage'
 import { CollisionScales } from './CollisionScales'
+import { CollisionChannels } from './CollisionChannels'
+import { collisionStepLine, recomputePath } from './collisionChannelsModel'
 import { ExtensionTipPanel } from './ExtensionTipPanel'
 import { MeshRepairPanel } from './MeshRepairPanel'
 import { TipSmoothingPanel } from './TipSmoothingPanel'
@@ -351,6 +357,11 @@ export function FieldBaseBody({ character, onOpenFigure }: {
   const [posting, setPosting] = useState(false)
   /** Slider preview of the collision scales — shown instead of the stored set. */
   const [collisionPreview, setCollisionPreview] = useState<CollisionPayload | null>(null)
+  /** Slider preview of the channel settings (CollisionChannels): the stored set with the channel drafts. */
+  const [channelsPreview, setChannelsPreview] = useState<CollisionPayload | null>(null)
+  /** The collision step's own button (the Channels panel's link brings it into view). */
+  const recomputeRef = useRef<HTMLButtonElement>(null)
+  const [recomputing, setRecomputing] = useState(false)
   /** Tip dots per pair tip group (ExtensionTipPanel), drawn on the model. */
   const [tipDots, setTipDots] = useState<Record<string, TipDots>>({})
   const onTipPreview = useCallback((group: string, dots: TipDots | null) => {
@@ -536,7 +547,33 @@ export function FieldBaseBody({ character, onOpenFigure }: {
   const modelBusy = posting || modelRunning(info) || !!st?.pending || tipsRunning(info) || !!info.mesh_repair?.running
   const ready = model?.status === 'ready'
 
-  const collision = collisionPreview ?? model?.collision
+  // Both panels preview live: the scales' capsules and the channels' drafts, merged.
+  const collisionBase = collisionPreview ?? model?.collision
+  const collision = channelsPreview && collisionBase
+    ? { ...collisionBase, channels: channelsPreview.channels } : collisionBase
+  const collisionStep = model?.steps?.find((step) => step.id === 'collision') ?? null
+  const collisionLine = collisionStepLine(collisionStep)
+  /** The single step (rule R2): the base model's capsules and channels recomputed, also when current — local. */
+  const recompute = async () => {
+    if (!info.signature) return
+    setRecomputing(true)
+    try {
+      await apiPost(recomputePath(character, info.signature), {})
+      toast(t('Collision capsules recomputed'))
+      await reloadAll()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally { setRecomputing(false) }
+  }
+  const channelsPanel = (
+    <CollisionChannels character={character} collision={model?.collision}
+      overrides={info.collision_channels} declarations={info.channel_declarations ?? []}
+      disabled={modelBusy || recomputing} onPreview={setChannelsPreview} onSaved={reloadAll} step={collisionStep}
+      onShowStep={() => {
+        recomputeRef.current?.scrollIntoView({ block: 'nearest' })
+        recomputeRef.current?.focus()
+      }} />
+  )
   const tipPanels = model?.url && ready ? info.extension_tips ?? [] : []
   const meshRepair = model?.url && ready ? info.mesh_repair ?? null : null
   const tipSmoothing = model?.url && ready ? info.tip_smoothing ?? null : null
@@ -624,7 +661,7 @@ export function FieldBaseBody({ character, onOpenFigure }: {
               ? `${model.url}${model.url.includes('?') ? '&' : '?'}tier=low` : model.url}
               format="glb" height={600} subject="figure"
               freshness={model.freshness} builtAt={model.created_at}
-              collision={collision} showCollision={!!collisionPreview}
+              collision={collision} showCollision={!!collisionPreview} showChannels={!!channelsPreview}
               motion={ready ? previewMotion : undefined}
               surfacePoints={surfacePoints} />
             {/* Full / Distance (Ruling A45): which stored mesh the viewer and the box show; only once the
@@ -725,12 +762,38 @@ export function FieldBaseBody({ character, onOpenFigure }: {
           ) : noModelYet
         ) : null}
         {sub === 'collision' ? (
-          !(model?.url && ready) ? noModelYet
+          !(model?.url && ready) ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {noModelYet}
+              {info.channel_declarations?.length ? channelsPanel : null}
+            </div>
+          )
             : model.collision === undefined ? <div className="ga-hint">{t('No collision capsules on this model')}</div>
             : (
-              <CollisionScales character={character} collision={model.collision}
-                scales={info.collision_scales} disabled={modelBusy}
-                onPreview={setCollisionPreview} onSaved={reloadAll} />
+              <div className="ga-collision-sub" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <StepRowView row={{ name: t('Collision capsules'), light: collisionLine?.light ?? 'grey',
+                  state: t(collisionLine?.state ?? 'Not recorded'),
+                  reason: collisionLine?.state === 'Due' ? t('Channel settings changed — recompute to apply')
+                    : collisionLine?.state === 'Current' ? t('The capsules and channels match the base model and the saved settings')
+                      : t(collisionStep?.detail || 'Not computed'),
+                  detail: collisionStep?.detail }}>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <button ref={recomputeRef} type="button" className="ga-btn ga-btn-sm"
+                      disabled={modelBusy || recomputing}
+                      title={t('Fits the base model’s collision capsules again and applies the saved channel settings — also when current. Outfit models apply theirs with Run all or the Build.')}
+                      onClick={() => { void recompute() }}>
+                      {t('Recompute collision capsules')}
+                    </button>
+                    <span className="ga-hint">{t('local, no hub job')}</span>
+                  </div>
+                </StepRowView>
+                <div className="ga-collision-panels">
+                  <CollisionScales character={character} collision={model.collision}
+                    scales={info.collision_scales} disabled={modelBusy}
+                    onPreview={setCollisionPreview} onSaved={reloadAll} />
+                  {channelsPanel}
+                </div>
+              </div>
             )
         ) : null}
         {sub === 'settings' ? (

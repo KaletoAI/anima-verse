@@ -163,6 +163,38 @@
  *     grid off. The 3D tab: Model3DSidePanels lists the Extension bones sub-tab only through `hasExtensionSection`
  *     (off the pipeline, with groups) and no longer carries the pipeline pointer ("Set on the base body"), FieldModel3D
  *     renders "Preview state" only under `statePreviewHere ?` with `statePreviewHere = hasExtensionSection(st)`.
+ * [15] The Channels panel, its step and the viewer's channel toggles (cross-person collision, plan Task 15; ruling R4
+ *     "Save stores only"). The fixture channel "demo:channel" on joint Hips: record a_pos (0, 0.9, 0.1), b_pos
+ *     (0, 0.9, 0.02) (axis −z, depth 0.08 m), r 0.015, cone 25°, frame side (1, 0, 0) / up (0, 1, 0) / front
+ *     (0, 0, 1), applied null; its declaration placed "declared".
+ *       previewPayload(payload, {demo:channel: the default}) → null (nothing differs);
+ *       a draft offset (10, 0, −5) mm, radius ×1.5, depth ×0.5, cone 30° → shift = side·0.010 + front·(−0.005):
+ *       a_pos (0.01, 0.9, 0.095); b_pos = a_pos + (b − a)·0.5 = a_pos + (0, 0, −0.04) = (0.01, 0.9, 0.055);
+ *       r 0.015·1.5 = 0.0225; cone 30; applied = the draft.
+ *       overridesToSave({old: X}, [demo:channel], {demo:channel: default}) → {old: X} (an undeclared id keeps its
+ *       entry, a default is left out); with the draft above → {old: X, demo:channel: draft}.
+ *       saveChannelOverrides(poster, "demo", map) posts exactly ONE request:
+ *       "/characters/demo/model3d/collision/channels" with {channels: map} — never "…/model3d/collision" (the step);
+ *       recomputePath("demo x", "s 1") → "/characters/demo%20x/model3d/collision?signature=s%201".
+ *       collisionStepLine: status due → yellow "Due"; done → green "Current"; failed → red "Failed"; none → null.
+ *       declarationLine: placement declared → green "Placed at the declared offset"; reason "No base model yet" →
+ *       yellow, that reason; "Covered by the worn outfit" → grey.
+ *       rodReadoutLines(null) → ["The rod is shown once the model carries a channel"]; {turns [0, 12.345], k 0.8,
+ *       past 3.24 mm, suppressed [torso_lower], w 1} → ["Turn per link: 0.0° · 12.3°", "Depth scale k 0.800 · past
+ *       the bottom 3.2 mm", "Weight w 1.00 · skipped capsules: torso_lower"].
+ *     The panel rendered (react-dom/server, en) after a Save, i.e. with the step "due": the legend "Channels", the six
+ *     fields Side / Up / Front / Radius / Depth / Cone (six range inputs), the line "Placed at the declared offset",
+ *     the step "Collision capsules · Due" with "Channel settings changed — recompute to apply" and the link
+ *     "Go to “Recompute collision capsules”"; Save disabled (no draft). With the step "done" no link. Without a base
+ *     model (no payload, reason "No base model yet"): the reason line, still the six fields.
+ *     baseBodyModel: runAllStep("collision") → "Collision capsules (local)"; runAllWhat("collision") names "no hub
+ *     job"; runAllButton({kind collision, hub_jobs 0}) → "Run all (0 hub jobs)", enabled.
+ *     Source greps: CollisionChannels saves through saveChannelOverrides and names neither recomputePath nor
+ *     "model3d/collision?"; FieldBaseBody renders <CollisionChannels inside `ga-collision-panels` beside
+ *     <CollisionScales, and its step button "Recompute collision capsules" posts recomputePath(character,
+ *     info.signature); FieldModel3D renders <CollisionChannels; the viewer has the toggles t('Channels') and
+ *     t('Test rod') (aria-pressed, both starting off: useState(false)), draws channelWireframe( and guideRod(, and
+ *     frees its lines in a disposer (dropLines(channelLines)).
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -624,6 +656,115 @@ check('[14] the 3D tab: Preview state only off the pipeline', [
   /const statePreviewHere = hasExtensionSection\(st\)/.test(model3d),
   /\{statePreviewHere \? \([\s\S]{0,200}t\('Preview state'\)/.test(model3d),
   (model3d.match(/t\('Preview state'\)/g) || []).length], [true, true, 1]);
+
+// [15]
+const ch = await loadBundled('frontend/src/tabs/characters/collisionChannelsModel.ts');
+const RECORD = { id: 'demo:channel', kind: 'channel', a: 'mixamorig:Hips', b: 'mixamorig:Hips', a_pos: [0, 0.9, 0.1],
+  b_pos: [0, 0.9, 0.02], r: 0.015, cone_deg: 25, funnel: 0.03, accepts: ['demo_op'], min_length: 1, compress_min: 0.6,
+  suppress: ['torso_lower'], frame: { side: [1, 0, 0], up: [0, 1, 0], front: [0, 0, 1] }, placement: 'declared',
+  applied: null };
+const PAYLOAD = { version: 7, capsules: [], channels: [RECORD] };
+const DECL = { id: 'demo:channel', bone: 'Hips', offset: [0, -0.05, 0.02], axis: [0, 0, -1], depth: 0.08, radius: 0.015,
+  cone_deg: 25, funnel: 0.03, accepts: ['demo_op'], min_length: 1, compress_min: 0.6, exposed_only: false,
+  from_rig: null, placement: 'declared', reason: '' };
+const DEF = { offset_mm: [0, 0, 0], radius_scale: 1, depth_scale: 1, cone_deg: 25 };
+const DRAFT = { offset_mm: [10, 0, -5], radius_scale: 1.5, depth_scale: 0.5, cone_deg: 30 };
+const r6 = (v) => v.map((x) => Math.round(x * 1e6) / 1e6);
+check('[15] previewPayload: nothing differs → null', ch.previewPayload(PAYLOAD, { 'demo:channel': DEF }), null);
+const moved = ch.previewPayload(PAYLOAD, { 'demo:channel': DRAFT }).channels[0];
+check('[15] previewPayload: the draft by hand', [r6(moved.a_pos), r6(moved.b_pos), r6([moved.r])[0], moved.cone_deg,
+  moved.applied], [[0.01, 0.9, 0.095], [0.01, 0.9, 0.055], 0.0225, 30, DRAFT]);
+const X = { offset_mm: [1, 2, 3], radius_scale: 1, depth_scale: 1, cone_deg: 20 };
+check('[15] overridesToSave: defaults left out, undeclared kept',
+  ch.overridesToSave({ old: X }, [DECL], { 'demo:channel': DEF }), { old: X });
+check('[15] overridesToSave: a draft saved', ch.overridesToSave({ old: X }, [DECL], { 'demo:channel': DRAFT }),
+  { old: X, 'demo:channel': DRAFT });
+const posted = [];
+await ch.saveChannelOverrides(async (path, body) => { posted.push([path, body]); return {}; }, 'demo',
+  { 'demo:channel': DRAFT });
+check('[15] Save posts the channels only', posted,
+  [['/characters/demo/model3d/collision/channels', { channels: { 'demo:channel': DRAFT } }]]);
+check('[15] Save never posts the step', posted.some(([path]) => /\/model3d\/collision(\?|$)/.test(path)), false);
+check('[15] the step path', ch.recomputePath('demo x', 's 1'), '/characters/demo%20x/model3d/collision?signature=s%201');
+const stepOf = (status) => ({ id: 'collision', label: 'Collision capsules', status,
+  detail: 'Channel settings changed — recompute to apply · 0 capsules' });
+check('[15] step lines', [ch.collisionStepLine(stepOf('due')), ch.collisionStepLine(stepOf('done')).state,
+  ch.collisionStepLine(stepOf('failed')).light, ch.collisionStepLine(null)],
+[{ light: 'yellow', state: 'Due', reason: 'Channel settings changed — recompute to apply · 0 capsules' }, 'Current',
+  'red', null]);
+check('[15] declaration lines', [ch.declarationLine(DECL), ch.declarationLine({ ...DECL, placement: null,
+  reason: 'No base model yet' }), ch.declarationLine({ ...DECL, placement: null, reason: 'Covered by the worn outfit' })],
+[{ light: 'green', text: 'Placed at the declared offset' }, { light: 'yellow', text: 'No base model yet' },
+  { light: 'grey', text: 'Covered by the worn outfit' }]);
+check('[15] rod readout', [ch.rodReadoutLines(null), ch.rodReadoutLines({ turnsDeg: [0, 12.345], k: 0.8,
+  pastBottomMm: 3.24, suppressed: ['torso_lower'], w: 1 })],
+[['The rod is shown once the model carries a channel'], ['Turn per link: 0.0° · 12.3°',
+  'Depth scale k 0.800 · past the bottom 3.2 mm', 'Weight w 1.00 · skipped capsules: torso_lower']]);
+
+async function renderChannels(props) {
+  const esbuild = esbuildModule();
+  const dir = await mkdtemp(join(tmpdir(), 'check-base-body-ui-ch-'));
+  try {
+    const entry = join(dir, 'entry.tsx');
+    const file = join(dir, 'ssr.cjs');
+    const at = (rel) => JSON.stringify(join(ROOT, rel));
+    writeFileSync(entry, [
+      `import { renderToStaticMarkup } from 'react-dom/server'`,
+      `import { I18nProvider } from ${at('frontend/src/i18n/I18nProvider.tsx')}`,
+      `import { ToastProvider } from ${at('frontend/src/lib/Toast.tsx')}`,
+      `import { CollisionChannels } from ${at('frontend/src/tabs/characters/CollisionChannels.tsx')}`,
+      `export const render = (p) => renderToStaticMarkup(<I18nProvider><ToastProvider><CollisionChannels`,
+      `  character="demo" disabled={false} onPreview={() => {}} onSaved={() => {}} onShowStep={() => {}} {...p} />`,
+      `</ToastProvider></I18nProvider>)`,
+    ].join('\n'));
+    await esbuild.build({
+      entryPoints: [entry], outfile: file, bundle: true, format: 'cjs', platform: 'node', jsx: 'automatic',
+      logLevel: 'silent', absWorkingDir: ROOT, nodePaths: [join(ROOT, 'node_modules')],
+      define: { 'process.env.NODE_ENV': '"production"' }, loader: { '.css': 'empty' },
+    });
+    return require_(file).render(props);
+  } catch (e) {
+    return `render failed: ${e.message}`;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+const dueHtml = await renderChannels({ collision: PAYLOAD, overrides: null, declarations: [DECL], step: stepOf('due') });
+const labelsOf = (html) => ['Side', 'Up', 'Front', 'Radius', 'Depth', 'Cone']
+  .map((l) => html.includes(`<span>${l}</span>`));
+check('[15] panel: legend, six fields, the placement', [dueHtml.includes('<legend>Channels</legend>'), labelsOf(dueHtml),
+  (dueHtml.match(/type="range"/g) || []).length, dueHtml.includes('Placed at the declared offset')],
+[true, [true, true, true, true, true, true], 6, true]);
+check('[15] after Save the step reads due, with the link', [dueHtml.includes('Collision capsules · Due'),
+  dueHtml.includes('Channel settings changed — recompute to apply'),
+  dueHtml.includes('Go to “Recompute collision capsules”')], [true, true, true]);
+check('[15] Save disabled without a draft', /<button[^>]*disabled=""[^>]*>Save<\/button>/.test(dueHtml), true);
+const doneHtml = await renderChannels({ collision: PAYLOAD, overrides: null, declarations: [DECL], step: stepOf('done') });
+check('[15] current: no link', [doneHtml.includes('Collision capsules · Current'),
+  doneHtml.includes('Go to “Recompute collision capsules”')], [true, false]);
+const noModelHtml = await renderChannels({ collision: null, overrides: null, step: null,
+  declarations: [{ ...DECL, placement: null, reason: 'No base model yet' }] });
+check('[15] no base model: the reason, the fields', [noModelHtml.includes('No base model yet'),
+  (noModelHtml.match(/type="range"/g) || []).length], [true, 6]);
+check('[15] Run all of kind collision', [m.runAllStep('collision'), /no hub job/.test(m.runAllWhat('collision')),
+  m.runAllButton({ kind: 'collision', hub_jobs: 0, steps: [{ name: 'collision', jobs: 0 }], running: false })],
+['Collision capsules (local)', true, { label: 'Run all (0 hub jobs)', disabled: false, reason: null }]);
+const channelsSrc = src('frontend/src/tabs/characters/CollisionChannels.tsx');
+check('[15] the panel stores only', [channelsSrc.includes('saveChannelOverrides('),
+  /recomputePath|model3d\/collision\?/.test(channelsSrc)], [true, false]);
+const panelsAt = baseTab.indexOf('ga-collision-panels');
+check('[15] Base body tab: panel beside the scales, the step button', [panelsAt > 0,
+  baseTab.indexOf('<CollisionScales', panelsAt) > panelsAt, baseTab.indexOf('{channelsPanel}', panelsAt) > panelsAt,
+  /<CollisionChannels /.test(baseTab), /apiPost\(recomputePath\(character, info\.signature\)/.test(baseTab),
+  /t\('Recompute collision capsules'\)/.test(baseTab)], [true, true, true, true, true, true]);
+check('[15] 3D tab: the panel', /<CollisionChannels /.test(model3d), true);
+check('[15] viewer: the two toggles, off at start', [/aria-pressed=\{channelsShownOn\}[\s\S]{0,400}t\('Channels'\)/.test(viewerSrc),
+  /aria-pressed=\{rodShownOn\}[\s\S]{0,400}t\('Test rod'\)/.test(viewerSrc),
+  /const \[channelsOn, setChannelsOn\] = useState\(false\)/.test(viewerSrc),
+  /const \[rodOn, setRodOn\] = useState\(false\)/.test(viewerSrc)], [true, true, true, true]);
+check('[15] viewer: draws the channels and the rod, frees them', [/channelWireframe\(THREE/.test(viewerSrc),
+  /guideRod\(target/.test(viewerSrc), /disposers\.push\(\(\) => \{\s*dropLines\(channelLines\)/.test(viewerSrc)],
+[true, true, true]);
 
 if (failures.length) {
   console.error('\nFAILED:\n' + failures.join('\n'));

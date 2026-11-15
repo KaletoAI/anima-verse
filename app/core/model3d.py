@@ -1294,6 +1294,11 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
         except Exception as exc:  # noqa: BLE001 — the info route never fails on it
             logger.warning("Model3D %s: collision capsules unavailable: %s", character_name, exc)
             info["collision"] = None
+        # The channels this model's declarations ask for, placed or with the reason (the 3D tab's Channels panel
+        # off the base-body pipeline; ``collision_channels.declarations_info`` never raises).
+        from app.core.collision_channels import declarations_info
+        info["channel_declarations"] = declarations_info(
+            character_name, path, {**_read_sidecar(path), "collision": info.get("collision")}, profile=profile)
         # The foot pose of the SERVED file (footwear spec § 6.1): the assembly
         # sidecar's record when the assembly is served, None for the bare file.
         from app.core import garment_assembly

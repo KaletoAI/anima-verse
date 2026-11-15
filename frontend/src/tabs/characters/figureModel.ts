@@ -789,16 +789,21 @@ function bodyRowsAtRest(body: NonNullable<FigurePayload['body']>, shapeNames: st
 
 /** The Build's planned steps as rows (checklist 8): red a chain that failed for its input (a manual Build retries
  *  it), blue the step in flight, yellow due; the cost on the right. */
+/** The reason of the Build's collision step (cross-person collision Task 15): a channel setting saved since. */
+export const COLLISION_STEP_REASON = 'Channel settings were saved and are not applied yet — recomputes the capsules of every stored model'
+
 export function planRows(f: Pick<FigurePayload, 'cost' | 'build'>, t: Tr = EN): Array<{
   key: string; name: string; light: Light; state: string; reason: string
 }> {
   const running = f.build.running ? f.build.step : null
   return f.cost.steps.map((s, i) => ({
     key: `${s.name}:${s.item_id}:${i}`,
-    name: s.label,
+    // The collision step's label is a fixed phrase (`figure_build.COLLISION_LABEL`): translated, with its reason.
+    name: s.name === 'collision' ? t(s.label) : s.label,
     light: running && running.name === s.name && running.item_id === s.item_id ? 'blue' : s.failed ? 'red' : 'yellow',
     state: s.jobs === null ? t('cost unknown') : s.jobs ? jobsTr(s.jobs, t) : t('no hub job'),
-    reason: [s.failed ? `${t('Failed')}: ${s.failed}` : '', s.manual ? t(s.manual) : ''].filter(Boolean).join(' · '),
+    reason: [s.failed ? `${t('Failed')}: ${s.failed}` : '', s.manual ? t(s.manual) : '',
+      s.name === 'collision' ? t(COLLISION_STEP_REASON) : ''].filter(Boolean).join(' · '),
   }))
 }
 

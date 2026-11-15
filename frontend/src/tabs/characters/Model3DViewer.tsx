@@ -23,11 +23,15 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   footPoseMatches, transplantedRestPose, measureClipGround, clipGroundOffset, plantFootPose,
   seatFootLift, createStrandHair, bindCollision, inGarment, transformPoint, linearScale, capsuleWireframe,
   placeCapsuleWireframe, consumerPartnerCapsules, probeCapsules, probeSweepOffset, probeSweptPose, probeSnapshot,
-  PROBE_COLOR } from '@anima/scene-render'
+  PROBE_COLOR, CAPSULE_REGION_COLORS, CHANNEL_GROW, bindChannels, channelCoords, channelWireframe, guideRod, inZone,
+  placeChannelWireframe, stepEngagement } from '@anima/scene-render'
 import type { SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm,
   CollisionOverlay, CollisionPayload, FootPose, GarmentCollision, HairStrandRecord, StrandHair, CapsuleNow,
-  PartnerSnapshot, ProbeSourceCapsule } from '@anima/scene-render'
+  PartnerSnapshot, ProbeSourceCapsule, ChannelNow, Engagement } from '@anima/scene-render'
 import { PartnerProbeControls } from './PartnerProbeControls'
+import { ChannelRodControls } from './ChannelRodControls'
+import { ROD_BUDGET_DEG, ROD_DEFAULTS } from './collisionChannelsModel'
+import type { RodReadout, RodSettings } from './collisionChannelsModel'
 import type { PartnerProbeSettings } from './PartnerProbeControls'
 import { previewMotionAmp, previewRootPose, TURN_S } from './hairstylesModel'
 import type { PreviewMotionKind } from './hairstylesModel'
@@ -336,7 +340,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   picking = false, onPickPoint, actionAccessPoints, spatialAuthoring = false, onPickGroundPoint,
   frontal = false, onFrontalChange, keepCamera = false,
   areaOutlines, polylines, slots, meshLayout, drawing = false, drawThrough = false,
-  onPolygonFaces, onDrawCancel, leafBbox, collision, showCollision = false, footPose = null, clipGroup,
+  onPolygonFaces, onDrawCancel, leafBbox, collision, showCollision = false, showChannels = false, footPose = null, clipGroup,
   meshAdjust = null, focus = null, alphaCutoff, strandHair, strandNote, subject = 'model', extensionBones = false,
   companions, onCompanionState, deform = null, resetViewOnDoubleClick = false }:
   { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; statusPanel?: ReactNode; sideToolbar?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
@@ -539,6 +543,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
      *  radius sliders preview a draft (CollisionScales), so the effect is
      *  visible as the slider moves. */
     showCollision?: boolean
+    /** Show the declared channels whatever the toggle says — while the Channels panel previews a draft
+     *  (CollisionChannels), so the wire moves with the slider. */
+    showChannels?: boolean
     /** THE FIT'S FOOT POSE (`foot_pose` of a footwear fit, footPose.ts of
      *  @anima/scene-render). Applied only when the loaded model carries the
      *  shoes it was fitted for (`footPoseMatches`): the extension is baked into
@@ -659,6 +666,20 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   const probeShownOn = probeOn && !!collision?.capsules?.length
   const probeRef = useRef({ on: probeShownOn, settings: probeSettings, other: probeOther, payload: collision ?? null })
   probeRef.current = { on: probeShownOn, settings: probeSettings, other: probeOther, payload: collision ?? null }
+  // THE DECLARED CHANNELS (plan Task 15): "Channels" draws each channel of the shown payload on the playing figure
+  // (`channelWireframe`, cylinder + funnel) with a 1 cm grid in its opening plane; "Test rod" pushes a straight
+  // stand-in chain into one (`guideRod`) and highlights the capsules it skips. Read per frame — a dragged channel
+  // draft or rod slider never reloads the model. Off at every start; a preview only, nothing is saved.
+  const channelIds = useMemo(() => (collision?.channels ?? []).map(record => record.id), [collision])
+  const hasChannels = channelIds.length > 0
+  const [channelsOn, setChannelsOn] = useState(false)
+  const channelsShownOn = hasChannels && (channelsOn || showChannels)
+  const [rodOn, setRodOn] = useState(false)
+  const rodShownOn = hasChannels && rodOn
+  const [rodSettings, setRodSettings] = useState<RodSettings>(ROD_DEFAULTS)
+  const [rodReadout, setRodReadout] = useState<RodReadout | null>(null)
+  const channelsRef = useRef({ on: channelsShownOn, rod: rodShownOn, settings: rodSettings, payload: collision ?? null })
+  channelsRef.current = { on: channelsShownOn, rod: rodShownOn, settings: rodSettings, payload: collision ?? null }
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
   // Triangle/vertex count of the loaded mesh — every preview shows it, so
@@ -1554,17 +1575,236 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           }
           world.forEach((c, i) => placeCapsuleWireframe(THREE, probeLines[i], c.now))
           // The metres against a grid (10 cm cells) at the figure's ground level (y 0 of its frame) — unless the clip's
-          // floor grid is there.
-          if (floorWorldY === null) {
+          // floor grid is there. A viewer that frames a PART (`focus`, the Hairstyles tab's head) has the ground out of
+          // view: the grid then lies at the height of the focused part, so x / z still read in metres (plan Task 15).
+          const focusAt = focusRef.current
+          if (floorWorldY === null || focusAt) {
             if (!probeGrid) {
               probeGrid = new THREE.GridHelper(2, 20, 0x58a6ff, 0x30363d)
               probeGroup.add(probeGrid)
             }
             const origin = transformPoint(m, [0, 0, 0])
-            probeGrid.position.set(origin[0], origin[1], origin[2])
+            const level = focusAt
+              ? object.localToWorld(new THREE.Vector3(focusAt.center[0], focusAt.center[1], focusAt.center[2])).y
+              : origin[1]
+            probeGrid.position.set(origin[0], level, origin[2])
           }
           probeGroup.visible = true
           return [probeSnapshot(world)]
+        }
+
+        // THE DECLARED CHANNELS AND THE TEST ROD (plan Task 15). The channels are bound to the figure by the endpoint
+        // rule (`bindChannels`) and drawn in WORLD space each frame, like the capsule overlay; the binding is rebuilt
+        // when the payload (identity) changes — a draft from the Channels panel is a new payload. Everything here is
+        // this viewer's own (the disposer below), never the model's.
+        const channelGroup = new THREE.Group()
+        channelGroup.name = 'channels'
+        channelGroup.visible = false
+        scene.add(channelGroup)
+        const channelLines: LineSegments[] = []
+        const rodLines: LineSegments[] = []
+        const skipLines: LineSegments[] = []
+        let channelGrid: GridHelper | null = null
+        let rodLabel: import('three').Sprite | null = null
+        let rodLabelText = ''
+        const dropLines = (lines: LineSegments[]) => {
+          for (const line of lines.splice(0)) {
+            line.removeFromParent()
+            line.geometry.dispose()
+            ;(line.material as Material).dispose()
+          }
+        }
+        const dropRodLabel = () => {
+          if (!rodLabel) return
+          rodLabel.removeFromParent()
+          rodLabel.material.map?.dispose()
+          rodLabel.material.dispose()
+          rodLabel = null
+          rodLabelText = ''
+        }
+        disposers.push(() => {
+          dropLines(channelLines)
+          dropLines(rodLines)
+          dropLines(skipLines)
+          dropRodLabel()
+          if (channelGrid) {
+            channelGrid.removeFromParent()
+            channelGrid.geometry.dispose()
+            ;(channelGrid.material as Material).dispose()
+            channelGrid = null
+          }
+          channelGroup.removeFromParent()
+        })
+        let channelsFor: CollisionPayload | null | undefined
+        let channelBinding: ReturnType<typeof bindChannels> = null
+        let capsuleBinding: ReturnType<typeof bindCollision> = null
+        let rodEngagement: Engagement = { engaged: false, w: 0 }
+        let rodClock = 0
+        let rodShown = ''
+        const yAxis = new THREE.Vector3(0, 1, 0)
+        /** World units per model metre at a channel (its record radius against the bound one). */
+        const unitsPerMetre = (ch: ChannelNow): number => {
+          const record = channelsFor?.channels?.find(entry => entry.id === ch.id)
+          return record && record.r > 0 ? ch.r / record.r : 1
+        }
+        /** The rod's length written on it (a sprite; "0.150 m" reads the same in every language). */
+        const placeRodLabel = (text: string, at: [number, number, number], h: number) => {
+          if (text !== rodLabelText) {
+            dropRodLabel()
+            const canvas = document.createElement('canvas')
+            canvas.width = 256
+            canvas.height = 64
+            const g = canvas.getContext('2d')
+            if (g) {
+              g.fillStyle = 'rgba(13,17,23,0.75)'
+              g.fillRect(0, 0, 256, 64)
+              g.fillStyle = '#ffe14d'
+              g.font = 'bold 40px sans-serif'
+              g.textAlign = 'center'
+              g.textBaseline = 'middle'
+              g.fillText(text, 128, 34)
+            }
+            const material = new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false,
+              transparent: true })
+            rodLabel = new THREE.Sprite(material)
+            rodLabel.renderOrder = 1000
+            channelGroup.add(rodLabel)
+            rodLabelText = text
+          }
+          if (rodLabel) {
+            rodLabel.scale.set(h * 4, h, 1)
+            rodLabel.position.set(at[0], at[1], at[2])
+          }
+        }
+        /** One frame of the channels and the rod (after the figure's pose is final). */
+        const channelFrame = (dt: number) => {
+          const state = channelsRef.current
+          const wanted = state.on || state.rod ? state.payload : null
+          if (wanted !== channelsFor) {
+            channelsFor = wanted
+            channelBinding = wanted ? bindChannels(THREE, object, wanted) : null
+            capsuleBinding = wanted ? bindCollision(THREE, object, wanted) : null
+            dropLines(channelLines)
+            rodEngagement = { engaged: false, w: 0 }
+          }
+          if (!channelBinding) {
+            channelGroup.visible = false
+            return
+          }
+          channelBinding.update()
+          const channels = channelBinding.channels
+          if (state.on) {
+            if (channelLines.length !== channels.length) {
+              dropLines(channelLines)
+              for (const ch of channels) {
+                const line = channelWireframe(THREE, ch, CAPSULE_REGION_COLORS.channel)
+                line.matrixAutoUpdate = false
+                // Inside the body: drawn through it, like the grid.
+                ;(line.material as Material).depthTest = false
+                line.renderOrder = 998
+                line.name = `channel:${ch.id}`
+                channelGroup.add(line)
+                channelLines.push(line)
+              }
+            }
+            channels.forEach((ch, i) => placeChannelWireframe(THREE, channelLines[i], ch))
+          }
+          channelLines.forEach(line => { line.visible = state.on })
+          // The 1 cm grid in the opening plane of the rod's channel (or the first): the mm offsets and the radius
+          // read against it.
+          const target = channels.find(ch => ch.id === state.settings.channel) ?? channels[0]
+          const metre = target ? unitsPerMetre(target) : 1
+          if (target && (state.on || state.rod)) {
+            if (!channelGrid) {
+              channelGrid = new THREE.GridHelper(1, 20, 0xffe14d, 0xb59a2e)
+              ;(channelGrid.material as Material).depthTest = false
+              ;(channelGrid.material as Material).transparent = true
+              ;(channelGrid.material as Material & { opacity: number }).opacity = 0.6
+              channelGrid.renderOrder = 998
+              channelGroup.add(channelGrid)
+            }
+            channelGrid.visible = true
+            channelGrid.scale.setScalar(0.2 * metre)
+            channelGrid.position.set(target.o[0], target.o[1], target.o[2])
+            channelGrid.quaternion.setFromUnitVectors(yAxis, new THREE.Vector3(target.u[0], target.u[1], target.u[2]))
+          } else if (channelGrid) channelGrid.visible = false
+          // The test rod: `guideRod` at w = 1 in the channel's world units, its links as capsules, the skipped
+          // capsules of the receiving body highlighted.
+          let readout: RodReadout | null = null
+          if (state.rod && target && capsuleBinding) {
+            const rod = state.settings
+            const links = Math.max(1, Math.round(rod.links))
+            const guided = guideRod(target, { length: rod.length * metre, radius: rod.radius * metre, links,
+              insertion: rod.insertion * metre, tiltDeg: rod.tiltDeg, budgetDeg: ROD_BUDGET_DEG })
+            if (rodLines.length !== links) {
+              dropLines(rodLines)
+              for (let i = 0; i < links; i++) {
+                const line = capsuleWireframe(THREE, { a: guided.joints[i], b: guided.joints[i + 1], r: rod.radius * metre },
+                  0xffe14d)
+                line.matrixAutoUpdate = false
+                ;(line.material as Material).depthTest = false
+                line.renderOrder = 999
+                line.name = `rod:${i}`
+                channelGroup.add(line)
+                rodLines.push(line)
+              }
+            }
+            rodLines.forEach((line, i) => placeCapsuleWireframe(THREE, line, { a: guided.joints[i],
+              b: guided.joints[i + 1], r: rod.radius * metre }))
+            const root = guided.joints[0]
+            placeRodLabel(`${rod.length.toFixed(3)} m`, [root[0], root[1] + 0.03 * metre, root[2]], 0.025 * metre)
+            // The engagement weight, ramped like a chain's: a link tip in the funnel or the cylinder with its lever
+            // within the cone engages, no tip in the grown zone releases.
+            let inside = false, inGrown = false, lever = 180
+            for (let i = 1; i <= links; i++) {
+              const tip = guided.joints[i], from = guided.joints[i - 1]
+              const { s, rho } = channelCoords(tip, target)
+              if (inZone(s, rho, target)) {
+                inside = true
+                const d = [tip[0] - from[0], tip[1] - from[1], tip[2] - from[2]]
+                const n = Math.hypot(d[0], d[1], d[2]) || 1
+                const cos = (d[0] * target.u[0] + d[1] * target.u[1] + d[2] * target.u[2]) / n
+                lever = Math.min(lever, (Math.acos(Math.max(-1, Math.min(1, cos))) * 180) / Math.PI)
+              }
+              if (inZone(s, rho, target, CHANNEL_GROW)) inGrown = true
+            }
+            rodEngagement = stepEngagement(rodEngagement, { gate: true, tipInZone: inside, tipInGrownZone: inGrown,
+              leverAngleDeg: lever }, target, dt)
+            // The skipped capsules: the receiving body's `suppress` list while a link tip is inside the cylinder.
+            capsuleBinding.update()
+            const skipped = capsuleBinding.capsules.filter(entry => guided.suppressed.includes(entry.capsule.id))
+            if (skipLines.length !== skipped.length) {
+              dropLines(skipLines)
+              for (const entry of skipped) {
+                const line = capsuleWireframe(THREE, entry.now, 0xffffff)
+                line.matrixAutoUpdate = false
+                line.name = `skipped:${entry.capsule.id}`
+                ;(line.material as Material).depthTest = false
+                line.renderOrder = 997
+                channelGroup.add(line)
+                skipLines.push(line)
+              }
+            }
+            skipped.forEach((entry, i) => placeCapsuleWireframe(THREE, skipLines[i], entry.now))
+            readout = { turnsDeg: guided.turnsDeg, k: guided.k, pastBottomMm: (guided.pastBottomM / metre) * 1000,
+              suppressed: guided.suppressed, w: rodEngagement.w }
+          } else {
+            dropLines(rodLines)
+            dropLines(skipLines)
+            dropRodLabel()
+            rodEngagement = { engaged: false, w: 0 }
+          }
+          channelGroup.visible = state.on || state.rod
+          rodClock += dt
+          if (rodClock >= 0.25) {
+            rodClock = 0
+            const key = JSON.stringify(readout && { ...readout, turnsDeg: readout.turnsDeg.map(v => v.toFixed(1)),
+              k: readout.k.toFixed(3), pastBottomMm: readout.pastBottomMm.toFixed(1), w: readout.w.toFixed(2) })
+            if (key !== rodShown) {
+              rodShown = key
+              setRodReadout(readout)
+            }
+          }
         }
 
         if (placementRef.current) {
@@ -3067,6 +3307,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             if (collisionOverlay) scene.add(collisionOverlay.group)
           }
           collisionOverlay?.update()
+          channelFrame(Math.min(realDelta, 0.1))
           const bonesWanted = bonesOnRef.current && motionRef.current ? motionRef.current.rev : null
           if (bonesWanted !== bonesShown) {
             boneOverlay?.dispose()
@@ -3167,6 +3408,15 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
     <PartnerProbeControls value={probeSettings} onChange={setProbeSettings} onOtherCapsules={setProbeOther}
       contacts={probeContacts} />
   )
+  const rodControls = (
+    <ChannelRodControls value={rodSettings} channels={channelIds} onChange={setRodSettings} readout={rodReadout} />
+  )
+  const channelsNote = channelsShownOn || rodShownOn ? (
+    <div className="ga-hint" style={{ fontSize: 11 }}>
+      {t('Channels: {n} on this model · the yellow grid in the opening has 1 cm cells · a preview, nothing runs')
+        .replace('{n}', String(channelIds.length))}
+    </div>
+  ) : null
   return (
     <div className={sideToolbar ? 'ga-model3d-preview' : undefined}>
       {embeddedTakes && takes.length > 0 ? (
@@ -3318,6 +3568,20 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
               {t('Partner probe')}
             </button>
           ) : null}
+          {hasChannels ? (
+            <button type="button" className="ga-btn ga-btn-sm"
+              aria-pressed={channelsShownOn} onClick={() => setChannelsOn(on => !on)}
+              title={t('Show the declared channels on the playing figure: the cylinder and its entry funnel, with a 1 cm grid in the opening')}>
+              {t('Channels')}
+            </button>
+          ) : null}
+          {hasChannels ? (
+            <button type="button" className="ga-btn ga-btn-sm"
+              aria-pressed={rodShownOn} onClick={() => setRodOn(on => !on)}
+              title={t('A straight stand-in chain pushed into a channel — how the guidance, the depth rule and the skipped capsules act, without a second character · preview only')}>
+              {t('Test rod')}
+            </button>
+          ) : null}
           {/* The front view is a MODE the owner holds (§ B1): pressed, the
               model stands straight on and the orbit is locked — the state a
               ring may be drawn in. */}
@@ -3394,13 +3658,19 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           {t('Extension bones: up to {n}° from their built pose · no jobs').replace('{n}', String(bonesSwing))}
         </div>
       ) : null}
-      {probeShownOn && !sideToolbar && !loading && !error ? (
-        <div style={{ maxWidth: 300, marginTop: 6 }}>{probeControls}</div>
+      {!loading && !error ? channelsNote : null}
+      {(probeShownOn || rodShownOn) && !sideToolbar && !loading && !error ? (
+        // Beside each other under the viewer (no side toolbar here): the probe and the rod act on the view live.
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 8, marginTop: 6 }}>
+          {probeShownOn ? probeControls : null}
+          {rodShownOn ? rodControls : null}
+        </div>
       ) : null}
       </div>
       {sideToolbar ? <aside className="ga-model3d-toolbar">
         {statusPanel}
         {probeShownOn && !loading && !error ? probeControls : null}
+        {rodShownOn && !loading && !error ? rodControls : null}
         {turnMode ? (
           <div className="ga-fieldset ga-model3d-group">
             <span className="ga-fieldset-title" style={{ margin: 0, fontSize: 11 }}>{t('Motion preview')}</span>

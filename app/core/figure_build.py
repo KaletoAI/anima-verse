@@ -68,6 +68,11 @@ order ``STEP_ORDER`` (a step with nothing to do is not in it):
 8. ``assemble`` — the outfit model of the figure delivered THEN, built from
    whatever is built (the interim rule), then the garment assembly
    (``garment_assembly.schedule``).
+9. ``collision`` — a stored model's collision record carries channels that no longer match the declarations,
+   the per-character overrides or the opening (``collision.channels_due``: the Channels panel's Save stores only,
+   ruling R4 of the cross-person collision plan): ``collision.recompute_character(apply_channels=True)`` — CPU,
+   no hub job, in automatic Builds too. Listed last, so the models this Build made are applied as well (a fresh
+   fit resolves its channels itself; the step then finds nothing due).
 
 A rebuilt plain body re-renders the views every other image is edited from:
 with ``plain_body`` in a MANUAL plan every view counts as missing and a stored
@@ -88,7 +93,7 @@ the plain body = ``base_rebuild_steps``; interim / texture =
 texture store 0 — fix round T12-F1, ruling F13 c) and the whole set
 ``base_body.dressed_view_jobs()`` on a rebuilt body or shape;
 shape = views (when missing) + ``model3d.mesh_hub_stages``; pieces / hair =
-``run_estimate``; fits / assemble = 0. ``hub_jobs`` None as soon as one step
+``run_estimate``; fits / assemble / collision = 0. ``hub_jobs`` None as soon as one step
 is unknown (the note says which). It is an ESTIMATE of first attempts: a
 gate's retry (a view-guard re-render, a re-draft after a refused composite) is extra — the
 note says so ("N hub jobs (estimate, retries extra)").
@@ -159,18 +164,21 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-STEP_ORDER = ("plain_body", "base_repair", "tip_smoothing", "interim", "shape", "pieces", "hair", "texture", "fits", "assemble")
+STEP_ORDER = ("plain_body", "base_repair", "tip_smoothing", "interim", "shape", "pieces", "hair", "texture", "fits", "assemble",
+              "collision")
 #: What a step needs: a failed (or skipped) step skips every step naming it here.
 DEPENDS = {"base_repair": {"plain_body"}, "tip_smoothing": {"plain_body"}, "interim": {"plain_body"}, "shape": {"plain_body"}, "pieces": {"plain_body"},
            "hair": {"plain_body"}, "texture": {"plain_body", "shape"}, "fits": {"plain_body"},
            "assemble": {"plain_body", "fits"}}
 #: Steps that hold the character's 3D generation slot (model work).
-SLOT_STEPS = frozenset({"plain_body", "base_repair", "tip_smoothing", "interim", "shape", "texture", "assemble"})
+SLOT_STEPS = frozenset({"plain_body", "base_repair", "tip_smoothing", "interim", "shape", "texture", "assemble",
+                        "collision"})
 #: Steps whose failure (a refused view, a shape not meshed) STOPS the Build: nothing after them runs (Ruling C4).
 STOP_STEPS = frozenset({"plain_body", "interim", "shape", "texture"})
 #: Steps that do not check the run's pinned figure first (Ruling A18): the plain body (it builds what every
-#: figure stands on; the pin is taken again after it) and the CPU refits (they fit what is built).
-UNPINNED_STEPS = frozenset({"plain_body", "base_repair", "tip_smoothing", "fits"})
+#: figure stands on; the pin is taken again after it), the CPU refits (they fit what is built) and the collision
+#: channels (they apply to every stored model, whichever figure is wanted).
+UNPINNED_STEPS = frozenset({"plain_body", "base_repair", "tip_smoothing", "fits", "collision"})
 #: Steps after which the run pins the wanted figure again: they change it themselves — the plain body (the
 #: figure stands on the new body) and the hair (its chain delivers the worn hairstyle's mesh; the hairstyle itself is
 #: made before the first pin — ``garment_hair.ensure_hairstyle`` at the start of ``_run``).
@@ -601,6 +609,9 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
     elif not hold and (_runnable(steps, explicit) or (not painted_interim and not waits
                                                       and (built is None or built.as_dict() != delivered.as_dict()))):
         steps.append(Step("assemble", ASSEMBLE_LABEL, 0))
+    # Last, and after the assembly's own test: a channel step alone never makes the figure assemble.
+    if _collision_due(character_name):
+        steps.append(Step("collision", COLLISION_LABEL, 0))
     return steps
 
 
@@ -1460,6 +1471,33 @@ def _run_tip_smoothing(character_name: str, step: Step, explicit: bool = False) 
     return ""
 
 
+#: The Build's label of the collision channel step (``collision.channels_due``; module docstring step 9).
+COLLISION_LABEL = "Collision capsules: apply the saved channel settings (local)"
+
+
+def _collision_due(character_name: str) -> bool:
+    """Whether a stored model of the character carries channels the saved settings no longer match
+    (``collision.channels_due``); False when it cannot be read (a plan never fails on it)."""
+    from app.core import collision
+    try:
+        return collision.channels_due(character_name)
+    except Exception:  # noqa: BLE001 — a plan never fails on it
+        logger.debug("Build %s: collision channels state not read", character_name, exc_info=True)
+        return False
+
+
+def _run_collision(character_name: str, step: Step, explicit: bool = False) -> str:
+    """Apply the saved channel settings to every stored model of the character
+    (``collision.recompute_character(apply_channels=True)``) — CPU, no hub job. "" or the models that failed."""
+    from app.core import collision
+    if not _collision_due(character_name):
+        return ""
+    result = collision.recompute_character(character_name, apply_channels=True)
+    failed = [f"{signature}: {entry.get('error') or 'failed'}" for signature, entry in (result.get("models") or {}).items()
+              if not entry.get("ok")]
+    return "Collision capsules not recomputed — " + "; ".join(failed) if failed else ""
+
+
 def _outfit_model(character_name: str, signature: str) -> str:
     """The outfit model of the figure delivered now, without the shape
     preparation (the Build's own steps make shapes). Not forced: a model of
@@ -1835,7 +1873,8 @@ def _run_assemble(character_name: str, step: Step, explicit: bool = False) -> st
 _RUNNERS: Dict[str, Callable[[str, Step, bool], str]] = {
     "plain_body": _run_plain_body, "base_repair": _run_base_repair, "tip_smoothing": _run_tip_smoothing,
     "interim": _run_interim, "shape": _run_shape, "pieces": _run_pieces,
-    "hair": _run_hair, "texture": _run_texture, "fits": _run_fits, "assemble": _run_assemble}
+    "hair": _run_hair, "texture": _run_texture, "fits": _run_fits, "assemble": _run_assemble,
+    "collision": _run_collision}
 
 
 # --- The Figure tab's payload ----------------------------------------------------------
@@ -2292,7 +2331,11 @@ def _plain_jobs(character_name: str, bsig: str) -> Dict[str, Any]:
 # 6. else ``extension_rig`` — a tip setting saved since (Task UI2) makes the stored base model's extension rig older
 #    than its settings (``model3d.extension_settings_changed``): ``extension_tip.start_tip_rebuild`` — local, no hub
 #    job.
-# 7. else nothing: "Everything is current".
+# 7. else ``collision`` — a channel setting saved since (the Channels panel stores only) leaves a stored model's
+#    collision channels not current (``collision.channels_due``): ``collision.recompute_character(apply_channels=
+#    True)`` in a worker thread — local, no hub job. The kinds above refit the base model's set, which resolves its
+#    channels; the outfit models it leaves due stay listed here on the next poll.
+# 8. else nothing: "Everything is current".
 #
 # Each earlier kind includes the later ones (a new model, a cleanup and a face retexture all re-rig, and the rig
 # builds the extension bones with the saved settings), so one kind per click is enough.
@@ -2305,6 +2348,9 @@ RUN_ALL_PLAIN, RUN_ALL_CLEANUP, RUN_ALL_FACE = "plain_body", "face_cleanup", "fa
 RUN_ALL_EXTENSION = "extension_rig"
 RUN_ALL_REPAIR = "mesh_repair"
 RUN_ALL_TIP = "tip_smoothing"
+RUN_ALL_COLLISION = "collision"
+#: The collision channels are applied locally (CPU); its label in the step list.
+COLLISION_STEP = "collision"
 #: The tip smoothing runs inside the extension rebuild (local); its label in the step list (Ruling A43).
 TIP_STEP = "tip_smoothing"
 #: The base mesh repair is local (CPU); its label in the step list.
@@ -2368,8 +2414,8 @@ def base_run_all(character_name: str, *, profile: Optional[Dict[str, Any]] = Non
     hub_jobs, note, running, last}`` — ``kind`` "" when every step is current (``hub_jobs`` 0) or the plan
     could not be read (``hub_jobs`` None, ``note`` says why); ``steps`` in run order with their first-attempt
     hub jobs (``view front``, ``skin front``, ``mesh``, ``upscale``, ``face``, ``rig``, ``cleanup``, ``repair``,
-    ``tip_smoothing`` and ``extension`` — the last four local; ``tip_smoothing`` only on a base with a switched-on
-    ``pair_tip`` group); ``face_due`` why a face retexture is planned ("missing" / "changed",
+    ``tip_smoothing``, ``extension`` and ``collision`` — the last five local; ``tip_smoothing`` only on a base with a
+    switched-on ``pair_tip`` group); ``face_due`` why a face retexture is planned ("missing" / "changed",
     else ""); ``running`` while a Run all of the character goes, ``last`` its last outcome
     (``{error, finished_at}``, None before the first). Read-only."""
     from app.core import base_body, model3d
@@ -2418,6 +2464,10 @@ def base_run_all(character_name: str, *, profile: Optional[Dict[str, Any]] = Non
                     "note": ("extension groups changed since the last build: extension rebuild (local)"
                              if due_reason == "groups" else "tip settings saved, not built yet: extension rebuild (local)"),
                     "steps": [*tip, {"name": EXTENSION_STEP, "jobs": 0}]}
+        if _collision_due(character_name):
+            return {**out, "kind": RUN_ALL_COLLISION, "hub_jobs": 0,
+                    "note": "channel settings changed — not applied yet: collision capsules recompute (local)",
+                    "steps": [{"name": COLLISION_STEP, "jobs": 0}]}
         return out
     except Exception as e:  # noqa: BLE001 — a label, never a failure of the poll
         logger.warning("Base Run all plan of %s not computable: %s", character_name, e)
@@ -2468,6 +2518,8 @@ def start_base_run_all(character_name: str) -> Dict[str, Any]:
         if model3d.generation_running(character_name) or not extension_tip.start_tip_rebuild(character_name, bsig):
             return {"status": "busy", "reason": RUN_ALL_BUSY}
         return {"status": "started", "kind": kind}
+    if kind == RUN_ALL_COLLISION:
+        return _start_collision_run_all(character_name)
     lock = build_lock(character_name)
     if not lock.acquire(blocking=False):
         return {"status": "building", "reason": RUN_ALL_BUILD_RUNNING}
@@ -2513,6 +2565,43 @@ def start_base_run_all(character_name: str) -> Dict[str, Any]:
         raise
     logger.info("Base Run all %s started (%s)", character_name, plan_now["note"])
     return {"status": "started", "kind": kind}
+
+
+def _start_collision_run_all(character_name: str) -> Dict[str, Any]:
+    """Run all's ``collision`` kind: the saved channel settings applied to every stored model in a worker thread under
+    the character's ``build_lock`` and 3D generation slot (``_run_step``) — local, no hub job. Counts as Run all
+    running (``_run_all_active``) until it ends."""
+    from app.core import model3d
+    lock = build_lock(character_name)
+    if not lock.acquire(blocking=False):
+        return {"status": "building", "reason": RUN_ALL_BUILD_RUNNING}
+    if model3d.generation_running(character_name):
+        lock.release()
+        return {"status": "busy", "reason": RUN_ALL_BUSY}
+    with _lock:
+        _run_all_active.add(character_name)
+    step = Step("collision", COLLISION_LABEL, 0)
+
+    def run() -> None:
+        from app.core.timeutils import utc_now_iso
+        error = "Run all failed"
+        try:
+            error = _run_step(character_name, step, True)
+        finally:
+            lock.release()
+            with _lock:
+                _run_all_active.discard(character_name)
+                _run_all_last[character_name] = {"error": error, "finished_at": utc_now_iso()}
+            logger.info("Base Run all %s (collision) ended%s", character_name, f": {error}" if error else "")
+
+    try:
+        threading.Thread(target=run, daemon=True, name=f"base-run-all-collision-{character_name}").start()
+    except Exception:
+        lock.release()
+        with _lock:
+            _run_all_active.discard(character_name)
+        raise
+    return {"status": "started", "kind": RUN_ALL_COLLISION}
 
 
 def _outfit_name(character_name: str, pieces: Dict[str, str]) -> str:
@@ -2673,7 +2762,8 @@ PROBLEM_MESH, PROBLEM_FAILED = "mesh_mismatch", "failed"
 #: A failed step's label when the plan does not list it any more.
 STEP_LABELS = {"plain_body": "Plain body", "base_repair": MESH_REPAIR_LABEL, "tip_smoothing": TIP_SMOOTHING_LABEL,
                "interim": "Interim texture", "shape": "Body shape", "pieces": "Own mesh", "hair": "Hair",
-               "texture": "Texture", "fits": "Fits on the CPU", "assemble": ASSEMBLE_LABEL}
+               "texture": "Texture", "fits": "Fits on the CPU", "assemble": ASSEMBLE_LABEL,
+               "collision": COLLISION_LABEL}
 _VIEW_IN_ERROR = re.compile(r"\b(front|back|left|right)(?: view\b|:)")
 
 

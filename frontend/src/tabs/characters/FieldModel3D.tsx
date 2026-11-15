@@ -8,6 +8,9 @@ import { ExtensionMotionSliders } from './ExtensionMotionDraft'
 import type { Physics } from '../../lib/motionDraft'
 import type { SecondaryMotionPayload, ExtensionRigDeclaration, CollisionPayload, FootPose } from '@anima/scene-render'
 import { CollisionScales } from './CollisionScales'
+import { CollisionChannels } from './CollisionChannels'
+import { collisionStepLine, recomputePath } from './collisionChannelsModel'
+import type { ChannelDeclaration, ChannelOverrides } from './collisionChannelsModel'
 /**
  * FieldModel3D — the character's 3D model for the current outfit. ONE model,
  * produced either way: GENERATE it from the T-pose render (mesh backend) or
@@ -118,6 +121,9 @@ export interface Model3DInfo {
   /** The served body's collision capsules (app/core/collision.py); null for
    *  a model that gets none. */
   collision?: CollisionPayload | null
+  /** Every declared channel with its placement on this model or the plain reason (`collision_channels.
+   *  declarations_info`) — the Channels panel off the pipeline. */
+  channel_declarations?: ChannelDeclaration[]
   /** The fitted shoe's foot pose of the SERVED file (`garment_assembly.served_foot_pose`); null for the bare file.
    *  Every viewer of the served figure passes it on (Ruling A52): the shoe is bound with its foot turned back by
    *  the fit's extension, so without it the shoe stands bent up at the front with its heel through the floor. */
@@ -192,7 +198,8 @@ export interface Model3DStatus {
     face_controls?: { strength?: number; feather?: number; render_resolution?: number; yaw?: number };
     extension_rig_models?: Record<string, Record<string, { enabled?: boolean; flip?: boolean; tip?: unknown }>>;
     extension_motion?: Record<string, Physics & { bounce?: number; weight?: number }>
-    collision_scales?: Record<string, number> }
+    collision_scales?: Record<string, number>
+    collision_channels?: ChannelOverrides }
   extension_groups?: ExtensionRigDeclaration[]
   /** Switches the served outfit model takes from its base model (locked here). */
   extension_inherited?: Record<string, { enabled: boolean; reason: string }>
@@ -281,6 +288,9 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
   const [viewTier, setViewTier] = useState<'full' | 'low'>('full')
   /** Slider preview of the collision scales (CollisionScales) — shown in the viewer instead of the stored set. */
   const [collisionPreview, setCollisionPreview] = useState<CollisionPayload | null>(null)
+  /** Slider preview of the channel settings (CollisionChannels, off the pipeline). */
+  const [channelsPreview, setChannelsPreview] = useState<CollisionPayload | null>(null)
+  const [recomputing, setRecomputing] = useState(false)
   // "Fetch by job ID": a mesh run that outlived our own poll is collected from
   // the gateway afterwards. jobErrors holds a failed model check, which the
   // admin may override with "Store anyway".
@@ -791,17 +801,73 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
 
   // Collision capsules beside the viewer, so a slider's effect shows while it
   // moves. On the pipeline the set belongs to the base body (outfit models
-  // inherit it) and is edited in the Figure tab.
+  // inherit it) and is edited in the Base body tab — together with the channel settings; this model's collision step
+  // (its light, the reason and its own "Recompute collision capsules", local, no hub job) stays here.
+  const collisionStep = model?.steps?.find((row) => row.id === 'collision') ?? null
+  const collisionLine = collisionStepLine(collisionStep)
+  const recompute = async () => {
+    if (!model?.signature) return
+    setRecomputing(true)
+    try {
+      await apiPost(recomputePath(character, model.signature), {})
+      toast(t('Collision capsules recomputed'))
+      await load()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally { setRecomputing(false) }
+  }
+  const recomputeRow = model?.signature ? (
+    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+      {collisionLine ? (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} title={collisionStep?.detail || undefined}>
+          <StepLight light={collisionLine.light} />
+          <span className="ga-hint" style={{ color: LIGHT_COLOR[collisionLine.light] }}>
+            {t('Collision capsules')} · {t(collisionLine.state)}
+            {collisionLine.state === 'Due' ? ` — ${t('Channel settings changed — recompute to apply')}` : ''}
+          </span>
+        </span>
+      ) : null}
+      <button type="button" className="ga-btn ga-btn-sm" disabled={pending || recomputing}
+        title={t('Fits this model’s collision capsules again and applies the saved channel settings — also when current.')}
+        onClick={() => { void recompute() }}>{t('Recompute collision capsules')}</button>
+      <span className="ga-hint">{t('local, no hub job')}</span>
+    </div>
+  ) : null
+  // Both panels preview live: the scales' capsules and the channels' drafts, merged.
+  const collisionBase = collisionPreview ?? model?.collision
+  const viewerCollision = channelsPreview && collisionBase ? { ...collisionBase, channels: channelsPreview.channels }
+    : collisionBase
   const collisionPanel = model && mixamo && model.format === 'glb' && model.collision !== undefined ? (
     pipeline ? (
-      <div className="ga-hint" title={t('Outfit models on the base body inherit its capsule set.')}>
-        {t('Collision capsules')}: {t('from the base body')}
-        {model.collision?.capsules ? ` · ${t('{n} capsules').replace('{n}', String(model.collision.capsules.length))}` : ''}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div className="ga-hint" title={t('Outfit models on the base body inherit its capsule set.')}>
+          {t('Collision capsules')}: {t('from the base body')}
+          {model.collision?.capsules ? ` · ${t('{n} capsules').replace('{n}', String(model.collision.capsules.length))}` : ''}
+          {model.collision?.channels?.length
+            ? ` · ${t('{n} channels').replace('{n}', String(model.collision.channels.length))}` : ''}
+        </div>
+        {recomputeRow}
+        {onOpenBaseBody ? (
+          <div className="ga-face-actions-row">
+            <span className="ga-hint">{t('Capsule and channel settings are made in the Base body tab.')}</span>
+            <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBaseBody}>{t('Open Base body tab')}</button>
+          </div>
+        ) : null}
       </div>
     ) : (
-      <CollisionScales character={character} collision={model.collision}
-        scales={st.options?.collision_scales} disabled={pending}
-        onPreview={setCollisionPreview} onSaved={load} />
+      <>
+        <CollisionScales character={character} collision={model.collision}
+          scales={st.options?.collision_scales} disabled={pending}
+          onPreview={setCollisionPreview} onSaved={load} />
+        {model.channel_declarations?.length ? (
+          <>
+            <CollisionChannels character={character} collision={model.collision}
+              overrides={st.options?.collision_channels} declarations={model.channel_declarations}
+              disabled={pending || recomputing} onPreview={setChannelsPreview} onSaved={load} step={collisionStep} />
+            {recomputeRow}
+          </>
+        ) : null}
+      </>
     )
   ) : null
   // On the base-body pipeline the Bounce / Weight sliders sit in the Base body tab's Extension bones box
@@ -1130,8 +1196,9 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
             embeddedTakes={model.rig === 'generic'}
             clipLoops={model.clips}
             textureUrl={model.texture_url ? `${model.texture_url}?v=${bust}` : ''}
-            collision={collisionPreview ?? model.collision}
+            collision={viewerCollision}
             showCollision={!!collisionPreview}
+            showChannels={!!channelsPreview}
             footPose={model.foot_pose ?? null}
           />
           </div>

@@ -978,7 +978,9 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
                        item_names: Optional[Dict[str, str]] = None,
                        texture_shared: Optional[int] = None,
                        body_meta: Optional[Dict[str, Any]] = None,
-                       missing_items: Iterable[str] = ()) -> List[Dict[str, Any]]:
+                       missing_items: Iterable[str] = (),
+                       collision_current: Optional[bool] = None,
+                       channels_current: Optional[bool] = None) -> List[Dict[str, Any]]:
     """The steps of an outfit model on the base-body pipeline (pure).
     ``meta``: its sidecar; ``base``: the current ``(bsig, base model
     sha256)``; ``base_meta``: the sidecar of the base model it names (None
@@ -992,7 +994,10 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
     ``texture_shared``: how many stored outfit models use its painted body;
     ``body_meta``: the sidecar of the meshed shape it names (None when gone
     or on the plain body); ``missing_items``: the own-mesh pieces it left out
-    that have no accepted fit now (``base_body.mesh_items_missing``). A copy
+    that have no accepted fit now (``base_body.mesh_items_missing``);
+    ``collision_current`` / ``channels_current``: the stored capsule record's
+    currency (``collision.record_state``) — channels not current with current
+    capsules = the collision step ``due``, as on the base model. A copy
     of a meshed shape (nothing painted on it) shows the shape row instead of
     the painted-body rows."""
     on_body = bool(meta.get("body_id")) and not meta.get("texture_signature")
@@ -1035,7 +1040,7 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
     else:
         source = ""
     rows.append(_extension_step(state, source=source))
-    rows.append(_collision_step(meta))
+    rows.append(_collision_step(meta, current=collision_current, channels_current=channels_current))
     mesh_row = _mesh_items_step(meta, item_names or {}, missing_items)
     if mesh_row is not None:
         rows.append(mesh_row)
@@ -1430,6 +1435,11 @@ def outfit_model_overview(character_name: str,
     garments, assembly_warnings = _assembled_garments(character_name, path.stem)
     if assembly_warnings:
         meta = {**meta, "garment_warnings": [*(meta.get("garment_warnings") or []), *assembly_warnings]}
+    from app.core import collision
+    try:
+        collision_state = collision.record_state(character_name, path, meta) if meta.get("collision") else {}
+    except Exception:  # noqa: BLE001 — the overview never fails on the currency (the row shows the record)
+        collision_state = {}
     steps = outfit_model_steps(meta, base=base, base_meta=base_meta, wanted_variant=wanted, deciders=deciders,
                                shown=shown, dressed_records=records, garments=garments,
                                tiers=available_tiers(path), low_tris=low_tris,
@@ -1442,7 +1452,9 @@ def outfit_model_overview(character_name: str,
                                    else None),
                                body_meta=body_meta,
                                missing_items=[i for i, _reason in base_body.mesh_items_missing(
-                                   character_name, meta, base_sha=base[1] if base else None)])
+                                   character_name, meta, base_sha=base[1] if base else None)],
+                               collision_current=collision_state.get("current"),
+                               channels_current=collision_state.get("channels_current"))
     return steps, dressed_changed(str(meta.get("created_at") or ""), records)
 
 

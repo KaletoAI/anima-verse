@@ -34,7 +34,8 @@ body makes every view and the stored shape count as missing):
     ``dressed_view_jobs()`` == 2 (front + back), 4 with the side views on
     (1 + 3 drafts).
 [1] Everything built → ``plan == []``, ``cost.hub_jobs == 0``, GET status
-    ``up_to_date``.
+    ``up_to_date``. With ``collision.channels_due`` True (a channel setting saved, not applied — cross-person
+    collision Task 15) → the plan is the collision step alone, 0 hub jobs (CPU).
 [2] Base missing + coat in_body + trousers own (no mesh) + blouse painted →
     plain_body (views 4 + mesh + rig = 6), interim (ruling A11, task 11c-2:
     the trousers are in the body meanwhile, so the interim is the shape
@@ -396,6 +397,16 @@ def stub_sections():
     check("[1] plan", fb.plan("Kira", profile={}), [])
     check("[1] cost hub_jobs", fb.cost("Kira")["hub_jobs"], 0)
     check("[1] status", fb.figure_info("Kira")["status"], "up_to_date")
+    # Cross-person collision Task 15: a channel setting saved since (Save stores only) adds the local collision step,
+    # last, 0 hub jobs; the figure itself stays built (no assemble).
+    from app.core import collision
+    saved_due = collision.channels_due
+    collision.channels_due = lambda c: True
+    try:
+        check("[1] channels due → the collision step alone", names(fb.plan("Kira", profile={})), [("collision", 0)])
+        check("[1] channels due → 0 hub jobs", fb.cost("Kira")["hub_jobs"], 0)
+    finally:
+        collision.channels_due = saved_due
 
     print("[2] base missing + coat in_body + trousers own (no mesh)")
     W = World(base="missing", in_body=("coat",), painted=("blouse",), own=("trousers",), shape_stored=False,
