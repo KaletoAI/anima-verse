@@ -12,7 +12,7 @@
 import type { UseUndoState } from './refusedAttemptsModel'
 import type { FitSettingsInfo } from './fitSettingsModel'
 import type { AllowanceView } from './fitWiden'
-import type { FootwearAllowanceView } from './footwearAllowance'
+import type { FootwearAllowanceView } from './footwearAllowanceModel'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiGet, apiPost, type BootHemState } from '../../lib/api'
 import type { ImageTileMeta } from './RefImage'

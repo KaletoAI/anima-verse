@@ -2,7 +2,7 @@
  * FootwearAllowance — Ruling A82: the footwear piece's Width and Length allowance beside the shod preview, each on its
  * own: Auto or +0 … +20 % (`footwear_fit.ALLOWANCE_STEPS`), the millimetres beside the step (Length = that share of
  * the foot's length, all of it heel room; Width = that share of the shoe's ball width). Dragging previews the shoe
- * live in the viewer (`footwearAllowance.ts`, the fit's rule); Save stores the settings only (POST
+ * live in the viewer (`footwearAllowanceModel.ts`, the fit's rule); Save stores the settings only (POST
  * …/garments/{item}/footwear/allowance) — the fit becomes due and Re-fit / Run all / the Figure tab's Build applies it
  * on the CPU, 0 hub jobs. Auto: Width +0 (the fit widens the shoe to the foot already), Length +0 or, when the fit
  * at +0 is refused because the foot pokes out, the smallest step the checks accept — what Auto took on the shown fit
@@ -14,8 +14,8 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { StepLight } from './StepRows'
-import { resolved, stepText } from './footwearAllowance'
-import type { AllowanceName, AllowanceSetting, FootwearAllowanceView } from './footwearAllowance'
+import { resolved, stepText } from './footwearAllowanceModel'
+import type { AllowanceName, AllowanceSetting, FootwearAllowanceView } from './footwearAllowanceModel'
 
 const BOX: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, padding: '6px 8px', borderRadius: 6,
   border: '1px solid var(--border, #30363d)' }

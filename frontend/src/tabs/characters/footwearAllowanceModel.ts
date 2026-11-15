@@ -1,5 +1,5 @@
 /**
- * footwearAllowance — Ruling A82: the footwear piece's Width / Length allowance, as the shod preview shows it live.
+ * footwearAllowanceModel — Ruling A82: the footwear piece's Width / Length allowance, as the shod preview shows it live.
  *
  * THE RULE is `footwear_fit.ALLOWANCE_STEPS` (Python, the fit), read in the SHOWN fit's cut frame (metres, x from the
  * shoe's heel end toward the toe, y up from the shoe's ground, z across — `garment_footwear.preview_frame`):

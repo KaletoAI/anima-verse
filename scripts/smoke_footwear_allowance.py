@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Ruling A82: the footwear piece's Width / Length allowance (``footwear_fit.ALLOWANCE_STEPS``), Length Auto, the
-viewer's live preview rule (``frontend/src/tabs/characters/footwearAllowance.ts``) and A72b's carry-over for footwear.
+viewer's live preview rule (``frontend/src/tabs/characters/footwearAllowanceModel.ts``) and A72b's carry-over for footwear.
 
 Usage:
     ./.venv/bin/python scripts/smoke_footwear_allowance.py
@@ -111,7 +111,7 @@ for (const cand of ['esbuild', join(root, 'node_modules/esbuild'), join(root, 'f
 if (!esbuild) { console.error('esbuild not found'); process.exit(2) }
 const dir = mkdtempSync(join(tmpdir(), 'smoke-footwear-allowance-'));
 const file = join(dir, 'm.mjs');
-await esbuild.build({ entryPoints: [join(root, 'frontend/src/tabs/characters/footwearAllowance.ts')], outfile: file,
+await esbuild.build({ entryPoints: [join(root, 'frontend/src/tabs/characters/footwearAllowanceModel.ts')], outfile: file,
   bundle: true, format: 'esm', platform: 'neutral', logLevel: 'silent', absWorkingDir: root });
 const m = await import('file://' + file);
 rmSync(dir, { recursive: true, force: true });

@@ -12,7 +12,7 @@
  */
 import type { FootPose } from '@anima/scene-render'
 import type { ArmLight, FitSettingsInfo } from './fitSettingsModel'
-import type { ShoeFrame } from './footwearAllowance'
+import type { ShoeFrame } from './footwearAllowanceModel'
 import { filesLabel, sizeLabel } from './hairstylesModel'
 import type { Light } from './hairstylesModel'
 
