@@ -15,6 +15,13 @@
    body. Changed texels carry into the atlas padding next to them (``_spread_to_padding``), else bilinear sampling
    draws the old colour along every island border. Runs only when the dark gate failed, so a face that passed
    keeps its bytes.
+   Version 2 (2026-11-15, Vallerie's brow above her right eye): the mesher's black brow block sat under the photo's
+   thin brow and the projection skipped it. Version 1 filled only its near-black core: the soft rim of that paint
+   (unwritten, 0.5-0.65 of the skin luma) stayed as dark specks around pale shards, and the fill colour mixed in the
+   photo's own brown brow. Now the rim fills too — unwritten texels below ``FILL_RIM_SHARE`` of the skin luma,
+   grown by connection (``FILL_RIM_MM`` steps) from texels that are dark in the ORIGINAL atlas, so a pass over an
+   already filled bake still finds it — and only texels of at least ``FILL_SKIN_SHARE`` of the skin luma give colour.
+   Measured on Vallerie's rebake (2048^2, right brow box 50 x 27 mm): unwritten texels below 0.6 skin luma 280 -> 0.
 
 2. SEAM CHECK. Measured on the surface, texel by texel: front-of-head texels just outside the projection's mask and
    just inside it, each outer texel paired with its nearest inner one, in two bands — ``edge`` (``SEAM_EDGE_MM``,
@@ -36,10 +43,13 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
-VERSION = 1
+VERSION = 2
 
 FILL_DARK_SHARE = 0.5          # a candidate is darker than this share of the median face-skin luma ...
 FILL_UNCHANGED = 12            # ... and within this many 8-bit levels of the hub's input atlas (never written)
+FILL_RIM_SHARE = 0.65           # version 2: an unwritten texel below this share of the skin luma ...
+FILL_RIM_MM = 3.0              # ... within this distance of a dark candidate is the paint's rim and fills too
+FILL_SKIN_SHARE = 0.8          # version 2: only texels at least this share of the skin luma give fill colour
 FILL_NEIGHBOURS = 12
 FILL_RADIUS_MM = 25.0
 FILL_REACH_MM = 8.0            # the fill region: head texels within this distance of a projected face texel
@@ -220,7 +230,25 @@ def polish(glb: bytes, original_glb: bytes, bake_meta: Dict[str, Any], *,
         t_dark = luma[rows, cols] < FILL_DARK_SHARE * skin_luma
         t_unchanged = np.abs(rgb[rows, cols].astype(int) - original[rows, cols].astype(int)).max(1) <= FILL_UNCHANGED
         t_cand = t_region & t_dark & t_unchanged
-        t_source = t_region & ~t_dark
+        # Version 2: the soft rim of the mesher's paint (unwritten, between FILL_DARK_SHARE and FILL_RIM_SHARE of
+        # the skin luma) next to a dark candidate fills with it, and only skin-bright texels give colour — the
+        # version 1 fill left the rim as dark specks and took brown from the photo's own brow (module doc, 1.). The rim grows by
+        # connection, so a long soft edge fills whole while skin-bright texels stop it.
+        t_rim = (t_region & t_unchanged & ~t_cand & (luma[rows, cols] < FILL_RIM_SHARE * skin_luma))
+        # The rim grows from the mesher's dark paint (dark in the ORIGINAL atlas, written over or not), so a second
+        # pass over an already filled bake still finds the rim it left.
+        o_luma = original[rows, cols].astype(np.float64) @ _LUMA
+        t_cand = t_cand.copy()
+        frontier = t_cand | (t_region & (o_luma < FILL_DARK_SHARE * skin_luma))
+        while frontier.any() and t_rim.any():
+            # grows through the rim: a rim texel within FILL_RIM_MM of a candidate (also of a rim texel just added)
+            near = cKDTree(points[frontier]).query(points[t_rim], distance_upper_bound=FILL_RIM_MM * mm)[0]
+            rim_idx = np.nonzero(t_rim)[0][np.isfinite(near)]
+            frontier = np.zeros_like(t_cand)
+            frontier[rim_idx] = True
+            t_cand[rim_idx] = True
+            t_rim[rim_idx] = False
+        t_source = t_region & ~t_cand & (luma[rows, cols] >= FILL_SKIN_SHARE * skin_luma)
         band = np.zeros(mask.shape, bool)
         band[rows[t_region], cols[t_region]] = True
         dark_before = float(_near_black(rgb)[band].mean())
@@ -238,7 +266,7 @@ def polish(glb: bytes, original_glb: bytes, bake_meta: Dict[str, Any], *,
             out[target[:, 0], target[:, 1], :3] = np.clip(np.round(fill_rgb[ok]), 0, 255).astype(np.uint8)
             filled = int(len(np.unique(target[:, 0] * width + target[:, 1])))
         record["dark_fill"] = {
-            "region_texels": int(band.sum()), "candidates": int(len(np.unique(
+            "region_texels": int(band.sum()), "rim_mm": FILL_RIM_MM, "candidates": int(len(np.unique(
                 texels[t_cand][:, 0] * width + texels[t_cand][:, 1]))), "filled": filled,
             "dark_share_before": round(dark_before, 6),
             "dark_share_after": round(float(_near_black(out[..., :3])[band].mean()), 6),

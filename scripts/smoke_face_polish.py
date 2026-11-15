@@ -162,6 +162,55 @@ def main():
     check(bool(edge) and bool(seam.get("wide")) and edge.get("pairs", 0) > 0 and 4.0 <= edge.get("de76_median", 0) <= 11.0,
           f"seam measured: edge dE {edge.get('de76_median')} ({edge.get('pairs')} pairs), wide {bool(seam.get('wide'))} (expected ~7)")
 
+    # --- version 2: the paint's soft rim and skin-only fill colour (A106) -------------------------------------------
+    # Fixture: the ORIGINAL atlas also carries a grey rim (100, 80, 70) of 2 mm around each lash ellipse and an
+    # isolated grey disc of 3 mm radius 25 mm under the eye line (both unwritten), and the projection writes a brown
+    # photo brow (120, 85, 60) in a 1.5 mm band 6..7.5 mm above each eye centre. By hand, with the face's median luma
+    # = projected skin (220, 150, 130) = 0.2126*220 + 0.7152*150 + 0.0722*130 = 163.5:
+    #   rim luma 0.2126*100 + 0.7152*80 + 0.0722*70 = 83.5 -> 0.51 x skin: not dark (>= 0.5), below FILL_RIM_SHARE
+    #   0.65 -> rim; it touches the lash paint (0 mm < FILL_RIM_MM 3) -> every rim texel fills (version 1 left it).
+    #   disc: same luma, 25 - 7 = 18 mm from the nearest lash paint, nothing dark nearer -> stays byte-identical.
+    #   brow luma 0.2126*120 + 0.7152*85 + 0.0722*60 = 90.6 -> 0.55 x skin < FILL_SKIN_SHARE 0.8 -> gives no colour,
+    #   so every filled texel stays in the skin range R 195..225, G 145..155, B 125..135 (it lies 2.5 mm from the
+    #   lash paint, version 1 would have mixed it in), and the written brow itself is kept.
+    from scipy import ndimage
+    px_mm = head.MM * width * 0.2 / head.R          # texels per mm of the planar map
+    rim_px = ndimage.binary_dilation(lash_px, iterations=int(round(2 * px_mm))) & ~lash_px & (cols[None, :] < 0.5)
+    iso_px = np.hypot(X, Y - (head.EYE_Y - 25 * head.MM)) < 3 * head.MM
+    iso_px &= (cols[None, :] < 0.5)
+    brow_px = np.zeros_like(lash_px)
+    for cx in (head.EYE_X, -head.EYE_X):
+        brow_px |= (np.abs(X - cx) < 18 * head.MM) & (Y - head.EYE_Y >= 6 * head.MM) & (Y - head.EYE_Y < 7.5 * head.MM)
+    brow_px &= (cols[None, :] < 0.5) & ~rim_px & ~lash_px
+    orig2 = tex.copy()
+    orig2[rim_px | iso_px, :3] = (100, 80, 70)
+    glb2 = _with_texture(glb, orig2)
+    mask2 = disc & ~lash_px & ~rim_px & ~iso_px
+    baked2_tex = orig2.copy()
+    baked2_tex[mask2, 0] = np.minimum(baked2_tex[mask2, 0].astype(int) + 20, 255).astype(np.uint8)
+    brow_w = brow_px & mask2
+    baked2_tex[brow_w, :3] = (120, 85, 60)
+    baked2 = _with_texture(glb2, baked2_tex)
+    meta2 = {"face_mask": face_polish.pack_mask(mask2), "texels_replaced": int(mask2.sum())}
+    out2, record2, changed2 = face_polish.polish(baked2, glb2, meta2, fill=True)
+    t2 = _texture_of(out2)[6]
+    rim_cov = rim_px & covered
+    rim_left = int(np.any(t2[rim_cov][:, :3] == np.array((100, 80, 70), np.uint8), axis=1).sum())
+    check(rim_cov.sum() > 300 and rim_left <= 0.02 * rim_cov.sum(),
+          f"v2: the paint's rim fills ({rim_left} of {int(rim_cov.sum())} covered rim texels left, expected <= 2 %)")
+    iso_cov = iso_px & covered
+    check(iso_cov.sum() > 50 and np.array_equal(t2[iso_cov], baked2_tex[iso_cov]),
+          f"v2: the grey disc 18 mm from any paint stays ({int(iso_cov.sum())} texels)")
+    f2 = (lash_px | rim_px) & changed2 & covered
+    rgb2 = t2[f2][:, :3].astype(int)
+    check(len(rgb2) and np.all((rgb2[:, 0] >= 195) & (rgb2[:, 0] <= 225) & (rgb2[:, 1] >= 145) & (rgb2[:, 1] <= 155)
+                                & (rgb2[:, 2] >= 125) & (rgb2[:, 2] <= 135)),
+          f"v2: fill colour is skin only, the written brow gives none (R {rgb2[:, 0].min()}..{rgb2[:, 0].max()}, "
+          f"G {rgb2[:, 1].min()}..{rgb2[:, 1].max()})")
+    check(np.array_equal(t2[brow_w & covered], baked2_tex[brow_w & covered]), "v2: the written photo brow is kept")
+    again, record3, changed3 = face_polish.polish(out2, glb2, meta2, fill=True)
+    check(changed3 is None, "v2: a second pass over its own result changes nothing")
+
     # --- the stage ---------------------------------------------------------------------------------------------
     from app.core.model3d import _face_polish_stage
     with tempfile.TemporaryDirectory(prefix="face-polish-") as tmp:
