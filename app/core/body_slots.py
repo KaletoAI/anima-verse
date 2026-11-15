@@ -441,7 +441,12 @@ def prompt_fragments(character_name: str,
                 exposed.append(frag)
     for spec in reference_parts:
         if is_slot_exposed(spec, profile):
-            frag = _render(spec.mesh_part.reference_prompt, _slot_text_values(spec, profile))
+            vals = _slot_text_values(spec, profile)
+            tpl = spec.mesh_part.reference_prompt
+            if isinstance(tpl, dict):
+                # Ruling A101: the text of the slot attribute's value, else the default.
+                tpl = tpl["values"].get(str(vals.get(tpl["by"]) or "").strip(), tpl["default"])
+            frag = _render(tpl, vals) if tpl else ""
             if frag:
                 exposed.append(frag)
     return {"general": general, "exposed": exposed}

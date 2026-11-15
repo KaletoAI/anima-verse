@@ -1984,7 +1984,9 @@ the mesh input names nothing for the active part (Ruling A74a). The full-body
 references (occasions `base_reference` / `outfit_reference`) never name the slot's
 own texts, switch on or off (Ruling A93b); `reference_prompt` (optional, non-empty,
 the usual placeholders — a missing value drops it) says what the region shows there
-instead while the slot is uncovered, and `reference_negative` (optional, non-empty,
+instead while the slot is uncovered — or a mapping `{by: <attribute>, values: {<option>: text}, default: text}`
+that picks the text by the slot's value of that attribute, the default (optional) for any other (Ruling A101) —
+and `reference_negative` (optional, non-empty,
 plain text) joins those renders' negative while it is uncovered (Ruling A95).
 `lora_patterns` is an optional list of
 non-empty glob strings; matching is case insensitive for active exposed mesh

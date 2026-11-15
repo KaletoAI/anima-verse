@@ -78,7 +78,8 @@ hub job c265fd78: that output → the A-pose front, A74b's edit prompt):
       occasions.mesh_input_text: base_reference / outfit_reference False; tpose / base_front / base_view True;
       base_block(DemoPart) = base_block(DemoPartOff) = Demo's block + ", exposed wide surface, a smooth plain
         large area" (the general fragments, then the exposed ones; the region slot's own texts stay out, switch
-        on or off — A93b; its reference_prompt "a smooth plain {size} area" comes last — A95); reference
+        on or off — A93b; its reference_prompt for type alpha "a smooth plain {size} area" comes last — A95; for
+        type beta "a flat large surface", with no type and no default nothing — A101); reference
         negatives: plain body "clothing, underwear, jewellery, region detail", outfit "region detail"; with the
         region covered neither its reference text nor its negative;
       outfit_block of both = the same text (nothing worn: no "wearing");
@@ -127,7 +128,9 @@ body_slots:
     mesh_part:
       switch: part
       lora_patterns: ["*Region*"]
-      reference_prompt: "a smooth plain {size} area"
+      reference_prompt:
+        by: type
+        values: {alpha: "a smooth plain {size} area", beta: "a flat {size} surface"}
       reference_negative: "region detail"
       rigs:
         region_inset: {params: {}}
@@ -368,6 +371,11 @@ def mesh_part_checks(human, *, want_block):
         check(f"{name}: outfit negative (uncovered): the region's only",
               fbr.reference_negative(name, stored, base=False), "region detail")
         from app.core import body_slots
+        beta = json.loads(json.dumps(stored))
+        beta["body_slots"]["region"]["type"] = "beta"
+        check(f"{name}: the reference text follows the type (A101)",
+              body_slots.prompt_fragments(name, profile=beta, appearance_reference=True, neutral_state=True)["exposed"],
+              ["exposed wide surface", "a flat large surface"])
         real_exposed = body_slots.is_slot_exposed
         with patch.object(body_slots, "is_slot_exposed",
                           lambda spec, prof: spec.id != "region" and real_exposed(spec, prof)):

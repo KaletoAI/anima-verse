@@ -300,7 +300,7 @@ class MeshPartSpec:
     rigs: Dict[str, Dict[str, Any]]
     # The full-body references (Ruling A95): what the region shows there instead of the slot's own texts
     # (placeholders as in the slot's prompt texts) and what their negative adds; "" = nothing.
-    reference_prompt: str = ""
+    reference_prompt: Any = ""   # a text, or {by, values: {option: text}, default} (Ruling A101)
     reference_negative: str = ""
 
     @classmethod
@@ -315,9 +315,27 @@ class MeshPartSpec:
         # Optional since Ruling A74a: without it the mesh input names nothing for the part.
         if "tpose_prompt" in raw and (not isinstance(raw["tpose_prompt"], str) or not raw["tpose_prompt"].strip()):
             raise ValueError("mesh_part.tpose_prompt must be a non-empty string when given")
-        for key in ("reference_prompt", "reference_negative"):
-            if key in raw and (not isinstance(raw[key], str) or not raw[key].strip()):
-                raise ValueError(f"mesh_part.{key} must be a non-empty string when given")
+        if "reference_negative" in raw and (not isinstance(raw["reference_negative"], str)
+                                            or not raw["reference_negative"].strip()):
+            raise ValueError("mesh_part.reference_negative must be a non-empty string when given")
+        reference = raw.get("reference_prompt")
+        if reference is not None:
+            # A text, or {by: <attribute>, values: {<option>: text}, default: text} (Ruling A101).
+            if isinstance(reference, dict):
+                by, values = reference.get("by"), reference.get("values")
+                if (set(reference) - {"by", "values", "default"} or by not in attributes
+                        or not isinstance(values, dict) or not values
+                        or any(not isinstance(v, str) or not v.strip() for v in values.values())
+                        or ("default" in reference and (not isinstance(reference["default"], str)
+                                                         or not reference["default"].strip()))):
+                    raise ValueError("mesh_part.reference_prompt mapping requires by (a declared attribute), "
+                                     "values {option: text} and an optional default text")
+                reference = {"by": by, "values": {str(k): v.strip() for k, v in values.items()},
+                             "default": str(reference.get("default") or "").strip()}
+            elif not isinstance(reference, str) or not reference.strip():
+                raise ValueError("mesh_part.reference_prompt must be a non-empty string or a mapping when given")
+            else:
+                reference = reference.strip()
         switch = attributes.get(raw["switch"], {})
         if (not isinstance(switch, dict) or switch.get("type") != "select"
                 or not isinstance(switch.get("options"), list) or "on" not in switch["options"]):
@@ -352,7 +370,7 @@ class MeshPartSpec:
                     raise ValueError("mesh_part attribute values require declared options and finite numbers")
             clean[rig_id] = {"params": dict(params), "attribute_params": dict(mappings)}
         return cls(raw["switch"], str(raw.get("tpose_prompt") or "").strip(), list(patterns), clean,
-                   str(raw.get("reference_prompt") or "").strip(), str(raw.get("reference_negative") or "").strip())
+                   reference or "", str(raw.get("reference_negative") or "").strip())
 
 
 #: Region kinds the core knows. A channel is an inside capsule of the
