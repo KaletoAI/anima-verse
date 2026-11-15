@@ -233,10 +233,28 @@ def hair_from_picture(character_name: str, *, profile: Optional[Dict[str, Any]] 
     hair text (``garment_hair.appearance_hair_text``) — the hair the profile
     image and the full-body reference show. A plain hairstyle whose text was
     rewritten is no hair of the picture: its text is named as before."""
-    from app.core import garment_hair
     profile = _profile_of(character_name, profile)
-    hair = hair_text(character_name, profile=profile)
+    return _picture_shows_hair(character_name, hair_text(character_name, profile=profile), profile)
+
+
+def _picture_shows_hair(character_name: str, hair: str, profile: Dict[str, Any]) -> bool:
+    """Whether the hair text ``hair`` is the Appearance's hair text — the hair
+    the profile image and every full-body reference made from it show."""
+    from app.core import garment_hair
     return bool(hair) and hair == garment_hair.appearance_hair_text(character_name, profile=profile)
+
+
+def picture_head(character_name: str, hair: str, profile: Dict[str, Any]) -> List[str]:
+    """The head clauses of a front made as an edit of a picture (Ruling A94):
+    hair the picture shows (``_picture_shows_hair``) → "the same face, hair[
+    and facial hair] as the person in the picture" and no hair text; other
+    hair → its text, then the identity clause; no hair → ``BALD_HEAD``, then
+    the identity clause. Facial hair is named only when the character has
+    some (``has_facial_hair``)."""
+    facial = has_facial_hair(character_name, profile=profile)
+    if _picture_shows_hair(character_name, hair, profile):
+        return [picture_identity(hair=True, facial_hair=facial)]
+    return [hair or BALD_HEAD, picture_identity(hair=False, facial_hair=facial)]
 
 _HAIR_RE = re.compile(r"\bhair", re.IGNORECASE)
 # The shape of ``base_signature`` — never an outfit signature (pure hex).
@@ -716,17 +734,22 @@ def prompts_current(character_name: str, signature: str, *, profile: Optional[Di
 
 def stored_base_haired(character_name: str, bsig: str) -> Optional[bool]:
     """Whether the stored base front of ``bsig`` was rendered with hair: its
-    sidecar ``prompt`` does not name the bald head — ``_BALD_WORDS``, the
-    words every wording of it starts with, so a front rendered with an
-    OLDER bald text ("completely bald, smooth clean-shaven head") reads as
-    bald too (fix round T12-F1: it read as haired, and a switch to hair in
-    the body served the bald body as "hair in the body"). None without a
-    stored front. The delivered figure shows HairDeck hair without a fit as
-    this body has it (``figure`` rule 3)."""
+    sidecar's ``final_prompt`` (the whole text the front was rendered with —
+    the bald head stands in the character block there since the prompt
+    review of 2026-11-11; Ruling A94b) does not name the bald head —
+    ``_BALD_WORDS``, the words every wording of it starts with, so a front
+    rendered with an OLDER bald text ("completely bald, smooth clean-shaven
+    head") reads as bald too (fix round T12-F1: it read as haired, and a
+    switch to hair in the body served the bald body as "hair in the body").
+    A sidecar without ``final_prompt`` is read by its ``prompt``, where the
+    bald head stood before the review. None without a stored front. The
+    delivered figure shows HairDeck hair without a fit as this body has it
+    (``figure`` rule 3)."""
     from app.core.model_refs import find_ref_image
     if find_ref_image(character_name, _kind("front"), bsig) is None:
         return None
-    return _BALD_WORDS not in str(_front_sidecar(character_name, bsig).get("prompt") or "")
+    meta = _front_sidecar(character_name, bsig)
+    return _BALD_WORDS not in str(meta.get("final_prompt") or meta.get("prompt") or "")
 
 
 def base_prompts_freshness(character_name: str, *,
@@ -819,12 +842,7 @@ def edit_character(character_name: str, *, profile: Optional[Dict[str, Any]] = N
     named only when the character has some (``has_facial_hair``)."""
     from app.core.body_slots import base_body_fragments
     profile = _profile_of(character_name, profile)
-    hair = hair_text(character_name, profile=profile)
-    facial = has_facial_hair(character_name, profile=profile)
-    if hair and hair_from_picture(character_name, profile=profile):
-        head = [picture_identity(hair=True, facial_hair=facial)]
-    else:
-        head = [hair or BALD_HEAD, picture_identity(hair=False, facial_hair=facial)]
+    head = picture_head(character_name, hair_text(character_name, profile=profile), profile)
     return ", ".join(p for p in (*head, BODY_TEXT, *base_body_fragments(character_name, profile=profile)) if p)
 
 
@@ -3909,22 +3927,31 @@ def outfit_edit_prompt(character_name: str, *, text: str, bald: bool, hair: Opti
                        profile: Optional[Dict[str, Any]] = None) -> Tuple[str, str, str]:
     """``(character block, prompt, negative)`` of an outfit's dressed front
     made from its reference picture: the block is the head of the body the
-    outfit is painted on (``BALD_HEAD`` for a bald one or under an own hair
-    mesh — ``bald`` —, else its hair text; ``hair`` as ``dress_prompt``'s)
-    and ``OUTFIT_REFERENCE_BODY``, for ``BASE_FRONT_EDIT_USE_CASE``'s slot;
-    the prompt is the base front's pose text (with the hair clauses of a
-    haired body); the negative is the dressed front's (``dress_negative`` of
-    the outfit text ``text``, ``HAIR_NEGATIVE`` when bald) and
-    ``POSE_NEGATIVE``."""
+    outfit is painted on and ``OUTFIT_REFERENCE_BODY``, for
+    ``BASE_FRONT_EDIT_USE_CASE``'s slot; the prompt is the base front's pose
+    text (with the hair clauses of a haired body); the negative is the
+    dressed front's (``dress_negative`` of the outfit text ``text``,
+    ``HAIR_NEGATIVE`` when bald) and ``POSE_NEGATIVE``.
+
+    The head (Ruling A94b, as the base front's ``edit_character``): the
+    picture's person is kept, never re-described (``picture_head``) — the
+    worn hair (``hair`` as ``dress_prompt``'s) when it is the hair the
+    picture shows becomes "the same face, hair[ and facial hair] as the person
+    in the picture"; other worn hair keeps its text; a bald body (none, or
+    under an own hair mesh — ``bald``) keeps ``BALD_HEAD``; both then say
+    "the same face[ and facial hair] as …". A character with facial hair
+    keeps "hair" out of the garment negative and, bald, gets
+    ``FACIAL_HAIR_SAFE_HAIR_NEGATIVE`` instead of ``HAIR_NEGATIVE``."""
     from app.core.garment_hair import BALD
     profile = _profile_of(character_name, profile)
     worn_hair = hair_text(character_name, profile=profile) if hair is None else ("" if hair == BALD else hair)
     haired = bool(worn_hair) and not bald
-    block = ", ".join((worn_hair if haired else BALD_HEAD, OUTFIT_REFERENCE_BODY))
+    facial = has_facial_hair(character_name, profile=profile)
+    block = ", ".join((*picture_head(character_name, worn_hair if haired else "", profile), OUTFIT_REFERENCE_BODY))
     prompt = _haired_front_pose(character_name, worn_hair, profile) if haired else _pose_text("front")
-    negative = dress_negative(text, keep_hair=haired)
+    negative = dress_negative(text, keep_hair=haired or facial)
     if bald:
-        negative = f"{negative}, {HAIR_NEGATIVE}"
+        negative = f"{negative}, {FACIAL_HAIR_SAFE_HAIR_NEGATIVE if facial else HAIR_NEGATIVE}"
     return block, prompt, f"{negative}, {POSE_NEGATIVE}"
 
 

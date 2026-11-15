@@ -62,7 +62,7 @@ the base front's framing/light tail + the pose text; no gender, age, height or b
       request not called; references_of(Demo) holds the key with sha256(Demo_2.png).
       generate_dressed_images(front, force): ONE render, occasion "outfit_front", use case "base_front_edit",
       reference a copy named Demo_2.png in model_refs/.editref_*, require_reference True, style_character
-      BALD_HEAD + ", " + OUTFIT_REFERENCE_BODY; sidecar outfit_reference_sha256 = sha256(Demo_2.png),
+      BALD_HEAD + ", the same face as the person in the picture, " + OUTFIT_REFERENCE_BODY (Ruling A94b); sidecar outfit_reference_sha256 = sha256(Demo_2.png),
       base_signature BSIG, base_image_sha256 = sha256 of the base front.
       dressed_image(front) is that file; after clear_reference it is None (due: "made from a reference image
       that was cleared"); after set_reference(Demo_3.png) None again (another picture).
@@ -411,7 +411,8 @@ def main() -> int:
                str(one.get("ref_dir") or "").startswith(".editref_"), bool(one.get("require_reference")),
                one.get("style_character")),
               ("outfit_front", "base_front_edit", "Demo_2.png", True, True,
-               base_body.BALD_HEAD + ", " + base_body.OUTFIT_REFERENCE_BODY))
+               base_body.BALD_HEAD + ", the same face as the person in the picture, "
+               + base_body.OUTFIT_REFERENCE_BODY))
         extra = one.get("sidecar_extra") or {}
         check("outfit front sidecar",
               (extra.get("outfit_reference_sha256"), extra.get("base_signature"), extra.get("base_image_sha256")),
