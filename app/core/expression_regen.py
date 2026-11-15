@@ -1002,7 +1002,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
     ``sidecar_extra`` adds keys to the sidecar JSON of the render.
     ``character_loras`` lets a ``bare_prompt`` render carry the character's
     own LoRAs (``outfit_imagegen.loras``, replaced by ``tpose_loras`` on the
-    mesh-input occasions, mesh-part filtered) — never slot LoRAs.
+    mesh-input occasions, mesh-part filtered except on the full-body
+    references, ``occasions.mesh_input_text``) — never slot LoRAs.
     ``style_character`` is the character block for the use-case style's
     ``{character}`` slot (``config.fill_character_slot``; the base-body
     views) — the final prompt then reads style, block, rest of the style,
@@ -1053,8 +1054,11 @@ def render_character_image(character_name: str, *, output_stem: Path,
             equipped_items = equipped_items or []
 
     _occasion = occasion or ("tpose" if image_use_case in TPOSE_USE_CASES else "expression")
-    from app.imagegen.occasions import MESH_INPUT_OCCASIONS
+    from app.imagegen.occasions import MESH_INPUT_OCCASIONS, mesh_input_text
     _mesh_input = _occasion in MESH_INPUT_OCCASIONS
+    # The slot texts and the mesh-part LoRA filter follow the mesh-input TEXT rule: a full-body reference is a
+    # mesh-input occasion (tpose LoRAs, no negative fold) but describes the figure as an ordinary image (A93).
+    _mesh_text = mesh_input_text(_occasion)
 
     # Outfit text via the central renderer (plan §4). equipped_pieces/items
     # are passed in so set previews work (override against the profile state).
@@ -1070,7 +1074,7 @@ def render_character_image(character_name: str, *, output_stem: Path,
         equipped_pieces=equipped_pieces,
         equipped_items=equipped_items,
         back_view=back_view,
-        mesh_input=_mesh_input,
+        mesh_input=_mesh_text,
         portrait_only=framing == "upper_body",
     )
     if framing == "head" and _rendered:
@@ -1114,7 +1118,7 @@ def render_character_image(character_name: str, *, output_stem: Path,
     else:
         _expr_builder = PromptBuilder(character_name,
                                       apply_state_modifiers=apply_state_modifiers,
-                                      back_view=back_view, mesh_input=_mesh_input,
+                                      back_view=back_view, mesh_input=_mesh_text,
                                       neutral_state=neutral_state,
                                       body_profile=_render_profile)
         persons = _expr_builder.detect_persons("", character_names=[character_name])
@@ -1280,7 +1284,7 @@ def render_character_image(character_name: str, *, output_stem: Path,
         if str(_sl.get("name")) not in _have:
             _merged_loras.append(_sl)
             _have.add(str(_sl.get("name")))
-    if _mesh_input:
+    if _mesh_text:
         from app.core.body_slots import filter_mesh_input_loras
         _merged_loras = filter_mesh_input_loras(_merged_loras, _render_profile)
     if dialog_loras is not None:
@@ -1295,7 +1299,7 @@ def render_character_image(character_name: str, *, output_stem: Path,
         # The base body: the character's look (identity/pose LoRAs) as on
         # its tpose render, but no slot LoRA — nothing outfit/anatomy-bound.
         _char_loras = list(loras_override or [])
-        if _mesh_input:
+        if _mesh_text:
             from app.core.body_slots import filter_mesh_input_loras
             _char_loras = filter_mesh_input_loras(_char_loras, _render_profile)
         if _char_loras:

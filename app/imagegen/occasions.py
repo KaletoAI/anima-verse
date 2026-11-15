@@ -274,6 +274,18 @@ MESH_INPUT_OCCASIONS: Tuple[str, ...] = (
 #: positive text at the front of the prompt.
 NO_FOLD_OCCASIONS: Tuple[str, ...] = MESH_INPUT_OCCASIONS + ("garment_view", "footwear_empty")
 
+#: Ruling A93: the mesh-input occasions whose SLOT TEXTS and LoRAs are those of an ordinary image — the full-body
+#: references are appearance pictures (``app/core/full_body_reference.py``), no mesh input: an active mesh part
+#: keeps its slot's text and its LoRAs there, and no mesh-input line is added. Everything else of
+#: ``MESH_INPUT_OCCASIONS`` (the tpose LoRAs, no negative fold) stays.
+APPEARANCE_REFERENCE_OCCASIONS: Tuple[str, ...] = ("base_reference", "outfit_reference")
+
+
+def mesh_input_text(occasion_id: str) -> bool:
+    """Whether a render of this occasion describes the figure as a mesh input (``mesh_input`` of the slot texts
+    and of the LoRA filter, Ruling A74a): the mesh-input occasions except ``APPEARANCE_REFERENCE_OCCASIONS``."""
+    return occasion_id in MESH_INPUT_OCCASIONS and occasion_id not in APPEARANCE_REFERENCE_OCCASIONS
+
 
 def folds_negative(occasion_id: str) -> bool:
     """Whether a backend without a negative input folds the negative of

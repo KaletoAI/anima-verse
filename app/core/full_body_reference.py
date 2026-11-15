@@ -29,6 +29,13 @@ the frame"``) — no edit prefix, no pose, no light words.
   (``prompt_builder.person_description``: the appearance tokens resolved and the
   body slots), in the neutral state (no state modifier), plus the height phrase
   when the appearance does not carry it (the rule of ``base_body.base_appearance``).
+  It is the ORDINARY image description, never the mesh-input one (Ruling A93): the
+  reference is an appearance picture, no mesh input — a slot with an active mesh
+  part keeps its slot text and its LoRAs here (A74a drops them on the mesh inputs
+  proper: the A-pose front and every view), and no mesh-input line is added (the
+  front's pose text places the hair itself, ``TPOSE_FRONT_HAIR_CLAUSE``).
+  The occasions stay mesh-input occasions for the tpose LoRAs and the unfolded
+  negative (``imagegen.occasions.APPEARANCE_REFERENCE_OCCASIONS``).
 * Plain body (``base_block``): the description of the UNDRESSED figure (nothing
   worn), hair included — the attribute block alone, as in the chain the user
   validated (Ruling A87b). The plain body's head and body state belong to the
@@ -264,10 +271,11 @@ def store_in_gallery(character_name: str, data: bytes, suffix: str, tag: str = "
 def _attributes(character_name: str, profile: Dict[str, Any]) -> str:
     """THE person description of the image prompts (``person_description``) of ``profile`` as it is (its worn
     pieces decide which body-slot texts show), neutral (no state modifier), plus the height phrase when the
-    description does not carry it (``base_body.base_appearance``'s rule)."""
+    description does not carry it (``base_body.base_appearance``'s rule). The ordinary description, not the
+    mesh-input one (Ruling A93, module docstring)."""
     from app.core.height import height_phrase
     from app.core.prompt_builder import person_description
-    text = person_description(character_name, apply_state_modifiers=False, mesh_input=True, body_profile=profile,
+    text = person_description(character_name, apply_state_modifiers=False, mesh_input=False, body_profile=profile,
                               neutral_state=True)
     height = height_phrase(profile, character_name)
     if height and height not in text:
@@ -300,7 +308,7 @@ def outfit_block(character_name: str, *, profile: Optional[Dict[str, Any]] = Non
     dressed["equipped_items"] = []
     attributes = _attributes(character_name, dressed)
     worn = (render_outfit(profile=dressed, character_name=character_name, equipped_pieces=pieces,
-                          equipped_items=[], mesh_input=True).get("pieces") or "").strip()
+                          equipped_items=[], mesh_input=False).get("pieces") or "").strip()
     return ", ".join(p for p in (attributes, f"wearing {worn}" if worn else "") if p)
 
 

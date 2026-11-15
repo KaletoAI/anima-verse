@@ -65,6 +65,24 @@ hub job c265fd78: that output → the A-pose front, A74b's edit prompt):
 [8] Run all and the Build never generate one: no module but full_body_reference.py and routes/figure.py names
     generate_base / generate_outfit / start_base / start_outfit; build_note(Demo) = {base, outfit} booleans.
 [9] Outbound attempts: 0.
+[10] Ruling A93 — the full-body reference is an appearance picture, NOT a mesh input. Fixture package
+    ``fixture_region`` (written into the throwaway plugins dir, requires human): slot ``region`` covered by
+    bottom / underwear_bottom, attributes type / size / part, exposed text "exposed {size} {type} region", a
+    mesh part switched by ``part`` with NO tpose_prompt (A74a: the mesh input names nothing) and lora_patterns
+    ["*Region*"]. ``DemoPart`` = Demo's profile + region {type alpha, size large, part on}, nothing worn, profile
+    image, outfit_imagegen.tpose_loras [PoseFixture, RegionFixture].
+      occasions.mesh_input_text: base_reference / outfit_reference False; tpose / base_front / base_view True
+        (A74a unchanged on every mesh input proper);
+      base_block(DemoPart) = Demo's block + ", exposed large alpha region" (the slot's ordinary exposed text: the
+        general fragments, then the exposed ones — body_slots.appearance_suffix);
+      the mesh-input description of the same profile (what the old code sent, c7a1b1bfe:
+        person_description(..., mesh_input=True, ...)) = Demo's block — the region dropped, as A74a does;
+      outfit_block(DemoPart) = the same text (nothing worn: no "wearing");
+      the REAL render_character_image behind generate_base(DemoPart) (stub service, generate_from_input records
+        the payload and delivers nothing -> RuntimeError "The render delivered no picture"): payload prompt = the
+        block + framing, loras [PoseFixture, RegionFixture] (the tpose LoRAs, none dropped), occasion
+        base_reference, require_reference True;
+      the same renderer on occasion base_front (a mesh input): loras [PoseFixture] (RegionFixture dropped, A74a).
 """
 import hashlib
 import io
@@ -82,6 +100,29 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 OLD = "a620816cd"
+#: The commit before Ruling A93 (its full-body reference took the mesh-input description).
+BEFORE_A93 = "c7a1b1bfe"
+FIXTURE_REGION = """name: fixture_region
+version: "1.0.0"
+requires: [human]
+apply_to: ["human-default", "human-roleplay"]
+body_slots:
+  - id: region
+    covered_by: [bottom, underwear_bottom]
+    attributes:
+      type: {type: select, options: [alpha, beta]}
+      size: {type: select, options: [small, large]}
+      part: {type: select, options: ["off", "on"]}
+    prompt:
+      exposed: "exposed {size} {type} region"
+    rigs:
+    - {id: region_inset, op: inset_part, chains: []}
+    mesh_part:
+      switch: part
+      lora_patterns: ["*Region*"]
+      rigs:
+        region_inset: {params: {}}
+"""
 FRAMING = "the whole figure from head to feet inside the frame"
 FAILS = []
 OUTBOUND = []
@@ -258,6 +299,67 @@ def upload_checks(full_body_reference):
               full_body_reference.base_record("Demo")["sha256"], hashlib.sha256(png_bytes(90)).hexdigest())
 
 
+def mesh_part_checks(human, *, want_block):
+    print("[10] an active mesh part: the full-body reference keeps its slot text and LoRAs (Ruling A93)")
+    from app.core import expression_regen, full_body_reference as fbr
+    from app.core.prompt_builder import person_description
+    from app.imagegen import occasions
+    from app.models.character import get_character_images_dir, get_character_profile, save_character_profile
+    check("mesh-input text per occasion",
+          {o: occasions.mesh_input_text(o) for o in ("base_reference", "outfit_reference", "tpose", "base_front",
+                                                     "base_view")},
+          {"base_reference": False, "outfit_reference": False, "tpose": True, "base_front": True, "base_view": True})
+    profile = json.loads(json.dumps(human))
+    profile["body_slots"]["region"] = {"type": "alpha", "size": "large", "part": "on"}
+    profile["outfit_imagegen"] = {"tpose_loras": [{"name": "PoseFixture", "strength": 1.0},
+                                                  {"name": "RegionFixture", "strength": 0.8}]}
+    check("create DemoPart", save_character_profile("DemoPart", profile, create_new=True), True)
+    png(get_character_images_dir("DemoPart") / "DemoPart_1.png")
+    stored = get_character_profile("DemoPart")
+    stored["profile_image"] = "DemoPart_1.png"
+    check("profile image DemoPart", save_character_profile("DemoPart", stored), True)
+    stored = get_character_profile("DemoPart")
+    want = want_block + ", exposed large alpha region"
+    check("plain body block: the slot's ordinary exposed text", fbr.base_block("DemoPart"), want)
+    mesh_text = person_description("DemoPart", apply_state_modifiers=False, mesh_input=True,
+                                   body_profile=fbr._undressed(stored), neutral_state=True)
+    print(f"  before (the mesh-input description, {BEFORE_A93}): {mesh_text + ', ' + FRAMING!r}")
+    print(f"  after  (the ordinary description):          {fbr.compose('base_reference', fbr.base_block('DemoPart'))!r}")
+    check("the mesh-input description drops it (A74a, what the old code sent)", mesh_text, want_block)
+    old_src = subprocess.run(["git", "-C", str(ROOT), "show", f"{BEFORE_A93}:app/core/full_body_reference.py"],
+                             capture_output=True, text=True, check=True).stdout
+    check("the old code took the mesh-input description",
+          "person_description(character_name, apply_state_modifiers=False, mesh_input=True," in old_src, True)
+    check("outfit block (nothing worn)", fbr.outfit_block("DemoPart"), want)
+
+    payloads = []
+
+    class Service:
+        enabled = True
+
+        def generate_from_input(self, raw, **kw):
+            payloads.append(json.loads(raw))
+            return ""     # no picture: the renderer returns None
+
+    with patch("app.imagegen.service.get_image_service", return_value=Service()):
+        check("real renderer behind generate_base", _raises(lambda: fbr.generate_base("DemoPart")), "RuntimeError")
+        sent = payloads[0] if len(payloads) == 1 else {}
+        check("full-body reference payload",
+              (sent.get("occasion"), sent.get("require_reference"), sent.get("style_character"),
+               [lora.get("name") for lora in sent.get("loras") or []]),
+              ("base_reference", True, want, ["PoseFixture", "RegionFixture"]))
+        payloads.clear()
+        expression_regen.render_character_image(
+            "DemoPart", output_stem=Path(tempfile.mkdtemp()) / "front", equipped_pieces={}, equipped_items=[],
+            pose_prompt="", expression_prompt="", bare_prompt="", image_use_case="base_front",
+            style_character="x", occasion="base_front", apply_state_modifiers=False,
+            mesh_input_profile=fbr._undressed(stored), character_loras=True, postprocess=False)
+        sent = payloads[0] if len(payloads) == 1 else {}
+        check("a mesh input (base_front) still drops the part's LoRA",
+              (sent.get("occasion"), [lora.get("name") for lora in sent.get("loras") or []]),
+              ("base_front", ["PoseFixture"]))
+
+
 def main() -> int:
     block_network()
     with tempfile.TemporaryDirectory(prefix="full-body-ref-") as tmp:
@@ -269,7 +371,7 @@ def main() -> int:
         from app.core import paths
         paths.init(root / "world")
         paths.init_instance(root / "instance")
-        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"},
+        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human,fixture_region"},
                                                        "base_body": {"skin_detail_step": False}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
@@ -277,6 +379,8 @@ def main() -> int:
         db.init_schema()
         plugins = root / "plugins"
         shutil.copytree(ROOT / "plugins" / "human", plugins / "human")
+        (plugins / "fixture_region").mkdir()
+        (plugins / "fixture_region" / "plugin.yaml").write_text(FIXTURE_REGION)
         from app.plugins.loader import discover_packages
         discover_packages(plugins, force=True)
 
@@ -298,6 +402,9 @@ def main() -> int:
         refs = get_character_dir("Demo") / "model_refs"
 
         routing_checks(profile_file)
+
+        mesh_part_checks(human, want_block="female, 30 years old, freckles, long dark hair, green eyes, olive skin, "
+                                           "average height, athletic build")
 
         expression_regen.render_character_image = recorder
 
