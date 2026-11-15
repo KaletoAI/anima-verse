@@ -1778,6 +1778,29 @@ def _set_character_model_refs_views_sync(character_name: str,
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.post("/{character_name}/model-refs/{kind}/mirror")
+def mirror_character_model_ref_view(character_name: str, kind: str,
+                                    _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Mirror the worn outfit's stored side view (``kind`` ``tpose_left`` / ``tpose_right``) left-right on
+    the CPU — or turn a mirrored one back to its kept original (Ruling A91,
+    ``model_refs.mirror_outfit_view``; no image job). ``{mirrored, info}``. 400 for another kind or a view
+    that is a copy of the body's view, 404 without the character or a stored view, 409 while the outfit's
+    views render, its Build or a 3D run of the character goes."""
+    from app.core import base_body
+    from app.core.model_refs import mirror_outfit_view
+    _require_character(character_name)
+    if kind not in ("tpose_left", "tpose_right"):
+        raise HTTPException(status_code=400, detail=base_body.MIRROR_SIDES_ONLY)
+    try:
+        return mirror_outfit_view(character_name, kind[len("tpose_"):])
+    except base_body.MirrorRefused as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/{character_name}/model-refs/{kind}")
 def get_character_model_ref_image(character_name: str, kind: str, request: Request):
     """Serves the reference render of the CURRENT outfit combination; 404
@@ -1902,6 +1925,26 @@ def get_character_base_body_image(character_name: str, view: str, request: Reque
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     media_type, _encoding = mimetypes.guess_type(str(path))
     return etag_file_response(path, request, media_type or "application/octet-stream")
+
+
+@router.post("/{character_name}/base-body/images/{view}/mirror")
+def mirror_character_base_body_view(character_name: str, view: str,
+                                    _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Mirror a stored base side view left-right on the CPU — or turn a mirrored one back to its kept
+    original (Ruling A91, ``base_body.mirror_base_view``; no image job). ``{mirrored, facing}``. 400 for a
+    view other than left / right, 404 without the character or a stored view, 409 while a base-body step, a
+    3D run or a Build of the character goes."""
+    from app.core import base_body
+    _require_character(character_name)
+    _refuse_during_build(character_name)
+    try:
+        return base_body.mirror_base_view(character_name, view)
+    except base_body.MirrorRefused as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/{character_name}/base-body/skin-step", status_code=202)

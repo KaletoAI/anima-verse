@@ -86,6 +86,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote
 
+from app.core import view_facing
 from app.core.log import get_logger
 
 logger = get_logger("base_body")
@@ -1211,6 +1212,9 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
                                                             source=str(front_ref.get("source") or ""))
                 else:
                     path = draw(v, final, reference)
+                    if path is not None and v in view_facing.SIDE_VIEWS:
+                        # Ruling A91: a side view the detector is sure faces the wrong way is mirrored on the CPU.
+                        view_facing.auto_correct(v, Path(path))
                 error = None if path else "render failed"
             except Exception as e:  # noqa: BLE001 — one view never kills the run
                 if raise_load and _is_load(e):
@@ -1303,6 +1307,8 @@ def base_info(character_name: str) -> Dict[str, Any]:
             # Ruling A74a carry-over through ``recorded_fingerprint``).
             tile["prompt_fingerprint"] = recorded_fingerprint(character_name, signature, view, _view_sidecar(path),
                                                               current=current, profile=profile)
+            if view in view_facing.SIDE_VIEWS:
+                tile["facing"] = _facing_tile(character_name, view, signature, path)
             image_meta[view] = tile
         else:
             image_meta[view] = None
@@ -1315,8 +1321,11 @@ def base_info(character_name: str) -> Dict[str, Any]:
             hair = garments.hair_summary(character_name, profile=profile)
         except Exception:  # noqa: BLE001 — the summary never breaks the poll
             logger.exception("Hair summary of %s failed", character_name)
+    sides = {v: find_ref_image(character_name, _kind(v), signature) if signature else None
+             for v in view_facing.SIDE_VIEWS}
     return {"pipeline": pipeline, "humanoid": humanoid,
             "signature": signature, "images": images, "image_meta": image_meta,
+            "facing_pair": view_facing.pair_state(sides["left"], sides["right"]),
             "front_reference": _front_reference_info(character_name, signature, profile) if humanoid else None,
             "prompt_fingerprint": current,
             "skin": _skin_info(character_name, signature) if humanoid else None,
@@ -1379,6 +1388,95 @@ def base_image_path(character_name: str, view: str) -> Optional[Path]:
         return None
     from app.core.model_refs import find_ref_image
     return find_ref_image(character_name, _kind(view), base_signature(character_name))
+
+
+# --- Facing of the side views (Ruling A91, ``view_facing``) -----------------
+
+class MirrorRefused(RuntimeError):
+    """A mirror that must wait (a step works on the views now) — a route answers 409."""
+
+
+#: ``mirror_followup`` kinds: what a Mirror click makes due besides the view itself (the tile's button title).
+FOLLOWUP_NO_MODEL = "no_model"          # no base model yet: nothing else changes
+FOLLOWUP_UNUSED = "unused"              # the base model was built without this view
+FOLLOWUP_RESTORES = "restores"          # turning back restores the view the base model was built from
+FOLLOWUP_STALE = "stale"                # the base model becomes out of date: the next Build rebuilds it
+FOLLOWUP_ALREADY_STALE = "already_stale"  # the base model is out of date already (the same rebuild)
+
+MIRROR_BUSY = "A base-body step works on the views right now — mirror when it is done"
+MIRROR_SIDES_ONLY = "Only the left and right views can be mirrored"
+
+
+def _mesh_stage_count(character_name: str, signature: str) -> Optional[int]:
+    """Hub jobs of a fresh mesh run of ``signature`` (``model3d.mesh_hub_stages``); None when unknown."""
+    try:
+        from app.core import model3d
+        return len(model3d.mesh_hub_stages(character_name, signature))
+    except Exception:  # noqa: BLE001 — an estimate, never a failure
+        logger.debug("Mesh stages of %s %s unknown", character_name, signature, exc_info=True)
+        return None
+
+
+def mirror_followup(character_name: str, view: str, bsig: str, path: Path) -> Dict[str, Any]:
+    """What mirroring (or turning back) the base ``view`` stored at ``path`` makes due: ``{kind, jobs,
+    dressed}`` — ``kind`` one of the ``FOLLOWUP_*`` (judged against the base model's recorded
+    ``view_images_sha256``, the same record ``model_overview.base_model_freshness`` compares), ``jobs`` the hub
+    jobs of the base model's rebuild at the next Build (0 when nothing is rebuilt, None unknown), ``dressed``
+    whether dressed side views are composited onto this view (``side_views_dressed``) — they follow it.
+    The mirror itself costs no image job. Read-only."""
+    from app.core import model3d
+    dressed = side_views_dressed()
+    model = model3d.find_model3d(character_name, bsig)
+    if model is None:
+        return {"kind": FOLLOWUP_NO_MODEL, "jobs": 0, "dressed": dressed}
+    recorded = str((model3d._read_sidecar(model).get("view_images_sha256") or {}).get(view) or "")
+    if not recorded:
+        return {"kind": FOLLOWUP_UNUSED, "jobs": 0, "dressed": dressed}
+    record = view_facing.mirror_record(path)
+    if record and view_facing.restorable(path) and record.get("original_sha256") == recorded:
+        return {"kind": FOLLOWUP_RESTORES, "jobs": 0, "dressed": dressed}
+    kind = FOLLOWUP_STALE if recorded == file_sha256(path) else FOLLOWUP_ALREADY_STALE
+    return {"kind": kind, "jobs": _mesh_stage_count(character_name, bsig), "dressed": dressed}
+
+
+def _facing_tile(character_name: str, view: str, bsig: str, path: Path) -> Optional[Dict[str, Any]]:
+    """``view_facing.tile_state`` of a base side view with its ``followup`` (``mirror_followup``); None when
+    it cannot be read (the poll never fails on it)."""
+    try:
+        tile = view_facing.tile_state(view, path)
+        if tile is not None:
+            tile["followup"] = mirror_followup(character_name, view, bsig, path)
+        return tile
+    except Exception:  # noqa: BLE001
+        logger.exception("Facing of %s %s view failed", character_name, view)
+        return None
+
+
+def mirror_base_view(character_name: str, view: str) -> Dict[str, Any]:
+    """The Base body tab's "Mirror" of a side view (Ruling A91): ``view_facing.toggle_mirror`` of the stored
+    view of the CURRENT base signature — mirrored, or turned back to its original. No image job; the base
+    model built from the old bytes is then stale (``mirror_followup``). Returns ``{mirrored, facing}``
+    (``facing`` = the tile's new state). Raises ``ValueError`` for another view, ``FileNotFoundError``
+    without a stored view, ``MirrorRefused`` while a base-body step or a 3D run of the character goes
+    (``base_steps_running``, ``model3d.generation_running``, the base render lock)."""
+    from app.core import model3d
+    from app.core.model_refs import find_ref_image
+    if view not in view_facing.SIDE_VIEWS:
+        raise ValueError(MIRROR_SIDES_ONLY)
+    if base_steps_running(character_name) or model3d.generation_running(character_name):
+        raise MirrorRefused(MIRROR_BUSY)
+    lock = _char_lock(character_name)   # a base render holds it for its whole run
+    if not lock.acquire(blocking=False):
+        raise MirrorRefused(MIRROR_BUSY)
+    try:
+        bsig = base_signature(character_name)
+        path = find_ref_image(character_name, _kind(view), bsig)
+        if path is None:
+            raise FileNotFoundError(f"No stored {view} view")
+        result = view_facing.toggle_mirror(path)
+    finally:
+        lock.release()
+    return {"mirrored": result["mirrored"], "facing": _facing_tile(character_name, view, bsig, path)}
 
 
 # --- The base model ---------------------------------------------------------
@@ -2808,6 +2906,9 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
         first = 1
         render_failed = False   # a draft that did not render: no refusal is recorded for it (Ruling FR-I3)
         kept = stored_draft(character_name, view, signature, front) if reuse_draft else None
+        if kept is not None and view in view_facing.SIDE_VIEWS:
+            # Ruling A91: the draft is composited onto the base view — it faces the way that view faces.
+            view_facing.match_facing(view, kept, base_view)
         if kept is not None:
             # Ruling C2: the stored draft made from this front is composited again first — no hub job; a
             # composite that fails its checks or a gate makes ONE new draft (attempt 2).
@@ -2850,6 +2951,8 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
                     raise OutfitError(f"Dressed {view} draft failed")
                 render_failed = True
                 break
+            if view in view_facing.SIDE_VIEWS:
+                view_facing.match_facing(view, Path(draft), base_view)   # Ruling A91
             stem = Path(staging) / f"attempt{n}" / final.name
             stem.parent.mkdir()
             attempt = _composite_attempt(character_name, view, stem=stem, draft=Path(draft), base_views=base_views,

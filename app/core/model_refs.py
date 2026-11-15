@@ -830,9 +830,11 @@ def image_tile_meta(path: Optional[Path], meta: Optional[Dict[str, Any]] = None)
     return out
 
 
-def _ref_info(path: Optional[Path]) -> Optional[Dict[str, Any]]:
+def _ref_info(path: Optional[Path], view: str = "") -> Optional[Dict[str, Any]]:
     """UI info for one stored render: filename, what its sidecar knows and
-    the tile meta (``image_tile_meta``: model, creation time)."""
+    the tile meta (``image_tile_meta``: model, creation time). A side
+    ``view`` (left / right) also carries ``facing`` (``view_facing.tile_state``,
+    Ruling A91)."""
     if not path:
         return None
     meta = _read_sidecar(path)
@@ -843,6 +845,12 @@ def _ref_info(path: Optional[Path]) -> Optional[Dict[str, Any]]:
     warning = (meta.get("fit_gate") or {}).get("warning") if isinstance(meta.get("fit_gate"), dict) else None
     if warning:
         info["warning"] = warning
+    if view in ("left", "right"):
+        try:
+            from app.core import view_facing
+            info["facing"] = view_facing.tile_state(view, path)
+        except Exception:  # noqa: BLE001 — the info stays served
+            logger.exception("Facing of %s failed", path)
     return info
 
 
@@ -885,7 +893,7 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
             continue
         path = (find_ref_image(character_name, f"tpose_{view}", signature)
                 if signature else None)
-        views[view] = {"enabled": pipeline or view in enabled, "info": _ref_info(path)}
+        views[view] = {"enabled": pipeline or view in enabled, "info": _ref_info(path, view)}
     if pipeline:
         out["drafts"] = {view: _ref_info(base_body.draft_path(character_name, view, signature)
                                          if signature else None)
@@ -902,6 +910,14 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
         except Exception as e:  # noqa: BLE001 — the info stays served; the buttons then name no source
             logger.warning("Dressed view source of %s unknown: %s", character_name, e)
             out["dressed_source"] = None
+    # Ruling A91: both side views facing the same edge — one of them is wrong; what a Mirror makes due.
+    from app.core import view_facing
+    sides = {v: (find_ref_image(character_name, f"tpose_{v}", signature) if signature and v in views else None)
+             for v in view_facing.SIDE_VIEWS}   # only the side views the tab shows
+    out["facing_pair"] = view_facing.pair_state(sides["left"], sides["right"])
+    out["mirror_followup"] = (outfit_mirror_followup(character_name, signature, pipeline=pipeline,
+                                                     source=out.get("dressed_source"))
+                              if any(sides.values()) else None)
     if is_humanoid(character_name):
         face = face_view_info(character_name)
         out["face_view"] = face
@@ -915,6 +931,62 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
     from app.core.timeutils import utc_now
     out["now"] = _iso(utc_now())
     return out
+
+
+#: ``outfit_mirror_followup`` kinds (Ruling A91): what a Mirror of a dressed side view makes due.
+MIRROR_REPAINT = "repaint"        # on the pipeline: the outfit model is repainted on the CPU at the next Build
+MIRROR_COPY = "copy"              # a copy of the body's view: nothing is painted from it — mirror that view
+MIRROR_MODEL = "model"            # off the pipeline: the stored 3D model keeps the old view until made again
+MIRROR_NO_MODEL = "no_model"      # off the pipeline, no 3D model of this outfit yet
+MIRROR_COPY_REFUSED = "This view is a copy of the body's view — mirror the body's view instead"
+MIRROR_BUSY = "This outfit's views or 3D model are being made right now — mirror when that is done"
+
+
+def outfit_mirror_followup(character_name: str, signature: str, *, pipeline: bool,
+                           source: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """``{kind, jobs}`` of a dressed side view's Mirror (one answer for both sides; the mirror itself costs
+    no image job). On the pipeline: ``copy`` while the views are copies of the body's views
+    (``base_body.dressed_view_source`` ``shape`` / ``plain``), else ``repaint`` (0 hub jobs — the Build
+    repaints the outfit model on the CPU). Off it: ``model`` with the hub jobs of making the outfit's 3D model
+    again (``model3d.mesh_hub_stages``), ``no_model`` without one. Never raises."""
+    if pipeline:
+        if isinstance(source, dict) and source.get("source") in ("shape", "plain"):
+            return {"kind": MIRROR_COPY, "jobs": 0}
+        return {"kind": MIRROR_REPAINT, "jobs": 0}
+    try:
+        from app.core import model3d
+        if not signature or model3d.find_model3d(character_name, signature) is None:
+            return {"kind": MIRROR_NO_MODEL, "jobs": 0}
+        return {"kind": MIRROR_MODEL, "jobs": len(model3d.mesh_hub_stages(character_name, signature))}
+    except Exception:  # noqa: BLE001 — an estimate, never a failure
+        logger.debug("Mirror follow-up of %s unknown", character_name, exc_info=True)
+        return {"kind": MIRROR_MODEL, "jobs": None}
+
+
+def mirror_outfit_view(character_name: str, view: str) -> Dict[str, Any]:
+    """The Figure tab's Dressed views "Mirror" of a side view of the outfit worn now (Ruling A91):
+    ``view_facing.toggle_mirror`` of ``tpose_<view>_<signature>`` — mirrored, or turned back to its original.
+    Returns ``{mirrored, info}`` (``info`` = the tile's new ``_ref_info``). Raises ``ValueError`` for another
+    view or a view that is a copy of the body's view (``MIRROR_COPY_REFUSED``), ``FileNotFoundError``
+    without a stored view, ``base_body.MirrorRefused`` while the outfit's views render, its Build or a 3D run
+    of the character goes."""
+    from app.core import base_body, figure_build, model3d, view_facing
+    if view not in view_facing.SIDE_VIEWS:
+        raise ValueError(base_body.MIRROR_SIDES_ONLY)
+    status = get_render_status(character_name).get("tpose") or {}   # the extra views render in the T-pose pass
+    if (status.get("running") or figure_build.running(character_name)
+            or model3d.generation_running(character_name)):
+        raise base_body.MirrorRefused(MIRROR_BUSY)
+    _, _, signature = current_outfit_state(character_name)
+    if base_body.is_base_pipeline(character_name):
+        source = base_body.dressed_view_source(character_name)
+        if isinstance(source, dict) and source.get("source") in ("shape", "plain"):
+            raise ValueError(MIRROR_COPY_REFUSED)
+    path = find_ref_image(character_name, f"tpose_{view}", signature) if signature else None
+    if path is None:
+        raise FileNotFoundError(f"No stored {view} view of this outfit")
+    result = view_facing.toggle_mirror(path)
+    return {"mirrored": result["mirrored"], "info": _ref_info(path, view)}
 
 
 def get_render_status(character_name: str) -> Dict[str, Dict[str, Any]]:
@@ -1191,6 +1263,10 @@ def generate_model_ref_images(character_name: str,
                         logger.warning(
                             "Model ref %s for %s (%s) failed: %s",
                             view_kind, character_name, signature, e)
+                    if view_path is not None and view in ("left", "right"):
+                        # Ruling A91: a side view the detector is sure faces the wrong way is mirrored on the CPU.
+                        from app.core import view_facing
+                        view_facing.auto_correct(view, Path(view_path))
                     results[view_kind] = str(view_path) if view_path else None
                     if view_path is None:
                         logger.warning(

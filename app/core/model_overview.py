@@ -1164,13 +1164,20 @@ def base_model_freshness(meta: Dict[str, Any], view_shas: Dict[str, str],
 
 def dressed_changed(model_created: str, records: Dict[str, Optional[Dict[str, Any]]]) -> List[Dict[str, str]]:
     """The dressed views the outfit model was built from that were rendered
-    again after the model (their sidecar ``created_at`` is later): ``[{view,
-    at}]`` in view order, [] without a model stamp."""
+    again after the model (their sidecar ``created_at`` is later) or mirrored
+    since (``mirror_changed_at``, Ruling A91 — a mirror keeps ``created_at``):
+    ``[{view, at}]`` in view order, [] without a model stamp."""
     if not model_created:
         return []
-    return [{"view": v, "at": str(records[v].get("created_at"))}
-            for v in _in_view_order(records)
-            if isinstance(records.get(v), dict) and str(records[v].get("created_at") or "") > model_created]
+    out = []
+    for v in _in_view_order(records):
+        record = records.get(v)
+        if not isinstance(record, dict):
+            continue
+        at = max(str(record.get("created_at") or ""), str(record.get("mirror_changed_at") or ""))
+        if at > model_created:
+            out.append({"view": v, "at": at})
+    return out
 
 
 def model3d_freshness(model: Dict[str, Any], *,
