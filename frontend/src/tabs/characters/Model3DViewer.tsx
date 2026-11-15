@@ -21,7 +21,7 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   standingHipsRef, clipHeightOffsetM, clipHeightGroup, createCollisionOverlay, collidingGarmentMeshes,
   createGarmentCollision, applyAlphaCutoff, applyFootPose, applyFootPoseToPose, figureBox, footPoseLiftM,
   footPoseMatches, transplantedRestPose, measureClipGround, clipGroundOffset, plantFootPose,
-  seatFootLift, createStrandHair, bindCollision, inGarment, transformPoint, linearScale, capsuleWireframe,
+  seatFootLift, createStrandHair, withoutHairGroups, bindCollision, inGarment, transformPoint, linearScale, capsuleWireframe,
   placeCapsuleWireframe, consumerPartnerCapsules, probeCapsules, probeSweepOffset, probeSweptPose, probeSnapshot,
   PROBE_COLOR, CAPSULE_REGION_COLORS, CHANNEL_GROW, bindChannels, channelCoords, channelWireframe, guideRod, inZone,
   placeChannelWireframe, stepEngagement, bindChannelOpening, OPENING_MARGIN_M, OPENING_FALLOFF_M,
@@ -3254,6 +3254,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         // The strands per frame: (re)bind a new record, on/off, the live Stiffness, the step, the status line.
         let statusClock = 0
         let shownStatus = ''
+        let strandTips = new Float64Array(0)
+        let strandSteps = 0
+        let strandTravel = 0
         const tickStrands = (dt: number) => {
           const given = strandHairRef.current
           const record = given?.record ?? null
@@ -3274,7 +3277,30 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             meshAdjustFnRef.current?.()   // the template's own positions back before the strands take over
             strandOn(true)
           }
-          if (strand?.enabled) strand.update(dt)
+          if (strand?.enabled) {
+            strand.update(dt)
+            // The steps and the tips' path (the largest per-frame tip move, summed) on the mount's data attributes:
+            // what the UI check reads to prove the hair is stepped and moves (Ruling A108). Nothing else reads them.
+            const cards = strandRecord?.cards ?? 0
+            const X = strand.sim.X, rows = cards ? strand.sim.n / cards : 0
+            if (strandTips.length !== 3 * cards) strandTips = new Float64Array(3 * cards).fill(NaN)
+            let move = 0
+            for (let k = 0; k < cards; k++) {
+              const q = 3 * (k * rows + rows - 1)
+              if (!Number.isNaN(strandTips[3 * k])) {
+                move = Math.max(move, Math.hypot(X[q] - strandTips[3 * k], X[q + 1] - strandTips[3 * k + 1],
+                  X[q + 2] - strandTips[3 * k + 2]))
+              }
+              strandTips[3 * k] = X[q]; strandTips[3 * k + 1] = X[q + 1]; strandTips[3 * k + 2] = X[q + 2]
+            }
+            strandSteps += 1
+            strandTravel += move
+            const host = mountRef.current
+            if (host) {
+              host.dataset.strandSteps = String(strandSteps)
+              host.dataset.strandTravelMm = String(Math.round(strandTravel * 1000))
+            }
+          }
           statusClock += dt
           if (statusClock < 0.25 && shownStatus) return
           statusClock = 0
@@ -3334,10 +3360,12 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           // through the knee, after the mixer's pose, before the extension
           // motion (P3b, `Figure.update` does the same in the world).
           if (clipGroup === 'seat' && shod && floorWorldY !== null) seatFootLift(THREE, object, shod, floorWorldY)
-          if (secondaryRev !== motionRef.current?.rev || secondaryEnabled !== secondaryOnRef.current) {
+          // A figure whose hair runs per strand solves no hair chain (the client's `Figure.updateSecondary`).
+          const framedMotion = strand?.enabled ? withoutHairGroups(motionRef.current) : motionRef.current
+          if (secondaryRev !== framedMotion?.rev || secondaryEnabled !== secondaryOnRef.current) {
             secondaryEnabled = secondaryOnRef.current
-            secondaryRev = motionRef.current?.rev
-            secondary?.configure(secondaryEnabled ? motionRef.current : undefined)
+            secondaryRev = framedMotion?.rev
+            secondary?.configure(secondaryEnabled ? framedMotion : undefined)
             if (!secondaryEnabled) secondary?.reset()
           }
           applyTurn(Math.min(realDelta, 0.1))

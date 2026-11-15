@@ -6,7 +6,8 @@ import { LIGHT_COLOR } from './stepStyle'
 import { previewMotionSliders } from './motionFieldPreview'
 import { ExtensionMotionSliders } from './ExtensionMotionDraft'
 import type { Physics } from '../../lib/motionDraft'
-import type { SecondaryMotionPayload, ExtensionRigDeclaration, CollisionPayload, FootPose } from '@anima/scene-render'
+import type { SecondaryMotionPayload, ExtensionRigDeclaration, CollisionPayload, FootPose, HairStrandRecord } from '@anima/scene-render'
+import { STRAND_RECORD_VERSION } from '@anima/scene-render'
 import { CollisionScales } from './CollisionScales'
 import { collisionStepLine, recomputePath } from './collisionChannelsModel'
 import type { ChannelDeclaration, ChannelOverrides } from './collisionChannelsModel'
@@ -173,6 +174,9 @@ export interface Model3DInfo {
   low_ratio?: number
   refined?: { retexture: boolean; reason?: string; bytes_saved?: number; at?: string }
   lod_error?: string
+  /** The strand record of the served full-tier hair (`hair_strands.served`, strand-hair spec § 6.2.3): where to
+   *  fetch it and its sha256. Null/absent = no per-strand hair (Swing off, no grafted hair, HairDeck chains). */
+  hair_strands?: { url: string; sha256: string } | null
 }
 
 interface MeshBackend {
@@ -719,6 +723,26 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
     : ''
   const hasLow = !!model?.tiers?.includes('low')
   const sliderContext = `${character}:${model?.signature || st.signature || ''}`
+  // The per-strand hair of the served model (Ruling A108): the game's record, fetched once per sha256, run by the
+  // viewer the way the 3D client runs it (strand-hair spec § 6.2.5). Only the full tier carries the binding.
+  const strandRef = model?.hair_strands?.url && model.hair_strands.sha256 ? model.hair_strands : null
+  const strandKey = strandRef ? `${strandRef.url}|${strandRef.sha256}` : ''
+  const [strandFetch, setStrandFetch] = useState<{ key: string; record: HairStrandRecord | null } | null>(null)
+  useEffect(() => {
+    if (!strandKey) return
+    let gone = false
+    apiGet<HairStrandRecord>(strandKey.slice(0, strandKey.indexOf('|')))
+      .then((record) => { if (!gone) setStrandFetch({ key: strandKey, record: record?.version === STRAND_RECORD_VERSION ? record : null }) })
+      .catch(() => { if (!gone) setStrandFetch({ key: strandKey, record: null }) })
+    return () => { gone = true }
+  }, [strandKey])
+  const strandRecord = strandKey && strandFetch?.key === strandKey ? strandFetch.record : null
+  const strandHair = useMemo(() => (strandRecord && viewTier === 'full' ? { record: strandRecord, stiffness: 1 } : null),
+    [strandRecord, viewTier])
+  const strandNote = !strandKey ? undefined
+    : viewTier !== 'full' ? t('The distance model carries no strands — the hair stays on its chains.')
+      : strandFetch?.key !== strandKey ? t('Loading the strands…')
+        : !strandRecord ? t('No strand record for this fit — the hair stays still.') : undefined
   const previewMotion = useMemo(() => {
     const overrides = { ...st.options?.extension_motion }
     for (const group of st.extension_groups ?? []) {
@@ -1178,6 +1202,8 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
             freshness={model.freshness}
             builtAt={model.created_at}
             motion={rigless ? undefined : previewMotion}
+            strandHair={strandKey && !rigless ? strandHair : undefined}
+            strandNote={strandNote}
             motionToolbar={asideTools}
             url={viewerUrl}
             format={model.format || 'fbx'}

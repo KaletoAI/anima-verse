@@ -34,6 +34,15 @@
  *     wireframes and grid freed by a viewer disposer (`dropProbeLines()` inside `disposers.push`). The controls offer
  *     both sources and call the admin bind-pose route. The headless screenshots are `~/claude-out/cross-person/cx8/`
  *     (harness outside the repo, see the Task 8 report).
+ * [6] Ruling A108 ("Reiter 3D: Haare sollten sich bewegen und Simulation ist der Default-Tab und Gehen Default"),
+ *     source greps: Model3DDetails opens on Situations (`useState<DetailTab>('situations')`, not stored);
+ *     AnimationSituations plays walking first (`DEFAULT_SITUATION = 'walking'`, standing only without a walking clip);
+ *     FieldModel3D fetches the served model's strand record (`model.hair_strands`, version-checked against
+ *     STRAND_RECORD_VERSION) and hands it to the viewer (`strandHair=`); the viewer steps the strands after the
+ *     secondary motion (`strand.update(dt)` inside `tickStrands`, called after `secondary?.update`), solves no hair
+ *     chain while they run (`withoutHairGroups`, the client's `Figure.updateSecondary` rule) and reports its steps and
+ *     tip path on the mount (`data-strand-steps` / `data-strand-travel-mm`). The headless proof (tip path over 2 s of
+ *     walking) is `~/claude-out/a108/` (harness outside the repo, see the A108 report).
  */
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -133,6 +142,19 @@ check('[5] viewer: read as a partner by every consumer', [/secondary\?\.update\(
 check('[5] viewer: the probe lines freed by a disposer', /disposers\.push\(\(\) => \{\s*dropProbeLines\(\)/.test(viewerSrc), true);
 check('[5] controls: both sources, the bind-pose route', [/This body, mirrored/.test(probeSrc), /Another character/.test(probeSrc),
   /model3d\/collision\/bind-pose/.test(probeSrc)], [true, true, true]);
+
+// [6]
+const situations = src('frontend/src/tabs/characters/AnimationSituations.tsx');
+check('[6] Situations is the default sub-tab', /useState<DetailTab>\('situations'\)/.test(side), true);
+check('[6] walking is the default clip', [/const DEFAULT_SITUATION = 'walking'/.test(situations),
+  /row\.pose === DEFAULT_SITUATION && row\.file/.test(situations)], [true, true]);
+check('[6] the served strand record reaches the viewer', [/model\?\.hair_strands/.test(fm),
+  /STRAND_RECORD_VERSION/.test(fm), /strandHair=\{/.test(viewer)], [true, true, true]);
+const secAt = viewerSrc.indexOf('secondary?.update(realDelta, { partners: probePartners })');
+const tickAt = viewerSrc.indexOf('tickStrands(realDelta)', secAt);
+check('[6] the viewer steps the strands after the secondary motion', [/if \(strand\?\.enabled\) \{\s*strand\.update\(dt\)/.test(viewerSrc),
+  secAt > 0 && tickAt > secAt, /strand\?\.enabled \? withoutHairGroups\(motionRef\.current\)/.test(viewerSrc),
+  /dataset\.strandSteps/.test(viewerSrc), /dataset\.strandTravelMm/.test(viewerSrc)], [true, true, true, true, true]);
 
 if (failures.length) {
   console.error(`\nFAIL (${failures.length})`);

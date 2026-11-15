@@ -44,6 +44,10 @@ const SITUATION_LABELS: Record<string, string> = {
   crawling_rest: 'Crawling – rest',
 }
 
+/** The situation that plays when the list opens (Ruling A108: walking, so the hair visibly moves); standing when
+ *  the character has no walking clip. */
+const DEFAULT_SITUATION = 'walking'
+
 /** Display the server's played/public resolutions; never resolve clips here. */
 export function AnimationSituations({ character, onPlay }: {
   character: string
@@ -67,12 +71,15 @@ export function AnimationSituations({ character, onPlay }: {
     setPose('')
     setActivity(null)
     setError('')
-    setSelected('standing')
+    setSelected(DEFAULT_SITUATION)
     onPlay('')
     apiGet<Animations>(path).then((result) => {
       if (!alive) return
       setData(result)
-      onPlay(result.situations.find((row) => row.pose === 'standing')?.file?.url || '')
+      const first = result.situations.find((row) => row.pose === DEFAULT_SITUATION && row.file)
+        || result.situations.find((row) => row.pose === 'standing')
+      setSelected(first?.pose || 'standing')
+      onPlay(first?.file?.url || '')
     }).catch((e: Error) => { if (alive) setError(e.message) })
     // These independent vocabularies must not prevent the situation table
     // from loading when either supporting request fails.
@@ -135,7 +142,7 @@ export function AnimationSituations({ character, onPlay }: {
   }
   const rowView = (row: Situation, label: string) => <tr key={row.pose}
     onClick={() => play(row)} style={{ cursor: row.file ? 'pointer' : undefined }}>
-    <td><button type="button" className="ga-btn ga-btn-sm" disabled={!row.file}
+    <td><button type="button" className={`ga-btn ga-btn-sm${selected === row.pose ? ' ga-btn-primary' : ''}`} disabled={!row.file}
       aria-pressed={selected === row.pose}
       onClick={(event) => { event.stopPropagation(); play(row) }}>{label}</button></td>
     {fileCell(row.kind, row.file)}

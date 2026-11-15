@@ -85,7 +85,9 @@ const HIDDEN: CSSProperties = { display: 'none' }
 export function Model3DDetails({ character }: { character: string }) {
   const { t } = useI18n()
   const panel = useModel3DPanel(character)
-  const [sub, setSub] = useState<DetailTab>('steps')
+  // Situations opens first (Ruling A108: the tab opens on the figure walking, its hair moving); the choice is not
+  // stored — every opening of the tab starts there.
+  const [sub, setSub] = useState<DetailTab>('situations')
   const steps = useRef<HTMLDivElement>(null)
   const model = useRef<HTMLDivElement>(null)
   const advanced = useRef<HTMLDivElement>(null)
