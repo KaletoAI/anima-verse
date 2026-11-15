@@ -61,7 +61,8 @@ sector radius 0.04; 28 stations of SLEEVE_STATION_M 0.02 cover s 0 .. 0.56).
     never beyond 1.08: max(SCALE_RETRY_STEPS) == 1.08 and every tried scale <= 1.08.
     Width only: ``widen`` keeps y — (0.3, 1.2, 0.1) widened 1.08 about (0, 0) with half width 10 -> (0.324, 1.2,
     0.108).
-[6] Fit settings: ``normalise`` fills every key with its default ("auto"; Ruling A68's ``depth`` 0) and drops
+[6] Fit settings: ``normalise`` fills every key with its default ("auto"; Ruling A68's ``depth`` 0, Ruling A83's
+    ``trunk`` "auto") and drops
     unknown values (depth 5 -> 0); a record made with the defaults
     and a profile asking sleeves_left "fitted" -> ``changed`` True (the fit is due), the same settings -> False, a
     record WITHOUT ``inputs.fit_settings`` reads as the defaults; ``validate`` refuses an unknown key, a bad sleeve
@@ -265,7 +266,7 @@ def test_settings():
     from app.core import garment_fit_settings as fs, garments
     check("[6] normalise", fs.normalise({"sleeves_left": "fitted", "sleeves_right": "bogus", "allowance": 5,
                                          "depth": 5})
-          == {"sleeves_left": "fitted", "sleeves_right": "auto", "allowance": "auto", "depth": 0})
+          == {"sleeves_left": "fitted", "sleeves_right": "auto", "allowance": "auto", "depth": 0, "trunk": "auto"})
     pre_a68 = {"kind": "clothing", "inputs": {"fit_settings": {"sleeves_left": "auto", "sleeves_right": "auto",
                                                               "allowance": 10}}}
     check("[6] a fit made before the depth setting is not due",

@@ -1,7 +1,8 @@
 /**
  * FitSettings — Ruling A47: the fit settings of an own-mesh clothing piece beside its 3D preview in the piece
  * dialog (GarmentPieceDialog): the arm light of the shown fit (skin seen inside the sleeves, front + back), per side
- * "Sleeves: Auto | As generated | Wider | Fitted to the arm" with what Auto chose and why, "Width allowance: Auto |
+ * "Sleeves: Auto | As generated | Wider | Fitted to the arm" with what Auto chose and why, (Ruling A83) "Trunk: Auto |
+ * As generated | Fitted to the body" with what Auto chose and why, "Width allowance: Auto |
  * +0 | +3 | +6 | +10 %" with the numbers it acts on and (Ruling A68) "Depth allowance: +0 | +3 | +6 | +10 %" — room
  * in front of and behind the trunk, no Auto. Each select SAVES on its own (POST
  * …/garments/{item}/fit-settings) and runs nothing; a fit made with other settings reads "Fit due — refits on the
@@ -20,11 +21,11 @@ import { StepLight } from './StepRows'
 import { stampLabel } from './freshnessText'
 import {
   ALLOWANCE_CHOICES, ALLOWANCE_HINT, DEPTH_CHOICES, DEPTH_HINT, SLEEVE_CHOICES, SLEEVE_HINTS, SLEEVE_LABELS,
-  allowanceLabel, allowanceNumbers, allowanceReason, armLightColour, armLightText, depthLabel, depthReason,
-  sleeveReason,
+  TRUNK_CHOICES, TRUNK_HINTS, TRUNK_LABELS, allowanceLabel, allowanceNumbers, allowanceReason, armLightColour,
+  armLightText, depthLabel, depthReason, sleeveReason, trunkReason,
 } from './fitSettingsModel'
 import type {
-  AllowanceChoice, DepthChoice, FitSettingsInfo, FitSettingsValues, SleeveChoice, SleeveSideKey,
+  AllowanceChoice, DepthChoice, FitSettingsInfo, FitSettingsValues, SleeveChoice, SleeveSideKey, TrunkChoice,
 } from './fitSettingsModel'
 
 const PANEL: CSSProperties = {
@@ -115,6 +116,22 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
       </div>
       {sleeveRow('left')}
       {sleeveRow('right')}
+      <label htmlFor="fit-trunk">{t('Trunk')}</label>
+      <select id="fit-trunk" className="ga-input" style={SELECT} value={values.trunk ?? 'auto'}
+        disabled={busy || saving !== null} title={t(TRUNK_HINTS[values.trunk ?? 'auto'])}
+        onChange={(e) => { void save({ trunk: e.target.value as TrunkChoice }) }}>
+        {TRUNK_CHOICES.map((c) => (
+          <option key={c} value={c} title={t(TRUNK_HINTS[c])}>
+            {t(TRUNK_LABELS[c])}{c === (values.trunk ?? 'auto') && c === 'auto' && info.trunk?.applied
+              ? ` (→ ${t(TRUNK_LABELS[info.trunk.applied])})` : ''}
+          </option>
+        ))}
+      </select>
+      <span className="ga-hint" style={REASON} title={t(TRUNK_HINTS[values.trunk ?? 'auto'])}>
+        {!info.recorded ? t('Decided at the first fit')
+          : `${info.recorded.trunk !== values.trunk ? `${t('Shown fit')}: ` : ''}${trunkReason(info, t)}${
+            info.recorded.trunk !== values.trunk ? ` · ${t('Re-fit applies it (no hub job)')}` : ''}`}
+      </span>
       <label htmlFor="fit-allowance">{t('Width allowance')}</label>
       <select id="fit-allowance" className="ga-input" style={SELECT} value={String(values.allowance)}
         disabled={busy || saving !== null} title={t(ALLOWANCE_HINT)}

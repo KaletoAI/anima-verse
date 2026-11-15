@@ -5668,6 +5668,17 @@
     "The body changed outside the piece": "Der Körper hat sich außerhalb des Teils verändert",
     "The head changed": "Der Kopf hat sich verändert",
     "The drafted back does not fit the body": "Die entworfene Rückseite passt nicht zum Körper",
-    "Rendered": "Gerendert"
+    "Rendered": "Gerendert",
+    "Trunk": "Rumpf",
+    "Fitted to the body": "An den Körper angelegt",
+    "Fitted to the body when the trunk stands more than 3 cm off the body (median) or its front more than 3 cm; else as generated": "An den Körper angelegt, wenn der Rumpf mehr als 3 cm vom Körper absteht (Median) oder seine Vorderseite mehr als 3 cm; sonst wie generiert",
+    "The trunk as the generator made it, pushed out of the body where it lies inside": "Der Rumpf, wie der Generator ihn gemacht hat, aus dem Körper geschoben, wo er darin liegt",
+    "Laid onto the body with 12 mm of room from the narrowest waist up to the shoulders; half of its folds is kept, the texture stays; below the waist it stays free (a peplum keeps its flare). Runs before the depth allowance.": "Mit 12 mm Spiel an den Körper gelegt, von der schmalsten Taille bis zu den Schultern; die Hälfte seiner Falten bleibt, die Textur bleibt; unter der Taille bleibt er frei (ein Schößchen behält seinen Schwung). Läuft vor der Weitenzugabe (Tiefe).",
+    "the trunk stands {cm} cm off the body (median)": "der Rumpf steht {cm} cm vom Körper ab (Median)",
+    "its front stands {cm} cm off the body": "seine Vorderseite steht {cm} cm vom Körper ab",
+    "the trunk sits {cm} cm off the body, {front} cm in front — it keeps its volume": "der Rumpf sitzt {cm} cm vom Körper, vorne {front} cm — er behält sein Volumen",
+    "Shown fit: trunk as generated": "Gezeigte Anpassung: Rumpf wie generiert",
+    "laid on {before} → {after} mm (median)": "angelegt {before} → {after} mm (Median)",
+    "Re-fit applies it (no hub job)": "Neu anpassen wendet es an (kein Hub-Job)"
   }
 }

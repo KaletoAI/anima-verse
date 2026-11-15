@@ -1,7 +1,7 @@
 /**
  * Ruling A47 — the fit settings of an own-mesh clothing piece (server: `garments.fit_settings_info`, saved by
- * POST /characters/{n}/garments/{item}/fit-settings): the sleeves per side, the width allowance, the depth allowance
- * (Ruling A68), the arm light.
+ * POST /characters/{n}/garments/{item}/fit-settings): the sleeves per side, the trunk (Ruling A83), the width
+ * allowance, the depth allowance (Ruling A68), the arm light.
  * Pure helpers (types, labels, the plain-words reasons composed through the translation layer).
  */
 import type { Light } from './hairstylesModel'
@@ -11,6 +11,8 @@ export type AllowanceChoice = 'auto' | 0 | 3 | 6 | 10 | 15 | 20
 /** Ruling A68: room in front of and behind the trunk, percent of the torso's half depth (no Auto). */
 export type DepthChoice = 0 | 3 | 6 | 10 | 15 | 20
 export type SleeveSideKey = 'left' | 'right'
+/** Ruling A83: the trunk as generated or laid onto the body (`garment_fit.TRUNK_CHOICES`). */
+export type TrunkChoice = 'auto' | 'generated' | 'fitted'
 
 /** One rule of the Auto choice (`garment_fit.auto_sleeve`). */
 export interface SleeveWhy {
@@ -31,6 +33,24 @@ export interface SleeveSide {
     offset_max_m: number; offset_where: string; clear_p50_m: number; inside_share: number
   } | null
   shift_max_m?: number
+}
+
+/** One rule of the trunk's Auto choice (`garment_fit.auto_trunk`). */
+export interface TrunkWhy {
+  rule: 'room' | 'front' | 'fits'
+  cm?: number
+  front_cm?: number
+}
+
+/** Ruling A83: `report.transfer.trunk` (`garment_fit.place_trunk`). */
+export interface TrunkInfo {
+  setting: TrunkChoice
+  applied: Exclude<TrunkChoice, 'auto'>
+  why: TrunkWhy[]
+  reason: string
+  numbers?: { room_p50_m: number; room_p95_m: number; front_m: number; back_m: number } | null
+  before?: { p50_m: number; p95_m: number } | null
+  after?: { p50_m: number; p95_m: number } | null
 }
 
 export interface ArmLight {
@@ -62,6 +82,7 @@ export interface FitSettingsValues {
   sleeves_right: SleeveChoice
   allowance: AllowanceChoice
   depth: DepthChoice
+  trunk: TrunkChoice
 }
 
 export interface FitSettingsInfo {
@@ -73,6 +94,8 @@ export interface FitSettingsInfo {
   sleeves: Partial<Record<SleeveSideKey, SleeveSide>>
   allowance: AllowanceInfo | null
   depth?: DepthInfo | null
+  /** Ruling A83; a fit made before it carries none. */
+  trunk?: TrunkInfo | null
   arm_light: ArmLight | null
   numbers: {
     deep_push_share?: number | null; torso_tight_share?: number | null; sleeve_shards?: number | null
@@ -81,7 +104,7 @@ export interface FitSettingsInfo {
   }
   accepted: boolean
   built_at: string | null
-  choices?: { sleeves: SleeveChoice[]; allowance: AllowanceChoice[]; depth?: DepthChoice[] }
+  choices?: { sleeves: SleeveChoice[]; allowance: AllowanceChoice[]; depth?: DepthChoice[]; trunk?: TrunkChoice[] }
   limits?: { red_cm2: number; deep: number; tight: number; tight_m: number; max_factor: number }
 }
 
@@ -90,6 +113,7 @@ type T = (s: string) => string
 export const SLEEVE_CHOICES: SleeveChoice[] = ['auto', 'generated', 'wider', 'fitted']
 export const ALLOWANCE_CHOICES: AllowanceChoice[] = ['auto', 0, 3, 6, 10, 15, 20]
 export const DEPTH_CHOICES: DepthChoice[] = [0, 3, 6, 10, 15, 20]
+export const TRUNK_CHOICES: TrunkChoice[] = ['auto', 'generated', 'fitted']
 
 export const SLEEVE_LABELS: Record<SleeveChoice, string> = {
   auto: 'Auto', generated: 'As generated', wider: 'Wider', fitted: 'Fitted to the arm',
@@ -99,6 +123,16 @@ export const SLEEVE_HINTS: Record<SleeveChoice, string> = {
   generated: 'The sleeve as the generator made it, re-centred on the arm',
   wider: 'As generated, then 20 % wider around the arm',
   fitted: 'Laid onto the arm with 12 mm of room; a third of its folds is kept, the texture stays',
+}
+
+/** Ruling A83. */
+export const TRUNK_LABELS: Record<TrunkChoice, string> = {
+  auto: 'Auto', generated: 'As generated', fitted: 'Fitted to the body',
+}
+export const TRUNK_HINTS: Record<TrunkChoice, string> = {
+  auto: 'Fitted to the body when the trunk stands more than 3 cm off the body (median) or its front more than 3 cm; else as generated',
+  generated: 'The trunk as the generator made it, pushed out of the body where it lies inside',
+  fitted: 'Laid onto the body with 12 mm of room from the narrowest waist up to the shoulders; half of its folds is kept, the texture stays; below the waist it stays free (a peplum keeps its flare). Runs before the depth allowance.',
 }
 
 export function allowanceLabel(choice: AllowanceChoice, t: T): string {
@@ -231,4 +265,30 @@ export function depthReason(info: FitSettingsInfo, t: T): string {
   return d.setting > 0
     ? t('Shown fit: {mm} mm more room in front and behind').replace('{mm}', d.ease_mm.toFixed(1))
     : t('Shown fit: no extra depth')
+}
+
+/** One trunk Auto rule in plain words (`garment_fit.trunk_reason_text`'s words). */
+export function trunkWhyText(w: TrunkWhy, t: T): string {
+  if (w.rule === 'room') return t('the trunk stands {cm} cm off the body (median)').replace('{cm}', cm(w.cm))
+  if (w.rule === 'front') return t('its front stands {cm} cm off the body').replace('{cm}', cm(w.cm))
+  return t('the trunk sits {cm} cm off the body, {front} cm in front — it keeps its volume')
+    .replace('{cm}', cm(w.cm)).replace('{front}', cm(w.front_cm))
+}
+
+/** Ruling A83: "Auto → Fitted to the body: its front stands 3.8 cm off the body · laid on 27.4 → 16.1 mm"; a fixed
+ *  setting names itself; a fit made before A83 kept its trunk as generated. */
+export function trunkReason(info: FitSettingsInfo, t: T): string {
+  const tr = info.trunk
+  if (!tr) return info.recorded ? t('Shown fit: trunk as generated') : ''
+  const label = t(TRUNK_LABELS[tr.applied] || tr.applied)
+  let head = `${t('Set to')}: ${label}`
+  if (tr.setting === 'auto') {
+    const parts = (tr.why || []).map((w) => trunkWhyText(w, t))
+    head = `${t('Auto')} → ${label}${parts.length ? `: ${parts.join(` ${t('and')} `)}` : ''}`
+  }
+  if (tr.before && tr.after) {
+    head += ` · ${t('laid on {before} → {after} mm (median)').replace('{before}', (tr.before.p50_m * 1000).toFixed(1))
+      .replace('{after}', (tr.after.p50_m * 1000).toFixed(1))}`
+  }
+  return head
 }

@@ -5064,7 +5064,8 @@ def fit_settings_info(character_name: str, item_id: str, fsig: str, base_model_s
     (those of the shown fit, None without one), due (a fit exists and was made with other settings: the next run
     refits on the CPU, no hub job), sleeves {left, right: {setting, applied, reason, why, numbers}}, allowance
     {setting, factor, trigger, numbers, attempts, inherited}, depth {setting, ease_mm, half_depth_mm, inherited}
-    (Ruling A68), arm_light {state, sides, worst_cm2}, numbers {deep_push_share, torso_tight_share, sleeve_shards,
+    (Ruling A68), trunk {setting, applied, why, reason, numbers, band, before, after} (Ruling A83), arm_light {state,
+    sides, worst_cm2}, numbers {deep_push_share, torso_tight_share, sleeve_shards,
     sleeve_skin_left_cm2, sleeve_skin_right_cm2, trunk_front_gap_p50_m, trunk_back_gap_p50_m, scale},
     accepted (the shown fit passed its gates), built_at}``. The shown fit: the current fingerprint's fit on the
     base model, else its newest refused attempt (``fit_attempts``)."""
@@ -5099,16 +5100,18 @@ def fit_settings_view(record: Dict[str, Any], current: Dict[str, Any], *, accept
         "settings": current, "recorded": made_with,
         "due": bool(record) and made_with != current,
         "sleeves": (report.get("transfer") or {}).get("sleeves") or {},
+        "trunk": (report.get("transfer") or {}).get("trunk"),
         "allowance": retry.get("allowance"),
         "depth": report.get("depth"),
         "arm_light": report.get("arm_light"),
         "numbers": numbers, "accepted": accepted,
         "built_at": record.get("created_at") or ((record.get("attempt") or {}).get("at") if record else None),
         "choices": {"sleeves": list(garment_fit.SLEEVE_CHOICES), "allowance": list(garment_fit.ALLOWANCE_CHOICES),
-                    "depth": list(garment_fit.DEPTH_CHOICES)},
+                    "depth": list(garment_fit.DEPTH_CHOICES), "trunk": list(garment_fit.TRUNK_CHOICES)},
         "limits": {"red_cm2": garment_fit.SKIN_RED_CM2, "deep": garment_fit.ALLOWANCE_DEEP,
                    "tight": garment_fit.ALLOWANCE_TIGHT, "tight_m": garment_fit.TORSO_TIGHT_M,
-                   "max_factor": max(garment_fit.SCALE_RETRY_STEPS)},
+                   "max_factor": max(garment_fit.SCALE_RETRY_STEPS),
+                   "trunk_room_m": garment_fit.TRUNK_AUTO_ROOM_M, "trunk_front_m": garment_fit.TRUNK_AUTO_FRONT_M},
     }
 
 

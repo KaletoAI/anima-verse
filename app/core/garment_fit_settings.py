@@ -11,6 +11,9 @@ may add — ``garment_fit.fit_clothing``'s ``settings``:
 - ``depth`` (Ruling A68): ``garment_fit.DEPTH_CHOICES`` — room in front of and behind the trunk added after the
   push-out (``garment_fit.depth_ease``), a percent of the torso's half depth (0 / 3 / 6 / 10; default 0, Auto never
   adds depth).
+- ``trunk`` (Ruling A83): ``garment_fit.TRUNK_CHOICES`` — "auto" (the fit decides, ``garment_fit.auto_trunk``),
+  "generated" (as generated) or "fitted" (laid onto the body, ``garment_fit.place_trunk``; before the depth
+  allowance).
 
 Stored on the character profile (``SETTINGS_KEY``: ``{item_id: {key: value}}``, only the values that differ from
 the defaults). Not part of the fingerprint: a change keeps every image and the mesh and only makes the fit due — the
@@ -19,13 +22,13 @@ fit records the settings it was made with (``inputs.fit_settings``) and a fit ma
 """
 from typing import Any, Dict, Optional
 
-#: Profile key of the per-piece fit settings: ``{item_id: {sleeves_left, sleeves_right, allowance, depth}}``.
+#: Profile key of the per-piece fit settings: ``{item_id: {sleeves_left, sleeves_right, allowance, depth, trunk}}``.
 SETTINGS_KEY = "garment_fit_settings"
 SIDES = ("left", "right")
 
 
 def defaults() -> Dict[str, Any]:
-    return {"sleeves_left": "auto", "sleeves_right": "auto", "allowance": "auto", "depth": 0}
+    return {"sleeves_left": "auto", "sleeves_right": "auto", "allowance": "auto", "depth": 0, "trunk": "auto"}
 
 
 def normalise(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -39,6 +42,7 @@ def normalise(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             out[f"sleeves_{side}"] = value
     out["allowance"] = garment_fit.allowance_choice(raw)
     out["depth"] = garment_fit.depth_choice(raw)
+    out["trunk"] = garment_fit.trunk_choice(raw)
     return out
 
 
@@ -82,6 +86,10 @@ def validate(changes: Dict[str, Any]) -> Dict[str, Any]:
                     or value not in garment_fit.DEPTH_CHOICES):
                 raise ValueError("depth must be 0, 3, 6 or 10")
             out[key] = int(value)
+        elif key == "trunk":
+            if not isinstance(value, str) or value not in garment_fit.TRUNK_CHOICES:
+                raise ValueError(f"trunk must be one of {', '.join(garment_fit.TRUNK_CHOICES)}")
+            out[key] = value
         else:
             raise ValueError(f"Unknown fit setting {str(key)[:40]!r}")
     return out

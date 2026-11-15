@@ -120,7 +120,11 @@ FRAGMENT. Demo has hair text, the world's hair method is the default
     the run re-fits ONLY: 0 renders, 0 mesh calls, 1 decimation (the low
     tier of the new fit; the prepared mesh stays cached); the new record
     accepted, fit_version current, base sha unchanged; "accepted" again. A
-    record with fit_version one lower is "stale" as well.
+    record with fit_version two lower is "stale" as well; one lower (15,
+    Ruling A83's CLOTHING_TRUNK_UNCHANGED) is "accepted" while its own
+    metrics keep the trunk as generated (torso_gap 13.8 mm, front 12.6 mm:
+    both under TRUNK_AUTO_*_M 3 cm), with or without a kept opening, and
+    "stale" with front 38.1 mm (Auto lays it onto the body).
 [6] New profile image -> B2 (base images + base model for B2 written):
     refit before re-render (garment_source, 2026-11-10): F2's group has no
     images, F1's accepted source names the current dress inputs on B1, so
@@ -693,16 +697,28 @@ def main() -> int:
         gs.write_record(gs.garment_path("Demo", hid, f1, "fit").with_suffix(".json"), older)
         check("older version stale", garments._fit_state("Demo", hid, f1, new_sha), "stale")
         # Ruling A72: the previous version is stale with or without a kept opening (Ruling A51's exemption of
-        # version 12 went with version 14: the repaired donors change every clothing fit).
+        # version 12 went with version 14: the repaired donors change every clothing fit). Ruling A83: version 15
+        # stays current when its own numbers keep the trunk as generated (``trunk_may_change``: room 13.8 mm, front
+        # 12.6 mm — both under 3 cm), and is stale when Auto would lay it onto the body (front 38.1 mm).
         kept = {"components": [{"pixels": 900, "recess_px": 8.0, "dropped": False}], "faces": 0}
+        check("the previous clothing version is the trunk-unchanged one",
+              garment_fit.FIT_VERSION["clothing"] - 1 == garment_fit.CLOTHING_TRUNK_UNCHANGED, True)
+        fits = {"torso_gap_p50_m": 0.0138, "trunk_front_gap_p50_m": 0.0126}
         prev = {**rec5b, "fit_version": garment_fit.FIT_VERSION["clothing"] - 1,
+               "metrics": {**(rec5b.get("metrics") or {}), **fits},
                "report": {**(rec5b.get("report") or {}), "opening": None}}
         gs.write_record(gs.garment_path("Demo", hid, f1, "fit").with_suffix(".json"), prev)
-        check("previous version without an opening kept: stale", garments._fit_state("Demo", hid, f1, new_sha),
-              "stale")
+        check("previous version, trunk kept as generated, no opening kept: current",
+              garments._fit_state("Demo", hid, f1, new_sha), "accepted")
         gs.write_record(gs.garment_path("Demo", hid, f1, "fit").with_suffix(".json"),
                         {**prev, "report": {**prev["report"], "opening": kept}})
-        check("previous version with an opening kept: stale", garments._fit_state("Demo", hid, f1, new_sha), "stale")
+        check("previous version, trunk kept as generated, opening kept: current",
+              garments._fit_state("Demo", hid, f1, new_sha), "accepted")
+        gs.write_record(gs.garment_path("Demo", hid, f1, "fit").with_suffix(".json"),
+                        {**prev, "metrics": {**prev["metrics"], "torso_gap_p50_m": 0.0232,
+                                             "trunk_front_gap_p50_m": 0.0381}})
+        check("previous version whose trunk Auto lays onto the body: stale",
+              garments._fit_state("Demo", hid, f1, new_sha), "stale")
         gs.write_record(gs.garment_path("Demo", hid, f1, "fit").with_suffix(".json"), rec5b)
 
         # --- [6] new bsig ---------------------------------------------------------------

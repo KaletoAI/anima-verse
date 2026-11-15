@@ -240,8 +240,17 @@ SIDE_DEEP_M = 0.03
 #: behind 15.7 % -> 1.4 %, the purple patches), and a recess opening's inside lies nearer its inside than its rim
 #: (``OPEN_INSIDE_SHARE``; the jacket: 1056 faces left out of its front edges -> 0, the hole on the chest). Every
 #: clothing fit is refitted: a mesher's double sheets are in nearly every piece.
+#: clothing 16 (2026-11-15, Ruling A83 — a CPU refit of the clothing fits it can change, no hub job): the trunk may be
+#: laid onto the body (fit setting ``trunk``, ``place_trunk``); Auto does so for a trunk standing off like a shell
+#: (``auto_trunk``: Ylva's laced linen blouse, its front 38.2 mm off — the band laid onto the body 27.4 / 58.2 mm ->
+#: 16.1 / 26.3 mm, p50 / p95). A fit Auto keeps as generated is unchanged vertex for vertex, so a version 15 fit stays
+#: current unless its own numbers meet an Auto rule (``expected_fit_version``, ``trunk_may_change``,
+#: ``CLOTHING_TRUNK_UNCHANGED``): in the worlds only the blouse's refused attempt.
 #: footwear: its own fit (``footwear_fit``), versioned there.
-FIT_VERSION: Dict[str, int] = {"hair": 16, "clothing": 15, "footwear": FOOTWEAR_FIT_VERSION}
+FIT_VERSION: Dict[str, int] = {"hair": 16, "clothing": 16, "footwear": FOOTWEAR_FIT_VERSION}
+#: The clothing fit version whose fits stay current under ``FIT_VERSION["clothing"]`` when Auto keeps their trunk as
+#: generated (Ruling A83, ``trunk_may_change``).
+CLOTHING_TRUNK_UNCHANGED = 15
 
 
 def fit_version_for(kind: str, method: str = "") -> Optional[int]:
@@ -255,8 +264,25 @@ def fit_version_for(kind: str, method: str = "") -> Optional[int]:
 
 def expected_fit_version(record: Dict[str, Any]) -> Optional[int]:
     """``fit_version_for`` of a fit record (its ``kind`` and ``method``) — what its ``fit_version`` must say to be
-    current."""
-    return fit_version_for(str(record.get("kind") or ""), str(record.get("method") or ""))
+    current. A clothing fit of ``CLOTHING_TRUNK_UNCHANGED`` whose trunk Auto keeps as generated
+    (``trunk_may_change``) is current as it is: version 16 changed nothing for it (Ruling A83)."""
+    kind = str(record.get("kind") or "")
+    if (kind == "clothing" and record.get("fit_version") == CLOTHING_TRUNK_UNCHANGED
+            and not trunk_may_change(record)):
+        return CLOTHING_TRUNK_UNCHANGED
+    return fit_version_for(kind, str(record.get("method") or ""))
+
+
+def trunk_may_change(record: Dict[str, Any]) -> bool:
+    """Ruling A83: whether a clothing fit made before the trunk choice would come out differently — Auto
+    (``auto_trunk``) lays its trunk onto the body by the fit's own numbers (``torso_gap_p50_m`` /
+    ``trunk_front_gap_p50_m``, what ``measure_trunk`` reads). A depth allowance (Ruling A68) only adds room in front
+    and behind, so a fit made with one holds an upper bound of them: below the rules there, it is below them before
+    the allowance too (Kai's jacket at +10 %: 25.4 / 24.4 mm stored, 23.0 / 19.6 before it)."""
+    metrics = record.get("metrics") or {}
+    choice, _why = auto_trunk({"room_p50_m": metrics.get("torso_gap_p50_m"),
+                               "front_m": metrics.get("trunk_front_gap_p50_m")})
+    return choice == "fitted"
 
 
 # Clothing (phase 5) — the dress spike ``fit_dress.py``. Placement: fractions of the unrigged body height.
@@ -2048,6 +2074,273 @@ def place_sleeves(X: np.ndarray, Xs: np.ndarray, Wg: np.ndarray, body: BodyMesh,
     return X, report, fitted, region
 
 
+# --- the trunk laid onto the body (Ruling A83) -------------------------------------------------------------------------
+# Like a sleeve onto its arm (``fit_sleeve``), the TRUNK of a piece may be laid onto the body: a mesher makes a laced
+# bodice over a puffy top as it saw it worn — a shell standing off the chest — and the push-out only ever pushes OUT.
+# The choice per piece (``TRUNK_CHOICES``, fit setting ``trunk``): "generated" = the fit as before, untouched;
+# "fitted" = ``fit_trunk``; "auto" = "fitted" when the piece as generated (after the rigged clearance pass, before
+# the depth allowance) stands off its trunk like a shell — ``measure_trunk`` over ``trunk_band`` (the vertices not
+# carried by an arm between the hips joint and the shoulder joints, the band ``torso_tight_share`` reads): the
+# median room of the band (the body field's distance) above ``TRUNK_AUTO_ROOM_M``, or the median of its FRONT
+# (``_front_back_gaps``, within ``FRONT_BACK_DEG`` of straight ahead) above ``TRUNK_AUTO_FRONT_M``; else "generated" —
+# a loose piece keeps its volume, as a loose sleeve does. The front, not the back: a piece hangs from the shoulders
+# over the chest and lies on it there, while a jacket's back hangs free from the shoulder blades. The band's centre
+# off the trunk's centre (half the front minus the back) and the share of the band inside the body BEFORE the push
+# are measured and reported, never a rule: the push-out lays an inside trunk at the clearance anyway (Kira's blazer,
+# Ruling A68: its chest 19 to 32 mm inside before the push, 12 mm off after it).
+# Measured 2026-11-15 (``a83-report.md``) on every clothing fit stored in the worlds — median room / front: Kira's
+# blazers 13.8 / 12.6 and 13.9 / 13.4 mm, Kai's jeans 15.3 / 11.9, Ylva's and Rosi's skirts 15.8 / 14.6 and
+# 13.7 / 13.6 (as stored, version 14), Kai's leather jacket ``a5e763666d1a`` 23.0 / 19.6 before its depth allowance
+# (re-measured with Ruling A76's lift; +10 %: 25.4 / 24.4 as stored; its back 38.6) — and Ylva's laced linen blouse
+# ``a4166095ab54`` 25.4 / 38.2 mm (stored attempt 23.2 / 38.1): its puffy top stands
+# 3.8 to 5.3 cm off the chest in front, its corset 3.7 to 4.4 cm. Auto lays the blouse onto the body and keeps
+# every other piece as generated (the room alone could not tell the blouse from the jacket: 25.4 / 23.0 mm).
+#
+# Fitted (``fit_trunk``, ``trunk_weights``): each vertex keeps its height and its direction about the torso axis
+# (``torso_frame``: the hip and the spine joints) and moves along that direction until the body field reads its
+# target room: ``TRUNK_FIT_CLEAR_M`` plus the vertex's own detail — its room minus the piece's median room in its
+# cell (``TRUNK_STATION_M`` high, one of ``TORSO_THETA`` directions, smoothed 1-2-1): an offset up to
+# ``TRUNK_FIT_SHEET_M`` is kept whole (the sheets of a piece — a mesher's lining lies 2 - 5 mm under its outer
+# sheet, Ruling A76 — stay apart and in their order), what lies beyond it by ``TRUNK_FIT_DETAIL`` (the pleats, the
+# lacing, the ruffles), never below half the clearance; the settling pass holds each vertex at the clearance plus its
+# lift (``layer_lift``) smoothed over the mesh (``TRUNK_LIFT_PASSES``; a sheet is its own shell, so its level
+# stays). The lift is measured on the placement: a puffy top's gathered folds lie over one another there, and their
+# lift, used per vertex once the folds are laid onto the body, crumpled the bodice — median angle between
+# neighbouring faces of the blouse's bodice 18.4 deg (as generated 11.3), with the lift smoothed 10.4 deg (without
+# any lift 11.0, the sheets then meet at the clearance). The texture rides along. The weight of that move: the vertex's
+# share off the arms (a sleeve is the sleeve choice's) times its height weight — whole from the narrowest waist up to
+# ``DEPTH_RAMP`` of the height below the shoulder joints (the neck opening and the collar keep their size, as with the
+# depth allowance), fading to 0 at the shoulder joints, and below the waist fading to 0 over ``TRUNK_FIT_BLEND_M``: what
+# hangs below it (a peplum, a skirt part, a hem) stays free and is never glued to the hips. The narrowest waist
+# (``trunk_waist``): the height between the hip and the Spine2 joint where the body's mean trunk radius is smallest.
+# Measured on Ylva (``base5fe6bd6a``): the waist at 1.09 m; the blouse's room per 2-cm station is 20 - 22 mm from 0.99
+# to 1.05 m (the corset's lower edge) and its peplum stands free from 0.97 m down (front 41 - 71 mm): the blend ends at
+# 1.03 m, 4 - 6 cm above it. The move is carried into the piece around it (``blend_sleeves``, the band and relaxation of
+# the sleeves), then the clearance is settled by a short side-kept pass (``push_kept``, 3 iterations). It runs after the
+# rigged clearance pass and before the depth allowance (``transfer_skinned`` step 4b): a depth allowance adds its room
+# on top of the fitted trunk. The vertices it moved are not "tight" (the width allowance's ``torso_tight_share`` leaves
+# them out: lying close is what was asked for). The blouse: the band laid onto the body 27.4 / 58.2 mm (p50 / p95) ->
+# 16.1 / 26.3 mm, its front / back 38.2 / 22.5 -> 17.5 / 16.9 mm.
+TRUNK_CHOICES: Tuple[str, ...] = ("auto", "generated", "fitted")
+TRUNK_FIT_CLEAR_M = 0.012
+TRUNK_FIT_DETAIL = 0.5
+TRUNK_FIT_SHEET_M = 0.006
+TRUNK_LIFT_PASSES = 10
+TRUNK_FIT_BLEND_M = 0.06
+TRUNK_STATION_M = 0.02
+TRUNK_FIT_STEPS = 4
+TRUNK_AUTO_ROOM_M = 0.03
+TRUNK_AUTO_FRONT_M = 0.03
+#: A vertex counts as laid onto the body (``place_trunk``'s report ``before`` / ``after``) from this weight on.
+TRUNK_FITTED_WEIGHT = 0.5
+
+
+def trunk_choice(settings: Optional[Dict[str, Any]]) -> str:
+    """The trunk choice of a piece's fit settings (``trunk``): one of ``TRUNK_CHOICES``, a missing or unknown value
+    "auto"."""
+    value = (settings or {}).get("trunk")
+    return value if isinstance(value, str) and value in TRUNK_CHOICES else "auto"
+
+
+def measure_trunk(X: np.ndarray, d: np.ndarray, trunk: np.ndarray, body_P,
+                  inside: Optional[np.ndarray] = None) -> Optional[Dict[str, Any]]:
+    """How the trunk of a piece sits (block above): ``X`` the piece in the bind space after the clearance pass, ``d``
+    the body field there, ``trunk`` the band (``trunk_band``), ``inside`` per vertex whether it lay inside the body
+    BEFORE the push -> ``{room_p50_m, room_p95_m, front_m, back_m, offset_m, inside_share, vertices}``; None without
+    a band. ``room_p50_m`` is the record's ``torso_gap_p50_m``, ``front_m`` / ``back_m`` its
+    ``trunk_front_gap_p50_m`` / ``trunk_back_gap_p50_m`` (``_front_back_gaps``) of a fit without a depth allowance."""
+    trunk = np.asarray(trunk, bool)
+    if not trunk.any():
+        return None
+    dt = np.asarray(d, np.float64)[trunk]
+    gaps = _front_back_gaps(X, d, trunk, body_P)
+    front, back = gaps["trunk_front_gap_p50_m"], gaps["trunk_back_gap_p50_m"]
+    offset = abs(front - back) / 2 if front is not None and back is not None else None
+    inner = float(np.asarray(inside, bool)[trunk].mean()) if inside is not None else float("nan")
+    return {"room_p50_m": round(float(np.median(dt)), 4), "room_p95_m": round(float(np.percentile(dt, 95)), 4),
+            "front_m": None if front is None else round(float(front), 4),
+            "back_m": None if back is None else round(float(back), 4),
+            "offset_m": None if offset is None else round(float(offset), 4),
+            "inside_share": round(inner, 4), "vertices": int(trunk.sum())}
+
+
+def auto_trunk(numbers: Optional[Dict[str, Any]]) -> Tuple[str, List[Dict[str, Any]]]:
+    """The Auto choice for a measured trunk (``measure_trunk``) -> ``(choice, why)``: "fitted" when a rule of the block
+    above holds, each that holds in ``why`` (``{rule: room, cm}`` / ``{rule: front, cm}``); else "generated" with the
+    numbers that kept it (``{rule: fits, cm, front_cm}``). No numbers (no trunk measured): "generated", ``why``
+    empty. ``numbers`` may be a fit record's own (``trunk_may_change``): ``room_p50_m`` and ``front_m`` are all it
+    reads."""
+    if not numbers:
+        return "generated", []
+    why: List[Dict[str, Any]] = []
+    room, front = numbers.get("room_p50_m"), numbers.get("front_m")
+    if isinstance(room, (int, float)) and math.isfinite(room) and room > TRUNK_AUTO_ROOM_M:
+        why.append({"rule": "room", "cm": round(room * 100, 1)})
+    if isinstance(front, (int, float)) and math.isfinite(front) and front > TRUNK_AUTO_FRONT_M:
+        why.append({"rule": "front", "cm": round(front * 100, 1)})
+    if why:
+        return "fitted", why
+    return "generated", [{"rule": "fits", "cm": round(float(room or 0.0) * 100, 1),
+                          "front_cm": round(float(front or 0.0) * 100, 1)}]
+
+
+def trunk_reason_text(choice: str, why: List[Dict[str, Any]]) -> str:
+    """The plain-words reason of an Auto trunk choice (``auto_trunk``) — the English record text; the Wardrobe
+    composes the same words from ``why`` through its translation layer."""
+    parts = []
+    for item in why:
+        if item["rule"] == "room":
+            parts.append(f"the trunk stands {item['cm']:g} cm off the body (median)")
+        elif item["rule"] == "front":
+            parts.append(f"its front stands {item['cm']:g} cm off the body")
+        elif item["rule"] == "fits":
+            parts.append(f"the trunk sits {item['cm']:g} cm off the body, {item['front_cm']:g} cm in front — it keeps "
+                         "its volume")
+    label = {"fitted": "Fitted to the body", "generated": "As generated"}.get(choice, choice)
+    return f"Auto -> {label}" + (": " + " and ".join(parts) if parts else "")
+
+
+def trunk_waist(body: BodyMesh, frame: Dict[str, Any]) -> float:
+    """The narrowest waist of the rigged ``body`` (block above): the height between the hip (``frame["hip_y"]``) and
+    the Spine2 joint (else the neck) where the mean of the trunk's radius over every direction is smallest."""
+    from app.core.rig_contract import norm_bone_name
+    joints = {norm_bone_name(k): np.asarray(v, np.float64) for k, v in (body.joint_positions or {}).items()}
+    top = float(joints["spine2"][1]) if "spine2" in joints else float(frame["neck_y"])
+    ys = np.arange(frame["hip_y"], max(top, frame["hip_y"] + TRUNK_STATION_M), 0.005)
+    v = _torso_v(ys, frame)
+    mean = np.mean([_torso_radius(frame, v, np.full(len(v), t))
+                    for t in np.linspace(-np.pi, np.pi, TORSO_THETA, endpoint=False)], axis=0)
+    return float(ys[int(np.argmin(mean))])
+
+
+def trunk_weights(X: np.ndarray, Wg: np.ndarray, body: BodyMesh, frame: Dict[str, Any]
+                  ) -> Tuple[np.ndarray, Dict[str, float]]:
+    """Per vertex of ``X`` the weight of the trunk fit (block above) and the band ``{waist_y_m, low_y_m, top_y_m,
+    full_y_m}``: the share off both arms times the height weight — 1 between the narrowest waist and ``full_y_m``,
+    linear to 0 at ``top_y_m`` (the lower shoulder joint) and at ``low_y_m`` (``TRUNK_FIT_BLEND_M`` below the
+    waist)."""
+    from app.core.rig_contract import norm_bone_name
+    joints = {norm_bone_name(k): np.asarray(v, np.float64) for k, v in (body.joint_positions or {}).items()}
+    P = np.asarray(body.positions, np.float64)
+    height = float(np.ptp(P[:, 1]))
+    arms = [float(joints[k][1]) for k in ("leftarm", "rightarm") if k in joints]
+    top = min(arms) if arms else float(frame["neck_y"])
+    full = top - DEPTH_RAMP * height
+    waist = trunk_waist(body, frame)
+    low = waist - TRUNK_FIT_BLEND_M
+    y = np.asarray(X, np.float64)[:, 1]
+    wy = np.clip((y - low) / max(waist - low, 1e-6), 0.0, 1.0) * np.clip((top - y) / max(top - full, 1e-6), 0.0, 1.0)
+    off_arm = 1.0 - np.clip(_arm_share(Wg, body.joint_names, "left") + _arm_share(Wg, body.joint_names, "right"),
+                            0.0, 1.0)
+    return wy * off_arm, {"waist_y_m": round(waist, 4), "low_y_m": round(low, 4), "top_y_m": round(top, 4),
+                          "full_y_m": round(full, 4)}
+
+
+def _cell_median(y: np.ndarray, theta: np.ndarray, value: np.ndarray) -> np.ndarray:
+    """Per point the piece's median ``value`` in its cell (``TRUNK_STATION_M`` of height x one of ``TORSO_THETA``
+    directions), the table smoothed 1-2-1 along both (the directions round), empty cells filled from their
+    neighbours."""
+    iy = np.floor((y - y.min()) / TRUNK_STATION_M).astype(np.int64)
+    it = _theta_bin(theta)
+    ny = int(iy.max()) + 1
+    key = iy * TORSO_THETA + it
+    order = np.argsort(key, kind="stable")
+    ks, vs = key[order], value[order]
+    starts = np.flatnonzero(np.r_[True, ks[1:] != ks[:-1]])
+    table = np.full(ny * TORSO_THETA, np.nan)
+    for a, b in zip(starts, np.r_[starts[1:], len(ks)]):
+        table[ks[a]] = np.median(vs[a:b])
+    table = table.reshape(ny, TORSO_THETA)
+    while np.isnan(table).any():
+        padded = np.pad(table, ((1, 1), (0, 0)), mode="edge")
+        around = np.stack([padded[:-2], padded[2:], np.roll(table, 1, 1), np.roll(table, -1, 1)])
+        count = (~np.isnan(around)).sum(0)
+        fill = np.where(count > 0, np.nansum(around, 0) / np.maximum(count, 1), np.nan)
+        grown = np.where(np.isnan(table), fill, table)
+        if np.isnan(grown).sum() == np.isnan(table).sum():
+            break
+        table = grown
+    table = np.nan_to_num(table, nan=float(np.nanmedian(value)))
+    padded = np.pad(table, ((1, 1), (0, 0)), mode="edge")
+    table = 0.25 * padded[:-2] + 0.5 * table + 0.25 * padded[2:]
+    table = 0.25 * np.roll(table, 1, 1) + 0.5 * table + 0.25 * np.roll(table, -1, 1)
+    return table[iy, it]
+
+
+def fit_trunk(X: np.ndarray, beta: np.ndarray, frame: Dict[str, Any], sdf: "Sdf") -> np.ndarray:
+    """The displacement (rows of ``X``) that lays the trunk onto the body (block above), weighted by ``beta``
+    (``trunk_weights``); rows with no weight are zero. The band smoothing (``blend_sleeves``) is not in it.
+
+    Each vertex keeps its height and its direction about the torso axis (``frame``) and moves along that direction
+    until the body field ``sdf`` reads its target room (``TRUNK_FIT_STEPS`` steps of ``room - target``: the field
+    is 1-Lipschitz, so a step never passes the target) — the field, not the radius table, so the body's own surface
+    and none of the table's bins shows through the fitted piece."""
+    X = np.asarray(X, np.float64)
+    D = np.zeros_like(X)
+    rows = np.nonzero(np.asarray(beta) > 1e-4)[0]
+    if not len(rows):
+        return D
+    Y = X[rows]
+    _v, theta, rho = _torso_coords(Y, frame)
+    room = sdf.sample(Y)
+    detail = room - _cell_median(Y[:, 1], theta, room)
+    sheet = np.clip(detail, -TRUNK_FIT_SHEET_M, TRUNK_FIT_SHEET_M)
+    target = TRUNK_FIT_CLEAR_M + np.maximum(sheet + TRUNK_FIT_DETAIL * (detail - sheet), -0.5 * TRUNK_FIT_CLEAR_M)
+    axis = _torso_axis(Y[:, 1], frame)
+    direction = np.stack([np.sin(theta), np.cos(theta)], 1)
+    T = Y.copy()
+    for _ in range(TRUNK_FIT_STEPS):
+        rho = np.maximum(rho - (sdf.sample(T) - target), 0.0)
+        T[:, [0, 2]] = axis + direction * rho[:, None]
+    D[rows] = np.asarray(beta, np.float64)[rows, None] * (T - Y)
+    return D
+
+
+def place_trunk(X: np.ndarray, Xs: np.ndarray, Wg: np.ndarray, body: BodyMesh, *, faces, adjacency, sdf: "Sdf",
+                choice: str, clear: float, margin: float, inside: Optional[np.ndarray] = None,
+                lift: Optional[np.ndarray] = None) -> Tuple[np.ndarray, Dict[str, Any], np.ndarray]:
+    """The trunk choice (block above) on ``X`` (the piece in the bind space after the clearance pass; ``Xs`` its
+    pre-push placement, ``inside`` per vertex whether it lay inside the body there) -> ``(X', report {setting,
+    applied, why, reason, numbers, band, before {p50_m, p95_m}, after {p50_m, p95_m}, blend, vertices}, fitted)`` —
+    ``before`` / ``after`` the body field over the vertices laid onto the body (weight from ``TRUNK_FITTED_WEIGHT``),
+    ``fitted`` the vertices the step moved (``blend_sleeves``' region). "generated" returns ``X`` itself. ``lift``
+    (Ruling A76, ``layer_lift``): each vertex's clearance in the settling pass is the clearance plus its lift,
+    smoothed ``TRUNK_LIFT_PASSES`` times over the mesh."""
+    trunk = trunk_band(X, Wg, body)
+    d = sdf.sample(X)
+    numbers = measure_trunk(X, d, trunk, body.positions, inside)
+    why: List[Dict[str, Any]] = []
+    if choice == "auto":
+        applied, why = auto_trunk(numbers)
+    else:
+        applied = choice if choice in TRUNK_CHOICES else "generated"
+    report: Dict[str, Any] = {"setting": choice, "applied": applied, "why": why,
+                              "reason": trunk_reason_text(applied, why) if choice == "auto" else "",
+                              "numbers": numbers}
+    fitted = np.zeros(len(X), bool)
+    if applied != "fitted":
+        return X, report, fitted
+    frame = torso_frame(body)
+    if frame is None:
+        report["skipped"] = "the body has no trunk joints"
+        return X, report, fitted
+    beta, band = trunk_weights(X, Wg, body, frame)
+    laid = beta >= TRUNK_FITTED_WEIGHT
+    report["band"] = band
+    D = fit_trunk(X, beta, frame, sdf)
+    Y, blend, fitted = blend_sleeves(X, D, Xs, faces, adjacency)
+    held = None if lift is None else _smooth(np.asarray(lift, np.float64)[:, None], adjacency, TRUNK_LIFT_PASSES)[:, 0]
+    Y = Y + push_kept(Y, adjacency, sdf, clear=clear, iterations=3, smooth_until=0, margin=margin, lift=held)
+    after = sdf.sample(Y)
+
+    def q(values):
+        return ({"p50_m": round(float(np.median(values)), 4), "p95_m": round(float(np.percentile(values, 95)), 4)}
+                if len(values) else None)
+    report.update(blend=blend, vertices=int(laid.sum()), before=q(d[laid]), after=q(after[laid]),
+                  shift_max_m=round(float(np.linalg.norm(Y - X, axis=1).max()), 4))
+    return Y, report, fitted
+
+
 # --- skin seen in the sleeves (Ruling A47, the arm light) --------------------------------------------------------------
 # The fitted piece and its rigged body are drawn orthographically from the front and from the back (bind pose, the arms
 # out) into depth buffers of ``SKIN_PX_M`` pixels; per side, the sleeve's outline (the pixels of its faces —
@@ -2139,7 +2432,8 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
                      limbs: Optional[Dict[str, Any]] = None, Q_pre=None,
                      sleeves: Optional[Dict[str, str]] = None,
                      ease_z: Optional[np.ndarray] = None,
-                     lift: Optional[np.ndarray] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
+                     lift: Optional[np.ndarray] = None,
+                     trunk: str = "auto") -> Tuple[np.ndarray, Dict[str, Any]]:
     """Carry welded clothing positions ``Q`` (unrigged units) into the rigged bind space (metres) by the body's own
     skinning -> ``(X, report)``. ``limbs`` (a refit, ``fit_clothing``): the source fit per welded vertex (``x0``,
     ``w0``, ``names0``, ``frames``, ``kinds``) — its limb part is aligned onto this body's limbs (``align_limbs``)
@@ -2169,6 +2463,10 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
     4. The clearance pass on the rigged body (SDF in metres, ``rigged_iterations`` iterations, smoothed in the
        first ``RIGGED_SMOOTH_UNTIL``), side-kept (``push_kept``); a vertex the skinning buried on the wrong side
        starts on the nearest body surface of its own side (``_transfer_sides``, ``_side_projection``).
+    4b. Ruling A83: the trunk choice (``place_trunk``; ``trunk`` = ``trunk_choice``): "auto" measures the trunk as
+       the clearance pass left it and lays it onto the body (``fit_trunk``) when it stands off; "generated" leaves
+       ``X`` as it is. ``report["trunk"]`` holds the choice and its numbers; the vertices it laid onto the body are
+       left out of ``torso_tight_share``.
     5. Ruling A68: ``ease_z`` (per vertex, unrigged units — ``depth_shift`` of ``Q``) is added to the rigged z
        (times ``k``) as the last step: the depth allowance never changes which part a vertex rides or how the
        clearance pass moves it, and every number of the report is measured with it.
@@ -2248,9 +2546,10 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
     lo = np.minimum(X.min(0), Xs.min(0)) - margin_m
     hi = np.maximum(X.max(0), Xs.max(0)) + margin_m
     sdf = body_sdf(Pr, body_rigged.faces, vox=vox_m, bounds=(lo, hi))
+    inside_pre = sdf.sample(Xs) < 0
     X, sleeve_report, fitted, sleeve_region = place_sleeves(X, Xs, Wg, body_rigged, faces=faces,
                                                             adjacency=adjacency, choices=sleeves or {},
-                                                            inside=sdf.sample(Xs) < 0, lift=lift)
+                                                            inside=inside_pre, lift=lift)
     if (X.min(0) < lo + 0.5 * margin_m).any() or (X.max(0) > hi - 0.5 * margin_m).any():
         lo, hi = np.minimum(lo, X.min(0) - margin_m), np.maximum(hi, X.max(0) + margin_m)
         sdf = body_sdf(Pr, body_rigged.faces, vox=vox_m, bounds=(lo, hi))
@@ -2269,6 +2568,10 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
     rigged_push = np.linalg.norm(Xd, axis=1)
     if lift is not None:
         rigged_push = np.maximum(rigged_push - lift_spread(lift, adjacency), 0.0)
+    # Ruling A83: the trunk laid onto the body (or kept as generated) — before the depth allowance.
+    X, trunk_report, trunk_fitted = place_trunk(X, Xs, Wg, body_rigged, faces=faces, adjacency=adjacency, sdf=sdf,
+                                                choice=trunk, clear=clear_m, margin=SIDE_MARGIN_M, inside=inside_pre,
+                                                lift=lift)
     if ease_z is not None and np.any(ease_z):
         X[:, 2] += np.asarray(ease_z, np.float64) * float(k)
         if (X.min(0) < lo + 0.5 * margin_m).any() or (X.max(0) > hi - 0.5 * margin_m).any():
@@ -2278,7 +2581,8 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
     arm_cols = [i for i, n in enumerate(body_rigged.joint_names) if "arm" in norm_bone_name(n)]
     # Ruling A47: how tight the trunk of the piece lies (the width allowance, ``scale_retry``) and how much the
     # sleeve placement stretched the fabric against its pre-push shape.
-    trunk = trunk_band(X, Wg, body_rigged)
+    band = trunk_band(X, Wg, body_rigged)
+    tight_band = band & ~trunk_fitted
     stretch = sleeve_stretch(X, Xs, faces, sleeve_region) if sleeve_region.any() else None
     report = {
         "method": "skinned",
@@ -2297,9 +2601,9 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
         "rigged_deep_push_share": float((rigged_push > DEEP_PUSH_M).mean()) if len(rigged_push) else 0.0,
         "rigged_clearance_p1_m": float(np.percentile(d, 1)),
         "rigged_inside_share": float((d < 0).mean()),
-        "torso_tight_share": float((d[trunk] < TORSO_TIGHT_M).mean()) if trunk.any() else 0.0,
-        "torso_gap_p50_m": float(np.median(d[trunk])) if trunk.any() else 0.0,
-        **_front_back_gaps(X, d, trunk, Pr),
+        "torso_tight_share": float((d[tight_band] < TORSO_TIGHT_M).mean()) if tight_band.any() else 0.0,
+        "torso_gap_p50_m": float(np.median(d[band])) if band.any() else 0.0,
+        **_front_back_gaps(X, d, band, Pr),
         "sleeve_stretch": stretch,
         "sleeve_fitted": fitted,
     }
@@ -2307,6 +2611,7 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
         report["limbs"] = limb_report
     if sleeve_report:
         report["sleeves"] = sleeve_report
+    report["trunk"] = trunk_report
     return X, report
 
 
@@ -3455,7 +3760,8 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
     ``settings`` (Ruling A47, the piece's fit settings — ``garments.fit_settings``): ``sleeves_left`` /
     ``sleeves_right`` (``SLEEVE_CHOICES``; ``place_sleeves``, report ``transfer.sleeves``) and ``allowance``
     (``ALLOWANCE_CHOICES``; ``scale_retry``, report ``scale_retry.allowance``) and ``depth`` (Ruling A68,
-    ``DEPTH_CHOICES``; ``depth_shift`` after the push-out, report ``depth``). The vertices laid onto the arm are
+    ``DEPTH_CHOICES``; ``depth_shift`` after the push-out, report ``depth``) and ``trunk`` (Ruling A83,
+    ``TRUNK_CHOICES``; ``place_trunk``, report ``transfer.trunk``). The vertices laid onto the arm are
     left out of the placement push numbers. ``metrics`` adds the skin seen in each sleeve
     (``sleeve_skin_left_cm2`` / ``sleeve_skin_right_cm2``, ``sleeve_skin_seen``; ``report["arm_light"]``), the
     trunk's tight share and the sleeve stretch.
@@ -3503,6 +3809,7 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
                      "frames": limb_source["frames"], "kinds": tuple(limb_source.get("kinds") or ("arm", "leg"))}
     margin = SDF_MARGIN_M / k
     choices = sleeve_choices(settings)
+    trunk = trunk_choice(settings)
     allowance = allowance_choice(settings)
     depth = depth_choice(settings)
     # Ruling A68: the depth allowance's shift in body units and its frame (set below, before the first finish).
@@ -3531,7 +3838,7 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
         ease_z = depth_shift(Qp, ease_u[0], **depth_args[0]) if ease_u[0] else None
         X, transfer_report = transfer_skinned(Qp, body_u, body_r, faces=Fk, k=k, split_y=split_y, limbs=limbs,
                                               Q_pre=Qs, sleeves=choices, ease_z=ease_z,
-                                              lift=None if lift_u[0] is None else lift_u[0] * k)
+                                              lift=None if lift_u[0] is None else lift_u[0] * k, trunk=trunk)
         fitted = transfer_report.pop("sleeve_fitted", None)
         if fitted_rows[0] is None and fitted is not None and np.any(fitted):
             fitted_rows[0] = fitted
@@ -3602,7 +3909,7 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
         result.metrics[f"sleeve_skin_{side}_cm2"] = skin.get(side)
     result.report["arm_light"] = arm_light(skin)
     result.report["fit_settings"] = {"sleeves_left": choices["left"], "sleeves_right": choices["right"],
-                                     "allowance": allowance, "depth": depth}
+                                     "allowance": allowance, "depth": depth, "trunk": trunk}
     result.report["depth"] = {"setting": depth, "ease_mm": round(ease_u[0] * k * 1000.0, 1),
                               "half_depth_mm": round(half_depth * k * 1000.0, 1),
                               "inherited": bool(torso_source and depth)}
