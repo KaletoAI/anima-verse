@@ -246,11 +246,20 @@ SIDE_DEEP_M = 0.03
 #: 16.1 / 26.3 mm, p50 / p95). A fit Auto keeps as generated is unchanged vertex for vertex, so a version 15 fit stays
 #: current unless its own numbers meet an Auto rule (``expected_fit_version``, ``trunk_may_change``,
 #: ``CLOTHING_TRUNK_UNCHANGED``): in the worlds only the blouse's refused attempt.
+#: clothing 17 (2026-11-15, Ruling A84 — a CPU refit of the clothing fits it can change, no hub job): each arm's seam
+#: is laid where the pose change opens it least (``armpit_seam``): a sleeve's whole tube rides the arm, the trunk ends
+#: at the armpit (Ylva's laced linen blouse: ``new_edge_max_m`` 0.2706 -> 0.1417, ``sleeve_shards`` 62 -> 4 — the
+#: "bat-wing" sheets under the arms; Kai's jacket and Kira's blazer re-lay their armhole ring). A piece with nothing
+#: on an arm (``sleeve_share`` 0: skirts, trousers) is unchanged bit for bit, so its version 16 fit (and a version 15
+#: one Auto keeps as generated) stays current (``seam_may_change``).
 #: footwear: its own fit (``footwear_fit``), versioned there.
-FIT_VERSION: Dict[str, int] = {"hair": 16, "clothing": 16, "footwear": FOOTWEAR_FIT_VERSION}
+FIT_VERSION: Dict[str, int] = {"hair": 16, "clothing": 17, "footwear": FOOTWEAR_FIT_VERSION}
 #: The clothing fit version whose fits stay current under ``FIT_VERSION["clothing"]`` when Auto keeps their trunk as
-#: generated (Ruling A83, ``trunk_may_change``).
+#: generated (Ruling A83, ``trunk_may_change``) and nothing rides an arm (Ruling A84, ``seam_may_change``).
 CLOTHING_TRUNK_UNCHANGED = 15
+#: The clothing fit version whose fits stay current under ``FIT_VERSION["clothing"]`` when nothing rides an arm
+#: (Ruling A84, ``seam_may_change``).
+CLOTHING_SEAM_UNCHANGED = 16
 
 
 def fit_version_for(kind: str, method: str = "") -> Optional[int]:
@@ -264,13 +273,25 @@ def fit_version_for(kind: str, method: str = "") -> Optional[int]:
 
 def expected_fit_version(record: Dict[str, Any]) -> Optional[int]:
     """``fit_version_for`` of a fit record (its ``kind`` and ``method``) — what its ``fit_version`` must say to be
-    current. A clothing fit of ``CLOTHING_TRUNK_UNCHANGED`` whose trunk Auto keeps as generated
-    (``trunk_may_change``) is current as it is: version 16 changed nothing for it (Ruling A83)."""
+    current. A clothing fit with nothing on an arm (``seam_may_change`` False) is current as it is at
+    ``CLOTHING_SEAM_UNCHANGED`` (version 17 changed nothing for it, Ruling A84), and at ``CLOTHING_TRUNK_UNCHANGED``
+    when Auto keeps its trunk as generated (``trunk_may_change``; version 16 changed nothing for it, Ruling A83)."""
     kind = str(record.get("kind") or "")
-    if (kind == "clothing" and record.get("fit_version") == CLOTHING_TRUNK_UNCHANGED
-            and not trunk_may_change(record)):
-        return CLOTHING_TRUNK_UNCHANGED
+    version = record.get("fit_version")
+    if kind == "clothing" and not seam_may_change(record):
+        if version == CLOTHING_SEAM_UNCHANGED:
+            return CLOTHING_SEAM_UNCHANGED
+        if version == CLOTHING_TRUNK_UNCHANGED and not trunk_may_change(record):
+            return CLOTHING_TRUNK_UNCHANGED
     return fit_version_for(kind, str(record.get("method") or ""))
+
+
+def seam_may_change(record: Dict[str, Any]) -> bool:
+    """Ruling A84: whether a clothing fit made before the armpit seam would come out differently — any of its
+    vertices rode an arm (the report's ``transfer.sleeve_share`` above 0, the very test ``armpit_seam`` returns the
+    weights unchanged on). A record without that number may have."""
+    share = ((record.get("report") or {}).get("transfer") or {}).get("sleeve_share")
+    return not (isinstance(share, (int, float)) and not isinstance(share, bool) and share == 0)
 
 
 def trunk_may_change(record: Dict[str, Any]) -> bool:
@@ -1400,6 +1421,139 @@ def sleeve_cuffs(Q, body_P, parts, faces, upper, sleeve, k: float) -> np.ndarray
     return out
 
 
+# --- the armpit seam (Ruling A84) --------------------------------------------------------------------------------------
+# Which garment vertex rides an arm and which the trunk is decided above by the NEAREST skin (``_donor_parts``,
+# ``sleeve_vertices``). In the A-pose the generator's arms hang 11 - 12 deg off vertical beside the trunk, and a
+# full sleeve's inner wall hangs between the two: on Ylva's laced linen blouse (``a4166095ab54``, ``base5fe6bd6a``) its
+# inner wall lies 3 - 6 cm from the torso side and as far from the arm (trunk ends of the long edges: torso 6.2 / arm
+# 6.6 cm left, 3.4 / 4.1 cm right) — it took the trunk's weights, stayed beside the ribs while the arm turned 76 deg
+# up, and the seam between it and the outer wall that rode the arm ran 25 - 30 cm below the shoulder joint, where
+# that turn opens it by 2 r sin(theta / 2) = 0.24 - 0.27 m: the "bat-wing" sheets under both arms (``new_edge_max_m``
+# 0.2479 with the sleeves as generated, 0.2706 laid onto the arm; 97 / 144 edges over 0.17 m, all of them between a
+# vertex with arm weight 1 and one with 0). The same half ring left the sleeve laid onto the arm (``fit_sleeve``)
+# measured from half its tube: 108 shards right after the lay-on; ``relax_sleeve_region`` evened them out by pulling
+# their vertices into the arm (65 % inside, median 6 mm deep), the clearance pass pushed them back out by 2 - 7 cm and
+# 61 shards came back (``sleeve_shards`` 62).
+#
+# So each arm's seam is LAID instead: every candidate vertex (nearer to that arm's skin than to the other arm's, above
+# the waist or already on the arm) may ride the arm (its weights blended from that arm's skin only, as a cuff's) or the
+# trunk (from the trunk's skin only, the donors its height allows); an edge whose two ends ride different parts costs
+# the length the pose change grows it by beyond its placed length, and the labelling with the least total cost is a
+# minimum cut (``seam_cut``). That cost is the rule of ``NEW_EDGE_MAX_M`` itself — 2 r sin(theta / 2), smallest
+# near the shoulder joint — so the cut runs round the armhole: the whole tube follows the arm, the trunk ends at the
+# armpit. Pinned: the vertices whose nearest skin is that arm's by more than ``SEAM_SEED_M`` than the trunk's (an
+# arm is always in its sleeve — without them the cheapest labelling is no sleeve at all), and every vertex that is no
+# candidate (below the waist and on no sleeve: a skirt beside a hanging hand stays a skirt). Each other vertex pays
+# ``SEAM_PREFER_M`` for leaving the part the nearest skin gave it, so where the seam's cost does not decide nothing
+# moves. A piece with no vertex on an arm (a skirt, trousers) is returned unchanged — weights, so the fit, bit for bit.
+# Measured 2026-11-15 (``a84-report.md``): the blouse — 925 / 605 vertices (left / right) laid onto the arm, 236 / 374
+# taken off it at the armhole; ``new_edge_max_m`` 0.2479 -> 0.1271 (as generated) and 0.2706 -> 0.1417 (laid onto the
+# arm), ``sleeve_shards`` 62 -> 4, the right arm's skin seen in the sleeve 47.3 -> 18.0 cm2. Kai's jacket and Kira's
+# blazer: only their armhole ring is re-laid (728 / 809 vertices); edges grown over 5 cm 67 -> 42 and 122 -> 90,
+# the longest 0.0799 -> 0.0825 and 0.0899 -> 0.0994 m, stretched sleeve triangles 1312 -> 1287 and 985 -> 839, shards
+# 0. The cut costs well under a second per fit.
+#: How much nearer (metres) a vertex on an arm must lie to that arm's skin than to the trunk's to be pinned to it.
+SEAM_SEED_M = 0.02
+#: What a vertex pays (metres of edge growth) for leaving the part the nearest skin gave it (``seam_cut``).
+SEAM_PREFER_M = 0.001
+#: The integer unit of the cut's capacities (``maximum_flow``), metres.
+SEAM_UNIT_M = 1e-4
+_SEAM_PINNED = 1 << 28
+
+
+def seam_cut(arm_pos: np.ndarray, trunk_pos: np.ndarray, rest: np.ndarray, edges: np.ndarray,
+             prefer_arm: np.ndarray, seed_arm: np.ndarray, seed_trunk: np.ndarray) -> np.ndarray:
+    """The labelling of one arm's seam (block above) -> per vertex True = rides the arm. ``arm_pos`` / ``trunk_pos``
+    (n, 3): where the vertex lands riding the arm / the trunk; ``edges`` (m, 2) with their ``rest`` length (the
+    placed piece); ``prefer_arm`` the labelling before the cut (each vertex pays ``SEAM_PREFER_M`` for leaving it);
+    ``seed_arm`` / ``seed_trunk`` are pinned. An edge whose two ends ride different parts pays the length it grows
+    beyond ``rest`` — the minimum total is the cut (``maximum_flow``, capacities in ``SEAM_UNIT_M``)."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import breadth_first_order, maximum_flow
+    n = len(arm_pos)
+    E = np.asarray(edges, np.int64).reshape(-1, 2)
+    u, v = E[:, 0], E[:, 1]
+
+    def units(m: np.ndarray) -> np.ndarray:
+        return np.ceil(np.maximum(m, 0.0) / SEAM_UNIT_M).astype(np.int64)
+    # u on the arm, v on the trunk (edge u -> v cut) and the other way round
+    uv = units(np.linalg.norm(arm_pos[u] - trunk_pos[v], axis=1) - rest)
+    vu = units(np.linalg.norm(arm_pos[v] - trunk_pos[u], axis=1) - rest)
+    src, snk = n, n + 1
+    prefer = int(round(SEAM_PREFER_M / SEAM_UNIT_M))
+    seed_arm, seed_trunk = np.asarray(seed_arm, bool), np.asarray(seed_trunk, bool) & ~np.asarray(seed_arm, bool)
+    prefer_arm = np.asarray(prefer_arm, bool)
+    a_cap = np.where(seed_arm, _SEAM_PINNED, np.where(prefer_arm & ~seed_trunk, prefer, 0))
+    t_cap = np.where(seed_trunk, _SEAM_PINNED, np.where(~prefer_arm & ~seed_arm, prefer, 0))
+    ia, it = np.nonzero(a_cap)[0], np.nonzero(t_cap)[0]
+    rows = np.concatenate([u, v, np.full(len(ia), src), it])
+    cols = np.concatenate([v, u, ia, np.full(len(it), snk)])
+    cap = np.concatenate([uv, vu, a_cap[ia], t_cap[it]])
+    keep = cap > 0
+    C = coo_matrix((cap[keep].astype(np.int32), (rows[keep], cols[keep])), shape=(n + 2, n + 2)).tocsr()
+    C.sum_duplicates()
+    flow = maximum_flow(C, src, snk).flow
+    # the reverse arcs carry the flow back: residual = C - flow, over the union of both patterns
+    R = (C - flow).tocsr()
+    R.data[R.data < 0] = 0
+    R.eliminate_zeros()
+    reach = breadth_first_order(R, src, directed=True, return_predecessors=False)
+    arm = np.zeros(n + 2, bool)
+    arm[reach] = True
+    return arm[:n]
+
+
+def armpit_seam(Q: np.ndarray, Wg: np.ndarray, k: float, *, faces, bones: "BoneTransforms", Pb: np.ndarray,
+                parts: np.ndarray, joint_names, blend, top_donors: np.ndarray, low_donors: np.ndarray,
+                upper: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """The transfer weights ``Wg`` with each arm's seam laid by ``seam_cut`` (block above) -> ``(Wg', report)``.
+    ``blend(candidates, rows)`` is ``transfer_skinned``'s inverse-distance blend; ``top_donors`` / ``low_donors``
+    the body vertices a trunk vertex above / below the waist (``upper``) may take its weights from. A vertex keeps its
+    row of ``Wg`` unless the cut moves it to the other part. ``report``: per side that had pinned vertices
+    ``{to_arm, to_trunk, seeds, candidates}``; empty (and ``Wg`` itself returned) when no vertex rides an arm."""
+    from scipy.spatial import cKDTree
+    from app.core.rig_contract import norm_bone_name
+    arm_cols = [i for i, n in enumerate(joint_names) if "arm" in norm_bone_name(n)]
+    if not arm_cols or not (np.asarray(Wg)[:, arm_cols].sum(1) > SLEEVE_ARM_SHARE).any():
+        # nothing rides an arm (``sleeve_share`` 0): the weights as they are (``seam_may_change``)
+        return Wg, {}
+    Q = np.asarray(Q, np.float64)
+    Qk = Q * float(k)
+    F = np.asarray(faces, np.int64).reshape(-1, 3)
+    E = np.unique(np.sort(np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]]), axis=1), axis=0)
+    rest = np.linalg.norm(Qk[E[:, 0]] - Qk[E[:, 1]], axis=1)
+    near = {p: (cKDTree(Pb[parts == p]).query(Q, workers=fit_kernels.threads())[0] * float(k)
+                if (parts == p).any() else np.full(len(Q), np.inf)) for p in (0, 1, 2)}
+    Wout = np.array(Wg, np.float64, copy=True)
+    X = bones.apply(Qk, Wout)
+    upper = np.asarray(upper, bool)
+    report: Dict[str, Any] = {}
+    for side, part in (("left", 1), ("right", 2)):
+        on = _arm_share(Wout, joint_names, side) > SLEEVE_ARM_SHARE
+        seed_arm = on & (near[0] - near[part] > SEAM_SEED_M)
+        if not seed_arm.any() or not (parts == part).any():
+            continue
+        cand = (near[part] < near[3 - part]) & (upper | on)
+        rows = np.nonzero(cand)[0]
+        Wa = blend(np.nonzero(parts == part)[0], rows)
+        Wt = np.zeros_like(Wa)
+        for donors, sel in ((top_donors, upper[rows]), (low_donors, ~upper[rows])):
+            donors = donors[parts[donors] == 0]
+            if sel.any() and len(donors):
+                Wt[sel] = blend(donors, rows[sel])
+        arm_pos, trunk_pos = X.copy(), X.copy()
+        arm_pos[rows] = np.where(on[rows, None], X[rows], bones.apply(Qk[rows], Wa))
+        trunk_pos[rows] = np.where(on[rows, None], bones.apply(Qk[rows], Wt), X[rows])
+        lab = seam_cut(arm_pos, trunk_pos, rest, E, on, seed_arm, ~cand)
+        to_arm, to_trunk = lab[rows] & ~on[rows], ~lab[rows] & on[rows]
+        Wout[rows[to_arm]] = Wa[to_arm]
+        Wout[rows[to_trunk]] = Wt[to_trunk]
+        X[rows] = np.where(lab[rows, None], arm_pos[rows], trunk_pos[rows])
+        report[side] = {"to_arm": int(to_arm.sum()), "to_trunk": int(to_trunk.sum()), "seeds": int(seed_arm.sum()),
+                        "candidates": int(len(rows))}
+    return Wout, report
+
+
 # --- sleeve centring (Ruling A35) --------------------------------------------------------------------------------------
 # A sleeve is re-centred on its arm in the rigged space, before the clearance pass. The mesher may draw a sleeve off
 # its arm: Kai's leather jacket came from two views that disagree on the sleeves' reach, and the mesher bent the
@@ -2448,6 +2602,9 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
        Ruling A35), which take their own arm's skin only. The blend is taken within
        ONE PART (``_donor_parts``: each arm chain, the rest) — the part whose skin is nearest to the garment vertex —
        so a sleeve hanging next to the torso is a sleeve and not a noisy mix of arm and torso.
+    2b. Ruling A84: each arm's seam between those parts is laid where the pose change opens it least
+       (``armpit_seam``, ``seam_cut``): a sleeve's whole tube rides the arm, the trunk ends at the armpit.
+       ``report["armpit_seam"]`` holds what it moved per side.
     3. Linear blend skinning of ``k * Q`` with those weights (the body itself is skinned that way). A vertex far
        from the skin keeps its distance to the bone it rides (a rigid motion), the blend zone of a joint deforms like
        the skin under it — no tear between neighbours with different donors, nothing to smooth over. The fabric
@@ -2530,6 +2687,9 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
     for side in (1, 2):
         if (cuff == side).any():
             Wg[cuff == side] = blend(np.nonzero(parts == side)[0], np.nonzero(cuff == side)[0])
+    Wg, seam_report = armpit_seam(Q, Wg, k, faces=faces, bones=bones, Pb=Pb, parts=parts,
+                                  joint_names=body_rigged.joint_names, blend=blend,
+                                  top_donors=eligible(_LOWER_ARM_TOKENS), low_donors=eligible(_ARM_TOKENS), upper=upper)
     X = bones.apply(Q * float(k), Wg)
     relaxed = relax_stretched(X, Q * float(k), faces, adjacency)
     limb_report = None
@@ -2595,6 +2755,7 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
         "sleeve_vertices": int(sleeve.sum()),
         "sleeve_below_waist": int((sleeve & ~upper).sum()),
         "sleeve_cuff_vertices": int((cuff > 0).sum()),
+        "armpit_seam": seam_report,
         "relaxed_vertices": int(relaxed),
         "rigged_push_max_m": float(rigged_push.max()) if len(rigged_push) else 0.0,
         "rigged_push_p95_m": float(np.percentile(rigged_push, 95)) if len(rigged_push) else 0.0,
