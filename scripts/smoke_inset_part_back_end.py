@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The inset part's back end: the levelled region ends before the channel closes, and slivers are mended (A77b).
+"""The inset part's back end: the part ends before the channel closes, the levelling runs on down the channel to where
+the legs close over it, and slivers are mended (A77b, A77c).
 
 Usage:
     ./.venv/bin/python scripts/smoke_inset_part_back_end.py
@@ -23,8 +24,19 @@ Runs inside Blender (bmesh), no world, no server. Hand-derived expectations:
     triangle of area .125 again), so the edge a-b is collapsed onto (5, 5): four triangles of aspect 10^2 / 50 = 2,
     all facing +z, the corners unmoved, and ``flat`` maps the surviving vertex to the flat midpoint (5, 5, 0).
 
+[5] ``channel_close`` on envelope rows every degree from 70 to 90, samples every millimetre across -3..3 mm: the
+    envelope is 100 mm + 4 mm per degree past 70 everywhere up to 84 degrees (4 mm a row is under ``rise`` = 15 mm:
+    the channel's floor, not a wall); from 85 degrees the three midline samples (|u| <= 1 mm) read 200 mm, a jump of
+    200 - 156 = 44 mm over the 84-degree row: the legs lie over the midline. From 71 with limit 90 the channel closes
+    at 84. A row with no skin at 80 (a miss) ends it at 79; limit 82 ends it at 82; a jump right at the start row
+    is no jump (there is no previous row), so starting at 85 the close stays 85 until 90.
+[6] ``flip_slivers`` limited by ``only``: case [3] with ``only`` = {A, B, Q} leaves both faces as they are (P is not
+    in the set); case [4] with ``collapse`` False keeps all six vertices and six faces (no flip helps, no collapse).
+
 No expected value is recorded from a run. Fails on f2f96c1ef1c3adfbee3692ad6e0e580261f58569: ``inset_part`` has no
-``region_ends``, ``aspect`` or ``flip_slivers`` (the levelled region ran into the closing channel).
+``region_ends``, ``aspect`` or ``flip_slivers`` (the levelled region ran into the closing channel); fails on
+3d64b6dd6bacd004fe005aed29244d8f55c6ad7d: no ``channel_close`` and ``flip_slivers`` takes no ``only`` / ``collapse``
+(the skin past the part's end kept the mesher's lumps).
 """
 import math
 import os
@@ -90,8 +102,39 @@ def probe():
     middle = next(v for v in bm.verts if (round(v.co.x, 9), round(v.co.y, 9)) == (5, 5))
     assert len(flat) == 5 and (flat[middle] - V((5, 5, 0))).length < 1e-9, dict((tuple(k.co), tuple(v)) for k, v in flat.items())
     bm.free()
+    # [5] channel_close
+    tg = np.radians(np.arange(70, 90.1, 1))
+    deg = np.round(np.degrees(tg))
+    ug = np.round(np.arange(-.003, .00301, .001), 6)
+    env = np.repeat((.100 + .004 * (np.minimum(deg, 84) - 70))[:, None], len(ug), 1)
+    env[np.ix_(deg >= 85, np.abs(ug) <= .001 + 1e-9)] = .200
+    close = lambda e, start, limit: round(math.degrees(inset_part.channel_close(tg, e, ug, rad(start), rad(limit), .015)), 6)
+    assert close(env, 71, 90) == 84, close(env, 71, 90)
+    missing = env.copy()
+    missing[deg == 80] = np.nan
+    assert close(missing, 71, 90) == 79, close(missing, 71, 90)
+    assert close(env, 71, 82) == 82, close(env, 71, 82)
+    assert close(env, 85, 90) == 90, close(env, 85, 90)
+    # [6] flip_slivers limited
+    bm = bmesh.new()
+    A, B, P, Q = (bm.verts.new(p) for p in ((0, 0, 0), (40, 0, 0), (20, 1, 0), (20, -1, 0)))
+    bm.faces.new((A, B, P)); bm.faces.new((B, A, Q))
+    bm.normal_update()
+    inset_part.flip_slivers(bm, {v: v.co.copy() for v in bm.verts}, only={A, B, Q})
+    shared = [e for e in bm.edges if len(e.link_faces) == 2]
+    assert len(shared) == 1 and set(shared[0].verts) == {A, B}, [tuple(v.co) for e in shared for v in e.verts]
+    bm.free()
+    bm = bmesh.new()
+    C0, C1, C2, C3 = (bm.verts.new(p) for p in ((0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)))
+    a, b = bm.verts.new((4.975, 5, 0)), bm.verts.new((5.025, 5, 0))
+    for face in ((C0, C1, b), (C1, C2, b), (b, C2, a), (a, C2, C3), (C0, a, C3), (C0, b, a)):
+        bm.faces.new(face)
+    bm.normal_update()
+    inset_part.flip_slivers(bm, {v: v.co.copy() for v in bm.verts}, collapse=False)
+    assert len(bm.faces) == 6 and len(bm.verts) == 6, (len(bm.faces), len(bm.verts))
+    bm.free()
     print('PASS inset back end: region ends 73 / starts 33 deg, aspect 1.1547 / 2 / inf, flip 40 -> 10.025, '
-          'needle 201 -> 2')
+          'needle 201 -> 2, channel closes 84 / 79 / 82 / 90 deg, limited mend keeps 2 / 6 faces')
 
 
 if __name__ == '__main__':

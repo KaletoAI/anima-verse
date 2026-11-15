@@ -215,8 +215,19 @@ def surface_chart(body, arm, P):
 #   whose narrower half width is under ``level.min_half_width`` (``region_ends``), and the part ends there with it;
 #   (2) skin more than ``level.under`` below the surface fades out by that excess, as if it lay that far beyond the
 #   region, and is not spread; (3) the faces the subdivision cut on one or two edges get the shorter diagonals
-#   (``beautify_fill``). The mesher's skin past the end stays as it was modelled.
+#   (``beautify_fill``).
+# * past the part's end (A77c, same model): left as modelled, the lower third of the channel kept the mesher's lumps
+#   (|residual| p95 4.8 mm against the robust fit, 70.7-84 degrees). So the part still ends at ``region_ends``, but
+#   the levelling runs on down the channel to where the legs close over its midline (``channel_close``: the midline's
+#   envelope jumps by more than ``wall_rise`` — 84.1 degrees here; never past the region's own end): p95 0.57 mm.
+#   Deep skin keeps rule (2). A lower ``min_half_width`` lengthens the part, not the levelling: 4 and 3 mm end it at
+#   72.7 instead of 70.7 degrees and put 26 more slivers and 2 folded faces into its narrow end, so 6 mm stays.
+#   Levelled between steep walls, the fade folds faces too: the mend takes every moved node and every face turned
+#   against its source face, against the faces around it, or (an outer face) newly toward the axis; then the levelled
+#   skin's slivers are flipped (``flip_slivers`` without collapses, which would renumber the body), and the displaced
+#   patch is mended and placed MEND_ROUNDS times.
 SLIVER_ASPECT = 20.          # longest edge over its height: a face past it is a sliver (A77b)
+MEND_ROUNDS = 3               # mend-and-place rounds of the displaced patch (A77c)
 LEVEL_GRID_M = .0015
 LEVEL_FIT_ITERATIONS = 6
 
@@ -311,13 +322,29 @@ def region_ends(tg, walls, t0, t1, minimum, margin):
     return (start, end) if start < end else (t0, t1)
 
 
+def channel_close(tg, env, ug, start, limit, rise):
+    """Where the leg walls meet over the channel's midline (an angle in [start, limit]): the last envelope row before
+    the midline's envelope (the lowest sample within 1 mm of it) jumps more than ``rise`` above the previous row's, or
+    misses — past it the ray from outside hits a leg lying over the channel (A77c)."""
+    mid = np.abs(ug) <= .001 + 1e-9
+    close, previous = start, None
+    for i in np.flatnonzero((tg >= start) & (tg <= limit)):
+        values = env[i, mid]
+        here = float(np.nanmin(values)) if np.isfinite(values).any() else math.nan
+        if not math.isfinite(here) or (previous is not None and here - previous > rise):
+            break
+        close, previous = float(tg[i]), here
+    return close
+
+
 def level_region(body, arm, P):
     """Level the skin of the region onto the surface around it before the part is built (module notes above).
     Returns the metrics ``{source_smooth: {radius_m, blend_m, iterations, moved, max_shift_mm,
     inner_wall_vertices}, source_level: {bump_mm: [before, after], bump_p95_mm: [before, after], fit_rms_mm,
     angle_deg, half_width_mm: [min, max], folded_faces: [before, after], normals_refreshed}}`` (bump: the outer skin
     of the region above the fitted surface, mm — the tip's ``bump_mm``), and ``end_point``: the world point where the
-    region was cut short (``region_ends``), None where it was not — ``build_part`` ends the part there."""
+    part is cut short (``region_ends``; the levelling runs on to ``channel_close``), None where it is not —
+    ``build_part`` ends the part there."""
     L, R = P['level'], P['region']
     ch = surface_chart(body, arm, P)
     M, Mi, Ni3, bvh, c, xm, th, S, prof = (ch[k] for k in ('M', 'Mi', 'Ni3', 'bvh', 'c', 'xm', 'th', 'S', 'prof'))
@@ -340,7 +367,9 @@ def level_region(body, arm, P):
                 env[i, j] = math.hypot(q.y - c.y, q.z - c.z)
     walls = region_walls(env, ug, R['u'], L['wall_rise'])
     nominal_end = t1
-    t0, t1 = region_ends(tg, walls, t0, t1, L['min_half_width'], R['fall'] / rho_nom)
+    t0, t_part = region_ends(tg, walls, t0, t1, L['min_half_width'], R['fall'] / rho_nom)
+    # Cut short, the part ends there; the levelling runs on down the channel to where the legs close over it (A77c).
+    t1 = channel_close(tg, env, ug, t_part, t1, L['wall_rise']) if t_part < t1 else t1
     span = (t1 - t0) * rho_nom
 
     def chart(points):
@@ -461,11 +490,14 @@ def level_region(body, arm, P):
     for i, x, y, z in zip(spread, xm + nu, c.y - nr * np.cos(nt), c.z - nr * np.sin(nt)):
         body.data.vertices[int(i)].co = Mi @ Vector((x, y, z))
     # A face the spread turned over (a node slid past a neighbour that stayed — the region's border, A77b) is mended
-    # by moving its spread nodes to the mean of their neighbours (seam copies together).
+    # by moving its moved nodes to the mean of their neighbours (seam copies together). Turned over: against its own
+    # face before the levelling, against the faces around it, or an outer face now facing the axis that did not
+    # before — the levelled channel past the part's end lies between steep walls, where the fade folds faces too (A77c).
+    mendable = set(levelled) | {int(i) for i, dh in zip(rows, shift) if abs(dh) > 1e-9}
     members = {}
-    for i in levelled:
+    for i in mendable:
         members.setdefault(int(group_of[i]), []).append(i)
-    faces = [tuple(f.vertices) for f in body.data.polygons if any(v in levelled for v in f.vertices)]
+    faces = [tuple(f.vertices) for f in body.data.polygons if any(v in mendable for v in f.vertices)]
     def normal(points):
         return (points[1] - points[0]).cross(points[2] - points[0])
     source = {f: normal([Mi @ Vector(V[v]) for v in f]) for f in faces}
@@ -474,9 +506,27 @@ def level_region(body, arm, P):
         i, j = e.vertices
         ring.setdefault(int(group_of[i]), set()).add(j)
         ring.setdefault(int(group_of[j]), set()).add(i)
+    adjacent = {}
+    for f in faces:
+        for k in range(len(f)):
+            adjacent.setdefault(frozenset((f[k], f[(k + 1) % len(f)])), []).append(f)
+    def turned_over(f):
+        local = [body.data.vertices[v].co for v in f]
+        n = normal(local)
+        if n.dot(source[f]) <= 0:
+            return True
+        around = sum((normal([body.data.vertices[v].co for v in g]) for k in range(len(f))
+                      for g in adjacent[frozenset((f[k], f[(k + 1) % len(f)]))] if g != f), Vector())
+        if around.length > 0 and n.normalized().dot(around.normalized()) < -.2:
+            return True
+        if is_inner[list(f)].any():
+            return False
+        world = [M @ p for p in local]
+        centre = sum(world, Vector()) / len(world)
+        out = Vector((0, centre.y - c.y, centre.z - c.z))
+        return normal(world).dot(out) <= 0 < (M.to_3x3() @ source[f]).dot(out)
     for _ in range(20):
-        turned = {int(group_of[v]) for f in faces if normal([body.data.vertices[v].co for v in f]).dot(source[f]) <= 0
-                  for v in f if v in levelled}
+        turned = {int(group_of[v]) for f in faces if turned_over(f) for v in f if v in mendable}
         if not turned:
             break
         mean = {g: sum((body.data.vertices[j].co for j in ring[g]), Vector()) / len(ring[g]) for g in turned}
@@ -484,13 +534,23 @@ def level_region(body, arm, P):
             for i in members[g]:
                 body.data.vertices[i].co = m
     body.data.update()
+    # The levelled skin's slivers are mended like the patch's (``flip_slivers``), by flips only: a collapse would
+    # renumber the body's vertices (A77c).
+    bm = bmesh.new()
+    bm.from_mesh(body.data)
+    bm.verts.ensure_lookup_table()
+    allowed = {bm.verts[int(i)] for i in rows}
+    flip_slivers(bm, {v: v.co.copy() for v in bm.verts}, only=allowed, collapse=False)
+    bm.to_mesh(body.data)
+    bm.free()
+    body.data.update()
     refreshed = extension_bones.refresh_normals(meshes, snapshot)
     after = rows[outside[rows] <= 0]
     folded_after = folded_faces(body, after, c)
     return {'source_smooth': {'radius_m': full, 'blend_m': extension_bones.NEUTRAL_BLEND * full,
                               'iterations': L['relax'], 'moved': moved, 'max_shift_mm': stats['max_shift_mm'],
                               'inner_wall_vertices': int(inner.sum())},
-            'end_point': [xm, c.y - rho_nom * math.cos(t1), c.z - rho_nom * math.sin(t1)] if t1 < nominal_end else None,
+            'end_point': [xm, c.y - rho_nom * math.cos(t_part), c.z - rho_nom * math.sin(t_part)] if t_part < nominal_end else None,
             'source_level': {'bump_mm': [stats['bump_before_mm'], stats['bump_after_mm']],
                              'bump_p95_mm': stats['bump_p95_mm'], 'fit_rms_mm': stats['fit_rms_mm'],
                              'angle_deg': [round(math.degrees(t0), 2), round(math.degrees(t1), 2)],
@@ -559,26 +619,29 @@ def aspect(points):
     return longest * longest / (2 * area) if area > 1e-16 else math.inf
 
 
-def flip_slivers(bm, flat, limit=SLIVER_ASPECT, passes=6, bend=.9):
+def flip_slivers(bm, flat, limit=SLIVER_ASPECT, passes=6, bend=.9, only=None, collapse=True):
     """Mend the slivers (aspect over ``limit``) of the displaced patch ``bm`` (A77b) — the walls of the cleft and pocket
     rise steeply over a few millimetres, and the flat subdivision's diagonals run across them. First the shared edge
     of a sliver and a neighbour is flipped where the other diagonal gives both triangles a lower worst aspect and each
     new face stays within ``bend`` (cosine) of the old faces' mean normal; then a needle's shortest edge is collapsed
     onto its midpoint where no face around it turns or becomes a sliver. ``flat`` maps every vertex to its position
     before the displacement; a collapse keeps it current (the merged vertex gets the flat midpoint), so the caller
-    places the mended patch again from it."""
+    places the mended patch again from it. ``only`` (a vertex set) limits the mend to faces of those vertices;
+    ``collapse`` False keeps every vertex (flips only — the levelled body skin, A77c)."""
     for _ in range(passes):
         flips = []
         seen = set()
         for f in bm.faces:
             if len(f.verts) != 3 or f in seen or aspect([v.co for v in f.verts]) <= limit:
                 continue
+            if only is not None and not all(v in only for v in f.verts):
+                continue
             best = None
             for e in f.edges:
                 if e.is_boundary or len(e.link_faces) != 2 or e.seam:
                     continue
                 g = e.link_faces[1] if e.link_faces[0] is f else e.link_faces[0]
-                if g in seen or len(g.verts) != 3:
+                if g in seen or len(g.verts) != 3 or (only is not None and not all(v in only for v in g.verts)):
                     continue
                 p = next(v for v in f.verts if v not in e.verts)
                 q = next(v for v in g.verts if v not in e.verts)
@@ -605,7 +668,7 @@ def flip_slivers(bm, flat, limit=SLIVER_ASPECT, passes=6, bend=.9):
         bm.normal_update()
     # What no flip mends is a needle: its shortest edge is collapsed onto its midpoint where that folds no face
     # around it (inner vertices only — the border stays welded to the body).
-    for _ in range(passes):
+    for _ in range(passes if collapse else 0):
         done = False
         for f in list(bm.faces):
             if not f.is_valid or len(f.verts) != 3 or aspect([v.co for v in f.verts]) <= limit:
@@ -613,6 +676,8 @@ def flip_slivers(bm, flat, limit=SLIVER_ASPECT, passes=6, bend=.9):
             e = min(f.edges, key=lambda e: e.calc_length())
             a, b = e.verts
             if a.is_boundary or b.is_boundary or e.is_boundary or e.seam:
+                continue
+            if only is not None and not all(v in only for g in set(a.link_faces) | set(b.link_faces) for v in g.verts):
                 continue
             m = (a.co + b.co) / 2
             ok = True
@@ -631,7 +696,7 @@ def flip_slivers(bm, flat, limit=SLIVER_ASPECT, passes=6, bend=.9):
                 done = True
         bm.normal_update()
         if not done:
-            return
+            break
 
 
 def build_part(group, output):
@@ -813,8 +878,9 @@ def build_part(group, output):
     print('patch tris', patch_tris)
     gname = {g.index: g.name for g in body.vertex_groups}
     VW = [{gname[g.group]: g.weight for g in v.groups} for v in body.data.vertices]
-    # Twice: the displaced patch is mended (``flip_slivers``) and then placed again from the mended flat patch.
-    for mend in (True, False):
+    # The displaced patch is mended (``flip_slivers``) and placed again from the mended flat patch, three times (a
+    # mend changes the faces the next placement displaces, A77c), then placed once more.
+    for mend in [True] * MEND_ROUNDS + [False]:
         bm.verts.ensure_lookup_table()
         bm.verts.index_update()
         Q = np.array([tuple(v.co) for v in bm.verts])
