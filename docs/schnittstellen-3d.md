@@ -2050,7 +2050,12 @@ eine andere `body`-Frisur als die des Grundkörpers ist eine eigene Körperform.
   Welt-Einstellung `base_body.hair_alpha_cutoff` (Default 0,15), `doubleSided`,
   Basisfarb-Textur = der Strähnen-Atlas (`app/core/hair_cards.py`, RGBA, fast
   weiß) × `COLOR_0`; die Kopfhaut-Kappe liest den deckenden Fleck des Atlas
-  (Spec `docs/superpowers/specs/2026-11-13-strand-hair-design.md` § 6.1). Jedes
+  (Spec `docs/superpowers/specs/2026-11-13-strand-hair-design.md` § 6.1). Das
+  **Alpha von `COLOR_0`** zählt mit (Fit-Version hair 18, Ruling A89b): es wird
+  vor dem Cutoff mit dem Alpha des Atlas multipliziert und blendet so das
+  Wurzelende jeder Karte (und Spitze wie Wurzel der Kopfhaut-Füllkarten) aus —
+  three.js tut das von selbst (`COLOR_0` VEC4 → `vertexAlphas`); ein Renderer
+  darf die Vertexfarben nicht auf RGB kürzen. Jedes
   andere Garment bleibt deckend (`alphaMode: OPAQUE`). Kein Renderer setzt
   einen eigenen Cutoff: der Client liest das glTF-Material (GLTFLoader →
   `alphaTest`); nur die Frisuren-Vorschau legt den aktuellen Wert aus dem

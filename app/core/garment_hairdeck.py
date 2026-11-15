@@ -245,6 +245,87 @@ FILL_SHADE_FAR_M = 0.010
 # parting and the crown (Kira's HairDeck renders).
 CAP_COLOUR_PERCENTILE = 50
 
+# Scalp hair instead of a fill band (Ruling A89b, FIT_VERSION hair 18). Until hair 17 the fill cards
+# (``scalp_fill_cards``) were all alike: 12 mm wide, 40 mm long, centred on their seed, every one running straight
+# away from the crown — on the forehead straight down — 2.5 mm over the scalp, and the cap under them shaded to 0.6.
+# Seen from the front that was a flat dark band with bright vertical stripes between the hairline and where the
+# strands begin (Vallerie seed 43: 91 cards over a 2 cm band, ending in one line), not hair growing from the scalp.
+# With ``SCALP_HAIR_ON`` the fill is short hair rooted on the scalp (``scalp_fill_cards(flow=...)``):
+# - DIRECTION: the strands' own flow (``hair_flow``: root -> tip of the hair cards' faces, the gradient of their
+#   strip's v) near the point, Gaussian-weighted with FLOW_SIGMA_M, plus FLOW_CROWN_SHARE of the away-from-crown
+#   direction. The flow enters with its coherence (|sum of weighted directions| / sum of weights): where the
+#   strands near a point disagree — a centre parting's left and right sweeps — the crown direction takes over, so
+#   neighbouring cards never cross (the hair cards' own flow without that weighting was tried for hair 14 and
+#   cross-hatched in Ylva's parting band). Each row re-reads the field: a card bends with the combing.
+# - ROOTS on the open scalp (points ``SCALP_SEED_STEP_M`` apart on the open cap, thinned to ``SCALP_SPACING_M``), the
+#   root moved upstream by SCALP_ROOT_BACK of the card's length in SCALP_BACK_STEPS steps (so the seed's spot lies
+#   under the card's body and a seed beside the strands roots under them; FLOW_BEHIND_M keeps the hair on the far
+#   side of the skull out of the field), the card growing from its root along that direction in rows SCALP_ROW_M
+#   apart (at most SCALP_ROWS_MAX) — longer the higher its root sits over the cap's edge (from
+#   SCALP_LEN_EDGE_M at the edge to SCALP_LEN_FAR_M at SCALP_GROW_M over it, golden-ratio jitter
+#   +-SCALP_LEN_JITTER), wider too (SCALP_WIDTH_EDGE_M -> FILL_WIDTH_M), and lifted at the root by up to
+#   SCALP_ROOT_LIFT_M towards the strands' layer, so the high cards run in under the strands and merge with them.
+# - THE HAIRLINE: a card running down stops at its own height over the cap's edge, spread over SCALP_TIP_SPAN_M by
+#   the golden-ratio sequence, so at the very edge only some tips arrive and skin shows between them; a root closer
+#   to the edge than SCALP_KEEP_RAMP_M is kept only with probability SCALP_KEEP_EDGE .. 1 (fewer roots at the edge).
+# - CARD ENDS: width tapers at the root (SCALP_ROOT_WIDTH of the card's width, full from a quarter of its length)
+#   and towards the tip; the root end fades in vertex alpha (``root_fade``, below) so no card begins bluntly.
+# - LAYERS: each card lies its own golden-ratio share of SCALP_LAYER_M higher, so overlapping cards never z-fight.
+# - COLOUR: a fill card takes the colour of the hair vertex nearest its root (and a tone of its own,
+#   +-SCALP_TONE_JITTER); the cap under the fill is shaded from SCALP_DEEP_SHADE deep under the hair
+#   (SCALP_SHADE_RAMP_M or more over its edge) to SCALP_EDGE_SHADE at the edge — root-dark to tip-light, as the
+#   strands lying on it are — instead of one FILL_CAP_SHADE (0.6) band.
+# - A hair card that faded its root (``root_fade``) covers no scalp: only hair vertices with alpha >= 0.5 close the
+#   cap to the fill, so the parting under faded roots gets scalp hair too.
+SCALP_HAIR_ON = True
+FLOW_SIGMA_M = 0.018
+FLOW_CROWN_SHARE = 0.25
+SCALP_ROOT_BACK = 0.45
+FLOW_BEHIND_M = 0.004
+SCALP_TONE_JITTER = 0.12
+SCALP_BACK_STEPS = 3
+SCALP_SEED_STEP_M = 0.0015
+SCALP_SPACING_M = 0.002
+SCALP_DEEP_SHADE = 0.7
+SCALP_LEN_EDGE_M = 0.012
+SCALP_LEN_FAR_M = 0.045
+SCALP_LEN_JITTER = 0.2
+SCALP_GROW_M = 0.02
+SCALP_WIDTH_EDGE_M = 0.006
+SCALP_ROOT_WIDTH = 0.4
+SCALP_TIP_WIDTH = 0.6
+SCALP_ROOT_LIFT_M = 0.002
+SCALP_TIP_SPAN_M = (-0.005, 0.005)
+SCALP_KEEP_EDGE = 0.4
+SCALP_KEEP_RAMP_M = 0.008
+SCALP_ROW_M = 0.005
+SCALP_ROWS_MAX = 10
+SCALP_LAYER_M = 0.0008
+SCALP_EDGE_SHADE = 0.85
+SCALP_SHADE_RAMP_M = 0.015
+GOLDEN_2 = 0.7548776662466927      # the plastic ratio's 1 / rho: a second low-discrepancy sequence beside GOLDEN
+GOLDEN_3 = 0.5698402909980532      # 1 / rho^2
+# The root end of every card fades (Ruling A89b): HairDeck's strip starts every strand line at the root at full
+# alpha, so a card whose root is in view ends in a blunt, dense edge — on Vallerie's served fit a dark card end at
+# brow height, on seed 43 a stepped cluster at the left temple (cards pushed out from inside the head, roots above
+# the floor). The vertex alpha (COLOR_0 alpha, which three.js multiplies into the map's alpha before the MASK test)
+# rises with a smoothstep from 0 on the root row to 1 at ROOT_FADE_M along the card (at most ROOT_FADE_SHARE of its
+# length; 12 mm: the strip's first 15 % are its darkened, densest part, and a 6 mm fade still left Vallerie's
+# served fit a dark near-root block beside the eye): each strand line's anti-aliased profile drops under the cutoff
+# from its edges first, so the lines taper to points instead of starting on one row. Roots under other hair only
+# show a little more cap (hair colour).
+ROOT_FADE_M = 0.012
+ROOT_FADE_SHARE = 0.4
+SCALP_ROOT_FADE_M = 0.006
+SCALP_ROOT_INSERT = (0.25, 0.6)
+# A fill card fades over the full SCALP_ROOT_FADE_M at its root whatever its length (with rows of its own at
+# SCALP_ROOT_INSERT of that length, since the vertex alpha is interpolated linearly between rows), and over TIP_FADE_M
+# at its tip: a short card cut at its stop height maps the whole strip onto a few mm, so its strand lines' own fade
+# (the last 18 % of each line) is under a millimetre long. A fill card shorter than SCALP_MIN_LEN_M (it would show
+# as a faint smudge) is not made.
+TIP_FADE_M = 0.003
+SCALP_MIN_LEN_M = 0.006
+
 # Swing on (Ruling H11): a chain bone's ``anchor_blend`` row is the least-squares row that reproduces today's skin
 # over the chain's vertices, pulled towards the row at the bone's segment middle with this ridge (relative to the
 # mean diagonal of the normal matrix) so a bone with few vertices stays near that row.
@@ -1049,8 +1130,257 @@ def offset_patch(P: np.ndarray, Fc: np.ndarray, sdf, offset: float
     return V + offset * N, Fl, N, int(flip.sum())
 
 
+def _smoothstep(x) -> np.ndarray:
+    x = np.clip(np.asarray(x, np.float64), 0.0, 1.0)
+    return x * x * (3.0 - 2.0 * x)
+
+
+def hair_flow(X: np.ndarray, F: np.ndarray, U: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``(centroids, directions, weights)`` of the hair's flow (Ruling A89b): per hair face whose strip ``v`` changes
+    across it, the unit direction of falling ``v`` in the face's plane — root -> tip, the strip runs from v 1 at the
+    root to 0 at the tip — at its centroid, weighted by its area. Faces without a v gradient (a row's cross section)
+    are left out. ``X`` the hair positions, ``F`` its faces, ``U`` its UVs (HairDeck's, before any turn round)."""
+    X = np.asarray(X, np.float64)
+    F = np.asarray(F, np.int64).reshape(-1, 3)
+    v = np.asarray(U, np.float64).reshape(-1, 2)[:, 1]
+    p0, p1, p2 = X[F[:, 0]], X[F[:, 1]], X[F[:, 2]]
+    e1, e2 = p1 - p0, p2 - p0
+    n = np.cross(e1, e2)
+    nn = (n * n).sum(1)
+    dv1, dv2 = (v[F[:, 1]] - v[F[:, 0]])[:, None], (v[F[:, 2]] - v[F[:, 0]])[:, None]
+    grad = (dv1 * np.cross(n, e2) * -1.0 + dv2 * np.cross(n, e1)) / np.maximum(nn, 1e-30)[:, None]
+    # grad v = (dv1 (e2 x n) + dv2 (n x e1)) / |n|^2
+    g = np.linalg.norm(grad, axis=1)
+    keep = (nn > 1e-16) & (g > 1e-6)
+    area = 0.5 * np.sqrt(nn[keep])
+    return (X[F[keep]].mean(1), -grad[keep] / g[keep, None], area)
+
+
+def root_fade(X: np.ndarray, U: np.ndarray, card: np.ndarray, *, fade: float = ROOT_FADE_M,
+              share: float = ROOT_FADE_SHARE) -> np.ndarray:
+    """The vertex alpha of the cards' root fade (Ruling A89b), per vertex: a row of a card (its vertices at one ``v``)
+    at the distance ``s`` along the card from its root row (``v`` = the card's largest; the distance runs over the
+    row centres) gets ``smoothstep(s / L)``, ``L = min(fade, share * the card's length)``; 1 for card -1 and for a
+    card without a ``v`` run."""
+    X = np.asarray(X, np.float64)
+    card = np.asarray(card, np.int64).reshape(-1)
+    v = np.round(np.asarray(U, np.float64).reshape(-1, 2)[:, 1], 6)
+    alpha = np.ones(len(card))
+    hair = np.flatnonzero(card >= 0)
+    if not len(hair):
+        return alpha
+    rows, inv = np.unique(np.stack([card[hair].astype(np.float64), -v[hair]], 1), axis=0, return_inverse=True)
+    inv = inv.reshape(-1)
+    nr = len(rows)
+    cnt = np.bincount(inv, minlength=nr).astype(np.float64)
+    cen = np.stack([np.bincount(inv, X[hair, k], nr) for k in range(3)], 1) / cnt[:, None]
+    rc = rows[:, 0].astype(np.int64)            # sorted by card, then root (largest v) first
+    step = np.r_[0.0, np.linalg.norm(np.diff(cen, axis=0), axis=1)]
+    first = np.r_[True, rc[1:] != rc[:-1]]
+    step[first] = 0.0
+    run = np.cumsum(step)
+    start = run[np.maximum.accumulate(np.where(first, np.arange(nr), 0))]
+    s = run - start
+    total = np.zeros(int(rc.max()) + 1)
+    np.maximum.at(total, rc, s)
+    length = np.minimum(fade, share * total[rc])
+    a = np.where(length > 1e-9, _smoothstep(s / np.maximum(length, 1e-12)), 1.0)
+    alpha[hair] = a[inv]
+    return alpha
+
+
+def _scalp_hair(Vc: np.ndarray, Fc: np.ndarray, hair: np.ndarray, sdf, crown: np.ndarray, floor, flow,
+                front: Optional[Tuple[float, float]]
+                ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, Any]]:
+    """``scalp_fill_cards`` with ``flow`` (Ruling A89b — the constants' comment at ``SCALP_HAIR_ON``): short cards
+    rooted on the open scalp, growing along the strands' flow, shorter, narrower and fewer towards the cap's edge,
+    tips spread over ``SCALP_TIP_SPAN_M`` around it. Same return as ``scalp_fill_cards``; the report carries
+    ``alpha`` (per vertex, the root fade) for the caller to pop."""
+    from scipy.spatial import cKDTree
+    from app.core.garment_fit import _unit
+    empty = (np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 2)), np.zeros((0, 3)),
+             np.zeros(0, np.int64))
+    report: Dict[str, Any] = {"mode": "scalp_hair", "open_points": 0, "cap_tris": int(len(Fc)), "cards": 0,
+                              "vertices": 0}
+    # candidate roots: a barycentric lattice SCALP_SEED_STEP_M apart on every cap triangle
+    pts: List[np.ndarray] = []
+    for tri in Vc[Fc]:
+        m = int(min(40, max(1, math.ceil(max(np.linalg.norm(tri[1] - tri[0]), np.linalg.norm(tri[2] - tri[0]),
+                                                 np.linalg.norm(tri[2] - tri[1])) / SCALP_SEED_STEP_M))))
+        i, j = np.meshgrid(np.arange(m + 1), np.arange(m + 1), indexing="ij")
+        ok = i + j <= m
+        a, b = (i[ok] + 1.0 / 3.0) / (m + 1.0), (j[ok] + 1.0 / 3.0) / (m + 1.0)
+        pts.append(tri[0] + a[:, None] * (tri[1] - tri[0]) + b[:, None] * (tri[2] - tri[0]))
+    cand = np.concatenate(pts) if pts else np.zeros((0, 3))
+    near, _ = cKDTree(hair).query(cand)
+    open_ = near > FILL_COVER_M
+    if front is not None:
+        open_ |= (cand[:, 2] > front[0]) & (cand[:, 1] < floor(cand) + front[1])
+    cand = cand[open_]
+    report["open_points"] = int(len(cand))
+    seeds: List[np.ndarray] = []
+    grid: Dict[Tuple[int, int, int], List[int]] = {}
+    for c in cand:
+        key = tuple(int(x) for x in np.floor(c / SCALP_SPACING_M))
+        hit = False
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    for s_i in grid.get((key[0] + dx, key[1] + dy, key[2] + dz), ()):
+                        if np.linalg.norm(seeds[s_i] - c) < SCALP_SPACING_M:
+                            hit = True
+                            break
+                    if hit:
+                        break
+                if hit:
+                    break
+            if hit:
+                break
+        if not hit:
+            grid.setdefault(key, []).append(len(seeds))
+            seeds.append(c)
+    cap_tree = cKDTree(Vc)
+    crown = np.asarray(crown, np.float64)
+    fc, fd, fw = (np.asarray(a, np.float64) for a in flow)
+    ftree = cKDTree(fc) if len(fc) else None
+
+    def direction(p: np.ndarray, n: np.ndarray) -> np.ndarray:
+        """The unit tangent the hair grows along at ``p`` (normal ``n``): coherent flow + the crown's share."""
+        t = (p - crown) - ((p - crown) @ n) * n
+        lt = np.linalg.norm(t)
+        tc = t / lt if lt > 1e-6 else np.zeros(3)
+        d = FLOW_CROWN_SHARE * tc
+        if ftree is not None:
+            idx = ftree.query_ball_point(p, 3.0 * FLOW_SIGMA_M)
+            if idx:
+                idx = np.asarray(idx)
+                # only hair on this side of the scalp: none behind the point's tangent plane (the far side of
+                # the skull, the hair hanging behind the ear)
+                idx = idx[(fc[idx] - p) @ n > -FLOW_BEHIND_M]
+            if len(idx):
+                w = fw[idx] * np.exp(-0.5 * (np.linalg.norm(fc[idx] - p, axis=1) / FLOW_SIGMA_M) ** 2)
+                s = (w[:, None] * fd[idx]).sum(0)
+                W = float(w.sum())
+                ls = float(np.linalg.norm(s))
+                if W > 1e-12 and ls > 1e-12:
+                    f = s / ls
+                    f = f - (f @ n) * n
+                    lf = np.linalg.norm(f)
+                    if lf > 1e-6:
+                        d = d + (ls / W) * f / lf
+        ld = np.linalg.norm(d)
+        return d / ld if ld > 1e-6 else np.zeros(3)
+
+    def onto(p: np.ndarray, off: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        n = _unit(np.asarray(sdf.grad(p[None]), np.float64))[0]
+        p = p - (float(sdf.sample(p[None])[0]) - off) * n
+        n = _unit(np.asarray(sdf.grad(p[None]), np.float64))[0]
+        return p, n, direction(p, n)
+
+    def over_edge(p: np.ndarray) -> float:
+        return float(p[1] - floor(p[None])[0] - CAP_TUCK_M)
+
+    V: List[np.ndarray] = []
+    UV: List[np.ndarray] = []
+    N: List[np.ndarray] = []
+    F: List[np.ndarray] = []
+    A: List[np.ndarray] = []
+    ids: List[np.ndarray] = []
+    dropped = 0
+    for k, seed in enumerate(seeds):
+        h0 = over_edge(seed)
+        grow = float(_smoothstep(h0 / SCALP_GROW_M))
+        keep = SCALP_KEEP_EDGE + (1.0 - SCALP_KEEP_EDGE) * float(_smoothstep(h0 / SCALP_KEEP_RAMP_M))
+        if (k * GOLDEN_2) % 1.0 > keep:
+            dropped += 1
+            continue
+        length = (SCALP_LEN_EDGE_M + (SCALP_LEN_FAR_M - SCALP_LEN_EDGE_M) * grow) \
+            * (1.0 + SCALP_LEN_JITTER * (2.0 * ((k * GOLDEN) % 1.0) - 1.0))
+        width = SCALP_WIDTH_EDGE_M + (FILL_WIDTH_M - SCALP_WIDTH_EDGE_M) * grow
+        stop = SCALP_TIP_SPAN_M[0] + (SCALP_TIP_SPAN_M[1] - SCALP_TIP_SPAN_M[0]) * ((k * GOLDEN_3) % 1.0)
+        layer = FILL_OFFSET_M + SCALP_LAYER_M * ((k * GOLDEN) % 1.0)
+        lift = SCALP_ROOT_LIFT_M * grow
+        n_rows = int(min(SCALP_ROWS_MAX, max(3, math.ceil(length / SCALP_ROW_M) + 1)))
+        step = length / (n_rows - 1)
+        p, n, t = onto(seed, layer + lift)
+        if not np.linalg.norm(t) > 0.5 or over_edge(p) < stop:
+            continue
+        # the root lies upstream of the seed by SCALP_ROOT_BACK of the length (against the flow, on the cap): the
+        # seed's own spot is covered by the card's body, not its faded root, and a seed beside the strands roots
+        # under them
+        for _ in range(SCALP_BACK_STEPS):
+            q, n2, t2 = onto(p - (SCALP_ROOT_BACK * length / SCALP_BACK_STEPS) * t, layer + lift)
+            if (cap_tree.query(q)[0] > FILL_CAP_REACH_M or not np.linalg.norm(t2) > 0.5
+                    or float(t2 @ t) < FILL_MAX_TURN_COS):
+                break
+            p, n, t = q, n2, t2
+        rows = [(p, n, t)]
+        for r in range(1, n_rows):
+            off = layer + lift * (1.0 - r / (n_rows - 1))
+            q, n2, t2 = onto(p + step * t, off)
+            hq, hp = over_edge(q), over_edge(p)
+            if hq < stop:
+                f = (hp - stop) / max(hp - hq, 1e-12)
+                if f > FILL_LAND_MIN:
+                    q, n2, t2 = onto(p + f * step * t, off)
+                    if np.linalg.norm(t2) > 0.5:
+                        rows.append((q, n2, t2))
+                break
+            if (cap_tree.query(q)[0] > FILL_CAP_REACH_M or not np.linalg.norm(t2) > 0.5
+                    or float(t2 @ t) < FILL_MAX_TURN_COS):
+                break
+            rows.append((q, n2, t2))
+            p, t = q, t2
+        if len(rows) < 2:
+            continue
+        centres = np.array([r[0] for r in rows])
+        run = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(centres, axis=0), axis=1))]
+        if run[-1] < SCALP_MIN_LEN_M:
+            continue
+        # the vertex alpha runs LINEARLY between rows SCALP_ROW_M apart, so a root faded only on its own row still
+        # shows nearly full width 1 mm in (the alpha there is a fifth of row 1's); rows inside the fade at
+        # SCALP_ROOT_INSERT of SCALP_ROOT_FADE_M make the interpolated alpha follow the smoothstep, so the root opens
+        # from nothing
+        extra = [f * SCALP_ROOT_FADE_M for f in SCALP_ROOT_INSERT if f * SCALP_ROOT_FADE_M < run[1] - 1e-4]
+        if extra:
+            (p0, n0, t0), (p1, n1, t1) = rows[0], rows[1]
+            ins = []
+            for dist in extra:
+                a = dist / run[1]
+                ins.append((p0 + a * (p1 - p0), _unit(((1 - a) * n0 + a * n1)[None])[0],
+                            _unit(((1 - a) * t0 + a * t1)[None])[0]))
+            rows = [rows[0], *ins, *rows[1:]]
+            centres = np.array([r[0] for r in rows])
+            run = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(centres, axis=0), axis=1))]
+        s = run / run[-1]
+        wid = width * (SCALP_ROOT_WIDTH + (1.0 - SCALP_ROOT_WIDTH) * _smoothstep(s / 0.25)) \
+            * (1.0 - (1.0 - SCALP_TIP_WIDTH) * _smoothstep((s - 0.6) / 0.4))
+        alpha = _smoothstep(run / SCALP_ROOT_FADE_M) * _smoothstep((run[-1] - run) / TIP_FADE_M)
+        base = sum(len(v) for v in V)
+        pts_c, nrm, uv, al = [], [], [], []
+        for (q, nq, tq), w, sv, aq in zip(rows, wid, s, alpha):
+            b = _unit(np.cross(tq, nq)[None])[0] * (w / 2)
+            pts_c += [q - b, q + b]
+            nrm += [nq, nq]
+            uv += [(0.0, 1.0 - sv), (1.0, 1.0 - sv)]
+            al += [aq, aq]
+        a_ = base + 2 * np.arange(len(rows) - 1)
+        F.append(np.concatenate([np.stack([a_, a_ + 1, a_ + 3], 1), np.stack([a_, a_ + 3, a_ + 2], 1)]))
+        V.append(np.asarray(pts_c))
+        N.append(np.asarray(nrm))
+        UV.append(np.asarray(uv))
+        A.append(np.asarray(al))
+        ids.append(np.full(len(pts_c), len(ids), np.int64))
+    report.update(seeds=len(seeds), dropped_at_edge=dropped)
+    if not V:
+        return (*empty, report)
+    Vf = np.concatenate(V)
+    report.update(cards=len(V), vertices=int(len(Vf)), alpha=np.concatenate(A))
+    return Vf, np.concatenate(F).astype(np.int64), np.concatenate(UV), np.concatenate(N), np.concatenate(ids), report
+
+
 def scalp_fill_cards(Vc: np.ndarray, Fc: np.ndarray, hair: np.ndarray, sdf, crown: np.ndarray, floor_y,
-                     front: Optional[Tuple[float, float]] = None, land_jitter: float = 0.0
+                     front: Optional[Tuple[float, float]] = None, land_jitter: float = 0.0, flow=None
                      ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, Any]]:
     """``(V, F, UV, normals, card, report)`` of the flat cards that fill the open scalp (``FILL_COVER_M`` and the
     rest above): ``Vc`` / ``Fc`` the cap, ``hair`` the fitted hair cards' vertices, ``sdf`` the body, ``crown`` the
@@ -1065,7 +1395,10 @@ def scalp_fill_cards(Vc: np.ndarray, Fc: np.ndarray, hair: np.ndarray, sdf, crow
     end around and below the cap's edge. Empty arrays without an open cap triangle.
 
     Ruling A89: ``land_jitter``: card ``k`` (in seed order) lands ``land_jitter * frac(k * GOLDEN)`` under the floor,
-    so the strands do not end on one line."""
+    so the strands do not end on one line.
+
+    Ruling A89b: with ``flow`` (``hair_flow`` of the fitted hair) the fill is scalp hair instead (``_scalp_hair``;
+    ``land_jitter`` unused, the report carries the root fade's ``alpha``). None: the fill above, bit for bit."""
     from scipy.spatial import cKDTree
     from app.core.garment_fit import _unit
     empty = (np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 2)), np.zeros((0, 3)),
@@ -1080,6 +1413,8 @@ def scalp_fill_cards(Vc: np.ndarray, Fc: np.ndarray, hair: np.ndarray, sdf, crow
     else:
         def floor(points: np.ndarray) -> np.ndarray:
             return np.full(len(np.asarray(points).reshape(-1, 3)), float(floor_y))
+    if flow is not None:
+        return _scalp_hair(Vc, Fc, hair, sdf, crown, floor, flow, front)
     centroid = Vc[Fc].mean(1)
     near, _ = cKDTree(hair).query(centroid)
     open_ = near > FILL_COVER_M
@@ -1940,19 +2275,46 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
     # cap triangles under the cap's own floor (the hairline, shaped since Ruling A89, lowered behind the face under a
     # manual tilt): none by construction
     below = int((Vc[Fc].mean(1)[:, 1] < floor(Vc[Fc].mean(1))).sum()) if len(Fc) and floor is not None else 0
-    Vf, Ff, Uf, Nf, fill_card, fill_info = scalp_fill_cards(
-        Vc, Fc, X, sdf, np.array([head_box[0], top, head_box[1]]), hairline if floor is None else floor,
-        front=None if hairline is None else (head_box[1] + HAIRLINE_FRONT_DEPTH * head_box[3],
-                                             CAP_TUCK_M + FILL_EDGE_BAND_M),
-        land_jitter=FILL_LAND_JITTER_M)
+    scalp_hair = SCALP_HAIR_ON and floor is not None
+    flow = hair_flow(X, F, U) if scalp_hair else None
     # Ruling A89: a card rooted on the bare face (its tip over the scalp or swept back) shows its tips there instead
     U, roots = _face_roots(np.asarray(U, np.float64), X, hair_card, floor, (head_box[0], head_box[1]), chin)
+    # Ruling A89b: every hair card's root end fades in vertex alpha (``root_fade``); a faded root covers no scalp
+    root = root_fade(X, U, hair_card) if SCALP_HAIR_ON else None
+    Vf, Ff, Uf, Nf, fill_card, fill_info = scalp_fill_cards(
+        Vc, Fc, X if root is None else X[root >= 0.5], sdf, np.array([head_box[0], top, head_box[1]]),
+        hairline if floor is None else floor,
+        front=None if hairline is None else (head_box[1] + HAIRLINE_FRONT_DEPTH * head_box[3],
+                                             CAP_TUCK_M + FILL_EDGE_BAND_M),
+        land_jitter=FILL_LAND_JITTER_M, flow=flow)
+    fill_alpha = fill_info.pop("alpha", None)
     nf = len(Vf)
     cap_colours = np.tile(cap_colour, (nc, 1))
+    fill_colours = np.tile(cap_colour, (nf, 1))
     if nf:
         near_fill, _ = cKDTree(Vf).query(Vc)
         dark = np.clip((FILL_SHADE_FAR_M - near_fill) / (FILL_SHADE_FAR_M - FILL_SHADE_NEAR_M), 0.0, 1.0)
-        cap_colours[:, :3] *= (1.0 - (1.0 - FILL_CAP_SHADE) * dark)[:, None]
+        shade = FILL_CAP_SHADE
+        if SCALP_HAIR_ON and floor is not None:
+            # Ruling A89b: root-dark deep under the hair, lighter towards the cap's edge where the tips lie
+            over = Vc[:, 1] - (floor(Vc) + CAP_TUCK_M)
+            shade = SCALP_DEEP_SHADE + (SCALP_EDGE_SHADE - SCALP_DEEP_SHADE) \
+                * (1.0 - _smoothstep(over / SCALP_SHADE_RAMP_M))
+        cap_colours[:, :3] *= (1.0 - (1.0 - shade) * dark)[:, None]
+        if fill_alpha is not None:
+            # Ruling A89b: each fill card in the colour of the hair vertex nearest its root, its root faded
+            first = np.r_[0, np.flatnonzero(np.diff(fill_card)) + 1]
+            _, nearest = cKDTree(X).query(Vf[first])
+            fill_colours = np.asarray(colours, np.float64)[nearest][np.searchsorted(first, np.arange(nf), "right") - 1]
+            # and a tone of its own (+-SCALP_TONE_JITTER, the golden-ratio sequence of its number): clumps, not a
+            # uniform brush
+            tone = 1.0 + SCALP_TONE_JITTER * (2.0 * ((fill_card * GOLDEN_3) % 1.0) - 1.0)
+            fill_colours = fill_colours.copy()
+            fill_colours[:, :3] = np.clip(fill_colours[:, :3] * tone[:, None], 0.0, 1.0)
+            fill_colours[:, 3] = np.asarray(fill_alpha, np.float64)
+    if root is not None:
+        colours = np.asarray(colours, np.float64).copy()
+        colours[:, 3] = colours[:, 3] * root[:len(colours)]
     Jc = np.zeros((nc + nf, 4), np.int64)
     Jc[:, 1] = 1
     Wc = np.zeros((nc + nf, 4))
@@ -1964,7 +2326,7 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
                           uvs=np.vstack([np.asarray(U, np.float64), np.zeros((nc, 2)), Uf]),
                           indices=np.vstack([F, Fc + len(X), Ff + len(X) + nc]), joints=np.vstack([J, Jc]),
                           weights=np.vstack([W, Wc]), joint_names=names, image=b"", mime="", material=material,
-                          colors=np.vstack([colours, cap_colours, np.tile(cap_colour, (nf, 1))]),
+                          colors=np.vstack([colours, cap_colours, fill_colours]),
                           joint_parents=joint_parents, joint_binds=joint_binds)
     # Alpha cards (strand-hair spec § 6.1): the strip atlas as base colour, each card's UVs in its variant's
     # column, the cap on the opaque patch; the MASK material keys are added by the graft (``_publish_fit``). The
@@ -2017,6 +2379,8 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
         "vertices": {"hair": int(len(X)), "cap": int(nc), "fill": int(nf)},
         "fill": fill_info,
         "roots": roots,
+        "root_fade": None if root is None else {"fade_m": ROOT_FADE_M, "share": ROOT_FADE_SHARE,
+                                                "vertices_below_1": int((root < 1.0).sum())},
         "chains": chain_info,
     }
     if drape_xpbd is not None:

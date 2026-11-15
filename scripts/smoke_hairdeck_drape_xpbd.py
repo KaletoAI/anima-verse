@@ -227,11 +227,13 @@ def blob(res, drop_xpbd=False):
 def base_comparable(res):
     """``blob(res)`` without what FIT hair 14 added to the report (``fill``, ``vertices.fill``, the automatic width's
     ``placement.width_auto`` and ``width_source`` "auto" for the base's "default", the drape's ``torn``; Ruling A85's
-    ``placement.up_m`` / ``up_source`` / ``hairline_image_y``; Ruling A89's ``roots``) — the base commit has none of it."""
+    ``placement.up_m`` / ``up_source`` / ``hairline_image_y``; Ruling A89's ``roots``; Ruling A89b's ``root_fade``) — the
+    base commit has none of it."""
     arrays, rest, metrics, ok, reasons, rep = blob(res)
     rep = json.loads(rep)
     rep.pop("fill", None)
     rep.pop("roots", None)
+    rep.pop("root_fade", None)
     rep.get("vertices", {}).pop("fill", None)
     pl = rep.get("placement", {})
     pl.pop("width_auto", None)
@@ -246,17 +248,18 @@ def base_comparable(res):
 
 @contextlib.contextmanager
 def a89_off(gh):
-    """Ruling A89's additions switched off for the [D5] comparison with the base commit."""
-    saved = (gh._scalp_cap, gh._face_roots, gh.FILL_LAND_JITTER_M, gh.FACE_CLEAR_SPREAD_M)
+    """Ruling A89's (and A89b's) additions switched off for the [D5] comparison with the base commit."""
+    saved = (gh._scalp_cap, gh._face_roots, gh.FILL_LAND_JITTER_M, gh.FACE_CLEAR_SPREAD_M, gh.SCALP_HAIR_ON)
     cap = gh._scalp_cap
     gh._scalp_cap = lambda *a, **k: cap(*a, **{**k, "shaped": False})
     gh._face_roots = lambda U, *a, **k: (U, {"face_rooted": 0, "flipped": 0})
     gh.FILL_LAND_JITTER_M = 0.0
     gh.FACE_CLEAR_SPREAD_M = 0.0
+    gh.SCALP_HAIR_ON = False          # Ruling A89b's scalp hair, cap shading and root fade (hair 18) off as well
     try:
         yield
     finally:
-        gh._scalp_cap, gh._face_roots, gh.FILL_LAND_JITTER_M, gh.FACE_CLEAR_SPREAD_M = saved
+        gh._scalp_cap, gh._face_roots, gh.FILL_LAND_JITTER_M, gh.FACE_CLEAR_SPREAD_M, gh.SCALP_HAIR_ON = saved
 
 
 def load_base(tmp: Path):

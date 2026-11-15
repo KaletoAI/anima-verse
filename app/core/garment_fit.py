@@ -258,7 +258,12 @@ SIDE_DEEP_M = 0.03
 #: the sideburn instead of a level line with right-angle corners; the edge tucked under the skin, the fill's ends
 #: spread), a card rooted on the bare face turns its strip round (``_face_roots``: tips on the cheek, not its hard
 #: root end), the face clearing spreads the moved strands (``FACE_CLEAR_SPREAD_M``).
-FIT_VERSION: Dict[str, int] = {"hair": 17, "clothing": 17, "footwear": FOOTWEAR_FIT_VERSION}
+#: hair 18 (2026-11-15, Ruling A89b — a CPU refit of every HairDeck fit, no hub job): the scalp fill is short hair
+#: rooted on the scalp (``garment_hairdeck.scalp_fill_cards(flow=...)``: along the strands' flow, longer towards the
+#: strands, fewer and shorter towards the hairline) instead of a band of straight-down cards; the cap under it is
+#: shaded root-dark to tip-light; every card's root end (and a fill card's tip) fades in vertex alpha
+#: (``root_fade``), so no card ends bluntly.
+FIT_VERSION: Dict[str, int] = {"hair": 18, "clothing": 17, "footwear": FOOTWEAR_FIT_VERSION}
 #: The clothing fit version whose fits stay current under ``FIT_VERSION["clothing"]`` when Auto keeps their trunk as
 #: generated (Ruling A83, ``trunk_may_change``) and nothing rides an arm (Ruling A84, ``seam_may_change``).
 CLOTHING_TRUNK_UNCHANGED = 15

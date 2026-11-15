@@ -47,7 +47,11 @@ Fixture (metres, +y up, the body faces +z)
     Since FIT_VERSION hair 14 the cap is shaded where fill cards lie on it ([7]; Ruling T-U2b: by the distance d to
     the nearest FILL vertex): 0.6 of the median for d <= FILL_SHADE_NEAR_M 0.006, the median for d >= 0.010,
     1 - 0.4 * (0.010 - d) / 0.004 between (recounted per vertex). The shell here lies 0.110 - 0.1015 = 8.5 mm off the
-    cap, so most of the cap is open and filled: cap vertices at 0.6 exist, none darker.
+    cap, so most of the cap is open and filled: cap vertices at 0.6 exist, none darker. Since hair 18 (Ruling A89b)
+    the shade is 0.7 deep under the hair (SCALP_DEEP_SHADE) and rises towards the cap's edge: shade(o) = 0.7 + 0.15 *
+    (1 - smoothstep(o / 0.015)) at the height o of the vertex over the cap's edge (its floor ``cap_floor`` of the report's
+    cap + CAP_TUCK_M) — 0.85 at the edge, 0.7 from 15 mm over it; a cap vertex becomes 1 - (1 - shade) * w with the
+    fill weight w above. The hair keeps its colour; its alpha is the root fade (``smoke_hairdeck_scalp_hair.py``).
 [4] Scalp cap — with Ruling A89's hairline shape and soft edge off (``_scalp_cap(shaped=False)``, the fill landing
     jitter and the face-clearing spread 0, ``_face_roots`` turning nothing: FIT hair 16's cap, checked by the rules
     below; the shape: ``smoke_hairdeck_hairline_arc.py``). With it on, no cap triangle lies under the cap's own floor
@@ -330,17 +334,18 @@ def reach_count(r, edge):
 
 @contextlib.contextmanager
 def a89_off(gh):
-    """Ruling A89's additions switched off: the cap of FIT hair 16 for the [4] rules."""
-    saved = (gh._scalp_cap, gh._face_roots, gh.FILL_LAND_JITTER_M, gh.FACE_CLEAR_SPREAD_M)
+    """Ruling A89's (and A89b's) additions switched off: the cap of FIT hair 16 for the [4] rules."""
+    saved = (gh._scalp_cap, gh._face_roots, gh.FILL_LAND_JITTER_M, gh.FACE_CLEAR_SPREAD_M, gh.SCALP_HAIR_ON)
     cap = gh._scalp_cap
     gh._scalp_cap = lambda *a, **k: cap(*a, **{**k, "shaped": False})
     gh._face_roots = lambda U, *a, **k: (U, {"face_rooted": 0, "flipped": 0})
     gh.FILL_LAND_JITTER_M = 0.0
     gh.FACE_CLEAR_SPREAD_M = 0.0
+    gh.SCALP_HAIR_ON = False          # Ruling A89b's scalp hair, cap shading and root fade (hair 18) off as well
     try:
         yield
     finally:
-        gh._scalp_cap, gh._face_roots, gh.FILL_LAND_JITTER_M, gh.FACE_CLEAR_SPREAD_M = saved
+        gh._scalp_cap, gh._face_roots, gh.FILL_LAND_JITTER_M, gh.FACE_CLEAR_SPREAD_M, gh.SCALP_HAIR_ON = saved
 
 
 class _SphereSDF:
@@ -527,17 +532,24 @@ def main() -> int:
         Ch = np.asarray(g.colors[:n_hair])
         check(bool(np.all(np.abs(np.median(Ch[:, :3], 0) - lin) <= 0.01)),
               f"corrected median {np.median(Ch[:, :3], 0).round(4).tolist()} = {lin.tolist()} +- 0.01")
-        check(bool(np.all(Ch[:, 3] == 1)), "alpha 1")
+        check(bool(np.all((Ch[:, 3] >= 0) & (Ch[:, 3] <= 1))), "alpha within 0..1 (the root fade, Ruling A89b)")
         check(m["colour_target"] == list(target), f"colour_target recorded {m['colour_target']}")
         n_cap = rep["vertices"]["cap"]
         Cc = np.asarray(g.colors[n_hair:n_hair + n_cap])
         from scipy.spatial import cKDTree
         d_cap, _ = cKDTree(np.asarray(g.positions[n_hair + n_cap:])).query(np.asarray(g.positions[n_hair:n_hair + n_cap]))
-        shade = 1 - 0.4 * np.clip((0.010 - d_cap) / 0.004, 0, 1)
+        w_fill = np.clip((0.010 - d_cap) / 0.004, 0, 1)
+        Pcap = np.asarray(g.positions[n_hair:n_hair + n_cap])
+        cinfo = rep["cap"]
+        floor = gh.cap_floor(cinfo["hairline_y"], cinfo.get("face_floor_y"), tuple(cinfo["head_centre_xz"]),
+                             cinfo.get("back_drop_m", 0.0), cinfo.get("shape"))
+        o = np.clip((Pcap[:, 1] - floor(Pcap) - 0.003) / 0.015, 0, 1)
+        deep = 0.7 + 0.15 * (1 - o * o * (3 - 2 * o))
+        shade = 1 - (1 - deep) * w_fill
         check(len(Cc) > 0 and bool(np.all(np.abs(Cc[:, :3] - lin * shade[:, None]) <= 0.01)),
               "cap colour = median = target, shaded by the fill rule")
-        check(rep["vertices"]["fill"] > 0 and bool((shade == 0.6).any()) and float(shade.min()) >= 0.6,
-              f"fill cards on the open cap ({rep['fill']}), the cap under them 0.6, none darker")
+        check(rep["vertices"]["fill"] > 0 and bool((np.abs(shade - 0.7) < 1e-9).any()) and float(shade.min()) >= 0.7 - 1e-9,
+              f"fill cards on the open cap ({rep['fill']}), the cap under them 0.7 deep, none darker")
         check(gh.CAP_COLOUR_PERCENTILE == 50, "the cap takes the median colour (CAP_COLOUR_PERCENTILE 50)")
         plain = gh.fit_hairdeck(nohead, proxy, body, colour_target=None, **NO_PLACEMENT)
         check(bool(np.all(np.abs(np.asarray(plain.garment.colors[:n_hair])[:, :3] - 0.25) <= 1e-9))
