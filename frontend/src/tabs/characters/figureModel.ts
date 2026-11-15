@@ -12,6 +12,7 @@
  */
 import type { FootPose } from '@anima/scene-render'
 import type { ArmLight, FitSettingsInfo } from './fitSettingsModel'
+import type { ShoeFrame } from './footwearAllowance'
 import { filesLabel, sizeLabel } from './hairstylesModel'
 import type { Light } from './hairstylesModel'
 
@@ -679,6 +680,8 @@ export interface FitBody {
   /** Ruling A50b: this body's fit as the dialog's fit row, chips and settings box show it (`body_fit_view`);
    *  null when the body shows nothing. */
   fit?: FitBodyFit | null
+  /** Ruling A82: a shoe's allowance preview frame of what is shown (`garment_footwear.preview_frame`). */
+  shoe_frame?: ShoeFrame | null
 }
 
 /** One body's fit for the piece dialog (Ruling A50b, `fit_attempts.body_fit_view`). */

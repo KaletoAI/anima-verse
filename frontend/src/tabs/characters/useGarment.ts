@@ -12,6 +12,7 @@
 import type { UseUndoState } from './refusedAttemptsModel'
 import type { FitSettingsInfo } from './fitSettingsModel'
 import type { AllowanceView } from './fitWiden'
+import type { FootwearAllowanceView } from './footwearAllowance'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiGet, apiPost, type BootHemState } from '../../lib/api'
 import type { ImageTileMeta } from './RefImage'
@@ -602,6 +603,8 @@ export interface FootwearInfo extends GarmentRunState {
   preview_freshness?: Freshness | null
   /** That fit's foot pose (with `source.fsig`) — the preview applies it only to a GLB carrying those shoes. */
   foot_pose: FootPose | null
+  /** Ruling A82: the Width / Length allowance box (`garment_footwear.allowance_view`). */
+  allowance?: FootwearAllowanceView | null
 }
 
 /** The panel's `garment` as footwear info — the server sends `garment_footwear.info` for kind

@@ -3233,6 +3233,39 @@ def set_character_footwear_width_cap(character_name: str, item_id: str, body: Fo
             "fsig": gs.garment_fsig(character_name, item_id, profile=profile)}
 
 
+class FootwearAllowanceRequest(BaseModel):
+    # "auto" or a percent of footwear_fit.ALLOWANCE_STEPS per key; plain Any so garment_footwear.validate_allowance
+    # answers (400 with its message, not a schema 422). A key left out keeps its value.
+    width: Any = None
+    length: Any = None
+
+
+@router.post("/{character_name}/garments/{item_id}/footwear/allowance")
+def set_character_footwear_allowance(character_name: str, item_id: str, body: FootwearAllowanceRequest,
+                                     _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Ruling A82: store the footwear piece's width / length allowance (``garment_footwear.set_allowance``) — "auto"
+    or a percent of ``footwear_fit.ALLOWANCE_STEPS``. Runs nothing and spends nothing: a fixed value enters the fit
+    fingerprint, the fit becomes due and the next run (Re-fit / Run all / the Figure tab's Build) refits on the CPU,
+    0 hub jobs. 400 for a bad value or an item that is no footwear piece of this character.
+    ``{item_id, allowance, fsig, due}`` — ``due`` True when the fit of the new fingerprint is not made yet."""
+    from app.core import base_body, garment_footwear, garment_store as gs
+    from app.models.character import get_character_profile
+    _require_character(character_name)
+    changes = {k: v for k, v in (("width", body.width), ("length", body.length)) if v is not None}
+    try:
+        saved = garment_footwear.set_allowance(character_name, item_id, changes)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not saved:
+        raise HTTPException(status_code=500, detail="Saving the character profile failed")
+    profile = get_character_profile(character_name) or {}
+    fsig = gs.garment_fsig(character_name, item_id, profile=profile)
+    base = base_body.current_base(character_name, profile=profile)
+    state = garment_footwear.fit_state(character_name, item_id, fsig, base[1]) if base else "missing"
+    return {"item_id": item_id, "allowance": garment_footwear.allowance(profile, item_id), "fsig": fsig,
+            "due": state != "accepted"}
+
+
 @router.get("/{character_name}/garments/{item_id}/hairdeck/{image}")
 def get_character_garment_hairdeck_image(character_name: str, item_id: str, image: str, request: Request,
                                          _: Dict[str, Any] = Depends(require_admin)):

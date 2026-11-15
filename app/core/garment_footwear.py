@@ -122,14 +122,97 @@ def set_width_cap(character_name: str, item_id: str, cap: Optional[float]) -> bo
         return bool(save_character_profile(character_name, profile))
 
 
+# --- the allowances (Ruling A82) ------------------------------------------------------------------------------------
+#: Profile key of the per-piece footwear allowances: ``{item_id: {"width": percent, "length": percent | "auto"}}``
+#: (only the values that differ from ``AUTO``).
+ALLOWANCE_KEY = "footwear_allowance"
+#: The default of both allowances. Width Auto = +0 (at the default cap the fit already widens a shoe without a shaft
+#: to the foot); Length Auto = +0, and when the fit at +0 is refused by an enclosure gate of the cut
+#: (``AUTO_LENGTH_GATES``) the smallest length step the gates accept (``fit_compute``; 1–3 s per step on the CPU, the
+#: same result every time).
+AUTO = "auto"
+ALLOWANCE_NAMES: Tuple[str, ...] = ("width", "length")
+#: The refusals Auto answers with heel room: the foot outside the shoe below its rim.
+AUTO_LENGTH_GATES: Tuple[str, ...] = ("visible_poke", "deep_outside")
+
+
+def allowance(profile: Optional[Dict[str, Any]], item_id: str) -> Dict[str, Any]:
+    """The piece's allowances ``{"width": AUTO | percent, "length": AUTO | percent}`` on the character ``profile``
+    (``ALLOWANCE_KEY``; a stored value outside ``footwear_fit.ALLOWANCE_STEPS`` reads as ``AUTO``)."""
+    from app.core.footwear_fit import ALLOWANCE_STEPS
+    stored = profile.get(ALLOWANCE_KEY) if isinstance(profile, dict) else None
+    raw = stored.get(item_id) if isinstance(stored, dict) else None
+    raw = raw if isinstance(raw, dict) else {}
+    out: Dict[str, Any] = {}
+    for name in ALLOWANCE_NAMES:
+        value = raw.get(name, AUTO)
+        ok = not isinstance(value, bool) and isinstance(value, (int, float)) and value in ALLOWANCE_STEPS
+        out[name] = int(value) if ok else AUTO
+    return out
+
+
+def validate_allowance(changes: Any) -> Dict[str, Any]:
+    """The checked changes (a subset of ``ALLOWANCE_NAMES``) -> ``{name: AUTO | percent}``; ValueError naming what is
+    wrong."""
+    from app.core.footwear_fit import ALLOWANCE_STEPS
+    if not isinstance(changes, dict) or not changes:
+        raise ValueError("Nothing to change")
+    out: Dict[str, Any] = {}
+    for name, value in changes.items():
+        if name not in ALLOWANCE_NAMES:
+            raise ValueError(f"Unknown footwear allowance {str(name)[:40]!r}")
+        if value == AUTO:
+            out[name] = AUTO
+        elif isinstance(value, bool) or not isinstance(value, (int, float)) or value not in ALLOWANCE_STEPS:
+            raise ValueError(f"The {name} allowance must be auto or one of "
+                             f"{', '.join(str(v) for v in ALLOWANCE_STEPS)} (percent)")
+        else:
+            out[name] = int(value)
+    return out
+
+
+def set_allowance(character_name: str, item_id: str, changes: Dict[str, Any]) -> bool:
+    """Store the piece's allowances (``validate_allowance``) — one read-modify-write under the profile lock, values
+    back at ``AUTO`` dropped. Runs nothing: a fixed value enters the fit fingerprint (``fsig_inputs``), so the fit
+    becomes due and the next run refits from the cached source on the CPU, 0 hub jobs. ValueError for invalid changes
+    or an item that is no footwear piece of the character. Returns ``save_character_profile``'s bool (True without
+    a change)."""
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile, save_character_profile
+    checked = validate_allowance(changes)
+    _check(character_name, item_id)
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        current = allowance(profile, item_id)
+        merged = {**current, **checked}
+        if merged == current:
+            return True
+        stored = dict(profile.get(ALLOWANCE_KEY)) if isinstance(profile.get(ALLOWANCE_KEY), dict) else {}
+        compact = {k: v for k, v in merged.items() if v != AUTO}
+        if compact:
+            stored[item_id] = compact
+        else:
+            stored.pop(item_id, None)
+        if stored:
+            profile[ALLOWANCE_KEY] = stored
+        else:
+            profile.pop(ALLOWANCE_KEY, None)
+        return bool(save_character_profile(character_name, profile))
+
+
 def fsig_inputs(character_name: str, item: Dict[str, Any], *, profile: Dict[str, Any]) -> Dict[str, Any]:
     """The footwear fingerprint inputs: the item's current source ``ssig``,
     the insole analysis version, the width cap and the fit version — no base
-    signature, no base images, no base model."""
+    signature, no base images, no base model — and the allowances (Ruling A82) only when one is not ``AUTO`` (a
+    piece at Auto keeps the fingerprint it had before the allowances)."""
     from app.core import footwear_insole, footwear_source, garment_fit
     item_id = str(item.get("id") or "")
-    return {"ssig": footwear_source.current_ssig(item_id), "insole_version": footwear_insole.INSOLE_VERSION,
-            "width_cap": width_cap(profile, item_id), "fit_version": garment_fit.FIT_VERSION[KIND]}
+    out = {"ssig": footwear_source.current_ssig(item_id), "insole_version": footwear_insole.INSOLE_VERSION,
+           "width_cap": width_cap(profile, item_id), "fit_version": garment_fit.FIT_VERSION[KIND]}
+    allow = allowance(profile, item_id)
+    if any(v != AUTO for v in allow.values()):
+        out["allowance"] = allow
+    return out
 
 
 # --- the run ------------------------------------------------------------------------------------------------------------
@@ -376,11 +459,14 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
 
     from app.core import fit_attempts
 
-    def keep(out: Dict[str, Any], error: str, method: str, slot: str = "") -> None:
+    allow = allowance(profile, item_id)
+
+    def keep(out: Dict[str, Any], error: str, method: str, slot: str = "") -> bool:
         # Ruling A31: the refused attempt is kept per (item, body) — with its GLB when the cut ran; a body shape's
-        # refused derived shoe in its own slot beside the fresh fit's attempt (Ruling A40).
+        # refused derived shoe in its own slot beside the fresh fit's attempt (Ruling A40). Ruling A82: the body's
+        # own attempt carries a user's acceptance over (A72b, ``fit_attempts.carries``) — True: published.
         attempt = out.get("attempt")
-        fit_attempts.store(character_name, item_id, fsig, body=body, kind=kind,
+        return fit_attempts.store(character_name, item_id, fsig, body=body, kind=kind,
                            record=record_of(attempt, False, method) if attempt else
                            {"kind": kind, "item_id": item_id, "fsig": fsig, "body_id": body_id,
                             "body_sha256": body_sha, "fit_version": garment_fit.FIT_VERSION[kind],
@@ -389,7 +475,8 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
                             **({"base_fit_sha256": hashlib.sha256(base_fit[0]).hexdigest()}
                                if base_fit is not None else {})},
                            error=error, gates=out["gates"], glb=tmp if attempt else None,
-                           tris=(attempt or {}).get("tris"), marks={"foot": out.get("marks")}, slot=slot)
+                           tris=(attempt or {}).get("tris"), marks={"foot": out.get("marks")}, slot=slot,
+                           carry=not slot)
 
     method = ""
     try:
@@ -407,13 +494,23 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
                             character_name, item_id, fsig, body, derived_error)
                 method = FRESH_FALLBACK
                 out = refit_pool.run(fit_compute, prepared, insole, rigged, width_cap_override(profile, item_id),
-                                     kind, item_id, fsig, str(tmp))
+                                     kind, item_id, fsig, str(tmp), allowance=allow)
         else:
             out = refit_pool.run(fit_compute, prepared, insole, rigged, width_cap_override(profile, item_id), kind,
-                                 item_id, fsig, str(tmp))
+                                 item_id, fsig, str(tmp), allowance=allow)
         if not out["ok"]:
             error = "fit refused — " + "; ".join(out["reasons"])
-            keep(out, error, method)
+            if keep(out, error, method):
+                # Ruling A82 (A72b for footwear): the same refusal the user accepted, no worse — published as the
+                # user-accepted fit; the attempts stay (an undo puts the displaced fit back)
+                logger.info("Footwear fit %s/%s (%s): accepted by you on %s — the refit kept the refusal you "
+                            "accepted (%s)", character_name, item_id, fsig, body or bsig, error)
+                if body:
+                    gs.clear_failure_on_body(character_name, item_id, fsig, body)
+                if schedule:
+                    from app.core import garment_assembly
+                    garment_assembly.schedule(character_name)
+                return path
             raise _Refused("fit", error, out["gates"])
         fit_record, cut_stats = out["record"], out["cut_stats"]
         record = record_of(out, True, method)
@@ -487,7 +584,7 @@ def _accepted_base_fit(character_name: str, item_id: str, fsig: str,
 
 
 def fit_compute(prepared: bytes, insole: Dict[str, Any], rigged: bytes, cap: Optional[float], kind: str,
-                item_id: str, fsig: str, out: str) -> Dict[str, Any]:
+                item_id: str, fsig: str, out: str, allowance: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The pure part of ``fit`` (a refit-pool worker runs it — ``refit_pool``): fit the prepared shoe
     (``footwear_fit.fit_pair``) on the rigged body, cut every body primitive (``footwear_cut.apply_cut``), judge
     the cut (``cut_gates``) and graft the shoe parts — once more with the upper fitted to the foot's height when the
@@ -496,7 +593,8 @@ def fit_compute(prepared: bytes, insole: Dict[str, Any], rigged: bytes, cap: Opt
     private temp path ``out`` when accepted. ``{ok: False, reasons, gates}`` when a gate refuses — plus, when a cut
     gate refused a fit that was cut (Ruling A31), ``attempt`` (the shape below; the refused GLB written to ``out``)
     and ``marks`` (``footwear_cut.cut_gates``) —, else ``{ok: True, record, foot_pose, cut_stats, rest, glb_sha256,
-    tris}`` (``record`` = the fit's own record part with the cut gates and diagnostics)."""
+    tris}`` (``record`` = the fit's own record part with the cut gates and diagnostics). ``allowance`` (Ruling A82):
+    the piece's width / length allowance (``footwear_fit.fit_pair``)."""
     from app.core import footwear_fit, glb_mesh
     positions, faces, uvs, image, mime, material = glb_mesh.static_arrays(prepared)
     n = len(positions)
@@ -509,14 +607,40 @@ def fit_compute(prepared: bytes, insole: Dict[str, Any], rigged: bytes, cap: Opt
     # gates or the cut's — and the shoe has a closed toe box to raise (``scale.height_ready``), once more with the
     # upper fitted to the foot's height. An accepted first attempt is the whole answer (an accepted look never
     # changes); the second attempt's outcome stands, a toe box it cannot raise enough names the mesh as the defect.
-    att = _fit_attempt(footwear_fit.fit_pair(insole, shoe, body, joints, width_cap=cap), prims, joints)
-    if not att.get("ok") and (att["result"].record.get("scale") or {}).get("height_ready"):
-        att = _fit_attempt(footwear_fit.fit_pair(insole, shoe, body, joints, width_cap=cap, fit_height=True),
+    def attempt(allow: Dict[str, int]) -> Dict[str, Any]:
+        att = _fit_attempt(footwear_fit.fit_pair(insole, shoe, body, joints, width_cap=cap, allowance=allow),
                            prims, joints)
-        flat = footwear_fit.too_flat_reason(att["result"].record)
-        if not att["ok"] and flat:
-            att["reasons"] = [flat] + att["reasons"]
-            att["gates"]["reasons"] = [flat] + list(att["gates"].get("reasons") or [])
+        if not att.get("ok") and (att["result"].record.get("scale") or {}).get("height_ready"):
+            att = _fit_attempt(footwear_fit.fit_pair(insole, shoe, body, joints, width_cap=cap, fit_height=True,
+                                                     allowance=allow), prims, joints)
+            flat = footwear_fit.too_flat_reason(att["result"].record)
+            if not att["ok"] and flat:
+                att["reasons"] = [flat] + att["reasons"]
+                att["gates"]["reasons"] = [flat] + list(att["gates"].get("reasons") or [])
+        return att
+
+    # Ruling A82: the allowances — Width Auto is +0; Length Auto is +0, and when that is refused by an enclosure gate
+    # of the cut, the smallest length step the gates accept (the refusal at +0 stands when none does)
+    settings = allowance or {}
+    width = 0 if settings.get("width", AUTO) == AUTO else int(settings["width"])
+    auto_length = settings.get("length", AUTO) == AUTO
+    length = 0 if auto_length else int(settings["length"])
+    att = attempt({"width": width, "length": length})
+    tried: List[int] = [length]
+    if auto_length and not att["ok"] and "replaced" in att and any(
+            str(r).split(" ", 1)[0] in AUTO_LENGTH_GATES for r in att["reasons"]):
+        for step in footwear_fit.ALLOWANCE_STEPS[1:]:
+            tried.append(step)
+            longer = attempt({"width": width, "length": step})
+            if longer["ok"]:
+                att = longer
+                break
+    auto_rec = {"width": "auto" if settings.get("width", AUTO) == AUTO else width,
+                "length": "auto" if auto_length else length, "tried_length": tried}
+    if len(tried) > 1:
+        scale = att["result"].record.setdefault("scale", {})
+        scale["allowance"] = {**(scale.get("allowance") or {"width_pct": float(width), "length_pct": 0.0,
+                                                           "heel_room_m": 0.0, "size": 1.0}), "auto": auto_rec}
     if not att["ok"]:
         refused: Dict[str, Any] = {"ok": False, "reasons": att["reasons"], "gates": att["gates"]}
         if "replaced" in att:
@@ -1103,6 +1227,71 @@ def _fit_info(character_name: str, item_id: str, fsig: Optional[str], body_sha: 
             "split": _split_view(record), "shaft": _fit_shaft_view(record)}
 
 
+def preview_frame(record: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Ruling A82: what the allowance preview needs of the SHOWN fit ``record`` — per side the cut frame
+    (``footwear_cut.cut_description``: the Foot bone's local bind frame -> the shoe frame in metres, x from the heel
+    end, y up from the shoe ground, z across) and the Foot joint's name, and the fit's own allowance (``width_pct``,
+    ``length_pct``), foot length and toe room. The viewer previews another allowance relative to this fit
+    (``FootwearAllowance.tsx``, the rule of ``footwear_fit.ALLOWANCE_STEPS``). None without a cut."""
+    from app.core.footwear_fit import ALLOW_M
+    record = record or {}
+    cut = record.get("cut") or {}
+    sides = {}
+    for side, desc in (cut.get("sides") or {}).items():
+        if isinstance(desc, dict) and desc.get("frame") is not None and desc.get("foot_joint"):
+            sides[side] = {"frame": desc["frame"], "joint": desc["foot_joint"]}
+    scale = record.get("scale") or {}
+    if not sides or not scale.get("foot_len_m"):
+        return None
+    applied = scale.get("allowance") or {}
+    return {"sides": sides, "foot_len_m": scale["foot_len_m"], "allow_m": ALLOW_M,
+            "width_pct": float(applied.get("width_pct") or 0.0), "length_pct": float(applied.get("length_pct") or 0.0)}
+
+
+def allowance_view(character_name: str, item_id: str, profile: Dict[str, Any], fsig: Optional[str],
+                   preview_fsig: str) -> Dict[str, Any]:
+    """The Wardrobe's footwear allowance box (Ruling A82): ``{settings, steps, auto, applied, foot_len_m,
+    ball_width_mm, frame, due}`` — the settings saved (``allowance``), the steps offered, what the shown fit applied
+    (its record's ``scale.allowance``: width / length percent, Auto's pick), the references the mm beside a step are
+    read from (the foot's length — Length is that share of it — and the shoe's ball width at +0 width — Width is that
+    share of it), ``preview_frame`` of the shown fit, and ``due`` when the shown fit is not the current settings'."""
+    from app.core import garment_store as gs
+    from app.core.footwear_fit import ALLOWANCE_STEPS
+    record: Dict[str, Any] = {}
+    if preview_fsig:
+        record = gs.read_record(gs.garment_path(character_name, item_id, preview_fsig, "fit").with_suffix(".json"))
+    elif fsig:
+        # no accepted fit: the kept attempt on the plain body (the Details preview shows it)
+        from app.core import fit_attempts
+        found = fit_attempts.attempt_of(character_name, item_id, "")
+        record = found[1] if found and found[1].get("fsig") == fsig else {}
+    scale = record.get("scale") or {}
+    applied = scale.get("allowance") or {}
+    widths = []
+    for side in (record.get("sides") or {}).values():
+        if isinstance(side, dict) and side.get("insole_w_ball_mm") and scale.get("width_factor"):
+            widths.append(float(side["insole_w_ball_mm"]) * float(scale["width_factor"])
+                          / (1.0 + float(applied.get("width_pct") or 0.0) / 100.0))
+    return {"settings": allowance(profile, item_id), "steps": list(ALLOWANCE_STEPS), "auto": AUTO,
+            "applied": {"width_pct": float(applied.get("width_pct") or 0.0),
+                        "length_pct": float(applied.get("length_pct") or 0.0),
+                        "auto": applied.get("auto")} if record else None,
+            "foot_len_m": scale.get("foot_len_m"), "ball_width_mm": max(widths) if widths else None,
+            "frame": preview_frame(record), "due": _allowance_due(character_name, item_id, fsig, preview_fsig)}
+
+
+def _allowance_due(character_name: str, item_id: str, fsig: Optional[str], preview_fsig: str) -> bool:
+    """Whether the shown shoe was made with other settings and the current ones were not fitted yet — a fit of the
+    current fsig that was refused (its kept attempt or its failure record) is not due, it is the refusal."""
+    if not (preview_fsig and fsig and preview_fsig != fsig):
+        return False
+    from app.core import fit_attempts, garment_store as gs
+    found = fit_attempts.attempt_of(character_name, item_id, "")
+    if found is not None and found[1].get("fsig") == fsig:
+        return False
+    return not gs.garment_path(character_name, item_id, fsig, "failed").is_file()
+
+
 def _strip_refused(error: str) -> str:
     from app.core.fit_attempts import strip_prefix
     return strip_prefix(error)
@@ -1230,7 +1419,22 @@ def _preview(character_name: str, item_id: str,
         return None, None
     record = gs.read_record(path.with_suffix(".json"))
     if not path.is_file() or record.get("accepted") is not True:
-        return None, None
+        # Ruling A82: a setting just changed (a new fsig, its fit not made yet) — the shoe served now stays the
+        # preview (``garments.preview_path``: the accepted fit on the current base model) with its OWN pose, so the
+        # allowance's live preview has a shoe to act on; ``model_overview.garment_preview_freshness`` names it as
+        # an older fit
+        from app.core import garments
+        other = garments.preview_path(character_name, item_id)
+        if other is None or other == path or not other.is_file():
+            return None, None
+        record = gs.read_record(other.with_suffix(".json"))
+        from app.core import base_body
+        from app.models.character import get_character_profile
+        base = base_body.current_base(character_name, profile=get_character_profile(character_name) or {})
+        if (record.get("accepted") is not True or record.get("item_id") != item_id or not base
+                or record.get("base_model_sha256") != base[1]):
+            return None, None
+        path, fsig = other, str(record.get("fsig") or "")
     try:
         version = content_version(path)
     except OSError:
@@ -1376,6 +1580,7 @@ def info(character_name: str, item_id: str, *, profile: Dict[str, Any]) -> Dict[
     steps["fit"] = _fit_info(character_name, item_id, fsig, base[1])
     fits = _fits(character_name, item_id, fsig, base, steps["fit"], profile=profile)
     preview_url, foot_pose = _preview(character_name, item_id, fsig)
+    preview_fsig = str(((foot_pose or {}).get("source") or {}).get("fsig") or "") if preview_url else ""
 
     insole = gs.read_record(folder / "insole.json")
     insole_view = _insole_view(insole)
@@ -1412,7 +1617,8 @@ def info(character_name: str, item_id: str, *, profile: Dict[str, Any]) -> Dict[
         "fits": fits, "preview_url": preview_url,
         # Ruling UI3 a: when the shown shoe mesh / the shod preview were made (the 3D previews' caption).
         "mesh_built_at": _built_at(mesh_path(character_name, item_id)) if steps["mesh"]["url"] else None,
-        "preview_built_at": (_built_at(gs.garment_path(character_name, item_id, fsig, "fit"))
-                             if preview_url and fsig else None),
+        "preview_built_at": (_built_at(gs.garment_path(character_name, item_id, preview_fsig or fsig, "fit"))
+                             if preview_url and (preview_fsig or fsig) else None),
         "preview_freshness": steps["fit"]["freshness"] if preview_url else None, "foot_pose": foot_pose,
+        "allowance": allowance_view(character_name, item_id, profile, fsig, preview_fsig),
         "served_fsig": None, "refit": None, "body": None, "body_id": None}

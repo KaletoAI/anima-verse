@@ -299,7 +299,17 @@ export interface ViewerCompanion {
 
 /** Ruling A48c: a live position map of the shown model — `map` rewrites flat xyz positions (in the loaded model's
  *  own frame) in place, always starting from the positions as loaded; a new `key` applies it again. */
-export interface ViewerDeform { key: string; map: (xyz: Float32Array) => void }
+export interface ViewerDeform {
+  key: string
+  map: (xyz: Float32Array) => void
+  /** Ruling A82: skinned meshes (skipped by `map`) whose name (the mesh's or its node's) `owns` accepts — `map` gets
+   *  that name, the flat xyz positions in the mesh's own bind space and its skeleton's bone inverse by bone name
+   *  (row-major 16, null when the skeleton has no such bone). Every other skinned mesh stays as loaded. */
+  skinned?: {
+    owns: (name: string) => boolean
+    map: (name: string, xyz: Float32Array, boneInverse: (bone: string) => number[] | null) => void
+  }
+}
 
 export interface ActionAccessOverlay {
   role: 'actor' | 'partner'
@@ -3005,7 +3015,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         // ── Live deformation (Ruling A48c) ── `deform` rewrites the positions of the model and of every companion
         // with `follow`, in the model's own frame, always from the positions as loaded (kept per geometry the first
         // time); `faceBits` narrows a companion to the faces whose mask word has the bit. Nothing is reloaded.
-        const deformRoot = (root: Object3D, map: ViewerDeform['map'] | null) => {
+        const deformRoot = (root: Object3D, map: ViewerDeform['map'] | null,
+          skinned: ViewerDeform['skinned'] | null = null) => {
           root.updateMatrixWorld(true)
           const rootInv = root.matrixWorld.clone().invert()
           const toRoot = new THREE.Matrix4()
@@ -3013,7 +3024,40 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           const v = new THREE.Vector3()
           root.traverse((o: Object3D) => {
             const mesh = o as Mesh
-            if (!mesh.isMesh || (o as { isSkinnedMesh?: boolean }).isSkinnedMesh) return
+            if (!mesh.isMesh) return
+            if ((o as { isSkinnedMesh?: boolean }).isSkinnedMesh) {
+              // Ruling A82: a skinned mesh deforms in its own bind space, only through `skinned`
+              const geo = mesh.geometry
+              const pos = geo.getAttribute('position')
+              const ud = geo.userData as { deformBase?: Float32Array }
+              const name = [mesh.name, mesh.parent?.name || ''].find((n) => n && skinned?.owns(n)) || ''
+              if (!pos || (!name && !ud.deformBase)) return
+              if (!ud.deformBase) {
+                const base = new Float32Array(pos.count * 3)
+                for (let i = 0; i < pos.count; i++) {
+                  base[3 * i] = pos.getX(i); base[3 * i + 1] = pos.getY(i); base[3 * i + 2] = pos.getZ(i)
+                }
+                ud.deformBase = base
+              }
+              const work = Float32Array.from(ud.deformBase)
+              if (skinned && name) {
+                const skeleton = (o as unknown as { skeleton?: { bones: Object3D[]; boneInverses: Array<{ elements: ArrayLike<number> }> } })
+                  .skeleton
+                const boneInverse = (bone: string): number[] | null => {
+                  const want = bone.toLowerCase().replace(/[^a-z0-9]/g, '')
+                  const i = (skeleton?.bones || []).findIndex((b) => b.name.toLowerCase().replace(/[^a-z0-9]/g, '') === want)
+                  if (i < 0 || !skeleton) return null
+                  const e = skeleton.boneInverses[i].elements   // column-major
+                  return [e[0], e[4], e[8], e[12], e[1], e[5], e[9], e[13], e[2], e[6], e[10], e[14], e[3], e[7], e[11], e[15]]
+                }
+                skinned.map(name, work, boneInverse)
+              }
+              for (let i = 0; i < pos.count; i++) pos.setXYZ(i, work[3 * i], work[3 * i + 1], work[3 * i + 2])
+              pos.needsUpdate = true
+              geo.computeBoundingSphere()
+              geo.computeBoundingBox()
+              return
+            }
             const geo = mesh.geometry
             const pos = geo.getAttribute('position')
             if (!pos) return
@@ -3083,7 +3127,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           maskFaces(obj, c?.faceBits ?? null)
         }
         const applyDeform = () => {
-          deformRoot(object, deformRef.current?.map ?? null)
+          deformRoot(object, deformRef.current?.map ?? null, deformRef.current?.skinned ?? null)
           for (const [key, entry] of companionObjs) if (entry.obj) deformCompanion(key, entry.obj)
           // The deformed model's extent in its own frame (min x, max x, min z, max z) as plain numbers on the mount:
           // what a UI check compares with the rule (`scripts/check_figure_ui.mjs`'s harness, Ruling A48c).

@@ -54,14 +54,16 @@ user-accepted fit is never served once it is not current (``garments.body_fit``,
 that replaces it. A new attempt on the same (item, fsig, body) whose GLB differs from the accepted one undoes the
 acceptance (``store``); the same GLB keeps it. A fit the gates accept overwrites it (``drop``).
 
-CARRIED (Ruling A72b): a clothing refit of the piece on the same body whose refusal is the SAME set of gates, each
+CARRIED (Ruling A72b; footwear since Ruling A82): a refit of the piece on the same body whose refusal is the SAME set of gates, each
 value no worse than the accepted one by more than ``CARRY_TOLERANCE`` (``carries``), takes the acceptance over
 instead: the new attempt is published as the user-accepted fit (``user_accepted`` keeps its ``at`` and ``failure``
 and lists the hand-over in ``carried``), the fit the first acceptance displaced stays in ``attempts/prev/`` for an
 ``undo``, and ``store`` returns True — the caller treats the fit as published. Kai's jeans, 2026-11-14: the fit
 version 14 refitted the accepted plain fit to the same deep push share 0.1512, voided the acceptance, and the body
 shape's refit then derived from the old mesh's fit and was refused. A refusal by a gate without a numeric metric
-(limbs, torso, frame) is never carried. An acceptance voided under the earlier rule is recovered once per world from
+(limbs, torso, frame) is never carried. A footwear refusal is compared by its gate rows (``{value, limit}``, the kind
+read from the side of the limit the value lies on; a range limit such as ``stand_floor_mm`` is never carried); a
+body shape's refused DERIVED shoe never carries (its slot). An acceptance voided under the earlier rule is recovered once per world from
 the log (``recover_voided_acceptances``, the boot sweep).
 
 Hair is out of scope: its fits are never kept or accepted here.
@@ -400,6 +402,14 @@ def refused_values(reasons: Any, gates: Any, metrics: Any = None) -> Optional[Di
     for reason in reasons or []:
         key = str(reason).split(" ", 1)[0].rstrip(":")
         spec, value = limits.get(key), values.get(key)
+        row = gates.get(key)
+        if spec is None and isinstance(row, dict):
+            # a footwear gate row ``{value, limit, ok}`` (Ruling A82): a single limit the refused value lies beyond
+            # names the kind — above it a "max" gate, below it a "min" gate; a range limit is never compared
+            value, limit = row.get("value"), row.get("limit")
+            if (isinstance(limit, (int, float)) and not isinstance(limit, bool)
+                    and isinstance(value, (int, float)) and not isinstance(value, bool) and value != limit):
+                spec = ("max", limit) if value > limit else ("min", limit)
         if (not isinstance(spec, (list, tuple)) or len(spec) < 2 or spec[0] not in ("max", "min")
                 or isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value)):
             return None
@@ -1086,13 +1096,16 @@ _TORSO_SIDE = {"front": "front", "side": "sides", "back": "back"}
 #: footwear cut / fit gate key -> the plain words (the numbers stay in the detail).
 _FOOT_GATES = {
     "deep_outside": "the foot pokes out through the shoe",
-    "visible_poke": "the foot shows above the shoe's rim",
+    "visible_poke": "the foot pokes out through the side of the shoe below its rim",
     "throat_ledge_p95_mm": "the foot stands up out of the shoe's opening",
     "toe_conform_m": "the toes do not fit under the toe box",
     "shaft_poke": "the leg pokes out of the boot's shaft",
     "collar_conform_m": "the leg does not fit into the boot's opening",
     "collar_flex_poke": "the leg pokes out of the boot's opening when the ankle bends",
 }
+#: Ruling A82: the footwear gates a larger allowance answers — named once after the plain words.
+_FOOT_ALLOWANCE_GATES = ("deep_outside", "visible_poke")
+_FOOT_ALLOWANCE_HINT = "more Length or Width in the shoe allowance helps"
 _GATE_KEY_RE = re.compile(r"^([a-z0-9_]+)(?::| [-0-9.e]+ (?:<|>|outside))")
 #: The limb / torso gates' reasons (``garment_source.limb_gate`` / ``torso_gate`` / ``torso_hole_gate``) — read
 #: only for a refusal kept without its gate record (made before attempts were kept).
@@ -1122,6 +1135,7 @@ def plain_reason(error: str, gates: Any = None, *, on_shape: bool = False) -> Di
     gates = gates if isinstance(gates, dict) else {}
     texts: List[str] = []
     piece = False
+    allowance_hint = False
     limbs = gates.get("limbs") if isinstance(gates.get("limbs"), dict) else None
     for name, seg in (limbs or {}).get("failing") or []:
         side, _, limb = str(name).partition("_")
@@ -1173,11 +1187,15 @@ def plain_reason(error: str, gates: Any = None, *, on_shape: bool = False) -> Di
             words = _FOOT_GATES.get(key.group(1)) if key else None
             if words and words not in texts:
                 texts.append(words)
+                allowance_hint = allowance_hint or key.group(1) in _FOOT_ALLOWANCE_GATES
+    if allowance_hint:
+        # Ruling A82: the remedy the Wardrobe offers for a foot outside the shoe, named once
+        texts = texts[:3] + [_FOOT_ALLOWANCE_HINT]
     if not texts and "regenerate" in detail.lower():
         piece = True
     if not texts:
         texts = [detail[:1].lower() + detail[1:] if detail else "refused by its checks"]
-    return {"text": "; ".join(texts[:3]), "detail": detail, "piece": piece}
+    return {"text": "; ".join(texts[:4] if allowance_hint else texts[:3]), "detail": detail, "piece": piece}
 
 
 def refusal_words(character_name: str, item_id: str, body: str, error: str) -> Dict[str, Any]:
@@ -1398,6 +1416,10 @@ def _entry(character_name: str, item_id: str, body: str, profile: Dict[str, Any]
     entry["numbers"] = body_numbers(shown_record)
     entry["fit"] = body_fit_view(item_id, shown_record, profile, accepted=entry["status"] in ("accepted",
                                                                                            "user_accepted"))
+    if (shown_record or {}).get("kind") == "footwear":
+        # Ruling A82: the allowance preview acts on the shown shoe (its cut frame and its own allowance)
+        from app.core.garment_footwear import preview_frame
+        entry["shoe_frame"] = preview_frame(shown_record)
     if entry["status"] == "refused":
         if found is None or not current_attempt:
             entry["accept_block"] = ("No attempt kept for this refusal (made before attempts were kept) — "

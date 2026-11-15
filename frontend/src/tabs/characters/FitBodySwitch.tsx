@@ -7,7 +7,7 @@
  * as last fitted there, a refused fit included, the region the refusing check measured marked in colour (legend
  * below the buttons; the server grafts the marks, the client only shows them).
  *
- * A refused fit can be accepted ("Accept this fit") — admin-only, it spends no job; the figure is then due for a
+ * A refused fit — clothing and footwear alike — can be accepted ("Accept this fit anyway (0 hub jobs)") — admin-only, it spends no job; the figure is then due for a
  * re-assembly on the CPU (the server's estimate is shown before the click and after it). "Accepted by you" (green)
  * holds until the fit, its body or the fit version changes; "Undo accept" brings the refusal back. Server:
  * `fit_attempts.bodies` (GET …/garments/{item} `bodies`), POST …/garments/{item}/fits/{body}/accept | unaccept.
@@ -178,7 +178,7 @@ export function FitBodySwitch({ character, itemId, bodies, selected, onSelect, o
               ? t('Counts this fit as accepted everywhere until it, its body or the fit version changes. Spends no jobs; then due: re-assembly of the figure (CPU only).')
               : t(shown.accept_block)}
             onClick={() => { void call('accept') }}>
-            {t('Accept this fit')}
+            {t('Accept this fit anyway (0 hub jobs)')}
           </button>
           <span className="ga-hint">
             {shown.can_accept ? t('No jobs. Then due: re-assembly of the figure (CPU only).') : t(shown.accept_block)}
@@ -190,7 +190,7 @@ export function FitBodySwitch({ character, itemId, bodies, selected, onSelect, o
           <button type="button" className="ga-btn ga-btn-sm" disabled={busy}
             title={t('The fit counts as refused again. Spends no jobs; then due: re-assembly of the figure (CPU only).')}
             onClick={() => { void call('unaccept') }}>
-            {t('Undo accept')}
+            {t('Undo accept (0 hub jobs)')}
           </button>
           <span className="ga-hint">{t('No jobs. Then due: re-assembly of the figure (CPU only).')}</span>
         </div>

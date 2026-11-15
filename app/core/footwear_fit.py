@@ -316,6 +316,16 @@ from app.core.footwear_gates import check_gates
 FOOTWEAR_FIT_VERSION = 18
 #: Toe room: the insole arc is the longer foot plus this (metres).
 ALLOW_M = 0.005
+#: Ruling A82: the per-piece footwear allowances the Wardrobe offers (percent; ``garment_footwear.ALLOWANCE_KEY``).
+#: ``length``: the shoe one size longer — the uniform scale ``k`` is solved for the longer foot plus this share of its
+#: length (``_scale``), and the heel contact sits that much further into the shoe, so ALL the added length is heel
+#: room and the toe room stays ``ALLOW_M`` (the poke it exists for is the heel: Vallerie's Woman shoes, whose rounded
+#: counter ends where her heel ends). The upper grows in height with ``k`` like a real size step; the WIDTH does not:
+#: the width factor is solved at the scale without the length allowance and divided by the size ratio, so a length
+#: step leaves the shoe's width in metres as it was. ``width``: the fitted width factor times (1 + share) — the shoe
+#: that much wider than the fit made it (at the default cap a shoe without a shaft is as wide as the foot, so the share
+#: is of the foot's ball width). 0 / 0 is byte-identical to fit version 18 (nothing becomes due).
+ALLOWANCE_STEPS: Tuple[int, ...] = (0, 2, 4, 6, 8, 10, 12, 15, 20)
 #: Half-width of the Foot -> ToeBase smoothstep around the ball (metres).
 BLEND_M = 0.015
 #: The largest width factor a fit may apply (spec § 5.5), also the default cap — the cap of a boot (an item whose
@@ -813,7 +823,7 @@ def _local_axis(J: np.ndarray, axis_w: np.ndarray) -> np.ndarray:
 
 def fit_pair(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.BodyMesh,
              joints: Dict[str, np.ndarray], *, width_cap: Optional[float] = None,
-             fit_height: bool = False) -> FootwearFit:
+             fit_height: bool = False, allowance: Optional[Dict[str, Any]] = None) -> FootwearFit:
     """Fit one shoe source (``shoe`` in its mesher coordinates, ``insole`` its analysis) to both feet of
     ``body`` (module docstring). A shoe that cannot be put on at all returns ``ok False`` with the reason
     and no parts; a fit that ran returns everything, ``ok`` = every gate of ``FIT_GATES`` (and, for a boot, the
@@ -823,16 +833,30 @@ def fit_pair(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.
     ``WIDTH_CAP``; recorded as ``scale.width_cap`` ``WIDTH_CAP``, the fingerprint's default); a number = the
     Wardrobe's cap, clamped to ``WIDTH_CAP_MIN`` .. ``WIDTH_CAP``, applied as it is. ``fit_height`` True fits the upper
     to the foot's height (step 4b) where ``scale.height_ready`` holds; False (the default) only measures it — the
-    first attempt of ``garment_footwear.fit_compute``, byte-identical to fit version 13."""
+    first attempt of ``garment_footwear.fit_compute``, byte-identical to fit version 13. ``allowance`` (Ruling A82):
+    ``{"width": percent, "length": percent}`` of ``ALLOWANCE_STEPS`` (``ALLOWANCE_STEPS`` docstring); None / zeros =
+    none."""
     applied = applied_width_cap(insole, width_cap)
     width_cap = WIDTH_CAP if width_cap is None else min(WIDTH_CAP, max(WIDTH_CAP_MIN, float(width_cap)))
     feet = measure_feet(body, joints)
     try:
-        return _fit(insole, shoe, body, joints, feet, width_cap, applied, fit_height)
+        return _fit(insole, shoe, body, joints, feet, width_cap, applied, fit_height, allowance_shares(allowance))
     except _Refused as exc:
         reason = str(exc)
         return FootwearFit(ok=False, reasons=[reason], record={"version": FOOTWEAR_FIT_VERSION, "error": reason},
                            parts={}, foot_pose={})
+
+
+def allowance_shares(allowance: Optional[Dict[str, Any]]) -> Tuple[float, float]:
+    """``(width share, length share)`` of an allowance dict (percent -> share); a value outside ``ALLOWANCE_STEPS``
+    is ValueError (``garment_footwear.validate_allowance`` checks it before it is stored)."""
+    out = []
+    for key in ("width", "length"):
+        value = (allowance or {}).get(key, 0) or 0
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value not in ALLOWANCE_STEPS:
+            raise ValueError(f"The {key} allowance must be one of {', '.join(str(v) for v in ALLOWANCE_STEPS)}")
+        out.append(float(value) / 100.0)
+    return out[0], out[1]
 
 
 def split_height(fm: FootMeasure, lift_m: float, floor: float) -> float:
@@ -1101,7 +1125,8 @@ def upper_height_map(Q: np.ndarray, insole: Dict[str, Any], height: Optional[Dic
 
 def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.BodyMesh,
          joints: Dict[str, np.ndarray], feet: Dict[str, FootMeasure], width_cap: float,
-         cap_applied: float, fit_height: bool = False) -> FootwearFit:
+         cap_applied: float, fit_height: bool = False,
+         allow: Tuple[float, float] = (0.0, 0.0)) -> FootwearFit:
     from app.core.footwear_insole import BALL_SHARE, HEEL_SEAT_M, PITCH_HEEL_SHARE, insole_map, topline_stations
     ins = _Insole(insole)
     P = np.asarray(body.positions, np.float64)
@@ -1117,6 +1142,14 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     foot_len = max(f.length_m for f in feet.values())
     toe_h = max(f.toe_height_m for f in feet.values())
     k, x_end = _scale(ins, foot_len, toe_h)
+    # Ruling A82 (``ALLOWANCE_STEPS``): the length allowance is heel room — the scale of the longer foot, the heel
+    # contact that much further in; ``size`` = the scale ratio the width factor is divided by
+    width_share, length_share = allow
+    heel_room = foot_len * length_share
+    k0 = k
+    if heel_room > 0.0:
+        k, x_end = _scale(ins, foot_len + heel_room, toe_h)
+    size = k / k0
 
     def insole_cols(x: float) -> Tuple[int, np.ndarray]:
         i = int(np.argmin(np.abs(gx - x)))
@@ -1126,7 +1159,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     work: Dict[str, Dict[str, Any]] = {}
     for side, fm in feet.items():
         # 3. extension: the 2-point chord minus the rest pitch; the ToeBase back onto the forepart slope
-        xh = ins.x0 + fm.d_heel_m / k
+        xh = ins.x0 + (fm.d_heel_m + heel_room) / k
         # The ball the shoe is placed on is the ball AS SKINNED (Foot and ToeBase): the ToeBase
         # counter-turn moves the plantar ball vertices off the Foot-rigid point — 4–5 mm on the real
         # material — and the shoe has to meet the ball the clips show. That ball depends on the pose,
@@ -1191,7 +1224,9 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
 
     # one width factor for the pair
     needed = {s: w["fw_ball"] / w["iw_ball"] for s, w in work.items()}
-    width_factor = min(cap_applied, max(1.0, max(needed.values())))
+    width_factor = min(cap_applied, max(1.0, max(needed.values()) * size))
+    if width_share or heel_room:
+        width_factor = width_factor * (1.0 + width_share) / size
     slim = {s: max(0.0, 1.0 - w["iw_ball"] * width_factor / w["fw_ball"]) for s, w in work.items()}
 
     for side, w in work.items():
@@ -1624,6 +1659,8 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             "height_factor": height_factor, "height_needed": height_needed, "height": height,
             "height_ready": height_ready, "instep_roof_share": instep_roof, "height_worst": height_worst,
             "insole_arc_m": ins.arc_at(x_end) * k, "foot_len_m": foot_len, "toe_h_m": toe_h,
+            **({"allowance": {"width_pct": round(width_share * 100.0, 6), "length_pct": round(length_share * 100.0, 6),
+                              "heel_room_m": heel_room, "size": size}} if width_share or heel_room else {}),
         },
         "sides": sides,
         "root_lift_m": root_lift,

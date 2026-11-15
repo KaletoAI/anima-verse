@@ -60,7 +60,7 @@
  * …/garments/{item}/fits/{body}/model — a refused fit with the failing region marked), and Accept / Undo accept of
  * a refused fit.
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { ConfirmDialog } from '@anima/player-ui'
@@ -76,7 +76,11 @@ import { FOOTWEAR_STEP_LABELS, ROW, WARN_STYLE, footwearRunPlan, meshNotReadyTex
 import type { ChipSpec, GarmentRunBody } from './garmentStyle'
 import { FootwearSteps } from './FootwearSteps'
 import { Model3DViewer } from './Model3DViewer'
+import type { ViewerDeform } from './Model3DViewer'
 import { FitBodySwitch } from './FitBodySwitch'
+import { FootwearAllowance } from './FootwearAllowance'
+import { applyInPlace, bindMap, cutMap, isShown, resolved, shoeSide } from './footwearAllowance'
+import type { AllowanceSetting, ShoeFrame } from './footwearAllowance'
 import { FitSettings } from './FitSettings'
 import { ModelSteps } from './ModelSteps'
 import type { ModelStep } from './ModelSteps'
@@ -771,14 +775,45 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
       onSelect={setBodyKey} onChanged={() => startPoll(0)} feedback={feedback} refitDisabled={busy}
       onRefit={noRunAll ? undefined : (b) => onRun({ step: 'fit', force: true, body: b }, refitSlot(b))} />
   ) : null
-  /** The model the viewer shows: the selected body's (the plain body's accepted fit = the piece's own preview). */
+  /** The model the viewer shows: the selected body's (the plain body's accepted fit = the piece's own preview).
+   *  Ruling A82: a shoe whose plain-body fit is due (a saved allowance) keeps showing its last fit — the piece's own
+   *  preview, named as an older fit — so the allowance's live preview has a shoe to act on. */
+  const showsBody = !!shownBody && (shownBody.key !== 'plain' || (shownBody.status !== 'accepted'
+    && (!!shownBody.url || !footwear?.preview_url)))
   const viewed = (own: { url: string | null | undefined; builtAt: string | null | undefined; footPose?: unknown }) =>
-    shownBody && (shownBody.key !== 'plain' || shownBody.status !== 'accepted')
+    showsBody && shownBody
       ? { url: shownBody.url, builtAt: shownBody.built_at, footPose: shownBody.foot_pose }
       : { url: own.url || null, builtAt: own.builtAt || null, footPose: own.footPose }
 
   const shoeView = viewed({ url: footwear?.preview_url, builtAt: footwear?.preview_built_at,
     footPose: footwear?.foot_pose })
+  // Ruling A82: the footwear allowance previewed (the settings being edited) and the live deform of the shown shoe
+  const allowView = footwear?.allowance ?? null
+  const savedAllow = allowView?.settings
+  const [allowDraft, setAllowDraft] = useState<{ width: AllowanceSetting; length: AllowanceSetting }>(
+    { width: 'auto', length: 'auto' })
+  useEffect(() => {
+    if (savedAllow) setAllowDraft({ width: savedAllow.width, length: savedAllow.length })
+  }, [itemId, savedAllow?.width, savedAllow?.length])  // eslint-disable-line react-hooks/exhaustive-deps
+  const shoeFrame: ShoeFrame | null = (showsBody ? shownBody?.shoe_frame : allowView?.frame) ?? null
+  const previewW = resolved(allowView, 'width', allowDraft.width)
+  const previewL = resolved(allowView, 'length', allowDraft.length)
+  const shoeDeform = useMemo<ViewerDeform | null>(() => {
+    if (!shoeFrame || isShown(shoeFrame, previewW, previewL)) return null
+    const T = cutMap(shoeFrame, previewW, previewL)
+    return {
+      key: `shoe:${previewW}:${previewL}:${shoeFrame.width_pct}:${shoeFrame.length_pct}`,
+      map: () => {},
+      skinned: {
+        owns: (name) => shoeSide(name, itemId) !== null,
+        map: (name, xyz, boneInverse) => {
+          const side = shoeFrame.sides[shoeSide(name, itemId) || '']
+          const inv = side ? boneInverse(side.joint) : null
+          if (side && inv) applyInPlace(xyz, bindMap(side.frame, inv, T))
+        },
+      },
+    }
+  }, [shoeFrame, previewW, previewL, itemId])
   const pieceView = viewed({ url: garment?.preview_url, builtAt: garment?.preview_built_at })
 
   let body: ReactNode
@@ -833,7 +868,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
               <Model3DViewer key={shoeView.url} url={shoeView.url} format="glb" height={430}
                 freshness={shoeView.url === footwear.preview_url ? footwear.preview_freshness : null}
                 builtAt={shoeView.builtAt} footPose={shoeView.footPose as typeof footwear.foot_pose}
-                clipUrl={clips[previewPose.kind] || ''} clipGroup={previewPose.group} />
+                clipUrl={clips[previewPose.kind] || ''} clipGroup={previewPose.group} deform={shoeDeform} />
             </>
           ) : (
             <div className="ga-step-grid-empty" style={{ width: '100%', height: 120 }}>
@@ -841,6 +876,10 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
                   : t('No fitted mesh yet'))}
             </div>
           )}
+          {allowView ? (
+            <FootwearAllowance character={character} itemId={itemId} view={allowView} draft={allowDraft}
+              onDraft={setAllowDraft} busy={busy} onSaved={() => startPoll(0)} />
+          ) : null}
           {info.steps?.length ? <ModelSteps steps={info.steps} /> : null}
           <GarmentFailure garment={footwear} stepLabels={FOOTWEAR_STEP_LABELS} />
           {info.status.missing && !running ? (

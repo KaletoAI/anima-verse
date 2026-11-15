@@ -275,7 +275,7 @@ def footwear(tmp: Path) -> None:
     calls = []
 
     def compute(kind_):
-        def run(*args):
+        def run(*args, **_kw):
             out = Path(args[-1])
             body = script["body"]
             calls.append(kind_)
@@ -414,7 +414,8 @@ def footwear(tmp: Path) -> None:
               ("refused", fit_attempts.FIT_METHOD_NOTES["fresh_fallback"]))
         check("B-derived: refused, acceptable", (entries[B + "-derived"]["status"], entries[B + "-derived"]["can_accept"],
                                                  entries[B + "-derived"]["reason"]),
-              ("refused", True, "the foot pokes out through the shoe; the foot shows above the shoe's rim"))
+              ("refused", True, "the foot pokes out through the shoe; the foot pokes out through the side of the shoe "
+               "below its rim; more Length or Width in the shoe allowance helps"))
         check("C: accepted, derived named", entries[C]["method_note"], fit_attempts.FIT_METHOD_NOTES["derived"])
         check("plain: no note", entries["plain"]["method_note"], "")
         check("parse_key", (fit_attempts.parse_key("plain"), fit_attempts.parse_key(B + "-derived"),
