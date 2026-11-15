@@ -38,6 +38,13 @@
  *     - s_tip 0.16: 0.12 / 0.16 = 0.75 → clamped to 0.8, tip at 0.128, 8 mm past;
  *     - compress_min 1.0: k = 1;
  *     - s_tip 0.10 ≤ D: k = 1.
+ *     s_e < 0 (fix round 1: no joint inside, the joint nearest before the opening):
+ *     - s_tip 0.15, s_e −0.05: (0.12 + 0.05) / (0.15 + 0.05) = 0.17 / 0.2 = 0.85 → k = 0.85,
+ *       tip at −0.05 + 0.85 · 0.2 = 0.12;
+ *     - s_tip 0.20, s_e −0.05: 0.17 / 0.25 = 0.68 → clamped to 0.8, tip at −0.05 + 0.8 · 0.25 = 0.15.
+ *     `depthJoint` (axial joint positions root first → the index of s_e): [−0.05, 0.01, 0.07] → 1 (the
+ *     first at s ≥ 0); [0, 0.05] → 0; [−0.08, −0.03] → 1 and [−0.03, −0.08] → 0 (none inside: the largest
+ *     s); [−0.02, −0.02] → 1 (tie → the later); [] → −1.
  * [5] Funnel: R'(−0.02) = 0.02 + 0.02 · tan 30° = 0.02 + 0.011547 = 0.031547 (±1e-6).
  *     Zones: (s 0.05, ρ 0.01) cylinder; (s 0.13, ρ 0) null (past the bottom);
  *     (s −0.02, ρ 0.03) funnel (0.03 ≤ 0.031547); (s −0.06, ρ 0) null (beyond F).
@@ -69,6 +76,9 @@
  *     the tip at 0.12, pastBottomM 0, the tip in C → suppressed [cap_a, cap_b].
  *     Insertion 0.16: root s 0.01 = s_e, k = max(0.8, 0.11 / 0.15 = 0.7333) = 0.8,
  *     tip at 0.01 + 0.8 · 0.15 = 0.13, pastBottomM 0.01.
+ *     Insertion 0.13 (fix round 1): the root at s −0.02 is the only joint, none inside → s_e = −0.02,
+ *     k = max(0.8, (0.12 + 0.02) / (0.13 + 0.02) = 0.14 / 0.15 = 0.933333), the tip at
+ *     −0.02 + 0.14 = 0.12, pastBottomM 0 (the first-joint-inside rule gave k 1, tip 0.13, 10 mm past).
  *     The [1] link as a rod: length 0.104403, tilt 16.699°, insertion
  *     0.104403 − 0.05 = 0.054403 (root on the axis at s −0.05), budget 30° → the
  *     turn 5.655° (±0.005), k 1 (tip s 0.05247 < D); budget 4° → 4°.
@@ -121,7 +131,7 @@ async function main() {
   const C = await import('../packages/scene-render/src/channels.ts')
   const { COLLISION_VERSION } = await import('../packages/scene-render/src/collision.ts')
   const THREE = await import('three')
-  const { channelCoords, inZone, allowedRadius, radialGuidanceAngle, depthScale, stepEngagement, channelGate,
+  const { channelCoords, inZone, allowedRadius, radialGuidanceAngle, depthJoint, depthScale, stepEngagement, channelGate,
     suppressedIds, guideRod, previewChannel, bindChannels, channelWireframe, placeChannelWireframe,
     CHANNEL_BLEND_S, CHANNEL_HYST_M, CHANNEL_HYST_DEG, CHANNEL_GROW } = C
 
@@ -188,6 +198,13 @@ async function main() {
     near(0.16 * k2 - D2.depth, 0.008, 1e-12), String(k2))
   check('[4] compress_min 1.0 → k 1', depthScale(0.16, 0, ch({ compressMin: 1.0 }), 0) === 1)
   check('[4] s_tip 0.10 ≤ D → k 1', depthScale(0.10, 0, D2, 0) === 1)
+  const k3 = depthScale(0.15, -0.05, D2, 0)
+  check('[4] s_e −0.05, s_tip 0.15 → k 0.85, tip at 0.12', near(k3, 0.85, 1e-12) && near(-0.05 + k3 * 0.2, 0.12, 1e-12), String(k3))
+  const k4 = depthScale(0.20, -0.05, D2, 0)
+  check('[4] s_e −0.05, s_tip 0.20 → k 0.8, tip at 0.15', near(k4, 0.8, 1e-12) && near(-0.05 + k4 * 0.25, 0.15, 1e-12), String(k4))
+  check('[4] depthJoint: first inside, else the nearest before, tie → later, none → −1',
+    depthJoint([-0.05, 0.01, 0.07]) === 1 && depthJoint([0, 0.05]) === 0 && depthJoint([-0.08, -0.03]) === 1
+    && depthJoint([-0.03, -0.08]) === 0 && depthJoint([-0.02, -0.02]) === 1 && depthJoint([]) === -1)
 
   // [5] funnel and zones
   check('[5] allowedRadius(−0.02) 0.031547', near(allowedRadius(-0.02, D2, 0), 0.031547, 1e-6), String(allowedRadius(-0.02, D2, 0)))
@@ -276,6 +293,10 @@ async function main() {
   check('[10] insertion 0.16: k 0.8, tip 0.13, pastBottomM 0.01', near(r10b.k, 0.8, 1e-12) &&
     near(channelCoords(r10b.joints[1], D2).s, 0.13, 1e-12) && near(r10b.pastBottomM, 0.01, 1e-12),
   JSON.stringify({ k: r10b.k, past: r10b.pastBottomM }))
+  const r10f = guideRod(D2, { ...rod, insertion: 0.13 })
+  check('[10] insertion 0.13 (root s −0.02 = s_e): k 0.933333, tip 0.12, pastBottomM 0', near(r10f.k, 0.14 / 0.15, 1e-12) &&
+    near(channelCoords(r10f.joints[1], D2).s, 0.12, 1e-12) && near(r10f.pastBottomM, 0, 1e-12),
+  JSON.stringify({ k: r10f.k, past: r10f.pastBottomM }))
   const tilted = { length: lever, radius: 0, links: 1, insertion: lever - 0.05, tiltDeg: Math.atan2(0.03, 0.1) / DEG, budgetDeg: 30 }
   const r10c = guideRod(D2, tilted)
   check('[10] the [1] link as a rod: turn 5.655°, k 1', near(r10c.turnsDeg[0], 5.655, 0.005) && r10c.k === 1 &&

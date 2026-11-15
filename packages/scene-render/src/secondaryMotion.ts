@@ -117,8 +117,9 @@
  *    taken out of THAT partner's list (radius × (1 − w), gone at w = 1, so
  *    neither engaging nor releasing snaps). After the chain's last link: the
  *    DEPTH SCALE k (`depthScale`, blended 1 → k by w) shortens the levers of
- *    the links from the first joint past the opening along their tips, about
- *    that joint, and the chain is re-published in the same update. All of it
+ *    the links from s_e on along their tips, about that joint (`depthJoint`:
+ *    the first joint past the opening, else the one nearest before it), and
+ *    the chain is re-published in the same update. All of it
  *    acts on the rendered frame only: the spring state never sees it, so a
  *    released chain is exactly where the free one would be. `contactTips`
  *    rows of an engaged chain carry `channel` (id, w, k). No channel in any
@@ -127,7 +128,7 @@
  */
 import type { Bone, Matrix4, Quaternion, Object3D, SkinnedMesh, Vector3 } from 'three'
 import { normBoneName } from './clipRetarget'
-import { CHANNEL_GROW, channelCoords, channelGate, depthScale, inZone, radialGuidanceAngle, stepEngagement } from './channels'
+import { CHANNEL_GROW, channelCoords, channelGate, depthJoint, depthScale, inZone, radialGuidanceAngle, stepEngagement } from './channels'
 import type { ChannelNow } from './channels'
 import { bindCollision, bodyJoints, COLLISION_VERSION, HAIR_ONLY_REGIONS, jointRefNow, linearScale, PARTNER_ONLY_REGIONS } from './collision'
 import type { BoundCapsule, CollisionBinding, CollisionPayload, JointRef, Vec3 } from './collision'
@@ -1445,6 +1446,8 @@ export function createSecondaryMotion(
     return suppressNow.size ? suppressNow : null
   }
   const chainHead = new three.Vector3(), chainFirst = new three.Vector3(), chainTip = new three.Vector3()
+  /** The axial positions of a chain's link joints (`depthJoint`'s input; reused). */
+  const depthS: number[] = []
   const depthAxis = new three.Vector3(), depthMatrix = new three.Matrix4(), parentInverse = new three.Matrix4()
   /** Is `bone` `top` or below it? */
   const below = (bone: Object3D, top: Object3D) => {
@@ -1453,8 +1456,8 @@ export function createSecondaryMotion(
   }
   /**
    * After a chain's last link (CHANNELS): per engagement with w > 0 the DEPTH SCALE — s_tip the last link's tip,
-   * s_e the first link joint at s ≥ 0, k = `depthScale` blended 1 → k by w — shortens the levers of that link and the
-   * links below it along their tips, about its joint: each joint moves to h_e + k (h − h_e), each lever is scaled by
+   * s_e the link joint `depthJoint` picks (the first at s ≥ 0, else the one nearest before the opening),
+   * k = `depthScale` blended 1 → k by w — shortens the levers of that link and the links below it along their tips, about its joint: each joint moves to h_e + k (h − h_e), each lever is scaled by
    * k along its tip direction, and the bones are re-published (world, pure world and local matrix). Then the zone of
    * every engagement's channel for the next update's step: any link tip in Φ ∪ C (with the smallest lever angle to
    * u among those) and any in the grown zone.
@@ -1467,10 +1470,9 @@ export function createSecondaryMotion(
       if (!(state.w > 0)) continue
       const ch = state.ch
       const sOf = (p: Vector3) => (p.x - ch.o[0]) * ch.u[0] + (p.y - ch.o[1]) * ch.u[1] + (p.z - ch.o[2]) * ch.u[2]
-      let first = -1
-      for (let j = 0; j < links.length; j++) {
-        if (sOf(chainHead.setFromMatrixPosition(links[j].bind.bone.matrixWorld)) >= 0) { first = j; break }
-      }
+      depthS.length = links.length
+      for (let j = 0; j < links.length; j++) depthS[j] = sOf(chainHead.setFromMatrixPosition(links[j].bind.bone.matrixWorld))
+      const first = depthJoint(depthS)
       if (first < 0) continue
       const top = links[first].bind.bone
       chainFirst.setFromMatrixPosition(top.matrixWorld)

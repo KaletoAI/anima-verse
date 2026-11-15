@@ -28,9 +28,12 @@
  *   joint, in the plane of its lever and the radial direction, by the smallest
  *   angle that gives ρ = R'. The caller multiplies it by w and caps it by the
  *   link's swing budget (no folding).
- * - DEPTH (`depthScale`): the links past the opening are shortened along their
- *   levers by k = max(compress_min, (D − r_c − s_e)/(s_tip − s_e)) when
- *   s_tip > D − r_c; what k cannot absorb stays past the bottom.
+ * - DEPTH (`depthJoint`, `depthScale`): the links from s_e on are shortened
+ *   along their levers by k = max(compress_min, (D − r_c − s_e)/(s_tip − s_e))
+ *   when s_tip > D − r_c; what k cannot absorb stays past the bottom. s_e is
+ *   the link joint nearest the opening: the first one at s ≥ 0, or — no joint
+ *   inside — the one closest before it (s_e < 0, so a one-link chain hanging
+ *   from outside the opening is still shortened from its joint).
  * - ENGAGEMENT (`channelGate`, `stepEngagement`): the gate (accepted op, state
  *   length, the same running pair interaction, its kind), a tip in Φ ∪ C and
  *   the lever within α engage; a failed gate or no tip in the grown zone
@@ -203,9 +206,24 @@ export function radialGuidanceAngle(joint: Vec3, tip: Vec3, ch: ChannelNow, rC: 
 // --- depth --------------------------------------------------------------------------------------------------------
 
 /**
- * The depth scale of the links past the opening: s_tip = the chain's last tip, s_e = the first link joint past the
- * opening (≥ 0). k = max(compress_min, (D − r_c − s_e)/(s_tip − s_e)) when s_tip > D − r_c, else 1. Applied to the
- * levers from that joint on, the tip lands at s_e + k·(s_tip − s_e); what k cannot absorb stays past the bottom.
+ * s_e of the depth scale, from the axial positions of a chain's link joints (root first, the tip excluded): the
+ * index of the joint nearest the opening — the first one at s ≥ 0, else (no joint inside) the one with the largest
+ * s < 0 (the later one on a tie). −1 without joints.
+ */
+export function depthJoint(sJoints: readonly number[]): number {
+  let best = -1
+  for (let i = 0; i < sJoints.length; i++) {
+    if (sJoints[i] >= 0) return i
+    if (best < 0 || sJoints[i] >= sJoints[best]) best = i
+  }
+  return best
+}
+
+/**
+ * The depth scale of the links from s_e on: s_tip = the chain's last tip, s_e = the joint `depthJoint` picks (it may
+ * lie before the opening, s_e < 0). k = max(compress_min, (D − r_c − s_e)/(s_tip − s_e)) when s_tip > D − r_c,
+ * else 1. Applied to the levers from that joint on, the tip lands at s_e + k·(s_tip − s_e); what k cannot absorb
+ * stays past the bottom.
  */
 export function depthScale(sTip: number, sE: number, ch: ChannelNow, rC: number): number {
   const floor = ch.depth - rC
@@ -262,8 +280,8 @@ export function suppressedIds(tip: Vec3, ch: ChannelNow): ReadonlySet<string> {
  * `length` / `links` and capsule radius `radius`; its root sits on the axis at s = `insertion` − `length`, and it
  * points along u tilted by `tiltDeg` (about a fixed perpendicular of u: u × x, or u × y when u is near x). Each link,
  * root to tip, takes its radial guidance turn capped by `budgetDeg` and carries the links after it; then the links
- * from the first joint past the opening (s ≥ 0) are scaled by `depthScale`. Returns the joints (root first, the tip
- * last), the turns in degrees, k (1 when no joint is past the opening), how far the tip's surface lies past the
+ * from the joint `depthJoint` picks are scaled by `depthScale`. Returns the joints (root first, the tip
+ * last), the turns in degrees, k (1 when the tip stays before D − radius), how far the tip's surface lies past the
  * bottom (s_tip − (D − radius), ≥ 0) and the suppressed ids (the channel's list when any link tip is inside C).
  */
 export function guideRod(ch: ChannelNow, rod: { length: number; radius: number; links: number; insertion: number;
@@ -288,7 +306,7 @@ export function guideRod(ch: ChannelNow, rod: { length: number; radius: number; 
   }
   const sOf = (p: Vec3) => dot(sub(p, ch.o), ch.u)
   let k = 1
-  const first = joints.slice(0, n).findIndex(p => sOf(p) >= 0)
+  const first = depthJoint(joints.slice(0, n).map(sOf))
   if (first >= 0) {
     k = depthScale(sOf(joints[n]), sOf(joints[first]), ch, rod.radius)
     if (k !== 1) for (let j = first + 1; j <= n; j++) joints[j] = add(joints[first], scale(sub(joints[j], joints[first]), k))

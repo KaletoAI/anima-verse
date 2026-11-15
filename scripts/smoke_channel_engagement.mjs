@@ -65,15 +65,20 @@
  * [6] A GROWING EXTENT, δ 0 (on the axis: no radial turn, so the guided chain is the free one but for k), static at
  *     zH −0.18, engaged (w = 1), then at update 20 the group's length → 1.4 (blended over 1.5 s). Joints at s
  *     −0.18, −0.18 + 0.1λ, −0.18 + 0.2λ, tip −0.18 + 0.3λ. Every update the tip lies at
- *     s_e + k(s_raw − s_e), k = max(0.8, (0.115 − s_e)/(s_raw − s_e)) (s_raw, s_e from the free reader's joints;
- *     ±1e-6), i.e. at most D − r_c plus what compress_min cannot absorb; no link folds (each lever·u > 0); w stays
+ *     s_e + k(s_raw − s_e), k = max(0.8, (0.115 − s_e)/(s_raw − s_e)) (s_raw, s_e from the free reader's joints —
+ *     s_e the first joint at s ≥ 0, else the one nearest before the opening (fix round 1); ±1e-6), i.e. at most D − r_c plus what compress_min cannot absorb; no link folds (each lever·u > 0); w stays
  *     1. λ 1: s_e 0.02, s_raw 0.12, k 0.95, tip 0.115. λ 1.4: joints −0.18, −0.04, 0.10 → s_e 0.10, s_raw 0.24,
  *     k = max(0.8, 0.015/0.14) = 0.8 → tip 0.212, 97 mm past D − r_c, left there. Then the interaction ends: after
  *     the ramp every bone equals the free reader's bit for bit (swing state untouched).
- *     PAST THE BOTTOM (ruling for Task 14): a ONE-link chain B1 (joint at s −0.02, lever 0.1, tip s 0.08, in C)
- *     engages; its length then grows to 1.6 → tip s −0.02 + 0.16 = 0.14 > D. No joint lies at s ≥ 0, so k = 1 and
- *     the tip stays past the bottom — and the chain stays ENGAGED (w = 1) for the whole growth and 1 s after: a tip
- *     with s > D counts as inside the grown release zone (ρ 0 ≤ R + h).
+ *     s_e < 0 (fix round 1): a ONE-link chain B1 (joint at s −0.02, lever 0.1, tip s 0.08, in C) engages; its
+ *     length then grows to 1.6 → s_raw = −0.02 + 0.16 = 0.14 > D − r_c. No joint lies at s ≥ 0, so s_e = −0.02 (its
+ *     own joint, the nearest before the opening): k = max(0.8, (0.115 + 0.02)/(0.14 + 0.02)) = 0.135/0.16 = 0.84375
+ *     → the tip at −0.02 + 0.84375 · 0.16 = 0.115 (±1e-6), the row's k 0.84375 (±1e-5). (The first-joint-inside
+ *     rule left k 1 and the tip at 0.14, 25 mm past D − r_c.)
+ *     PAST THE BOTTOM (ruling for Task 14): the same chain grown to 2.5 → s_raw = 0.23, k = max(0.8, 0.135/0.25 =
+ *     0.54) = 0.8 → the tip at −0.02 + 0.8 · 0.25 = 0.18 > D (what k cannot absorb is left there), and the chain
+ *     stays ENGAGED (w = 1) for the whole growth and 1 s after: a tip with s > D counts as inside the grown
+ *     release zone (ρ 0 ≤ R + h).
  * [7] PARITY with BASE (a0e50ae66, before this task): with no channel in any payload every output is BIT-IDENTICAL —
  *     over the [1] advance with `cap_u` on the way and a swinging variant (gain 1, gravity 1, Hips turning) against
  *     a moving partner capsule, with the reader's interaction passed (BASE ignores it) and partners with
@@ -351,7 +356,8 @@ console.log('--- [6] a growing extent while engaged ---')
     if (f < 13) continue
     if (channelOf(rd)?.w !== 1) wDrop = true
     const L = linksOf(rd), F = linksOf(free)
-    const sRaw = F[2].tip.z, sE = F.map(l => l.joint.z).find(s => s >= 0)
+    const sJ = F.map(l => l.joint.z)
+    const sRaw = F[2].tip.z, sE = sJ.find(s => s >= 0) ?? Math.max(...sJ)
     const k = sRaw > 0.115 ? Math.max(0.8, (0.115 - sE) / (sRaw - sE)) : 1
     const want = sE + k * (sRaw - sE)
     worst = Math.max(worst, Math.abs(L[2].tip.z - want))
@@ -366,17 +372,26 @@ console.log('--- [6] a growing extent while engaged ---')
   for (let f = 1; f <= 20; f++) { step(rd, [snap()], null); step(free, [snap()], null) }
   check('[6] after the release every bone equals the free reader (swing state untouched)', sameBones(rd, free))
 
-  // Past the bottom: one link, joint at s −0.02 (z0 −0.02 under Hips at 0).
-  const one = reader(NOW, { x: 0, links: 1, z0: -0.02 })
-  let dropped = false, tipEnd = NaN
-  for (let f = 1; f <= 240; f++) {
-    if (f === 20) one.motion.configure(group(one, { length: 1.6 }))
-    step(one, [snap()])
-    if (f >= 13 && channelOf(one)?.w !== 1) dropped = true
-    tipEnd = linksOf(one)[0].tip.z
+  // One link, joint at s −0.02 (z0 −0.02 under Hips at 0): s_e < 0, then past the bottom.
+  const grow = (length) => {
+    const one = reader(NOW, { x: 0, links: 1, z0: -0.02 })
+    let dropped = false, tipEnd = NaN, kEnd = NaN
+    for (let f = 1; f <= 240; f++) {
+      if (f === 20) one.motion.configure(group(one, { length }))
+      step(one, [snap()])
+      if (f >= 13 && channelOf(one)?.w !== 1) dropped = true
+      tipEnd = linksOf(one)[0].tip.z
+      kEnd = channelOf(one)?.k
+    }
+    return { dropped, tipEnd, kEnd }
   }
-  check('[6] one link past the bottom: the tip at s 0.14 (> D, k 1)', near(tipEnd, 0.14, 1e-6), String(tipEnd))
-  check('[6] one link past the bottom stays engaged (w 1) through the growth and 1 s after', !dropped)
+  const g16 = grow(1.6)
+  check('[6] one link, s_e −0.02 (its joint before the opening), length 1.6: k 0.84375, the tip at 0.115',
+    near(g16.tipEnd, 0.115, 1e-6) && near(g16.kEnd, 0.84375, 1e-5) && !g16.dropped, `${g16.tipEnd} k ${g16.kEnd}`)
+  const g25 = grow(2.5)
+  check('[6] one link past the bottom, length 2.5: k 0.8, the tip at s 0.18 (> D)', near(g25.tipEnd, 0.18, 1e-6) &&
+    near(g25.kEnd, 0.8, 1e-5), `${g25.tipEnd} k ${g25.kEnd}`)
+  check('[6] one link past the bottom stays engaged (w 1) through the growth and 1 s after', !g25.dropped)
 }
 
 console.log('--- [7] parity with BASE (no channels) ---')
