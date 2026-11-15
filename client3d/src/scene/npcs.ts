@@ -16,15 +16,14 @@ import { SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
 import { RIDE_ARRIVE_M, rideStep, type StairRide } from '../game/stairs';
 import type { PhotoSubject } from '../game/photoView';
 import { bodyYawForView, eyeHeight } from './cameraFraming';
-import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary, hairPartnerCapsules } from './figures';
+import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
 import { pickStrandFigures, STRAND_LIMITS } from '@anima/scene-render';
-import type { PartnerSnapshot } from '@anima/scene-render';
-import { planPartnerFrame, type FrameFigure } from './partnerFrame';
-import { strandCandidates, type StrandFigureView } from './strandBudget';
+import { OPENING_BUDGET, runFigureFrame, strandCandidates, type FrameEntry, type FrameLoopState,
+  type StrandFigureView } from '@anima/scene-render';
 import { WALK_CLEARANCE_M } from '../game/ground';
 import { GROUND_Y } from './ground';
 import { tagAnchorY, tagBadges, tagName, tagTravelling, tagVisible } from './nameTags';
-import type { PlaceEntry } from './placeSlot';
+import type { PlaceEntry } from '@anima/scene-render';
 import { settleOffset, type StandSettle } from './standSettle';
 import { seededRandom } from './textures';
 import { adoptTarget, advanceAlongPaces, stepShown, rateAt, pushErr, catchUpStep, clampProgress, deadReckonRate, deadReckonStep, densifyPolyline, pointAtDistance, remainingPoints, trimBucket, type ErrWindow, type MetrePoint } from './travelPath';
@@ -280,10 +279,6 @@ export interface PairPlay {
   stamp: number;
 }
 
-/** A figure that reads no partner this frame (phase B, `tickSecondary`). */
-const NO_PARTNERS: readonly PartnerSnapshot[] = [];
-/** A102b: opening recomputes (or first binds) per frame across all figures. */
-const OPENING_BUDGET = 1;
 
 /** Scratch for the goal `update()` writes (one figure at a time). */
 const _goal = new THREE.Vector3();
@@ -335,8 +330,8 @@ const PLAIN_FLOOR_MOVE: GroundMove = { movement: 'walk_run', scope: 'wilderness'
 const STRAND_SCRATCH = new THREE.Vector3();
 
 export class NpcManager {
-  /** A102b: the rotating start of the opening pass (`tickSecondary`). */
-  private openingTurn = 0;
+  /** A102b: the rotating start of the opening pass (`runFigureFrame`, from `tickSecondary`). */
+  private readonly frameState: FrameLoopState = { openingTurn: 0 };
   onPropEntryError: ((message: string) => void) | null = null;
   group = new THREE.Group();
   /** Photo mode holds only the avatar; all other figures keep their world tick. */
@@ -2299,7 +2294,7 @@ export class NpcManager {
     this.tickSecondary();
   }
 
-  /** PHASE B of the two-phase figure frame (`partnerFrame.ts`), once every
+  /** PHASE B of the two-phase figure frame (`runFigureFrame`, `@anima/scene-render`), once every
    *  figure has posed in the loop above (phase A, `Figure.update`):
    *   1. the plan — per reader the partners it reads this frame;
    *   2. every selected partner snapshot ONCE, before any solve, so the
@@ -2309,70 +2304,10 @@ export class NpcManager {
    *      pose (their own phase B included) and 5. handed to its hair push,
    *      which reads them at render time — no lag. */
   private tickSecondary() {
-    const frames: FrameFigure[] = [];
+    const entries: FrameEntry[] = [];
     for (const npc of this.npcs.values()) {
-      const frame = npc.figure?.frameFigure(npc.name, npc.interaction?.members ?? []);
-      if (frame) frames.push(frame);
+      entries.push({ name: npc.name, interaction: npc.interaction ?? null, figure: npc.figure });
     }
-    const plan = frames.length > 1 ? planPartnerFrame(frames) : new Map<string, string[]>();
-    const interactionOf = (npc: Npc) => npc.interaction ? { id: npc.interaction.id, kind: npc.interaction.kind } : null;
-    const snapshots = new Map<string, PartnerSnapshot | null>();
-    for (const names of plan.values()) {
-      for (const name of names) {
-        if (snapshots.has(name)) continue;
-        const npc = this.npcs.get(name);
-        snapshots.set(name, npc?.figure?.partnerSnapshot(interactionOf(npc), name) ?? null);
-      }
-    }
-    const partnersOf = (name: string): readonly PartnerSnapshot[] => {
-      const names = plan.get(name);
-      if (!names?.length) return NO_PARTNERS;
-      const out: PartnerSnapshot[] = [];
-      for (const partner of names) {
-        const snap = snapshots.get(partner);
-        if (snap) out.push(snap);
-      }
-      return out;
-    };
-    // Each reader passes its OWN interaction: a partner's channel engages only within the same one.
-    for (const npc of this.npcs.values()) npc.figure?.updateSecondary(partnersOf(npc.name), interactionOf(npc));
-    // THE OPENING (Ruling A102): every chain engaged in a partner's channel opens that partner's surface, on the
-    // final poses of this phase B.
-    const occupied = new Map<string, ReturnType<Figure['channelOccupants']>>();
-    for (const npc of this.npcs.values()) {
-      for (const occ of npc.figure?.channelOccupants() ?? []) {
-        const list = occupied.get(occ.partner) ?? [];
-        list.push(occ);
-        occupied.set(occ.partner, list);
-      }
-    }
-    // A102b: at most OPENING_BUDGET opening recomputes per frame (unchanged ones are skipped by the figure); the
-    // receivers are visited from a rotating start so a starved one gets the next frame's budget.
-    const receivers = [...this.npcs.values()];
-    const budget = { left: OPENING_BUDGET };
-    const start = receivers.length ? this.openingTurn++ % receivers.length : 0;
-    for (let k = 0; k < receivers.length; k++) {
-      const npc = receivers[(start + k) % receivers.length];
-      npc.figure?.applyChannelOpenings(occupied.get(npc.name) ?? [], budget);
-    }
-    // The GPU hair push: the same selection, the partners re-read after every phase B.
-    const fresh = new Map<string, PartnerSnapshot | null>();
-    for (const npc of this.npcs.values()) {
-      const figure = npc.figure;
-      if (!figure) continue;
-      const names = figure.hasHairPush ? plan.get(npc.name) : undefined;
-      if (!names?.length) { figure.setGpuPartners(null); continue; }
-      const partners: PartnerSnapshot[] = [];
-      for (const name of names) {
-        if (!snapshots.get(name)) continue;
-        if (!fresh.has(name)) {
-          const partner = this.npcs.get(name);
-          fresh.set(name, partner?.figure?.partnerSnapshot(interactionOf(partner), name) ?? null);
-        }
-        const snap = fresh.get(name);
-        if (snap) partners.push(snap);
-      }
-      figure.setGpuPartners(partners.length ? hairPartnerCapsules(partners) : null);
-    }
+    runFigureFrame(entries, this.frameState, OPENING_BUDGET);
   }
 }

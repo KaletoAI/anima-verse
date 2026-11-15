@@ -2,7 +2,7 @@
 /**
  * Smoke check for the client's half of PLACES (plan-posen-plaetze.md § 4,
  * numbers, no screenshots — § B5a): the one pure rule the 3D client applies
- * to a seat the SERVER handed it, `client3d/src/scene/placeSlot.ts`.
+ * to a seat the SERVER handed it, `packages/scene-render/src/placeSlot.ts`.
  *
  * Usage:  node client3d/scripts/smoke_places_client.mjs
  *         (self-bundles through esbuild like its siblings)
@@ -150,7 +150,7 @@ async function main() {
   }
 
   const THREE = await import('three')
-  const { slotFor } = await import('../src/scene/placeSlot.ts')
+  const { slotFor } = await import('../../packages/scene-render/src/placeSlot.ts')
 
   const FAILED = []
   function check(label, got, want) {

@@ -26,7 +26,7 @@
 import * as THREE from 'three';
 import type { PlaceOffer } from '../types';
 import type { PlacePick } from '../game/placement';
-import type { PlaceEntry } from './placeSlot';
+import type { PlaceEntry } from '@anima/scene-render';
 
 /** Ring colour per place group — the place types the catalog knows
  *  (plan-platztypen.md: a place type is a BODY SHAPE, not a kind of

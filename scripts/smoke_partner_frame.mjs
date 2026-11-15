@@ -2,7 +2,7 @@
 /**
  * The 3D client's TWO-PHASE FIGURE FRAME (cross-person collision plan Task 7; spec
  * docs/superpowers/specs/2026-11-13-cross-person-collision-design.md Part 1, "Update order and lag"):
- * `client3d/src/scene/partnerFrame.ts` `planPartnerFrame` and `Figure.update` (phase A) /
+ * `packages/scene-render/src/partnerFrame.ts` `planPartnerFrame` and `Figure.update` (phase A) /
  * `updateSecondary` / `frameFigure` / `partnerSnapshot` in `client3d/src/scene/figures.ts`. Hand-derived.
  *
  * Usage: node scripts/smoke_partner_frame.mjs   (no server, no world; bundles the client with esbuild, and the
@@ -73,20 +73,28 @@ const BASE = 'fe755a740'
 async function bundle(dir, srcRoot, entry, spy, name) {
   const esbuild = await import(join(ROOT, 'node_modules/esbuild/lib/main.js'))
   const sceneRender = join(srcRoot, 'packages/scene-render/src/index.ts')
-  // The spy: the client's own `@anima/scene-render` imports go through a module that counts `bindCollision`
-  // (the package's internal binds — secondary motion, garment push — import './collision' and are not counted).
+  // The spy: the partner binding's own `bindCollision` — since Ruling A110 the per-figure runtime
+  // (`figureRuntime.ts`) binds the partner capsules, so ITS './collision' import goes through a module that counts
+  // (the package's other internal binds — secondary motion, garment push — import './collision' directly and are
+  // not counted). `spyCounts` rides on the client's `@anima/scene-render` import.
+  const collision = join(srcRoot, 'packages/scene-render/src/collision.ts')
   const plugins = spy ? [{
     name: 'spy',
     setup(build) {
       build.onResolve({ filter: /^@anima\/scene-render$/ }, () => ({ path: 'spy', namespace: 'spy' }))
-      build.onLoad({ filter: /.*/, namespace: 'spy' }, () => ({
+      build.onResolve({ filter: /^spy-counts$/ }, () => ({ path: 'counts', namespace: 'spy' }))
+      build.onResolve({ filter: /^\.\/collision$/ }, args => args.importer.endsWith('figureRuntime.ts')
+        ? { path: 'collision', namespace: 'spy' } : undefined)
+      build.onLoad({ filter: /.*/, namespace: 'spy' }, args => ({
         resolveDir: ROOT, loader: 'ts',
-        contents: [
-          `export * from '${sceneRender}';`,
-          `import { bindCollision as realBind } from '${sceneRender}';`,
-          'export const spyCounts = { bind: 0 };',
-          'export function bindCollision(...args) { spyCounts.bind++; return realBind(...args); }',
-        ].join('\n'),
+        contents: args.path === 'counts' ? 'export const spyCounts = { bind: 0 };'
+          : args.path === 'collision' ? [
+            `export * from '${collision}';`,
+            `import { bindCollision as realBind } from '${collision}';`,
+            "import { spyCounts } from 'spy-counts';",
+            'export function bindCollision(...args) { spyCounts.bind++; return realBind(...args); }',
+          ].join('\n')
+          : [`export * from '${sceneRender}';`, "export { spyCounts } from 'spy-counts';"].join('\n'),
       }))
     },
   }] : []
@@ -105,7 +113,7 @@ async function loadClients() {
   try {
     const src = join(ROOT, 'client3d/src')
     const client = await bundle(dir, ROOT, [
-      `export { planPartnerFrame } from '${src}/scene/partnerFrame';`,
+      `export { planPartnerFrame } from '@anima/scene-render';`,
       `export { Figure, FigureLibrary } from '${src}/scene/figures';`,
       `export { COLLISION_VERSION, spyCounts } from '@anima/scene-render';`,
     ].join('\n'), true, 'client')
@@ -309,7 +317,7 @@ function phaseB(figs, order, lazy = false) {
       p.update(1 / 60, { realDelta: 1 / 60 })
       q.update(1 / 60, { realDelta: 1 / 60 })
       plan = phaseB(figs, order, lazy)
-      for (const f of [p, q]) if (f.secondary.contactTips().some(row => row.partner.length)) pushed = true
+      for (const f of [p, q]) if (f.runtime.secondary.contactTips().some(row => row.partner.length)) pushed = true
     }
     const out = { plan, pushed, p: matrices(p), q: matrices(q) }
     p.dispose(); q.dispose()
@@ -340,8 +348,8 @@ function phaseB(figs, order, lazy = false) {
   for (const f of figs.values()) {
     const snap = f.partnerSnapshot.bind(f)
     f.partnerSnapshot = (...args) => { snapshots++; return snap(...args) }
-    const real = f.secondary.update.bind(f.secondary)
-    f.secondary.update = (dt, options) => { solved++; real(dt, options) }
+    const real = f.runtime.secondary.update.bind(f.runtime.secondary)
+    f.runtime.secondary.update = (dt, options) => { solved++; real(dt, options) }
   }
   let plan = null
   for (let k = 0; k < 5; k++) {
@@ -365,21 +373,21 @@ function phaseB(figs, order, lazy = false) {
   const a = seeded(() => lib.instantiate('P'))
   const snapA = a.partnerSnapshot(null, 'P')
   check('[5] figure A snapshots, bound once on its instance', !!snapA && spyCounts.bind === binds + 1
-    && a.partnerBoundOn === a.root.children[0], String(spyCounts.bind - binds))
+    && a.runtime.partnerBoundOn === a.root.children[0], String(spyCounts.bind - binds))
   lib.retireModels('P')
   let threw = null, afterRetire, frameRetired
   try { afterRetire = a.partnerSnapshot(null, 'P'); frameRetired = a.frameFigure('P') } catch (e) { threw = e }
   check('[5] after retireModels: A\'s snapshot and frame are null, its binding dropped',
-    !threw && afterRetire === null && frameRetired === null && a.partnerBinding === null, String(threw ?? ''))
+    !threw && afterRetire === null && frameRetired === null && a.runtime.partnerBinding === null, String(threw ?? ''))
   lib.apiModels.set('P', model({ name: 'Two' }))
   const b = seeded(() => lib.instantiate('P'))
   b.root.position.set(5, 0, 0)
   b.update(1 / 60, { realDelta: 1 / 60 })
   const snapB = b.partnerSnapshot(null, 'P')
   const descends = (o, root) => { for (let n = o; n; n = n.parent) if (n === root) return true; return false }
-  const meshes = (b.partnerBinding?.capsules ?? []).flatMap(c => [c.ja.mesh, c.jb.mesh])
+  const meshes = (b.runtime.partnerBinding?.capsules ?? []).flatMap(c => [c.ja.mesh, c.jb.mesh])
   check('[5] the next snapshot binds on the new instance (spy +2)', !!snapB && spyCounts.bind === binds + 2
-    && b.partnerBoundOn === b.root.children[0], String(spyCounts.bind - binds))
+    && b.runtime.partnerBoundOn === b.root.children[0], String(spyCounts.bind - binds))
   check('[5] every bound capsule\'s meshes descend from the live root, none from the retired one',
     meshes.length === 8 && meshes.every(m => descends(m, b.root) && !descends(m, a.root)), String(meshes.length))
   check('[5] the capsule ends follow the live figure (x within 5 ± 0.3)',
@@ -388,7 +396,7 @@ function phaseB(figs, order, lazy = false) {
   a.dispose()
   lib.freeRetired('P')
   b.dispose()
-  check('[5] dispose drops the partner binding', b.partnerBinding === null)
+  check('[5] dispose drops the partner binding', b.runtime.partnerBinding === null)
 
   const v5 = seeded(() => new Figure(model({ version: 5 })))
   const reader = seeded(() => new Figure(model()))
@@ -412,8 +420,8 @@ function phaseB(figs, order, lazy = false) {
 {
   const fig = seeded(() => new Figure(model()))
   const calls = []
-  const real = fig.secondary.update.bind(fig.secondary)
-  fig.secondary.update = (dt, options) => { calls.push({ dt, ...options }); real(dt, options) }
+  const real = fig.runtime.secondary.update.bind(fig.runtime.secondary)
+  fig.runtime.secondary.update = (dt, options) => { calls.push({ dt, ...options }); real(dt, options) }
   const partners = [{ name: 'X', capsules: [], channels: [], interaction: null }]
   fig.update(1 / 60, { frozen: true, realDelta: 1 / 60 })
   fig.updateSecondary(partners)
@@ -456,8 +464,8 @@ function phaseB(figs, order, lazy = false) {
   check('[7] without a channel record: channels []', Array.isArray(plain.partnerSnapshot(null, 'Q')?.channels)
     && plain.partnerSnapshot(null, 'Q').channels.length === 0)
   const calls = []
-  const real = plain.secondary.update.bind(plain.secondary)
-  plain.secondary.update = (dt, options) => { calls.push(options); real(dt, options) }
+  const real = plain.runtime.secondary.update.bind(plain.runtime.secondary)
+  plain.runtime.secondary.update = (dt, options) => { calls.push(options); real(dt, options) }
   plain.update(1 / 60, { realDelta: 1 / 60 })
   plain.updateSecondary([s1], { id: 'i1' })
   plain.update(1 / 60, { realDelta: 1 / 60 })

@@ -83,7 +83,7 @@ export async function modelFunctions() {
       export { surfaceFinish } from './packages/scene-render/src/materials';
       export * from './client3d/src/scene/materialLooks';
       export { markerLiftPoint } from './client3d/src/game/placement';
-      export { slotFor } from './client3d/src/scene/placeSlot';
+      export { slotFor } from './packages/scene-render/src/placeSlot';
       export { glyphRows, glyphParameters } from './client3d/src/scene/placeGlyphs';
       export { Vector3 } from 'three';
     `, resolveDir: ROOT, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', write: false });

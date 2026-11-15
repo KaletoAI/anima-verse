@@ -20,8 +20,9 @@
  * current frame); the sphere test of `selectPartners` then decides. A figure
  * that is not a reader gets no entry; a reader without a candidate gets `[]`.
  */
-import { PARTNER_MAX, PARTNER_PREFILTER_SLACK_M, selectPartners } from '@anima/scene-render';
-import type { Sphere, Vec3 } from '@anima/scene-render';
+import { PARTNER_MAX, PARTNER_PREFILTER_SLACK_M, selectPartners } from './partnerContact';
+import type { Sphere } from './partnerContact';
+import type { Vec3 } from './footLock';
 
 /** One figure as the frame plan sees it (`Figure.frameFigure`). */
 export interface FrameFigure {

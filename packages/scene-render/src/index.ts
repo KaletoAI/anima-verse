@@ -237,3 +237,16 @@ export type { Quat } from './twoBoneIk'
 
 export { PLANT_FADE_S, PLANT_FALLBACK_FPS, plantSampleTimes, fadeRuns, levelTurn, plantFootPose } from './footPlant'
 export type { FootPlantOptions } from './footPlant'
+
+// The per-figure runtime of the two-phase frame (Ruling A110): client3d's `Figure` wraps it, the Game-Admin
+// place preview drives it directly — one frame order, one secondary motion, one partner pass.
+export { FigureRuntime, createFigureRuntime } from './figureRuntime'
+export type { FigureRuntimeOptions, ChannelOccupants } from './figureRuntime'
+export { planPartnerFrame } from './partnerFrame'
+export type { FrameFigure } from './partnerFrame'
+export { runFigureFrame, OPENING_BUDGET } from './frameLoop'
+export type { FramePhaseB, FrameEntry, FrameLoopState } from './frameLoop'
+export { strandCandidates } from './strandBudget'
+export type { StrandFigureView } from './strandBudget'
+export { slotFor } from './placeSlot'
+export type { PlaceEntry } from './placeSlot'

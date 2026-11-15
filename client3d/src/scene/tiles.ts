@@ -16,7 +16,7 @@ import { pointInPolygon, polygonBounds, sanitizePolygon } from '../game/polygon'
 import { roomRectOf } from '../game/roomAt';
 import { roomSpotsOf, type SpotBox, type SpotPoint } from '../game/roomSpots';
 import type { SubmergedGhost } from './submergedGhost';
-import type { PlaceEntry } from './placeSlot';
+import type { PlaceEntry } from '@anima/scene-render';
 import { storeyPieceOpacity } from './storeyDisplay';
 
 // --- The FOOTPRINT of a location (contract v6 "Gebiete", § A1.1) -------------

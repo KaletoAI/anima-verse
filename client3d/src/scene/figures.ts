@@ -16,17 +16,14 @@ import {
 import { clipGroundOffset, measureGroundOffsets } from './clipGround';
 import {
   findLegChains as findLegChainsData, advanceProceduralPhase, proceduralGaitAmplitudes, proceduralIdleAmplitudes,
-  createSecondaryMotion, bindRelativeValues, hipsTrackMedian, mapHipsTrack, normBoneName, restCorrections, restPoseOf,
-  rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM, clipShiftM, figureBox, createGarmentCollision,
+  bindRelativeValues, hipsTrackMedian, mapHipsTrack, normBoneName, restCorrections, restPoseOf,
+  rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM, clipShiftM, figureBox,
   applyFootPose, footPoseLiftM, footPoseMatches, plantFootPose, transplantedRestPose, seatFootLift,
-  createStrandHair, withoutHairGroups, STRAND_LIMITS, STRAND_RECORD_VERSION,
-  bindCollision, bodySphere, reachSphere, consumerPartnerCapsules, snapshotPartner, COLLISION_VERSION,
-  bindChannels, bindChannelOpening,
+  STRAND_RECORD_VERSION, consumerPartnerCapsules, createFigureRuntime,
 } from '@anima/scene-render';
-import type { SecondaryMotion, RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, CollisionPayload,
-  GarmentCollision, FootPose, HairStrandRecord, StrandHair, CollisionBinding, CapsuleNow, PartnerSnapshot,
-  Sphere, ChannelOpeningBinding, OpeningSegment } from '@anima/scene-render';
-import type { FrameFigure } from './partnerFrame';
+import type { RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, CollisionPayload,
+  FootPose, HairStrandRecord, StrandHair, CapsuleNow, PartnerSnapshot, OpeningSegment,
+  ChannelOccupants, FigureRuntime, FrameFigure } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import { applyFigureTexture, zeroFigureMetalness } from './figureMaterials';
 import type { ApiModel } from '../api';
@@ -1980,77 +1977,35 @@ function findLegChains(inst: THREE.Object3D, box: THREE.Box3): LegChain[] {
 export class Figure {
   private motionState?: { payload: MotionPayload | undefined };
   get motion(): MotionPayload | undefined { return this.motionState?.payload; }
-  private secondary: SecondaryMotion;
-  private garmentCollision: GarmentCollision | null = null;
-  private secondaryRev?: string;
-  private secondaryTime = performance.now();
-  private secondaryPosition = new THREE.Vector3();
-  private readonly secondaryNextPosition = new THREE.Vector3();
-  private secondaryPlaced = false;
-  private secondaryFar: boolean;
   /** The tier the figure's model was loaded at. */
   readonly tier: FigureTier;
 
-  /** PER-STRAND HAIR (strand-hair spec § 6.2.2). The library hands the
-   *  figure its strand record through `loadStrandRecord` (a full-tier model
-   *  with `hairStrands` only); `prepareStrandHair` binds it to the hair mesh
-   *  once it has loaded (`createStrandHair`, nothing on the mesh changes yet),
-   *  and `NpcManager.tickStrandHair` switches it on for the figures the budget
-   *  admits (`setStrandHair`). While it runs, the hair chains are not solved
-   *  (`withoutHairGroups`), the hair mesh is out of the GPU garment push
-   *  (`excludeMesh`) and the sim steps after the mixer, before the secondary
-   *  motion. A record the mesh does not carry the binding of (Review Focus 2)
-   *  leaves the hair on its chains, with one console warning. */
-  loadStrandRecord?: () => HairStrandRecord | null | undefined;
-  private strand: StrandHair | null = null;
-  private strandRefused = false;
-  private strandOn = false;
+  /** THE PER-FIGURE RUNTIME (`@anima/scene-render` `FigureRuntime`, Ruling A110): the secondary motion, the GPU
+   *  garment push, the per-strand hair, the partner binding (capsules + channels) and the channel openings — the
+   *  part of the frame the Game-Admin preview runs identically. This class WRAPS it with the game's own phase A
+   *  (mixer, placement, height, foot pose, bridges, travel, lift) and first person.
+   *
+   *  THE TWO-PHASE FRAME (cross-person collision spec Part 1, `partnerFrame.ts`): `update` is phase A — the pose —
+   *  and ends in `runtime.poseStep`, which records what phase B needs; `updateSecondary` (phase B) steps the strand
+   *  hair and the secondary motion with the partners' snapshots, then shrinks the head for first person. Phase B of
+   *  every figure runs after phase A of every figure (`runFigureFrame`, from `NpcManager.tickSecondary`), so a
+   *  partner is read on its FINAL pose. Secondary motion must never move back into `update`.
+   *
+   *  PER-STRAND HAIR (strand-hair spec § 6.2.2): the library hands the strand record through `loadStrandRecord`
+   *  (a full-tier model with `hairStrands` only); `prepareStrandHair` binds it, `NpcManager.tickStrandHair`
+   *  switches it on for the figures the budget admits (`setStrandHair`). */
+  private readonly runtime: FigureRuntime;
 
-  /** THE TWO-PHASE FRAME (cross-person collision spec Part 1, `partnerFrame.ts`).
-   *  `update` is phase A — the pose: mixer, placement, height, foot pose,
-   *  bridge (and the secondary motion's configuration, which solves nothing)
-   *  — and records here what phase B needs; `updateSecondary` (phase B)
-   *  steps the strand hair and the secondary motion with the partners'
-   *  snapshots, then shrinks the head for first person. Phase B of every
-   *  figure runs after phase A of every figure (`NpcManager.tickSecondary`),
-   *  so a partner is read on its FINAL pose and the order the figures are
-   *  visited in does not matter. Secondary motion must never move back into
-   *  `update`. Null = nothing posed since the last phase B. Several phase A
-   *  calls before one phase B add their real time up. */
-  private pendingSecondary: { realDelta: number; frozen: boolean; far: boolean } | null = null;
-  /** The model this figure was built from (its `retired` flag) and the body's
-   *  collision payload. */
-  private readonly model: LoadedModel;
-  private readonly collisionPayload: CollisionPayload | null;
-  /** THE PARTNER BINDING: this figure's capsules as OTHER figures read them,
-   *  and its own body sphere for the frame plan. Bound lazily the first time
-   *  the figure is planned or selected, on the instance it then shows
-   *  (`partnerBoundOn`); dropped with the model it was bound on (`retired`,
-   *  `dispose`). It holds no GPU resource. `partnerRefused`: the payload
-   *  `bindCollision` refuses (another version, no capsules) — never retried. */
-  private partnerBinding: CollisionBinding | null = null;
-  private partnerBoundOn: THREE.Object3D | null = null;
-  private partnerRefused = false;
-  /** The figure's declared channels as OTHER figures enter them (`bindChannels`, collision v7), bound with the
-   *  partner binding on the same instance; null without any (today's worlds). */
-  private partnerChannels: ReturnType<typeof bindChannels> = null;
-  /** Ruling A102: this figure's surface opened around what occupies its channels (`bindChannelOpening`), per
-   *  channel id, bound on `openingsOn` (the instance shown); each owns a clone of the geometry it touches. */
-  private openings = new Map<string, ChannelOpeningBinding | null>();
-  private openingsOn: THREE.Object3D | null = null;
-  /** A sphere about the root that holds the body in its bind pose (the
-   *  plan's root prefilter): the half-diagonal of the figure's box over its
-   *  feet, at least the figure's height. */
-  private readonly bindRadius: number;
-  /** Partner capsules are handed to the strand sim / the GPU hair push right now. */
-  private strandPartners = false;
-  private gpuPartners = false;
+  get loadStrandRecord(): (() => HairStrandRecord | null | undefined) | undefined {
+    return this.runtime.loadStrandRecord;
+  }
+  set loadStrandRecord(load: (() => HairStrandRecord | null | undefined) | undefined) {
+    this.runtime.loadStrandRecord = load;
+  }
 
   /** Explicit placement/LOD reset; a replacement Figure starts with fresh state. */
   resetSecondaryMotion() {
-    this.secondary.reset();
-    this.secondaryPlaced = false;
-    this.secondaryTime = performance.now();
+    this.runtime.reset();
   }
   root = new THREE.Group();
   height: number;
@@ -2286,10 +2241,10 @@ export class Figure {
     this.travelBase = { x: inst.position.x, z: inst.position.z };
     this.root.add(inst);
     this.root.updateMatrixWorld(true);
-    this.model = model;
-    this.collisionPayload = model.collision ?? null;
     const size = box.isEmpty() ? null : box.getSize(new THREE.Vector3());
-    this.bindRadius = Math.max(this.height, size ? Math.hypot(size.x / 2, size.y, size.z / 2) : 0);
+    // A sphere about the root that holds the body in its bind pose (the frame plan's root prefilter): the
+    // half-diagonal of the figure's box over its feet, at least the figure's height.
+    const bindRadius = Math.max(this.height, size ? Math.hypot(size.x / 2, size.y, size.z / 2) : 0);
     const rigBones: Record<string, THREE.Bone> = {};
     inst.traverse((o) => {
       const key = (o as THREE.Bone).isBone ? normBoneName(o.name) : '';
@@ -2305,17 +2260,12 @@ export class Figure {
       const q = head.getWorldQuaternion(new THREE.Quaternion()).invert();
       this.eyeLocal.set(eye[0] - h.x, eye[1] - h.y, eye[2] - h.z).applyQuaternion(q);
     }
-    this.secondary = createSecondaryMotion(THREE, this.root, this.motion, model.template);
-    // Extension-bone tips kept outside the same capsules (CPU, a few tips) —
-    // the SAME routine the Game-Admin viewer runs; inert without a driven link.
-    this.secondary.setCollision(model.collision);
-    this.secondaryRev = this.motion?.rev;
-    // Garments pushed out of the body's capsules on the GPU — the SAME
-    // routine the Game-Admin viewer runs. Null (inert) without a garment or
-    // capsules. The patched materials are clones owned by THIS figure (the
-    // template's stay shared and untouched); `dispose` frees them.
-    this.garmentCollision = createGarmentCollision(THREE, inst, model.collision);
-    this.secondaryFar = model.tier === 'low';
+    // The shared runtime (Ruling A110): secondary motion with the extension-tip collision, the GPU garment push
+    // (per-figure material clones, freed in `dispose`), strands and the partner binding.
+    this.runtime = createFigureRuntime(THREE, {
+      root: this.root, template: model.template, motion: () => this.motion, collision: model.collision,
+      tier: model.tier, bindRadius, retired: () => !!model.retired,
+    });
     this.tier = model.tier;
 
     this.mixer = new THREE.AnimationMixer(inst);
@@ -2867,21 +2817,9 @@ export class Figure {
    *  skeleton's bone texture are per figure, and those go here. */
   dispose() {
     this.disposed = true;
-    this.dropOpenings();
     this.prepareClips = undefined;
-    this.pendingSecondary = null;
-    // The partner binding belongs to the model it was bound on (no GPU resource).
-    this.partnerBinding = null;
-    this.partnerBoundOn = null;
-    this.partnerChannels = null;
-    this.secondary.dispose();
-    // The strand handle first: it puts the template's geometry back and frees
-    // the clone it made; the garment collision then restores the materials.
-    this.strand?.dispose();
-    this.strand = null;
-    this.strandOn = false;
-    this.garmentCollision?.dispose();
-    this.garmentCollision = null;
+    // The runtime's own: openings, partner binding, motion, the strand clone, the garment material clones.
+    this.runtime.dispose();
     this.ghost.dispose();
     // The mixer's bindings hold the clone bone by bone; without this they keep
     // it — and through it the template — alive for as long as anything still
@@ -3207,60 +3145,19 @@ export class Figure {
     if (this.heightGroup === 'seat' && this.footPose && this.floorY !== null) {
       seatFootLift(THREE, this.root, this.footPose, this.floorY);
     }
-    // Final anchors now include mixer pose, bridge travel, turn and lift.
-    // The engine clamps its animation delta; secondary motion uses real time.
-    const now = performance.now();
-    const realDelta = options.realDelta ?? (now - this.secondaryTime) / 1000;
-    this.secondaryTime = now;
-    // A figure whose hair runs per strand solves no hair chain.
-    const motion = this.strandOn ? withoutHairGroups(this.motion) : this.motion;
-    if (this.secondaryRev !== motion?.rev) {
-      this.secondary.configure(motion);
-      this.secondaryRev = motion?.rev;
-    }
-    const position = this.root.getWorldPosition(this.secondaryNextPosition);
-    // Safety net for owners that replace placement directly: >2 m is a jump.
-    if (this.secondaryPlaced && position.distanceTo(this.secondaryPosition) > 2) this.secondary.reset();
-    this.secondaryPosition.copy(position);
-    this.secondaryPlaced = true;
-    // Phase B's share (`pendingSecondary`): the strands and the secondary
-    // motion step in `updateSecondary`, once every figure has posed.
-    const pending = this.pendingSecondary;
-    this.pendingSecondary = {
-      realDelta: (pending?.realDelta ?? 0) + realDelta,
-      frozen: !!options.frozen,
-      far: options.far ?? this.secondaryFar,
-    };
+    // Final anchors now include mixer pose, bridge travel, turn and lift. The engine clamps its animation
+    // delta; secondary motion uses real time. Phase B's share is recorded by the runtime: the strands and the
+    // secondary motion step in `updateSecondary`, once every figure has posed.
+    this.runtime.poseStep(options);
   }
 
-  /** PHASE B of the two-phase frame (`pendingSecondary`): the strand hair and
-   *  the secondary motion on this frame's final pose, against `partners` —
-   *  the other figures' capsules (and declared channels) as snapshot before
-   *  any phase B ran (`NpcManager.tickSecondary`); `[]` when the figure reads
-   *  none. `interaction`: the running pair interaction this figure is in —
-   *  a partner's channel engages only within the same one (null = none). A
-   *  no-op without a pending phase A. Frozen (the photo hold included) still
-   *  runs it, frozen. */
+  /** PHASE B of the two-phase frame: the runtime's strand hair and secondary motion on this frame's final pose,
+   *  against `partners` — the other figures' capsules (and declared channels) as snapshot before any phase B ran
+   *  (`runFigureFrame`); `[]` when the figure reads none. `interaction`: the running pair interaction this figure
+   *  is in — a partner's channel engages only within the same one (null = none). A no-op without a pending phase
+   *  A. Then the head shrinks for first person. */
   updateSecondary(partners: readonly PartnerSnapshot[], interaction: { id: string } | null = null): void {
-    const pending = this.pendingSecondary;
-    if (!pending) return;
-    this.pendingSecondary = null;
-    if (this.disposed) return;
-    // The strands step on this frame's final pose (the sim reads the bones'
-    // world matrices); it resets itself on a long frame or a head jump. Their
-    // partners: every region of the partner set (the hair consumer).
-    if (this.strandOn && this.strand) {
-      if (partners.length) {
-        this.strand.setPartners(hairPartnerCapsules(partners));
-        this.strandPartners = true;
-      } else if (this.strandPartners) {
-        this.strand.setPartners(null);
-        this.strandPartners = false;
-      }
-      this.root.updateMatrixWorld(true);
-      this.strand.update(pending.realDelta, { frozen: pending.frozen });
-    }
-    this.secondary.update(pending.realDelta, { frozen: pending.frozen, far: pending.far, partners, interaction });
+    if (!this.runtime.updateSecondary(partners, interaction)) return;
     if (this.firstPerson && this.head) {
       this.head.scale.copy(this.headScale).multiplyScalar(1e-3);
       this.headShrunk = true;
@@ -3268,181 +3165,36 @@ export class Figure {
   }
 
   /** What occupies the PARTNERS' channels from this figure's chains, as last rendered (Ruling A102). */
-  channelOccupants(): ReturnType<SecondaryMotion['channelOccupants']> {
-    return this.disposed ? [] : this.secondary.channelOccupants();
+  channelOccupants(): ChannelOccupants {
+    return this.runtime.channelOccupants();
   }
 
-  /** Every opening back to the model as loaded, and their clones freed. */
-  private dropOpenings(): void {
-    for (const binding of this.openings.values()) binding?.dispose();
-    this.openings.clear();
-    this.openingsOn = null;
-  }
-
-  /** THE OPENING (Ruling A102), after every figure's phase B: the other figures' chains engaged in THIS figure's
-   *  channels (`occupants`, world segments with w) open its surface — each segment's radius × w, so the opening
-   *  ramps with the engagement. A channel without occupant is restored; none at all costs nothing.
-   *  A102b: an occupied opening is recomputed only when its segments, the channel or a bone its region is skinned to
-   *  moved beyond `OPENING_SKIP_M` / `OPENING_SKIP_DEG` since its last apply (`changed`), and only while the frame's
-   *  `budget` lasts (each recompute or first bind takes one); otherwise it keeps its last result. */
+  /** THE OPENING (Ruling A102/A102b) — `FigureRuntime.applyChannelOpenings`. */
   applyChannelOpenings(occupants: readonly { channel: string; w: number; segments: readonly OpeningSegment[] }[],
     budget: { left: number } = { left: Infinity }): void {
-    if (!occupants.length && !this.openings.size) return;
-    const inst = this.root.children[0] ?? null;
-    const channels = this.partnerChannels;
-    if (this.disposed || this.model.retired || !channels || !inst || (this.openingsOn && this.openingsOn !== inst)) {
-      this.dropOpenings();
-      if (this.disposed || this.model.retired || !channels || !inst) return;
-    }
-    this.openingsOn = inst;
-    channels.update();
-    for (const ch of channels.channels) {
-      const segments: OpeningSegment[] = [];
-      for (const occ of occupants) {
-        if (occ.channel !== ch.id) continue;
-        for (const seg of occ.segments) segments.push({ a: seg.a, b: seg.b, r: seg.r * occ.w });
-      }
-      let binding = this.openings.get(ch.id);
-      if (!segments.length) { binding?.restore(); continue; }
-      if (binding === undefined) {
-        if (!(budget.left > 0)) continue;
-        budget.left--;
-        binding = bindChannelOpening(THREE, inst, ch);
-        this.openings.set(ch.id, binding);
-      }
-      if (!binding || !binding.changed(ch, segments) || !(budget.left > 0)) continue;
-      budget.left--;
-      binding.apply(ch, segments);
-    }
+    this.runtime.applyChannelOpenings(occupants, budget);
   }
 
-  /** The partner binding on the instance shown now (`partnerBinding`), its
-   *  capsules recomputed from the current bones. Null for a retired model, a
-   *  disposed figure and a payload `bindCollision` refuses. */
-  private boundPartner(update = true): CollisionBinding | null {
-    if (this.disposed || this.model.retired) {
-      this.partnerBinding = null;
-      this.partnerBoundOn = null;
-      this.partnerChannels = null;
-      return null;
-    }
-    if (this.partnerRefused || !this.collisionPayload) return null;
-    const inst = this.root.children[0] ?? null;
-    if (!inst) return null;
-    if (this.partnerBoundOn !== inst) {
-      this.partnerBinding = bindCollision(THREE, inst, this.collisionPayload);
-      this.partnerBoundOn = this.partnerBinding ? inst : null;
-      this.partnerChannels = this.partnerBinding ? bindChannels(THREE, inst, this.collisionPayload) : null;
-      if (!this.partnerBinding) {
-        this.partnerRefused = true;
-        return null;
-      }
-    }
-    // The bones are read in the world: the placement of the frame (owner,
-    // root, instance) first.
-    this.root.updateWorldMatrix(true, false);
-    this.root.updateMatrixWorld(true);
-    if (update) this.partnerBinding!.update();
-    return this.partnerBinding;
-  }
-
-  /** This figure for the frame plan (`planPartnerFrame`), null without a
-   *  collision payload this client can bind (another version, no capsules)
-   *  and for a retired model. `body()` / `reach()` bind lazily and are asked
-   *  only for a pair that passed the root prefilter; each answers once per
-   *  call of this method. `name` / `members` are the owner's (the figure
-   *  knows neither). */
+  /** This figure for the frame plan (`planPartnerFrame`) — `FigureRuntime.frameFigure`; `name` / `members` are
+   *  the owner's (the figure knows neither). */
   frameFigure(name = '', members: readonly string[] = []): FrameFigure | null {
-    const payload = this.collisionPayload;
-    if (this.disposed || this.model.retired || this.partnerRefused || !payload
-      || payload.version !== COLLISION_VERSION || !payload.capsules?.length) return null;
-    const at = this.root.getWorldPosition(FRAME_SCRATCH);
-    const lever = this.secondary.reach();
-    const reader = !!this.pendingSecondary && !this.pendingSecondary.far
-      && (lever > 0 || this.strandOn || this.hasHairPush);
-    let body: Sphere | null | undefined;
-    const bodyNow = () => {
-      if (body === undefined) {
-        const binding = this.boundPartner();
-        body = binding ? bodySphere(binding.capsules.map(entry => entry.now)) : null;
-      }
-      return body;
-    };
-    return {
-      name, members, reader, lever,
-      root: [at.x, at.y, at.z],
-      bindRadius: this.bindRadius,
-      body: bodyNow,
-      reach: () => {
-        const b = bodyNow();
-        return b ? reachSphere(b, lever, this.hairSpheres()) : null;
-      },
-    };
+    return this.runtime.frameFigure(name, members);
   }
 
-  /** The hair this figure's reach covers beyond its chains: the GPU-pushed
-   *  hair meshes' world spheres as last rendered, and the per-strand hair's
-   *  rows as last stepped. */
-  private hairSpheres(): Sphere[] {
-    const spheres: Sphere[] = [];
-    for (const entry of this.garmentCollision?.entries ?? []) {
-      if (entry.sphere && !this.strandRuns(entry.mesh)) spheres.push(entry.sphere);
-    }
-    if (this.strandOn && this.strand) {
-      const rows = this.strand.targets;
-      const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
-      for (let i = 0; i + 2 < rows.length; i += 3) {
-        for (let d = 0; d < 3; d++) {
-          lo[d] = Math.min(lo[d], rows[i + d]);
-          hi[d] = Math.max(hi[d], rows[i + d]);
-        }
-      }
-      if (lo[0] <= hi[0]) {
-        const c: [number, number, number] = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
-        spheres.push({ c, r: Math.hypot(hi[0] - c[0], hi[1] - c[1], hi[2] - c[2]) });
-      }
-    }
-    return spheres;
-  }
-
-  /** This figure's capsules and declared channels as a partner reads them in
-   *  phase B (`snapshotPartner` — the binding updated once on the current
-   *  pose; `bindChannels` on the same instance, `[]` without channels):
-   *  binds lazily on the instance shown now. Null for a payload
-   *  `bindCollision` refuses, a retired model or a disposed figure — the
-   *  reader then skips it. `name` is the owner's (it keys the reader's
-   *  partner hysteresis and its channel engagements); `interaction` the
-   *  owner's running pair interaction (`PairPlay` id and kind). */
+  /** This figure's capsules and declared channels as a partner reads them in phase B
+   *  (`FigureRuntime.partnerSnapshot`). */
   partnerSnapshot(interaction: { id: string; kind: string } | null, name = ''): PartnerSnapshot | null {
-    const binding = this.boundPartner(false);
-    if (!binding) return null;
-    const snap = snapshotPartner(name, binding, interaction);
-    const channels = this.partnerChannels;
-    if (!channels) return snap;
-    channels.update();
-    // A copy: the next update puts fresh objects into the binding's slots, this frame's snapshot keeps its own.
-    return { ...snap, channels: [...channels.channels] };
+    return this.runtime.partnerSnapshot(interaction, name);
   }
 
-  /** `mesh` is the hair mesh the per-strand hair runs now (out of the GPU push). */
-  private strandRuns(mesh: THREE.Object3D): boolean {
-    return this.strandOn && !!this.strand && this.strand.mesh === mesh;
-  }
-
-  /** The figure's hair meshes are pushed on the GPU (a hair entry of the
-   *  garment push the per-strand hair has not taken over). */
+  /** The figure's hair meshes are pushed on the GPU (a hair entry the per-strand hair has not taken over). */
   get hasHairPush(): boolean {
-    return !!this.garmentCollision?.entries.some(entry => entry.kind === 'hair' && !this.strandRuns(entry.mesh));
+    return this.runtime.hasHairPush;
   }
 
-  /** The partner capsules (world, the hair consumer's regions) the GPU hair
-   *  push reads at render time; null or `[]` = none. Called after phase B
-   *  with the partners re-read on their final pose, so the push has no lag. */
+  /** The partner capsules (world) the GPU hair push reads at render time; null or `[]` = none. */
   setGpuPartners(capsules: readonly CapsuleNow[] | null): void {
-    const any = !!capsules?.length;
-    if (!any && !this.gpuPartners) return;
-    this.gpuPartners = any;
-    this.garmentCollision?.setPartners(any ? capsules : null);
+    this.runtime.setGpuPartners(capsules);
   }
 
   /** Can this figure be its own first-person body (it has a head bone)? */
@@ -3452,64 +3204,37 @@ export class Figure {
 
   /** Draw the figure as the camera's own body: headless, from the next
    *  `update` on. Switching it off gives the head back at once — a figure
-   *  that is not updated every frame must not stay headless. */
+   *  that is not updated every frame must not stay headless. The shrunk head
+   *  hides the hair, so the strands are blocked meanwhile (spec § 6.2.2). */
   setFirstPerson(on: boolean) {
     this.firstPerson = on && this.head !== null;
     if (!this.firstPerson) this.restoreHead();
-    else this.setStrandHair(false);   // the shrunk head hides the hair (spec § 6.2.2)
+    this.runtime.setStrandBlocked(this.firstPerson);
   }
 
   /** The bound strand handle, null before `prepareStrandHair` succeeded. */
   get strandHair(): StrandHair | null {
-    return this.strand;
+    return this.runtime.strandHair;
   }
 
   /** Runs per strand now. */
   get strandRunning(): boolean {
-    return this.strandOn;
+    return this.runtime.strandRunning;
   }
 
-  /** What the figure budget adds up for this figure: the handle's measured
-   *  (or, before its first run, estimated) ms per frame; the whole budget
-   *  without a handle. */
+  /** What the figure budget adds up for this figure (`FigureRuntime.strandCostMs`). */
   get strandCostMs(): number {
-    return this.strand?.costMs ?? STRAND_LIMITS.budgetMs;
+    return this.runtime.strandCostMs;
   }
 
-  /** Bind the strand record once it has loaded (the first call starts the
-   *  download): true when a handle is ready. False without a record, at the
-   *  distance tier, or for good when the record and the mesh do not belong
-   *  together (one warning). Changes nothing on the mesh. */
+  /** Bind the strand record once it has loaded (`FigureRuntime.prepareStrandHair`). */
   prepareStrandHair(): boolean {
-    if (this.strand) return true;
-    if (this.strandRefused || this.tier !== 'full' || !this.loadStrandRecord) return false;
-    const record = this.loadStrandRecord();
-    if (record === undefined) return false;
-    const inst = this.root.children[0];
-    const handle = record && inst ? createStrandHair(THREE, inst, record) : null;
-    if (!handle) {
-      this.strandRefused = true;
-      if (record) {
-        console.warn(`[figures] ${record.item_id}: the hair mesh does not carry the strand binding of record`
-          + ` ${record.fit_sha256.slice(0, 12)} — the hair stays on its chains`);
-      }
-      return false;
-    }
-    this.strand = handle;
-    return true;
+    return this.runtime.prepareStrandHair();
   }
 
-  /** Switch the per-strand hair on or off (only on with a ready handle and
-   *  not in first person). On: the sim reset to the current pose, the hair out
-   *  of the GPU push, the hair chains dropped from the motion. Off: the shared
-   *  geometry and skin back, the push and the chains with it. Both switches
-   *  are invisible at rest. */
+  /** Switch the per-strand hair on or off (`FigureRuntime.setStrandHair`; never in first person). */
   setStrandHair(on: boolean) {
-    const want = on && !!this.strand && !this.firstPerson;
-    if (want === this.strandOn || !this.strand) return;
-    this.strandOn = want;
-    this.strand.setEnabled(want);
-    this.garmentCollision?.excludeMesh(this.strand.mesh, want);
+    this.runtime.setStrandHair(on);
   }
 
   private restoreHead() {
@@ -3533,7 +3258,6 @@ export class Figure {
 const EYE_SCRATCH = {
   pos: new THREE.Vector3(), quat: new THREE.Quaternion(), scale: new THREE.Vector3(),
 };
-const FRAME_SCRATCH = new THREE.Vector3();
 
 /** The world capsules of `partners` the hair consumer takes (`partnerCapsules('hair', …)`: every region,
  *  `outer_trunk` replacing `torso`), in partner order — the region filter runs once per snapshot, shared with the

@@ -31,7 +31,7 @@ import { fitDistance, worldCentreXZ } from './scene/cameraMath';
 import { viewHeading } from './scene/cameraFraming';
 import { enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { FigureLibrary } from './scene/figures';
-import { slotFor, type PlaceEntry } from './scene/placeSlot';
+import { slotFor, type PlaceEntry } from '@anima/scene-render';
 import { buildGlyphs, clearPropHighlight, disposeGlyphs, highlightProp, hitPlace,
   hitProp, pickableProps, type PickableProp, type PlacedPropRef,
   type PropHighlight } from './scene/placeGlyphs';

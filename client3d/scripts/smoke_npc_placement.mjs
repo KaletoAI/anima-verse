@@ -182,7 +182,7 @@ import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
 
 const entry = `
 export { huddleOffset, placeAtLocation } from './client3d/src/game/npcPlacement.ts';
-export { slotFor } from './client3d/src/scene/placeSlot.ts';
+export { slotFor } from './packages/scene-render/src/placeSlot.ts';
 export { Vector3 } from 'three';
 `;
 const built = await build({

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * The 3D client's per-strand hair wiring (strand-hair plan 2026-11-13 Task 9, spec § 6.2.2):
- * `client3d/src/scene/strandBudget.ts` `strandCandidates` (what `NpcManager.tickStrandHair` hands the budget) and
+ * `packages/scene-render/src/strandBudget.ts` `strandCandidates` (what `NpcManager.tickStrandHair` hands the budget) and
  * `Figure.prepareStrandHair` / `setStrandHair` / `setFirstPerson` in `client3d/src/scene/figures.ts`. Hand-derived.
  *
  * Usage: node scripts/smoke_client_strand_wiring.mjs   (no server, no world; bundles the client with esbuild)
@@ -39,7 +39,7 @@ async function loadClient() {
   try {
     const src = join(ROOT, 'client3d/src')
     const entry = [
-      `export { strandCandidates } from '${src}/scene/strandBudget';`,
+      `export { strandCandidates } from '@anima/scene-render';`,
       `export { Figure } from '${src}/scene/figures';`,
       `export { COLLISION_VERSION } from '${join(ROOT, 'packages/scene-render/src/collision')}';`,
     ].join('\n')
@@ -177,13 +177,13 @@ const hairOf = f => {
   check('[3] the hair mesh runs on an owned geometry', hair.geometry !== tpl.hair.geometry)
   figure.update(1 / 60, { realDelta: 1 / 60 })
   check('[3] the secondary motion is configured without the hair groups (rev m1:strands)',
-    figure.secondaryRev === 'm1:strands', String(figure.secondaryRev))
+    figure.runtime.secondaryRev === 'm1:strands', String(figure.runtime.secondaryRev))
   check('[3] strandCostMs is the handle\'s', figure.strandCostMs === figure.strandHair.costMs)
   figure.setFirstPerson(true)
   check('[4] first person turns it off: the template geometry back, the patched clone back',
     !figure.strandRunning && hair.geometry === tpl.hair.geometry && hair.material === patched)
   figure.update(1 / 60, { realDelta: 1 / 60 })
-  check('[4] the chains are back (rev m1)', figure.secondaryRev === 'm1', String(figure.secondaryRev))
+  check('[4] the chains are back (rev m1)', figure.runtime.secondaryRev === 'm1', String(figure.runtime.secondaryRev))
   figure.setStrandHair(true)
   check('[4] setStrandHair(true) in first person stays off', !figure.strandRunning)
   figure.dispose()

@@ -8,7 +8,7 @@
  * slot points themselves are the payload's `slots[]`, composed by the
  * server's own slot formula. Numbers: client3d/scripts/smoke_places_client.mjs.
  */
-import type * as THREE from 'three';
+import type { Vector3 } from 'three';
 
 /** One place of a room, keyed by its marker id in `tile.roomMarkers`. */
 export interface PlaceEntry {
@@ -16,7 +16,7 @@ export interface PlaceEntry {
    *  figure-root height (surface − `drop`, plus the terrain lift). Re-lifted
    *  IN PLACE by `deriveRoomSpots` / `reliftScene` — a seat is never copied
    *  out of here, so a held reference follows the ground. */
-  slots: THREE.Vector3[];
+  slots: Vector3[];
   /** The room this place belongs to (`markers[].room_id`). The map it hangs
    *  in is keyed by the room too — but under the room's NAME as well as its
    *  id — so a consumer that has to compare rooms reads the id from here. */
@@ -72,7 +72,7 @@ export interface PlaceEntry {
  *  falls back to slot 0, and a PAIR sits on the place's CENTRE — the mean
  *  of the slots, the server's `centre_of` and the pair's anchor (a fresh
  *  vector). `undefined` for an entry without slots: total, never a throw. */
-export function slotFor(entry: PlaceEntry, slot: number | 'pair'): THREE.Vector3 | undefined {
+export function slotFor(entry: PlaceEntry, slot: number | 'pair'): Vector3 | undefined {
   const slots = entry.slots;
   if (!slots.length) return undefined;
   if (slot === 'pair') {

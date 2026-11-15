@@ -11,7 +11,7 @@
  * first person (the shrunk head hides the hair there). Everyone else keeps the
  * spring chains or today's skin.
  */
-import type { StrandCandidate } from '@anima/scene-render';
+import type { StrandCandidate } from './hairSimMath';
 
 /** What the budget needs to know of one figure. */
 export interface StrandFigureView {
