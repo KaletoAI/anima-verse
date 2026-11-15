@@ -10,8 +10,8 @@ import './imagegenOverride.css'
  * backend globs + LoRA lists), rendered as the template special slot
  * `imagegen_override`. ALL of them live on the Image tab, one template
  * section per pipeline stage (`slot_keys` names the keys of the stage):
- * Pictures (renders, portrait, character LoRAs) → T-pose (main reference,
- * its views + garment edits, T-pose LoRAs) → Base body → Outfit views → 3D
+ * Pictures (renders, portrait, character LoRAs) → reference pose (main reference,
+ * its views + garment edits, reference LoRAs) → Base body → Outfit views → 3D
  * (character mesh, the HairDeck hair mesh, the HAAR hair strands). The grouping is a template edit
  * (base-character.json, tab `image_settings`), not code.
  *
@@ -94,41 +94,41 @@ interface LoraDef {
 const DEFS: Record<string, GlobDef | LoraDef> = {
   workflow: {
     kind: 'image', label: 'Renders', placeholder: 'Flux*',
-    tip: 'Tried first for every render of this character that names no backend: photos, Instagram posts, expression and outfit variants, gallery regenerate. Also the fallback of the T-pose and the base-body front.',
+    tip: 'Tried first for every render of this character that names no backend: photos, Instagram posts, expression and outfit variants, gallery regenerate. Also the fallback of the reference pose and the base-body front.',
   },
   profile_workflow: {
     kind: 'image', label: 'Portrait', placeholder: 'Portrait*',
     tip: 'Tried first for the profile portrait only. Empty = the portrait chain (the Renders glob is NOT used).',
   },
   tpose_workflow: {
-    kind: 'image', label: 'T-pose', placeholder: 'TPose*', fallback: ['workflow'],
-    tip: 'The T-pose main reference (main mesh input). Empty = the Renders glob, then the T-pose chain.',
+    kind: 'image', label: 'Reference pose', placeholder: 'TPose*', fallback: ['workflow'],
+    tip: 'The main reference picture (main mesh input). Empty = the Renders glob, then the reference pose chain.',
   },
   tpose_view_workflow: {
-    kind: 'image', label: 'Views + garment edits', ref: 'T-pose views', placeholder: 'Flux*',
-    tip: 'The extra T-pose reference views (back, side, face) AND the garment edits (the Wardrobe\'s worn and garment-only views, the HairDeck hair\'s beard-free picture). The base-body back/side views and every outfit view fall back to it. Empty = the T-pose views chain (garment edits: the garment-edit chain).',
+    kind: 'image', label: 'Views + garment edits', ref: 'Reference views', placeholder: 'Flux*',
+    tip: 'The extra reference views (back, side, face) AND the garment edits (the Wardrobe\'s worn and garment-only views, the HairDeck hair\'s beard-free picture). The base-body back/side views and every outfit view fall back to it. Empty = the reference views chain (garment edits: the garment-edit chain).',
   },
   base_front_workflow: {
     kind: 'image', label: 'Front', placeholder: 'Qwen*', fallback: ['tpose_workflow', 'workflow'],
-    tip: 'The bald A-pose front. Identity comes from the profile picture; an accurate (non-turbo) model is recommended. Empty = the T-pose glob, then the Renders glob, then this step\'s chain.',
+    tip: 'The bald A-pose front. Identity comes from the profile picture; an accurate (non-turbo) model is recommended. Empty = the reference pose glob, then the Renders glob, then this step\'s chain.',
   },
   base_view_workflow: {
     kind: 'image', label: 'Back/side views', placeholder: 'Qwen*', fallback: ['tpose_view_workflow'],
-    tip: 'The back, left and right views (edits of the front). Empty = the T-pose views glob, then this step\'s chain.',
+    tip: 'The back, left and right views (edits of the front). Empty = the reference views glob, then this step\'s chain.',
   },
   outfit_front_workflow: {
     kind: 'image', label: 'Front edit', placeholder: 'Qwen*', fallback: ['tpose_view_workflow'],
-    tip: 'The dressed front, an edit of the base front. Empty = the T-pose views glob, then this step\'s chain.',
+    tip: 'The dressed front, an edit of the base front. Empty = the reference views glob, then this step\'s chain.',
   },
   outfit_back_draft_workflow: {
     kind: 'image', label: 'Back draft', placeholder: 'Qwen*', fallback: ['tpose_view_workflow'],
-    tip: 'Rendered fresh from the dressed front; only its clothing is used, composited onto the base back on the CPU (no second render). Empty = the T-pose views glob, then this step\'s chain.',
+    tip: 'Rendered fresh from the dressed front; only its clothing is used, composited onto the base back on the CPU (no second render). Empty = the reference views glob, then this step\'s chain.',
   },
   outfit_side_draft_workflow: {
     kind: 'image', label: 'Side draft', placeholder: 'Qwen*',
     fallback: ['outfit_back_draft_workflow', 'tpose_view_workflow'],
     note: 'Only with the world setting Dressed side views',
-    tip: 'Rendered fresh from the dressed front in profile; only its clothing is used, composited onto the base side view on the CPU (no second render). Runs only with the world setting Dressed side views. Empty = the Back draft glob, then the T-pose views glob, then this step\'s chain.',
+    tip: 'Rendered fresh from the dressed front in profile; only its clothing is used, composited onto the base side view on the CPU (no second render). Runs only with the world setting Dressed side views. Empty = the Back draft glob, then the reference views glob, then this step\'s chain.',
   },
   mesh_workflow: {
     kind: 'mesh', label: 'Mesh', placeholder: 'Trellis*',
@@ -144,12 +144,12 @@ const DEFS: Record<string, GlobDef | LoraDef> = {
   },
   loras: {
     kind: 'loras', label: 'Character LoRAs', target: 'render', empty: 'None',
-    tip: 'Added to this character\'s variant, outfit, T-pose and base-body renders. The choices are the LoRAs of the backend its variant renders resolve to (with the Renders glob as typed).',
+    tip: 'Added to this character\'s variant, outfit, reference pose and base-body renders. The choices are the LoRAs of the backend its variant renders resolve to (with the Renders glob as typed).',
   },
   tpose_loras: {
-    kind: 'loras', label: 'T-pose LoRAs', target: 'tpose', empty: 'Empty: the character LoRAs apply',
+    kind: 'loras', label: 'Reference LoRAs', target: 'tpose', empty: 'Empty: the character LoRAs apply',
     note: 'Replace the character LoRAs on every mesh-input render',
-    tip: 'Used INSTEAD of the character LoRAs on every mesh-input render (T-pose, its views, base body, outfit views) — a different backend has its own LoRAs. The choices are the LoRAs of the backend the T-pose resolves to.',
+    tip: 'Used INSTEAD of the character LoRAs on every mesh-input render (reference pose, its views, base body, outfit views) — a different backend has its own LoRAs. The choices are the LoRAs of the backend the reference pose resolves to.',
   },
 }
 
@@ -366,7 +366,7 @@ function LoraList({ character, def, list, draft, savedSignal, onChange }: {
   const [addName, setAddName] = useState('')
 
   // The choices follow the backend the render resolves to WITH the unsaved
-  // globs (render: workflow; T-pose: tpose_workflow, falling back to
+  // globs (render: workflow; reference pose: tpose_workflow, falling back to
   // workflow) — debounced, typing a glob is many edits.
   const draftWorkflow = typeof draft.workflow === 'string' ? draft.workflow : undefined
   const draftTpose = typeof draft.tpose_workflow === 'string' ? draft.tpose_workflow : undefined

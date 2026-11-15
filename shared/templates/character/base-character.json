@@ -563,8 +563,8 @@
     },
     {
       "id": "image_tpose",
-      "label": "T-pose — the reference renders the mesh is built from",
-      "label_de": "T-Pose — die Referenzbilder, aus denen das Mesh entsteht",
+      "label": "Reference pose — the reference renders the mesh is built from",
+      "label_de": "Referenzpose — die Referenzbilder, aus denen das Mesh entsteht",
       "column": 21,
       "row": 0,
       "special": "imagegen_override",
