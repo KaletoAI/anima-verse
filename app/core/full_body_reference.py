@@ -20,10 +20,12 @@ show that there is none.
 
 GENERATION follows the user's validated hub job 5086b496 (profile image →
 full-body reference; its output was then the input of the A-pose edit c265fd78):
-an img2img EDIT of the appearance picture whose prompt is ONLY the character's
-attribute block and one framing clause (use cases ``base_reference`` /
-``outfit_reference``: ``"{character}, the whole figure from head to feet inside
-the frame"``) — no edit prefix, no pose, no light words.
+an img2img EDIT of the appearance picture whose prompt is the character's
+attribute block between a framing clause and one light/finish sentence (use
+cases ``base_reference`` / ``outfit_reference``, Ruling A95, the shape the user
+validated on 2026-11-15: ``"Full body shot from head to feet inside the frame,
+{character}, neutral studio lighting, plain clean background, photorealistic,
+high detail"``) — no edit prefix, no pose words.
 
 * The attribute block is THE person description of every image prompt
   (``prompt_builder.person_description``: the appearance tokens resolved and the
@@ -35,15 +37,19 @@ the frame"``) — no edit prefix, no pose, no light words.
   declares a ``mesh_part`` names nothing here and its LoRAs are dropped, whether
   its switch is on or off (Ruling A93b — a clean mesh cannot be made from a
   reference that shows it; ``person_description(appearance_reference=True)``,
-  ``body_slots.filter_appearance_reference_loras``). The occasions stay mesh-input
+  ``body_slots.filter_appearance_reference_loras``). While it is uncovered the
+  slot's ``mesh_part.reference_prompt`` says what the region shows instead, and
+  its ``reference_negative`` joins the negative (Ruling A95,
+  ``body_slots.appearance_reference_negative``) — the package words both. The occasions stay mesh-input
   occasions for the tpose LoRAs and the unfolded negative
   (``imagegen.occasions.APPEARANCE_REFERENCE_OCCASIONS``).
 * Plain body (``base_block``): the description of the UNDRESSED figure (nothing
   worn), hair included — the attribute block alone, as in the chain the user
   validated (Ruling A87b). The plain body's head and body state belong to the
   A-pose edit (step 2, ``base_body.edit_character``), which carries them.
-  Negative: the use case's (``_NEG_TPOSE``) plus the base front's
-  (``base_body.base_prompt(front)``) — what the base views keep out.
+  Negative: the use case's (``_NEG_REFERENCE``: picture quality and framing
+  only, no pose terms) plus ``BASE_NEGATIVE`` (nothing worn) and the mesh-part
+  slots' reference negatives (Ruling A95).
 * Outfit (``outfit_block``): the description of the figure as dressed in the
   outfit, then "wearing" and the outfit's pieces (``outfit_renderer.render_outfit``:
   their prompt fragments). Appearance picture: the plain body's full-body
@@ -314,6 +320,18 @@ def outfit_block(character_name: str, *, profile: Optional[Dict[str, Any]] = Non
     return ", ".join(p for p in (attributes, f"wearing {worn}" if worn else "") if p)
 
 
+#: What the plain body's reference adds to the use case's negative: it wears nothing (Ruling A95).
+BASE_NEGATIVE = "clothing, underwear, jewellery"
+
+
+def reference_negative(character_name: str, render_profile: Dict[str, Any], *, base: bool) -> str:
+    """The extra negative of a full-body reference (Ruling A95): ``BASE_NEGATIVE`` for the plain body, then the
+    mesh-part slots' reference negatives of the figure as rendered."""
+    from app.core.body_slots import appearance_reference_negative
+    parts = [BASE_NEGATIVE if base else "", appearance_reference_negative(character_name, profile=render_profile)]
+    return ", ".join(p for p in parts if p)
+
+
 def compose(use_case: str, block: str) -> str:
     """The prompt a Generate sends (before LoRA triggers): the use case's style with ``block`` in its
     ``{character}`` slot — what the tile shows before the click."""
@@ -422,14 +440,13 @@ def check_base(character_name: str, *, profile: Optional[Dict[str, Any]] = None)
 def generate_base(character_name: str, *, reserved: bool = False) -> Dict[str, Any]:
     """Generate the plain body's full-body reference from the profile image (module docstring) and record it.
     Blocking — call from a worker thread. Returns the record."""
-    from app.core import base_body
     if not reserved:
         _reserve(character_name, BASE_SLOT)
     error: Optional[str] = None
     try:
         profile, image = check_base(character_name)
         block = base_block(character_name, profile=profile)
-        negative = base_body.base_prompt(character_name, "front", profile=profile)[1]
+        negative = reference_negative(character_name, _undressed(profile), base=True)
         data, suffix, prompt, source_sha = _render(
             character_name, occasion=BASE_OCCASION, use_case=BASE_USE_CASE, block=block, source=image,
             render_profile=_undressed(profile), extra_negative=negative)
@@ -479,7 +496,8 @@ def generate_outfit(character_name: str, *, key: Optional[str] = None, reserved:
         block = outfit_block(character_name, profile=profile)
         data, suffix, prompt, source_sha = _render(
             character_name, occasion=OUTFIT_OCCASION, use_case=OUTFIT_USE_CASE, block=block, source=source,
-            render_profile={**profile, "equipped_items": []}, extra_negative="")
+            render_profile={**profile, "equipped_items": []},
+            extra_negative=reference_negative(character_name, {**profile, "equipped_items": []}, base=False))
         name = _publish(character_name, data, suffix, prompt)
         return set_outfit(character_name, name, key=key, pieces=pieces, origin=ORIGIN_GENERATED, prompt=prompt,
                           made_from={"image": source.name, "sha256": source_sha, "kind": kind})

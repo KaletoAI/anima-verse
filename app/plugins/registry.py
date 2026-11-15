@@ -298,19 +298,26 @@ class MeshPartSpec:
     tpose_prompt: str
     lora_patterns: List[str]
     rigs: Dict[str, Dict[str, Any]]
+    # The full-body references (Ruling A95): what the region shows there instead of the slot's own texts
+    # (placeholders as in the slot's prompt texts) and what their negative adds; "" = nothing.
+    reference_prompt: str = ""
+    reference_negative: str = ""
 
     @classmethod
     def parse(cls, raw, attributes, rigs):
         import math
         if not isinstance(raw, dict):
             raise ValueError("mesh_part must be a mapping")
-        if set(raw) - {"switch", "tpose_prompt", "lora_patterns", "rigs"}:
+        if set(raw) - {"switch", "tpose_prompt", "lora_patterns", "rigs", "reference_prompt", "reference_negative"}:
             raise ValueError("unknown mesh_part keys")
         if not isinstance(raw.get("switch"), str) or not raw["switch"].strip():
             raise ValueError("mesh_part.switch must be a non-empty string")
         # Optional since Ruling A74a: without it the mesh input names nothing for the part.
         if "tpose_prompt" in raw and (not isinstance(raw["tpose_prompt"], str) or not raw["tpose_prompt"].strip()):
             raise ValueError("mesh_part.tpose_prompt must be a non-empty string when given")
+        for key in ("reference_prompt", "reference_negative"):
+            if key in raw and (not isinstance(raw[key], str) or not raw[key].strip()):
+                raise ValueError(f"mesh_part.{key} must be a non-empty string when given")
         switch = attributes.get(raw["switch"], {})
         if (not isinstance(switch, dict) or switch.get("type") != "select"
                 or not isinstance(switch.get("options"), list) or "on" not in switch["options"]):
@@ -344,7 +351,8 @@ class MeshPartSpec:
                         for key, value in values.items()):
                     raise ValueError("mesh_part attribute values require declared options and finite numbers")
             clean[rig_id] = {"params": dict(params), "attribute_params": dict(mappings)}
-        return cls(raw["switch"], str(raw.get("tpose_prompt") or "").strip(), list(patterns), clean)
+        return cls(raw["switch"], str(raw.get("tpose_prompt") or "").strip(), list(patterns), clean,
+                   str(raw.get("reference_prompt") or "").strip(), str(raw.get("reference_negative") or "").strip())
 
 
 #: Region kinds the core knows. A channel is an inside capsule of the

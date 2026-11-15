@@ -17,7 +17,7 @@ olive, eyes green, build athletic, 168 cm; no hairstyle — a bald plain body) w
 "average height, athletic build" (the build slot carries the height — ``base_body.base_appearance``'s rule).
 
 Expected, derived by hand from the brief and the user's validated chain (hub job 5086b496: profile image → full-body
-reference, prompt "<attributes>, the whole figure from head to feet inside the frame", negative = the base body's;
+reference, prompt since Ruling A95 "Full body shot from head to feet inside the frame, <attributes>, neutral studio lighting, …", negative = nothing worn;
 hub job c265fd78: that output → the A-pose front, A74b's edit prompt):
 
 [1] Routing. OCCASIONS base_reference / outfit_reference: needs_ref_slot True, requires_chain True, both in
@@ -35,9 +35,11 @@ hub job c265fd78: that output → the A-pose front, A74b's edit prompt):
       style_character = "female, 30 years old, freckles, long dark hair, green eyes, olive skin, average height,
         athletic build"  (the appearance text resolved, hair included, then the slots — the attribute block
         alone, no body-state words: those belong to the A-pose edit, Ruling A87b);
-      composed prompt = that + ", the whole figure from head to feet inside the frame" (no edit prefix, no pose,
-        no light words — the shape of job 5086b496);
-      extra_negative = base_prompt(Demo, front)[1] (the base negative as it is now).
+      composed prompt (Ruling A95, the user's validated shape of 2026-11-15) = "Full body shot from head to feet
+        inside the frame, " + that + ", neutral studio lighting, plain clean background, photorealistic, high
+        detail" (no edit prefix, no pose words);
+      extra_negative = "clothing, underwear, jewellery" + ", region detail" (the fixture region of [10] applies to
+        Demo, uncovered; its reference text needs {size} and drops, its negative stays).
     Record: origin "generated", the picture in the gallery as Demo_<stamp>_fullbody.png with the recorder's bytes,
     made_from {image "Demo_1.png", sha256 of Demo_1.png, kind "profile"}, prompt = the composed prompt.
 [3] The front's reference chain:
@@ -74,8 +76,11 @@ hub job c265fd78: that output → the A-pose front, A74b's edit prompt):
     large, part on} + surface {size wide}, nothing worn, profile image, outfit_imagegen.tpose_loras [PoseFixture,
     RegionFixture]; ``DemoPartOff`` the same with part off.
       occasions.mesh_input_text: base_reference / outfit_reference False; tpose / base_front / base_view True;
-      base_block(DemoPart) = base_block(DemoPartOff) = Demo's block + ", exposed wide surface" (the general
-        fragments, then the exposed ones; the region slot names nothing, switch on or off — A93b);
+      base_block(DemoPart) = base_block(DemoPartOff) = Demo's block + ", exposed wide surface, a smooth plain
+        large area" (the general fragments, then the exposed ones; the region slot's own texts stay out, switch
+        on or off — A93b; its reference_prompt "a smooth plain {size} area" comes last — A95); reference
+        negatives: plain body "clothing, underwear, jewellery, region detail", outfit "region detail"; with the
+        region covered neither its reference text nor its negative;
       outfit_block of both = the same text (nothing worn: no "wearing");
       A93's ordinary description of DemoPartOff (person_description(mesh_input=False)) = Demo's block +
         ", exposed large alpha region, exposed wide surface" (manifest slot order) — what A93b takes out;
@@ -122,6 +127,8 @@ body_slots:
     mesh_part:
       switch: part
       lora_patterns: ["*Region*"]
+      reference_prompt: "a smooth plain {size} area"
+      reference_negative: "region detail"
       rigs:
         region_inset: {params: {}}
   - id: surface
@@ -131,7 +138,15 @@ body_slots:
     prompt:
       exposed: "exposed {size} surface"
 """
-FRAMING = "the whole figure from head to feet inside the frame"
+FRAMING = "Full body shot from head to feet inside the frame"
+FINISH = "neutral studio lighting, plain clean background, photorealistic, high detail"
+#: The plain body's extra negative without a mesh-part slot (Ruling A95: nothing worn).
+BASE_NEG = "clothing, underwear, jewellery"
+
+
+def framed(block):
+    """The composed reference prompt (Ruling A95): framing first, then the block, then light and finish."""
+    return f"{FRAMING}, {block}, {FINISH}"
 FAILS = []
 OUTBOUND = []
 
@@ -317,7 +332,8 @@ def mesh_part_checks(human, *, want_block):
           {o: occasions.mesh_input_text(o) for o in ("base_reference", "outfit_reference", "tpose", "base_front",
                                                      "base_view")},
           {"base_reference": False, "outfit_reference": False, "tpose": True, "base_front": True, "base_view": True})
-    want = want_block + ", exposed wide surface"
+    # A95: the region's own texts stay out (A93b), its reference_prompt says what it shows instead (uncovered).
+    want = want_block + ", exposed wide surface, a smooth plain large area"
     payloads = []
 
     class Service:
@@ -342,11 +358,23 @@ def mesh_part_checks(human, *, want_block):
         stored = get_character_profile(name)
         a93 = person_description(name, apply_state_modifiers=False, mesh_input=False,
                                  body_profile=fbr._undressed(stored), neutral_state=True)
-        print(f"  {name} A93  (ordinary description): {a93 + ', ' + FRAMING!r}")
+        print(f"  {name} A93  (ordinary description): {framed(a93)!r}")
         print(f"  {name} A93b (the reference):        {fbr.compose('base_reference', fbr.base_block(name))!r}")
         check(f"{name}: plain body block names nothing of the region, the other exposed text stays",
               fbr.base_block(name), want)
         check(f"{name}: outfit block (nothing worn)", fbr.outfit_block(name), want)
+        check(f"{name}: plain body negative adds the region's reference negative",
+              fbr.reference_negative(name, fbr._undressed(stored), base=True), BASE_NEG + ", region detail")
+        check(f"{name}: outfit negative (uncovered): the region's only",
+              fbr.reference_negative(name, stored, base=False), "region detail")
+        from app.core import body_slots
+        real_exposed = body_slots.is_slot_exposed
+        with patch.object(body_slots, "is_slot_exposed",
+                          lambda spec, prof: spec.id != "region" and real_exposed(spec, prof)):
+            check(f"{name}: covered region: no reference text, no reference negative",
+                  (body_slots.prompt_fragments(name, profile=stored, appearance_reference=True,
+                                               neutral_state=True)["exposed"],
+                   body_slots.appearance_reference_negative(name, profile=stored)), (["exposed wide surface"], ""))
         if switch == "off":
             check(f"{name}: A93's ordinary description still named it", a93,
                   want_block + ", exposed large alpha region, exposed wide surface")   # manifest slot order
@@ -425,7 +453,7 @@ def main() -> int:
 
         print("[2] generate the plain body's full-body reference")
         want_block = "female, 30 years old, freckles, long dark hair, green eyes, olive skin, average height, athletic build"
-        check("tile prompt before the click", fbr.base_tile("Demo")["generate"]["prompt"], want_block + ", " + FRAMING)
+        check("tile prompt before the click", fbr.base_tile("Demo")["generate"]["prompt"], framed(want_block))
         record = fbr.generate_base("Demo")
         one = CALLS[0] if len(CALLS) == 1 else {}
         check("one render", len(CALLS), 1)
@@ -435,14 +463,16 @@ def main() -> int:
                bool(one.get("require_reference")), one.get("postprocess"), one.get("equipped_pieces")),
               ("base_reference", "base_reference", "Demo_1.png", True, False, True, False, {}))
         check("attribute block", one.get("style_character"), want_block)
-        check("composed prompt: block + framing only", composed("base_reference", one), want_block + ", " + FRAMING)
-        check("negative: the base front's", one.get("extra_negative"), base_body.base_prompt("Demo", "front")[1])
+        check("composed prompt: framing, block, finish", composed("base_reference", one), framed(want_block))
+        # Demo is human-roleplay, so the fixture region applies (uncovered, no attributes: its reference text
+        # needs {size} and drops, its negative names no attribute and stays).
+        check("negative: nothing worn + the region's (A95)", one.get("extra_negative"), BASE_NEG + ", region detail")
         gallery = get_character_images_dir("Demo") / record["image"]
         check("record", (record["origin"], record["image"].startswith("Demo_") and
                          record["image"].endswith("_fullbody.png"), gallery.read_bytes() == RENDERED,
                          record["made_from"], record["prompt"]),
               ("generated", True, True, {"image": "Demo_1.png", "sha256": sha(profile_file), "kind": "profile"},
-               want_block + ", " + FRAMING))
+               framed(want_block)))
         check("no staging left in model_refs", sorted(p.name for p in refs.iterdir()) if refs.is_dir() else [], [])
 
         print("[3] the front's reference chain")
@@ -521,7 +551,7 @@ def main() -> int:
               (out.get("occasion"), out.get("image_use_case"), out.get("ref_name"), bool(out.get("require_reference")),
                out.get("style_character"), composed("outfit_reference", out)),
               ("outfit_reference", "outfit_reference", record["image"], True, want_outfit,
-               want_outfit + ", " + FRAMING))
+               framed(want_outfit)))
         check("recorded under the worn outfit", (got["key"], got["record"]["origin"],
                                                  got["record"]["made_from"]["kind"],
                                                  key in outfit_references.references_of("Demo")),

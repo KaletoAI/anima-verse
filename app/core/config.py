@@ -153,6 +153,15 @@ _NEG_EXPRESSION = (_NEG_PHOTO + ", full body shot, full length, legs, knees, "
 # the chest or in front of the shoulders": long hair and braids kept falling
 # onto the chest, which bakes into the torso mesh.
 _NEG_TPOSE = ("illustration, anime, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, shadows on the face, one side of the face darker, shadow under the nose, shadowed eye sockets, directional key light, cropped, out of frame, cropped hands, hands cut off, cropped feet, feet cut off, T-pose, arms raised to shoulder height, arms touching the body, hands on hips, hands at hips, hands touching body, palms facing the camera, palms facing up, clenched fists, curled fingers, fingers pressed together, splayed fingers, fanned fingers, oversized hands, large hands, thick fingers, chunky fingers, swollen fingers, fused fingers, mitten hands, hands hidden, legs together, touching legs, touching ankles, crossed legs, narrow stance, hair over the chest, hair covering the chest, strands of hair on the chest, hair over the shoulders, hair in front of the shoulders, hair falling forward, braid over the shoulder, ponytail over the shoulder")
+# The full-body references (use cases base_reference / outfit_reference, Ruling A95): an appearance picture,
+# not a mesh input — the framing first (models weigh the start), then the figure, then light and finish
+# (the user's validated prompt shape, 2026-11-15). Its negative keeps only picture quality and framing: no
+# pose terms (the A-pose belongs to the front edit), nothing that names the figure.
+_REFERENCE_STYLE = ("Full body shot from head to feet inside the frame, {character}, neutral studio lighting, "
+                    "plain clean background, photorealistic, high detail")
+_NEG_REFERENCE = ("illustration, anime, painting, cartoon, drawing, sketch, plastic skin, airbrushed skin, "
+                  "overexposed, glossy, watermark, signature, text, logo, deformed, blurry, low quality, "
+                  "dramatic lighting, harsh shadows, cropped, out of frame, cropped hands, cropped feet, feet cut off")
 _NEG_TPOSE_ANIMAL = ("illustration, anime, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, rim light, backlighting, cropped, out of frame, cropped legs, tail cut off, close-up, portrait, head only, human, person, hands, anthropomorphic, standing on two legs, clothing, costume, looking at the camera, head turned toward the camera, open mouth, sitting, lying down, curled up, walking, mid-stride, one paw raised, staggered legs, head turned, looking at viewer")
 
 # Negatives of the OPTIONAL extra mesh views (back / left+right profile).
@@ -701,32 +710,33 @@ _DEFAULT_IMAGE_USE_CASES = {
     # the picture the A-pose front is an edit of. The plain body's is an edit
     # of the profile image (occasion base_reference), an outfit's an edit of
     # the plain body's full-body reference — else the profile image — wearing
-    # the outfit (occasion outfit_reference). The user's validated hub job
-    # 5086b496 is the template: the prompt is ONLY the character's attribute
-    # block (``{character}``, composed at run time from the character's data)
-    # and the one framing clause — no edit prefix, no pose, no light words.
-    # Negatives as ``base_front``; the plain body's adds the base negative.
+    # the outfit (occasion outfit_reference). Since Ruling A95 (the user's
+    # validated prompt of 2026-11-15) the framing comes first, then the
+    # character's attribute block (``{character}``, composed at run time from
+    # the character's data), then light and finish — no edit prefix, no pose
+    # words. Negative: _NEG_REFERENCE (quality and framing only); the plain
+    # body's adds "nothing worn", a mesh-part slot its reference negative.
     "base_reference": {
         "keywords": {
-            "prompt_style": "{character}, the whole figure from head to feet inside the frame",
-            "prompt_negative": _NEG_TPOSE,
+            "prompt_style": _REFERENCE_STYLE,
+            "prompt_negative": _NEG_REFERENCE,
             "prompt_instruction": "",
         },
         "natural": {
-            "prompt_style": "{character}, the whole figure from head to feet inside the frame",
-            "prompt_negative": _NEG_TPOSE,
+            "prompt_style": _REFERENCE_STYLE,
+            "prompt_negative": _NEG_REFERENCE,
             "prompt_instruction": "",
         },
     },
     "outfit_reference": {
         "keywords": {
-            "prompt_style": "{character}, the whole figure from head to feet inside the frame",
-            "prompt_negative": _NEG_TPOSE,
+            "prompt_style": _REFERENCE_STYLE,
+            "prompt_negative": _NEG_REFERENCE,
             "prompt_instruction": "",
         },
         "natural": {
-            "prompt_style": "{character}, the whole figure from head to feet inside the frame",
-            "prompt_negative": _NEG_TPOSE,
+            "prompt_style": _REFERENCE_STYLE,
+            "prompt_negative": _NEG_REFERENCE,
             "prompt_instruction": "",
         },
     },

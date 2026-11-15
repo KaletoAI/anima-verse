@@ -1980,7 +1980,13 @@ Each attribute parameter names a declared attribute and maps a subset of its
 options to finite numbers (booleans are rejected). Unmapped attribute values
 leave the operation default in place. `tpose_prompt` is optional; when given
 it is a non-empty string with the usual fragment placeholders, and without it
-the mesh input names nothing for the active part (Ruling A74a). `lora_patterns` is an optional list of
+the mesh input names nothing for the active part (Ruling A74a). The full-body
+references (occasions `base_reference` / `outfit_reference`) never name the slot's
+own texts, switch on or off (Ruling A93b); `reference_prompt` (optional, non-empty,
+the usual placeholders — a missing value drops it) says what the region shows there
+instead while the slot is uncovered, and `reference_negative` (optional, non-empty,
+plain text) joins those renders' negative while it is uncovered (Ruling A95).
+`lora_patterns` is an optional list of
 non-empty glob strings; matching is case insensitive for active exposed mesh
 inputs. Operation-specific parameters are validated at execution. Old singular
 rig and size declarations are rejected. A malformed declaration rejects the package.

@@ -365,11 +365,15 @@ def prompt_fragments(character_name: str,
     the base body is unclothed, so covered/exposed texts and state flags
     never apply to it.
     ``appearance_reference`` (the full-body references, Ruling A93b) leaves
-    out every slot that declares a ``mesh_part`` — none of its texts, whether
-    its switch is on or off: a mesh is made from what the reference shows.
+    out every slot that declares a ``mesh_part`` — none of its own texts,
+    whether its switch is on or off: a mesh is made from what the reference
+    shows. While such a slot is uncovered its ``mesh_part.reference_prompt``
+    (Ruling A95) says what the region shows instead, as an exposed fragment.
     """
     specs = slots_for_character(character_name, profile=profile)
+    reference_parts = []
     if appearance_reference:
+        reference_parts = [s for s in specs if s.mesh_part and s.mesh_part.reference_prompt]
         specs = [s for s in specs if not s.mesh_part]
     if base_body:
         specs = [s for s in specs if getattr(s, "base_body", False)]
@@ -378,7 +382,7 @@ def prompt_fragments(character_name: str,
         specs = [s for s in specs if getattr(s, "face", False)]
     if portrait_only:
         specs = [s for s in specs if getattr(s, "portrait", False)]
-    if not specs:
+    if not specs and not reference_parts:
         return {"general": [], "exposed": []}
     if profile is None:
         try:
@@ -435,7 +439,28 @@ def prompt_fragments(character_name: str,
                                     neutral_state=neutral_state, back_view=back_view)
             if frag:
                 exposed.append(frag)
+    for spec in reference_parts:
+        if is_slot_exposed(spec, profile):
+            frag = _render(spec.mesh_part.reference_prompt, _slot_text_values(spec, profile))
+            if frag:
+                exposed.append(frag)
     return {"general": general, "exposed": exposed}
+
+
+def appearance_reference_negative(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
+    """What the full-body references' negative adds (Ruling A95): the ``mesh_part.reference_negative`` of every
+    applicable slot that declares one and is uncovered, in slot order; "" without any."""
+    specs = [s for s in slots_for_character(character_name, profile=profile)
+             if s.mesh_part and s.mesh_part.reference_negative]
+    if not specs:
+        return ""
+    if profile is None:
+        try:
+            from app.models.character import get_character_profile
+            profile = get_character_profile(character_name) or {}
+        except Exception:
+            return ""
+    return ", ".join(s.mesh_part.reference_negative for s in specs if is_slot_exposed(s, profile))
 
 
 def base_body_fragments(character_name: str, *,
