@@ -1270,7 +1270,7 @@ Block-Beitrag (`admin_settings._prompt_filter_block_keys`).
 
 | Funktion | Semantik |
 |---|---|
-| `app.core.llm_router.llm_call(task, system_prompt, user_prompt, *, agent_name='', priority=None, label='', max_tokens=None)` | IMMER über die Provider-Queue — nie direkt zum Provider. `task` ist ein Eintrag aus `app/core/llm_tasks.py` |
+| `app.core.llm_router.llm_call(task, system_prompt, user_prompt, *, agent_name='', priority=None, label='', max_tokens=None, image_path=None)` | IMMER über die Provider-Queue — nie direkt zum Provider. `image_path` hängt ein Bild an den User-Turn (Vision; Task auf ein Vision-Modell routen). `task` ist ein Eintrag aus `app/core/llm_tasks.py` |
 | `app.core.llm_router.fallback_parent(task) -> Optional[str]` | Wohin ein nicht zugewiesener Task fällt — die EINE Stelle dieser Regel, nie nachbauen |
 | `app.core.prompt_templates.render_task(task, **vars) -> (system, user)` / `render(template_path, **vars) -> str` | Jinja-Templates; die Paket-Templates liegen im Suchpfad (`StrictUndefined` — ein fehlender Platzhalter kracht laut) |
 | `app.core.tool_formats.format_example(format_name, tool_name, example_input) -> str` | Tool-Nutzungs-Beispiel im aktiven Tool-Format |

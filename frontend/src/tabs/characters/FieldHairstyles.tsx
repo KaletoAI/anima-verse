@@ -366,6 +366,8 @@ function HairstyleText({ character, itemId, mode, text, busy, onSaved }: {
   const [draft, setDraft] = useState<string | null>(null)
   const [posting, setPosting] = useState(false)
   const [note, setNote] = useState('')
+  const [describing, setDescribing] = useState(false)
+  const [describeError, setDescribeError] = useState('')
   const value = draft ?? text
   const changed = draft !== null && draft.trim() !== text.trim()
   const save = async () => {
@@ -390,24 +392,46 @@ function HairstyleText({ character, itemId, mode, text, busy, onSaved }: {
       onSaved()
     }
   }
+  // Ruling A105: one vision LLM call writes the HAAR prompt off the profile picture into the field — saved only by Save.
+  const describe = async () => {
+    if (describing || posting) return
+    setDescribing(true)
+    setDescribeError('')
+    try {
+      const d = await apiPost<{ text: string }>(
+        `/characters/${encodeURIComponent(character)}/hair/describe-from-profile`, { item_id: itemId })
+      setDraft(d.text)
+      setNote(t('Suggestion from the profile picture — check it, then Save.'))
+    } catch (e) {
+      setDescribeError(t('No suggestion') + ': ' + (e as Error).message)
+    } finally {
+      setDescribing(false)
+    }
+  }
   return (
     <div style={{ gridColumn: '1 / -1', display: 'flex', flexDirection: 'column', gap: 3 }}>
       <label className="ga-form-hint" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         {mode === 'haar' ? t('Text (the HAAR prompt)') : t('Description')}
-        <textarea className="ga-input" rows={2} value={value} disabled={busy || posting}
+        <textarea className="ga-input" rows={2} value={value} disabled={busy || posting || describing}
           onChange={(e) => { setDraft(e.target.value); setNote('') }} />
       </label>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
         <button type="button" className="ga-btn ga-btn-sm" disabled={busy || posting || !changed || !value.trim()}
           title={t('Saves the text — nothing runs')} onClick={() => { void save() }}>{t('Save')}</button>
-        {changed ? <button type="button" className="ga-btn ga-btn-sm" disabled={posting}
+        {changed ? <button type="button" className="ga-btn ga-btn-sm" disabled={posting || describing}
           onClick={() => setDraft(null)}>{t('Discard')}</button> : null}
+        {mode === 'haar' ? <button type="button" className="ga-btn ga-btn-sm" data-testid="haar-describe"
+          disabled={busy || posting || describing}
+          title={t('Writes the HAAR prompt from the profile picture into the field: one LLM call, no image and no hub job. Nothing is saved until you Save.')}
+          onClick={() => { void describe() }}>
+          {describing ? t('Describing…') : t('Describe from profile picture')}</button> : null}
         <span className="ga-hint" style={{ color: note ? LIGHT_COLOR.yellow : undefined }}>
           {note || (changed ? (mode === 'haar'
             ? t('Saving runs nothing; then the strands are due — Run all makes 3 new variants (3 hub jobs).')
             : t('Saving runs nothing.')) : t('Saved on Save — nothing runs.'))}
         </span>
       </div>
+      {describeError ? <div className="ga-hint" role="alert" style={{ color: LIGHT_COLOR.red }}>{describeError}</div> : null}
     </div>
   )
 }

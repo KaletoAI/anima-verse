@@ -142,6 +142,7 @@ Overview page all show the same answer:
 | `building_layout`, `furnish`, `prop_mount_classify`, `room_description_sync`, `pose_animation_prompt` | `intent` |
 | `npc_*` | `chat_stream` |
 | `image_pose_check`, `image_prompt_shorten`, `piece_back_text` | `image_prompt` |
+| `haar_hair_prompt` | `image_recognition` |
 | anything else | none — the task simply has no LLM |
 
 A fallback is a convenience, not a recommendation: an unrouted `npc_action`
@@ -223,7 +224,7 @@ mutations of the UI model.
 
 ## Task catalog
 
-32 tasks, in the order they stand in
+33 tasks, in the order they stand in
 [`app/core/llm_tasks.py`](../app/core/llm_tasks.py).
 
 ### Streaming / RP
@@ -317,7 +318,8 @@ exist as routing tasks — only as template file names.
 | `image_prompt_shorten` | Image Prompt Shorten | helper | `image_generation.enabled` | `imagegen/prompt_limit.py` (via `ImageService.run_on_backend_channel`, before the submission) | Condenses a final prompt that is longer than the backend's prompt character limit (backend field `prompt_char_limit`, else the AI hub's alias schema `prompt_limit.max_chars`): keeps reference wording, appearance and clothing, condenses the style prefix and filler first. The result is checked hard against the limit and cut at a comma or sentence boundary when needed; an LLM failure means the cut alone. Cached by prompt + limit. |
 | `piece_back_text` | Outfit Piece Back Text | helper | — | `core/piece_back_text.py` (Items editor "Suggest", `POST /inventory/items/suggest-back-text`; the one-time back-text migration at `Priority.LOW`) | Rewrites an outfit piece's front description for its back and side renders: keeps colour, material, length, cut and fit, drops front-only details (neckline, front buttons, what an opening shows), scene words and poses — or answers that the front text needs no change. The result goes into the optional item field `prompt_fragment_back`, never behind a render. |
 | `instagram_caption` | Instagram Caption | image | `skills.instagram.enabled` | `routes/instagram.py`, `core/character_ops.py`, `plugins/instagram/skill_post.py` | Post caption in the character's voice; also the image-to-video motion prompt. Vision model. |
-| `image_recognition` | Vision (analysis · comments · recognition) | image | `image_generation.enabled` | `imagegen/service.py`, `routes/chat.py`, `plugins/instagram/social_reactions.py` | The ONE vision task — every image call resolves it. Objective analysis after a generation, the character's own comment on the picture, and the look at a photo before other characters react to it. `image_analysis` and `image_comment` are queue labels and metadata keys, not routing tasks. |
+| `image_recognition` | Vision (analysis · comments · recognition) | image | `image_generation.enabled` | `imagegen/service.py`, `routes/chat.py`, `plugins/instagram/social_reactions.py` | The general vision task — every image call resolves it (the one other vision task, `haar_hair_prompt`, falls back to it). Objective analysis after a generation, the character's own comment on the picture, and the look at a photo before other characters react to it. `image_analysis` and `image_comment` are queue labels and metadata keys, not routing tasks. |
+| `haar_hair_prompt` | HAAR Hairstyle Prompt (from profile picture) | image | — | `core/garment_hair.py` (`suggest_haar_prompt`; Hairstyles tab "Describe from profile picture", `POST /characters/{c}/hair/describe-from-profile`) | Vision: reads the character's profile picture (attached through `llm_call(image_path=…)`) and writes the hairstyle's text in HAAR's form — one English line of comma phrases: length, cut, parting, fringe, texture/curl, volume and fall, colour last; no face, clothing or background. A suggestion only: the tab fills the field, the user saves it as the HAAR prompt (`garment.description`). |
 
 ### Misc
 

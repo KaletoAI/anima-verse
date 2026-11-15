@@ -110,6 +110,13 @@
  *     selection is `afterDeleteSelection(next)` of the reloaded list and a NONE_SELECTED selection shows no detail;
  *     the route file has `@router.delete("/{character_name}/hairstyles/{item_id}")` and the preview GET, both with
  *     `Depends(require_admin)`.
+ * [14] Describe from profile picture (Ruling A105). The hairstyle text (HairstyleText) of a HAAR hairstyle has a
+ *     button `t('Describe from profile picture')` (busy label `t('Describing…')`) whose mouse-over names its cost:
+ *     "one LLM call, no image and no hub job"; it posts `{ item_id: itemId }` to `…/hair/describe-from-profile`,
+ *     puts the answer into the draft (`setDraft(d.text)`) and saves nothing (no `/hair/description` call in
+ *     `describe`); a failure is an error line (`role="alert"`), no native dialog. The button only for
+ *     `mode === 'haar'`. The route is `@router.post("/{character_name}/hair/describe-from-profile")` with
+ *     `Depends(require_admin)`. Every new string has a de.json key.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -389,6 +396,25 @@ check('[11] no client carries a cutoff of its own', [sources.length > 100, hardC
     /selected === NONE_SELECTED \? null/.test(tab),
     /Depends\(require_admin\)/.test(del), /Depends\(require_admin\)/.test(prev)],
   [true, true, true, true, true, true, false, true, true, true, true]);
+}
+
+{
+  const tab = readFileSync(join(ROOT, 'frontend/src/tabs/characters/FieldHairstyles.tsx'), 'utf8');
+  const text = (tab.match(/function HairstyleText\([\s\S]*?\n}\n/) || [''])[0];
+  const describe = (text.match(/const describe = async \(\) => \{[\s\S]*?\n {2}}\n/) || [''])[0];
+  const route = readFileSync(join(ROOT, 'app/routes/characters.py'), 'utf8');
+  const post = (route.match(/@router\.post\("\/\{character_name\}\/hair\/describe-from-profile"\)[\s\S]*?\n\n\n/) || [''])[0];
+  const de = JSON.parse(readFileSync(join(ROOT, 'shared/languages/de.json'), 'utf8')).translations;
+  const keys = ['Describe from profile picture', 'Describing…', 'No suggestion',
+    'Suggestion from the profile picture — check it, then Save.',
+    'Writes the HAAR prompt from the profile picture into the field: one LLM call, no image and no hub job. Nothing is saved until you Save.'];
+  check('[14] describe button', [
+    /mode === 'haar' \? <button[\s\S]*?t\('Describe from profile picture'\)/.test(text),
+    /t\('Describing…'\)/.test(text), /one LLM call, no image and no hub job/.test(text),
+    /hair\/describe-from-profile`, \{ item_id: itemId \}/.test(describe), /setDraft\(d\.text\)/.test(describe),
+    /hair\/description/.test(describe), /role="alert"/.test(text), /window\.(prompt|alert|confirm)\(/.test(text),
+    /Depends\(require_admin\)/.test(post), keys.every((k) => typeof de[k] === 'string' && de[k].length > 0)],
+  [true, true, true, true, true, false, true, false, true, true]);
 }
 
 if (failures.length) {

@@ -153,6 +153,10 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
 
     # Vision
     "image_recognition":  {"label": "Vision (analysis · comments · recognition)", "priority": Priority.NORMAL, "category": "image", "gate": "image_generation.enabled"},
+    # The HAAR prompt of a hairstyle from the profile picture (Ruling A105,
+    # app/core/garment_hair.py::suggest_haar_prompt; the Hairstyles tab's
+    # "Describe from profile picture"). Vision; unrouted it borrows image_recognition.
+    "haar_hair_prompt":   {"label": "HAAR Hairstyle Prompt (from profile picture)", "priority": Priority.NORMAL, "category": "image"},
 
     # Misc
     "intro_memory":       {"label": "Intro Memory (Fresh Import)", "priority": Priority.NORMAL, "category": "helper"},
@@ -621,6 +625,13 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         "tools": False, "vision": True, "json": False, "min_context": 2048,
         "model_class": "medium", "arch": "any", "hallucination_risk": "medium",
         "creative": False, "language_de": True, "latency_sensitive": True,
+    },
+
+    # One short English hair-only line for HAAR, read off the profile picture.
+    "haar_hair_prompt": {
+        "tools": False, "vision": True, "json": False, "min_context": 2048,
+        "model_class": "medium", "arch": "any", "hallucination_risk": "medium",
+        "creative": False, "language_de": False, "latency_sensitive": False,
     },
 
     # --- Misc ---------------------------------------------------------------

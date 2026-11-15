@@ -408,6 +408,76 @@ def set_hairstyle_description(character_name: str, item_id: str, description: st
         return inventory.update_item(item["id"], changes) is not None
 
 
+# --- The HAAR prompt from the profile picture (Ruling A105) -------------------------------------------------------
+# A HAAR hairstyle's text (``garment.description``) IS the HAAR prompt (``garment_store.haar_prompt``). The
+# Hairstyles tab's "Describe from profile picture" asks the vision task ``HAAR_PROMPT_TASK`` (template
+# ``tasks/haar_hair_prompt.md``) to write that text off the character's profile picture; the answer is only a
+# suggestion — the route saves nothing, the user edits it and saves it through ``set_hairstyle_description``.
+
+#: The LLM task (``llm_tasks.TASK_TYPES``, unrouted → ``image_recognition``) and its template.
+HAAR_PROMPT_TASK = "haar_hair_prompt"
+#: The completion budget: one line of phrases — a cap against a model that rambles or loops.
+HAAR_PROMPT_MAX_TOKENS = 200
+#: The longest suggestion kept: HAAR's text encoder reads about 60 words; a longer answer is cut at the last
+#: comma inside the cap (never mid-phrase).
+HAAR_PROMPT_MAX_CHARS = 350
+
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+_ANSWER_LABEL = re.compile(r"^\s*(?:hair(?:style)?(?:\s+description)?|description|prompt|answer)\s*:\s*",
+                           re.IGNORECASE)
+_REFUSAL = re.compile(r"\b(?:i\s*(?:'|’)?m\s+sorry|i\s+am\s+sorry|i\s+can(?:not|'t|’t)|i\s+(?:am|'m)\s+unable|"
+                      r"unable\s+to|as\s+an\s+ai|cannot\s+(?:help|assist|describe|see)|no\s+(?:image|picture)\s+"
+                      r"(?:was\s+)?(?:attached|provided)|i\s+don(?:'|’)t\s+see)\b", re.IGNORECASE)
+
+
+def clean_haar_prompt(answer: Any) -> str:
+    """The usable HAAR text of an LLM answer: no ``<think>`` block, no markdown (``*``/``_``/backticks/headings/
+    bullets), no label ("Description:"), no surrounding quotes, one line, no trailing full stop, cut at the last
+    comma inside ``HAAR_PROMPT_MAX_CHARS``. ValueError for an empty answer or a refusal."""
+    text = _THINK_BLOCK.sub("", str(answer or ""))
+    lines = []
+    for line in text.splitlines():
+        line = re.sub(r"^\s*(?:#+|[-*•]|\d+[.)])\s+", "", line)
+        line = _ANSWER_LABEL.sub("", line.replace("**", "").replace("__", "").replace("`", ""))
+        line = line.strip().strip("\"'“”‘’").strip()
+        if line:
+            lines.append(line)
+    text = ", ".join(lines)
+    text = " ".join(text.split()).strip(" ,;").rstrip(".").strip().strip("\"'“”‘’").strip()
+    if not text:
+        raise ValueError("the LLM answered nothing usable")
+    if _REFUSAL.search(text):
+        raise ValueError(f"the LLM refused or saw no picture: {text[:120]!r}")
+    if len(text) > HAAR_PROMPT_MAX_CHARS:
+        cut = text[:HAAR_PROMPT_MAX_CHARS]
+        text = (cut[:cut.rfind(",")] if "," in cut else cut.rsplit(" ", 1)[0]).strip(" ,;")
+    return text
+
+
+def suggest_haar_prompt(character_name: str, item_id: str) -> str:
+    """A HAAR text for hairstyle ``item_id`` of ``character_name`` read off the character's current profile picture
+    (``model_refs.current_profile_image``) by ONE queued vision call (``llm_router.llm_call`` with the picture
+    attached; task ``HAAR_PROMPT_TASK``). Saves nothing. ValueError for an item that is no hairstyle of the
+    character or a character without a profile picture; RuntimeError when the LLM is not routed, fails or answers
+    unusably (empty, a refusal)."""
+    from app.core.llm_router import llm_call
+    from app.core.model_refs import current_profile_image
+    from app.core.prompt_templates import render_task
+    item = _own_hairstyle(character_name, item_id)
+    picture = current_profile_image(character_name)
+    if picture is None:
+        raise ValueError(f"{character_name} has no profile picture — set one in the Images tab first")
+    system, user = render_task(HAAR_PROMPT_TASK, hairstyle_name=" ".join(str(item.get("name") or "").split()),
+                               current_text=hairstyle_description(item))
+    response = llm_call(task=HAAR_PROMPT_TASK, system_prompt=system, user_prompt=user, agent_name=character_name,
+                        max_tokens=HAAR_PROMPT_MAX_TOKENS, label=f"haar_hair_prompt:{item['id']}",
+                        image_path=picture)
+    try:
+        return clean_haar_prompt(getattr(response, "content", "") or "")
+    except ValueError as e:
+        raise RuntimeError(str(e)) from e
+
+
 def set_hair_colour(character_name: str, item_id: str, hex_colour: str) -> bool:
     """Store a hairstyle's manual hair colour (``hair_colour``, lower-case
     ``#rrggbb``); ``""`` = automatic (HairDeck's own colours). ValueError for

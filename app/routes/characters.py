@@ -1999,6 +1999,11 @@ class HairMethodRequest(BaseModel):
     item_id: str = ""
 
 
+class HairstyleItemRequest(BaseModel):
+    # ``item_id`` "" = the worn hairstyle.
+    item_id: str = ""
+
+
 class HairstyleTextRequest(BaseModel):
     # The hairstyle's text; ``item_id`` "" = the worn hairstyle.
     description: str = ""
@@ -2592,6 +2597,27 @@ def set_character_hairstyle_text(character_name: str, body: HairstyleTextRequest
         except Exception:  # noqa: BLE001 — a label, never a failure of the save
             logger.exception("Hairstyle text: no run estimate for %s/%s", character_name, item_id)
     return {"item_id": item_id, "description": garment_hair.hairstyle_description(get_item(item_id)), "run": run}
+
+
+@router.post("/{character_name}/hair/describe-from-profile")
+def suggest_character_hairstyle_text(character_name: str, body: HairstyleItemRequest,
+                                     _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The Hairstyles tab's "Describe from profile picture" (Ruling A105): ONE queued vision LLM call
+    (``garment_hair.suggest_haar_prompt``, task ``haar_hair_prompt``) writes the hairstyle's text — the HAAR prompt —
+    off the character's profile picture. Saves NOTHING and starts no image or hub job: the tab puts ``text`` into the
+    field and the user saves it (POST …/hair/description). 400 for no profile picture or an item that is no
+    hairstyle of the character, 502 when the LLM is not routed, fails or answers unusably."""
+    from app.core import garment_hair
+    _require_character(character_name)
+    item_id = _hairstyle_id(character_name, body.item_id)
+    try:
+        text = garment_hair.suggest_haar_prompt(character_name, item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:  # noqa: BLE001 — any LLM failure is one answer for the tab, logged here
+        logger.warning("HAAR prompt suggestion for %s/%s failed: %s", character_name, item_id, e)
+        raise HTTPException(status_code=502, detail=f"No suggestion: {e}")
+    return {"item_id": item_id, "text": text}
 
 
 @router.post("/{character_name}/hair/colour")

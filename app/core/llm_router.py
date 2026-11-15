@@ -412,6 +412,8 @@ def fallback_parent(task: str) -> Optional[str]:
         no tools — so the small prompt model that already handles the world's
         clothing words in image prompts fits; the intent anchor is for strict
         tool / JSON work, the chat anchor writes in character.
+      * haar_hair_prompt → "image_recognition": it reads the profile picture,
+        so it needs the vision anchor.
     """
     from app.core.llm_tasks import plugin_task_fallback
     declared_parent = plugin_task_fallback(task)
@@ -426,6 +428,8 @@ def fallback_parent(task: str) -> Optional[str]:
         return "chat_stream"
     if task in ("image_pose_check", "image_prompt_shorten", "piece_back_text"):
         return "image_prompt"
+    if task == "haar_hair_prompt":
+        return "image_recognition"
     return None
 
 
@@ -1040,7 +1044,8 @@ def llm_call(
     user_prompt: str,
     *,
     agent_name: str = "", priority: Optional[int] = None,
-    label: str = "", max_tokens: Optional[int] = None) -> Any:
+    label: str = "", max_tokens: Optional[int] = None,
+    image_path: Any = None) -> Any:
     """Central LLM entry point for non-streaming calls.
 
     Resolves provider+model per task and submits through the queue; the queue
@@ -1061,6 +1066,11 @@ def llm_call(
     routing entry) — the anti-hallucination bound for tightly limited output
     such as the prompt composer.
 
+    ``image_path`` attaches one image to the user turn (vision input, the
+    OpenAI ``image_url`` content form of ``vision_message.image_user_content``)
+    — route such a task at a vision model. A missing file raises before any
+    submit.
+
     Returns:
         The queue's response object (compatible with the existing call sites:
         `.content` yields the text).
@@ -1073,9 +1083,13 @@ def llm_call(
         from app.core.llm_tasks import get_default_priority
         priority = get_default_priority(task)
 
+    user_content: Any = user_prompt
+    if image_path is not None:
+        from app.core.vision_message import image_user_content
+        user_content = image_user_content(user_prompt, image_path)
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
+        {"role": "user", "content": user_content},
     ]
 
     from app.core.llm_lanes import LaneOverflow, Overflow
