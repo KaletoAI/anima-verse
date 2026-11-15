@@ -10,8 +10,8 @@ CONVENTION. The ``left`` view shows the figure's LEFT flank, so the figure faces
 * the body-retexture worker that paints the dressed views onto the mesh (ComfyUI-GLB-Body-Retexture
   ``body_core.VIEW_YAW_OFFSETS``: ``left`` = yaw +90°, "the camera of ``left`` looks at the character's own left
   side", glTF +X; its orthographic projection puts the character's front, +Z, at the image's LEFT edge);
-* the stored views: 57 of the 59 side views of a live world copy (2026-11-15, hand-labelled) follow it — the
-  two that do not are one character's right view (it faces left like her left view) and none else.
+* the stored views: 58 of the 59 side views of a live world copy (2026-11-15, hand-labelled) follow it — the
+  one that does not is one character's right view (it faces left like her left view).
 
 A view that faces the wrong way hands the mesher two identical profiles (or a profile seen from behind the
 mirror) and the worker paints the near flank onto the far one.
@@ -21,9 +21,9 @@ the bottom ``FOOT_BAND`` of the figure every connected part (a foot, both feet o
 into its upper rows (the leg above the ankle) and its lowest rows (the sole); the sole reaches much further
 forward of the leg than behind it, heel or high heel included. ``score`` is that reach balance, weighted by the
 parts' areas: > 0 the figure faces image-right, < 0 image-left. Measured on the 59 stored side views (see
-``scripts/smoke_view_facing.py`` for the table): every one signed right, ``|score|`` 0.17 .. 0.71, 0.30 or more
-on 56 of them; the arms (held forward, backward or hanging), long hair, dresses to the knee, boots, sandals,
-high heels and a four-legged animal did not move it. The head and the torso were measured as well and dropped:
+the A91 report for the table): every one signed right, ``|score|`` 0.17 .. 0.71, 0.30 or more on 57 of them;
+the arms (held forward, backward or hanging), long hair, dresses to the knee, boots, sandals, high heels and a
+four-legged animal did not move it. The head and the torso were measured as well and dropped:
 hair behind the head reverses the head's balance, the arms cover the chest. ``confidence`` grows with
 ``|score|`` up to ``SCORE_FULL`` and halves when one part points the other way (a stride).
 

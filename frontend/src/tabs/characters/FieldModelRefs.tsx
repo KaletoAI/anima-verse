@@ -36,6 +36,9 @@ import { shortCost } from './figureModel'
 import { DRAFT_NOTE, MAIN_FOLLOWUP, VIEW_FOLLOWUP, renderAllLabel, viewAction, viewRow } from './dressedViewsModel'
 import type { DressedSource } from './dressedViewsModel'
 import type { Freshness } from './FreshnessBadge'
+import { ViewMirrorButton } from './ViewMirrorButton'
+import { MIRROR_DONE, MIRROR_UNDONE, facingLine } from './viewFacingModel'
+import type { FacingPair, FacingTile, MirrorFollowup, Side } from './viewFacingModel'
 
 interface RefInfo {
   filename?: string
@@ -50,6 +53,8 @@ interface RefInfo {
    *  dressed views and drafts against the current base, the face view
    *  against the profile picture) — the tile's corner badge. */
   freshness?: Freshness | null
+  /** A side view's facing (Ruling A91, `view_facing.tile_state`). */
+  facing?: FacingTile | null
 }
 
 /** What the backend is doing to ONE kind right now (system-time stamps). */
@@ -95,6 +100,11 @@ export interface RefsInfo {
   /** Base-body pipeline: where a view's render comes from now — an edit (1 image job) or a copy of the body
    *  shape's view (no job; Ruling A70). Null when the server could not judge it. */
   dressed_source?: DressedSource | null
+  /** Both side views facing the same edge (Ruling A91, `view_facing.pair_state`). */
+  facing_pair?: FacingPair | null
+  /** What a Mirror of a dressed side view makes due (Ruling A91, `model_refs.outfit_mirror_followup`); null without
+   *  a stored side view. */
+  mirror_followup?: MirrorFollowup | null
   // Per image — a running default-pose render must not lock the 3D tab's
   // T-pose button (and vice versa): with several backends they run in parallel.
   status?: Partial<Record<RefKind, KindStatus>>
@@ -167,6 +177,8 @@ function renderFingerprint(d: RefsInfo | null | undefined, kinds: RefKind[]): st
     VIEW_ORDER.map((v) => [
       d?.views?.[v]?.info?.filename || '',
       d?.views?.[v]?.info?.created_at || '',
+      // A mirror keeps the file name and its stamp (Ruling A91): its record says the content changed.
+      d?.views?.[v]?.info?.facing?.mirrored?.at || '',
     ]),
   ])
 }
@@ -300,6 +312,22 @@ export function FieldModelRefs({
       setBusy(false)
     }
   }, [busy, enc, kindList, info.auto, info.pipeline, startPoll, t, toast])
+
+  // Ruling A91: a dressed side view's Mirror — the server flips the stored view on the CPU (no image job) or turns
+  // it back; the poll sees the changed mirror record and reloads the picture.
+  const mirror = useCallback(async (view: Side) => {
+    if (busy) return
+    setBusy(true)
+    try {
+      const d = await apiPost<{ mirrored?: boolean }>(`/characters/${enc}/model-refs/tpose_${view}/mirror`, {})
+      toast(t(d?.mirrored ? MIRROR_DONE : MIRROR_UNDONE))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+      startPoll(300)
+    }
+  }, [busy, enc, startPoll, t, toast])
 
   // The face view renders through the image dialog: its backend, LoRAs and
   // prompt apply to this one run only (the automatic render stays routed).
@@ -550,6 +578,10 @@ export function FieldModelRefs({
       const why = viewDisabled(view !== 'main')
       const color = LIGHT_COLOR[row.light]
       const loud = (row.light === 'yellow' || row.light === 'red') && row.reason
+      // Ruling A91: a side view's facing — one line only when it needs a look — and its Mirror beside the button.
+      const side: Side | null = view === 'left' || view === 'right' ? view : null
+      const facing = side ? ri?.facing : null
+      const notice = side ? facingLine(facing, info.facing_pair, side, t) : null
       return (
         <div key={view} className="ga-view-tile">
           <div className="ga-view-head" title={row.detail || row.state}>
@@ -568,11 +600,23 @@ export function FieldModelRefs({
               </div>
             ) : null}
           </div>
-          <button type="button" className="ga-btn ga-btn-sm ga-view-action" disabled={!!why}
-            title={why || [action.label, copy ? action.note : followup].filter(Boolean).join('\n')}
-            onClick={() => generate(view)} aria-label={`${t('Regenerate')} · ${name}`}>
-            ↻ {copy ? `${t('Copy')} · ${t('no job')}` : shortCost(action.jobs, undefined, t)}
-          </button>
+          <div className="ga-view-actions">
+            <button type="button" className="ga-btn ga-btn-sm ga-view-action" disabled={!!why}
+              title={why || [action.label, copy ? action.note : followup].filter(Boolean).join('\n')}
+              onClick={() => generate(view)} aria-label={`${t('Regenerate')} · ${name}`}>
+              ↻ {copy ? `${t('Copy')} · ${t('no job')}` : shortCost(action.jobs, undefined, t)}
+            </button>
+            {side && ri && facing ? (
+              <ViewMirrorButton facing={facing} followup={info.mirror_followup} view={side} outfit label={name}
+                busy={!!why} busyReason={why || undefined} onMirror={() => { void mirror(side) }} />
+            ) : null}
+          </div>
+          {notice ? (
+            <div className="ga-view-notice" title={notice.title}>
+              <StepLight light={notice.light} />
+              <span className="ga-one-line" style={{ color: LIGHT_COLOR[notice.light] }}>{notice.text}</span>
+            </div>
+          ) : null}
           {why && why !== t('Rendering…') ? <div className="ga-hint ga-one-line" title={why}>{why}</div> : null}
           {loud ? <div className="ga-hint ga-one-line" style={{ color }} title={row.detail || row.reason}>{row.reason}</div> : null}
         </div>

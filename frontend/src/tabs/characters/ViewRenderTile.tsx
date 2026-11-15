@@ -7,6 +7,9 @@
  * state, why the button waits, the failure and the kept warning. A `note` dims the picture and says what it really
  * is (a picture that is not the current view it stands for).
  *
+ * A side view adds a small button beside its own (`beside` — the Mirror "⇋", Ruling A91) and, only when something needs
+ * a look, one `notice` line (its facing: wrong, unsure, both sides the same way — the whole reason on mouse-over).
+ *
  * The caller decides everything (what the button starts and says, why it is disabled); the tile only renders.
  */
 import type { ReactNode } from 'react'
@@ -14,11 +17,13 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { RefImage } from './RefImage'
 import type { ImageTileMeta } from './RefImage'
 import { LIGHT_COLOR } from './stepStyle'
+import { StepLight } from './StepRows'
+import type { Light } from './hairstylesModel'
 
 const ONE_LINE = 'ga-hint ga-one-line'
 
 export function ViewRenderTile({ label, state, stateColor, reason, lead, url, meta, height, running, status, failed,
-  error, warning, disabled, disabledTitle, disabledReason, note, actionLabel, actionTitle, onRender }: {
+  error, warning, disabled, disabledTitle, disabledReason, note, actionLabel, actionTitle, beside, notice, onRender }: {
   /** The view's name. */
   label: string
   /** Its state in one word, written under the name in `stateColor`. */
@@ -51,6 +56,10 @@ export function ViewRenderTile({ label, state, stateColor, reason, lead, url, me
   actionLabel?: string
   /** The button's tooltip otherwise: the whole sentence with its cost and what it makes stale. */
   actionTitle?: string
+  /** A small button beside the view's own (the side views' Mirror). */
+  beside?: ReactNode
+  /** One line that asks for a look (the facing of a side view): its light, its words, the whole on mouse-over. */
+  notice?: { light: Light; text: string; title: string } | null
   onRender: () => void
 }) {
   const { t } = useI18n()
@@ -72,16 +81,25 @@ export function ViewRenderTile({ label, state, stateColor, reason, lead, url, me
           {running ? t('Generating…') : t('No render yet')}
         </div>
       )}
-      <button
-        type="button"
-        className="ga-btn ga-btn-sm ga-view-action"
-        disabled={disabled || running}
-        title={(disabled && (disabledReason || disabledTitle)) || actionTitle || undefined}
-        onClick={onRender}
-        aria-label={`${action} · ${label}`}
-      >
-        {actionLabel || action}
-      </button>
+      <div className="ga-view-actions">
+        <button
+          type="button"
+          className="ga-btn ga-btn-sm ga-view-action"
+          disabled={disabled || running}
+          title={(disabled && (disabledReason || disabledTitle)) || actionTitle || undefined}
+          onClick={onRender}
+          aria-label={`${action} · ${label}`}
+        >
+          {actionLabel || action}
+        </button>
+        {beside}
+      </div>
+      {notice ? (
+        <div className="ga-view-notice" title={notice.title}>
+          <StepLight light={notice.light} />
+          <span className="ga-one-line" style={{ color: LIGHT_COLOR[notice.light] }}>{notice.text}</span>
+        </div>
+      ) : null}
       {shownReason && !running ? (
         <div className={ONE_LINE} style={{ color: stateColor }} title={shownReason}>{shownReason}</div>
       ) : null}

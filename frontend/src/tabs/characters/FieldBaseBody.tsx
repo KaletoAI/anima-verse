@@ -93,6 +93,9 @@ import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clock
 import { Model3DViewer } from './Model3DViewer'
 import { ModelSteps } from './ModelSteps'
 import { ViewRenderTile } from './ViewRenderTile'
+import { ViewMirrorButton } from './ViewMirrorButton'
+import { MIRROR_DONE, MIRROR_UNDONE, MIRROR_WAIT_MODEL, facingLine } from './viewFacingModel'
+import type { Side } from './viewFacingModel'
 import { RefImage } from './RefImage'
 import { CollisionScales } from './CollisionScales'
 import { CollisionChannels } from './CollisionChannels'
@@ -199,7 +202,7 @@ function SkinStepLine({ info, busy, followup, onRun }: {
   )
 }
 
-function ViewTile({ info, view, label, busy, jobs, onRender, onSkinStep }: {
+function ViewTile({ info, view, label, busy, jobs, onRender, onSkinStep, onMirror }: {
   info: BaseBodyInfo
   view: BaseView
   label: string
@@ -207,6 +210,8 @@ function ViewTile({ info, view, label, busy, jobs, onRender, onSkinStep }: {
   jobs: PlainBodyJobs | undefined
   onRender: (view: BaseView, force: boolean) => void
   onSkinStep: () => void
+  /** A side view's Mirror (Ruling A91). */
+  onMirror: (view: Side) => void
 }) {
   const { t } = useI18n()
   const url = info.images?.[view] || null
@@ -223,6 +228,10 @@ function ViewTile({ info, view, label, busy, jobs, onRender, onSkinStep }: {
   const row = baseViewRow({ running: !!st?.running, failed: !!st?.failed, error: st?.error, warning: st?.warning,
     stored: !!url, freshness: info.image_meta?.[view]?.freshness }, t)
   const short = images === undefined ? '' : shortCost(images, hub, t)
+  // Ruling A91: a side view's facing — one line only when it needs a look — and its Mirror beside the button.
+  const side: Side | null = view === 'left' || view === 'right' ? view : null
+  const facing = side ? info.image_meta?.[view]?.facing : null
+  const notice = side ? facingLine(facing, info.facing_pair, side, t) : null
   return (
     <ViewRenderTile label={label} state={row.state} stateColor={LIGHT_COLOR[row.light]}
       reason={row.light === 'yellow' || row.light === 'red' ? row.reason : ''}
@@ -235,6 +244,13 @@ function ViewTile({ info, view, label, busy, jobs, onRender, onSkinStep }: {
       status={view === 'front' ? (
         <SkinStepLine info={info} busy={busy || viewsRunning(info)} followup={jobs?.model_followup}
           onRun={onSkinStep} />
+      ) : null}
+      notice={notice}
+      beside={side && url && facing ? (
+        <ViewMirrorButton facing={facing} followup={facing.followup} view={side} outfit={false} label={label}
+          busy={busy || viewsRunning(info) || modelRunning(info)}
+          busyReason={modelRunning(info) ? t(MIRROR_WAIT_MODEL) : t('Rendering…')}
+          onMirror={() => onMirror(side)} />
       ) : null}
       onRender={() => onRender(view, !!url)} />
   )
@@ -512,6 +528,26 @@ export function FieldBaseBody({ character, onOpenFigure, onOpenGallery }: {
       try {
         await apiPost(`/characters/${enc}/base-body/${path}`, body)
         startPoll(500)
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+        startPoll()
+      } finally {
+        setPosting(false)
+      }
+    },
+    [enc, posting, startPoll, t, toast],
+  )
+
+  // Ruling A91: a side view's Mirror — the server flips the stored view on the CPU (no image job) or turns it back;
+  // the poll then shows the new picture (its URL carries the file's mtime) and the facing line.
+  const mirror = useCallback(
+    async (view: Side) => {
+      if (posting) return
+      setPosting(true)
+      try {
+        const d = await apiPost<{ mirrored?: boolean }>(`/characters/${enc}/base-body/images/${view}/mirror`, {})
+        toast(t(d?.mirrored ? MIRROR_DONE : MIRROR_UNDONE))
+        startPoll(300)
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
         startPoll()
@@ -817,7 +853,7 @@ export function FieldBaseBody({ character, onOpenFigure, onOpenGallery }: {
               {BASE_VIEWS.map((view) => (
                 <ViewTile key={view} info={info} view={view} label={viewLabel(view)} jobs={jobs}
                   busy={posting} onRender={(v, force) => post('images', { view: v, force })}
-                  onSkinStep={() => post('skin-step', {})} />
+                  onSkinStep={() => post('skin-step', {})} onMirror={mirror} />
               ))}
             </div>
           </div>

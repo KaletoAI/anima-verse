@@ -3608,3 +3608,9 @@ a.ga-btn {
 
 /* Ruling A42 / A90 — the Figure tab's "Pause automatic generation": notice lines in the right panel (no box). */
 .ga-gen-pause { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+/* Ruling A91 — a side view's Mirror "⇋" beside its own button; pressed while the view is mirrored. */
+.ga-view-actions { display: flex; gap: 3px; align-items: stretch; min-width: 0; }
+.ga-view-actions > .ga-view-action { flex: 1 1 0; min-width: 0; }
+.ga-view-tile .ga-view-actions > .ga-view-mirror { flex: 0 0 auto; width: auto; padding: 2px 6px; font-size: 12px; margin-top: 2px; }
+.ga-view-mirror[aria-pressed="true"] { border-color: var(--accent, #388bfd); background: rgba(56, 139, 253, 0.22); }
+.ga-view-notice { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 11px; }

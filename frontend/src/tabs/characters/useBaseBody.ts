@@ -12,6 +12,7 @@ import type { ChannelDeclaration, ChannelOverrides } from './collisionChannelsMo
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiGet } from '../../lib/api'
 import type { ImageTileMeta } from './RefImage'
+import type { FacingPair, FacingTile } from './viewFacingModel'
 import type { Freshness } from './FreshnessBadge'
 import type { ModelStep } from './ModelSteps'
 import type { CollisionPayload, ExtensionRigDeclaration, SecondaryMotionPayload } from '@anima/scene-render'
@@ -194,7 +195,12 @@ export interface BaseBodyInfo {
   signature: string
   images: Partial<Record<BaseView, string | null>>
   /** Per stored view: model, creation time and freshness for the image tile. */
-  image_meta?: Partial<Record<BaseView, ImageTileMeta | null>>
+  image_meta?: Partial<Record<BaseView, (ImageTileMeta & {
+    /** A side view's facing and what its Mirror makes due (Ruling A91, `base_body._facing_tile`). */
+    facing?: FacingTile | null
+  }) | null>>
+  /** Both side views facing the same edge (Ruling A91, `view_facing.pair_state`). */
+  facing_pair?: FacingPair | null
   status: Partial<Record<BaseView, BaseViewStatus>>
   model: BaseModelWithFace | null
   outfit: BaseOutfitInfo | null
