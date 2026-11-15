@@ -28,12 +28,14 @@
  * link to the Figure tab and Run all's plan in one line (`runAllPlanLine`, what it does on mouse-over). Then two
  * columns: the base model's 3D preview ("Built <time>" in its corner, Full / Distance under it) on the left; on the
  * right one panel with sub-tabs instead of scrolling —
- * - Views (4): what the front is made from above them (Ruling A74b, `FrontReferenceRow`: the profile image small,
- *   "Reference: profile image" — the front is an edit of it — or the line that there is none and the front is made
- *   from text; a front made from another picture is outdated, said there and on its tile — and right beside the
- *   reason the front's Regenerate with its cost, the tile's own action, Ruling A86: `frontRegenerate`), then the four views two
- *   by two, small (a click enlarges one), each with its light and state in the label
- *   (`baseViewRow`), its Regenerate with the cost under it, the skin detail step under the front;
+ * - Views (4), two rows (Ruling A90 — the user: references side by side, the views in one row, less text):
+ *   row 1 the profile image (read-only, ↗ Gallery) → the full-body reference (Ruling A87, `FullBodyReferenceTile`),
+ *   each picture once; under it what the front is made from as a chip ("Front from: full-body reference / profile
+ *   image / text", Ruling A74b, `FrontReferenceRow`) — a front made from another picture adds its reason in one line
+ *   and right beside it the front's Regenerate with its cost (Ruling A86: `frontRegenerate`); row 2 the four views in
+ *   ONE row of small tiles (`ViewRenderTile`; a click enlarges one), each with its light, its state in one word
+ *   (`baseViewRow`), its Regenerate with the cost in short form ("↻ 1 image + 4 hub" — the whole sentence and what it
+ *   makes stale on mouse-over), the skin detail step under the front;
  * - Base model: its step row (`baseModelRow`) with "Regenerate the plain body's mesh — N hub jobs", the model's steps
  *   one line each, the base mesh repair (MeshRepairPanel, Ruling A34: status light, its settings saved on their own,
  *   "Repair again" — local), the tip smoothing (TipSmoothingPanel, Ruling A43) and the face/rig actions
@@ -109,19 +111,22 @@ import type { CollisionPayload, SecondaryMotionPayload } from '@anima/scene-rend
 import { BASE_VIEWS, modelRunning, tipsRunning, useBaseBody, viewsRunning } from './useBaseBody'
 import type { BaseActivity, BaseBodyInfo, BaseFrontReference, BaseView, ExtensionTipPanelInfo } from './useBaseBody'
 import { AUTO_BUILD_NOTE, BUILD_RUNNING_NOTE, ESTIMATE_NOTE, FRONT_WAITS_FOR_BUILD, frontRegenerate, modelFollowup,
-  singleAction, staleBaseNote } from './figureModel'
+  shortCost, singleAction, staleBaseNote } from './figureModel'
 import type { ModelFollowup } from './figureModel'
 import { EXT_DUE_GROUPS_NOTE, RUN_ALL_STATUS, TIP_DUE_NOTE, TIP_REBUILD_LABEL, baseHead, baseModelRow, baseViewRow, faceDueLine,
   runAllButton, runAllPlanLine, runAllWhat, stateMotionUrl, statePicker, viewerStateMotion } from './baseBodyModel'
 import type { BaseLight, BaseRunAll, PickedStateMotion, TipDots } from './baseBodyModel'
 import { BuildProblemView } from './BuildProblem'
-import { FullBodyReferenceTile } from './FullBodyReferenceTile'
+import { FullBodyReferenceTile, ReferenceArrow, ReferenceSourceTile } from './FullBodyReferenceTile'
 import { baseFollowup, fullBodyBuildNote, fullBodyRow } from './fullBodyReferenceModel'
 import type { BaseFullBodyInfo } from './fullBodyReferenceModel'
 import { StepLight, StepRowView, SubTabs } from './StepRows'
 import { LIGHT_COLOR, PANEL } from './stepStyle'
 
-const TILE_HEIGHT = 128
+const TILE_HEIGHT = 150
+
+/** Ruling A90: the long sentence under the four views is the views' buttons' mouse-over now. */
+const NEW_VIEW_STALE = 'A new view makes the base model stale — Run all or the next Build you start rebuilds it.'
 
 /** The right-hand panel's sub-tabs (Task UI5). */
 type BaseTab = 'views' | 'model' | 'extensions' | 'collision' | 'settings'
@@ -132,6 +137,8 @@ const ERROR_STYLE: CSSProperties = { color: 'var(--danger, #f85149)', overflowWr
 export interface PlainBodyJobs {
   view: number | null
   front: number | null
+  /** Ruling A92: the front made from the full-body reference (no skin step there). */
+  front_full_body?: number | null
   model: number | null
   after_front: number | null
   /** Ruling UI3c: what a step that changes a base view in place makes stale (the stored base model's hub stages);
@@ -168,28 +175,26 @@ function SkinStepLine({ info, busy, followup, onRun }: {
   const step = skin.step
   const label = !step ? t('Rendered without the skin detail step')
     : step.applied ? t('Skin detail added — the neutral render on the left')
-    : step.outcome === 'off' ? t('Skin detail step off — the neutral render is the front')
+    // Ruling A92: a front made from the full-body reference records why the step did not run (`reason`).
+    : step.outcome === 'off' ? (step.reason ? t(step.reason) : t('Skin detail step off — the neutral render is the front'))
     : step.outcome === 'busy' ? t('Skin detail not added (backend busy) — the neutral render is the front')
     : t('Skin detail not added — the neutral render is the front')
+  const cost = shortCost(1, followup ? followup.jobs : undefined, t)
+  const title = [label, t('Runs the skin detail edit again on the stored neutral front (one image job); the front is not re-rendered.'),
+    followup ? modelFollowup(followup, t) : '', followup ? staleBaseNote(followup.jobs, t) : ''].filter(Boolean).join('\n')
   return (
-    <div style={{ marginTop: 4 }}>
-      <div className="ga-face-actions-row" style={{ alignItems: 'center', gap: 6 }}>
-        {skin.neutral_url ? (
-          <div style={{ width: 52, flex: '0 0 auto' }}>
-            <RefImage key={skin.neutral_url} src={skin.neutral_url} height={72} label={t('Neutral front')}
-              meta={skin.neutral_meta} compact />
-          </div>
-        ) : null}
-        <span className="ga-hint" style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}
-          title={step?.error || undefined}>{label}</span>
-        {skin.enabled ? (
-          <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={onRun}
-            title={t('Runs the skin detail edit again on the stored neutral front (one image job); the front is not re-rendered.')}>
-            {t('Run skin step')}{followup ? ` (${modelFollowup(followup, t)})` : ''}
-          </button>
-        ) : null}
-      </div>
-      {skin.enabled && followup ? <ActionLine text={staleBaseNote(followup.jobs, t)} /> : null}
+    <div className="ga-skin-step" title={label}>
+      {skin.neutral_url ? (
+        <div style={{ width: 30, flex: '0 0 auto' }}>
+          <RefImage key={skin.neutral_url} src={skin.neutral_url} height={44} label={t('Neutral front')} compact bare />
+        </div>
+      ) : null}
+      {skin.enabled ? (
+        <button type="button" className="ga-btn ga-btn-sm ga-view-action" disabled={busy} onClick={onRun} title={title}
+          aria-label={t('Run skin step')}>
+          {t('Run skin step')} · {cost}
+        </button>
+      ) : <span className="ga-hint ga-one-line" title={label}>{label}</span>}
     </div>
   )
 }
@@ -208,36 +213,38 @@ function ViewTile({ info, view, label, busy, jobs, onRender, onSkinStep }: {
   const st = info.status?.[view]
   // A side/back view edits the front: it cannot render before the front exists.
   const needsFront = view !== 'front' && !info.images?.front
-  const cost = jobs ? singleAction('view', view === 'front' ? jobs.front : jobs.view, t) : undefined
+  const images = jobs ? (view === 'front' ? jobs.front : jobs.view) : undefined
+  const cost = jobs ? singleAction('view', images ?? null, t) : undefined
   // Ruling UI3c: a new view makes the stored base model stale (a new front the other views too) — said before the
-  // click.
+  // click, on the button's mouse-over (Ruling A90); the button itself carries the cost in short form.
+  const hub = !jobs?.model_followup ? undefined : view === 'front' ? jobs.after_front : jobs.model_followup.jobs
   const followup = !jobs?.model_followup ? '' : view === 'front' ? staleBaseNote(jobs.after_front, t)
     : modelFollowup(jobs.model_followup, t)
   const row = baseViewRow({ running: !!st?.running, failed: !!st?.failed, error: st?.error, warning: st?.warning,
     stored: !!url, freshness: info.image_meta?.[view]?.freshness }, t)
+  const short = images === undefined ? '' : shortCost(images, hub, t)
   return (
-    <ViewRenderTile label={`${label} · ${row.state}`} url={url} meta={info.image_meta?.[view]} height={TILE_HEIGHT}
+    <ViewRenderTile label={label} state={row.state} stateColor={LIGHT_COLOR[row.light]}
+      reason={row.light === 'yellow' || row.light === 'red' ? row.reason : ''}
+      url={url} meta={info.image_meta?.[view]} height={TILE_HEIGHT}
       lead={<StepLight light={row.light} title={row.detail || row.state} />}
       running={!!st?.running} failed={!!st?.failed} error={st?.error} warning={st?.warning}
       disabled={busy || needsFront} disabledReason={needsFront ? t('Render the front view first') : undefined}
-      actionTitle={cost && followup ? `${cost} · ${followup}` : cost}
-      status={(
-        <>
-          {cost && !needsFront ? <ActionLine text={followup ? `${cost} · ${followup}` : cost} /> : null}
-          {view === 'front' ? (
-            <SkinStepLine info={info} busy={busy || viewsRunning(info)} followup={jobs?.model_followup}
-              onRun={onSkinStep} />
-          ) : null}
-        </>
-      )}
+      actionLabel={short ? `${url ? '↻' : t('Generate')} ${short}` : undefined}
+      actionTitle={[cost, followup, jobs?.model_followup ? t(NEW_VIEW_STALE) : ''].filter(Boolean).join('\n') || undefined}
+      status={view === 'front' ? (
+        <SkinStepLine info={info} busy={busy || viewsRunning(info)} followup={jobs?.model_followup}
+          onRun={onSkinStep} />
+      ) : null}
       onRender={() => onRender(view, !!url)} />
   )
 }
 
-/** Above the four views (Ruling A74b): what the front is made from — the profile image, small (a click enlarges
- *  it), labelled "Reference: profile image", or the line that there is none and the front is made from text. A
- *  stored front made from something else says why it is outdated, and right beside the reason the front's
- *  Regenerate with its cost (Ruling A86 — the front tile's own action, `onRegenerate`); Run all re-renders it too. */
+/** Under the references (Ruling A74b, A86, A90): what the front is made from as one short chip — "Front from:
+ *  full-body reference / profile image / text" (the picture itself is the tile above, never shown twice; the
+ *  explanation on mouse-over). A stored front made from something else adds its reason in one line and, right beside
+ *  it, the front's Regenerate with its cost in short form (Ruling A86 — the front tile's own action, `onRegenerate`;
+ *  the whole label on mouse-over); Run all re-renders it too. */
 function FrontReferenceRow({ reference, jobs, busy, buildRunning, onRegenerate }: {
   reference: BaseFrontReference | null | undefined
   jobs: PlainBodyJobs | undefined
@@ -253,45 +260,32 @@ function FrontReferenceRow({ reference, jobs, busy, buildRunning, onRegenerate }
   // Ruling A87: the full-body reference while one is set, else the profile image.
   const fullBody = reference.method === 'reference' && reference.source === 'full_body'
   const action = frontRegenerate(fullBody ? 'full_body' : reference.method, jobs, t)
-  const title = reference.method !== 'reference' ? t('Reference: none')
-    : fullBody ? t('Reference: full-body reference') : t('Reference: profile image')
+  const chip = reference.method !== 'reference' ? t('Front from: text')
+    : fullBody ? t('Front from: full-body reference') : t('Front from: profile image')
+  const explain = fullBody
+    ? t('The front is an edit of the full-body reference above: build, face and proportions come from the picture. A new full-body reference makes the front outdated — Regenerate or Run all renders it again.')
+    : reference.method === 'reference'
+    ? t('The front is an edit of the profile image: build, face and proportions come from the picture. A new profile image makes the front outdated — Regenerate or Run all renders it again.')
+    : t(reference.note)
+  const title = [explain, reference.method === 'reference' && !fullBody ? t(reference.note) : ''].filter(Boolean).join('\n')
+  const light = outdated ? 'yellow' : 'green'
   return (
-    <div className="ga-face-actions-row" style={{ alignItems: 'center', gap: 8 }}>
-      {reference.method === 'reference' && reference.url ? (
-        <div style={{ width: 60, flex: '0 0 auto' }}>
-          <RefImage key={reference.url} src={reference.url} height={80} label={title} compact />
-        </div>
+    <div className="ga-front-from">
+      <span className="ga-chip" title={title}>
+        <StepLight light={light} />{chip}
+      </span>
+      {outdated ? (
+        <>
+          <span className="ga-hint ga-one-line" style={{ color: LIGHT_COLOR.yellow, flex: '1 1 0' }}
+            title={`${t('Outdated')}: ${t(reference.reason)}`}>{t('Outdated')}: {t(reference.reason)}</span>
+          <button type="button" className="ga-btn ga-btn-sm" disabled={busy || buildRunning} onClick={onRegenerate}
+            title={[action.label, action.note, buildRunning ? t(FRONT_WAITS_FOR_BUILD) : '',
+              t('Renders the front again — the same as the front view’s Regenerate below')].filter(Boolean).join('\n')}
+            aria-label={action.label}>
+            ↻ {t('Front view')}{jobs ? ` · ${shortCost(jobs.front, jobs.model_followup ? jobs.after_front : undefined, t)}` : ''}
+          </button>
+        </>
       ) : null}
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <strong style={{ fontSize: 12 }}>{title}</strong>
-        <span className="ga-hint" style={{ overflowWrap: 'anywhere' }}>
-          {fullBody
-            ? t('The front is an edit of the full-body reference above: build, face and proportions come from the picture. A new full-body reference makes the front outdated — Regenerate or Run all renders it again.')
-            : reference.method === 'reference'
-            ? t('The front is an edit of the profile image: build, face and proportions come from the picture. A new profile image makes the front outdated — Regenerate or Run all renders it again.')
-            : t(reference.note)}
-        </span>
-        {reference.method === 'reference' && !fullBody && reference.note ? (
-          <span className="ga-hint" style={{ overflowWrap: 'anywhere' }}>{t(reference.note)}</span>
-        ) : null}
-        {outdated ? (
-          <>
-            <span className="ga-hint" style={{ display: 'flex', gap: 6, alignItems: 'baseline',
-              color: LIGHT_COLOR.yellow, overflowWrap: 'anywhere' }}>
-              <StepLight light="yellow" />
-              <span>{t('Outdated')}: {t(reference.reason)}</span>
-            </span>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-              <button type="button" className="ga-btn ga-btn-sm" disabled={busy || buildRunning} onClick={onRegenerate}
-                title={t('Renders the front again — the same as the front view’s Regenerate below')}>
-                {action.label}
-              </button>
-            </div>
-            {buildRunning ? <span className="ga-hint">{t(FRONT_WAITS_FOR_BUILD)}</span> : null}
-            {action.note ? <span className="ga-hint">{action.note}</span> : null}
-          </>
-        ) : null}
-      </div>
     </div>
   )
 }
@@ -301,8 +295,10 @@ function FrontReferenceRow({ reference, jobs, busy, buildRunning, onRegenerate }
  *  makes due is said before the click: the front, with the front's Regenerate cost. Saving (pick, upload, clear)
  *  renders nothing. Read on its own (GET …/base-body/full-body-reference), every 2 s while a Generate runs; when one
  *  ends or a save lands, the base body is read again (the front turns outdated). */
-function BaseFullBodyReference({ character, jobs, refreshKey, onChanged }: {
+function BaseFullBodyReference({ character, jobs, refreshKey, onChanged, onOpenGallery }: {
   character: string
+  /** Opens the Gallery tab, where the profile image is chosen. */
+  onOpenGallery?: () => void
   jobs: PlainBodyJobs | undefined
   /** Changes when the front changes: read again (its light follows the front). */
   refreshKey: string
@@ -345,7 +341,14 @@ function BaseFullBodyReference({ character, jobs, refreshKey, onChanged }: {
   }, [busy, onChanged, t, toast])
   if (!info) return null
   const path = `/characters/${enc}/base-body/full-body-reference`
+  // Row 1 of Views (Ruling A90): the profile image → the full-body reference made from it, side by side.
+  const profileUrl = info.generate?.source === 'profile' ? info.generate.source_url : ''
   return (
+    <div className="ga-ref-row">
+    <ReferenceSourceTile title={t('Profile image')} url={profileUrl} empty={t('No profile image')}
+      link={onOpenGallery ? { label: t('Gallery'), title: t('The profile image is chosen in the Gallery tab'),
+        onClick: onOpenGallery } : undefined} />
+    <ReferenceArrow />
     <FullBodyReferenceTile character={character} row={fullBodyRow('base', info, t)} record={info.record} url={info.url}
       run={info.run} generate={info.generate} busy={busy} followup={baseFollowup(jobs, t)}
       clearNote={t('The picture stays in the gallery. Nothing renders now — the front is then made from the profile image again, and it shows as outdated until you regenerate it.')}
@@ -353,6 +356,7 @@ function BaseFullBodyReference({ character, jobs, refreshKey, onChanged }: {
       onPick={(filename) => void run(() => apiPost<BaseFullBodyInfo>(path, { image: filename }), 'Saved')}
       onUpload={(file) => void run(() => apiUpload<BaseFullBodyInfo>(`${path}/upload`, file), 'Saved')}
       onClear={() => void run(() => apiDelete<BaseFullBodyInfo>(path), 'Cleared')} />
+    </div>
   )
 }
 
@@ -387,7 +391,7 @@ function RunAllHeader({ runAll, lights, busy, buildRunning, activity, fullBody, 
         <StepLight light={head.light} />
         <strong style={{ color: LIGHT_COLOR[head.light] }}>{head.words}</strong>
         <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={disabled}
-          title={[what, runAll?.kind && runAll.hub_jobs ? t(ESTIMATE_NOTE) : '', runAll?.note || ''].filter(Boolean)
+          title={[what, runAll?.kind && runAll.hub_jobs ? t(ESTIMATE_NOTE) : '', runAll?.note || '', fullBody].filter(Boolean)
             .join('\n') || undefined} onClick={onRun}>
           {button.label}
         </button>
@@ -395,10 +399,10 @@ function RunAllHeader({ runAll, lights, busy, buildRunning, activity, fullBody, 
           <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenFigure}>↗ {t('Figure')}</button>
         ) : null}
       </div>
-      {plan ? <div className="ga-hint" style={{ fontSize: 12 }} title={what}>{t('Run all runs')}: {plan}</div> : null}
-      {fullBody ? (
-        <div className="ga-hint" style={{ fontSize: 12 }}
-          title={t('Optional — Run all never generates it: Base body → Views → Full-body reference.')}>{fullBody}</div>
+      {plan ? (
+        <div className="ga-hint ga-one-line" style={{ fontSize: 12 }}
+          title={[what, fullBody ? `${fullBody} (${t('Optional — Run all never generates it: Base body → Views → Full-body reference.')})` : '']
+            .filter(Boolean).join('\n')}>{t('Run all runs')}: {plan}</div>
       ) : null}
       {/* A running Build disables Run all; the line says so only when Run all has something to run. */}
       {buildRunning && !button.disabled ? <div className="ga-hint" style={{ fontSize: 12 }}>{t('A Build runs for this character — Run all waits until it has ended.')}</div>
@@ -428,19 +432,24 @@ function BaseSettings({ character, info, st, pending, onReload }: {
         dueLine={faceDueLine(info.run_all, t)} />
         : <div className="ga-hint">{t('Loading…')}</div>}
       {info.skin ? (
-        <div className="ga-hint">
-          {info.skin.enabled ? t('Skin detail step: on') : t('Skin detail step: off')}
-          {' — '}{t('a world setting (Game-Admin → Setup); it applies to the next front render')}
+        <div className="ga-hint" style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}
+          title={t('a world setting (Game-Admin → Setup); it applies to the next front render')}>
+          {/* Ruling A92: the world switch (`world_enabled`); `enabled` only says whether it applies to this front. */}
+          <span>{(info.skin.world_enabled ?? info.skin.enabled) ? t('Skin detail step: on') : t('Skin detail step: off')}</span>
+          {info.skin.note ? <span className="ga-chip ga-one-line" style={{ maxWidth: '100%' }} title={t(info.skin.note)}>
+            {t(info.skin.note)}</span> : null}
         </div>
       ) : null}
     </div>
   )
 }
 
-export function FieldBaseBody({ character, onOpenFigure }: {
+export function FieldBaseBody({ character, onOpenFigure, onOpenGallery }: {
   character: string
   /** Switches to the Figure tab (the figure and its Build). */
   onOpenFigure?: () => void
+  /** Switches to the Gallery tab, where the profile image is chosen (the references row's link). */
+  onOpenGallery?: () => void
 }) {
   useClockSettings()
   const { t } = useI18n()
@@ -797,20 +806,20 @@ export function FieldBaseBody({ character, onOpenFigure }: {
         <SubTabs tabs={tabs} value={sub} onChange={setSub} />
         {sub === 'views' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {/* Ruling A87: the full-body reference the front is an edit of — the first step. */}
-            <BaseFullBodyReference character={character} jobs={jobs} onChanged={startPoll}
+            {/* Row 1 (Ruling A90): profile image → full-body reference (Ruling A87, the first step); the front's
+                source as a chip under it; row 2: the four views in one row. */}
+            <BaseFullBodyReference character={character} jobs={jobs} onChanged={startPoll} onOpenGallery={onOpenGallery}
               refreshKey={`${info.image_meta?.front?.created_at || ''}:${info.front_reference?.image || ''}:${info.front_reference?.current ? 1 : 0}`} />
             <FrontReferenceRow reference={info.front_reference} jobs={jobs} busy={posting || viewsRunning(info)}
               buildRunning={!!figure?.build.running}
               onRegenerate={() => { void post('images', { view: 'front', force: true }) }} />
-            <div className="ga-basebody-views">
+            <div className="ga-view-row">
               {BASE_VIEWS.map((view) => (
                 <ViewTile key={view} info={info} view={view} label={viewLabel(view)} jobs={jobs}
                   busy={posting} onRender={(v, force) => post('images', { view: v, force })}
                   onSkinStep={() => post('skin-step', {})} />
               ))}
             </div>
-            {jobs ? <div className="ga-hint">{t('A new view makes the base model stale — Run all or the next Build you start rebuilds it.')}</div> : null}
           </div>
         ) : null}
         {sub === 'model' ? (

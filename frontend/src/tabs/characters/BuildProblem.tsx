@@ -17,8 +17,11 @@ import { StepLight } from './StepRows'
 import { LIGHT_COLOR } from './stepStyle'
 import { useFigure } from './useFigure'
 
-export function BuildProblemView({ problem, busy, onRun, runLabel, extra }: {
+export function BuildProblemView({ problem, busy, onRun, runLabel, extra, compact }: {
   problem: BuildProblem
+  /** Ruling A90: one notice line — the light, the title and the reason (the whole, the measured detail and the note on
+   *  mouse-over) and the fix's button with its cost (the Figure tab's notices). */
+  compact?: boolean
   busy?: boolean
   /** Runs the fix; without it the action is named, not offered. */
   onRun?: () => void
@@ -29,6 +32,23 @@ export function BuildProblemView({ problem, busy, onRun, runLabel, extra }: {
 }) {
   const { t } = useI18n()
   const text = problemText(problem, t)
+  if (compact) {
+    const title = [text.reason, text.detail, text.note].filter(Boolean).join('\n')
+    return (
+      <div role="alert" className="ga-notice" title={title || undefined}>
+        <StepLight light="red" />
+        <span className="ga-one-line ga-notice-text" style={{ color: LIGHT_COLOR.red }}>
+          <strong>{text.title}</strong> · {text.reason}
+        </span>
+        {onRun ? (
+          <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy} onClick={onRun} title={title || undefined}>
+            {runLabel || text.action}
+          </button>
+        ) : <span className="ga-hint">{text.action}</span>}
+        {extra}
+      </div>
+    )
+  }
   return (
     <div role="alert" style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '6px 8px',
       border: `1px solid ${LIGHT_COLOR.red}`, borderRadius: 6, fontSize: 13 }}>

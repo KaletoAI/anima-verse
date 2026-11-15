@@ -337,7 +337,10 @@ export interface FigurePayload {
   problem?: BuildProblem | null
   body: {
     plain: FigureBodyPart & {
-      jobs?: { view: number | null; front: number | null; model: number | null; after_front: number | null
+      /** `front_full_body` (Ruling A92): the front's Regenerate when it is made from the full-body reference — no skin
+       *  step there (what a new full-body reference makes due). */
+      jobs?: { view: number | null; front: number | null; front_full_body?: number | null; model: number | null
+        after_front: number | null
         model_followup?: ModelFollowup | null }
     }
     /** `state`: ready · missing · plain (nothing in the body). */
@@ -420,6 +423,17 @@ function jobsTr(hubJobs: number | null, t: Tr): string {
 export function imageJobsTr(jobs: number | null, t: Tr): string {
   if (jobs === null) return t('cost unknown')
   return jobs === 1 ? t('1 image job') : t('{n} image jobs').replace('{n}', String(jobs))
+}
+
+/** Ruling A90: a button's cost in short form, the long sentence on its mouse-over — "1 image + 4 hub",
+ *  "2 images", "no job"; null parts read "cost unknown" / "hub cost unknown"; `hub` 0 or absent adds nothing. */
+export function shortCost(images: number | null, hub?: number | null, t: Tr = EN): string {
+  const parts: string[] = []
+  if (images === null) parts.push(t('cost unknown'))
+  else if (images > 0) parts.push(images === 1 ? t('1 image') : t('{n} images').replace('{n}', String(images)))
+  if (hub === null) parts.push(t('hub cost unknown'))
+  else if (hub) parts.push(t('{n} hub').replace('{n}', String(hub)))
+  return parts.length ? parts.join(' + ') : t('no job')
 }
 
 /** The note of the hair's change while the plain body must be rebuilt with the hair (`figure.HAIR_REBUILD`). */

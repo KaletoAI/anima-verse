@@ -2980,7 +2980,50 @@ a.ga-btn {
 .ga-inline-pick > .ga-input { width: auto; max-width: 24em; }
 .ga-model3d-actions-row { display: flex; flex-wrap: wrap; gap: 6px 28px; align-items: flex-start; }
 /* The Base body tab (Task UI5): the four views two by two in the panel; the extension grid's container. */
-.ga-basebody-views { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; align-items: start; }
+/* Ruling A90 — the views of a flow in ONE row (Base body → Views, Figure → Dressed views): equal small tiles. */
+.ga-view-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; align-items: start; }
+.ga-view-tile { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ga-view-head { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: 12px; }
+.ga-view-tile .ga-view-action, .ga-skin-step .ga-view-action { width: 100%; white-space: normal; line-height: 1.2;
+  padding: 2px 4px; font-size: 11px; margin-top: 2px; }
+.ga-view-thumbs { display: flex; gap: 3px; min-width: 0; align-items: flex-end; }
+.ga-view-thumbs > :first-child { flex: 1 1 0; min-width: 0; }
+.ga-skin-step { display: flex; gap: 4px; align-items: center; min-width: 0; margin-top: 2px; }
+/* Ruling A90 — the references side by side (source → full-body reference), the same picture size. */
+.ga-ref-row { display: flex; gap: 6px; align-items: flex-start; min-width: 0; }
+.ga-ref-arrow { align-self: center; color: var(--text-muted, #8b949e); font-size: 16px; flex: 0 0 auto; }
+.ga-ref-tile { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.ga-ref-source { flex: 0 0 92px; width: 92px; }
+.ga-ref-main { flex: 1 1 0; }
+.ga-ref-head { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; }
+.ga-ref-state { margin-left: auto; font-size: 12px; white-space: nowrap; }
+.ga-ref-body { display: flex; gap: 8px; align-items: flex-start; min-width: 0; }
+.ga-ref-pic { width: 92px; flex: 0 0 92px; }
+.ga-ref-side { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1 1 0; }
+.ga-ref-buttons { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+.ga-ref-empty { display: flex; align-items: center; justify-content: center; text-align: center; padding: 4px;
+  border: 1px dashed var(--border, #30363d); border-radius: 6px; font-size: 11px; box-sizing: border-box; }
+.ga-info { cursor: help; color: var(--text-muted, #8b949e); font: italic 600 10px/1 Georgia, serif; display: inline-flex;
+  align-items: center; justify-content: center; width: 15px; height: 15px; border: 1px solid currentColor; border-radius: 50%; }
+.ga-one-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ga-chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border: 1px solid var(--border, #30363d);
+  border-radius: 10px; font-size: 12px; white-space: nowrap; flex: 0 0 auto; }
+.ga-front-from { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.ga-front-from > .ga-chip { display: block; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ga-front-from > .ga-chip > span:first-child { margin-right: 5px; vertical-align: -1px; }
+.ga-front-from > .ga-btn { flex: 0 0 auto; white-space: nowrap; }
+.ga-ref-source .ga-btn { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.ga-ref-others { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ga-ref-other { display: flex; gap: 6px; align-items: center; min-width: 0; font-size: 12px; }
+/* Ruling A90 — the Figure tab: one header line above the viewer; the notices one line each in the right panel. */
+.ga-notices { display: flex; flex-direction: column; gap: 2px; min-width: 0;
+  padding-bottom: 6px; border-bottom: 1px solid var(--border, #30363d); }
+.ga-notice { display: flex; gap: 6px; align-items: center; min-width: 0; font-size: 12px; }
+.ga-notice > .ga-btn { flex: 0 0 auto; white-space: nowrap; }
+.ga-notice-text { flex: 1 1 0; }
+.ga-notice.is-sub { padding-left: 16px; }
+.ga-figure-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-height: 28px; }
+.ga-due-toggle { background: none; border: none; padding: 0; cursor: pointer; font: inherit; font-weight: 600; }
 .ga-basebody-ext { container-type: inline-size; }
 /* Tip panels and the Extension bones box: two equal columns, top-aligned; one column on a narrow width. */
 .ga-ext-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
@@ -3563,11 +3606,5 @@ a.ga-btn {
   vertical-align: 1px;
 }
 
-/* Ruling A42 — the Figure tab's "Pause automatic generation" block: a status light, Resume with its cost, the
-   waiting jobs one compact line each with Cancel. */
-.ga-gen-pause { border: 1px solid var(--warning, #d29922); border-radius: 8px; padding: 8px 10px; display: flex;
-  flex-direction: column; gap: 6px; }
-.ga-gen-pause-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px;
-  max-height: 180px; overflow-y: auto; font-size: 12px; }
-.ga-gen-pause-list li { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.ga-gen-pause-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Ruling A42 / A90 — the Figure tab's "Pause automatic generation": notice lines in the right panel (no box). */
+.ga-gen-pause { display: flex; flex-direction: column; gap: 2px; min-width: 0; }

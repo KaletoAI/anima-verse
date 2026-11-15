@@ -1125,6 +1125,8 @@ export function CharactersTab() {
                     queueField={queueField}
                     draft={templateDraft}
                     discardSignal={discardSignal}
+                    // Ruling A90: no "BASE BODY" / "FIGURE" heading repeating the tab over its 3D preview.
+                    hideLoneSectionTitle={ft.tab.id === 'base_body_tab' || ft.tab.id === 'figure_tab'}
                     specialSlots={{
                       placement: placementUI,
                       body_editor: (
@@ -1164,14 +1166,18 @@ export function CharactersTab() {
                           onOpenHairstyles={subTabs.some((s) => s.id === 'hairstyles')
                             ? () => setSubTab('hairstyles') : undefined}
                           onOpenBaseBody={fieldTabs.some((g) => g.id === 'tab:base_body_tab')
-                            ? () => setSubTab('tab:base_body_tab') : undefined} />
+                            ? () => setSubTab('tab:base_body_tab') : undefined}
+                          onOpenGallery={subTabs.some((s) => s.id === 'gallery')
+                            ? () => setSubTab('gallery') : undefined} />
                       ),
                       // The Base body tab (Task UI1): the plain body's views, model, face and rig steps, its
                       // "Run all" and its settings.
                       base_body: (
                         <FieldBaseBody key={selected} character={selected}
                           onOpenFigure={fieldTabs.some((g) => g.id === 'tab:figure_tab')
-                            ? () => setSubTab('tab:figure_tab') : undefined} />
+                            ? () => setSubTab('tab:figure_tab') : undefined}
+                          onOpenGallery={subTabs.some((s) => s.id === 'gallery')
+                            ? () => setSubTab('gallery') : undefined} />
                       ),
                       model3d_gen: (
                         <FieldModel3D key={selected} character={selected}

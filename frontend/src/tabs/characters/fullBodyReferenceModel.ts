@@ -128,7 +128,9 @@ export function generateLabel(hasRecord: boolean, jobs: number, t: Tr = EN): str
 /** Plain body: what a new full-body reference makes due — the front, with the front's Regenerate cost (Ruling A86's
  *  helper, so the number is the one on the front's button). */
 export function baseFollowup(jobs: PlainJobs | undefined, t: Tr = EN): string {
-  const action = frontRegenerate('full_body', jobs, t)
+  // Ruling A92: the front made from the full-body reference has no skin step — `front_full_body` image jobs.
+  const action = frontRegenerate('full_body', jobs && jobs.front_full_body !== undefined
+    ? { ...jobs, front: jobs.front_full_body } : jobs, t)
   return t('Then the front is due: {action}').replace('{action}', action.label)
 }
 

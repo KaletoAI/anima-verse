@@ -139,13 +139,18 @@ export interface ExtensionTipPanelInfo {
 
 /** The base front's skin detail step (`base_skin.info`). */
 export interface BaseSkinInfo {
-  /** The world switch `base_body.skin_detail_step`. */
+  /** Whether the step applies to the stored front (Ruling A92: the world switch on AND the front not made from the
+   *  full-body reference) — it drives "Run skin step". */
   enabled: boolean
+  /** The world switch `base_body.skin_detail_step` (Ruling A92). */
+  world_enabled?: boolean
+  /** Why the step does not apply to this front ("" when it does or the switch is off). */
+  note?: string
   /** The stored neutral front the step started from (null = none). */
   neutral_url: string | null
   neutral_meta?: ImageTileMeta | null
   /** The front sidecar's `skin_step` record (null = none). */
-  step: { applied?: boolean; outcome?: string; error?: string | null; at?: string } | null
+  step: { applied?: boolean; outcome?: string; error?: string | null; reason?: string | null; at?: string } | null
 }
 
 /** The extension bones of the base model (Ruling A45): what the "Extension bones" box and the viewer show. */

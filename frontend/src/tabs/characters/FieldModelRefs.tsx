@@ -3,7 +3,7 @@
  * Two kinds: `pose` (default-pose wardrobe preview) and `tpose` (input for the
  * image-to-3D pipeline). Which kinds are shown is chosen by the `kinds` prop —
  * the wardrobe shows only the default pose (`layout="row"`); the T-pose and its
- * views as step rows (`layout="steps"`, Task UI5) are the Figure tab's "Dressed
+ * views in ONE row of small tiles (`layout="steps"`, Task UI5, Ruling A90) are the Figure tab's "Dressed
  * views" on the figure pipeline (Ruling A70) and the 3D tab's "Pose render" off it
  * (an animal, a temporary NPC).
  *
@@ -30,7 +30,9 @@ import { useToast } from '../../lib/Toast'
 import { ImageGenDialog } from '../../components/ImageGenDialog'
 import type { ImageGenSubmit } from '../../components/ImageGenDialog'
 import { RefImage } from './RefImage'
-import { StepRowView } from './StepRows'
+import { StepLight } from './StepRows'
+import { LIGHT_COLOR } from './stepStyle'
+import { shortCost } from './figureModel'
 import { DRAFT_NOTE, MAIN_FOLLOWUP, VIEW_FOLLOWUP, renderAllLabel, viewAction, viewRow } from './dressedViewsModel'
 import type { DressedSource } from './dressedViewsModel'
 import type { Freshness } from './FreshnessBadge'
@@ -112,12 +114,10 @@ const DRAFT_ORDER = ['back', 'left', 'right'] as const
 
 type RefKind = 'pose' | 'tpose'
 
-/** Thumbnail size of a step row (small: a click enlarges). */
-const STEP_THUMB_W = 84
-const STEP_THUMB_H = 140
-/** A step row: its thumbnails, then where the view comes from and its button beside them (checklist point 5). */
-const ROW_BODY = { display: 'flex', gap: 8, alignItems: 'flex-start' } as const
-const ROW_ACTIONS = { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0, flex: 1 } as const
+/** Thumbnail height of a view tile (small: a click enlarges). */
+const STEP_THUMB_H = 150
+/** Painted views whose front is an edit of the outfit's own full-body reference (Ruling A74b). */
+const main_ref = (s: DressedSource) => s.source === 'painted' && !!s.reference
 /** A server-reported state is shown only after persisting this long. */
 const HINT_AFTER_S = 20
 /** Poll cadence while something runs or is scheduled; slows after ~2 min. */
@@ -513,13 +513,6 @@ export function FieldModelRefs({
   useEffect(() => { if (stepLights) onLights?.(stepLights) }, [stepLights, onLights])
 
   if (layout === 'steps') {
-    const thumb = (src: string, lbl: string, meta: RefInfo | null | undefined, k: string) => (
-      <div key={k} style={{ width: STEP_THUMB_W, minWidth: 0 }}>
-        <RefImage key={`${k}-${bust}`} src={`${src}?v=${bust}`} width={STEP_THUMB_W} height={STEP_THUMB_H} radius={6}
-          compact label={lbl} meta={meta} />
-        <div className="ga-hint" style={{ fontSize: 11 }}>{lbl}</div>
-      </div>
-    )
     const viewDisabled = (needsMain: boolean): string | null =>
       building ? t(BUILD_RUNS_VIEWS) : busy || running ? t('Rendering…') : needsMain && !info.tpose
         ? t('Render the main view first') : null
@@ -528,17 +521,17 @@ export function FieldModelRefs({
     const copy = action.jobs === 0
     const source = info.pipeline && info.dressed_source ? info.dressed_source : null
     const plainShape = !!source && source.shape.startsWith('base')
-    // The outfit-reference note belongs to the front (main view) only: the other views stay edits of the shape's.
-    const fromLine = (main: boolean) => !source ? null : (
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span className="ga-hint" title={copy ? action.note : undefined}>
+    // Ruling A90: where the views come from is said ONCE, as a chip over the row (the explanation on mouse-over); the
+    // outfit-reference note belongs to the front only and rides in the same chip.
+    const sourceChip = !source ? null : (
+      <div className="ga-front-from">
+        <span className="ga-chip" title={[copy ? action.note : '', main_ref(source) ? t('the front is an edit of the outfit’s full-body reference') : '']
+          .filter(Boolean).join('\n') || undefined}>
           {source.source === 'shape' ? t('Copy of the body shape’s view — nothing painted')
             : source.source === 'plain' ? t('Copy of the plain body’s view — nothing painted')
               : plainShape ? t('Painted on the plain body’s view') : t('Painted on the body shape’s view')}
+          {main_ref(source) ? ` · ${t('front from the full-body reference')}` : ''}
         </span>
-        {main && source.source === 'painted' && source.reference ? (
-          <span className="ga-hint">· {t('the front is an edit of the outfit’s full-body reference')}</span>
-        ) : null}
         {plainShape ? (onOpenBaseBody ? (
           <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBaseBody}
             title={t('The plain body’s views are made in the Base body tab')}>↗ {t('Base body')}</button>
@@ -548,56 +541,64 @@ export function FieldModelRefs({
         ) : null}
       </div>
     )
-    const regen = (view: 'main' | typeof VIEW_ORDER[number], title: string) => {
+    // One view as a tile of the row: light and name, the state in one word, the picture small (a click enlarges it;
+    // the draft it was composited from beside it, smaller), its button with the cost in short form — the whole label
+    // and what it makes due on mouse-over —, then (one line each, the whole on mouse-over) why it waits and the
+    // reason of a yellow or red light.
+    const tile = (view: 'main' | typeof VIEW_ORDER[number], name: string, row: ReturnType<typeof viewRow>,
+      ri: RefInfo | null | undefined, src: string, draft: RefInfo | null | undefined, followup: string) => {
       const why = viewDisabled(view !== 'main')
+      const color = LIGHT_COLOR[row.light]
+      const loud = (row.light === 'yellow' || row.light === 'red') && row.reason
       return (
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button type="button" className="ga-btn ga-btn-sm" disabled={!!why} title={why || (copy ? action.note : title)}
-            onClick={() => generate(view)}
-            aria-label={`${t('Regenerate')} · ${view === 'main' ? t('Main view') : viewLabel(view)}`}>
-            {action.label}
+        <div key={view} className="ga-view-tile">
+          <div className="ga-view-head" title={row.detail || row.state}>
+            <StepLight light={row.light} /><strong className="ga-one-line" title={name}>{name}</strong>
+          </div>
+          <div className="ga-hint ga-one-line" style={{ color }} title={row.state}>{row.state}</div>
+          <div className="ga-view-thumbs">
+            {ri ? (
+              <RefImage key={`${view}-${bust}`} src={`${src}?v=${bust}`} height={STEP_THUMB_H} radius={6} compact
+                label={name} meta={ri} />
+            ) : <div className="ga-hint ga-ref-empty" style={{ height: STEP_THUMB_H }}>{t('No render yet')}</div>}
+            {draft && view !== 'main' ? (
+              <div style={{ width: 26, flex: '0 0 26px' }} title={draftLabel(view)}>
+                <RefImage key={`${view}-draft-${bust}`} src={`${src}_draft?v=${bust}`} height={40} radius={3} compact bare
+                  label={draftLabel(view)} />
+              </div>
+            ) : null}
+          </div>
+          <button type="button" className="ga-btn ga-btn-sm ga-view-action" disabled={!!why}
+            title={why || [action.label, copy ? action.note : followup].filter(Boolean).join('\n')}
+            onClick={() => generate(view)} aria-label={`${t('Regenerate')} · ${name}`}>
+            ↻ {copy ? `${t('Copy')} · ${t('no job')}` : shortCost(action.jobs, undefined, t)}
           </button>
-          {why && why !== t('Rendering…') ? <span className="ga-hint">{why}</span> : null}
+          {why && why !== t('Rendering…') ? <div className="ga-hint ga-one-line" title={why}>{why}</div> : null}
+          {loud ? <div className="ga-hint ga-one-line" style={{ color }} title={row.detail || row.reason}>{row.reason}</div> : null}
         </div>
       )
     }
+    const enc0 = `/characters/${enc}/model-refs`
     const faceInfo = info.views?.face
     const faceOn = !!faceInfo?.enabled
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
         {genError ? <div className="ga-hint" style={{ color: 'var(--danger, #f85149)' }}>{genError}</div> : null}
-        <StepRowView row={{ name: t('Main view'), ...mainRow }}>
-          <div style={ROW_BODY}>
-            {info.tpose ? thumb(`/characters/${enc}/model-refs/tpose`, t('Front view'), info.tpose, 'main') : null}
-            <div style={ROW_ACTIONS}>
-              {fromLine(true)}
-              {regen('main', info.pipeline ? `${t(MAIN_FOLLOWUP)}\n${t(VIEW_FOLLOWUP)}` : '')}
-            </div>
-          </div>
-        </StepRowView>
-        {extraRows.map(({ view, row }) => {
-          const draft = info.pipeline ? info.drafts?.[view] : null
-          const vi = info.views?.[view]?.info
-          return (
-            <StepRowView key={view} row={{ name: viewLabel(view), ...row,
-              detail: [row.detail, draft !== undefined && info.pipeline && !copy ? t(DRAFT_NOTE) : '']
-                .filter(Boolean).join('\n') }}>
-              <div style={ROW_BODY}>
-                {vi ? thumb(`/characters/${enc}/model-refs/tpose_${view}`, viewLabel(view), vi, view) : null}
-                {draft ? thumb(`/characters/${enc}/model-refs/tpose_${view}_draft`, draftLabel(view), draft, `${view}-draft`)
-                  : null}
-                <div style={ROW_ACTIONS}>
-                  {fromLine(false)}
-                  {regen(view, info.pipeline ? t(VIEW_FOLLOWUP) : '')}
-                </div>
-              </div>
-            </StepRowView>
-          )
-        })}
+        {sourceChip}
+        <div className="ga-view-row">
+          {tile('main', t('Front view'), mainRow, info.tpose, `${enc0}/tpose`, null,
+            info.pipeline ? `${t(MAIN_FOLLOWUP)}\n${t(VIEW_FOLLOWUP)}` : '')}
+          {extraRows.map(({ view, row }) => tile(view, viewLabel(view), {
+            ...row, detail: [row.detail, info.pipeline && info.drafts?.[view] !== undefined && !copy ? t(DRAFT_NOTE) : '']
+              .filter(Boolean).join('\n') }, info.views?.[view]?.info, `${enc0}/tpose_${view}`,
+          info.pipeline ? info.drafts?.[view] : null, info.pipeline ? t(VIEW_FOLLOWUP) : ''))}
+        </div>
         {faceInfo && info.pipeline ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <span className="ga-hint">{t('Face view: it textures the plain body’s face — regenerated in the Base body tab')}</span>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0 }}>
+              <span className="ga-hint ga-one-line" style={{ flex: '1 1 0' }}
+                title={t('Face view: it textures the plain body’s face — regenerated in the Base body tab')}>
+                {t('Face view: it textures the plain body’s face — regenerated in the Base body tab')}</span>
               {onOpenBaseBody ? (
                 <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBaseBody}>↗ {t('Base body')}</button>
               ) : null}
@@ -606,8 +607,9 @@ export function FieldModelRefs({
               title={t('Render a face close-up for face retexture')}>
               <input type="checkbox" checked={faceOn} onChange={(e) => setView('face', e.target.checked)} />
               <span>{t('Render a missing face view with these views')}</span>
-              <span className="ga-hint">{faceOn ? t('Saved — the next views render adds it if missing (1 image job)')
-                : t('Saved — nothing runs')}</span>
+              <span className="ga-hint ga-one-line" style={{ flex: '1 1 0' }}
+                title={faceOn ? t('Saved — the next views render adds it if missing (1 image job)') : t('Saved — nothing runs')}>
+                {faceOn ? t('Saved — the next views render adds it if missing (1 image job)') : t('Saved — nothing runs')}</span>
             </label>
           </div>
         ) : faceInfo ? renderView('face', STEP_THUMB_H) : null}

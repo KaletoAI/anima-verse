@@ -61,7 +61,7 @@
  * …/figure while a Build runs (useFigure); the tab re-reads on the push topic `generation`.
  */
 import { useCallback, useState } from 'react'
-import type { CSSProperties } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -83,9 +83,10 @@ import {
   BUILD_DEFERRED_NOTE, BUILD_RUNNING_NOTE, BUILD_STATUS, ESTIMATE_NOTE, HAIR_MODE_LABELS, MESH_MODE_LABELS,
   FRONT_WAITS_FOR_BUILD, NO_BASE_BODY_NOTE, REFIT_LABEL, autoBuildNote, baseBodyLine, bodyRows, buildButton,
   changeLine, frontBuildCovers, frontRegenerate, hairState, headerLine, noBaseBody, planRows, regenerateMeshLabel,
-  retryLabel, servedLines, stateMeshAction, stateToggleNote, statusLight, wornState,
+  retryLabel, servedLines, shortCost, stateMeshAction, stateToggleNote, statusLight, wornState,
 } from './figureModel'
-import type { FigureChange, FigurePayload, FigureWornRow, GenerationPause, HairMode, PieceState, WaitingJob } from './figureModel'
+import type { FigurePayload, FigureWornRow, GenerationPause, HairMode, PieceState, WaitingJob } from './figureModel'
+import type { Light } from './hairstylesModel'
 
 const ERROR_STYLE: CSSProperties = { color: LIGHT_COLOR.red, overflowWrap: 'anywhere' }
 
@@ -101,7 +102,8 @@ type Sub = FigureSub
 /** The dressed views are the T-pose kind's (a literal kept stable for FieldModelRefs' poll). */
 const TPOSE: ('tpose')[] = ['tpose']
 
-export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpenBaseBody, initialSub = 'worn' }: {
+export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpenBaseBody, onOpenGallery,
+  initialSub = 'worn' }: {
   character: string
   /** The sub-tab it opens on (a link into the Dressed views or the Outfit model; the check renders each). */
   initialSub?: Sub
@@ -111,6 +113,8 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
   onOpenHairstyles?: () => void
   /** Opens the Base body tab (the plain body's views, model, face and rig, and their settings). */
   onOpenBaseBody?: () => void
+  /** Opens the Gallery tab, where the profile image is chosen (Dressed views' references row). */
+  onOpenGallery?: () => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -200,23 +204,20 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
       title: t('What the Build runs') },
     { id: 'body' as const, label: t('Body') },
     { id: 'views' as const, label: viewLights ? `${t('Dressed views')} (${viewLights.split(',').length})`
-      : t('Dressed views'), title: t('The outfit’s views of the figure: the input of its texture and model') },
+      : t('Dressed views'),
+    // Ruling A90: the line that the Build renders them is the sub-tab's mouse-over.
+    title: `${t('The outfit’s views of the figure: the input of its texture and model')}\n${t(VIEWS_BY_BUILD)}` },
     { id: 'model' as const, label: t('Outfit model'), title: t('The current outfit’s model and its steps') },
   ]
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0, fontSize: 13 }}>
+      {/* Ruling A90: ONE line above the viewer; everything else is a notice line in the right-hand panel. */}
       <FigureHeader data={data} posting={posting} autoSaved={autoSaved} onBuild={build}
         onAutoBuild={(enabled) => { void setAutoBuild(enabled) }}
-        onPause={() => { void setPaused(true) }} onRegenerateFront={() => { void regenerateFront() }}
-        onOpenBaseBody={onOpenBaseBody} />
-      {data.generation_pause ? (
-        <GenerationPausePanel gp={data.generation_pause} busy={posting} onResume={() => { void setPaused(false) }}
-          onCancel={(job) => { void cancelWaiting(job) }} />
-      ) : null}
+        onPause={() => { void setPaused(true) }} />
       <div className="ga-split ga-split-views ga-split-figure">
         <div className="ga-split-col">
-          <ServedStateNote state={data.served_state} />
           {/* The figure gets the wider column and no tilt toolbar (user 2026-11-13): the canvas fills the column. */}
           {data.served_url ? (
             <Model3DViewer key={data.served_url} url={data.served_url} format="glb" height={600} subject="figure"
@@ -230,6 +231,14 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
           )}
         </div>
         <div className="ga-split-col" style={PANEL}>
+          <FigureNotices data={data} posting={posting} onBuild={build} onRegenerateFront={() => { void regenerateFront() }}
+            onOpenBaseBody={onOpenBaseBody}>
+            {data.generation_pause ? (
+              <GenerationPausePanel gp={data.generation_pause} busy={posting} onResume={() => { void setPaused(false) }}
+                onCancel={(job) => { void cancelWaiting(job) }} />
+            ) : null}
+            <ServedStateNote state={data.served_state} />
+          </FigureNotices>
           <SubTabs tabs={tabs} value={sub} onChange={setSub} />
           {sub === 'worn' ? (
             <WornRows data={data} character={character} busy={posting} onRetry={build} onOpenWardrobe={onOpenWardrobe}
@@ -246,9 +255,10 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
           ) : null}
           {/* Kept mounted while hidden: it polls the views and counts them for the sub-tab's label. */}
           <div style={sub === 'views' ? { display: 'flex', flexDirection: 'column', gap: 6 } : { display: 'none' }}>
-            <span className="ga-hint">{t(VIEWS_BY_BUILD)}</span>
-            {/* Ruling A74b: the worn outfit's reference image — its dressed front is an edit of that picture. */}
+            {/* Ruling A90: row 1 the references (source → the worn outfit's full-body reference, Ruling A74b/A87 — its
+                dressed front is an edit of that picture), row 2 the dressed views in one row. */}
             <OutfitReferenceRow character={character} onChanged={() => { setRefVersion((n) => n + 1); reload() }}
+              onOpenBaseBody={onOpenBaseBody} onOpenGallery={onOpenGallery}
               refreshKey={`${data.build.running ? 'running' : 'idle'}:${data.served_built_at || ''}:${data.outfit || ''}:${(data.worn || []).map((w) => w.item_id).join(',')}`} />
             <FieldModelRefs character={character} kinds={TPOSE} layout="steps" onOpenBaseBody={onOpenBaseBody}
               onOpenBody={openBody} onLights={onViewLights}
@@ -264,24 +274,23 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
   )
 }
 
-/** Ruling A75: what the shown figure is against the outfit worn now — its light and reason over the viewer, one
- *  line per piece it lacks (the measured refusal on mouse-over). A figure without a piece is never shown as if it
- *  were the outfit. */
+/** Ruling A75: what the shown figure is against the outfit worn now — its light and reason, one line per piece it
+ *  lacks (the measured refusal on mouse-over). A figure without a piece is never shown as if it were the outfit.
+ *  Ruling A90: notice lines in the right-hand panel, each in one line with the whole on mouse-over; a figure that
+ *  shows the outfit worn now (green) is no notice. */
 function ServedStateNote({ state }: { state: FigurePayload['served_state'] }) {
   const { t } = useI18n()
-  const lines = servedLines(state, t)
-  if (!lines.length) return null
+  if (!state || state.light === 'green' || !servedLines(state, t).length) return null
   return (
-    <div className="ga-served-state" style={{ display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 4 }}>
-      {lines.map((line, i) => (
-        <span key={i} title={line.title || undefined} className={line.head ? undefined : 'ga-hint'}
-          style={{ display: 'flex', gap: 6, alignItems: 'baseline', paddingLeft: line.head ? 0 : 16,
-            color: line.head && state ? LIGHT_COLOR[state.light] : undefined, fontWeight: line.head ? 600 : undefined }}>
+    <>
+      {servedLines(state, t).map((line, i) => (
+        <div key={i} className={`ga-notice${line.head ? '' : ' is-sub'}`} title={[line.text, line.title].filter(Boolean).join('\n')}>
           {line.light ? <StepLight light={line.light} /> : null}
-          <span>{line.text}</span>
-        </span>
+          <span className={`ga-one-line ga-notice-text${line.head ? '' : ' ga-hint'}`}
+            style={line.head ? { color: LIGHT_COLOR[state.light], fontWeight: 600 } : undefined}>{line.text}</span>
+        </div>
       ))}
-    </div>
+    </>
   )
 }
 
@@ -289,8 +298,10 @@ function ServedStateNote({ state }: { state: FigurePayload['served_state'] }) {
 const NOT_PAUSED: GenerationPause = { paused: false, since: null, waiting: [], running: [], resume_jobs: 0,
   resume_unknown: 0 }
 
-function FigureHeader({ data, posting, autoSaved, onBuild, onAutoBuild, onPause, onRegenerateFront,
-  onOpenBaseBody }: {
+/** The Figure tab's one line above the viewer (Ruling A90): the light, "N changes" (the due list on its mouse-over
+ *  and behind its ▸ toggle), Build with its cost, "Build automatically" and "Pause automatic generation" — what each
+ *  does on mouse-over. Everything else is a notice line in the right-hand panel (`FigureNotices`). */
+function FigureHeader({ data, posting, autoSaved, onBuild, onAutoBuild, onPause }: {
   data: FigurePayload
   posting: boolean
   /** "Build automatically" was saved in this visit: its note says so. */
@@ -299,116 +310,137 @@ function FigureHeader({ data, posting, autoSaved, onBuild, onAutoBuild, onPause,
   onAutoBuild: (enabled: boolean) => void
   /** Ruling A42: "Pause automatic generation" (no jobs). */
   onPause: () => void
-  /** Ruling A86: the front's Regenerate (POST …/base-body/images {view: "front", force: true}). */
-  onRegenerateFront: () => void
-  onOpenBaseBody?: () => void
 }) {
   const { t } = useI18n()
+  const [open, setOpen] = useState(false)
   const button = buildButton(data, t)
-  const running = data.build.running
-  const step = data.build.step
-  // A worn piece's failure is written in its own row; the head names only the others (an assembly, a texture).
-  const wornIds = new Set(data.worn.map((r) => r.item_id))
-  const failed = Object.entries(data.build.failed || {}).filter(([, f]) => !f.item_id || !wornIds.has(f.item_id))
-  // The step the problem box says in full is not repeated in the one-line list.
-  const others = failed.filter(([name]) => name !== data.problem?.step)
   const light = statusLight(data.status)
-  // Ruling A86: the plain body's front made from another reference is its own row with its action (below), not a
-  // part of the one-line list.
+  // Ruling A86: the plain body's front made from another reference is its own notice with its action, not a part of
+  // the due list.
   const frontChange = data.changes.find((c) => c.key === 'body' && c.front)
   const listed = data.changes.filter((c) => c !== frontChange)
+  const due = listed.map((c) => changeLine(c, t))
+  const served = data.served_state && data.served_state.light === 'green' ? t(data.served_state.state) : ''
+  const head = headerLine(data.status, data.changes.length, t)
+  const autoNote = autoSaved ? autoBuildNote(data.auto_build, t)
+    : data.auto_build ? t('Changes start the Build by themselves') : t('Changes wait for Build')
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', minHeight: 30 }}>
-        <StepLight light={light} />
-        <strong style={{ color: LIGHT_COLOR[light] }}>{headerLine(data.status, data.changes.length, t)}</strong>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <div className="ga-figure-head">
+        <StepLight light={light} title={served || undefined} />
+        {due.length ? (
+          <button type="button" className="ga-due-toggle" style={{ color: LIGHT_COLOR[light] }} aria-expanded={open}
+            title={`${t('Due')}:\n${due.join('\n')}`} onClick={() => setOpen((v) => !v)}>
+            {head} {open ? '▾' : '▸'}
+          </button>
+        ) : <strong style={{ color: LIGHT_COLOR[light] }} title={served || undefined}>{head}</strong>}
         <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={posting || !!button.disabled}
           title={[t('Runs every step that is missing or out of date, in order, and skips what is current'),
             data.cost.hub_jobs ? t(ESTIMATE_NOTE) : ''].filter(Boolean).join(' — ')} onClick={onBuild}>
           {button.label}
         </button>
         <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}
-          title={t('Outfit changes, a new body or a piece that became ready start the Build by themselves; such a Build never makes or refreshes the base body — only a Build you start does. Off: they only collect as changes until you click Build. Never stops a running Build.')}>
+          title={`${autoNote}\n${t('Outfit changes, a new body or a piece that became ready start the Build by themselves; such a Build never makes or refreshes the base body — only a Build you start does. Off: they only collect as changes until you click Build. Never stops a running Build.')}`}>
           <input type="checkbox" checked={data.auto_build} disabled={posting}
             onChange={(e) => onAutoBuild(e.target.checked)} />
           <span>{t('Build automatically')}</span>
+          {autoSaved ? <span className="ga-hint" style={{ color: LIGHT_COLOR.yellow }}>{t('Saved')}</span> : null}
         </label>
-        <span className="ga-hint" style={autoSaved ? { color: LIGHT_COLOR.yellow } : undefined}>
-          {autoSaved ? autoBuildNote(data.auto_build, t)
-            : data.auto_build ? t('Changes start the Build by themselves') : t('Changes wait for Build')}
-        </span>
         <GenerationPauseSwitch gp={data.generation_pause ?? NOT_PAUSED} busy={posting} onPause={onPause} />
       </div>
-      {button.disabled && button.disabled !== button.label ? <div className="ga-hint">{button.disabled}</div> : null}
-      {noBaseBody(data) && !running ? <div className="ga-hint">{t(NO_BASE_BODY_NOTE)}</div> : null}
-      {running ? (
-        <div className="ga-hint" style={{ color: LIGHT_COLOR.blue }}>
-          {step ? `${t('Running')}: ${step.index && step.count ? `${step.index}/${step.count} ` : ''}${step.label}` : t('Running')}
-          {' — '}{t(BUILD_RUNNING_NOTE)}
-        </div>
-      ) : null}
-      {!running && data.build.deferred ? <div className="ga-hint">{t(BUILD_DEFERRED_NOTE)}</div> : null}
-      {!running && data.build.paused ? (
-        <div className="ga-hint">{t('Paused before {step} — Resume builds the rest').replace('{step}', data.build.paused.label)}</div>
-      ) : null}
-      {listed.length ? (
-        <div className="ga-hint" style={{ color: LIGHT_COLOR.yellow }}>
-          {t('Due')}: {listed.map((c) => changeLine(c, t)).join(' · ')}
-        </div>
-      ) : null}
-      {/* Ruling A87: no full-body reference is information, never a due step — the Build never generates one. */}
-      {data.full_body_reference && (!data.full_body_reference.base || !data.full_body_reference.outfit) ? (
-        <div className="ga-hint" title={t('Optional — the Build never generates it: Base body → Views, and Dressed views here.')}>
-          {[fullBodyBuildNote('base', data.full_body_reference.base, undefined, t),
-            fullBodyBuildNote('outfit', data.full_body_reference.outfit, undefined, t)].filter(Boolean).join(' · ')}
-        </div>
-      ) : null}
-      {frontChange ? (
-        <FrontChangeRow change={frontChange} jobs={data.body?.plain.jobs} busy={posting} buildRunning={running}
-          onRegenerate={onRegenerateFront} onOpenBaseBody={onOpenBaseBody} />
-      ) : null}
-      {/* Ruling A61: the failed step said in full — the step, the reason, the view, the fix with its cost. */}
-      {!running && data.problem ? <BuildProblemView problem={data.problem} busy={posting} onRun={onBuild} /> : null}
-      {!running && others.length ? (
-        <div className="ga-hint" style={ERROR_STYLE}>
-          {others.map(([name, f]) => `${name}: ${f.error}`).join(' · ')}
+      {open && due.length ? (
+        <div className="ga-hint" style={{ color: LIGHT_COLOR.yellow, display: 'flex', flexDirection: 'column' }}>
+          {due.map((line, i) => <span key={i} className="ga-one-line" title={line}>{t('Due')}: {line}</span>)}
         </div>
       ) : null}
     </div>
   )
 }
 
-/** Ruling A86: the plain body's change whose front was made from another reference — the light, the reason in plain
- *  words, and right on it the front's Regenerate with its cost (the front's image jobs plus what the new front makes
- *  due at the next Build), "Open Base body tab", and that the Build covers it in one go with its count. */
-function FrontChangeRow({ change, jobs, busy, buildRunning, onRegenerate, onOpenBaseBody }: {
-  change: FigureChange
-  jobs: NonNullable<FigurePayload['body']>['plain']['jobs']
-  busy: boolean
-  /** A Build of the character runs: the server refuses the front (409) until it has ended. */
-  buildRunning: boolean
-  onRegenerate: () => void
+/** Ruling A90: the Figure tab's notices at the top of its right-hand panel, one line each — light, the reason in a few
+ *  words (the whole on mouse-over), the button with its cost — never a box above the viewer: why Build waits, the
+ *  running Build's step, a deferred or paused automatic Build, a failed step with its fix (Ruling A61), the other
+ *  failed steps, the plain body's outdated front with its Regenerate (Ruling A86), the full-body reference
+ *  information (Ruling A87), and the caller's (the generation pause, the served figure's lacks). Nothing to say → no
+ *  list. */
+function FigureNotices({ data, posting, onBuild, onRegenerateFront, onOpenBaseBody, children }: {
+  data: FigurePayload
+  posting: boolean
+  onBuild: () => void
+  /** Ruling A86: the front's Regenerate (POST …/base-body/images {view: "front", force: true}). */
+  onRegenerateFront: () => void
   onOpenBaseBody?: () => void
+  children?: ReactNode
 }) {
   const { t } = useI18n()
-  const action = frontRegenerate(change.front, jobs, t)
-  const covers = frontBuildCovers(change.jobs, t)
-  return (
-    <div className="ga-front-change" style={{ ...PANEL, marginTop: 2 }}>
-      <StepRowView row={{ name: t(change.name), light: 'yellow', state: t('Outdated'), reason: t(change.delivered) }}>
-        <div style={BUTTONS}>
-          <button type="button" className="ga-btn ga-btn-sm" disabled={busy || buildRunning} onClick={onRegenerate}
-            title={t('Renders the plain body’s front again — the same as the front view’s Regenerate in the Base body tab')}>
-            {action.label}
+  const button = buildButton(data, t)
+  const running = data.build.running
+  const step = data.build.step
+  // A worn piece's failure is written in its own row; the notices name only the others (an assembly, a texture).
+  const wornIds = new Set(data.worn.map((r) => r.item_id))
+  const failed = Object.entries(data.build.failed || {}).filter(([, f]) => !f.item_id || !wornIds.has(f.item_id))
+  // The step the problem line says in full is not repeated.
+  const others = failed.filter(([name]) => name !== data.problem?.step)
+  const frontChange = data.changes.find((c) => c.key === 'body' && c.front)
+  const fullBody = data.full_body_reference && (!data.full_body_reference.base || !data.full_body_reference.outfit)
+    ? [fullBodyBuildNote('base', data.full_body_reference.base, undefined, t),
+      fullBodyBuildNote('outfit', data.full_body_reference.outfit, undefined, t)].filter(Boolean).join(' · ') : ''
+  const runningText = running
+    ? (step ? `${t('Running')}: ${step.index && step.count ? `${step.index}/${step.count} ` : ''}${step.label}` : t('Running')) : ''
+  const lines: ReactNode[] = []
+  const line = (key: string, light: Light | null, text: string, title?: string, actions?: ReactNode) => lines.push(
+    <div key={key} className="ga-notice" title={title || text}>
+      {light ? <StepLight light={light} /> : null}
+      <span className="ga-one-line ga-notice-text ga-hint"
+        style={light === 'red' || light === 'yellow' || light === 'blue' ? { color: LIGHT_COLOR[light] } : undefined}>{text}</span>
+      {actions}
+    </div>,
+  )
+  if (!running && data.problem) {
+    lines.push(<BuildProblemView key="problem" problem={data.problem} busy={posting} onRun={onBuild} compact />)
+  }
+  if (!running) others.forEach(([name, f]) => line(`failed-${name}`, 'red', `${name}: ${f.error}`))
+  if (frontChange) {
+    const jobs = data.body?.plain.jobs
+    const action = frontRegenerate(frontChange.front, jobs, t)
+    const covers = frontBuildCovers(frontChange.jobs, t)
+    line('front', 'yellow', `${t(frontChange.name)} · ${t('Outdated')}: ${t(frontChange.delivered)}`,
+      [`${t(frontChange.name)} · ${t('Outdated')}: ${t(frontChange.delivered)}`, action.note, covers].filter(Boolean).join('\n'), (
+        <>
+          <button type="button" className="ga-btn ga-btn-sm" disabled={posting || running} onClick={onRegenerateFront}
+            aria-label={action.label}
+            title={[action.label, action.note, running ? t(FRONT_WAITS_FOR_BUILD) : '',
+              t('Renders the plain body’s front again — the same as the front view’s Regenerate in the Base body tab')]
+              .filter(Boolean).join('\n')}>
+            ↻ {t('Front view')}{jobs ? ` · ${shortCost(jobs.front, jobs.model_followup ? jobs.after_front : undefined, t)}` : ''}
           </button>
           {onOpenBaseBody ? (
-            <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBaseBody}>↗ {t('Open Base body tab')}</button>
+            <button type="button" className="ga-btn ga-btn-sm" title={t('Open Base body tab')}
+              onClick={onOpenBaseBody}>↗ {t('Base body')}</button>
           ) : null}
-        </div>
-        {buildRunning ? <div className="ga-hint">{t(FRONT_WAITS_FOR_BUILD)}</div> : null}
-        {action.note ? <div className="ga-hint">{action.note}</div> : null}
-        {covers ? <div className="ga-hint">{covers}</div> : null}
-      </StepRowView>
+        </>
+      ))
+  }
+  if (runningText) line('running', 'blue', runningText, `${runningText} — ${t(BUILD_RUNNING_NOTE)}`)
+  if (button.disabled && button.disabled !== button.label) line('disabled', 'grey', button.disabled)
+  if (noBaseBody(data) && !running) line('nobase', 'grey', t(NO_BASE_BODY_NOTE))
+  if (!running && data.build.deferred) line('deferred', 'grey', t(BUILD_DEFERRED_NOTE))
+  if (!running && data.build.paused) {
+    line('paused', 'grey', t('Paused before {step} — Resume builds the rest').replace('{step}', data.build.paused.label))
+  }
+  // Ruling A87: no full-body reference is information, never a due step — the Build never generates one.
+  if (fullBody) {
+    line('fullbody', 'grey', fullBody,
+      `${fullBody}\n${t('Optional — the Build never generates it: Base body → Views, and Dressed views here.')}`)
+  }
+  // The caller's lines (the pause, the served figure's lacks) render nothing when they have nothing to say.
+  const extra = !!data.generation_pause?.paused || (!!data.served_state && data.served_state.light !== 'green'
+    && servedLines(data.served_state, (k) => k).length > 0)
+  if (!lines.length && !extra) return null
+  return (
+    <div className="ga-notices" aria-label={t('Notices')}>
+      {lines}
+      {children}
     </div>
   )
 }

@@ -93,7 +93,7 @@
  *       paints it"}; plain missing → {yellow, "None yet"}.
  * [12] Source greps: the Wardrobe's "Mesh steps" opens only on a row that is NOT worn on the pipeline (T9
  *      concern 2 — a worn piece's only entry is the Figure tab); the Base body tab (FieldBaseBody — was
- *      FigureBodyDetails inside the Figure tab until Task UI1) writes staleBaseNote under "Run skin step"; FieldFigure starts nothing but the Build (its POSTs, all through its one
+ *      FigureBodyDetails inside the Figure tab until Task UI1) writes staleBaseNote on "Run skin step" (SkinStepLine, its mouse-over since Ruling A90); FieldFigure starts nothing but the Build (its POSTs, all through its one
  *      `post()` helper — `apiPost` named twice: import + that call: figure/build, figure/auto-build,
  *      (base-body/pipeline until Task 11h removed the switch) and since Task 11b the other state's single
  *      action garments/{item}/run (also the refused piece's Regenerate mesh), and since Ruling A23 b the CPU-only
@@ -266,11 +266,13 @@
  *      tab's "Pose render" sub-tab (off the pipeline only — `poseRender`; a chosen Pose render whose character went onto
  *      the pipeline falls back to Steps) renders FieldModelRefs steps.
  *      Rendered from fixtures (react-dom/server): Main + Back on the pipeline —
- *        shape copy (ob0a1b2c3d, 0 jobs): the rows "Main view" 1 and "Back view" 1, the copy
- *          button 2, no "Regenerate this view", "Copy of the body shape’s view — nothing painted" 2, a ↗ Body
- *          button 2, the face view note 1;
- *        painted: "Regenerate this view — 1 image job" 2, "Painted on the body shape’s view" 2, no "no job";
- *        plain copy (base1234abcd): the plain copy button 2, ↗ Base body 3 (2 rows + the face view note);
+ *        (Ruling A90: the views are ONE row of tiles, where they come from ONE chip over the row with ONE link,
+ *        each button's whole label on its mouse-over, a one-line note's whole text there too)
+ *        shape copy (ob0a1b2c3d, 0 jobs): the tiles "Front view" 1 and "Back view" 1, the copy
+ *          label 2 (the buttons' mouse-over), no "Regenerate this view", "Copy of the body shape’s view — nothing
+ *          painted" 1, a ↗ Body button 1, the face view note 2 (its text + its mouse-over);
+ *        painted: "Regenerate this view — 1 image job" 2, "Painted on the body shape’s view" 1, no "no job";
+ *        plain copy (base1234abcd): the plain copy label 2, ↗ Base body 2 (the chip + the face view note);
  *        off the pipeline (main + the enabled left view, not rendered): Regenerate 2, "Render all views — 2 image
  *          jobs" 1, Auto 1, no "nothing painted";
  *      OutfitModelRows ready with texels 0.92 / 0.031: "Outfit model (base body)", "Ready", the reason "Garment
@@ -305,7 +307,8 @@
  *      FRONT_NO_PROFILE_NOW): 4 found, none names the button ("Regenerate"), each has a de.json entry, and the
  *      German one names no button either („Neu generieren“).
  *      Source greps: figure.py puts `"front": front_ref["wanted"]["method"]` on the plain body's change; FieldFigure
- *      leaves that change out of the one-line list (`c !== frontChange`), renders <FrontChangeRow and posts
+ *      leaves that change out of the one-line list (`c !== frontChange`), renders it as the Notices line `front`
+ *      (Ruling A90, was <FrontChangeRow above the viewer) and posts
  *      'base-body/images', { view: 'front', force: true }; FieldBaseBody's FrontReferenceRow gets the cost and posts
  *      'images', { view: 'front', force: true }.
  */
@@ -570,8 +573,9 @@ const meshSteps = wardrobe.split("{t('Mesh steps')}")[0].split('\n').slice(-6).j
 check('[12] Wardrobe: Mesh steps only on rows not worn on the pipeline',
   /garmentStatus && !\(it\.equipped && garments\.pipeline\)/.test(meshSteps), true);
 const details = src('frontend/src/tabs/characters/FieldBaseBody.tsx');
-const skin = details.split("t('Run skin step')")[1] || '';
-check('[12] skin step: stale-base note under the button', /staleBaseNote\(/.test(skin.slice(0, 600)), true);
+const skin = details.split('function SkinStepLine(')[1]?.split('\nfunction ')[0] || '';
+check('[12] skin step: stale-base note on the button', [/staleBaseNote\(/.test(skin), /t\('Run skin step'\)/.test(skin)],
+  [true, true]);
 const fieldFigure = src('frontend/src/tabs/characters/FieldFigure.tsx');
 // Every POST of the tab goes through its one `post(path, …)` helper (one apiPost call).
 const posts = [...fieldFigure.matchAll(/\bpost\(\s*['`]([^'`]+)['`]/g)].map((x) => x[1].replace(/\$\{[^}]*\}/g, '{}'));
@@ -953,7 +957,7 @@ check('[23] tabs render it', [/<BuildProblemNote\b/.test(src('frontend/src/tabs/
   // Regenerate on a view posts exactly that view's job.
   const refsSrc = src('frontend/src/tabs/characters/FieldModelRefs.tsx');
   check('[26] a view button posts generateBody(view, …)', [/onClick=\{\(\) => generate\(view\)\}/.test(refsSrc),
-    /\/model-refs\/generate`,\s*generateBody\(view, kindList,/.test(refsSrc), /\{action\.label\}/.test(refsSrc),
+    /\/model-refs\/generate`,\s*generateBody\(view, kindList,/.test(refsSrc), /action\.label/.test(refsSrc),
     /singleAction\('view', 1, t\)/.test(refsSrc)], [true, true, true, false]);
   check('[26] FieldModelRefs: steps layout (no stack), the face view link + its switch (from check_pose_ui [5])',
     [/layout === 'steps'/.test(refsSrc), /'stack'/.test(refsSrc), /onClick=\{onOpenBaseBody\}/.test(refsSrc),
@@ -992,16 +996,16 @@ check('[23] tabs render it', [/<BuildProblemNote\b/.test(src('frontend/src/tabs/
       initialInfo: info, ...(links ? { onOpenBody: () => undefined, onOpenBaseBody: () => undefined } : {}) }));
     const shape = steps(refsInfo({ source: 'shape', shape: 'ob0a1b2c3d', jobs: 0 }));
     check('[26] Dressed views, shape copy: two rows say it and cost no job, ↗ Body each', [
-      count(shape, 'Main view</strong>'), count(shape, 'Back view</strong>'),
+      count(shape, 'Front view</strong>'), count(shape, 'Back view</strong>'),
       count(shape, 'Copy this view again from the body shape — no job'), count(shape, 'Regenerate this view'),
       count(shape, 'Copy of the body shape’s view — nothing painted'), count(shape, 'Body</button>'),
-      count(shape, 'Face view: it textures the plain body’s face')], [1, 1, 2, 0, 2, 2, 1]);
+      count(shape, 'Face view: it textures the plain body’s face')], [1, 1, 2, 0, 1, 1, 2]);
     const painted = steps(refsInfo({ source: 'painted', shape: 'ob0a1b2c3d', jobs: 1 }));
     check('[26] Dressed views, painted: 1 image job each', [count(painted, 'Regenerate this view — 1 image job'),
-      count(painted, 'Painted on the body shape’s view'), count(painted, 'no job')], [2, 2, 0]);
+      count(painted, 'Painted on the body shape’s view'), count(painted, 'no job')], [2, 1, 0]);
     const plain = steps(refsInfo({ source: 'plain', shape: 'base1234abcd', jobs: 0 }));
     check('[26] Dressed views, plain copy: ↗ Base body each (+ the face view note)', [
-      count(plain, 'Copy this view again from the plain body — no job'), count(plain, 'Base body</button>')], [2, 3]);
+      count(plain, 'Copy this view again from the plain body — no job'), count(plain, 'Base body</button>')], [2, 2]);
     const off = steps({ signature: 'asig', pipeline: false, status: {}, auto: { tpose: true }, now: '2026-11-14T21:00:00Z',
       tpose: { filename: 'tpose_asig.png', freshness: { state: 'current' } },
       views: { left: { enabled: true, info: null } } }, false);
@@ -1190,7 +1194,7 @@ check('[25] the Wardrobe chip\'s fit', m.acceptedWhat({ step: 'fit', on: '', rea
     // Ruling A87: "full_body" when the front is made from the full-body reference, else the method.
     /else front_ref\["wanted"\]\["method"\]\)/.test(src('app/core/figure.py')),
     /data\.changes\.filter\(\(c\) => c !== frontChange\)/.test(fig),
-    /<FrontChangeRow /.test(fig),
+    /line\('front', 'yellow',/.test(fig),
     /post\('base-body\/images', \{ view: 'front', force: true \}/.test(fig),
     /<FrontReferenceRow reference=\{info\.front_reference\} jobs=\{jobs\}/.test(base),
     /onRegenerate=\{\(\) => \{ void post\('images', \{ view: 'front', force: true \}\) \}\}/.test(base),

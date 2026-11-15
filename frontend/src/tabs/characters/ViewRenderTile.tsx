@@ -1,52 +1,39 @@
 /**
- * ViewRenderTile — one view image of the Figure tab's plain body with
- * its own render action: the view's name and a Generate / Regenerate button
- * above the tile (RefImage — the freshness badge comes with its `meta`, the
- * server decides it), below it the run state ("Generating…", a caller's
- * status line such as the queue place with Cancel), the failure and the
- * kept warning of the view. A `note` dims the image and says what it really
- * is (an image that is not the current view it stands for).
+ * ViewRenderTile — one view of a "views in one row" strip (Ruling A90: the Base body tab's four views side by side):
+ * the view's light and name, its state in one word under it in the light's colour, the picture small (RefImage — a
+ * click enlarges it, the freshness badge comes with its `meta`, the server decides it), then the view's own button
+ * with its cost in short form ("↻ 1 image + 4 hub") — the long sentence (what it renders, what it makes stale) is its
+ * mouse-over. Under it, each in one line with the whole on mouse-over: the reason of a yellow or red light, the run
+ * state, why the button waits, the failure and the kept warning. A `note` dims the picture and says what it really
+ * is (a picture that is not the current view it stands for).
  *
- * The caller decides everything (what the button starts, why it is
- * disabled); the tile only renders. A disabled button shows its reason
- * (`disabledReason`) as a line under the tile, not only as its tooltip.
+ * The caller decides everything (what the button starts and says, why it is disabled); the tile only renders.
  */
-import type { CSSProperties, ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { RefImage } from './RefImage'
 import type { ImageTileMeta } from './RefImage'
+import { LIGHT_COLOR } from './stepStyle'
 
-const ERROR_STYLE: CSSProperties = { color: 'var(--danger, #f85149)', overflowWrap: 'anywhere' }
-const WARNING_STYLE: CSSProperties = { color: 'var(--warning, #d29922)', overflowWrap: 'anywhere' }
-const LOCK_STYLE: CSSProperties = { fontStyle: 'italic', overflowWrap: 'anywhere' }
+const ONE_LINE = 'ga-hint ga-one-line'
 
-function emptyTile(height: number): CSSProperties {
-  return {
-    width: '100%',
-    height,
-    borderRadius: 6,
-    border: '1px solid var(--border, #30363d)',
-    background: 'rgba(255, 255, 255, 0.04)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    textAlign: 'center',
-    padding: 6,
-    boxSizing: 'border-box',
-  }
-}
-
-export function ViewRenderTile({ label, lead, url, meta, height, running, status, failed, error, warning, disabled,
-  disabledTitle, disabledReason, note, actionTitle, onRender }: {
+export function ViewRenderTile({ label, state, stateColor, reason, lead, url, meta, height, running, status, failed,
+  error, warning, disabled, disabledTitle, disabledReason, note, actionLabel, actionTitle, onRender }: {
+  /** The view's name. */
   label: string
-  /** Before the label, e.g. the view's step light. */
+  /** Its state in one word, written under the name in `stateColor`. */
+  state?: string
+  stateColor?: string
+  /** The reason of a yellow or red light (one line, the whole on mouse-over); "" for none. */
+  reason?: string
+  /** Before the name, e.g. the view's step light. */
   lead?: ReactNode
   url: string | null
   meta?: ImageTileMeta | null
   height: number
   /** The view renders now. */
   running: boolean
-  /** An extra line under the tile (e.g. the queue place with Cancel). */
+  /** An extra block under the tile (e.g. the front's skin detail step). */
   status?: ReactNode
   /** The view's last render failed (shown while it does not run), with its error. */
   failed?: boolean
@@ -56,56 +43,62 @@ export function ViewRenderTile({ label, lead, url, meta, height, running, status
   disabled: boolean
   /** Why the button is disabled (its tooltip then). */
   disabledTitle?: string
-  /** Why the button is disabled, shown as a visible line under the tile (and as its tooltip). */
+  /** Why the button is disabled, shown as a line under the tile (and as its tooltip). */
   disabledReason?: string
   /** The image is not the current view it stands for: shown dimmed with this line under it. */
   note?: string
-  /** The button's tooltip otherwise. */
+  /** The button's words with the cost in short form; without one "Regenerate" / "Generate". */
+  actionLabel?: string
+  /** The button's tooltip otherwise: the whole sentence with its cost and what it makes stale. */
   actionTitle?: string
   onRender: () => void
 }) {
   const { t } = useI18n()
   const action = url ? t('Regenerate') : t('Generate')
+  // The failure and the warning are said in their own lines below; the reason line is for the rest (a stale view).
+  const shownReason = reason && reason !== error && reason !== warning ? reason : ''
   return (
-    <div style={{ minWidth: 0 }}>
-      <div className="ga-face-actions-row" style={{ justifyContent: 'space-between', marginBottom: 2 }}>
-        <span className="ga-hint" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-          {lead}{label}
-        </span>
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm"
-          disabled={disabled || running}
-          title={(disabled && (disabledReason || disabledTitle)) || actionTitle || undefined}
-          onClick={onRender}
-          aria-label={`${action} · ${label}`}
-        >
-          {action}
-        </button>
+    <div className="ga-view-tile">
+      <div className="ga-view-head">
+        {lead}<strong className="ga-one-line" title={label}>{label}</strong>
       </div>
+      {state ? <div className={ONE_LINE} style={{ color: stateColor }} title={state}>{state}</div> : null}
       {url ? (
         <div style={note ? { opacity: 0.45 } : undefined}>
           <RefImage key={url} src={url} height={height} label={label} meta={meta} compact />
         </div>
       ) : (
-        <div className="ga-hint" style={emptyTile(height)}>
+        <div className="ga-hint ga-ref-empty" style={{ height }}>
           {running ? t('Generating…') : t('No render yet')}
         </div>
       )}
-      {url && running ? <div className="ga-hint">{t('Generating…')}</div> : null}
-      {url && note ? <div className="ga-hint" style={WARNING_STYLE} title={note}>{note}</div> : null}
-      {status}
+      <button
+        type="button"
+        className="ga-btn ga-btn-sm ga-view-action"
+        disabled={disabled || running}
+        title={(disabled && (disabledReason || disabledTitle)) || actionTitle || undefined}
+        onClick={onRender}
+        aria-label={`${action} · ${label}`}
+      >
+        {actionLabel || action}
+      </button>
+      {shownReason && !running ? (
+        <div className={ONE_LINE} style={{ color: stateColor }} title={shownReason}>{shownReason}</div>
+      ) : null}
+      {url && running ? <div className={ONE_LINE}>{t('Generating…')}</div> : null}
+      {url && note ? <div className={ONE_LINE} style={{ color: LIGHT_COLOR.yellow }} title={note}>{note}</div> : null}
       {disabled && !running && disabledReason ? (
-        <div className="ga-hint" style={LOCK_STYLE} title={disabledReason}>{disabledReason}</div>
+        <div className={ONE_LINE} style={{ fontStyle: 'italic' }} title={disabledReason}>{disabledReason}</div>
       ) : null}
       {failed && !running ? (
-        <div className="ga-hint" style={ERROR_STYLE} title={error || ''}>
+        <div className={ONE_LINE} style={{ color: LIGHT_COLOR.red }} title={error || ''}>
           {t('Failed')}{error ? `: ${error}` : ''}
         </div>
       ) : null}
       {url && warning && !running ? (
-        <div className="ga-hint" style={WARNING_STYLE} title={warning}>{warning}</div>
+        <div className={ONE_LINE} style={{ color: LIGHT_COLOR.yellow }} title={warning}>{warning}</div>
       ) : null}
+      {status}
     </div>
   )
 }

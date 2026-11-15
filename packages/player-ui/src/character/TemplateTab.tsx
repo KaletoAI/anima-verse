@@ -205,6 +205,7 @@ export function TemplateTab({
   queueField,
   draft,
   discardSignal,
+  hideLoneSectionTitle = false,
 }: {
   character: string
   tab: TmplTabDef
@@ -245,6 +246,9 @@ export function TemplateTab({
    *  typed but never blurred — it never reached the buffer — falls back to
    *  the server's value too. */
   discardSignal?: number
+  /** A tab that is ONE section named like the tab does not repeat its name over the content (Ruling A90, the
+   *  Game-Admin Base body and Figure tabs: the space above the 3D preview goes to the preview). */
+  hideLoneSectionTitle?: boolean
 }) {
   const { t, lang } = useI18n()
   const { toast } = useToast()
@@ -465,6 +469,11 @@ export function TemplateTab({
   // Columns sit side by side (one per tab.column), with sections stacked
   // in each column and fields stacked in each section. Prompt fields stack
   // prompt → resolved preview → image (see PromptField/renderField).
+  // hideLoneSectionTitle: a tab that is ONE section named like the tab does not repeat its name (Ruling A90).
+  const tabLabel = tmplText(tab as unknown as Record<string, unknown>, 'label', lang)
+  const shown = sections.filter((s) =>
+    s.special ? !!(specialSlots && specialSlots[String(s.special)]) : editableFields(s).length > 0)
+  const lone = hideLoneSectionTitle && cols.length === 1 && shown.filter((s) => cols.includes(s.column || 1)).length === 1
   return (
     <div className="ga-form tpl-tab-cols">
       {cols.map((col) => {
@@ -479,7 +488,8 @@ export function TemplateTab({
             {colSections.map((s) => (
               <div key={s.id}
                 className={`tpl-tab-section${s.grow ? ' tpl-tab-section--grow' : ''}`}>
-                <div className="ga-fieldset-title">{tmplText(s, 'label', lang) || s.id}</div>
+                {lone && tabLabel && tmplText(s, 'label', lang) === tabLabel ? null
+                  : <div className="ga-fieldset-title">{tmplText(s, 'label', lang) || s.id}</div>}
                 {s.special ? renderSlot(specialSlots?.[String(s.special)], s)
                   : <div className="tpl-section-fields">{editableFields(s).map(renderField)}</div>}
               </div>

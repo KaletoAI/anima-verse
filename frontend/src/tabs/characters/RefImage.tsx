@@ -65,6 +65,7 @@ export function RefImage({
   action,
   compact = false,
   checker = false,
+  bare = false,
 }: {
   src: string
   height: number
@@ -80,6 +81,9 @@ export function RefImage({
   compact?: boolean
   /** A checkerboard behind the picture, so its transparent parts show (a cut-out with an opening, Ruling A60). */
   checker?: boolean
+  /** A thumbnail too small for badges (Ruling A90: the neutral front, a draft beside its view, another outfit's
+   *  reference): the picture alone — a click still enlarges it. */
+  bare?: boolean
 }) {
   // Re-render once the server-configured clock format and timezone arrive.
   useClockSettings()
@@ -115,7 +119,7 @@ export function RefImage({
         }}
         onError={() => setHidden(true)}
       />
-      {!hidden && (time || right) ? (
+      {!hidden && !bare && (time || right) ? (
         <div
           style={{
             position: 'absolute',
@@ -133,7 +137,7 @@ export function RefImage({
           {right ? <span style={{ ...badge, marginLeft: 'auto' }}>{right}</span> : null}
         </div>
       ) : null}
-      {!hidden ? <FreshnessCorner freshness={meta?.freshness} compact={compact} inset={inset} /> : null}
+      {!hidden && !bare ? <FreshnessCorner freshness={meta?.freshness} compact={compact} inset={inset} /> : null}
       {action ? (
         <div style={{ position: 'absolute', top: inset, right: inset }}>{action}</div>
       ) : null}

@@ -10,7 +10,9 @@
  *   on the figure, else nothing (the picture is not used now).
  * - Pick from gallery, Upload, Clear (an in-app confirmation) save only — nothing renders.
  * - Unset: the views are made as before — an edit of the body's front, or a copy of the body shape's view.
- * - Other outfits with a reference are listed under it (small picture, label, Clear).
+ * - Other outfits with a reference are listed under it, one line each (a tiny picture, label, Clear).
+ * - Ruling A90: row 1 of Dressed views — what the reference is made from (the plain body's full-body reference, else
+ *   the profile image; read-only, with its link) → the outfit's full-body reference, side by side.
  *
  * Backend (app/routes/figure.py): GET …/figure/outfit-reference, POST …/figure/outfit-reference {image},
  * POST …/figure/outfit-reference/upload (multipart `file`), POST …/figure/outfit-reference/generate,
@@ -21,14 +23,18 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiUpload } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { RefImage } from './RefImage'
-import { ClearConfirm, FullBodyReferenceTile } from './FullBodyReferenceTile'
+import { ClearConfirm, FullBodyReferenceTile, ReferenceArrow, ReferenceSourceTile } from './FullBodyReferenceTile'
 import { fullBodyRow, outfitFollowup } from './fullBodyReferenceModel'
 import type { OutfitReferenceInfo } from './dressedViewsModel'
 
 const CLEAR_NOTE = 'The picture stays in the gallery. Nothing renders now — the dressed views of this outfit are then due and made as before (an edit of the body’s front).'
 
-export function OutfitReferenceRow({ character, refreshKey, onChanged }: {
+export function OutfitReferenceRow({ character, refreshKey, onChanged, onOpenBaseBody, onOpenGallery }: {
   character: string
+  /** The source tile's link when the outfit's reference is made from the plain body's full-body reference. */
+  onOpenBaseBody?: () => void
+  /** The source tile's link when it is made from the profile image (chosen in the Gallery tab). */
+  onOpenGallery?: () => void
   /** Changes when the figure changes (a Build ended, another outfit worn): read again. */
   refreshKey?: string
   /** After a save: the views and the plan read again (they turn due). */
@@ -77,31 +83,44 @@ export function OutfitReferenceRow({ character, refreshKey, onChanged }: {
 
   if (!info) return null
   const row = fullBodyRow('outfit', info, t)
+  // Row 1 (Ruling A90): what the outfit's reference is made from → the outfit's full-body reference, side by side.
+  const fromBase = info.generate?.source === 'full_body'
+  const sourceLink = fromBase
+    ? (onOpenBaseBody ? { label: t('Base body'), title: t('The plain body’s full-body reference is made in the Base body tab'),
+      onClick: onOpenBaseBody } : undefined)
+    : (onOpenGallery ? { label: t('Gallery'), title: t('The profile image is chosen in the Gallery tab'),
+      onClick: onOpenGallery } : undefined)
   return (
-    <FullBodyReferenceTile character={character} row={row} record={info.record} url={info.url} run={info.run}
-      generate={info.generate} busy={busy} followup={outfitFollowup(info.applies, info.followup_jobs, t)}
-      clearNote={t(CLEAR_NOTE)}
-      onGenerate={() => void run(() => apiPost<OutfitReferenceInfo>(`/characters/${enc}/figure/outfit-reference/generate`, {}),
-        'Generating')}
-      onPick={(filename) => void run(() => apiPost<OutfitReferenceInfo>(`/characters/${enc}/figure/outfit-reference`,
-        { image: filename }), 'Saved')}
-      onUpload={(file) => void run(() => apiUpload<OutfitReferenceInfo>(`/characters/${enc}/figure/outfit-reference/upload`,
-        file), 'Saved')}
-      onClear={() => void run(() => apiDelete<OutfitReferenceInfo>(
-        `/characters/${enc}/figure/outfit-reference/${encodeURIComponent(info.key)}`), 'Cleared')}>
+    <>
+      <div className="ga-ref-row">
+        <ReferenceSourceTile title={fromBase ? t('Base full-body reference') : t('Profile image')}
+          url={info.generate?.source ? info.generate.source_url : ''} empty={t('No profile image')} link={sourceLink} />
+        <ReferenceArrow />
+        <FullBodyReferenceTile character={character} row={row} record={info.record} url={info.url} run={info.run}
+          generate={info.generate} busy={busy} followup={outfitFollowup(info.applies, info.followup_jobs, t)}
+          clearNote={t(CLEAR_NOTE)}
+          onGenerate={() => void run(() => apiPost<OutfitReferenceInfo>(`/characters/${enc}/figure/outfit-reference/generate`, {}),
+            'Generating')}
+          onPick={(filename) => void run(() => apiPost<OutfitReferenceInfo>(`/characters/${enc}/figure/outfit-reference`,
+            { image: filename }), 'Saved')}
+          onUpload={(file) => void run(() => apiUpload<OutfitReferenceInfo>(`/characters/${enc}/figure/outfit-reference/upload`,
+            file), 'Saved')}
+          onClear={() => void run(() => apiDelete<OutfitReferenceInfo>(
+            `/characters/${enc}/figure/outfit-reference/${encodeURIComponent(info.key)}`), 'Cleared')} />
+      </div>
       {info.others.length ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span className="ga-hint">{t('Other outfits with a full-body reference')}</span>
+        <div className="ga-ref-others">
+          <span className="ga-hint ga-one-line">{t('Other outfits with a full-body reference')}</span>
           {info.others.map((o) => (
-            <div key={o.key} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div key={o.key} className="ga-ref-other">
               {o.url ? (
-                <div style={{ width: 36, flex: '0 0 auto' }}>
-                  <RefImage key={o.url} src={o.url} height={48} label={o.label} compact />
+                <div style={{ width: 20, flex: '0 0 auto' }}>
+                  <RefImage key={o.url} src={o.url} height={28} radius={3} label={o.label} compact bare />
                 </div>
               ) : <span className="ga-hint">{t('Picture gone')}</span>}
-              <span style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{o.label}</span>
-              <button type="button" className="ga-btn ga-btn-sm" disabled={busy}
-                onClick={() => setClearing({ key: o.key, label: o.label })}>{t('Clear reference')}</button>
+              <span className="ga-one-line" style={{ flex: 1 }} title={o.label}>{o.label}</span>
+              <button type="button" className="ga-btn ga-btn-sm" disabled={busy} aria-label={`${t('Clear reference')} · ${o.label}`}
+                title={t(CLEAR_NOTE)} onClick={() => setClearing({ key: o.key, label: o.label })}>{t('Clear')}</button>
             </div>
           ))}
         </div>
@@ -115,6 +134,6 @@ export function OutfitReferenceRow({ character, refreshKey, onChanged }: {
               `/characters/${enc}/figure/outfit-reference/${encodeURIComponent(key)}`), 'Cleared')
           }} />
       ) : null}
-    </FullBodyReferenceTile>
+    </>
   )
 }
