@@ -35,7 +35,10 @@ Fixture (metres, +y up, +z front). Body, skin joints [mixamorig:Hips, mixamorig:
 [D4] Short hair, drape=True: ``report.push.drape_xpbd`` == {"skipped": "no_free_vertex"}; garment, metrics and the
      rest of the report equal to drape=False.
 [D5] drape=False is byte-equal to commit 71306d21's ``fit_hairdeck`` on both fixtures: every garment array's bytes,
-     the metrics, the verdict and the report (no ``drape_xpbd`` key). The default (``HAIR_DRAPE_ON`` True since
+     the metrics, the verdict and the report (no ``drape_xpbd`` key) — with Ruling A89's four additions switched
+     off (``a89_off``: the cap without its hairline shape and soft edge, ``_scalp_cap(shaped=False)``;
+     FILL_LAND_JITTER_M 0; FACE_CLEAR_SPREAD_M 0; ``_face_roots`` turning nothing round), so everything else is
+     still the base's; their own proof is ``smoke_hairdeck_hairline_arc.py``. The default (``HAIR_DRAPE_ON`` True since
      acceptance B) is byte-equal to drape=True (the drape's wall-clock timings ``t_*_s`` aside).
 [D6] Ruling B11e, ``drape_below_ear`` directly: one card held only by its top (2 columns x 0.075 / 0.079, z 0, rows
      every 5 mm from y 1.50 down to 1.4125 — no vertex at or above the ear line 1.5125), fitted (``Qf``) beside the
@@ -54,6 +57,7 @@ Fixture (metres, +y up, +z front). Body, skin joints [mixamorig:Hips, mixamorig:
      6.5 mm -> torn.
 Timings of the drape (``t_jit_s``, ``t_run_s``) are printed.
 """
+import contextlib
 import importlib.util
 import json
 import math
@@ -223,10 +227,11 @@ def blob(res, drop_xpbd=False):
 def base_comparable(res):
     """``blob(res)`` without what FIT hair 14 added to the report (``fill``, ``vertices.fill``, the automatic width's
     ``placement.width_auto`` and ``width_source`` "auto" for the base's "default", the drape's ``torn``; Ruling A85's
-    ``placement.up_m`` / ``up_source`` / ``hairline_image_y``) — the base commit has none of it."""
+    ``placement.up_m`` / ``up_source`` / ``hairline_image_y``; Ruling A89's ``roots``) — the base commit has none of it."""
     arrays, rest, metrics, ok, reasons, rep = blob(res)
     rep = json.loads(rep)
     rep.pop("fill", None)
+    rep.pop("roots", None)
     rep.get("vertices", {}).pop("fill", None)
     pl = rep.get("placement", {})
     pl.pop("width_auto", None)
@@ -237,6 +242,21 @@ def base_comparable(res):
     if isinstance(rep.get("push", {}).get("drape_xpbd"), dict):
         rep["push"]["drape_xpbd"].pop("torn", None)
     return arrays, rest, metrics, ok, reasons, json.dumps(rep, sort_keys=True)
+
+
+@contextlib.contextmanager
+def a89_off(gh):
+    """Ruling A89's additions switched off for the [D5] comparison with the base commit."""
+    saved = (gh._scalp_cap, gh._face_roots, gh.FILL_LAND_JITTER_M, gh.FACE_CLEAR_SPREAD_M)
+    cap = gh._scalp_cap
+    gh._scalp_cap = lambda *a, **k: cap(*a, **{**k, "shaped": False})
+    gh._face_roots = lambda U, *a, **k: (U, {"face_rooted": 0, "flipped": 0})
+    gh.FILL_LAND_JITTER_M = 0.0
+    gh.FACE_CLEAR_SPREAD_M = 0.0
+    try:
+        yield
+    finally:
+        gh._scalp_cap, gh._face_roots, gh.FILL_LAND_JITTER_M, gh.FACE_CLEAR_SPREAD_M = saved
 
 
 def load_base(tmp: Path):
@@ -331,7 +351,10 @@ def main() -> int:
         for label, nh, px, res, res_on in (("long", nohead, proxy, off, on), ("short", s_nohead, s_proxy, s_off, s_on)):
             ref = base.fit_hairdeck(nh, px, bglb, **kw)
             dflt = gh.fit_hairdeck(nh, px, bglb, **kw)
-            check(base_comparable(res) == blob(ref), f"[D5] {label}: drape=False byte-equal to {BASE_COMMIT}")
+            with a89_off(gh):
+                res_off = gh.fit_hairdeck(nh, px, bglb, drape=False, **kw)
+            check(base_comparable(res_off) == blob(ref),
+                  f"[D5] {label}: drape=False (A89 off) byte-equal to {BASE_COMMIT}")
             same = blob(dflt, drop_xpbd=True) == blob(res_on, drop_xpbd=True) and untimed(dflt) == untimed(res_on)
             check(same, f"[D5] {label}: the default (HAIR_DRAPE_ON True) byte-equal to drape=True (drape timings aside)")
             check("drape_xpbd" not in res.report["push"], f"[D5] {label}: no drape_xpbd key without the drape")

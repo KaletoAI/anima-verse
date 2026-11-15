@@ -57,6 +57,10 @@ Fixture (metres, +y up, the face looks along +z)
     has radius sqrt(0.1025^2 - 0.04^2) = 0.09437, 6 mm = 3.64 deg of azimuth. So every row centre lies at or above
     its own floor - 0.0005, and every fill vertex within 60 - 3.64 = 56.3 deg (rounded down: 56) at or above
     1.64 - 0.0005. 9312d5058's fill there lands on 1.57.
+
+Since Ruling A89 (FIT hair 17) the cap's floor carries the hairline shape (an arc, rounded corners, a temple drop)
+and its edge tucks under the skin; this smoke checks the floor it is added to, so ``_scalp_cap`` runs with
+``shaped=False`` (the hair 16 cap). The shape itself: ``smoke_hairdeck_hairline_arc.py``.
 """
 import importlib.util
 import math
@@ -198,14 +202,14 @@ def main():
     check(not low_15 >= 1.64, f"[2] fails on {A80_BROW}: the cap is a visor down to the brow")
 
     print("[3] new code")
-    Vn, Fn, Nn, hl_n, info_n = gh._scalp_cap(body, head_w, hair, sdf, 1.55, lm)
+    Vn, Fn, Nn, hl_n, info_n = gh._scalp_cap(body, head_w, hair, sdf, 1.55, lm, shaped=False)
     print(f"       {info_n}")
     check(abs(hl_n - 1.57) < 1e-9, f"[3] new hairline {hl_n} (unchanged)")
     low_n = lowest(Vn, 60.0)
     print(f"       new lowest face cap point {low_n:.5f} ({(low_n - 1.64) * 1000:+.1f} mm to the hairline)")
     check(low_n >= 1.64, f"[3] the cap's lowest face point {low_n:.5f} >= the natural hairline 1.64")
     check(abs(low_n - 1.6436) <= 0.0006 and low_n <= 1.645, f"[3] it reaches its edge: {low_n:.5f} (want 1.6436)")
-    Vr = gh._scalp_cap(body, head_w, ref, sdf, 1.55, lm)
+    Vr = gh._scalp_cap(body, head_w, ref, sdf, 1.55, lm, shaped=False)
     check(abs(Vr[3] - 1.64) < 1e-9 and Vr[4].get("face_lift_m") == 0.0, f"[3] reference: hairline {Vr[3]}, no lift")
     low_r, low_n55 = lowest(Vr[0], 55.0), lowest(Vn, 55.0)
     check(abs(low_r - low_n55) <= 1e-6, f"[3] no helmet: fringe cap ends at {low_n55:.6f}, without a fringe {low_r:.6f}")
@@ -218,7 +222,7 @@ def main():
 
     print("[4] no fringe / no landmarks: unchanged")
     for marks, label in (({"brow_y": 1.56, "crown_y": 1.70}, "brow 1.56"), (None, "no landmarks")):
-        V2, F2, N2, _, _ = gh._scalp_cap(body, head_w, hair, sdf, 1.55, marks)
+        V2, F2, N2, _, _ = gh._scalp_cap(body, head_w, hair, sdf, 1.55, marks, shaped=False)
         check(np.array_equal(V2, Vo) and np.array_equal(F2, Fo) and np.array_equal(N2, No),
               f"[4] {label}: the cap equals {BEFORE_A80}'s ({len(V2)} / {len(Vo)} vertices)")
 

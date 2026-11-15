@@ -253,7 +253,12 @@ SIDE_DEEP_M = 0.03
 #: on an arm (``sleeve_share`` 0: skirts, trousers) is unchanged bit for bit, so its version 16 fit (and a version 15
 #: one Auto keeps as generated) stays current (``seam_may_change``).
 #: footwear: its own fit (``footwear_fit``), versioned there.
-FIT_VERSION: Dict[str, int] = {"hair": 16, "clothing": 17, "footwear": FOOTWEAR_FIT_VERSION}
+#: hair 17 (2026-11-15, Ruling A89 — a CPU refit of every HairDeck fit, no hub job): the cap's front edge is a
+#: hairline (``garment_hairdeck.hairline_offset``: an arc 6 mm higher at the temples, then a wide turn down towards
+#: the sideburn instead of a level line with right-angle corners; the edge tucked under the skin, the fill's ends
+#: spread), a card rooted on the bare face turns its strip round (``_face_roots``: tips on the cheek, not its hard
+#: root end), the face clearing spreads the moved strands (``FACE_CLEAR_SPREAD_M``).
+FIT_VERSION: Dict[str, int] = {"hair": 17, "clothing": 17, "footwear": FOOTWEAR_FIT_VERSION}
 #: The clothing fit version whose fits stay current under ``FIT_VERSION["clothing"]`` when Auto keeps their trunk as
 #: generated (Ruling A83, ``trunk_may_change``) and nothing rides an arm (Ruling A84, ``seam_may_change``).
 CLOTHING_TRUNK_UNCHANGED = 15

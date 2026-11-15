@@ -48,7 +48,10 @@ Fixture (metres, +y up, the body faces +z)
     the nearest FILL vertex): 0.6 of the median for d <= FILL_SHADE_NEAR_M 0.006, the median for d >= 0.010,
     1 - 0.4 * (0.010 - d) / 0.004 between (recounted per vertex). The shell here lies 0.110 - 0.1015 = 8.5 mm off the
     cap, so most of the cap is open and filled: cap vertices at 0.6 exist, none darker.
-[4] Scalp cap. Front hairline = lowest hair vertex with z > 0.05 and |x| < 0.03: the outer shell's lowest ring
+[4] Scalp cap — with Ruling A89's hairline shape and soft edge off (``_scalp_cap(shaped=False)``, the fill landing
+    jitter and the face-clearing spread 0, ``_face_roots`` turning nothing: FIT hair 16's cap, checked by the rules
+    below; the shape: ``smoke_hairdeck_hairline_arc.py``). With it on, no cap triangle lies under the cap's own floor
+    (``cap_tris_below_hairline`` 0). Front hairline = lowest hair vertex with z > 0.05 and |x| < 0.03: the outer shell's lowest ring
     h = 0.010 -> y = 0.8 + 2 * (0.4 + 0.010) = 1.62 (its vertex at segment 0 is at x 0, z 0.108). The push leaves
     that ring where the placement put it (FIT_VERSION hair 7): the shell sits at the layer map's fixed point (see
     [5]) and the smoothed push, which weighs at most 0.033 there, has no crown spread any more, so it is 0 on the
@@ -125,6 +128,7 @@ Fixture (metres, +y up, the body faces +z)
     y - 0.5: the shared edge 1-2 is crossed once -> 3 new vertices, not 4: (0,0.5), (0.5,0.5), (1,0.5); kept area =
     the square's upper half 0.5.
 """
+import contextlib
 import json
 import math
 import struct
@@ -324,6 +328,21 @@ def reach_count(r, edge):
     return int((np.asarray(P)[F][:, :, 1].max(1) > edge).sum())
 
 
+@contextlib.contextmanager
+def a89_off(gh):
+    """Ruling A89's additions switched off: the cap of FIT hair 16 for the [4] rules."""
+    saved = (gh._scalp_cap, gh._face_roots, gh.FILL_LAND_JITTER_M, gh.FACE_CLEAR_SPREAD_M)
+    cap = gh._scalp_cap
+    gh._scalp_cap = lambda *a, **k: cap(*a, **{**k, "shaped": False})
+    gh._face_roots = lambda U, *a, **k: (U, {"face_rooted": 0, "flipped": 0})
+    gh.FILL_LAND_JITTER_M = 0.0
+    gh.FACE_CLEAR_SPREAD_M = 0.0
+    try:
+        yield
+    finally:
+        gh._scalp_cap, gh._face_roots, gh.FILL_LAND_JITTER_M, gh.FACE_CLEAR_SPREAD_M = saved
+
+
 class _SphereSDF:
     """Signed distance to a sphere (centre ``c``, radius ``r``) — the stub ``_clamp`` needs."""
     def __init__(self, c, r):
@@ -371,7 +390,11 @@ def face_clear(gh):
           f"inner column at y 1.48 moves 0.0376 to the box edge ({dx[i_mid]:.6f})")
     check(abs(dx[0] - 0.0376 * 0.85 ** 8) < 1e-6, f"top vertex y 1.60 bends 0.0376 x 0.85^8 = 0.010246 ({dx[0]:.6f})")
     j_mid = 2 * len(ys) + i_mid
-    check(abs(dx[j_mid] + 0.0376) < 1e-6, f"the mirrored ribbon moves to -x ({dx[j_mid]:.6f})")
+    # Ruling A89: each card clears FACE_CLEAR_SPREAD_M * frac(card * GOLDEN) further (card 0: 0, the mirror card 1:
+    # 0.008 * 0.6180340 = 0.0049443), so the cards do not pile up on one plane
+    want_j = 0.0376 + gh.FACE_CLEAR_SPREAD_M * ((1 * gh.GOLDEN) % 1.0)
+    check(gh.FACE_CLEAR_SPREAD_M == 0.008 and abs(dx[j_mid] + 0.0425443) < 1e-6 and abs(dx[j_mid] + want_j) < 1e-6,
+          f"the mirrored ribbon (card 1) moves to -x by 0.0376 + 0.0049443 ({dx[j_mid]:.6f})")
     check(np.allclose(Q[:, 1:], V[:, 1:]), "only x changes (y, z kept; no clamp)")
     mov = (np.arange(len(V)) < 2 * len(ys)) & (V[:, 1] < 1.495)
     Qm, repm = gh._clear_face(F, V, sdf, body, head_w, {"brow_y": 1.53}, 1.42, None, movable=mov, clear=0.008)
@@ -527,6 +550,12 @@ def main() -> int:
 
         # [4] scalp cap
         print("[4] scalp cap")
+        check(m["cap_tris_below_hairline"] == 0 and "shape" in rep["cap"],
+              f"A89 on: no cap triangle under the cap's floor ({m['cap_tris_below_hairline']}), shape reported")
+        with a89_off(gh):
+            res = gh.fit_hairdeck(nohead, proxy, body, colour_target=target, **NO_PLACEMENT)
+        m, rep, g = res.metrics, res.report, res.garment
+        n_cap = rep["vertices"]["cap"]
         hl = rep["cap"]["hairline_y"]
         placed_ring = m["icp_scale"] * 0.41 + rep["icp"]["translation"][1]
         check(abs(hl - placed_ring) <= 0.0002 and 1.619 <= hl <= 1.625,
@@ -556,7 +585,8 @@ def main() -> int:
         Xh = np.asarray(g.positions[:n_hair])
         sdf2 = body_sdf(B2.positions, B2.faces, vox=VOX_M,
                         bounds=(Xh.min(0) - SDF_MARGIN_M, Xh.max(0) + SDF_MARGIN_M))
-        V2, F2, _, hl2, info2 = gh._scalp_cap(B2, dense_weights(B2)[:, joint_index(B2, "head")], Xh, sdf2)
+        V2, F2, _, hl2, info2 = gh._scalp_cap(B2, dense_weights(B2)[:, joint_index(B2, "head")], Xh, sdf2,
+                                              shaped=False)
         r2 = np.linalg.norm(V2 - [0, 1.6, 0], axis=1)
         inner_want = reach_count(0.094, hl2 + 0.003)
         check(abs(hl2 - hl) <= 1e-5 and len(F2) == want, f"two walls: cap {len(F2)} == {want} outer triangles")

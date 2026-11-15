@@ -117,6 +117,14 @@ DRAPE_TEAR_FLOOR_M = 0.002
 FACE_CLEAR_SHARE = 0.8
 FACE_FALLOFF = 0.85
 FACE_FALLOFF_RINGS = 12
+# Every vertex in the box went to exactly the box's side, |x - cx| = reach: the moved strands piled up in one
+# vertical plane beside the eye — a cut line (Ruling A89: Lirien 204 vertices within 0.5 mm of that plane against
+# ~80 for an even spread, Glut 89 / ~29, Ylva 107 / ~39). Each card goes FACE_CLEAR_SPREAD_M * frac(card * GOLDEN)
+# further out (its own share, deterministic), so the moved ends spread over a band instead.
+FACE_CLEAR_SPREAD_M = 0.008
+# ``_face_roots`` (Ruling A89): a card rooted on the bare face is turned round when its tip lies over the cap's floor or
+# at least this much azimuth farther back than its root (swept back past the ear).
+FACE_ROOT_BACK_DEG = 15.0
 # Cranium = Head-weighted vertices above chin + CRANIUM_FROM * (top - chin).
 CRANIUM_FROM = 0.6
 ICP_ITERATIONS = 30
@@ -154,6 +162,36 @@ CAP_TUCK_M = 0.003
 # fill the band above it). A hairline above the brow is no fringe: its cap is today's, bit for bit.
 FACE_SECTOR_DEG = 60.0
 FACE_SECTOR_FADE_DEG = 25.0
+# The front edge is a hairline, not a cut (Ruling A89, FIT_VERSION hair 17). The floor above was one height across
+# the face, so the cap and the fill ended in a straight line, and seen from the front the skin under it was a
+# rectangle with right-angle corners where the side hair or a side-swept fringe leaves the forehead open (Vallerie
+# seed 43: 85 deg of turn within 2 mm of the visible hairline at x +69.5 mm; Glut / Ylva / Rosi / Lirien straight
+# too). ``hairline_offset`` adds the shape of a natural hairline on top of that floor, the same on both sides:
+# - from the middle to HAIRLINE_ARC_DEG of azimuth the floor rises by HAIRLINE_ARC_RISE_M in a cosine S (flat in
+#   the middle and at the temple): higher at the temples, lower in the middle;
+# - from there over HAIRLINE_TURN_ARC_M of arc (``hairline_shape``: as azimuth at the head's radius just under the
+#   floor) it turns down by HAIRLINE_ARC_RISE_M + HAIRLINE_DROP_M in a smoothstep: the temple turns down towards
+#   the sideburn in a wide curve (the steepest bend: 6 * (rise + drop) / turn arc^2, about 3 deg per 2 mm), no
+#   right angle;
+# - behind that it stays HAIRLINE_DROP_M under the floor (the cap tucks under the side hair) and fades back to the
+#   floor between HAIRLINE_SIDE_FADE_DEG (over the ear, where the side cap is as before).
+# A turn picked per side where the hair starts to cover the skin was tried first: a fit whose side hair lies close
+# to the temples (Glut seed 42: cover from 20-25 deg) turned down right next to the middle, a tent instead of an
+# arc, and a fringe fit's fill then ran down the temple beside the eye. The fill's front band keeps its plane.
+HAIRLINE_ARC_RISE_M = 0.006
+HAIRLINE_ARC_DEG = 35.0
+HAIRLINE_DROP_M = 0.010
+HAIRLINE_TURN_ARC_M = 0.06
+HAIRLINE_RADIUS_BAND_M = (0.002, 0.012)
+HAIRLINE_SIDE_FADE_DEG = (85.0, 100.0)
+# A soft edge (Ruling A89): the cap's last CAP_EDGE_FADE_M above its edge sinks from CAP_OFFSET_M over the body to
+# CAP_EDGE_SINK_M under it, so the edge tucks under the skin instead of standing on it as a 1.5 mm step (the light
+# line under the fill band); each fill card lands up to FILL_LAND_JITTER_M under the floor (its own share, the
+# golden-ratio sequence of its seed — deterministic), so the strands do not all end on one line.
+CAP_EDGE_FADE_M = 0.004
+CAP_EDGE_SINK_M = 0.001
+FILL_LAND_JITTER_M = 0.0025
+GOLDEN = 0.6180339887498949
 # Front hairline region: z > head centre z + 0.25 * head depth and |x - head cx| < 0.15 * head width. The plan said
 # 0.3 * width (+-5.1 cm on the spike's head): that strip reaches the face-framing strands, whose tips hang at eye
 # level (x +-4.5..5.6 cm, y 1.572), and the cap then covered forehead and temples (seen in the render, and 52 cap
@@ -811,7 +849,8 @@ def fringe_floor(hairline: Optional[float], landmarks: Optional[Dict[str, float]
     return hairline_target(float(landmarks["brow_y"]), float(landmarks["crown_y"]))
 
 
-def cap_floor(hairline: float, face_y: Optional[float], centre_xz: Tuple[float, float], back_drop: float = 0.0):
+def cap_floor(hairline: float, face_y: Optional[float], centre_xz: Tuple[float, float], back_drop: float = 0.0,
+              shape: Optional[Dict[str, Any]] = None):
     """The cap's floor per point (Ruling A80): ``floor(points (N, 3)) -> (N,)`` heights, the hairline lifted towards
     ``face_y`` (``fringe_floor``) by ``face_weight``: ``hairline + w * max(0, face_y - hairline)``. The cap's edge
     lies ``CAP_TUCK_M`` above it, the fill cards land on it. Without ``face_y`` or with one at or below the hairline
@@ -819,22 +858,66 @@ def cap_floor(hairline: float, face_y: Optional[float], centre_xz: Tuple[float, 
 
     ``back_drop`` (Ruling A85, ``tilt_back_drop``; > 0 only under a manual forward tilt): behind the face sector the
     floor is lowered by up to that much — 0 at ``FACE_SECTOR_DEG + FACE_SECTOR_FADE_DEG`` (85 deg), all of it at the
-    back (180 deg), linear between (``back_weight``) — the face part is unchanged. 0: the floor above, bit for bit."""
+    back (180 deg), linear between (``back_weight``) — the face part is unchanged. 0: the floor above, bit for bit.
+
+    ``shape`` (Ruling A89, ``hairline_shape``): its offset (``hairline_offset``) is added — the arc and the temple's
+    turn down. None: the floor above, bit for bit."""
     lift = 0.0 if face_y is None else max(0.0, float(face_y) - float(hairline))
 
-    def floor(points: np.ndarray) -> np.ndarray:
-        X = np.asarray(points, np.float64).reshape(-1, 3)
+    def base(X: np.ndarray) -> np.ndarray:
         if back_drop > 0.0:
             plain = float(hairline) - float(back_drop) * back_weight(X, centre_xz)
             return plain + lift * face_weight(X, centre_xz)
         if lift <= 0.0:
             return np.full(len(X), float(hairline))
         return float(hairline) + lift * face_weight(X, centre_xz)
+
+    def floor(points: np.ndarray) -> np.ndarray:
+        X = np.asarray(points, np.float64).reshape(-1, 3)
+        if shape is None:
+            return base(X)
+        return base(X) + hairline_offset(X, centre_xz, shape)
     return floor
 
 
+def hairline_offset(points: np.ndarray, centre_xz: Tuple[float, float], shape: Dict[str, Any]) -> np.ndarray:
+    """The floor's offset of the hairline shape per point (Ruling A89): by the absolute azimuth ``a`` about
+    ``centre_xz``, with ``a1 = HAIRLINE_ARC_DEG`` and the turn's span ``t = shape["turn_deg"]``:
+    ``rise = HAIRLINE_ARC_RISE_M * (1 - cos(pi * min(a, a1) / a1)) / 2``, ``s = smoothstep((a - a1) / t)``, offset
+    ``rise * (1 - s) - HAIRLINE_DROP_M * s``, times the side fade ``1 - smoothstep((a - 85) / 15)`` (0 from 100 deg
+    on)."""
+    X = np.asarray(points, np.float64).reshape(-1, 3)
+    a = np.abs(np.degrees(np.arctan2(X[:, 0] - centre_xz[0], X[:, 2] - centre_xz[1])))
+    a1, span = HAIRLINE_ARC_DEG, float(shape["turn_deg"])
+    rise = HAIRLINE_ARC_RISE_M * (1.0 - np.cos(np.pi * np.minimum(a, a1) / a1)) / 2.0
+    u = np.clip((a - a1) / span, 0.0, 1.0)
+    s = u * u * (3.0 - 2.0 * u)
+    lo, hi = HAIRLINE_SIDE_FADE_DEG
+    v = np.clip((a - lo) / (hi - lo), 0.0, 1.0)
+    fade = 1.0 - v * v * (3.0 - 2.0 * v)
+    return (rise * (1.0 - s) - HAIRLINE_DROP_M * s) * fade
+
+
+def hairline_shape(P: np.ndarray, F: np.ndarray, head_v: np.ndarray, centre_xz: Tuple[float, float],
+                   floor) -> Dict[str, Any]:
+    """The shape of the front hairline (Ruling A89): ``{turn_deg, radius_m}``. ``radius_m``: the median horizontal
+    distance from ``centre_xz`` of the head's points (the Head-weighted vertices and the centroids of the faces
+    between them) ``HAIRLINE_RADIUS_BAND_M`` under ``floor`` (the cap's floor without the shape) in front
+    (|azimuth| <= 90), 0.08 without one; ``turn_deg`` = ``HAIRLINE_TURN_ARC_M`` as azimuth at that radius."""
+    P = np.asarray(P, np.float64)
+    F = np.asarray(F, np.int64).reshape(-1, 3)
+    head_v = np.asarray(head_v, bool)
+    pts = np.vstack([P[head_v], P[F[head_v[F].all(1)]].mean(1)])
+    signed = np.degrees(np.arctan2(pts[:, 0] - centre_xz[0], pts[:, 2] - centre_xz[1]))
+    below = floor(pts) - pts[:, 1]
+    band = (below > HAIRLINE_RADIUS_BAND_M[0]) & (below <= HAIRLINE_RADIUS_BAND_M[1]) & (np.abs(signed) <= 90.0)
+    radius = float(np.median(np.hypot(pts[band, 0] - centre_xz[0], pts[band, 2] - centre_xz[1]))) if band.any() \
+        else 0.08
+    return {"turn_deg": round(math.degrees(HAIRLINE_TURN_ARC_M / max(radius, 1e-3)), 4), "radius_m": round(radius, 5)}
+
+
 def _scalp_cap(body, head_w: np.ndarray, hair_X: np.ndarray, sdf, floor_y: Optional[float] = None,
-               landmarks: Optional[Dict[str, float]] = None, tilt_deg: float = 0.0
+               landmarks: Optional[Dict[str, float]] = None, tilt_deg: float = 0.0, shaped: bool = True
                ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[float], Dict[str, Any]]:
     """``(positions, faces, normals, hairline_y, info)`` of the scalp cap (faces index the returned positions).
 
@@ -848,6 +931,10 @@ def _scalp_cap(body, head_w: np.ndarray, hair_X: np.ndarray, sdf, floor_y: Optio
     one) — behind the face sector the floor drops by ``tilt_back_drop`` (Ruling A85, ``info.back_drop_m``). Face normals are oriented by the SDF gradient at the centroid before they are accumulated into vertex
     normals — the generator body's winding is never trusted — and the winding is flipped to match, so a cap face
     looks outward.
+
+    ``shaped`` (Ruling A89): the floor carries ``hairline_shape`` (``info.shape``, the same dict ``cap_floor`` takes,
+    so the fill lands on the same floor), and the cap's last ``CAP_EDGE_FADE_M`` above its edge sinks to
+    ``CAP_EDGE_SINK_M`` under the body (``info.edge_fade_m``). False: the cap of FIT hair 16, bit for bit.
     """
     from scipy.spatial import cKDTree
     P, F = body.positions, body.faces
@@ -864,14 +951,25 @@ def _scalp_cap(body, head_w: np.ndarray, hair_X: np.ndarray, sdf, floor_y: Optio
     edge_y = hairline + CAP_TUCK_M
     face_y = fringe_floor(hairline, landmarks)
     back_drop = tilt_back_drop(tilt_deg, depth, P, head_v, hair_X, (cx, cz), hairline) if tilt_deg else 0.0
-    level = P[:, 1] - (cap_floor(hairline, face_y, (cx, cz), back_drop)(P) + CAP_TUCK_M)
+    shape = (hairline_shape(P, F, head_v, (cx, cz), cap_floor(hairline, face_y, (cx, cz), back_drop))
+             if shaped else None)
+    floor = cap_floor(hairline, face_y, (cx, cz), back_drop, shape)
+    level = P[:, 1] - (floor(P) + CAP_TUCK_M)
     sel = head_v[F].all(1) & (level[F].max(1) > 0) & (near <= CAP_REACH_M)
     candidates = int(sel.sum())
     sel[sel] = sdf.sample(centroid[sel]) > -CAP_INNER_DEPTH_M
     if not sel.any():
         return (*empty, hairline, {"note": "no scalp triangle above the hairline near the hair"})
     Pc, Fcut = clip_patch(P, F[sel], level)
-    V, Fl, N, flipped = offset_patch(Pc, Fcut, sdf, CAP_OFFSET_M)
+    if shape is None:
+        V, Fl, N, flipped = offset_patch(Pc, Fcut, sdf, CAP_OFFSET_M)
+    else:
+        # the soft edge: the offset runs from CAP_OFFSET_M (CAP_EDGE_FADE_M or more over the edge) down to
+        # -CAP_EDGE_SINK_M on the edge, measured on the body (offset 0)
+        V0, Fl, N, flipped = offset_patch(Pc, Fcut, sdf, 0.0)
+        over = V0[:, 1] - (floor(V0) + CAP_TUCK_M)
+        t = np.clip(over / CAP_EDGE_FADE_M, 0.0, 1.0)
+        V = V0 + (-CAP_EDGE_SINK_M + (CAP_OFFSET_M + CAP_EDGE_SINK_M) * t)[:, None] * N
     lifted = face_y is not None and face_y > hairline
     brow_y = (landmarks or {}).get("brow_y")
     info = {"head_centre_xz": [round(float(cx), 5), round(float(cz), 5)],
@@ -884,6 +982,9 @@ def _scalp_cap(body, head_w: np.ndarray, hair_X: np.ndarray, sdf, floor_y: Optio
             "face_lift_m": round(float(face_y - hairline), 5) if lifted else 0.0}
     if back_drop > 0.0:
         info["back_drop_m"] = back_drop
+    if shape is not None:
+        info["shape"] = shape
+        info["edge_fade_m"] = [CAP_EDGE_FADE_M, -CAP_EDGE_SINK_M]
     return V, Fl, N, hairline, info
 
 
@@ -949,7 +1050,7 @@ def offset_patch(P: np.ndarray, Fc: np.ndarray, sdf, offset: float
 
 
 def scalp_fill_cards(Vc: np.ndarray, Fc: np.ndarray, hair: np.ndarray, sdf, crown: np.ndarray, floor_y,
-                     front: Optional[Tuple[float, float]] = None
+                     front: Optional[Tuple[float, float]] = None, land_jitter: float = 0.0
                      ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, Any]]:
     """``(V, F, UV, normals, card, report)`` of the flat cards that fill the open scalp (``FILL_COVER_M`` and the
     rest above): ``Vc`` / ``Fc`` the cap, ``hair`` the fitted hair cards' vertices, ``sdf`` the body, ``crown`` the
@@ -961,7 +1062,10 @@ def scalp_fill_cards(Vc: np.ndarray, Fc: np.ndarray, hair: np.ndarray, sdf, crow
     v from 1 at the root row to 0 at the tip row by the distance along the card — the whole strip on every card,
     so a card cut short still ends in the strip's ragged tips, not mid-strand. A card that lands on the floor reaches v
     ``FILL_EDGE_V`` where it crosses the cap's edge (``CAP_TUCK_M`` above the floor) and 0 on the floor: its strands
-    end around and below the cap's edge. Empty arrays without an open cap triangle."""
+    end around and below the cap's edge. Empty arrays without an open cap triangle.
+
+    Ruling A89: ``land_jitter``: card ``k`` (in seed order) lands ``land_jitter * frac(k * GOLDEN)`` under the floor,
+    so the strands do not end on one line."""
     from scipy.spatial import cKDTree
     from app.core.garment_fit import _unit
     empty = (np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 2)), np.zeros((0, 3)),
@@ -1005,20 +1109,21 @@ def scalp_fill_cards(Vc: np.ndarray, Fc: np.ndarray, hair: np.ndarray, sdf, crow
     N: List[np.ndarray] = []
     F: List[np.ndarray] = []
     ids: List[np.ndarray] = []
-    for seed in seeds:
+    for k_seed, seed in enumerate(seeds):
         row0 = onto(seed)
         if not np.linalg.norm(row0[2]) > 0.5:
             continue
+        sink = float(land_jitter) * ((k_seed * GOLDEN) % 1.0)
         rows = {0: row0}
         landed = False
         for sign in (1, -1):
             p, _, t = row0
             for k in range(1, half + 1):
                 q, n, t2 = onto(p + sign * step * t)
-                over_q = q[1] - float(floor(q[None])[0])
+                over_q = q[1] - float(floor(q[None])[0]) + sink
                 if over_q < 0:
                     # the last row lands on the floor: the step cut where it crosses the floor
-                    over_p = p[1] - float(floor(p[None])[0])
+                    over_p = p[1] - float(floor(p[None])[0]) + sink
                     f = over_p / max(over_p - over_q, 1e-12)
                     if f > FILL_LAND_MIN:
                         q, n, t2 = onto(p + f * sign * step * t)
@@ -1313,7 +1418,8 @@ def _clear_face(Fw: np.ndarray, Qp: np.ndarray, sdf, body, head_w: np.ndarray,
     inside = (Q[:, 1] < brow) & (Q[:, 1] > chin) & (Q[:, 2] > mid_z) & (np.abs(off) < reach)
     if movable is not None:
         inside &= movable
-    need = np.where(inside, reach - np.abs(off), 0.0)
+    spread = FACE_CLEAR_SPREAD_M * ((_cards(Fw, len(Q)) * GOLDEN) % 1.0)
+    need = np.where(inside, reach - np.abs(off) + spread, 0.0)
     adjacency = _adjacency(Fw, len(Q))
     dx = (_ring_max(np.where(off >= 0, need, 0.0), adjacency, FACE_FALLOFF, FACE_FALLOFF_RINGS)
           - _ring_max(np.where(off < 0, need, 0.0), adjacency, FACE_FALLOFF, FACE_FALLOFF_RINGS))
@@ -1605,6 +1711,53 @@ def _anchor_blend(chain: Any, body: Any, today: Tuple[List[str], np.ndarray, np.
     return out
 
 
+def _face_roots(U: np.ndarray, X: np.ndarray, card: np.ndarray, floor, centre_xz: Tuple[float, float],
+                chin: float) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """``(U, report)``: the hair UVs with the strip turned round on every card rooted on the bare face (Ruling A89).
+
+    HairDeck grows its cards from its proxy sphere, whose scalp reaches over the cheeks of a real face: Vallerie seed
+    42 had 23 cards rooted beside her eye (azimuth 43-60 deg, at eye height, 2-7 cm under the cap's floor) running
+    back to tips behind her ear (azimuth 123-141 deg, over the cap). The strip's root end is its hard, dense end
+    (every strand line starts there), so their roots made a straight line on the skin — hair grown out of the cheek
+    (user 2026-11-15). Such a card — root row (``v`` = its largest) within ``FACE_SECTOR_DEG + FACE_SECTOR_FADE_DEG``
+    of the front, above ``chin`` and more than ``CAP_TUCK_M`` under ``floor``; tip row (``v`` = its smallest) at or
+    over ``floor`` or at least ``FACE_ROOT_BACK_DEG`` of azimuth farther back (swept back past the ear at eye height:
+    seed 42 had 35 more of them, tips 1-2 cm under the floor behind the ear) — gets ``v -> 1 - v``: its tapered tips
+    lie on the cheek, its root end over the scalp or in the hair behind the ear. A card hanging down the cheek (tip
+    under the floor and not farther back) keeps its tips at the bottom. Without a floor nothing changes."""
+    report: Dict[str, Any] = {"face_rooted": 0, "flipped": 0}
+    if floor is None or not len(X):
+        return U, report
+    hair = card >= 0
+    ids = card[hair]
+    n = int(ids.max()) + 1 if len(ids) else 0
+    v = U[hair, 1]
+    vmax = np.full(n, -np.inf)
+    vmin = np.full(n, np.inf)
+    np.maximum.at(vmax, ids, v)
+    np.minimum.at(vmin, ids, v)
+    Xh = np.asarray(X, np.float64)[hair]
+
+    def ends(at: np.ndarray) -> np.ndarray:
+        sel = np.abs(v - at[ids]) < 1e-6
+        cnt = np.bincount(ids[sel], minlength=n).astype(np.float64)
+        pos = np.stack([np.bincount(ids[sel], Xh[sel, k], n) for k in range(3)], 1)
+        return pos / np.maximum(cnt, 1.0)[:, None]
+    has = vmax - vmin > 1e-6
+    root, tip = ends(vmax), ends(vmin)
+    azimuth = np.degrees(np.abs(np.arctan2(root[:, 0] - centre_xz[0], root[:, 2] - centre_xz[1])))
+    tip_az = np.degrees(np.abs(np.arctan2(tip[:, 0] - centre_xz[0], tip[:, 2] - centre_xz[1])))
+    face = (has & (azimuth < FACE_SECTOR_DEG + FACE_SECTOR_FADE_DEG) & (root[:, 1] > chin)
+            & (root[:, 1] < floor(root) - CAP_TUCK_M))
+    flip = face & ((tip[:, 1] >= floor(tip)) | (tip_az >= azimuth + FACE_ROOT_BACK_DEG))
+    report.update(face_rooted=int(face.sum()), flipped=int(flip.sum()))
+    if flip.any():
+        U = U.copy()
+        rows = np.flatnonzero(hair)[flip[ids]]
+        U[rows, 1] = 1.0 - U[rows, 1]
+    return U, report
+
+
 def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
                  colour_target: Optional[Tuple[float, float, float]],
                  forward_m: Optional[float] = None, tilt_deg: Optional[float] = None,
@@ -1778,16 +1931,22 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
                                                 cap_tilt)
     nc = len(Vc)
     cap_colour = np.r_[np.percentile(colours[:, :3], CAP_COLOUR_PERCENTILE, axis=0), 1.0]
-    below = int((Vc[Fc].mean(1)[:, 1] < hairline).sum()) if len(Fc) else 0
     # scalp fill: flat cards over the cap where no hair card lies (after the cap, rigid like it: all Head)
     hair_card = hair_cards.hairdeck_cards(F, len(X), len(X))
     head_box = _head_box(body.positions, head_v)
+    floor = None if hairline is None else cap_floor(hairline, fringe_floor(hairline, landmarks),
+                                                    (head_box[0], head_box[1]), cap_info.get("back_drop_m", 0.0),
+                                                    cap_info.get("shape"))
+    # cap triangles under the cap's own floor (the hairline, shaped since Ruling A89, lowered behind the face under a
+    # manual tilt): none by construction
+    below = int((Vc[Fc].mean(1)[:, 1] < floor(Vc[Fc].mean(1))).sum()) if len(Fc) and floor is not None else 0
     Vf, Ff, Uf, Nf, fill_card, fill_info = scalp_fill_cards(
-        Vc, Fc, X, sdf, np.array([head_box[0], top, head_box[1]]),
-        hairline if hairline is None else cap_floor(hairline, fringe_floor(hairline, landmarks),
-                                                    (head_box[0], head_box[1]), cap_info.get("back_drop_m", 0.0)),
+        Vc, Fc, X, sdf, np.array([head_box[0], top, head_box[1]]), hairline if floor is None else floor,
         front=None if hairline is None else (head_box[1] + HAIRLINE_FRONT_DEPTH * head_box[3],
-                                             CAP_TUCK_M + FILL_EDGE_BAND_M))
+                                             CAP_TUCK_M + FILL_EDGE_BAND_M),
+        land_jitter=FILL_LAND_JITTER_M)
+    # Ruling A89: a card rooted on the bare face (its tip over the scalp or swept back) shows its tips there instead
+    U, roots = _face_roots(np.asarray(U, np.float64), X, hair_card, floor, (head_box[0], head_box[1]), chin)
     nf = len(Vf)
     cap_colours = np.tile(cap_colour, (nc, 1))
     if nf:
@@ -1857,6 +2016,7 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
                     if len(near_hair) else None),
         "vertices": {"hair": int(len(X)), "cap": int(nc), "fill": int(nf)},
         "fill": fill_info,
+        "roots": roots,
         "chains": chain_info,
     }
     if drape_xpbd is not None:
