@@ -2330,7 +2330,8 @@ export class NpcManager {
       }
       return out;
     };
-    for (const npc of this.npcs.values()) npc.figure?.updateSecondary(partnersOf(npc.name));
+    // Each reader passes its OWN interaction: a partner's channel engages only within the same one.
+    for (const npc of this.npcs.values()) npc.figure?.updateSecondary(partnersOf(npc.name), interactionOf(npc));
     // The GPU hair push: the same selection, the partners re-read after every phase B.
     const fresh = new Map<string, PartnerSnapshot | null>();
     for (const npc of this.npcs.values()) {

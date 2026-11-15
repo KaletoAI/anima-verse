@@ -14,7 +14,10 @@
  *   s = (P − O)·u and the radial distance ρ = |P − O − s·u| (`channelCoords`).
  * - THE ZONES (`inZone`). Cylinder C: 0 ≤ s ≤ D and ρ ≤ R. Funnel Φ:
  *   −F ≤ s < 0 and ρ ≤ R + (−s)·tan α. The grown zone of the release test adds
- *   h to F and R and δ to α (`CHANNEL_GROW`); D is not grown.
+ *   h to F and R and δ to α (`CHANNEL_GROW`); D is not grown, but an engaged
+ *   tip PAST the bottom (s > D, ρ ≤ R + h) still counts as inside it — the
+ *   depth scale already compresses it, and releasing there would drop the
+ *   guidance exactly where it is deepest (`pastBottom`).
  * - THE BINDING (`bindChannels`) follows the endpoint rule of `collision.ts`
  *   unchanged: `a_pos` → O and `b_pos` → the bottom, each through its joint's
  *   bind→world matrix; u and D come from those two points, R and F scale with
@@ -55,8 +58,10 @@ export const CHANNEL_BLEND_S = 0.2
 export const CHANNEL_HYST_M = 0.005
 /** δ: the release zone grows the funnel half-angle by this (degrees; spec default). */
 export const CHANNEL_HYST_DEG = 10
-/** The grown zone of the release test: `inZone(s, ρ, ch, CHANNEL_GROW)`. */
-export const CHANNEL_GROW: Readonly<{ h: number; deg: number }> = Object.freeze({ h: CHANNEL_HYST_M, deg: CHANNEL_HYST_DEG })
+/** The grown zone of the release test: `inZone(s, ρ, ch, CHANNEL_GROW)` — F and R grown by h, α by δ, and the
+ *  cylinder open past the bottom (an engaged tip with s > D stays inside; `depthScale` compresses it). */
+export const CHANNEL_GROW: Readonly<{ h: number; deg: number; pastBottom: boolean }> =
+  Object.freeze({ h: CHANNEL_HYST_M, deg: CHANNEL_HYST_DEG, pastBottom: true })
 
 const DEG = Math.PI / 180
 /** Scan steps over a half turn, then bisection iterations, of the radial guidance search. */
@@ -120,13 +125,14 @@ export function channelCoords(p: Vec3, ch: ChannelNow): { s: number; rho: number
 
 /**
  * Which zone (s, ρ) lies in: `cylinder` (0 ≤ s ≤ D, ρ ≤ R), `funnel` (−F ≤ s < 0, ρ ≤ R + (−s)·tan α) or null.
- * `grow` grows F and R by `h` and α by `deg` (default 0) — the release test passes `CHANNEL_GROW`.
+ * `grow` grows F and R by `h` and α by `deg` (default 0), and with `pastBottom` the cylinder has no bottom (s > D
+ * counts as `cylinder`) — the release test passes `CHANNEL_GROW`.
  */
 export function inZone(s: number, rho: number, ch: ChannelNow,
-  grow?: { h: number; deg?: number }): 'cylinder' | 'funnel' | null {
+  grow?: { h: number; deg?: number; pastBottom?: boolean }): 'cylinder' | 'funnel' | null {
   const h = grow?.h ?? 0
   const alpha = (ch.coneDeg + (grow?.deg ?? 0)) * DEG
-  if (s >= 0) return s <= ch.depth && rho <= ch.r + h ? 'cylinder' : null
+  if (s >= 0) return (s <= ch.depth || !!grow?.pastBottom) && rho <= ch.r + h ? 'cylinder' : null
   return s >= -(ch.funnel + h) && rho <= ch.r + h + (-s) * Math.tan(alpha) ? 'funnel' : null
 }
 
@@ -213,7 +219,8 @@ export function depthScale(sTip: number, sE: number, ch: ChannelNow, rC: number)
  * One frame of an entering chain's engagement with a channel:
  *  - not engaged: engages when the gate passes, a link tip lies in Φ ∪ C (`tipInZone`) and that link's lever is
  *    within α of u (`leverAngleDeg` ≤ `coneDeg`);
- *  - engaged: releases when the gate fails or no link tip lies in the grown zone (`tipInGrownZone`, `CHANNEL_GROW`);
+ *  - engaged: releases when the gate fails or no link tip lies in the grown zone (`tipInGrownZone`, `CHANNEL_GROW`
+ *    — a tip past the bottom counts as inside it);
  *  - w then moves towards 1 (engaged) or 0 by dt / `CHANNEL_BLEND_S` — the engaging and the releasing frame
  *    included, so guidance never snaps.
  */

@@ -96,12 +96,41 @@
  *    release pending, the path is the own-only one above and allocates
  *    nothing; a link whose chain kept no partner capsule and holds no turn
  *    stays on it too.
+ *  - CHANNELS (`update(dt, { partners, interaction })`, cross-person
+ *    collision spec Part 4 "Guidance rule", the rule itself in `channels.ts`):
+ *    a partner's declared channel (`PartnerSnapshot.channels`) is a way INTO
+ *    that body that this figure's accepted chains may take. Per chain (its
+ *    root link) and partner channel: THE GATE (`channelGate` — the chain's
+ *    `MotionGroup.op` accepted, its state `length` ≥ `min_length`, the reader's
+ *    `interaction` and the partner's the same running pair interaction, its
+ *    kind among `interaction_kinds`), ENGAGEMENT (`stepEngagement`, once per
+ *    update before the solve, on the zone of the chain's tips as RENDERED in
+ *    the previous update: a tip in Φ ∪ C with its lever within α engages, no
+ *    tip in the grown zone — past the bottom counts as inside — or a failed
+ *    gate releases) and the weight w, which ramps over `CHANNEL_BLEND_S` both
+ *    ways. A figure's own channels are never read (they are not a partner's).
+ *    While w > 0, per link root to tip after its dynamics: the RADIAL GUIDANCE
+ *    turn (`radialGuidanceAngle` with r_c = the link's own extension capsule
+ *    radius × the state girth) × w, capped by the link's swing budget (the
+ *    contact turn's cap, applied on its own), then the contact turn — where
+ *    the guided tip lies inside C, the partner's `suppress` capsules are
+ *    taken out of THAT partner's list (radius × (1 − w), gone at w = 1, so
+ *    neither engaging nor releasing snaps). After the chain's last link: the
+ *    DEPTH SCALE k (`depthScale`, blended 1 → k by w) shortens the levers of
+ *    the links from the first joint past the opening along their tips, about
+ *    that joint, and the chain is re-published in the same update. All of it
+ *    acts on the rendered frame only: the spring state never sees it, so a
+ *    released chain is exactly where the free one would be. `contactTips`
+ *    rows of an engaged chain carry `channel` (id, w, k). No channel in any
+ *    partner (today's worlds): nothing of this runs and nothing allocates.
  *  - INERT: no driven link, no payload, or far LOD → no binding, no work.
  */
 import type { Bone, Matrix4, Quaternion, Object3D, SkinnedMesh, Vector3 } from 'three'
 import { normBoneName } from './clipRetarget'
-import { bindCollision, HAIR_ONLY_REGIONS, PARTNER_ONLY_REGIONS } from './collision'
-import type { BoundCapsule, CollisionBinding, CollisionPayload, Vec3 } from './collision'
+import { CHANNEL_GROW, channelCoords, channelGate, depthScale, inZone, radialGuidanceAngle, stepEngagement } from './channels'
+import type { ChannelNow } from './channels'
+import { bindCollision, bodyJoints, COLLISION_VERSION, HAIR_ONLY_REGIONS, jointRefNow, linearScale, PARTNER_ONLY_REGIONS } from './collision'
+import type { BoundCapsule, CollisionBinding, CollisionPayload, JointRef, Vec3 } from './collision'
 import { inGarment } from './figure'
 import { COLLIDE_MAX, HAIR_REGIONS, pushOutOfCapsules } from './garmentCollision'
 import type { CollideCapsule, PushOptions } from './garmentCollision'
@@ -177,8 +206,10 @@ export interface SecondaryMotionPayload {
 }
 export interface SecondaryMotion {
   configure(payload?: SecondaryMotionPayload): void
-  /** `partners`: the other figures' capsules this frame (module docstring, PARTNER CAPSULES). */
-  update(realDelta: number, options?: { frozen?: boolean; far?: boolean; partners?: readonly PartnerSnapshot[] }): void
+  /** `partners`: the other figures' capsules and channels this frame (module docstring, PARTNER CAPSULES);
+   *  `interaction`: the running pair interaction this figure is in (CHANNELS; null / absent = none). */
+  update(realDelta: number, options?: { frozen?: boolean; far?: boolean; partners?: readonly PartnerSnapshot[];
+    interaction?: { id: string } | null }): void
   /** The body's `collision` payload the extension tips are kept outside of (module docstring); null = off. */
   setCollision(payload?: CollisionPayload | null): void
   /** The longest driven lever: from a chain's root joint to the tip of one of its links (the sum of the
@@ -186,8 +217,10 @@ export interface SecondaryMotion {
   reach(): number
   /** Inspection (checks, debug overlays): every link with contacts — its tip in world space as last
    *  rendered, its bone frame tip, the ids of the own capsules it is kept outside of, and the partner
-   *  capsules that pushed it in the last frame (`"<partner>:<capsule id>"`). */
-  contactTips(): { bone: string; tip: Vec3; tipLocal: Vec3; capsules: string[]; partner: string[] }[]
+   *  capsules that pushed it in the last frame (`"<partner>:<capsule id>"`); a link of a chain guided by a
+   *  partner's channel (CHANNELS, w > 0) also names it: the channel id, w and the depth scale k applied. */
+  contactTips(): { bone: string; tip: Vec3; tipLocal: Vec3; capsules: string[]; partner: string[];
+    channel?: { id: string; w: number; k: number } }[]
   reset(): void
   dispose(): void
 }
@@ -199,6 +232,30 @@ const CONTACT_REFINE = 14
 const COLLIDE_SLACK = 1e-6
 /** The hair chains' push options: the SQUEEZE rule (hair only — extension tips keep the ordinary passes, plan R10). */
 const SQUEEZE: PushOptions = { squeeze: true }
+/** The regions of a link's OWN extension capsule (one per chain bone, start joint = the link): its radius is the
+ *  r_c of the channel guidance (CHANNELS). */
+const LINK_REGIONS: readonly string[] = ['chest', 'attached_part', 'appendage']
+
+/** One chain's engagement with one partner channel (module docstring, CHANNELS); kept on the chain's root link. */
+interface ChannelState {
+  /** `"<partner>:<channel id>"`. */
+  key: string
+  /** The channel as last seen (world, that update's frame): the release ramp keeps guiding a vanished one. */
+  ch: ChannelNow
+  /** The update in which the gate last passed (`partnerUpdate`). */
+  gate: number
+  engaged: boolean
+  w: number
+  /** The zone of the chain's rendered tips at the end of the last update — this update's engagement step. */
+  inZone: boolean
+  inGrown: boolean
+  leverDeg: number
+  /** The depth scale applied in the last update (1 = none). */
+  k: number
+  /** The partner's contact keys of `ch.suppress` (`"<partner>:<capsule id>"`), and the set they were made from. */
+  suppressKeys: string[]
+  suppressFrom: ReadonlySet<string> | null
+}
 
 /** The turn angle in [0, limit] that takes a tip out of the capsules (`depthAt(angle)` = its depth after that
  *  turn, `depth0` at 0): the first outside angle of a `CONTACT_SCAN` scan, refined by bisection; when no angle
@@ -441,6 +498,12 @@ interface Particle {
    *  (in the frame the turn is expressed in: the anchor frame, or the hair bone's pre-contact world). */
   partnerDeg: number
   partnerAxis: Vector3 | null
+  /** The bind radius (metres) of the link's own extension capsule (`LINK_REGIONS`, start joint = the link); 0 = none. */
+  linkR: number
+  /** Root only: the chain's engagements with partner channels (CHANNELS); null = none. */
+  channels: ChannelState[] | null
+  /** Root only: the body joint the chain hangs from (its scale turns `linkR` into world metres); undefined = not looked up. */
+  hangJoint?: JointRef | null
 }
 /** The shared partner cull's margin (metres) for a chain root's move between the cull and its own broad phase within
  *  one update: only how often the culled list is read depends on it, never what a chain keeps. */
@@ -640,6 +703,13 @@ export function createSecondaryMotion(
   let collision: CollisionBinding | null = null
   /** Bind the capsules (lazily — only with a driven link) and give each moving tip its contacts. */
   const prepareCollision = () => {
+    // Each link's own extension capsule radius (CHANNELS r_c), from the payload — no binding needed.
+    for (const st of particles) {
+      const name = normBoneName(st.bind.bone.name)
+      const own = collisionPayload?.version === COLLISION_VERSION ? collisionPayload.capsules?.find(c =>
+        LINK_REGIONS.includes(c.region) && normBoneName(c.a) === name) : undefined
+      st.linkR = own && own.r > 0 ? own.r : 0
+    }
     if (!collisionPayload || !particles.length) {
       collision = null
       for (const st of particles) st.contacts = []
@@ -829,7 +899,8 @@ export function createSecondaryMotion(
           staticWeightFrom: (2 * Math.PI * params.freq_hz) ** 2 < 1e-12 ? 0 : 1,
           staticWeightTo: (2 * Math.PI * params.freq_hz) ** 2 < 1e-12 ? 0 : 1,
           tipLocal: new three.Vector3(), ancestors: new Set(), contacts: [],
-          chainRoot: null, chainLinks: [], partnerFrame: 0, partnerNearKeys: [], partnerNearNows: [], partnerPushed: [], partnerDeg: 0, partnerAxis: null }
+          chainRoot: null, chainLinks: [], partnerFrame: 0, partnerNearKeys: [], partnerNearNows: [], partnerPushed: [], partnerDeg: 0, partnerAxis: null,
+          linkR: 0, channels: null }
         if (particle.restTo !== to) {
           particle.restFrom = particle.rest
           particle.restTo = to
@@ -919,20 +990,28 @@ export function createSecondaryMotion(
     for (const st of particles) {
       st.chainRoot = particleOf.get(rootBinds.get(st) ?? st.bind) ?? st
       st.chainRoot.chainLinks.push(st)
+      st.hangJoint = undefined
     }
+    // A link that stopped being a chain root drops its engagements (a root keeps them across a state change).
+    for (const st of particles) if (st.chainRoot !== st) st.channels = null
     prepareCollision()
   }
   const reset = () => {
     for (const st of particles) {
       st.p = null; st.target = null; st.anchorRotation = null; st.v.set(0, 0, 0)
       st.partnerDeg = 0; st.partnerPushed = []
+      st.channels = null
     }
     releasing = 0
+    channelLive = 0
   }
   /** Links whose last frame held a partner turn (PARTNER CAPSULES): while > 0 the partner path runs on. */
   let releasing = 0
   /** The last update ran the partner path: the first one without it clears the links' partner state. */
   let pairedLast = false
+  /** Chain engagements with partner channels alive after the last update (CHANNELS): while > 0 the partner path
+   *  runs on, so a release ramps down even when the partner is gone. */
+  let channelLive = 0
   /** A chain's lever: the sum of its links' joint-to-tip levers, world metres at the current state `length`
    *  (the scale of the body bone the chain hangs from); `stretch` adds the longitudinal squash maximum. */
   const chainLever = (root: Particle, stretch: boolean) => {
@@ -1083,7 +1162,7 @@ export function createSecondaryMotion(
   const pairOwn: CollideCapsule[] = [], pairPartner: CollideCapsule[] = [], pairKeys: string[] = []
   const pairStore: CollideCapsule[] = []
   const pairJoint = new three.Vector3()
-  const gatherPair = (st: Particle, own: boolean, joint: Vector3) => {
+  const gatherPair = (st: Particle, own: boolean, joint: Vector3, suppress: ReadonlyMap<string, number> | null = null) => {
     pairOwn.length = 0; pairPartner.length = 0; pairKeys.length = 0
     if (own) for (const { bound, factor } of st.contacts) pairOwn.push({ a: bound.now.a, b: bound.now.b, r: bound.now.r * factor })
     const root = st.chainRoot ?? st
@@ -1116,8 +1195,12 @@ export function createSecondaryMotion(
     const keys = root.partnerNearKeys, nows = root.partnerNearNows
     for (let k = 0; k < keys.length; k++) {
       const now = nows[k]
-      const c = pairStore[k] ??= { a: now.a, b: now.b, r: 0 }
-      c.a = now.a; c.b = now.b; c.r = now.r + (st.partnerPushed.includes(keys[k]) ? PARTNER_HYST_M : 0)
+      // A channel's `suppress` capsule while the guided tip is inside C (CHANNELS): its radius × (1 − w).
+      const keep = suppress === null ? 1 : suppress.get(keys[k]) ?? 1
+      if (!(keep > 0)) continue
+      const c = pairStore[pairPartner.length] ??= { a: now.a, b: now.b, r: 0 }
+      c.a = now.a; c.b = now.b
+      c.r = (keep === 1 ? now.r : now.r * keep) + (st.partnerPushed.includes(keys[k]) ? PARTNER_HYST_M : 0)
       pairPartner.push(c)
       pairKeys.push(keys[k])
     }
@@ -1195,9 +1278,9 @@ export function createSecondaryMotion(
   }
   /** `keepTipOutside` with the partners (PARTNER CAPSULES): the same frame and turn, the pair search. */
   const keepTipOutsidePair = (st: Particle, dynamic: Quaternion, rest: Quaternion, limit: number, dt: number,
-    own: boolean) => {
+    own: boolean, suppress: ReadonlyMap<string, number> | null = null) => {
     if (!(limit > 0)) { st.partnerDeg = 0; st.partnerPushed = []; return }
-    gatherPair(st, own, pairJoint.setFromMatrixPosition(anchor))
+    gatherPair(st, own, pairJoint.setFromMatrixPosition(anchor), suppress)
     if (!pairPartner.length && st.partnerDeg === 0) {
       st.partnerPushed = []
       if (own && st.contacts.length) keepTipOutside(st, dynamic, rest, limit)
@@ -1252,6 +1335,198 @@ export function createSecondaryMotion(
     world.premultiply(translationMatrix.makeTranslation(-head.x, -head.y, -head.z))
       .premultiply(rotationMatrix).premultiply(translationMatrix.makeTranslation(head.x, head.y, head.z))
   }
+  // --- declared channels (module docstring, CHANNELS) ---
+  /** The figure's body joints by name (looked up once, for the joint a chain hangs from). */
+  let channelJoints: Map<string, JointRef> | null = null
+  /** r_c of a link: its own extension capsule radius in world metres (the scale of the body joint its chain hangs
+   *  from, as a capsule radius scales) × the state girth; 0 without such a capsule. */
+  const linkRadius = (st: Particle, chain: Particle): number => {
+    if (!(st.linkR > 0)) return 0
+    if (chain.hangJoint === undefined) {
+      const parent = chain.bind.bone.parent
+      channelJoints ??= bodyJoints(root)
+      chain.hangJoint = parent ? channelJoints.get(normBoneName(parent.name)) ?? null : null
+    }
+    const world = chain.hangJoint ? linearScale(jointRefNow(chain.hangJoint).bindToWorld) : 1
+    return st.linkR * world * Math.max(0, st.params.girth ?? 1)
+  }
+  /**
+   * ENGAGEMENT, once per update before the solve (CHANNELS): per chain root with an op and per partner channel
+   * whose gate passes, its state (made on first sight); then every state of the chain steps (`stepEngagement`) on
+   * the zone its tips had at the end of the last update — a state whose gate failed releases. A state is dropped once
+   * it is released, at w = 0 and without a passing gate. Sets `channelLive`.
+   */
+  const stepChannels = (partners: readonly PartnerSnapshot[], interaction: { id: string } | null, dt: number) => {
+    const reader = { interaction }
+    let live = 0
+    for (const chain of particles) {
+      if (chain.chainRoot !== chain) continue
+      const op = chain.paramsTo.op
+      if (op && !chain.paramsTo.hair) {
+        for (const snap of partners) {
+          if (!snap.channels?.length) continue
+          for (const ch of snap.channels) {
+            if (!channelGate({ op, length: chain.params.length ?? 1 }, ch, reader, snap)) continue
+            const key = `${snap.name}:${ch.id}`
+            const states = chain.channels ??= []
+            let state = states.find(x => x.key === key)
+            if (!state) {
+              state = { key, ch, gate: 0, engaged: false, w: 0, inZone: false, inGrown: false, leverDeg: Infinity, k: 1,
+                suppressKeys: [], suppressFrom: null }
+              states.push(state)
+            }
+            state.ch = ch
+            state.gate = partnerUpdate
+            if (state.suppressFrom !== ch.suppress) {
+              state.suppressKeys = [...ch.suppress].map(id => `${snap.name}:${id}`)
+              state.suppressFrom = ch.suppress
+            }
+          }
+        }
+      }
+      const states = chain.channels
+      if (!states) continue
+      for (let i = states.length - 1; i >= 0; i--) {
+        const state = states[i]
+        const gate = state.gate === partnerUpdate
+        const next = stepEngagement(state, { gate, tipInZone: state.inZone, tipInGrownZone: state.inGrown,
+          leverAngleDeg: state.leverDeg }, state.ch, dt)
+        state.engaged = next.engaged
+        state.w = next.w
+        if (!gate && !next.engaged && !(next.w > 0)) states.splice(i, 1)
+      }
+      if (!states.length) chain.channels = null
+      else live += states.length
+    }
+    channelLive = live
+  }
+  const guideJoint = new three.Vector3(), guideAxis = new three.Vector3()
+  /** The partner keys a link skips this update (CHANNELS), with the factor their radius keeps (1 − w). */
+  const suppressNow = new Map<string, number>()
+  /** The world tip and joint of a link from its anchor-frame rotation (the frame `keepTipOutside` reads). */
+  const linkTipWorld = (st: Particle, dynamic: Quaternion, rest: Quaternion) => {
+    contactLocal.makeRotationFromQuaternion(contactQ.copy(dynamic).multiply(rest))
+      .premultiply(translationMatrix).multiply(scale)
+    tipWorld.copy(st.tipLocal).applyMatrix4(contactLocal).applyMatrix4(anchor)
+  }
+  /**
+   * RADIAL GUIDANCE of one link, after its dynamics (CHANNELS): per engagement of its chain with w > 0, the turn of
+   * `radialGuidanceAngle` × w, capped by `limit`, about the link's joint (in the anchor frame, onto `dynamic`); then,
+   * where the guided tip lies inside C, that partner's `suppress` keys with the factor 1 − w. Returns the keys
+   * (null: none).
+   */
+  const guideLink = (st: Particle, chain: Particle, dynamic: Quaternion, rest: Quaternion,
+    limit: number): ReadonlyMap<string, number> | null => {
+    suppressNow.clear()
+    let rC = -1
+    for (const state of chain.channels!) {
+      if (!(state.w > 0)) continue
+      const ch = state.ch
+      if (rC < 0) rC = linkRadius(st, chain)
+      linkTipWorld(st, dynamic, rest)
+      if (limit > 0) {
+        guideJoint.copy(shiftPart).applyMatrix4(anchor)
+        const guide = radialGuidanceAngle([guideJoint.x, guideJoint.y, guideJoint.z],
+          [tipWorld.x, tipWorld.y, tipWorld.z], ch, rC)
+        const turn = guide ? Math.min(guide.angle * state.w, limit) : 0
+        if (guide && turn > 0) {
+          // A world turn about the joint is, in the anchor frame (rotation × uniform scale), the same turn about
+          // the axis carried back.
+          guideAxis.set(guide.axis[0], guide.axis[1], guide.axis[2]).transformDirection(contactInverse.copy(anchor).invert())
+          dynamic.premultiply(contactQ.setFromAxisAngle(guideAxis, turn))
+          linkTipWorld(st, dynamic, rest)
+        }
+      }
+      const { s, rho } = channelCoords([tipWorld.x, tipWorld.y, tipWorld.z], ch)
+      if (inZone(s, rho, ch) === 'cylinder') {
+        for (const key of state.suppressKeys) suppressNow.set(key, Math.min(suppressNow.get(key) ?? 1, 1 - state.w))
+      }
+    }
+    return suppressNow.size ? suppressNow : null
+  }
+  const chainHead = new three.Vector3(), chainFirst = new three.Vector3(), chainTip = new three.Vector3()
+  const depthAxis = new three.Vector3(), depthMatrix = new three.Matrix4(), parentInverse = new three.Matrix4()
+  /** Is `bone` `top` or below it? */
+  const below = (bone: Object3D, top: Object3D) => {
+    for (let n: Object3D | null = bone; n; n = n.parent) if (n === top) return true
+    return false
+  }
+  /**
+   * After a chain's last link (CHANNELS): per engagement with w > 0 the DEPTH SCALE — s_tip the last link's tip,
+   * s_e the first link joint at s ≥ 0, k = `depthScale` blended 1 → k by w — shortens the levers of that link and the
+   * links below it along their tips, about its joint: each joint moves to h_e + k (h − h_e), each lever is scaled by
+   * k along its tip direction, and the bones are re-published (world, pure world and local matrix). Then the zone of
+   * every engagement's channel for the next update's step: any link tip in Φ ∪ C (with the smallest lever angle to
+   * u among those) and any in the grown zone.
+   */
+  const finishChain = (chain: Particle) => {
+    const links = chain.chainLinks
+    const last = links[links.length - 1]
+    for (const state of chain.channels!) {
+      state.k = 1
+      if (!(state.w > 0)) continue
+      const ch = state.ch
+      const sOf = (p: Vector3) => (p.x - ch.o[0]) * ch.u[0] + (p.y - ch.o[1]) * ch.u[1] + (p.z - ch.o[2]) * ch.u[2]
+      let first = -1
+      for (let j = 0; j < links.length; j++) {
+        if (sOf(chainHead.setFromMatrixPosition(links[j].bind.bone.matrixWorld)) >= 0) { first = j; break }
+      }
+      if (first < 0) continue
+      const top = links[first].bind.bone
+      chainFirst.setFromMatrixPosition(top.matrixWorld)
+      const sTip = sOf(chainTip.copy(last.tipLocal).applyMatrix4(last.bind.bone.matrixWorld))
+      const k = depthScale(sTip, sOf(chainFirst), ch, linkRadius(last, chain))
+      const kEff = 1 + state.w * (k - 1)
+      if (!(kEff < 1)) continue
+      state.k = kEff
+      for (let j = first; j < links.length; j++) {
+        const link = links[j], bone = link.bind.bone
+        if (j > first && !below(bone, top)) continue
+        const world = bone.matrixWorld
+        chainHead.setFromMatrixPosition(world).sub(chainFirst).multiplyScalar(kEff).add(chainFirst)
+        // k along the tip direction in the bone frame: I + (k − 1) a aᵀ.
+        depthAxis.copy(link.tipLocal).normalize()
+        const a = depthAxis
+        depthMatrix.set(
+          1 + (kEff - 1) * a.x * a.x, (kEff - 1) * a.x * a.y, (kEff - 1) * a.x * a.z, 0,
+          (kEff - 1) * a.y * a.x, 1 + (kEff - 1) * a.y * a.y, (kEff - 1) * a.y * a.z, 0,
+          (kEff - 1) * a.z * a.x, (kEff - 1) * a.z * a.y, 1 + (kEff - 1) * a.z * a.z, 0,
+          0, 0, 0, 1)
+        world.multiply(depthMatrix).setPosition(chainHead)
+        link.bind.pureWorld.setPosition(chainHead)
+        bone.matrix.copy(parentInverse.copy(bone.parent!.matrixWorld).invert()).multiply(world)
+        bone.matrixWorldNeedsUpdate = true
+      }
+    }
+    for (const state of chain.channels!) {
+      const ch = state.ch
+      let tipIn = false, tipGrown = false, lever = Infinity
+      for (const link of links) {
+        const world = link.bind.bone.matrixWorld
+        chainHead.setFromMatrixPosition(world)
+        chainTip.copy(link.tipLocal).applyMatrix4(world)
+        const { s, rho } = channelCoords([chainTip.x, chainTip.y, chainTip.z], ch)
+        if (inZone(s, rho, ch, CHANNEL_GROW)) tipGrown = true
+        if (!inZone(s, rho, ch)) continue
+        tipIn = true
+        chainTip.sub(chainHead)
+        const len = chainTip.length()
+        if (len > 1e-12) {
+          const cos = (chainTip.x * ch.u[0] + chainTip.y * ch.u[1] + chainTip.z * ch.u[2]) / len
+          lever = Math.min(lever, Math.acos(Math.max(-1, Math.min(1, cos))) * 180 / Math.PI)
+        }
+      }
+      state.inZone = tipIn
+      state.inGrown = tipGrown
+      state.leverDeg = lever
+    }
+  }
+  /** The engagement a link's `contactTips` row names: the one of its chain with the largest w > 0. */
+  const channelRow = (st: Particle): { id: string; w: number; k: number } | null => {
+    let best: ChannelState | null = null
+    for (const state of st.chainRoot?.channels ?? []) if (state.w > 0 && (!best || state.w > best.w)) best = state
+    return best ? { id: best.ch.id, w: best.w, k: best.k } : null
+  }
   /** Rest frame at the blend of the anchor bones' motions since bind: the bind
    *  head moved as linear skinning moved the tissue (sum of share x delta x head),
    *  the rotation is the normalised share-weighted sum of their delta rotations.
@@ -1293,12 +1568,17 @@ export function createSecondaryMotion(
     },
     contactTips() {
       const tip = new three.Vector3()
-      return particles.filter(st => st.contacts.length || st.partnerPushed.length || st.partnerDeg > 0).map(st => {
+      const rows: ReturnType<SecondaryMotion['contactTips']> = []
+      for (const st of particles) {
+        const channel = channelLive > 0 ? channelRow(st) : null
+        if (!(st.contacts.length || st.partnerPushed.length || st.partnerDeg > 0 || channel)) continue
         tip.copy(st.tipLocal).applyMatrix4(st.bind.bone.matrixWorld)
-        return { bone: st.bind.bone.name, tip: [tip.x, tip.y, tip.z] as Vec3,
+        rows.push({ bone: st.bind.bone.name, tip: [tip.x, tip.y, tip.z] as Vec3,
           tipLocal: [st.tipLocal.x, st.tipLocal.y, st.tipLocal.z] as Vec3,
-          capsules: st.contacts.map(c => c.bound.capsule.id), partner: [...st.partnerPushed] }
-      })
+          capsules: st.contacts.map(c => c.bound.capsule.id), partner: [...st.partnerPushed],
+          ...(channel ? { channel } : {}) })
+      }
+      return rows
     },
     reach() {
       let longest = 0
@@ -1316,10 +1596,16 @@ export function createSecondaryMotion(
       if (colliding) collision!.update()
       // Partner contact (PARTNER CAPSULES): with partners, or while a held turn is still releasing.
       const partners = options.partners
-      const pairing = !far && (!!partners?.length || releasing > 0)
+      const pairing = !far && (!!partners?.length || releasing > 0 || channelLive > 0)
       if (pairing) fillPartnerPool(partners ?? [])
       else if (pairedLast) for (const st of particles) { st.partnerPushed = []; st.partnerDeg = 0 }
       pairedLast = pairing
+      // Channels (CHANNELS): only when a partner brings one, or an engagement is still alive.
+      let channeling = false
+      if (pairing) {
+        if (channelLive > 0) channeling = true
+        else for (const snap of partners ?? []) if (snap.channels?.length) { channeling = true; break }
+      }
       driven.clear()
       // A carried hair joint is at its rigid rest for the solve (HAIR CHAINS).
       for (const b of hairBones) b.bone.matrix.copy(b.local)
@@ -1342,6 +1628,7 @@ export function createSecondaryMotion(
         const carried = st.straightenFrom * straighteningFraction(st.rest, st.straightenRestFrom * 180 / Math.PI)
         st.straighten = carried + (straightTarget - carried) * straightWeight
       }
+      if (channeling) stepChannels(partners ?? [], options.interaction ?? null, dt)
       for (const st of particles) {
         const b = st.bind
         const motionLimit = st.params.max_deg * st.motionShare * Math.PI / 180
@@ -1599,8 +1886,10 @@ export function createSecondaryMotion(
         shiftPart.copy(head).add(headShift).applyMatrix4(inverseAnchor)
         translationMatrix.makeTranslation(shiftPart.x, shiftPart.y, shiftPart.z)
         if (pairing && !b.todayBlend) {
-          keepTipOutsidePair(st, dynamicQ, restQ,
-            Math.max(st.params.max_deg, st.params.sag_max_deg ?? 0) * st.motionShare * Math.PI / 180, dt, colliding)
+          const limit = Math.max(st.params.max_deg, st.params.sag_max_deg ?? 0) * st.motionShare * Math.PI / 180
+          const chain = st.chainRoot ?? st
+          const suppress = chain.channels ? guideLink(st, chain, dynamicQ, restQ, limit) : null
+          keepTipOutsidePair(st, dynamicQ, restQ, limit, dt, colliding, suppress)
         } else if (colliding && st.contacts.length && !b.todayBlend) {
           keepTipOutside(st, dynamicQ, restQ,
             Math.max(st.params.max_deg, st.params.sag_max_deg ?? 0) * st.motionShare * Math.PI / 180)
@@ -1619,6 +1908,10 @@ export function createSecondaryMotion(
         // parent's scale: parentFull = anchorFull x local^-1, hence
         // matrix = local x anchorFull^-1 x world.
         if (drivenAncestor) b.bone.matrix.copy(b.local).multiply(inverseAnchor.copy(anchorFull).invert()).multiply(b.bone.matrixWorld)
+        // The chain's last link is done: its depth scale and the zone for the next engagement step (CHANNELS).
+        if (pairing && st.chainRoot?.channels && st === st.chainRoot.chainLinks[st.chainRoot.chainLinks.length - 1]) {
+          finishChain(st.chainRoot)
+        }
       }
       // A rigid tail link takes its parent's frame without the parent's own
       // extension scale, at the parent's fully deformed position — the same

@@ -21,6 +21,7 @@ import {
   applyFootPose, footPoseLiftM, footPoseMatches, plantFootPose, transplantedRestPose, seatFootLift,
   createStrandHair, withoutHairGroups, STRAND_LIMITS, STRAND_RECORD_VERSION,
   bindCollision, bodySphere, reachSphere, consumerPartnerCapsules, snapshotPartner, COLLISION_VERSION,
+  bindChannels,
 } from '@anima/scene-render';
 import type { SecondaryMotion, RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, CollisionPayload,
   GarmentCollision, FootPose, HairStrandRecord, StrandHair, CollisionBinding, CapsuleNow, PartnerSnapshot,
@@ -2030,6 +2031,9 @@ export class Figure {
   private partnerBinding: CollisionBinding | null = null;
   private partnerBoundOn: THREE.Object3D | null = null;
   private partnerRefused = false;
+  /** The figure's declared channels as OTHER figures enter them (`bindChannels`, collision v7), bound with the
+   *  partner binding on the same instance; null without any (today's worlds). */
+  private partnerChannels: ReturnType<typeof bindChannels> = null;
   /** A sphere about the root that holds the body in its bind pose (the
    *  plan's root prefilter): the half-diagonal of the figure's box over its
    *  feet, at least the figure's height. */
@@ -2864,6 +2868,7 @@ export class Figure {
     // The partner binding belongs to the model it was bound on (no GPU resource).
     this.partnerBinding = null;
     this.partnerBoundOn = null;
+    this.partnerChannels = null;
     this.secondary.dispose();
     // The strand handle first: it puts the template's geometry back and frees
     // the clone it made; the garment collision then restores the materials.
@@ -3225,11 +3230,13 @@ export class Figure {
 
   /** PHASE B of the two-phase frame (`pendingSecondary`): the strand hair and
    *  the secondary motion on this frame's final pose, against `partners` —
-   *  the other figures' capsules as snapshot before any phase B ran
-   *  (`NpcManager.tickSecondary`); `[]` when the figure reads none. A no-op
-   *  without a pending phase A. Frozen (the photo hold included) still runs
-   *  it, frozen. */
-  updateSecondary(partners: readonly PartnerSnapshot[]): void {
+   *  the other figures' capsules (and declared channels) as snapshot before
+   *  any phase B ran (`NpcManager.tickSecondary`); `[]` when the figure reads
+   *  none. `interaction`: the running pair interaction this figure is in —
+   *  a partner's channel engages only within the same one (null = none). A
+   *  no-op without a pending phase A. Frozen (the photo hold included) still
+   *  runs it, frozen. */
+  updateSecondary(partners: readonly PartnerSnapshot[], interaction: { id: string } | null = null): void {
     const pending = this.pendingSecondary;
     if (!pending) return;
     this.pendingSecondary = null;
@@ -3248,7 +3255,7 @@ export class Figure {
       this.root.updateMatrixWorld(true);
       this.strand.update(pending.realDelta, { frozen: pending.frozen });
     }
-    this.secondary.update(pending.realDelta, { frozen: pending.frozen, far: pending.far, partners });
+    this.secondary.update(pending.realDelta, { frozen: pending.frozen, far: pending.far, partners, interaction });
     if (this.firstPerson && this.head) {
       this.head.scale.copy(this.headScale).multiplyScalar(1e-3);
       this.headShrunk = true;
@@ -3262,6 +3269,7 @@ export class Figure {
     if (this.disposed || this.model.retired) {
       this.partnerBinding = null;
       this.partnerBoundOn = null;
+      this.partnerChannels = null;
       return null;
     }
     if (this.partnerRefused || !this.collisionPayload) return null;
@@ -3270,6 +3278,7 @@ export class Figure {
     if (this.partnerBoundOn !== inst) {
       this.partnerBinding = bindCollision(THREE, inst, this.collisionPayload);
       this.partnerBoundOn = this.partnerBinding ? inst : null;
+      this.partnerChannels = this.partnerBinding ? bindChannels(THREE, inst, this.collisionPayload) : null;
       if (!this.partnerBinding) {
         this.partnerRefused = true;
         return null;
@@ -3342,14 +3351,23 @@ export class Figure {
     return spheres;
   }
 
-  /** This figure's capsules as a partner reads them in phase B (`snapshotPartner`
-   *  — the binding updated once on the current pose): binds lazily on the
-   *  instance shown now. Null for a payload `bindCollision` refuses, a
-   *  retired model or a disposed figure — the reader then skips it. `name`
-   *  is the owner's (it keys the reader's partner hysteresis). */
+  /** This figure's capsules and declared channels as a partner reads them in
+   *  phase B (`snapshotPartner` — the binding updated once on the current
+   *  pose; `bindChannels` on the same instance, `[]` without channels):
+   *  binds lazily on the instance shown now. Null for a payload
+   *  `bindCollision` refuses, a retired model or a disposed figure — the
+   *  reader then skips it. `name` is the owner's (it keys the reader's
+   *  partner hysteresis and its channel engagements); `interaction` the
+   *  owner's running pair interaction (`PairPlay` id and kind). */
   partnerSnapshot(interaction: { id: string; kind: string } | null, name = ''): PartnerSnapshot | null {
     const binding = this.boundPartner(false);
-    return binding ? snapshotPartner(name, binding, interaction) : null;
+    if (!binding) return null;
+    const snap = snapshotPartner(name, binding, interaction);
+    const channels = this.partnerChannels;
+    if (!channels) return snap;
+    channels.update();
+    // A copy: the next update puts fresh objects into the binding's slots, this frame's snapshot keeps its own.
+    return { ...snap, channels: [...channels.channels] };
   }
 
   /** `mesh` is the hair mesh the per-strand hair runs now (out of the GPU push). */

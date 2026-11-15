@@ -22,6 +22,10 @@
  *        [--only pair,sweep,budget]  the sections to run (default all)
  *        [--no-off]                  sweep: skip the contact-off runs (tuning loops)
  *        [--const NAME=VALUE]        override a `partnerContact.ts` constant for this run (repeatable; tuning)
+ *        [--channels]                also run CHANNELS: B's payload must carry a declared channel (collision v7)
+ *                                    and A an accepted chain (`MotionGroup.op`); see CHANNELS below
+ *        [--trace FILE]              write a sha256 per section over every bone `matrixWorld` and `contactTips()`
+ *                                    after each secondary update (parity runs between two commits)
  *        [--json FILE]               write every number as JSON
  *   The inputs are READ-ONLY COPIES (plan: never a live world): the GLBs and their served collision payloads, the
  *   motion payloads (`{rev, groups}`), the two halves of one pair clip, the retarget reference from
@@ -76,6 +80,16 @@
  * about 4–8 mm a frame, which no constant removes); `flip` = min(|Δ_f|, |Δ_{f−1}|) when Δ reverses (dot < 0), the
  * back-and-forth part. Frames within 3 of a change of the probe's own velocity (approach reversals, the pass's jump
  * back) are left out. `pushed` = share of tip-frames with a partner push; `delta` = |Δ| p95.
+ * CHANNELS (`--channels`, plan Task 14). The pair clip as in PAIR (mode gpu, two loops, the last measured), both
+ * members of the running pair interaction {pair, pair}. B is the partner: its snapshot carries its declared channels
+ * (`bindChannels` on its instance, as `Figure.partnerSnapshot`). Two copies of A play the same frames — one reading B
+ * WITH the channels (and passing its interaction), one the same snapshot WITHOUT them; B reads the second (so B never
+ * sees the channels' effect). Over the measured frames of the first copy:
+ *  - `engaged` = share of frames in which a `contactTips` row names a channel (w > 0), `full` = with w = 1;
+ *  - ρ EXCESS = max(0, ρ − R'(s)) of every guided link tip at w = 1 with s ≥ −F (R' from `allowedRadius` with
+ *    r_c = the link's own extension capsule radius of A's payload, girth 1): p95 and max, mm;
+ *  - PAST THE BOTTOM = max(0, s − (D − r_c)) over the guided tips: the max, mm; `k_min` the smallest depth scale;
+ *  - `channelAddedMs` = mean `secondaryMs` of the first copy − of the second (interleaved, alternating order).
  * BUDGET. The reader plays idle with FOUR probes (the other figure's bind capsules in front, behind, left and right,
  * each where it first touches the reader's hair tips, or where it comes closest — bisection as above). Two copies of the reader step the same frames, one with the four
  * partners and one with `[]`; `partnerAddedMs` = mean(with) − mean(without) of `secondaryMs` (and of `strandMs`
@@ -92,10 +106,11 @@ const __dirname = path.dirname(__filename)
 const REPO = process.env.PARTNER_CHECK_BUNDLED ? process.cwd() : path.join(__dirname, '..')
 
 function parseArgs(argv) {
-  const opts = { sweep: 0.5, span: 0.08, overlap: 0.04, every: 4, only: ['pair', 'sweep', 'budget'], consts: {}, off: true }
+  const opts = { sweep: 0.5, span: 0.08, overlap: 0.04, every: 4, only: ['pair', 'sweep', 'budget'], consts: {}, off: true,
+    channels: false }
   const take = { '--a': 'a', '--b': 'b', '--clip-a': 'clipA', '--clip-b': 'clipB', '--collision-a': 'collisionA',
     '--collision-b': 'collisionB', '--motion-a': 'motionA', '--motion-b': 'motionB', '--strands-a': 'strandsA',
-    '--idle': 'idle', '--json': 'json' }
+    '--idle': 'idle', '--json': 'json', '--trace': 'trace' }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (take[a]) opts[take[a]] = argv[++i]
@@ -106,6 +121,7 @@ function parseArgs(argv) {
     else if (a === '--every') opts.every = Math.max(1, Math.round(Number(argv[++i])))
     else if (a === '--only') opts.only = argv[++i].split(',').filter(Boolean)
     else if (a === '--no-off') opts.off = false
+    else if (a === '--channels') opts.channels = true
     else if (a === '--const') {
       const [k, v] = argv[++i].split('=')
       if (!/^PARTNER_[A-Z_]+$/.test(k) || !Number.isFinite(Number(v))) throw new Error(`bad --const ${k}=${v}`)
@@ -240,6 +256,15 @@ async function main() {
   const { restPoseOf, restCorrections, rigHipsHeight, createSecondaryMotion, bindCollision, withoutHairGroups,
     createGarmentCollision, createStrandHair, pushOutOfCapsules, partnerCapsules, snapshotPartner, probeCapsules,
     probeSweepOffset, probeSweptPose, probeSnapshot } = SR
+  // --trace: one running sha256 per section over the bones and contact rows after every secondary update.
+  const { createHash } = await import('crypto')
+  const traces = {}
+  const trace = (section, fig) => {
+    if (!opts.trace) return
+    const h = traces[section] ??= createHash('sha256')
+    fig.inst.traverse((o) => { if (o.isBone) h.update(new Uint8Array(new Float64Array(o.matrixWorld.elements).buffer)) })
+    h.update(JSON.stringify(fig.sm.contactTips()))
+  }
   const constants = Object.fromEntries(['PARTNER_MAX', 'PARTNER_COLLIDE_MAX', 'PARTNER_PUSH_MAX_M', 'PARTNER_HYST_M',
     'PARTNER_RELEASE_DEG_S', 'PARTNER_PREFILTER_SLACK_M'].map((k) => [k, SR[k]]))
   const FPS = 60, DT = 1 / FPS
@@ -405,6 +430,7 @@ async function main() {
             const t0 = performance.now()
             fig.sm.update(DT, { partners })
             acc[k].secondaryMs.push(performance.now() - t0)
+            trace(`pair:${mode}:${contact ? 'on' : 'off'}`, fig)
           })
           if (f < measureFrom) continue
           // The final capsules (after phase B) — what the GPU push re-reads and what is seen.
@@ -544,6 +570,7 @@ async function main() {
             offsets.push(offset)
             const caps = probeCapsules(src, pose, false)
             fig.sm.update(DT, { partners: contact ? [probeSnapshot(caps)] : [] })
+            trace(`sweep:${key}:${contact ? 'on' : 'off'}`, fig)
             const nows = consumerNows(consumer, caps)
             const pushed = new Set(fig.sm.contactTips().filter((r) => r.partner.length).map((r) => r.bone))
             tips.forEach((t, i) => {
@@ -589,6 +616,73 @@ async function main() {
           + ` | pushed ${(r[k].pushed * 100).toFixed(1)}% (${r[k].samples} samples, ${r.tips} tips)`)
       }
     }
+  }
+
+  // ================================================================ CHANNELS
+  if (opts.channels) {
+    const { bindChannels, channelCoords, allowedRadius } = SR
+    const loop = Math.max(A.pairClip.duration, B.pairClip.duration)
+    const total = opts.frames ?? 2 * Math.round(loop * FPS)
+    const measureFrom = Math.floor(total / 2)
+    const guided = makeFigure(A, 'gpu', A.pairClip), plain = makeFigure(A, 'gpu', A.pairClip)
+    const partner = makeFigure(B, 'gpu', B.pairClip)
+    const bound = bindChannels(THREE, partner.inst, B.collision)
+    if (!bound) throw new Error(`B: no declared channel binds (payload version ${B.collision?.version}, `
+      + `${B.collision?.channels?.length ?? 0} channels)`)
+    const ops = Object.values(A.motion.groups ?? {}).map((g) => g.op).filter(Boolean)
+    // r_c per link: its own extension capsule (start joint = the link), as the solver reads it.
+    const linkR = new Map()
+    for (const c of A.collision.capsules ?? []) {
+      const key = SR.normBoneName(c.a)
+      if (['chest', 'attached_part', 'appendage'].includes(c.region) && !linkR.has(key)) linkR.set(key, c.r)
+    }
+    const pair = { id: 'pair', kind: 'pair' }
+    const acc = { engaged: 0, full: 0, frames: 0, excess: [], past: 0, kMin: 1, rows: 0, with: [], without: [] }
+    for (let f = 0; f < total; f++) {
+      for (const fig of [guided, plain, partner]) phaseA(fig, true)
+      const snapB = snapshotPartner('B', partner.binding, pair)
+      bound.update()
+      const snapBCh = { ...snapB, channels: [...bound.channels] }
+      const snapA = snapshotPartner('A', plain.binding, pair)
+      const rec = f >= measureFrom
+      for (const o of f % 2 ? [0, 1] : [1, 0]) {
+        const t0 = performance.now()
+        if (o) guided.sm.update(DT, { partners: [snapBCh], interaction: pair })
+        else plain.sm.update(DT, { partners: [snapB], interaction: pair })
+        if (rec) (o ? acc.with : acc.without).push(performance.now() - t0)
+      }
+      partner.sm.update(DT, { partners: [snapA] })
+      if (!rec) continue
+      acc.frames++
+      const rows = guided.sm.contactTips().filter((r) => r.channel)
+      if (rows.length) acc.engaged++
+      if (rows.some((r) => r.channel.w === 1)) acc.full++
+      for (const r of rows) {
+        acc.rows++
+        const ch = snapBCh.channels.find((c) => c.id === r.channel.id)
+        if (!ch) continue
+        const rc = linkR.get(SR.normBoneName(r.bone)) ?? 0
+        const { s, rho } = channelCoords(r.tip, ch)
+        if (r.channel.w === 1 && s >= -ch.funnel) acc.excess.push(Math.max(0, rho - allowedRadius(s, ch, rc)))
+        acc.past = Math.max(acc.past, s - (ch.depth - rc))
+        acc.kMin = Math.min(acc.kMin, r.channel.k)
+      }
+    }
+    for (const fig of [guided, plain, partner]) { fig.sm.dispose(); fig.gc?.dispose() }
+    acc.excess.sort((a, b) => a - b)
+    const row = report.channels = {
+      frames: acc.frames, channels: bound.channels.map((c) => c.id), accepted_ops: ops,
+      engaged: +(acc.engaged / Math.max(1, acc.frames)).toFixed(4), full: +(acc.full / Math.max(1, acc.frames)).toFixed(4),
+      guided_tips: acc.excess.length, rho_excess_p95_mm: mm(quantile(acc.excess, 0.95)), rho_excess_max_mm: mm(acc.excess.at(-1) ?? 0),
+      past_bottom_max_mm: mm(Math.max(0, acc.rows ? acc.past : 0)), k_min: +acc.kMin.toFixed(4),
+      secondaryMs: { with: msStats(acc.with), without: msStats(acc.without) },
+      channelAddedMs: ms4(msStats(acc.with).mean - msStats(acc.without).mean),
+    }
+    console.log(`-- channels ${row.channels.join(', ')} (A ops ${ops.join(', ') || '—'}; ${row.frames} frames): engaged`
+      + ` ${(row.engaged * 100).toFixed(1)}% (w = 1 ${(row.full * 100).toFixed(1)}%) | ρ excess p95 ${row.rho_excess_p95_mm}`
+      + ` max ${row.rho_excess_max_mm} mm (${row.guided_tips} tips) | past the bottom max ${row.past_bottom_max_mm} mm,`
+      + ` k min ${row.k_min} | secondaryMs ${row.secondaryMs.with.mean} vs ${row.secondaryMs.without.mean}`
+      + ` → channelAddedMs ${row.channelAddedMs}`)
   }
 
   // ================================================================ BUDGET
@@ -659,6 +753,11 @@ async function main() {
           + ` | lone: ${row.lone.plain.mean} vs [] ${row.lone.empty.mean} → ${row.lone.addedMs} | snapshotMs ${row.snapshotMs.mean}`)
       }
     }
+  }
+  if (opts.trace) {
+    const digests = Object.fromEntries(Object.entries(traces).map(([k, h]) => [k, h.digest('hex')]))
+    fs.writeFileSync(opts.trace, JSON.stringify(digests, null, 1))
+    console.log(`-- trace: ${Object.keys(digests).length} sections → ${opts.trace}`)
   }
   if (opts.json) fs.writeFileSync(opts.json, JSON.stringify(report, null, 1))
 }

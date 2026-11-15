@@ -49,6 +49,8 @@
  *     - Grown funnel at s −0.02: R + h + 0.02 · tan 40° = 0.025 + 0.016782 = 0.041782,
  *       so ρ 0.035 is in the grown funnel and not in the plain one (0.031547).
  *     - s −0.052 (ρ 0): beyond F = 0.05, within F + h = 0.055 → grown funnel only.
+ *     - Past the bottom (s 0.13 > D): the plain zone and `{h}` alone say null; the release
+ *       zone (`CHANNEL_GROW`, `pastBottom`) says cylinder at ρ 0.024 ≤ R + h, null at 0.026.
  *     - Engaging needs the lever within α: a tip in the zone with the lever at 35°
  *       does not engage, at 20° it does.
  * [7] Blend, CHANNEL_BLEND_S = 0.2: w ramps by dt / 0.2. From the engaging frame,
@@ -214,6 +216,9 @@ async function main() {
     inZone(-0.02, 0.035, D2) === null && inZone(-0.02, 0.035, D2, CHANNEL_GROW) === 'funnel' &&
     inZone(-0.02, 0.0417, D2, CHANNEL_GROW) === 'funnel' && inZone(-0.02, 0.0419, D2, CHANNEL_GROW) === null)
   check('[6] s −0.052: grown funnel only', inZone(-0.052, 0, D2) === null && inZone(-0.052, 0, D2, CHANNEL_GROW) === 'funnel')
+  check('[6] past the bottom: only the release zone holds it', inZone(0.13, 0, D2) === null &&
+    inZone(0.13, 0, D2, { h: CHANNEL_HYST_M }) === null && inZone(0.13, 0.024, D2, CHANNEL_GROW) === 'cylinder' &&
+    inZone(0.13, 0.026, D2, CHANNEL_GROW) === null)
   const free = { engaged: false, w: 0 }
   check('[6] lever 35° > α does not engage', stepEngagement(free, { gate: true, tipInZone: true, tipInGrownZone: true,
     leverAngleDeg: 35 }, D2, dt).engaged === false)

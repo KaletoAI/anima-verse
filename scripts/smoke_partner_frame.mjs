@@ -52,6 +52,13 @@
  * [6] FROZEN: `update(1/60, {frozen: true})` and the photo hold `update(0, {frozen: true})` both reach phase B:
  *     `secondary.update` is called once, with `frozen: true` and the given partners. Two phase A calls before one
  *     phase B add their real time: 0.01 + 0.02 → one `secondary.update` with 0.03.
+ * [7] CHANNELS (plan Task 14): a figure whose payload carries a channel record (owning joint Hips, opening
+ *     a_pos (0, 1.0, 0.1), bottom b_pos (0, 1.0, 0.0), r 0.02, funnel 0.05), its root at x = 2: its
+ *     `partnerSnapshot({i1, k}, 'P')` carries that channel in the world — o (2, 1.0, 0.1), u (0, 0, −1), depth
+ *     0.1, r 0.02 (±1e-9; bind rotations identity, scale 1) — and the interaction; a snapshot taken after the root
+ *     moved to x = 3 has o.x 3 while the first keeps 2 (each snapshot owns its frame). Without a channel record the
+ *     snapshot's `channels` is []. `updateSecondary(partners, {id: i1})` hands `interaction: {id: i1}` to the
+ *     secondary motion, `updateSecondary(partners)` hands null.
  */
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
@@ -209,8 +216,9 @@ const MOTION = { rev: 'm1', groups: {
 const CALM = { rev: 'calm', groups: {
   chain_a: { ...DEFAULTS, gain: 0, gravity: 0, bones: ['LinkA_00', 'LinkA_01'], hair: true },
   chain_b: { ...DEFAULTS, gain: 0, gravity: 0, bones: ['LinkB_00', 'LinkB_01'] } } }
-function model({ tier = 'full', version = COLLISION_VERSION, motion = MOTION, name = 'Fixture' } = {}) {
-  return { motion: { payload: motion }, collision: { version, capsules: CAPSULES }, footPose: null, hairStrands: null,
+function model({ tier = 'full', version = COLLISION_VERSION, motion = MOTION, name = 'Fixture', channels } = {}) {
+  return { motion: { payload: motion }, collision: { version, capsules: CAPSULES, ...(channels ? { channels } : {}) },
+    footPose: null, hairStrands: null,
     name, template: template(), clips: [], scale: 1, height: 1.7, assignOnly: true, noClips: false, tier,
     libraryFits: false }
 }
@@ -423,6 +431,40 @@ function phaseB(figs, order, lazy = false) {
   check('[6] two phase A calls, one phase B: one secondary.update with 0.03 s',
     calls.length === 1 && Math.abs(calls[0].dt - 0.03) < 1e-12 && calls[0].frozen === false, JSON.stringify(calls))
   fig.dispose()
+}
+
+// [7] channels in the snapshot, the reader's interaction into phase B ----------------------------------------------------
+{
+  const record = { id: 'pkg:chan', kind: 'channel', a: 'mixamorig:Hips', b: 'mixamorig:Hips', a_pos: [0, 1.0, 0.1],
+    b_pos: [0, 1.0, 0.0], r: 0.02, cone_deg: 30, funnel: 0.05, accepts: ['appendage_chain'], min_length: 1,
+    compress_min: 0.8, suppress: ['torso'], frame: { side: [1, 0, 0], up: [0, 1, 0], front: [0, 0, 1] },
+    placement: 'declared', applied: null }
+  const fig = seeded(() => new Figure(model({ channels: [record] })))
+  fig.root.position.set(2, 0, 0)
+  const near = (v, w) => v.every((x, i) => Math.abs(x - w[i]) <= 1e-9)
+  const s1 = fig.partnerSnapshot({ id: 'i1', kind: 'k' }, 'P')
+  const c1 = s1?.channels[0]
+  check('[7] the snapshot carries the channel in the world: o (2, 1, 0.1), u (0, 0, −1), D 0.1, r 0.02',
+    s1?.channels.length === 1 && c1.id === 'pkg:chan' && near(c1.o, [2, 1, 0.1]) && near(c1.u, [0, 0, -1])
+    && Math.abs(c1.depth - 0.1) <= 1e-9 && Math.abs(c1.r - 0.02) <= 1e-9, JSON.stringify(c1 && { o: c1.o, u: c1.u }))
+  check('[7] … and the owner\'s interaction', s1?.interaction?.id === 'i1' && s1.interaction.kind === 'k')
+  fig.root.position.set(3, 0, 0)
+  const s2 = fig.partnerSnapshot(null, 'P')
+  check('[7] a later snapshot has its own frame (3 vs the first\'s 2)', Math.abs(s2.channels[0].o[0] - 3) <= 1e-9
+    && Math.abs(c1.o[0] - 2) <= 1e-9 && s2.channels !== s1.channels)
+  const plain = seeded(() => new Figure(model()))
+  check('[7] without a channel record: channels []', Array.isArray(plain.partnerSnapshot(null, 'Q')?.channels)
+    && plain.partnerSnapshot(null, 'Q').channels.length === 0)
+  const calls = []
+  const real = plain.secondary.update.bind(plain.secondary)
+  plain.secondary.update = (dt, options) => { calls.push(options); real(dt, options) }
+  plain.update(1 / 60, { realDelta: 1 / 60 })
+  plain.updateSecondary([s1], { id: 'i1' })
+  plain.update(1 / 60, { realDelta: 1 / 60 })
+  plain.updateSecondary([s1])
+  check('[7] updateSecondary hands the reader\'s interaction to the secondary motion (null by default)',
+    calls.length === 2 && calls[0].interaction?.id === 'i1' && calls[1].interaction === null, JSON.stringify(calls.map(c => c.interaction)))
+  fig.dispose(); plain.dispose()
 }
 
 console.log(failures ? `${failures} check(s) FAILED` : 'all checks passed')
