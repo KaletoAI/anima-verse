@@ -311,6 +311,27 @@ def _views_label(what: str, views: int, copied: bool = False) -> str:
     return f"{what}: views copied from the texture store" if copied else f"{what}: paint on the CPU"
 
 
+#: The plan label's tail when the outfit's full-body reference is generated first (Ruling A104).
+AUTO_REFERENCE_LABEL = " + full-body reference 1 (generated automatically before the front)"
+
+
+def _with_reference(character_name: str, step: Step, fig, signature: str, profile: Dict[str, Any],
+                    front: Optional[bool]) -> Step:
+    """``step`` (one that renders the dressed views of ``fig``) with the outfit's full-body reference that
+    ``base_body.generate_dressed_images`` generates before the front (Ruling A104, ``full_body_reference.auto_jobs``)
+    counted in — only while the step renders the front (``front``: the whole set, or the front not stored)."""
+    from app.core import base_body, full_body_reference
+    if not step.jobs:
+        return step
+    if front is None:
+        front = base_body.dressed_image(character_name, "front", signature, fig.bsig, fig=fig) is None
+    extra = full_body_reference.auto_jobs(character_name, fig, profile=profile) if front else 0
+    if not extra:
+        return step
+    return Step(step.name, step.label + AUTO_REFERENCE_LABEL, step.jobs + extra, step.item_id, failed=step.failed,
+                manual=step.manual)
+
+
 def _painted_interim(fig) -> bool:
     """Whether ``fig`` (a delivered figure) paints in-body pieces on the plain
     body because their shape is not built (``figure.INTERIM_PAINTED``, rule 1
@@ -571,7 +592,10 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
             views = (set_jobs if rebased or not shape_built
                      else base_body.dressed_view_estimate(character_name, wanted, signature, profile=profile)
                      if views_missing else 0)
-            step = Step("texture", _views_label("Texture", views, copied=views_missing), views, manual=take_out)
+            step = _with_reference(character_name, Step("texture", _views_label("Texture", views,
+                                                                                 copied=views_missing),
+                                                         views, manual=take_out),
+                                   wanted, signature, profile, True if rebased or not shape_built else None)
             steps.append(step if rebased or not shape_built
                          else _refused(step, base_body.dressed_view_refusals(character_name, wanted, signature)))
     # Ruling A23 b: a refused fit on the wanted shape is a cached failure — an automatic Build plans no views,
@@ -589,7 +613,8 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
         views = base_body.dressed_view_estimate(character_name, delivered, signature, profile=profile)
         label = (_views_label("Views", views, copied=True) if views or delivered.texture
                  else "Views: copied from the body's views")
-        step = _refused(Step("texture", label, views),
+        step = _refused(_with_reference(character_name, Step("texture", label, views), delivered, signature,
+                                        profile, None),
                         base_body.dressed_view_refusals(character_name, delivered, signature))
         steps.append(step)
         hold = hold or (not explicit and bool(step.failed))

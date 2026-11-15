@@ -2,8 +2,8 @@
  * The full-body reference step (Ruling A87, server `app/core/full_body_reference.py`): the picture the A-pose front is
  * an edit of — one for the plain body (Base body → Views) and one per outfit (Figure → Dressed views). Pure helpers of
  * `FullBodyReferenceTile`: the step row (light, state, reason in plain words) and the cost lines, the SAME wording in
- * both places. Optional: Run all and the Build never generate one — they only say there is none
- * (`fullBodyBuildNote`).
+ * both places. Optional: Run all and the Build never generate the plain body's — they only say there is none
+ * (`fullBodyBuildNote`); the worn outfit's is generated automatically before its dressed front (Ruling A104).
  */
 import type { Light } from './hairstylesModel'
 import { frontRegenerate, imageJobsTr } from './figureModel'
@@ -60,7 +60,7 @@ export interface BaseFullBodyInfo {
 /** The wording shared by both places. */
 export const FULL_BODY = 'Full-body reference'
 export const NONE_BASE = 'Optional. Without one the front is made from the profile image. Generate makes a full-body picture of the character from the profile image, with all of its attributes.'
-export const NONE_OUTFIT = 'Optional. Without one the dressed front is an edit of the body’s front (or a copy of the body shape’s view). Generate makes a full-body picture of the character wearing this outfit.'
+export const NONE_OUTFIT = 'Optional. Without one it is generated automatically before the dressed front (if that fails, the front is an edit of the body’s front). Generate makes a full-body picture of the character wearing this outfit now.'
 export const SAVES_ONLY = 'Saves only — nothing renders.'
 
 function sourceWords(source: string, t: Tr): string {
@@ -143,8 +143,10 @@ export function outfitFollowup(applies: boolean, jobs: number | null | undefined
 
 /** The information line beside Run all / the Build (never a due step — they never generate one). */
 export function fullBodyBuildNote(kind: 'base' | 'outfit', set: boolean, method: string | undefined,
-  t: Tr = EN): string {
+  t: Tr = EN, auto = false): string {
   if (set) return ''
+  // Ruling A104: the worn outfit's reference is generated automatically right before its dressed front.
+  if (kind === 'outfit' && auto) return t('Outfit full-body reference: none — generated automatically before the dressed front (+1 image job)')
   if (kind === 'outfit') return t('Outfit full-body reference: none — the dressed front is an edit of the body’s front')
   if (method === 'text') return t('Full-body reference: none — no profile image, the front is made from text')
   return t('Full-body reference: none — the front uses the profile image')

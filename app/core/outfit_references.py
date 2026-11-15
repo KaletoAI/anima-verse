@@ -203,6 +203,8 @@ def set_reference(character_name: str, image: str) -> Dict[str, Any]:
         if not save_character_profile(character_name, profile):
             raise RuntimeError("The reference was not saved")
     _invalidate()
+    from app.core import full_body_reference
+    full_body_reference.clear_auto_failure(character_name, key)   # Ruling A104: a picked picture allows a retry
     logger.info("Outfit reference of %s (%s, %s): %s", character_name, key, record["label"], name)
     return {"key": key, "record": record}
 

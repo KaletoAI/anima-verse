@@ -378,6 +378,10 @@ def main() -> int:
         from app.core import paths
         paths.init(root / "world")
         paths.init_instance(root / "instance")
+        # Ruling A104 (smoke_outfit_reference_auto.py): these checks pin the dressed views WITHOUT an outfit
+        # full-body reference — no automatic generation before the front.
+        from app.core import full_body_reference as _fbr
+        _fbr.auto_due = lambda *_a, **_k: False
         paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")

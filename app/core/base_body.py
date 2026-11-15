@@ -3870,6 +3870,13 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
     is COPIED into the outfit — no image job; only the rest is rendered and
     then published into the store.
 
+    Outfit full-body reference (Ruling A104): when the front is to be
+    rendered with something painted and the worn outfit has no reference
+    record, ``full_body_reference.ensure_outfit`` generates it first (or waits
+    for a run of it already going) and the pass restarts on the figure that
+    record makes; a failed generation leaves the old path (the front an edit
+    of the shape's front) with its ``AUTO_FAILED`` note.
+
     Missing shape views: the status error ``BASE_IMAGES_MISSING`` /
     ``SHAPE_VIEWS_MISSING``, nothing rendered. Returns ``{kind: path | None}``
     for every view it produced.
@@ -3913,6 +3920,17 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
         return {}
     texts = figure_texts(character_name, fig, items, profile=profile)
     dressed = _paints(fig, texts)
+    if dressed and "front" in todo:
+        # Ruling A104: the worn outfit without a full-body reference gets one first (one image job, from this
+        # thread as the front's own render); the record is part of the figure's texture key, so the pass starts
+        # again on the new figure. A failure falls through to the old path (an edit of the shape's front).
+        from app.core import full_body_reference
+        if full_body_reference.auto_due(character_name, fig.pieces, fig.open, profile=profile):
+            made, _note = full_body_reference.ensure_outfit(character_name, fig.pieces, fig.open,
+                                                              raise_load=raise_load)
+            if made is not None:
+                return generate_dressed_images(character_name, pieces=pieces, items=items, signature=signature,
+                                               force=force, view=view, raise_load=raise_load)
     # Ruling A74b: the outfit's own reference picture — its dressed front is an edit of it while something is painted.
     from app.core import outfit_references
     record = outfit_references.record_for(character_name, fig.pieces, fig.open, profile=profile) if dressed else None
@@ -5893,6 +5911,7 @@ def rebuild_cost(character_name: str, signature: str, *, profile: Optional[Dict[
         shape_views = shape_view_shas(character_name, wanted.shape, bsig) if meshed else {}
         body_needed = meshed and figure.stored_shape(character_name, wanted.shape, view_shas=shape_views) is None
         shape_views_needed = body_needed and not all(shape_views.values())
+        dressed_fig = wanted
         if body_needed:
             views_needed = bool(wanted.texture)
         else:
@@ -5900,11 +5919,18 @@ def rebuild_cost(character_name: str, signature: str, *, profile: Optional[Dict[
             # On a meshed shape with nothing painted the views are copies of the shape's (no job).
             views_needed = (bool(now.texture) or figure.is_plain(now.shape)) and any(
                 dressed_image(character_name, v, signature, bsig, fig=now) is None for v in views)
+            dressed_fig = now
+        # Ruling A104: the outfit's full-body reference generated before a new front (one image job).
+        reference_jobs = 0
+        if views_needed and (body_needed or dressed_image(character_name, "front", signature, bsig,
+                                                          fig=dressed_fig) is None):
+            from app.core import full_body_reference
+            reference_jobs = full_body_reference.auto_jobs(character_name, dressed_fig, profile=profile)
     except Exception as e:  # noqa: BLE001 — an estimate, never a failure
         logger.warning("Rebuild cost %s / %s not computable: %s", character_name, signature, e)
         return {"image_jobs": None, "mesh_jobs": None, "hub_jobs": None, "views_needed": None,
                 "body_needed": None, "note": f"cost unknown — {e}"}
-    image_jobs = dressed_view_jobs() * (int(views_needed) + int(shape_views_needed))
+    image_jobs = dressed_view_jobs() * (int(views_needed) + int(shape_views_needed)) + reference_jobs
     mesh_jobs = OUTFIT_BODY_JOBS if body_needed else 0
     parts = ([f"views {image_jobs}"] if image_jobs else []) + ([f"body {mesh_jobs}"] if mesh_jobs else [])
     what = (" + ".join(parts) + " (first attempts)" if parts

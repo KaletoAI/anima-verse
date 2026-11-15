@@ -329,7 +329,7 @@ export interface FigurePayload {
   outfit: string
   /** Ruling A87: whether the plain body / the worn outfit have a full-body reference (`full_body_reference.build_note`)
    *  — information beside the Build, never a step; absent from an older server. */
-  full_body_reference?: { base: boolean; outfit: boolean } | null
+  full_body_reference?: { base: boolean; outfit: boolean; outfit_auto?: boolean; outfit_failed?: string } | null
   worn: FigureWornRow[]
   hair: FigureHairRow | null
   /** Ruling A61: what failed and what fixes it (`figure_build._build_problem`); null when nothing failed or while a

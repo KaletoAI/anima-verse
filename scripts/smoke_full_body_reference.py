@@ -65,7 +65,7 @@ hub job c265fd78: that output → the A-pose front, A74b's edit prompt):
 [7] Uploads (the routes on a test app, the cap patched to 1000 bytes): 2000 declared bytes -> 413 for both upload
     routes; bytes that are no image -> 415; an 8x8 PNG -> 200, record origin "upload".
 [8] Run all and the Build never generate one: no module but full_body_reference.py and routes/figure.py names
-    generate_base / generate_outfit / start_base / start_outfit; build_note(Demo) = {base, outfit} booleans.
+    generate_base / generate_outfit / start_base / start_outfit; build_note(Demo) = {base, outfit, outfit_auto} booleans + outfit_failed (Ruling A104).
 [11] Ruling A103 — per-backend reference texts. The fixture region's reference_prompt adds
     backends [{match "*fake*", values {alpha: "a textured {size} area"}}], its reference_negative is
     {default "region detail", backends [{match "*FAKE*", default "blurred region"}]} (globs case-insensitive,
@@ -711,7 +711,7 @@ def main() -> int:
                         if any(n in p.read_text(encoding="utf-8") for n in names)})
         check("only the module and its routes", users, ["app/core/full_body_reference.py", "app/routes/figure.py"])
         note = fbr.build_note("Demo")
-        check("build note", sorted(note), ["base", "outfit"])
+        check("build note", sorted(note), ["base", "outfit", "outfit_auto", "outfit_failed"])
 
     print("[9] outbound attempts")
     check("outbound", OUTBOUND, [])

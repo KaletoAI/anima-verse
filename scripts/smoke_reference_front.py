@@ -426,7 +426,13 @@ def main() -> int:
         check("reference changes rendered nothing", (len(CALLS), started), (1, []))
         outfit_references.clear_reference("Demo", key)
         CALLS.clear()
-        base_body.generate_dressed_images("Demo", pieces={}, items=[], signature=osig, force=True, view="front")
+        # Ruling A104 would generate the reference first (smoke_outfit_reference_auto.py); the old edit is pinned here.
+        from app.core import full_body_reference as _fbr
+        _auto_due, _fbr.auto_due = _fbr.auto_due, (lambda *_a, **_k: False)
+        try:
+            base_body.generate_dressed_images("Demo", pieces={}, items=[], signature=osig, force=True, view="front")
+        finally:
+            _fbr.auto_due = _auto_due
         check("without a reference: the old edit", [(c.get("occasion"), c.get("image_use_case")) for c in CALLS],
               [("outfit_front", base_body.DRESS_USE_CASE)])
 
