@@ -722,11 +722,29 @@ def subdivide_around(mesh, centres, radii):
     """One flat subdivision pass per radius (metres, in order): every edge
     whose midpoint lies within that radius of a centre is cut once; new
     vertices take interpolated deform weights, which must sum to one."""
+    subdivide_where(mesh,[lambda point,limit=limit: any((point-t).length <= limit for t in centres)
+                          for limit in radii])
+
+
+def subdivide_where(mesh, passes, vectorised=False):
+    """One flat subdivision pass per predicate (in order): every edge whose
+    world midpoint the predicate accepts is cut once; new vertices take
+    interpolated deform weights, which must sum to one (``subdivide_around``
+    with a region of any shape — the inset part's levelling). ``vectorised``:
+    each predicate takes all midpoints at once (n x 3 array) and returns a
+    bool mask."""
     bm = bmesh.new()
     bm.from_mesh(mesh.data)
     original = set(bm.verts)
-    for radius_limit in radii:
-        selected = [e for e in bm.edges if any((mesh.matrix_world@((e.verts[0].co+e.verts[1].co)/2)-t).length <= radius_limit for t in centres)]
+    for accept in passes:
+        if vectorised:
+            edges = list(bm.edges)
+            matrix = np.array(mesh.matrix_world)
+            local = np.array([tuple((e.verts[0].co+e.verts[1].co)/2) for e in edges]).reshape(-1,3)
+            mask = accept(local@matrix[:3,:3].T+matrix[:3,3])
+            selected = [e for e,keep in zip(edges,mask) if keep]
+        else:
+            selected = [e for e in bm.edges if accept(mesh.matrix_world@((e.verts[0].co+e.verts[1].co)/2))]
         if selected:
             bmesh.ops.subdivide_edges(bm,edges=selected,cuts=1,use_grid_fill=True,smooth=0.)
             bmesh.ops.triangulate(bm,faces=[f for f in bm.faces if len(f.verts)>4])
@@ -870,11 +888,10 @@ def level_surface(meshes, tip, normal, full, inner):
     notes above): ``h' = Q + (1 - k) (h - Q)`` along ``normal`` with ``Q``
     the quadratic fitted on the ring, ``k`` = 1 within ``full`` metres and
     fading to 0 over the blend; an ``inner`` vertex only goes down and keeps
-    ``NEUTRAL_GAP_M`` x k below. Returns ``{bump_before_mm,
-    bump_after_mm, moved, max_shift_mm, fit_rms_mm, full_radius_mm,
-    blend_mm}`` (bump = the highest outer-skin point within ``full`` above
-    the fitted surface)."""
-    blend = NEUTRAL_BLEND*full
+    ``NEUTRAL_GAP_M`` x k below (``level_heights``). Returns
+    ``{bump_before_mm, bump_after_mm, moved, max_shift_mm, fit_rms_mm,
+    full_radius_mm, blend_mm}`` (bump = the highest outer-skin point within
+    ``full`` above the fitted surface)."""
     a = normal.orthogonal().normalized()
     b = normal.cross(a)
     rows = []
@@ -889,21 +906,11 @@ def level_surface(meshes, tip, normal, full, inner):
     R = np.array([row[2:5] for row in rows])
     inside = np.array([row[5] for row in rows])
     r = np.hypot(R[:,0],R[:,1])
-    ring = ~inside&(r >= NEUTRAL_FIT[0]*full)&(np.abs(R[:,2]) < NEUTRAL_DEPTH_M[1])
-    if ring.sum() < 12:
-        raise ValueError('no surface around the part to level')
-    coef = np.linalg.lstsq(_quadratic(R[ring,0],R[ring,1]),R[ring,2],rcond=None)[0]
-    Q = _quadratic(R[:,0],R[:,1])@coef
-    off = R[:,2]-Q
-    near = (off > -NEUTRAL_DEPTH_M[0])&(off < NEUTRAL_DEPTH_M[1])
-    k = np.where(near,np.clip((full+blend-r)/blend,0.,1.),0.)
-    k = k*k*(3-2*k)
-    target = Q+(1-k)*off
-    target = np.where(inside,np.minimum(R[:,2],target)-NEUTRAL_GAP_M*k,target)
-    shift = target-R[:,2]
-    within = ~inside&near&(r <= full)
-    bump = lambda values: round(float(values[within].max())*1000,3) if within.any() else 0.
-    before = bump(off)
+
+    def quadratic(ring):
+        coef = np.linalg.lstsq(_quadratic(R[ring,0],R[ring,1]),R[ring,2],rcond=None)[0]
+        return _quadratic(R[:,0],R[:,1])@coef
+    shift,level = level_heights(R[:,2],r-full,inside,full,quadratic)
     moved = 0
     for row,dh in zip(rows,shift):
         if abs(dh) > 1e-9:
@@ -913,10 +920,47 @@ def level_surface(meshes, tip, normal, full, inner):
             moved += 1
     for mesh in meshes:
         mesh.data.update()
-    return {'bump_before_mm':before,'bump_after_mm':bump(target-Q),'moved':moved,
-            'max_shift_mm':round(float(np.abs(shift).max())*1000,3),
-            'fit_rms_mm':round(float(np.sqrt(np.mean((R[ring,2]-Q[ring])**2)))*1000,3),
-            'full_radius_mm':round(full*1000,2),'blend_mm':round(blend*1000,2)}
+    return {'bump_before_mm':level['bump_before_mm'],'bump_after_mm':level['bump_after_mm'],'moved':moved,
+            'max_shift_mm':level['max_shift_mm'],'fit_rms_mm':level['fit_rms_mm'],
+            'full_radius_mm':round(full*1000,2),'blend_mm':round(NEUTRAL_BLEND*full*1000,2)}
+
+
+def level_heights(h, outside, inner, full, fit, depth=NEUTRAL_DEPTH_M, inner_follows=False, ring=None):
+    """The levelling itself, for a region of any shape (``level_surface``
+    around a tip, ``inset_part`` along its chart): per row its height ``h``
+    along the direction it moves in (metres), ``outside`` its distance beyond
+    the full-strength region (0 or less within it) and ``inner`` whether it
+    is an inner-wall vertex; ``full`` the region's scale (the fade is
+    NEUTRAL_BLEND x it, the fit ring NEUTRAL_FIT - 1 x it beyond the region
+    on the outer skin within ``depth[1]`` of the height 0); ``fit(ring)``
+    returns the fitted surface Q at every row from the ring rows (bool mask;
+    ``ring`` replaces it where the surface is fitted on other rows — the inset
+    part's fit over its region — and is what ``fit_rms_mm`` measures).
+    ``inner_follows``: an inner row follows the levelled skin both ways
+    instead of only going down. Returns ``(shift per row, {bump_before_mm, bump_after_mm, bump_p95_mm:
+    [before, after], max_shift_mm, fit_rms_mm})`` — a row that is further
+    than ``depth`` (below, above) from Q is another part of the body and
+    stays; bump = the outer skin within the region above Q."""
+    blend = NEUTRAL_BLEND*full
+    if ring is None:
+        ring = ~inner&(outside >= (NEUTRAL_FIT[0]-1)*full)&(np.abs(h) < depth[1])
+    if ring.sum() < 12:
+        raise ValueError('no surface around the part to level')
+    Q = fit(ring)
+    off = h-Q
+    near = (off > -depth[0])&(off < depth[1])
+    k = np.where(near,np.clip((blend-outside)/blend,0.,1.),0.)
+    k = k*k*(3-2*k)
+    target = Q+(1-k)*off
+    target = np.where(inner,(target if inner_follows else np.minimum(h,target))-NEUTRAL_GAP_M*k,target)
+    shift = target-h
+    within = ~inner&near&(outside <= 0)
+    bump = lambda values: round(float(values[within].max())*1000,3) if within.any() else 0.
+    p95 = lambda values: round(float(np.percentile(values[within],95))*1000,3) if within.any() else 0.
+    return shift,{'bump_before_mm':bump(off),'bump_after_mm':bump(target-Q),
+                  'bump_p95_mm':[p95(off),p95(target-Q)],
+                  'max_shift_mm':round(float(np.abs(shift).max())*1000,3),
+                  'fit_rms_mm':round(float(np.sqrt(np.mean((h[ring]-Q[ring])**2)))*1000,3)}
 
 
 def level_full(p, radius):
@@ -3070,4 +3114,5 @@ def extension_bones(args):
     return {'status':'applied','reason':'','groups':metrics,'metrics':metrics},{'model':str(output)}
 
 
-_common.main(extension_bones)
+# Runs only as the job's own script: imported (inset_part levels with it) or exec'd by a probe, nothing runs.
+(_common.main if __name__ == '__main__' else lambda job: None)(extension_bones)

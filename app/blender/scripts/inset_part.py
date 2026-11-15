@@ -12,9 +12,11 @@ _SCRIPT_DIR = str(Path(__file__).parent)
 sys.path.insert(0, _SCRIPT_DIR)
 import _common
 from attached_part import resolve_bone
+import extension_bones
 sys.path.remove(_SCRIPT_DIR)
 import bpy
 import bmesh
+from mathutils.kdtree import KDTree
 import numpy as np
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
@@ -40,6 +42,7 @@ DEFAULTS = {
     'pocket': {'s0': .048, 's1': .094, 'hw': .0022, 'depth': .02, 'pow': .5},
     'tone': {'ridge': [.97, .9, .88], 'inner': [.82, .56, .6], 'folds': [.9, .66, .7], 'nub': [.92, .62, .66], 'pocket': [.45, .22, .26], 'centre': [.96, .9, .9]},
     'edge': [.0007, .0022, .005], 'bake': 512, 'fill_iterations': 1500,
+    'level': {'enabled': 1, 'sigma': .015, 'tukey': .004, 'wall_rise': .015, 'depth': [.06, .03], 'relax': 500},
 }
 
 
@@ -83,6 +86,11 @@ def parameters(raw):
             raise ValueError('Expected positive length or profile exponent: ' + section)
     if min(p['edge']) <= 0 or min(p['center_drop'], p['centre_height'], p['under_ref']) <= 0:
         raise ValueError('Expected positive chart lengths')
+    level = p['level']
+    if level['enabled'] not in (0, 1) or not isinstance(level['relax'], int) or level['relax'] < 0:
+        raise ValueError('Level: enabled is 0 or 1, relax a nonnegative integer')
+    if min(level['sigma'], level['tukey'], level['wall_rise'], *level['depth']) <= 0:
+        raise ValueError('Level: expected positive lengths')
     if p['under'][0] >= p['under'][1]:
         raise ValueError('Invalid underside interval')
     if not 0 < p['scale_min'] <= 1:
@@ -97,16 +105,10 @@ def parameters(raw):
     return p
 
 
-def build_part(group, output):
-    """Build the accepted midline field, bake its texture and weld its border."""
-    P = parameters(group.get('params', {}))
-    arms = [o for o in bpy.context.scene.objects if o.type == 'ARMATURE']
-    if len(arms) != 1 or abs(bpy.context.scene.unit_settings.scale_length - 1) > 1e-6:
-        raise ValueError('Requires one armature and metre scene units')
-    arm = arms[0]
-    body = next(o for o in bpy.context.scene.objects if o.type == 'MESH' and o.vertex_groups and not o.get('attached_part'))
-    if not body.data.uv_layers.active:
-        raise ValueError('Body requires a UV map')
+def surface_chart(body, arm, P):
+    """The op's chart of the body as it is now: the outer midline profile
+    around the centre below the anchor bone, its arc length ``S`` (scaled)
+    and ``chart(Q)`` -> (s, u, radial offset) of world points."""
     M = body.matrix_world.copy(); Mi = M.inverted(); N3 = M.to_3x3(); Ni3 = Mi.to_3x3()
     hips = arm.matrix_world @ resolve_bone(arm.pose.bones, P['anchor_bone']).head
     xm = hips.x
@@ -172,8 +174,325 @@ def build_part(group, output):
         s = np.interp(t, th, S)
         r = np.hypot(dy, dz) - np.interp(t, th, np.hypot(prof[:, 1] - c.y, prof[:, 2] - c.z))
         return s, Q[:, 0] - xm, r
+    return {'M': M, 'Mi': Mi, 'N3': N3, 'Ni3': Ni3, 'bvh': bvh, 'c': c, 'xm': xm, 'th': th, 'S': S, 'prof': prof,
+            'pn': pn, 'i0': i0, 'arc': arc, 's_start': s_start, 'underside': underside, 'scale': scale, 'chart': chart}
 
 
+# The levelling (Ruling A77): before the part is built, the skin the mesher modelled in the region (a groove, folds,
+# raised bumps — drawn although the mesh input asked for plain skin) is levelled onto the surface around it, as a tip
+# part levels its source bump (``extension_bones.level_heights``: k = 1 over the region, fading over NEUTRAL_BLEND x
+# full; the inner wall of a double-walled body kept NEUTRAL_GAP_M under the skin; rows further than ``level.depth``
+# from the surface are other parts of the body). What differs from the tip is the region and the surface, both
+# measured on a mesher-built base model (2026-11-15) whose region detail stood 30 mm above and 40-48 mm below it:
+# * the region is this op's own: the chart interval [region.s0, region.s1] and |u| <= region.u — but between the
+#   legs the skin is a channel 10-40 mm wide whose walls rise 40-100 mm, so each side ends where the OUTER ENVELOPE
+#   (rays from outside along the chart's radial direction) rises more than ``level.wall_rise`` above the lowest point
+#   between it and the midline: a wall, not part of the region (a fold stays under 15 mm, the legs rise 40 mm within
+#   4 mm). The fade is the region's own ``fall`` (full = fall / NEUTRAL_BLEND), measured along the skin: beside the
+#   region a vertex's height above the surface counts as distance too — measured across, the fade pulled the foot
+#   of the walls down onto the surface and left them sheared into stripes.
+# * the surface: a disc's ring of skin around it does not exist in the channel (beyond its sides are the walls), so
+#   it is fitted over the region itself — a quadratic around every node of a LEVEL_GRID_M grid with Gaussian weights
+#   of ``level.sigma`` (moving least squares) on the outer envelope inside the region, samples standing off it by more
+#   than ``level.tukey`` dropped (Tukey weights, LEVEL_FIT_ITERATIONS refits): the modelled detail is the outlier, the
+#   skin it sits on is the fit. On the envelope because the vertices include the inner wall and the groove's walls.
+#   Heights are radial distances from the chart axis — not from the profile, which dips into a groove and made the
+#   levelled surface jump by 26 mm where it did.
+# * the groove's walls are levelled too: ``level.depth[0]`` = 60 mm — at 40 mm the deepest rows stayed and the
+#   levelled rim pulled a fin down to them that the op's own profile then followed (its underside fell from 62 to
+#   22 mm). A curled fold faces inward like an inner wall, so inner rows FOLLOW the levelled skin, NEUTRAL_GAP_M under
+#   it (``inner_follows``) — left in place they stood as spikes across the levelled skin.
+# * a levelled fold lies folded over itself on the surface: the levelled rows are spread over the surface again, each
+#   at the mean of its neighbours inside the fixed rest (``spread_evenly``, at most ``level.relax`` conjugate-gradient
+#   steps, in the chart; the height is the surface's; seam copies as one point); then the moved skin gets the
+#   surface's own normals (``extension_bones.refresh_normals``).
+LEVEL_GRID_M = .0015
+LEVEL_FIT_ITERATIONS = 6
+
+
+def robust_local_surface(a, u, h, sigma, tukey, step, extent):
+    """The surface the samples (a, u, h) lie on, as a sampler ``f(a, u) -> h``: a quadratic fitted around every
+    node of a ``step`` grid over ``extent`` (a0, a1, u0, u1) with Gaussian weights of ``sigma`` (moving least
+    squares), samples that stand off it by more than ``tukey`` dropped by Tukey weights over
+    LEVEL_FIT_ITERATIONS refits; bilinear between the nodes."""
+    ga = np.arange(extent[0] - step, extent[1] + 2 * step, step)
+    gu = np.arange(extent[2] - step, extent[3] + 2 * step, step)
+    GA, GU = np.meshgrid(ga, gu, indexing='ij')
+    nodes = np.stack([GA.ravel(), GU.ravel()], 1)
+    robust = np.ones(len(a))
+    order = np.argsort(a)
+    sorted_a = a[order]
+    reach = 3 * sigma
+
+    def solve():
+        out = np.full(len(nodes), np.nan)
+        for start in range(0, len(nodes), 256):
+            block = nodes[start:start + 256]
+            lo, hi = np.searchsorted(sorted_a, [block[:, 0].min() - reach, block[:, 0].max() + reach])
+            idx = order[lo:hi]
+            if not len(idx):
+                continue
+            da = a[idx][None, :] - block[:, :1]
+            du = u[idx][None, :] - block[:, 1:]
+            w = np.exp(-(da * da + du * du) / sigma ** 2) * robust[idx][None, :]
+            X = np.stack([np.ones_like(da), da, du, da * da, da * du, du * du], -1)
+            G = np.einsum('nk,nki,nkj->nij', w, X, X) + np.eye(6) * 1e-12
+            rhs = np.einsum('nk,nki,k->ni', w, X, h[idx])
+            ok = w.sum(1) > 1e-3
+            out[start:start + 256][ok] = np.linalg.solve(G[ok], rhs[ok][..., None])[:, 0, 0]
+        grid = out.reshape(GA.shape)
+        # A node without samples near it takes its row's nearest value (never read inside the region).
+        for row in grid:
+            known = np.isfinite(row)
+            if known.any() and not known.all():
+                row[~known] = np.interp(np.flatnonzero(~known), np.flatnonzero(known), row[known])
+        return np.where(np.isfinite(grid), grid, np.nanmean(grid) if np.isfinite(grid).any() else 0.)
+
+    def sample(grid, pa, pu):
+        fa = np.clip((pa - ga[0]) / step, 0, len(ga) - 1.001)
+        fu = np.clip((pu - gu[0]) / step, 0, len(gu) - 1.001)
+        i, j = fa.astype(int), fu.astype(int)
+        x, y = fa - i, fu - j
+        return (grid[i, j] * (1 - x) * (1 - y) + grid[i + 1, j] * x * (1 - y)
+                + grid[i, j + 1] * (1 - x) * y + grid[i + 1, j + 1] * x * y)
+    for _ in range(LEVEL_FIT_ITERATIONS):
+        grid = solve()
+        res = h - sample(grid, a, u)
+        robust = np.clip(1 - (res / tukey) ** 2, 0, None) ** 2
+    grid = solve()
+    return lambda pa, pu: sample(grid, np.asarray(pa, float), np.asarray(pu, float))
+
+
+def region_walls(env, ug, cap, rise):
+    """Per envelope row (one chart angle) the region's half width on each side ``[left, right]`` (metres): out from
+    the midline, the last sample before the envelope ``env`` (radial distances, NaN = no skin) rises more than
+    ``rise`` above the lowest point between it and the midline, or misses; at most ``cap``."""
+    mid = int(np.argmin(np.abs(ug)))
+    walls = np.full((len(env), 2), float(cap))
+    for i, row in enumerate(env):
+        for side, sign in enumerate((-1, 1)):
+            low = row[mid]
+            for j in range(mid, len(ug) if sign > 0 else -1, sign):
+                if not np.isfinite(row[j]) or row[j] - low > rise:
+                    walls[i, side] = min(cap, max(0., abs(ug[j]) - abs(ug[1] - ug[0])))
+                    break
+                low = min(low, row[j])
+    return walls
+
+
+def level_region(body, arm, P):
+    """Level the skin of the region onto the surface around it before the part is built (module notes above).
+    Returns the metrics ``{source_smooth: {radius_m, blend_m, iterations, moved, max_shift_mm,
+    inner_wall_vertices}, source_level: {bump_mm: [before, after], bump_p95_mm: [before, after], fit_rms_mm,
+    angle_deg, half_width_mm: [min, max], folded_faces: [before, after], normals_refreshed}}`` (bump: the outer skin
+    of the region above the fitted surface, mm — the tip's ``bump_mm``)."""
+    L, R = P['level'], P['region']
+    ch = surface_chart(body, arm, P)
+    M, Mi, Ni3, bvh, c, xm, th, S, prof = (ch[k] for k in ('M', 'Mi', 'Ni3', 'bvh', 'c', 'xm', 'th', 'S', 'prof'))
+    t0, t1 = (float(v) for v in np.interp([R['s0'], R['s1']], S, th))
+    rho_prof = np.hypot(prof[:, 1] - c.y, prof[:, 2] - c.z)
+    rho_nom = float(np.median(rho_prof[(th >= t0) & (th <= t1)]))
+    span = (t1 - t0) * rho_nom
+    full = R['fall'] / extension_bones.NEUTRAL_BLEND
+    reach = (extension_bones.NEUTRAL_FIT[1] - 1) * full
+    # The outer envelope over the region and its surroundings: 1 degree x 1 mm, rays from outside.
+    tg = np.arange(t0 - reach / rho_nom, t1 + reach / rho_nom + 1e-9, math.radians(1))
+    ug = np.round(np.arange(-R['u'] - reach, R['u'] + reach + 1e-9, .001), 6)
+    env = np.full((len(tg), len(ug)), np.nan)
+    for i, t in enumerate(tg):
+        d = Vector((0, -math.cos(t), -math.sin(t)))
+        for j, x in enumerate(ug):
+            hit = bvh.ray_cast(Mi @ (Vector((xm + x, c.y, c.z)) + d * .5), Ni3 @ (-d))
+            if hit[0] is not None:
+                q = M @ hit[0]
+                env[i, j] = math.hypot(q.y - c.y, q.z - c.z)
+    walls = region_walls(env, ug, R['u'], L['wall_rise'])
+
+    def chart(points):
+        """(a along the region, u, height above rho_nom, distance outside the region, valid, radial unit)."""
+        dy, dz = points[:, 1] - c.y, points[:, 2] - c.z
+        t = np.arctan2(-dz, -dy)
+        t = np.where(t < np.radians(P['theta'][0]) - .5, t + 2 * np.pi, t)
+        rho = np.hypot(dy, dz)
+        u = points[:, 0] - xm
+        a = (t - t0) * rho_nom
+        width = np.where(u < 0, np.interp(t, tg, walls[:, 0]), np.interp(t, tg, walls[:, 1]))
+        outside = np.hypot(np.maximum(0, np.maximum(-a, a - span)), np.maximum(0, np.abs(u) - width))
+        valid = (t > th[0]) & (t < th[-1]) & (np.abs(rho - rho_nom) < .05)
+        return a, u, rho - rho_nom, outside, valid, np.stack([np.zeros(len(points)), dy, dz], 1) / np.maximum(rho, 1e-9)[:, None]
+    # The fit, before any vertex moves: the envelope inside the region.
+    TG, UG = np.meshgrid(tg, ug, indexing='ij')
+    ea = (TG - t0) * rho_nom
+    width = np.where(UG < 0, np.interp(TG, tg, walls[:, 0]), np.interp(TG, tg, walls[:, 1]))
+    inside = (np.isfinite(env) & (ea >= 0) & (ea <= span) & (np.abs(UG) <= width)
+              & (np.abs(np.nan_to_num(env, nan=0.) - rho_nom) < .05))
+    if inside.sum() < 12:
+        raise ValueError('No skin in the inset region to level')
+    surface = robust_local_surface(ea[inside], UG[inside], env[inside] - rho_nom, L['sigma'], L['tukey'],
+                                   LEVEL_GRID_M, (-reach, span + reach, ug[0], ug[-1]))
+    meshes = [body]
+    snapshot = extension_bones.position_snapshot(meshes)
+
+    def window(limit):
+        def accept(points):
+            _, _, _, outside, valid, _ = chart(points)
+            return valid & (outside <= limit)
+        return accept
+    source_count = len(body.data.vertices)
+    extension_bones.subdivide_where(body, [window((f - 1) * full) for f in extension_bones.NEUTRAL_SUBDIVIDE],
+                                    vectorised=True)
+    # The grid fill leaves quads; the patch is cut from triangles, and a quad half in it opens the border.
+    bm = bmesh.new()
+    bm.from_mesh(body.data)
+    bm.verts.ensure_lookup_table()
+    quads = [f for f in bm.faces if len(f.verts) > 3 and any(v.index >= source_count for v in f.verts)]
+    if quads:
+        bmesh.ops.triangulate(bm, faces=quads)
+        bm.to_mesh(body.data)
+    bm.free()
+    V = np.array([tuple(M @ v.co) for v in body.data.vertices])
+    Nn = np.array([tuple((M.to_3x3() @ v.normal).normalized()) for v in body.data.vertices])
+    # Coincident copies (UV seams) are one point: one normal, one move.
+    groups = {}
+    for i, q in enumerate(np.round(V / 1e-5).astype(np.int64)):
+        groups.setdefault(tuple(q), []).append(i)
+    group_of = np.empty(len(V), np.int64)
+    for g, members in enumerate(groups.values()):
+        group_of[members] = g
+        if len(members) > 1:
+            n = Nn[members].sum(0)
+            Nn[members] = n / (np.linalg.norm(n) + 1e-12)
+    a, u, h, outside, valid, radial = chart(V)
+    rows = np.flatnonzero(valid & (outside <= reach))
+    # This op's inner wall: facing the chart axis (``build_part``'s ``inner_wall``).
+    inner = np.einsum('ij,ij->i', Nn[rows], radial[rows]) < -.2
+    folded_before = folded_faces(body, rows[outside[rows] <= 0], c)
+    Q = surface(a[rows], u[rows])
+    support = ~inner & (outside[rows] <= 0) & (np.abs(h[rows] - Q) < L['tukey'])
+    # Beyond the region the fade runs along the skin: a wall rising off the surface is that far away too.
+    beyond = np.where(outside[rows] > 0, np.hypot(outside[rows], np.maximum(0, h[rows] - Q)), outside[rows])
+    shift, stats = extension_bones.level_heights(h[rows], beyond, inner, full, lambda ring: Q,
+                                                 tuple(L['depth']), inner_follows=True, ring=support)
+    moved = 0
+    for i, dh, n in zip(rows, shift, radial[rows]):
+        if abs(dh) > 1e-9:
+            vertex = body.data.vertices[int(i)]
+            vertex.co = Mi @ (M @ vertex.co + Vector(n) * float(dh))
+            moved += 1
+    # Spread the levelled folds over the surface again (tangential; seam copies as one point).
+    off = h[rows] - Q
+    level = np.zeros(len(V), bool)
+    level[rows[(outside[rows] <= 0) & (off > -L['depth'][0]) & (off < L['depth'][1])]] = True
+    count = group_of.max() + 1
+    free = np.zeros(count, bool)
+    free[group_of[level]] = True
+    free[group_of[~level]] = False
+    ga, gu = np.zeros(count), np.zeros(count)
+    ga[group_of], gu[group_of] = a, u
+    edges = group_of[np.array([tuple(e.vertices) for e in body.data.edges], np.int64).reshape(-1, 2)]
+    edges = edges[(edges[:, 0] != edges[:, 1]) & (free[edges[:, 0]] | free[edges[:, 1]])]
+    ga[free], gu[free] = spread_evenly(edges, free, ga, gu, L['relax'])
+    is_inner = np.zeros(len(V), bool)
+    is_inner[rows[inner]] = True
+    # A node the spread put onto another one of its sheet (a sliver between the same fixed neighbours) keeps its
+    # levelled place instead: two vertices in one spot leave a face of no area, which the patch drops (an open edge).
+    sheet = np.zeros(count)
+    sheet[group_of[is_inner]] = 1.
+    tree = KDTree(count)
+    for g in range(count):
+        tree.insert((ga[g], gu[g], sheet[g]), g)
+    tree.balance()
+    for g in np.flatnonzero(free):
+        if len(tree.find_range((ga[g], gu[g], sheet[g]), 2e-5)) > 1:
+            free[g] = False
+    spread = np.flatnonzero(level & free[group_of])
+    na, nu = ga[group_of[spread]], gu[group_of[spread]]
+    nt = na / rho_nom + t0
+    nr = rho_nom + surface(na, nu) - np.where(is_inner[spread], extension_bones.NEUTRAL_GAP_M, 0.)
+    for i, x, y, z in zip(spread, xm + nu, c.y - nr * np.cos(nt), c.z - nr * np.sin(nt)):
+        body.data.vertices[int(i)].co = Mi @ Vector((x, y, z))
+    body.data.update()
+    refreshed = extension_bones.refresh_normals(meshes, snapshot)
+    after = rows[outside[rows] <= 0]
+    folded_after = folded_faces(body, after, c)
+    return {'source_smooth': {'radius_m': full, 'blend_m': extension_bones.NEUTRAL_BLEND * full,
+                              'iterations': L['relax'], 'moved': moved, 'max_shift_mm': stats['max_shift_mm'],
+                              'inner_wall_vertices': int(inner.sum())},
+            'source_level': {'bump_mm': [stats['bump_before_mm'], stats['bump_after_mm']],
+                             'bump_p95_mm': stats['bump_p95_mm'], 'fit_rms_mm': stats['fit_rms_mm'],
+                             'angle_deg': [round(math.degrees(t0), 2), round(math.degrees(t1), 2)],
+                             'half_width_mm': [round(float(walls.min()) * 1000, 1), round(float(walls.max()) * 1000, 1)],
+                             'folded_faces': [folded_before, folded_after], 'normals_refreshed': refreshed}}
+
+
+def spread_evenly(edges, free, xa, xb, iterations):
+    """The free nodes' coordinates (two arrays over all nodes) once every free node sits at the mean of its
+    neighbours, the others fixed — the even spread of the graph inside its fixed border (uniform Laplacian,
+    conjugate gradients, at most ``iterations`` steps), which leaves no face folded over another where the border
+    is convex. Returns the free nodes' (a, b)."""
+    count = len(free)
+    degree = np.bincount(edges.ravel(), minlength=count).astype(float)
+    solvable = free & (degree > 0)
+
+    def laplace(x):
+        neighbours = np.bincount(edges[:, 0], x[edges[:, 1]], count) + np.bincount(edges[:, 1], x[edges[:, 0]], count)
+        return degree * x - neighbours
+    out = []
+    for x in (xa.copy(), xb.copy()):
+        fixed = np.where(solvable, 0., x)
+        rhs = -laplace(fixed)
+        y = np.where(solvable, x, 0.)
+        r = np.where(solvable, rhs - laplace(y), 0.)
+        d = r.copy()
+        rr = r @ r
+        for _ in range(iterations):
+            if rr < 1e-24:
+                break
+            q = np.where(solvable, laplace(d), 0.)
+            alpha = rr / (d @ q)
+            y += alpha * d
+            r -= alpha * q
+            new = r @ r
+            d = r + new / rr * d
+            rr = new
+        out.append(np.where(solvable, y, x)[free])
+    return out
+
+
+def folded_faces(body, vertices, c):
+    """Outer-skin faces among those with every vertex in ``vertices`` whose winding faces the chart axis while
+    their vertices' own normals face away from it: skin folded over itself."""
+    chosen = np.zeros(len(body.data.vertices), bool)
+    chosen[vertices] = True
+    M = body.matrix_world
+    count = 0
+    for poly in body.data.polygons:
+        if not chosen[list(poly.vertices)].all():
+            continue
+        points = [M @ body.data.vertices[i].co for i in poly.vertices]
+        centre = sum(points, Vector()) / len(points)
+        radial = Vector((0, centre.y - c.y, centre.z - c.z))
+        normal = (points[1] - points[0]).cross(points[2] - points[0])
+        if normal.dot(radial) < 0 and sum((M.to_3x3() @ body.data.vertices[i].normal for i in poly.vertices), Vector()).dot(radial) > 0:
+            count += 1
+    return count
+
+
+def build_part(group, output):
+    """Build the accepted midline field, bake its texture and weld its border."""
+    P = parameters(group.get('params', {}))
+    arms = [o for o in bpy.context.scene.objects if o.type == 'ARMATURE']
+    if len(arms) != 1 or abs(bpy.context.scene.unit_settings.scale_length - 1) > 1e-6:
+        raise ValueError('Requires one armature and metre scene units')
+    arm = arms[0]
+    body = next(o for o in bpy.context.scene.objects if o.type == 'MESH' and o.vertex_groups and not o.get('attached_part'))
+    if not body.data.uv_layers.active:
+        raise ValueError('Body requires a UV map')
+    level = level_region(body, arm, P) if P['level']['enabled'] else None
+    ch = surface_chart(body, arm, P)
+    M, Mi, N3, Ni3, bvh = ch['M'], ch['Mi'], ch['N3'], ch['Ni3'], ch['bvh']
+    c, xm, th, S, prof, pn, i0 = ch['c'], ch['xm'], ch['th'], ch['S'], ch['prof'], ch['pn'], ch['i0']
+    arc, s_start, underside, scale, chart = ch['arc'], ch['s_start'], ch['underside'], ch['scale'], ch['chart']
     sstep = lambda x: (lambda y: y * y * (3 - 2 * y))(np.clip(x, 0, 1))
 
 
@@ -529,7 +848,7 @@ def build_part(group, output):
             'border_vertices': int(border.sum()), 'open_border_edges': open_left,
             'border_max_abs_h': float(np.abs(hq[border]).max()) if border.any() else 0.,
             'usable_half_width': float(np.interp((P['cleft']['s0'] + P['cleft']['s1']) / 2, WS, WA)),
-            'inner_scale': P['inner_scale'], 'nub_scale': P['nub_scale']}
+            'inner_scale': P['inner_scale'], 'nub_scale': P['nub_scale'], **(level or {})}
 
 
 def inset_part(args):

@@ -1936,7 +1936,15 @@ The staged prerig passes through `attached_part`, then `inset_part`, then
 groups are only passed to `attached_part`. Attached part nodes carry
 `extras.attached_part` equal to their group ID. An inset part replaces body
 faces with a subdivided, displaced skin patch welded into the body; its second
-material carries the same marker in its extras. Body meshes remain first, and
+material carries the same marker in its extras. Before the patch is cut, the
+skin the mesher modelled in the region is levelled onto the surface around it,
+the way a `pair_tip` part levels its source (`level`: `enabled`, the fit's
+`sigma` and `tukey` width, the `wall_rise` that ends the region beside the
+midline, the `depth` [below, above] that still counts as the region's skin, and
+the `relax` steps that spread levelled folds; defaults and the measurements
+behind them in `inset_part.py`). The record carries `source_smooth` and
+`source_level` (`bump_mm` [before, after] above the fitted surface, like the
+tip's). Body meshes remain first, and
 face texture preservation checks ignore marked nodes and material primitives.
 LOD decimates the joined inset body as one mesh, retaining its second material
 and baked texture. Each failed part operation keeps its incoming body, including

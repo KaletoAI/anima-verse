@@ -159,7 +159,9 @@ def probe(directory):
         seam_positions[key] = seam_positions.get(key, 0) + 1
     assert any(count > 1 and abs(key[0]) == 0 for key, count in seam_positions.items())
     source_faces = [tuple(p.vertices) for p in me.polygons]
-    group = {'id': 'inset', 'op': 'inset_part', 'chains': [], 'params': {'pocket': {'s0': .07}, 'bake': 64}}
+    # The op's geometry on the skin as given; the levelling before it is smoke_inset_part_level.py's.
+    group = {'id': 'inset', 'op': 'inset_part', 'chains': [],
+             'params': {'pocket': {'s0': .07}, 'bake': 64, 'level': {'enabled': 0}}}
     if '--fill' in sys.argv or '--fill-odd' in sys.argv:
         group['params'].update(bake=bake_size, tone={k: [1,1,1] for k in inset_part.DEFAULTS['tone']})
     try:
