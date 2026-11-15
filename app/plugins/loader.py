@@ -219,6 +219,7 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any], *,
     sil = meta.get("silhouette") or {}
     if isinstance(sil, dict):
         pkg.silhouette = sil
+    region_ids = set()  # region ids are unique within the package
     for bdef in meta.get("body_slots") or []:
         if not isinstance(bdef, dict) or not bdef.get("id"):
             continue
@@ -238,6 +239,26 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any], *,
                 except (ValueError, TypeError, OverflowError) as exc:
                     logger.warning("Package %s slot %s: rig dropped: %s", pkg.id, bdef["id"], exc)
             rigs = _resolve_rig_dependencies(rigs, pkg.id, bdef["id"])
+        # Regions (ruling R3): unlike a malformed rig, which is dropped, a
+        # malformed region rejects the whole package with one error.
+        regions = []
+        if "regions" in bdef:
+            from app.plugins.registry import RegionSpec
+            entries = bdef["regions"]
+            if not isinstance(entries, list):
+                logger.error("Package %s slot %s: invalid regions: must be a list", pkg.id, bdef["id"])
+                return None
+            for entry in entries:
+                try:
+                    region = RegionSpec.parse(entry, bdef.get("attributes") or {}, [rig.id for rig in rigs])
+                except (ValueError, TypeError, OverflowError) as exc:
+                    logger.error("Package %s slot %s: invalid region: %s", pkg.id, bdef["id"], exc)
+                    return None
+                if region.id in region_ids:
+                    logger.error("Package %s slot %s: invalid region: duplicate id %s", pkg.id, bdef["id"], region.id)
+                    return None
+                region_ids.add(region.id)
+                regions.append(region)
         for attribute, declaration in (bdef.get("attributes") or {}).items():
             if isinstance(declaration, dict) and "applies_to" in declaration:
                 conditions = declaration["applies_to"]
@@ -294,6 +315,7 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any], *,
             base_body_negative=str(bdef.get("base_body_negative") or "").strip(),
             base_body_prompt=str(bdef.get("base_body_prompt") or "").strip(),
             rigs=rigs,
+            regions=regions,
             mesh_part=mesh_part,
             mesh_input_prompt=mesh_input_prompt,
             mesh_item=mesh_item.strip(),
@@ -439,6 +461,11 @@ def _collect_packages(base: Path, *, warn: bool = True,
         if any(slot.mesh_part and not set(slot.mesh_part.rigs).issubset({rig.id for rig in slot.rigs})
                for slot in pkg.body_slots):
             logger.error("Package %s: mesh_part rig lost during conflict resolution", pkg.id)
+            found.pop(pkg.id)
+        # A region's from_rig names a rig of its slot (ruling R3: reject, never drop).
+        elif any(region.from_rig and region.from_rig not in {rig.id for rig in slot.rigs}
+                 for slot in pkg.body_slots for region in slot.regions):
+            logger.error("Package %s: region from_rig lost during conflict resolution", pkg.id)
             found.pop(pkg.id)
     while True:
         broken = [pkg for pkg in found.values() if any(dep not in found for dep in pkg.requires)]

@@ -9,6 +9,43 @@ def _revision(value):
                                      ensure_ascii=True).encode()).hexdigest()
 
 
+def _applicability_context(character_name, profile):
+    """``(template_name, template, active_slots)`` the slot-owned rules
+    (rigs, regions) are matched against: ``template`` carries only the
+    template's ``features`` (no deep copy per character and poll),
+    ``active_slots`` the ``id()`` of every slot that applies."""
+    from app.core.body_slots import slots_for_character
+    from app.models.character_template import template_features
+    template_name = (profile.get("template") or "").strip()
+    template = ({"features": template_features(template_name) or {}}
+                if template_name else {})
+    active_slots = {id(slot) for slot in slots_for_character(character_name, profile=profile)}
+    return template_name, template, active_slots
+
+
+def _rule_applies(slot, rule, values, profile, template_name, template, active_slots):
+    """Whether a slot-owned declaration (a rig or a region) applies.
+
+    ``rule.templates`` None = the slot must apply to the character
+    (``active_slots``); otherwise the template selector decides. Every
+    ``rule.applies_to`` condition must hold: ``attributes.<key>`` and the
+    slot's own attribute names read ``values`` (the slot's stored values),
+    any other key the profile."""
+    from app.core.body_slots import normalize_condition_value
+    from app.models.character_template import fragment_applies
+    if rule.templates is None:
+        if id(slot) not in active_slots:
+            return False
+    elif not template_name or not fragment_applies({"apply_to": rule.templates}, template_name, template):
+        return False
+    for key, allowed in rule.applies_to.items():
+        value = (values.get(key[len("attributes."):]) if key.startswith("attributes.")
+                 else values.get(key) if key in slot.attributes else profile.get(key))
+        if normalize_condition_value(value) not in [normalize_condition_value(v) for v in allowed]:
+            return False
+    return True
+
+
 def rig_groups_for(character_name, profile=None, mesh_variant=None):
     """Applicable groups, with package physics defaults and ordered chains.
 
@@ -21,19 +58,12 @@ def rig_groups_for(character_name, profile=None, mesh_variant=None):
     switch reads "off" for every condition, so no part op or part-only group
     is built over clothing or over anatomy the generator drew itself.
     """
-    from app.core.body_slots import (is_slot_exposed, mesh_part_active, mesh_variant_token,
-                                     normalize_condition_value, slots_for_character)
+    from app.core.body_slots import is_slot_exposed, mesh_part_active, mesh_variant_token
     if profile is None:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
     from app.plugins.registry import packages
-    from app.models.character_template import fragment_applies, template_features
-    template_name = (profile.get("template") or "").strip()
-    # The selectors below read only the template's ``features`` — no deep
-    # copy of the whole template per character and poll.
-    template = ({"features": template_features(template_name) or {}}
-                if template_name else {})
-    active_slots = {id(slot) for slot in slots_for_character(character_name, profile=profile)}
+    template_name, template, active_slots = _applicability_context(character_name, profile)
     groups = []
     for slot in (slot for package in packages() for slot in package.body_slots):
         values = (profile.get("body_slots") or {}).get(slot.id) or {}
@@ -44,20 +74,7 @@ def rig_groups_for(character_name, profile=None, mesh_variant=None):
             if not part_on:
                 values = {**values, slot.mesh_part.switch: "off"}
         for rig in slot.rigs:
-            if rig.templates is None:
-                if id(slot) not in active_slots:
-                    continue
-            elif not template_name or not fragment_applies({"apply_to": rig.templates}, template_name, template):
-                continue
-            matches = True
-            for key, allowed in rig.applies_to.items():
-                value = (values.get(key[len("attributes."):]) if key.startswith("attributes.")
-                         else values.get(key) if key in slot.attributes else profile.get(key))
-                if normalize_condition_value(value) not in [
-                        normalize_condition_value(v) for v in allowed]:
-                    matches = False
-                    break
-            if matches:
+            if _rule_applies(slot, rig, values, profile, template_name, template, active_slots):
                 group = asdict(rig)
                 # The clothing slots that hide this group (``exposed_only``).
                 group["covered_by"] = list(slot.covered_by)
@@ -80,6 +97,49 @@ def rig_groups_for(character_name, profile=None, mesh_variant=None):
         ordered.extend(ready)
         groups = [g for g in groups if g not in ready]
     return ordered
+
+
+def region_declarations_for(character_name, profile=None):
+    """The regions every applicable body slot declares, by the rig rules
+    (``_rule_applies`` over the slot's stored values), in declaration order.
+
+    Each entry: ``{id: "<package>:<id>", slot, bone, offset, axis, depth,
+    radius, cone_deg, funnel, accepts, min_length, compress_min, exposed_only,
+    interaction_kinds, from_rig, covered_by}`` — ``accepts`` the op names,
+    ``radius`` / ``depth`` already multiplied by the slot's attribute values
+    (``attribute_params``; an unmapped value multiplies by 1). Exposure is NOT
+    decided here: a region stays listed under clothing, and the mesh part's
+    switch is read as stored (the resolver applies ``exposed_only``)."""
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    from app.plugins.registry import packages
+    template_name, template, active_slots = _applicability_context(character_name, profile)
+    result = []
+    for package in packages():
+        for slot in package.body_slots:
+            if not slot.regions:
+                continue
+            values = (profile.get("body_slots") or {}).get(slot.id) or {}
+            for region in slot.regions:
+                if not _rule_applies(slot, region, values, profile, template_name, template, active_slots):
+                    continue
+                sizes = {"radius": region.radius, "depth": region.depth}
+                for param, mapping in region.attribute_params.items():
+                    selected = values.get(mapping["attribute"])
+                    if selected in mapping["values"]:
+                        sizes[param] *= mapping["values"][selected]
+                result.append({
+                    "id": f"{package.id}:{region.id}", "slot": slot.id, "bone": region.bone,
+                    "offset": list(region.offset), "axis": list(region.axis),
+                    "depth": sizes["depth"], "radius": sizes["radius"],
+                    "cone_deg": region.cone_deg, "funnel": region.funnel,
+                    "accepts": list(region.accepts_ops), "min_length": region.min_length,
+                    "compress_min": region.compress_min, "exposed_only": region.exposed_only,
+                    "interaction_kinds": (list(region.interaction_kinds)
+                                          if region.interaction_kinds is not None else None),
+                    "from_rig": region.from_rig, "covered_by": list(slot.covered_by)})
+    return result
 
 
 def exposed_only_slots():
@@ -430,6 +490,8 @@ def validate_motion_overrides(section, *, character=False):
 def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_states=True, preview_states=None):
     """Package → world → attribute multipliers → raw character → bounce/weight → clothing → state; mesh-independent.
 
+    Each package group carries its effective ``op`` (``rig_groups_for``); hair groups carry none.
+
     Hair: the served HairDeck fit's spring chains (``hair_motion.motion_groups``, groups ``hair_c<CC>``) are merged
     after the package groups, also for a character without any package group; none of the layers apply to them.
 
@@ -590,6 +652,9 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
             values[field] = max(.25, min(4., values[field]))
         values["gravity_scale"] = scale
         groups[group["id"]] = {
+            # The effective op (``rig_groups_for``: attached_part where the
+            # mesh part turns the chain into one) — what a channel accepts.
+            "op": group["op"],
             "bones": [link["bone"] for chain in group["chains"] for link in chain],
             **values, "scale_axis": group["scale_axis"], "rigid_tail": group["rigid_tail"],
             "rest_deg": max(-values["rest_max_deg"], min((rest or 0) + lift * values["rest_max_deg"], values["rest_max_deg"])),

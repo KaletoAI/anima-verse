@@ -139,6 +139,10 @@ export interface MotionGroup {
   rest_max_deg: number
   straighten_deg: number
   freetext_clothing_gain: number
+  /** Package groups only: the group's effective op (`extension_rig.motion_payload` — `attached_part` where the
+   *  mesh part turns an `appendage_chain` into one); what a declared channel's `accepts` is compared with.
+   *  Hair groups carry none. */
+  op?: string
   /** A HairDeck spring chain (`app/core/hair_motion.py`): its tips collide with `hairChainCapsules`
    *  instead of `extensionCapsules` (module docstring). */
   hair?: boolean

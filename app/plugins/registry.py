@@ -71,6 +71,35 @@ class FlagSpec:
     distracting: bool = False     # a set flag occupies the character's attention
 
 
+def _parse_applicability(raw, label):
+    """``(applies_to, templates)`` of a rig or region declaration — the one
+    rule both follow: ``applies_to`` maps fields to non-empty scalar lists,
+    ``templates`` is ``*``, template names or a feature selector (absent =
+    None, the owning slot decides). ValueError otherwise."""
+    conditions = raw.get("applies_to", {})
+    if not isinstance(conditions, dict) or any(
+            not isinstance(k, str) or not k or not isinstance(v, list) or not v
+            or any(not isinstance(x, (str, int, float, bool, type(None))) for x in v)
+            for k, v in conditions.items()):
+        raise ValueError(f"{label}.applies_to must map fields to non-empty scalar lists")
+    if "apply_to" in raw:
+        raise ValueError(f"use {label}.templates for template selection and {label}.applies_to for conditions")
+    templates = raw.get("templates")
+    if "templates" in raw and not (
+            templates == "*"
+            or (isinstance(templates, list) and templates
+                and all(isinstance(v, str) and v.strip() for v in templates))
+            or (isinstance(templates, dict) and set(templates) == {"feature"}
+                and isinstance(templates["feature"], str) and templates["feature"].strip())):
+        raise ValueError(f"{label}.templates requires template names, * or a feature selector")
+    return conditions, templates
+
+
+def _is_finite_number(value):
+    import math
+    return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
+
+
 @dataclass
 class RigSpec:
     """Validated declaration; operation parameters remain opaque in P0."""
@@ -136,22 +165,7 @@ class RigSpec:
         params = raw.get("params", {})
         if not isinstance(params, dict):
             raise ValueError("rig.params must be a mapping")
-        conditions = raw.get("applies_to", {})
-        if not isinstance(conditions, dict) or any(
-                not isinstance(k, str) or not k or not isinstance(v, list) or not v
-                or any(not isinstance(x, (str, int, float, bool, type(None))) for x in v)
-                for k, v in conditions.items()):
-            raise ValueError("rig.applies_to must map fields to non-empty scalar lists")
-        if "apply_to" in raw:
-            raise ValueError("use rig.templates for template selection and rig.applies_to for conditions")
-        templates = raw.get("templates")
-        if "templates" in raw and not (
-                templates == "*"
-                or (isinstance(templates, list) and templates
-                    and all(isinstance(v, str) and v.strip() for v in templates))
-                or (isinstance(templates, dict) and set(templates) == {"feature"}
-                    and isinstance(templates["feature"], str) and templates["feature"].strip())):
-            raise ValueError("rig.templates requires template names, * or a feature selector")
+        conditions, templates = _parse_applicability(raw, "rig")
         chains = raw.get("chains")
         if not isinstance(chains, list) or (not chains and raw["op"].strip() != "inset_part"):
             raise ValueError("rig.chains must be a non-empty list")
@@ -333,6 +347,132 @@ class MeshPartSpec:
         return cls(raw["switch"], str(raw.get("tpose_prompt") or "").strip(), list(patterns), clean)
 
 
+#: Region kinds the core knows. A channel is an inside capsule of the
+#: receiving body that only chains of an accepted op may enter (spec
+#: 2026-11-13-cross-person-collision-design.md, Part 4).
+REGION_KINDS = ("channel",)
+#: The declaration numbers ``attribute_params`` may scale.
+REGION_SCALED_PARAMS = ("radius", "depth")
+_REGION_KEYS = {"id", "kind", "bone", "offset", "axis", "depth", "radius", "cone_deg", "funnel", "accepts",
+                "min_length", "compress_min", "exposed_only", "interaction_kinds", "from_rig", "templates",
+                "applies_to", "attribute_params"}
+
+
+@dataclass
+class RegionSpec:
+    """A region a body slot declares (``regions:`` next to its ``rigs:``).
+
+    ``offset`` / ``axis`` are in the body frame the rig params use, relative
+    to the base joint ``bone``; ``from_rig`` names a rig of the same slot whose
+    build may report the opening instead. ``templates`` / ``applies_to`` follow
+    the rig rules; ``attribute_params`` multiplies ``radius`` / ``depth`` by a
+    slot attribute value (``{param: {attribute, values: {option: factor}}}``)."""
+    id: str
+    kind: str
+    bone: str
+    offset: List[float]
+    axis: List[float]
+    depth: float
+    radius: float
+    cone_deg: float
+    funnel: float
+    accepts_ops: List[str]
+    min_length: float = 1.0
+    compress_min: float = 1.0
+    exposed_only: bool = True
+    interaction_kinds: Optional[List[str]] = None
+    from_rig: Optional[str] = None
+    templates: Any = None
+    applies_to: Dict[str, List[Any]] = field(default_factory=dict)
+    attribute_params: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+    @classmethod
+    def parse(cls, raw, attributes, rig_ids):
+        """Validate one region; ``attributes`` are the slot's declared
+        attributes, ``rig_ids`` the ids of the slot's rigs. ValueError for
+        anything malformed (the loader rejects the package, ruling R3)."""
+        from app.core.rig_contract import BASE_JOINT_KEYS, norm_bone_name
+        if not isinstance(raw, dict):
+            raise ValueError("region must be a mapping")
+        unknown = set(raw) - _REGION_KEYS
+        if unknown:
+            raise ValueError(f"unknown region keys: {', '.join(sorted(map(str, unknown)))}")
+        if not isinstance(raw.get("id"), str) or not raw["id"].strip():
+            raise ValueError("region.id must be a non-empty string")
+        if raw.get("kind") not in REGION_KINDS:
+            raise ValueError(f"region.kind must be one of {', '.join(REGION_KINDS)}")
+        bone = raw.get("bone")
+        if not isinstance(bone, str) or norm_bone_name(bone.strip()) not in BASE_JOINT_KEYS:
+            raise ValueError("region.bone must name a base joint")
+        vectors = {}
+        for key in ("offset", "axis"):
+            value = raw.get(key)
+            if not isinstance(value, list) or len(value) != 3 or not all(_is_finite_number(v) for v in value):
+                raise ValueError(f"region.{key} requires three finite numbers")
+            vectors[key] = [float(v) for v in value]
+        if not any(vectors["axis"]):
+            raise ValueError("region.axis must not be zero")
+        sizes = {}
+        for key in ("depth", "radius", "funnel"):
+            value = raw.get(key)
+            if not _is_finite_number(value) or value <= 0:
+                raise ValueError(f"region.{key} must be a finite number above zero")
+            sizes[key] = float(value)
+        cone = raw.get("cone_deg")
+        if not _is_finite_number(cone) or not 0 < cone <= 60:
+            raise ValueError("region.cone_deg must lie in (0, 60]")
+        accepts = raw.get("accepts")
+        ops = accepts.get("ops") if isinstance(accepts, dict) and set(accepts) == {"ops"} else None
+        if not isinstance(ops, list) or not ops or any(not isinstance(op, str) or not op.strip() for op in ops):
+            raise ValueError("region.accepts.ops must be a non-empty list of op names")
+        min_length = raw.get("min_length", 1.0)
+        if not _is_finite_number(min_length) or not .25 <= min_length <= 4:
+            raise ValueError("region.min_length must lie in [0.25, 4]")
+        compress_min = raw.get("compress_min", 1.0)
+        if not _is_finite_number(compress_min) or not 0 < compress_min <= 1:
+            raise ValueError("region.compress_min must lie in (0, 1]")
+        exposed_only = raw.get("exposed_only", True)
+        if not isinstance(exposed_only, bool):
+            raise ValueError("region.exposed_only must be a boolean")
+        kinds = raw.get("interaction_kinds")
+        if kinds is not None and (not isinstance(kinds, list) or not kinds
+                                  or any(not isinstance(k, str) or not k.strip() for k in kinds)):
+            raise ValueError("region.interaction_kinds must be a non-empty list of strings")
+        from_rig = raw.get("from_rig")
+        if from_rig is not None and (not isinstance(from_rig, str) or from_rig.strip() not in set(rig_ids)):
+            raise ValueError("region.from_rig must name a rig of the same slot")
+        conditions, templates = _parse_applicability(raw, "region")
+        mappings = raw.get("attribute_params", {})
+        if not isinstance(mappings, dict):
+            raise ValueError("region.attribute_params must be a mapping")
+        attributes = attributes or {}
+        for param, mapping in mappings.items():
+            if param not in REGION_SCALED_PARAMS:
+                raise ValueError("region.attribute_params may scale radius and depth only")
+            if (not isinstance(mapping, dict) or set(mapping) != {"attribute", "values"}
+                    or not isinstance(mapping["attribute"], str)
+                    or not isinstance(attributes.get(mapping["attribute"]), dict)):
+                raise ValueError("region.attribute_params requires a declared attribute")
+            values = mapping["values"]
+            options = attributes[mapping["attribute"]].get("options") or []
+            if not isinstance(values, dict) or any(
+                    key not in options or not _is_finite_number(value) or value <= 0
+                    for key, value in values.items()):
+                raise ValueError("region attribute values require declared options and finite positive numbers")
+        return cls(
+            id=raw["id"].strip(), kind=raw["kind"], bone=bone.strip(),
+            offset=vectors["offset"], axis=vectors["axis"],
+            depth=sizes["depth"], radius=sizes["radius"], cone_deg=float(cone), funnel=sizes["funnel"],
+            accepts_ops=[op.strip() for op in ops],
+            min_length=float(min_length), compress_min=float(compress_min), exposed_only=exposed_only,
+            interaction_kinds=[k.strip() for k in kinds] if kinds is not None else None,
+            from_rig=from_rig.strip() if from_rig is not None else None,
+            templates=templates, applies_to=dict(conditions),
+            attribute_params={param: {"attribute": mapping["attribute"],
+                                      "values": {key: float(value) for key, value in mapping["values"].items()}}
+                              for param, mapping in mappings.items()})
+
+
 @dataclass
 class BodySlotSpec:
     """A body slot declared by a species package (plan-body-slots.md).
@@ -368,6 +508,8 @@ class BodySlotSpec:
     # value) — how a pack's body-shape attribute reaches the base render.
     base_body_prompt: str = ""
     rigs: List[RigSpec] = field(default_factory=list)
+    # Regions of the slot (``RegionSpec``), applicable by the rig rules.
+    regions: List[RegionSpec] = field(default_factory=list)
     mesh_part: Optional[MeshPartSpec] = None
     # Mesh-input (T-pose) text chosen by one attribute's value:
     # {"attribute": <name>, "values": {<option>: <fragment>},
