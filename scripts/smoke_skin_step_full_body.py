@@ -191,9 +191,18 @@ def main() -> int:
         old = old_modules()
 
         def old_fp(name, *, switch=True):
+            # Ruling A94 rewords the edit views of a front made from a picture whose hair is the picture's (the
+            # fixture's "long dark hair" in the body) — pinned by smoke_picture_identity_a94. This smoke is about the
+            # skin part, so the old code fingerprints today's view texts (base_prompt with the stored front's
+            # ``picture``, as prompt_fingerprint reads it); everything A92 decides stays the old module's.
+            picture = base_body.front_from_picture(name)
+
+            def view_texts(n, v, *, profile=None):
+                return base_body.base_prompt(n, v, profile=profile, picture=picture)
             with patch.dict(sys.modules, {"app.core.base_skin": old["base_skin"]}), \
                     patch.object(core_pkg, "base_skin", old["base_skin"], create=True), \
-                    patch.object(old["base_skin"], "enabled", lambda: switch):
+                    patch.object(old["base_skin"], "enabled", lambda: switch), \
+                    patch.object(old["base_body"], "base_prompt", view_texts):
                 return old["base_body"].prompt_fingerprint(name)
 
         print("[1] fingerprints before any render")

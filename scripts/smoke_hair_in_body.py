@@ -377,7 +377,10 @@ def main() -> int:
         sidecar.write_text(json.dumps({"base_signature": bsig, "prompt_fingerprint": fp_deck}))
         check("freshness bald front", base_body.base_prompts_freshness("Long"),
               {"state": "stale", "reason": base_body.OLDER_PROMPTS})
-        sidecar.write_text(json.dumps({"base_signature": bsig, "prompt_fingerprint": fp_body}))
+        # A front rendered with a profile image records what it was made from (A74b); the fingerprint without a
+        # stored front is the one of a front made from that picture (Ruling A94: its views' texts).
+        sidecar.write_text(json.dumps({"base_signature": bsig, "prompt_fingerprint": fp_body,
+                                       "front_reference": base_body.front_reference("Long")}))
         check("freshness haired front", base_body.base_prompts_freshness("Long"), {"state": "current", "reason": ""})
         sidecar.write_text(json.dumps({"base_signature": bsig, "prompt_fingerprint": fp_deck}))
 

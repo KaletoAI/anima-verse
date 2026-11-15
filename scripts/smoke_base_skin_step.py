@@ -213,7 +213,7 @@ def section_fingerprint(config, paths):
     print("[B] the fingerprint")
     real = base_body.base_character, base_body.base_prompt
     base_body.base_character = lambda name, view, profile=None: "block" if view == "front" else None
-    base_body.base_prompt = lambda name, view, profile=None: (f"prompt {view}", "negative")
+    base_body.base_prompt = lambda name, view, profile=None, **_kw: (f"prompt {view}", "negative")
     try:
         male, female = {"gender": "male"}, {"gender": "female"}
         set_switch(config, paths, False)

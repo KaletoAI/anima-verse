@@ -55,7 +55,11 @@ not part of ``base_identity``: a mode change of the plain body's hairstyle
 only changes ``prompt_fingerprint`` (the ``OLDER_PROMPTS`` note), never
 renames a base; WEARING another hairstyle never touches the plain body — it
 makes a body shape (``figure.shape_inputs`` ``hair``, D4) whose views are
-the plain views edited to that hair (``dress_prompt(hair=…)``).
+the plain views edited to that hair (``dress_prompt(hair=…)``). A front
+made as an EDIT of a picture never re-describes the hair it shows: it keeps
+the face, the hair and the facial hair of the picture, and its edit views
+take them from the front (Ruling A94, ``edit_character`` /
+``base_prompt(picture=True)``).
 
 The prompt layout (user directive 2026-11-09, "character details always
 first"): the front's style (``base_front``) opens with its subject
@@ -178,6 +182,61 @@ HAIR_BEHIND_SHOULDERS = "the hair falls behind the shoulders"
 HEADWEAR_NEGATIVE = "hat, hood, headscarf, wig"
 #: ``BASE_NEGATIVE`` of a haired base.
 HAIRED_BASE_NEGATIVE = ", ".join((HEADWEAR_NEGATIVE, BODY_NEGATIVE, POSE_NEGATIVE))
+
+# Ruling A94 (user, 2026-11-15: "the reference image has different hair than
+# the front view"): a front that is an EDIT of a picture (``front_reference``
+# method "reference") keeps the face, the hair and the facial hair FROM THAT
+# PICTURE instead of re-describing them — the precedent of Ruling A29 for
+# clothing. Rurik's front re-described his hair from the text ("short auburn
+# hair, …"): the edit recoloured the hair, dropped the beard (nothing named
+# it) and drifted the face. So the edit block (``edit_character``) names what
+# stays (``picture_identity``) and, for hair in the body whose text is the
+# Appearance's (``hair_from_picture`` — the picture shows that hair), never the
+# hair text; the views of such a front (``base_prompt(picture=True)``) take
+# the hair and the facial hair from the front they edit. Facial hair is
+# Appearance text (the human ``facial_hair`` slot, a ``character_appearance``
+# clause — ``garment_beard.has_facial_hair``), named only when the character
+# has some: a named beard is a drawn beard. It stays in the body mesh (the base
+# body keeps the beard; only the HairDeck input loses it, ``garment_beard``).
+# A front made from text alone keeps every text of before, byte for byte.
+
+#: What the front edit keeps from its picture, in naming order (``picture_identity``).
+PICTURE_FACE, PICTURE_HAIR, PICTURE_FACIAL_HAIR = "face", "hair", "facial hair"
+#: An edit view's hair of a base whose hair came from the picture: from the front, colour included.
+VIEW_HAIR_FROM_REFERENCE = "the same hairstyle, hair length, hair volume and hair colour as the reference"
+#: An edit view's facial hair of a base made from a picture, for a character with facial hair.
+VIEW_FACIAL_HAIR_FROM_REFERENCE = "the same facial hair as the reference"
+#: ``HAIR_NEGATIVE`` without its bare "hair" term: the head negative of a BALD
+#: base made from a picture of a character with facial hair — the bare term
+#: forbids the beard the picture shows.
+FACIAL_HAIR_SAFE_HAIR_NEGATIVE = ("long hair, short hair, ponytail, braid, bun, fringe, bangs, wig, headscarf, hat, "
+                                  "hood, stubble on the scalp, hair on the shoulders, hair on the back")
+
+
+def picture_identity(*, hair: bool, facial_hair: bool) -> str:
+    """The clause of a front edit that keeps the person of the picture:
+    "the same face[, hair][ and facial hair] as the person in the picture"."""
+    things = [PICTURE_FACE] + ([PICTURE_HAIR] if hair else []) + ([PICTURE_FACIAL_HAIR] if facial_hair else [])
+    named = things[0] if len(things) == 1 else ", ".join(things[:-1]) + " and " + things[-1]
+    return f"the same {named} as the person in the picture"
+
+
+def has_facial_hair(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether the character's Appearance names facial hair (``garment_beard.has_facial_hair``)."""
+    from app.core import garment_beard
+    return garment_beard.has_facial_hair(character_name, profile=_profile_of(character_name, profile))
+
+
+def hair_from_picture(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether a picture edit takes the plain body's hair from the picture:
+    the hair is in the body (``hair_text``) and its text is the Appearance's
+    hair text (``garment_hair.appearance_hair_text``) — the hair the profile
+    image and the full-body reference show. A plain hairstyle whose text was
+    rewritten is no hair of the picture: its text is named as before."""
+    from app.core import garment_hair
+    profile = _profile_of(character_name, profile)
+    hair = hair_text(character_name, profile=profile)
+    return bool(hair) and hair == garment_hair.appearance_hair_text(character_name, profile=profile)
 
 _HAIR_RE = re.compile(r"\bhair", re.IGNORECASE)
 # The shape of ``base_signature`` — never an outfit signature (pure hex).
@@ -326,8 +385,29 @@ def base_character(character_name: str, view: str, *,
     return ", ".join(p for p in (head, BODY_TEXT, appearance) if p)
 
 
+def _picture_head(character_name: str, hair: str, profile: Dict[str, Any]) -> str:
+    """What stands in an edit view's prompt where ``_BALD_WORDS`` stood when
+    the front is an edit of a picture (Ruling A94): hair from the picture →
+    ``VIEW_HAIR_FROM_REFERENCE`` (and ``HAIR_BEHIND_SHOULDERS`` when that hair
+    falls behind them), other hair in the body → ``_haired_head``, bald →
+    ``_BALD_WORDS``; then ``VIEW_FACIAL_HAIR_FROM_REFERENCE`` for a character
+    with facial hair."""
+    from app.core.garment_hair import hair_behind_shoulders
+    if not hair:
+        parts = [_BALD_WORDS]
+    elif hair_from_picture(character_name, profile=profile):
+        parts = [VIEW_HAIR_FROM_REFERENCE]
+        if hair_behind_shoulders(character_name, profile=profile, text=hair):
+            parts.append(HAIR_BEHIND_SHOULDERS)
+    else:
+        parts = [_haired_head(character_name, hair, profile)]
+    if has_facial_hair(character_name, profile=profile):
+        parts.append(VIEW_FACIAL_HAIR_FROM_REFERENCE)
+    return ", ".join(parts)
+
+
 def base_prompt(character_name: str, view: str, *,
-                profile: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
+                profile: Optional[Dict[str, Any]] = None, picture: bool = False) -> Tuple[str, str]:
     """``(prompt, negative)`` of one base-body view. Front: the pose text —
     what follows the style (``base_character`` is the block inside it).
     Back/left/right: the ``BASE_VIEW_PROMPTS`` text, the whole prompt of the
@@ -335,11 +415,31 @@ def base_prompt(character_name: str, view: str, *,
     texts). A haired base (``hair_text``): the front's pose text keeps the
     hair off the chest (``_haired_front_pose``), an edit view names the hair
     where it said "completely bald" (``_haired_head``), and the negative
-    starts with ``HAIRED_BASE_NEGATIVE``."""
+    starts with ``HAIRED_BASE_NEGATIVE``.
+
+    ``picture`` (Ruling A94): the front is (or, for the front, will be) an
+    edit of a picture — the edit views say ``_picture_head`` where "completely
+    bald" stood, and a bald base of a character with facial hair starts its
+    negative with ``FACIAL_HAIR_SAFE_HAIR_NEGATIVE``. False (a front made from
+    text) keeps every text of before."""
     if view not in BASE_VIEWS:
         raise ValueError(f"unknown base-body view: {view!r}")
     profile = _profile_of(character_name, profile)
     hair = hair_text(character_name, profile=profile)
+    if picture:
+        if view != "front":
+            prompt = BASE_VIEW_PROMPTS[view].replace(_BALD_WORDS, _picture_head(character_name, hair, profile), 1)
+        elif hair:
+            prompt = _haired_front_pose(character_name, hair, profile)
+        else:
+            prompt = _pose_text("front")
+        if hair:
+            head = HAIRED_BASE_NEGATIVE
+        elif has_facial_hair(character_name, profile=profile):
+            head = ", ".join((FACIAL_HAIR_SAFE_HAIR_NEGATIVE, BODY_NEGATIVE, POSE_NEGATIVE))
+        else:
+            head = BASE_NEGATIVE
+        return prompt, base_negative(character_name, profile=profile, head=head)
     if not hair:
         prompt = _pose_text("front") if view == "front" else BASE_VIEW_PROMPTS[view]
         return prompt, base_negative(character_name, profile=profile)
@@ -383,7 +483,7 @@ def base_identity(character_name: str, *, profile: Optional[Dict[str, Any]] = No
 
 
 def prompt_fingerprint(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
-                       source: Optional[str] = None) -> str:
+                       source: Optional[str] = None, picture: Optional[bool] = None) -> str:
     """12 hex over the four views' character blocks, prompts and negatives —
     the texts a base render is made with — and, while the world switch
     ``base_body.skin_detail_step`` is on, the front's skin detail step
@@ -398,10 +498,17 @@ def prompt_fingerprint(character_name: str, *, profile: Optional[Dict[str, Any]]
     run there). ``source`` None = the source of the stored front of the
     current base (the front a comparison judges), else what the front is made
     from now; a front made from the profile image or from text keeps the
-    fingerprint it had before the ruling, byte for byte."""
+    fingerprint it had before the ruling, byte for byte.
+
+    Ruling A94: the views' texts are those of ``picture`` (``base_prompt``) —
+    None = whether the stored front of the current base is an edit of a
+    picture (``front_from_picture``), else what the front is made from now."""
     profile = _profile_of(character_name, profile)
+    if picture is None:
+        picture = front_from_picture(character_name, profile=profile)
     payload: Dict[str, Any] = {view: [base_character(character_name, view, profile=profile),
-                                      *base_prompt(character_name, view, profile=profile)] for view in BASE_VIEWS}
+                                      *base_prompt(character_name, view, profile=profile, picture=picture)]
+                               for view in BASE_VIEWS}
     from app.core import base_skin
     if source is None and base_skin.enabled():
         source = base_skin.front_source(character_name, profile=profile)
@@ -509,7 +616,7 @@ def _full_body_skin_carried(character_name: str, signature: str, recorded: str,
     stored = stored_front_reference(character_name, signature) or {}
     if stored.get("source") != SOURCE_FULL_BODY:
         return False
-    return recorded == prompt_fingerprint(character_name, profile=profile, source="")
+    return recorded == prompt_fingerprint(character_name, profile=profile, source="", picture=True)
 
 
 def _carried_front(meta: Dict[str, Any], appearance: str, profile_image: str) -> bool:
@@ -601,7 +708,8 @@ def prompts_current(character_name: str, signature: str, *, profile: Optional[Di
     if not meta:
         return False
     made_from = meta.get("front_reference") if isinstance(meta.get("front_reference"), dict) else {}
-    current = prompt_fingerprint(character_name, profile=profile, source=str(made_from.get("source") or ""))
+    current = prompt_fingerprint(character_name, profile=profile, source=str(made_from.get("source") or ""),
+                                 picture=made_from.get("method") == FRONT_FROM_REFERENCE)
     return recorded_fingerprint(character_name, signature, "front", meta, current=current,
                                 profile=profile) == current
 
@@ -695,23 +803,35 @@ NO_FULL_BODY_NOTE = "No full-body reference — the front is made from the profi
 
 
 def edit_character(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
-    """The character block of the front made from the profile image: the head
-    (the plain body's hair text, else ``BALD_HEAD``), ``BODY_TEXT`` and the
+    """The character block of the front made from a picture (the full-body
+    reference or the profile image): the head, ``BODY_TEXT`` and the
     packages' base-body texts (``body_slots.base_body_fragments`` — what a
     clothed picture cannot show). Never gender, age, height or the build
     slots of ``base_appearance``: the picture shows them, and naming them is
     what made every front the same build (user 2026-11-14; the validated job
-    c265fd78 names none of them)."""
+    c265fd78 names none of them).
+
+    The head (Ruling A94) keeps the person of the picture
+    (``picture_identity``): hair from the picture (``hair_from_picture``) →
+    "the same face, hair[ and facial hair] as the person in the picture" and
+    no hair text; other hair in the body → its text, then the identity
+    clause; bald → ``BALD_HEAD``, then the identity clause. Facial hair is
+    named only when the character has some (``has_facial_hair``)."""
     from app.core.body_slots import base_body_fragments
     profile = _profile_of(character_name, profile)
-    head = hair_text(character_name, profile=profile) or BALD_HEAD
-    return ", ".join(p for p in (head, BODY_TEXT, *base_body_fragments(character_name, profile=profile)) if p)
+    hair = hair_text(character_name, profile=profile)
+    facial = has_facial_hair(character_name, profile=profile)
+    if hair and hair_from_picture(character_name, profile=profile):
+        head = [picture_identity(hair=True, facial_hair=facial)]
+    else:
+        head = [hair or BALD_HEAD, picture_identity(hair=False, facial_hair=facial)]
+    return ", ".join(p for p in (*head, BODY_TEXT, *base_body_fragments(character_name, profile=profile)) if p)
 
 
 def _edit_fingerprint(character_name: str, profile: Dict[str, Any]) -> str:
     """12 hex over the texts the front edit is made with (block, pose text,
     negative) — part of ``front_reference``."""
-    prompt, negative = base_prompt(character_name, "front", profile=profile)
+    prompt, negative = base_prompt(character_name, "front", profile=profile, picture=True)
     raw = json.dumps([edit_character(character_name, profile=profile), prompt, negative], ensure_ascii=False)
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
 
@@ -758,6 +878,21 @@ def stored_front_reference(character_name: str, bsig: str) -> Optional[Dict[str,
         return None
     record = _front_sidecar(character_name, bsig).get("front_reference")
     return dict(record) if isinstance(record, dict) and record.get("method") else {"method": FRONT_FROM_TEXT}
+
+
+def front_from_picture(character_name: str, bsig: Optional[str] = None, *,
+                       profile: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether the base front of ``bsig`` (the current base when None) is an
+    edit of a picture (Ruling A94 — what ``base_prompt``'s ``picture`` says):
+    the stored front's record (``stored_front_reference``, method
+    "reference"), else — without a stored front — whether a front would be
+    made from a picture now (``front_source_image``)."""
+    profile = _profile_of(character_name, profile)
+    bsig = bsig or base_signature(character_name, profile=profile)
+    stored = stored_front_reference(character_name, bsig)
+    if stored is not None:
+        return stored.get("method") == FRONT_FROM_REFERENCE
+    return front_source_image(character_name, profile=profile)[0] is not None
 
 
 def front_reference_state(character_name: str, bsig: Optional[str] = None, *,
@@ -1096,8 +1231,12 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
                 if force or find_ref_image(character_name, _kind(v), bsig) is None]
         # Ruling A92: a new front is made from ``front_ref`` (its skin step follows that source); views
         # rendered on the stored front record the fingerprint of that front's source.
+        # Ruling A94: the views edit the front of this run (made from ``front_ref``) or the stored one.
+        picture = (front_ref.get("method") == FRONT_FROM_REFERENCE if "front" in todo
+                   else front_from_picture(character_name, bsig, profile=profile))
         fingerprint = prompt_fingerprint(character_name, profile=profile,
-                                         source=str(front_ref.get("source") or "") if "front" in todo else None)
+                                         source=str(front_ref.get("source") or "") if "front" in todo else None,
+                                         picture=picture)
         if not todo:
             logger.info("Base body %s (%s): already rendered", character_name, bsig)
             return {}
@@ -1108,9 +1247,10 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
         results: Dict[str, Optional[str]] = {}
 
         def draw(v: str, stem: Path, reference: Optional[Path]) -> Optional[Path]:
-            prompt, negative = base_prompt(character_name, v, profile=profile)
             # Ruling A74b: the front with a profile image is an edit of it (``reference`` = its frozen copy).
             edit = v == "front" and reference is not None
+            prompt, negative = base_prompt(character_name, v, profile=profile,
+                                           picture=edit if v == "front" else picture)
             character = (edit_character(character_name, profile=profile) if edit
                          else base_character(character_name, v, profile=profile))
             extra = {"base_signature": bsig, "base_identity": identity, "prompt_fingerprint": fingerprint,

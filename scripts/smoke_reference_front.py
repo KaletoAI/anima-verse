@@ -30,11 +30,13 @@ the base front's framing/light tail + the pose text; no gender, age, height or b
 [2] Base front with a profile image (generate_base_images(Demo), skin step off): 4 renders; the front's
     use case "base_front_edit", occasion "base_front", reference = a copy NAMED Demo_1.png inside
     model_refs/.editref_* (not the gallery file; its transparent corner on grey (128, 128, 128)),
-    require_reference True; style_character = edit_character(Demo) = BALD_HEAD + ", " + BODY_TEXT (the human
+    require_reference True; style_character = edit_character(Demo) = BALD_HEAD + ", " + SAME_FACE + ", " + BODY_TEXT
+    (SAME_FACE = "the same face as the person in the picture", Ruling A94 — Demo has no facial hair; the human
     package adds no base-body text) — so no "female", no "30 years old", no "average height", no
     "athletic build" in it. The composed natural-family prompt (config.join_style_prompt over the use case's
     style with that block, then the pose text) starts with
-    "change the view and position of the character in the picture to " + BALD_HEAD + ", " + BODY_TEXT +
+    "change the view and position of the character in the picture to " + BALD_HEAD + ", " + SAME_FACE + ", " +
+    BODY_TEXT +
     ", the whole figure from head to feet inside the frame with both hands inside it and empty margin above
     the head and below the feet, plain neutral background, flat even shadowless lighting on the whole figure
     and the face, sharp focus" and ends with base_prompt(front)[0]. The front's sidecar_extra records
@@ -299,7 +301,7 @@ def main() -> int:
               ("Demo_1.png", refs, True, False, (128, 128, 128)))
         check("require_reference only on the front", [bool(c.get("require_reference")) for c in CALLS],
               [True, False, False, False])
-        block = base_body.BALD_HEAD + ", " + base_body.BODY_TEXT
+        block = base_body.BALD_HEAD + ", the same face as the person in the picture, " + base_body.BODY_TEXT
         check("edit block", (front["style_character"], base_body.edit_character("Demo")), (block, block))
         check("no build words in the block", [w for w in ("female", "30 years old", "average height", "athletic")
                                               if w in front["style_character"]], [])
