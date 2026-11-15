@@ -31,8 +31,9 @@ red overlay. The server measures every factor the allowance can take (``allowanc
 and the automatic steps) once, with the same body field: the share inside the body, and the gap to the body over
 the piece's trunk band (``trunk_band_rows``: the welded vertices within the widening's half width of the axis,
 between the hips and the shoulder joints) as p50 and minimum in mm. The red overlay holds every face that is inside
-at ANY factor; ``allowance.mask`` says per overlay face (one byte, bit ``i`` = ``allowance_factors()[i]``) at which
-factors it is inside, so the client shows exactly the faces of the factor being previewed.
+at ANY factor; ``allowance.mask`` says per overlay face (a little-endian 16-bit word, bit ``i`` =
+``allowance_factors()[i]``) at which factors it is inside, so the client shows exactly the faces of the factor being
+previewed.
 
 **The depth allowance (Ruling A68).** The fit adds room in front of and behind the trunk AFTER its push-out
 (``garment_fit.depth_shift``: z away from the torso's depth centre by a percent of the torso's half depth, faded out
@@ -73,8 +74,9 @@ WHICH: Tuple[str, ...] = ("prepared", "raw")
 #: The two cached overlays (``overlay_path``).
 OVERLAYS: Tuple[str, ...] = ("ghost", "inside")
 #: Stamped into the cache key: a change of the placement or the inside rule computes every view again
-#: (2: Ruling A48c, the allowance table and the union overlay; 3: Ruling A68, the depth frame and gaps).
-VIEW_VERSION = 3
+#: (2: Ruling A48c, the allowance table and the union overlay; 3: Ruling A68, the depth frame and gaps; 4: Ruling A76,
+#: the choices up to +20 % — nine factors, two mask bytes per face).
+VIEW_VERSION = 4
 #: The ghost's colour (RGBA) and the inside faces' (the client draws them translucent / on top).
 GHOST_RGBA = [0.62, 0.70, 0.80, 1.0]
 INSIDE_RGBA = [0.97, 0.32, 0.29, 1.0]
@@ -247,12 +249,12 @@ def placement(P, F, body_P, masks) -> Tuple[float, np.ndarray]:
 def allowance_factors() -> Tuple[float, ...]:
     """Every width factor the fit allowance can apply (Ruling A47): 1.0, the settable choices
     (``garment_fit.ALLOWANCE_CHOICES`` in percent) and the automatic steps (``SCALE_RETRY_STEPS``), sorted —
-    at most 8, so one mask byte per face holds them all."""
+    at most 16, so one 16-bit mask word per face holds them all (Ruling A76: nine since the choices reach +20 %)."""
     from app.core import garment_fit as gf
     out = {1.0} | {round(float(v), 4) for v in gf.SCALE_RETRY_STEPS}
     out |= {round(1.0 + float(c) / 100.0, 4) for c in gf.ALLOWANCE_CHOICES if c != "auto"}
     factors = tuple(sorted(out))
-    assert len(factors) <= 8
+    assert len(factors) <= 16
     return factors
 
 
@@ -371,13 +373,13 @@ def allowance_table(P, F, body_P, body_F, *, s: float, t, axis: Dict[str, float]
     sdf = gf.body_sdf(np.asarray(body_P, np.float64), np.asarray(body_F, np.int64).reshape(-1, 3), vox=vox,
                       bounds=(lo - margin, hi + margin))
     area = None
-    bits = np.zeros(len(F), np.uint8)
+    bits = np.zeros(len(F), np.uint16)
     steps = []
     for i, f in enumerate(factors):
         Qf = widened(Q, f)
         centroids = Qf[F].mean(axis=1) if len(F) else np.zeros((0, 3))
         mask = sdf.sample(centroids) < 0 if len(F) else np.zeros(0, bool)
-        bits |= (mask.astype(np.uint8) << i)
+        bits |= (mask.astype(np.uint16) << i)
         area = gf.triangle_areas(Qf, F)
         total = float(area.sum())
         share = float(area[mask].sum() / total) if total > 0 else (float(mask.mean()) if len(mask) else 0.0)
@@ -482,7 +484,7 @@ def _compute(character_name: str, item_id: str, inputs: Dict[str, Any]) -> Dict[
     if union.any():
         _write_atomic(files["inside"], overlay_glb(P, F[union], INSIDE_RGBA, name="inside"))
     allowance = {"axis": axis, **table, "mask_faces": int(union.sum()),
-                 "mask": base64.b64encode(bits.astype(np.uint8).tobytes()).decode("ascii")}
+                 "mask": base64.b64encode(bits.astype("<u2").tobytes()).decode("ascii")}
     result = {"key": inputs["key"], "share": round(share, 4), "face_share": round(face_share, 4),
               "faces": int(len(F)), "inside_faces": int(mask.sum()), "bsig": inputs["bsig"],
               "placement": {"scale": s, "offset": [float(v) for v in t], "k": float(k)},

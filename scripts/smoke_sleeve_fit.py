@@ -65,7 +65,8 @@ sector radius 0.04; 28 stations of SLEEVE_STATION_M 0.02 cover s 0 .. 0.56).
     unknown values (depth 5 -> 0); a record made with the defaults
     and a profile asking sleeves_left "fitted" -> ``changed`` True (the fit is due), the same settings -> False, a
     record WITHOUT ``inputs.fit_settings`` reads as the defaults; ``validate`` refuses an unknown key, a bad sleeve
-    choice, allowance 5 and depth 5 / "auto"; ``garments._settings_changed`` judges a clothing record so and never a
+    choice, allowance 5 / 25 and depth 5 / 25 / "auto" and keeps allowance 20 / depth 20 (Ruling A76: both reach
+    +20 %); ``garments._settings_changed`` judges a clothing record so and never a
     footwear one. Ruling A68: a record made before the depth setting (no ``depth`` key) under a profile without one
     is NOT due (missing = 0), the same record under depth 6 is.
 [7] Fails on the old code: at commit 8e6d8c65a (before Ruling A47) app/core/garment_fit.py has no ``fit_sleeve``,
@@ -276,8 +277,8 @@ def test_settings():
     check("[6] another setting -> due", fs.changed(record, profile, "item_a"))
     check("[6] the same settings -> not due", not fs.changed(record, {}, "item_a"))
     check("[6] a record without settings reads as the defaults", not fs.changed({"inputs": {}}, {}, "item_a"))
-    for bad in ({"colour": "red"}, {"sleeves_left": "baggy"}, {"allowance": 5}, {"depth": 5}, {"depth": "auto"},
-                {"depth": True}, {}):
+    for bad in ({"colour": "red"}, {"sleeves_left": "baggy"}, {"allowance": 5}, {"allowance": 25}, {"depth": 5},
+                {"depth": 25}, {"depth": "auto"}, {"depth": True}, {}):
         try:
             fs.validate(bad)
             ok = False
@@ -286,6 +287,8 @@ def test_settings():
         check(f"[6] validate refuses {bad}", ok)
     check("[6] validate keeps good values", fs.validate({"allowance": 6, "sleeves_right": "wider", "depth": 10})
           == {"allowance": 6, "sleeves_right": "wider", "depth": 10})
+    check("[6] validate keeps +20 % (Ruling A76)", fs.validate({"allowance": 20, "depth": 20})
+          == {"allowance": 20, "depth": 20})
     check("[6] garments._settings_changed: clothing record due",
           garments._settings_changed("Demo", "item_a", record, profile))
     check("[6] ... a footwear record never", not garments._settings_changed("Demo", "item_a",

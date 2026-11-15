@@ -17,11 +17,11 @@ path is a recorder that counts: ``service.get_image_service``,
 ``garment_store.garment_fsig`` / ``garment_method`` / ``garment_hsig`` come
 from fixed tables.
 
-Fixture, character Demo (fsig = 12 hex; FV = FIT_VERSION, hair 16 clothing 14 footwear = FOOTWEAR_FIT_VERSION):
+Fixture, character Demo (fsig = 12 hex; FV = FIT_VERSION, hair 16 clothing 15 footwear = FOOTWEAR_FIT_VERSION):
   item   kind      stored fsig  current fsig  base sha  fit_version  method
   hA     hair      aaaaaaaaaaaa same          SHA       (none)       edit_chain
-  cB     clothing  bbbbbbbbbbbb same          SHA       12 (FV - 2)  edit_chain
-  cC     clothing  cccccccccccc same          SHA       14 (= FV)    edit_chain
+  cB     clothing  bbbbbbbbbbbb same          SHA       13 (FV - 2)  edit_chain
+  cC     clothing  cccccccccccc same          SHA       15 (= FV)    edit_chain
   cD     clothing  dddddddddddd eeeeeeeeeeee  SHA       1            edit_chain
   hE     hair      ffffffffffff same          OTHER     (none)       edit_chain
 Each edit-chain item has prepared/{item}_{fsig}.glb (bytes b"P"+item) and its
@@ -36,9 +36,9 @@ record's inputs.prepared_sha256 = sha256 of those bytes.
 [3] Released: sweep([Demo], pause 0) -> {Demo: [cB, hA]}; _fit called for
     cB then hA (the order of [1]), each once; 0 hub calls; 2 assembly
     schedules (one per published fit); exactly 2 log lines "Garment refit
-    Demo/<item>" ending "ok", naming "fit_version 12 -> 14" (cB: a fit two clothing versions back
+    Demo/<item>" ending "ok", naming "fit_version 13 -> 15" (cB: a fit two clothing versions back
     is outdated) and "None -> 16" (hA);
-    records of hA / cB: accepted, fit_version 16 / 14, base sha SHA; _fit_state
+    records of hA / cB: accepted, fit_version 16 / 15, base sha SHA; _fit_state
     "accepted"; cC: GLB bytes and record byte-identical, mtime unchanged; cD
     and hE records unchanged. A second sweep -> {} (nothing left).
 [4] HairDeck hair hH (method hairdeck, fsig 999999999999, hsig
@@ -157,7 +157,7 @@ def main() -> int:
         SHA, OTHER = "s" * 64, "o" * 64
         FV = garment_fit.FIT_VERSION
         # Footwear follows garment_fit.FOOTWEAR_FIT_VERSION (bumped by the boots plan): read, not pinned.
-        check("FIT_VERSION", FV, {"hair": 16, "clothing": 14, "footwear": garment_fit.FOOTWEAR_FIT_VERSION})
+        check("FIT_VERSION", FV, {"hair": 16, "clothing": 15, "footwear": garment_fit.FOOTWEAR_FIT_VERSION})
         charmod.get_character_dir("Demo", create=True)
         garments_root = gs._root("Demo")
         garments_root.mkdir(parents=True, exist_ok=True)

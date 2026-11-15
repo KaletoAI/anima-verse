@@ -95,6 +95,30 @@ RIGGED_SMOOTH_UNTIL = 7
 SIDE_MARGIN_M = 0.03
 #: Samples along a smoothed displacement checked for a crossing of the body (``push_kept``).
 SIDE_PATH_SAMPLES = 12
+#: Ruling A76 — the sheets of a piece keep their order (``layer_lift``). A mesher builds a garment as a stack of thin
+#: sheets a few millimetres apart: Kai's leather jacket (``item_555a7a01`` ``a5e763666d1a``) is a leather sheet over a
+#: lining sheet, each a closed shell, the lining 2.4 mm (p50) to 5.3 mm (p10) under the leather. Every clothing push
+#: set each vertex inside the clearance onto the SAME clearance level, one by one, and laying a sleeve onto its arm
+#: kept 0.3 of a vertex's radial detail: the sheets met and crossed. Seen from behind, 0.8 % of the placed piece was
+#: lining, 15.0 % after the placement push, 15.7 % fitted — the lining's blue-black showed through the black leather
+#: as purple patches. So each vertex gets its own clearance: the clearance + its LIFT, the field depth it had at the
+#: placement over the sheets under it (a sheet over another ends that much further out, on a parallel level of the
+#: field) — in the placement push, in the rigged clearance pass and in a sleeve laid onto its arm. Under it: of its
+#: ``CARRY_K`` nearest within ``CARRY_M``, those lying deeper along its own field gradient within 45 deg of straight
+#: under it, at most half ``CARRY_M`` across, whose gradient lies within acos(``CARRY_COS``) of its own (an armpit's
+#: sleeve and trunk face each other and lift neither). Kai's jacket: lift p50 2.9 mm, p90 8.5 mm; the back shows
+#: 1.4 % lining fitted (15.7 % before). The push numbers and the rigged push numbers measure the push BEYOND a vertex's lift (the
+#: depth it was inside the body, as before; ``LIFT_SPREAD_PASSES``): the gates judge the placement, not the stack.
+CARRY_M = 0.012
+CARRY_K = 48
+CARRY_COS = 0.8
+#: ... and a push counts beyond the lift as the push's smoothing spreads it (``lift_spread``): the larger of a vertex's
+#: own lift and its lift smoothed over the mesh this many passes. A sheet's edge without a sheet under it (lift 0)
+#: is drawn out with its lifted neighbours by 2.1 to 2.8 mm (median): measured beyond its own lift alone, Kai's jeans
+#: (``825e34df4aaf``, the user-accepted refusal 0.1512) would read 0.1577, the jacket 0.1138 for 0.1100, Rosi's piece
+#: (``6caf444c4413``) 0.2608 for 0.2527; beyond the spread lift 0.1467, 0.1055 and 0.2527 (6 passes: 0.1443 / 0.1036 /
+#: 0.2502 — more than the stack's thickness).
+LIFT_SPREAD_PASSES = 3
 #: A vertex the transfer put inside the rigged body leaves by the side it had before (``_transfer_sides``) when that
 #: side is more than acos(SIDE_COS) = 60 deg from the field's gradient: it is projected onto the nearest body surface
 #: whose outward normal lies within acos(SIDE_COS) of that side (``_side_projection``).
@@ -210,8 +234,14 @@ SIDE_DEEP_M = 0.03
 #: new edge (``new_edge_max_m``, ``NEW_EDGE_MAX_M``). Every clothing fit is refitted: the repaired donors change the
 #: weights wherever such a vertex is among a garment vertex's nearest, so Ruling A51's exemption of version 12 fits
 #: without a deep opening went with this version.
+#: clothing 15 (2026-11-15, Ruling A76 — one CPU refit of every clothing fit, no hub job): the sheets of a piece keep
+#: their order (``layer_lift``: each vertex's clearance + the depth it had over the sheets under it, in the placement
+#: push, the rigged pass and a sleeve laid onto the arm; Kai's leather jacket ``a5e763666d1a``: the lining seen from
+#: behind 15.7 % -> 1.4 %, the purple patches), and a recess opening's inside lies nearer its inside than its rim
+#: (``OPEN_INSIDE_SHARE``; the jacket: 1056 faces left out of its front edges -> 0, the hole on the chest). Every
+#: clothing fit is refitted: a mesher's double sheets are in nearly every piece.
 #: footwear: its own fit (``footwear_fit``), versioned there.
-FIT_VERSION: Dict[str, int] = {"hair": 16, "clothing": 14, "footwear": FOOTWEAR_FIT_VERSION}
+FIT_VERSION: Dict[str, int] = {"hair": 16, "clothing": 15, "footwear": FOOTWEAR_FIT_VERSION}
 
 
 def fit_version_for(kind: str, method: str = "") -> Optional[int]:
@@ -573,6 +603,19 @@ OPEN_SHOWN_SHARE = 0.5
 OPEN_SHOWN_RECESS_PX = 5
 #: ... and the garment encloses it: at most this share of its ring (``OPEN_RING_PX``) lies outside the garment mask.
 OPEN_SHOWN_OUTLINE_MAX = 0.25
+#: Ruling A76: a recess opening's inside lies nearer its inside than its rim — a seed of step 3, and a vertex the
+#: inside grows through in step 4, lies at least this share of the opening's recess behind the median front of its
+#: ring. Kai's leather jacket (``a5e763666d1a``, open at the front): the inside its opening (54 052 px) shows is the
+#: back panel, 168.6 px behind the ring — a single layer, never a seed; its seeds were the front panels' own edges,
+#: where the mesh's projection overlaps the opening by a few pixels: 9.0 px (median) behind the ring, 14 px behind
+#: the chest beside them, so "OPEN_STEP_PX behind the front within OPEN_LOCAL_PX" took them for the inside; the
+#: growth then took the zipper strips and the leather beside them up to the collar (1056 faces: 364 leather and
+#: zipper, 270 lining, 422 between) — fitted, the chest showed through a hole beside each edge. None of its seeds
+#: lies half the recess behind the ring (0.0 %): nothing is left out. The same edges went on Kira's blazers —
+#: ``2860e5a646c0`` keeps the seeds deep in its V (34 %): 2220 -> 657 faces, the lapels' edges stay; ``77c40b6840a7``
+#: none (its seeds lie at its ring, -0.5 px median of a 50.2 px recess): 1613 -> 0 — and Kai's jeans (``825e34df4aaf``,
+#: the waistband's 4868 px): 614 -> 0.
+OPEN_INSIDE_SHARE = 0.5
 #: Most sampling steps per face edge of the dense depth images (``_depth_images``, Ruling A51): a face that long gets
 #: (401 x 402) / 2 = 80 601 samples; the remeshed blazer's longest face is 57 px, its median 10.
 OPEN_DENSE_MAX = 400
@@ -615,6 +658,8 @@ def opening_lining(Pd: np.ndarray, Fd: np.ndarray, opening, garment_mask,
     # the mask's border pixels fall on) is the front itself and never the inside
     recessed = ndimage.maximum_filter(front, size=2 * OPEN_LOCAL_PX + 1)[iy, ix] - depth >= OPEN_STEP_PX
     seeds = np.zeros(len(Pd), bool)
+    # Ruling A76: per vertex the depth a recess opening's inside lies behind (``OPEN_INSIDE_SHARE``); -inf elsewhere
+    inside_depth = np.full(len(Pd), -np.inf)
     accepted = np.zeros((h, w), bool)
     accepted_shown = np.zeros((h, w), bool)
     sizes = np.bincount(labels.ravel(), minlength=n + 1)
@@ -627,7 +672,8 @@ def opening_lining(Pd: np.ndarray, Fd: np.ndarray, opening, garment_mask,
         around = on_front & ring[iy, ix]
         if inside.sum() < 3 or around.sum() < 3:
             continue
-        recess = float(np.median(depth[around]) - np.median(depth[inside]))
+        ring_front = float(np.median(depth[around]))
+        recess = float(ring_front - np.median(depth[inside]))
         entry: Dict[str, Any] = {"pixels": int(sizes[c]), "recess_px": round(recess, 1)}
         by = "recess" if recess >= OPEN_RECESS_PX else None
         if sh is not None:
@@ -643,7 +689,11 @@ def opening_lining(Pd: np.ndarray, Fd: np.ndarray, opening, garment_mask,
             entry["by"] = by
         report["components"].append(entry)
         if by == "recess":
-            seeds |= inside & layered & recessed
+            near = ndimage.binary_dilation(comp, iterations=OPEN_REACH_PX)[iy, ix]
+            inside_depth[near] = np.maximum(inside_depth[near], ring_front - OPEN_INSIDE_SHARE * recess)
+            deep = depth <= ring_front - OPEN_INSIDE_SHARE * recess
+            entry["seeds"] = int((inside & layered & recessed & deep).sum())
+            seeds |= inside & layered & recessed & deep
             accepted |= comp
         elif by == "shown":
             accepted_shown |= comp
@@ -651,7 +701,8 @@ def opening_lining(Pd: np.ndarray, Fd: np.ndarray, opening, garment_mask,
     if seeds.any():
         # Grow over the mesh: the inside reaches past the worn view's opening, under the lapels that close in when
         # worn — front-most there, recessed behind the front within OPEN_LOCAL_PX, connected to a seed.
-        region = ndimage.binary_dilation(accepted, iterations=OPEN_REACH_PX)[iy, ix] & layered
+        region = (ndimage.binary_dilation(accepted, iterations=OPEN_REACH_PX)[iy, ix] & layered
+                  & (depth <= inside_depth))
         lining |= _grow_lining(F, A, seeds, region, recessed)
     # Ruling A51, a component shown as body: its seeds are its vertices on shown pixels with garment at least
     # OPEN_LAYER_PX behind them (``ahead``), front-most or not — a flush inside is a sheet with two faces, and its rear
@@ -890,7 +941,8 @@ def push_out(Q0, Fd, sdf: Sdf, *, clear: float, spread: float = 0.0, spread_dept
 
 
 def push_kept(Q0, adjacency, sdf: Sdf, *, clear: float, iterations: int, smooth_until: int,
-              margin: float, passes: int = SMOOTH_PASSES, start: Optional[np.ndarray] = None) -> np.ndarray:
+              margin: float, passes: int = SMOOTH_PASSES, start: Optional[np.ndarray] = None,
+              lift: Optional[np.ndarray] = None) -> np.ndarray:
     """The clothing push (unrigged ``fit_clothing`` and rigged ``transfer_skinned``) -> the displacement of ``Q0``.
 
     ``push_out``'s loop without the crown spread — each iteration adds ``max(clear - d, 0)`` along the field's
@@ -908,8 +960,12 @@ def push_kept(Q0, adjacency, sdf: Sdf, *, clear: float, iterations: int, smooth_
       nothing is carried the result equals the plain loop bit for bit.
     - ``start`` (rows of displacements, zero rows = none): where a vertex the transfer buried on the wrong side starts
       (``_side_projection``: on its own side of the body, not at the nearest exit of the solid it was dropped into).
+    - ``lift`` (Ruling A76, per row, field units; ``layer_lift``): a vertex's clearance is ``clear`` + its lift, so a
+      sheet over another stays over it.
     """
     Q0 = np.asarray(Q0, np.float64)
+    if lift is not None:
+        clear = clear + np.asarray(lift, np.float64)
     s0 = sdf.sample(Q0)
     floor = np.minimum(s0, 0.0) - sdf.vox
     reach = np.maximum(-s0, 0.0) + clear + margin
@@ -924,6 +980,42 @@ def push_kept(Q0, adjacency, sdf: Sdf, *, clear: float, iterations: int, smooth_
                 carried |= sdf.sample(Q0 + t * S) < floor
             D = np.where(carried[:, None], D, S)
     return D
+
+
+def layer_lift(Q0, sdf: Sdf, carry: float, *, k: int = CARRY_K, cos: float = CARRY_COS) -> np.ndarray:
+    """Ruling A76 (``CARRY_M`` block): per position of ``Q0`` how far it lies over the sheets under it — the largest
+    field depth difference ``s(i) - s(j)``, at most ``carry``, to an UNDER neighbour ``j``: one of its ``k`` nearest
+    within ``carry`` whose offset to it along its own unit field gradient ``g`` is positive (it lies further out)
+    and at least its offset across ``g`` (within 45 deg of straight under it: a single sheet tilted against the
+    field lifts nothing), at most ``carry / 2`` across, and whose own gradient lies within acos(``cos``) of ``g``.
+    0 where nothing lies under a vertex (a single sheet, the innermost one)."""
+    from scipy.spatial import cKDTree
+    Q0 = np.asarray(Q0, np.float64)
+    n = len(Q0)
+    lift = np.zeros(n)
+    if n < 2 or carry <= 0:
+        return lift
+    kk = min(k, n)
+    dist, nn = cKDTree(Q0).query(Q0, k=kk, distance_upper_bound=carry, workers=fit_kernels.threads())
+    dist, nn = dist.reshape(n, kk), nn.reshape(n, kk)
+    real = np.isfinite(dist)
+    nn = np.where(real, nn, np.arange(n)[:, None])
+    s0 = sdf.sample(Q0)
+    g = _unit(sdf.grad(Q0))
+    off = Q0[:, None, :] - Q0[nn]
+    along = np.einsum("nkj,nj->nk", off, g)
+    across = np.linalg.norm(off - along[..., None] * g[:, None, :], axis=2)
+    under = (real & (along > 0) & (across <= carry / 2.0) & (along >= across)
+             & (np.einsum("nj,nkj->nk", g, g[nn]) >= cos))
+    rise = np.where(under, s0[:, None] - s0[nn], 0.0).max(1)
+    return np.clip(rise, 0.0, carry)
+
+
+def lift_spread(lift, adjacency, passes: int = LIFT_SPREAD_PASSES) -> np.ndarray:
+    """Ruling A76 (``LIFT_SPREAD_PASSES``): per vertex the larger of ``lift`` and ``lift`` smoothed over the mesh
+    ``passes`` passes (``_smooth``) — the part of a push the push numbers do not count."""
+    lift = np.asarray(lift, np.float64)
+    return np.maximum(lift, _smooth(lift[:, None], adjacency, passes)[:, 0])
 
 
 def _in_crop(sdf: Sdf, X: np.ndarray) -> np.ndarray:
@@ -1715,11 +1807,13 @@ def sleeve_reason_text(choice: str, why: List[Dict[str, Any]]) -> str:
     return f"Auto -> {label}" + (": " + " and ".join(parts) if parts else "")
 
 
-def fit_sleeve(X: np.ndarray, Xs: np.ndarray, share: np.ndarray, arm: _ArmSections) -> np.ndarray:
+def fit_sleeve(X: np.ndarray, Xs: np.ndarray, share: np.ndarray, arm: _ArmSections,
+               lift: Optional[np.ndarray] = None) -> np.ndarray:
     """The displacement (rows of ``X``) that lays one sleeve onto its arm (block above): ``X`` the garment in the
     bind space now, ``Xs`` the same vertices as placed before the push (their sleeve shape), ``share`` per vertex
     the transfer weight on that arm's chain. Rows of vertices off the sleeve are zero; the blend
-    (``SLEEVE_FIT_BLEND_M`` x ``share``) is in it, the band smoothing (``blend_sleeves``) is not."""
+    (``SLEEVE_FIT_BLEND_M`` x ``share``) is in it, the band smoothing (``blend_sleeves``) is not. ``lift`` (Ruling
+    A76, per vertex, metres; ``layer_lift``) is added to each vertex's radius: a sheet over another stays over it."""
     D = np.zeros_like(X)
     rows = np.nonzero(share > 1e-4)[0]
     ring = share[rows] > SLEEVE_ARM_SHARE
@@ -1735,6 +1829,8 @@ def fit_sleeve(X: np.ndarray, Xs: np.ndarray, share: np.ndarray, arm: _ArmSectio
     detail = np.hypot(a - c[:, 0], b - c[:, 1]) - _station_value(radius, s)
     r = (arm.radius(s, theta) + SLEEVE_FIT_CLEAR_M
          + np.maximum(SLEEVE_FIT_DETAIL * detail, -0.5 * SLEEVE_FIT_CLEAR_M))
+    if lift is not None:
+        r = r + np.asarray(lift, np.float64)[rows]
     ca = arm.centre(s)
     T = _chain_point(arm.pts, arm.reference, s, seg, ca[:, 0] + r * np.cos(theta), ca[:, 1] + r * np.sin(theta))
     lo, hi = SLEEVE_FIT_BLEND_M
@@ -1893,14 +1989,14 @@ def _front_back_gaps(X: np.ndarray, d: np.ndarray, trunk: np.ndarray, body_P) ->
 
 
 def place_sleeves(X: np.ndarray, Xs: np.ndarray, Wg: np.ndarray, body: BodyMesh, *, faces, adjacency,
-                  choices: Dict[str, str], inside: Optional[np.ndarray] = None
-                  ) -> Tuple[np.ndarray, Dict[str, Any], np.ndarray, np.ndarray]:
+                  choices: Dict[str, str], inside: Optional[np.ndarray] = None,
+                  lift: Optional[np.ndarray] = None) -> Tuple[np.ndarray, Dict[str, Any], np.ndarray, np.ndarray]:
     """Per side the sleeve choice (block above; ``choices`` from ``sleeve_choices``), measured on ``Xs`` (the
     pre-push placement in the bind space; ``inside`` per vertex whether it lies inside the body there) and applied to
     ``X`` -> ``(X', report {side: {setting, applied, why, reason, numbers, shift_max_m}}, fitted, region)`` —
     ``fitted`` the vertex mask the fit laid onto the arm (their placement push is discarded: ``clothing_metrics``
     counts them as not pushed), ``region`` the vertices the placement may have moved (``blend_sleeves``).
-    "generated" / "wider" re-centre that side first (``center_sleeves``)."""
+    "generated" / "wider" re-centre that side first (``center_sleeves``). ``lift``: ``fit_sleeve``'s (Ruling A76)."""
     X = np.asarray(X, np.float64)
     Xs = np.asarray(Xs, np.float64)
     frames = limb_frames(body)
@@ -1937,7 +2033,7 @@ def place_sleeves(X: np.ndarray, Xs: np.ndarray, Wg: np.ndarray, body: BodyMesh,
     fitted = np.zeros(len(X), bool)
     for side, choice in applied.items():
         if choice == "fitted":
-            Ds = fit_sleeve(X, Xs, shares[side], arms[side])
+            Ds = fit_sleeve(X, Xs, shares[side], arms[side], lift=lift)
             fitted |= (np.linalg.norm(Ds, axis=1) > 0) & (shares[side] > SLEEVE_ARM_SHARE)
         elif choice == "wider":
             Ds = widen_sleeve(X, shares[side], arms[side])
@@ -2042,7 +2138,8 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
                      rigged_iterations: int = RIGGED_ITERATIONS,
                      limbs: Optional[Dict[str, Any]] = None, Q_pre=None,
                      sleeves: Optional[Dict[str, str]] = None,
-                     ease_z: Optional[np.ndarray] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
+                     ease_z: Optional[np.ndarray] = None,
+                     lift: Optional[np.ndarray] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Carry welded clothing positions ``Q`` (unrigged units) into the rigged bind space (metres) by the body's own
     skinning -> ``(X, report)``. ``limbs`` (a refit, ``fit_clothing``): the source fit per welded vertex (``x0``,
     ``w0``, ``names0``, ``frames``, ``kinds``) — its limb part is aligned onto this body's limbs (``align_limbs``)
@@ -2075,6 +2172,8 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
     5. Ruling A68: ``ease_z`` (per vertex, unrigged units — ``depth_shift`` of ``Q``) is added to the rigged z
        (times ``k``) as the last step: the depth allowance never changes which part a vertex rides or how the
        clearance pass moves it, and every number of the report is measured with it.
+    ``lift`` (Ruling A76, per vertex, metres; ``layer_lift`` of the placement): each vertex's clearance in step 4 and
+    its radius in a sleeve laid onto the arm (step 3b) are raised by it, so the piece's sheets keep their order.
     """
     from scipy.spatial import cKDTree
     from app.core.rig_contract import norm_bone_name
@@ -2151,22 +2250,25 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
     sdf = body_sdf(Pr, body_rigged.faces, vox=vox_m, bounds=(lo, hi))
     X, sleeve_report, fitted, sleeve_region = place_sleeves(X, Xs, Wg, body_rigged, faces=faces,
                                                             adjacency=adjacency, choices=sleeves or {},
-                                                            inside=sdf.sample(Xs) < 0)
+                                                            inside=sdf.sample(Xs) < 0, lift=lift)
     if (X.min(0) < lo + 0.5 * margin_m).any() or (X.max(0) > hi - 0.5 * margin_m).any():
         lo, hi = np.minimum(lo, X.min(0) - margin_m), np.maximum(hi, X.max(0) + margin_m)
         sdf = body_sdf(Pr, body_rigged.faces, vox=vox_m, bounds=(lo, hi))
     toward = _transfer_sides(Q, X, body_unrigged, bones, Wg, sdf)
     start, side_report = _side_projection(sdf, X, toward, Pr, body_rigged.faces, clear_m)
     Xd = push_kept(X, adjacency, sdf, clear=clear_m, iterations=rigged_iterations,
-                   smooth_until=RIGGED_SMOOTH_UNTIL, margin=SIDE_MARGIN_M, start=start)
+                   smooth_until=RIGGED_SMOOTH_UNTIL, margin=SIDE_MARGIN_M, start=start, lift=lift)
     if sleeve_region.any() and sleeve_shards(X + Xd, Xs, faces, sleeve_region).any():
         # Ruling A47: a strip the clearance pass stretched in the placed sleeves is evened out, then held clear.
         Y = X + Xd
         relax_sleeve_region(Y, Xs, faces, adjacency, sleeve_region)
         Xd = Y - X
-        Xd = Xd + push_kept(Y, adjacency, sdf, clear=clear_m, iterations=3, smooth_until=0, margin=SIDE_MARGIN_M)
+        Xd = Xd + push_kept(Y, adjacency, sdf, clear=clear_m, iterations=3, smooth_until=0, margin=SIDE_MARGIN_M,
+                            lift=lift)
     X = X + Xd
     rigged_push = np.linalg.norm(Xd, axis=1)
+    if lift is not None:
+        rigged_push = np.maximum(rigged_push - lift_spread(lift, adjacency), 0.0)
     if ease_z is not None and np.any(ease_z):
         X[:, 2] += np.asarray(ease_z, np.float64) * float(k)
         if (X.min(0) < lo + 0.5 * margin_m).any() or (X.max(0) > hi - 0.5 * margin_m).any():
@@ -2865,15 +2967,19 @@ def new_edge_max(X: np.ndarray, X0: np.ndarray, faces) -> float:
 
 
 def clothing_metrics(X, Fw, Q0_pre, Q_post, transfer_report: Dict[str, Any],
-                     exclude: Optional[np.ndarray] = None) -> Dict[str, Any]:
+                     exclude: Optional[np.ndarray] = None, lift: Optional[np.ndarray] = None) -> Dict[str, Any]:
     """Mesh gate numbers of a fitted clothing piece (``CLOTHING_GATES``), positions as in ``metrics``. ``exclude``
     (a vertex mask): counted as not pushed — the sleeves laid onto the arm (Ruling A47), whose placement push is
     discarded (they are placed at the sleeve clearance instead; their own check is ``sleeve_shards``). They stay in
     the share's denominator, as every vertex did when the gate limits were measured. ``new_edge_max_m`` (Ruling A72):
-    the longest edge the fit grew beyond the placed piece ``Q0_pre``."""
+    the longest edge the fit grew beyond the placed piece ``Q0_pre``. ``lift`` (Ruling A76, per vertex, metres; the
+    ``lift_spread`` of ``layer_lift``): a push counts beyond it — the depth the vertex was inside the body, not its
+    stack's thickness."""
     X = np.asarray(X, np.float64)
     Fw = np.asarray(Fw, np.int64).reshape(-1, 3)
     push = np.linalg.norm(np.asarray(Q_post, np.float64) - np.asarray(Q0_pre, np.float64), axis=1)
+    if lift is not None:
+        push = np.maximum(push - np.asarray(lift, np.float64), 0.0)
     if exclude is not None and len(exclude) == len(push) and np.any(exclude):
         push = np.where(np.asarray(exclude, bool), 0.0, push)
     _, share = components(X, Fw)
@@ -3080,8 +3186,9 @@ def widen(Q, scale: float, *, centre_x: float, centre_z: float, half_width: floa
 # size). The fit adds it to the rigged piece's z as the last step of the transfer (``transfer_skinned`` step 5), so it
 # never changes which part a vertex rides; the push numbers (``deep_push_share``, ``max_push_m``) measure the push
 # alone, every gate of the rigged body judges the fit with the room added. 0 = no shift — the default, so a fit made
-# before A68 is unchanged and not due. Auto (the width allowance) never adds depth.
-DEPTH_CHOICES: Tuple[int, ...] = (0, 3, 6, 10)
+# before A68 is unchanged and not due. Auto (the width allowance) never adds depth. Ruling A76: up to +20 % (the user asked for
+# 20 % of room, not 10 %); Kai's half trunk depth 133.4 mm -> +15 % 20.0 mm, +20 % 26.7 mm.
+DEPTH_CHOICES: Tuple[int, ...] = (0, 3, 6, 10, 15, 20)
 DEPTH_RAMP = 0.03
 
 
@@ -3160,10 +3267,13 @@ def depth_ease(Q, ease: float, **frame: float) -> np.ndarray:
     return Q
 
 
-def push_numbers(Q0_pre, Q_post, exclude: Optional[np.ndarray] = None) -> Dict[str, float]:
+def push_numbers(Q0_pre, Q_post, exclude: Optional[np.ndarray] = None,
+                 lift: Optional[np.ndarray] = None) -> Dict[str, float]:
     """``max_push_m`` and ``deep_push_share`` of a push-out (positions in metres, as ``clothing_metrics``; ``exclude``
-    as there)."""
+    and ``lift`` as there)."""
     push = np.linalg.norm(np.asarray(Q_post, np.float64) - np.asarray(Q0_pre, np.float64), axis=1)
+    if lift is not None:
+        push = np.maximum(push - np.asarray(lift, np.float64), 0.0)
     if exclude is not None and len(exclude) == len(push) and np.any(exclude):
         push = np.where(np.asarray(exclude, bool), 0.0, push)
     return {"max_push_m": round(float(push.max()) if len(push) else 0.0, 4),
@@ -3192,8 +3302,9 @@ def too_small(reasons: List[str]) -> bool:
 # accepted. A piece's fit settings may fix the allowance instead (``ALLOWANCE_CHOICES``, percent: that ``widen``
 # factor and no retry — the sides, and the depth in proportion before the push-out; room in front and behind after
 # the push-out is the separate depth allowance, Ruling A68). A fit whose trunk is mapped from its base fit (outfit bodies) takes
-# its width from the base fit: no allowance there.
-ALLOWANCE_CHOICES: Tuple[Any, ...] = ("auto", 0, 3, 6, 10)
+# its width from the base fit: no allowance there. Ruling A76: a fixed allowance goes up to +20 % (x1.20); Auto keeps
+# its steps up to 1.08 — the gates still judge every fixed choice, so a too-wide piece is refused, never clamped.
+ALLOWANCE_CHOICES: Tuple[Any, ...] = ("auto", 0, 3, 6, 10, 15, 20)
 ALLOWANCE_DEEP = 0.08
 ALLOWANCE_TIGHT = 0.18
 
@@ -3399,21 +3510,28 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
     depth_args: List[Dict[str, float]] = [{}]
     # the vertices the first finished fit laid onto the arm: left out of every later push number (scale steps)
     fitted_rows: List[Optional[np.ndarray]] = [None]
+    # Ruling A76: the lift of the placement last pushed (``layer_lift``, body units) — its transfer keeps it.
+    lift_u: List[Optional[np.ndarray]] = [None]
+    spread_m: List[Optional[np.ndarray]] = [None]     # its ``lift_spread``, metres: what the push numbers skip
 
     def push(Qs):
         sdf = body_sdf(body_u.positions, body_u.faces, vox=VOX_M / k,
                        bounds=(Qs.min(0) - margin, Qs.max(0) + margin))
-        disp = push_kept(Qs, _adjacency(Fk, len(Qs)), sdf, clear=CLEAR_M / k, iterations=PUSH_ITERATIONS,
-                         smooth_until=PUSH_SMOOTH_UNTIL, margin=SIDE_MARGIN_M / k)
+        adjacency = _adjacency(Fk, len(Qs))
+        lift_u[0] = layer_lift(Qs, sdf, CARRY_M / k)
+        spread_m[0] = lift_spread(lift_u[0], adjacency) * k
+        disp = push_kept(Qs, adjacency, sdf, clear=CLEAR_M / k, iterations=PUSH_ITERATIONS,
+                         smooth_until=PUSH_SMOOTH_UNTIL, margin=SIDE_MARGIN_M / k, lift=lift_u[0])
         Qp = Qs + disp
-        return Qp, disp, push_numbers(Qs * k, Qp * k, exclude=fitted_rows[0])
+        return Qp, disp, push_numbers(Qs * k, Qp * k, exclude=fitted_rows[0], lift=spread_m[0])
 
     def finish(Qs, Qp, disp) -> FitResult:
         split_y = float(Qp[:, 1].max() - CLOTHING_WAIST_DROP * height_u)
         # Ruling A68: the depth allowance of the pushed placement, added on the rigged body (``depth_shift``).
         ease_z = depth_shift(Qp, ease_u[0], **depth_args[0]) if ease_u[0] else None
         X, transfer_report = transfer_skinned(Qp, body_u, body_r, faces=Fk, k=k, split_y=split_y, limbs=limbs,
-                                              Q_pre=Qs, sleeves=choices, ease_z=ease_z)
+                                              Q_pre=Qs, sleeves=choices, ease_z=ease_z,
+                                              lift=None if lift_u[0] is None else lift_u[0] * k)
         fitted = transfer_report.pop("sleeve_fitted", None)
         if fitted_rows[0] is None and fitted is not None and np.any(fitted):
             fitted_rows[0] = fitted
@@ -3426,7 +3544,7 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
         remap[used] = np.arange(len(used))
         J = np.where(W > 0, remap[J], 0)
         names = [body_r.joint_names[i] for i in used]
-        m = clothing_metrics(X, Fk, Qs * k, Qp * k, transfer_report, exclude=fitted)
+        m = clothing_metrics(X, Fk, Qs * k, Qp * k, transfer_report, exclude=fitted, lift=spread_m[0])
         torso_mapped = "torso" in ((transfer_report.get("limbs") or {}).get("chains") or {})
         ok, reasons = gate(m, clothing_gates(torso_mapped=torso_mapped))
 

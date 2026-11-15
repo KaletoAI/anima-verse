@@ -7,9 +7,9 @@
 import type { Light } from './hairstylesModel'
 
 export type SleeveChoice = 'auto' | 'generated' | 'wider' | 'fitted'
-export type AllowanceChoice = 'auto' | 0 | 3 | 6 | 10
+export type AllowanceChoice = 'auto' | 0 | 3 | 6 | 10 | 15 | 20
 /** Ruling A68: room in front of and behind the trunk, percent of the torso's half depth (no Auto). */
-export type DepthChoice = 0 | 3 | 6 | 10
+export type DepthChoice = 0 | 3 | 6 | 10 | 15 | 20
 export type SleeveSideKey = 'left' | 'right'
 
 /** One rule of the Auto choice (`garment_fit.auto_sleeve`). */
@@ -88,8 +88,8 @@ export interface FitSettingsInfo {
 type T = (s: string) => string
 
 export const SLEEVE_CHOICES: SleeveChoice[] = ['auto', 'generated', 'wider', 'fitted']
-export const ALLOWANCE_CHOICES: AllowanceChoice[] = ['auto', 0, 3, 6, 10]
-export const DEPTH_CHOICES: DepthChoice[] = [0, 3, 6, 10]
+export const ALLOWANCE_CHOICES: AllowanceChoice[] = ['auto', 0, 3, 6, 10, 15, 20]
+export const DEPTH_CHOICES: DepthChoice[] = [0, 3, 6, 10, 15, 20]
 
 export const SLEEVE_LABELS: Record<SleeveChoice, string> = {
   auto: 'Auto', generated: 'As generated', wider: 'Wider', fitted: 'Fitted to the arm',
@@ -110,8 +110,10 @@ export const ALLOWANCE_HINT = 'Widens the piece about the body’s centre before
 /** Ruling A68. */
 export const DEPTH_HINT = 'Room in front of and behind the trunk, added after the fit pushes the piece out: the front and the back stand off by this share of the torso’s half depth. Sleeves, the collar and the neck opening keep their size. Auto never adds depth; the default is +0 %.'
 
-export function depthLabel(choice: DepthChoice): string {
-  return `+${choice} %`
+/** "+6 %", with the room in mm when the torso's half depth is known ("+6 % · 8.0 mm", Ruling A76). */
+export function depthLabel(choice: DepthChoice, halfDepthMm?: number | null): string {
+  return halfDepthMm != null && Number.isFinite(halfDepthMm)
+    ? `+${choice} % · ${((choice / 100) * halfDepthMm).toFixed(1)} mm` : `+${choice} %`
 }
 
 const WHERE: Record<string, string> = { 'upper arm': 'upper arm', forearm: 'forearm', wrist: 'wrist' }

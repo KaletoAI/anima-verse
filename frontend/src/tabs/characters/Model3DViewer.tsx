@@ -290,7 +290,7 @@ export interface ViewerCompanion {
   /** Ruling A48c: the companion follows the viewer's `deform` (it is part of the shown mesh, e.g. its red faces). */
   follow?: boolean
   /** Ruling A48c: show only the faces whose byte in `bits` (one per face, in the file's order) has bit `bit`. */
-  faceBits?: { bits: Uint8Array; bit: number } | null
+  faceBits?: { bits: Uint16Array; bit: number } | null
 }
 
 /** Ruling A48c: a live position map of the shown model — `map` rewrites flat xyz positions (in the loaded model's
@@ -2767,7 +2767,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
 
         // ── Live deformation (Ruling A48c) ── `deform` rewrites the positions of the model and of every companion
         // with `follow`, in the model's own frame, always from the positions as loaded (kept per geometry the first
-        // time); `faceBits` narrows a companion to the faces whose byte has the bit. Nothing is reloaded.
+        // time); `faceBits` narrows a companion to the faces whose mask word has the bit. Nothing is reloaded.
         const deformRoot = (root: Object3D, map: ViewerDeform['map'] | null) => {
           root.updateMatrixWorld(true)
           const rootInv = root.matrixWorld.clone().invert()

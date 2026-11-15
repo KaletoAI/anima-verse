@@ -55,12 +55,12 @@ grid lines).
 
 Ruling A48c — the fit allowance's preview numbers (``allowance_factors`` / ``widen_axis`` / ``trunk_band_rows`` /
 ``allowance_table``):
-[5b] The body view of [5] carries ``allowance``: factors (1.0, 1.02, 1.03, 1.04, 1.06, 1.08, 1.1) — 1.0, the
-    settable +3 / +6 / +10 % and the automatic steps 1.02 .. 1.08, sorted; its first step's share is the view's
+[5b] The body view of [5] carries ``allowance``: factors (1.0, 1.02, 1.03, 1.04, 1.06, 1.08, 1.1, 1.15, 1.2) — 1.0,
+    the settable +3 / +6 / +10 / +15 / +20 % (Ruling A76) and the automatic steps 1.02 .. 1.08, sorted; its first step's share is the view's
     share (0.125 ± 0.01). The axis in the mesh frame: the body's median x 0 and its band's depth middle z 0, the
     half width 0.12 · 1.7 = 0.204 in the body frame -> mapped back with s 0.2, t (0, 1, 0): (0 − 0)/0.2 = 0,
-    (0 − 0)/0.2 = 0, 0.204/0.2 = 1.02 (± 1e-6). The red overlay holds 96 faces and the mask 96 bytes, each with
-    bit 0 (inside at 1.0) set.
+    (0 − 0)/0.2 = 0, 0.204/0.2 = 1.02 (± 1e-6). The red overlay holds 96 faces and the mask 96 little-endian
+    16-bit words (192 bytes), each with bit 0 (inside at 1.0) set.
 [7] ``allowance_table`` on a cylinder: body = a closed cylinder of radius R 0.10 about the y axis (256 sides, the
     side's flats lie 0.10 · cos(π/256) = 0.099992 from the axis — 0.008 mm, nothing at this tolerance), y 0 .. 0.3
     in 151 rings (2 mm apart: the body's surface voxelisation samples each triangle 5 × 5, so it must be dense);
@@ -68,12 +68,13 @@ Ruling A48c — the fit allowance's preview numbers (``allowance_factors`` / ``w
     one unit = 1 m), axis (0, 0), half width 0.5 (every vertex within it: x and z are both scaled by f, so the tube
     stays round with radius 0.092 · f). Voxel 1 mm.
     a. Gap = 0.092 · f − 0.100, in mm (every band vertex at the same radius, so the median = the minimum):
-       f 1.00 -> −8.00, 1.02 -> −6.16, 1.03 -> −5.24, 1.04 -> −4.32, 1.06 -> −2.48, 1.08 -> −0.64, 1.10 -> +1.20
-       (± 0.5 mm: the field's trilinear sampling at 1 mm).
+       f 1.00 -> −8.00, 1.02 -> −6.16, 1.03 -> −5.24, 1.04 -> −4.32, 1.06 -> −2.48, 1.08 -> −0.64, 1.10 -> +1.20,
+       1.15 -> +5.80, 1.20 -> +10.40 (± 0.5 mm: the field's trilinear sampling at 1 mm; ± 1.5 mm beyond
+       ``SDF_EXACT_BAND_VOX`` (6) voxels outside the body, where the EDT reads up to about a voxel short).
     b. Inside: a triangle's centroid lies at radius r·f·(1 + 2 cos(2π/96))/3 = r·f·0.998573 (two corners on one
        ring, one on the next, all at the same angle span): at 1.08 0.099217 (0.78 mm inside the body), at 1.10
-       0.101058 (1.06 mm outside) -> share 1.0 for every f up to 1.08 and 0.0 at 1.10; every face's mask byte
-       has bits 0 .. 5 set and bit 6 clear = 63.
+       0.101058 (1.06 mm outside) -> share 1.0 for every f up to 1.08 and 0.0 at 1.10, 1.15, 1.20; every face's
+       mask word has bits 0 .. 5 set and bits 6 .. 8 clear = 63.
     c. The band: with trunk heights (0.115, 0.185) the rings at 0.12 .. 0.18 = 7 · 96 = 672 vertices; with the
        half width 0.05 instead (no heights): per ring the points with |0.092 cos a| ≤ 0.05, |cos a| ≤ 0.5435, a in
        [57.1°, 122.9°] and its mirror — at 3.75° spacing k 16 .. 32 = 17 points, twice -> 34 per ring, 374 in all.
@@ -83,18 +84,18 @@ Ruling A68 — the depth allowance in the view (``widen_axis``' depth frame, ``a
     ramp 0.03 · 1.7 (0.051) = 0.102 and y_limit 1.7 − 0.21 · 1.7 = 1.343 (body frame); half depth: the body band
     (3 .. 15 % of 1.7 below the garment's top 1.2) spans the box's z ±0.1 -> 0.1. In the mesh frame (s 0.2,
     t (0, 1, 0)): ramp 0.051/0.2 = 0.255, x_limit 0.51, y_limit (1.343 − 1)/0.2 = 1.715, half depth 0.5.
-    ``allowance.depth``: choices [0, 3, 6, 10], ease in mm = choice/100 · 0.1 m · k 1 -> [0, 3, 6, 10]; every step
-    carries 4 ``depth_gaps``.
+    ``allowance.depth``: choices [0, 3, 6, 10, 15, 20], ease in mm = choice/100 · 0.1 m · k 1 -> [0, 3, 6, 10, 15,
+    20]; every one of the 9 steps carries 6 ``depth_gaps``.
 [7d] ``allowance_table`` on the cylinder of [7] with a depth frame in the axis (x_limit 0.5 and y_limit 1.0 —
     every vertex at full weight —, ramp 0.01, half depth 0.04 -> ease = 0.4 · the choice in mm): the front sector
     (within 35° of +z: the tube's angles a with x = r cos a, z = r sin a in [55°, 125°] -> k 15 .. 33 at 3.75°, 19
     per ring) and the back sector (19 per ring) move by +e / −e (|z| ≥ 0.092 · sin 55° = 0.075 ≫ the ramp). The gap of a
     sector point = sqrt(x² + (z ± e)²) − R grows with |sin a|, symmetric about 90° / 270°, so the median (10th of
     19, the same on every ring) is the point at a = 90° / 270°: 92·f + 0.4·d − 100 mm on both sides — f 1.00: d 0
-    −8.0, 3 −6.8, 6 −5.6, 10 −4.0; f 1.10: 1.2, 2.4, 3.6, 5.2 (± 0.5 mm). The half depth is kept small so every
-    gap stays within ``SDF_EXACT_BAND_VOX`` (6) voxels of 1 mm outside the body, where the field is exact (beyond
-    it the EDT reads about a voxel short; the real view's voxel is 3.4 mm / k, a band of about 2 cm). The ease
-    in mm is the choice / 100 · 0.04 m = [0, 1.2, 2.4, 4.0].
+    −8.0, 3 −6.8, 6 −5.6, 10 −4.0, 15 −2.0, 20 0.0; f 1.10: 1.2, 2.4, 3.6, 5.2, 7.2, 9.2 (± 0.5 mm within
+    ``SDF_EXACT_BAND_VOX`` (6) voxels of 1 mm outside the body, where the field is exact; ± 1.5 mm beyond it, where
+    the EDT reads up to about a voxel short — the real view's voxel is 3.4 mm / k, a band of about 2 cm). The ease
+    in mm is the choice / 100 · 0.04 m = [0, 1.2, 2.4, 4.0, 6.0, 8.0].
 """
 import json
 import os
@@ -383,16 +384,16 @@ def main() -> int:
 
             print("[5b] the allowance block of the body view (Ruling A48c)")
             al = body.get("allowance") or {}
-            check("factors", al.get("factors"), [1.0, 1.02, 1.03, 1.04, 1.06, 1.08, 1.1])
+            check("factors", al.get("factors"), [1.0, 1.02, 1.03, 1.04, 1.06, 1.08, 1.1, 1.15, 1.2])
             near("first step = the view's share", ((al.get("steps") or [{}])[0]).get("share"), 0.125, 0.01)
             ax = al.get("axis") or {}
             near("axis centre x (mesh frame)", ax.get("centre_x"), 0.0, 1e-6)
             near("axis centre z (mesh frame)", ax.get("centre_z"), 0.0, 1e-6)
             near("axis half width (mesh frame)", ax.get("half_width"), 1.02, 1e-6)
             import base64
-            mask = base64.b64decode(al.get("mask") or "")
-            check("mask: one byte per overlay face, bit 0 set", (al.get("mask_faces"), len(mask),
-                                                                 all(b & 1 for b in mask)), (96, 96, True))
+            mask = np.frombuffer(base64.b64decode(al.get("mask") or ""), "<u2")
+            check("mask: one 16-bit word per overlay face, bit 0 set", (al.get("mask_faces"), len(mask),
+                                                                        bool(all(b & 1 for b in mask))), (96, 96, True))
 
             print("[5c] the depth frame of the body view (Ruling A68)")
             near("ramp (mesh frame)", ax.get("ramp"), 0.255, 1e-6)
@@ -401,8 +402,8 @@ def main() -> int:
             near("half depth (mesh frame)", ax.get("half_depth"), 0.5, 1e-6)
             check("depth choices / ease mm", ((al.get("depth") or {}).get("choices"),
                                               (al.get("depth") or {}).get("ease_mm")),
-                  ([0, 3, 6, 10], [0.0, 3.0, 6.0, 10.0]))
-            check("depth gaps per step", [len(st.get("depth_gaps") or []) for st in al.get("steps") or []], [4] * 7)
+                  ([0, 3, 6, 10, 15, 20], [0.0, 3.0, 6.0, 10.0, 15.0, 20.0]))
+            check("depth gaps per step", [len(st.get("depth_gaps") or []) for st in al.get("steps") or []], [6] * 9)
 
             print("[6] auth")
             client.cookies.set(sessions.SESSION_COOKIE_NAME, tokens[users.ROLE_USER])
@@ -424,11 +425,14 @@ def main() -> int:
         axis = {"centre_x": 0.0, "centre_z": 0.0, "half_width": 0.5}
         table = garment_mesh_view.allowance_table(tube_P, tube_F, cyl_P, cyl_F, s=1.0, t=np.zeros(3), axis=axis,
                                                   vox=0.001, k=1.0, trunk_y=None)
-        gaps = {1.0: -8.0, 1.02: -6.16, 1.03: -5.24, 1.04: -4.32, 1.06: -2.48, 1.08: -0.64, 1.1: 1.2}
+        gaps = {1.0: -8.0, 1.02: -6.16, 1.03: -5.24, 1.04: -4.32, 1.06: -2.48, 1.08: -0.64, 1.1: 1.2, 1.15: 5.8,
+                1.2: 10.4}
         for st in table["steps"]:
-            near(f"gap p50 at x{st['factor']}", st["gap_p50_mm"], gaps[st["factor"]], 0.5)
-            near(f"gap min at x{st['factor']}", st["gap_min_mm"], gaps[st["factor"]], 0.5)
-        check("share per factor", [st["share"] for st in table["steps"]], [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0])
+            tol = 0.5 if gaps[st["factor"]] <= 6.0 else 1.5
+            near(f"gap p50 at x{st['factor']}", st["gap_p50_mm"], gaps[st["factor"]], tol)
+            near(f"gap min at x{st['factor']}", st["gap_min_mm"], gaps[st["factor"]], tol)
+        check("share per factor", [st["share"] for st in table["steps"]],
+              [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0])
         check("mask bytes", (int(table["bits"].min()), int(table["bits"].max()), int(table["union"].sum())),
               (63, 63, len(tube_F)))
         check("band, every vertex", table["band_vertices"], 11 * 96)
@@ -442,12 +446,14 @@ def main() -> int:
         axis_d = {**axis, "ramp": 0.01, "x_limit": 0.5, "y_limit": 1.0, "half_depth": 0.04}
         table = garment_mesh_view.allowance_table(tube_P, tube_F, cyl_P, cyl_F, s=1.0, t=np.zeros(3), axis=axis_d,
                                                   vox=0.001, k=1.0, trunk_y=None)
-        check("ease mm", table["depth"], {"choices": [0, 3, 6, 10], "ease_mm": [0.0, 1.2, 2.4, 4.0]})
+        check("ease mm", table["depth"], {"choices": [0, 3, 6, 10, 15, 20],
+                                          "ease_mm": [0.0, 1.2, 2.4, 4.0, 6.0, 8.0]})
         for st in table["steps"]:
-            for d, (front, back) in zip((0, 3, 6, 10), st["depth_gaps"]):
+            for d, (front, back) in zip((0, 3, 6, 10, 15, 20), st["depth_gaps"]):
                 want = 92.0 * st["factor"] + 0.4 * d - 100.0
-                near(f"front at x{st['factor']} +{d} %", front, want, 0.5)
-                near(f"back at x{st['factor']} +{d} %", back, want, 0.5)
+                tol = 0.5 if want <= 6.0 else 1.5
+                near(f"front at x{st['factor']} +{d} %", front, want, tol)
+                near(f"back at x{st['factor']} +{d} %", back, want, tol)
 
     print("\nFAILED: " + ", ".join(FAILS) if FAILS else "\nall checks passed")
     return 1 if FAILS else 0

@@ -134,7 +134,7 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
         disabled={busy || saving !== null} title={t(DEPTH_HINT)}
         onChange={(e) => { void save({ depth: Number(e.target.value) as DepthChoice }) }}>
         {DEPTH_CHOICES.map((c) => (
-          <option key={c} value={String(c)}>{depthLabel(c)}</option>
+          <option key={c} value={String(c)}>{depthLabel(c, info.depth?.half_depth_mm)}</option>
         ))}
       </select>
       <span className="ga-hint" style={REASON} title={t(DEPTH_HINT)}>

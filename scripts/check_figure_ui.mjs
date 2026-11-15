@@ -773,7 +773,8 @@ check('[21] Figure tab source', [/<StepRowView\b/.test(fieldFigure), /<SubTabs\b
 // [22] Ruling A48c — the mesh view's fit allowance (`fitWiden.ts`, pure helpers; the rule's parity with the fit is
 //      scripts/smoke_fit_widen_parity.py). Hand-derived: +3 % → ×1.03, Auto has no factor of its own; ×1.04 is an
 //      automatic step and no setting, ×1.10 is +10 %; Auto's factor is read only from a fit made with Auto (a fit set to
-//      +10 % says nothing about Auto); "Pz8=" is base64 of the bytes 63, 63 (bits 0..5); the factor list
+//      +10 % says nothing about Auto); "PwAAAQ==" is base64 of the bytes 63, 0, 0, 1: the little-endian 16-bit words 63
+//      (bits 0..5) and 256 (bit 8, Ruling A76: nine factors since the choices reach +20 %); the factor list
 //      [1, 1.02, 1.03, 1.04, 1.06, 1.08, 1.1] puts ×1.06 at bit 4; a gap of −3 mm reads "−3.0 mm".
 {
   const w = await loadBundled(join(ROOT, 'frontend/src/tabs/characters/fitWiden.ts'));
@@ -789,8 +790,8 @@ check('[21] Figure tab source', [/<StepRowView\b/.test(fieldFigure), /<SubTabs\b
     w.autoFactor(null)], [1.04, null, null, null]);
   const factors = [1, 1.02, 1.03, 1.04, 1.06, 1.08, 1.1];
   check('[22] labels, bits, mask', [w.factorText(1.04), w.factorText(1), w.maskBit(factors, 1.06), w.maskBit(factors, 1.05),
-    Array.from(w.decodeMask('Pz8=')), w.mmText(-3), w.mmText(12.44), w.mmText(null)],
-    ['×1.04', '×1.00', 4, -1, [63, 63], '−3.0 mm', '12.4 mm', '–']);
+    Array.from(w.decodeMask('PwAAAQ==')), w.mmText(-3), w.mmText(12.44), w.mmText(null)],
+    ['×1.04', '×1.00', 4, -1, [63, 256], '−3.0 mm', '12.4 mm', '–']);
   const table = { factors, steps: factors.map((f, i) => ({ factor: f, share: i / 10, face_share: 0, inside_faces: 0,
     gap_p50_mm: null, gap_min_mm: null })) };
   check('[22] step lookup', [w.stepAt(table, 1.06)?.share, w.stepAt(table, 1.05), w.stepAt(null, 1)], [0.4, null, null]);

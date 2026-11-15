@@ -55,11 +55,11 @@ rounds its four corners by 3 + 2 + 1 = 6 px each: the component is 7476 px.
     OPEN_DENSE_MAX 400 — so samples lie at most 1 px apart): all 7500 opening px
     see the back at -52.5 (within 0.01). With the two-triangle back panel [2] holds unchanged: 1525 vertices, 2880
     faces.
-[6] The due rule (``expected_fit_version``): FIT_VERSION clothing 14 (13 was Ruling A51's openings; Ruling A72's
-    repaired donors change every clothing fit, so A51's exemption of a version 12 record without a deep opening
-    went with it). Every clothing record below 14 expects 14 (stale) — version 12 with a kept deep component, with a
-    shallow one, with all left out, without an opening report; versions 11 and 13 — a version 14 record 14; hair /
-    footwear unchanged.
+[6] The due rule (``expected_fit_version``): FIT_VERSION clothing 15 (13 was Ruling A51's openings, 14 Ruling A72's
+    repaired donors — A51's exemption of a version 12 record without a deep opening went with it — and 15 Ruling
+    A76's kept sheet order, which changes every clothing fit). Every clothing record below 15 expects 15 (stale) —
+    version 12 with a kept deep component, with a shallow one, with all left out, without an opening report;
+    versions 11, 13 and 14 — a version 15 record 15; hair / footwear unchanged.
 [8] The evidence itself (``garment_source.shown_body``): a base copy 120 x 200 px with alpha — the figure rows
     20 .. 179, cols 30 .. 89 in skin (200, 160, 130), the rest transparent; the worn view on the neutral grey (128,
     128, 128): the same figure, a dark piece (30, 30, 40) over rows 40 .. 119, cols 30 .. 89 except a V window rows
@@ -231,21 +231,22 @@ kept = {"components": [{"pixels": 100, "recess_px": 5.0, "dropped": False}], "fa
 shallow = {"components": [{"pixels": 100, "recess_px": 3.0, "dropped": False}], "faces": 0}
 gone = {"components": [{"pixels": 100, "recess_px": 50.0, "dropped": True}], "faces": 12}
 cases = [
-    ({"kind": "clothing", "fit_version": 12, "report": {"opening": kept}}, 14),
-    ({"kind": "clothing", "fit_version": 12, "report": {"opening": shallow}}, 14),
-    ({"kind": "clothing", "fit_version": 12, "report": {"opening": gone}}, 14),
-    ({"kind": "clothing", "fit_version": 12, "report": {"opening": None}}, 14),
-    ({"kind": "clothing", "fit_version": 12}, 14),
-    ({"kind": "clothing", "fit_version": 11, "report": {"opening": gone}}, 14),
-    ({"kind": "clothing", "fit_version": 13, "report": {"opening": kept}}, 14),
-    ({"kind": "clothing", "fit_version": 14, "report": {"opening": kept}}, 14),
+    ({"kind": "clothing", "fit_version": 12, "report": {"opening": kept}}, 15),
+    ({"kind": "clothing", "fit_version": 12, "report": {"opening": shallow}}, 15),
+    ({"kind": "clothing", "fit_version": 12, "report": {"opening": gone}}, 15),
+    ({"kind": "clothing", "fit_version": 12, "report": {"opening": None}}, 15),
+    ({"kind": "clothing", "fit_version": 12}, 15),
+    ({"kind": "clothing", "fit_version": 11, "report": {"opening": gone}}, 15),
+    ({"kind": "clothing", "fit_version": 13, "report": {"opening": kept}}, 15),
+    ({"kind": "clothing", "fit_version": 14, "report": {"opening": kept}}, 15),
+    ({"kind": "clothing", "fit_version": 15, "report": {"opening": kept}}, 15),
     ({"kind": "hair", "fit_version": 12}, gf.FIT_VERSION["hair"]),
     ({"kind": "footwear", "fit_version": 12, "method": "shoe"}, gf.FIT_VERSION["footwear"]),
 ]
 got = [gf.expected_fit_version(r) for r, _want in cases]
-check("[6] FIT_VERSION clothing 14, no A51 exemption left",
-      gf.FIT_VERSION["clothing"] == 14 and not hasattr(gf, "CLOTHING_OPENING_UNCHANGED"), f"{gf.FIT_VERSION}")
-check("[6] expected versions: every clothing record -> 14, other kinds as before",
+check("[6] FIT_VERSION clothing 15, no A51 exemption left",
+      gf.FIT_VERSION["clothing"] == 15 and not hasattr(gf, "CLOTHING_OPENING_UNCHANGED"), f"{gf.FIT_VERSION}")
+check("[6] expected versions: every clothing record -> 15, other kinds as before",
       got == [want for _r, want in cases], f"{got}")
 
 # [8] the evidence: worn minus base

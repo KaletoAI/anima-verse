@@ -51,7 +51,8 @@ export interface AllowanceView {
   /** Ruling A68: the depth choices (percent) and their shift in mm on this body. */
   depth?: { choices: number[]; ease_mm: number[] }
   mask_faces: number
-  /** base64, one byte per face of the red overlay: bit i = inside the body at `factors[i]`. */
+  /** base64, one little-endian 16-bit word per face of the red overlay: bit i = inside the body at `factors[i]`
+   *  (Ruling A76: nine factors since the choices reach +20 %). */
   mask: string
 }
 
@@ -150,11 +151,11 @@ export function maskBit(factors: number[] | undefined, factor: number): number {
   return (factors || []).findIndex((f) => Math.abs(f - factor) < 1e-6)
 }
 
-/** The overlay's per-face bytes. */
-export function decodeMask(b64: string): Uint8Array {
+/** The overlay's per-face words (little-endian 16 bit). */
+export function decodeMask(b64: string): Uint16Array {
   const bin = atob(b64 || '')
-  const out = new Uint8Array(bin.length)
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+  const out = new Uint16Array(Math.floor(bin.length / 2))
+  for (let i = 0; i < out.length; i++) out[i] = bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8)
   return out
 }
 
