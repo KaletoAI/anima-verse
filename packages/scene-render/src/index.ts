@@ -195,7 +195,12 @@ export { PARTNER_MAX, PARTNER_COLLIDE_MAX, PARTNER_PUSH_MAX_M, PARTNER_HYST_M, P
   PARTNER_PREFILTER_SLACK_M, bodySphere, reachSphere, selectPartners, partnerCapsules, broadPhase, nearestCapsules,
   createPartnerList, snapshotPartnerLists, fillPartnerList, consumerPartnerCapsules, cullPartnerList, chainPartners,
   contactAnglePair, releasedAngle, snapshotPartner } from './partnerContact'
-export type { Sphere, ChannelNow, PartnerCapsule, PartnerSnapshot, PartnerList } from './partnerContact'
+export type { Sphere, PartnerCapsule, PartnerSnapshot, PartnerList } from './partnerContact'
+
+export { CHANNEL_BLEND_S, CHANNEL_HYST_M, CHANNEL_HYST_DEG, CHANNEL_GROW, channelCoords, inZone, allowedRadius,
+  radialGuidanceAngle, depthScale, stepEngagement, channelGate, suppressedIds, guideRod, previewChannel, bindChannels,
+  channelLineSegments, channelWireframe, placeChannelWireframe } from './channels'
+export type { ChannelNow, Engagement } from './channels'
 
 export { PROBE_NAME, PROBE_COLOR, probeCapsules, probeSweepOffset, probeSweptPose, probeSnapshot } from './partnerProbe'
 export type { ProbeSourceCapsule, ProbePose } from './partnerProbe'

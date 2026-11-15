@@ -30,6 +30,7 @@
  */
 import { HAIR_ONLY_REGIONS } from './collision'
 import type { CapsuleNow, CollisionBinding, Vec3 } from './collision'
+import type { ChannelNow } from './channels'
 
 // --- constants (measured by `scripts/check_partner_collision.mjs`, plan Task 9; the numbers: docs/schnittstellen-3d.md,
 // "Partner contact (cross-person)") ---------------------------------------------------------------------------------
@@ -69,16 +70,13 @@ const CONTACT_REFINE = 14
 /** A sphere in world space. */
 export interface Sphere { c: Vec3; r: number }
 
-/**
- * A declared channel in the current frame. Stage 2 (channels) defines it; in
- * stage 1 no channel exists, so the type is empty and `channels` is always `[]`.
- */
-export type ChannelNow = never
-
 /** One partner capsule as the snapshot holds it: payload id, region and world-space capsule. */
 export interface PartnerCapsule { id: string; region: string; now: CapsuleNow }
 
-/** A partner's capsules at the start of phase B (spec Part 1, "two-phase frame"). */
+/**
+ * A partner's capsules at the start of phase B (spec Part 1, "two-phase frame"); `channels` are its declared
+ * channels in the same frame (`channels.ts` `bindChannels`), `[]` when it has none.
+ */
 export interface PartnerSnapshot {
   name: string
   capsules: readonly PartnerCapsule[]
@@ -451,7 +449,7 @@ export function releasedAngle(prevDeg: number, wantDeg: number, dt: number): num
  * after phase A), then every bound capsule's id, region and world-space
  * capsule. `now` is held by reference — `update()` assigns a fresh object
  * per capsule rather than mutating it, so a later update leaves this snapshot
- * intact. `channels` is `[]` until stage 2.
+ * intact. `channels` is `[]` here; a figure with bound channels adds them (`bindChannels`).
  */
 export function snapshotPartner(name: string, binding: CollisionBinding,
   interaction: PartnerSnapshot['interaction']): PartnerSnapshot {

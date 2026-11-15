@@ -23,7 +23,7 @@ import type { PartnerCapsule, PartnerSnapshot } from './partnerContact'
 
 /** The probe's partner name: contact rows name its capsules `probe:<capsule id>`. */
 export const PROBE_NAME = 'probe'
-/** The probe's wireframe colour — apart from every region colour of `CAPSULE_REGION_COLORS`. */
+/** The probe's wireframe colour — apart from every body region colour of `CAPSULE_REGION_COLORS` (its `partner` entry is this value). */
 export const PROBE_COLOR = 0xff4fd8
 
 /** One capsule of the probe's source set in its bind pose (model frame, metres). */

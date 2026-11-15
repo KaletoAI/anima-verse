@@ -272,7 +272,34 @@ export function capsuleLineSegments(r: number, length: number, meridians = 8, ca
 
 // --- three binding ----------------------------------------------------------------------------------------------
 
-interface JointRef { mesh: SkinnedMesh; index: number }
+/** A joint of a body skinned mesh: the mesh and the bone's index in its skeleton. */
+export interface JointRef { mesh: SkinnedMesh; index: number }
+
+/**
+ * The joints of a figure's BODY skinned meshes by `normBoneName` — never a
+ * garment's (`inGarment`), since a bind position lives in the body's POSITION
+ * space; the first mesh that has a joint keeps it. Shared by `bindCollision`
+ * and `channels.ts` `bindChannels`.
+ */
+export function bodyJoints(root: Object3D): Map<string, JointRef> {
+  const joints = new Map<string, JointRef>()
+  root.traverse(o => {
+    const mesh = o as SkinnedMesh
+    if (!mesh.isSkinnedMesh || !mesh.skeleton || inGarment(mesh)) return
+    mesh.skeleton.bones.forEach((bone, index) => {
+      const key = normBoneName(bone.name)
+      if (!joints.has(key)) joints.set(key, { mesh, index })
+    })
+  })
+  return joints
+}
+
+/** A body joint in the CURRENT frame (`jointNowFrom` with the mesh's and the bone's matrices as they are now). */
+export function jointRefNow(ref: JointRef): JointNow {
+  return jointNowFrom(ref.mesh.matrixWorld.elements, ref.mesh.bindMatrixInverse.elements,
+    ref.mesh.skeleton.bones[ref.index].matrixWorld.elements, ref.mesh.skeleton.boneInverses[ref.index].elements,
+    ref.mesh.bindMatrix.elements)
+}
 
 /**
  * A capsule bound to a figure; `now` is refreshed by `update()`. `bind` = the
@@ -302,15 +329,7 @@ export interface CollisionBinding {
  */
 export function bindCollision(three: Three, root: Object3D, payload: CollisionPayload | null | undefined): CollisionBinding | null {
   if (!payload || payload.version !== COLLISION_VERSION || !payload.capsules?.length) return null
-  const joints = new Map<string, JointRef>()
-  root.traverse(o => {
-    const mesh = o as SkinnedMesh
-    if (!mesh.isSkinnedMesh || !mesh.skeleton || inGarment(mesh)) return
-    mesh.skeleton.bones.forEach((bone, index) => {
-      const key = normBoneName(bone.name)
-      if (!joints.has(key)) joints.set(key, { mesh, index })
-    })
-  })
+  const joints = bodyJoints(root)
   // A joint in the bind pose: the bone's world matrix IS inverse(boneInverse) and the mesh's world matrix its
   // bindMatrix, so a vertex fixed to it goes through `bindMatrix` (the endpoint rule with the bind matrices). The
   // inverse is inverse(bindMatrix) — NOT the mesh's `bindMatrixInverse`, which the default `attached` bind mode
@@ -329,11 +348,8 @@ export function bindCollision(three: Three, root: Object3D, payload: CollisionPa
     bound.push({ capsule, ja, jb, now: { a: [0, 0, 0], b: [0, 0, 0], r: capsule.r },
       bind: capsuleNow(capsule, jointAtBind(ja), jointAtBind(jb)) })
   }
-  const jointNow = (ref: JointRef): JointNow => jointNowFrom(ref.mesh.matrixWorld.elements,
-    ref.mesh.bindMatrixInverse.elements, ref.mesh.skeleton.bones[ref.index].matrixWorld.elements,
-    ref.mesh.skeleton.boneInverses[ref.index].elements, ref.mesh.bindMatrix.elements)
   const update = () => {
-    for (const entry of bound) entry.now = capsuleNow(entry.capsule, jointNow(entry.ja), jointNow(entry.jb))
+    for (const entry of bound) entry.now = capsuleNow(entry.capsule, jointRefNow(entry.ja), jointRefNow(entry.jb))
   }
   update()
   return { capsules: bound, missing, update }
@@ -346,6 +362,9 @@ export const CAPSULE_REGION_COLORS: Record<string, number> = {
   leg: 0xff9f1c, arm: 0x2ec4b6, torso: 0x7bd389, head: 0xe0aaff,
   chest: 0xff6b9a, chest_hair: 0xffc94d, shoulder_hair: 0xf4a259, attached_part: 0x5ab0ff, appendage: 0x9b8cff,
   outer_trunk: 0x3ddbd9,
+  // Not body regions: a declared channel (`channels.ts` `channelWireframe`) and another figure's capsules (the
+  // partner probe's colour, `partnerProbe.ts` `PROBE_COLOR`).
+  channel: 0xff3b30, partner: 0xff4fd8,
 }
 
 interface WireState { r: number; length: number }
