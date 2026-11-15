@@ -43,6 +43,8 @@ export interface FacingTile {
   mirrored: MirrorRecord | null
   restorable: boolean
   followup?: MirrorFollowup
+  /** Ruling A96: an arm reaches clearly in front of or behind the body (server `view_facing.arms_out`). */
+  arms_out?: boolean
 }
 
 /** Both side views measured facing the same edge (server `view_facing.pair_state`). */
@@ -59,6 +61,9 @@ export const FACING_UNSURE_REASON = 'The facing check is not sure which way this
   + 'A {view} view faces the {view} edge of the image — check it and mirror it if needed.'
 export const FACING_SAME = 'Same as other'
 export const FACING_SAME_REASON = 'Both side views face the {side} edge of the image — one of them must be mirrored.'
+export const ARMS_OUT = 'Arm away'
+export const ARMS_OUT_REASON = 'An arm reaches clearly in front of or behind the body — the 3D model needs the arms '
+  + 'hanging beside it. Regenerate this view (↻); Run all stops before the model until then.'
 export const MIRRORED_AUTO = 'Mirrored automatically: it faced the other way ({pct} % sure).'
 export const MIRRORED_HAND = 'Mirrored by hand.'
 
@@ -71,7 +76,7 @@ function fill(text: string, view: Side, side: Side | null, t: Tr): string {
 /**
  * The tile's facing line — only when something needs a look: a sure wrong view → red "Wrong way"; both
  * sides facing the same edge → yellow "Same as other"; an unsure view → yellow "Facing unsure". Short, the
- * tile is narrow: the whole reason (what is wrong, what fixes it — the Mirror, no image job) is the line's
+ * tile is narrow — an arm held away from the body (Ruling A96) → red "Arm away", after a wrong facing: the whole reason (what is wrong, what fixes it — the Mirror, no image job) is the line's
  * mouse-over. Null for a view that faces the right way (or has no facing).
  */
 export function facingLine(f: FacingTile | null | undefined, pair: FacingPair | null | undefined, view: Side,
@@ -79,6 +84,9 @@ export function facingLine(f: FacingTile | null | undefined, pair: FacingPair | 
   if (!f) return null
   if (f.state === 'wrong') {
     return { light: 'red', text: t(FACING_WRONG), title: fill(t(FACING_WRONG_REASON), view, f.facing, t) }
+  }
+  if (f.arms_out) {
+    return { light: 'red', text: t(ARMS_OUT), title: t(ARMS_OUT_REASON) }
   }
   if (pair?.same) {
     return { light: 'yellow', text: t(FACING_SAME), title: fill(t(FACING_SAME_REASON), view, pair.facing, t) }

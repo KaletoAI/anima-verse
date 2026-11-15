@@ -5813,6 +5813,8 @@
     "The facing check is not sure which way this view faces (it reads the feet). A {view} view faces the {view} edge of the image — check it and mirror it if needed.": "Die Blickrichtungs-Prüfung ist sich bei dieser Ansicht nicht sicher (sie liest die Füße). Die Ansicht „{view}“ muss zum Bildrand {view} schauen — prüfen und ggf. spiegeln.",
     "Same as other": "Beide gleich",
     "Both side views face the {side} edge of the image — one of them must be mirrored.": "Beide Seitenansichten schauen nach {side} — eine davon muss gespiegelt werden.",
+    "Arm away": "Arm steht ab",
+    "An arm reaches clearly in front of or behind the body — the 3D model needs the arms hanging beside it. Regenerate this view (↻); Run all stops before the model until then.": "Ein Arm ragt deutlich vor oder hinter den Körper — das 3D-Modell braucht die Arme seitlich hängend. Ansicht neu erzeugen (↻); bis dahin hält „Alles ausführen“ vor dem Modell an.",
     "Mirrored automatically: it faced the other way ({pct} % sure).": "Automatisch gespiegelt: sie schaute in die andere Richtung ({pct} % sicher).",
     "Mirrored by hand.": "Von Hand gespiegelt.",
     "Mirror this view left-right on the CPU — no image job.": "Diese Ansicht auf der CPU links-rechts spiegeln — kein Bild-Job.",

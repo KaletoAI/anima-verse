@@ -131,6 +131,11 @@ check('[1] same pair', m.facingLine(tile('left', 'ok', 'left'), { same: true, fa
   title: 'Both side views face the left edge of the image — one of them must be mirrored.' });
 check('[1] wrong beats same', m.facingLine(tile('right', 'wrong', 'left'), { same: true, facing: 'left' }, 'right')?.light,
   'red');
+check('[1] arms out (A96)', m.facingLine({ ...tile('right', 'ok', 'right'), arms_out: true }, { same: true, facing: 'right' },
+  'right'), { light: 'red', text: 'Arm away', title: 'An arm reaches clearly in front of or behind the body — the 3D '
+  + 'model needs the arms hanging beside it. Regenerate this view (↻); Run all stops before the model until then.' });
+check('[1] wrong beats arms', m.facingLine({ ...tile('right', 'wrong', 'left'), arms_out: true }, null, 'right')?.text,
+  'Wrong way');
 check('[1] unsure', m.facingLine(tile('left', 'unsure', null), null, 'left'), {
   light: 'yellow', text: 'Facing unsure',
   title: 'The facing check is not sure which way this view faces (it reads the feet). A left view faces the left '
@@ -216,7 +221,7 @@ check('[4] copies: reason', mirrorTags.every((tg) => tg.includes(esc(
 
 // [5]
 const de = JSON.parse(readFileSync(join(ROOT, 'shared/languages/de.json'), 'utf8')).translations;
-const strings = [m.FACING_WRONG, m.FACING_WRONG_REASON, m.FACING_UNSURE, m.FACING_UNSURE_REASON, m.FACING_SAME,
+const strings = [m.ARMS_OUT, m.ARMS_OUT_REASON, m.FACING_WRONG, m.FACING_WRONG_REASON, m.FACING_UNSURE, m.FACING_UNSURE_REASON, m.FACING_SAME,
   m.FACING_SAME_REASON, m.MIRRORED_AUTO, m.MIRRORED_HAND, m.MIRROR_TITLE, m.TURN_BACK_TITLE, m.MIRROR_SWAPS,
   m.MIRROR_AGAIN, m.MIRROR_DONE, m.MIRROR_UNDONE, m.MIRROR_WAIT_MODEL, m.DRESSED_FOLLOW,
   ...Object.values(m.FOLLOWUP_TEXT), 'Turn back', 'Mirror', 'left', 'right', 'cost unknown', '1 hub job', '{n} hub jobs'];

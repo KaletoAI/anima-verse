@@ -1403,6 +1403,10 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
             with neutral_view_reference(front, refs_dir) as reference:
                 for v in views:
                     render(v, reference)
+            if any(results.get(v) for v in views if v in view_facing.SIDE_VIEWS):
+                # Ruling A96: both side views facing the same edge — the one against the convention is mirrored.
+                view_facing.resolve_pair(find_ref_image(character_name, _kind("left"), bsig),
+                                         find_ref_image(character_name, _kind("right"), bsig))
         logger.info("Base body %s (%s): %s", character_name, bsig,
                     {k: bool(p) for k, p in results.items()})
         if any(results.values()):

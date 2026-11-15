@@ -78,8 +78,19 @@ DISAGREE_PART = 0.15
 #: From this confidence on a view's direction is taken as known: ``ok`` / ``wrong``, and a wrong one is
 #: mirrored automatically (``|score|`` 0.30 at ``SCORE_FULL`` 0.4).
 AUTO_CONFIDENCE = 0.75
-#: Both side views measured at least this sure and facing the same edge: one of them is wrong.
+#: Both side views measured at least this sure and facing the same edge: one of them is wrong — the one whose
+#: convention names the other edge, which ``resolve_pair`` mirrors (Ruling A96).
 SAME_CONFIDENCE = 0.5
+
+#: ARMS OUT (Ruling A96): in the rows ``ARM_BAND`` of the figure (shoulders to the waist; hands hanging in the
+#: A-pose end below it) nothing may reach further than ``ARM_REACH_LIMIT`` × the figure height in front of or
+#: behind the body line at the hips (``HIP_BAND``, the medians of its rows' extents). Measured on the 61 stored
+#: side views of the test world 2026-11-15: every current base view 0.006 .. 0.053; arms held forward 0.064 ..
+#: 0.365 (Dario, Kira, Rosi, Luisa, Kai, Rurik's replaced right view). Short, foreshortened arms at shoulder
+#: height read 0.037 .. 0.049 — inside the good range, so they are NOT caught (the silhouette cannot tell them).
+ARM_BAND = (0.12, 0.45)
+HIP_BAND = (0.45, 0.55)
+ARM_REACH_LIMIT = 0.06
 
 #: Subfolder of ``model_refs`` that keeps a mirrored view's original bytes.
 MIRROR_DIR = "mirrored"
@@ -144,6 +155,34 @@ def measure_mask(mask) -> Optional[Dict[str, Any]]:
             "confidence": round(confidence, 3), "parts": parts}
 
 
+def arm_reach_mask(mask) -> Optional[float]:
+    """How far (× the figure height) anything in ``ARM_BAND`` reaches beyond the hip line, front or back; None
+    without a figure tall enough."""
+    import numpy as np
+    mask = np.asarray(mask, dtype=bool)
+    if mask.ndim != 2 or not mask.any():
+        return None
+    rows = np.flatnonzero(mask.any(axis=1))
+    top, bottom = int(rows[0]), int(rows[-1])
+    height = bottom - top + 1
+    if height < MIN_FIGURE_PX:
+        return None
+
+    def extents(band):
+        out = []
+        for y in range(top + int(band[0] * height), top + int(band[1] * height)):
+            xs = np.flatnonzero(mask[y])
+            if len(xs):
+                out.append((int(xs[0]), int(xs[-1])))
+        return out
+    hips, arms = extents(HIP_BAND), extents(ARM_BAND)
+    if not hips or not arms:
+        return None
+    back = float(np.median([a for a, _b in hips]))
+    front = float(np.median([b for _a, b in hips]))
+    return round(max(max(b - front, back - a) for a, b in arms) / height, 3)
+
+
 def _mask_of(path: Path):
     """The alpha matte of an image as a boolean array, or None (unreadable, or no transparent pixel — an
     image without a matte cannot be measured)."""
@@ -167,27 +206,44 @@ _cache: "OrderedDict[Tuple[str, int, int], Optional[Dict[str, Any]]]" = OrderedD
 _CACHE_SIZE = 512
 
 
-def measure(path: Optional[Path]) -> Optional[Dict[str, Any]]:
-    """``measure_mask`` of a stored view (its alpha matte), memoised per file identity (path, mtime, size);
-    None when it cannot be measured or the file is gone."""
+def _memo(kind: str, path: Optional[Path], fn):
+    """``fn(mask)`` of a stored view's alpha matte, memoised per (kind, file identity: path, mtime, size); None
+    when it cannot be measured or the file is gone."""
     if path is None:
         return None
     try:
         stat = Path(path).stat()
     except OSError:
         return None
-    key = (str(path), stat.st_mtime_ns, stat.st_size)
+    key = (kind, str(path), stat.st_mtime_ns, stat.st_size)
     with _cache_lock:
         if key in _cache:
             _cache.move_to_end(key)
             return _cache[key]
     mask = _mask_of(Path(path))
-    result = measure_mask(mask) if mask is not None else None
+    result = fn(mask) if mask is not None else None
     with _cache_lock:
         _cache[key] = result
         while len(_cache) > _CACHE_SIZE:
             _cache.popitem(last=False)
     return result
+
+
+def measure(path: Optional[Path]) -> Optional[Dict[str, Any]]:
+    """``measure_mask`` of a stored view (its alpha matte), memoised per file identity (path, mtime, size);
+    None when it cannot be measured or the file is gone."""
+    return _memo("facing", path, measure_mask)
+
+
+def arm_reach(path: Optional[Path]) -> Optional[float]:
+    """``arm_reach_mask`` of a stored view, memoised like ``measure``."""
+    return _memo("arms", path, arm_reach_mask)
+
+
+def arms_out(path: Optional[Path]) -> bool:
+    """Whether a stored side view holds an arm clearly away from the body (``ARM_REACH_LIMIT``, Ruling A96)."""
+    reach = arm_reach(path)
+    return reach is not None and reach >= ARM_REACH_LIMIT
 
 
 def judge(view: str, measured: Optional[Dict[str, Any]], expected: Optional[str] = None) -> str:
@@ -375,7 +431,8 @@ def tile_state(view: str, path: Optional[Path]) -> Optional[Dict[str, Any]]:
     return {"expected": EXPECTED[view], "facing": measured["facing"] if measured else None,
             "confidence": measured["confidence"] if measured else None,
             "state": judge(view, measured), "mirrored": public,
-            "restorable": restorable(Path(path)) if record else False}
+            "restorable": restorable(Path(path)) if record else False,
+            "arm_reach": arm_reach(Path(path)), "arms_out": arms_out(Path(path))}
 
 
 def pair_state(left: Optional[Path], right: Optional[Path]) -> Dict[str, Any]:
@@ -386,3 +443,52 @@ def pair_state(left: Optional[Path], right: Optional[Path]) -> Dict[str, Any]:
             and min(float(a["confidence"]), float(b["confidence"])) >= SAME_CONFIDENCE):
         return {"same": True, "facing": a["facing"]}
     return {"same": False, "facing": None}
+
+
+# --- Both side views (Ruling A96) --------------------------------------------------------------------------------
+
+def resolve_pair(left: Optional[Path], right: Optional[Path]) -> Optional[str]:
+    """When both side views face the same edge (``pair_state``), exactly one of them breaks the convention — the
+    view whose expected edge is the other one: mirror it (auto, original kept) and return its name; None when
+    there is nothing to resolve or the mirror failed. Never raises."""
+    try:
+        pair = pair_state(left, right)
+        if not pair["same"]:
+            return None
+        view = "left" if EXPECTED["left"] != pair["facing"] else "right"
+        path = left if view == "left" else right
+        measured = measure(Path(path)) or {}
+        reason = (f"both side views faced the {pair['facing']} edge; the {view} view faces the "
+                  f"{EXPECTED[view]} edge")
+        toggle_mirror(Path(path), auto=True, reason=reason, confidence=measured.get("confidence"))
+        logger.info("View %s: mirrored — %s", Path(path).name, reason)
+        return view
+    except Exception:  # noqa: BLE001 — a check after a render never loses the render
+        logger.warning("Side view pair %s / %s: facing check failed", left, right, exc_info=True)
+        return None
+
+
+#: ``side_view_holds`` texts (the Run all / Build error the tab shows).
+HOLD_WRONG = "the {view} view faces the wrong way — mirror it (⇋)"
+HOLD_SAME = "both side views face the same way — mirror the wrong one (⇋)"
+HOLD_ARMS = "the {view} view holds an arm away from the body — regenerate it (↻)"
+HOLD_PREFIX = "Stopped before the 3D model: "
+
+
+def side_view_holds(left: Optional[Path], right: Optional[Path]) -> list:
+    """What keeps a Run all / Build from making a model of these side views (Ruling A96): a sure wrong facing,
+    both facing the same edge, an arm clearly away from the body. [] = nothing. Never raises."""
+    holds = []
+    try:
+        paths = {"left": left, "right": right}
+        for view, path in paths.items():
+            if path is not None and judge(view, measure(Path(path))) == WRONG:
+                holds.append(HOLD_WRONG.format(view=view))
+        if not holds and pair_state(left, right)["same"]:
+            holds.append(HOLD_SAME)
+        for view, path in paths.items():
+            if path is not None and arms_out(Path(path)):
+                holds.append(HOLD_ARMS.format(view=view))
+    except Exception:  # noqa: BLE001 — a check never stops a build on its own failure
+        logger.warning("Side view holds of %s / %s not read", left, right, exc_info=True)
+    return holds

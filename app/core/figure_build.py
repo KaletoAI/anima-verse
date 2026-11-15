@@ -1379,7 +1379,7 @@ def _wait_base_views(character_name: str, *, timeout_s: Optional[float] = None,
 def _run_plain_body(character_name: str, step: Step, explicit: bool = False) -> str:
     """The plain body's views (all four in one run when the front is among them — the
     others edit the new front — else each view alone), then its model; forced."""
-    from app.core import base_body
+    from app.core import base_body, view_facing
     refresh = base_body.base_refresh_plan(character_name, missing=True)
     views = list(refresh.get("views") or ())
     if views:
@@ -1395,10 +1395,26 @@ def _run_plain_body(character_name: str, step: Step, explicit: bool = False) -> 
             error = next((status[v].get("error") for v in missing if (status.get(v) or {}).get("error")), None)
             return f"views {', '.join(missing)} — {error or 'render failed'}"
     if refresh.get("model") or views:
+        holds = _side_view_holds(character_name)
+        if holds:
+            # Ruling A96: no hub jobs on side views the user must look at first — the tab names what to do; the
+            # base model's own button builds it anyway (the user's decision).
+            return view_facing.HOLD_PREFIX + "; ".join(holds)
         result = base_body.generate_base_model(character_name, force=True)
         if not result.get("ok"):
             return str(result.get("error") or "Base model generation failed")
     return ""
+
+
+def _side_view_holds(character_name: str) -> List[str]:
+    """``view_facing.side_view_holds`` of the stored base side views (Ruling A96); [] when they cannot be found."""
+    from app.core import base_body, view_facing
+    from app.core.model_refs import find_ref_image
+    bsig = base_body.base_signature(character_name)
+    if not bsig:
+        return []
+    sides = {v: find_ref_image(character_name, base_body._kind(v), bsig) for v in view_facing.SIDE_VIEWS}
+    return view_facing.side_view_holds(sides["left"], sides["right"])
 
 
 #: The Build's label of the base mesh repair step.
