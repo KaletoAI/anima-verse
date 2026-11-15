@@ -808,7 +808,7 @@ export function FieldBaseBody({ character, onOpenFigure, onOpenGallery }: {
               ? `${model.url}${model.url.includes('?') ? '&' : '?'}tier=low` : model.url}
               format="glb" height={600} subject="figure"
               freshness={model.freshness} builtAt={model.created_at}
-              collision={collision} showCollision={!!collisionPreview} showChannels={!!channelsPreview}
+              collision={collision} showCollision={!!collisionPreview} showChannels={!!channelsPreview} channelTools
               motion={ready ? previewMotion : undefined}
               surfacePoints={surfacePoints} />
             {/* Full / Distance (Ruling A45): which stored mesh the viewer and the box show; only once the

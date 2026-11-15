@@ -2332,6 +2332,17 @@ export class NpcManager {
     };
     // Each reader passes its OWN interaction: a partner's channel engages only within the same one.
     for (const npc of this.npcs.values()) npc.figure?.updateSecondary(partnersOf(npc.name), interactionOf(npc));
+    // THE OPENING (Ruling A102): every chain engaged in a partner's channel opens that partner's surface, on the
+    // final poses of this phase B.
+    const occupied = new Map<string, ReturnType<Figure['channelOccupants']>>();
+    for (const npc of this.npcs.values()) {
+      for (const occ of npc.figure?.channelOccupants() ?? []) {
+        const list = occupied.get(occ.partner) ?? [];
+        list.push(occ);
+        occupied.set(occ.partner, list);
+      }
+    }
+    for (const npc of this.npcs.values()) npc.figure?.applyChannelOpenings(occupied.get(npc.name) ?? []);
     // The GPU hair push: the same selection, the partners re-read after every phase B.
     const fresh = new Map<string, PartnerSnapshot | null>();
     for (const npc of this.npcs.values()) {

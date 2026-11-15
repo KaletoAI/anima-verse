@@ -222,6 +222,10 @@ export interface SecondaryMotion {
    *  partner's channel (CHANNELS, w > 0) also names it: the channel id, w and the depth scale k applied. */
   contactTips(): { bone: string; tip: Vec3; tipLocal: Vec3; capsules: string[]; partner: string[];
     channel?: { id: string; w: number; k: number } }[]
+  /** Ruling A102: per engagement with w > 0, the partner, its channel id, w and the chain's links as world segments
+   *  (joint → tip, the link's capsule radius r_c; links without a capsule left out) as last rendered — what the
+   *  receiving figure opens its surface around (`bindChannelOpening`). */
+  channelOccupants(): { partner: string; channel: string; w: number; segments: { a: Vec3; b: Vec3; r: number }[] }[]
   reset(): void
   dispose(): void
 }
@@ -241,6 +245,8 @@ const LINK_REGIONS: readonly string[] = ['chest', 'attached_part', 'appendage']
 interface ChannelState {
   /** `"<partner>:<channel id>"`. */
   key: string
+  /** The partner's name (the channel id may itself hold a colon). */
+  partner: string
   /** The channel as last seen (world, that update's frame): the release ramp keeps guiding a vanished one. */
   ch: ChannelNow
   /** The update in which the gate last passed (`partnerUpdate`). */
@@ -582,6 +588,7 @@ export function createSecondaryMotion(
         delegate?.setCollision(payload)
       },
       contactTips() { return delegate?.contactTips() ?? [] },
+      channelOccupants() { return delegate?.channelOccupants() ?? [] },
       reach() { return delegate?.reach() ?? 0 },
       reset() { delegate?.reset() },
       dispose() { delegate?.dispose(); stopped = true },
@@ -1372,7 +1379,7 @@ export function createSecondaryMotion(
             const states = chain.channels ??= []
             let state = states.find(x => x.key === key)
             if (!state) {
-              state = { key, ch, gate: 0, engaged: false, w: 0, inZone: false, inGrown: false, leverDeg: Infinity, k: 1,
+              state = { key, partner: snap.name, ch, gate: 0, engaged: false, w: 0, inZone: false, inGrown: false, leverDeg: Infinity, k: 1,
                 suppressKeys: [], suppressFrom: null }
               states.push(state)
             }
@@ -1567,6 +1574,27 @@ export function createSecondaryMotion(
       collisionPayload = next
       collision = null
       prepareCollision()
+    },
+    channelOccupants() {
+      const rows: ReturnType<SecondaryMotion['channelOccupants']> = []
+      if (!(channelLive > 0)) return rows
+      const head = new three.Vector3(), tip = new three.Vector3()
+      for (const chain of particles) {
+        if (chain.chainRoot !== chain || !chain.channels) continue
+        for (const state of chain.channels) {
+          if (!(state.w > 0)) continue
+          const segments: { a: Vec3; b: Vec3; r: number }[] = []
+          for (const link of chain.chainLinks) {
+            const r = linkRadius(link, chain)
+            if (!(r > 0)) continue
+            head.setFromMatrixPosition(link.bind.bone.matrixWorld)
+            tip.copy(link.tipLocal).applyMatrix4(link.bind.bone.matrixWorld)
+            segments.push({ a: [head.x, head.y, head.z], b: [tip.x, tip.y, tip.z], r })
+          }
+          if (segments.length) rows.push({ partner: state.partner, channel: state.ch.id, w: state.w, segments })
+        }
+      }
+      return rows
     },
     contactTips() {
       const tip = new three.Vector3()

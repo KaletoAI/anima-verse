@@ -24,10 +24,12 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   seatFootLift, createStrandHair, bindCollision, inGarment, transformPoint, linearScale, capsuleWireframe,
   placeCapsuleWireframe, consumerPartnerCapsules, probeCapsules, probeSweepOffset, probeSweptPose, probeSnapshot,
   PROBE_COLOR, CAPSULE_REGION_COLORS, CHANNEL_GROW, bindChannels, channelCoords, channelWireframe, guideRod, inZone,
-  placeChannelWireframe, stepEngagement } from '@anima/scene-render'
+  placeChannelWireframe, stepEngagement, bindChannelOpening, OPENING_MARGIN_M, OPENING_FALLOFF_M,
+  OPENING_BAND_M, OPENING_SLACK_M } from '@anima/scene-render'
 import type { SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm,
   CollisionOverlay, CollisionPayload, FootPose, GarmentCollision, HairStrandRecord, StrandHair, CapsuleNow,
-  PartnerSnapshot, ProbeSourceCapsule, ChannelNow, Engagement } from '@anima/scene-render'
+  PartnerSnapshot, ProbeSourceCapsule, ChannelNow, Engagement, ChannelOpeningBinding,
+  OpeningSegment } from '@anima/scene-render'
 import { PartnerProbeControls } from './PartnerProbeControls'
 import { ChannelRodControls } from './ChannelRodControls'
 import { ROD_BUDGET_DEG, ROD_DEFAULTS } from './collisionChannelsModel'
@@ -350,7 +352,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   picking = false, onPickPoint, actionAccessPoints, spatialAuthoring = false, onPickGroundPoint,
   frontal = false, onFrontalChange, keepCamera = false,
   areaOutlines, polylines, slots, meshLayout, drawing = false, drawThrough = false,
-  onPolygonFaces, onDrawCancel, leafBbox, collision, showCollision = false, showChannels = false, footPose = null, clipGroup,
+  onPolygonFaces, onDrawCancel, leafBbox, collision, showCollision = false, showChannels = false, channelTools = false, footPose = null, clipGroup,
   meshAdjust = null, focus = null, alphaCutoff, strandHair, strandNote, subject = 'model', extensionBones = false,
   companions, onCompanionState, deform = null, resetViewOnDoubleClick = false }:
   { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; statusPanel?: ReactNode; sideToolbar?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
@@ -556,6 +558,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
     /** Show the declared channels whatever the toggle says — while the Channels panel previews a draft
      *  (CollisionChannels), so the wire moves with the slider. */
     showChannels?: boolean
+    /** Ruling A102: the channel display (the Channels toggle, wireframe, grid) and the test rod with its opening
+     *  are offered ONLY where this is set — the Base body tab's viewer. Everywhere else they never show. */
+    channelTools?: boolean
     /** THE FIT'S FOOT POSE (`foot_pose` of a footwear fit, footPose.ts of
      *  @anima/scene-render). Applied only when the loaded model carries the
      *  shoes it was fitted for (`footPoseMatches`): the extension is baked into
@@ -681,7 +686,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   // stand-in chain into one (`guideRod`) and highlights the capsules it skips. Read per frame — a dragged channel
   // draft or rod slider never reloads the model. Off at every start; a preview only, nothing is saved.
   const channelIds = useMemo(() => (collision?.channels ?? []).map(record => record.id), [collision])
-  const hasChannels = channelIds.length > 0
+  const hasChannels = channelTools && channelIds.length > 0
   const [channelsOn, setChannelsOn] = useState(false)
   const channelsShownOn = hasChannels && (channelsOn || showChannels)
   const [rodOn, setRodOn] = useState(false)
@@ -1637,6 +1642,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           dropLines(rodLines)
           dropLines(skipLines)
           dropRodLabel()
+          opening?.dispose()
+          opening = null
           if (channelGrid) {
             channelGrid.removeFromParent()
             channelGrid.geometry.dispose()
@@ -1646,6 +1653,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           channelGroup.removeFromParent()
         })
         let channelsFor: CollisionPayload | null | undefined
+        /** Ruling A102: the receiving body opened around the rod (`bindChannelOpening`), bound per channel. */
+        let opening: ChannelOpeningBinding | null = null
+        let openingFor = ''
         let channelBinding: ReturnType<typeof bindChannels> = null
         let capsuleBinding: ReturnType<typeof bindCollision> = null
         let rodEngagement: Engagement = { engaged: false, w: 0 }
@@ -1694,6 +1704,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             channelsFor = wanted
             channelBinding = wanted ? bindChannels(THREE, object, wanted) : null
             capsuleBinding = wanted ? bindCollision(THREE, object, wanted) : null
+            opening?.dispose()
+            opening = null
+            openingFor = ''
             dropLines(channelLines)
             rodEngagement = { engaged: false, w: 0 }
           }
@@ -1796,20 +1809,35 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
               }
             }
             skipped.forEach((entry, i) => placeCapsuleWireframe(THREE, skipLines[i], entry.now))
+            // THE OPENING (Ruling A102): the body's surface around the channel moves out to the rod's radius plus the
+            // skin margin, on the skinned positions of this frame; bound once per channel (candidates fixed then).
+            if (target.id !== openingFor) {
+              opening?.dispose()
+              opening = bindChannelOpening(THREE, object, target, { falloff: OPENING_FALLOFF_M * metre,
+                slack: OPENING_SLACK_M * metre })
+              openingFor = target.id
+            }
+            const segments: OpeningSegment[] = []
+            for (let i = 0; i < links; i++) segments.push({ a: guided.joints[i], b: guided.joints[i + 1], r: rod.radius * metre })
+            const opened = opening ? opening.apply(target, segments, { margin: OPENING_MARGIN_M * metre,
+              falloff: OPENING_FALLOFF_M * metre, band: OPENING_BAND_M * metre }) : { maxPush: 0, moved: 0 }
             readout = { turnsDeg: guided.turnsDeg, k: guided.k, pastBottomMm: (guided.pastBottomM / metre) * 1000,
-              suppressed: guided.suppressed, w: rodEngagement.w }
+              suppressed: guided.suppressed, w: rodEngagement.w, openingMm: (opened.maxPush / metre) * 1000,
+              openingMoved: opened.moved }
           } else {
             dropLines(rodLines)
             dropLines(skipLines)
             dropRodLabel()
             rodEngagement = { engaged: false, w: 0 }
+            // Rod off: the body exactly as loaded.
+            opening?.restore()
           }
           channelGroup.visible = state.on || state.rod
           rodClock += dt
           if (rodClock >= 0.25) {
             rodClock = 0
             const key = JSON.stringify(readout && { ...readout, turnsDeg: readout.turnsDeg.map(v => v.toFixed(1)),
-              k: readout.k.toFixed(3), pastBottomMm: readout.pastBottomMm.toFixed(1), w: readout.w.toFixed(2) })
+              k: readout.k.toFixed(3), openingMm: readout.openingMm.toFixed(1), pastBottomMm: readout.pastBottomMm.toFixed(1), w: readout.w.toFixed(2) })
             if (key !== rodShown) {
               rodShown = key
               setRodReadout(readout)

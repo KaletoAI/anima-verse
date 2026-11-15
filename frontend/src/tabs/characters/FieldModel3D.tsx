@@ -8,7 +8,6 @@ import { ExtensionMotionSliders } from './ExtensionMotionDraft'
 import type { Physics } from '../../lib/motionDraft'
 import type { SecondaryMotionPayload, ExtensionRigDeclaration, CollisionPayload, FootPose } from '@anima/scene-render'
 import { CollisionScales } from './CollisionScales'
-import { CollisionChannels } from './CollisionChannels'
 import { collisionStepLine, recomputePath } from './collisionChannelsModel'
 import type { ChannelDeclaration, ChannelOverrides } from './collisionChannelsModel'
 /**
@@ -288,8 +287,6 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
   const [viewTier, setViewTier] = useState<'full' | 'low'>('full')
   /** Slider preview of the collision scales (CollisionScales) — shown in the viewer instead of the stored set. */
   const [collisionPreview, setCollisionPreview] = useState<CollisionPayload | null>(null)
-  /** Slider preview of the channel settings (CollisionChannels, off the pipeline). */
-  const [channelsPreview, setChannelsPreview] = useState<CollisionPayload | null>(null)
   const [recomputing, setRecomputing] = useState(false)
   // "Fetch by job ID": a mesh run that outlived our own poll is collected from
   // the gateway afterwards. jobErrors holds a failed model check, which the
@@ -833,10 +830,8 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
       <span className="ga-hint">{t('local, no hub job')}</span>
     </div>
   ) : null
-  // Both panels preview live: the scales' capsules and the channels' drafts, merged.
-  const collisionBase = collisionPreview ?? model?.collision
-  const viewerCollision = channelsPreview && collisionBase ? { ...collisionBase, channels: channelsPreview.channels }
-    : collisionBase
+  // The scales panel previews live (the channels are the Base body tab's, Ruling A102).
+  const viewerCollision = collisionPreview ?? model?.collision
   const collisionPanel = model && mixamo && model.format === 'glb' && model.collision !== undefined ? (
     pipeline ? (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -859,14 +854,8 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
         <CollisionScales character={character} collision={model.collision}
           scales={st.options?.collision_scales} disabled={pending}
           onPreview={setCollisionPreview} onSaved={load} />
-        {model.channel_declarations?.length ? (
-          <>
-            <CollisionChannels character={character} collision={model.collision}
-              overrides={st.options?.collision_channels} declarations={model.channel_declarations}
-              disabled={pending || recomputing} onPreview={setChannelsPreview} onSaved={load} step={collisionStep} />
-            {recomputeRow}
-          </>
-        ) : null}
+        {/* Ruling A102: the channel settings and display live only in the Base body tab. */}
+        {model.channel_declarations?.length ? recomputeRow : null}
       </>
     )
   ) : null
@@ -1198,7 +1187,6 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
             textureUrl={model.texture_url ? `${model.texture_url}?v=${bust}` : ''}
             collision={viewerCollision}
             showCollision={!!collisionPreview}
-            showChannels={!!channelsPreview}
             footPose={model.foot_pose ?? null}
           />
           </div>

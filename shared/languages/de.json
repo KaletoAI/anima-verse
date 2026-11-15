@@ -5728,6 +5728,7 @@
     "Turn per link: {list}": "Drehung pro Glied: {list}",
     "Depth scale k {k} · past the bottom {mm} mm": "Tiefenfaktor k {k} · über den Boden hinaus {mm} mm",
     "Weight w {w} · skipped capsules: {list}": "Gewicht w {w} · übersprungene Kapseln: {list}",
+    "Opening widened by {mm} mm · {n} vertices moved": "Öffnung um {mm} mm geweitet · {n} Eckpunkte verschoben",
     "Placed at the declared offset": "Am deklarierten Versatz platziert",
     "Placed at the opening the part's build reported": "An der Öffnung platziert, die der Aufbau des Teils gemeldet hat",
     "Covered by the worn outfit": "Vom getragenen Outfit verdeckt",

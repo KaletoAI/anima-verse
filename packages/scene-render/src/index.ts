@@ -201,6 +201,10 @@ export { CHANNEL_BLEND_S, CHANNEL_HYST_M, CHANNEL_HYST_DEG, CHANNEL_GROW, channe
   radialGuidanceAngle, depthJoint, depthScale, stepEngagement, channelGate, suppressedIds, guideRod, previewChannel, bindChannels,
   channelLineSegments, channelWireframe, placeChannelWireframe } from './channels'
 export type { ChannelNow, Engagement } from './channels'
+export { OPENING_MARGIN_M, OPENING_FALLOFF_M, OPENING_BAND_M, OPENING_SLACK_M, OPENING_POSE_SLACK_M, openingBand,
+  openedDistance, openingWeight, openingCandidates, openingDisplacement, displaceInto, channelOpening, openingReach,
+  bindChannelOpening } from './channelOpening'
+export type { OpeningSegment, OpeningOptions, ChannelOpeningBinding } from './channelOpening'
 
 export { PROBE_NAME, PROBE_COLOR, probeCapsules, probeSweepOffset, probeSweptPose, probeSnapshot } from './partnerProbe'
 export type { ProbeSourceCapsule, ProbePose } from './partnerProbe'

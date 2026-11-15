@@ -181,7 +181,12 @@
  *       yellow, that reason; "Covered by the worn outfit" → grey.
  *       rodReadoutLines(null) → ["The rod is shown once the model carries a channel"]; {turns [0, 12.345], k 0.8,
  *       past 3.24 mm, suppressed [torso_lower], w 1} → ["Turn per link: 0.0° · 12.3°", "Depth scale k 0.800 · past
- *       the bottom 3.2 mm", "Weight w 1.00 · skipped capsules: torso_lower"].
+ *       the bottom 3.2 mm", "Weight w 1.00 · skipped capsules: torso_lower", "Opening widened by 12.0 mm · 37
+ *       vertices moved"] (Ruling A102: openingMm 12.04 → "12.0", openingMoved 37).
+ *     Ruling A102 gate: the channel display and the test rod live ONLY in the Base body tab's viewer — Model3DViewer
+ *     gates both behind `channelTools` (default false: `hasChannels = channelTools && …`); FieldBaseBody.tsx is the
+ *     ONE file passing `channelTools`, none of the other viewers (FieldModel3D, FieldFigure, garment, hairstyle,
+ *     footwear, wardrobe, building, room, prop) does.
  *     The panel rendered (react-dom/server, en) after a Save, i.e. with the step "due": the legend "Channels", the six
  *     fields Side / Up / Front / Radius / Depth / Cone (six range inputs), the line "Placed at the declared offset",
  *     the step "Collision capsules · Due" with "Channel settings changed — recompute to apply" and the link
@@ -697,9 +702,26 @@ check('[15] declaration lines', [ch.declarationLine(DECL), ch.declarationLine({ 
 [{ light: 'green', text: 'Placed at the declared offset' }, { light: 'yellow', text: 'No base model yet' },
   { light: 'grey', text: 'Covered by the worn outfit' }]);
 check('[15] rod readout', [ch.rodReadoutLines(null), ch.rodReadoutLines({ turnsDeg: [0, 12.345], k: 0.8,
-  pastBottomMm: 3.24, suppressed: ['torso_lower'], w: 1 })],
+  pastBottomMm: 3.24, suppressed: ['torso_lower'], w: 1, openingMm: 12.04, openingMoved: 37 })],
 [['The rod is shown once the model carries a channel'], ['Turn per link: 0.0° · 12.3°',
-  'Depth scale k 0.800 · past the bottom 3.2 mm', 'Weight w 1.00 · skipped capsules: torso_lower']]);
+  'Depth scale k 0.800 · past the bottom 3.2 mm', 'Weight w 1.00 · skipped capsules: torso_lower',
+  'Opening widened by 12.0 mm · 37 vertices moved']]);
+{
+  // Ruling A102: channels + rod only in the Base body tab's viewer.
+  const fsA = await import('fs');
+  const dir = new URL('../frontend/src/tabs/', import.meta.url).pathname;
+  const files = [];
+  const walk = (d) => { for (const e of fsA.readdirSync(d, { withFileTypes: true })) {
+    if (e.isDirectory()) walk(d + e.name + '/'); else if (e.name.endsWith('.tsx')) files.push(d + e.name); } };
+  walk(dir);
+  const users = files.filter(f => /<Model3DViewer\b/.test(fsA.readFileSync(f, 'utf8')));
+  const withTools = users.filter(f => /\bchannelTools\b/.test(fsA.readFileSync(f, 'utf8'))).map(f => f.split('/').pop());
+  check('[15] A102 channel tools only on the Base body viewer', [withTools, users.length > 5], [['FieldBaseBody.tsx'], true]);
+  const viewer = fsA.readFileSync(dir + 'characters/Model3DViewer.tsx', 'utf8');
+  check('[15] A102 viewer gate', [/channelTools = false/.test(viewer),
+    /const hasChannels = channelTools && channelIds\.length > 0/.test(viewer),
+    /rodShownOn = hasChannels &&/.test(viewer), /channelsShownOn = hasChannels &&/.test(viewer)], [true, true, true, true]);
+}
 
 async function renderChannels(props) {
   const esbuild = esbuildModule();
@@ -757,7 +779,7 @@ check('[15] Base body tab: panel beside the scales, the step button', [panelsAt 
   baseTab.indexOf('<CollisionScales', panelsAt) > panelsAt, baseTab.indexOf('{channelsPanel}', panelsAt) > panelsAt,
   /<CollisionChannels /.test(baseTab), /apiPost\(recomputePath\(character, info\.signature\)/.test(baseTab),
   /t\('Recompute collision capsules'\)/.test(baseTab)], [true, true, true, true, true, true]);
-check('[15] 3D tab: the panel', /<CollisionChannels /.test(model3d), true);
+check('[15] 3D tab: no channel panel (Ruling A102: Base body tab only)', /<CollisionChannels /.test(model3d), false);
 check('[15] viewer: the two toggles, off at start', [/aria-pressed=\{channelsShownOn\}[\s\S]{0,400}t\('Channels'\)/.test(viewerSrc),
   /aria-pressed=\{rodShownOn\}[\s\S]{0,400}t\('Test rod'\)/.test(viewerSrc),
   /const \[channelsOn, setChannelsOn\] = useState\(false\)/.test(viewerSrc),

@@ -12539,17 +12539,46 @@ this repository declares a region, so every record here carries `channels: []`.
 - With no channel on any partner, nothing of this runs and nothing allocates. The frame is bit-identical to the
   frame without channels (`scripts/smoke_channel_engagement.mjs` [7]).
 
-**Admin viewer.** The toggles "Channels" and "Test rod" appear only when the payload carries channels, and both start
-off.
+**Admin viewer.** The toggles "Channels" and "Test rod" appear only in the Base body tab's viewer (Model3DViewer prop
+`channelTools`, Ruling A102 — every other 3D preview shows neither, and the 3D tab has no Channels panel) and only
+when the payload carries channels; both start off.
 - "Channels" draws one wireframe per channel through the body (`channelWireframe`, colour
   `CAPSULE_REGION_COLORS.channel`), with a 20 cm grid of 1 cm cells in the chosen channel's opening plane.
 - "Test rod" runs `guideRod` (w = 1, swing budget 30°) every frame. The rod's controls are length, radius, links,
   insertion along the axis (negative = in front of the opening) and tilt. The readout shows the turn per link, k,
   the distance past the bottom, the skipped capsules and w.
+  The rod also OPENS the body (below): the readout adds the largest widening (mm) and the number of moved vertices;
+  rod off restores the model exactly.
 - The Channels panel sits beside "Collision scales" in the Base body tab's collision sub-tab. It has six sliders
   (side / up / front ±50 mm, radius × and depth × 0.5–2, cone).
   - Its live preview (`previewChannel`) is the same mapping as the server's resolution.
   - Save stores only. The panel then shows the step as Due, with a link to "Recompute collision capsules".
+
+**The opening (Ruling A102).** While something occupies a channel the receiving body's surface opens around it; the
+rule exists once, in `packages/scene-render/src/channelOpening.ts` (numbers: `scripts/smoke_channel_opening.mjs`).
+- The occupant is a list of world segments a → b with radius r: a guided chain's links (`channelOccupants()` of
+  `secondaryMotion.ts`, r = the link's capsule radius r_c × the engagement weight w, so the opening ramps with w), or
+  the test rod's links.
+- A body vertex P (skinned, this frame) at distance d from the axis of its nearest segment (nearest by surface, d − r)
+  moves radially away from that axis to f(d). T = r + m (skin margin m = `OPENING_MARGIN_M` = 2 mm), band
+  B = max(`OPENING_BAND_M` = 15 mm, 0.6·r), b = T + B, d0 = max(0, T − B). f(d) = T for d ≤ d0 (the inner wall ends
+  exactly at T), f(d) = d for d ≥ b, and between them the cubic Hermite with f(d0) = T, f'(d0) = 0, f(b) = b,
+  f'(b) = 1. f is monotone and C1, so the rim is a stretched, rounded lip rather than a step, and no vertex passes another.
+- Along the axis: z = 1 for −F ≤ s ≤ D, then 1 − smoothstep(e / f) for the distance e before −F or past D,
+  f = `OPENING_FALLOFF_M` = 20 mm. Across the axis only the radial map bounds the opening, so an occupant wider than
+  the channel opens a smooth rim, not a ragged one. The displacement is z · (f(d) − d). Moves under 1 µm count as none.
+- Candidates: −F − f ≤ s ≤ D + f and ρ ≤ R + f + `OPENING_SLACK_M` (60 mm), taken ONCE per channel when it is first
+  occupied; only skinned body meshes (never a garment's). Per frame they are narrowed by the occupant's reach
+  (bind-time s, ρ against the segments' extent + b + `OPENING_POSE_SLACK_M`).
+- The world displacement goes into a CLONE of the mesh's geometry, in bind space through the inverse of each vertex's
+  blended skin matrix. The normals of the triangles touching a moved vertex are recomputed (bind space, seam-split
+  vertices accumulated together). `restore()` swaps the original geometry back (positions and normals bit-identical).
+- Cost (headless Chromium, SwiftShader host under load 20): 4–6 ms per apply on 12–21 k visited vertices of the two
+  stored base models (r 20 / 50 mm). That is above the 1.5 ms target: the vertices really move (9–20 k), see the
+  A102 report.
+- 3D client: after every figure's phase B, `NpcManager.tickSecondary` collects each figure's `channelOccupants()` by
+  partner and calls `Figure.applyChannelOpenings` on the receiving figure. No occupant → nothing to do; an empty
+  channel restores; a model swap or dispose drops the openings.
 
 **Measured** (`scripts/check_partner_collision.mjs --channels`, read-only copies of two models, a pair clip and one
 SYNTHETIC channel on a one-link chain; no real model declares one yet):

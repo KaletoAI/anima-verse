@@ -169,6 +169,9 @@ export interface RodReadout {
   suppressed: string[]
   /** The engagement weight, ramped like a chain's (`stepEngagement`). */
   w: number
+  /** Ruling A102: the largest outward move of the receiving body's surface (mm) and how many vertices moved. */
+  openingMm: number
+  openingMoved: number
 }
 
 /** The readout as one line per value (plain words, units written out; `t` translates the templates). */
@@ -180,5 +183,7 @@ export function rodReadoutLines(r: RodReadout | null, t: (s: string) => string =
       .replace('{mm}', r.pastBottomMm.toFixed(1)),
     t('Weight w {w} · skipped capsules: {list}').replace('{w}', r.w.toFixed(2))
       .replace('{list}', r.suppressed.join(', ') || t('none')),
+    t('Opening widened by {mm} mm · {n} vertices moved').replace('{mm}', r.openingMm.toFixed(1))
+      .replace('{n}', String(r.openingMoved)),
   ]
 }

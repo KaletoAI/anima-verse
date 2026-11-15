@@ -21,11 +21,11 @@ import {
   applyFootPose, footPoseLiftM, footPoseMatches, plantFootPose, transplantedRestPose, seatFootLift,
   createStrandHair, withoutHairGroups, STRAND_LIMITS, STRAND_RECORD_VERSION,
   bindCollision, bodySphere, reachSphere, consumerPartnerCapsules, snapshotPartner, COLLISION_VERSION,
-  bindChannels,
+  bindChannels, bindChannelOpening,
 } from '@anima/scene-render';
 import type { SecondaryMotion, RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, CollisionPayload,
   GarmentCollision, FootPose, HairStrandRecord, StrandHair, CollisionBinding, CapsuleNow, PartnerSnapshot,
-  Sphere } from '@anima/scene-render';
+  Sphere, ChannelOpeningBinding, OpeningSegment } from '@anima/scene-render';
 import type { FrameFigure } from './partnerFrame';
 import { SubmergedGhost } from './submergedGhost';
 import { applyFigureTexture, zeroFigureMetalness } from './figureMaterials';
@@ -2034,6 +2034,10 @@ export class Figure {
   /** The figure's declared channels as OTHER figures enter them (`bindChannels`, collision v7), bound with the
    *  partner binding on the same instance; null without any (today's worlds). */
   private partnerChannels: ReturnType<typeof bindChannels> = null;
+  /** Ruling A102: this figure's surface opened around what occupies its channels (`bindChannelOpening`), per
+   *  channel id, bound on `openingsOn` (the instance shown); each owns a clone of the geometry it touches. */
+  private openings = new Map<string, ChannelOpeningBinding | null>();
+  private openingsOn: THREE.Object3D | null = null;
   /** A sphere about the root that holds the body in its bind pose (the
    *  plan's root prefilter): the half-diagonal of the figure's box over its
    *  feet, at least the figure's height. */
@@ -2863,6 +2867,7 @@ export class Figure {
    *  skeleton's bone texture are per figure, and those go here. */
   dispose() {
     this.disposed = true;
+    this.dropOpenings();
     this.prepareClips = undefined;
     this.pendingSecondary = null;
     // The partner binding belongs to the model it was bound on (no GPU resource).
@@ -3259,6 +3264,46 @@ export class Figure {
     if (this.firstPerson && this.head) {
       this.head.scale.copy(this.headScale).multiplyScalar(1e-3);
       this.headShrunk = true;
+    }
+  }
+
+  /** What occupies the PARTNERS' channels from this figure's chains, as last rendered (Ruling A102). */
+  channelOccupants(): ReturnType<SecondaryMotion['channelOccupants']> {
+    return this.disposed ? [] : this.secondary.channelOccupants();
+  }
+
+  /** Every opening back to the model as loaded, and their clones freed. */
+  private dropOpenings(): void {
+    for (const binding of this.openings.values()) binding?.dispose();
+    this.openings.clear();
+    this.openingsOn = null;
+  }
+
+  /** THE OPENING (Ruling A102), after every figure's phase B: the other figures' chains engaged in THIS figure's
+   *  channels (`occupants`, world segments with w) open its surface — each segment's radius × w, so the opening
+   *  ramps with the engagement. A channel without occupant is restored; none at all costs nothing. */
+  applyChannelOpenings(occupants: readonly { channel: string; w: number; segments: readonly OpeningSegment[] }[]): void {
+    if (!occupants.length && !this.openings.size) return;
+    const inst = this.root.children[0] ?? null;
+    const channels = this.partnerChannels;
+    if (this.disposed || this.model.retired || !channels || !inst || (this.openingsOn && this.openingsOn !== inst)) {
+      this.dropOpenings();
+      if (this.disposed || this.model.retired || !channels || !inst) return;
+    }
+    this.openingsOn = inst;
+    channels.update();
+    for (const ch of channels.channels) {
+      const segments: OpeningSegment[] = [];
+      for (const occ of occupants) {
+        if (occ.channel !== ch.id) continue;
+        for (const seg of occ.segments) segments.push({ a: seg.a, b: seg.b, r: seg.r * occ.w });
+      }
+      let binding = this.openings.get(ch.id);
+      if (binding === undefined && segments.length) {
+        binding = bindChannelOpening(THREE, inst, ch);
+        this.openings.set(ch.id, binding);
+      }
+      binding?.apply(ch, segments);
     }
   }
 
