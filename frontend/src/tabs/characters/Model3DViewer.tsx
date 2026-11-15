@@ -22,7 +22,7 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   createGarmentCollision, applyAlphaCutoff, applyFootPose, applyFootPoseToPose, figureBox, footPoseLiftM,
   footPoseMatches, transplantedRestPose, measureClipGround, clipGroundOffset, plantFootPose,
   seatFootLift, createStrandHair, bindCollision, inGarment, transformPoint, linearScale, capsuleWireframe,
-  placeCapsuleWireframe, partnerCapsules, probeCapsules, probeSweepOffset, probeSweptPose, probeSnapshot,
+  placeCapsuleWireframe, consumerPartnerCapsules, probeCapsules, probeSweepOffset, probeSweptPose, probeSnapshot,
   PROBE_COLOR } from '@anima/scene-render'
 import type { SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm,
   CollisionOverlay, CollisionPayload, FootPose, GarmentCollision, HairStrandRecord, StrandHair, CapsuleNow,
@@ -323,13 +323,10 @@ function findBodyMesh(root: Object3D): SkinnedMesh | null {
 }
 
 /** The world capsules of `partners` the hair consumer takes (`partnerCapsules('hair', …)`), partner by partner — the
- *  strand hair's and the GPU hair push's partners (the 3D client's `hairPartnerCapsules`). */
+ *  strand hair's and the GPU hair push's partners (the 3D client's `hairPartnerCapsules`); the region filter runs once
+ *  per snapshot (`consumerPartnerCapsules`). */
 function hairCapsulesOf(partners: readonly PartnerSnapshot[]): CapsuleNow[] {
-  const out: CapsuleNow[] = []
-  for (const snap of partners) {
-    for (const { capsule } of partnerCapsules('hair', snap.capsules.map(capsule => ({ capsule })))) out.push(capsule.now)
-  }
-  return out
+  return consumerPartnerCapsules('hair', partners)
 }
 
 export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel, freshness, builtAt, sideToolbar = false, embeddedTakes = false, clipLoops, clipUrl = '', textureUrl = '', height = 320, rotation,

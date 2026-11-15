@@ -68,10 +68,15 @@
  *    the capsules, never toward a partner; the partner is never moved. Per
  *    consumer (`partnerCapsules`): a hair chain takes every partner region,
  *    an extension chain all but `HAIR_ONLY_REGIONS`. Per chain the broad
- *    phase (`broadPhase`) keeps the capsules within the chain's lever (+ the
- *    exit radius) of its ROOT joint; its links test only those — at most
- *    `COLLIDE_MAX` (the push's cap per list), the farthest from the root
- *    joint dropped (`nearestCapsules`).
+ *    phase keeps the capsules within the chain's lever (+ the exit radius)
+ *    of its ROOT joint; its links test only those — at most `COLLIDE_MAX`
+ *    (the push's cap per list), the farthest from the root joint dropped
+ *    (`broadPhase` + `nearestCapsules`, bit for bit, as `chainPartners`).
+ *    THE SHARED CULL (plan Task 9b): the region filter runs once per partner
+ *    snapshot, the pool once per update, and a consumer with three chains or
+ *    more culls it once per update against a sphere about its chain roots
+ *    (`cullPartnerList`); a chain inside that sphere reads the culled list,
+ *    any other the whole pool — the same capsules either way.
  *    NO BIND RULE: a partner has no bind relation to the reader, so its
  *    capsules apply at FULL radius. The own and the partner capsules go
  *    through ONE search (`contactAnglePair`), capped by the same swing
@@ -100,7 +105,8 @@ import type { BoundCapsule, CollisionBinding, CollisionPayload, Vec3 } from './c
 import { inGarment } from './figure'
 import { COLLIDE_MAX, HAIR_REGIONS, pushOutOfCapsules } from './garmentCollision'
 import type { CollideCapsule, PushOptions } from './garmentCollision'
-import { broadPhase, contactAnglePair, nearestCapsules, partnerCapsules, PARTNER_HYST_M, releasedAngle } from './partnerContact'
+import { chainPartners, contactAnglePair, createPartnerList, cullPartnerList, fillPartnerList, PARTNER_HYST_M,
+  releasedAngle } from './partnerContact'
 import type { PartnerCapsule, PartnerSnapshot } from './partnerContact'
 type Three = typeof import('three')
 
@@ -420,9 +426,11 @@ interface Particle {
   chainRoot: Particle | null
   /** Root only: the chain's links, root first (their levers add up to the chain's lever). */
   chainLinks: Particle[]
-  /** Root only: the update the partner broad phase below belongs to, and its surviving pool entries. */
+  /** Root only: the update the partner broad phase below belongs to, and its surviving pool entries (contact key and
+   *  world capsule, pool order). */
   partnerFrame: number
-  partnerNear: PartnerEntry[]
+  partnerNearKeys: string[]
+  partnerNearNows: PartnerCapsule['now'][]
   /** The partner capsules that pushed the tip in the last frame (`"<partner>:<capsule id>"`; PARTNER CAPSULES). */
   partnerPushed: string[]
   /** The turn applied in the last frame while a partner contact held it (degrees; 0 = none), and its axis
@@ -430,8 +438,11 @@ interface Particle {
   partnerDeg: number
   partnerAxis: Vector3 | null
 }
-/** One partner capsule of the frame's pool, with its contact key. */
-interface PartnerEntry { key: string; now: PartnerCapsule['now'] }
+/** The shared partner cull's margin (metres) for a chain root's move between the cull and its own broad phase within
+ *  one update: only how often the culled list is read depends on it, never what a chain keeps. */
+const CULL_MARGIN_M = 0.1
+/** The shared partner cull runs for a consumer with at least this many chains. */
+const CULL_MIN_CHAINS = 3
 /** Maximum transverse compensation: strong flattening must not inflate the mesh. */
 const SPREAD_CAP = 1.6
 const DEFAULT_AXIS_GAIN: [number, number, number] = [1, 1, 1]
@@ -814,7 +825,7 @@ export function createSecondaryMotion(
           staticWeightFrom: (2 * Math.PI * params.freq_hz) ** 2 < 1e-12 ? 0 : 1,
           staticWeightTo: (2 * Math.PI * params.freq_hz) ** 2 < 1e-12 ? 0 : 1,
           tipLocal: new three.Vector3(), ancestors: new Set(), contacts: [],
-          chainRoot: null, chainLinks: [], partnerFrame: 0, partnerNear: [], partnerPushed: [], partnerDeg: 0, partnerAxis: null }
+          chainRoot: null, chainLinks: [], partnerFrame: 0, partnerNearKeys: [], partnerNearNows: [], partnerPushed: [], partnerDeg: 0, partnerAxis: null }
         if (particle.restTo !== to) {
           particle.restFrom = particle.rest
           particle.restTo = to
@@ -900,7 +911,7 @@ export function createSecondaryMotion(
     particles = nextParticles.sort((a, b) => drivenDepth(a) - drivenDepth(b))
     // Partner broad phase per chain: each link's root particle (itself when its root is not driven), root first.
     const particleOf = new Map(particles.map(st => [st.bind, st]))
-    for (const st of particles) { st.chainLinks = []; st.partnerFrame = 0; st.partnerNear = [] }
+    for (const st of particles) { st.chainLinks = []; st.partnerFrame = 0; st.partnerNearKeys = []; st.partnerNearNows = [] }
     for (const st of particles) {
       st.chainRoot = particleOf.get(rootBinds.get(st) ?? st.bind) ?? st
       st.chainRoot.chainLinks.push(st)
@@ -1017,23 +1028,56 @@ export function createSecondaryMotion(
   }
   // --- partner contact (module docstring, PARTNER CAPSULES) ---
   /** The frame's partner pool per consumer (rebuilt each update with partners), and the update counter. */
-  const partnerPool: { hair: PartnerEntry[]; extension: PartnerEntry[] } = { hair: [], extension: [] }
-  const partnerNows: { hair: PartnerCapsule['now'][]; extension: PartnerCapsule['now'][] } = { hair: [], extension: [] }
+  const partnerPool = { hair: createPartnerList(), extension: createPartnerList() }
   let partnerUpdate = 0
   const fillPartnerPool = (partners: readonly PartnerSnapshot[]) => {
     partnerUpdate++
-    for (const consumer of ['hair', 'extension'] as const) {
-      const pool = partnerPool[consumer], nows = partnerNows[consumer]
-      pool.length = 0; nows.length = 0
-      for (const snap of partners) {
-        const kept = partnerCapsules(consumer, snap.capsules.map(capsule => ({ capsule })))
-        for (const { capsule } of kept) { pool.push({ key: `${snap.name}:${capsule.id}`, now: capsule.now }); nows.push(capsule.now) }
-      }
-    }
+    fillPartnerList(partnerPool.hair, 'hair', partners)
+    fillPartnerList(partnerPool.extension, 'extension', partners)
   }
+  /**
+   * THE SHARED CULL (module docstring, PARTNER CAPSULES): once per consumer and update, at its first chain, the pool
+   * is culled against the consumer's reach sphere — centre the mean of its chain roots' joints as they stand now,
+   * radius the largest joint distance + chain lever + exit radius, plus `CULL_MARGIN_M` for the joints' own move
+   * within the solve. A chain whose root joint and lever lie inside it reads the culled list, any other the whole
+   * pool; either way it keeps the same capsules (`cullPartnerList`).
+   */
+  const partnerCull = {
+    hair: { frame: 0, centre: [0, 0, 0] as Vec3, radius: -1, list: createPartnerList() },
+    extension: { frame: 0, centre: [0, 0, 0] as Vec3, radius: -1, list: createPartnerList() },
+  }
+  const cullOf = (consumer: 'hair' | 'extension') => {
+    const cull = partnerCull[consumer]
+    if (cull.frame === partnerUpdate) return cull
+    cull.frame = partnerUpdate
+    const c = cull.centre
+    let roots = 0
+    c[0] = 0; c[1] = 0; c[2] = 0
+    for (const st of particles) {
+      if (st.chainRoot !== st || (st.paramsTo.hair ? 'hair' : 'extension') !== consumer) continue
+      const e = st.bind.bone.matrixWorld.elements
+      c[0] += e[12]; c[1] += e[13]; c[2] += e[14]
+      roots++
+    }
+    // One or two chains: the cull would cost what it saves — they read the whole pool.
+    if (roots < CULL_MIN_CHAINS) { cull.radius = -1; cull.list.n = 0; return cull }
+    c[0] /= roots; c[1] /= roots; c[2] /= roots
+    let radius = 0
+    for (const st of particles) {
+      if (st.chainRoot !== st || (st.paramsTo.hair ? 'hair' : 'extension') !== consumer) continue
+      const e = st.bind.bone.matrixWorld.elements
+      radius = Math.max(radius, Math.hypot(e[12] - c[0], e[13] - c[1], e[14] - c[2]) + chainLever(st, true) + PARTNER_HYST_M)
+    }
+    cull.radius = radius + CULL_MARGIN_M
+    cullPartnerList(partnerPool[consumer], c, cull.radius, cull.list)
+    return cull
+  }
+  /** `chainPartners` output (indices into the list read) and its scratch. */
+  const nearIndex: number[] = [], nearDist: number[] = []
   /** One link's capsules for the pair search: own (bind rule) and partner (full radius, + the exit radius for a
-   *  capsule that pushed last frame), the partner keys alongside. */
+   *  capsule that pushed last frame), the partner keys alongside. The partner entries are reused objects. */
   const pairOwn: CollideCapsule[] = [], pairPartner: CollideCapsule[] = [], pairKeys: string[] = []
+  const pairStore: CollideCapsule[] = []
   const pairJoint = new three.Vector3()
   const gatherPair = (st: Particle, own: boolean, joint: Vector3) => {
     pairOwn.length = 0; pairPartner.length = 0; pairKeys.length = 0
@@ -1045,23 +1089,33 @@ export function createSecondaryMotion(
       // bone as already written this update (roots are solved before their links).
       if (root !== st) joint = pairJoint.setFromMatrixPosition(root.bind.bone.matrixWorld)
       root.partnerFrame = partnerUpdate
-      root.partnerNear.length = 0
-      const nows = partnerNows[consumer]
-      if (nows.length) {
+      root.partnerNearKeys.length = 0
+      root.partnerNearNows.length = 0
+      const pool = partnerPool[consumer]
+      if (pool.n) {
         const at: Vec3 = [joint.x, joint.y, joint.z]
-        let kept = broadPhase(at, chainLever(root, true) + PARTNER_HYST_M, nows)
+        const lever = chainLever(root, true) + PARTNER_HYST_M
+        // The shared cull's list when the chain lies inside its sphere, else the whole pool (the same capsules).
+        const cull = cullOf(consumer)
+        const inside = cull.radius >= 0
+          && Math.hypot(at[0] - cull.centre[0], at[1] - cull.centre[1], at[2] - cull.centre[2]) + lever <= cull.radius
+        const list = inside ? cull.list : pool
         // The push takes at most COLLIDE_MAX capsules per list: beyond it the FARTHEST from the root joint drop
-        // (`nearestCapsules`), the survivors keep their pool order.
-        if (kept.length > COLLIDE_MAX) {
-          const all = kept
-          kept = nearestCapsules({ c: at, r: 0 }, all.map(i => nows[i]), COLLIDE_MAX).map(k => all[k]).sort((p, q) => p - q)
+        // (`nearestCapsules` order), the survivors keep their pool order.
+        const n = chainPartners(list, at, lever, COLLIDE_MAX, nearIndex, nearDist)
+        for (let k = 0; k < n; k++) {
+          root.partnerNearKeys.push(list.keys[nearIndex[k]])
+          root.partnerNearNows.push(list.nows[nearIndex[k]])
         }
-        for (const i of kept) root.partnerNear.push(partnerPool[consumer][i])
       }
     }
-    for (const { key, now } of root.partnerNear) {
-      pairPartner.push({ a: now.a, b: now.b, r: now.r + (st.partnerPushed.includes(key) ? PARTNER_HYST_M : 0) })
-      pairKeys.push(key)
+    const keys = root.partnerNearKeys, nows = root.partnerNearNows
+    for (let k = 0; k < keys.length; k++) {
+      const now = nows[k]
+      const c = pairStore[k] ??= { a: now.a, b: now.b, r: 0 }
+      c.a = now.a; c.b = now.b; c.r = now.r + (st.partnerPushed.includes(keys[k]) ? PARTNER_HYST_M : 0)
+      pairPartner.push(c)
+      pairKeys.push(keys[k])
     }
   }
   /** [own, partner] depth of `tipWorld`: how far each push moves it (the own one with `options`, SQUEEZE for hair). */
@@ -1077,16 +1131,23 @@ export function createSecondaryMotion(
     const q = pairPartner.length ? pushOutOfCapsules(p, pairPartner) : p
     return pairOwn.length ? pushOutOfCapsules(q, pairOwn, 1, undefined, options) : q
   }
-  /** The partner keys whose capsule holds `tipWorld` (at its test radius): the capsules that push this frame. */
+  /** The partner keys whose capsule holds `tipWorld` (at its test radius): the capsules that push this frame. The
+   *  plain square root rules out a capsule surely farther than r − `COLLIDE_SLACK`; the exact `Math.hypot` decides
+   *  every other one (the band is far wider than either's rounding). */
   const pairPushing = (): string[] => {
     const out: string[] = []
-    pairPartner.forEach((c, i) => {
+    const x = tipWorld.x, y = tipWorld.y, z = tipWorld.z
+    for (let i = 0; i < pairPartner.length; i++) {
+      const c = pairPartner[i]
       const abx = c.b[0] - c.a[0], aby = c.b[1] - c.a[1], abz = c.b[2] - c.a[2]
-      const apx = tipWorld.x - c.a[0], apy = tipWorld.y - c.a[1], apz = tipWorld.z - c.a[2]
+      const apx = x - c.a[0], apy = y - c.a[1], apz = z - c.a[2]
       const len2 = abx * abx + aby * aby + abz * abz
       const t = len2 > 1e-12 ? Math.min(1, Math.max(0, (apx * abx + apy * aby + apz * abz) / len2)) : 0
-      if (c.r - Math.hypot(apx - abx * t, apy - aby * t, apz - abz * t) >= COLLIDE_SLACK) out.push(pairKeys[i])
-    })
+      const dx = apx - abx * t, dy = apy - aby * t, dz = apz - abz * t
+      const s = Math.sqrt(dx * dx + dy * dy + dz * dz)
+      if (c.r - s < COLLIDE_SLACK - 1e-9 - 1e-9 * s) continue
+      if (c.r - Math.hypot(dx, dy, dz) >= COLLIDE_SLACK) out.push(pairKeys[i])
+    }
     return out
   }
   /**

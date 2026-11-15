@@ -2,8 +2,9 @@
  * Partner contact, the pure rules (cross-person collision, stage 1; spec
  * `docs/superpowers/specs/2026-11-13-cross-person-collision-design.md`
  * Parts 1 and 3): which OTHER figures a reader reads, which of their capsules
- * each consumer takes, the per-chain broad phase, the combined own + partner
- * contact search, the release rate, and the snapshot of a partner's capsules.
+ * each consumer takes, the per-chain broad phase and its shared cull (plan
+ * Task 9b), the combined own + partner contact search, the release rate, and
+ * the snapshot of a partner's capsules.
  *
  * - A figure's BODY SPHERE comes from its bound capsules in the current frame:
  *   centre = the mean of all endpoints, radius = the largest endpoint distance
@@ -23,7 +24,9 @@
  * suppress list added for the partner wiring must name `outer_waist` along with
  * the other Hips-rooted capsules (collision v6 splits the Hips segment).
  *
- * Pure: no Three, no allocation beyond the returned values.
+ * No Three. The rules allocate nothing beyond the returned values; the
+ * shared cull keeps one list pair per snapshot (a `WeakMap`, gone with the
+ * snapshot) and writes into lists the caller reuses.
  */
 import { HAIR_ONLY_REGIONS } from './collision'
 import type { CapsuleNow, CollisionBinding, Vec3 } from './collision'
@@ -179,6 +182,193 @@ export function nearestCapsules(sphere: Sphere, capsules: readonly CapsuleNow[],
     .sort((p, q) => p.d - q.d || p.i - q.i)
     .slice(0, Math.max(0, max))
     .map(entry => entry.i)
+}
+
+// --- the shared partner cull (plan Task 9b) ---------------------------------------------------------------------
+//
+// The per-chain broad phase above, done ONCE per reader and frame where it can be: the region filter runs once per
+// SNAPSHOT (`snapshotPartnerLists`, shared by every reader of that partner and by both consumers), the reader's pool
+// is built once per frame (`fillPartnerList`), culled once per consumer against a sphere about its chains
+// (`cullPartnerList`), and each chain then reads that list (`chainPartners`). The result per chain is bit for bit
+// `broadPhase` + `nearestCapsules` over the whole pool: the same float expressions on the same values, the cull never
+// drops a capsule a chain inside its sphere would keep (triangle inequality, `CULL_SLACK` for rounding), and a chain
+// outside it reads the whole pool.
+
+/** Floats per capsule in a `PartnerList`'s `seg`: a (3), b − a (3), |b − a|², r. */
+const SEG = 8
+/** The cull keeps a capsule within its sphere's radius + r + this (metres); the float rounding is ~1e-15. */
+const CULL_SLACK = 1e-6
+
+/**
+ * One consumer's partner capsules, in partner order then payload order: the contact keys
+ * (`"<partner>:<capsule id>"`), the world capsules and the broad phase's segment data (`SEG` floats per capsule).
+ * The first `n` entries are valid; the arrays are reused from frame to frame.
+ */
+export interface PartnerList { n: number; keys: string[]; nows: CapsuleNow[]; seg: Float64Array }
+
+/** An empty, reusable `PartnerList`. */
+export function createPartnerList(): PartnerList {
+  return { n: 0, keys: [], nows: [], seg: new Float64Array(0) }
+}
+
+function ensureSeg(list: PartnerList, n: number): void {
+  if (list.seg.length >= n * SEG) return
+  const seg = new Float64Array(Math.max(n, 2 * list.seg.length / SEG, 16) * SEG)
+  seg.set(list.seg)
+  list.seg = seg
+}
+
+function appendEntry(list: PartnerList, key: string, now: CapsuleNow): void {
+  ensureSeg(list, list.n + 1)
+  const o = list.n * SEG, seg = list.seg, { a, b } = now
+  seg[o] = a[0]; seg[o + 1] = a[1]; seg[o + 2] = a[2]
+  seg[o + 3] = b[0] - a[0]; seg[o + 4] = b[1] - a[1]; seg[o + 5] = b[2] - a[2]
+  seg[o + 6] = seg[o + 3] * seg[o + 3] + seg[o + 4] * seg[o + 4] + seg[o + 5] * seg[o + 5]
+  seg[o + 7] = now.r
+  list.keys[list.n] = key
+  list.nows[list.n] = now
+  list.n++
+}
+
+/** `segmentDistance` from the segment data of entry `o` (the same expressions, so the same float). */
+function segDistanceAt(seg: Float64Array, o: number, x: number, y: number, z: number): number {
+  const abx = seg[o + 3], aby = seg[o + 4], abz = seg[o + 5], len2 = seg[o + 6]
+  const apx = x - seg[o], apy = y - seg[o + 1], apz = z - seg[o + 2]
+  const t = len2 > 1e-12 ? Math.min(1, Math.max(0, (apx * abx + apy * aby + apz * abz) / len2)) : 0
+  return Math.hypot(apx - abx * t, apy - aby * t, apz - abz * t)
+}
+
+/**
+ * Where `segDistanceAt` (a `Math.hypot`) lies against `limit` when the cheap square root already decides: 1 surely
+ * above, −1 surely at or below, 0 too close to tell (then only the exact value may decide). `Math.hypot` and
+ * `Math.sqrt` of the sum of squares both lie within a few ulp (~1e-15 relative) of the true distance; the band
+ * `NEAR_ABS` + `NEAR_REL` · distance is far wider than that.
+ */
+function segSide(seg: Float64Array, o: number, x: number, y: number, z: number, limit: number): number {
+  const abx = seg[o + 3], aby = seg[o + 4], abz = seg[o + 5], len2 = seg[o + 6]
+  const apx = x - seg[o], apy = y - seg[o + 1], apz = z - seg[o + 2]
+  const t = len2 > 1e-12 ? Math.min(1, Math.max(0, (apx * abx + apy * aby + apz * abz) / len2)) : 0
+  const dx = apx - abx * t, dy = apy - aby * t, dz = apz - abz * t
+  const s = Math.sqrt(dx * dx + dy * dy + dz * dz)
+  const band = NEAR_ABS + NEAR_REL * s
+  return s > limit + band ? 1 : s < limit - band ? -1 : 0
+}
+/** The band of `segSide` (metres, and relative to the distance). */
+const NEAR_ABS = 1e-9
+const NEAR_REL = 1e-9
+
+/** A snapshot's capsules per consumer, made once per snapshot (a snapshot never changes after it is made). */
+const SNAPSHOT_LISTS = new WeakMap<PartnerSnapshot,
+  { capsules: readonly PartnerCapsule[]; hair: PartnerList; extension: PartnerList }>()
+
+/**
+ * The capsules each consumer takes from `snap` (`partnerCapsules`, payload order) with their contact keys — made
+ * once per snapshot object and shared by every reader and consumer of it. A snapshot is immutable once made
+ * (`snapshotPartner`, `probeSnapshot` make a new one each frame); handing in a new `capsules` array remakes it.
+ */
+export function snapshotPartnerLists(snap: PartnerSnapshot): { hair: PartnerList; extension: PartnerList } {
+  const known = SNAPSHOT_LISTS.get(snap)
+  if (known && known.capsules === snap.capsules) return known
+  const wrapped = snap.capsules.map(capsule => ({ capsule }))
+  const made = { capsules: snap.capsules, hair: createPartnerList(), extension: createPartnerList() }
+  for (const consumer of ['hair', 'extension'] as const) {
+    for (const { capsule } of partnerCapsules(consumer, wrapped)) {
+      appendEntry(made[consumer], `${snap.name}:${capsule.id}`, capsule.now)
+    }
+  }
+  SNAPSHOT_LISTS.set(snap, made)
+  return made
+}
+
+/** A reader's pool for `consumer`: every partner's list in partner order, into `out` (reused). */
+export function fillPartnerList(out: PartnerList, consumer: 'hair' | 'extension',
+  partners: readonly PartnerSnapshot[]): PartnerList {
+  out.n = 0
+  let total = 0
+  for (const snap of partners) total += snapshotPartnerLists(snap)[consumer].n
+  ensureSeg(out, total)
+  for (const snap of partners) {
+    const list = snapshotPartnerLists(snap)[consumer]
+    out.seg.set(list.seg.subarray(0, list.n * SEG), out.n * SEG)
+    for (let i = 0; i < list.n; i++) { out.keys[out.n + i] = list.keys[i]; out.nows[out.n + i] = list.nows[i] }
+    out.n += list.n
+  }
+  out.keys.length = out.n
+  out.nows.length = out.n
+  return out
+}
+
+/** The world capsules `consumer` takes from `partners`, partner by partner (`partnerCapsules`, payload order). */
+export function consumerPartnerCapsules(consumer: 'hair' | 'extension',
+  partners: readonly PartnerSnapshot[]): CapsuleNow[] {
+  const out: CapsuleNow[] = []
+  for (const snap of partners) {
+    const list = snapshotPartnerLists(snap)[consumer]
+    for (let i = 0; i < list.n; i++) out.push(list.nows[i])
+  }
+  return out
+}
+
+/**
+ * The figure's cull: the entries of `src` whose segment comes within `radius` + r (+ `CULL_SLACK`) of `centre`,
+ * pool order kept, into `out` (reused). A chain whose root joint j and lever L satisfy |j − centre| + L ≤ `radius`
+ * keeps from `out` exactly what it keeps from `src` (`chainPartners`).
+ */
+export function cullPartnerList(src: PartnerList, centre: Vec3, radius: number, out: PartnerList): PartnerList {
+  out.n = 0
+  ensureSeg(out, src.n)
+  for (let i = 0; i < src.n; i++) {
+    const o = i * SEG
+    // The plain square root: the slack is far wider than its distance from `Math.hypot`.
+    if (segSide(src.seg, o, centre[0], centre[1], centre[2], radius + src.seg[o + 7] + CULL_SLACK) > 0) continue
+    out.seg.set(src.seg.subarray(o, o + SEG), out.n * SEG)
+    out.keys[out.n] = src.keys[i]
+    out.nows[out.n] = src.nows[i]
+    out.n++
+  }
+  out.keys.length = out.n
+  out.nows.length = out.n
+  return out
+}
+
+/**
+ * One chain's partner capsules: the indices into `list` that `broadPhase(joint, lever, list.nows)` keeps; beyond
+ * `max` the `max` nearest (`nearestCapsules` order: segment distance − r, ties the list order), handed back in list
+ * order — `broadPhase` + `nearestCapsules` bit for bit, without allocating. Writes `out[0..count)` (`dist` is
+ * scratch) and returns the count.
+ */
+export function chainPartners(list: PartnerList, joint: Vec3, lever: number, max: number,
+  out: number[], dist: number[]): number {
+  const seg = list.seg, [x, y, z] = joint
+  let n = 0
+  for (let i = 0; i < list.n; i++) {
+    const o = i * SEG, r = seg[o + 7], limit = lever + r
+    // The exact distance only where the cheap one cannot tell, or (below) where the order needs it.
+    const side = segSide(seg, o, x, y, z, limit)
+    if (side > 0) continue
+    if (side < 0) { out[n] = i; dist[n] = NaN; n++; continue }
+    const d = segDistanceAt(seg, o, x, y, z)
+    if (d <= limit) { out[n] = i; dist[n] = d - r; n++ }
+  }
+  const cap = Math.max(0, max)
+  if (n <= cap) return n
+  for (let k = 0; k < n; k++) {
+    if (Number.isNaN(dist[k])) { const o = out[k] * SEG; dist[k] = segDistanceAt(seg, o, x, y, z) - seg[o + 7] }
+  }
+  // Nearest first, stable (equal distances keep the list order), then the survivors back in list order.
+  for (let k = 1; k < n; k++) {
+    const i = out[k], d = dist[k]
+    let j = k - 1
+    for (; j >= 0 && dist[j] > d; j--) { out[j + 1] = out[j]; dist[j + 1] = dist[j] }
+    out[j + 1] = i; dist[j + 1] = d
+  }
+  for (let k = 1; k < cap; k++) {
+    const i = out[k]
+    let j = k - 1
+    for (; j >= 0 && out[j] > i; j--) out[j + 1] = out[j]
+    out[j + 1] = i
+  }
+  return cap
 }
 
 // --- the combined contact search --------------------------------------------------------------------------------

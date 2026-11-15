@@ -593,11 +593,15 @@ function partnerRadius(p: Vec3, c: CapsuleNow, off: Float64Array): number {
   return f > 0 ? d + depth * f : 0
 }
 
-/** The ordinary passes: `COLLIDE_PASSES` passes over the capsules in payload order (`COLLIDE_GLSL_PASSES`). */
-function ordinaryPasses(p: Vec3, capsules: readonly CollideCapsule[], radii: readonly number[]): Vec3 {
+/**
+ * The ordinary passes: `COLLIDE_PASSES` passes over the first `n` capsules in payload order (`COLLIDE_GLSL_PASSES`).
+ * A pass that moves nothing ends them: every later pass would repeat it on the same point (the same result, bit for
+ * bit, without the work).
+ */
+function ordinaryPasses(p: Vec3, capsules: readonly CollideCapsule[], radii: ArrayLike<number>, n: number): Vec3 {
   let x = p[0], y = p[1], z = p[2]
-  const n = radii.length
   for (let it = 0; it < COLLIDE_PASSES; it++) {
+    let moved = false
     for (let i = 0; i < n; i++) {
       const { a, b } = capsules[i]
       const r = radii[i]
@@ -610,21 +614,27 @@ function ordinaryPasses(p: Vec3, capsules: readonly CollideCapsule[], radii: rea
       if (d < r && d > COLLIDE_MIN_D) {
         const k = r / d - 1
         x += dx * k; y += dy * k; z += dz * k
+        moved = true
       }
     }
+    if (!moved) break
   }
   return [x, y, z]
 }
+
+/** Scratch of the TypeScript push (single-threaded, never re-entered): the axis offset, the squeeze set, the radii. */
+const PUSH_OFF = new Float64Array(4)
+const PUSH_IN_S = new Uint8Array(COLLIDE_MAX + PARTNER_COLLIDE_MAX)
+const PUSH_RADII = new Float64Array(COLLIDE_MAX)
 
 /**
  * The SQUEEZE rule (`COLLIDE_GLSL_FUNCTION_SQUEEZE`, the same steps): the
  * squeezed point, or null when the ordinary passes apply (|Σ n_i| below
  * `SQUEEZE_MIN_N`, or 2·max r_S not outside every capsule of S).
  */
-function squeezeOut(p: Vec3, capsules: readonly CollideCapsule[], radii: readonly number[]): Vec3 | null {
-  const n = radii.length
-  const off = new Float64Array(4)
-  const inS = new Uint8Array(n)
+function squeezeOut(p: Vec3, capsules: readonly CollideCapsule[], radii: ArrayLike<number>, n: number): Vec3 | null {
+  const off = PUSH_OFF
+  const inS = PUSH_IN_S.fill(0, 0, n)
   let count = 0
   for (let i = 0; i < n; i++) {
     if (axisOffset(p[0], p[1], p[2], capsules[i], off)[3] < radii[i]) { inS[i] = 1; count++ }
@@ -695,15 +705,21 @@ export function pushOutOfCapsules(p: Vec3, capsules: readonly CollideCapsule[], 
   options?: PushOptions): Vec3 {
   const n = Math.min(capsules.length, COLLIDE_MAX)
   let used: readonly CollideCapsule[] = capsules
-  let radii = capsules.slice(0, n).map(c => (c.bind && bindP ? Math.min(c.r, segmentDistance(bindP, c.bind.a, c.bind.b)) : c.r))
+  let radii: ArrayLike<number> = PUSH_RADII
+  let count = n
+  for (let i = 0; i < n; i++) {
+    const c = capsules[i]
+    PUSH_RADII[i] = c.bind && bindP ? Math.min(c.r, segmentDistance(bindP, c.bind.a, c.bind.b)) : c.r
+  }
   const partners = options?.partners?.length ? options.partners.slice(0, PARTNER_COLLIDE_MAX) : null
   if (partners) {
     // One list, partners first — the shader runs the partner loop before the own one everywhere.
     const off = new Float64Array(4)
     used = [...partners, ...capsules.slice(0, n)]
-    radii = [...partners.map(c => partnerRadius(p, c, off)), ...radii]
+    radii = [...partners.map(c => partnerRadius(p, c, off)), ...Array.from(PUSH_RADII.subarray(0, n))]
+    count = used.length
   }
-  const [x, y, z] = (options?.squeeze ? squeezeOut(p, used, radii) : null) ?? ordinaryPasses(p, used, radii)
+  const [x, y, z] = (options?.squeeze ? squeezeOut(p, used, radii, count) : null) ?? ordinaryPasses(p, used, radii, count)
   const w = Math.min(1, Math.max(0, weight))
   return [p[0] + (x - p[0]) * w, p[1] + (y - p[1]) * w, p[2] + (z - p[2]) * w]
 }

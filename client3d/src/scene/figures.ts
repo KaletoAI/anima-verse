@@ -20,7 +20,7 @@ import {
   rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM, clipShiftM, figureBox, createGarmentCollision,
   applyFootPose, footPoseLiftM, footPoseMatches, plantFootPose, transplantedRestPose, seatFootLift,
   createStrandHair, withoutHairGroups, STRAND_LIMITS, STRAND_RECORD_VERSION,
-  bindCollision, bodySphere, reachSphere, partnerCapsules, snapshotPartner, COLLISION_VERSION,
+  bindCollision, bodySphere, reachSphere, consumerPartnerCapsules, snapshotPartner, COLLISION_VERSION,
 } from '@anima/scene-render';
 import type { SecondaryMotion, RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, CollisionPayload,
   GarmentCollision, FootPose, HairStrandRecord, StrandHair, CollisionBinding, CapsuleNow, PartnerSnapshot,
@@ -3464,11 +3464,8 @@ const EYE_SCRATCH = {
 const FRAME_SCRATCH = new THREE.Vector3();
 
 /** The world capsules of `partners` the hair consumer takes (`partnerCapsules('hair', …)`: every region,
- *  `outer_trunk` replacing `torso`), in partner order. */
+ *  `outer_trunk` replacing `torso`), in partner order — the region filter runs once per snapshot, shared with the
+ *  secondary motion's pool (`consumerPartnerCapsules`). */
 export function hairPartnerCapsules(partners: readonly PartnerSnapshot[]): CapsuleNow[] {
-  const out: CapsuleNow[] = [];
-  for (const snap of partners) {
-    for (const { capsule } of partnerCapsules('hair', snap.capsules.map(capsule => ({ capsule })))) out.push(capsule.now);
-  }
-  return out;
+  return consumerPartnerCapsules('hair', partners);
 }

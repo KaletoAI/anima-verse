@@ -193,8 +193,9 @@ export type { CollideCapsule, GarmentCollision, GarmentCollisionEntry, PushOptio
 
 export { PARTNER_MAX, PARTNER_COLLIDE_MAX, PARTNER_PUSH_MAX_M, PARTNER_HYST_M, PARTNER_RELEASE_DEG_S,
   PARTNER_PREFILTER_SLACK_M, bodySphere, reachSphere, selectPartners, partnerCapsules, broadPhase, nearestCapsules,
+  createPartnerList, snapshotPartnerLists, fillPartnerList, consumerPartnerCapsules, cullPartnerList, chainPartners,
   contactAnglePair, releasedAngle, snapshotPartner } from './partnerContact'
-export type { Sphere, ChannelNow, PartnerCapsule, PartnerSnapshot } from './partnerContact'
+export type { Sphere, ChannelNow, PartnerCapsule, PartnerSnapshot, PartnerList } from './partnerContact'
 
 export { PROBE_NAME, PROBE_COLOR, probeCapsules, probeSweepOffset, probeSweptPose, probeSnapshot } from './partnerProbe'
 export type { ProbeSourceCapsule, ProbePose } from './partnerProbe'

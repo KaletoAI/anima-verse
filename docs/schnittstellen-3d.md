@@ -12318,7 +12318,13 @@ and both renderers apply them (the 3D client to the figures on the map, the admi
   Every consumer drops `torso` when the partner's set has `outer_trunk` (the outer set encloses it). The figure's
   OWN `outer_trunk` capsules push nothing of its own (`PARTNER_ONLY_REGIONS`).
 - **Part 3 rules** (link turn). Per chain a broad phase keeps the partner capsules within the chain's lever
-  (+ `PARTNER_HYST_M`) of its root joint (`broadPhase`), at most `COLLIDE_MAX`, the farthest dropped. NO BIND RULE —
+  (+ `PARTNER_HYST_M`) of its root joint (`broadPhase`), at most `COLLIDE_MAX`, the farthest dropped. The work
+  that does not depend on the chain runs ONCE (the shared cull, plan Task 9b): the consumer filter once per partner
+  snapshot (shared by every reader and by the strand hair and the GPU push), the reader's pool once per frame, and
+  for a consumer with three chains or more one cull per frame against a sphere about its chain roots (their mean;
+  radius = the largest root distance + chain lever + `PARTNER_HYST_M`, plus 0.1 m). A chain whose root joint and
+  lever lie inside that sphere reads the culled list, any other the whole pool; each keeps exactly the capsules of
+  `broadPhase` + `nearestCapsules` over the whole pool (`chainPartners`, bit for bit). NO BIND RULE —
   a partner capsule applies at full radius. ONE search over the own and the partner depths (`contactAnglePair`),
   capped by the link's swing budget: the smallest turn outside both; when none within the budget is, the turn with
   the smallest OWN depth, the partner depth breaking ties — the own body always wins. HYSTERESIS: a partner capsule
@@ -12354,10 +12360,15 @@ and both renderers apply them (the 3D client to the figures on the map, the admi
   starts carrying jumps by the probe's speed, 4–8 mm a frame at 0.5 m/s, which no constant removes.
   `PARTNER_RELEASE_DEG_S`: the slowest rate no sweep reading of which is worse than at 240°/s (60°/s turns more
   often). Cost per reader and frame (node, `performance.now`, a loaded 28-core host): `snapshotMs` ≈ 0.02;
-  a lone figure 0.00 added; four partners add 0.03–0.11 ms to the secondary motion of a figure with one extension
-  group and 0.13–0.36 ms to one with eleven hair chain groups (halving `PARTNER_COLLIDE_MAX` changes nothing).
+  a lone figure 0.00 added. Four partners add to the secondary motion, with the shared cull (six runs alternating
+  with the code before it, median, min–max): 0.075 (0.071–0.111) ms to a figure with eleven hair chain groups on the
+  GPU path (before: 0.166, 0.150–0.188), 0.063 (0.026–0.080) ms to it with strand hair (before: 0.079,
+  0.062–0.097), 0.015 (0.012–0.035) ms to a figure with one extension group (before: 0.038, 0.025–0.045). What
+  remains is the contact search itself (the tips the probes actually reach). Every depth and jitter number above is
+  unchanged by the cull, bit for bit (halving `PARTNER_COLLIDE_MAX` changes nothing).
   Checks: `scripts/smoke_partner_rules.mjs`, `scripts/smoke_partner_contact.mjs`, `scripts/smoke_partner_frame.mjs`,
   `scripts/smoke_partner_probe.mjs`, `scripts/smoke_partner_hair_push.mjs` (hand-derived);
+  `scripts/smoke_partner_cull_parity.mjs` (the shared cull against the code before it, bit for bit);
   `scripts/check_partner_collision.mjs` (the numbers above, on read-only copies of two models and a pair clip).
 
 ### Hair strands (`hair_strands`)
