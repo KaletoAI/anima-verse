@@ -85,6 +85,14 @@ The CHECKS (``ok`` / ``reasons``):
   figure, piece 0.002) means the draft wears nothing that shows in this
   view: see EMPTY below.
 
+* ``dropped <= DROP_MAX`` (0.03, Ruling A99) — the composite left out no garment: the largest connected
+  region the registered draft wears over the base's skin (not skin by the BASE's model, ΔE > ``DE_UNSKIN``)
+  outside the mask (``dropped_garment``). The put-on score cannot see it: its region needs ΔE > 20, and
+  Rurik's oatmeal linen shirt differed from the bare back by ΔE 13.9 — the composite dropped it (mask 0.48,
+  the shirt read as skin because it had become the draft's skin mode via ``_shared_skin``) and passed
+  with coverage 0.96; ``dropped`` there 0.338, on the 14 other stored dressed backs of Anima Divide
+  0.0002 .. 0.025.
+
 EMPTY (fix round 1 of Task 11g): a draft that lines up with the base
 (``iou >= IOU_MIN``) but wears nothing that shows in this view — a necklace
 or a front-only detail seen from behind — is NOT refused. The view is the
@@ -127,10 +135,11 @@ from app.core.log import get_logger
 
 logger = get_logger("view_composite")
 
-#: Bumped when the composite changes for the same inputs (recorded with every result). 4: a bald shape's dressed back
+#: Bumped when the composite changes for the same inputs (recorded with every result). 5: a garment close to the
+#: base's skin colour is no longer read as skin, and a composite that leaves one out is refused (Ruling A99). 4: a bald shape's dressed back
 #: takes the draft's head (Ruling A21) and its views are judged by the face (A16) — a dressed view composited before
 #: is re-composited from its stored draft at its next use (Ruling A24, ``base_body.composite_outdated``).
-VERSION = 4
+VERSION = 5
 #: Rows of the shape flow's work images.
 FLOW_HEIGHT = 512
 #: Gaussian sigma (work px) of the flow field.
@@ -155,7 +164,13 @@ FLARE_FILL = 6
 #: Lab ΔE76 under which an aligned draft pixel over the base's (eroded) skin still is that skin
 #: (``_shared_skin``), and the share of the draft figure such pixels need to set the draft's skin mode.
 SHARED_SKIN_DE = 15.0
-SHARED_SKIN_MIN = 0.02
+SHARED_SKIN_MIN = 0.005
+#: Lab ΔE76 above which a draft pixel that is skin by neither skin model, over base skin, is garment
+#: (``_garment_mask``; Ruling A99: an oatmeal linen shirt over the back differed by ΔE 13.9 < ``DE_GARMENT``).
+DE_UNSKIN = 8.0
+#: The largest connected garment region the composite may leave out, as a share of the base figure
+#: (``dropped_garment``; Ruling A99).
+DROP_MAX = 0.03
 #: The alignment IoU (registered draft figure / base figure, outside the garment — ``alignment_iou``) a
 #: composite needs.
 IOU_MIN = 0.93
@@ -212,6 +227,7 @@ NOTHING_TO_PUT_ON = "nothing to put on"
 NOT_ALIGNED = "the draft does not line up with the base"
 NOT_COVERED = "the composite did not put on what the draft wears"
 NO_FIGURE = "the draft has no figure"
+DROPPED = "the composite left out a garment the draft wears"
 #: Neutral grey of a flattened composite (``model_refs.VIEW_REFERENCE_BACKGROUND``).
 GREY = (128, 128, 128)
 
@@ -450,9 +466,16 @@ class Skin:
                 continue
             if bright and other.lum_median < self.lum_p10:
                 continue
+            if region is figure and self._maha(other.centre) >= SKIN_MAHA:
+                # The whole figure's mode outside this skin's spread is a garment (Ruling A99), not warmer skin.
+                continue
             out.centre, out.lo = other.centre, min(self.lo, other.lo)
             break
         return out
+
+    def _maha(self, ab: np.ndarray) -> float:
+        d = np.asarray(ab, dtype=np.float64) - self.centre
+        return float(np.sqrt(d @ self.icov @ d))
 
     def like(self, labimg: np.ndarray) -> np.ndarray:
         if self.empty:
@@ -467,10 +490,13 @@ def _shared_skin(lb: np.ndarray, la: np.ndarray, base_mask: np.ndarray, aligned:
                  skin_b: "Skin") -> np.ndarray:
     """The aligned draft's pixels over the base's skin (the base figure eroded by 3 px, ``skin_b``) that
     differ from it by less than ``SHARED_SKIN_DE`` (Lab ΔE76) — the bare skin both images share (arms,
-    shoulders, feet), whatever the garment's colour (``Skin.recentred``)."""
+    shoulders, feet), whatever the garment's colour (``Skin.recentred``). The draft pixel must itself be
+    skin by the base's model (Ruling A99): an oatmeal linen shirt over the back is within ΔE 15 of the
+    base's skin there (13.9) but not skin — without the test it made 17 % of the figure "shared skin",
+    the draft's skin mode became the shirt and the shirt was dropped as skin."""
     from scipy import ndimage as ndi
     inner = ndi.binary_erosion(base_mask, _disk(3)) & (aligned[..., 3] > 240)
-    return inner & skin_b.like(lb) & (np.linalg.norm(la - lb, axis=-1) < SHARED_SKIN_DE)
+    return inner & skin_b.like(lb) & skin_b.like(la) & (np.linalg.norm(la - lb, axis=-1) < SHARED_SKIN_DE)
 
 
 def _garment_mask(base: np.ndarray, dw: np.ndarray, base_mask: np.ndarray, dw_mask: np.ndarray,
@@ -492,6 +518,9 @@ def _garment_mask(base: np.ndarray, dw: np.ndarray, base_mask: np.ndarray, dw_ma
     # Draft skin OUTSIDE the base silhouette is limb drift; inside it a bare
     # part may replace a base garment (shoes -> bare feet) and stays.
     cand &= ~(skin_draft & ~base_mask)
+    # A draft pixel over base skin that is skin by neither model is garment from a smaller ΔE on (Ruling A99:
+    # a light linen shirt differs from the skin under it mostly in chroma, ΔE ~14).
+    cand |= (dw_mask & base_mask & skin_b.like(lbs) & ~skin_draft & ~skin_b.like(lds) & (de > DE_UNSKIN))
     m = ndi.binary_opening(cand, _disk(opening)) if opening else cand
     m = ndi.binary_closing(m, _disk(4))
     lab_, n = ndi.label(m)
@@ -509,6 +538,26 @@ def _garment_mask(base: np.ndarray, dw: np.ndarray, base_mask: np.ndarray, dw_ma
         small[1:] = hs < 2500
         m |= small[hl]
     return m & dw_mask, de
+
+
+def dropped_garment(base: np.ndarray, dw: np.ndarray, base_mask: np.ndarray, dw_mask: np.ndarray,
+                    mask: np.ndarray, skin_b: Skin, head_share: float = PUT_ON_HEAD_SHARE) -> float:
+    """The largest connected region the draft wears over the base's skin that the composite left out, as a
+    share of the base figure (Ruling A99): registered draft pixels below the head rows, over base skin, that
+    are not skin by the BASE's model (independent of the draft's re-centred skin, which is what failed),
+    differ by more than ``DE_UNSKIN`` and lie outside the mask (grown 3 px), opened by 2 px."""
+    from scipy import ndimage as ndi
+    lbs, lds = _blur3(_lab(base), 1.5), _blur3(_lab(dw), 1.5)
+    de = np.linalg.norm(lbs - lds, axis=-1)
+    left = (dw_mask & base_mask & skin_b.like(lbs) & ~skin_b.like(lds) & (de > DE_UNSKIN)
+            & ~ndi.binary_dilation(mask, _disk(3)))
+    t, b, _l, _r = _bbox(base_mask)
+    left[:t + int(round(head_share * (b - t)))] = False
+    left = ndi.binary_opening(left, _disk(2))
+    lab_, n = ndi.label(left)
+    if not n:
+        return 0.0
+    return float(ndi.sum(left, lab_, range(1, n + 1)).max() / max(1, base_mask.sum()))
 
 
 def _flare(aligned: np.ndarray, aligned_mask: np.ndarray, base_mask: np.ndarray) -> np.ndarray:
@@ -788,6 +837,7 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str, *, take_head: boo
         "iou_full": round(iou(dwm & ~flare, bm), 4),
         "composite_iou": round(iou(cm, bm), 4),
         "drift_px": round(contour_drift(cm, bm), 2),
+        "dropped": round(dropped_garment(base, dw, bm, dwm, mask | flare, skin_b), 4),
     })
     reasons = check(record)
     support = ndi.binary_dilation(mask | flare, _disk(SUPPORT_GROW))
@@ -814,6 +864,9 @@ def check(record: Dict[str, Any]) -> List[str]:
         reasons.append(f"{NOTHING_TO_PUT_ON} (garment region {float(coverage.get('region') or 0.0):.4f} < {limit})")
     elif float(coverage.get("score") or 0.0) < COVERAGE_MIN:
         reasons.append(f"{NOT_COVERED} (coverage {float(coverage.get('score') or 0.0):.3f} < {COVERAGE_MIN})")
+    dropped = record.get("dropped")
+    if dropped is not None and float(dropped) > DROP_MAX:
+        reasons.append(f"{DROPPED} (region {float(dropped):.3f} > {DROP_MAX})")
     if not aligned:
         reasons.append(f"{NOT_ALIGNED} (IoU {float(record.get('iou') or 0.0):.3f} < {IOU_MIN})")
     return reasons

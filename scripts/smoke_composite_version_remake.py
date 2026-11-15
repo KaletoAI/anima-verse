@@ -18,21 +18,21 @@ character's ``model_refs`` (where ``draft_path`` looks).
 
 Expected, derived by hand from Ruling A24:
 
-[1] ``view_composite.VERSION`` == 4 (3 + the bump for A16's face check / A21's head). ``composite_outdated``:
-    {fit composite, composite {version 3, ok, iou 0.99, coverage 0.9}} True (3 < 4); the same at version 4
-    False; version 4 recorded ok with iou 0.90 True (today ``check`` refuses it: IoU < IOU_MIN 0.93); version 4
+[1] ``view_composite.VERSION`` == 5 (3 + the bump for A16's face check / A21's head, + A99's skin-tone garment). ``composite_outdated``:
+    {fit composite, composite {version 3, ok, iou 0.99, coverage 0.9}} True (3 < 5); the same at version 5
+    False; version 5 recorded ok with iou 0.90 True (today ``check`` refuses it: IoU < IOU_MIN 0.93); version 5
     ok False False (a refused composite is never published, nothing to remake); composite "empty" False;
     a model fit {fit_gate …} (no ``fit: composite``) False; {} False; version "x" True.
-[2] A first ``_dress_view`` of the back: 1 draft, 1 composite, the sidecar's composite version 4.
+[2] A first ``_dress_view`` of the back: 1 draft, 1 composite, the sidecar's composite version 5.
 [3] Its sidecar's composite version set back to 3 (a view of before the bump): ``_dress_view`` again — 0 new
     drafts (the stored draft follows the front), 1 more composite (the CPU re-composite), the published sidecar
-    at version 4, ``fit_gate`` with ONE attempt (no new draft after it).
-[4] At version 4 a further ``_dress_view`` is the ordinary C2 path (the stored draft composited again, passes,
+    at version 5, ``fit_gate`` with ONE attempt (no new draft after it).
+[4] At version 5 a further ``_dress_view`` is the ordinary C2 path (the stored draft composited again, passes,
     no draft) — still 0 new drafts: A24 adds no job to a current view.
 [5] Version 3 again but the front changed (another pixel): the stored draft follows another front -> ONE new
-    draft (what the estimate counts), then its composite at version 4.
+    draft (what the estimate counts), then its composite at version 5.
 [6] ``shape_view``: a stored shape view current for the plain body (``shape_view_shas`` stubbed {back: sha}) is
-    returned at version 4 and None at version 3 (re-composited before the shape is meshed from it).
+    returned at version 5 and None at version 3 (re-composited before the shape is meshed from it).
 [7] Fails on the old code (explicit hash 21ca534b, the base of T15-F1): ``view_composite.VERSION = 3`` there and
     ``base_body`` had no ``composite_outdated``.
 """
@@ -73,14 +73,14 @@ def main() -> int:
         from app.models.character import get_character_dir
 
         print("[1] composite_outdated")
-        check("VERSION", vc.VERSION, 4)
+        check("VERSION", vc.VERSION, 5)
         ok_rec = {"ok": True, "iou": 0.99, "coverage": {"score": 0.9, "region": 0.2}}
         table = [
             ("version 3", {"fit": "composite", "composite": {**ok_rec, "version": 3}}, True),
-            ("version 4", {"fit": "composite", "composite": {**ok_rec, "version": 4}}, False),
-            ("version 4, iou 0.90 recorded ok", {"fit": "composite", "composite": {**ok_rec, "version": 4,
+            ("version 5", {"fit": "composite", "composite": {**ok_rec, "version": 5}}, False),
+            ("version 5, iou 0.90 recorded ok", {"fit": "composite", "composite": {**ok_rec, "version": 5,
                                                                                    "iou": 0.90}}, True),
-            ("version 4, refused", {"fit": "composite", "composite": {**ok_rec, "version": 4, "ok": False,
+            ("version 5, refused", {"fit": "composite", "composite": {**ok_rec, "version": 5, "ok": False,
                                                                       "iou": 0.90}}, False),
             ("empty", {"fit": "composite", "composite": "empty"}, False),
             ("model fit", {"fit_gate": {"ok": True}}, False),
@@ -138,7 +138,7 @@ def main() -> int:
         try:
             print("[2] the first dressed back")
             path, _warning = base_body._dress_view("Demo", "back", **kw)
-            check("1 draft, 1 composite, version 4", (renders, len(composes), version_of(path)), (["back"], 1, 4))
+            check("1 draft, 1 composite, version 5", (renders, len(composes), version_of(path)), (["back"], 1, 5))
 
             print("[3] a view of before the bump: re-composited from its stored draft")
             set_version(path, 3)
@@ -146,9 +146,9 @@ def main() -> int:
                   True)
             path, _warning = base_body._dress_view("Demo", "back", **kw)
             meta = json.loads(path.with_suffix(".json").read_text())
-            check("0 new drafts, 1 more composite, version 4, one attempt",
+            check("0 new drafts, 1 more composite, version 5, one attempt",
                   (renders, len(composes), version_of(path), len(meta["fit_gate"]["attempts"])),
-                  (["back"], 2, 4, 1))
+                  (["back"], 2, 5, 1))
 
             print("[4] a current view: no job either")
             base_body._dress_view("Demo", "back", **kw)
@@ -159,14 +159,14 @@ def main() -> int:
             save(dressed_front, front)
             set_version(path, 3)
             path, _warning = base_body._dress_view("Demo", "back", **kw)
-            check("1 new draft, version 4", (renders, version_of(path)), (["back", "back"], 4))
+            check("1 new draft, version 5", (renders, version_of(path)), (["back", "back"], 5))
 
             print("[6] shape_view")
             shape_back = save(figure(h["hair"], BLUE), refs / "tpose_back_obshape01.png")
             shape_back.with_suffix(".json").write_text(json.dumps(
-                {"fit": "composite", "composite": {**ok_rec, "version": 4}}))
+                {"fit": "composite", "composite": {**ok_rec, "version": 5}}))
             base_body.shape_view_shas = lambda *a, **k: {"back": "sha"}
-            check("version 4: the stored view", base_body.shape_view("Demo", "back", "obshape01", "bsig"), shape_back)
+            check("version 5: the stored view", base_body.shape_view("Demo", "back", "obshape01", "bsig"), shape_back)
             shape_back.with_suffix(".json").write_text(json.dumps(
                 {"fit": "composite", "composite": {**ok_rec, "version": 3}}))
             check("version 3: None (re-composited first)",
