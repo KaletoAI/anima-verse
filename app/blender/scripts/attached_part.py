@@ -193,6 +193,7 @@ class OuterSkin:
         full = BVHTree.FromPolygons(verts, [p.vertices[:] for p in me.polygons])
         centre_local = body.matrix_world.inverted() @ centre
         radius_local = radius / max(body.matrix_world.to_scale())
+        self.body = body
         self.index = []
         self.inner_wall_faces = 0
         for poly in me.polygons:
@@ -200,7 +201,21 @@ class OuterSkin:
                 self.inner_wall_faces += 1
                 continue
             self.index.append(poly.index)
-        self.tree = BVHTree.FromPolygons(verts, [me.polygons[i].vertices[:] for i in self.index])
+        self.refit()
+
+    def refit(self):
+        """Rebuild the tree on the body's current vertex positions, keeping
+        the classification. Which face is skin and which is inner wall is
+        decided once, before the window is flattened: a flattened skin that
+        passes a wall it was meant to push along (13 faces under the root on a
+        UniForge body) reads as enclosed afterwards, and the wall in front of
+        it as skin. That wall faces the hollow, upward under the body: every
+        point of a sweep hanging below it lay "behind" it, the skin field
+        took the sweep's middle for the inside of the body and cut a gash
+        across it (Ruling A98)."""
+        me = self.body.data
+        self.tree = BVHTree.FromPolygons([v.co.copy() for v in me.vertices],
+                                         [me.polygons[i].vertices[:] for i in self.index])
 
     @staticmethod
     def _enclosed(tree, poly):
@@ -533,6 +548,10 @@ def build_part(group, companions, output):
 
 
 
+    # The outer skin is told from an inner wall on the body as delivered (see
+    # OuterSkin.refit); its tree follows the flattened positions below.
+    bvh = OuterSkin(body, root, .25)
+    print('inner wall faces skipped', bvh.inner_wall_faces)
     # Flatten the front window: one inward displacement per seam group.
     import bmesh as _bm
     bmb = _bm.new(); bmb.from_mesh(body.data); bmb.verts.ensure_lookup_table()
@@ -674,11 +693,12 @@ def build_part(group, companions, output):
             hips_g.add([v.index], cur + take, 'REPLACE')
             moved += 1
     print('root verts moved to hips', moved)
-    bvh = OuterSkin(body, root, .25)
-    print('inner wall faces skipped', bvh.inner_wall_faces)
+    bvh.refit()
     # Skin faces near the window that the outer-skin test now takes for an inner
-    # wall: the flatten pushed them behind one.
-    window_skin_lost = len(region_ - enclosed_ - set(bvh.index))
+    # wall: the flatten pushed them behind one. A diagnostic only: the skin
+    # field keeps them as skin (see OuterSkin.refit).
+    flattened_tree = BVHTree.FromPolygons([v.co.copy() for v in body.data.vertices], [p_.vertices[:] for p_ in polys_])
+    window_skin_lost = sum(_common.enclosed(flattened_tree, polys_[i].center, polys_[i].normal) for i in region_ - enclosed_)
     print('window skin faces lost to the inner wall', window_skin_lost)
 
 

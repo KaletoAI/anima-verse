@@ -241,13 +241,15 @@ def extension_bone_names(character_name, profile=None):
 # 10: no seam normal from an opposite skin wall, a wider midline ridge (Ruling A65d).
 # 11: the window blends out, an inner wall moves with it, a border beside its skin stays inside (Ruling A65e).
 # 12: the underside ridge starts at .5 and the web reaches .55, so the lifted junction shows no midline band (Ruling A88).
+# 13: skin and inner wall are told apart before the window is flattened, so a wall the flattened skin passed is no
+# skin for the field below the body (Ruling A98).
 # inset_part 4: the skin the mesher modelled in the region is levelled onto the surface around it before the part
 # is built (Ruling A77). 5: the region and the part end before the channel between the legs closes, skin left deep
 # beneath fades out instead of being lifted, and slivers are mended (Ruling A77b). 6: past the part's end the skin is
 # levelled on down the channel to where the legs close over it, turned faces and slivers of the levelled skin are
 # mended (Ruling A77c). 7: the op reports its opening (centre and inward axis in bind space) for a channel region
 # declared ``from_rig`` — a build-6 sidecar lacks it.
-PART_BUILDS = {"attached_part": 12, "inset_part": 7}
+PART_BUILDS = {"attached_part": 13, "inset_part": 7}
 # The same for the other operations; pair_tip 1: a geometry apex (no colour
 # marker) is a tip suggestion too, and the tip override moves it.
 OP_BUILDS = {**PART_BUILDS, "pair_tip": 1}

@@ -2222,7 +2222,11 @@ vertices whose normal share an opposite skin wall reduced), and `seam_vertices` 
 skin by the seam pass), `hole_border_vertices` (border vertices of holes the build
 closed), `hole_border_vertices_left`, `inner_wall_moved` (inner-wall vertices moved
 with the window) and `window_skin_lost` (skin faces around the window the outer-skin
-test takes for an inner wall after flattening; 0 when the walls stay apart). Geometry metrics use the
+test would take for an inner wall after flattening; 0 when the walls stay apart). It is a
+diagnostic only: skin and inner wall are classified once on the body as delivered and the
+skin field keeps that classification after the flatten. Classified again, a wall the
+flattened skin passed read as skin; facing the hollow above a sweep hanging below the
+body, it put the sweep's middle "inside" and the union cut a gash across it (Ruling A98). Geometry metrics use the
 final reduced mesh. `protrusion_mm` tells whether the generated body still carries a
 part: how far anything on the midline 2–16 cm below the anchor reaches in front of the
 belly line 6–12 cm above it, measured on the original body before flattening. A drawn
