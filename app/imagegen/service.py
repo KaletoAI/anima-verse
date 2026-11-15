@@ -322,6 +322,45 @@ def prompt_for_backend(prompt: str, by_family: Any, backend: Any) -> str:
     return prompt
 
 
+#: The payload fields a ``backend_variants`` entry may replace (Ruling A103).
+BACKEND_VARIANT_FIELDS = ("style_character", "negative_prompt_extra")
+
+
+def backend_matches(glob: str, backend: Any) -> bool:
+    """Whether ``glob`` (case-insensitive fnmatch) matches ``backend``'s name or its model id."""
+    import fnmatch
+    spec = (glob or "").strip().lower()
+    return bool(spec) and any(fnmatch.fnmatch(str(value or "").lower(), spec)
+                              for value in (getattr(backend, "name", ""), getattr(backend, "model", "")))
+
+
+def backend_choice(keys: Any, backend: Any) -> List[int]:
+    """Per key of a payload's ``backend_variants`` (``{match: [glob, ...]}``) the index of the first glob that
+    matches ``backend``, -1 for none."""
+    return [next((i for i, glob in enumerate(key.get("match") or []) if backend_matches(glob, backend)), -1)
+            for key in keys or []]
+
+
+def apply_backend_variant(input_data: Dict[str, Any], backend: Any) -> Dict[str, Any]:
+    """``input_data`` as ``backend`` renders it (Ruling A103): with a ``backend_variants`` payload
+    (``{keys: [{match: [glob, ...]}, ...], variants: [{choice: [index per key], style_character,
+    negative_prompt_extra}, ...]}``, computed by the caller before any backend is resolved) a COPY whose
+    ``BACKEND_VARIANT_FIELDS`` are the variant's whose choice equals ``backend_choice`` for this backend; the
+    payload itself when there is none or no variant fits (the caller's base fields)."""
+    spec = input_data.get("backend_variants")
+    if not isinstance(spec, dict):
+        return input_data
+    choice = backend_choice(spec.get("keys"), backend)
+    for variant in spec.get("variants") or []:
+        if isinstance(variant, dict) and list(variant.get("choice") or []) == choice:
+            picked = dict(input_data)
+            for field in BACKEND_VARIANT_FIELDS:
+                if field in variant:
+                    picked[field] = variant[field]
+            return picked
+    return input_data
+
+
 @dataclass
 class GenerationResult:
     """One finished string-path generation (``ImageService.generate_on_backend``).
@@ -2395,6 +2434,9 @@ class ImageService:
             # A caller's own prompt per image family ({"keywords": ...}),
             # picked per backend in generate_on_backend.
             "prompt_by_family": ctx.get("prompt_by_family"),
+            # Per-backend replacements of the fields above (Ruling A103),
+            # picked per backend in generate_on_backend.
+            "backend_variants": ctx.get("backend_variants"),
         }
 
         if "prompt" not in ctx and self._json_keys(data.get("prompt")):
@@ -2527,6 +2569,9 @@ class ImageService:
         ``prompt_by_family`` (``{"keywords": ...}``): a caller's own prompt
         for one image family — it replaces ``prompt`` on a backend of that
         family (a bare edit instruction in tag form)."""
+        # A caller's per-backend fields (``backend_variants``, Ruling A103) for THIS backend — a copy, so a
+        # routing re-run on the next chain entry picks again from the caller's payload.
+        input_data = apply_backend_variant(input_data, backend)
         prompt_text = prompt_for_backend(input_data.get("prompt", ""), input_data.get("prompt_by_family"),
                                          backend)
         character_name = (input_data.get("agent_name") or "").strip()

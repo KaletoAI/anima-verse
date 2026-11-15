@@ -40,6 +40,8 @@ instead of dropping the fragment. A package may declare ``undressed_prompt``,
 the text an undressed free-text character says in place of the core's
 "no clothes".
 """
+from contextlib import contextmanager
+from contextvars import ContextVar
 from string import Formatter
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -442,10 +444,7 @@ def prompt_fragments(character_name: str,
     for spec in reference_parts:
         if is_slot_exposed(spec, profile):
             vals = _slot_text_values(spec, profile)
-            tpl = spec.mesh_part.reference_prompt
-            if isinstance(tpl, dict):
-                # Ruling A101: the text of the slot attribute's value, else the default.
-                tpl = tpl["values"].get(str(vals.get(tpl["by"]) or "").strip(), tpl["default"])
+            tpl = reference_text(spec, "prompt", vals)
             frag = _render(tpl, vals) if tpl else ""
             if frag:
                 exposed.append(frag)
@@ -465,7 +464,54 @@ def appearance_reference_negative(character_name: str, *, profile: Optional[Dict
             profile = get_character_profile(character_name) or {}
         except Exception:
             return ""
-    return ", ".join(s.mesh_part.reference_negative for s in specs if is_slot_exposed(s, profile))
+    texts = (reference_text(s, "negative", {}) for s in specs if is_slot_exposed(s, profile))
+    return ", ".join(t for t in texts if t)
+
+
+#: Which ``backends`` entry of a mesh part's reference text applies while a full-body reference block is built
+#: (Ruling A103): ``{(slot id, "prompt"|"negative"): entry index}``; a pair not named = the base text.
+_REFERENCE_CHOICE: "ContextVar[Dict[Tuple[str, str], int]]" = ContextVar("reference_backend_choice", default={})
+
+
+@contextmanager
+def reference_backend_choice(choice: Dict[Tuple[str, str], int]):
+    """Build reference texts with ``choice`` (``_REFERENCE_CHOICE``) inside the block."""
+    token = _REFERENCE_CHOICE.set(dict(choice))
+    try:
+        yield
+    finally:
+        _REFERENCE_CHOICE.reset(token)
+
+
+def reference_text(spec, field: str, vals: Dict[str, str]) -> str:
+    """The unrendered reference text (``field`` "prompt" or "negative") of ``spec``'s mesh part (Rulings A95 /
+    A101 / A103): with a ``by`` attribute the text of its value, else the default; under a chosen ``backends``
+    entry (``reference_backend_choice``) that entry's text for the value, then the base's text for the value,
+    then the entry's default, then the base's default."""
+    decl = spec.mesh_part.reference_prompt if field == "prompt" else spec.mesh_part.reference_negative
+    if not isinstance(decl, dict):
+        return decl or ""
+    value = str(vals.get(decl["by"]) or "").strip() if decl["by"] else ""
+    index = _REFERENCE_CHOICE.get().get((spec.id, field))
+    entry = decl["backends"][index] if index is not None and 0 <= index < len(decl["backends"]) else None
+    chain = ([entry["values"].get(value)] if entry else []) + [decl["values"].get(value)]
+    chain += ([entry["default"]] if entry else []) + [decl["default"]]
+    return next((t for t in chain if t), "")
+
+
+def reference_backend_keys(character_name: str, *, profile: Optional[Dict[str, Any]] = None
+                           ) -> List[Dict[str, Any]]:
+    """The reference texts that differ per rendering backend (Ruling A103), in slot order: ``[{slot, field,
+    match: [glob, ...]}]`` — one per mesh-part text that declares ``backends``; [] without any."""
+    keys = []
+    for spec in slots_for_character(character_name, profile=profile):
+        if not spec.mesh_part:
+            continue
+        for field, decl in (("prompt", spec.mesh_part.reference_prompt),
+                            ("negative", spec.mesh_part.reference_negative)):
+            if isinstance(decl, dict) and decl["backends"]:
+                keys.append({"slot": spec.id, "field": field, "match": [e["match"] for e in decl["backends"]]})
+    return keys
 
 
 def base_body_fragments(character_name: str, *,

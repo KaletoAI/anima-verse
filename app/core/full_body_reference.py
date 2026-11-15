@@ -332,6 +332,29 @@ def reference_negative(character_name: str, render_profile: Dict[str, Any], *, b
     return ", ".join(p for p in parts if p)
 
 
+def backend_variants(character_name: str, render_profile: Dict[str, Any], block_of, negative_of
+                     ) -> Optional[Dict[str, Any]]:
+    """The payload ``backend_variants`` of a full-body reference (Ruling A103): when a mesh-part slot of the
+    figure declares per-backend reference texts, ``{keys, variants}`` with one variant per combination of the
+    texts' entries (the base included) — ``block_of()`` / ``negative_of()`` built under that choice
+    (``body_slots.reference_backend_choice``) as ``style_character`` / ``negative_prompt_extra``. The image
+    service picks the variant of the backend that renders (``service.apply_backend_variant``). None without
+    any."""
+    from itertools import product
+    from app.core.body_slots import reference_backend_choice, reference_backend_keys
+    keys = reference_backend_keys(character_name, profile=render_profile)
+    if not keys:
+        return None
+    variants = []
+    for choice in product(*[range(-1, len(key["match"])) for key in keys]):
+        picked = {(key["slot"], key["field"]): index for key, index in zip(keys, choice) if index >= 0}
+        with reference_backend_choice(picked):
+            variants.append({"choice": list(choice), "style_character": block_of(),
+                             "negative_prompt_extra": negative_of()})
+    return {"keys": [{"slot": k["slot"], "field": k["field"], "match": k["match"]} for k in keys],
+            "variants": variants}
+
+
 def compose(use_case: str, block: str) -> str:
     """The prompt a Generate sends (before LoRA triggers): the use case's style with ``block`` in its
     ``{character}`` slot — what the tile shows before the click."""
@@ -375,7 +398,8 @@ def _release(character_name: str, slot: str, error: Optional[str]) -> None:
 
 
 def _render(character_name: str, *, occasion: str, use_case: str, block: str, source: Path,
-            render_profile: Dict[str, Any], extra_negative: str) -> Tuple[bytes, str, str, str]:
+            render_profile: Dict[str, Any], extra_negative: str,
+            variants: Optional[Dict[str, Any]] = None) -> Tuple[bytes, str, str, str]:
     """One edit of ``source`` (frozen for the run inside ``model_refs``, as the base front's) with ``block`` in the
     use case's slot. Returns ``(image bytes, suffix, prompt sent, sha256 of the source)``; RuntimeError when the
     render delivered nothing."""
@@ -400,7 +424,9 @@ def _render(character_name: str, *, occasion: str, use_case: str, block: str, so
             # The character's identity/pose LoRAs as on the fronts (tpose_loras), no slot LoRA.
             character_loras=True,
             # A reference picture as the backend delivered it: no matte, no trim.
-            postprocess=False)
+            postprocess=False,
+            # Per-backend block/negative (Ruling A103); the sidecar's prompt is the one really sent.
+            backend_variants=variants)
         if not path or not Path(path).is_file():
             raise RuntimeError("The render delivered no picture")
         path = Path(path)
@@ -447,9 +473,12 @@ def generate_base(character_name: str, *, reserved: bool = False) -> Dict[str, A
         profile, image = check_base(character_name)
         block = base_block(character_name, profile=profile)
         negative = reference_negative(character_name, _undressed(profile), base=True)
+        variants = backend_variants(
+            character_name, _undressed(profile), lambda: base_block(character_name, profile=profile),
+            lambda: reference_negative(character_name, _undressed(profile), base=True))
         data, suffix, prompt, source_sha = _render(
             character_name, occasion=BASE_OCCASION, use_case=BASE_USE_CASE, block=block, source=image,
-            render_profile=_undressed(profile), extra_negative=negative)
+            render_profile=_undressed(profile), extra_negative=negative, variants=variants)
         name = _publish(character_name, data, suffix, prompt)
         return set_base(character_name, name, origin=ORIGIN_GENERATED, prompt=prompt,
                         made_from={"image": image.name, "sha256": source_sha, "kind": FROM_PROFILE})
@@ -494,10 +523,14 @@ def generate_outfit(character_name: str, *, key: Optional[str] = None, reserved:
             from app.core import base_body
             raise base_body.MissingInput(NO_APPEARANCE_PICTURE)
         block = outfit_block(character_name, profile=profile)
+        worn = {**profile, "equipped_items": []}
+        variants = backend_variants(
+            character_name, worn, lambda: outfit_block(character_name, profile=profile),
+            lambda: reference_negative(character_name, worn, base=False))
         data, suffix, prompt, source_sha = _render(
             character_name, occasion=OUTFIT_OCCASION, use_case=OUTFIT_USE_CASE, block=block, source=source,
-            render_profile={**profile, "equipped_items": []},
-            extra_negative=reference_negative(character_name, {**profile, "equipped_items": []}, base=False))
+            render_profile=worn, extra_negative=reference_negative(character_name, worn, base=False),
+            variants=variants)
         name = _publish(character_name, data, suffix, prompt)
         return set_outfit(character_name, name, key=key, pieces=pieces, origin=ORIGIN_GENERATED, prompt=prompt,
                           made_from={"image": source.name, "sha256": source_sha, "kind": kind})

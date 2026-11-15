@@ -988,7 +988,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
                            raise_load: bool = False,
                            crop_back_to: Optional[Tuple[Any, Tuple[int, int], Tuple[int, int]]] = None,
                            name_outfit: bool = True,
-                           require_reference: bool = False
+                           require_reference: bool = False,
+                           backend_variants: Optional[Dict[str, Any]] = None
                            ) -> Optional[Path]:
     """Render explicit content to a caller-owned stem, without expression policy.
 
@@ -1008,6 +1009,9 @@ def render_character_image(character_name: str, *, output_stem: Path,
     ``{character}`` slot (``config.fill_character_slot``; the base-body
     views) — the final prompt then reads style, block, rest of the style,
     prompt as one comma list. None = no block, the historic join.
+    ``backend_variants`` (Ruling A103) replaces ``style_character`` and
+    ``extra_negative`` per rendering backend (payload ``backend_variants``,
+    ``service.apply_backend_variant``); None = the same for every backend.
     ``bare_prompt_keywords`` is the tag form of ``bare_prompt`` a
     keywords-family backend renders instead (payload ``prompt_by_family``,
     picked per backend in ``service.generate_on_backend``).
@@ -1320,6 +1324,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
     payload["image_use_case"] = image_use_case
     if style_character is not None:
         payload["style_character"] = style_character
+    if backend_variants:
+        payload["backend_variants"] = backend_variants
     # Fabric only exists in the picture when something is actually worn —
     # pieces or the free-text wardrobe, both of which land in outfit_desc.
     # An undressed character would otherwise be rendered against a style

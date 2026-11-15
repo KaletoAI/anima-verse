@@ -1988,6 +1988,32 @@ instead while the slot is uncovered — or a mapping `{by: <attribute>, values: 
 that picks the text by the slot's value of that attribute, the default (optional) for any other (Ruling A101) —
 and `reference_negative` (optional, non-empty,
 plain text) joins those renders' negative while it is uncovered (Ruling A95).
+Both texts can differ per image model (Ruling A103): `reference_prompt` as a mapping (its `by`/`values`
+may be left out for one plain `default` text) and `reference_negative` as `{default: text}` take an optional
+`backends` list, e.g.
+
+```yaml
+reference_prompt:
+  by: type
+  values: {a: "slot text a", b: "slot text b"}
+  backends:
+    - match: "*model-x*"          # case-insensitive glob over the rendering backend's name AND its model id
+      values: {a: "slot text a for model x"}
+      default: "slot text for model x when the value is unset"
+reference_negative:
+  default: "region detail"
+  backends:
+    - {match: "*model-x*", default: "other region detail"}
+```
+
+The first entry whose `match` fits the backend that actually renders wins; without one the base text applies
+exactly as before. Inside an entry a value it does not name falls back to the base's text for that value, then to
+the entry's `default`, then to the base's `default`. An entry needs `match` and at least one of `values` /
+`default`; `values` only where the base has `by`, never on the negative. Because the backend is resolved after
+the prompt is built, the full-body reference sends every combination of entries along (payload
+`backend_variants`, `full_body_reference.backend_variants`) and the image service picks the one for the
+resolved backend at the same point it picks `prompt_by_family` (`service.apply_backend_variant`) — also on a
+routing re-run on the next chain entry; the stored prompt is the one sent. The tile's preview shows the base text.
 `lora_patterns` is an optional list of
 non-empty glob strings; matching is case insensitive for active exposed mesh
 inputs. Operation-specific parameters are validated at execution. Old singular

@@ -66,6 +66,25 @@ hub job c265fd78: that output → the A-pose front, A74b's edit prompt):
     routes; bytes that are no image -> 415; an 8x8 PNG -> 200, record origin "upload".
 [8] Run all and the Build never generate one: no module but full_body_reference.py and routes/figure.py names
     generate_base / generate_outfit / start_base / start_outfit; build_note(Demo) = {base, outfit} booleans.
+[11] Ruling A103 — per-backend reference texts. The fixture region's reference_prompt adds
+    backends [{match "*fake*", values {alpha: "a textured {size} area"}}], its reference_negative is
+    {default "region detail", backends [{match "*FAKE*", default "blurred region"}]} (globs case-insensitive,
+    over the backend's name AND model). For DemoPart (alpha, large; surface wide):
+      under the override: base_block = Demo's block + ", exposed wide surface, a textured large area"; type beta
+        -> "a flat large surface" (a value the override does not name falls back to the base's); no type ->
+        nothing (neither declares a default); negatives: plain body BASE_NEG + ", blurred region", outfit
+        "blurred region"; without a choice everything as in [10];
+      generate_base's payload backend_variants: keys [region/prompt ["*fake*"], region/negative ["*FAKE*"]],
+        4 variants in product order (-1,-1), (-1,0), (0,-1), (0,0); variant (-1,-1) = the base block/negative,
+        (0,0) = the override block / BASE_NEG + ", blurred region";
+      service.apply_backend_variant at the backend point: backend "Fake-1" (model "m1") -> choice [0, 0], the
+        override block + negative; "Other" (model "m2") -> [-1, -1], the base; "Plain" with model "fake-xl" ->
+        [0, 0] (the model id matches); the caller's payload is never changed (a re-run picks again);
+      generate_on_backend on "Other", then "Fake-1", then "Other" with the same payload: the use-case style
+        receives base / override / base block and the effective negative ends with "region detail" / "blurred
+        region" / "region detail" (the use case's negative before it).
+    Loader: a backends entry without match, a non-list backends, values on a negative, an entry with neither
+      values nor default -> ValueError.
 [9] Outbound attempts: 0.
 [10] Rulings A93 / A93b — the full-body reference is an appearance picture, NOT a mesh input, and it names nothing
     of a slot that declares a mesh part (a clean mesh cannot be made from it). Fixture package ``fixture_region``
@@ -131,7 +150,13 @@ body_slots:
       reference_prompt:
         by: type
         values: {alpha: "a smooth plain {size} area", beta: "a flat {size} surface"}
-      reference_negative: "region detail"
+        backends:
+          - match: "*fake*"
+            values: {alpha: "a textured {size} area"}
+      reference_negative:
+        default: "region detail"
+        backends:
+          - {match: "*FAKE*", default: "blurred region"}
       rigs:
         region_inset: {params: {}}
   - id: surface
@@ -338,6 +363,7 @@ def mesh_part_checks(human, *, want_block):
     # A95: the region's own texts stay out (A93b), its reference_prompt says what it shows instead (uncovered).
     want = want_block + ", exposed wide surface, a smooth plain large area"
     payloads = []
+    payloads_by_name = {}
 
     class Service:
         enabled = True
@@ -391,6 +417,7 @@ def mesh_part_checks(human, *, want_block):
             check(f"{name}: real renderer behind generate_base", _raises(lambda: fbr.generate_base(name)),
                   "RuntimeError")
             sent = payloads[0] if len(payloads) == 1 else {}
+            payloads_by_name[name] = sent
             check(f"{name}: full-body reference payload",
                   (sent.get("occasion"), sent.get("require_reference"), sent.get("style_character"),
                    [lora.get("name") for lora in sent.get("loras") or []]),
@@ -405,11 +432,117 @@ def mesh_part_checks(human, *, want_block):
             check(f"{name}: a mesh input (base_front), A74a unchanged",
                   (sent.get("occasion"), [lora.get("name") for lora in sent.get("loras") or []]),
                   ("base_front", front_loras))
+    backend_variant_checks(want_block, payloads_by_name)
     old_src = subprocess.run(["git", "-C", str(ROOT), "show", f"{BEFORE_A93}:app/core/full_body_reference.py"],
                              capture_output=True, text=True, check=True).stdout
     check("the code before A93 took the mesh-input description",
           "person_description(character_name, apply_state_modifiers=False, mesh_input=True," in old_src, True)
 
+
+
+def backend_variant_checks(want_block, payloads_by_name):
+    print("[11] per-backend reference texts (A103)")
+    from app.core import body_slots, config, full_body_reference as fbr
+    from app.imagegen import service as svc
+    from app.imagegen.base import ImageBackend
+    from app.models.character import get_character_profile
+    from app.plugins.registry import _parse_reference_text
+    name = "DemoPart"
+    stored = get_character_profile(name)
+    base = want_block + ", exposed wide surface, a smooth plain large area"
+    fake = want_block + ", exposed wide surface, a textured large area"
+    choice = {("region", "prompt"): 0, ("region", "negative"): 0}
+    with body_slots.reference_backend_choice(choice):
+        check("override block", fbr.base_block(name), fake)
+        beta = json.loads(json.dumps(stored))
+        beta["body_slots"]["region"]["type"] = "beta"
+        check("override: a value it does not name falls back to the base's",
+              body_slots.prompt_fragments(name, profile=beta, appearance_reference=True, neutral_state=True)["exposed"],
+              ["exposed wide surface", "a flat large surface"])
+        beta["body_slots"]["region"]["type"] = ""
+        check("override: no type, no default anywhere -> nothing",
+              body_slots.prompt_fragments(name, profile=beta, appearance_reference=True, neutral_state=True)["exposed"],
+              ["exposed wide surface"])
+        check("override negatives", (fbr.reference_negative(name, fbr._undressed(stored), base=True),
+                                     fbr.reference_negative(name, stored, base=False)),
+              (BASE_NEG + ", blurred region", "blurred region"))
+    check("without a choice: the base", (fbr.base_block(name), fbr.reference_negative(name, stored, base=False)),
+          (base, "region detail"))
+    sent = payloads_by_name.get(name) or {}
+    variants = sent.get("backend_variants") or {}
+    check("payload keys", variants.get("keys"),
+          [{"slot": "region", "field": "prompt", "match": ["*fake*"]},
+           {"slot": "region", "field": "negative", "match": ["*FAKE*"]}])
+    check("payload variants",
+          [(v["choice"], v["style_character"], v["negative_prompt_extra"]) for v in variants.get("variants") or []],
+          [([-1, -1], base, BASE_NEG + ", region detail"), ([-1, 0], base, BASE_NEG + ", blurred region"),
+           ([0, -1], fake, BASE_NEG + ", region detail"), ([0, 0], fake, BASE_NEG + ", blurred region")])
+
+    class Backend(ImageBackend):
+        def __init__(self, bname, model):
+            super().__init__(bname, "http://unused", 0, "stub", "FBR_SMOKE_")
+            self.model = model
+            self.ref_slot_count = 1
+            self._available = True
+
+        def check_availability(self):
+            return True
+
+        def _generate(self, *args):
+            raise AssertionError("No external generation")
+    fake_b, other_b, plain_b = Backend("Fake-1", "m1"), Backend("Other", "m2"), Backend("Plain", "fake-xl")
+    frozen = json.dumps(sent, sort_keys=True)
+    for b, want in ((fake_b, (fake, BASE_NEG + ", blurred region")), (other_b, (base, BASE_NEG + ", region detail")),
+                    (plain_b, (fake, BASE_NEG + ", blurred region"))):
+        got = svc.apply_backend_variant(sent, b)
+        check(f"pick for {b.name}/{b.model}", (svc.backend_choice(variants["keys"], b),
+                                              got.get("style_character"), got.get("negative_prompt_extra")),
+              ([0, 0] if b is not other_b else [-1, -1], *want))
+    check("the caller's payload is unchanged", json.dumps(sent, sort_keys=True), frozen)
+
+    class Reached(Exception):
+        pass
+    with patch.object(svc.ImageService, "_load_instances", return_value=[]):
+        service = svc.ImageService()
+    parsed = service._parse_input(json.dumps({**sent, "reference_image_override": "", "require_reference": False}))
+    seen = []
+    real_ucp, real_neg = config.get_use_case_prompts, svc.resolve_negative_prompt
+
+    def spy_ucp(*a, **kw):
+        seen.append(("block", kw.get("character")))
+        return real_ucp(*a, **kw)
+
+    def spy_neg(data, uc_negative):
+        out = real_neg(data, uc_negative)
+        seen.append(("negative", out.rsplit(", ", 1)[-1]))
+        return out
+    with (patch.object(service, "_get_instance_config", return_value={}),
+          patch.object(service, "run_on_backend", side_effect=Reached()),
+          patch.object(config, "get_use_case_prompts", spy_ucp),
+          patch.object(svc, "resolve_negative_prompt", spy_neg)):
+        for b in (other_b, fake_b, other_b):
+            try:
+                service.generate_on_backend(b, parsed, explicit=False)
+            except Reached:
+                pass
+            except Exception as e:   # noqa: BLE001 — reported by the check below
+                seen.append(("error", type(e).__name__ + ": " + str(e)[:120]))
+    check("generate_on_backend picks per backend",
+          [entry for entry in seen if entry[0] != "block" or entry[1] is not None],
+          [("block", base), ("negative", "region detail"), ("block", fake), ("negative", "blurred region"),
+           ("block", base), ("negative", "region detail")])
+    attrs = {"type": {"type": "select", "options": ["a"]}}
+    for label, raw, field in (
+            ("entry without match", {"by": "type", "values": {"a": "x"}, "backends": [{"values": {"a": "y"}}]},
+             "reference_prompt"),
+            ("backends not a list", {"default": "x", "backends": {"match": "*"}}, "reference_negative"),
+            ("values on a negative", {"default": "x", "backends": [{"match": "*", "values": {"a": "y"}}]},
+             "reference_negative"),
+            ("entry with no text", {"by": "type", "values": {"a": "x"}, "backends": [{"match": "*"}]},
+             "reference_prompt")):
+        check(f"loader refuses: {label}",
+              _raises(lambda: _parse_reference_text(raw, attrs, field, allow_by=field == "reference_prompt")),
+              "ValueError")
 
 def main() -> int:
     block_network()
