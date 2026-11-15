@@ -2015,7 +2015,7 @@ k_body: 0.016
 body_window: {radius: 0.03, fall: 0.02, recede: 2} # radius and fall scale with size_factor
 skin_sink: 0.0008
 hidden_band: {lateral: 0.025, above: -0.02, radius: 0.045, depth: 0.006}
-flatten: {lateral: 0.055, down: 0.035, below: 0.065, above: 0.01, front: 0.03, normal_front: 0.2, iterations: 150}
+flatten: {lateral: 0.055, down: 0.035, below: 0.065, above: 0.01, front: 0.03, normal_front: 0.2, iterations: 150, wall_reach: 0.03, blend: 10}
 reweight: {from: 0.045, to: 0.095}
 tone: {shaft: [0.9, 0.83, 0.8], tip: [1.04, 0.84, 0.82]}
 border_lift: 0.010
@@ -2033,7 +2033,15 @@ protrusion_warn_mm: 12
 steps smoothly up to `tip_girth` over `tip_rim` of the length, then the rounded cap
 uses `tip_girth*(1-u**2.4)**.55`.
 Flattening relaxes the front window and moves coincident seam copies together,
-only inward. Radial reweighting transfers only `*UpLeg` weights to the anchor.
+only inward. The displacement is then averaged with its neighbours' `blend` times
+over the skin within `wall_reach` of the window (held at zero beyond): each window
+vertex had moved along its own normal and its neighbours outside the window not at
+all, and on a coarse body the window's edge became a serrated line of creases, lit
+like a torn edge under the part (Ruling A65e). A double-walled body's inner wall
+within `wall_reach` moves with the skin point in front of it (a ray against the
+wall's normal): flattened deeper than the wall, the skin lay behind it, the
+outer-skin test dropped it as an inner wall, and a client that draws front faces
+only looked into the hollow body. Radial reweighting transfers only `*UpLeg` weights to the anchor.
 The body union is confined to `body_window`: beyond `radius + fall` the body field
 sinks `recede` metres per metre of distance into the body, so where the part merely
 touches skin there (a pod on a thigh or in a fold) it keeps its own closed surface
@@ -2052,7 +2060,12 @@ standing `h` above the landing level `seam.tuck` under the skin moves down by
 `h * max(s(1 - h/band), strip) * share` (`s` the smoothstep, `share` the larger of the
 fillet share and the strip), so an open border ends `tuck` under the skin and the
 profile meets it tangentially; a border edge in a fold is landed twice more against
-the nearest skin. An edge standing on the skin showed as a dark serrated line
+the nearest skin. A border vertex beside its nearest skin face rather than over it
+(the offset more than 60 degrees off the face normal: the nearest point lies on the
+rim a left-out inner wall or crease leaves, often centimetres away) is judged by six
+axis rays' crossings of the outer skin (`OuterSkin.inside_beside`, which a check
+uses too): inside it stays, outside it lands on the nearest skin point. Landing it
+along that face's normal walked it through the body (Ruling A65e). An edge standing on the skin showed as a dark serrated line
 (Ruling A65c). The seam
 smoke (`scripts/smoke_attached_part_seam.py`) derives the remaining crease by hand.
 Its normals turn to the body's interpolated corner normals over `seam.normal_band`,
@@ -2078,7 +2091,9 @@ Per-group metrics include `status`, `reason`, `size_factor`, `protrusion_mm`,
 `skin_patch_cm`, `tip_vertices`, `border_vertices`, `seam_opposed_normals` (seam
 vertices whose normal share an opposite skin wall reduced), and `seam_vertices` (moved onto the
 skin by the seam pass), `hole_border_vertices` (border vertices of holes the build
-closed) and `hole_border_vertices_left`. Geometry metrics use the
+closed), `hole_border_vertices_left`, `inner_wall_moved` (inner-wall vertices moved
+with the window) and `window_skin_lost` (skin faces around the window the outer-skin
+test takes for an inner wall after flattening; 0 when the walls stay apart). Geometry metrics use the
 final reduced mesh. `protrusion_mm` tells whether the generated body still carries a
 part: how far anything on the midline 2–16 cm below the anchor reaches in front of the
 belly line 6–12 cm above it, measured on the original body before flattening. A drawn

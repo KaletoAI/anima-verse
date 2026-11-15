@@ -61,8 +61,11 @@ DEFAULTS = {
     # out of the skin and drew a rim around the root (Ruling A65b).
     'skin_sink': .0008,
     'hidden_band': {'lateral': .025, 'above': -.02, 'radius': .045, 'depth': .006},
+    # wall_reach: how far around the window the flattening blends out, and how
+    # deep under its skin an inner wall moves with it; blend: smoothing passes
+    # over the displacement there (Ruling A65e).
     'flatten': {'lateral': .055, 'down': .035, 'below': .065, 'above': .01,
-                'front': .03, 'normal_front': .2, 'iterations': 150},
+                'front': .03, 'normal_front': .2, 'iterations': 150, 'wall_reach': .03, 'blend': 10},
     'reweight': {'from': .045, 'to': .095},
     'tone': {'shaft': [.9, .83, .8], 'tip': [1.04, .84, .82]}, 'border_lift': .010,
     # The attachment seam: the fillet lands `tuck` under the skin, its height
@@ -106,7 +109,7 @@ def parameters(raw):
                 raise ValueError('Expected bone name: ' + name)
         elif isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
             raise ValueError('Expected finite number: ' + name)
-        elif name in ('params.flatten.iterations', 'params.smooth.iterations', 'params.texture.bake', 'params.texture.patch_max', 'params.texture.blur') and (not isinstance(value, int) or value < 0):
+        elif name in ('params.flatten.iterations', 'params.flatten.blend', 'params.smooth.iterations', 'params.texture.bake', 'params.texture.patch_max', 'params.texture.blur') and (not isinstance(value, int) or value < 0):
             raise ValueError('Expected nonnegative integer: ' + name)
         return value
     settings = merge(DEFAULTS, raw, 'params')
@@ -142,7 +145,7 @@ def parameters(raw):
     for ridge in settings['ridges']:
         if not 0 <= ridge['t0'] < settings['tip_start'] - ridge['tip_offset'] or min(ridge['r0'], ridge['r1']) <= 0:
             raise ValueError('Invalid ridge interval or radius')
-    for section, keys in (('flatten', ['lateral', 'down', 'below', 'above', 'front']),
+    for section, keys in (('flatten', ['lateral', 'down', 'below', 'above', 'front', 'wall_reach']),
                            ('hidden_band', ['lateral', 'radius', 'depth'])):
         if any(settings[section][key] < 0 for key in keys):
             raise ValueError('Invalid ' + section + ' length')
@@ -201,6 +204,34 @@ class OuterSkin:
 
     def find_nearest(self, co):
         return self._mapped(self.tree.find_nearest(co))
+
+    def inside_beside(self, co, hit):
+        """For a point beside its nearest skin face rather than over it: whether
+        it lies inside the skin; None for a point over the face.
+
+        Over a face (the offset to the nearest point within 60 degrees of the
+        face normal) the offset along the normal is the point's height. Beside
+        it the nearest point lies on the rim that a left-out inner wall or crease
+        leaves in the outer skin, often centimetres away, and the offset along
+        that face's normal says nothing: a border vertex deep in the body read as
+        standing on the skin, and landing it along that normal walked it 9 mm
+        through the body (Ruling A65e). There six axis rays vote by their
+        crossings of the outer skin. ``co`` and ``hit`` are in the body's local
+        space, ``hit`` from ``find_nearest``."""
+        location, normal, _, distance = hit
+        if location is None or distance < 1e-9 or abs((co - location).dot(normal)) >= .5 * distance:
+            return None
+        votes = 0
+        for axis in ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)):
+            direction, origin, crossings = Vector(axis), co.copy(), 0
+            while True:
+                found = self.tree.ray_cast(origin, direction)[0]
+                if found is None:
+                    break
+                crossings += 1
+                origin = found + direction * 1e-6
+            votes += crossings % 2
+        return votes > 3
 
     def ray_cast(self, origin, direction):
         return self._mapped(self.tree.ray_cast(origin, direction))
@@ -515,6 +546,38 @@ def build_part(group, companions, output):
             for e in c.link_edges:
                 ns.add(e.other_vert(c))
         nbrs[v] = list(ns)
+    # A double-walled body (see OuterSkin) carries an inner wall a few mm under
+    # its skin. Flattening the skin deeper than that pushed it through the wall:
+    # the wall then lay in front of the skin, the outer-skin test took the skin
+    # for an inner wall, and a client that draws front faces only looked through
+    # the window into the hollow body (Ruling A65e). Each inner-wall vertex
+    # under the window is paired with the skin point in front of it (a ray
+    # against its normal) and moves with that point.
+    polys_ = body.data.polygons
+    full_ = BVHTree.FromPolygons([v.co.copy() for v in body.data.vertices], [p_.vertices[:] for p_ in polys_])
+    reach_ = window['wall_reach']
+    def near_window(point):
+        return (abs(point.x - cen.x) < window['lateral'] + reach_ and cen.z - window['below'] - reach_ < point.z < root.z + window['above'] + reach_
+                and point.y < cen.y + window['front'] + reach_)
+    region_ = {p_.index for p_ in polys_ if near_window(body_matrix @ p_.center)}
+    enclosed_ = {i for i in region_ if _common.enclosed(full_, polys_[i].center, polys_[i].normal)}
+    reach_local = reach_ / max(body_matrix.to_scale())
+    wall_pairs = {}
+    for grp in keyv.values():
+        if not all(f.index in enclosed_ for c in grp for f in c.link_faces):
+            continue
+        normal_ = sum((body.data.vertices[c.index].normal for c in grp), Vector()).normalized()
+        origin_, travelled = grp[0].co - normal_ * 1e-5, 0.
+        while travelled < reach_local:
+            hit_, _, face_, distance_ = full_.ray_cast(origin_, -normal_, reach_local - travelled)
+            if hit_ is None:
+                break
+            if face_ in region_ and face_ not in enclosed_:
+                wall_pairs[id(grp)] = (grp, face_, hit_)
+                break
+            travelled += distance_ + 1e-5
+            origin_ = hit_ - normal_ * 1e-5
+    orig_all = [v.co.copy() for v in bmb.verts]
     orig = {v: v.co.copy() for v in mask}
     pos = {v: v.co.copy() for v in mask}
     for _ in range(settings['flatten']['iterations']):
@@ -543,6 +606,42 @@ def build_part(group, companions, output):
                 c.co = orig[v] - n * d
             flatten_outward = max(flatten_outward, (grp[0].co - orig[v]).dot(n))
             flat += len(grp)
+    # Each window vertex moved along its own normal, its neighbours outside the
+    # window not at all: on a coarse body the window's edge became a serrated
+    # line of creases, up to 53 degrees sharper than the body's, lit like a
+    # torn edge under the part (Ruling A65e). The displacement is smoothed over
+    # the skin around the window, held at zero beyond `wall_reach`; the inner
+    # wall (paired above) follows below.
+    skin_groups = [g for g in keyv.values() if near_window(body_matrix @ orig_all[g[0].index]) and id(g) not in wall_pairs
+                   and not all(f.index in enclosed_ for c in g for f in c.link_faces)]
+    slot = {id(g): i for i, g in enumerate(skin_groups)}
+    links = []
+    for g in skin_groups:
+        ring = set()
+        for c in g:
+            for e in c.link_edges:
+                other = keyv[tuple(round(x / 1e-5) for x in orig_all[e.other_vert(c).index])]
+                if other is not g:
+                    ring.add(slot.get(id(other), -1))
+        links.append(list(ring))
+    shift_ = [g[0].co - orig_all[g[0].index] for g in skin_groups]
+    for _ in range(window['blend']):
+        shift_ = [(shift_[i] + sum((shift_[j] if j >= 0 else Vector() for j in links[i]), Vector()) / len(links[i])) / 2 if links[i] else shift_[i]
+                  for i in range(len(skin_groups))]
+    for g, s_ in zip(skin_groups, shift_):
+        for c in g:
+            c.co = orig_all[c.index] + s_
+    from mathutils.interpolate import poly_3d_calc
+    wall_moved = 0
+    for grp, face_, hit_ in wall_pairs.values():
+        corners = polys_[face_].vertices[:]
+        shares = poly_3d_calc([orig_all[j] for j in corners], hit_)
+        shift = sum(((bmb.verts[j].co - orig_all[j]) * w_ for j, w_ in zip(corners, shares)), Vector())
+        if shift.length > 1e-7:
+            for c in grp:
+                c.co = orig_all[c.index] + shift
+            wall_moved += len(grp)
+    print('inner wall verts moved with the window', wall_moved, 'paired', sum(len(g) for g, _, _ in wall_pairs.values()))
     seam_cracks = sum(max((c.co - grp[0].co).length for c in grp) > 1e-6 for grp in keyv.values() if len(grp) > 1)
     bmb.to_mesh(body.data); bmb.free(); body.data.update()
     print('window verts flattened', flat, 'of', len(mask))
@@ -569,6 +668,10 @@ def build_part(group, companions, output):
     print('root verts moved to hips', moved)
     bvh = OuterSkin(body, root, .25)
     print('inner wall faces skipped', bvh.inner_wall_faces)
+    # Skin faces near the window that the outer-skin test now takes for an inner
+    # wall: the flatten pushed them behind one.
+    window_skin_lost = len(region_ - enclosed_ - set(bvh.index))
+    print('window skin faces lost to the inner wall', window_skin_lost)
 
 
     # Sample root-local unions of sweep, ridges, pods and body skin.
@@ -1048,13 +1151,16 @@ def build_part(group, companions, output):
     seam_moved = 0
     for i, point in enumerate(final_positions):
         point = Vector(point)
-        q, _, fi, _ = bvh.find_nearest(body_inverse @ point)
-        q = body_matrix @ q
+        hit_ = bvh.find_nearest(body_inverse @ point)
+        q, fi = body_matrix @ hit_[0], hit_[2]
         nb = sum((corner_normals[li].vector * share for li, _, share in skin_share(q, fi)), Vector())
         nb = (normal_matrix @ nb).normalized()
         body_normal.append(nb)
         # Height over the landing level `tuck` under the skin.
         height = (point - q).dot(nb) + seam['tuck']
+        if bvh.inside_beside(body_inverse @ point, hit_):
+            # Deep in the body, beside a far skin: hidden, nothing to land.
+            height = -(point - q).length
         skin_height[i] = height
         if height <= 0 or seam_share[i] <= 0:
             continue
@@ -1065,13 +1171,20 @@ def build_part(group, companions, output):
             skin_height[i] -= move
             seam_moved += 1
     # In a fold the move can bring an edge over the opposite skin: land it again.
+    # Beside its skin (see OuterSkin.inside_beside) an edge inside the body stays,
+    # one outside lands on the nearest skin point.
     for _ in range(2):
         for i in final_border:
             point = body_matrix @ pme.vertices[i].co
-            q, normal_, _, _ = bvh.find_nearest(body_inverse @ point)
-            height = (point - body_matrix @ q).dot((normal_matrix @ normal_).normalized()) + seam['tuck']
-            if height > 1e-6:
-                pme.vertices[i].co = body_inverse @ (point - (normal_matrix @ normal_).normalized() * height)
+            hit_ = bvh.find_nearest(body_inverse @ point)
+            q, normal_ = body_matrix @ hit_[0], (normal_matrix @ hit_[1]).normalized()
+            beside = bvh.inside_beside(body_inverse @ point, hit_)
+            if beside is None:
+                height = (point - q).dot(normal_) + seam['tuck']
+                if height > 1e-6:
+                    pme.vertices[i].co = body_inverse @ (point - normal_ * height)
+            elif not beside:
+                pme.vertices[i].co = body_inverse @ (q - normal_ * seam['tuck'])
     # Decimation blended a trace of the part's bones back into the border; on
     # the skin's weights alone it stays where the skin is in every pose.
     for i in final_border:
@@ -1272,6 +1385,7 @@ def build_part(group, companions, output):
         'seam_vertices': seam_moved, 'seam_opposed_normals': opposed,
         'hole_border_vertices': len(hole_points), 'hole_border_vertices_left': holes_left,
         'cracked_seam_groups': int(seam_cracks), 'flatten_outward_m': flatten_outward,
+        'inner_wall_moved': wall_moved, 'window_skin_lost': window_skin_lost,
         'inner_wall_faces': bvh.inner_wall_faces, 'stray_faces': stray_faces,
     }
 

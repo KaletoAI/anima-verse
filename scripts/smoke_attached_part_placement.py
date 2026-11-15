@@ -46,6 +46,7 @@ lateral tops .028 f and .024 f (33.6 / 28.8 mm), so its pouch top misses the
 12.2 / 14.6 mm limit. All six checks (two sizes x three) fail there.
 """
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -66,13 +67,19 @@ def skin_y(z, ledge=True):
     return -.065 + .3 * (.997 - 1.0) + .065 * min(1., (.997 - z) / .012)
 
 
-def make_fixture(scripts, out, ledge=True, floor=None, wall=None):
+def make_fixture(scripts, out, ledge=True, floor=None, wall=None, bump=None, inner=None):
     """Write the tilted synthetic body (see the docstring) to ``out``/fixture.glb.
 
     ``floor``: the height of an extra upward-facing skin quad under the pods
     (x +-.06, y -.10 to -.01, in front of the receded skin). ``wall``: the x
     of an extra skin quad facing -x (y -.10 to -.01, z .93 to 1.0), a skin
-    wall beside the pods like a thigh. Returns the
+    wall beside the pods like a thigh. ``bump``: (height, radius, z) of a
+    Gaussian bump h exp(-(x^2 + (z - zb)^2) / r^2) on the front skin, towards
+    the front. ``inner``: the depth of an inner wall under the front skin, a
+    copy of its grid that far behind it (bump included) facing back into the
+    hollow body, as a double-walled mesher delivers it, plus a wide box open
+    to the front (x +-.6, z .4 to 1.6, y -.3 to .07) that closes the hollow.
+    Returns the
     fixture path and the root and skin normal found by the builder's ray,
     independently of the builder. Runs inside Blender; the seam, closed-shell
     and shading smokes share it."""
@@ -98,13 +105,36 @@ def make_fixture(scripts, out, ledge=True, floor=None, wall=None):
             bone.tail = bone.head + Vector((0, 0, -.25))
     bpy.ops.object.mode_set(mode='OBJECT')
     vertices, faces = [], []
+
+    def front(x, z):
+        if bump is None:
+            return skin_y(z, ledge)
+        return skin_y(z, ledge) - bump[0] * math.exp(-(x * x + (z - bump[2]) ** 2) / bump[1] ** 2)
     for z in np.linspace(.72, 1.34, 125):
         for x in np.linspace(-.18, .18, 73):
-            vertices.append((x, skin_y(z, ledge), z))
+            vertices.append((x, front(x, z), z))
     for iz in range(124):
         for ix in range(72):
             a = iz * 73 + ix
             faces.append((a, a + 1, a + 74, a + 73))
+    if inner is not None:
+        start = len(vertices)
+        for z in np.linspace(.72, 1.34, 125):
+            for x in np.linspace(-.18, .18, 73):
+                vertices.append((x, front(x, z) + inner, z))
+        for iz in range(124):
+            for ix in range(72):
+                a = start + iz * 73 + ix
+                faces.append((a + 73, a + 74, a + 1, a))
+        # A wide box open to the front closes the hollow for the outer-skin
+        # test's fan of rays.
+        start = len(vertices)
+        for x, z in ((-.6, .4), (.6, .4), (.6, 1.6), (-.6, 1.6)):
+            vertices.extend([(x, .07, z), (x, -.3, z)])
+        for i in range(4):
+            j = (i + 1) % 4
+            faces.append((start + 2 * i, start + 2 * j, start + 2 * j + 1, start + 2 * i + 1))
+        faces.append((start, start + 2, start + 4, start + 6))
     start = len(vertices)
     vertices.extend([(-.18, .065, .72), (.18, .065, .72), (.18, .065, 1.34), (-.18, .065, 1.34)])
     faces.append((start + 3, start + 2, start + 1, start))
