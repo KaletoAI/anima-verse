@@ -12544,7 +12544,8 @@ this repository declares a region, so every record here carries `channels: []`.
 when the payload carries channels; both start off.
 - "Channels" draws one wireframe per channel through the body (`channelWireframe`, colour
   `CAPSULE_REGION_COLORS.channel`), with a 20 cm grid of 1 cm cells in the chosen channel's opening plane.
-- "Test rod" runs `guideRod` (w = 1, swing budget 30°) every frame. The rod's controls are length, radius, links,
+- "Test rod" runs `guideRod` (w = 1, swing budget 30°) every frame. The rod passes through the opening centre; tilt
+  pivots there (A102c), insertion is measured along the rod. Sliders and readout show cm (stored in metres). The rod's controls are length, radius, links,
   insertion along the axis (negative = in front of the opening) and tilt. The readout shows the turn per link, k,
   the distance past the bottom, the skipped capsules and w.
   The rod also OPENS the body (below): the readout adds the largest widening (mm) and the number of moved vertices;
@@ -12560,14 +12561,15 @@ rule exists once, in `packages/scene-render/src/channelOpening.ts` (numbers: `sc
   `secondaryMotion.ts`, r = the link's capsule radius r_c × the engagement weight w, so the opening ramps with w), or
   the test rod's links.
 - A body vertex P (skinned, this frame) at distance d from the axis of its nearest segment (nearest by surface, d − r)
-  moves radially away from that axis to f(d). T = r + m (skin margin m = `OPENING_MARGIN_M` = 2 mm), band
-  B = max(`OPENING_BAND_M` = 15 mm, 0.6·r), b = T + B, d0 = max(0, T − B). f(d) = T for d ≤ d0 (the inner wall ends
-  exactly at T), f(d) = d for d ≥ b, and between them the cubic Hermite with f(d0) = T, f'(d0) = 0, f(b) = b,
-  f'(b) = 1. f is monotone and C1, so the rim is a stretched, rounded lip rather than a step, and no vertex passes another.
+  moves radially away from that axis to f(d) = d + T·(1 − d/b)² (d < b; identity from b). T = r + m (skin margin
+  m = `OPENING_MARGIN_M` = 2 mm), band B = max(`OPENING_BAND_M` = 15 mm, `OPENING_BAND_K`·max(r, R)) with K = 1.5 and
+  R the channel's radius, b = T + B (A102c: the band grows with the occupant, so the modelled region around the
+  opening is carried outward with it). f(0) = T, f ≥ d, f ≥ T; B ≥ T always, so f' ≥ 0 (monotone, no fold-over) and
+  f'(b) = 1 (C1, a rounded lip).
 - Along the axis: z = 1 for −F ≤ s ≤ D, then 1 − smoothstep(e / f) for the distance e before −F or past D,
   f = `OPENING_FALLOFF_M` = 20 mm. Across the axis only the radial map bounds the opening, so an occupant wider than
   the channel opens a smooth rim, not a ragged one. The displacement is z · (f(d) − d). Moves under 1 µm count as none.
-- Candidates: −F − f ≤ s ≤ D + f and ρ ≤ R + f + `OPENING_SLACK_M` (60 mm), taken ONCE per channel when it is first
+- Candidates: −F − f ≤ s ≤ D + f and ρ ≤ R + f + `OPENING_SLACK_M` (80 mm), taken ONCE per channel when it is first
   occupied; only skinned body meshes (never a garment's). Per frame they are narrowed by the occupant's reach
   (bind-time s, ρ against the segments' extent + b + `OPENING_POSE_SLACK_M`).
 - The world displacement goes into a CLONE of the mesh's geometry, in bind space through the inverse of each vertex's

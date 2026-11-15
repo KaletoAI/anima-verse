@@ -179,11 +179,11 @@ export function rodReadoutLines(r: RodReadout | null, t: (s: string) => string =
   if (!r) return [t('The rod is shown once the model carries a channel')]
   return [
     t('Turn per link: {list}').replace('{list}', r.turnsDeg.map(v => `${v.toFixed(1)}°`).join(' · ') || '–'),
-    t('Depth scale k {k} · past the bottom {mm} mm').replace('{k}', r.k.toFixed(3))
-      .replace('{mm}', r.pastBottomMm.toFixed(1)),
+    t('Depth scale k {k} · past the bottom {cm} cm').replace('{k}', r.k.toFixed(3))
+      .replace('{cm}', (r.pastBottomMm / 10).toFixed(2)),
     t('Weight w {w} · skipped capsules: {list}').replace('{w}', r.w.toFixed(2))
       .replace('{list}', r.suppressed.join(', ') || t('none')),
-    t('Opening widened by {mm} mm · {n} vertices moved').replace('{mm}', r.openingMm.toFixed(1))
+    t('Opening widened by {cm} cm · {n} vertices moved').replace('{cm}', (r.openingMm / 10).toFixed(2))
       .replace('{n}', String(r.openingMoved)),
   ]
 }

@@ -79,9 +79,13 @@
  *     Insertion 0.13 (fix round 1): the root at s −0.02 is the only joint, none inside → s_e = −0.02,
  *     k = max(0.8, (0.12 + 0.02) / (0.13 + 0.02) = 0.14 / 0.15 = 0.933333), the tip at
  *     −0.02 + 0.14 = 0.12, pastBottomM 0 (the first-joint-inside rule gave k 1, tip 0.13, 10 mm past).
- *     The [1] link as a rod: length 0.104403, tilt 16.699°, insertion
- *     0.104403 − 0.05 = 0.054403 (root on the axis at s −0.05), budget 30° → the
- *     turn 5.655° (±0.005), k 1 (tip s 0.05247 < D); budget 4° → 4°.
+ *     Tilted (A102c: the tilt pivots about the opening centre O, root = O + dir·(insertion − length)):
+ *     length 0.104403, tilt 30°, insertion 0.08 → dir = (sin 30°, 0, cos 30°), J = −0.024403·dir =
+ *     (−0.0122015, 0, −0.0211339), tip before guidance 0.08·dir = (0.04, 0, 0.069282), ρ 0.04 > R.
+ *     A turn by φ in the xz-plane leaves ρ = −0.0122015 + 0.104403·sin(30° − φ); ρ = R = 0.02 at
+ *     sin(30° − φ) = 0.0322015 / 0.104403 = 0.308435 → 30° − φ = 17.965°, φ = 12.035° (±0.01); the tip at
+ *     s = −0.0211339 + 0.104403·cos 17.965° = 0.078179 (±1e-5), k 1. Budget 4° → 4°, ρ > R.
+ *     Tilt 16.699°, insertion 0.054403: tip 0.054403·dir at ρ 0.015633 < R → no turn; the rod crosses s = 0 at ρ 0.
  * [11] previewChannel, frame side (1,0,0), up (0, 0.6, 0.8), front (0, −0.8, 0.6),
  *     a_pos (0,1,0), b_pos (0,1,0.1), r 0.02, cone 30, applied neutral:
  *     - offset_mm (0, +10, 0) → a_pos + 0.01 · up = (0, 1.006, 0.008), b_pos the
@@ -297,10 +301,15 @@ async function main() {
   check('[10] insertion 0.13 (root s −0.02 = s_e): k 0.933333, tip 0.12, pastBottomM 0', near(r10f.k, 0.14 / 0.15, 1e-12) &&
     near(channelCoords(r10f.joints[1], D2).s, 0.12, 1e-12) && near(r10f.pastBottomM, 0, 1e-12),
   JSON.stringify({ k: r10f.k, past: r10f.pastBottomM }))
-  const tilted = { length: lever, radius: 0, links: 1, insertion: lever - 0.05, tiltDeg: Math.atan2(0.03, 0.1) / DEG, budgetDeg: 30 }
+  const tilted = { length: lever, radius: 0, links: 1, insertion: 0.08, tiltDeg: 30, budgetDeg: 30 }
   const r10c = guideRod(D2, tilted)
-  check('[10] the [1] link as a rod: turn 5.655°, k 1', near(r10c.turnsDeg[0], 5.655, 0.005) && r10c.k === 1 &&
-    near(channelCoords(r10c.joints[1], D2).s, 0.05247, 1e-5), JSON.stringify(r10c.turnsDeg))
+  check('[10] tilt 30° about the opening: turn 12.035°, tip s 0.078179, k 1', near(r10c.turnsDeg[0], 12.035, 0.01) && r10c.k === 1 &&
+    near(channelCoords(r10c.joints[1], D2).s, 0.078179, 1e-5) && near(channelCoords(r10c.joints[1], D2).rho, 0.02, 1e-6),
+  JSON.stringify(r10c.turnsDeg))
+  const r10g = guideRod(D2, { ...tilted, tiltDeg: Math.atan2(0.03, 0.1) / DEG, insertion: lever - 0.05 })
+  const [rg0, rg1] = r10g.joints
+  check('[10] tilt 16.699°: no turn, the rod crosses the opening at its centre', r10g.turnsDeg[0] === 0 &&
+    near(rg0[0] + (rg1[0] - rg0[0]) * (-rg0[2] / (rg1[2] - rg0[2])), 0, 1e-12), JSON.stringify(r10g.joints))
   const r10d = guideRod(D2, { ...tilted, budgetDeg: 4 })
   check('[10] budget 4° → 4°, ρ > R', near(r10d.turnsDeg[0], 4, 1e-9) && channelCoords(r10d.joints[1], D2).rho > D2.r,
     JSON.stringify(r10d.turnsDeg))

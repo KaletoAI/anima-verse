@@ -7,12 +7,12 @@
  * - THE OCCUPANT is a list of segments a → b with radius r (world metres; a chain's links, the rod's links).
  * - THE RADIAL MAP (`openedDistance`). d = the distance of a vertex P from the axis of its NEAREST segment (nearest by
  *   surface, d − r; Q the closest point on a → b). T = r + m (m = `margin`, default `OPENING_MARGIN_M`), the band
- *   B = max(`band` (default `OPENING_BAND_M`), 0.6·r), the band's outer end b = T + B and its inner end
- *   d0 = max(0, T − B), L = b − d0. Then f(d) = T for d ≤ d0 (the inner wall ends EXACTLY at T), f(d) = d for d ≥ b,
- *   and between them the cubic Hermite with f(d0) = T, f'(d0) = 0, f(b) = b, f'(b) = 1: with t = (d − d0)/L,
- *   f = T(2t³ − 3t² + 1) + b(−2t³ + 3t²) + L(t³ − t²). The secant slope B/L is ½ (T ≥ B) or B/(T + B) ≥ ½ (T < B), within
- *   the Fritsch–Carlson bound for end slopes 0 and 1, so f is MONOTONE and C1: no vertex passes another, no fold, no
- *   step at the rim.
+ *   B = max(`band` (default `OPENING_BAND_M`), K·max(r, R)) with K = `OPENING_BAND_K` = 1.5 and R the channel's radius
+ *   (A102c: the band grows with the occupant, so the region around the opening is carried outward with it, not just
+ *   the hole), b = T + B. Then f(d) = d + T·(1 − d/b)² for d < b, f(d) = d from b on. f(0) = T; f ≥ d and f ≥ T;
+ *   f'(d) = 1 − 2T(1 − d/b)/b ≥ 1 − 2T/b ≥ 0 because B ≥ T always holds (B ≥ 1.5·r and B ≥ 15 mm, T = r + 2 mm), so
+ *   f is MONOTONE (no vertex passes another, the modelled rim keeps its order); f'(b) = 1, so it is C1 at the band's
+ *   end — a stretched, rounded lip, never a step.
  * - THE AXIAL WEIGHT `openingWeight`: z = 1 for −F ≤ s ≤ D (the channel's funnel and cylinder along its axis),
  *   1 − smoothstep(e / f) for a distance e before −F or past D, f = `falloff` (default `OPENING_FALLOFF_M`), 0 from
  *   e ≥ f on. Across the axis the radial map alone bounds the opening (a hard radial zone edge is what made a rod
@@ -43,10 +43,12 @@ type Three = typeof import('three')
 export const OPENING_MARGIN_M = 0.002
 /** f: the band before the opening and past the bottom over which the opening fades along the axis (metres). */
 export const OPENING_FALLOFF_M = 0.02
-/** The radial band's floor (metres); B = max(this, 0.6·r). */
+/** The radial band's floor (metres); B = max(this, `OPENING_BAND_K`·max(r, R)). */
 export const OPENING_BAND_M = 0.015
+/** K: the radial band in units of the larger of the occupant's and the channel's radius. */
+export const OPENING_BAND_K = 1.5
 /** How far across the axis beyond R + f a vertex may be and still be a candidate (metres) — a wide occupant's lip. */
-export const OPENING_SLACK_M = 0.06
+export const OPENING_SLACK_M = 0.08
 /** The pose drift allowed between bind-time and current channel coordinates in the per-frame narrowing (metres). */
 export const OPENING_POSE_SLACK_M = 0.01
 
@@ -62,22 +64,18 @@ export const OPENING_SKIP_DEG = 0.5
 /** A push at or below this (metres) does not move the point. */
 const OPENING_EPS_M = 1e-6
 
-/** The band B of a segment of radius r: max(`band`, 0.6·r). */
-export function openingBand(r: number, band = OPENING_BAND_M): number {
-  return Math.max(band, 0.6 * r)
+/** The band B of a segment of radius r in a channel of radius `channelR`: max(`band`, K·max(r, channelR)). */
+export function openingBand(r: number, band = OPENING_BAND_M, channelR = 0): number {
+  return Math.max(band, OPENING_BAND_K * Math.max(r, channelR))
 }
 
-/** f(d): where a vertex at distance d from the occupant's axis ends (module docstring, THE RADIAL MAP). */
-export function openedDistance(d: number, r: number, options: OpeningOptions = {}): number {
+/** f(d): where a vertex at distance d from the occupant's axis ends (module docstring, THE RADIAL MAP); `channelR` R. */
+export function openedDistance(d: number, r: number, options: OpeningOptions = {}, channelR = 0): number {
   const T = r + (options.margin ?? OPENING_MARGIN_M)
-  const B = openingBand(r, options.band)
-  const b = T + B
+  const b = T + openingBand(r, options.band, channelR)
   if (d >= b) return d
-  const d0 = Math.max(0, T - B)
-  if (d <= d0) return T
-  const L = b - d0
-  const t = (d - d0) / L, t2 = t * t, t3 = t2 * t
-  return T * (2 * t3 - 3 * t2 + 1) + b * (-2 * t3 + 3 * t2) + L * (t3 - t2)
+  const x = 1 - Math.max(0, d) / b
+  return d + T * x * x
 }
 
 /** z: 1 for −F ≤ s ≤ D, 1 − smoothstep(e / f) for e = the distance before −F or past D, 0 from e ≥ f. */
@@ -120,7 +118,7 @@ export function openingDisplacement(p: Vec3, ch: ChannelNow, segments: readonly 
   }
   let dir: Vec3 = [p[0] - q[0], p[1] - q[1], p[2] - q[2]]
   const d = Math.hypot(dir[0], dir[1], dir[2])
-  const push = z * (openedDistance(d, r, options) - d)
+  const push = z * (openedDistance(d, r, options, ch.r) - d)
   if (!(push > OPENING_EPS_M)) return null
   if (d > 1e-9) dir = [dir[0] / d, dir[1] / d, dir[2] / d]
   else {
@@ -166,7 +164,7 @@ export function openingReach(segments: readonly OpeningSegment[], ch: ChannelNow
       const { s, rho } = channelCoords(p, ch)
       sMin = Math.min(sMin, s); sMax = Math.max(sMax, s); rhoSeg = Math.max(rhoSeg, rho)
     }
-    reach = Math.max(reach, seg.r + (options.margin ?? OPENING_MARGIN_M) + openingBand(seg.r, options.band))
+    reach = Math.max(reach, seg.r + (options.margin ?? OPENING_MARGIN_M) + openingBand(seg.r, options.band, ch.r))
   }
   return { sMin: sMin - reach - poseSlack, sMax: sMax + reach + poseSlack, rhoMax: rhoSeg + reach + poseSlack }
 }
@@ -194,7 +192,7 @@ export function displaceInto(px: number, py: number, pz: number, ch: ChannelNow,
   }
   const dx = px - qx, dy = py - qy, dz = pz - qz
   const d = Math.hypot(dx, dy, dz)
-  const push = z * (openedDistance(d, r, options) - d)
+  const push = z * (openedDistance(d, r, options, ch.r) - d)
   if (!(push > OPENING_EPS_M)) return 0
   if (d > 1e-9) { out[0] = dx / d * push; out[1] = dy / d * push; out[2] = dz / d * push; return push }
   const full = openingDisplacement([px, py, pz], ch, segments, options)

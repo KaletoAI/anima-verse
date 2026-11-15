@@ -277,8 +277,11 @@ export function suppressedIds(tip: Vec3, ch: ChannelNow): ReadonlySet<string> {
 
 /**
  * The admin viewer's test rod through the rule, root to tip, at w = 1. The rod is straight, `links` equal links of
- * `length` / `links` and capsule radius `radius`; its root sits on the axis at s = `insertion` − `length`, and it
- * points along u tilted by `tiltDeg` (about a fixed perpendicular of u: u × x, or u × y when u is near x). Each link,
+ * `length` / `links` and capsule radius `radius`. It points along u tilted by `tiltDeg` (about a fixed perpendicular of u:
+ * u × x, or u × y when u is near x) and passes through the opening centre O, its tip `insertion` along the rod past O
+ * (root = O + dir·(insertion − length)): the tilt PIVOTS ABOUT THE OPENING, so it changes the angle of entry, never
+ * whether the rod enters (A102c — pivoting about the root swung the crossing (length − insertion)·tan(tilt) sideways,
+ * out of the opening at a few degrees). Each link,
  * root to tip, takes its radial guidance turn capped by `budgetDeg` and carries the links after it; then the links
  * from the joint `depthJoint` picks are scaled by `depthScale`. Returns the joints (root first, the tip
  * last), the turns in degrees, k (1 when the tip stays before D − radius), how far the tip's surface lies past the
@@ -292,7 +295,7 @@ export function guideRod(ch: ChannelNow, rod: { length: number; radius: number; 
   const ref: Vec3 = Math.abs(ch.u[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]
   const side = cross(ch.u, ref)
   const dir = rotate(ch.u, scale(side, 1 / len(side)), rod.tiltDeg * DEG)
-  const joints: Vec3[] = [add(ch.o, scale(ch.u, rod.insertion - rod.length))]
+  const joints: Vec3[] = [add(ch.o, scale(dir, rod.insertion - rod.length))]
   for (let i = 0; i < n; i++) joints.push(add(joints[i], scale(dir, linkLen)))
   const budget = Math.max(0, rod.budgetDeg) * DEG
   const turnsDeg: number[] = []

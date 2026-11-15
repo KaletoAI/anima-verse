@@ -1775,7 +1775,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             rodLines.forEach((line, i) => placeCapsuleWireframe(THREE, line, { a: guided.joints[i],
               b: guided.joints[i + 1], r: rod.radius * metre }))
             const root = guided.joints[0]
-            placeRodLabel(`${rod.length.toFixed(3)} m`, [root[0], root[1] + 0.03 * metre, root[2]], 0.025 * metre)
+            placeRodLabel(`${(rod.length * 100).toFixed(1)} cm`, [root[0], root[1] + 0.03 * metre, root[2]], 0.025 * metre)
             // The engagement weight, ramped like a chain's: a link tip in the funnel or the cylinder with its lever
             // within the cone engages, no tip in the grown zone releases.
             let inside = false, inGrown = false, lever = 180

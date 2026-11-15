@@ -8,7 +8,7 @@
  * - Length / Radius (m), Links (count), Insertion (m: how far the rod's tip lies past the opening along the axis,
  *   negative = still in front of it), Tilt (° off the axis). Every slider applies live.
  * - The readout (`RodReadout`, read by the viewer each moment): the turn per link (°), the depth scale k, how far
- *   the tip's surface lies past the bottom (mm), the receiving body's capsules it skips and the weight w.
+ *   the tip's surface lies past the bottom (cm), the receiving body's capsules it skips and the weight w.
  * The rod's length is written on the rod in the viewer; the channel grid there has 1 cm cells.
  */
 import { useI18n } from '../../i18n/I18nProvider'
@@ -40,7 +40,8 @@ export function ChannelRodControls({ value, channels, onChange, readout }: {
 }) {
   const { t } = useI18n()
   const set = (patch: Partial<RodSettings>) => onChange({ ...value, ...patch })
-  const metres = (m: number) => `${m < 0 ? '−' : ''}${Math.abs(m).toFixed(3)} m`
+  // Shown in cm like the rest of the UI (A102c); the settings stay in metres.
+  const metres = (m: number) => `${m < 0 ? '−' : ''}${(Math.abs(m) * 100).toFixed(1)} cm`
   const lines = rodReadoutLines(readout, t)
   return (
     <div className="ga-fieldset ga-model3d-group" style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -54,13 +55,13 @@ export function ChannelRodControls({ value, channels, onChange, readout }: {
       </label>
       <div style={GRID3}>
         <Slider label={t('Length')} value={value.length} shown={metres(value.length)} min={0.03} max={0.4} step={0.005}
-          title={t('The rod’s length in metres — written on the rod in the viewer')} onChange={(length) => set({ length })} />
+          title={t('The rod’s length in cm — written on the rod in the viewer')} onChange={(length) => set({ length })} />
         <Slider label={t('Radius')} value={value.radius} shown={metres(value.radius)} min={0.002} max={0.05} step={0.001}
-          title={t('The radius of each link’s capsule, in metres')} onChange={(radius) => set({ radius })} />
+          title={t('The radius of each link’s capsule, in cm')} onChange={(radius) => set({ radius })} />
         <Slider label={t('Links')} value={value.links} shown={String(value.links)} min={1} max={6} step={1}
           title={t('How many equal links the rod has')} onChange={(links) => set({ links })} />
         <Slider label={t('Insertion')} value={value.insertion} shown={metres(value.insertion)} min={-0.1} max={0.3}
-          step={0.005} title={t('How far the rod’s tip lies past the opening along the channel axis, in metres (negative = in front of it)')}
+          step={0.005} title={t('How far the rod’s tip lies past the opening along the rod, in cm (negative = in front of it); the rod always passes through the opening centre, the tilt pivots there')}
           onChange={(insertion) => set({ insertion })} />
         <Slider label={t('Tilt')} value={value.tiltDeg} shown={`${value.tiltDeg}°`} min={-45} max={45} step={1}
           title={t('How far the rod points off the channel axis, in degrees')} onChange={(tiltDeg) => set({ tiltDeg })} />

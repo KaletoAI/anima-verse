@@ -181,8 +181,9 @@
  *       yellow, that reason; "Covered by the worn outfit" → grey.
  *       rodReadoutLines(null) → ["The rod is shown once the model carries a channel"]; {turns [0, 12.345], k 0.8,
  *       past 3.24 mm, suppressed [torso_lower], w 1} → ["Turn per link: 0.0° · 12.3°", "Depth scale k 0.800 · past
- *       the bottom 3.2 mm", "Weight w 1.00 · skipped capsules: torso_lower", "Opening widened by 12.0 mm · 37
- *       vertices moved"] (Ruling A102: openingMm 12.04 → "12.0", openingMoved 37).
+ *       the bottom 0.32 cm", "Weight w 1.00 · skipped capsules: torso_lower", "Opening widened by 1.20 cm · 37
+ *       vertices moved"] (Ruling A102: openingMm 12.04 → "1.20" cm, openingMoved 37; A102c: the readout and the rod sliders show cm,
+ *       pastBottomMm 3.24 → "0.32" cm; the sliders format 0.02 m → "2.0 cm", −0.015 m → "−1.5 cm").
  *     Ruling A102 gate: the channel display and the test rod live ONLY in the Base body tab's viewer — Model3DViewer
  *     gates both behind `channelTools` (default false: `hasChannels = channelTools && …`); FieldBaseBody.tsx is the
  *     ONE file passing `channelTools`, none of the other viewers (FieldModel3D, FieldFigure, garment, hairstyle,
@@ -704,8 +705,15 @@ check('[15] declaration lines', [ch.declarationLine(DECL), ch.declarationLine({ 
 check('[15] rod readout', [ch.rodReadoutLines(null), ch.rodReadoutLines({ turnsDeg: [0, 12.345], k: 0.8,
   pastBottomMm: 3.24, suppressed: ['torso_lower'], w: 1, openingMm: 12.04, openingMoved: 37 })],
 [['The rod is shown once the model carries a channel'], ['Turn per link: 0.0° · 12.3°',
-  'Depth scale k 0.800 · past the bottom 3.2 mm', 'Weight w 1.00 · skipped capsules: torso_lower',
-  'Opening widened by 12.0 mm · 37 vertices moved']]);
+  'Depth scale k 0.800 · past the bottom 0.32 cm', 'Weight w 1.00 · skipped capsules: torso_lower',
+  'Opening widened by 1.20 cm · 37 vertices moved']]);
+{
+  // A102c: the rod controls show cm.
+  const fsC = await import('fs');
+  const rodSrc = fsC.readFileSync(new URL('../frontend/src/tabs/characters/ChannelRodControls.tsx', import.meta.url).pathname, 'utf8');
+  const fmt = new Function('m', 'return ' + rodSrc.match(/const metres = \(m: number\) => (`[^`]*`)/)[1]);
+  check('[15] A102c rod sliders in cm', [fmt(0.02), fmt(-0.015), /toFixed\(3\)\} m/.test(rodSrc)], ['2.0 cm', '−1.5 cm', false]);
+}
 {
   // Ruling A102: channels + rod only in the Base body tab's viewer.
   const fsA = await import('fs');
