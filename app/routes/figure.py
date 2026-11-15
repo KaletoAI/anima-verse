@@ -93,7 +93,7 @@ body actions):
   image" row of the outfit worn now (Ruling A74b, ``outfit_references.info``):
   ``{key, label, record, url, gone, applies, note, source, jobs, others}``.
 * ``POST /characters/{c}/figure/outfit-reference {image}`` — pick a picture of
-  the character's gallery as the worn outfit's reference image
+  the character's gallery as the worn outfit's full-body reference
   (``outfit_references.set_reference``): it SAVES ONLY — nothing renders; the
   dressed front shows as due with its cost until a Build. 400 for a file not
   in the gallery or not an image; 503 when the profile was not saved.
@@ -104,6 +104,23 @@ body actions):
 * ``DELETE /characters/{c}/figure/outfit-reference/{key}`` — clear one
   outfit's reference (``outfit_references.clear_reference``); saves only.
   404 when that outfit has none.
+  Ruling A87: these answers carry the tile's Generate part
+  (``full_body_reference.outfit_tile``); the record keeps its ``origin``.
+* ``POST /characters/{c}/figure/outfit-reference/generate`` — GENERATE the worn
+  outfit's full-body reference (Ruling A87, ``full_body_reference.start_outfit``:
+  one image job, an edit of the plain body's full-body reference, else of the
+  profile image; recorded under the outfit worn at the click). 202; 409 without
+  either picture or while a reference of the character is generated; 400 for a
+  non-humanoid.
+* ``GET /characters/{c}/base-body/full-body-reference`` — the Base body tab's
+  "Full-body reference" tile (Ruling A87, ``full_body_reference.base_tile``).
+* ``POST …/base-body/full-body-reference {image}`` (pick from the gallery),
+  ``POST …/base-body/full-body-reference/upload`` (multipart ``file``; capped
+  and checked as the outfit upload), ``DELETE …/base-body/full-body-reference``
+  (clear) — SAVE ONLY: the front then shows as outdated with its cost.
+* ``POST …/base-body/full-body-reference/generate`` — generate it from the
+  profile image (``full_body_reference.start_base``, one image job). 202; 409
+  without a profile image or while a reference of the character is generated.
 * ``POST /characters/{c}/model3d/build-current`` — the 3D tab's "Build current
   outfit" while it serves a stand-in (``model3d_pipeline.build_current_outfit``:
   the character's Build, a click — ``{status: started | queued | current}``);
@@ -411,36 +428,38 @@ class OutfitReferenceRequest(BaseModel):
 
 @router.get("/{character_name}/figure/outfit-reference")
 def get_outfit_reference(character_name: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    from app.core import outfit_references
     _require_character(character_name)
-    return outfit_references.info(character_name)
+    return _outfit_tile(character_name)
 
 
-def _set_outfit_reference(character_name: str, image: str) -> Dict[str, Any]:
-    from app.core import outfit_references
+def _outfit_tile(character_name: str) -> Dict[str, Any]:
+    from app.core import full_body_reference, outfit_references
+    return full_body_reference.outfit_tile(character_name, outfit_references.info(character_name))
+
+
+def _set_outfit_reference(character_name: str, image: str, origin: str) -> Dict[str, Any]:
+    from app.core import full_body_reference
     try:
-        outfit_references.set_reference(character_name, image)
+        full_body_reference.set_outfit(character_name, image, origin=origin)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
-    return outfit_references.info(character_name)
+    return _outfit_tile(character_name)
 
 
 @router.post("/{character_name}/figure/outfit-reference")
 def set_outfit_reference(character_name: str, body: OutfitReferenceRequest,
                          _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import full_body_reference
     _require_character(character_name)
-    return _set_outfit_reference(character_name, body.image)
+    return _set_outfit_reference(character_name, body.image, full_body_reference.ORIGIN_GALLERY)
 
 
-@router.post("/{character_name}/figure/outfit-reference/upload")
-async def upload_outfit_reference(character_name: str, request: Request,
-                                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    from starlette.concurrency import run_in_threadpool
-    from app.core import outfit_references
+async def _read_reference_upload(request: Request) -> tuple:
+    """``(bytes, file name)`` of a reference upload: capped by its declared length and while reading, checked by
+    its bytes (the gallery upload's rules)."""
     from app.core.upload_limits import ensure_image, guard_content_length, read_upload_capped
-    _require_character(character_name)
     guard_content_length(request, what="Reference image")
     form = await request.form()
     file = form.get("file")
@@ -448,11 +467,36 @@ async def upload_outfit_reference(character_name: str, request: Request,
         raise HTTPException(status_code=400, detail="No file uploaded")
     data = await read_upload_capped(file, what="Reference image")
     ensure_image(data, filename=file.filename, what="Reference image")
+    return data, file.filename
+
+
+@router.post("/{character_name}/figure/outfit-reference/upload")
+async def upload_outfit_reference(character_name: str, request: Request,
+                                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from starlette.concurrency import run_in_threadpool
+    from app.core import full_body_reference, outfit_references
+    _require_character(character_name)
+    data, filename = await _read_reference_upload(request)
     try:
-        name = await run_in_threadpool(outfit_references.store_upload, character_name, data, file.filename)
+        name = await run_in_threadpool(outfit_references.store_upload, character_name, data, filename)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    return await run_in_threadpool(_set_outfit_reference, character_name, name)
+    return await run_in_threadpool(_set_outfit_reference, character_name, name, full_body_reference.ORIGIN_UPLOAD)
+
+
+@router.post("/{character_name}/figure/outfit-reference/generate", status_code=202)
+def generate_outfit_reference(character_name: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import base_body, full_body_reference
+    _require_character(character_name)
+    try:
+        full_body_reference.start_outfit(character_name)
+    except base_body.MissingInput as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    return _outfit_tile(character_name)
 
 
 @router.delete("/{character_name}/figure/outfit-reference/{key}")
@@ -466,4 +510,77 @@ def clear_outfit_reference(character_name: str, key: str,
         raise HTTPException(status_code=503, detail=str(e)) from e
     if not cleared:
         raise HTTPException(status_code=404, detail="This outfit has no reference image")
-    return outfit_references.info(character_name)
+    return _outfit_tile(character_name)
+
+
+# --- The plain body's full-body reference (Ruling A87) ---------------------------
+
+
+@router.get("/{character_name}/base-body/full-body-reference")
+def get_base_reference(character_name: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import full_body_reference
+    _require_character(character_name)
+    return full_body_reference.base_tile(character_name)
+
+
+def _set_base_reference(character_name: str, image: str, origin: str) -> Dict[str, Any]:
+    from app.core import full_body_reference
+    try:
+        full_body_reference.set_base(character_name, image, origin=origin)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return full_body_reference.base_tile(character_name)
+
+
+@router.post("/{character_name}/base-body/full-body-reference")
+def set_base_reference(character_name: str, body: OutfitReferenceRequest,
+                       _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import full_body_reference
+    _require_character(character_name)
+    return _set_base_reference(character_name, body.image, full_body_reference.ORIGIN_GALLERY)
+
+
+@router.post("/{character_name}/base-body/full-body-reference/upload")
+async def upload_base_reference(character_name: str, request: Request,
+                                _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from pathlib import Path
+    from starlette.concurrency import run_in_threadpool
+    from app.core import full_body_reference
+    _require_character(character_name)
+    data, filename = await _read_reference_upload(request)
+    try:
+        name = await run_in_threadpool(full_body_reference.store_in_gallery, character_name, data,
+                                       Path(filename or "").suffix, "fullbody")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return await run_in_threadpool(_set_base_reference, character_name, name, full_body_reference.ORIGIN_UPLOAD)
+
+
+@router.post("/{character_name}/base-body/full-body-reference/generate", status_code=202)
+def generate_base_reference(character_name: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import base_body, full_body_reference
+    _require_character(character_name)
+    try:
+        full_body_reference.start_base(character_name)
+    except base_body.MissingInput as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    return full_body_reference.base_tile(character_name)
+
+
+@router.delete("/{character_name}/base-body/full-body-reference")
+def clear_base_reference(character_name: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import full_body_reference
+    _require_character(character_name)
+    try:
+        cleared = full_body_reference.clear_base(character_name)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    if not cleared:
+        raise HTTPException(status_code=404, detail="The plain body has no full-body reference")
+    return full_body_reference.base_tile(character_name)

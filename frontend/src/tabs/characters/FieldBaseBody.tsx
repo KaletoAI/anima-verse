@@ -85,7 +85,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPost } from '../../lib/api'
+import { apiDelete, apiGet, apiPost, apiUpload } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 import { Model3DViewer } from './Model3DViewer'
@@ -115,6 +115,9 @@ import { EXT_DUE_GROUPS_NOTE, RUN_ALL_STATUS, TIP_DUE_NOTE, TIP_REBUILD_LABEL, b
   runAllButton, runAllPlanLine, runAllWhat, stateMotionUrl, statePicker, viewerStateMotion } from './baseBodyModel'
 import type { BaseLight, BaseRunAll, PickedStateMotion, TipDots } from './baseBodyModel'
 import { BuildProblemView } from './BuildProblem'
+import { FullBodyReferenceTile } from './FullBodyReferenceTile'
+import { baseFollowup, fullBodyBuildNote, fullBodyRow } from './fullBodyReferenceModel'
+import type { BaseFullBodyInfo } from './fullBodyReferenceModel'
 import { StepLight, StepRowView, SubTabs } from './StepRows'
 import { LIGHT_COLOR, PANEL } from './stepStyle'
 
@@ -247,24 +250,30 @@ function FrontReferenceRow({ reference, jobs, busy, buildRunning, onRegenerate }
   const { t } = useI18n()
   if (!reference) return null
   const outdated = !reference.current && reference.reason
-  const action = frontRegenerate(reference.method, jobs, t)
+  // Ruling A87: the full-body reference while one is set, else the profile image.
+  const fullBody = reference.method === 'reference' && reference.source === 'full_body'
+  const action = frontRegenerate(fullBody ? 'full_body' : reference.method, jobs, t)
+  const title = reference.method !== 'reference' ? t('Reference: none')
+    : fullBody ? t('Reference: full-body reference') : t('Reference: profile image')
   return (
     <div className="ga-face-actions-row" style={{ alignItems: 'center', gap: 8 }}>
       {reference.method === 'reference' && reference.url ? (
         <div style={{ width: 60, flex: '0 0 auto' }}>
-          <RefImage key={reference.url} src={reference.url} height={80} label={t('Reference: profile image')}
-            compact />
+          <RefImage key={reference.url} src={reference.url} height={80} label={title} compact />
         </div>
       ) : null}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <strong style={{ fontSize: 12 }}>
-          {reference.method === 'reference' ? t('Reference: profile image') : t('Reference: none')}
-        </strong>
+        <strong style={{ fontSize: 12 }}>{title}</strong>
         <span className="ga-hint" style={{ overflowWrap: 'anywhere' }}>
-          {reference.method === 'reference'
+          {fullBody
+            ? t('The front is an edit of the full-body reference above: build, face and proportions come from the picture. A new full-body reference makes the front outdated — Regenerate or Run all renders it again.')
+            : reference.method === 'reference'
             ? t('The front is an edit of the profile image: build, face and proportions come from the picture. A new profile image makes the front outdated — Regenerate or Run all renders it again.')
             : t(reference.note)}
         </span>
+        {reference.method === 'reference' && !fullBody && reference.note ? (
+          <span className="ga-hint" style={{ overflowWrap: 'anywhere' }}>{t(reference.note)}</span>
+        ) : null}
         {outdated ? (
           <>
             <span className="ga-hint" style={{ display: 'flex', gap: 6, alignItems: 'baseline',
@@ -287,10 +296,73 @@ function FrontReferenceRow({ reference, jobs, busy, buildRunning, onRegenerate }
   )
 }
 
+/** Ruling A87: the first step of Views — the plain body's full-body reference (`FullBodyReferenceTile`, the same
+ *  tile as the Figure tab's outfit reference). Generate makes it from the profile image (one image job); what it
+ *  makes due is said before the click: the front, with the front's Regenerate cost. Saving (pick, upload, clear)
+ *  renders nothing. Read on its own (GET …/base-body/full-body-reference), every 2 s while a Generate runs; when one
+ *  ends or a save lands, the base body is read again (the front turns outdated). */
+function BaseFullBodyReference({ character, jobs, refreshKey, onChanged }: {
+  character: string
+  jobs: PlainBodyJobs | undefined
+  /** Changes when the front changes: read again (its light follows the front). */
+  refreshKey: string
+  onChanged: () => void
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const enc = encodeURIComponent(character)
+  const [info, setInfo] = useState<BaseFullBodyInfo | null>(null)
+  const [busy, setBusy] = useState(false)
+  const load = useCallback(async () => {
+    try {
+      setInfo(await apiGet<BaseFullBodyInfo>(`/characters/${enc}/base-body/full-body-reference`))
+    } catch {
+      setInfo(null)
+    }
+  }, [enc])
+  useEffect(() => { void load() }, [load, refreshKey])
+  const running = !!info?.run?.running
+  const wasRunning = useRef(false)
+  useEffect(() => {
+    if (wasRunning.current && !running) onChanged()
+    wasRunning.current = running
+    if (!running) return undefined
+    const id = window.setTimeout(() => { void load() }, 2000)
+    return () => window.clearTimeout(id)
+  }, [running, info, load, onChanged])
+  const run = useCallback(async (call: () => Promise<BaseFullBodyInfo>, done: string) => {
+    if (busy) return
+    setBusy(true)
+    try {
+      setInfo(await call())
+      toast(t(done))
+      onChanged()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }, [busy, onChanged, t, toast])
+  if (!info) return null
+  const path = `/characters/${enc}/base-body/full-body-reference`
+  return (
+    <FullBodyReferenceTile character={character} row={fullBodyRow('base', info, t)} record={info.record} url={info.url}
+      run={info.run} generate={info.generate} busy={busy} followup={baseFollowup(jobs, t)}
+      clearNote={t('The picture stays in the gallery. Nothing renders now — the front is then made from the profile image again, and it shows as outdated until you regenerate it.')}
+      onGenerate={() => void run(() => apiPost<BaseFullBodyInfo>(`${path}/generate`, {}), 'Generating')}
+      onPick={(filename) => void run(() => apiPost<BaseFullBodyInfo>(path, { image: filename }), 'Saved')}
+      onUpload={(file) => void run(() => apiUpload<BaseFullBodyInfo>(`${path}/upload`, file), 'Saved')}
+      onClear={() => void run(() => apiDelete<BaseFullBodyInfo>(path), 'Cleared')} />
+  )
+}
+
 /** The tab's head (Task UI5): the light with its words, "Run all" (rule R1) with its count, its plan in one line,
  *  why it is disabled, its last error; the link to the Figure tab. */
-function RunAllHeader({ runAll, lights, busy, buildRunning, activity, onRun, onOpenFigure }: {
+function RunAllHeader({ runAll, lights, busy, buildRunning, activity, fullBody, onRun, onOpenFigure }: {
   runAll: BaseRunAll | null | undefined
+  /** Ruling A87: the line that no full-body reference is set (information, never a due step — Run all never
+   *  generates one); "" when one is set. */
+  fullBody: string
   /** The step rows' lights (the views, the model). */
   lights: BaseLight[]
   busy: boolean
@@ -324,6 +396,10 @@ function RunAllHeader({ runAll, lights, busy, buildRunning, activity, onRun, onO
         ) : null}
       </div>
       {plan ? <div className="ga-hint" style={{ fontSize: 12 }} title={what}>{t('Run all runs')}: {plan}</div> : null}
+      {fullBody ? (
+        <div className="ga-hint" style={{ fontSize: 12 }}
+          title={t('Optional — Run all never generates it: Base body → Views → Full-body reference.')}>{fullBody}</div>
+      ) : null}
       {/* A running Build disables Run all; the line says so only when Run all has something to run. */}
       {buildRunning && !button.disabled ? <div className="ga-hint" style={{ fontSize: 12 }}>{t('A Build runs for this character — Run all waits until it has ended.')}</div>
         : button.reason ? <div className="ga-hint" style={{ fontSize: 12 }}>{button.reason}</div> : null}
@@ -668,6 +744,8 @@ export function FieldBaseBody({ character, onOpenFigure }: {
     <div>
     <RunAllHeader runAll={info.run_all} lights={lights} busy={posting || viewsRunning(info) || modelBusy}
       buildRunning={!!figure?.build.running} activity={info.activity} onRun={() => { void runAll() }}
+      fullBody={info.front_reference ? fullBodyBuildNote('base', info.front_reference.source === 'full_body',
+        info.front_reference.method, t) : ''}
       onOpenFigure={onOpenFigure} />
     {figure?.build.running && info.activity?.base ? <div className="ga-hint">{t(BUILD_RUNNING_NOTE)}</div> : null}
     {/* Ruling A61: the base mesh does not match its own views — Run all makes it again (the plain body step). */}
@@ -719,6 +797,9 @@ export function FieldBaseBody({ character, onOpenFigure }: {
         <SubTabs tabs={tabs} value={sub} onChange={setSub} />
         {sub === 'views' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {/* Ruling A87: the full-body reference the front is an edit of — the first step. */}
+            <BaseFullBodyReference character={character} jobs={jobs} onChanged={startPoll}
+              refreshKey={`${info.image_meta?.front?.created_at || ''}:${info.front_reference?.image || ''}:${info.front_reference?.current ? 1 : 0}`} />
             <FrontReferenceRow reference={info.front_reference} jobs={jobs} busy={posting || viewsRunning(info)}
               buildRunning={!!figure?.build.running}
               onRegenerate={() => { void post('images', { view: 'front', force: true }) }} />

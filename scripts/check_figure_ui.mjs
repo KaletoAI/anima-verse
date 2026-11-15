@@ -1187,13 +1187,64 @@ check('[25] the Wardrobe chip\'s fit', m.acceptedWhat({ step: 'fit', on: '', rea
   const fig = src('frontend/src/tabs/characters/FieldFigure.tsx');
   const base = src('frontend/src/tabs/characters/FieldBaseBody.tsx');
   check('[28] wiring', [
-    /"front": front_ref\["wanted"\]\["method"\]/.test(src('app/core/figure.py')),
+    // Ruling A87: "full_body" when the front is made from the full-body reference, else the method.
+    /else front_ref\["wanted"\]\["method"\]\)/.test(src('app/core/figure.py')),
     /data\.changes\.filter\(\(c\) => c !== frontChange\)/.test(fig),
     /<FrontChangeRow /.test(fig),
     /post\('base-body\/images', \{ view: 'front', force: true \}/.test(fig),
     /<FrontReferenceRow reference=\{info\.front_reference\} jobs=\{jobs\}/.test(base),
     /onRegenerate=\{\(\) => \{ void post\('images', \{ view: 'front', force: true \}\) \}\}/.test(base),
   ], [true, true, true, true, true, true]);
+}
+
+// [29] Ruling A87 — the full-body reference step, the same wording in the Base body and the Figure tab. Expected
+// values by hand: one Generate = 1 image job; the plain body's follow-up is the front's Regenerate from [28]'s counts
+// (2 image jobs + 7 hub jobs at the next Build while a base model is stored); an outfit's is the dressed views' image
+// jobs (2 with front + back) while something is painted, else nothing.
+{
+  const fb = await loadBundled(join(ROOT, 'frontend/src/tabs/characters/fullBodyReferenceModel.ts'));
+  const J = { view: 1, front: 2, model: 4, after_front: 7, model_followup: { jobs: 4, stages: ['mesh', 'upscale', 'face', 'rig'] } };
+  check('[29] front from the full-body reference', m.frontRegenerate('full_body', J).label,
+    'Regenerate front from the full-body reference — 2 image jobs + 7 hub jobs at the next Build');
+  check('[29] Generate labels', [fb.generateLabel(false, 1), fb.generateLabel(true, 1)],
+    ['Generate — 1 image job', 'Regenerate — 1 image job']);
+  check('[29] base follow-up', fb.baseFollowup(J),
+    'Then the front is due: Regenerate front from the full-body reference — 2 image jobs + 7 hub jobs at the next Build');
+  check('[29] outfit follow-up', [fb.outfitFollowup(true, 2), fb.outfitFollowup(false, 2)],
+    ['Then the dressed views are due with the next Build — 2 image jobs',
+      'Nothing becomes due now: nothing is painted on this figure, so the picture is not used']);
+  check('[29] Run all / Build notes', [fb.fullBodyBuildNote('base', false, 'reference'), fb.fullBodyBuildNote('base', false, 'text'),
+    fb.fullBodyBuildNote('base', true, 'reference'), fb.fullBodyBuildNote('outfit', false)],
+  ['Full-body reference: none — the front uses the profile image',
+    'Full-body reference: none — no profile image, the front is made from text', '',
+    'Outfit full-body reference: none — the dressed front is an edit of the body’s front']);
+  const rec = { image: 'a.png', sha256: 'x', set_at: '2026-11-15T10:00:00+00:00', origin: 'generated' };
+  const run = { running: false, started_at: null, error: null, failed_at: null };
+  const rows = [
+    fb.fullBodyRow('base', { record: null, gone: false, run }),
+    fb.fullBodyRow('base', { record: null, gone: false, run: { ...run, running: true }, generate: { jobs: 1, source: 'profile' } }),
+    fb.fullBodyRow('base', { record: rec, gone: false, run, front: { stored: true, current: false, source: 'full_body' } }),
+    fb.fullBodyRow('base', { record: rec, gone: false, run, front: { stored: true, current: true, source: 'full_body' } }),
+    fb.fullBodyRow('base', { record: rec, gone: true, run }),
+    fb.fullBodyRow('base', { record: rec, gone: false, run: { ...run, error: 'no backend' } }),
+    fb.fullBodyRow('outfit', { record: rec, gone: false, run, applies: false, note: 'n', label: 'Blue dress' }),
+    fb.fullBodyRow('outfit', { record: rec, gone: false, run, applies: true, jobs: 2, label: 'Blue dress' }),
+    fb.fullBodyRow('outfit', { record: rec, gone: false, run, applies: true, jobs: 0, label: 'Blue dress' }),
+  ].map((r) => [r.light, r.state]);
+  check('[29] rows', rows, [['grey', 'Not set'], ['blue', 'Generating'], ['yellow', 'Due'], ['green', 'Used'],
+    ['red', 'Picture gone'], ['red', 'Failed'], ['grey', 'Not used now'], ['yellow', 'Due'], ['green', 'Used']]);
+  check('[29] the same name in both places', [fb.fullBodyRow('base', { record: null, gone: false }).name,
+    fb.fullBodyRow('outfit', { record: null, gone: false, label: 'Blue dress' }).name],
+  ['Full-body reference', 'Full-body reference · Blue dress']);
+  const de = JSON.parse(src('shared/languages/de.json')).translations;
+  const tde = (k) => de[k] ?? k;
+  check('[29] German', [fb.generateLabel(false, 1, tde), fb.fullBodyBuildNote('base', false, 'reference', tde)],
+    ['Generieren — 1 Bild-Job', 'Ganzkörper-Referenz: keine — die Vorderansicht verwendet das Profilbild']);
+  const tile = src('frontend/src/tabs/characters/FullBodyReferenceTile.tsx');
+  check('[29] one tile in both places', [
+    /<FullBodyReferenceTile /.test(src('frontend/src/tabs/characters/FieldBaseBody.tsx')),
+    /<FullBodyReferenceTile /.test(src('frontend/src/tabs/characters/OutfitReferenceRow.tsx')),
+    /createPortal\(/.test(tile), !/window\.(confirm|alert|prompt)/.test(tile)], [true, true, true, true]);
 }
 
 if (failures.length) {

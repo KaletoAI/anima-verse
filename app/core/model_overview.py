@@ -133,8 +133,8 @@ CLOTHING_STALE_REASONS = {"description_changed": "Piece description changed",
                           "base_model_changed": "Base model changed"}
 FITTED_ON_OLDER_BASE = "Fitted on an older base model"
 #: Ruling A74b: a dressed view made for another outfit reference image than the one set now.
-OUTFIT_REFERENCE_SET = "Made before the outfit's reference image was set — the Build renders it from the picture"
-OUTFIT_REFERENCE_CHANGED = "Made from another reference image of the outfit — the Build renders it from the current one"
+OUTFIT_REFERENCE_SET = "Made before the outfit's full-body reference was set — the Build renders it from the picture"
+OUTFIT_REFERENCE_CHANGED = "Made from another full-body reference of the outfit — the Build renders it from the current one"
 OUTFIT_REFERENCE_CLEARED = "Made from a reference image that was cleared — the Build renders it without one"
 
 

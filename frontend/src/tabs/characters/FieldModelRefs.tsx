@@ -537,7 +537,7 @@ export function FieldModelRefs({
               : plainShape ? t('Painted on the plain body’s view') : t('Painted on the body shape’s view')}
         </span>
         {main && source.source === 'painted' && source.reference ? (
-          <span className="ga-hint">· {t('the front is an edit of the outfit’s reference image')}</span>
+          <span className="ga-hint">· {t('the front is an edit of the outfit’s full-body reference')}</span>
         ) : null}
         {plainShape ? (onOpenBaseBody ? (
           <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBaseBody}

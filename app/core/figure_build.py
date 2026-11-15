@@ -2754,7 +2754,19 @@ def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[st
             "wanted": wanted.as_dict(), "delivered": delivered.as_dict(),
             "outfit": _outfit_name(character_name, wanted.pieces),
             "worn": worn, "hair": hair, "body": body, "served_state": served_state,
+            # Ruling A87: whether the full-body references are set — information beside the plan, never a step.
+            "full_body_reference": _full_body_note(character_name, profile),
             "problem": None if build["running"] else _build_problem(character_name, steps, failures, delivered)}
+
+
+def _full_body_note(character_name: str, profile: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """``full_body_reference.build_note`` (Ruling A87); None when it cannot be read."""
+    try:
+        from app.core import full_body_reference
+        return full_body_reference.build_note(character_name, profile=profile)
+    except Exception:  # noqa: BLE001 — an information line never breaks the tab
+        logger.exception("Full-body reference note of %s failed", character_name)
+        return None
 
 
 #: ``problem.kind`` (Ruling A61): the body's mesh does not match its own views / any other failed step.

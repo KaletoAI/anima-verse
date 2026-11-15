@@ -4,6 +4,7 @@
  * from them, and what a view's single button does — an edit (1 image job) or a copy of the body shape's view (no
  * job). No React, no fetch — the check script (scripts/check_figure_ui.mjs) bundles this file alone.
  */
+import type { FullBodyGenerate, FullBodyRecord, FullBodyRun } from './fullBodyReferenceModel'
 import type { Light } from './hairstylesModel'
 import type { Freshness } from './FreshnessBadge'
 import { singleAction } from './figureModel'
@@ -124,11 +125,14 @@ export function viewAction(src: DressedSource | null | undefined, t: Tr = EN): {
   return { label: singleAction('view', 1, t), note: '', jobs: 1 }
 }
 
-/** GET …/figure/outfit-reference (Ruling A74b, `outfit_references.info`): the reference image of the outfit worn now. */
+/** GET …/figure/outfit-reference (Ruling A74b, `outfit_references.info`; Ruling A87 adds the Generate part,
+ *  `full_body_reference.outfit_tile`): the full-body reference of the outfit worn now. Its step row is
+ *  `fullBodyRow('outfit', …)` (fullBodyReferenceModel), the same as the plain body's. */
 export interface OutfitReferenceInfo {
+  kind?: 'outfit'
   key: string
   label: string
-  record: { image: string; sha256: string; label?: string; set_at?: string } | null
+  record: FullBodyRecord | null
   url: string
   /** The record names a picture that is not in the gallery any more. */
   gone: boolean
@@ -140,32 +144,8 @@ export interface OutfitReferenceInfo {
   /** Image jobs of the dressed views due now (null = unknown). */
   jobs: number | null
   others: { key: string; label: string; image: string; url: string; set_at: string }[]
-}
-
-/**
- * The "Reference image" step row of the outfit worn now (Ruling A74b): none set → grey "Not set" with what the
- * views are made from instead; set but the picture is gone → red "Picture gone"; set but nothing painted → grey
- * "Not used now" with the server's reason; set and the dressed views not made from it yet → yellow "Due" with the
- * job count; else green "Used".
- */
-export function outfitReferenceRow(info: OutfitReferenceInfo, t: Tr = EN): {
-  name: string; light: Light; state: string; reason: string; detail: string
-} {
-  const name = `${t('Reference image')} · ${info.label}`
-  const detail = t('An outfit here is the worn combination of clothing pieces (with the pieces worn open).')
-  if (!info.record) {
-    return { name, light: 'grey', state: t('Not set'), detail,
-      reason: t('Optional. Without one the dressed front is an edit of the body’s front (or a copy of the body shape’s view). Set a picture of the character wearing this outfit to make the front from it.') }
-  }
-  if (info.gone) {
-    return { name, light: 'red', state: t('Picture gone'), detail,
-      reason: t('The picture is not in the gallery any more — pick another one or clear it.') }
-  }
-  if (!info.applies) return { name, light: 'grey', state: t('Not used now'), detail, reason: t(info.note) }
-  if (info.jobs !== 0) {
-    return { name, light: 'yellow', state: t('Due'), detail,
-      reason: t('The dressed front is made from this picture with the next Build — saving rendered nothing.') }
-  }
-  return { name, light: 'green', state: t('Used'), detail,
-    reason: t('The dressed front is an edit of this picture.') }
+  run?: FullBodyRun
+  generate?: FullBodyGenerate
+  /** Image jobs of the dressed views a new reference makes due at the next Build (0: not used now). */
+  followup_jobs?: number
 }

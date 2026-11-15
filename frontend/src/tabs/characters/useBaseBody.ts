@@ -228,6 +228,8 @@ export interface BaseBodyInfo {
  *  from something else (`reason`) — only Regenerate / Run all re-renders it. */
 export interface BaseFrontReference {
   method: 'reference' | 'text'
+  /** Ruling A87: "full_body" — the picture is the full-body reference; "" — the profile image. */
+  source?: string
   image: string
   url: string
   current: boolean

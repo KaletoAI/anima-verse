@@ -43,8 +43,9 @@
  *     body tab"), the body shape and the texture as step rows, and the stored bodies and textures (FigureStored,
  *     Delete behind an in-app confirmation);
  *   - "Dressed views" (Ruling A70, from the dissolved Pose tab): one line that the Build renders them, the worn
- *     outfit's "Reference image" row (Ruling A74b, OutfitReferenceRow: pick from the gallery, upload, clear — saving
- *     only saves; while something is painted the dressed front is then an edit of that picture, due with its cost),
+ *     outfit's "Full-body reference" step (Ruling A74b + A87, OutfitReferenceRow → FullBodyReferenceTile: Generate
+ *     with its cost, pick from the gallery, upload, clear — saving only saves; while something is painted the dressed
+ *     front is then an edit of that picture, due with its cost),
  *     then one step
  *     row per dressed view (FieldModelRefs `layout="steps"`): light, state, reason, small thumbnails that enlarge,
  *     where the view comes from — painted on the body's view, or a copy of the body shape's / plain body's view
@@ -70,6 +71,7 @@ import { FigureStored } from './FigureStored'
 import { FieldModelRefs } from './FieldModelRefs'
 import { FigureOutfitModel } from './FigureOutfitModel'
 import { OutfitReferenceRow } from './OutfitReferenceRow'
+import { fullBodyBuildNote } from './fullBodyReferenceModel'
 import { VIEWS_BY_BUILD } from './dressedViewsModel'
 import { GenerationPausePanel, GenerationPauseSwitch } from './GenerationPausePanel'
 import { BuildProblemView } from './BuildProblem'
@@ -352,6 +354,13 @@ function FigureHeader({ data, posting, autoSaved, onBuild, onAutoBuild, onPause,
       {listed.length ? (
         <div className="ga-hint" style={{ color: LIGHT_COLOR.yellow }}>
           {t('Due')}: {listed.map((c) => changeLine(c, t)).join(' · ')}
+        </div>
+      ) : null}
+      {/* Ruling A87: no full-body reference is information, never a due step — the Build never generates one. */}
+      {data.full_body_reference && (!data.full_body_reference.base || !data.full_body_reference.outfit) ? (
+        <div className="ga-hint" title={t('Optional — the Build never generates it: Base body → Views, and Dressed views here.')}>
+          {[fullBodyBuildNote('base', data.full_body_reference.base, undefined, t),
+            fullBodyBuildNote('outfit', data.full_body_reference.outfit, undefined, t)].filter(Boolean).join(' · ')}
         </div>
       ) : null}
       {frontChange ? (

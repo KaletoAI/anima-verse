@@ -519,8 +519,9 @@ def main() -> int:
         check("new use cases are additions",
               sorted(set(config._DEFAULT_IMAGE_USE_CASES) - set(old_ucs)),
               # base_front_edit: Ruling A74b, the front as an edit of the profile image / an outfit's picture.
-              ["base_back", "base_front", "base_front_edit", "base_side", "base_view_back", "base_view_side",
-               "footwear_source", "outfit_edit"])
+              # base_reference / outfit_reference: Ruling A87, the full-body references.
+              ["base_back", "base_front", "base_front_edit", "base_reference", "base_side", "base_view_back",
+               "base_view_side", "footwear_source", "outfit_edit", "outfit_reference"])
         # Review 2026-11-11: face_view (style emptied) and profile (rules
         # positive, character slot) changed on purpose; Ruling A29: tpose_back /
         # tpose_side (the instruction never describes the clothing) too; every

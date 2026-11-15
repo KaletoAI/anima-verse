@@ -697,6 +697,39 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "",
         },
     },
+    # The FULL-BODY REFERENCE (Ruling A87, app/core/full_body_reference.py):
+    # the picture the A-pose front is an edit of. The plain body's is an edit
+    # of the profile image (occasion base_reference), an outfit's an edit of
+    # the plain body's full-body reference — else the profile image — wearing
+    # the outfit (occasion outfit_reference). The user's validated hub job
+    # 5086b496 is the template: the prompt is ONLY the character's attribute
+    # block (``{character}``, composed at run time from the character's data)
+    # and the one framing clause — no edit prefix, no pose, no light words.
+    # Negatives as ``base_front``; the plain body's adds the base negative.
+    "base_reference": {
+        "keywords": {
+            "prompt_style": "{character}, the whole figure from head to feet inside the frame",
+            "prompt_negative": _NEG_TPOSE,
+            "prompt_instruction": "",
+        },
+        "natural": {
+            "prompt_style": "{character}, the whole figure from head to feet inside the frame",
+            "prompt_negative": _NEG_TPOSE,
+            "prompt_instruction": "",
+        },
+    },
+    "outfit_reference": {
+        "keywords": {
+            "prompt_style": "{character}, the whole figure from head to feet inside the frame",
+            "prompt_negative": _NEG_TPOSE,
+            "prompt_instruction": "",
+        },
+        "natural": {
+            "prompt_style": "{character}, the whole figure from head to feet inside the frame",
+            "prompt_negative": _NEG_TPOSE,
+            "prompt_instruction": "",
+        },
+    },
     "base_back": {
         "keywords": {
             "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, {character}, full body view, head to toe, full arm span visible with both hands fully inside the frame, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
@@ -1798,6 +1831,21 @@ def _migrate_base_body_routing(config: dict) -> bool:
     return _seed_routing_copies(config, _BASE_BODY_ROUTING_SEEDS)
 
 
+#: (target, source) — the full-body references (Ruling A87) start on the
+#: chains of the fronts they feed: both are edits of a reference picture.
+_REFERENCE_ROUTING_SEEDS = (("base_reference", "base_front"),
+                            ("outfit_reference", "outfit_front"))
+
+
+def _migrate_reference_routing(config: dict) -> bool:
+    """Seed the two full-body reference chains from base_front / outfit_front
+    once each; a key already in the routing is never overwritten, a missing
+    source seeds nothing (the occasion then has no route — it requires a
+    chain). Runs after ``_migrate_base_body_routing`` (which may seed the
+    sources itself)."""
+    return _seed_routing_copies(config, _REFERENCE_ROUTING_SEEDS)
+
+
 #: (target, source) — the dressed side draft starts on the chain of the
 #: back's draft, which it mirrors.
 _OUTFIT_SIDE_ROUTING_SEEDS = (("outfit_side_draft", "outfit_back_draft"),)
@@ -1925,6 +1973,8 @@ def _apply_file_migrations(config: dict) -> bool:
     if _migrate_base_body_routing(config):
         changed = True
     if _migrate_outfit_side_routing(config):
+        changed = True
+    if _migrate_reference_routing(config):
         changed = True
     if _seed_default_use_cases(config):
         changed = True

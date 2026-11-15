@@ -118,6 +118,22 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
         hint="An edit of the profile picture (a backend that takes a reference "
              "image is required while there is one); an accurate (non-turbo) "
              "model is recommended."),
+    # The full-body references (Ruling A87, app/core/full_body_reference.py):
+    # the picture the A-pose front is an edit of. Each render is an EDIT of
+    # a reference image (``require_reference``), so a backend without a
+    # reference slot never serves it (``needs_ref_slot``) and an empty chain
+    # is no route (``requires_chain``) — never the cheapest (possibly paid)
+    # backend. config._migrate_reference_routing seeds the chains from
+    # base_front / outfit_front once; a character's own glob is the one of
+    # the front it feeds (no field of its own).
+    "base_reference": {**_image(
+        "Base body — full-body reference", "Base body tab: the full-body reference the A-pose front is an edit of "
+                                           "(an edit of the profile picture)",
+        ["base_reference"],
+        {"character_scoped": True, "char_spec_field": "base_front_workflow",
+         "char_spec_fallback": ("tpose_workflow", "workflow")}, needs_ref_slot=True,
+        hint="An edit of the profile picture: a backend that takes a reference image is required. Generated "
+             "only by a click on Generate (Base body → Views)."), "requires_chain": True},
     "base_view": _image(
         "Base body — back/side views", "Base body tab: base-body back, left and right (edits of the front)",
         ["base_view_back", "base_view_side"],
@@ -125,10 +141,18 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
          "char_spec_fallback": "tpose_view_workflow"}),
     "outfit_front": _image(
         "Outfit — front edit", "Figure tab, Dressed views: the dressed front (edit of the base front, or of "
-                               "the outfit's reference image)",
+                               "the outfit's full-body reference)",
         ["outfit_edit", "base_front_edit"],
         {"character_scoped": True, "char_spec_field": "outfit_front_workflow",
          "char_spec_fallback": "tpose_view_workflow"}),
+    "outfit_reference": {**_image(
+        "Outfit — full-body reference", "Figure tab, Dressed views: the outfit's full-body reference (an edit of "
+                                        "the plain body's full-body reference, else of the profile picture)",
+        ["outfit_reference"],
+        {"character_scoped": True, "char_spec_field": "outfit_front_workflow",
+         "char_spec_fallback": "tpose_view_workflow"}, needs_ref_slot=True,
+        hint="An edit of a reference picture: a backend that takes a reference image is required. Generated only "
+             "by a click on Generate (Figure → Dressed views)."), "requires_chain": True},
     "outfit_back_draft": _image(
         "Outfit — back draft", "Figure tab, Dressed views: back draft, an edit of the dressed front turned around",
         ["base_view_back"],
@@ -234,7 +258,11 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
 #: the matte trims the image sides and breaks their shared framing.
 MESH_INPUT_OCCASIONS: Tuple[str, ...] = (
     "tpose", "tpose_view", "base_front", "base_view",
-    "outfit_front", "outfit_back_draft", "outfit_side_draft")
+    "outfit_front", "outfit_back_draft", "outfit_side_draft",
+    # Ruling A87: the full-body references the A-pose fronts are edits of —
+    # the character's tpose LoRAs as on the front (the user's validated chain
+    # ran both steps with the same LoRA); their caller skips the matte.
+    "base_reference", "outfit_reference")
 
 #: Image occasions whose negative is NEVER folded into the prompt on a backend
 #: without a negative input (review 2026-11-11): the mesh-input renders and the

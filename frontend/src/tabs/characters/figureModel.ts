@@ -327,6 +327,9 @@ export interface FigurePayload {
   served_state?: ServedState | null
   /** The saved outfit worn now, "" when none matches. */
   outfit: string
+  /** Ruling A87: whether the plain body / the worn outfit have a full-body reference (`full_body_reference.build_note`)
+   *  — information beside the Build, never a step; absent from an older server. */
+  full_body_reference?: { base: boolean; outfit: boolean } | null
   worn: FigureWornRow[]
   hair: FigureHairRow | null
   /** Ruling A61: what failed and what fixes it (`figure_build._build_problem`); null when nothing failed or while a
@@ -551,7 +554,8 @@ export type PlainJobs = NonNullable<NonNullable<FigurePayload['body']>['plain'][
 
 /** Ruling A86: the front's Regenerate where its outdated reason is written — the Base body tab's reference row and
  *  the Figure tab's plain-body change. The same action as the front tile's Regenerate (POST …/base-body/images
- *  {view: "front", force: true}). `method` is what the front is made from now (`reference` = the profile image).
+ *  {view: "front", force: true}). `method` is what the front is made from now (`reference` = the profile image,
+ *  `full_body` = the full-body reference — Ruling A87, `text`).
  *  The cost is on the button before the click: the front's image jobs, plus — while a base model is stored
  *  (`model_followup`) — what the new front makes due, the other three views and the base model, which the next
  *  Build you start rebuilds (`after_front`, the same count as the front tile's). `note` says that in a sentence
@@ -559,7 +563,10 @@ export type PlainJobs = NonNullable<NonNullable<FigurePayload['body']>['plain'][
 export function frontRegenerate(method: string | undefined, jobs: PlainJobs | undefined, t: Tr = EN): {
   label: string; note: string
 } {
-  const action = method === 'text' ? t('Regenerate front from text') : t('Regenerate front from the profile image')
+  // Ruling A87: `full_body` — the front is an edit of the full-body reference.
+  const action = method === 'text' ? t('Regenerate front from text')
+    : method === 'full_body' ? t('Regenerate front from the full-body reference')
+    : t('Regenerate front from the profile image')
   if (!jobs) return { label: action, note: '' }
   const now = imageJobsTr(jobs.front, t)
   if (!jobs.model_followup) return { label: `${action} — ${now}`, note: '' }

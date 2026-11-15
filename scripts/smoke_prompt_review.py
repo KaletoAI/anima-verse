@@ -136,7 +136,9 @@ def main() -> int:
         check("auto keywords -> send", negative_mode("auto", "keywords", "SD1.5"), "send")
         check("ignored never reaches the engine", backend_supports_negative("ignored", "natural"), False)
         pipeline = ("tpose", "tpose_view", "base_front", "base_view", "outfit_front", "outfit_back_draft",
-                    "outfit_side_draft", "garment_view", "footwear_empty")
+                    "outfit_side_draft", "garment_view", "footwear_empty",
+                    # Ruling A87: the full-body references (mesh-input occasions, base negatives).
+                    "base_reference", "outfit_reference")
         check("no fold on the pipeline occasions", [folds_negative(o) for o in pipeline], [False] * len(pipeline))
         check("NO_FOLD_OCCASIONS is exactly that set", sorted(NO_FOLD_OCCASIONS), sorted(pipeline))
         check("fold elsewhere", [folds_negative(o) for o in ("photo", "profile", "", "unknown")], [True] * 4)

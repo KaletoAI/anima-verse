@@ -639,6 +639,24 @@ FRONT_OTHER_EDIT_TEXT = "Made with an older edit text — regenerating the front
 FRONT_NO_PROFILE_NOW = "Made from a profile image there is none of now — regenerating the front makes it from text"
 #: The Base body tab's line when there is no profile image (decision 2 of the brief).
 NO_PROFILE_IMAGE_NOTE = "No profile image — the front is made from text alone. Set a profile image to make it from that picture."
+# Ruling A87: the front is an edit of the FULL-BODY REFERENCE when one is set
+# (``full_body_reference``), else of the profile image as before. A front made
+# from the profile image keeps a record WITHOUT ``source`` (byte-identical to
+# A74b's, so no stored front turns due on deploy); one made from the full-body
+# reference records ``source: "full_body"``.
+#: ``front_reference["source"]`` of a front made from the full-body reference.
+SOURCE_FULL_BODY = "full_body"
+FRONT_PROFILE_NOT_FULL_BODY = ("Made from the profile image — regenerating the front makes it from the full-body "
+                               "reference")
+FRONT_TEXT_NOT_FULL_BODY = "Made from text alone — regenerating the front makes it from the full-body reference"
+FRONT_OTHER_FULL_BODY = ("Made from another full-body reference — regenerating the front makes it from the current "
+                         "one")
+FRONT_NO_FULL_BODY_NOW = ("Made from a full-body reference there is none of now — regenerating the front makes it "
+                          "from the profile image")
+FRONT_NO_FULL_BODY_TEXT = ("Made from a full-body reference there is none of now — regenerating the front makes it "
+                           "from text")
+#: The Base body tab's line when no full-body reference is set (Ruling A87).
+NO_FULL_BODY_NOTE = "No full-body reference — the front is made from the profile image"
 
 
 def edit_character(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
@@ -663,19 +681,37 @@ def _edit_fingerprint(character_name: str, profile: Dict[str, Any]) -> str:
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
 
 
-def front_reference(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """What the base front is made from NOW: ``{"method": "reference",
-    "image": <profile file name>, "sha256": <its content>, "prompt": <edit
-    text fingerprint>}`` while the character has a readable profile image,
-    else ``{"method": "text"}``."""
+def front_source_image(character_name: str, *, profile: Optional[Dict[str, Any]] = None
+                       ) -> Tuple[Optional[Path], str]:
+    """``(picture, source)`` the base front is an edit of NOW (Ruling A87):
+    the full-body reference's gallery file (``SOURCE_FULL_BODY``) while one is
+    set and its file is there, else the current profile image (source ""),
+    else ``(None, "")`` — the text path."""
+    from app.core import full_body_reference
     from app.core.model_refs import current_profile_image
     profile = _profile_of(character_name, profile)
-    image = current_profile_image(character_name, profile=profile)
+    full_body = full_body_reference.base_image(character_name, profile=profile)
+    if full_body is not None:
+        return full_body, SOURCE_FULL_BODY
+    return current_profile_image(character_name, profile=profile), ""
+
+
+def front_reference(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """What the base front is made from NOW: ``{"method": "reference",
+    "image": <file name>, "sha256": <its content>, "prompt": <edit text
+    fingerprint>}`` while there is a picture to edit (``front_source_image``:
+    the full-body reference — then with ``"source": "full_body"`` — else the
+    profile image), else ``{"method": "text"}``."""
+    profile = _profile_of(character_name, profile)
+    image, source = front_source_image(character_name, profile=profile)
     sha = file_sha256(image)
     if image is None or not sha:
         return {"method": FRONT_FROM_TEXT}
-    return {"method": FRONT_FROM_REFERENCE, "image": image.name, "sha256": sha,
-            "prompt": _edit_fingerprint(character_name, profile)}
+    record = {"method": FRONT_FROM_REFERENCE, "image": image.name, "sha256": sha,
+              "prompt": _edit_fingerprint(character_name, profile)}
+    if source:
+        record["source"] = source
+    return record
 
 
 def stored_front_reference(character_name: str, bsig: str) -> Optional[Dict[str, Any]]:
@@ -702,12 +738,16 @@ def front_reference_state(character_name: str, bsig: Optional[str] = None, *,
     stored = stored_front_reference(character_name, bsig)
     reason = ""
     if stored is not None and stored != wanted:
+        stored_full = stored.get("source") == SOURCE_FULL_BODY
+        wanted_full = wanted.get("source") == SOURCE_FULL_BODY
         if wanted["method"] == FRONT_FROM_TEXT:
-            reason = FRONT_NO_PROFILE_NOW
+            reason = FRONT_NO_FULL_BODY_TEXT if stored_full else FRONT_NO_PROFILE_NOW
         elif stored.get("method") != FRONT_FROM_REFERENCE:
-            reason = FRONT_MADE_FROM_TEXT
+            reason = FRONT_TEXT_NOT_FULL_BODY if wanted_full else FRONT_MADE_FROM_TEXT
+        elif stored_full != wanted_full:
+            reason = FRONT_PROFILE_NOT_FULL_BODY if wanted_full else FRONT_NO_FULL_BODY_NOW
         elif (stored.get("image"), stored.get("sha256")) != (wanted["image"], wanted["sha256"]):
-            reason = FRONT_OTHER_REFERENCE
+            reason = FRONT_OTHER_FULL_BODY if wanted_full else FRONT_OTHER_REFERENCE
         else:
             reason = FRONT_OTHER_EDIT_TEXT
     return {"wanted": wanted, "stored": stored, "current": not reason, "reason": reason}
@@ -1063,9 +1103,17 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
             """``(stored path, warning)`` of the gated front attempts — each an
             edit of the frozen profile image while there is one (Ruling A74b)."""
             import contextlib
-            from app.core.model_refs import current_profile_image
-            profile_image = (current_profile_image(character_name, profile=profile)
-                             if front_ref["method"] == FRONT_FROM_REFERENCE else None)
+            # Ruling A87: the full-body reference while one is set, else the profile image.
+            profile_image, source = (front_source_image(character_name, profile=profile)
+                                     if front_ref["method"] == FRONT_FROM_REFERENCE else (None, ""))
+            if profile_image is not None and (profile_image.name, source) != (front_ref.get("image"),
+                                                                              front_ref.get("source", "")):
+                # Another picture than the read above (one was set or cleared meanwhile): record what is edited.
+                front_ref.update(image=profile_image.name)
+                if source:
+                    front_ref["source"] = source
+                else:
+                    front_ref.pop("source", None)
             if profile_image is None and front_ref["method"] == FRONT_FROM_REFERENCE:
                 front_ref.clear()   # the picture went since the read above: the text render, recorded so
                 front_ref["method"] = FRONT_FROM_TEXT
@@ -1243,23 +1291,27 @@ def base_info(character_name: str) -> Dict[str, Any]:
 
 def _front_reference_info(character_name: str, signature: str,
                           profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """The Base body tab's reference line (Ruling A74b): ``{method, image,
-    url (the profile image, its mtime as cache key — "" without one),
-    current, reason, note}``; None when it cannot be read."""
+    """The Base body tab's reference line (Ruling A74b): ``{method, source,
+    image, url (the picture the front is an edit of, its mtime as cache key —
+    "" without one), current, reason, note}``; ``source`` "full_body" when
+    that picture is the full-body reference (Ruling A87), "" for the profile
+    image; None when it cannot be read."""
     try:
-        from app.core.model_refs import current_profile_image
         state = front_reference_state(character_name, signature or None, profile=profile)
         wanted = state["wanted"]
-        image = current_profile_image(character_name, profile=profile) if wanted["method"] == FRONT_FROM_REFERENCE else None
+        image = (front_source_image(character_name, profile=profile)[0]
+                 if wanted["method"] == FRONT_FROM_REFERENCE else None)
         try:
             stamp = image.stat().st_mtime_ns if image else None
         except OSError:
             stamp = None
         url = (f"/characters/{quote(character_name, safe='')}/images/{quote(image.name, safe='')}?v={stamp}"
                if image is not None and stamp is not None else "")
-        return {"method": wanted["method"], "image": wanted.get("image", ""), "url": url,
-                "current": state["current"], "reason": state["reason"],
-                "note": NO_PROFILE_IMAGE_NOTE if wanted["method"] == FRONT_FROM_TEXT else ""}
+        source = str(wanted.get("source") or "")
+        note = (NO_PROFILE_IMAGE_NOTE if wanted["method"] == FRONT_FROM_TEXT
+                else "" if source == SOURCE_FULL_BODY else NO_FULL_BODY_NOTE)
+        return {"method": wanted["method"], "source": source, "image": wanted.get("image", ""), "url": url,
+                "current": state["current"], "reason": state["reason"], "note": note}
     except Exception:  # noqa: BLE001 — the poll never fails on it
         logger.exception("Front reference info of %s failed", character_name)
         return None
@@ -3620,7 +3672,7 @@ def _reference_front(character_name: str, *, signature: str, reference: Dict[str
     width, height = _tpose_size()
     with _frozen_reference(Path(source), refs_dir) as (frozen, sha):
         if sha != reference.get("sha256"):
-            raise OutfitError("The outfit's reference image changed since it was picked — pick it again")
+            raise OutfitError("The outfit's full-body reference changed since it was picked — pick it again")
         return expression_regen.render_character_image(
             character_name,
             output_stem=refs_dir / f"tpose_{signature}",
@@ -3708,14 +3760,14 @@ def _render_views(character_name: str, *, signature: str, pieces: Optional[Dict[
                                                    "dress_text": texts.get("front", "")},
                                             load_kwargs=load_kwargs)
                     if path is None:
-                        errors.append("Dressed front edit of the outfit's reference image failed")
+                        errors.append("Dressed front edit of the outfit's full-body reference failed")
                 except Exception as e:  # noqa: BLE001 — one view never kills the pass
                     if raise_load and _is_load(e):
                         interrupted = True
                         raise
                     path = None
                     errors.append(str(e) if isinstance(e, OutfitError)
-                                  else f"Dressed front edit of the outfit's reference image failed: {e}")
+                                  else f"Dressed front edit of the outfit's full-body reference failed: {e}")
                     logger.warning("Dressed %s front (%s) from its reference failed: %s", character_name, signature, e)
                 results["tpose"] = str(path) if path else None
             elif "front" in todo:

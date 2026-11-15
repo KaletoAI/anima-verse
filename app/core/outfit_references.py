@@ -56,7 +56,7 @@ logger = get_logger("outfit_references")
 #: The profile key of the records.
 PROFILE_KEY = "outfit_references"
 #: The render's refusal when the picked picture is gone from the gallery.
-REFERENCE_GONE = "The outfit's reference image is gone from the gallery — pick another one or clear it"
+REFERENCE_GONE = "The outfit's full-body reference is gone from the gallery — pick another one or clear it"
 #: Why a set reference is not used now (the Figure tab's line).
 NOT_PAINTED_NOTE = ("Not used now: nothing is painted on this figure — its pieces are in the body shape or have "
                     "their own mesh, so the dressed views are copies")

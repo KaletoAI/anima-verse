@@ -1177,10 +1177,13 @@ def _pending(character_name: str, wanted: "Figure", delivered: "Figure",
     elif not hair_rebuild and not (front_ref := base_body.front_reference_state(
             character_name, wanted.bsig, profile=profile))["current"]:
         # Ruling A74b: the front was made from another reference — only a Build you start refreshes it (8a).
-        # Ruling A86: ``front`` = what the front is made from now — the Figure tab offers the front's Regenerate.
+        # Ruling A86: ``front`` = what the front is made from now — the Figure tab offers the front's Regenerate
+        # ("reference" the profile image, "full_body" the full-body reference — Ruling A87 —, "text").
         out.append({"key": BODY_KEY, "name": "Plain body", "wanted": "built",
                     "delivered": front_ref["reason"], "note": BASE_OUTDATED,
-                    "front": front_ref["wanted"]["method"]})
+                    "front": (base_body.SOURCE_FULL_BODY
+                              if front_ref["wanted"].get("source") == base_body.SOURCE_FULL_BODY
+                              else front_ref["wanted"]["method"])})
     from app.core.garment_hair import worn_hairstyle
     hairstyle = worn_hairstyle(character_name, profile)
     hair_name = str((hairstyle or {}).get("name") or "Hair")
