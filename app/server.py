@@ -118,6 +118,15 @@ _im = migrate_members_once()
 if _im:
     logger.info("Interactions: %d profiles moved from partner to members", _im)
 
+# Boot migration (2026-11-16, Ruling A159): the contact target head_front became the mouth opening.
+try:
+    from app.core.animation_clips import migrate_contact_target_words
+    _ct = migrate_contact_target_words()
+    if _ct:
+        logger.info("Clip contact relations: head_front -> mouth in %d clip sidecar(s)", _ct)
+except Exception as _cte:
+    logger.warning("contact target migration failed: %s", _cte)
+
 # Boot migration (2026-11-02): pose field solo -> participants in the world layer.
 from app.core.pose_catalog import migrate_participants_once
 _pm = migrate_participants_once()

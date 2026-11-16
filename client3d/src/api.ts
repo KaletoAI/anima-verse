@@ -604,7 +604,7 @@ export interface ApiClip {
   height_offsets_cm?: Partial<Record<'ground' | 'seat' | 'lie', number>>;
   orientation?: { shift_cm?: [number, number] | null; partner_turn_deg?: [number, number] | null };
   /** Ruling A139: the contact relations of a pair/group clip (`[]` = automatic channel detection). */
-  contact_target?: { relations: { part: string; at: string; target: 'channel' | 'hand_left' | 'hand_right' | 'head_front' | 'none' }[]; source: string } | null;
+  contact_target?: { relations: { part: string; at: string; target: 'channel' | 'mouth' | 'hand_left' | 'hand_right' | 'none' }[]; source: string } | null;
   /** Ruling A145: how far the attached part may bend toward its target, per state (degrees). */
   bend_limits?: { limits: { raised: { joint_deg: number; total_deg: number }; resting: { joint_deg: number; total_deg: number } }; source: string } | null;
   /** Ruling A158: the attached part's direct root angle (degrees; pitch + = up toward the belly, yaw + = right). */

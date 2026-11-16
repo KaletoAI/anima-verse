@@ -5,7 +5,7 @@
  * (PATCH `contact_target`), "Use inherited" drops the clip's own list so the package default (or the automatic
  * channel detection) applies again. Saving runs nothing.
  */
-import { CONTACT_TARGETS, PROVISIONAL_TARGETS, type ContactRelation, type ContactTarget } from '@anima/scene-render'
+import { CONTACT_TARGETS, type ContactRelation, type ContactTarget } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { targetWordOf } from './contactWords'
 import type { BendLimitsWire, RootAngleWire } from './clipSets'
@@ -48,17 +48,12 @@ export function ContactRelations({ roles, saved, draft, onDraft, onSave, busy }:
           </select>
           <select {...sel} data-testid={`contact-target-${i}`} aria-label={t('Contact target')} value={r.target} disabled={busy}
             onChange={(e) => set(i, { target: e.target.value as ContactTarget })}>
-            {CONTACT_TARGETS.map((x) => <option key={x} value={x}>{targetWordOf(t, x)}{PROVISIONAL_TARGETS.includes(x) ? ` (${t('provisional')})` : ''}</option>)}
+            {CONTACT_TARGETS.map((x) => <option key={x} value={x}>{targetWordOf(t, x)}</option>)}
           </select>
           <button type="button" className="ga-btn ga-btn-sm" disabled={busy} title={t('Remove this contact')}
             onClick={() => onDraft(draft.filter((_, k) => k !== i))}>×</button>
         </div>
       ))}
-      {draft.some((r) => PROVISIONAL_TARGETS.includes(r.target)) ? (
-        <div className="ga-form-hint" style={{ margin: 0 }}>
-          {t('Head front point is provisional: a point in front of the head at mouth height, from the head bone and the face direction. A mouth opening (region, opening, widening like a channel) is not built yet.')}
-        </div>
-      ) : null}
       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
         <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !free.length || roles.length < 2}
           onClick={() => { const part = free.includes('b') ? 'b' : free[0]; onDraft([...draft, { part, at: roles.find((x) => x !== part) ?? 'a', target: 'channel' }]) }}>

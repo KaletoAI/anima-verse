@@ -1832,7 +1832,10 @@ def set_clip_role_gender(library: str, rel: str,
     return [_view_of(p, cset, library) for p in _kind_files(path.parent, kind)]
 
 
-CONTACT_TARGETS = ("channel", "hand_left", "hand_right", "head_front", "none")
+CONTACT_TARGETS = ("channel", "mouth", "hand_left", "hand_right", "none")
+#: Ruling A159: target words that were renamed — ``head_front`` (the provisional point in front of the head) is now
+#: the ``mouth`` opening. Used only by :func:`migrate_contact_target_words` (boot), never on read.
+RENAMED_CONTACT_TARGETS = {"head_front": "mouth"}
 #: Hook capability a package registers to default the contact relations of its clip kinds
 #: (``fn() -> {kind: relations}``, ``multiple=True``; relations as :func:`validate_contact_relations`
 #: takes them, or a bare target word = one relation B's part → A); the clip's own value wins.
@@ -1867,6 +1870,36 @@ def validate_contact_relations(value: Any, roles: Sequence[str] = CLIP_ROLES) ->
         seen.add(part)
         out.append({"part": part, "at": at, "target": target})
     return out
+
+
+def migrate_contact_target_words() -> int:
+    """Boot migration (Ruling A159): rewrite renamed target words (``RENAMED_CONTACT_TARGETS``) in the stored
+    ``contact_relations`` of every ``<kind>.json`` of both libraries. Idempotent; returns how many files changed."""
+    changed = 0
+    for library in LIBRARIES:
+        try:
+            root = library_root(library)
+        except Exception:  # noqa: BLE001 — a library that is not configured has nothing to migrate
+            continue
+        if not root.is_dir():
+            continue
+        for sidecar in sorted(root.rglob("*.json")):
+            try:
+                data = json.loads(sidecar.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            rels = data.get("contact_relations") if isinstance(data, dict) else None
+            if not isinstance(rels, list) or not any(
+                    isinstance(r, dict) and r.get("target") in RENAMED_CONTACT_TARGETS for r in rels):
+                continue
+            data["contact_relations"] = [
+                {**r, "target": RENAMED_CONTACT_TARGETS[r["target"]]}
+                if isinstance(r, dict) and r.get("target") in RENAMED_CONTACT_TARGETS else r for r in rels]
+            sidecar.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            changed += 1
+    if changed:
+        reload_clip_caches()
+    return changed
 
 
 def package_contact_targets() -> Dict[str, List[Dict[str, str]]]:

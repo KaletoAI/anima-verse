@@ -6,7 +6,7 @@ export interface ClipSource {
   /** Ruling A129: a pair's partner-B turn [tilt, roll] degrees. */
   partnerTurn?: [number, number] | null;
   /** Ruling A139: the clip's contact relations ([] / absent = automatic). */
-  contacts?: { part: string; at: string; target: 'channel' | 'hand_left' | 'hand_right' | 'head_front' | 'none' }[] | null;
+  contacts?: { part: string; at: string; target: 'channel' | 'mouth' | 'hand_left' | 'hand_right' | 'none' }[] | null;
   /** Ruling A145: the clip's bend limits as listed (`bend_limits.limits`). */
   bend?: unknown;
   /** Ruling A158: the clip's direct root angle as listed (`root_angle`). */

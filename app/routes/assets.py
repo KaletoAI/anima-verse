@@ -194,8 +194,8 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
     ``root_angle`` (Ruling A158) is the attached part's direct root angle ``{pitch_deg: −60..60,
     yaw_deg: −30..30}`` (pitch + = up toward the belly, yaw + = the figure's right); ``null`` / 0 = none.
     ``contact_target`` (Ruling A139) is the clip's contact relations
-    ``[{part, at, target}]`` (target ``channel`` / ``hand_left`` / ``hand_right`` /
-    ``head_front`` / ``none``; a bare word = B → A), ``null`` = inherit the package
+    ``[{part, at, target}]`` (target ``channel`` / ``mouth`` / ``hand_left`` /
+    ``hand_right`` / ``none``; a bare word = B → A), ``null`` = inherit the package
     default (stored in the ``<kind>.json``). ``height_offsets_cm`` is a partial
     map of ground/seat/lie to finite numbers from -50 to 50 cm; zero removes
     only that surface. Corrections are absolute for a 1.70 m figure, shared

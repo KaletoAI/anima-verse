@@ -48,7 +48,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { bendLimitsOf, POSTURE, clipHeightGroup, type ClipHeightOffsetsCm } from '@anima/scene-render'
 import { BendLimitsEditor, ContactRelations, RootAngleEditor } from './ContactRelations'
-import { targetWordOf } from './contactWords'
+import { hasInside, targetWordOf } from './contactWords'
 import { PlacePreview, type AutoAlignResult, type AutoAlignRun, type PairCheckResult, type PlaceReadout } from './PlacePreview'
 import type { AlignmentDraft, ContactRelation } from '@anima/scene-render'
 import { ClipPreview, ROLE_COLOR } from './ClipPreview'
@@ -1449,8 +1449,8 @@ export function ClipLibrary({
                                 <thead><tr><th /><th style={{ padding: '0 4px' }}>{t('before')}</th><th style={{ padding: '0 4px' }}>{t('after')}</th></tr></thead>
                                 <tbody>
                                   {([
-                                    [autoAlign.target === 'channel' ? t('Tip to opening at the outermost frame') : t('Tip to target at the outermost frame'), autoAlign.before.entryMm, autoAlign.after.entryMm],
-                                    ...(autoAlign.target === 'channel' ? [[t('Depth at the deepest frame'), autoAlign.before.depthMm, autoAlign.after.depthMm] as const] : []),
+                                    [hasInside(autoAlign.target) ? t('Tip to opening at the outermost frame') : t('Tip to target at the outermost frame'), autoAlign.before.entryMm, autoAlign.after.entryMm],
+                                    ...(hasInside(autoAlign.target) ? [[t('Depth at the deepest frame'), autoAlign.before.depthMm, autoAlign.after.depthMm] as const] : []),
                                     [t('Off the axis, worst frame'), autoAlign.before.maxLateralMm, autoAlign.after.maxLateralMm],
                                     [t('Interpenetration besides the channel'), autoAlign.overlapBeforeMm, autoAlign.overlapAfterMm],
                                   ] as const).map(([label, a, b]) => (
@@ -1458,7 +1458,7 @@ export function ClipLibrary({
                                       <td style={{ textAlign: 'right', padding: '0 4px' }}>{a.toFixed(0)} mm</td>
                                       <td style={{ textAlign: 'right', padding: '0 4px' }}>{b.toFixed(0)} mm</td></tr>
                                   ))}
-                                  {autoAlign.target === 'channel' ? (<tr><td>{t('Depth gained by B’s tilt/roll')}</td>
+                                  {hasInside(autoAlign.target) ? (<tr><td>{t('Depth gained by B’s tilt/roll')}</td>
                                     <td style={{ textAlign: 'right', padding: '0 4px' }}>{autoAlign.afterShift.depthMm.toFixed(0)} mm</td>
                                     <td style={{ textAlign: 'right', padding: '0 4px' }}>{autoAlign.after.depthMm.toFixed(0)} mm</td></tr>) : null}
                                   <tr><td>{t('B tilt / roll')}</td><td />
@@ -1484,7 +1484,7 @@ export function ClipLibrary({
                                     <tr key={x.part}><td>{x.by} → {x.of} {targetWordOf(t, x.target)}</td>
                                       <td><LampDot lamp={x.lamp} title={t('Contact')} /></td>
                                       <td style={{ textAlign: 'right', padding: '0 4px' }}>{x.before.entryMm.toFixed(0)} → {x.after.entryMm.toFixed(0)} mm</td>
-                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{x.target === 'channel' ? `${x.after.depthMm.toFixed(0)} mm` : '–'}</td>
+                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{hasInside(x.target) ? `${x.after.depthMm.toFixed(0)} mm` : '–'}</td>
                                       <td style={{ textAlign: 'right', padding: '0 4px' }}>{x.before.maxLateralMm.toFixed(0)} → {x.after.maxLateralMm.toFixed(0)} mm</td>
                                       <td style={{ textAlign: 'right', padding: '0 4px' }}>{x.part.toUpperCase()} {x.shiftCm.map((v) => v.toFixed(1)).join(' / ')} cm</td></tr>
                                   ))}</tbody>
