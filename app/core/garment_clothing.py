@@ -69,6 +69,13 @@ EDIT_STEPS: Dict[str, Dict[str, Any]] = {"worn": {"source": "base", "views": ("f
                                          "ghost": {"source": "worn"}}
 
 WORN = "Keep the image exactly as it is. Only change their clothing: they now wear only {fragment}."
+#: Ruling A147: a closable piece (``garment_set.closable_of``) worn CLOSED says so in its worn FRONT edit — the
+#: piece is worn alone, and "they now wear only <cardigan>" let the edit model hang it wide open over the bare
+#: body (hub job 529572e5). Only the front CLOSURE is named: an intended V neckline / lapel opening stays (A51).
+#: Not added when the fragment already names a state (``outfit_options.fragment_names_state``: "worn open" in
+#: the item text wins) nor in the fingerprint (``fragment``): closed inputs stay byte for byte, nothing re-renders.
+WORN_CLOSED = ("worn closed, its fronts fastened together at the centre (buttoned / zipped / wrapped shut), "
+               "any designed neckline or lapel opening kept as it is")
 #: The ghost texts (Ruling A57, 2026-11-14). The base text of EVERY ghost
 #: view is the USER'S OWN prompt, word for word (hub job 29e09f8a, Qwen
 #: image edit: an off-shoulder blouse, the person removed, the inside of the
@@ -255,12 +262,23 @@ def edit_prompt(character_name: str, step: str, view: str, *,
     if step == "worn":
         from app.core.base_body import hair_text
         haired = bool(hair_text(character_name, profile=prof))
-        return WORN.format(fragment=text), _worn_negative(text, keep_hair=haired)
+        return WORN.format(fragment=worn_text(item, text, state_of(item, prof))), \
+            _worn_negative(text, keep_hair=haired)
     if view == "back":
         text = _back_text_of(item)
     negative = ", ".join(t for t in (_worn_negative(text), *GHOST_NEGATIVE) if t)
     slots = (item.get("outfit_piece") or {}).get("slots") or []
     return ghost_prompt(slots, view), negative
+
+
+def worn_text(item: Dict[str, Any], text: str, state: str) -> str:
+    """The worn front's piece text (Ruling A147): ``text`` plus ``WORN_CLOSED`` for a closable piece worn closed
+    whose text names no state of its own; ``text`` alone otherwise (open state, not closable, "worn open" in it)."""
+    from app.core.garment_set import closable_of
+    from app.core.outfit_options import CLOSED, fragment_names_state
+    if state == CLOSED and closable_of(item) and not fragment_names_state(text):
+        return f"{text}, {WORN_CLOSED}"
+    return text
 
 
 def ghost_prompt(slots, view: str) -> str:
