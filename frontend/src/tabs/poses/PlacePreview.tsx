@@ -232,6 +232,12 @@ function useBuiltCharacters() {
 
 const memoKey = (kind: string) => `anima.placePreview.${kind}`
 
+/** Ruling A129.8: what the Places view keeps when the clip changes (tab state, for this page load): the camera, and
+ *  per place INDEX the person, body and state — restored on the new clip's places with that index. */
+const placeMemory: { camera: { pos: [number, number, number]; target: [number, number, number] } | null
+  byIndex: Record<number, { character: string; role: string; body: Assignment['body']; state: string }> } = {
+  camera: null, byIndex: {} }
+
 /** Ruling A126: the outcome of Auto-align (partner B against the channel the pair's attached part enters). */
 export type AutoAlignResult =
   | { ok: false; reason: string }
@@ -380,7 +386,18 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
     const names = chars ? [...chars.filter((c) => c.built).map((c) => c.name), MANNEQUIN] : null
     const plan = planFill(places.map((p) => ({ letter: p.letter, markerId: p.marker.id, group: p.marker.group })),
       { names, want: wantType, roles: solo ? [''] : roleList, all, max: MAX_FIGURES })
-    setAssign(plan.assign)
+    const next = { ...plan.assign }
+    if (!all) {
+      // A129.8: the persons, bodies and states picked on the last clip, per place index, where this clip has the place.
+      const rl = solo ? [''] : roleList
+      places.forEach((p, i) => {
+        const m = placeMemory.byIndex[i]
+        if (!m || !m.character) return
+        const role = next[p.letter]?.role ?? (rl.includes(m.role) ? m.role : rl[i % rl.length])
+        next[p.letter] = { character: m.character, role, body: m.body, state: m.state }
+      })
+    }
+    setAssign(next)
     if (all) setFillNote({ count: plan.count, reason: plan.reason })
   }
   const filled = useRef('')
@@ -392,6 +409,15 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [places, chars, kind, propId, variant])
 
+  // A129.8: remember what is shown, per place index.
+  useEffect(() => {
+    if (!places.length) return
+    places.forEach((p, i) => {
+      const a = assign[p.letter]
+      if (a?.character) placeMemory.byIndex[i] = { character: a.character, role: a.role, body: a.body, state: a.state }
+      else if (a) delete placeMemory.byIndex[i]
+    })
+  }, [assign, places])
   const assigned = places.filter((p) => assign[p.letter]?.character)
   const plain = usePlainBodies(places.map((p) => assign[p.letter]?.character || ''))
   // A base figure's model, motion and state are part of the scene's key: a state pick or a base body that arrives
@@ -661,6 +687,11 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         camera.position.set(0.4, 1.7, 3.6)
         const controls = new OrbitControls(camera, renderer.domElement)
         controls.target.set(0, 0.6, 0)
+        // A129.8: the camera of the last clip (or of the last rebuild) carries over.
+        if (placeMemory.camera) {
+          camera.position.set(...placeMemory.camera.pos)
+          controls.target.set(...placeMemory.camera.target)
+        }
         configureViewControls(THREE, controls)
         controls.update()
         disposers.push(() => controls.dispose())
@@ -855,6 +886,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             camera.position.copy(controls.target).addScaledVector(fdir.normalize(), d + (0.9 - d) * 0.2)
           }
           controls.update()
+          placeMemory.camera = { pos: [camera.position.x, camera.position.y, camera.position.z],
+            target: [controls.target.x, controls.target.y, controls.target.z] }
           renderer.setScissorTest(false)
           const w = renderer.domElement.clientWidth || width, h = renderer.domElement.clientHeight || height
           renderer.setViewport(0, 0, w, h)
