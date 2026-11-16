@@ -428,6 +428,13 @@ def noise_gate(path: Path, reference: Optional[Path]) -> Dict[str, Any]:
 # square canvas's own spread is far below it) is kept with a warning.
 FRAMING_LIMIT = 0.03
 FRAMING_WARN = 0.01
+# A dressed view must show the base view's body in its pose (Ruling A123): a garment only ADDS to the
+# silhouette, so with both figures brought to one height and one horizontal centre, the dressed figure
+# covers the whole base figure up to a matting rim. Glut 2026-11-16: a dressed front drawn as a NEW
+# picture (re-posed from the outfit's reference, arms and legs elsewhere, the body 11 % narrower)
+# covered 87 % and painted the background (white) onto arms, scalp and shin; the back, an edit of the
+# base back, covered 99 %. Below 95 % the view is refused like a framing drift.
+COVERAGE_MIN = 0.95
 
 
 def _silhouette_rows(alpha: np.ndarray) -> Optional[Dict[str, float]]:
@@ -454,6 +461,24 @@ def _silhouette_rows(alpha: np.ndarray) -> Optional[Dict[str, float]]:
             "touches": bool(rows[0] == 0 or rows[-1] == mask.shape[0] - 1)}
 
 
+def _coverage(mask: np.ndarray, base_mask: np.ndarray) -> float:
+    """Share of the base figure's pixels that the dressed figure covers once both stand at one height and
+    one horizontal centre (block above): each base pixel looks up the dressed pixel at the same place
+    relative to the figure's top row and centroid column, scaled by the height ratio (the canvases may
+    differ in width). 1.0 without a figure on either side (nothing to judge)."""
+    if not mask.any() or not base_mask.any():
+        return 1.0
+    rows, cols = np.nonzero(mask)
+    brows, bcols = np.nonzero(base_mask)
+    ratio = (rows.max() + 1 - rows.min()) / float(brows.max() + 1 - brows.min())
+    y = np.rint(rows.min() + (brows - brows.min()) * ratio).astype(int)
+    x = np.rint(cols.mean() + (bcols - bcols.mean()) * ratio).astype(int)
+    inside = (y >= 0) & (y < mask.shape[0]) & (x >= 0) & (x < mask.shape[1])
+    covered = np.zeros(len(brows), dtype=bool)
+    covered[inside] = mask[y[inside], x[inside]]
+    return float(covered.mean())
+
+
 def framing_arrays(alpha: np.ndarray, base_alpha: np.ndarray) -> Dict[str, Any]:
     """``{"ok", "top", "bottom", "width", "limit", "warning"?, "cut"?}`` of a
     dressed view's matte against its base view's (block above): ``top`` /
@@ -470,8 +495,11 @@ def framing_arrays(alpha: np.ndarray, base_alpha: np.ndarray) -> Dict[str, Any]:
                 "skipped": "dressed view without a matte" if mine is None else "base view without a matte"}
     top = round(mine["top"] - base["top"], 4)
     bottom = round(mine["bottom"] - base["bottom"], 4)
-    out: Dict[str, Any] = {"ok": bool(max(abs(top), abs(bottom)) <= FRAMING_LIMIT), "top": top, "bottom": bottom,
-                           "width": round(mine["width"] - base["width"], 4), "limit": FRAMING_LIMIT}
+    coverage = round(_coverage(np.asarray(alpha) > 127, np.asarray(base_alpha) > 127), 4)
+    out: Dict[str, Any] = {"ok": bool(max(abs(top), abs(bottom)) <= FRAMING_LIMIT and coverage >= COVERAGE_MIN),
+                           "top": top, "bottom": bottom,
+                           "width": round(mine["width"] - base["width"], 4), "limit": FRAMING_LIMIT,
+                           "coverage": coverage, "coverage_min": COVERAGE_MIN}
     if mine["touches"] and not base["touches"]:
         out["cut"] = True
     drift = max(abs(top), abs(bottom))
@@ -481,10 +509,17 @@ def framing_arrays(alpha: np.ndarray, base_alpha: np.ndarray) -> Dict[str, Any]:
 
 
 def framing_message(record: Dict[str, Any], view: str = "") -> str:
-    """The refusal / warning text of a framing record: which edge moved by how much."""
+    """The refusal / warning text of a framing record: which edge moved by how much, or how little of the
+    base figure the dressed figure covers."""
+    what = f"{view} view: " if view else ""
+    edges = max(abs(record.get("top") or 0), abs(record.get("bottom") or 0))
+    coverage = record.get("coverage")
+    if coverage is not None and coverage < record.get("coverage_min", COVERAGE_MIN) and \
+            edges <= record.get("limit", FRAMING_LIMIT):
+        return (f"{what}the dressed image shows a different body or pose: it covers {coverage * 100:.1f} % of "
+                f"the base figure (minimum {record.get('coverage_min', COVERAGE_MIN) * 100:.0f} %)")
     edge = "bottom" if abs(record.get("bottom") or 0) >= abs(record.get("top") or 0) else "top"
     drift = float(record.get(edge) or 0) * 100
-    what = f"{view} view: " if view else ""
     cut = " — cut at the frame" if record.get("cut") else ""
     return (f"{what}the figure moved: its {edge} edge shifted {drift:+.1f} % of the height "
             f"(limit {record.get('limit', FRAMING_LIMIT) * 100:.0f} %){cut}")
