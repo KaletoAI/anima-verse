@@ -262,3 +262,4 @@ export { solvePairFix, fixPoint, unfixPoint, fixSample, fixRoot, composeFix, tur
   findContact, contactSampleOf, turnAxes, createPairFit, pairFitTotal, pairFitObserve, FIT_MIN_SAMPLES, FOLLOW, partnerTurnFix, fixPivot, ALIGN_FIT, RUNTIME_FIT, FIT_ANGLE_WEIGHT_M, NO_FIX,
   pairInterpenetration, clearLamp, PART_REGIONS, CLEAR_GREEN_MM, CLEAR_YELLOW_MM } from './pairFit'
 export type { FitSample, PairFix, FitBounds, FitOptions, PairFitState, ClearLamp } from './pairFit'
+export { attachedPartIndex, partBoneNames, PART_WEIGHT_SHARE } from './attachedPart'

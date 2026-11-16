@@ -38,7 +38,7 @@ import {
   type HairStrandRecord, type SceneMarker, type SceneModelSpec, type SecondaryMotionPayload,
   contactLamp, contactReport, solveContactShift, solvePairFix, fixRoot, fixPivot, partnerTurnFix, turnAxes,
   fixAnglesDeg, ALIGN_FIT, NO_FIX, RUNTIME_FIT, createPairFit, pairFitObserve, pairFitTotal, findContact, contactSampleOf,
-  type PairFitState, pairInterpenetration, clearLamp, PART_REGIONS, type ClearLamp,
+  attachedPartIndex, partBoneNames, type PairFitState, pairInterpenetration, clearLamp, PART_REGIONS, type ClearLamp,
   type ContactLamp, type ContactReport, type FitSample, type PairFix,
 } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -135,6 +135,8 @@ export interface PartnerShow { collision: boolean; channels: boolean
   fit: boolean
   /** Ruling A129.4: per frame the entering figure's pelvis follows so the tip stays on the channel axis (default on). */
   follow: boolean
+  /** Ruling A129.9: the entering figure's body is hidden, its attached part (extension group) stays. Preview only. */
+  hidePartner: boolean
   /** Ruling A129.7: the camera follows the contact point, and an inset shows the channel axis and the shaft. */
   focus: boolean }
 const SHOW_KEY = 'anima.placePreview.show'
@@ -142,8 +144,8 @@ function loadShow(): PartnerShow {
   try {
     const v = JSON.parse(localStorage.getItem(SHOW_KEY) || '{}') as Partial<PartnerShow>
     return { collision: !!v.collision, channels: !!v.channels, fit: v.fit !== false, follow: v.follow !== false,
-      focus: !!v.focus }
-  } catch { return { collision: false, channels: false, fit: true, follow: true, focus: false } }
+      focus: !!v.focus, hidePartner: !!v.hidePartner }
+  } catch { return { collision: false, channels: false, fit: true, follow: true, focus: false, hidePartner: false } }
 }
 /** Capsules of two figures that overlap; a channel occupied by a partner chain. */
 const CONTACT_COLOR = 0xff2d2d
@@ -623,6 +625,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           arrow: InstanceType<typeof THREE.ArrowHelper>; yawS: number[]; posS: number[]
           medYaw: number; medPos: number; dyaw: number; dpos: number; chains: number
           head: Object3D | null; tips: Object3D[]; tipRest: Map<Object3D, InstanceType<typeof THREE.Vector3>>
+          /** A129.9: the body's skinned meshes and their part-only twins (same attributes and skeleton). */
+          bodyMeshes: Object3D[]; partMeshes: Object3D[]
         }
         const figs: Fig[] = []
         const centreOf = (m: SceneMarker) => {
@@ -671,7 +675,39 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             if (/^mixamorig:?head$/i.test(n.name)) head = n
             if (/^HairGen_.*_end$/.test(n.name)) tips.push(n)
           })
-          figs.push({ letter: p.letter, character: a.character, role: a.role, place: p, root, inst, mixer, path: clip.path,
+          // A129.9: part-only twins of the skinned meshes — the triangles weighted onto the bones of the motion groups
+          // that carry an op (scene-render attachedPartIndex); attributes and skeleton are shared, only the index is new.
+          const bodyMeshes: Object3D[] = [], partMeshes: Object3D[] = []
+          const partNames = partBoneNames((answer?.motion?.groups ?? {}) as Record<string, { bones: string[]; op?: string | null }>)
+          const bare = (n: string) => n.replace(/^mixamorig:?/i, '').toLowerCase()
+          const partBare = new Set([...partNames].map(bare))
+          if (partBare.size) {
+            const found: InstanceType<typeof THREE.SkinnedMesh>[] = []
+            inst.traverse((n) => { if ((n as InstanceType<typeof THREE.SkinnedMesh>).isSkinnedMesh) found.push(n as InstanceType<typeof THREE.SkinnedMesh>) })
+            for (const m of found) {
+              const g = m.geometry, si = g.getAttribute('skinIndex'), sw = g.getAttribute('skinWeight')
+              if (!si || !sw || !m.parent) continue
+              const bones = new Set<number>()
+              m.skeleton.bones.forEach((b, i) => { if (partBare.has(bare(b.name))) bones.add(i) })
+              if (!bones.size) continue
+              const index = g.index ? g.index.array : Array.from({ length: g.getAttribute('position').count }, (_, i) => i)
+              const tri = attachedPartIndex(index, si.array, sw.array, bones)
+              bodyMeshes.push(m)
+              if (!tri.length) continue
+              const pg = new THREE.BufferGeometry()
+              for (const [k, v] of Object.entries(g.attributes)) pg.setAttribute(k, v)
+              pg.setIndex(tri)
+              const twin = new THREE.SkinnedMesh(pg, m.material)
+              twin.bind(m.skeleton, m.bindMatrix)
+              twin.position.copy(m.position); twin.quaternion.copy(m.quaternion); twin.scale.copy(m.scale)
+              twin.frustumCulled = false
+              twin.visible = false
+              m.parent.add(twin)
+              partMeshes.push(twin)
+              // not disposed: pg shares the template's attribute buffers, disposing it would drop them on the GPU
+            }
+          }
+          figs.push({ letter: p.letter, bodyMeshes, partMeshes, character: a.character, role: a.role, place: p, root, inst, mixer, path: clip.path,
             duration: clip.raw.duration, hips, hipsBind: { x: hb.x, y: hb.y, z: hb.z }, bindInv, runtime, hasRecord,
             saved: { shiftCm: o?.shift_cm ?? null, heightOffsetsCm: clip.file.height_offsets_cm ?? null,
               partnerTurnDeg: o?.partner_turn_deg ?? null },
@@ -956,6 +992,19 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             const extra = fitOn && live.hit && figs[live.hit.e] === f ? pairFitTotal(live.st, time) : NO_FIX
             placedNow.set(f, placeRoot(f, time, draft, extra))
             f.runtime.poseStep({ realDelta: dt })
+          }
+          // A129.9: hide the entering figure's body, keep its attached part.
+          {
+            const ent = live.hit ? figs[live.hit.e] : figs.find((x) => x.role === 'b')
+            for (const f of figs) {
+              const hide = showRef.current.hidePartner && f === ent && f.partMeshes.length > 0
+              for (const m of f.bodyMeshes) m.visible = !hide
+              for (const m of f.partMeshes) m.visible = hide
+            }
+            host.dataset.hidePartner = showRef.current.hidePartner
+              ? JSON.stringify(figs.map((f) => ({ letter: f.letter, body: f.bodyMeshes.length, part: f.partMeshes.length,
+                partTris: f.partMeshes.reduce((a, m) => a + (((m as InstanceType<typeof THREE.Mesh>).geometry.index?.count ?? 0) / 3), 0),
+                hidden: f.bodyMeshes.some((m) => !m.visible) }))) : ''
           }
           const wantInspect = showRef.current.collision || showRef.current.channels
           const fitInspect = (fitOn && !live.none) || showRef.current.focus
@@ -1322,6 +1371,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         </label>
         <label title={t('Fits every pair on its own, as the game does when a pair interaction starts: one loop is measured, then the entering figure moves by at most 5 cm and turns by at most 10° so the attached part runs along the channel. The stored clip stays as it is.')}>
           <input type="checkbox" data-testid="place-fit" checked={show.fit} onChange={() => toggleShow('fit')} /> {t('Fine-fit the pair')}
+        </label>
+        <label title={t('Hides the body of the entering figure; its attached part stays visible, so the channel is not covered. Preview only, nothing is stored.')}>
+          <input type="checkbox" data-testid="place-hide-partner" checked={show.hidePartner} onChange={() => toggleShow('hidePartner')} /> {t('Hide partner body (attached part stays)')}
         </label>
         <label title={t('The camera eases to the contact point (the channel opening) at 0.9 m, and an inset at the bottom right shows the channel axis (green) and the shaft of the attached part (orange) side-on. Auto-align and the pair check switch it on.')}>
           <input type="checkbox" data-testid="place-focus" checked={show.focus} onChange={() => toggleShow('focus')} /> {t('Focus the contact')}
