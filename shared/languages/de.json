@@ -5988,6 +5988,21 @@
     "no base model yet (Characters → Base body)": "noch kein Grundmodell (Charaktere → Grundkörper)",
     "A character without an outfit model can still show its base body.": "Ein Charakter ohne Outfit-Modell kann trotzdem seinen Grundkörper zeigen.",
     "no outfit model yet (Characters → Figure)": "noch kein Outfit-Modell (Charaktere → Figur)",
-    "Base body = the plain body; outfit body = the figure the game shows, with what the character wears.": "Grundkörper = der blanke Körper; Outfit-Körper = die Figur, die das Spiel zeigt, mit dem, was der Charakter trägt."
+    "Base body = the plain body; outfit body = the figure the game shows, with what the character wears.": "Grundkörper = der blanke Körper; Outfit-Körper = die Figur, die das Spiel zeigt, mit dem, was der Charakter trägt.",
+    "Shell from the body": "Hülle aus dem Körper",
+    "Mesh shape": "Mesh-Form",
+    "Shell from the body for a close-fitting piece (every slot underwear or legs, covers nothing, cannot be worn open); else as generated": "Hülle aus dem Körper für ein eng anliegendes Teil (jeder Slot Unterwäsche oder Beine, verdeckt nichts, nicht offen tragbar); sonst wie generiert",
+    "The generated mesh, placed on the body and fitted": "Das generierte Mesh, auf den Körper gesetzt und angepasst",
+    "The piece is made from the surface of the body where the piece-only views show it, 4 mm over the skin, coloured from those views — the generated mesh is not used": "Das Teil wird aus der Körperoberfläche gebaut, wo die Teil-Ansichten es zeigen, 4 mm über der Haut, eingefärbt aus diesen Ansichten — das generierte Mesh wird nicht verwendet",
+    "close-fitting slots only: {slots}": "nur eng anliegende Slots: {slots}",
+    "worn in a slot that is not close-fitting: {slots}": "in einem nicht eng anliegenden Slot getragen: {slots}",
+    "it covers another slot: {slots}": "es verdeckt einen anderen Slot: {slots}",
+    "it can be worn open": "es kann offen getragen werden",
+    "the piece has no slot": "das Teil hat keinen Slot",
+    "only this piece's fit becomes due — on the CPU, 0 hub jobs": "nur die Anpassung dieses Teils wird fällig — auf der CPU, 0 Hub-Jobs",
+    "A change runs locally on the CPU, 0 hub jobs; only this piece's fit becomes due, nothing runs until the next run or Build": "Eine Änderung läuft lokal auf der CPU, 0 Hub-Jobs; nur die Anpassung dieses Teils wird fällig, bis zum nächsten Lauf oder Build läuft nichts",
+    "The fit was made as {shape}": "Die Anpassung wurde als „{shape}“ gemacht",
+    "sides coloured from the views within 2 cm": "Seiten aus den Ansichten gefärbt (innerhalb 2 cm)",
+    "Made from the body's surface over the piece's region — local on the CPU, 0 hub jobs": "Aus der Körperoberfläche über dem Bereich des Teils gebaut — lokal auf der CPU, 0 Hub-Jobs"
   }
 }

@@ -55,6 +55,7 @@ import {
 import type { AttemptTile, ChipSpec, GarmentLimits, GarmentRunBody, LightState } from './garmentStyle'
 import { GarmentMeshTiles } from './GarmentMeshView'
 import type { MeshAllowance } from './GarmentMeshView'
+import { MeshShapeControl } from './MeshShapeControl'
 import { MeshJobFetch } from './MeshJobFetch'
 import { StepLight } from './StepRows'
 import { armLightColour, armLightShort, armLightText } from './fitSettingsModel'
@@ -744,6 +745,10 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
         {/* Collecting a job by its id waits for the running job (its step holds the run lock). */}
         <MeshJobFetch url={garment ? meshFetchUrl : null} disabled={busy || !!meshJob}
           disabledReason={meshJob ? t('Waits for the running mesh job of this piece') : ''} onDone={() => onMeshFetched?.()} />
+        {meshAllowance?.info.mesh_shape ? (
+          <MeshShapeControl character={meshAllowance.character} itemId={meshAllowance.itemId}
+            info={meshAllowance.info} busy={busy || meshAllowance.busy} onSaved={meshAllowance.onSaved} />
+        ) : null}
         <GarmentMeshTiles view={mesh?.view} builtAt={mesh?.created_at ?? null} pieceName={pieceName}
           userAccepted={!!mesh?.user_accepted} onUse={onMeshUse} useDisabled={busy || !garment}
           allowance={meshAllowance} />

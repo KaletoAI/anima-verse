@@ -132,6 +132,8 @@ export interface GarmentMeshAttempt {
 export interface GarmentMeshView {
   prepared: GarmentMeshFile | null
   raw: GarmentMeshFile | null
+  /** Ruling A48d: the shell from the body of the last shell fit (none before one). */
+  shell?: GarmentMeshFile | null
   attempts: GarmentMeshAttempt[]
 }
 

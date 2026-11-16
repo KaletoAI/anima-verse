@@ -86,6 +86,12 @@ function meshSources(view: GarmentMeshView | undefined, builtAt: string | null, 
       : t('Raw mesh'), prepared: view.prepared, raw: view.raw, builtAt, refused: !view.prepared, note: '', slot: 0,
     origin: 'in_use', notApplied: false, useBlock: '' })
   }
+  if (view.shell) {
+    // Ruling A48d: the shell from the body the last shell fit made — shown as its Prepared mesh, beside the generated
+    out.push({ id: 'shell', label: t('Shell from the body'), prepared: view.shell, raw: null, builtAt, refused: false,
+      note: t('Made from the body\'s surface over the piece\'s region — local on the CPU, 0 hub jobs'), slot: 0,
+      origin: 'in_use', notApplied: false, useBlock: '' })
+  }
   for (const a of view.attempts) {
     if (!a.prepared && !a.raw) continue
     out.push({ id: `attempt-${a.attempt}`, label: keptLabel(a, t), prepared: a.prepared, raw: a.raw,
@@ -155,7 +161,7 @@ function MeshTile({ source, onOpen, onUse, useDisabled }: {
       <span className="ga-hint" style={{ fontSize: '0.7em', textAlign: 'center', lineHeight: 1.2 }} title={title}>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
           <StepLight light={source.refused ? 'red' : 'green'} title={gate} />
-          {source.origin === 'in_use' ? t('In use') : source.label}
+          {source.id === 'shell' ? source.label : source.origin === 'in_use' ? t('In use') : source.label}
         </span>
         <br />{built ? `${t('Built')} ${built}` : ''}
         <br />{trisText(file.tris)}
