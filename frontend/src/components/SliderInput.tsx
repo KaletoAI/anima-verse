@@ -141,10 +141,10 @@ export function SliderInput({
   // shortened number back as the field's content.
   const text = value === undefined ? '' : String(Math.round(value * 1e6) / 1e6)
   // Never narrower than the longest number the field can hold: the bounds, the value and a draft, plus the native
-  // spin buttons (~26 px). A fixed 54 px box cut a one-decimal value ("-1.3" read "-1.:", Ruling A129).
+  // spin buttons and the field padding (~44 px). A fixed 54 px box cut a one-decimal value ("-1.3" read "-1.:", Ruling A129).
   const chars = Math.max(String(min).length, String(max).length, text.length, (draft ?? '').length,
     numberStep === 'any' ? 0 : String(min).length + (decimals ? decimals + 1 : 0))
-  const fieldWidth = typeof inputWidth === 'number' ? `max(${inputWidth}px, calc(${chars}ch + 26px))` : inputWidth
+  const fieldWidth = typeof inputWidth === 'number' ? `max(${inputWidth}px, calc(${chars}ch + 44px))` : inputWidth
 
   const commit = (raw: string) => {
     setDraft(null)
