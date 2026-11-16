@@ -59,6 +59,8 @@ def main():
         paths.init(Path(tmp) / 'world')
         paths.init_instance(Path(tmp) / 'instance')
         from app.core import model3d, face_retexture, db
+        # A163: these fixtures exercise the FRONT source (no face view) — the stored setting, not a fallback.
+        face_retexture.stored_source = lambda _c: 'front'
         from app.core.model_store import export_files
         from app.imagegen import routing
         from app.imagegen.service import ImageService

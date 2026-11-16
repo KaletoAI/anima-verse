@@ -33,6 +33,8 @@ def main():
         paths.init(Path(tmp) / 'world')
         paths.init_instance(Path(tmp) / 'instance')
         from app.core import db, model3d, face_retexture
+        # A163: these fixtures exercise the FRONT source (no face view) — the stored setting, not a fallback.
+        face_retexture.stored_source = lambda _c: 'front'
         from app.core.improvements import engine, registry, store
         from app.core.improvements.base import ParamField
         from app.core.improvements.types.face_retexture import FaceRetexture

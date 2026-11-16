@@ -193,6 +193,8 @@ def section_stage_guard(root: Path) -> None:
     from smoke_face_retexture_rollback import fixture, photo
     from smoke_face_retexture_check import glb
     from app.core import base_body, face_retexture, model3d
+    # A163: these fixtures exercise the FRONT source (no face view) — the stored setting, not a fallback.
+    face_retexture.stored_source = lambda _c: 'front'
     from app.models.character import save_character_profile
 
     model_root = root / "world" / "characters" / "guard" / "model3d"

@@ -9,12 +9,13 @@ file under a temp character directory (the real one reads the profile from the w
 
 The rule (``reference_info``): the face view ``model_refs/face_view.png`` is the reference only when its sidecar
 carries ``image_sha256`` == sha256 of the file AND ``reference_sha256`` == sha256 of the current profile picture;
-otherwise the run silently takes the front view. ``face_info`` exposes that choice as
-``face_reference = {reference, face_available, face_problem}`` so the tab can say it before a run.
+otherwise it is due (A163: the run renders it first — no silent fallback to the front view; the reference stays
+the stored face texture source, ``face`` by default). ``face_info`` exposes it as
+``face_reference = {reference, face_available, face_problem, face_view_due}`` so the tab can say it before a run.
 
 Hand-derived expectations:
-[1] no profile picture -> reference "front", face_available False, problem code "no_profile_image";
-[2] profile picture, no face view -> "front", "no_face_photo";
+[1] no profile picture -> reference "face", face_available False, problem code "no_profile_image", due "";
+[2] profile picture, no face view -> "face", "no_face_photo", due "no_face_photo";
 [3] face view whose sidecar has no image hash -> "face_unverified";
 [4] face view rendered from an OLDER profile picture (reference_sha256 of other bytes) -> "face_stale" — the
     user's case: the projection would use the small face of the full-body front view;
@@ -22,7 +23,7 @@ Hand-derived expectations:
 [6] the payload survives a broken state: ``face_info`` on a character directory without a model_refs folder still
     returns the key (never raises).
 [7] UI contract (text of the sources): ModelFaceActions.tsx renders ``faceReferenceNotice`` with the strings
-    "Face view stale (built from an older profile picture)", "No face view", "the front view would be used" and a
+    "Face view stale (built from an older profile picture)", "No face view", "the next run renders it first" and a
     "Regenerate face view" button that posts to ``model-refs/generate`` with view "face" (the face view card's own
     route); the notice sits in the face section (data-face-reference) AND in the retexture dialog (beside the
     reference select); FieldModel3D.tsx declares ``face_reference`` on Model3DInfo; de.json translates the new
@@ -91,56 +92,56 @@ def main() -> int:
 
         print("[1] no profile picture")
         s = state()
-        check("front, no_profile_image", (s["reference"], s["face_available"], (s["face_problem"] or {}).get("code")),
-              ("front", False, "no_profile_image"))
+        check("face, no_profile_image, not due", (s["reference"], s["face_available"], (s["face_problem"] or {}).get("code"), s["face_view_due"]),
+              ("face", False, "no_profile_image", ""))
 
         print("[2] profile picture, no face view")
         picture = cdir / "images" / "profile.png"
         picture.write_bytes(png_bytes(1))
         profile["path"] = picture
         s = state()
-        check("front, no_face_photo", (s["reference"], s["face_available"], (s["face_problem"] or {}).get("code")),
-              ("front", False, "no_face_photo"))
+        check("face, no_face_photo, due", (s["reference"], s["face_available"], (s["face_problem"] or {}).get("code"), s["face_view_due"]),
+              ("face", False, "no_face_photo", "no_face_photo"))
 
         print("[3] face view without an image hash")
         face = refs / "face_view.png"
         face.write_bytes(png_bytes(2))
         face.with_suffix(".json").write_text(json.dumps({"reference_sha256": hashlib.sha256(picture.read_bytes()).hexdigest()}))
         s = state()
-        check("front, face_unverified", (s["reference"], (s["face_problem"] or {}).get("code")), ("front", "face_unverified"))
+        check("face, face_unverified, due", (s["reference"], (s["face_problem"] or {}).get("code"), s["face_view_due"]), ("face", "face_unverified", "face_unverified"))
 
         print("[4] face view from an older profile picture")
         face.with_suffix(".json").write_text(json.dumps({"image_sha256": hashlib.sha256(face.read_bytes()).hexdigest(),
                                                          "reference_sha256": hashlib.sha256(png_bytes(9)).hexdigest()}))
         s = state()
-        check("front, face_stale", (s["reference"], s["face_available"], (s["face_problem"] or {}).get("code")),
-              ("front", False, "face_stale"))
+        check("face, face_stale, due", (s["reference"], s["face_available"], (s["face_problem"] or {}).get("code"), s["face_view_due"]),
+              ("face", False, "face_stale", "face_stale"))
         check("stale message names the profile picture", "profile picture changed" in (s["face_problem"] or {}).get("message", ""), True)
 
         print("[5] face view current")
         face.with_suffix(".json").write_text(json.dumps({"image_sha256": hashlib.sha256(face.read_bytes()).hexdigest(),
                                                          "reference_sha256": hashlib.sha256(picture.read_bytes()).hexdigest()}))
         s = state()
-        check("face, available", (s["reference"], s["face_available"], s["face_problem"]), ("face", True, None))
+        check("face, available, not due", (s["reference"], s["face_available"], s["face_problem"], s["face_view_due"]), ("face", True, None, ""))
 
         print("[6] never raises")
         other = get_character_dir("Bare", create=True) / "model3d"
         other.mkdir(parents=True, exist_ok=True)
         (other / f"{sig}.glb").write_bytes(b"glTF")
         s = (face_info("Bare", other / f"{sig}.glb") or {})
-        check("key present without model_refs", "face_reference" in s and (s["face_reference"] or {}).get("reference") in ("front", None), True)
+        check("key present without model_refs", "face_reference" in s and (s["face_reference"] or {}).get("reference") in ("face", None), True)
 
     print("[7] UI contract")
     actions = (ROOT / "frontend/src/tabs/characters/ModelFaceActions.tsx").read_text(encoding="utf-8")
     field = (ROOT / "frontend/src/tabs/characters/FieldModel3D.tsx").read_text(encoding="utf-8")
     de = json.loads((ROOT / "shared/languages/de.json").read_text(encoding="utf-8"))
     translations = de.get("translations") if isinstance(de.get("translations"), dict) else de
-    for needle in ("Face view stale (built from an older profile picture)", "No face view", "the front view would be used",
+    for needle in ("Face view stale (built from an older profile picture)", "No face view", "the next run renders it first",
                    "Regenerate face view", "model-refs/generate", "view: 'face'", "data-face-reference",
-                   "faceReferenceNotice({ reference: faceCheck.reference"):
+                   "faceReferenceNotice(faceCheck, t)"):
         check(f"ModelFaceActions has {needle!r}", needle in actions, True)
     check("FieldModel3D declares face_reference", "face_reference?: FaceReferenceState | null" in field, True)
-    for key in ("Face view stale (built from an older profile picture)", "the front view would be used", "No face view",
+    for key in ("Face view stale (built from an older profile picture)", "the next run renders it first", "No face view",
                 "Regenerate face view", "Face view requested"):
         check(f"de.json translates {key!r}", bool(translations.get(key)), True)
     regenerable = re.search(r"export function faceViewRegenerable\((.*?)\n}\n", actions, re.S)

@@ -63,6 +63,8 @@ def main():
         from app.core import base_body as _legacy_bb
         _legacy_bb.is_base_pipeline = lambda *_a, **_k: False
         from app.core import face_retexture, model3d
+        # A163: these fixtures exercise the FRONT source (no face view) — the stored setting, not a fallback.
+        face_retexture.stored_source = lambda _c: 'front'
         root = Path(tmp) / 'characters' / 'demo' / 'model3d'
         root.mkdir(parents=True)
         (root / 'unrigged').mkdir()

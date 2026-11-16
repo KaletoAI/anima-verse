@@ -37,6 +37,8 @@ def main():
         paths.init(Path(tmp) / 'world')
         paths.init_instance(Path(tmp) / 'instance')
         from app.core import model3d, db, face_retexture, hub_ops
+        # A163: these fixtures exercise the FRONT source (no face view) — the stored setting, not a fallback.
+        face_retexture.stored_source = lambda _c: 'front'
         from app.imagegen.base import GenerationCancelled, MediaGenerationDisabled, HubJobLost
         from app.models.character import save_character_profile
         db.init_schema()

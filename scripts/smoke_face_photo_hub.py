@@ -229,11 +229,13 @@ def integration():
             hub_ops.delete(old)
             # Check and preview agree with selected capability, front hub preview
             # equals brightness-only output and explains the approximation.
+            # A163: the front source is the stored setting (Base body settings), not a query parameter.
+            model3d.set_model3d_options('demo', {'face_source': 'front'})
             for hub in (True, False):
                 with patch.object(face, 'photo_controls_supported', return_value=hub):
-                    checked = check_character_face_retexture('demo', sig, reference='front')
+                    checked = check_character_face_retexture('demo', sig)
                     assert checked['photo_controls'] == ('hub' if hub else 'local')
-            response = preview_character_face_photo('demo', sig, 'front', .4, .85)
+            response = preview_character_face_photo('demo', sig, .4, .85)
             assert response.status_code == 200
             assert 'Brightness-only' in response.headers['x-face-photo-preview']
             expected = face.flatten_photo(raw, {'balance': 0., 'brightness': .85}, max_size=512)
@@ -241,7 +243,7 @@ def integration():
             with patch.object(model3d, 'trigger_face_retexture', return_value={'status': 'generating'}) as trigger:
                 started = start_character_face_retexture(
                     'demo', sig, strength=1, feather=.18, render_resolution=768,
-                    balance=.4, tone_match=.65, skin_recolor=.35, brightness=.85, yaw=0, reference='front', upscale=False)
+                    balance=.4, tone_match=.65, skin_recolor=.35, brightness=.85, yaw=0, upscale=False)
                 assert started['status'] == 'generating'
                 assert trigger.call_args.kwargs['photo'] == photo_params
             # Remembered controls drive automatic face-before-rig hub mode, too.

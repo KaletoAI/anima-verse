@@ -155,8 +155,10 @@ def render_contract(refs, profile, sig, meta):
         buf = io.BytesIO()
         Image.new('RGB', (32, 32), 'blue').save(buf, 'PNG')
         profile.write_bytes(buf.getvalue())
-        assert face.reference_info('demo', sig, meta)['reference'] == 'front'
+        # A163: a stale face view keeps the face source (the run renders it first) — no fallback to front.
+        assert face.reference_info('demo', sig, meta)['reference'] == 'face'
         assert face.reference_info('demo', sig, meta)['face_problem']['code'] == 'face_stale'
+        assert face.face_view_due('demo') == 'face_stale'
         assert mr.face_view_info('demo')['stale'] is True
         tpose_pass()
         assert len(seen) == 2

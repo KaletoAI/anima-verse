@@ -154,7 +154,7 @@ def integration(a):
             face_path.write_bytes(big.getvalue())
             face_path.with_suffix('.json').write_text(json.dumps({'image_sha256':hashlib.sha256(big.getvalue()).hexdigest(),'reference_sha256':hashlib.sha256(photo()).hexdigest()}))
             with patch('app.core.face_photo_adjust.adjust', wraps=adjust) as preview_adjust:
-                response=preview_character_face_photo('demo',sig,'face',.5,.85)
+                response=preview_character_face_photo('demo',sig,.5,.85)
                 assert max(preview_adjust.call_args.args[0].size) <= 512
             face_path.write_bytes(raw)
             face_path.with_suffix('.json').write_text(json.dumps({'image_sha256':hashlib.sha256(raw).hexdigest(),'reference_sha256':hashlib.sha256(photo()).hexdigest()}))
@@ -162,9 +162,12 @@ def integration(a):
             assert image.format=='PNG' and max(image.size)<=512
             assert response.headers['cache-control']=='no-store'
             from fastapi import HTTPException
-            try: preview_character_face_photo('demo',sig,'front',.5,1.)
+            # A163: the source is the stored setting (Base body settings), not a query parameter.
+            model3d.set_model3d_options('demo',{'face_source':'front'})
+            try: preview_character_face_photo('demo',sig,.5,1.)
             except HTTPException as exc: assert exc.status_code==409
             else: raise AssertionError('front balance preview accepted')
+            finally: model3d.set_model3d_options('demo',{'face_source':'face'})
             with ExitStack() as generation:
                 generation.enter_context(patch.object(model3d,'find_ref_image',return_value=front))
                 generation.enter_context(patch('app.core.model_refs.enabled_tpose_views',return_value=[]))
@@ -172,13 +175,15 @@ def integration(a):
                 generation.enter_context(patch.object(model3d,'_character_mesh_stages',side_effect=Stop))
                 model3d.set_model3d_options('demo',{'face_before_rig':True})
                 for use_face in (True,False):
-                    if not use_face: face_path.unlink()
+                    # A163: the front path is the stored setting, never a fallback from a missing face view.
+                    if not use_face: model3d.set_model3d_options('demo',{'face_source':'front'})
                     try: model3d.generate_for_current_outfit('demo',signature=sig,force=True)
                     except Stop: pass
                     generated=captured[-1]
                     assert generated.inputs['photo']=={'balance':.5 if use_face else 0.,'brightness':.85,'skin_recolor':1.,'tone_match':1.}
                     assert bool(generated.inputs['photo_reason']) is (not use_face)
                     hub_ops.delete(generated)
+                model3d.set_model3d_options('demo',{'face_source':'face'})
             # Defaults are full balance (user decision 2026-10-16): only a deviation
             # from {balance 1, brightness 1} is remembered, so an explicit 0 stays.
             model3d.set_model3d_options('demo',{'face_photo':{'balance':0,'brightness':1}})
