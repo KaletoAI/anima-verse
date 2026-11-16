@@ -32,11 +32,14 @@
  * [8] bendLimitsOf({raised: {joint_deg: 10}}) → raised 10 / 35 (total from the default), resting 45 / 120; junk →
  *     defaults. Limit 0 → no bend at all.
  * [9] THE ROOT ANGLE (A158, `rootTurnOf`): a straight 2-link chain P_k = (0, 0, 0.1k), frame side +X, up +Y (a figure
- *     facing +Z, its left +X). s = sign(((X × Z)·Y)) = sign(−1) = −1, so pitch +α is a turn of −α about +X:
+ *     facing +Z = side × up, its left +X). Pitch +α is a turn of −α about +X (fixed sign):
  *     tip (0, 0, 0.2) → (0, 0.2 sin α, 0.2 cos α). Pitch +30 → (0, 0.1, 0.1732051); −30 → (0, −0.1, 0.1732051); 0 → no
- *     turn (null). t = −sign(((Y × Z)·X)) = −1, so yaw +β is a turn of −β about +Y: tip → (−0.2 sin β, 0, 0.2 cos β) —
+ *     turn (null). Yaw +β is a turn of −β about +Y (fixed sign): tip → (−0.2 sin β, 0, 0.2 cos β) —
  *     toward −X, the figure's RIGHT. Yaw +15 → (−0.0517638, 0, 0.1931852); −15 → (+0.0517638, 0, 0.1931852). P_0 stays;
  *     the middle point turns with it (0, 0.05, 0.0866025) at pitch +30. Pitch 70 is clamped to 60: tip y = 0.2 sin 60.
+ *     A HANGING chain P_k = (0, −0.1k, 0): pitch +30 swings it FORWARD: tip (0, −0.2 cos 30, 0.2 sin 30) = (0, −0.1732051, 0.1).
+ *     bodyFrameOf(hips (0,1,0), spine (0,1.1,0.02), left hip (0.1,0.95,0), right hip (−0.1,0.95,0)): side (1,0,0), up
+ *     (0, 0.1, 0.02)/|…| = (0, 0.9805807, 0.1961161).
  * [10] rootAngleOf({pitch_deg: 20, yaw_deg: -5}) → 20 / −5; junk → 0 / 0. solveChainBend never turns joint 0 (the
  *      root is the clip's, not the solve's): a line at y = 0.2 sin 20° with joint limits 0 leaves the chain as it is.
  */
@@ -136,6 +139,10 @@ assert.equal(r8.totalDeg, 0)
   close(SR.rootTurnOf(straight(2), F, { pitchDeg: 30, yawDeg: 0 }).points[0], [0, 0, 0], '[9] P_0 stays')
   near(tip({ pitchDeg: 70, yawDeg: 0 })[1], 0.2 * sin(60), 1e-9, '[9] clamped at 60')
   assert.equal(SR.rootTurnOf(straight(2), F, { pitchDeg: 0, yawDeg: 0 }), null)
+  const hang = [[0, 0, 0], [0, -0.1, 0], [0, -0.2, 0]]
+  close(SR.rootTurnOf(hang, F, { pitchDeg: 30, yawDeg: 0 }).points[2], [0, -0.2 * cos(30), 0.1], '[9] hanging swings forward')
+  const bf = SR.bodyFrameOf([0, 1, 0], [0, 1.1, 0.02], [0.1, 0.95, 0], [-0.1, 0.95, 0])
+  close(bf.side, [1, 0, 0], '[9] body side'); close(bf.up, [0, 0.1 / Math.hypot(0.1, 0.02), 0.02 / Math.hypot(0.1, 0.02)], '[9] body up')
   assert.deepEqual(SR.rootAngleOf({ pitch_deg: 20, yaw_deg: -5 }), { pitchDeg: 20, yawDeg: -5 })   // [10]
   assert.deepEqual(SR.rootAngleOf('junk'), { pitchDeg: 0, yawDeg: 0 })
   const nr = SR.solveChainBend(straight(2), [0, 0.2 * sin(20), 0], [0, 0, 1], { jointDeg: 0, totalDeg: 0 })

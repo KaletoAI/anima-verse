@@ -33,9 +33,11 @@
  * per clip — pitch (+ up toward the belly, − down) about the body's side axis and turn (+ the figure's right, − its
  * left) about the body's up axis, both at the root joint P_0 (`rootTurnOf`). It is applied to the rendered chain
  * BEFORE anything reads it (`FigureRuntime.setRootAngle`), always, with or without a partner; the bend above then
- * starts from it and never changes it. Pitch UP is the turn that raises the tip along the body's up axis:
- * s = sign(((side × d)·up)) for the chain direction d = P_n − P_0; the figure's RIGHT is −side (a figure faces +Z,
- * +X is its left): t = −sign(((up × d)·side)).
+ * starts from it and never changes it. The body axes are the skeleton's own (`bodyFrameOf`: hip joints, hips → spine),
+ * since a pair clip turns each half's body inside the clip frame. The figure faces +forward = side × up, side is its
+ * LEFT. Pitch +α is a turn of −α about side: a forward-pointing part rises toward the belly, a hanging one swings
+ * forward. Yaw +β is a turn of −β about up: a forward-pointing part swings to the figure's RIGHT. Fixed signs, so the
+ * slider means the same whatever the part's direction.
  *
  * THE LAMP (`bendLamp`): yellow when the bend used reaches `BEND_AT_LIMIT` of the total (or every joint its own) —
  * the part is at its limit and the rest of the error is the shift's/turn's; green otherwise.
@@ -197,12 +199,23 @@ export function rootTurnOf(points: readonly Vec3[], frame: BendFrame, angle: Roo
   const clamp = (v: number, m: number) => (Number.isFinite(v) ? Math.max(-m, Math.min(m, v)) : 0)
   const a = clamp(angle.pitchDeg, ROOT_PITCH_MAX_DEG) * DEG, b = clamp(angle.yawDeg, ROOT_YAW_MAX_DEG) * DEG
   if (Math.abs(a) + Math.abs(b) < 1e-12) return null
-  const p0 = points[0], d = sub(points[n], p0)
-  const s = Math.sign(dot(cross(frame.side, d), frame.up)) || 1
-  const t = -(Math.sign(dot(cross(frame.up, d), frame.side)) || 1)
+  const p0 = points[0]
   // Pitch about the body's side axis, then the turn about its up axis (world axes, both at P_0).
-  const q = quatMul(quatOf(mul(frame.up, t * b)), quatOf(mul(frame.side, s * a)))
+  const q = quatMul(quatOf(mul(frame.up, -b)), quatOf(mul(frame.side, -a)))
   return { q, points: points.map((p, k) => (k === 0 ? [p[0], p[1], p[2]] as Vec3 : add(p0, quatRotate(q, sub(p, p0))))) }
+}
+
+/** Ruling A158: the BODY's own axes from its skeleton (world points): side = left hip joint − right hip joint (the
+ *  figure's left), up = hips → spine with its side share removed. Not the placement root's axes — a pair clip turns
+ *  each half's body inside the clip frame (partner B faces A). Null when the points are degenerate. */
+export function bodyFrameOf(hips: Vec3, spine: Vec3, leftUpLeg: Vec3, rightUpLeg: Vec3): BendFrame | null {
+  const sd = sub(leftUpLeg, rightUpLeg), ls = len(sd)
+  if (ls < 1e-6) return null
+  const side = mul(sd, 1 / ls)
+  const ur = sub(spine, hips)
+  const uo = sub(ur, mul(side, dot(ur, side))), lu = len(uo)
+  if (lu < 1e-6) return null
+  return { side, up: mul(uo, 1 / lu) }
 }
 
 /** Ruling A158: a stored root angle ({pitch_deg, yaw_deg}, degrees) — 0/0 for anything else. */

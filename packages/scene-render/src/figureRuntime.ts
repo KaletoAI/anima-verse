@@ -32,7 +32,7 @@
  */
 import type { Object3D, Vector3 } from 'three'
 import { POINT_TARGET_OPS, TARGET_BONE_NAMES, targetFrames, type TargetBones, type TargetFrame } from './contactTarget'
-import { rootTurnOf, type RootAngle } from './chainBend'
+import { bodyFrameOf, rootTurnOf, type BendFrame, type RootAngle } from './chainBend'
 import { normBoneName } from './clipRetarget'
 import { createSecondaryMotion, withoutHairGroups } from './secondaryMotion'
 import type { SecondaryMotion, SecondaryMotionPayload } from './secondaryMotion'
@@ -235,8 +235,8 @@ export class FigureRuntime {
     this.rootAngle = angle && (angle.pitchDeg || angle.yawDeg) ? { pitchDeg: angle.pitchDeg, yawDeg: angle.yawDeg } : null
   }
 
-  /** The root turn on this frame's rendered bones: the first chain with a point-target op, about the figure root's
-   *  side (+X) and up (+Y) axes in world space. */
+  /** The root turn on this frame's rendered bones: the first chain with a point-target op, about the BODY's side and up
+   *  axes (`bodyFrameOf` from the hip joints and the spine; the figure root's +X/+Y when the rig names none). */
   private applyRootAngle(): void {
     const angle = this.rootAngle
     if (!angle || this.disposed) return
@@ -245,13 +245,36 @@ export class FigureRuntime {
     if (ci < 0) return
     const segs = chains[ci].segments
     const points = [...segs.map(seg => seg.a), segs[segs.length - 1].b]
+    const got = rootTurnOf(points, this.bodyFrame(), angle)
+    if (got) this.secondary.bendChain(ci, [{ joint: 0, q: got.q }])
+  }
+
+  private bodyBoneRefs: { on: Object3D | null; bones: Map<string, Object3D> } = { on: null, bones: new Map() }
+  /** Ruling A158: the body's side/up axes now (world). */
+  private bodyFrame(): BendFrame {
+    const inst = this.instance
+    if (inst && this.bodyBoneRefs.on !== inst) {
+      const bones = new Map<string, Object3D>()
+      const want = new Set(['hips', 'spine', 'leftupleg', 'rightupleg'])
+      inst.traverse(o => {
+        const k = normBoneName(o.name)
+        if (want.has(k) && !bones.has(k)) bones.set(k, o)
+      })
+      this.bodyBoneRefs = { on: inst, bones }
+    }
+    const at = (k: string): [number, number, number] | null => {
+      const e = this.bodyBoneRefs.bones.get(k)?.matrixWorld.elements
+      return e ? [e[12], e[13], e[14]] : null
+    }
+    const h = at('hips'), sp = at('spine'), l = at('leftupleg'), r = at('rightupleg')
+    const f = h && sp && l && r ? bodyFrameOf(h, sp, l, r) : null
+    if (f) return f
     const e = this.root.matrixWorld.elements
     const unit = (x: number, y: number, z: number): [number, number, number] => {
-      const l = Math.hypot(x, y, z) || 1
-      return [x / l, y / l, z / l]
+      const n = Math.hypot(x, y, z) || 1
+      return [x / n, y / n, z / n]
     }
-    const got = rootTurnOf(points, { side: unit(e[0], e[1], e[2]), up: unit(e[4], e[5], e[6]) }, angle)
-    if (got) this.secondary.bendChain(ci, [{ joint: 0, q: got.q }])
+    return { side: unit(e[0], e[1], e[2]), up: unit(e[4], e[5], e[6]) }
   }
 
   /** What occupies the PARTNERS' channels from this figure's chains, as last rendered (Ruling A102). */
