@@ -50,9 +50,19 @@ POSES = {
     "walk": [("LeftUpLeg", "X", -25), ("RightUpLeg", "X", 20), ("RightLeg", "X", 30), ("LeftLeg", "X", 10)],
     "sit": [("LeftUpLeg", "X", -85), ("RightUpLeg", "X", -85), ("LeftLeg", "X", 90), ("RightLeg", "X", 90)],
     "kneel": [("LeftUpLeg", "X", -10), ("RightUpLeg", "X", -10), ("LeftLeg", "X", 100), ("RightLeg", "X", 100)],
+    # Ruling A142 — arm poses (the bind pose is the T-pose): a positive Y rotation lowers the left arm (+X), a
+    # negative Z rotation swings it forward (-Y); the right arm mirrored.
+    "arms_down": [("LeftArm", "Y", 72), ("RightArm", "Y", -72), ("LeftForeArm", "X", -15), ("RightForeArm", "X", -15)],
+    "arms_forward": [("LeftArm", "Z", -80), ("RightArm", "Z", 80), ("LeftForeArm", "Z", -10), ("RightForeArm", "Z", 10)],
+    "arms_up": [("LeftArm", "Y", -60), ("RightArm", "Y", 60)],
 }
+#: Poses that set the arms themselves (ARMS_DOWN is not added to them).
+ARM_POSES = ("rest", "arms_down", "arms_forward", "arms_up")
 COLLIDER_VOXEL_M = 0.005  # closed, outward-wound collider (see drape)
 RIM_BAND_M = 0.02   # body vertices this close to a piece opening are not judged
+#: Ruling A142: a body vertex with other skin within this distance outward (arm on the flank, thigh on thigh) is a
+#: contact, not judged — no cloth fits between (two layers of 1.5 mm + the 4 mm collision distance each side).
+CONTACT_M = 0.012
 ARMS_DOWN = [("LeftArm", "Y", 30), ("RightArm", "Y", -30), ("LeftForeArm", "X", -20), ("RightForeArm", "X", -20)]
 
 
@@ -180,7 +190,7 @@ def set_pose(arm, name):
     for pb in arm.pose.bones:
         pb.matrix_basis = Matrix.Identity(4)
     bpy.context.view_layer.update()
-    steps = list(POSES[name]) + (ARMS_DOWN if name != "rest" else [])
+    steps = list(POSES[name]) + (ARMS_DOWN if name not in ARM_POSES else [])
     for bone, axis, deg in steps:
         pb = arm.pose.bones.get(P + bone)
         if pb is None:
@@ -245,13 +255,25 @@ def edges_of(obj):
 
 
 # ---------------------------------------------------------------- measurement
-def bone_segments(arm):
+def bone_segments(arm, names=None):
     segs = []
     for pb in arm.pose.bones:
         if "Hand" in pb.name and not pb.name.endswith("Hand"):
             continue                                 # finger bones: no piece reaches them
         segs.append((np.array(arm.matrix_world @ pb.head), np.array(arm.matrix_world @ pb.tail)))
+        if names is not None:
+            names.append(pb.name.replace(P, ""))
     return np.array(segs)
+
+
+def axis_index(pts, segs):
+    """Index of the nearest bone segment for every point."""
+    a, b = segs[:, 0], segs[:, 1]
+    ab = b - a
+    t = np.einsum("pkd,kd->pk", pts[:, None, :] - a[None], ab) / np.maximum((ab * ab).sum(1), 1e-12)
+    t = np.clip(t, 0, 1)
+    q = a[None] + t[..., None] * ab[None]
+    return np.linalg.norm(pts[:, None, :] - q, axis=2).argmin(1)
 
 
 def axis_points(pts, segs):
@@ -278,7 +300,8 @@ def measure_pose(arm, body, piece, pose, rest_edges_len, edges, rim):
     bb = bvh_of(bco, _tri)
     gco, _gn, gtri = world_coords(piece)
     gb = bvh_of(gco, gtri)
-    segs = bone_segments(arm)
+    seg_names = []
+    segs = bone_segments(arm, seg_names)
     from mathutils.kdtree import KDTree
     kd = KDTree(max(1, len(rim)))
     for j, ri in enumerate(rim):
@@ -286,8 +309,26 @@ def measure_pose(arm, body, piece, pose, rest_edges_len, edges, rim):
     kd.balance()
     lo, hi = gco.min(0) - 0.04, gco.max(0) + 0.04
     cand = np.where(np.all((bco > lo) & (bco < hi), axis=1))[0]
+    vbone = np.full(len(bco), -1)
+    near = np.where(np.all((bco > lo - 0.05) & (bco < hi + 0.05), axis=1))[0]
+    for s0 in range(0, len(near), 20000):
+        part = near[s0:s0 + 20000]
+        vbone[part] = axis_index(bco[part], segs)
+    tri_bone = vbone[np.asarray(_tri)[:, 0]]
+
+    def limb_of(k):
+        if k < 0:
+            return "?"
+        n = seg_names[k]
+        for side in ("Left", "Right"):
+            if n.startswith(side) and any(x in n for x in ("Arm", "Hand", "Shoulder")):
+                return side + "Arm"
+            if n.startswith(side) and any(x in n for x in ("Leg", "Foot", "Toe")):
+                return side + "Leg"
+        return "Trunk"
     ax = axis_points(bco[cand], segs) if len(cand) else np.zeros((0, 3))
-    region = poke = 0
+    region = poke = contact = 0
+    poked = []
     for i, q in zip(cand, ax):
         v = Vector(bco[i])
         if len(rim) and kd.find(v)[2] < RIM_BAND_M:
@@ -301,9 +342,16 @@ def measure_pose(arm, body, piece, pose, rest_edges_len, edges, rim):
         h = gb.ray_cast(o, d, L + 0.08)
         if h[0] is None:
             continue
+        # skin pressed against OTHER skin (an arm lowered onto the flank): no room for cloth between them. Only a
+        # surface of another limb counts (the same limb's own folds and inner islands are no contact).
+        c = bb.ray_cast(v + d * 0.002, d, CONTACT_M)
+        if c[0] is not None and limb_of(tri_bone[c[2]]) != limb_of(vbone[i]):
+            contact += 1
+            continue
         region += 1
         if h[3] < L - 0.0005:
             poke += 1
+            poked.append(i)
 
     def inside(idx):
         if len(idx) == 0:
@@ -327,8 +375,14 @@ def measure_pose(arm, body, piece, pose, rest_edges_len, edges, rim):
     all_share, all_mm = inside(sample)
     ln = np.linalg.norm(gco[edges[:, 0]] - gco[edges[:, 1]], axis=1)
     ratio = ln / np.maximum(rest_edges_len, 1e-6)
+    by_bone = {}
+    if poked:
+        for k in axis_index(bco[np.asarray(poked)], segs):
+            by_bone[seg_names[k]] = by_bone.get(seg_names[k], 0) + 1
     return {
         "poke_share": round(poke / max(region, 1), 5), "region_body_verts": int(region),
+        "contact_verts": int(contact),
+        "poke_bones": dict(sorted(by_bone.items(), key=lambda kv: -kv[1])[:4]),
         "rim_inside_share": round(rim_share, 4), "rim_inside_max_mm": round(rim_mm, 1),
         "piece_inside_share": round(all_share, 4), "piece_inside_max_mm": round(all_mm, 1),
         "stretch_max": round(float(ratio.max()), 3), "stretch_p99": round(float(np.percentile(ratio, 99)), 3),
@@ -346,7 +400,7 @@ def measure_all(arm, body, piece, rest_len, edges, rim, render_dir, tag, cam_tar
 
 
 # ---------------------------------------------------------------- render
-def render(path, target):
+def render(path, target, side=-0.55):
     sc = bpy.context.scene
     sc.render.engine = "CYCLES"
     sc.cycles.device = "CPU"
@@ -369,7 +423,7 @@ def render(path, target):
     cam = bpy.data.objects["cam"]
     c, size = Vector(target[0]), target[1]
     cam.data.ortho_scale = size
-    d = Vector((-0.55, -1.0, 0.25)).normalized()   # front three-quarter (front = -Y)
+    d = Vector((side, -1.0, 0.25)).normalized()   # front three-quarter (front = -Y); side > 0 = from the left
     cam.location = c + d * 4
     cam.rotation_euler = (-d).to_track_quat("-Z", "Y").to_euler()
     sc.render.filepath = str(path)
@@ -377,8 +431,38 @@ def render(path, target):
 
 
 # ---------------------------------------------------------------- cloth
-def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collision, thickness):
-    """Collider = decimated rest copy of the body. Returns CPU seconds and pin drift (mm)."""
+#: A lower garment layer joins the collider as a solid this thick, grown INWARD from its outer surface (a 1.5 mm cloth
+#: shell would fall between the 5 mm voxels of the remesh; grown outward or centred it filled the armpit and the
+#: jacket above it exploded — A142 first layered run).
+EXTRA_SOLID_M = 0.008
+
+
+def _join_extra(col, extra, dg):
+    """Join the evaluated mesh of ``extra`` (a lower garment, Ruling A142) into the collider object ``col``,
+    thickened to EXTRA_SOLID_M so the voxel remesh keeps it."""
+    tmp = bpy.data.objects.new("extra_col", bpy.data.meshes.new_from_object(extra.evaluated_get(dg)))
+    tmp.matrix_world = extra.matrix_world.copy()
+    bpy.context.scene.collection.objects.link(tmp)
+    so = tmp.modifiers.new("so", "SOLIDIFY")
+    so.thickness = EXTRA_SOLID_M
+    so.offset = -1.0
+    bpy.context.view_layer.objects.active = tmp
+    bpy.ops.object.modifier_apply(modifier=so.name)
+    bm = bmesh.new()
+    bm.from_mesh(col.data)
+    m = col.matrix_world.inverted() @ tmp.matrix_world
+    me2 = tmp.data.copy()
+    me2.transform(m)
+    bm.from_mesh(me2)
+    bm.to_mesh(col.data)
+    bm.free()
+    bpy.data.objects.remove(tmp)
+    bpy.data.meshes.remove(me2)
+
+
+def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collision, thickness, extra=()):
+    """Collider = decimated rest copy of the body (+ the ``extra`` lower garment layers). Returns CPU seconds and
+    pin drift (mm)."""
     sc = bpy.context.scene
     dg = bpy.context.evaluated_depsgraph_get()
     # the collider must be wound OUTWARD everywhere: Blender's cloth collision is
@@ -388,6 +472,8 @@ def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collisio
     col = bpy.data.objects.new("collider", bpy.data.meshes.new_from_object(body.evaluated_get(dg)))
     col.matrix_world = body.matrix_world.copy()
     sc.collection.objects.link(col)
+    for ex in extra:
+        _join_extra(col, ex, dg)
     vox = col.modifiers.new("vox", "REMESH")
     vox.mode = "VOXEL"
     vox.voxel_size = COLLIDER_VOXEL_M
@@ -858,13 +944,17 @@ def run_panels(a):
             "bake": tex, "draped": m}, {"glb": str(out / "skirt_template.glb")}
 
 
-def project_bake(obj, a, out_png, size=1024):
+def project_bake(obj, a, out_png, size=1024, co=None, nr=None):
     """Projection bake of the front/back cut-out views onto obj's UVs (orthographic,
-    registered by bounding box: the piece's projected bbox = the view's alpha bbox)."""
+    registered by bounding box: the piece's projected bbox = the view's alpha bbox). ``co`` / ``nr`` = world
+    positions / normals to project from instead of the rest mesh (Ruling A142: a top is projected in the arm pose
+    its picture shows)."""
     me = obj.data
     me.calc_loop_triangles()
-    co = np.array([obj.matrix_world @ v.co for v in me.vertices])
-    nr = np.array([(obj.matrix_world.to_3x3() @ v.normal).normalized() for v in me.vertices])
+    if co is None:
+        co = np.array([obj.matrix_world @ v.co for v in me.vertices])
+    if nr is None:
+        nr = np.array([(obj.matrix_world.to_3x3() @ v.normal).normalized() for v in me.vertices])
     views = {}
     for side in ("front", "back"):
         im = bpy.data.images.load(a[f"view_{side}"])

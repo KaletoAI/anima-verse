@@ -77,6 +77,274 @@ def wrap(spec, btree, centre):
     return verts, faces, uvs, angles
 
 
+# --- Ruling A142: the bodice (top, jacket, dress with straps or sleeves) -------------------------------------
+#: Columns either side of each side seam (angle 0 = the character's left, pi = right) removed between the chest
+#: band and the shoulder line: the armhole (5 of 80 columns = 0.39 rad, ~7 cm at a 0.18 m torso radius — wider than
+#: the T-posed arm's depth).
+WINDOW_COLS = 5
+BODICE_CLEAR_M = 0.01
+CAP_CLEAR_M = 0.008
+SLEEVE_CLEAR_M = 0.012
+#: Over this distance along the arm the sleeve turns from the armhole's shape into a ring round the arm.
+SLEEVE_BLEND_M = 0.06
+#: A stand collar: rings above the neck opening.
+COLLAR_RINGS = 3
+#: The neckline cut reaches this far beyond the neck opening's radius to the sides.
+NECK_CUT_WIDEN_M = 0.03
+COLLAR_STEP_M = 0.012
+UV_TORSO = (0.30, 0.86)
+UV_CAP = (0.87, 0.98)
+UV_COLLAR = (0.985, 0.995)
+UV_SLEEVE = (0.02, 0.28)
+
+
+def _bone_world(arm, name, rest=True):
+    b = arm.data.bones[gd.P + name]
+    return np.array(arm.matrix_world @ b.head_local)
+
+
+def _ray_down(tree, x, y, top=2.5):
+    hit = tree.ray_cast(Vector((x, y, top)), Vector((0, 0, -1)), top + 1)
+    return None if hit[0] is None else float(hit[0].z)
+
+
+def _ray_in(tree, q, d, reach=0.25):
+    """Distance from the axis point ``q`` to the first surface met coming in from ``q + d * reach`` (0 if none)."""
+    o = Vector(q) + Vector(d) * reach
+    hit = tree.ray_cast(o, -Vector(d), reach)
+    return (reach - hit[3]) if hit[0] is not None else 0.0
+
+
+def build_bodice(spec, btree, ftree, centre, arm):
+    """Ruling A142 — the vertices, faces and per-corner UVs of a piece with a bodice (Blender world, Z up, front =
+    -Y): the torso rows wrapped round the body like a skirt (row 0 = the shoulder line), a yoke ("cap") from the
+    shoulder line in to the neck opening, laid on the shoulders, the armholes cut at the side seams with the sleeves
+    grown out of the armhole loops along the arm bones, the neckline cut at the front, straps, an open front and a
+    stand collar. Returns ``(verts, faces, face_uvs, info)``; info carries the vertex groups the caller needs."""
+    rows, cols = spec["rows"], spec["cols"]
+    bod = spec["bodice"]
+    N = 2 * (cols - 1)
+    open_front = bool(bod.get("front_open"))
+    nc = N + 1 if open_front else N
+    angles = [1.5 * math.pi + c * 2 * math.pi / N for c in range(nc)]
+    row_y = spec["row_y"]
+    circ = []
+    for r in range(rows):
+        tot = 0.0
+        for p_ in spec["panels"]:
+            row = np.array(p_["grid_m"][r])
+            tot += float(np.sum(np.linalg.norm(np.diff(row, axis=0), axis=1)))
+        circ.append(tot)
+    verts, faces, fuv = [], [], []
+    tid = np.zeros((rows, nc), int)
+    for r in range(rows):
+        z = row_y[r]
+        for c in range(nc):
+            a = angles[c]
+            br = gd.body_radius(btree, centre, a, z)
+            rad = max(circ[r] / (2 * math.pi), br + BODICE_CLEAR_M)
+            tid[r, c] = len(verts)
+            verts.append((centre[0] + rad * math.cos(a), centre[1] + rad * math.sin(a), z))
+
+    def u_of(c):
+        return 0.01 + 0.98 * c / N
+
+    def v_rows(r):
+        return UV_TORSO[0] + (UV_TORSO[1] - UV_TORSO[0]) * (1.0 - r / (rows - 1))
+    band_y = bod["band_y"]
+    r_band = max(r for r in range(rows) if row_y[r] >= band_y - 1e-6) if any(y >= band_y for y in row_y) else rows - 1
+    side_c = {"l": N // 4, "r": 3 * N // 4}
+    straps = bod["shoulders"] == "straps"
+    sleeves = bod.get("sleeve") is not None and not straps
+    window = set()
+    if not straps:
+        for sc_ in side_c.values():
+            window.update(range(sc_ - WINDOW_COLS, sc_ + WINDOW_COLS))      # face columns c..c+1
+    span = nc - 1 if open_front else nc
+    # the neckline: a front column inside it ends at its own height (the neckline curve, from the shoulder line
+    # down by depth x shape) — its top kept vertex is moved onto the curve and its yoke columns are dropped
+    nj = bod["joints"].get("neck")
+    ncx, ncy = (nj[0], -nj[2]) if nj else (centre[0], centre[1])
+    depth = float(bod.get("depth_m") or 0.0)
+    hw = bod["neck_r"] + NECK_CUT_WIDEN_M
+    top_z = row_y[0]
+    rcut = [0] * nc
+    cutcol = [False] * nc
+    for c in range(nc):
+        x, y, _z = verts[tid[0, c]]
+        dx = abs(x - ncx)
+        if depth <= 0 or y >= ncy or dx >= hw:
+            continue
+        tx = dx / hw
+        shape = (1 - tx) if bod["neckline"] == "v" else math.sqrt(max(0.0, 1 - tx * tx))
+        zn = top_z - depth * shape
+        if zn > top_z - 0.002:
+            continue
+        rc = next((r for r in range(rows) if row_y[r] <= zn + 1e-6), rows - 1)
+        cutcol[c] = True
+        rcut[c] = rc
+        a = angles[c]
+        br = gd.body_radius(btree, centre, a, zn)
+        rad = max(circ[rc] / (2 * math.pi), br + BODICE_CLEAR_M)
+        verts[tid[rc, c]] = (centre[0] + rad * math.cos(a), centre[1] + rad * math.sin(a), zn)
+    for r in range(rows - 1):
+        for c in range(span):
+            c2 = (c + 1) % nc
+            if r < r_band and c in window:
+                continue
+            if r < max(rcut[c], rcut[c2]):
+                continue
+            faces.append((tid[r, c], tid[r, c2], tid[r + 1, c2], tid[r + 1, c]))
+            u1 = u_of(c + 1)
+            fuv.append(((u_of(c), v_rows(r)), (u1, v_rows(r)), (u1, v_rows(r + 1)), (u_of(c), v_rows(r + 1))))
+    # the cap: row 0 in to the neck ring, laid on the shoulders
+    neck_r = bod["neck_r"]
+    outer = [np.array(verts[tid[0, c]]) for c in range(nc)]
+    inner = [np.array((ncx + neck_r * math.cos(angles[c]), ncy + neck_r * math.sin(angles[c]))) for c in range(nc)]
+    reach = max(float(np.linalg.norm(outer[c][:2] - inner[c])) for c in range(nc))
+    K = max(3, int(round(reach / 0.015)))
+    cid = np.zeros((K + 1 + COLLAR_RINGS, nc), int)
+    cid[0] = tid[0]
+    # rays start under the chin (the neck base + 3.5 cm) so the yoke never climbs onto the head
+    ray_top = max(top_z, bod["neck_y"]) + 0.035
+    for k in range(1, K + 1):
+        t = k / K
+        for c in range(nc):
+            xy = (1 - t) * outer[c][:2] + t * inner[c]
+            zs = _ray_down(ftree, xy[0], xy[1], top=ray_top)
+            z = max(top_z - 0.06, (zs + CAP_CLEAR_M) if zs is not None else top_z)
+            cid[k, c] = len(verts)
+            verts.append((float(xy[0]), float(xy[1]), float(z)))
+    collar = bod.get("collar") in ("stand", "lapel")
+    nring = K + (COLLAR_RINGS if collar else 0)
+    for k in range(K + 1, nring + 1):
+        for c in range(nc):
+            x, y, z = verts[cid[K, c]]
+            sh = 0.97 ** (k - K)
+            cid[k, c] = len(verts)
+            verts.append((ncx + (x - ncx) * sh, ncy + (y - ncy) * sh, z + COLLAR_STEP_M * (k - K)))
+    for k in range(nring):
+        v0 = UV_CAP[0] + (UV_CAP[1] - UV_CAP[0]) * k / K if k < K else UV_COLLAR[0]
+        v1 = UV_CAP[0] + (UV_CAP[1] - UV_CAP[0]) * (k + 1) / K if k + 1 <= K else UV_COLLAR[1]
+        for c in range(span):
+            c2 = (c + 1) % nc
+            if cutcol[c] or cutcol[c2]:
+                continue
+            faces.append((cid[k, c], cid[k, c2], cid[k + 1, c2], cid[k + 1, c]))
+            u1 = u_of(c + 1)
+            fuv.append(((u_of(c), v0), (u1, v0), (u1, v1), (u_of(c), v1)))
+    # sleeves: ring 0 = the armhole loop
+    sleeve_rows = {}
+    if sleeves:
+        sl = bod["sleeve"]
+        for side, sc_ in side_c.items():
+            c0, c1 = sc_ - WINDOW_COLS, sc_ + WINDOW_COLS
+            loop = [tid[0, c] for c in range(c0, c1 + 1)]
+            loop += [tid[r, c1] for r in range(1, r_band + 1)]
+            loop += [tid[r_band, c] for c in range(c1 - 1, c0 - 1, -1)]
+            loop += [tid[r, c0] for r in range(r_band - 1, 0, -1)]
+            names = ("LeftArm", "LeftForeArm", "LeftHand") if side == "l" else ("RightArm", "RightForeArm", "RightHand")
+            A, E, H = (_bone_world(arm, n) for n in names)
+            seg = [(A, E), (E, H)]
+            lens = [float(np.linalg.norm(b - a)) for a, b in seg]
+
+            def axis_at(d):
+                if d <= lens[0]:
+                    a, b = seg[0]
+                    return a + (b - a) * d / lens[0], (b - a) / lens[0]
+                a, b = seg[1]
+                t = min(1.0, (d - lens[0]) / lens[1])
+                return a + (b - a) * t, (b - a) / lens[1]
+            L = np.array([verts[i] for i in loop])
+            t0 = (E - A) / lens[0]
+            d0 = float(np.dot(L.mean(0) - A, t0))
+            Q0, _ = axis_at(max(0.0, d0))
+            e1 = np.cross(t0, [0.0, 0.0, 1.0])
+            e1 /= np.linalg.norm(e1)
+            e2 = np.cross(e1, t0)
+            phi = np.arctan2((L - Q0) @ e2, (L - Q0) @ e1)
+            ring_ds = [(d, c) for d, c in sl["rings"] if d > d0 + 0.02]
+            if not ring_ds or ring_ds[-1][0] < sl["len_m"] - 1e-3:
+                ring_ds.append((max(sl["len_m"], d0 + 0.03), sl["rings"][-1][1]))
+            prev = loop
+            M = len(loop)
+            S = len(ring_ds)
+            u_lo, u_hi = (0.01, 0.49) if side == "l" else (0.51, 0.99)
+            rows_ids = [loop]
+            for j, (d, cj) in enumerate(ring_ds, start=1):
+                Q, t = axis_at(d)
+                f1 = np.cross(t, [0.0, 0.0, 1.0])
+                f1 /= np.linalg.norm(f1)
+                f2 = np.cross(f1, t)
+                w = min(1.0, max(0.0, (d - d0) / SLEEVE_BLEND_M))
+                w = w * w * (3 - 2 * w)
+                cur = []
+                for i in range(M):
+                    dirv = math.cos(phi[i]) * f1 + math.sin(phi[i]) * f2
+                    rad = max(cj / (2 * math.pi), _ray_in(ftree, Q, dirv) + SLEEVE_CLEAR_M)
+                    target = Q + rad * dirv
+                    moved = L[i] + (Q - Q0)
+                    cur.append(len(verts))
+                    verts.append(tuple((1 - w) * moved + w * target))
+                for i in range(M):
+                    i2 = (i + 1) % M
+                    faces.append((prev[i], prev[i2], cur[i2], cur[i]))
+                    ua = u_lo + (u_hi - u_lo) * i / M
+                    ub = u_lo + (u_hi - u_lo) * (i + 1) / M
+                    va = UV_SLEEVE[0] + (UV_SLEEVE[1] - UV_SLEEVE[0]) * (j - 1) / S
+                    vb = UV_SLEEVE[0] + (UV_SLEEVE[1] - UV_SLEEVE[0]) * j / S
+                    fuv.append(((ua, va), (ub, va), (ub, vb), (ua, vb)))
+                prev = cur
+                rows_ids.append(cur)
+            sleeve_rows[side] = rows_ids
+    # straps: above the chest band only the strap strips stay
+    V = np.array(verts)
+    keep = []
+    for f, uv in zip(faces, fuv):
+        cen = V[list(f)].mean(0)
+        x, z = cen[0] - ncx, cen[2]
+        if straps and z > band_y + 0.005 and abs(abs(x) - bod["strap_x"]) > bod["strap_w"] / 2:
+            continue
+        keep.append((f, uv))
+    faces = [f for f, _ in keep]
+    fuv = [uv for _, uv in keep]
+    used = {i for f in faces for i in f}
+    cap_ids = sorted({int(i) for i in cid[1:].ravel()} & used)
+    info = {"cap_ids": cap_ids, "sleeve_rings": {k: len(v) - 1 for k, v in sleeve_rows.items()}, "cap_rings": K,
+            "collar_rings": nring - K, "columns": nc, "r_band": r_band}
+    return verts, faces, fuv, info
+
+
+#: The pinned shoulder strip reaches this far in front of / behind the neck opening: farther, the front and back
+#: of a yoke built 1 cm off the chest would be held there as a step (seen A142, first run).
+PIN_DEPTH_M = 0.025
+
+
+def bodice_pins(obj, bod, ncx, ncy):
+    """Ruling A142 pin rule (spike A135): the collar and the shoulder line — the yoke (vertex group "cap") and the top
+    ``pin_band_m`` of the piece within ``pin_half_x`` of the neck, the torso rows front to back only across the
+    shoulder (``PIN_DEPTH_M``), plus the rim of the
+    neck opening down to the neckline's depth (an unpinned neckline sags into a deep scoop: seen A142). The sleeves
+    and the rest of the body hang free."""
+    co = np.array([v.co for v in obj.data.vertices])
+    top = co[:, 2].max()
+    cap = np.zeros(len(co), bool)
+    g = obj.vertex_groups.get("cap")
+    if g is not None:
+        for v in obj.data.vertices:
+            if any(ge.group == g.index for ge in v.groups):
+                cap[v.index] = True
+    # the yoke lying on the shoulders is pinned whole within pin_half_x; the torso rows only across the shoulder
+    strip = (np.abs(co[:, 0] - ncx) < bod["pin_half_x"]) & (
+        cap | ((co[:, 2] > top - bod["pin_band_m"]) & (np.abs(co[:, 1] - ncy) < bod["neck_r"] + PIN_DEPTH_M)))
+    rim = np.zeros(len(co), bool)
+    rim[gd.boundary_verts(obj)] = True
+    reach = bod["neck_r"] + 0.04
+    near_neck = (np.hypot(co[:, 0] - ncx, co[:, 1] - ncy) < reach + float(bod.get("depth_m") or 0.0)) \
+        & (co[:, 2] > top - float(bod.get("depth_m") or 0.0) - 0.08)
+    return np.where(strip | (rim & near_neck))[0]
+
+
 def split_slit(obj, angles, slit, hem_z, centre):
     """Split the vertical edges at the slit's angle from the hem up to ``depth_m``."""
     side, depth = slit.get("side"), float(slit.get("depth_m") or 0)
@@ -133,6 +401,9 @@ PLATE_OFF_M = 0.03
 #: The corrective drapes use at least this bending (a settle from the skinned pose crumples a soft
 #: fabric into folds a static shape cannot carry well).
 SHAPE_MIN_BENDING = 0.5
+#: A corrective drape that moved its cloth this far at p90 exploded (good ones move 6–32 mm, A141/A142): the shape is
+#: dropped (the skinned drape stays in that pose) and the drop is recorded.
+SHAPE_MAX_MOVE_P90_MM = 100.0
 
 
 def to_gltf(v):
@@ -140,15 +411,16 @@ def to_gltf(v):
     return (float(v[0]), float(v[2]), float(-v[1]))
 
 
-def driver_features(arm):
-    """The four leg segment directions with the hips' rotation since rest taken out, glTF axes."""
+def driver_features(arm, segments=DRIVER_SEGMENTS, frame="Hips"):
+    """The segment directions (joint head to joint head) with the ``frame`` joint's rotation since rest taken out,
+    glTF axes."""
     P = gd.P
-    hb = arm.pose.bones[P + "Hips"]
+    hb = arm.pose.bones[P + frame]
     rot = ((arm.matrix_world @ hb.matrix).to_3x3().normalized()
            @ (arm.matrix_world @ hb.bone.matrix_local).to_3x3().normalized().inverted())
     inv = rot.inverted()
     out = []
-    for a, b in DRIVER_SEGMENTS:
+    for a, b in segments:
         ha = arm.matrix_world @ arm.pose.bones[P + a].head
         hb2 = arm.matrix_world @ arm.pose.bones[P + b].head
         d = inv @ (hb2 - ha)
@@ -322,9 +594,11 @@ def supports(arm, body, pose):
     return out
 
 
-def pose_shape(arm, body, obj, pose, pin, names, W, rest_world, fab, thickness):
+def pose_shape(arm, body, obj, pose, pin, names, W, rest_world, fab, thickness, lower=(), frames=SHAPE_FRAMES):
     """The corrective of one pose, as world-space deltas at the bind pose (n x 3) + its numbers."""
     gd.set_pose(arm, pose)
+    for lo in lower:
+        apply_shapes(lo, arm)
     M = skin_matrices(arm, names)
     Mv = np.einsum("ng,gij->nij", W, M)
     ph = np.c_[rest_world, np.ones(len(rest_world))]
@@ -336,9 +610,10 @@ def pose_shape(arm, body, obj, pose, pin, names, W, rest_world, fab, thickness):
     tmp = bpy.data.objects.new("pose_" + pose, me)
     bpy.context.scene.collection.objects.link(tmp)
     held = supports(arm, body, pose)
-    cpu, wall, drift = gd.drape(tmp, body, pin, SHAPE_FRAMES, quality=int(fab["quality"]),
+    cpu, wall, drift = gd.drape(tmp, body, pin, frames, quality=int(fab["quality"]),
                                 bending=max(float(fab["bending"]), SHAPE_MIN_BENDING),
-                                shrink=float(fab.get("shrink", 0.0)), self_collision=False, thickness=thickness)
+                                shrink=float(fab.get("shrink", 0.0)), self_collision=False, thickness=thickness,
+                                extra=lower)
     draped = np.array([tmp.matrix_world @ v.co for v in tmp.data.vertices])
     for o in [tmp, *held]:
         bpy.data.objects.remove(o)
@@ -358,47 +633,197 @@ def export_glb(path, objs):
                               export_morph_normal=False, export_animations=False)
 
 
+def blend_groups(arm, groups):
+    """``{target: influence}`` over every pose-shape group (each blended by its own segments and frame)."""
+    out = {}
+    for g in groups:
+        out.update(blend(driver_features(arm, g["segments"], g["frame"]), g["samples"], g["sigma"]))
+    return out
+
+
+def apply_shapes(obj, arm):
+    """Set a lower layer's shape-key values for the armature's current pose (its own payload, Ruling A142)."""
+    payload = obj.get("pose_shapes_json")
+    keys = obj.data.shape_keys
+    if not payload or keys is None:
+        return
+    import json
+    inf = blend_groups(arm, json.loads(payload).get("groups") or [])
+    for kb in keys.key_blocks[1:]:
+        kb.value = float(inf.get(kb.name, 0.0))
+    bpy.context.view_layer.update()
+
+
+def load_lower(path, arm, payload):
+    """Import a lower drape GLB (Ruling A142 layering) and skin its garment to OUR armature (same bone names)."""
+    import json
+    before = set(bpy.data.objects)
+    bpy.ops.import_scene.gltf(filepath=str(path))
+    new = [o for o in bpy.data.objects if o not in before]
+    garment = max((o for o in new if o.type == "MESH"), key=lambda o: len(o.data.vertices))
+    mw = garment.matrix_world.copy()
+    garment.parent = arm
+    garment.matrix_world = mw
+    for m in garment.modifiers:
+        if m.type == "ARMATURE":
+            m.object = arm
+    for o in new:
+        if o is not garment:
+            bpy.data.objects.remove(o)
+    garment.name = "lower_" + Path(path).stem
+    garment["pose_shapes_json"] = json.dumps(payload or {})
+    garment.hide_render = True
+    return garment
+
+
+def _set_arm_angle(arm, deg):
+    """The arms lowered ``deg`` from the T-pose (the bake pose search)."""
+    gd.POSES["_bake"] = [("LeftArm", "Y", deg), ("RightArm", "Y", -deg)]
+    gd.set_pose(arm, "_bake")
+
+
+#: Arm angles (degrees below the T-pose) tried for the projection of a bodice's views.
+BAKE_ARM_DEG = (0, 20, 35, 50, 65, 80)
+
+
+#: Silhouette grid of the bake pose search (columns x rows over the alpha / outline box).
+SIL_W, SIL_H = 48, 64
+
+
+def _silhouette(xs, zs):
+    """Boolean SIL_H x SIL_W grid of points normalised to their own box, closed by a 1-cell dilation."""
+    g = np.zeros((SIL_H, SIL_W), bool)
+    fx = (xs - xs.min()) / max(1e-9, xs.max() - xs.min())
+    fz = (zs - zs.min()) / max(1e-9, zs.max() - zs.min())
+    g[np.clip((fz * (SIL_H - 1)).astype(int), 0, SIL_H - 1), np.clip((fx * (SIL_W - 1)).astype(int), 0, SIL_W - 1)] = True
+    d = g.copy()
+    for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        d |= np.roll(np.roll(g, dy, 0), dx, 1)
+    return d
+
+
+def bake_pose(arm, obj, views):
+    """Ruling A142 — the arm angle whose posed front silhouette matches the front view's alpha best (IoU on a
+    SIL_W x SIL_H grid, both normalised to their own box): an item picture shows a top with its sleeves hanging, a
+    T-posed drape would project its sleeve pixels onto the torso. Returns ``(deg, co, nr, info)`` (world positions /
+    normals in that pose)."""
+    im = bpy.data.images.load(views["view_front"])
+    w, h = im.size
+    px = np.array(im.pixels[:]).reshape(h, w, im.channels)
+    alpha = px[..., 3] if im.channels == 4 else np.ones((h, w))
+    ys, xs = np.where(alpha > 0.5)
+    want = np.zeros((SIL_H, SIL_W), bool)
+    fx = (xs - xs.min()) / max(1, xs.max() - xs.min())
+    fz = (ys - ys.min()) / max(1, ys.max() - ys.min())        # row 0 = bottom (Blender pixels)
+    want[np.clip((fz * (SIL_H - 1)).astype(int), 0, SIL_H - 1), np.clip((fx * (SIL_W - 1)).astype(int), 0, SIL_W - 1)] = True
+    best, scores = None, {}
+    for deg in BAKE_ARM_DEG:
+        _set_arm_angle(arm, deg)
+        co, nr, _t = gd.world_coords(obj)
+        front = nr[:, 1] <= 0
+        sil = _silhouette(co[front, 0], co[front, 2])
+        iou = float((sil & want).sum() / max(1, (sil | want).sum()))
+        scores[deg] = round(iou, 3)
+        if best is None or iou > best[0]:
+            best = (iou, deg, co, nr)
+    gd.set_pose(arm, "rest")
+    return best[1], best[2], best[3], {"iou": scores}
+
+
 def run(a):
     t_all, c_all = time.time(), time.process_time()
     inp, prm = a["inputs"], a["params"]
     out = Path(a["out_dir"])
     arm, body, _g = gd.load_fit(inp["body"])
     spec = prm["spec"]
+    bod = spec.get("bodice")
+    lower = []
+    for i, payload in enumerate(prm.get("lower_shapes") or []):
+        key = f"lower_{i}"
+        if inp.get(key):
+            lower.append(load_lower(inp[key], arm, payload))
     bco, _bn, btri = gd.world_coords(body)
     # the radius tree is the torso + legs only: a T-posed arm beside the chest band would
     # otherwise be the "body" a ray from outside meets first (the band then spans the arms)
     half = float(prm.get("torso_half_m") or 0.24)
     tri = np.asarray(btri)
     keep = np.all(np.abs(bco[tri][..., 0]) < half, axis=1)
-    btree = gd.bvh_of(bco, [tuple(t) for t in tri[keep]])
+    tri_t = [tuple(t) for t in tri[keep]]
+    co_all, tri_all = bco, [tuple(t) for t in tri]
+    for lo in lower:                       # a jacket starts outside the top it is worn over
+        lco, _ln, ltri = gd.world_coords(lo)
+        off = len(co_all)
+        co_all = np.vstack([co_all, lco])
+        lt = np.asarray(ltri) + off
+        tri_all += [tuple(t) for t in lt]
+        tri_t += [tuple(t) for t in lt[np.all(np.abs(co_all[lt][..., 0]) < half, axis=1)]]
+    btree = gd.bvh_of(co_all, tri_t)
+    ftree = gd.bvh_of(co_all, tri_all)
     top_z = spec["row_y"][0]
     sl = bco[np.abs(bco[:, 2] - top_z) < 0.01]
     centre = sl[:, :2].mean(0) if len(sl) else bco[:, :2].mean(0)
-    verts, faces, uvs, angles = wrap(spec, btree, centre)
-    me = bpy.data.meshes.new("template")
-    me.from_pydata(verts, [], faces)
-    uvl = me.uv_layers.new(name="UVMap")
-    for lp in me.loops:
-        uvl.data[lp.index].uv = uvs[lp.vertex_index]
-    obj = bpy.data.objects.new(prm["node"], me)
-    bpy.context.scene.collection.objects.link(obj)
-    bm = bmesh.new()
-    bm.from_mesh(me)
-    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=0.004)   # the two side seams
-    bm.to_mesh(me)
-    bm.free()
-    hem_z = spec["row_y"][-1]
-    slit_edges = split_slit(obj, angles, prm.get("slit") or {}, hem_z, centre)
+    if bod:
+        # the torso axis of a bodice is the spine (the slice at the shoulder line holds the arms' roots)
+        sp = _bone_world(arm, "Spine2")
+        centre = np.array([sp[0], sp[1]])
+        verts, faces, fuv, binfo = build_bodice(spec, btree, ftree, centre, arm)
+        me = bpy.data.meshes.new("template")
+        me.from_pydata(verts, [], faces)
+        uvl = me.uv_layers.new(name="UVMap")
+        for poly, uvs in zip(me.polygons, fuv):
+            for lp, uv in zip(poly.loop_indices, uvs):
+                uvl.data[lp].uv = uv
+        obj = bpy.data.objects.new(prm["node"], me)
+        bpy.context.scene.collection.objects.link(obj)
+        obj.vertex_groups.new(name="cap").add(binfo.pop("cap_ids"), 1.0, "REPLACE")
+        bm = bmesh.new()
+        bm.from_mesh(me)
+        loose = [v for v in bm.verts if not v.link_faces]
+        bmesh.ops.delete(bm, geom=loose, context="VERTS")
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+        bm.to_mesh(me)
+        bm.free()
+        slit_edges = 0
+    else:
+        binfo = {}
+        verts, faces, uvs, angles = wrap(spec, btree, centre)
+        me = bpy.data.meshes.new("template")
+        me.from_pydata(verts, [], faces)
+        uvl = me.uv_layers.new(name="UVMap")
+        for lp in me.loops:
+            uvl.data[lp.index].uv = uvs[lp.vertex_index]
+        obj = bpy.data.objects.new(prm["node"], me)
+        bpy.context.scene.collection.objects.link(obj)
+        bm = bmesh.new()
+        bm.from_mesh(me)
+        bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=0.004)   # the two side seams
+        bm.to_mesh(me)
+        bm.free()
+        hem_z = spec["row_y"][-1]
+        slit_edges = split_slit(obj, angles, prm.get("slit") or {}, hem_z, centre)
     me = obj.data
     co0 = np.array([v.co for v in me.vertices])
+    # outward normals (Solidify and the projection side test read them)
+    nrm = np.array([v.normal for v in me.vertices])
+    radial = co0[:, :2] - centre
+    if float(np.mean(np.einsum("ij,ij->i", nrm[:, :2], radial))) < 0:
+        bm = bmesh.new()
+        bm.from_mesh(me)
+        bmesh.ops.reverse_faces(bm, faces=bm.faces)
+        bm.to_mesh(me)
+        bm.free()
     edges = gd.edges_of(obj)
     rest_len = np.linalg.norm(co0[edges[:, 0]] - co0[edges[:, 1]], axis=1)
-    pin = np.where(co0[:, 2] > top_z - 0.004)[0]
+    if bod:
+        nj = bod["joints"].get("neck")
+        pin = bodice_pins(obj, bod, nj[0] if nj else centre[0], -nj[2] if nj else centre[1])
+    else:
+        pin = np.where(co0[:, 2] > top_z - 0.004)[0]
     fab = prm["fabric"]
     thickness = float(prm.get("thickness", 0.004))
     cpu, wall, drift = gd.drape(obj, body, pin, int(prm.get("frames", 50)), quality=int(fab["quality"]),
                                 bending=float(fab["bending"]), shrink=float(fab.get("shrink", 0.0)),
-                                self_collision=False, thickness=thickness)
+                                self_collision=False, thickness=thickness, extra=lower)
     me = obj.data
     co1 = np.array([v.co for v in me.vertices])
     st = np.linalg.norm(co1[edges[:, 0]] - co1[edges[:, 1]], axis=1) / np.maximum(rest_len, 1e-6)
@@ -407,17 +832,48 @@ def run(a):
                 "deg": round(math.degrees(math.atan2(worst[1] - centre[1], worst[0] - centre[0])) % 360, 1),
                 "over_1_3": int((st > 1.3).sum())}
     n_single = len(me.vertices)
-    hem, up = hem_sets(obj, top_z)
+    skirtish = prm.get("kind") in ("skirt", "dress")
+    hem, up = hem_sets(obj, top_z) if skirtish else (np.zeros(0, int), np.zeros(0, int))
+    if bod and len(hem):                   # the hem only: armholes, straps and the neckline are boundaries too
+        low = co0[hem, 2] < (spec.get("outline") or {}).get("waist_y", top_z) - 0.05
+        hem, up = hem[low], up[low]
     # skin the single layer (the corrective drapes need it), inpaint the free cloth's weights
     gd.bind_to_armature(obj, body, arm)
     weights = smooth_weights(obj, body) if prm.get("smooth_weights", True) else {}
     names, W = weight_matrix(obj)
     rest_world = np.array([obj.matrix_world @ v.co for v in obj.data.vertices])
-    shape_poses = [p for p in (prm.get("shape_poses") if prm.get("shape_poses") is not None else SHAPE_POSES)]
+    groups = [dict(g) for g in (prm.get("shape_groups") or [])]
     deltas, shape_info = {}, {}
     t_shape = time.time()
-    for pose in shape_poses:
-        deltas[pose], shape_info[pose] = pose_shape(arm, body, obj, pose, pin, names, W, rest_world, fab, thickness)
+    xs, zs = rest_world[:, 0], rest_world[:, 2]
+    ncx = (bod["joints"].get("neck") or [centre[0]])[0] if bod else centre[0]
+    band = bod["band_y"] if bod else 9.0
+    waist_z = (spec.get("outline") or {}).get("waist_y", -9.0)
+    for g in groups:
+        g["targets"] = []
+        for pose in g["poses"]:
+            if pose not in deltas.get("_raw", {}):
+                frames = int(g.get("frames") or SHAPE_FRAMES)
+                d, info = pose_shape(arm, body, obj, pose, pin, names, W, rest_world, fab, thickness, lower=lower,
+                                     frames=frames)
+                deltas.setdefault("_raw", {})[pose] = d
+                shape_info[pose] = info
+            d = deltas["_raw"][pose]
+            if shape_info[pose]["moved_p90_mm"] > SHAPE_MAX_MOVE_P90_MM:
+                shape_info[pose]["dropped"] = f"moved p90 {shape_info[pose]['moved_p90_mm']} mm"
+                continue
+            if g["name"] == "legs":
+                mask = np.clip((band - zs) / 0.05, 0.0, 1.0) if bod else np.ones(len(zs))
+                name = pose
+            else:
+                side = np.clip((xs - ncx) / 0.04 + 0.5, 0.0, 1.0)
+                side = side if g["side"] == "l" else 1.0 - side
+                below = np.clip((zs - (waist_z - 0.05)) / 0.1, 0.0, 1.0) if prm.get("kind") == "dress" else 1.0
+                mask = side * below
+                name = f"{pose}_{g['side']}"
+            deltas[name] = d * mask[:, None]
+            g["targets"].append(name)
+    deltas.pop("_raw", None)
     gd.set_pose(arm, "rest")
     shape_wall = round(time.time() - t_shape, 2)
     # Solidify without the armature in the stack: its copy layer follows the original vertex order
@@ -443,46 +899,73 @@ def run(a):
     targets = []
     if deltas:
         obj.shape_key_add(name="Basis", from_mix=False)
-        for pose in shape_poses:
-            kb = obj.shape_key_add(name=pose, from_mix=False)
-            dl = (deltas[pose] @ rot_inv.T)
-            full = np.tile(dl, (layers, 1))
-            flat = (co2 + full).astype(np.float32).ravel()
-            kb.data.foreach_set("co", flat)
-            kb.value = 0.0
-            targets.append(pose)
-    samples = []
-    for pose in [*ANCHOR_POSES, *shape_poses]:
-        gd.set_pose(arm, pose)
-        f = driver_features(arm)
-        target = pose if pose in deltas else None
-        samples.append({"pose": pose, "target": target, "dirs": f})
-        mf = mirror_features(f)
-        if max(abs(a - b) for u, v in zip(f, mf) for a, b in zip(u, v)) > 1e-3:
-            samples.append({"pose": pose + "_mirror", "target": target, "dirs": mf})
+        for g in groups:
+            for name in g["targets"]:
+                kb = obj.shape_key_add(name=name, from_mix=False)
+                dl = (deltas[name] @ rot_inv.T)
+                full = np.tile(dl, (layers, 1))
+                flat = (co2 + full).astype(np.float32).ravel()
+                kb.data.foreach_set("co", flat)
+                kb.value = 0.0
+                targets.append(name)
+    out_groups = []
+    for g in groups:
+        samples = []
+        for pose in [*g["anchors"], *g["poses"]]:
+            gd.set_pose(arm, pose)
+            f = driver_features(arm, g["segments"], g["frame"])
+            target = (pose if g["name"] == "legs" else f"{pose}_{g['side']}") if pose in g["poses"] else None
+            if target not in g["targets"]:
+                target = None              # an anchor, or a shape that was dropped
+            samples.append({"pose": pose, "target": target, "dirs": f})
+            if g.get("mirror"):
+                mf = mirror_features(f)
+                if max(abs(a - b) for u, v in zip(f, mf) for a, b in zip(u, v)) > 1e-3:
+                    samples.append({"pose": pose + "_mirror", "target": target, "dirs": mf})
+        out_groups.append({"name": g["name"], "frame": g["frame"], "segments": [list(x) for x in g["segments"]],
+                           "sigma": g["sigma"], "targets": list(g["targets"]), "samples": samples})
     gd.set_pose(arm, "rest")
-    pose_shapes = {"version": 1, "segments": [list(s) for s in DRIVER_SEGMENTS], "sigma": DRIVER_SIGMA,
-                   "targets": targets, "samples": samples} if targets else None
+    pose_shapes = {"version": 2, "targets": targets, "groups": out_groups} if targets else None
     t_bake = time.time()
-    tex = gd.project_bake(obj, {"view_front": inp["front"], "view_back": inp["back"]},
-                          out / "template_atlas.png", size=1024)
+    views = {"view_front": inp["front"], "view_back": inp["back"]}
+    bake_info = {}
+    if bod:
+        deg, bco_, bnr_, sil = bake_pose(arm, obj, views)
+        bake_info = {"arm_deg": deg, **sil}
+        tex = gd.project_bake(obj, views, out / "template_atlas.png", size=1024, co=bco_, nr=bnr_)
+    else:
+        tex = gd.project_bake(obj, views, out / "template_atlas.png", size=1024)
+    tex.update(bake_info)
     tex["wall_s"] = round(time.time() - t_bake, 2)
     edges2 = gd.edges_of(obj)
     rest2 = np.linalg.norm(co2[edges2[:, 0]] - co2[edges2[:, 1]], axis=1)
     rim = gd.boundary_verts(obj)
     view = gd.frame_of(co2)
     t_meas = time.time()
+    render_s = 0.0
     measured = {}
     for pose in prm.get("poses") or ["rest"]:
         gd.set_pose(arm, pose)
-        inf = blend(driver_features(arm), samples) if pose_shapes else {}
+        inf = blend_groups(arm, out_groups) if pose_shapes else {}
         for name in targets:
             obj.data.shape_keys.key_blocks[name].value = float(inf.get(name, 0.0))
+        for lo in lower:
+            apply_shapes(lo, arm)
         measured[pose] = gd.measure_pose(arm, body, obj, pose, rest2, edges2, rim)
-        measured[pose].update(hem_metrics(obj, body, hem, up))
+        if skirtish:
+            measured[pose].update(hem_metrics(obj, body, hem, up))
+        for k, lo in enumerate(lower):
+            lm = gd.measure_pose(arm, lo, obj, pose, rest2, edges2, rim)
+            measured[pose][f"layer_poke_share_{k}"] = lm["poke_share"]
+            measured[pose][f"layer_region_{k}"] = lm["region_body_verts"]
         measured[pose]["shapes"] = {k: round(v, 4) for k, v in inf.items()}
         if prm.get("render"):
+            t_r = time.time()
+            for lo in lower:
+                lo.hide_render = False
             gd.render(out / f"template_{pose}.png", view)
+            gd.render(out / f"template_{pose}_left.png", view, side=0.55)
+            render_s += time.time() - t_r
             # the posed garment (glTF axes, float32) for checks of a renderer against this pose
             gco, _gn, _gt = gd.world_coords(obj)
             np.ascontiguousarray(np.c_[gco[:, 0], gco[:, 2], -gco[:, 1]], np.float32).tofile(
@@ -498,16 +981,20 @@ def run(a):
         p = out / f"template_{pose}.png"
         if p.is_file():
             outputs[f"render_{pose}"] = str(p)
+        p = out / f"template_{pose}_left.png"
+        if p.is_file():
+            outputs[f"render_{pose}_left"] = str(p)
         q = out / f"template_{pose}_posed.f32"
         if q.is_file():
             outputs[f"posed_{pose}"] = str(q)
     data = {"verts": len(obj.data.vertices), "pins": int(len(pin)), "slit_edges": int(slit_edges),
+            "bodice": binfo, "lower_layers": len(lower),
             "drape": {"cpu_s": cpu, "wall_s": wall, "pin_drift_mm": drift,
                       "stretch_max": round(float(st.max()), 3), "stretch_at": worst_at, "stretch_p99": round(float(np.percentile(st, 99)), 3),
                       "quality": int(fab["quality"])},
             "weights": weights, "shapes": {"wall_s": shape_wall, **shape_info}, "pose_shapes": pose_shapes,
             "hem_verts": int(len(hem)),
-            "bake": tex, "draped": measured, "measure_wall_s": meas_s,
+            "bake": tex, "draped": measured, "measure_wall_s": meas_s, "render_wall_s": round(render_s, 2),
             "script_wall_s": round(time.time() - t_all, 2), "script_cpu_s": round(time.process_time() - c_all, 2)}
     return gd._plain(data), outputs
 
