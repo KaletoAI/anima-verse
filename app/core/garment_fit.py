@@ -252,6 +252,12 @@ SIDE_DEEP_M = 0.03
 #: "bat-wing" sheets under the arms; Kai's jacket and Kira's blazer re-lay their armhole ring). A piece with nothing
 #: on an arm (``sleeve_share`` 0: skirts, trousers) is unchanged bit for bit, so its version 16 fit (and a version 15
 #: one Auto keeps as generated) stays current (``seam_may_change``).
+#: clothing 18 (2026-11-16, Ruling A114 — a CPU refit of the clothing fits it can change, no hub job): a recess
+#: opening's seed lies ``OPEN_STEP_PX`` behind the ring's front near it too (``opening_lining``; Kai's leather jacket
+#: ``def323f99985``: 1181 faces of its front edge and collar left out -> 0, the hole at the top of the zip). Only the
+#: seeds changed, so a fit whose opening report has no recess component with a seed is unchanged bit for bit and its
+#: version 17 fit stays current (``opening_may_change``; in the worlds due at 17: that jacket on both bodies and
+#: Ylva's wrap skirt ``186f6282fd28``, which keeps the same 17 faces).
 #: footwear: its own fit (``footwear_fit``), versioned there.
 #: hair 17 (2026-11-15, Ruling A89 — a CPU refit of every HairDeck fit, no hub job): the cap's front edge is a
 #: hairline (``garment_hairdeck.hairline_offset``: an arc 6 mm higher at the temples, then a wide turn down towards
@@ -263,13 +269,16 @@ SIDE_DEEP_M = 0.03
 #: strands, fewer and shorter towards the hairline) instead of a band of straight-down cards; the cap under it is
 #: shaded root-dark to tip-light; every card's root end (and a fill card's tip) fades in vertex alpha
 #: (``root_fade``), so no card ends bluntly.
-FIT_VERSION: Dict[str, int] = {"hair": 18, "clothing": 17, "footwear": FOOTWEAR_FIT_VERSION}
+FIT_VERSION: Dict[str, int] = {"hair": 18, "clothing": 18, "footwear": FOOTWEAR_FIT_VERSION}
 #: The clothing fit version whose fits stay current under ``FIT_VERSION["clothing"]`` when Auto keeps their trunk as
 #: generated (Ruling A83, ``trunk_may_change``) and nothing rides an arm (Ruling A84, ``seam_may_change``).
 CLOTHING_TRUNK_UNCHANGED = 15
 #: The clothing fit version whose fits stay current under ``FIT_VERSION["clothing"]`` when nothing rides an arm
 #: (Ruling A84, ``seam_may_change``).
 CLOTHING_SEAM_UNCHANGED = 16
+#: The clothing fit version whose fits stay current under ``FIT_VERSION["clothing"]`` when no recess opening of theirs
+#: had a seed (Ruling A114, ``opening_may_change``) — and so on down the chain above.
+CLOTHING_SEEDS_UNCHANGED = 17
 
 
 def fit_version_for(kind: str, method: str = "") -> Optional[int]:
@@ -285,15 +294,36 @@ def expected_fit_version(record: Dict[str, Any]) -> Optional[int]:
     """``fit_version_for`` of a fit record (its ``kind`` and ``method``) — what its ``fit_version`` must say to be
     current. A clothing fit with nothing on an arm (``seam_may_change`` False) is current as it is at
     ``CLOTHING_SEAM_UNCHANGED`` (version 17 changed nothing for it, Ruling A84), and at ``CLOTHING_TRUNK_UNCHANGED``
-    when Auto keeps its trunk as generated (``trunk_may_change``; version 16 changed nothing for it, Ruling A83)."""
+    when Auto keeps its trunk as generated (``trunk_may_change``; version 16 changed nothing for it, Ruling A83) —
+    each only while no recess opening of it had a seed (``opening_may_change``: version 18 changed nothing for it,
+    Ruling A114)."""
     kind = str(record.get("kind") or "")
     version = record.get("fit_version")
-    if kind == "clothing" and not seam_may_change(record):
+    if kind == "clothing" and not opening_may_change(record):
+        if version == CLOTHING_SEEDS_UNCHANGED:
+            return CLOTHING_SEEDS_UNCHANGED
+    if kind == "clothing" and not opening_may_change(record) and not seam_may_change(record):
         if version == CLOTHING_SEAM_UNCHANGED:
             return CLOTHING_SEAM_UNCHANGED
         if version == CLOTHING_TRUNK_UNCHANGED and not trunk_may_change(record):
             return CLOTHING_TRUNK_UNCHANGED
     return fit_version_for(kind, str(record.get("method") or ""))
+
+
+def opening_may_change(record: Dict[str, Any]) -> bool:
+    """Ruling A114: whether a clothing fit made before the near-ring seed test would come out differently — its
+    opening report (``report.opening``) has a recess component with a seed; the test only removes seeds. A record
+    without the report (a fit without opening masks has none: nothing to change) may not; a component without a
+    ``seeds`` number counts as seeded."""
+    opening = (record.get("report") or {}).get("opening")
+    if not isinstance(opening, dict):
+        return False
+    for comp in opening.get("components") or []:
+        if isinstance(comp, dict) and comp.get("by") == "recess":
+            seeds = comp.get("seeds")
+            if not isinstance(seeds, (int, float)) or isinstance(seeds, bool) or seeds > 0:
+                return True
+    return False
 
 
 def seam_may_change(record: Dict[str, Any]) -> bool:
@@ -673,6 +703,14 @@ OPEN_SHOWN_OUTLINE_MAX = 0.25
 #: none (its seeds lie at its ring, -0.5 px median of a 50.2 px recess): 1613 -> 0 — and Kai's jeans (``825e34df4aaf``,
 #: the waistband's 4868 px): 614 -> 0.
 OPEN_INSIDE_SHARE = 0.5
+#: Ruling A114 (2026-11-16): a seed lies ``OPEN_STEP_PX`` behind the ring's front NEAR it too (the ring's mean front
+#: within ``OPEN_LOCAL_PX``), not only behind the ring's median. Kai's leather jacket ``def323f99985`` (open, 64 302 px
+#: opening, recess 37.9 px, 615 px/m): its 450 seeds were its left front edge and the collar beside the zip — behind
+#: the ring's median (106.2 px) only because the collar curves back toward the neck, but -26.8 / -5.6 / +1.7 px
+#: (p5 / p50 / p95) behind the ring next to them, i.e. the front itself; 1181 faces went, a hole at the top of the zip
+#: (the piece's own mesh view has none). Now 0 seeds, nothing left out (its inside, the back panel, is one layer).
+#: The insides kept: Ylva's wrap skirt ``186f6282fd28`` (27.2 / 36.0 / 44.5 px behind its near ring, 17 faces, same)
+#: and Kira's earlier blazer ``2860e5a646c0`` (5.9 / 15.8 / 26.2 px: 104 -> 68 seeds, the same 657 faces).
 #: Most sampling steps per face edge of the dense depth images (``_depth_images``, Ruling A51): a face that long gets
 #: (401 x 402) / 2 = 80 601 samples; the remeshed blazer's longest face is 57 px, its median 10.
 OPEN_DENSE_MAX = 400
@@ -749,6 +787,15 @@ def opening_lining(Pd: np.ndarray, Fd: np.ndarray, opening, garment_mask,
             near = ndimage.binary_dilation(comp, iterations=OPEN_REACH_PX)[iy, ix]
             inside_depth[near] = np.maximum(inside_depth[near], ring_front - OPEN_INSIDE_SHARE * recess)
             deep = depth <= ring_front - OPEN_INSIDE_SHARE * recess
+            # Ruling A114: and OPEN_STEP_PX behind the ring's front NEAR it (its mean within OPEN_LOCAL_PX) — a
+            # front edge that only lies behind the ring's median because the garment curves back there (the collar
+            # at the neck) is no inside; where no ring lies that near, the median alone decides.
+            ring_ok = ring & np.isfinite(front)
+            win = 2 * OPEN_LOCAL_PX + 1
+            den = ndimage.uniform_filter(ring_ok.astype(np.float64), win)
+            num = ndimage.uniform_filter(np.where(ring_ok, front, 0.0), win)
+            local = np.where(den > 1e-9, num / np.maximum(den, 1e-9), np.inf)[iy, ix]
+            deep &= depth <= local - OPEN_STEP_PX
             entry["seeds"] = int((inside & layered & recessed & deep).sum())
             seeds |= inside & layered & recessed & deep
             accepted |= comp

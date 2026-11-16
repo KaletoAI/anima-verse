@@ -55,7 +55,7 @@ rounds its four corners by 3 + 2 + 1 = 6 px each: the component is 7476 px.
     OPEN_DENSE_MAX 400 — so samples lie at most 1 px apart): all 7500 opening px
     see the back at -52.5 (within 0.01). With the two-triangle back panel [2] holds unchanged: 1525 vertices, 2880
     faces.
-[6] The due rule (``expected_fit_version``): FIT_VERSION clothing 17 (13 was Ruling A51's openings, 14 Ruling A72's
+[6] The due rule (``expected_fit_version``): FIT_VERSION clothing 18 (18 Ruling A114's seeds, 13 was Ruling A51's openings, 14 Ruling A72's
     repaired donors — A51's exemption of a version 12 record without a deep opening went with it —, 15 Ruling
     A76's kept sheet order, which changes every clothing fit, 16 Ruling A83's trunk laid onto the body, 17 Ruling
     A84's armpit seam). Every clothing record below 15 expects 17 (stale) — version 12 with a kept deep component,
@@ -234,25 +234,25 @@ kept = {"components": [{"pixels": 100, "recess_px": 5.0, "dropped": False}], "fa
 shallow = {"components": [{"pixels": 100, "recess_px": 3.0, "dropped": False}], "faces": 0}
 gone = {"components": [{"pixels": 100, "recess_px": 50.0, "dropped": True}], "faces": 12}
 cases = [
-    ({"kind": "clothing", "fit_version": 12, "report": {"opening": kept}}, 17),
-    ({"kind": "clothing", "fit_version": 12, "report": {"opening": shallow}}, 17),
-    ({"kind": "clothing", "fit_version": 12, "report": {"opening": gone}}, 17),
-    ({"kind": "clothing", "fit_version": 12, "report": {"opening": None}}, 17),
-    ({"kind": "clothing", "fit_version": 12}, 17),
-    ({"kind": "clothing", "fit_version": 11, "report": {"opening": gone}}, 17),
-    ({"kind": "clothing", "fit_version": 13, "report": {"opening": kept}}, 17),
-    ({"kind": "clothing", "fit_version": 14, "report": {"opening": kept}}, 17),
-    ({"kind": "clothing", "fit_version": 15, "report": {"opening": kept}}, 17),
-    ({"kind": "clothing", "fit_version": 16, "report": {"opening": kept}}, 17),
+    ({"kind": "clothing", "fit_version": 12, "report": {"opening": kept}}, 18),
+    ({"kind": "clothing", "fit_version": 12, "report": {"opening": shallow}}, 18),
+    ({"kind": "clothing", "fit_version": 12, "report": {"opening": gone}}, 18),
+    ({"kind": "clothing", "fit_version": 12, "report": {"opening": None}}, 18),
+    ({"kind": "clothing", "fit_version": 12}, 18),
+    ({"kind": "clothing", "fit_version": 11, "report": {"opening": gone}}, 18),
+    ({"kind": "clothing", "fit_version": 13, "report": {"opening": kept}}, 18),
+    ({"kind": "clothing", "fit_version": 14, "report": {"opening": kept}}, 18),
+    ({"kind": "clothing", "fit_version": 15, "report": {"opening": kept}}, 18),
+    ({"kind": "clothing", "fit_version": 16, "report": {"opening": kept}}, 18),
     ({"kind": "clothing", "fit_version": 15, "report": {"opening": kept, "transfer": {"sleeve_share": 0.0}}}, 15),
     ({"kind": "clothing", "fit_version": 16, "report": {"opening": kept, "transfer": {"sleeve_share": 0.0}}}, 16),
     ({"kind": "hair", "fit_version": 12}, gf.FIT_VERSION["hair"]),
     ({"kind": "footwear", "fit_version": 12, "method": "shoe"}, gf.FIT_VERSION["footwear"]),
 ]
 got = [gf.expected_fit_version(r) for r, _want in cases]
-check("[6] FIT_VERSION clothing 17, no A51 exemption left",
-      gf.FIT_VERSION["clothing"] == 17 and not hasattr(gf, "CLOTHING_OPENING_UNCHANGED"), f"{gf.FIT_VERSION}")
-check("[6] expected versions: every clothing record -> 17 (15 / 16 kept without sleeves), other kinds as before",
+check("[6] FIT_VERSION clothing 18, no A51 exemption left",
+      gf.FIT_VERSION["clothing"] == 18 and not hasattr(gf, "CLOTHING_OPENING_UNCHANGED"), f"{gf.FIT_VERSION}")
+check("[6] expected versions: every clothing record -> 18 (15 / 16 kept without sleeves), other kinds as before",
       got == [want for _r, want in cases], f"{got}")
 
 # [8] the evidence: worn minus base

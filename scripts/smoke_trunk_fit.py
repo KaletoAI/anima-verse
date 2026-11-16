@@ -48,7 +48,7 @@ bin edge of the 36 directions), x = r sin t, z = r cos t (the frame's angle 0 is
 [5] Fit settings: ``normalise`` gives ``trunk`` "auto" by default, keeps "fitted" / "generated", drops "wider";
     ``validate`` keeps trunk "fitted" and refuses "wider", True and 1; a record made before the trunk setting (no
     ``trunk`` key) under a profile without one is not due, under trunk "fitted" it is.
-[6] Versions: FIT_VERSION clothing 17 (Ruling A84, smoke_armpit_seam [4]), CLOTHING_TRUNK_UNCHANGED 15. With
+[6] Versions: FIT_VERSION clothing 18 (Ruling A114; 17 by Ruling A84, smoke_armpit_seam [4]), CLOTHING_TRUNK_UNCHANGED 15. With
     nothing on an arm (report ``transfer.sleeve_share`` 0, so Ruling A84 changed nothing either),
     ``expected_fit_version`` of a clothing record of version 15 whose own metrics keep Auto as generated (Kira's
     blazer's numbers torso_gap 0.0138 / front 0.0126) -> 15 (it stays current); the blouse's (0.0232 / 0.0381) -> 17
@@ -227,21 +227,21 @@ def test_settings():
 
 def test_versions(gf):
     print("[6] versions")
-    check("[6] FIT_VERSION clothing 17, CLOTHING_TRUNK_UNCHANGED 15",
-          gf.FIT_VERSION["clothing"] == 17 and gf.CLOTHING_TRUNK_UNCHANGED == 15, gf.FIT_VERSION)
+    check("[6] FIT_VERSION clothing 18, CLOTHING_TRUNK_UNCHANGED 15",
+          gf.FIT_VERSION["clothing"] == 18 and gf.CLOTHING_TRUNK_UNCHANGED == 15, gf.FIT_VERSION)
 
     def rec(version, room=None, front=None, kind="clothing", share=0.0):
         metrics = {} if room is None else {"torso_gap_p50_m": room, "trunk_front_gap_p50_m": front}
         return {"kind": kind, "fit_version": version, "metrics": metrics,
                 "report": {"transfer": {"sleeve_share": share}}}
     cases = [("v15 blazer 13.8 / 12.6 mm stays current", rec(15, 0.0138, 0.0126), 15),
-             ("v15 blouse 23.2 / 38.1 mm is due", rec(15, 0.0232, 0.0381), 17),
-             ("v15 room 31 mm is due", rec(15, 0.031, 0.010), 17),
+             ("v15 blouse 23.2 / 38.1 mm is due", rec(15, 0.0232, 0.0381), 18),
+             ("v15 room 31 mm is due", rec(15, 0.031, 0.010), 18),
              ("v15 without metrics stays current", rec(15), 15),
-             ("v14 is due", rec(14, 0.0138, 0.0126), 17),
+             ("v14 is due", rec(14, 0.0138, 0.0126), 18),
              ("v16 is current", rec(16, 0.0232, 0.0381), 16),
              ("v17 is current", rec(17, 0.0232, 0.0381), 17),
-             ("v15 with sleeves is due", rec(15, 0.0138, 0.0126, share=0.3762), 17),
+             ("v15 with sleeves is due", rec(15, 0.0138, 0.0126, share=0.3762), 18),
              ("hair keeps its own", rec(15, kind="hair"), gf.FIT_VERSION["hair"])]
     for label, record, want in cases:
         got = gf.expected_fit_version(record)
