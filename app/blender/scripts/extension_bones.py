@@ -372,6 +372,7 @@ OUTLINE_SHADED_SLOPE = 1.5                    # a softer jump counts with a shad
 OUTLINE_SHADOW = .97                          # boundary luminance below this share of the half-round's
 OUTLINE_POINTS_MIN = 5                        # crease points per side
 OUTLINE_RMS_MAX_M = .008                      # circle fit residual
+OUTLINE_ARC_TOLERANCE_M = .01
 OUTLINE_LINE_SPAN_M = (.02,.03)               # upper chest line: below / above the band top
 OUTLINE_LINE_LEAVE_M = .002                   # the surface stands this far in front of the line
 OUTLINE_BUMP_SIGMAS_M = (.006,.04)
@@ -495,6 +496,11 @@ def outline_locate(p, front, mid, lo, hi):
             inner.append(row[int(np.argmax(g))][0])
     inner = max(float(np.median(inner)) if inner else cd-radius,p['side_margin'])
     bottom,outer = float(P[:,1].min()),float(P[:,0].max())
+    # The crease points must lie on the circle's lower half: its bottom and
+    # outer side where the crease is (measured 2-3 mm off on both models; a
+    # cap without an undercut, whose steepest steps scatter, 5 cm).
+    if abs(cz-radius-bottom) > OUTLINE_ARC_TOLERANCE_M or abs(cd+radius-outer) > OUTLINE_ARC_TOLERANCE_M:
+        return None,'outline: crease off its circle (bottom %.3f/%.3f, outer %.3f/%.3f)'%(bottom,cz-radius,outer,cd+radius)
     if outer-inner < 2*p['boundary_s_min'] or top-bottom < 2*p['boundary_s_min']:
         return None,'outline: extent %.3f x %.3f'%(outer-inner,top-bottom)
     return ({'centre':[.5*(inner+outer),.5*(bottom+top)],'half':[.5*(outer-inner),.5*(top-bottom)],
