@@ -19,11 +19,11 @@ import {
   bindRelativeValues, hipsTrackMedian, mapHipsTrack, normBoneName, restCorrections, restPoseOf,
   rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM, clipShiftM, figureBox,
   applyFootPose, footPoseLiftM, footPoseMatches, plantFootPose, transplantedRestPose, seatFootLift,
-  STRAND_RECORD_VERSION, consumerPartnerCapsules, createFigureRuntime, bendLimitsOf, BEND_LIMITS_DEFAULT,
+  STRAND_RECORD_VERSION, consumerPartnerCapsules, createFigureRuntime, bendLimitsOf, BEND_LIMITS_DEFAULT, rootAngleOf,
 } from '@anima/scene-render';
 import type { RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, CollisionPayload,
   FootPose, HairStrandRecord, StrandHair, CapsuleNow, PartnerSnapshot, OpeningSegment,
-  ChannelOccupants, ContactRelation, FigureInspection, FigureRuntime, FrameFigure, BendLimits } from '@anima/scene-render';
+  ChannelOccupants, ContactRelation, FigureInspection, FigureRuntime, FrameFigure, BendLimits, RootAngle } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import { applyFigureTexture, zeroFigureMetalness } from './figureMaterials';
 import type { ApiModel } from '../api';
@@ -88,6 +88,12 @@ export function setClipContactRelations(clip: THREE.AnimationClip, rel: ContactR
 const clipBendLimits = new WeakMap<THREE.AnimationClip, BendLimits>();
 export function setClipBendLimits(clip: THREE.AnimationClip, wire: unknown): void {
   if (wire && typeof wire === 'object') clipBendLimits.set(clip, bendLimitsOf(wire));
+}
+/** Ruling A158: a pair/group clip's direct root angle of the attached part (`root_angle` of the listing; absent = 0/0). */
+const clipRootAngles = new WeakMap<THREE.AnimationClip, RootAngle>();
+export function setClipRootAngle(clip: THREE.AnimationClip, wire: unknown): void {
+  const a = rootAngleOf(wire);
+  if (a.pitchDeg || a.yawDeg) clipRootAngles.set(clip, a);
 }
 /** The bend limits of a played clip (the core default when the listing names none). */
 export function clipBendLimitsOf(clip: THREE.AnimationClip | null | undefined): BendLimits {
@@ -157,6 +163,8 @@ function carryClipLoops(from: readonly THREE.AnimationClip[],
     if (rel) clipContactRelations.set(c, rel);
     const bend = source && clipBendLimits.get(source);
     if (bend) clipBendLimits.set(c, bend);
+    const rootAngle = source && clipRootAngles.get(source);
+    if (rootAngle) clipRootAngles.set(c, rootAngle);
   }
 }
 
@@ -1095,7 +1103,7 @@ export class FigureLibrary {
       const sources: Array<{ kind: string; set: string; url: string; loop?: boolean; loopCount?: number | null;
                              rootMotion?: boolean; rootMotionMode?: string; heightOffsets?: ClipHeightOffsetsCm; shift?: ClipShiftCm | null;
                              partnerTurn?: [number, number] | null; contacts?: ContactRelation[] | null;
-                             bend?: unknown }> =
+                             bend?: unknown; rootAngle?: unknown }> =
         serverClips.map((c) => ({
           kind: clipIndexName(c), set: c.set ?? '',
           url: c.url, loop: c.loop, loopCount: c.loop_count,
@@ -1106,6 +1114,7 @@ export class FigureLibrary {
           partnerTurn: c.orientation?.partner_turn_deg,
           contacts: c.contact_target?.relations,
           bend: c.bend_limits?.limits,
+          rootAngle: c.root_angle,
         }));
       if (!sources.length) {
         // Dev/offline fallback: the local manifest clips (no sets)
@@ -1164,6 +1173,7 @@ export class FigureLibrary {
           setClipPartnerTurn(clip, source.partnerTurn);
           setClipContactRelations(clip, source.contacts);
           setClipBendLimits(clip, source.bend);
+          setClipRootAngle(clip, source.rootAngle);
         },
         isPair: isPairClipName,
         pairRoot: extractRootPath,
@@ -1244,6 +1254,7 @@ export class FigureLibrary {
               setClipPartnerTurn(clip, source.orientation?.partner_turn_deg);
               setClipContactRelations(clip, source.contact_target?.relations);
               setClipBendLimits(clip, source.bend_limits?.limits);
+              setClipRootAngle(clip, source.root_angle);
             }
           } catch (e) { console.warn('[figures] clip reload not loadable', source.url, e); }
         }
@@ -1798,6 +1809,8 @@ export class FigureLibrary {
           if (rel) clipContactRelations.set(c, rel);
           const bend = clipBendLimits.get(clip);
           if (bend) clipBendLimits.set(c, bend);
+          const rootAngle = clipRootAngles.get(clip);
+          if (rootAngle) clipRootAngles.set(c, rootAngle);
           out.push(c);
           break;
         }
@@ -2280,6 +2293,17 @@ export class Figure {
   /** Ruling A145: the bend limits of the clip playing now (the core default without its own). */
   get bendLimits(): BendLimits {
     return clipBendLimitsOf(this.current?.getClip());
+  }
+
+  /** Ruling A158: the direct root angle of the clip playing now (null = none). */
+  get clipRootAngle(): RootAngle | null {
+    const clip = this.current?.getClip();
+    return (clip && clipRootAngles.get(clip)) || null;
+  }
+
+  /** Ruling A158: the root angle this figure's attached part takes from the next phase B on (null = none). */
+  setRootAngle(angle: RootAngle | null): void {
+    this.runtime.setRootAngle(angle);
   }
 
   /** Ruling A145: bend chain `index` of `inspect().chains` this frame (`FigureRuntime.bendChain`). */

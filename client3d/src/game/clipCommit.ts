@@ -9,6 +9,8 @@ export interface ClipSource {
   contacts?: { part: string; at: string; target: 'channel' | 'hand_left' | 'hand_right' | 'head_front' | 'none' }[] | null;
   /** Ruling A145: the clip's bend limits as listed (`bend_limits.limits`). */
   bend?: unknown;
+  /** Ruling A158: the clip's direct root angle as listed (`root_angle`). */
+  rootAngle?: unknown;
 }
 export interface ClipResult<C> { clip: C | null }
 export interface CommitOps<C> {

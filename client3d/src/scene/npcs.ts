@@ -18,8 +18,8 @@ import type { PhotoSubject } from '../game/photoView';
 import { bodyYawForView, eyeHeight } from './cameraFraming';
 import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
 import { pickStrandFigures, STRAND_LIMITS, eulerYXZ, fixPivot, fixRoot, partnerTurnFix, composeFix, createPairFit,
-  pairFitObserve, pairFitTotal, findContact, contactSampleOf, turnAxes, RUNTIME_FIT, bendFrameOf,
-  type PairFix, type PairFitState, bendSample } from '@anima/scene-render';
+  pairFitObserve, pairFitTotal, findContact, contactSampleOf, turnAxes, RUNTIME_FIT,
+  type PairFix, type PairFitState, type RootAngle, bendSample } from '@anima/scene-render';
 import { OPENING_BUDGET, runFigureFrame, strandCandidates, type FrameEntry, type FrameLoopState,
   type StrandFigureView } from '@anima/scene-render';
 import { WALK_CLEARANCE_M } from '../game/ground';
@@ -342,9 +342,7 @@ export class NpcManager {
     hit: { chain: number; channel: string } | null; none: boolean; pivot: [number, number, number] | null
     /** Ruling A139: the interaction this record belongs to (the map key is `<id>|<relation>`). */
     interaction: string
-    axes: [number, number, number][]
-    /** Ruling A150: the entering figure's root frame this frame (the bend's root lever turns about its axes). */
-    frame: number[] | null }>();
+    axes: [number, number, number][] }>();
   /** A102b: the rotating start of the opening pass (`runFigureFrame`, from `tickSecondary`). */
   private readonly frameState: FrameLoopState = { openingTurn: 0 };
   onPropEntryError: ((message: string) => void) | null = null;
@@ -1552,7 +1550,6 @@ export class NpcManager {
     if (rec) {
       rec.pivot = got.pivot;
       rec.axes = turnAxes(got.frame);
-      rec.frame = got.frame;
       const it = npc.interaction;
       const phase = it && it.clipDuration > 0 ? it.clipT % it.clipDuration : undefined;
       if (rec.hit) fix = composeFix(fix, pairFitTotal(rec.st, phase));
@@ -2366,9 +2363,22 @@ export class NpcManager {
     const entries: FrameEntry[] = [];
     for (const npc of this.npcs.values()) {
       entries.push({ name: npc.name, interaction: npc.interaction ?? null, figure: npc.figure });
+      npc.figure?.setRootAngle(this.rootAngleOf(npc));
     }
     runFigureFrame(entries, this.frameState, OPENING_BUDGET);
     this.observePairFits();
+  }
+
+  /** Ruling A158: the clip's direct root angle for this figure — only in a pair/group interaction, and only on a part
+   *  role of its contact relations (none declared: every role; only a figure with an attached part turns). */
+  private rootAngleOf(npc: Npc): RootAngle | null {
+    const it = npc.interaction, fig = npc.figure;
+    if (!it || !fig || !it.base.includes('__')) return null;
+    const angle = fig.clipRootAngle;
+    if (!angle) return null;
+    const role = it.base.slice(it.base.lastIndexOf('__') + 2);
+    const parts = fig.contactRelations.filter((r) => r.target !== 'none').map((r) => r.part);
+    return !parts.length || parts.includes(role) ? angle : null;
   }
 
   /** Ruling A150: the place type the entering figure of a pair stands on (the turn cap of the posture), null = the
@@ -2412,7 +2422,7 @@ export class NpcManager {
         // Ruling A145: the attached part bends first, within the clip's bend limits.
         const bend = list.map((n) => n.figure!.bendLimits)[0] ?? null;
         rec = { key, st: createPairFit(bend), entering: '', receiving: '', hit: null, none: false, pivot: null, axes: [],
-          interaction: id, frame: null };
+          interaction: id };
         this.pairFits.set(k, rec);
       }
       if (rec.none) return;
@@ -2447,8 +2457,8 @@ export class NpcManager {
       if (!ie || !ir || !rec.pivot || !(it.clipDuration > 0)) return;
       const found = contactSampleOf(ie, ir, rec.hit, rec.pivot);
       if (!found) return;
-      // Ruling A150: the root lever turns about the entering figure's body axes; the support comes with the sample.
-      const sample = rec.frame ? { ...found, frame: bendFrameOf(rec.frame) } : found;
+      // Ruling A158: the clip's root angle is already on the chain the sample was read from.
+      const sample = found;
       // Ruling A145: bend the chain bones of this frame (the same solve the fit's follow reads), then observe.
       if (rec.st.bend) {
         const b = bendSample(sample, rec.st.bend).bend;
