@@ -1042,7 +1042,7 @@ export function PosesTab() {
     // (facets, list, preview+import), the page itself does not — otherwise
     // the import button sat below the browser's bottom edge.
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      <div className="ga-poses-sub" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
         {viewSwitch}
         {view === 'catalog'
           ? <ClipCatalog onCreatePose={startFromClip} rootDropOf={rootDropOf} />

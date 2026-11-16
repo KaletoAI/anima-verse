@@ -30,6 +30,8 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ClipPreview, type PlayWindow } from './ClipPreview'
+import { takeLamp } from './clipStatus'
+import { LampDot } from './StatusLamp'
 import { SliderInput } from '../../components/SliderInput'
 import { Sparkline } from './Sparkline'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -557,7 +559,7 @@ export function ClipCatalog({ onCreatePose, rootDropOf }: {
   }
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '220px minmax(320px, 1.1fr) minmax(340px, 1.2fr)', gap: 14,
+    <div style={{ display: 'grid', gridTemplateColumns: '190px minmax(300px, 0.8fr) minmax(600px, 1.7fr)', gap: 14,
                   alignItems: 'stretch', flex: 1, minHeight: 0 }}>
       {/* ── facets ── */}
       <aside style={{ display: 'flex', flexDirection: 'column', gap: 10, minHeight: 0, overflowY: 'auto' }}>
@@ -704,7 +706,8 @@ export function ClipCatalog({ onCreatePose, rootDropOf }: {
         {!selected ? (
           <div className="ga-placeholder">{t('Pick a take to see its metrics and import it.')}</div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 14, alignItems: 'start' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div>
               <h3 style={{ margin: '0 0 2px' }}>
                 <code>{selected.id}</code> — {selected.description}
@@ -782,68 +785,6 @@ export function ClipCatalog({ onCreatePose, rootDropOf }: {
                 />
               </div>
             </div>
-
-            {selected.clip && selected.clip_urls && (selected.clip_urls.solo || selected.clip_urls.a) ? (
-              <>
-                <ClipPreview urls={selected.clip_urls} height={280} window={playWindow}
-                  speed={Number(speed) || 1} importYaw={yawDeg + frameYaw} footprint={footprint}
-                  rootDrop={footprint ? (rootDropOf?.(footprint) ?? 0) : 0} />
-                {/* THE ORIENTATION DIAL. It turns the preview live and is
-                    baked by the import — the same rotation on both sides
-                    (scripts/smoke_clip_yaw.py). The footprint beside it is
-                    what the angle is set AGAINST: a sleeper has to lie along
-                    the bed, and without an outline on the ground there is
-                    nothing to judge that by. */}
-                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                  <SliderInput
-                    label={t('Turn the clip')}
-                    unit="°"
-                    title={t('Degrees the import bakes into the clip. The converter aims the root’s FORWARD axis at +Z, which is the facing of a standing actor and the belly direction of a lying one — so a lying take needs its angle set here.')}
-                    min={-180}
-                    max={180}
-                    step={5}
-                    fineStep={1}
-                    value={yawDeg}
-                    onChange={setYawDeg}
-                    sliderWidth="auto"
-                    sliderStyle={{ flex: 1, minWidth: 90 }}
-                    style={{ display: 'flex', flex: '1 1 260px' }}
-                  />
-                  <button type="button" className="ga-btn ga-btn-sm"
-                    onClick={() => setYawDeg((v) => ((v - 90 + 540) % 360) - 180)}>−90°</button>
-                  <button type="button" className="ga-btn ga-btn-sm"
-                    onClick={() => setYawDeg((v) => ((v + 90 + 540) % 360) - 180)}>+90°</button>
-                  <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                    <span className="ga-hint">{t('Turn against')}</span>
-                    <select className="ga-input" value={footprint}
-                      onChange={(e) => setFootprint(e.target.value)}>
-                      <option value="">{t('grid only')}</option>
-                      <option value="lie">{t('bed / lying surface')}</option>
-                      <option value="seat">{t('seat')}</option>
-                    </select>
-                  </label>
-                </div>
-                {frameYaw ? (
-                  <div className="ga-hint">
-                    {t('The window starts later than the take, where the actor is turned by')}
-                    {` ${(-frameYaw).toFixed(1)}° — `}
-                    {t('the preview is turned with it, so it shows the import’s own framing.')}
-                  </div>
-                ) : null}
-                {loopOn && !selected.pair ? (
-                  <div className="ga-hint">
-                    {loopCut
-                      ? `${t('Loop cut the import will make')}: ${loopCut.start.toFixed(2)} – ${loopCut.end.toFixed(2)} s`
-                        + (loopCut.seam !== null ? ` · ${t('seam')} ${loopCut.seam.toFixed(2)}` : '')
-                      : t('Computing the loop cut…')}
-                  </div>
-                ) : null}
-              </>
-            ) : (
-              <div className="ga-form-hint">
-                {t('Not converted yet — the bulk conversion has not reached this take. It can still be imported: the import converts the original recording directly.')}
-              </div>
-            )}
 
             {/* ── import form ── */}
             <div style={{ borderTop: '1px solid var(--border, #30363d)', paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -932,7 +873,7 @@ export function ClipCatalog({ onCreatePose, rootDropOf }: {
                     || (!selected.pair && rootMotionBlocksLoop(loopOn, rootMotion))}
                   onClick={runImport}
                 >
-                  {importing ? t('Converting with Blender…') : t('Import')}
+                  {importing ? t('Converting with Blender…') : t('Import (one Blender run, no hub jobs)')}
                 </button>
                 {lastImported ? (
                   <>
@@ -952,6 +893,71 @@ export function ClipCatalog({ onCreatePose, rootDropOf }: {
                   : t('One Blender run of a few seconds; the new kind is selectable in the pose editor right after.')}
               </div>
             </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {selected.clip && selected.clip_urls && (selected.clip_urls.solo || selected.clip_urls.a) ? (
+              <>
+                <ClipPreview urls={selected.clip_urls} height={340} window={playWindow}
+                  speed={Number(speed) || 1} importYaw={yawDeg + frameYaw} footprint={footprint}
+                  rootDrop={footprint ? (rootDropOf?.(footprint) ?? 0) : 0} />
+                {/* THE ORIENTATION DIAL. It turns the preview live and is
+                    baked by the import — the same rotation on both sides
+                    (scripts/smoke_clip_yaw.py). The footprint beside it is
+                    what the angle is set AGAINST: a sleeper has to lie along
+                    the bed, and without an outline on the ground there is
+                    nothing to judge that by. */}
+                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                  <SliderInput
+                    label={t('Turn the clip')}
+                    unit="°"
+                    title={t('Degrees the import bakes into the clip. The converter aims the root’s FORWARD axis at +Z, which is the facing of a standing actor and the belly direction of a lying one — so a lying take needs its angle set here.')}
+                    min={-180}
+                    max={180}
+                    step={5}
+                    fineStep={1}
+                    value={yawDeg}
+                    onChange={setYawDeg}
+                    sliderWidth="auto"
+                    sliderStyle={{ flex: 1, minWidth: 90 }}
+                    style={{ display: 'flex', flex: '1 1 260px' }}
+                  />
+                  <button type="button" className="ga-btn ga-btn-sm"
+                    onClick={() => setYawDeg((v) => ((v - 90 + 540) % 360) - 180)}>−90°</button>
+                  <button type="button" className="ga-btn ga-btn-sm"
+                    onClick={() => setYawDeg((v) => ((v + 90 + 540) % 360) - 180)}>+90°</button>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    <span className="ga-hint">{t('Turn against')}</span>
+                    <select className="ga-input" value={footprint}
+                      onChange={(e) => setFootprint(e.target.value)}>
+                      <option value="">{t('grid only')}</option>
+                      <option value="lie">{t('bed / lying surface')}</option>
+                      <option value="seat">{t('seat')}</option>
+                    </select>
+                  </label>
+                </div>
+                {frameYaw ? (
+                  <div className="ga-hint">
+                    {t('The window starts later than the take, where the actor is turned by')}
+                    {` ${(-frameYaw).toFixed(1)}° — `}
+                    {t('the preview is turned with it, so it shows the import’s own framing.')}
+                  </div>
+                ) : null}
+                {loopOn && !selected.pair ? (
+                  <div className="ga-hint">
+                    {loopCut
+                      ? `${t('Loop cut the import will make')}: ${loopCut.start.toFixed(2)} – ${loopCut.end.toFixed(2)} s`
+                        + (loopCut.seam !== null ? ` · ${t('seam')} ${loopCut.seam.toFixed(2)}` : '')
+                      : t('Computing the loop cut…')}
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <div className="ga-form-hint">
+                {t('Not converted yet — the bulk conversion has not reached this take. It can still be imported: the import converts the original recording directly.')}
+              </div>
+            )}
+
+          </div>
           </div>
         )}
       </section>
@@ -1014,6 +1020,11 @@ function TakeRow({ take, active, onSelect, t }:
       style={{ alignItems: 'flex-start' }}
       onClick={onSelect}
     >
+      <span style={{ marginRight: 6, marginTop: 4 }}>
+        <LampDot lamp={takeLamp(take)} title={take.status?.rejected ? t('Rejected in review.')
+          : take.status?.imported?.length ? t('Imported into the clip library.')
+            : take.clip ? t('Converted — previewable, not imported yet.') : t('Not converted yet — still importable from the recording.')} />
+      </span>
       <span className="ga-list-row-main" style={{ minWidth: 0 }}>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 0 }}>
           <code>{take.id}</code>

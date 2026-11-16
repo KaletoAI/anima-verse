@@ -5963,6 +5963,10 @@
     "Further roles": "Weitere Rollen",
     "Import (one Blender run, no hub jobs)": "Importieren (ein Blender-Lauf, keine Hub-Jobs)",
     "Scratch conversion, nothing imported; no hub jobs.": "Probekonvertierung, nichts wird importiert; keine Hub-Jobs.",
-    "Press “Preview with these settings” to see the take.": "„Vorschau mit diesen Einstellungen“ drücken, um die Aufnahme zu sehen."
+    "Press “Preview with these settings” to see the take.": "„Vorschau mit diesen Einstellungen“ drücken, um die Aufnahme zu sehen.",
+    "Rejected in review.": "Bei der Durchsicht abgelehnt.",
+    "Imported into the clip library.": "In die Clip-Bibliothek importiert.",
+    "Converted — previewable, not imported yet.": "Konvertiert — mit Vorschau, noch nicht importiert.",
+    "Not converted yet — still importable from the recording.": "Noch nicht konvertiert — aus der Aufnahme trotzdem importierbar."
   }
 }
