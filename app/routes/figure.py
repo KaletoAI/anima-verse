@@ -55,6 +55,10 @@ body actions):
 * ``PUT  /characters/{c}/figure/template/{item_id} {params, source}`` — store the parameters on the ITEM
   (every wearer; ``garment_template.set_params``); spends nothing — the next Build re-drapes. 400 with the
   validation errors (nothing stored).
+* ``GET  /characters/{c}/figure/painted/{item_id}`` — the painted piece dialog (Ruling A148,
+  ``painted_piece.info``); ``…/region.png`` its region tile; ``POST …/preview.glb {hex, strength}`` the painted body
+  recoloured for the viewer (nothing stored); ``POST …/colour {hex, strength}`` stores the colour (runs nothing).
+* ``POST /characters/{c}/figure/paint`` — "Paint now": only the CPU steps (``figure_build.paint``), 409 otherwise.
 * ``POST /characters/{c}/base-body/run-all`` — the Base body tab's "Run all"
   (``figure_build.start_base_run_all``, Task UI1 rule R1): the plain body's
   refresh — only the steps that are not current — else the face cleanup or the
@@ -142,9 +146,9 @@ body actions):
   the character's Build, a click — ``{status: started | queued | current}``);
   400 off the pipeline.
 """
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from app.core.auth_dependency import require_admin
@@ -388,6 +392,78 @@ def refit_figure_piece(character_name: str, body: RefitRequest,
         raise HTTPException(status_code=409, detail=str(result.get("reason") or figure_build.OFF_PIPELINE))
     if result.get("status") == "failed":
         raise HTTPException(status_code=503, detail=str(result.get("reason") or "Build failed"))
+    return result
+
+
+class PaintColourRequest(BaseModel):
+    hex: str = ""
+    strength: Optional[float] = None
+
+
+@router.get("/{character_name}/figure/painted/{item_id}")
+def get_painted_piece(character_name: str, item_id: str,
+                      _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Ruling A148: the painted piece dialog's payload (``painted_piece.info``)."""
+    from app.core import painted_piece
+    _require_character(character_name)
+    try:
+        return painted_piece.info(character_name, item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/{character_name}/figure/painted/{item_id}/region.png")
+def get_painted_region(character_name: str, item_id: str, _: Dict[str, Any] = Depends(require_admin)) -> Response:
+    """Ruling A148: the painted texture with this piece's body regions tinted (PNG; CPU)."""
+    from app.core import painted_piece
+    _require_character(character_name)
+    try:
+        return Response(painted_piece.region_png(character_name, item_id), media_type="image/png",
+                        headers={"Cache-Control": "no-store"})
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/{character_name}/figure/painted/{item_id}/preview.glb")
+def preview_painted_colour(character_name: str, item_id: str, body: PaintColourRequest,
+                           _: Dict[str, Any] = Depends(require_admin)) -> Response:
+    """Ruling A148: the painted body with this piece in the posted colour — nothing stored, no job (CPU)."""
+    from app.core import painted_piece
+    _require_character(character_name)
+    try:
+        glb = painted_piece.preview_glb(character_name, item_id, body.hex, body.strength)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return Response(glb, media_type="model/gltf-binary", headers={"Cache-Control": "no-store"})
+
+
+@router.post("/{character_name}/figure/painted/{item_id}/colour")
+def set_painted_colour(character_name: str, item_id: str, body: PaintColourRequest,
+                       _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Ruling A148: store the piece's colour (``hex`` "" = the painted colours) — runs nothing; the paint and the
+    assembly become due (CPU, 0 hub jobs)."""
+    from app.core import paint_colour
+    _require_character(character_name)
+    try:
+        saved = paint_colour.set_colour(character_name, item_id, body.hex, body.strength)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not saved:
+        raise HTTPException(status_code=500, detail="The colour was not saved")
+    return {"ok": True}
+
+
+@router.post("/{character_name}/figure/paint", status_code=202)
+def paint_figure(character_name: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Ruling A148: "Paint now" — the CPU steps only (``figure_build.paint``); 409 while hub work is due, a Build
+    or a base step runs, or nothing is due."""
+    from app.core import figure_build
+    _require_character(character_name)
+    result = figure_build.paint(character_name)
+    if result.get("status") == "failed":
+        raise HTTPException(status_code=503, detail=str(result.get("reason") or "Paint failed"))
+    if result.get("status") != "started":
+        raise HTTPException(status_code=409, detail=str(result.get("reason") or "Nothing to paint"))
     return result
 
 

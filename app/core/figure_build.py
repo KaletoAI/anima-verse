@@ -1025,7 +1025,7 @@ def _worker(character_name: str) -> None:
             reason, automatic = queue.popleft()
             refit_item = _refit_items.pop(character_name, "") if reason == REFIT_REASON else ""
             _current[character_name] = {"reason": reason, "step": None, "steps": []}
-        if automatic and not refit_item:
+        if automatic and not refit_item and reason != PAINT_REASON:
             from app.core import generation_pause
             if generation_pause.hold_build(character_name, reason):
                 continue   # Ruling A42: a kept automatic follow-up waits for the Resume
@@ -1034,6 +1034,8 @@ def _worker(character_name: str) -> None:
             with build_lock(character_name):
                 if refit_item:
                     _run_refit(character_name, refit_item)
+                elif reason == PAINT_REASON:
+                    _run_paint(character_name)
                 else:
                     _run(character_name, reason, automatic=automatic)
         except Exception:  # noqa: BLE001 — a worker reports, never raises
@@ -1812,6 +1814,92 @@ def _run_refit(character_name: str, item_id: str) -> None:
                 queue.track_finish(task_id, error="; ".join(f"{k}: {v['error']}" for k, v in failed.items()))
             except Exception:  # noqa: BLE001
                 logger.debug("Re-fit track %s not finished", task_id, exc_info=True)
+
+
+#: The run reason of a "Paint now" (Ruling A148, ``paint``): the worker runs ``_run_paint``, never a Build.
+PAINT_REASON = "paint"
+#: ``paint``'s refusal while a Build runs (it paints itself).
+PAINT_BUILD_RUNNING = "A Build runs for this character now — it paints too"
+#: ``paint``'s refusal when the plan needs hub work first (the steps named).
+PAINT_HUB_DUE = "Needs hub work first: {steps} — Build runs it"
+#: ``paint``'s refusal when nothing is due.
+PAINT_NOTHING = "The painted texture is current"
+
+
+def paint_steps(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
+                resolved: Optional[Tuple[Any, Any]] = None) -> Tuple[List[Step], List[Step]]:
+    """``(cpu, hub)`` of the automatic plan (Ruling A148): the CPU steps a "Paint now" runs — a texture step with 0
+    hub jobs (its views are stored), the fits, the assembly — and every other runnable step (hub work, or a step
+    with an unknown cost), which keeps "Paint now" disabled. Read-only."""
+    planned = plan(character_name, profile=profile, explicit=False, resolved=resolved)
+    steps = _runnable([s for s in planned if not s.manual], False)
+    cpu = [s for s in steps if s.name in REFIT_STEPS or (s.name == "texture" and s.jobs == 0)]
+    # A manual step (the plain body, a mesh made again) blocks too: only a Build you start runs it.
+    return cpu, [s for s in planned if s.manual] + [s for s in steps if s not in cpu]
+
+
+def paint(character_name: str) -> Dict[str, Any]:
+    """The painted piece dialog's "Paint now" (Ruling A148): a run of its own in the character's Build worker that
+    runs only the CPU steps of ``paint_steps`` (the repaint with the stored painted body and the colours, then the
+    assembly) — never a hub step. ``{"status": "started"}``; ``"building"`` / ``"base_busy"`` / ``"hub_due"`` /
+    ``"current"`` / ``"off"`` with ``reason``."""
+    busy = base_step_in_flight(character_name)
+    if busy:
+        return {"status": "base_busy", "reason": BASE_STEP_RUNNING.format(step=busy)}
+    try:
+        profile = _read_profile(character_name)
+    except Exception as e:  # noqa: BLE001 — recorded like a Build's start
+        return _record_unread(character_name, PAINT_REASON, e)
+    if not on_pipeline(character_name, profile=profile):
+        return {"status": "off", "reason": OFF_PIPELINE}
+    cpu, hub = paint_steps(character_name, profile=profile)
+    if hub:
+        return {"status": "hub_due", "reason": PAINT_HUB_DUE.format(steps="; ".join(s.label for s in hub))}
+    if not cpu:
+        return {"status": "current", "reason": PAINT_NOTHING}
+    with _lock:
+        if character_name in _active:
+            return {"status": "building", "reason": PAINT_BUILD_RUNNING}
+        _queues[character_name] = deque([(PAINT_REASON, True)])
+        _active.add(character_name)
+        _current[character_name] = {"reason": PAINT_REASON, "step": None, "steps": []}
+    threading.Thread(target=_worker, args=(character_name,), daemon=True,
+                     name=f"figure-paint-{character_name}").start()
+    logger.info("Paint now of %s started", character_name)
+    return {"status": "started"}
+
+
+def _run_paint(character_name: str) -> None:
+    """The "Paint now" run (``paint``; the worker holds the ``build_lock``): re-plans and runs the CPU steps only,
+    when still no hub step is due; else nothing runs and ``state()['failed']['assemble']`` says why."""
+    from app.core.timeutils import utc_now_iso
+    queue, task_id = _tracked(character_name, f"Paint · {character_name}")
+    failed: Dict[str, Dict[str, Any]] = {}
+    try:
+        cpu, hub = paint_steps(character_name, profile=_read_profile(character_name))
+        if hub:
+            failed["assemble"] = {"error": PAINT_HUB_DUE.format(steps="; ".join(s.label for s in hub)), "item_id": ""}
+            return
+        for index, step in enumerate(cpu, 1):
+            with _lock:
+                if character_name in _current:
+                    _current[character_name]["step"] = {**step.as_dict(), "index": index, "count": len(cpu)}
+            error = _run_step(character_name, step, False)
+            if error:
+                failed[step.name] = {"error": error, "item_id": step.item_id}
+                break
+    except Exception as e:  # noqa: BLE001 — a worker reports, never raises
+        logger.exception("Paint of %s failed", character_name)
+        failed.setdefault("assemble", {"error": str(e) or type(e).__name__, "item_id": ""})
+    finally:
+        with _lock:
+            _last[character_name] = {"failed": failed, "skipped": [], "reason": PAINT_REASON,
+                                     "finished_at": utc_now_iso(), "superseded": None}
+        if queue is not None and task_id:
+            try:
+                queue.track_finish(task_id, error="; ".join(f"{k}: {v['error']}" for k, v in failed.items()))
+            except Exception:  # noqa: BLE001
+                logger.debug("Paint track %s not finished", task_id, exc_info=True)
 
 
 def _run_assemble(character_name: str, step: Step, explicit: bool = False) -> str:

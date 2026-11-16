@@ -5278,6 +5278,13 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
             if meshed:
                 record.update(shape=on, shape_sha256=hashlib.sha256(source["rigged"]).hexdigest())
             _store_texture_body(character_name, tsig, outfit, record)
+        # Ruling A148: the person's colours of painted pieces go onto the OUTFIT model only — the stored painted
+        # body above stays the worker's output (reused when only a colour changes; CPU, no hub job).
+        from app.core import paint_colour
+        colours = paint_colour.wanted(profile, pieces, fig.painted) if tsig else {}
+        colour_proof: Dict[str, Any] = {}
+        if colours:
+            outfit, colour_proof = paint_colour.apply(outfit, source["rigged"], colours)
         out_dir = model3d.get_model3d_dir(character_name)
         path = out_dir / f"{signature}.glb"
         meta = {k: v for k, v in deepcopy(source["meta"]).items()
@@ -5299,6 +5306,9 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
                      "view_images": {v: n for v, n in names.items() if v != "front"},
                      "view_guard": guard, "view_warnings": warnings,
                      "texture_signature": tsig, "texture_reused": stored is not None})
+        if colours:
+            meta[paint_colour.RECORD_KEY] = colours
+            meta[paint_colour.PROOF_KEY] = colour_proof
         if meshed:
             meta.update(body_id=on, body_sha256=hashlib.sha256(source["rigged"]).hexdigest())
         meta.update(manifest)
@@ -5436,6 +5446,8 @@ SHAPE_EMPTY = "The pieces in the body name nothing to dress the body shape with"
 SHAPE_NOT_WANTED = "Not meshed: the body shape {shape} is no longer wanted — the follow-up builds the one wanted now"
 OUTFIT_BODY_CHANGED = "Built on an older body shape"
 #: An outfit model built as another figure than the one delivered now.
+#: Ruling A148: the outfit model was painted with other colours of its painted pieces.
+PAINT_COLOUR_CHANGED = "A painted piece's colour changed — the next Build repaints it (CPU, 0 hub jobs)"
 FIGURE_CHANGED = "Built for another figure"
 NOT_FITTED_ON_BODY = "Not fitted on this outfit body, served without: {items}"
 def _left_off_warning(character_name: str, meta: Dict[str, Any], profile: Optional[Dict[str, Any]]) -> str:
@@ -5539,6 +5551,10 @@ def figure_stale(character_name: str, meta: Dict[str, Any], *,
                                          piece_state={i: "open" for i in built.open})
     if (built.shape, built.texture) != (now.shape, now.texture):
         return "figure"
+    from app.core import paint_colour
+    if now.texture and paint_colour.recorded(meta) != paint_colour.wanted(
+            _profile_of(character_name, profile), now.pieces, now.painted):
+        return "paint_colour"   # Ruling A148: painted with other colours — the paint/assembly is due (CPU)
     if not figure.is_plain(built.shape) and (
             not is_outfit_body_signature(meta.get("body_id"))
             or file_sha256(outfit_body_path(character_name, built.shape)) != meta.get("body_sha256")):
@@ -6065,7 +6081,8 @@ def outfit_info(character_name: str, *, base_sig: Optional[str] = None,
     elif not variant_current(character_name, meta):
         status, error, reason = "stale", DETAIL_CHANGED, "detail_changed"
     elif reason := figure_stale(character_name, meta) or None:
-        status, error = "stale", FIGURE_CHANGED if reason == "figure" else OUTFIT_BODY_CHANGED
+        status, error = "stale", (FIGURE_CHANGED if reason == "figure" else PAINT_COLOUR_CHANGED
+                                  if reason == "paint_colour" else OUTFIT_BODY_CHANGED)
     else:
         status, error = "ready", ""
     return {"signature": signature, "status": status, "error": error, "stale_reason": reason,

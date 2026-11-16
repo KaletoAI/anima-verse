@@ -780,7 +780,7 @@ def _current_base(character_name: str) -> Optional[tuple]:
         return None
 
 
-def _on_older_base(path: Path, base: Optional[tuple]) -> bool:
+def _on_older_base(path: Path, base: Optional[tuple], *, serving: bool = False) -> bool:
     """Whether a stored outfit model is not built on the current base body
     (``base`` from ``_current_base``; None = off the pipeline, never stale):
     another base signature, another base model under the same signature,
@@ -801,7 +801,12 @@ def _on_older_base(path: Path, base: Optional[tuple]) -> bool:
         return True
     if not meta.get("character"):
         return False
-    return not variant_current(meta["character"], meta) or bool(figure_stale(meta["character"], meta))
+    if not variant_current(meta["character"], meta):
+        return True
+    reason = figure_stale(meta["character"], meta)
+    # Ruling A148 (``serving``): a model painted with other colours of its painted pieces is still THIS figure — it is
+    # served until the repaint (CPU) replaces it; for the Build it is due.
+    return bool(reason) and not (serving and reason == "paint_colour")
 
 
 def _stored_manifest(character_name: str, signature: str) -> Optional[Dict[str, Any]]:
@@ -950,7 +955,7 @@ def find_model3d_serving(character_name: str) -> tuple:
     if base:
         for ext in MODEL_EXTS:
             p = d / f"{sig}{ext}"
-            if p.exists() and not _on_older_base(p, base):
+            if p.exists() and not _on_older_base(p, base, serving=True):
                 return p, "exact"
         plain = d / f"{base[0]}.glb"
         return (plain, "base") if base[1] and plain.is_file() else (None, "")
