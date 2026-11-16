@@ -3,8 +3,8 @@
 Usage: .venv/bin/python scripts/smoke_extension_tip_override.py [--python-only]
 
 Python part (no Blender, no world):
-[1] validate_tip_override clamps every offset to +-30 mm: up 45 -> 30,
-    out -31.5 -> -30, -12/3 stay; mirror copies side 1 onto side 2; the disc
+[1] validate_tip_override clamps every offset to +-80 mm (Ruling A113, was 30): up 95 -> 80,
+    out -81.5 -> -80, 45 / -12 / 3 stay; mirror copies side 1 onto side 2; the disc
     diameter 5 -> 10 and 70 -> 50, the soft edge -1 -> 0 and 12 -> 10, the
     colour is lower-cased; all defaults (no offset, no mirror, disc off with
     the default look) are None; a bool, a NaN, an unknown key or "#12345"
@@ -210,9 +210,9 @@ def python_part():
     from app.core.extension_tip import paint_disc_masks, paint_texels
     from app.core.base_body import base_color_image
     # [1]
-    cleaned = er.validate_tip_override({"offsets": [{"up": 45, "out": -31.5}, {"up": -12, "out": 3}],
+    cleaned = er.validate_tip_override({"offsets": [{"up": 95, "out": -81.5}, {"up": -12, "out": 45}],
                                         "disc": {"diameter_mm": 5, "soft_mm": -1, "color": "#ABCDEF"}})
-    check("[1] offsets clamped to +-30", cleaned["offsets"] == [{"up": 30.0, "out": -30.0}, {"up": -12.0, "out": 3.0}],
+    check("[1] offsets clamped to +-80", cleaned["offsets"] == [{"up": 80.0, "out": -80.0}, {"up": -12.0, "out": 45.0}],
           cleaned)
     check("[1] diameter/soft clamped low, colour lower-cased",
           cleaned["disc"] == {"enabled": False, "color": "#abcdef", "diameter_mm": 10.0, "soft_mm": 0.0}, cleaned)
