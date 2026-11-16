@@ -134,13 +134,16 @@ export interface PartnerShow { collision: boolean; channels: boolean
   /** Ruling A129.3: the per-pair fine fit runs (default on) — what the game does when a pair interaction starts. */
   fit: boolean
   /** Ruling A129.4: per frame the entering figure's pelvis follows so the tip stays on the channel axis (default on). */
-  follow: boolean }
+  follow: boolean
+  /** Ruling A129.7: the camera follows the contact point, and an inset shows the channel axis and the shaft. */
+  focus: boolean }
 const SHOW_KEY = 'anima.placePreview.show'
 function loadShow(): PartnerShow {
   try {
     const v = JSON.parse(localStorage.getItem(SHOW_KEY) || '{}') as Partial<PartnerShow>
-    return { collision: !!v.collision, channels: !!v.channels, fit: v.fit !== false, follow: v.follow !== false }
-  } catch { return { collision: false, channels: false, fit: true, follow: true } }
+    return { collision: !!v.collision, channels: !!v.channels, fit: v.fit !== false, follow: v.follow !== false,
+      focus: !!v.focus }
+  } catch { return { collision: false, channels: false, fit: true, follow: true, focus: false } }
 }
 /** Capsules of two figures that overlap; a channel occupied by a partner chain. */
 const CONTACT_COLOR = 0xff2d2d
@@ -817,6 +820,67 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         const resetLive = () => { live.st = createPairFit(); live.hit = null; live.none = false }
         let liveFitOn = showRef.current.fit
         const placedNow = new Map<Fig, { pivot: [number, number, number]; frame: number[] }>()
+        // ── Ruling A129.7: focus on the contact — the orbit target eases to the channel opening at 0.9 m, and an inset
+        // (bottom right, orthographic, side-on to the channel axis) draws the axis (green, ±12 cm) and the shaft
+        // (orange, base → tip). The user still orbits: only the target and the distance are eased. ──
+        let focusNow: { o: number[]; u: number[]; tip: number[]; base: number[] } | null = null
+        const axisGeom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()])
+        const shaftGeom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()])
+        const axisMat = new THREE.LineBasicMaterial({ color: 0x3fb950, depthTest: false })
+        const shaftMat = new THREE.LineBasicMaterial({ color: 0xff9f1c, depthTest: false })
+        own.push(axisGeom, shaftGeom, axisMat, shaftMat)
+        const axisLine = new THREE.Line(axisGeom, axisMat), shaftLine = new THREE.Line(shaftGeom, shaftMat)
+        axisLine.renderOrder = shaftLine.renderOrder = 1000
+        sceneObj.add(axisLine, shaftLine)
+        const insetCam = new THREE.OrthographicCamera(-0.12, 0.12, 0.12, -0.12, 0.01, 10)
+        const fv = new THREE.Vector3(), fu = new THREE.Vector3(), fside = new THREE.Vector3(), fdir = new THREE.Vector3()
+        const setLine = (geom: InstanceType<typeof THREE.BufferGeometry>, a: number[], b: number[]) => {
+          const pos = geom.getAttribute('position') as InstanceType<typeof THREE.BufferAttribute>
+          pos.setXYZ(0, a[0], a[1], a[2]); pos.setXYZ(1, b[0], b[1], b[2]); pos.needsUpdate = true
+          geom.computeBoundingSphere()
+        }
+        const draw = () => {
+          const fc = showRef.current.focus ? focusNow : null
+          axisLine.visible = shaftLine.visible = !!fc
+          host.dataset.focus = fc ? JSON.stringify({ o: fc.o.map((v) => +v.toFixed(4)), target: [controls.target.x, controls.target.y,
+            controls.target.z].map((v) => +v.toFixed(4)), dist: +camera.position.distanceTo(controls.target).toFixed(3) }) : ''
+          if (fc) {
+            const o = fc.o, u = fc.u
+            setLine(axisGeom, [o[0] - u[0] * 0.12, o[1] - u[1] * 0.12, o[2] - u[2] * 0.12], [o[0] + u[0] * 0.12, o[1] + u[1] * 0.12, o[2] + u[2] * 0.12])
+            setLine(shaftGeom, fc.base, fc.tip)
+            fv.set(o[0], o[1], o[2])
+            fdir.copy(camera.position).sub(controls.target)
+            controls.target.lerp(fv, 0.2)
+            const d = fdir.length() || 1
+            camera.position.copy(controls.target).addScaledVector(fdir.normalize(), d + (0.9 - d) * 0.2)
+          }
+          controls.update()
+          renderer.setScissorTest(false)
+          const w = renderer.domElement.clientWidth || width, h = renderer.domElement.clientHeight || height
+          renderer.setViewport(0, 0, w, h)
+          renderer.render(sceneObj, camera)
+          if (fc) {
+            // side-on to the axis: look along u × up (or u × x when the axis is vertical)
+            fu.set(fc.u[0], fc.u[1], fc.u[2])
+            fside.set(0, 1, 0).cross(fu)
+            if (fside.lengthSq() < 1e-6) fside.set(1, 0, 0).cross(fu)
+            fside.normalize()
+            insetCam.position.copy(fv).addScaledVector(fside, 1)
+            insetCam.up.set(0, 1, 0)
+            insetCam.lookAt(fv)
+            insetCam.updateProjectionMatrix()
+            const iw = Math.round(Math.min(w, h) * 0.38)
+            renderer.setScissorTest(true)
+            renderer.setScissor(w - iw - 6, 6, iw, iw)
+            renderer.setViewport(w - iw - 6, 6, iw, iw)
+            renderer.setClearColor(0x0d1117, 1)
+            renderer.clear()
+            renderer.render(sceneObj, insetCam)
+            renderer.setClearColor(0x000000, 0)
+            renderer.setScissorTest(false)
+            renderer.setViewport(0, 0, w, h)
+          }
+        }
         const scratch = new THREE.Vector3()
         const q = new THREE.Quaternion()
         const fwd = new THREE.Vector3()
@@ -861,7 +925,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             f.runtime.poseStep({ realDelta: dt })
           }
           const wantInspect = showRef.current.collision || showRef.current.channels
-          const fitInspect = fitOn && !live.none
+          const fitInspect = (fitOn && !live.none) || showRef.current.focus
           const phaseB = placePhaseB(entries, frameState, wantInspect || fitInspect)   // phase B (+ the partner readout)
           if (fitInspect && phaseB && !pausedRef.current) {
             if (!live.hit) { live.hit = findHit(phaseB); live.none = !live.hit }
@@ -873,6 +937,14 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             }
           }
           const inspection = wantInspect ? phaseB : null
+          // A129.7: the contact this frame (world) for the camera focus and the inset.
+          focusNow = null
+          if (showRef.current.focus && phaseB) {
+            const hit = live.hit ?? findHit(phaseB)
+            const ie = hit ? phaseB.figures[hit.e].inspection : null, ir = hit ? phaseB.figures[hit.r].inspection : null
+            const w = hit && ie && ir ? contactSampleOf(ie, ir, hit, [0, 0, 0]) : null
+            if (w) focusNow = { o: w.o, u: w.u, tip: w.tip, base: w.base }
+          }
           ms = ms * 0.9 + (performance.now() - t0) * 0.1
           drawPartners(inspection)
           // readout: hips in stage space against the place
@@ -933,7 +1005,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             const ready = done.length > 0 && done.length === rows.length
             // Only a CHANGED readout reaches the Library (it re-renders the whole edit view).
             const sig = ready ? rows.map((r) => `${r.letter}${r.medYaw.toFixed(1)}/${r.medPos.toFixed(1)}`).join() : ''
-            if (sig === lastSig) { controls.update(); renderer.render(sceneObj, camera); return }
+            if (sig === lastSig) { draw(); return }
             lastSig = sig
             onReadoutRef.current?.(ready ? {
               prop: propName, places: rows.map((r) => r.letter).join('+'), figures: rows,
@@ -942,13 +1014,14 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               worstPos: Math.max(...rows.map((r) => r.medPos)),
             } : null)
           }
-          controls.update()
-          renderer.render(sceneObj, camera)
+          draw()
         }
         // ── Ruling A126: Auto-align. Plays the clip in fixed 60 fps steps (two loops, the second sampled) with partner
         // B moved by `extra` (clip frame metres [side, up, forward] on top of the draft), reads the entering chain and
         // the receiving channel from every figure's inspection, solves the shift (scene-render `channelContact.ts`). ──
+        const focusOn = () => { if (!showRef.current.focus) setShow((cur) => ({ ...cur, focus: true })) }
         const autoAlign = (): AutoAlignResult => {
+          focusOn()
           if (solo || figs.length < 2) return { ok: false, reason: t('Auto-align needs a pair clip on a place.') }
           const step = 1 / 60
           const placed = new Map<Fig, { pivot: [number, number, number]; frame: number[] }>()
@@ -1113,6 +1186,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             after: rep, fit, followed: rep, followFit: fit, clearMm: [clearBefore, clearAfter, clearAfter], clearWorst }
         }
         const pairCheck = (): PairCheckResult => {
+          focusOn()
           const plain = pairCheckOnce(false)
           if (!plain.ok) return plain
           const followed = pairCheckOnce(true)
@@ -1215,6 +1289,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         </label>
         <label title={t('Fits every pair on its own, as the game does when a pair interaction starts: one loop is measured, then the entering figure moves by at most 5 cm and turns by at most 10° so the attached part runs along the channel. The stored clip stays as it is.')}>
           <input type="checkbox" data-testid="place-fit" checked={show.fit} onChange={() => toggleShow('fit')} /> {t('Fine-fit the pair')}
+        </label>
+        <label title={t('The camera eases to the contact point (the channel opening) at 0.9 m, and an inset at the bottom right shows the channel axis (green) and the shaft of the attached part (orange) side-on. Auto-align and the pair check switch it on.')}>
+          <input type="checkbox" data-testid="place-focus" checked={show.focus} onChange={() => toggleShow('focus')} /> {t('Focus the contact')}
         </label>
         <label title={t('Per frame, the entering figure’s pelvis follows by at most 2 cm so the attached part’s tip stays on the channel axis through the stroke, as in the game.')}>
           <input type="checkbox" data-testid="place-follow" checked={show.follow} disabled={!show.fit}

@@ -6081,6 +6081,8 @@
     "else": "sonst",
     "Channel contact": "Kanalkontakt",
     "Nothing else interpenetrates (green at most 5 mm)": "Sonst durchdringt nichts (grün höchstens 5 mm)",
-    "mm; nothing is saved. Open a clip: its Partner B dials carry the result; Save stores it.": "mm; nichts ist gespeichert. Einen Clip öffnen: seine Partner-B-Regler tragen das Ergebnis; Speichern sichert es."
+    "mm; nothing is saved. Open a clip: its Partner B dials carry the result; Save stores it.": "mm; nichts ist gespeichert. Einen Clip öffnen: seine Partner-B-Regler tragen das Ergebnis; Speichern sichert es.",
+    "The camera eases to the contact point (the channel opening) at 0.9 m, and an inset at the bottom right shows the channel axis (green) and the shaft of the attached part (orange) side-on. Auto-align and the pair check switch it on.": "Die Kamera gleitet auf 0,9 m an den Kontaktpunkt (die Kanalöffnung), und ein Einsatz unten rechts zeigt die Kanalachse (grün) und den Schaft des angesetzten Teils (orange) von der Seite. Automatisch ausrichten und die Paarprüfung schalten es ein.",
+    "Focus the contact": "Kontakt fokussieren"
   }
 }
