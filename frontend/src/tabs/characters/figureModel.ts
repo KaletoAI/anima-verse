@@ -17,19 +17,20 @@ import { filesLabel, sizeLabel } from './hairstylesModel'
 import type { Light } from './hairstylesModel'
 
 /** How an outfit piece reaches the figure (`garment_set.MESH_MODES`). */
-export type MeshMode = 'own_mesh' | 'painted' | 'in_body'
+export type MeshMode = 'own_mesh' | 'painted' | 'in_body' | 'template'
 /** How the hair reaches the figure: HairDeck cards from the profile picture, HAAR strands from the text (H3), or
  *  in the body. */
 export type HairMode = 'hairdeck' | 'haar' | 'body'
 
 /** The select's order. */
-export const MESH_MODES: MeshMode[] = ['own_mesh', 'painted', 'in_body']
+export const MESH_MODES: MeshMode[] = ['own_mesh', 'painted', 'in_body', 'template']
 export const HAIR_MODES: HairMode[] = ['hairdeck', 'haar', 'body']
 
 export const MESH_MODE_LABELS: Record<MeshMode, string> = {
   own_mesh: 'Own mesh',
   painted: 'Painted',
   in_body: 'In the body',
+  template: 'Template (fabric)',
 }
 
 export const HAIR_MODE_LABELS: Record<HairMode, string> = {
@@ -43,6 +44,7 @@ export const MESH_MODE_HINTS: Record<MeshMode, string> = {
   own_mesh: 'A finished mesh of its own, fitted on top of the body.',
   painted: "Painted onto the body's texture.",
   in_body: 'Meshed as part of the body.',
+  template: 'A sewing pattern sized to the body and draped as cloth on the CPU (0 hub jobs); 1 LLM call suggests its parameters from the item picture. Skirts and dresses today.',
 }
 
 export const HAIR_MODE_HINTS: Record<HairMode, string> = {
@@ -58,7 +60,7 @@ export function hairModeDisabled(m: HairMode, built: readonly string[] = HAIR_MO
 }
 
 export function isMeshMode(v: unknown): v is MeshMode {
-  return v === 'own_mesh' || v === 'painted' || v === 'in_body'
+  return v === 'own_mesh' || v === 'painted' || v === 'in_body' || v === 'template'
 }
 
 /** The default mode of a piece worn on `slots` (`garment_set.default_mesh_mode`): in the body for every slot
@@ -254,6 +256,89 @@ export interface FigureWornRow {
   /** A piece whose fit was refused: hub jobs of its "Regenerate mesh" (the server's estimate; null = unknown
    *  or n.a.). */
   regenerate_jobs?: number | null
+  /** Mode template only (Ruling A138, `figure_build._template_row`); null otherwise. */
+  template?: TemplateInfo | null
+}
+
+/** The sewing-pattern parameters of a template piece (`garment_template.PARAM_SPEC`). */
+export interface TemplateParams {
+  kind: string
+  length_m: number
+  flare: number
+  waist_height: string
+  slit: string
+  slit_m: number
+  sleeves: string
+  fabric: string
+}
+
+/** A template row's drape state and parameters (`figure_build._template_row`). */
+export interface TemplateInfo {
+  params: TemplateParams | null
+  source: '' | 'llm' | 'user'
+  updated_at: string
+  /** The kinds draped today ("skirt", "dress"). */
+  built: string[]
+  state: 'ready' | 'missing' | 'failed' | 'blocked'
+  reason: string
+  built_at: string
+  metrics: { wall_s: number | null; cpu_s: number | null; stretch_max: number | null; coverage: number | null;
+    texture: string } | null
+  cost: { llm_calls: number; hub_jobs: number; cpu_s: number }
+}
+
+/** One field of the parameter dialog's schema (GET …/figure/template/{item}). */
+export type TemplateFieldSpec = { type: 'choice'; choices: string[]; default: string }
+  | { type: 'number'; min: number; max: number; default: number }
+
+/** The words of the choice values (English; put through `t()`). */
+export const TEMPLATE_CHOICE_LABELS: Record<string, string> = {
+  skirt: 'Skirt', dress: 'Dress', top: 'Top', jacket: 'Jacket', trousers: 'Trousers',
+  high: 'High', natural: 'Natural', low: 'Low',
+  none: 'None', left: 'Left', right: 'Right', front: 'Front', back: 'Back',
+  short: 'Short', long: 'Long',
+  stiff: 'Stiff (denim, wool)', medium: 'Medium (cotton, linen)', flowing: 'Flowing (silk, jersey)',
+}
+
+/** The parameter dialog's field labels. */
+export const TEMPLATE_FIELD_LABELS: Record<keyof TemplateParams, string> = {
+  kind: 'Kind', length_m: 'Length below the waist', flare: 'Flare (0 straight … 1 circle)',
+  waist_height: 'Waistband', slit: 'Slit', slit_m: 'Slit height from the hem', sleeves: 'Sleeves', fabric: 'Fabric',
+}
+
+/** "45 cm" of a length in metres. */
+export function cm(m: number): string {
+  return `${Math.round(m * 100)} cm`
+}
+
+/** A template row's one-line summary: "Skirt · 45 cm · flare 0.4 · Medium (cotton, linen)" (+ slit), or "No
+ *  parameters yet". */
+export function templateSummary(p: TemplateParams | null, t: Tr = EN): string {
+  if (!p) return t('No parameters yet')
+  const parts = [t(TEMPLATE_CHOICE_LABELS[p.kind] || p.kind), cm(p.length_m),
+    t('flare {n}').replace('{n}', String(p.flare)), t(TEMPLATE_CHOICE_LABELS[p.fabric] || p.fabric)]
+  if (p.slit !== 'none') parts.push(t('slit {side} {cm}').replace('{side}', t(TEMPLATE_CHOICE_LABELS[p.slit] || p.slit))
+    .replace('{cm}', cm(p.slit_m)))
+  return parts.join(' · ')
+}
+
+/** The cost line of a template piece (checklist 9): what suggesting and draping spend. */
+export function templateCost(c: TemplateInfo['cost'] | undefined, t: Tr = EN): string {
+  const cost = c || { llm_calls: 1, hub_jobs: 0, cpu_s: 20 }
+  return t('Suggest: {n} LLM call · Drape: {jobs} hub jobs, ~{s} s CPU')
+    .replace('{n}', String(cost.llm_calls)).replace('{jobs}', String(cost.hub_jobs)).replace('{s}', String(cost.cpu_s))
+}
+
+/** "Draped <time> · 14 s wall · stretch 1.10 · texture from the cut-out views" — the built line (checklist 8). */
+export function templateBuilt(info: TemplateInfo, t: Tr = EN): string {
+  if (info.state !== 'ready' || !info.built_at) return ''
+  const m = info.metrics
+  const parts = [t('Draped {at}').replace('{at}', info.built_at.replace('T', ' ').slice(0, 16))]
+  if (m?.wall_s != null) parts.push(t('{s} s').replace('{s}', String(Math.round(m.wall_s))))
+  if (m?.stretch_max != null) parts.push(t('stretch {n}').replace('{n}', m.stretch_max.toFixed(2)))
+  if (m?.texture) parts.push(m.texture === 'cutout' ? t('texture from the cut-out views')
+    : t('texture from the item picture'))
+  return parts.join(' · ')
 }
 
 export interface FigureHairRow {
@@ -657,6 +742,9 @@ export function wornState(row: Pick<FigureWornRow, 'state' | 'mode' | 'jobs' | '
     case 'left_out': return { light: 'grey', text: t('Left out'), sub: t(row.left_out || row.note), detail: '' }
     case 'building': return { light: 'blue', text: t('Building now'), sub: null, detail: '' }
     default:
+      if (row.mode === 'template') {
+        return { light: 'yellow', text: t('Due: template drape · CPU, 0 hub jobs'), sub: null, detail: '' }
+      }
       return row.mode === 'own_mesh'
         ? { light: 'yellow', text: t('Due: own mesh · {cost}').replace('{cost}', jobsTr(row.jobs, t)), sub: null, detail: '' }
         : { light: 'yellow', text: t('Waits for the Build'), sub: null, detail: '' }

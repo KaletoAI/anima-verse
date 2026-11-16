@@ -67,6 +67,7 @@ import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Model3DViewer } from './Model3DViewer'
 import { GarmentPieceDialog, PieceStateToggle } from './WardrobeGarment'
+import { TemplateParamsDialog } from './TemplateParamsDialog'
 import { FigureStored } from './FigureStored'
 import { FieldModelRefs } from './FieldModelRefs'
 import { FigureOutfitModel } from './FigureOutfitModel'
@@ -83,7 +84,8 @@ import {
   BUILD_DEFERRED_NOTE, BUILD_RUNNING_NOTE, BUILD_STATUS, ESTIMATE_NOTE, HAIR_MODE_LABELS, MESH_MODE_LABELS,
   FRONT_WAITS_FOR_BUILD, NO_BASE_BODY_NOTE, REFIT_LABEL, autoBuildNote, baseBodyLine, bodyRows, buildButton,
   changeLine, frontBuildCovers, frontRegenerate, hairState, headerLine, noBaseBody, planRows, regenerateMeshLabel,
-  retryLabel, servedLines, shortCost, stateMeshAction, stateToggleNote, statusLight, wornState,
+  retryLabel, servedLines, shortCost, stateMeshAction, stateToggleNote, statusLight, templateBuilt, templateCost,
+  templateSummary, wornState,
 } from './figureModel'
 import type { FigurePayload, FigureWornRow, GenerationPause, HairMode, PieceState, WaitingJob } from './figureModel'
 import type { Light } from './hairstylesModel'
@@ -472,6 +474,8 @@ function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairst
   onRegenerateMesh: (row: FigureWornRow) => void
 }) {
   const { t } = useI18n()
+  /** The template piece whose parameter dialog is open (Ruling A138). */
+  const [params, setParams] = useState<string | null>(null)
   const wardrobe = onOpenWardrobe ? (
     <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenWardrobe}
       title={t('The mode is set in the Wardrobe')}>↗ {t('Wardrobe')}</button>
@@ -527,6 +531,14 @@ function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairst
                     : t('Details')}
                 </button>
               ) : null}
+              {row.mode === 'template' ? (
+                <button type="button" className="ga-btn ga-btn-sm" aria-haspopup="dialog"
+                  title={t('The sewing-pattern parameters this piece is draped from; “Suggest from picture” asks the LLM once')}
+                  onClick={() => setParams(row.item_id)}>
+                  {row.template?.params ? t('Edit parameters…') : t('Set parameters…')}
+                </button>
+              ) : null}
+              {row.mode === 'template' && row.template?.state === 'failed' ? retry : null}
               {row.state === 'failed' ? retry : null}
               {row.state === 'fit_refused' ? (
                 <>
@@ -544,6 +556,13 @@ function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairst
                 </>
               ) : null}
             </div>
+            {row.mode === 'template' ? (
+              <div className="ga-hint" title={templateCost(row.template?.cost, t)}>
+                {templateSummary(row.template?.params || null, t)}
+                {row.template && templateBuilt(row.template, t) ? ` · ${templateBuilt(row.template, t)}` : ''}
+                {' · '}{templateCost(row.template?.cost, t)}
+              </div>
+            ) : null}
             {row.piece_state ? (
               <div style={BUTTONS}>
                 {/* Its own "then Build runs automatically" stays off: the note beside it names the cost too. */}
@@ -569,6 +588,10 @@ function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairst
         )
       })}
       {!data.worn.length && !hair ? <div className="ga-hint">{t('Nothing worn')}</div> : null}
+      {params ? (
+        <TemplateParamsDialog character={character} itemId={params} onClose={() => setParams(null)}
+          onSaved={onChanged} />
+      ) : null}
     </div>
   )
 }

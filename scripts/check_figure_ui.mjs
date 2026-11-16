@@ -420,10 +420,19 @@ try {
 
 // [1]
 check('[1] MESH_MODE_LABELS', m.MESH_MODE_LABELS,
-  { own_mesh: 'Own mesh', painted: 'Painted', in_body: 'In the body' });
+  { own_mesh: 'Own mesh', painted: 'Painted', in_body: 'In the body', template: 'Template (fabric)' });
 check('[1] HAIR_MODE_LABELS', m.HAIR_MODE_LABELS,
   { hairdeck: 'HairDeck', haar: 'HAAR', body: 'In the body' });
-check('[1] MESH_MODES order', m.MESH_MODES, ['own_mesh', 'painted', 'in_body']);
+check('[1] MESH_MODES order', m.MESH_MODES, ['own_mesh', 'painted', 'in_body', 'template']);
+// Ruling A138: the template row's summary and cost line, and its due light.
+check('[1] templateSummary', m.templateSummary({ kind: 'skirt', length_m: 0.45, flare: 0.4, waist_height: 'natural',
+  slit: 'left', slit_m: 0.2, sleeves: 'none', fabric: 'medium' }),
+  'Skirt · 45 cm · flare 0.4 · Medium (cotton, linen) · slit Left 20 cm');
+check('[1] templateSummary without params', m.templateSummary(null), 'No parameters yet');
+check('[1] templateCost', m.templateCost({ llm_calls: 1, hub_jobs: 0, cpu_s: 20 }),
+  'Suggest: 1 LLM call · Drape: 0 hub jobs, ~20 s CPU');
+check('[1] template due light', m.wornState({ state: 'pending', mode: 'template', jobs: 0, failure: '', left_out: '',
+  note: '' }).text, 'Due: template drape · CPU, 0 hub jobs');
 check('[1] HAIR_MODES order', m.HAIR_MODES, ['hairdeck', 'haar', 'body']);
 
 // [2]
