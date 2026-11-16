@@ -12,3 +12,13 @@ Non-commercial use includes:
 - Academic or research use.
 - Non-profit organizations.
 - Open-source projects (if not used commercially).
+
+Third-party code vendored in this repository
+--------------------------------------------
+- app/third_party/pygarment — subset of pygarment 2.0.2 (GarmentCode sewing-pattern
+  programming, (c) 2024 Maria Korosteleva), MIT licence: app/third_party/pygarment/LICENSE.
+  Vendored because the PyPI wheel 2.0.2 ships its modules without the `pygarment`
+  package directory; imports rewritten to `app.third_party.*`, otherwise unchanged
+  except two invalid escape sequences in strings.
+- app/third_party/svgpathtools — subset of svgpathtools 1.8.0 ((c) Andy Port), MIT licence:
+  app/third_party/svgpathtools/LICENSE. SVG writer/reader modules left out (no svgwrite).
