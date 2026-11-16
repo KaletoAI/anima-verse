@@ -37,8 +37,9 @@ export const POSTURE = Object.freeze({
   floatM: 0.015,
   /** … and lower it by at most this (metres) — "no sinking". */
   sinkM: 0.01,
-  /** Residual weight per metre beyond the band (1 cm beyond costs like 30 cm of tip lateral in one frame). */
-  weight: 30,
+  /** Residual weight per metre beyond the band (1 cm beyond costs like 3 m of tip lateral in one frame): a near-hard
+   *  limit — the entry condition (`CONTACT_ENTRY_WEIGHT` × N) must not buy a float or a sink. */
+  weight: 300,
   /** Residual per radian of turn (× √N): a turn must pay for itself. */
   turnCostM: 0.15,
   /** A frame within this of the band's edge counts as "at the posture limit" (metres). */

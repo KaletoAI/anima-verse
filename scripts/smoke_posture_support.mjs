@@ -14,11 +14,13 @@
  *   [3] THE SOLVE: 6 frames, tip T = (0, 0, 0.3), base (0, 0, 0.2), O = (0, 0.05, 0.3), u = +Z, pivot (0, 0.9, 0), no
  *       axes, no bend. Rigid (no support): the lateral (0, −0.05) is taken by Δ = (0, 0.05, 0) (entry s = 0 already).
  *       With the support above (base = its own height): per frame the y residuals are (d − 0.05) and
- *       30·(d − 0.015) for d > 0.015; d/dd [(d − 0.05)² + 900 (d − 0.015)²] = 0 → d = (0.05 + 13.5)/901 = 0.0150388457.
- *       Expect Δy within 1e-6 of that, Δx = Δz = 0 (±1e-9).
+ *       300·(d − 0.015) for d > 0.015; d/dd [(d − 0.05)² + 90000 (d − 0.015)²] = 0 → d = (0.05 + 1350)/90001
+ *       = 0.01500038888. The band edge is a kink (zero slope inside), which Gauss–Newton approaches from inside by
+ *       line-search halvings: expect d − 0.5 mm ≤ Δy ≤ d + 1e-6 (never beyond the minimum, at most 0.5 mm short),
+ *       Δx = Δz = 0 (±1e-9).
  *   [4] postureAngleCapDeg: stand 20 → 3, lie 20 → 5, seat 20 → 20, null 10 → 10.
- *   [5] postureReport of the frames moved by [3]: gapMm = 15.0388 (±1e-3), sinkMm 0, heightMm = (0.05 + d − 0)·1000
- *       = 65.0388 with surface 0, limited (15.04 ≥ 15 − 2).
+ *   [5] postureReport of the frames moved by [3]: gapMm = Δy·1000 (±1e-6), sinkMm 0, heightMm = (0.05 + Δy)·1000 with
+ *       surface 0, limited (Δy ≥ 14.5 mm ≥ 15 − 2).
  *   [6] Fixture [3] with tilt/roll axes X, Z and group 'lie': every turn ≤ 5° (+1e-9).
  */
 import assert from 'node:assert/strict'
@@ -67,15 +69,15 @@ const rigid = SR.solvePairFix(Array.from({ length: 6 }, () => frame(null)), { ax
 near(rigid.shift[1], 0.05, 1e-6, '[3] rigid Δy')
 const S = Array.from({ length: 6 }, () => frame(sup))
 const fix = SR.solvePairFix(S, { axes: [], maxShiftM: 0.5, maxAngleDeg: 20 })
-const d = (0.05 + 13.5) / 901
-near(fix.shift[1], d, 1e-6, '[3] posture Δy'); near(fix.shift[0], 0, 1e-9, '[3] Δx'); near(fix.shift[2], 0, 1e-9, '[3] Δz')
+const d = (0.05 + 1350) / 90001
+assert.ok(fix.shift[1] >= d - 0.0005 && fix.shift[1] <= d + 1e-6, `[3] posture Δy ${fix.shift[1]} vs ${d}`); near(fix.shift[0], 0, 1e-9, '[3] Δx'); near(fix.shift[2], 0, 1e-9, '[3] Δz')
 // [4]
 assert.equal(SR.postureAngleCapDeg('stand', 20), 3); assert.equal(SR.postureAngleCapDeg('lie', 20), 5)
 assert.equal(SR.postureAngleCapDeg('seat', 20), 20); assert.equal(SR.postureAngleCapDeg(null, 10), 10)
 // [5]
 const rep = SR.postureReport(S.map((x) => ({ support: x.support, pts: x.support.pts.map((p) => SR.fixPoint(fix, x.pivot, p)) })))
-near(rep.gapMm, d * 1000, 1e-3, '[5] gap'); assert.equal(rep.sinkMm, 0)
-near(rep.heightMm, (0.05 + d) * 1000, 1e-3, '[5] height'); assert.equal(rep.limited, true)
+near(rep.gapMm, fix.shift[1] * 1000, 1e-6, '[5] gap'); assert.equal(rep.sinkMm, 0)
+near(rep.heightMm, (0.05 + fix.shift[1]) * 1000, 1e-6, '[5] height'); assert.equal(rep.limited, true)
 // [6]
 const ax = [[1, 0, 0], [0, 0, 1]]
 const tf = SR.solvePairFix(S, { axes: ax, maxShiftM: 0.5, maxAngleDeg: 20, group: 'lie' })
