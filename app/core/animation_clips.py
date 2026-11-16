@@ -1982,6 +1982,15 @@ def validate_bend_limits(value: Any, base: Optional[Dict[str, Dict[str, float]]]
     return out
 
 
+def _without_root_limits(value: Any) -> Any:
+    """Ruling A158: the A150 root limits (``root_*_deg``) are gone — a stored clip value or a package default that still
+    carries them loses them on load instead of being refused whole."""
+    if not isinstance(value, dict):
+        return value
+    return {st: ({k: v for k, v in row.items() if not str(k).startswith("root_")} if isinstance(row, dict) else row)
+            for st, row in value.items()}
+
+
 def package_bend_limits() -> Dict[str, Dict[str, Dict[str, float]]]:
     """The bend-limit defaults every loaded package declares, by clip kind (``"*"`` = any kind; first valid wins)."""
     from app.core import hooks
@@ -1998,7 +2007,7 @@ def package_bend_limits() -> Dict[str, Dict[str, Dict[str, float]]]:
             if not isinstance(kind, str) or kind in out:
                 continue
             try:
-                out[kind] = validate_bend_limits(lim)
+                out[kind] = validate_bend_limits(_without_root_limits(lim))
             except ClipLibraryError as e:
                 logger.warning("bend limits of %s from a package ignored: %s", kind, e)
     return out
@@ -2014,12 +2023,7 @@ def clip_bend_limits(meta: Optional[Dict[str, Any]], kind: str) -> Dict[str, Any
     pkg = package_bend_limits()
     inherited = pkg.get(kind) or pkg.get("*")
     base = inherited or BEND_LIMITS_DEFAULT
-    own = (meta or {}).get("bend_limits") if isinstance(meta, dict) else None
-    if isinstance(own, dict):
-        # Ruling A158: the A150 root limits (root_*_deg) are gone; a sidecar that still carries them loses them here.
-        keys = {k for k, _ in BEND_LIMIT_KEYS}
-        own = {st: ({k: v for k, v in row.items() if k in keys} if isinstance(row, dict) else row)
-               for st, row in own.items()}
+    own = _without_root_limits((meta or {}).get("bend_limits") if isinstance(meta, dict) else None)
     if own is not None:
         try:
             return {"limits": validate_bend_limits(own, base), "source": "clip"}

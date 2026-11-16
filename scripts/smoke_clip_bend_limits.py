@@ -13,7 +13,8 @@ Expected, by hand:
     package value, not the core one).
 [7] A158: the A150 root limit keys are gone — validate_bend_limits refuses {"raised": {"root_up_deg": 30}}; a
     stored clip value {"raised": {"joint_deg": 10, "root_up_deg": 30}} loads as source clip, raised 10/25 (the root key
-    dropped, not the whole value).
+    dropped, not the whole value); a package default {"x": {"resting": {"joint_deg": 25, "root_up_deg": 45}}} gives
+    kind x resting 25/120 (not refused).
 [8] A158 root angle: {} -> 0/0; {"pitch_deg": -30} -> pitch -30, yaw 0; refused: pitch 61, pitch -61, yaw 31,
     a bool, a key "roll_deg"; clip_root_angle(None) and of a junk stored value -> 0/0, of {"pitch_deg": 20,
     "yaw_deg": -15} -> 20/-15.
@@ -60,6 +61,10 @@ except ac.ClipLibraryError:
     pass
 old = ac.clip_bend_limits({"bend_limits": {"raised": {"joint_deg": 10, "root_up_deg": 30}}}, "k")
 assert old["source"] == "clip" and old["limits"]["raised"] == {"joint_deg": 10.0, "total_deg": 25.0}, old
+hooks.register_provider(ac.BEND_LIMIT_DEFAULTS_CAPABILITY,
+                        lambda: {"x": {"resting": {"joint_deg": 25, "root_up_deg": 45}}}, owner="smoke2", multiple=True)
+px = ac.clip_bend_limits(None, "x")
+assert px["source"] == "package" and px["limits"]["resting"] == {"joint_deg": 25.0, "total_deg": 120.0}, px
 assert ac.validate_root_angle({}) == {"pitch_deg": 0.0, "yaw_deg": 0.0}                  # [8]
 assert ac.validate_root_angle({"pitch_deg": -30}) == {"pitch_deg": -30.0, "yaw_deg": 0.0}
 for bad in ({"pitch_deg": 61}, {"pitch_deg": -61}, {"yaw_deg": 31}, {"pitch_deg": True}, {"roll_deg": 1}):
