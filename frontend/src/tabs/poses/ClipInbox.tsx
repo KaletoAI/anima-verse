@@ -38,6 +38,14 @@ import { apiDelete, apiGet, apiPost, apiUpload } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { RootMotionField } from './RootMotionField'
 import { rootMotionBlocksLoop, type RootMotionMode } from './rootMotion'
+import { inboxLamp } from './clipStatus'
+import { LampDot } from './StatusLamp'
+
+/** The inbox path from the repository root (shared/models/…) — the absolute server path only in the mouse-over. */
+function relativeDir(dir: string): string {
+  const i = dir.indexOf('shared/models/')
+  return i >= 0 ? dir.slice(i) : dir
+}
 
 interface Probe {
   skeleton_family: string
@@ -649,7 +657,7 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
   return (
     <div
       style={{
-        display: 'grid', gridTemplateColumns: 'minmax(280px, 1fr) minmax(340px, 1.4fr)',
+        display: 'grid', gridTemplateColumns: '300px minmax(320px, 1fr) minmax(340px, 1fr)',
         gap: 14, alignItems: 'stretch', flex: 1, minHeight: 0,
       }}
     >
@@ -684,7 +692,7 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
         </div>
 
         <div className="ga-hint" style={{ wordBreak: 'break-all' }}>
-          {t('Inbox directory')}: <code>{data?.dir || ''}</code>
+          <span title={data?.dir || ''}>{t('Inbox directory')}: <code>{relativeDir(data?.dir || '')}</code></span>
           {' — '}{t('subfolders are read too')}
           {error ? ` — ${error}` : ''}
         </div>
@@ -756,6 +764,12 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
                           title={e.name}
                           onClick={() => pick(e.name)}
                         >
+                          <span style={{ marginRight: 6, marginTop: 4 }}>
+                            <LampDot lamp={inboxLamp(e.probe)} title={!e.probe.skeleton_family
+                              ? t('Unknown rig — no bone map matches; it cannot be imported.')
+                              : e.probe.is_rest_candidate ? t('A reference pose — the bind pose for another import, not a motion.')
+                                : t('Convertible — a known rig.')} />
+                          </span>
                           <span className="ga-list-row-main" style={{ minWidth: 0 }}>
                             <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {file}
@@ -816,8 +830,8 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
             ) : null}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <span className="ga-hint">
-                {t('Further roles — the animation above plays role A. A pair adds B, a group up to E; all of them become one kind (__a … __e) at a shared anchor. The offset moves a role whose pack recorded it elsewhere. A pack names the axis of ITS engine: a Unity export\'s forward is forward here, an Unreal export\'s forward (its X) is side here with the opposite sign — "-0.3 on the forward axis" is forward -0.3 for Unity, side +0.3 for Unreal.')}
+              <span className="ga-hint" title={t('Further roles — the animation above plays role A. A pair adds B, a group up to E; all of them become one kind (__a … __e) at a shared anchor. The offset moves a role whose pack recorded it elsewhere. A pack names the axis of ITS engine: a Unity export\'s forward is forward here, an Unreal export\'s forward (its X) is side here with the opposite sign — "-0.3 on the forward axis" is forward -0.3 for Unity, side +0.3 for Unreal.')}>
+                {t('Further roles')} ⓘ
               </span>
               {others.map((o, i) => (
                 <RoleRow key={i} letter={ROLES[i + 1]} value={o} entry={entry} ownTakes={takes}
@@ -899,7 +913,9 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
 
 
             <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-              <span className="ga-hint">{t('Reference pose (optional)')}</span>
+              <span className="ga-hint" title={t('The bind pose of THIS rig — gives the bones their real twist.'
+                   + ' Only files of the same rig family are offered; a pack'
+                   + ' usually carries its own pose as one of its animations.')}>{t('Reference pose (optional)')} ⓘ</span>
               <select className="ga-input" value={restFile} onChange={(e) => setRestFile(e.target.value)}>
                 <option value="">{t('— none —')}</option>
                 {takes.length > 1 ? (
@@ -909,11 +925,6 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
                   <option key={e.name} value={e.name}>{e.name}</option>
                 ))}
               </select>
-              <span className="ga-hint">
-                {t('The bind pose of THIS rig — gives the bones their real twist.'
-                   + ' Only files of the same rig family are offered; a pack'
-                   + ' usually carries its own pose as one of its animations.')}
-              </span>
             </label>
 
             {restFile && restTakes.length > 1 ? (
@@ -926,6 +937,7 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
               />
             ) : null}
 
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               <span className="ga-hint">{t('Clip kind (the file stem, lowercase, no "__")')}</span>
               <input className="ga-input" value={kind} onChange={(e) => setKind(e.target.value)} />
@@ -940,6 +952,7 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
                 ))}
               </select>
             </label>
+            </div>
 
             <div style={{ display: 'flex', gap: 8 }}>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1 }}>
@@ -1023,7 +1036,7 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
                   || loopBlocked}
                 onClick={runImport}
               >
-                {importing ? t('Converting with Blender…') : t('Import')}
+                {importing ? t('Converting with Blender…') : t('Import (one Blender run, no hub jobs)')}
               </button>
               {imported ? (
                 <>
@@ -1053,14 +1066,54 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
                 : t('One Blender run of a few seconds; the new kind is selectable in the pose editor right after.')}
             </div>
 
+            <details>
+              <summary>{t('Import as an alt half of a scene')}</summary>
+              <div className="ga-hint">
+                {t('The selected take replaces ONE role of a pair or group already in the library — another motion recorded with the same scene. The scene is converted again from its own sources, and only the alt file is written.')}
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  <span className="ga-hint">{t('Scene')}</span>
+                  <select className="ga-input" value={altKind}
+                    onChange={(e) => { setAltKind(e.target.value); setAltRole('') }}>
+                    <option value="">—</option>
+                    {Object.keys(scenes).sort().map((k) => <option key={k} value={k}>{k}</option>)}
+                  </select>
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  <span className="ga-hint">{t('Role')}</span>
+                  <select className="ga-input" value={altRole} onChange={(e) => setAltRole(e.target.value)}>
+                    <option value="">—</option>
+                    {(scenes[altKind] || []).map((r) => <option key={r} value={r}>{r.toUpperCase()}</option>)}
+                  </select>
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  <span className="ga-hint">{t('Alt name')}</span>
+                  <input className="ga-input" value={altName} placeholder="arm-down"
+                    onChange={(e) => setAltName(e.target.value.toLowerCase())} />
+                </label>
+                <button type="button" className="ga-btn"
+                  disabled={altImporting || !entry || !altKind || !altRole || !/^[a-z0-9][a-z0-9-]*$/.test(altName)}
+                  onClick={() => void runAltImport()}>
+                  {altImporting ? t('Converting…') : t('Import alt half')}
+                </button>
+              </div>
+            </details>
+          </div>
+        )}
+      </section>
+
+      {/* ── preview of the current settings, the turn dial beside it ── */}
+      <section style={{ minWidth: 0, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
+        {!entry ? null : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <button type="button" className="ga-btn" disabled={probing || !entry || loopBlocked}
+              <button type="button" className="ga-btn ga-btn-sm" disabled={probing || !entry || loopBlocked}
+                title={t('Runs the conversion into a scratch folder — offset, window and reference pose exactly as the import would write them. Nothing is imported.')}
                 onClick={() => void runProbe()}>
                 {probing ? t('Converting preview…') : t('Preview with these settings')}
               </button>
-              <span className="ga-hint">
-                {t('Runs the conversion into a scratch folder — offset, window and reference pose exactly as the import would write them. Nothing is imported.')}
-              </span>
+              <span className="ga-hint">{t('Scratch conversion, nothing imported; no hub jobs.')}</span>
             </div>
             {probe && !imported ? (
               <>
@@ -1103,39 +1156,7 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
               <ClipPreview key={`${imported.kind}:${imported.seq}`} kind={imported.kind} height={300} />
             ) : null}
 
-            <details>
-              <summary>{t('Import as an alt half of a scene')}</summary>
-              <div className="ga-hint">
-                {t('The selected take replaces ONE role of a pair or group already in the library — another motion recorded with the same scene. The scene is converted again from its own sources, and only the alt file is written.')}
-              </div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                  <span className="ga-hint">{t('Scene')}</span>
-                  <select className="ga-input" value={altKind}
-                    onChange={(e) => { setAltKind(e.target.value); setAltRole('') }}>
-                    <option value="">—</option>
-                    {Object.keys(scenes).sort().map((k) => <option key={k} value={k}>{k}</option>)}
-                  </select>
-                </label>
-                <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                  <span className="ga-hint">{t('Role')}</span>
-                  <select className="ga-input" value={altRole} onChange={(e) => setAltRole(e.target.value)}>
-                    <option value="">—</option>
-                    {(scenes[altKind] || []).map((r) => <option key={r} value={r}>{r.toUpperCase()}</option>)}
-                  </select>
-                </label>
-                <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                  <span className="ga-hint">{t('Alt name')}</span>
-                  <input className="ga-input" value={altName} placeholder="arm-down"
-                    onChange={(e) => setAltName(e.target.value.toLowerCase())} />
-                </label>
-                <button type="button" className="ga-btn"
-                  disabled={altImporting || !entry || !altKind || !altRole || !/^[a-z0-9][a-z0-9-]*$/.test(altName)}
-                  onClick={() => void runAltImport()}>
-                  {altImporting ? t('Converting…') : t('Import alt half')}
-                </button>
-              </div>
-            </details>
+            {!probe && !imported ? <div className="ga-placeholder">{t('Press “Preview with these settings” to see the take.')}</div> : null}
           </div>
         )}
       </section>

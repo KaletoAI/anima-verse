@@ -5956,6 +5956,13 @@
     "Not ready": "Nicht bereit",
     "Open…": "Öffnen…",
     "Bridge every suggested transition": "Jeden vorgeschlagenen Übergang überbrücken",
-    "{n} transitions × {v} variants = {jobs} hub jobs. Each ends with variants to choose from in Jobs.": "{n} Übergänge × {v} Varianten = {jobs} Hub-Jobs. Jeder endet mit Varianten zur Auswahl unter Jobs."
+    "{n} transitions × {v} variants = {jobs} hub jobs. Each ends with variants to choose from in Jobs.": "{n} Übergänge × {v} Varianten = {jobs} Hub-Jobs. Jeder endet mit Varianten zur Auswahl unter Jobs.",
+    "Unknown rig — no bone map matches; it cannot be imported.": "Unbekanntes Rig — keine Knochenzuordnung passt; nicht importierbar.",
+    "A reference pose — the bind pose for another import, not a motion.": "Eine Referenzpose — die Bindepose für einen anderen Import, keine Bewegung.",
+    "Convertible — a known rig.": "Konvertierbar — ein bekanntes Rig.",
+    "Further roles": "Weitere Rollen",
+    "Import (one Blender run, no hub jobs)": "Importieren (ein Blender-Lauf, keine Hub-Jobs)",
+    "Scratch conversion, nothing imported; no hub jobs.": "Probekonvertierung, nichts wird importiert; keine Hub-Jobs.",
+    "Press “Preview with these settings” to see the take.": "„Vorschau mit diesen Einstellungen“ drücken, um die Aufnahme zu sehen."
   }
 }
