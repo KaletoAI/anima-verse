@@ -960,7 +960,7 @@ def list_props():
     ground_offset_m?}`` — element 0 is the primary one, whose ``tiers`` IS
     ``model_tiers``; size and sink belong to the VARIANT (2026-08-25), so a
     consumer that draws one reads them off its entry. ``marker_count`` is the
-    primary variant's, ``marker_groups`` its markers' place types (each once,
+    primary variant's, ``marker_groups`` its markers' place types (each once, ``marker_capacities`` the most slots one marker per type has,
     in marker order); the marker LISTS ride only on the admin record. An
     empty list is the normal starting state."""
     from app.core.props import list_props as _list

@@ -6083,6 +6083,11 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool,
         "marker_groups": list(dict.fromkeys(
             str(m.get("group") or "") for m in variant_markers(meta, primary)
             if m.get("group"))),
+        # The most figures ONE marker of each place type seats, `{type: n}` —
+        # what the place preview filters its prop picker by: a pair clip of
+        # type lie lists only props with a lie place of ≥ 2 slots (Ruling
+        # A110c). The same capacity reading the room recipe composes.
+        "marker_capacities": _marker_capacities(variant_markers(meta, primary)),
         "has_model": has_model,
         "model_tiers": tiers,
         # Every active variant that has a mesh, in payload order:
@@ -7480,3 +7485,14 @@ def save_house_models(prop_id: str, variant: int, blobs: Dict[str, bytes],
         gallery.delete(old.name)
     _lod_failed.discard(_lod_key(safe_prop_id(prop_id), variant))
     return targets["full"].name
+
+
+def _marker_capacities(markers: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Per place type the largest marker capacity (Ruling A110c)."""
+    from app.core.room_recipe import marker_capacity
+    out: Dict[str, int] = {}
+    for m in markers:
+        group = str(m.get("group") or "").strip().lower()
+        if group:
+            out[group] = max(out.get(group, 0), marker_capacity(m))
+    return out

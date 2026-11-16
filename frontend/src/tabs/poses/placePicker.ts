@@ -21,7 +21,31 @@ export const GROUND_PROP = '__ground__'
 /** Solo figures on the bare floor: 1..4 in one row (the row stays inside the 6 m preview room at 0.6 m). */
 export const GROUND_MAX = 4
 
-export interface PickerProp { id: string; name?: string; marker_groups?: string[] }
+export interface PickerProp { id: string; name?: string; marker_groups?: string[]; marker_capacities?: Record<string, number> }
+
+/**
+ * Ruling A110c: ONLY the props that can host this clip — a place of the clip's type `want` whose marker seats at
+ * least `n` figures (`marker_capacities` of `/assets/props`, the server's own capacity reading; solo n = 1). Each
+ * kept prop is narrowed to the clip's type, so the picker shows one group. No type (`want` '') = any place type
+ * with enough slots.
+ */
+export function fittingProps<T extends PickerProp>(props: readonly T[], want: string, n: number): T[] {
+  const need = Math.max(1, n)
+  const ty = want.trim()
+  return props.flatMap((p) => {
+    const caps = p.marker_capacities ?? {}
+    if (ty) return (caps[ty] ?? 0) >= need ? [{ ...p, marker_groups: [ty] }] : []
+    const ok = Object.keys(caps).filter((k) => (caps[k] ?? 0) >= need)
+    return ok.length ? [{ ...p, marker_groups: ok }] : []
+  })
+}
+
+/** Whether the bare floor can host the clip (the A110b ground rule): a floor-type clip (stand/ground — or none),
+ *  at most GROUND_MAX figures in one row. A seat or lie clip is never played on the floor marker. */
+export function groundFits(want: string, n: number): boolean {
+  const ty = want.trim()
+  return (!ty || ty === 'stand' || ty === 'ground') && Math.max(1, n) <= GROUND_MAX
+}
 export interface PropGroup { type: string; props: { id: string; label: string }[] }
 
 /** Option groups of the prop picker; `want` = the clip's place type ('' = none). */
@@ -47,15 +71,15 @@ export function groupProps(props: readonly PickerProp[], want: string): PropGrou
     .map(([type, list]) => ({ type, props: list.sort((x, y) => x.label.localeCompare(y.label)) }))
 }
 
-/** The prop to preselect: the remembered one while it exists, else the first under the clip's type, else the bare
- *  floor for a floor-type clip, else the first prop at all. */
-export function preselectProp(groups: readonly PropGroup[], want: string, memo: string): string {
-  if (memo === GROUND_PROP) return GROUND_PROP
-  if (memo && groups.some((g) => g.props.some((p) => p.id === memo))) return memo
+/** The prop to preselect among the FITTING ones (A110c): the remembered one while it still fits, else the first
+ *  under the clip's type, else the bare floor when it fits, else '' — nothing fits. */
+export function preselectProp(groups: readonly PropGroup[], want: string, memo: string, groundOk = true): string {
+  if (memo === GROUND_PROP && groundOk) return GROUND_PROP
+  if (memo && memo !== GROUND_PROP && groups.some((g) => g.props.some((p) => p.id === memo))) return memo
   const match = groups.find((g) => g.type === want && g.props.length)
   if (match) return match.props[0].id
-  if (want === 'stand' || want === 'ground') return GROUND_PROP
-  return groups.find((g) => g.props.length)?.props[0].id ?? GROUND_PROP
+  if (groundOk && (want === 'stand' || want === 'ground')) return GROUND_PROP
+  return groups.find((g) => g.props.length)?.props[0].id ?? (groundOk ? GROUND_PROP : '')
 }
 
 /** The bare floor's marker type for a clip of type `want`. */

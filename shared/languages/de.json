@@ -5969,6 +5969,8 @@
     "No prop": "Kein Requisit",
     "Ground (no prop)": "Boden (kein Requisit)",
     "this clip": "dieser Clip",
+    "— none fits —": "— nichts passt —",
+    "No prop has a {type} place with at least {n} slots, so this clip cannot be shown on a place. Such a prop must exist first — add a {type} place with that capacity to a prop in the Props tab.": "Kein Requisit hat einen Platz vom Typ {type} mit mindestens {n} Plätzen, daher lässt sich dieser Clip auf keinem Platz zeigen. Ein solches Requisit muss erst existieren — im Reiter Requisiten einem Requisit einen {type}-Platz mit dieser Kapazität geben.",
     "Figures": "Figuren",
     "Seat": "Sitzen",
     "Ground": "Boden",

@@ -22,6 +22,18 @@
  *     want seat, solo, all, max 1        → count 1
  *     names [Kira, mannequin], 2 places  → A Kira, B mannequin (in order, cycling)
  *
+ *
+ *   A110c fit filter, props with marker_capacities: chair {seat:1} · bench {seat:3} · sofa {seat:2, lie:2} ·
+ *   cot {lie:1} · post {stand:1}
+ *     fittingProps(lie, 2)   → sofa only (cot's lie place seats 1), narrowed to [lie]
+ *     fittingProps(lie, 1)   → sofa, cot (input order)
+ *     fittingProps(seat, 3)  → bench only
+ *     fittingProps(seat, 1)  → bench, chair, sofa (all three seats)
+ *     fittingProps(lie, 3)   → nothing; groundFits(lie, 3) false → preselect '' (the nothing-fits line)
+ *     fittingProps('', 2)    → bench [seat], sofa [seat, lie]
+ *     groundFits: stand 2 ✓ · ground 4 ✓ · ground 5 ✗ (GROUND_MAX 4) · seat 1 ✗ · lie 2 ✗ · '' 1 ✓
+ *     preselect(lie pair, memo cot) → sofa (memo no longer fits) · memo "__ground__" on a lie clip → sofa
+ *
  * Usage: node scripts/smoke_place_picker.mjs   (no server, no world; bundles the module with esbuild)
  */
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -84,6 +96,24 @@ try {
   check('max 1', fill({ max: 1 }).count, 1)
   const names = fill({ names: ['Kira', '__mannequin__'] })
   check('names cycle', [names.assign.A.character, names.assign.B.character], ['Kira', '__mannequin__'])
+  console.log('[5] fit filter (A110c)')
+  const cp = [{ id: 'chair', marker_capacities: { seat: 1 } }, { id: 'bench', marker_capacities: { seat: 3 } },
+    { id: 'sofa', marker_capacities: { seat: 2, lie: 2 } }, { id: 'cot', marker_capacities: { lie: 1 } },
+    { id: 'post', marker_capacities: { stand: 1 } }]
+  const fit = (w, n) => P.fittingProps(cp, w, n).map((p) => [p.id, p.marker_groups])
+  check('lie pair', fit('lie', 2), [['sofa', ['lie']]])
+  check('lie solo', fit('lie', 1).map((x) => x[0]), ['sofa', 'cot'])
+  check('seat ×3', fit('seat', 3).map((x) => x[0]), ['bench'])
+  check('seat solo', fit('seat', 1).map((x) => x[0]).sort(), ['bench', 'chair', 'sofa'])
+  check('lie ×3 none', fit('lie', 3), [])
+  check('no type ×2', fit('', 2), [['bench', ['seat']], ['sofa', ['seat', 'lie']]])
+  check('groundFits', [P.groundFits('stand', 2), P.groundFits('ground', 4), P.groundFits('ground', 5),
+    P.groundFits('seat', 1), P.groundFits('lie', 2), P.groundFits('', 1)], [true, true, false, false, false, true])
+  const lg = P.groupProps(P.fittingProps(cp, 'lie', 2), 'lie')
+  check('lie pair one group', lg.map((x) => [x.type, x.props.map((p) => p.id)]), [['lie', ['sofa']]])
+  check('memo no longer fits', P.preselectProp(lg, 'lie', 'cot', false), 'sofa')
+  check('memo floor on lie', P.preselectProp(lg, 'lie', '__ground__', false), 'sofa')
+  check('nothing fits', P.preselectProp(P.groupProps(P.fittingProps(cp, 'lie', 3), 'lie'), 'lie', '', P.groundFits('lie', 3)), '')
 } finally {
   await rm(dir, { recursive: true, force: true })
 }

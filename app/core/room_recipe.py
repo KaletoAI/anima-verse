@@ -395,6 +395,17 @@ def _mirrored_openings(lay: Dict[str, Any],
     return out
 
 
+def marker_capacity(marker: Dict[str, Any]) -> int:
+    """How many figures one prop marker seats — the ONE reading of a marker's
+    ``capacity`` (absent/0 = 1). The composed recipe carries it, the scene
+    recipe makes that many slots, and the prop listing's
+    ``marker_capacities`` reports its per-type maximum (Ruling A110c)."""
+    try:
+        return max(1, int(marker.get("capacity") or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
 def compose_prop_marker(*, bbox: List[float], rotation: Any,
                         dims: List[float], frac: List[float],
                         facing: Optional[float], placement_yaw: float,
@@ -949,7 +960,7 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
                 placement_offset_y=off_y)
             composed["id"] = str(marker.get("id") or "")
             composed["group"] = str(marker.get("group") or "")
-            composed["capacity"] = int(marker.get("capacity") or 1)
+            composed["capacity"] = marker_capacity(marker)
             composed["spacing_m"] = float(marker.get("spacing_m") or 0.6)
             from app.core.prop_action_migration import compose_binding
             from app.core.prop_actions import derive_bindings

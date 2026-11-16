@@ -45,7 +45,7 @@ import { rootAt, rootPath, ROLE_COLOR, type RootPath } from './ClipPreview'
 import { ModelTurnHint } from '../../components/ModelTurnHint'
 import { attachModelTurn, configureViewControls, poseMatrix } from '../../lib/modelTurn'
 import { mountPlaceFigure, placeInteraction, placePhaseB } from './placeFigures'
-import { GROUND_MAX, GROUND_PROP, groundRoom, groupProps, planFill, preselectProp, type FillReason } from './placePicker'
+import { GROUND_MAX, GROUND_PROP, fittingProps, groundFits, groundRoom, groupProps, planFill, preselectProp, type FillReason } from './placePicker'
 import { stateMotionUrl, statePicker, type PreviewStateChoice } from '../characters/baseBodyModel'
 
 export const MANNEQUIN = '__mannequin__'
@@ -62,7 +62,7 @@ interface ModelAnswer {
   motion?: SecondaryMotionPayload
 }
 interface PropRow {
-  id: string; name?: string; marker_count?: number; marker_groups?: string[]; has_model?: boolean
+  id: string; name?: string; marker_count?: number; marker_groups?: string[]; marker_capacities?: Record<string, number>; has_model?: boolean
   variant_tiers?: Array<{ variant: number }>
 }
 /** One clip file of the edited kind, as the listing carries it. */
@@ -280,15 +280,19 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
       setProps(usable)
       let memo: { prop?: string; variant?: number } = {}
       try { memo = JSON.parse(localStorage.getItem(memoKey(kind)) || '{}') } catch { memo = {} }
-      // The remembered prop, else the first under the clip's place type (Ruling A110b).
-      const pick = preselectProp(groupProps(usable, wantType), wantType, memo.prop || '')
+      // Only the props that fit the clip (Ruling A110c); the remembered one while it still fits, else the first.
+      const pick = preselectProp(groupProps(fittingProps(usable, wantType, roles), wantType), wantType, memo.prop || '',
+        groundFits(wantType, roles))
       setPropId(pick)
       setVariant(pick === memo.prop ? memo.variant ?? 0 : 0)
-    }).catch(() => { if (!off) { setProps([]); setPropId(GROUND_PROP) } })
+    }).catch(() => { if (!off) { setProps([]); setPropId(groundFits(wantType, roles) ? GROUND_PROP : '') } })
     return () => { off = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind])
-  const propGroups = useMemo(() => groupProps(props ?? [], wantType), [props, wantType])
+  }, [kind, wantType, roles])
+  const propGroups = useMemo(() => groupProps(fittingProps(props ?? [], wantType, roles), wantType),
+    [props, wantType, roles])
+  const groundOk = groundFits(wantType, roles)
+  const nothingFits = props !== null && !groundOk && !propGroups.length
 
   // ── its places from the server (the draft scene preview) ──
   useEffect(() => {
@@ -848,9 +852,12 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           {t('Prop')}{' '}
           <select value={propId} onChange={(e) => { setPropId(e.target.value); setVariant(0); setFillNote(null) }}
             style={{ maxWidth: 220 }} data-testid="place-prop">
-            <optgroup label={t('No prop')}>
-              <option value={GROUND_PROP}>{t('Ground (no prop)')}</option>
-            </optgroup>
+            {groundOk ? (
+              <optgroup label={t('No prop')}>
+                <option value={GROUND_PROP}>{t('Ground (no prop)')}</option>
+              </optgroup>
+            ) : null}
+            {nothingFits ? <option value="">{t('— none fits —')}</option> : null}
             {propGroups.map((g) => (
               <optgroup key={g.type || '-'} label={g.type ? `${typeLabel(g.type)}${g.type === wantType ? ` — ${t('this clip')}` : ''}`
                 : t('Other')}>
@@ -905,6 +912,13 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           </span>
         ) : null}
       </div>
+      {nothingFits ? (
+        <div role="status" data-testid="place-none-fits" className="ga-hint"
+          style={{ color: 'var(--danger, #f85149)', marginBottom: 4 }}>
+          {t('No prop has a {type} place with at least {n} slots, so this clip cannot be shown on a place. Such a prop must exist first — add a {type} place with that capacity to a prop in the Props tab.')
+            .split('{type}').join(wantType ? typeLabel(wantType) : t('fitting')).replace('{n}', String(roles < 2 ? 1 : roles))}
+        </div>
+      ) : null}
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 300px', gap: 8 }}>
         <div>
           <div ref={hostRef} data-testid="place-preview" style={{ position: 'relative', height, background: 'var(--surface-2, #161b22)' }}>
