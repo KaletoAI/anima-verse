@@ -1531,7 +1531,6 @@
     "Wipe": "Löschen",
     "Wipe memory": "Memory löschen",
     "Wiping…": "Lösche…",
-    "Without animation": "Ohne Animation",
     "world": "Welt",
     "World Dev": "World-Dev",
     "World is sleeping — all NPCs are asleep, no NPC LLM chat calls. Ticks, memory consolidation and the game clock keep running. Click to wake.": "Welt schläft — alle NPCs schlafen, keine NPC-LLM-Chat-Calls. Ticks, Memory-Konsolidierung und die Spieluhr laufen weiter. Klicken zum Aufwecken.",
@@ -5967,6 +5966,8 @@
     "Rejected in review.": "Bei der Durchsicht abgelehnt.",
     "Imported into the clip library.": "In die Clip-Bibliothek importiert.",
     "Converted — previewable, not imported yet.": "Konvertiert — mit Vorschau, noch nicht importiert.",
-    "Not converted yet — still importable from the recording.": "Noch nicht konvertiert — aus der Aufnahme trotzdem importierbar."
+    "Not converted yet — still importable from the recording.": "Noch nicht konvertiert — aus der Aufnahme trotzdem importierbar.",
+    "Without clip": "Ohne Clip",
+    "No clip file for this kind — nothing to preview.": "Keine Clip-Datei für diese Art — keine Vorschau."
   }
 }

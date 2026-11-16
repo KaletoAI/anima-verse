@@ -614,10 +614,13 @@ export function PosesTab() {
     [data.entries],
   )
 
+  /** Kinds with at least one clip file — "without clip" means none of these. */
+  const clipKinds = useMemo(() => new Set(clipList.clips.map((c) => c.kind)), [clipList.clips])
+
   const list = useMemo(() => {
     const q = search.trim().toLowerCase()
     return data.entries.filter((p) => {
-      if (isPose && onlyMissing && p.animation) return false
+      if (isPose && onlyMissing && p.animation && clipKinds.has(p.animation)) return false
       if (isPose && groupFilter && (p.group || '') !== groupFilter) return false
       if (!q) return true
       return (
@@ -626,11 +629,11 @@ export function PosesTab() {
         p.synonyms.some((s) => s.includes(q))
       )
     })
-  }, [data.entries, search, onlyMissing, groupFilter, isPose])
+  }, [data.entries, search, onlyMissing, groupFilter, isPose, clipKinds])
 
   const missingCount = useMemo(
-    () => data.entries.filter((p) => !p.animation).length,
-    [data.entries],
+    () => data.entries.filter((p) => !p.animation || !clipKinds.has(p.animation)).length,
+    [data.entries, clipKinds],
   )
 
   const select = useCallback(
@@ -1300,7 +1303,7 @@ export function PosesTab() {
                   onChange={(e) => setOnlyMissing(e.target.checked)}
                 />
                 <span>
-                  {t('Without animation')} ({missingCount})
+                  {t('Without clip')} ({missingCount})
                 </span>
               </label>
             ) : null}
@@ -1900,7 +1903,7 @@ export function PosesTab() {
                         place type (a group on a double bed) and carries the yaw
                         dial; a solo pose never turns against
                         a marker, so it gets no `onYawOffset`. */}
-                    {draft.animation ? (<div>
+                    {draft.animation && clipKinds.has(draft.animation) ? (<div>
                       <ClipPreview
                         kind={draft.animation}
                         bust={animationJobs.find((job) => job.key === draft.key && job.state === 'published')?.task_id}
@@ -1918,7 +1921,8 @@ export function PosesTab() {
                         return built ? <div className="ga-hint" data-testid="pose-built">
                           {t('Built {time}').replace('{time}', new Date(built * 1000).toLocaleString())}</div> : null
                       })()}
-                    </div>) : <div className="ga-placeholder">{t('No animation kind picked — nothing to preview.')}</div>}
+                    </div>) : <div className="ga-placeholder">{draft.animation ? t('No clip file for this kind — nothing to preview.')
+                      : t('No animation kind picked — nothing to preview.')}</div>}
                   </div>
                 ) : null}
                 {draft.movement && draft.deletable === false ? <div className="ga-form-hint">

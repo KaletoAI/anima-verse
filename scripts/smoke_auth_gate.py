@@ -443,11 +443,13 @@ with patch("app.core.pose_animation.submit", return_value="task_00") as submit:
     check("defaults Auto and 3 variants", (submit.call_args.kwargs["backend"],
           submit.call_args.kwargs["variants"]), ("", 3))
 listing = [{"name": "motion-kimodo", "available": True, "motion_meta": {"max_variants": 4}}]
-with patch("app.imagegen.service.get_image_service") as svc:
+with patch("app.imagegen.service.get_image_service") as svc, \
+        patch("app.core.pose_animation.animatable_groups", return_value=["seat", "stand"]):
     svc.return_value.animation_backends.return_value = listing
     response = pose_client.get("/poses/animations/backends", headers=admin_headers)
+# animatable_groups (A110 phase 5): the place types "Run all" may animate, from pose_animation.
 check("backends listing", (response.status_code, response.json()),
-      (200, {"backends": listing, "default_variants": 3}))
+      (200, {"backends": listing, "default_variants": 3, "animatable_groups": ["seat", "stand"]}))
 from app.core.pose_animation import ChoiceError
 for status_code in (404, 409, 410, 422):
     with patch("app.core.pose_animation.choose", side_effect=ChoiceError(status_code, "nope")):
