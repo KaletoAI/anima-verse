@@ -1265,7 +1265,7 @@ export function ClipLibrary({
                       </button>
                       <button type="button" className="ga-btn ga-btn-sm" data-testid="pair-check"
                         disabled={innerTab !== 'places'}
-                        title={t('Plays the pair shown over five loops: the first as stored with the dials above, then the fine fit the game makes for this pair when the interaction starts (at most 5 cm and 10°). Changes nothing, saves nothing.')}
+                        title={t('Plays the pair shown over six loops: the first as stored with the dials above, then the fine fit the game makes for this pair when the interaction starts (at most 5 cm and 10°), with and without the per-frame follow; the last two loops are measured. Changes nothing, saves nothing.')}
                         onClick={() => {
                           const run = pairCheckRef.current
                           setPairCheck(run ? run() : { ok: false, reason: t('The place preview is still loading.') })
@@ -1290,6 +1290,7 @@ export function ClipLibrary({
                                     [t('Depth at the deepest frame'), pairCheck.before.depthMm, pairCheck.after.depthMm, pairCheck.followed.depthMm, 'mm'],
                                     [t('Off the axis inside, worst frame'), pairCheck.before.maxLateralMm, pairCheck.after.maxLateralMm, pairCheck.followed.maxLateralMm, 'mm'],
                                     [t('Shaft against the axis at the outermost frame'), pairCheck.before.axisDeg, pairCheck.after.axisDeg, pairCheck.followed.axisDeg, '°'],
+                                    [t('Interpenetration besides the channel'), pairCheck.clearMm[0], pairCheck.clearMm[1], pairCheck.clearMm[2], 'mm'],
                                   ] as const).map(([label, a, b, c, unit]) => (
                                     <tr key={label}><td>{label}</td>
                                       <td style={{ textAlign: 'right', padding: '0 4px' }}>{a.toFixed(0)} {unit}</td>
@@ -1298,6 +1299,10 @@ export function ClipLibrary({
                                   ))}
                                 </tbody>
                               </table>
+                              {pairCheck.clearWorst ? (
+                                <div className="ga-form-hint" style={{ margin: 0 }}>
+                                  {t('Deepest besides the channel: {pair}').replace('{pair}', pairCheck.clearWorst)}</div>
+                              ) : null}
                             </>
                           ) : <span style={{ color: 'var(--danger, #f85149)' }}>{pairCheck.reason}</span>}
                         </div>
@@ -1310,8 +1315,12 @@ export function ClipLibrary({
                               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                                 <LampDot lamp={autoAlign.lamp} title={autoAlign.lamp === 'green'
                                   ? t('On the opening at the outermost frame and inside the channel at the deepest.')
-                                  : autoAlign.lamp === 'yellow' ? t('Inside at the deepest frame, but off the axis, off the opening, or the shift pressed the bodies more than 30 mm deeper into each other elsewhere.')
+                                  : autoAlign.lamp === 'yellow' ? t('Inside at the deepest frame, but off the axis or off the opening.')
                                     : t('Not inside the channel at the deepest frame.')} />
+                                <LampDot lamp={autoAlign.clearLamp} title={(autoAlign.clearLamp === 'green'
+                                  ? t('Nothing else interpenetrates: only the attached part enters the other body, through the channel (at most 5 mm elsewhere).')
+                                  : t('The bodies interpenetrate besides the channel by {mm} mm, deepest at {pair} (green at most 5 mm, yellow at most 20 mm).')
+                                    .replace('{mm}', autoAlign.overlapAfterMm.toFixed(0)).replace('{pair}', autoAlign.clearWorst || '–'))} />
                                 <span>{t('{by} → {of}: {channel}').replace('{by}', autoAlign.by).replace('{of}', autoAlign.of)
                                   .replace('{channel}', autoAlign.channel.split(':').pop() || autoAlign.channel)}</span>
                               </div>
@@ -1322,7 +1331,7 @@ export function ClipLibrary({
                                     [t('Tip to opening at the outermost frame'), autoAlign.before.entryMm, autoAlign.after.entryMm],
                                     [t('Depth at the deepest frame'), autoAlign.before.depthMm, autoAlign.after.depthMm],
                                     [t('Off the axis there'), autoAlign.before.lateralMm, autoAlign.after.lateralMm],
-                                    [t('Deepest body overlap elsewhere'), autoAlign.overlapBeforeMm, autoAlign.overlapAfterMm],
+                                    [t('Interpenetration besides the channel'), autoAlign.overlapBeforeMm, autoAlign.overlapAfterMm],
                                   ] as const).map(([label, a, b]) => (
                                     <tr key={label}><td>{label}</td>
                                       <td style={{ textAlign: 'right', padding: '0 4px' }}>{a.toFixed(0)} mm</td>

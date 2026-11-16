@@ -259,5 +259,6 @@ export { solveContactShift, contactReport, contactLamp, entryFrame, bodyOverlap,
   CONTACT_ENTRY_GREEN_MM, CONTACT_CLEAR_MM } from './channelContact'
 export type { ContactSample, ContactReport, ContactLamp } from './channelContact'
 export { solvePairFix, fixPoint, unfixPoint, fixSample, fixRoot, composeFix, turnMatrix, matrixTurn, fixAnglesDeg,
-  findContact, contactSampleOf, turnAxes, createPairFit, pairFitTotal, pairFitObserve, FIT_MIN_SAMPLES, FOLLOW, partnerTurnFix, fixPivot, ALIGN_FIT, RUNTIME_FIT, FIT_ANGLE_WEIGHT_M, NO_FIX } from './pairFit'
-export type { FitSample, PairFix, FitBounds, FitOptions, PairFitState } from './pairFit'
+  findContact, contactSampleOf, turnAxes, createPairFit, pairFitTotal, pairFitObserve, FIT_MIN_SAMPLES, FOLLOW, partnerTurnFix, fixPivot, ALIGN_FIT, RUNTIME_FIT, FIT_ANGLE_WEIGHT_M, NO_FIX,
+  pairInterpenetration, clearLamp, PART_REGIONS, CLEAR_GREEN_MM, CLEAR_YELLOW_MM } from './pairFit'
+export type { FitSample, PairFix, FitBounds, FitOptions, PairFitState, ClearLamp } from './pairFit'

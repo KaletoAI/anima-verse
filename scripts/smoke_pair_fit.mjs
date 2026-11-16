@@ -31,12 +31,20 @@
  *   [10] Bound: the same with x = 0.08 → Δx clamped to −0.05 (RUNTIME_FIT.maxShiftM).
  *   [11] After the fit every measured frame lies on the axis: lateralMm all 0 (±1e-3 mm). Loop 3 adds 9 rows: its
  *        frame 0 is the solving frame, rendered BEFORE the fit (s = −0.02 < 0, not inside).
- * THE FOLLOW (A129.4), fixture C with the fit bounded to nothing (maxShiftM 0, maxAngleDeg 0) so only the follow acts;
- *   every frame inside (s ≥ −0.03). Integral control f ← f − 0.7·r on the lateral r of the frame just rendered:
- *   r_n = 0.01 + f_n  →  f_{n+1} = f_n − 0.7(0.01 + f_n) = 0.3 f_n − 0.007  →  f_n = −0.01 (1 − 0.3^n).
- *   [12] after 3 observed frames f_x = −0.01 · (1 − 0.027) = −0.00973 (±1e-9); f_y = f_z = 0.
- *   [13] lateral offset 0.05: the fixed point −0.05 lies beyond FOLLOW.maxM → f_x clamps at −0.02 after enough frames.
- *   [14] a tip far outside (s = −0.2 < −0.03): the follow decays by 0.9 per frame (−0.00973 → −0.008757).
+ * THE FOLLOW (A129.4), fixture C with the fit bounded to nothing (maxShiftM 0, maxAngleDeg 0) so only the follow acts.
+ *   Fitted after 2 loops + 1 frame ([8]); the period seen is 0.9 s, so 24 bins of 0.0375 s: phase k/10 lies in bin
+ *   floor(k/10 / 0.9 · 24) — k = 0..9 → bins 0, 2, 5, 8, 10, 13, 16, 18, 21, 23 (one frame per bin). Each bin learns
+ *   f ← f − 0.8·r from the frame rendered with it: r_n = 0.01 + f_n → f_n = −0.01 (1 − 0.2^n) per loop.
+ *   [12] after loops 3, 4, 5 (frames 1..9 of loop 3 learn; frame 0 was the solving frame, rendered before the fit):
+ *        bin 0 has learnt twice (loops 4, 5) → −0.01 · (1 − 0.04) = −0.0096; bin 2 thrice → −0.01 · 0.992 = −0.00992.
+ *   [13] lateral offset 0.05: the fixed point −0.05 lies beyond FOLLOW.maxM → every bin at −0.02 after 4 loops.
+ *   [14] the tip far outside (s = −0.2 < −0.03) for one more loop: bin 2 decays by 0.9 → −0.008928.
+ *   [15] pairFitTotal at phase 0.1 (bin 2) carries that bin's shift; without a phase it carries none.
+ * THE HONEST CHECK (A129.5): entering E with part capsule `part`, receiving R whose channel allows `pelvis`.
+ *   Contacts: E|part–R|pelvis 0.03 (exempt), R|pelvis–E|part 0.04 (exempt, reversed order), E|part–R|thigh 0.01
+ *   (counts: the part may only pass the allowed capsule), E|thigh–R|pelvis 0.02 (counts: not the part).
+ *   [16] depth 0.02 at E thigh ↔ R pelvis. Without the exemption the deepest would be 0.04.
+ *   [17] lamps: 5 mm green, 5.1 yellow, 20 yellow, 20.1 red.
  */
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -107,16 +115,28 @@ near(runLoops(0.08, 3).st.fix.shift[0], -0.05, 1e-12, 'fit bound')              
 assert.equal(c1.st.lateralMm.length, 9)                                                    // [11]
 assert.ok(c1.st.lateralMm.every((v) => Math.abs(v) < 1e-3), 'lateral after the fit')
 const NOFIT = { maxShiftM: 0, maxAngleDeg: 0 }
-const follow = (x0, frames, z = 0.01, st = SR.createPairFit()) => {
-  for (let k = 0; k < frames; k++) {
-    const tip = [x0, 0, z]
+const followLoops = (x0, loops, z = 0.01, st = SR.createPairFit()) => {
+  for (let L = 0; L < loops; L++) for (let k = 0; k < 10; k++) {
+    const ph = k / 10, tip = [x0, 0, z]
     const raw = { tip, base: [x0, 0, z - 0.1], o: O, u: U, pivot: [0, 0, -0.3] }
-    SR.pairFitObserve(st, SR.fixSample(raw, SR.pairFitTotal(st)), 0.05 * k, [], NOFIT, true)
+    SR.pairFitObserve(st, SR.fixSample(raw, SR.pairFitTotal(st, ph)), ph, [], NOFIT, true)
   }
   return st
 }
-const f3 = follow(0.01, 3)                                                                   // [12]
-near(f3.follow[0], -0.00973, 1e-9, 'follow x'); near(f3.follow[1], 0, 1e-12, 'follow y'); near(f3.follow[2], 0, 1e-12, 'follow z')
-near(follow(0.05, 30).follow[0], -0.02, 1e-12, 'follow clamp')                              // [13]
-near(follow(0.01, 1, -0.2, f3).follow[0], -0.008757, 1e-9, 'follow decay')                  // [14]
+const f5 = followLoops(0.01, 5)                                                             // [12]
+near(f5.period, 0.9, 1e-12, 'period')
+near(f5.followTable[0][0], -0.0096, 1e-9, 'bin 0'); near(f5.followTable[2][0], -0.00992, 1e-9, 'bin 2')
+near(f5.followTable[2][1], 0, 1e-12, 'bin 2 y')
+assert.ok(followLoops(0.05, 6).followTable.filter((_, b) => [0, 2, 5, 8, 10, 13, 16, 18, 21, 23].includes(b))
+  .every((c) => Math.abs(c[0] + 0.02) < 1e-12), 'follow clamp')                             // [13]
+near(followLoops(0.01, 1, -0.2, f5).followTable[2][0], -0.008928, 1e-9, 'follow decay')   // [14]
+near(SR.pairFitTotal(f5, 0.1).shift[0], f5.followTable[2][0], 1e-12, 'total with phase')   // [15]
+near(SR.pairFitTotal(f5).shift[0], 0, 1e-12, 'total without phase')
+const contacts = [{ a: 'E', capA: 'part', b: 'R', capB: 'pelvis', depth: 0.03 },
+  { a: 'R', capA: 'pelvis', b: 'E', capB: 'part', depth: 0.04 }, { a: 'E', capA: 'part', b: 'R', capB: 'thigh', depth: 0.01 },
+  { a: 'E', capA: 'thigh', b: 'R', capB: 'pelvis', depth: 0.02 }]
+const hon = SR.pairInterpenetration(contacts, { entering: 'E', parts: new Set(['part']), receiving: 'R', allowed: new Set(['pelvis']) })
+near(hon.depth, 0.02, 1e-12, 'honest depth'); assert.deepEqual(hon.worst, { a: 'E', capA: 'thigh', b: 'R', capB: 'pelvis' })  // [16]
+near(SR.pairInterpenetration(contacts, { entering: 'E', parts: new Set(), receiving: 'R', allowed: new Set() }).depth, 0.04, 1e-12, 'no exemption')
+assert.deepEqual([5, 5.1, 20, 20.1].map(SR.clearLamp), ['green', 'yellow', 'yellow', 'red'])                                       // [17]
 console.log('smoke_pair_fit: OK')

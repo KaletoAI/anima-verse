@@ -36,9 +36,9 @@ import {
   placeModelSpec, restCorrections, restPoseOf, strandCandidates,
   type AlignmentDraft, type ChannelNow, type FrameInspection, type AlignmentLamp, type ClipHeightOffsetsCm, type CollisionPayload, type FigureRuntime,
   type HairStrandRecord, type SceneMarker, type SceneModelSpec, type SecondaryMotionPayload,
-  bodyOverlap, contactLamp, contactReport, solveContactShift, solvePairFix, fixRoot, fixPivot, partnerTurnFix, turnAxes,
+  contactLamp, contactReport, solveContactShift, solvePairFix, fixRoot, fixPivot, partnerTurnFix, turnAxes,
   fixAnglesDeg, ALIGN_FIT, NO_FIX, RUNTIME_FIT, createPairFit, pairFitObserve, pairFitTotal, findContact, contactSampleOf,
-  type PairFitState,
+  type PairFitState, pairInterpenetration, clearLamp, PART_REGIONS, type ClearLamp,
   type ContactLamp, type ContactReport, type FitSample, type PairFix,
 } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -157,6 +157,8 @@ export interface PairFitReadout {
 export type PairCheckResult =
   | { ok: false; reason: string }
   | { ok: true; by: string; of: string; before: ContactReport; after: ContactReport; fit: PairFitReadout
+      /** Ruling A129.5: the deepest interpenetration besides the channel (mm) over each run's frames, and its pair. */
+      clearMm: [number, number, number]; clearWorst: string
       /** Ruling A129.4: the same with the per-frame follow on top of the fit. */
       followed: ContactReport; followFit: PairFitReadout }
 
@@ -233,6 +235,8 @@ export type AutoAlignResult =
   | { ok: true; by: string; of: string; channel: string; shiftCm: [number, number, number]
       /** Ruling A129: partner B's tilt/roll (degrees, saved + draft + solved, each within ±20°). */
       turnDeg: [number, number]
+      /** Ruling A129.5: the deepest interpenetration besides what the channel allows, its pair and lamp. */
+      clearWorst: string; clearLamp: ClearLamp
       before: ContactReport; after: ContactReport; afterShift: ContactReport; overlapBeforeMm: number; overlapAfterMm: number
       lampBefore: ContactLamp; lamp: ContactLamp }
 
@@ -785,6 +789,17 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           const w = ie && ir ? contactSampleOf(ie, ir, hit, pivot) : null
           return w ? { tip: toStageP(w.tip), base: toStageP(w.base), o: toStageP(w.o), u: toStageP(w.u, true), pivot } : null
         }
+        // Ruling A129.5: the honest check of one frame — only the entering figure's attached part against the
+        // receiving channel's `suppress` capsules is exempt; the pair is named by place letter and capsule.
+        const honestAt = (res: NonNullable<ReturnType<typeof placePhaseB>>, hit: Hit) => {
+          const ie = res.figures[hit.e].inspection, ir = res.figures[hit.r].inspection
+          const ch = ir?.channels.find((x) => x.id === hit.channel)
+          const got = pairInterpenetration(res.frame.contacts, { entering: entries[hit.e].name,
+            parts: new Set((ie?.capsules ?? []).filter((c) => PART_REGIONS.includes(c.region)).map((c) => c.id)),
+            receiving: entries[hit.r].name, allowed: new Set(ch?.suppress ?? []) })
+          const w = got.worst
+          return { mm: got.depth * 1000, worst: w ? `${letterOf(w.a)} ${w.capA} ↔ ${letterOf(w.b)} ${w.capB}` : '' }
+        }
         const fitReadout = (st: PairFitState, hit: Hit, axes: [number, number, number][]): PairFitReadout => {
           const tot = pairFitTotal(st)
           const lat = [...st.lateralMm].sort((a, b) => a - b)
@@ -838,7 +853,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           for (const f of figs) {
             // phase A: the pose, then the root by the calibration (draft over saved, the bake's order)
             f.mixer.setTime(time)
-            const extra = fitOn && live.hit && figs[live.hit.e] === f ? pairFitTotal(live.st) : NO_FIX
+            const extra = fitOn && live.hit && figs[live.hit.e] === f ? pairFitTotal(live.st, time) : NO_FIX
             placedNow.set(f, placeRoot(f, time, draft, extra))
             f.runtime.poseStep({ realDelta: dt })
           }
@@ -956,7 +971,6 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           const moving = figs.find((f) => f.role === 'b')
           if (!moving || (fe.role !== 'b' && fr.role !== 'b')) return { ok: false, reason: t('Auto-align moves partner B; neither figure of the contact is B.') }
           const sign = moving === fe ? 1 : -1
-          const eName = entries[hit.e].name, rName = entries[hit.r].name
           const rot = new THREE.Matrix3().setFromMatrix4(stageInv)
           const vec = new THREE.Vector3()
           const toStage = (p: readonly number[], dir = false): [number, number, number] => {
@@ -973,7 +987,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             const draft: AlignmentDraft = { ...base, roleShiftM: { ...base.roleShiftM,
               b: [b0[0] + extra[0], b0[1] + extra[1], b0[2] + extra[2]] }, partnerTurnDeg: [t0[0] + turn[0], t0[1] + turn[1]] }
             const samples: FitSample[] = []
-            let overlap = 0
+            let overlap = 0, worst = ''   // mm while sampling (A129.5 honest check)
             for (let i = 0; i < 2 * loop; i++) {
               const time = (i % loop) * step % duration
               const res = runAt(time, draft, i >= loop)
@@ -987,11 +1001,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               axes = turnAxes(pl.frame)
               samples.push({ tip: toStage(chain.segments[chain.segments.length - 1].b), base: toStage(chain.segments[0].a),
                 o: toStage(ch.o), u: toStage(ch.u, true), pivot: pl.pivot })
-              const skip = new Set<string>([...ch.suppress.map((id) => `${rName}|${id}`),
-                ...ie.capsules.filter((c) => c.region === 'attached_part' || c.region === 'appendage').map((c) => `${eName}|${c.id}`)])
-              overlap = Math.max(overlap, bodyOverlap(res.frame.contacts, skip))
+              const h = honestAt(res, hit)
+              if (h.mm > overlap) { overlap = h.mm; worst = h.worst }
             }
-            return { samples, overlap, draft }
+            return { samples, overlap: overlap / 1000, worst, draft }
           }
           // world (stage) Δ of the entering tip → B's clip-frame role shift: S = sign · frameᵀ Δ, the vertical through the
           // hips-drop gain (root.y moves by hipsBind.y / standRef per metre of clip hips).
@@ -1044,10 +1057,12 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             shiftCm: [cm(b0[0] + extra[0]), cm(b0[1] + extra[1]), cm(b0[2] + extra[2])],
             turnDeg: [deg(t0[0] + turn[0]), deg(t0[1] + turn[1])], afterShift,
             before, after, overlapBeforeMm: p0.overlap * 1000, overlapAfterMm: cur.overlap * 1000,
-            lampBefore: contactLamp(before, chNow), lamp: contactLamp(after, chNow, (cur.overlap - p0.overlap) * 1000) }
+            clearWorst: cur.worst, clearLamp: clearLamp(cur.overlap * 1000),
+            lampBefore: contactLamp(before, chNow), lamp: contactLamp(after, chNow) }
         }
-        // ── Ruling A129.3: the pair over whole loops at 60 fps — loop 1 as stored + draft (the "before"), loop 2 arms
-        // and loop 3 samples the fine fit (as client3d does when the interaction starts), loops 4–5 play with it. ──
+        // ── Ruling A129.3: the pair over whole loops at 60 fps — loop 1 as stored + draft (the "before"), loop 2 is
+        // sampled for the fine fit (as client3d does when the interaction starts), loops 3–4 settle the chain and teach
+        // the follow (A129.4), loops 5–6 are measured. ──
         const pairCheckOnce = (follow: boolean): PairCheckResult => {
           if (solo || figs.length < 2) return { ok: false, reason: t('The pair check needs a pair clip on a place.') }
           const step = 1 / 60
@@ -1057,11 +1072,12 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           let hit: Hit | null = null
           let axes: [number, number, number][] = []
           const before: FitSample[] = [], after: FitSample[] = []
-          for (let i = 0; i < 5 * loop; i++) {
+          let clearBefore = 0, clearAfter = 0, clearWorst = ''
+          for (let i = 0; i < 6 * loop; i++) {
             const time = (i % loop) * step % duration
             for (const f of figs) {
               f.mixer.setTime(time)
-              placedNow.set(f, placeRoot(f, time, draft, hit && figs[hit.e] === f ? pairFitTotal(st) : NO_FIX))
+              placedNow.set(f, placeRoot(f, time, draft, hit && figs[hit.e] === f ? pairFitTotal(st, time) : NO_FIX))
               f.runtime.poseStep({ realDelta: step })
             }
             const res = placePhaseB(entries, frameState, true)
@@ -1073,9 +1089,13 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             if (!smp) continue
             axes = turnAxes(pl.frame)
             // Loop 3 settles the chain after the fit's jump; its rows do not count.
-            if (i === 3 * loop) st.lateralMm = []
-            if (i < loop) before.push(smp)
-            else if (st.phase === 'fitted' && i >= 3 * loop) after.push(smp)
+            if (i === 4 * loop) st.lateralMm = []
+            const h = honestAt(res, hit)
+            if (i < loop) { before.push(smp); clearBefore = Math.max(clearBefore, h.mm) }
+            else if (st.phase === 'fitted' && i >= 4 * loop) {
+              after.push(smp)
+              if (h.mm > clearAfter) { clearAfter = h.mm; clearWorst = h.worst }
+            }
             pairFitObserve(st, smp, time, axes, RUNTIME_FIT, follow)
           }
           for (const f of figs) {
@@ -1087,13 +1107,14 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           if (before.length < 4 || after.length < 4) return { ok: false, reason: t('The contact could not be sampled over the clip.') }
           const fit = fitReadout(st, hit, axes), rep = contactReport(after)
           return { ok: true, by: figs[hit.e].letter, of: figs[hit.r].letter, before: contactReport(before),
-            after: rep, fit, followed: rep, followFit: fit }
+            after: rep, fit, followed: rep, followFit: fit, clearMm: [clearBefore, clearAfter, clearAfter], clearWorst }
         }
         const pairCheck = (): PairCheckResult => {
           const plain = pairCheckOnce(false)
           if (!plain.ok) return plain
           const followed = pairCheckOnce(true)
-          return followed.ok ? { ...plain, followed: followed.after, followFit: followed.fit } : plain
+          return followed.ok ? { ...plain, followed: followed.after, followFit: followed.fit,
+            clearMm: [plain.clearMm[0], plain.clearMm[1], followed.clearMm[1]], clearWorst: followed.clearWorst } : plain
         }
         if (pairCheckOut.current) pairCheckOut.current.current = pairCheck
         disposers.push(() => { if (pairCheckOut.current?.current) pairCheckOut.current.current = null })

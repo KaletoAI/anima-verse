@@ -23,10 +23,12 @@
  * `FIT_MIN_SAMPLES` samples — and keeps
  * that fix for the interaction. The stored clip offset stays the coarse one; every pair gets its own fine one.
  *
- * THE FOLLOW (`pairFitObserve`): per frame a small extra shift of the entering figure that keeps the tip on the
- * channel axis through the stroke — integral control on the measured lateral r = P(T − O):
- *   f ← clamp(f − g · r, `FOLLOW.maxM`) while the tip is near (s ≥ −`FOLLOW.nearM`), else f ← f · `FOLLOW.decay`.
- * Measured on the frame just rendered, applied on the next (one frame of lag, like any IK on last frame's pose).
+ * THE FOLLOW (`pairFitObserve`): per frame a small extra shift of the entering figure (its pelvis, the whole body
+ * rigidly) that keeps the tip on the channel axis through the stroke. The clip LOOPS, so the correction is learnt per
+ * PHASE: the loop is cut into `FOLLOW.bins` bins, the frame rendered in bin b with the shift f_b shows the lateral
+ * r = P(T − O), and  f_b ← clamp(f_b − g · r, `FOLLOW.maxM`)  while the tip is near (s ≥ −`FOLLOW.nearM`), else
+ * f_b ← f_b · `FOLLOW.decay` — repetitive control: the error of a bin shrinks by (1 − g) per loop, without the lag a
+ * per-frame integral has on a stroke. Only once fitted (the follow never enters the fit's samples).
  *
  * THE HONEST CHECK (`pairInterpenetration`): the deepest overlap of two different figures' capsules where ONLY the
  * pairs the channel allows are exempt — an attached-part capsule of the entering figure against one of the receiving
@@ -53,7 +55,7 @@ export const ALIGN_FIT: FitBounds = Object.freeze({ maxShiftM: 0.5, maxAngleDeg:
 /** The runtime fine fit of one pair on top of the stored clip: ±5 cm, ±10°. */
 export const RUNTIME_FIT: FitBounds = Object.freeze({ maxShiftM: 0.05, maxAngleDeg: 10 })
 export const FIT_MIN_SAMPLES = 8
-export const FOLLOW = Object.freeze({ maxM: 0.02, gain: 0.7, nearM: 0.03, decay: 0.9 })
+export const FOLLOW = Object.freeze({ maxM: 0.02, gain: 0.8, nearM: 0.03, decay: 0.9, bins: 24 })
 export const CLEAR_GREEN_MM = 5
 export const CLEAR_YELLOW_MM = 20
 export const NO_FIX: PairFix = Object.freeze({ shift: [0, 0, 0] as Vec3, turn: [0, 0, 0] as Vec3 }) as PairFix
@@ -229,7 +231,12 @@ export interface PairFitState {
   phase: 'collect' | 'fitted'
   samples: FitSample[]
   fix: PairFix
+  /** The follow shift applied in the last observed frame (readout). */
   follow: Vec3
+  /** THE FOLLOW's table: one shift per phase bin of the loop (`FOLLOW.bins`), learnt loop over loop. */
+  followTable: Vec3[]
+  /** The loop length (s) as seen: the largest clip phase before a wrap. */
+  period: number
   lastPhase: number
   /** The first wrap of the clip was seen: from here one WHOLE loop is sampled. */
   armed: boolean
@@ -238,42 +245,57 @@ export interface PairFitState {
 }
 
 export function createPairFit(): PairFitState {
-  return { phase: 'collect', samples: [], fix: NO_FIX, follow: [0, 0, 0], lastPhase: -1, armed: false, lateralMm: [] }
+  return { phase: 'collect', samples: [], fix: NO_FIX, follow: [0, 0, 0],
+    followTable: Array.from({ length: FOLLOW.bins }, () => [0, 0, 0] as Vec3), period: 0, lastPhase: -1, armed: false,
+    lateralMm: [] }
 }
 
-/** The fix the entering figure carries this frame: the solved one plus the follow shift. */
-export function pairFitTotal(st: PairFitState): PairFix {
-  return { shift: add(st.fix.shift, st.follow), turn: st.fix.turn }
+const binOf = (st: PairFitState, phase: number) =>
+  Math.max(0, Math.min(FOLLOW.bins - 1, Math.floor(phase / (st.period || 1) * FOLLOW.bins)))
+
+/** The fix the entering figure carries this frame: the solved one, plus — once fitted and given the clip `phase` —
+ *  the follow shift learnt for that phase. */
+export function pairFitTotal(st: PairFitState, phase?: number): PairFix {
+  const f = st.phase === 'fitted' && phase !== undefined && st.period > 0 ? st.followTable[binOf(st, phase)] : [0, 0, 0] as Vec3
+  return { shift: add(st.fix.shift, f), turn: st.fix.turn }
 }
 
 /** One rendered frame of the pair (module docstring THE RUNTIME FIT / THE FOLLOW). `measured` = the sample as
- *  rendered, i.e. WITH `pairFitTotal(st)` applied about `measured.pivot`; `phase` = the clip time (s). `axes` =
+ *  rendered, i.e. WITH `pairFitTotal(st, phase)` applied about `measured.pivot`; `phase` = the clip time (s). `axes` =
  *  the tilt/roll axes (world) of this frame. `follow` false switches the follow off (the fit still runs). */
 export function pairFitObserve(st: PairFitState, measured: FitSample, phase: number, axes: readonly Vec3[],
   bounds: FitBounds = RUNTIME_FIT, follow = true): void {
-  const total = pairFitTotal(st)
+  const wrapped = st.lastPhase >= 0 && phase < st.lastPhase
+  if (wrapped) st.period = Math.max(st.period, st.lastPhase)
   if (st.phase === 'collect') {
+    // Nothing of the follow is applied while collecting: the total is the (zero) fix.
+    const total = pairFitTotal(st)
     const raw: FitSample = { ...measured, tip: unfixPoint(total, measured.pivot, measured.tip),
       base: unfixPoint(total, measured.pivot, measured.base) }
-    const wrapped = st.lastPhase >= 0 && phase < st.lastPhase
     if (wrapped && st.armed && st.samples.length >= FIT_MIN_SAMPLES) {
       st.fix = solvePairFix(st.samples, { ...bounds, axes })
       st.phase = 'fitted'
-    } else {
-      if (wrapped) st.armed = true
-      if (st.armed) st.samples.push(raw)
+      st.lastPhase = phase
+      return   // this frame was rendered before the fit: it teaches the follow nothing
     }
+    if (wrapped) st.armed = true
+    if (st.armed) st.samples.push(raw)
   }
   st.lastPhase = phase
+  if (st.phase !== 'fitted') return
   // What was rendered: the evidence (lateral through the stroke, once fitted).
   const rel = sub(measured.tip, measured.o)
   const s = dot(rel, measured.u)
   const lat = lateral(rel, measured.u)
-  if (st.phase === 'fitted' && s >= 0) st.lateralMm.push(len(lat) * 1000)
-  if (!follow) { st.follow = [0, 0, 0]; return }
-  if (s >= -FOLLOW.nearM) {
-    st.follow = [0, 1, 2].map((i) => clamp(st.follow[i] - FOLLOW.gain * lat[i], FOLLOW.maxM)) as Vec3
-  } else st.follow = scale(st.follow, FOLLOW.decay)
+  if (s >= 0) st.lateralMm.push(len(lat) * 1000)
+  const b = binOf(st, phase)
+  const cell = st.followTable[b]
+  if (!follow) { st.followTable[b] = [0, 0, 0]; st.follow = [0, 0, 0]; return }
+  // The frame was rendered with this bin's shift, so its lateral is that shift's error: learn it for the next loop.
+  st.followTable[b] = s >= -FOLLOW.nearM
+    ? [0, 1, 2].map((i) => clamp(cell[i] - FOLLOW.gain * lat[i], FOLLOW.maxM)) as Vec3
+    : scale(cell, FOLLOW.decay)
+  st.follow = st.followTable[b]
 }
 
 // ── finding the contact in two inspections ──
@@ -302,3 +324,28 @@ export function contactSampleOf(entering: InspectionLike, receiving: InspectionL
     u: scale(u, 1 / l), pivot }
 }
 
+// ── the honest interpenetration check ──
+
+export type ClearLamp = 'green' | 'yellow' | 'red'
+/** The deepest overlap between two different figures' capsules (metres, ≥ 0) where only `entering|part` against
+ *  `receiving|allowed` is exempt (module docstring THE HONEST CHECK), and the pair it is. */
+export function pairInterpenetration(
+  contacts: readonly { a: string; capA: string; b: string; capB: string; depth: number }[],
+  allow: { entering: string; parts: ReadonlySet<string>; receiving: string; allowed: ReadonlySet<string> },
+): { depth: number; worst: { a: string; capA: string; b: string; capB: string } | null } {
+  let depth = 0
+  let worst: { a: string; capA: string; b: string; capB: string } | null = null
+  const exempt = (fa: string, ca: string, fb: string, cb: string) =>
+    fa === allow.entering && allow.parts.has(ca) && fb === allow.receiving && allow.allowed.has(cb)
+  for (const c of contacts) {
+    if (exempt(c.a, c.capA, c.b, c.capB) || exempt(c.b, c.capB, c.a, c.capA)) continue
+    if (c.depth > depth) { depth = c.depth; worst = { a: c.a, capA: c.capA, b: c.b, capB: c.capB } }
+  }
+  return { depth, worst }
+}
+/** The capsule regions of the entering figure that ARE the attached part (only these may enter the channel). */
+export const PART_REGIONS: readonly string[] = ['attached_part', 'appendage']
+/** The lamp of the honest check (mm): green ≤ `CLEAR_GREEN_MM`, yellow ≤ `CLEAR_YELLOW_MM`, red beyond. */
+export function clearLamp(depthMm: number): ClearLamp {
+  return depthMm <= CLEAR_GREEN_MM ? 'green' : depthMm <= CLEAR_YELLOW_MM ? 'yellow' : 'red'
+}

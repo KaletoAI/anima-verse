@@ -1548,7 +1548,9 @@ export class NpcManager {
     if (rec && rec.entering === npc.name) {
       rec.pivot = got.pivot;
       rec.axes = turnAxes(got.frame);
-      if (rec.hit) fix = composeFix(fix, pairFitTotal(rec.st));
+      const it = npc.interaction;
+      const phase = it && it.clipDuration > 0 ? it.clipT % it.clipDuration : undefined;
+      if (rec.hit) fix = composeFix(fix, pairFitTotal(rec.st, phase));
     }
     if (!(fix.turn.some((v) => v) || fix.shift.some((v) => v))) return;
     const p = npc.root.position;
