@@ -1321,6 +1321,9 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         # Ruling A139: the contact relations of a pair/group clip
         # ({"relations", "source"}: clip | package | default); None for a solo clip.
         "contact_target": clip_contact_target(meta, entry["kind"]) if entry["role"] else None,
+        # Ruling A145: how far the attached part may bend toward its target
+        # ({"limits", "source"}: clip | package | default); None for a solo clip.
+        "bend_limits": clip_bend_limits(meta, entry["kind"]) if entry["role"] else None,
         # Saved orientation and renderer calibration. Angles and partner B
         # offsets are baked; the whole-clip shift is applied at placement.
         "orientation": {k: geometry.get(k) for k in
@@ -1936,6 +1939,118 @@ def set_clip_contact_target(library: str, rel: str, relations: Any) -> List[Dict
     reload_clip_caches()
     logger.info("clip contact relations: %s%s (%s) -> %s", f"{cset}/" if cset else "", kind, library,
                 data.get("contact_relations") or "inherited")
+    return [_view_of(p, cset, library) for p in _kind_files(path.parent, kind)]
+
+
+#: Ruling A145: the core default of how far an attached part may bend toward its contact target before the
+#: pair fit moves the partner, per state (degrees per joint / in all); a raised state is much stiffer.
+BEND_LIMITS_DEFAULT = {"raised": {"joint_deg": 15.0, "total_deg": 35.0},
+                       "resting": {"joint_deg": 45.0, "total_deg": 120.0}}
+BEND_STATES = ("raised", "resting")
+#: Hook capability a package registers to default the bend limits of its clip kinds
+#: (``fn() -> {kind: limits}``, ``multiple=True``; ``"*"`` = every kind without its own entry);
+#: limits as :func:`validate_bend_limits` takes them. The clip's own value wins.
+BEND_LIMIT_DEFAULTS_CAPABILITY = "clip_bend_limit_defaults"
+
+
+def validate_bend_limits(value: Any, base: Optional[Dict[str, Dict[str, float]]] = None) -> Dict[str, Dict[str, float]]:
+    """Ruling A145: a clip's BEND LIMITS — ``{"raised": {"joint_deg", "total_deg"}, "resting": {...}}``.
+
+    Partial input is completed from ``base`` (default: :data:`BEND_LIMITS_DEFAULT`). Every value is a
+    finite number, ``joint_deg`` 0–90, ``total_deg`` 0–360 (0 = the part stays rigid in that state).
+    """
+    import math
+    base = base or BEND_LIMITS_DEFAULT
+    if not isinstance(value, dict) or set(value) - set(BEND_STATES):
+        raise ClipLibraryError("bend limits must be an object with raised and/or resting")
+    out: Dict[str, Dict[str, float]] = {}
+    for state in BEND_STATES:
+        got = value.get(state, {})
+        if not isinstance(got, dict) or set(got) - {"joint_deg", "total_deg"}:
+            raise ClipLibraryError(f"bend limits {state}: an object with joint_deg and/or total_deg")
+        row = {}
+        for key, upper in (("joint_deg", 90.0), ("total_deg", 360.0)):
+            v = got.get(key, base[state][key])
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not 0 <= v <= upper:
+                raise ClipLibraryError(f"bend limits {state}.{key} must be a number from 0 to {upper:g}")
+            row[key] = float(v)
+        out[state] = row
+    return out
+
+
+def package_bend_limits() -> Dict[str, Dict[str, Dict[str, float]]]:
+    """The bend-limit defaults every loaded package declares, by clip kind (``"*"`` = any kind; first valid wins)."""
+    from app.core import hooks
+    out: Dict[str, Dict[str, Dict[str, float]]] = {}
+    for fn in hooks.get_providers(BEND_LIMIT_DEFAULTS_CAPABILITY):
+        try:
+            got = fn() or {}
+        except Exception as e:  # a broken package must not break the clip listing
+            logger.warning("bend limit defaults provider failed: %s", e)
+            continue
+        if not isinstance(got, dict):
+            continue
+        for kind, lim in got.items():
+            if not isinstance(kind, str) or kind in out:
+                continue
+            try:
+                out[kind] = validate_bend_limits(lim)
+            except ClipLibraryError as e:
+                logger.warning("bend limits of %s from a package ignored: %s", kind, e)
+    return out
+
+
+def clip_bend_limits(meta: Optional[Dict[str, Any]], kind: str) -> Dict[str, Any]:
+    """Ruling A145: the bend limits of a pair/group clip — ``{"limits", "source"}``.
+
+    The ``<kind>.json``'s ``bend_limits`` (source ``clip``, set in the Poses tab, completed from the
+    inherited value) over a package default for the kind or ``"*"`` (``package``) over
+    :data:`BEND_LIMITS_DEFAULT` (``default``).
+    """
+    pkg = package_bend_limits()
+    inherited = pkg.get(kind) or pkg.get("*")
+    base = inherited or BEND_LIMITS_DEFAULT
+    own = (meta or {}).get("bend_limits") if isinstance(meta, dict) else None
+    if own is not None:
+        try:
+            return {"limits": validate_bend_limits(own, base), "source": "clip"}
+        except ClipLibraryError:
+            pass
+    if inherited:
+        return {"limits": inherited, "source": "package"}
+    return {"limits": validate_bend_limits({}), "source": "default"}
+
+
+@_library_writer
+def set_clip_bend_limits(library: str, rel: str, limits: Any) -> List[Dict[str, Any]]:
+    """Writes (or with ``None`` clears = inherit) a pair/group clip's bend limits in its shared
+    ``<kind>.json`` (Ruling A145). Refused for a solo clip, invalid limits and a kind without a sidecar."""
+    path = resolve_clip(library, rel)
+    if not path.is_file():
+        raise ClipNotFound(f"{rel} does not exist in the {library} library")
+    kind, role = parse_clip_role(path.name)
+    if not role:
+        raise ClipLibraryError(f"'{kind}' is a solo clip — only a pair clip has bend limits")
+    root = library_root(library).resolve()
+    cset = path.parent.name if path.parent.resolve() != root else ""
+    sidecar = path.parent / f"{kind}.json"
+    if not sidecar.is_file():
+        raise ClipLibraryError(f"'{kind}' has no sidecar {sidecar.name} — re-import the clip first")
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ClipLibraryError(f"{sidecar.name} is not readable: {e}")
+    if not isinstance(data, dict):
+        raise ClipLibraryError(f"{sidecar.name} is not an object")
+    if limits is None:
+        data.pop("bend_limits", None)
+    else:
+        pkg = package_bend_limits()
+        data["bend_limits"] = validate_bend_limits(limits, pkg.get(kind) or pkg.get("*"))
+    sidecar.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    reload_clip_caches()
+    logger.info("clip bend limits: %s%s (%s) -> %s", f"{cset}/" if cset else "", kind, library,
+                data.get("bend_limits") or "inherited")
     return [_view_of(p, cset, library) for p in _kind_files(path.parent, kind)]
 
 

@@ -215,6 +215,18 @@ wins; nothing declared = the A126 auto-detection. Core:
 `app.core.animation_clips.clip_contact_target(meta, kind)`,
 `validate_contact_relations(value, roles)`.
 
+## Clip bend limits — capability `clip_bend_limit_defaults` ✅
+
+Ruling A145. Before Auto-align, the fine fit or the follow move a pair clip's partner, the
+attached part bends toward its contact target — at most `joint_deg` per joint and `total_deg`
+in all, per state: `raised` (the chain's straightened state) and `resting`, blended by how far
+the chain is raised. Core default raised 15°/35°, resting 45°/120°. A package defaults its kinds
+with `register_provider("clip_bend_limit_defaults", fn, owner="<package id>", multiple=True)`,
+`fn() -> {kind | "*": {"raised": {"joint_deg", "total_deg"}, "resting": {...}}}` (partial = completed
+from the core default; `"*"` = every kind without its own entry). The clip's own `bend_limits` in
+its `<kind>.json` (Poses tab → Alignment → Contacts) wins. Core:
+`app.core.animation_clips.clip_bend_limits(meta, kind)`, `validate_bend_limits(value, base)`.
+
 ## Strict conditions and held snapshots — `app.core.activity_engine`
 
 | Function / value | Semantics |
