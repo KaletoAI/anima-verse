@@ -37,6 +37,22 @@ pair's geometry crest (tip_source geometry). By the bump's symmetry the crest
 is its centre (+-.15,-.15,1.4) within one .0025 grid cell, the suggestion is
 the source apex exactly, and without a marker area the refinement radius is
 the declared stub radius tip_diameter/2=.0045.
+Tall (Ruling A109, geometry as C): a cosine bump of 13 mm height and 6 mm
+radius along -Y at each crest — taller than the frame window normal_radius x
+R = 2 x .0045 = 9 mm. The crest apex is the bump's top, (+-.15,-.163,1.4);
+the levelling (full radius max(1.2 x 4.5, 12, 9) = 12 mm, so the whole bump)
+lowers the skin there onto the fitted cap, y = -.044-.106 = -.15 at the
+crest (fit error .044 mm, budget .3 mm). The tip settles back onto the skin
+along the cap normal (~ -Y): (hit - tip) . normal = -13 mm +- .3; the bump is
+recorded >= 12.9 mm before (13 minus the fit error) and < .3 mm after; the
+stub's filled tip lies on the cap, y = -.15 +- .3 mm and within one .0025
+grid cell of (+-.15,-.15,1.4). Before A109 the frame around the unsettled apex
+found no skin and the WHOLE build failed ("tip surface normal is empty").
+Tipfail (Ruling A109): the tip op lowers every vertex by 10 mm, subdivides,
+then raises. The tip group alone is reported {status failed, reason the
+error}; the pair group is still built (its bones exist, its metrics carry a
+placement, no status); the mesh is the one before the tip op, vertex for
+vertex (1e-9). Before A109 the whole build answered status "failed".
 No expected value is recorded from a run.
 """
 import sys
@@ -100,6 +116,13 @@ if kind!='C':
    if any(tp['fill_radius']*R<=math.hypot(vertex.co.x-t.x,vertex.co.z-t.z)<=(tp['fill_radius']+tp['fill_ring'])*R for t in tips):
     vertex.co.y+=rng.uniform(-.008,.008)
   tp['fill_rms_max']=1e-5
+if job['params'].get('tall',False):
+ # Ruling A109: a modelled tip taller than the frame window (normal_radius x R).
+ for vertex in obj.data.vertices:
+  for t in [Vector(row['tip']) for row in placement]:
+   r=math.hypot(vertex.co.x-t.x,vertex.co.z-t.z)
+   if r<.006:
+    vertex.co.y-=.013*(1+math.cos(math.pi*r/.006))/2
 obj.data.update()
 co,edges,owners,normals,faces=scope['mesh_arrays']([obj])
 placement=scope['pair_plan'](group,validated,co,bones,scope['pair_surface']([obj]),owners)[2]['placement']
@@ -125,6 +148,17 @@ bad_tip=dict(tip_group,params=dict(tp,up_from_bone='Missing'))
 rejected,_=scope['extension_bones']({'params':{'groups':[bad_tip,group]},'inputs':{'model':'fixture'}})
 assert rejected['status']=='failed',rejected
 groups=[tip_group,group]
+tipfail=job['params'].get('tipfail',False)
+if tipfail:
+ # Ruling A109: the tip op changes the skin, then fails.
+ original_mesh=scope['tip_mesh']
+ rest=[v.co.copy() for v in obj.data.vertices]
+ def failing_mesh(meshes,p,rows,sources):
+  for mesh in meshes:
+   for v in mesh.data.vertices: v.co.y-=.01
+  scope['subdivide_around'](meshes[0],[Vector(rows[0]['tip'])],[.01])
+  raise ValueError('forced tip failure')
+ scope['tip_mesh']=failing_mesh
 if job['params'].get('descendant',False):
  groups.insert(0,dict(group,id='Marker',chains=[[dict(bone='MarkerLeft',parent='TipLeft')],[dict(bone='MarkerRight',parent='TipRight')]]))
 result,outputs=scope['extension_bones']({'params':{'groups':groups},'inputs':{'model':'fixture'},'out_dir':str(Path(job['result']).parent)})
@@ -135,6 +169,23 @@ if job['params'].get('descendant',False):
  assert arm.data.bones['MarkerLeft'].parent.name=='TipLeft'
  assert arm.data.bones['MarkerRight'].parent.name=='TipRight'
  assert 'Marker' in result['metrics'],result
+elif tipfail:
+ scope['tip_mesh']=original_mesh
+ assert result['metrics']['Tip']=={'status':'failed','reason':'forced tip failure'},result['metrics']['Tip']
+ assert result['metrics']['Pair'].get('placement') and not result['metrics']['Pair'].get('status'),result['metrics']['Pair']
+ assert {'ExampleLeft','ExampleRight'}<=set(arm.data.bones.keys()) and not {'TipLeft','TipRight'}&set(arm.data.bones.keys())
+ assert len(obj.data.vertices)==len(rest)
+ assert all((v.co-c).length<1e-9 for v,c in zip(obj.data.vertices,rest))
+elif job['params'].get('tall',False):
+ metrics=result['metrics']['Tip']; rows=metrics['placement']
+ assert metrics['tip_source']=='geometry' and 'status' not in metrics,metrics
+ for side,name,row in zip((1,-1),('TipLeft','TipRight'),rows):
+  level=row['source_level']
+  assert level['bump_mm'][0]>=12.9 and level['bump_mm'][1]<.3,level
+  assert abs(level['tip_settled_mm']+13.)<.3,level
+  sphere=Vector((side*.15,-.15,1.4))
+  assert abs(row['tip'][1]-sphere.y)<.0003 and (Vector(row['tip'])-sphere).length<.0026,row
+  assert (arm.data.bones[name].head_local-Vector(row['tip'])).length<1e-4
 elif kind=='C':
  metrics=result['metrics']['Tip']; rows=metrics['placement']
  assert metrics['tip_source']=='geometry' and 'status' not in metrics,metrics
@@ -269,7 +320,7 @@ Path(job['result']).write_text(json.dumps({'ok':True,'data':{},'outputs':{}}))
 def main():
     import argparse
     parser=argparse.ArgumentParser()
-    parser.add_argument('--case',choices=['crater','seam','geometry','refusal','descendant','modelled'])
+    parser.add_argument('--case',choices=['crater','seam','geometry','refusal','descendant','modelled','tall','tipfail'])
     selected=parser.parse_args().case
     from app.blender import runner
     if not runner.status()['executable']:
@@ -282,7 +333,7 @@ def main():
         (root/'probe.py').write_text(prefix+TIP_PROBE)
         source=runner.SCRIPTS_DIR/'extension_bones.py'
         with patch.object(runner,'SCRIPTS_DIR',root):
-            for label,options in [('crater',{}),('seam',{'seam':True}),('geometry',{'kind':'C'}),('refusal',{'noise':True}),('descendant',{'descendant':True}),('modelled',{'modelled':True})]:
+            for label,options in [('crater',{}),('seam',{'seam':True}),('geometry',{'kind':'C'}),('refusal',{'noise':True}),('descendant',{'descendant':True}),('modelled',{'modelled':True}),('tall',{'kind':'C','tall':True}),('tipfail',{'tipfail':True})]:
                 if selected and selected!=label: continue
                 result=runner.run('probe',params={'source':str(source),**options},out_dir=root/label,timeout_s=120)
                 assert result['ok'],(label,result)

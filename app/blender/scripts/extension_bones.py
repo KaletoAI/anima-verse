@@ -778,8 +778,24 @@ def tip_mesh(meshes, p, placement, sources):
     before = sum(len(mesh.data.vertices) for mesh in meshes)
     for mesh in meshes:
         subdivide_around(mesh,tips,[level*radius for level in p['subdivide_radii']])
-    levelled,smoothing,inner = level_sides(meshes,p,radius,sources,placement)
+    levelled,smoothing,inner,normals = level_sides(meshes,p,radius,sources,placement)
     tree = world_tree(meshes)
+    # A tip placed on its source apex sits where the levelling just lowered
+    # the skin by the bump's height. When that leaves no skin within its
+    # frame window (normal_radius x R) the tip settles back onto the outer
+    # skin along the source's normal (the first hit from in front, as
+    # ``existing_tip`` reads it) — Ruling A109: a 12.9 mm bump under a 9 mm
+    # window failed the build. Any other tip stays exactly where it is.
+    settled = []
+    for tip,side,normal in zip(tips,levelled,normals):
+        hit = None
+        try:
+            tip_frame(meshes,tip,p,radius,inner,tree)
+        except ValueError:
+            hit = tree.ray_cast(tip+normal*.08,-normal,.2)[0]
+        side['tip_settled_mm'] = round(float((hit-tip).dot(normal))*1000,3) if hit is not None else 0.
+        settled.append(hit.copy() if hit is not None else tip)
+    tips = settled
     frames = [tip_frame(meshes,tip,p,radius,inner,tree) for tip in tips]
     rows = []
     for (tip,normal,a,b,existing),side in zip(frames,levelled):
@@ -1017,8 +1033,14 @@ def level_sides(meshes, p, radius, sources, placed=None):
             errors.append(str(e))
     tree = world_tree(meshes)
     sides = []
-    for o,t,(_,_,_,_,existing),level,error in zip(origins,targets,frames,levels,errors):
-        after = tip_frame(meshes,o,p,radius,inner,tree)[4]
+    for o,t,(_,normal,a,b,existing),level,error in zip(origins,targets,frames,levels,errors):
+        # Measured in the frame taken before the levelling: the levelling
+        # lowers the skin under the source apex by the bump's height, so a
+        # fresh frame around ``o`` can find no skin within its window
+        # (normal_radius x R) at all — a 13 mm bump under a 9 mm window
+        # failed the whole build (Ruling A109). The rays come from in front
+        # along the same normal, so before and after compare like for like.
+        after = existing_tip(tree,o,normal,a,b)
         sides.append({'bump_mm':[level['bump_before_mm'],level['bump_after_mm']] if level else None,
                       'height_mm':[round(existing['protrusion']*1000,3),round(after['protrusion']*1000,3)],
                       'tip_from_source_mm':round((t-o).length*1000,2) if t is not None else None,
@@ -1030,7 +1052,7 @@ def level_sides(meshes, p, radius, sources, placed=None):
                  'inner_wall_vertices':len(inner)}
     if any(errors):
         smoothing['error'] = next(error for error in errors if error)
-    return sides,smoothing,inner
+    return sides,smoothing,inner,[frame[1] for frame in frames]
 
 
 def neutralise_mesh(meshes, p, sources):
@@ -1042,12 +1064,12 @@ def neutralise_mesh(meshes, p, sources):
     height_after_mm, bump_mm, level}`` — and the numbers of the side that
     moved most, in the shape of the stub's ``source_smooth``."""
     radius = tip_radius(p,sources)
-    sides,smoothing,inner = level_sides(meshes,p,radius,sources)
-    tree = world_tree(meshes)
+    sides,smoothing,inner,normals = level_sides(meshes,p,radius,sources)
     rows = []
-    for row,side in zip(sources,sides):
+    for row,side,normal in zip(sources,sides,normals):
+        # The surface normal at the source before the levelling: the levelled
+        # skin may lie below the window around the apex (Ruling A109).
         tip = Vector(row['tip'])
-        normal = tip_frame(meshes,tip,p,radius,inner,tree)[1]
         rows.append({'tip':list(tip),'axis':list(normal),'radius':radius,'tip_source':'neutral',
                      'height_before_mm':side['height_mm'][0],'height_after_mm':side['height_mm'][1],
                      'bump_mm':side['bump_mm'],'level':side['level']})
@@ -2929,12 +2951,31 @@ def extension_bones(args):
                 soft[g['id']] = {'status':'not_found','reason':'Source placement is missing'}
                 continue
             p = parameters(g)
-            rows,tip_info[g['id']] = tip_positions(meshes,pinned[g['depends_on']],g.get('tip_override'))
-            if snapshot is None:
-                snapshot = position_snapshot(meshes)
-            centres = [Vector(row['tip']) for row in rows]
-            census[g['id']] = (centres,normal_census(meshes,centres))
-            prepared[g['id']] = tip_mesh(meshes,p,rows,pinned[g['depends_on']])
+            # A tip that cannot be built fails alone (Ruling A109): the mesh
+            # goes back to how it was before this group touched it, and the
+            # source pair group is still built.
+            saved = [mesh.data.copy() for mesh in meshes]
+            fresh = snapshot is None
+            try:
+                rows,tip_info[g['id']] = tip_positions(meshes,pinned[g['depends_on']],g.get('tip_override'))
+                if fresh:
+                    snapshot = position_snapshot(meshes)
+                centres = [Vector(row['tip']) for row in rows]
+                census[g['id']] = (centres,normal_census(meshes,centres))
+                prepared[g['id']] = tip_mesh(meshes,p,rows,pinned[g['depends_on']])
+            except (ValueError,KeyError,TypeError,IndexError) as e:
+                for mesh,data in zip(meshes,saved):
+                    changed = mesh.data
+                    mesh.data = data
+                    bpy.data.meshes.remove(changed)
+                for store in (tip_info,census,prepared):
+                    store.pop(g['id'],None)
+                if fresh:
+                    snapshot = None
+                soft[g['id']] = {'status':'failed','reason':str(e)}
+                continue
+            for data in saved:
+                bpy.data.meshes.remove(data)
         for g in neutral_groups:
             # Where the part would sit: the same placement it uses when on.
             if g.get('depends_on') not in pinned or g.get('depends_on') in soft:

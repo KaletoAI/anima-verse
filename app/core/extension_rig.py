@@ -251,8 +251,11 @@ def extension_bone_names(character_name, profile=None):
 # declared ``from_rig`` — a build-6 sidecar lacks it.
 PART_BUILDS = {"attached_part": 13, "inset_part": 7}
 # The same for the other operations; pair_tip 1: a geometry apex (no colour
-# marker) is a tip suggestion too, and the tip override moves it.
-OP_BUILDS = {**PART_BUILDS, "pair_tip": 1}
+# marker) is a tip suggestion too, and the tip override moves it. 2: the tip
+# settles onto the levelled skin and the levelling is measured in the frame
+# taken before it; a tip that cannot be built fails alone, its pair group is
+# still built (Ruling A109).
+OP_BUILDS = {**PART_BUILDS, "pair_tip": 2}
 
 
 def extension_rig_fingerprint(groups, overrides=None):
