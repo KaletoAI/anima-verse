@@ -159,8 +159,9 @@ def main() -> int:
         check("BODY_TEXT", base_body.BODY_TEXT, BODY)
         check("fingerprint key = the old wording", base_body.BODY_TEXT_FINGERPRINT, OLD_BODY)
         check("old module's body text", old.BODY_TEXT, OLD_BODY)
+        # Ruling A155: the front edit names neither skin nor body — the picture gives face AND body.
         check("edit block Pic (sent)", base_body.edit_character("Pic"),
-              BALD + ", the same face as the person in the picture, " + BODY)
+              BALD + ", the same face and body as the person in the picture, natural matte look")
 
         print("[2] the fingerprints are the old ones")
         for name in names:

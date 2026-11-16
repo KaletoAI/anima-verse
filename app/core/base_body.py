@@ -865,8 +865,46 @@ def edit_character(character_name: str, *, profile: Optional[Dict[str, Any]] = N
     no hair text; other hair in the body → its text, then the identity
     clause; bald → ``BALD_HEAD``, then the identity clause. Facial hair is
     named only when the character has some (``has_facial_hair``)."""
-    from app.core.body_slots import base_body_fragments
     profile = _profile_of(character_name, profile)
+    head = picture_head(character_name, hair_text(character_name, profile=profile), profile)
+    # Ruling A155 (user 2026-11-16): the picture is the source of face AND body — the block names neither the
+    # skin nor any body feature (no build or shape words, no package body texts); only what the edit must
+    # change (the head) and the look of the render. The identity clause says "face … and body".
+    body_identity = [_with_body(h) for h in head]
+    return ", ".join(p for p in (*body_identity, EDIT_LOOK_TEXT, *_postprocess_edit_texts(profile)) if p)
+
+
+def _with_body(clause: str) -> str:
+    """"the same face[, hair][ and facial hair] as the person in the picture" with "body" added as the last thing
+    kept (Ruling A155); any other clause unchanged."""
+    head, tail = "the same ", " as the person in the picture"
+    if not (clause.startswith(head) and clause.endswith(tail)):
+        return clause
+    things = re.split(r", | and ", clause[len(head):-len(tail)]) + ["body"]
+    return f"{head}{', '.join(things[:-1])} and {things[-1]}{tail}"
+
+
+#: Ruling A155: the only body-independent words of the front edit's block.
+EDIT_LOOK_TEXT = "natural matte look"
+
+
+def _postprocess_edit_texts(profile: Dict[str, Any]) -> List[str]:
+    """Ruling A155: the edit text each reference post-process that is on for the character adds (its
+    descriptor's ``edit_prompt``) — what the processed picture no longer shows must not come back."""
+    try:
+        from app.core import view_postprocess
+        available = view_postprocess.operations()
+        return [str(available[op].get("edit_prompt") or "").strip()
+                for op in view_postprocess.enabled_ids(profile, available) if available[op].get("edit_prompt")]
+    except Exception as exc:  # noqa: BLE001 — a package failure never blocks the front
+        logger.warning("Reference post-process edit texts unavailable: %s", exc)
+        return []
+
+
+def _edit_character_fingerprint_form(character_name: str, profile: Dict[str, Any]) -> str:
+    """Ruling A155: the block as it was before A155 — the edit fingerprint keeps hashing it, so the new wording
+    ages no base front (no re-render, no hub job); the next render uses the new wording."""
+    from app.core.body_slots import base_body_fragments
     head = picture_head(character_name, hair_text(character_name, profile=profile), profile)
     return ", ".join(p for p in (*head, BODY_TEXT, *base_body_fragments(character_name, profile=profile)) if p)
 
@@ -875,7 +913,8 @@ def _edit_fingerprint(character_name: str, profile: Dict[str, Any]) -> str:
     """12 hex over the texts the front edit is made with (block, pose text,
     negative) — part of ``front_reference``."""
     prompt, negative = base_prompt(character_name, "front", profile=profile, picture=True)
-    raw = json.dumps([_fingerprint_form(edit_character(character_name, profile=profile)), prompt, negative], ensure_ascii=False)
+    raw = json.dumps([_fingerprint_form(_edit_character_fingerprint_form(character_name, profile)), prompt, negative],
+                     ensure_ascii=False)
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
 
 
