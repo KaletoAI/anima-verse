@@ -97,6 +97,7 @@ import { ViewMirrorButton } from './ViewMirrorButton'
 import { MIRROR_DONE, MIRROR_UNDONE, MIRROR_WAIT_MODEL, facingLine } from './viewFacingModel'
 import type { Side } from './viewFacingModel'
 import { RefImage } from './RefImage'
+import { ViewPostprocessPanel } from './ViewPostprocessPanel'
 import { CollisionScales } from './CollisionScales'
 import { CollisionChannels } from './CollisionChannels'
 import { collisionStepLine, recomputePath } from './collisionChannelsModel'
@@ -856,6 +857,9 @@ export function FieldBaseBody({ character, onOpenFigure, onOpenGallery }: {
                   onSkinStep={() => post('skin-step', {})} onMirror={mirror} />
               ))}
             </div>
+            {/* Ruling A146: a package's CPU post-process of the stored views (hidden without one). */}
+            <ViewPostprocessPanel character={character} info={info.postprocess} busy={posting || viewsRunning(info)}
+              stored={BASE_VIEWS.filter((v) => !!info.images?.[v])} onChanged={() => startPoll(300)} />
           </div>
         ) : null}
         {sub === 'model' ? (

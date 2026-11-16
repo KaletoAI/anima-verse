@@ -6204,6 +6204,24 @@
     "provisional": "vorläufig",
     "set for this clip": "für diesen Clip gesetzt",
     "tip →": "Spitze →",
-    "unsaved — the preview already uses it": "ungespeichert — die Vorschau nutzt es schon"
+    "unsaved — the preview already uses it": "ungespeichert — die Vorschau nutzt es schon",
+    "Applied to the stored views — no image job": "Auf die gespeicherten Ansichten angewendet — kein Bildjob",
+    "Stored views restored — no image job": "Gespeicherte Ansichten wiederhergestellt — kein Bildjob",
+    "on": "an",
+    "This character: on, off, or the world default (Game-Admin → Setup). Saving applies it to the stored views at once.": "Dieser Charakter: an, aus oder der Welt-Standard (Game-Admin → Setup). Speichern wendet es sofort auf die gespeicherten Ansichten an.",
+    "Post-process for this character": "Nachbearbeitung für diesen Charakter",
+    "World default": "Welt-Standard",
+    "On for this character": "An für diesen Charakter",
+    "Off for this character": "Aus für diesen Charakter",
+    "CPU, no image job": "CPU, kein Bildjob",
+    "Preview view": "Vorschau-Ansicht",
+    "Shows before and after on this view — nothing is stored.": "Zeigt vorher und nachher an dieser Ansicht — nichts wird gespeichert.",
+    "Turning it off:": "Ausschalten:",
+    "Turning it on:": "Einschalten:",
+    "After": "Nachher",
+    "Nothing found in this view — it stays as it is.": "In dieser Ansicht nichts gefunden — sie bleibt, wie sie ist.",
+    "{n} found, {s} s": "{n} gefunden, {s} s",
+    "Post-processing of the stored views (runs on the CPU after a view is rendered; the original is kept):": "Nachbearbeitung der gespeicherten Ansichten (läuft nach dem Rendern auf der CPU; das Original bleibt erhalten):",
+    "Dressed views composited onto these views follow them at their next Build.": "Angezogene Ansichten, die auf diese Ansichten montiert werden, folgen ihnen beim nächsten Build."
   }
 }

@@ -8,6 +8,7 @@
  * tick while active (no give-up — a render may wait minutes in the queue;
  * after ~2 min the tick slows down), stopped on unmount / character switch.
  */
+import type { BasePostprocessInfo } from './ViewPostprocessPanel'
 import type { ChannelDeclaration, ChannelOverrides } from './collisionChannelsModel'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiGet } from '../../lib/api'
@@ -223,6 +224,8 @@ export interface BaseBodyInfo {
   extension?: BaseExtensionState | null
   /** The front's skin detail step (null for a non-humanoid). */
   skin?: BaseSkinInfo | null
+  /** Ruling A146: the reference post-process operations a package supplies (null = none). */
+  postprocess?: BasePostprocessInfo | null
   /** What the front is made from (Ruling A74b, `base_body._front_reference_info`; null for a non-humanoid). */
   front_reference?: BaseFrontReference | null
   /** The Base body tab's "Run all" plan (`figure_build.base_run_all`). */
