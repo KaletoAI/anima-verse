@@ -5843,6 +5843,16 @@
     "A 3D model of this character is being made — mirror when it is done": "Ein 3D-Modell dieses Charakters wird gerade gemacht — spiegeln, wenn es fertig ist",
     "Mirrored — no image job": "Gespiegelt — kein Bild-Job",
     "Turned back — no image job": "Zurückgedreht — kein Bild-Job",
-    "Turn back": "Zurückdrehen"
+    "Turn back": "Zurückdrehen",
+    "No model yet — build one in Characters → Figure.": "Noch kein Modell — baue eines unter Charaktere → Figur.",
+    "No clip file for this kind in shared/models/clips.": "Keine Clip-Datei für diese Art in shared/models/clips.",
+    "Character on the shared runtime": "Charakter auf der gemeinsamen Laufzeit",
+    "Only characters with a built model can be picked.": "Wählbar sind nur Charaktere mit gebautem Modell.",
+    "no model yet (Characters → Figure)": "noch kein Modell (Charaktere → Figur)",
+    "Phase B of the two-phase frame: secondary motion and strand hair.": "Phase B des Zwei-Phasen-Frames: Sekundärbewegung und Strähnenhaar.",
+    "strand hair": "Strähnenhaar",
+    "hair on chains": "Haar an Ketten",
+    "{n} motion groups": "{n} Bewegungsgruppen",
+    "hair swing {mm} mm": "Haarschwung {mm} mm"
   }
 }

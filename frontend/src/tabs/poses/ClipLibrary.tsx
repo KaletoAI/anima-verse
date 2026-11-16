@@ -42,6 +42,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { clipHeightGroup, type ClipHeightOffsetsCm } from '@anima/scene-render'
+import { FigureRuntimePreview } from './FigureRuntimePreview'
 import { ClipPreview, ROLE_COLOR } from './ClipPreview'
 import { invalidateAnimationPreviewClips } from '../characters/Model3DViewer'
 import { SliderInput } from '../../components/SliderInput'
@@ -1062,6 +1063,8 @@ export function ClipLibrary({
                   rootDrop={footprint ? (rootDropOf?.(footprint) ?? 0) : 0}
                   bust={seq}
                 />
+                {/* A110 phase 1: one character through the shared per-figure runtime (hair, secondary motion). */}
+                <FigureRuntimePreview kind={row.kind} set={previewSet} height={280} bust={seq} />
 
                 {/* ── the orientation dials ── */}
                 {orientTarget ? (
