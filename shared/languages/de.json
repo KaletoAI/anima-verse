@@ -5996,6 +5996,13 @@
     "Its texture is not built yet": "Seine Textur ist noch nicht gebaut",
     "Body shape not built": "Körperform nicht gebaut",
     "Left off the figure. Re-fit tries again on the CPU (no hub job). A new mesh only helps when the piece itself is broken.": "Von der Figur weggelassen. Neu anpassen versucht es erneut auf der CPU (kein Hub-Job). Ein neues Mesh hilft nur, wenn das Teil selbst kaputt ist.",
-    "Plain body": "Grundkörper"
+    "Plain body": "Grundkörper",
+    "Shaft": "Schaft",
+    "Keep (shoe + leg part)": "Behalten (Schuh + Beinteil)",
+    "Cut off at the shoe top": "Am Schuhrand abschneiden",
+    "The shoe part (up to {top} cm) follows the foot and the shin; the leg part above {cut} cm is fitted to its own leg and overlaps the shoe part by {overlap} cm, so no gap opens when the knee or the ankle bends. Re-fit: 0 hub jobs.": "Der Schuhteil (bis {top} cm) folgt Fuß und Schienbein; der Beinteil ab {cut} cm wird an sein eigenes Bein angepasst und überlappt den Schuhteil um {overlap} cm, damit beim Beugen von Knie oder Knöchel keine Lücke aufgeht. Neu anpassen: 0 Hub-Jobs.",
+    "Only the shoe part up to {top} cm is kept; everything above it is dropped. Re-fit: 0 hub jobs.": "Nur der Schuhteil bis {top} cm bleibt; alles darüber fällt weg. Neu anpassen: 0 Hub-Jobs.",
+    "Shown fit: cut at {top} cm, {n} faces dropped": "Gezeigte Anpassung: bei {top} cm abgeschnitten, {n} Flächen entfernt",
+    "Shown fit: shoe part {shoe} · leg part {leg} faces · overlap {overlap} cm": "Gezeigte Anpassung: Schuhteil {shoe} · Beinteil {leg} Flächen · Überlappung {overlap} cm"
   }
 }

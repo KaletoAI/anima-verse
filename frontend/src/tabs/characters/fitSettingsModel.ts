@@ -85,6 +85,24 @@ export interface FitSettingsValues {
   trunk: TrunkChoice
   /** Ruling A48d; a server before it sends none. */
   mesh_shape?: MeshShapeChoice
+  /** Ruling A122; a server before it sends none. */
+  shaft?: ShaftChoice
+}
+
+/** Ruling A122: a boot past the knee — the shaft above the shoe kept as a leg part, or cut off
+ *  (`garment_shaft.SHAFT_CHOICES`). */
+export type ShaftChoice = 'split' | 'cut'
+
+/** Ruling A122: `garments.shaft_view` — only for a piece on the feet and the legs. */
+export interface ShaftInfo {
+  setting: ShaftChoice
+  choices: ShaftChoice[]
+  shoe_top_mm: number
+  cut_mm: number
+  overlap_mm: number
+  /** `report.shaft` of the shown fit (null: no fit yet, or one made before A122). */
+  made: { mode: ShaftChoice; faces: { shoe: number; leg: number; overlap: number; dropped: number } } | null
+  cost: { hub_jobs: number; where: string }
 }
 
 /** Ruling A48d: the piece's mesh shape (`garment_shell.SHAPE_CHOICES`). */
@@ -121,6 +139,8 @@ export interface FitSettingsInfo {
   arm_light: ArmLight | null
   /** Ruling A48d. */
   mesh_shape?: MeshShapeInfo
+  /** Ruling A122: null / absent for every piece that is not on the feet and the legs. */
+  shaft?: ShaftInfo | null
   numbers: {
     deep_push_share?: number | null; torso_tight_share?: number | null; sleeve_shards?: number | null
     sleeve_skin_left_cm2?: number | null; sleeve_skin_right_cm2?: number | null; scale?: number | null
@@ -138,6 +158,33 @@ export const SLEEVE_CHOICES: SleeveChoice[] = ['auto', 'generated', 'wider', 'fi
 export const ALLOWANCE_CHOICES: AllowanceChoice[] = ['auto', 0, 3, 6, 10, 15, 20]
 export const DEPTH_CHOICES: DepthChoice[] = [0, 3, 6, 10, 15, 20]
 export const TRUNK_CHOICES: TrunkChoice[] = ['auto', 'generated', 'fitted']
+export const SHAFT_LABELS: Record<ShaftChoice, string> = {
+  split: 'Keep (shoe + leg part)',
+  cut: 'Cut off at the shoe top',
+}
+const cmOf = (mm: number) => String(Math.round(mm / 10))
+
+/** The hint of a shaft choice, with the numbers of the server. */
+export function shaftHint(choice: ShaftChoice, info: ShaftInfo, t: T): string {
+  const text = choice === 'split'
+    ? t('The shoe part (up to {top} cm) follows the foot and the shin; the leg part above {cut} cm is fitted to its own leg and overlaps the shoe part by {overlap} cm, so no gap opens when the knee or the ankle bends. Re-fit: 0 hub jobs.')
+    : t('Only the shoe part up to {top} cm is kept; everything above it is dropped. Re-fit: 0 hub jobs.')
+  return text.replace('{top}', cmOf(info.shoe_top_mm)).replace('{cut}', cmOf(info.cut_mm))
+    .replace('{overlap}', cmOf(info.overlap_mm))
+}
+
+/** What the shown fit made of the shaft, in words. */
+export function shaftReason(info: ShaftInfo, t: T): string {
+  const m = info.made
+  if (!m) return t('Re-fit applies it (no hub job)')
+  if (m.mode === 'cut') {
+    return t('Shown fit: cut at {top} cm, {n} faces dropped').replace('{top}', cmOf(info.shoe_top_mm))
+      .replace('{n}', String(m.faces.dropped))
+  }
+  return t('Shown fit: shoe part {shoe} · leg part {leg} faces · overlap {overlap} cm')
+    .replace('{shoe}', String(m.faces.shoe)).replace('{leg}', String(m.faces.leg))
+    .replace('{overlap}', cmOf(info.overlap_mm))
+}
 
 export const SLEEVE_LABELS: Record<SleeveChoice, string> = {
   auto: 'Auto', generated: 'As generated', wider: 'Wider', fitted: 'Fitted to the arm',
