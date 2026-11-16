@@ -256,8 +256,10 @@ PART_BUILDS = {"attached_part": 13, "inset_part": 8}
 # marker) is a tip suggestion too, and the tip override moves it. 2: the tip
 # settles onto the levelled skin and the levelling is measured in the frame
 # taken before it; a tip that cannot be built fails alone, its pair group is
-# still built (Ruling A109).
-OP_BUILDS = {**PART_BUILDS, "pair_tip": 2}
+# still built (Ruling A109). pair_protrusion 1: the colour marker's reference
+# skin tone ignores cells below the darkness gate (hair across the window,
+# Ruling A120).
+OP_BUILDS = {**PART_BUILDS, "pair_protrusion": 1, "pair_tip": 2}
 
 
 def extension_rig_fingerprint(groups, overrides=None):

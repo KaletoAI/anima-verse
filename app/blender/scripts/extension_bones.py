@@ -338,6 +338,24 @@ def pair_surface(meshes):
     return front
 
 
+def marker_accept(lab, p):
+    """Which colour-window cells (rows of CIE Lab) belong to a tip marker.
+
+    A marker cell is redder and less yellow than the reference skin tone by
+    more than marker_score_min, neither much darker nor much lighter. The
+    reference comes from the cells that pass the darkness gate: a dark strand
+    of hair across the window (Tilda: about 40 % of the cells, L 37 / a 10)
+    otherwise drags the median toward its own red and a faint tip next to it
+    drops below marker_score_min (Ruling A120). Without such cells the gated
+    median is the plain one."""
+    med = np.median(lab,axis=0)
+    skin = lab[:,0] > p['marker_dark_min']*med[0]
+    if skin.sum() >= 10:
+        med = np.median(lab[skin],axis=0)
+    score = lab[:,1]-med[1]-p['marker_yellow_weight']*(lab[:,2]-med[2])
+    return (score>p['marker_score_min'])&(lab[:,0]>p['marker_dark_min']*med[0])&(lab[:,0]<med[0]+p['marker_light_max'])
+
+
 def pair_plan(group, p, co, bones, front, owners, pinned=None):
     chains = group['chains']
     if len(chains) != 2 or any(len(c) != 1 for c in chains):
@@ -438,9 +456,7 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
         xyz /= np.array([.9505,1.,1.089])
         f = np.where(xyz>.008856,np.cbrt(xyz),7.787*xyz+16/116)
         lab = np.stack((116*f[:,1]-16,500*(f[:,0]-f[:,1]),200*(f[:,1]-f[:,2])),axis=1)
-        med = np.median(lab,axis=0)
-        score = lab[:,1]-med[1]-p['marker_yellow_weight']*(lab[:,2]-med[2])
-        ok = (score>p['marker_score_min'])&(lab[:,0]>p['marker_dark_min']*med[0])&(lab[:,0]<med[0]+p['marker_light_max'])
+        ok = marker_accept(lab,p)
         pending = {k for k,accepted in zip(keys,ok) if accepted}
         components = []
         while pending:
