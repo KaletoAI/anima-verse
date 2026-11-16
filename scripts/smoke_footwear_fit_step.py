@@ -632,8 +632,12 @@ def main() -> int:
               (False, "fit", True, 0.0, True))
         check("P7 Wardrobe cap 1.05", gf.set_width_cap("Demo", pumps, 1.05), True)
         res = garments.run_garment("Demo", pumps)
-        check("P7 slim gate refuses", (res.get("ok"), res.get("step"), "slim_needed 0.2563 > 0.18" in str(res.get("error")),
-                                       "deep_outside" in str(res.get("error"))), (False, "fit", True, False))
+        # Ruling A162: a fit refused by its own gates is cut too (its attempt can be accepted) — the cut's reasons
+        # follow the slim reason, which leads
+        err = str(res.get("error"))
+        check("P7 slim gate refuses", (res.get("ok"), res.get("step"), "slim_needed 0.2563 > 0.18" in err,
+                                       err.find("slim_needed") < err.find("deep_outside") if "deep_outside" in err
+                                       else True), (False, "fit", True, True))
         gw = (res.get("gates") or {}).get("slim_needed") or {}
         near("P7 slim_needed", gw.get("value"), 1 - 1.05 / 1.41189, 1e-3)
         check("P7 slim_needed refuses", (gw.get("ok"), gw.get("gating")), (False, True))
