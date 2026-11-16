@@ -284,6 +284,8 @@ export function ClipLibrary({
   const [rollDeg, setRollDeg] = useState(0)
   // A pair's B half against A: [side, up, forward] centimetres, baked like the angles.
   const [partnerShift, setPartnerShift] = useState<[number, number, number]>([0, 0, 0])
+  // Ruling A129: partner B's [tilt, roll] degrees about its hips — renderer-only, stored in the sidecar like shift_cm.
+  const [partnerTurn, setPartnerTurn] = useState<[number, number]>([0, 0])
   // A group's roles, each against the scene: {role: [side, up, forward]} cm,
   // baked like the partner shift; `shiftRole` is the one the sliders move.
   const [roleShift, setRoleShift] = useState<Record<string, [number, number, number]>>({})
@@ -464,12 +466,13 @@ export function ClipLibrary({
   const isGroupTarget = orientTarget?.role === 'a' && (row?.roles ?? 0) > 2
   const groupRoles = isGroupTarget ? (['a', 'b', 'c', 'd', 'e'] as const).slice(0, row?.roles ?? 0) : []
   const shiftDirty = isPairTarget && partnerShift.some((v) => v !== 0)
+  const turnDirty = isPairTarget && partnerTurn.some((v) => v !== 0)
   const movedRoles = useMemo(() => (isGroupTarget
     ? Object.fromEntries(Object.entries(roleShift).filter(([, v]) => v.some((x) => x !== 0)))
     : {}), [isGroupTarget, roleShift])
   const roleShiftDirty = Object.keys(movedRoles).length > 0
   const clipShiftDirty = clipShift.some((v) => v !== 0)
-  const orientDirty = !!(yawDeg || tiltDeg || rollDeg) || shiftDirty || roleShiftDirty || clipShiftDirty
+  const orientDirty = !!(yawDeg || tiltDeg || rollDeg) || shiftDirty || roleShiftDirty || clipShiftDirty || turnDirty
   // ONE draft object for the place preview, read through a ref in its frame loop (a drag reloads nothing).
   const alignmentDraft = useMemo<AlignmentDraft>(() => ({
     yawDeg, tiltDeg, rollDeg, shiftCm: clipShift,
@@ -480,7 +483,8 @@ export function ClipLibrary({
           [r, [v[0] / 100, v[1] / 100, v[2] / 100] as [number, number, number]]))
         : {},
     heightCm: heightDraft,
-  }), [clipShift, heightDraft, isGroupTarget, isPairTarget, partnerShift, roleShift, rollDeg, tiltDeg, yawDeg])
+    partnerTurnDeg: isPairTarget ? partnerTurn : undefined,
+  }), [clipShift, heightDraft, isGroupTarget, isPairTarget, partnerShift, partnerTurn, roleShift, rollDeg, tiltDeg, yawDeg])
   const draftRef = useRef(alignmentDraft)
   draftRef.current = alignmentDraft
   /** The check to store with Apply/Save: only when every figure reads green (D3/D4). */
@@ -511,11 +515,11 @@ export function ClipLibrary({
     && !(orientDirty && orientLocked)
   /** The consequence of Save, shown BEFORE the click (checklist point 2). */
   const saveConsequence = useMemo(() => saveSteps({
-    bake: bakeDirty, shift: clipShiftDirty, heights: heightDirty, finales: finaleKinds.length,
+    bake: bakeDirty, shift: clipShiftDirty || turnDirty, heights: heightDirty, finales: finaleKinds.length,
     greenCheck: !!placeCheck && (orientDirty || heightDirty || !checkStored), savedCheck: !!savedCheck,
   }).map((step) => ({
     bake: t('turn/tilt/roll and role offsets are baked into the clip file (one Blender run, no hub jobs)'),
-    shift: t('the side/forward shift goes to the sidecar'),
+    shift: t('the side/forward shift and partner B’s tilt/roll go to the sidecar'),
     heights: t('surface heights go to the sidecar and apply in game'),
     finales: t('the finale clips change the same way: {kinds}').replace('{kinds}', finaleKinds.join(', ')),
     check: t('the green place check is stored'),
@@ -535,6 +539,7 @@ export function ClipLibrary({
           ...(shiftDirty ? { partner_shift_cm: partnerShift } : {}),
           ...(roleShiftDirty ? { role_shift_cm: movedRoles } : {}),
           ...(clipShiftDirty ? { shift_cm: clipShift } : {}),
+          ...(turnDirty ? { partner_turn_deg: partnerTurn } : {}),
           ...(placeCheck ? { checked: placeCheck } : {}),
         })
         setOrientSeconds(typeof res.seconds === 'number' ? res.seconds : null)
@@ -554,6 +559,7 @@ export function ClipLibrary({
       setTiltDeg(0)
       setRollDeg(0)
       setPartnerShift([0, 0, 0])
+      setPartnerTurn([0, 0])
       setRoleShift({})
       setClipShift([0, 0])
       setHeightDraft({})
@@ -567,7 +573,7 @@ export function ClipLibrary({
       setHeightBusy(false)
     }
   }, [canSave, clipShift, clipShiftDirty, heightDirty, heightDraft, movedRoles, onReload, orientDirty, orientTarget,
-    partnerShift, placeCheck, roleShiftDirty, rollDeg, shiftDirty, tiltDeg, yawDeg])
+    partnerShift, partnerTurn, placeCheck, roleShiftDirty, rollDeg, shiftDirty, tiltDeg, turnDirty, yawDeg])
 
   /** Saved angles and calibration, including every earlier apply. */
   const savedNote = useMemo(() => {
@@ -582,6 +588,8 @@ export function ClipLibrary({
       o.partner_shift_cm
         ? `${t('partner B forward / side / up')} ${o.partner_shift_cm[2]} / ${o.partner_shift_cm[0]} / ${o.partner_shift_cm[1]} cm`
         : '',
+      o.partner_turn_deg?.some((v) => v !== 0)
+        ? `${t('partner B tilt / roll')} ${o.partner_turn_deg[0]} / ${o.partner_turn_deg[1]}°` : '',
       ...Object.entries(o.role_shift_cm || {}).map(([r, v]) =>
         `${t('role {r} forward / side / up').replace('{r}', r.toUpperCase())} ${v[2]} / ${v[0]} / ${v[1]} cm`),
     ].filter(Boolean)
@@ -1227,16 +1235,26 @@ export function ClipLibrary({
                           })}
                           disabled={orientLocked} {...DIAL} />
                       ))}
+                      {([['B tilt', 0], ['B roll', 1]] as const).map(([label, axis]) => (
+                        <SliderInput key={label} label={dialLabel(t(label))} unit="°"
+                          title={t('Turns partner B about its hips, on top of the clip — renderer-only, saved beside the clip like the shift. Tilt tips B’s head towards the clip’s forward axis, roll tips B sideways.')}
+                          min={-20} max={20} step={1} fineStep={0.1} value={partnerTurn[axis]}
+                          onChange={(v) => setPartnerTurn((prev) => axis === 0 ? [v, prev[1]] : [prev[0], v])}
+                          disabled={orientLocked} {...DIAL} />
+                      ))}
                       <button type="button" className="ga-btn ga-btn-sm" data-testid="align-auto"
                         disabled={orientLocked || innerTab !== 'places'}
                         title={innerTab !== 'places'
                           ? t('Open the Places view: Auto-align measures the figures shown there.')
-                          : t('Plays the clip with the figures shown and moves partner B so that the attached part’s tip sits at the channel’s opening at the outermost frame and stays on the channel’s axis; the deepest frame is checked. Writes the three sliders above; Save stores them as usual.')}
+                          : t('Plays the clip with the figures shown and moves partner B so that the attached part’s tip sits at the channel’s opening at the outermost frame and stays on the channel’s axis, then turns B (tilt/roll, at most 20°) so that the shaft runs along the axis; the deepest frame is checked. Writes the five sliders above; Save stores them as usual.')}
                         onClick={() => {
                           const run = autoAlignRef.current
                           const res: AutoAlignResult = run ? run() : { ok: false, reason: t('The place preview is still loading.') }
                           setAutoAlign(res)
-                          if (res.ok) setPartnerShift(res.shiftCm)
+                          if (res.ok) {
+                            setPartnerShift(res.shiftCm)
+                            setPartnerTurn([+res.turnDeg[0].toFixed(1), +res.turnDeg[1].toFixed(1)])
+                          }
                         }}>
                         {t('Auto-align')}
                       </button>
@@ -1266,6 +1284,11 @@ export function ClipLibrary({
                                       <td style={{ textAlign: 'right', padding: '0 4px' }}>{a.toFixed(0)} mm</td>
                                       <td style={{ textAlign: 'right', padding: '0 4px' }}>{b.toFixed(0)} mm</td></tr>
                                   ))}
+                                  <tr><td>{t('Depth gained by B’s tilt/roll')}</td>
+                                    <td style={{ textAlign: 'right', padding: '0 4px' }}>{autoAlign.afterShift.depthMm.toFixed(0)} mm</td>
+                                    <td style={{ textAlign: 'right', padding: '0 4px' }}>{autoAlign.after.depthMm.toFixed(0)} mm</td></tr>
+                                  <tr><td>{t('B tilt / roll')}</td><td />
+                                    <td style={{ textAlign: 'right', padding: '0 4px' }}>{autoAlign.turnDeg[0].toFixed(1)}° / {autoAlign.turnDeg[1].toFixed(1)}°</td></tr>
                                   <tr><td>{t('Shaft against the axis at the outermost frame')}</td>
                                     <td style={{ textAlign: 'right', padding: '0 4px' }}>{autoAlign.before.axisDeg.toFixed(0)}°</td>
                                     <td style={{ textAlign: 'right', padding: '0 4px' }}>{autoAlign.after.axisDeg.toFixed(0)}°</td></tr>

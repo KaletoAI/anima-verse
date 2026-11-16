@@ -275,7 +275,8 @@ async def post_animation_clip_orient(library: str, rel: str, request: Request,
     """Turns an already imported clip — the import's orientation dial,
     applied to the FILE.
 
-    Body ``{yaw_deg?, tilt_deg?, roll_deg?, partner_shift_cm?, role_shift_cm?, shift_cm?}``, at least
+    Body ``{yaw_deg?, tilt_deg?, roll_deg?, partner_shift_cm?, role_shift_cm?, shift_cm?, partner_turn_deg?}``,
+    at least
     one of them non-zero: the rigid rotation ``Ry(yaw) · Rx(tilt) · Rz(roll)``
     about the origin of the clip frame on the floor. ``partner_shift_cm`` is
     ``[side, up, forward]`` centimetres (clip frame, −100..100) that move a
@@ -284,7 +285,9 @@ async def post_animation_clip_orient(library: str, rel: str, request: Request,
     named role moves, with its alt halves (``orient_clip``). Surface heights use the PATCH route's
     ``height_offsets_cm`` instead. ``shift_cm`` is the renderer-only cumulative
     [side, forward] correction in cm (-200..200 per edit), shared by both halves.
-    Shift-only edits do not require Blender. Both halves of a pair are turned in ONE
+    ``partner_turn_deg`` (Ruling A129) is a pair's renderer-only cumulative [tilt, roll] of partner B
+    in degrees (-45..45 per edit), turned about B's hips at placement. Shift-only and turn-only edits do
+    not require Blender. Both halves of a pair are turned in ONE
     Blender run, the sidecar's angles add up and a
     pair's root geometry is re-measured on the written file. Needs Blender
     (503 when the host has none), answers the touched clips plus the run time.
@@ -330,9 +333,10 @@ async def post_animation_clip_orient(library: str, rel: str, request: Request,
                                 detail="role_shift_cm must be {role: [side, up, forward] numbers}")
         role_shift = {str(r): [float(x) for x in v] for r, v in role_shift.items()}
     role_moves = [x for v in (role_shift or {}).values() for x in v]
-    from app.core.animation_clips import validate_clip_shift
+    from app.core.animation_clips import validate_clip_shift, validate_partner_turn
     try:
         horizontal = validate_clip_shift(body.get("shift_cm"))
+        turn = validate_partner_turn(body.get("partner_turn_deg"))
     except ClipLibraryError as e:
         raise _clip_edit_error(e)
     checked = None
@@ -342,23 +346,25 @@ async def post_animation_clip_orient(library: str, rel: str, request: Request,
             checked = validate_orientation_check(body["checked"])
         except ClipLibraryError as e:
             raise _clip_edit_error(e)
-        if not any(abs(v) > 1e-9 for v in (*dials.values(), *(shift or ()), *role_moves, *horizontal)):
+        if not any(abs(v) > 1e-9 for v in (*dials.values(), *(shift or ()), *role_moves, *horizontal, *turn)):
             # Nothing to bake: the admin saved a place check that already reads green.
             try:
                 return {"clips": mark_clip_checked(library, rel, checked), "seconds": 0}
             except ClipLibraryError as e:
                 raise _clip_edit_error(e)
-    if not any(abs(v) > 1e-9 for v in (*dials.values(), *(shift or ()), *role_moves, *horizontal)):
+    if not any(abs(v) > 1e-9 for v in (*dials.values(), *(shift or ()), *role_moves, *horizontal, *turn)):
         raise HTTPException(
             status_code=400,
-            detail="one of yaw_deg, tilt_deg, roll_deg, partner_shift_cm, role_shift_cm, shift_cm must be non-zero")
+            detail="one of yaw_deg, tilt_deg, roll_deg, partner_shift_cm, role_shift_cm, shift_cm, partner_turn_deg "
+                   "must be non-zero")
     if any(abs(v) > 1e-9 for v in (*dials.values(), *(shift or ()), *role_moves)) and not blender_runner.is_available():
         raise HTTPException(status_code=503,
                             detail="Blender is not available on this server")
     started = time.monotonic()
     try:
         clips = orient_clip(library, rel, **dials, partner_shift_cm=shift,
-                            role_shift_cm=role_shift, shift_cm=horizontal, checked=checked)
+                            role_shift_cm=role_shift, shift_cm=horizontal, partner_turn_deg=turn,
+                            checked=checked)
     except ClipLibraryError as e:
         raise _clip_edit_error(e)
     return {"clips": clips, "seconds": round(time.monotonic() - started, 2)}

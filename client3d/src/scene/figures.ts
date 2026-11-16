@@ -76,6 +76,17 @@ const clipLoopFlags = new WeakMap<THREE.AnimationClip, boolean>();
 const clipLoopCounts = new WeakMap<THREE.AnimationClip, number>();
 const clipHeightOffsets = new WeakMap<THREE.AnimationClip, ClipHeightOffsetsCm>();
 const clipShifts = new WeakMap<THREE.AnimationClip, ClipShiftCm>();
+/** Ruling A129: a pair's partner-B turn [tilt, roll] degrees (renderer-only, `orientation.partner_turn_deg`). */
+const clipPartnerTurns = new WeakMap<THREE.AnimationClip, [number, number]>();
+
+/** Remembers the listing's partner-B turn for one loaded clip file. */
+export function setClipPartnerTurn(clip: THREE.AnimationClip, turn: [number, number] | null | undefined): void {
+  if (turn && (turn[0] || turn[1])) clipPartnerTurns.set(clip, turn);
+}
+/** The partner-B turn of a played clip ([0, 0] = none). */
+export function clipPartnerTurn(clip: THREE.AnimationClip | null | undefined): [number, number] {
+  return (clip && clipPartnerTurns.get(clip)) || [0, 0];
+}
 
 /** Renderer-only horizontal correction of the exact selected source file. */
 export function setClipShift(clip: THREE.AnimationClip, shift: ClipShiftCm | null | undefined): void {
@@ -121,6 +132,8 @@ function carryClipLoops(from: readonly THREE.AnimationClip[],
     if (heights) clipHeightOffsets.set(c, heights);
     const shift = source && clipShifts.get(source);
     if (shift) clipShifts.set(c, shift);
+    const turn = source && clipPartnerTurns.get(source);
+    if (turn) clipPartnerTurns.set(c, turn);
   }
 }
 
@@ -1057,7 +1070,8 @@ export class FigureLibrary {
       // carries a travel in its hips track that the figure is to follow
       // (`Figure.update`); `strip` or no block plays in place as before.
       const sources: Array<{ kind: string; set: string; url: string; loop?: boolean; loopCount?: number | null;
-                             rootMotion?: boolean; rootMotionMode?: string; heightOffsets?: ClipHeightOffsetsCm; shift?: ClipShiftCm | null }> =
+                             rootMotion?: boolean; rootMotionMode?: string; heightOffsets?: ClipHeightOffsetsCm; shift?: ClipShiftCm | null;
+                             partnerTurn?: [number, number] | null }> =
         serverClips.map((c) => ({
           kind: clipIndexName(c), set: c.set ?? '',
           url: c.url, loop: c.loop, loopCount: c.loop_count,
@@ -1065,6 +1079,7 @@ export class FigureLibrary {
           rootMotionMode: c.root_motion?.mode,
           heightOffsets: c.height_offsets_cm,
           shift: c.orientation?.shift_cm,
+          partnerTurn: c.orientation?.partner_turn_deg,
         }));
       if (!sources.length) {
         // Dev/offline fallback: the local manifest clips (no sets)
@@ -1120,6 +1135,7 @@ export class FigureLibrary {
           setClipRootMotion(clip, source.rootMotion, source.rootMotionMode);
           setClipHeightOffsets(clip, source.heightOffsets);
           setClipShift(clip, source.shift);
+          setClipPartnerTurn(clip, source.partnerTurn);
         },
         isPair: isPairClipName,
         pairRoot: extractRootPath,
@@ -1197,6 +1213,7 @@ export class FigureLibrary {
               setClipRootMotion(clip, !!source.root_motion && source.root_motion.mode !== 'strip', source.root_motion?.mode);
               setClipHeightOffsets(clip, source.height_offsets_cm);
               setClipShift(clip, source.orientation?.shift_cm);
+              setClipPartnerTurn(clip, source.orientation?.partner_turn_deg);
             }
           } catch (e) { console.warn('[figures] clip reload not loadable', source.url, e); }
         }
@@ -1745,6 +1762,8 @@ export class FigureLibrary {
           if (heights) clipHeightOffsets.set(c, heights);
           const shift = clipShifts.get(clip);
           if (shift) clipShifts.set(c, shift);
+          const turn = clipPartnerTurns.get(clip);
+          if (turn) clipPartnerTurns.set(c, turn);
           out.push(c);
           break;
         }
@@ -2211,6 +2230,13 @@ export class Figure {
   private readonly eyeLocal = new THREE.Vector3();
   private firstPerson = false;
   private headShrunk = false;
+  /** Ruling A129: the bind hips over the root (metres) — `fixPivot`'s hips for a pair fix. */
+  readonly pairHipsBind: [number, number, number];
+
+  /** Ruling A129: the partner-B turn [tilt, roll] degrees of the clip playing now ([0, 0] = none). */
+  get pairTurnDeg(): [number, number] {
+    return clipPartnerTurn(this.current?.getClip());
+  }
 
   constructor(model: LoadedModel) {
     this.motionState = model.motion;
@@ -2238,6 +2264,8 @@ export class Figure {
       inst.position.y -= box.min.y;
     }
     this.groundY = inst.position.y;
+    // Ruling A129: the bind hips over the feet (root space) — the pivot a pair fix turns this figure about.
+    this.pairHipsBind = [0, rigHipsHeight(THREE, inst) ?? this.height * 0.53, 0];
     this.travelBase = { x: inst.position.x, z: inst.position.z };
     this.root.add(inst);
     this.root.updateMatrixWorld(true);

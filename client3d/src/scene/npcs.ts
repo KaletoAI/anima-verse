@@ -17,7 +17,7 @@ import { RIDE_ARRIVE_M, rideStep, type StairRide } from '../game/stairs';
 import type { PhotoSubject } from '../game/photoView';
 import { bodyYawForView, eyeHeight } from './cameraFraming';
 import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
-import { pickStrandFigures, STRAND_LIMITS } from '@anima/scene-render';
+import { pickStrandFigures, STRAND_LIMITS, eulerYXZ, fixPivot, fixRoot, partnerTurnFix, type PairFix } from '@anima/scene-render';
 import { OPENING_BUDGET, runFigureFrame, strandCandidates, type FrameEntry, type FrameLoopState,
   type StrandFigureView } from '@anima/scene-render';
 import { WALK_CLEARANCE_M } from '../game/ground';
@@ -127,6 +127,9 @@ function makePortraitTexture(name: string, avatarUrl: string | undefined, isAvat
 
 interface Npc {
   name: string;
+  /** Ruling A129: the pair fix applied to `root` this frame (position delta; the root's quaternion carries the
+   *  turn) — undone at the start of the next frame, before anything places the root again. */
+  pairFixDelta?: THREE.Vector3 | null;
   /** the icons behind the name (`tagBadges`) and the key last written there */
   labelBadges: HTMLSpanElement;
   badgeKey: string;
@@ -1509,10 +1512,42 @@ export class NpcManager {
     npc.root.position.set(shown.x, shown.y, shown.z);
     // Apply the eased yaw exactly; the ordinary standing yaw ease would lag behind it.
     npc.figure.faceTowards(new THREE.Vector3(Math.sin(shown.yaw), 0, Math.cos(shown.yaw)), true);
+    this.applyPairFix(npc, it.base, shown.yaw);
     if (age >= BLEND_S) it.blend = undefined;
     npc.figure.update(dt, { frozen: frozen || it.rate <= 0 });
     npc.label.visible = labelVisible;
     return true;
+  }
+
+  /** Ruling A129: partner B's stored turn (`orientation.partner_turn_deg`, renderer-only) about its bind hips —
+   *  the same `partnerTurnFix` / `fixPivot` / `fixRoot` the Library's place preview applies. */
+  private pairFixOf(npc: Npc, base: string, yaw: number): { fix: PairFix; frame: number[]; pivot: [number, number, number] } | null {
+    const fig = npc.figure;
+    if (!fig) return null;
+    const frame = eulerYXZ(0, yaw, 0);
+    const p = npc.root.position;
+    const pivot = fixPivot([p.x, p.y, p.z], frame, fig.pairHipsBind);
+    const role = base.slice(base.lastIndexOf('__') + 2);
+    const [tilt, roll] = role === 'b' ? fig.pairTurnDeg : [0, 0];
+    return { fix: partnerTurnFix(tilt, roll, frame), frame, pivot };
+  }
+
+  private applyPairFix(npc: Npc, base: string, yaw: number): void {
+    const got = this.pairFixOf(npc, base, yaw);
+    if (!got || !(got.fix.turn.some((v) => v) || got.fix.shift.some((v) => v))) return;
+    const p = npc.root.position;
+    const r = fixRoot(got.fix, got.pivot, [p.x, p.y, p.z]);
+    const delta = new THREE.Vector3(r.position[0] - p.x, r.position[1] - p.y, r.position[2] - p.z);
+    p.add(delta);
+    npc.root.quaternion.set(r.quaternion[0], r.quaternion[1], r.quaternion[2], r.quaternion[3]);
+    npc.pairFixDelta = delta;
+  }
+
+  private clearPairFix(npc: Npc): void {
+    if (!npc.pairFixDelta) return;
+    npc.root.position.sub(npc.pairFixDelta);
+    npc.root.quaternion.identity();
+    npc.pairFixDelta = null;
   }
 
   /** What the ground at (x, z) says, through the depth gate: the raw word,
@@ -1870,6 +1905,7 @@ export class NpcManager {
       // A hidden root takes its label with it (CSS2DRenderer hides the
       // subtree); the rule states it all the same, for the native client.
       const labelVisible = tagVisible(camDist, !npc.root.visible, own);
+      this.clearPairFix(npc);
       if (npc.name === this.photoHeldName) {
         npc.figure?.update(0, { frozen: true });
         npc.label.visible = false;

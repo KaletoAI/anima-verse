@@ -28,7 +28,7 @@
     "surface heights go to the sidecar and apply in game": "Flächenhöhen gehen ins Sidecar und gelten im Spiel",
     "the finale clips change the same way: {kinds}": "die Finale-Clips ändern sich genauso: {kinds}",
     "the green place check is stored": "die grüne Platzprüfung wird gespeichert",
-    "the side/forward shift goes to the sidecar": "die Seit-/Vorwärtsverschiebung geht ins Sidecar",
+    "the side/forward shift and partner B’s tilt/roll go to the sidecar": "die Seit-/Vorwärtsverschiebung und Partner Bs Neigung/Rollen gehen ins Sidecar",
     "the stored place check is cleared": "die gespeicherte Platzprüfung wird gelöscht",
     "turn/tilt/roll and role offsets are baked into the clip file (one Blender run, no hub jobs)": "Drehen/Kippen/Rollen und Rollenversatz werden in die Clip-Datei gebrannt (ein Blender-Lauf, keine Hub-Jobs)",
     "used or not": "benutzt oder nicht",
@@ -6034,7 +6034,7 @@
     "Auto-align moves partner B; neither figure of the contact is B.": "Automatisch ausrichten verschiebt Partner B; keine Figur des Kontakts ist B.",
     "The contact could not be sampled over the clip.": "Der Kontakt ließ sich über den Clip nicht abtasten.",
     "Open the Places view: Auto-align measures the figures shown there.": "Die Plätze-Ansicht öffnen: Automatisch ausrichten misst die dort gezeigten Figuren.",
-    "Plays the clip with the figures shown and moves partner B so that the attached part’s tip sits at the channel’s opening at the outermost frame and stays on the channel’s axis; the deepest frame is checked. Writes the three sliders above; Save stores them as usual.": "Spielt den Clip mit den gezeigten Figuren ab und verschiebt Partner B so, dass die Spitze des angesetzten Teils im äußersten Frame an der Öffnung des Kanals sitzt und auf seiner Achse bleibt; der tiefste Frame wird geprüft. Schreibt die drei Regler darüber; Speichern sichert sie wie gewohnt.",
+    "Plays the clip with the figures shown and moves partner B so that the attached part’s tip sits at the channel’s opening at the outermost frame and stays on the channel’s axis, then turns B (tilt/roll, at most 20°) so that the shaft runs along the axis; the deepest frame is checked. Writes the five sliders above; Save stores them as usual.": "Spielt den Clip mit den gezeigten Figuren und verschiebt Partner B so, dass die Spitze des angesetzten Teils im äußersten Frame an der Öffnung des Kanals sitzt und auf seiner Achse bleibt, und dreht B dann (Neigen/Rollen, höchstens 20°), damit der Schaft entlang der Achse läuft; der tiefste Frame wird geprüft. Schreibt die fünf Regler oben; Speichern sichert sie wie üblich.",
     "The place preview is still loading.": "Die Platz-Vorschau lädt noch.",
     "{by} → {of}: {channel}": "{by} → {of}: {channel}",
     "before": "vorher",
@@ -6047,6 +6047,12 @@
     "Measured on the pair shown; another pair may need its own run. Save stores the sliders.": "Am gezeigten Paar gemessen; ein anderes Paar braucht eventuell einen eigenen Lauf. Speichern sichert die Regler.",
     "On the opening at the outermost frame and inside the channel at the deepest.": "Im äußersten Frame an der Öffnung und im tiefsten im Kanal.",
     "Inside at the deepest frame, but off the axis, off the opening, or the shift pressed the bodies more than 30 mm deeper into each other elsewhere.": "Im tiefsten Frame drin, aber neben der Achse, neben der Öffnung, oder die Verschiebung drückt die Körper anderswo mehr als 30 mm tiefer ineinander.",
-    "Not inside the channel at the deepest frame.": "Im tiefsten Frame nicht im Kanal."
+    "Not inside the channel at the deepest frame.": "Im tiefsten Frame nicht im Kanal.",
+    "B tilt": "B neigen",
+    "B roll": "B rollen",
+    "Turns partner B about its hips, on top of the clip — renderer-only, saved beside the clip like the shift. Tilt tips B’s head towards the clip’s forward axis, roll tips B sideways.": "Dreht Partner B um seine Hüfte, zusätzlich zum Clip — nur beim Darstellen, neben dem Clip gespeichert wie die Verschiebung. Neigen kippt Bs Kopf zur Vorwärtsachse des Clips, Rollen kippt B seitlich.",
+    "Depth gained by B’s tilt/roll": "Tiefe durch Bs Neigen/Rollen",
+    "B tilt / roll": "B neigen / rollen",
+    "partner B tilt / roll": "Partner B neigen / rollen"
   }
 }

@@ -36,8 +36,9 @@ import {
   placeModelSpec, restCorrections, restPoseOf, strandCandidates,
   type AlignmentDraft, type ChannelNow, type FrameInspection, type AlignmentLamp, type ClipHeightOffsetsCm, type CollisionPayload, type FigureRuntime,
   type HairStrandRecord, type SceneMarker, type SceneModelSpec, type SecondaryMotionPayload,
-  bodyOverlap, contactLamp, contactReport, solveContactShift,
-  type ContactLamp, type ContactReport, type ContactSample,
+  bodyOverlap, contactLamp, contactReport, solveContactShift, solvePairFix, fixRoot, fixPivot, partnerTurnFix, turnAxes,
+  fixAnglesDeg, ALIGN_FIT, NO_FIX,
+  type ContactLamp, type ContactReport, type FitSample, type PairFix,
 } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
@@ -71,7 +72,7 @@ interface PropRow {
 export interface PlaceClip {
   role?: string; set?: string; url: string
   height_offsets_cm?: ClipHeightOffsetsCm
-  orientation?: { shift_cm?: [number, number] | null } | null
+  orientation?: { shift_cm?: [number, number] | null; partner_turn_deg?: [number, number] | null } | null
 }
 /** A pose that plays this clip (read-only here, D2). */
 export interface PlacePose { key: string; yaw_offset?: number; group?: string }
@@ -211,7 +212,9 @@ const memoKey = (kind: string) => `anima.placePreview.${kind}`
 export type AutoAlignResult =
   | { ok: false; reason: string }
   | { ok: true; by: string; of: string; channel: string; shiftCm: [number, number, number]
-      before: ContactReport; after: ContactReport; overlapBeforeMm: number; overlapAfterMm: number
+      /** Ruling A129: partner B's tilt/roll (degrees, saved + draft + solved, each within ±20°). */
+      turnDeg: [number, number]
+      before: ContactReport; after: ContactReport; afterShift: ContactReport; overlapBeforeMm: number; overlapAfterMm: number
       lampBefore: ContactLamp; lamp: ContactLamp }
 
 export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq, bust = 0, poses, onOpenPose,
@@ -265,14 +268,16 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   const autoAlignOut = useRef(autoAlignRef); autoAlignOut.current = autoAlignRef
   // The SAVED calibration per role, read live in the frame loop: after Apply the listing (new shift_cm / heights)
   // arrives after the clip reload, and the figures must take it the moment it does — never a stale copy.
-  const savedRef = useRef<Record<string, { shiftCm: [number, number] | null; heightOffsetsCm: ClipHeightOffsetsCm | null }>>({})
+  const savedRef = useRef<Record<string, { shiftCm: [number, number] | null; heightOffsetsCm: ClipHeightOffsetsCm | null
+    partnerTurnDeg: [number, number] | null }>>({})
   {
     const want = set.trim()
     const out: typeof savedRef.current = {}
     for (const role of ['', 'a', 'b', 'c', 'd', 'e']) {
       const c = (want ? clips.find((x) => (x.role || '') === role && (x.set || '') === want) : undefined)
         || clips.find((x) => (x.role || '') === role && !x.set) || clips.find((x) => (x.role || '') === role)
-      if (c) out[role] = { shiftCm: c.orientation?.shift_cm ?? null, heightOffsetsCm: c.height_offsets_cm ?? null }
+      if (c) out[role] = { shiftCm: c.orientation?.shift_cm ?? null, heightOffsetsCm: c.height_offsets_cm ?? null,
+        partnerTurnDeg: c.orientation?.partner_turn_deg ?? null }
     }
     savedRef.current = out
   }
@@ -555,7 +560,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           mixer: InstanceType<typeof THREE.AnimationMixer>; path: RootPath; duration: number
           hips: Object3D | null; hipsBind: { x: number; y: number; z: number }
           bindInv: InstanceType<typeof THREE.Quaternion>; runtime: FigureRuntime; hasRecord: boolean
-          saved: { shiftCm: [number, number] | null; heightOffsetsCm: ClipHeightOffsetsCm | null }
+          saved: { shiftCm: [number, number] | null; heightOffsetsCm: ClipHeightOffsetsCm | null; partnerTurnDeg: [number, number] | null }
           anchor: { x: number; y: number; z: number }; placeYaw: number
           arrow: InstanceType<typeof THREE.ArrowHelper>; yawS: number[]; posS: number[]
           medYaw: number; medPos: number; dyaw: number; dpos: number; chains: number
@@ -610,7 +615,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           })
           figs.push({ letter: p.letter, character: a.character, role: a.role, place: p, root, inst, mixer, path: clip.path,
             duration: clip.raw.duration, hips, hipsBind: { x: hb.x, y: hb.y, z: hb.z }, bindInv, runtime, hasRecord,
-            saved: { shiftCm: o?.shift_cm ?? null, heightOffsetsCm: clip.file.height_offsets_cm ?? null },
+            saved: { shiftCm: o?.shift_cm ?? null, heightOffsetsCm: clip.file.height_offsets_cm ?? null,
+              partnerTurnDeg: o?.partner_turn_deg ?? null },
             anchor, placeYaw, arrow, yawS: [], posS: [], medYaw: NaN, medPos: NaN, dyaw: 0, dpos: 0,
             chains: Object.keys(answer?.motion?.groups ?? {}).length, head, tips, tipRest: new Map() })
           disposers.push(() => { mixer.stopAllAction(); mixer.uncacheRoot(inst); runtime.dispose() })
@@ -709,6 +715,31 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           }
         }
 
+        // ── Ruling A129: the root of a figure — the calibration (draft over saved), then partner B's turn (saved +
+        // draft, renderer-only) and `extra` (a solve's trial fix) about the bind hips (`fixPivot`, stage space). ──
+        const fixQ = new THREE.Quaternion()
+        const placeRoot = (f: Fig, time: number, draft: AlignmentDraft, extra: PairFix = NO_FIX) => {
+          const cal = clipCalibration(draft, savedRef.current[f.role] ?? f.saved, f.placeYaw, f.place.marker.group)
+          const at = calibratedRoot(cal, { anchor: f.anchor, role: f.role, hips: rootAt(f.path, time), inPlace: solo,
+            hipsBind: f.hipsBind, standRefM })
+          f.root.position.set(at.x, at.y, at.z)
+          f.root.rotation.set(cal.euler[0], cal.euler[1], cal.euler[2], 'YXZ')
+          const pivot = fixPivot([at.x, at.y, at.z], cal.frame, [f.hipsBind.x, f.hipsBind.y, f.hipsBind.z])
+          if (!solo && f.role === 'b') {
+            const saved = (savedRef.current[f.role] ?? f.saved).partnerTurnDeg ?? [0, 0]
+            const turn = draft.partnerTurnDeg ?? [0, 0]
+            const base = partnerTurnFix(saved[0] + turn[0], saved[1] + turn[1], cal.frame)
+            const fix: PairFix = { shift: extra.shift, turn: [base.turn[0] + extra.turn[0], base.turn[1] + extra.turn[1],
+              base.turn[2] + extra.turn[2]] }
+            if (fix.turn.some((v) => v) || fix.shift.some((v) => v)) {
+              const r = fixRoot(fix, pivot, [at.x, at.y, at.z])
+              f.root.position.set(r.position[0], r.position[1], r.position[2])
+              f.root.quaternion.premultiply(fixQ.set(r.quaternion[0], r.quaternion[1], r.quaternion[2], r.quaternion[3]))
+            }
+          }
+          f.root.updateMatrixWorld(true)
+          return { pivot, frame: cal.frame }
+        }
         const scratch = new THREE.Vector3()
         const q = new THREE.Quaternion()
         const fwd = new THREE.Vector3()
@@ -745,12 +776,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           for (const f of figs) {
             // phase A: the pose, then the root by the calibration (draft over saved, the bake's order)
             f.mixer.setTime(time)
-            const cal = clipCalibration(draft, savedRef.current[f.role] ?? f.saved, f.placeYaw, f.place.marker.group)
-            const r = rootAt(f.path, time)
-            const at = calibratedRoot(cal, { anchor: f.anchor, role: f.role, hips: r, inPlace: solo, hipsBind: f.hipsBind, standRefM })
-            f.root.position.set(at.x, at.y, at.z)
-            f.root.rotation.set(cal.euler[0], cal.euler[1], cal.euler[2], 'YXZ')
-            f.root.updateMatrixWorld(true)
+            placeRoot(f, time, draft)
             f.runtime.poseStep({ realDelta: dt })
           }
           const wantInspect = showRef.current.collision || showRef.current.channels
@@ -831,15 +857,11 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         const autoAlign = (): AutoAlignResult => {
           if (solo || figs.length < 2) return { ok: false, reason: t('Auto-align needs a pair clip on a place.') }
           const step = 1 / 60
+          const placed = new Map<Fig, { pivot: [number, number, number]; frame: number[] }>()
           const runAt = (time: number, draft: AlignmentDraft, inspect: boolean) => {
             for (const f of figs) {
               f.mixer.setTime(time)
-              const cal = clipCalibration(draft, savedRef.current[f.role] ?? f.saved, f.placeYaw, f.place.marker.group)
-              const at = calibratedRoot(cal, { anchor: f.anchor, role: f.role, hips: rootAt(f.path, time), inPlace: solo,
-                hipsBind: f.hipsBind, standRefM })
-              f.root.position.set(at.x, at.y, at.z)
-              f.root.rotation.set(cal.euler[0], cal.euler[1], cal.euler[2], 'YXZ')
-              f.root.updateMatrixWorld(true)
+              placed.set(f, placeRoot(f, time, draft))
               f.runtime.poseStep({ realDelta: step })
             }
             return placePhaseB(entries, frameState, inspect)
@@ -867,11 +889,14 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             return [vec.x, vec.y, vec.z]
           }
           const b0 = base.roleShiftM.b ?? [0, 0, 0]
+          const t0 = base.partnerTurnDeg ?? [0, 0]
+          const savedTurn = (savedRef.current.b ?? moving.saved).partnerTurnDeg ?? [0, 0]
           const loop = Math.max(8, Math.ceil(duration / step))
-          const pass = (extra: [number, number, number]) => {
+          let axes: [number, number, number][] = []
+          const pass = (extra: [number, number, number], turn: [number, number] = [0, 0]) => {
             const draft: AlignmentDraft = { ...base, roleShiftM: { ...base.roleShiftM,
-              b: [b0[0] + extra[0], b0[1] + extra[1], b0[2] + extra[2]] } }
-            const samples: ContactSample[] = []
+              b: [b0[0] + extra[0], b0[1] + extra[1], b0[2] + extra[2]] }, partnerTurnDeg: [t0[0] + turn[0], t0[1] + turn[1]] }
+            const samples: FitSample[] = []
             let overlap = 0
             for (let i = 0; i < 2 * loop; i++) {
               const time = (i % loop) * step % duration
@@ -881,8 +906,11 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               const chain = ie?.chains[hit.chain]
               const ch = ir?.channels.find((x) => x.id === hit.channel)
               if (!ie || !ir || !chain?.segments.length || !ch) continue
+              // The entering figure's pivot (stage space); a sign −1 (B receives) turns B, so the tip's pivot is B's.
+              const pl = placed.get(moving)!
+              axes = turnAxes(pl.frame)
               samples.push({ tip: toStage(chain.segments[chain.segments.length - 1].b), base: toStage(chain.segments[0].a),
-                o: toStage(ch.o), u: toStage(ch.u, true) })
+                o: toStage(ch.o), u: toStage(ch.u, true), pivot: pl.pivot })
               const skip = new Set<string>([...ch.suppress.map((id) => `${rName}|${id}`),
                 ...ie.capsules.filter((c) => c.region === 'attached_part' || c.region === 'appendage').map((c) => `${eName}|${c.id}`)])
               overlap = Math.max(overlap, bodyOverlap(res.frame.contacts, skip))
@@ -911,11 +939,34 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             cur = pass(extra)
             if (Math.hypot(d[0], d[1], d[2]) < 0.0005) break
           }
+          const afterShift = contactReport(cur.samples)
+          // Ruling A129: then the angles — partner B's tilt/roll about its bind hips (±20° in all, saved included)
+          // together with the shift, on top of the shift found above. Only when B is the entering figure: turning the
+          // receiving figure would carry the channel, which the samples hold fixed.
+          let turn: [number, number] = [0, 0]
+          if (sign === 1) {
+            const lim = ALIGN_FIT.maxAngleDeg
+            for (let it = 0; it < 3; it++) {
+              const fix = solvePairFix(cur.samples, { ...ALIGN_FIT, axes })
+              const [dt, dr] = fixAnglesDeg(fix, axes)
+              const total = (i: 0 | 1, d: number) => Math.max(-lim, Math.min(lim, savedTurn[i] + t0[i] + turn[i] + d))
+                - savedTurn[i] - t0[i]
+              const next: [number, number] = [total(0, dt), total(1, dr)]
+              const s = toClip(fix.shift, cur.draft)
+              extra = [extra[0] + s[0], extra[1] + s[1], extra[2] + s[2]]
+              const moved = Math.abs(next[0] - turn[0]) + Math.abs(next[1] - turn[1])
+              turn = next
+              cur = pass(extra, turn)
+              if (moved < 0.05 && Math.hypot(...fix.shift) < 0.0005) break
+            }
+          }
           const after = contactReport(cur.samples)
           runAt(timeRef.current, base, false)
           const cm = (v: number) => Math.round(v * 1000) / 10
+          const deg = (v: number) => Math.round(v * 10) / 10
           return { ok: true, by: fe.letter, of: fr.letter, channel: hit.channel,
             shiftCm: [cm(b0[0] + extra[0]), cm(b0[1] + extra[1]), cm(b0[2] + extra[2])],
+            turnDeg: [deg(t0[0] + turn[0]), deg(t0[1] + turn[1])], afterShift,
             before, after, overlapBeforeMm: p0.overlap * 1000, overlapAfterMm: cur.overlap * 1000,
             lampBefore: contactLamp(before, chNow), lamp: contactLamp(after, chNow, (cur.overlap - p0.overlap) * 1000) }
         }

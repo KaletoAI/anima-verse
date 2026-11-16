@@ -57,6 +57,8 @@ export interface ApiClipRow {
     roll_deg?: number | null
     floor_shift_cm?: number | null
     partner_shift_cm?: [number, number, number] | null
+    /** Ruling A129: partner B's renderer-only [tilt, roll] degrees. */
+    partner_turn_deg?: [number, number] | null
     /** A group's per-role [side, up, forward] offsets in centimetres. */
     role_shift_cm?: Record<string, [number, number, number]> | null
     /** Cumulative renderer-only [side, forward] centimetres. */

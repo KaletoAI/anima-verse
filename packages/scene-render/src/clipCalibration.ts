@@ -34,6 +34,8 @@ export interface AlignmentDraft {
   roleShiftM: Readonly<Record<string, readonly [number, number, number]>>
   /** Draft surface corrections in cm per surface group; a group not named keeps its saved value. */
   heightCm: ClipHeightOffsetsCm
+  /** Ruling A129: a pair's partner B turned about its hips, renderer-only [tilt, roll] degrees (`partnerTurnFix`). */
+  partnerTurnDeg?: readonly [number, number]
 }
 
 export const EMPTY_DRAFT: AlignmentDraft = Object.freeze({
@@ -50,7 +52,7 @@ export interface SavedCalibration {
 export function isEmptyDraft(d: AlignmentDraft): boolean {
   return !d.yawDeg && !d.tiltDeg && !d.rollDeg && !d.shiftCm[0] && !d.shiftCm[1]
     && !Object.values(d.roleShiftM).some((v) => v.some((x) => x))
-    && !Object.keys(d.heightCm).length
+    && !Object.keys(d.heightCm).length && !(d.partnerTurnDeg && (d.partnerTurnDeg[0] || d.partnerTurnDeg[1]))
 }
 
 const RAD = Math.PI / 180

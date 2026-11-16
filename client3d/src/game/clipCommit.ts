@@ -3,6 +3,8 @@ export interface ClipSource {
   rootMotionMode?: string;
   heightOffsets?: Partial<Record<'ground' | 'seat' | 'lie', number>>;
   shift?: readonly [number, number] | null;
+  /** Ruling A129: a pair's partner-B turn [tilt, roll] degrees. */
+  partnerTurn?: [number, number] | null;
 }
 export interface ClipResult<C> { clip: C | null }
 export interface CommitOps<C> {

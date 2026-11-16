@@ -258,3 +258,6 @@ export type { PlaceEntry } from './placeSlot'
 export { solveContactShift, contactReport, contactLamp, entryFrame, bodyOverlap, CONTACT_ENTRY_WEIGHT,
   CONTACT_ENTRY_GREEN_MM, CONTACT_CLEAR_MM } from './channelContact'
 export type { ContactSample, ContactReport, ContactLamp } from './channelContact'
+export { solvePairFix, fixPoint, unfixPoint, fixSample, fixRoot, composeFix, turnMatrix, matrixTurn, fixAnglesDeg,
+  findContact, contactSampleOf, turnAxes, partnerTurnFix, fixPivot, ALIGN_FIT, RUNTIME_FIT, FIT_ANGLE_WEIGHT_M, NO_FIX } from './pairFit'
+export type { FitSample, PairFix, FitBounds, FitOptions } from './pairFit'
