@@ -885,14 +885,12 @@ def _mesh_items_step(meta: Dict[str, Any], names: Dict[str, str],
     the garment warnings) and — outfit body mode mesh, ruling 2026-11-10 —
     which are missing from it because they have no accepted fit yet
     (``missing``: ``base_body.mesh_items_missing``, judged now; "missing
-    own-mesh pieces: …") and — ruling A11 — which are in the body shape until
-    their own mesh is ready (``base_body.mesh_items_in_body``; "in the body
-    until ready: …"). None for an outfit without any."""
-    from app.core.base_body import mesh_items_in_body, mesh_items_unpainted
+    own-mesh pieces: …" — Ruling A119: left off until ready). None for an
+    outfit without any."""
+    from app.core.base_body import mesh_items_unpainted
     mesh = _dict(meta.get("mesh_items"))
     intended = [i for i in mesh.get("intended") or [] if isinstance(i, str)]
-    in_body = mesh_items_in_body(meta)
-    if not intended and not in_body:
+    if not intended:
         return None
     unpainted = set(mesh_items_unpainted(meta))
     absent = set(missing) & unpainted
@@ -906,11 +904,9 @@ def _mesh_items_step(meta: Dict[str, Any], names: Dict[str, str],
         parts.append("painted on: " + ", ".join(names.get(i, i) for i in painted))
     if lacking:
         parts.append("missing own-mesh pieces: " + ", ".join(names.get(i, i) for i in lacking))
-    if in_body:
-        parts.append("in the body until ready: " + ", ".join(names.get(i, i) for i in in_body))
-    return step("mesh_items", "Own-mesh pieces", WARNING if painted or lacking or in_body else DONE,
+    return step("mesh_items", "Own-mesh pieces", WARNING if painted or lacking else DONE,
                 " · ".join(parts), {"intended": len(intended), "effective": len(effective),
-                                    "missing": len(lacking) or None, "in_body": len(in_body) or None})
+                                    "missing": len(lacking) or None})
 
 
 #: The overview's words for a boot's shaft class (``footwear_insole.SHAFT_CLASS_M``).
@@ -1452,8 +1448,7 @@ def outfit_model_overview(character_name: str,
                                tiers=available_tiers(path), low_tris=low_tris,
                                covered_missing_text=base_body.COVERED_MISSING,
                                item_names={i: str((items.get(i) or {}).get("name") or i)
-                                           for i in (*base_body.mesh_items_intended(meta),
-                                                     *base_body.mesh_items_in_body(meta))},
+                                           for i in base_body.mesh_items_intended(meta)},
                                texture_shared=(len(base_body.texture_users(character_name).get(
                                    str(meta.get("texture_signature")), [])) if meta.get("texture_signature")
                                    else None),

@@ -2209,23 +2209,20 @@ def get_character_garment(character_name: str, item_id: str,
     pieces = profile.get("equipped_pieces") if isinstance(profile.get("equipped_pieces"), dict) else {}
     mesh_pieces = profile.get("equipped_mesh_pieces") if isinstance(profile.get("equipped_mesh_pieces"), dict) else {}
     worn = item_id in pieces.values() or item_id in mesh_pieces.values()
-    # A worn own-mesh clothing piece without its fit is in the body shape meanwhile (ruling A11, the delivered
-    # figure's ``in_body_own``) or left out in the refusal branch; hair is simply absent and footwear is
-    # missing until fitted (``piece_status``, spec § 9.1).
+    # A worn own-mesh piece without its fit is left off the figure until it is ready (Ruling A119); hair is
+    # simply absent (``piece_status``).
     worn_piece = bool(pipeline and worn and kind in garment_set.OWN_MESH_PIECE_KINDS)
-    left_out = in_body = False
+    left_out = False
     if worn_piece:
         from app.core import figure
-        delivered = figure.delivered_figure_cached(character_name, profile=profile)
-        left_out = item_id in delivered.left_out
-        in_body = item_id in delivered.in_body_own   # ruling A11: in the body until its own mesh is ready
+        left_out = item_id in figure.delivered_figure_cached(character_name, profile=profile).left_out
     payload = {"pipeline": pipeline, "item_id": item_id, "name": str(item.get("name") or item_id),
                "kind": kind, "mesh_mode": garment_set.mesh_mode_of(item), "worn": bool(worn),
                "status": garment_set.piece_status(
                    info, worn=worn_piece, base_model_ready=bool(base and base[1]),
                    layers=garment_set.worn_layers(character_name, profile=profile,
                                                   base_model_sha=base[1] if base else "").get(item_id),
-                   left_out=left_out, in_body=in_body),
+                   left_out=left_out),
                "garment": info, "limits": _garment_limits(kind),
                # Ruling A31: the Details preview's body switch — each body's fit attempt, its status and reason;
                # Ruling A67: the base body and the current body only (``fit_attempts.bodies``; [] off the pipeline

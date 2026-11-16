@@ -219,15 +219,12 @@ def built_on_fit_base(bare_meta: Dict[str, Any], record: Dict[str, Any]) -> bool
 
 def effective_mesh_items(bare_meta: Optional[Dict[str, Any]]) -> List[str]:
     """The own-mesh outfit pieces to graft onto a bare outfit model: the ones
-    it was built WITHOUT in its texture (``base_body.mesh_items_unpainted``:
-    sidecar ``mesh_items.effective``; in outfit body mode mesh
-    ``unpainted``) and the ones its body shape holds until their mesh is
-    ready (``base_body.mesh_items_in_body``, ruling A11: served as their own
-    mesh once accepted, the shape keeps them until the next Build) — one
-    without an accepted fit yet is simply not grafted until it has one
-    (ruling 2026-11-10), sorted; [] when it records none."""
-    from app.core.base_body import mesh_items_in_body, mesh_items_unpainted
-    return sorted({*mesh_items_unpainted(bare_meta), *mesh_items_in_body(bare_meta)})
+    its figure wants outside the body (``base_body.mesh_items_intended``) —
+    grafted and left off alike (Ruling A119): one without an accepted fit is
+    simply not grafted until it has one, then the assembly puts it on (CPU,
+    no rebuild of the bare model); sorted, [] when it records none."""
+    from app.core.base_body import mesh_items_intended
+    return sorted(set(mesh_items_intended(bare_meta or {})))
 
 
 def _piece_kind(item: Dict[str, Any]) -> str:
@@ -399,12 +396,36 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
     return out
 
 
+def bare_meta_of(character_name: str, directory: Path, signature: str) -> Dict[str, Any]:
+    """The FULL sidecar of the bare model of ``signature`` in ``directory`` — for the PLAIN BODY (a base
+    signature) while it is the figure served for the worn outfit (Ruling A119: the outfit model of the figure
+    delivered now is not built yet, ``model3d.find_model3d_serving`` match ``"base"``), with the delivered
+    figure's ready own-mesh pieces as its ``mesh_items.intended``, its ``pieces`` and the base model it is: the
+    assembly puts them on on the CPU like on any outfit model. Nothing is painted on it. Any other base, or one
+    the delivered figure does not stand on, keeps its own sidecar (nothing wanted)."""
+    meta = _read_json(bare_path(directory, signature, FULL).with_suffix(".json"))
+    from app.core import base_body
+    if not base_body.is_base_signature(signature):
+        return meta
+    try:
+        from app.core import figure
+        fig = figure.delivered_figure_cached(character_name)
+        sha = base_body.base_model_sha256(character_name, signature)
+    except Exception:  # noqa: BLE001 — nothing grafted, never a failure of serving
+        logger.debug("Worn plain body of %s not judged", character_name, exc_info=True)
+        return meta
+    if fig.shape != signature or not sha:
+        return meta
+    return {**meta, "base_signature": signature, "base_model_sha256": sha, "pieces": dict(fig.pieces),
+            "mesh_items": {"intended": list(fig.own), "effective": list(fig.own)}}
+
+
 def _wanted_for(character_name: str, directory: Path, signature: str, *,
                 build_layers: bool = False) -> List[Dict[str, Any]]:
     """``_wanted`` for the bare model of ``signature`` in ``directory``: its
-    FULL sidecar names the base it was built on (the low tier is derived
-    from the full file)."""
-    return _wanted(character_name, bare_meta=_read_json(bare_path(directory, signature, FULL).with_suffix(".json")),
+    FULL sidecar (``bare_meta_of``) names the base it was built on (the low
+    tier is derived from the full file)."""
+    return _wanted(character_name, bare_meta=bare_meta_of(character_name, directory, signature),
                    build_layers=build_layers)
 
 
@@ -597,9 +618,6 @@ def served(character_name: str, path: Optional[Path], tier: str) -> Optional[Pat
         else:
             return path
         signature = path.stem
-        from app.core.base_body import is_base_signature
-        if is_base_signature(signature):
-            return path  # the base body itself is never dressed
         assembled = assembled_path(directory, signature, tier)
         wanted = _wanted_for(character_name, directory, signature)
         if not wanted:
@@ -745,7 +763,8 @@ def _build(character_name: str, directory: Path, bare: Path,
         revision = bare_revision(bare)
         data = bare.read_bytes()
         meta = _read_json(bare.with_suffix(".json"))
-    if meta.get("base") or meta.get("rig") != "mixamo":
+    # The plain body is dressed only as the worn figure (Ruling A119, ``bare_meta_of``; ``served`` asks for it).
+    if meta.get("rig") != "mixamo":
         raise ValueError(f"bare model {bare.name} is no rigged outfit model (rig {meta.get('rig')!r})")
     blob = data
     grafted = [g for g in wanted if g["fit"] is not None]  # never a pending one (``_wanted`` with build_layers fits first)
@@ -850,7 +869,7 @@ def assemble(character_name: str, signature: str, *,
     directory = model3d.get_model3d_dir(character_name)
     # The layered fits of pieces worn over each other are built here (CPU, no hub job), never while serving.
     warnings: List[str] = []
-    wanted = _wanted(character_name, bare_meta=_read_json(bare_path(directory, signature, FULL).with_suffix(".json")),
+    wanted = _wanted(character_name, bare_meta=bare_meta_of(character_name, directory, signature),
                      build_layers=True, warnings=warnings)
     statuses: Dict[str, str] = {}
     errors: List[str] = []

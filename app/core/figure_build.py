@@ -17,42 +17,14 @@ order ``STEP_ORDER`` (a step with nothing to do is not in it):
    (``extension_tip.model_tip_smoothing_due``; Ruling A43): its local extension rebuild
    (``model3d.rebuild_extension_rig``) — CPU, no hub job, in automatic Builds too. A base repaired or rebuilt
    before it in the same Build was smoothed by that run; the step then finds nothing due.
-2. ``interim`` — the wanted figure needs an own mesh that is not built
-   (``Figure.interim``: an own-mesh piece IN the body shape until its mesh
-   is ready, ruling A11) and no outfit model of that interim figure is
-   stored. Never for an in-body piece waiting for its shape (Ruling C4, fix
-   round 2 of Task 11g: no PAINTED interim — a live test Build painted a nude
-   back onto the plain body; ``_painted_interim``): the figure delivered
-   before stays served until the ``shape`` step has built it. Else: the
-   interim body shape when it is not stored yet (``base_body.prepare_shape``
-   of the delivered figure, its cost counted like the ``shape`` step), its
-   views (``generate_dressed_images``) and its outfit model (ruling 2;
-   scheduled FIRST, counted in the cost). It never waits for a garment chain
-   (ruling A14): the ``pieces`` steps run after it. Not listed while a manual
-   Build takes kept pieces out and the stored model of the kept shape serves
-   meanwhile. Ruling A15: only an own-mesh piece whose mesh needs HUB work is
-   in the interim (``figure._needs_hub`` — a piece whose garment mesh exists
-   and only lacks its fit on the current base is fitted by the ``pieces`` /
-   ``fits`` steps on the CPU), and no interim at all while the character has
-   a figure to show (``_interim_waits``: an outfit model is served — exact,
-   stale or the nearest stand-in): that figure stays served until the new one
-   is assembled (as Ruling C4 does for a refused view); the interim is built
-   only when there is nothing to show. While it waits, nothing is rendered or
-   assembled for the interim figure (no ``Views`` step for it, the ``texture``
-   step renders nothing, the assembly reports ``INTERIM_WAITS``) and the
-   wanted shape is no take-out: no interim shape holds the pieces, so an
-   automatic Build builds it.
+2. (Ruling A119: there is no interim step — a piece that is not ready is left off the figure shown meanwhile.)
 3. ``shape`` — the wanted meshed shape is not stored
    (``base_body.prepare_shape``): first every view the shape needs
    (``dressed_views()``) is refreshed — a stale one (a model fit of before
    Task 11g, Ruling C2) counts as missing and is re-made, its stored draft
    composited again when it follows the front (``base_body.
    shape_view_jobs``) — then it is meshed; never from a partial, stale or
-   refused set. While own-mesh pieces are in the delivered
-   body shape (``Figure.in_body_own``) this step and ``texture`` take them
-   out of it: listed with ``manual`` ``figure.TAKE_OUT`` — only a manual
-   Build runs them (ruling A11: no automatic extra jobs); a manual Build
-   plans and builds under ``figure.taking_out``.
+   refused set.
 4. ``pieces`` — one step per own-mesh piece whose chain has something to
    run (``garments.run_estimate``), run through the character's garment
    FIFO (``garments.run_queued``).
@@ -61,12 +33,12 @@ order ``STEP_ORDER`` (a step with nothing to do is not in it):
    (``garment_hair.ensure_hairstyle``) when the Build starts.
 6. ``texture`` — the wanted painted set: its views, when they are missing
    (the paint itself is Blender on the CPU, done by the assembly). Also
-   ("Views: …") when no interim / texture step is planned but a view of
+   ("Views: …") when no texture step is planned but a view of
    the figure delivered NOW is not current for it (``dressed_image`` — the
    predicate of the Figure tab's Dressed views; ruling F16).
 7. ``fits`` — the CPU refits (``garment_refit.refit_character``, tracked).
 8. ``assemble`` — the outfit model of the figure delivered THEN, built from
-   whatever is built (the interim rule), then the garment assembly
+   whatever is built (Ruling A119: pieces not ready are left off), then the garment assembly
    (``garment_assembly.schedule``).
 9. ``collision`` — a stored model's collision record carries channels that no longer match the declarations,
    the per-character overrides or the opening (``collision.channels_due``: the Channels panel's Save stores only,
@@ -88,7 +60,7 @@ of it); without any plain body it has nothing to build on and plans nothing
 else.
 
 Cost (``cost``) reuses the producers' own arithmetic, never a second table:
-the plain body = ``base_rebuild_steps``; interim / texture =
+the plain body = ``base_rebuild_steps``; texture =
 ``base_body.dressed_view_estimate`` (per missing view, a copy from the
 texture store 0 — fix round T12-F1, ruling F13 c) and the whole set
 ``base_body.dressed_view_jobs()`` on a rebuilt body or shape;
@@ -104,19 +76,19 @@ every run re-plans at its start, so a follow-up with nothing left ends at
 once. Each run, from its plan to its last step, holds the character's
 ``build_lock``: the Figure tab's Delete of a stored body or texture
 (``figure.delete_stored``) takes it too and re-judges deletability under it,
-so a Build never plans on a body that is deleted under it (Ruling 10a). Model work (plain body, interim, shape,
+so a Build never plans on a body that is deleted under it (Ruling 10a). Model work (plain body, shape,
 texture, assemble) holds ``model3d.generation_slot``. A failed step is
 recorded (``failed[step]``; for ``pieces`` the first failing piece, every
 failing piece under ``items``) and skips only the steps whose ``DEPENDS``
 name it; the others run — except a failed VIEW step (``STOP_STEPS``: plain
-body, interim, shape, texture — a refused view, Ruling C4): it STOPS the
+body, shape, texture — a refused view, Ruling C4): it STOPS the
 Build there, every later step is skipped, and its reason is the Build's
 status (``state()['failed']``) in the Figure tab. The run shows as one tracked task "Build · <name>
 (<i>/<n> <label>)".
 
 A run pins the figure it planned for (Ruling A18, Task 11g-fix6): the wanted figure of its plan (taken again
 after the ``REPIN_STEPS``, which change it themselves). Before every step but ``UNPINNED_STEPS`` the wanted figure of NOW is compared with
-it; the interim step pins its interim body shape, the shape step its shape, a view render the figure it
+it; the shape step pins its shape, a view render the figure it
 renders for; and a shape being meshed is asked between its hub stages whether it is still wanted
 (``model3d.shape_guard``: no face or rig job for a shape the hair change made obsolete). A step whose figure
 moved ends the run as "superseded" (``StepSuperseded``, ``state()['superseded']``) — not a failure, no error
@@ -164,17 +136,17 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-STEP_ORDER = ("plain_body", "base_repair", "tip_smoothing", "interim", "shape", "pieces", "hair", "texture", "fits", "assemble",
+STEP_ORDER = ("plain_body", "base_repair", "tip_smoothing", "shape", "pieces", "hair", "texture", "fits", "assemble",
               "collision")
 #: What a step needs: a failed (or skipped) step skips every step naming it here.
-DEPENDS = {"base_repair": {"plain_body"}, "tip_smoothing": {"plain_body"}, "interim": {"plain_body"}, "shape": {"plain_body"}, "pieces": {"plain_body"},
+DEPENDS = {"base_repair": {"plain_body"}, "tip_smoothing": {"plain_body"}, "shape": {"plain_body"}, "pieces": {"plain_body"},
            "hair": {"plain_body"}, "texture": {"plain_body", "shape"}, "fits": {"plain_body"},
            "assemble": {"plain_body", "fits"}}
 #: Steps that hold the character's 3D generation slot (model work).
-SLOT_STEPS = frozenset({"plain_body", "base_repair", "tip_smoothing", "interim", "shape", "texture", "assemble",
+SLOT_STEPS = frozenset({"plain_body", "base_repair", "tip_smoothing", "shape", "texture", "assemble",
                         "collision"})
 #: Steps whose failure (a refused view, a shape not meshed) STOPS the Build: nothing after them runs (Ruling C4).
-STOP_STEPS = frozenset({"plain_body", "interim", "shape", "texture"})
+STOP_STEPS = frozenset({"plain_body", "shape", "texture"})
 #: Steps that do not check the run's pinned figure first (Ruling A18): the plain body (it builds what every
 #: figure stands on; the pin is taken again after it), the CPU refits (they fit what is built) and the collision
 #: channels (they apply to every stored model, whichever figure is wanted).
@@ -188,14 +160,13 @@ REPIN_STEPS = frozenset({"plain_body", "hair"})
 SUPERSEDED = "Superseded: {why} — the follow-up builds {new}"
 #: ``SUPERSEDED``'s ``why`` of the run's pinned wanted figure.
 WANTED_MOVED = "the wanted figure changed meanwhile ({fields})"
-#: ... of the interim step's body shape (a garment fit accepted meanwhile needs another interim, or none).
-INTERIM_MOVED = "the interim body shape {shape} is no longer the one to show (now {now})"
 #: ... of the shape step's body shape (the hair or an outfit change wants another shape).
 SHAPE_MOVED = "the body shape {shape} is no longer wanted (now {now})"
 #: ... of the views of a step (the figure delivered moved while they rendered).
 VIEWS_MOVED = "the figure changed while its views rendered ({fields})"
 #: The reason of the follow-up a superseded run keeps.
 SUPERSEDED_REASON = "superseded"
+
 
 
 class BuildPaused(Exception):
@@ -332,46 +303,10 @@ def _with_reference(character_name: str, step: Step, fig, signature: str, profil
                 manual=step.manual)
 
 
-def _painted_interim(fig) -> bool:
-    """Whether ``fig`` (a delivered figure) paints in-body pieces on the plain
-    body because their shape is not built (``figure.INTERIM_PAINTED``, rule 1
-    of ``figure``'s block). Such a figure is never built (Ruling C4): the
-    figure delivered before stays served until the Build has built the
-    shape."""
-    from app.core import figure
-    painted = figure.INTERIM_PAINTED.format(what=figure.WHAT_SHAPE)
-    return any(text == painted for text in (fig.interim or {}).values())
-
-
-#: ``_run_assemble``'s error while the figure delivered now would still paint in-body pieces (Ruling C4).
-SHAPE_NOT_BUILT = ("Not assembled: the body shape is not built — nothing is painted in its place; the figure "
-                   "built before stays served")
 #: The ``fits`` step of a manual Build that re-fits the pieces whose fit on the body shape was refused (Ruling A23 b).
 REFIT_LABEL = "Re-fit on the body shape (refused before): {names}"
-#: ``_run_fits``' error when a re-fit is refused again (Ruling A23 b): nothing is assembled without the piece.
-REFIT_REFUSED = "Fit refused — {items}; the figure built before stays served"
-#: ``_run_assemble``'s error while a wanted fit stays refused (Ruling A23 a): nothing lacking it is published.
-FIT_REFUSED_KEPT = ("Not assembled: {items} fit the plain body but not the body shape{shape}. The figure built before "
-                    "stays shown.")
-#: ``_run_assemble``'s error while an own mesh needs hub work and a figure is served (Ruling A15 b).
-INTERIM_WAITS = ("Not assembled: an own mesh is not ready — no interim body shape while a figure is shown; the "
-                 "figure built before stays served")
-
-
-def _interim_waits(character_name: str, delivered, built, *, signature: str = "") -> bool:
-    """Ruling A15 b: whether the figure delivered now holds own-mesh pieces whose mesh needs hub work in an
-    interim body shape (``figure.INTERIM_IN_BODY``) that is not the built model (``built``: the figure the
-    stored outfit model of the worn outfit was built as) while the character has a figure to show
-    (``figure.figure_served``; ``signature``: of that outfit) — then no interim is made: the figure shown stays
-    served until the new one is assembled."""
-    from app.core import figure
-    if not any(text == figure.INTERIM_IN_BODY for text in (delivered.interim or {}).values()):
-        return False
-    if built is not None and built.as_dict() == delivered.as_dict():
-        return False
-    return figure.figure_served(character_name, signature)
-
-
+#: ``_run_fits``' error when a re-fit is refused again (Ruling A23 b): the piece stays left off (Ruling A119).
+REFIT_REFUSED = "Fit refused — {items}; left off the figure"
 #: The plain body step's label when its rebuild is what the hair wanted in the body costs (ruling F13 a).
 HAIR_REBUILD_LABEL = "Hair · in the body → plain body rebuild ({parts})"
 #: ``cost`` note: the total is an estimate of first attempts (ruling F13 c).
@@ -420,7 +355,7 @@ def _runnable(steps: List[Step], explicit: bool) -> List[Step]:
 
 
 #: The steps that render views (Ruling FR-I3: a refused view makes them a cached failure).
-VIEW_STEPS = frozenset({"interim", "shape", "texture"})
+VIEW_STEPS = frozenset({"shape", "texture"})
 #: ``Step.failed`` of a view step whose view was refused for its inputs (Ruling FR-I3).
 VIEW_REFUSED = "View refused — {views}"
 
@@ -445,40 +380,6 @@ def _retry_refused_views(character_name: str, step: Optional[Step], explicit: bo
         if signature:
             base_body.clear_view_refusals(character_name, signature)
     logger.info("Build %s: retrying the refused views of %s", character_name, ", ".join(s for s in signatures if s))
-
-
-#: The interim step's label when it makes an interim body shape first (ruling A11 / A14).
-INTERIM_SHAPE_LABEL = "Interim body shape (own mesh in the body until ready): {parts}"
-
-
-def _interim_step(character_name: str, delivered, signature: str, *, rebased: bool,
-                  profile: Dict[str, Any]) -> Step:
-    """The ``interim`` step of the figure delivered meanwhile: its views and
-    outfit model — and first its body shape when that is an interim shape
-    not stored yet (ruling A11: own-mesh pieces without their mesh in the
-    body). That shape's cost is counted like the ``shape`` step (its views
-    when missing + ``model3d.mesh_hub_stages``), and its dressed views as a
-    whole set (they are edits of the new shape's views; copies when nothing
-    is painted). It never waits for a garment chain (ruling A14). Planned
-    only for pieces whose mesh needs hub work and only while the character
-    has no figure to show (ruling A15, ``plan``)."""
-    from app.core import base_body, figure, model3d
-    set_jobs = base_body.dressed_view_jobs()
-    new_shape = not figure.is_plain(delivered.shape) and (
-        rebased or not figure._shape_stored(character_name, delivered.shape, delivered.bsig))
-    if not new_shape:
-        missing = rebased or _views_missing(character_name, delivered, signature)
-        views = set_jobs if rebased else base_body.dressed_view_estimate(
-            character_name, delivered, signature, profile=profile) if missing else 0
-        return Step("interim", _views_label("Interim texture", views, copied=missing), views)
-    shape_views = set_jobs if rebased else base_body.shape_view_jobs(character_name, delivered.shape,
-                                                                     delivered.bsig)
-    stages = model3d.mesh_hub_stages(character_name, delivered.shape)
-    texture_views = set_jobs if delivered.texture else 0
-    parts = ([f"views {shape_views}"] if shape_views else []) + list(stages) + (
-        [f"texture views {texture_views}"] if texture_views else [])
-    return Step("interim", INTERIM_SHAPE_LABEL.format(parts=" + ".join(parts)),
-                shape_views + len(stages) + texture_views)
 
 
 def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
@@ -526,29 +427,7 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
 
     built = _model_figure(character_name, signature)
     set_jobs = base_body.dressed_view_jobs()
-    # Ruling A11: a manual Build that takes kept pieces out leaves the stored model of the kept shape served
-    # meanwhile — no interim figure of its own (it would paint what that shape already carries).
-    kept_serving = (figure.is_taking_out(character_name) and built is not None and bool(built.in_body_own)
-                    and not figure.is_plain(built.shape) and figure._shape_stored(character_name, built.shape, bsig))
-    painted_interim = _painted_interim(delivered)
-    # Ruling A15 b: no interim while a figure is shown — it stays served until the new one is assembled.
-    waits = _interim_waits(character_name, delivered, built)
-    if delivered.interim and not painted_interim and not kept_serving and not waits and (
-            rebased or built is None or built.as_dict() != delivered.as_dict()):
-        step = _interim_step(character_name, delivered, signature, rebased=rebased, profile=profile)
-        if not rebased:   # Ruling FR-I3
-            refusals = dict(base_body.dressed_view_refusals(character_name, delivered, signature))
-            if not figure.is_plain(delivered.shape):
-                refusals.update(base_body.shape_view_refusals(character_name, delivered.shape, delivered.bsig))
-            step = _refused(step, refusals)
-        steps.append(step)
-    # Ruling A11: while own-mesh pieces are in the delivered body shape (no mesh yet, or ready but not taken
-    # out), the wanted shape / texture take them out — only a manual Build spends that (``figure.TAKE_OUT``).
-    # Ruling A15 b: pieces waiting for their mesh while a figure is shown are in no shape that is built — the
-    # wanted shape is no take-out then (a kept shape's ready pieces still are).
-    take_out = figure.TAKE_OUT if delivered.in_body_own and (not waits or any(
-        delivered.notes.get(item_id) == figure.READY_IN_BODY for item_id in delivered.in_body_own)) else ""
-
+    take_out = ""
     meshed = not figure.is_plain(wanted.shape)
     shape_stored = meshed and not rebased and figure._shape_stored(character_name, wanted.shape, bsig)
     if shape_stored and base_body.mesh_view_mismatch(character_name, wanted.shape) is not None:
@@ -598,15 +477,15 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
                                    wanted, signature, profile, True if rebased or not shape_built else None)
             steps.append(step if rebased or not shape_built
                          else _refused(step, base_body.dressed_view_refusals(character_name, wanted, signature)))
-    # Ruling A23 b: a refused fit on the wanted shape is a cached failure — an automatic Build plans no views,
-    # fits or assembly for it (nothing new can be published without the piece); a manual one re-fits it once.
+    # Ruling A23 b: a refused fit on the shape is a cached failure — the piece is left off (Ruling A119); a manual
+    # Build re-fits it once.
     refused = dict(delivered.fit_refused)
     # Ruling FR-I3: a view refused for its inputs is a cached failure too — an automatic Build plans nothing
     # that needs it (no other views, fits or assembly); a manual one retries it once.
     view_hold = not explicit and any(s.failed and s.name in VIEW_STEPS for s in steps)
-    hold = (bool(refused) or view_hold or held is not None) and not explicit
-    if (not painted_interim and not waits and not refused and not view_hold
-            and not any(s.name in ("interim", "texture") for s in _runnable(steps, explicit))
+    hold = (view_hold or held is not None) and not explicit
+    if (not view_hold
+            and not any(s.name == "texture" for s in _runnable(steps, explicit))
             and _views_missing(character_name, delivered, signature)):
         # Ruling F16: the views of the figure delivered NOW, judged like the Dressed views (``dressed_image``) — a
         # view made for another figure is never "nothing to build" while the sub-tab calls it stale.
@@ -628,11 +507,10 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
                                    or garment_refit.work_count(character_name, profile=profile) > 0):
         steps.append(Step("fits", "Fits on the CPU", 0))
 
-    if held is not None and not refused and not view_hold:
+    if held is not None and not view_hold:
         # Listed "failed — Retry" (Ruling A61): ``_runnable`` drops it from an automatic Build.
         steps.append(Step("assemble", ASSEMBLE_LABEL + FAILED_SUFFIX, 0, failed=held["error"]))
-    elif not hold and (_runnable(steps, explicit) or (not painted_interim and not waits
-                                                      and (built is None or built.as_dict() != delivered.as_dict()))):
+    elif not hold and (_runnable(steps, explicit) or built is None or built.as_dict() != delivered.as_dict()):
         steps.append(Step("assemble", ASSEMBLE_LABEL, 0))
     # Last, and after the assembly's own test: a channel step alone never makes the figure assemble.
     if _collision_due(character_name):
@@ -1096,9 +974,8 @@ def _tracked(character_name: str, label: str):
 def _run(character_name: str, reason: str, *, automatic: bool = False) -> None:
     """One Build: re-plan, then every step in order (module docstring). An
     ``automatic`` run reports a cached chain failure without running it; a
-    manual one retries it, and takes own-mesh pieces whose mesh is ready out
-    of the body shape (ruling A11)."""
-    from app.core import figure, garment_hair
+    manual one retries it."""
+    from app.core import garment_hair
     try:
         # Hairstyles (plan Task 13): a humanoid without one gets its first, worn, before anything is planned.
         garment_hair.ensure_hairstyle(character_name)
@@ -1111,13 +988,7 @@ def _run(character_name: str, reason: str, *, automatic: bool = False) -> None:
     except Exception as e:  # noqa: BLE001 — ruling F13 e: failed, never "nothing to build"
         _record_unread(character_name, reason, e)
         return
-    if not automatic:
-        # Ruling A11: a manual Build takes own-mesh pieces whose mesh is ready out of the body shape — the figure
-        # it plans and builds is the wanted one, not the kept shape (``figure.taking_out``).
-        with figure.taking_out(character_name):
-            _run_planned(character_name, reason, profile, automatic=False)
-    else:
-        _run_planned(character_name, reason, profile, automatic=True)
+    _run_planned(character_name, reason, profile, automatic=automatic)
 
 
 def _figure_text(fig) -> str:
@@ -1598,40 +1469,6 @@ def _dressed(character_name: str, wanted) -> str:
     return DRESSED_VIEWS_MISSING.format(views=", ".join(missing)) + (f" ({reason})" if reason else "")
 
 
-def _run_interim(character_name: str, step: Step, explicit: bool = False) -> str:
-    """The interim figure: its body shape first when it is an interim shape
-    not stored yet (ruling A11 — own-mesh pieces without their mesh in the
-    body; ``base_body.prepare_shape`` of the DELIVERED figure), then its
-    views, then its outfit model — served while the wanted shape / own
-    meshes are built (ruling 2). No garment chain runs before it (ruling
-    A14): the ``pieces`` steps follow.
-
-    Ruling A18: the step pins its interim body shape — a garment fit accepted meanwhile makes another interim
-    (or none) the one to show: the mesh stops before its next hub stage (``model3d.shape_guard``) and the step
-    ends superseded (``StepSuperseded``) instead of failing on the views of a figure nobody shows."""
-    from app.core import base_body, figure, model3d
-    _profile, wanted, delivered, items = _now(character_name)
-    shape = delivered.shape
-    _retry_refused_views(character_name, step, explicit, wanted.signature,
-                         "" if figure.is_plain(shape) else shape)
-    result = None
-    if not figure.is_plain(shape) and delivered.in_body_own and not figure._shape_stored(
-            character_name, shape, delivered.bsig):
-        with model3d.shape_guard(character_name, shape, lambda: _now(character_name)[2].shape == shape):
-            result = base_body.prepare_shape(character_name, delivered, items=items, signature=wanted.signature)
-        if result is not None and not result.get("ok") and not result.get("superseded"):
-            return str(result.get("error") or "Interim body shape build failed")
-    _profile, wanted_now, delivered_now, _items = _now(character_name)
-    if delivered_now.shape != shape:
-        raise StepSuperseded(SUPERSEDED.format(why=INTERIM_MOVED.format(shape=shape, now=delivered_now.shape),
-                                               new=_figure_text(wanted_now)))
-    if result is not None and result.get("superseded"):
-        # The guard said no, but this interim is the one to show again now: the follow-up builds it.
-        raise StepSuperseded(SUPERSEDED.format(why=str(result.get("error") or "the interim body shape moved"),
-                                               new=_figure_text(wanted_now)))
-    return _dressed(character_name, wanted) or _outfit_model(character_name, wanted.signature)
-
-
 def _run_shape(character_name: str, step: Step, explicit: bool = False) -> str:
     """The wanted meshed shape (``base_body.prepare_shape``). Ruling A18: the step pins that shape — a hair or
     outfit change that wants another one stops the mesh before its next hub stage (``model3d.shape_guard``)
@@ -1695,21 +1532,15 @@ def _run_hair(character_name: str, step: Step, explicit: bool = False) -> str:
 
 
 def _run_texture(character_name: str, step: Step, explicit: bool = False) -> str:
-    """The views of the painted set on the shape delivered now (the paint is the assembly's) — none while an
-    own mesh needs hub work and a figure is shown (Ruling A15 b: no views of an interim figure; the assembly
-    reports it)."""
-    _profile, wanted, delivered, _items = _now(character_name)
-    if _interim_waits(character_name, delivered, _model_figure(character_name, wanted.signature)):
-        logger.info("Build %s: no views rendered — an own mesh is not ready and the figure shown stays",
-                    character_name)
-        return ""
+    """The views of the painted set on the wanted shape (the paint is the assembly's)."""
+    _profile, wanted, _delivered, _items = _now(character_name)
     _retry_refused_views(character_name, step, explicit, wanted.signature)
     return _dressed(character_name, wanted)
 
 
 def _run_fits(character_name: str, step: Step, explicit: bool = False) -> str:
     """The CPU refits; a manual Build first re-fits the pieces whose fit on the wanted body shape was refused
-    (Ruling A23 b, ``refit_refused``) — refused again: the step's error, nothing is assembled."""
+    (Ruling A23 b, ``refit_refused``) — refused again: the step's error, the piece stays left off."""
     from app.core import garment_refit
     if explicit:
         still = refit_refused(character_name)
@@ -1884,19 +1715,10 @@ def _run_refit(character_name: str, item_id: str) -> None:
 
 
 def _run_assemble(character_name: str, step: Step, explicit: bool = False) -> str:
-    """The outfit model of the figure delivered now (whatever is built), then the assembly."""
+    """The outfit model of the figure delivered now (Ruling A119: the newest body, the ready pieces on it, the
+    rest left off), then the garment assembly — CPU only."""
     from app.core import base_body, garment_assembly
-    _profile, wanted, delivered, _items = _now(character_name)
-    if delivered.fit_refused:
-        # Ruling A23 a: never published lacking a wanted piece whose fit was refused.
-        names = (", ".join(_item_name(i) for i in wanted.in_body)
-                 if wanted.shape == delivered.fit_refused_on else "")
-        return FIT_REFUSED_KEPT.format(items=", ".join(_item_name(i) for i in sorted(delivered.fit_refused)),
-                                       shape=f" ({names})" if names else "")
-    if _painted_interim(delivered):
-        return SHAPE_NOT_BUILT  # Ruling C4: never the painted interim
-    if _interim_waits(character_name, delivered, _model_figure(character_name, wanted.signature)):
-        return INTERIM_WAITS  # Ruling A15 b: no interim while a figure is shown
+    _profile, wanted, _delivered, _items = _now(character_name)
     views = base_body.ensure_figure_views(character_name, wanted.signature)
     if views is not None and not views.get("ok"):
         return str(views.get("error") or "views failed")
@@ -1913,49 +1735,30 @@ def _run_assemble(character_name: str, step: Step, explicit: bool = False) -> st
 
 _RUNNERS: Dict[str, Callable[[str, Step, bool], str]] = {
     "plain_body": _run_plain_body, "base_repair": _run_base_repair, "tip_smoothing": _run_tip_smoothing,
-    "interim": _run_interim, "shape": _run_shape, "pieces": _run_pieces,
+    "shape": _run_shape, "pieces": _run_pieces,
     "hair": _run_hair, "texture": _run_texture, "fits": _run_fits, "assemble": _run_assemble,
     "collision": _run_collision}
 
 
 # --- The Figure tab's payload ----------------------------------------------------------
 
-#: The note of an own-mesh piece waiting for hub work while a figure is shown (Ruling A15 b): no interim body
-#: is built, so it is not "in the body" — replaces ``figure.INTERIM_IN_BODY`` in the change row and the worn row.
-INTERIM_SHOWN = "The figure built before stays shown until its own mesh is ready"
-
-
-#: The note of a worn piece the served figure does not carry (Ruling A75) — replaces ``INTERIM_SHOWN``, which
-#: claimed the figure built before (WITH the piece) stays shown.
+#: The note of a worn piece the served figure does not carry (Ruling A75).
 NOT_ON_FIGURE = "Not on the figure shown now"
 
 
 def _not_on_figure(served_state: Optional[Dict[str, Any]], changes: List[Dict[str, Any]],
                    worn: List[Dict[str, Any]]) -> None:
-    """The rows of a piece the served figure lacks (``_served_state`` ``missing``, not only pending) say so: an
-    ``INTERIM_SHOWN`` note becomes ``NOT_ON_FIGURE`` in the change row and the worn row (Ruling A75)."""
+    """The rows of a piece the served figure lacks (``_served_state`` ``missing``, not only pending) without a
+    reason of their own say so (``NOT_ON_FIGURE``, Ruling A75)."""
     gone = {m["item_id"] for m in (served_state or {}).get("missing") or [] if not m.get("pending")}
     if not gone:
         return
     for change in changes:
-        if change.get("key") in gone and change.get("note") == INTERIM_SHOWN:
+        if change.get("key") in gone and not change.get("note"):
             change["note"] = NOT_ON_FIGURE
     for row in worn:
-        if row.get("item_id") in gone and row.get("note") == INTERIM_SHOWN:
+        if row.get("item_id") in gone and not row.get("note"):
             row["note"] = NOT_ON_FIGURE
-
-
-def _waiting_wording(changes: List[Dict[str, Any]], worn: List[Dict[str, Any]]) -> None:
-    """While no interim body is built (Ruling A15 b), the rows of the pieces it would hold say what is shown
-    instead (``INTERIM_SHOWN``): the change's note, and the worn row's note with ``in_body_until`` / ``interim``
-    cleared (the tab writes those as "in the body until …")."""
-    from app.core import figure
-    for change in changes:
-        if change.get("note") == figure.INTERIM_IN_BODY:
-            change["note"] = INTERIM_SHOWN
-    for row in worn:
-        if row.get("in_body_until") == "mesh":
-            row.update(in_body_until=None, interim=False, note=INTERIM_SHOWN)
 
 
 #: The hair row's notes while the hair wanted in the body waits for the plain body's rebuild (ruling F13 a):
@@ -2033,9 +1836,7 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
     """The Figure tab's worn rows. Open / closed (plan Task 11b): ``piece_state`` — ``"open"`` / ``"closed"`` for
     a closable piece, None otherwise (not the row's ``state``, which is its readiness) — and, for an own-mesh
     closable piece, ``other_state_jobs``: what building the other state's mesh costs (None: unknown or not
-    applicable). ``in_body_until`` (ruling A11): an own-mesh piece in the body shape — ``"mesh"`` until its own
-    mesh is ready (``figure.INTERIM_IN_BODY``), ``"build"`` its mesh is ready and served, the next Build takes
-    it out of the shape (``figure.READY_IN_BODY``); None otherwise. A piece whose fit on the body shape was
+    applicable). ``left_out`` (Ruling A119): why a piece that is not ready is left off the figure shown. A piece whose fit on the body shape was
     refused (Ruling A31 wording): ``fit_refused`` the reason in plain words, ``fit_refused_detail`` the measured
     reasons (the tooltip), ``refused_on`` what is in that body shape ("" unknown), ``piece_broken`` whether the
     reason points at the piece itself — only then ``regenerate_jobs`` is what its "Regenerate mesh" spends
@@ -2076,8 +1877,6 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
             state = "building"
         elif item_id in delivered.left_out:
             state = "left_out"
-        elif item_id in delivered.interim:
-            state = "interim"
         else:
             state = "pending"
         mode = garment_set.mesh_mode_of(item) or garment_set.PAINTED
@@ -2085,17 +1884,13 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
         piece_state = (OPEN if item_id in wanted.open else CLOSED) if closable else None
         rows.append({"slot": slot, "item_id": item_id, "name": str(item.get("name") or item_id),
                      "mode": mode, "state": state,
-                     "note": (delivered.interim.get(item_id) or delivered.left_out.get(item_id)
-                              or delivered.notes.get(item_id) or ""),
-                     "interim": item_id in delivered.interim, "left_out": delivered.left_out.get(item_id) or "",
+                     "note": delivered.left_out.get(item_id) or delivered.notes.get(item_id) or "",
+                     "left_out": delivered.left_out.get(item_id) or "",
                      "failure": failure, "fit_refused": words["text"], "fit_refused_detail": words["detail"],
                      "refused_on": names.get(delivered.fit_refused_on, "") if refused else "",
                      "piece_broken": bool(words["piece"]), "piece_state": piece_state,
                      "accepted_by_user": (_accepted_by_user(character_name, item_id, delivered.shape, profile, names)
                                           if mode == garment_set.OWN_MESH and not refused else None),
-                     "in_body_until": (None if item_id not in delivered.in_body_own
-                                       else "mesh" if delivered.interim.get(item_id) == figure.INTERIM_IN_BODY
-                                       else "build"),
                      "other_state_jobs": (_other_state_jobs(character_name, item_id, piece_state, profile)
                                           if closable and mode == garment_set.OWN_MESH else None),
                      "regenerate_jobs": (_regenerate_jobs(character_name, item_id, profile)
@@ -2170,17 +1965,16 @@ SERVED_WITHOUT = "Not the whole outfit"
 SERVED_WITHOUT_REASON = "Shown without {pieces}: this is not the outfit worn now until the missing pieces are on it."
 SERVED_ASSEMBLING = "Putting the pieces on"
 SERVED_ASSEMBLING_REASON = "Shown without {pieces} for a moment: the CPU puts them on now (no hub job)."
-SERVED_STAND_IN = "Another outfit's model"
-SERVED_STAND_IN_REASON = ("No model of the outfit worn now yet: the model of the closest outfit is shown until the "
-                          "Build makes this one.")
-SERVED_OLDER_BASE = "Built on an older base body"
-SERVED_OLDER_BASE_REASON = "This outfit's model from before the base body changed is shown until the Build makes it again."
+#: Ruling A119: the outfit model of the figure delivered now is not built yet — the newest plain body is shown with
+#: the ready own-mesh pieces put on; every painted piece is left off until its texture is built.
+SERVED_PLAIN = "Plain body"
+SERVED_PLAIN_REASON = "The model of the outfit worn now is not built yet: the plain body is shown with the pieces that are ready."
 #: A missing piece's reason (``missing[].reason``); a refusal's measured text goes into ``missing[].detail``.
 PIECE_REFUSED = "Its fit on this body was refused"
 PIECE_NO_FIT = "It has no accepted fit on this body"
 PIECE_REFUSED_PLAIN = "Its fit on the base body was refused"
 PIECE_PENDING = "Its fit on this body is made now"
-PIECE_OLDER_BASE = "The model was built on an older base body; the piece's fit is for the current one"
+PIECE_NO_TEXTURE = "Its texture is not built yet"
 
 
 def _plain_fit_refusal(character_name: str, item_id: str, profile: Optional[Dict[str, Any]]) -> str:
@@ -2204,18 +1998,19 @@ def _served_state(character_name: str, *, profile: Optional[Dict[str, Any]] = No
     ``{pieces}`` (the missing pieces' names, joined), filled in by the client after translating; ``notes`` further
     sentences —, None without a served model.
 
-    - ``match`` "nearest" (a stand-in of another outfit) → yellow ``SERVED_STAND_IN`` (its pieces are not this
-      outfit's, nothing is compared);
+    - ``match`` "base" (Ruling A119: the outfit model of the figure delivered now is not built yet, the plain body
+      is served with the ready own-mesh pieces put on, ``garment_assembly.bare_meta_of``) → yellow
+      ``SERVED_PLAIN``; ``missing`` lists every painted piece (``PIECE_NO_TEXTURE``) and the own-mesh pieces the
+      served bytes do not carry, as below;
     - an own-mesh piece the served model's texture leaves to its garment (``effective_mesh_items`` of its bare
       sidecar) that the served bytes do not carry (the assembled sidecar's ``garments``; none when the bare file is
       served) → ``missing``, each with its reason (``detail``: a refusal's measured text): a fit refused on the model's body (``garment_assembly._wanted``
       ``left_off``, read only — ``PIECE_REFUSED``), a fit refused on the plain body already (``PIECE_REFUSED_PLAIN``,
-      ``_plain_fit_refusal``), a fit still to be made (``pending``, ``PIECE_PENDING``), a
-      model from an older base body (``PIECE_OLDER_BASE``) or no accepted fit there (``PIECE_NO_FIT``). Any not
+      ``_plain_fit_refusal``), a fit still to be made (``pending``, ``PIECE_PENDING``) or no accepted fit there
+      (``PIECE_NO_FIT``). Any not
       pending → red ``SERVED_WITHOUT`` (the stored model stays served: the serving path re-assembles it without the
       piece); only pending → blue ``SERVED_ASSEMBLING``;
-    - else ``match`` "stale" (this outfit on an older base body) → yellow ``SERVED_OLDER_BASE``; else green
-      ``SERVED_COMPLETE``. A red or blue state of a stale model carries ``SERVED_OLDER_BASE_REASON`` in ``notes``.
+    - else green ``SERVED_COMPLETE``.
     Never raises (None on failure)."""
     from app.core import garment_assembly, model3d
     from app.models.inventory import get_item
@@ -2223,11 +2018,8 @@ def _served_state(character_name: str, *, profile: Optional[Dict[str, Any]] = No
         path, match = model3d.find_model3d_serving(character_name)
         if path is None:
             return None
-        if match == "nearest":
-            return {"light": "yellow", "state": SERVED_STAND_IN, "reason": SERVED_STAND_IN_REASON, "pieces": "",
-                    "notes": [], "missing": []}
-        notes = [SERVED_OLDER_BASE_REASON] if match == "stale" else []
-        bare_meta = model3d._read_sidecar(path)
+        notes: List[str] = []
+        bare_meta = garment_assembly.bare_meta_of(character_name, path.parent, path.stem)
         worn = (profile or {}).get("equipped_mesh_pieces")
         hair = {str(v) for v in worn.values() if v} if isinstance(worn, dict) else set()
         clothing = sorted(set(garment_assembly.effective_mesh_items(bare_meta)) - hair)
@@ -2250,9 +2042,16 @@ def _served_state(character_name: str, *, profile: Optional[Dict[str, Any]] = No
                 elif detail := _plain_fit_refusal(character_name, item_id, profile):
                     reason = PIECE_REFUSED_PLAIN
                 else:
-                    reason = PIECE_OLDER_BASE if match == "stale" else PIECE_NO_FIT
+                    reason = PIECE_NO_FIT
                 missing.append({"item_id": item_id, "name": str((get_item(item_id) or {}).get("name") or item_id),
                                 "reason": reason, "detail": detail, "pending": pending})
+        if match == "base":
+            from app.core import figure
+            fig = figure.delivered_figure_cached(character_name, profile=profile)
+            missing[:0] = [{"item_id": item_id, "name": str((get_item(item_id) or {}).get("name") or item_id),
+                            "reason": PIECE_NO_TEXTURE, "detail": "", "pending": False} for item_id in fig.painted]
+            return {"light": "yellow", "state": SERVED_PLAIN, "reason": SERVED_PLAIN_REASON,
+                    "pieces": ", ".join(m["name"] for m in missing), "notes": [], "missing": missing}
         pieces = ", ".join(m["name"] for m in missing)
         if missing and not all(m["pending"] for m in missing):
             return {"light": "red", "state": SERVED_WITHOUT, "reason": SERVED_WITHOUT_REASON, "pieces": pieces,
@@ -2260,9 +2059,6 @@ def _served_state(character_name: str, *, profile: Optional[Dict[str, Any]] = No
         if missing:
             return {"light": "blue", "state": SERVED_ASSEMBLING, "reason": SERVED_ASSEMBLING_REASON,
                     "pieces": pieces, "notes": notes, "missing": missing}
-        if match == "stale":
-            return {"light": "yellow", "state": SERVED_OLDER_BASE, "reason": SERVED_OLDER_BASE_REASON, "pieces": "",
-                    "notes": [], "missing": []}
         return {"light": "green", "state": SERVED_COMPLETE, "reason": "", "pieces": "", "notes": [], "missing": []}
     except Exception:  # noqa: BLE001 — a caption of the viewer, never a failure of the poll
         logger.exception("Served figure state of %s unreadable", character_name)
@@ -2736,7 +2532,7 @@ def figure_info(character_name: str) -> Dict[str, Any]:
 
 
 #: The plan steps the character list counts as the BASE (plain) body (Ruling A112); every other step is the
-#: outfit's (the worn figure: interim, shape, pieces, hair, texture/views, fits, assembly, collision).
+#: outfit's (the worn figure: shape, pieces, hair, texture/views, fits, assembly, collision).
 BASE_STEPS = frozenset({"plain_body", "base_repair", "tip_smoothing"})
 #: ``open_steps`` memo: character -> (key, monotonic, answer) — the same key and TTL as ``figure_info``.
 _open_memo: Dict[str, Tuple[Tuple[Any, ...], float, Dict[str, Any]]] = {}
@@ -2878,8 +2674,6 @@ def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[st
                                   and built.shape == wanted.shape else "missing") if wanted.texture else "none"}}
     body["plain"]["jobs"] = _plain_jobs(character_name, wanted.bsig)
     worn = _worn_rows(character_name, wanted, delivered, failures, build["running"], profile)
-    if _interim_waits(character_name, delivered, built):
-        _waiting_wording(changes, worn)
     served_state = _served_state(character_name, profile=profile)
     _not_on_figure(served_state, changes, worn)
     hair = _hair_row(character_name, profile, wanted, delivered, failures, build["running"])
@@ -2909,7 +2703,7 @@ def _full_body_note(character_name: str, profile: Optional[Dict[str, Any]]) -> O
 PROBLEM_MESH, PROBLEM_FAILED = "mesh_mismatch", "failed"
 #: A failed step's label when the plan does not list it any more.
 STEP_LABELS = {"plain_body": "Plain body", "base_repair": MESH_REPAIR_LABEL, "tip_smoothing": TIP_SMOOTHING_LABEL,
-               "interim": "Interim texture", "shape": "Body shape", "pieces": "Own mesh", "hair": "Hair",
+               "shape": "Body shape", "pieces": "Own mesh", "hair": "Hair",
                "texture": "Texture", "fits": "Fits on the CPU", "assemble": ASSEMBLE_LABEL,
                "collision": COLLISION_LABEL}
 _VIEW_IN_ERROR = re.compile(r"\b(front|back|left|right)(?: view\b|:)")

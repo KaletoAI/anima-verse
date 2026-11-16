@@ -691,11 +691,8 @@ export interface PieceStatus {
   /** Outfit body mode mesh only: worn without an accepted fit — never painted (meshed) into the outfit body,
    *  so it is missing from the outfit model until its mesh is accepted (ruling 2026-11-10). */
   missing?: boolean
-  /** Worn without its own mesh (no accepted fit, or refused): in the body shape until it is ready
-   *  (ruling A11) — never painted then. */
-  in_body?: boolean
-  /** Why it is in the body / missing (server text, the outfit warning's words). The server's `painted`
-   *  flag is not read: a worn own-mesh piece without its mesh sits in the body (ruling A11), never painted. */
+  /** Why it is missing (server text, the outfit warning's words). The server's `painted` flag is not read: a
+   *  worn own-mesh piece without its mesh is left off the figure (Ruling A119), never painted. */
   reason: string | null
   /** Names of the worn own-mesh pieces under this one that have a fit: it is fitted over them
    *  (absent when nothing is worn under it). */

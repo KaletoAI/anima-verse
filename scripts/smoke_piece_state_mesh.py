@@ -85,14 +85,14 @@ Expected, derived by hand from the brief:
     ``_garment_roots`` keep holds both garment keys (jacket, fsig_c) and
     (jacket, fsig_o).
 [8] Figure: the jacket worn open, only F_c -> delivered ``own`` ∋ jacket,
-    ``shown_closed`` == (jacket,), no interim (ruling F13 b: the closed mesh
+    ``shown_closed`` == (jacket,), not left off (ruling F13 b: the closed mesh
     stands in, never painted while it exists). ``figure_build.plan`` has
     Step("pieces", "Own mesh · Black Jacket (open)", 5, jacket) — worn 1 +
     ghost 1 + cutout 2 + mesh 1: [5]'s closed chain has both backs (its worn back
     follows its front), the open state copies them (ruling F15 i-1) — and no
     other pieces step for the jacket.
-    The open chain built (as [5]'s closed one) -> ``own`` ∋ jacket, no
-    interim, no pieces step.
+    The open chain built (as [5]'s closed one) -> ``own`` ∋ jacket, not
+    left off, no pieces step.
 [9] Layering: the jacket open with F_o over the blouse with its fit F_b ->
     ``garment_layers.plan`` entry for the jacket: ``fsig`` == the open fsig,
     ``inner`` keys == {blouse}; the blouse entry: ``lsig`` "", ``source`` ==
@@ -426,12 +426,12 @@ def main() -> int:
         set_state("open")
         got = figure.delivered_figure("Demo", profile=prof())
         check("own ∋ jacket (closed mesh)", (jacket in got.own, got.shown_closed), (True, (jacket,)))
-        check("no interim", (jacket in got.painted, got.interim.get(jacket)), (False, None))
+        check("not painted, not left off", (jacket in got.painted, jacket in got.left_out), (False, False))
         steps = [s for s in figure_build.plan("Demo", profile=prof()) if s.name == "pieces"]
         check("pieces step", steps, [figure_build.Step("pieces", "Own mesh · Black Jacket (open)", 5, jacket)])
         f_o = build_chain(fsig_o, "open")
         got = figure.delivered_figure("Demo", profile=prof())
-        check("with F_o: own", (jacket in got.own, got.interim.get(jacket)), (True, None))
+        check("with F_o: own", (jacket in got.own, jacket in got.left_out), (True, False))
         check("with the open chain built: no pieces step",
               [s for s in figure_build.plan("Demo", profile=prof()) if s.name == "pieces"], [])
 

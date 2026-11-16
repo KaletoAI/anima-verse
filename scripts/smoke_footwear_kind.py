@@ -83,8 +83,9 @@ dress; Mira holds heels.
      The cloak worn (mode in_body — replaces the old "mesh mode" case): the
        wanted figure has in_body [cloak] on a meshed shape (not plain); no
        shape is built, so the delivered figure stays on the plain body with
-       the cloak painted meanwhile (interim {cloak: "Shown painted until its
-       body shape is built"}) and the same record. The cloak taken off
+       the cloak LEFT OFF (Ruling A119: left_out {cloak: "Body shape not
+       built"}, never painted meanwhile); the record names it in unpainted
+       and missing, never in intended (an in-body piece is never grafted). The cloak taken off
        again -> the plain body, nothing in it.
      A record that painted heels (intended [dress, heels], effective
      [dress], no unpainted): mesh_items_ready(Kira, record, base_sha=SHA)
@@ -334,17 +335,18 @@ def main() -> int:
         check("plain-body figure: both grafted", (fig.shape, list(fig.own), out.get("figure")),
               (kira_bsig, both, fig.as_dict()))
         check("run_queued: no chain (ruling A14)", QUEUED, [])
-        # Mesh mode = a worn piece in the body (interim rule, plan 2026-11-12-unified-worn-pieces Task 2).
+        # Mesh mode = a worn piece in the body; its shape not built -> left off (Ruling A119).
         check("Kira holds the cloak", inventory.add_to_inventory("Kira", cloak), True)
         check("mesh mode on: cloak worn", inventory.equip_piece("Kira", cloak, source="smoke")["status"], "ok")
         wanted = figure.wanted_figure("Kira")
         check("wanted: cloak in the body, on a shape", (list(wanted.in_body), figure.is_plain(wanted.shape)),
               ([cloak], False))
         fig, out = base_body.resolve_figure("Kira", {**pieces, "outer": cloak})
-        check("delivered: no shape built, the cloak painted meanwhile",
-              (fig.shape, fig.interim), (kira_bsig, {cloak: figure.INTERIM_PAINTED.format(what=figure.WHAT_SHAPE)}))
+        check("delivered: no shape built, the cloak left off",
+              (fig.shape, fig.left_out), (kira_bsig, {cloak: figure.LEFT_OFF_SHAPE}))
         check("shape record", {k: v for k, v in out.items() if k != "figure"},
-              {"intended": both, "effective": both, "warnings": [], "unpainted": both, "missing": {}})
+              {"intended": both, "effective": both, "warnings": [], "unpainted": sorted({*both, cloak}),
+               "missing": {cloak: figure.LEFT_OFF_SHAPE}})
         painted = {"mesh_items": {"intended": both, "effective": [dress]}, "base_signature": kira_bsig}
         check("mesh_items_ready painted heels", base_body.mesh_items_ready("Kira", painted, base_sha=sha), [heels])
         left_out = {"mesh_items": {"intended": both, "effective": [dress], "unpainted": both,

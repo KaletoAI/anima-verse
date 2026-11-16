@@ -913,11 +913,19 @@ def find_model3d_serving_tier(character_name: str, tier: str = FULL_TIER) -> tup
 def find_model3d_serving(character_name: str) -> tuple:
     """(path, match) of the mesh to SERVE for the worn outfit — the serving
     chain behind the byte/meta routes. ``match`` is how it was found:
-    ``"exact"`` / ``"stale"`` (this combination's model, built on an
-    older base body — base-body pipeline only) / ``"nearest"``
+    ``"exact"`` / ``"base"`` (base-body pipeline, below) / ``"nearest"``
     (no entry for this combination — the stored mesh whose recorded piece
     combination is closest to the worn one, so a fresh outfit never degrades
-    the character to a placeholder figure). (None, "") without any match.
+    the character to a placeholder figure) — OFF the base-body pipeline only.
+    (None, "") without any match.
+
+    On the base-body pipeline (Ruling A119: the 3D view is what the game
+    shows, and an old mesh is never shown) only the model of the worn outfit
+    built as the figure delivered NOW on the current base body counts
+    (``"exact"``); until it is built the newest plain body itself is served
+    (``"base"``: the garment assembly puts the ready own-mesh pieces on it,
+    ``garment_assembly.bare_meta_of``; nothing painted). Never another outfit's model, never one
+    built on an older body or as another figure.
 
     Management paths (delete, rig update, generation skip-check) keep
     find_model3d's exact semantics — "the nearest neighbour" is never the
@@ -927,20 +935,23 @@ def find_model3d_serving(character_name: str) -> tuple:
     except Exception:
         return None, ""
     d = get_model3d_dir(character_name)
+    base = _current_base(character_name)
+    if base:
+        for ext in MODEL_EXTS:
+            p = d / f"{sig}{ext}"
+            if p.exists() and not _on_older_base(p, base):
+                return p, "exact"
+        plain = d / f"{base[0]}.glb"
+        return (plain, "base") if base[1] and plain.is_file() else (None, "")
     for ext in MODEL_EXTS:
         p = d / f"{sig}{ext}"
         if p.exists():
-            base = _current_base(character_name)
-            # Base-body pipeline: a model built on an older base body is
-            # still this outfit, so it stays on screen until its rebuild is
-            # published — but never as the current one ("stale").
-            return p, ("stale" if _on_older_base(p, base) else "exact")
+            return p, "exact"
     best = None
     if d.is_dir():
         from app.core.model_refs import is_state_fork
         from app.core.outfit_match import outfit_similarity
         from app.core.base_body import is_base_signature
-        base = _current_base(character_name)
         for p in d.iterdir():
             if p.suffix.lower() not in MODEL_EXTS or is_state_fork(p.stem) or "-p" in p.stem:
                 continue
@@ -955,14 +966,13 @@ def find_model3d_serving(character_name: str) -> tuple:
                 continue
             score = outfit_similarity(pieces, items,
                                       manifest["pieces"], manifest["items"])
-            # Ties: prefer the newest neutral outfit entry; a model on the
-            # current base body beats one built on an older base.
-            key = (not _on_older_base(p, base), score, p.stat().st_mtime)
+            # Ties: prefer the newest neutral outfit entry.
+            key = (score, p.stat().st_mtime)
             if best is None or key > best[0]:
                 best = (key, p)
     if best is not None:
         logger.debug("Model3D %s: nearest %s for combination %s (score %.2f)",
-                     character_name, best[1].stem, sig, best[0][1])
+                     character_name, best[1].stem, sig, best[0][0])
         return best[1], "nearest"
     return None, ""
 

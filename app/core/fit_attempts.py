@@ -1231,7 +1231,7 @@ def dialog_shape(character_name: str, item_id: str, *, profile: Optional[Dict[st
     try:
         fig = figure.wanted_figure(character_name, profile=_profile(character_name, profile))
         shape = fig.shape if gs.is_body_id(fig.shape) else ""
-        if not shape or (item_id in fig.in_body and item_id not in fig.in_body_own):
+        if not shape or item_id in fig.in_body:
             return "", False
         if item_id not in fig.own and shape not in {gs.body_of(p) for (iid, _f), files
                                                     in gs.stored_groups(character_name).items()

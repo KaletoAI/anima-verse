@@ -18,7 +18,7 @@
  *   front's image jobs plus what the new front makes due at the next Build (`frontRegenerate`, the Base body tab's
  *   count; POST …/base-body/images {view: "front", force: true}, the front tile's own action, 409 while a Build
  *   runs), "Open Base body tab", and that Build covers it in one go with the plan step's count (`frontBuildCovers`);
- * - left: the figure DELIVERED now (`served_url`, the interim rule applied — never a half step), "Built <time>"
+ * - left: the figure DELIVERED now (`served_url`, Ruling A119: the newest body with the ready pieces on it — never an old mesh), "Built <time>"
  *   in its corner; the mouse turns the figure; no extension-bone note (Ruling A73 — the 3D tab keeps it); over it
  *   what that figure is against the outfit worn now (Ruling A75, `served_state`): its light and reason, one line
  *   per piece it lacks — a figure without a piece is never shown as if it were the outfit;
@@ -500,7 +500,7 @@ function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairst
       ) : null}
       {data.worn.map((row) => {
         const cell = wornState(row, t)
-        const note = row.note && !row.interim && !row.in_body_until && row.state !== 'left_out'
+        const note = row.note && row.state !== 'left_out'
           && row.state !== 'failed' && row.state !== 'fit_refused' ? t(row.note) : ''
         const other: PieceState | null = row.piece_state ? (row.piece_state === 'open' ? 'closed' : 'open') : null
         return (

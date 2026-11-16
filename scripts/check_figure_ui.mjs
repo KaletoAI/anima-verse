@@ -77,13 +77,10 @@
  *     null / 'older_base' → "Built on an older base body — rebuild it".
  * [11] wornState(row) — a worn row as a step (Task UI5: a light instead of the ✓ / ⏳ glyphs, the state short, the
  *       reason under it, the refusal's guidance on mouse-over):
- *       ready → {green, "Ready", no line}; own_mesh interim with 3 jobs, in_body_until 'mesh' (ruling A11) →
- *       {yellow, "Due: own mesh · 3 hub jobs", "in the body until its own mesh is ready"}; own_mesh pending,
- *       in_body_until 'build' (its mesh ready, the next Build takes it out of the shape) → {yellow, "Waits for the
- *       Build", "own mesh ready — in the body until the next Build"}, building → {blue, "Building now", the same
- *       line}; in_body interim (no in_body_until) → the line "not in the 3D figure until its body shape is
- *       built" (Ruling C4); failed "mesh — refused" → {red, "Failed", "mesh — refused"}; left_out "no fit yet" →
- *       {grey, "Left out", "no fit yet"}; in_body pending → {yellow, "Waits for the Build", no line};
+ *       ready → {green, "Ready", no line}; own_mesh pending with 3 jobs → {yellow, "Due: own mesh · 3 hub jobs",
+ *       no line}; Ruling A119 left_out "Body shape not built" (an in-body piece on the plain body) → {grey, "Left
+ *       out", "Body shape not built"}; failed "mesh — refused" → {red, "Failed", "mesh — refused"}; left_out "no fit
+ *       yet" → {grey, "Left out", "no fit yet"}; in_body pending → {yellow, "Waits for the Build", no line};
  *       fit_refused "sole sinks" on "T-shirt" with detail "d" → {red, "Refused on the body shape", "Fits the plain
  *       body — refused on the body shape (T-shirt): sole sinks", mouse-over FIT_REFUSED_NOTE + "\n" + "d"}.
  *       bodyRows(all ready, ['hair'], ['Black Blazer']) → plain {green, "Current"}, shape {green, "Current",
@@ -535,18 +532,12 @@ check('[10] stale model texts', ['before_pipeline', 'outfit_body', 'figure', nul
   'Built on an older base body — rebuild it']);
 
 // [11]
-const row = (o) => ({ state: 'pending', mode: 'painted', jobs: 0, failure: '', left_out: '', note: '',
-  interim: false, ...o });
+const row = (o) => ({ state: 'pending', mode: 'painted', jobs: 0, failure: '', left_out: '', note: '', ...o });
 const ws = (o) => { const w = m.wornState(row(o)); return [w.light, w.text, w.sub]; };
 check('[11] ready', ws({ state: 'ready' }), ['green', 'Ready', null]);
-check('[11] interim own mesh', ws({ state: 'interim', mode: 'own_mesh', jobs: 3, interim: true, in_body_until: 'mesh' }),
-  ['yellow', 'Due: own mesh · 3 hub jobs', 'in the body until its own mesh is ready']);
-check('[11] own mesh ready, in the body until the Build', ws({ mode: 'own_mesh', in_body_until: 'build' }),
-  ['yellow', 'Waits for the Build', 'own mesh ready — in the body until the next Build']);
-check('[11] ... while the Build runs', ws({ state: 'building', mode: 'own_mesh', in_body_until: 'build' }),
-  ['blue', 'Building now', 'own mesh ready — in the body until the next Build']);
-check('[11] in_body interim keeps its line', ws({ state: 'interim', mode: 'in_body', interim: true })[2],
-  'not in the 3D figure until its body shape is built');
+check('[11] own mesh due', ws({ mode: 'own_mesh', jobs: 3 }), ['yellow', 'Due: own mesh · 3 hub jobs', null]);
+check('[11] A119 left off: body shape not built', ws({ state: 'left_out', mode: 'in_body', left_out: 'Body shape not built' }),
+  ['grey', 'Left out', 'Body shape not built']);
 check('[11] failed', ws({ state: 'failed', failure: 'mesh — refused' }), ['red', 'Failed', 'mesh — refused']);
 check('[11] left out', ws({ state: 'left_out', left_out: 'no fit yet' }), ['grey', 'Left out', 'no fit yet']);
 check('[11] in body pending', ws({ mode: 'in_body' }), ['yellow', 'Waits for the Build', null]);
@@ -1155,7 +1146,7 @@ check('[25] the Wardrobe chip\'s fit', m.acceptedWhat({ step: 'fit', on: '', rea
   const py = src('app/core/figure_build.py');
   const keys = [...py.matchAll(/^(?:SERVED_[A-Z_]+|PIECE_[A-Z_]+|NOT_ON_FIGURE)(?:, [A-Z_]+)* = ("(?:[^"\\]|\\.)*")/gm)]
     .map((x) => JSON.parse(x[1]));
-  check('[27] server keys found', keys.length >= 14, true);
+  check('[27] server keys found', keys.length >= 11, true);  // A119: stand-in / older-base states gone
   check('[27] server keys translated', keys.filter((k) => !(k in de)), []);
   check('[27] FieldFigure renders it',
     /<ServedStateNote state=\{data\.served_state\} \/>/.test(src('frontend/src/tabs/characters/FieldFigure.tsx')), true);

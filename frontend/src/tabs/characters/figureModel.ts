@@ -225,13 +225,13 @@ export interface FigureWornRow {
   item_id: string
   name: string
   mode: MeshMode
-  state: 'ready' | 'failed' | 'fit_refused' | 'building' | 'left_out' | 'interim' | 'pending'
+  state: 'ready' | 'failed' | 'fit_refused' | 'building' | 'left_out' | 'pending'
   note: string
-  interim: boolean
+  /** Ruling A119: why the piece is left off the figure shown (not ready yet); "" when worn. */
   left_out: string
   failure: string
-  /** Ruling A23 b: its fit on the body shape was refused (the reason; "" otherwise) — the figure built before stays
-   *  served; the row offers Re-fit and Regenerate mesh. */
+  /** Ruling A23 b: its fit on the body shape was refused (the reason; "" otherwise) — left off the figure (Ruling
+   *  A119); the row offers Re-fit and Regenerate mesh. */
   fit_refused?: string
   /** Ruling A31: the measured reasons behind `fit_refused` (the tooltip). */
   fit_refused_detail?: string
@@ -254,9 +254,6 @@ export interface FigureWornRow {
   /** A piece whose fit was refused: hub jobs of its "Regenerate mesh" (the server's estimate; null = unknown
    *  or n.a.). */
   regenerate_jobs?: number | null
-  /** An own-mesh piece in the body shape (ruling A11): until its own mesh is ready (`mesh`), or its mesh is
-   *  ready and served and the next Build takes it out of the shape (`build`); null otherwise. */
-  in_body_until?: 'mesh' | 'build' | null
 }
 
 export interface FigureHairRow {
@@ -602,18 +599,9 @@ export function frontBuildCovers(jobs: number | null | undefined, t: Tr = EN): s
 /** Ruling A86: the front's Regenerate refused while a Build of the character runs (the server answers 409). */
 export const FRONT_WAITS_FOR_BUILD = 'A Build runs for this character — regenerating the front waits until it has ended'
 
-/** Under the state of an own-mesh piece in the body shape until its mesh is ready (ruling A11). */
-export const IN_BODY_UNTIL_MESH = 'in the body until its own mesh is ready'
-/** ... once its mesh is ready and served, until the next Build takes it out of the shape. */
-export const IN_BODY_UNTIL_BUILD = 'own mesh ready — in the body until the next Build'
-
-/** Under an in-body piece whose body shape is not built yet: nothing is painted in its place any more (Ruling C4,
- *  Task 11g fix round 2) — the Build meshes the shape first, the figure built before stays served meanwhile. */
-export const IN_BODY_UNTIL_SHAPE = 'not in the 3D figure until its body shape is built'
-
-/** Under a piece whose fit on the body shape was refused (Ruling A23, A31 wording): nothing lacking it is
- *  published; what each button does. */
-export const FIT_REFUSED_NOTE = 'Still shown: the figure built before. Re-fit tries again on the CPU (no hub job). A new mesh only helps when the piece itself is broken.'
+/** Under a piece whose fit on the body shape was refused (Ruling A23, A31 wording): it is left off the figure
+ *  (Ruling A119); what each button does. */
+export const FIT_REFUSED_NOTE = 'Left off the figure. Re-fit tries again on the CPU (no hub job). A new mesh only helps when the piece itself is broken.'
 /** The status light's words of a fit the user accepted although its checks refused it (Ruling A31). */
 export const ACCEPTED_BY_YOU = 'Accepted by you'
 
@@ -640,17 +628,10 @@ export function acceptedWhat(a: { step?: string; view?: string; on?: string; rea
 /** A worn row as a step (checklist 8): its light, the state on the right, the reason in plain words under it and
  *  the mouse-over. Green ready (or accepted by you) · yellow due (waits for the Build, its own mesh missing) ·
  *  blue building · red failed or refused · grey left out. */
-export function wornState(row: Pick<FigureWornRow, 'state' | 'mode' | 'jobs' | 'failure' | 'left_out' | 'note' | 'interim'
-  | 'in_body_until' | 'fit_refused' | 'refused_on' | 'accepted_by_user' | 'fit_refused_detail'>, t: Tr = EN): {
+export function wornState(row: Pick<FigureWornRow, 'state' | 'mode' | 'jobs' | 'failure' | 'left_out' | 'note'
+  | 'fit_refused' | 'refused_on' | 'accepted_by_user' | 'fit_refused_detail'>, t: Tr = EN): {
   light: Light; text: string; sub: string | null; detail: string
 } {
-  const sub = row.in_body_until === 'mesh' ? t(IN_BODY_UNTIL_MESH)
-    : row.in_body_until === 'build' ? t(IN_BODY_UNTIL_BUILD)
-      : row.interim ? t(IN_BODY_UNTIL_SHAPE) : null
-  if (row.in_body_until === 'build' && row.state !== 'failed') {
-    return row.state === 'building' ? { light: 'blue', text: t('Building now'), sub, detail: '' }
-      : { light: 'yellow', text: t('Waits for the Build'), sub, detail: '' }
-  }
   switch (row.state) {
     case 'ready': return row.accepted_by_user
       ? {
@@ -670,12 +651,12 @@ export function wornState(row: Pick<FigureWornRow, 'state' | 'mode' | 'jobs' | '
         .replace('{reason}', row.fit_refused || row.note),
       detail: [t(FIT_REFUSED_NOTE), row.fit_refused_detail || ''].filter(Boolean).join('\n'),
     }
-    case 'left_out': return { light: 'grey', text: t('Left out'), sub: row.left_out || row.note, detail: '' }
-    case 'building': return { light: 'blue', text: t('Building now'), sub, detail: '' }
+    case 'left_out': return { light: 'grey', text: t('Left out'), sub: t(row.left_out || row.note), detail: '' }
+    case 'building': return { light: 'blue', text: t('Building now'), sub: null, detail: '' }
     default:
       return row.mode === 'own_mesh'
-        ? { light: 'yellow', text: t('Due: own mesh · {cost}').replace('{cost}', jobsTr(row.jobs, t)), sub, detail: '' }
-        : { light: 'yellow', text: t('Waits for the Build'), sub, detail: '' }
+        ? { light: 'yellow', text: t('Due: own mesh · {cost}').replace('{cost}', jobsTr(row.jobs, t)), sub: null, detail: '' }
+        : { light: 'yellow', text: t('Waits for the Build'), sub: null, detail: '' }
   }
 }
 
@@ -802,7 +783,7 @@ export function hairState(hair: FigureHairRow, t: Tr = EN): { light: Light; text
 /** Which body row a running Build's step builds (Ruling A55, the reverse check: a row never reads "Current" while
  *  the Build works on it). The other steps are the worn pieces' rows. */
 export const BUILD_STEP_BODY_ROW: Record<string, 'plain' | 'shape' | 'texture'> = {
-  plain_body: 'plain', base_repair: 'plain', tip_smoothing: 'plain', interim: 'shape', shape: 'shape', texture: 'texture',
+  plain_body: 'plain', base_repair: 'plain', tip_smoothing: 'plain', shape: 'shape', texture: 'texture',
 }
 
 /** The body the pieces are worn on as three steps (checklist 8): the plain body (its flow is the Base body tab),
