@@ -491,12 +491,14 @@ async def _read_reference_upload(request: Request) -> tuple:
 @router.post("/{character_name}/figure/outfit-reference/upload")
 async def upload_outfit_reference(character_name: str, request: Request,
                                   _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from pathlib import Path
     from starlette.concurrency import run_in_threadpool
     from app.core import full_body_reference, outfit_references
     _require_character(character_name)
     data, filename = await _read_reference_upload(request)
     try:
-        name = await run_in_threadpool(outfit_references.store_upload, character_name, data, filename)
+        name = await run_in_threadpool(outfit_references.store_reference, character_name, data,
+                                       Path(filename or "").suffix, "outfitref")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return await run_in_threadpool(_set_outfit_reference, character_name, name, full_body_reference.ORIGIN_UPLOAD)
@@ -560,6 +562,27 @@ def set_base_reference(character_name: str, body: OutfitReferenceRequest,
     return _set_base_reference(character_name, body.image, full_body_reference.ORIGIN_GALLERY)
 
 
+@router.get("/{character_name}/figure/reference-image/{name}")
+def get_reference_image(character_name: str, name: str, request: Request,
+                        _: Dict[str, Any] = Depends(require_admin)):
+    """A generated full-body reference (plain body or outfit) from ``model_refs/references`` — those are never
+    gallery pictures (user rule 2026-11-16). 404 for a name outside that folder or a file gone."""
+    from pathlib import Path
+    from app.core.http_files import etag_file_response
+    from app.core.outfit_references import references_dir
+    _require_character(character_name)
+    media = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+    try:
+        root = references_dir(character_name).resolve()
+        path = (root / name).resolve()
+    except (OSError, RuntimeError, ValueError):
+        raise HTTPException(status_code=404, detail="Not found")
+    if Path(name).name != name or not path.is_relative_to(root) or not path.is_file() \
+            or path.suffix.lower() not in media:
+        raise HTTPException(status_code=404, detail="Not found")
+    return etag_file_response(path, request, media[path.suffix.lower()])
+
+
 @router.post("/{character_name}/base-body/full-body-reference/upload")
 async def upload_base_reference(character_name: str, request: Request,
                                 _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
@@ -569,8 +592,8 @@ async def upload_base_reference(character_name: str, request: Request,
     _require_character(character_name)
     data, filename = await _read_reference_upload(request)
     try:
-        name = await run_in_threadpool(full_body_reference.store_in_gallery, character_name, data,
-                                       Path(filename or "").suffix, "fullbody")
+        from app.core.outfit_references import store_reference
+        name = await run_in_threadpool(store_reference, character_name, data, Path(filename or "").suffix, "fullbody")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return await run_in_threadpool(_set_base_reference, character_name, name, full_body_reference.ORIGIN_UPLOAD)

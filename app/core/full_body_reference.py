@@ -94,7 +94,6 @@ import threading
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
-from urllib.parse import quote
 
 from app.core.log import get_logger
 
@@ -153,27 +152,28 @@ def base_record(character_name: str, *, profile: Optional[Dict[str, Any]] = None
     return dict(record) if _valid(record) else None
 
 
-def gallery_path(character_name: str, image: str) -> Optional[Path]:
-    """The gallery file ``image`` of the character, None when it is gone or outside the gallery."""
+def gallery_path(character_name: str, image: str, origin: str = ORIGIN_GALLERY) -> Optional[Path]:
+    """The file ``image`` of a reference of ``origin``: a generated or uploaded one in
+    ``model_refs/references``, a pick in the gallery (``outfit_references.image_path``); None when it is gone."""
     from app.core import outfit_references
-    return outfit_references.image_path(character_name, {"image": image, "sha256": "-"})
+    return outfit_references.image_path(character_name, {"image": image, "sha256": "-", "origin": origin})
 
 
 def base_image(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Optional[Path]:
     """The plain body's full-body reference file — None without a record or when its picture is gone from the
     gallery (the front then falls back to the profile image; the tile says the picture is gone)."""
-    record = base_record(character_name, profile=profile)
-    return gallery_path(character_name, record["image"]) if record else None
+    from app.core import outfit_references
+    return outfit_references.image_path(character_name, base_record(character_name, profile=profile))
 
 
-def _gallery_checked(character_name: str, image: str) -> Tuple[Path, bytes]:
+def _gallery_checked(character_name: str, image: str, origin: str = ORIGIN_GALLERY) -> Tuple[Path, bytes]:
     """``(path, bytes)`` of a gallery picture to record; ValueError for a name outside the gallery, a missing
     file or bytes that are no image."""
     from app.core.upload_limits import ensure_image
     name = str(image or "").strip()
     if not name or Path(name).name != name:
         raise ValueError("Pick a picture of the character's gallery")
-    path = gallery_path(character_name, name)
+    path = gallery_path(character_name, name, origin)
     if path is None:
         raise ValueError(f"Not in the gallery: {name}")
     data = path.read_bytes()
@@ -207,7 +207,7 @@ def set_base(character_name: str, image: str, *, origin: str = ORIGIN_GALLERY, p
     image; RuntimeError when the profile was not saved. Returns the record."""
     from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile, save_character_profile
-    _path, data = _gallery_checked(character_name, image)
+    _path, data = _gallery_checked(character_name, image, origin)
     record = _record(image, data, origin, prompt, made_from)
     with keyed_lock("character_profile", character_name):
         profile = get_character_profile(character_name) or {}
@@ -245,7 +245,7 @@ def set_outfit(character_name: str, image: str, *, key: Optional[str] = None,
     from app.core import outfit_references
     from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile, save_character_profile
-    _path, data = _gallery_checked(character_name, image)
+    _path, data = _gallery_checked(character_name, image, origin)
     record = _record(image, data, origin, prompt, made_from)
     with keyed_lock("character_profile", character_name):
         profile = get_character_profile(character_name) or {}
@@ -263,27 +263,6 @@ def set_outfit(character_name: str, image: str, *, key: Optional[str] = None,
     clear_auto_failure(character_name, key)
     logger.info("Full-body reference of %s (outfit %s, %s): %s", character_name, key, origin, image)
     return {"key": key, "record": record}
-
-
-def store_in_gallery(character_name: str, data: bytes, suffix: str, tag: str = "fullbody") -> str:
-    """Bytes (an upload already capped and checked by its route, or a generated picture) into the character's
-    gallery as ``<name>_<stamp>_<tag><suffix>``. Returns the file name."""
-    import time
-    from app.models.character import add_character_image, get_character_images_dir
-    suffix = (suffix or "").lower()
-    if suffix not in (".png", ".jpg", ".jpeg", ".webp"):
-        raise ValueError("Format not supported — PNG, JPEG or WebP")
-    images = get_character_images_dir(character_name)
-    images.mkdir(parents=True, exist_ok=True)
-    stem = f"{character_name}_{int(time.time())}_{tag}"
-    target = images / f"{stem}{suffix}"
-    n = 1
-    while target.exists():
-        n += 1
-        target = images / f"{stem}{n}{suffix}"
-    target.write_bytes(data)
-    add_character_image(character_name, target.name)
-    return target.name
 
 
 # --- The prompts -------------------------------------------------------------------------------------------------
@@ -458,14 +437,10 @@ def _render(character_name: str, *, occasion: str, use_case: str, block: str, so
 
 
 def _publish(character_name: str, data: bytes, suffix: str, prompt: str) -> str:
-    """The generated picture into the gallery with its prompt; returns its file name."""
-    from app.models.character import add_character_image_prompt
-    name = store_in_gallery(character_name, data, suffix if suffix else ".png")
-    try:
-        add_character_image_prompt(character_name, name, prompt)
-    except Exception:  # noqa: BLE001 — the prompt line is a convenience, the record keeps the prompt too
-        logger.debug("Prompt of %s not recorded in the gallery meta", name, exc_info=True)
-    return name
+    """The generated picture into ``model_refs/references`` (never the gallery); the record keeps its prompt.
+    Returns its file name."""
+    from app.core.outfit_references import store_reference
+    return store_reference(character_name, data, suffix if suffix else ".png", "fullbody")
 
 
 def check_base(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], Path]:
@@ -745,13 +720,8 @@ def ensure_outfit(character_name: str, pieces: Optional[Dict[str, str]], open_id
 # --- The tiles ---------------------------------------------------------------------------------------------------
 
 def _url(character_name: str, path: Optional[Path]) -> str:
-    if path is None:
-        return ""
-    try:
-        stamp = path.stat().st_mtime_ns
-    except OSError:
-        return ""
-    return f"/characters/{quote(character_name, safe='')}/images/{quote(path.name, safe='')}?v={stamp}"
+    from app.core.outfit_references import reference_url
+    return reference_url(character_name, path)
 
 
 def _public(record: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -771,7 +741,7 @@ def base_tile(character_name: str) -> Dict[str, Any]:
     from app.core.model_refs import current_profile_image
     profile = _profile_of(character_name, None)
     record = base_record(character_name, profile=profile)
-    path = gallery_path(character_name, record["image"]) if record else None
+    path = base_image(character_name, profile=profile)
     image = current_profile_image(character_name, profile=profile)
     blocked = "" if image is not None else NO_PROFILE_IMAGE
     try:

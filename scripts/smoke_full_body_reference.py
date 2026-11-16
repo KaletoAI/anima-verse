@@ -40,7 +40,7 @@ hub job c265fd78: that output → the A-pose front, A74b's edit prompt):
         detail" (no edit prefix, no pose words);
       extra_negative = "clothing, underwear, jewellery" + ", region detail" (the fixture region of [10] applies to
         Demo, uncovered; its reference text needs {size} and drops, its negative stays).
-    Record: origin "generated", the picture in the gallery as Demo_<stamp>_fullbody.png with the recorder's bytes,
+    Record: origin "generated", the picture in model_refs/references (never the gallery) as Demo_<stamp>_fullbody.png with the recorder's bytes,
     made_from {image "Demo_1.png", sha256 of Demo_1.png, kind "profile"}, prompt = the composed prompt.
 [3] The front's reference chain:
       with the full-body reference: front_reference(Demo) = {method "reference", image <its name>, sha256 <its
@@ -609,13 +609,16 @@ def main() -> int:
         # Demo is human-roleplay, so the fixture region applies (uncovered, no attributes: its reference text
         # needs {size} and drops, its negative names no attribute and stays).
         check("negative: nothing worn + the region's (A95)", one.get("extra_negative"), BASE_NEG + ", region detail")
-        gallery = get_character_images_dir("Demo") / record["image"]
+        from app.core.outfit_references import references_dir
+        gallery = references_dir("Demo") / record["image"]   # never the gallery (user rule 2026-11-16)
         check("record", (record["origin"], record["image"].startswith("Demo_") and
                          record["image"].endswith("_fullbody.png"), gallery.read_bytes() == RENDERED,
                          record["made_from"], record["prompt"]),
               ("generated", True, True, {"image": "Demo_1.png", "sha256": sha(profile_file), "kind": "profile"},
                framed(want_block)))
-        check("no staging left in model_refs", sorted(p.name for p in refs.iterdir()) if refs.is_dir() else [], [])
+        check("no staging left in model_refs (only the references folder)",
+              sorted(p.name for p in refs.iterdir()) if refs.is_dir() else [], ["references"])
+        check("nothing in the gallery", (get_character_images_dir("Demo") / record["image"]).exists(), False)
 
         print("[3] the front's reference chain")
         fp = base_body._edit_fingerprint("Demo", get_character_profile("Demo"))
@@ -649,7 +652,7 @@ def main() -> int:
         front_json.write_text(json.dumps(meta))
         check("profile-made front current without a reference", base_body.front_reference_state("Demo")["current"],
               True)
-        fbr.set_base("Demo", record["image"])
+        fbr.set_base("Demo", record["image"], origin=fbr.ORIGIN_GENERATED)
         check("set -> due with its reason", base_body.front_reference_state("Demo")["reason"],
               base_body.FRONT_PROFILE_NOT_FULL_BODY)
         check("Run all / Build plan", base_body.base_refresh_plan("Demo", missing=True).get("reason"), "reference")
@@ -681,7 +684,7 @@ def main() -> int:
               'return {"method": FRONT_FROM_REFERENCE, "image": image.name, "sha256": sha,' in old_body, True)
 
         print("[6] generate an outfit's full-body reference")
-        fbr.set_base("Demo", record["image"])
+        fbr.set_base("Demo", record["image"], origin=fbr.ORIGIN_GENERATED)
         check("source: the plain body's reference", fbr.outfit_source("Demo"), (gallery, "full_body"))
         CALLS.clear()
         got = fbr.generate_outfit("Demo")

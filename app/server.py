@@ -240,6 +240,14 @@ async def lifespan(app: FastAPI):
     from app.core.skill_drop_migration import migrate_skill_drop_blocks_once
     migrate_skill_drop_blocks_once()
 
+    # Reference pictures a figure uses that were generated/uploaded into the gallery move to
+    # model_refs/references (user rule 2026-11-16; idempotent, one log line per file).
+    try:
+        from app.core.outfit_references import move_all_gallery_references
+        move_all_gallery_references()
+    except Exception as _rm:  # noqa: BLE001 — never blocks the boot
+        logger.warning("Moving reference pictures out of the gallery failed: %s", _rm)
+
     # Add persistent location IDs and clean up legacy filesystem storage.
     from app.models.world import migrate_location_ids
     migrate_location_ids()

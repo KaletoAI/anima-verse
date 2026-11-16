@@ -183,6 +183,9 @@ def main() -> int:
                 if stand["mode"] == "boom":
                     raise RuntimeError("boom")
                 stand["made"] += 1
+                from app.core.outfit_references import references_dir   # a generated picture lives there
+                references_dir(character_name).mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(images / "Demo_2.png", references_dir(character_name) / "Demo_2.png")
                 return fbr.set_outfit(character_name, "Demo_2.png", key=key, pieces={},
                                       origin=fbr.ORIGIN_GENERATED, prompt="p")
             except Exception as e:

@@ -148,7 +148,9 @@ def main() -> int:
                 stored["profile_image"] = f"{name}_1.png"
                 check(f"profile image {name}", save_character_profile(name, stored), True)
             garment_hair.create_hairstyle(name, "", "hairdeck")
-        png(get_character_images_dir("Full") / "Full_ref.png", (90, 120, 180))
+        from app.core.outfit_references import references_dir
+        references_dir("Full").mkdir(parents=True, exist_ok=True)
+        png(references_dir("Full") / "Full_ref.png", (90, 120, 180))   # a generated reference lives there
         full_body_reference.set_base("Full", "Full_ref.png", origin=full_body_reference.ORIGIN_GENERATED,
                                      prompt=OLD_REFERENCE_PROMPT)
         old = old_module()
