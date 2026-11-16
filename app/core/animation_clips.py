@@ -1944,8 +1944,14 @@ def set_clip_contact_target(library: str, rel: str, relations: Any) -> List[Dict
 
 #: Ruling A145: the core default of how far an attached part may bend toward its contact target before the
 #: pair fit moves the partner, per state (degrees per joint / in all); a raised state is much stiffer.
-BEND_LIMITS_DEFAULT = {"raised": {"joint_deg": 15.0, "total_deg": 35.0},
-                       "resting": {"joint_deg": 45.0, "total_deg": 120.0}}
+#: Ruling A150: plus the ROOT joint's pitch up / pitch down / yaw (the attachment pitches first).
+BEND_LIMITS_DEFAULT = {"raised": {"joint_deg": 15.0, "total_deg": 35.0,
+                                  "root_up_deg": 35.0, "root_down_deg": 45.0, "root_yaw_deg": 10.0},
+                       "resting": {"joint_deg": 45.0, "total_deg": 120.0,
+                                   "root_up_deg": 45.0, "root_down_deg": 80.0, "root_yaw_deg": 15.0}}
+#: Each limit key and its upper bound (degrees).
+BEND_LIMIT_KEYS = (("joint_deg", 90.0), ("total_deg", 360.0), ("root_up_deg", 90.0), ("root_down_deg", 120.0),
+                   ("root_yaw_deg", 45.0))
 BEND_STATES = ("raised", "resting")
 #: Hook capability a package registers to default the bend limits of its clip kinds
 #: (``fn() -> {kind: limits}``, ``multiple=True``; ``"*"`` = every kind without its own entry);
@@ -1957,7 +1963,8 @@ def validate_bend_limits(value: Any, base: Optional[Dict[str, Dict[str, float]]]
     """Ruling A145: a clip's BEND LIMITS — ``{"raised": {"joint_deg", "total_deg"}, "resting": {...}}``.
 
     Partial input is completed from ``base`` (default: :data:`BEND_LIMITS_DEFAULT`). Every value is a
-    finite number, ``joint_deg`` 0–90, ``total_deg`` 0–360 (0 = the part stays rigid in that state).
+    finite number, ``joint_deg`` 0–90, ``total_deg`` 0–360 (0 = the part stays rigid in that state); Ruling A150:
+    ``root_up_deg`` 0–90, ``root_down_deg`` 0–120, ``root_yaw_deg`` 0–45 (the root joint's pitch/yaw; 0 = it stays).
     """
     import math
     base = base or BEND_LIMITS_DEFAULT
@@ -1966,11 +1973,11 @@ def validate_bend_limits(value: Any, base: Optional[Dict[str, Dict[str, float]]]
     out: Dict[str, Dict[str, float]] = {}
     for state in BEND_STATES:
         got = value.get(state, {})
-        if not isinstance(got, dict) or set(got) - {"joint_deg", "total_deg"}:
-            raise ClipLibraryError(f"bend limits {state}: an object with joint_deg and/or total_deg")
+        if not isinstance(got, dict) or set(got) - {k for k, _ in BEND_LIMIT_KEYS}:
+            raise ClipLibraryError(f"bend limits {state}: an object with {', '.join(k for k, _ in BEND_LIMIT_KEYS)}")
         row = {}
-        for key, upper in (("joint_deg", 90.0), ("total_deg", 360.0)):
-            v = got.get(key, base[state][key])
+        for key, upper in BEND_LIMIT_KEYS:
+            v = got.get(key, base[state].get(key, BEND_LIMITS_DEFAULT[state][key]))
             if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not 0 <= v <= upper:
                 raise ClipLibraryError(f"bend limits {state}.{key} must be a number from 0 to {upper:g}")
             row[key] = float(v)
