@@ -19,6 +19,7 @@ Third-party code vendored in this repository
   programming, (c) 2024 Maria Korosteleva), MIT licence: app/third_party/pygarment/LICENSE.
   Vendored because the PyPI wheel 2.0.2 ships its modules without the `pygarment`
   package directory; imports rewritten to `app.third_party.*`, otherwise unchanged
-  except two invalid escape sequences in strings.
+  except two invalid escape sequences in strings and
+  np.cross of 2-D vectors routed through `_compat.cross` (numpy 2).
 - app/third_party/svgpathtools — subset of svgpathtools 1.8.0 ((c) Andy Port), MIT licence:
   app/third_party/svgpathtools/LICENSE. SVG writer/reader modules left out (no svgwrite).

@@ -4,6 +4,7 @@ import numpy as np
 from numpy.linalg import norm
 from scipy.spatial.transform import Rotation
 from app.third_party import svgpathtools as svgpath
+from app.third_party.pygarment._compat import cross as _np2_cross
 
 
 
@@ -32,7 +33,7 @@ def vector_angle(v1, v2):
     cos = np.dot(v1, v2) / (norm(v1) * norm(v2))
     angle = np.arccos(cos) 
     # Cross to indicate correct relative orienataion of v2 w.r.t. v1
-    cross = np.cross(v1, v2)
+    cross = _np2_cross(v1, v2)
     
     if abs(cross) > 1e-5:
         angle *= np.sign(cross)
@@ -54,7 +55,7 @@ def vector_align_3D(v1, v2):
     angle = np.arccos(cos) 
 
     # Cross to get the axis of rotation
-    cross = np.cross(v1, v2)
+    cross = _np2_cross(v1, v2)
     cross = cross / norm(cross)
 
     return Rotation.from_rotvec(cross * angle)

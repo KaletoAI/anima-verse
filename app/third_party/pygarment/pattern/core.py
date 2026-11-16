@@ -13,6 +13,7 @@ from app.third_party import svgpathtools as svgpath
 # My
 from . import rotation as rotation_tools
 from . import utils
+from app.third_party.pygarment._compat import cross as _np2_cross
 
 standard_filenames = [
     'specification',  # e.g. used by dataset generation
@@ -392,7 +393,7 @@ class BasicPattern(object):
         last_edge = self._edge_as_vector(vertices, rotated_edges[-1])[:2]
         flipped = False
         # due to the choice of origin (at the corner), first & last edge cross-product will reliably show panel normal direction 
-        if np.cross(first_edge, last_edge) > 0:  # should be negative -- counterclockwise
+        if _np2_cross(first_edge, last_edge) > 0:  # should be negative -- counterclockwise
             print('{}::{}::panel <{}> flipped'.format(
                 self.__class__.__name__, self.name, panel_name
             ))

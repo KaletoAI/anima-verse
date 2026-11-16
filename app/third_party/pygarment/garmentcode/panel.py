@@ -9,6 +9,7 @@ from app.third_party.pygarment.garmentcode.edge import Edge, EdgeSequence, Circl
 from app.third_party.pygarment.garmentcode.utils import close_enough, vector_align_3D
 from app.third_party.pygarment.garmentcode.operators import cut_into_edge
 from app.third_party.pygarment.garmentcode.interface import Interface
+from app.third_party.pygarment._compat import cross as _np2_cross
 
 
 class Panel(BaseComponent):
@@ -365,7 +366,7 @@ class Panel(BaseComponent):
             vert_1 = b_verts_3d[(i + 1) % num_b_verts_3d]
             # Pylance + NP error for unreachanble code -- see https://github.com/numpy/numpy/issues/22146
             # Works ok for numpy 1.23.4+
-            norm = np.cross(vert_0 - b_center_3d, vert_1 - b_center_3d)
+            norm = _np2_cross(vert_0 - b_center_3d, vert_1 - b_center_3d)
             norm /= np.linalg.norm(norm)
             norms.append(norm)
 

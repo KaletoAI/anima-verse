@@ -12,6 +12,7 @@ from app.third_party.pygarment.garmentcode.interface import Interface
 from app.third_party.pygarment.garmentcode.utils import vector_angle, close_enough, c_to_list, c_to_np
 from app.third_party.pygarment.garmentcode.utils import list_to_c
 from app.third_party.pygarment.garmentcode.base import BaseComponent
+from app.third_party.pygarment._compat import cross as _np2_cross
 
 
 # ANCHOR ----- Edge Sequences Modifiers ----
@@ -289,7 +290,7 @@ def cut_into_edge_single(target_shape, base_edge: Edge, offset=0, right=True,
 
     # Check orientation 
     avg_vertex = np.asarray(new_edges.verts()).mean(0)
-    right_position = np.sign(np.cross(insert_vector, avg_vertex - np.asarray(new_edges[0].start))) == -1 
+    right_position = np.sign(_np2_cross(insert_vector, avg_vertex - np.asarray(new_edges[0].start))) == -1 
     if not right and right_position or right and not right_position:
         # flip shape to match the requested direction
         new_edges.reflect(new_edges[0].start, new_edges[-1].end)  
@@ -391,7 +392,7 @@ def distribute_horisontally(component, n_copies, stride=20, name_tag='panel'):
     if isinstance(component, BaseComponent):
         translation_dir = component.rotation.apply([0, 0, 1])   # Horisontally along the panel
         # FIXME What if it's looking up?
-        translation_dir = np.cross(translation_dir, [0, 1, 0])   # perpendicular to Y
+        translation_dir = _np2_cross(translation_dir, [0, 1, 0])   # perpendicular to Y
         translation_dir = translation_dir / norm(translation_dir)
         delta_translation = translation_dir * stride
     else:
