@@ -37,18 +37,21 @@ image group has none of its own images yet):
 4. Accepted -> the fit record names its source (``source``: origin fsig, ``bsig``, ``base_images``,
    ``materialized_from``) and ``refitted: true``; the Wardrobe shows "Refitted from the previous base"
    with a Re-render action. Refused (gate, frame beyond the caps, a sleeve off its arm — ARMS —, a source file
-   missing) -> the copies are dropped (``drop_materialized``) and the same run renders the whole chain, as before.
+   missing) -> the copies are dropped (``drop_materialized``) — kept only when the fit's gates refused and kept a
+   fit attempt with a mesh, which the user may accept — and the run STOPS (Ruling A162, ``garments.REFIT_STOPPED``):
+   no hub job on its own; the piece dialog offers "Keep the old fit", "Accept the refit anyway" and "Make a new
+   mesh" (the explicit Regenerate, the only one spending hub jobs).
 
 An explicit run of an IMAGE step on a materialised group (Re-render, Regenerate of one view) drops the copies
 first and renders from the method's first step: images of two bases never mix in one group. A refused refit is
-not persisted: the next default run of a group without own images tries again (CPU seconds) — automatic triggers
-skip a failed chain anyway (``garment_store.chain_failure``).
+persisted as the piece's failure at the fit with its offer (``refit_offer``, Ruling A162): automatic triggers skip
+it (``garment_store.chain_failure``), a manual Build tries the CPU refit again (CPU seconds, never a hub job).
 
 FRAME. ``garment_fit.place_by_framing`` maps the garment through ITS mask frame and the body through the body
 mask's frame, so the ghost mask must be in the frame of the view the body was meshed from. A source made on base
 B0 fitted onto B1: the ghost (B0's frame) is padded onto B1's canvas (``garment_images.pad_into``: crops of one
 square canvas, centred) and registered by the existing outline registration ``garment_gates.register`` (shift +
-uniform scale, caps |shift| <= 0.04 Hb, scale 0.93..1.07) of B0's base front onto B1's base front — on the TRUNK
+uniform scale, caps |shift| <= 0.04 Hb, scale 0.80..1.25 since Ruling A162 — ``FRAME_SCALE_MIN``) of B0's base front onto B1's base front — on the TRUNK
 only: columns within ``TRUNK_HALF`` x Hb of the head's centre column (head, neck, shoulder line, the inner leg
 outline). The full outline is dominated by the T-pose arms, whose angle differs from base to base. Measured
 2026-11-10 on Kira's Black Blazer (made on base20d5701a), against its fit on its own base (collar top above the
@@ -213,6 +216,15 @@ TRUNK_HEAD_ROW = 0.05
 #: A registration whose mean outline distance stays above this x Hb did not find the body (the real trunks
 #: settle at 0.003-0.004 Hb, the outline distance is truncated at 0.01 Hb): refused like one beyond the caps.
 FRAME_RESIDUAL_MAX = 0.006
+#: Ruling A162: the scale caps of the BASE-TO-BASE framing registration (``register_frames``). A base front
+#: rendered again under the same signature may frame the figure at another size — Ylva's base5fe6bd6a, measured
+#: 2026-11-16 on her Leather Wrap Skirt's two base copies: figure 1446 px high on the old front, 1332 px on the new
+#: one (1332 / 1446 = 0.921), trunk registration scale 0.926 at a residual outline distance of 1.36 px (0.001 Hb,
+#: cap 0.006 Hb = 8.0 px) — an exact match that the ghost caps (``garment_gates.REG_SCALE_MIN`` 0.93) refused.
+#: The scale here is a pure frame change of two images of the same body, so it may reach this far; the residual
+#: (``FRAME_RESIDUAL_MAX``) and the fit's own gates still judge the result. The shift cap stays the ghost's.
+FRAME_SCALE_MIN = 0.80
+FRAME_SCALE_MAX = 1.25
 #: Limbs (module docstring LIMBS): a vertex farther than the limb radius + this from its limb is off the limb.
 LIMB_OFF_M = 0.04
 #: The off-limb share of a segment may exceed the source's by at most this.
@@ -595,6 +607,10 @@ def register_frames(source_mask: np.ndarray, target_mask: np.ndarray) -> Dict[st
     moving, _hb = trunk(_pad(source_mask, target.shape))
     reg = garment_gates.register(reference, moving, body_h=hb) if hb else None
     residual = (reg or {}).get("fit_px") or [None, None]
+    if reg is not None:
+        # Ruling A162: the frame's own scale caps (``FRAME_SCALE_MIN`` / ``_MAX``), the ghost's shift cap
+        reg["within_caps"] = bool(float(reg.get("shift_abs") or 0.0) <= garment_gates.REG_SHIFT_MAX
+                                  and FRAME_SCALE_MIN <= float(reg["scale"]) <= FRAME_SCALE_MAX)
     if reg is None or not reg.get("within_caps") or residual[1] is None or residual[1] > FRAME_RESIDUAL_MAX * hb:
         raise FrameRefused(reg)
     return reg
