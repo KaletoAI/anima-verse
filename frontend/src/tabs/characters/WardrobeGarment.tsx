@@ -701,6 +701,41 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
     }
     startPoll(0)
   }
+  /** Ruling A128: deleting meshes of the piece — one tile (slot 0 = the mesh in use) or all of them. The dialog asks
+   *  first with the server's rebuild cost (GET …/mesh-delete-preview); the toast names what is due after. */
+  const [del, setDel] = useState<{ slot: number | null; label: string } | null>(null)
+  const [delPreview, setDelPreview] = useState<MeshDeletePreview | null>(null)
+  const [delImages, setDelImages] = useState(false)
+  const askDelete = (slot: number | null, label: string) => {
+    setDel({ slot, label })
+    setDelImages(false)
+    setDelPreview(null)
+    if (slot === null || slot === 0) {
+      apiGet<MeshDeletePreview>(`/characters/${enc}/garments/${encodeURIComponent(itemId)}/mesh-delete-preview`)
+        .then(setDelPreview).catch(() => setDelPreview(null))
+    }
+  }
+  const onDelete = async () => {
+    const ask = del
+    setDel(null)
+    if (!ask || using) return
+    setUsing(true)
+    try {
+      const base = `/characters/${enc}/garments/${encodeURIComponent(itemId)}/mesh`
+      const d = ask.slot === null
+        ? await apiPost<{ deleted: { meshes: number; images: number }; follow_up: MeshDeleteCost }>(
+          `${base}/delete-all`, { include_images: delImages })
+        : await apiPost<{ deleted: number; follow_up: MeshDeleteCost }>(
+          `${base}/attempts/${ask.slot}/delete`, { in_use: ask.slot === 0 })
+      const files = typeof d.deleted === 'number' ? d.deleted : d.deleted.meshes + d.deleted.images
+      toast(`${t('Deleted')} (${files} ${t('files')}) · ${dueText(d.follow_up, t)}`, 'success')
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setUsing(false)
+    }
+    startPoll(0)
+  }
   /** Ruling A46, "Piece-only views from": SAVED on its own — nothing runs; the toast names what is due now (the
    *  view, its cut-out, the mesh and the fit; Run all or the Build makes them). */
   const onPieceView = async (view: GarmentView, choice: PieceViewChoice) => {
@@ -904,6 +939,18 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             </div>
           ) : null}
           <RefitNotice garment={garment} feedback={feedback} busy={busy} onRun={onRun} />
+          <ConfirmDialog open={del !== null} danger confirmLabel={t('Delete')}
+            title={del?.slot === null ? t('Delete all meshes of this piece') : `${t('Delete')} · ${del?.label || ''}`}
+            message={meshDeleteMessage(del?.slot ?? null, delPreview, delImages, t)}
+            onConfirm={() => { void onDelete() }} onClose={() => setDel(null)}>
+            {del?.slot === null ? (
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, fontSize: '0.85em' }}>
+                <input type="checkbox" checked={delImages} onChange={(e) => setDelImages(e.target.checked)} />
+                {t('Also delete the worn, piece-only and cut-out images')}
+                {delPreview ? ` (${delPreview.files.images})` : ''}
+              </label>
+            ) : null}
+          </ConfirmDialog>
           {/* Ruling A79: the refused views with their attempts, "Use this attempt" and the Undo of the last one. */}
           <GarmentRefusedAttempts garment={garment} useRuns={info.use_runs} useUndo={info.use_undo}
             busy={busy || using || running} onUse={(step, view, attempt) => { void onUse(step, view, attempt) }}
@@ -917,6 +964,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             busy={busy || using}
             imageUseBusy={busy || using || running}
             onMeshUse={(slot) => { void onMeshUse(slot) }}
+            onMeshDelete={(slot, label) => askDelete(slot, label)}
+            onMeshDeleteAll={() => askDelete(null, '')}
             onRun={onRunFit}
             refitOn={refitOn}
             refitBlock={refitBlock}
@@ -1021,4 +1070,43 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
     </div>,
     document.body,
   )
+}
+
+/** Ruling A128: a run's cost as the server estimates it (`garments.run_estimate`). */
+interface MeshDeleteCost { hub_jobs: number | null; note: string }
+/** Ruling A128: GET …/mesh-delete-preview — what goes and what making it again costs. */
+interface MeshDeletePreview {
+  files: { meshes: number; images: number }
+  rebuild_mesh: MeshDeleteCost
+  rebuild_all: MeshDeleteCost
+}
+
+function costText(c: MeshDeleteCost | undefined, t: (s: string) => string): string {
+  if (!c || c.hub_jobs == null) return t('cost unknown')
+  return `${c.hub_jobs} ${t('hub jobs')}${c.note ? ` (${c.note})` : ''}`
+}
+
+function dueText(c: MeshDeleteCost, t: (s: string) => string): string {
+  if (c.hub_jobs === 0 && !c.note) return t('Everything is current')
+  return t('Now due: {note}').replace('{note}', costText(c, t))
+}
+
+/** The confirmation's text (Ruling A128): what goes, what stays, and the hub jobs making it again costs. */
+function meshDeleteMessage(slot: number | null, p: MeshDeletePreview | null, images: boolean,
+  t: (s: string) => string): string {
+  if (slot !== null && slot > 0) {
+    return t('This kept mesh is deleted. The mesh in use and the fit stay; nothing becomes due.')
+  }
+  const cost = p ? costText(images ? p.rebuild_all : p.rebuild_mesh, t) : t('Loading…')
+  if (slot === 0) {
+    return [t('The mesh in use is deleted; the kept meshes stay and can be used instead.'),
+      t('The fit stays served until the next fit. The mesh step becomes due.'),
+      `${t('Making it again costs')}: ${cost}`].join('\n')
+  }
+  const counts = p ? `${p.files.meshes} ${t('mesh and fit files')}${images ? ` + ${p.files.images} ${t('images')}` : ''}`
+    : ''
+  return [t('Every mesh, kept mesh, shell and fit of this piece is deleted (every state and body shape).'),
+    images ? t('The images go too.') : t('The worn, piece-only and cut-out images stay.'),
+    counts, t('The piece leaves the figure at its next Build until it is made again.'),
+    `${t('Making it again costs')}: ${cost}`].filter(Boolean).join('\n')
 }

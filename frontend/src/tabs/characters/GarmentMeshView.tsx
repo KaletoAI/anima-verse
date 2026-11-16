@@ -120,11 +120,13 @@ function trisText(n: number | null | undefined): string {
 
 /** A still picture of one mesh (meshSnapshot) — a click opens the viewer; its gate light beside the caption and,
  *  for a kept mesh, "Use this" under it (0 hub jobs, then the fit on the CPU — Ruling A58). */
-function MeshTile({ source, onOpen, onUse, useDisabled }: {
+function MeshTile({ source, onOpen, onUse, useDisabled, onDelete }: {
   source: MeshSource
   onOpen: () => void
   onUse?: (slot: number) => void
   useDisabled: boolean
+  /** Ruling A128: delete this tile (the caller confirms first). Absent = no button. */
+  onDelete?: (slot: number, label: string) => void
 }) {
   const { t } = useI18n()
   useClockSettings()
@@ -180,6 +182,17 @@ function MeshTile({ source, onOpen, onUse, useDisabled }: {
           {t('Use this mesh')}
         </button>
       ) : null}
+      {onDelete && source.id !== 'shell' ? (
+        <button type="button" className="ga-btn ga-btn-sm ga-btn-danger" style={{ fontSize: '0.72em', padding: '1px 6px' }}
+          disabled={useDisabled}
+          title={source.origin === 'in_use'
+            ? t('Delete the mesh in use — the mesh step becomes due (asks first, names the hub jobs)')
+            : t('Delete this kept mesh — 0 hub jobs, it cannot be brought back')}
+          aria-label={`${t('Delete')} · ${source.label}`}
+          onClick={() => onDelete(source.slot, source.label)}>
+          {t('Delete')}
+        </button>
+      ) : null}
       {onUse && source.slot > 0 && source.useBlock ? (
         <span className="ga-hint" style={{ fontSize: '0.68em', textAlign: 'center', lineHeight: 1.2 }}>
           {t(source.useBlock)}
@@ -191,7 +204,7 @@ function MeshTile({ source, onOpen, onUse, useDisabled }: {
 
 /** The Mesh row's tiles: the mesh in use, then each kept mesh (a failed attempt as a slim placeholder). */
 export function GarmentMeshTiles({ view, builtAt, pieceName, userAccepted = false, onUse, useDisabled = false,
-  allowance = null }: {
+  allowance = null, onDelete, onDeleteAll }: {
   view: GarmentMeshView | undefined
   builtAt: string | null
   pieceName: string
@@ -202,6 +215,10 @@ export function GarmentMeshTiles({ view, builtAt, pieceName, userAccepted = fals
   useDisabled?: boolean
   /** Ruling A48c: the fit allowance beside the viewer (null: none — the piece has no fit settings). */
   allowance?: MeshAllowance | null
+  /** Ruling A128: delete one tile (slot 0 = the mesh in use); the caller confirms first. */
+  onDelete?: (slot: number, label: string) => void
+  /** Ruling A128: "Delete all meshes of this piece…"; the caller confirms first. */
+  onDeleteAll?: () => void
 }) {
   const { t } = useI18n()
   const sources = useMemo(() => meshSources(view, builtAt, userAccepted, t), [view, builtAt, userAccepted, t])
@@ -212,7 +229,8 @@ export function GarmentMeshTiles({ view, builtAt, pieceName, userAccepted = fals
   return (
     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'flex-start', flexBasis: '100%' }}>
       {sources.map((s) => (
-        <MeshTile key={s.id} source={s} onOpen={() => setOpen(s.id)} onUse={onUse} useDisabled={useDisabled} />
+        <MeshTile key={s.id} source={s} onOpen={() => setOpen(s.id)} onUse={onUse} useDisabled={useDisabled}
+          onDelete={onDelete} />
       ))}
       {failed.map((a, i) => (
         <div key={`failed-${i}`} className="ga-step-grid-empty" style={{ width: TILE_W, height: TILE_H }}
@@ -221,6 +239,13 @@ export function GarmentMeshTiles({ view, builtAt, pieceName, userAccepted = fals
           {`${t('Attempt')} ${a.run_attempt ?? ''} · ${t('Failed')}`}
         </div>
       ))}
+      {onDeleteAll && sources.length ? (
+        <button type="button" className="ga-btn ga-btn-sm ga-btn-danger" style={{ alignSelf: 'flex-end', fontSize: '0.72em' }}
+          disabled={useDisabled} onClick={onDeleteAll}
+          title={t('Delete every mesh, kept mesh and fit of this piece (asks first, names the hub jobs to make them again)')}>
+          {t('Delete all meshes…')}
+        </button>
+      ) : null}
       {open ? (
         <GarmentMeshViewer sources={sources} initial={open} pieceName={pieceName} onClose={() => setOpen(null)}
           allowance={allowance} />

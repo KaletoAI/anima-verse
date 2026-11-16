@@ -3172,6 +3172,66 @@ def use_character_garment_mesh(character_name: str, item_id: str, attempt: int,
         raise HTTPException(status_code=404, detail=str(e))
 
 
+def _garment_delete_call(fn, character_name: str, item_id: str, *args, **kwargs) -> Dict[str, Any]:
+    """Ruling A128: one delete action of ``garment_mesh_delete`` with its HTTP mapping."""
+    from app.core import garment_mesh, garment_mesh_delete as gmd
+    from app.models.inventory import safe_item_id
+    if safe_item_id(item_id) != item_id:
+        raise HTTPException(status_code=404, detail="Unknown item")
+    _require_character(character_name)
+    try:
+        return fn(character_name, item_id, *args, **kwargs)
+    except (garment_mesh.KeptUnusable, gmd.DeleteBusy) as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except gmd.InUseNeedsConfirm as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+class GarmentMeshDeleteRequest(BaseModel):
+    #: Ruling A128: deleting the mesh in use (slot 0) needs this — the dialog's confirmation.
+    in_use: bool = False
+
+
+class GarmentMeshDeleteAllRequest(BaseModel):
+    #: Ruling A128: the worn / piece-only / cut-out images go too.
+    include_images: bool = False
+
+
+@router.get("/{character_name}/garments/{item_id}/mesh-delete-preview")
+def get_character_garment_mesh_delete_preview(character_name: str, item_id: str,
+                                              _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Ruling A128: what "Delete all meshes" removes and what making it again costs, before the click
+    (``garment_mesh_delete.preview``). Admin-only; 404 for an item that is no own-mesh clothing piece."""
+    from app.core import garment_mesh_delete
+    return _garment_delete_call(garment_mesh_delete.preview, character_name, item_id)
+
+
+@router.post("/{character_name}/garments/{item_id}/mesh/attempts/{attempt}/delete")
+def delete_character_garment_mesh(character_name: str, item_id: str, attempt: int, body: GarmentMeshDeleteRequest,
+                                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Ruling A128: delete one tile of the piece's Mesh row — kept mesh ``attempt`` (1..KEPT_MAX) or, with
+    ``attempt`` 0 and ``in_use``, the mesh in use (the mesh step becomes due; ``garment_mesh_delete.delete_mesh``).
+    No job. ``{item_id, n, deleted, in_use, follow_up}``. Admin-only. 400 for slot 0 without ``in_use``, 404 for a bad
+    slot or an item that is no own-mesh clothing piece, 409 for an empty slot or while a run of the piece writes."""
+    from app.core import garment_mesh_delete
+    return _garment_delete_call(garment_mesh_delete.delete_mesh, character_name, item_id, attempt,
+                                in_use=body.in_use)
+
+
+@router.post("/{character_name}/garments/{item_id}/mesh/delete-all")
+def delete_character_garment_meshes(character_name: str, item_id: str, body: GarmentMeshDeleteAllRequest,
+                                    _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Ruling A128: delete every mesh, kept mesh, shell, fit and failure record of the piece (every state and body),
+    its images only with ``include_images`` (``garment_mesh_delete.delete_all``). No job. ``{item_id, deleted:
+    {meshes, images}, follow_up}``. Admin-only. 404 for an item that is no own-mesh clothing piece, 409 while a run
+    of the piece writes."""
+    from app.core import garment_mesh_delete
+    return _garment_delete_call(garment_mesh_delete.delete_all, character_name, item_id,
+                                include_images=body.include_images)
+
+
 @router.post("/{character_name}/garments/{item_id}/images/{step}/{view}/attempts/{attempt}/use")
 def use_character_garment_attempt(character_name: str, item_id: str, step: str, view: str, attempt: int,
                                   _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:

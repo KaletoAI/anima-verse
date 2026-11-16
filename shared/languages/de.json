@@ -6003,6 +6003,23 @@
     "The shoe part (up to {top} cm) follows the foot and the shin; the leg part above {cut} cm is fitted to its own leg and overlaps the shoe part by {overlap} cm, so no gap opens when the knee or the ankle bends. Re-fit: 0 hub jobs.": "Der Schuhteil (bis {top} cm) folgt Fuß und Schienbein; der Beinteil ab {cut} cm wird an sein eigenes Bein angepasst und überlappt den Schuhteil um {overlap} cm, damit beim Beugen von Knie oder Knöchel keine Lücke aufgeht. Neu anpassen: 0 Hub-Jobs.",
     "Only the shoe part up to {top} cm is kept; everything above it is dropped. Re-fit: 0 hub jobs.": "Nur der Schuhteil bis {top} cm bleibt; alles darüber fällt weg. Neu anpassen: 0 Hub-Jobs.",
     "Shown fit: cut at {top} cm, {n} faces dropped": "Gezeigte Anpassung: bei {top} cm abgeschnitten, {n} Flächen entfernt",
-    "Shown fit: shoe part {shoe} · leg part {leg} faces · overlap {overlap} cm": "Gezeigte Anpassung: Schuhteil {shoe} · Beinteil {leg} Flächen · Überlappung {overlap} cm"
+    "Shown fit: shoe part {shoe} · leg part {leg} faces · overlap {overlap} cm": "Gezeigte Anpassung: Schuhteil {shoe} · Beinteil {leg} Flächen · Überlappung {overlap} cm",
+    "hub jobs": "Hub-Jobs",
+    "images": "Bilder",
+    "Delete all meshes of this piece": "Alle Meshes dieses Teils löschen",
+    "Also delete the worn, piece-only and cut-out images": "Auch die Getragen-, Nur-Teil- und Ausschnitt-Bilder löschen",
+    "This kept mesh is deleted. The mesh in use and the fit stay; nothing becomes due.": "Dieses aufbewahrte Mesh wird gelöscht. Das verwendete Mesh und der Fit bleiben; nichts wird fällig.",
+    "The mesh in use is deleted; the kept meshes stay and can be used instead.": "Das verwendete Mesh wird gelöscht; die aufbewahrten Meshes bleiben und können stattdessen verwendet werden.",
+    "The fit stays served until the next fit. The mesh step becomes due.": "Der Fit wird bis zum nächsten Fit weiter ausgeliefert. Der Mesh-Schritt wird fällig.",
+    "Making it again costs": "Neu erstellen kostet",
+    "mesh and fit files": "Mesh- und Fit-Dateien",
+    "Every mesh, kept mesh, shell and fit of this piece is deleted (every state and body shape).": "Jedes Mesh, aufbewahrte Mesh, jede Hülle und jeder Fit dieses Teils wird gelöscht (jeder Zustand und jede Körperform).",
+    "The images go too.": "Die Bilder werden ebenfalls gelöscht.",
+    "The worn, piece-only and cut-out images stay.": "Die Getragen-, Nur-Teil- und Ausschnitt-Bilder bleiben.",
+    "The piece leaves the figure at its next Build until it is made again.": "Bis es neu erstellt ist, fehlt das Teil ab dem nächsten Build an der Figur.",
+    "Delete the mesh in use — the mesh step becomes due (asks first, names the hub jobs)": "Verwendetes Mesh löschen — der Mesh-Schritt wird fällig (fragt vorher, nennt die Hub-Jobs)",
+    "Delete this kept mesh — 0 hub jobs, it cannot be brought back": "Dieses aufbewahrte Mesh löschen — 0 Hub-Jobs, kann nicht wiederhergestellt werden",
+    "Delete all meshes…": "Alle Meshes löschen…",
+    "Delete every mesh, kept mesh and fit of this piece (asks first, names the hub jobs to make them again)": "Jedes Mesh, aufbewahrte Mesh und jeden Fit dieses Teils löschen (fragt vorher, nennt die Hub-Jobs zum Neuerstellen)"
   }
 }

@@ -425,7 +425,8 @@ function upToText(n: number, t: (s: string) => string): string {
 
 export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitChips, busy, onRun, feedback,
   viewRuns = null, useRuns = null, onUse, onPieceView, onCutoutOpening, meshFetchUrl = null, onMeshFetched, pieceName = '',
-  meshAllowance = null, refitOn = '', refitBlock = '', shownFit = null, onMeshUse, imageUseBusy }: {
+  meshAllowance = null, refitOn = '', refitBlock = '', shownFit = null, onMeshUse, imageUseBusy, onMeshDelete,
+  onMeshDeleteAll }: {
   garment: GarmentInfo | null
   imageSteps: ImageStepSpec[]
   stepLabels: Record<string, string>
@@ -466,6 +467,9 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   /** Ruling A58: "Use this" on kept mesh `slot` (0 hub jobs, then the fit on the CPU) — usable while a mesh job
    *  runs; the caller posts it and reloads. Absent = no button. */
   onMeshUse?: (slot: number) => void
+  /** Ruling A128: delete one Mesh-row tile (slot 0 = the mesh in use) / every mesh of the piece; the caller confirms. */
+  onMeshDelete?: (slot: number, label: string) => void
+  onMeshDeleteAll?: () => void
   /** "Use this" on an image attempt: busy also while a run of the piece holds its run lock (a new image would drop
    *  the mesh a running mesh job makes). Defaults to `busy`. */
   imageUseBusy?: boolean
@@ -761,7 +765,7 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
         ) : null}
         <GarmentMeshTiles view={mesh?.view} builtAt={mesh?.created_at ?? null} pieceName={pieceName}
           userAccepted={!!mesh?.user_accepted} onUse={onMeshUse} useDisabled={busy || !garment}
-          allowance={meshAllowance} />
+          allowance={meshAllowance} onDelete={onMeshDelete} onDeleteAll={onMeshDeleteAll} />
       </div>
 
       <StepLabel garment={garment} step="fit" label={stepLabels.fit || 'Fit'} help={STEP_HELP.fit} />

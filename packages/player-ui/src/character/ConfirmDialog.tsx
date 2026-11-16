@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../I18nProvider'
 
@@ -21,6 +22,7 @@ export function ConfirmDialog({
   danger,
   onConfirm,
   onClose,
+  children,
 }: {
   open: boolean
   title: string
@@ -32,6 +34,8 @@ export function ConfirmDialog({
   danger?: boolean
   onConfirm: () => void
   onClose: () => void
+  /** Optional controls under the message (e.g. what else to delete). */
+  children?: ReactNode
 }) {
   const { t } = useI18n()
   const cancelRef = useRef<HTMLButtonElement | null>(null)
@@ -75,7 +79,8 @@ export function ConfirmDialog({
           </button>
         </div>
         <div className="ga-modal-body">
-          <div className="ga-hint">{message}</div>
+          <div className="ga-hint" style={{ whiteSpace: 'pre-line' }}>{message}</div>
+          {children}
         </div>
         <div
           className="ga-modal-footer"
