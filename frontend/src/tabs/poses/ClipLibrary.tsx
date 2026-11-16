@@ -1,6 +1,7 @@
 /**
- * ClipLibrary — what is actually INSTALLED in the shared animation libraries,
- * read as one matrix: kind × set × library.
+ * ClipLibrary — what is actually INSTALLED in the shared animation libraries:
+ * a narrow list of kinds (lamp first, the sets as letters n/f/m/a, used-by
+ * count) and the selected kind's edit view (Ruling A110 phase 4).
  *
  * The other three surfaces of the Poses tab look at clips from the outside —
  * the catalog entries name a kind, the CMU browser and the inbox produce one.
@@ -29,12 +30,16 @@
  * and offers "Replace", which repeats the same call with `overwrite` and lets
  * the incoming file take the place of the one lying there.
  *
- * Under the preview sit the ORIENTATION dials: turn, tilt and roll — and for
- * a pair the PARTNER B offset (forward / side / up), baked the same way.
- * "Apply orientation" BAKES these angles into the file. Height corrections
- * and whole-clip horizontal shifts are saved in the sidecar, never in the FBX.
- * The import's own dial is gone by then and most mocap sources with it, so
- * this is the only way a clip that lies across the bed gets straightened.
+ * The edit view has inner sub-tabs — Places (the place preview), Clip (the
+ * single-clip viewer with its surface box), Files (loop, repeats, roles,
+ * rename/move/delete per file) and Used by — and BESIDE the viewer the
+ * ALIGNMENT column: turn, tilt, roll, the whole-clip shift, the surface height
+ * and a pair's partner B / a group's role offsets. Every drag moves the
+ * figures live. ONE Save writes what is dirty — angles and role offsets BAKED
+ * into the file (a Blender run), shift and heights into the sidecar, the
+ * green place check (D3) — and says so, finale clips included, before the
+ * click. The lamp per clip: green = checked on a place, yellow = sidecar
+ * without a check, grey = no sidecar; "Built <time>" is the file's mtime.
  *
  *   PATCH  /assets/animation-clips/{library}/{rel}     {kind?, set?, library?, loop?, loop_count?, overwrite?}
  *   POST   /assets/animation-clips/{library}/{rel}/orient  {yaw_deg?, tilt_deg?, roll_deg?, partner_shift_cm?, role_shift_cm?, shift_cm?}
@@ -53,6 +58,7 @@ import { bridgeKinds, orderSets } from './clipSets'
 import type { ApiClipRow as BaseApiClipRow, ClipListing } from './clipSets'
 import { rootMotionSummary } from './rootMotion'
 import { generatedBadge, isStudioClip } from './generatedClip'
+import { clipLamp, finaleKinds as finaleKindsOf, kindLamp, saveSteps, setLetter, type Lamp } from './clipStatus'
 
 interface ApiClipRow extends BaseApiClipRow {
   generator?: string
@@ -208,17 +214,25 @@ interface PoseRef {
   /** read-only in the place preview (D2) */
   yaw_offset?: number
   group?: string
+  /** the pose's own finale clip kind, else the one a package derives — the finales a save edits too */
+  finale_animation?: string
+  finale_auto?: string
 }
 
-/** The orientation dials: one grid, as many columns as the panel holds. */
-const DIAL_GRID = {
-  display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))',
-  gap: '6px 12px', alignItems: 'end',
-} as const
-const DIAL_HEAD = { fontSize: 12, fontWeight: 600, opacity: 0.8, marginTop: 4 } as const
-const DIAL = {
-  sliderWidth: 'auto', sliderStyle: { flex: 1, minWidth: 70 }, style: { display: 'flex', flex: 1, minWidth: 0 },
-} as const
+/** One alignment dial row in the column beside the viewer: label | track | number. */
+const DIAL = { sliderWidth: 'auto', sliderStyle: { flex: 1, minWidth: 40 }, inputWidth: 54,
+  style: { display: 'flex', width: '100%', fontSize: 12 } } as const
+const DIAL_LABEL = { width: 74, flex: '0 0 74px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } as const
+const FILTER = { fontSize: 12, padding: '2px 4px', minWidth: 0 } as const
+const COL_HEAD = { fontSize: 12, fontWeight: 600, opacity: 0.85, margin: '6px 0 2px' } as const
+
+const LAMP_COLOR: Record<Lamp, string> = { green: '#3fb950', yellow: '#d29922', grey: '#6e7681' }
+function LampDot({ lamp, title }: { lamp: Lamp; title?: string }) {
+  return <span title={title} data-lamp={lamp} style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 5,
+    flex: '0 0 9px', background: LAMP_COLOR[lamp] }} />
+}
+
+type InnerTab = 'places' | 'clip' | 'files' | 'used'
 
 export function ClipLibrary({
   listing,
@@ -252,6 +266,7 @@ export function ClipLibrary({
   const [onlyUnused, setOnlyUnused] = useState(false)
   const [selected, setSelected] = useState('')
   const [previewSet, setPreviewSet] = useState('')
+  const [innerTab, setInnerTab] = useState<InnerTab>('places')
   // Which clip has an action open, and the value being typed for it
   const [action, setAction] = useState<{ rel: string; type: ActionKind } | null>(null)
   const [value, setValue] = useState('')
@@ -417,7 +432,7 @@ export function ClipLibrary({
   // Opened from a pose: every filter off so the row is in the list, the kind
   // selected and scrolled into view — once per `seq`, after the listing is in.
   const focused = useRef(0)
-  const tableRef = useRef<HTMLTableElement | null>(null)
+  const tableRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     if (!focus?.kind || focus.seq === focused.current || !clips.length) return
     focused.current = focus.seq
@@ -428,7 +443,7 @@ export function ClipLibrary({
     setOnlyUnused(false)
     pick(focus.kind)
     requestAnimationFrame(() => {
-      tableRef.current?.querySelector(`tr[data-kind="${CSS.escape(focus.kind)}"]`)
+      tableRef.current?.querySelector(`[data-kind="${CSS.escape(focus.kind)}"]`)
         ?.scrollIntoView({ block: 'center' })
     })
   }, [clips.length, focus, pick])
@@ -481,20 +496,59 @@ export function ClipLibrary({
   const heightLocked = orientBusy || heightBusy
   const orientLocked = heightLocked || orientTarget?.has_sidecar === false
 
-  const applyOrientation = useCallback(async () => {
-    if (!orientTarget || orientBusy || !orientDirty) return
+  // What a save would bake: angles and per-role offsets go through Blender; the whole-clip shift and the
+  // surface heights are sidecar values (no Blender), the check is a sidecar mark.
+  const bakeDirty = !!(yawDeg || tiltDeg || rollDeg) || shiftDirty || roleShiftDirty
+  /** The finale clips the server edits along with this one (`finale_kinds_of` + same set/library): the
+   *  finale of every pose that plays the kind, when a file of it lies beside this clip. */
+  const finaleKinds = useMemo(() => (row && orientTarget
+    ? finaleKindsOf(poses, row.kind, { set: orientTarget.set, library: libraryOf(orientTarget) },
+      clips.map((c) => ({ kind: c.kind, set: c.set, library: libraryOf(c) })))
+    : []), [clips, orientTarget, poses, row])
+  // A green check that is already stored (same prop and places) is not offered again on its own.
+  const checkStored = !!(placeCheck && savedCheck && savedCheck.prop === placeCheck.prop
+    && savedCheck.place === placeCheck.place)
+  const checkOnly = !orientDirty && !heightDirty && !!placeCheck && !checkStored
+  const canSave = !!orientTarget && (orientDirty || heightDirty || checkOnly) && !heightLocked
+    && !(orientDirty && orientLocked)
+  /** The consequence of Save, shown BEFORE the click (checklist point 2). */
+  const saveConsequence = useMemo(() => saveSteps({
+    bake: bakeDirty, shift: clipShiftDirty, heights: heightDirty, finales: finaleKinds.length,
+    greenCheck: !!placeCheck && (orientDirty || heightDirty || !checkStored), savedCheck: !!savedCheck,
+  }).map((step) => ({
+    bake: t('turn/tilt/roll and role offsets are baked into the clip file (one Blender run, no hub jobs)'),
+    shift: t('the side/forward shift goes to the sidecar'),
+    heights: t('surface heights go to the sidecar and apply in game'),
+    finales: t('the finale clips change the same way: {kinds}').replace('{kinds}', finaleKinds.join(', ')),
+    check: t('the green place check is stored'),
+    'clear-check': t('the stored place check is cleared'),
+  })[step]), [bakeDirty, checkStored, clipShiftDirty, finaleKinds, heightDirty, orientDirty, placeCheck, savedCheck, t])
+  /** THE one save path: bake/shift (orient), heights (PATCH) and the place check, in that order. */
+  const save = useCallback(async () => {
+    if (!orientTarget || !canSave) return
     setOrientBusy(true)
+    setHeightBusy(heightDirty)
     setOrientError('')
+    const touched = new Set<string>()
     try {
-      const res = await apiPost<{ seconds?: number; clips?: { kind: string }[] }>(`${clipPath(orientTarget)}/orient`, {
-        yaw_deg: yawDeg, tilt_deg: tiltDeg, roll_deg: rollDeg,
-        ...(shiftDirty ? { partner_shift_cm: partnerShift } : {}),
-        ...(roleShiftDirty ? { role_shift_cm: movedRoles } : {}),
-        ...(clipShiftDirty ? { shift_cm: clipShift } : {}),
-        ...(placeCheck ? { checked: placeCheck } : {}),
-      })
-      setOrientSeconds(typeof res.seconds === 'number' ? res.seconds : null)
-      setFinalesTouched(otherKinds(res.clips, orientTarget.kind))
+      if (orientDirty) {
+        const res = await apiPost<{ seconds?: number; clips?: { kind: string }[] }>(`${clipPath(orientTarget)}/orient`, {
+          yaw_deg: yawDeg, tilt_deg: tiltDeg, roll_deg: rollDeg,
+          ...(shiftDirty ? { partner_shift_cm: partnerShift } : {}),
+          ...(roleShiftDirty ? { role_shift_cm: movedRoles } : {}),
+          ...(clipShiftDirty ? { shift_cm: clipShift } : {}),
+          ...(placeCheck ? { checked: placeCheck } : {}),
+        })
+        setOrientSeconds(typeof res.seconds === 'number' ? res.seconds : null)
+        otherKinds(res.clips, orientTarget.kind).forEach((k) => touched.add(k))
+      }
+      if (heightDirty) {
+        const res = await apiPatch<{ clips?: { kind: string }[] }>(clipPath(orientTarget), { height_offsets_cm: heightDraft })
+        otherKinds(res.clips, orientTarget.kind).forEach((k) => touched.add(k))
+      }
+      // Heights are not a bake, and a check with nothing dialled is stored on its own (D3).
+      if (!orientDirty && placeCheck) await apiPost(`${clipPath(orientTarget)}/orient`, { checked: placeCheck })
+      setFinalesTouched(Array.from(touched))
       // The new saved values first, THEN the draft back to zero: in between the figures would jump.
       invalidateAnimationPreviewClips()
       await onReload()
@@ -504,50 +558,18 @@ export function ClipLibrary({
       setPartnerShift([0, 0, 0])
       setRoleShift({})
       setClipShift([0, 0])
+      setHeightDraft({})
       // The file keeps its URL, so the preview has to be rebuilt AND the
       // clip re-fetched — `seq` does both (component key + cache buster).
-      setSeq((n) => n + 1)
+      if (orientDirty || heightDirty) setSeq((n) => n + 1)
     } catch (e) {
       setOrientError((e as Error).message)
     } finally {
       setOrientBusy(false)
-    }
-  }, [clipShift, clipShiftDirty, movedRoles, onReload, orientBusy, orientDirty, orientTarget, partnerShift, placeCheck, roleShiftDirty, rollDeg, shiftDirty, tiltDeg, yawDeg])
-
-  const saveHeights = useCallback(async () => {
-    if (!orientTarget || heightBusy || !heightDirty) return
-    setHeightBusy(true)
-    setOrientError('')
-    try {
-      const res = await apiPatch<{ clips?: { kind: string }[] }>(clipPath(orientTarget), { height_offsets_cm: heightDraft })
-      setFinalesTouched(otherKinds(res.clips, orientTarget.kind))
-      // An all-green place check goes with the save (D3); heights are not a bake, so it is stored on its own.
-      if (placeCheck) await apiPost(`${clipPath(orientTarget)}/orient`, { checked: placeCheck })
-      invalidateAnimationPreviewClips()
-      await onReload()
-      setHeightDraft({})
-      setSeq((n) => n + 1)
-    } catch (e) {
-      setOrientError((e as Error).message)
-    } finally {
       setHeightBusy(false)
     }
-  }, [heightBusy, heightDirty, heightDraft, onReload, orientTarget, placeCheck])
-
-  /** Store the check alone — nothing dialled, every place already green. */
-  const saveCheck = useCallback(async () => {
-    if (!orientTarget || !placeCheck || orientBusy) return
-    setOrientBusy(true)
-    setOrientError('')
-    try {
-      await apiPost(`${clipPath(orientTarget)}/orient`, { checked: placeCheck })
-      await onReload()
-    } catch (e) {
-      setOrientError((e as Error).message)
-    } finally {
-      setOrientBusy(false)
-    }
-  }, [onReload, orientBusy, orientTarget, placeCheck])
+  }, [canSave, clipShift, clipShiftDirty, heightDirty, heightDraft, movedRoles, onReload, orientDirty, orientTarget,
+    partnerShift, placeCheck, roleShiftDirty, rollDeg, shiftDirty, tiltDeg, yawDeg])
 
   /** Saved angles and calibration, including every earlier apply. */
   const savedNote = useMemo(() => {
@@ -623,40 +645,44 @@ export function ClipLibrary({
       </>
     ) : null
 
-  const cellNode = (r: Row, col: string) => {
+  /** The sets a kind has files in, as letters (n f m a …) — one mark per set instead of a column each;
+   *  the libraries and the variant count sit in the mouse-over. */
+  const setMarks = (r: Row) => columns.filter((col) => r.cells[col]?.all.length).map((col) => {
     const cell = r.cells[col]
-    if (!cell || !cell.all.length) {
-      return <span style={{ opacity: 0.25 }}>·</span>
-    }
+    const libs = [
+      cell.free.length ? t('free') : '',
+      cell.licensed.length ? t('licensed') : '',
+      cell.all.some(isStudioClip) ? t('studio') : '',
+      cell.all.map((c) => generatedBadge(c)).find(Boolean) || '',
+    ].filter(Boolean)
     const n = variants(cell.all)
     return (
-      <span style={{ display: 'inline-flex', gap: 3, alignItems: 'center', flexWrap: 'wrap' }}>
-        {cell.free.length ? (
-          <span className="ga-tag ga-tag-tier" title={t('free library (tracked in git)')}>
-            {t('free')}
-          </span>
-        ) : null}
-        {cell.licensed.length ? (
-          <span className="ga-tag ga-tag-tier" title={t('licensed library (local only)')}>
-            {t('licensed')}
-          </span>
-        ) : null}
-        {cell.all.some(isStudioClip) ? (
-          <span className="ga-tag ga-tag-tier" title={t('made in the animation studio (written as code)')}>
-            {t('studio')}
-          </span>
-        ) : null}
-        {(() => {
-          const generated = cell.all.find((clip) => generatedBadge(clip))
-          return generated ? (
-            <span className="ga-tag ga-tag-tier" title={generated.license}>
-              {generatedBadge(generated)}
-            </span>
-          ) : null
-        })()}
-        {n > 1 ? <span style={{ opacity: 0.7 }}>×{n}</span> : null}
+      <span key={col || 'neutral'} className={`ga-tag${cell.licensed.length ? ' ga-tag-tier' : ''}`}
+        style={{ padding: '0 4px', fontSize: 11, cursor: 'pointer' }}
+        title={`${col || t('neutral')}: ${libs.join(', ')}${n > 1 ? ` ×${n}` : ''}`}
+        onClick={(e) => { e.stopPropagation(); pick(r.kind, col) }}>
+        {setLetter(col)}{n > 1 ? <sup>{n}</sup> : null}
       </span>
     )
+  })
+
+  /** "Built <time>" of a clip file — when the import or the last bake wrote it. */
+  const builtText = (c: ApiClipRow | null | undefined) => (c?.built_s
+    ? t('Built {time}').replace('{time}', new Date(c.built_s * 1000).toLocaleString())
+    : '')
+  /** The lamp's reason in plain words. */
+  const lampText = (c: ApiClipRow) => {
+    const lamp = clipLamp(c)
+    const ck = c.orientation?.checked
+    if (lamp === 'green' && ck) {
+      return t('Orientation checked {at} on {prop} / {place}: {dyaw}°, {dpos} cm')
+        .replace('{at}', new Date(ck.at).toLocaleString())
+        .replace('{prop}', ck.prop).replace('{place}', ck.place)
+        .replace('{dyaw}', String(ck.dyaw)).replace('{dpos}', String(ck.dpos))
+    }
+    return lamp === 'grey'
+      ? t('No sidecar: orientation, loop and heights cannot be stored — import the clip again.')
+      : t('Orientation not checked on a place yet — Save while every place reads green.')
   }
 
   const clipNode = (clip: ApiClipRow) => {
@@ -687,9 +713,11 @@ export function ClipLibrary({
       clip.has_sidecar === false ? t('no sidecar') : '',
     ].filter(Boolean)
     return (
-      <li key={rel} style={{ padding: '6px 0', borderBottom: '1px solid var(--border, #30363d)' }}>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'baseline', flexWrap: 'wrap' }}>
+      <li key={rel} style={{ fontSize: 12, padding: '6px 0', borderBottom: '1px solid var(--border, #30363d)' }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <LampDot lamp={clipLamp(clip)} title={lampText(clip)} />
           <code style={{ wordBreak: 'break-all' }}>{clip.filename || relOf(clip)}</code>
+          <span className="ga-form-hint" style={{ margin: 0 }}>{builtText(clip)}</span>
           <span className={`ga-tag${lib === 'licensed' ? ' ga-tag-tier' : ''}`}>{t(lib)}</span>
           {generatedBadge(clip) ? (
             <span className="ga-tag ga-tag-tier" title={clip.license}>{generatedBadge(clip)}</span>
@@ -899,25 +927,34 @@ export function ClipLibrary({
     )
   }
 
+  const dialLabel = (text: string) => <span style={DIAL_LABEL} title={text}>{text}</span>
+  const usedCount = row?.used.length ?? 0
+  const fileCount = row ? row.clips.length : 0
+
   return (
     <div
       style={{
         display: 'grid',
-        // the list 30 % narrower than it was (1.3fr), the settings wider
-        gridTemplateColumns: 'minmax(280px, 0.9fr) minmax(380px, 1.4fr)',
-        gap: 14,
+        gridTemplateColumns: '280px minmax(0, 1fr)',
+        gap: 12,
         alignItems: 'stretch',
         flex: 1,
         minHeight: 0,
+        fontSize: 13,
+        // the Help / Translate side tabs sit over the right edge of the page
+        paddingRight: 34,
       }}
     >
-      {/* ── the matrix ── */}
-      <section style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0, minHeight: 0 }}>
-        <p className="ga-sched-muted" style={{ margin: 0 }}>
-          {t('Every installed clip by kind, set and library. A licensed file hides a free one of the same name: only the licensed one is listed and only it is played. A row without any clip is named by a pose but backed by no file — figures fall back to idle there.')}
-        </p>
-
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+      {/* ── the list: one row per kind, lamp first, sets as letters ── */}
+      <section style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0, minHeight: 0 }}>
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          <input
+            className="ga-input"
+            style={{ flex: 1, minWidth: 0 }}
+            placeholder={t('Search kind…')}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
           <button
             type="button"
             className="ga-btn ga-btn-sm"
@@ -927,448 +964,352 @@ export function ClipLibrary({
           >
             {t('Refresh')}
           </button>
-          <input
-            className="ga-input"
-            style={{ maxWidth: 180 }}
-            placeholder={t('Search kind…')}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          <select
-            className="ga-input"
-            style={{ maxWidth: 140 }}
-            value={libFilter}
-            onChange={(e) => setLibFilter(e.target.value)}
-          >
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 4 }}>
+          <select className="ga-input" style={FILTER} value={libFilter} onChange={(e) => setLibFilter(e.target.value)}
+            title={t('Library')}>
             <option value="">{t('all libraries')}</option>
             <option value="free">{t('free')}</option>
             <option value="licensed">{t('licensed')}</option>
             <option value="studio">{t('studio only')}</option>
           </select>
-          <select
-            className="ga-input"
-            style={{ maxWidth: 140 }}
-            value={setFilter}
-            onChange={(e) => setSetFilter(e.target.value)}
-          >
+          <select className="ga-input" style={FILTER} value={setFilter} onChange={(e) => setSetFilter(e.target.value)}
+            title={t('Set')}>
             <option value="*">{t('all sets')}</option>
             {columns.map((s) => (
               <option key={s || 'neutral'} value={s}>
-                {s || t('neutral')}
+                {`${setLetter(s)} = ${s || t('neutral')}`}
               </option>
             ))}
           </select>
-          <label style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: '0.8em' }}>
-            <input
-              type="checkbox"
-              checked={onlyUsed}
-              onChange={(e) => {
-                setOnlyUsed(e.target.checked)
-                if (e.target.checked) setOnlyUnused(false)
-              }}
-            />
-            <span>{t('only used')}</span>
-          </label>
-          <label style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: '0.8em' }}>
-            <input
-              type="checkbox"
-              checked={onlyUnused}
-              onChange={(e) => {
-                setOnlyUnused(e.target.checked)
-                if (e.target.checked) setOnlyUsed(false)
-              }}
-            />
-            <span>{t('only unused')}</span>
-          </label>
+          <select className="ga-input" style={FILTER} value={onlyUsed ? 'used' : onlyUnused ? 'unused' : ''}
+            onChange={(e) => { setOnlyUsed(e.target.value === 'used'); setOnlyUnused(e.target.value === 'unused') }}>
+            <option value="">{t('used or not')}</option>
+            <option value="used">{t('only used')}</option>
+            <option value="unused">{t('only unused')}</option>
+          </select>
         </div>
-
-        <div style={{ overflow: 'auto', minHeight: 0, flex: 1 }}>
-          <table className="ga-sched-table" ref={tableRef}>
-            <thead>
-              <tr>
-                <th>{t('Clip kind')}</th>
-                {columns.map((s) => (
-                  <th key={s || 'neutral'}>{s || t('neutral')}</th>
-                ))}
-                <th>{t('Used by')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {!shown.length ? (
-                <tr>
-                  <td colSpan={columns.length + 2}>{t('No clips')}</td>
-                </tr>
+        <div className="ga-form-hint" style={{ margin: 0 }}
+          title={t('Every installed clip by kind, set and library. A licensed file hides a free one of the same name: only the licensed one is listed and only it is played. A row without any clip is named by a pose but backed by no file — figures fall back to idle there.')}>
+          {`${shown.length} ${t('kinds')} · ${t('lamp: green = checked on a place, yellow = not checked, grey = no sidecar')}`}
+        </div>
+        <div ref={tableRef} data-testid="clip-list"
+          style={{ overflow: 'auto', minHeight: 0, flex: 1, borderTop: '1px solid var(--border, #30363d)' }}>
+          {!shown.length ? <div className="ga-placeholder">{t('No clips')}</div> : null}
+          {shown.map((r) => (
+            <div
+              key={r.kind}
+              data-kind={r.kind}
+              onClick={() => pick(r.kind)}
+              style={{
+                display: 'flex', gap: 6, alignItems: 'center', padding: '3px 4px', cursor: 'pointer',
+                borderBottom: '1px solid var(--border, #21262d)',
+                background: r.kind === selected ? 'var(--bg-secondary, #21262d)' : undefined,
+              }}
+            >
+              {r.missing
+                ? <LampDot lamp="grey" title={t('missing')} />
+                : <LampDot lamp={kindLamp(r.clips)} title={lampText(r.clips.find((c) => clipLamp(c) !== 'green' && (c.role || '') !== 'b') || r.clips[0])} />}
+              <code title={r.kind} style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                fontSize: 12, color: r.missing ? 'var(--warn, #d29922)' : undefined }}>
+                {r.kind}
+              </code>
+              {r.roles > 2 ? (
+                <span className="ga-tag" style={{ padding: '0 4px', fontSize: 11 }} title={t('Group animation — one figure per role')}>
+                  {r.roles}
+                </span>
+              ) : r.pair ? (
+                <span className="ga-tag" style={{ padding: '0 4px', fontSize: 11 }} title={t('Pair animation — needs a partner')}>
+                  {t('pair')}
+                </span>
               ) : null}
-              {shown.map((r) => (
-                <tr
-                  key={r.kind}
-                  data-kind={r.kind}
-                  onClick={() => pick(r.kind)}
-                  style={{
-                    cursor: 'pointer',
-                    background: r.kind === selected ? 'var(--bg-secondary, #21262d)' : undefined,
-                  }}
-                >
-                  <td>
-                    <code style={{ color: r.missing ? 'var(--warn, #d29922)' : undefined }}>
-                      {r.kind}
-                    </code>
-                    {r.roles > 2 ? (
-                      <span className="ga-tag" style={{ marginLeft: 4 }}
-                        title={t('Group animation — one figure per role')}>
-                        {t('group')} {r.roles}
-                      </span>
-                    ) : r.pair ? (
-                      <span className="ga-tag" style={{ marginLeft: 4 }} title={t('Pair animation — needs a partner')}>
-                        {t('pair')}
-                      </span>
-                    ) : null}
-                    {r.missing ? (
-                      <span className="ga-tag ga-tag-missing" style={{ marginLeft: 4 }}>
-                        {t('missing')}
-                      </span>
-                    ) : null}
-                  </td>
-                  {columns.map((s) => (
-                    <td
-                      key={s || 'neutral'}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        pick(r.kind, s)
-                      }}
-                    >
-                      {cellNode(r, s)}
-                    </td>
-                  ))}
-                  <td title={r.used.join(', ')}>{r.used.length || ''}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+              {r.missing ? (
+                <span className="ga-tag ga-tag-missing" style={{ padding: '0 4px', fontSize: 11 }}>{t('missing')}</span>
+              ) : null}
+              <span style={{ display: 'inline-flex', gap: 2 }}>{setMarks(r)}</span>
+              <span style={{ width: 18, textAlign: 'right', opacity: 0.75, fontSize: 11 }}
+                title={r.used.length ? `${t('Used by')}: ${r.used.join(', ')}` : t('No pose entry plays this kind.')}>
+                {r.used.length || ''}
+              </span>
+            </div>
+          ))}
         </div>
       </section>
 
-      {/* ── the selected kind ── */}
+      {/* ── the selected kind: header, inner sub-tabs, the alignment column beside the viewer ── */}
       <section style={{ minWidth: 0, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
         {!row ? (
           <div className="ga-placeholder">{t('Pick a kind to see its files.')}</div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div>
-              <h3 style={{ margin: '0 0 2px' }}>{row.kind}</h3>
-              <div className="ga-hint">
-                {row.used.length
-                  ? `${t('Used by')}: ${row.used.join(', ')}`
-                  : t('No pose entry plays this kind.')}
-              </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }} data-testid="clip-head">
+              <strong style={{ fontSize: 15 }}>{row.kind}</strong>
+              {row.roles > 2 ? <span className="ga-tag">{t('group')} {row.roles}</span>
+                : row.pair ? <span className="ga-tag">{t('pair')}</span> : null}
+              {rowSets.map((s) => (
+                <button
+                  key={s || 'neutral'}
+                  type="button"
+                  className={`ga-btn ga-btn-sm${previewSet === s ? ' ga-btn-primary' : ''}`}
+                  disabled={orientBusy || heightBusy}
+                  title={t('Set the viewer and the dials act on')}
+                  onClick={() => { resetDials(); setPreviewSet(s) }}
+                >
+                  {s || t('neutral')}
+                </button>
+              ))}
+              {orientTarget ? (
+                <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center', fontSize: 12 }} data-testid="orientation-check">
+                  <LampDot lamp={clipLamp(orientTarget)} />
+                  <span>{lampText(orientTarget)}</span>
+                </span>
+              ) : null}
+              <span style={{ marginLeft: 'auto', fontSize: 12, opacity: 0.8 }} data-testid="clip-built">
+                {builtText(orientTarget)}
+              </span>
             </div>
 
             {error ? (
-              <div className="ga-form-hint" style={{ color: 'var(--danger, #f85149)' }}>
-                {error}
-              </div>
+              <div className="ga-form-hint" style={{ color: 'var(--danger, #f85149)', margin: 0 }}>{error}</div>
             ) : null}
+
+            <nav className="ga-subtabs" style={{ display: 'flex', gap: 4 }}>
+              {([
+                ['places', t('Places')],
+                ['clip', t('Clip')],
+                ['files', `${t('Files')} (${fileCount})`],
+                ['used', `${t('Used by')} (${usedCount})`],
+              ] as const).map(([id, label]) => (
+                <button key={id} type="button" data-testid={`inner-tab-${id}`}
+                  className={`ga-btn ga-btn-sm${innerTab === id ? ' ga-btn-primary' : ''}`}
+                  aria-pressed={innerTab === id}
+                  onClick={() => { setInnerTab(id); if (id !== 'places') setPlaceReadout(null) }}>
+                  {label}
+                </button>
+              ))}
+            </nav>
 
             {row.missing ? (
               <div className="ga-form-hint" style={{ color: 'var(--warn, #d29922)' }}>
                 {t('No file for this kind in any set — import one, or point the poses above at another kind.')}
               </div>
-            ) : (
-              <>
-                {rowSets.length > 1 ? (
-                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            ) : null}
+
+            <div style={{ display: 'grid', gridTemplateColumns: orientTarget ? 'minmax(0, 1fr) 290px' : 'minmax(0, 1fr)', gap: 10, alignItems: 'start' }}>
+              <div style={{ minWidth: 0 }}>
+                {innerTab === 'places' && !row.missing ? (
+                  /* A110 phase 2: the clip on a prop's places, through the shared per-figure runtime. */
+                  <PlacePreview kind={row.kind} set={previewSet} roles={row.roles ?? 0} clips={row.clips}
+                    draftRef={draftRef} draftSeq={alignmentDraft} bust={seq} height={600}
+                    poses={poses.filter((p) => (p.animation || '').trim() === row.kind)}
+                    onOpenPose={onOpenPose} onReadout={setPlaceReadout} />
+                ) : null}
+                {innerTab === 'clip' && !row.missing ? (
+                  <ClipPreview
+                    key={`${row.kind}:${previewSet}:${seq}`}
+                    kind={row.kind}
+                    set={previewSet}
+                    height={600}
+                    importYaw={yawDeg}
+                    importTilt={tiltDeg}
+                    importRoll={rollDeg}
+                    importHeightM={heightCm / 100}
+                    shiftCm={clipShift}
+                    roleShiftM={alignmentDraft.roleShiftM && Object.keys(alignmentDraft.roleShiftM).length
+                      ? alignmentDraft.roleShiftM as Record<string, [number, number, number]> : undefined}
+                    footprint={footprint}
+                    rootDrop={footprint ? (rootDropOf?.(footprint) ?? 0) : 0}
+                    bust={seq}
+                  />
+                ) : null}
+                {innerTab === 'files' ? (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', gap: '0 14px' }}>
                     {rowSets.map((s) => (
-                      <button
-                        key={s || 'neutral'}
-                        type="button"
-                        className={`ga-btn ga-btn-sm${previewSet === s ? ' ga-btn-primary' : ''}`}
-                        disabled={orientBusy || heightBusy}
-                        onClick={() => { resetDials(); setPreviewSet(s) }}
-                      >
-                        {s || t('neutral')}
-                      </button>
+                      <div key={s || 'neutral'}>
+                        <div style={COL_HEAD}>{s || t('neutral')}</div>
+                        <ul className="ga-list" style={{ minWidth: 0 }}>
+                          {row.clips.filter((c) => (c.set || '') === s).map(clipNode)}
+                        </ul>
+                      </div>
                     ))}
                   </div>
                 ) : null}
-                <ClipPreview
-                  key={`${row.kind}:${previewSet}:${seq}`}
-                  kind={row.kind}
-                  set={previewSet}
-                  height={280}
-                  importYaw={yawDeg}
-                  importTilt={tiltDeg}
-                  importRoll={rollDeg}
-                  importHeightM={heightCm / 100}
-                  shiftCm={clipShift}
-                  roleShiftM={isPairTarget
-                    ? { b: [partnerShift[0] / 100, partnerShift[1] / 100, partnerShift[2] / 100] }
-                    : isGroupTarget
-                      ? Object.fromEntries(Object.entries(roleShift).map(([r, v]) =>
-                        [r, [v[0] / 100, v[1] / 100, v[2] / 100] as [number, number, number]]))
-                      : undefined}
-                  footprint={footprint}
-                  rootDrop={footprint ? (rootDropOf?.(footprint) ?? 0) : 0}
-                  bust={seq}
-                />
-                {/* A110 phase 2: the clip on a prop's places, through the shared per-figure runtime. */}
-                <PlacePreview kind={row.kind} set={previewSet} roles={row.roles ?? 0} clips={row.clips}
-                  draftRef={draftRef} draftSeq={alignmentDraft} bust={seq}
-                  poses={poses.filter((p) => (p.animation || '').trim() === row.kind)}
-                  onOpenPose={onOpenPose} onReadout={setPlaceReadout} />
-
-                {/* ── the orientation dials ── */}
-                {orientTarget ? (
-                  <div
-                    style={{
-                      border: '1px solid var(--border, #30363d)',
-                      borderRadius: 6,
-                      padding: '8px 10px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 6,
-                    }}
-                    title={orientTarget.has_sidecar === false
-                      ? t('Without a sidecar there is nowhere to store the flag — import the clip again.')
-                      : undefined}
-                  >
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
-                      <strong>{t('Orientation')}</strong>
-                      <span className="ga-hint">
-                        {t('Apply orientation writes angles into the clip file and saves horizontal shifts separately. Surface heights are saved separately and also apply in game. Both halves of a pair stay together.')}
-                      </span>
-                    </div>
-                    <div style={DIAL_HEAD}>{t('Rotation')}</div>
-                    <div style={DIAL_GRID}>
-                      <div style={{ display: 'flex', gap: 4, alignItems: 'flex-end' }}>
-                        <SliderInput
-                          label={t('Turn the clip')}
-                          unit="°"
-                          title={t('Degrees the clip turns about the vertical — the import dial, applied after the fact. A lying clip is aimed at the bed with it.')}
-                          min={-180}
-                          max={180}
-                          step={5}
-                          fineStep={1}
-                          value={yawDeg}
-                          onChange={setYawDeg}
-                          disabled={orientLocked}
-                          {...DIAL}
-                        />
-                        <button type="button" className="ga-btn ga-btn-sm" disabled={orientLocked}
-                          onClick={() => setYawDeg((v) => ((v - 90 + 540) % 360) - 180)}>−90°</button>
-                        <button type="button" className="ga-btn ga-btn-sm" disabled={orientLocked}
-                          onClick={() => setYawDeg((v) => ((v + 90 + 540) % 360) - 180)}>+90°</button>
-                      </div>
-                      <SliderInput
-                        label={t('Tilt')}
-                        unit="°"
-                        title={t('Degrees the clip tips forward — a standing figure bows, a lying one rolls onto its face. Positive tips the head towards the clip’s forward axis.')}
-                        min={-180}
-                        max={180}
-                        step={5}
-                        fineStep={1}
-                        value={tiltDeg}
-                        onChange={setTiltDeg}
-                        disabled={orientLocked}
-                        {...DIAL}
-                      />
-                      <SliderInput
-                        label={t('Roll')}
-                        unit="°"
-                        title={t('Degrees the clip tips sideways. Positive tips the figure to its own right.')}
-                        min={-180}
-                        max={180}
-                        step={5}
-                        fineStep={1}
-                        value={rollDeg}
-                        onChange={setRollDeg}
-                        disabled={orientLocked}
-                        {...DIAL}
-                      />
-                    </div>
-                    <div style={DIAL_HEAD}>{t('Position')}</div>
-                    <div style={DIAL_GRID}>
-                      {([['Shift sideways', 0], ['Shift forward', 1]] as const).map(([label, axis]) => (
-                        <SliderInput
-                          key={label}
-                          label={t(label)}
-                          unit="cm"
-                          title={t('Moves the whole clip, including both pair halves. Positive sideways is the clip’s left (+X); positive forward is +Z. Applied horizontally at the place’s yaw, independently of turn, tilt and roll.')}
-                          min={-200}
-                          max={200}
-                          step={5}
-                          fineStep={1}
-                          value={clipShift[axis]}
-                          onChange={(cm) => setClipShift((prev) => axis === 0 ? [cm, prev[1]] : [prev[0], cm])}
-                          disabled={orientLocked}
-                          {...DIAL}
-                        />
-                      ))}
-                      <SliderInput
-                        label={t('Surface height correction')}
-                        unit="cm"
-                        title={t('Absolute height correction for the selected surface only. Other surface types keep their own values.')}
-                        min={-50}
-                        max={50}
-                        step={1}
-                        value={heightCm}
-                        onChange={(cm) => setHeightDraft((prev) => ({ ...prev, [heightGroup]: cm }))}
-                        disabled={heightLocked}
-                        {...DIAL}
-                      />
-                    </div>
-                    {isPairTarget ? (
-                      <>
-                        <div style={DIAL_HEAD}>{t('Partner B')}</div>
-                        <div style={DIAL_GRID}
-                          title={t('Moves partner B against partner A in the clip file — the import offset, after the fact. Forward is the clip’s forward axis, side positive is its left.')}>
-                          {([['Partner B forward', 2], ['Partner B side', 0], ['Partner B up', 1]] as const).map(([label, axis]) => (
-                            <SliderInput
-                              key={label}
-                              label={t(label)}
-                              unit="cm"
-                              min={-50}
-                              max={50}
-                              step={1}
-                              value={partnerShift[axis]}
-                              onChange={(cm) => setPartnerShift((prev) => {
-                                const next: [number, number, number] = [prev[0], prev[1], prev[2]]
-                                next[axis] = cm
-                                return next
-                              })}
-                              disabled={orientLocked}
-                              {...DIAL}
-                            />
-                          ))}
-                        </div>
-                      </>
-                    ) : null}
-                    {isGroupTarget ? (
-                      <>
-                        <div style={{ ...DIAL_HEAD, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                          <span>{t('Move a role')}</span>
-                          {groupRoles.map((r) => {
-                            const moved = (roleShift[r] || [0, 0, 0]).some((v) => v !== 0)
-                            return (
-                              <button key={r} type="button"
-                                className={`ga-btn ga-btn-sm${shiftRole === r ? ' ga-btn-primary' : ''}`}
-                                style={{ borderColor: ROLE_COLOR[r], minWidth: 34 }}
-                                aria-pressed={shiftRole === r}
-                                disabled={orientLocked}
-                                onClick={() => setShiftRole(r)}>
-                                <span style={{ color: shiftRole === r ? undefined : ROLE_COLOR[r] }}>{r.toUpperCase()}</span>
-                                {moved ? ' •' : ''}
+                {innerTab === 'used' ? (
+                  row.used.length ? (
+                    <ul className="ga-list">
+                      {row.used.map((u) => {
+                        const isPose = poses.some((p) => p.key === u)
+                        return (
+                          <li key={u} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0' }}>
+                            <span className="ga-tag" style={{ fontSize: 11 }}>{isPose ? t('pose') : t('transition')}</span>
+                            <code>{u}</code>
+                            {isPose && onOpenPose ? (
+                              <button type="button" className="ga-btn ga-btn-sm" onClick={() => onOpenPose(u)}>
+                                {t('Open entry →')}
                               </button>
-                            )
+                            ) : null}
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  ) : <div className="ga-placeholder">{t('No pose entry plays this kind.')}</div>
+                ) : null}
+              </div>
+
+              {/* ── the alignment column, beside the viewer: every drag moves the figures live ── */}
+              {orientTarget ? (
+                <div data-testid="align-col"
+                  style={{ border: '1px solid var(--border, #30363d)', borderRadius: 6, padding: '6px 8px',
+                    display: 'flex', flexDirection: 'column', gap: 3, fontSize: 12 }}
+                  title={orientTarget.has_sidecar === false
+                    ? t('Without a sidecar there is nowhere to store the flag — import the clip again.')
+                    : undefined}>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
+                    <strong style={{ fontSize: 13 }}>{t('Alignment')}</strong>
+                    <span className="ga-form-hint" style={{ margin: 0 }}
+                      title={t('Apply orientation writes angles into the clip file and saves horizontal shifts separately. Surface heights are saved separately and also apply in game. Both halves of a pair stay together.')}>
+                      {orientDirty || heightDirty ? t('draft — the viewer shows it live') : t('saved state')}
+                    </span>
+                  </div>
+                  <div style={COL_HEAD}>{t('Rotation')}</div>
+                  <SliderInput label={dialLabel(t('Turn'))} unit="°"
+                    title={t('Degrees the clip turns about the vertical — the import dial, applied after the fact. A lying clip is aimed at the bed with it.')}
+                    min={-180} max={180} step={5} fineStep={1} value={yawDeg} onChange={setYawDeg}
+                    disabled={orientLocked} {...DIAL} />
+                  <div style={{ display: 'flex', gap: 4, paddingLeft: 80 }}>
+                    <button type="button" className="ga-btn ga-btn-sm" disabled={orientLocked}
+                      onClick={() => setYawDeg((v) => ((v - 90 + 540) % 360) - 180)}>−90°</button>
+                    <button type="button" className="ga-btn ga-btn-sm" disabled={orientLocked}
+                      onClick={() => setYawDeg((v) => ((v + 90 + 540) % 360) - 180)}>+90°</button>
+                  </div>
+                  <SliderInput label={dialLabel(t('Tilt'))} unit="°"
+                    title={t('Degrees the clip tips forward — a standing figure bows, a lying one rolls onto its face. Positive tips the head towards the clip’s forward axis.')}
+                    min={-180} max={180} step={5} fineStep={1} value={tiltDeg} onChange={setTiltDeg}
+                    disabled={orientLocked} {...DIAL} />
+                  <SliderInput label={dialLabel(t('Roll'))} unit="°"
+                    title={t('Degrees the clip tips sideways. Positive tips the figure to its own right.')}
+                    min={-180} max={180} step={5} fineStep={1} value={rollDeg} onChange={setRollDeg}
+                    disabled={orientLocked} {...DIAL} />
+                  <div style={COL_HEAD}>{t('Position')}</div>
+                  {([['Shift sideways', 0], ['Shift forward', 1]] as const).map(([label, axis]) => (
+                    <SliderInput key={label} label={dialLabel(t(label))} unit="cm"
+                      title={t('Moves the whole clip, including both pair halves. Positive sideways is the clip’s left (+X); positive forward is +Z. Applied horizontally at the place’s yaw, independently of turn, tilt and roll.')}
+                      min={-200} max={200} step={5} fineStep={1} value={clipShift[axis]}
+                      onChange={(cm) => setClipShift((prev) => axis === 0 ? [cm, prev[1]] : [prev[0], cm])}
+                      disabled={orientLocked} {...DIAL} />
+                  ))}
+                  <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}
+                    title={t('Which surface the height dial corrects; the Clip tab draws that surface as the box to turn against.')}>
+                    {dialLabel(t('Surface'))}
+                    <select className="ga-input" style={{ flex: 1, minWidth: 0, fontSize: 12 }} value={footprint}
+                      disabled={orientBusy || heightBusy} onChange={(e) => setFootprint(e.target.value)}>
+                      <option value="">{t('ground (grid only)')}</option>
+                      <option value="lie">{t('bed / lying surface')}</option>
+                      <option value="seat">{t('seat')}</option>
+                    </select>
+                  </label>
+                  <SliderInput label={dialLabel(t('Height'))} unit="cm"
+                    title={t('Absolute height correction for the selected surface only. Other surface types keep their own values.')}
+                    min={-50} max={50} step={1} value={heightCm}
+                    onChange={(cm) => setHeightDraft((prev) => ({ ...prev, [heightGroup]: cm }))}
+                    disabled={heightLocked} {...DIAL} />
+                  {isPairTarget ? (
+                    <>
+                      <div style={COL_HEAD}
+                        title={t('Moves partner B against partner A in the clip file — the import offset, after the fact. Forward is the clip’s forward axis, side positive is its left.')}>
+                        {t('Partner B')}
+                      </div>
+                      {([['Forward', 2], ['Side', 0], ['Up', 1]] as const).map(([label, axis]) => (
+                        <SliderInput key={label} label={dialLabel(t(label))} unit="cm"
+                          min={-50} max={50} step={1} value={partnerShift[axis]}
+                          onChange={(cm) => setPartnerShift((prev) => {
+                            const next: [number, number, number] = [prev[0], prev[1], prev[2]]
+                            next[axis] = cm
+                            return next
                           })}
-                        </div>
-                        <div style={DIAL_GRID}
-                          title={t('Moves the selected role against the others in the clip files — its own half and its alt halves. Forward is the clip’s forward axis, side positive is its left.')}>
-                          {([['Forward', 2], ['Side', 0], ['Up', 1]] as const).map(([label, axis]) => (
-                            <SliderInput
-                              key={label}
-                              label={`${t('Role')} ${shiftRole.toUpperCase()} · ${t(label)}`}
-                              unit="cm"
-                              min={-50}
-                              max={50}
-                              step={1}
-                              value={(roleShift[shiftRole] || [0, 0, 0])[axis]}
-                              onChange={(cm) => setRoleShift((prev) => {
-                                const cur = prev[shiftRole] || [0, 0, 0]
-                                const next: [number, number, number] = [cur[0], cur[1], cur[2]]
-                                next[axis] = cm
-                                return { ...prev, [shiftRole]: next }
-                              })}
+                          disabled={orientLocked} {...DIAL} />
+                      ))}
+                    </>
+                  ) : null}
+                  {isGroupTarget ? (
+                    <>
+                      <div style={{ ...COL_HEAD, display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}
+                        title={t('Moves the selected role against the others in the clip files — its own half and its alt halves. Forward is the clip’s forward axis, side positive is its left.')}>
+                        <span>{t('Move a role')}</span>
+                        {groupRoles.map((r) => {
+                          const moved = (roleShift[r] || [0, 0, 0]).some((v) => v !== 0)
+                          return (
+                            <button key={r} type="button"
+                              className={`ga-btn ga-btn-sm${shiftRole === r ? ' ga-btn-primary' : ''}`}
+                              style={{ borderColor: ROLE_COLOR[r], minWidth: 30 }}
+                              aria-pressed={shiftRole === r}
                               disabled={orientLocked}
-                              {...DIAL}
-                            />
-                          ))}
-                        </div>
-                      </>
-                    ) : null}
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                      <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                        <span className="ga-hint">{t('Turn against')}</span>
-                        <select className="ga-input" value={footprint}
-                          disabled={orientBusy || heightBusy}
-                          onChange={(e) => setFootprint(e.target.value)}>
-                          <option value="">{t('grid only')}</option>
-                          <option value="lie">{t('bed / lying surface')}</option>
-                          <option value="seat">{t('seat')}</option>
-                        </select>
-                      </label>
-                      <button type="button" className="ga-btn ga-btn-sm ga-btn-primary"
-                        disabled={!heightDirty || heightLocked}
-                        onClick={() => void saveHeights()}>
-                        {heightBusy ? t('Saving…') : t('Save surface heights')}
-                      </button>
-                      <button
-                        type="button"
-                        className="ga-btn ga-btn-sm ga-btn-primary"
-                        disabled={!orientDirty || orientLocked}
-                        onClick={() => void applyOrientation()}
-                      >
-                        {orientBusy ? t('Applying…') : t('Apply orientation')}
-                      </button>
-                      <button
-                        type="button"
-                        className="ga-btn ga-btn-sm"
-                        disabled={(!orientDirty && !heightDirty) || heightLocked}
-                        onClick={resetDials}
-                      >
-                        {t('Reset dials')}
+                              onClick={() => setShiftRole(r)}>
+                              <span style={{ color: shiftRole === r ? undefined : ROLE_COLOR[r] }}>{r.toUpperCase()}</span>
+                              {moved ? ' •' : ''}
+                            </button>
+                          )
+                        })}
+                      </div>
+                      {([['Forward', 2], ['Side', 0], ['Up', 1]] as const).map(([label, axis]) => (
+                        <SliderInput key={label} label={dialLabel(`${shiftRole.toUpperCase()} · ${t(label)}`)} unit="cm"
+                          min={-50} max={50} step={1} value={(roleShift[shiftRole] || [0, 0, 0])[axis]}
+                          onChange={(cm) => setRoleShift((prev) => {
+                            const cur = prev[shiftRole] || [0, 0, 0]
+                            const next: [number, number, number] = [cur[0], cur[1], cur[2]]
+                            next[axis] = cm
+                            return { ...prev, [shiftRole]: next }
+                          })}
+                          disabled={orientLocked} {...DIAL} />
+                      ))}
+                    </>
+                  ) : null}
+
+                  {/* THE one save path, its consequence spelled out before the click. */}
+                  <div style={{ borderTop: '1px solid var(--border, #30363d)', marginTop: 6, paddingTop: 6 }}
+                    data-testid="align-consequence">
+                    {saveConsequence.length ? (
+                      <ul style={{ margin: '0 0 4px 14px', padding: 0 }}>
+                        {saveConsequence.map((line) => <li key={line}>{line}</li>)}
+                      </ul>
+                    ) : (
+                      <div className="ga-form-hint" style={{ margin: '0 0 4px' }}>
+                        {t('Nothing to save — drag a dial, or make every place read green to store the check.')}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button type="button" data-testid="align-save"
+                        className="ga-btn ga-btn-sm ga-btn-primary" disabled={!canSave}
+                        onClick={() => void save()}>
+                        {orientBusy || heightBusy ? t('Saving…')
+                          : bakeDirty ? t('Save (Blender run)')
+                            : checkOnly ? t('Save check') : t('Save')}
                       </button>
                       <button type="button" className="ga-btn ga-btn-sm"
-                        disabled={!placeCheck || orientDirty || heightDirty || orientLocked}
-                        title={t('Stores that this clip reads green on the shown places. Every later Apply clears it.')}
-                        onClick={() => void saveCheck()}>
-                        {t('Save check')}
+                        disabled={(!orientDirty && !heightDirty) || heightLocked} onClick={resetDials}>
+                        {t('Reset dials')}
                       </button>
                       {orientSeconds !== null && !orientBusy ? (
-                        <span className="ga-hint">{`${t('written in')} ${orientSeconds.toFixed(1)} s`}</span>
+                        <span className="ga-form-hint" style={{ margin: 0 }}>{`${t('written in')} ${orientSeconds.toFixed(1)} s`}</span>
                       ) : null}
                     </div>
-                    {finalesTouched.length ? (
-                      <div className="ga-form-hint">
-                        {`${t('Its finale clips were changed the same way')}: ${finalesTouched.join(', ')}`}
-                      </div>
-                    ) : null}
-                    <div className="ga-form-hint">
-                      {t('Orientation and surface heights also apply to the clip\'s finale clips (the finale of every pose that plays it).')}
-                    </div>
-                    <div className="ga-form-hint">
-                      {orientTarget.has_sidecar === false
-                        ? t('Without a sidecar there is nowhere to store the flag — import the clip again.')
-                        : `${t('Saved orientation and shifts')}: ${savedNote}`}
-                    </div>
-                    <div className="ga-form-hint" data-testid="orientation-check">
-                      <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 5, marginRight: 4,
-                        background: savedCheck ? '#3fb950' : '#d29922' }} />
-                      {savedCheck
-                        ? t('Orientation checked {at} on {prop} / {place}: {dyaw}°, {dpos} cm')
-                          .replace('{at}', new Date(savedCheck.at).toLocaleString())
-                          .replace('{prop}', savedCheck.prop).replace('{place}', savedCheck.place)
-                          .replace('{dyaw}', String(savedCheck.dyaw)).replace('{dpos}', String(savedCheck.dpos))
-                        : t('Orientation not checked on a place yet — Apply or Save check while every place reads green.')}
-                      {placeCheck ? ` · ${t('all places green now — Apply/Save stores the check')}` : ''}
-                    </div>
-                    {orientError ? (
-                      <div className="ga-form-hint" style={{ color: 'var(--danger, #f85149)' }}>
-                        {orientError}
-                      </div>
-                    ) : null}
                   </div>
-                ) : null}
-
-                {rowSets.map((s) => (
-                  <div key={s || 'neutral'}>
-                    <h4 style={{ margin: '6px 0 2px' }}>{s || t('neutral')}</h4>
-                    <ul className="ga-list" style={{ minWidth: 0 }}>
-                      {row.clips.filter((c) => (c.set || '') === s).map(clipNode)}
-                    </ul>
+                  {finalesTouched.length ? (
+                    <div className="ga-form-hint" style={{ margin: 0 }}>
+                      {`${t('Its finale clips were changed the same way')}: ${finalesTouched.join(', ')}`}
+                    </div>
+                  ) : null}
+                  <div className="ga-form-hint" style={{ margin: 0 }} title={savedNote}>
+                    {orientTarget.has_sidecar === false
+                      ? t('Without a sidecar there is nowhere to store the flag — import the clip again.')
+                      : `${t('Saved orientation and shifts')}: ${savedNote}`}
                   </div>
-                ))}
-              </>
-            )}
+                  {orientError ? (
+                    <div className="ga-form-hint" style={{ color: 'var(--danger, #f85149)', margin: 0 }}>{orientError}</div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           </div>
         )}
       </section>
