@@ -226,6 +226,9 @@ export interface SecondaryMotion {
    *  (joint → tip, the link's capsule radius r_c; links without a capsule left out) as last rendered — what the
    *  receiving figure opens its surface around (`bindChannelOpening`). */
   channelOccupants(): { partner: string; channel: string; w: number; segments: { a: Vec3; b: Vec3; r: number }[] }[]
+  /** Ruling A126: every chain with an op (no hair) as last rendered, engaged or not — its links as world segments
+   *  (joint → tip, the link's capsule radius r_c, 0 without one), root first. What the auto contact samples. */
+  opChains(): { op: string; segments: { a: Vec3; b: Vec3; r: number }[] }[]
   reset(): void
   dispose(): void
 }
@@ -589,6 +592,7 @@ export function createSecondaryMotion(
       },
       contactTips() { return delegate?.contactTips() ?? [] },
       channelOccupants() { return delegate?.channelOccupants() ?? [] },
+      opChains() { return delegate?.opChains() ?? [] },
       reach() { return delegate?.reach() ?? 0 },
       reset() { delegate?.reset() },
       dispose() { delegate?.dispose(); stopped = true },
@@ -1593,6 +1597,22 @@ export function createSecondaryMotion(
           }
           if (segments.length) rows.push({ partner: state.partner, channel: state.ch.id, w: state.w, segments })
         }
+      }
+      return rows
+    },
+    opChains() {
+      const rows: ReturnType<SecondaryMotion['opChains']> = []
+      const head = new three.Vector3(), tip = new three.Vector3()
+      for (const chain of particles) {
+        const op = chain.paramsTo.op
+        if (chain.chainRoot !== chain || !op || chain.paramsTo.hair) continue
+        const segments: { a: Vec3; b: Vec3; r: number }[] = []
+        for (const link of chain.chainLinks) {
+          head.setFromMatrixPosition(link.bind.bone.matrixWorld)
+          tip.copy(link.tipLocal).applyMatrix4(link.bind.bone.matrixWorld)
+          segments.push({ a: [head.x, head.y, head.z], b: [tip.x, tip.y, tip.z], r: Math.max(0, linkRadius(link, chain) || 0) })
+        }
+        if (segments.length) rows.push({ op, segments })
       }
       return rows
     },

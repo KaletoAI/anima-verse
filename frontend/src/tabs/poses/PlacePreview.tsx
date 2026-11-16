@@ -36,6 +36,8 @@ import {
   placeModelSpec, restCorrections, restPoseOf, strandCandidates,
   type AlignmentDraft, type ChannelNow, type FrameInspection, type AlignmentLamp, type ClipHeightOffsetsCm, type CollisionPayload, type FigureRuntime,
   type HairStrandRecord, type SceneMarker, type SceneModelSpec, type SecondaryMotionPayload,
+  bodyOverlap, contactLamp, contactReport, solveContactShift,
+  type ContactLamp, type ContactReport, type ContactSample,
 } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
@@ -205,8 +207,15 @@ function useBuiltCharacters() {
 
 const memoKey = (kind: string) => `anima.placePreview.${kind}`
 
+/** Ruling A126: the outcome of Auto-align (partner B against the channel the pair's attached part enters). */
+export type AutoAlignResult =
+  | { ok: false; reason: string }
+  | { ok: true; by: string; of: string; channel: string; shiftCm: [number, number, number]
+      before: ContactReport; after: ContactReport; overlapBeforeMm: number; overlapAfterMm: number
+      lampBefore: ContactLamp; lamp: ContactLamp }
+
 export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq, bust = 0, poses, onOpenPose,
-  onReadout, height = 360 }: {
+  onReadout, autoAlignRef, height = 360 }: {
   kind: string; set?: string
   /** 0/1 = solo, 2 = pair, 3+ = group */
   roles: number
@@ -219,6 +228,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   poses: PlacePose[]
   onOpenPose?: (key: string) => void
   onReadout?: (r: PlaceReadout | null) => void
+  /** Set while a scene runs: plays the clip headless-fast and solves partner B's shift (Ruling A126). */
+  autoAlignRef?: MutableRefObject<(() => AutoAlignResult) | null>
   height?: number
 }) {
   const { t } = useI18n()
@@ -251,6 +262,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   const timeRef = useRef(0)
   const draftSeqRef = useRef(draftSeq); draftSeqRef.current = draftSeq
   const onReadoutRef = useRef(onReadout); onReadoutRef.current = onReadout
+  const autoAlignOut = useRef(autoAlignRef); autoAlignOut.current = autoAlignRef
   // The SAVED calibration per role, read live in the frame loop: after Apply the listing (new shift_cm / heights)
   // arrives after the clip reload, and the figures must take it the moment it does — never a stale copy.
   const savedRef = useRef<Record<string, { shiftCm: [number, number] | null; heightOffsetsCm: ClipHeightOffsetsCm | null }>>({})
@@ -813,6 +825,102 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           controls.update()
           renderer.render(sceneObj, camera)
         }
+        // ── Ruling A126: Auto-align. Plays the clip in fixed 60 fps steps (two loops, the second sampled) with partner
+        // B moved by `extra` (clip frame metres [side, up, forward] on top of the draft), reads the entering chain and
+        // the receiving channel from every figure's inspection, solves the shift (scene-render `channelContact.ts`). ──
+        const autoAlign = (): AutoAlignResult => {
+          if (solo || figs.length < 2) return { ok: false, reason: t('Auto-align needs a pair clip on a place.') }
+          const step = 1 / 60
+          const runAt = (time: number, draft: AlignmentDraft, inspect: boolean) => {
+            for (const f of figs) {
+              f.mixer.setTime(time)
+              const cal = clipCalibration(draft, savedRef.current[f.role] ?? f.saved, f.placeYaw, f.place.marker.group)
+              const at = calibratedRoot(cal, { anchor: f.anchor, role: f.role, hips: rootAt(f.path, time), inPlace: solo,
+                hipsBind: f.hipsBind, standRefM })
+              f.root.position.set(at.x, at.y, at.z)
+              f.root.rotation.set(cal.euler[0], cal.euler[1], cal.euler[2], 'YXZ')
+              f.root.updateMatrixWorld(true)
+              f.runtime.poseStep({ realDelta: step })
+            }
+            return placePhaseB(entries, frameState, inspect)
+          }
+          const base = draftRef.current
+          const probe = runAt(timeRef.current, base, true)
+          let found: { e: number; r: number; chain: number; channel: string } | null = null
+          probe?.figures.forEach((fe, e) => fe.inspection?.chains.forEach((c, ci) => probe.figures.forEach((fr, r) => {
+            if (found || r === e) return
+            const ch = fr.inspection?.channels.find((x) => x.accepts.includes(c.op))
+            if (ch) found = { e, r, chain: ci, channel: ch.id }
+          })))
+          const hit = found as { e: number; r: number; chain: number; channel: string } | null
+          if (!hit) return { ok: false, reason: t('No figure here has an attached part that one of the other figure’s channels accepts.') }
+          const fe = figs[hit.e], fr = figs[hit.r]
+          const moving = figs.find((f) => f.role === 'b')
+          if (!moving || (fe.role !== 'b' && fr.role !== 'b')) return { ok: false, reason: t('Auto-align moves partner B; neither figure of the contact is B.') }
+          const sign = moving === fe ? 1 : -1
+          const eName = entries[hit.e].name, rName = entries[hit.r].name
+          const rot = new THREE.Matrix3().setFromMatrix4(stageInv)
+          const vec = new THREE.Vector3()
+          const toStage = (p: readonly number[], dir = false): [number, number, number] => {
+            vec.set(p[0], p[1], p[2])
+            if (dir) vec.applyMatrix3(rot).normalize(); else vec.applyMatrix4(stageInv)
+            return [vec.x, vec.y, vec.z]
+          }
+          const b0 = base.roleShiftM.b ?? [0, 0, 0]
+          const loop = Math.max(8, Math.ceil(duration / step))
+          const pass = (extra: [number, number, number]) => {
+            const draft: AlignmentDraft = { ...base, roleShiftM: { ...base.roleShiftM,
+              b: [b0[0] + extra[0], b0[1] + extra[1], b0[2] + extra[2]] } }
+            const samples: ContactSample[] = []
+            let overlap = 0
+            for (let i = 0; i < 2 * loop; i++) {
+              const time = (i % loop) * step % duration
+              const res = runAt(time, draft, i >= loop)
+              if (!res) continue
+              const ie = res.figures[hit.e].inspection, ir = res.figures[hit.r].inspection
+              const chain = ie?.chains[hit.chain]
+              const ch = ir?.channels.find((x) => x.id === hit.channel)
+              if (!ie || !ir || !chain?.segments.length || !ch) continue
+              samples.push({ tip: toStage(chain.segments[chain.segments.length - 1].b), base: toStage(chain.segments[0].a),
+                o: toStage(ch.o), u: toStage(ch.u, true) })
+              const skip = new Set<string>([...ch.suppress.map((id) => `${rName}|${id}`),
+                ...ie.capsules.filter((c) => c.region === 'attached_part' || c.region === 'appendage').map((c) => `${eName}|${c.id}`)])
+              overlap = Math.max(overlap, bodyOverlap(res.frame.contacts, skip))
+            }
+            return { samples, overlap, draft }
+          }
+          // world (stage) Δ of the entering tip → B's clip-frame role shift: S = sign · frameᵀ Δ, the vertical through the
+          // hips-drop gain (root.y moves by hipsBind.y / standRef per metre of clip hips).
+          const toClip = (d: [number, number, number], draft: AlignmentDraft): [number, number, number] => {
+            const m = clipCalibration(draft, savedRef.current[moving.role] ?? moving.saved, moving.placeYaw,
+              moving.place.marker.group).frame
+            const k = standRefM > 0 && moving.hipsBind.y > 0 ? moving.hipsBind.y / standRefM : 1
+            return [sign * (m[0] * d[0] + m[3] * d[1] + m[6] * d[2]), sign * (m[1] * d[0] + m[4] * d[1] + m[7] * d[2]) / k,
+              sign * (m[2] * d[0] + m[5] * d[1] + m[8] * d[2])]
+          }
+          const p0 = pass([0, 0, 0])
+          const chNow = probe!.figures[hit.r].inspection!.channels.find((x) => x.id === hit.channel)!
+          if (p0.samples.length < 4) return { ok: false, reason: t('The contact could not be sampled over the clip.') }
+          const before = contactReport(p0.samples)
+          let extra: [number, number, number] = [0, 0, 0]
+          let cur = p0
+          for (let it = 0; it < 3; it++) {
+            const d = solveContactShift(cur.samples)
+            const s = toClip(d, cur.draft)
+            extra = [extra[0] + s[0], extra[1] + s[1], extra[2] + s[2]]
+            cur = pass(extra)
+            if (Math.hypot(d[0], d[1], d[2]) < 0.0005) break
+          }
+          const after = contactReport(cur.samples)
+          runAt(timeRef.current, base, false)
+          const cm = (v: number) => Math.round(v * 1000) / 10
+          return { ok: true, by: fe.letter, of: fr.letter, channel: hit.channel,
+            shiftCm: [cm(b0[0] + extra[0]), cm(b0[1] + extra[1]), cm(b0[2] + extra[2])],
+            before, after, overlapBeforeMm: p0.overlap * 1000, overlapAfterMm: cur.overlap * 1000,
+            lampBefore: contactLamp(before, chNow), lamp: contactLamp(after, chNow, (cur.overlap - p0.overlap) * 1000) }
+        }
+        if (autoAlignOut.current) autoAlignOut.current.current = autoAlign
+        disposers.push(() => { if (autoAlignOut.current?.current === autoAlign) autoAlignOut.current.current = null })
         tick()
       } catch (e) {
         setStatus(String(e))

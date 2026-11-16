@@ -75,7 +75,9 @@ export interface OpeningInspection { channel: string; radius: number; segments: 
 export interface FigureInspection {
   capsules: { id: string; region: string; now: CapsuleNow }[]
   channels: { id: string; o: [number, number, number]; u: [number, number, number]; r: number; depth: number;
-    funnel: number; coneDeg: number }[]
+    funnel: number; coneDeg: number; accepts: string[]; suppress: string[] }[]
+  /** Ruling A126: this figure's chains with an op, engaged or not (`SecondaryMotion.opChains`), world segments. */
+  chains: { op: string; segments: { a: [number, number, number]; b: [number, number, number]; r: number }[] }[]
   /** This figure's chains engaged in a PARTNER's channel: weight w and the chain's largest segment radius (metres). */
   engaged: { partner: string; channel: string; w: number; radius: number }[]
   openings: OpeningInspection[]
@@ -274,7 +276,9 @@ export class FigureRuntime {
       capsules: binding.capsules.map(e => ({ id: e.capsule.id, region: e.capsule.region,
         now: { a: v(e.now.a), b: v(e.now.b), r: e.now.r } })),
       channels: (channels?.channels ?? []).map(ch => ({ id: ch.id, o: v(ch.o), u: v(ch.u), r: ch.r, depth: ch.depth,
-        funnel: ch.funnel, coneDeg: ch.coneDeg })),
+        funnel: ch.funnel, coneDeg: ch.coneDeg, accepts: [...ch.accepts], suppress: [...ch.suppress] })),
+      chains: this.disposed ? [] : this.secondary.opChains().map(c => ({ op: c.op,
+        segments: c.segments.map(seg => ({ a: v(seg.a), b: v(seg.b), r: seg.r })) })),
       engaged: this.channelOccupants().map(o => ({ partner: o.partner, channel: o.channel, w: o.w,
         radius: o.segments.length ? Math.max(...o.segments.map(seg => seg.r)) : 0 })),
       openings: [...this.openingState.values()].map(o => ({ ...o })),

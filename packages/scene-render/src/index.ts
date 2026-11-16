@@ -255,3 +255,6 @@ export { strandCandidates } from './strandBudget'
 export type { StrandFigureView } from './strandBudget'
 export { slotFor } from './placeSlot'
 export type { PlaceEntry } from './placeSlot'
+export { solveContactShift, contactReport, contactLamp, entryFrame, bodyOverlap, CONTACT_ENTRY_WEIGHT,
+  CONTACT_ENTRY_GREEN_MM, CONTACT_CLEAR_MM } from './channelContact'
+export type { ContactSample, ContactReport, ContactLamp } from './channelContact'

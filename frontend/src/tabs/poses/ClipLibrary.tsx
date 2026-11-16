@@ -47,7 +47,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { clipHeightGroup, type ClipHeightOffsetsCm } from '@anima/scene-render'
-import { PlacePreview, type PlaceReadout } from './PlacePreview'
+import { PlacePreview, type AutoAlignResult, type PlaceReadout } from './PlacePreview'
 import type { AlignmentDraft } from '@anima/scene-render'
 import { ClipPreview, ROLE_COLOR } from './ClipPreview'
 import { invalidateAnimationPreviewClips } from '../characters/Model3DViewer'
@@ -298,6 +298,9 @@ export function ClipLibrary({
   const [orientSeconds, setOrientSeconds] = useState<number | null>(null)
   /** The place preview's readout (loop medians) — an all-green one is stored with Apply/Save (D3). */
   const [placeReadout, setPlaceReadout] = useState<PlaceReadout | null>(null)
+  /** Ruling A126: the place preview's Auto-align (set while a pair scene runs) and its last outcome. */
+  const autoAlignRef = useRef<(() => AutoAlignResult) | null>(null)
+  const [autoAlign, setAutoAlign] = useState<AutoAlignResult | null>(null)
   /** Finale clips the server changed along with the last apply/save. */
   const [finalesTouched, setFinalesTouched] = useState<string[]>([])
 
@@ -1097,7 +1100,7 @@ export function ClipLibrary({
                   <PlacePreview kind={row.kind} set={previewSet} roles={row.roles ?? 0} clips={row.clips}
                     draftRef={draftRef} draftSeq={alignmentDraft} bust={seq} height={600}
                     poses={poses.filter((p) => (p.animation || '').trim() === row.kind)}
-                    onOpenPose={onOpenPose} onReadout={setPlaceReadout} />
+                    onOpenPose={onOpenPose} onReadout={setPlaceReadout} autoAlignRef={autoAlignRef} />
                 ) : null}
                 {innerTab === 'clip' && !row.missing ? (
                   <ClipPreview
@@ -1224,6 +1227,57 @@ export function ClipLibrary({
                           })}
                           disabled={orientLocked} {...DIAL} />
                       ))}
+                      <button type="button" className="ga-btn ga-btn-sm" data-testid="align-auto"
+                        disabled={orientLocked || innerTab !== 'places'}
+                        title={innerTab !== 'places'
+                          ? t('Open the Places view: Auto-align measures the figures shown there.')
+                          : t('Plays the clip with the figures shown and moves partner B so that the attached part’s tip sits at the channel’s opening at the outermost frame and stays on the channel’s axis; the deepest frame is checked. Writes the three sliders above; Save stores them as usual.')}
+                        onClick={() => {
+                          const run = autoAlignRef.current
+                          const res: AutoAlignResult = run ? run() : { ok: false, reason: t('The place preview is still loading.') }
+                          setAutoAlign(res)
+                          if (res.ok) setPartnerShift(res.shiftCm)
+                        }}>
+                        {t('Auto-align')}
+                      </button>
+                      {autoAlign ? (
+                        <div data-testid="align-auto-result" data-result={JSON.stringify(autoAlign)}
+                          style={{ fontSize: 11, lineHeight: 1.35 }}>
+                          {autoAlign.ok ? (
+                            <>
+                              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                <LampDot lamp={autoAlign.lamp} title={autoAlign.lamp === 'green'
+                                  ? t('On the opening at the outermost frame and inside the channel at the deepest.')
+                                  : autoAlign.lamp === 'yellow' ? t('Inside at the deepest frame, but off the axis, off the opening, or the shift pressed the bodies more than 30 mm deeper into each other elsewhere.')
+                                    : t('Not inside the channel at the deepest frame.')} />
+                                <span>{t('{by} → {of}: {channel}').replace('{by}', autoAlign.by).replace('{of}', autoAlign.of)
+                                  .replace('{channel}', autoAlign.channel.split(':').pop() || autoAlign.channel)}</span>
+                              </div>
+                              <table style={{ borderCollapse: 'collapse' }}>
+                                <thead><tr><th /><th style={{ padding: '0 4px' }}>{t('before')}</th><th style={{ padding: '0 4px' }}>{t('after')}</th></tr></thead>
+                                <tbody>
+                                  {([
+                                    [t('Tip to opening at the outermost frame'), autoAlign.before.entryMm, autoAlign.after.entryMm],
+                                    [t('Depth at the deepest frame'), autoAlign.before.depthMm, autoAlign.after.depthMm],
+                                    [t('Off the axis there'), autoAlign.before.lateralMm, autoAlign.after.lateralMm],
+                                    [t('Deepest body overlap elsewhere'), autoAlign.overlapBeforeMm, autoAlign.overlapAfterMm],
+                                  ] as const).map(([label, a, b]) => (
+                                    <tr key={label}><td>{label}</td>
+                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{a.toFixed(0)} mm</td>
+                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{b.toFixed(0)} mm</td></tr>
+                                  ))}
+                                  <tr><td>{t('Shaft against the axis at the outermost frame')}</td>
+                                    <td style={{ textAlign: 'right', padding: '0 4px' }}>{autoAlign.before.axisDeg.toFixed(0)}°</td>
+                                    <td style={{ textAlign: 'right', padding: '0 4px' }}>{autoAlign.after.axisDeg.toFixed(0)}°</td></tr>
+                                </tbody>
+                              </table>
+                              <div className="ga-form-hint" style={{ margin: 0 }}>
+                                {t('Measured on the pair shown; another pair may need its own run. Save stores the sliders.')}
+                              </div>
+                            </>
+                          ) : <span style={{ color: 'var(--danger, #f85149)' }}>{autoAlign.reason}</span>}
+                        </div>
+                      ) : null}
                     </>
                   ) : null}
                   {isGroupTarget ? (
