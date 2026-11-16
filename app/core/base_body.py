@@ -1863,8 +1863,35 @@ def postprocess_preview(character_name: str, op_id: str,
         with Image.open(_io.BytesIO(data)) as im:
             mime = Image.MIME.get(im.format or "PNG", "image/png")
         return f"data:{mime};base64," + base64.b64encode(data).decode("ascii")
+    def crops(before: Optional[bytes], after: Optional[bytes]):
+        """Ruling A154: the changed area of before/after, cut out with a margin — on the small tile the whole
+        reference shows the change only a few pixels wide."""
+        if not before or not after:
+            return None, None
+        import io as _io
+        import numpy as np
+        from PIL import Image
+        with Image.open(_io.BytesIO(before)) as a, Image.open(_io.BytesIO(after)) as b:
+            a, b = a.convert("RGBA"), b.convert("RGBA")
+            diff = np.abs(np.asarray(a, dtype=np.int16) - np.asarray(b, dtype=np.int16)).max(axis=2) > 6
+            ys, xs = np.nonzero(diff)
+            if not len(ys):
+                return None, None
+            y0, y1, x0, x1 = int(ys.min()), int(ys.max()), int(xs.min()), int(xs.max())
+            side = max(y1 - y0, x1 - x0) + 1
+            side = int(side * 1.8) + 40
+            cy, cx = (y0 + y1) // 2, (x0 + x1) // 2
+            box = (max(0, cx - side // 2), max(0, cy - side // 2),
+                   min(a.width, cx + side // 2), min(a.height, cy + side // 2))
+            out = []
+            for im in (a, b):
+                buf = _io.BytesIO()
+                im.crop(box).save(buf, "PNG")
+                out.append(url(buf.getvalue()))
+            return out[0], out[1]
+    before_crop, after_crop = crops(res["before"], res["after"])
     return {"before": url(res["before"]), "after": url(res["after"]), "found": res["found"],
-            "seconds": res["seconds"]}
+            "seconds": res["seconds"], "before_crop": before_crop, "after_crop": after_crop}
 
 
 # --- The base model ---------------------------------------------------------

@@ -108,9 +108,12 @@ function OperationRow({ character, op, hasReference, stateLine, busy, onChanged,
     if (previewing) { stopPreview(); return }
     setPosting(true)
     try {
-      const d = await apiPost<{ before: string | null; after: string | null; found: number; seconds: number }>(
+      const d = await apiPost<{ before: string | null; after: string | null; found: number; seconds: number;
+        before_crop?: string | null; after_crop?: string | null }>(
         `/characters/${enc}/base-body/postprocess-preview/${encodeURIComponent(op.id)}`, {})
-      if (d?.after) { setPreviewing(true); onPreview(d.after) }
+      // Ruling A154: the changed area enlarged (the whole reference shows it only a few pixels wide on the tile).
+      const shown = d?.after_crop || d?.after
+      if (shown) { setPreviewing(true); onPreview(shown) }
       toast(d?.after
         ? t('{n} found, {s} s').replace('{n}', String(d.found)).replace('{s}', d.seconds.toFixed(2))
         : t('Nothing found in the reference — it stays as it is.'))
