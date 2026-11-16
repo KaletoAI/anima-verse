@@ -1,3 +1,4 @@
+import type { ContactRelation } from '@anima/scene-render'
 /**
  * The clip listing as the admin UI reads it, plus the two rules every surface
  * that shows sets has to agree on: the ORDER of the sets (neutral first, then
@@ -40,6 +41,8 @@ export interface ApiClipRow {
    *  (`{a: 'male', b: 'female'}` or reversed; a group names every role up to
    *  `e`); empty = not assigned, the initiator plays A. */
   role_gender?: Record<string, string>
+  /** Ruling A139: the contact relations of a pair/group clip and where they come from (null for a solo clip). */
+  contact_target?: { relations: ContactRelation[]; source: 'clip' | 'package' | 'default' } | null
   origin?: string
   has_sidecar?: boolean
   /** Per-surface corrections in centimetres of the 1.70 m reference figure. */

@@ -47,8 +47,10 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { clipHeightGroup, type ClipHeightOffsetsCm } from '@anima/scene-render'
+import { ContactRelations } from './ContactRelations'
+import { targetWordOf } from './contactWords'
 import { PlacePreview, type AutoAlignResult, type AutoAlignRun, type PairCheckResult, type PlaceReadout } from './PlacePreview'
-import type { AlignmentDraft } from '@anima/scene-render'
+import type { AlignmentDraft, ContactRelation } from '@anima/scene-render'
 import { ClipPreview, ROLE_COLOR } from './ClipPreview'
 import { invalidateAnimationPreviewClips } from '../characters/Model3DViewer'
 import { SliderInput } from '../../components/SliderInput'
@@ -306,7 +308,8 @@ export function ClipLibrary({
    *  results wait per clip (kind|set) and fill the Partner B dials when that clip is opened. */
   const [alignAll, setAlignAll] = useState<{ running: boolean; done: number; rows: { kind: string; set: string
     result: AutoAlignResult }[] } | null>(null)
-  const pendingAlign = useRef<Record<string, { shiftCm: [number, number, number]; turnDeg: [number, number] }>>({})
+  const pendingAlign = useRef<Record<string, { shiftCm: [number, number, number]; turnDeg: [number, number]
+    roleShiftCm: Record<string, [number, number, number]> }>>({})
   const alignAllStop = useRef(false)
   const [autoAlign, setAutoAlign] = useState<AutoAlignResult | null>(null)
   /** Ruling A129.3: the pair shown before and with the per-pair fine fit the game runs. */
@@ -435,7 +438,10 @@ export function ClipLibrary({
       setPreviewSet(nextSet)
       // A129.6: an "Align all" result for this clip fills the Partner B dials as a draft (Save stores it).
       const waiting = pendingAlign.current[`${kind}|${nextSet}`]
-      if (waiting) { setPartnerShift(waiting.shiftCm); setPartnerTurn(waiting.turnDeg) }
+      if (waiting) {
+        setPartnerShift(waiting.roleShiftCm.b ?? waiting.shiftCm); setPartnerTurn(waiting.turnDeg)
+        setRoleShift(waiting.roleShiftCm)
+      }
       setAction(null)
       setError('')
       setConflict(null)
@@ -445,7 +451,7 @@ export function ClipLibrary({
 
   /** A129.6: Auto-align every pair clip listed, one after the other, on the pair each one's preview fills in. */
   const runAlignAll = useCallback(async () => {
-    const targets = shown.filter((r) => (r.roles ?? 0) === 2 && !r.missing)
+    const targets = shown.filter((r) => (r.roles ?? 0) >= 2 && !r.missing)
     const back = selected
     alignAllStop.current = false
     const out: { kind: string; set: string; result: AutoAlignResult }[] = []
@@ -465,7 +471,8 @@ export function ClipLibrary({
       }
       await wait(1500)
       const result: AutoAlignResult = run ? run() : { ok: false, reason: t('No pair was filled on a place of this clip.') }
-      if (result.ok) pendingAlign.current[`${r.kind}|${set}`] = { shiftCm: result.shiftCm, turnDeg: result.turnDeg }
+      if (result.ok) pendingAlign.current[`${r.kind}|${set}`] = { shiftCm: result.shiftCm, turnDeg: result.turnDeg,
+        roleShiftCm: result.roleShiftCm }
       out.push({ kind: r.kind, set, result })
       setAlignAll({ running: true, done: out.length, rows: [...out] })
     }
@@ -505,6 +512,11 @@ export function ClipLibrary({
   const heightDirty = Object.entries(heightDraft).some(
     ([group, cm]) => cm !== (orientTarget?.height_offsets_cm?.[group as keyof ClipHeightOffsetsCm] ?? 0),
   )
+  // Ruling A139: the contact relations — a draft over the saved list, reset when the clip changes.
+  const savedContacts = orientTarget?.contact_target ?? null
+  const savedContactsKey = JSON.stringify(savedContacts?.relations ?? [])
+  const [contactDraft, setContactDraft] = useState<ContactRelation[]>([])
+  useEffect(() => { setContactDraft(JSON.parse(savedContactsKey) as ContactRelation[]) }, [savedContactsKey, selected])
   // The dials act on the A half; how many roles it has decides pair or group.
   const isPairTarget = orientTarget?.role === 'a' && (row?.roles ?? 0) === 2
   const isGroupTarget = orientTarget?.role === 'a' && (row?.roles ?? 0) > 2
@@ -528,7 +540,8 @@ export function ClipLibrary({
         : {},
     heightCm: heightDraft,
     partnerTurnDeg: isPairTarget ? partnerTurn : undefined,
-  }), [clipShift, heightDraft, isGroupTarget, isPairTarget, partnerShift, partnerTurn, roleShift, rollDeg, tiltDeg, yawDeg])
+    contactRelations: contactDraft,
+  }), [contactDraft, clipShift, heightDraft, isGroupTarget, isPairTarget, partnerShift, partnerTurn, roleShift, rollDeg, tiltDeg, yawDeg])
   const draftRef = useRef(alignmentDraft)
   draftRef.current = alignmentDraft
   /** The check to store with Apply/Save: only when every figure reads green (D3/D4). */
@@ -1287,19 +1300,26 @@ export function ClipLibrary({
                           onChange={(v) => setPartnerTurn((prev) => axis === 0 ? [v, prev[1]] : [prev[0], v])}
                           disabled={orientLocked} {...DIAL} />
                       ))}
+                    </>
+                  ) : null}
+                  {(isPairTarget || isGroupTarget) && orientTarget ? (
+                    <>
+                      <ContactRelations roles={(['a', 'b', 'c', 'd', 'e'] as const).slice(0, row?.roles ?? 2)}
+                        saved={savedContacts} draft={contactDraft} onDraft={setContactDraft} busy={busy}
+                        onSave={(next) => { void run(orientTarget, { contact_target: next }) }} />
                       <button type="button" className="ga-btn ga-btn-sm" data-testid="align-auto"
                         disabled={orientLocked || innerTab !== 'places'}
                         title={innerTab !== 'places'
                           ? t('Open the Places view: Auto-align measures the figures shown there.')
-                          : t('Plays the clip with the figures shown and moves partner B so that the attached part’s tip sits at the channel’s opening at the outermost frame and stays on the channel’s axis, then turns B (tilt/roll, at most 20°) so that the shaft runs along the axis; the deepest frame is checked. Writes the five sliders above; Save stores them as usual.')}
+                          : t('Plays the clip with the figures shown and, per contact, moves the place with the attached part (a pair: partner B) so that the tip sits at the target at the outermost frame and stays on the target’s axis; a pair’s B is then turned (tilt/roll, at most 20°). Writes the sliders above; Save stores them as usual.')}
                         onClick={() => {
                           const run = autoAlignRef.current
                           const res: AutoAlignResult = run ? run() : { ok: false, reason: t('The place preview is still loading.') }
                           setAutoAlign(res)
-                          if (res.ok) {
-                            setPartnerShift(res.shiftCm)
+                          if (res.ok && isPairTarget) {
+                            setPartnerShift(res.roleShiftCm.b ?? res.shiftCm)
                             setPartnerTurn([+res.turnDeg[0].toFixed(1), +res.turnDeg[1].toFixed(1)])
-                          }
+                          } else if (res.ok) setRoleShift(res.roleShiftCm)
                         }}>
                         {t('Auto-align')}
                       </button>
@@ -1317,7 +1337,7 @@ export function ClipLibrary({
                         title={t('Runs Auto-align on every pair clip in the list, one after the other, with the pair each clip’s Places view fills in (the persons you picked stay). Nothing is saved: open a clip from the table and Save it there.')}
                         onClick={() => { if (alignAll?.running) alignAllStop.current = true; else void runAlignAll() }}>
                         {alignAll?.running ? t('Stop ({n} done)').replace('{n}', String(alignAll.done))
-                          : t('Align all pair clips ({n})').replace('{n}', String(shown.filter((r) => (r.roles ?? 0) === 2 && !r.missing).length))}
+                          : t('Align all pair and group clips ({n})').replace('{n}', String(shown.filter((r) => (r.roles ?? 0) >= 2 && !r.missing).length))}
                       </button>
                       {alignAll?.rows.length ? (
                         <table data-testid="align-all-result" data-result={JSON.stringify(alignAll.rows)}
@@ -1400,15 +1420,15 @@ export function ClipLibrary({
                                   : t('The bodies interpenetrate besides the channel by {mm} mm, deepest at {pair} (green at most 5 mm, yellow at most 20 mm).')
                                     .replace('{mm}', autoAlign.overlapAfterMm.toFixed(0)).replace('{pair}', autoAlign.clearWorst || '–'))} />
                                 <span>{t('{by} → {of}: {channel}').replace('{by}', autoAlign.by).replace('{of}', autoAlign.of)
-                                  .replace('{channel}', autoAlign.channel.split(':').pop() || autoAlign.channel)}</span>
+                                  .replace('{channel}', autoAlign.target === 'channel' ? (autoAlign.channel.split(':').pop() || autoAlign.channel) : targetWordOf(t, autoAlign.target))}</span>
                               </div>
                               <table style={{ borderCollapse: 'collapse' }}>
                                 <thead><tr><th /><th style={{ padding: '0 4px' }}>{t('before')}</th><th style={{ padding: '0 4px' }}>{t('after')}</th></tr></thead>
                                 <tbody>
                                   {([
-                                    [t('Tip to opening at the outermost frame'), autoAlign.before.entryMm, autoAlign.after.entryMm],
-                                    [t('Depth at the deepest frame'), autoAlign.before.depthMm, autoAlign.after.depthMm],
-                                    [t('Off the axis there'), autoAlign.before.lateralMm, autoAlign.after.lateralMm],
+                                    [autoAlign.target === 'channel' ? t('Tip to opening at the outermost frame') : t('Tip to target at the outermost frame'), autoAlign.before.entryMm, autoAlign.after.entryMm],
+                                    ...(autoAlign.target === 'channel' ? [[t('Depth at the deepest frame'), autoAlign.before.depthMm, autoAlign.after.depthMm] as const] : []),
+                                    [t('Off the axis, worst frame'), autoAlign.before.maxLateralMm, autoAlign.after.maxLateralMm],
                                     [t('Interpenetration besides the channel'), autoAlign.overlapBeforeMm, autoAlign.overlapAfterMm],
                                   ] as const).map(([label, a, b]) => (
                                     <tr key={label}><td>{label}</td>
@@ -1425,6 +1445,20 @@ export function ClipLibrary({
                                     <td style={{ textAlign: 'right', padding: '0 4px' }}>{autoAlign.after.axisDeg.toFixed(0)}°</td></tr>
                                 </tbody>
                               </table>
+                              {autoAlign.relations.length > 1 ? (
+                                <table data-testid="align-auto-relations" style={{ borderCollapse: 'collapse' }}>
+                                  <thead><tr><th style={{ textAlign: 'left' }}>{t('Contact')}</th><th /><th>{t('to target')}</th><th>{t('depth')}</th>
+                                    <th>{t('off axis')}</th><th>{t('shift')}</th></tr></thead>
+                                  <tbody>{autoAlign.relations.map((x) => (
+                                    <tr key={x.part}><td>{x.by} → {x.of} {targetWordOf(t, x.target)}</td>
+                                      <td><LampDot lamp={x.lamp} title={t('Contact')} /></td>
+                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{x.before.entryMm.toFixed(0)} → {x.after.entryMm.toFixed(0)} mm</td>
+                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{x.target === 'channel' ? `${x.after.depthMm.toFixed(0)} mm` : '–'}</td>
+                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{x.before.maxLateralMm.toFixed(0)} → {x.after.maxLateralMm.toFixed(0)} mm</td>
+                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{x.part.toUpperCase()} {x.shiftCm.map((v) => v.toFixed(1)).join(' / ')} cm</td></tr>
+                                  ))}</tbody>
+                                </table>
+                              ) : null}
                               <div className="ga-form-hint" style={{ margin: 0 }}>
                                 {t('Measured on the pair shown; another pair may need its own run. Save stores the sliders.')}
                               </div>
