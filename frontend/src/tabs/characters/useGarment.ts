@@ -422,6 +422,8 @@ export interface GarmentInfo {
   cpu_refit?: boolean
   /** Ruling A134: the OPTIONAL forced run of the whole chain from `step` and its hub jobs (null = unknown). */
   regenerate?: { step: string; hub_jobs: number | null } | null
+  /** Ruling A162: the CPU refit was refused and the run stopped before any hub job (null/absent otherwise). */
+  refit_stopped?: RefitStopped | null
   /** Current fsig fit on screen, or an older one and why (server). */
   preview_freshness?: Freshness | null
   /** Ruling A46: where each piece-only view comes from; null/absent for a piece without the choice. */
@@ -793,6 +795,20 @@ export interface AttemptUsePlan {
 export type AttemptUsePlans = Partial<Record<string, Partial<Record<GarmentView, Record<string, AttemptUsePlan>>>>>
 
 /** GET /characters/{n}/garments/{item} — the Wardrobe's own-mesh panel. */
+/** Ruling A162: a refused CPU refit that stopped the piece's run (server `garments.refit_stopped_info`). */
+export interface RefitStopped {
+  reason: string
+  source_fsig?: string | null
+  source_bsig?: string | null
+  /** A refused fit with a mesh is kept: "Accept the refit anyway". */
+  attempt: boolean
+  /** The user kept the old fit. */
+  kept: boolean
+  /** An earlier fit exists to keep. */
+  keep_available: boolean
+  error?: string | null
+}
+
 export interface GarmentItemInfo {
   pipeline: boolean
   item_id: string

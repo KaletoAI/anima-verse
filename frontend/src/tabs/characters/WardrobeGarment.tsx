@@ -80,6 +80,7 @@ import { FootwearSteps } from './FootwearSteps'
 import { Model3DViewer } from './Model3DViewer'
 import type { ViewerDeform } from './Model3DViewer'
 import { FitBodySwitch } from './FitBodySwitch'
+import { RefitStoppedOffer } from './RefitStoppedOffer'
 import { FootwearAllowance } from './FootwearAllowance'
 import { applyInPlace, bindMap, cutMap, isShown, resolved, shoeSide } from './footwearAllowanceModel'
 import type { AllowanceSetting, ShoeFrame } from './footwearAllowanceModel'
@@ -951,7 +952,11 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
       <div className="ga-garment-dialog-body">
         <div className="ga-garment-dialog-col">
           {/* A fit-settings change alone is shown (with its CPU-only Re-fit) in the fit settings beside the viewer. */}
-          {garment && garment.stale_reasons.some((r) => r !== 'fit_settings_changed') && garment.cpu_refit ? (
+          {garment?.refit_stopped ? (
+            <RefitStoppedOffer character={character} itemId={itemId} stopped={garment.refit_stopped}
+              regenerate={garment.regenerate} feedback={feedback} busy={busy} onRun={onRun}
+              onChanged={() => startPoll(0)} />
+          ) : garment && garment.stale_reasons.some((r) => r !== 'fit_settings_changed') && garment.cpu_refit ? (
             // Ruling A134: the kept mesh is fitted on this body on the CPU — Regenerate is an offer, never a must.
             <div style={{ ...ROW, gap: 8, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--accent, #6aa9ff)' }}>
               <span title={t(REFIT_OFFER_TITLE)}>
