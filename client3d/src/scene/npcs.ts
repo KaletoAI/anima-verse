@@ -18,7 +18,7 @@ import type { PhotoSubject } from '../game/photoView';
 import { bodyYawForView, eyeHeight } from './cameraFraming';
 import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
 import { pickStrandFigures, STRAND_LIMITS, eulerYXZ, fixPivot, fixRoot, partnerTurnFix, composeFix, createPairFit,
-  pairFitObserve, pairFitTotal, findContact, contactSampleOf, turnAxes, RUNTIME_FIT,
+  pairFitObserve, pairFitTotal, findContact, contactSampleOf, turnAxes, RUNTIME_FIT, bendFrameOf,
   type PairFix, type PairFitState, bendSample } from '@anima/scene-render';
 import { OPENING_BUDGET, runFigureFrame, strandCandidates, type FrameEntry, type FrameLoopState,
   type StrandFigureView } from '@anima/scene-render';
@@ -342,7 +342,9 @@ export class NpcManager {
     hit: { chain: number; channel: string } | null; none: boolean; pivot: [number, number, number] | null
     /** Ruling A139: the interaction this record belongs to (the map key is `<id>|<relation>`). */
     interaction: string
-    axes: [number, number, number][] }>();
+    axes: [number, number, number][]
+    /** Ruling A150: the entering figure's root frame this frame (the bend's root lever turns about its axes). */
+    frame: number[] | null }>();
   /** A102b: the rotating start of the opening pass (`runFigureFrame`, from `tickSecondary`). */
   private readonly frameState: FrameLoopState = { openingTurn: 0 };
   onPropEntryError: ((message: string) => void) | null = null;
@@ -1550,6 +1552,7 @@ export class NpcManager {
     if (rec) {
       rec.pivot = got.pivot;
       rec.axes = turnAxes(got.frame);
+      rec.frame = got.frame;
       const it = npc.interaction;
       const phase = it && it.clipDuration > 0 ? it.clipT % it.clipDuration : undefined;
       if (rec.hit) fix = composeFix(fix, pairFitTotal(rec.st, phase));
@@ -2368,6 +2371,14 @@ export class NpcManager {
     this.observePairFits();
   }
 
+  /** Ruling A150: the place type the entering figure of a pair stands on (the turn cap of the posture), null = the
+   *  bare floor of a standing pair. */
+  private pairPlaceGroup(npc: Npc): string | null {
+    const it = npc.interaction;
+    if (!it?.anchor.placeId) return null;
+    return this.placeAt(npc.name, it.anchor.placeId, it.anchor.x, it.anchor.z)?.group ?? null;
+  }
+
   /** Ruling A129.3: after phase B, every two-figure pair interaction measures its contact (the attached part of one
    *  figure, the channel of the other that accepts it) and feeds the shared fine fit. A pair without such a contact
    *  is marked and not inspected again until its clip changes. */
@@ -2401,7 +2412,7 @@ export class NpcManager {
         // Ruling A145: the attached part bends first, within the clip's bend limits.
         const bend = list.map((n) => n.figure!.bendLimits)[0] ?? null;
         rec = { key, st: createPairFit(bend), entering: '', receiving: '', hit: null, none: false, pivot: null, axes: [],
-          interaction: id };
+          interaction: id, frame: null };
         this.pairFits.set(k, rec);
       }
       if (rec.none) return;
@@ -2415,6 +2426,7 @@ export class NpcManager {
           const h = findContact(ie, ir, rel.target);
           if (!h) { rec.none = true; return; }
           rec.hit = h; rec.entering = e.name; rec.receiving = r.name;
+          rec.st.group = this.pairPlaceGroup(e);
           return;
         }
         const [a, b] = list;
@@ -2425,6 +2437,7 @@ export class NpcManager {
         rec.hit = ab ?? ba;
         rec.entering = ab ? a.name : b.name;
         rec.receiving = ab ? b.name : a.name;
+        rec.st.group = this.pairPlaceGroup(ab ? a : b);
         return;   // the pivot is taken when the entering figure is placed next frame
       }
       const e = list.find((n) => n.name === rec!.entering), r = list.find((n) => n.name === rec!.receiving);
@@ -2432,8 +2445,10 @@ export class NpcManager {
       const ie = e.figure!.inspect(), ir = r.figure!.inspect();
       const it = e.interaction!;
       if (!ie || !ir || !rec.pivot || !(it.clipDuration > 0)) return;
-      const sample = contactSampleOf(ie, ir, rec.hit, rec.pivot);
-      if (!sample) return;
+      const found = contactSampleOf(ie, ir, rec.hit, rec.pivot);
+      if (!found) return;
+      // Ruling A150: the root lever turns about the entering figure's body axes; the support comes with the sample.
+      const sample = rec.frame ? { ...found, frame: bendFrameOf(rec.frame) } : found;
       // Ruling A145: bend the chain bones of this frame (the same solve the fit's follow reads), then observe.
       if (rec.st.bend) {
         const b = bendSample(sample, rec.st.bend).bend;
