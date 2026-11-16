@@ -73,7 +73,7 @@ check("skirt pins the waist", gt.mesh_args(Path("a"), Path("b"), "skirt", "t")["
 check("jacket pins the shoulders", gt.mesh_args(Path("a"), Path("b"), "jacket", "t")["pin"] == "shoulders")
 
 # --- the Blender script at least parses and names the modes the core relies on
-src = (ROOT / "app/blender/scripts" / gt.SCRIPT).read_text(encoding="utf-8")
+src = (ROOT / "app/blender/scripts" / gt.SPIKE_SCRIPT).read_text(encoding="utf-8")
 import ast  # noqa: E402
 ast.parse(src)
 for mode in ("mesh", "panels", "from_body", "necklace"):
