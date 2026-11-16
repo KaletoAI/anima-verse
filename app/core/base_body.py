@@ -2907,7 +2907,7 @@ def _dress_common(view: str, *, pieces: Optional[Dict[str, str]], items: Optiona
     return dict(equipped_pieces=dict(pieces or {}), equipped_items=list(items or []),
                 pose_prompt="", expression_prompt="", image_use_case=DRAFT_USE_CASES[view],
                 override_width=size[0], override_height=size[1], apply_state_modifiers=False,
-                mesh_input_profile=profile, back_view=view == "back", character_loras=True)
+                mesh_input_profile=profile, back_view=view == "back", character_loras=False)
 
 
 def render_draft(character_name: str, view: str, *, stem: Path, front: Path, refs_dir: Path,
@@ -4151,7 +4151,7 @@ def _render_views(character_name: str, *, signature: str, pieces: Optional[Dict[
                         reference=reference,
                         common={"equipped_pieces": dict(pieces or {}), "equipped_items": list(items or []),
                                 "pose_prompt": "", "expression_prompt": "", "apply_state_modifiers": False,
-                                "mesh_input_profile": profile, "character_loras": True, **load_kwargs},
+                                "mesh_input_profile": profile, "character_loras": False, **load_kwargs},
                         extra={"base_signature": on, **mesh_extra, "texture_signature": tsig,
                                "dress_text": texts.get("front", "")})
                     if path is None:

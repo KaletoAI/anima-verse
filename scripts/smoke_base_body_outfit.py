@@ -108,7 +108,7 @@ Expected, derived by hand from the brief:
     skip -> attempt 1 kept (fit_gate ok, chosen 1, no warning), no staging
     dir left in model_refs.
     No left/right edits. The front edit carries [2]'s negative; character_loras
-    True. find_ref_image(tpose_back, osig) = the stored composite (the draft lives
+    False (Ruling A130: an edit of the base view keeps the body from picture 1, so no body LoRA). find_ref_image(tpose_back, osig) = the stored composite (the draft lives
     in drafts/, invisible to it). Then the auto hook (auto_generate is OFF)
     asks the Build ("outfit_change", ``figure_build.request`` recorded —
     Task 8 of plan 2026-11-12-unified-worn-pieces) and the Build's assemble
@@ -687,7 +687,7 @@ def main() -> int:
             check("render sizes", [(r.get("override_width"), r.get("override_height")) for r in dressed_renders],
                   [(16, 16), (16, 16)])
             check("use cases", [r.get("image_use_case") for r in dressed_renders], ["outfit_edit", "outfit_edit"])
-            check("character loras", [r.get("character_loras") for r in dressed_renders], [True] * 2)
+            check("character loras", [r.get("character_loras") for r in dressed_renders], [False] * 2)
             front_sha = hashlib.sha256((refs / f"tpose_{bsig}.png").read_bytes()).hexdigest()
             back_sha = hashlib.sha256((refs / f"tpose_back_{bsig}.png").read_bytes()).hexdigest()
             draft_file = refs / "drafts" / f"tpose_back_{osig}.png"
