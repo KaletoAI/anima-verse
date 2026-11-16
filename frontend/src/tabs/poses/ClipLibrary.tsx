@@ -47,7 +47,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { clipHeightGroup, type ClipHeightOffsetsCm } from '@anima/scene-render'
-import { PlacePreview, type AutoAlignResult, type PairCheckResult, type PlaceReadout } from './PlacePreview'
+import { PlacePreview, type AutoAlignResult, type AutoAlignRun, type PairCheckResult, type PlaceReadout } from './PlacePreview'
 import type { AlignmentDraft } from '@anima/scene-render'
 import { ClipPreview, ROLE_COLOR } from './ClipPreview'
 import { invalidateAnimationPreviewClips } from '../characters/Model3DViewer'
@@ -301,7 +301,13 @@ export function ClipLibrary({
   /** The place preview's readout (loop medians) — an all-green one is stored with Apply/Save (D3). */
   const [placeReadout, setPlaceReadout] = useState<PlaceReadout | null>(null)
   /** Ruling A126: the place preview's Auto-align (set while a pair scene runs) and its last outcome. */
-  const autoAlignRef = useRef<(() => AutoAlignResult) | null>(null)
+  const autoAlignRef = useRef<AutoAlignRun | null>(null)
+  /** Ruling A129.6: "Align all" — Auto-align over every pair clip listed, one result per clip, nothing saved. The
+   *  results wait per clip (kind|set) and fill the Partner B dials when that clip is opened. */
+  const [alignAll, setAlignAll] = useState<{ running: boolean; done: number; rows: { kind: string; set: string
+    result: AutoAlignResult }[] } | null>(null)
+  const pendingAlign = useRef<Record<string, { shiftCm: [number, number, number]; turnDeg: [number, number] }>>({})
+  const alignAllStop = useRef(false)
   const [autoAlign, setAutoAlign] = useState<AutoAlignResult | null>(null)
   /** Ruling A129.3: the pair shown before and with the per-pair fine fit the game runs. */
   const pairCheckRef = useRef<(() => PairCheckResult) | null>(null)
@@ -425,13 +431,47 @@ export function ClipLibrary({
       // Clicking the row (no column) previews the set the kind actually has —
       // neutral when there is one, otherwise the first that exists.
       const own = clips.filter((c) => c.kind === kind).map((c) => c.set || '')
-      setPreviewSet(set !== undefined ? set : orderSets(Array.from(new Set(own)))[0] || '')
+      const nextSet = set !== undefined ? set : orderSets(Array.from(new Set(own)))[0] || ''
+      setPreviewSet(nextSet)
+      // A129.6: an "Align all" result for this clip fills the Partner B dials as a draft (Save stores it).
+      const waiting = pendingAlign.current[`${kind}|${nextSet}`]
+      if (waiting) { setPartnerShift(waiting.shiftCm); setPartnerTurn(waiting.turnDeg) }
       setAction(null)
       setError('')
       setConflict(null)
     },
     [clips, heightBusy, orientBusy, resetDials],
   )
+
+  /** A129.6: Auto-align every pair clip listed, one after the other, on the pair each one's preview fills in. */
+  const runAlignAll = useCallback(async () => {
+    const targets = shown.filter((r) => (r.roles ?? 0) === 2 && !r.missing)
+    const back = selected
+    alignAllStop.current = false
+    const out: { kind: string; set: string; result: AutoAlignResult }[] = []
+    setAlignAll({ running: true, done: 0, rows: [] })
+    const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+    for (const r of targets) {
+      if (alignAllStop.current) break
+      const set = orderSets(Array.from(new Set(r.clips.map((c) => c.set || ''))))[0] || ''
+      delete pendingAlign.current[`${r.kind}|${set}`]
+      pick(r.kind, set)
+      let run: AutoAlignRun | null = null
+      // The preview of THIS clip with two figures; then a moment for the figures' first frames.
+      for (let k = 0; k < 240 && !alignAllStop.current; k++) {
+        await wait(500)
+        const cur = autoAlignRef.current
+        if (cur && cur.kind === r.kind && (cur.set ?? '') === set && (cur.figures ?? 0) >= 2) { run = cur; break }
+      }
+      await wait(1500)
+      const result: AutoAlignResult = run ? run() : { ok: false, reason: t('No pair was filled on a place of this clip.') }
+      if (result.ok) pendingAlign.current[`${r.kind}|${set}`] = { shiftCm: result.shiftCm, turnDeg: result.turnDeg }
+      out.push({ kind: r.kind, set, result })
+      setAlignAll({ running: true, done: out.length, rows: [...out] })
+    }
+    setAlignAll({ running: false, done: out.length, rows: out })
+    if (back) pick(back)
+  }, [pick, selected, shown, t])
 
   // Opened from a pose: every filter off so the row is in the list, the kind
   // selected and scrolled into view — once per `seq`, after the listing is in.
@@ -1272,6 +1312,44 @@ export function ClipLibrary({
                         }}>
                         {t('Check this pair')}
                       </button>
+                      <button type="button" className="ga-btn ga-btn-sm" data-testid="align-all"
+                        disabled={innerTab !== 'places' || orientBusy || heightBusy}
+                        title={t('Runs Auto-align on every pair clip in the list, one after the other, with the pair each clip’s Places view fills in (the persons you picked stay). Nothing is saved: open a clip from the table and Save it there.')}
+                        onClick={() => { if (alignAll?.running) alignAllStop.current = true; else void runAlignAll() }}>
+                        {alignAll?.running ? t('Stop ({n} done)').replace('{n}', String(alignAll.done))
+                          : t('Align all pair clips ({n})').replace('{n}', String(shown.filter((r) => (r.roles ?? 0) === 2 && !r.missing).length))}
+                      </button>
+                      {alignAll?.rows.length ? (
+                        <table data-testid="align-all-result" data-result={JSON.stringify(alignAll.rows)}
+                          style={{ borderCollapse: 'collapse', fontSize: 11 }}>
+                          <thead><tr><th style={{ textAlign: 'left' }}>{t('Clip')}</th><th /><th>{t('tip')}</th><th>{t('depth')}</th>
+                            <th>{t('off axis')}</th><th>{t('angle')}</th><th>{t('else')}</th><th /></tr></thead>
+                          <tbody>
+                            {alignAll.rows.map((x) => (
+                              <tr key={`${x.kind}|${x.set}`}>
+                                <td title={x.set ? `${x.kind} (${x.set})` : x.kind} style={{ maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{x.kind}</td>
+                                {x.result.ok ? (
+                                  <>
+                                    <td style={{ whiteSpace: 'nowrap' }}><LampDot lamp={x.result.lamp} title={t('Channel contact')} />
+                                      <LampDot lamp={x.result.clearLamp} title={t('Nothing else interpenetrates (green at most 5 mm)')} /></td>
+                                    <td style={{ textAlign: 'right' }}>{x.result.after.entryMm.toFixed(0)}</td>
+                                    <td style={{ textAlign: 'right' }}>{x.result.after.depthMm.toFixed(0)}</td>
+                                    <td style={{ textAlign: 'right' }}>{x.result.after.maxLateralMm.toFixed(0)}</td>
+                                    <td style={{ textAlign: 'right' }}>{x.result.after.axisDeg.toFixed(0)}°</td>
+                                    <td style={{ textAlign: 'right' }}>{x.result.overlapAfterMm.toFixed(0)}</td>
+                                  </>
+                                ) : <td colSpan={6} style={{ color: 'var(--danger, #f85149)' }} title={x.result.reason}>{x.result.reason}</td>}
+                                <td><button type="button" className="ga-btn ga-btn-sm" onClick={() => pick(x.kind, x.set)}
+                                  disabled={alignAll.running}>{t('Open')}</button></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      ) : null}
+                      {alignAll && !alignAll.running && alignAll.rows.length ? (
+                        <div className="ga-form-hint" style={{ margin: 0 }}>
+                          {t('mm; nothing is saved. Open a clip: its Partner B dials carry the result; Save stores it.')}</div>
+                      ) : null}
                       {pairCheck ? (
                         <div data-testid="pair-check-result" data-result={JSON.stringify(pairCheck)} style={{ fontSize: 11, lineHeight: 1.35 }}>
                           {pairCheck.ok ? (

@@ -6070,6 +6070,17 @@
     "+ follow": "+ folgen",
     "Nothing else interpenetrates: only the attached part enters the other body, through the channel (at most 5 mm elsewhere).": "Sonst durchdringt nichts: nur das angesetzte Teil dringt in den anderen Körper ein, durch den Kanal (anderswo höchstens 5 mm).",
     "The bodies interpenetrate besides the channel by {mm} mm, deepest at {pair} (green at most 5 mm, yellow at most 20 mm).": "Die Körper durchdringen sich außerhalb des Kanals um {mm} mm, am tiefsten bei {pair} (grün höchstens 5 mm, gelb höchstens 20 mm).",
-    "Deepest besides the channel: {pair}": "Am tiefsten außerhalb des Kanals: {pair}"
+    "Deepest besides the channel: {pair}": "Am tiefsten außerhalb des Kanals: {pair}",
+    "No pair was filled on a place of this clip.": "Auf keinem Platz dieses Clips wurde ein Paar eingesetzt.",
+    "Runs Auto-align on every pair clip in the list, one after the other, with the pair each clip’s Places view fills in (the persons you picked stay). Nothing is saved: open a clip from the table and Save it there.": "Führt Automatisch ausrichten für jeden Paar-Clip der Liste nacheinander aus, mit dem Paar, das die Plätze-Ansicht des Clips einsetzt (die gewählten Personen bleiben). Nichts wird gespeichert: einen Clip aus der Tabelle öffnen und dort speichern.",
+    "Stop ({n} done)": "Anhalten ({n} fertig)",
+    "Align all pair clips ({n})": "Alle Paar-Clips ausrichten ({n})",
+    "tip": "Spitze",
+    "off axis": "neben Achse",
+    "angle": "Winkel",
+    "else": "sonst",
+    "Channel contact": "Kanalkontakt",
+    "Nothing else interpenetrates (green at most 5 mm)": "Sonst durchdringt nichts (grün höchstens 5 mm)",
+    "mm; nothing is saved. Open a clip: its Partner B dials carry the result; Save stores it.": "mm; nichts ist gespeichert. Einen Clip öffnen: seine Partner-B-Regler tragen das Ergebnis; Speichern sichert es."
   }
 }

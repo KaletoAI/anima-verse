@@ -240,6 +240,9 @@ export type AutoAlignResult =
       before: ContactReport; after: ContactReport; afterShift: ContactReport; overlapBeforeMm: number; overlapAfterMm: number
       lampBefore: ContactLamp; lamp: ContactLamp }
 
+/** The Auto-align of the scene that runs now, tagged with what it shows (A129.6: "Align all" waits for its clip). */
+export type AutoAlignRun = (() => AutoAlignResult) & { kind?: string; set?: string; figures?: number }
+
 export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq, bust = 0, poses, onOpenPose,
   onReadout, autoAlignRef, pairCheckRef, height = 360 }: {
   kind: string; set?: string
@@ -255,7 +258,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   onOpenPose?: (key: string) => void
   onReadout?: (r: PlaceReadout | null) => void
   /** Set while a scene runs: plays the clip headless-fast and solves partner B's shift (Ruling A126). */
-  autoAlignRef?: MutableRefObject<(() => AutoAlignResult) | null>
+  autoAlignRef?: MutableRefObject<AutoAlignRun | null>
   /** Set while a scene runs: the pair over whole loops at 60 fps, before and with the per-pair fine fit (A129.3). */
   pairCheckRef?: MutableRefObject<(() => PairCheckResult) | null>
   height?: number
@@ -1118,7 +1121,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         }
         if (pairCheckOut.current) pairCheckOut.current.current = pairCheck
         disposers.push(() => { if (pairCheckOut.current?.current) pairCheckOut.current.current = null })
-        if (autoAlignOut.current) autoAlignOut.current.current = autoAlign
+        if (autoAlignOut.current) autoAlignOut.current.current = Object.assign(autoAlign, { kind, set, figures: figs.length })
         disposers.push(() => { if (autoAlignOut.current?.current === autoAlign) autoAlignOut.current.current = null })
         tick()
       } catch (e) {
