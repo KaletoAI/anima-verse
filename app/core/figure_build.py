@@ -322,6 +322,9 @@ def _chain_step(character_name: str, name: str, item_id: str, label: str,
     spends — a manual Build runs it (Ruling A25; an automatic one skips it)."""
     from app.core import garments
     failure = garments.cached_failure(character_name, item_id, profile=profile)
+    if failure is not None and (failure.get(garments.REFIT_OFFER) or {}).get("kept"):
+        # Ruling A162: the user kept the old fit after a refused refit — nothing to run for the piece.
+        return None
     estimate = garments.run_estimate(character_name, item_id, profile=profile)
     if failure is not None:
         error = str(failure.get("error") or "chain failed")

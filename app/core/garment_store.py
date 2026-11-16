@@ -1082,10 +1082,12 @@ def newest_accepted_fits(character_name: str, item_id: str, *, base_model_sha: s
 # base model it failed on.
 
 def record_failure(character_name: str, item_id: str, fsig: str, *, step: str, error: str,
-                   base_model_sha: str = "", stamp: Optional[Dict[str, Any]] = None) -> None:
+                   base_model_sha: str = "", stamp: Optional[Dict[str, Any]] = None,
+                   refit_offer: Optional[Dict[str, Any]] = None) -> None:
     """Persist the failure of a chain run of ``(item_id, fsig)``. ``stamp`` (a refused refit of the sweep,
     ``garment_refit.refusal_stamp``): ``{fit_version, inputs_id}`` merged into the record — the sweep does not
-    try the same refit again (``garment_refit.held_refusal``, Ruling R7c)."""
+    try the same refit again (``garment_refit.held_refusal``, Ruling R7c). ``refit_offer`` (Ruling A162): the
+    refused CPU refit that stopped the run before any hub job — ``{reason, source_fsig, source_bsig, attempt}``."""
     from app.core import model_geometry
     from app.core.timeutils import utc_now
     path = garment_path(character_name, item_id, fsig, "failed")
@@ -1100,6 +1102,8 @@ def record_failure(character_name: str, item_id: str, fsig: str, *, step: str, e
         record["scale_retry"] = SCALE_RETRY_VERSION
         if stamp:
             record.update({key: stamp[key] for key in ("fit_version", "inputs_id") if key in stamp})
+        if refit_offer:
+            record["refit_offer"] = dict(refit_offer)
     write_record(path, record)
 
 

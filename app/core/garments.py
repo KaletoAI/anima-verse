@@ -2422,7 +2422,7 @@ def _note_outcome(character_name: str, item_id: str, result: Dict[str, Any]) -> 
             base = base_body.current_base(character_name)
             gs.record_failure(character_name, item_id, fsig, step=str(result["step"]),
                               error=str(result.get("error") or ""), base_model_sha=base[1] if base else "",
-                              stamp=result.get("refusal_stamp"))
+                              stamp=result.get("refusal_stamp"), refit_offer=result.get(REFIT_OFFER))
     except (OSError, ValueError) as e:
         logger.warning("Garment failure record %s/%s not written: %s", character_name, item_id, e)
 
@@ -2520,7 +2520,9 @@ def run_estimate(character_name: str, item_id: str, *,
     start at an image step but ``garment_source.find_source`` has a source
     made on another base and the current group holds no own images: the
     chain refits on the CPU first (``_refit_from_source``), so ``hub_jobs``
-    is 0 and the note names the full cost a refused refit falls back to.
+    is 0 and the note names the full cost of a new mesh — since Ruling A162 a
+    refused refit stops there (``REFIT_STOPPED``) and that cost is spent only
+    on the user's explicit Regenerate.
     ``state``: the open / closed state of a closable clothing piece whose
     chain is estimated (None: the worn state) — its own fsig, its own
     source (``outfit_options.with_item_state``). The OPEN state's image
@@ -3250,11 +3252,25 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                           if not _done(character_name, item_id, kind, fsig, s, base_sha, method, hsig)), None)
             if first is None:
                 return {"ok": True, "fsig": fsig, "ran": []}
-            if first in gs.IMAGE_STEPS:
-                # Refit before re-render: the last accepted source onto the new base first (CPU).
+            if first in gs.IMAGE_STEPS or (first == "fit" and method == gs.EDIT_CHAIN
+                                           and garment_source_materialized(character_name, item_id, fsig)):
+                # Refit before re-render: the last accepted source onto the new base first (CPU) — or the copies a
+                # refused refit kept (Ruling A162) fitted again.
                 refit = _refit_from_source(character_name, item_id, kind, method, fsig, bsig, profile)
                 if refit is not None and refit.get("ok"):
                     return refit
+                if refit is not None:
+                    # Ruling A162: a refused refit never falls through to the image chain on its own — the hub
+                    # jobs of a new mesh are the user's choice (the piece's offer: keep / accept anyway / new mesh,
+                    # ``REFIT_OFFER``). Recorded as the piece's failure at the fit; a manual Build tries the CPU
+                    # refit again, an explicit run of an image step (Regenerate) renders.
+                    source = refit.get("refit") or {}
+                    offer = {"reason": refit.get("error") or "", "source_fsig": source.get("fsig"),
+                             "source_bsig": source.get("bsig"), "attempt": bool(refit.get("attempt"))}
+                    gates = {"ok": False, REFIT_OFFER: offer}
+                    return {**_refusal(character_name, item_id, fsig, "fit",
+                                       REFIT_STOPPED.format(reason=refit.get("error") or "refused"), gates, ran),
+                            REFIT_OFFER: offer}
         else:
             first = min(wanted, key=order.index)
             scoped = view is not None and method == gs.EDIT_CHAIN
@@ -3465,37 +3481,67 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
         return _refusal(character_name, item_id, fsig, step, str(e) or type(e).__name__, None, ran)
 
 
+def garment_source_materialized(character_name: str, item_id: str, fsig: str) -> bool:
+    """Whether the group ``fsig`` holds a source copied from another group (``garment_source.is_materialized``)."""
+    from app.core import garment_source
+    return garment_source.is_materialized(character_name, item_id, fsig)
+
+
+#: Ruling A162: the gates key of a refusal that stopped a default run after a refused CPU refit (no hub job spent).
+REFIT_OFFER = "refit_offer"
+#: Ruling A162: the error of that refusal — the piece dialog offers keep / accept anyway / a new mesh.
+REFIT_STOPPED = ("Refit failed ({reason}) — no new mesh was made: keep the old fit, accept the refit anyway or "
+                 "make a new mesh (hub jobs)")
+
+
 def _refit_from_source(character_name: str, item_id: str, kind: str, method: str, fsig: str, bsig: str,
                        profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Refit before re-render (``garment_source``): when the image group ``fsig`` has none of its own images
     and the item has an accepted source made on another base, copy it in and fit it onto the current base on the
     CPU (``_fit``; edit chain only). ``{ok: True, fsig, ran, refit: {source…}}`` when accepted; ``{ok: False,
-    error, refit}`` when refused (the copies are dropped again, the caller renders the chain); None when there
-    is nothing to refit from."""
-    from app.core import garment_source, garment_store as gs
+    error, refit, attempt}`` when refused; None when there is nothing to refit from.
+
+    Ruling A162: the caller never renders the chain after a refusal (``REFIT_STOPPED``). A refusal by the fit's
+    gates that kept a fit attempt with a mesh (``fit_attempts``) KEEPS the copies (``attempt`` True), so the user
+    can accept that refit as it is (``fits/plain/accept``) and the next default run fits the same copies again
+    (``group`` already materialised: no second copy); any other refusal (the framing beyond the caps, a missing
+    source file) drops them again — there is nothing to accept."""
+    from app.core import fit_attempts, garment_source, garment_store as gs
     if method != gs.EDIT_CHAIN:
         return None
     if garment_source.has_own_images(character_name, item_id, kind, method, fsig):
         return None
-    source = garment_source.find_source(character_name, item_id, kind, method, profile, fsig)
+    if garment_source.is_materialized(character_name, item_id, fsig):
+        held = garment_source.source_of(character_name, item_id, fsig)
+        source: Optional[Dict[str, Any]] = {"fsig": held.get(garment_source.MATERIALIZED), "bsig": held.get("bsig"),
+                                            "base_images": held.get("base_images")}
+        copied = True
+    else:
+        source = garment_source.find_source(character_name, item_id, kind, method, profile, fsig)
+        copied = False
     if source is None:
         return None
     step = "fit"
     gs.start(character_name, item_id, step)
     try:
-        garment_source.materialize(character_name, item_id, kind, method, source["fsig"], fsig)
+        if not copied:
+            garment_source.materialize(character_name, item_id, kind, method, source["fsig"], fsig)
         _fit(character_name, item_id, kind, fsig, bsig, profile)
         ran = ["fit"]
-    except Exception as e:  # noqa: BLE001 — any refusal or missing source: the chain is rendered instead
+    except Exception as e:  # noqa: BLE001 — any refusal or missing source: the piece's offer (Ruling A162)
         error = e.error if isinstance(e, _Refused) else (str(e) or type(e).__name__)
-        try:
-            garment_source.drop_materialized(character_name, item_id, fsig)
-        except (OSError, ValueError):
-            logger.exception("Garment %s/%s: dropping the copied source failed", character_name, item_id)
+        found = fit_attempts.attempt_of(character_name, item_id, "") if isinstance(e, _Refused) else None
+        attempt = bool(found and found[0] is not None and str(found[1].get("fsig") or "") == fsig)
+        if not attempt:
+            try:
+                garment_source.drop_materialized(character_name, item_id, fsig)
+            except (OSError, ValueError):
+                logger.exception("Garment %s/%s: dropping the copied source failed", character_name, item_id)
         gs.end(character_name, item_id, step)
-        logger.info("Garment %s/%s: refit from %s (made on %s) refused at %s — %s; the chain is rendered",
-                    character_name, item_id, source["fsig"], source.get("bsig"), step, error)
-        return {"ok": False, "error": error, "refit": source}
+        logger.info("Garment %s/%s: refit from %s (made on %s) refused at %s — %s; no new mesh is made on its own "
+                    "(%s)", character_name, item_id, source["fsig"], source.get("bsig"), step, error,
+                    "the refused fit is kept to accept" if attempt else "nothing to accept")
+        return {"ok": False, "error": error, "refit": source, "attempt": attempt}
     gs.end(character_name, item_id, step)
     logger.info("Garment %s/%s: refitted from %s (made on %s) onto %s — no image or mesh job", character_name,
                 item_id, source["fsig"], source.get("bsig"), bsig)
@@ -5407,6 +5453,88 @@ def _refit_offer(character_name: str, item_id: str, kind: str, method: str, fsig
     return {"cpu_refit": cpu, "regenerate": regenerate}
 
 
+def _previous_fit(character_name: str, item_id: str, fsig: str, base_sha: str,
+                  profile: Dict[str, Any]) -> Optional[Tuple[Path, Dict[str, Any]]]:
+    """Ruling A162: ``(fit GLB, record)`` of the item's newest accepted base-body fit of its current method and
+    worn state in ANOTHER group than ``fsig`` that is not accepted on the current base model ``base_sha`` — the
+    fit "Keep the old fit" serves on — else None."""
+    from app.core import garment_store as gs
+    try:
+        state = gs.item_state(character_name, item_id, profile, None)
+        method = gs.garment_method(character_name, item_id, profile=profile)
+    except ValueError:
+        return None
+    hit = gs.newest_accepted_fits(character_name, item_id, state=state).get(method)
+    if hit is None:
+        return None
+    parsed = gs.parse_name(hit[0])
+    if (parsed[1] if parsed else str(hit[1].get("fsig") or "")) == fsig:
+        return None
+    from app.core.model_geometry import record_matches
+    if record_matches(hit[1], base_sha):
+        return None
+    return hit
+
+
+def refit_stopped_info(character_name: str, item_id: str, fsig: str, base_sha: str,
+                       profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Ruling A162: the persisted refusal of a default run that stopped after a refused CPU refit
+    (``REFIT_STOPPED``), for the piece dialog's offer — ``{reason, source_fsig, source_bsig, attempt (a refused fit
+    to accept anyway), kept (the old fit is kept), keep_available, error}`` — else None."""
+    from app.core import garment_store as gs
+    record = gs.chain_failure(character_name, item_id, fsig, base_model_sha=base_sha)
+    offer = (record or {}).get(REFIT_OFFER)
+    if not isinstance(offer, dict):
+        return None
+    keep = offer.get("kept") or _previous_fit(character_name, item_id, fsig, base_sha, profile) is not None
+    return {**offer, "kept": bool(offer.get("kept")), "keep_available": bool(keep),
+            "error": record.get("error")}
+
+
+def keep_previous_fit(character_name: str, item_id: str) -> Dict[str, Any]:
+    """Ruling A162, "Keep the old fit as it is": after a refused CPU refit (``refit_stopped_info``) the item's
+    newest accepted fit made on the previous body (``_previous_fit``) is served on the current base model as it is
+    — its record re-stamped on that model (``kept_by_user`` names the model it was made on), the persisted refusal
+    marked ``kept`` (the Build plan leaves the piece alone; automatic runs skip it as before) and the figure
+    re-assembled (CPU). No hub job, no fit. ValueError when there is no stopped refit or no old fit to keep."""
+    from app.core import base_body, figure_build, garment_assembly, model_geometry
+    from app.core import garment_store as gs
+    from app.core.keyed_lock import keyed_lock
+    from app.core.timeutils import utc_now_iso
+    from app.models.character import get_character_profile
+    profile = get_character_profile(character_name) or {}
+    base = base_body.current_base(character_name, profile=profile)
+    if base is None:
+        raise ValueError(f"{character_name} is not on the base-body pipeline")
+    bsig, base_sha = base
+    fsig = gs.garment_fsig(character_name, item_id, profile=profile)
+    failed = gs.garment_path(character_name, item_id, fsig, "failed")
+    with keyed_lock("garment_keep_fit", f"{character_name}/{item_id}"):
+        record = gs.chain_failure(character_name, item_id, fsig, base_model_sha=base_sha)
+        if not isinstance((record or {}).get(REFIT_OFFER), dict):
+            raise ValueError("The piece's refit was not refused — there is no old fit to keep instead")
+        hit = _previous_fit(character_name, item_id, fsig, base_sha, profile)
+        if hit is None:
+            raise ValueError("There is no earlier fit of this piece to keep")
+        path, fit_record = hit
+        geometry = {key: fit_record.get(key) for key in ("base_model_sha256", model_geometry.FIELD, "body_sha256")}
+        fit_record = {**{k: v for k, v in fit_record.items() if k != model_geometry.FIELD},
+                      "base_model_sha256": base_sha, "body_sha256": base_sha,
+                      **model_geometry.stamp_on(character_name, bsig, base_sha),
+                      "kept_by_user": {"at": utc_now_iso(), "from": geometry, "refit_error": record.get("error")}}
+        gs.write_record(path.with_suffix(".json"), fit_record)
+        gs.write_record(failed, {**record, REFIT_OFFER: {**record[REFIT_OFFER], "kept": True,
+                                                         "kept_fsig": fit_record.get("fsig")}})
+    gs.end(character_name, item_id, "fit")
+    figure_build.answer_piece_failure(character_name, item_id, ("fit",))
+    from app.core import figure
+    figure.invalidate()
+    garment_assembly.schedule(character_name)
+    logger.info("Garment %s/%s: the old fit %s is kept on %s by the user (refit refused: %s)", character_name,
+                item_id, path.name, bsig, record.get("error"))
+    return {"item_id": item_id, "kept": path.name}
+
+
 def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     """UI info of one garment (the hair row, the own-mesh dialog): fsig, the method and its
     source, description, every step's files and gate numbers (the steps of
@@ -5561,6 +5689,7 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
                      "first_step": next(iter(gs.steps_for(kind, method)), None),
                      "created_at": fit_record.get("created_at")}
     refit_offer = _refit_offer(character_name, item_id, kind, method, fsig, steps, stale, profile)
+    refit_stopped = refit_stopped_info(character_name, item_id, fsig, base[1] or "", profile) if fsig else None
     status = gs.status(character_name, item_id)
     queue = queue_state(character_name, item_id)
     failed = status["failed"]
@@ -5591,6 +5720,8 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
         # Ruling A134: the fit is due but a CPU re-fit of the kept mesh on this body suffices (``cpu_refit``, the
         # next Build does it, 0 hub jobs); ``regenerate`` is the optional full re-make and its hub jobs.
         **refit_offer,
+        # Ruling A162: the CPU refit was refused and the run stopped before any hub job — keep / accept / new mesh.
+        "refit_stopped": refit_stopped,
         # Ruling A46: where each piece-only view comes from (the setting, the reason, what is due).
         "piece_views": (piece_views_info(character_name, item_id, fsig, _item_, checking=checking)
                         if fsig and method == gs.EDIT_CHAIN and kind == _clothing() else None),

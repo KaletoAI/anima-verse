@@ -3641,6 +3641,21 @@ def accept_character_garment_fit(character_name: str, item_id: str, body: str,
     return _fit_accept_call(fit_attempts.accept, character_name, item_id, body)
 
 
+@router.post("/{character_name}/garments/{item_id}/keep-previous-fit")
+def keep_character_garment_previous_fit(character_name: str, item_id: str,
+                                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Ruling A162, "Keep the old fit as it is": after the CPU refit of an own-mesh piece was refused (the run
+    stopped before any hub job), serve the piece's previous fit on the current body as it is
+    (``garments.keep_previous_fit``) — no hub job, no fit; the figure is re-assembled on the CPU. 409 when the
+    refit was not refused or there is no earlier fit."""
+    from app.core import garments
+    _require_character(character_name)
+    try:
+        return garments.keep_previous_fit(character_name, item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
 @router.post("/{character_name}/garments/{item_id}/fits/{body}/unaccept")
 def unaccept_character_garment_fit(character_name: str, item_id: str, body: str,
                                    _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
