@@ -25,8 +25,8 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   placeCapsuleWireframe, consumerPartnerCapsules, probeCapsules, probeSweepOffset, probeSweptPose, probeSnapshot,
   PROBE_COLOR, CAPSULE_REGION_COLORS, CHANNEL_GROW, bindChannels, channelCoords, channelWireframe, guideRod, inZone,
   placeChannelWireframe, stepEngagement, bindChannelOpening, OPENING_MARGIN_M, OPENING_FALLOFF_M,
-  OPENING_BAND_M, OPENING_SLACK_M } from '@anima/scene-render'
-import type { SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm,
+  OPENING_BAND_M, OPENING_SLACK_M, bindPoseShapes } from '@anima/scene-render'
+import type { PoseShapes, SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm,
   CollisionOverlay, CollisionPayload, FootPose, GarmentCollision, HairStrandRecord, StrandHair, CapsuleNow,
   PartnerSnapshot, ProbeSourceCapsule, ChannelNow, Engagement, ChannelOpeningBinding,
   OpeningSegment } from '@anima/scene-render'
@@ -1285,6 +1285,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         // It drives the model's own skeleton by bone name, so model and clip
         // MUST come from the same rig — see shared/models/clips/README.md.
         let secondary: SecondaryMotion | null = null
+        // Ruling A141: a draped template garment's pose shapes, blended by the leg directions (the client's runtime).
+        let poseShapes: PoseShapes | null | undefined
         let secondaryRev = motionRef.current?.rev
         let secondaryEnabled = secondaryOnRef.current
         let mixer: InstanceType<typeof THREE.AnimationMixer> | null = null
@@ -3360,6 +3362,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           // through the knee, after the mixer's pose, before the extension
           // motion (P3b, `Figure.update` does the same in the world).
           if (clipGroup === 'seat' && shod && floorWorldY !== null) seatFootLift(THREE, object, shod, floorWorldY)
+          // The pose is final: the draped garments take their pose shapes (Ruling A141, `FigureRuntime.poseStep`).
+          if (poseShapes === undefined) poseShapes = bindPoseShapes(THREE, object)
+          poseShapes?.update()
           // A figure whose hair runs per strand solves no hair chain (the client's `Figure.updateSecondary`).
           const framedMotion = strand?.enabled ? withoutHairGroups(motionRef.current) : motionRef.current
           if (secondaryRev !== framedMotion?.rev || secondaryEnabled !== secondaryOnRef.current) {

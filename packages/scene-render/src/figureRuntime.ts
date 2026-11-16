@@ -11,6 +11,7 @@
  *    collision (`setCollision`) and the motion payload re-configured by `rev`
  *    (hair chains dropped while the strands run, `withoutHairGroups`);
  *  - the GPU garment push (`createGarmentCollision`, per-figure material clones);
+ *  - the pose shapes of draped template garments (`bindPoseShapes`, Ruling A141), set in `poseStep`;
  *  - the per-strand hair (`createStrandHair` on the record `loadStrandRecord`
  *    hands in; `prepareStrandHair` / `setStrandHair`);
  *  - the partner binding: own capsules (`bindCollision`) and channels
@@ -36,6 +37,8 @@ import { createSecondaryMotion, withoutHairGroups } from './secondaryMotion'
 import type { SecondaryMotion, SecondaryMotionPayload } from './secondaryMotion'
 import { createGarmentCollision } from './garmentCollision'
 import type { GarmentCollision } from './garmentCollision'
+import { bindPoseShapes } from './poseShapes'
+import type { PoseShapes } from './poseShapes'
 import { createStrandHair } from './hairSim'
 import type { StrandHair } from './hairSim'
 import { STRAND_LIMITS } from './hairSimMath'
@@ -100,6 +103,8 @@ export class FigureRuntime {
   readonly tier: 'full' | 'low'
   readonly bindRadius: number
   private garmentCollision: GarmentCollision | null
+  /** Ruling A141: the template garments' pose shapes (null = none on this instance). */
+  readonly poseShapes: PoseShapes | null
   private secondaryRev?: string
   private secondaryTime = performance.now()
   private readonly secondaryPosition: Vector3
@@ -150,6 +155,7 @@ export class FigureRuntime {
     // The patched materials are clones owned by THIS runtime; `dispose` frees them.
     const inst = this.instance
     this.garmentCollision = inst ? createGarmentCollision(three, inst, opts.collision) : null
+    this.poseShapes = inst ? bindPoseShapes(three, inst) : null
     this.secondaryFar = opts.tier === 'low'
   }
 
@@ -169,6 +175,8 @@ export class FigureRuntime {
    *  jump > 2 m, and records the real time for phase B. `realDelta` defaults to the wall clock since the last call. */
   poseStep(options: { frozen?: boolean; far?: boolean; realDelta?: number } = {}): void {
     const now = performance.now()
+    // The pose is final: the draped garments take their pose shapes (morphs apply before skinning).
+    this.poseShapes?.update()
     const realDelta = options.realDelta ?? (now - this.secondaryTime) / 1000
     this.secondaryTime = now
     // A figure whose hair runs per strand solves no hair chain.

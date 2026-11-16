@@ -283,7 +283,8 @@ export interface TemplateInfo {
   reason: string
   built_at: string
   metrics: { wall_s: number | null; cpu_s: number | null; stretch_max: number | null; coverage: number | null;
-    texture: string } | null
+    texture: string; /** Ruling A141: the poses draped again as corrective shapes ("sit", "kneel"). */
+    pose_shapes?: string[] } | null
   cost: { llm_calls: number; hub_jobs: number; cpu_s: number }
 }
 
@@ -329,7 +330,11 @@ export function templateCost(c: TemplateInfo['cost'] | undefined, t: Tr = EN): s
     .replace('{n}', String(cost.llm_calls)).replace('{jobs}', String(cost.hub_jobs)).replace('{s}', String(cost.cpu_s))
 }
 
-/** "Draped <time> · 14 s wall · stretch 1.10 · texture from the cut-out views" — the built line (checklist 8). */
+/** Ruling A141: the words of the poses a drape carries a corrective shape for. */
+export const POSE_SHAPE_LABELS: Record<string, string> = { sit: 'Sit', kneel: 'Kneel' }
+
+/** "Draped <time> · 14 s wall · stretch 1.10 · texture from the cut-out views · shaped for Sit, Kneel" — the built line
+ *  (checklist 8). */
 export function templateBuilt(info: TemplateInfo, t: Tr = EN): string {
   if (info.state !== 'ready' || !info.built_at) return ''
   const m = info.metrics
@@ -338,6 +343,8 @@ export function templateBuilt(info: TemplateInfo, t: Tr = EN): string {
   if (m?.stretch_max != null) parts.push(t('stretch {n}').replace('{n}', m.stretch_max.toFixed(2)))
   if (m?.texture) parts.push(m.texture === 'cutout' ? t('texture from the cut-out views')
     : t('texture from the item picture'))
+  if (m?.pose_shapes?.length) parts.push(t('shaped for {poses}').replace('{poses}',
+    m.pose_shapes.map(p => t(POSE_SHAPE_LABELS[p] || p)).join(', ')))
   return parts.join(' · ')
 }
 
