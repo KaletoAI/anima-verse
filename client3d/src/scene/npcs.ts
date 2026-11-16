@@ -17,7 +17,9 @@ import { RIDE_ARRIVE_M, rideStep, type StairRide } from '../game/stairs';
 import type { PhotoSubject } from '../game/photoView';
 import { bodyYawForView, eyeHeight } from './cameraFraming';
 import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
-import { pickStrandFigures, STRAND_LIMITS, eulerYXZ, fixPivot, fixRoot, partnerTurnFix, type PairFix } from '@anima/scene-render';
+import { pickStrandFigures, STRAND_LIMITS, eulerYXZ, fixPivot, fixRoot, partnerTurnFix, composeFix, createPairFit,
+  pairFitObserve, pairFitTotal, findContact, contactSampleOf, turnAxes, RUNTIME_FIT,
+  type PairFix, type PairFitState } from '@anima/scene-render';
 import { OPENING_BUDGET, runFigureFrame, strandCandidates, type FrameEntry, type FrameLoopState,
   type StrandFigureView } from '@anima/scene-render';
 import { WALK_CLEARANCE_M } from '../game/ground';
@@ -333,6 +335,11 @@ const PLAIN_FLOOR_MOVE: GroundMove = { movement: 'walk_run', scope: 'wilderness'
 const STRAND_SCRATCH = new THREE.Vector3();
 
 export class NpcManager {
+  /** Ruling A129.3: the per-pair fine fit of every running pair interaction (by id) — the shared `pairFitObserve`
+   *  the Library's place preview runs: one loop measured, then the entering figure fixed by ≤ 5 cm / ≤ 10°. */
+  private readonly pairFits = new Map<string, { key: string; st: PairFitState; entering: string; receiving: string
+    hit: { chain: number; channel: string } | null; none: boolean; pivot: [number, number, number] | null
+    axes: [number, number, number][] }>();
   /** A102b: the rotating start of the opening pass (`runFigureFrame`, from `tickSecondary`). */
   private readonly frameState: FrameLoopState = { openingTurn: 0 };
   onPropEntryError: ((message: string) => void) | null = null;
@@ -1512,7 +1519,7 @@ export class NpcManager {
     npc.root.position.set(shown.x, shown.y, shown.z);
     // Apply the eased yaw exactly; the ordinary standing yaw ease would lag behind it.
     npc.figure.faceTowards(new THREE.Vector3(Math.sin(shown.yaw), 0, Math.cos(shown.yaw)), true);
-    this.applyPairFix(npc, it.base, shown.yaw);
+    this.applyPairFix(npc, it.base, shown.yaw, it.id);
     if (age >= BLEND_S) it.blend = undefined;
     npc.figure.update(dt, { frozen: frozen || it.rate <= 0 });
     npc.label.visible = labelVisible;
@@ -1532,11 +1539,19 @@ export class NpcManager {
     return { fix: partnerTurnFix(tilt, roll, frame), frame, pivot };
   }
 
-  private applyPairFix(npc: Npc, base: string, yaw: number): void {
+  private applyPairFix(npc: Npc, base: string, yaw: number, interactionId: string): void {
     const got = this.pairFixOf(npc, base, yaw);
-    if (!got || !(got.fix.turn.some((v) => v) || got.fix.shift.some((v) => v))) return;
+    if (!got) return;
+    let fix = got.fix;
+    const rec = this.pairFits.get(interactionId);
+    if (rec && rec.entering === npc.name) {
+      rec.pivot = got.pivot;
+      rec.axes = turnAxes(got.frame);
+      if (rec.hit) fix = composeFix(fix, pairFitTotal(rec.st));
+    }
+    if (!(fix.turn.some((v) => v) || fix.shift.some((v) => v))) return;
     const p = npc.root.position;
-    const r = fixRoot(got.fix, got.pivot, [p.x, p.y, p.z]);
+    const r = fixRoot(fix, got.pivot, [p.x, p.y, p.z]);
     const delta = new THREE.Vector3(r.position[0] - p.x, r.position[1] - p.y, r.position[2] - p.z);
     p.add(delta);
     npc.root.quaternion.set(r.quaternion[0], r.quaternion[1], r.quaternion[2], r.quaternion[3]);
@@ -2345,5 +2360,47 @@ export class NpcManager {
       entries.push({ name: npc.name, interaction: npc.interaction ?? null, figure: npc.figure });
     }
     runFigureFrame(entries, this.frameState, OPENING_BUDGET);
+    this.observePairFits();
+  }
+
+  /** Ruling A129.3: after phase B, every two-figure pair interaction measures its contact (the attached part of one
+   *  figure, the channel of the other that accepts it) and feeds the shared fine fit. A pair without such a contact
+   *  is marked and not inspected again until its clip changes. */
+  private observePairFits(): void {
+    const groups = new Map<string, Npc[]>();
+    for (const npc of this.npcs.values()) {
+      if (!npc.interaction || !npc.figure) continue;
+      const list = groups.get(npc.interaction.id) ?? [];
+      list.push(npc);
+      groups.set(npc.interaction.id, list);
+    }
+    for (const id of [...this.pairFits.keys()]) if (!groups.has(id)) this.pairFits.delete(id);
+    for (const [id, list] of groups) {
+      if (list.length !== 2) continue;
+      const key = list.map((n) => `${n.name}:${n.interaction!.clip}`).sort().join('|');
+      let rec = this.pairFits.get(id);
+      if (!rec || rec.key !== key) {
+        rec = { key, st: createPairFit(), entering: '', receiving: '', hit: null, none: false, pivot: null, axes: [] };
+        this.pairFits.set(id, rec);
+      }
+      if (rec.none) continue;
+      const [a, b] = list;
+      if (!rec.hit) {
+        const ia = a.figure!.inspect(), ib = b.figure!.inspect();
+        if (!ia || !ib) continue;
+        const ab = findContact(ia, ib), ba = ab ? null : findContact(ib, ia);
+        if (!ab && !ba) { rec.none = true; continue; }
+        rec.hit = ab ?? ba;
+        rec.entering = ab ? a.name : b.name;
+        rec.receiving = ab ? b.name : a.name;
+        continue;   // the pivot is taken when the entering figure is placed next frame
+      }
+      const e = rec.entering === a.name ? a : b, r = e === a ? b : a;
+      const ie = e.figure!.inspect(), ir = r.figure!.inspect();
+      const it = e.interaction!;
+      if (!ie || !ir || !rec.pivot || !(it.clipDuration > 0)) continue;
+      const sample = contactSampleOf(ie, ir, rec.hit, rec.pivot);
+      if (sample) pairFitObserve(rec.st, sample, it.clipT % it.clipDuration, rec.axes, RUNTIME_FIT, false);
+    }
   }
 }

@@ -19,7 +19,8 @@
  *
  * THE RUNTIME FIT (`PairFitState`): a pair interaction samples its own first loop (the tip measured with the current
  * fix applied, unapplied again before it is stored, so the samples are the raw clip), solves ONCE with the runtime
- * bounds (`RUNTIME_FIT`: ±5 cm, ±10°) when the clip phase wraps after at least `FIT_MIN_SAMPLES` samples, and keeps
+ * bounds (`RUNTIME_FIT`: ±5 cm, ±10°) — one whole loop, from the first wrap of the clip phase to the next, at least
+ * `FIT_MIN_SAMPLES` samples — and keeps
  * that fix for the interaction. The stored clip offset stays the coarse one; every pair gets its own fine one.
  *
  * THE FOLLOW (`pairFitObserve`): per frame a small extra shift of the entering figure that keeps the tip on the
@@ -220,6 +221,59 @@ export function fixPivot(rootPosition: Vec3, frame: readonly number[], hipsBind:
   return [rootPosition[0] + frame[0] * hipsBind[0] + frame[1] * hipsBind[1] + frame[2] * hipsBind[2],
     rootPosition[1] + frame[3] * hipsBind[0] + frame[4] * hipsBind[1] + frame[5] * hipsBind[2],
     rootPosition[2] + frame[6] * hipsBind[0] + frame[7] * hipsBind[1] + frame[8] * hipsBind[2]]
+}
+
+// ── the runtime fit + the follow ──
+
+export interface PairFitState {
+  phase: 'collect' | 'fitted'
+  samples: FitSample[]
+  fix: PairFix
+  follow: Vec3
+  lastPhase: number
+  /** The first wrap of the clip was seen: from here one WHOLE loop is sampled. */
+  armed: boolean
+  /** Lateral of the tip (mm) at each frame the tip was in or at the channel since the fit (the follow's evidence). */
+  lateralMm: number[]
+}
+
+export function createPairFit(): PairFitState {
+  return { phase: 'collect', samples: [], fix: NO_FIX, follow: [0, 0, 0], lastPhase: -1, armed: false, lateralMm: [] }
+}
+
+/** The fix the entering figure carries this frame: the solved one plus the follow shift. */
+export function pairFitTotal(st: PairFitState): PairFix {
+  return { shift: add(st.fix.shift, st.follow), turn: st.fix.turn }
+}
+
+/** One rendered frame of the pair (module docstring THE RUNTIME FIT / THE FOLLOW). `measured` = the sample as
+ *  rendered, i.e. WITH `pairFitTotal(st)` applied about `measured.pivot`; `phase` = the clip time (s). `axes` =
+ *  the tilt/roll axes (world) of this frame. `follow` false switches the follow off (the fit still runs). */
+export function pairFitObserve(st: PairFitState, measured: FitSample, phase: number, axes: readonly Vec3[],
+  bounds: FitBounds = RUNTIME_FIT, follow = true): void {
+  const total = pairFitTotal(st)
+  if (st.phase === 'collect') {
+    const raw: FitSample = { ...measured, tip: unfixPoint(total, measured.pivot, measured.tip),
+      base: unfixPoint(total, measured.pivot, measured.base) }
+    const wrapped = st.lastPhase >= 0 && phase < st.lastPhase
+    if (wrapped && st.armed && st.samples.length >= FIT_MIN_SAMPLES) {
+      st.fix = solvePairFix(st.samples, { ...bounds, axes })
+      st.phase = 'fitted'
+    } else {
+      if (wrapped) st.armed = true
+      if (st.armed) st.samples.push(raw)
+    }
+  }
+  st.lastPhase = phase
+  // What was rendered: the evidence (lateral through the stroke, once fitted).
+  const rel = sub(measured.tip, measured.o)
+  const s = dot(rel, measured.u)
+  const lat = lateral(rel, measured.u)
+  if (st.phase === 'fitted' && s >= 0) st.lateralMm.push(len(lat) * 1000)
+  if (!follow) { st.follow = [0, 0, 0]; return }
+  if (s >= -FOLLOW.nearM) {
+    st.follow = [0, 1, 2].map((i) => clamp(st.follow[i] - FOLLOW.gain * lat[i], FOLLOW.maxM)) as Vec3
+  } else st.follow = scale(st.follow, FOLLOW.decay)
 }
 
 // ── finding the contact in two inspections ──

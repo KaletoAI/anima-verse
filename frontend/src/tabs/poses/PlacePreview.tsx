@@ -37,7 +37,8 @@ import {
   type AlignmentDraft, type ChannelNow, type FrameInspection, type AlignmentLamp, type ClipHeightOffsetsCm, type CollisionPayload, type FigureRuntime,
   type HairStrandRecord, type SceneMarker, type SceneModelSpec, type SecondaryMotionPayload,
   bodyOverlap, contactLamp, contactReport, solveContactShift, solvePairFix, fixRoot, fixPivot, partnerTurnFix, turnAxes,
-  fixAnglesDeg, ALIGN_FIT, NO_FIX,
+  fixAnglesDeg, ALIGN_FIT, NO_FIX, RUNTIME_FIT, createPairFit, pairFitObserve, pairFitTotal, findContact, contactSampleOf,
+  type PairFitState,
   type ContactLamp, type ContactReport, type FitSample, type PairFix,
 } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -129,17 +130,31 @@ export interface PlaceReadout { prop: string; places: string; figures: FigureRea
   worstYaw: number; worstPos: number }
 
 /** The partner overlays (phase 3): what is drawn, never what runs. */
-export interface PartnerShow { collision: boolean; channels: boolean }
+export interface PartnerShow { collision: boolean; channels: boolean
+  /** Ruling A129.3: the per-pair fine fit runs (default on) — what the game does when a pair interaction starts. */
+  fit: boolean }
 const SHOW_KEY = 'anima.placePreview.show'
 function loadShow(): PartnerShow {
   try {
     const v = JSON.parse(localStorage.getItem(SHOW_KEY) || '{}') as Partial<PartnerShow>
-    return { collision: !!v.collision, channels: !!v.channels }
-  } catch { return { collision: false, channels: false } }
+    return { collision: !!v.collision, channels: !!v.channels, fit: v.fit !== false }
+  } catch { return { collision: false, channels: false, fit: true } }
 }
 /** Capsules of two figures that overlap; a channel occupied by a partner chain. */
 const CONTACT_COLOR = 0xff2d2d
 const OPENING_COLOR = 0x3fb950
+
+/** Ruling A129.3: the runtime fine fit of the pair shown — live, or stepped at 60 fps by `pairCheck`. */
+export interface PairFitReadout {
+  phase: 'collect' | 'fitted'; by: string; of: string
+  shiftMm: [number, number, number]; turnDeg: [number, number]
+  /** Lateral of the tip from the channel axis while inside (s ≥ 0), over the fitted frames (mm). */
+  lateralMaxMm: number; lateralMedMm: number; frames: number
+}
+/** `pairCheck`: the pair shown over whole loops at 60 fps — the clip as stored + draft, then with the fine fit. */
+export type PairCheckResult =
+  | { ok: false; reason: string }
+  | { ok: true; by: string; of: string; before: ContactReport; after: ContactReport; fit: PairFitReadout }
 
 /** The printed partner readout (names = place letters). */
 interface PartnerInfo {
@@ -218,7 +233,7 @@ export type AutoAlignResult =
       lampBefore: ContactLamp; lamp: ContactLamp }
 
 export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq, bust = 0, poses, onOpenPose,
-  onReadout, autoAlignRef, height = 360 }: {
+  onReadout, autoAlignRef, pairCheckRef, height = 360 }: {
   kind: string; set?: string
   /** 0/1 = solo, 2 = pair, 3+ = group */
   roles: number
@@ -233,6 +248,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   onReadout?: (r: PlaceReadout | null) => void
   /** Set while a scene runs: plays the clip headless-fast and solves partner B's shift (Ruling A126). */
   autoAlignRef?: MutableRefObject<(() => AutoAlignResult) | null>
+  /** Set while a scene runs: the pair over whole loops at 60 fps, before and with the per-pair fine fit (A129.3). */
+  pairCheckRef?: MutableRefObject<(() => PairCheckResult) | null>
   height?: number
 }) {
   const { t } = useI18n()
@@ -250,7 +267,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   const [paused, setPaused] = useState(false)
   const [speed, setSpeed] = useState(1)
   const [info, setInfo] = useState<{ ms: number; swingMm: number; strands: number; chains: number; figures: FigureReadout[]
-    partners: PartnerInfo | null } | null>(null)
+    partners: PartnerInfo | null; fit: PairFitReadout | null } | null>(null)
   const [show, setShow] = useState<PartnerShow>(loadShow)
   const showRef = useRef(show); showRef.current = show
   const toggleShow = (k: keyof PartnerShow) => setShow((cur) => {
@@ -266,6 +283,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   const draftSeqRef = useRef(draftSeq); draftSeqRef.current = draftSeq
   const onReadoutRef = useRef(onReadout); onReadoutRef.current = onReadout
   const autoAlignOut = useRef(autoAlignRef); autoAlignOut.current = autoAlignRef
+  const pairCheckOut = useRef(pairCheckRef); pairCheckOut.current = pairCheckRef
   // The SAVED calibration per role, read live in the frame loop: after Apply the listing (new shift_cm / heights)
   // arrives after the clip reload, and the figures must take it the moment it does — never a stale copy.
   const savedRef = useRef<Record<string, { shiftCm: [number, number] | null; heightOffsetsCm: ClipHeightOffsetsCm | null
@@ -725,9 +743,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           f.root.position.set(at.x, at.y, at.z)
           f.root.rotation.set(cal.euler[0], cal.euler[1], cal.euler[2], 'YXZ')
           const pivot = fixPivot([at.x, at.y, at.z], cal.frame, [f.hipsBind.x, f.hipsBind.y, f.hipsBind.z])
-          if (!solo && f.role === 'b') {
-            const saved = (savedRef.current[f.role] ?? f.saved).partnerTurnDeg ?? [0, 0]
-            const turn = draft.partnerTurnDeg ?? [0, 0]
+          if (!solo) {
+            const saved = f.role === 'b' ? (savedRef.current[f.role] ?? f.saved).partnerTurnDeg ?? [0, 0] : [0, 0]
+            const turn = f.role === 'b' ? draft.partnerTurnDeg ?? [0, 0] : [0, 0]
             const base = partnerTurnFix(saved[0] + turn[0], saved[1] + turn[1], cal.frame)
             const fix: PairFix = { shift: extra.shift, turn: [base.turn[0] + extra.turn[0], base.turn[1] + extra.turn[1],
               base.turn[2] + extra.turn[2]] }
@@ -740,6 +758,43 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           f.root.updateMatrixWorld(true)
           return { pivot, frame: cal.frame }
         }
+        // ── Ruling A129.3: the per-pair fine fit — the contact of the pair shown, its samples in stage space. ──
+        type Hit = { e: number; r: number; chain: number; channel: string }
+        const stageRot = new THREE.Matrix3()
+        const sv = new THREE.Vector3()
+        const toStageP = (p: readonly number[], dir = false): [number, number, number] => {
+          sv.set(p[0], p[1], p[2])
+          if (dir) sv.applyMatrix3(stageRot.setFromMatrix4(stageInv)).normalize(); else sv.applyMatrix4(stageInv)
+          return [sv.x, sv.y, sv.z]
+        }
+        const findHit = (res: NonNullable<ReturnType<typeof placePhaseB>>): Hit | null => {
+          for (let e = 0; e < res.figures.length; e++) for (let r = 0; r < res.figures.length; r++) {
+            const ie = res.figures[e].inspection, ir = res.figures[r].inspection
+            if (r === e || !ie || !ir) continue
+            const h = findContact(ie, ir)
+            if (h) return { e, r, ...h }
+          }
+          return null
+        }
+        const sampleAt = (res: NonNullable<ReturnType<typeof placePhaseB>>, hit: Hit, pivot: [number, number, number]): FitSample | null => {
+          const ie = res.figures[hit.e].inspection, ir = res.figures[hit.r].inspection
+          const w = ie && ir ? contactSampleOf(ie, ir, hit, pivot) : null
+          return w ? { tip: toStageP(w.tip), base: toStageP(w.base), o: toStageP(w.o), u: toStageP(w.u, true), pivot } : null
+        }
+        const fitReadout = (st: PairFitState, hit: Hit, axes: [number, number, number][]): PairFitReadout => {
+          const tot = pairFitTotal(st)
+          const lat = [...st.lateralMm].sort((a, b) => a - b)
+          const [tl, rl] = axes.length ? fixAnglesDeg(tot, axes) : [0, 0]
+          return { phase: st.phase, by: figs[hit.e].letter, of: figs[hit.r].letter,
+            shiftMm: [tot.shift[0] * 1000, tot.shift[1] * 1000, tot.shift[2] * 1000], turnDeg: [tl, rl],
+            lateralMaxMm: lat.length ? lat[lat.length - 1] : NaN, lateralMedMm: lat.length ? lat[lat.length >> 1] : NaN,
+            frames: lat.length }
+        }
+        const live: { st: PairFitState; hit: Hit | null; none: boolean; axes: [number, number, number][] } = {
+          st: createPairFit(), hit: null, none: false, axes: [] }
+        const resetLive = () => { live.st = createPairFit(); live.hit = null; live.none = false }
+        let liveFitOn = showRef.current.fit
+        const placedNow = new Map<Fig, { pivot: [number, number, number]; frame: number[] }>()
         const scratch = new THREE.Vector3()
         const q = new THREE.Quaternion()
         const fwd = new THREE.Vector3()
@@ -767,7 +822,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           const time = timeRef.current
           const wrapped = time < lastTime
           lastTime = time
+          const fitOn = showRef.current.fit && !solo && figs.length > 1
+          if (fitOn !== liveFitOn) { liveFitOn = fitOn; resetLive() }
           if (seenSeq !== draftSeqRef.current) {
+            resetLive()
             seenSeq = draftSeqRef.current
             for (const f of figs) { f.yawS = []; f.posS = []; f.medYaw = NaN; f.medPos = NaN }
           }
@@ -776,11 +834,23 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           for (const f of figs) {
             // phase A: the pose, then the root by the calibration (draft over saved, the bake's order)
             f.mixer.setTime(time)
-            placeRoot(f, time, draft)
+            const extra = fitOn && live.hit && figs[live.hit.e] === f ? pairFitTotal(live.st) : NO_FIX
+            placedNow.set(f, placeRoot(f, time, draft, extra))
             f.runtime.poseStep({ realDelta: dt })
           }
           const wantInspect = showRef.current.collision || showRef.current.channels
-          const inspection = placePhaseB(entries, frameState, wantInspect)   // phase B (+ the partner readout)
+          const fitInspect = fitOn && !live.none
+          const phaseB = placePhaseB(entries, frameState, wantInspect || fitInspect)   // phase B (+ the partner readout)
+          if (fitInspect && phaseB && !pausedRef.current) {
+            if (!live.hit) { live.hit = findHit(phaseB); live.none = !live.hit }
+            const pl = live.hit ? placedNow.get(figs[live.hit.e]) : undefined
+            const smp = live.hit && pl ? sampleAt(phaseB, live.hit, pl.pivot) : null
+            if (live.hit && pl && smp) {
+              live.axes = turnAxes(pl.frame)
+              pairFitObserve(live.st, smp, time, live.axes, RUNTIME_FIT, false)
+            }
+          }
+          const inspection = wantInspect ? phaseB : null
           ms = ms * 0.9 + (performance.now() - t0) * 0.1
           drawPartners(inspection)
           // readout: hips in stage space against the place
@@ -825,9 +895,11 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               return { letter: f.letter, character: f.character, role: f.role, dyaw: f.dyaw, dpos: f.dpos, medYaw, medPos,
                 lamp: Number.isFinite(f.medYaw) ? alignmentLamp(medYaw, medPos) : null }
             })
+            const fit = fitOn && live.hit ? fitReadout(live.st, live.hit, live.axes) : null
+            host.dataset.pairfit = fit ? JSON.stringify(fit) : ''
             setInfo({ ms, swingMm, strands: figs.filter((f) => f.runtime.strandRunning).length,
               chains: figs.filter((f) => !f.runtime.strandRunning && f.chains > 0).length, figures: rows,
-              partners: partnerInfo })
+              partners: partnerInfo, fit })
             host.dataset.partners = partnerInfo ? JSON.stringify(partnerInfo) : ''
             host.dataset.figures = JSON.stringify(figs.map((f) => {
               f.hips?.getWorldPosition(scratch).applyMatrix4(stageInv)
@@ -970,6 +1042,50 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             before, after, overlapBeforeMm: p0.overlap * 1000, overlapAfterMm: cur.overlap * 1000,
             lampBefore: contactLamp(before, chNow), lamp: contactLamp(after, chNow, (cur.overlap - p0.overlap) * 1000) }
         }
+        // ── Ruling A129.3: the pair over whole loops at 60 fps — loop 1 as stored + draft (the "before"), loop 2 arms
+        // and loop 3 samples the fine fit (as client3d does when the interaction starts), loops 4–5 play with it. ──
+        const pairCheck = (follow = false): PairCheckResult => {
+          if (solo || figs.length < 2) return { ok: false, reason: t('The pair check needs a pair clip on a place.') }
+          const step = 1 / 60
+          const loop = Math.max(8, Math.ceil(duration / step))
+          const draft = draftRef.current
+          const st = createPairFit()
+          let hit: Hit | null = null
+          let axes: [number, number, number][] = []
+          const before: FitSample[] = [], after: FitSample[] = []
+          for (let i = 0; i < 5 * loop; i++) {
+            const time = (i % loop) * step % duration
+            for (const f of figs) {
+              f.mixer.setTime(time)
+              placedNow.set(f, placeRoot(f, time, draft, hit && figs[hit.e] === f ? pairFitTotal(st) : NO_FIX))
+              f.runtime.poseStep({ realDelta: step })
+            }
+            const res = placePhaseB(entries, frameState, true)
+            if (!res) continue
+            if (!hit) hit = findHit(res)
+            if (!hit) continue
+            const pl = placedNow.get(figs[hit.e])!
+            const smp = sampleAt(res, hit, pl.pivot)
+            if (!smp) continue
+            axes = turnAxes(pl.frame)
+            // Loop 3 settles the chain after the fit's jump; its rows do not count.
+            if (i === 3 * loop) st.lateralMm = []
+            if (i < loop) before.push(smp)
+            else if (st.phase === 'fitted' && i >= 3 * loop) after.push(smp)
+            pairFitObserve(st, smp, time, axes, RUNTIME_FIT, follow)
+          }
+          for (const f of figs) {
+            f.mixer.setTime(timeRef.current)
+            placeRoot(f, timeRef.current, draftRef.current)
+          }
+          resetLive()
+          if (!hit) return { ok: false, reason: t('No figure here has an attached part that one of the other figure’s channels accepts.') }
+          if (before.length < 4 || after.length < 4) return { ok: false, reason: t('The contact could not be sampled over the clip.') }
+          return { ok: true, by: figs[hit.e].letter, of: figs[hit.r].letter, before: contactReport(before),
+            after: contactReport(after), fit: fitReadout(st, hit, axes) }
+        }
+        if (pairCheckOut.current) pairCheckOut.current.current = () => pairCheck(false)
+        disposers.push(() => { if (pairCheckOut.current?.current) pairCheckOut.current.current = null })
         if (autoAlignOut.current) autoAlignOut.current.current = autoAlign
         disposers.push(() => { if (autoAlignOut.current?.current === autoAlign) autoAlignOut.current.current = null })
         tick()
@@ -1061,6 +1177,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         </label>
         <label title={t('Draw each figure’s channels; a ring at the mouth while a partner’s chain opens it.')}>
           <input type="checkbox" checked={show.channels} onChange={() => toggleShow('channels')} /> {t('Channels')}
+        </label>
+        <label title={t('Fits every pair on its own, as the game does when a pair interaction starts: one loop is measured, then the entering figure moves by at most 5 cm and turns by at most 10° so the attached part runs along the channel. The stored clip stays as it is.')}>
+          <input type="checkbox" data-testid="place-fit" checked={show.fit} onChange={() => toggleShow('fit')} /> {t('Fine-fit the pair')}
         </label>
         {info ? (
           <span style={{ marginLeft: 'auto', opacity: 0.8 }}
@@ -1208,6 +1327,20 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
                     : t('No figure carries a channel.'))}
                 </div>
               ) : null}
+            </div>
+          ) : null}
+          {show.fit && info?.fit ? (
+            <div style={{ marginTop: 6, borderTop: '1px solid var(--border, #30363d)', paddingTop: 4 }} data-testid="place-fit-readout"
+              title={t('The fine fit of this pair on top of the stored clip (at most 5 cm and 10°), and how far the attached part’s tip stays off the channel axis while inside, over the fitted frames.')}>
+              {info.fit.phase === 'collect'
+                ? t('Fine fit {by} → {of}: measuring one loop…').replace('{by}', info.fit.by).replace('{of}', info.fit.of)
+                : t('Fine fit {by} → {of}: {x} / {y} / {z} mm, tilt {tilt}°, roll {roll}° · off the axis inside: max {max} mm, median {med} mm')
+                  .replace('{by}', info.fit.by).replace('{of}', info.fit.of)
+                  .replace('{x}', info.fit.shiftMm[0].toFixed(0)).replace('{y}', info.fit.shiftMm[1].toFixed(0))
+                  .replace('{z}', info.fit.shiftMm[2].toFixed(0))
+                  .replace('{tilt}', info.fit.turnDeg[0].toFixed(1)).replace('{roll}', info.fit.turnDeg[1].toFixed(1))
+                  .replace('{max}', Number.isFinite(info.fit.lateralMaxMm) ? info.fit.lateralMaxMm.toFixed(0) : '–')
+                  .replace('{med}', Number.isFinite(info.fit.lateralMedMm) ? info.fit.lateralMedMm.toFixed(0) : '–')}
             </div>
           ) : null}
         </div>

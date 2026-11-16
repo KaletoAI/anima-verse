@@ -22,6 +22,15 @@
  * [6] partnerTurnFix(10, −5, identity frame) = turn (10°, 0, −5°) in radians: (0.17453293, 0, −0.08726646).
  * [7] fixPivot((1, 0, 2), Ry(90°) row-major [0,0,1, 0,1,0, −1,0,0], hips (0, 0.9, 0.1)) = (1 + 0.1, 0.9, 2 − 0) =
  *     (1.1, 0.9, 2).
+ * FIXTURE C — THE RUNTIME FIT (A129.3). Same channel; ten frames per loop at phase k/10, tip T = (0.01, 0, −0.02 +
+ *   0.05·phase), base = T − 0.1·u, pivot (0, 0, −0.3), no axes. Fed as the renderer would: the sample measured WITH
+ *   `pairFitTotal` applied.
+ *   [8] Loop 1 is not sampled (it may have started mid-loop); the wrap into loop 2 arms, loop 2 is sampled (10
+ *       samples), the wrap into loop 3 solves: phase 'fitted' after 2 loops + 1 frame, not one frame earlier.
+ *   [9] The fix: lateral x + 0.01 → Δx = −0.01, Δy = 0; entry frame = phase 0 (s = −0.02) → Δz = +0.02 (±1e-6).
+ *   [10] Bound: the same with x = 0.08 → Δx clamped to −0.05 (RUNTIME_FIT.maxShiftM).
+ *   [11] After the fit every measured frame lies on the axis: lateralMm all 0 (±1e-3 mm). Loop 3 adds 9 rows: its
+ *        frame 0 is the solving frame, rendered BEFORE the fit (s = −0.02 < 0, not inside).
  */
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -73,4 +82,22 @@ const pt = SR.partnerTurnFix(10, -5, [1, 0, 0, 0, 1, 0, 0, 0, 1])               
 near(pt.turn[0], 0.17453293, 1e-8, 'turn x'); near(pt.turn[1], 0, 1e-12, 'turn y'); near(pt.turn[2], -0.08726646, 1e-8, 'turn z')
 const pv = SR.fixPivot([1, 0, 2], [0, 0, 1, 0, 1, 0, -1, 0, 0], [0, 0.9, 0.1])               // [7]
 ;[1.1, 0.9, 2].forEach((v, i) => near(pv[i], v, 1e-12, 'pivot'))
+const runLoops = (x0, loops) => {
+  const st = SR.createPairFit()
+  const log = []
+  for (let L = 0; L < loops; L++) for (let k = 0; k < 10; k++) {
+    const ph = k / 10, tip = [x0, 0, -0.02 + 0.05 * ph]
+    const raw = { tip, base: [tip[0], tip[1], tip[2] - 0.1], o: O, u: U, pivot: [0, 0, -0.3] }
+    SR.pairFitObserve(st, SR.fixSample(raw, SR.pairFitTotal(st)), ph, [], SR.RUNTIME_FIT, false)
+    log.push(st.phase)
+  }
+  return { st, log }
+}
+const c1 = runLoops(0.01, 3)                                                                // [8]
+assert.equal(c1.log[19], 'collect'); assert.equal(c1.log[20], 'fitted')
+const cf = c1.st.fix.shift                                                                  // [9]
+near(cf[0], -0.01, 1e-6, 'fit x'); near(cf[1], 0, 1e-6, 'fit y'); near(cf[2], 0.02, 1e-6, 'fit z')
+near(runLoops(0.08, 3).st.fix.shift[0], -0.05, 1e-12, 'fit bound')                          // [10]
+assert.equal(c1.st.lateralMm.length, 9)                                                    // [11]
+assert.ok(c1.st.lateralMm.every((v) => Math.abs(v) < 1e-3), 'lateral after the fit')
 console.log('smoke_pair_fit: OK')

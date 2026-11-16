@@ -47,7 +47,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { clipHeightGroup, type ClipHeightOffsetsCm } from '@anima/scene-render'
-import { PlacePreview, type AutoAlignResult, type PlaceReadout } from './PlacePreview'
+import { PlacePreview, type AutoAlignResult, type PairCheckResult, type PlaceReadout } from './PlacePreview'
 import type { AlignmentDraft } from '@anima/scene-render'
 import { ClipPreview, ROLE_COLOR } from './ClipPreview'
 import { invalidateAnimationPreviewClips } from '../characters/Model3DViewer'
@@ -303,6 +303,9 @@ export function ClipLibrary({
   /** Ruling A126: the place preview's Auto-align (set while a pair scene runs) and its last outcome. */
   const autoAlignRef = useRef<(() => AutoAlignResult) | null>(null)
   const [autoAlign, setAutoAlign] = useState<AutoAlignResult | null>(null)
+  /** Ruling A129.3: the pair shown before and with the per-pair fine fit the game runs. */
+  const pairCheckRef = useRef<(() => PairCheckResult) | null>(null)
+  const [pairCheck, setPairCheck] = useState<PairCheckResult | null>(null)
   /** Finale clips the server changed along with the last apply/save. */
   const [finalesTouched, setFinalesTouched] = useState<string[]>([])
 
@@ -404,6 +407,7 @@ export function ClipLibrary({
     setTiltDeg(0)
     setRollDeg(0)
     setPartnerShift([0, 0, 0])
+    setPartnerTurn([0, 0])
     setRoleShift({})
     setShiftRole('a')
     setClipShift([0, 0])
@@ -1108,7 +1112,8 @@ export function ClipLibrary({
                   <PlacePreview kind={row.kind} set={previewSet} roles={row.roles ?? 0} clips={row.clips}
                     draftRef={draftRef} draftSeq={alignmentDraft} bust={seq} height={600}
                     poses={poses.filter((p) => (p.animation || '').trim() === row.kind)}
-                    onOpenPose={onOpenPose} onReadout={setPlaceReadout} autoAlignRef={autoAlignRef} />
+                    onOpenPose={onOpenPose} onReadout={setPlaceReadout} autoAlignRef={autoAlignRef}
+                    pairCheckRef={pairCheckRef} />
                 ) : null}
                 {innerTab === 'clip' && !row.missing ? (
                   <ClipPreview
@@ -1258,6 +1263,43 @@ export function ClipLibrary({
                         }}>
                         {t('Auto-align')}
                       </button>
+                      <button type="button" className="ga-btn ga-btn-sm" data-testid="pair-check"
+                        disabled={innerTab !== 'places'}
+                        title={t('Plays the pair shown over five loops: the first as stored with the dials above, then the fine fit the game makes for this pair when the interaction starts (at most 5 cm and 10°). Changes nothing, saves nothing.')}
+                        onClick={() => {
+                          const run = pairCheckRef.current
+                          setPairCheck(run ? run() : { ok: false, reason: t('The place preview is still loading.') })
+                        }}>
+                        {t('Check this pair')}
+                      </button>
+                      {pairCheck ? (
+                        <div data-testid="pair-check-result" data-result={JSON.stringify(pairCheck)} style={{ fontSize: 11, lineHeight: 1.35 }}>
+                          {pairCheck.ok ? (
+                            <>
+                              <div>{t('{by} → {of}: fine fit {x} / {y} / {z} mm, tilt {tilt}°, roll {roll}°')
+                                .replace('{by}', pairCheck.by).replace('{of}', pairCheck.of)
+                                .replace('{x}', pairCheck.fit.shiftMm[0].toFixed(0)).replace('{y}', pairCheck.fit.shiftMm[1].toFixed(0))
+                                .replace('{z}', pairCheck.fit.shiftMm[2].toFixed(0))
+                                .replace('{tilt}', pairCheck.fit.turnDeg[0].toFixed(1)).replace('{roll}', pairCheck.fit.turnDeg[1].toFixed(1))}</div>
+                              <table style={{ borderCollapse: 'collapse' }}>
+                                <thead><tr><th /><th style={{ padding: '0 4px' }}>{t('stored')}</th><th style={{ padding: '0 4px' }}>{t('fine fit')}</th></tr></thead>
+                                <tbody>
+                                  {([
+                                    [t('Tip to opening at the outermost frame'), pairCheck.before.entryMm, pairCheck.after.entryMm, 'mm'],
+                                    [t('Depth at the deepest frame'), pairCheck.before.depthMm, pairCheck.after.depthMm, 'mm'],
+                                    [t('Off the axis inside, worst frame'), pairCheck.before.maxLateralMm, pairCheck.after.maxLateralMm, 'mm'],
+                                    [t('Shaft against the axis at the outermost frame'), pairCheck.before.axisDeg, pairCheck.after.axisDeg, '°'],
+                                  ] as const).map(([label, a, b, unit]) => (
+                                    <tr key={label}><td>{label}</td>
+                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{a.toFixed(0)} {unit}</td>
+                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{b.toFixed(0)} {unit}</td></tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </>
+                          ) : <span style={{ color: 'var(--danger, #f85149)' }}>{pairCheck.reason}</span>}
+                        </div>
+                      ) : null}
                       {autoAlign ? (
                         <div data-testid="align-auto-result" data-result={JSON.stringify(autoAlign)}
                           style={{ fontSize: 11, lineHeight: 1.35 }}>

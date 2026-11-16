@@ -6053,6 +6053,17 @@
     "Turns partner B about its hips, on top of the clip — renderer-only, saved beside the clip like the shift. Tilt tips B’s head towards the clip’s forward axis, roll tips B sideways.": "Dreht Partner B um seine Hüfte, zusätzlich zum Clip — nur beim Darstellen, neben dem Clip gespeichert wie die Verschiebung. Neigen kippt Bs Kopf zur Vorwärtsachse des Clips, Rollen kippt B seitlich.",
     "Depth gained by B’s tilt/roll": "Tiefe durch Bs Neigen/Rollen",
     "B tilt / roll": "B neigen / rollen",
-    "partner B tilt / roll": "Partner B neigen / rollen"
+    "partner B tilt / roll": "Partner B neigen / rollen",
+    "The pair check needs a pair clip on a place.": "Die Paarprüfung braucht einen Paar-Clip auf einem Platz.",
+    "Fits every pair on its own, as the game does when a pair interaction starts: one loop is measured, then the entering figure moves by at most 5 cm and turns by at most 10° so the attached part runs along the channel. The stored clip stays as it is.": "Passt jedes Paar für sich an, wie das Spiel es beim Start einer Paar-Interaktion tut: eine Schleife wird gemessen, dann rückt die eindringende Figur höchstens 5 cm und dreht sich höchstens 10°, damit das angesetzte Teil entlang des Kanals läuft. Der gespeicherte Clip bleibt, wie er ist.",
+    "Fine-fit the pair": "Paar fein anpassen",
+    "The fine fit of this pair on top of the stored clip (at most 5 cm and 10°), and how far the attached part’s tip stays off the channel axis while inside, over the fitted frames.": "Die Feinanpassung dieses Paars zusätzlich zum gespeicherten Clip (höchstens 5 cm und 10°), und wie weit die Spitze des angesetzten Teils im Inneren neben der Kanalachse bleibt, über die angepassten Frames.",
+    "Fine fit {by} → {of}: measuring one loop…": "Feinanpassung {by} → {of}: misst eine Schleife…",
+    "Fine fit {by} → {of}: {x} / {y} / {z} mm, tilt {tilt}°, roll {roll}° · off the axis inside: max {max} mm, median {med} mm": "Feinanpassung {by} → {of}: {x} / {y} / {z} mm, Neigen {tilt}°, Rollen {roll}° · neben der Achse innen: max. {max} mm, Median {med} mm",
+    "Plays the pair shown over five loops: the first as stored with the dials above, then the fine fit the game makes for this pair when the interaction starts (at most 5 cm and 10°). Changes nothing, saves nothing.": "Spielt das gezeigte Paar über fünf Schleifen: die erste wie gespeichert mit den Reglern oben, dann mit der Feinanpassung, die das Spiel beim Start der Interaktion für dieses Paar macht (höchstens 5 cm und 10°). Ändert nichts, speichert nichts.",
+    "Check this pair": "Dieses Paar prüfen",
+    "{by} → {of}: fine fit {x} / {y} / {z} mm, tilt {tilt}°, roll {roll}°": "{by} → {of}: Feinanpassung {x} / {y} / {z} mm, Neigen {tilt}°, Rollen {roll}°",
+    "fine fit": "Feinanpassung",
+    "Off the axis inside, worst frame": "Neben der Achse innen, schlechtester Frame"
   }
 }
