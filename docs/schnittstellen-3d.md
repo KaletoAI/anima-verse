@@ -12300,17 +12300,21 @@ and both renderers apply them (the 3D client to the figures on the map, the admi
 `partnerProbe.ts`).
 
 - **Selection** (per reader, per frame). A READER is a figure posed this frame, not in the far tier, with a driven
-  link or a GPU hair push. A pair first passes the ROOT prefilter (`client3d/src/scene/partnerFrame.ts`):
+  link or a GPU hair push. A pair first passes the ROOT prefilter (`packages/scene-render/src/partnerFrame.ts`):
   |root_r − root_p| ≤ bindRadius_r + lever_r + bindRadius_p + `PARTNER_PREFILTER_SLACK_M`; only then are the
   spheres read. BODY SPHERE = the mean of all capsule endpoints in the current frame, radius = the largest endpoint
   distance plus that capsule's r; the reader's REACH SPHERE = its body sphere grown by its longest driven lever and
   by the hair meshes' bounding spheres. Candidates are the figures whose body sphere touches the reach sphere
   (gap ≤ 0); members of the reader's running pair interaction first, then the smallest gap, at most `PARTNER_MAX`
   (`selectPartners`).
-- **Two-phase frame.** Phase A poses every figure (`Figure.update`); between the phases `planPartnerFrame` selects the
-  partners and `NpcManager.tickSecondary` snapshots each selected partner ONCE (`snapshotPartner`); phase B runs
-  each reader's strand hair and secondary motion against its partners' snapshots (`Figure.updateSecondary`), so the
-  result does not depend on the order the figures are visited in. A partner's body capsules are exact in the frame;
+- **Two-phase frame.** Phase A poses every figure (`Figure.update` in the 3D client, a bare mixer in the admin) and
+  ends in `FigureRuntime.poseStep`; then `runFigureFrame` (`packages/scene-render/src/frameLoop.ts`, called by
+  `NpcManager.tickSecondary` and by the Game-Admin's `FigureRuntimePreview`) selects the partners (`planPartnerFrame`),
+  snapshots each selected partner ONCE (`snapshotPartner`) and runs phase B — each reader's strand hair and secondary
+  motion against its partners' snapshots (`FigureRuntime.updateSecondary`, wrapped by `Figure.updateSecondary`) — so
+  the result does not depend on the order the figures are visited in. The per-figure part (secondary motion, garment
+  push, strand hair, partner binding, channel openings) is ONE runtime, `packages/scene-render/src/figureRuntime.ts`
+  (Ruling A110); client3d's `Figure` wraps it with the game's own phase A (bridges, travel, lift, first person). A partner's body capsules are exact in the frame;
   its extension capsules carry that partner's swing of the previous frame. The GPU hair push re-reads the partners on
   their final pose (`setGpuPartners`, after phase B). No partner (`partners` absent or `[]`) is today's frame bit for
   bit and allocates nothing.
@@ -12581,12 +12585,12 @@ rule exists once, in `packages/scene-render/src/channelOpening.ts` (numbers: `sc
 - Skipping and budget (A102b): the client recomputes an occupied opening only when `changed()` reports that its segments,
   the channel or a bone its region is skinned to moved more than `OPENING_SKIP_M` (1 mm) or turned more than
   `OPENING_SKIP_DEG` (0.5°) since its last apply; otherwise the last result stays. At most ONE recompute (or first
-  bind) runs per frame across all figures (`OPENING_BUDGET` in `npcs.ts`), and the receivers are visited from a
+  bind) runs per frame across all figures (`OPENING_BUDGET` in `packages/scene-render/src/frameLoop.ts`), and the receivers are visited from a
   rotating start, so with n changed receivers each waits at most n − 1 frames. Measured by
   `scripts/bench_channel_opening.mjs` (node, 20 480-vertex synthetic region): held pose 0.006 ms/frame, walk about
   4.3 ms/frame for 1 or 3 receivers (3 receivers without the budget: about 13.8 ms).
-- 3D client: after every figure's phase B, `NpcManager.tickSecondary` collects each figure's `channelOccupants()` by
-  partner and calls `Figure.applyChannelOpenings` on the receiving figure. No occupant → nothing to do; an empty
+- 3D client (and the admin's figure preview): after every figure's phase B, `runFigureFrame` collects each figure's
+  `channelOccupants()` by partner and calls `applyChannelOpenings` on the receiving figure (`FigureRuntime`). No occupant → nothing to do; an empty
   channel restores; a model swap or dispose drops the openings.
 
 **Measured** (`scripts/check_partner_collision.mjs --channels`, read-only copies of two models, a pair clip and one
@@ -12747,7 +12751,7 @@ figure runs per strand its hair mesh leaves the garment push (`GarmentCollision.
 leave the spring chains (`secondaryMotion.withoutHairGroups`); off, both come back. `pickStrandFigures` admits per
 frame, nearest first, at most `STRAND_LIMITS.maxFigures` (2) figures within `enterM` (8 m; a running one leaves
 past `leaveM`, 9 m) whose summed `costMs` stays within `budgetMs` (8 ms); the first-person body never runs. The
-client (`client3d/src/scene/strandBudget.ts`, `NpcManager.tickStrandHair`) fetches `model.hair_strands` only for
+client (`packages/scene-render/src/strandBudget.ts`, `NpcManager.tickStrandHair`) fetches `model.hair_strands` only for
 full-tier figures within `leaveM` and caches records by sha256. A record named for a model whose hair carries no
 `_STRAND_*` attributes is refused once with a console warning; that figure stays on the spring chains. Proofs:
 `scripts/smoke_strand_hair_handle.mjs`, `scripts/smoke_client_strand_wiring.mjs`; real hair:

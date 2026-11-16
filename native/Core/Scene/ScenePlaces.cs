@@ -8,7 +8,7 @@ using AnimaNative.World;
 namespace AnimaNative.Scene;
 
 /// <summary>
-/// ONE PLACE of a mounted scene (client3d/src/scene/placeSlot.ts <c>PlaceEntry</c>), its slots finished in WORLD metres
+/// ONE PLACE of a mounted scene (packages/scene-render/src/placeSlot.ts <c>PlaceEntry</c>), its slots finished in WORLD metres
 /// at the figure-root height. <see cref="Slots"/> is re-lifted IN PLACE (<see cref="PlaceInventory.Relift"/>): a consumer
 /// that keeps the array follows the ground, as a seated figure keeps its slot vector in the browser.
 /// </summary>

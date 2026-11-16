@@ -30,7 +30,7 @@ namespace AnimaNative.Tests;
 ///   tileDatumStep                  StoreyGround.TileDatumStep            sampler n → () => n, null → none
 ///   markerLiftPoint                StoreyGround.MarkerLiftPoint          client3d game/placement.ts
 ///   markerLiftPointInvalidAnchor   MarkerLiftPoint(at, (NaN, 2))          (smoke wrapper)
-///   slotFor                        PlaceSlots.SlotFor                    client3d scene/placeSlot.ts; 'pair' → null
+///   slotFor                        PlaceSlots.SlotFor                    scene-render placeSlot.ts; 'pair' → null
 ///   buildGlyphs                    PlaceSlots.GlyphRows                  client3d scene/placeGlyphs.ts
 ///   glyphParameters                PlaceSlots.GlyphParameters
 ///   surfaceHeightAt                SurfaceHeight.At                      scene-render surface.ts

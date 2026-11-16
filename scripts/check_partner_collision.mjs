@@ -37,7 +37,7 @@
  * `extractRootPath` of the RAW clip, `npcs.ts` `tickInteraction`: `anchor + R_y(yaw) · clipRoot(t)`, anchor at the
  * origin, yaw 0); the clip itself plays in place. No height scaling (the stored models' own size).
  *
- * THE FRAME is the client's two-phase frame (`client3d/src/scene/partnerFrame.ts`, `NpcManager.tickSecondary`):
+ * THE FRAME is the client's two-phase frame (`packages/scene-render/src/frameLoop.ts` `runFigureFrame`, from `NpcManager.tickSecondary`):
  * phase A poses both figures; phase B snapshots each figure's capsules once (`snapshotPartner`), then each reader
  * steps its strand hair (`StrandHair.setPartners(hairPartnerCapsules(…))`) and its secondary motion
  * (`update(dt, {partners})`) against the OTHER figure's snapshot. Each figure reads the other (the pair's members
