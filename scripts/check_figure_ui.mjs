@@ -429,6 +429,17 @@ check('[1] templateSummary', m.templateSummary({ kind: 'skirt', length_m: 0.45, 
   slit: 'left', slit_m: 0.2, sleeves: 'none', fabric: 'medium' }),
   'Skirt · 45 cm · flare 0.4 · Medium (cotton, linen) · slit Left 20 cm');
 check('[1] templateSummary without params', m.templateSummary(null), 'No parameters yet');
+// Ruling A142: a jacket's summary names its sleeves, neckline and open front, no flare; the built line folds the arm
+// shapes' sides and names the lower layer it was draped over.
+check('[1] templateSummary jacket', m.templateSummary({ kind: 'jacket', length_m: 0.68, flare: 0.3,
+  waist_height: 'natural', slit: 'none', slit_m: 0, shoulders: 'covered', sleeves: 'long', sleeve_fit: 0.3, fit: 0.4,
+  neckline: 'v', neck_depth_m: 0, front: 'open', collar: 'lapel', fabric: 'stiff' }),
+  'Jacket · 68 cm · Long sleeves · V-neck · open front · Stiff (denim, wool)');
+check('[1] templateBuilt arms + layer', m.templateBuilt({ state: 'ready', built_at: '2026-11-16T20:00:00',
+  metrics: { wall_s: 48, cpu_s: 600, stretch_max: 1.2, coverage: 0.9, texture: 'item_image',
+    pose_shapes: ['arms_down', 'arms_up'], layered_over: 1 } }),
+  'Draped 2026-11-16 20:00 · 48 s · stretch 1.20 · texture from the item picture · shaped for Arms down, Arms raised'
+  + ' · draped over 1 lower layer(s)');
 check('[1] templateCost', m.templateCost({ llm_calls: 1, hub_jobs: 0, cpu_s: 20 }),
   'Suggest: 1 LLM call · Drape: 0 hub jobs, ~20 s CPU');
 check('[1] template due light', m.wornState({ state: 'pending', mode: 'template', jobs: 0, failure: '', left_out: '',

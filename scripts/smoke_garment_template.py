@@ -1,4 +1,4 @@
-"""Smoke: garment templates P1 (Ruling A138) — parameters, panels, cache key, figure mode, judge.
+"""Smoke: garment templates P1 + P2 (Rulings A138, A142) — parameters, panels, cache key, figure mode, judge.
 
 Usage:
     ./.venv/bin/python scripts/smoke_garment_template.py
@@ -10,7 +10,7 @@ run sheet (``~/claude-out/a138/``), not here.
 Expected numbers, derived by hand from ``app/core/garment_template.py``:
 
 [1] validate_params: an empty dict gives the PARAM_SPEC defaults (skirt, 0.5 m, flare 0.3, natural, no slit,
-    0 m, no sleeves, medium) and NO error. ``length_m`` 2.0 is clamped to the range top 1.2 and reported;
+    0 m, strapless, no sleeves, sleeve fit 0.3, fit 0.3, crew, depth 0, closed, no collar, medium) and NO error. ``length_m`` 2.0 is clamped to the range top 1.2 and reported;
     ``kind`` "cape" is reported and becomes the default "skirt"; ``slit`` "left" with ``slit_m`` 0 takes
     min(0.25, 0.4 * length) — for length 0.5: min(0.25, 0.2) = 0.2; ``slit_m`` 0.6 on a 0.5 m piece is capped at
     0.8 * 0.5 = 0.4. ``slit`` "none" forces ``slit_m`` 0.
@@ -26,7 +26,7 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
       frac 0.5 → 0.95 + (0.70-0.95) * 0.5 + 0.02 = 0.845.
     * dress, length 0.5: bodice 1.275 - 1.00 = 0.275, top knot (0.775, 0.90 + 0.02 = 0.92), top_y 1.275,
       rows = round(0.775 / 0.015) + 1 = round(51.67) + 1 = 53.
-    * kind "top" raises ValueError (not built in P1).
+    * kind "trousers" raises ValueError (not built).
 [4] tsig: the same inputs give the same 12-hex key; each of params / base sha / texture sha / lower layers
     changes it; the order of the lower layers does not.
 [5] drape_state in a temp folder: no parameters → blocked with NEEDS_PARAMS; kind "trousers" → blocked with
@@ -50,6 +50,27 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
 [11] texture_sources (Ruling A141): no cut-out → the item picture for both sides; only a front cut-out → it serves
     both sides; front + back → each its own; source "cutout" whenever one exists.
 [10] the vendored pygarment imports from app.third_party and builds a 4-edge panel (no PyPI package).
+[12] Ruling A142 tops / jackets / dresses with a bodice, on a hand-made body: shoulder_y 1.37, shoulder_w 0.39,
+     neck_c 0.33, arm_len 0.50, arm_c [[0.05, 0.34], [0.25, 0.26], [0.5, 0.24], [0.97, 0.17]], torso
+     [[0.8, 0.92], [1.0, 0.70], [1.2, 0.80], [1.36, 1.0]] (+ the [3] body):
+    * validate_params: kind "top" forces shoulders "covered" and resets the skirt fields (flare back to 0.3, slit
+      "none"); a strapless dress drops its sleeves to "none"; a skirt resets sleeves / neckline to their defaults.
+    * top, length 0.55, fit 0.3: top_y = 1.37 + 0.045 = 1.415, hem_y 0.865; ease 1 + 0.03 + 0.17 * 0.3 = 1.081;
+      the hem knot: torso girth at 0.865 = 0.92 - 0.22 * 0.065 / 0.2 = 0.8485 -> 0.8485 * 1.081 + 0.02 = 0.93723;
+      the top knot (0.55, 1.0 * 1.081 + 0.02 = 1.101). A jacket adds 0.05 ease: top knot 1.0 * 1.131 + 0.02 = 1.151.
+    * bodice_spec, short sleeves, sleeve fit 0.3: length 0.3 * 0.50 = 0.15; ease 1 + 0.05 + 0.4 * 0.3 = 1.17; ring 0
+      (share 0, left of the samples -> 0.34) 0.34 * 1.17 + 0.02 = 0.4178; rings every 2.5 cm 0 .. 0.15 = 7; the last
+      (share 0.3: 0.26 - 0.02 * 0.05 / 0.25 = 0.256) 0.256 * 1.17 + 0.02 = 0.31952. neck_r = 0.33 / 2pi + 0.012 =
+      0.06452; pin_half_x 0.75 * 0.195 = 0.14625; crew depth 0.03 (NECK_DEPTH). Boat: neck_r = 0.62 * 0.195 = 0.1209.
+      Lapel: neckline "v", depth max(0.15, 1.415 - 1.275 + 0.04) = 0.18, front open. No sleeves -> sleeve None.
+    * shape_groups: a top with hem 0.865 above hip_y 0.85 -> the two arm groups (arms_down, arms_forward, arms_up),
+      no leg group; length 0.6 (hem 0.815 < 0.85) adds the leg group with "sit" only; a strapless dress -> legs
+      (sit, kneel) only; a covered dress with sleeves -> legs + both arms with "arms_down" only.
+    * shape_targets folds sides: ["sit", "arms_down_l", "arms_down_r"] -> ["sit", "arms_down"].
+    * judge_build takes the sheet renders out of the wall: wall 63 with render 4 -> 59 passes.
+[13] Ruling A142 layering: a jacket worn with a template top lists the top as its collider (collider_pieces), the
+     top lists nothing (rank 1 < 2 only one way); an own-mesh piece is no collider. The jacket's key changes when
+     the TOP's parameters change; the top's key does not change with the jacket's.
 """
 import json
 import shutil
@@ -87,7 +108,9 @@ def close(a, b, tol=1e-4):
 p, e = gt.validate_params({})
 check("[1] defaults, no error", e == [] and p == {"kind": "skirt", "length_m": 0.5, "flare": 0.3,
                                                   "waist_height": "natural", "slit": "none", "slit_m": 0.0,
-                                                  "sleeves": "none", "fabric": "medium"}, str((p, e)))
+                                                  "shoulders": "strapless", "sleeves": "none", "sleeve_fit": 0.3,
+                                                  "fit": 0.3, "neckline": "crew", "neck_depth_m": 0.0,
+                                                  "front": "closed", "collar": "none", "fabric": "medium"}, str((p, e)))
 p, e = gt.validate_params({"length_m": 2.0, "kind": "cape"})
 check("[1] length clamped to 1.2 and reported", p["length_m"] == 1.2 and any("length_m" in x for x in e))
 check("[1] unknown kind reported, default skirt", p["kind"] == "skirt" and any("kind" in x for x in e))
@@ -134,10 +157,10 @@ check("[3] dress top knot (0.775, 0.92), top_y 1.275",
       close(o["knots"][-1][0], 0.775) and close(o["knots"][-1][1], 0.92) and close(o["top_y"], 1.275), o)
 check("[3] dress rows 53", gt.panel_spec(dress, M)["rows"] == 53)
 try:
-    gt.panel_spec(gt.validate_params({"kind": "top"})[0], M)
-    check("[3] top not built raises", False)
+    gt.panel_spec(gt.validate_params({"kind": "trousers"})[0], M)
+    check("[3] trousers not built raises", False)
 except ValueError:
-    check("[3] top not built raises", True)
+    check("[3] trousers not built raises", True)
 
 # [4]
 k = dict(base_sha="a" * 64, texture_sha="t1", lower=["b", "a"])
@@ -280,6 +303,79 @@ pn = Panel("p")
 for a, b in (([0, 0], [10, 0]), ([10, 0], [10, 10]), ([10, 10], [0, 10]), ([0, 10], [0, 0])):
     pn.edges.append(Edge(a, b))
 check("[10] vendored pygarment panel assembles", "p" in pn.assembly().pattern["panels"])
+
+# [12]
+MU = dict(M, shoulder_y=1.37, shoulder_w=0.39, neck_y=1.42, neck_c=0.33, arm_len=0.50,
+          arm_c=[[0.05, 0.34], [0.25, 0.26], [0.5, 0.24], [0.97, 0.17]],
+          torso=[[0.8, 0.92], [1.0, 0.70], [1.2, 0.80], [1.36, 1.0]], joints={})
+top, e = gt.validate_params({"kind": "top", "length_m": 0.55, "flare": 0.9, "slit": "left", "sleeves": "short"})
+check("[12] top: covered, skirt fields reset", e == [] and top["shoulders"] == "covered" and top["flare"] == 0.3
+      and top["slit"] == "none", top)
+d0, _ = gt.validate_params({"kind": "dress", "sleeves": "long"})
+check("[12] strapless dress drops sleeves", d0["shoulders"] == "strapless" and d0["sleeves"] == "none")
+sk, _ = gt.validate_params({"kind": "skirt", "sleeves": "long", "neckline": "v"})
+check("[12] skirt resets bodice fields", sk["sleeves"] == "none" and sk["neckline"] == "crew")
+o = gt.outline(top, MU)
+check("[12] top_y 1.415, length 0.55", close(o["top_y"], 1.415) and close(o["knots"][-1][0], 0.55), o["top_y"])
+check("[12] hem knot 0.93723", close(o["knots"][0][1], 0.93723), o["knots"][0])
+check("[12] top knot 1.101", close(o["knots"][-1][1], 1.101), o["knots"][-1])
+jk, _ = gt.validate_params({"kind": "jacket", "length_m": 0.55, "sleeves": "short"})
+check("[12] jacket top knot 1.151", close(gt.outline(jk, MU)["knots"][-1][1], 1.151))
+b = gt.bodice_spec(top, MU)
+sl = b["sleeve"]
+check("[12] sleeve 0.15 m, 7 rings", close(sl["len_m"], 0.15) and len(sl["rings"]) == 7, sl)
+check("[12] ring 0 0.4178, last 0.31952", close(sl["rings"][0][1], 0.4178) and close(sl["rings"][-1][1], 0.3195),
+      sl["rings"])
+check("[12] neck_r 0.06452, pin 0.14625, crew 0.03", close(b["neck_r"], 0.0645) and close(b["pin_half_x"], 0.1462)
+      and close(b["depth_m"], 0.03), b)
+boat = gt.bodice_spec(gt.validate_params({"kind": "top", "neckline": "boat"})[0], MU)
+check("[12] boat neck 0.1209", close(boat["neck_r"], 0.1209), boat["neck_r"])
+lap = gt.bodice_spec(gt.validate_params({"kind": "jacket", "collar": "lapel"})[0], MU)
+check("[12] lapel = open v 0.18", lap["neckline"] == "v" and close(lap["depth_m"], 0.18) and lap["front_open"], lap)
+check("[12] no sleeves -> None", gt.bodice_spec(gt.validate_params({"kind": "top"})[0], MU)["sleeve"] is None)
+spec_t = gt.panel_spec(top, MU)
+check("[12] panel_spec carries bodice + sleeve panel", "bodice" in spec_t
+      and set(spec_t["pygarment"]["panels"]) == {"front", "back", "sleeve"})
+names = lambda gs: [(g["name"], tuple(g["poses"])) for g in gs]  # noqa: E731
+check("[12] top groups: arms only", names(gt.shape_groups(top)) == [
+    ("arm_l", gt.ARM_SHAPE_POSES), ("arm_r", gt.ARM_SHAPE_POSES)])
+args = gt.build_args(gt.validate_params({"kind": "top", "length_m": 0.6})[0],
+                     gt.panel_spec(gt.validate_params({"kind": "top", "length_m": 0.6})[0], MU), item_id="x")
+check("[12] long top adds sit", [g["name"] for g in args["shape_groups"]] == ["legs", "arm_l", "arm_r"]
+      and args["shape_groups"][0]["poses"] == ["sit"])
+args = gt.build_args(top, spec_t, item_id="x")
+check("[12] hip-length top: no legs", [g["name"] for g in args["shape_groups"]] == ["arm_l", "arm_r"])
+check("[12] strapless dress: legs", names(gt.shape_groups(d0)) == [("legs", ("sit", "kneel"))])
+dc, _ = gt.validate_params({"kind": "dress", "shoulders": "covered", "sleeves": "short"})
+check("[12] covered dress: legs + arms_down", names(gt.shape_groups(dc)) == [
+    ("legs", ("sit", "kneel")), ("arm_l", ("arms_down",)), ("arm_r", ("arms_down",))])
+check("[12] shape_targets folds sides", gt.shape_targets({"targets": ["sit", "arms_down_l", "arms_down_r"]})
+      == ["sit", "arms_down"])
+check("[12] renders out of the wall", {r["check"]: r for r in gt.judge_build(
+    {"wall_total_s": 63.0, "render_wall_s": 4.0})}["build_wall_s"]["ok"])
+
+# [13]
+from app.models import inventory as _inv2  # noqa: E402
+lay = {"tp": {"category": "outfit_piece", "outfit_piece": {"slots": ["top"], "mesh_mode": "template",
+                                                            "template": {"params": {"kind": "top"}}}},
+       "jk": {"category": "outfit_piece", "outfit_piece": {"slots": ["outer"], "mesh_mode": "template",
+                                                            "template": {"params": {"kind": "jacket"}}}},
+       "bt": {"category": "outfit_piece", "outfit_piece": {"slots": ["feet"], "mesh_mode": "own_mesh"}}}
+_inv2.get_item = lambda iid: lay.get(iid)
+gt.texture_sources = lambda name, item_id: {"front": "/x.png", "back": "/x.png", "source": "item_image"}
+check("[13] jacket over the top", [i for i, _ in gt.collider_pieces("jk", "jacket", ["tp", "bt"])] == ["tp"])
+check("[13] top over nothing", gt.collider_pieces("tp", "top", ["jk", "bt"]) == [])
+kj1 = gt.key_for("K", "jk", base_sha="s", lower=["bt", "tp"], item=lay["jk"])[0]
+kt1 = gt.key_for("K", "tp", base_sha="s", lower=["bt", "jk"], item=lay["tp"])[0]
+lay["tp"]["outfit_piece"]["template"]["params"]["sleeves"] = "long"
+kj2 = gt.key_for("K", "jk", base_sha="s", lower=["bt", "tp"], item=lay["jk"])[0]
+lay["jk"]["outfit_piece"]["template"]["params"]["collar"] = "lapel"
+kt2 = gt.key_for("K", "tp", base_sha="s", lower=["bt", "jk"], item=lay["tp"])[0]
+kt1b = kt1
+lay["tp"]["outfit_piece"]["template"]["params"]["sleeves"] = "none"
+kt1b = gt.key_for("K", "tp", base_sha="s", lower=["bt", "jk"], item=lay["tp"])[0]
+check("[13] top change re-keys the jacket", kj1 and kj2 and kj1 != kj2)
+check("[13] jacket change keeps the top's key", kt1 == kt1b, (kt1, kt1b, kt2))
 
 print("\n" + ("all checks passed" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}"))
 sys.exit(1 if FAILS else 0)
