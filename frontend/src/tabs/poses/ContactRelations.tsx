@@ -36,7 +36,7 @@ export function ContactRelations({ roles, saved, draft, onDraft, onSave, busy }:
       </div>
       {draft.length === 0 ? <div className="ga-form-hint" style={{ margin: 0 }}>{t('No rows: the channel the attached part fits is found automatically.')}</div> : null}
       {draft.map((r, i) => (
-        <div key={i} style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'nowrap' }}>
+        <div key={i} style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
           <select {...sel} aria-label={t('Place with the attached part')} value={r.part} disabled={busy}
             onChange={(e) => set(i, { part: e.target.value })}>
             {roles.map((x) => <option key={x} value={x} disabled={x !== r.part && draft.some((y) => y.part === x)}>{x.toUpperCase()}</option>)}
