@@ -15,7 +15,12 @@ Rule, per body vertex ``v`` (bind pose, normal ``n_v``) against the union of the
 * kept anyway — within ``HEM_BAND_M`` of a piece's open border (a boundary edge: the hem, a cuff, a collar), so no
   hole can show through an opening.
 
-A body face is dropped only when all three of its vertices are covered. Footwear has its own cut, hair and painted
+A body face is dropped only when all three of its vertices are covered.
+
+Garment under garment (Ruling A144, ``covered_under``): a template piece worn under a higher-ranked template piece
+(a top under a jacket) loses the faces the upper piece covers, by the same rule with the outward direction taken
+from the body (the nearest body vertex to the point: a cloth shell's own normals point both ways) and without the
+facing test; the band at the UPPER piece's openings stays (the top shows in a jacket's V and at its cuffs). Footwear has its own cut, hair and painted
 pieces never hide anything. Numpy + pykdtree on the CPU, no hub job. ``VERSION`` enters the assembly state, so a
 changed rule makes every assembly due once.
 """
@@ -25,7 +30,7 @@ from typing import Any, Dict, List, Sequence, Tuple
 
 import numpy as np
 
-VERSION = 1
+VERSION = 2
 REACH_M = 0.06
 FACING_MIN = 0.3
 INSIDE_TOL_M = 0.02
@@ -98,6 +103,45 @@ def covered_vertices(body_pos: np.ndarray, body_faces: np.ndarray,
     if len(R) and covered.any():
         cand = np.flatnonzero(covered)
         d_rim, _ = KDTree(np.ascontiguousarray(R)).query(np.ascontiguousarray(B[cand]), k=1)
+        hem = cand[d_rim < HEM_BAND_M]
+        covered[hem] = False
+        stats["hem_kept"] = int(len(hem))
+    stats["covered"] = int(covered.sum())
+    return covered, stats
+
+
+def covered_under(lower_pos: np.ndarray, body_pos: np.ndarray,
+                  pieces: Sequence[Tuple[np.ndarray, np.ndarray]]) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """(bool mask over the lower piece's vertices, stats): covered by the upper ``pieces`` — see the module rule."""
+    from pykdtree.kdtree import KDTree
+    L = np.ascontiguousarray(np.asarray(lower_pos, np.float64))
+    covered = np.zeros(len(L), bool)
+    stats: Dict[str, Any] = {"pieces": len(pieces), "hem_kept": 0}
+    if not len(pieces) or not len(L) or not len(body_pos):
+        return covered, stats
+    B = np.ascontiguousarray(np.asarray(body_pos, np.float64))
+    _d, bi = KDTree(B).query(L, k=1)
+    out = L - B[bi]
+    ln = np.linalg.norm(out, axis=1, keepdims=True)
+    n = np.divide(out, ln, out=np.zeros_like(out), where=ln > 1e-9)
+    gp, rim = [], []
+    for pos, faces in pieces:
+        P = np.asarray(pos, np.float64)
+        gp.append(P)
+        rim.append(P[boundary_vertices(weld(P, faces))])
+    G = np.ascontiguousarray(np.concatenate(gp))
+    dist, idx = KDTree(G).query(L, k=NEIGHBOURS, distance_upper_bound=REACH_M)
+    near = np.isfinite(dist) & (idx < len(G))
+    j = np.where(near, idx, 0)
+    ahead = np.einsum("ikj,ij->ik", G[j] - L[:, None, :], n)
+    span = np.linalg.norm(G[j] - L[:, None, :], axis=2)
+    lateral = np.sqrt(np.maximum(span ** 2 - ahead ** 2, 0.0))
+    over = lateral <= np.abs(ahead) + LATERAL_SLACK_M
+    covered = (near & (ahead >= -INSIDE_TOL_M) & over).any(axis=1) & (ln[:, 0] > 1e-9)
+    R = np.concatenate(rim) if rim else np.zeros((0, 3))
+    if len(R) and covered.any():
+        cand = np.flatnonzero(covered)
+        d_rim, _ = KDTree(np.ascontiguousarray(R)).query(np.ascontiguousarray(L[cand]), k=1)
         hem = cand[d_rim < HEM_BAND_M]
         covered[hem] = False
         stats["hem_kept"] = int(len(hem))

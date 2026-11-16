@@ -20,6 +20,17 @@ LATERAL_SLACK_M 0.005):
   = 2 x 32 = 64 vertices; unwelded both rims hold 33 vertices (2 x 33 = 66) and both seam columns
   add their 41 - 2 = 39 inner vertices (78) -> 144.
 * A piece far away (r 0.20, 0.10 m out > REACH_M) -> 0 covered.
+
+Garment under garment (``covered_under``, Ruling A144): lower = cylinder r 0.115, rings y = 0.20 .. 0.80 (61 rings);
+upper = r 0.132, rings 0.30 .. 0.70. The outward direction of a lower vertex = from its nearest body vertex (same
+angle and height, 0.015 m in) = radial. Upper vertex at the same angle: ahead 0.017.
+* y in [0.30, 0.70]: sideways 0 -> over. y = 0.29 / 0.28: sideways 0.01 / 0.02 <= 0.017 + 0.005 -> over; y = 0.27:
+  0.03 > 0.022 -> not (and symmetric above: 0.71, 0.72 over, 0.73 not).
+* Band at the UPPER piece's rims (y 0.30, 0.70): sqrt(0.017^2 + dy^2) < 0.02 <=> dy < 0.0105 -> rings 0.29, 0.30,
+  0.31 and 0.69, 0.70, 0.71 stay. Covered: rings 0.28 .. 0.72 = 45 rings - 6 = 39 x 32 = 1248.
+* The lower piece wound inward (its inner shell) -> the same 1248 (the direction comes from the body, not the
+  shell's normals).
+* Lower r 0.16 over the upper (ahead -0.025 < -INSIDE_TOL_M) -> 0 covered.
 """
 from __future__ import annotations
 
@@ -89,6 +100,17 @@ check("seam split piece covers the same", int(body_cover.covered_vertices(body_P
 far = cylinder(0.20, 0.30, 0.70, 41)
 check("piece 0.10 m out -> 0 covered", int(body_cover.covered_vertices(body_P, body_F, [far])[0].sum()), 0)
 check("no pieces -> nothing", body_cover.hide_under([prim], [])[0], {})
+
+lower = cylinder(0.115, 0.20, 0.80, 61)
+upper = cylinder(0.132, 0.30, 0.70, 41)
+cov_u, st_u = body_cover.covered_under(lower[0], body_P, [upper])
+check("covered_under: 39 rings x 32", int(cov_u.sum()), 1248)
+check("covered_under: 0.27 no, 0.28 yes, 0.30 band, 0.72 yes, 0.73 no",
+      [bool(cov_u[r * 32]) for r in (7, 8, 10, 52, 53)], [False, True, False, True, False])
+check("covered_under: inner shell the same",
+      int(body_cover.covered_under(cylinder(0.115, 0.20, 0.80, 61, inward=True)[0], body_P, [upper])[0].sum()), 1248)
+check("covered_under: lower outside the upper -> 0",
+      int(body_cover.covered_under(cylinder(0.16, 0.20, 0.80, 61)[0], body_P, [upper])[0].sum()), 0)
 
 print("\nALL OK" if not FAILS else f"\nFAILED ({len(FAILS)}): " + ", ".join(FAILS))
 sys.exit(1 if FAILS else 0)

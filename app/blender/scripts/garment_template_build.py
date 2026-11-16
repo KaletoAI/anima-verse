@@ -98,6 +98,9 @@ MIN_EDGE_M = 0.001
 #: The yoke reaches at least this far outward from the neck opening.
 CAP_MIN_M = 0.03
 COLLAR_STEP_M = 0.012
+#: Ruling A144: a stand collar runs only where the neckline is cut less than this (down a V it stood as a 3 mm band
+#: the lower layer stretched to 4x).
+COLLAR_CUT_MAX_M = 0.03
 UV_TORSO = (0.30, 0.86)
 UV_CAP = (0.87, 0.98)
 UV_COLLAR = (0.985, 0.995)
@@ -291,15 +294,15 @@ def build_bodice(spec, btree, ftree, centre, arm):
         for c in range(nc):
             x, y, z = verts[cid[K, c]]
             sh = 0.97 ** (k - K)
-            # the stand lowers along a cut front (never to zero: a zero-length edge has no rest length)
-            step = COLLAR_STEP_M * max(0.25, 1.0 - cut_s[c] / 0.05)
             cid[k, c] = len(verts)
-            verts.append((ncx + (x - ncx) * sh, ncy + (y - ncy) * sh, z + step * (k - K)))
+            verts.append((ncx + (x - ncx) * sh, ncy + (y - ncy) * sh, z + COLLAR_STEP_M * (k - K)))
     for k in range(nring):
         v0 = UV_CAP[0] + (UV_CAP[1] - UV_CAP[0]) * k / K if k < K else UV_COLLAR[0]
         v1 = UV_CAP[0] + (UV_CAP[1] - UV_CAP[0]) * (k + 1) / K if k + 1 <= K else UV_COLLAR[1]
         for c in range(span):
             c2 = (c + 1) % nc
+            if k >= K and max(cut_s[c], cut_s[c2]) > COLLAR_CUT_MAX_M:
+                continue                   # the collar ends where the neckline runs down the front (its gorge)
             faces.append((cid[k, c], cid[k, c2], cid[k + 1, c2], cid[k + 1, c]))
             u1 = u_of(c + 1)
             fuv.append(((u_of(c), v0), (u1, v0), (u1, v1), (u_of(c), v1)))
@@ -662,6 +665,46 @@ def smooth_weights(obj, body):
     return {"fixed_share": round(float(fixed.mean()), 4), "free_share": round(float((conf <= 0).mean()), 4)}
 
 
+#: Ruling A144 layering: a piece's vertex within LAYER_NEAR_M of a lower layer takes that layer's bone weights
+#: (linear to its own weights at LAYER_FAR_M), so the two layers deform alike and the lower one cannot slide out
+#: through the upper one in a skinned pose (the body's weights at 3–4 cm from the skin had diffused differently).
+LAYER_NEAR_M = 0.025
+LAYER_FAR_M = 0.05
+
+
+def layer_weights(obj, lower):
+    """Blend ``obj``'s weights towards the nearest lower-layer vertex's (see LAYER_NEAR_M); returns the share taken."""
+    from mathutils.kdtree import KDTree
+    names, W = weight_matrix(obj)
+    col = {n: j for j, n in enumerate(names)}
+    co = np.array([obj.matrix_world @ v.co for v in obj.data.vertices])
+    best_d = np.full(len(co), np.inf)
+    best_w = np.zeros_like(W)
+    for lo in lower:
+        lco, _ln, _lt = gd.world_coords(lo)
+        lnames, LW = weight_matrix(lo)
+        LW2 = np.zeros((len(LW), W.shape[1]))
+        for j, n in enumerate(lnames):
+            if n in col:
+                LW2[:, col[n]] = LW[:len(LW), j]
+        kd = KDTree(len(lco))
+        for i, p in enumerate(lco[:len(LW)]):
+            kd.insert(Vector(p), i)
+        kd.balance()
+        for i, p in enumerate(co):
+            _q, k, d = kd.find(Vector(p))
+            if k is not None and d < best_d[i]:
+                best_d[i], best_w[i] = d, LW2[k]
+    conf = np.clip((LAYER_FAR_M - best_d) / (LAYER_FAR_M - LAYER_NEAR_M), 0.0, 1.0)
+    conf[best_w.sum(1) <= 0] = 0.0
+    out = conf[:, None] * best_w + (1 - conf[:, None]) * W
+    order = np.argsort(-out, axis=1)[:, 4:]
+    np.put_along_axis(out, order, 0.0, axis=1)
+    out /= np.maximum(out.sum(1, keepdims=True), 1e-9)
+    write_weights(obj, out)
+    return {"taken_share": round(float((conf >= 0.999).mean()), 4), "blend_share": round(float((conf > 0).mean()), 4)}
+
+
 def hem_sets(obj, top_z):
     """Hem vertices (boundary, not the waistband) and, per hem vertex, its upward neighbour."""
     bm = bmesh.new()
@@ -997,7 +1040,7 @@ def run(a):
     worst_at = {"z": round(float(worst[2]), 3),
                 "deg": round(math.degrees(math.atan2(worst[1] - centre[1], worst[0] - centre[0])) % 360, 1),
                 "over_1_3": int((st > 1.3).sum()), "short_edges": int((rest_len < MIN_EDGE_M).sum()),
-                "short_at": [[round(float(x), 3) for x in co0[e].mean(0)] for e in edges[rest_len < MIN_EDGE_M][:8]], "rest_mm": round(float(rest_len[int(st.argmax())]) * 1000, 1),
+                "over_at": [[round(float(x), 2) for x in co0[e].mean(0)] for e in edges[np.argsort(-st)[:8]]], "rest_mm": round(float(rest_len[int(st.argmax())]) * 1000, 1),
                 "x": round(float(worst[0]), 3), "y": round(float(worst[1]), 3)}
     n_single = len(me.vertices)
     neck = {}
@@ -1016,6 +1059,8 @@ def run(a):
     # skin the single layer (the corrective drapes need it), inpaint the free cloth's weights
     gd.bind_to_armature(obj, body, arm)
     weights = smooth_weights(obj, body) if prm.get("smooth_weights", True) else {}
+    if lower and prm.get("smooth_weights", True):
+        weights["layer"] = layer_weights(obj, lower)
     names, W = weight_matrix(obj)
     rest_world = np.array([obj.matrix_world @ v.co for v in obj.data.vertices])
     groups = [dict(g) for g in (prm.get("shape_groups") or [])]

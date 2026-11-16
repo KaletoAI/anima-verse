@@ -750,6 +750,35 @@ def _hide_covered_body(blob: bytes, clothing: List[Dict[str, Any]], tier: str) -
     return blob, stats
 
 
+def _template_uppers(grafted: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """Ruling A144: per template piece, the template pieces of a higher layer rank worn over it (a jacket over a
+    top) — their cover hides the lower piece's faces under them (``body_cover.covered_under``)."""
+    from app.core import garment_template
+    tpl = [g for g in grafted if g.get("template")]
+
+    def rank(g: Dict[str, Any]) -> int:
+        kind = str(((g.get("record") or {}).get("params") or {}).get("kind") or "")
+        return garment_template.LAYER_RANK.get(kind, 0)
+    return {g["item_id"]: [u for u in tpl if rank(u) > rank(g)] for g in tpl if any(rank(u) > rank(g) for u in tpl)}
+
+
+def _hide_under_upper(mesh: Any, body_blob: bytes, uppers: List[Dict[str, Any]], tier: str) -> Dict[str, Any]:
+    """Drop the faces of the lower template piece ``mesh`` (in place) that the ``uppers`` cover; returns the stats.
+    Vertices and morph targets stay (only the index list shrinks)."""
+    import numpy as np
+    from app.core import body_cover, glb_mesh
+    body = glb_mesh.body_arrays(body_blob)
+    pieces = []
+    for u in uppers:
+        um = glb_mesh.garment_arrays(_source(u, tier).read_bytes())
+        pieces.append((um.positions, um.indices))
+    covered, stats = body_cover.covered_under(mesh.positions, body.positions, pieces)
+    drop = body_cover.hidden_faces(mesh.indices, covered)
+    mesh.indices = np.asarray(mesh.indices)[~drop]
+    stats.update({"hidden_faces": int(drop.sum()), "faces": int(len(drop))})
+    return stats
+
+
 def _tint_scalp(blob: bytes, mesh, garment: Dict[str, Any], tier: str, tints: Dict[str, Any]) -> bytes:
     """``blob`` with the scalp under the hair ``mesh`` tinted in the body texture (``hair_scalp_tint``; the bare
     and base files stay untouched — this is the assembly's copy). A failure keeps the untinted body: the tint is a
@@ -838,6 +867,7 @@ def _build(character_name: str, directory: Path, bare: Path,
         foot_pose = {**pose, "rest": rest_measurement(data),
                      "source": {"item_id": garment["item_id"], "fsig": garment["fsig"], "glb_sha256": ""}}
     blob, cover = _hide_covered_body(blob, [g for g in grafted if g["kind"] == CLOTHING], tier)
+    under = _template_uppers(grafted)
     scalp_tints: Dict[str, Any] = {}
     for garment in grafted:
         source = _source(garment, tier).read_bytes()
@@ -865,6 +895,9 @@ def _build(character_name: str, directory: Path, bare: Path,
                                           material_overrides=material_overrides)
             continue
         mesh = glb_mesh.garment_arrays(source)
+        if under.get(garment["item_id"]):
+            cover.setdefault("under", {})[garment["item_id"]] = _hide_under_upper(mesh, data, under[garment["item_id"]],
+                                                                                   tier)
         overrides = material_overrides
         if garment["kind"] != HAIR and overrides is None:
             _roughness_map(character_name, garment, tier, mesh)
