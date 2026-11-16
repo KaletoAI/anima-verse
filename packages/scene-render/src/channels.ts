@@ -61,6 +61,7 @@ import type { ChannelOverride, ChannelRecord, CollisionPayload, JointRef, Vec3 }
 import type { PartnerSnapshot } from './partnerContact'
 import { normBoneName } from './clipRetarget'
 import { inGarment } from './figure'
+import { mouthChannel, type TargetBones } from './contactTarget'
 
 type Three = typeof import('three')
 
@@ -453,12 +454,15 @@ function endpointSkin(meshes: readonly SkinnedMesh[], p: Vec3): EndpointSkin | n
  * bottom are `a_pos` / `b_pos` through their joints (a BODY mesh's, `bodyJoints`), u and D follow from them, R and F
  * scale with joint `a`'s matrix like a capsule radius. `update()` recomputes from the CURRENT bone matrices (call
  * after `updateMatrixWorld`) and puts a fresh `ChannelNow` into each slot, so a snapshot that copied the array keeps
- * its frame. Null for a payload of another version, without channels, or when no channel's joint is on the figure.
- * `_three` keeps the signature of `bindCollision`; the current-frame rule needs no three object here.
+ * its frame. Ruling A159: a figure with a head (`head` bone plus the eyes or the head bone's +Z) also gets its MOUTH
+ * channel LAST (`contactTarget.ts` `mouthChannel`, rebuilt from the head bones on every `update()`; it skips the
+ * payload's `head`-region capsules). Null for a payload of another version, or when neither a declared channel's
+ * joint nor a head is on the figure. `_three` keeps the signature of `bindCollision`; the current-frame rule needs no
+ * three object here.
  */
 export function bindChannels(_three: Three, root: Object3D,
   payload: CollisionPayload | null | undefined): { channels: ChannelNow[]; update(): void } | null {
-  if (!payload || payload.version !== COLLISION_VERSION || !payload.channels?.length) return null
+  if (!payload || payload.version !== COLLISION_VERSION) return null
   const joints = bodyJoints(root)
   const bound: Array<{ record: ChannelRecord; ja: JointRef; jb: JointRef; suppress: ReadonlySet<string>
     wa: EndpointSkin | null; wb: EndpointSkin | null }> = []
@@ -467,7 +471,7 @@ export function bindChannels(_three: Three, root: Object3D,
     const mesh = o as SkinnedMesh
     if (mesh.isSkinnedMesh && mesh.skeleton && !inGarment(mesh)) bodyMeshes.push(mesh)
   })
-  for (const record of payload.channels) {
+  for (const record of payload.channels ?? []) {
     const ja = joints.get(normBoneName(record.a))
     const jb = joints.get(normBoneName(record.b))
     if (!ja || !jb || !(record.r > 0)) continue
@@ -477,7 +481,6 @@ export function bindChannels(_three: Three, root: Object3D,
     const wb = wa ? skinOn(wa.mesh, record.b_pos) : null
     bound.push({ record, ja, jb, suppress: new Set(record.suppress), wa, wb })
   }
-  if (!bound.length) return null
   const channelNow = (entry: typeof bound[number]): ChannelNow | null => {
     const { record } = entry
     const jointA = jointRefNow(entry.ja)
@@ -494,13 +497,40 @@ export function bindChannels(_three: Three, root: Object3D,
     }
   }
   const usable = bound.filter(entry => channelNow(entry) !== null)
-  if (!usable.length) return null
+  // The mouth (A159): the head bones by their normalised names, read in the CURRENT frame.
+  const headBones = new Map<keyof TargetBones, Object3D>()
+  root.traverse(o => {
+    if (!(o as { isBone?: boolean }).isBone) return
+    const k = normBoneName(o.name)
+    if ((k === 'head' || k === 'headtop_end' || k === 'lefteye' || k === 'righteye') && !headBones.has(k)) headBones.set(k, o)
+  })
+  const headSuppress: ReadonlySet<string> = new Set(payload.capsules.filter(c => c.region === 'head').map(c => c.id))
+  const mouthNow = (): ChannelNow | null => {
+    if (!headBones.has('head')) return null
+    const tb: TargetBones = {}
+    for (const [k, o] of headBones) {
+      const e = o.matrixWorld.elements
+      tb[k] = [e[12], e[13], e[14]]
+      if (k === 'head') {
+        const l = Math.hypot(e[8], e[9], e[10]) || 1
+        tb.headZ = [e[8] / l, e[9] / l, e[10] / l]
+        tb.headY = [e[4], e[5], e[6]]
+      }
+    }
+    return mouthChannel(tb, headSuppress)
+  }
+  const hasMouth = mouthNow() !== null
+  if (!usable.length && !hasMouth) return null
   const channels: ChannelNow[] = []
   const update = () => {
     usable.forEach((entry, i) => {
       const now = channelNow(entry)
       if (now) channels[i] = now
     })
+    if (hasMouth) {
+      const now = mouthNow()
+      if (now) channels[usable.length] = now
+    }
   }
   update()
   return { channels, update }

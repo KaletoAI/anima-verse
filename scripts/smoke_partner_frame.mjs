@@ -56,8 +56,9 @@
  *     a_pos (0, 1.0, 0.1), bottom b_pos (0, 1.0, 0.0), r 0.02, funnel 0.05), its root at x = 2: its
  *     `partnerSnapshot({i1, k}, 'P')` carries that channel in the world — o (2, 1.0, 0.1), u (0, 0, −1), depth
  *     0.1, r 0.02 (±1e-9; bind rotations identity, scale 1) — and the interaction; a snapshot taken after the root
- *     moved to x = 3 has o.x 3 while the first keeps 2 (each snapshot owns its frame). Without a channel record the
- *     snapshot's `channels` is []. `updateSecondary(partners, {id: i1})` hands `interaction: {id: i1}` to the
+ *     moved to x = 3 has o.x 3 while the first keeps 2 (each snapshot owns its frame). The fixture has a Head bone, so
+ *     the mouth (Ruling A159, `mouthChannel`) follows the declared channel as the LAST entry; without a channel record
+ *     the snapshot's `channels` is the mouth alone. `updateSecondary(partners, {id: i1})` hands `interaction: {id: i1}` to the
  *     secondary motion, `updateSecondary(partners)` hands null.
  */
 import assert from 'node:assert/strict'
@@ -453,7 +454,7 @@ function phaseB(figs, order, lazy = false) {
   const s1 = fig.partnerSnapshot({ id: 'i1', kind: 'k' }, 'P')
   const c1 = s1?.channels[0]
   check('[7] the snapshot carries the channel in the world: o (2, 1, 0.1), u (0, 0, −1), D 0.1, r 0.02',
-    s1?.channels.length === 1 && c1.id === 'pkg:chan' && near(c1.o, [2, 1, 0.1]) && near(c1.u, [0, 0, -1])
+    s1?.channels.length === 2 && s1.channels[1].id === 'mouth' && c1.id === 'pkg:chan' && near(c1.o, [2, 1, 0.1]) && near(c1.u, [0, 0, -1])
     && Math.abs(c1.depth - 0.1) <= 1e-9 && Math.abs(c1.r - 0.02) <= 1e-9, JSON.stringify(c1 && { o: c1.o, u: c1.u }))
   check('[7] … and the owner\'s interaction', s1?.interaction?.id === 'i1' && s1.interaction.kind === 'k')
   fig.root.position.set(3, 0, 0)
@@ -461,8 +462,8 @@ function phaseB(figs, order, lazy = false) {
   check('[7] a later snapshot has its own frame (3 vs the first\'s 2)', Math.abs(s2.channels[0].o[0] - 3) <= 1e-9
     && Math.abs(c1.o[0] - 2) <= 1e-9 && s2.channels !== s1.channels)
   const plain = seeded(() => new Figure(model()))
-  check('[7] without a channel record: channels []', Array.isArray(plain.partnerSnapshot(null, 'Q')?.channels)
-    && plain.partnerSnapshot(null, 'Q').channels.length === 0)
+  check('[7] without a channel record: channels = [mouth]', Array.isArray(plain.partnerSnapshot(null, 'Q')?.channels)
+    && plain.partnerSnapshot(null, 'Q').channels.map(c => c.id).join() === 'mouth')
   const calls = []
   const real = plain.runtime.secondary.update.bind(plain.runtime.secondary)
   plain.runtime.secondary.update = (dt, options) => { calls.push(options); real(dt, options) }

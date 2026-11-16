@@ -52,7 +52,7 @@
  */
 import type { Vec3 } from './collision'
 import { CONTACT_ENTRY_WEIGHT, type ContactSample } from './channelContact'
-import { isPointTarget, orientAlong, POINT_TARGET_OPS, type ContactTarget } from './contactTarget'
+import { isPointTarget, MOUTH_CHANNEL_ID, orientAlong, POINT_TARGET_OPS, type ContactTarget } from './contactTarget'
 import { bendLimitAt, solveChainBend, type BendFrame, type BendLimits, type BendResult } from './chainBend'
 import { POSTURE, postureAngleCapDeg, postureExcess, supportHeight, supportSample, type SupportSample } from './postureSupport'
 
@@ -417,7 +417,8 @@ interface InspectionLike {
   capsules?: readonly { id: string; now: { a: readonly number[]; b: readonly number[]; r: number } }[]
 }
 /** The contact of `entering` in `receiving` for the clip's CONTACT TARGET (Ruling A139, `contactTarget.ts`):
- *  `channel` = the first chain whose op one of `receiving`'s channels accepts (A126); a point target = the first chain
+ *  `channel` = the first chain whose op one of `receiving`'s DECLARED channels accepts (A126); `mouth` = the same
+ *  against the mouth channel only (A159); a point target = the first chain
  *  with an op of `POINT_TARGET_OPS` against that target of `receiving` (`channel` then holds the target id); `none` = no contact. */
 export function findContact(entering: InspectionLike, receiving: InspectionLike, target: ContactTarget = 'channel'):
   { chain: number; channel: string } | null {
@@ -427,8 +428,10 @@ export function findContact(entering: InspectionLike, receiving: InspectionLike,
     const ci = entering.chains.findIndex((c) => c.segments.length > 0 && POINT_TARGET_OPS.includes(c.op))
     return ci >= 0 ? { chain: ci, channel: target } : null
   }
+  // A159: `mouth` = only the mouth channel; `channel` = a declared one, never the mouth.
+  const wanted = (id: string) => target === 'mouth' ? id === MOUTH_CHANNEL_ID : id !== MOUTH_CHANNEL_ID
   for (let ci = 0; ci < entering.chains.length; ci++) {
-    const ch = receiving.channels.find((x) => x.accepts.includes(entering.chains[ci].op))
+    const ch = receiving.channels.find((x) => wanted(x.id) && x.accepts.includes(entering.chains[ci].op))
     if (ch && entering.chains[ci].segments.length) return { chain: ci, channel: ch.id }
   }
   return null
