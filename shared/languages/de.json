@@ -6233,6 +6233,24 @@
     "If it finds something, the reference changes: the front shows as outdated, and the next Run all or Build renders the four views and the base model again ({jobs}).": "Wenn etwas gefunden wird, ändert sich die Referenz: die Vorderansicht gilt als veraltet, und das nächste Alles ausführen oder Build rendert die vier Ansichten und das Basismodell neu ({jobs}).",
     "Dressed views made on these views follow at their next Build.": "Angezogene Ansichten, die auf diesen Ansichten gemacht werden, folgen beim nächsten Build.",
     "Made from the full-body reference before it was post-processed — regenerating the front makes it from the processed reference": "Aus der Ganzkörper-Referenz vor ihrer Nachbearbeitung erstellt — die Vorderansicht neu zu erzeugen macht sie aus der bearbeiteten Referenz",
-    "Made from the post-processed full-body reference — regenerating the front makes it from the original reference": "Aus der nachbearbeiteten Ganzkörper-Referenz erstellt — die Vorderansicht neu zu erzeugen macht sie aus der ursprünglichen Referenz"
+    "Made from the post-processed full-body reference — regenerating the front makes it from the original reference": "Aus der nachbearbeiteten Ganzkörper-Referenz erstellt — die Vorderansicht neu zu erzeugen macht sie aus der ursprünglichen Referenz",
+    "Bend limits": "Biegegrenzen",
+    "Bend the attached part": "Angesetztes Teil biegen",
+    "Bend {deg}° of max {max}°": "Biegung {deg}° von max. {max}°",
+    "Drops this clip’s own bend limits: the package default, or the core default, applies again.": "Verwirft die eigenen Biegegrenzen dieses Clips: Es gilt wieder die Paketvorgabe oder die Kernvorgabe.",
+    "How far the attached part may bend toward its target before the partner is moved or turned: per joint and in all. Raised is the stiff state, resting the loose one; in between the limit is blended by how far the part is raised.": "Wie weit sich das angesetzte Teil zum Ziel biegen darf, bevor der Partner verschoben oder gedreht wird: je Gelenk und insgesamt. Aufgerichtet ist der steife Zustand, ruhend der lockere; dazwischen wird die Grenze nach dem Grad der Aufrichtung gemischt.",
+    "Most a single joint bends when raised": "Höchste Biegung eines Gelenks, aufgerichtet",
+    "Most a single joint bends when resting": "Höchste Biegung eines Gelenks, ruhend",
+    "Most the whole part bends when raised": "Höchste Biegung des ganzen Teils, aufgerichtet",
+    "Most the whole part bends when resting": "Höchste Biegung des ganzen Teils, ruhend",
+    "Per joint · in all": "Je Gelenk · insgesamt",
+    "Raised": "Aufgerichtet",
+    "Resting": "Ruhend",
+    "Save bend limits": "Biegegrenzen speichern",
+    "Stores the bend limits with the clip (all its sets and halves). Runs nothing; Auto-align uses them at once.": "Speichert die Biegegrenzen beim Clip (alle Sets und Hälften). Startet nichts; Auto-Ausrichten nutzt sie sofort.",
+    "The attached part bends toward its target first (within the clip’s bend limits: stiff when raised, loose when resting); only what the bend cannot reach moves or turns the partner. Off = the part stays rigid, as before.": "Das angesetzte Teil biegt sich zuerst zum Ziel (innerhalb der Biegegrenzen des Clips: steif, wenn aufgerichtet, locker, wenn ruhend); nur was die Biegung nicht erreicht, verschiebt oder dreht den Partner. Aus = das Teil bleibt starr wie bisher.",
+    "The attached part bends within its limit in every frame.": "Das angesetzte Teil bleibt in jedem Bild innerhalb seiner Biegegrenze.",
+    "The attached part is at its bend limit in {n} of {m} frames: the rest of the way is the partner’s shift or turn.": "Das angesetzte Teil steht in {n} von {m} Bildern an seiner Biegegrenze: Den Rest übernimmt die Verschiebung oder Drehung des Partners.",
+    "core default": "Kernvorgabe"
   }
 }

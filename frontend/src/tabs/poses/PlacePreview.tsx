@@ -41,6 +41,7 @@ import {
   attachedPartIndex, partBoneNames, type PairFitState, pairInterpenetration, clearLamp, PART_REGIONS, type ClearLamp,
   type ContactLamp, type ContactReport, type FitSample, type PairFix,
   targetLamp, isPointTarget, TARGET_RADIUS_M, POINT_TARGET_OPS, type ContactTarget,
+  bendSample, BEND_LIMITS_DEFAULT, type BendLimits, type BendResult,
 } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { targetWordOf } from './contactWords'
@@ -140,14 +141,16 @@ export interface PartnerShow { collision: boolean; channels: boolean
   /** Ruling A129.9: the entering figure's body is hidden, its attached part (extension group) stays. Preview only. */
   hidePartner: boolean
   /** Ruling A129.7: the camera follows the contact point, and an inset shows the channel axis and the shaft. */
-  focus: boolean }
+  focus: boolean
+  /** Ruling A145: the attached part bends toward its target first (default on); off = rigid, as before. */
+  bend: boolean }
 const SHOW_KEY = 'anima.placePreview.show'
 function loadShow(): PartnerShow {
   try {
     const v = JSON.parse(localStorage.getItem(SHOW_KEY) || '{}') as Partial<PartnerShow>
     return { collision: !!v.collision, channels: !!v.channels, fit: v.fit !== false, follow: v.follow !== false,
-      focus: !!v.focus, hidePartner: !!v.hidePartner }
-  } catch { return { collision: false, channels: false, fit: true, follow: true, focus: false, hidePartner: false } }
+      focus: !!v.focus, hidePartner: !!v.hidePartner, bend: v.bend !== false }
+  } catch { return { collision: false, channels: false, fit: true, follow: true, focus: false, hidePartner: false, bend: true } }
 }
 /** Capsules of two figures that overlap; a channel occupied by a partner chain. */
 const CONTACT_COLOR = 0xff2d2d
@@ -159,7 +162,11 @@ export interface PairFitReadout {
   shiftMm: [number, number, number]; turnDeg: [number, number]
   /** Lateral of the tip from the channel axis while inside (s ≥ 0), over the fitted frames (mm). */
   lateralMaxMm: number; lateralMedMm: number; frames: number
+  /** Ruling A145: the bend used since the fit (largest, degrees), its limit and the frames at the limit (null = rigid). */
+  bend: BendReadout | null
 }
+/** Ruling A145: how much the attached part bent — the largest over the frames, its limit there, and the lamp. */
+export interface BendReadout { maxDeg: number; limitDeg: number; atLimit: number; frames: number; lamp: 'green' | 'yellow' }
 /** `pairCheck`: the pair shown over whole loops at 60 fps — the clip as stored + draft, then with the fine fit. */
 export type PairCheckResult =
   | { ok: false; reason: string }
@@ -255,7 +262,9 @@ export interface RelationAlign { by: string; of: string; channel: string; target
       turnDeg: [number, number]
       clearWorst: string; clearLamp: ClearLamp
       before: ContactReport; after: ContactReport; afterShift: ContactReport; overlapBeforeMm: number; overlapAfterMm: number
-      lampBefore: ContactLamp; lamp: ContactLamp }
+      lampBefore: ContactLamp; lamp: ContactLamp
+      /** Ruling A145: the bend after Auto-align (null = rigid). */
+      bend: BendReadout | null }
 export type AutoAlignResult =
   | { ok: false; reason: string }
   | { ok: true; relations: RelationAlign[]; roleShiftCm: Record<string, [number, number, number]>
@@ -266,7 +275,7 @@ export type AutoAlignResult =
       /** Ruling A129.5: the deepest interpenetration besides what the channel allows, its pair and lamp. */
       clearWorst: string; clearLamp: ClearLamp
       before: ContactReport; after: ContactReport; afterShift: ContactReport; overlapBeforeMm: number; overlapAfterMm: number
-      lampBefore: ContactLamp; lamp: ContactLamp }
+      lampBefore: ContactLamp; lamp: ContactLamp; bend: BendReadout | null }
 
 /** The Auto-align of the scene that runs now, tagged with what it shows (A129.6: "Align all" waits for its clip). */
 export type AutoAlignRun = (() => AutoAlignResult) & { kind?: string; set?: string; figures?: number }
@@ -915,7 +924,32 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         const sampleAt = (res: NonNullable<ReturnType<typeof placePhaseB>>, hit: Hit, pivot: [number, number, number]): FitSample | null => {
           const ie = res.figures[hit.e].inspection, ir = res.figures[hit.r].inspection
           const w = ie && ir ? contactSampleOf(ie, ir, hit, pivot) : null
-          return w ? { tip: toStageP(w.tip), base: toStageP(w.base), o: toStageP(w.o), u: toStageP(w.u, true), pivot } : null
+          return w ? { tip: toStageP(w.tip), base: toStageP(w.base), o: toStageP(w.o), u: toStageP(w.u, true), pivot,
+            chain: w.chain?.map((p) => toStageP(p)), raised: w.raised, channel: w.channel } : null
+        }
+        // ── Ruling A145: the attached part bends toward its target before anything moves (`chainBend.ts`). ──
+        /** The bend limits in force: the clip's draft (or the default), null when "Bend" is off (rigid, as before). */
+        const bendLimitsNow = (): BendLimits | null => (showRef.current.bend ? (draftRef.current.bendLimits ?? BEND_LIMITS_DEFAULT) : null)
+        /** A stage sample as rendered with the bend (the sample itself when rigid). */
+        const bentOf = (smp: FitSample, lim: BendLimits | null): { sample: FitSample; bend: BendResult | null } =>
+          (lim ? bendSample(smp, lim) : { sample: smp, bend: null })
+        /** Bend the entering figure's chain bones of this frame (world; the same solve as `bentOf`), return the bend. */
+        const bendBones = (res: NonNullable<ReturnType<typeof placePhaseB>>, hit: Hit, lim: BendLimits | null): BendResult | null => {
+          if (!lim) return null
+          const ie = res.figures[hit.e].inspection, ir = res.figures[hit.r].inspection
+          const w = ie && ir ? contactSampleOf(ie, ir, hit, [0, 0, 0]) : null
+          const b = w ? bendSample(w, lim).bend : null
+          if (b) entries[hit.e].figure.bendChain(hit.chain, b.turns)
+          return b
+        }
+        /** The bend over sampled frames (largest, its limit, frames at the limit, lamp). */
+        const bendReadout = (bends: readonly (BendResult | null)[]): BendReadout | null => {
+          const got = bends.filter((x): x is BendResult => !!x)
+          if (!got.length) return null
+          const top = got.reduce((a, x) => (x.totalDeg > a.totalDeg ? x : a), got[0])
+          const atLimit = got.filter((x) => x.atLimit).length
+          return { maxDeg: top.totalDeg, limitDeg: top.limit.totalDeg, atLimit, frames: got.length,
+            lamp: atLimit > 0 ? 'yellow' : 'green' }
         }
         // Ruling A129.5: the honest check of one frame — only the entering figure's attached part against the
         // receiving channel's `suppress` capsules is exempt; the pair is named by place letter and capsule.
@@ -935,7 +969,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           return { phase: st.phase, by: figs[hit.e].letter, of: figs[hit.r].letter,
             shiftMm: [tot.shift[0] * 1000, tot.shift[1] * 1000, tot.shift[2] * 1000], turnDeg: [tl, rl],
             lateralMaxMm: lat.length ? lat[lat.length - 1] : NaN, lateralMedMm: lat.length ? lat[lat.length >> 1] : NaN,
-            frames: lat.length }
+            frames: lat.length,
+            bend: st.bend && st.bendDeg.length ? { maxDeg: Math.max(...st.bendDeg), limitDeg: st.bendLimitDeg,
+              atLimit: st.bendAtLimit, frames: st.bendDeg.length, lamp: st.bendAtLimit > 0 ? 'yellow' : 'green' } : null }
         }
         // Ruling A139: one fine fit per contact relation.
         type LiveRec = { hit: Hit; st: PairFitState; axes: [number, number, number][] }
@@ -946,6 +982,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           return rec ? pairFitTotal(rec.st, time) : NO_FIX
         }
         let liveFitOn = showRef.current.fit
+        let liveBendOn = showRef.current.bend
         const placedNow = new Map<Fig, { pivot: [number, number, number]; frame: number[] }>()
         // ── Ruling A129.7: focus on the contact — the orbit target eases to the channel opening at 0.9 m, and an inset
         // (bottom right, orthographic, side-on to the channel axis) draws the axis (green, ±12 cm) and the shaft
@@ -1051,7 +1088,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           const wrapped = time < lastTime
           lastTime = time
           const fitOn = showRef.current.fit && !solo && figs.length > 1
-          if (fitOn !== liveFitOn) { liveFitOn = fitOn; resetLive() }
+          if (fitOn !== liveFitOn || showRef.current.bend !== liveBendOn) {
+            liveFitOn = fitOn; liveBendOn = showRef.current.bend; resetLive()
+          }
           if (seenSeq !== draftSeqRef.current) {
             resetLive()
             seenSeq = draftSeqRef.current
@@ -1106,7 +1145,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           }
           if (fitInspect && phaseB && !pausedRef.current) {
             if (!live.found) {
-              live.recs = findHits(phaseB).map((hit) => ({ hit, st: createPairFit(), axes: [] }))
+              live.recs = findHits(phaseB).map((hit) => ({ hit, st: createPairFit(bendLimitsNow()), axes: [] }))
               live.found = true
               live.none = !live.recs.length
             }
@@ -1114,6 +1153,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               const pl = placedNow.get(figs[rec.hit.e])
               const smp = pl ? sampleAt(phaseB, rec.hit, pl.pivot) : null
               if (!pl || !smp) continue
+              bendBones(phaseB, rec.hit, rec.st.bend)
               rec.axes = turnAxes(pl.frame)
               pairFitObserve(rec.st, smp, time, rec.axes, RUNTIME_FIT, showRef.current.follow)
             }
@@ -1234,6 +1274,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           }
           if (!hits.length) return { ok: false, reason: t('No figure here has an attached part that one of the other figure’s channels accepts.') }
           const isPair = roles === 2
+          const bendLim = bendLimitsNow()
+          const rep = (smps: readonly FitSample[]) => contactReport(smps.map((x) => bentOf(x, bendLim).sample))
           const loop = Math.max(8, Math.ceil(duration / step))
           const rows: RelationAlign[] = []
           for (const hit of hits) {
@@ -1280,24 +1322,26 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             }
             const p0 = pass([0, 0, 0])
             if (p0.samples.length < 4) return { ok: false, reason: t('The contact could not be sampled over the clip.') }
-            const before = contactReport(p0.samples)
+            const before = rep(p0.samples)
             let extra: [number, number, number] = [0, 0, 0]
             let cur = p0
             for (let it = 0; it < 3; it++) {
-              const d = solveContactShift(cur.samples)
+              // A145: bend first — the shift only solves what the bent part cannot reach.
+              const d = bendLim ? solvePairFix(cur.samples, { maxShiftM: ALIGN_FIT.maxShiftM, maxAngleDeg: 0, axes: [], bend: bendLim }).shift
+                : solveContactShift(cur.samples)
               const sh = toClip(d, cur.draft)
               extra = [extra[0] + sh[0], extra[1] + sh[1], extra[2] + sh[2]]
               cur = pass(extra)
               if (Math.hypot(d[0], d[1], d[2]) < 0.0005) break
             }
-            const afterShift = contactReport(cur.samples)
+            const afterShift = rep(cur.samples)
             // Ruling A129: then partner B's tilt/roll about its hips (±20° in all, saved included) — a pair only, and
             // only when B is the entering figure (turning the receiving figure would carry the target).
             let turn: [number, number] = [0, 0]
             if (isPair && sign === 1) {
               const lim = ALIGN_FIT.maxAngleDeg
               for (let it = 0; it < 3; it++) {
-                const fix = solvePairFix(cur.samples, { ...ALIGN_FIT, axes })
+                const fix = solvePairFix(cur.samples, { ...ALIGN_FIT, axes, bend: bendLim })
                 const [dt, dr] = fixAnglesDeg(fix, axes)
                 const total = (i: 0 | 1, d: number) => Math.max(-lim, Math.min(lim, savedTurn[i] + t0[i] + turn[i] + d))
                   - savedTurn[i] - t0[i]
@@ -1310,7 +1354,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
                 if (moved < 0.05 && Math.hypot(...fix.shift) < 0.0005) break
               }
             }
-            const after = contactReport(cur.samples)
+            const after = rep(cur.samples)
+            const bend = bendLim ? bendReadout(cur.samples.map((x) => bentOf(x, bendLim).bend)) : null
             base = cur.draft
             const cm = (v: number) => Math.round(v * 1000) / 10
             const deg = (v: number) => Math.round(v * 10) / 10
@@ -1324,7 +1369,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               turnDeg: [deg(t0[0] + turn[0]), deg(t0[1] + turn[1])], afterShift,
               before, after, overlapBeforeMm: p0.overlap * 1000, overlapAfterMm: cur.overlap * 1000,
               clearWorst: cur.worst, clearLamp: clearLamp(cur.overlap * 1000),
-              lampBefore: lampOf(before), lamp: lampOf(after) })
+              lampBefore: lampOf(before), lamp: lampOf(after), bend })
           }
           runAt(timeRef.current, draftRef.current, false)
           const roleShiftCm: Record<string, [number, number, number]> = {}
@@ -1342,6 +1387,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           const step = 1 / 60
           const loop = Math.max(8, Math.ceil(duration / step))
           const draft = draftRef.current
+          const lim = bendLimitsNow()
           let recs: { hit: Hit; st: PairFitState; axes: [number, number, number][]; before: FitSample[]; after: FitSample[] }[] | null = null
           let clearBefore = 0, clearAfter = 0, clearWorst = ''
           for (let i = 0; i < 6 * loop; i++) {
@@ -1354,11 +1400,14 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             }
             const res = placePhaseB(entries, frameState, true)
             if (!res) continue
-            if (!recs) recs = findHits(res).map((hit) => ({ hit, st: createPairFit(), axes: [], before: [], after: [] }))
+            if (!recs) recs = findHits(res).map((hit) => ({ hit, st: createPairFit(lim), axes: [], before: [], after: [] }))
             for (const rec of recs) {
               const pl = placedNow.get(figs[rec.hit.e])!
-              const smp = sampleAt(res, rec.hit, pl.pivot)
-              if (!smp) continue
+              const pre = sampleAt(res, rec.hit, pl.pivot)
+              if (!pre) continue
+              // A145: the bones bend as the game bends them; the reports read the bent tip, the fit the unbent chain.
+              bendBones(res, rec.hit, lim)
+              const smp = bentOf(pre, lim).sample
               rec.axes = turnAxes(pl.frame)
               // Loop 3 settles the chain after the fit's jump; its rows do not count.
               if (i === 4 * loop) rec.st.lateralMm = []
@@ -1368,7 +1417,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
                 rec.after.push(smp)
                 if (h.mm > clearAfter) { clearAfter = h.mm; clearWorst = h.worst }
               }
-              pairFitObserve(rec.st, smp, time, rec.axes, RUNTIME_FIT, follow)
+              pairFitObserve(rec.st, pre, time, rec.axes, RUNTIME_FIT, follow)
             }
           }
           for (const f of figs) {
@@ -1491,6 +1540,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         </label>
         <label title={t('Fits every pair on its own, as the game does when a pair interaction starts: one loop is measured, then the entering figure moves by at most 5 cm and turns by at most 10° so the attached part runs along the channel. The stored clip stays as it is.')}>
           <input type="checkbox" data-testid="place-fit" checked={show.fit} onChange={() => toggleShow('fit')} /> {t('Fine-fit the pair')}
+        </label>
+        <label title={t('The attached part bends toward its target first (within the clip’s bend limits: stiff when raised, loose when resting); only what the bend cannot reach moves or turns the partner. Off = the part stays rigid, as before.')}>
+          <input type="checkbox" data-testid="place-bend" checked={show.bend} onChange={() => toggleShow('bend')} /> {t('Bend the attached part')}
         </label>
         <label title={t('Hides the body of the entering figure; its attached part stays visible, so the channel is not covered. Preview only, nothing is stored.')}>
           <input type="checkbox" data-testid="place-hide-partner" checked={show.hidePartner} onChange={() => toggleShow('hidePartner')} /> {t('Hide partner body (attached part stays)')}

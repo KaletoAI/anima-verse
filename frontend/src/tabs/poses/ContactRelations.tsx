@@ -8,6 +8,7 @@
 import { CONTACT_TARGETS, PROVISIONAL_TARGETS, type ContactRelation, type ContactTarget } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { targetWordOf } from './contactWords'
+import type { BendLimitsWire } from './clipSets'
 
 export interface ContactSetting { relations: ContactRelation[]; source: 'clip' | 'package' | 'default' }
 
@@ -67,6 +68,61 @@ export function ContactRelations({ roles, saved, draft, onDraft, onSave, busy }:
           onClick={() => onSave(draft)}>{t('Save contacts')}</button>
         <button type="button" className="ga-btn ga-btn-sm" disabled={busy || saved?.source !== 'clip'}
           title={t('Drops this clip’s own contacts: the package default, or the automatic channel detection, applies again.')}
+          onClick={() => onSave(null)}>{t('Use inherited')}</button>
+        {dirty ? <span style={{ color: 'var(--warning, #d29922)' }}>{t('unsaved — the preview already uses it')}</span> : null}
+      </div>
+    </div>
+  )
+}
+
+/** Ruling A145: the clip's BEND LIMITS in the Contacts panel — how far the attached part may bend toward its target
+ *  before Auto-align, the fine fit and the follow move the partner, per state (raised: stiff; resting: loose; blended
+ *  by how far the part is raised). The draft acts on the preview at once; "Save bend limits" stores them in the clip's
+ *  `<kind>.json` (PATCH `bend_limits`), "Use inherited" drops them (package default or the core default). Runs nothing. */
+export interface BendSetting { limits: BendLimitsWire; source: 'clip' | 'package' | 'default' }
+
+export function BendLimitsEditor({ saved, draft, onDraft, onSave, busy }: {
+  saved: BendSetting | null | undefined
+  draft: BendLimitsWire
+  onDraft: (next: BendLimitsWire) => void
+  onSave: (next: BendLimitsWire | null) => void
+  busy: boolean
+}) {
+  const { t } = useI18n()
+  const dirty = !!saved && JSON.stringify(draft) !== JSON.stringify(saved.limits)
+  const sourceText = saved?.source === 'clip' ? t('set for this clip')
+    : saved?.source === 'package' ? t('package default') : t('core default')
+  const num = (state: 'raised' | 'resting', key: 'joint_deg' | 'total_deg', max: number, label: string) => (
+    <label style={{ display: 'inline-flex', gap: 2, alignItems: 'center' }} title={label}>
+      <input type="number" className="ga-input" data-testid={`bend-${state}-${key}`} min={0} max={max} step={1}
+        style={{ width: 52, fontSize: 12, padding: '0 2px' }} disabled={busy} value={draft[state][key]}
+        onChange={(e) => {
+          const v = Number(e.target.value)
+          if (!Number.isFinite(v)) return
+          onDraft({ ...draft, [state]: { ...draft[state], [key]: Math.max(0, Math.min(max, v)) } })
+        }} />°
+    </label>
+  )
+  return (
+    <div data-testid="bend-limits" style={{ fontSize: 12, display: 'grid', gap: 3 }}>
+      <div title={t('How far the attached part may bend toward its target before the partner is moved or turned: per joint and in all. Raised is the stiff state, resting the loose one; in between the limit is blended by how far the part is raised.')}>
+        <strong>{t('Bend limits')}</strong> <span style={{ opacity: 0.7 }}>· {sourceText}</span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto auto auto', gap: '2px 8px', alignItems: 'center' }}>
+        <span>{t('Raised')}</span>
+        {num('raised', 'joint_deg', 90, t('Most a single joint bends when raised'))}
+        {num('raised', 'total_deg', 360, t('Most the whole part bends when raised'))}
+        <span>{t('Resting')}</span>
+        {num('resting', 'joint_deg', 90, t('Most a single joint bends when resting'))}
+        {num('resting', 'total_deg', 360, t('Most the whole part bends when resting'))}
+      </div>
+      <div className="ga-form-hint" style={{ margin: 0 }}>{t('Per joint · in all')}</div>
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" data-testid="bend-save" disabled={busy || !dirty}
+          title={t('Stores the bend limits with the clip (all its sets and halves). Runs nothing; Auto-align uses them at once.')}
+          onClick={() => onSave(draft)}>{t('Save bend limits')}</button>
+        <button type="button" className="ga-btn ga-btn-sm" disabled={busy || saved?.source !== 'clip'}
+          title={t('Drops this clip’s own bend limits: the package default, or the core default, applies again.')}
           onClick={() => onSave(null)}>{t('Use inherited')}</button>
         {dirty ? <span style={{ color: 'var(--warning, #d29922)' }}>{t('unsaved — the preview already uses it')}</span> : null}
       </div>

@@ -46,8 +46,8 @@
  *   DELETE /assets/animation-clips/{library}/{rel}
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { clipHeightGroup, type ClipHeightOffsetsCm } from '@anima/scene-render'
-import { ContactRelations } from './ContactRelations'
+import { bendLimitsOf, clipHeightGroup, type ClipHeightOffsetsCm } from '@anima/scene-render'
+import { BendLimitsEditor, ContactRelations } from './ContactRelations'
 import { targetWordOf } from './contactWords'
 import { PlacePreview, type AutoAlignResult, type AutoAlignRun, type PairCheckResult, type PlaceReadout } from './PlacePreview'
 import type { AlignmentDraft, ContactRelation } from '@anima/scene-render'
@@ -57,7 +57,7 @@ import { SliderInput } from '../../components/SliderInput'
 import { useI18n } from '../../i18n/I18nProvider'
 import { ApiError, apiDelete, apiPatch, apiPost } from '../../lib/api'
 import { bridgeKinds, orderSets } from './clipSets'
-import type { ApiClipRow as BaseApiClipRow, ClipListing } from './clipSets'
+import type { ApiClipRow as BaseApiClipRow, BendLimitsWire, ClipListing } from './clipSets'
 import { rootMotionSummary } from './rootMotion'
 import { generatedBadge, isStudioClip } from './generatedClip'
 import { clipLamp, finaleKinds as finaleKindsOf, kindLamp, saveSteps, setLetter } from './clipStatus'
@@ -517,6 +517,11 @@ export function ClipLibrary({
   const savedContactsKey = JSON.stringify(savedContacts?.relations ?? [])
   const [contactDraft, setContactDraft] = useState<ContactRelation[]>([])
   useEffect(() => { setContactDraft(JSON.parse(savedContactsKey) as ContactRelation[]) }, [savedContactsKey, selected])
+  // Ruling A145: the bend limits — a draft over the saved (or inherited) value, reset when the clip changes.
+  const savedBend = orientTarget?.bend_limits ?? null
+  const savedBendKey = JSON.stringify(savedBend?.limits ?? BEND_WIRE_DEFAULT)
+  const [bendDraft, setBendDraft] = useState<BendLimitsWire>(BEND_WIRE_DEFAULT)
+  useEffect(() => { setBendDraft(JSON.parse(savedBendKey) as BendLimitsWire) }, [savedBendKey, selected])
   // The dials act on the A half; how many roles it has decides pair or group.
   const isPairTarget = orientTarget?.role === 'a' && (row?.roles ?? 0) === 2
   const isGroupTarget = orientTarget?.role === 'a' && (row?.roles ?? 0) > 2
@@ -541,7 +546,8 @@ export function ClipLibrary({
     heightCm: heightDraft,
     partnerTurnDeg: isPairTarget ? partnerTurn : undefined,
     contactRelations: contactDraft,
-  }), [contactDraft, clipShift, heightDraft, isGroupTarget, isPairTarget, partnerShift, partnerTurn, roleShift, rollDeg, tiltDeg, yawDeg])
+    bendLimits: bendLimitsOf(bendDraft),
+  }), [bendDraft, contactDraft, clipShift, heightDraft, isGroupTarget, isPairTarget, partnerShift, partnerTurn, roleShift, rollDeg, tiltDeg, yawDeg])
   const draftRef = useRef(alignmentDraft)
   draftRef.current = alignmentDraft
   /** The check to store with Apply/Save: only when every figure reads green (D3/D4). */
@@ -1307,6 +1313,8 @@ export function ClipLibrary({
                       <ContactRelations roles={(['a', 'b', 'c', 'd', 'e'] as const).slice(0, row?.roles ?? 2)}
                         saved={savedContacts} draft={contactDraft} onDraft={setContactDraft} busy={busy}
                         onSave={(next) => { void run(orientTarget, { contact_target: next }) }} />
+                      <BendLimitsEditor saved={savedBend} draft={bendDraft} onDraft={setBendDraft} busy={busy}
+                        onSave={(next) => { void run(orientTarget, { bend_limits: next }) }} />
                       <button type="button" className="ga-btn ga-btn-sm" data-testid="align-auto"
                         disabled={orientLocked || innerTab !== 'places'}
                         title={innerTab !== 'places'
@@ -1397,6 +1405,9 @@ export function ClipLibrary({
                                   ))}
                                 </tbody>
                               </table>
+                              {pairCheck.fit.bend ? (
+                                <BendLine bend={pairCheck.followFit.bend ?? pairCheck.fit.bend} />
+                              ) : null}
                               {pairCheck.clearWorst ? (
                                 <div className="ga-form-hint" style={{ margin: 0 }}>
                                   {t('Deepest besides the channel: {pair}').replace('{pair}', pairCheck.clearWorst)}</div>
@@ -1445,6 +1456,7 @@ export function ClipLibrary({
                                     <td style={{ textAlign: 'right', padding: '0 4px' }}>{autoAlign.after.axisDeg.toFixed(0)}°</td></tr>
                                 </tbody>
                               </table>
+                              {autoAlign.bend ? <BendLine bend={autoAlign.bend} /> : null}
                               {autoAlign.relations.length > 1 ? (
                                 <table data-testid="align-auto-relations" style={{ borderCollapse: 'collapse' }}>
                                   <thead><tr><th style={{ textAlign: 'left' }}>{t('Contact')}</th><th /><th>{t('to target')}</th><th>{t('depth')}</th>
@@ -1550,6 +1562,23 @@ export function ClipLibrary({
           </div>
         )}
       </section>
+    </div>
+  )
+}
+
+/** Ruling A145: the core default of the bend limits (the server's `BEND_LIMITS_DEFAULT`), until the listing says. */
+const BEND_WIRE_DEFAULT: BendLimitsWire = { raised: { joint_deg: 15, total_deg: 35 }, resting: { joint_deg: 45, total_deg: 120 } }
+
+/** Ruling A145: "Bend 28° of max 35°" with its lamp — yellow when the part was at its limit in some frame. */
+function BendLine({ bend }: { bend: { maxDeg: number; limitDeg: number; atLimit: number; frames: number; lamp: 'green' | 'yellow' } }) {
+  const { t } = useI18n()
+  return (
+    <div data-testid="bend-readout" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+      <LampDot lamp={bend.lamp} title={bend.lamp === 'yellow'
+        ? t('The attached part is at its bend limit in {n} of {m} frames: the rest of the way is the partner’s shift or turn.')
+          .replace('{n}', String(bend.atLimit)).replace('{m}', String(bend.frames))
+        : t('The attached part bends within its limit in every frame.')} />
+      <span>{t('Bend {deg}° of max {max}°').replace('{deg}', bend.maxDeg.toFixed(0)).replace('{max}', bend.limitDeg.toFixed(0))}</span>
     </div>
   )
 }

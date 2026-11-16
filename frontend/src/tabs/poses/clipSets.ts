@@ -43,6 +43,8 @@ export interface ApiClipRow {
   role_gender?: Record<string, string>
   /** Ruling A139: the contact relations of a pair/group clip and where they come from (null for a solo clip). */
   contact_target?: { relations: ContactRelation[]; source: 'clip' | 'package' | 'default' } | null
+  /** Ruling A145: how far the attached part may bend toward its target, per state (degrees), and the source. */
+  bend_limits?: { limits: BendLimitsWire; source: 'clip' | 'package' | 'default' } | null
   origin?: string
   has_sidecar?: boolean
   /** Per-surface corrections in centimetres of the 1.70 m reference figure. */
@@ -132,3 +134,8 @@ export function setLabel(set: string, t: (en: string) => string): string {
   return set
 }
 
+/** Ruling A145: bend limits as the server stores them (degrees per joint / in all, per state). */
+export interface BendLimitsWire {
+  raised: { joint_deg: number; total_deg: number }
+  resting: { joint_deg: number; total_deg: number }
+}
