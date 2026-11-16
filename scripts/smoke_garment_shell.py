@@ -22,6 +22,11 @@ Expected values, derived by hand:
     outer piece set explicitly to as_generated → still not due (same made shape); a shell fit of the underwear
     piece under Auto → not due; setting the underwear piece's shape leaves the other piece's verdict unchanged
     (settings are keyed per item).
+[7] The chain of a shell piece (``garments.shell_order`` / ``run_estimate``): clothing order worn → ghost →
+    cutout → mesh → fit; a shell piece drops cutout + mesh → worn → ghost → fit; an outer piece keeps all five.
+    Costs (``HUB_JOBS``): worn 2, ghost 2, cutout 2, mesh 1, fit 0. Nothing done: shell piece 2 + 2 = 4 hub jobs,
+    the outer piece 2 + 2 + 2 + 1 = 7. Shell piece with worn + ghost done and no generated mesh: first step fit →
+    0 hub jobs; the outer piece in the same state: cutout 2 + mesh 1 = 3.
 """
 import os
 import sys
@@ -145,6 +150,33 @@ try:
     check("[6] bad mesh_shape refused", False)
 except ValueError:
     check("[6] bad mesh_shape refused", True)
+
+# [7]
+from app.core import garments, base_body, garment_images, garment_source  # noqa: E402
+from app.core import garment_store as gstore  # noqa: E402
+FULL = ("worn", "ghost", "cutout", "mesh", "fit")
+check("[7] shell order", garments.shell_order(FULL, "clothing", "item_under", {}) == ("worn", "ghost", "fit"))
+check("[7] outer order unchanged", garments.shell_order(FULL, "clothing", "item_outer", {}) == FULL)
+DONE = set()
+garments._item = lambda c, i: (ITEMS[i], "clothing")
+gstore.kind_method = lambda *a, **k: "edit_chain"
+base_body.current_base = lambda *a, **k: ("base00000000", "sha")
+gstore.item_state = lambda *a, **k: None
+gstore.garment_fsig = lambda *a, **k: "0123456789ab"
+garments._done = lambda c, i, k, f, s, *a: s in DONE
+garments._view_done = lambda c, i, f, s, v: s in DONE
+garments._run_profile = lambda p, i, st: p
+for name in ("rejudge_expected", "source_due", "cutout_reusable"):
+    setattr(garment_images, name, lambda *a, **k: False)
+garment_images.piece_source = lambda *a, **k: None
+garment_source.has_own_images = lambda *a, **k: True
+for done, under, outer in ((set(), 4, 7), ({"worn", "ghost"}, 0, 3)):
+    DONE.clear(); DONE.update(done)
+    eu = garments.run_estimate("Demo", "item_under", profile={})
+    eo = garments.run_estimate("Demo", "item_outer", profile={})
+    check(f"[7] done {sorted(done)}: shell piece {under} hub jobs ({eu.get('steps')})", eu.get("hub_jobs") == under,
+          str(eu))
+    check(f"[7] done {sorted(done)}: outer piece {outer} hub jobs", eo.get("hub_jobs") == outer, str(eo))
 
 print("FAILED: " + ", ".join(FAILS) if FAILS else "all pass")
 sys.exit(1 if FAILS else 0)

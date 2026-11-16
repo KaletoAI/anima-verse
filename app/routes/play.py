@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 from app.core import users
 from app.core.auth_dependency import get_current_user, require_admin
+from app.core.body_slots import DEFAULT_PIECE_SLOT_LABELS
 from app.core.log import get_logger
 from app.core.perception import STORYTELLER_SPEAKER
 
@@ -2985,10 +2986,7 @@ def play_news(user=Depends(get_current_user)):
 # plan-body-slots.md): topology, order and labels then come from the package.
 _SLOT_ORDER = ["head", "neck", "outer", "top", "underwear_top",
                "bottom", "underwear_bottom", "legs", "feet"]
-_SLOT_LABELS = {"head": "Head", "neck": "Neck", "outer": "Coat & jacket",
-                "top": "Top", "underwear_top": "Underwear top",
-                "bottom": "Bottom", "underwear_bottom": "Underwear bottom",
-                "legs": "Legs", "feet": "Feet"}
+_SLOT_LABELS = DEFAULT_PIECE_SLOT_LABELS
 
 
 def build_belongings(character_name: str) -> dict:

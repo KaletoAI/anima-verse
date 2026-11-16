@@ -845,6 +845,21 @@ def appearance_suffix(character_name: str, face_only: bool = False,
 # Topology & silhouette
 # ---------------------------------------------------------------------------
 
+#: Display labels of the core clothing slots (``app.models.inventory.VALID_PIECE_SLOTS``) without a species package;
+#: English, translated by the clients (de.json).
+DEFAULT_PIECE_SLOT_LABELS: Dict[str, str] = {
+    "head": "Head", "neck": "Neck", "outer": "Coat & jacket", "top": "Top", "underwear_top": "Underwear top",
+    "bottom": "Bottom", "underwear_bottom": "Underwear bottom", "legs": "Legs", "feet": "Feet"}
+
+
+def piece_slot_labels(character_name: str) -> Dict[str, str]:
+    """The character's clothing-slot labels: the species package's (``declared_piece_slots``), else the core ones."""
+    declared = declared_piece_slots(character_name)
+    if declared:
+        return {s: declared[1].get(s, DEFAULT_PIECE_SLOT_LABELS.get(s, s)) for s in declared[0]}
+    return dict(DEFAULT_PIECE_SLOT_LABELS)
+
+
 def declared_piece_slots(character_name: str) -> Optional[Tuple[Tuple[str, ...], Dict[str, str]]]:
     """Species-declared clothing topology as ``(slot_ids, labels)`` — or
     None when no species package declares one (callers keep their core

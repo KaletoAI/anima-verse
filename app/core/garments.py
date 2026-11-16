@@ -1476,6 +1476,10 @@ def _fit_locked(character_name: str, item_id: str, kind: str, fsig: str, bsig: s
     return _publish_fit(character_name, item_id, kind, fsig, bsig, snapshot["rigged"], result, record)
 
 
+#: Ruling A48d: at most one shell build at a time (``_fit_shell``).
+_SHELL_BUILD_LOCK = threading.Lock()
+
+
 def _fit_shell(character_name: str, item_id: str, kind: str, fsig: str, bsig: str, profile: Dict[str, Any], *,
                body: str = "", body_snapshot: Optional[Dict[str, Any]] = None, schedule: bool = True,
                extra: Optional[Dict[str, Any]] = None) -> Path:
@@ -1512,7 +1516,10 @@ def _fit_shell(character_name: str, item_id: str, kind: str, fsig: str, bsig: st
     base_record.update(extra or {})
     try:
         views = garment_shell.shell_views(character_name, item_id, fsig, bsig)
-        result = refit_pool.run(garment_shell.build_shell, rigged, unrigged, views)
+        # One shell build at a time in this server (peak ~3.6 GB each): the lock is held around the pool call, so
+        # a second shell waits here and never takes a refit-pool slot; other fits keep their slots.
+        with _SHELL_BUILD_LOCK:
+            result = refit_pool.run(garment_shell.build_shell, rigged, unrigged, views)
     except (garment_shell.ShellRefused, garment_source.FrameRefused) as e:
         error = f"shell refused — {e}"
         gates = {"ok": False, "reasons": [str(e)]}
@@ -3155,7 +3162,25 @@ def _item_order(character_name: str, item_id: str,
     item, kind = _item(character_name, item_id)
     if profile is None:
         profile = get_character_profile(character_name) or {}
-    return item, kind, gs.steps_for(kind, gs.kind_method(kind, character_name, profile, item_id=item_id))
+    return item, kind, shell_order(gs.steps_for(kind, gs.kind_method(kind, character_name, profile, item_id=item_id)),
+                                   kind, item_id, profile)
+
+
+#: Ruling A48d: the steps a shell piece skips — the shell is made from the body and the piece-only views, so the
+#: cut-outs (the mesh generator's input) and the hub mesh job are not needed.
+SHELL_SKIPS: Tuple[str, ...] = ("cutout", "mesh")
+
+
+def shell_order(order: Tuple[str, ...], kind: str, item_id: str, profile: Optional[Dict[str, Any]]) -> Tuple[str, ...]:
+    """``order`` without ``SHELL_SKIPS`` when ``item_id`` is a clothing piece whose mesh shape resolves to shell
+    (``garment_fit_settings.current_shape``): its chain is worn → ghost → fit, 0 hub jobs past the views."""
+    from app.core import garment_fit_settings, garment_set, garment_shell
+    if kind != garment_set.CLOTHING or "fit" not in order:
+        return order
+    shape = garment_fit_settings.current_shape(garment_fit_settings.fit_settings(profile or {}, item_id), item_id)
+    if shape != garment_shell.SHELL:
+        return order
+    return tuple(s for s in order if s not in SHELL_SKIPS)
 
 
 def _run_profile(profile: Dict[str, Any], item_id: str, state: str) -> Optional[Dict[str, Any]]:
@@ -3196,7 +3221,7 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                 "error": NOT_WORN_OPEN_ERROR.format(name=item.get("name") or item_id)}
     profile = run_profile
     method = gs.kind_method(kind, character_name, profile, item_id=item_id)
-    order = gs.steps_for(kind, method)
+    order = shell_order(gs.steps_for(kind, method), kind, item_id, profile)
     if not order:
         # The method changed to one without steps (hair in the body mesh) while the run waited.
         return {"ok": False, "fsig": "", "step": "", "error": _no_steps_note(kind, method), "ran": []}
@@ -5167,13 +5192,15 @@ def fit_settings_info(character_name: str, item_id: str, fsig: str, base_model_s
         found = fit_attempts.attempt_of(character_name, item_id, "")
         if found and found[1].get("fsig") == fsig:
             record = found[1]
-    return fit_settings_view(record, current, accepted=accepted, item_id=item_id)
+    return fit_settings_view(record, current, accepted=accepted, item_id=item_id, character_name=character_name)
 
 
-def mesh_shape_view(record: Dict[str, Any], current: Dict[str, Any], item_id: str) -> Dict[str, Any]:
+def mesh_shape_view(record: Dict[str, Any], current: Dict[str, Any], item_id: str,
+                    character_name: str = "") -> Dict[str, Any]:
     """Ruling A48d — the mesh shape of a clothing piece for the Mesh step: ``{setting, resolved (what the setting
     makes now), auto {shape, reason, details} (``garment_shell.auto_reason``), made (the shape of the shown fit, None
-    without one), due (a fit exists and made another shape), choices, cost {hub_jobs: 0, where: "cpu"}, shell
+    without one), due (a fit exists and made another shape), choices, cost {hub_jobs: 0, where: "cpu"},
+    slot_labels (the character's clothing-slot labels, ``body_slots.piece_slot_labels``), shell
     {faces, inside_share, side_colour_within_2cm, seconds} (the shown fit's, when it is a shell)}``."""
     from app.core import garment_fit_settings, garment_shell
     from app.models.inventory import get_item
@@ -5188,11 +5215,23 @@ def mesh_shape_view(record: Dict[str, Any], current: Dict[str, Any], item_id: st
         shell = {k: metrics.get(k) for k in ("shell_faces", "inside_share", "side_colour_within_2cm", "seconds")}
     return {"setting": setting, "resolved": resolved, "auto": {"shape": auto, "reason": reason, "details": details},
             "made": made, "due": made is not None and made != resolved,
-            "choices": list(garment_shell.SHAPE_CHOICES), "cost": {"hub_jobs": 0, "where": "cpu"}, "shell": shell}
+            "choices": list(garment_shell.SHAPE_CHOICES), "cost": {"hub_jobs": 0, "where": "cpu"}, "shell": shell,
+            "slot_labels": slot_labels(character_name)}
+
+
+def slot_labels(character_name: str) -> Dict[str, str]:
+    """``body_slots.piece_slot_labels`` (the core labels without a character)."""
+    from app.core import body_slots
+    if not character_name:
+        return dict(body_slots.DEFAULT_PIECE_SLOT_LABELS)
+    try:
+        return body_slots.piece_slot_labels(character_name)
+    except Exception:  # noqa: BLE001 — labels are display only
+        return dict(body_slots.DEFAULT_PIECE_SLOT_LABELS)
 
 
 def fit_settings_view(record: Dict[str, Any], current: Dict[str, Any], *, accepted: bool,
-                      item_id: str = "") -> Dict[str, Any]:
+                      item_id: str = "", character_name: str = "") -> Dict[str, Any]:
     """``fit_settings_info``'s shape for ONE fit record (or kept attempt; {} = none): what the fit settings box
     shows of the fit it describes — the plain body's (``fit_settings_info``) or, Ruling A50b, a body shape's
     (``fit_attempts`` entry ``fit``). ``current``: the piece's settings now (shared by every body)."""
@@ -5205,7 +5244,7 @@ def fit_settings_view(record: Dict[str, Any], current: Dict[str, Any], *, accept
                                             "trunk_front_gap_p50_m", "trunk_back_gap_p50_m")}
     numbers["scale"] = metrics.get("scale_retry")
     made_with = garment_fit_settings.recorded(record) if record else None
-    shape = mesh_shape_view(record, current, item_id)
+    shape = mesh_shape_view(record, current, item_id, character_name)
     return {
         "settings": current, "recorded": made_with,
         "due": bool(record) and ({k: v for k, v in made_with.items() if k != "mesh_shape"}
