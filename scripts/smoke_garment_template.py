@@ -34,14 +34,21 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
     DRAPE_FAILED; a GLB + accepted record → ready.
 [6] judge_build: wall 60.0 passes (gate is <= 60 s, Ruling A138), 60.01 fails; drape CPU 126 s is reported and
     NOT a gate; poke at rest is a gate, at sit not.
-[7] prepare_view: a 40 x 40 picture, white background, a blue 20 x 20 block and a skin-coloured 4 x 20 strip
-    under it: the white border is cut (alpha 0), blue kept; the skin strip is 80 / 480 = 16.7 % of the opaque
-    pixels (< 50 %) and is cut; a yellow pixel (230, 200, 60: b * 10 = 600 < r * 3 = 690) is NOT skin.
+[7] prepare_view: a 40 x 40 picture, white background, a blue 20 x 20 block (rows 5-24, cols 10-29), under it a
+    4 x 20 skin strip (rows 25-26 lit (224, 172, 140), rows 27-28 shaded (70, 40, 30)) and a blue 2 x 2 island at
+    rows 35-36, cols 2-3: the white border is cut (alpha 0), blue kept; the skin strip is 80 / 484 = 16.5 % of the
+    opaque pixels (< 50 %) and is cut — the shaded rows too: Y 0.299·70 + 0.587·40 + 0.114·30 = 47.1 ≥ 25,
+    Cr 128 + 35 − 16.75 − 2.44 = 143.8 in [133, 180], Cb 128 − 11.81 − 13.25 + 15 = 117.9 in [77, 127] (the A138 RGB rule
+    needed r > 95); a yellow pixel (230, 200, 60): Cb 128 − 38.8 − 66.3 + 30 = 52.9 < 77 is NOT skin. Skin grown by 2
+    px takes block rows 23-24; the island is not the largest region and goes; the rim loses one pixel: (5, 10) cut,
+    (6, 11) kept. With garment_only False (a cut-out view) nothing of the strip is cut and skin_dropped is 0.
 [8] suggest_params with the stub LLM: ONE call, task "garment_template_params", the item picture attached,
     the fenced JSON parsed and validated.
 [9] figure: worn_sets puts a template piece into ``template`` AND ``own`` (kind clothing), never into
     in_body/painted; Figure.state_of answers "template"; as_dict carries "template" only when one is worn and
     from_dict reads it back.
+[11] texture_sources (Ruling A141): no cut-out → the item picture for both sides; only a front cut-out → it serves
+    both sides; front + back → each its own; source "cutout" whenever one exists.
 [10] the vendored pygarment imports from app.third_party and builds a 4-edge panel (no PyPI package).
 """
 import json
@@ -61,6 +68,7 @@ paths.init(_SCRATCH / "world")
 paths.init_instance(_SCRATCH / "instance")
 
 from app.core import garment_template as gt  # noqa: E402
+TEXTURE_SOURCES = gt.texture_sources   # [5] stubs it; [11] checks the real one
 
 FAILS = []
 
@@ -176,15 +184,23 @@ try:
     import numpy as np
     img = np.full((40, 40, 3), 255, np.uint8)
     img[5:25, 10:30] = (20, 40, 200)
-    img[25:29, 10:30] = (224, 172, 140)
+    img[25:27, 10:30] = (224, 172, 140)
+    img[27:29, 10:30] = (70, 40, 30)
     img[6, 11] = (230, 200, 60)
+    img[35:37, 2:4] = (20, 40, 200)
     src, dst = tmp / "v.png", tmp / "v_out.png"
     Image.fromarray(img).save(src)
     info = gt.prepare_view(str(src), dst)
     a = np.asarray(Image.open(dst))[..., 3]
     check("[7] border cut, blue kept", a[0, 0] == 0 and a[15, 20] == 255)
-    check("[7] skin strip cut (16.7 %)", a[26, 20] == 0 and close(info["skin_dropped"], 80 / 480, 1e-3), info)
+    check("[7] skin strip cut (16.5 %)", a[26, 20] == 0 and close(info["skin_dropped"], 80 / 484, 1e-3), info)
     check("[7] yellow kept", a[6, 11] == 255)
+    check("[7] shaded skin cut", a[28, 20] == 0)
+    check("[7] stray island cut", a[35, 2] == 0)
+    check("[7] rim eroded", a[5, 10] == 0 and a[6, 11] == 255)
+    info_cut = gt.prepare_view(str(src), dst, garment_only=False)
+    a = np.asarray(Image.open(dst))[..., 3]
+    check("[7] a cut-out keeps its pixels", a[26, 20] == 255 and a[28, 20] == 255 and info_cut["skin_dropped"] == 0.0)
 
     # [8] suggest_params with a stub LLM (no outbound request)
     from app.core import llm_router
@@ -237,6 +253,25 @@ check("[6] wall 60.0 passes", by["build_wall_s"]["ok"])
 check("[6] wall 60.01 fails", not {r["check"]: r for r in gt.judge_build({"wall_total_s": 60.01})}["build_wall_s"]["ok"])
 check("[6] CPU reported, no gate", not by["drape_cpu_s"]["ok"] and not by["drape_cpu_s"]["gate"])
 check("[6] rest poke gates, sit not", by["poke_share[rest]"]["gate"] and not by["poke_share[sit]"]["gate"])
+
+# [11] texture_sources: cut-outs whenever any exists, the item picture only without one
+from app.core import garment_store  # noqa: E402
+from app.models import inventory as _inv  # noqa: E402
+store = Path(tempfile.mkdtemp(prefix="smoke-template-src-"))
+(store / "images").mkdir()
+garment_store.garments_dir = lambda name: store
+_inv.get_item_image_path = lambda iid: "/pictures/item.png"
+check("[11] no cut-out → item picture", TEXTURE_SOURCES("K", "i9") == {
+    "front": "/pictures/item.png", "back": "/pictures/item.png", "source": "item_image"})
+front = store / "images" / "i9_abc_cutout_front.png"
+front.write_bytes(b"x")
+check("[11] front only → both sides from it", TEXTURE_SOURCES("K", "i9") == {
+    "front": str(front), "back": str(front), "source": "cutout"})
+back = store / "images" / "i9_abc_cutout_back.png"
+back.write_bytes(b"x")
+check("[11] both → each side its own", TEXTURE_SOURCES("K", "i9") == {
+    "front": str(front), "back": str(back), "source": "cutout"})
+shutil.rmtree(store, ignore_errors=True)
 
 # [10]
 from app.third_party.pygarment.garmentcode.edge import Edge  # noqa: E402

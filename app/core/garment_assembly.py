@@ -880,6 +880,11 @@ def _build(character_name: str, directory: Path, bare: Path,
                 _attach_strands(character_name, garment, source, mesh)
         if garment.get("over") and not garment["over"]["pending"]:
             extras["over"] = garment["over"]["items"]
+        shapes = (garment.get("record") or {}).get("pose_shapes") if garment.get("template") else None
+        if shapes and mesh.targets:
+            # Ruling A141: the drape's pose shapes and their driver; the renderers blend the morph targets by the
+            # leg directions (``packages/scene-render/src/poseShapes.ts``).
+            extras["pose_shapes"] = shapes
         blob = glb_mesh.graft(blob, mesh, name=f"garment_{garment['kind']}_{garment['item_id']}", extras=extras,
                               material_overrides=overrides)
     verdict = model3d._validator_for("mixamo", character_name)(blob)

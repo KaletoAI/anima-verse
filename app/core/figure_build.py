@@ -1956,7 +1956,8 @@ def _template_row(character_name: str, item_id: str, item: Dict[str, Any], wante
                   profile: Dict[str, Any]) -> Dict[str, Any]:
     """A template row's ``template`` (Ruling A138): ``{params (None: none stored), source ("llm" / "user"),
     updated_at, built (the kinds draped today), state ("ready" / "missing" / "failed" / "blocked"), reason,
-    built_at, metrics {wall_s, cpu_s, stretch_max, coverage, texture}, cost {llm_calls, hub_jobs, cpu_s}}``."""
+    built_at, metrics {wall_s, cpu_s, stretch_max, coverage, texture, pose_shapes (Ruling A141: the poses with a
+    corrective shape)}, cost {llm_calls, hub_jobs, cpu_s}}``."""
     from app.core import base_body, garment_template
     stored = garment_template.template_of(item)
     base = base_body.current_base(character_name, profile=profile)
@@ -1970,7 +1971,9 @@ def _template_row(character_name: str, item_id: str, item: Dict[str, Any], wante
            "metrics": {"wall_s": metrics.get("wall_total_s"), "cpu_s": (metrics.get("drape") or {}).get("cpu_s"),
                        "stretch_max": (metrics.get("drape") or {}).get("stretch_max"),
                        "coverage": (metrics.get("bake") or {}).get("coverage"),
-                       "texture": (record.get("texture") or {}).get("source") or ""} if metrics else None,
+                       "texture": (record.get("texture") or {}).get("source") or "",
+                       "pose_shapes": list((record.get("pose_shapes") or {}).get("targets") or [])}
+           if metrics else None,
            "cost": {"llm_calls": 1, "hub_jobs": 0, "cpu_s": garment_template.CPU_ESTIMATE_S}}
     return out
 

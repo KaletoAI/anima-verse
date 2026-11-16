@@ -121,6 +121,10 @@ class GarmentMesh:
     #: none (the material's factors alone). ``graft`` writes it, ``garment_arrays`` reads it back (Ruling A36).
     mr_image: bytes = b""
     mr_mime: str = ""
+    #: Ruling A141: morph targets as POSITION deltas ``(n, 3)`` in the primitive's order, named by
+    #: ``target_names`` (glTF ``mesh.extras.targetNames``) — a template drape's pose shapes. Empty = none.
+    targets: List[np.ndarray] = field(default_factory=list)
+    target_names: List[str] = field(default_factory=list)
 
 
 def accessor_array(parsed: dict, index: int) -> np.ndarray:
@@ -586,7 +590,25 @@ def garment_arrays(glb: bytes, *, node_prefix: str = GARMENT_NODE_PREFIX, exact:
                        image=image, mime=mime, material=material, colors=_vertex_colors(parsed, prim, n),
                        joint_parents=_joint_parents(gltf, node["skin"]) if "skin" in node else {},
                        extra_attributes=_extra_attributes(parsed, prim, n),
+                       **_morph_targets(parsed, gltf["meshes"][node["mesh"]], prim, n),
                        **dict(zip(("mr_image", "mr_mime"), _primitive_mr(parsed, prim))))
+
+
+def _morph_targets(parsed: dict, mesh: dict, primitive: dict, count: int) -> Dict[str, Any]:
+    """``{targets, target_names}`` of a garment primitive: the POSITION delta of every morph target (a target
+    without one is all zeros) and the mesh's ``extras.targetNames`` (else ``target_<i>``)."""
+    targets: List[np.ndarray] = []
+    for target in primitive.get("targets") or []:
+        if "POSITION" in target:
+            delta = np.asarray(accessor_array(parsed, target["POSITION"]), np.float64)
+            if delta.shape != (count, 3):
+                raise ValueError("A morph target's POSITION has the wrong shape")
+        else:
+            delta = np.zeros((count, 3))
+        targets.append(delta)
+    names = list(((mesh.get("extras") or {}).get("targetNames") or []))
+    names = [str(names[i]) if i < len(names) else f"target_{i}" for i in range(len(targets))]
+    return {"targets": targets, "target_names": names}
 
 
 def _extra_attributes(parsed: dict, primitive: dict, count: int) -> Dict[str, np.ndarray]:
@@ -1025,7 +1047,9 @@ def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict,
     ``extensionsUsed`` (Ruling A36). A
     hair-chain joint the target lacks and ``garment.joint_binds`` names is APPENDED to the target skin (module
     docstring), weighted or not. ``garment.extra_attributes`` become custom SCALAR vertex attributes of the
-    primitive (``_check_extra``: uint16 / float32; ValueError naming one whose length is not the vertex count)."""
+    primitive (``_check_extra``: uint16 / float32; ValueError naming one whose length is not the vertex count).
+    ``garment.targets`` become the primitive's morph targets (POSITION deltas, weights 0, ``extras.targetNames``,
+    Ruling A141)."""
     from app.core.rig_contract import BASE_JOINT_KEYS, HAIR_CHAIN_JOINT_RE, hair_chain_parent, norm_bone_name
     if not name or not isinstance(extras, dict):
         raise ValueError("graft needs a node name and an extras dict")
@@ -1166,6 +1190,12 @@ def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict,
     for extra_name, values, component in extra:
         attributes[extra_name] = add_accessor(values.reshape(-1, 1), component, "SCALAR", _ARRAY_BUFFER)
     indices = add_accessor(I.reshape(-1, 1).astype("<u4"), 5125, "SCALAR", _ELEMENT_ARRAY_BUFFER)
+    targets = []
+    for delta in garment.targets or []:
+        delta = np.asarray(delta, np.float64)
+        if delta.shape != P.shape or not np.isfinite(delta).all():
+            raise ValueError(f"A garment morph target has {delta.shape} values for {P.shape} positions")
+        targets.append({"POSITION": add_accessor(delta.astype("<f4"), 5126, "VEC3", _ARRAY_BUFFER, minmax=True)})
 
     material = copy.deepcopy(garment.material or {})
     for key in ("normalTexture", "occlusionTexture", "emissiveTexture", "extensions", "alphaCutoff"):
@@ -1223,8 +1253,15 @@ def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict,
     materials.append(material)
 
     meshes = gltf.setdefault("meshes", [])
-    meshes.append({"name": name, "primitives": [{"attributes": attributes, "indices": indices,
-                                                  "material": len(materials) - 1, "mode": 4}]})
+    primitive = {"attributes": attributes, "indices": indices, "material": len(materials) - 1, "mode": 4}
+    mesh_entry: Dict[str, Any] = {"name": name, "primitives": [primitive]}
+    if targets:
+        primitive["targets"] = targets
+        mesh_entry["weights"] = [0.0] * len(targets)
+        names = [str(x) for x in (garment.target_names or [])]
+        mesh_entry["extras"] = {"targetNames": [names[i] if i < len(names) else f"target_{i}"
+                                                for i in range(len(targets))]}
+    meshes.append(mesh_entry)
     body = nodes[body_i]
     node = {"name": name, "mesh": len(meshes) - 1, "skin": 0, "extras": {"garment": copy.deepcopy(extras)}}
     node.update({k: copy.deepcopy(body[k]) for k in _TRS_KEYS if k in body})

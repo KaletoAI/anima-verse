@@ -37,6 +37,8 @@ After ``graft(name="garment_hair_hair_demo")``:
   missing CONTRACT joint never folds: the target without Spine2 still raises KeyError although Spine2 names
   Hips as its parent. ``garment_arrays`` reads ``joint_parents`` from the file's node tree: breast_L ->
   mixamorig:Spine2, mixamorig:Hips -> Armature.
+  Ruling A141: a garment with a morph target "sit" grafts it as the primitive's target (weights [0], targetNames,
+  min/max by hand in the code) and reads back; a target of the wrong length is refused.
   a WebP garment image adds ``EXT_texture_webp`` to ``extensionsUsed``; a second graft under the same name is
   refused.
 - ``static_arrays`` concatenates two primitives (indices of the second shifted by the first's vertex count 3).
@@ -350,6 +352,35 @@ def main():
           f"static_arrays: two primitives concatenated (last face {F[-1].tolist()})")
     check(img_bytes == image() and mime == "image/png" and material.get("name") == "Skin",
           "static_arrays: image + material")
+
+    # Ruling A141: morph targets (a template drape's pose shapes). Target "sit" moves vertex 2 by (0, 0, 0.05)
+    # and vertex 3 by (0, -0.02, 0.05), the rest 0 → accessor min (0, -0.02, 0), max (0, 0, 0.05); mesh weights
+    # [0], extras.targetNames ["sit"]; garment_arrays reads the same deltas (float32) and name back; a target of
+    # 3 rows for 4 vertices is refused.
+    shaped = garment()
+    shaped.targets = [np.array([[0, 0, 0], [0, 0, 0], [0, 0, 0.05], [0, -0.02, 0.05]])]
+    shaped.target_names = ["sit"]
+    gs = gm.graft(bare, shaped, name=NAME, extras=EXTRAS)
+    ps = parse_glb(gs)
+    ms = next(m for m in ps["gltf"]["meshes"] if m.get("name") == NAME)
+    tg = ms["primitives"][0].get("targets") or []
+    acc = ps["gltf"]["accessors"][tg[0]["POSITION"]] if tg else {}
+    check(len(tg) == 1 and ms.get("weights") == [0.0] and ms.get("extras") == {"targetNames": ["sit"]},
+          f"morph: one target, weight 0, named ({ms.get('weights')}, {ms.get('extras')})")
+    check(np.allclose(acc.get("min", []), [0, -0.02, 0], atol=1e-6) and np.allclose(acc.get("max", []), [0, 0, 0.05],
+                                                                                         atol=1e-6),
+          f"morph: accessor min/max ({acc.get('min')}, {acc.get('max')})")
+    back = gm.garment_arrays(gs)
+    check(back.target_names == ["sit"] and len(back.targets) == 1
+          and np.allclose(back.targets[0], shaped.targets[0], atol=1e-6), "morph: round trip")
+    check(gm.garment_arrays(grafted).targets == [], "morph: a garment without targets reads none")
+    bad = garment()
+    bad.targets = [np.zeros((3, 3))]
+    try:
+        gm.graft(bare, bad, name=NAME, extras=EXTRAS)
+        check(False, "morph: a 3-row target for 4 vertices is refused")
+    except ValueError:
+        check(True, "morph: a 3-row target for 4 vertices is refused")
 
     if FAILS:
         print(f"\n{len(FAILS)} FAILED")

@@ -21,8 +21,12 @@ The path, per (piece, body):
    at a radius that follows the body (the spike's open point), cloth-draped on a
    voxel-remeshed posed-body collider with the ``fabric`` preset
    (``FABRICS``), thickened, textured by projecting the piece's front / back
-   cut-out views (else its item picture) onto the panel UVs, skinned by
-   nearest-face Data Transfer and exported as one garment node.
+   cut-out views (else its item picture, masked to the garment) onto the panel UVs,
+   skinned by nearest-face Data Transfer with the free-hanging cloth's weights
+   inpainted from its neighbours, and given one pose shape per ``SHAPE_POSES``
+   pose (Ruling A141: the cloth draped again in that pose, taken back through the
+   inverse skinning, stored as a morph target; the renderers blend them by the leg
+   directions, ``record["pose_shapes"]``). Exported as one garment node.
 4. **Assembly**: the drape GLB is grafted like an own-mesh clothing piece
    (``garment_assembly``; Ruling A133 hides the body faces it covers).
 
@@ -52,7 +56,7 @@ SCRIPT = "garment_template_build"
 #: The spike's evaluator script (modes mesh / panels / from_body / necklace).
 SPIKE_SCRIPT = "garment_template_drape.py"
 #: Bumped when the same parameters drape differently.
-TEMPLATE_VERSION = 1
+TEMPLATE_VERSION = 2
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.
@@ -94,8 +98,13 @@ THRESHOLDS = {
 #: P1 gates on WALL time (Ruling A138: a Build is waited for in wall seconds; the spike's CPU sum
 #: counts every Blender thread). Same 60 s budget, hand-derived in ``scripts/smoke_garment_template.py``.
 BUILD_WALL_S = 60.0
-#: The wall seconds a drape takes, for the cost line (measured A138 on Kira: 13.4–17.8 s per piece).
-CPU_ESTIMATE_S = 20
+#: The wall seconds a drape takes, for the cost line (measured A141 on Kira with the two pose shapes:
+#: 28–47 s per piece; A138 without them 13.4–17.8 s).
+CPU_ESTIMATE_S = 35
+#: Ruling A141: the poses that get a corrective shape (a drape of their own, a morph target blended by
+#: the leg directions at runtime) and the poses every Build measures.
+SHAPE_POSES = ("sit", "kneel")
+MEASURED_POSES = ("rest", "walk", "sit", "kneel")
 #: Stretch above which the drape is re-run once with doubled quality (spec section 6), then refused.
 RETRY_STRETCH = 1.5
 
@@ -403,10 +412,10 @@ def _file_sha(path: str) -> str:
 
 
 def texture_sources(character_name: str, item_id: str) -> Dict[str, str]:
-    """``{front, back, source}``: the piece's newest cut-out views from the garment store
-    (``images/{item}_{fsig}_cutout_{front,back}.png``) when both exist — what the old own-mesh chain
-    already rendered —, else its item picture for both sides (``source`` "item_image"). {} without
-    any picture."""
+    """``{front, back, source}``: the piece's newest cut-out (piece-only) views from the garment store
+    (``images/{item}_{fsig}_cutout_{front,back}.png``) whenever ANY exists — a missing side takes the other
+    side's view (Ruling A141: the cut-outs are always preferred) —, else its item picture for both sides
+    (``source`` "item_image"; ``run_drape`` masks it to the garment). {} without any picture."""
     from app.core.garment_store import garments_dir
     from app.models.inventory import get_item_image_path
     folder = garments_dir(character_name) / "images"
@@ -419,8 +428,10 @@ def texture_sources(character_name: str, item_id: str) -> Dict[str, str]:
                 stamp = path.stat().st_mtime
                 if side not in best or stamp > best[side][0]:
                     best[side] = (stamp, str(path))
-    if "front" in best and "back" in best:
-        return {"front": best["front"][1], "back": best["back"][1], "source": "cutout"}
+    if best:
+        front = (best.get("front") or best["back"])[1]
+        back = (best.get("back") or best["front"])[1]
+        return {"front": front, "back": back, "source": "cutout"}
     picture = get_item_image_path(item_id)
     return {"front": picture, "back": picture, "source": "item_image"} if picture else {}
 
@@ -474,15 +485,18 @@ def drape_state(character_name: str, item_id: str, *, base_sha: str, lower: List
 # --- the drape run ----------------------------------------------------------------
 
 def build_args(params: Dict[str, Any], spec: Dict[str, Any], *, item_id: str, render: bool = False,
-               poses: Tuple[str, ...] = ("rest", "walk"), quality_scale: float = 1.0) -> Dict[str, Any]:
-    """The ``params`` of one ``garment_template_build`` run."""
+               poses: Tuple[str, ...] = MEASURED_POSES, quality_scale: float = 1.0,
+               corrective: bool = True) -> Dict[str, Any]:
+    """The ``params`` of one ``garment_template_build`` run. ``corrective`` False = the A138 drape
+    (nearest-face weights, no pose shapes) — kept for the before/after measurement."""
     fabric = dict(FABRICS[params["fabric"]])
     fabric["quality"] = int(round(fabric["quality"] * quality_scale))
     meas = spec.get("measure") or {}
     torso = max(meas.get("hip_c", 0.9), meas.get("band_c", 0.9)) / (2 * math.pi) * 1.6
     return {"spec": spec, "fabric": fabric, "torso_half_m": round(torso, 4), "slit": {"side": params["slit"], "depth_m": params["slit_m"]},
             "pin": "top", "kind": params["kind"], "item_id": item_id, "node": f"garment_template_{item_id}",
-            "render": bool(render), "poses": list(poses), "frames": 50, "thickness": 0.004}
+            "render": bool(render), "poses": list(poses), "frames": 50, "thickness": 0.004,
+            "smooth_weights": bool(corrective), "shape_poses": list(SHAPE_POSES) if corrective else []}
 
 
 def judge_build(data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -515,12 +529,36 @@ def judge_build(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return rows
 
 
-def prepare_view(src: str, dst: Path, *, tolerance: int = 24) -> Dict[str, Any]:
+#: Ruling A141 — skin in YCrCb (also shaded skin: a leg in the shadow of a slit); a garment pixel within
+#: SKIN_GROW_PX of skin goes too (the anti-aliased rim between leg and fabric is half skin).
+SKIN_CR = (133, 180)
+SKIN_CB = (77, 127)
+SKIN_MIN_Y = 25
+SKIN_GROW_PX = 2
+
+
+def skin_mask(rgb):
+    """Skin-coloured pixels of an (h, w, 3) uint8 array (YCrCb box, see SKIN_CR / SKIN_CB / SKIN_MIN_Y)."""
+    import numpy as np
+    r, g, b = (rgb[..., k].astype(np.float64) for k in range(3))
+    y = 0.299 * r + 0.587 * g + 0.114 * b
+    cr = 128 + 0.5 * r - 0.4187 * g - 0.0813 * b
+    cb = 128 - 0.1687 * r - 0.3313 * g + 0.5 * b
+    return ((cr >= SKIN_CR[0]) & (cr <= SKIN_CR[1]) & (cb >= SKIN_CB[0]) & (cb <= SKIN_CB[1])
+            & (y >= SKIN_MIN_Y))
+
+
+def prepare_view(src: str, dst: Path, *, tolerance: int = 24, garment_only: bool = True) -> Dict[str, Any]:
     """Write ``src`` as RGBA to ``dst`` with the piece cut free: an image that already has a
     transparent background (a cut-out view) keeps its alpha; an opaque one (an item picture on a
     plain background) loses every border-connected pixel within ``tolerance`` (max channel difference)
-    of the median border colour. Returns ``{alpha: "kept" | "border", share}`` (share = opaque
-    pixels). The projection registers by the alpha bounding box, so the background must go."""
+    of the median border colour. Returns ``{alpha: "kept" | "border", share, skin_dropped}`` (share =
+    opaque pixels). The projection registers by the alpha bounding box, so the background must go.
+
+    ``garment_only`` (the item picture — a picture of the piece WORN shows legs): skin (``skin_mask``,
+    grown by SKIN_GROW_PX) is cut when it is a minority of the opaque pixels (a skin-coloured piece keeps
+    its pixels), then only the largest opaque region stays (stray leg / hand islands) and its rim loses one
+    pixel. A cut-out view is the piece alone already and is taken as it is."""
     import numpy as np
     from PIL import Image
     from scipy import ndimage
@@ -539,25 +577,29 @@ def prepare_view(src: str, dst: Path, *, tolerance: int = 24) -> Dict[str, Any]:
         background = np.isin(labels, edge[edge > 0])
         px[..., 3] = np.where(background, 0, 255).astype(np.uint8)
         mode = "border"
-    # A picture of the piece WORN shows skin (legs under a skirt); skin texels would be projected
-    # onto the fabric and the alpha box would not be the piece. Skin is dropped when it is a minority
-    # of the opaque pixels (a skin-coloured piece keeps its pixels).
-    rgb = px[..., :3].astype(np.int32)
-    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
-    skin = ((r > 95) & (g > 40) & (b > 20) & (r > g) & (r > b) & (r - g > 15) & (b * 10 > r * 3)
-            & (rgb.max(axis=2) - rgb.min(axis=2) > 15)) & (px[..., 3] >= 128)
-    opaque = px[..., 3] >= 128
-    skin_share = float(skin.sum() / max(1, opaque.sum()))
-    if 0.0 < skin_share < 0.5:
-        px[..., 3] = np.where(skin, 0, px[..., 3]).astype(np.uint8)
+    dropped = 0.0
+    if garment_only:
+        opaque = px[..., 3] >= 128
+        skin = skin_mask(px[..., :3]) & opaque
+        share = float(skin.sum() / max(1, opaque.sum()))
+        if 0.0 < share < 0.5:
+            dropped = share
+            grown = ndimage.binary_dilation(skin, iterations=SKIN_GROW_PX)
+            opaque &= ~grown
+            labels, count = ndimage.label(opaque)
+            if count > 1:
+                sizes = ndimage.sum(opaque, labels, range(1, count + 1))
+                opaque = labels == (int(np.argmax(sizes)) + 1)
+            opaque = ndimage.binary_erosion(opaque, iterations=1)
+            px[..., 3] = np.where(opaque, 255, 0).astype(np.uint8)
     Image.fromarray(px).save(dst)
     return {"alpha": mode, "share": round(float((px[..., 3] >= 128).mean()), 4),
-            "skin_dropped": round(skin_share, 4) if 0.0 < skin_share < 0.5 else 0.0}
+            "skin_dropped": round(dropped, 4)}
 
 
 def run_drape(body_glb: Path, params: Dict[str, Any], sources: Dict[str, str], *, item_id: str,
-              out_dir: Path, render: bool = False, poses: Tuple[str, ...] = ("rest", "walk"),
-              timeout_s: int = 300) -> Dict[str, Any]:
+              out_dir: Path, render: bool = False, poses: Tuple[str, ...] = MEASURED_POSES,
+              timeout_s: int = 300, corrective: bool = True) -> Dict[str, Any]:
     """Measure, make the panels and drape on ``body_glb`` (one Blender run; one retry with doubled
     quality when the stretch is above ``RETRY_STRETCH``). Returns ``{ok, error, data, glb, rows}`` —
     ``ok`` False when Blender failed or a gate row failed (``error`` names it)."""
@@ -569,13 +611,14 @@ def run_drape(body_glb: Path, params: Dict[str, Any], sources: Dict[str, str], *
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     views = {side: out_dir / f"view_{side}.png" for side in ("front", "back")}
-    view_info = {side: prepare_view(sources[side], views[side]) for side in views}
+    view_info = {side: prepare_view(sources[side], views[side],
+                                    garment_only=sources.get("source") != "cutout") for side in views}
     data: Dict[str, Any] = {}
     res: Dict[str, Any] = {}
     for scale in (1.0, 2.0):
         res = runner.run(SCRIPT, inputs={"body": Path(body_glb), "front": views["front"], "back": views["back"]},
                          params=build_args(params, spec, item_id=item_id, render=render, poses=poses,
-                                           quality_scale=scale),
+                                           quality_scale=scale, corrective=corrective),
                          out_dir=Path(out_dir), timeout_s=timeout_s)
         data = dict(res.get("data") or {})
         if not res.get("ok"):
@@ -630,7 +673,8 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
         record = {"item_id": item_id, "tsig": sig, "params": params, "version": TEMPLATE_VERSION,
                   "base_signature": base[0], "base_model_sha256": base_sha, "lower": lower,
                   "texture": {k: Path(v).name if k != "source" else v for k, v in sources.items()},
-                  "metrics": result["data"], "rows": result["rows"], "created_at": utc_now_iso()}
+                  "metrics": result["data"], "rows": result["rows"], "created_at": utc_now_iso(),
+                  "pose_shapes": (result["data"] or {}).get("pose_shapes")}
         if result["ok"]:
             target = drape_path(character_name, item_id, sig)
             shutil.move(str(result["glb"]), str(target))
