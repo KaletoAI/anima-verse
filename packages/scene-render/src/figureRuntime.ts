@@ -30,6 +30,8 @@
  * `three` is a parameter, never an import (package rule).
  */
 import type { Object3D, Vector3 } from 'three'
+import { TARGET_BONE_NAMES, targetFrames, type TargetBones, type TargetFrame } from './contactTarget'
+import { normBoneName } from './clipRetarget'
 import { createSecondaryMotion, withoutHairGroups } from './secondaryMotion'
 import type { SecondaryMotion, SecondaryMotionPayload } from './secondaryMotion'
 import { createGarmentCollision } from './garmentCollision'
@@ -81,6 +83,8 @@ export interface FigureInspection {
   /** This figure's chains engaged in a PARTNER's channel: weight w and the chain's largest segment radius (metres). */
   engaged: { partner: string; channel: string; w: number; radius: number }[]
   openings: OpeningInspection[]
+  /** Ruling A139: the point contact targets this figure's bones resolve now (hands, the head stand-in), world. */
+  targets: TargetFrame[]
 }
 
 /** The phase-B outputs of one figure the frame loop reads (`frameLoop.ts`). */
@@ -282,7 +286,35 @@ export class FigureRuntime {
       engaged: this.channelOccupants().map(o => ({ partner: o.partner, channel: o.channel, w: o.w,
         radius: o.segments.length ? Math.max(...o.segments.map(seg => seg.r)) : 0 })),
       openings: [...this.openingState.values()].map(o => ({ ...o })),
+      targets: this.disposed ? [] : this.targetsNow(),
     }
+  }
+
+  private targetBoneRefs: { on: Object3D | null; bones: Map<keyof TargetBones, Object3D> } = { on: null, bones: new Map() }
+  /** Ruling A139: the point targets from the current bones (`contactTarget.ts`; the frame is placed by `boundPartner`). */
+  private targetsNow(): TargetFrame[] {
+    const inst = this.instance
+    if (!inst) return []
+    if (this.targetBoneRefs.on !== inst) {
+      const bones = new Map<keyof TargetBones, Object3D>()
+      const want = new Set<string>(TARGET_BONE_NAMES)
+      inst.traverse(o => {
+        if (!(o as { isBone?: boolean }).isBone) return
+        const k = normBoneName(o.name)
+        if (want.has(k) && !bones.has(k as keyof TargetBones)) bones.set(k as keyof TargetBones, o)
+      })
+      this.targetBoneRefs = { on: inst, bones }
+    }
+    const tb: TargetBones = {}
+    for (const [k, o] of this.targetBoneRefs.bones) {
+      const e = o.matrixWorld.elements
+      ;(tb as Record<string, [number, number, number]>)[k] = [e[12], e[13], e[14]]
+      if (k === 'head') {
+        const l = Math.hypot(e[8], e[9], e[10]) || 1
+        tb.headZ = [e[8] / l, e[9] / l, e[10] / l]
+      }
+    }
+    return targetFrames(tb)
   }
 
   /** The partner binding on the instance shown now, its capsules recomputed from the current bones. */

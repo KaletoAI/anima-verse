@@ -16,6 +16,7 @@
  *
  * Pure maths, no three.js: the callers turn `rootQuat` / `rootPos` into their own objects.
  */
+import type { ContactTarget } from './contactTarget'
 import { clipHeightGroup, clipHipsDrop, clipShiftM, FIGURE_HEIGHT_M } from './figure'
 import type { ClipHeightOffsetsCm, ClipShiftCm } from './figure'
 
@@ -36,7 +37,12 @@ export interface AlignmentDraft {
   heightCm: ClipHeightOffsetsCm
   /** Ruling A129: a pair's partner B turned about its hips, renderer-only [tilt, roll] degrees (`partnerTurnFix`). */
   partnerTurnDeg?: readonly [number, number]
+  /** Ruling A139: the clip's contact relations (part place → anchor place, target); empty/absent = auto-detect (A126). */
+  contactRelations?: readonly ContactRelation[]
 }
+
+/** Ruling A139: one contact of a clip — place `part`'s attached part aims at `target` of place `at`. */
+export interface ContactRelation { part: string; at: string; target: ContactTarget }
 
 export const EMPTY_DRAFT: AlignmentDraft = Object.freeze({
   yawDeg: 0, tiltDeg: 0, rollDeg: 0, shiftCm: [0, 0] as const, roleShiftM: {}, heightCm: {},

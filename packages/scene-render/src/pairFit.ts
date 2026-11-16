@@ -37,6 +37,7 @@
  */
 import type { Vec3 } from './collision'
 import { CONTACT_ENTRY_WEIGHT, type ContactSample } from './channelContact'
+import { isPointTarget, orientAlong, type ContactTarget } from './contactTarget'
 
 export interface FitSample extends ContactSample { pivot: Vec3 }
 export interface PairFix { shift: Vec3; turn: Vec3 }
@@ -303,25 +304,37 @@ export function pairFitObserve(st: PairFitState, measured: FitSample, phase: num
 interface InspectionLike {
   chains: readonly { op: string; segments: readonly { a: readonly number[]; b: readonly number[] }[] }[]
   channels: readonly { id: string; o: readonly number[]; u: readonly number[]; accepts: readonly string[] }[]
+  /** Ruling A139: the point targets the figure's bones resolve (`contactTarget.ts`). */
+  targets?: readonly { id: string; o: readonly number[]; u: readonly number[] }[]
 }
-/** The first chain of `entering` whose op one of `receiving`'s channels accepts: chain index + channel id. */
-export function findContact(entering: InspectionLike, receiving: InspectionLike): { chain: number; channel: string } | null {
+/** The contact of `entering` in `receiving` for the clip's CONTACT TARGET (Ruling A139, `contactTarget.ts`):
+ *  `channel` = the first chain whose op one of `receiving`'s channels accepts (A126); a point target = the first chain
+ *  with segments against that target of `receiving` (`channel` then holds the target id); `none` = no contact. */
+export function findContact(entering: InspectionLike, receiving: InspectionLike, target: ContactTarget = 'channel'):
+  { chain: number; channel: string } | null {
+  if (target === 'none') return null
+  if (isPointTarget(target)) {
+    if (!receiving.targets?.some((x) => x.id === target)) return null
+    const ci = entering.chains.findIndex((c) => c.segments.length > 0 && c.op !== '')
+    return ci >= 0 ? { chain: ci, channel: target } : null
+  }
   for (let ci = 0; ci < entering.chains.length; ci++) {
     const ch = receiving.channels.find((x) => x.accepts.includes(entering.chains[ci].op))
     if (ch && entering.chains[ci].segments.length) return { chain: ci, channel: ch.id }
   }
   return null
 }
-/** The contact sample of this frame (world), or null when the chain or channel is missing. */
+/** The contact sample of this frame (world), or null when the chain or the channel / point target is missing. */
 export function contactSampleOf(entering: InspectionLike, receiving: InspectionLike, hit: { chain: number; channel: string },
   pivot: Vec3): FitSample | null {
   const chain = entering.chains[hit.chain]
-  const ch = receiving.channels.find((x) => x.id === hit.channel)
+  const ch = isPointTarget(hit.channel) ? receiving.targets?.find((x) => x.id === hit.channel)
+    : receiving.channels.find((x) => x.id === hit.channel)
   if (!chain?.segments.length || !ch) return null
   const v = (p: readonly number[]): Vec3 => [p[0], p[1], p[2]]
   const u = v(ch.u), l = len(u) || 1
-  return { tip: v(chain.segments[chain.segments.length - 1].b), base: v(chain.segments[0].a), o: v(ch.o),
-    u: scale(u, 1 / l), pivot }
+  const tip = v(chain.segments[chain.segments.length - 1].b), base = v(chain.segments[0].a)
+  return { tip, base, o: v(ch.o), u: orientAlong(hit.channel, scale(u, 1 / l), tip, base), pivot }
 }
 
 // ── the honest interpenetration check ──

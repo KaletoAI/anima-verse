@@ -133,7 +133,7 @@ export type { ClipHeightOffsetsCm, ClipShiftCm } from './figure'
 export { markerSlots, pairYaw, rotateXZ, pairPoints } from './placeGeometry'
 export { clipCalibration, calibratedRoot, bakedHips, isEmptyDraft, EMPTY_DRAFT, alignmentLamp, alignmentDelta,
   median, wrapDeg, eulerYXZ, matQuat, ALIGN_GREEN, ALIGN_YELLOW } from './clipCalibration'
-export type { AlignmentDraft, SavedCalibration, ClipCalibration, RootInput, AlignmentLamp } from './clipCalibration'
+export type { AlignmentDraft, ContactRelation, SavedCalibration, ClipCalibration, RootInput, AlignmentLamp } from './clipCalibration'
 export type { XZ } from './placeGeometry'
 
 export { surfaceMaterial, updateSurfaceMaterials, setSurfaceSky,
@@ -258,6 +258,9 @@ export type { PlaceEntry } from './placeSlot'
 export { solveContactShift, contactReport, contactLamp, entryFrame, bodyOverlap, CONTACT_ENTRY_WEIGHT,
   CONTACT_ENTRY_GREEN_MM, CONTACT_CLEAR_MM } from './channelContact'
 export type { ContactSample, ContactReport, ContactLamp } from './channelContact'
+export { CONTACT_TARGETS, POINT_TARGETS, PROVISIONAL_TARGETS, TARGET_RADIUS_M, HEAD_FRONT, TARGET_BONE_NAMES, isContactTarget,
+  isPointTarget, targetFrame, targetFrames, orientAlong, targetLamp } from './contactTarget'
+export type { ContactTarget, PointTarget, TargetBones, TargetFrame } from './contactTarget'
 export { solvePairFix, fixPoint, unfixPoint, fixSample, fixRoot, composeFix, turnMatrix, matrixTurn, fixAnglesDeg,
   findContact, contactSampleOf, turnAxes, createPairFit, pairFitTotal, pairFitObserve, FIT_MIN_SAMPLES, FOLLOW, partnerTurnFix, fixPivot, ALIGN_FIT, RUNTIME_FIT, FIT_ANGLE_WEIGHT_M, NO_FIX,
   pairInterpenetration, clearLamp, PART_REGIONS, CLEAR_GREEN_MM, CLEAR_YELLOW_MM } from './pairFit'
