@@ -18,10 +18,19 @@
  *   tip PAST the bottom (s > D, ρ ≤ R + h) still counts as inside it — the
  *   depth scale already compresses it, and releasing there would drop the
  *   guidance exactly where it is deepest (`pastBottom`).
- * - THE BINDING (`bindChannels`) follows the endpoint rule of `collision.ts`
- *   unchanged: `a_pos` → O and `b_pos` → the bottom, each through its joint's
- *   bind→world matrix; u and D come from those two points, R and F scale with
- *   that matrix like a capsule radius.
+ * - THE BINDING (`bindChannels`) moves O (`a_pos`) and the bottom (`b_pos`)
+ *   LIKE THE SKIN AROUND THEM (`regionWeights`): each endpoint takes the mean
+ *   skin weights of the up to `CHANNEL_REGION_K` vertices nearest to it in
+ *   bind space (within `CHANNEL_REGION_M`, on the body mesh with the most
+ *   vertices there, `endpointSkin`) and goes through the blend
+ *   Σ w_j · bindToWorld_j of those joints (linear blend skinning of the point).
+ *   The bottom takes its weights from the SAME mesh, uncapped (`skinOn`).
+ *   An opening is usually weighted mostly to the thighs, so the joint rule of
+ *   `collision.ts` (rigid on the named joint) left O ~11 cm and u ~70–90° off
+ *   the drawn opening once the hips flexed (Ruling A116: crouch, sit). No
+ *   vertex in reach (or no skin weights) = the joint rule unchanged. u and D
+ *   come from those two points, R and F scale with joint `a`'s matrix like a
+ *   capsule radius.
  * - RADIAL GUIDANCE (`radialGuidanceAngle`, `allowedRadius`): with a link tip
  *   at s ≥ 0 the allowed radius is R' = max(0, R − r_c), at −F ≤ s < 0 it is
  *   R'(s) = max(0, R + (−s)·tan α − r_c); a tip with ρ > R' turns about its
@@ -46,10 +55,12 @@
  * rules themselves are pure.
  */
 import type { BufferGeometry, LineSegments, Object3D } from 'three'
-import { COLLISION_VERSION, bodyJoints, capsuleNow, jointRefNow } from './collision'
+import type { SkinnedMesh } from 'three'
+import { COLLISION_VERSION, bodyJoints, capsuleNow, jointNowFrom, jointRefNow, transformPoint } from './collision'
 import type { ChannelOverride, ChannelRecord, CollisionPayload, JointRef, Vec3 } from './collision'
 import type { PartnerSnapshot } from './partnerContact'
 import { normBoneName } from './clipRetarget'
+import { inGarment } from './figure'
 
 type Three = typeof import('three')
 
@@ -349,6 +360,94 @@ export function previewChannel(record: ChannelRecord, applied: ChannelOverride |
 
 // --- three binding ------------------------------------------------------------------------------------------------
 
+/** How many body vertices nearest to a channel endpoint give it their mean skin weights (`regionWeights`). */
+export const CHANNEL_REGION_K = 32
+/** The farthest a vertex may lie from the endpoint (bind space, metres) to count for `regionWeights`. */
+export const CHANNEL_REGION_M = 0.035
+
+/**
+ * The mean skin weights (bone index → weight, summing to 1) of the up to `k` vertices of `mesh` nearest to the
+ * bind-space point `p` (the mesh's POSITION space, as `a_pos`/`b_pos`), only vertices within `maxM`; null when none
+ * is in reach or the mesh carries no skin attributes. Pure over the attribute arrays.
+ */
+export function regionWeights(positions: ArrayLike<number>, skinIndex: ArrayLike<number>, skinWeight: ArrayLike<number>,
+  p: Vec3, k = CHANNEL_REGION_K, maxM = CHANNEL_REGION_M): Map<number, number> | null {
+  const near: Array<[number, number]> = []
+  const max2 = maxM * maxM
+  const count = Math.floor(positions.length / 3)
+  for (let i = 0; i < count; i++) {
+    const dx = positions[i * 3] - p[0], dy = positions[i * 3 + 1] - p[1], dz = positions[i * 3 + 2] - p[2]
+    const d2 = dx * dx + dy * dy + dz * dz
+    if (d2 > max2) continue
+    if (near.length < k) { near.push([d2, i]); near.sort((x, y) => x[0] - y[0]) }
+    else if (d2 < near[k - 1][0]) { near[k - 1] = [d2, i]; near.sort((x, y) => x[0] - y[0]) }
+  }
+  const weights = new Map<number, number>()
+  let total = 0
+  for (const [, i] of near) {
+    for (let c = 0; c < 4; c++) {
+      const w = skinWeight[i * 4 + c]
+      if (!(w > 0)) continue
+      const j = skinIndex[i * 4 + c]
+      weights.set(j, (weights.get(j) ?? 0) + w)
+      total += w
+    }
+  }
+  if (!(total > 0)) return null
+  for (const [j, w] of weights) weights.set(j, w / total)
+  return weights
+}
+
+/** The bind→world matrix of a point skinned with `weights` on `mesh` in the CURRENT frame: Σ w_j bindToWorld_j. */
+function blendNow(mesh: SkinnedMesh, weights: Map<number, number>): number[] {
+  const out = new Array<number>(16).fill(0)
+  for (const [j, w] of weights) {
+    const bone = mesh.skeleton.bones[j]
+    if (!bone) continue
+    const m = jointNowFrom(mesh.matrixWorld.elements, mesh.bindMatrixInverse.elements, bone.matrixWorld.elements,
+      mesh.skeleton.boneInverses[j].elements, mesh.bindMatrix.elements).bindToWorld
+    for (let e = 0; e < 16; e++) out[e] += w * m[e]
+  }
+  return out
+}
+
+/** `regionWeights` of `p` on one mesh with no distance cap; null without usable skin attributes. */
+function skinOn(mesh: SkinnedMesh, p: Vec3): EndpointSkin | null {
+  const g = mesh.geometry
+  const pos = g?.attributes?.position, si = g?.attributes?.skinIndex, sw = g?.attributes?.skinWeight
+  if (!pos || !si || !sw) return null
+  const weights = regionWeights(pos.array, si.array, sw.array, p, CHANNEL_REGION_K, Infinity)
+  return weights ? { mesh, weights } : null
+}
+
+/** A channel endpoint's skin: the body mesh and its region weights (`regionWeights`). */
+interface EndpointSkin { mesh: SkinnedMesh; weights: Map<number, number> }
+
+/**
+ * The skin of a channel endpoint: of the figure's BODY skinned meshes (a body may come in several, e.g. an inset
+ * patch beside the hull), the one with the most vertices within `CHANNEL_REGION_M` of the bind-space point gives
+ * the weights — that is the surface drawn at the opening. Null = the joint rule.
+ */
+function endpointSkin(meshes: readonly SkinnedMesh[], p: Vec3): EndpointSkin | null {
+  let best: EndpointSkin | null = null, bestCount = 0
+  for (const mesh of meshes) {
+    const g = mesh.geometry
+    const pos = g?.attributes?.position, si = g?.attributes?.skinIndex, sw = g?.attributes?.skinWeight
+    if (!pos || !si || !sw || pos.itemSize !== 3 || si.itemSize !== 4 || sw.itemSize !== 4) continue
+    if ([pos, si, sw].some(a => (a as { isInterleavedBufferAttribute?: boolean }).isInterleavedBufferAttribute)) continue
+    const arr = pos.array, max2 = CHANNEL_REGION_M * CHANNEL_REGION_M
+    let count = 0
+    for (let i = 0; i < arr.length; i += 3) {
+      const dx = arr[i] - p[0], dy = arr[i + 1] - p[1], dz = arr[i + 2] - p[2]
+      if (dx * dx + dy * dy + dz * dz <= max2) count++
+    }
+    if (count <= bestCount) continue
+    const weights = regionWeights(arr, si.array, sw.array, p)
+    if (weights) { best = { mesh, weights }; bestCount = count }
+  }
+  return best
+}
+
 /**
  * Bind the `channels` of a `collision` payload to a loaded figure by the endpoint rule of `collision.ts`: O and the
  * bottom are `a_pos` / `b_pos` through their joints (a BODY mesh's, `bodyJoints`), u and D follow from them, R and F
@@ -361,17 +460,30 @@ export function bindChannels(_three: Three, root: Object3D,
   payload: CollisionPayload | null | undefined): { channels: ChannelNow[]; update(): void } | null {
   if (!payload || payload.version !== COLLISION_VERSION || !payload.channels?.length) return null
   const joints = bodyJoints(root)
-  const bound: Array<{ record: ChannelRecord; ja: JointRef; jb: JointRef; suppress: ReadonlySet<string> }> = []
+  const bound: Array<{ record: ChannelRecord; ja: JointRef; jb: JointRef; suppress: ReadonlySet<string>
+    wa: EndpointSkin | null; wb: EndpointSkin | null }> = []
+  const bodyMeshes: SkinnedMesh[] = []
+  root.traverse(o => {
+    const mesh = o as SkinnedMesh
+    if (mesh.isSkinnedMesh && mesh.skeleton && !inGarment(mesh)) bodyMeshes.push(mesh)
+  })
   for (const record of payload.channels) {
     const ja = joints.get(normBoneName(record.a))
     const jb = joints.get(normBoneName(record.b))
     if (!ja || !jb || !(record.r > 0)) continue
-    bound.push({ record, ja, jb, suppress: new Set(record.suppress) })
+    // The bottom follows the SAME surface as the opening (its nearest vertices on that mesh, the cavity's wall,
+    // however deep): the hull nearest to a deep bottom is usually the far side of the body, skinned elsewhere.
+    const wa = endpointSkin(bodyMeshes, record.a_pos)
+    const wb = wa ? skinOn(wa.mesh, record.b_pos) : null
+    bound.push({ record, ja, jb, suppress: new Set(record.suppress), wa, wb })
   }
   if (!bound.length) return null
   const channelNow = (entry: typeof bound[number]): ChannelNow | null => {
     const { record } = entry
-    const cap = capsuleNow(record, jointRefNow(entry.ja), jointRefNow(entry.jb))
+    const jointA = jointRefNow(entry.ja)
+    const cap = capsuleNow(record, jointA, jointRefNow(entry.jb))
+    if (entry.wa) cap.a = transformPoint(blendNow(entry.wa.mesh, entry.wa.weights), record.a_pos)
+    if (entry.wb) cap.b = transformPoint(blendNow(entry.wb.mesh, entry.wb.weights), record.b_pos)
     const axis = sub(cap.b, cap.a)
     const depth = len(axis)
     if (!(depth > 1e-12)) return null
