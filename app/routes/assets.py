@@ -187,10 +187,12 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
     """Renames or moves a clip and/or edits its playback metadata.
 
     Body ``{kind?, set?, library?, loop?, loop_count?, role_gender?,
-    height_offsets_cm?, contact_target?, bend_limits?, overwrite?}``, at least one edit field.
+    height_offsets_cm?, contact_target?, bend_limits?, root_angle?, overwrite?}``, at least one edit field.
     ``bend_limits`` (Ruling A145) is how far the attached part may bend toward its
     target per state, ``{raised: {joint_deg, total_deg}, resting: {...}}`` (partial =
     completed from the inherited value), ``null`` = inherit.
+    ``root_angle`` (Ruling A158) is the attached part's direct root angle ``{pitch_deg: −60..60,
+    yaw_deg: −30..30}`` (pitch + = up toward the belly, yaw + = the figure's right); ``null`` / 0 = none.
     ``contact_target`` (Ruling A139) is the clip's contact relations
     ``[{part, at, target}]`` (target ``channel`` / ``hand_left`` / ``hand_right`` /
     ``head_front`` / ``none``; a bare word = B → A), ``null`` = inherit the package
@@ -221,11 +223,11 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
         raise HTTPException(status_code=400, detail="object expected")
     if not any(k in body for k in
                ("kind", "set", "library", "loop", "loop_count", "role_gender",
-                "height_offsets_cm", "contact_target", "bend_limits")):
+                "height_offsets_cm", "contact_target", "bend_limits", "root_angle")):
         raise HTTPException(
             status_code=400,
             detail="one of kind, set, library, loop, loop_count, role_gender, "
-                   "height_offsets_cm, contact_target, bend_limits is required")
+                   "height_offsets_cm, contact_target, bend_limits, root_angle is required")
     if "role_gender" in body and not (body["role_gender"] is None
                                       or isinstance(body["role_gender"], dict)):
         raise HTTPException(status_code=400,
@@ -276,6 +278,9 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
         if "bend_limits" in body:
             from app.core.animation_clips import set_clip_bend_limits
             clips = set_clip_bend_limits(library, rel, body["bend_limits"])
+        if "root_angle" in body:
+            from app.core.animation_clips import set_clip_root_angle
+            clips = set_clip_root_angle(library, rel, body["root_angle"])
     except ClipLibraryError as e:
         raise _clip_edit_error(e)
     return {"clips": clips}

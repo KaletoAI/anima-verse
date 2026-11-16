@@ -1324,6 +1324,8 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         # Ruling A145: how far the attached part may bend toward its target
         # ({"limits", "source"}: clip | package | default); None for a solo clip.
         "bend_limits": clip_bend_limits(meta, entry["kind"]) if entry["role"] else None,
+        # Ruling A158: the attached part's direct root angle {pitch_deg, yaw_deg}; None for a solo clip.
+        "root_angle": clip_root_angle(meta) if entry["role"] else None,
         # Saved orientation and renderer calibration. Angles and partner B
         # offsets are baked; the whole-clip shift is applied at placement.
         "orientation": {k: geometry.get(k) for k in
@@ -1944,14 +1946,10 @@ def set_clip_contact_target(library: str, rel: str, relations: Any) -> List[Dict
 
 #: Ruling A145: the core default of how far an attached part may bend toward its contact target before the
 #: pair fit moves the partner, per state (degrees per joint / in all); a raised state is much stiffer.
-#: Ruling A150: plus the ROOT joint's pitch up / pitch down / yaw (the attachment pitches first).
-BEND_LIMITS_DEFAULT = {"raised": {"joint_deg": 15.0, "total_deg": 35.0,
-                                  "root_up_deg": 35.0, "root_down_deg": 45.0, "root_yaw_deg": 10.0},
-                       "resting": {"joint_deg": 45.0, "total_deg": 120.0,
-                                   "root_up_deg": 45.0, "root_down_deg": 80.0, "root_yaw_deg": 15.0}}
+BEND_LIMITS_DEFAULT = {"raised": {"joint_deg": 15.0, "total_deg": 35.0},
+                       "resting": {"joint_deg": 45.0, "total_deg": 120.0}}
 #: Each limit key and its upper bound (degrees).
-BEND_LIMIT_KEYS = (("joint_deg", 90.0), ("total_deg", 360.0), ("root_up_deg", 90.0), ("root_down_deg", 120.0),
-                   ("root_yaw_deg", 45.0))
+BEND_LIMIT_KEYS = (("joint_deg", 90.0), ("total_deg", 360.0))
 BEND_STATES = ("raised", "resting")
 #: Hook capability a package registers to default the bend limits of its clip kinds
 #: (``fn() -> {kind: limits}``, ``multiple=True``; ``"*"`` = every kind without its own entry);
@@ -1963,8 +1961,7 @@ def validate_bend_limits(value: Any, base: Optional[Dict[str, Dict[str, float]]]
     """Ruling A145: a clip's BEND LIMITS — ``{"raised": {"joint_deg", "total_deg"}, "resting": {...}}``.
 
     Partial input is completed from ``base`` (default: :data:`BEND_LIMITS_DEFAULT`). Every value is a
-    finite number, ``joint_deg`` 0–90, ``total_deg`` 0–360 (0 = the part stays rigid in that state); Ruling A150:
-    ``root_up_deg`` 0–90, ``root_down_deg`` 0–120, ``root_yaw_deg`` 0–45 (the root joint's pitch/yaw; 0 = it stays).
+    finite number, ``joint_deg`` 0–90, ``total_deg`` 0–360 (0 = the part stays rigid in that state).
     """
     import math
     base = base or BEND_LIMITS_DEFAULT
@@ -2018,6 +2015,11 @@ def clip_bend_limits(meta: Optional[Dict[str, Any]], kind: str) -> Dict[str, Any
     inherited = pkg.get(kind) or pkg.get("*")
     base = inherited or BEND_LIMITS_DEFAULT
     own = (meta or {}).get("bend_limits") if isinstance(meta, dict) else None
+    if isinstance(own, dict):
+        # Ruling A158: the A150 root limits (root_*_deg) are gone; a sidecar that still carries them loses them here.
+        keys = {k for k, _ in BEND_LIMIT_KEYS}
+        own = {st: ({k: v for k, v in row.items() if k in keys} if isinstance(row, dict) else row)
+               for st, row in own.items()}
     if own is not None:
         try:
             return {"limits": validate_bend_limits(own, base), "source": "clip"}
@@ -2058,6 +2060,70 @@ def set_clip_bend_limits(library: str, rel: str, limits: Any) -> List[Dict[str, 
     reload_clip_caches()
     logger.info("clip bend limits: %s%s (%s) -> %s", f"{cset}/" if cset else "", kind, library,
                 data.get("bend_limits") or "inherited")
+    return [_view_of(p, cset, library) for p in _kind_files(path.parent, kind)]
+
+
+#: Ruling A158: the attached part's DIRECT root angle per pair clip (degrees): pitch about the body's side axis
+#: (+ = up toward the belly, − = down) and turn about the body's up axis (+ = the figure's right, − = its left).
+#: Applied always, before any bend; Auto-align never changes it.
+ROOT_ANGLE_KEYS = (("pitch_deg", 60.0), ("yaw_deg", 30.0))
+
+
+def validate_root_angle(value: Any) -> Dict[str, float]:
+    """Ruling A158: ``{"pitch_deg": −60..60, "yaw_deg": −30..30}`` (a missing key = 0)."""
+    import math
+    if not isinstance(value, dict) or set(value) - {k for k, _ in ROOT_ANGLE_KEYS}:
+        raise ClipLibraryError("root angle must be an object with pitch_deg and/or yaw_deg")
+    out: Dict[str, float] = {}
+    for key, bound in ROOT_ANGLE_KEYS:
+        v = value.get(key, 0.0)
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not -bound <= v <= bound:
+            raise ClipLibraryError(f"root angle {key} must be a number from {-bound:g} to {bound:g}")
+        out[key] = float(v)
+    return out
+
+
+def clip_root_angle(meta: Optional[Dict[str, Any]]) -> Dict[str, float]:
+    """Ruling A158: the clip's stored root angle (``<kind>.json`` ``root_angle``), 0/0 when absent or invalid."""
+    own = (meta or {}).get("root_angle") if isinstance(meta, dict) else None
+    if own is not None:
+        try:
+            return validate_root_angle(own)
+        except ClipLibraryError:
+            pass
+    return {"pitch_deg": 0.0, "yaw_deg": 0.0}
+
+
+@_library_writer
+def set_clip_root_angle(library: str, rel: str, angle: Any) -> List[Dict[str, Any]]:
+    """Writes (or with ``None`` / all zero clears) a pair/group clip's root angle in its shared ``<kind>.json``
+    (Ruling A158). Refused for a solo clip, an invalid angle and a kind without a sidecar."""
+    path = resolve_clip(library, rel)
+    if not path.is_file():
+        raise ClipNotFound(f"{rel} does not exist in the {library} library")
+    kind, role = parse_clip_role(path.name)
+    if not role:
+        raise ClipLibraryError(f"'{kind}' is a solo clip — only a pair clip has a root angle")
+    root = library_root(library).resolve()
+    cset = path.parent.name if path.parent.resolve() != root else ""
+    sidecar = path.parent / f"{kind}.json"
+    if not sidecar.is_file():
+        raise ClipLibraryError(f"'{kind}' has no sidecar {sidecar.name} — re-import the clip first")
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ClipLibraryError(f"{sidecar.name} is not readable: {e}")
+    if not isinstance(data, dict):
+        raise ClipLibraryError(f"{sidecar.name} is not an object")
+    got = None if angle is None else validate_root_angle(angle)
+    if not got or not any(got.values()):
+        data.pop("root_angle", None)
+    else:
+        data["root_angle"] = got
+    sidecar.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    reload_clip_caches()
+    logger.info("clip root angle: %s%s (%s) -> %s", f"{cset}/" if cset else "", kind, library,
+                data.get("root_angle") or "0/0")
     return [_view_of(p, cset, library) for p in _kind_files(path.parent, kind)]
 
 
