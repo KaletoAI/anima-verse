@@ -140,8 +140,8 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
         {"character_scoped": True, "char_spec_field": "base_view_workflow",
          "char_spec_fallback": "tpose_view_workflow"}),
     "outfit_front": _image(
-        "Outfit — front edit", "Figure tab, Dressed views: the dressed front (edit of the base front, or of "
-                               "the outfit's full-body reference)",
+        "Outfit — front edit", "Figure tab, Dressed views: the dressed front — an edit of the base front, the "
+                               "outfit's full-body reference as a second picture (Ruling A125)",
         ["outfit_edit", "base_front_edit"],
         {"character_scoped": True, "char_spec_field": "outfit_front_workflow",
          "char_spec_fallback": "tpose_view_workflow"}),
@@ -154,12 +154,13 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
         hint="An edit of a reference picture: a backend that takes a reference image is required. Generated only "
              "by a click on Generate (Figure → Dressed views)."), "requires_chain": True},
     "outfit_back_draft": _image(
-        "Outfit — back draft", "Figure tab, Dressed views: back draft, an edit of the dressed front turned around",
-        ["base_view_back"],
+        "Outfit — back draft", "Figure tab, Dressed views: back draft, an edit of the base back view (the outfit's "
+                               "reference or the dressed front as a second picture)",
+        ["outfit_edit"],
         {"character_scoped": True, "char_spec_field": "outfit_back_draft_workflow",
          "char_spec_fallback": "tpose_view_workflow"},
-        hint="An edit of the dressed front turned around; only its clothing is used — composited onto the "
-             "base back view on the CPU (no second render)."),
+        hint="An edit of the base back view that only changes the clothing (Ruling A125) — composited back onto "
+             "it on the CPU (no second render). A view-change model is wrong here: route a plain edit model."),
     # The second step of a dressed back/side view — the draft's clothing put
     # onto the base view — is a CPU composite (app/core/view_composite.py,
     # Task 11g): the model-fit occasions outfit_back / outfit_side are gone
@@ -169,8 +170,9 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
     # its back draft glob, then the T-pose views glob;
     # config._migrate_outfit_side_routing seeds the chain from the back's.
     "outfit_side_draft": _image(
-        "Outfit — side draft", "Figure tab, Dressed views: left/right draft, an edit of the dressed front in profile",
-        ["base_view_side"],
+        "Outfit — side draft", "Figure tab, Dressed views: left/right draft, an edit of the base side view (the "
+                               "outfit's reference or the dressed front as a second picture)",
+        ["outfit_edit"],
         {"character_scoped": True, "char_spec_field": "outfit_side_draft_workflow",
          "char_spec_fallback": ("outfit_back_draft_workflow", "tpose_view_workflow")},
         hint="An edit of the dressed front in profile; only its clothing is used — composited onto the "

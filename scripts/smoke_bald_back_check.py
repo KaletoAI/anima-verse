@@ -184,22 +184,22 @@ def main() -> int:
         renders: list = []
         source = {"draft": bald_back}
 
-        def render_draft(character_name, view, *, stem, front, refs_dir, prompt, profile, common, sidecar_extra):
+        def render_draft(character_name, view, *, stem, refs_dir, prompt, common, sidecar_extra, **kw):
             renders.append(view)
             path = Path(str(stem) + ".png")
             path.write_bytes(source["draft"].read_bytes())
             path.with_suffix(".json").write_text(json.dumps({"n": len(renders), **sidecar_extra}))
             return path
 
-        def compose(base_view, draft_file, target, *, rule="outfit", background=None, mask_target=None, head=False):
+        def compose(base_view, draft_file, target, *, rule="outfit", background=None, mask_target=None, head=False, base_alpha=False):
             Path(target).write_bytes(Path(draft_file).read_bytes())
             rec = {"version": vc.VERSION, "rule": rule, "ok": True, "iou": 0.99,
                    "coverage": {"score": 0.9, "region": 0.2}, "mask_share": 0.3}
             rec["reasons"] = vc.check(rec)
             return rec
 
-        real = (base_body.render_draft, base_body.draft_prompt, vc.compose, base_body_gates.noise_gate)
-        base_body.render_draft = render_draft
+        real = (base_body.render_view_edit, base_body.draft_prompt, vc.compose, base_body_gates.noise_gate)
+        base_body.render_view_edit = render_draft
         base_body.draft_prompt = lambda *a, **k: ("p", "n")
         vc.compose = compose
         base_body_gates.noise_gate = lambda *a, **k: {"ok": True, "score": 1.0}
@@ -253,7 +253,7 @@ def main() -> int:
             base_body._guard_dressed_views("Demo", "sig", "bsig", views, plain, rerender=rerender)
             check("one re-render", rerenders, ["back"])
         finally:
-            base_body.render_draft, base_body.draft_prompt, vc.compose, base_body_gates.noise_gate = real
+            base_body.render_view_edit, base_body.draft_prompt, vc.compose, base_body_gates.noise_gate = real
 
     print("FAIL: " + ", ".join(FAILS) if FAILS else "ALL OK")
     return 1 if FAILS else 0

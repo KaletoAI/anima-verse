@@ -159,9 +159,10 @@ def sha(path: Path) -> str:
 def brown_share(img: np.ndarray) -> float:
     """Share of the skirt over the figure and between the legs (rows 200..318, cols 105..195: the 5 px it is
     wider than the legs lie outside the base outline, which the composite keeps; the hem row feathers) that
-    is BROWN within 12 per channel, alpha >= 250."""
+    is BROWN within 12 per channel. Colour only: since Ruling A125 the alpha is the base's everywhere (the part
+    between the legs is coloured but not figure)."""
     box = img[200:318, 105:195]
-    return float(((np.abs(box[..., :3] - BROWN).max(axis=-1) <= 12) & (box[..., 3] >= 250)).mean())
+    return float((np.abs(box[..., :3] - BROWN).max(axis=-1) <= 12).mean())
 
 
 def old_module(rel: str, name: str):
@@ -219,7 +220,8 @@ def stage_character(refs: Path, *, draft_img=None, draft_front_sha=None, extra=N
     sig = TSIG if where else SIG
     front = put_view(folder, f"tpose_{sig}", figure(BODY + [SKIRT]), {"base_signature": BSIG, "dressed": True})
     draft = put_view(folder / "drafts", f"tpose_back_{sig}", figure(BODY + [SKIRT]) if draft_img is None else draft_img,
-                     {"front_sha256": draft_front_sha or sha(front), "base_signature": BSIG, "dressed": True})
+                     {"front_sha256": draft_front_sha or sha(front), "base_signature": BSIG, "dressed": True,
+                      "draft_method": "base_edit"})
     meta = {"prompt": "edit the first image", "base_signature": BSIG, "dressed": True,
             "base_image_sha256": sha(base_back), "back_draft": draft.name, "back_draft_sha256": sha(draft),
             "fit_gate": {"ok": True, "chosen": 1, "attempts": []}, "outfit_body": {"body_id": "x"},
@@ -425,7 +427,7 @@ def dress_view_section(tmp: Path):
     def render_draft(character_name, view, *, stem, **kw):
         renders.append(view)
         return save(figure(BODY + [SKIRT]), Path(f"{stem}.png"))
-    base_body.render_draft = render_draft
+    base_body.render_view_edit = render_draft
     views = {v: refs / f"tpose_{'' if v == 'front' else v + '_'}{BSIG}.png" for v in ("front", "back")}
     views.update(left=None, right=None)
     kw = dict(signature=SIG, bsig=BSIG, pieces={}, items=[], profile={}, front=front, base_views=views,

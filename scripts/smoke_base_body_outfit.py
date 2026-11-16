@@ -80,7 +80,8 @@ Expected, derived by hand from the brief:
     2026-11-09: only front and back are dressed; Task 11g, Ruling C1: the
     back is a draft + a CPU composite, ``view_composite.compose`` — stubbed
     here, the composite itself is ``smoke_view_composite.py``):
-      front edit  stem tpose_<osig> in model_refs, reference tpose_<bsig>.png
+    Ruling A125: both are edits of the base view of their direction, each composited back (the front too).
+      front edit  stem tpose_<osig> in the staging dir "edit", reference tpose_<bsig>.png
                   centred on a grey SQUARE (fix round T12-F1, ruling F14 g:
                   ``garment_images.square_frame`` — side max(8, 8) rounded up
                   to SIZE_STEP 16 = 16, offset ((16-8)//2) = (4, 4); pixel
@@ -90,12 +91,12 @@ Expected, derived by hand from the brief:
                   sidecar_extra {base_signature, dressed: true,
                   base_image_sha256 = sha256(tpose_<bsig>.png)};
       back draft  stem tpose_back_<osig> in the staging dir draft1, reference = the
-                  dressed front tpose_<osig>.png on the same 16 x 16 grey
-                  square (F14 g; (0,0) grey padding, (4,4) = the opaque stub's
-                  colour_of("tpose_<osig>")), bare_prompt and
-                  extra_negative = draft_prompt(Demo, "back"), no character
-                  block (review 2026-11-11), occasion outfit_back_draft, use
-                  case base_view_back, back_view.
+                  BASE back tpose_back_<bsig>.png on the same 16 x 16 grey
+                  square ((0,0) and (4,4) grey), the dressed front tpose_<osig>.png
+                  as the second picture, bare_prompt = DRESS_VIEW["back"] + " Keep
+                  the image exactly …" naming the dress, extra_negative = the
+                  front's, no character block, occasion outfit_back_draft, use
+                  case outfit_edit, back_view.
     Then ONE composite call: base view tpose_back_<bsig>.png, the draft
     (draft1/tpose_back_<osig>.png), target in the staging dir attempt1, rule
     "outfit"; the stub writes the draft there and answers an ok record
@@ -584,7 +585,7 @@ def main() -> int:
             SCRIPT_CALLS.append((operation, [g["id"] for g in params.get("groups", [])]))
             return {"applied": True, "data": {}}
 
-        def compose(base_view, draft, target, *, rule="outfit", background=None):
+        def compose(base_view, draft, target, *, rule="outfit", background=None, base_alpha=False):
             """The composite stand-in: the (opaque) draft copied onto the target, an ok record."""
             COMPOSITES.append((Path(base_view).name, Path(draft).name, Path(draft).parent.name, rule,
                                Path(target).parent.name))
@@ -655,32 +656,37 @@ def main() -> int:
             check("the Build's assemble step", build_model("Demo"), "")
             dressed_renders = [r for r in RENDERS if r["character"] == "Demo"]
             check("front edit, back draft", [(r["stem"], r["dir"]) for r in dressed_renders],
-                  [(f"tpose_{osig}", "model_refs"), (f"tpose_back_{osig}", "draft1")])
+                  [(f"tpose_{osig}", "edit"), (f"tpose_back_{osig}", "draft1")])
             front_r, draft_r = (dressed_renders + [{}] * 2)[:2]
             check("references", [r.get("reference_name") for r in dressed_renders],
-                  [f"tpose_{bsig}.png", f"tpose_{osig}.png"])
+                  [f"tpose_{bsig}.png", f"tpose_back_{bsig}.png"])
             # Front edit and draft: their source on the 16 x 16 grey square at
             # offset (4, 4) (F14 g) — (4,4) is the source's corner: the base
             # front's transparent corner -> grey, the opaque draft stub's colour.
             check("references on grey", [r.get("reference_px") for r in dressed_renders],
                   [((128, 128, 128), (128, 128, 128)),
-                   ((128, 128, 128), colour_of(f"tpose_{osig}"))])
-            check("one composite: base back + draft 1 -> attempt 1, rule outfit", COMPOSITES,
-                  [(f"tpose_back_{bsig}.png", f"tpose_back_{osig}.png", "draft1", "outfit", "attempt1")])
-            check("no extra reference on any render", [bool(r.get("extra_reference_images")) for r in dressed_renders],
-                  [False, False])
+                   ((128, 128, 128), (128, 128, 128))])
+            check("two composites: the front edit onto the base front, draft 1 onto the base back",
+                  [c[:4] + ((".composite_" if str(c[4]).startswith(".composite_") else c[4]),) for c in COMPOSITES],
+                  [(f"tpose_{bsig}.png", f"tpose_{osig}.png", "edit", "outfit", ".composite_"),
+                   (f"tpose_back_{bsig}.png", f"tpose_back_{osig}.png", "draft1", "outfit", "attempt1")])
+            check("second picture: none on the front, the dressed front on the back",
+                  [[Path(p).name for p in r.get("extra_reference_images") or []] for r in dressed_renders],
+                  [[], [f"tpose_{osig}.png"]])
             check("front prompt", (front_r.get("bare_prompt", "").startswith("Keep the image exactly as it is"),
                                    "a fitted red cotton dress with white sneakers" in front_r.get("bare_prompt", "")),
                   (True, True))
-            check("draft prompt", draft_r.get("bare_prompt"), base_body.draft_prompt("Demo", "back")[0])
-            check("draft extra negative", draft_r.get("extra_negative"), base_body.draft_prompt("Demo", "back")[1])
+            check("draft prompt: the back view sentence, then the edit naming the dress",
+                  (draft_r.get("bare_prompt", "").startswith(base_body.DRESS_VIEW["back"] + " Keep the image exactly"),
+                   "a fitted red cotton dress with white sneakers" in draft_r.get("bare_prompt", "")), (True, True))
+            check("draft extra negative = the front's", draft_r.get("extra_negative"), front_r.get("extra_negative"))
             check("no character block on any dressed render", [r.get("style_character") is not None
                                                                for r in dressed_renders], [False, False])
             check("occasions", [r.get("occasion") for r in dressed_renders], ["outfit_front", "outfit_back_draft"])
             # Front edit and draft render at their square canvas 16 (F14 g).
             check("render sizes", [(r.get("override_width"), r.get("override_height")) for r in dressed_renders],
                   [(16, 16), (16, 16)])
-            check("use cases", [r.get("image_use_case") for r in dressed_renders], ["outfit_edit", "base_view_back"])
+            check("use cases", [r.get("image_use_case") for r in dressed_renders], ["outfit_edit", "outfit_edit"])
             check("character loras", [r.get("character_loras") for r in dressed_renders], [True] * 2)
             front_sha = hashlib.sha256((refs / f"tpose_{bsig}.png").read_bytes()).hexdigest()
             back_sha = hashlib.sha256((refs / f"tpose_back_{bsig}.png").read_bytes()).hexdigest()

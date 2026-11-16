@@ -257,7 +257,7 @@ def main() -> int:
             path.with_suffix(".json").write_text(json.dumps({"n": len(renders)}))
             return path
 
-        def compose(base_view, draft_file, target, *, rule="outfit", background=None, mask_target=None):
+        def compose(base_view, draft_file, target, *, rule="outfit", background=None, mask_target=None, base_alpha=False):
             ok = plan.pop(0)
             Path(target).write_bytes(Path(draft_file).read_bytes())
             if ok == "empty":
@@ -268,10 +268,10 @@ def main() -> int:
             rec["reasons"] = vc.check(rec)
             return rec
 
-        real = (base_body.render_draft, base_body.draft_prompt, vc.compose, base_body.view_guard)
+        real = (base_body.render_view_edit, base_body.draft_prompt, vc.compose, base_body.view_guard)
         from app.core import base_body_gates
         real_gates = (base_body_gates.noise_gate, base_body_gates.framing_gate)
-        base_body.render_draft = render_draft
+        base_body.render_view_edit = render_draft
         base_body.draft_prompt = lambda *a, **k: ("p", "n")
         vc.compose = compose
         base_body.view_guard = lambda view, path, views, front=None: {"ok": True, "best": view}
@@ -313,7 +313,7 @@ def main() -> int:
             check("(c) sidecar", (meta.get("fit"), meta.get("composite"), (meta.get("composite_record") or {}).get("empty")),
                   ("composite", "empty", True))
         finally:
-            base_body.render_draft, base_body.draft_prompt, vc.compose, base_body.view_guard = real
+            base_body.render_view_edit, base_body.draft_prompt, vc.compose, base_body.view_guard = real
             base_body_gates.noise_gate, base_body_gates.framing_gate = real_gates
 
         print("[6] job counts")

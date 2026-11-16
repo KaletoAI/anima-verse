@@ -229,7 +229,7 @@ def main() -> int:
         expression_regen.render_character_image = render
         from app.core import view_composite
 
-        def compose(base_view, draft, target, *, rule="outfit", background=None):
+        def compose(base_view, draft, target, *, rule="outfit", background=None, base_alpha=False):
             """The composite stand-in (Task 11g; the real one: smoke_view_composite.py): the draft copied, ok."""
             Path(target).write_bytes(Path(draft).read_bytes())
             return {"version": view_composite.VERSION, "rule": rule, "ok": True, "reasons": [], "iou": 0.99,

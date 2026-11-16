@@ -2609,8 +2609,10 @@ def stored_draft(character_name: str, view: str, signature: str, front: Optional
     draft = draft_path(character_name, view, signature)
     if draft is None or front is None:
         return None
-    sha = _ref_sidecar(draft).get("front_sha256")
-    return draft if sha and sha == file_sha256(front) else None
+    meta = _ref_sidecar(draft)
+    sha = meta.get("front_sha256")
+    # Ruling A125: only a draft that is an edit of the base view is composited again.
+    return draft if sha and sha == file_sha256(front) and meta.get("draft_method") == DRAFT_BASE_EDIT else None
 
 
 # --- Refused views (Ruling FR-I3) ---------------------------------------------------------
@@ -2995,7 +2997,7 @@ def _composite_attempt(character_name: str, view: str, *, stem: Path, draft: Pat
     path = stem.with_suffix(".png")
     match = head_match(front, base_views.get("front")) if front is not None else None
     other_head = {"head": True} if match is not None and match < HEAD_MATCH_MIN else {}
-    record = view_composite.compose(base_view, draft, path, rule="outfit", **other_head)
+    record = view_composite.compose(base_view, draft, path, rule="outfit", base_alpha=True, **other_head)
     path.with_suffix(".json").write_text(json.dumps(composite_sidecar(draft, view, extra, record),
                                                     ensure_ascii=False, indent=2), encoding="utf-8")
     if not record["ok"]:
@@ -3013,7 +3015,8 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
                 size: Tuple[int, int], mesh_items: Optional[Dict[str, Any]] = None,
                 texture: Optional[Dict[str, Any]] = None,
                 raise_load: bool = False, reuse_draft: bool = True,
-                hair: Optional[str] = None) -> Tuple[Optional[Path], Optional[str]]:
+                hair: Optional[str] = None, bald: bool = False, hair_edit: bool = False,
+                text: str = "", reference: Optional[Path] = None) -> Tuple[Optional[Path], Optional[str]]:
     """A dressed back or side view in two steps (Task 11g, Ruling C1).
     ``(stored path, warning)``; raises ``OutfitError`` with the step that
     failed. ``raise_load``: the draft render raises ``BackendBusyError`` /
@@ -3024,12 +3027,14 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
     the record goes into the draft's and the view's sidecar.
 
     1. DRAFT (occasion ``DRAFT_OCCASIONS[view]``: ``outfit_back_draft`` /
-       ``outfit_side_draft`` — the view's only hub job): an edit of the
-       dressed ``front`` (on grey, the only reference) with ``draft_prompt``
-       (the view's ``DRAFT_PROMPTS`` sentence, empty style
-       ``DRAFT_USE_CASES``, no character block), rendered on the front's
-       square canvas and cut back to its frame; stored as
-       ``model_refs/drafts/tpose_<view>_<sig>``.
+       ``outfit_side_draft`` — the view's only hub job). Ruling A125: an
+       EDIT of the base view of the same direction (input 1) with
+       ``dress_prompt`` of the view's dress text ``text`` ("Keep the image
+       exactly as it is … Only change their clothing …"), the outfit's
+       reference picture ``reference`` — else the dressed ``front`` — as the
+       SECOND picture where the backend slots it (``render_view_edit``);
+       stored as ``model_refs/drafts/tpose_<view>_<sig>``, its sidecar
+       naming the ``front_sha256`` it follows.
     2. COMPOSITE (``view_composite``, CPU, no hub job, no model fallback):
        the draft's clothing put onto the shape's base view, staged in a
        private ``.composite_*`` dir inside ``model_refs``
@@ -3101,11 +3106,15 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
             draft_stem = Path(staging) / f"draft{n}" / f"{kind}_{signature}"
             draft_stem.parent.mkdir()
             try:
-                draft = render_draft(
-                    character_name, view, stem=draft_stem, front=front, refs_dir=refs_dir,
-                    prompt=draft_prompt(character_name, view, profile=profile, hair=hair), profile=profile,
-                    common=common,
+                draft = render_view_edit(
+                    character_name, view, stem=draft_stem, base_view=base_view,
+                    second=reference if reference is not None else front, refs_dir=refs_dir,
+                    prompt=_view_edit_prompt(character_name, view, text=text, front=front, pieces=pieces,
+                                             items=items, profile=profile, bald=bald, hair=hair,
+                                             hair_edit=hair_edit),
+                    occasion=DRAFT_OCCASIONS[view], common=common,
                     sidecar_extra={"base_signature": bsig, "dressed": True, f"{view}_draft": True,
+                                   "draft_method": DRAFT_BASE_EDIT,
                                    "front_sha256": file_sha256(front),
                                    **({"mesh_items": mesh_items} if mesh_items else {}), **(texture or {})})
             except Exception as e:  # noqa: BLE001 — a later draft never loses an earlier composite
@@ -3933,7 +3942,8 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
             if made is not None:
                 return generate_dressed_images(character_name, pieces=pieces, items=items, signature=signature,
                                                force=force, view=view, raise_load=raise_load)
-    # Ruling A74b: the outfit's own reference picture — its dressed front is an edit of it while something is painted.
+    # The outfit's own reference picture (A74b's record) is the SECOND picture of each view's edit of the base view
+    # while something is painted (Ruling A125).
     from app.core import outfit_references
     record = (outfit_references.record_for(character_name, fig.pieces, fig.open, painted=fig.painted, profile=profile)
               if dressed else None)
@@ -3947,85 +3957,122 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
                          hair=_shape_hair(character_name, profile, meshed=meshed), reference=reference)
 
 
-#: The character block of an outfit's dressed front made from its reference
-#: picture (Ruling A74b), after the head words: the clothing is the
-#: picture's — never named (Ruling A29: a view change never names it).
-OUTFIT_REFERENCE_BODY = "wearing exactly the clothing of the person in the picture and nothing else"
+#: Ruling A125 (supersedes A74b): the sentence that names the SECOND picture of
+#: a dressed edit — appended to the prompt only by a backend that slotted it
+#: (``service._with_extra_reference_prompt``); a backend with one slot edits
+#: the base view from the text alone.
+EDIT_SECOND_PICTURE = ("The clothing is exactly the clothing the person in the second picture wears{seen}, and "
+                       "nothing else; the body, pose, framing and background stay those of the first picture.")
+_EDIT_SEEN = {"front": "", "back": ", as it looks from behind", "left": ", as it looks from the side",
+              "right": ", as it looks from the side"}
+#: The clothing clause of a back/side edit whose view names no clothing of its
+#: own and whose front names none either (``_view_edit_prompt``).
+EDIT_FROM_SECOND_PICTURE = "Only change their clothing to the clothing the person in the second picture wears."
+#: A draft's sidecar ``draft_method`` of an edit of the base view (Ruling A125);
+#: a stored draft without it (a turn-around of the dressed front) is never
+#: composited again (``stored_draft``).
+DRAFT_BASE_EDIT = "base_edit"
 
 
-def outfit_edit_prompt(character_name: str, *, text: str, bald: bool, hair: Optional[str],
-                       profile: Optional[Dict[str, Any]] = None) -> Tuple[str, str, str]:
-    """``(character block, prompt, negative)`` of an outfit's dressed front
-    made from its reference picture: the block is the head of the body the
-    outfit is painted on and ``OUTFIT_REFERENCE_BODY``, for
-    ``BASE_FRONT_EDIT_USE_CASE``'s slot; the prompt is the base front's pose
-    text (with the hair clauses of a haired body); the negative is the
-    dressed front's (``dress_negative`` of the outfit text ``text``,
-    ``HAIR_NEGATIVE`` when bald) and ``POSE_NEGATIVE``.
-
-    The head (Ruling A94b, as the base front's ``edit_character``): the
-    picture's person is kept, never re-described (``picture_head``) — the
-    worn hair (``hair`` as ``dress_prompt``'s) when it is the hair the
-    picture shows becomes "the same face, hair[ and facial hair] as the person
-    in the picture"; other worn hair keeps its text; a bald body (none, or
-    under an own hair mesh — ``bald``) keeps ``BALD_HEAD``; both then say
-    "the same face[ and facial hair] as …". A character with facial hair
-    keeps "hair" out of the garment negative and, bald, gets
-    ``FACIAL_HAIR_SAFE_HAIR_NEGATIVE`` instead of ``HAIR_NEGATIVE``."""
-    from app.core.garment_hair import BALD
-    profile = _profile_of(character_name, profile)
-    worn_hair = hair_text(character_name, profile=profile) if hair is None else ("" if hair == BALD else hair)
-    haired = bool(worn_hair) and not bald
-    facial = has_facial_hair(character_name, profile=profile)
-    block = ", ".join((*picture_head(character_name, worn_hair if haired else "", profile), OUTFIT_REFERENCE_BODY))
-    prompt = _haired_front_pose(character_name, worn_hair, profile) if haired else _pose_text("front")
-    negative = dress_negative(text, keep_hair=haired or facial)
-    if bald:
-        negative = f"{negative}, {FACIAL_HAIR_SAFE_HAIR_NEGATIVE if facial else HAIR_NEGATIVE}"
-    return block, prompt, f"{negative}, {POSE_NEGATIVE}"
+def edit_second_picture(view: str) -> str:
+    """``EDIT_SECOND_PICTURE`` for ``view``."""
+    return EDIT_SECOND_PICTURE.format(seen=_EDIT_SEEN.get(view, ""))
 
 
-def _reference_front(character_name: str, *, signature: str, reference: Dict[str, Any], refs_dir: Path,
-                     pieces: Optional[Dict[str, str]], items: Optional[list], profile: Dict[str, Any], text: str,
-                     bald: bool, hair: Optional[str], on: str, registration: Optional[Path],
-                     extra: Dict[str, Any], load_kwargs: Dict[str, Any]) -> Optional[Path]:
-    """The dressed front of ``signature`` as an EDIT of the outfit's reference
-    picture (Ruling A74b): ``reference`` = ``{path, sha256}``; the picture is
-    frozen for the render (``_frozen_reference``), the edit is
-    ``outfit_edit_prompt`` under ``BASE_FRONT_EDIT_USE_CASE`` on the dressed
-    front's routing (occasion ``outfit_front``) with ``require_reference`` —
-    a routed backend without a reference slot is not applicable, never a text
-    render. The sidecar records the shape ``on`` and its front's content
-    (``base_image_sha256`` — the view belongs to that body like an edit of
-    it), ``outfit_reference_sha256`` / ``outfit_reference_image`` and
-    ``extra``. ``OutfitError`` when the picture is gone or changed since it
-    was picked."""
+def render_view_edit(character_name: str, view: str, *, stem: Path, base_view: Path, second: Optional[Path],
+                     refs_dir: Path, prompt: Tuple[str, str], occasion: str, common: Dict[str, Any],
+                     sidecar_extra: Dict[str, Any]) -> Optional[Path]:
+    """A dressed view as an EDIT of the base view of the same direction
+    (Ruling A125): input 1 = ``base_view`` centred on its square canvas
+    (``require_reference`` — never a text render), input 2 = ``second`` (a
+    flat private copy, ``_frozen_reference``) with ``edit_second_picture``
+    where the backend slots it; ``prompt`` = ``(text, negative)``
+    (``dress_prompt``: "Keep the image exactly as it is … Only change their
+    clothing …"), use case ``DRESS_USE_CASE`` (no style). The render is cut
+    back to the base view's frame. None when it returned nothing."""
+    import contextlib
     from app.core import expression_regen
-    from app.core.model_refs import _tpose_size
-    from app.core.outfit_references import REFERENCE_GONE
-    source = reference.get("path")
-    if source is None:
-        raise OutfitError(REFERENCE_GONE)
-    block, prompt, negative = outfit_edit_prompt(character_name, text=text, bald=bald, hair=hair, profile=profile)
-    width, height = _tpose_size()
-    with _frozen_reference(Path(source), refs_dir) as (frozen, sha):
-        if sha != reference.get("sha256"):
-            raise OutfitError("The outfit's full-body reference changed since it was picked — pick it again")
+    from app.core.garment_images import square_reference
+    text, negative = prompt
+    with contextlib.ExitStack() as stack:
+        reference, side, offset, source_size = stack.enter_context(square_reference(base_view, refs_dir))
+        extra = stack.enter_context(_frozen_reference(Path(second), refs_dir))[0] if second is not None else None
         return expression_regen.render_character_image(
-            character_name,
-            output_stem=refs_dir / f"tpose_{signature}",
-            equipped_pieces=dict(pieces or {}), equipped_items=list(items or []),
-            pose_prompt="", expression_prompt="",
-            bare_prompt=prompt, extra_negative=negative,
-            image_use_case=BASE_FRONT_EDIT_USE_CASE, style_character=block,
-            occasion="outfit_front",
-            override_width=width, override_height=height,
-            apply_state_modifiers=False,
-            mesh_input_profile=profile,
-            reference_image=frozen, require_reference=True,
-            sidecar_extra={"base_signature": on, "dressed": True, "base_image_sha256": file_sha256(registration),
-                           "outfit_reference_sha256": sha, "outfit_reference_image": Path(source).name, **extra},
-            character_loras=True, **load_kwargs)
+            character_name, output_stem=stem, bare_prompt=text, extra_negative=negative,
+            occasion=occasion, reference_image=reference, require_reference=True,
+            extra_reference_images=[extra] if extra is not None else [],
+            extra_reference_prompt=edit_second_picture(view) if extra is not None else "",
+            sidecar_extra={**sidecar_extra, **({"second_picture": Path(second).name} if second is not None else {})},
+            **{**common, "image_use_case": DRESS_USE_CASE, "override_width": side, "override_height": side,
+               "crop_back_to": (side, offset, source_size)})
+
+
+def _view_edit_prompt(character_name: str, view: str, *, text: str, front: Path, pieces: Optional[Dict[str, str]],
+                      items: Optional[list], profile: Dict[str, Any], bald: bool, hair: Optional[str],
+                      hair_edit: bool) -> Tuple[str, str]:
+    """``dress_prompt`` of a back/side edit (Ruling A125): the view's dress
+    text ``text``, else the dressed ``front``'s (its sidecar ``dress_text`` —
+    a view where nothing of the outfit shows by its own text still takes the
+    outfit's words; the composite then puts on what differs), else
+    ``EDIT_FROM_SECOND_PICTURE`` — the clothing only from the second picture."""
+    for candidate in (text, str(_ref_sidecar(front).get("dress_text") or "")):
+        try:
+            return dress_prompt(character_name, view, pieces=pieces, items=items, profile=profile, text=candidate,
+                                bald=bald, hair=hair, hair_edit=hair_edit)
+        except ValueError:
+            continue
+    from app.core.garment_hair import BALD
+    haired = bool(hair_text(character_name, profile=profile) if hair is None else ("" if hair == BALD else hair))
+    keep = DRESS_KEEP_HAIR if haired and not bald else DRESS_KEEP
+    sentence = DRESS_VIEW.get(view)
+    edit = f"{keep} {EDIT_FROM_SECOND_PICTURE}"
+    return (f"{sentence} {edit}" if sentence else edit), DRAFT_NEGATIVE if not haired else HAIRED_DRAFT_NEGATIVE
+
+
+def _edit_front(character_name: str, *, signature: str, refs_dir: Path, base_front: Path, prompt: Tuple[str, str],
+                reference: Optional[Dict[str, Any]], common: Dict[str, Any], extra: Dict[str, Any]) -> Optional[Path]:
+    """The dressed front of ``signature`` (Ruling A125): an edit of the base
+    front ``base_front`` (``render_view_edit``, occasion ``outfit_front``)
+    with the outfit's reference picture (``reference`` = ``{path, sha256}``)
+    as the second picture, then composited back onto the base front
+    (``view_composite.compose``, ``base_alpha``): the base outside the
+    change mask, the edit inside, the alpha always the base's — the
+    registration outside the garment is exact by construction. The sidecar
+    is the render's with ``extra``, the base front's content
+    (``base_image_sha256``) and the composite record (``edit_composite``).
+    ``OutfitError`` when the reference picture is gone or changed since it
+    was picked, or when the composite fails its checks (the edit drew
+    another body). None when the render returned nothing."""
+    import tempfile
+    from app.core import view_composite
+    from app.core.outfit_references import REFERENCE_GONE
+    second = None
+    ref_fields: Dict[str, Any] = {}
+    if reference is not None:
+        source = reference.get("path")
+        if source is None or not Path(source).is_file():
+            raise OutfitError(REFERENCE_GONE)
+        if file_sha256(Path(source)) != reference.get("sha256"):
+            raise OutfitError("The outfit's full-body reference changed since it was picked — pick it again")
+        second = Path(source)
+        ref_fields = {"outfit_reference_sha256": reference["sha256"], "outfit_reference_image": second.name}
+    with tempfile.TemporaryDirectory(prefix=".composite_", dir=refs_dir, ignore_cleanup_errors=True) as staging:
+        stem = Path(staging) / "edit" / f"tpose_{signature}"
+        stem.parent.mkdir()
+        draft = render_view_edit(
+            character_name, "front", stem=stem, base_view=base_front, second=second, refs_dir=refs_dir,
+            prompt=prompt, occasion="outfit_front", common=common,
+            sidecar_extra={"dressed": True, "base_image_sha256": file_sha256(base_front), **ref_fields, **extra})
+        if draft is None:
+            return None
+        staged = Path(staging) / f"tpose_{signature}.png"
+        record = view_composite.compose(base_front, Path(draft), staged, rule="outfit", base_alpha=True)
+        if not record["ok"]:
+            raise OutfitError(view_composite.refusal("Dressed front", [record]))
+        meta = _ref_sidecar(Path(draft))
+        meta.update({"dressed": True, "base_image_sha256": file_sha256(base_front), **ref_fields, **extra})
+        staged.with_suffix(".json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        return _publish_staged(staged, refs_dir / f"tpose_{signature}", record, key="edit_composite")
 
 
 def _render_views(character_name: str, *, signature: str, pieces: Optional[Dict[str, str]], items: Optional[list],
@@ -4043,12 +4090,11 @@ def _render_views(character_name: str, *, signature: str, pieces: Optional[Dict[
     ``hair_edit``: ``dress_prompt``'s (the shape's hair when it is not the
     plain body's; a shape's own views put it on). ``reference`` (Ruling
     A74b, an outfit's own picture: ``{path, sha256}``, ``path`` None when it
-    is gone): the dressed front is an EDIT of that picture
-    (``_reference_front``) instead of the shape's front, and every view
+    is gone) is the SECOND picture of every view's edit (Ruling A125,
+    superseding A74b — ``_edit_front`` / ``render_view_edit``: each view is
+    an edit of the shape's view of the same direction), and every view
     written records ``outfit_reference_sha256``."""
     import shutil
-    from app.core import expression_regen
-    from app.core.garment_images import square_reference
     from app.core.model_refs import _tpose_size, get_model_refs_dir, mesh_items_token, mesh_variant
     refs_dir = get_model_refs_dir(character_name)
     results: Dict[str, Optional[str]] = {}
@@ -4088,58 +4134,18 @@ def _render_views(character_name: str, *, signature: str, pieces: Optional[Dict[
                 for v, path in reused.items():
                     results[_kind(v)] = str(path)
                 todo = [v for v in todo if v not in reused]
-            if "front" in todo and reference is not None:
+            if "front" in todo:
                 try:
-                    path = _reference_front(character_name, signature=signature, reference=reference,
-                                            refs_dir=refs_dir, pieces=pieces, items=items, profile=profile,
-                                            text=texts.get("front", ""), bald=bald, hair=hair, on=on,
-                                            registration=registrations["front"],
-                                            extra={**mesh_extra, "texture_signature": tsig,
-                                                   "dress_text": texts.get("front", "")},
-                                            load_kwargs=load_kwargs)
-                    if path is None:
-                        errors.append("Dressed front edit of the outfit's full-body reference failed")
-                except Exception as e:  # noqa: BLE001 — one view never kills the pass
-                    if raise_load and _is_load(e):
-                        interrupted = True
-                        raise
-                    path = None
-                    errors.append(str(e) if isinstance(e, OutfitError)
-                                  else f"Dressed front edit of the outfit's full-body reference failed: {e}")
-                    logger.warning("Dressed %s front (%s) from its reference failed: %s", character_name, signature, e)
-                results["tpose"] = str(path) if path else None
-            elif "front" in todo:
-                prompt, negative = dress_prompt(character_name, "front", pieces=pieces, items=items,
-                                                profile=profile, text=texts.get("front", ""), bald=bald,
-                                                hair=hair, hair_edit=hair_edit)
-                try:
-                    # The base front centred on a square canvas, the edit
-                    # cut back to its frame (ruling F14 g: a narrow source
-                    # gets re-framed by the edit model).
-                    with square_reference(registrations["front"], refs_dir) as (reference, side, offset,
-                                                                                 source_size):
-                        path = expression_regen.render_character_image(
-                            character_name,
-                            output_stem=refs_dir / f"tpose_{signature}",
-                            equipped_pieces=dict(pieces or {}), equipped_items=list(items or []),
-                            pose_prompt="", expression_prompt="",
-                            bare_prompt=prompt, extra_negative=negative,
-                            # No style: the edit instruction is the whole
-                            # prompt (review 2026-11-11 — the tpose style
-                            # stood in front of "Keep the image exactly as
-                            # it is" and put the outfit at word 110).
-                            image_use_case=DRESS_USE_CASE,
-                            occasion="outfit_front",
-                            override_width=side, override_height=side,
-                            crop_back_to=(side, offset, source_size),
-                            apply_state_modifiers=False,
-                            mesh_input_profile=profile,
-                            reference_image=reference,
-                            sidecar_extra={"base_signature": on, "dressed": True,
-                                           "base_image_sha256": file_sha256(registrations["front"]),
-                                           **mesh_extra, "texture_signature": tsig,
-                                           "dress_text": texts.get("front", "")},
-                            character_loras=True, **load_kwargs)
+                    path = _edit_front(
+                        character_name, signature=signature, refs_dir=refs_dir, base_front=registrations["front"],
+                        prompt=dress_prompt(character_name, "front", pieces=pieces, items=items, profile=profile,
+                                            text=texts.get("front", ""), bald=bald, hair=hair, hair_edit=hair_edit),
+                        reference=reference,
+                        common={"equipped_pieces": dict(pieces or {}), "equipped_items": list(items or []),
+                                "pose_prompt": "", "expression_prompt": "", "apply_state_modifiers": False,
+                                "mesh_input_profile": profile, "character_loras": True, **load_kwargs},
+                        extra={"base_signature": on, **mesh_extra, "texture_signature": tsig,
+                               "dress_text": texts.get("front", "")})
                     if path is None:
                         errors.append("Dressed front edit failed")
                 except Exception as e:  # noqa: BLE001 — one view never kills the pass
@@ -4147,7 +4153,7 @@ def _render_views(character_name: str, *, signature: str, pieces: Optional[Dict[
                         interrupted = True
                         raise
                     path = None
-                    errors.append(f"Dressed front edit failed: {e}")
+                    errors.append(str(e) if isinstance(e, OutfitError) else f"Dressed front edit failed: {e}")
                     logger.warning("Dressed %s front (%s) failed: %s", character_name, signature, e)
                 results["tpose"] = str(path) if path else None
             for v in (v for v in DRAFT_VIEWS if v in todo):
@@ -4163,7 +4169,10 @@ def _render_views(character_name: str, *, signature: str, pieces: Optional[Dict[
                             profile=profile, front=front, base_views=registrations, refs_dir=refs_dir,
                             size=(width, height), mesh_items=_ref_sidecar(front).get("mesh_items") or None,
                             texture={"texture_signature": tsig, "dress_text": texts.get(v, ""), **ref_extra},
-                            reuse_draft=not force, hair=hair, **load_kwargs)
+                            reuse_draft=not force, hair=hair, bald=bald, hair_edit=hair_edit,
+                            text=texts.get(v, ""),
+                            reference=Path(reference["path"]) if reference and reference.get("path") else None,
+                            **load_kwargs)
                         if warning:
                             logger.warning("Dressed %s %s (%s): %s", v, character_name, signature, warning)
                     except Exception as e:  # noqa: BLE001 — the front stays

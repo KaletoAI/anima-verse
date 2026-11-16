@@ -361,6 +361,24 @@ def apply_backend_variant(input_data: Dict[str, Any], backend: Any) -> Dict[str,
     return input_data
 
 
+def _with_extra_reference_prompt(prompt: str, input_data: Dict[str, Any], pv: Any,
+                                 reference_images: Dict[str, Any], backend: Any) -> str:
+    """``prompt`` with the payload's ``extra_reference_prompt`` appended when
+    every requested extra reference (``extra_reference_images``, Ruling
+    A125) sits in a slot of THIS backend; else unchanged — a backend that
+    takes one picture renders the edit from it and the text alone."""
+    wanted = list(getattr(pv, "extra_ref_images", None) or [])
+    sentence = str(input_data.get("extra_reference_prompt") or "").strip()
+    if not input_data.get("extra_reference_images"):
+        return prompt
+    slotted = {str(v) for v in (reference_images or {}).values()}
+    if wanted and len(wanted) == len(input_data["extra_reference_images"]) and all(w in slotted for w in wanted):
+        return f"{prompt} {sentence}".strip() if sentence else prompt
+    logger.info("%s: the extra reference picture(s) not slotted (%s slots) — the edit goes without them",
+                getattr(backend, "name", "?"), getattr(backend, "ref_slot_count", 0))
+    return prompt
+
+
 @dataclass
 class GenerationResult:
     """One finished string-path generation (``ImageService.generate_on_backend``).
@@ -2414,6 +2432,12 @@ class ImageService:
             # profile image, an outfit's front from its reference — Ruling
             # A74b): a routed backend that cannot slot it is not applicable.
             "require_reference": bool(ctx.get("require_reference", False)),
+            # Further pictures of that edit (Ruling A125: an outfit's reference
+            # beside the base view), slotted right after the reference when the
+            # backend takes them; the prompt sentence naming them is appended
+            # only on a backend that slotted every one.
+            "extra_reference_images": [str(p) for p in (ctx.get("extra_reference_images") or []) if p],
+            "extra_reference_prompt": str(ctx.get("extra_reference_prompt") or ""),
             "to_avatar_gallery": ctx.get("to_avatar_gallery", False),
             "gallery_character": ctx.get("gallery_character", ""),
             "image_use_case": ctx.get("image_use_case", ""),
@@ -2827,6 +2851,12 @@ class ImageService:
                             ref = builder._resolve_person_ref_image(p, profile_only=_profile_only)
                         if ref:
                             pv.ref_images[idx] = ref
+                    if _ref_override:
+                        from app.core.model_refs import checked_reference_override
+                        for _extra in input_data.get("extra_reference_images") or []:
+                            _checked = checked_reference_override(character_name, str(_extra))
+                            if _checked:
+                                pv.extra_ref_images.append(_checked)
                 # profile_only = variant/outfit portrait: no location (neither
                 # location prompt nor ref_image_room). Otherwise, with FLUX_BG,
                 # the location image would push out the profile reference slot.
@@ -2947,6 +2977,8 @@ class ImageService:
                 face_refs = builder.resolve_reference_slots(
                     pv, max_slots=backend.ref_slot_count)
                 params["reference_images"] = face_refs["reference_images"]
+                enhanced_prompt = _with_extra_reference_prompt(
+                    enhanced_prompt, input_data, pv, params["reference_images"], backend)
             else:
                 logger.info("No person detected -> no reference images")
                 face_refs = {"reference_images": {}, "has_reference_slots": False}

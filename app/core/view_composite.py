@@ -753,8 +753,8 @@ def composite_arrays(base: np.ndarray, draft: np.ndarray, *, rule: str = "outfit
     return out, record
 
 
-def _composite(base: np.ndarray, draft: np.ndarray, rule: str, *, take_head: bool = False
-               ) -> Tuple[np.ndarray, Dict[str, Any], np.ndarray]:
+def _composite(base: np.ndarray, draft: np.ndarray, rule: str, *, take_head: bool = False,
+               base_alpha: bool = False) -> Tuple[np.ndarray, Dict[str, Any], np.ndarray]:
     """``composite_arrays`` plus the support mask (module docstring; all
     False when the result is the base).
 
@@ -766,7 +766,12 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str, *, take_head: boo
     and the base's figure goes where the draft has none (no hair left on a
     bald head). Never EMPTY (the head is put on). The record gains
     ``head`` = the zone's rows and the seam ΔE along its neck line
-    (``neck_seam_de``); without it nothing changes."""
+    (``neck_seam_de``); without it nothing changes.
+
+    ``base_alpha`` (Ruling A125, an edit of the base view): the composite's
+    alpha is the base's everywhere — a garment never adds figure, the
+    silhouette (and so the registration on the mesh) is the base's by
+    construction; the record says ``alpha: "base"``."""
     from scipy import ndimage as ndi
     started = time.perf_counter()
     if rule not in RULES:
@@ -814,6 +819,9 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str, *, take_head: boo
         flare = np.isin(fl, touch[touch > 0])
     matched, ring_offset = _seam_colour_match(base, dw, mask, skin_b, skin_d)
     out = _blend(base, matched, mask, aligned, flare, clear=zone)
+    if base_alpha:
+        out[..., 3] = base[..., 3]
+        record["alpha"] = "base"
     # The registered draft as the composite sees it: the warped draft, the flare unwarped.
     registered = np.where(flare[..., None], aligned, dw)
     cm = figure_mask(out)
@@ -907,18 +915,20 @@ def to_image(rgba: np.ndarray, background: Optional[Tuple[int, int, int]] = None
 
 def compose(base_view: Path, draft: Path, target: Path, *, rule: str = "outfit",
             background: Optional[Tuple[int, int, int]] = None,
-            mask_target: Optional[Path] = None, head: bool = False) -> Dict[str, Any]:
+            mask_target: Optional[Path] = None, head: bool = False, base_alpha: bool = False) -> Dict[str, Any]:
     """Composite ``draft`` onto ``base_view`` and write the result to
     ``target`` (PNG, in the base view's frame; RGBA, or flattened onto
     ``background``) — written whether or not it passes, the caller stages it;
     ``rule``: "outfit" (a dressed view) or "piece" (a worn back).
     ``mask_target``: where the support goes (``write_support``).
     ``head``: the draft's head comes too (Ruling A21, ``_composite``).
+    ``base_alpha``: the alpha is the base's everywhere (Ruling A125).
     Returns the record (``composite_arrays``). ``CompositeError`` on the
     event loop / a GPU-queue worker (``_guard_thread``) or for a base view
     without a figure."""
     _guard_thread()
-    out, record, support = _composite(load_rgba(base_view), load_rgba(draft), rule, take_head=head)
+    out, record, support = _composite(load_rgba(base_view), load_rgba(draft), rule, take_head=head,
+                                      base_alpha=base_alpha)
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f".{target.name}.tmp")

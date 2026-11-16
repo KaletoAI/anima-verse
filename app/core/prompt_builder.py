@@ -65,6 +65,10 @@ class PromptVariables:
     prompt_persons: Dict[int, str] = field(default_factory=dict)    # {1: "Woman1, blonde hair..."}
     prompt_outfits: Dict[int, str] = field(default_factory=dict)    # {1: "Woman1 is wearing red dress"}
     ref_images: Dict[int, str] = field(default_factory=dict)        # {1: "/path/to/image.png"}
+    # Further pictures an edit of the creating character's reference names
+    # (Ruling A125: the outfit's reference beside the base view) — planned
+    # right after that character, before room, other people and items.
+    extra_ref_images: List[str] = field(default_factory=list)
 
     # Items selected as props in the room-items panel
     # items: [{"id": "...", "name": "chair", "description": "...", "image": "/path"}]
@@ -1323,6 +1327,13 @@ class PromptBuilder:
                 if entry:
                     plan.append(entry)
                 break
+
+        # Prio 1b: further pictures of the edit (Ruling A125), only behind
+        # the creating character's own reference.
+        if plan and plan[0]["kind"] == "person" and plan[0].get("is_agent"):
+            for extra in variables.extra_ref_images or []:
+                if extra and Path(extra).exists():
+                    plan.append({"kind": "extra", "path": extra, "name": Path(extra).name})
 
         # Prio 2: Raum / Location
         if variables.ref_image_room and Path(variables.ref_image_room).exists():

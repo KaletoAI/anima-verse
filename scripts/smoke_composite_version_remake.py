@@ -11,7 +11,7 @@ Usage:
 Runs without a server, a hub or a GPU: a temp world (``paths.init`` first, STORAGE_DIR / INSTANCE_DIR temp
 dirs). The synthetic figures are those of ``scripts/smoke_bald_back_check.py`` (haired plain views, a haired
 dressed front, a haired dressed back as the draft — the view check passes on the head). Stubbed:
-``base_body.render_draft`` (copies the draft, records the view), ``draft_prompt``, ``view_composite.compose``
+``base_body.render_view_edit`` (copies the draft, records the view), ``draft_prompt``, ``view_composite.compose``
 (copies the draft, an ok record of ``VERSION``; counted) and ``base_body_gates.noise_gate`` (ok). The view
 check, the framing gate, ``stored_draft``, ``composite_outdated`` and ``_dress_view`` are real; ``refs_dir`` is the
 character's ``model_refs`` (where ``draft_path`` looks).
@@ -103,14 +103,14 @@ def main() -> int:
 
         renders, composes = [], []
 
-        def render_draft(character_name, view, *, stem, front, refs_dir, prompt, profile, common, sidecar_extra):
+        def render_draft(character_name, view, *, stem, refs_dir, prompt, common, sidecar_extra, **kw):
             renders.append(view)
             path = Path(str(stem) + ".png")
             path.write_bytes(draft_img.read_bytes())
             path.with_suffix(".json").write_text(json.dumps(sidecar_extra))
             return path
 
-        def compose(base_view, draft_file, target, *, rule="outfit", background=None, mask_target=None, head=False):
+        def compose(base_view, draft_file, target, *, rule="outfit", background=None, mask_target=None, head=False, base_alpha=False):
             composes.append(Path(draft_file).name)
             Path(target).write_bytes(Path(draft_file).read_bytes())
             rec = {"version": vc.VERSION, "rule": rule, "ok": True, "iou": 0.99,
@@ -118,9 +118,9 @@ def main() -> int:
             rec["reasons"] = vc.check(rec)
             return rec
 
-        real = (base_body.render_draft, base_body.draft_prompt, vc.compose, base_body_gates.noise_gate,
+        real = (base_body.render_view_edit, base_body.draft_prompt, vc.compose, base_body_gates.noise_gate,
                 base_body.shape_view_shas)
-        base_body.render_draft = render_draft
+        base_body.render_view_edit = render_draft
         base_body.draft_prompt = lambda *a, **k: ("p", "n")
         vc.compose = compose
         base_body_gates.noise_gate = lambda *a, **k: {"ok": True, "score": 1.0}
@@ -172,7 +172,7 @@ def main() -> int:
             check("version 3: None (re-composited first)",
                   base_body.shape_view("Demo", "back", "obshape01", "bsig"), None)
         finally:
-            (base_body.render_draft, base_body.draft_prompt, vc.compose, base_body_gates.noise_gate,
+            (base_body.render_view_edit, base_body.draft_prompt, vc.compose, base_body_gates.noise_gate,
              base_body.shape_view_shas) = real
 
         print(f"[7] fails on the old code ({BASELINE})")

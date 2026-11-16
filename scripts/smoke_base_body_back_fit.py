@@ -113,7 +113,7 @@ def main() -> int:
         check(f"{occ} mesh input", occ in occasions.MESH_INPUT_OCCASIONS, True)
     check("ref slot", [o for o in want if occasions.OCCASIONS[o].get("needs_ref_slot")], [])
     hints = {o: occasions.OCCASIONS[o].get("hint") or "" for o in want}
-    check("hints", ("non-turbo" in hints["base_front"], "only its clothing" in hints["outfit_back_draft"],
+    check("hints", ("non-turbo" in hints["base_front"], "only changes the clothing" in hints["outfit_back_draft"],
                     hints["base_view"], hints["outfit_front"]), (True, True, "", ""))
     check("no fit occasion", ("outfit_back" in occasions.OCCASIONS, "outfit_back" in occasions.MESH_INPUT_OCCASIONS),
           (False, False))

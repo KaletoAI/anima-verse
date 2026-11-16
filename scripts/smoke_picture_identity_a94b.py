@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Ruling A94b: (1) ``stored_base_haired`` reads the bald head where it stands since the prompt review of
-2026-11-11 — the front's ``final_prompt`` (the character block) — with ``prompt`` for older sidecars; (2) an
-outfit's dressed front made from its own reference picture (``outfit_edit_prompt``) keeps the face, hair and
-facial hair of the picture as the base front does (Ruling A94) instead of re-describing the worn hair.
+2026-11-11 — the front's ``final_prompt`` (the character block) — with ``prompt`` for older sidecars; (2) was
+the outfit front made from its own reference picture — removed by Ruling A125.
 
 Usage:
     ./.venv/bin/python scripts/smoke_picture_identity_a94b.py
@@ -17,8 +16,7 @@ Fixtures (as smoke_picture_identity_a94; template human-roleplay, profile image 
   ``Deck``       female, hair slot {long, black}, hairstyle mode "hairdeck" (bald plain body), no facial hair.
   ``Rewritten``  male, no facial hair, hairstyle "a shaved undercut" in mode "body" (not the Appearance's hair).
 
-Hand-derived (BALD = "completely bald with a smooth bare scalp", ORB = OUTFIT_REFERENCE_BODY = "wearing exactly the
-clothing of the person in the picture and nothing else", POSE_NEG as base_body):
+Hand-derived (BALD = "completely bald with a smooth bare scalp"):
 
 [1] stored_base_haired(Deck, bsig) with a front file tpose_<bsig>.png and the sidecar
       {final_prompt: "change … to " + BALD + ", the same face …", prompt: <A-pose text, no bald words>}  -> False
@@ -28,21 +26,10 @@ clothing of the person in the picture and nothing else", POSE_NEG as base_body):
       an older sidecar without final_prompt, prompt "…, completely bald, smooth clean-shaven head, …"   -> False;
       the same without the bald words                                                                  -> True;
       no front file                                                                                     -> None.
-[2] outfit_edit_prompt(name, text="a red dress", bald=…, hair=…) -> (block, prompt, negative):
-      Beard, hair None, bald False: block "the same face, hair and facial hair as the person in the picture, "
-        + ORB (no "auburn"); prompt = base_prompt(Beard, front)[0] (the A-pose with the hair clause, unchanged);
-        negative = dress_negative("a red dress", keep_hair=True) + ", " + POSE_NEG (unchanged: haired).
-      Beard, bald True (under an own hair mesh): block BALD + ", the same face and facial hair as the person in the
-        picture, " + ORB; prompt = the A-pose text; negative = dress_negative(…, keep_hair=True) + ", " +
-        FACIAL_HAIR_SAFE_HAIR_NEGATIVE + ", " + POSE_NEG — no bare "hair" clause anywhere.
-      Beard, hair "long red hair" (another hairstyle, D4): block "long red hair, the same face and facial hair as
-        the person in the picture, " + ORB.
-      Deck, hair None: block BALD + ", the same face as the person in the picture, " + ORB; prompt and negative
-        = the old module's, byte for byte. Deck, bald True: negative = the old module's (HAIR_NEGATIVE kept).
-      Rewritten: block "a shaved undercut, the same face as the person in the picture, " + ORB.
+[2] (Removed by Ruling A125: an outfit's dressed front is no longer made from its reference picture —
+    ``outfit_edit_prompt`` is gone; the edit of the base view is ``smoke_dressed_edit_a125.py``.)
 [3] Fails on the old code (commit OLD = 7df28407f, Ruling A94, before A94b — never HEAD): its
-    stored_base_haired reads the first [1] sidecar as True; its outfit_edit_prompt(Beard) block is
-    "short auburn hair, " + ORB.
+    stored_base_haired reads the first [1] sidecar as True.
 [4] Outbound attempts: 0.
 """
 import json
@@ -177,36 +164,8 @@ def main() -> int:
             if old_first is None:
                 old_first = old.stored_base_haired("Deck", bsig)
 
-        print("[2] the outfit's dressed front from its own picture")
-        text = "a red dress"
-        pose_neg = base_body.POSE_NEGATIVE
-        block, prompt, negative = base_body.outfit_edit_prompt("Beard", text=text, bald=False, hair=None)
-        check("Beard block", block, "the same face, hair and facial hair as the person in the picture, " + ORB)
-        check("Beard prompt", prompt, base_body.base_prompt("Beard", "front")[0])
-        check("Beard negative", negative, base_body.dress_negative(text, keep_hair=True) + ", " + pose_neg)
-        block, prompt, negative = base_body.outfit_edit_prompt("Beard", text=text, bald=True, hair=None)
-        check("Beard bald block", block, BALD + ", the same face and facial hair as the person in the picture, " + ORB)
-        from app.core.model_refs import BASE_FRONT_POSE_PROMPT
-        check("Beard bald prompt", prompt, BASE_FRONT_POSE_PROMPT)
-        check("Beard bald negative", negative, base_body.dress_negative(text, keep_hair=True) + ", "
-              + base_body.FACIAL_HAIR_SAFE_HAIR_NEGATIVE + ", " + pose_neg)
-        check("Beard bald negative: no bare 'hair'", "hair" in [c.strip() for c in negative.split(",")], False)
-        block = base_body.outfit_edit_prompt("Beard", text=text, bald=False, hair="long red hair")[0]
-        check("Beard other hairstyle", block,
-              "long red hair, the same face and facial hair as the person in the picture, " + ORB)
-        new = base_body.outfit_edit_prompt("Deck", text=text, bald=False, hair=None)
-        was = old.outfit_edit_prompt("Deck", text=text, bald=False, hair=None)
-        check("Deck block", new[0], BALD + ", the same face as the person in the picture, " + ORB)
-        check("Deck prompt and negative = old", new[1:], was[1:])
-        check("Deck bald negative = old", base_body.outfit_edit_prompt("Deck", text=text, bald=True, hair=None)[2],
-              old.outfit_edit_prompt("Deck", text=text, bald=True, hair=None)[2])
-        check("Rewritten block", base_body.outfit_edit_prompt("Rewritten", text=text, bald=False, hair=None)[0],
-              "a shaved undercut, the same face as the person in the picture, " + ORB)
-
         print("[3] fails on the old code")
         check("old stored_base_haired reads a bald front as haired", old_first, True)
-        check("old outfit block re-describes the hair",
-              old.outfit_edit_prompt("Beard", text=text, bald=False, hair=None)[0], "short auburn hair, " + ORB)
 
     print("[4] outbound")
     check("outbound attempts", len(OUTBOUND), 0)

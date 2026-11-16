@@ -20,12 +20,12 @@ Frontansicht erzeugt werden"):
 
 (a) no record + a source (the profile image): auto_due True, auto_jobs(fig) = GENERATE_JOBS = 1, build_note
     outfit_auto True; generate_dressed_images(front, force) -> the stand-in runs ONCE, then ONE render: occasion
-    "outfit_front", use case "base_front_edit" (the A74b edit of the picture), reference a frozen copy named
-    Demo_2.png, sidecar outfit_reference_sha256 = sha256(Demo_2.png). Afterwards build_note outfit True,
-    outfit_auto False.
-(b) the record exists: the same call -> the stand-in is NOT called (still 1), one render from Demo_2.png.
+    "outfit_front", use case "outfit_edit" — Ruling A125: an edit of the base front tpose_<bsig>.png (input 1) with
+    a frozen copy named Demo_2.png as the SECOND picture, sidecar outfit_reference_sha256 = sha256(Demo_2.png)
+    (``view_composite.compose`` stubbed: copies the edit). Afterwards build_note outfit True, outfit_auto False.
+(b) the record exists: the same call -> the stand-in is NOT called (still 1), one render with Demo_2.png second.
 (c) record cleared, the stand-in raises RuntimeError("boom"): one attempt, then ONE render on the old path
-    (occasion "outfit_front", use case DRESS_USE_CASE, reference = the base front on grey — NOT Demo_2.png, no
+    (occasion "outfit_front", use case DRESS_USE_CASE, reference = the base front on grey, no second picture, no
     outfit_reference_sha256 in the sidecar); auto_note = AUTO_FAILED with error "boom" = "Full-body reference
     failed: boom — front made from the base front"; build_note outfit_failed the same; outfit_failure(Demo, osig)
     "" (the pass is no failure — the build continues).
@@ -193,6 +193,17 @@ def main() -> int:
         fbr.generate_outfit = stand_in
         step2 = figure_build.Step("texture", "Texture: views 2", 2)
 
+        from app.core import view_composite as _vc
+
+        def fake_compose(base_view, draft_file, target, *, rule="outfit", **_kw):
+            Path(target).write_bytes(Path(draft_file).read_bytes())
+            return {"version": _vc.VERSION, "rule": rule, "ok": True, "iou": 1.0,
+                    "coverage": {"score": 0.9, "region": 0.2}, "mask_share": 0.2, "reasons": []}
+        _vc.compose = fake_compose
+
+        def second(call):
+            return [Path(p).name for p in call.get("extra_reference_images") or []]
+
         def dress_front():
             CALLS.clear()
             base_body.generate_dressed_images("Demo", pieces={}, items=[], signature=osig, force=True, view="front")
@@ -211,9 +222,9 @@ def main() -> int:
         check("generated once", (stand["attempts"], stand["made"]), (1, 1))
         one = calls[0] if len(calls) == 1 else {}
         check("one render from the new record",
-              (len(calls), one.get("occasion"), one.get("image_use_case"), one.get("ref_name"),
+              (len(calls), one.get("occasion"), one.get("image_use_case"), one.get("ref_name"), second(one),
                (one.get("sidecar_extra") or {}).get("outfit_reference_sha256")),
-              (1, "outfit_front", "base_front_edit", "Demo_2.png", sha(images / "Demo_2.png")))
+              (1, "outfit_front", "outfit_edit", f"tpose_{bsig}.png", ["Demo_2.png"], sha(images / "Demo_2.png")))
         stored_meta = json.loads((refs / f"tpose_{osig}.json").read_text())
         check("stored sidecar", stored_meta.get("outfit_reference_sha256"), sha(images / "Demo_2.png"))
         note = fbr.build_note("Demo")
@@ -224,8 +235,8 @@ def main() -> int:
               figure_build._with_reference("Demo", step2, fig(), osig, get_character_profile("Demo"), True).jobs, 2)
         calls = dress_front()
         check("not called", stand["attempts"], 1)
-        check("render from the record", [(c.get("image_use_case"), c.get("ref_name")) for c in calls],
-              [("base_front_edit", "Demo_2.png")])
+        check("render from the record", [(c.get("image_use_case"), second(c)) for c in calls],
+              [("outfit_edit", ["Demo_2.png"])])
 
         print("(c) the generation fails")
         outfit_references.clear_reference("Demo", key)
@@ -233,7 +244,7 @@ def main() -> int:
         calls = dress_front()
         check("one attempt", stand["attempts"], 2)
         one = calls[0] if len(calls) == 1 else {}
-        check("old path", (len(calls), one.get("occasion"), one.get("image_use_case"), one.get("ref_name") == "Demo_2.png",
+        check("old path", (len(calls), one.get("occasion"), one.get("image_use_case"), bool(second(one)),
                            "outfit_reference_sha256" in (one.get("sidecar_extra") or {})),
               (1, "outfit_front", base_body.DRESS_USE_CASE, False, False))
         failed = "Full-body reference failed: boom — front made from the base front"

@@ -60,10 +60,13 @@ the base front's framing/light tail + the pose text; no gender, age, height or b
     "or" + sha256('{"open":["b"],"pieces":["a","b"]}')[:10] (sorted ids; an open id not worn is dropped).
       set_reference(Demo, "Demo_2.png") (a second gallery picture): saves only — 0 renders, figure_build.start /
       request not called; references_of(Demo) holds the key with sha256(Demo_2.png).
-      generate_dressed_images(front, force): ONE render, occasion "outfit_front", use case "base_front_edit",
-      reference a copy named Demo_2.png in model_refs/.editref_*, require_reference True, style_character
-      BALD_HEAD + ", the same face as the person in the picture, " + OUTFIT_REFERENCE_BODY (Ruling A94b); sidecar outfit_reference_sha256 = sha256(Demo_2.png),
-      base_signature BSIG, base_image_sha256 = sha256 of the base front.
+      generate_dressed_images(front, force): ONE render (Ruling A125, superseding A74b's outfit part), occasion
+      "outfit_front", use case "outfit_edit", input 1 = a copy of the BASE front tpose_<BSIG>.png in
+      model_refs/.viewref_*, require_reference True, input 2 (extra_reference_images) = one copy named Demo_2.png
+      in model_refs/.editref_*, with EDIT_SECOND_PICTURE (front: no "seen" words); sidecar
+      outfit_reference_sha256 = sha256(Demo_2.png), base_signature BSIG, base_image_sha256 = sha256 of the base
+      front. ``view_composite.compose`` is stubbed here (copies the edit, record ok; asserted base_alpha=True);
+      the real composite is smoke_dressed_edit_a125.py.
       dressed_image(front) is that file; after clear_reference it is None (due: "made from a reference image
       that was cleared"); after set_reference(Demo_3.png) None again (another picture).
       Without a reference the dressed front is the old edit of the body's front (use case "outfit_edit").
@@ -403,16 +406,27 @@ def main() -> int:
                                          variant="", items=[], profile=bare_profile)
         check("painted: this outfit's reference changes the key", (with_ref != without, without ==
               base_body.texture_signature({"version": 1, "dress_text": {"front": "a red dress"}})), (True, True))
+        from app.core import view_composite as _vc
+        composed = []
+
+        def fake_compose(base_view, draft_file, target, *, rule="outfit", base_alpha=False, **_kw):
+            composed.append((Path(base_view).name, base_alpha))
+            Path(target).write_bytes(Path(draft_file).read_bytes())
+            return {"version": _vc.VERSION, "rule": rule, "ok": True, "iou": 1.0, "alpha": "base",
+                    "coverage": {"score": 0.9, "region": 0.2}, "mask_share": 0.2, "reasons": []}
+        _real_compose, _vc.compose = _vc.compose, fake_compose
         base_body.generate_dressed_images("Demo", pieces={}, items=[], signature=osig, force=True, view="front")
         one = CALLS[0] if len(CALLS) == 1 else {}
+        check("composited onto the base front, alpha the base's", composed, [(f"tpose_{bsig}.png", True)])
+        extras = [Path(p) for p in one.get("extra_reference_images") or []]
         check("one render", len(CALLS), 1)
-        check("outfit front from its picture",
+        check("outfit front: an edit of the base front, its picture second",
               (one.get("occasion"), one.get("image_use_case"), one.get("ref_name"),
-               str(one.get("ref_dir") or "").startswith(".editref_"), bool(one.get("require_reference")),
-               one.get("style_character")),
-              ("outfit_front", "base_front_edit", "Demo_2.png", True, True,
-               base_body.BALD_HEAD + ", the same face as the person in the picture, "
-               + base_body.OUTFIT_REFERENCE_BODY))
+               str(one.get("ref_dir") or "").startswith(".viewref_"), bool(one.get("require_reference")),
+               [p.name for p in extras], all(p.parent.name.startswith(".editref_") for p in extras),
+               one.get("extra_reference_prompt")),
+              ("outfit_front", "outfit_edit", f"tpose_{bsig}.png", True, True, ["Demo_2.png"], True,
+               base_body.EDIT_SECOND_PICTURE.format(seen="")))
         extra = one.get("sidecar_extra") or {}
         check("outfit front sidecar",
               (extra.get("outfit_reference_sha256"), extra.get("base_signature"), extra.get("base_image_sha256")),
@@ -433,8 +447,10 @@ def main() -> int:
             base_body.generate_dressed_images("Demo", pieces={}, items=[], signature=osig, force=True, view="front")
         finally:
             _fbr.auto_due = _auto_due
-        check("without a reference: the old edit", [(c.get("occasion"), c.get("image_use_case")) for c in CALLS],
-              [("outfit_front", base_body.DRESS_USE_CASE)])
+        check("without a reference: the same edit, no second picture",
+              [(c.get("occasion"), c.get("image_use_case"), list(c.get("extra_reference_images") or []))
+               for c in CALLS], [("outfit_front", base_body.DRESS_USE_CASE, [])])
+        _vc.compose = _real_compose
 
         built = figure.Figure(signature=osig, bsig=bsig, shape=bsig, texture="texplain", in_body=(), painted=(),
                               own=())

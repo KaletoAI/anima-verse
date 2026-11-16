@@ -998,7 +998,9 @@ def render_character_image(character_name: str, *, output_stem: Path,
                            crop_back_to: Optional[Tuple[Any, Tuple[int, int], Tuple[int, int]]] = None,
                            name_outfit: bool = True,
                            require_reference: bool = False,
-                           backend_variants: Optional[Dict[str, Any]] = None
+                           backend_variants: Optional[Dict[str, Any]] = None,
+                           extra_reference_images: Iterable[Path] = (),
+                           extra_reference_prompt: str = ""
                            ) -> Optional[Path]:
     """Render explicit content to a caller-owned stem, without expression policy.
 
@@ -1040,6 +1042,11 @@ def render_character_image(character_name: str, *, output_stem: Path,
     ``reference_image`` — a routed backend that does not slot it is not
     applicable (``BackendNotApplicableError``: the routing tries the next
     chain entry, no cooldown); the render never falls back to the text alone.
+    ``extra_reference_images`` / ``extra_reference_prompt`` (Ruling A125):
+    further pictures of an edit of ``reference_image`` (input 1) — input 2..
+    on a backend with the slots, with the sentence naming them appended to
+    the prompt there; a backend with one slot gets ``reference_image`` and
+    the text alone.
     ``name_outfit=False`` (Ruling A29): the render only CHANGES THE VIEW of a
     ``reference_image`` that already shows the figure dressed (the T-pose
     back/side views of ``model_refs``) — the prompt names no clothing: the
@@ -1268,6 +1275,10 @@ def render_character_image(character_name: str, *, output_stem: Path,
         payload["reference_image_override"] = str(reference_image)
         if require_reference:
             payload["require_reference"] = True
+        extras = [str(p) for p in extra_reference_images or () if p]
+        if extras:
+            payload["extra_reference_images"] = extras
+            payload["extra_reference_prompt"] = extra_reference_prompt
 
     if outfit_w:
         payload["override_width"] = outfit_w
