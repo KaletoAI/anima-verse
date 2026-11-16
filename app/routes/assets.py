@@ -290,6 +290,12 @@ async def post_animation_clip_orient(library: str, rel: str, request: Request,
     (503 when the host has none), answers the touched clips plus the run time.
     The clip's finale clips get the same edit (``orient_clip``'s
     ``with_finales``) and are among the touched clips.
+
+    ``checked`` ``{prop, place, dyaw, dpos}`` (Ruling A110 D3) is the place
+    check of the Library preview with every figure green: stored as the
+    sidecar's ``orientation.checked`` (with ``at``) by this edit, alone when
+    every dial is 0; a check that is not green is a 400. Every bake without
+    it clears the old one.
     """
     try:
         body = await request.json()
@@ -329,6 +335,19 @@ async def post_animation_clip_orient(library: str, rel: str, request: Request,
         horizontal = validate_clip_shift(body.get("shift_cm"))
     except ClipLibraryError as e:
         raise _clip_edit_error(e)
+    checked = None
+    if body.get("checked") is not None:
+        from app.core.animation_clips import mark_clip_checked, validate_orientation_check
+        try:
+            checked = validate_orientation_check(body["checked"])
+        except ClipLibraryError as e:
+            raise _clip_edit_error(e)
+        if not any(abs(v) > 1e-9 for v in (*dials.values(), *(shift or ()), *role_moves, *horizontal)):
+            # Nothing to bake: the admin saved a place check that already reads green.
+            try:
+                return {"clips": mark_clip_checked(library, rel, checked), "seconds": 0}
+            except ClipLibraryError as e:
+                raise _clip_edit_error(e)
     if not any(abs(v) > 1e-9 for v in (*dials.values(), *(shift or ()), *role_moves, *horizontal)):
         raise HTTPException(
             status_code=400,
@@ -339,7 +358,7 @@ async def post_animation_clip_orient(library: str, rel: str, request: Request,
     started = time.monotonic()
     try:
         clips = orient_clip(library, rel, **dials, partner_shift_cm=shift,
-                            role_shift_cm=role_shift, shift_cm=horizontal)
+                            role_shift_cm=role_shift, shift_cm=horizontal, checked=checked)
     except ClipLibraryError as e:
         raise _clip_edit_error(e)
     return {"clips": clips, "seconds": round(time.monotonic() - started, 2)}

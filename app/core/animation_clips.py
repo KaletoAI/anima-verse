@@ -1320,7 +1320,12 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         # offsets are baked; the whole-clip shift is applied at placement.
         "orientation": {k: geometry.get(k) for k in
                         ORIENT_ANGLES + ("floor_shift_cm", "partner_shift_cm", "role_shift_cm")
-                        } | {"shift_cm": horizontal},
+                        } | {"shift_cm": horizontal,
+                             # D3 (Ruling A110): the place check the admin passed all-green, or None —
+                             # cleared by the next bake.
+                             "checked": (shift_geometry.get("checked")
+                                         if isinstance(shift_geometry, dict)
+                                         and isinstance(shift_geometry.get("checked"), dict) else None)},
         # How the import treated the root's travel, and where the clip ends
         # up (clip frame, metres) — None for a pair or a clip without block.
         "root_motion": ({"mode": rm["mode"], "travel_m": rm.get("travel_m")}
@@ -1970,7 +1975,8 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
                 partner_shift_cm: Optional[Sequence[float]] = None,
                 role_shift_cm: Optional[Dict[str, Sequence[float]]] = None,
                 shift_cm: Optional[Sequence[float]] = None,
-                with_finales: bool = True) -> List[Dict[str, Any]]:
+                with_finales: bool = True,
+                checked: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Turns and lifts a clip IN THE FILE — the import dial, after the fact.
 
     ``yaw_deg`` / ``tilt_deg`` / ``roll_deg`` are the rigid rotation
@@ -2012,6 +2018,12 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
 
     All dials at 0 is a no-op (no Blender start). Returns the touched
     clips as listing views.
+
+    ``checked`` (Ruling A110 D3): every write here clears the sidecar's
+    ``geometry.checked`` — the place check belonged to the clip before this
+    edit; a ``checked`` from :func:`validate_orientation_check` (the admin
+    applied with every place reading green) is stored in its place. Finale
+    clips are only cleared.
 
     ``with_finales``: the clip's finale clips (:func:`_finale_files`) get the
     same dials in the same call — the finale continues the pose, and a pose
@@ -2182,6 +2194,9 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
             geometry["shift_cm"] = total
         else:
             geometry.pop("shift_cm", None)
+    geometry.pop("checked", None)
+    if checked:
+        geometry["checked"] = dict(checked)
     sidecar.write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n",
                        encoding="utf-8")
 
@@ -2213,6 +2228,66 @@ def _xz_m(xyz: Any) -> List[float]:
     if not isinstance(xyz, (list, tuple)) or len(xyz) < 3:
         return [0.0, 0.0]
     return [round(float(xyz[0]) / 100, 3), round(float(xyz[2]) / 100, 3)]
+
+
+ORIENT_CHECK_GREEN = {"dyaw": 3.0, "dpos": 2.0}
+
+
+def validate_orientation_check(raw: Any) -> Dict[str, Any]:
+    """The place check of the Library preview (Ruling A110 D3/D4) as it is
+    stored: ``{at, prop, place, dyaw, dpos}``. ``prop`` / ``place`` name what
+    the clip was checked on, ``dyaw`` (degrees) and ``dpos`` (cm) the WORST
+    loop-median deviation over the figures shown; both must read green
+    (|dyaw| <= 3, dpos <= 2) — a check that is not green is not stored.
+    ``at`` is set here (system time, a technical stamp)."""
+    from app.core.timeutils import utc_now_iso
+    if not isinstance(raw, dict):
+        raise ClipLibraryError("checked must be {prop, place, dyaw, dpos}")
+    prop = str(raw.get("prop") or "").strip()
+    place = str(raw.get("place") or "").strip()
+    if not prop or not place or len(prop) > 200 or len(place) > 200:
+        raise ClipLibraryError("checked needs a prop and a place")
+    out: Dict[str, Any] = {"at": utc_now_iso(), "prop": prop, "place": place}
+    for key in ("dyaw", "dpos"):
+        v = raw.get(key)
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+            raise ClipLibraryError(f"checked.{key} must be a number")
+        if abs(float(v)) > ORIENT_CHECK_GREEN[key]:
+            raise ClipLibraryError(
+                f"checked.{key} {float(v):g} is not green (at most {ORIENT_CHECK_GREEN[key]:g})")
+        out[key] = round(float(v), 2)
+    return out
+
+
+@_library_writer
+def mark_clip_checked(library: str, rel: str, checked: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Stores a validated place check in the clip's orientation sidecar
+    (the one :func:`orient_clip` writes) without touching the animation —
+    the admin's Save while every place already reads green."""
+    path = resolve_clip(library, rel)
+    if not path.is_file():
+        raise ClipNotFound(f"{rel} does not exist in the {library} library")
+    kind, _role = parse_clip_role(path.name)
+    root = library_root(library).resolve()
+    cset = path.parent.name if path.parent.resolve() != root else ""
+    sidecar = _orient_sidecar(path, kind, bool(_role_siblings(path)))
+    if not sidecar.is_file():
+        raise ClipLibraryError(f"'{kind}' has no sidecar {sidecar.name} — import it first")
+    try:
+        meta = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ClipLibraryError(f"{sidecar.name} is not readable: {e}")
+    if not isinstance(meta, dict):
+        raise ClipLibraryError(f"{sidecar.name} is not an object")
+    geometry = meta.get("geometry")
+    if not isinstance(geometry, dict):
+        geometry = meta["geometry"] = {}
+    geometry["checked"] = dict(checked)
+    sidecar.write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    reload_clip_caches()
+    logger.info("clip place check stored: %s%s (%s) on %s/%s", f"{cset}/" if cset else "", kind,
+                library, checked.get("prop"), checked.get("place"))
+    return [_view_of(path, cset, library)]
 
 
 def _view_of(path: Path, cset: str, library: str) -> Dict[str, Any]:
