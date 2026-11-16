@@ -7,6 +7,9 @@
  *   once (POST /characters/{n}/model3d/options {face_cleanup | face_before_rig}). Switching the cleanup on while
  *   the stored mesh is not cleaned, or "Improve face" on while the stored model has no face retexture, makes that
  *   step due: the Base body tab's "Run all" picks it up (`figure_build.base_run_all`).
+ * - "Face texture source" (A163) — Face view (default: the bald close-up rendered from the profile picture) or
+ *   Front (the T-pose front view); saved at once (POST …/model3d/options {face_source}); base and outfit bodies
+ *   follow it. Under it the face view's state: current, or why the next run renders it first (+1 image job).
  * - The face retexture values — light balance, skin tone match, skin colour correction, face brightness
  *   (`face_photo`) and strength, feather, render resolution, yaw (`face_controls`) — with Save
  *   (POST …/model3d/options {face_photo, face_controls}); only deviations from the defaults are stored. Until
@@ -21,6 +24,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import type { Model3DStatus } from './FieldModel3D'
+import { faceReferenceNotice } from './ModelFaceActions'
 import {
   FACE_CONTROL_DEFAULTS, FACE_PHOTO_DEFAULTS, FACE_SETTINGS_NOTE, faceControlsOf, facePhotoOf, faceSettingsChanged,
   faceSettingsInvalid,
@@ -54,7 +58,7 @@ export function FaceSettings({ character, st, pending, onReload, dueLine }: {
   // A reload (or another tab's save) replaces the draft with what is stored.
   useEffect(() => { setPhoto(saved.photo); setControls(saved.controls) }, [saved])
 
-  const setOption = useCallback(async (key: 'face_before_rig' | 'face_cleanup', value: boolean) => {
+  const setOption = useCallback(async (key: 'face_before_rig' | 'face_cleanup' | 'face_source', value: boolean | string) => {
     try {
       await apiPost(`/characters/${enc}/model3d/options`, { [key]: value })
       toast(t('Saved'))
@@ -95,9 +99,30 @@ export function FaceSettings({ character, st, pending, onReload, dueLine }: {
     </Field>
   )
 
+  const source = st.options?.face_source === 'front' ? 'front' : 'face'
+  const faceRef = st.model?.face_reference
+  const faceState = source === 'front' ? ''
+    : faceReferenceNotice(faceRef, t) || (faceRef?.face_available ? t('Face view current') : '')
   return (
     <div className="ga-face-settings" role="group" aria-label={t('Face settings')}
       style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div className="ga-face-actions-row" style={{ alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <Field label={t('Face texture source')} compact
+          tip={t('What the face retexture projects onto the model — for the base body and every outfit body. Face view: a bald close-up rendered from the profile picture; a run renders it first when it is missing or the profile picture changed (+1 image job). Front: the pose render of the body.')}>
+          <select className="ga-input" style={{ width: 200 }} value={source} disabled={!humanoid || pending}
+            onChange={(e) => { void setOption('face_source', e.target.value) }}>
+            <option value="face">{t('Face view (default)')}</option>
+            <option value="front">{t('Front view (pose render)')}</option>
+          </select>
+        </Field>
+        {faceState ? (
+          <span className="ga-hint" role="status" data-face-view-due={faceRef?.face_view_due || ''}
+            style={faceRef?.face_available ? undefined : { color: 'var(--ga-warn, #c77d0a)' }}
+            title={faceRef?.face_problem?.message || ''}>
+            {faceState}{faceRef?.face_view_due ? ` (${t('+1 image job (face view)')})` : ''}
+          </span>
+        ) : null}
+      </div>
       <label className="ga-check-row"
         title={!humanoid ? t('Humanoid models only.')
           : t('Before the face retexture, lash flaps the mesher built from painted lashes are folded back onto their root (the eyeball, lids and sockets stay) and over-saturated lips in the raw texture are neutralised. Recorded in the model overview as "Face cleanup". Humanoid models only.')}>

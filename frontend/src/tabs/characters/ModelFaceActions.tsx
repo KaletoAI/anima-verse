@@ -65,35 +65,36 @@ export interface FaceCleanupState {
 }
 
 /** What the next face retexture projects from (server `model3d.face_info`
- *  -> `face_retexture.reference_info`): `face` when the face view is current,
- *  else `front` with the reason in `face_problem`. */
+ *  -> `face_retexture.reference_info`, A163): `reference` is the stored face texture source (Base body
+ *  settings); `face_view_due` names why the run renders the face view first ('' = current). */
 export interface FaceReferenceState {
   reference: 'face' | 'front'
   face_available: boolean
   face_problem?: FaceRetextureFinding | null
+  face_view_due?: string
 }
 
 /** The face fields of the model the face acts on (`model3d.face_info`). */
 export type FaceFields = Pick<Model3DInfo, 'face_retexture' | 'face_retexture_revert'
   | 'face_retexture_snapshot' | 'face_retexture_compare_url' | 'face_signature' | 'face_reference'>
 
-/** The notice shown BEFORE a run when the face view cannot be the reference
- *  (the server would silently project from the front view): '' when it can. */
+/** The notice shown BEFORE a run about the face view (A163): '' when the source is the front view or the face
+ *  view is current; else why the next run renders it first, or what blocks it. */
 export function faceReferenceNotice(ref: FaceReferenceState | null | undefined, t: (s: string) => string): string {
-  if (!ref || ref.face_available) return ''
+  if (!ref || ref.reference !== 'face' || ref.face_available) return ''
   const code = ref.face_problem?.code
-  const tail = t('the front view would be used')
-  if (code === 'face_stale') return `${t('Face view stale (built from an older profile picture)')} — ${tail}`
-  if (code === 'face_rendering') return `${t('The face view is being re-rendered')} — ${tail}`
-  if (code === 'face_unverified') return `${t('Face view unverified (no image hash)')} — ${tail}`
-  if (code === 'no_profile_image') return `${t('No profile picture')} — ${tail}`
-  return `${t('No face view')} — ${tail}`
+  const first = t('the next run renders it first')
+  if (code === 'face_stale') return `${t('Face view stale (built from an older profile picture)')} — ${first}`
+  if (code === 'face_rendering') return t('The face view is being re-rendered')
+  if (code === 'face_unverified') return `${t('Face view unverified (no image hash)')} — ${first}`
+  if (code === 'no_profile_image') return `${t('No profile picture')} — ${t('the face retexture cannot run; set one or choose Front in the face settings')}`
+  return `${t('No face view')} — ${first}`
 }
 
 /** Whether "Regenerate face view" can help: not without a profile picture, not while it renders. */
 export function faceViewRegenerable(ref: FaceReferenceState | null | undefined): boolean {
   const code = ref?.face_problem?.code
-  return !!ref && !ref.face_available && code !== 'no_profile_image' && code !== 'face_rendering'
+  return !!ref && ref.reference === 'face' && !ref.face_available && code !== 'no_profile_image' && code !== 'face_rendering'
 }
 
 interface FaceRetextureFinding {
@@ -108,6 +109,8 @@ interface FaceRetextureCheck {
   reference: 'face' | 'front'
   face_available: boolean
   face_problem?: FaceRetextureFinding | null
+  /** A163: why the run renders the face view first ('' = current or the source is the front view). */
+  face_view_due?: string
   ok: boolean
   problems: FaceRetextureFinding[]
   warnings: FaceRetextureFinding[]
@@ -246,7 +249,6 @@ export function ModelFaceActions({ character, st, face, signature, cleanup, hasM
   const photoPreviewRequest = useRef(0)
   const [faceOpen, setFaceOpen] = useState(false)
   const [faceBackend, setFaceBackend] = useState('')
-  const [faceReference, setFaceReference] = useState<'' | 'face' | 'front'>('')
   const [upscaleFirst, setUpscaleFirst] = useState(true)
   const [upscaleBackend, setUpscaleBackend] = useState('')
   const [faceCheck, setFaceCheck] = useState<FaceRetextureCheck | null>(null)
@@ -256,37 +258,38 @@ export function ModelFaceActions({ character, st, face, signature, cleanup, hasM
 
   const faceSignature = face?.face_signature || signature
   const hubPhotoControls = faceCheck?.photo_controls === 'hub'
+  // The stored face texture source (A163, Base body settings) — the dialog never chooses it.
+  const faceReference = faceCheck?.reference || ''
+  const faceViewFirst = !!faceCheck?.face_view_due
   const photoPreviewKey = JSON.stringify([faceOpen, enc, faceSignature, faceReference, facePhoto, faceBackend, hubPhotoControls])
   const photoPreview = photoPreviewResult.key === photoPreviewKey ? photoPreviewResult : {}
-  const photoPreviewReady = !!photoPreview.adjusted && !photoPreview.error
+  // A face view the run renders first has nothing to preview yet: the run checks it.
+  const photoPreviewReady = faceViewFirst || (!!photoPreview.adjusted && !photoPreview.error)
   useEffect(() => {
     if (!faceOpen) return
     let cancelled = false
     setFaceCheck(null)
     setFaceCheckError('')
-    const query = new URLSearchParams({ signature: faceSignature, backend: faceBackend, reference: faceReference, lang })
+    const query = new URLSearchParams({ signature: faceSignature, backend: faceBackend, lang })
     apiGet<FaceRetextureCheck>(`/characters/${enc}/model3d/face-retexture/check?${query}`)
       .then(result => {
         if (cancelled) return
         setFaceCheck(result)
-        if (!faceReference) {
-          setFaceReference(result.reference)
-          setUpscaleFirst(result.reference === 'front' && !!st.upscale_runnable)
-        }
+        setUpscaleFirst(result.reference === 'front' && !!st.upscale_runnable)
       })
       .catch(error => { if (!cancelled) setFaceCheckError((error as Error).message) })
     return () => { cancelled = true }
-  }, [faceOpen, faceSignature, faceBackend, faceReference, st.upscale_runnable, enc, lang])
+  }, [faceOpen, faceSignature, faceBackend, st.upscale_runnable, enc, lang])
 
   useEffect(() => {
     const request = ++photoPreviewRequest.current
-    if (!faceOpen || !faceReference) return
+    if (!faceOpen || !faceReference || faceViewFirst) return
     setPhotoPreview({})
     const controller = new AbortController()
     const urls: string[] = []
     const timer = window.setTimeout(async () => {
       const load = async (balance: number, brightness: number) => {
-        const q = new URLSearchParams({ signature: faceSignature, reference: faceReference, backend: faceBackend, balance: String(balance), brightness: String(brightness) })
+        const q = new URLSearchParams({ signature: faceSignature, backend: faceBackend, balance: String(balance), brightness: String(brightness) })
         const response = await fetch(`/characters/${enc}/model3d/face-photo-preview?${q}`, { signal: controller.signal })
         if (!response.ok) {
           const body = await response.json()
@@ -307,12 +310,11 @@ export function ModelFaceActions({ character, st, face, signature, cleanup, hasM
       }
     }, 300)
     return () => { photoPreviewRequest.current = request + 1; window.clearTimeout(timer); controller.abort(); urls.forEach(URL.revokeObjectURL) }
-  }, [faceOpen, faceReference, faceSignature, facePhoto, faceBackend, hubPhotoControls, enc, photoPreviewKey])
+  }, [faceOpen, faceReference, faceViewFirst, faceSignature, facePhoto, faceBackend, hubPhotoControls, enc, photoPreviewKey])
 
   const openFaceDialog = () => {
     // The dialog starts from the saved face values (FaceSettings); a run with other values stores its photo values.
     setFacePhoto(facePhotoOf(st.options?.face_photo))
-    setFaceReference('')
     setUpscaleFirst(!!st.upscale_runnable)
     setUpscaleBackend('')
     setFaceBackend('')
@@ -323,8 +325,7 @@ export function ModelFaceActions({ character, st, face, signature, cleanup, hasM
 
   const applyFaceRetexture = async () => {
     if (pending || !faceCheck?.ok || !faceCheck.runnable || !photoPreviewReady) return
-    const query = new URLSearchParams({ signature: faceSignature, backend: faceBackend, reference: faceReference, lang })
-    query.set('reference', faceReference || faceCheck.reference)
+    const query = new URLSearchParams({ signature: faceSignature, backend: faceBackend, lang })
     query.set('upscale', String(upscaleFirst))
     query.set('upscale_backend', upscaleBackend)
     query.set('balance', String(faceReference === 'front' && !hubPhotoControls ? 0 : facePhoto.balance))
@@ -491,20 +492,13 @@ export function ModelFaceActions({ character, st, face, signature, cleanup, hasM
               <fieldset className="ga-fieldset">
                 <legend className="ga-fieldset-title">{t('Source check')}</legend>
                 <Field label={t('Reference image')}>
-                  <select className="ga-input" value={faceReference || faceCheck?.reference || 'front'}
-                    disabled={busy || !faceCheck} onChange={e => {
-                      const reference = e.target.value as 'face' | 'front'
-                      setFaceReference(reference)
-                      setUpscaleFirst(reference === 'front' && !!st.upscale_runnable)
-                      setFaceCheck(null)
-                    }}>
-                    <option value="face" disabled={!faceCheck?.face_available}>{t('Face view')}</option>
-                    <option value="front">{t('Front view (pose render)')}</option>
-                  </select>
-                  {faceCheck?.face_problem ? <div className="ga-field-hint" role="status" style={WARN}>
-                    {faceReferenceNotice({ reference: faceCheck.reference, face_available: faceCheck.face_available, face_problem: faceCheck.face_problem }, t)}
-                    {faceCheck.face_problem.fix ? ` · ${faceCheck.face_problem.fix}` : ''}
-                    {faceViewRegenerable({ reference: faceCheck.reference, face_available: faceCheck.face_available, face_problem: faceCheck.face_problem }) ? <> {faceViewButton}</> : null}
+                  <div className="ga-hint" title={t('Face texture source — chosen in the Base body settings')}>
+                    {faceCheck ? (faceCheck.reference === 'face' ? t('Face view') : t('Front view (pose render)')) : '…'}
+                    {' · '}{t('set in the face settings')}
+                  </div>
+                  {faceCheck && faceCheck.reference === 'face' && faceCheck.face_problem ? <div className="ga-field-hint" role="status" style={WARN}>
+                    {faceReferenceNotice(faceCheck, t)}
+                    {faceViewFirst ? ` · ${t('+1 image job (face view)')}` : ''}
                   </div> : null}
                 </Field>
                 <Field label={`${t('Light balance')} ${Math.round(facePhoto.balance * 100)} %`}

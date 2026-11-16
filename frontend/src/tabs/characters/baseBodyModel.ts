@@ -87,6 +87,7 @@ export function runAllStep(name: string, t: Tr = EN): string {
   switch (name) {
     case 'skin front': return t('Skin detail step')
     case 'mesh': return t('Mesh')
+    case 'face view': return t('Face view (from the profile picture)')
     case 'upscale': return t('Upscale (face reference)')
     case 'face': return t('Face retexture')
     case 'rig': return t('Rig')

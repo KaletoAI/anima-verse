@@ -111,10 +111,8 @@ export interface Model3DInfo {
   face_retexture_revert?: 'snapshot' | 'rerig' | null
   face_retexture_snapshot?: { ok: boolean; created_at?: string; error?: string }
   face_retexture_compare_url?: string
-  /** What the NEXT face retexture projects from (server `model3d.face_info`):
-   *  the face view, or the front view when the face view is missing, stale
-   *  (rendered from an older profile picture) or unverified — surfaced before
-   *  a run instead of a silent fallback. */
+  /** What the NEXT face retexture projects from (server `model3d.face_info`): the stored face texture source
+   *  (A163) and, for the face view, whether the run renders it first (`face_view_due`). */
   face_reference?: FaceReferenceState | null
   model_rev?: string
   extension_rig?: ExtensionRigResult
@@ -197,7 +195,7 @@ export interface Model3DStatus {
   rig?: string
   has_input?: boolean
   model?: Model3DInfo | null
-  options?: { auto_generate?: boolean; face_before_rig?: boolean; face_cleanup?: boolean; face_photo?: { balance?: number; skin_recolor?: number; tone_match?: number; brightness?: number };
+  options?: { auto_generate?: boolean; face_before_rig?: boolean; face_cleanup?: boolean; face_source?: 'face' | 'front'; face_photo?: { balance?: number; skin_recolor?: number; tone_match?: number; brightness?: number };
     face_controls?: { strength?: number; feather?: number; render_resolution?: number; yaw?: number };
     extension_rig_models?: Record<string, Record<string, { enabled?: boolean; flip?: boolean; tip?: unknown }>>;
     extension_motion?: Record<string, Physics & { bounce?: number; weight?: number }>
