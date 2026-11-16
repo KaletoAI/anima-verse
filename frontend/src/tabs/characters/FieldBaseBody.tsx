@@ -847,6 +847,9 @@ export function FieldBaseBody({ character, onOpenFigure, onOpenGallery }: {
                 source as a chip under it; row 2: the four views in one row. */}
             <BaseFullBodyReference character={character} jobs={jobs} onChanged={startPoll} onOpenGallery={onOpenGallery}
               refreshKey={`${info.image_meta?.front?.created_at || ''}:${info.front_reference?.image || ''}:${info.front_reference?.current ? 1 : 0}`} />
+            {/* Ruling A149: a package's CPU post-process of the full-body reference (hidden without one). */}
+            <ViewPostprocessPanel character={character} info={info.postprocess} busy={posting || viewsRunning(info)}
+              onChanged={() => startPoll(300)} />
             <FrontReferenceRow reference={info.front_reference} jobs={jobs} busy={posting || viewsRunning(info)}
               buildRunning={!!figure?.build.running}
               onRegenerate={() => { void post('images', { view: 'front', force: true }) }} />
@@ -857,9 +860,6 @@ export function FieldBaseBody({ character, onOpenFigure, onOpenGallery }: {
                   onSkinStep={() => post('skin-step', {})} onMirror={mirror} />
               ))}
             </div>
-            {/* Ruling A146: a package's CPU post-process of the stored views (hidden without one). */}
-            <ViewPostprocessPanel character={character} info={info.postprocess} busy={posting || viewsRunning(info)}
-              stored={BASE_VIEWS.filter((v) => !!info.images?.[v])} onChanged={() => startPoll(300)} />
           </div>
         ) : null}
         {sub === 'model' ? (
