@@ -228,7 +228,8 @@ def texture_key(character_name: str, sets: WornSets, *, shape: str, bsig: str, v
     nothing painted — the key is byte-identical to the one before."""
     from app.core import base_body, outfit_references
     original = _profile_of(character_name, profile)
-    reference = outfit_references.texture_part(character_name, sets.pieces, sets.open, profile=original)
+    reference = outfit_references.texture_part(character_name, sets.pieces, sets.open, painted=sets.painted,
+                                               profile=original)
     profile = _dressed_profile(original, sets, items)
     if is_plain(shape):
         plain = base_body.texture_inputs(

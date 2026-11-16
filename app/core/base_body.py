@@ -2590,7 +2590,8 @@ def dressed_image(character_name: str, view: str, signature: str, bsig: str, *, 
         # is no view of this outfit — a copy of the shape's view never uses a reference.
         from app.core import outfit_references
         if str(meta.get("outfit_reference_sha256") or "") != outfit_references.wanted_sha(
-                character_name, getattr(fig, "pieces", None) or {}, getattr(fig, "open", ()) or ()):
+                character_name, getattr(fig, "pieces", None) or {}, getattr(fig, "open", ()) or (),
+                painted=getattr(fig, "painted", ()) or ()):
             return None
     return path
 
@@ -3519,7 +3520,8 @@ def dressed_view_estimate(character_name: str, fig, signature: str, *,
         from app.core import outfit_references
         adopted = _adoptable_texture_views(character_name, bsig=on, texts=texts, base_views=base_views,
                                            reference_sha=outfit_references.wanted_sha(
-                                               character_name, fig.pieces, fig.open, profile=profile))
+                                               character_name, fig.pieces, fig.open, painted=fig.painted,
+                                               profile=profile))
         if adopted is None:
             return sum(jobs.values())
         source_front = find_ref_image(character_name, "tpose", adopted[0])
@@ -3629,7 +3631,8 @@ def _sync_texture_views(character_name: str, *, signature: str, tsig: str, fig,
     kwargs = dict(signature=signature, tsig=tsig, bsig=on, texts=texts, base_views=base_views,
                   pieces=manifest.get("pieces") or {}, items=manifest.get("items") or [], profile=profile,
                   mesh=_dict_of(manifest.get("mesh_items")),
-                  reference_sha=outfit_references.wanted_sha(character_name, fig.pieces, fig.open))
+                  reference_sha=outfit_references.wanted_sha(character_name, fig.pieces, fig.open,
+                                                             painted=fig.painted))
     front_sha = file_sha256(store_front)
     if file_sha256(outfit["front"]) != front_sha:
         if _newer(outfit["front"], store_front):
@@ -3838,7 +3841,7 @@ def dressed_view_source(character_name: str, *, profile: Optional[Dict[str, Any]
         # Ruling A74b: with the outfit's own reference image the front is an edit of that picture.
         from app.core import outfit_references
         out = {"source": VIEW_SOURCE_PAINTED, "shape": fig.shape, "jobs": 1}
-        if outfit_references.wanted_sha(character_name, fig.pieces, fig.open, profile=profile):
+        if outfit_references.wanted_sha(character_name, fig.pieces, fig.open, painted=fig.painted, profile=profile):
             out["reference"] = True
         return out
     source = VIEW_SOURCE_PLAIN if figure_mod.is_plain(fig.shape) else VIEW_SOURCE_SHAPE
@@ -3954,15 +3957,16 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
         # thread as the front's own render); the record is part of the figure's texture key, so the pass starts
         # again on the new figure. A failure falls through to the old path (an edit of the shape's front).
         from app.core import full_body_reference
-        if full_body_reference.auto_due(character_name, fig.pieces, fig.open, profile=profile):
+        if full_body_reference.auto_due(character_name, fig.pieces, fig.open, painted=fig.painted, profile=profile):
             made, _note = full_body_reference.ensure_outfit(character_name, fig.pieces, fig.open,
-                                                              raise_load=raise_load)
+                                                              painted=fig.painted, raise_load=raise_load)
             if made is not None:
                 return generate_dressed_images(character_name, pieces=pieces, items=items, signature=signature,
                                                force=force, view=view, raise_load=raise_load)
     # Ruling A74b: the outfit's own reference picture — its dressed front is an edit of it while something is painted.
     from app.core import outfit_references
-    record = outfit_references.record_for(character_name, fig.pieces, fig.open, profile=profile) if dressed else None
+    record = (outfit_references.record_for(character_name, fig.pieces, fig.open, painted=fig.painted, profile=profile)
+              if dressed else None)
     reference = ({"path": outfit_references.image_path(character_name, record), "sha256": record["sha256"]}
                  if record else None)
     return _render_views(character_name, signature=signature, pieces=pieces, items=items, todo=todo, force=force,

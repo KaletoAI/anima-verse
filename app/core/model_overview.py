@@ -1534,7 +1534,8 @@ def annotate_model_refs_info(character_name: str, info: Dict[str, Any]) -> Dict[
                     # Ruling A74b: made for another outfit reference picture than the one set now (or none).
                     from app.core import outfit_references
                     fig = delivered()
-                    wanted_ref = outfit_references.wanted_sha(character_name, fig.pieces, fig.open)
+                    wanted_ref = outfit_references.wanted_sha(character_name, fig.pieces, fig.open,
+                                                                 painted=fig.painted)
                     if str(record.get("outfit_reference_sha256") or "") != wanted_ref:
                         off_rule = (OUTFIT_REFERENCE_SET if wanted_ref and not record.get("outfit_reference_sha256")
                                     else OUTFIT_REFERENCE_CLEARED if not wanted_ref else OUTFIT_REFERENCE_CHANGED)

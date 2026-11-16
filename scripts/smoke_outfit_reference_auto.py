@@ -174,7 +174,7 @@ def main() -> int:
 
         stand = {"mode": "ok", "attempts": 0, "made": 0}
 
-        def stand_in(character_name, *, key=None, reserved=False):
+        def stand_in(character_name, *, key=None, reserved=False, painted=None):
             stand["attempts"] += 1
             if not reserved:
                 fbr._reserve(character_name, key)
@@ -199,7 +199,7 @@ def main() -> int:
             return list(CALLS)
 
         print("(a) no record + a source")
-        check("auto_due", fbr.auto_due("Demo", {}, ()), True)
+        check("auto_due", fbr.auto_due("Demo", {}, (), painted=()), True)
         check("auto_jobs", fbr.auto_jobs("Demo", fig()), 1)
         note = fbr.build_note("Demo")
         check("note before", (note["outfit"], note["outfit_auto"], note["outfit_failed"]), (False, True, ""))
@@ -243,7 +243,7 @@ def main() -> int:
         check("no pass failure", base_body.outfit_failure("Demo", osig), "")
 
         print("(g) the same source: no automatic retry")
-        check("auto_due", fbr.auto_due("Demo", {}, ()), False)
+        check("auto_due", fbr.auto_due("Demo", {}, (), painted=()), False)
         check("auto_jobs", fbr.auto_jobs("Demo", fig()), 0)
         check("plan +0",
               figure_build._with_reference("Demo", step2, fig(), osig, get_character_profile("Demo"), True).jobs, 2)
@@ -254,18 +254,18 @@ def main() -> int:
 
         print("(h) the source changed: tried again")
         png_rgba(images / "Demo_1.png", pixel=(1, 2, 3, 255))
-        check("auto_due", fbr.auto_due("Demo", {}, ()), True)
+        check("auto_due", fbr.auto_due("Demo", {}, (), painted=()), True)
         dress_front()
         check("tried again", stand["attempts"], 3)
-        check("blocked again", fbr.auto_due("Demo", {}, ()), False)
+        check("blocked again", fbr.auto_due("Demo", {}, (), painted=()), False)
         fbr.clear_auto_failure("Demo", key)
-        check("Generate/pick re-allows", fbr.auto_due("Demo", {}, ()), True)
+        check("Generate/pick re-allows", fbr.auto_due("Demo", {}, (), painted=()), True)
 
         print("(d) no source")
         stored = get_character_profile("Demo")
         stored.pop("profile_image", None)
         check("profile image dropped", save_character_profile("Demo", stored), True)
-        check("auto_due", fbr.auto_due("Demo", {}, ()), False)
+        check("auto_due", fbr.auto_due("Demo", {}, (), painted=()), False)
         check("(e) no source: auto_jobs 0", fbr.auto_jobs("Demo", fig()), 0)
         check("(e) no source: +0",
               figure_build._with_reference("Demo", step2, fig(), osig, get_character_profile("Demo"), True).jobs, 2)
@@ -286,7 +286,7 @@ def main() -> int:
             fbr._release("Demo", fbr.BASE_SLOT, None)
         fbr.AUTO_POLL_S = 0.05
         threading.Thread(target=other_run, daemon=True).start()
-        record, note = fbr.ensure_outfit("Demo", {}, ())
+        record, note = fbr.ensure_outfit("Demo", {}, (), painted=())
         check("waited and used its record", (bool(record) and record.get("image"), note, stand["attempts"],
                                              stand["made"]), ("Demo_2.png", "", 1, 0))
 

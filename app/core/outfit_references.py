@@ -8,9 +8,14 @@ the character WEARING that outfit, when one is set. Unset, the dressed views
 stay what they were (an edit of the body's front, or a copy of the body shape's
 view — ``base_body.dressed_view_source``, Ruling A70).
 
-WHAT AN OUTFIT IS here: what the Figure tab's "Dressed views" and "Outfit model"
-show — the WORN COMBINATION of clothing pieces, with the pieces worn open
-(``outfit_key``: the sorted worn item ids and the sorted open ids). Held items
+WHAT AN OUTFIT IS here: the PAINTED SET of the worn combination (Ruling A115,
+spec 2026-11-12-unified-worn-pieces "Reuse, not rebuild": a texture is cached by
+the set of painted pieces on its shape) — the worn pieces the figure paints,
+with those of them worn open (``reference_key`` = ``outfit_key`` of
+``painted_pieces``). An own-mesh piece (or a HairDeck/HAAR hairstyle) and an
+in-body piece are no part of it: the picture shows the body wearing ONLY the
+painted pieces, so adding, removing or swapping an own-mesh piece keeps the
+reference, the texture key and its stored views — no image job. Held items
 are not part of it (a picture of the outfit does not change with what is held),
 nor the own-mesh token or the base variant (technical keys that move when a
 piece's mesh lands — a reference must not vanish with them). Two saved outfits
@@ -110,27 +115,38 @@ def references_of(character_name: str, *, profile: Optional[Dict[str, Any]] = No
     return _records_of(profile) if profile is not None else _read_records(character_name)
 
 
+def painted_pieces(pieces: Optional[Dict[str, str]], painted: Iterable[str]) -> Dict[str, str]:
+    """``{slot: item id}`` of ``pieces`` whose item is in ``painted`` (a figure's / worn set's painted ids)."""
+    keep = {str(i) for i in painted or ()}
+    return {str(slot): str(iid) for slot, iid in (pieces or {}).items() if iid and str(iid).strip() in keep}
+
+
+def reference_key(pieces: Optional[Dict[str, str]], open_ids: Iterable[str], painted: Iterable[str]) -> str:
+    """The key of an outfit's reference (Ruling A115): ``outfit_key`` of its PAINTED pieces only."""
+    return outfit_key(painted_pieces(pieces, painted), open_ids)
+
+
 def record_for(character_name: str, pieces: Optional[Dict[str, str]], open_ids: Iterable[str] = (), *,
-               profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
-    """The record of the outfit ``pieces`` (+ open ids), None without one."""
-    record = references_of(character_name, profile=profile).get(outfit_key(pieces, open_ids))
+               painted: Iterable[str], profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """The record of the painted set ``painted`` of the outfit ``pieces`` (+ open ids), None without one."""
+    record = references_of(character_name, profile=profile).get(reference_key(pieces, open_ids, painted))
     return dict(record) if record else None
 
 
 def wanted_sha(character_name: str, pieces: Optional[Dict[str, str]], open_ids: Iterable[str] = (), *,
-               profile: Optional[Dict[str, Any]] = None) -> str:
+               painted: Iterable[str], profile: Optional[Dict[str, Any]] = None) -> str:
     """The picture content the outfit's dressed views are made for: the
     record's ``sha256``, "" without a reference."""
-    record = record_for(character_name, pieces, open_ids, profile=profile)
+    record = record_for(character_name, pieces, open_ids, painted=painted, profile=profile)
     return str(record["sha256"]) if record else ""
 
 
 def texture_part(character_name: str, pieces: Optional[Dict[str, str]], open_ids: Iterable[str] = (), *,
-                 profile: Optional[Dict[str, Any]] = None) -> str:
+                 painted: Iterable[str], profile: Optional[Dict[str, Any]] = None) -> str:
     """What the reference adds to a PAINTED figure's texture key: its
     ``sha256`` ("" without one — the key then stays byte-identical to the one
     before references existed)."""
-    return wanted_sha(character_name, pieces, open_ids, profile=profile)
+    return wanted_sha(character_name, pieces, open_ids, painted=painted, profile=profile)
 
 
 def image_path(character_name: str, record: Optional[Dict[str, Any]]) -> Optional[Path]:
@@ -164,11 +180,13 @@ def _label(character_name: str, pieces: Dict[str, str]) -> str:
 
 
 def _worn(character_name: str, profile: Dict[str, Any]):
-    """``(pieces, open ids)`` worn now."""
+    """``(pieces, open ids, painted ids)`` worn now — the painted ids of ``figure.worn_sets``."""
+    from app.core import figure
     from app.core.model_refs import live_piece_state
     pieces = dict(profile.get("equipped_pieces") or {})
     open_ids = sorted(live_piece_state(character_name, pieces, profile))
-    return pieces, open_ids
+    painted = figure.worn_sets(character_name, pieces=pieces, profile=profile).painted
+    return pieces, open_ids, painted
 
 
 def set_reference(character_name: str, image: str) -> Dict[str, Any]:
@@ -193,10 +211,10 @@ def set_reference(character_name: str, image: str) -> Dict[str, Any]:
         raise ValueError(f"Not an image: {name}") from e
     with keyed_lock("character_profile", character_name):
         profile = get_character_profile(character_name) or {}
-        pieces, open_ids = _worn(character_name, profile)
-        key = outfit_key(pieces, open_ids)
+        pieces, open_ids, painted = _worn(character_name, profile)
+        key = reference_key(pieces, open_ids, painted)
         record = {"image": name, "sha256": hashlib.sha256(data).hexdigest(),
-                  "label": _label(character_name, pieces), "set_at": utc_now_iso()}
+                  "label": _label(character_name, painted_pieces(pieces, painted)), "set_at": utc_now_iso()}
         records = _records_of(profile)
         records[key] = record
         profile[PROFILE_KEY] = records
@@ -296,8 +314,8 @@ def info(character_name: str) -> Dict[str, Any]:
     from app.core import base_body
     from app.models.character import get_character_profile
     profile = get_character_profile(character_name) or {}
-    pieces, open_ids = _worn(character_name, profile)
-    key = outfit_key(pieces, open_ids)
+    pieces, open_ids, painted = _worn(character_name, profile)
+    key = reference_key(pieces, open_ids, painted)
     records = _records_of(profile)
     enc = quote(character_name, safe="")
 
@@ -332,7 +350,7 @@ def info(character_name: str) -> Dict[str, Any]:
          "set_at": str(r.get("set_at") or "")}
         for k, r in sorted(records.items(), key=lambda kv: str(kv[1].get("set_at") or ""), reverse=True)
         if k != key]
-    return {"key": key, "label": _label(character_name, pieces), "record": record,
+    return {"key": key, "label": _label(character_name, painted_pieces(pieces, painted)), "record": record,
             "url": url_of(record) if record else "", "gone": bool(record) and image_path(character_name, record) is None,
             "applies": applies, "note": "" if applies or not record else NOT_PAINTED_NOTE,
             "source": source.get("source") or "", "jobs": jobs, "others": others}
