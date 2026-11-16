@@ -258,8 +258,10 @@ PART_BUILDS = {"attached_part": 13, "inset_part": 8}
 # taken before it; a tip that cannot be built fails alone, its pair group is
 # still built (Ruling A109). pair_protrusion 1: the colour marker's reference
 # skin tone ignores cells below the darkness gate (hair across the window,
-# Ruling A120).
-OP_BUILDS = {**PART_BUILDS, "pair_protrusion": 1, "pair_tip": 2}
+# Ruling A120). 2: without a marker the pair is located by its measured outline
+# (underside crease, side, inner edge, top line; apex in the middle) before the
+# crest search (Ruling A160).
+OP_BUILDS = {**PART_BUILDS, "pair_protrusion": 2, "pair_tip": 2}
 
 
 def extension_rig_fingerprint(groups, overrides=None):

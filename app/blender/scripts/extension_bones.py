@@ -356,6 +356,168 @@ def marker_accept(lab, p):
     return (score>p['marker_score_min'])&(lab[:,0]>p['marker_dark_min']*med[0])&(lab[:,0]<med[0]+p['marker_light_max'])
 
 
+# Marker-free outline of a chest pair (Ruling A160), used when no colour marker
+# is found (a reference post-process removed the tips before the texture was
+# made). Measured on two such models and one with a marker: the underside
+# crease of each half-round is a jump of the front depth along a ray from the
+# bump (slope 4-38 m/m below and at the side, under 1.6 above and toward the
+# midline), so it is read where it is sharp; the shadow under it (luminance
+# 3-12 % below the half-round) admits a softer jump. The top has no crease:
+# the half-round fades into the upper chest, which runs as a straight line in
+# the side profile; the top is where the surface leaves that line.
+OUTLINE_ANGLES_DEG = tuple(range(0,166,15))   # from straight down (0) over the side (90) to the lower midline side
+OUTLINE_RAY_MAX_M = .11
+OUTLINE_CREASE_SLOPE = 3.                     # depth jump per metre along the ray: a crease on its own
+OUTLINE_SHADED_SLOPE = 1.5                    # a softer jump counts with a shadow at it
+OUTLINE_SHADOW = .97                          # boundary luminance below this share of the half-round's
+OUTLINE_POINTS_MIN = 5                        # crease points per side
+OUTLINE_RMS_MAX_M = .008                      # circle fit residual
+OUTLINE_LINE_SPAN_M = (.02,.03)               # upper chest line: below / above the band top
+OUTLINE_LINE_LEAVE_M = .002                   # the surface stands this far in front of the line
+OUTLINE_BUMP_SIGMAS_M = (.006,.04)
+# The top line never lies below this share of the crease circle's radius above
+# its centre (Vallerie: the upper chest line runs on into the half-round's
+# upper slope and leaves it 1 cm above the centre; the shading fades 3 cm above).
+OUTLINE_TOP_MIN = .75
+
+
+def outline_locate(p, front, mid, lo, hi):
+    """Locate both half-rounds of a chest pair without a colour marker.
+
+    Returns ``(outline, note)``: ``outline`` is None when the shape is not
+    found, otherwise ``{'centre': [d, z], 'radius', 'top', 'bottom', 'outer',
+    'seed': [d, z], 'points': [n+, n-], 'rms', 'shaded'}`` in side coordinates
+    (``d`` = distance from the midline, one outline mirrored onto both
+    sides). Steps: a seed per side at the mirrored best bump of the front depth
+    (small blur minus wide blur), rays from it downward and sideways whose
+    steepest depth jump is the crease (with its shadow), one circle fitted to
+    the crease points of both sides, and the top where the surface leaves the
+    straight upper chest line."""
+    step = p['marker_grid_step']
+    margin = math.ceil(3*OUTLINE_BUMP_SIGMAS_M[1]/step)
+    zs = lo-.06+step*np.arange(int((hi-lo+.06)/step)+1)
+    ds = step*np.arange(int((p['lateral_max']+.02)/step)+1)
+    zs_m = np.concatenate((zs[0]-step*np.arange(margin,0,-1),zs,zs[-1]+step*np.arange(1,margin+1)))
+    ds_m = np.concatenate((ds,ds[-1]+step*np.arange(1,margin+1)))
+    def blur(a,sigma):
+        reach = math.ceil(3*sigma/step)
+        kernel = np.exp(-.5*(np.arange(-reach,reach+1)*step/sigma)**2)
+        a = np.apply_along_axis(lambda r:np.convolve(r,kernel,'same'),0,a)
+        return np.apply_along_axis(lambda r:np.convolve(r,kernel,'same'),1,a)
+    bumps = []
+    for sign in (1,-1):
+        depth = np.full((len(zs_m),len(ds_m)),np.nan)
+        for j,z in enumerate(zs_m):
+            for i,d in enumerate(ds_m):
+                hit = front(float(mid+sign*d),float(z))
+                if hit:
+                    depth[j,i] = hit[0].y
+        known = ~np.isnan(depth)
+        sm = [blur(np.where(known,depth,0.),s)/np.maximum(blur(known.astype(float),s),1e-9) for s in OUTLINE_BUMP_SIGMAS_M]
+        bumps.append(np.where(known,sm[1]-sm[0],np.nan)[margin:margin+len(zs),:len(ds)])
+    score = bumps[0]+bumps[1]
+    band = (zs[:,None] > lo-.03)&(zs[:,None] < hi)&(ds[None,:] > p['lateral_min'])&(ds[None,:] < p['lateral_max']-.01)
+    score = np.where(band&~np.isnan(score),score,-np.inf)
+    if not np.isfinite(score.max()):
+        return None,'outline: no surface'
+    j,i = np.unravel_index(int(np.argmax(score)),score.shape)
+    sd,sz = float(ds[i]),float(zs[j])
+    def luminance(rgb):
+        return float(.2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2])
+    points,counts,shaded = [],[],0
+    ts = np.arange(.005,OUTLINE_RAY_MAX_M,step/2)
+    for sign in (1,-1):
+        n = 0
+        for a in OUTLINE_ANGLES_DEG:
+            u = (math.sin(math.radians(a)),-math.cos(math.radians(a)))
+            ys,lum = np.full(len(ts),np.nan),np.full(len(ts),np.nan)
+            for k,t in enumerate(ts):
+                d,z = sd+u[0]*t,sz+u[1]*t
+                if d <= p['side_margin']:
+                    break
+                hit = front(float(mid+sign*d),float(z),True)
+                if hit:
+                    ys[k] = hit[0].y
+                    if hit[1] is not None:
+                        lum[k] = luminance(hit[1])
+            if np.isnan(ys).sum() > len(ts)-3:
+                continue
+            g = np.gradient(np.where(np.isnan(ys),np.nanmax(ys),ys),ts)
+            k = int(np.nanargmax(g))
+            ok = g[k] > OUTLINE_CREASE_SLOPE
+            if not ok and g[k] > OUTLINE_SHADED_SLOPE and np.isfinite(lum[k]):
+                inside = np.nanmedian(lum[:max(k-2,1)])
+                ring = lum[max(k-2,0):k+3]
+                ok = bool(np.isfinite(inside) and np.nanmin(ring) < OUTLINE_SHADOW*inside)
+                shaded += ok
+            if ok:
+                points.append((sd+u[0]*ts[k],sz+u[1]*ts[k]))
+                n += 1
+        counts.append(n)
+    if min(counts) < OUTLINE_POINTS_MIN:
+        return None,'outline: %d/%d crease points'%tuple(counts)
+    P = np.array(points)
+    A = np.c_[2*P,np.ones(len(P))]
+    c = np.linalg.lstsq(A,(P**2).sum(axis=1),rcond=None)[0]
+    cd,cz = float(c[0]),float(c[1])
+    radius = math.sqrt(max(c[2]+cd*cd+cz*cz,0.))
+    rms = float(np.sqrt(((np.hypot(P[:,0]-cd,P[:,1]-cz)-radius)**2).mean()))
+    if rms > OUTLINE_RMS_MAX_M or not p['boundary_s_min'] <= radius <= p['boundary_s_max'] or cd-radius < -p['side_margin']:
+        return None,'outline: circle d %.3f r %.3f rms %.4f'%(cd,radius,rms)
+    # Top: per column near the centre, the upper chest line fitted above the
+    # band top, extended down; the highest point standing in front of it.
+    below,above = OUTLINE_LINE_SPAN_M
+    tops = []
+    for sign in (1,-1):
+        for d in cd+step*np.arange(-4,5):
+            line = [(z,front(float(mid+sign*d),float(z))) for z in np.arange(hi-below,hi+above+1e-9,step)]
+            line = [(z,h[0].y) for z,h in line if h]
+            if len(line) < 5:
+                continue
+            fit = np.polyfit([z for z,_ in line],[y for _,y in line],1)
+            for z in np.arange(hi-below,cz,-step):
+                h = front(float(mid+sign*d),float(z))
+                if h and np.polyval(fit,z)-h[0].y > OUTLINE_LINE_LEAVE_M:
+                    tops.append(float(z))
+                    break
+    line_top = float(np.median(tops)) if tops else cz+radius
+    top = max(line_top,cz+OUTLINE_TOP_MIN*radius)
+    # Inner edge: the cleavage wall, the steepest backward step of the depth on
+    # rows from the seed toward the midline around the circle's centre height.
+    inner = []
+    for z in cz+step*np.arange(-4,5):
+        for sign in (1,-1):
+            row = [(d,front(float(mid+sign*d),float(z))) for d in np.arange(sd,p['side_margin'],-step)]
+            row = [(d,h[0].y) for d,h in row if h]
+            if len(row) < 3:
+                continue
+            g = np.gradient([y for _,y in row],[-d for d,_ in row])
+            inner.append(row[int(np.argmax(g))][0])
+    inner = max(float(np.median(inner)) if inner else cd-radius,p['side_margin'])
+    bottom,outer = float(P[:,1].min()),float(P[:,0].max())
+    if outer-inner < 2*p['boundary_s_min'] or top-bottom < 2*p['boundary_s_min']:
+        return None,'outline: extent %.3f x %.3f'%(outer-inner,top-bottom)
+    return ({'centre':[.5*(inner+outer),.5*(bottom+top)],'half':[.5*(outer-inner),.5*(top-bottom)],
+             'inner':inner,'outer':outer,'bottom':bottom,'top':top,'line_top':line_top,
+             'circle':[cd,cz,radius],'seed':[sd,sz],'points':counts,'rms':rms,'shaded':shaded},
+            'outline %.1f x %.1f cm, %d+%d crease points'%((outer-inner)*100,(top-bottom)*100,*counts))
+
+
+def outline_reach(outline, apex_d, apex_z, directions):
+    """Distance from an apex (side coordinates) to the outline along each
+    boundary direction ``(lateral, up)``: the axis-aligned ellipse spanned by
+    the measured inner edge, outer side, crease bottom and top."""
+    (cd,cz),(a,b) = outline['centre'],outline['half']
+    out = []
+    for dx,dz in directions:
+        fx,fz = (apex_d-cd)/a,(apex_z-cz)/b
+        ux,uz = dx/a,dz/b
+        qa,qb,qc = ux*ux+uz*uz,2*(fx*ux+fz*uz),fx*fx+fz*fz-1
+        disc = qb*qb-4*qa*qc
+        out.append(max((-qb+math.sqrt(disc))/(2*qa) if disc > 0 else min(a,b),1e-3))
+    return out
+
+
 def pair_plan(group, p, co, bones, front, owners, pinned=None):
     chains = group['chains']
     if len(chains) != 2 or any(len(c) != 1 for c in chains):
@@ -507,8 +669,10 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
             markers.append((Vector((x,hit[0].y,z)),row['marker_note']))
         marker_areas = [row['marker_area'] for row in pinned]
         # A geometry placement is pinned only for a dependent tip group: it
-        # keeps its crest apex and its round outline, no new crest search.
+        # keeps its crest apex and its round outline, no new crest search;
+        # an outline placement keeps its apex and its measured outline.
         colour = all(row['apex_source']=='colour' for row in pinned)
+        outline = {'pinned':[row['reach'] for row in pinned]} if all(row['apex_source']=='outline' for row in pinned) else None
     else:
         found = [marker(v,sign) for v,sign in zip(frontmost,(1,-1))]
         mirrored = lambda a,b: abs(a[0].z-b[0].z)<p['marker_pair_dz'] and abs((a[0].x-mid)+(b[0].x-mid))<p['marker_pair_dx']
@@ -524,17 +688,20 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
             pairs = sorted(((a,b) for a in near[0] for b in near[1] if mirrored(a,b)),
                            key=lambda pair:pair[0][0].y+pair[1][0].y)[:1]
         colour = bool(pairs)
+        outline = None
+        if not colour:
+            outline,outline_note = outline_locate(p,front,mid,lo,hi)
         if colour:
             markers = [(c[0],c[2] if c[3] else c[2]+'; at crest') for c in pairs[0]]
             marker_areas = [c[1] for c in pairs[0]]
         else:
-            markers = [((c[0] if c else None),('pair mismatch; '+note) if all(primary) else note)
+            markers = [((c[0] if c else None),(('pair mismatch; '+note) if all(primary) else note)+'; '+outline_note)
                        for c,(_,note) in zip(primary,found)]
     K = int(p['boundary_directions'])
     directions = [(math.sin(2*math.pi*k/K),math.cos(2*math.pi*k/K)) for k in range(K)]
-    def walls(apexes):
-        side_reach = []
-        for apex,sign in zip(apexes,(1,-1)):
+    def walls(apexes, fixed=None):
+        side_reach = [list(r) for r in fixed] if fixed else []
+        for apex,sign in zip(apexes,() if fixed else (1,-1)):
             reach = [None]*K
             for k,(dx,dz) in enumerate(directions):
                 if dx > 1e-6:
@@ -583,13 +750,41 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
                 raise ValueError('apex does not protrude from wall')
             fitted.append((c,n,points))
         return reach,fitted
-    if colour or pinned is not None:
+    def outline_plan():
+        # The apex is the middle of the half-round, the outline's centre on
+        # the surface, mirrored over both sides: the tip suggestion of a
+        # dependent tip group (pair_tip build 1). The front-most point is not
+        # used: on both measured models it sits 2.5-3 cm toward the midline
+        # of the middle, where the half-rounds lean in.
+        cd,cz = outline['centre']
+        apexes = []
+        for sign in (1,-1):
+            hit = front(float(mid+sign*cd),float(cz))
+            if hit is None:
+                raise ValueError('outline centre missed surface')
+            apexes.append(Vector((mid+sign*cd,hit[0].y,cz)))
+        outline['apex'] = [cd,cz]
+        reach,fitted = walls(apexes,[outline_reach(outline,cd,cz,directions)]*2)
+        return apexes,reach,fitted
+    if outline and pinned is None:
+        try:
+            apexes,reach,fitted = outline_plan()
+        except ValueError as e:
+            # A wall that does not close falls back to the crest search.
+            outline = None
+            markers = [(v,note+' ('+str(e)+')') for v,note in markers]
+    if outline and 'pinned' not in outline:
+        pass
+    elif colour or pinned is not None:
         apexes = [v.copy() for v,_ in markers]
     else:
         cell,pick,initial = crest_search()
         apexes = initial
-    reach,fitted = walls(apexes)
-    if not colour:
+    if not outline:
+        reach,fitted = walls(apexes)
+    elif 'pinned' in outline:
+        reach,fitted = walls(apexes,outline['pinned'])
+    if not colour and not outline:
         if pinned is None:
             near = lambda c:all(math.hypot(mid+sign*ds[c[1]]-start.x,zs[c[0]]-start.z)<=p['marker_search_radius'] for sign,start in zip((1,-1),initial))
             # Only the sagittal tilt of the wall moves the tip (a torso leaning back);
@@ -638,7 +833,8 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
         if not w:
             raise ValueError('empty pair weight region')
         weights[link['bone']] = w
-        placements.append({'head':list(head),'tip':list(apex),'apex_source':'colour' if colour else 'geometry',
+        placements.append({'head':list(head),'tip':list(apex),'apex_source':'colour' if colour else 'outline' if outline else 'geometry',
+                           **({'outline':outline} if outline and 'pinned' not in outline else {}),
                            'marker_area':marker_areas[len(placements)] if colour else None,'marker_note':note,'reach':reach.copy(),'wall_centre':list(c),'wall_normal':list(n),'depth':depth,
                            'anchor_blend':anchor_blend(w,owners,bones)})
     return links,weights,{'placement':placements,'leak':False},set(),[]
