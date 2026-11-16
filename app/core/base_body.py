@@ -888,14 +888,15 @@ def _with_body(clause: str) -> str:
 EDIT_LOOK_TEXT = "natural matte look"
 
 
-def _postprocess_edit_texts(profile: Dict[str, Any]) -> List[str]:
-    """Ruling A155: the edit text each reference post-process that is on for the character adds (its
-    descriptor's ``edit_prompt``) — what the processed picture no longer shows must not come back."""
+def _postprocess_edit_texts(profile: Dict[str, Any], key: str = "edit_prompt") -> List[str]:
+    """Ruling A155/A156: the edit text each reference post-process that is on for the character adds — its
+    descriptor's ``edit_prompt`` (positive) or ``edit_negative`` — so what the processed picture no longer
+    shows does not come back."""
     try:
         from app.core import view_postprocess
         available = view_postprocess.operations()
-        return [str(available[op].get("edit_prompt") or "").strip()
-                for op in view_postprocess.enabled_ids(profile, available) if available[op].get("edit_prompt")]
+        return [str(available[op].get(key) or "").strip()
+                for op in view_postprocess.enabled_ids(profile, available) if available[op].get(key)]
     except Exception as exc:  # noqa: BLE001 — a package failure never blocks the front
         logger.warning("Reference post-process edit texts unavailable: %s", exc)
         return []
@@ -1349,6 +1350,10 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
                                            picture=edit if v == "front" else picture)
             character = (edit_character(character_name, profile=profile) if edit
                          else base_character(character_name, v, profile=profile))
+            if edit:
+                # Ruling A156: what an active reference post-process removed stays out (its negative terms).
+                negative = ", ".join(p for p in (negative, *_postprocess_edit_texts(
+                    _profile_of(character_name, profile), key="edit_negative")) if p)
             extra = {"base_signature": bsig, "base_identity": identity, "prompt_fingerprint": fingerprint,
                      "prompt_rules": PROMPT_RULES}
             if v == "front":
