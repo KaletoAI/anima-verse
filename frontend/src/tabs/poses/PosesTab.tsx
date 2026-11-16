@@ -298,6 +298,9 @@ export function PosesTab() {
   const [entryTab, setEntryTab] = useState<'entry' | 'candidates'>('entry')
   const [runAllOpen, setRunAllOpen] = useState(false)
   const [runAllBusy, setRunAllBusy] = useState(false)
+  const [transitionTab, setTransitionTab] = useState<'rules' | 'suggested' | 'jobs'>('rules')
+  /** Suggested transitions (the misses) — counted for the inner tab label even while it is closed. */
+  const [missCount, setMissCount] = useState<number | null>(null)
 
   const isPose = axis === 'pose'
 
@@ -341,6 +344,15 @@ export function PosesTab() {
       .catch(() => { /* the buttons then say no model is routed */ })
     return () => { live = false }
   }, [])
+
+  useEffect(() => {
+    if (view !== 'transitions') return
+    let live = true
+    apiGet<{ misses: unknown[] }>('/poses/transition-misses')
+      .then((r) => { if (live) setMissCount(r.misses.length) })
+      .catch(() => { if (live) setMissCount(null) })
+    return () => { live = false }
+  }, [view, transitionRefresh])
 
   const countExpressionImages = useCallback(async () => {
     try {
@@ -968,32 +980,55 @@ export function PosesTab() {
   }
 
   if (view === 'transitions') {
+    const openJobs = transitionJobs.filter((job) => job.state === 'awaiting_choice' || job.status === 'pending'
+      || job.status === 'running').length
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      <div className="ga-poses-sub" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
         {viewSwitch}
-        <div style={{ padding: 8 }}>
-          <button type="button" className="ga-btn ga-btn-primary" onClick={() => { setTransitionPrefill(null); setTransitionOpen(true) }}>{t('Generate transition')}</button>
-          <TransitionMisses refresh={transitionRefresh} onPick={(m) => {
-            setTransitionPrefill({ start_pose: m.start_pose, target_pose: m.target_pose,
-              start_role: m.start_role, target_role: m.target_role, cset: m.cset })
-            setTransitionOpen(true)
-          }} />
-          {transitionError ? <p role="alert">{t('Error')}: {transitionError}</p> : null}
-          {transitionJobs.map((job) => <div key={job.task_id} style={{ display: 'flex', gap: 8, padding: 6, alignItems: 'center' }}>
-            <span>{job.request.start_pose} → {job.request.target_pose} · {t(job.state || job.phase || job.status)}</span>
-            {job.error ? <span role="alert">{job.error}</span> : null}
-            {job.state === 'awaiting_choice' ? <button type="button" className="ga-btn ga-btn-sm" onClick={() => setTransitionChoice(job)}>{t('Choose a transition')}</button> : null}
-            {['failed', 'cancelled'].includes(job.status) || ['published', 'discarded', 'expired'].includes(job.state || '')
-              ? <button type="button" className="ga-btn ga-btn-sm" onClick={() => {
-                void apiPost(`/poses/transition-jobs/${job.task_id}/dismiss`, {}).then(() => setTransitionRefresh((n) => n + 1))
-                  .catch((error: Error) => setTransitionError(error.message))
-              }}>{t('Dismiss')}</button> : null}
-          </div>)}
+        <div className="ga-poses-inner" style={{ alignItems: 'center' }}>
+          {(['rules', 'suggested', 'jobs'] as const).map((tab) => (
+            <button key={tab} type="button" className={`ga-btn ga-btn-sm${transitionTab === tab ? ' ga-btn-primary' : ''}`}
+              onClick={() => setTransitionTab(tab)}>
+              {tab === 'rules' ? t('Rules') : tab === 'suggested'
+                ? `${t('Suggested')} (${missCount ?? '…'})` : `${t('Jobs')} (${transitionJobs.length}${openJobs ? `, ${openJobs} ${t('open')}` : ''})`}
+            </button>
+          ))}
+          <span style={{ flex: 1 }} />
+          <button type="button" className="ga-btn ga-btn-sm" onClick={() => { setTransitionPrefill(null); setTransitionOpen(true) }}>
+            {t('Generate transition…')}</button>
         </div>
-        <ClipTransitions key={transitionRefresh} poses={data.entries} onSaved={() => { void loadClips() }} />
+        {transitionError ? <p role="alert" className="ga-hint">{t('Error')}: {transitionError}</p> : null}
+        {transitionTab === 'suggested' ? (
+          <TransitionMisses refresh={transitionRefresh} onCount={setMissCount}
+            onStarted={() => { setTransitionRefresh((n) => n + 1); setTransitionTab('jobs') }}
+            onPick={(m) => {
+              setTransitionPrefill({ start_pose: m.start_pose, target_pose: m.target_pose,
+                start_role: m.start_role, target_role: m.target_role, cset: m.cset })
+              setTransitionOpen(true)
+            }} />
+        ) : transitionTab === 'jobs' ? (
+          <div style={{ overflowY: 'auto', minHeight: 0 }} data-testid="transition-jobs">
+            {!transitionJobs.length ? <div className="ga-hint">{t('No transition jobs.')}</div> : null}
+            {transitionJobs.map((job) => <div key={job.task_id} style={{ display: 'flex', gap: 8, padding: '3px 0', alignItems: 'center',
+              borderBottom: '1px solid var(--border, #30363d)' }}>
+              <LampDot lamp={job.state === 'published' ? 'green' : job.status === 'failed' || job.status === 'cancelled' ? 'red'
+                : job.state === 'awaiting_choice' ? 'yellow' : 'grey'} title={t(job.state || job.phase || job.status)} />
+              <span>{job.request.start_pose} → {job.request.target_pose} · {t(job.state || job.phase || job.status)}</span>
+              {job.error ? <span role="alert" className="ga-hint">{job.error}</span> : null}
+              {job.state === 'awaiting_choice' ? <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" onClick={() => setTransitionChoice(job)}>{t('Choose a transition')}</button> : null}
+              {['failed', 'cancelled'].includes(job.status) || ['published', 'discarded', 'expired'].includes(job.state || '')
+                ? <button type="button" className="ga-btn ga-btn-sm" onClick={() => {
+                  void apiPost(`/poses/transition-jobs/${job.task_id}/dismiss`, {}).then(() => setTransitionRefresh((n) => n + 1))
+                    .catch((error: Error) => setTransitionError(error.message))
+                }}>{t('Dismiss')}</button> : null}
+            </div>)}
+          </div>
+        ) : (
+          <ClipTransitions key={transitionRefresh} poses={data.entries} onSaved={() => { void loadClips() }} />
+        )}
         {transitionOpen ? <PoseTransitionDialog poses={data.entries} listing={clipList} initial={transitionPrefill ?? undefined}
           onClose={() => setTransitionOpen(false)}
-          onStarted={() => { setTransitionOpen(false); setTransitionRefresh((n) => n + 1) }} /> : null}
+          onStarted={() => { setTransitionOpen(false); setTransitionRefresh((n) => n + 1); setTransitionTab('jobs') }} /> : null}
         {transitionChoice ? <PoseTransitionChoice key={transitionChoice.task_id} job={transitionChoice} poses={data.entries} listing={clipList}
           onClose={() => setTransitionChoice(null)} onDecided={() => {
             setTransitionChoice(null); setTransitionRefresh((n) => n + 1); void reloadLibrary()

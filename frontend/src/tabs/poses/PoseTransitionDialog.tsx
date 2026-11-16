@@ -145,7 +145,7 @@ export function PoseTransitionDialog({ poses, listing, onClose, onStarted, initi
           {error ? <p role="alert">{t('Error')}: {error}</p> : null}
         </div>
         <div className="ga-modal-footer"><button type="button" className="ga-btn" disabled={busy} onClick={onClose}>{t('Cancel')}</button>
-          <button type="submit" className="ga-btn ga-btn-primary" disabled={busy || !start || !target || (!!request.start_role && !!request.target_role && request.start_role !== request.target_role) || request.start_pose === request.target_pose || (guideEnabled && !guideClip)}>{t('Generate')}</button></div>
+          <button type="submit" className="ga-btn ga-btn-primary" disabled={busy || !start || !target || (!!request.start_role && !!request.target_role && request.start_role !== request.target_role) || request.start_pose === request.target_pose || (guideEnabled && !guideClip)}>{t('Generate (+{n} jobs)').replace('{n}', String(request.variants))}</button></div>
       </form>
     </div>
   </div>, document.body)

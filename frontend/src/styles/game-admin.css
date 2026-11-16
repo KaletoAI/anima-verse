@@ -3624,7 +3624,7 @@ a.ga-btn {
 .ga-open-badge.is-building { color: var(--accent, #58a6ff); }
 .ga-open-badge-hub { margin-left: 3px; opacity: .85; }
 /* Poses sub-tabs (Ruling A110 phase 5): one text size, hints muted and one step smaller. */
-.ga-poses-sub { font-size: 13px; }
+.ga-poses-sub { font-size: 13px; padding-right: 34px; }
 .ga-poses-sub .ga-hint, .ga-poses-sub .ga-form-hint { font-size: 12px; color: var(--text-muted, #8b949e); }
 .ga-poses-sub h3 { font-size: 15px; }
 .ga-poses-sub .ga-input { font-size: 13px; }
