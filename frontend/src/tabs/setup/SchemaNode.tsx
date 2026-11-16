@@ -25,6 +25,11 @@ export type SchemaFieldDef = {
   preview_url?: string
   url?: string
   meta_url?: string
+  /** Rendering hint for a "str" field: "checklist" = the comma list as checkboxes over `options`. */
+  widget?: string
+  options_source?: string
+  /** Resolved server-side from `options_source` (what is installed now). */
+  options?: { value: string; label: string; description?: string }[]
 }
 export type SchemaNodeDef = {
   label?: string
@@ -52,6 +57,36 @@ export function Origin({ path, overrides, onReset }: Pick<SchemaProps, 'path' | 
     <span className={`ga-tag${world ? ' ga-tag-admin' : ''}`}>{world ? t('World') : t('Default')}</span>
     {world && <button type="button" className="ga-btn ga-btn-sm" onClick={() => onReset(path)}>{t('Reset to default')}</button>}
   </span>
+}
+
+/** The ids of a comma-separated value in stored order; whitespace and empty entries dropped. */
+function commaIds(raw: Json | undefined): string[] {
+  return String(raw ?? '').split(',').map(s => s.trim()).filter(Boolean)
+}
+
+/**
+ * A "str" field holding a comma list, shown as one checkbox per option. Ticking appends, unticking
+ * removes, the order of the rest is kept; a stored id that is not among the options stays listed
+ * (and kept) as "(not installed)".
+ */
+function Checklist({ field, ids, onChange }: {
+  field: SchemaFieldDef; ids: string[]; onChange: (next: string) => void
+}) {
+  const { t } = useI18n()
+  const options = field.options ?? []
+  const known = new Set(options.map(o => o.value))
+  const rows = [...options, ...ids.filter(id => !known.has(id)).map(id => ({ value: id, label: id, description: '', missing: true }))]
+  const toggle = (id: string, on: boolean) =>
+    onChange((on ? [...ids.filter(x => x !== id), id] : ids.filter(x => x !== id)).join(','))
+  if (!rows.length) return <span className="ga-form-hint">{t('No operations installed')}</span>
+  return <div role="group" aria-label={field.label}>
+    {rows.map(row => <label key={row.value} style={{ display: 'block' }} title={row.description || undefined}>
+      <input type="checkbox" checked={ids.includes(row.value)} onChange={event => toggle(row.value, event.target.checked)} />
+      {' '}{row.label} <code>{row.value}</code>
+      {'missing' in row && <span className="ga-form-hint"> {t('(not installed)')}</span>}
+      {row.description && <div className="ga-form-hint">{row.description}</div>}
+    </label>)}
+  </div>
 }
 
 function ImagePreview({ field, revision }: { field: SchemaFieldDef; revision: number }) {
@@ -123,7 +158,9 @@ export function SchemaField({ field, fieldKey, revision, refresh, ...props }: Sc
   const hint = <>{field.description}{scalarDefault.length > 0 && scalarDefault.length <= 80 &&
     <div>{t('Default')}: {scalarDefault}</div>}</>
   let control
-  if (field.type === 'bool') control = <input type="checkbox" aria-label={field.label} checked={Boolean(value ?? defaultValue)} onChange={event => change(event.target.checked)} />
+  if (field.widget === 'checklist') control = <Checklist field={field} ids={commaIds(value ?? defaultValue)}
+    onChange={next => change(next)} />
+  else if (field.type === 'bool') control = <input type="checkbox" aria-label={field.label} checked={Boolean(value ?? defaultValue)} onChange={event => change(event.target.checked)} />
   else if (field.type === 'select') control = <select className="ga-input" aria-label={field.label} value={String(value ?? defaultValue ?? '')}
     onChange={event => change(field.choices?.find(choice => String(choice) === event.target.value) ?? event.target.value)}>
     {selectOptions(field.choices, field.choice_labels).map(option =>

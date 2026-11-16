@@ -194,14 +194,16 @@ SECTIONS = {
             },
             "reference_postprocess": {
                 "type": "str",
+                "widget": "checklist",
+                "options_source": "reference_postprocess_ops",
                 "label": "Full-body reference post-processing (default)",
                 "default": "",
-                "description": "Operation ids, comma separated, that run on the CPU over the plain body's "
-                               "full-body reference (no image job; the original is kept) — the front and every "
-                               "view are then generated from the processed picture. Operations come from "
-                               "installed packages and are listed with their ids in Characters → Figure → Base "
-                               "body, at the full-body reference. Each character may turn an operation on or off "
-                               "for itself there. Empty: none by default.",
+                "description": "The operations that run by default on the CPU over the plain body's full-body "
+                               "reference (no image job; the original is kept) — the front and every view are "
+                               "then generated from the processed picture. Operations come from installed "
+                               "packages. Each character may turn an operation on or off for itself in "
+                               "Characters → Figure, at the full-body reference. None ticked: none by default. "
+                               "Stored as a comma-separated list of operation ids.",
             },
         },
     },

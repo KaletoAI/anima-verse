@@ -6,6 +6,8 @@ Admin-only (prefix /admin is on the auth gate's admin list, the dependency
 is the second layer).
 """
 import asyncio
+import logging
+import copy
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -13,13 +15,42 @@ from app.core import config, config_admin, config_scope, paths
 from app.core.auth_dependency import require_admin
 from app.core.config_schema import WORLD_GROUPS
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/admin/world-settings", tags=["world-settings"],
                    dependencies=[Depends(require_admin)])
 
 
+def _reference_postprocess_ops() -> list:
+    from app.core import view_postprocess
+    return [{"value": op_id, "label": str(d.get("label") or op_id), "description": str(d.get("description") or "")}
+            for op_id, d in sorted(view_postprocess.operations().items())]
+
+
+#: ``options_source`` of a schema field -> resolver of its options ``[{value, label, description}]``.
+#: The options are what is installed NOW; a stored value the resolver does not list stays the client's to show.
+OPTION_SOURCES = {"reference_postprocess_ops": _reference_postprocess_ops}
+
+
+def _resolve_options(node) -> None:
+    """Put ``options`` on every field (nested) that names an ``options_source``; an unknown or failing source
+    resolves to no options rather than breaking the page."""
+    if isinstance(node, dict):
+        source = node.get("options_source")
+        if isinstance(source, str):
+            try:
+                node["options"] = OPTION_SOURCES[source]()
+            except Exception:  # noqa: BLE001
+                logger.exception("options_source %r failed", source)
+                node["options"] = []
+        for value in node.values():
+            _resolve_options(value)
+
+
 def _payload() -> dict:
     from app.core.config import _DEFAULT_IMAGE_USE_CASES, _PROMPT_STYLE_FAMILIES
-    schema = config_scope.schema_for(config_scope.WORLD)
+    schema = copy.deepcopy(config_scope.schema_for(config_scope.WORLD))
+    _resolve_options(schema)
     groups = []
     for g in WORLD_GROUPS:
         sections = [k for k, sec in schema.items() if sec.get("world_group") == g["id"]]

@@ -6245,7 +6245,9 @@
     "The attached part bends toward its target first (within the clip’s bend limits: stiff when raised, loose when resting); only what the bend cannot reach moves or turns the partner. Off = the part stays rigid, as before.": "Das angesetzte Teil biegt sich zuerst zum Ziel (innerhalb der Biegegrenzen des Clips: steif, wenn aufgerichtet, locker, wenn ruhend); nur was die Biegung nicht erreicht, verschiebt oder dreht den Partner. Aus = das Teil bleibt starr wie bisher.",
     "The attached part bends within its limit in every frame.": "Das angesetzte Teil bleibt in jedem Bild innerhalb seiner Biegegrenze.",
     "The attached part is at its bend limit in {n} of {m} frames: the rest of the way is the partner’s shift or turn.": "Das angesetzte Teil steht in {n} von {m} Bildern an seiner Biegegrenze: Den Rest übernimmt die Verschiebung oder Drehung des Partners.",
-    "core default": "Kernvorgabe"
+    "core default": "Kernvorgabe",
+    "No operations installed": "Keine Operationen installiert",
+    "(not installed)": "(nicht installiert)"
   },
     "Show the reference as it is again": "Referenzbild wieder unverändert zeigen",
     "Shows the processed reference in its place — nothing is stored.": "Zeigt das bearbeitete Referenzbild an seiner Stelle — es wird nichts gespeichert."
