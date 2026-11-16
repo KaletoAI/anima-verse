@@ -30,7 +30,7 @@
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import type { Object3D, AnimationClip } from 'three'
 import {
-  CAPSULE_REGION_COLORS, FIGURE_HEIGHT_M, OPENING_MARGIN_M, STRAND_RECORD_VERSION, alignmentDelta, alignmentLamp,
+  CAPSULE_REGION_COLORS, FIGURE_HEIGHT_M, contactCapsules, OPENING_MARGIN_M, STRAND_RECORD_VERSION, alignmentDelta, alignmentLamp,
   bindRelativeClip, calibratedRoot, capsuleWireframe, channelWireframe, clipCalibration,
   installSkinnedNormalCorrection, median, pairYaw, pickModelVariant, placeCapsuleWireframe, placeChannelWireframe,
   placeModelSpec, restCorrections, restPoseOf, strandCandidates,
@@ -550,7 +550,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           let channels = 0
           for (const { name, inspection: ins } of res.figures) {
             if (!ins) continue
-            if (sh.collision) for (const c of ins.capsules) {
+            if (sh.collision) for (const c of contactCapsules(ins)) {
               const key = `${name}|${c.id}`
               usedCaps.add(key)
               let line = capLines.get(key)
@@ -880,7 +880,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
                         .replace('{mm}', g.openingMm === null ? t('pending') : `${g.openingMm.toFixed(1)} mm`)}
                     </div>
                   )) : (info.partners.channels
-                    ? t('{n} channels, none engaged.').replace('{n}', String(info.partners.channels))
+                    ? t('Channels: {n}, none engaged.').replace('{n}', String(info.partners.channels))
                     : t('No figure carries a channel.'))}
                 </div>
               ) : null}

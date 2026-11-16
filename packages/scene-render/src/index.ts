@@ -245,7 +245,7 @@ export type { FootPlantOptions } from './footPlant'
 // place preview drives it directly — one frame order, one secondary motion, one partner pass.
 export { FigureRuntime, createFigureRuntime } from './figureRuntime'
 export type { FigureRuntimeOptions, ChannelOccupants, FigureInspection, OpeningInspection } from './figureRuntime'
-export { inspectFrame, segmentSegmentDistance } from './figureInspect'
+export { contactCapsules, inspectFrame, segmentSegmentDistance } from './figureInspect'
 export type { CapsuleContact, FrameInspection } from './figureInspect'
 export { planPartnerFrame } from './partnerFrame'
 export type { FrameFigure } from './partnerFrame'

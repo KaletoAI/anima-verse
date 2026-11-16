@@ -5867,7 +5867,7 @@
     "Fewer than two figures with collision capsules.": "Weniger als zwei Figuren mit Kollisionskapseln.",
     "A chain of one figure engaged in another figure’s channel: its weight w and the radius the channel opens to.": "Eine Kette einer Figur im Kanal einer anderen Figur: ihr Gewicht w und der Radius, auf den sich der Kanal öffnet.",
     "{by} → {of} {channel}: w {w}, opening {mm}": "{by} → {of} {channel}: w {w}, Öffnung {mm}",
-    "{n} channels, none engaged.": "{n} Kanäle, keiner belegt.",
+    "Channels: {n}, none engaged.": "Kanäle: {n}, keiner belegt.",
     "No figure carries a channel.": "Keine Figur trägt einen Kanal.",
     "Phase B of the two-phase frame: secondary motion and strand hair. Strand hair runs for the 2 figures nearest the camera.": "Phase B des Zwei-Phasen-Frames: Sekundärbewegung und Strähnenhaar. Strähnenhaar läuft für die 2 Figuren, die der Kamera am nächsten sind.",
     "{n} strand hair": "{n} mit Strähnenhaar",

@@ -3,7 +3,9 @@
  * "Collision" and "Channels" toggles, computed from `FigureRuntime.inspect()` of every figure after phase B
  * (`runFigureFrame`) — the same capsules and channels client3d's figures engage, never a second geometry.
  *
- *  - contacts: every pair of capsules of two DIFFERENT figures whose surfaces overlap, depth = r_a + r_b − the
+ *  - contacts: over the capsules a partner's extension chain collides with (`contactCapsules` = `partnerCapsules`
+ *    'extension': no hair-only regions, `outer_trunk` in place of `torso` where the set has it), every pair of
+ *    capsules of two DIFFERENT figures whose surfaces overlap, depth = r_a + r_b − the
  *    closest distance of their axis segments (metres, > 0 = penetration), deepest first; per figure pair the
  *    closest one (its depth may be negative = the gap);
  *  - engagements: which figure's chain is engaged in which figure's channel, its weight w and the opening radius
@@ -13,6 +15,12 @@
  */
 import type { Vec3 } from './collision'
 import type { FigureInspection } from './figureRuntime'
+import { partnerCapsules } from './partnerContact'
+
+/** The capsules of an inspection the contact readout measures (module docstring), payload order. */
+export function contactCapsules(inspection: FigureInspection): FigureInspection['capsules'] {
+  return partnerCapsules('extension', inspection.capsules.map(c => ({ capsule: c }))).map(e => e.capsule)
+}
 
 /** Closest distance between the segments p1–q1 and p2–q2 (clamped closest points, Ericson § 5.1.9). */
 export function segmentSegmentDistance(p1: Vec3, q1: Vec3, p2: Vec3, q2: Vec3): number {
@@ -60,8 +68,9 @@ export function inspectFrame(figures: readonly { name: string; inspection: Figur
   for (let i = 0; i < live.length; i++) {
     for (let j = i + 1; j < live.length; j++) {
       let best: CapsuleContact | null = null
-      for (const ca of live[i].inspection.capsules) {
-        for (const cb of live[j].inspection.capsules) {
+      const capsB = contactCapsules(live[j].inspection)
+      for (const ca of contactCapsules(live[i].inspection)) {
+        for (const cb of capsB) {
           const depth = ca.now.r + cb.now.r - segmentSegmentDistance(ca.now.a, ca.now.b, cb.now.a, cb.now.b)
           const row = { a: live[i].name, capA: ca.id, b: live[j].name, capB: cb.id, depth }
           if (depth > 0) contacts.push(row)
