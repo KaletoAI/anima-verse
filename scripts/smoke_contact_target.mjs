@@ -13,8 +13,9 @@
  *     u = −f = (0, 0, −1); provisional.
  * [4] no eyes, headZ (0, 0.6, 0.8): minus h part → (0, 0, 0.8) → f (0,0,1) → the same O.
  * [5] no head → null; no pinky → null.
- * [6] findContact: a chain op 'x'; receiving with target hand_left → {chain 0, 'hand_left'}; head_front missing → null;
- *     'none' → null; 'channel' with a channel accepting 'x' → its id.
+ * [6] findContact: chains [pair_tip, attached_part]; receiving with target hand_left → {chain 1, 'hand_left'} (a
+ *     pair_tip chain never aims at a point target: only pair_tip → null); head_front missing → null; 'none' → null;
+ *     'channel' with a channel accepting attached_part → chain 1 + its id.
  * [7] contactSampleOf on hand_left with base (0.04,1,−0.15) → tip (0.04,1,0.05): shaft +z, u (0,0,−1) flips to (0,0,1).
  * [8] solve against that hand: o (0.04,1,0), u (0,0,1), tips (0.05,1,0) and (0.05,1,0.05): entry frame 0 (s 0);
  *     M = diag(2, 2, 20), g = (0.02, 0, 0) → Δ = (−0.01, 0, 0); after: entry 0 mm, max lateral 0 mm.
@@ -59,13 +60,14 @@ v(SR.targetFrame('head_front', { head: head.head, headtop_end: head.headtop_end,
 assert.equal(SR.targetFrame('head_front', {}), null)                                            // [5]
 assert.equal(SR.targetFrame('hand_left', { ...hand, lefthandpinky1: undefined }), null)
 const seg = { a: [0.04, 1, -0.15], b: [0.04, 1, 0.05] }
-const ent = { chains: [{ op: 'x', segments: [seg] }], channels: [] }
-const rec = { chains: [], channels: [{ id: 'B:c', o: [0, 0, 0], u: [0, 0, 1], accepts: ['x'] }], targets: SR.targetFrames(hand) }
-assert.deepEqual(SR.findContact(ent, rec, 'hand_left'), { chain: 0, channel: 'hand_left' })      // [6]
+const ent = { chains: [{ op: 'pair_tip', segments: [seg] }, { op: 'attached_part', segments: [seg] }], channels: [] }
+const rec = { chains: [], channels: [{ id: 'B:c', o: [0, 0, 0], u: [0, 0, 1], accepts: ['attached_part'] }], targets: SR.targetFrames(hand) }
+assert.deepEqual(SR.findContact(ent, rec, 'hand_left'), { chain: 1, channel: 'hand_left' })      // [6]
 assert.equal(SR.findContact(ent, rec, 'head_front'), null)
 assert.equal(SR.findContact(ent, rec, 'none'), null)
-assert.deepEqual(SR.findContact(ent, rec, 'channel'), { chain: 0, channel: 'B:c' })
-const smp = SR.contactSampleOf(ent, rec, { chain: 0, channel: 'hand_left' }, [0, 0, 0])            // [7]
+assert.deepEqual(SR.findContact(ent, rec, 'channel'), { chain: 1, channel: 'B:c' })
+assert.equal(SR.findContact({ chains: [ent.chains[0]], channels: [] }, rec, 'hand_left'), null)
+const smp = SR.contactSampleOf(ent, rec, { chain: 1, channel: 'hand_left' }, [0, 0, 0])            // [7]
 v(smp.u, [0, 0, 1], 'grip u along shaft'); v(smp.o, [0.04, 1, 0], 'grip o')
 const ss = [[0.05, 1, 0], [0.05, 1, 0.05]].map((tip) => ({ tip, base: [tip[0], tip[1], tip[2] - 0.2], o: [0.04, 1, 0], u: [0, 0, 1] }))
 const d = SR.solveContactShift(ss)                                                                 // [8]

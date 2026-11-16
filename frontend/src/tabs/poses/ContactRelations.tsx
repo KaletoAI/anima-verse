@@ -28,7 +28,7 @@ export function ContactRelations({ roles, saved, draft, onDraft, onSave, busy }:
     : saved?.source === 'package' ? t('package default') : t('automatic (the channel the part fits, B moves)')
   const set = (i: number, patch: Partial<ContactRelation>) => onDraft(draft.map((r, k) => (k === i ? { ...r, ...patch } : r)))
   const free = roles.filter((r) => !draft.some((x) => x.part === r))
-  const sel = { className: 'ga-input', style: { fontSize: 12, padding: '0 2px' } }
+  const sel = { className: 'ga-input', style: { fontSize: 12, padding: '0 2px', width: 'auto', minWidth: 0, flex: '0 0 auto' } }
   return (
     <div data-testid="contact-relations" style={{ fontSize: 12, display: 'grid', gap: 3 }}>
       <div title={t('Which place’s attached part aims at which target of which other place. Auto-align, the fine fit and the follow solve every row; the place preview checks that each person has what the row needs.')}>
@@ -36,7 +36,7 @@ export function ContactRelations({ roles, saved, draft, onDraft, onSave, busy }:
       </div>
       {draft.length === 0 ? <div className="ga-form-hint" style={{ margin: 0 }}>{t('No rows: the channel the attached part fits is found automatically.')}</div> : null}
       {draft.map((r, i) => (
-        <div key={i} style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div key={i} style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'nowrap' }}>
           <select {...sel} aria-label={t('Place with the attached part')} value={r.part} disabled={busy}
             onChange={(e) => set(i, { part: e.target.value })}>
             {roles.map((x) => <option key={x} value={x} disabled={x !== r.part && draft.some((y) => y.part === x)}>{x.toUpperCase()}</option>)}

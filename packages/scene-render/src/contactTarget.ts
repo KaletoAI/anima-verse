@@ -16,6 +16,8 @@
  *   mouth height in front of the face), u = −f (towards the head).
  * - `none`       — no contact: no fit, no follow, Auto-align refuses.
  *
+ * A point target is aimed at by the first chain whose op is in `POINT_TARGET_OPS` (a channel picks by its `accepts`).
+ *
  * The CHECKS report the distance to the target at the entry frame and the lateral off the axis; DEPTH only for a
  * channel (a hand or the head stand-in has no inside). The lamp of a non-channel target (`targetLamp`): green = entry
  * ≤ `CONTACT_ENTRY_GREEN_MM` and the largest lateral ≤ the target's radius (`TARGET_RADIUS_M`), yellow ≤ twice it,
@@ -32,6 +34,8 @@ export type ContactTarget = typeof CONTACT_TARGETS[number]
 /** The point targets (not a channel, not none). */
 export type PointTarget = 'hand_left' | 'hand_right' | 'head_front'
 export const POINT_TARGETS: readonly PointTarget[] = ['hand_left', 'hand_right', 'head_front']
+/** The chain ops that aim at a point target (an attached part; other op chains — tips, protrusions — never do). */
+export const POINT_TARGET_OPS: readonly string[] = ['attached_part', 'appendage_chain']
 /** Targets that only stand in for something not built yet. */
 export const PROVISIONAL_TARGETS: readonly ContactTarget[] = ['head_front']
 /** The lamp's radius of a point target (metres). */

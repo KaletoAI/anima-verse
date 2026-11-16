@@ -37,7 +37,7 @@
  */
 import type { Vec3 } from './collision'
 import { CONTACT_ENTRY_WEIGHT, type ContactSample } from './channelContact'
-import { isPointTarget, orientAlong, type ContactTarget } from './contactTarget'
+import { isPointTarget, orientAlong, POINT_TARGET_OPS, type ContactTarget } from './contactTarget'
 
 export interface FitSample extends ContactSample { pivot: Vec3 }
 export interface PairFix { shift: Vec3; turn: Vec3 }
@@ -309,13 +309,13 @@ interface InspectionLike {
 }
 /** The contact of `entering` in `receiving` for the clip's CONTACT TARGET (Ruling A139, `contactTarget.ts`):
  *  `channel` = the first chain whose op one of `receiving`'s channels accepts (A126); a point target = the first chain
- *  with segments against that target of `receiving` (`channel` then holds the target id); `none` = no contact. */
+ *  with an op of `POINT_TARGET_OPS` against that target of `receiving` (`channel` then holds the target id); `none` = no contact. */
 export function findContact(entering: InspectionLike, receiving: InspectionLike, target: ContactTarget = 'channel'):
   { chain: number; channel: string } | null {
   if (target === 'none') return null
   if (isPointTarget(target)) {
     if (!receiving.targets?.some((x) => x.id === target)) return null
-    const ci = entering.chains.findIndex((c) => c.segments.length > 0 && c.op !== '')
+    const ci = entering.chains.findIndex((c) => c.segments.length > 0 && POINT_TARGET_OPS.includes(c.op))
     return ci >= 0 ? { chain: ci, channel: target } : null
   }
   for (let ci = 0; ci < entering.chains.length; ci++) {

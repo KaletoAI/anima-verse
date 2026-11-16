@@ -40,7 +40,7 @@ import {
   fixAnglesDeg, ALIGN_FIT, NO_FIX, RUNTIME_FIT, createPairFit, pairFitObserve, pairFitTotal, findContact, contactSampleOf,
   attachedPartIndex, partBoneNames, type PairFitState, pairInterpenetration, clearLamp, PART_REGIONS, type ClearLamp,
   type ContactLamp, type ContactReport, type FitSample, type PairFix,
-  targetLamp, isPointTarget, TARGET_RADIUS_M, type ContactTarget,
+  targetLamp, isPointTarget, TARGET_RADIUS_M, POINT_TARGET_OPS, type ContactTarget,
 } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { targetWordOf } from './contactWords'
@@ -902,7 +902,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             const e = figs.findIndex((f) => f.role === rel.part), r = figs.findIndex((f) => f.role === rel.at)
             if (e < 0 || r < 0) continue
             const ie = res.figures[e].inspection, ir = res.figures[r].inspection
-            if (!ie?.chains.some((c) => c.segments.length)) {
+            if (!ie?.chains.some((c) => c.segments.length && POINT_TARGET_OPS.includes(c.op))) {
               out.push(t('Place {p} ({who}) needs an attached part.').replace('{p}', figs[e].letter).replace('{who}', figs[e].character))
               continue
             }
@@ -1093,7 +1093,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             if (needs.length && swapTried.current !== swapKey) {
               swapTried.current = swapKey
               const partRoles = new Set((draftRef.current.contactRelations ?? []).filter((x) => x.target !== 'none').map((x) => x.part))
-              const has = (i: number) => !!phaseB.figures[i].inspection?.chains.some((c) => c.segments.length)
+              const has = (i: number) => !!phaseB.figures[i].inspection?.chains.some((c) => c.segments.length && POINT_TARGET_OPS.includes(c.op))
               const lack = figs.findIndex((f, i) => partRoles.has(f.role) && !has(i))
               const donor = figs.findIndex((f, i) => !partRoles.has(f.role) && has(i))
               if (lack >= 0 && donor >= 0) {

@@ -258,7 +258,7 @@ export type { PlaceEntry } from './placeSlot'
 export { solveContactShift, contactReport, contactLamp, entryFrame, bodyOverlap, CONTACT_ENTRY_WEIGHT,
   CONTACT_ENTRY_GREEN_MM, CONTACT_CLEAR_MM } from './channelContact'
 export type { ContactSample, ContactReport, ContactLamp } from './channelContact'
-export { CONTACT_TARGETS, POINT_TARGETS, PROVISIONAL_TARGETS, TARGET_RADIUS_M, HEAD_FRONT, TARGET_BONE_NAMES, isContactTarget,
+export { CONTACT_TARGETS, POINT_TARGETS, POINT_TARGET_OPS, PROVISIONAL_TARGETS, TARGET_RADIUS_M, HEAD_FRONT, TARGET_BONE_NAMES, isContactTarget,
   isPointTarget, targetFrame, targetFrames, orientAlong, targetLamp } from './contactTarget'
 export type { ContactTarget, PointTarget, TargetBones, TargetFrame } from './contactTarget'
 export { solvePairFix, fixPoint, unfixPoint, fixSample, fixRoot, composeFix, turnMatrix, matrixTurn, fixAnglesDeg,

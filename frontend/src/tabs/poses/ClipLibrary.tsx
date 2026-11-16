@@ -1435,9 +1435,9 @@ export function ClipLibrary({
                                       <td style={{ textAlign: 'right', padding: '0 4px' }}>{a.toFixed(0)} mm</td>
                                       <td style={{ textAlign: 'right', padding: '0 4px' }}>{b.toFixed(0)} mm</td></tr>
                                   ))}
-                                  <tr><td>{t('Depth gained by B’s tilt/roll')}</td>
+                                  {autoAlign.target === 'channel' ? (<tr><td>{t('Depth gained by B’s tilt/roll')}</td>
                                     <td style={{ textAlign: 'right', padding: '0 4px' }}>{autoAlign.afterShift.depthMm.toFixed(0)} mm</td>
-                                    <td style={{ textAlign: 'right', padding: '0 4px' }}>{autoAlign.after.depthMm.toFixed(0)} mm</td></tr>
+                                    <td style={{ textAlign: 'right', padding: '0 4px' }}>{autoAlign.after.depthMm.toFixed(0)} mm</td></tr>) : null}
                                   <tr><td>{t('B tilt / roll')}</td><td />
                                     <td style={{ textAlign: 'right', padding: '0 4px' }}>{autoAlign.turnDeg[0].toFixed(1)}° / {autoAlign.turnDeg[1].toFixed(1)}°</td></tr>
                                   <tr><td>{t('Shaft against the axis at the outermost frame')}</td>
