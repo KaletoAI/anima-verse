@@ -15,6 +15,10 @@ Expected values, derived by hand:
 * ``stand_in`` turns every pixel inside the matte with R < 100 into (180, 140, 120) and reports how many: it sees
   600 matte pixels (the core handed the matte as alpha), finds 16, the copy has 0 pixels with R < 100 and alpha 255
   everywhere (the picture's own alpha), the original keeps its 16 dark pixels byte for byte.
+* A generated reference is RGBA with alpha 253 EVERYWHERE (A152; no pixel under 128 -> under ``OPAQUE_SHARE``):
+  it gets the matte too — the operation sees 600 matte pixels, not 800; the result keeps alpha 253 everywhere and
+  has 0 dark pixels. Before A152 only alpha 255 counted as opaque and the operation saw all 800 pixels as figure.
+* ``preview`` of that picture returns ``after`` bytes (not None), found 16.
 * No operation on: the original path comes back. Asked again: the same copy, the operation not run again (1 call).
 * A reference without a dark pixel: nothing found -> the original path, sidecar ``result_sha256`` None.
 * An operation that changes the matte it was handed: ``run`` raises ValueError; ``processed_reference`` falls back
@@ -137,6 +141,18 @@ check(CALLS["seen"] == 600, f"the operation saw the figure matte: 600 px (got {C
 check(int((px[..., 0] < 100).sum()) == 0, "copy: no dark pixel left")
 check(bool((px[..., 3] == 255).all()), "copy: the picture's own (opaque) alpha")
 check(ref.read_bytes() == orig and int((pixels(ref)[..., 0] < 100).sum()) == 16, "original untouched (16 dark)")
+# --- A152: an RGBA reference with alpha 253 everywhere is opaque too ------------------
+near = picture(); near[..., 3] = 253
+res = vp.run(png(near), vp.REFERENCE_VIEW, vp.operations()["stand_in"])
+check(CALLS["seen"] == 600, f"alpha-253 picture: the operation saw the matte, 600 px (got {CALLS['seen']})")
+npx = np.asarray(Image.open(io.BytesIO(res["data"])).convert("RGBA")) if res["data"] else None
+check(npx is not None and bool((npx[..., 3] == 253).all()) and int((npx[..., 0] < 100).sum()) == 0,
+      "alpha-253 picture: own alpha kept, no dark pixel left")
+near_ref = gallery / "near.png"
+near_ref.write_bytes(png(near))
+pv = vp.preview(near_ref, "stand_in")
+check(pv["after"] is not None and pv["found"] == 16, f"preview returns an after picture, found 16 (got {pv['found']})")
+CALLS["stand_in"] -= 2
 rec = vp.reference_record(CHAR, ref, ["stand_in"])
 check(rec["steps"][0]["found"] == 16 and rec["path"] == out, f"record: found 16 (got {rec['steps']})")
 check(rec["source_sha256"] == hashlib.sha256(orig).hexdigest(), "record: source sha = original")

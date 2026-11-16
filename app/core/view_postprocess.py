@@ -68,6 +68,10 @@ CONFIG_KEY = "base_body.reference_postprocess"
 
 NOT_RESTORABLE = ("The view changed since it was processed (rendered or edited again) — its kept original "
                   "no longer belongs to it")
+#: A picture whose alpha leaves less than this share of its pixels transparent has no matte of its own: a generated
+#: full-body reference is RGBA with alpha 252..254 everywhere (A152), and as its own "matte" the whole frame was the
+#: figure — the operation then searched the background and the upper arms.
+OPAQUE_SHARE = 0.001
 SILHOUETTE_CHANGED = "The operation changed the silhouette of the view — result discarded"
 
 
@@ -162,7 +166,7 @@ def figure_matte(data: bytes, size) -> "Any":
 def run(data: bytes, view: str, desc: Dict[str, Any], params: Optional[Dict[str, Any]] = None
         ) -> Dict[str, Any]:
     """Run one operation on image bytes, nothing stored: ``{data|None, found, regions, seconds, params}``. An opaque
-    picture is handed over with its figure matte as alpha (``figure_matte``); the result keeps the picture's own
+    picture (no pixel transparent beyond ``OPAQUE_SHARE``) is handed over with its figure matte as alpha (``figure_matte``); the result keeps the picture's own
     alpha. Raises ``ValueError`` when the operation changed the matte it was given."""
     import numpy as np
     from PIL import Image
@@ -172,7 +176,7 @@ def run(data: bytes, view: str, desc: Dict[str, Any], params: Optional[Dict[str,
         src = opened.convert("RGBA")
     own_alpha = np.asarray(src)[..., 3]
     given = src
-    if int(own_alpha.min()) == 255:
+    if float((own_alpha < 128).mean()) < OPAQUE_SHARE:
         given = src.copy()
         given.putalpha(figure_matte(data, src.size).convert("L"))
     result = desc["apply"](given, view=view, params=merged) or {}
