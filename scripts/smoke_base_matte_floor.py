@@ -31,7 +31,7 @@ by hand (``MATTE_MARGIN`` = 0.05):
     at 10: its image bytes are byte-identical after the floor (Ruling A36 — a garment keeps its generator map), and
     its UVs do not enter the anchor (anchor still 0.549).
 [6] ``repair_glb`` with the hole fill switched off: hole-fill status "skipped", yet ``record["matte"]["status"]``
-    "applied" (the floor is not a hole repair). VERSION is 2, and the settings fingerprint of the defaults under
+    "applied" (the floor is not a hole repair). VERSION is at least 2 (3 since Ruling A137), and the settings fingerprint of the defaults under
     VERSION 1 is ``332a2bb4fd247881`` — the value every stored base record of the test world carries (read from
     their sidecars 2026-11-15) — while under VERSION 2 it differs: every stored base body is due, the Build's local
     "Base mesh repair" step applies the floor (``figure_build._mesh_repair_due``), no hub job.
@@ -195,11 +195,11 @@ def main() -> int:
     out, rec = R.repair_glb(glb, {"enabled": False})
     check("hole fill skipped", rec.get("status") == "skipped", str(rec))
     check("matte applied anyway", (rec.get("matte") or {}).get("status") == "applied", str(rec))
-    check("VERSION 2", R.VERSION == 2)
+    check("VERSION >= 2", R.VERSION >= 2)
     current = R.settings_fingerprint({})
-    R.VERSION = 1
+    kept, R.VERSION = R.VERSION, 1
     old = R.settings_fingerprint({})
-    R.VERSION = 2
+    R.VERSION = kept
     check("v1 default fingerprint is the stored records' 332a2bb4fd247881", old == "332a2bb4fd247881", old)
     check("v2 fingerprint differs (every stored base due)", current != old, current)
 

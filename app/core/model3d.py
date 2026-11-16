@@ -2191,6 +2191,15 @@ def _extension_rig_once(character_name: str, path: Path,
         # Neutralised only where the extension script ran (it needs the part's source placement).
         neutral_ids = neutral_ids if remaining else []
         if publish:
+            if _mesh_repair_target(meta, path) and isinstance(meta.get("mesh_repair"), dict):
+                # The extension parts bring faces of their own: wound outward and their normals repaired too
+                # (Ruling A137); the body itself was oriented in ``_repaired_base``.
+                from app.core import base_mesh_repair
+                try:
+                    oriented, meta["mesh_repair"]["orient_parts"] = base_mesh_repair.orient_glb(staged.read_bytes())
+                    staged.write_bytes(oriented)
+                except Exception as exc:  # noqa: BLE001 — the parts keep their own winding and normals
+                    meta["mesh_repair"]["orient_parts"] = {"status": "failed", "error": f"Orientation failed: {exc}"}
             _publish_model_bytes(path, staged.read_bytes())
             meta["blender"] = source_meta.get("blender") or {}
             if result.get("applied") or batches:

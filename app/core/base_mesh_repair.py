@@ -40,6 +40,22 @@ image is re-encoded in its own format (JPEG at quality 95 without chroma subsamp
 body whose texels are all at or above the floor, or one without a metallic-roughness texture, comes back
 unchanged. It runs whether the hole fill is switched on or off — it is not a hole repair — and its record is
 ``mesh_repair["matte"]``.
+
+**Orientation** (``orient`` / ``orient_glb``, Ruling A137). Every face of a base body is wound outward and every
+vertex normal agrees with its faces. Measured on the stored bodies of the test world (four bodies, prerig, plain
+and covered): the mesher's winding is already consistent (0..2 inconsistent manifold edges of ~140 000), no face is
+visible from outside on its back (9 rays per side), but the surface is split into thousands of manifold pieces by
+non-manifold edges (Kira: ~4 900), most faces lie in tight folds, and the parts the extension script builds carry
+vertex normals AGAINST their faces (Glut: 3.2 % of the faces). That is why ray parity and normal-based tests read
+"13 % inward" (Ruling A135) — not the winding. The pass therefore never guesses an orientation across a
+non-manifold edge: on the welded surface it splits the faces into components over MANIFOLD edges only, makes
+each component's winding consistent (a breadth-first walk; where both orientations are possible the one that
+reverses less area wins), and reverses a whole component only when it is CLOSED (no open or non-manifold edge),
+encloses negative volume and does NOT lie inside the rest of the body (six-ray parity, majority) — a closed shell
+inside the body wound inward is a cavity and stays so; an open piece keeps the orientation its own majority has. Then every vertex whose stored NORMAL points against the area-weighted normal of its
+faces (dot < 0) gets that face normal; every other vertex keeps its bytes. A body that needs nothing comes back
+unchanged, byte for byte. It runs in ``repair_glb`` (record ``mesh_repair["orient"]``) and once more on the
+published body after the extension parts (``model3d``, ``mesh_repair["orient_parts"]``).
 """
 from __future__ import annotations
 
@@ -53,7 +69,8 @@ import numpy as np
 
 #: Bump when the repair changes what it produces: every stored base body is then repaired again (on the CPU).
 #: 2: the matte floor of the body's roughness (Ruling A97).
-VERSION = 2
+#: 3: outward winding + vertex normals (``orient``, Ruling A137).
+VERSION = 3
 #: Metres: positional copies (UV seams, creases) within this distance are one surface point
 #: (``extension_bones.COINCIDENT_EPSILON_M``).
 WELD_M = 1e-5
@@ -543,6 +560,159 @@ def fill_holes(prims: List[Any], *, max_hole_m: float) -> Dict[str, Any]:
     return report
 
 
+# --- Orientation (Ruling A137) ---------------------------------------------------------------------------------
+
+
+#: The six axis rays of the enclosure test (``_enclosed``), nudged off the axes so no ray runs along an edge.
+_RAYS = np.array([[1, 0.013, 0.007], [-1, 0.011, -0.009], [0.008, 1, 0.012], [-0.006, -1, 0.01],
+                  [0.009, -0.014, 1], [-0.012, 0.005, -1]], np.float64)
+
+
+def _enclosed(P: np.ndarray, F: np.ndarray, point: np.ndarray) -> bool:
+    """Whether ``point`` lies inside the surface ``P[F]``: an odd number of crossings on most of six rays (a
+    majority, because the surface is not watertight everywhere)."""
+    if not len(F):
+        return False
+    v0, v1, v2 = P[F[:, 0]], P[F[:, 1]], P[F[:, 2]]
+    e1, e2 = v1 - v0, v2 - v0
+    s = point - v0
+    q = np.cross(s, e1)
+    odd = 0
+    for d in _RAYS:
+        h = np.cross(d, e2)
+        det = np.einsum("ij,ij->i", e1, h)
+        ok = np.abs(det) > 1e-14
+        inv = np.where(ok, 1.0 / np.where(ok, det, 1.0), 0.0)
+        u = np.einsum("ij,ij->i", s, h) * inv
+        v = np.einsum("ij,j->i", q, d) * inv
+        t = np.einsum("ij,ij->i", e2, q) * inv
+        hits = ok & (u >= 0) & (v >= 0) & (u + v <= 1) & (t > 0)
+        odd += int(hits.sum()) % 2
+    return odd >= 4
+
+
+def orient(prims: List[Any]) -> Dict[str, Any]:
+    """Wind the body primitives ``prims`` (``glb_mesh.Prim``, mutated) outward and repair their vertex normals
+    (module docstring). Returns ``{components, closed, voids, faces_flipped, conflicts, normals_fixed, changed}``."""
+    sizes = [len(p.positions) for p in prims]
+    offsets = np.concatenate([[0], np.cumsum(sizes)]).astype(np.int64)
+    fcounts = [len(p.faces) for p in prims]
+    foff = np.concatenate([[0], np.cumsum(fcounts)]).astype(np.int64)
+    report: Dict[str, Any] = {"components": 0, "closed": 0, "voids": 0, "faces_flipped": 0,
+                              "conflicts": 0, "normals_fixed": 0, "changed": []}
+    if not prims or not sum(fcounts):
+        return report
+    P = np.concatenate([p.positions for p in prims])
+    F = np.concatenate([p.faces + offsets[i] for i, p in enumerate(prims)]).astype(np.int64)
+    m = len(F)
+    w = weld(P)
+    Fw = w[F]
+    proper = _proper(Fw)
+    # Directed edges of the proper faces; an undirected edge with exactly two faces links them.
+    fid = np.tile(np.arange(m), 3)
+    a = np.concatenate([Fw[:, 0], Fw[:, 1], Fw[:, 2]])
+    b = np.concatenate([Fw[:, 1], Fw[:, 2], Fw[:, 0]])
+    keep = np.tile(proper, 3)
+    fid, a, b = fid[keep], a[keep], b[keep]
+    stride = int(w.max()) + 1
+    key = np.minimum(a, b) * stride + np.maximum(a, b)
+    forward = a < b
+    order = np.argsort(key, kind="stable")
+    key, fid, forward = key[order], fid[order], forward[order]
+    _, start, count = np.unique(key, return_index=True, return_counts=True)
+    two = start[count == 2]
+    f1, f2 = fid[two], fid[two + 1]
+    # Same traversal direction on both sides: the two faces disagree (one of them must be reversed).
+    differ = (forward[two] == forward[two + 1]).astype(np.int8)
+    bad_edge_faces = np.zeros(m, bool)          # faces on an open or non-manifold edge
+    bad_edge_faces[fid[np.repeat(count != 2, count)]] = True
+    adj: List[List[Tuple[int, int]]] = [[] for _ in range(m)]
+    for x, y, d in zip(f1.tolist(), f2.tolist(), differ.tolist()):
+        if x == y:
+            continue
+        adj[x].append((y, d))
+        adj[y].append((x, d))
+    fn = np.cross(P[F[:, 1]] - P[F[:, 0]], P[F[:, 2]] - P[F[:, 0]])      # 2 x area, along the winding
+    area = 0.5 * np.linalg.norm(fn, axis=1)
+    vol6 = np.einsum("ij,ij->i", P[F[:, 0]], fn)                          # 6 x signed volume (origin)
+    flip = np.zeros(m, bool)
+    seen = np.zeros(m, bool)
+    for seed in range(m):
+        if seen[seed] or not proper[seed]:
+            continue
+        report["components"] += 1
+        seen[seed] = True
+        rel = {seed: 0}
+        stack = [seed]
+        while stack:
+            f = stack.pop()
+            for g, d in adj[f]:
+                want = rel[f] ^ d
+                if g in rel:
+                    if rel[g] != want:
+                        report["conflicts"] += 1
+                    continue
+                rel[g] = want
+                seen[g] = True
+                stack.append(g)
+        faces = np.fromiter(rel.keys(), np.int64, len(rel))
+        bits = np.fromiter(rel.values(), np.int8, len(rel)).astype(bool)
+        # The orientation of the component that reverses less area.
+        if area[faces[bits]].sum() > area[faces[~bits]].sum():
+            bits = ~bits
+        if not bad_edge_faces[faces].any():
+            report["closed"] += 1
+            sign = np.where(bits, -1.0, 1.0)
+            if float((vol6[faces] * sign).sum()) < 0:
+                inside = np.ones(m, bool)
+                inside[faces] = False
+                if _enclosed(P, F[inside & proper], P[F[faces[0]]].mean(0)):
+                    report["voids"] += 1     # a cavity in the body: wound into the cavity, as it should be
+                else:
+                    bits = ~bits
+        flip[faces[bits]] = True
+    report["conflicts"] //= 2
+    report["faces_flipped"] = int(flip.sum())
+    changed = set()
+    for i, p in enumerate(prims):
+        local = flip[foff[i]:foff[i + 1]]
+        if local.any():
+            p.faces = p.faces.copy()
+            p.faces[local] = p.faces[local][:, [0, 2, 1]]
+            changed.add(i)
+        N = p.attributes.get("NORMAL")
+        if N is None or not len(p.faces):
+            continue
+        Q = p.positions
+        n = np.cross(Q[p.faces[:, 1]] - Q[p.faces[:, 0]], Q[p.faces[:, 2]] - Q[p.faces[:, 0]])
+        vn = np.zeros_like(Q)
+        for k in range(3):
+            np.add.at(vn, p.faces[:, k], n)
+        length = np.linalg.norm(vn, axis=1)
+        wrong = (np.einsum("ij,ij->i", vn, N) < 0) & (length > 0)
+        if wrong.any():
+            N = N.copy()
+            N[wrong] = vn[wrong] / length[wrong, None]
+            p.attributes["NORMAL"] = N
+            report["normals_fixed"] += int(wrong.sum())
+            changed.add(i)
+    report["changed"] = sorted(changed)
+    return report
+
+
+def orient_glb(glb: bytes) -> Tuple[bytes, Dict[str, Any]]:
+    """``(bytes, record)``: ``glb`` with its body primitives wound outward and their normals repaired
+    (``orient``); a body that needs nothing returns ``glb`` itself."""
+    from app.core import glb_mesh
+    prims = glb_mesh.body_primitive_arrays(glb)
+    report = orient(prims)
+    changed = report.pop("changed")
+    record = {"status": "applied", **report}
+    if not changed:
+        return glb, record
+    return glb_mesh.rewrite_body_primitives(glb, {i: prims[i] for i in changed}), record
+
+
 # --- Matte floor ----------------------------------------------------------------------------------------------
 
 def _texture_images(gltf: dict, texture_index: int) -> List[int]:
@@ -661,7 +831,8 @@ def matte_floor(glb: bytes, *, margin: float = MATTE_MARGIN) -> Tuple[bytes, Dic
 
 def repair_glb(glb: bytes, settings: Optional[Dict[str, Any]] = None) -> Tuple[bytes, Dict[str, Any]]:
     """``(bytes, record)``: ``glb`` with the holes of its body primitives filled (``fill_holes``), then its body
-    roughness lifted to the matte floor (``matte_floor``, also when the hole fill is switched off), and the record a
+    wound outward with its normals repaired (``orient``), its roughness lifted to the matte floor (``matte_floor``;
+    both also when the hole fill is switched off), and the record a
     model stores (``mesh_repair``: version, settings fingerprint, status ``applied`` | ``skipped`` of the hole fill,
     the numbers, ``matte``). A closed body without a glossy texel returns ``glb`` itself, unchanged."""
     from app.core import glb_mesh
@@ -679,6 +850,10 @@ def repair_glb(glb: bytes, settings: Optional[Dict[str, Any]] = None) -> Tuple[b
         if changed:
             out = glb_mesh.rewrite_body_primitives(glb, {i: prims[i] for i in changed})
             record["open_edges_after"] = open_edge_count(*_concat(glb_mesh.body_primitive_arrays(out)))
+    try:
+        out, record["orient"] = orient_glb(out)
+    except Exception as exc:  # noqa: BLE001 — the body keeps the mesher's winding and normals
+        record["orient"] = {"status": "failed", "error": f"Orientation failed: {exc}"}
     try:
         out, record["matte"] = matte_floor(out)
     except Exception as exc:  # noqa: BLE001 — the holes stay filled; the body keeps the mesher's roughness
