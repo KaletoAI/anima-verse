@@ -158,6 +158,9 @@ UPPER_LEG_POSES = ("sit",)
 BODICE_FRAMES = 30
 ARM_SHAPE_FRAMES = 12
 UPPER_SIT_FRAMES = 16
+#: Ruling A144: a dress with a bodice drapes its sit / kneel shapes with this many frames (40 put a sleeved dress at
+#: 63 s wall, 28 still 62 s; a skirt keeps the default SHAPE_FRAMES of the builder).
+DRESS_LEG_FRAMES = 20
 MEASURED_UPPER_POSES = ("rest", "walk", "arms_down", "arms_forward", "arms_up", "sit")
 #: The pose-shape groups (driver segments are joint pairs; ``frame`` = the joint whose rotation since the bind pose
 #: is taken out of the directions; ``sigma`` = Gaussian width in radians of summed segment angle). The arm samples lie
@@ -188,7 +191,10 @@ def shape_groups(params: Dict[str, Any], long_top: bool = False) -> List[Dict[st
     or jacket whose hem reaches below the hip joints (``long_top``) also the sit shape (its hem lies on the lap)."""
     groups: List[Dict[str, Any]] = []
     if params["kind"] in ("skirt", "dress"):
-        groups.append({**LEG_GROUP, "poses": list(SHAPE_POSES)})
+        leg = {**LEG_GROUP, "poses": list(SHAPE_POSES)}
+        if has_bodice(params):
+            leg["frames"] = DRESS_LEG_FRAMES
+        groups.append(leg)
     elif params["kind"] in UPPER_KINDS and long_top:
         groups.append({**LEG_GROUP, "poses": list(UPPER_LEG_POSES), "frames": UPPER_SIT_FRAMES})
     if has_bodice(params):

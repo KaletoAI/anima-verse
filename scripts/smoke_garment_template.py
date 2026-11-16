@@ -347,9 +347,11 @@ check("[12] long top adds sit", [g["name"] for g in args["shape_groups"]] == ["l
 args = gt.build_args(top, spec_t, item_id="x")
 check("[12] hip-length top: no legs", [g["name"] for g in args["shape_groups"]] == ["arm_l", "arm_r"])
 check("[12] strapless dress: legs", names(gt.shape_groups(d0)) == [("legs", ("sit", "kneel"))])
+check("[12] strapless dress: leg shapes at the builder default (no frames key)", "frames" not in gt.shape_groups(d0)[0])
 dc, _ = gt.validate_params({"kind": "dress", "shoulders": "covered", "sleeves": "short"})
 check("[12] covered dress: legs + arms_down", names(gt.shape_groups(dc)) == [
     ("legs", ("sit", "kneel")), ("arm_l", ("arms_down",)), ("arm_r", ("arms_down",))])
+check("[12] covered dress: leg shapes 20 frames (DRESS_LEG_FRAMES)", gt.shape_groups(dc)[0]["frames"] == 20)
 check("[12] shape_targets folds sides", gt.shape_targets({"targets": ["sit", "arms_down_l", "arms_down_r"]})
       == ["sit", "arms_down"])
 check("[12] renders out of the wall", {r["check"]: r for r in gt.judge_build(
