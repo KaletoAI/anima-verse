@@ -192,6 +192,15 @@ SECTIONS = {
                                "nothing is rebuilt automatically. Not used for fronts made from a full-body "
                                "reference.",
             },
+            "reference_postprocess": {
+                "type": "str",
+                "label": "Reference view post-processing (default)",
+                "default": "",
+                "description": "Operation ids, comma separated, that run on the CPU over every newly stored base "
+                               "view (no image job) — operations come from installed packages and are listed "
+                               "with their ids in Characters → Figure → Base body. Each character may turn an "
+                               "operation on or off for itself there. Empty: none by default.",
+            },
         },
     },
     "packages": {

@@ -90,7 +90,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote
 
-from app.core import view_facing
+from app.core import view_facing, view_postprocess
 from app.core.log import get_logger
 
 logger = get_logger("base_body")
@@ -1393,11 +1393,15 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
                         from app.core import base_skin
                         path = base_skin.after_front_render(character_name, path, bsig=bsig, profile=profile,
                                                             source=str(front_ref.get("source") or ""))
+                        # Ruling A146: the operations on for the character (a package's, on the CPU).
+                        view_postprocess.after_view_accepted(character_name, v, path, profile=profile)
                 else:
                     path = draw(v, final, reference)
                     if path is not None and v in view_facing.SIDE_VIEWS:
                         # Ruling A91: a side view the detector is sure faces the wrong way is mirrored on the CPU.
                         view_facing.auto_correct(v, Path(path))
+                    if path is not None:
+                        view_postprocess.after_view_accepted(character_name, v, Path(path), profile=profile)
                 error = None if path else "render failed"
             except Exception as e:  # noqa: BLE001 — one view never kills the run
                 if raise_load and _is_load(e):
@@ -1496,6 +1500,7 @@ def base_info(character_name: str) -> Dict[str, Any]:
                                                               current=current, profile=profile)
             if view in view_facing.SIDE_VIEWS:
                 tile["facing"] = _facing_tile(character_name, view, signature, path)
+            tile["postprocess"] = view_postprocess.tile_state(path)
             image_meta[view] = tile
         else:
             image_meta[view] = None
@@ -1516,6 +1521,7 @@ def base_info(character_name: str) -> Dict[str, Any]:
             "front_reference": _front_reference_info(character_name, signature, profile) if humanoid else None,
             "prompt_fingerprint": current,
             "skin": _skin_info(character_name, signature) if humanoid else None,
+            "postprocess": postprocess_info(character_name, signature, profile) if humanoid else None,
             "status": base_status(character_name),
             "model": base_model_info(character_name, signature),
             "outfit": outfit_info(character_name, base_sig=signature) if pipeline else None,
@@ -1664,6 +1670,133 @@ def mirror_base_view(character_name: str, view: str) -> Dict[str, Any]:
     finally:
         lock.release()
     return {"mirrored": result["mirrored"], "facing": _facing_tile(character_name, view, bsig, path)}
+
+
+# --- Reference post-processing (Ruling A146, ``view_postprocess``) ----------------
+
+POSTPROCESS_BUSY = "A base-body step works on the views right now — change it when it is done"
+
+
+def _postprocess_targets(character_name: str, bsig: str, desc: Dict[str, Any]) -> Dict[str, Path]:
+    from app.core.model_refs import find_ref_image
+    out: Dict[str, Path] = {}
+    for view in BASE_VIEWS:
+        if view in (desc.get("views") or BASE_VIEWS):
+            path = find_ref_image(character_name, _kind(view), bsig)
+            if path is not None:
+                out[view] = path
+    return out
+
+
+def postprocess_followup(character_name: str, bsig: str, op_id: str, enable: bool) -> Dict[str, Any]:
+    """What turning ``op_id`` on (``enable``) or off makes due for the stored views of ``bsig``: ``{kind,
+    jobs, views, dressed}`` — ``kind`` one of the mirror's ``FOLLOWUP_*`` (judged against the base model's
+    recorded ``view_images_sha256``): ``no_model``, ``unused`` (the model was built without these views),
+    ``restores`` (turning off gives back the bytes the model was built from), ``stale`` (the next Build
+    rebuilds the base model: ``jobs`` hub jobs, None unknown), ``already_stale``. Turning ON is judged as
+    "the views change" (what the operation finds is only known when it runs). ``dressed``: dressed views
+    composited onto these views follow them at their next Build. The step itself costs no image job."""
+    from app.core import model3d
+    desc = view_postprocess.operations().get(op_id) or {}
+    targets = _postprocess_targets(character_name, bsig, desc)
+    dressed = any(v in CORE_DRESSED_VIEWS for v in targets) or (side_views_dressed() and bool(targets))
+    model = model3d.find_model3d(character_name, bsig)
+    if model is None:
+        return {"kind": FOLLOWUP_NO_MODEL, "jobs": 0, "views": sorted(targets), "dressed": dressed}
+    recorded = model3d._read_sidecar(model).get("view_images_sha256") or {}
+    used = [v for v in targets if recorded.get(v)]
+    if not used:
+        return {"kind": FOLLOWUP_UNUSED, "jobs": 0, "views": sorted(targets), "dressed": dressed}
+    current = all(recorded.get(v) == file_sha256(targets[v]) for v in used)
+    if not enable:
+        recs = {v: view_postprocess.record_of(targets[v]) or {} for v in used}
+        if all(recorded.get(v) == (recs[v].get("original_sha256") or file_sha256(targets[v])) for v in used):
+            return {"kind": FOLLOWUP_RESTORES, "jobs": 0, "views": sorted(targets), "dressed": dressed}
+    kind = FOLLOWUP_STALE if current else FOLLOWUP_ALREADY_STALE
+    return {"kind": kind, "jobs": _mesh_stage_count(character_name, bsig), "views": sorted(targets),
+            "dressed": dressed}
+
+
+def postprocess_info(character_name: str, bsig: str, profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The Base body tab's post-process block: every supplied operation with the character's choice, the
+    world default, whether it is on, and the followup of a click (``postprocess_followup``). None when no
+    package supplies one (the block is hidden)."""
+    try:
+        available = view_postprocess.operations()
+        if not available:
+            return None
+        own = view_postprocess.character_choices(profile)
+        world = set(view_postprocess.world_default_ids())
+        on = set(view_postprocess.enabled_ids(profile, available))
+        ops = []
+        for op_id, desc in available.items():
+            entry = view_postprocess.public_descriptor(desc)
+            entry.update(own=own.get(op_id), world_default=op_id in world, enabled=op_id in on,
+                         followup=postprocess_followup(character_name, bsig, op_id, op_id not in on)
+                         if bsig else None)
+            ops.append(entry)
+        return {"operations": ops}
+    except Exception:  # noqa: BLE001 — the poll never fails on it
+        logger.exception("Post-process info of %s failed", character_name)
+        return None
+
+
+def set_base_postprocess(character_name: str, op_id: str, enabled: Optional[bool]) -> Dict[str, Any]:
+    """Store the character's choice for ``op_id`` (None = follow the world default) and bring the stored
+    base views of the CURRENT signature in line at once: processed when the operation is now on, restored to
+    their originals when off. CPU only, no image job; the base model built from the old bytes is then out of
+    date (``postprocess_followup``). Returns ``{enabled, views: {view: record|None}, errors}``. Raises
+    ``KeyError`` for an operation nobody supplies, ``MirrorRefused`` while a base-body step or a 3D run of
+    the character goes."""
+    from app.core import model3d
+    available = view_postprocess.operations()
+    if op_id not in available:
+        raise KeyError(op_id)
+    if base_steps_running(character_name) or model3d.generation_running(character_name):
+        raise MirrorRefused(POSTPROCESS_BUSY)
+    lock = _char_lock(character_name)
+    if not lock.acquire(blocking=False):
+        raise MirrorRefused(POSTPROCESS_BUSY)
+    try:
+        if not view_postprocess.set_character_choice(character_name, op_id, enabled):
+            raise RuntimeError("The character could not be saved")
+        profile = _profile_of(character_name, None)
+        on = op_id in view_postprocess.enabled_ids(profile, available)
+        bsig = base_signature(character_name, profile=profile)
+        views: Dict[str, Any] = {}
+        errors: Dict[str, str] = {}
+        for view, path in _postprocess_targets(character_name, bsig, available[op_id]).items():
+            try:
+                if on:
+                    views[view] = view_postprocess.process(path, view, op_id)
+                else:
+                    view_postprocess.restore(path)
+                    views[view] = None
+            except view_postprocess.NotRestorable as e:
+                errors[view] = str(e)
+    finally:
+        lock.release()
+    return {"enabled": on, "views": views, "errors": errors}
+
+
+def postprocess_preview(character_name: str, view: str, op_id: str,
+                        params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Before/after of ``op_id`` over the stored ``view`` (unprocessed bytes), as data URLs; nothing stored.
+    ``FileNotFoundError`` without a stored view, ``KeyError`` for an unknown operation, ``ValueError`` for
+    another view."""
+    import base64
+    from app.core.model_refs import find_ref_image
+    if view not in BASE_VIEWS:
+        raise ValueError(f"Unknown view {view}")
+    path = find_ref_image(character_name, _kind(view), base_signature(character_name))
+    if path is None:
+        raise FileNotFoundError(f"No stored {view} view")
+    res = view_postprocess.preview(path, view, op_id, params)
+
+    def url(data: Optional[bytes]) -> Optional[str]:
+        return "data:image/png;base64," + base64.b64encode(data).decode("ascii") if data else None
+    return {"before": url(res["before"]), "after": url(res["after"]), "found": res["found"],
+            "seconds": res["seconds"]}
 
 
 # --- The base model ---------------------------------------------------------

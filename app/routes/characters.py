@@ -1947,6 +1947,46 @@ def mirror_character_base_body_view(character_name: str, view: str,
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/{character_name}/base-body/postprocess/{op_id}")
+def set_character_base_body_postprocess(character_name: str, op_id: str, body: Dict[str, Any],
+                                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Turn a reference post-process operation on or off for the character (``{"enabled": true|false|null}``,
+    null = the world default) and apply it to the stored base views at once — CPU only, no image job
+    (Ruling A146, ``base_body.set_base_postprocess``). 404 for an operation no package supplies, 409 while a
+    base-body step, a 3D run or a Build of the character goes."""
+    from app.core import base_body
+    _require_character(character_name)
+    _refuse_during_build(character_name)
+    enabled = body.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        raise HTTPException(status_code=400, detail="enabled must be true, false or null")
+    try:
+        return base_body.set_base_postprocess(character_name, op_id, enabled)
+    except base_body.MirrorRefused as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No operation {op_id}")
+
+
+@router.post("/{character_name}/base-body/images/{view}/postprocess-preview/{op_id}")
+def preview_character_base_body_postprocess(character_name: str, view: str, op_id: str,
+                                            body: Optional[Dict[str, Any]] = None,
+                                            _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Before/after of a post-process operation over one stored base view, nothing stored (Ruling A146).
+    ``{before, after, found, seconds}`` (data URLs; ``after`` null when nothing was found)."""
+    from app.core import base_body, view_postprocess
+    _require_character(character_name)
+    params = (body or {}).get("params") if isinstance((body or {}).get("params"), dict) else None
+    try:
+        return base_body.postprocess_preview(character_name, view, op_id, params)
+    except (FileNotFoundError, KeyError) as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except view_postprocess.NotRestorable as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/{character_name}/base-body/skin-step", status_code=202)
 def rerun_character_base_body_skin_step(character_name: str,
                                         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:

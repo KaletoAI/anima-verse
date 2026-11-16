@@ -250,11 +250,13 @@ def _ref_files(character_name: str) -> Dict[str, List[Path]]:
     """signature → its reference files (image + sidecar), by file name —
     the base-body back drafts (``model_refs/drafts/``), the refusal
     records of the dressed views (``drafts/refused/``, Ruling FR-I3) and the
-    kept originals of mirrored side views (``mirrored/``, Ruling A91) go
+    kept originals of mirrored side views (``mirrored/``, Ruling A91) and of post-processed views
+    (``postprocessed/``, Ruling A146) go
     with the signature of their outfit."""
     from app.core.base_body import DRAFT_DIR, VIEW_REFUSED_DIR
     from app.core.model_refs import _IMAGE_EXTS
     from app.core.view_facing import MIRROR_DIR
+    from app.core.view_postprocess import KEEP_DIR
     from app.models.character import get_character_dir
     out: Dict[str, List[Path]] = {}
     d = get_character_dir(character_name) / "model_refs"
@@ -263,9 +265,11 @@ def _ref_files(character_name: str) -> Dict[str, List[Path]]:
     drafts = d / DRAFT_DIR
     refused = drafts / VIEW_REFUSED_DIR
     mirrored = d / MIRROR_DIR
+    processed = d / KEEP_DIR
     for p in (sorted(d.iterdir()) + (sorted(drafts.iterdir()) if drafts.is_dir() else [])
               + (sorted(refused.iterdir()) if refused.is_dir() else [])
-              + (sorted(mirrored.iterdir()) if mirrored.is_dir() else [])):
+              + (sorted(mirrored.iterdir()) if mirrored.is_dir() else [])
+              + (sorted(processed.iterdir()) if processed.is_dir() else [])):
         if not p.is_file() or p.suffix.lower() not in _IMAGE_EXTS + (".json",):
             continue
         for prefix in REF_PREFIXES:
