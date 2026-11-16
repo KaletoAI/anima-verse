@@ -1318,6 +1318,9 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
             pair=bool(entry["role"]))),
         # Which gender plays which role — pair/group halves only, {} = not assigned.
         "role_gender": clip_role_gender(meta) if entry["role"] else {},
+        # Ruling A139: the contact relations of a pair/group clip
+        # ({"relations", "source"}: clip | package | default); None for a solo clip.
+        "contact_target": clip_contact_target(meta, entry["kind"]) if entry["role"] else None,
         # Saved orientation and renderer calibration. Angles and partner B
         # offsets are baked; the whole-clip shift is applied at placement.
         "orientation": {k: geometry.get(k) for k in
@@ -1821,6 +1824,118 @@ def set_clip_role_gender(library: str, rel: str,
     reload_clip_caches()
     logger.info("clip role genders: %s%s (%s) -> %s", f"{cset}/" if cset else "",
                 kind, library, value or "not assigned")
+    return [_view_of(p, cset, library) for p in _kind_files(path.parent, kind)]
+
+
+CONTACT_TARGETS = ("channel", "hand_left", "hand_right", "head_front", "none")
+#: Hook capability a package registers to default the contact relations of its clip kinds
+#: (``fn() -> {kind: relations}``, ``multiple=True``; relations as :func:`validate_contact_relations`
+#: takes them, or a bare target word = one relation B's part → A); the clip's own value wins.
+CONTACT_TARGET_DEFAULTS_CAPABILITY = "clip_contact_target_defaults"
+
+
+def validate_contact_relations(value: Any, roles: Sequence[str] = CLIP_ROLES) -> List[Dict[str, str]]:
+    """Ruling A139: a clip's CONTACT RELATIONS — ``[{"part": role, "at": role, "target": word}]``.
+
+    ``part`` is the place whose attached part's tip moves, ``at`` the anchor place
+    whose target it aims at (``target`` one of :data:`CONTACT_TARGETS`); the solve
+    moves ``part`` against ``at``. A bare target word is one relation ``b → a``.
+    Refused: unknown roles, ``part == at``, the same ``part`` twice.
+    """
+    if isinstance(value, str):
+        value = [{"part": "b", "at": "a", "target": value}]
+    if not isinstance(value, list) or not value:
+        raise ClipLibraryError("contact relations must be a non-empty list of {part, at, target}")
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for r in value:
+        if not isinstance(r, dict):
+            raise ClipLibraryError("a contact relation is {part, at, target}")
+        part, at, target = r.get("part"), r.get("at"), r.get("target")
+        if part not in roles or at not in roles or part == at:
+            raise ClipLibraryError(f"contact relation {part}→{at}: part and at must be two different roles of "
+                                   + ", ".join(roles))
+        if target not in CONTACT_TARGETS:
+            raise ClipLibraryError("contact target must be one of " + ", ".join(CONTACT_TARGETS))
+        if part in seen:
+            raise ClipLibraryError(f"place {part} has two contact relations")
+        seen.add(part)
+        out.append({"part": part, "at": at, "target": target})
+    return out
+
+
+def package_contact_targets() -> Dict[str, List[Dict[str, str]]]:
+    """The contact-relation defaults every loaded package declares, by clip kind (first valid wins)."""
+    from app.core import hooks
+    out: Dict[str, List[Dict[str, str]]] = {}
+    for fn in hooks.get_providers(CONTACT_TARGET_DEFAULTS_CAPABILITY):
+        try:
+            got = fn() or {}
+        except Exception as e:  # a broken package must not break the clip listing
+            logger.warning("contact target defaults provider failed: %s", e)
+            continue
+        if not isinstance(got, dict):
+            continue
+        for kind, rel in got.items():
+            if not isinstance(kind, str) or kind in out:
+                continue
+            try:
+                out[kind] = validate_contact_relations(rel)
+            except ClipLibraryError as e:
+                logger.warning("contact relations of %s from a package ignored: %s", kind, e)
+    return out
+
+
+def clip_contact_target(meta: Optional[Dict[str, Any]], kind: str) -> Dict[str, Any]:
+    """Ruling A139: the contact relations of a pair/group clip — ``{"relations", "source"}``.
+
+    The ``<kind>.json``'s ``contact_relations`` (source ``clip``, set in the Poses
+    tab) over a package default for the kind (``package``) over ``[]`` (``default``:
+    the A126 auto-detection — the channel the attached part fits, B moves).
+    """
+    roles = _meta_roles(meta) if isinstance(meta, dict) else list(CLIP_ROLES)
+    own = (meta or {}).get("contact_relations") if isinstance(meta, dict) else None
+    if own is not None:
+        try:
+            return {"relations": validate_contact_relations(own, roles), "source": "clip"}
+        except ClipLibraryError:
+            pass
+    pkg = package_contact_targets().get(kind)
+    if pkg and all(r["part"] in roles and r["at"] in roles for r in pkg):
+        return {"relations": pkg, "source": "package"}
+    return {"relations": [], "source": "default"}
+
+
+@_library_writer
+def set_clip_contact_target(library: str, rel: str, relations: Any) -> List[Dict[str, Any]]:
+    """Writes (or with ``None`` clears = inherit) a pair/group clip's contact
+    relations in its shared ``<kind>.json`` (Ruling A139). Refused for a solo
+    clip, an invalid relation and a kind without a sidecar."""
+    path = resolve_clip(library, rel)
+    if not path.is_file():
+        raise ClipNotFound(f"{rel} does not exist in the {library} library")
+    kind, role = parse_clip_role(path.name)
+    if not role:
+        raise ClipLibraryError(f"'{kind}' is a solo clip — only a pair clip has contact relations")
+    root = library_root(library).resolve()
+    cset = path.parent.name if path.parent.resolve() != root else ""
+    sidecar = path.parent / f"{kind}.json"
+    if not sidecar.is_file():
+        raise ClipLibraryError(f"'{kind}' has no sidecar {sidecar.name} — re-import the clip first")
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ClipLibraryError(f"{sidecar.name} is not readable: {e}")
+    if not isinstance(data, dict):
+        raise ClipLibraryError(f"{sidecar.name} is not an object")
+    if relations is None:
+        data.pop("contact_relations", None)
+    else:
+        data["contact_relations"] = validate_contact_relations(relations, _meta_roles(data))
+    sidecar.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    reload_clip_caches()
+    logger.info("clip contact relations: %s%s (%s) -> %s", f"{cset}/" if cset else "", kind, library,
+                data.get("contact_relations") or "inherited")
     return [_view_of(p, cset, library) for p in _kind_files(path.parent, kind)]
 
 

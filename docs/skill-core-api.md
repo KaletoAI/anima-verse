@@ -202,6 +202,19 @@ entry without an icon dropped. Answer `[]` for a character the badge does not
 concern — this runs on every 3-second poll for every character, so keep it to
 profile reads (no DB query per call).
 
+## Clip contact relations — capability `clip_contact_target_defaults` ✅
+
+Ruling A139. A pair/group clip says which place's attached part aims at which
+target of which other place: `[{"part": "b", "at": "a", "target": t}]`,
+`t` ∈ `channel` · `hand_left` · `hand_right` · `head_front` (provisional
+stand-in for a mouth) · `none`. A package defaults its own kinds with
+`register_provider("clip_contact_target_defaults", fn, owner="<package id>", multiple=True)`,
+`fn() -> {kind: relations | target word}` (a bare word = one relation B → A).
+The clip's own `contact_relations` in its `<kind>.json` (Poses tab → Alignment)
+wins; nothing declared = the A126 auto-detection. Core:
+`app.core.animation_clips.clip_contact_target(meta, kind)`,
+`validate_contact_relations(value, roles)`.
+
 ## Strict conditions and held snapshots — `app.core.activity_engine`
 
 | Function / value | Semantics |

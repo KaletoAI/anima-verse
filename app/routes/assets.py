@@ -187,7 +187,11 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
     """Renames or moves a clip and/or edits its playback metadata.
 
     Body ``{kind?, set?, library?, loop?, loop_count?, role_gender?,
-    height_offsets_cm?, overwrite?}``, at least one edit field. ``height_offsets_cm`` is a partial
+    height_offsets_cm?, contact_target?, overwrite?}``, at least one edit field.
+    ``contact_target`` (Ruling A139) is the clip's contact relations
+    ``[{part, at, target}]`` (target ``channel`` / ``hand_left`` / ``hand_right`` /
+    ``head_front`` / ``none``; a bare word = B → A), ``null`` = inherit the package
+    default (stored in the ``<kind>.json``). ``height_offsets_cm`` is a partial
     map of ground/seat/lie to finite numbers from -50 to 50 cm; zero removes
     only that surface. Corrections are absolute for a 1.70 m figure, shared
     by pair halves and applied by the renderer, never baked into the clip.
@@ -214,11 +218,11 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
         raise HTTPException(status_code=400, detail="object expected")
     if not any(k in body for k in
                ("kind", "set", "library", "loop", "loop_count", "role_gender",
-                "height_offsets_cm")):
+                "height_offsets_cm", "contact_target")):
         raise HTTPException(
             status_code=400,
             detail="one of kind, set, library, loop, loop_count, role_gender, "
-                   "height_offsets_cm is required")
+                   "height_offsets_cm, contact_target is required")
     if "role_gender" in body and not (body["role_gender"] is None
                                       or isinstance(body["role_gender"], dict)):
         raise HTTPException(status_code=400,
@@ -263,6 +267,9 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
             clips = set_clip_role_gender(library, rel, body["role_gender"])
         if "height_offsets_cm" in body:
             clips = set_clip_height_offsets(library, rel, body["height_offsets_cm"])
+        if "contact_target" in body:
+            from app.core.animation_clips import set_clip_contact_target
+            clips = set_clip_contact_target(library, rel, body["contact_target"])
     except ClipLibraryError as e:
         raise _clip_edit_error(e)
     return {"clips": clips}
