@@ -2735,6 +2735,92 @@ def figure_info(character_name: str) -> Dict[str, Any]:
     return info
 
 
+#: The plan steps the character list counts as the BASE (plain) body (Ruling A112); every other step is the
+#: outfit's (the worn figure: interim, shape, pieces, hair, texture/views, fits, assembly, collision).
+BASE_STEPS = frozenset({"plain_body", "base_repair", "tip_smoothing"})
+#: ``open_steps`` memo: character -> (key, monotonic, answer) — the same key and TTL as ``figure_info``.
+_open_memo: Dict[str, Tuple[Tuple[Any, ...], float, Dict[str, Any]]] = {}
+
+
+def _open_group(steps: List[Step]) -> Dict[str, Any]:
+    rows = [{"label": s.label, "jobs": s.jobs, "hold": bool(s.failed or s.manual),
+             "why": s.failed or s.manual} for s in steps]
+    return {"count": len(rows),
+            "hub_jobs": None if any(s.jobs is None for s in steps) else sum(int(s.jobs or 0) for s in steps),
+            "hold": any(r["hold"] for r in rows), "steps": rows}
+
+
+def open_steps(character_name: str) -> Dict[str, Any]:
+    """The character list's badges (Ruling A112): the Build's own plan (``plan``, the manual one the Figure tab
+    shows) split into ``base`` (``BASE_STEPS``) and ``outfit`` — each ``{count, hub_jobs (None = unknown), hold,
+    steps: [{label, jobs, hold, why}]}``; ``hold`` a step only a manual Build runs (``Step.manual``) or one that
+    failed for its inputs (``Step.failed``). Plus ``building`` (a run goes). Off the pipeline both are empty.
+    Read-only, no hub / LLM / Blender work; memoised like ``figure_info`` (``_info_key``, ``figure.MEMO_TTL_S``).
+    Never raises: an unreadable plan answers ``error`` with empty groups."""
+    import copy
+    import time
+    from app.core import figure
+    try:
+        profile = _profile_of(character_name, None)
+        build = state(character_name)
+        key = _info_key(character_name, profile, build)
+    except Exception as e:  # noqa: BLE001 — a badge, never a failure of the list
+        logger.debug("open steps of %s: key not read", character_name, exc_info=True)
+        return {"building": False, "base": _open_group([]), "outfit": _open_group([]), "error": str(e)}
+    now = time.monotonic()
+    with _info_lock:
+        hit = _open_memo.get(character_name)
+        if hit is not None and hit[0] == key:
+            if now - hit[1] >= figure.MEMO_TTL_S and character_name not in _open_refreshing:
+                # Past the TTL with the same key: served once more while ONE background re-plan refreshes it
+                # (the list polls every character; a cold plan of ~30 characters takes about a second).
+                _open_refreshing.add(character_name)
+                threading.Thread(target=_refresh_open, args=(character_name,), daemon=True,
+                                 name=f"open-steps-{character_name}").start()
+            return copy.deepcopy(hit[2])
+    return _compute_open(character_name, profile, build, key, now)
+
+
+_open_refreshing: set = set()
+
+
+def _refresh_open(character_name: str) -> None:
+    import time
+    try:
+        profile = _profile_of(character_name, None)
+        build = state(character_name)
+        _compute_open(character_name, profile, build, _info_key(character_name, profile, build), time.monotonic())
+    except Exception:  # noqa: BLE001 — the stale answer stays until the next read
+        logger.debug("open steps of %s: refresh failed", character_name, exc_info=True)
+    finally:
+        with _info_lock:
+            _open_refreshing.discard(character_name)
+
+
+def _compute_open(character_name: str, profile: Dict[str, Any], build: Dict[str, Any],
+                  key: Tuple[Any, ...], now: float) -> Dict[str, Any]:
+    import copy
+    from app.core import figure
+    try:
+        steps = plan(character_name, profile=profile)
+        error = ""
+    except Exception as e:  # noqa: BLE001
+        logger.warning("open steps of %s not computable: %s", character_name, e)
+        steps, error = [], str(e)
+    out: Dict[str, Any] = {"building": bool(build.get("running")),
+                           "base": _open_group([s for s in steps if s.name in BASE_STEPS]),
+                           "outfit": _open_group([s for s in steps if s.name not in BASE_STEPS])}
+    if error:
+        out["error"] = error
+        return out
+    with _info_lock:
+        if key[0] == figure._generation[0]:
+            if len(_open_memo) >= 256:
+                _open_memo.clear()
+            _open_memo[character_name] = (key, now, copy.deepcopy(out))
+    return out
+
+
 def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[str, Any]) -> Dict[str, Any]:
     """``GET /characters/{c}/figure``: ``{pipeline, humanoid, auto_build,
     status, changes, cost, build, wanted, delivered, served_url, served_built_at

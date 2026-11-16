@@ -5,6 +5,8 @@ import { ImportButton } from '../../components/ImportExport'
 import { ListPane } from '../../components/ListPane'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import type { CharacterRef } from '../../lib/refs'
+import { OpenStepsBadges } from './OpenStepsBadges'
+import { useOpenSteps } from './useOpenSteps'
 
 interface PooledNpc {
   name: string
@@ -91,6 +93,8 @@ export function CharacterListPanel({
   const [pooled, setPooled] = useState<PooledNpc[]>([])
   const [limits, setLimits] = useState<NpcLimits>({})
   const [living, setLiving] = useState<Record<string, LivingNpc>>({})
+  // Ruling A112: open Build steps of the base body / outfit per row, planned by the server.
+  const openSteps = useOpenSteps(characters.length)
 
   const loadPool = useCallback(() => {
     apiGet<{ npcs?: LivingNpc[]; pooled?: PooledNpc[]; limits?: NpcLimits }>('/npc/list')
@@ -190,6 +194,7 @@ export function CharacterListPanel({
                 {t('dormant')}
               </span>
             ) : null}
+            <OpenStepsBadges info={openSteps[c.name]} />
           </span>
         </button>
       </li>
@@ -256,6 +261,7 @@ export function CharacterListPanel({
                       list needs the span, and the server words it (game
                       clock, see `npc_ops.remaining_span`). */}
                   {ttl(c.name)}
+                  <OpenStepsBadges info={openSteps[c.name]} />
                 </span>
               </button>
               {!living[c.name]?.permanent && (

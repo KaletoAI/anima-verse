@@ -4,6 +4,10 @@ plan docs/superpowers/plans/2026-11-12-unified-worn-pieces.md Task 7).
 Admin-only (``Depends(require_admin)`` on each, like the base-body and outfit
 body actions):
 
+* ``GET  /characters/open-steps`` — the character list's badges (Ruling A112):
+  ``{characters: {name: figure_build.open_steps}}``, only characters with an
+  open step or a running Build.
+
 * ``GET  /characters/{c}/figure`` — the Figure tab's payload
   (``figure_build.figure_info``): ``{pipeline, humanoid, auto_build, status
   ("up_to_date" | "changes" | "building" | "failed"), changes
@@ -143,6 +147,20 @@ router = APIRouter(prefix="/characters", tags=["figure"])
 def _require_character(character_name: str) -> None:
     if not get_character_dir(character_name).exists():
         raise HTTPException(status_code=404, detail="Character not found")
+
+
+@router.get("/open-steps")
+def get_open_steps(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The character list's badges (Ruling A112): ``{"characters": {name: figure_build.open_steps(name)}}`` for
+    every character of the roster (dormant included) — only those with an open step or a running Build."""
+    from app.core import figure_build
+    from app.models.character import list_available_characters
+    out: Dict[str, Any] = {}
+    for name in list_available_characters(include_dormant=True):
+        info = figure_build.open_steps(name)
+        if info["building"] or info["base"]["count"] or info["outfit"]["count"]:
+            out[name] = info
+    return {"characters": out}
 
 
 @router.get("/{character_name}/figure")

@@ -3614,3 +3614,12 @@ a.ga-btn {
 .ga-view-tile .ga-view-actions > .ga-view-mirror { flex: 0 0 auto; width: auto; padding: 2px 6px; font-size: 12px; margin-top: 2px; }
 .ga-view-mirror[aria-pressed="true"] { border-color: var(--accent, #388bfd); background: rgba(56, 139, 253, 0.22); }
 .ga-view-notice { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 11px; }
+
+/* Ruling A112: open Build steps per character row — icon + count, red = held, yellow = due. */
+.ga-open-badges { display: inline-flex; gap: 4px; margin-left: 6px; vertical-align: middle; }
+.ga-open-badge { display: inline-flex; align-items: center; gap: 2px; padding: 0 5px; border-radius: 8px;
+  font-size: 11px; line-height: 16px; border: 1px solid currentColor; }
+.ga-open-badge.is-due { color: var(--warning, #d29922); }
+.ga-open-badge.is-hold { color: var(--danger, #f85149); }
+.ga-open-badge.is-building { color: var(--accent, #58a6ff); }
+.ga-open-badge-hub { margin-left: 3px; opacity: .85; }

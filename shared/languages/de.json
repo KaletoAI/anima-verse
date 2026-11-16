@@ -5907,6 +5907,9 @@
     "Measuring — the lamp shows after one full loop.": "Misst — die Ampel erscheint nach einer ganzen Schleife.",
     "This prop has no places.": "Dieses Requisit hat keine Plätze.",
     "Save check": "Prüfung speichern",
-    "Orientation checked {at} on {prop} / {place}: {dyaw}°, {dpos} cm": "Ausrichtung geprüft {at} auf {prop} / {place}: {dyaw}°, {dpos} cm"
+    "Orientation checked {at} on {prop} / {place}: {dyaw}°, {dpos} cm": "Ausrichtung geprüft {at} auf {prop} / {place}: {dyaw}°, {dpos} cm",
+    "A Build is running": "Ein Build läuft",
+    "Base body: {n} open steps": "Grundkörper: {n} offene Schritte",
+    "Outfit: {n} open steps": "Outfit: {n} offene Schritte"
   }
 }
