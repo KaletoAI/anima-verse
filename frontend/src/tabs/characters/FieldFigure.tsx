@@ -32,7 +32,8 @@
  *     cached chain failure, ruling 7a), Re-fit — no hub job (POST …/figure/refit {item_id}: that piece's CPU fit
  *     and the CPU assembly only, hub steps stay due for the Build — Ruling FR-I2; 409 while a Build runs),
  *     Regenerate mesh (POST …/garments/{item}/run {step: "mesh", force, chain}, only when the refusal points at
- *     the piece itself — Ruling A23), Details (an own-mesh piece's chain dialog, GarmentPieceDialog — a WORN
+ *     the piece itself — Ruling A23), Paint steps (a painted piece's dialog, PaintedPieceDialog, Ruling A148 — its outfit's views, paint
+ *     region, painted texture with its colour, assembly), Details (an own-mesh piece's chain dialog, GarmentPieceDialog — a WORN
  *     piece's only entry, opened without its "Run all", Ruling 10a; "Details — use a refused image" when every
  *     attempt of an image view was refused, Ruling A79: the dialog's "Refused images" takes one by hand); a closable piece has Closed / Open
  *     (PieceStateToggle, saved at once — Task 11b) with what the switch starts and costs beside it, and an
@@ -67,6 +68,7 @@ import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Model3DViewer } from './Model3DViewer'
 import { GarmentPieceDialog, PieceStateToggle } from './WardrobeGarment'
+import { PaintedPieceDialog } from './PaintedPieceDialog'
 import { TemplateParamsDialog } from './TemplateParamsDialog'
 import { FigureStored } from './FigureStored'
 import { FieldModelRefs } from './FieldModelRefs'
@@ -495,6 +497,8 @@ function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairst
   const { t } = useI18n()
   /** The template piece whose parameter dialog is open (Ruling A138). */
   const [params, setParams] = useState<string | null>(null)
+  /** The painted piece whose dialog is open (Ruling A148). */
+  const [painted, setPainted] = useState<{ id: string; name: string } | null>(null)
   const wardrobe = onOpenWardrobe ? (
     <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenWardrobe}
       title={t('The mode is set in the Wardrobe')}>↗ {t('Wardrobe')}</button>
@@ -548,6 +552,13 @@ function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairst
                   onClick={() => onOpenPiece(row.item_id, row.name)}>
                   {row.state === 'failed' && imageRefusal(row.failure) ? t('Details — use a refused image')
                     : t('Details')}
+                </button>
+              ) : null}
+              {row.mode === 'painted' ? (
+                <button type="button" className="ga-btn ga-btn-sm" aria-haspopup="dialog"
+                  title={t('The outfit’s dressed views, this piece’s paint region, the painted texture and its colour')}
+                  onClick={() => setPainted({ id: row.item_id, name: row.name })}>
+                  {t('Paint steps')}
                 </button>
               ) : null}
               {row.mode === 'template' ? (
@@ -607,6 +618,10 @@ function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairst
         )
       })}
       {!data.worn.length && !hair ? <div className="ga-hint">{t('Nothing worn')}</div> : null}
+      {painted ? (
+        <PaintedPieceDialog character={character} itemId={painted.id} name={painted.name}
+          onClose={() => { setPainted(null); onChanged() }} />
+      ) : null}
       {params ? (
         <TemplateParamsDialog character={character} itemId={params} onClose={() => setParams(null)}
           onSaved={onChanged} />
