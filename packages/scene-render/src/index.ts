@@ -201,7 +201,7 @@ export { PARTNER_MAX, PARTNER_COLLIDE_MAX, PARTNER_PUSH_MAX_M, PARTNER_HYST_M, P
 export type { Sphere, PartnerCapsule, PartnerSnapshot, PartnerList } from './partnerContact'
 
 export { CHANNEL_BLEND_S, CHANNEL_HYST_M, CHANNEL_HYST_DEG, CHANNEL_GROW, channelCoords, inZone, allowedRadius,
-  radialGuidanceAngle, depthJoint, depthScale, stepEngagement, channelGate, suppressedIds, guideRod, previewChannel, bindChannels, regionWeights, CHANNEL_REGION_K, CHANNEL_REGION_M,
+  radialGuidanceAngle, depthJoint, depthScale, stepEngagement, channelGate, suppressedIds, guideRod, previewChannel, bindChannels, regionWeights, CHANNEL_REGION_K, CHANNEL_PART_MARGIN_M, effectiveChannelRadius, channelForPart, CHANNEL_REGION_M,
   channelLineSegments, channelWireframe, placeChannelWireframe } from './channels'
 export type { ChannelNow, Engagement } from './channels'
 export { OPENING_MARGIN_M, OPENING_FALLOFF_M, OPENING_SKIP_M, OPENING_SKIP_DEG, OPENING_BAND_M, OPENING_BAND_K, OPENING_SLACK_M, OPENING_POSE_SLACK_M, openingBand,

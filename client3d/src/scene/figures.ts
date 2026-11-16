@@ -3271,7 +3271,7 @@ export class Figure {
   }
 
   /** THE OPENING (Ruling A102/A102b) — `FigureRuntime.applyChannelOpenings`. */
-  applyChannelOpenings(occupants: readonly { channel: string; w: number; segments: readonly OpeningSegment[] }[],
+  applyChannelOpenings(occupants: readonly { channel: string; w: number; segments: readonly OpeningSegment[]; channelR?: number }[],
     budget: { left: number } = { left: Infinity }): void {
     this.runtime.applyChannelOpenings(occupants, budget);
   }

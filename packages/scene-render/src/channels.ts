@@ -160,6 +160,25 @@ export function allowedRadius(s: number, ch: ChannelNow, rC: number): number {
   return Math.max(0, open - rC)
 }
 
+/**
+ * The lateral room a channel keeps around the thickest link of the part it engages (metres): the declared sizes
+ * require R − r_c ≥ 5 mm, so a thicker part grows the channel to r_c + this (Ruling A161).
+ */
+export const CHANNEL_PART_MARGIN_M = 0.005
+
+/** The effective channel radius for a part whose largest link radius is `rPart` (core × girth, the radius guidance
+ *  uses): max(R, rPart + `CHANNEL_PART_MARGIN_M`). A part thinner than R − margin leaves R unchanged. */
+export function effectiveChannelRadius(r: number, rPart: number): number {
+  return rPart > 0 ? Math.max(r, rPart + CHANNEL_PART_MARGIN_M) : r
+}
+
+/** `ch` as one engaging part sees it (Ruling A161): R grown to `effectiveChannelRadius`, everything else (funnel,
+ *  depth, cone, gate fields, the `suppress` set) shared. The same object when nothing grows. */
+export function channelForPart(ch: ChannelNow, rPart: number): ChannelNow {
+  const r = effectiveChannelRadius(ch.r, rPart)
+  return r === ch.r ? ch : { ...ch, r }
+}
+
 // --- radial guidance ----------------------------------------------------------------------------------------------
 
 /**
@@ -302,6 +321,7 @@ export function suppressedIds(tip: Vec3, ch: ChannelNow): ReadonlySet<string> {
 export function guideRod(ch: ChannelNow, rod: { length: number; radius: number; links: number; insertion: number;
   tiltDeg: number; budgetDeg: number }): { joints: Vec3[]; turnsDeg: number[]; k: number; pastBottomM: number;
   suppressed: string[] } {
+  ch = channelForPart(ch, rod.radius)
   const n = Math.max(1, Math.round(rod.links))
   const linkLen = Math.max(0, rod.length) / n
   const ref: Vec3 = Math.abs(ch.u[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]

@@ -75,7 +75,8 @@ export interface FigureRuntimeOptions {
 /** One of this figure's channels as the last opening pass left it: `radius` = the largest occupying segment's
  *  radius × its chain's weight (metres; the surface opens to it plus `OPENING_MARGIN_M`), `applied` = recomputed
  *  this frame (the budget may defer it), `maxPush` = the largest vertex push of the last apply (metres). */
-export interface OpeningInspection { channel: string; radius: number; segments: number; applied: boolean; maxPush: number }
+export interface OpeningInspection { channel: string; radius: number;
+  /** The channel radius the occupants grew it to (Ruling A161; the declared R when none is thicker). */ channelR: number; segments: number; applied: boolean; maxPush: number }
 
 /** `FigureRuntime.inspect()` — see there. Capsules/channels in world space. */
 export interface FigureInspection {
@@ -291,7 +292,7 @@ export class FigureRuntime {
   /** THE OPENING (Ruling A102/A102b), after every figure's phase B: the other figures' chains engaged in THIS
    *  figure's channels open its surface — each segment's radius × w. An unoccupied channel is restored; an
    *  occupied one is recomputed only when it `changed`, and only while `budget` lasts (one per recompute/bind). */
-  applyChannelOpenings(occupants: readonly { channel: string; w: number; segments: readonly OpeningSegment[] }[],
+  applyChannelOpenings(occupants: readonly { channel: string; w: number; segments: readonly OpeningSegment[]; channelR?: number }[],
     budget: { left: number } = { left: Infinity }): void {
     const before = this.openingState
     this.openingState = new Map()
@@ -306,13 +307,15 @@ export class FigureRuntime {
     channels.update()
     for (const ch of channels.channels) {
       const segments: OpeningSegment[] = []
+      let channelR = ch.r
       for (const occ of occupants) {
         if (occ.channel !== ch.id) continue
+        if (occ.w > 0 && occ.channelR !== undefined) channelR = Math.max(channelR, occ.channelR)
         for (const seg of occ.segments) segments.push({ a: seg.a, b: seg.b, r: seg.r * occ.w })
       }
       let binding = this.openings.get(ch.id)
       if (!segments.length) { binding?.restore(); continue }
-      const state: OpeningInspection = { channel: ch.id, radius: Math.max(...segments.map(seg => seg.r)),
+      const state: OpeningInspection = { channel: ch.id, radius: Math.max(...segments.map(seg => seg.r)), channelR,
         segments: segments.length, applied: false, maxPush: before.get(ch.id)?.maxPush ?? 0 }
       this.openingState.set(ch.id, state)
       if (binding === undefined) {
@@ -321,9 +324,11 @@ export class FigureRuntime {
         binding = bindChannelOpening(this.three, inst, ch)
         this.openings.set(ch.id, binding)
       }
-      if (!binding || !binding.changed(ch, segments) || !(budget.left > 0)) continue
+      // Ruling A161: the opening's band follows the grown radius (the candidates' 8 cm slack covers the growth).
+      const grown = channelR === ch.r ? ch : { ...ch, r: channelR }
+      if (!binding || !binding.changed(grown, segments) || !(budget.left > 0)) continue
       budget.left--
-      state.maxPush = binding.apply(ch, segments).maxPush
+      state.maxPush = binding.apply(grown, segments).maxPush
       state.applied = true
     }
   }
@@ -341,7 +346,9 @@ export class FigureRuntime {
     return {
       capsules: binding.capsules.map(e => ({ id: e.capsule.id, region: e.capsule.region,
         now: { a: v(e.now.a), b: v(e.now.b), r: e.now.r } })),
-      channels: (channels?.channels ?? []).map(ch => ({ id: ch.id, o: v(ch.o), u: v(ch.u), r: ch.r, depth: ch.depth,
+      // Ruling A161: the wireframe follows the radius the engaged part grew the channel to.
+      channels: (channels?.channels ?? []).map(ch => ({ id: ch.id, o: v(ch.o), u: v(ch.u),
+        r: Math.max(ch.r, this.openingState.get(ch.id)?.channelR ?? 0), depth: ch.depth,
         funnel: ch.funnel, coneDeg: ch.coneDeg, accepts: [...ch.accepts], suppress: [...ch.suppress] })),
       chains: this.disposed ? [] : this.secondary.opChains().map(c => ({ op: c.op, raised: c.raised,
         segments: c.segments.map(seg => ({ a: v(seg.a), b: v(seg.b), r: seg.r })) })),

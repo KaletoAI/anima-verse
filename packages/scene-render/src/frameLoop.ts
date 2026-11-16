@@ -25,8 +25,8 @@ export interface FramePhaseB {
   frameFigure(name: string, members: readonly string[]): FrameFigure | null
   partnerSnapshot(interaction: { id: string; kind: string } | null, name: string): PartnerSnapshot | null
   updateSecondary(partners: readonly PartnerSnapshot[], interaction: { id: string } | null): unknown
-  channelOccupants(): readonly { partner: string; channel: string; w: number; segments: readonly OpeningSegment[] }[]
-  applyChannelOpenings(occupants: readonly { channel: string; w: number; segments: readonly OpeningSegment[] }[],
+  channelOccupants(): readonly { partner: string; channel: string; w: number; segments: readonly OpeningSegment[]; channelR?: number }[]
+  applyChannelOpenings(occupants: readonly { channel: string; w: number; segments: readonly OpeningSegment[]; channelR?: number }[],
     budget: { left: number }): void
   readonly hasHairPush: boolean
   setGpuPartners(capsules: readonly CapsuleNow[] | null): void
@@ -80,7 +80,7 @@ export function runFigureFrame(entries: readonly FrameEntry[], state: FrameLoopS
   }
   // Each reader passes its OWN interaction: a partner's channel engages only within the same one.
   for (const e of entries) e.figure?.updateSecondary(partnersOf(e.name), interactionOf(e))
-  const occupied = new Map<string, { channel: string; w: number; segments: readonly OpeningSegment[] }[]>()
+  const occupied = new Map<string, { channel: string; w: number; segments: readonly OpeningSegment[]; channelR?: number }[]>()
   for (const e of entries) {
     for (const occ of e.figure?.channelOccupants() ?? []) {
       const list = occupied.get(occ.partner) ?? []

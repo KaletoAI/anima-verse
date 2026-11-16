@@ -128,7 +128,7 @@
  */
 import type { Bone, Matrix4, Quaternion, Object3D, SkinnedMesh, Vector3 } from 'three'
 import { normBoneName } from './clipRetarget'
-import { CHANNEL_GROW, channelCoords, channelGate, depthJoint, depthScale, inZone, radialGuidanceAngle, stepEngagement } from './channels'
+import { CHANNEL_GROW, channelCoords, channelForPart, channelGate, depthJoint, depthScale, inZone, radialGuidanceAngle, stepEngagement } from './channels'
 import type { ChannelNow } from './channels'
 import { bindCollision, bodyJoints, COLLISION_VERSION, HAIR_ONLY_REGIONS, jointRefNow, linearScale, PARTNER_ONLY_REGIONS } from './collision'
 import type { BoundCapsule, CollisionBinding, CollisionPayload, JointRef, Vec3 } from './collision'
@@ -225,7 +225,8 @@ export interface SecondaryMotion {
   /** Ruling A102: per engagement with w > 0, the partner, its channel id, w and the chain's links as world segments
    *  (joint → tip, the link's SURFACE radius — `r_surface` × girth, Ruling A159; links without a capsule left out) as last rendered — what the
    *  receiving figure opens its surface around (`bindChannelOpening`). */
-  channelOccupants(): { partner: string; channel: string; w: number; segments: { a: Vec3; b: Vec3; r: number }[] }[]
+  channelOccupants(): { partner: string; channel: string; w: number; segments: { a: Vec3; b: Vec3; r: number }[];
+    /** The channel radius this chain sees (Ruling A161: grown to its thickest link + margin). */ channelR: number }[]
   /** Ruling A126: every chain with an op (no hair) as last rendered, engaged or not — its links as world segments
    *  (joint → tip, the link's capsule radius r_c, 0 without one), root first. What the auto contact samples. */
   opChains(): { op: string; segments: { a: Vec3; b: Vec3; r: number }[]; raised: number }[]
@@ -1374,6 +1375,12 @@ export function createSecondaryMotion(
     const world = chain.hangJoint ? linearScale(jointRefNow(chain.hangJoint).bindToWorld) : 1
     return (surface ? st.linkSurfaceR : st.linkR) * world * Math.max(0, st.params.girth ?? 1)
   }
+  /** The largest r_c (core × girth) of a chain's links — the radius a channel it engages grows to fit (A161). */
+  const chainRadius = (chain: Particle): number => {
+    let r = 0
+    for (const link of chain.chainLinks) r = Math.max(r, linkRadius(link, chain))
+    return r
+  }
   /**
    * ENGAGEMENT, once per update before the solve (CHANNELS): per chain root with an op and per partner channel
    * whose gate passes, its state (made on first sight); then every state of the chain steps (`stepEngagement`) on
@@ -1399,7 +1406,8 @@ export function createSecondaryMotion(
                 suppressKeys: [], suppressFrom: null }
               states.push(state)
             }
-            state.ch = ch
+            // Ruling A161: the channel grows with the part — R ≥ its largest link radius + the margin.
+            state.ch = channelForPart(ch, chainRadius(chain))
             state.gate = partnerUpdate
             if (state.suppressFrom !== ch.suppress) {
               state.suppressKeys = [...ch.suppress].map(id => `${snap.name}:${id}`)
@@ -1608,7 +1616,7 @@ export function createSecondaryMotion(
             tip.copy(link.tipLocal).applyMatrix4(link.bind.bone.matrixWorld)
             segments.push({ a: [head.x, head.y, head.z], b: [tip.x, tip.y, tip.z], r })
           }
-          if (segments.length) rows.push({ partner: state.partner, channel: state.ch.id, w: state.w, segments })
+          if (segments.length) rows.push({ partner: state.partner, channel: state.ch.id, w: state.w, segments, channelR: state.ch.r })
         }
       }
       return rows
