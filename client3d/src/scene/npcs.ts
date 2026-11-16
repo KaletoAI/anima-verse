@@ -19,7 +19,7 @@ import { bodyYawForView, eyeHeight } from './cameraFraming';
 import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
 import { pickStrandFigures, STRAND_LIMITS, eulerYXZ, fixPivot, fixRoot, partnerTurnFix, composeFix, createPairFit,
   pairFitObserve, pairFitTotal, findContact, contactSampleOf, turnAxes, RUNTIME_FIT,
-  type PairFix, type PairFitState } from '@anima/scene-render';
+  type PairFix, type PairFitState, bendSample } from '@anima/scene-render';
 import { OPENING_BUDGET, runFigureFrame, strandCandidates, type FrameEntry, type FrameLoopState,
   type StrandFigureView } from '@anima/scene-render';
 import { WALK_CLEARANCE_M } from '../game/ground';
@@ -2398,7 +2398,9 @@ export class NpcManager {
     {
       let rec = this.pairFits.get(k);
       if (!rec || rec.key !== key) {
-        rec = { key, st: createPairFit(), entering: '', receiving: '', hit: null, none: false, pivot: null, axes: [],
+        // Ruling A145: the attached part bends first, within the clip's bend limits.
+        const bend = list.map((n) => n.figure!.bendLimits)[0] ?? null;
+        rec = { key, st: createPairFit(bend), entering: '', receiving: '', hit: null, none: false, pivot: null, axes: [],
           interaction: id };
         this.pairFits.set(k, rec);
       }
@@ -2431,7 +2433,13 @@ export class NpcManager {
       const it = e.interaction!;
       if (!ie || !ir || !rec.pivot || !(it.clipDuration > 0)) return;
       const sample = contactSampleOf(ie, ir, rec.hit, rec.pivot);
-      if (sample) pairFitObserve(rec.st, sample, it.clipT % it.clipDuration, rec.axes, RUNTIME_FIT, true);
+      if (!sample) return;
+      // Ruling A145: bend the chain bones of this frame (the same solve the fit's follow reads), then observe.
+      if (rec.st.bend) {
+        const b = bendSample(sample, rec.st.bend).bend;
+        if (b) e.figure!.bendChain(rec.hit.chain, b.turns);
+      }
+      pairFitObserve(rec.st, sample, it.clipT % it.clipDuration, rec.axes, RUNTIME_FIT, true);
     }
   }
 }

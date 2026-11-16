@@ -605,6 +605,8 @@ export interface ApiClip {
   orientation?: { shift_cm?: [number, number] | null; partner_turn_deg?: [number, number] | null };
   /** Ruling A139: the contact relations of a pair/group clip (`[]` = automatic channel detection). */
   contact_target?: { relations: { part: string; at: string; target: 'channel' | 'hand_left' | 'hand_right' | 'head_front' | 'none' }[]; source: string } | null;
+  /** Ruling A145: how far the attached part may bend toward its target, per state (degrees). */
+  bend_limits?: { limits: { raised: { joint_deg: number; total_deg: number }; resting: { joint_deg: number; total_deg: number } }; source: string } | null;
   /** How the import treated the root's travel (the sidecar's
    *  `geometry.root_motion`): `strip` plays in place, `keep`/`foot_lock`
    *  carry the figure along `travel_m` (clip frame: +Z forward, +X the

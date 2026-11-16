@@ -7,6 +7,8 @@ export interface ClipSource {
   partnerTurn?: [number, number] | null;
   /** Ruling A139: the clip's contact relations ([] / absent = automatic). */
   contacts?: { part: string; at: string; target: 'channel' | 'hand_left' | 'hand_right' | 'head_front' | 'none' }[] | null;
+  /** Ruling A145: the clip's bend limits as listed (`bend_limits.limits`). */
+  bend?: unknown;
 }
 export interface ClipResult<C> { clip: C | null }
 export interface CommitOps<C> {
