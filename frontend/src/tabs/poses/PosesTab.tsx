@@ -892,7 +892,8 @@ export function PosesTab() {
           </div>
         ) : null}
         <ClipLibrary listing={clipList} poses={data.entries} onReload={reloadLibrary}
-          rootDropOf={rootDropOf} focus={libraryFocus} />
+          rootDropOf={rootDropOf} focus={libraryFocus}
+          onOpenPose={(key) => { setView('entries'); select(key) }} />
       </div>
     )
   }

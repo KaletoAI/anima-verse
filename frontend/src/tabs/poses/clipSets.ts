@@ -59,6 +59,8 @@ export interface ApiClipRow {
     role_shift_cm?: Record<string, [number, number, number]> | null
     /** Cumulative renderer-only [side, forward] centimetres. */
     shift_cm?: [number, number] | null
+    /** The place check stored with an all-green Apply/Save (Ruling A110 D3), cleared by the next bake. */
+    checked?: { at: string; prop: string; place: string; dyaw: number; dpos: number } | null
   }
   /** How the import treated the root's travel (`geometry.root_motion` of the
    *  sidecar): the mode plus the travel it baked, `[x, z]` in metres of the

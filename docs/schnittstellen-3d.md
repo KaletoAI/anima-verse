@@ -12309,7 +12309,7 @@ and both renderers apply them (the 3D client to the figures on the map, the admi
   (`selectPartners`).
 - **Two-phase frame.** Phase A poses every figure (`Figure.update` in the 3D client, a bare mixer in the admin) and
   ends in `FigureRuntime.poseStep`; then `runFigureFrame` (`packages/scene-render/src/frameLoop.ts`, called by
-  `NpcManager.tickSecondary` and by the Game-Admin's `FigureRuntimePreview`) selects the partners (`planPartnerFrame`),
+  `NpcManager.tickSecondary` and by the Game-Admin's Library `PlacePreview`) selects the partners (`planPartnerFrame`),
   snapshots each selected partner ONCE (`snapshotPartner`) and runs phase B — each reader's strand hair and secondary
   motion against its partners' snapshots (`FigureRuntime.updateSecondary`, wrapped by `Figure.updateSecondary`) — so
   the result does not depend on the order the figures are visited in. The per-figure part (secondary motion, garment

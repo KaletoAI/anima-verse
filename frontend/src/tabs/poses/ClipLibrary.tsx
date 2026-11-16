@@ -42,7 +42,8 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { clipHeightGroup, type ClipHeightOffsetsCm } from '@anima/scene-render'
-import { FigureRuntimePreview } from './FigureRuntimePreview'
+import { PlacePreview, type PlaceReadout } from './PlacePreview'
+import type { AlignmentDraft } from '@anima/scene-render'
 import { ClipPreview, ROLE_COLOR } from './ClipPreview'
 import { invalidateAnimationPreviewClips } from '../characters/Model3DViewer'
 import { SliderInput } from '../../components/SliderInput'
@@ -204,6 +205,9 @@ type ActionKind = 'kind' | 'set' | 'library' | 'delete'
 interface PoseRef {
   key: string
   animation: string
+  /** read-only in the place preview (D2) */
+  yaw_offset?: number
+  group?: string
 }
 
 /** The orientation dials: one grid, as many columns as the panel holds. */
@@ -222,6 +226,7 @@ export function ClipLibrary({
   onReload,
   rootDropOf,
   focus,
+  onOpenPose,
 }: {
   listing: ClipListing
   /** the pose catalog entries — the "Used by" column reads their `animation` */
@@ -235,6 +240,8 @@ export function ClipLibrary({
   /** a kind to open right away — the pose editor's "Open in library"; a new
    *  `seq` opens it again even when the kind is the same */
   focus?: { kind: string; seq: number } | null
+  /** open a pose entry in Entries (the place preview's yaw-offset link, D2) */
+  onOpenPose?: (key: string) => void
 }) {
   const { t } = useI18n()
   const [search, setSearch] = useState('')
@@ -279,6 +286,8 @@ export function ClipLibrary({
   const [orientBusy, setOrientBusy] = useState(false)
   const [orientError, setOrientError] = useState('')
   const [orientSeconds, setOrientSeconds] = useState<number | null>(null)
+  /** The place preview's readout (loop medians) — an all-green one is stored with Apply/Save (D3). */
+  const [placeReadout, setPlaceReadout] = useState<PlaceReadout | null>(null)
   /** Finale clips the server changed along with the last apply/save. */
   const [finalesTouched, setFinalesTouched] = useState<string[]>([])
 
@@ -448,6 +457,25 @@ export function ClipLibrary({
   const roleShiftDirty = Object.keys(movedRoles).length > 0
   const clipShiftDirty = clipShift.some((v) => v !== 0)
   const orientDirty = !!(yawDeg || tiltDeg || rollDeg) || shiftDirty || roleShiftDirty || clipShiftDirty
+  // ONE draft object for the place preview, read through a ref in its frame loop (a drag reloads nothing).
+  const alignmentDraft = useMemo<AlignmentDraft>(() => ({
+    yawDeg, tiltDeg, rollDeg, shiftCm: clipShift,
+    roleShiftM: isPairTarget
+      ? { b: [partnerShift[0] / 100, partnerShift[1] / 100, partnerShift[2] / 100] }
+      : isGroupTarget
+        ? Object.fromEntries(Object.entries(roleShift).map(([r, v]) =>
+          [r, [v[0] / 100, v[1] / 100, v[2] / 100] as [number, number, number]]))
+        : {},
+    heightCm: heightDraft,
+  }), [clipShift, heightDraft, isGroupTarget, isPairTarget, partnerShift, roleShift, rollDeg, tiltDeg, yawDeg])
+  const draftRef = useRef(alignmentDraft)
+  draftRef.current = alignmentDraft
+  /** The check to store with Apply/Save: only when every figure reads green (D3/D4). */
+  const placeCheck = useMemo(() => (placeReadout?.allGreen
+    ? { prop: placeReadout.prop, place: placeReadout.places, dyaw: +placeReadout.worstYaw.toFixed(2),
+      dpos: +placeReadout.worstPos.toFixed(2) }
+    : null), [placeReadout])
+  const savedCheck = orientTarget?.orientation?.checked ?? null
   // The baked angles live in the sidecar, so a clip without one has nowhere to
   // put them — the block says so instead of earning a 400 after Apply.
   const heightLocked = orientBusy || heightBusy
@@ -463,9 +491,13 @@ export function ClipLibrary({
         ...(shiftDirty ? { partner_shift_cm: partnerShift } : {}),
         ...(roleShiftDirty ? { role_shift_cm: movedRoles } : {}),
         ...(clipShiftDirty ? { shift_cm: clipShift } : {}),
+        ...(placeCheck ? { checked: placeCheck } : {}),
       })
       setOrientSeconds(typeof res.seconds === 'number' ? res.seconds : null)
       setFinalesTouched(otherKinds(res.clips, orientTarget.kind))
+      // The new saved values first, THEN the draft back to zero: in between the figures would jump.
+      invalidateAnimationPreviewClips()
+      await onReload()
       setYawDeg(0)
       setTiltDeg(0)
       setRollDeg(0)
@@ -475,14 +507,12 @@ export function ClipLibrary({
       // The file keeps its URL, so the preview has to be rebuilt AND the
       // clip re-fetched — `seq` does both (component key + cache buster).
       setSeq((n) => n + 1)
-      invalidateAnimationPreviewClips()
-      await onReload()
     } catch (e) {
       setOrientError((e as Error).message)
     } finally {
       setOrientBusy(false)
     }
-  }, [clipShift, clipShiftDirty, movedRoles, onReload, orientBusy, orientDirty, orientTarget, partnerShift, roleShiftDirty, rollDeg, shiftDirty, tiltDeg, yawDeg])
+  }, [clipShift, clipShiftDirty, movedRoles, onReload, orientBusy, orientDirty, orientTarget, partnerShift, placeCheck, roleShiftDirty, rollDeg, shiftDirty, tiltDeg, yawDeg])
 
   const saveHeights = useCallback(async () => {
     if (!orientTarget || heightBusy || !heightDirty) return
@@ -491,6 +521,8 @@ export function ClipLibrary({
     try {
       const res = await apiPatch<{ clips?: { kind: string }[] }>(clipPath(orientTarget), { height_offsets_cm: heightDraft })
       setFinalesTouched(otherKinds(res.clips, orientTarget.kind))
+      // An all-green place check goes with the save (D3); heights are not a bake, so it is stored on its own.
+      if (placeCheck) await apiPost(`${clipPath(orientTarget)}/orient`, { checked: placeCheck })
       invalidateAnimationPreviewClips()
       await onReload()
       setHeightDraft({})
@@ -500,7 +532,22 @@ export function ClipLibrary({
     } finally {
       setHeightBusy(false)
     }
-  }, [heightBusy, heightDirty, heightDraft, onReload, orientTarget])
+  }, [heightBusy, heightDirty, heightDraft, onReload, orientTarget, placeCheck])
+
+  /** Store the check alone — nothing dialled, every place already green. */
+  const saveCheck = useCallback(async () => {
+    if (!orientTarget || !placeCheck || orientBusy) return
+    setOrientBusy(true)
+    setOrientError('')
+    try {
+      await apiPost(`${clipPath(orientTarget)}/orient`, { checked: placeCheck })
+      await onReload()
+    } catch (e) {
+      setOrientError((e as Error).message)
+    } finally {
+      setOrientBusy(false)
+    }
+  }, [onReload, orientBusy, orientTarget, placeCheck])
 
   /** Saved angles and calibration, including every earlier apply. */
   const savedNote = useMemo(() => {
@@ -1063,8 +1110,11 @@ export function ClipLibrary({
                   rootDrop={footprint ? (rootDropOf?.(footprint) ?? 0) : 0}
                   bust={seq}
                 />
-                {/* A110 phase 1: one character through the shared per-figure runtime (hair, secondary motion). */}
-                <FigureRuntimePreview kind={row.kind} set={previewSet} height={280} bust={seq} />
+                {/* A110 phase 2: the clip on a prop's places, through the shared per-figure runtime. */}
+                <PlacePreview kind={row.kind} set={previewSet} roles={row.roles ?? 0} clips={row.clips}
+                  draftRef={draftRef} draftSeq={alignmentDraft} bust={seq}
+                  poses={poses.filter((p) => (p.animation || '').trim() === row.kind)}
+                  onOpenPose={onOpenPose} onReadout={setPlaceReadout} />
 
                 {/* ── the orientation dials ── */}
                 {orientTarget ? (
@@ -1267,6 +1317,12 @@ export function ClipLibrary({
                       >
                         {t('Reset dials')}
                       </button>
+                      <button type="button" className="ga-btn ga-btn-sm"
+                        disabled={!placeCheck || orientDirty || heightDirty || orientLocked}
+                        title={t('Stores that this clip reads green on the shown places. Every later Apply clears it.')}
+                        onClick={() => void saveCheck()}>
+                        {t('Save check')}
+                      </button>
                       {orientSeconds !== null && !orientBusy ? (
                         <span className="ga-hint">{`${t('written in')} ${orientSeconds.toFixed(1)} s`}</span>
                       ) : null}
@@ -1283,6 +1339,17 @@ export function ClipLibrary({
                       {orientTarget.has_sidecar === false
                         ? t('Without a sidecar there is nowhere to store the flag — import the clip again.')
                         : `${t('Saved orientation and shifts')}: ${savedNote}`}
+                    </div>
+                    <div className="ga-form-hint" data-testid="orientation-check">
+                      <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 5, marginRight: 4,
+                        background: savedCheck ? '#3fb950' : '#d29922' }} />
+                      {savedCheck
+                        ? t('Orientation checked {at} on {prop} / {place}: {dyaw}°, {dpos} cm')
+                          .replace('{at}', new Date(savedCheck.at).toLocaleString())
+                          .replace('{prop}', savedCheck.prop).replace('{place}', savedCheck.place)
+                          .replace('{dyaw}', String(savedCheck.dyaw)).replace('{dpos}', String(savedCheck.dpos))
+                        : t('Orientation not checked on a place yet — Apply or Save check while every place reads green.')}
+                      {placeCheck ? ` · ${t('all places green now — Apply/Save stores the check')}` : ''}
                     </div>
                     {orientError ? (
                       <div className="ga-form-hint" style={{ color: 'var(--danger, #f85149)' }}>
