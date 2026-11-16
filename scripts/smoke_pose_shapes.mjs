@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Ruling A141: the pose shapes of a draped template garment (`packages/scene-render/src/poseShapes.ts`; the same
+ * Rulings A141 / A142: the pose shapes of a draped template garment (`packages/scene-render/src/poseShapes.ts`; the same
  * rule as `blend` in `app/blender/scripts/garment_template_build.py`). Every expected number is derived BY HAND
  * below (§ B5a).
  *
@@ -12,7 +12,8 @@
  *     = 5.1723e−5 → sit = 5.1723e−5 / (1 + 5.1723e−5) = 5.1720e−5.
  * [2] features = sit: the mirror case → sit = 1 / (1 + 5.1723e−5) = 0.99994828.
  * [3] thighs at 45° forward (0, −√½, √½), shins (0,−1,0): d_rest² = d_sit² = 2·(π/4)² → sit = 0.5 exactly.
- * [4] validPoseShapes: the payload passes; a sample with three directions fails; σ 0 fails.
+ * [4] validPoseShapes (payload version 2 = groups): the payload passes; a sample with three directions fails; σ 0
+ *     fails; a version-1 payload (no groups) fails.
  * [5] bindPoseShapes on a built rig: hips (0,1,0); thighs from (±0.1,0.95,0) to (±0.1,0.5,0); shins to
  *     (±0.1,0.05,0); one skinned garment with a morph target "sit" and the payload in userData.garment.
  *     a) bind pose → sit 5.1720e−5 (= [1]);
@@ -22,6 +23,14 @@
  *        taken out and the root cancels → the same 0.99994828;
  *     d) the morph influence written is that number.
  * [6] bindPoseShapes without a pose-shaped garment → null.
+ * [7] Ruling A142 arm groups, one per side (frame Spine2, σ 0.55, segments upper arm + forearm): samples rest (anchor,
+ *     both segments (1,0,0) for the left arm) and arms_down (target "arms_down_l", both (0,−1,0)). The rig gets a
+ *     spine and a left arm along +X from (0.15,1.4,0): ForeArm at +0.25, Hand at +0.5.
+ *     a) bind pose: d_down² = 2·(π/2)² = 4.9348 → g = exp(−4.9348 / (2·0.3025)) = exp(−8.15669) = 2.8681e−4 →
+ *        arms_down_l = 2.8681e−4 / (1 + 2.8681e−4) = 2.8673e−4;
+ *     b) LeftArm rotated −90° about Z (+X turns to −Y): both segments (0,−1,0) → the down sample →
+ *        1 / (1 + 2.8681e−4) = 0.99971327; the leg group's "sit" is unchanged by the arm (still [5a]);
+ *     c) b) with Spine2 leaned 30° about X: the frame's rotation is taken out → the same 0.99971327.
  */
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -63,15 +72,23 @@ near(SR.poseShapeInfluences([[0, 0, 1], [0, 0, 1], down, down], samples, 0.5).si
 const h = Math.SQRT1_2
 near(SR.poseShapeInfluences([[0, -h, h], [0, -h, h], down, down], samples, 0.5).sit, 0.5, 1e-12, '[3] half')
 
-const payload = {
-  version: 1, sigma: 0.5, targets: ['sit'], samples,
+const legs = {
+  name: 'legs', frame: 'Hips', sigma: 0.5, targets: ['sit'], samples,
   segments: [['LeftUpLeg', 'LeftLeg'], ['RightUpLeg', 'RightLeg'], ['LeftLeg', 'LeftFoot'], ['RightLeg', 'RightFoot']],
 }
+const armL = {
+  name: 'arm_l', frame: 'Spine2', sigma: 0.55, targets: ['arms_down_l'],
+  segments: [['LeftArm', 'LeftForeArm'], ['LeftForeArm', 'LeftHand']],
+  samples: [{ pose: 'rest', target: null, dirs: [[1, 0, 0], [1, 0, 0]] },
+    { pose: 'arms_down', target: 'arms_down_l', dirs: [down, down] }],
+}
+let payload = { version: 2, targets: ['sit'], groups: [legs] }
 assert.equal(SR.validPoseShapes(payload), true)                                                  // [4]
-assert.equal(SR.validPoseShapes({ ...payload, samples: [{ pose: 'x', target: null, dirs: [down, down, down] }] }), false)
-assert.equal(SR.validPoseShapes({ ...payload, sigma: 0 }), false)
+assert.equal(SR.validPoseShapes({ ...payload, groups: [{ ...legs, samples: [{ pose: 'x', target: null, dirs: [down, down, down] }] }] }), false)
+assert.equal(SR.validPoseShapes({ ...payload, groups: [{ ...legs, sigma: 0 }] }), false)
+assert.equal(SR.validPoseShapes({ version: 1, ...legs }), false)
 
-function rig(withShapes) {                                                                       // [5]
+function rig(withShapes, withArm = false) {                                                                       // [5]
   const root = new THREE.Group()
   const inst = new THREE.Group()
   root.add(inst)
@@ -86,15 +103,23 @@ function rig(withShapes) {                                                      
     const foot = bone(`mixamorig${side}Foot`, 0, -0.45, 0, leg)
     bones.push(up, leg, foot)
   }
+  if (withArm) {
+    const spine = bone('mixamorigSpine2', 0, 0.3, 0, hips)
+    const armB = bone('mixamorigLeftArm', 0.15, 0.1, 0, spine)
+    const fore = bone('mixamorigLeftForeArm', 0.25, 0, 0, armB)
+    const hand = bone('mixamorigLeftHand', 0.25, 0, 0, fore)
+    bones.push(spine, armB, fore, hand)
+  }
   inst.updateMatrixWorld(true)
   const geo = new THREE.BufferGeometry()
   geo.setAttribute('position', new THREE.Float32BufferAttribute([0, 1, 0, 0.1, 0.9, 0, -0.1, 0.9, 0], 3))
   geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 4))
   geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], 4))
-  geo.morphAttributes.position = [new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, 0.1, 0, 0, 0.1], 3)]
+  const target = () => new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, 0.1, 0, 0, 0.1], 3)
+  geo.morphAttributes.position = withArm ? [target(), target()] : [target()]
   const mesh = new THREE.SkinnedMesh(geo, new THREE.MeshBasicMaterial())
   mesh.updateMorphTargets()
-  mesh.morphTargetDictionary = { sit: 0 }
+  mesh.morphTargetDictionary = withArm ? { sit: 0, arms_down_l: 1 } : { sit: 0 }
   if (withShapes) mesh.userData.garment = { kind: 'clothing', pose_shapes: payload }
   inst.add(mesh)
   mesh.bind(new THREE.Skeleton(bones))
@@ -117,4 +142,20 @@ ps.update()
 near(ps.last.influences.sit, SIT_AT_SIT, 1e-6, '[5c] hips leaned, root turned')
 near(r.mesh.morphTargetInfluences[0], SIT_AT_SIT, 1e-6, '[5d] written')
 assert.equal(SR.bindPoseShapes(THREE, rig(false).inst), null)                                    // [6]
+payload = { version: 2, targets: ['sit', 'arms_down_l'], groups: [legs, armL] }                   // [7]
+const ra = rig(true, true)
+const pa = SR.bindPoseShapes(THREE, ra.inst)
+assert.ok(pa, '[7] bound')
+pa.update()
+const G = Math.exp(-2 * (Math.PI / 2) ** 2 / (2 * 0.55 * 0.55))
+near(G, 2.8681e-4, 1e-8, '[7] hand-derived g')
+near(pa.last.influences.arms_down_l, G / (1 + G), 1e-6, '[7a] bind pose')
+ra.byName('LeftArm').rotateZ(-Math.PI / 2)
+pa.update()
+near(pa.last.influences.arms_down_l, 1 / (1 + G), 1e-6, '[7b] arm down')
+near(pa.last.influences.sit, SIT_AT_REST, 1e-6, '[7b] legs untouched')
+ra.byName('Spine2').rotateX(Math.PI / 6)
+pa.update()
+near(pa.last.influences.arms_down_l, 1 / (1 + G), 1e-6, '[7c] spine leaned')
+near(ra.mesh.morphTargetInfluences[1], 1 / (1 + G), 1e-6, '[7c] written')
 console.log('smoke_pose_shapes: ALL OK')

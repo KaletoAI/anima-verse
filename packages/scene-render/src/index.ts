@@ -244,8 +244,8 @@ export type { FootPlantOptions } from './footPlant'
 // The per-figure runtime of the two-phase frame (Ruling A110): client3d's `Figure` wraps it, the Game-Admin
 // place preview drives it directly — one frame order, one secondary motion, one partner pass.
 export { FigureRuntime, createFigureRuntime } from './figureRuntime'
-export { bindPoseShapes, poseShapeInfluences, validPoseShapes } from './poseShapes'
-export type { PoseShapes, PoseShapesPayload, PoseShapeSample } from './poseShapes'
+export { bindPoseShapes, poseShapeInfluences, validPoseShapeGroup, validPoseShapes } from './poseShapes'
+export type { PoseShapeGroup, PoseShapes, PoseShapesPayload, PoseShapeSample } from './poseShapes'
 export type { FigureRuntimeOptions, ChannelOccupants, FigureInspection, OpeningInspection } from './figureRuntime'
 export { contactCapsules, inspectFrame, segmentSegmentDistance } from './figureInspect'
 export type { CapsuleContact, FrameInspection } from './figureInspect'

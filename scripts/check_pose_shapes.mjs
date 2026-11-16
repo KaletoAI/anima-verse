@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 /**
- * Ruling A141 — does the RENDERER reproduce a template drape's poses? Loads a drape GLB of
+ * Rulings A141 / A142 — does the RENDERER reproduce a template drape's poses? Loads a drape GLB of
  * `garment_template_build.py` (a run directory written with `render`: `template.glb` + the Blender-evaluated
  * garment per pose, `template_<pose>_posed.f32`, glTF axes), poses the rig in three exactly as the Blender
- * script's `set_pose` (world-axis rotations about each bone's head, arms lowered in every pose but rest), blends
+ * script's `set_pose` (world-axis rotations about each bone's head, arms lowered in every pose that does not set
+ * the arms itself), blends
  * the pose shapes with `bindPoseShapes` (scene-render, the client's code) and skins every garment vertex with
  * three (`getVertexPosition`: morphs, then the skin). Prints per pose the influences and the largest / p99
  * distance to Blender's vertices (each three vertex matched to Blender's by its rest position). A measurement, not a smoke: it needs a run directory.
  *
- * Usage: node scripts/check_pose_shapes.mjs <run_dir> [pose …]   (default poses rest walk sit kneel)
+ * Usage: node scripts/check_pose_shapes.mjs <run_dir> [pose …]   (default: every pose the run measured)
  */
 import { readFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -41,7 +42,11 @@ const POSES = {
   walk: [['LeftUpLeg', 'X', -25], ['RightUpLeg', 'X', 20], ['RightLeg', 'X', 30], ['LeftLeg', 'X', 10]],
   sit: [['LeftUpLeg', 'X', -85], ['RightUpLeg', 'X', -85], ['LeftLeg', 'X', 90], ['RightLeg', 'X', 90]],
   kneel: [['LeftUpLeg', 'X', -10], ['RightUpLeg', 'X', -10], ['LeftLeg', 'X', 100], ['RightLeg', 'X', 100]],
+  arms_down: [['LeftArm', 'Y', 72], ['RightArm', 'Y', -72], ['LeftForeArm', 'X', -15], ['RightForeArm', 'X', -15]],
+  arms_forward: [['LeftArm', 'Z', -80], ['RightArm', 'Z', 80], ['LeftForeArm', 'Z', -10], ['RightForeArm', 'Z', 10]],
+  arms_up: [['LeftArm', 'Y', -60], ['RightArm', 'Y', 60]],
 }
+const ARM_POSES = new Set(['rest', 'arms_down', 'arms_forward', 'arms_up'])
 const ARMS_DOWN = [['LeftArm', 'Y', 30], ['RightArm', 'Y', -30], ['LeftForeArm', 'X', -20], ['RightForeArm', 'X', -20]]
 const AXIS = { X: [1, 0, 0], Y: [0, 0, -1], Z: [0, 1, 0] }
 
@@ -84,7 +89,7 @@ const M = new THREE.Matrix4(), T = new THREE.Matrix4(), R = new THREE.Matrix4(),
 function setPose(name) {
   for (const [k, b] of bones) b.quaternion.copy(rest.get(k))
   scene.updateMatrixWorld(true)
-  for (const [bn, ax, deg] of [...POSES[name], ...(name !== 'rest' ? ARMS_DOWN : [])]) {
+  for (const [bn, ax, deg] of [...POSES[name], ...(ARM_POSES.has(name) ? [] : ARMS_DOWN)]) {
     const b = bones.get(bn.toLowerCase())
     if (!b) continue
     const head = new THREE.Vector3().setFromMatrixPosition(b.matrixWorld)
@@ -125,7 +130,7 @@ for (let i = 0; i < n; i++) {
   match[i] = best
 }
 console.log(JSON.stringify({ matched: [...match].filter(j => j >= 0).length, of: n }))
-for (const pose of want.length ? want : Object.keys(POSES)) {
+for (const pose of want.length ? want : Object.keys(run.data.draped ?? POSES)) {
   setPose(pose)
   ps.update()
   scene.updateMatrixWorld(true)

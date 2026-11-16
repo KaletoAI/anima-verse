@@ -2046,14 +2046,17 @@ eine andere `body`-Frisur als die des Grundkörpers ist eine eigene Körperform.
   und Mesh-Name `garment_<kind>_<item_id>` (überlebt Blender und three.js'
   `sanitizeNodeName`), Knoten-`extras.garment = {kind, item_id, fsig}` —
   three.js' GLTFLoader legt das als `userData.garment` ab. **Posenformen**
-  (Ruling A141): ein drapiertes Schnittmuster-Garment (Modus `template`) trägt
-  zusätzlich `extras.garment.pose_shapes = {version, segments, sigma, targets,
-  samples}` und am Primitiv je Ziel ein Morph-Target (`POSITION`-Deltas in der
-  Bindpose, `mesh.extras.targetNames` = `targets`, Gewichte 0). Jeder Renderer
-  mischt sie pro Bild nach den Beinrichtungen (`segments`: Gelenkpaare,
-  Richtung im Modellraum ohne die Hüftdrehung seit der Bindpose; Gauß über die
-  summierten Quadratwinkel zu `samples[].dirs`, normiert; ein Sample ohne
-  `target` ist ein Anker) — die eine Regel ist `poseShapes.ts` in
+  (Rulings A141, A142): ein drapiertes Schnittmuster-Garment (Modus `template`) trägt
+  zusätzlich `extras.garment.pose_shapes = {version: 2, targets, groups: [{name,
+  frame, segments, sigma, targets, samples}]}` und am Primitiv je Ziel ein
+  Morph-Target (`POSITION`-Deltas in der Bindpose, `mesh.extras.targetNames` =
+  `targets`, Gewichte 0). Jeder Renderer mischt sie pro Bild und Gruppe nach
+  deren Gliedrichtungen (`segments`: Gelenkpaare — Beine: Oberschenkel, dann
+  Unterschenkel, Rahmen `Hips`; je Arm eine Gruppe: Ober-, dann Unterarm,
+  Rahmen `Spine2`, Ziele `<pose>_l` / `<pose>_r`; Richtung im Modellraum ohne die
+  Drehung des Rahmengelenks seit der Bindpose; Gauß über die summierten
+  Quadratwinkel zu `samples[].dirs`, normiert innerhalb der Gruppe; ein Sample
+  ohne `target` ist ein Anker) — die eine Regel ist `poseShapes.ts` in
   `@anima/scene-render`, gerufen in `FigureRuntime.poseStep`. Material: **Haare**
   (`kind` `hair`) sind Alpha-Karten — `alphaMode: MASK` mit `alphaCutoff` =
   Welt-Einstellung `base_body.hair_alpha_cutoff` (Default 0,15), `doubleSided`,
