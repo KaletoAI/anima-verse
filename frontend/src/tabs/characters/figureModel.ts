@@ -268,9 +268,20 @@ export interface TemplateParams {
   waist_height: string
   slit: string
   slit_m: number
+  /** Ruling A142: a dress's shoulders (strapless / straps / covered); a top or jacket is always covered. */
+  shoulders: string
   sleeves: string
+  sleeve_fit: number
+  fit: number
+  neckline: string
+  neck_depth_m: number
+  front: string
+  collar: string
   fabric: string
 }
+
+/** Ruling A142: the kinds with a bodice over the shoulders (the length counts from the shoulder line). */
+export const UPPER_KINDS = ['top', 'jacket']
 
 /** A template row's drape state and parameters (`figure_build._template_row`). */
 export interface TemplateInfo {
@@ -283,8 +294,9 @@ export interface TemplateInfo {
   reason: string
   built_at: string
   metrics: { wall_s: number | null; cpu_s: number | null; stretch_max: number | null; coverage: number | null;
-    texture: string; /** Ruling A141: the poses draped again as corrective shapes ("sit", "kneel"). */
-    pose_shapes?: string[] } | null
+    texture: string; /** Rulings A141 / A142: the poses draped again as corrective shapes ("sit", "arms_down", …). */
+    pose_shapes?: string[]; /** Ruling A142: how many lower template drapes it was draped over. */
+    layered_over?: number } | null
   cost: { llm_calls: number; hub_jobs: number; cpu_s: number }
 }
 
@@ -297,7 +309,10 @@ export const TEMPLATE_CHOICE_LABELS: Record<string, string> = {
   skirt: 'Skirt', dress: 'Dress', top: 'Top', jacket: 'Jacket', trousers: 'Trousers',
   high: 'High', natural: 'Natural', low: 'Low',
   none: 'None', left: 'Left', right: 'Right', front: 'Front', back: 'Back',
-  short: 'Short', long: 'Long',
+  short: 'Short', long: 'Long', cap: 'Cap', elbow: 'Elbow',
+  strapless: 'Strapless', straps: 'Straps', covered: 'Covered (with a bodice)',
+  crew: 'Crew', v: 'V-neck', scoop: 'Scoop', boat: 'Boat',
+  closed: 'Closed', open: 'Open', stand: 'Stand collar', lapel: 'Lapels',
   stiff: 'Stiff (denim, wool)', medium: 'Medium (cotton, linen)', flowing: 'Flowing (silk, jersey)',
 }
 
@@ -305,6 +320,13 @@ export const TEMPLATE_CHOICE_LABELS: Record<string, string> = {
 export const TEMPLATE_FIELD_LABELS: Record<keyof TemplateParams, string> = {
   kind: 'Garment kind', length_m: 'Length below the waist', flare: 'Flare (0 straight … 1 circle)',
   waist_height: 'Waistband', slit: 'Slit', slit_m: 'Slit height from the hem', sleeves: 'Sleeves', fabric: 'Fabric',
+  shoulders: 'Shoulders', sleeve_fit: 'Sleeve fit (0 tight … 1 loose)', fit: 'Body fit (0 tight … 1 loose)',
+  neckline: 'Neckline', neck_depth_m: 'Neckline depth (0 = usual)', front: 'Front', collar: 'Collar',
+}
+
+/** The length field's label for a kind (Ruling A142: a top or jacket counts from the shoulder line). */
+export function lengthLabel(kind: string): string {
+  return UPPER_KINDS.includes(kind) ? 'Length from the shoulder' : 'Length below the waist'
 }
 
 /** "45 cm" of a length in metres. */
@@ -316,8 +338,15 @@ export function cm(m: number): string {
  *  parameters yet". */
 export function templateSummary(p: TemplateParams | null, t: Tr = EN): string {
   if (!p) return t('No parameters yet')
-  const parts = [t(TEMPLATE_CHOICE_LABELS[p.kind] || p.kind), cm(p.length_m),
-    t('flare {n}').replace('{n}', String(p.flare)), t(TEMPLATE_CHOICE_LABELS[p.fabric] || p.fabric)]
+  const parts = [t(TEMPLATE_CHOICE_LABELS[p.kind] || p.kind), cm(p.length_m)]
+  if (!UPPER_KINDS.includes(p.kind)) parts.push(t('flare {n}').replace('{n}', String(p.flare)))
+  if ((UPPER_KINDS.includes(p.kind) || p.shoulders === 'covered') && p.sleeves && p.sleeves !== 'none') {
+    parts.push(t('{sleeves} sleeves').replace('{sleeves}', t(TEMPLATE_CHOICE_LABELS[p.sleeves] || p.sleeves)))
+  }
+  if (p.kind === 'dress' && p.shoulders === 'straps') parts.push(t('Straps'))
+  if (UPPER_KINDS.includes(p.kind) || p.shoulders === 'covered') parts.push(t(TEMPLATE_CHOICE_LABELS[p.neckline] || p.neckline))
+  if (p.kind === 'jacket' && p.front === 'open') parts.push(t('open front'))
+  parts.push(t(TEMPLATE_CHOICE_LABELS[p.fabric] || p.fabric))
   if (p.slit !== 'none') parts.push(t('slit {side} {cm}').replace('{side}', t(TEMPLATE_CHOICE_LABELS[p.slit] || p.slit))
     .replace('{cm}', cm(p.slit_m)))
   return parts.join(' · ')
@@ -330,8 +359,10 @@ export function templateCost(c: TemplateInfo['cost'] | undefined, t: Tr = EN): s
     .replace('{n}', String(cost.llm_calls)).replace('{jobs}', String(cost.hub_jobs)).replace('{s}', String(cost.cpu_s))
 }
 
-/** Ruling A141: the words of the poses a drape carries a corrective shape for. */
-export const POSE_SHAPE_LABELS: Record<string, string> = { sit: 'Sit', kneel: 'Kneel' }
+/** Rulings A141 / A142: the words of the poses a drape carries a corrective shape for. */
+export const POSE_SHAPE_LABELS: Record<string, string> = {
+  sit: 'Sit', kneel: 'Kneel', arms_down: 'Arms down', arms_forward: 'Arms forward', arms_up: 'Arms raised',
+}
 
 /** "Draped <time> · 14 s wall · stretch 1.10 · texture from the cut-out views · shaped for Sit, Kneel" — the built line
  *  (checklist 8). */
@@ -345,6 +376,7 @@ export function templateBuilt(info: TemplateInfo, t: Tr = EN): string {
     : t('texture from the item picture'))
   if (m?.pose_shapes?.length) parts.push(t('shaped for {poses}').replace('{poses}',
     m.pose_shapes.map(p => t(POSE_SHAPE_LABELS[p] || p)).join(', ')))
+  if (m?.layered_over) parts.push(t('draped over {n} lower layer(s)').replace('{n}', String(m.layered_over)))
   return parts.join(' · ')
 }
 
