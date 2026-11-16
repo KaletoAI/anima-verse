@@ -86,6 +86,13 @@ changed preset re-assembles on the CPU — never a refit. Without a preset a
 clothing piece keeps the generator's roughness map: the tier source's, else
 the full fit's, else — a fit grafted before the map was kept — that of the
 prepared mesh it was fitted from (same UVs, ``_roughness_map``).
+
+Covered body (Ruling A133): before grafting, the body faces the clothing
+pieces of the tier fully cover are dropped from the assembly's body
+(``body_cover``; a band at every opening stays), so the skin never pokes
+through a piece in a bent pose. CPU, no hub job; the bare file stays whole.
+Each clothing entry carries ``cover`` (``body_cover.VERSION``), the sidecar
+``body_cover`` the stats.
 """
 import json
 import threading
@@ -554,8 +561,10 @@ def _state(wanted: List[Dict[str, Any]], tier: str, *,
     fit's current strand record (``hair_strands.current_sha``, with the
     collision scales of ``character_name`` when given; "" without one), the
     record whose per-vertex binding the build grafts (spec § 6.2.3). Every
-    other piece adds ``material`` (``piece_material.state_key``, Ruling A36)."""
-    from app.core.garment_set import HAIR
+    other piece adds ``material`` (``piece_material.state_key``, Ruling A36), a clothing piece also
+    ``cover`` (``body_cover.VERSION``, Ruling A133)."""
+    from app.core import body_cover
+    from app.core.garment_set import CLOTHING, HAIR
     out: Dict[str, Dict[str, Any]] = {}
     scales: Optional[Dict[str, float]] = None
     for g in wanted:
@@ -575,6 +584,9 @@ def _state(wanted: List[Dict[str, Any]], tier: str, *,
             entry["hem"] = {"mode": hem["mode"], "lsig": over["lsig"] if over else "", "fallback": hem.get("fallback")}
         if g["kind"] != HAIR:
             entry["material"] = _material(g)[0]
+        if g["kind"] == CLOTHING:
+            # the body faces this piece covers are dropped from the delivered body (``body_cover``, Ruling A133)
+            entry["cover"] = body_cover.VERSION
         if g["kind"] == HAIR:
             if alpha_cutoff is None:
                 from app.core import hair_cards
@@ -696,6 +708,29 @@ def _cut_body(blob: bytes, garment: Dict[str, Any], tier: str) -> bytes:
     return glb_mesh.rewrite_body_primitives(blob, replaced)
 
 
+def _hide_covered_body(blob: bytes, clothing: List[Dict[str, Any]], tier: str) -> Tuple[bytes, Dict[str, Any]]:
+    """``blob`` without the body faces the own-mesh ``clothing`` pieces fully cover (``body_cover.hide_under``,
+    Ruling A133: no skin pokes through a piece in a bent pose; a band at every opening stays) and the stats for the
+    sidecar's ``body_cover`` ({} without clothing). Only the assembly's copy loses faces — the bare file stays
+    whole, so another worn set re-assembles from it. Footwear has its own cut, hair hides nothing."""
+    if not clothing:
+        return blob, {}
+    import time
+    from app.core import body_cover, glb_mesh
+    started = time.perf_counter()
+    pieces = []
+    for garment in clothing:
+        mesh = glb_mesh.garment_arrays(_source(garment, tier).read_bytes())
+        pieces.append((mesh.positions, mesh.indices))
+    replaced, stats = body_cover.hide_under(glb_mesh.body_primitive_arrays(blob), pieces)
+    if replaced:
+        blob = glb_mesh.rewrite_body_primitives(blob, replaced)
+    stats["seconds"] = round(time.perf_counter() - started, 3)
+    logger.info("Garment assembly: %d of %d %s body faces hidden under %d clothing piece(s) in %.2f s",
+                stats["hidden_faces"], stats["faces"], tier, len(pieces), stats["seconds"])
+    return blob, stats
+
+
 def _tint_scalp(blob: bytes, mesh, garment: Dict[str, Any], tier: str, tints: Dict[str, Any]) -> bytes:
     """``blob`` with the scalp under the hair ``mesh`` tinted in the body texture (``hair_scalp_tint``; the bare
     and base files stay untouched — this is the assembly's copy). A failure keeps the untinted body: the tint is a
@@ -751,7 +786,7 @@ def _build(character_name: str, directory: Path, bare: Path,
     sidecar, captured revision)."""
     import hashlib
     from app.core import glb_mesh
-    from app.core.garment_set import FOOTWEAR, HAIR
+    from app.core.garment_set import CLOTHING, FOOTWEAR, HAIR
     from app.core.keyed_lock import keyed_lock
     from app.core.model_validate import rig_frames_preserved
     from app.core.timeutils import utc_now_iso
@@ -783,6 +818,7 @@ def _build(character_name: str, directory: Path, bare: Path,
         from app.core.footwear_rest import rest_measurement
         foot_pose = {**pose, "rest": rest_measurement(data),
                      "source": {"item_id": garment["item_id"], "fsig": garment["fsig"], "glb_sha256": ""}}
+    blob, cover = _hide_covered_body(blob, [g for g in grafted if g["kind"] == CLOTHING], tier)
     scalp_tints: Dict[str, Any] = {}
     for garment in grafted:
         source = _source(garment, tier).read_bytes()
@@ -838,6 +874,8 @@ def _build(character_name: str, directory: Path, bare: Path,
             "assembled_at": utc_now_iso()}
     if scalp_tints:
         side["scalp_tint"] = scalp_tints
+    if cover:
+        side["body_cover"] = cover
     if foot_pose is not None:
         foot_pose["source"]["glb_sha256"] = hashlib.sha256(blob).hexdigest()
         side["foot_pose"] = foot_pose
