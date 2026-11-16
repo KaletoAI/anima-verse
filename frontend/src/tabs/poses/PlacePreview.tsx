@@ -27,7 +27,7 @@
  *
  * three.js is imported dynamically — the admin bundle must not carry it for tabs that never show 3D.
  */
-import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import type { Object3D, AnimationClip } from 'three'
 import {
   CAPSULE_REGION_COLORS, FIGURE_HEIGHT_M, contactCapsules, OPENING_MARGIN_M, STRAND_RECORD_VERSION, alignmentDelta, alignmentLamp,
@@ -164,21 +164,21 @@ function BodyPick({ a, outfitBuilt, base, onChange }: {
   const missing = a.body === 'base' ? (base === null ? t('no base model yet (Characters → Base body)') : '')
     : outfitBuilt ? '' : t('no outfit model yet (Characters → Figure)')
   return (
-    <span style={{ display: 'inline-flex', gap: 2, marginLeft: 2, alignItems: 'center' }}>
-      <select value={a.body} data-testid="place-body" title={t('Base body = the plain body; outfit body = the figure the game shows, with what the character wears.')}
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center', minWidth: 0 }}>
+      <select value={a.body} data-testid="place-body" style={{ flex: '1 1 0', minWidth: 0 }} title={t('Base body = the plain body; outfit body = the figure the game shows, with what the character wears.')}
         onChange={(e) => onChange({ body: e.target.value as Assignment['body'], state: '' })}>
         <option value="outfit" disabled={!outfitBuilt}>{outfitBuilt ? t('Outfit body') : `${t('Outfit body')} — ${t('not built')}`}</option>
         <option value="base" disabled={base === null}>{base === null ? `${t('Base body')} — ${t('not built')}` : t('Base body')}</option>
       </select>
       <select value={a.body === 'base' ? a.state : ''} data-testid="place-state" title={stateTitle}
-        disabled={a.body !== 'base' || !picker?.options.length} style={{ maxWidth: 120 }}
+        disabled={a.body !== 'base' || !picker?.options.length} style={{ flex: '1 1 0', minWidth: 0 }}
         onChange={(e) => onChange({ state: e.target.value })}>
         {a.body === 'base' && picker?.options.length
           ? picker.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)
           : <option value="">{t('None (at rest)')}</option>}
       </select>
-      {missing ? <span className="ga-hint" style={{ color: 'var(--danger, #f85149)' }}>{missing}</span> : null}
-    </span>
+      {missing ? <div className="ga-hint" style={{ flexBasis: '100%', color: 'var(--danger, #f85149)' }}>{missing}</div> : null}
+    </div>
   )
 }
 
@@ -913,7 +913,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           <ModelTurnHint />
           <div className="ga-hint">{t('Figures 1.70 m, yellow post 1.70 m, grid 0.5 m · dashed = place facing, arrow = body facing.')}</div>
         </div>
-        <div style={{ fontSize: 12 }}>
+        <div style={{ fontSize: 12, minWidth: 0, overflow: 'hidden' }}>
           {pose ? (
             <div className="ga-hint" style={{ marginBottom: 4 }}
               title={t('The pose’s yaw offset turns a pair or group on its place in the game. It is edited in Entries.')}>
@@ -923,9 +923,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               ) : null}
             </div>
           ) : null}
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+            <colgroup><col style={{ width: 60 }} /><col /><col style={{ width: 52 }} /><col style={{ width: 70 }} /></colgroup>
             <thead>
-              <tr style={{ textAlign: 'left', opacity: 0.7 }}>
+              <tr style={{ textAlign: 'left', opacity: 0.7, whiteSpace: 'nowrap' }}>
                 <th />
                 <th>{t('Character')}</th>
                 <th title={t('Body facing against the place facing, degrees (loop median).')}>{t('Δ turn')}</th>
@@ -937,13 +938,15 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
                 const a = assign[p.letter]
                 const r = readout.get(p.letter)
                 const full = !a?.character && nAssigned >= MAX_FIGURES
+                const body = a?.character && a.character !== MANNEQUIN
                 return (
-                  <tr key={p.letter}>
-                    <td title={`${p.marker.group}${p.marker.label ? ` · ${p.marker.label}` : ''} · ${t('facing')} ${p.facing}°`}>
+                  <Fragment key={p.letter}>
+                  <tr style={{ borderTop: '1px solid var(--border, #30363d)' }}>
+                    <td style={{ overflow: 'hidden', whiteSpace: 'nowrap' }} title={`${p.marker.group}${p.marker.label ? ` · ${p.marker.label}` : ''} · ${t('facing')} ${p.facing}°`}>
                       <strong>{p.letter}</strong> <span style={{ opacity: 0.7 }}>{p.marker.group}</span>
                     </td>
-                    <td>
-                      <select value={a?.character || ''} disabled={full} style={{ maxWidth: 130 }}
+                    <td style={{ display: 'flex', gap: 2, minWidth: 0 }}>
+                      <select value={a?.character || ''} disabled={full} style={{ flex: 1, minWidth: 0 }}
                         title={full ? t('At most 6 figures.') : t('A character without an outfit model can still show its base body.')}
                         onChange={(e) => {
                           const v = e.target.value
@@ -964,21 +967,17 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
                           </option>
                         ))}
                       </select>
-                      {a?.character && a.character !== MANNEQUIN ? (
-                        <BodyPick a={a} outfitBuilt={!!chars?.find((c) => c.name === a.character)?.built}
-                          base={plain[a.character]} onChange={(patch) => setAssign((cur) => ({ ...cur, [p.letter]: { ...cur[p.letter], ...patch } }))} />
-                      ) : null}
                       {!solo && a?.character ? (
-                        <select value={a.role} style={{ marginLeft: 2 }} title={t('Which half of the clip this figure plays.')}
+                        <select value={a.role} style={{ flex: '0 0 auto' }} title={t('Which half of the clip this figure plays.')}
                           onChange={(e) => setAssign((cur) => ({ ...cur, [p.letter]: { ...cur[p.letter], role: e.target.value } }))}>
                           {roleList.map((r) => <option key={r} value={r}>{`(${r})`}</option>)}
                         </select>
                       ) : null}
                     </td>
-                    <td style={{ whiteSpace: 'nowrap' }} title={r ? `${t('now')} ${fmt(r.dyaw)}°` : ''}>
+                    <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textAlign: 'right' }} title={r ? `${t('now')} ${fmt(r.dyaw)}°` : ''}>
                       {r ? `${fmt(r.medYaw)}°` : ''}
                     </td>
-                    <td style={{ whiteSpace: 'nowrap' }} title={r ? `${t('now')} ${r.dpos.toFixed(1)} cm` : ''}>
+                    <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textAlign: 'right' }} title={r ? `${t('now')} ${r.dpos.toFixed(1)} cm` : ''}>
                       {r ? (
                         <>
                           {`${r.medPos.toFixed(1)} cm `}
@@ -990,6 +989,16 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
                       ) : null}
                     </td>
                   </tr>
+                  {body ? (
+                    <tr>
+                      <td />
+                      <td colSpan={3} style={{ paddingBottom: 3 }}>
+                        <BodyPick a={a} outfitBuilt={!!chars?.find((c) => c.name === a.character)?.built}
+                          base={plain[a.character]} onChange={(patch) => setAssign((cur) => ({ ...cur, [p.letter]: { ...cur[p.letter], ...patch } }))} />
+                      </td>
+                    </tr>
+                  ) : null}
+                  </Fragment>
                 )
               })}
             </tbody>
