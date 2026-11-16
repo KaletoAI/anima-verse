@@ -484,6 +484,8 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   const mesh = steps.mesh
   const fit = steps.fit
   const cutoutsReady = !!lastImage && GARMENT_VIEWS.every((v) => accepted(lastImage, v))
+  // Ruling A48d: a shell piece skips the cut-outs and the hub mesh job (its chain is worn → ghost → fit).
+  const shellPiece = meshAllowance?.info.mesh_shape?.resolved === 'shell'
   const columns = `minmax(110px, 140px) repeat(${GARMENT_VIEWS.length}, minmax(0, 1fr))`
 
   const imageCell = (spec: ImageStepSpec, index: number, view: GarmentView): ReactNode => {
@@ -672,7 +674,7 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   // Ruling A58: the piece's mesh job in flight — its time and hub-job count; the tiles and Re-fit stay usable.
   const meshJob = mesh?.job ?? null
   const meshText = [
-    !mesh || mesh.status === 'missing' ? t('Not built yet') : mesh.status === 'refused' ? t('Refused')
+    shellPiece && (!mesh || mesh.status === 'missing') ? t('Shell from the body') : !mesh || mesh.status === 'missing' ? t('Not built yet') : mesh.status === 'refused' ? t('Refused')
       : mesh.user_accepted ? t('Accepted by you') : t('Accepted'),
     trisRaw != null && trisPrepared != null
       ? `${t('Triangles')} ${trisRaw.toLocaleString()} → ${trisPrepared.toLocaleString()}`
@@ -719,7 +721,11 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
         <Fragment key={spec.step}>
           <StepLabel garment={garment} step={spec.step} label={stepLabels[spec.step] || spec.step}
             help={STEP_HELP[spec.step] || ''} />
-          {GARMENT_VIEWS.map((view) => imageCell(spec, index, view))}
+          {shellPiece && spec.step === 'cutout' ? (
+            <div className="ga-step-grid-row" style={{ gridColumn: `span ${GARMENT_VIEWS.length}` }}>
+              <span className="ga-hint">{t('Not needed: the shell is made from the piece-only views')}</span>
+            </div>
+          ) : GARMENT_VIEWS.map((view) => imageCell(spec, index, view))}
         </Fragment>
       ))}
 
@@ -729,6 +735,9 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
         <RunBadge mark={runMark(feedback, garment, order, 'mesh')} />
         <span className="ga-hint" style={{ minWidth: 0 }}>{meshText}</span>
         {meshJob ? <MeshJobLine job={meshJob} /> : null}
+        {shellPiece ? (
+          <span className="ga-hint">{t('Shell from the body: this piece needs no generated mesh — 0 hub jobs')}</span>
+        ) : (<>
         <RunButton
           feedback={feedback}
           slot={runSlot({ step: 'mesh' })}
@@ -745,6 +754,7 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
         {/* Collecting a job by its id waits for the running job (its step holds the run lock). */}
         <MeshJobFetch url={garment ? meshFetchUrl : null} disabled={busy || !!meshJob}
           disabledReason={meshJob ? t('Waits for the running mesh job of this piece') : ''} onDone={() => onMeshFetched?.()} />
+        </>)}
         {meshAllowance?.info.mesh_shape ? (
           <MeshShapeControl character={meshAllowance.character} itemId={meshAllowance.itemId}
             info={meshAllowance.info} busy={busy || meshAllowance.busy} onSaved={meshAllowance.onSaved} />

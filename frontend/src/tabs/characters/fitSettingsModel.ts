@@ -103,6 +103,8 @@ export interface MeshShapeInfo {
   cost: { hub_jobs: number; where: string }
   shell: { shell_faces?: number | null; inside_share?: number | null; side_colour_within_2cm?: number | null
     seconds?: number | null } | null
+  /** The character's clothing-slot labels (English; translated here). */
+  slot_labels?: Record<string, string>
 }
 
 export interface FitSettingsInfo {
@@ -170,7 +172,7 @@ export const MESH_SHAPE_HINTS: Record<MeshShapeChoice, string> = {
 /** Ruling A48d: why Auto chose what it chose, in plain words. */
 export function meshShapeReason(info: MeshShapeInfo, t: T): string {
   const a = info.auto
-  const list = (xs?: string[]) => (xs || []).join(', ')
+  const list = (xs?: string[]) => (xs || []).map((x) => t(info.slot_labels?.[x] || x)).join(', ')
   switch (a.reason) {
     case 'close_slots': return t('close-fitting slots only: {slots}').replace('{slots}', list(a.details.slots))
     case 'loose_slot': return t('worn in a slot that is not close-fitting: {slots}').replace('{slots}', list(a.details.slots))

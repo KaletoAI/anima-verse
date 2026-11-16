@@ -576,7 +576,7 @@ export function GarmentMeshViewer({ sources, initial, pieceName, onClose, initia
             <div className="ga-hint" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               <span>{`${t('Triangles')} ${file.tris?.toLocaleString() ?? '–'}`}</span>
               {built ? <span>{`${t('Built')} ${built}`}</span> : null}
-              {source.note ? <span style={{ whiteSpace: 'pre-line', color: 'var(--danger, #f85149)' }}>{source.note}</span> : null}
+              {source.note ? <span style={{ whiteSpace: 'pre-line', color: source.id === 'shell' ? 'inherit' : 'var(--danger, #f85149)' }}>{source.note}</span> : null}
             </div>
           </div>
         </div>

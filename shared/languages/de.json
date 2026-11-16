@@ -6003,6 +6003,8 @@
     "A change runs locally on the CPU, 0 hub jobs; only this piece's fit becomes due, nothing runs until the next run or Build": "Eine Änderung läuft lokal auf der CPU, 0 Hub-Jobs; nur die Anpassung dieses Teils wird fällig, bis zum nächsten Lauf oder Build läuft nichts",
     "The fit was made as {shape}": "Die Anpassung wurde als „{shape}“ gemacht",
     "sides coloured from the views within 2 cm": "Seiten aus den Ansichten gefärbt (innerhalb 2 cm)",
-    "Made from the body's surface over the piece's region — local on the CPU, 0 hub jobs": "Aus der Körperoberfläche über dem Bereich des Teils gebaut — lokal auf der CPU, 0 Hub-Jobs"
+    "Made from the body's surface over the piece's region — local on the CPU, 0 hub jobs": "Aus der Körperoberfläche über dem Bereich des Teils gebaut — lokal auf der CPU, 0 Hub-Jobs",
+    "Shell from the body: this piece needs no generated mesh — 0 hub jobs": "Hülle aus dem Körper: dieses Teil braucht kein generiertes Mesh — 0 Hub-Jobs",
+    "Not needed: the shell is made from the piece-only views": "Nicht nötig: die Hülle entsteht aus den Nur-Teil-Ansichten"
   }
 }
