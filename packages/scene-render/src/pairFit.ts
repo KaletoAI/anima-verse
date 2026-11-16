@@ -30,6 +30,13 @@
  * f_b ← f_b · `FOLLOW.decay` — repetitive control: the error of a bin shrinks by (1 − g) per loop, without the lag a
  * per-frame integral has on a stroke. Only once fitted (the follow never enters the fit's samples).
  *
+ * BEND FIRST (Ruling A145, `chainBend.ts`): with `FitOptions.bend` (and a sample carrying its `chain`) every residual
+ * is taken AFTER the attached part has bent toward the target within its limits — the fix only solves what the bend
+ * cannot reach; the angle term then reads the part's LAST link (tip joint → tip), not base → tip. A small STAY term (√N · `BEND_STAY` · the shift in metres, and the angles × λ) then prefers leaving
+ * the entering figure where it is whenever the bend already reaches. The runtime fit does the same (`createPairFit`
+ * with limits), and its follow learns from the BENT tip — what is rendered (the caller bends the bones with the same
+ * `bendSample`).
+ *
  * THE HONEST CHECK (`pairInterpenetration`): the deepest overlap of two different figures' capsules where ONLY the
  * pairs the channel allows are exempt — an attached-part capsule of the entering figure against one of the receiving
  * figure's `suppress` capsules. Everything else counts, attached part included. Lamp green ≤ `CLEAR_GREEN_MM`,
@@ -38,8 +45,16 @@
 import type { Vec3 } from './collision'
 import { CONTACT_ENTRY_WEIGHT, type ContactSample } from './channelContact'
 import { isPointTarget, orientAlong, POINT_TARGET_OPS, type ContactTarget } from './contactTarget'
+import { bendLimitAt, solveChainBend, type BendLimits, type BendResult } from './chainBend'
 
-export interface FitSample extends ContactSample { pivot: Vec3 }
+export interface FitSample extends ContactSample {
+  pivot: Vec3
+  /** Ruling A145: the attached-part chain's points (root joint … tip), its raised fraction and whether the target is a
+   *  channel (the inside joints follow its axis). Absent = the chain cannot bend (the A129 rigid solve). */
+  chain?: Vec3[]
+  raised?: number
+  channel?: boolean
+}
 export interface PairFix { shift: Vec3; turn: Vec3 }
 export interface FitBounds { maxShiftM: number; maxAngleDeg: number }
 export interface FitOptions extends FitBounds {
@@ -48,7 +63,11 @@ export interface FitOptions extends FitBounds {
   angleWeightM?: number
   entryWeight?: number
   iterations?: number
+  /** Ruling A145: bend the chain first (module docstring BEND FIRST). */
+  bend?: BendLimits | null
 }
+/** Ruling A145: metres of residual per metre of shift (× √N) that keep the figure still when the bend reaches. */
+export const BEND_STAY = 0.05
 
 export const FIT_ANGLE_WEIGHT_M = 0.02
 /** Auto-align (the Library, stored): partner B's tilt and roll at most ±20°, the shift effectively free. */
@@ -94,7 +113,16 @@ export function unfixPoint(fix: PairFix, pivot: Vec3, x: Vec3): Vec3 {
 }
 /** A sample with the entering figure's points (tip, base) moved by `fix`. */
 export function fixSample(s: FitSample, fix: PairFix): FitSample {
-  return { ...s, tip: fixPoint(fix, s.pivot, s.tip), base: fixPoint(fix, s.pivot, s.base) }
+  return { ...s, tip: fixPoint(fix, s.pivot, s.tip), base: fixPoint(fix, s.pivot, s.base),
+    ...(s.chain ? { chain: s.chain.map((p) => fixPoint(fix, s.pivot, p)) } : {}) }
+}
+/** Ruling A145: the sample with its chain bent toward its target within `limits` at its raised fraction — tip and base
+ *  from the bent chain — and the bend; the sample unchanged (bend null) without a chain. */
+export function bendSample(s: FitSample, limits: BendLimits): { sample: FitSample; bend: BendResult | null } {
+  if (!s.chain || s.chain.length < 2) return { sample: s, bend: null }
+  const bend = solveChainBend(s.chain, s.o, s.u, bendLimitAt(limits, s.raised ?? 0), { channel: !!s.channel })
+  const pts = bend.points
+  return { sample: { ...s, chain: pts, tip: pts[pts.length - 1], base: pts[0] }, bend }
 }
 /** Two fixes about the same pivot: first `a`, then `b`. */
 export function composeFix(a: PairFix, b: PairFix): PairFix {
@@ -121,19 +149,27 @@ export function fixRoot(fix: PairFix, pivot: Vec3, position: Vec3): { position: 
   return { position: fixPoint(fix, pivot, position), quaternion: [fix.turn[0] * s, fix.turn[1] * s, fix.turn[2] * s, Math.cos(h)] }
 }
 
-function residuals(samples: readonly FitSample[], fix: PairFix, lambda: number, W: number): number[] {
+function residuals(samples: readonly FitSample[], fix: PairFix, lambda: number, W: number,
+  bend: BendLimits | null = null): number[] {
   const out: number[] = []
   let e = -1, min = Infinity
-  const moved = samples.map((x) => fixSample(x, fix))
+  const moved = samples.map((x) => (bend ? bendSample(fixSample(x, fix), bend).sample : fixSample(x, fix)))
   moved.forEach((x, i) => { const s = dot(sub(x.tip, x.o), x.u); if (s < min) { min = s; e = i } })
   for (const x of moved) {
     const lat = lateral(sub(x.tip, x.o), x.u)
     out.push(lat[0], lat[1], lat[2])
-    const d = sub(x.tip, x.base), l = len(d)
+    // A145: with the bend, the direction that must follow the axis is the part's LAST link (the bend shapes the rest).
+    const c = bend && x.chain && x.chain.length >= 2 ? x.chain : null
+    const d = c ? sub(c[c.length - 1], c[c.length - 2]) : sub(x.tip, x.base), l = len(d)
     const pd = l > 0 ? lateral(scale(d, 1 / l), x.u) : [0, 0, 0] as Vec3
     out.push(lambda * pd[0], lambda * pd[1], lambda * pd[2])
   }
   if (e >= 0) out.push(Math.sqrt(W) * min)
+  if (bend) {
+    const k = BEND_STAY * Math.sqrt(samples.length)
+    out.push(k * fix.shift[0], k * fix.shift[1], k * fix.shift[2], k * lambda * fix.turn[0], k * lambda * fix.turn[1],
+      k * lambda * fix.turn[2])
+  }
   return out
 }
 
@@ -170,14 +206,15 @@ export function solvePairFix(samples: readonly FitSample[], opts: FitOptions): P
   const project = (x: number[]) => x.map((v, i) => clamp(v, i < 3 ? opts.maxShiftM : maxA))
   let x = new Array(n).fill(0)
   const cost = (r: number[]) => r.reduce((a, v) => a + v * v, 0)
-  let r = residuals(samples, toFix(x), lambda, W)
+  const bend = opts.bend ?? null
+  let r = residuals(samples, toFix(x), lambda, W, bend)
   let c = cost(r)
   const iterations = opts.iterations ?? 20
   for (let it = 0; it < iterations; it++) {
     const J: number[][] = []
     for (let k = 0; k < n; k++) {
       const xp = x.slice(); xp[k] += 1e-6
-      const rp = residuals(samples, toFix(xp), lambda, W)
+      const rp = residuals(samples, toFix(xp), lambda, W, bend)
       J.push(rp.map((v, i) => (v - r[i]) / 1e-6))
     }
     const A = Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_, j) => {
@@ -191,7 +228,7 @@ export function solvePairFix(samples: readonly FitSample[], opts: FitOptions): P
     let t = 1, accepted = false
     for (let ls = 0; ls < 8; ls++) {
       const xn = project(x.map((v, i) => v + t * step[i]))
-      const rn = residuals(samples, toFix(xn), lambda, W)
+      const rn = residuals(samples, toFix(xn), lambda, W, bend)
       const cn = cost(rn)
       if (cn < c) { const moved = Math.max(...xn.map((v, i) => Math.abs(v - x[i]))); x = xn; r = rn; c = cn; accepted = moved > 1e-7; break }
       t /= 2
@@ -243,12 +280,18 @@ export interface PairFitState {
   armed: boolean
   /** Lateral of the tip (mm) at each frame the tip was in or at the channel since the fit (the follow's evidence). */
   lateralMm: number[]
+  /** Ruling A145: the bend limits (null = rigid, the A129 fit) and, since the fit, the bend used per frame (degrees),
+   *  its limit (the total at the frame's raised fraction) and how many frames were at the limit. */
+  bend: BendLimits | null
+  bendDeg: number[]
+  bendLimitDeg: number
+  bendAtLimit: number
 }
 
-export function createPairFit(): PairFitState {
+export function createPairFit(bend: BendLimits | null = null): PairFitState {
   return { phase: 'collect', samples: [], fix: NO_FIX, follow: [0, 0, 0],
     followTable: Array.from({ length: FOLLOW.bins }, () => [0, 0, 0] as Vec3), period: 0, lastPhase: -1, armed: false,
-    lateralMm: [] }
+    lateralMm: [], bend, bendDeg: [], bendLimitDeg: 0, bendAtLimit: 0 }
 }
 
 const binOf = (st: PairFitState, phase: number) =>
@@ -272,9 +315,10 @@ export function pairFitObserve(st: PairFitState, measured: FitSample, phase: num
     // Nothing of the follow is applied while collecting: the total is the (zero) fix.
     const total = pairFitTotal(st)
     const raw: FitSample = { ...measured, tip: unfixPoint(total, measured.pivot, measured.tip),
-      base: unfixPoint(total, measured.pivot, measured.base) }
+      base: unfixPoint(total, measured.pivot, measured.base),
+      ...(measured.chain ? { chain: measured.chain.map((p) => unfixPoint(total, measured.pivot, p)) } : {}) }
     if (wrapped && st.armed && st.samples.length >= FIT_MIN_SAMPLES) {
-      st.fix = solvePairFix(st.samples, { ...bounds, axes })
+      st.fix = solvePairFix(st.samples, { ...bounds, axes, bend: st.bend })
       st.phase = 'fitted'
       st.lastPhase = phase
       return   // this frame was rendered before the fit: it teaches the follow nothing
@@ -284,7 +328,16 @@ export function pairFitObserve(st: PairFitState, measured: FitSample, phase: num
   }
   st.lastPhase = phase
   if (st.phase !== 'fitted') return
-  // What was rendered: the evidence (lateral through the stroke, once fitted).
+  // What was rendered: the evidence (lateral through the stroke, once fitted) — the BENT tip (A145).
+  if (st.bend && measured.chain) {
+    const b = bendSample(measured, st.bend)
+    measured = b.sample
+    if (b.bend) {
+      st.bendDeg.push(b.bend.totalDeg)
+      st.bendLimitDeg = b.bend.limit.totalDeg
+      if (b.bend.atLimit) st.bendAtLimit++
+    }
+  }
   const rel = sub(measured.tip, measured.o)
   const s = dot(rel, measured.u)
   const lat = lateral(rel, measured.u)
@@ -302,7 +355,9 @@ export function pairFitObserve(st: PairFitState, measured: FitSample, phase: num
 // ── finding the contact in two inspections ──
 
 interface InspectionLike {
-  chains: readonly { op: string; segments: readonly { a: readonly number[]; b: readonly number[] }[] }[]
+  chains: readonly { op: string; segments: readonly { a: readonly number[]; b: readonly number[] }[]
+    /** Ruling A145: the chain's raised (straightening) fraction, 0 … 1. */
+    raised?: number }[]
   channels: readonly { id: string; o: readonly number[]; u: readonly number[]; accepts: readonly string[] }[]
   /** Ruling A139: the point targets the figure's bones resolve (`contactTarget.ts`). */
   targets?: readonly { id: string; o: readonly number[]; u: readonly number[] }[]
@@ -334,7 +389,10 @@ export function contactSampleOf(entering: InspectionLike, receiving: InspectionL
   const v = (p: readonly number[]): Vec3 => [p[0], p[1], p[2]]
   const u = v(ch.u), l = len(u) || 1
   const tip = v(chain.segments[chain.segments.length - 1].b), base = v(chain.segments[0].a)
-  return { tip, base, o: v(ch.o), u: orientAlong(hit.channel, scale(u, 1 / l), tip, base), pivot }
+  // Ruling A145: the chain's points (joints, then the tip) so the fit can bend it.
+  const pts = [...chain.segments.map((x) => v(x.a)), tip]
+  return { tip, base, o: v(ch.o), u: orientAlong(hit.channel, scale(u, 1 / l), tip, base), pivot, chain: pts,
+    raised: chain.raised ?? 0, channel: !isPointTarget(hit.channel) }
 }
 
 // ── the honest interpenetration check ──

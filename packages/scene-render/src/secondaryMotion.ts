@@ -228,7 +228,12 @@ export interface SecondaryMotion {
   channelOccupants(): { partner: string; channel: string; w: number; segments: { a: Vec3; b: Vec3; r: number }[] }[]
   /** Ruling A126: every chain with an op (no hair) as last rendered, engaged or not — its links as world segments
    *  (joint → tip, the link's capsule radius r_c, 0 without one), root first. What the auto contact samples. */
-  opChains(): { op: string; segments: { a: Vec3; b: Vec3; r: number }[] }[]
+  opChains(): { op: string; segments: { a: Vec3; b: Vec3; r: number }[]; raised: number }[]
+  /** Ruling A145 (`chainBend.ts`): bend chain `index` of `opChains()` as rendered — per joint (a link index) its turn
+   *  q [x, y, z, w] relative to its parent link in world axes, applied root-most first about the joint's world
+   *  position; the links past it ride along (skinning reads the bones' world matrices at render). Acts on this
+   *  frame's rendered bones only: the next update rebuilds them. */
+  bendChain(index: number, turns: readonly { joint: number; q: readonly number[] }[]): void
   reset(): void
   dispose(): void
 }
@@ -593,6 +598,7 @@ export function createSecondaryMotion(
       contactTips() { return delegate?.contactTips() ?? [] },
       channelOccupants() { return delegate?.channelOccupants() ?? [] },
       opChains() { return delegate?.opChains() ?? [] },
+      bendChain(index, turns) { delegate?.bendChain(index, turns) },
       reach() { return delegate?.reach() ?? 0 },
       reset() { delegate?.reset() },
       dispose() { delegate?.dispose(); stopped = true },
@@ -1034,6 +1040,8 @@ export function createSecondaryMotion(
     }
     return sum * scale
   }
+  const bendPos = new three.Vector3(), bendOff = new three.Vector3(), bendQ = new three.Quaternion()
+  const bendM = new three.Matrix4(), bendW = new three.Matrix4(), bendInv = new three.Matrix4()
   const anchor = new three.Matrix4(), anchorFull = new three.Matrix4(), inverseAnchor = new three.Matrix4(), scale = new three.Matrix4(), rotationMatrix = new three.Matrix4()
   const anchorQ = new three.Quaternion(), restQ = new three.Quaternion(), dynamicQ = new three.Quaternion(), identityQ = new three.Quaternion()
   const restVector = new three.Vector3(), target = new three.Vector3(), head = new three.Vector3(), vTarget = new three.Vector3(), deltaG = new three.Vector3(), t = new three.Vector3(), base = new three.Vector3(), rendered = new three.Vector3(), localRendered = new three.Vector3(), u = new three.Vector3(), temp = new three.Vector3()
@@ -1612,9 +1620,36 @@ export function createSecondaryMotion(
           tip.copy(link.tipLocal).applyMatrix4(link.bind.bone.matrixWorld)
           segments.push({ a: [head.x, head.y, head.z], b: [tip.x, tip.y, tip.z], r: Math.max(0, linkRadius(link, chain) || 0) })
         }
-        if (segments.length) rows.push({ op, segments })
+        // Ruling A145: the raised state = the chain's straightening fraction.
+        if (segments.length) rows.push({ op, segments, raised: chain.straighten })
       }
       return rows
+    },
+    bendChain(index, turns) {
+      let k = -1
+      for (const chain of particles) {
+        const op = chain.paramsTo.op
+        if (chain.chainRoot !== chain || !op || chain.paramsTo.hair || !chain.chainLinks.length) continue
+        if (++k !== index) continue
+        const order = [...turns].sort((x, y) => x.joint - y.joint)
+        for (const t of order) {
+          const link = chain.chainLinks[t.joint]
+          if (!link || !(Math.abs(t.q[3]) < 1 - 1e-12)) continue
+          const bone = link.bind.bone
+          const p = bendPos.setFromMatrixPosition(bone.matrixWorld)
+          bendQ.set(t.q[0], t.q[1], t.q[2], t.q[3])
+          // newWorld = T(p) R T(−p) · world;  local = parentWorld⁻¹ · newWorld.
+          bendM.makeRotationFromQuaternion(bendQ)
+          bendM.setPosition(bendOff.copy(p).applyQuaternion(bendQ).negate().add(p))
+          bendW.multiplyMatrices(bendM, bone.matrixWorld)
+          if (bone.parent) bendInv.copy(bone.parent.matrixWorld).invert()
+          else bendInv.identity()
+          bone.matrix.multiplyMatrices(bendInv, bendW)
+          bone.matrix.decompose(bone.position, bone.quaternion, bone.scale)
+          bone.updateMatrixWorld(true)
+        }
+        return
+      }
     },
     contactTips() {
       const tip = new three.Vector3()
