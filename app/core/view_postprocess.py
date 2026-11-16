@@ -98,7 +98,7 @@ def operations() -> Dict[str, Dict[str, Any]]:
 
 def public_descriptor(desc: Dict[str, Any]) -> Dict[str, Any]:
     """The JSON-safe part of a descriptor (no callable)."""
-    return {k: v for k, v in desc.items() if k != "apply"}
+    return {k: v for k, v in desc.items() if k != "apply" and not callable(v)}
 
 
 def default_params(desc: Dict[str, Any]) -> Dict[str, Any]:

@@ -895,8 +895,14 @@ def _postprocess_edit_texts(profile: Dict[str, Any], key: str = "edit_prompt") -
     try:
         from app.core import view_postprocess
         available = view_postprocess.operations()
-        return [str(available[op].get(key) or "").strip()
-                for op in view_postprocess.enabled_ids(profile, available) if available[op].get(key)]
+        out = []
+        for op in view_postprocess.enabled_ids(profile, available):
+            value = available[op].get(key)
+            # Ruling A157: a package may give a callable (profile → text), so the text follows the body.
+            text = value(profile) if callable(value) else value
+            if text and str(text).strip():
+                out.append(str(text).strip())
+        return out
     except Exception as exc:  # noqa: BLE001 — a package failure never blocks the front
         logger.warning("Reference post-process edit texts unavailable: %s", exc)
         return []
