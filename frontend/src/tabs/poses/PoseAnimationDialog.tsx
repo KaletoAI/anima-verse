@@ -202,6 +202,7 @@ export function PoseAnimationDialog({ open, mode, entryKey, rawText, prompt,
                 ? `${generatorName(chosen.motion_meta.generator)} · ${chosen.motion_meta.license || ''} · `
                 : ''}
               {t('you pick one variant; the clip goes into the shared library')}
+              {' · '}{t('{n} hub jobs (one per variant) + one LLM call for the captions').replace('{n}', String(variants))}
             </div>
           </div>
         </div>
@@ -211,7 +212,8 @@ export function PoseAnimationDialog({ open, mode, entryKey, rawText, prompt,
           </button>
           <button type="submit" className="ga-btn ga-btn-sm ga-btn-primary"
             disabled={busy || (mode === 'free' && !text.trim()) || (mode === 'entry' && !entryKey)}>
-            {mode === 'entry' ? t('Generate') : t('Generate entry and animation')}
+            {(mode === 'entry' ? t('Generate (+{n} jobs)') : t('Generate entry and animation (+{n} jobs)'))
+              .replace('{n}', String(variants))}
           </button>
         </div>
       </form>

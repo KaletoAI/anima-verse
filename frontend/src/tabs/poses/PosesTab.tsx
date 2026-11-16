@@ -33,7 +33,9 @@ import { ClipTransitions } from './ClipTransitions'
 import { PoseTransitionDialog, type TransitionRequest } from './PoseTransitionDialog'
 import { TransitionMisses } from './TransitionMisses'
 import { PoseTransitionChoice, type TransitionJob } from './PoseTransitionChoice'
-import { clipCoverage, setLabel } from './clipSets'
+import { setLabel } from './clipSets'
+import { poseLamp, posesToAnimate, type PoseLamp } from './clipStatus'
+import { LampDot } from './StatusLamp'
 import type { ClipListing } from './clipSets'
 import { ClipPreview } from './ClipPreview'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -287,6 +289,15 @@ export function PosesTab() {
   const notifiedJobs = useRef(new Set<string>())
   const pendingCompletions = useRef(new Map<string, { job: AnimationJob; reload: Promise<void> }>())
   const [choiceJob, setChoiceJob] = useState<AnimationJob | null>(null)
+  /** What one generation costs and where it may run — from the backends endpoint, so every button
+   *  that starts pose-animation jobs can name their number before the click. */
+  const [animMeta, setAnimMeta] = useState<{ variants: number; groups: string[]; models: number }>(
+    { variants: 3, groups: [], models: 0 })
+  /** How many rendered expression images "Clear" would delete (null = not counted yet). */
+  const [exprImages, setExprImages] = useState<number | null>(null)
+  const [entryTab, setEntryTab] = useState<'entry' | 'candidates'>('entry')
+  const [runAllOpen, setRunAllOpen] = useState(false)
+  const [runAllBusy, setRunAllBusy] = useState(false)
 
   const isPose = axis === 'pose'
 
@@ -321,6 +332,26 @@ export function PosesTab() {
   useEffect(() => {
     load()
   }, [load])
+
+  useEffect(() => {
+    let live = true
+    apiGet<{ backends: unknown[]; default_variants: number; animatable_groups?: string[] }>('/poses/animations/backends')
+      .then((r) => { if (live) setAnimMeta({ variants: r.default_variants || 3, groups: r.animatable_groups || [],
+        models: (r.backends || []).length }) })
+      .catch(() => { /* the buttons then say no model is routed */ })
+    return () => { live = false }
+  }, [])
+
+  const countExpressionImages = useCallback(async () => {
+    try {
+      setExprImages((await apiGet<{ images: number }>('/poses/expression-images/count')).images)
+    } catch {
+      setExprImages(null)
+    }
+  }, [])
+  useEffect(() => {
+    if (axis === 'expression') void countExpressionImages()
+  }, [axis, countExpressionImages])
 
   useEffect(() => {
     void loadClips()
@@ -503,6 +534,40 @@ export function PosesTab() {
     </div>
   )
 
+  /** The base sets every pose should have its own clip in (the instance's `clip_sets`). */
+  const baseSets = clipList.clip_sets || []
+  const lampReason = (l: PoseLamp) => {
+    const sets = l.missing.map((x) => setLabel(x, t)).join(', ')
+    if (!l.files) return t('No clip file for this kind — a 3D figure plays nothing.')
+    if (l.lamp === 'red') return t('No clip for {sets} and no neutral clip to fall back to.').replace('{sets}', sets)
+    if (l.lamp === 'yellow') return t('{sets} figures fall back to the neutral clip.').replace('{sets}', sets)
+    return t('A clip in every set.')
+  }
+  const toAnimate = isPose ? posesToAnimate(data.entries, clipList.clips, animMeta.groups,
+    new Set(animationJobs.filter(activeJob).map((job) => job.key || ''))) : []
+  /** "Run all": one generation per pose without a clip, Auto model, the default variant count. */
+  const runAll = async () => {
+    setRunAllOpen(false)
+    setRunAllBusy(true)
+    let started = 0
+    const failed: string[] = []
+    for (const key of toAnimate) {
+      try {
+        const r = await apiPost<{ task_id: string }>('/poses/animations/generate',
+          { mode: 'entry', key, hint: '', backend: '', variants: animMeta.variants })
+        jobStatuses.current.set(r.task_id, 'pending')
+        setAnimationJobs((jobs) => [{ task_id: r.task_id, status: 'pending', mode: 'entry', key }, ...jobs])
+        started++
+      } catch (e) {
+        failed.push(`${key}: ${(e as Error).message}`)
+      }
+    }
+    setRunAllBusy(false)
+    setJobsRefresh((value) => value + 1)
+    toast(t('Started {n} animations').replace('{n}', String(started)))
+    if (failed.length) toast(t('Error') + ': ' + failed.join('; '), 'error')
+  }
+
   const jobsByKey = new Map<string, AnimationJob>()
   for (const job of animationJobs) {
     if (job.key && !jobsByKey.has(job.key)) jobsByKey.set(job.key, job)
@@ -563,12 +628,14 @@ export function PosesTab() {
       setSelected(key)
       setIsNew(false)
       setApproveOf('')
+      setEntryTab('entry')
       setDraft({ ...p, synonyms: [...p.synonyms] })
     },
     [data.entries],
   )
 
   const addNew = useCallback(() => {
+    setEntryTab('entry')
     setSelected('')
     setIsNew(true)
     setApproveOf('')
@@ -599,6 +666,7 @@ export function PosesTab() {
     setIsNew(true)
     setApproveOf(c.raw_text)
     setDraft({ ...EMPTY, key: c.raw_text })
+    setEntryTab('entry')
   }, [])
 
   const save = useCallback(async () => {
@@ -781,12 +849,13 @@ export function PosesTab() {
       )
       toast(`${t('Rendered expression images cleared')}: ${r?.images_deleted ?? 0}`)
       setConfirmClear(false)
+      void countExpressionImages()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     } finally {
       setBusy(false)
     }
-  }, [busy, t, toast])
+  }, [busy, countExpressionImages, t, toast])
 
   const upd = useCallback(<K extends keyof Entry>(k: K, v: Entry[K]) => {
     setDraft((prev) => (prev ? { ...prev, [k]: v } : prev))
@@ -950,7 +1019,7 @@ export function PosesTab() {
   return (
     // The view switch sits ABOVE the two columns, not inside the list pane:
     // collapsing the pane must not take the way back to Library/Import with it.
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+    <div className="ga-poses-sub" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       {viewSwitch}
       {!isPose && <ExpressionSetsEditor selected={expressionSet}
         reloadKey={data.entries.map(e => e.key).join(',')} onSaved={load}
@@ -966,42 +1035,10 @@ export function PosesTab() {
             <ListHeader
             title={t('Catalog')}
             onNew={addNew}
-            extra={
-              confirmClear ? (
-                <>
-                  <button
-                    type="button"
-                    className="ga-btn ga-btn-sm ga-btn-danger"
-                    disabled={busy}
-                    onClick={clearExpressionImages}
-                  >
-                    {busy ? t('Clearing…') : t('Really clear?')}
-                  </button>
-                  <button
-                    type="button"
-                    className="ga-btn ga-btn-sm"
-                    onClick={() => setConfirmClear(false)}
-                  >
-                    {t('Cancel')}
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  className="ga-btn ga-btn-sm ga-btn-danger"
-                  title={t('Deletes all expression images. To remove only incompatible history, use the per-character cleanup preview.')}
-                  onClick={() => setConfirmClear(true)}
-                >
-                  {t('Clear rendered expression images')}
-                </button>
-              )
-            }
           />
-          <p className="ga-sched-muted">
-            {t('The catalog is the closed set of render keys: a pose key carries the body-posture prompt and the animation kind, an expression key the facial prompt. Free text is matched onto a key — it never creates one.')}
-          </p>
 
-          <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}
+            title={t('The catalog is the closed set of render keys: a pose key carries the body-posture prompt and the animation kind, an expression key the facial prompt. Free text is matched onto a key — it never creates one.')}>
             {(['pose', 'expression'] as Axis[]).map((a) => (
               <button
                 key={a}
@@ -1091,7 +1128,7 @@ export function PosesTab() {
                         </Field>
                         <Field
                           label={t('Needs a marker')}
-                          hint={t('On: a pose of this type is only possible where a marker of it stands. Off: the poses are offered anywhere in the room, take no place and their spot is never named.')}
+                          tip={t('On: a pose of this type is only possible where a marker of it stands. Off: the poses are offered anywhere in the room, take no place and their spot is never named.')}
                         >
                           <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                             <input
@@ -1110,7 +1147,7 @@ export function PosesTab() {
                         </Field>
                         <Field
                           label={t('Stored in')}
-                          hint={t('The shared catalog travels with the repository; this world keeps its own version in its world.db, which overrides the shared one for the same key and is never committed.')}
+                          tip={t('The shared catalog travels with the repository; this world keeps its own version in its world.db, which overrides the shared one for the same key and is never committed.')}
                         >
                           <select
                             className="ga-input"
@@ -1123,7 +1160,7 @@ export function PosesTab() {
                         </Field>
                         <Field
                           label={t('Default pose')}
-                          hint={t('The pose a click on such a marker sets. It has to be a pose of this place type — only a place type without poses may stay empty.')}
+                          tip={t('The pose a click on such a marker sets. It has to be a pose of this place type — only a place type without poses may stay empty.')}
                         >
                           <select
                             className="ga-input"
@@ -1152,7 +1189,7 @@ export function PosesTab() {
                         </Field>
                         <Field
                           label={t('Follow pose')}
-                          hint={t('The pose a figure goes into when a pose of this type ends normally, unless the pose names its own. Any solo pose, of any place type.')}
+                          tip={t('The pose a figure goes into when a pose of this type ends normally, unless the pose names its own. Any solo pose, of any place type.')}
                         >
                           <select
                             className="ga-input"
@@ -1259,6 +1296,10 @@ export function PosesTab() {
                   className={`ga-list-row${selected === p.key ? ' is-active' : ''}`}
                   onClick={() => select(p.key)}
                 >
+                  {isPose ? (() => {
+                    const l = poseLamp(p.animation, clipList.clips, baseSets)
+                    return <span style={{ marginRight: 6, alignSelf: 'center' }}><LampDot lamp={l.lamp} title={lampReason(l)} /></span>
+                  })() : null}
                   <span className="ga-list-row-main">
                     {isPose ? <code>{p.key}</code> : <span title={p.key}>{p.label || p.key}</span>}
                     {isPose ? (
@@ -1292,13 +1333,42 @@ export function PosesTab() {
             ))}
           </ul>
 
-          {/* Candidates: free text the resolver could not absorb. A capped flex
-              column so a long candidate list scrolls by itself and leaves the
-              catalog list above its share of the column. */}
+          {isPose ? (
+            <div data-testid="run-all" style={{ borderTop: '1px solid var(--border, #30363d)', paddingTop: 8, marginTop: 8,
+              display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {toAnimate.length ? (
+                <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={!animMeta.models || runAllBusy}
+                  title={t('Generates an animation for every solo pose whose kind has no clip file yet; poses with a clip are skipped. One hub job per variant, plus one LLM call per pose for the motion captions.')}
+                  onClick={() => setRunAllOpen(true)}>
+                  {t('Run all: animate {n} poses (+{jobs} jobs)').replace('{n}', String(toAnimate.length))
+                    .replace('{jobs}', String(toAnimate.length * animMeta.variants))}
+                </button>
+              ) : <span className="ga-hint">{t('Everything is current — every animatable pose has a clip.')}</span>}
+              {!animMeta.models ? <span className="ga-hint">{t('No pose-animation model is routed: /admin/settings → Media Generation → Routing.')}</span> : null}
+            </div>
+          ) : (
+            <div style={{ borderTop: '1px solid var(--border, #30363d)', paddingTop: 8, marginTop: 8 }}>
+              <button type="button" className="ga-btn ga-btn-sm ga-btn-danger" data-testid="clear-expression-images"
+                disabled={busy || !exprImages}
+                title={t('Deletes all expression images. To remove only incompatible history, use the per-character cleanup preview.')}
+                onClick={() => setConfirmClear(true)}>
+                {t('Clear rendered expression images ({n} images)').replace('{n}', exprImages === null ? '…' : String(exprImages))}
+              </button>
+            </div>
+          )}
+        </ListPane>
+
+        <section className="ga-twocol-right">
+          <div className="ga-poses-inner">
+            <button type="button" className={`ga-btn ga-btn-sm${entryTab === 'entry' ? ' ga-btn-primary' : ''}`}
+              onClick={() => setEntryTab('entry')}>{t('Entry')}</button>
+            <button type="button" className={`ga-btn ga-btn-sm${entryTab === 'candidates' ? ' ga-btn-primary' : ''}`}
+              onClick={() => setEntryTab('candidates')}>{t('Candidates')} ({candidates.length})</button>
+          </div>
+          {entryTab === 'candidates' ? (
           <div
             style={{
-              marginTop: 16, display: 'flex', flexDirection: 'column',
-              flex: '0 1 auto', minHeight: 0, maxHeight: '35vh',
+              display: 'flex', flexDirection: 'column', minHeight: 0, overflowY: 'auto',
             }}
           >
             <div
@@ -1348,7 +1418,7 @@ export function PosesTab() {
                 </button>
               </div>
             )}
-            <p className="ga-sched-muted" style={{ marginTop: 0 }}>
+            <p className="ga-hint" style={{ marginTop: 0 }}>
               {t('Free text that landed on the default key. Approve it as its own entry, attach it as a synonym, or dismiss it. "Seen" counts first sightings per server run.')}
             </p>
             {!candidates.length ? (
@@ -1359,16 +1429,17 @@ export function PosesTab() {
                   <li
                     key={c.raw_text}
                     style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 4,
-                      padding: '6px 0',
+                      display: 'grid',
+                      gridTemplateColumns: 'minmax(0, 1fr) auto',
+                      gap: 8,
+                      alignItems: 'center',
+                      padding: '4px 0',
                       borderBottom: '1px solid var(--border, #30363d)',
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                      <code style={{ wordBreak: 'break-word' }}>{c.raw_text}</code>
-                      <span style={{ fontSize: '0.75em', opacity: 0.6, whiteSpace: 'nowrap' }}>
+                    <div style={{ display: 'flex', gap: 8, minWidth: 0, alignItems: 'baseline' }}>
+                      <code style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.raw_text}>{c.raw_text}</code>
+                      <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>
                         {t('seen')} {c.count}× · {t('nearest')}: {c.nearest_key || '–'}
                       </span>
                     </div>
@@ -1392,7 +1463,7 @@ export function PosesTab() {
                         </button>
                       </div>
                     ) : (
-                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                         <button
                           type="button"
                           className="ga-btn ga-btn-sm"
@@ -1428,10 +1499,7 @@ export function PosesTab() {
               </ul>
             )}
           </div>
-        </ListPane>
-
-        <section className="ga-twocol-right">
-          {!draft ? (
+          ) : !draft ? (
             <div className="ga-placeholder">{t('Pick an entry or create a new one.')}</div>
           ) : (
             <>
@@ -1450,15 +1518,15 @@ export function PosesTab() {
               />
               {!isNew && draft.resettable && <button type="button" className="ga-btn ga-btn-sm"
                 onClick={() => setDeleteOpen(true)}>{t('Reset World override')}</button>}
-              {/* Two columns: the catalog text on the left, the 3D animation
-                  with its preview on the right — the preview needs the room. */}
+              {/* Three columns on one screen (A110): identity · animation · preview. Long
+                  explanations sit in the ⓘ mouse-over of each field. */}
               <div className="ga-form" style={{ display: 'grid',
-                gridTemplateColumns: isPose ? 'minmax(260px, 1fr) minmax(320px, 1.2fr)' : '1fr',
-                gap: 16, alignItems: 'start' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                gridTemplateColumns: isPose ? 'minmax(240px, 1fr) minmax(240px, 1fr) minmax(300px, 340px)' : 'minmax(0, 720px)',
+                gap: 14, alignItems: 'start' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <Field
                     label={t('Key')}
-                    hint={t('Canonical name, lowercase (e.g. sitting). This is the render and cache key.')}
+                    tip={t('Canonical name, lowercase (e.g. sitting). This is the render and cache key.')}
                   >
                     <div style={{ display: 'flex', gap: 8 }}>
                       <input
@@ -1494,7 +1562,7 @@ export function PosesTab() {
 
                 <Field
                   label={t('Synonyms')}
-                  hint={t('Comma-separated. Free text matching one of these lands on this key directly, without an embedding lookup.')}
+                  tip={t('Comma-separated. Free text matching one of these lands on this key directly, without an embedding lookup.')}
                 >
                   <CommaListInput
                     value={draft.synonyms}
@@ -1506,22 +1574,22 @@ export function PosesTab() {
                   <input className="ga-input" maxLength={80} value={draft.label || ''}
                     onChange={e => upd('label', e.target.value)} />
                 </Field>}
-                {isPose && <>
+                {isPose && <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                   <Field label={t('Label (en)')}
-                    hint={t('Gerund phrase, e.g. “dancing”. Empty = the key.')}>
+                    tip={t('Gerund phrase, e.g. “dancing”. Empty = the key.')}>
                     <input className="ga-input" maxLength={80} value={draft.label || ''}
                       onChange={(e) => upd('label', e.target.value)} />
                   </Field>
                   <Field label={t('Label (de)')}
-                    hint={t('Noun form, e.g. “Tanzen”. Used in German sentences.')}>
+                    tip={t('Noun form, e.g. “Tanzen”. Used in German sentences.')}>
                     <input className="ga-input" maxLength={80} value={draft.label_de || ''}
                       onChange={(e) => upd('label_de', e.target.value)} />
                   </Field>
-                </>}
+                </div>}
 
                 <Field
                   label={t('Stored in')}
-                  hint={t('The shared catalog travels with the repository. Pick this'
+                  tip={t('The shared catalog travels with the repository. Pick this'
                           + ' world for an entry that must never be committed —'
                           + ' a licensed or adult clip; it lives in the world.db. An'
                           + ' entry is only reachable in the game once it is in one of'
@@ -1541,7 +1609,7 @@ export function PosesTab() {
                 {isPose ? (
                   <Field
                     label={t('Participants')}
-                    hint={t('How many people the pose takes: 1 = alone, 2 = a pair (kissing, embracing), 3 to 5 = a group, started only through a furniture action. A multi-person pose is skipped when a single-character image is rendered. A clip with roles sets it.')}
+                    tip={t('How many people the pose takes: 1 = alone, 2 = a pair (kissing, embracing), 3 to 5 = a group, started only through a furniture action. A multi-person pose is skipped when a single-character image is rendered. A clip with roles sets it.')}
                   >
                     <input
                       className="ga-input"
@@ -1561,10 +1629,18 @@ export function PosesTab() {
 
                 </div>
                 {isPose ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {(() => {
+                      const l = poseLamp(draft.animation, clipList.clips, baseSets)
+                      return (
+                        <div data-testid="pose-lamp" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                          <LampDot lamp={l.lamp} title={lampReason(l)} /><span className="ga-hint">{lampReason(l)}</span>
+                        </div>
+                      )
+                    })()}
                     <Field
                       label={t('Animation')}
-                      hint={t('Clip kind a 3D figure plays. Options come from the clips present in shared/models/clips.')}
+                      tip={t('Clip kind a 3D figure plays. Options come from the clips present in shared/models/clips.')}
                     >
                       <select
                         className="ga-input"
@@ -1593,8 +1669,12 @@ export function PosesTab() {
                           </option>
                         ) : null}
                       </select>
+                    </Field>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                       {(draft.participants || 1) === 1 && (approveOf || !isNew) ? (
-                        <button type="button" className="ga-btn ga-btn-sm"
+                        <button type="button" className="ga-btn ga-btn-sm" style={{ whiteSpace: 'nowrap' }}
+                          title={t('One hub job per variant ({n} by default, changeable in the dialog), plus one LLM call for the motion captions. You pick one variant afterwards.')
+                            .replace('{n}', String(animMeta.variants))}
                           disabled={animationJobs.some((job) => job.key === draft.key && activeJob(job))}
                           onClick={() => {
                             const entry = data.entries.find((item) => item.key === draft.key)
@@ -1602,31 +1682,18 @@ export function PosesTab() {
                               ? { mode: 'candidate', rawText: approveOf }
                               : { mode: 'entry', entryKey: draft.key, prompt: entry?.prompt || draft.prompt })
                           }}>
-                          {approveOf ? t('Generate new') : draft.animation ? t('Regenerate') : t('Generate animation')}
+                          {(approveOf ? t('Generate new (+{n} jobs)') : draft.animation ? t('Regenerate (+{n} jobs)')
+                            : t('Generate animation (+{n} jobs)')).replace('{n}', String(animMeta.variants))}
                         </button>
                       ) : null}
                       {draft.animation && data.kinds.includes(draft.animation) ? (
-                        <button type="button" className="ga-btn ga-btn-sm"
+                        <button type="button" className="ga-btn ga-btn-sm" style={{ whiteSpace: 'nowrap' }}
                           title={t('Show this clip in the Library — preview, orientation, heights')}
                           onClick={() => openInLibrary(draft.animation, draft.key)}>
-                          {t('Open in library')}
+                          {t('Library →')}
                         </button>
                       ) : null}
-                    </Field>
-                    {/* Which figure sets actually have a file for the selected
-                        kind — a kind that only exists as `female` leaves every
-                        other figure standing. */}
-                    {draft.animation ? (
-                      <div className="ga-form-hint">
-                        {t('Clip sets')}:{' '}
-                        {(() => {
-                          const cov = clipCoverage(clipList.clips, draft.animation)
-                          return cov.length
-                            ? cov.map((s) => setLabel(s, t)).join(' ')
-                            : t('no clip')
-                        })()}
-                      </div>
-                    ) : null}
+                    </div>
                     {(data.role_counts?.[draft.animation] ?? 1) > 1 ? (
                       <div className="ga-form-hint">
                         {t('Clip with {n} roles: {n} figures play it together at one anchor — this pose takes {n} participants.')
@@ -1635,7 +1702,7 @@ export function PosesTab() {
                     ) : null}
                     <Field
                       label={t('Finale clip')}
-                      hint={t('Optional closing clip: one participant plays it once inside the running action, then goes back to the pose’s own clip. It needs as many roles as the pose has participants, a solo pose a solo clip. Left empty, a package may assign one by its naming rule (shown as “automatic”). Offers with a finale are marked in the HUD.')}
+                      tip={t('Optional closing clip: one participant plays it once inside the running action, then goes back to the pose’s own clip. It needs as many roles as the pose has participants, a solo pose a solo clip. Left empty, a package may assign one by its naming rule (shown as “automatic”). Offers with a finale are marked in the HUD.')}
                     >
                       <select
                         className="ga-input"
@@ -1669,7 +1736,7 @@ export function PosesTab() {
                     </Field>
                     <Field
                       label={t('Follow pose')}
-                      hint={t('The pose a figure goes into when this one ends normally — finished, or ended from the HUD — instead of standing up: lying on after a scene in bed, catching breath after a dance. A multi-person pose names one per role. Left empty, a package or the place type decides (shown as “automatic”). Only solo poses can follow.')}
+                      tip={t('The pose a figure goes into when this one ends normally — finished, or ended from the HUD — instead of standing up: lying on after a scene in bed, catching breath after a dance. A multi-person pose names one per role. Left empty, a package or the place type decides (shown as “automatic”). Only solo poses can follow.')}
                     >
                       {rolesFor(draft.participants || 1).map((role) => {
                         const own = followOf(draft.follow_pose, role)
@@ -1701,7 +1768,7 @@ export function PosesTab() {
                     </Field>
                     <Field
                       label={t('Place type')}
-                      hint={t('The kind of marker this pose can be played on. Every pose belongs to exactly one place type.')}
+                      tip={t('The kind of marker this pose can be played on. Every pose belongs to exactly one place type.')}
                     >
                       <select
                         className="ga-input"
@@ -1727,7 +1794,7 @@ export function PosesTab() {
                       <div className="ga-form-row">
                         <Field
                           label={t('Places')}
-                          hint={(() => {
+                          tip={(() => {
                             const span = data.pair_spans?.[draft.animation]
                             if (typeof span !== 'number') {
                               return t('How many slots of the anchor marker the group uses. A slot is 0.60 m — one body width.')
@@ -1771,7 +1838,7 @@ export function PosesTab() {
                         {draft.animation ? null : (
                           <Field
                             label={t('Yaw offset')}
-                            hint={t('Degrees the pair or group clip’s frame turns against the marker facing.')}
+                            tip={t('Degrees the pair or group clip’s frame turns against the marker facing.')}
                           >
                             <input
                               className="ga-input"
@@ -1788,17 +1855,21 @@ export function PosesTab() {
                       </div>
                     ) : null}
 
+                  </div>
+                ) : null}
+                {isPose ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                     {/* Below the select, not inside the Field: .ga-field-control
                         is a flex ROW and would put the canvas beside the select.
                         A PAIR or GROUP is previewed on a virtual marker of its
                         place type (a group on a double bed) and carries the yaw
                         dial; a solo pose never turns against
                         a marker, so it gets no `onYawOffset`. */}
-                    {draft.animation ? (
+                    {draft.animation ? (<div>
                       <ClipPreview
                         kind={draft.animation}
                         bust={animationJobs.find((job) => job.key === draft.key && job.state === 'published')?.task_id}
-                        height={360}
+                        height={320}
                         group={draft.group}
                         rootDrop={(data.groups || {})[draft.group || '']?.root_drop ?? 0}
                         yawOffset={draft.yaw_offset ?? 0}
@@ -1806,7 +1877,13 @@ export function PosesTab() {
                           ? (deg) => upd('yaw_offset', deg)
                           : undefined}
                       />
-                    ) : null}
+                      {(() => {
+                        const built = Math.max(0, ...clipList.clips.filter((c) => c.kind === draft.animation)
+                          .map((c) => c.built_s || 0))
+                        return built ? <div className="ga-hint" data-testid="pose-built">
+                          {t('Built {time}').replace('{time}', new Date(built * 1000).toLocaleString())}</div> : null
+                      })()}
+                    </div>) : <div className="ga-placeholder">{t('No animation kind picked — nothing to preview.')}</div>}
                   </div>
                 ) : null}
                 {draft.movement && draft.deletable === false ? <div className="ga-form-hint">
@@ -1822,6 +1899,17 @@ export function PosesTab() {
           )}
         </section>
       </div>
+      <ConfirmDialog open={confirmClear} title={t('Clear rendered expression images')} danger
+        confirmLabel={t('Clear {n} images').replace('{n}', String(exprImages ?? 0))}
+        message={t('Deletes {n} rendered expression images of every character. They are rendered again on demand (image jobs then).')
+          .replace('{n}', String(exprImages ?? 0))}
+        onConfirm={() => { void clearExpressionImages() }} onClose={() => setConfirmClear(false)} />
+      <ConfirmDialog open={runAllOpen} title={t('Animate poses without a clip')}
+        confirmLabel={t('Start {jobs} jobs').replace('{jobs}', String(toAnimate.length * animMeta.variants))}
+        message={t('{n} poses × {v} variants = {jobs} hub jobs, plus one LLM call per pose. Each job ends with variants to choose from: {keys}')
+          .replace('{n}', String(toAnimate.length)).replace('{v}', String(animMeta.variants))
+          .replace('{jobs}', String(toAnimate.length * animMeta.variants)).replace('{keys}', toAnimate.join(', '))}
+        onConfirm={() => { void runAll() }} onClose={() => setRunAllOpen(false)} />
       <ConfirmDialog open={pendingSet !== null} title={t('Discard unsaved changes?')}
         message={t('Switching expression sets discards the open entry draft.')}
         confirmLabel={t('Discard')}

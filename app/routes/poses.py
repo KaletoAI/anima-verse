@@ -674,8 +674,11 @@ async def animation_backends(_: Dict[str, Any] = Depends(require_admin)) -> Dict
     from app.imagegen.service import get_image_service
 
     # The service singleton may build itself (availability probes): off the loop.
+    from app.core import pose_animation
     backends = await asyncio.to_thread(lambda: get_image_service().animation_backends())
-    return {"backends": backends, "default_variants": DEFAULT_ANIMATION_VARIANTS}
+    # The place types a generated clip may serve — "Run all" counts only poses on these.
+    return {"backends": backends, "default_variants": DEFAULT_ANIMATION_VARIANTS,
+            "animatable_groups": pose_animation.animatable_groups()}
 
 
 @router.get("/animations/{task_id}/candidates/{index}/clip.fbx")
@@ -1107,6 +1110,21 @@ async def dismiss_all_candidates(request: Request,
 
 # ── Rendered expression images ───────────────────────────────────────────
 
+@router.get("/expression-images/count")
+def count_expression_images_route(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """How many rendered expression images "Clear" would delete — shown on the button before the click."""
+    from app.core.expression_regen import count_expression_images
+    from app.models.character import list_available_characters
+
+    per: Dict[str, int] = {}
+    for name in list_available_characters():
+        try:
+            per[name] = count_expression_images(name)
+        except (OSError, ValueError) as e:
+            logger.warning("count_expression_images(%s) failed: %s", name, e)
+    return {"images": sum(per.values()), "characters": sum(1 for n in per.values() if n)}
+
+
 @router.post("/expression-images/clear")
 def clear_expression_images(_: Dict[str, Any] = Depends(require_admin)
                             ) -> Dict[str, Any]:
@@ -1121,10 +1139,15 @@ def clear_expression_images(_: Dict[str, Any] = Depends(require_admin)
     from app.core.expression_regen import clear_expression_cache
     from app.models.character import list_available_characters
 
+    from app.core.expression_regen import count_expression_images
+
     images = 0
     for name in list_available_characters():
         try:
-            images += clear_expression_cache(name)
+            # The count names IMAGES (what the button promised), not image + sidecar files.
+            n = count_expression_images(name)
+            clear_expression_cache(name)
+            images += n
         except Exception as e:
             logger.warning("clear_expression_cache(%s) failed: %s", name, e)
     logger.info("rendered expression images cleared: %d", images)

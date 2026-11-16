@@ -58,7 +58,8 @@ import { bridgeKinds, orderSets } from './clipSets'
 import type { ApiClipRow as BaseApiClipRow, ClipListing } from './clipSets'
 import { rootMotionSummary } from './rootMotion'
 import { generatedBadge, isStudioClip } from './generatedClip'
-import { clipLamp, finaleKinds as finaleKindsOf, kindLamp, saveSteps, setLetter, type Lamp } from './clipStatus'
+import { clipLamp, finaleKinds as finaleKindsOf, kindLamp, saveSteps, setLetter } from './clipStatus'
+import { LampDot } from './StatusLamp'
 
 interface ApiClipRow extends BaseApiClipRow {
   generator?: string
@@ -225,12 +226,6 @@ const DIAL = { sliderWidth: 'auto', sliderStyle: { flex: 1, minWidth: 40 }, inpu
 const DIAL_LABEL = { width: 74, flex: '0 0 74px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } as const
 const FILTER = { fontSize: 12, padding: '2px 4px', minWidth: 0 } as const
 const COL_HEAD = { fontSize: 12, fontWeight: 600, opacity: 0.85, margin: '6px 0 2px' } as const
-
-const LAMP_COLOR: Record<Lamp, string> = { green: '#3fb950', yellow: '#d29922', grey: '#6e7681' }
-function LampDot({ lamp, title }: { lamp: Lamp; title?: string }) {
-  return <span title={title} data-lamp={lamp} style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 5,
-    flex: '0 0 9px', background: LAMP_COLOR[lamp] }} />
-}
 
 type InnerTab = 'places' | 'clip' | 'files' | 'used'
 

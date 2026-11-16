@@ -59,3 +59,55 @@ export function saveSteps(s: { bake: boolean; shift: boolean; heights: boolean; 
   else if ((s.bake || s.shift) && s.savedCheck) out.push('clear-check')
   return out
 }
+
+// ── Entries, Transitions, Import (Ruling A110 phase 5) ─────────────────────────────────────
+
+/** A pose's clip coverage: green = a file in every base set (the instance's `clip_sets`), yellow =
+ *  some base set falls back to the neutral file, red = no file at all, or a base set with neither its
+ *  own nor a neutral file. `missing` names the base sets without their own file. */
+export interface PoseLamp { lamp: 'green' | 'yellow' | 'red'; missing: string[]; neutral: boolean; files: number }
+
+export function poseLamp(kind: string, clips: Pick<ApiClipRow, 'kind' | 'set'>[], baseSets: string[]): PoseLamp {
+  const own = kind ? clips.filter((c) => c.kind === kind) : []
+  const sets = new Set(own.map((c) => c.set || ''))
+  const neutral = sets.has('')
+  const missing = baseSets.filter((s) => s && !sets.has(s))
+  if (!own.length) return { lamp: 'red', missing, neutral, files: 0 }
+  if (!missing.length) return { lamp: 'green', missing, neutral, files: own.length }
+  return { lamp: neutral ? 'yellow' : 'red', missing, neutral, files: own.length }
+}
+
+export interface AnimatablePose { key: string; animation?: string; participants?: number; group?: string }
+
+/** The poses "Run all" animates: solo poses (the generator makes solo clips only) on a place type the
+ *  generator supports, whose kind has no clip file at all and that have no job running already. A pose
+ *  that has any clip is current and skipped — its single button still regenerates it. */
+export function posesToAnimate(poses: AnimatablePose[], clips: Pick<ApiClipRow, 'kind'>[],
+  animatableGroups: string[], busyKeys: Set<string>): string[] {
+  const withFile = new Set(clips.map((c) => c.kind))
+  return poses.filter((p) => (p.participants || 1) === 1 && animatableGroups.includes(p.group || '')
+    && !busyKeys.has(p.key) && !(p.animation && withFile.has(p.animation))).map((p) => p.key)
+}
+
+/** A transition rule: red = it names a bridge clip that is not installed, yellow = it overlaps an
+ *  earlier rule (the earlier one wins), green = every bridge clip is there. */
+export function ruleLamp(bridgeKinds: string[], installed: Set<string>, conflict: boolean): 'green' | 'yellow' | 'red' {
+  if (!bridgeKinds.length || bridgeKinds.some((k) => !installed.has(k))) return 'red'
+  return conflict ? 'yellow' : 'green'
+}
+
+/** An inbox file: red = no bone map knows the rig (cannot be imported), yellow = a reference pose,
+ *  not a motion (used as the bind pose of another import), green = convertible. */
+export function inboxLamp(probe: { skeleton_family?: string | null; is_rest_candidate?: boolean }): 'green' | 'yellow' | 'red' {
+  if (!probe.skeleton_family) return 'red'
+  return probe.is_rest_candidate ? 'yellow' : 'green'
+}
+
+/** A CMU take: red = rejected, green = imported into the library, yellow = converted and previewable,
+ *  grey = not converted yet (still importable from the original recording). */
+export function takeLamp(take: { clip?: unknown; status: { rejected?: boolean; imported?: unknown[] | null } }):
+  'green' | 'yellow' | 'red' | 'grey' {
+  if (take.status.rejected) return 'red'
+  if (take.status.imported?.length) return 'green'
+  return take.clip ? 'yellow' : 'grey'
+}

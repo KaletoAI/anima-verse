@@ -856,6 +856,15 @@ def clear_expression_cache(character_name):
         return len(files)
 
 
+def count_expression_images(character_name):
+    """The rendered expression images of one character (sidecars not counted) — what
+    ``clear_expression_cache`` would delete, shown before the click."""
+    folder = _get_expressions_dir(character_name)
+    if not folder.is_dir() or folder.is_symlink():
+        return 0
+    return sum(1 for p in folder.iterdir() if p.is_file() and not p.is_symlink() and p.suffix in _IMAGE_EXTS)
+
+
 def list_expressions(character_name):
     from app.core.expression_cleanup import inventory
     return inventory(character_name)

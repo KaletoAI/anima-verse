@@ -126,17 +126,16 @@ export function ExpressionSetsEditor({ selected, reloadKey, labels, worldOnlyMem
       else onSelect('humanoid')
     } catch (e) { setError((e as Error).message) } finally { setBusy(false) }
   }
-  return <section className="ga-section" style={{ marginBottom: 12, flexShrink: 0 }}>
+  return <section className="ga-section" style={{ marginBottom: 8, flexShrink: 0 }}>
     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-      <label htmlFor="expression-set-picker">{t('Expression set')}</label>
+      <label htmlFor="expression-set-picker" title={`${t('One image per outfit and expression. Activity poses and temporary states do not create extra images.')} ${t('A set LoRA is added to every image of the set; write its trigger words into the expression prompts.')}`}>
+        {t('Expression set')} ⓘ</label>
       <select id="expression-set-picker" className="ga-input" style={{ width: 'auto', minWidth: 180 }} value={selected} onChange={e => choose(e.target.value)} disabled={busy}>
         {Object.values(sets).map(s => <option key={s.id} value={s.id}>{s.label} ({s.members.length})</option>)}
       </select>
       <button type="button" className="ga-btn ga-btn-sm" onClick={() => setExpanded(v => !v)}>{t('Edit set')}</button>
       <button type="button" className="ga-btn ga-btn-sm" disabled={!!changed || busy} onClick={begin}>{t('New set')}</button>
     </div>
-    <p className="ga-field-hint">{t('One image per outfit and expression. Activity poses and temporary states do not create extra images.')}
-      {' '}{t('A set LoRA is added to every image of the set; write its trigger words into the expression prompts.')}</p>
     {error && <p role="alert" style={{ color: 'var(--error)' }}>{error}</p>}
     {leaveTo !== null && <div className="ga-form">
       <span>{t('Discard unsaved set changes?')}</span>
@@ -168,6 +167,7 @@ export function ExpressionSetsEditor({ selected, reloadKey, labels, worldOnlyMem
         <button type="button" className="ga-btn ga-btn-primary" disabled={busy || !changed} onClick={() => void save()}>{t('Save set')}</button>
         <button type="button" className="ga-btn" disabled={busy} onClick={() => { edited.current = false; setDraft(sets[selected] || null); setCreating(false); setError('') }}>{t('Discard')}</button>
         {!creating && <button type="button" className="ga-btn" disabled={busy || !!changed} onClick={() => setImportOpen(v => !v)}>{t('Import expressions')}</button>}
+        <span className="ga-field-hint" style={{ alignSelf: 'center' }}>{t('Saving starts no jobs; images already rendered stay until they are cleared.')}</span>
         {!creating && <button type="button" className="ga-btn ga-btn-danger" disabled={busy || (draft.store === 'shared' && ['humanoid', 'animal'].includes(draft.id))} onClick={() => setConfirmRemove(true)}>
           {draft.store === 'world' ? t('Remove World definition') : t('Delete set')}
         </button>}

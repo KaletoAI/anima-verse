@@ -52,6 +52,11 @@ REQUIRED_ROTATION_BONES = frozenset({
 })
 
 
+def animatable_groups() -> list:
+    """The place types a generated clip may serve (the check has limits for them)."""
+    return sorted(g for g in pose_catalog.get_groups() if g in CHECK_LIMITS["hips_y"])
+
+
 def _allowed_group(group: str) -> bool:
     return group in pose_catalog.get_groups() and group in CHECK_LIMITS["hips_y"]
 
