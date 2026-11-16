@@ -613,10 +613,10 @@ def fit_compute(prepared: bytes, insole: Dict[str, Any], rigged: bytes, cap: Opt
     # changes); the second attempt's outcome stands, a toe box it cannot raise enough names the mesh as the defect.
     def attempt(allow: Dict[str, int]) -> Dict[str, Any]:
         att = _fit_attempt(footwear_fit.fit_pair(insole, shoe, body, joints, width_cap=cap, allowance=allow),
-                           prims, joints)
+                           prims, joints, insole)
         if not att.get("ok") and (att["result"].record.get("scale") or {}).get("height_ready"):
             att = _fit_attempt(footwear_fit.fit_pair(insole, shoe, body, joints, width_cap=cap, fit_height=True,
-                                                     allowance=allow), prims, joints)
+                                                     allowance=allow), prims, joints, insole)
             flat = footwear_fit.too_flat_reason(att["result"].record)
             if not att["ok"] and flat:
                 att["reasons"] = [flat] + att["reasons"]
@@ -868,13 +868,37 @@ def derive_compute(base_fit: bytes, base_record: Dict[str, Any], base_rigged: by
     return {"ok": True, **_attempt_out(att, rigged, kind, item_id, fsig, out)}
 
 
-def _fit_attempt(result: Any, prims: List["glb_mesh.Prim"], joints: Dict[str, np.ndarray]) -> Dict[str, Any]:
+def _fit_attempt(result: Any, prims: List["glb_mesh.Prim"], joints: Dict[str, np.ndarray],
+                 insole: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """One attempt of ``fit_compute``: a fit that ran (``footwear_fit.fit_pair``) cut on every body primitive and
-    judged by the cut gates. ``{ok, result, reasons, gates}`` + ``replaced`` / ``cut_stats`` when the fit ran."""
+    judged by the cut gates. ``{ok, result, reasons, gates}`` + ``replaced`` / ``cut_stats`` when the fit ran.
+
+    Ruling A162: a fit that RAN but was refused by its own fit gates (e.g. ``lift_asymmetry_mm``) is cut too when
+    ``insole`` is given, so the refusal keeps a GLB the user can accept (``fit_attempts.accept``) — before, such a
+    refusal had no mesh and the shoe could neither be kept nor accepted. The fit gates' reasons lead."""
     from app.core import footwear_cut, footwear_fit, glb_mesh
     if not result.ok:
-        return {"ok": False, "result": result, "reasons": list(result.reasons),
-                "gates": {"ok": False, "reasons": list(result.reasons), **(result.record.get("gates") or {})}}
+        refused = {"ok": False, "result": result, "reasons": list(result.reasons),
+                   "gates": {"ok": False, "reasons": list(result.reasons), **(result.record.get("gates") or {})}}
+        if insole is None or not result.record.get("sides") or not result.parts:
+            return refused
+        try:
+            result.record["cut"] = footwear_cut.cut_description(result, insole)
+            result.ok = True
+            cut_att = _fit_attempt(result, prims, joints)
+        except Exception as e:  # noqa: BLE001 — no cut possible: the plain refusal without a mesh stands
+            logger.info("Footwear fit refused by its gates and not cuttable (%s) — no attempt mesh", e)
+            result.record.pop("cut", None)
+            return refused
+        finally:
+            result.ok = False
+        reasons = list(result.reasons) + [r for r in cut_att.get("reasons") or [] if r not in result.reasons]
+        out = {"ok": False, "result": result, "reasons": reasons,
+               "gates": {"ok": False, "reasons": reasons, **(result.record.get("gates") or {})}}
+        for key in ("replaced", "cut_stats", "marks"):
+            if key in cut_att:
+                out[key] = cut_att[key]
+        return out
 
     # The cut on every body primitive, then the cut gates on the body as a whole (spec § 7.1, § 8).
     cut = result.record["cut"]
