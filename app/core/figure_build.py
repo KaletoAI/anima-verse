@@ -2334,7 +2334,9 @@ def _face_stages(character_name: str, bsig: str, follow_up: str) -> List[str]:
     if follow_up == "rerig":
         return ["rig"]
     stages = [stage for stage in model3d.mesh_hub_stages(character_name, bsig) if stage != "mesh"]
-    return stages if "face" in stages else ["face", "rig"]
+    # A163: a face view the run renders first counts as its own (image) job.
+    from app.core.face_retexture import face_view_due
+    return stages if "face" in stages else [*(["face view"] if face_view_due(character_name) else []), "face", "rig"]
 
 
 def base_run_all(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

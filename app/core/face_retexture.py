@@ -72,11 +72,76 @@ def use_upscale(reference: str, upscale: bool | None) -> bool:
     return reference != 'face' if upscale is None else bool(upscale)
 
 
+#: The face texture source a character uses (A163): ``model3d_opts.face_source``, ``face`` (the bald face view made
+#: from the profile picture) unless the Base body settings chose ``front`` (the T-pose front view).
+FACE_SOURCES = ('face', 'front')
+#: ``face_problem`` codes a render of the face view fixes — a run renders it first (``ensure_face_view``).
+FACE_VIEW_DUE_CODES = ('no_face_photo', 'face_stale', 'face_unverified')
+
+
+def stored_source(character: str) -> str:
+    """The character's face texture source setting (``face`` by default)."""
+    from app.core.model3d import get_model3d_options
+    value = get_model3d_options(character).get('face_source')
+    return value if value in FACE_SOURCES else 'face'
+
+
+def face_view_due(character: str) -> str:
+    """Why the next run renders the face view first: a ``FACE_VIEW_DUE_CODES`` code, else '' (current, the
+    setting is ``front``, or no profile picture — that stays a visible problem of the run)."""
+    if stored_source(character) != 'face':
+        return ''
+    # Hashes only (no decode): the run's own ``reference_info`` certifies and freezes the bytes afterwards.
+    from app.core.model_refs import current_profile_image
+    profile = current_profile_image(character)
+    try:
+        expected = hashlib.sha256(profile.read_bytes()).hexdigest() if profile else ''
+    except OSError:
+        expected = ''
+    if not expected:
+        return ''
+    path = photo_path(character, 'x', {}, 'face')
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return 'no_face_photo'
+    meta = read_meta(path)
+    if not meta.get('image_sha256'):
+        return 'face_unverified'
+    if hashlib.sha256(raw).hexdigest() != meta['image_sha256']:
+        return ''  # being re-rendered: the render in flight publishes a current one
+    return '' if meta.get('reference_sha256') == expected else 'face_stale'
+
+
+def ensure_face_view(character: str) -> dict | None:
+    """Render the face view as a step of the calling run when the setting is ``face`` and the view is missing,
+    stale or unverified (``model_refs.generate_face_view`` — an image job on its routed occasion). Returns None
+    when nothing blocks the face reference, else the problem that does (the run reports it; never a silent
+    fallback to the front view)."""
+    if stored_source(character) != 'face':
+        return None
+    due = face_view_due(character)
+    if due:
+        from app.core.model_refs import generate_face_view
+        try:
+            path = generate_face_view(character, force=due == 'face_unverified')
+        except Exception as exc:  # noqa: BLE001 — reported as the run's face problem
+            return {'code': 'face_view_failed', 'message': f'The face view could not be rendered: {exc}',
+                    'fix': 'Check the face view route, or switch the face texture source to Front'}
+        if path is None:
+            return {'code': 'face_view_failed', 'message': 'The face view could not be rendered.',
+                    'fix': 'Check the face view route, or switch the face texture source to Front'}
+    # What remains (no profile picture, a render in flight) the run's own reference check reports.
+    return None
+
+
 def reference_info(character: str, signature: str, meta: dict, reference: str = '', *,
                    _snapshot: dict | None = None) -> dict:
-    """Select a self-verified close-up of the current profile, independent of outfit."""
+    """Check the self-verified close-up of the current profile, independent of outfit. ``reference`` ''
+    = the character's stored setting (``stored_source``) — never a silent fallback to the front view."""
     if reference not in ('', 'face', 'front'):
         raise ValueError('Invalid face reference choice')
+    reference = reference or stored_source(character)
     from app.core.model_refs import current_profile_image
     profile = current_profile_image(character)
     try:
@@ -120,7 +185,7 @@ def reference_info(character: str, signature: str, meta: dict, reference: str = 
                     _snapshot['image'] = image
                     _snapshot['rgba'] = raw
         break
-    selected = reference or ('front' if problem else 'face')
+    selected = reference
     return {'reference': selected, 'face_available': problem is None,
             'face_problem': problem, 'problems': [problem] if selected == 'face' and problem else []}
 

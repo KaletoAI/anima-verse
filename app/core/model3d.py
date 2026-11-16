@@ -474,6 +474,10 @@ def get_model3d_options(character_name: str) -> Dict[str, Any]:
             # result passes the visual gate (review 2026-11-09, torn shards at the eye); only True is stored.
             "face_cleanup": bool(raw.get("face_cleanup")),
             "face_photo": dict(raw.get("face_photo") or {}),
+            # The face texture source (A163, Base body settings): "face" = the bald face view rendered from the
+            # profile picture (default; a run renders it first when missing or stale), "front" = the T-pose front
+            # view. Base and outfit bodies follow it; only "front" is stored.
+            "face_source": "front" if raw.get("face_source") == "front" else "face",
             # The face retexture's four controls (strength, feather, render resolution, yaw) — remembered like
             # ``face_photo``, saved on their own (the Base body tab's face settings); only deviations from
             # ``face_retexture.validated_params()`` are stored. A run without explicit values uses them
@@ -580,6 +584,13 @@ def set_model3d_options(character_name: str,
                 opts["face_controls"] = cleaned
             else:
                 opts.pop("face_controls", None)
+        if "face_source" in updates:
+            if updates["face_source"] not in ("face", "front"):
+                raise ValueError("face_source must be 'face' or 'front'")
+            if updates["face_source"] == "front":
+                opts["face_source"] = "front"
+            else:
+                opts.pop("face_source", None)
         if "face_before_rig" in updates:
             if type(updates["face_before_rig"]) is not bool:
                 raise ValueError("face_before_rig must be a boolean")
@@ -1424,15 +1435,15 @@ def face_info(character_name: str, face_path: Path) -> Dict[str, Any]:
     if (face_path.parent / "facefix" / f"{face_path.stem}.png").is_file():
         out["face_retexture_compare_url"] = (f"/characters/{quote(character_name)}/model3d/face-retexture/compare"
                                              f"?signature={face_path.stem}")
-    # What the NEXT run would project from (``face_retexture.reference_info``,
-    # the same choice ``check`` makes): the face view, or the front view when
-    # the face view is missing, stale (rendered from an older profile picture)
-    # or unverified — shown before a run instead of silently falling back.
+    # What the NEXT run projects from (``face_retexture.reference_info``, the stored face texture source, A163):
+    # ``face_view_due`` names why the run renders the face view first (missing, stale, unverified), '' when
+    # it is current or the source is the front view.
     try:
-        from app.core.face_retexture import read_meta, reference_info
+        from app.core.face_retexture import face_view_due, read_meta, reference_info
         choice = reference_info(character_name, face_path.stem,
                                 read_meta(face_path.parent / "unrigged" / f"{face_path.stem}.glb"))
-        out["face_reference"] = {k: choice.get(k) for k in ("reference", "face_available", "face_problem")}
+        out["face_reference"] = {**{k: choice.get(k) for k in ("reference", "face_available", "face_problem")},
+                                 "face_view_due": face_view_due(character_name)}
     except Exception:  # noqa: BLE001 — a status read never fails on it
         logger.exception("Face reference state of %s failed", character_name)
         out["face_reference"] = None
@@ -3460,7 +3471,8 @@ def mesh_hub_stages(character_name: str, signature: str) -> List[str]:
     import time
     from app.core import figure
     planned = face_before_rig_planned(character_name)
-    key = (figure._generation[0], planned, _face_view_stat(character_name))
+    from app.core.face_retexture import stored_source
+    key = (figure._generation[0], planned, _face_view_stat(character_name), stored_source(character_name))
     now = time.monotonic()
     with _stages_lock:
         hit = _stages_memo.get((character_name, signature))
@@ -3491,6 +3503,9 @@ def _mesh_hub_stages(character_name: str, signature: str, planned: bool) -> List
     stages = ["mesh"]
     if planned and _face_route_ok(character_name):
         reference = face_retexture.reference_info(character_name, signature, {})["reference"]
+        if face_retexture.face_view_due(character_name):
+            # A163: the run renders the missing / stale face view first (an image job).
+            stages.append("face view")
         if face_retexture.use_upscale(reference, None):
             stages.append("upscale")
         stages.append("face")
@@ -3742,6 +3757,8 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
             if face_before_rig_planned(character_name, rig):
                 from app.core import face_retexture
                 ready = face_retexture.runnable(character_name)
+                # A163: a missing / stale face view is rendered as a step of this run, before it is used.
+                face_view_problem = face_retexture.ensure_face_view(character_name) if ready["ok"] else None
                 face_snapshot = {}
                 face_choice = face_retexture.reference_info(character_name, signature, {
                     "source_image": src.name, "source_image_sha256": hashlib.sha256(source_bytes).hexdigest()},
@@ -3762,6 +3779,10 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
                 if not ready["ok"]:
                     face_inputs["face_retexture"] = {"status": "skipped", "reason": "; ".join(
                         problem["message"] for problem in ready["problems"])}
+                elif face_view_problem or face_choice["problems"]:
+                    face_inputs["face_retexture"] = {"status": "failed", "error": "; ".join(
+                        p["message"] for p in ([face_view_problem] if face_view_problem else face_choice["problems"])),
+                        "at": utc_now_iso()}
                 else:
                     try:
                         photo_raw = face_snapshot['rgba'] if face_reference == 'face' else source_bytes
@@ -4670,9 +4691,14 @@ def _face_retexture_model(character_name: str, signature: Optional[str] = None, 
         # No explicit controls (Improvements, any non-dialog caller): the remembered ones, like the photo values.
         controls = (face_retexture.validated_params(params) if params is not None
                     else remembered_face_controls(character_name))
+        ready = face_retexture.runnable(character_name, backend_glob)
+        # A163: with the face view as the source, a missing / stale one is rendered first, in this run.
+        if ready['ok'] and (reference or face_retexture.stored_source(character_name)) == 'face':
+            face_view_problem = face_retexture.ensure_face_view(character_name)
+            if face_view_problem:
+                return {'ok': False, 'problems': [face_view_problem], 'error': face_view_problem['message']}
         face_snapshot = {}
         eligibility = face_retexture.check(character_name, signature, reference, _snapshot=face_snapshot)
-        ready = face_retexture.runnable(character_name, backend_glob)
         problems = eligibility['problems'] + ready['problems']
         if problems:
             return {'ok': False, 'problems': problems, 'error': '; '.join(p['message'] for p in problems)}

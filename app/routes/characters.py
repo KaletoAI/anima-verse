@@ -4017,17 +4017,32 @@ def _face_retexture_localize(value: dict, lang: str) -> dict:
     return result
 
 
+def _face_view_rendered_first(eligibility: dict) -> dict:
+    """A163: a missing / stale / unverified face view is no blocking problem — the run renders it first.
+    Drops that problem from ``problems`` and names it in ``face_view_due``."""
+    from app.core.face_retexture import FACE_VIEW_DUE_CODES
+    due = ""
+    problems = []
+    for p in eligibility.get("problems") or []:
+        if eligibility.get("reference") == "face" and p.get("code") in FACE_VIEW_DUE_CODES:
+            due = p["code"]
+        else:
+            problems.append(p)
+    return {**eligibility, "problems": problems, "ok": not problems, "face_view_due": due}
+
+
 @router.get("/{character_name}/model3d/face-retexture/check")
 def check_character_face_retexture(character_name: str, signature: str = "",
-                                   backend: str = "", lang: str = "en", reference: str = Query("", pattern="^(face|front)?$"),
+                                   backend: str = "", lang: str = "en",
                                    _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Keep permanent eligibility and temporary routing readiness distinct."""
+    """Keep permanent eligibility and temporary routing readiness distinct. The reference is the stored face
+    texture source (A163); a face view the run renders first is reported as ``face_view_due``, not a problem."""
     from app.core import face_retexture
     from app.core.keyed_lock import keyed_lock
     signature = _face_retexture_signature(character_name, signature)
     root = get_character_dir(character_name) / "model3d"
     with keyed_lock("model3d_publication", str(root)):
-        eligibility = face_retexture.check(character_name, signature, reference)
+        eligibility = _face_view_rendered_first(face_retexture.check(character_name, signature))
         snapshot = face_retexture.snapshot_info(root, signature)
     ready = face_retexture.runnable(character_name, backend)
     return {**_face_retexture_localize(eligibility, lang), "signature": signature,
@@ -4040,7 +4055,6 @@ def check_character_face_retexture(character_name: str, signature: str = "",
 
 @router.get("/{character_name}/model3d/face-photo-preview")
 def preview_character_face_photo(character_name: str, signature: str = "",
-                                 reference: str = Query("face", pattern="^(face|front)$"),
                                  balance: float = Query(0, ge=0, le=1),
                                  brightness: float = Query(1, ge=0.5, le=1.5),
                                  _: Dict[str, Any] = Depends(require_admin), backend: str = ""):
@@ -4057,7 +4071,8 @@ def preview_character_face_photo(character_name: str, signature: str = "",
     with keyed_lock('face_photo_preview', character_name):
         signature = _face_retexture_signature(character_name, signature)
         snapshot = {}
-        eligibility = face_retexture.check(character_name, signature, reference, _snapshot=snapshot)
+        eligibility = face_retexture.check(character_name, signature, _snapshot=snapshot)
+        reference = eligibility['reference']
         if not eligibility['ok']:
             raise HTTPException(409, '; '.join(p['message'] for p in eligibility['problems']))
         try:
@@ -4100,7 +4115,6 @@ def start_character_face_retexture(character_name: str, signature: str = "",
                                    brightness: float = Query(1, ge=0.5, le=1.5),
                                    yaw: float = Query(0, ge=-180, le=180), lang: str = "en",
                                    upscale: Optional[bool] = None, upscale_backend: str = "",
-                                   reference: str = Query("", pattern="^(face|front)?$"),
                                    _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Validate the preflight, then start a tracked correction job."""
     from app.core import face_retexture
@@ -4113,7 +4127,7 @@ def start_character_face_retexture(character_name: str, signature: str = "",
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     snapshot = {}
-    eligibility = face_retexture.check(character_name, signature, reference, _snapshot=snapshot)
+    eligibility = _face_view_rendered_first(face_retexture.check(character_name, signature, _snapshot=snapshot))
     ready = face_retexture.runnable(character_name, backend)
     if not eligibility["ok"] or not ready["ok"]:
         return _face_retexture_localize({"ok": False, "problems": eligibility["problems"] + ready["problems"]}, lang)
@@ -4123,7 +4137,9 @@ def start_character_face_retexture(character_name: str, signature: str = "",
         hub = face_retexture.photo_controls_supported(character_name, backend)
         if not hub and eligibility['reference'] == 'front' and balance:
             raise ValueError(PROBLEM)
-        face_retexture.flatten_photo(snapshot['rgba'], None if hub else photo)
+        if not eligibility['face_view_due']:
+            # A face view the run renders first is checked by the run itself.
+            face_retexture.flatten_photo(snapshot['rgba'], None if hub else photo)
     except ValueError as exc:
         return _face_retexture_localize({'ok': False, 'problems': [
             {'code': 'face_photo', 'message': str(exc), 'fix': FIX}]}, lang)
@@ -4474,7 +4490,7 @@ def _set_character_model3d_options_sync(character_name: str,
     if not isinstance(body, dict) or not (
             "auto_generate" in body or "face_before_rig" in body or "face_cleanup" in body
             or "face_photo" in body or "face_controls" in body or "extension_rig" in body
-            or "mesh_repair" in body):
+            or "mesh_repair" in body or "face_source" in body):
         raise HTTPException(status_code=400,
                             detail="model options missing")
     updates = {}
@@ -4482,6 +4498,9 @@ def _set_character_model3d_options_sync(character_name: str,
         updates["face_photo"] = body["face_photo"]
     if "face_controls" in body:
         updates["face_controls"] = body["face_controls"]
+    if "face_source" in body:
+        # The face texture source (A163): "face" (face view, default) or "front"; validated by set_model3d_options.
+        updates["face_source"] = body["face_source"]
     if "mesh_repair" in body:
         # The base mesh repair's settings (Ruling A34), validated by ``set_model3d_options``; saved without
         # running anything — the panel then shows the repair as due.
