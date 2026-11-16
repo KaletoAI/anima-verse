@@ -140,6 +140,11 @@ export function SliderInput({
   // that was placed by clicking rather than dialled — and, worse, offer that
   // shortened number back as the field's content.
   const text = value === undefined ? '' : String(Math.round(value * 1e6) / 1e6)
+  // Never narrower than the longest number the field can hold: the bounds, the value and a draft, plus the native
+  // spin buttons (~26 px). A fixed 54 px box cut a one-decimal value ("-1.3" read "-1.:", Ruling A129).
+  const chars = Math.max(String(min).length, String(max).length, text.length, (draft ?? '').length,
+    numberStep === 'any' ? 0 : String(min).length + (decimals ? decimals + 1 : 0))
+  const fieldWidth = typeof inputWidth === 'number' ? `max(${inputWidth}px, calc(${chars}ch + 26px))` : inputWidth
 
   const commit = (raw: string) => {
     setDraft(null)
@@ -190,7 +195,7 @@ export function SliderInput({
         placeholder={placeholder}
         disabled={disabled}
         aria-label={ariaLabel}
-        style={{ width: inputWidth, flex: '0 0 auto' }}
+        style={{ width: fieldWidth, flex: '0 0 auto' }}
         onChange={(e) => setDraft(e.target.value)}
         // Only an EDITED field commits. Focusing and leaving without typing
         // must not write anything back — re-committing the displayed number
