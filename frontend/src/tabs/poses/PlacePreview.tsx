@@ -36,12 +36,13 @@ import {
   placeModelSpec, restCorrections, restPoseOf, strandCandidates,
   type AlignmentDraft, type ChannelNow, type FrameInspection, type AlignmentLamp, type ClipHeightOffsetsCm, type CollisionPayload, type FigureRuntime,
   type HairStrandRecord, type SceneMarker, type SceneModelSpec, type SecondaryMotionPayload,
-  contactLamp, contactReport, solveContactShift, solvePairFix, fixRoot, fixPivot, partnerTurnFix, turnAxes,
+  contactLamp, contactReport, solvePairFix, fixRoot, fixPivot, partnerTurnFix, turnAxes,
   fixAnglesDeg, ALIGN_FIT, NO_FIX, RUNTIME_FIT, createPairFit, pairFitObserve, pairFitTotal, findContact, contactSampleOf,
   attachedPartIndex, partBoneNames, type PairFitState, pairInterpenetration, clearLamp, PART_REGIONS, type ClearLamp,
   type ContactLamp, type ContactReport, type FitSample, type PairFix,
   targetLamp, isPointTarget, TARGET_RADIUS_M, POINT_TARGET_OPS, type ContactTarget,
   bendSample, BEND_LIMITS_DEFAULT, type BendLimits, type BendResult,
+  bendFrameOf, supportSample, supportHeight, postureReport, postureAngleCapDeg, type PostureReport,
 } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { targetWordOf } from './contactWords'
@@ -164,9 +165,13 @@ export interface PairFitReadout {
   lateralMaxMm: number; lateralMedMm: number; frames: number
   /** Ruling A145: the bend used since the fit (largest, degrees), its limit and the frames at the limit (null = rigid). */
   bend: BendReadout | null
+  /** Ruling A150: the support's change since the fit (mm; largest float / sink; null = no support read). */
+  support: { gapMm: number; sinkMm: number } | null
 }
-/** Ruling A145: how much the attached part bent — the largest over the frames, its limit there, and the lamp. */
-export interface BendReadout { maxDeg: number; limitDeg: number; atLimit: number; frames: number; lamp: 'green' | 'yellow' }
+/** Ruling A145: how much the attached part bent — the largest over the frames, its limit there, and the lamp.
+ *  Ruling A150: plus the root pitch used (the frame with the largest |pitch|, + = up). */
+export interface BendReadout { maxDeg: number; limitDeg: number; atLimit: number; frames: number; lamp: 'green' | 'yellow'
+  rootPitchDeg: number }
 /** `pairCheck`: the pair shown over whole loops at 60 fps — the clip as stored + draft, then with the fine fit. */
 export type PairCheckResult =
   | { ok: false; reason: string }
@@ -252,6 +257,19 @@ const placeMemory: { camera: { pos: [number, number, number]; target: [number, n
   byIndex: Record<number, { character: string; role: string; body: Assignment['body']; state: string }> } = {
   camera: null, byIndex: {} }
 
+/** Ruling A150: the persons, bodies and states last picked per place index, remembered in this browser across page
+ *  loads and server restarts (localStorage; the server has no per-user preference store). */
+const PEOPLE_KEY = 'anima.placePreview.people'
+function loadPeople(): typeof placeMemory.byIndex {
+  try {
+    const v = JSON.parse(localStorage.getItem(PEOPLE_KEY) || '{}') as { byIndex?: typeof placeMemory.byIndex }
+    return v.byIndex && typeof v.byIndex === 'object' ? v.byIndex : {}
+  } catch { return {} }
+}
+function savePeople(byIndex: typeof placeMemory.byIndex) {
+  try { localStorage.setItem(PEOPLE_KEY, JSON.stringify({ byIndex })) } catch { /* private mode: not remembered */ }
+}
+
 /** Ruling A139: frames of the one-off camera move to the contact (~0.5 s; 0.8^30 of the gap is left). */
 const FOCUS_FRAMES = 30
 
@@ -264,7 +282,10 @@ export interface RelationAlign { by: string; of: string; channel: string; target
       before: ContactReport; after: ContactReport; afterShift: ContactReport; overlapBeforeMm: number; overlapAfterMm: number
       lampBefore: ContactLamp; lamp: ContactLamp
       /** Ruling A145: the bend after Auto-align (null = rigid). */
-      bend: BendReadout | null }
+      bend: BendReadout | null
+      /** Ruling A150: the moving figure's support before/after against its own posture (null = none read), and why the
+       *  contact lamp is not green when the posture held it back. */
+      postureBefore: PostureReport | null; posture: PostureReport | null; limitReason: 'posture' | null }
 export type AutoAlignResult =
   | { ok: false; reason: string }
   | { ok: true; relations: RelationAlign[]; roleShiftCm: Record<string, [number, number, number]>
@@ -275,7 +296,8 @@ export type AutoAlignResult =
       /** Ruling A129.5: the deepest interpenetration besides what the channel allows, its pair and lamp. */
       clearWorst: string; clearLamp: ClearLamp
       before: ContactReport; after: ContactReport; afterShift: ContactReport; overlapBeforeMm: number; overlapAfterMm: number
-      lampBefore: ContactLamp; lamp: ContactLamp; bend: BendReadout | null }
+      lampBefore: ContactLamp; lamp: ContactLamp; bend: BendReadout | null
+      postureBefore: PostureReport | null; posture: PostureReport | null; limitReason: 'posture' | null }
 
 /** The Auto-align of the scene that runs now, tagged with what it shows (A129.6: "Align all" waits for its clip). */
 export type AutoAlignRun = (() => AutoAlignResult) & { kind?: string; set?: string; figures?: number }
@@ -308,6 +330,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   const [groundCount, setGroundCount] = useState(2)
   /** The last Fill all's outcome: count placed or why none. */
   const [fillNote, setFillNote] = useState<{ count: number; reason: FillReason } | null>(null)
+  /** Ruling A150: remembered persons that no longer exist (their places got the default fill). */
+  const [goneNote, setGoneNote] = useState<string[]>([])
   const [variant, setVariant] = useState(0)
   const [scene, setScene] = useState<{ models: SceneModelSpec[]; markers: SceneMarker[] } | null>(null)
   const [assign, setAssign] = useState<Record<string, Assignment>>({})
@@ -423,13 +447,19 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
     if (!all) {
       // A129.8: the persons, bodies and states picked on the last clip, per place index, where this clip has the place.
       const rl = solo ? [''] : roleList
+      // A150: this page load's memory first, else what this browser remembered.
+      const memo = Object.keys(placeMemory.byIndex).length ? placeMemory.byIndex : loadPeople()
+      const known = new Set([...(chars ?? []).map((c) => c.name), MANNEQUIN])
+      const gone: string[] = []
       places.forEach((p, i) => {
-        const m = placeMemory.byIndex[i]
+        const m = memo[i]
         if (!m || !m.character) return
+        if (!known.has(m.character)) { if (!gone.includes(m.character)) gone.push(m.character); return }
         const role = next[p.letter]?.role ?? (rl.includes(m.role) ? m.role : rl[i % rl.length])
         next[p.letter] = { character: m.character, role, body: m.body, state: m.state }
       })
-    }
+      setGoneNote(gone)
+    } else setGoneNote([])
     setAssign(next)
     if (all) setFillNote({ count: plan.count, reason: plan.reason })
   }
@@ -450,6 +480,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
       if (a?.character) placeMemory.byIndex[i] = { character: a.character, role: a.role, body: a.body, state: a.state }
       else if (a) delete placeMemory.byIndex[i]
     })
+    // A150: only once something is shown (an empty first render must not wipe what the browser remembered).
+    if (Object.keys(placeMemory.byIndex).length) savePeople(placeMemory.byIndex)
   }, [assign, places])
   const assigned = places.filter((p) => assign[p.letter]?.character)
   const plain = usePlainBodies(places.map((p) => assign[p.letter]?.character || ''))
@@ -921,11 +953,25 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           }
           return out
         }
-        const sampleAt = (res: NonNullable<ReturnType<typeof placePhaseB>>, hit: Hit, pivot: [number, number, number]): FitSample | null => {
+        // Ruling A150: the sample carries the moving figure's support (stage space, the surface under its place; `ids` =
+        // the capsules a baseline pass chose) and its body axes (the bend's root lever).
+        const sampleAt = (res: NonNullable<ReturnType<typeof placePhaseB>>, hit: Hit,
+          pl: { pivot: [number, number, number]; frame: number[] }, ids?: readonly string[] | null): FitSample | null => {
           const ie = res.figures[hit.e].inspection, ir = res.figures[hit.r].inspection
-          const w = ie && ir ? contactSampleOf(ie, ir, hit, pivot) : null
-          return w ? { tip: toStageP(w.tip), base: toStageP(w.base), o: toStageP(w.o), u: toStageP(w.u, true), pivot,
-            chain: w.chain?.map((p) => toStageP(p)), raised: w.raised, channel: w.channel } : null
+          const w = ie && ir ? contactSampleOf(ie, ir, hit, pl.pivot) : null
+          if (!w || !ie) return null
+          const support = supportSample(ie.capsules, { ids, surface: figs[hit.e].place.marker.y_world, map: (p) => toStageP(p) })
+          return { tip: toStageP(w.tip), base: toStageP(w.base), o: toStageP(w.o), u: toStageP(w.u, true), pivot: pl.pivot,
+            chain: w.chain?.map((p) => toStageP(p)), raised: w.raised, channel: w.channel, frame: bendFrameOf(pl.frame),
+            ...(support ? { support } : {}) }
+        }
+        /** Ruling A150: the stage frame's body axes in world space (the bones bend in world space). */
+        const stageWorldRot = new THREE.Matrix3()
+        const worldBendFrame = (frame: number[]) => {
+          stageWorldRot.setFromMatrix4(stage.matrixWorld)
+          const f = bendFrameOf(frame)
+          const d = (v: readonly number[]): [number, number, number] => { sv.set(v[0], v[1], v[2]).applyMatrix3(stageWorldRot).normalize(); return [sv.x, sv.y, sv.z] }
+          return { side: d(f.side), up: d(f.up) }
         }
         // ── Ruling A145: the attached part bends toward its target before anything moves (`chainBend.ts`). ──
         /** The bend limits in force: the clip's draft (or the default), null when "Bend" is off (rigid, as before). */
@@ -938,7 +984,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           if (!lim) return null
           const ie = res.figures[hit.e].inspection, ir = res.figures[hit.r].inspection
           const w = ie && ir ? contactSampleOf(ie, ir, hit, [0, 0, 0]) : null
-          const b = w ? bendSample(w, lim).bend : null
+          const pl = placedNow.get(figs[hit.e])
+          const b = w ? bendSample({ ...w, frame: pl ? worldBendFrame(pl.frame) : null }, lim).bend : null
           if (b) entries[hit.e].figure.bendChain(hit.chain, b.turns)
           return b
         }
@@ -948,8 +995,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           if (!got.length) return null
           const top = got.reduce((a, x) => (x.totalDeg > a.totalDeg ? x : a), got[0])
           const atLimit = got.filter((x) => x.atLimit).length
+          const root = got.reduce((a, x) => (Math.abs(x.rootPitchDeg) > Math.abs(a) ? x.rootPitchDeg : a), 0)
           return { maxDeg: top.totalDeg, limitDeg: top.limit.totalDeg, atLimit, frames: got.length,
-            lamp: atLimit > 0 ? 'yellow' : 'green' }
+            lamp: atLimit > 0 ? 'yellow' : 'green', rootPitchDeg: root }
         }
         // Ruling A129.5: the honest check of one frame — only the entering figure's attached part against the
         // receiving channel's `suppress` capsules is exempt; the pair is named by place letter and capsule.
@@ -971,7 +1019,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             lateralMaxMm: lat.length ? lat[lat.length - 1] : NaN, lateralMedMm: lat.length ? lat[lat.length >> 1] : NaN,
             frames: lat.length,
             bend: st.bend && st.bendDeg.length ? { maxDeg: Math.max(...st.bendDeg), limitDeg: st.bendLimitDeg,
-              atLimit: st.bendAtLimit, frames: st.bendDeg.length, lamp: st.bendAtLimit > 0 ? 'yellow' : 'green' } : null }
+              atLimit: st.bendAtLimit, frames: st.bendDeg.length, lamp: st.bendAtLimit > 0 ? 'yellow' : 'green',
+              rootPitchDeg: st.rootPitchDeg.reduce((a, v) => (Math.abs(v) > Math.abs(a) ? v : a), 0) } : null,
+            support: st.supportMm.length ? { gapMm: Math.max(0, ...st.supportMm), sinkMm: Math.max(0, ...st.supportMm.map((v) => -v)) } : null }
         }
         // Ruling A139: one fine fit per contact relation.
         type LiveRec = { hit: Hit; st: PairFitState; axes: [number, number, number][] }
@@ -1145,13 +1195,13 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           }
           if (fitInspect && phaseB && !pausedRef.current) {
             if (!live.found) {
-              live.recs = findHits(phaseB).map((hit) => ({ hit, st: createPairFit(bendLimitsNow()), axes: [] }))
+              live.recs = findHits(phaseB).map((hit) => ({ hit, st: createPairFit(bendLimitsNow(), figs[hit.e].place.marker.group), axes: [] }))
               live.found = true
               live.none = !live.recs.length
             }
             for (const rec of live.recs) {
               const pl = placedNow.get(figs[rec.hit.e])
-              const smp = pl ? sampleAt(phaseB, rec.hit, pl.pivot) : null
+              const smp = pl ? sampleAt(phaseB, rec.hit, pl) : null
               if (!pl || !smp) continue
               bendBones(phaseB, rec.hit, rec.st.bend)
               rec.axes = turnAxes(pl.frame)
@@ -1293,23 +1343,34 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             const draftOf = (extra: [number, number, number], turn: [number, number]): AlignmentDraft => ({ ...cur0,
               roleShiftM: { ...cur0.roleShiftM, [mr]: [b0[0] + extra[0], b0[1] + extra[1], b0[2] + extra[2]] },
               partnerTurnDeg: isPair ? [t0[0] + turn[0], t0[1] + turn[1]] : cur0.partnerTurnDeg })
+            // Ruling A150: the moving figure's own posture per frame index (its support capsules and height), from the
+            // baseline pass; every later pass keeps the same capsules and measures against that height.
+            const group = moving.place.marker.group
+            let baseline: Map<number, { ids: string[]; h: number }> | null = null
             const pass = (extra: [number, number, number], turn: [number, number] = [0, 0]) => {
               const draft = draftOf(extra, turn)
               const samples: FitSample[] = []
+              const heights = new Map<number, { ids: string[]; h: number }>()
               let overlap = 0, worst = ''   // mm while sampling (A129.5 honest check)
               for (let i = 0; i < 2 * loop; i++) {
                 const time = (i % loop) * step % duration
                 const res = runAt(time, draft, i >= loop)
                 if (!res) continue
                 const pl = placed.get(moving)!
-                const smp = sampleAt(res, hit, pl.pivot)
+                const k = i - loop
+                const smp = sampleAt(res, hit, pl, baseline?.get(k)?.ids)
                 if (!smp) continue
+                if (smp.support) {
+                  heights.set(k, { ids: smp.support.ids, h: supportHeight(smp.support.pts, smp.support.r) })
+                  const b = baseline?.get(k)
+                  if (b) smp.support = { ...smp.support, base: b.h }
+                }
                 axes = turnAxes(pl.frame)
                 samples.push(smp)
                 const h = honestAt(res, hit)
                 if (h.mm > overlap) { overlap = h.mm; worst = h.worst }
               }
-              return { samples, overlap: overlap / 1000, worst, draft }
+              return { samples, overlap: overlap / 1000, worst, draft, heights }
             }
             // world (stage) Δ of the entering tip → the moving place's clip-frame role shift: S = sign · frameᵀ Δ, the
             // vertical through the hips-drop gain (root.y moves by hipsBind.y / standRef per metre of clip hips).
@@ -1320,6 +1381,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               return [sign * (m[0] * d[0] + m[3] * d[1] + m[6] * d[2]), sign * (m[1] * d[0] + m[4] * d[1] + m[7] * d[2]) / k,
                 sign * (m[2] * d[0] + m[5] * d[1] + m[8] * d[2])]
             }
+            // The baseline: B's clip pose without the draft role shift and without any partner turn (saved + draft).
+            const st0 = isPair && sign === 1 ? [-(savedTurn[0] + t0[0]), -(savedTurn[1] + t0[1])] as [number, number] : [0, 0] as [number, number]
+            baseline = pass([-b0[0], -b0[1], -b0[2]], st0).heights
             const p0 = pass([0, 0, 0])
             if (p0.samples.length < 4) return { ok: false, reason: t('The contact could not be sampled over the clip.') }
             const before = rep(p0.samples)
@@ -1327,8 +1391,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             let cur = p0
             for (let it = 0; it < 3; it++) {
               // A145: bend first — the shift only solves what the bent part cannot reach.
-              const d = bendLim ? solvePairFix(cur.samples, { maxShiftM: ALIGN_FIT.maxShiftM, maxAngleDeg: 0, axes: [], bend: bendLim }).shift
-                : solveContactShift(cur.samples)
+              // A150: the posture term keeps B's support on the surface (the rigid case too).
+              const d = solvePairFix(cur.samples, { maxShiftM: ALIGN_FIT.maxShiftM, maxAngleDeg: 0, axes: [], bend: bendLim, group }).shift
               const sh = toClip(d, cur.draft)
               extra = [extra[0] + sh[0], extra[1] + sh[1], extra[2] + sh[2]]
               cur = pass(extra)
@@ -1339,9 +1403,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             // only when B is the entering figure (turning the receiving figure would carry the target).
             let turn: [number, number] = [0, 0]
             if (isPair && sign === 1) {
-              const lim = ALIGN_FIT.maxAngleDeg
+              const lim = postureAngleCapDeg(group, ALIGN_FIT.maxAngleDeg)
               for (let it = 0; it < 3; it++) {
-                const fix = solvePairFix(cur.samples, { ...ALIGN_FIT, axes, bend: bendLim })
+                const fix = solvePairFix(cur.samples, { ...ALIGN_FIT, axes, bend: bendLim, group })
                 const [dt, dr] = fixAnglesDeg(fix, axes)
                 const total = (i: 0 | 1, d: number) => Math.max(-lim, Math.min(lim, savedTurn[i] + t0[i] + turn[i] + d))
                   - savedTurn[i] - t0[i]
@@ -1364,12 +1428,19 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               const ch = probe!.figures[hit.r].inspection!.channels.find((x) => x.id === hit.channel)!
               return contactLamp(rep, ch)
             }
+            const postureOf = (smps: readonly FitSample[]) => {
+              const r = postureReport(smps.map((x) => ({ support: x.support })))
+              return r.frames ? r : null
+            }
+            const posture = postureOf(cur.samples)
+            const lamp = lampOf(after)
             rows.push({ by: fe.letter, of: fr.letter, channel: hit.channel, target: hit.target, part: mr,
+              postureBefore: postureOf(p0.samples), posture, limitReason: lamp !== 'green' && posture?.limited ? 'posture' : null,
               shiftCm: [cm(b0[0] + extra[0]), cm(b0[1] + extra[1]), cm(b0[2] + extra[2])],
               turnDeg: [deg(t0[0] + turn[0]), deg(t0[1] + turn[1])], afterShift,
               before, after, overlapBeforeMm: p0.overlap * 1000, overlapAfterMm: cur.overlap * 1000,
               clearWorst: cur.worst, clearLamp: clearLamp(cur.overlap * 1000),
-              lampBefore: lampOf(before), lamp: lampOf(after), bend })
+              lampBefore: lampOf(before), lamp, bend })
           }
           runAt(timeRef.current, draftRef.current, false)
           const roleShiftCm: Record<string, [number, number, number]> = {}
@@ -1400,10 +1471,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             }
             const res = placePhaseB(entries, frameState, true)
             if (!res) continue
-            if (!recs) recs = findHits(res).map((hit) => ({ hit, st: createPairFit(lim), axes: [], before: [], after: [] }))
+            if (!recs) recs = findHits(res).map((hit) => ({ hit, st: createPairFit(lim, figs[hit.e].place.marker.group), axes: [], before: [], after: [] }))
             for (const rec of recs) {
               const pl = placedNow.get(figs[rec.hit.e])!
-              const pre = sampleAt(res, rec.hit, pl.pivot)
+              const pre = sampleAt(res, rec.hit, pl)
               if (!pre) continue
               // A145: the bones bend as the game bends them; the reports read the bent tip, the fit the unbent chain.
               bendBones(res, rec.hit, lim)
@@ -1526,6 +1597,11 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         ))}
         <button type="button" className="ga-btn ga-btn-sm" onClick={() => fill(true)}
           title={t('Every place this clip fits gets a figure (at most 6).')}>{t('Fill all with this clip')}</button>
+        {goneNote.length ? (
+          <span role="status" data-testid="place-gone-note" className="ga-hint" style={{ color: 'var(--warning, #d29922)' }}>
+            {t('Remembered {names} no longer exists; the default fill took the place.').replace('{names}', goneNote.join(', '))}
+          </span>
+        ) : null}
         {fillNote ? (
           <span role="status" data-testid="place-fill-note" className="ga-hint"
             style={fillNote.count ? { color: '#3fb950' } : { color: 'var(--danger, #f85149)' }}>

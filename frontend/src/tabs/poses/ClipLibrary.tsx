@@ -46,7 +46,7 @@
  *   DELETE /assets/animation-clips/{library}/{rel}
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { bendLimitsOf, clipHeightGroup, type ClipHeightOffsetsCm } from '@anima/scene-render'
+import { bendLimitsOf, POSTURE, clipHeightGroup, type ClipHeightOffsetsCm } from '@anima/scene-render'
 import { BendLimitsEditor, ContactRelations } from './ContactRelations'
 import { targetWordOf } from './contactWords'
 import { PlacePreview, type AutoAlignResult, type AutoAlignRun, type PairCheckResult, type PlaceReadout } from './PlacePreview'
@@ -1408,6 +1408,10 @@ export function ClipLibrary({
                               {pairCheck.fit.bend ? (
                                 <BendLine bend={pairCheck.followFit.bend ?? pairCheck.fit.bend} />
                               ) : null}
+                              {(pairCheck.followFit.support ?? pairCheck.fit.support) ? (() => {
+                                const sp = (pairCheck.followFit.support ?? pairCheck.fit.support)!
+                                return <PostureLine gapMm={sp.gapMm} sinkMm={sp.sinkMm} limited={sp.gapMm >= (POSTURE.floatM - POSTURE.edgeM) * 1000 || sp.sinkMm >= (POSTURE.sinkM - POSTURE.edgeM) * 1000} />
+                              })() : null}
                               {pairCheck.clearWorst ? (
                                 <div className="ga-form-hint" style={{ margin: 0 }}>
                                   {t('Deepest besides the channel: {pair}').replace('{pair}', pairCheck.clearWorst)}</div>
@@ -1457,6 +1461,13 @@ export function ClipLibrary({
                                 </tbody>
                               </table>
                               {autoAlign.bend ? <BendLine bend={autoAlign.bend} /> : null}
+                              {autoAlign.posture ? <PostureLine gapMm={autoAlign.posture.gapMm} sinkMm={autoAlign.posture.sinkMm}
+                                limited={autoAlign.posture.limited} heightMm={autoAlign.posture.heightMm} /> : null}
+                              {autoAlign.limitReason === 'posture' ? (
+                                <div data-testid="align-limit-reason" style={{ color: 'var(--warning, #d29922)' }}>
+                                  {t('Contact lamp {lamp}: posture limit — the partner stays supported instead of floating.')
+                                    .replace('{lamp}', autoAlign.lamp === 'red' ? t('red') : t('yellow'))}</div>
+                              ) : null}
                               {autoAlign.relations.length > 1 ? (
                                 <table data-testid="align-auto-relations" style={{ borderCollapse: 'collapse' }}>
                                   <thead><tr><th style={{ textAlign: 'left' }}>{t('Contact')}</th><th /><th>{t('to target')}</th><th>{t('depth')}</th>
@@ -1567,10 +1578,14 @@ export function ClipLibrary({
 }
 
 /** Ruling A145: the core default of the bend limits (the server's `BEND_LIMITS_DEFAULT`), until the listing says. */
-const BEND_WIRE_DEFAULT: BendLimitsWire = { raised: { joint_deg: 15, total_deg: 35 }, resting: { joint_deg: 45, total_deg: 120 } }
+const BEND_WIRE_DEFAULT: BendLimitsWire = {
+  raised: { joint_deg: 15, total_deg: 35, root_up_deg: 35, root_down_deg: 45, root_yaw_deg: 10 },
+  resting: { joint_deg: 45, total_deg: 120, root_up_deg: 45, root_down_deg: 80, root_yaw_deg: 15 },
+}
 
 /** Ruling A145: "Bend 28° of max 35°" with its lamp — yellow when the part was at its limit in some frame. */
-function BendLine({ bend }: { bend: { maxDeg: number; limitDeg: number; atLimit: number; frames: number; lamp: 'green' | 'yellow' } }) {
+function BendLine({ bend }: { bend: { maxDeg: number; limitDeg: number; atLimit: number; frames: number; lamp: 'green' | 'yellow'
+  rootPitchDeg?: number } }) {
   const { t } = useI18n()
   return (
     <div data-testid="bend-readout" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -1579,6 +1594,27 @@ function BendLine({ bend }: { bend: { maxDeg: number; limitDeg: number; atLimit:
           .replace('{n}', String(bend.atLimit)).replace('{m}', String(bend.frames))
         : t('The attached part bends within its limit in every frame.')} />
       <span>{t('Bend {deg}° of max {max}°').replace('{deg}', bend.maxDeg.toFixed(0)).replace('{max}', bend.limitDeg.toFixed(0))}</span>
+      {bend.rootPitchDeg !== undefined ? (
+        <span data-testid="root-pitch">· {t('root pitch {deg}°').replace('{deg}', `${bend.rootPitchDeg >= 0 ? '+' : ''}${bend.rootPitchDeg.toFixed(0)}`)}</span>
+      ) : null}
+    </div>
+  )
+}
+
+/** Ruling A150: "Support gap 4 mm" — how far the moving figure's support left the surface it rests on (+ float,
+ *  − sink against its own clip posture); yellow when the posture held the solve back. */
+function PostureLine({ gapMm, sinkMm, limited, heightMm }: { gapMm: number; sinkMm: number; limited: boolean; heightMm?: number | null }) {
+  const { t } = useI18n()
+  return (
+    <div data-testid="posture-readout" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+      <LampDot lamp={limited ? 'yellow' : 'green'} title={limited
+        ? t('Posture limit: the partner would have to float or sink to reach the contact; it stays supported and the rest is left as the contact’s error.')
+        : t('The partner stays supported: it neither floats nor sinks against its own pose.')} />
+      <span>{t('Support gap {gap} mm, sunk {sink} mm').replace('{gap}', gapMm.toFixed(0)).replace('{sink}', sinkMm.toFixed(0))}</span>
+      {heightMm !== undefined && heightMm !== null ? (
+        <span style={{ opacity: 0.7 }} title={t('The lowest supporting capsule above the surface of its place (a shin capsule ends at the ankle).')}>
+          · {t('{mm} mm above the surface').replace('{mm}', heightMm.toFixed(0))}</span>
+      ) : null}
     </div>
   )
 }

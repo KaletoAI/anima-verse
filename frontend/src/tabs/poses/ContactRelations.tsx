@@ -92,7 +92,7 @@ export function BendLimitsEditor({ saved, draft, onDraft, onSave, busy }: {
   const dirty = !!saved && JSON.stringify(draft) !== JSON.stringify(saved.limits)
   const sourceText = saved?.source === 'clip' ? t('set for this clip')
     : saved?.source === 'package' ? t('package default') : t('core default')
-  const num = (state: 'raised' | 'resting', key: 'joint_deg' | 'total_deg', max: number, label: string) => (
+  const num = (state: 'raised' | 'resting', key: keyof BendLimitsWire['raised'], max: number, label: string) => (
     <label style={{ display: 'inline-flex', gap: 2, alignItems: 'center' }} title={label}>
       <input type="number" className="ga-input" data-testid={`bend-${state}-${key}`} min={0} max={max} step={1}
         style={{ width: 52, fontSize: 12, padding: '0 2px' }} disabled={busy} value={draft[state][key]}
@@ -117,6 +117,18 @@ export function BendLimitsEditor({ saved, draft, onDraft, onSave, busy }: {
         {num('resting', 'total_deg', 360, t('Most the whole part bends when resting'))}
       </div>
       <div className="ga-form-hint" style={{ margin: 0 }}>{t('Per joint · in all')}</div>
+      <div title={t('First the part pitches at its root, where it is attached: up toward the belly, down away from it, and a little sideways. Then the joints bend, then the partner moves.')}
+        style={{ display: 'grid', gridTemplateColumns: 'auto auto auto auto', gap: '2px 8px', alignItems: 'center' }}>
+        <span>{t('Root, raised')}</span>
+        {num('raised', 'root_up_deg', 90, t('Most the root pitches up when raised'))}
+        {num('raised', 'root_down_deg', 120, t('Most the root pitches down when raised'))}
+        {num('raised', 'root_yaw_deg', 45, t('Most the root turns sideways when raised'))}
+        <span>{t('Root, resting')}</span>
+        {num('resting', 'root_up_deg', 90, t('Most the root pitches up when resting'))}
+        {num('resting', 'root_down_deg', 120, t('Most the root pitches down when resting'))}
+        {num('resting', 'root_yaw_deg', 45, t('Most the root turns sideways when resting'))}
+      </div>
+      <div className="ga-form-hint" style={{ margin: 0 }}>{t('Root: up · down · sideways')}</div>
       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
         <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" data-testid="bend-save" disabled={busy || !dirty}
           title={t('Stores the bend limits with the clip (all its sets and halves). Runs nothing; Auto-align uses them at once.')}
