@@ -23,7 +23,7 @@ import {
 } from '@anima/scene-render';
 import type { RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, CollisionPayload,
   FootPose, HairStrandRecord, StrandHair, CapsuleNow, PartnerSnapshot, OpeningSegment,
-  ChannelOccupants, FigureRuntime, FrameFigure } from '@anima/scene-render';
+  ChannelOccupants, FigureInspection, FigureRuntime, FrameFigure } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import { applyFigureTexture, zeroFigureMetalness } from './figureMaterials';
 import type { ApiModel } from '../api';
@@ -3173,6 +3173,11 @@ export class Figure {
   applyChannelOpenings(occupants: readonly { channel: string; w: number; segments: readonly OpeningSegment[] }[],
     budget: { left: number } = { left: Infinity }): void {
     this.runtime.applyChannelOpenings(occupants, budget);
+  }
+
+  /** The cross-person state after the last phase B — `FigureRuntime.inspect` (the Library preview reads the same). */
+  inspect(): FigureInspection | null {
+    return this.runtime.inspect();
   }
 
   /** This figure for the frame plan (`planPartnerFrame`) — `FigureRuntime.frameFigure`; `name` / `members` are

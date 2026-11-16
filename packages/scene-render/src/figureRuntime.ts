@@ -66,6 +66,21 @@ export interface FigureRuntimeOptions {
   retired?: () => boolean
 }
 
+/** One of this figure's channels as the last opening pass left it: `radius` = the largest occupying segment's
+ *  radius × its chain's weight (metres; the surface opens to it plus `OPENING_MARGIN_M`), `applied` = recomputed
+ *  this frame (the budget may defer it), `maxPush` = the largest vertex push of the last apply (metres). */
+export interface OpeningInspection { channel: string; radius: number; segments: number; applied: boolean; maxPush: number }
+
+/** `FigureRuntime.inspect()` — see there. Capsules/channels in world space. */
+export interface FigureInspection {
+  capsules: { id: string; region: string; now: CapsuleNow }[]
+  channels: { id: string; o: [number, number, number]; u: [number, number, number]; r: number; depth: number;
+    funnel: number; coneDeg: number }[]
+  /** This figure's chains engaged in a PARTNER's channel: weight w and the chain's largest segment radius (metres). */
+  engaged: { partner: string; channel: string; w: number; radius: number }[]
+  openings: OpeningInspection[]
+}
+
 /** The phase-B outputs of one figure the frame loop reads (`frameLoop.ts`). */
 export type ChannelOccupants = ReturnType<SecondaryMotion['channelOccupants']>
 
@@ -104,6 +119,8 @@ export class FigureRuntime {
   private partnerChannels: ReturnType<typeof bindChannels> = null
   private openings = new Map<string, ChannelOpeningBinding | null>()
   private openingsOn: Object3D | null = null
+  /** What the last opening pass put on each of this figure's channels (`inspect`): per occupied channel. */
+  private openingState = new Map<string, OpeningInspection>()
   private strandPartners = false
   private gpuPartners = false
 
@@ -208,6 +225,8 @@ export class FigureRuntime {
    *  occupied one is recomputed only when it `changed`, and only while `budget` lasts (one per recompute/bind). */
   applyChannelOpenings(occupants: readonly { channel: string; w: number; segments: readonly OpeningSegment[] }[],
     budget: { left: number } = { left: Infinity }): void {
+    const before = this.openingState
+    this.openingState = new Map()
     if (!occupants.length && !this.openings.size) return
     const inst = this.instance
     const channels = this.partnerChannels
@@ -225,6 +244,9 @@ export class FigureRuntime {
       }
       let binding = this.openings.get(ch.id)
       if (!segments.length) { binding?.restore(); continue }
+      const state: OpeningInspection = { channel: ch.id, radius: Math.max(...segments.map(seg => seg.r)),
+        segments: segments.length, applied: false, maxPush: before.get(ch.id)?.maxPush ?? 0 }
+      this.openingState.set(ch.id, state)
       if (binding === undefined) {
         if (!(budget.left > 0)) continue
         budget.left--
@@ -233,7 +255,29 @@ export class FigureRuntime {
       }
       if (!binding || !binding.changed(ch, segments) || !(budget.left > 0)) continue
       budget.left--
-      binding.apply(ch, segments)
+      state.maxPush = binding.apply(ch, segments).maxPush
+      state.applied = true
+    }
+  }
+
+  /** Read-only view of the cross-person state as the last frame left it (the Library preview's Collision/Channels
+   *  overlay, the equality smoke): this figure's partner capsules and channels in the world NOW (recomputed from the
+   *  current bones, the ones a partner engages), the chains it has engaged in partners' channels and what the last
+   *  opening pass did on its own channels. Null without a bindable collision payload. */
+  inspect(): FigureInspection | null {
+    const binding = this.boundPartner()
+    if (!binding) return null
+    const channels = this.partnerChannels
+    channels?.update()
+    const v = (p: readonly number[]): [number, number, number] => [p[0], p[1], p[2]]
+    return {
+      capsules: binding.capsules.map(e => ({ id: e.capsule.id, region: e.capsule.region,
+        now: { a: v(e.now.a), b: v(e.now.b), r: e.now.r } })),
+      channels: (channels?.channels ?? []).map(ch => ({ id: ch.id, o: v(ch.o), u: v(ch.u), r: ch.r, depth: ch.depth,
+        funnel: ch.funnel, coneDeg: ch.coneDeg })),
+      engaged: this.channelOccupants().map(o => ({ partner: o.partner, channel: o.channel, w: o.w,
+        radius: o.segments.length ? Math.max(...o.segments.map(seg => seg.r)) : 0 })),
+      openings: [...this.openingState.values()].map(o => ({ ...o })),
     }
   }
 
