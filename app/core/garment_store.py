@@ -394,6 +394,45 @@ def stored_groups(character_name: str) -> Dict[Tuple[str, str], List[Path]]:
     return out
 
 
+def earlier_mesh_fsigs(character_name: str, item_id: str, current_fsig: str) -> List[str]:
+    """Ruling A131: the fingerprints of ``item_id`` other than ``current_fsig`` that still hold a generated mesh
+    (``prepared`` / ``raw``) — a clothing fsig carries the base ``bsig``, so a new base body moves the piece onto a
+    new, empty fsig while the meshes made for the earlier body stay stored. Newest first (by the mesh file's
+    mtime). Read-only, never raises."""
+    found: Dict[str, float] = {}
+    try:
+        for (iid, fsig), _paths in stored_groups(character_name).items():
+            if iid != item_id or fsig == current_fsig:
+                continue
+            for part in ("prepared", "raw"):
+                path = garment_path(character_name, item_id, fsig, part)
+                if path.is_file():
+                    found[fsig] = max(found.get(fsig, 0.0), path.stat().st_mtime)
+    except Exception:  # noqa: BLE001 — a hint, never a failure of the reader
+        logger.debug("Earlier meshes of %s/%s unreadable", character_name, item_id, exc_info=True)
+    return sorted(found, key=lambda f: -found[f])
+
+
+def fitted_on_earlier_body(character_name: str, item_id: str, bsig: str) -> bool:
+    """Ruling A131: whether ``item_id`` has an accepted fit (any fsig) made on a base other than ``bsig`` — the
+    piece was ready on an earlier body and waits to be fitted on the new one (the Build refits it from that
+    source on the CPU, ``garment_source``). Read-only, never raises."""
+    try:
+        root = _root(character_name)
+        for (iid, _fsig), paths in stored_groups(character_name).items():
+            if iid != item_id:
+                continue
+            for path in paths:
+                if path.suffix != ".glb" or path.parent != root:
+                    continue
+                record = read_record(path.with_suffix(".json"))
+                if record.get("accepted") is True and str(record.get("base_signature") or "") not in ("", bsig):
+                    return True
+    except Exception:  # noqa: BLE001 — a reason, never a failure of the reader
+        logger.debug("Earlier fits of %s/%s unreadable", character_name, item_id, exc_info=True)
+    return False
+
+
 # --- Fingerprint --------------------------------------------------------------
 
 def image_steps(kind: str) -> Tuple[str, ...]:

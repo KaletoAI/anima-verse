@@ -3073,8 +3073,9 @@ def _garment_mesh_args(character_name: str, item_id: str, which: str, attempt: i
 
 @router.get("/{character_name}/garments/{item_id}/mesh/{which}")
 def get_character_garment_mesh(character_name: str, item_id: str, which: str, request: Request,
-                               attempt: int = 0, _: Dict[str, Any] = Depends(require_admin)):
-    """Ruling A48a: one mesh file of the piece's CURRENT fsig — ``prepared`` (the accepted decimated mesh) or
+                               attempt: int = 0, fsig: str = "", _: Dict[str, Any] = Depends(require_admin)):
+    """Ruling A48a: one mesh file of the piece's CURRENT fsig (Ruling A131: ``fsig`` = one of the piece's EARLIER
+    fingerprints holding a mesh made for an earlier body, ``garment_store.earlier_mesh_fsigs``; any other → 404) — ``prepared`` (the accepted decimated mesh) or
     ``raw`` (the generator output); ``attempt`` 1..n = that kept refused attempt's file
     (``garment_mesh_view.mesh_file``; Ruling A58: any kept mesh slot). Versioned by content (``snapshot_response``: ETag, 304, immutable with a
     matching ``v``). Admin-only. 400 for a bad which / attempt, 404 for a file that is not there or an item that
@@ -3085,7 +3086,7 @@ def get_character_garment_mesh(character_name: str, item_id: str, which: str, re
 
     def resolve() -> Optional[Path]:
         try:
-            return garment_mesh_view.mesh_file(character_name, item_id, which, attempt)
+            return garment_mesh_view.mesh_file(character_name, item_id, which, attempt, fsig)
         except ValueError:
             return None
     return snapshot_response(None, request, media_type="model/gltf-binary",

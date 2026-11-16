@@ -151,17 +151,25 @@ def file_triangles(path: Path, version: str) -> Optional[int]:
     return count
 
 
-def mesh_file(character_name: str, item_id: str, which: str, attempt: int = 0) -> Optional[Path]:
+def mesh_file(character_name: str, item_id: str, which: str, attempt: int = 0, fsig: str = "") -> Optional[Path]:
     """The mesh file ``which`` (``prepared`` / ``raw``) of the piece's CURRENT fsig — of the kept mesh
     ``attempt`` when > 0 (``garment_mesh.attempt_files``, Ruling A58) — or None when it is not there. The prepared mesh is
     served only with its accepted record (``garment_mesh``: it exists only then). ValueError for a bad ``which``,
-    attempt or item."""
+    attempt or item. ``fsig`` (Ruling A131): the file of an EARLIER fingerprint of the piece
+    (``garment_store.earlier_mesh_fsigs``) instead — ``prepared`` / ``raw`` only, ``attempt`` 0."""
     from app.core import garment_mesh
     from app.core import garment_store as gs
     if which not in WHICH:
         raise ValueError(f"which must be one of {', '.join(WHICH)}")
     if isinstance(attempt, bool) or not isinstance(attempt, int) or not 0 <= attempt <= garment_mesh.KEPT_MAX:
         raise ValueError(f"attempt must be 0..{garment_mesh.KEPT_MAX}")
+    if fsig:
+        # Ruling A131: a mesh made for an earlier body (another fsig of the piece) — shown, never used or fitted
+        if attempt or which == "shell" or fsig not in gs.earlier_mesh_fsigs(character_name, item_id,
+                                                                            current_fsig(character_name, item_id)):
+            raise ValueError("Not an earlier mesh of this piece")
+        path = gs.garment_path(character_name, item_id, fsig, which)
+        return path if path.is_file() else None
     fsig = current_fsig(character_name, item_id)
     if which == "shell" and attempt:
         raise ValueError("A shell has no kept attempts")

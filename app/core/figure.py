@@ -366,6 +366,9 @@ PAINT_ON_SHAPE = True
 PAINT_NEEDS_PLAIN = "In the body here: painting needs the plain body"
 #: ``Figure.left_out`` of an in-body piece while its body shape is not built (Ruling A119).
 LEFT_OFF_SHAPE = "Body shape not built"
+#: ``Figure.left_out`` of an own-mesh piece fitted on an earlier body, not yet on the newest one (Ruling A131): the
+#: Build refits it from its kept source on the CPU after the new body.
+LEFT_OFF_NEW_BODY = "Waiting for the new body"
 #: ``Figure.notes`` of a piece worn open shown with its closed mesh until its open mesh is built (ruling F13 b).
 SHOWN_CLOSED = "Shown closed until its open mesh is built"
 #: The note of a worn-open piece's ONE pending change while its open mesh is missing (ruling F13 b).
@@ -570,8 +573,8 @@ def _shape_stored(character_name: str, shape: str, bsig: str) -> bool:
 def _not_fitted_reason(character_name: str, item_id: str, *, base_sha: str, profile: Dict[str, Any],
                        state: Optional[str] = None) -> str:
     """Why an own-mesh piece has no fit (in ``state``, None: the worn one): its chain's persisted failure
-    (``base_body.MESH_ITEM_CHAIN_FAILED``), else ``NO_MESH_FIT`` /
-    ``BASE_MODEL_MISSING``."""
+    (``base_body.MESH_ITEM_CHAIN_FAILED``), else ``LEFT_OFF_NEW_BODY`` when it was fitted on an earlier body
+    (Ruling A131), else ``NO_MESH_FIT`` / ``BASE_MODEL_MISSING``."""
     from app.core import base_body, garments
     try:
         failure = garments.cached_failure(character_name, item_id, profile=profile, state=state)
@@ -579,6 +582,10 @@ def _not_fitted_reason(character_name: str, item_id: str, *, base_sha: str, prof
         failure = None
     if failure and failure.get("step") and failure.get("error"):
         return base_body.MESH_ITEM_CHAIN_FAILED.format(step=failure["step"], error=failure["error"])
+    from app.core import garment_store
+    if garment_store.fitted_on_earlier_body(character_name, item_id,
+                                            base_body.base_signature(character_name, profile=profile)):
+        return LEFT_OFF_NEW_BODY
     return base_body.NO_MESH_FIT if base_sha else base_body.BASE_MODEL_MISSING
 
 

@@ -18,7 +18,8 @@ body actions):
   ("open" | "closed" | null — null: not closable; ``state`` is the
   readiness), other_state_jobs (own mesh only: the hub jobs of the other
   state's mesh, null unknown)}], hair:
-  {mode, state, note}, body: {plain, shape, texture}}``. 404 for an unknown
+  {mode, state, note}, body: {plain, shape, texture}, new_body (Ruling A131: a new body is built or the newest
+  body has no fits of pieces fitted on the earlier one)}``. 404 for an unknown
   character. With ``?plain=1`` it also carries ``plain_body``: the plain
   (base) body's own payload — ``{pipeline, humanoid, signature, images,
   status, model, now, outfit, …}`` of ``base_body.base_info`` with the base

@@ -42,7 +42,7 @@ import type { AllowanceView } from './fitWiden'
 import { stampLabel } from './freshnessText'
 import { meshSnapshot } from './meshSnapshot'
 import { StepLight } from './StepRows'
-import type { GarmentMeshAttempt, GarmentMeshBodyView, GarmentMeshFile, GarmentMeshView } from './useGarment'
+import type { GarmentEarlierMesh, GarmentMeshAttempt, GarmentMeshBodyView, GarmentMeshFile, GarmentMeshView } from './useGarment'
 
 const TILE_W = 84
 const TILE_H = 112
@@ -62,7 +62,7 @@ export interface MeshSource {
   /** Ruling A58: the kept mesh's slot (the `Use this` target); 0 for the mesh in use. */
   slot: number
   /** Ruling A58: what the kept mesh is (refused attempt / earlier mesh / a job's result). */
-  origin: GarmentMeshAttempt['origin'] | 'in_use'
+  origin: GarmentMeshAttempt['origin'] | 'in_use' | 'earlier_body'
   /** Finished while another mesh was chosen — kept, not applied (Ruling A58). */
   notApplied: boolean
   /** Why "Use this" waits ("" when it can). */
@@ -78,7 +78,7 @@ function keptLabel(a: GarmentMeshAttempt, t: (s: string) => string): string {
 
 /** The sources of the Mesh row: the mesh in use first, then every kept mesh that kept a file. */
 function meshSources(view: GarmentMeshView | undefined, builtAt: string | null, userAccepted: boolean,
-  t: (s: string) => string): MeshSource[] {
+  t: (s: string) => string, earlier: GarmentEarlierMesh[] = []): MeshSource[] {
   if (!view) return []
   const out: MeshSource[] = []
   if (view.prepared || view.raw) {
@@ -98,8 +98,23 @@ function meshSources(view: GarmentMeshView | undefined, builtAt: string | null, 
       builtAt: a.created_at ?? builtAt, refused: !a.ok, note: attemptNote(a, t), slot: a.attempt,
       origin: a.origin, notApplied: !!a.chosen_during_job, useBlock: a.use_block || '' })
   }
+  // Ruling A131: a new base body moves the piece onto a new, empty fingerprint — the meshes made for the earlier
+  // body stay stored and are shown here (read-only) so the row never looks as if they were gone.
+  if (!out.length) {
+    earlier.forEach((e) => {
+      if (!e.prepared && !e.raw) return
+      out.push({ id: `earlier-${e.fsig}`, label: t(EARLIER_BODY), prepared: e.prepared, raw: e.raw,
+        builtAt: e.created_at, refused: !e.prepared, note: t(EARLIER_BODY_NOTE), slot: -1, origin: 'earlier_body',
+        notApplied: false, useBlock: '' })
+    })
+  }
   return out
 }
+
+/** Ruling A131: the tile of a mesh made for an earlier body. */
+const EARLIER_BODY = 'Made for the earlier body'
+const EARLIER_BODY_NOTE = 'Kept from before the new body — the Build fits the piece again on the new body (CPU, 0 hub jobs)'
+
 
 function attemptNote(a: GarmentMeshAttempt, t: (s: string) => string): string {
   return [
@@ -120,13 +135,15 @@ function trisText(n: number | null | undefined): string {
 
 /** A still picture of one mesh (meshSnapshot) — a click opens the viewer; its gate light beside the caption and,
  *  for a kept mesh, "Use this" under it (0 hub jobs, then the fit on the CPU — Ruling A58). */
-function MeshTile({ source, onOpen, onUse, useDisabled, onDelete }: {
+function MeshTile({ source, onOpen, onUse, useDisabled, onDelete, deleteBlock = '' }: {
   source: MeshSource
   onOpen: () => void
   onUse?: (slot: number) => void
   useDisabled: boolean
   /** Ruling A128: delete this tile (the caller confirms first). Absent = no button. */
   onDelete?: (slot: number, label: string) => void
+  /** Ruling A131: why Delete waits (a run of the piece or the character's Build) — "" when it can. */
+  deleteBlock?: string
 }) {
   const { t } = useI18n()
   useClockSettings()
@@ -182,12 +199,12 @@ function MeshTile({ source, onOpen, onUse, useDisabled, onDelete }: {
           {t('Use this mesh')}
         </button>
       ) : null}
-      {onDelete && source.id !== 'shell' ? (
+      {onDelete && source.id !== 'shell' && source.origin !== 'earlier_body' ? (
         <button type="button" className="ga-btn ga-btn-sm ga-btn-danger" style={{ fontSize: '0.72em', padding: '1px 6px' }}
-          disabled={useDisabled}
-          title={source.origin === 'in_use'
+          disabled={useDisabled || !!deleteBlock}
+          title={deleteBlock || (source.origin === 'in_use'
             ? t('Delete the mesh in use — the mesh step becomes due (asks first, names the hub jobs)')
-            : t('Delete this kept mesh — 0 hub jobs, it cannot be brought back')}
+            : t('Delete this kept mesh — 0 hub jobs, it cannot be brought back'))}
           aria-label={`${t('Delete')} · ${source.label}`}
           onClick={() => onDelete(source.slot, source.label)}>
           {t('Delete')}
@@ -204,7 +221,7 @@ function MeshTile({ source, onOpen, onUse, useDisabled, onDelete }: {
 
 /** The Mesh row's tiles: the mesh in use, then each kept mesh (a failed attempt as a slim placeholder). */
 export function GarmentMeshTiles({ view, builtAt, pieceName, userAccepted = false, onUse, useDisabled = false,
-  allowance = null, onDelete, onDeleteAll }: {
+  allowance = null, onDelete, onDeleteAll, earlier, deleteBlock = '' }: {
   view: GarmentMeshView | undefined
   builtAt: string | null
   pieceName: string
@@ -219,9 +236,14 @@ export function GarmentMeshTiles({ view, builtAt, pieceName, userAccepted = fals
   onDelete?: (slot: number, label: string) => void
   /** Ruling A128: "Delete all meshes of this piece…"; the caller confirms first. */
   onDeleteAll?: () => void
+  /** Ruling A131: the meshes kept from an earlier body — shown while the current fingerprint has none. */
+  earlier?: GarmentEarlierMesh[]
+  /** Ruling A131: why every Delete waits (a run of the piece or the character's Build) — "" when it can. */
+  deleteBlock?: string
 }) {
   const { t } = useI18n()
-  const sources = useMemo(() => meshSources(view, builtAt, userAccepted, t), [view, builtAt, userAccepted, t])
+  const sources = useMemo(() => meshSources(view, builtAt, userAccepted, t, earlier),
+    [view, builtAt, userAccepted, t, earlier])
   const [open, setOpen] = useState<string | null>(null)
   if (!view) return null
   const failed = view.attempts.filter((a) => !a.prepared && !a.raw)
@@ -230,7 +252,7 @@ export function GarmentMeshTiles({ view, builtAt, pieceName, userAccepted = fals
     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'flex-start', flexBasis: '100%' }}>
       {sources.map((s) => (
         <MeshTile key={s.id} source={s} onOpen={() => setOpen(s.id)} onUse={onUse} useDisabled={useDisabled}
-          onDelete={onDelete} />
+          onDelete={onDelete} deleteBlock={deleteBlock} />
       ))}
       {failed.map((a, i) => (
         <div key={`failed-${i}`} className="ga-step-grid-empty" style={{ width: TILE_W, height: TILE_H }}
@@ -241,8 +263,8 @@ export function GarmentMeshTiles({ view, builtAt, pieceName, userAccepted = fals
       ))}
       {onDeleteAll && sources.length ? (
         <button type="button" className="ga-btn ga-btn-sm ga-btn-danger" style={{ alignSelf: 'flex-end', fontSize: '0.72em' }}
-          disabled={useDisabled} onClick={onDeleteAll}
-          title={t('Delete every mesh, kept mesh and fit of this piece (asks first, names the hub jobs to make them again)')}>
+          disabled={useDisabled || !!deleteBlock} onClick={onDeleteAll}
+          title={deleteBlock || t('Delete every mesh, kept mesh and fit of this piece (asks first, names the hub jobs to make them again)')}>
           {t('Delete all meshes…')}
         </button>
       ) : null}

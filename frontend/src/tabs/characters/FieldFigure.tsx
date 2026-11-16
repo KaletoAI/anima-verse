@@ -357,6 +357,9 @@ function FigureHeader({ data, posting, autoSaved, onBuild, onAutoBuild, onPause 
   )
 }
 
+/** Ruling A131: the notice while a new body is built or the newest body has no fits yet. */
+const NEW_BODY_NOTE = 'New body being built — the pieces are fitted again after it (CPU, 0 hub jobs)'
+
 /** Ruling A90: the Figure tab's notices at the top of its right-hand panel, one line each — light, the reason in a few
  *  words (the whole on mouse-over), the button with its cost — never a box above the viewer: why Build waits, the
  *  running Build's step, a deferred or paused automatic Build, a failed step with its fix (Ruling A61), the other
@@ -424,6 +427,8 @@ function FigureNotices({ data, posting, onBuild, onRegenerateFront, onOpenBaseBo
       ))
   }
   if (runningText) line('running', 'blue', runningText, `${runningText} — ${t(BUILD_RUNNING_NOTE)}`)
+  // Ruling A131: instead of a bare list of left-off pieces — the pieces wait for the new body.
+  if (data.new_body) line('newbody', 'blue', t(NEW_BODY_NOTE))
   if (button.disabled && button.disabled !== button.label) line('disabled', 'grey', button.disabled)
   if (noBaseBody(data) && !running) line('nobase', 'grey', t(NO_BASE_BODY_NOTE))
   if (!running && data.build.deferred) line('deferred', 'grey', t(BUILD_DEFERRED_NOTE))

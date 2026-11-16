@@ -2629,7 +2629,7 @@ def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[st
     ``changes`` when the plan has steps (failed: the last run recorded a
     failure, or a planned chain failed for its input — ``Step.failed``),
     else ``up_to_date``. ``auto_build`` = ``auto_build_on``."""
-    from app.core import base_body, figure, model_refs
+    from app.core import base_body, figure, garment_set, model_refs
     pipeline = on_pipeline(character_name, profile=profile)
     out: Dict[str, Any] = {
         "pipeline": pipeline, "humanoid": model_refs.is_humanoid(character_name, profile=profile),
@@ -2674,6 +2674,16 @@ def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[st
                                   and built.shape == wanted.shape else "missing") if wanted.texture else "none"}}
     body["plain"]["jobs"] = _plain_jobs(character_name, wanted.bsig)
     worn = _worn_rows(character_name, wanted, delivered, failures, build["running"], profile)
+    # Ruling A131: a new body is being built (a base or body-shape step runs) or the newest body has no fits of
+    # pieces that were fitted on the earlier one — the tab says so once; those pieces wait for it.
+    step_name = str((build.get("step") or {}).get("name") or "") if build["running"] else ""
+    new_body = step_name in BASE_STEPS or step_name == "shape" or any(
+        row["left_out"] == figure.LEFT_OFF_NEW_BODY for row in worn)
+    if new_body:
+        for row in worn:
+            # a running Build's own-mesh row has no left-off reason of its own yet; a left-off row keeps its own
+            if row["mode"] == garment_set.OWN_MESH and row["state"] == "building" and not row["left_out"]:
+                row["left_out"] = row["note"] = figure.LEFT_OFF_NEW_BODY
     served_state = _served_state(character_name, profile=profile)
     _not_on_figure(served_state, changes, worn)
     hair = _hair_row(character_name, profile, wanted, delivered, failures, build["running"])
@@ -2683,7 +2693,7 @@ def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[st
     return {**out, "status": status, "changes": changes, "cost": cost(character_name, steps),
             "wanted": wanted.as_dict(), "delivered": delivered.as_dict(),
             "outfit": _outfit_name(character_name, wanted.pieces),
-            "worn": worn, "hair": hair, "body": body, "served_state": served_state,
+            "worn": worn, "hair": hair, "body": body, "served_state": served_state, "new_body": new_body,
             # Ruling A87: whether the full-body references are set — information beside the plan, never a step.
             "full_body_reference": _full_body_note(character_name, profile),
             "problem": None if build["running"] else _build_problem(character_name, steps, failures, delivered)}

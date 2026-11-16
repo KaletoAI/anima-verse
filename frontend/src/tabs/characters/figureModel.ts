@@ -322,6 +322,9 @@ export interface FigurePayload {
   /** Ruling A75: what the served figure is against the outfit worn now (`figure_build._served_state`); null without
    *  a served model, absent from an older server. */
   served_state?: ServedState | null
+  /** Ruling A131: a new base body / body shape is being built, or the newest body has no fits of pieces fitted on
+   *  the earlier one — those pieces are left off with "Waiting for the new body". */
+  new_body?: boolean
   /** The saved outfit worn now, "" when none matches. */
   outfit: string
   /** Ruling A87: whether the plain body / the worn outfit have a full-body reference (`full_body_reference.build_note`)

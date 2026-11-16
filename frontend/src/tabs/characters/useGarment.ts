@@ -89,6 +89,17 @@ export interface GarmentMeshInfo {
   job?: GarmentMeshJob | null
   /** Ruling A48a: the Mesh row's 3D view — the mesh files and the kept meshes with their files. */
   view?: GarmentMeshView
+  /** Ruling A131: meshes the piece keeps from an earlier body (another fingerprint), newest first — shown while
+   *  the current fingerprint has none; never used or fitted, "Delete all meshes" removes them. */
+  earlier?: GarmentEarlierMesh[]
+}
+
+/** Ruling A131: one mesh made for an earlier body (`url` carries its `fsig`; no body view). */
+export interface GarmentEarlierMesh {
+  fsig: string
+  created_at: string | null
+  prepared: GarmentMeshFile | null
+  raw: GarmentMeshFile | null
 }
 
 /** Ruling A58: the running mesh job of a piece — since when, which hub job of how many, and whether another mesh
@@ -388,6 +399,8 @@ export interface GarmentInfo {
   /** The step in flight, `queued` between the click and the first step. */
   running_step: string | null
   started_at: string | null
+  /** Ruling A131: the character's figure Build runs (it may make a new body and refit this piece). */
+  build_running?: boolean
   /** The 1-based place of the item's next waiting run in the character's
    *  garment queue (null = none waits) and the item id in flight (null =
    *  idle) — `garments.queue_state`; absent on an older server. */

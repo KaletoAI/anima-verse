@@ -4542,7 +4542,49 @@ def _mesh_info(character_name: str, item_id: str, fsig: str) -> Dict[str, Any]:
     return {"status": status, "metrics": metrics, "gates": record.get("attempts") or [],
             "tris": record.get("tris_prepared"), "created_at": record.get("created_at"),
             "user_accepted": bool(record.get("user_accepted")) and status == "accepted", "job": job,
-            "view": _mesh_view_info(character_name, item_id, fsig, record, accepted=status == "accepted")}
+            "view": _mesh_view_info(character_name, item_id, fsig, record, accepted=status == "accepted"),
+            "earlier": _earlier_meshes(character_name, item_id, fsig)}
+
+
+#: Ruling A131: at most this many earlier-body meshes are listed in the Mesh row.
+EARLIER_MESHES_MAX = 3
+
+
+def _build_running(character_name: str) -> bool:
+    """Whether the character's figure Build runs (``figure_build.state``); False when unreadable."""
+    try:
+        from app.core import figure_build
+        return bool(figure_build.state(character_name).get("running"))
+    except Exception:  # noqa: BLE001 — a hint, never a failure of the dialog
+        return False
+
+
+def _earlier_meshes(character_name: str, item_id: str, fsig: str) -> List[Dict[str, Any]]:
+    """Ruling A131: the meshes the piece keeps from an EARLIER fingerprint (``garment_store.earlier_mesh_fsigs`` — a
+    clothing fsig carries the base body, so a new base body leaves the current fsig empty while these stay stored),
+    newest first, at most ``EARLIER_MESHES_MAX``: ``[{fsig, created_at, prepared, raw}]`` — each file ``{url,
+    body_url: "", tris}`` (``url`` with ``&fsig=``). Shown so the row never looks empty; "Delete all meshes" removes
+    them, the Build refits the piece from its kept source. Never raises."""
+    from app.core import garment_mesh_view
+    from app.core import garment_store as gs
+    from app.core.http_files import content_version
+    out: List[Dict[str, Any]] = []
+    try:
+        for old in gs.earlier_mesh_fsigs(character_name, item_id, fsig)[:EARLIER_MESHES_MAX]:
+            files: Dict[str, Any] = {}
+            for which in ("prepared", "raw"):
+                path = gs.garment_path(character_name, item_id, old, which)
+                if not path.is_file():
+                    files[which] = None
+                    continue
+                version = content_version(path)
+                files[which] = {"url": _url(character_name, item_id, f"mesh/{which}", version, f"&fsig={old}"),
+                                "body_url": "", "tris": garment_mesh_view.file_triangles(path, version)}
+            record = gs.read_record(gs.garment_path(character_name, item_id, old, "prepared").with_suffix(".json"))
+            out.append({"fsig": old, "created_at": record.get("created_at"), **files})
+    except Exception:  # noqa: BLE001 — a hint, never a failure of the dialog
+        logger.debug("Earlier meshes of %s/%s unreadable", character_name, item_id, exc_info=True)
+    return out
 
 
 def _mesh_view_info(character_name: str, item_id: str, fsig: str, record: Dict[str, Any], *,
@@ -5503,6 +5545,9 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
         "hsig": hsig, "ssig": ssig, "description": inputs.get("description") or inputs.get("prompt_fragment") or "",
         "steps": steps, "stale_reasons": stale, "pair": pair,
         "running_step": status["running_step"], "started_at": status["started_at"],
+        # Ruling A131: the character's Build runs (it may make a new body and refit this piece) — the dialog's
+        # delete buttons wait for it.
+        "build_running": _build_running(character_name),
         "queue_position": queue["queue_position"], "queue_running": queue["queue_running"],
         "queue_beside": queue["queue_beside"],
         "failed": failed, "preview_url": preview_url,

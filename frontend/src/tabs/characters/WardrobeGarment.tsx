@@ -65,7 +65,7 @@ import type { CSSProperties, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { ConfirmDialog } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPost, apiPut, setPieceState } from '../../lib/api'
+import { ApiError, apiGet, apiPost, apiPut, setPieceState } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { useClockSettings } from '../../lib/clockFormat'
 import { GarmentFailure, GateChips, RefitNotice, RunButton, RunStatusLine } from './GarmentSteps'
@@ -706,7 +706,10 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
   const [del, setDel] = useState<{ slot: number | null; label: string } | null>(null)
   const [delPreview, setDelPreview] = useState<MeshDeletePreview | null>(null)
   const [delImages, setDelImages] = useState(false)
+  /** Ruling A131: the last delete's refusal, shown in the dialog until the next delete or a dismiss. */
+  const [delError, setDelError] = useState('')
   const askDelete = (slot: number | null, label: string) => {
+    setDelError('')
     setDel({ slot, label })
     setDelImages(false)
     setDelPreview(null)
@@ -715,6 +718,9 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
         .then(setDelPreview).catch(() => setDelPreview(null))
     }
   }
+  // Ruling A131: Delete waits while the piece runs or the character's Build runs (it may make a new body and refit
+  // the piece) — the reason is the buttons' tooltip.
+  const deleteBlock = running || info?.garment?.build_running ? t(DELETE_WAITS) : ''
   const onDelete = async () => {
     const ask = del
     setDel(null)
@@ -730,7 +736,9 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
       const files = typeof d.deleted === 'number' ? d.deleted : d.deleted.meshes + d.deleted.images
       toast(`${t('Deleted')} (${files} ${t('files')}) · ${dueText(d.follow_up, t)}`, 'success')
     } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      // Ruling A131: nothing was deleted — the dialog keeps its state and tiles; a 409 is a run holding the piece.
+      setDelError(e instanceof ApiError && e.status === 409 ? t(DELETE_BUSY_MESSAGE)
+        : `${t('Nothing was deleted')}: ${(e as Error).message}`)
     } finally {
       setUsing(false)
     }
@@ -939,6 +947,13 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             </div>
           ) : null}
           <RefitNotice garment={garment} feedback={feedback} busy={busy} onRun={onRun} />
+          {delError ? (
+            <div role="alert" style={{ ...ROW, gap: 8, padding: '4px 8px', borderRadius: 6,
+              border: '1px solid var(--warning, #d29922)' }}>
+              <span style={WARN_STYLE}>{delError}</span>
+              <button type="button" className="ga-btn ga-btn-sm" onClick={() => setDelError('')}>{t('Dismiss')}</button>
+            </div>
+          ) : null}
           <ConfirmDialog open={del !== null} danger confirmLabel={t('Delete')}
             title={del?.slot === null ? t('Delete all meshes of this piece') : `${t('Delete')} · ${del?.label || ''}`}
             message={meshDeleteMessage(del?.slot ?? null, delPreview, delImages, t)}
@@ -966,6 +981,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             onMeshUse={(slot) => { void onMeshUse(slot) }}
             onMeshDelete={(slot, label) => askDelete(slot, label)}
             onMeshDeleteAll={() => askDelete(null, '')}
+            meshDeleteBlock={deleteBlock}
             onRun={onRunFit}
             refitOn={refitOn}
             refitBlock={refitBlock}
@@ -1073,6 +1089,10 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
 }
 
 /** Ruling A128: a run's cost as the server estimates it (`garments.run_estimate`). */
+/** Ruling A131: why the Delete buttons wait, and what a refused (409) delete says. */
+const DELETE_WAITS = 'Waits for the running run of this piece or the character’s Build'
+const DELETE_BUSY_MESSAGE = 'A run is working on this piece (e.g. a Build) — nothing was deleted. Try again when it is done.'
+
 interface MeshDeleteCost { hub_jobs: number | null; note: string }
 /** Ruling A128: GET …/mesh-delete-preview — what goes and what making it again costs. */
 interface MeshDeletePreview {
