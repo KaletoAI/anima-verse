@@ -72,6 +72,8 @@ import { GarmentFailure, GateChips, RefitNotice, RunButton, RunStatusLine } from
 import { GarmentStepGrid } from './GarmentStepGrid'
 import { GarmentRefusedAttempts } from './GarmentRefusedAttempts'
 import type { ImageStepSpec } from './GarmentSteps'
+import { OLD_FIT_HIDDEN, OLD_FIT_LABEL, OLD_FIT_TOGGLE, previewChoice } from './garmentStyle'
+import { useFigure } from './useFigure'
 import { FOOTWEAR_STEP_LABELS, ROW, WARN_STYLE, footwearRunPlan, meshNotReadyText, pieceViewDueText, REFIT_REASON } from './garmentStyle'
 import type { ChipSpec, GarmentRunBody } from './garmentStyle'
 import { FootwearSteps } from './FootwearSteps'
@@ -860,6 +862,13 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
     }
   }, [shoeFrame, previewW, previewL, itemId])
   const pieceView = viewed({ url: garment?.preview_url, builtAt: garment?.preview_built_at })
+  // Ruling A136: an out-of-date fit is not shown as if worn — only on request, and then marked as old.
+  const [showOld, setShowOld] = useState(false)
+  useEffect(() => { setShowOld(false) }, [itemId])
+  const { data: figureNow } = useFigure(character)
+  const staleFit = !!pieceView.url && pieceView.url === garment?.preview_url
+    && garment?.preview_freshness?.state === 'stale'
+  const shown = previewChoice(pieceView.url, staleFit, showOld, figureNow?.served_url)
 
   let body: ReactNode
   if (!info) {
@@ -1022,12 +1031,27 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
         </div>
         <div className="ga-garment-dialog-col">
           {bodySwitch}
-          {pieceView.url ? (
-            <Model3DViewer key={pieceView.url} url={pieceView.url} format="glb" height={430}
-              freshness={pieceView.url === garment?.preview_url ? garment?.preview_freshness : null}
-              builtAt={pieceView.builtAt}
+          {staleFit ? (
+            <div className="ga-hint" style={{ ...ROW, gap: 8 }}>
+              <label style={{ ...ROW, gap: 4 }}>
+                <input type="checkbox" checked={showOld} onChange={(e) => setShowOld(e.target.checked)} />
+                {t(OLD_FIT_TOGGLE)}
+              </label>
+              {!showOld ? <span>{t(OLD_FIT_HIDDEN)}</span> : null}
+            </div>
+          ) : null}
+          {shown === 'body' && figureNow?.served_url ? (
+            <Model3DViewer key={`body:${figureNow.served_url}`} url={figureNow.served_url} format="glb" height={430}
               statusPanel={info.steps?.length ? <ModelSteps steps={info.steps} /> : undefined} />
-          ) : (
+          ) : shown === 'fit' || shown === 'old' ? (
+            <div style={shown === 'old' ? { outline: '3px solid rgba(187, 128, 9, 0.9)', borderRadius: 6 } : undefined}>
+              {shown === 'old' ? <div style={{ ...WARN_STYLE, padding: '2px 8px' }}>{t(OLD_FIT_LABEL)}</div> : null}
+              <Model3DViewer key={pieceView.url || ''} url={pieceView.url || ''} format="glb" height={430}
+                freshness={pieceView.url === garment?.preview_url ? garment?.preview_freshness : null}
+                builtAt={pieceView.builtAt}
+                statusPanel={info.steps?.length ? <ModelSteps steps={info.steps} /> : undefined} />
+            </div>
+          ) : staleFit ? null : (
             <>
               <div className="ga-step-grid-empty" style={{ width: '100%', height: 120 }}>
                 {refitBlock || (shownBody && shownBody.key !== 'plain' ? t(noRunAll ? NO_ATTEMPT_KEPT : NO_ATTEMPT_KEPT_HERE)

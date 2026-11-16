@@ -500,3 +500,18 @@ export function openingLines(info: CutoutOpeningInfo | undefined, t: (s: string)
   if (info.due?.length) lines.push(`${t('Now due')}: ${pieceViewDueText(info.due, t)}`)
   return lines
 }
+
+/** Ruling A136: what the piece dialog's Details 3D preview shows. A fit made on an earlier body is shown only on
+ *  explicit request (`showOld`) and then marked as old; otherwise the character's served figure (the body without
+ *  the piece — delivery does not wear an out-of-date fit) with a line why. */
+export type PreviewChoice = 'fit' | 'body' | 'old' | 'none'
+export function previewChoice(fitUrl: string | null | undefined, stale: boolean, showOld: boolean,
+  bodyUrl: string | null | undefined): PreviewChoice {
+  if (!fitUrl) return 'none'
+  if (!stale) return 'fit'
+  if (showOld) return 'old'
+  return bodyUrl ? 'body' : 'none'
+}
+export const OLD_FIT_TOGGLE = 'Show the old fit (made on the earlier body)'
+export const OLD_FIT_HIDDEN = 'This fit was made on an earlier body, so the piece is not worn now — shown is the body without it.'
+export const OLD_FIT_LABEL = 'Old fit — made on the earlier body, not worn now'

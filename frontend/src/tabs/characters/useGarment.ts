@@ -14,6 +14,7 @@ import type { FitSettingsInfo } from './fitSettingsModel'
 import type { AllowanceView } from './fitWiden'
 import type { FootwearAllowanceView } from './footwearAllowanceModel'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { syncHub } from '@anima/player-ui'
 import { apiGet, apiPost, type BootHemState } from '../../lib/api'
 import type { ImageTileMeta } from './RefImage'
 import type { Freshness } from './FreshnessBadge'
@@ -861,7 +862,10 @@ export function useGarment<T extends { garment?: GarmentInfo | null }>(url: stri
     setInfo(null)
     if (!url) return stopPoll
     startPoll()
-    return stopPoll
+    // Ruling A136: a Build or re-fit of the character started or ended (`figure_build._notify_build_changed`) —
+    // reload, so the dialog's text never stays stale after the Build re-fitted the piece.
+    const off = syncHub().onTopics(['generation'], () => startPoll(0))
+    return () => { off(); stopPoll() }
   }, [url, startPoll, stopPoll])
 
   return { info, setInfo, startPoll }

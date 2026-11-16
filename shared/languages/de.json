@@ -6091,6 +6091,9 @@
     "The camera eases to the contact point (the channel opening) at 0.9 m, and an inset at the bottom right shows the channel axis (green) and the shaft of the attached part (orange) side-on. Auto-align and the pair check switch it on.": "Die Kamera gleitet auf 0,9 m an den Kontaktpunkt (die Kanalöffnung), und ein Einsatz unten rechts zeigt die Kanalachse (grün) und den Schaft des angesetzten Teils (orange) von der Seite. Automatisch ausrichten und die Paarprüfung schalten es ein.",
     "Focus the contact": "Kontakt fokussieren",
     "Hides the body of the entering figure; its attached part stays visible, so the channel is not covered. Preview only, nothing is stored.": "Blendet den Körper der eindringenden Figur aus; ihr angesetztes Teil bleibt sichtbar, damit der Kanal nicht verdeckt ist. Nur Vorschau, nichts wird gespeichert.",
-    "Hide partner body (attached part stays)": "Partnerkörper ausblenden (angesetztes Teil bleibt)"
+    "Hide partner body (attached part stays)": "Partnerkörper ausblenden (angesetztes Teil bleibt)",
+    "Show the old fit (made on the earlier body)": "Alte Anpassung zeigen (auf dem früheren Körper gemacht)",
+    "This fit was made on an earlier body, so the piece is not worn now — shown is the body without it.": "Diese Anpassung wurde auf einem früheren Körper gemacht, darum wird das Teil gerade nicht getragen — gezeigt wird der Körper ohne es.",
+    "Old fit — made on the earlier body, not worn now": "Alte Anpassung — auf dem früheren Körper gemacht, gerade nicht getragen"
   }
 }

@@ -950,6 +950,7 @@ def _worker(character_name: str) -> None:
             from app.core import generation_pause
             if generation_pause.hold_build(character_name, reason):
                 continue   # Ruling A42: a kept automatic follow-up waits for the Resume
+        _notify_build_changed()
         try:
             with build_lock(character_name):
                 if refit_item:
@@ -958,6 +959,16 @@ def _worker(character_name: str) -> None:
                     _run(character_name, reason, automatic=automatic)
         except Exception:  # noqa: BLE001 — a worker reports, never raises
             logger.exception("Build %s (%s) failed", character_name, reason)
+        finally:
+            _notify_build_changed()
+
+
+def _notify_build_changed() -> None:
+    """Ruling A136: a Build (or re-fit) of a character started or ended — push the admin-only topic
+    ``generation`` to the admins' connections (a topic, never data; Build state is admin-only, so never to the
+    character's avatar), so an open piece dialog and the Figure tab reload instead of keeping stale text."""
+    from app.core import sync_topics
+    sync_topics.notify("generation", to=sync_topics.Admins())
 
 
 def _tracked(character_name: str, label: str):
