@@ -223,7 +223,7 @@ export interface SecondaryMotion {
   contactTips(): { bone: string; tip: Vec3; tipLocal: Vec3; capsules: string[]; partner: string[];
     channel?: { id: string; w: number; k: number } }[]
   /** Ruling A102: per engagement with w > 0, the partner, its channel id, w and the chain's links as world segments
-   *  (joint → tip, the link's capsule radius r_c; links without a capsule left out) as last rendered — what the
+   *  (joint → tip, the link's SURFACE radius — `r_surface` × girth, Ruling A159; links without a capsule left out) as last rendered — what the
    *  receiving figure opens its surface around (`bindChannelOpening`). */
   channelOccupants(): { partner: string; channel: string; w: number; segments: { a: Vec3; b: Vec3; r: number }[] }[]
   /** Ruling A126: every chain with an op (no hair) as last rendered, engaged or not — its links as world segments
@@ -515,6 +515,9 @@ interface Particle {
   partnerAxis: Vector3 | null
   /** The bind radius (metres) of the link's own extension capsule (`LINK_REGIONS`, start joint = the link); 0 = none. */
   linkR: number
+  /** Ruling A159: the bind SURFACE radius of that capsule (`r_surface`, at least `linkR`) — what a channel's opening
+   *  widens to; 0 = none. */
+  linkSurfaceR: number
   /** Root only: the chain's engagements with partner channels (CHANNELS); null = none. */
   channels: ChannelState[] | null
   /** Root only: the body joint the chain hangs from (its scale turns `linkR` into world metres); undefined = not looked up. */
@@ -727,6 +730,7 @@ export function createSecondaryMotion(
       const own = collisionPayload?.version === COLLISION_VERSION ? collisionPayload.capsules?.find(c =>
         LINK_REGIONS.includes(c.region) && normBoneName(c.a) === name) : undefined
       st.linkR = own && own.r > 0 ? own.r : 0
+      st.linkSurfaceR = st.linkR > 0 ? Math.max(st.linkR, own?.r_surface ?? 0) : 0
     }
     if (!collisionPayload || !particles.length) {
       collision = null
@@ -918,7 +922,7 @@ export function createSecondaryMotion(
           staticWeightTo: (2 * Math.PI * params.freq_hz) ** 2 < 1e-12 ? 0 : 1,
           tipLocal: new three.Vector3(), ancestors: new Set(), contacts: [],
           chainRoot: null, chainLinks: [], partnerFrame: 0, partnerNearKeys: [], partnerNearNows: [], partnerPushed: [], partnerDeg: 0, partnerAxis: null,
-          linkR: 0, channels: null }
+          linkR: 0, linkSurfaceR: 0, channels: null }
         if (particle.restTo !== to) {
           particle.restFrom = particle.rest
           particle.restTo = to
@@ -1359,8 +1363,8 @@ export function createSecondaryMotion(
   /** The figure's body joints by name (looked up once, for the joint a chain hangs from). */
   let channelJoints: Map<string, JointRef> | null = null
   /** r_c of a link: its own extension capsule radius in world metres (the scale of the body joint its chain hangs
-   *  from, as a capsule radius scales) × the state girth; 0 without such a capsule. */
-  const linkRadius = (st: Particle, chain: Particle): number => {
+   *  from, as a capsule radius scales) × the state girth; 0 without such a capsule. `surface`: its SURFACE radius instead (Ruling A159). */
+  const linkRadius = (st: Particle, chain: Particle, surface = false): number => {
     if (!(st.linkR > 0)) return 0
     if (chain.hangJoint === undefined) {
       const parent = chain.bind.bone.parent
@@ -1368,7 +1372,7 @@ export function createSecondaryMotion(
       chain.hangJoint = parent ? channelJoints.get(normBoneName(parent.name)) ?? null : null
     }
     const world = chain.hangJoint ? linearScale(jointRefNow(chain.hangJoint).bindToWorld) : 1
-    return st.linkR * world * Math.max(0, st.params.girth ?? 1)
+    return (surface ? st.linkSurfaceR : st.linkR) * world * Math.max(0, st.params.girth ?? 1)
   }
   /**
    * ENGAGEMENT, once per update before the solve (CHANNELS): per chain root with an op and per partner channel
@@ -1597,7 +1601,8 @@ export function createSecondaryMotion(
           if (!(state.w > 0)) continue
           const segments: { a: Vec3; b: Vec3; r: number }[] = []
           for (const link of chain.chainLinks) {
-            const r = linkRadius(link, chain)
+            // Ruling A159: the opening widens to the part's SURFACE radius (× the state girth), not its contact core.
+            const r = linkRadius(link, chain, true)
             if (!(r > 0)) continue
             head.setFromMatrixPosition(link.bind.bone.matrixWorld)
             tip.copy(link.tipLocal).applyMatrix4(link.bind.bone.matrixWorld)

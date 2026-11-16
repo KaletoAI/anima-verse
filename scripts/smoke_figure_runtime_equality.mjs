@@ -62,6 +62,7 @@ async function loadClients() {
     const old = await bundle(dir, base, [
       `export { Figure, hairPartnerCapsules } from '${base}/client3d/src/scene/figures';`,
       `export { planPartnerFrame } from '${base}/client3d/src/scene/partnerFrame';`,
+      "export { COLLISION_VERSION } from '@anima/scene-render';",
     ].join('\n'), 'base')
     return { now, old }
   } finally {
@@ -71,7 +72,9 @@ async function loadClients() {
 
 const THREE = await import('three')
 const { now, old } = await loadClients()
-const COLLISION_VERSION = now.COLLISION_VERSION
+// Each side gets the payload under ITS OWN collision version (BASE reads 7; the payload change since — v8's
+// r_surface, Ruling A159 — is not part of what is compared here).
+let COLLISION_VERSION = now.COLLISION_VERSION
 
 // --- fixture ------------------------------------------------------------------------------------------------------
 const R = 17, XK = [-0.03, 0.03]
@@ -207,6 +210,7 @@ function oldPhaseB(npcs) {
 }
 
 function world(lib, newLoop) {
+  COLLISION_VERSION = lib.COLLISION_VERSION
   const make = () => {
     const f = seeded(() => new lib.Figure(model()))
     f.loadStrandRecord = () => record()

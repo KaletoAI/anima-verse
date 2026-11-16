@@ -7,13 +7,13 @@ once per model and applied by both renderers every frame (``@anima/scene-render`
 
 PAYLOAD (sidecar key ``collision``, delivered next to ``extension_rig``)::
 
-    {"version": 7,
+    {"version": 8,
      "capsules": [{"id": "left_thigh", "a": "mixamorig:LeftUpLeg", "b": "mixamorig:LeftLeg",
                    "r": 0.1, "region": "leg"},
                   {"id": "head", "a": "mixamorig:Head", "b": "mixamorig:Head",
                    "b_pos": [0.0, 1.62, 0.13], "r": 0.075, "region": "head"}, ...,
                   {"id": "<group>:<bone>", "a": "<chain bone>", "b": "<chain bone>",
-                   "b_pos": [...], "r": 0.018, "region": "chest"}, ...],
+                   "b_pos": [...], "r": 0.018, "r_surface": 0.021, "region": "chest"}, ...],
      "skipped":  [{"id": "left_shin", "a": "mixamorig:LeftLeg", "b": "LeftFoot",
                    "reason": "joint LeftFoot missing"}],
      "scales":   {"leg": 1.0, "arm": 1.0, "torso": 1.0, "head": 1.0, "shoulder_hair": 1.0, "chest": 1.0,
@@ -97,6 +97,12 @@ without ``torso`` where the set has the ``outer_trunk`` capsules of version 6; n
 cap). A partner record of another version is skipped for that frame — both renderers bind only
 ``COLLISION_VERSION``.
 
+SURFACE RADIUS (version 8, Ruling A159). Every extension capsule also carries ``r_surface``: the same fit with the
+quantile ``SURFACE_QUANTILE`` (0.95) instead of the region's — where the part's SURFACE lies, not the core the
+contact pushes with. Only the opening of a channel (``channelOpening.ts``) reads it: the receiving body opens to the
+part's actual thickness, so a part whose surface lies beyond its p75 core no longer pokes through the opened wall
+(measured on a thick attached part: p75 27–31 mm, p95 28–36 mm per link). Table capsules have no ``r_surface``.
+
 CHANNELS (version 7; ``collision_channels.py``). A package may declare ``channel`` regions on a body slot
 (``extension_rig.region_declarations_for``): an inside capsule another figure's accepted chain may slide into instead
 of being pushed out. Each applicable, exposed channel is resolved into this record's bind space (``channels``):
@@ -130,7 +136,7 @@ from app.core.log import get_logger
 
 logger = get_logger("collision")
 
-VERSION = 7
+VERSION = 8
 #: The fixed table's regions, then the extension regions (``EXTENSION_CAPSULES``), then the partner-only table
 #: region (version 6).
 REGIONS = ("leg", "arm", "torso", "head", "shoulder_hair", "chest", "chest_hair", "attached_part", "appendage",
@@ -302,6 +308,9 @@ EXTENSION_CAPSULES: Dict[str, Tuple[Tuple[str, float, float], ...]] = {
     "attached_part": (("attached_part", 0.75, 0.0),),
     "appendage_chain": (("appendage", 0.50, 0.0),),
 }
+
+#: The quantile of an extension capsule's ``r_surface`` (SURFACE RADIUS in the module docstring).
+SURFACE_QUANTILE = 0.95
 
 #: Share of a last link's own vertices (farthest along its axis) whose mean is its tip.
 TIP_SHARE = 0.01
@@ -632,16 +641,19 @@ def _fit_extension_capsules(extension: Optional[List[Dict[str, Any]]], *, index_
                 if float(np.linalg.norm(b - a)) < 1e-4:
                     skipped.append({"id": capsule_id, "a": a_name, "b": a_name, "reason": "degenerate segment"})
                     continue
-                distance = float(np.quantile(_segment_distances(owned, a, b), quantile))
+                distances = _segment_distances(owned, a, b)
+                distance = float(np.quantile(distances, quantile))
                 radius = (distance * unit + margin) * scales[region]
+                surface = (float(np.quantile(distances, max(quantile, SURFACE_QUANTILE))) * unit + margin) * scales[region]
                 if axis is None:
                     capsules.append({"id": capsule_id, "a": a_name, "b": names[next_index], "r": round(radius, 4),
-                                     "region": region})
+                                     "r_surface": round(surface, 4), "region": region})
                 else:
                     # The cap ends at the tip pushed out by the scaled margin (at the tip for margin 0).
                     end = a + axis * max(height + (margin * scales[region] - radius) / unit, 0.0)
                     capsules.append({"id": capsule_id, "a": a_name, "b": a_name, "r": round(radius, 4),
-                                     "region": region, "b_pos": [round(float(v), 4) for v in end]})
+                                     "r_surface": round(surface, 4), "region": region,
+                                     "b_pos": [round(float(v), 4) for v in end]})
 
 
 def _figure_vertices(parsed: dict, joint_names: List[str]) -> Tuple[np.ndarray, np.ndarray]:

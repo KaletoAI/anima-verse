@@ -42,6 +42,9 @@ export interface CollisionCapsule {
   a: string
   b: string
   r: number
+  /** Extension capsules only (version 8): the p95 SURFACE radius the part really has — what a channel's opening
+   *  widens to (`channelOpening.ts`); the contact pushes with `r`. Table capsules have none. */
+  r_surface?: number
   region: string
   a_pos?: Vec3
   b_pos?: Vec3
@@ -128,11 +131,13 @@ export interface CollisionPayload {
  * 7: the declared `channels` next to `capsules` (`ChannelRecord`, a package
  * region of kind `channel` resolved per model; `channels_skipped`,
  * `channels_sig`) — the capsules themselves are unchanged.
+ * 8: every extension capsule carries `r_surface` (the p95 surface radius, Ruling A159) — the thickness a channel's
+ * opening widens to (`channelOpening.ts`); the contact keeps `r`.
  * THE version: every reader compares against this constant (a record that
  * froze an older list, the strand hair's, binds it under this one — never
  * under its own number, `hairSim.ts`).
  */
-export const COLLISION_VERSION = 7
+export const COLLISION_VERSION = 8
 
 /**
  * Regions whose capsules are for HAIR only (`garmentCollision.ts`
