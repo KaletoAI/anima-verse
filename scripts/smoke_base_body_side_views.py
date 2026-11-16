@@ -453,8 +453,9 @@ def main() -> int:
             if runs:
                 a = argv_of(runs[0])
                 check("views front, back", sorted(a["views"]), ["back", "front"])
-                check("no side flags", ("--side-arm-margin" in a["argv"], "--arm-rig-glb" in a["argv"]),
-                      (False, False))
+                # A127: the painted pieces' paint region needs the rigged twin, side views or not.
+                check("no side flags", ("--side-arm-margin" in a["argv"], "--arm-rig-glb" in a["argv"],
+                                        "--paint-region" in a["argv"]), (False, True, True))
             model = model_dir / f"{osig}.glb"
             meta = model3d._read_sidecar(model)
             check("no back_refit", "back_refit" in meta, False)
@@ -534,8 +535,8 @@ def main() -> int:
             if runs:
                 a = argv_of(runs[0])
                 check("four views", sorted(a["views"]), ["back", "front", "left", "right"])
-                check("side flags", (a["argv"][-4], a["argv"][-3], a["argv"][-2]),
-                      ("--side-arm-margin", "0.05", "--arm-rig-glb"))
+                flag = lambda name: a["argv"][a["argv"].index(name) + 1] if name in a["argv"] else None
+                check("side flags", (flag("--side-arm-margin"), a["argv"][-2]), ("0.05", "--arm-rig-glb"))
                 check("arm rig = rigged base", (runs[0] / "arm_rig.glb").read_bytes(), rigged)
             meta2 = model3d._read_sidecar(model_dir / f"{sig2}.glb")
             check("view images", sorted((meta2.get("view_images") or {})), ["back", "left", "right"])

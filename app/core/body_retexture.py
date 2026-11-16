@@ -79,13 +79,17 @@ SIDE_VIEWS = ("left", "right")
 
 def build_argv(python: Path, glb_in: Path, views: dict, out_glb: Path,
                proof: Path, atlas: Path, *, side_arm_margin: Optional[float] = None,
-               arm_rig_glb: Optional[Path] = None) -> list:
+               arm_rig_glb: Optional[Path] = None, paint_region: Optional[tuple] = None,
+               paint_region_margin_mm: Optional[float] = None, body_height_mm: Optional[float] = None) -> list:
     """The worker command line: views in BASE_VIEWS order, absent ones skipped,
     every path absolute (the worker runs with its own repo as cwd). With a
     side view among ``views``: ``--side-arm-margin`` (when given) and
     ``--arm-rig-glb`` (when given) — the left/right views then skip the arm
     and that margin around it (fraction of the body height); without a
-    side view neither flag is passed."""
+    side view neither flag is passed. With ``paint_region`` (body regions,
+    ``app.core.paint_region``): ``--paint-region``, ``--paint-region-margin-mm``
+    / ``--body-height-mm`` when given, and ``--arm-rig-glb`` (required) — only
+    the surface those regions' bones hold may change."""
     unknown = sorted(set(views) - set(BASE_VIEWS))
     if unknown:
         raise ValueError(f"Unknown retexture view(s): {', '.join(unknown)}")
@@ -100,17 +104,26 @@ def build_argv(python: Path, glb_in: Path, views: dict, out_glb: Path,
     argv += ["--out", os.path.abspath(out_glb),
              "--proof", os.path.abspath(proof),
              "--atlas", os.path.abspath(atlas)]
-    if any(name in views for name in SIDE_VIEWS):
-        if side_arm_margin is not None:
-            argv += ["--side-arm-margin", repr(float(side_arm_margin))]
-        if arm_rig_glb is not None:
-            argv += ["--arm-rig-glb", os.path.abspath(arm_rig_glb)]
+    side = any(name in views for name in SIDE_VIEWS)
+    if side and side_arm_margin is not None:
+        argv += ["--side-arm-margin", repr(float(side_arm_margin))]
+    if paint_region:
+        if arm_rig_glb is None:
+            raise ValueError("A paint region needs the rigged copy (arm_rig_glb)")
+        argv += ["--paint-region", ",".join(paint_region)]
+        if paint_region_margin_mm is not None:
+            argv += ["--paint-region-margin-mm", repr(float(paint_region_margin_mm))]
+        if body_height_mm is not None:
+            argv += ["--body-height-mm", repr(float(body_height_mm))]
+    if (side or paint_region) and arm_rig_glb is not None:
+        argv += ["--arm-rig-glb", os.path.abspath(arm_rig_glb)]
     return argv
 
 
 def retexture(glb_in: Path, views: dict[str, tuple[Path, Path]], out_glb: Path,
               *, proof: Path, atlas: Path, side_arm_margin: Optional[float] = None,
-              arm_rig_glb: Optional[Path] = None) -> dict:
+              arm_rig_glb: Optional[Path] = None, paint_region: Optional[tuple] = None,
+              paint_region_margin_mm: Optional[float] = None, body_height_mm: Optional[float] = None) -> dict:
     """Run the worker once and return its parsed proof JSON.
 
     ``views`` maps a view name (``front`` required; ``back``/``left``/``right``
@@ -126,7 +139,8 @@ def retexture(glb_in: Path, views: dict[str, tuple[Path, Path]], out_glb: Path,
     if not python.is_file():
         raise RetextureUnavailable(f"Body retexture worker not installed: {python} not found")
     argv = build_argv(python, glb_in, views, out_glb, proof, atlas,
-                      side_arm_margin=side_arm_margin, arm_rig_glb=arm_rig_glb)
+                      side_arm_margin=side_arm_margin, arm_rig_glb=arm_rig_glb, paint_region=paint_region,
+                      paint_region_margin_mm=paint_region_margin_mm, body_height_mm=body_height_mm)
     timeout = _timeout_seconds()
     proof = Path(proof)
     # A proof left by an earlier run must never pass as this run's result.

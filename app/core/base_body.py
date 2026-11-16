@@ -3213,17 +3213,25 @@ def texture_inputs(character_name: str, *, pieces: Optional[Dict[str, str]], ite
     signature, the base variant, the effective dress text of every dressed
     view (``dress_text(mesh_items=<unpainted>)``, ``mesh_items_unpainted``;
     ``dressed_views()``), the
-    side-view switch and ``TEXTURE_BODY_VERSION``. NOT the outfit
+    side-view switch, ``TEXTURE_BODY_VERSION`` and — when a worn piece is
+    painted — its ``paint_region`` (Ruling A127, ``app.core.paint_region``:
+    only those body regions may change). NOT the outfit
     signature, NOT the own-mesh token: a piece that is its own garment mesh
     is not painted, so it changes nothing here."""
     profile = _profile_of(character_name, profile)
+    from app.core import paint_region
     meshed = sorted({str(i) for i in mesh_effective or ()})
-    return {"version": TEXTURE_BODY_VERSION,
+    region = paint_region.paint_region(
+        pieces, {str(i) for i in (pieces or {}).values() if i and str(i).strip()} - set(meshed))
+    out = {"version": TEXTURE_BODY_VERSION,
             "base_signature": bsig or base_signature(character_name, profile=profile),
             "base_variant": variant,
             "side_views": side_views_dressed(),
             "dress_text": {v: dress_text(character_name, v, pieces=pieces, items=items, profile=profile,
                                          mesh_items=meshed) for v in dressed_views()}}
+    if region:
+        out["paint_region"] = region
+    return out
 
 
 def texture_signature(inputs: Dict[str, Any]) -> str:
@@ -4823,7 +4831,7 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
     recorded for the outfit status; nothing is written, so the previous
     model of the signature stays."""
     import tempfile
-    from app.core import body_retexture, figure as figure_mod, model3d
+    from app.core import body_retexture, figure as figure_mod, model3d, paint_region
     from app.core.extension_rig import extension_metadata
     from app.core.model_refs import find_ref_image
     from app.core.task_queue import get_task_queue
@@ -4881,7 +4889,8 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
             return _build_on_shape(character_name, signature, fig=fig, base=base, shape=source,
                                    variant=wanted_variant, profile=profile)
         if meshed:
-            inputs: Dict[str, Any] = {"shape": on, "dress_text": texts, "figure": fig.as_dict()}
+            inputs: Dict[str, Any] = {"shape": on, "dress_text": texts, "figure": fig.as_dict(),
+                                      "paint_region": paint_region.paint_region(pieces, fig.painted)}
         else:
             inputs = texture_inputs(character_name, pieces=pieces, items=items, variant=wanted_variant,
                                     mesh_effective=sorted({*fig.own, *fig.left_out}), bsig=bsig,
@@ -4966,10 +4975,19 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
                     worker_in = work / "base_in.glb"
                     worker_in.write_bytes(replace_base_color(source["unrigged"], image, mime))
                     side: Dict[str, Any] = {}
-                    if any(v in views for v in SIDE_DRESSED_VIEWS):
+                    # Ruling A127: only the painted pieces' body regions may change. The rigged twin
+                    # must share the unrigged source's UVs: on the plain body the covered copy does
+                    # (the rigged one may carry re-mapped extension geometry).
+                    region = paint_region.worker_arguments(inputs.get("paint_region"))
+                    if region or any(v in views for v in SIDE_DRESSED_VIEWS):
                         arm_rig = work / "arm_rig.glb"
-                        arm_rig.write_bytes(source["rigged"])
-                        side = {"side_arm_margin": side_arm_margin(), "arm_rig_glb": arm_rig}
+                        arm_rig.write_bytes(base["covered"] if not meshed and base["covered"] is not None
+                                            else source["rigged"])
+                        side = {"arm_rig_glb": arm_rig}
+                        if any(v in views for v in SIDE_DRESSED_VIEWS):
+                            side["side_arm_margin"] = side_arm_margin()
+                    if region:
+                        side.update(region, body_height_mm=round(model3d._target_height_m(character_name) * 1000))
 
                     out_glb = work / "dressed.glb"
                     proof = body_retexture.retexture(worker_in, views, out_glb, proof=work / "proof.json",

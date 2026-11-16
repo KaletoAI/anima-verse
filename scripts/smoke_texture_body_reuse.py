@@ -46,7 +46,7 @@ Expected, derived by hand from the plan's Global Constraints:
 
 [1] The rule. texture_inputs(Demo, A, variant rigged) = {version 1,
     base_signature B1, base_variant "rigged", side_views False, dress_text
-    {front, back}} — both texts name "plain grey underwear" and "white
+    {front, back}, paint_region (A127: the painted slots' regions)} — both texts name "plain grey underwear" and "white
     sneakers"; tsig = "tex" + sha256(canonical JSON: keys sorted,
     separators "," ":", UTF-8)[:12]. The bare body (C, D): texts {"front": "",
     "back": ""} -> written out below, hashed by hand. Another base signature
@@ -383,8 +383,8 @@ def main() -> int:
         print("[1] texture signature rule")
         inputs_a = base_body.texture_inputs("Demo", pieces=A, items=[], variant="rigged")
         texts = inputs_a.get("dress_text") or {}
-        check("inputs keys", sorted(inputs_a), ["base_signature", "base_variant", "dress_text", "side_views",
-                                                "version"])
+        check("inputs keys", sorted(inputs_a), ["base_signature", "base_variant", "dress_text", "paint_region",
+                                                "side_views", "version"])
         check("inputs fixed", (inputs_a["version"], inputs_a["base_signature"], inputs_a["base_variant"],
                                inputs_a["side_views"], sorted(texts)), (1, b1, "rigged", False, ["back", "front"]))
         check("texts name under + shoes", [all(f in texts.get(v, "") for f in (FRAG["under"], FRAG["shoes"]))

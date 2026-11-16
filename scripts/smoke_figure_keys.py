@@ -56,10 +56,16 @@ Expected, derived by hand from the brief:
     mesh_effective=["boots", "trousers"], bsig=bsig)) — today's tsig — and,
     by hand, "tex" + h12({"version": 1, "base_signature": "base0123abcd",
     "base_variant": "rigged", "side_views": False, "dress_text": {"back":
-    "wear:blouse+coat", "front": "wear:blouse+coat"}}) = "tex06c6eeeaa12a".
+    "wear:blouse+coat", "front": "wear:blouse+coat"}, "paint_region": R(outer +
+    top)}) = "tex162ae74891b8", where R(slots) = {"version": 1, "margin_mm": 40,
+    "regions": <sorted union of paint_region.SLOT_REGIONS>} (Ruling A127): outer
+    = spine, shoulder, upper_arm, forearm, hips, upper_leg; top = spine,
+    shoulder, upper_arm, forearm -> ["forearm", "hips", "shoulder", "spine",
+    "upper_arm", "upper_leg"].
     On the coat's shape "ob82e8f156": "tex" + h12({"version": 1, "shape":
     "ob82e8f156", "base_variant": "rigged", "dress_text": {"back":
-    "wear:blouse", "front": "wear:blouse"}}) = "texe57feda37703" (covers the
+    "wear:blouse", "front": "wear:blouse"}, "paint_region": R(top) = regions
+    ["forearm", "shoulder", "spine", "upper_arm"]}) = "tex78dbfeffc168" (covers the
     blouse only); with the blouse own_mesh nothing is painted there -> "".
 [5] Hair: the same in-body set (coat) with hair_method "hairdeck" ->
     hair_in_body False -> "ob" + h8(<[2]'s dict with "hair_in_body": False>)
@@ -223,12 +229,12 @@ def main() -> int:
             "Demo", pieces=PIECES, items=[], variant="rigged", mesh_effective=["boots", "trousers"], bsig=BSIG,
             profile=p))
         check("plain body == today's tsig", tex, today)
-        check("plain body by hand", tex, "tex06c6eeeaa12a")
+        check("plain body by hand", tex, "tex162ae74891b8")
         set_mode("coat", "in_body")
         s, shape, p = key()
         check("coat shape", shape, "ob82e8f156")
         check("on the coat's shape", figure.texture_key("Demo", s, shape=shape, bsig=BSIG, variant="rigged",
-                                                         items=[], profile=p), "texe57feda37703")
+                                                         items=[], profile=p), "tex78dbfeffc168")
         set_mode("blouse", "own_mesh")
         s, shape, p = key()
         check("blouse own_mesh: nothing painted", figure.texture_key(

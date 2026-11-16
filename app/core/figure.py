@@ -224,8 +224,11 @@ def texture_key(character_name: str, sets: WornSets, *, shape: str, bsig: str, v
     whose figure paints something adds the picture's content
     (``outfit_reference``) to either key: its dressed front is an edit of
     that picture, so its texture is its own. Without a reference — or with
-    nothing painted — the key is byte-identical to the one before."""
-    from app.core import base_body, outfit_references
+    nothing painted — the key is byte-identical to the one before.
+
+    Both keys carry the painted pieces' ``paint_region`` (Ruling A127): a
+    texture is painted only inside the body regions of their slots."""
+    from app.core import base_body, outfit_references, paint_region
     original = _profile_of(character_name, profile)
     reference = outfit_references.texture_part(character_name, sets.pieces, sets.open, painted=sets.painted,
                                                profile=original)
@@ -241,6 +244,9 @@ def texture_key(character_name: str, sets: WornSets, *, shape: str, bsig: str, v
     if not any(texts.values()):
         return ""
     inputs = {"version": SHAPE_TEXTURE_VERSION, "shape": shape, "base_variant": variant, "dress_text": texts}
+    region = paint_region.paint_region(sets.pieces, sets.painted)
+    if region:
+        inputs["paint_region"] = region
     if reference:
         inputs["outfit_reference"] = reference
     return "tex" + hashlib.sha256(_canonical(inputs)).hexdigest()[:12]
