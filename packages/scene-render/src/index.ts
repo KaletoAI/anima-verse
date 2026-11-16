@@ -265,9 +265,12 @@ export { CONTACT_TARGETS, POINT_TARGETS, POINT_TARGET_OPS, PROVISIONAL_TARGETS, 
 export type { ContactTarget, PointTarget, TargetBones, TargetFrame } from './contactTarget'
 export { solvePairFix, fixPoint, unfixPoint, fixSample, fixRoot, composeFix, turnMatrix, matrixTurn, fixAnglesDeg,
   findContact, contactSampleOf, turnAxes, createPairFit, pairFitTotal, pairFitObserve, FIT_MIN_SAMPLES, FOLLOW, partnerTurnFix, fixPivot, ALIGN_FIT, RUNTIME_FIT, FIT_ANGLE_WEIGHT_M, NO_FIX,
-  pairInterpenetration, clearLamp, PART_REGIONS, CLEAR_GREEN_MM, CLEAR_YELLOW_MM, bendSample, BEND_STAY } from './pairFit'
+  pairInterpenetration, clearLamp, PART_REGIONS, CLEAR_GREEN_MM, CLEAR_YELLOW_MM, bendSample, BEND_STAY, supportDelta, bendFrameOf } from './pairFit'
+export { POSTURE, SUPPORT_CAPSULES, POSTURE_ANGLE_CAP_DEG, postureAngleCapDeg, supportSample, supportHeight, postureExcess,
+  postureReport } from './postureSupport'
+export type { SupportSample, PostureReport } from './postureSupport'
 export { solveChainBend, bendLimitAt, bendLimitsOf, bendJoints, bendLamp, quatOf, quatMul, quatRotate, quatAngle,
-  BEND_LIMITS_DEFAULT, BEND_JOINTS, BEND_SWEEPS, BEND_BISECT, BEND_AT_LIMIT, BEND_NEAR_M } from './chainBend'
-export type { BendLimit, BendLimits, BendResult, Quat as BendQuat } from './chainBend'
+  BEND_LIMITS_DEFAULT, ROOT_SWEEPS, BEND_JOINTS, BEND_SWEEPS, BEND_BISECT, BEND_AT_LIMIT, BEND_NEAR_M } from './chainBend'
+export type { BendLimit, BendLimits, BendResult, BendFrame, Quat as BendQuat } from './chainBend'
 export type { FitSample, PairFix, FitBounds, FitOptions, PairFitState, ClearLamp } from './pairFit'
 export { attachedPartIndex, partBoneNames, PART_WEIGHT_SHARE } from './attachedPart'

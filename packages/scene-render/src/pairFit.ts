@@ -37,6 +37,14 @@
  * with limits), and its follow learns from the BENT tip — what is rendered (the caller bends the bones with the same
  * `bendSample`).
  *
+ * POSTURE (Ruling A150, `postureSupport.ts`): a sample may carry the entering figure's SUPPORT; then every frame adds
+ * the residual `POSTURE.weight` · (the support's change beyond the float/sink band), and the fix's
+ * turn costs `POSTURE.turnCostM` · √N per radian — so the solve shifts along the surface first, turns only a little and
+ * only about the support, and leaves what the posture cannot give as the residual. A standing or lying place type caps
+ * the turn at a few degrees (`FitOptions.group`, `postureAngleCapDeg`). The runtime follow keeps the support in the
+ * band too (its vertical share is clamped). A sample may also carry the body `frame` (side/up axes): then the bend's
+ * root lever (`chainBend.ts` THE ROOT, Ruling A150) pitches the part at its attachment first.
+ *
  * THE HONEST CHECK (`pairInterpenetration`): the deepest overlap of two different figures' capsules where ONLY the
  * pairs the channel allows are exempt — an attached-part capsule of the entering figure against one of the receiving
  * figure's `suppress` capsules. Everything else counts, attached part included. Lamp green ≤ `CLEAR_GREEN_MM`,
@@ -45,7 +53,8 @@
 import type { Vec3 } from './collision'
 import { CONTACT_ENTRY_WEIGHT, type ContactSample } from './channelContact'
 import { isPointTarget, orientAlong, POINT_TARGET_OPS, type ContactTarget } from './contactTarget'
-import { bendLimitAt, solveChainBend, type BendLimits, type BendResult } from './chainBend'
+import { bendLimitAt, solveChainBend, type BendFrame, type BendLimits, type BendResult } from './chainBend'
+import { POSTURE, postureAngleCapDeg, postureExcess, supportHeight, supportSample, type SupportSample } from './postureSupport'
 
 export interface FitSample extends ContactSample {
   pivot: Vec3
@@ -54,6 +63,10 @@ export interface FitSample extends ContactSample {
   chain?: Vec3[]
   raised?: number
   channel?: boolean
+  /** Ruling A150: the entering figure's support this frame (absent = no posture term) and its body axes (absent = the
+   *  root lever stays off). */
+  support?: SupportSample | null
+  frame?: BendFrame | null
 }
 export interface PairFix { shift: Vec3; turn: Vec3 }
 export interface FitBounds { maxShiftM: number; maxAngleDeg: number }
@@ -65,6 +78,9 @@ export interface FitOptions extends FitBounds {
   iterations?: number
   /** Ruling A145: bend the chain first (module docstring BEND FIRST). */
   bend?: BendLimits | null
+  /** Ruling A150: the posture term for samples with a support (default on) and the place type (turn cap). */
+  posture?: boolean
+  group?: string | null
 }
 /** Ruling A145: metres of residual per metre of shift (× √N) that keep the figure still when the bend reaches. */
 export const BEND_STAY = 0.05
@@ -114,13 +130,21 @@ export function unfixPoint(fix: PairFix, pivot: Vec3, x: Vec3): Vec3 {
 /** A sample with the entering figure's points (tip, base) moved by `fix`. */
 export function fixSample(s: FitSample, fix: PairFix): FitSample {
   return { ...s, tip: fixPoint(fix, s.pivot, s.tip), base: fixPoint(fix, s.pivot, s.base),
-    ...(s.chain ? { chain: s.chain.map((p) => fixPoint(fix, s.pivot, p)) } : {}) }
+    ...(s.chain ? { chain: s.chain.map((p) => fixPoint(fix, s.pivot, p)) } : {}),
+    ...(s.support ? { support: { ...s.support, pts: s.support.pts.map((p) => fixPoint(fix, s.pivot, p)),
+      base: s.support.base ?? supportHeight(s.support.pts, s.support.r) } } : {}) }
+}
+/** Ruling A150: the support's change (metres) of sample `s` under `fix` against its baseline. */
+export function supportDelta(s: FitSample, fix: PairFix): number | null {
+  if (!s.support) return null
+  const base = s.support.base ?? supportHeight(s.support.pts, s.support.r)
+  return supportHeight(s.support.pts.map((p) => fixPoint(fix, s.pivot, p)), s.support.r) - base
 }
 /** Ruling A145: the sample with its chain bent toward its target within `limits` at its raised fraction — tip and base
  *  from the bent chain — and the bend; the sample unchanged (bend null) without a chain. */
 export function bendSample(s: FitSample, limits: BendLimits): { sample: FitSample; bend: BendResult | null } {
   if (!s.chain || s.chain.length < 2) return { sample: s, bend: null }
-  const bend = solveChainBend(s.chain, s.o, s.u, bendLimitAt(limits, s.raised ?? 0), { channel: !!s.channel })
+  const bend = solveChainBend(s.chain, s.o, s.u, bendLimitAt(limits, s.raised ?? 0), { channel: !!s.channel, frame: s.frame })
   const pts = bend.points
   return { sample: { ...s, chain: pts, tip: pts[pts.length - 1], base: pts[0] }, bend }
 }
@@ -150,7 +174,7 @@ export function fixRoot(fix: PairFix, pivot: Vec3, position: Vec3): { position: 
 }
 
 function residuals(samples: readonly FitSample[], fix: PairFix, lambda: number, W: number,
-  bend: BendLimits | null = null): number[] {
+  bend: BendLimits | null = null, posture = false): number[] {
   const out: number[] = []
   let e = -1, min = Infinity
   const moved = samples.map((x) => (bend ? bendSample(fixSample(x, fix), bend).sample : fixSample(x, fix)))
@@ -169,6 +193,15 @@ function residuals(samples: readonly FitSample[], fix: PairFix, lambda: number, 
     const k = BEND_STAY * Math.sqrt(samples.length)
     out.push(k * fix.shift[0], k * fix.shift[1], k * fix.shift[2], k * lambda * fix.turn[0], k * lambda * fix.turn[1],
       k * lambda * fix.turn[2])
+  }
+  if (posture) {
+    // A150: the support stays in its band; a turn pays for itself.
+    for (const x of samples) {
+      const d = supportDelta(x, fix)
+      if (d !== null) out.push(POSTURE.weight * postureExcess(d))
+    }
+    const k = POSTURE.turnCostM * Math.sqrt(samples.length)
+    out.push(k * fix.turn[0], k * fix.turn[1], k * fix.turn[2])
   }
   return out
 }
@@ -197,7 +230,8 @@ export function solvePairFix(samples: readonly FitSample[], opts: FitOptions): P
   const W = (opts.entryWeight ?? CONTACT_ENTRY_WEIGHT) * samples.length
   const axes = opts.axes
   const n = 3 + axes.length
-  const maxA = opts.maxAngleDeg * Math.PI / 180
+  const posture = opts.posture !== false && samples.some((x) => !!x.support)
+  const maxA = (posture ? postureAngleCapDeg(opts.group, opts.maxAngleDeg) : opts.maxAngleDeg) * Math.PI / 180
   const toFix = (x: number[]): PairFix => {
     const turn: Vec3 = [0, 0, 0]
     axes.forEach((a, k) => { turn[0] += a[0] * x[3 + k]; turn[1] += a[1] * x[3 + k]; turn[2] += a[2] * x[3 + k] })
@@ -207,14 +241,14 @@ export function solvePairFix(samples: readonly FitSample[], opts: FitOptions): P
   let x = new Array(n).fill(0)
   const cost = (r: number[]) => r.reduce((a, v) => a + v * v, 0)
   const bend = opts.bend ?? null
-  let r = residuals(samples, toFix(x), lambda, W, bend)
+  let r = residuals(samples, toFix(x), lambda, W, bend, posture)
   let c = cost(r)
   const iterations = opts.iterations ?? 20
   for (let it = 0; it < iterations; it++) {
     const J: number[][] = []
     for (let k = 0; k < n; k++) {
       const xp = x.slice(); xp[k] += 1e-6
-      const rp = residuals(samples, toFix(xp), lambda, W, bend)
+      const rp = residuals(samples, toFix(xp), lambda, W, bend, posture)
       J.push(rp.map((v, i) => (v - r[i]) / 1e-6))
     }
     const A = Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_, j) => {
@@ -228,7 +262,7 @@ export function solvePairFix(samples: readonly FitSample[], opts: FitOptions): P
     let t = 1, accepted = false
     for (let ls = 0; ls < 8; ls++) {
       const xn = project(x.map((v, i) => v + t * step[i]))
-      const rn = residuals(samples, toFix(xn), lambda, W, bend)
+      const rn = residuals(samples, toFix(xn), lambda, W, bend, posture)
       const cn = cost(rn)
       if (cn < c) { const moved = Math.max(...xn.map((v, i) => Math.abs(v - x[i]))); x = xn; r = rn; c = cn; accepted = moved > 1e-7; break }
       t /= 2
@@ -248,6 +282,10 @@ export function fixAnglesDeg(fix: PairFix, axes: readonly Vec3[]): number[] {
  *  (`ClipCalibration.frame`): its side axis (+X) and its forward axis (+Z). */
 export function turnAxes(frame: readonly number[]): [Vec3, Vec3] {
   return [[frame[0], frame[3], frame[6]], [frame[2], frame[5], frame[8]]]
+}
+/** Ruling A150: the body axes the bend's root lever turns about — side (+X) and up (+Y) of the root frame. */
+export function bendFrameOf(frame: readonly number[]): BendFrame {
+  return { side: [frame[0], frame[3], frame[6]], up: [frame[1], frame[4], frame[7]] }
 }
 /** Partner B's stored/drafted turn (Ruling A129) as a fix: tilt about the side axis, roll about the forward axis. */
 export function partnerTurnFix(tiltDeg: number, rollDeg: number, frame: readonly number[]): PairFix {
@@ -286,12 +324,17 @@ export interface PairFitState {
   bendDeg: number[]
   bendLimitDeg: number
   bendAtLimit: number
+  /** Ruling A150: the place type (turn cap) and, since the fit, the root pitch used per frame (degrees) and the
+   *  support change per frame (mm, + = float). */
+  group: string | null
+  rootPitchDeg: number[]
+  supportMm: number[]
 }
 
-export function createPairFit(bend: BendLimits | null = null): PairFitState {
+export function createPairFit(bend: BendLimits | null = null, group: string | null = null): PairFitState {
   return { phase: 'collect', samples: [], fix: NO_FIX, follow: [0, 0, 0],
     followTable: Array.from({ length: FOLLOW.bins }, () => [0, 0, 0] as Vec3), period: 0, lastPhase: -1, armed: false,
-    lateralMm: [], bend, bendDeg: [], bendLimitDeg: 0, bendAtLimit: 0 }
+    lateralMm: [], bend, bendDeg: [], bendLimitDeg: 0, bendAtLimit: 0, group, rootPitchDeg: [], supportMm: [] }
 }
 
 const binOf = (st: PairFitState, phase: number) =>
@@ -316,9 +359,10 @@ export function pairFitObserve(st: PairFitState, measured: FitSample, phase: num
     const total = pairFitTotal(st)
     const raw: FitSample = { ...measured, tip: unfixPoint(total, measured.pivot, measured.tip),
       base: unfixPoint(total, measured.pivot, measured.base),
-      ...(measured.chain ? { chain: measured.chain.map((p) => unfixPoint(total, measured.pivot, p)) } : {}) }
+      ...(measured.chain ? { chain: measured.chain.map((p) => unfixPoint(total, measured.pivot, p)) } : {}),
+      ...(measured.support ? { support: { ...measured.support, pts: measured.support.pts.map((p) => unfixPoint(total, measured.pivot, p)) } } : {}) }
     if (wrapped && st.armed && st.samples.length >= FIT_MIN_SAMPLES) {
-      st.fix = solvePairFix(st.samples, { ...bounds, axes, bend: st.bend })
+      st.fix = solvePairFix(st.samples, { ...bounds, axes, bend: st.bend, group: st.group })
       st.phase = 'fitted'
       st.lastPhase = phase
       return   // this frame was rendered before the fit: it teaches the follow nothing
@@ -328,6 +372,15 @@ export function pairFitObserve(st: PairFitState, measured: FitSample, phase: num
   }
   st.lastPhase = phase
   if (st.phase !== 'fitted') return
+  // A150: the support as rendered against the clip's own (the total unapplied) — the follow keeps it in the band.
+  let supportNow: number | null = null
+  if (measured.support) {
+    const s0 = measured.support
+    const total = pairFitTotal(st, phase)
+    const base = s0.base ?? supportHeight(s0.pts.map((p) => unfixPoint(total, measured.pivot, p)), s0.r)
+    supportNow = supportHeight(s0.pts, s0.r) - base
+    st.supportMm.push(supportNow * 1000)
+  }
   // What was rendered: the evidence (lateral through the stroke, once fitted) — the BENT tip (A145).
   if (st.bend && measured.chain) {
     const b = bendSample(measured, st.bend)
@@ -336,6 +389,7 @@ export function pairFitObserve(st: PairFitState, measured: FitSample, phase: num
       st.bendDeg.push(b.bend.totalDeg)
       st.bendLimitDeg = b.bend.limit.totalDeg
       if (b.bend.atLimit) st.bendAtLimit++
+      st.rootPitchDeg.push(b.bend.rootPitchDeg)
     }
   }
   const rel = sub(measured.tip, measured.o)
@@ -346,9 +400,12 @@ export function pairFitObserve(st: PairFitState, measured: FitSample, phase: num
   const cell = st.followTable[b]
   if (!follow) { st.followTable[b] = [0, 0, 0]; st.follow = [0, 0, 0]; return }
   // The frame was rendered with this bin's shift, so its lateral is that shift's error: learn it for the next loop.
-  st.followTable[b] = s >= -FOLLOW.nearM
+  const next: Vec3 = s >= -FOLLOW.nearM
     ? [0, 1, 2].map((i) => clamp(cell[i] - FOLLOW.gain * lat[i], FOLLOW.maxM)) as Vec3
     : scale(cell, FOLLOW.decay)
+  // A150: world up is +Y; the support then changes by next_y − cell_y on top of supportNow — keep it in the band.
+  if (supportNow !== null) next[1] = Math.max(cell[1] - supportNow - POSTURE.sinkM, Math.min(cell[1] - supportNow + POSTURE.floatM, next[1]))
+  st.followTable[b] = next
   st.follow = st.followTable[b]
 }
 
@@ -361,6 +418,8 @@ interface InspectionLike {
   channels: readonly { id: string; o: readonly number[]; u: readonly number[]; accepts: readonly string[] }[]
   /** Ruling A139: the point targets the figure's bones resolve (`contactTarget.ts`). */
   targets?: readonly { id: string; o: readonly number[]; u: readonly number[] }[]
+  /** Ruling A150: the body capsules (world) the posture support is read from. */
+  capsules?: readonly { id: string; now: { a: readonly number[]; b: readonly number[]; r: number } }[]
 }
 /** The contact of `entering` in `receiving` for the clip's CONTACT TARGET (Ruling A139, `contactTarget.ts`):
  *  `channel` = the first chain whose op one of `receiving`'s channels accepts (A126); a point target = the first chain
@@ -391,8 +450,9 @@ export function contactSampleOf(entering: InspectionLike, receiving: InspectionL
   const tip = v(chain.segments[chain.segments.length - 1].b), base = v(chain.segments[0].a)
   // Ruling A145: the chain's points (joints, then the tip) so the fit can bend it.
   const pts = [...chain.segments.map((x) => v(x.a)), tip]
+  const support = entering.capsules ? supportSample(entering.capsules) : null
   return { tip, base, o: v(ch.o), u: orientAlong(hit.channel, scale(u, 1 / l), tip, base), pivot, chain: pts,
-    raised: chain.raised ?? 0, channel: !isPointTarget(hit.channel) }
+    raised: chain.raised ?? 0, channel: !isPointTarget(hit.channel), ...(support ? { support } : {}) }
 }
 
 // ── the honest interpenetration check ──

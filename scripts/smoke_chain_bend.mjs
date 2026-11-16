@@ -31,6 +31,12 @@
  *     asin(e / 0.1) at joint 1, the same back at joint 2 → 2 asin(e / 0.1) in all (11.48° at Δy = 0).
  * [8] bendLimitsOf({raised: {joint_deg: 10}}) → raised 10 / 35 (total from the default), resting 45 / 120; junk →
  *     defaults. Limit 0 → no bend at all.
+ * [9] THE ROOT (A150): a straight 2-link chain P_k = (0, 0, 0.1k), frame side +X, up +Y, only the root may turn
+ *     (joint limits 0). A turn α about +X maps the tip (0, 0, 0.2) to (0, −0.2 sin α, 0.2 cos α); s = sign(((X × Z)·Y))
+ *     = sign(−1) = −1, so pitch UP = −rotation about +X, tip (0, 0.2 sin α, 0.2 cos α). The axis line y = 0.2 sin 20°
+ *     along +Z: the tip lies on it at α = 20° (CCD fixed point) — pitch +20°, yaw 0, joint 0 in `turns`.
+ * [10] Limits: a line at 0.2 sin 50° → pitch clamped at +35° (rootAtLimit); at −0.2 sin 60° → −45°; a line at
+ *      x = 0.2 sin 20° → yaw clamped at 10°, pitch 0. Without a frame the root stays (pitch 0, no turn).
  */
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -63,9 +69,9 @@ const lat = (p, o, u) => { const r = [p[0] - o[0], p[1] - o[1], p[2] - o[2]]; co
   return Math.hypot(r[0] - s * u[0], r[1] - s * u[1], r[2] - s * u[2]) }
 
 // [1]
-assert.deepEqual(SR.bendLimitAt(D, 1), { jointDeg: 15, totalDeg: 35 })
-assert.deepEqual(SR.bendLimitAt(D, 0), { jointDeg: 45, totalDeg: 120 })
-assert.deepEqual(SR.bendLimitAt(D, 0.5), { jointDeg: 30, totalDeg: 77.5 })
+assert.deepEqual(SR.bendLimitAt(D, 1), { jointDeg: 15, totalDeg: 35, rootUpDeg: 35, rootDownDeg: 45, rootYawDeg: 10 })
+assert.deepEqual(SR.bendLimitAt(D, 0), { jointDeg: 45, totalDeg: 120, rootUpDeg: 45, rootDownDeg: 80, rootYawDeg: 15 })
+assert.deepEqual(SR.bendLimitAt(D, 0.5), { jointDeg: 30, totalDeg: 77.5, rootUpDeg: 40, rootDownDeg: 62.5, rootYawDeg: 12.5 })
 // [2]
 assert.deepEqual(SR.bendJoints(5), [2, 3, 4]); assert.deepEqual(SR.bendJoints(4), [1, 2, 3])
 assert.deepEqual(SR.bendJoints(2), [1]); assert.deepEqual(SR.bendJoints(1), [])
@@ -110,8 +116,29 @@ for (const f of frames) {
 }
 // [8]
 const L = SR.bendLimitsOf({ raised: { joint_deg: 10 } })
-assert.deepEqual(L, { raised: { jointDeg: 10, totalDeg: 35 }, resting: { jointDeg: 45, totalDeg: 120 } })
-assert.deepEqual(SR.bendLimitsOf('junk'), { raised: { jointDeg: 15, totalDeg: 35 }, resting: { jointDeg: 45, totalDeg: 120 } })
+assert.deepEqual(L, { raised: { jointDeg: 10, totalDeg: 35, rootUpDeg: 35, rootDownDeg: 45, rootYawDeg: 10 },
+  resting: { jointDeg: 45, totalDeg: 120, rootUpDeg: 45, rootDownDeg: 80, rootYawDeg: 15 } })
+assert.deepEqual(SR.bendLimitsOf('junk'), D)
+assert.equal(SR.bendLimitsOf({ raised: { root_down_deg: 30 } }).raised.rootDownDeg, 30)
 const r8 = SR.solveChainBend(straight(2), [0, -0.05, 0], [0, 0, 1], { jointDeg: 0, totalDeg: 0 })
 assert.equal(r8.totalDeg, 0)
+// [9]–[10] THE ROOT (A150)
+{
+  const F = { side: [1, 0, 0], up: [0, 1, 0] }
+  const only = (up, down, yaw) => ({ jointDeg: 0, totalDeg: 0, rootUpDeg: up, rootDownDeg: down, rootYawDeg: yaw })
+  const sin = (d) => Math.sin(d * Math.PI / 180)
+  const r9 = SR.solveChainBend(straight(2), [0, 0.2 * sin(20), 0], [0, 0, 1], only(35, 45, 10), { frame: F })
+  near(r9.rootPitchDeg, 20, 0.05, '[9] pitch up 20° lays the tip on y = 0.2 sin 20°')
+  near(r9.rootYawDeg, 0, 1e-6, '[9] no yaw')
+  near(r9.points[2][1], 0.2 * sin(20), 1e-4, '[9] tip height')
+  assert.equal(r9.turns[0].joint, 0); assert.equal(r9.rootAtLimit, false)
+  const up = SR.solveChainBend(straight(2), [0, 0.2 * sin(50), 0], [0, 0, 1], only(35, 45, 10), { frame: F })
+  near(up.rootPitchDeg, 35, 1e-6, '[10] up clamped at 35'); assert.equal(up.rootAtLimit, true)
+  const dn = SR.solveChainBend(straight(2), [0, -0.2 * sin(60), 0], [0, 0, 1], only(35, 45, 10), { frame: F })
+  near(dn.rootPitchDeg, -45, 1e-6, '[10] down clamped at 45')
+  const yw = SR.solveChainBend(straight(2), [0.2 * sin(20), 0, 0], [0, 0, 1], only(35, 45, 10), { frame: F })
+  near(Math.abs(yw.rootYawDeg), 10, 1e-6, '[10] yaw clamped at 10'); near(yw.rootPitchDeg, 0, 1e-6, '[10] no pitch')
+  const nf = SR.solveChainBend(straight(2), [0, 0.2 * sin(20), 0], [0, 0, 1], only(35, 45, 10))
+  assert.equal(nf.rootPitchDeg, 0); assert.ok(!nf.turns.some((x) => x.joint === 0))
+}
 console.log('smoke_chain_bend OK')
