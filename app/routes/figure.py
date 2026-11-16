@@ -320,7 +320,8 @@ def get_template_params(character_name: str, item_id: str,
                      else {"type": "number", "min": rule[0], "max": rule[1], "default": default})
     return {"item_id": item_id, "name": str(item.get("name") or item_id), "params": gt.params_of(item),
             "source": stored.get("source") or "", "updated_at": stored.get("updated_at") or "", "spec": spec,
-            "built": list(gt.BUILT_KINDS), "cost": {"llm_calls": 1, "hub_jobs": 0, "cpu_s": gt.CPU_ESTIMATE_S}}
+            "built": list(gt.BUILT_KINDS), "kind_fields": {k: list(v) for k, v in gt.KIND_FIELDS.items()},
+            "cost": {"llm_calls": 1, "hub_jobs": 0, "cpu_s": gt.CPU_ESTIMATE_S}}
 
 
 @router.post("/{character_name}/figure/template/{item_id}/suggest")
