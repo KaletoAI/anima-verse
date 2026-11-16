@@ -5,6 +5,8 @@ export interface ClipSource {
   shift?: readonly [number, number] | null;
   /** Ruling A129: a pair's partner-B turn [tilt, roll] degrees. */
   partnerTurn?: [number, number] | null;
+  /** Ruling A139: the clip's contact relations ([] / absent = automatic). */
+  contacts?: { part: string; at: string; target: 'channel' | 'hand_left' | 'hand_right' | 'head_front' | 'none' }[] | null;
 }
 export interface ClipResult<C> { clip: C | null }
 export interface CommitOps<C> {

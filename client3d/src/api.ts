@@ -603,6 +603,8 @@ export interface ApiClip {
   loop_count?: number | null;
   height_offsets_cm?: Partial<Record<'ground' | 'seat' | 'lie', number>>;
   orientation?: { shift_cm?: [number, number] | null; partner_turn_deg?: [number, number] | null };
+  /** Ruling A139: the contact relations of a pair/group clip (`[]` = automatic channel detection). */
+  contact_target?: { relations: { part: string; at: string; target: 'channel' | 'hand_left' | 'hand_right' | 'head_front' | 'none' }[]; source: string } | null;
   /** How the import treated the root's travel (the sidecar's
    *  `geometry.root_motion`): `strip` plays in place, `keep`/`foot_lock`
    *  carry the figure along `travel_m` (clip frame: +Z forward, +X the

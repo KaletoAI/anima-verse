@@ -25,7 +25,7 @@ import { OPENING_BUDGET, runFigureFrame, strandCandidates, type FrameEntry, type
 import { WALK_CLEARANCE_M } from '../game/ground';
 import { GROUND_Y } from './ground';
 import { tagAnchorY, tagBadges, tagName, tagTravelling, tagVisible } from './nameTags';
-import type { PlaceEntry } from '@anima/scene-render';
+import type { ContactRelation, PlaceEntry } from '@anima/scene-render';
 import { settleOffset, type StandSettle } from './standSettle';
 import { seededRandom } from './textures';
 import { adoptTarget, advanceAlongPaces, stepShown, rateAt, pushErr, catchUpStep, clampProgress, deadReckonRate, deadReckonStep, densifyPolyline, pointAtDistance, remainingPoints, trimBucket, type ErrWindow, type MetrePoint } from './travelPath';
@@ -340,6 +340,8 @@ export class NpcManager {
    *  frame its pelvis follows by ≤ 2 cm so the tip stays on the channel axis (A129.4). */
   private readonly pairFits = new Map<string, { key: string; st: PairFitState; entering: string; receiving: string
     hit: { chain: number; channel: string } | null; none: boolean; pivot: [number, number, number] | null
+    /** Ruling A139: the interaction this record belongs to (the map key is `<id>|<relation>`). */
+    interaction: string
     axes: [number, number, number][] }>();
   /** A102b: the rotating start of the opening pass (`runFigureFrame`, from `tickSecondary`). */
   private readonly frameState: FrameLoopState = { openingTurn: 0 };
@@ -1544,8 +1546,8 @@ export class NpcManager {
     const got = this.pairFixOf(npc, base, yaw);
     if (!got) return;
     let fix = got.fix;
-    const rec = this.pairFits.get(interactionId);
-    if (rec && rec.entering === npc.name) {
+    const rec = [...this.pairFits.values()].find((x) => x.interaction === interactionId && x.entering === npc.name);
+    if (rec) {
       rec.pivot = got.pivot;
       rec.axes = turnAxes(got.frame);
       const it = npc.interaction;
@@ -2377,31 +2379,57 @@ export class NpcManager {
       list.push(npc);
       groups.set(npc.interaction.id, list);
     }
-    for (const id of [...this.pairFits.keys()]) if (!groups.has(id)) this.pairFits.delete(id);
+    for (const [k, rec] of [...this.pairFits]) if (!groups.has(rec.interaction)) this.pairFits.delete(k);
     for (const [id, list] of groups) {
-      if (list.length !== 2) continue;
+      if (list.length < 2) continue;
       const key = list.map((n) => `${n.name}:${n.interaction!.clip}`).sort().join('|');
-      let rec = this.pairFits.get(id);
+      // Ruling A139: one fit per contact relation of the clip (part place → anchor place, target); none declared =
+      // the A126 auto-detection on a pair.
+      const roleOf = (n: Npc) => n.interaction!.base.slice(n.interaction!.base.lastIndexOf('__') + 2);
+      const rels = list.map((n) => n.figure!.contactRelations).find((r) => r.length) ?? [];
+      if (!rels.length && list.length !== 2) continue;
+      const jobs = rels.length ? rels.map((r, i) => ({ k: `${id}|${i}`, rel: r })) : [{ k: `${id}|auto`, rel: null }];
+      for (const job of jobs) this.observePairFit(id, key, job.k, job.rel, list, roleOf);
+    }
+  }
+
+  private observePairFit(id: string, key: string, k: string, rel: ContactRelation | null, list: Npc[],
+    roleOf: (n: Npc) => string): void {
+    {
+      let rec = this.pairFits.get(k);
       if (!rec || rec.key !== key) {
-        rec = { key, st: createPairFit(), entering: '', receiving: '', hit: null, none: false, pivot: null, axes: [] };
-        this.pairFits.set(id, rec);
+        rec = { key, st: createPairFit(), entering: '', receiving: '', hit: null, none: false, pivot: null, axes: [],
+          interaction: id };
+        this.pairFits.set(k, rec);
       }
-      if (rec.none) continue;
-      const [a, b] = list;
+      if (rec.none) return;
       if (!rec.hit) {
+        if (rel) {
+          if (rel.target === 'none') { rec.none = true; return; }
+          const e = list.find((n) => roleOf(n) === rel.part), r = list.find((n) => roleOf(n) === rel.at);
+          const ie = e?.figure!.inspect(), ir = r?.figure!.inspect();
+          if (!e || !r) { rec.none = true; return; }
+          if (!ie || !ir) return;
+          const h = findContact(ie, ir, rel.target);
+          if (!h) { rec.none = true; return; }
+          rec.hit = h; rec.entering = e.name; rec.receiving = r.name;
+          return;
+        }
+        const [a, b] = list;
         const ia = a.figure!.inspect(), ib = b.figure!.inspect();
-        if (!ia || !ib) continue;
+        if (!ia || !ib) return;
         const ab = findContact(ia, ib), ba = ab ? null : findContact(ib, ia);
-        if (!ab && !ba) { rec.none = true; continue; }
+        if (!ab && !ba) { rec.none = true; return; }
         rec.hit = ab ?? ba;
         rec.entering = ab ? a.name : b.name;
         rec.receiving = ab ? b.name : a.name;
-        continue;   // the pivot is taken when the entering figure is placed next frame
+        return;   // the pivot is taken when the entering figure is placed next frame
       }
-      const e = rec.entering === a.name ? a : b, r = e === a ? b : a;
+      const e = list.find((n) => n.name === rec!.entering), r = list.find((n) => n.name === rec!.receiving);
+      if (!e || !r) return;
       const ie = e.figure!.inspect(), ir = r.figure!.inspect();
       const it = e.interaction!;
-      if (!ie || !ir || !rec.pivot || !(it.clipDuration > 0)) continue;
+      if (!ie || !ir || !rec.pivot || !(it.clipDuration > 0)) return;
       const sample = contactSampleOf(ie, ir, rec.hit, rec.pivot);
       if (sample) pairFitObserve(rec.st, sample, it.clipT % it.clipDuration, rec.axes, RUNTIME_FIT, true);
     }

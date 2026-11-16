@@ -23,7 +23,7 @@ import {
 } from '@anima/scene-render';
 import type { RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, CollisionPayload,
   FootPose, HairStrandRecord, StrandHair, CapsuleNow, PartnerSnapshot, OpeningSegment,
-  ChannelOccupants, FigureInspection, FigureRuntime, FrameFigure } from '@anima/scene-render';
+  ChannelOccupants, ContactRelation, FigureInspection, FigureRuntime, FrameFigure } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import { applyFigureTexture, zeroFigureMetalness } from './figureMaterials';
 import type { ApiModel } from '../api';
@@ -78,6 +78,16 @@ const clipHeightOffsets = new WeakMap<THREE.AnimationClip, ClipHeightOffsetsCm>(
 const clipShifts = new WeakMap<THREE.AnimationClip, ClipShiftCm>();
 /** Ruling A129: a pair's partner-B turn [tilt, roll] degrees (renderer-only, `orientation.partner_turn_deg`). */
 const clipPartnerTurns = new WeakMap<THREE.AnimationClip, [number, number]>();
+
+/** Ruling A139: a pair/group clip's contact relations (`contact_target.relations` of the listing; [] = automatic). */
+const clipContactRelations = new WeakMap<THREE.AnimationClip, ContactRelation[]>();
+export function setClipContactRelations(clip: THREE.AnimationClip, rel: ContactRelation[] | null | undefined): void {
+  if (rel && rel.length) clipContactRelations.set(clip, rel);
+}
+/** The contact relations of a played clip ([] = automatic channel detection). */
+export function clipContactRelationsOf(clip: THREE.AnimationClip | null | undefined): ContactRelation[] {
+  return (clip && clipContactRelations.get(clip)) || [];
+}
 
 /** Remembers the listing's partner-B turn for one loaded clip file. */
 export function setClipPartnerTurn(clip: THREE.AnimationClip, turn: [number, number] | null | undefined): void {
@@ -134,6 +144,8 @@ function carryClipLoops(from: readonly THREE.AnimationClip[],
     if (shift) clipShifts.set(c, shift);
     const turn = source && clipPartnerTurns.get(source);
     if (turn) clipPartnerTurns.set(c, turn);
+    const rel = source && clipContactRelations.get(source);
+    if (rel) clipContactRelations.set(c, rel);
   }
 }
 
@@ -1071,7 +1083,7 @@ export class FigureLibrary {
       // (`Figure.update`); `strip` or no block plays in place as before.
       const sources: Array<{ kind: string; set: string; url: string; loop?: boolean; loopCount?: number | null;
                              rootMotion?: boolean; rootMotionMode?: string; heightOffsets?: ClipHeightOffsetsCm; shift?: ClipShiftCm | null;
-                             partnerTurn?: [number, number] | null }> =
+                             partnerTurn?: [number, number] | null; contacts?: ContactRelation[] | null }> =
         serverClips.map((c) => ({
           kind: clipIndexName(c), set: c.set ?? '',
           url: c.url, loop: c.loop, loopCount: c.loop_count,
@@ -1080,6 +1092,7 @@ export class FigureLibrary {
           heightOffsets: c.height_offsets_cm,
           shift: c.orientation?.shift_cm,
           partnerTurn: c.orientation?.partner_turn_deg,
+          contacts: c.contact_target?.relations,
         }));
       if (!sources.length) {
         // Dev/offline fallback: the local manifest clips (no sets)
@@ -1136,6 +1149,7 @@ export class FigureLibrary {
           setClipHeightOffsets(clip, source.heightOffsets);
           setClipShift(clip, source.shift);
           setClipPartnerTurn(clip, source.partnerTurn);
+          setClipContactRelations(clip, source.contacts);
         },
         isPair: isPairClipName,
         pairRoot: extractRootPath,
@@ -1214,6 +1228,7 @@ export class FigureLibrary {
               setClipHeightOffsets(clip, source.height_offsets_cm);
               setClipShift(clip, source.orientation?.shift_cm);
               setClipPartnerTurn(clip, source.orientation?.partner_turn_deg);
+              setClipContactRelations(clip, source.contact_target?.relations);
             }
           } catch (e) { console.warn('[figures] clip reload not loadable', source.url, e); }
         }
@@ -1764,6 +1779,8 @@ export class FigureLibrary {
           if (shift) clipShifts.set(c, shift);
           const turn = clipPartnerTurns.get(clip);
           if (turn) clipPartnerTurns.set(c, turn);
+          const rel = clipContactRelations.get(clip);
+          if (rel) clipContactRelations.set(c, rel);
           out.push(c);
           break;
         }
@@ -2236,6 +2253,11 @@ export class Figure {
   /** Ruling A129: the partner-B turn [tilt, roll] degrees of the clip playing now ([0, 0] = none). */
   get pairTurnDeg(): [number, number] {
     return clipPartnerTurn(this.current?.getClip());
+  }
+
+  /** Ruling A139: the contact relations of the clip playing now ([] = automatic). */
+  get contactRelations(): ContactRelation[] {
+    return clipContactRelationsOf(this.current?.getClip());
   }
 
   constructor(model: LoadedModel) {
