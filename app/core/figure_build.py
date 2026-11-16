@@ -136,11 +136,12 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-STEP_ORDER = ("plain_body", "base_repair", "tip_smoothing", "shape", "pieces", "hair", "texture", "fits", "assemble",
+STEP_ORDER = ("plain_body", "base_repair", "tip_smoothing", "shape", "pieces", "template", "hair", "texture", "fits",
+              "assemble",
               "collision")
 #: What a step needs: a failed (or skipped) step skips every step naming it here.
 DEPENDS = {"base_repair": {"plain_body"}, "tip_smoothing": {"plain_body"}, "shape": {"plain_body"}, "pieces": {"plain_body"},
-           "hair": {"plain_body"}, "texture": {"plain_body", "shape"}, "fits": {"plain_body"},
+           "template": {"plain_body"}, "hair": {"plain_body"}, "texture": {"plain_body", "shape"}, "fits": {"plain_body"},
            "assemble": {"plain_body", "fits"}}
 #: Steps that hold the character's 3D generation slot (model work).
 SLOT_STEPS = frozenset({"plain_body", "base_repair", "tip_smoothing", "shape", "texture", "assemble",
@@ -348,6 +349,29 @@ def _hair_step(character_name: str, profile: Dict[str, Any]) -> Optional[Step]:
     return _chain_step(character_name, "hair", str(item["id"]), label, profile)
 
 
+#: The label of a template drape step (Ruling A138) and its CPU estimate (measured A138: 13–18 s wall on Kira).
+TEMPLATE_LABEL = "Template drape · {name} (CPU ~20 s, 0 hub jobs)"
+
+
+def _template_step(character_name: str, item_id: str, delivered, profile: Dict[str, Any]) -> Optional[Step]:
+    """The drape of a worn template piece (``garment_template.drape_state``): None when it is ready or cannot be
+    draped (no parameters, a kind not built — the Figure tab says why, nothing to build); "failed — Retry" for a
+    failed drape of the current key (a manual Build retries it, ruling 7a)."""
+    from app.core import base_body, garment_template
+    from app.core.figure import worn_sets
+    base = base_body.current_base(character_name, profile=profile)
+    sets = worn_sets(character_name, pieces=dict(delivered.pieces), profile=profile)
+    state = garment_template.drape_state(character_name, item_id, base_sha=base[1] if base else "",
+                                         lower=garment_template.lower_layers(sets.own, item_id))
+    label = TEMPLATE_LABEL.format(name=_item_name(item_id))
+    if state["state"] == "missing":
+        return Step("template", label, 0, item_id)
+    if state["state"] == "failed":
+        return Step("template", label + FAILED_SUFFIX, 0, item_id,
+                    failed=str(state["record"].get("error") or state["reason"]))
+    return None
+
+
 def _runnable(steps: List[Step], explicit: bool) -> List[Step]:
     """The steps that do work: a cached chain failure (ruling 7a) and the
     plain body (ruling 8a) only in a manual Build."""
@@ -445,7 +469,14 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
         steps.append(step if rebased else _refused(step, base_body.shape_view_refusals(character_name,
                                                                                          wanted.shape, bsig)))
 
+    for item_id in wanted.template:
+        # Ruling A138: a template piece is draped on the CPU (0 hub jobs) when its drape of the current key is missing.
+        step = _template_step(character_name, item_id, delivered, profile)
+        if step is not None:
+            steps.append(step)
     for item_id in wanted.own:
+        if item_id in wanted.template:
+            continue
         # The worn state's chain only (plan Task 11b: the other state is built by its own button, never both
         # automatically); a piece worn open says so — its open mesh is another chain.
         label = f"Own mesh · {_item_name(item_id)}" + (" (open)" if item_id in wanted.open else "")
@@ -1533,6 +1564,16 @@ def _run_pieces(character_name: str, step: Step, explicit: bool = False) -> str:
     return _chain(character_name, step.item_id, explicit)
 
 
+def _run_template(character_name: str, step: Step, explicit: bool = False) -> str:
+    """Drape one template piece (``garment_template.build``; a manual Build first forgets its failed drape)."""
+    from app.core import garment_template
+    if explicit and step.failed:
+        garment_template.clear_failure(character_name, step.item_id)
+    profile = _read_profile(character_name)
+    state = garment_template.build(character_name, step.item_id, profile=profile)
+    return "" if state["state"] == "ready" else str(state["reason"])
+
+
 def _run_hair(character_name: str, step: Step, explicit: bool = False) -> str:
     """The worn HairDeck hairstyle's chain (``step.item_id``, else the worn one now)."""
     from app.core import garment_hair
@@ -1746,7 +1787,7 @@ def _run_assemble(character_name: str, step: Step, explicit: bool = False) -> st
 
 _RUNNERS: Dict[str, Callable[[str, Step, bool], str]] = {
     "plain_body": _run_plain_body, "base_repair": _run_base_repair, "tip_smoothing": _run_tip_smoothing,
-    "shape": _run_shape, "pieces": _run_pieces,
+    "shape": _run_shape, "pieces": _run_pieces, "template": _run_template,
     "hair": _run_hair, "texture": _run_texture, "fits": _run_fits, "assemble": _run_assemble,
     "collision": _run_collision}
 
@@ -1905,8 +1946,33 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
                      "other_state_jobs": (_other_state_jobs(character_name, item_id, piece_state, profile)
                                           if closable and mode == garment_set.OWN_MESH else None),
                      "regenerate_jobs": (_regenerate_jobs(character_name, item_id, profile)
-                                         if state == "fit_refused" and words["piece"] else None)})
+                                         if state == "fit_refused" and words["piece"] else None),
+                     "template": (_template_row(character_name, item_id, item, wanted, profile)
+                                  if mode == garment_set.TEMPLATE else None)})
     return rows
+
+
+def _template_row(character_name: str, item_id: str, item: Dict[str, Any], wanted,
+                  profile: Dict[str, Any]) -> Dict[str, Any]:
+    """A template row's ``template`` (Ruling A138): ``{params (None: none stored), source ("llm" / "user"),
+    updated_at, built (the kinds draped today), state ("ready" / "missing" / "failed" / "blocked"), reason,
+    built_at, metrics {wall_s, cpu_s, stretch_max, coverage, texture}, cost {llm_calls, hub_jobs, cpu_s}}``."""
+    from app.core import base_body, garment_template
+    stored = garment_template.template_of(item)
+    base = base_body.current_base(character_name, profile=profile)
+    drape = garment_template.drape_state(character_name, item_id, base_sha=base[1] if base else "",
+                                         lower=garment_template.lower_layers(wanted.own, item_id), item=item)
+    record = drape["record"] or {}
+    metrics = record.get("metrics") or {}
+    out = {"params": garment_template.params_of(item), "source": stored.get("source") or "",
+           "updated_at": stored.get("updated_at") or "", "built": list(garment_template.BUILT_KINDS),
+           "state": drape["state"], "reason": drape["reason"], "built_at": record.get("created_at") or "",
+           "metrics": {"wall_s": metrics.get("wall_total_s"), "cpu_s": (metrics.get("drape") or {}).get("cpu_s"),
+                       "stretch_max": (metrics.get("drape") or {}).get("stretch_max"),
+                       "coverage": (metrics.get("bake") or {}).get("coverage"),
+                       "texture": (record.get("texture") or {}).get("source") or ""} if metrics else None,
+           "cost": {"llm_calls": 1, "hub_jobs": 0, "cpu_s": garment_template.CPU_ESTIMATE_S}}
+    return out
 
 
 def _accepted_by_user(character_name: str, item_id: str, shape: str, profile: Dict[str, Any],
@@ -2724,7 +2790,7 @@ def _full_body_note(character_name: str, profile: Optional[Dict[str, Any]]) -> O
 PROBLEM_MESH, PROBLEM_FAILED = "mesh_mismatch", "failed"
 #: A failed step's label when the plan does not list it any more.
 STEP_LABELS = {"plain_body": "Plain body", "base_repair": MESH_REPAIR_LABEL, "tip_smoothing": TIP_SMOOTHING_LABEL,
-               "shape": "Body shape", "pieces": "Own mesh", "hair": "Hair",
+               "shape": "Body shape", "pieces": "Own mesh", "template": "Template drape", "hair": "Hair",
                "texture": "Texture", "fits": "Fits on the CPU", "assemble": ASSEMBLE_LABEL,
                "collision": COLLISION_LABEL}
 _VIEW_IN_ERROR = re.compile(r"\b(front|back|left|right)(?: view\b|:)")

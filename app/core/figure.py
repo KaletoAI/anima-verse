@@ -81,6 +81,9 @@ class WornSets:
     hair_shape: str = ""
     #: The worn hairstyle's id when it is not the plain body's (``garment_hair.hair_style_id``), else "".
     hair_style: str = ""
+    #: Sorted worn pieces in mode ``template`` (Ruling A138) — also in ``own`` (kind ``clothing``): a draped
+    #: template is grafted like an own mesh; this names which of them are templates.
+    template: Tuple[str, ...] = ()
 
 
 def _open_map(open_ids) -> Dict[str, str]:
@@ -128,6 +131,9 @@ def worn_sets(character_name: str, *, pieces: Optional[Dict[str, str]] = None,
         if item_id in ids and kind in garment_set.OWN_MESH_PIECE_KINDS:
             own[item_id] = kind
     pipeline = bool(own) or base_body.is_base_pipeline(character_name, profile=profile)
+    template = sorted(i for i in ids - set(own)
+                      if pipeline and garment_set.mesh_mode_of(get_item(i)) == garment_set.TEMPLATE)
+    own.update({item_id: garment_set.CLOTHING for item_id in template})
     in_body = sorted(i for i in ids - set(own)
                      if pipeline and garment_set.mesh_mode_of(get_item(i)) == garment_set.IN_BODY)
     painted = sorted(ids - set(own) - set(in_body))
@@ -141,7 +147,8 @@ def worn_sets(character_name: str, *, pieces: Optional[Dict[str, str]] = None,
                                if mode in (garment_hair.HAIRDECK_MODE, garment_hair.HAAR_MODE) else ""),
                     pieces=dict(worn), open=tuple(opened),
                     hair_shape=garment_hair.shape_hair(character_name, profile) if hair_pipeline else "",
-                    hair_style=garment_hair.hair_style_id(character_name, profile) if hair_pipeline else "")
+                    hair_style=garment_hair.hair_style_id(character_name, profile) if hair_pipeline else "",
+                    template=tuple(template))
 
 
 def _dress_texts(character_name: str, sets: WornSets, *, left_out, items: Optional[list],
@@ -430,6 +437,9 @@ class Figure:
     fit_refused: Dict[str, str] = field(default_factory=dict, compare=False)
     #: The body shape those fits were refused on (Ruling A31: the Figure tab names it) — "" without a refusal.
     fit_refused_on: str = field(default="", compare=False)
+    #: Ruling A138: the pieces of ``own`` that are draped templates (``garment_template``), sorted. Recorded only
+    #: when one is worn, so a figure without templates records what it recorded before.
+    template: Tuple[str, ...] = ()
 
     def as_dict(self) -> Dict[str, Any]:
         """The JSON form an outfit model sidecar records as ``figure`` —
@@ -449,6 +459,8 @@ class Figure:
             out["shown_closed"] = list(self.shown_closed)
         if self.hair_style:
             out["hair_style"] = self.hair_style
+        if self.template:
+            out["template"] = list(self.template)
         return out
 
     @classmethod
@@ -465,12 +477,14 @@ class Figure:
                    in_body=ids("in_body"), painted=ids("painted"), own=ids("own"), left_out=texts("left_out"),
                    notes=texts("notes"), hair=str(data.get("hair") or HAIR_BODY),
                    pieces=texts("pieces"), open=ids("open"), shown_closed=ids("shown_closed"),
-                   hair_style=str(data.get("hair_style") or ""))
+                   hair_style=str(data.get("hair_style") or ""), template=ids("template"))
 
     def state_of(self, item_id: str) -> str:
         """Where a worn piece is in this figure: ``in_body`` / ``painted`` /
-        ``own_mesh`` / ``left_out`` (``""`` when not worn)."""
+        ``own_mesh`` / ``template`` / ``left_out`` (``""`` when not worn)."""
         from app.core import garment_set
+        if item_id in self.template and item_id in self.own:
+            return garment_set.TEMPLATE
         if item_id in self.in_body:
             return garment_set.IN_BODY
         if item_id in self.own:
@@ -550,7 +564,8 @@ def _wanted(character_name: str, *, profile: Dict[str, Any], pieces: Optional[Di
                     shape=shape, texture=texture, in_body=sets.in_body, painted=sets.painted,
                     own=tuple(sorted(sets.own)), notes=notes if not is_plain(shape) else {},
                     hair=HAIR_BODY if sets.hair_in_body else HAIR_HAIRDECK if sets.hair_item else HAIR_BALD,
-                    pieces=dict(sets.pieces), open=sets.open, hair_style=sets.hair_style)
+                    pieces=dict(sets.pieces), open=sets.open, hair_style=sets.hair_style,
+                    template=tuple(sets.template))
     return figure, sets, variant
 
 
@@ -738,7 +753,20 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
     fit_refused: Dict[str, str] = {}
     own: List[str] = []
     closed: set = set()
+    draped: List[str] = []
     for item_id, kind in sorted(sets.own.items()):
+        if item_id in sets.template:
+            # Ruling A138: a template is draped on the plain body (CPU); until its drape of the current key is
+            # stored it is left off with the reason (no parameters, not draped yet, the drape failed).
+            from app.core import garment_template
+            drape = garment_template.drape_state(character_name, item_id, base_sha=base_sha,
+                                                 lower=garment_template.lower_layers(sets.own, item_id))
+            if drape["state"] == "ready":
+                own.append(item_id)
+                draped.append(item_id)
+            else:
+                left_out[item_id] = drape["reason"]
+            continue
         has, stand_in = _mesh_delivered(character_name, item_id, kind, open_=item_id in sets.open,
                                         base_sha=base_sha, profile=profile)
         if not has:
@@ -790,7 +818,7 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
                        in_body=tuple(sorted(in_body)), painted=tuple(sorted(wanted.painted)), own=tuple(own),
                        left_out=left_out, notes=notes, hair=hair, pieces=dict(sets.pieces), open=sets.open,
                        shown_closed=shown_closed, hair_style=hair_style, fit_refused=fit_refused,
-                       fit_refused_on=shape if fit_refused else "")
+                       fit_refused_on=shape if fit_refused else "", template=tuple(sorted(draped)))
     return wanted, delivered
 
 

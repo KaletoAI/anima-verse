@@ -44,6 +44,16 @@ body actions):
   piece's fit is not refused, 409 off the pipeline, while a Build of the
   character runs or a base step is in flight, 503 when the profile could not
   be read.
+* ``GET  /characters/{c}/figure/template/{item_id}`` — a template piece's parameter dialog (Ruling A138,
+  ``garment_template``): ``{item_id, name, params (None: none stored), source, updated_at, spec (the field
+  schema: ``{field: {type, choices | min/max, default}}``), built (the kinds draped today), cost {llm_calls,
+  hub_jobs, cpu_s}}``; 404 for an unknown character or item.
+* ``POST /characters/{c}/figure/template/{item_id}/suggest`` — ONE queued vision call (``TASK``) reads the item's
+  picture and text: ``{params, errors, raw}``; saves nothing. 400 without a picture / for no outfit piece, 502
+  when the LLM fails or answers no JSON.
+* ``PUT  /characters/{c}/figure/template/{item_id} {params, source}`` — store the parameters on the ITEM
+  (every wearer; ``garment_template.set_params``); spends nothing — the next Build re-drapes. 400 with the
+  validation errors (nothing stored).
 * ``POST /characters/{c}/base-body/run-all`` — the Base body tab's "Run all"
   (``figure_build.start_base_run_all``, Task UI1 rule R1): the plain body's
   refresh — only the steps that are not current — else the face cleanup or the
@@ -287,6 +297,60 @@ def start_manual_build(character_name: str) -> Dict[str, Any]:
     if result.get("status") == "failed":
         raise HTTPException(status_code=503, detail=str(result.get("reason") or "Build failed"))
     return result
+
+
+def _template_item(character_name: str, item_id: str) -> Dict[str, Any]:
+    from app.models.inventory import get_item
+    _require_character(character_name)
+    item = get_item(item_id)
+    if not item or item.get("category") != "outfit_piece":
+        raise HTTPException(status_code=404, detail="Outfit piece not found")
+    return item
+
+
+@router.get("/{character_name}/figure/template/{item_id}")
+def get_template_params(character_name: str, item_id: str,
+                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import garment_template as gt
+    item = _template_item(character_name, item_id)
+    stored = gt.template_of(item)
+    spec = {}
+    for key, (kind, rule, default) in gt.PARAM_SPEC.items():
+        spec[key] = ({"type": "choice", "choices": list(rule), "default": default} if kind == "choice"
+                     else {"type": "number", "min": rule[0], "max": rule[1], "default": default})
+    return {"item_id": item_id, "name": str(item.get("name") or item_id), "params": gt.params_of(item),
+            "source": stored.get("source") or "", "updated_at": stored.get("updated_at") or "", "spec": spec,
+            "built": list(gt.BUILT_KINDS), "cost": {"llm_calls": 1, "hub_jobs": 0, "cpu_s": gt.CPU_ESTIMATE_S}}
+
+
+@router.post("/{character_name}/figure/template/{item_id}/suggest")
+def suggest_template_params(character_name: str, item_id: str,
+                            _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import garment_template as gt
+    _template_item(character_name, item_id)
+    try:
+        return gt.suggest_params(item_id, character_name=character_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+class TemplateParamsRequest(BaseModel):
+    params: Dict[str, Any]
+    source: str = "user"
+
+
+@router.put("/{character_name}/figure/template/{item_id}")
+def put_template_params(character_name: str, item_id: str, body: TemplateParamsRequest,
+                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import garment_template as gt
+    _template_item(character_name, item_id)
+    try:
+        record = gt.set_params(item_id, body.params, source=body.source)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"item_id": item_id, **record}
 
 
 class RefitRequest(BaseModel):

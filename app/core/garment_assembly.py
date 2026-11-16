@@ -234,6 +234,12 @@ def effective_mesh_items(bare_meta: Optional[Dict[str, Any]]) -> List[str]:
     return sorted(set(mesh_items_intended(bare_meta or {})))
 
 
+def garment_set_mode(item: Dict[str, Any]) -> str:
+    """The item's mesh mode (``garment_set.mesh_mode_of``), "" for anything that is no outfit piece."""
+    from app.core.garment_set import mesh_mode_of
+    return mesh_mode_of(item) or ""
+
+
 def _piece_kind(item: Dict[str, Any]) -> str:
     """The garment kind of an own-mesh outfit piece the bare model left out
     of its texture: ``garment_set.garment_kind_of`` — and for a piece whose
@@ -319,6 +325,19 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
             kind = str((item.get("garment") or {}).get("kind") or "")
             if item.get("category") != "garment" or kind not in garment_store.GARMENT_VERSION:
                 continue
+        if item_id in clothing and garment_set_mode(item) == "template":
+            # Ruling A138: a draped template (``garment_template``) — its drape on the current base model, grafted
+            # like an own-mesh clothing piece on the plain body and on an outfit body alike (it was draped against
+            # the plain body; the body faces it covers are hidden, Ruling A133). Not ready: left off.
+            from app.core import garment_template
+            drape = garment_template.drape_state(character_name, item_id, base_sha=base[1],
+                                                 lower=garment_template.lower_layers(clothing, item_id), item=item)
+            if drape["state"] == "ready":
+                out.append({"item_id": item_id, "kind": CLOTHING, "fsig": drape["tsig"], "fit": drape["path"],
+                            "low": None, "record": drape["record"], "template": True})
+            elif left_off is not None:
+                left_off[item_id] = drape["reason"]
+            continue
         if on_body and kind == FOOTWEAR:
             # Derived on the outfit body from the shoe's accepted base fit
             # (``garment_footwear.derive_compute``, Ruling A35).
@@ -368,7 +387,7 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
                     "low": low if low.is_file() else None, "record": fit[1]})
     for g in out:
         g["item"] = items[g["item_id"]]     # its material (``_material``) is read from the same item
-    layered = [g for g in out if g["kind"] == CLOTHING and g["fit"] is not None]
+    layered = [g for g in out if g["kind"] == CLOTHING and g["fit"] is not None and not g.get("template")]
     # The boot hem (``outfit_options``, boots spec § 8): the worn ``bottom`` piece of the signature over the
     # chosen boot's shaft — the mode is read from the PROFILE (an assembly input, never a signature input).
     hem: Optional[Dict[str, Any]] = None

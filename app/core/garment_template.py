@@ -94,6 +94,8 @@ THRESHOLDS = {
 #: P1 gates on WALL time (Ruling A138: a Build is waited for in wall seconds; the spike's CPU sum
 #: counts every Blender thread). Same 60 s budget, hand-derived in ``scripts/smoke_garment_template.py``.
 BUILD_WALL_S = 60.0
+#: The wall seconds a drape takes, for the cost line (measured A138 on Kira: 13.4–17.8 s per piece).
+CPU_ESTIMATE_S = 20
 #: Stretch above which the drape is re-run once with doubled quality (spec section 6), then refused.
 RETRY_STRETCH = 1.5
 
@@ -423,11 +425,10 @@ def texture_sources(character_name: str, item_id: str) -> Dict[str, str]:
     return {"front": picture, "back": picture, "source": "item_image"} if picture else {}
 
 
-def lower_layers(sets: Any, item_id: str) -> List[str]:
-    """The other worn mesh pieces (own-mesh and template) of a figure's worn sets — the lower
-    layers in the cache key (module docstring)."""
-    others = set(getattr(sets, "own", {}) or {}) | set(getattr(sets, "template", ()) or ())
-    return sorted(others - {item_id})
+def lower_layers(mesh_ids: Any, item_id: str) -> List[str]:
+    """The other worn mesh pieces (own-mesh and template: ``figure.WornSets.own``, or the outfit
+    model's ``mesh_items.intended``) — the lower layers in the cache key (module docstring)."""
+    return sorted({str(i) for i in (mesh_ids or ())} - {item_id})
 
 
 def key_for(character_name: str, item_id: str, *, base_sha: str, lower: List[str],
@@ -612,7 +613,7 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
     base = base_body.current_base(character_name, profile=profile)
     base_sha = base[1] if base else ""
     if lower is None:
-        lower = lower_layers(figure.worn_sets(character_name, profile=profile), item_id)
+        lower = lower_layers(figure.worn_sets(character_name, profile=profile).own, item_id)
     item = get_item(item_id)
     state = drape_state(character_name, item_id, base_sha=base_sha, lower=lower, item=item)
     if state["state"] == "blocked" or (state["state"] == "ready" and not force):

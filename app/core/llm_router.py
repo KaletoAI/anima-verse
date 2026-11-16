@@ -414,6 +414,8 @@ def fallback_parent(task: str) -> Optional[str]:
         tool / JSON work, the chat anchor writes in character.
       * haar_hair_prompt → "image_recognition": it reads the profile picture,
         so it needs the vision anchor.
+      * garment_template_params → "image_recognition": it reads the item
+        picture (Ruling A138).
     """
     from app.core.llm_tasks import plugin_task_fallback
     declared_parent = plugin_task_fallback(task)
@@ -428,7 +430,7 @@ def fallback_parent(task: str) -> Optional[str]:
         return "chat_stream"
     if task in ("image_pose_check", "image_prompt_shorten", "piece_back_text"):
         return "image_prompt"
-    if task == "haar_hair_prompt":
+    if task in ("haar_hair_prompt", "garment_template_params"):
         return "image_recognition"
     return None
 

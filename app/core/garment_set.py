@@ -54,7 +54,9 @@ FOOTWEAR_SLOT = "feet"
 
 #: The modes of an outfit piece (``outfit_piece.mesh_mode``, module docstring).
 OWN_MESH, PAINTED, IN_BODY = "own_mesh", "painted", "in_body"
-MESH_MODES: Tuple[str, ...] = (OWN_MESH, PAINTED, IN_BODY)
+#: A sewing-pattern template draped onto the plain body on the CPU (``garment_template``, Ruling A138).
+TEMPLATE = "template"
+MESH_MODES: Tuple[str, ...] = (OWN_MESH, PAINTED, IN_BODY, TEMPLATE)
 
 
 def default_mesh_mode(slots: Iterable[str]) -> str:

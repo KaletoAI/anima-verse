@@ -157,6 +157,10 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # app/core/garment_hair.py::suggest_haar_prompt; the Hairstyles tab's
     # "Describe from profile picture"). Vision; unrouted it borrows image_recognition.
     "haar_hair_prompt":   {"label": "HAAR Hairstyle Prompt (from profile picture)", "priority": Priority.NORMAL, "category": "image"},
+    # The sewing-pattern parameters of an outfit piece in mode "template" read off its item picture
+    # (Ruling A138, app/core/garment_template.py::suggest_params; the Figure tab's "Suggest from picture").
+    # Vision + strict JSON; unrouted it borrows image_recognition.
+    "garment_template_params": {"label": "Garment Template Parameters (from item picture)", "priority": Priority.NORMAL, "category": "image"},
 
     # Misc
     "intro_memory":       {"label": "Intro Memory (Fresh Import)", "priority": Priority.NORMAL, "category": "helper"},
@@ -630,6 +634,13 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
     # One short English hair-only line for HAAR, read off the profile picture.
     "haar_hair_prompt": {
         "tools": False, "vision": True, "json": False, "min_context": 2048,
+        "model_class": "medium", "arch": "any", "hallucination_risk": "medium",
+        "creative": False, "language_de": False, "latency_sensitive": False,
+    },
+
+    # The template parameters of a garment as one JSON object, read off the item picture.
+    "garment_template_params": {
+        "tools": False, "vision": True, "json": True, "min_context": 2048,
         "model_class": "medium", "arch": "any", "hallucination_risk": "medium",
         "creative": False, "language_de": False, "latency_sensitive": False,
     },

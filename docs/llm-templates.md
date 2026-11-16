@@ -94,6 +94,7 @@ can add a template, not override one. That is where
 | `scene_photo.md` | `image_prompt` | `scene_photo` | Distill a photo prompt out of a room transcript |
 | `image_analysis.md` | `image_recognition` | `plugins/instagram/skill_post.py` (`_analyze_image`) | Vision-LLM objective image description (every vision call resolves `image_recognition`; `image_analysis` is the queue label) |
 | `haar_hair_prompt.md` | `haar_hair_prompt` | `core/garment_hair.suggest_haar_prompt` | Vision: the hairstyle in the profile picture as HAAR's one-line hair-only prompt (Ruling A105) |
+| `garment_template_params.md` | `garment_template_params` | `core/garment_template.suggest_params` | Vision + JSON: the sewing-pattern parameters of an outfit piece in mode `template` read off its item picture (Ruling A138) |
 | `instagram_caption.md` (in `plugins/instagram/templates/`) | `instagram_caption` | `plugins/instagram/skill_post.py` | Vision-LLM Instagram post caption |
 | `tasks/pose_animation_prompt.md` | `pose_animation_prompt` | `pose_animation_prompt.prepare_motion` | Turn a catalog pose or activity into English motion captions in the backend's caption style, a loop flag and an optional catalog proposal |
 | `animation_prompt.md` | `instagram_caption` | `routes/instagram`, `character_ops` (suggest-animate) | Image-to-video motion prompt |
