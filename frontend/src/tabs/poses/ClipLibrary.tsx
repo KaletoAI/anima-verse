@@ -568,7 +568,7 @@ export function ClipLibrary({
     finales: t('the finale clips change the same way: {kinds}').replace('{kinds}', finaleKinds.join(', ')),
     check: t('the green place check is stored'),
     'clear-check': t('the stored place check is cleared'),
-  })[step]), [bakeDirty, checkStored, clipShiftDirty, finaleKinds, heightDirty, orientDirty, placeCheck, savedCheck, t])
+  })[step]), [bakeDirty, checkStored, clipShiftDirty, finaleKinds, heightDirty, orientDirty, placeCheck, savedCheck, t, turnDirty])
   /** THE one save path: bake/shift (orient), heights (PATCH) and the place check, in that order. */
   const save = useCallback(async () => {
     if (!orientTarget || !canSave) return
