@@ -18,15 +18,23 @@
  *   against the slot point, now and as the LOOP MEDIAN, with the D4 lamp. The pose's `yaw_offset` is shown
  *   read-only with a link to its entry (D2).
  *
+ * * Toggles "Collision" and "Channels" (phase 3, off by default, remembered per browser user in localStorage) only
+ *   change what is DRAWN and printed — the sim always runs them, as in the game: each figure's capsules as other
+ *   figures engage them (pairs of two figures that overlap drawn red, the deepest pair in mm), and each channel with
+ *   its opening (a ring at the mouth while a partner chain occupies it; who engages whom, w, opening radius in mm).
+ *   The numbers come from `FigureRuntime.inspect` / `inspectFrame` (`placeFigures.ts`); client3d computes them on
+ *   the same runtime (`scripts/smoke_place_preview_partners.mjs`).
+ *
  * three.js is imported dynamically — the admin bundle must not carry it for tabs that never show 3D.
  */
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import type { Object3D, AnimationClip } from 'three'
 import {
-  FIGURE_HEIGHT_M, STRAND_RECORD_VERSION, alignmentDelta, alignmentLamp, anchorFigureBind, bindRelativeClip,
-  calibratedRoot, clipCalibration, createFigureRuntime, installSkinnedNormalCorrection, median, pairYaw,
-  pickModelVariant, placeModelSpec, restCorrections, restPoseOf, runFigureFrame, strandCandidates,
-  type AlignmentDraft, type AlignmentLamp, type ClipHeightOffsetsCm, type CollisionPayload, type FigureRuntime,
+  CAPSULE_REGION_COLORS, FIGURE_HEIGHT_M, OPENING_MARGIN_M, STRAND_RECORD_VERSION, alignmentDelta, alignmentLamp,
+  bindRelativeClip, calibratedRoot, capsuleWireframe, channelWireframe, clipCalibration,
+  installSkinnedNormalCorrection, median, pairYaw, pickModelVariant, placeCapsuleWireframe, placeChannelWireframe,
+  placeModelSpec, restCorrections, restPoseOf, strandCandidates,
+  type AlignmentDraft, type ChannelNow, type FrameInspection, type AlignmentLamp, type ClipHeightOffsetsCm, type CollisionPayload, type FigureRuntime,
   type HairStrandRecord, type SceneMarker, type SceneModelSpec, type SecondaryMotionPayload,
 } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -36,6 +44,7 @@ import { loadTestFigure, standHipsRef } from '../characters/Model3DViewer'
 import { rootAt, rootPath, ROLE_COLOR, type RootPath } from './ClipPreview'
 import { ModelTurnHint } from '../../components/ModelTurnHint'
 import { attachModelTurn, configureViewControls, poseMatrix } from '../../lib/modelTurn'
+import { mountPlaceFigure, placeInteraction, placePhaseB } from './placeFigures'
 
 export const MANNEQUIN = '__mannequin__'
 /** D5: figures in the preview, and how many of them run strand hair. */
@@ -78,6 +87,27 @@ export interface FigureReadout {
 /** What the Library needs to store a check (D3): the figures' readouts and whether they are all green. */
 export interface PlaceReadout { prop: string; places: string; figures: FigureReadout[]; allGreen: boolean
   worstYaw: number; worstPos: number }
+
+/** The partner overlays (phase 3): what is drawn, never what runs. */
+export interface PartnerShow { collision: boolean; channels: boolean }
+const SHOW_KEY = 'anima.placePreview.show'
+function loadShow(): PartnerShow {
+  try {
+    const v = JSON.parse(localStorage.getItem(SHOW_KEY) || '{}') as Partial<PartnerShow>
+    return { collision: !!v.collision, channels: !!v.channels }
+  } catch { return { collision: false, channels: false } }
+}
+/** Capsules of two figures that overlap; a channel occupied by a partner chain. */
+const CONTACT_COLOR = 0xff2d2d
+const OPENING_COLOR = 0x3fb950
+
+/** The printed partner readout (names = place letters). */
+interface PartnerInfo {
+  closest: { a: string; b: string; capA: string; capB: string; mm: number } | null
+  contacts: number
+  channels: number
+  engaged: { by: string; of: string; channel: string; w: number; openingMm: number | null }[]
+}
 
 const LAMP_COLOR: Record<AlignmentLamp, string> = { green: '#3fb950', yellow: '#d29922', red: '#f85149' }
 
@@ -128,7 +158,15 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   const [status, setStatus] = useState('')
   const [paused, setPaused] = useState(false)
   const [speed, setSpeed] = useState(1)
-  const [info, setInfo] = useState<{ ms: number; swingMm: number; strands: number; chains: number; figures: FigureReadout[] } | null>(null)
+  const [info, setInfo] = useState<{ ms: number; swingMm: number; strands: number; chains: number; figures: FigureReadout[]
+    partners: PartnerInfo | null } | null>(null)
+  const [show, setShow] = useState<PartnerShow>(loadShow)
+  const showRef = useRef(show); showRef.current = show
+  const toggleShow = (k: keyof PartnerShow) => setShow((cur) => {
+    const next = { ...cur, [k]: !cur[k] }
+    try { localStorage.setItem(SHOW_KEY, JSON.stringify(next)) } catch { /* private mode: not remembered */ }
+    return next
+  })
   const hostRef = useRef<HTMLDivElement>(null)
   const pausedRef = useRef(paused); pausedRef.current = paused
   const speedRef = useRef(speed); speedRef.current = speed
@@ -415,24 +453,14 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           const model = models.get(a.character)
           const clip = clipFiles.get(a.role)
           if (!model || !clip) continue
-          const inst = skclone(model.template) as Object3D
-          inst.traverse((o) => { o.frustumCulled = false })
-          const pivot = new THREE.Group()
-          pivot.add(inst)
-          anchorFigureBind(THREE, pivot, FIGURE_HEIGHT_M)
-          const root = new THREE.Group()
-          root.add(pivot)
+          const answer = model.answer
+          const { root, inst, runtime } = mountPlaceFigure(THREE, (o) => skclone(o) as Object3D, model.template,
+            { collision: answer?.model?.collision ?? null, motion: () => answer?.motion })
           stage.add(root)
           root.updateMatrixWorld(true)
           const hips = hipsOf(inst)
           const hb = hips ? hips.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3(0, FIGURE_HEIGHT_M * 0.55, 0)
           const bindInv = hips ? hips.getWorldQuaternion(new THREE.Quaternion()).invert() : new THREE.Quaternion()
-          const size = new THREE.Box3().setFromObject(inst).getSize(new THREE.Vector3())
-          const answer = model.answer
-          const runtime = createFigureRuntime(THREE, {
-            root, template: model.template, motion: () => answer?.motion, collision: answer?.model?.collision ?? null,
-            tier: 'full', bindRadius: Math.max(FIGURE_HEIGHT_M, Math.hypot(size.x / 2, size.y, size.z / 2)),
-          })
           let hasRecord = false
           if (model.record) {
             const record = model.record
@@ -488,9 +516,81 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         const frameState = { openingTurn: 0 }
         const entries = figs.map((f) => ({
           name: `${f.letter}:${f.character}`,
-          interaction: solo ? null : { id: f.place.marker.id, kind, members: figs.filter((g) => g.place.marker.id === f.place.marker.id).map((g) => `${g.letter}:${g.character}`) },
+          interaction: solo ? null : placeInteraction(kind, f.place.marker.id,
+            figs.filter((g) => g.place.marker.id === f.place.marker.id).map((g) => `${g.letter}:${g.character}`)),
           figure: f.runtime,
         }))
+        // ── partner overlays (phase 3): world space, on the scene root — the runtime reads the stage-turned figures ──
+        const overlay = new THREE.Group()
+        sceneObj.add(overlay)
+        const capLines = new Map<string, ReturnType<typeof capsuleWireframe>>()
+        const chLines = new Map<string, ReturnType<typeof channelWireframe>>()
+        const rings = new Map<string, InstanceType<typeof THREE.LineLoop>>()
+        const ringGeom = new THREE.BufferGeometry().setFromPoints(Array.from({ length: 33 },
+          (_, k) => new THREE.Vector3(Math.cos(k * Math.PI / 16), 0, Math.sin(k * Math.PI / 16))))
+        const ringMat = new THREE.LineBasicMaterial({ color: OPENING_COLOR, depthTest: false })
+        own.push(ringGeom, ringMat)
+        disposers.push(() => {
+          for (const l of [...capLines.values(), ...chLines.values()]) {
+            l.geometry.dispose(); (l.material as { dispose(): void }).dispose()
+          }
+          overlay.removeFromParent()
+        })
+        const nameToLetter = new Map(figs.map((f) => [`${f.letter}:${f.character}`, f.letter]))
+        const letterOf = (name: string) => nameToLetter.get(name) ?? name
+        let partnerInfo: PartnerInfo | null = null
+        const drawPartners = (res: ReturnType<typeof placePhaseB>) => {
+          const sh = showRef.current
+          overlay.visible = !!res
+          if (!res) { partnerInfo = null; return }
+          const frame = res.frame
+          const touching = new Set<string>()
+          for (const c of frame.contacts) { touching.add(`${c.a}|${c.capA}`); touching.add(`${c.b}|${c.capB}`) }
+          const usedCaps = new Set<string>(), usedCh = new Set<string>()
+          let channels = 0
+          for (const { name, inspection: ins } of res.figures) {
+            if (!ins) continue
+            if (sh.collision) for (const c of ins.capsules) {
+              const key = `${name}|${c.id}`
+              usedCaps.add(key)
+              let line = capLines.get(key)
+              if (!line) { line = capsuleWireframe(THREE, c.now, CAPSULE_REGION_COLORS[c.region]); capLines.set(key, line); overlay.add(line) }
+              else placeCapsuleWireframe(THREE, line, c.now)
+              ;(line.material as InstanceType<typeof THREE.LineBasicMaterial>).color.setHex(
+                touching.has(key) ? CONTACT_COLOR : CAPSULE_REGION_COLORS[c.region] ?? 0xffd166)
+            }
+            channels += ins.channels.length
+            if (sh.channels) for (const ch of ins.channels) {
+              const key = `${name}|${ch.id}`
+              usedCh.add(key)
+              const now = ch as unknown as ChannelNow
+              let line = chLines.get(key)
+              if (!line) { line = channelWireframe(THREE, now, CAPSULE_REGION_COLORS.channel); chLines.set(key, line); overlay.add(line) }
+              else placeChannelWireframe(THREE, line, now)
+              const open = ins.openings.find((o) => o.channel === ch.id)
+              let ring = rings.get(key)
+              if (!ring) { ring = new THREE.LineLoop(ringGeom, ringMat); ring.renderOrder = 999; rings.set(key, ring); overlay.add(ring) }
+              ring.visible = !!open
+              if (open) {
+                const rad = open.radius + OPENING_MARGIN_M
+                ring.position.set(ch.o[0], ch.o[1], ch.o[2])
+                ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(ch.u[0], ch.u[1], ch.u[2]))
+                ring.scale.setScalar(rad)
+              }
+            }
+          }
+          for (const [k, l] of capLines) l.visible = usedCaps.has(k)
+          for (const [k, l] of chLines) l.visible = usedCh.has(k)
+          for (const [k, r] of rings) if (!usedCh.has(k)) r.visible = false
+          const best = frame.closest.reduce<FrameInspection['closest'][number] | null>((w, c) => (!w || c.depth > w.depth ? c : w), null)
+          partnerInfo = {
+            closest: best ? { a: letterOf(best.a), b: letterOf(best.b), capA: best.capA, capB: best.capB, mm: best.depth * 1000 } : null,
+            contacts: frame.contacts.length, channels,
+            engaged: frame.engagements.map((g) => ({ by: letterOf(g.by), of: letterOf(g.of), channel: g.channel, w: g.w,
+              openingMm: g.opening === null ? null : g.opening * 1000 })),
+          }
+        }
+
         const scratch = new THREE.Vector3()
         const q = new THREE.Quaternion()
         const fwd = new THREE.Vector3()
@@ -535,8 +635,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             f.root.updateMatrixWorld(true)
             f.runtime.poseStep({ realDelta: dt })
           }
-          runFigureFrame(entries, frameState)   // phase B
+          const wantInspect = showRef.current.collision || showRef.current.channels
+          const inspection = placePhaseB(entries, frameState, wantInspect)   // phase B (+ the partner readout)
           ms = ms * 0.9 + (performance.now() - t0) * 0.1
+          drawPartners(inspection)
           // readout: hips in stage space against the place
           for (const f of figs) {
             if (!f.hips) continue
@@ -580,7 +682,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
                 lamp: Number.isFinite(f.medYaw) ? alignmentLamp(medYaw, medPos) : null }
             })
             setInfo({ ms, swingMm, strands: figs.filter((f) => f.runtime.strandRunning).length,
-              chains: figs.filter((f) => !f.runtime.strandRunning && f.chains > 0).length, figures: rows })
+              chains: figs.filter((f) => !f.runtime.strandRunning && f.chains > 0).length, figures: rows,
+              partners: partnerInfo })
+            host.dataset.partners = partnerInfo ? JSON.stringify(partnerInfo) : ''
             host.dataset.figures = JSON.stringify(figs.map((f) => {
               f.hips?.getWorldPosition(scratch).applyMatrix4(stageInv)
               return { letter: f.letter, time: +time.toFixed(4), hips: [scratch.x, scratch.y, scratch.z].map((v) => +v.toFixed(5)),
@@ -650,6 +754,12 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         ))}
         <button type="button" className="ga-btn ga-btn-sm" disabled={!places.length} onClick={() => fill(true)}
           title={t('Every place this clip fits gets a figure (at most 6).')}>{t('Fill all with this clip')}</button>
+        <label title={t('Draw each figure’s collision capsules as other figures engage them; overlapping pairs of two figures turn red.')}>
+          <input type="checkbox" checked={show.collision} onChange={() => toggleShow('collision')} /> {t('Collision')}
+        </label>
+        <label title={t('Draw each figure’s channels; a ring at the mouth while a partner’s chain opens it.')}>
+          <input type="checkbox" checked={show.channels} onChange={() => toggleShow('channels')} /> {t('Channels')}
+        </label>
         {info ? (
           <span style={{ marginLeft: 'auto', opacity: 0.8 }}
             title={t('Phase B of the two-phase frame: secondary motion and strand hair. Strand hair runs for the 2 figures nearest the camera.')}>
@@ -743,6 +853,39 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             </tbody>
           </table>
           {!places.length && propId ? <div className="ga-hint">{t('This prop has no places.')}</div> : null}
+          {(show.collision || show.channels) && info?.partners ? (
+            <div style={{ marginTop: 6, borderTop: '1px solid var(--border, #30363d)', paddingTop: 4 }} data-testid="place-partners">
+              {show.collision ? (
+                <div title={t('Closest capsule pair of two figures: positive = they overlap by that much, negative = the gap.')}>
+                  {info.partners.closest ? (
+                    <>
+                      <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 5, marginRight: 4,
+                        background: info.partners.closest.mm > 0 ? '#f85149' : '#3fb950' }} />
+                      {t('Closest pair {a} {capA} ↔ {b} {capB}: {mm} mm')
+                        .replace('{a}', info.partners.closest.a).replace('{capA}', info.partners.closest.capA)
+                        .replace('{b}', info.partners.closest.b).replace('{capB}', info.partners.closest.capB)
+                        .replace('{mm}', `${info.partners.closest.mm > 0 ? '+' : ''}${info.partners.closest.mm.toFixed(1)}`)}
+                      {' · '}{t('{n} overlapping').replace('{n}', String(info.partners.contacts))}
+                    </>
+                  ) : t('Fewer than two figures with collision capsules.')}
+                </div>
+              ) : null}
+              {show.channels ? (
+                <div title={t('A chain of one figure engaged in another figure’s channel: its weight w and the radius the channel opens to.')}>
+                  {info.partners.engaged.length ? info.partners.engaged.map((g, i) => (
+                    <div key={i}>
+                      {t('{by} → {of} {channel}: w {w}, opening {mm}')
+                        .replace('{by}', g.by).replace('{of}', g.of).replace('{channel}', g.channel)
+                        .replace('{w}', g.w.toFixed(2))
+                        .replace('{mm}', g.openingMm === null ? t('pending') : `${g.openingMm.toFixed(1)} mm`)}
+                    </div>
+                  )) : (info.partners.channels
+                    ? t('{n} channels, none engaged.').replace('{n}', String(info.partners.channels))
+                    : t('No figure carries a channel.'))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>
