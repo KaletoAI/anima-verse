@@ -369,6 +369,9 @@ LEFT_OFF_SHAPE = "Body shape not built"
 #: ``Figure.left_out`` of an own-mesh piece fitted on an earlier body, not yet on the newest one (Ruling A131): the
 #: Build refits it from its kept source on the CPU after the new body.
 LEFT_OFF_NEW_BODY = "Waiting for the new body"
+#: ``Figure.left_out`` of an own-mesh piece whose kept mesh is not fitted on the delivered body yet and needs only a
+#: CPU fit (Ruling A134: e.g. the body was rebuilt under the same signature — ``garments.cpu_refit_suffices``).
+LEFT_OFF_REFIT = "Not fitted on this body yet — the next Build fits it on the CPU (0 hub jobs)"
 #: ``Figure.notes`` of a piece worn open shown with its closed mesh until its open mesh is built (ruling F13 b).
 SHOWN_CLOSED = "Shown closed until its open mesh is built"
 #: The note of a worn-open piece's ONE pending change while its open mesh is missing (ruling F13 b).
@@ -574,7 +577,8 @@ def _not_fitted_reason(character_name: str, item_id: str, *, base_sha: str, prof
                        state: Optional[str] = None) -> str:
     """Why an own-mesh piece has no fit (in ``state``, None: the worn one): its chain's persisted failure
     (``base_body.MESH_ITEM_CHAIN_FAILED``), else ``LEFT_OFF_NEW_BODY`` when it was fitted on an earlier body
-    (Ruling A131), else ``NO_MESH_FIT`` / ``BASE_MODEL_MISSING``."""
+    (Ruling A131), else ``LEFT_OFF_REFIT`` when a CPU fit alone makes it (Ruling A134), else ``NO_MESH_FIT`` /
+    ``BASE_MODEL_MISSING``."""
     from app.core import base_body, garments
     try:
         failure = garments.cached_failure(character_name, item_id, profile=profile, state=state)
@@ -586,6 +590,8 @@ def _not_fitted_reason(character_name: str, item_id: str, *, base_sha: str, prof
     if garment_store.fitted_on_earlier_body(character_name, item_id,
                                             base_body.base_signature(character_name, profile=profile)):
         return LEFT_OFF_NEW_BODY
+    if base_sha and garments.cpu_refit_suffices(character_name, item_id, profile=profile, state=state):
+        return LEFT_OFF_REFIT   # Ruling A134: same rule as the Wardrobe's piece status (garment_set.piece_status)
     return base_body.NO_MESH_FIT if base_sha else base_body.BASE_MODEL_MISSING
 
 

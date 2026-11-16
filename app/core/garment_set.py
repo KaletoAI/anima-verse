@@ -289,7 +289,10 @@ def piece_status(info: Dict[str, Any], *, worn: bool, base_model_ready: bool,
         if failed and failed.get("step") and failed.get("error"):
             reason = f"{failed['step']} — {failed['error']}"
         else:
-            reason = base_body.NO_MESH_FIT if base_model_ready else base_body.BASE_MODEL_MISSING
+            from app.core.figure import LEFT_OFF_REFIT
+            # Ruling A134: the figure's rule (``figure._not_fitted_reason``) — a CPU fit alone is no "not ready".
+            reason = (LEFT_OFF_REFIT if base_model_ready and info.get("cpu_refit")
+                      else base_body.NO_MESH_FIT if base_model_ready else base_body.BASE_MODEL_MISSING)
     out = {"state": state, "step": running, "painted": painted, "reason": reason,
            "queue_position": info.get("queue_position")}
     if left_out or footwear:

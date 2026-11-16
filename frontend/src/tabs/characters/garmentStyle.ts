@@ -33,7 +33,11 @@ export const ROW: CSSProperties = { display: 'flex', gap: 12, alignItems: 'cente
 
 /** The warning of an own-mesh piece the outfit model is missing in outfit body mode mesh: no accepted fit
  *  yet, so it is never meshed into the outfit body (server `base_body.MESH_ITEM_NOT_READY`). */
+/** Ruling A134 (server `figure.LEFT_OFF_REFIT`): the kept mesh needs only a CPU fit on this body — not "not ready". */
+export const REFIT_REASON = 'Not fitted on this body yet — the next Build fits it on the CPU (0 hub jobs)'
+
 export function meshNotReadyText(t: (key: string) => string, item: string, reason: string | null | undefined): string {
+  if (reason === REFIT_REASON) return `${item}: ${t(REFIT_REASON)}`
   return t('{item}: own mesh not ready — not shown until its mesh is accepted ({reason})')
     .replace('{item}', item).replace('{reason}', t(reason || ''))
 }

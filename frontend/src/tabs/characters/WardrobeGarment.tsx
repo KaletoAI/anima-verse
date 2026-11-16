@@ -72,7 +72,7 @@ import { GarmentFailure, GateChips, RefitNotice, RunButton, RunStatusLine } from
 import { GarmentStepGrid } from './GarmentStepGrid'
 import { GarmentRefusedAttempts } from './GarmentRefusedAttempts'
 import type { ImageStepSpec } from './GarmentSteps'
-import { FOOTWEAR_STEP_LABELS, ROW, WARN_STYLE, footwearRunPlan, meshNotReadyText, pieceViewDueText } from './garmentStyle'
+import { FOOTWEAR_STEP_LABELS, ROW, WARN_STYLE, footwearRunPlan, meshNotReadyText, pieceViewDueText, REFIT_REASON } from './garmentStyle'
 import type { ChipSpec, GarmentRunBody } from './garmentStyle'
 import { FootwearSteps } from './FootwearSteps'
 import { Model3DViewer } from './Model3DViewer'
@@ -206,6 +206,11 @@ const CHIP: CSSProperties = {
   whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%',
 }
 
+/** Ruling A134: the offer beside a stale fit whose kept mesh only needs a CPU fit on this body. */
+const REFIT_OFFER_TEXT = 'the current mesh keeps working: it is fitted on this body on the CPU (0 hub jobs) — now or at the next Build'
+const REFIT_OFFER_TITLE = 'The mesh made for the earlier body is fitted onto the current one; no images or mesh are made again.'
+const REGENERATE_OPTIONAL_TITLE = 'Optional: renders new images and a new mesh on the current body — a closer fit where the body shape changed a lot. The current mesh stays in use until the new one is fitted.'
+
 /** The row chip: running, in the body / missing (and why), or how far the chain got. */
 export function PieceStatusChip({ status, name }: { status: PieceStatus; name: string }) {
   const { t } = useI18n()
@@ -221,7 +226,7 @@ export function PieceStatusChip({ status, name }: { status: PieceStatus; name: s
   } else if (status.missing) {
     // Mesh mode: not painted into the outfit body, so not shown until the mesh is accepted.
     text = meshNotReadyText(t, name, status.reason)
-    color = 'var(--warning, #d29922)'
+    color = status.reason === REFIT_REASON ? 'var(--accent, #6aa9ff)' : 'var(--warning, #d29922)'
   } else if (status.state === 'fitted') {
     color = 'var(--success, #3fb950)'
     // Layered over the worn pieces under it (garment_layers); one without a fit is painted on.
@@ -923,7 +928,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
           {info.steps?.length ? <ModelSteps steps={info.steps} /> : null}
           <GarmentFailure garment={footwear} stepLabels={FOOTWEAR_STEP_LABELS} />
           {info.status.missing && !running ? (
-            <div className="ga-hint" style={WARN_STYLE}>
+            <div className="ga-hint" style={info.status.reason === REFIT_REASON ? undefined : WARN_STYLE}>
               {meshNotReadyText(t, info.name || name, info.status.reason)}
             </div>
           ) : null}
@@ -936,7 +941,23 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
       <div className="ga-garment-dialog-body">
         <div className="ga-garment-dialog-col">
           {/* A fit-settings change alone is shown (with its CPU-only Re-fit) in the fit settings beside the viewer. */}
-          {garment && garment.stale_reasons.some((r) => r !== 'fit_settings_changed') ? (
+          {garment && garment.stale_reasons.some((r) => r !== 'fit_settings_changed') && garment.cpu_refit ? (
+            // Ruling A134: the kept mesh is fitted on this body on the CPU — Regenerate is an offer, never a must.
+            <div style={{ ...ROW, gap: 8, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--accent, #6aa9ff)' }}>
+              <span title={t(REFIT_OFFER_TITLE)}>
+                {garment.stale_reasons.map((r) => t(STALE_LABELS[r] || r)).join(' · ')} — {t(REFIT_OFFER_TEXT)}
+              </span>
+              <RunButton feedback={feedback} slot="stale" disabled={busy} onClick={() => onRun({}, 'stale')}
+                title={t(REFIT_OFFER_TITLE)} label={t('Re-fit now (CPU, 0 hub jobs)')} />
+              {garment.regenerate ? (
+                <RunButton feedback={feedback} slot="regenerate" disabled={busy}
+                  onClick={() => onRun({ step: garment.regenerate!.step, force: true, chain: true }, 'regenerate')}
+                  title={t(REGENERATE_OPTIONAL_TITLE)}
+                  label={t('Regenerate (optional, {n} hub jobs)').replace('{n}',
+                    garment.regenerate.hub_jobs == null ? '?' : String(garment.regenerate.hub_jobs))} />
+              ) : null}
+            </div>
+          ) : garment && garment.stale_reasons.some((r) => r !== 'fit_settings_changed') ? (
             <div style={{ ...ROW, gap: 8, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--warning, #d29922)' }}>
               <span style={WARN_STYLE} title={t('The previous mesh stays in use until the new one is fitted.')}>
                 {garment.stale_reasons.map((r) => t(STALE_LABELS[r] || r)).join(' · ')}
@@ -1043,7 +1064,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
           ) : null}
           <GarmentFailure garment={garment} stepLabels={STEP_LABELS} />
           {info.status.missing && !running ? (
-            <div className="ga-hint" style={WARN_STYLE}>
+            <div className="ga-hint" style={info.status.reason === REFIT_REASON ? undefined : WARN_STYLE}>
               {meshNotReadyText(t, info.name || name, info.status.reason)}
             </div>
           ) : null}

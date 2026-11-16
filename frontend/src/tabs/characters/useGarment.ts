@@ -417,6 +417,10 @@ export interface GarmentInfo {
   /** The current fit was refitted from images + mesh made on the previous
    *  base (server `garment_source`); null otherwise / on an older server. */
   refit?: GarmentRefit | null
+  /** Ruling A134: the fit is due but a CPU fit of the kept mesh on this body suffices (0 hub jobs; the next Build). */
+  cpu_refit?: boolean
+  /** Ruling A134: the OPTIONAL forced run of the whole chain from `step` and its hub jobs (null = unknown). */
+  regenerate?: { step: string; hub_jobs: number | null } | null
   /** Current fsig fit on screen, or an older one and why (server). */
   preview_freshness?: Freshness | null
   /** Ruling A46: where each piece-only view comes from; null/absent for a piece without the choice. */

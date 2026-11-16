@@ -5374,6 +5374,39 @@ def piece_views_info(character_name: str, item_id: str, fsig: str,
     return out
 
 
+def cpu_refit_suffices(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None,
+                       state: Optional[str] = None) -> bool:
+    """Ruling A134: whether the piece's due work is a fit on the CPU alone — the plain run (what the Build runs for
+    it) has steps and 0 hub jobs (``run_estimate``: the kept mesh of the current fsig, or a source made on an earlier
+    body, is fitted on the current body). Read-only, never raises."""
+    try:
+        estimate = run_estimate(character_name, item_id, profile=profile, state=state)
+    except Exception:  # noqa: BLE001 — a reason, never a failure of the caller
+        logger.debug("CPU refit check %s/%s failed", character_name, item_id, exc_info=True)
+        return False
+    return bool(estimate.get("steps")) and estimate.get("hub_jobs") == 0
+
+
+def _refit_offer(character_name: str, item_id: str, kind: str, method: str, fsig: Optional[str],
+                 steps: Dict[str, Any], stale: List[str], profile: Dict[str, Any]) -> Dict[str, Any]:
+    """``{cpu_refit, regenerate}`` of ``garment_info`` (Ruling A134): ``cpu_refit`` True when the current fsig has
+    no accepted fit on this body and the plain run is a CPU fit only (``cpu_refit_suffices``); ``regenerate``
+    ``{step, hub_jobs}`` — the OPTIONAL forced run of the whole chain (``run_estimate(from_step=…)``) offered
+    beside a stale fit — else None."""
+    from app.core import garment_store as gs
+    fitted = bool(fsig and (steps.get("fit") or {}).get("status") == "accepted")
+    cpu = bool(fsig and not fitted and cpu_refit_suffices(character_name, item_id, profile=profile))
+    regenerate = None
+    first = next(iter(gs.steps_for(kind, method)), None) if fsig else None
+    if first and (stale or cpu):
+        try:
+            jobs = run_estimate(character_name, item_id, profile=profile, from_step=first).get("hub_jobs")
+        except Exception:  # noqa: BLE001
+            jobs = None
+        regenerate = {"step": first, "hub_jobs": jobs}
+    return {"cpu_refit": cpu, "regenerate": regenerate}
+
+
 def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     """UI info of one garment (the hair row, the own-mesh dialog): fsig, the method and its
     source, description, every step's files and gate numbers (the steps of
@@ -5527,6 +5560,7 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
                      "registration": {"shift": reg.get("shift_abs"), "scale": reg.get("scale")} if reg else None,
                      "first_step": next(iter(gs.steps_for(kind, method)), None),
                      "created_at": fit_record.get("created_at")}
+    refit_offer = _refit_offer(character_name, item_id, kind, method, fsig, steps, stale, profile)
     status = gs.status(character_name, item_id)
     queue = queue_state(character_name, item_id)
     failed = status["failed"]
@@ -5554,6 +5588,9 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
         # Ruling UI3 a: when the previewed fit was made (the 3D preview's caption).
         "preview_built_at": model_overview.built_at(preview) if preview_url else None,
         "served_fsig": served_fsig, "refit": refit,
+        # Ruling A134: the fit is due but a CPU re-fit of the kept mesh on this body suffices (``cpu_refit``, the
+        # next Build does it, 0 hub jobs); ``regenerate`` is the optional full re-make and its hub jobs.
+        **refit_offer,
         # Ruling A46: where each piece-only view comes from (the setting, the reason, what is due).
         "piece_views": (piece_views_info(character_name, item_id, fsig, _item_, checking=checking)
                         if fsig and method == gs.EDIT_CHAIN and kind == _clothing() else None),
