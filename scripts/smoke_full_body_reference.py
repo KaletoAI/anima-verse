@@ -166,7 +166,8 @@ body_slots:
     prompt:
       exposed: "exposed {size} surface"
 """
-FRAMING = "Full body shot from head to feet inside the frame"
+# Ruling A111: framing words for both feet with floor below.
+FRAMING = "Full body shot from head to feet inside the frame, both feet fully visible with empty floor below them"
 FINISH = "neutral studio lighting, plain clean background, photorealistic, high detail"
 #: The plain body's extra negative without a mesh-part slot (Ruling A95: nothing worn).
 BASE_NEG = "clothing, underwear, jewellery"

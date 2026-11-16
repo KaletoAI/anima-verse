@@ -219,7 +219,7 @@ FEET = ("the whole figure from head to feet inside the frame with both hands ins
         "the head and below the feet")
 FEET_KW = "both feet and both hands fully inside the frame, empty margin above the head and below the feet"
 BALD = "completely bald with a smooth bare scalp"
-BODY = "an unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin"
+BODY = "an unclothed body with the same skin and body surface as the person in the picture, realistic detailed texture, natural matte look"
 BLOCK_HEAD = BALD + ", " + BODY
 APPEARANCE = "female, 30 years old, green eyes, olive skin, average height, athletic build"
 APPEARANCE_BACK = "female, 30 years old, olive skin, average height, athletic build"
@@ -233,15 +233,16 @@ NEGATIVE = BASE + ", visible marking"
 # hand with clean separators and the neutral stand-in fragments of frag_a /
 # frag_b: subject sentence, the character block (bald, body text,
 # appearance), ONE framing clause, background, ONE lighting clause, focus,
-# then the pose text. Counted by hand: subject 15 words, block head 22 (bald
-# 7, body 15 — the natural-skin body text of 2026-11-13 without the
-# plain-surface clause, Ruling A74a), appearance 18 (incl. the two 3-word
-# fixture fragments), framing 25, background 3, lighting 11, focus 2, pose
-# 40 = 136 words; "completely" is word 16 and "unclothed" word 24
+# then the pose text. Counted by hand: subject 15 words, block head 29 (bald
+# 7, body 22 — Ruling A111's "an unclothed body with the same skin and body
+# surface as the person in the picture" 16 + "realistic detailed texture" 3
+# + "natural matte look" 3), appearance 18 (incl. the two 3-word fixture
+# fragments), framing 25, background 3, lighting 11, focus 2, pose
+# 40 = 143 words; "completely" is word 16 and "unclothed" word 24
 # (15 + 7 + 2).
 TARGET = ("a full-body render of the character as a realistic 3D figure with lifelike skin textures, "
-          "completely bald with a smooth bare scalp, an unclothed body with realistic natural skin, visible pores, "
-          "subtle skin tone variation, matte skin, "
+          "completely bald with a smooth bare scalp, an unclothed body with the same skin and body surface as the person in the picture, "
+          "realistic detailed texture, natural matte look, "
           "female, 26 years old, blue eyes, light skin, average height, athletic build, slot fragment a, "
           "slot fragment b, the whole figure from head to feet inside the frame with both hands inside it and empty "
           "margin above the head and below the feet, plain neutral background, flat even shadowless lighting on the "
@@ -466,8 +467,8 @@ def main() -> int:
         check("front final == TARGET", front_final, TARGET)
         check("block right after the subject", front_final.startswith(SUBJECT + ", " + BLOCK_HEAD + ", female"), True)
         words = front_final.split()
-        check("bald at word 16, unclothed at word 24, 136 words",
-              (words.index("completely") + 1, words.index("unclothed") + 1, len(words)), (16, 24, 136))
+        check("bald at word 16, unclothed at word 24, 143 words",
+              (words.index("completely") + 1, words.index("unclothed") + 1, len(words)), (16, 24, 143))
         check("pose right after the style", ", sharp focus, standing upright facing the camera" in front_final, True)
         for view, want in (("back", VIEW_BACK), ("left", VIEW_LEFT), ("right", VIEW_RIGHT)):
             for family in ("natural", "keywords"):

@@ -157,6 +157,8 @@ def old_code(root: Path, names) -> dict:
     a74a = {"BASE_BLOCK_HEAD": "", **{key: getattr(base_body, key) for key in (
         "BODY_TEXT", "BODY_NEGATIVE", "BASE_NEGATIVE", "HAIRED_BASE_NEGATIVE", "DRAFT_NEGATIVE",
         "HAIRED_DRAFT_NEGATIVE")}}
+    # Ruling A111: the old code is fed the body text the stored bases were made with — the fingerprint form.
+    a74a["BODY_TEXT"] = base_body.BODY_TEXT_FINGERPRINT
     run = subprocess.run([sys.executable, "-c", OLD_PROBE, str(root / "plugins"), *names], cwd=str(old),
                          capture_output=True, text=True,
                          env={**os.environ, "PYTHONPATH": str(old), "A74A_TEXTS": json.dumps(a74a)})

@@ -23,8 +23,8 @@ Fixtures (template human-roleplay, profile image <name>_1.png, skin olive, eyes 
 
 Hand-derived from the ruling (the user: the reference image is the truth; precedent Ruling A29: a view change
 never re-describes what the picture shows) with BALD = "completely bald with a smooth bare scalp", BODY = "an
-unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin" (the human
-package adds no base-body text):
+unclothed body with the same skin and body surface as the person in the picture, realistic detailed texture,
+natural matte look" (Ruling A111; the human package adds no base-body text):
 
 [1] The Appearance's hair text of Beard is the hair slot's "{length} {color} hair" = "short auburn hair" (the beard
     clause names no \\bhair\\b) — the plain hair text, so hair_from_picture(Beard) True; Rewritten's plain text
@@ -61,7 +61,7 @@ package adds no base-body text):
       Bare (text front): prompt_fingerprint == the old module's and front_reference {"method": "text"} on both:
         current.
 [5] Fails on the old code (commit OLD = 83855a099, before the ruling — never HEAD): its edit_character(Beard) is
-    "short auburn hair, " + BODY (the hair re-described, no face, no beard) and its base_prompt takes no
+    "short auburn hair, " + OLD_BODY (its pre-A111 body text; the hair re-described, no face, no beard) and its base_prompt takes no
     ``picture`` — each of [1]/[2] would fail there.
 [6] Outbound attempts: 0.
 """
@@ -85,7 +85,9 @@ OUTBOUND = []
 CALLS = []
 
 BALD = "completely bald with a smooth bare scalp"
-BODY = "an unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin"
+BODY = "an unclothed body with the same skin and body surface as the person in the picture, realistic detailed texture, natural matte look"
+#: The body text of the pinned old code (before Ruling A111).
+OLD_BODY = "an unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin"
 VIEW_HAIR = "the same hairstyle, hair length, hair volume and hair colour as the reference"
 BEARD = "the same facial hair as the reference"
 POSE_NEG = ("hands touching body, fists, curled fingers, fused fingers, mitten hands, cropped feet, feet cut off, "
@@ -288,7 +290,7 @@ def main() -> int:
         check("Bare prompts current", base_body.base_prompts_freshness("Bare")["state"], "current")
 
         print("[5] fails on the old code")
-        check("old edit block re-describes the hair", old.edit_character("Beard"), "short auburn hair, " + BODY)
+        check("old edit block re-describes the hair", old.edit_character("Beard"), "short auburn hair, " + OLD_BODY)
         check("old edit block != today's", old.edit_character("Beard") != blocks["Beard"], True)
         try:
             old.base_prompt("Beard", "back", picture=True)

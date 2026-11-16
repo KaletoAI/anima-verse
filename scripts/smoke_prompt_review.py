@@ -201,7 +201,7 @@ def main() -> int:
               (nat.count("lighting"), "relit" in nat, "uniform illumination" in nat), (1, False, False))
         check("BALD_HEAD", base_body.BALD_HEAD, "completely bald with a smooth bare scalp")
         check("BODY_TEXT", base_body.BODY_TEXT,
-              "an unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin")
+              "an unclothed body with the same skin and body surface as the person in the picture, realistic detailed texture, natural matte look")
         check("no BASE_BLOCK_HEAD (Ruling A74a)", hasattr(base_body, "BASE_BLOCK_HEAD"), False)
         check("no negation in the block words",
               any(w in t for t in (base_body.BALD_HEAD, base_body.BODY_TEXT) for w in ("no ", "without")), False)

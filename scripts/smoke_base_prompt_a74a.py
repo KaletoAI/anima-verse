@@ -112,7 +112,7 @@ def check(label, got, want):
 
 
 BALD = "completely bald with a smooth bare scalp"
-BODY = "an unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin"
+BODY = "an unclothed body with the same skin and body surface as the person in the picture, realistic detailed texture, natural matte look"
 APPEARANCE = "female, 30 years old, green eyes, olive skin, average height, athletic build"
 HAIR_NEG = ("hair, long hair, short hair, ponytail, braid, bun, fringe, bangs, wig, headscarf, hat, hood, "
             "stubble on the scalp, hair on the shoulders, hair on the back")

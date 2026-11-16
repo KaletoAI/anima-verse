@@ -161,7 +161,7 @@ def old_names(path: str, names) -> dict:
 
 
 APPEARANCE = "female, 30 years old, green eyes, olive skin, average height, athletic build"
-BODY_TEXT = "an unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin"
+BODY_TEXT = "an unclothed body with the same skin and body surface as the person in the picture, realistic detailed texture, natural matte look"
 CHEST = ("no hair on the chest or in front of the shoulders, chest, collarbones and front of the shoulders "
          "fully uncovered")
 REF = "the same hairstyle, hair length and hair volume as the reference"

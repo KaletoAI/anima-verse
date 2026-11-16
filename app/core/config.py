@@ -157,11 +157,16 @@ _NEG_TPOSE = ("illustration, anime, painting, airbrushed skin, plastic skin, smo
 # not a mesh input — the framing first (models weigh the start), then the figure, then light and finish
 # (the user's validated prompt shape, 2026-11-15). Its negative keeps only picture quality and framing: no
 # pose terms (the A-pose belongs to the front edit), nothing that names the figure.
-_REFERENCE_STYLE = ("Full body shot from head to feet inside the frame, {character}, neutral studio lighting, "
+# Ruling A111 (2026-11-16): both feet whole with floor below them — a backend that keeps the source frame
+# (MiniMax-H3-Image) turns a reference with cut-off feet into a front without feet. Nothing records or
+# hashes this text for freshness (a reference is kept by its image sha256), so no reference ages.
+_REFERENCE_STYLE = ("Full body shot from head to feet inside the frame, both feet fully visible with empty floor "
+                    "below them, {character}, neutral studio lighting, "
                     "plain clean background, photorealistic, high detail")
 _NEG_REFERENCE = ("illustration, anime, painting, cartoon, drawing, sketch, plastic skin, airbrushed skin, "
                   "overexposed, glossy, watermark, signature, text, logo, deformed, blurry, low quality, "
-                  "dramatic lighting, harsh shadows, cropped, out of frame, cropped hands, cropped feet, feet cut off")
+                  "dramatic lighting, harsh shadows, cropped, out of frame, cropped hands, cropped feet, feet cut off, feet out of frame, "
+                  "cropped legs, legs cut off")
 _NEG_TPOSE_ANIMAL = ("illustration, anime, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, rim light, backlighting, cropped, out of frame, cropped legs, tail cut off, close-up, portrait, head only, human, person, hands, anthropomorphic, standing on two legs, clothing, costume, looking at the camera, head turned toward the camera, open mouth, sitting, lying down, curled up, walking, mid-stride, one paw raised, staggered legs, head turned, looking at viewer")
 
 # Negatives of the OPTIONAL extra mesh views (back / left+right profile).

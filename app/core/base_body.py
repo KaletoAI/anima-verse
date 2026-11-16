@@ -115,7 +115,26 @@ BALD_HEAD = "completely bald with a smooth bare scalp"
 #: body text no longer asks for a plain surface, and the block no longer
 #: opens with a safe-content tag — the base front shows the body as the
 #: character's description and the active packs' slots make it.
-BODY_TEXT = "an unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin"
+#: Ruling A111 (2026-11-16): the skin is taken FROM the reference, never prescribed — a figure whose body is not
+#: human skin (gel, stone, scales) kept its hair from the picture but was given human skin by the old
+#: "realistic natural skin, visible pores" text. User-tested on a gel and a human figure: both right.
+#: The Ruling A111 wording itself — ``BODY_TEXT`` is it; ``_fingerprint_form`` matches this literal.
+BODY_TEXT_A111 = ("an unclothed body with the same skin and body surface as the person in the picture, realistic "
+                  "detailed texture, natural matte look")
+BODY_TEXT = BODY_TEXT_A111
+#: Ruling A111 (user decision: the new wording must not age anything — no ``OLDER_PROMPTS``, no Build or
+#: ``base_refresh`` re-render, base names unchanged). ONE rule: every prompt FINGERPRINT
+#: (``prompt_fingerprint``, ``_edit_fingerprint``, the A74a carry-over in ``_view_carried``) hashes the
+#: A111 wording as the wording it replaced, ``BODY_TEXT_FINGERPRINT``, so the stored fingerprints stay
+#: equal byte for byte. Only that literal is mapped: any other change of ``BODY_TEXT`` (a clause added,
+#: a later rewording) shows in the fingerprint and ages bases as before. ``base_identity`` never hashed
+#: the body text.
+BODY_TEXT_FINGERPRINT = "an unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin"
+
+
+def _fingerprint_form(block: Optional[str]) -> Optional[str]:
+    """``block`` with ``BODY_TEXT_A111`` written as ``BODY_TEXT_FINGERPRINT`` (Ruling A111)."""
+    return block.replace(BODY_TEXT_A111, BODY_TEXT_FINGERPRINT) if block else block
 #: Use case (style, negative) per base view — their own, so the whole-body
 #: T-pose path keeps "tpose" / "tpose_back" / "tpose_side" untouched. The
 #: edit views' use cases carry no style: their whole prompt is the short
@@ -524,7 +543,7 @@ def prompt_fingerprint(character_name: str, *, profile: Optional[Dict[str, Any]]
     profile = _profile_of(character_name, profile)
     if picture is None:
         picture = front_from_picture(character_name, profile=profile)
-    payload: Dict[str, Any] = {view: [base_character(character_name, view, profile=profile),
+    payload: Dict[str, Any] = {view: [_fingerprint_form(base_character(character_name, view, profile=profile)),
                                       *base_prompt(character_name, view, profile=profile, picture=picture)]
                                for view in BASE_VIEWS}
     from app.core import base_skin
@@ -584,7 +603,8 @@ def _view_carried(character_name: str, view: str, meta: Dict[str, Any], profile:
         return False
     if view != "front":
         return True
-    if not _drops_only(base_character(character_name, view, profile=profile), meta.get("final_prompt")):
+    if not _drops_only(_fingerprint_form(base_character(character_name, view, profile=profile)),
+                       meta.get("final_prompt")):
         return False
     from app.core import base_skin
     made_from = meta.get("front_reference") if isinstance(meta.get("front_reference"), dict) else {}
@@ -850,7 +870,7 @@ def _edit_fingerprint(character_name: str, profile: Dict[str, Any]) -> str:
     """12 hex over the texts the front edit is made with (block, pose text,
     negative) — part of ``front_reference``."""
     prompt, negative = base_prompt(character_name, "front", profile=profile, picture=True)
-    raw = json.dumps([edit_character(character_name, profile=profile), prompt, negative], ensure_ascii=False)
+    raw = json.dumps([_fingerprint_form(edit_character(character_name, profile=profile)), prompt, negative], ensure_ascii=False)
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
 
 
