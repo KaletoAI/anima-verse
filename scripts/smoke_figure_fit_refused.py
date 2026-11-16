@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Ruling A23 a/b/c (T15-F1 of plan ``docs/superpowers/plans/2026-11-12-unified-worn-pieces.md``): a wanted
-own-mesh piece whose fit on the wanted body shape is refused never leads to a published outfit model lacking it,
-the refusal is a cached failure an automatic Build does not re-plan, a manual Build re-fits it once, and the
-resolver never puts the (mesh-ready) piece into an interim body while a figure is shown.
+"""Ruling A23 b/c as amended by Ruling A119 (T15-F1 of plan ``docs/superpowers/plans/2026-11-12-unified-worn-pieces.md``):
+a wanted own-mesh piece whose fit on the wanted body shape is refused is LEFT OFF the figure (A119 lifted A23 a — the
+outfit model is published without it), the refusal is a cached failure an automatic Build does not re-fit, a
+manual Build re-fits it once, and the piece never goes into an interim body.
 
 Usage:
     ./.venv/bin/python scripts/smoke_figure_fit_refused.py
@@ -27,25 +27,24 @@ Fixture: "Demo", hair in the body (the worn hairstyle "hair_body"), items blouse
 [outer] own mesh, closable. Worn W = {top: blouse, outer: jacket}. The wanted figure: shape SB = the shape of
 {blouse} (stored, meshed), own (jacket,).
 
-Expected, derived by hand from rulings A23 a/b/c:
+Expected, derived by hand from rulings A23 b/c and A119:
 
-[1] Nothing shown (no model of W, nothing served): the jacket's fit on SB refused -> it joins the body as before
-    A23 (rule 1 of ``_delivered``, ruling A11): the delivered shape is not SB, in_body (blouse, jacket),
-    in_body_own (jacket,), fit_refused {} — there is nothing to keep.
+[1] Nothing shown (no model of W, nothing served): the jacket's fit on SB refused -> delivered on SB (stored),
+    in_body (blouse,), own (), left_out {jacket: "Fit refused — refused — stub"}, fit_refused
+    {jacket: "refused — stub"}.
 [2] The model of W stored, built as F = the figure on SB with the jacket grafted (the fit accepted then): its fit
-    on SB refused now -> delivered = F (``as_dict`` equal), kept True, fit_refused {jacket: "refused — stub"};
-    never an interim (interim {}). The AUTOMATIC plan has no "fits" and no "assemble" step (a cached failure is
-    not re-planned); the MANUAL plan has Step("fits", "Re-fit on the body shape (refused before): Jacket", 0)
-    then Step("assemble", …). ``_run_assemble`` -> "Not assembled: Jacket fit the plain body but not the body
-    shape (Blouse). The figure built before stays shown." (nothing published; Ruling A31 wording — the shape
-    named by what is in it, the wanted figure's in-body pieces). The worn row of the jacket: state
+    on SB refused now -> delivered is NOT F (an old model is never kept): on SB, own (), fit_refused
+    {jacket: "refused — stub"}. The AUTOMATIC plan has no "fits" step (a cached failure is not re-fitted) but an
+    "assemble" step (F carries the jacket the delivered figure leaves off); the MANUAL plan has Step("fits", "Re-fit on the body shape (refused before): Jacket", 0)
+    then Step("assemble", …). ``_run_assemble`` -> "" (published without the jacket — A119 lifted the A23 a
+    lock). The worn row of the jacket: state
     "fit_refused", fit_refused "refused — stub". ``refit(blouse)`` -> ValueError (its fit is not refused);
     ``refit(jacket)`` (Ruling FR-I2) answers {"status": "started"} and starts NO Build (``figure_build.start``
     not called): its own run in the Build worker clears the refusal of (jacket, "0123456789ab") on SB once,
     under the character's build lock (FR-minors), fits it again, refused again -> ``state()["failed"]`` ==
-    {"fits": "Fit refused — Jacket: refused — stub; the figure built before stays served"}, no CPU refit,
-    0 hub calls. The manual Build's fits step, refused again -> "Fit refused — Jacket: refused — stub; the
-    figure built before stays served", no CPU refit run (assemble depends on fits: ``DEPENDS["assemble"]`` ∋
+    {"fits": "Fit refused — Jacket: refused — stub; left off the figure"}, no CPU refit,
+    0 hub calls. The manual Build's fits step, refused again -> "Fit refused — Jacket: refused — stub; left
+    off the figure", no CPU refit run (assemble depends on fits: ``DEPENDS["assemble"]`` ∋
     "fits"); accepted (BODY_FITS ∋ (jacket, SB)) -> "", the CPU refits run once, and the figure is no longer
     refused (delivered own (jacket,), fit_refused {}).
 [2b] Ruling FR-I2 — what a Re-fit runs: the jacket's fit on SB refused when the figure is resolved, ACCEPTED
@@ -58,8 +57,8 @@ Expected, derived by hand from rulings A23 a/b/c:
        nothing.
     Every Re-fit run held the character's build lock (``build_lock`` recorded on entry).
 [3] A model served for ANOTHER outfit only (no model of W, the nearest stand-in): delivered on SB, own (),
-    left_out {jacket: "Fit refused — refused — stub"}, fit_refused {jacket: "refused — stub"}, kept False, no
-    interim — the refused jacket never goes into an interim body while a figure is shown (A23 c); the worn row
+    left_out {jacket: "Fit refused — refused — stub"}, fit_refused {jacket: "refused — stub"} — the refused
+    jacket never goes into an interim body (A23 c); the worn row
     "fit_refused".
 [5] Ruling FR-I3 — a dressed view refused for its inputs is a cached failure too: the model of W built as F
     and served, the jacket's fit accepted, the back view of W missing (``dressed_image`` None for "back") and
@@ -221,12 +220,12 @@ def main() -> int:
         check("wanted: shape of {blouse} (meshed), the jacket own", (figure.is_plain(sb), wanted.in_body, wanted.own),
               (False, ("blouse",), ("jacket",)))
 
-        print("[1] nothing shown: the refused jacket joins the body (as before A23)")
+        print("[1] nothing shown: the refused jacket left off on SB (Ruling A119)")
         _w, got = delivered()
-        check("interim body with the jacket", (got.shape != sb, got.in_body, got.in_body_own, got.fit_refused),
-              (True, ("blouse", "jacket"), ("jacket",), {}))
+        check("left off on SB", (got.shape, got.in_body, got.own, got.left_out, got.fit_refused),
+              (sb, ("blouse",), (), {"jacket": "Fit refused — refused — stub"}, {"jacket": "refused — stub"}))
 
-        print("[2] the model of W shown: it stays the delivered figure")
+        print("[2] the model of W shown: the refused jacket is left off all the same (Ruling A119)")
         BODY_FITS.add(("jacket", sb))
         _w, built = delivered()
         check("F: on SB, the jacket grafted", (built.shape, built.own, built.in_body), (sb, ("jacket",), ("blouse",)))
@@ -234,20 +233,21 @@ def main() -> int:
         MODEL.update(sig=wanted.signature, path=root / "model.glb", meta={"figure": built.as_dict()})
         SERVED["path"] = root / "model.glb"
         _w, got = delivered()
-        check("delivered = F, kept, the refusal named", (got.as_dict() == built.as_dict(), got.kept,
-                                                         got.fit_refused, got.interim),
-              (True, True, {"jacket": "refused — stub"}, {}))
+        check("not F: on SB, the jacket left off, the refusal named",
+              (got.as_dict() == built.as_dict(), got.shape, got.own, got.fit_refused),
+              (False, sb, (), {"jacket": "refused — stub"}))
         auto = [s.name for s in figure_build._runnable(figure_build.plan("Demo", profile=profile(), explicit=False),
                                                        False)]
-        check("automatic plan: no fits, no assemble", ("fits" in auto, "assemble" in auto), (False, False))
+        # Ruling A119: F carries the jacket the figure delivered now leaves off -> the automatic plan assembles the
+        # figure without it; the cached refusal is not re-fitted.
+        check("automatic plan: no fits, the assembly", ("fits" in auto, "assemble" in auto), (False, True))
         manual = [(s.name, s.label, s.jobs) for s in figure_build.plan("Demo", profile=profile(), explicit=True)]
         check("manual plan: the re-fit, then the assembly",
               [m for m in manual if m[0] in ("fits", "assemble")],
               [("fits", "Re-fit on the body shape (refused before): Jacket", 0),
                ("assemble", "Assemble the figure", 0)])
-        check("assemble refuses to publish", figure_build._run_assemble("Demo", None),
-              "Not assembled: Jacket fit the plain body but not the body shape (Blouse). The figure built before "
-              "stays shown.")
+        check("assemble publishes without the jacket (A23 a lifted by A119)", figure_build._run_assemble("Demo", None),
+              "")
         wanted_now, got = delivered()
         rows = figure_build._worn_rows("Demo", wanted_now, got, {}, False, profile())
         check("worn row", [(r["item_id"], r["state"], r.get("fit_refused")) for r in rows if r["item_id"] == "jacket"],
@@ -267,13 +267,13 @@ def main() -> int:
         check("refit(jacket): refusal cleared once under the build lock, no CPU refit",
               (CLEARED, REFITS, LOCKED), ([("jacket", FSIG, sb)], [], ["Demo"]))
         check("refit(jacket): refused again", errors(figure_build),
-              {"fits": "Fit refused — Jacket: refused — stub; the figure built before stays served"})
+              {"fits": "Fit refused — Jacket: refused — stub; left off the figure"})
         check("refit(jacket): 0 hub calls", HUB, [])
         check("DEPENDS: assemble needs the fits", "fits" in figure_build.DEPENDS["assemble"], True)
         CLEARED.clear()
         REFITS.clear()
         check("manual fits, refused again", figure_build._run_fits("Demo", None, True),
-              "Fit refused — Jacket: refused — stub; the figure built before stays served")
+              "Fit refused — Jacket: refused — stub; left off the figure")
         check("refused again: cleared once, no CPU refits", (CLEARED, REFITS), ([("jacket", FSIG, sb)], []))
         BODY_FITS.add(("jacket", sb))
         check("manual fits, accepted", figure_build._run_fits("Demo", None, True), "")
@@ -328,12 +328,12 @@ def main() -> int:
             with figure_build._lock:
                 figure_build._active.discard("Demo")
 
-        print("[3] another outfit's model shown: the jacket left out, never an interim")
+        print("[3] another outfit's model shown: the jacket left out")
         MODEL.update(sig="another", path=root / "other.glb", meta={})
         SERVED["path"] = root / "other.glb"
         wanted_now, got = delivered()
-        check("left out on SB", (got.shape, got.own, got.left_out, got.fit_refused, got.kept, got.interim),
-              (sb, (), {"jacket": "Fit refused — refused — stub"}, {"jacket": "refused — stub"}, False, {}))
+        check("left out on SB", (got.shape, got.own, got.left_out, got.fit_refused),
+              (sb, (), {"jacket": "Fit refused — refused — stub"}, {"jacket": "refused — stub"}))
         rows = figure_build._worn_rows("Demo", wanted_now, got, {}, False, profile())
         check("worn row", [r["state"] for r in rows if r["item_id"] == "jacket"], ["fit_refused"])
 
@@ -353,7 +353,7 @@ def main() -> int:
             auto = [s.name for s in figure_build._runnable(
                 figure_build.plan("Demo", profile=profile(), explicit=False), False)]
             check("automatic: no view step, no fits, no assembly",
-                  [n for n in auto if n in ("interim", "shape", "texture", "fits", "assemble")], [])
+                  [n for n in auto if n in ("shape", "texture", "fits", "assemble")], [])
             manual = [s for s in figure_build.plan("Demo", profile=profile(), explicit=True)
                       if s.name in figure_build.VIEW_STEPS]
             check("manual: one failed view step",

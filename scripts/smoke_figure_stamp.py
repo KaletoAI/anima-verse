@@ -42,9 +42,9 @@ body, own-mesh pieces — ``figure_migration.legacy_current``):
      runs again (a new object, equal to the first).
 [M2] A worn item's mode changed (``update_item``: the top in_body) → a new
      key without any invalidate (the item content is in the key): no shape
-     is built, so the interim rule delivers the top painted with its note —
-     the cached figure's ``interim`` is {top: "Shown painted until its body
-     shape is built"} (it was {} before).
+     is built, so Ruling A119 leaves the top off — the cached figure's
+     ``left_out`` is {top: "Body shape not built"} (``LEFT_OFF_SHAPE``; it
+     was {} before).
 [M3] Timing: one cold call (memo cleared) and the median warm call are
      printed; warm < 2 ms.
 """
@@ -203,8 +203,8 @@ def main() -> int:
         op = dict(inventory.get_item(worn["top"])["outfit_piece"])
         op["mesh_mode"] = "in_body"
         inventory.update_item(worn["top"], {"outfit_piece": op})
-        check("interim now", figure.delivered_figure_cached("Kira").interim,
-              {worn["top"]: figure.INTERIM_PAINTED.format(what=figure.WHAT_SHAPE)})
+        check("left off now", figure.delivered_figure_cached("Kira").left_out,
+              {worn["top"]: figure.LEFT_OFF_SHAPE})
         op["mesh_mode"] = "painted"
         inventory.update_item(worn["top"], {"outfit_piece": op})
 

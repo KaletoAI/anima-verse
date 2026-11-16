@@ -98,19 +98,19 @@ def main() -> int:
         check("plain body, not stale / nearest", (p.name, m), (f"{BSIG}.glb", "base"))
         print("[3] no outfit model")
         state["older"] = set()
-        (d / f"{SIG}.glb").rename(d / "keep.glb")
+        (d / f"{SIG}.glb").rename(d / "keep.bin")
         p, m = model3d.find_model3d_serving("Demo")
         check("plain body, not nearest", (p.name, m), (f"{BSIG}.glb", "base"))
         print("[4] no plain body file either")
-        (d / f"{BSIG}.glb").rename(d / "keepbase.glb")
+        (d / f"{BSIG}.glb").rename(d / "keepbase.bin")
         check("nothing", model3d.find_model3d_serving("Demo"), (None, ""))
-        (d / "keepbase.glb").rename(d / f"{BSIG}.glb")
+        (d / "keepbase.bin").rename(d / f"{BSIG}.glb")
         print("[5] off the pipeline")
         state["base"] = None
         p, m = model3d.find_model3d_serving("Demo")
         check("nearest stays for img2mesh", (p.name, m), (f"{OTHER}.glb", "nearest"))
         state["base"] = (BSIG, "basesha")
-        (d / "keep.glb").rename(d / f"{SIG}.glb")
+        (d / "keep.bin").rename(d / f"{SIG}.glb")
 
         print("[6] the worn plain body carries the ready pieces")
         fig = figure.Figure(signature=SIG, bsig=BSIG, shape=BSIG, texture="", in_body=(), painted=("pants",),

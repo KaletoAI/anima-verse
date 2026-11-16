@@ -69,7 +69,11 @@ Expected, derived by hand from the spec and the plan's Global Constraints:
     distance tier requested for sigA only (build_lod [sigA]); outfit_info
     ready; find_model3d(Demo, bA) is the body (an outfit body is never
     stale); find_model3d_serving(Demo) = (sigA, "exact").
-[3] B = A + dress (own mesh), the dress's chain run first (no outfit render
+[3] (Ruling A119 below: B IS published with a NOT_FITTED_ON_BODY garment
+    warning naming the dress and served "exact"; A's/G's outfit renders are
+    0 image jobs — pieces left off on an unbuilt shape — and the painted
+    retexture build renders its 2 views.)
+    B = A + dress (own mesh), the dress's chain run first (no outfit render
     runs a chain since task 11c-2 of plan 2026-11-12-unified-worn-pieces,
     ruling A14): the same shape bA -> 0 image jobs, 0 chain steps on a body
     (no mesh, no rig), 0 worker runs; the dress has an accepted (base) fit
@@ -444,7 +448,9 @@ def main() -> int:
                        for v, k in (("front", "tpose"), ("back", "tpose_back"))}
         check("A: shape inputs", {k: shape_inputs.get(k) for k in ("version", "base_signature", "dress_text")},
               {"version": 2, "base_signature": b1, "dress_text": store_texts})
-        check("A: ok, 2 image jobs, 0 worker runs", (result.get("ok"), jobs, runs), (True, 2, 0))
+        # Ruling A119: the outfit renders before the shape exists leave its in-body pieces off (copies, 0 image
+        # jobs; was 2 painted interim views) — the build renders the SHAPE's views itself.
+        check("A: ok, 0 outfit image jobs (A119), 0 worker runs", (result.get("ok"), jobs, runs), (True, 0, 0))
         check("A: chain in order", steps,
               [("mesh", b_a), ("rig", b_a), ("retexture", b_a), ("normalize", b_a), ("extension", b_a),
                ("collision", b_a), ("extension", sig_a), ("collision", sig_a)])
@@ -496,20 +502,23 @@ def main() -> int:
         jobs, runs, steps, result = render_and_build()
         meta_b = model_meta(sig_b)
         reason = "The garment mesh is missing — run the mesh step first"
-        check("B: not ok, 0 image jobs, 0 runs, no mesh/rig job", (result.get("ok"), jobs, runs, jobs_of(steps)),
-              (False, 0, 0, []))
-        check("B: not published (A23 a)", (base_body.FIT_REFUSED_NOT_PUBLISHED.format(items=f"Dress ({reason})")
-                                           in str(result.get("error")), meta_b, (mdir / f"{sig_b}.glb").exists()),
-              (True, {}, False))
+        # Ruling A119 (replaces A23 a): the model IS published, the refused dress left off and named in the
+        # garment warning; it is what the game shows, so it is served exactly.
+        check("B: ok, 0 image jobs, 0 runs, no mesh/rig job", (result.get("ok"), jobs, runs, jobs_of(steps)),
+              (True, 0, 0, []))
+        check("B: published with the warning (A119)",
+              ((mdir / f"{sig_b}.glb").exists(),
+               base_body.NOT_FITTED_ON_BODY.format(items=f"Dress ({reason})") in str(meta_b.get("garment_warnings"))),
+              (True, True))
         served = model3d.find_model3d_serving("Demo")
-        check("B: A's model stays served", served[0].stem if served[0] else None, sig_a)
+        check("B: B's model served exactly", (served[0].stem if served[0] else None, served[1]), (sig_b, "exact"))
         check("B: failure recorded on the body",
               gs.garment_path("Demo", "dress", gs.parse_name(fit[0])[1], "failed", body=b_a).is_file(), True)
         check("B: no assembly with a base fit", (mdir / "assembled" / f"{sig_b}.glb").exists(), False)
         now = figure.delivered_figure("Demo")
-        check("B: the refused dress left out, never in an interim body while A is shown (A23 c)",
-              (now.shape, now.in_body, now.in_body_own, now.own, now.left_out, now.fit_refused),
-              (b_a, ("shoes", "under"), (), (), {"dress": figure.FIT_REFUSED.format(reason=reason)},
+        check("B: the refused dress left out, on bA (A119: no interim body)",
+              (now.shape, now.in_body, now.own, now.left_out, now.fit_refused),
+              (b_a, ("shoes", "under"), (), {"dress": figure.FIT_REFUSED.format(reason=reason)},
                {"dress": reason}))
 
         # --- [4] empty dress text ---------------------------------------------------------
@@ -534,8 +543,10 @@ def main() -> int:
               (None, "figure"))
         jobs, runs, steps, result = render_and_build()
         meta_r = model_meta(sig_a)
-        check("retexture: ok, 0 image jobs, 0 mesh/rig jobs, 1 worker run",
-              (result.get("ok"), jobs, jobs_of(steps), runs), (True, 0, [], 1))
+        # A119: A's outfit views were copies of the plain body (in-body pieces left off), so the painted
+        # pieces need their 2 view renders now (was 0: the painted interim views already existed).
+        check("retexture: ok, 2 image jobs, 0 mesh/rig jobs, 1 worker run",
+              (result.get("ok"), jobs, jobs_of(steps), runs), (True, 2, [], 1))
         check("retexture: painted on the plain body", ("outfit_body_mode" in meta_r, "body_id" in meta_r,
                                                       base_body.is_texture_signature(meta_r.get("texture_signature")),
                                                       (meta_r.get("figure") or {}).get("shape")),
@@ -572,8 +583,8 @@ def main() -> int:
         jobs, runs, steps, result = render_and_build()
         t_g = model_meta(sig_g).get("texture_signature")
         b_g = model_meta(sig_g).get("body_id")
-        check("G: ok, 2 image jobs, one mesh + one rig job on its own body",
-              (result.get("ok"), jobs, jobs_of(steps)), (True, 2, [("mesh", b_g), ("rig", b_g)]))
+        check("G: ok, 0 outfit image jobs (A119: pieces left off), one mesh + one rig job on its own body",
+              (result.get("ok"), jobs, jobs_of(steps)), (True, 0, [("mesh", b_g), ("rig", b_g)]))
         check("G: nothing painted either, other body", (t_g, t_a, b_g != b_a, base_body.is_outfit_body_signature(b_g)),
               ("", "", True, True))
 

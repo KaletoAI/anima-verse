@@ -28,18 +28,9 @@ hub, no GPU, no server.
 
 Expected, derived by hand from the rulings:
 
-[1] Kai's interim (A18). Wanted W: signature "sigK", shape "obWANT",
-    t-shirt in the body, jacket + jeans own. Delivered D1: the interim shape
-    "obS1" holding jacket + jeans (``INTERIM_IN_BODY``). The plan is
-    [interim, assemble]. While ``prepare_shape`` meshes obS1, the jeans fit
-    is accepted: delivered D2 = interim shape "obS2" (jacket only).
-    -> the shape guard registered for obS1 answers False inside the mesh
-       (the hub stages would stop); the step ends superseded:
-       ``SUPERSEDED`` with why ``INTERIM_MOVED`` (obS1, now obS2) and new
-       "figure sigK (shape obWANT)"; ``state()``: failed {}, skipped [],
-       superseded.step "interim"; the follow-up kept = ("superseded",
-       automatic True); neither the views, the outfit model nor the assembly
-       ran.
+[1] (removed with Ruling A119: Kai's case was the interim step, which no
+    longer exists — a piece not ready is left off, no shape is meshed for
+    it; the superseded shape step stays covered by [1b].)
 [1b] Ylva's hair switch during the shape's mesh (A18). Plan [shape,
     assemble], wanted shape "obHAIR"; inside ``prepare_shape`` the hair moves
     to HairDeck: wanted shape "obBALD"; the stub returns what the real one
@@ -108,11 +99,9 @@ def section_pins() -> None:
     from app.core import base_body, figure, figure_build, model3d
     from app.core.figure import Figure
 
-    def fig(shape, *, in_body=("tshirt",), own=("jacket", "jeans"), interim=None, hair="body", signature="sigK"):
+    def fig(shape, *, in_body=("tshirt",), own=("jacket", "jeans"), hair="body", signature="sigK"):
         return Figure(signature=signature, bsig=BSIG, shape=shape, texture="", in_body=tuple(in_body), painted=(),
-                      own=tuple(own), interim=dict(interim or {}), hair=hair,
-                      pieces={"top": "tshirt", "outer": "jacket", "legs": "jeans"},
-                      in_body_own=tuple(sorted(i for i in (interim or {}))))
+                      own=tuple(own), hair=hair, pieces={"top": "tshirt", "outer": "jacket", "legs": "jeans"})
 
     state = {}
     calls = []
@@ -148,33 +137,6 @@ def section_pins() -> None:
             "plain_body": lambda c, s, e=False: calls.append("plain_body") or ""}))
         stack.enter_context(patch.object(figure_build, "_wait_base_views", lambda c, **k: calls.append("wait") or []))
         step = figure_build.Step
-
-        print("[1] Kai: a jeans fit accepted while the interim shape is meshed")
-        in_body = {"jacket": figure.INTERIM_IN_BODY, "jeans": figure.INTERIM_IN_BODY}
-        state.update(wanted=fig("obWANT"), delivered=fig("obS1", in_body=("jacket", "jeans", "tshirt"), own=(),
-                                                         interim=in_body))
-        guard_answers = []
-
-        def prepare_interim(c, f, **kw):
-            calls.append(("prepare_shape", f.shape))
-            state["delivered"] = fig("obS2", in_body=("jacket", "tshirt"), own=("jeans",),
-                                     interim={"jacket": figure.INTERIM_IN_BODY})
-            guard_answers.append(model3d.shape_still_wanted(c, f.shape))
-            return {"ok": True, "body_id": f.shape}
-
-        calls.clear()
-        with patch.object(base_body, "prepare_shape", prepare_interim), \
-                patch.object(figure_build, "plan", lambda *a, **k: [step("interim", "Interim body shape", 4),
-                                                                    step("assemble", "Assemble the figure", 0)]):
-            got, queued = run("Kai", None)
-        want_note = figure_build.SUPERSEDED.format(why=figure_build.INTERIM_MOVED.format(shape="obS1", now="obS2"),
-                                                   new="figure sigK (shape obWANT)")
-        check("the guard said no inside the mesh", guard_answers, [False])
-        check("only the interim shape ran — no views, no model, no assembly", calls, [("prepare_shape", "obS1")])
-        check("no failure, no skipped step", (got["failed"], got["skipped"]), ({}, []))
-        check("superseded at the interim, the follow-up named", got["superseded"],
-              {"step": "interim", "label": "Interim body shape", "note": want_note})
-        check("ONE follow-up kept (automatic)", queued, [(figure_build.SUPERSEDED_REASON, True)])
 
         print("[1b] Ylva: the hair switched while the shape is meshed")
         state.update(wanted=fig("obHAIR", own=()), delivered=fig(BSIG, own=()))

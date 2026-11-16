@@ -126,7 +126,7 @@ Expected, derived by hand from the brief:
     fake proof.
 [4] Base changes (new profile image -> bsig2 != bsig): find_model3d(Demo,
     osig) None, with include_stale the path; find_model3d_serving ->
-    (path, "stale"); outfit status "stale", error "Built on an older base
+    (None, "") — Ruling A119: a stale model is never served; outfit status "stale", error "Built on an older base
     body", stale_reason "older_base" (the sidecar names a base signature). A tpose pass now finds no base images for bsig2: no render, the
     outfit status "failed" with BASE_IMAGES_MISSING, no model run. Profile
     image back -> bsig again, a pass (all cached) clears it -> "ready".
@@ -768,7 +768,9 @@ def main() -> int:
             check("base signature changed", bsig2 != bsig, True)
             check("stale counts as missing", model3d.find_model3d("Demo", osig), None)
             check("include_stale", model3d.find_model3d("Demo", osig, include_stale=True), model)
-            check("serving stale", model3d.find_model3d_serving("Demo"), (model, "stale"))
+            # Ruling A119: a stale outfit model is never served (was (model, "stale")); the new base's plain body
+            # has no file yet, so nothing is served.
+            check("serving: never the stale model (A119)", model3d.find_model3d_serving("Demo"), (None, ""))
             info = base_body.outfit_info("Demo")
             check("status stale", (info["status"], info["error"], info["stale_reason"]),
                   ("stale", "Built on an older base body", "older_base"))
@@ -946,8 +948,11 @@ def main() -> int:
                 info12 = base_body.outfit_info("Demo")
                 check("detail changed: status", (info12["status"], info12["error"], info12["stale_reason"]),
                       ("stale", base_body.DETAIL_CHANGED, "detail_changed"))
-                check("detail changed: model info", model3d.get_model3d_info("Demo")["model"].get("stale_reason"),
-                      "detail_changed")
+                # Ruling A119: the stale outfit model is not served — the info names the served plain body
+                # (match "base"), so it carries no stale_reason (was "detail_changed").
+                _m12 = model3d.get_model3d_info("Demo")["model"] or {}
+                check("detail changed: model info serves the plain body (A119)",
+                      (_m12.get("match"), _m12.get("stale_reason")), ("base", None))
                 SCRIPT_CALLS.clear()
                 result = model3d.generate_for_current_outfit("Demo", force=True)
                 meta12 = model3d._read_sidecar(model)

@@ -26,9 +26,9 @@ the attempt kept by ``fit_attempts.store`` (GLB bytes "attempt-A", 3 limb marks)
 
 Expected, derived by hand from Ruling A31:
 
-[1] Refused: ``figure._fit_on`` -> (False, E); delivered = Fb, kept, fit_refused {jacket: E}; the automatic plan
-    has no assemble step (Ruling A23 b holds a refusal); ``_run_assemble`` -> "Not assembled: Jacket fit the plain
-    body but not the body shape (Blouse). The figure built before stays shown."; the worn row: state
+[1] Refused: ``figure._fit_on`` -> (False, E); delivered on SB with the jacket left off (Ruling A119 — Fb is
+    never kept), own (), fit_refused {jacket: E}; the automatic plan has no "fits" step (Ruling A23 b: a refusal is
+    not re-fitted); the worn row: state
     "fit_refused", fit_refused "the left trouser leg stands off the thigh (15 % of it more than 4 cm from it)"
     (0.1478 -> 15 %), refused_on "Blouse", piece_broken False, regenerate_jobs None (a body problem: no new mesh
     offered). The attempt files: ``bodies/SB/attempts/jacket_<FSIG>.{glb,json,npz}``. ``bodies`` -> two entries:
@@ -47,7 +47,7 @@ Expected, derived by hand from Ruling A31:
 [6] Changed fit version (record fit_version FV - 2 (two behind:
     one behind without an opening Ruling A51 could change stays current)): ``body_fit`` fit None (``body_fit_state`` stale); back -> holds.
 [7] Undo (route): 200; the fit path is empty (nothing was displaced), the failure record E is back; ``_fit_on``
-    -> (False, E) again; delivered kept Fb.
+    -> (False, E) again; delivered own () again, fit_refused {jacket: E}.
 [8] A new attempt with OTHER bytes after a re-accept undoes the acceptance by itself (the failure back); the
     same bytes keep it.
 [9] A gate-accepted fit drops the attempt (``fit_attempts.drop``): no attempt files left.
@@ -214,14 +214,11 @@ def main() -> int:
         check("_fit_on: refused", figure._fit_on("Demo", "jacket", shape=SB, base_sha="basesha", profile=profile()),
               (False, E))
         _w, got = delivered()
-        check("delivered: the figure built before, kept", (got.kept, got.own, got.fit_refused, got.fit_refused_on),
-              (True, (), {"jacket": E}, SB))
+        check("delivered: on SB, the jacket left off", (got.shape, got.own, got.fit_refused, got.fit_refused_on),
+              (SB, (), {"jacket": E}, SB))
         auto = [s.name for s in figure_build._runnable(figure_build.plan("Demo", profile=profile(), explicit=False),
                                                        False)]
-        check("automatic plan: no assemble", "assemble" in auto, False)
-        check("assemble refuses", figure_build._run_assemble("Demo", None),
-              "Not assembled: Jacket fit the plain body but not the body shape (Blouse). The figure built before "
-              "stays shown.")
+        check("automatic plan: no re-fit", "fits" in auto, False)
         wanted_now, got = delivered()
         row = [r for r in figure_build._worn_rows("Demo", wanted_now, got, {}, False, profile())
                if r["item_id"] == "jacket"][0]
@@ -264,8 +261,8 @@ def main() -> int:
         check("_fit_on: fitted", figure._fit_on("Demo", "jacket", shape=SB, base_sha="basesha", profile=profile()),
               (True, ""))
         _w, got = delivered()
-        check("delivered: on SB with the jacket", (got.shape, got.own, got.fit_refused, got.kept),
-              (SB, ("jacket",), {}, False))
+        check("delivered: on SB with the jacket", (got.shape, got.own, got.fit_refused),
+              (SB, ("jacket",), {}))
         follow = body.get("follow_up") or {}
         check("estimate: the re-assembly, CPU only",
               (follow.get("hub_jobs"), [(s["name"], s["label"], s["jobs"]) for s in follow.get("steps") or []]),
@@ -313,7 +310,7 @@ def main() -> int:
         check("_fit_on: refused again",
               figure._fit_on("Demo", "jacket", shape=SB, base_sha="basesha", profile=profile()), (False, E))
         _w, got = delivered()
-        check("delivered: kept again", (got.kept, got.fit_refused), (True, {"jacket": E}))
+        check("delivered: the jacket left off again", (got.own, got.fit_refused), ((), {"jacket": E}))
         res = client.post(f"/characters/Demo/garments/jacket/fits/{SB}/unaccept")
         check("undo again: 409", res.status_code, 409)
 

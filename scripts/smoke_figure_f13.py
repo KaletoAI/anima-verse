@@ -49,7 +49,7 @@ Expected, derived by hand from the rulings:
     ``accepted_fit`` (worn state) -> F_c, explicit ``state="open"`` -> None;
     delivered ``own`` ∋ jacket, ``shown_closed`` == (jacket,),
     ``notes[jacket]`` "Shown closed until its open mesh is built", not painted,
-    no interim; ``pending_changes`` holds exactly ONE entry naming the jacket:
+    not left off; ``pending_changes`` holds exactly ONE entry naming the jacket:
     ``{key "<jacket>:state", wanted open, delivered closed, note "worn open —
     open mesh missing"}``; the plan keeps Step("pieces", "Own mesh · Black
     Jacket (open)", 5) (worn 1 + ghost 1 + cutout 2 + mesh 1: the closed
@@ -57,9 +57,8 @@ Expected, derived by hand from the rulings:
     front; the cut-out's two upscales counted since Ruling A25, T15-F1);
     ``figure_info``: that change ``jobs`` 5, the worn row state "pending"
     with the SHOWN_CLOSED
-    note. Without F_c too: still ONE entry, key and note as above (how the
-    piece is shown then is the general interim — ruling A11, a follow-up
-    task; not pinned here).
+    note. Without F_c too: still ONE entry, key and note as above (the piece is
+    then left off, Ruling A119; not pinned here).
 [c] Estimate (F13 c), front + back dressed: ``dressed_view_jobs()`` 2 (1 + 1:
     the back is one draft, its composite is CPU since Task 11g).
     ``dressed_view_estimate`` of a figure with texture TSIG and both views
@@ -378,7 +377,7 @@ def main() -> int:
             check("own ∋ jacket", jacket in got.own, True)
             check("shown_closed", got.shown_closed, (jacket,))
             check("note", got.notes.get(jacket), "Shown closed until its open mesh is built")
-            check("not painted, no interim", (jacket in got.painted, got.interim.get(jacket)), (False, None))
+            check("not painted, not left off", (jacket in got.painted, jacket in got.left_out), (False, False))
             mine = [c for c in figure.pending_changes("Demo", profile=prof()) if jacket in c["key"]]
             check("ONE change", mine, [{"key": f"{jacket}:state", "name": "Black Jacket", "wanted": "open",
                                         "delivered": "closed", "note": "worn open — open mesh missing"}])
@@ -393,7 +392,7 @@ def main() -> int:
             for path in (f_c, f_c.with_suffix(".json")):
                 path.unlink()
             figure.invalidate()
-            # Without any mesh of the piece the general interim decides (ruling A11's follow-up, not pinned here).
+            # Without any mesh of the piece it is left off (Ruling A119; not pinned here).
             mine = [c for c in figure.pending_changes("Demo", profile=prof()) if jacket in c["key"]]
             check("no mesh: still ONE change", [(c["key"], c.get("note")) for c in mine],
                   [(f"{jacket}:state", "worn open — open mesh missing")])
@@ -429,7 +428,7 @@ def main() -> int:
             check("no texture: 0",
                   base_body.dressed_view_estimate("Demo", replace(fig, texture=""), "sig1", profile=prof()), 0)
         Step = figure_build.Step
-        check("cost note", figure_build.cost("Demo", [Step("interim", "x", 3), Step("pieces", "y", 6)])["note"],
+        check("cost note", figure_build.cost("Demo", [Step("texture", "x", 3), Step("pieces", "y", 6)])["note"],
               "9 hub jobs (estimate, retries extra)")
 
         # --- [d] one step ------------------------------------------------------------------------------------
@@ -770,7 +769,7 @@ def main() -> int:
         # The plan and the Dressed views judge the views alike (base_body.dressed_image): a delivered figure whose model
         # is built and that has no texture / interim -> "Views" step while a view is not current, nothing else.
         _w, d = figure._delivered("Demo", profile=prof())
-        bare = dataclasses.replace(d, texture="", interim={})
+        bare = dataclasses.replace(d, texture="")
         with patch.object(figure, "_delivered", lambda *a, **k: (bare, bare)), \
                 patch.object(figure_build, "_model_figure", lambda *a, **k: bare), \
                 patch.object(base_body, "base_refresh_plan", lambda *a, **k: {}), \

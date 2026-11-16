@@ -40,8 +40,11 @@ Items: ``jeans`` (slots [bottom]), ``jacket`` (slots [outer], closable, ``covers
     - groups [] or [g_tip] → the SAME bytes object back;
     - groups [g_chain] → node Part has neither ``mesh`` nor ``skin``; body keeps mesh 0, garment mesh 2; still 4
       nodes, 3 meshes, BIN chunk byte-identical.
-[4] figure_build._served_state with stub readers (bare sidecar ``mesh_items.effective = [jeans, shoes]``):
-    a. match "nearest" → yellow, state SERVED_STAND_IN, missing [].
+[4] figure_build._served_state with stub readers (``garment_assembly.bare_meta_of`` → ``mesh_items.effective =
+    [jeans, shoes]``):
+    a. match "base" (Ruling A119: the plain body served; the delivered figure paints "blouse"), garments {shoes}
+       carried → yellow SERVED_PLAIN, missing [blouse PIECE_NO_TEXTURE, jeans PIECE_NO_FIT] (painted first),
+       pieces "blouse, Jeans" (no item row for the blouse: its id is its name).
     b. exact, assembled sidecar garments {jeans, shoes} → green SERVED_COMPLETE.
     c. exact, assembled garments {shoes}; _wanted's left_off {jeans: "deep_push_share 0.225 > 0.12"} → red
        SERVED_WITHOUT, pieces "Jeans", missing [{jeans, PIECE_REFUSED, detail "deep_push_share 0.225 > 0.12",
@@ -50,11 +53,10 @@ Items: ``jeans`` (slots [bottom]), ``jacket`` (slots [outer], closable, ``covers
        0.12") → red, missing reason PIECE_REFUSED_PLAIN with that detail.
     e. exact, bare file served (assembly not current), _wanted lists both → blue SERVED_ASSEMBLING, pieces
        "Jeans, Shoes" (both pending).
-    f. match "stale", garments {jeans, shoes} → yellow SERVED_OLDER_BASE; stale with jeans refused → red with
-       notes [SERVED_OLDER_BASE_REASON].
+    f. (removed with Ruling A119: the pipeline serves no "stale" / "nearest" model any more.)
     g. hair in ``equipped_mesh_pieces`` is never counted as a missing outfit piece: effective [jeans, hairX],
        hairX worn as hair, garments {jeans} → green.
-    And _not_on_figure turns the jeans rows' INTERIM_SHOWN note into NOT_ON_FIGURE for case c, not for case e.
+    And _not_on_figure gives the jeans rows without a note NOT_ON_FIGURE for case c, not for case e.
 [5] Fails on the old code: at commit d1ca152281426caee1e5fa1397cf6ee1e89d0a6f the fit-model route served the stored
     GLB untouched (no ``covered_part_groups`` in app/routes/characters.py) and the Figure payload had no
     ``served_state`` (app/core/figure_build.py) — read with ``git show``; skipped when git is unavailable.
@@ -175,7 +177,11 @@ def setup(match, effective, garments, *, served_bare=False, left_off=None, wante
 
 
 model3d.find_model3d_serving = lambda c: (BARE, STATE["match"])
-model3d._read_sidecar = lambda p: {"mesh_items": {"effective": STATE["effective"]}}
+garment_assembly.bare_meta_of = lambda c, d, sig: {"mesh_items": {"effective": STATE["effective"]}}
+from app.core import figure  # noqa: E402
+from app.core.figure import Figure  # noqa: E402
+figure.delivered_figure_cached = lambda c, profile=None, **_: Figure(
+    signature="sig", bsig="base", shape="base", texture="", in_body=(), painted=("blouse",), own=("shoes",))
 garment_assembly.effective_mesh_items = lambda meta: list(meta["mesh_items"]["effective"])
 garment_assembly.served = lambda c, p, tier: BARE if STATE["served_bare"] else ASM
 garment_assembly.read_sidecar = lambda p: {"garments": {g: {} for g in STATE["garments"]}}
@@ -193,9 +199,11 @@ fit_attempts.fit_status = lambda c, i, body, profile=None: (
 fb = figure_build
 served = fb._served_state
 
-setup("nearest", ["jeans", "shoes"], [])
+setup("base", ["jeans", "shoes"], ["shoes"])
 s = served("C", profile={})
-check("4a stand-in", (s["light"], s["state"], s["missing"]), ("yellow", fb.SERVED_STAND_IN, []))
+check("4a plain body served", (s["light"], s["state"], s["pieces"], [(m["item_id"], m["reason"]) for m in s["missing"]]),
+      ("yellow", fb.SERVED_PLAIN, "blouse, Jeans",
+       [("blouse", fb.PIECE_NO_TEXTURE), ("jeans", fb.PIECE_NO_FIT)]))
 setup("exact", ["jeans", "shoes"], ["jeans", "shoes"])
 s = served("C", profile={})
 check("4b complete", (s["light"], s["state"]), ("green", fb.SERVED_COMPLETE))
@@ -213,20 +221,14 @@ setup("exact", ["jeans", "shoes"], [], served_bare=True, wanted=["jeans", "shoes
 s = served("C", profile={})
 check("4e assembling", (s["light"], s["state"], s["pieces"]), ("blue", fb.SERVED_ASSEMBLING, "Jeans, Shoes"))
 state_e = s
-setup("stale", ["jeans", "shoes"], ["jeans", "shoes"])
-s = served("C", profile={})
-check("4f stale complete", (s["light"], s["state"]), ("yellow", fb.SERVED_OLDER_BASE))
-setup("stale", ["jeans", "shoes"], ["shoes"], left_off={"jeans": "refused"})
-s = served("C", profile={})
-check("4f stale + refused", (s["light"], s["notes"]), ("red", [fb.SERVED_OLDER_BASE_REASON]))
 setup("exact", ["jeans", "hairX"], ["jeans"])
 s = served("C", profile={"equipped_mesh_pieces": {"hair": "hairX"}})
 check("4g hair not counted", s["light"], "green")
 
-rows = [{"item_id": "jeans", "note": fb.INTERIM_SHOWN}]
-changes = [{"key": "jeans", "note": fb.INTERIM_SHOWN}]
+rows = [{"item_id": "jeans", "note": ""}]
+changes = [{"key": "jeans", "note": ""}]
 fb._not_on_figure(state_e, changes, rows)
-check("4 pending keeps note", (rows[0]["note"], changes[0]["note"]), (fb.INTERIM_SHOWN, fb.INTERIM_SHOWN))
+check("4 pending: no note added", (rows[0]["note"], changes[0]["note"]), ("", ""))
 fb._not_on_figure(state_c, changes, rows)
 check("4 refused → not on figure", (rows[0]["note"], changes[0]["note"]), (fb.NOT_ON_FIGURE, fb.NOT_ON_FIGURE))
 

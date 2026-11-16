@@ -41,8 +41,11 @@ Expected, derived by hand from the ruling:
     "Back view missing — not meshed from the front alone";
     (["back", "left"], ["front", "right"]) = "Back and left views missing —
     not meshed from the front and right alone"; a reason goes in brackets.
-[1] A, front only ("Regenerate · Main view"): 1 image job (the outfit's
-    front edit), no back. The build renders the shape's views FIRST — EVENTS
+[1] A, front only ("Regenerate · Main view"): 0 image jobs — Ruling A119:
+    the shape is not built, the outfit stands on the plain body with its
+    in-body pieces LEFT OFF, nothing is painted (was: 1, the painted interim
+    front) — no back. The same holds for every outfit render below (G main
+    view, H/K/L full render: 0, was 1 / 2). The build renders the shape's views FIRST — EVENTS
     of the build = [image tpose_<bA> (its front edit), image tpose_back_<bA>
     (draft; its composite onto the base back is CPU work since Task 11g —
     ``view_composite.compose`` stubbed to copy the draft), mesh <bA>]: exactly 1 mesh job, its
@@ -333,8 +336,10 @@ def main() -> int:
         from app.core import figure
         check("A: every piece in the body", sorted(figure.wanted_figure("Demo").in_body), ["shoes", "under"])
         jobs = render_views("main")
-        check("A main view: 1 image job, front only", (len(jobs), dressed(sig_a, "front"), dressed(sig_a, "back")),
-              (1, True, False))
+        # Ruling A119: the shape is not built, so the outfit is delivered on the plain body with every (in-body)
+        # piece LEFT OFF — nothing painted, its views are no edits: 0 image jobs, no back.
+        check("A main view: 0 image jobs (A119: pieces left off), no back", (len(jobs), dressed(sig_a, "back")),
+              (0, False))
         b_a = body_of(sig_a)
         m0 = len(MESH_CALLS)
         result, events, ops = build()
@@ -349,7 +354,7 @@ def main() -> int:
         # --- [2] back refused -> no mesh job, a status ----------------------------------------
         print("[2] back refused: 0 mesh jobs, the status names the missing view")
         sig_g = wear({"underwear_bottom": "under", "feet": "shoes", "bottom": "skirt"})
-        check("G main view: 1 image job", len(render_views("main")), 1)
+        check("G main view: 0 image jobs (A119)", len(render_views("main")), 0)
         b_g = body_of(sig_g)
         real_dress_view = base_body._dress_view
 
@@ -376,7 +381,7 @@ def main() -> int:
         # --- [3] every view present -> 1 mesh job ----------------------------------------------
         print("[3] all views present: no image job, one mesh job")
         sig_h = wear({"underwear_bottom": "under", "bottom": "skirt"})
-        check("H full render: 2 image jobs", len(render_views()), 2)
+        check("H full render: 0 image jobs (A119)", len(render_views()), 0)
         m0 = len(MESH_CALLS)
         result, events, ops = build()
         check("H build: ok, the shape's 2 image jobs, 1 mesh job",
@@ -409,7 +414,7 @@ def main() -> int:
             return False
 
         sig_k = wear({"feet": "shoes", "bottom": "skirt"})
-        check("K full render: 2 image jobs", len(render_views()), 2)
+        check("K full render: 0 image jobs (A119)", len(render_views()), 0)
         real_views = base_body.dressed_views
         base_body.dressed_views = lambda: ("front",)  # the old behaviour: meshed from the front alone
         try:
@@ -430,7 +435,7 @@ def main() -> int:
         print("[5] a front + back record is resumed")
         wear({"feet": "shoes"})
         sig_l = model_refs.current_outfit_state("Demo")[2]
-        check("L full render: 2 image jobs", len(render_views()), 2)
+        check("L full render: 0 image jobs (A119)", len(render_views()), 0)
         op, created = died_record(sig_l)
         check("L record left, front + back", (op is not None, sorted((created[-1].get("view_images") or {})
                                                                      if created else [])), (True, ["back"]))
