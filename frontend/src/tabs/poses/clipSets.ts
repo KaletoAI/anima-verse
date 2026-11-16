@@ -28,6 +28,8 @@ export interface ApiClipRow {
   rel?: string
   url: string
   size?: number
+  /** when the file was last written (import or bake), epoch seconds */
+  built_s?: number
   duration_s?: number | null
   fps?: number | null
   frames?: number | null

@@ -1300,6 +1300,8 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
                + "/".join(quote(seg) for seg in entry["rel"].split("/"))
                + f"?v={content_version(path)}",
         "size": path.stat().st_size,
+        # When the file was last written (import or bake), epoch seconds — the Library's "Built <time>".
+        "built_s": path.stat().st_mtime,
         "has_sidecar": meta is not None,
         "origin": _origin(meta),
         "generator": str(source.get("generator") or ""),
