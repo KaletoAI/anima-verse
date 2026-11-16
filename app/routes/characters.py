@@ -1951,9 +1951,10 @@ def mirror_character_base_body_view(character_name: str, view: str,
 def set_character_base_body_postprocess(character_name: str, op_id: str, body: Dict[str, Any],
                                         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Turn a reference post-process operation on or off for the character (``{"enabled": true|false|null}``,
-    null = the world default) and apply it to the stored base views at once — CPU only, no image job
-    (Ruling A146, ``base_body.set_base_postprocess``). 404 for an operation no package supplies, 409 while a
-    base-body step, a 3D run or a Build of the character goes."""
+    null = the world default). It runs on the full-body reference only (CPU, a derived copy — Ruling A149,
+    ``base_body.set_base_postprocess``); nothing renders, the front shows as outdated when its reference changed.
+    404 for an operation no package supplies, 409 while a base-body step, a 3D run or a Build of the character
+    goes."""
     from app.core import base_body
     _require_character(character_name)
     _refuse_during_build(character_name)
@@ -1968,21 +1969,19 @@ def set_character_base_body_postprocess(character_name: str, op_id: str, body: D
         raise HTTPException(status_code=404, detail=f"No operation {op_id}")
 
 
-@router.post("/{character_name}/base-body/images/{view}/postprocess-preview/{op_id}")
-def preview_character_base_body_postprocess(character_name: str, view: str, op_id: str,
+@router.post("/{character_name}/base-body/postprocess-preview/{op_id}")
+def preview_character_base_body_postprocess(character_name: str, op_id: str,
                                             body: Optional[Dict[str, Any]] = None,
                                             _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Before/after of a post-process operation over one stored base view, nothing stored (Ruling A146).
+    """Before/after of a post-process operation over the full-body reference, nothing stored (Ruling A149).
     ``{before, after, found, seconds}`` (data URLs; ``after`` null when nothing was found)."""
-    from app.core import base_body, view_postprocess
+    from app.core import base_body
     _require_character(character_name)
     params = (body or {}).get("params") if isinstance((body or {}).get("params"), dict) else None
     try:
-        return base_body.postprocess_preview(character_name, view, op_id, params)
+        return base_body.postprocess_preview(character_name, op_id, params)
     except (FileNotFoundError, KeyError) as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except view_postprocess.NotRestorable as e:
-        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

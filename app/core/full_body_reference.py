@@ -166,6 +166,21 @@ def base_image(character_name: str, *, profile: Optional[Dict[str, Any]] = None)
     return outfit_references.image_path(character_name, base_record(character_name, profile=profile))
 
 
+def base_source(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Optional[Path]:
+    """The picture the base front and an outfit's reference are GENERATED from (Ruling A149): the plain body's
+    full-body reference (``base_image``) handed through the post-process operations on for the character
+    (``view_postprocess.processed_reference`` — a derived copy, the original untouched), the reference itself while
+    none is on or nothing was found; None without a reference."""
+    from app.core import view_postprocess
+    profile = _profile_of(character_name, profile)
+    original = base_image(character_name, profile=profile)
+    if original is None:
+        return None
+    available = view_postprocess.operations()
+    ops = view_postprocess.enabled_ids(profile, available)
+    return view_postprocess.processed_reference(character_name, original, ops, available) if ops else original
+
+
 def _gallery_checked(character_name: str, image: str, origin: str = ORIGIN_GALLERY) -> Tuple[Path, bytes]:
     """``(path, bytes)`` of a gallery picture to record; ValueError for a name outside the gallery, a missing
     file or bytes that are no image."""
@@ -489,11 +504,11 @@ def generate_base(character_name: str, *, reserved: bool = False) -> Dict[str, A
 
 def outfit_source(character_name: str, *, profile: Optional[Dict[str, Any]] = None
                   ) -> Tuple[Optional[Path], str]:
-    """``(picture, kind)`` an outfit's reference is generated from: the plain body's full-body reference, else the
-    profile image; ``(None, "")`` without either."""
+    """``(picture, kind)`` an outfit's reference is generated from: the plain body's full-body reference (as
+    post-processed, ``base_source``), else the profile image; ``(None, "")`` without either."""
     from app.core.model_refs import current_profile_image
     profile = _profile_of(character_name, profile)
-    full_body = base_image(character_name, profile=profile)
+    full_body = base_source(character_name, profile=profile)
     if full_body is not None:
         return full_body, FROM_FULL_BODY
     image = current_profile_image(character_name, profile=profile)
