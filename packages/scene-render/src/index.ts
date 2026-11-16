@@ -131,6 +131,9 @@ export { clipShiftM } from './figure'
 export type { ClipHeightOffsetsCm, ClipShiftCm } from './figure'
 
 export { markerSlots, pairYaw, rotateXZ, pairPoints } from './placeGeometry'
+export { clipCalibration, calibratedRoot, bakedHips, isEmptyDraft, EMPTY_DRAFT, alignmentLamp, alignmentDelta,
+  median, wrapDeg, eulerYXZ, matQuat, ALIGN_GREEN, ALIGN_YELLOW } from './clipCalibration'
+export type { AlignmentDraft, SavedCalibration, ClipCalibration, RootInput, AlignmentLamp } from './clipCalibration'
 export type { XZ } from './placeGeometry'
 
 export { surfaceMaterial, updateSurfaceMaterials, setSurfaceSky,
