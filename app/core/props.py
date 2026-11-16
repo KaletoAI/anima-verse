@@ -6077,6 +6077,12 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool,
         "description": variant_description(meta, primary),
         "dims_estimated": variant_dims_estimated(meta, primary),
         "marker_count": len(variant_markers(meta, primary)),
+        # The place TYPES of those markers (pose-catalog groups), each once, in
+        # marker order — what the Poses tab's place preview groups its prop
+        # picker by (Ruling A110b). Read off the same sanitized list.
+        "marker_groups": list(dict.fromkeys(
+            str(m.get("group") or "") for m in variant_markers(meta, primary)
+            if m.get("group"))),
         "has_model": has_model,
         "model_tiers": tiers,
         # Every active variant that has a mesh, in payload order:

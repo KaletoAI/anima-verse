@@ -45,6 +45,8 @@ import { rootAt, rootPath, ROLE_COLOR, type RootPath } from './ClipPreview'
 import { ModelTurnHint } from '../../components/ModelTurnHint'
 import { attachModelTurn, configureViewControls, poseMatrix } from '../../lib/modelTurn'
 import { mountPlaceFigure, placeInteraction, placePhaseB } from './placeFigures'
+import { GROUND_MAX, GROUND_PROP, groundRoom, groupProps, planFill, preselectProp, type FillReason } from './placePicker'
+import { stateMotionUrl, statePicker, type PreviewStateChoice } from '../characters/baseBodyModel'
 
 export const MANNEQUIN = '__mannequin__'
 /** D5: figures in the preview, and how many of them run strand hair. */
@@ -60,7 +62,7 @@ interface ModelAnswer {
   motion?: SecondaryMotionPayload
 }
 interface PropRow {
-  id: string; name?: string; marker_count?: number; has_model?: boolean
+  id: string; name?: string; marker_count?: number; marker_groups?: string[]; has_model?: boolean
   variant_tiers?: Array<{ variant: number }>
 }
 /** One clip file of the edited kind, as the listing carries it. */
@@ -77,7 +79,42 @@ interface PlaceRow {
   letter: string; marker: SceneMarker; slot: number
   point: [number, number]; facing: number; rootY: number
 }
-interface Assignment { character: string; role: string }
+/** A figure on a place: who, which half of the clip, which body (Ruling A110b: the plain base body or the outfit
+ *  body the game shows) and, on the base body, the previewed state ('' = at rest). */
+interface Assignment { character: string; role: string; body: 'outfit' | 'base'; state: string }
+
+/** A character's plain base body as GET …/figure?plain=1 reports it (`plain_body`) — the Base body tab's source. */
+interface PlainInfo {
+  url: string; collision: CollisionPayload | null; motion?: SecondaryMotionPayload
+  groupCount: number; states: PreviewStateChoice[]
+}
+interface PlainAnswer {
+  plain_body?: {
+    model?: { url?: string; status?: string; collision?: CollisionPayload | null } | null
+    extension?: { groups?: unknown[]; motion?: SecondaryMotionPayload; states?: PreviewStateChoice[] } | null
+  }
+}
+/** The base body of each character asked for, fetched once per mount: PlainInfo, null = none built, undefined = loading. */
+function usePlainBodies(names: readonly string[]) {
+  const [rows, setRows] = useState<Record<string, PlainInfo | null>>({})
+  const asked = useRef(new Set<string>())
+  const key = names.join('|')
+  useEffect(() => {
+    for (const name of names) {
+      if (!name || name === MANNEQUIN || asked.current.has(name)) continue
+      asked.current.add(name)
+      apiGet<PlainAnswer>(`/characters/${encodeURIComponent(name)}/figure?plain=1`).then((d) => {
+        const m = d?.plain_body?.model
+        const ready = !!m?.url && m.status === 'ready'
+        const ext = ready ? d?.plain_body?.extension : null
+        setRows((cur) => ({ ...cur, [name]: ready ? { url: m!.url!, collision: m!.collision ?? null, motion: ext?.motion,
+          groupCount: ext?.groups?.length ?? 0, states: ext?.states ?? [] } : null }))
+      }).catch(() => setRows((cur) => ({ ...cur, [name]: null })))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key])
+  return rows
+}
 
 /** One figure's readout: now and the loop median. */
 export interface FigureReadout {
@@ -107,6 +144,42 @@ interface PartnerInfo {
   contacts: number
   channels: number
   engaged: { by: string; of: string; channel: string; w: number; openingMm: number | null }[]
+}
+
+/** The pose catalog's place types as the picker names them. */
+const TYPE_LABEL: Record<string, string> = { stand: 'Stand', seat: 'Seat', ground: 'Ground', lie: 'Lie' }
+
+/** Body and state of one figure (Ruling A110b): outfit body (GET …/model3d, the game's figure) or the plain base body
+ *  (GET …/figure?plain=1) — a variant that is not built is greyed with the step that builds it; the state picker is
+ *  the Base body tab's (`statePicker`: None (at rest) + each state that moves one of the base model's extension
+ *  groups, motion from GET …/base-body/state-motion). */
+function BodyPick({ a, outfitBuilt, base, onChange }: {
+  a: Assignment; outfitBuilt: boolean; base: PlainInfo | null | undefined
+  onChange: (patch: Partial<Assignment>) => void
+}) {
+  const { t } = useI18n()
+  const picker = base ? statePicker(base.groupCount, base.states, t) : null
+  const stateTitle = a.body !== 'base' ? t('States are previewed on the base body, as in the Base body tab.')
+    : base === undefined ? t('Loading…') : !base ? t('No base model yet (Characters → Base body).') : picker?.note || ''
+  const missing = a.body === 'base' ? (base === null ? t('no base model yet (Characters → Base body)') : '')
+    : outfitBuilt ? '' : t('no outfit model yet (Characters → Figure)')
+  return (
+    <span style={{ display: 'inline-flex', gap: 2, marginLeft: 2, alignItems: 'center' }}>
+      <select value={a.body} data-testid="place-body" title={t('Base body = the plain body; outfit body = the figure the game shows, with what the character wears.')}
+        onChange={(e) => onChange({ body: e.target.value as Assignment['body'], state: '' })}>
+        <option value="outfit" disabled={!outfitBuilt}>{outfitBuilt ? t('Outfit body') : `${t('Outfit body')} — ${t('not built')}`}</option>
+        <option value="base" disabled={base === null}>{base === null ? `${t('Base body')} — ${t('not built')}` : t('Base body')}</option>
+      </select>
+      <select value={a.body === 'base' ? a.state : ''} data-testid="place-state" title={stateTitle}
+        disabled={a.body !== 'base' || !picker?.options.length} style={{ maxWidth: 120 }}
+        onChange={(e) => onChange({ state: e.target.value })}>
+        {a.body === 'base' && picker?.options.length
+          ? picker.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)
+          : <option value="">{t('None (at rest)')}</option>}
+      </select>
+      {missing ? <span className="ga-hint" style={{ color: 'var(--danger, #f85149)' }}>{missing}</span> : null}
+    </span>
+  )
 }
 
 const LAMP_COLOR: Record<AlignmentLamp, string> = { green: '#3fb950', yellow: '#d29922', red: '#f85149' }
@@ -152,6 +225,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   const chars = useBuiltCharacters()
   const [props, setProps] = useState<PropRow[] | null>(null)
   const [propId, setPropId] = useState('')
+  /** Solo figures on the bare floor (1..GROUND_MAX). */
+  const [groundCount, setGroundCount] = useState(2)
+  /** The last Fill all's outcome: count placed or why none. */
+  const [fillNote, setFillNote] = useState<{ count: number; reason: FillReason } | null>(null)
   const [variant, setVariant] = useState(0)
   const [scene, setScene] = useState<{ models: SceneModelSpec[]; markers: SceneMarker[] } | null>(null)
   const [assign, setAssign] = useState<Record<string, Assignment>>({})
@@ -191,6 +268,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   const roleList = useMemo(() => (solo ? [''] : ['a', 'b', 'c', 'd', 'e'].slice(0, roles)), [roles, solo])
   const pose = poses[0]
   const yawOffset = pose?.yaw_offset ?? 0
+  const wantType = (pose?.group || '').trim()
+  const isGround = propId === GROUND_PROP
 
   // ── the props with places ──
   useEffect(() => {
@@ -201,20 +280,25 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
       setProps(usable)
       let memo: { prop?: string; variant?: number } = {}
       try { memo = JSON.parse(localStorage.getItem(memoKey(kind)) || '{}') } catch { memo = {} }
-      const first = usable.find((p) => p.id === memo.prop) || usable[0]
-      setPropId(first?.id || '')
-      setVariant(first && first.id === memo.prop ? memo.variant ?? 0 : 0)
-    }).catch(() => { if (!off) setProps([]) })
+      // The remembered prop, else the first under the clip's place type (Ruling A110b).
+      const pick = preselectProp(groupProps(usable, wantType), wantType, memo.prop || '')
+      setPropId(pick)
+      setVariant(pick === memo.prop ? memo.variant ?? 0 : 0)
+    }).catch(() => { if (!off) { setProps([]); setPropId(GROUND_PROP) } })
     return () => { off = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind])
+  const propGroups = useMemo(() => groupProps(props ?? [], wantType), [props, wantType])
 
   // ── its places from the server (the draft scene preview) ──
   useEffect(() => {
     if (!propId) { setScene(null); return }
     try { localStorage.setItem(memoKey(kind), JSON.stringify({ prop: propId, variant })) } catch { /* private mode */ }
     let off = false
-    const room = { id: 'place-preview', name: 'Preview',
-      layout: { x: -3, y: -3, w: 6, d: 6, props: [{ id: 'p', prop_id: propId, at: [3, 3], yaw: 0, variant }] } }
+    // The bare floor is one room marker (placePicker.groundRoom); a prop stands at the room centre.
+    const room = propId === GROUND_PROP ? groundRoom(wantType, solo ? groundCount : roleList.length)
+      : { id: 'place-preview', name: 'Preview',
+        layout: { x: -3, y: -3, w: 6, d: 6, props: [{ id: 'p', prop_id: propId, at: [3, 3], yaw: 0, variant }] } }
     apiPost<{ models?: SceneModelSpec[]; markers?: SceneMarker[] }>('/play/scene-preview', { rooms: [room] })
       .then((payload) => {
         if (off) return
@@ -222,7 +306,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
       })
       .catch((e) => { if (!off) { setScene(null); setStatus(String((e as Error).message || e)) } })
     return () => { off = true }
-  }, [propId, variant, kind])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [propId, variant, kind, groundCount, wantType, roleList.length])
 
   const places = useMemo<PlaceRow[]>(() => {
     const out: PlaceRow[] = []
@@ -236,32 +321,14 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
     return out
   }, [scene])
 
-  // Default fill: the first built character (else the mannequin) on the first place(s) the clip fits.
+  // Default fill and Fill all: built characters first, the mannequin between them (D1), only on places of the
+  // clip's place type (placePicker.planFill). Fill all reports what it did — the count, or why nobody was placed.
   const fill = (all: boolean) => {
-    // Built characters first, the mannequin between them (D1); a pose's place type limits the places.
-    const names = [...(chars ?? []).filter((c) => c.built).map((c) => c.name), MANNEQUIN]
-    const who = (i: number) => names[i % names.length]
-    const wantGroup = (pose?.group || '').trim()
-    const next: Record<string, Assignment> = {}
-    let n = 0
-    const byMarker = new Map<string, PlaceRow[]>()
-    const fits = wantGroup && places.some((p) => p.marker.group === wantGroup)
-    for (const p of places) {
-      if (fits && p.marker.group !== wantGroup) continue
-      byMarker.set(p.marker.id, [...(byMarker.get(p.marker.id) || []), p])
-    }
-    for (const rows of byMarker.values()) {
-      if (!all && n) break
-      if (solo) {
-        for (const p of rows) {
-          if (n >= MAX_FIGURES || (!all && n)) break
-          next[p.letter] = { character: who(n), role: '' }; n++
-        }
-      } else if (rows.length >= roleList.length && n + roleList.length <= MAX_FIGURES) {
-        roleList.forEach((r, i) => { next[rows[i].letter] = { character: who(n), role: r }; n++ })
-      }
-    }
-    setAssign(next)
+    const names = chars ? [...chars.filter((c) => c.built).map((c) => c.name), MANNEQUIN] : null
+    const plan = planFill(places.map((p) => ({ letter: p.letter, markerId: p.marker.id, group: p.marker.group })),
+      { names, want: wantType, roles: solo ? [''] : roleList, all, max: MAX_FIGURES })
+    setAssign(plan.assign)
+    if (all) setFillNote({ count: plan.count, reason: plan.reason })
   }
   const filled = useRef('')
   useEffect(() => {
@@ -273,8 +340,27 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   }, [places, chars, kind, propId, variant])
 
   const assigned = places.filter((p) => assign[p.letter]?.character)
-  const assignKey = JSON.stringify(assigned.map((p) => [p.letter, assign[p.letter]]))
-  const propName = props?.find((p) => p.id === propId)?.name || propId
+  const plain = usePlainBodies(places.map((p) => assign[p.letter]?.character || ''))
+  // A base figure's model, motion and state are part of the scene's key: a state pick or a base body that arrives
+  // rebuilds the scene with the right model.
+  const [stateMotions, setStateMotions] = useState<Record<string, SecondaryMotionPayload | null>>({})
+  useEffect(() => {
+    for (const p of assigned) {
+      const a = assign[p.letter]
+      const k = `${a.character}|${a.state}`
+      if (a.body !== 'base' || !a.state || k in stateMotions || !plain[a.character]) continue
+      setStateMotions((cur) => ({ ...cur, [k]: null }))
+      apiGet<{ motion: SecondaryMotionPayload }>(stateMotionUrl(a.character, a.state))
+        .then((d) => setStateMotions((cur) => ({ ...cur, [k]: d.motion })))
+        .catch(() => { /* the figure keeps the rest motion */ })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assign, plain])
+  const assignKey = JSON.stringify(assigned.map((p) => {
+    const a = assign[p.letter]
+    return [p.letter, a, a.body === 'base' ? [plain[a.character]?.url ?? '', !!stateMotions[`${a.character}|${a.state}`]] : 0]
+  }))
+  const propName = isGround ? t('Ground (no prop)') : props?.find((p) => p.id === propId)?.name || propId
 
   // ── the scene ──
   useEffect(() => {
@@ -312,11 +398,27 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           if (raw) clipFiles.set(role, { file, raw, path: rootPath(raw, standRefM) })
         }
         // Models per character, loaded once; the mannequin is shared and never disposed here.
+        // Keyed by character + body + state: the outfit body is GET …/model3d (the game's figure), the base body
+        // `plain_body.model` of GET …/figure?plain=1 with its rest motion or the picked state's (Base body tab).
+        const modelKey = (a: Assignment) => a.character === MANNEQUIN ? MANNEQUIN
+          : a.body === 'base' ? `${a.character}|base|${a.state}` : a.character
         const models = new Map<string, { template: Object3D; answer: ModelAnswer | null; record: HairStrandRecord | null; owned: boolean }>()
-        for (const name of new Set(assigned.map((p) => assign[p.letter].character))) {
+        for (const a of assigned.map((p) => assign[p.letter])) {
+          const name = a.character
+          const mk = modelKey(a)
+          if (models.has(mk)) continue
           if (name === MANNEQUIN) {
             const fig = await loadTestFigure()
-            if (fig) models.set(name, { template: fig, answer: null, record: null, owned: false })
+            if (fig) models.set(mk, { template: fig, answer: null, record: null, owned: false })
+            continue
+          }
+          if (a.body === 'base') {
+            const base = plain[name]
+            if (!base) continue
+            const motion = (a.state ? stateMotions[`${name}|${a.state}`] : null) ?? base.motion
+            const gltf = await gltfLoader.loadAsync(base.url).catch(() => null)
+            if (gltf) models.set(mk, { template: gltf.scene, answer: { model: { url: base.url, collision: base.collision }, motion },
+              record: null, owned: true })
             continue
           }
           const answer = await apiGet<ModelAnswer>(`/characters/${encodeURIComponent(name)}/model3d`).catch(() => null)
@@ -328,7 +430,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             const json = res?.ok ? await res.json().catch(() => null) as HairStrandRecord | null : null
             record = json && json.version === STRAND_RECORD_VERSION ? json : null
           }
-          models.set(name, { template: gltf.scene, answer, record, owned: true })
+          models.set(mk, { template: gltf.scene, answer, record, owned: true })
         }
         // The prop mesh, placed by the contract's routine.
         const propObjects: Object3D[] = []
@@ -450,7 +552,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         }
         for (const p of assigned) {
           const a = assign[p.letter]
-          const model = models.get(a.character)
+          const model = models.get(modelKey(a))
           const clip = clipFiles.get(a.role)
           if (!model || !clip) continue
           const answer = model.answer
@@ -722,6 +824,18 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   }, [scene, assignKey, kind, set, bust, height, yawOffset, t])
 
   const nAssigned = assigned.length
+  const typeLabel = (ty: string) => TYPE_LABEL[ty] ? t(TYPE_LABEL[ty]) : ty
+  const fillText = (count: number, reason: FillReason) => {
+    const want = wantType ? typeLabel(wantType) : ''
+    switch (reason) {
+      case '': return t('Filled {n} places.').replace('{n}', String(count))
+      case 'loading': return t('Characters are still loading — try again in a moment.')
+      case 'no_places': return t('This choice has no places — pick a prop or Ground (no prop).')
+      case 'no_type': return t('No {type} place here — pick a prop under “{type}”.').split('{type}').join(want)
+      case 'too_few_slots': return t('No {type} place with {n} slots for this pair or group — pick a prop with a wider place.')
+        .replace('{type}', want || t('fitting')).replace('{n}', String(roleList.length))
+    }
+  }
   const variants = props?.find((p) => p.id === propId)?.variant_tiers || []
   const readout = new Map((info?.figures || []).map((f) => [f.letter, f]))
   const fmt = (v: number, d = 1) => `${v >= 0 ? '+' : ''}${v.toFixed(d)}`
@@ -732,11 +846,27 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         <strong>{t('Places')}</strong>
         <label title={t('Props with places; the scene comes from the server like in the game.')}>
           {t('Prop')}{' '}
-          <select value={propId} onChange={(e) => { setPropId(e.target.value); setVariant(0) }} style={{ maxWidth: 200 }}>
-            {(props ?? []).length ? null : <option value="">{t('— no prop with places —')}</option>}
-            {(props ?? []).map((p) => <option key={p.id} value={p.id}>{p.name || p.id}</option>)}
+          <select value={propId} onChange={(e) => { setPropId(e.target.value); setVariant(0); setFillNote(null) }}
+            style={{ maxWidth: 220 }} data-testid="place-prop">
+            <optgroup label={t('No prop')}>
+              <option value={GROUND_PROP}>{t('Ground (no prop)')}</option>
+            </optgroup>
+            {propGroups.map((g) => (
+              <optgroup key={g.type || '-'} label={g.type ? `${typeLabel(g.type)}${g.type === wantType ? ` — ${t('this clip')}` : ''}`
+                : t('Other')}>
+                {g.props.map((p) => <option key={`${g.type}/${p.id}`} value={p.id}>{p.label}</option>)}
+              </optgroup>
+            ))}
           </select>
         </label>
+        {isGround && solo ? (
+          <label title={t('Figures on the bare floor in one row, as a room’s floor place seats them: 0.6 m apart, across the facing.')}>
+            {t('Figures')}{' '}
+            <select value={groundCount} onChange={(e) => { setGroundCount(Number(e.target.value)); setFillNote(null) }}>
+              {Array.from({ length: GROUND_MAX }, (_v, i) => <option key={i} value={i + 1}>{i + 1}</option>)}
+            </select>
+          </label>
+        ) : null}
         {variants.length > 1 ? (
           <label>
             {t('Variant')}{' '}
@@ -752,8 +882,14 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           <button key={s} type="button" className={`ga-btn ga-btn-sm${speed === s ? ' ga-btn-primary' : ''}`}
             onClick={() => setSpeed(s)}>{`${s}×`}</button>
         ))}
-        <button type="button" className="ga-btn ga-btn-sm" disabled={!places.length} onClick={() => fill(true)}
+        <button type="button" className="ga-btn ga-btn-sm" onClick={() => fill(true)}
           title={t('Every place this clip fits gets a figure (at most 6).')}>{t('Fill all with this clip')}</button>
+        {fillNote ? (
+          <span role="status" data-testid="place-fill-note" className="ga-hint"
+            style={fillNote.count ? { color: '#3fb950' } : { color: 'var(--danger, #f85149)' }}>
+            {fillText(fillNote.count, fillNote.reason)}
+          </span>
+        ) : null}
         <label title={t('Draw each figure’s collision capsules as other figures engage them; overlapping pairs of two figures turn red.')}>
           <input type="checkbox" checked={show.collision} onChange={() => toggleShow('collision')} /> {t('Collision')}
         </label>
@@ -808,24 +944,30 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
                     </td>
                     <td>
                       <select value={a?.character || ''} disabled={full} style={{ maxWidth: 130 }}
-                        title={full ? t('At most 6 figures.') : t('Only characters with a built model can be picked.')}
+                        title={full ? t('At most 6 figures.') : t('A character without an outfit model can still show its base body.')}
                         onChange={(e) => {
                           const v = e.target.value
                           setAssign((cur) => {
                             const next = { ...cur }
+                            const built = !!chars?.find((c) => c.name === v)?.built
                             if (!v) delete next[p.letter]
-                            else next[p.letter] = { character: v, role: cur[p.letter]?.role ?? (solo ? '' : roleList[p.slot % roleList.length]) }
+                            else next[p.letter] = { character: v, role: cur[p.letter]?.role ?? (solo ? '' : roleList[p.slot % roleList.length]),
+                              body: built || v === MANNEQUIN ? 'outfit' : 'base', state: '' }
                             return next
                           })
                         }}>
                         <option value="">{t('— empty')}</option>
                         <option value={MANNEQUIN}>{t('1.70 m mannequin')}</option>
                         {(chars ?? []).map((c) => (
-                          <option key={c.name} value={c.name} disabled={!c.built}>
-                            {c.built ? c.name : `${c.name} — ${t('no model yet (Characters → Figure)')}`}
+                          <option key={c.name} value={c.name}>
+                            {c.built ? c.name : `${c.name} — ${t('no outfit model yet')}`}
                           </option>
                         ))}
                       </select>
+                      {a?.character && a.character !== MANNEQUIN ? (
+                        <BodyPick a={a} outfitBuilt={!!chars?.find((c) => c.name === a.character)?.built}
+                          base={plain[a.character]} onChange={(patch) => setAssign((cur) => ({ ...cur, [p.letter]: { ...cur[p.letter], ...patch } }))} />
+                      ) : null}
                       {!solo && a?.character ? (
                         <select value={a.role} style={{ marginLeft: 2 }} title={t('Which half of the clip this figure plays.')}
                           onChange={(e) => setAssign((cur) => ({ ...cur, [p.letter]: { ...cur[p.letter], role: e.target.value } }))}>
@@ -852,7 +994,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               })}
             </tbody>
           </table>
-          {!places.length && propId ? <div className="ga-hint">{t('This prop has no places.')}</div> : null}
+          {!places.length && propId && !isGround ? <div className="ga-hint">{t('This prop has no places.')}</div> : null}
           {(show.collision || show.channels) && info?.partners ? (
             <div style={{ marginTop: 6, borderTop: '1px solid var(--border, #30363d)', paddingTop: 4 }} data-testid="place-partners">
               {show.collision ? (
