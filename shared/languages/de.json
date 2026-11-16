@@ -6206,10 +6206,7 @@
     "tip →": "Spitze →",
     "unsaved — the preview already uses it": "ungespeichert — die Vorschau nutzt es schon",
     "on": "an",
-    "Post-process for this character": "Nachbearbeitung für diesen Charakter",
     "World default": "Welt-Standard",
-    "On for this character": "An für diesen Charakter",
-    "Off for this character": "Aus für diesen Charakter",
     "CPU, no image job": "CPU, kein Bildjob",
     "Turning it off:": "Ausschalten:",
     "Turning it on:": "Einschalten:",
@@ -6217,10 +6214,7 @@
     "{n} found, {s} s": "{n} gefunden, {s} s",
     "Applied to the full-body reference — nothing renders now": "Auf die Ganzkörper-Referenz angewendet — jetzt wird nichts gerendert",
     "The original full-body reference is used again — nothing renders now": "Die ursprüngliche Ganzkörper-Referenz wird wieder verwendet — jetzt wird nichts gerendert",
-    "This character: on, off, or the world default (Game-Admin → Setup). Saving processes the full-body reference at once; nothing renders.": "Dieser Charakter: an, aus oder der Welt-Standard (Game-Admin → Setup). Speichern bearbeitet die Ganzkörper-Referenz sofort; nichts wird gerendert.",
-    "Shows the full-body reference before and after — nothing is stored.": "Zeigt die Ganzkörper-Referenz vorher und nachher — nichts wird gespeichert.",
     "Nothing found in the reference — it stays as it is.": "In der Referenz nichts gefunden — sie bleibt, wie sie ist.",
-    "Post-processing of the full-body reference (runs on the CPU; the front and every view are then generated from the processed picture):": "Nachbearbeitung der Ganzkörper-Referenz (läuft auf der CPU; Vorderansicht und alle Ansichten werden dann aus dem bearbeiteten Bild erzeugt):",
     "No full-body reference — nothing is processed.": "Keine Ganzkörper-Referenz — nichts wird bearbeitet.",
     "Post-process failed — the front is made from the original reference": "Nachbearbeitung fehlgeschlagen — die Vorderansicht wird aus der ursprünglichen Referenz gemacht",
     "The front is made from the processed reference ({n} found; the original is kept).": "Die Vorderansicht wird aus der bearbeiteten Referenz gemacht ({n} gefunden; das Original bleibt erhalten).",
@@ -6252,5 +6246,7 @@
     "The attached part bends within its limit in every frame.": "Das angesetzte Teil bleibt in jedem Bild innerhalb seiner Biegegrenze.",
     "The attached part is at its bend limit in {n} of {m} frames: the rest of the way is the partner’s shift or turn.": "Das angesetzte Teil steht in {n} von {m} Bildern an seiner Biegegrenze: Den Rest übernimmt die Verschiebung oder Drehung des Partners.",
     "core default": "Kernvorgabe"
-  }
+  },
+    "Show the reference as it is again": "Referenzbild wieder unverändert zeigen",
+    "Shows the processed reference in its place — nothing is stored.": "Zeigt das bearbeitete Referenzbild an seiner Stelle — es wird nichts gespeichert."
 }

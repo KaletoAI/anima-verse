@@ -1,6 +1,7 @@
 /**
- * Ruling A146, corrected by A149: the post-process operations of the plain body's FULL-BODY REFERENCE, right under
- * the reference tile (Characters → Base body → Views, row 1). The operation runs on that one picture only; the
+ * Ruling A146, corrected by A149: the post-process operations of the plain body's FULL-BODY REFERENCE. Ruling A151:
+ * one compact line per operation INSIDE the reference tile, under Gallery / Upload / Clear; the state, cost and what a
+ * click makes due are on mouse-over, and Preview shows the processed picture in the reference's own place. The operation runs on that one picture only; the
  * front and every view are generated from the processed copy, no generated view is processed.
  * One compact row per operation a package supplies (server `base_body.postprocess_info`; hidden without one):
  * the switch (this character: on / off / world default), the cost line "CPU, no image job", what a click makes
@@ -13,7 +14,6 @@ import { useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { RefImage } from './RefImage'
 import { hubJobs } from './viewFacingModel'
 
 export interface PostprocessFollowup {
@@ -68,19 +68,25 @@ function postprocessDue(f: PostprocessFollowup | null | undefined, t: (s: string
   return [line, f.dressed ? t(POSTPROCESS_DRESSED) : ''].filter(Boolean).join(' ')
 }
 
-function OperationRow({ character, op, hasReference, busy, onChanged }: {
+function OperationRow({ character, op, hasReference, stateLine, busy, onChanged, onPreview }: {
   character: string
   op: PostprocessOperation
   /** A full-body reference is set (the preview needs it). */
   hasReference: boolean
+  /** The reference's state sentence (on mouse-over). */
+  stateLine: string
   busy: boolean
   onChanged: () => void
+  /** Shows a picture in the reference's place (null = the reference again). */
+  onPreview: (url: string | null) => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
   const enc = encodeURIComponent(character)
   const [posting, setPosting] = useState(false)
-  const [preview, setPreview] = useState<{ before: string | null; after: string | null; found: number; seconds: number } | null>(null)
+  const [previewing, setPreviewing] = useState(false)
+
+  const stopPreview = () => { setPreviewing(false); onPreview(null) }
 
   const set = async (enabled: boolean | null) => {
     setPosting(true)
@@ -89,7 +95,7 @@ function OperationRow({ character, op, hasReference, busy, onChanged }: {
         `/characters/${enc}/base-body/postprocess/${encodeURIComponent(op.id)}`, { enabled })
       if (d?.reference?.error) toast(t(d.reference.error), 'error')
       else toast(t(d?.enabled ? 'Applied to the full-body reference — nothing renders now' : 'The original full-body reference is used again — nothing renders now'))
-      setPreview(null)
+      stopPreview()
       onChanged()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
@@ -98,10 +104,16 @@ function OperationRow({ character, op, hasReference, busy, onChanged }: {
     }
   }
 
-  const runPreview = async () => {
+  const togglePreview = async () => {
+    if (previewing) { stopPreview(); return }
     setPosting(true)
     try {
-      setPreview(await apiPost(`/characters/${enc}/base-body/postprocess-preview/${encodeURIComponent(op.id)}`, {}))
+      const d = await apiPost<{ before: string | null; after: string | null; found: number; seconds: number }>(
+        `/characters/${enc}/base-body/postprocess-preview/${encodeURIComponent(op.id)}`, {})
+      if (d?.after) { setPreviewing(true); onPreview(d.after) }
+      toast(d?.after
+        ? t('{n} found, {s} s').replace('{n}', String(d.found)).replace('{s}', d.seconds.toFixed(2))
+        : t('Nothing found in the reference — it stays as it is.'))
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     } finally {
@@ -111,50 +123,34 @@ function OperationRow({ character, op, hasReference, busy, onChanged }: {
 
   const choice = op.own === true ? 'on' : op.own === false ? 'off' : 'world'
   const due = postprocessDue(op.followup, t)
+  const title = [op.description ? t(op.description) : '', stateLine, t(POSTPROCESS_COST),
+    due ? `${t(op.enabled ? 'Turning it off:' : 'Turning it on:')} ${due}` : ''].filter(Boolean).join('\n')
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span className="ga-chip" title={op.description ? t(op.description) : ''}
-          style={{ background: op.enabled ? 'var(--success-bg, #1f3d2a)' : undefined }}>
-          {t(op.label)}: {op.enabled ? t('on') : t('off')}
-        </span>
-        <select className="ga-input ga-input-sm" style={{ width: 'auto' }} disabled={busy || posting} value={choice}
-          title={t('This character: on, off, or the world default (Game-Admin → Setup). Saving processes the full-body reference at once; nothing renders.')}
-          onChange={(e) => { void set(e.target.value === 'on' ? true : e.target.value === 'off' ? false : null) }}
-          aria-label={t('Post-process for this character')}>
-          <option value="world">{t('World default')} ({op.world_default ? t('on') : t('off')})</option>
-          <option value="on">{t('On for this character')}</option>
-          <option value="off">{t('Off for this character')}</option>
-        </select>
-        <span className="ga-hint">{t(POSTPROCESS_COST)}</span>
-        {hasReference ? (
-          <button type="button" className="ga-btn ga-btn-sm" disabled={busy || posting} onClick={() => { void runPreview() }}
-            title={t('Shows the full-body reference before and after — nothing is stored.')}>
-            {t('Preview')}
-          </button>
-        ) : null}
-      </div>
-      {due ? <div className="ga-hint" style={{ overflowWrap: 'anywhere' }}>
-        {t(op.enabled ? 'Turning it off:' : 'Turning it on:')} {due}</div> : null}
-      {preview ? (
-        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-          {preview.before ? <div style={{ width: 90 }}><RefImage src={preview.before} height={140} label={t('Before')} compact /></div> : null}
-          {preview.after ? <div style={{ width: 90 }}><RefImage src={preview.after} height={140} label={t('After')} compact /></div>
-            : <span className="ga-hint">{t('Nothing found in the reference — it stays as it is.')}</span>}
-          <span className="ga-hint">
-            {t('{n} found, {s} s').replace('{n}', String(preview.found)).replace('{s}', preview.seconds.toFixed(2))}
-          </span>
-        </div>
+    <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+      <select className="ga-input ga-input-sm" style={{ width: 'auto', maxWidth: '100%' }} disabled={busy || posting}
+        value={choice} title={title} aria-label={t(op.label)}
+        onChange={(e) => { void set(e.target.value === 'on' ? true : e.target.value === 'off' ? false : null) }}>
+        <option value="world">{t(op.label)}: {t('World default')} ({op.world_default ? t('on') : t('off')})</option>
+        <option value="on">{t(op.label)}: {t('on')}</option>
+        <option value="off">{t(op.label)}: {t('off')}</option>
+      </select>
+      {hasReference ? (
+        <button type="button" className={`ga-btn ga-btn-sm${previewing ? ' ga-btn-primary' : ''}`} disabled={busy || posting}
+          aria-pressed={previewing} onClick={() => { void togglePreview() }}
+          title={t(previewing ? 'Show the reference as it is again' : 'Shows the processed reference in its place — nothing is stored.')}>
+          {t('Preview')}
+        </button>
       ) : null}
     </div>
   )
 }
 
-export function ViewPostprocessPanel({ character, info, busy, onChanged }: {
+export function ViewPostprocessPanel({ character, info, busy, onChanged, onPreview }: {
   character: string
   info: BasePostprocessInfo | null | undefined
   busy: boolean
   onChanged: () => void
+  onPreview: (url: string | null) => void
 }) {
   const { t } = useI18n()
   if (!info?.operations?.length) return null
@@ -166,12 +162,12 @@ export function ViewPostprocessPanel({ character, info, busy, onChanged }: {
     : ref.pending ? t('The processed copy is made when the front next reads the reference.')
     : t('The front is made from the original reference.')
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <div className="ga-hint">{t('Post-processing of the full-body reference (runs on the CPU; the front and every view are then generated from the processed picture):')}</div>
-      <div className="ga-hint">{state}</div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       {info.operations.map((op) => (
-        <OperationRow key={op.id} character={character} op={op} hasReference={!!ref?.set} busy={busy} onChanged={onChanged} />
+        <OperationRow key={op.id} character={character} op={op} hasReference={!!ref?.set} stateLine={state}
+          busy={busy} onChanged={onChanged} onPreview={onPreview} />
       ))}
+      {ref?.error ? <div className="ga-hint ga-one-line" style={{ color: 'var(--danger, #e66)' }} title={state}>{state}</div> : null}
     </div>
   )
 }

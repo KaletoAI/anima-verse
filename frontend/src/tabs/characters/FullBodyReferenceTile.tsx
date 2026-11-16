@@ -153,7 +153,7 @@ const PIC_H = 120
  * buttons wait.
  */
 export function FullBodyReferenceTile({ character, row, record, url, run, generate, followup, busy, disabledReason,
-  clearNote, onGenerate, onPick, onUpload, onClear, children }: {
+  clearNote, onGenerate, onPick, onUpload, onClear, extra, children }: {
   character: string
   row: StepRowData
   record: FullBodyRecord | null
@@ -172,6 +172,8 @@ export function FullBodyReferenceTile({ character, row, record, url, run, genera
   onPick: (filename: string) => void
   onUpload: (file: File) => void
   onClear: () => void
+  /** Ruling A151: compact controls under the buttons (the reference post-process switch). */
+  extra?: ReactNode
   children?: ReactNode
 }) {
   const { t } = useI18n()
@@ -243,6 +245,7 @@ export function FullBodyReferenceTile({ character, row, record, url, run, genera
               ) : null}
               {info ? <span className="ga-info" tabIndex={0} title={info} aria-label={info}>i</span> : null}
             </div>
+            {extra}
           </div>
         </div>
         {loud && row.reason ? (

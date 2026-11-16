@@ -85,7 +85,7 @@
  * settings).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiUpload } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -312,8 +312,11 @@ function FrontReferenceRow({ reference, jobs, busy, buildRunning, onRegenerate }
  *  makes due is said before the click: the front, with the front's Regenerate cost. Saving (pick, upload, clear)
  *  renders nothing. Read on its own (GET …/base-body/full-body-reference), every 2 s while a Generate runs; when one
  *  ends or a save lands, the base body is read again (the front turns outdated). */
-function BaseFullBodyReference({ character, jobs, refreshKey, onChanged, onOpenGallery }: {
+function BaseFullBodyReference({ character, jobs, refreshKey, onChanged, onOpenGallery, extra }: {
   character: string
+  /** Ruling A151: compact controls under the reference tile's buttons; `showPreview(url)` puts a preview picture
+   *  in the reference's place (null = the reference again). */
+  extra?: (showPreview: (url: string | null) => void) => ReactNode
   /** Opens the Gallery tab, where the profile image is chosen. */
   onOpenGallery?: () => void
   jobs: PlainBodyJobs | undefined
@@ -326,6 +329,7 @@ function BaseFullBodyReference({ character, jobs, refreshKey, onChanged, onOpenG
   const enc = encodeURIComponent(character)
   const [info, setInfo] = useState<BaseFullBodyInfo | null>(null)
   const [busy, setBusy] = useState(false)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const load = useCallback(async () => {
     try {
       setInfo(await apiGet<BaseFullBodyInfo>(`/characters/${enc}/base-body/full-body-reference`))
@@ -366,13 +370,13 @@ function BaseFullBodyReference({ character, jobs, refreshKey, onChanged, onOpenG
       link={onOpenGallery ? { label: t('Gallery'), title: t('The profile image is chosen in the Gallery tab'),
         onClick: onOpenGallery } : undefined} />
     <ReferenceArrow />
-    <FullBodyReferenceTile character={character} row={fullBodyRow('base', info, t)} record={info.record} url={info.url}
+    <FullBodyReferenceTile character={character} row={fullBodyRow('base', info, t)} record={info.record} url={previewUrl || info.url}
       run={info.run} generate={info.generate} busy={busy} followup={baseFollowup(jobs, t)}
       clearNote={t('The picture stays in the gallery. Nothing renders now — the front is then made from the profile image again, and it shows as outdated until you regenerate it.')}
       onGenerate={() => void run(() => apiPost<BaseFullBodyInfo>(`${path}/generate`, {}), 'Generating')}
       onPick={(filename) => void run(() => apiPost<BaseFullBodyInfo>(path, { image: filename }), 'Saved')}
       onUpload={(file) => void run(() => apiUpload<BaseFullBodyInfo>(`${path}/upload`, file), 'Saved')}
-      onClear={() => void run(() => apiDelete<BaseFullBodyInfo>(path), 'Cleared')} />
+      onClear={() => void run(() => apiDelete<BaseFullBodyInfo>(path), 'Cleared')} extra={extra?.(setPreviewUrl)} />
     </div>
   )
 }
@@ -846,10 +850,9 @@ export function FieldBaseBody({ character, onOpenFigure, onOpenGallery }: {
             {/* Row 1 (Ruling A90): profile image → full-body reference (Ruling A87, the first step); the front's
                 source as a chip under it; row 2: the four views in one row. */}
             <BaseFullBodyReference character={character} jobs={jobs} onChanged={startPoll} onOpenGallery={onOpenGallery}
-              refreshKey={`${info.image_meta?.front?.created_at || ''}:${info.front_reference?.image || ''}:${info.front_reference?.current ? 1 : 0}`} />
-            {/* Ruling A149: a package's CPU post-process of the full-body reference (hidden without one). */}
-            <ViewPostprocessPanel character={character} info={info.postprocess} busy={posting || viewsRunning(info)}
-              onChanged={() => startPoll(300)} />
+              refreshKey={`${info.image_meta?.front?.created_at || ''}:${info.front_reference?.image || ''}:${info.front_reference?.current ? 1 : 0}`}
+              extra={(showPreview) => <ViewPostprocessPanel character={character} info={info.postprocess}
+                busy={posting || viewsRunning(info)} onChanged={() => startPoll(300)} onPreview={showPreview} />} />
             <FrontReferenceRow reference={info.front_reference} jobs={jobs} busy={posting || viewsRunning(info)}
               buildRunning={!!figure?.build.running}
               onRegenerate={() => { void post('images', { view: 'front', force: true }) }} />
