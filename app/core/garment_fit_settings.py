@@ -14,6 +14,10 @@ may add — ``garment_fit.fit_clothing``'s ``settings``:
 - ``trunk`` (Ruling A83): ``garment_fit.TRUNK_CHOICES`` — "auto" (the fit decides, ``garment_fit.auto_trunk``),
   "generated" (as generated) or "fitted" (laid onto the body, ``garment_fit.place_trunk``; before the depth
   allowance).
+- ``mesh_shape`` (Ruling A48d): ``garment_shell.SHAPE_CHOICES`` — "auto" (``garment_shell.auto_shape``: a shell for
+  a close-fitting piece), "as_generated" (the generated mesh, fitted) or "shell" (the piece's mesh made from the
+  body's surface over its region, ``garment_shell.build_shell``; CPU only). The fit records the shape it made
+  (``inputs.mesh_shape``); a fit whose made shape is not what the current choice resolves to is due (``changed``).
 
 Stored on the character profile (``SETTINGS_KEY``: ``{item_id: {key: value}}``, only the values that differ from
 the defaults). Not part of the fingerprint: a change keeps every image and the mesh and only makes the fit due — the
@@ -22,13 +26,15 @@ fit records the settings it was made with (``inputs.fit_settings``) and a fit ma
 """
 from typing import Any, Dict, Optional
 
-#: Profile key of the per-piece fit settings: ``{item_id: {sleeves_left, sleeves_right, allowance, depth, trunk}}``.
+#: Profile key of the per-piece fit settings: ``{item_id: {sleeves_left, sleeves_right, allowance, depth, trunk,
+#: mesh_shape}}``.
 SETTINGS_KEY = "garment_fit_settings"
 SIDES = ("left", "right")
 
 
 def defaults() -> Dict[str, Any]:
-    return {"sleeves_left": "auto", "sleeves_right": "auto", "allowance": "auto", "depth": 0, "trunk": "auto"}
+    return {"sleeves_left": "auto", "sleeves_right": "auto", "allowance": "auto", "depth": 0, "trunk": "auto",
+            "mesh_shape": "auto"}
 
 
 def normalise(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -43,6 +49,8 @@ def normalise(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     out["allowance"] = garment_fit.allowance_choice(raw)
     out["depth"] = garment_fit.depth_choice(raw)
     out["trunk"] = garment_fit.trunk_choice(raw)
+    from app.core import garment_shell
+    out["mesh_shape"] = garment_shell.shape_choice(raw)
     return out
 
 
@@ -57,9 +65,29 @@ def recorded(record: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return normalise(((record or {}).get("inputs") or {}).get("fit_settings"))
 
 
+def made_shape(record: Optional[Dict[str, Any]]) -> str:
+    """The mesh shape a fit ``record`` made (``inputs.mesh_shape``; a fit before Ruling A48d: as generated)."""
+    from app.core import garment_shell
+    value = ((record or {}).get("inputs") or {}).get("mesh_shape")
+    return garment_shell.SHELL if value == garment_shell.SHELL else garment_shell.AS_GENERATED
+
+
+def current_shape(settings: Dict[str, Any], item_id: str) -> str:
+    """What the piece's mesh shape choice in ``settings`` resolves to now (Auto: ``garment_shell.auto_shape``)."""
+    from app.core import garment_shell
+    from app.models.inventory import get_item
+    return garment_shell.resolve_shape(settings.get("mesh_shape", "auto"), get_item(item_id))
+
+
 def changed(record: Optional[Dict[str, Any]], profile: Optional[Dict[str, Any]], item_id: str) -> bool:
-    """Whether the fit ``record`` was made with other fit settings than the current ones."""
-    return recorded(record) != fit_settings(profile, item_id)
+    """Whether the fit ``record`` was made with other fit settings than the current ones — or made another mesh
+    shape than the current choice resolves to (Auto may resolve differently than when the fit was made). The shape
+    is compared by what it resolves to: Auto → As generated on a piece Auto keeps as generated changes nothing."""
+    current = fit_settings(profile, item_id)
+    made = recorded(record)
+    made.pop("mesh_shape", None)
+    now = {k: v for k, v in current.items() if k != "mesh_shape"}
+    return made != now or made_shape(record) != current_shape(current, item_id)
 
 
 def validate(changes: Dict[str, Any]) -> Dict[str, Any]:
@@ -86,6 +114,11 @@ def validate(changes: Dict[str, Any]) -> Dict[str, Any]:
                     or value not in garment_fit.DEPTH_CHOICES):
                 raise ValueError("depth must be 0, 3, 6 or 10")
             out[key] = int(value)
+        elif key == "mesh_shape":
+            from app.core import garment_shell
+            if not isinstance(value, str) or value not in garment_shell.SHAPE_CHOICES:
+                raise ValueError(f"mesh_shape must be one of {', '.join(garment_shell.SHAPE_CHOICES)}")
+            out[key] = value
         elif key == "trunk":
             if not isinstance(value, str) or value not in garment_fit.TRUNK_CHOICES:
                 raise ValueError(f"trunk must be one of {', '.join(garment_fit.TRUNK_CHOICES)}")

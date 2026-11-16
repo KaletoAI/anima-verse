@@ -192,14 +192,16 @@ PART_DIRS: Dict[str, str] = {"image": "images", "raw": "raw", "prepared": "prepa
                              # Ruling A40: a body shape's refused derived shoe beside the fresh fit's attempt
                              "attempt_derived": "attempts/derived",
                              # Ruling A48a (``garment_mesh``): the refused attempts of the mesh step's last run
-                             "mesh_attempt": "attempts/mesh", "mesh_attempt_raw": "attempts/mesh"}
+                             "mesh_attempt": "attempts/mesh", "mesh_attempt_raw": "attempts/mesh",
+                             # Ruling A48d (``garment_shell``): the shell from the body alone, beside its fit
+                             "shell": "shell"}
 #: File suffix of a part other than ``glb`` (``limbs``: the refit's limb source, ``garment_source``).
 _PART_SUFFIX: Dict[str, str] = {"failed": "json", "limbs": "npz"}
 #: The parts keyed by an inner-layer signature ``lsig`` besides the fsig.
 LAYER_PARTS: Tuple[str, ...] = ("layer", "layer_low")
 #: The parts kept per body (``garment_path(body=…)``); the rest is shared.
 BODY_PARTS: Tuple[str, ...] = ("fit", "low", "failed", "layer", "layer_low", "attempt", "attempt_prev",
-                                "attempt_prev_low", "attempt_derived")
+                                "attempt_prev_low", "attempt_derived", "shell")
 #: Folder of the outfit bodies' fits under ``garments/``.
 BODIES_DIR = "bodies"
 #: An outfit body id (``base_body.OUTFIT_BODY_RE``).

@@ -1319,7 +1319,7 @@ def body_fit_view(item_id: str, record: Dict[str, Any], profile: Dict[str, Any],
     fit_settings = None
     if gs._garment_kind(item_id) == "clothing":
         fit_settings = garments.fit_settings_view(record, garment_fit_settings.fit_settings(profile, item_id),
-                                                  accepted=accepted)
+                                                  accepted=accepted, item_id=item_id)
     gates = attempt.get("gates") if attempt else record.get("gates")
     reasons = [] if accepted else [str(r) for r in ((gates or {}).get("reasons") or [])]
     return {"metrics": metrics, "tris": metrics.get("tris") or attempt.get("tris"),

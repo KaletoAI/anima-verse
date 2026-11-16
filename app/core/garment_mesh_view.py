@@ -69,8 +69,10 @@ from app.core.log import get_logger
 
 logger = get_logger("garment_mesh_view")
 
-#: The mesh files of the Mesh row: the decimated mesh the fit takes, and the generator's output.
-WHICH: Tuple[str, ...] = ("prepared", "raw")
+#: The mesh files of the Mesh row: the decimated mesh the fit takes, the generator's output, and (Ruling A48d) the
+#: shell from the body (``garment_shell``; it sits on the RIGGED base body in its bind pose, so its view needs no
+#: placement: the ghost is the rigged body, the inside test the rigged body's field, no allowance table).
+WHICH: Tuple[str, ...] = ("prepared", "raw", "shell")
 #: The two cached overlays (``overlay_path``).
 OVERLAYS: Tuple[str, ...] = ("ghost", "inside")
 #: Stamped into the cache key: a change of the placement or the inside rule computes every view again
@@ -161,6 +163,8 @@ def mesh_file(character_name: str, item_id: str, which: str, attempt: int = 0) -
     if isinstance(attempt, bool) or not isinstance(attempt, int) or not 0 <= attempt <= garment_mesh.KEPT_MAX:
         raise ValueError(f"attempt must be 0..{garment_mesh.KEPT_MAX}")
     fsig = current_fsig(character_name, item_id)
+    if which == "shell" and attempt:
+        raise ValueError("A shell has no kept attempts")
     if attempt:
         return garment_mesh.attempt_files(character_name, item_id, fsig, attempt)[which]
     path = gs.garment_path(character_name, item_id, fsig, which)
@@ -445,8 +449,26 @@ def _inputs(character_name: str, item_id: str, which: str, attempt: int) -> Dict
     if not all(versions[1:3]):
         raise ViewUnavailable("No base model yet — the body cannot be shown")
     raw = f"a48a-v{VIEW_VERSION}|{'|'.join(versions)}|{_version(copy if copy.is_file() else None)}"
-    return {"mesh": mesh, "fsig": fsig, "bsig": bsig, "front": Path(front), "versions": versions,
+    return {"mesh": mesh, "fsig": fsig, "bsig": bsig, "front": Path(front), "versions": versions, "which": which,
             "key": hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]}
+
+
+def _compute_shell(inputs: Dict[str, Any], body_r, P, F, started: float) -> Dict[str, Any]:
+    """The body view of a shell (Ruling A48d): the shell is in the rigged base's bind space, so the ghost is the
+    rigged body as it is and the inside test its field at ``VOX_M`` (metres); placement identity, no allowance."""
+    from app.core import garment_fit
+    from app.core.timeutils import utc_now_iso
+    mask, share, face_share = inside_faces(P, F, body_r.positions, body_r.faces, vox=garment_fit.VOX_M)
+    files = _cache_files(inputs["key"])
+    _write_atomic(files["ghost"], overlay_glb(body_r.positions, body_r.faces, GHOST_RGBA, name="body"))
+    if mask.any():
+        _write_atomic(files["inside"], overlay_glb(P, F[mask], INSIDE_RGBA, name="inside"))
+    result = {"key": inputs["key"], "share": round(share, 4), "face_share": round(face_share, 4),
+              "faces": int(len(F)), "inside_faces": int(mask.sum()), "bsig": inputs["bsig"],
+              "placement": {"scale": 1.0, "offset": [0.0, 0.0, 0.0], "k": 1.0}, "allowance": None,
+              "computed_at": utc_now_iso(), "seconds": round(time.monotonic() - started, 2)}
+    _write_atomic(files["json"], json.dumps(result).encode("utf-8"))
+    return result
 
 
 def _compute(character_name: str, item_id: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
@@ -470,6 +492,8 @@ def _compute(character_name: str, item_id: str, inputs: Dict[str, Any]) -> Dict[
     except garment_source.FrameRefused as e:
         raise ViewUnavailable(f"The piece cannot be placed on this body: {e}")
     P, F, _U, _image, _mime, _material = static_arrays(inputs["mesh"].read_bytes())
+    if inputs.get("which") == "shell":
+        return _compute_shell(inputs, body_r, P, F, started)
     s, t = placement(P, F, body_u.positions, {"body": body_mask, "garment": ghost_mask})
     vox = garment_fit.VOX_M / k
     mask, share, face_share = inside_faces(P * s + t, F, body_u.positions, body_u.faces, vox=vox)

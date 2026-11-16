@@ -644,7 +644,12 @@ def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str
             return "outdated"
         return "accepted"
     prepared = garment_path(character_name, item_id, fsig, "prepared")
-    if (record.get("inputs") or {}).get("prepared_sha256") != _sha(prepared) or not prepared.is_file():
+    if (record.get("inputs") or {}).get("mesh_shape") == "shell":
+        # Ruling A48d: a shell is made from the body and the ghost views, never from the prepared mesh
+        from app.core import garment_shell
+        if (record.get("inputs") or {}).get("shell_version") != garment_shell.SHELL_VERSION:
+            return "stale"
+    elif (record.get("inputs") or {}).get("prepared_sha256") != _sha(prepared) or not prepared.is_file():
         return "outdated"
     if _settings_changed(character_name, item_id, record, profile):
         return "stale"  # Ruling A47: the fit settings changed — the chain re-runs the fit only (CPU)
@@ -1360,6 +1365,10 @@ def _fit_locked(character_name: str, item_id: str, kind: str, fsig: str, bsig: s
     from app.core.garment_store import GARMENT_VIEWS, garment_path
     from app.core.model_refs import find_ref_image
     from app.core.timeutils import utc_now_iso
+    from app.core import garment_fit_settings, garment_shell
+    if garment_fit_settings.current_shape(garment_fit_settings.fit_settings(profile, item_id),
+                                          item_id) == garment_shell.SHELL:
+        return _fit_shell(character_name, item_id, kind, fsig, bsig, profile)
 
     prepared = garment_path(character_name, item_id, fsig, "prepared")
     if not _accepted(prepared):
@@ -1465,6 +1474,68 @@ def _fit_locked(character_name: str, item_id: str, kind: str, fsig: str, bsig: s
 
     record: Dict[str, Any] = record_of(True, frame)
     return _publish_fit(character_name, item_id, kind, fsig, bsig, snapshot["rigged"], result, record)
+
+
+def _fit_shell(character_name: str, item_id: str, kind: str, fsig: str, bsig: str, profile: Dict[str, Any], *,
+               body: str = "", body_snapshot: Optional[Dict[str, Any]] = None, schedule: bool = True,
+               extra: Optional[Dict[str, Any]] = None) -> Path:
+    """Ruling A48d — the fit of a piece whose mesh shape resolves to "Shell from the body": the shell is made from
+    the body's own surface over the piece's region in its two ghost views (``garment_shell.build_shell``, CPU only,
+    no hub job, the generated mesh is not read) and grafted as it is — it already sits on the body, so there is no
+    placement, push or allowance. The standalone shell is kept beside the fit (``garment_path(..., "shell")``, the
+    Mesh step's 3D view). ``body``: an outfit body id (its ``body_snapshot`` ``{rigged, unrigged, sha}``, ``extra``
+    the body fit's own record keys) — the shell is made on that body's own surface, framed by the base views; "" =
+    the base body. ``_Refused`` when no shell can be made."""
+    from app.core import (base_body, fit_attempts, garment_fit, garment_fit_settings, garment_shell, garment_source,
+                          refit_pool)
+    from app.core.garment_store import garment_path, write_record
+    from app.core.timeutils import utc_now_iso
+    for view in ("front", "back"):
+        if not _accepted(_image(character_name, item_id, fsig, "ghost", view)):
+            raise base_body.MissingInput(f"The ghost {view} image is missing — run the ghost step first")
+    if body_snapshot is None:
+        snapshot = base_body._snapshot_base_model(character_name, bsig)
+        rigged, unrigged = snapshot["rigged"], snapshot["unrigged"]
+        body_sha = hashlib.sha256(rigged).hexdigest()
+    else:
+        rigged, unrigged, body_sha = body_snapshot["rigged"], body_snapshot["unrigged"], body_snapshot["sha"]
+    base_sha = body_sha if not body else base_body_sha(character_name, bsig)
+    fit_settings = garment_fit_settings.fit_settings(profile, item_id)
+    ghosts = {v: _sha(_image(character_name, item_id, fsig, "ghost", v)) for v in ("front", "back")}
+    base_record = {"kind": kind, "item_id": item_id, "fsig": fsig, "base_signature": bsig,
+                   "base_model_sha256": base_sha, **model_geometry.stamp_on(character_name, bsig, base_sha),
+                   "body_id": body or bsig, "body_sha256": body_sha,
+                   "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
+                              "ghost_front_sha256": ghosts["front"], "ghost_back_sha256": ghosts["back"],
+                              "fit_settings": fit_settings, "mesh_shape": garment_shell.SHELL,
+                              "shell_version": garment_shell.SHELL_VERSION}}
+    base_record.update(extra or {})
+    try:
+        views = garment_shell.shell_views(character_name, item_id, fsig, bsig)
+        result = refit_pool.run(garment_shell.build_shell, rigged, unrigged, views)
+    except (garment_shell.ShellRefused, garment_source.FrameRefused) as e:
+        error = f"shell refused — {e}"
+        gates = {"ok": False, "reasons": [str(e)]}
+        fit_attempts.store(character_name, item_id, fsig, body=body, kind=kind,
+                           record={**base_record, "fit_version": garment_fit.FIT_VERSION[kind]}, error=error,
+                           gates=gates)
+        raise _Refused("fit", error, gates)
+    shell = garment_path(character_name, item_id, fsig, "shell", body=body)
+    _write_atomic(shell, garment_shell.shell_glb(result.garment))
+    write_record(shell.with_suffix(".json"), {"item_id": item_id, "fsig": fsig, "body_id": body or bsig,
+                                              "body_sha256": body_sha, "metrics": result.metrics,
+                                              "created_at": utc_now_iso()})
+    record = {**base_record, "accepted": True, "metrics": result.metrics, "report": result.report,
+              "gates": {"ok": True, "reasons": []}, "frame": {"registered": False}, "created_at": utc_now_iso()}
+    return _publish_fit(character_name, item_id, kind, fsig, bsig, rigged, result, record, body=body,
+                        schedule=schedule)
+
+
+def base_body_sha(character_name: str, bsig: str) -> str:
+    """The rigged base model's content sha ("" without one)."""
+    from app.models.character import get_character_dir
+    path = get_character_dir(character_name) / "model3d" / f"{bsig}.glb"
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
 
 
 def _fsig_or_empty(character_name: str, item_id: str, state: Optional[str] = None) -> str:
@@ -1945,6 +2016,10 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
     elif kind != garment_set.CLOTHING:
         # Hair fits of the removed methods (hair views → mesh, subtract): nothing refits them any more.
         raise ValueError(f"No fit on an outfit body for a {kind} fit by {gs.fit_method(base_record)!r}")
+    elif (base_record.get("inputs") or {}).get("mesh_shape") == "shell":
+        # Ruling A48d: the base fit is a shell — this body gets its own shell, made on its surface
+        return _fit_shell(character_name, item_id, kind, fsig, bsig, profile, body=body_id, body_snapshot=body,
+                          schedule=schedule, extra={k: v for k, v in record.items() if k != "accepted"})
     else:
         from app.core import fit_attempts
         record["fit_version"] = garment_fit.FIT_VERSION[kind]
@@ -4447,7 +4522,7 @@ def _mesh_info(character_name: str, item_id: str, fsig: str) -> Dict[str, Any]:
 
 def _mesh_view_info(character_name: str, item_id: str, fsig: str, record: Dict[str, Any], *,
                     accepted: bool) -> Dict[str, Any]:
-    """The Mesh row's 3D view (Ruling A48a, ``garment_mesh_view``): ``{prepared, raw, attempts}`` — each mesh
+    """The Mesh row's 3D view (Ruling A48a, ``garment_mesh_view``): ``{prepared, raw, shell, attempts}`` — each mesh
     file ``{url, body_url, tris}`` (``url`` versioned by content; ``body_url`` the body view's JSON; ``tris``
     counted in the file, ``garment_mesh_view.file_triangles``) or None. ``attempts`` (Ruling A58): every KEPT mesh of
     the fsig (the record's ``kept``, ``garment_mesh.kept_entries``) with its files — ``{attempt (its slot), origin
@@ -4476,6 +4551,8 @@ def _mesh_view_info(character_name: str, item_id: str, fsig: str, record: Dict[s
         "prepared": file(garment_path(character_name, item_id, fsig, "prepared"), "prepared", 0,
                          record.get("tris_prepared")) if accepted else None,
         "raw": file(garment_path(character_name, item_id, fsig, "raw"), "raw", 0, record.get("tris_raw")),
+        # Ruling A48d: the shell from the body the last shell fit made (on the base body), beside the generated mesh
+        "shell": file(garment_path(character_name, item_id, fsig, "shell"), "shell", 0, None),
         "attempts": [],
     }
     block = _mesh_use_block(character_name, item_id)
@@ -5090,10 +5167,32 @@ def fit_settings_info(character_name: str, item_id: str, fsig: str, base_model_s
         found = fit_attempts.attempt_of(character_name, item_id, "")
         if found and found[1].get("fsig") == fsig:
             record = found[1]
-    return fit_settings_view(record, current, accepted=accepted)
+    return fit_settings_view(record, current, accepted=accepted, item_id=item_id)
 
 
-def fit_settings_view(record: Dict[str, Any], current: Dict[str, Any], *, accepted: bool) -> Dict[str, Any]:
+def mesh_shape_view(record: Dict[str, Any], current: Dict[str, Any], item_id: str) -> Dict[str, Any]:
+    """Ruling A48d — the mesh shape of a clothing piece for the Mesh step: ``{setting, resolved (what the setting
+    makes now), auto {shape, reason, details} (``garment_shell.auto_reason``), made (the shape of the shown fit, None
+    without one), due (a fit exists and made another shape), choices, cost {hub_jobs: 0, where: "cpu"}, shell
+    {faces, inside_share, side_colour_within_2cm, seconds} (the shown fit's, when it is a shell)}``."""
+    from app.core import garment_fit_settings, garment_shell
+    from app.models.inventory import get_item
+    item = get_item(item_id) if item_id else None
+    auto, reason, details = garment_shell.auto_reason(item)
+    setting = current.get("mesh_shape", "auto")
+    resolved = auto if setting == "auto" else setting
+    made = garment_fit_settings.made_shape(record) if record else None
+    metrics = record.get("metrics") or {}
+    shell = None
+    if made == garment_shell.SHELL:
+        shell = {k: metrics.get(k) for k in ("shell_faces", "inside_share", "side_colour_within_2cm", "seconds")}
+    return {"setting": setting, "resolved": resolved, "auto": {"shape": auto, "reason": reason, "details": details},
+            "made": made, "due": made is not None and made != resolved,
+            "choices": list(garment_shell.SHAPE_CHOICES), "cost": {"hub_jobs": 0, "where": "cpu"}, "shell": shell}
+
+
+def fit_settings_view(record: Dict[str, Any], current: Dict[str, Any], *, accepted: bool,
+                      item_id: str = "") -> Dict[str, Any]:
     """``fit_settings_info``'s shape for ONE fit record (or kept attempt; {} = none): what the fit settings box
     shows of the fit it describes — the plain body's (``fit_settings_info``) or, Ruling A50b, a body shape's
     (``fit_attempts`` entry ``fit``). ``current``: the piece's settings now (shared by every body)."""
@@ -5106,9 +5205,12 @@ def fit_settings_view(record: Dict[str, Any], current: Dict[str, Any], *, accept
                                             "trunk_front_gap_p50_m", "trunk_back_gap_p50_m")}
     numbers["scale"] = metrics.get("scale_retry")
     made_with = garment_fit_settings.recorded(record) if record else None
+    shape = mesh_shape_view(record, current, item_id)
     return {
         "settings": current, "recorded": made_with,
-        "due": bool(record) and made_with != current,
+        "due": bool(record) and ({k: v for k, v in made_with.items() if k != "mesh_shape"}
+                                 != {k: v for k, v in current.items() if k != "mesh_shape"} or shape["due"]),
+        "mesh_shape": shape,
         "sleeves": (report.get("transfer") or {}).get("sleeves") or {},
         "trunk": (report.get("transfer") or {}).get("trunk"),
         "allowance": retry.get("allowance"),
