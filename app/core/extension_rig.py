@@ -325,7 +325,7 @@ def effective_extension_overrides(profile, signature, meta, declarations):
 
 # Millimetres: the tip offset range per direction and the colour disc's
 # diameter range, its soft-edge range and defaults (Blender clamps the same).
-TIP_OFFSET_MAX_MM = 80.0
+TIP_OFFSET_MAX_MM = 50.0
 DISC_DIAMETER_MM = (10.0, 50.0)
 DISC_SOFT_MAX_MM = 10.0
 DISC_DEFAULTS = {"enabled": False, "color": "#c07a72", "diameter_mm": 28.0, "soft_mm": 3.0}

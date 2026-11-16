@@ -1172,7 +1172,7 @@ def normal_census(meshes, centres):
 TIP_WALK_STEP_M = .0005
 # Millimetres: the tip offset range per direction (the server clamps the
 # stored override to the same range).
-TIP_OFFSET_MAX_MM = 80.
+TIP_OFFSET_MAX_MM = 50.
 # Millimetres: the colour disc diameter range and its soft edge width range.
 DISC_DIAMETER_MM = (10., 50.)
 DISC_SOFT_MAX_MM = 10.
