@@ -42,7 +42,7 @@ import {
   type ContactLamp, type ContactReport, type FitSample, type PairFix,
   targetLamp, isPointTarget, TARGET_RADIUS_M, POINT_TARGET_OPS, type ContactTarget,
   bendSample, BEND_LIMITS_DEFAULT, type BendLimits, type BendResult,
-  bendFrameOf, supportSample, supportHeight, postureReport, postureAngleCapDeg, type PostureReport,
+  supportSample, supportHeight, postureReport, postureAngleCapDeg, type PostureReport,
 } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { targetWordOf } from './contactWords'
@@ -168,10 +168,8 @@ export interface PairFitReadout {
   /** Ruling A150: the support's change since the fit (mm; largest float / sink; null = no support read). */
   support: { gapMm: number; sinkMm: number } | null
 }
-/** Ruling A145: how much the attached part bent — the largest over the frames, its limit there, and the lamp.
- *  Ruling A150: plus the root pitch used (the frame with the largest |pitch|, + = up). */
-export interface BendReadout { maxDeg: number; limitDeg: number; atLimit: number; frames: number; lamp: 'green' | 'yellow'
-  rootPitchDeg: number }
+/** Ruling A145: how much the attached part bent — the largest over the frames, its limit there, and the lamp. */
+export interface BendReadout { maxDeg: number; limitDeg: number; atLimit: number; frames: number; lamp: 'green' | 'yellow' }
 /** `pairCheck`: the pair shown over whole loops at 60 fps — the clip as stored + draft, then with the fine fit. */
 export type PairCheckResult =
   | { ok: false; reason: string }
@@ -900,6 +898,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             }
           }
           f.root.updateMatrixWorld(true)
+          // Ruling A158: the clip's direct root angle on the attached part — on every part place (a relation's `part`;
+          // without relations every figure: only one with an attached part turns). Live: read from the draft each frame.
+          const parts = (draft.contactRelations ?? []).filter((x) => x.target !== 'none').map((x) => x.part)
+          f.runtime.setRootAngle(!solo && (!parts.length || parts.includes(f.role)) ? draft.rootAngle ?? null : null)
           return { pivot, frame: cal.frame }
         }
         // ── Ruling A129.3: the per-pair fine fit — the contact of the pair shown, its samples in stage space. ──
@@ -954,7 +956,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           return out
         }
         // Ruling A150: the sample carries the moving figure's support (stage space, the surface under its place; `ids` =
-        // the capsules a baseline pass chose) and its body axes (the bend's root lever).
+        // the capsules a baseline pass chose).
         const sampleAt = (res: NonNullable<ReturnType<typeof placePhaseB>>, hit: Hit,
           pl: { pivot: [number, number, number]; frame: number[] }, ids?: readonly string[] | null): FitSample | null => {
           const ie = res.figures[hit.e].inspection, ir = res.figures[hit.r].inspection
@@ -962,16 +964,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           if (!w || !ie) return null
           const support = supportSample(ie.capsules, { ids, surface: figs[hit.e].place.marker.y_world, map: (p) => toStageP(p) })
           return { tip: toStageP(w.tip), base: toStageP(w.base), o: toStageP(w.o), u: toStageP(w.u, true), pivot: pl.pivot,
-            chain: w.chain?.map((p) => toStageP(p)), raised: w.raised, channel: w.channel, frame: bendFrameOf(pl.frame),
+            chain: w.chain?.map((p) => toStageP(p)), raised: w.raised, channel: w.channel,
             ...(support ? { support } : {}) }
-        }
-        /** Ruling A150: the stage frame's body axes in world space (the bones bend in world space). */
-        const stageWorldRot = new THREE.Matrix3()
-        const worldBendFrame = (frame: number[]) => {
-          stageWorldRot.setFromMatrix4(stage.matrixWorld)
-          const f = bendFrameOf(frame)
-          const d = (v: readonly number[]): [number, number, number] => { sv.set(v[0], v[1], v[2]).applyMatrix3(stageWorldRot).normalize(); return [sv.x, sv.y, sv.z] }
-          return { side: d(f.side), up: d(f.up) }
         }
         // ── Ruling A145: the attached part bends toward its target before anything moves (`chainBend.ts`). ──
         /** The bend limits in force: the clip's draft (or the default), null when "Bend" is off (rigid, as before). */
@@ -984,8 +978,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           if (!lim) return null
           const ie = res.figures[hit.e].inspection, ir = res.figures[hit.r].inspection
           const w = ie && ir ? contactSampleOf(ie, ir, hit, [0, 0, 0]) : null
-          const pl = placedNow.get(figs[hit.e])
-          const b = w ? bendSample({ ...w, frame: pl ? worldBendFrame(pl.frame) : null }, lim).bend : null
+          const b = w ? bendSample(w, lim).bend : null
           if (b) entries[hit.e].figure.bendChain(hit.chain, b.turns)
           return b
         }
@@ -995,9 +988,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           if (!got.length) return null
           const top = got.reduce((a, x) => (x.totalDeg > a.totalDeg ? x : a), got[0])
           const atLimit = got.filter((x) => x.atLimit).length
-          const root = got.reduce((a, x) => (Math.abs(x.rootPitchDeg) > Math.abs(a) ? x.rootPitchDeg : a), 0)
           return { maxDeg: top.totalDeg, limitDeg: top.limit.totalDeg, atLimit, frames: got.length,
-            lamp: atLimit > 0 ? 'yellow' : 'green', rootPitchDeg: root }
+            lamp: atLimit > 0 ? 'yellow' : 'green' }
         }
         // Ruling A129.5: the honest check of one frame — only the entering figure's attached part against the
         // receiving channel's `suppress` capsules is exempt; the pair is named by place letter and capsule.
@@ -1019,8 +1011,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             lateralMaxMm: lat.length ? lat[lat.length - 1] : NaN, lateralMedMm: lat.length ? lat[lat.length >> 1] : NaN,
             frames: lat.length,
             bend: st.bend && st.bendDeg.length ? { maxDeg: Math.max(...st.bendDeg), limitDeg: st.bendLimitDeg,
-              atLimit: st.bendAtLimit, frames: st.bendDeg.length, lamp: st.bendAtLimit > 0 ? 'yellow' : 'green',
-              rootPitchDeg: st.rootPitchDeg.reduce((a, v) => (Math.abs(v) > Math.abs(a) ? v : a), 0) } : null,
+              atLimit: st.bendAtLimit, frames: st.bendDeg.length, lamp: st.bendAtLimit > 0 ? 'yellow' : 'green' } : null,
             support: st.supportMm.length ? { gapMm: Math.max(0, ...st.supportMm), sinkMm: Math.max(0, ...st.supportMm.map((v) => -v)) } : null }
         }
         // Ruling A139: one fine fit per contact relation.

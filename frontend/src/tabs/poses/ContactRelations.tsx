@@ -8,7 +8,7 @@
 import { CONTACT_TARGETS, PROVISIONAL_TARGETS, type ContactRelation, type ContactTarget } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { targetWordOf } from './contactWords'
-import type { BendLimitsWire } from './clipSets'
+import type { BendLimitsWire, RootAngleWire } from './clipSets'
 
 export interface ContactSetting { relations: ContactRelation[]; source: 'clip' | 'package' | 'default' }
 
@@ -117,18 +117,6 @@ export function BendLimitsEditor({ saved, draft, onDraft, onSave, busy }: {
         {num('resting', 'total_deg', 360, t('Most the whole part bends when resting'))}
       </div>
       <div className="ga-form-hint" style={{ margin: 0 }}>{t('Per joint · in all')}</div>
-      <div title={t('First the part pitches at its root, where it is attached: up toward the belly, down away from it, and a little sideways. Then the joints bend, then the partner moves.')}
-        style={{ display: 'grid', gridTemplateColumns: 'auto auto auto auto', gap: '2px 8px', alignItems: 'center' }}>
-        <span>{t('Root, raised')}</span>
-        {num('raised', 'root_up_deg', 90, t('Most the root pitches up when raised'))}
-        {num('raised', 'root_down_deg', 120, t('Most the root pitches down when raised'))}
-        {num('raised', 'root_yaw_deg', 45, t('Most the root turns sideways when raised'))}
-        <span>{t('Root, resting')}</span>
-        {num('resting', 'root_up_deg', 90, t('Most the root pitches up when resting'))}
-        {num('resting', 'root_down_deg', 120, t('Most the root pitches down when resting'))}
-        {num('resting', 'root_yaw_deg', 45, t('Most the root turns sideways when resting'))}
-      </div>
-      <div className="ga-form-hint" style={{ margin: 0 }}>{t('Root: up · down · sideways')}</div>
       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
         <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" data-testid="bend-save" disabled={busy || !dirty}
           title={t('Stores the bend limits with the clip (all its sets and halves). Runs nothing; Auto-align uses them at once.')}
@@ -136,6 +124,57 @@ export function BendLimitsEditor({ saved, draft, onDraft, onSave, busy }: {
         <button type="button" className="ga-btn ga-btn-sm" disabled={busy || saved?.source !== 'clip'}
           title={t('Drops this clip’s own bend limits: the package default, or the core default, applies again.')}
           onClick={() => onSave(null)}>{t('Use inherited')}</button>
+        {dirty ? <span style={{ color: 'var(--warning, #d29922)' }}>{t('unsaved — the preview already uses it')}</span> : null}
+      </div>
+    </div>
+  )
+}
+
+/** Ruling A158: the attached part's DIRECT root angle — two sliders, the preview turns the part at once (no Auto-align,
+ *  partner near or far). Pitch: down ← → up toward the belly, about the body's side axis; turn: the figure's left ← →
+ *  right, about its up axis. "Save root angle" stores it in the clip's `<kind>.json` (PATCH `root_angle`); every
+ *  renderer applies it before any bend, and Auto-align starts from it without changing it. */
+export function RootAngleEditor({ saved, draft, onDraft, onSave, busy }: {
+  saved: RootAngleWire | null | undefined
+  draft: RootAngleWire
+  onDraft: (next: RootAngleWire) => void
+  onSave: (next: RootAngleWire | null) => void
+  busy: boolean
+}) {
+  const { t } = useI18n()
+  const base = saved ?? { pitch_deg: 0, yaw_deg: 0 }
+  const dirty = draft.pitch_deg !== base.pitch_deg || draft.yaw_deg !== base.yaw_deg
+  const row = (key: keyof RootAngleWire, max: number, label: string, low: string, high: string, title: string) => (
+    <div style={{ display: 'grid', gap: 1 }} title={title}>
+      <div>
+        {label}: <strong data-testid={`root-angle-${key}-value`}>{draft[key] > 0 ? '+' : ''}{draft[key].toFixed(0)}°</strong>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto auto', gap: 6, alignItems: 'center' }}>
+        <span style={{ opacity: 0.8 }}>{low} ←</span>
+        <input type="range" data-testid={`root-angle-${key}`} min={-max} max={max} step={1} disabled={busy}
+          value={draft[key]} onChange={(e) => {
+            const v = Number(e.target.value)
+            if (Number.isFinite(v)) onDraft({ ...draft, [key]: Math.max(-max, Math.min(max, v)) })
+          }} />
+        <span style={{ opacity: 0.8 }}>→ {high}</span>
+        <button type="button" className="ga-btn ga-btn-sm" disabled={busy || draft[key] === 0}
+          data-testid={`root-angle-${key}-reset`} onClick={() => onDraft({ ...draft, [key]: 0 })}>{t('Reset to 0')}</button>
+      </div>
+    </div>
+  )
+  return (
+    <div data-testid="root-angle" style={{ fontSize: 12, display: 'grid', gap: 4 }}>
+      <div title={t('Sets the angle of the attached part at its root directly. The preview shows it at once; Auto-align bends the joints from this angle and never changes it.')}>
+        <strong>{t('Root angle')}</strong>
+      </div>
+      {row('pitch_deg', 60, t('Root pitch'), t('down'), t('up toward the belly'),
+        t('Pitches the part at its root about the body’s side axis: up toward the belly, or down away from it.'))}
+      {row('yaw_deg', 30, t('Root turn'), t('left'), t('right'),
+        t('Turns the part at its root about the body’s up axis, to the figure’s own left or right.'))}
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" data-testid="root-angle-save" disabled={busy || !dirty}
+          title={t('Stores the root angle with the clip (all its sets and halves); the 3D client plays it too.')}
+          onClick={() => onSave(draft)}>{t('Save root angle')}</button>
         {dirty ? <span style={{ color: 'var(--warning, #d29922)' }}>{t('unsaved — the preview already uses it')}</span> : null}
       </div>
     </div>

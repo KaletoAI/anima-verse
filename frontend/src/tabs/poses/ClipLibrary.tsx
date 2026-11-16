@@ -47,7 +47,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { bendLimitsOf, POSTURE, clipHeightGroup, type ClipHeightOffsetsCm } from '@anima/scene-render'
-import { BendLimitsEditor, ContactRelations } from './ContactRelations'
+import { BendLimitsEditor, ContactRelations, RootAngleEditor } from './ContactRelations'
 import { targetWordOf } from './contactWords'
 import { PlacePreview, type AutoAlignResult, type AutoAlignRun, type PairCheckResult, type PlaceReadout } from './PlacePreview'
 import type { AlignmentDraft, ContactRelation } from '@anima/scene-render'
@@ -57,7 +57,7 @@ import { SliderInput } from '../../components/SliderInput'
 import { useI18n } from '../../i18n/I18nProvider'
 import { ApiError, apiDelete, apiPatch, apiPost } from '../../lib/api'
 import { bridgeKinds, orderSets } from './clipSets'
-import type { ApiClipRow as BaseApiClipRow, BendLimitsWire, ClipListing } from './clipSets'
+import type { ApiClipRow as BaseApiClipRow, BendLimitsWire, ClipListing, RootAngleWire } from './clipSets'
 import { rootMotionSummary } from './rootMotion'
 import { generatedBadge, isStudioClip } from './generatedClip'
 import { clipLamp, finaleKinds as finaleKindsOf, kindLamp, saveSteps, setLetter } from './clipStatus'
@@ -522,6 +522,11 @@ export function ClipLibrary({
   const savedBendKey = JSON.stringify(savedBend?.limits ?? BEND_WIRE_DEFAULT)
   const [bendDraft, setBendDraft] = useState<BendLimitsWire>(BEND_WIRE_DEFAULT)
   useEffect(() => { setBendDraft(JSON.parse(savedBendKey) as BendLimitsWire) }, [savedBendKey, selected])
+  // Ruling A158: the attached part's direct root angle — a draft over the saved value, the preview applies it live.
+  const savedRoot = orientTarget?.root_angle ?? null
+  const savedRootKey = JSON.stringify(savedRoot ?? { pitch_deg: 0, yaw_deg: 0 })
+  const [rootDraft, setRootDraft] = useState<RootAngleWire>({ pitch_deg: 0, yaw_deg: 0 })
+  useEffect(() => { setRootDraft(JSON.parse(savedRootKey) as RootAngleWire) }, [savedRootKey, selected])
   // The dials act on the A half; how many roles it has decides pair or group.
   const isPairTarget = orientTarget?.role === 'a' && (row?.roles ?? 0) === 2
   const isGroupTarget = orientTarget?.role === 'a' && (row?.roles ?? 0) > 2
@@ -547,7 +552,8 @@ export function ClipLibrary({
     partnerTurnDeg: isPairTarget ? partnerTurn : undefined,
     contactRelations: contactDraft,
     bendLimits: bendLimitsOf(bendDraft),
-  }), [bendDraft, contactDraft, clipShift, heightDraft, isGroupTarget, isPairTarget, partnerShift, partnerTurn, roleShift, rollDeg, tiltDeg, yawDeg])
+    rootAngle: { pitchDeg: rootDraft.pitch_deg, yawDeg: rootDraft.yaw_deg },
+  }), [bendDraft, rootDraft, contactDraft, clipShift, heightDraft, isGroupTarget, isPairTarget, partnerShift, partnerTurn, roleShift, rollDeg, tiltDeg, yawDeg])
   const draftRef = useRef(alignmentDraft)
   draftRef.current = alignmentDraft
   /** The check to store with Apply/Save: only when every figure reads green (D3/D4). */
@@ -1315,6 +1321,8 @@ export function ClipLibrary({
                         onSave={(next) => { void run(orientTarget, { contact_target: next }) }} />
                       <BendLimitsEditor saved={savedBend} draft={bendDraft} onDraft={setBendDraft} busy={busy}
                         onSave={(next) => { void run(orientTarget, { bend_limits: next }) }} />
+                      <RootAngleEditor saved={savedRoot} draft={rootDraft} onDraft={setRootDraft} busy={busy}
+                        onSave={(next) => { void run(orientTarget, { root_angle: next }) }} />
                       <button type="button" className="ga-btn ga-btn-sm" data-testid="align-auto"
                         disabled={orientLocked || innerTab !== 'places'}
                         title={innerTab !== 'places'
@@ -1579,13 +1587,12 @@ export function ClipLibrary({
 
 /** Ruling A145: the core default of the bend limits (the server's `BEND_LIMITS_DEFAULT`), until the listing says. */
 const BEND_WIRE_DEFAULT: BendLimitsWire = {
-  raised: { joint_deg: 15, total_deg: 35, root_up_deg: 35, root_down_deg: 45, root_yaw_deg: 10 },
-  resting: { joint_deg: 45, total_deg: 120, root_up_deg: 45, root_down_deg: 80, root_yaw_deg: 15 },
+  raised: { joint_deg: 15, total_deg: 35 },
+  resting: { joint_deg: 45, total_deg: 120 },
 }
 
 /** Ruling A145: "Bend 28° of max 35°" with its lamp — yellow when the part was at its limit in some frame. */
-function BendLine({ bend }: { bend: { maxDeg: number; limitDeg: number; atLimit: number; frames: number; lamp: 'green' | 'yellow'
-  rootPitchDeg?: number } }) {
+function BendLine({ bend }: { bend: { maxDeg: number; limitDeg: number; atLimit: number; frames: number; lamp: 'green' | 'yellow' } }) {
   const { t } = useI18n()
   return (
     <div data-testid="bend-readout" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -1594,9 +1601,6 @@ function BendLine({ bend }: { bend: { maxDeg: number; limitDeg: number; atLimit:
           .replace('{n}', String(bend.atLimit)).replace('{m}', String(bend.frames))
         : t('The attached part bends within its limit in every frame.')} />
       <span>{t('Bend {deg}° of max {max}°').replace('{deg}', bend.maxDeg.toFixed(0)).replace('{max}', bend.limitDeg.toFixed(0))}</span>
-      {bend.rootPitchDeg !== undefined ? (
-        <span data-testid="root-pitch">· {t('root pitch {deg}°').replace('{deg}', `${bend.rootPitchDeg >= 0 ? '+' : ''}${bend.rootPitchDeg.toFixed(0)}`)}</span>
-      ) : null}
     </div>
   )
 }

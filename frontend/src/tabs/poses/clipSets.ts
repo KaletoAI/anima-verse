@@ -45,6 +45,8 @@ export interface ApiClipRow {
   contact_target?: { relations: ContactRelation[]; source: 'clip' | 'package' | 'default' } | null
   /** Ruling A145: how far the attached part may bend toward its target, per state (degrees), and the source. */
   bend_limits?: { limits: BendLimitsWire; source: 'clip' | 'package' | 'default' } | null
+  /** Ruling A158: the attached part's direct root angle (null for a solo clip). */
+  root_angle?: RootAngleWire | null
   origin?: string
   has_sidecar?: boolean
   /** Per-surface corrections in centimetres of the 1.70 m reference figure. */
@@ -139,7 +141,7 @@ export interface BendLimitsWire {
   raised: BendStateWire
   resting: BendStateWire
 }
-/** Ruling A150: plus the root joint's pitch up / pitch down / yaw (degrees). */
-export interface BendStateWire {
-  joint_deg: number; total_deg: number; root_up_deg: number; root_down_deg: number; root_yaw_deg: number
-}
+export interface BendStateWire { joint_deg: number; total_deg: number }
+/** Ruling A158: the attached part's direct root angle as the server stores it (degrees; pitch + = up toward the
+ *  belly, yaw + = the figure's right). */
+export interface RootAngleWire { pitch_deg: number; yaw_deg: number }
