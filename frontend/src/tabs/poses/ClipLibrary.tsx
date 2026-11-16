@@ -1282,17 +1282,19 @@ export function ClipLibrary({
                                 .replace('{z}', pairCheck.fit.shiftMm[2].toFixed(0))
                                 .replace('{tilt}', pairCheck.fit.turnDeg[0].toFixed(1)).replace('{roll}', pairCheck.fit.turnDeg[1].toFixed(1))}</div>
                               <table style={{ borderCollapse: 'collapse' }}>
-                                <thead><tr><th /><th style={{ padding: '0 4px' }}>{t('stored')}</th><th style={{ padding: '0 4px' }}>{t('fine fit')}</th></tr></thead>
+                                <thead><tr><th /><th style={{ padding: '0 4px' }}>{t('stored')}</th><th style={{ padding: '0 4px' }}>{t('fine fit')}</th>
+                                  <th style={{ padding: '0 4px' }}>{t('+ follow')}</th></tr></thead>
                                 <tbody>
                                   {([
-                                    [t('Tip to opening at the outermost frame'), pairCheck.before.entryMm, pairCheck.after.entryMm, 'mm'],
-                                    [t('Depth at the deepest frame'), pairCheck.before.depthMm, pairCheck.after.depthMm, 'mm'],
-                                    [t('Off the axis inside, worst frame'), pairCheck.before.maxLateralMm, pairCheck.after.maxLateralMm, 'mm'],
-                                    [t('Shaft against the axis at the outermost frame'), pairCheck.before.axisDeg, pairCheck.after.axisDeg, '°'],
-                                  ] as const).map(([label, a, b, unit]) => (
+                                    [t('Tip to opening at the outermost frame'), pairCheck.before.entryMm, pairCheck.after.entryMm, pairCheck.followed.entryMm, 'mm'],
+                                    [t('Depth at the deepest frame'), pairCheck.before.depthMm, pairCheck.after.depthMm, pairCheck.followed.depthMm, 'mm'],
+                                    [t('Off the axis inside, worst frame'), pairCheck.before.maxLateralMm, pairCheck.after.maxLateralMm, pairCheck.followed.maxLateralMm, 'mm'],
+                                    [t('Shaft against the axis at the outermost frame'), pairCheck.before.axisDeg, pairCheck.after.axisDeg, pairCheck.followed.axisDeg, '°'],
+                                  ] as const).map(([label, a, b, c, unit]) => (
                                     <tr key={label}><td>{label}</td>
                                       <td style={{ textAlign: 'right', padding: '0 4px' }}>{a.toFixed(0)} {unit}</td>
-                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{b.toFixed(0)} {unit}</td></tr>
+                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{b.toFixed(0)} {unit}</td>
+                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{c.toFixed(0)} {unit}</td></tr>
                                   ))}
                                 </tbody>
                               </table>

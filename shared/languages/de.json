@@ -6064,6 +6064,9 @@
     "Check this pair": "Dieses Paar prüfen",
     "{by} → {of}: fine fit {x} / {y} / {z} mm, tilt {tilt}°, roll {roll}°": "{by} → {of}: Feinanpassung {x} / {y} / {z} mm, Neigen {tilt}°, Rollen {roll}°",
     "fine fit": "Feinanpassung",
-    "Off the axis inside, worst frame": "Neben der Achse innen, schlechtester Frame"
+    "Off the axis inside, worst frame": "Neben der Achse innen, schlechtester Frame",
+    "Per frame, the entering figure’s pelvis follows by at most 2 cm so the attached part’s tip stays on the channel axis through the stroke, as in the game.": "Pro Frame folgt das Becken der eindringenden Figur um höchstens 2 cm, damit die Spitze des angesetzten Teils über den ganzen Stoß auf der Kanalachse bleibt, wie im Spiel.",
+    "Follow the stroke": "Dem Stoß folgen",
+    "+ follow": "+ folgen"
   }
 }

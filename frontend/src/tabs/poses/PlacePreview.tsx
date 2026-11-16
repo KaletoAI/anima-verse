@@ -132,13 +132,15 @@ export interface PlaceReadout { prop: string; places: string; figures: FigureRea
 /** The partner overlays (phase 3): what is drawn, never what runs. */
 export interface PartnerShow { collision: boolean; channels: boolean
   /** Ruling A129.3: the per-pair fine fit runs (default on) — what the game does when a pair interaction starts. */
-  fit: boolean }
+  fit: boolean
+  /** Ruling A129.4: per frame the entering figure's pelvis follows so the tip stays on the channel axis (default on). */
+  follow: boolean }
 const SHOW_KEY = 'anima.placePreview.show'
 function loadShow(): PartnerShow {
   try {
     const v = JSON.parse(localStorage.getItem(SHOW_KEY) || '{}') as Partial<PartnerShow>
-    return { collision: !!v.collision, channels: !!v.channels, fit: v.fit !== false }
-  } catch { return { collision: false, channels: false, fit: true } }
+    return { collision: !!v.collision, channels: !!v.channels, fit: v.fit !== false, follow: v.follow !== false }
+  } catch { return { collision: false, channels: false, fit: true, follow: true } }
 }
 /** Capsules of two figures that overlap; a channel occupied by a partner chain. */
 const CONTACT_COLOR = 0xff2d2d
@@ -154,7 +156,9 @@ export interface PairFitReadout {
 /** `pairCheck`: the pair shown over whole loops at 60 fps — the clip as stored + draft, then with the fine fit. */
 export type PairCheckResult =
   | { ok: false; reason: string }
-  | { ok: true; by: string; of: string; before: ContactReport; after: ContactReport; fit: PairFitReadout }
+  | { ok: true; by: string; of: string; before: ContactReport; after: ContactReport; fit: PairFitReadout
+      /** Ruling A129.4: the same with the per-frame follow on top of the fit. */
+      followed: ContactReport; followFit: PairFitReadout }
 
 /** The printed partner readout (names = place letters). */
 interface PartnerInfo {
@@ -847,7 +851,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             const smp = live.hit && pl ? sampleAt(phaseB, live.hit, pl.pivot) : null
             if (live.hit && pl && smp) {
               live.axes = turnAxes(pl.frame)
-              pairFitObserve(live.st, smp, time, live.axes, RUNTIME_FIT, false)
+              pairFitObserve(live.st, smp, time, live.axes, RUNTIME_FIT, showRef.current.follow)
             }
           }
           const inspection = wantInspect ? phaseB : null
@@ -1044,7 +1048,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         }
         // ── Ruling A129.3: the pair over whole loops at 60 fps — loop 1 as stored + draft (the "before"), loop 2 arms
         // and loop 3 samples the fine fit (as client3d does when the interaction starts), loops 4–5 play with it. ──
-        const pairCheck = (follow = false): PairCheckResult => {
+        const pairCheckOnce = (follow: boolean): PairCheckResult => {
           if (solo || figs.length < 2) return { ok: false, reason: t('The pair check needs a pair clip on a place.') }
           const step = 1 / 60
           const loop = Math.max(8, Math.ceil(duration / step))
@@ -1081,10 +1085,17 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           resetLive()
           if (!hit) return { ok: false, reason: t('No figure here has an attached part that one of the other figure’s channels accepts.') }
           if (before.length < 4 || after.length < 4) return { ok: false, reason: t('The contact could not be sampled over the clip.') }
+          const fit = fitReadout(st, hit, axes), rep = contactReport(after)
           return { ok: true, by: figs[hit.e].letter, of: figs[hit.r].letter, before: contactReport(before),
-            after: contactReport(after), fit: fitReadout(st, hit, axes) }
+            after: rep, fit, followed: rep, followFit: fit }
         }
-        if (pairCheckOut.current) pairCheckOut.current.current = () => pairCheck(false)
+        const pairCheck = (): PairCheckResult => {
+          const plain = pairCheckOnce(false)
+          if (!plain.ok) return plain
+          const followed = pairCheckOnce(true)
+          return followed.ok ? { ...plain, followed: followed.after, followFit: followed.fit } : plain
+        }
+        if (pairCheckOut.current) pairCheckOut.current.current = pairCheck
         disposers.push(() => { if (pairCheckOut.current?.current) pairCheckOut.current.current = null })
         if (autoAlignOut.current) autoAlignOut.current.current = autoAlign
         disposers.push(() => { if (autoAlignOut.current?.current === autoAlign) autoAlignOut.current.current = null })
@@ -1180,6 +1191,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         </label>
         <label title={t('Fits every pair on its own, as the game does when a pair interaction starts: one loop is measured, then the entering figure moves by at most 5 cm and turns by at most 10° so the attached part runs along the channel. The stored clip stays as it is.')}>
           <input type="checkbox" data-testid="place-fit" checked={show.fit} onChange={() => toggleShow('fit')} /> {t('Fine-fit the pair')}
+        </label>
+        <label title={t('Per frame, the entering figure’s pelvis follows by at most 2 cm so the attached part’s tip stays on the channel axis through the stroke, as in the game.')}>
+          <input type="checkbox" data-testid="place-follow" checked={show.follow} disabled={!show.fit}
+            onChange={() => toggleShow('follow')} /> {t('Follow the stroke')}
         </label>
         {info ? (
           <span style={{ marginLeft: 'auto', opacity: 0.8 }}

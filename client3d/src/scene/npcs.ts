@@ -336,7 +336,8 @@ const STRAND_SCRATCH = new THREE.Vector3();
 
 export class NpcManager {
   /** Ruling A129.3: the per-pair fine fit of every running pair interaction (by id) — the shared `pairFitObserve`
-   *  the Library's place preview runs: one loop measured, then the entering figure fixed by ≤ 5 cm / ≤ 10°. */
+   *  the Library's place preview runs: one loop measured, then the entering figure fixed by ≤ 5 cm / ≤ 10°, and per
+   *  frame its pelvis follows by ≤ 2 cm so the tip stays on the channel axis (A129.4). */
   private readonly pairFits = new Map<string, { key: string; st: PairFitState; entering: string; receiving: string
     hit: { chain: number; channel: string } | null; none: boolean; pivot: [number, number, number] | null
     axes: [number, number, number][] }>();
@@ -2400,7 +2401,7 @@ export class NpcManager {
       const it = e.interaction!;
       if (!ie || !ir || !rec.pivot || !(it.clipDuration > 0)) continue;
       const sample = contactSampleOf(ie, ir, rec.hit, rec.pivot);
-      if (sample) pairFitObserve(rec.st, sample, it.clipT % it.clipDuration, rec.axes, RUNTIME_FIT, false);
+      if (sample) pairFitObserve(rec.st, sample, it.clipT % it.clipDuration, rec.axes, RUNTIME_FIT, true);
     }
   }
 }

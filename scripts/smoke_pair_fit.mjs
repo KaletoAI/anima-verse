@@ -31,6 +31,12 @@
  *   [10] Bound: the same with x = 0.08 → Δx clamped to −0.05 (RUNTIME_FIT.maxShiftM).
  *   [11] After the fit every measured frame lies on the axis: lateralMm all 0 (±1e-3 mm). Loop 3 adds 9 rows: its
  *        frame 0 is the solving frame, rendered BEFORE the fit (s = −0.02 < 0, not inside).
+ * THE FOLLOW (A129.4), fixture C with the fit bounded to nothing (maxShiftM 0, maxAngleDeg 0) so only the follow acts;
+ *   every frame inside (s ≥ −0.03). Integral control f ← f − 0.7·r on the lateral r of the frame just rendered:
+ *   r_n = 0.01 + f_n  →  f_{n+1} = f_n − 0.7(0.01 + f_n) = 0.3 f_n − 0.007  →  f_n = −0.01 (1 − 0.3^n).
+ *   [12] after 3 observed frames f_x = −0.01 · (1 − 0.027) = −0.00973 (±1e-9); f_y = f_z = 0.
+ *   [13] lateral offset 0.05: the fixed point −0.05 lies beyond FOLLOW.maxM → f_x clamps at −0.02 after enough frames.
+ *   [14] a tip far outside (s = −0.2 < −0.03): the follow decays by 0.9 per frame (−0.00973 → −0.008757).
  */
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -100,4 +106,17 @@ near(cf[0], -0.01, 1e-6, 'fit x'); near(cf[1], 0, 1e-6, 'fit y'); near(cf[2], 0.
 near(runLoops(0.08, 3).st.fix.shift[0], -0.05, 1e-12, 'fit bound')                          // [10]
 assert.equal(c1.st.lateralMm.length, 9)                                                    // [11]
 assert.ok(c1.st.lateralMm.every((v) => Math.abs(v) < 1e-3), 'lateral after the fit')
+const NOFIT = { maxShiftM: 0, maxAngleDeg: 0 }
+const follow = (x0, frames, z = 0.01, st = SR.createPairFit()) => {
+  for (let k = 0; k < frames; k++) {
+    const tip = [x0, 0, z]
+    const raw = { tip, base: [x0, 0, z - 0.1], o: O, u: U, pivot: [0, 0, -0.3] }
+    SR.pairFitObserve(st, SR.fixSample(raw, SR.pairFitTotal(st)), 0.05 * k, [], NOFIT, true)
+  }
+  return st
+}
+const f3 = follow(0.01, 3)                                                                   // [12]
+near(f3.follow[0], -0.00973, 1e-9, 'follow x'); near(f3.follow[1], 0, 1e-12, 'follow y'); near(f3.follow[2], 0, 1e-12, 'follow z')
+near(follow(0.05, 30).follow[0], -0.02, 1e-12, 'follow clamp')                              // [13]
+near(follow(0.01, 1, -0.2, f3).follow[0], -0.008757, 1e-9, 'follow decay')                  // [14]
 console.log('smoke_pair_fit: OK')
