@@ -1135,7 +1135,7 @@ decides no exposure.
 - The op that builds a region's geometry knows where its opening is. With `from_rig`, the opening that rig reports in
   its build metrics replaces `offset` / `axis`. The metric is `extension_rig.metrics[<rig id>].opening` =
   `{centre: [x, y, z], axis: [x, y, z]}`: the bind (glTF) space of the model, with a unit axis pointing inward.
-- Today only `inset_part` reports it (`PART_BUILDS["inset_part"]` 7):
+- Today only `inset_part` reports it (since `PART_BUILDS["inset_part"]` 7):
   - `centre` is the levelled skin on the midline at the middle of the pocket's interval
     s_mid = (s0 + min(s1, s_end − fall/2))/2. When levelling shortens the part (`part_end_s`), the interval is
     clipped to the built pocket. With no interval left, the op writes no `opening`.
@@ -2093,7 +2093,13 @@ behind them in `inset_part.py`). The record carries `source_smooth` and
 tip's; `angle_deg` shows where the levelled region ends, `part_end_s` where a
 shortened part ends). Since build 7 the group metrics also carry the pocket's `opening` (centre and
 inward axis, glTF bind space) that a `regions` entry with `from_rig` reads ("Optional `regions` declaration
-(channels)" above). Faces the levelling turned over are mended, slivers of
+(channels)" above). Since build 8 the part's skin weights follow the `pelvis` rule (Ruling A117): `bone` (default
+`Hips`) carries at least `share` of each part vertex's weight (0 = off, the interpolated body weights stay), blended
+by a smoothstep over a band around the welded border that reaches `ring` × the part's deepest border distance
+inwards and `spread` × that distance outwards along the surrounding skin (other groups shrink in proportion; skin
+past the band and vertices already above the floor keep their weights). Without it the region rides the thighs and
+turns away with them when the hips flex; the record carries `pelvis` (resolved bone, band in metres, vertices
+raised). Faces the levelling turned over are mended, slivers of
 the levelled skin are flipped, and slivers of the displaced patch are flipped
 or collapsed before it is placed. Body meshes remain first, and
 face texture preservation checks ignore marked nodes and material primitives.

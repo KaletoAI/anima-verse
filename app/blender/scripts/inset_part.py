@@ -44,6 +44,11 @@ DEFAULTS = {
     'edge': [.0007, .0022, .005], 'bake': 512, 'fill_iterations': 1500,
     'level': {'enabled': 1, 'sigma': .015, 'tukey': .004, 'wall_rise': .015, 'depth': [.06, .03], 'relax': 500,
               'min_half_width': .006, 'under': .012},
+    # The pelvis rule (Ruling A117): ``bone`` carries at least ``share`` of a vertex's weight in the part, blended
+    # over a band around the part's welded border — ``ring`` of the part's deepest border distance inwards, ``spread``
+    # of it outwards over the surrounding skin (measured along the skin) — so the opening region stays on the pelvis
+    # when the legs flex. ``share`` 0 leaves the interpolated skin weights.
+    'pelvis': {'bone': 'Hips', 'share': 0.0, 'ring': .5, 'spread': .5},
 }
 
 
@@ -72,6 +77,9 @@ def parameters(raw):
         raise ValueError('Bake size must be a positive integer')
     if not isinstance(p['fill_iterations'], int) or p['fill_iterations'] <= 0:
         raise ValueError('Fill iterations must be a positive integer')
+    pv = p['pelvis']
+    if not 0 <= pv['share'] <= 1 or not 0 < pv['ring'] <= 1 or not 0 <= pv['spread'] <= 4:
+        raise ValueError('Pelvis: share 0..1, ring above 0 up to 1, spread 0..4')
     if not -180 <= p['theta'][0] < p['theta'][1] <= 180:
         raise ValueError('Invalid theta interval')
     for section in ('region', 'ridges', 'cleft', 'inner', 'pocket'):
@@ -726,6 +734,50 @@ def flip_slivers(bm, flat, limit=SLIVER_ASPECT, passes=6, bend=.9, only=None, co
             break
 
 
+def pelvis_level(x, inner, outer):
+    """The pelvis rule's blend (Ruling A117) at signed border distance ``x`` — depth into the part positive, distance
+    out over the surrounding skin negative: 0 at ``-outer`` and beyond, 1 at ``inner`` and deeper, a smoothstep
+    between (monotone in ``x``, no kink at either end)."""
+    t = np.clip((np.asarray(x, float) + outer) / (inner + outer), 0, 1)
+    return t * t * (3 - 2 * t)
+
+
+def pelvis_weights(weights, floors, bone):
+    """``weights`` (one ``{group: weight}`` per vertex) with ``bone``'s share of each vertex's total raised to at
+    least its ``floors`` entry; the other groups shrink in proportion, so the total and their ratios stay. A vertex
+    whose share already reaches its floor (every one with floor 0) keeps its weights exactly."""
+    out = []
+    for w, floor in zip(weights, floors):
+        total = sum(w.values())
+        own = w.get(bone, 0.)
+        rest = total - own
+        if total <= 0 or own >= floor * total or rest <= 0:
+            out.append(dict(w))
+            continue
+        k = (1 - floor) * total / rest
+        new = {g: x * k for g, x in w.items() if g != bone}
+        new[bone] = floor * total
+        out.append(new)
+    return out
+
+
+def skin_distance(adjacency, positions, seeds, limit):
+    """Shortest distance along mesh edges from ``seeds`` (vertex indices) to every vertex within ``limit``."""
+    import heapq
+    dist = {i: 0. for i in seeds}
+    heap = [(0., i) for i in seeds]
+    while heap:
+        d, i = heapq.heappop(heap)
+        if d > dist.get(i, math.inf):
+            continue
+        for j in adjacency[i]:
+            nd = d + float(np.linalg.norm(positions[i] - positions[j]))
+            if nd <= limit and nd < dist.get(j, math.inf):
+                dist[j] = nd
+                heapq.heappush(heap, (nd, j))
+    return dist
+
+
 def build_part(group, output):
     """Build the accepted midline field, bake its texture and weld its border."""
     P = parameters(group.get('params', {}))
@@ -971,6 +1023,60 @@ def build_part(group, output):
     ca = me.color_attributes.new('Tint', 'FLOAT_COLOR', 'POINT')
     for i, t in enumerate(tint):
         ca.data[i].color = (*t, 1)
+    pv = P['pelvis']
+    pelvis = None
+    if pv['share'] > 0:
+        pelvis_bone = resolve_bone(arm.data.bones, pv['bone']).name
+        rim = Q[border]
+        kd_rim = KDTree(len(rim))
+        for i_, q_ in enumerate(rim):
+            kd_rim.insert(Vector(q_), i_)
+        kd_rim.balance()
+        depth = np.array([0. if border[i_] else kd_rim.find(Vector(q_))[2] for i_, q_ in enumerate(Q)])
+        inner_m, outer_m = pv['ring'] * depth.max(), pv['spread'] * depth.max()
+        share_of = lambda ws: np.array([w.get(pelvis_bone, 0.) / (sum(w.values()) or 1) for w in ws])
+        before = share_of(qw)
+        floors = pv['share'] * pelvis_level(depth, inner_m, outer_m)
+        qw = pelvis_weights(qw, floors, pelvis_bone)
+        after = share_of(qw)
+        # The surrounding skin: body vertices off the replaced faces, by their distance along the skin from the
+        # part's welded border (the border's own body vertices are the seeds, at distance 0 like the part's border).
+        replaced = np.zeros(len(V), int)
+        for poly in body.data.polygons:
+            for v in poly.vertices:
+                replaced[v] += 1
+        for pi in sel_polys:
+            for v in body.data.polygons[pi].vertices:
+                replaced[v] -= 1
+        kept = replaced > 0
+        adjacency = [[] for _ in range(len(V))]
+        for e_ in body.data.edges:
+            a_, b_ = e_.vertices
+            if kept[a_] and kept[b_]:
+                adjacency[a_].append(b_); adjacency[b_].append(a_)
+        # Seam copies (one position, several vertices) are joined at distance 0, so they get one weight.
+        for grp in key.values():
+            for a_ in grp:
+                adjacency[a_].extend(b_ for b_ in grp if b_ != a_ and kept[a_] and kept[b_])
+        seeds = sorted({j_ for q_ in rim for j_ in key.get(tuple(np.round(q_ / 1e-5).astype(int)), []) if kept[j_]})
+        hull = {i_: d_ for i_, d_ in skin_distance(adjacency, V, seeds, outer_m).items()} if outer_m > 0 else {}
+        hull_idx = sorted(hull)
+        hull_floor = pv['share'] * pelvis_level(-np.array([hull[i_] for i_ in hull_idx]), inner_m, outer_m)
+        hull_new = pelvis_weights([VW[i_] for i_ in hull_idx], hull_floor, pelvis_bone)
+        hull_raised = 0
+        for i_, old, new in zip(hull_idx, (VW[i_] for i_ in hull_idx), hull_new):
+            if new == old:
+                continue
+            hull_raised += 1
+            for g, x in new.items():
+                vg = body.vertex_groups.get(g) or body.vertex_groups.new(name=g)
+                vg.add([i_], x, 'REPLACE')
+        pelvis = {'bone': pelvis_bone, 'share': pv['share'], 'ring_m': round(float(inner_m), 4),
+                  'spread_m': round(float(outer_m), 4), 'depth_max_m': round(float(depth.max()), 4),
+                  'raised': int((after > before + 1e-9).sum()), 'core_vertices': int((floors >= pv['share'] - 1e-9).sum()),
+                  'skin_raised': hull_raised,
+                  'mean_share_before': round(float(before.mean()), 3), 'mean_share_after': round(float(after.mean()), 3)}
+        print('pelvis rule', pelvis)
     for i, w in enumerate(qw):
         for g, x in w.items():
             if x > 0:
@@ -1118,6 +1224,7 @@ def build_part(group, output):
             'usable_half_width': float(np.interp((P['cleft']['s0'] + P['cleft']['s1']) / 2, WS, WA)),
             'inner_scale': P['inner_scale'], 'nub_scale': P['nub_scale'],
             **({'part_end_s': round(s_end, 4)} if s_end is not None else {}),
+            **({'pelvis': pelvis} if pelvis else {}),
             **({'opening': opening} if opening is not None else {}), **(level or {})}
 
 

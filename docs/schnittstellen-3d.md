@@ -12425,7 +12425,7 @@ this repository declares a region, so every record here carries `channels: []`.
 - **`placement`:**
   - `declared`: O = the owning joint + `offset` · [side, up, front], and u = `axis` in that frame, normalised.
   - `rig`: O and u are the `opening` that the region's `from_rig` op reports in its build metrics
-    (`extension_rig.metrics[<rig id>].opening` = `{centre, axis}`, bind space; today only `inset_part`, build 7).
+    (`extension_rig.metrics[<rig id>].opening` = `{centre, axis}`, bind space; today only `inset_part`, since build 7).
   - A `from_rig` region gets NO channel when its rig is not built on the model or reports no opening. It never falls
     back to the declared offset. The reason goes into `channels_skipped`.
 - **`applied`** is the per-character override used (null without one), stored in
