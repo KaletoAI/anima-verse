@@ -135,7 +135,7 @@ THRESHOLDS = {
 #: counts every Blender thread). Same 60 s budget, hand-derived in ``scripts/smoke_garment_template.py``.
 BUILD_WALL_S = 60.0
 #: The wall seconds a drape takes, for the cost line (measured A141 on Kira with the two pose shapes:
-#: 28–47 s per piece; A138 without them 13.4–17.8 s; A142 tops with four shapes 40–50 s).
+#: 28–47 s per piece; A138 without them 13.4–17.8 s; A142 tops with four shapes 40–50 s; A144 tops / jackets 40–50 s).
 CPU_ESTIMATE_S = 45
 #: Ruling A141: the poses that get a corrective shape (a drape of their own, a morph target blended by
 #: the leg directions at runtime) and the poses every Build measures.
@@ -152,10 +152,12 @@ DRESS_ARM_SHAPE_POSES = ("arms_down",)
 UPPER_LEG_POSES = ("sit",)
 #: Ruling A142 wall budget (60 s per piece): a bodice drapes BODICE_FRAMES frames, an arm shape ARM_SHAPE_FRAMES (the
 #: arm shapes settle from the skinned pose and move 14–29 mm at p90; measured A142 with 40 frames: 12–15 s wall each,
-#: a long-sleeved jacket was 66 s with 25 frames).
-BODICE_FRAMES = 40
-ARM_SHAPE_FRAMES = 20
-UPPER_SIT_FRAMES = 25
+#: a long-sleeved jacket was 66 s with 25 frames). Ruling A144: 30 / 12 / 16 frames and the arm poses collide with a
+#: skinned rest collider (no remesh per pose): the blazer 70.7 -> 44.6 s, its pose numbers unchanged (stretch p99
+#: arms_down 1.25, arms_up 1.40; sit poke 0).
+BODICE_FRAMES = 30
+ARM_SHAPE_FRAMES = 12
+UPPER_SIT_FRAMES = 16
 MEASURED_UPPER_POSES = ("rest", "walk", "arms_down", "arms_forward", "arms_up", "sit")
 #: The pose-shape groups (driver segments are joint pairs; ``frame`` = the joint whose rotation since the bind pose
 #: is taken out of the directions; ``sigma`` = Gaussian width in radians of summed segment angle). The arm samples lie
@@ -594,6 +596,8 @@ def bodice_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
             share = float(d) / meas["arm_len"]
             rings.append([round(float(d), 4), round(float(np.interp(share, shares, girths)) * ease + EASE_M, 4)])
         if rings[-1][0] < length - 1e-3:
+            if length - rings[-1][0] < SLEEVE_RING_M / 2 and len(rings) > 1:
+                rings.pop()                # Ruling A144: a last ring a few mm past its neighbour drapes as a pucker
             rings.append([round(length, 4), round(float(np.interp(length / meas["arm_len"], shares, girths)) * ease
                                                   + EASE_M, 4)])
         sleeve = {"len_m": round(length, 4), "rings": rings}

@@ -334,7 +334,10 @@ def build_bodice(spec, btree, ftree, centre, arm):
             e1 = np.cross(t0, [0.0, 0.0, 1.0])
             e1 /= np.linalg.norm(e1)
             e2 = np.cross(e1, t0)
-            phi = np.arctan2((L - Q0) @ e2, (L - Q0) @ e1)
+            phi = np.unwrap(np.arctan2((L - Q0) @ e2, (L - Q0) @ e1))
+            # Ruling A144: along the sleeve the ring vertices spread evenly round the arm (the armhole loop's spacing
+            # is uneven: bunched vertices made 4.7 mm edges that took the drape's largest stretch at the cuff)
+            even = phi[0] + math.copysign(2 * math.pi, phi[-1] - phi[0]) * np.arange(len(phi)) / len(phi)
             ring_ds = [(d, c) for d, c in sl["rings"] if d > d0 + 0.02]
             if not ring_ds or ring_ds[-1][0] < sl["len_m"] - 1e-3:
                 ring_ds.append((max(sl["len_m"], d0 + 0.03), sl["rings"][-1][1]))
@@ -352,7 +355,8 @@ def build_bodice(spec, btree, ftree, centre, arm):
                 w = w * w * (3 - 2 * w)
                 cur = []
                 for i in range(M):
-                    dirv = math.cos(phi[i]) * f1 + math.sin(phi[i]) * f2
+                    ang = (1 - w) * phi[i] + w * even[i]
+                    dirv = math.cos(ang) * f1 + math.sin(ang) * f2
                     rad = max(cj / (2 * math.pi), _ray_in(ftree, Q, dirv) + SLEEVE_CLEAR_M)
                     target = Q + rad * dirv
                     moved = L[i] + (Q - Q0)
@@ -553,6 +557,10 @@ SHAPE_MIN_BENDING = 0.5
 #: A corrective drape that moved its cloth this far at p90 exploded (good ones move 6–32 mm, A141/A142): the shape is
 #: dropped (the skinned drape stays in that pose) and the drop is recorded.
 SHAPE_MAX_MOVE_P90_MM = 100.0
+#: Ruling A144 wall budget: the collider keeps only the faces within CROP_M of the cloth's box (a top never meets the
+#: shins or the head); a corrective drape collides at SHAPE_COLLISION_QUALITY.
+CROP_M = 0.12
+SHAPE_COLLISION_QUALITY = 4
 
 
 def to_gltf(v):
@@ -743,7 +751,8 @@ def supports(arm, body, pose):
     return out
 
 
-def pose_shape(arm, body, obj, pose, pin, names, W, rest_world, fab, thickness, lower=(), frames=SHAPE_FRAMES):
+def pose_shape(arm, body, obj, pose, pin, names, W, rest_world, fab, thickness, lower=(), frames=SHAPE_FRAMES,
+               collider=None):
     """The corrective of one pose, as world-space deltas at the bind pose (n x 3) + its numbers."""
     gd.set_pose(arm, pose)
     for lo in lower:
@@ -762,7 +771,8 @@ def pose_shape(arm, body, obj, pose, pin, names, W, rest_world, fab, thickness, 
     cpu, wall, drift = gd.drape(tmp, body, pin, frames, quality=int(fab["quality"]),
                                 bending=max(float(fab["bending"]), SHAPE_MIN_BENDING),
                                 shrink=float(fab.get("shrink", 0.0)), self_collision=False, thickness=thickness,
-                                extra=lower)
+                                extra=lower, crop_m=CROP_M, collision_quality=SHAPE_COLLISION_QUALITY,
+                                prebuilt=collider)
     draped = np.array([tmp.matrix_world @ v.co for v in tmp.data.vertices])
     for o in [tmp, *held]:
         bpy.data.objects.remove(o)
@@ -930,6 +940,9 @@ def run(a):
         bm.from_mesh(me)
         loose = [v for v in bm.verts if not v.link_faces]
         bmesh.ops.delete(bm, geom=loose, context="VERTS")
+        # Ruling A144: edges under MIN_EDGE_M (an armhole corner where two re-spaced rows meet, carried along the whole
+        # sleeve) are collapsed; an open front's two seam columns share positions but no edge and stay apart
+        bmesh.ops.dissolve_degenerate(bm, dist=MIN_EDGE_M, edges=bm.edges[:])
         bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
         bm.to_mesh(me)
         bm.free()
@@ -973,7 +986,7 @@ def run(a):
     thickness = float(prm.get("thickness", 0.004))
     cpu, wall, drift = gd.drape(obj, body, pin, int(prm.get("frames", 50)), quality=int(fab["quality"]),
                                 bending=float(fab["bending"]), shrink=float(fab.get("shrink", 0.0)),
-                                self_collision=False, thickness=thickness, extra=lower)
+                                self_collision=False, thickness=thickness, extra=lower, crop_m=CROP_M)
     me = obj.data
     co1 = np.array([v.co for v in me.vertices])
     st = np.linalg.norm(co1[edges[:, 0]] - co1[edges[:, 1]], axis=1) / np.maximum(rest_len, 1e-6)
@@ -983,7 +996,8 @@ def run(a):
     worst = co0[edges[int(st.argmax())]].mean(0)
     worst_at = {"z": round(float(worst[2]), 3),
                 "deg": round(math.degrees(math.atan2(worst[1] - centre[1], worst[0] - centre[0])) % 360, 1),
-                "over_1_3": int((st > 1.3).sum()), "short_edges": int((rest_len < MIN_EDGE_M).sum()), "rest_mm": round(float(rest_len[int(st.argmax())]) * 1000, 1),
+                "over_1_3": int((st > 1.3).sum()), "short_edges": int((rest_len < MIN_EDGE_M).sum()),
+                "short_at": [[round(float(x), 3) for x in co0[e].mean(0)] for e in edges[rest_len < MIN_EDGE_M][:8]], "rest_mm": round(float(rest_len[int(st.argmax())]) * 1000, 1),
                 "x": round(float(worst[0]), 3), "y": round(float(worst[1]), 3)}
     n_single = len(me.vertices)
     neck = {}
@@ -1006,6 +1020,7 @@ def run(a):
     rest_world = np.array([obj.matrix_world @ v.co for v in obj.data.vertices])
     groups = [dict(g) for g in (prm.get("shape_groups") or [])]
     deltas, shape_info = {}, {}
+    collider = None
     t_shape = time.time()
     xs, zs = rest_world[:, 0], rest_world[:, 2]
     ncx = (bod["joints"].get("neck") or [centre[0]])[0] if bod else centre[0]
@@ -1016,8 +1031,13 @@ def run(a):
         for pose in g["poses"]:
             if pose not in deltas.get("_raw", {}):
                 frames = int(g.get("frames") or SHAPE_FRAMES)
+                # the arm poses collide with the skinned rest collider; a leg pose bends the hips far, where the
+                # skinned surface folds into itself (sit poke 0.64 % with it, 0 with a fresh remesh: A144)
+                arm_pose = g["name"] != "legs"
+                if arm_pose and collider is None and not lower:
+                    collider = gd.skinned_collider(body, arm)
                 d, info = pose_shape(arm, body, obj, pose, pin, names, W, rest_world, fab, thickness, lower=lower,
-                                     frames=frames)
+                                     frames=frames, collider=collider if arm_pose else None)
                 deltas.setdefault("_raw", {})[pose] = d
                 shape_info[pose] = info
             d = deltas["_raw"][pose]
@@ -1036,6 +1056,8 @@ def run(a):
             deltas[name] = d * mask[:, None]
             g["targets"].append(name)
     deltas.pop("_raw", None)
+    if collider is not None:
+        bpy.data.objects.remove(collider)
     gd.set_pose(arm, "rest")
     shape_wall = round(time.time() - t_shape, 2)
     # Solidify without the armature in the stack: its copy layer follows the original vertex order
@@ -1156,7 +1178,7 @@ def run(a):
             "drape": {"cpu_s": cpu, "wall_s": wall, "pin_drift_mm": drift,
                       "stretch_max": round(float(st.max()), 3), "stretch_at": worst_at, "stretch_p99": round(float(np.percentile(st, 99)), 3),
                       "quality": int(fab["quality"])},
-            "weights": weights, "shapes": {"wall_s": shape_wall, **shape_info}, "pose_shapes": pose_shapes,
+            "weights": weights, "shapes": {"wall_s": shape_wall, **shape_info}, "collider_s": list(gd.COLLIDER_S), "pose_shapes": pose_shapes,
             "hem_verts": int(len(hem)),
             "bake": tex, "draped": measured, "measure_wall_s": meas_s, "render_wall_s": round(render_s, 2),
             "script_wall_s": round(time.time() - t_all, 2), "script_cpu_s": round(time.process_time() - c_all, 2)}

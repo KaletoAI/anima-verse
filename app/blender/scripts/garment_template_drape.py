@@ -474,6 +474,8 @@ def render(path, target, side=-0.55):
 #: shell would fall between the 5 mm voxels of the remesh; grown outward or centred it filled the armpit and the
 #: jacket above it exploded — A142 first layered run).
 EXTRA_SOLID_M = 0.008
+#: Wall seconds of each collider build (remesh, decimate, crop, pre-inflate), for the cost record.
+COLLIDER_S = []
 
 
 def _join_extra(col, extra, dg):
@@ -499,29 +501,69 @@ def _join_extra(col, extra, dg):
     bpy.data.meshes.remove(me2)
 
 
-def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collision, thickness, extra=()):
-    """Collider = decimated rest copy of the body (+ the ``extra`` lower garment layers). Returns CPU seconds and
-    pin drift (mm)."""
-    sc = bpy.context.scene
-    dg = bpy.context.evaluated_depsgraph_get()
-    # the collider must be wound OUTWARD everywhere: Blender's cloth collision is
-    # one-sided, and the generated bodies mix windings (13 % of Kira's faces point in
-    # even after recalc + parity) - a flipped patch pulls the cloth INTO the body.
-    # A voxel remesh of the posed body is closed and wound outward by construction.
-    col = bpy.data.objects.new("collider", bpy.data.meshes.new_from_object(body.evaluated_get(dg)))
-    col.matrix_world = body.matrix_world.copy()
-    sc.collection.objects.link(col)
-    for ex in extra:
-        _join_extra(col, ex, dg)
+def _remesh(col, faces):
     vox = col.modifiers.new("vox", "REMESH")
     vox.mode = "VOXEL"
     vox.voxel_size = COLLIDER_VOXEL_M
     bpy.context.view_layer.objects.active = col
     bpy.ops.object.modifier_apply(modifier=vox.name)
     dec = col.modifiers.new("dec", "DECIMATE")
-    dec.ratio = min(1.0, 80000 / max(1, len(col.data.polygons)))
+    dec.ratio = min(1.0, faces / max(1, len(col.data.polygons)))
     bpy.context.view_layer.objects.active = col
     bpy.ops.object.modifier_apply(modifier=dec.name)
+
+
+def skinned_collider(body, arm, faces=80000):
+    """Ruling A144: the body remeshed ONCE in the rest pose (closed, wound outward) and skinned like the body, so a
+    pose's collider is an armature evaluation instead of a remesh + decimate (~2 s each)."""
+    arm.data.pose_position = "REST"
+    bpy.context.view_layer.update()
+    dg = bpy.context.evaluated_depsgraph_get()
+    col = bpy.data.objects.new("collider_rest", bpy.data.meshes.new_from_object(body.evaluated_get(dg)))
+    col.matrix_world = body.matrix_world.copy()
+    bpy.context.scene.collection.objects.link(col)
+    arm.data.pose_position = "POSE"
+    _remesh(col, faces)
+    bind_to_armature(col, body, arm)
+    col.hide_render = True
+    return col
+
+
+def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collision, thickness, extra=(),
+          collider_faces=80000, collision_quality=4, crop_m=None, prebuilt=None):
+    """Collider = decimated rest copy of the body (+ the ``extra`` lower garment layers). Returns CPU seconds and
+    pin drift (mm). ``crop_m`` (Ruling A144): collider faces farther than this outside the cloth's box are dropped
+    after the remesh (a jacket never reaches the shins; the collision tests scale with the faces)."""
+    sc = bpy.context.scene
+    dg = bpy.context.evaluated_depsgraph_get()
+    # the collider must be wound OUTWARD everywhere: Blender's cloth collision is
+    # one-sided, and the generated bodies mix windings (13 % of Kira's faces point in
+    # even after recalc + parity) - a flipped patch pulls the cloth INTO the body.
+    # A voxel remesh of the posed body is closed and wound outward by construction.
+    t_col = time.time()
+    if prebuilt is not None and not extra:
+        # Ruling A144: the remeshed rest collider skinned to the armature (``skinned_collider``), evaluated in the pose
+        col = bpy.data.objects.new("collider", bpy.data.meshes.new_from_object(prebuilt.evaluated_get(dg)))
+        col.matrix_world = prebuilt.matrix_world.copy()
+        sc.collection.objects.link(col)
+    else:
+        col = bpy.data.objects.new("collider", bpy.data.meshes.new_from_object(body.evaluated_get(dg)))
+        col.matrix_world = body.matrix_world.copy()
+        sc.collection.objects.link(col)
+        for ex in extra:
+            _join_extra(col, ex, dg)
+        _remesh(col, collider_faces)
+    if crop_m is not None:
+        gco = np.array([obj.matrix_world @ v.co for v in obj.data.vertices])
+        lo, hi = gco.min(0) - crop_m, gco.max(0) + crop_m
+        cco, _cn, _ct = world_coords(col, evaluated=False)
+        near = np.all((cco > lo) & (cco < hi), axis=1)
+        bm = bmesh.new()
+        bm.from_mesh(col.data)
+        far = [f for f in bm.faces if not any(near[v.index] for v in f.verts)]
+        bmesh.ops.delete(bm, geom=far, context="FACES")
+        bm.to_mesh(col.data)
+        bm.free()
     cm = col.modifiers.new("col", "COLLISION")
     col.collision.thickness_outer = thickness
     col.collision.cloth_friction = 5.0
@@ -541,7 +583,7 @@ def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collisio
     cs = cl.collision_settings
     cs.distance_min = thickness
     cs.use_self_collision = self_collision
-    cs.collision_quality = 4
+    cs.collision_quality = collision_quality
     s.air_damping = 5.0
     cs.self_distance_min = 0.003
     cl.point_cache.frame_start = 1
@@ -564,6 +606,7 @@ def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collisio
             pushed += 1
     obj.data.update()
     bpy.context.view_layer.update()
+    COLLIDER_S.append(round(time.time() - t_col, 2))
     print("DRAPE collider faces", len(col.data.polygons), "cloth verts", len(obj.data.vertices), "col mods", [m.type for m in col.modifiers])
     before = np.array([obj.matrix_world @ obj.data.vertices[int(i)].co for i in pin_idx])
     t0, c0 = time.time(), time.process_time()
