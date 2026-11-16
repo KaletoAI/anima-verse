@@ -35,7 +35,7 @@ export interface BaseRunAll {
 type Tr = (s: string) => string
 const EN: Tr = (s) => s
 
-function jobsTr(hubJobs: number | null, t: Tr): string {
+export function jobsTr(hubJobs: number | null, t: Tr): string {
   if (hubJobs === null) return t('cost unknown')
   return hubJobs === 1 ? t('1 hub job') : t('{n} hub jobs').replace('{n}', String(hubJobs))
 }

@@ -1582,6 +1582,10 @@ GARMENT_STEP_LABELS = {"worn": "Worn views", "ghost": "Piece-only views", "cutou
 FOOTWEAR_STEP_LABELS = {"source": "Item image", "empty": "Empty shoe", "cutout": "Cut-out", "mesh": "Mesh",
                         "insole": "Insole", "fit": "Fit"}
 STEP_RUNNING = "running"
+#: Ruling A140: the rows of a shell piece (mesh shape "Shell from the body").
+SHELL_FROM_BODY_STEP = "From the body — made in the fit step"
+SHELL_NO_CUTOUT = "Not needed: the shell is made from the piece-only views"
+SHELL_FIT_DUE = "Not fitted yet — makes the shell on the CPU, 0 hub jobs"
 
 
 def garment_steps(garment: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1596,6 +1600,7 @@ def garment_steps(garment: Dict[str, Any]) -> List[Dict[str, Any]]:
     running = garment.get("running_step")
     footwear = garment.get("kind") == "footwear"
     labels = FOOTWEAR_STEP_LABELS if footwear else GARMENT_STEP_LABELS
+    shell = (not footwear and _dict(_dict(garment.get("fit_settings")).get("mesh_shape")).get("resolved") == "shell")
     for step_id, data in steps.items():
         label = labels.get(step_id, step_id)
         data = _dict(data)
@@ -1614,6 +1619,11 @@ def garment_steps(garment: Dict[str, Any]) -> List[Dict[str, Any]]:
             status = DONE if state == "accepted" else FAILED if state == "refused" else MISSING
             numbers = {k: v for k, v in _dict(data.get("metrics")).items() if isinstance(v, (int, float))}
             detail = ""
+        if shell and step_id in ("cutout", "mesh") and status == MISSING:
+            # Ruling A140: a shell piece skips these — the shell is made from the body in the fit step.
+            status, detail = SKIPPED, SHELL_FROM_BODY_STEP if step_id == "mesh" else SHELL_NO_CUTOUT
+        elif shell and step_id == "fit" and status == MISSING:
+            status, detail = DUE, SHELL_FIT_DUE
         if running == step_id:
             detail = STEP_RUNNING
         elif failed.get("step") == step_id:

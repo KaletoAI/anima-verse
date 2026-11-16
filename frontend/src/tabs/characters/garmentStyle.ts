@@ -515,3 +515,35 @@ export function previewChoice(fitUrl: string | null | undefined, stale: boolean,
 export const OLD_FIT_TOGGLE = 'Show the old fit (made on the earlier body)'
 export const OLD_FIT_HIDDEN = 'This fit was made on an earlier body, so the piece is not worn now — shown is the body without it.'
 export const OLD_FIT_LABEL = 'Old fit — made on the earlier body, not worn now'
+
+/** Ruling A140: the fit row's button. A shell piece (mesh shape "Shell from the body") has no mesh step — its shell
+ *  is made by the fit from the piece-only views — so its fit runs once both piece-only views are accepted, never
+ *  "after the mesh". A blocked button always carries a visible reason (`reason`), never a tooltip alone. `label`
+ *  and `reason` are English keys for `t()`. */
+export interface FitRowGate { disabled: boolean; label: string; reason: string; primary: boolean }
+export const FIT_REFIT = 'Re-fit (CPU, 0 hub jobs)'
+export const FIT_FIRST = 'Fit now (CPU, 0 hub jobs)'
+export const FIT_WAITS_BUILD = 'Waits for the running Build — it fits this piece too'
+export const FIT_NEEDS_VIEWS = 'Needs both piece-only views accepted first'
+export const FIT_NEEDS_MESH = 'Needs an accepted mesh first'
+export function fitRowGate(a: { shell: boolean; meshAccepted: boolean; viewsReady: boolean; fitMade: boolean;
+  refitBlock: string; buildRunning: boolean }): FitRowGate {
+  const label = a.fitMade ? FIT_REFIT : FIT_FIRST
+  const no = (reason: string): FitRowGate => ({ disabled: true, label, reason, primary: false })
+  if (a.refitBlock) return no(a.refitBlock)
+  if (a.buildRunning) return no(FIT_WAITS_BUILD)
+  if (a.shell && !a.viewsReady) return no(FIT_NEEDS_VIEWS)
+  if (!a.shell && !a.meshAccepted) return no(FIT_NEEDS_MESH)
+  return { disabled: false, label, reason: '', primary: !a.fitMade }
+}
+
+/** Ruling A140: the dialog head's "next step" line where it has no Run all (opened from the Figure tab) — the
+ *  server's estimate (`run_estimate`): the steps due and their hub jobs, or that nothing is due. Null without an
+ *  estimate. English keys; `steps` are step keys for the caller's labels. */
+export const NEXT_NOTHING = 'Everything is current'
+export const NEXT_RUNS_IT = 'the Build runs it, or the button in its row below'
+export function nextStepLine(run: { steps: string[]; hub_jobs: number | null } | null | undefined):
+  { nothing: boolean; steps: string[]; hubJobs: number | null } | null {
+  if (!run) return null
+  return { nothing: run.steps.length === 0, steps: run.steps, hubJobs: run.hub_jobs }
+}

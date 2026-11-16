@@ -53,6 +53,10 @@ import {
   pieceViewReason, queueText, shownRecord, upscaleText, warningLines,
 } from './garmentStyle'
 import type { AttemptTile, ChipSpec, GarmentLimits, GarmentRunBody, LightState } from './garmentStyle'
+import { fitRowGate } from './garmentStyle'
+
+/** A blocked button's visible reason (Ruling A140). */
+const WARN_HINT: CSSProperties = { color: 'var(--warning, #d29922)' }
 import { GarmentMeshTiles } from './GarmentMeshView'
 import type { MeshAllowance } from './GarmentMeshView'
 import { MeshShapeControl } from './MeshShapeControl'
@@ -492,6 +496,13 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   const cutoutsReady = !!lastImage && GARMENT_VIEWS.every((v) => accepted(lastImage, v))
   // Ruling A48d: a shell piece skips the cut-outs and the hub mesh job (its chain is worn → ghost → fit).
   const shellPiece = meshAllowance?.info.mesh_shape?.resolved === 'shell'
+  // Ruling A140: a shell piece's fit runs once its piece-only views (the last image step it keeps) are accepted.
+  const shellViewsStep = imageSteps.map((x) => x.step).filter((x) => x !== 'cutout').pop()
+  const fitGate = fitRowGate({
+    shell: shellPiece, meshAccepted: mesh?.status === 'accepted',
+    viewsReady: !!shellViewsStep && GARMENT_VIEWS.every((v) => accepted(shellViewsStep, v)),
+    fitMade: !!fit && fit.status !== 'missing', refitBlock: refitBlock || '', buildRunning: !!garment?.build_running,
+  })
   const columns = `minmax(110px, 140px) repeat(${GARMENT_VIEWS.length}, minmax(0, 1fr))`
 
   const imageCell = (spec: ImageStepSpec, index: number, view: GarmentView): ReactNode => {
@@ -798,13 +809,15 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
         <RunButton
           feedback={feedback}
           slot={runSlot({ step: 'fit' })}
-          disabled={busy || !garment || mesh?.status !== 'accepted' || !!refitBlock}
-          title={garment && mesh?.status !== 'accepted' ? t('Run the previous step first') : refitBlock || (refitOn
+          primary={fitGate.primary}
+          disabled={busy || !garment || fitGate.disabled}
+          title={fitGate.reason ? t(fitGate.reason) : refitOn
             ? t('Fits the piece on the selected body shape again on the CPU — 0 hub jobs. The plain body is fitted first when its fit is due.')
-            : t(STEP_HELP.fit))}
-          label={refitOn ? `${t('Re-fit')} · ${refitOn}` : t('Re-fit')}
+            : t(STEP_HELP.fit)}
+          label={refitOn ? `${t(fitGate.label)} · ${refitOn}` : t(fitGate.label)}
           onClick={() => onRun({ step: 'fit', force: true })}
         />
+        {garment && fitGate.reason ? <span className="ga-hint" style={WARN_HINT}>{t(fitGate.reason)}</span> : null}
       </div>
     </div>
   )

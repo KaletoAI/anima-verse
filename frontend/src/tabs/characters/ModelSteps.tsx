@@ -57,7 +57,8 @@ export function ModelSteps({ steps }: { steps: ModelStep[] }) {
         return (
           <div key={s.id} className="ga-model3d-status-row" title={tip}>
             <span className={`ga-model3d-status-dot ga-model3d-status-${DOT[s.status] || 'grey'}`} />
-            <span className="ga-model3d-status-text">{t(s.label)} · {t(STATUS_LABEL[s.status] || s.status)}</span>
+            <span className="ga-model3d-status-text">{t(s.label)} · {s.status === 'skipped' && s.detail
+              ? t(s.detail) : t(STATUS_LABEL[s.status] || s.status)}</span>
           </div>
         )
       })}

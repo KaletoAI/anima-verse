@@ -72,7 +72,7 @@ import { GarmentFailure, GateChips, RefitNotice, RunButton, RunStatusLine } from
 import { GarmentStepGrid } from './GarmentStepGrid'
 import { GarmentRefusedAttempts } from './GarmentRefusedAttempts'
 import type { ImageStepSpec } from './GarmentSteps'
-import { OLD_FIT_HIDDEN, OLD_FIT_LABEL, OLD_FIT_TOGGLE, previewChoice } from './garmentStyle'
+import { NEXT_NOTHING, NEXT_RUNS_IT, OLD_FIT_HIDDEN, OLD_FIT_LABEL, OLD_FIT_TOGGLE, nextStepLine, previewChoice } from './garmentStyle'
 import { useFigure } from './useFigure'
 import { FOOTWEAR_STEP_LABELS, ROW, WARN_STYLE, footwearRunPlan, meshNotReadyText, pieceViewDueText, REFIT_REASON } from './garmentStyle'
 import type { ChipSpec, GarmentRunBody } from './garmentStyle'
@@ -97,7 +97,7 @@ import {
   showBodySwitch, switchOffWarning, wearersLine,
 } from './figureModel'
 import type { FitBody, MeshMode, OwnMeshFiles, PieceState } from './figureModel'
-import { chainRunAll } from './baseBodyModel'
+import { chainRunAll, jobsTr } from './baseBodyModel'
 
 /** A piece worn in slot feet alone is footwear (`garment_set.garment_kind_of`): a shoe or a boot (boots spec
  *  2026-11-11 § 15). */
@@ -633,6 +633,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
   const footwearPlan = footwear ? footwearRunPlan(footwear, t) : ''
   // Rule R1 (Task UI1): the label carries what Run all runs now; nothing due → "Everything is current".
   const runAll = chainRunAll(info?.run, t)
+  const next = nextStepLine(info?.run)
   const running = garmentRunning(info)
   // Ruling A58: while the piece's run is in its mesh job, nothing is disabled because of the job — the kept meshes'
   // "Use this" and Re-fit run beside it (CPU), every other run click queues behind it.
@@ -1111,6 +1112,13 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
               ? <RunStatusLine garment={runState} feedback={feedback} stepLabels={stepLabels} bare
                 onCancel={() => { void cancel() }} />
               : info?.status ? <PieceStatusChip status={info.status} name={info.name || name} /> : null}
+            {/* Ruling A140: without Run all the head still names the next step and its cost. */}
+            {noRunAll && next && !running && feedback.pending === null ? (
+              <div className="ga-hint" title={info?.run?.note || ''}>
+                {next.nothing ? t(NEXT_NOTHING) : `${t('Next')}: ${next.steps.map((s) => t(stepLabels[s] || s)).join(' → ')}`
+                  + ` · ${jobsTr(next.hubJobs, t)} — ${t(NEXT_RUNS_IT)}`}
+              </div>
+            ) : null}
           </div>
           {info?.pipeline && !noRunAll ? (
             <RunButton
