@@ -91,6 +91,12 @@ SLEEVE_BLEND_M = 0.06
 COLLAR_RINGS = 3
 #: The neckline cut reaches this far beyond the neck opening's radius to the sides.
 NECK_CUT_WIDEN_M = 0.03
+#: Ruling A144: below the neckline cut a column's vertices are re-spaced over this arc length (or twice the cut).
+NECK_BLEND_M = 0.08
+#: Edges built shorter than this are left out of the stretch ratio.
+MIN_EDGE_M = 0.001
+#: The yoke reaches at least this far outward from the neck opening.
+CAP_MIN_M = 0.03
 COLLAR_STEP_M = 0.012
 UV_TORSO = (0.30, 0.86)
 UV_CAP = (0.87, 0.98)
@@ -113,6 +119,36 @@ def _ray_in(tree, q, d, reach=0.25):
     o = Vector(q) + Vector(d) * reach
     hit = tree.ray_cast(o, -Vector(d), reach)
     return (reach - hit[3]) if hit[0] is not None else 0.0
+
+
+#: Ruling A144: above the chest band a bodice row follows the body's own cross-section (its radius per angle +
+#: BODICE_CLEAR_M) and takes the pattern's ease as one even offset, at most ROW_EASE_MAX_M (a circle of the row's
+#: girth stood 13 cm off the front of the neck at the shoulder line on the reference body: the box-shaped stand of
+#: A142). Below the band the cloth hangs from the bust: the circle of the girth (never inside the body), blended over
+#: ROW_BLEND_M (body-shaped rows down to the hem clung to the waist and folded into the groin).
+ROW_EASE_MAX_M = 0.05
+ROW_BLEND_M = 0.06
+
+
+def row_radii(btree, centre, angles, z, circ, w=1.0):
+    """The radius per angle of one bodice row: ``w`` x the body-shaped row + (1 - w) x the circle rule (see
+    ROW_EASE_MAX_M). A ray that misses the body takes its nearest hit neighbour's radius; a row without any hit is the
+    circle of its girth."""
+    br = np.array([gd.body_radius(btree, centre, a, z) for a in angles])
+    hit = br > 0
+    circle = np.maximum(circ / (2 * math.pi), br + BODICE_CLEAR_M)
+    if not hit.any() or w <= 0.0:
+        return np.where(hit, circle, circ / (2 * math.pi))
+    idx = np.where(hit)[0]
+    n = len(angles)
+    for i in np.where(~hit)[0]:
+        d = np.minimum(np.abs(idx - i), n - np.abs(idx - i))
+        br[i] = br[idx[int(np.argmin(d))]]
+    r0 = br + BODICE_CLEAR_M
+    xs, ys = r0 * np.cos(angles), r0 * np.sin(angles)
+    perim = float(np.sum(np.hypot(np.diff(np.r_[xs, xs[:1]]), np.diff(np.r_[ys, ys[:1]]))))
+    shaped = r0 + min(ROW_EASE_MAX_M, max(0.0, (circ - perim) / (2 * math.pi)))
+    return w * shaped + (1 - w) * np.maximum(circle, r0)
 
 
 def build_bodice(spec, btree, ftree, centre, arm):
@@ -139,12 +175,12 @@ def build_bodice(spec, btree, ftree, centre, arm):
     tid = np.zeros((rows, nc), int)
     for r in range(rows):
         z = row_y[r]
+        rad = row_radii(btree, centre, angles[:N], z, circ[r], w=min(1.0, max(0.0, (z - bod["band_y"]) / ROW_BLEND_M)))
+        rad = list(rad) + ([rad[0]] if open_front else [])
         for c in range(nc):
             a = angles[c]
-            br = gd.body_radius(btree, centre, a, z)
-            rad = max(circ[r] / (2 * math.pi), br + BODICE_CLEAR_M)
             tid[r, c] = len(verts)
-            verts.append((centre[0] + rad * math.cos(a), centre[1] + rad * math.sin(a), z))
+            verts.append((centre[0] + rad[c] * math.cos(a), centre[1] + rad[c] * math.sin(a), z))
 
     def u_of(c):
         return 0.01 + 0.98 * c / N
@@ -160,79 +196,115 @@ def build_bodice(spec, btree, ftree, centre, arm):
     if not straps:
         for sc_ in side_c.values():
             window.update(range(sc_ - WINDOW_COLS, sc_ + WINDOW_COLS))      # face columns c..c+1
-    span = nc - 1 if open_front else nc
-    # the neckline: a front column inside it ends at its own height (the neckline curve, from the shoulder line
-    # down by depth x shape) — its top kept vertex is moved onto the curve and its yoke columns are dropped
+    # Ruling A144 — the neckline is ONE smooth curve. Every column is a meridian: from the neck ring out over the
+    # yoke ("cap") to the shoulder line and down the torso rows to the hem. In front the neckline comes down from the
+    # ring to ``front_y - depth`` at the centre (front_y = the jugular notch, the shoulder-joint height: above it the
+    # front of a T-posed body is the neck, and cloth built up there stood as a crumpled stand, A142), by
+    # shape(dx / half width); each meridian is cut where it first runs below that height, and its vertices down to
+    # NECK_BLEND_M below the cut are re-spaced into the part that stays. No face is dropped (the A142 per-column cut
+    # left a staircase rim and free yoke edges standing up as flaps at the neck sides).
     nj = bod["joints"].get("neck")
     ncx, ncy = (nj[0], -nj[2]) if nj else (centre[0], centre[1])
     depth = float(bod.get("depth_m") or 0.0)
+    front_y = float(bod.get("front_y") or (row_y[0] - 0.045))
     hw = bod["neck_r"] + NECK_CUT_WIDEN_M
     top_z = row_y[0]
-    rcut = [0] * nc
-    cutcol = [False] * nc
-    for c in range(nc):
-        x, y, _z = verts[tid[0, c]]
-        dx = abs(x - ncx)
-        if depth <= 0 or y >= ncy or dx >= hw:
-            continue
-        tx = dx / hw
-        shape = (1 - tx) if bod["neckline"] == "v" else math.sqrt(max(0.0, 1 - tx * tx))
-        zn = top_z - depth * shape
-        if zn > top_z - 0.002:
-            continue
-        rc = next((r for r in range(rows) if row_y[r] <= zn + 1e-6), rows - 1)
-        cutcol[c] = True
-        rcut[c] = rc
-        a = angles[c]
-        br = gd.body_radius(btree, centre, a, zn)
-        rad = max(circ[rc] / (2 * math.pi), br + BODICE_CLEAR_M)
-        verts[tid[rc, c]] = (centre[0] + rad * math.cos(a), centre[1] + rad * math.sin(a), zn)
-    for r in range(rows - 1):
-        for c in range(span):
-            c2 = (c + 1) % nc
-            if r < r_band and c in window:
-                continue
-            if r < max(rcut[c], rcut[c2]):
-                continue
-            faces.append((tid[r, c], tid[r, c2], tid[r + 1, c2], tid[r + 1, c]))
-            u1 = u_of(c + 1)
-            fuv.append(((u_of(c), v_rows(r)), (u1, v_rows(r)), (u1, v_rows(r + 1)), (u_of(c), v_rows(r + 1))))
-    # the cap: row 0 in to the neck ring, laid on the shoulders
+    span = nc - 1 if open_front else nc
     neck_r = bod["neck_r"]
-    outer = [np.array(verts[tid[0, c]]) for c in range(nc)]
-    inner = [np.array((ncx + neck_r * math.cos(angles[c]), ncy + neck_r * math.sin(angles[c]))) for c in range(nc)]
-    reach = max(float(np.linalg.norm(outer[c][:2] - inner[c])) for c in range(nc))
+    nxy = np.array((ncx, ncy))
+    inner = [nxy + neck_r * np.array((math.cos(angles[c]), math.sin(angles[c]))) for c in range(nc)]
+    outer = []
+    for c in range(nc):
+        p = np.array(verts[tid[0, c]][:2])
+        d = p - nxy
+        rho = float(np.linalg.norm(d))
+        # the yoke runs at least CAP_MIN_M outward from the neck opening (a row hugging the neck lies inside it)
+        outer.append(nxy + d / max(rho, 1e-9) * max(rho, neck_r + CAP_MIN_M))
+    reach = max(float(np.linalg.norm(outer[c] - inner[c])) for c in range(nc))
     K = max(3, int(round(reach / 0.015)))
     cid = np.zeros((K + 1 + COLLAR_RINGS, nc), int)
     cid[0] = tid[0]
     # rays start under the chin (the neck base + 3.5 cm) so the yoke never climbs onto the head
     ray_top = max(top_z, bod["neck_y"]) + 0.035
-    for k in range(1, K + 1):
+    capz = np.zeros((K + 1, nc))
+    for k in range(0, K + 1):
         t = k / K
         for c in range(nc):
-            xy = (1 - t) * outer[c][:2] + t * inner[c]
+            xy = (1 - t) * outer[c] + t * inner[c]
             zs = _ray_down(ftree, xy[0], xy[1], top=ray_top)
-            z = max(top_z - 0.06, (zs + CAP_CLEAR_M) if zs is not None else top_z)
-            cid[k, c] = len(verts)
-            verts.append((float(xy[0]), float(xy[1]), float(z)))
+            capz[k, c] = max(top_z - 0.08, (zs + CAP_CLEAR_M) if zs is not None else top_z - 0.08)
+            if k:
+                cid[k, c] = len(verts)
+                verts.append((float(xy[0]), float(xy[1]), float(capz[k, c])))
+    cut_s = [0.0] * nc
+    cap_set = set()
+    for c in range(nc):
+        ids = [cid[k, c] for k in range(K, 0, -1)] + [tid[r, c] for r in range(rows)]
+        z_surf = capz[0, c]
+        # the path the cloth takes: the yoke on the shoulders, the shoulder line's point at the surface height there,
+        # then the rows below it (a row above the surface there is air: the A142 stand wall)
+        knots = [verts[i] for i in ids[:K]] + [(outer[c][0], outer[c][1], z_surf)]
+        low = [r for r in range(rows) if row_y[r] < z_surf - 0.005]
+        knots += [verts[tid[r, c]] for r in low]
+        Q = np.array(knots, float)
+        s = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(Q, axis=0), axis=1))]
+        cap_set.update(int(i) for i in ids[:K])
+        x, y = outer[c]
+        dx = abs(x - ncx)
+        sc_ = 0.0
+        if y < ncy and dx < hw:
+            tx = dx / hw
+            shape = (1 - tx) if bod["neckline"] == "v" else (1 - tx * tx)
+            zt = Q[0, 2] - shape * max(0.0, Q[0, 2] - (front_y - depth))
+            below = np.where(Q[:, 2] <= zt)[0]
+            if len(below) and below[0] > 0:
+                j = int(below[0])
+                f_ = (Q[j - 1, 2] - zt) / max(1e-9, Q[j - 1, 2] - Q[j, 2])
+                sc_ = float(s[j - 1] + f_ * (s[j] - s[j - 1]))
+        cut_s[c] = sc_ if sc_ >= 0.002 else 0.0
+        z_lo = min(z_surf, float(np.interp(cut_s[c], s, Q[:, 2]))) - NECK_BLEND_M
+        keep = [r for r in low if row_y[r] <= z_lo]
+        if len(keep) < 2:
+            continue                       # never on a sane body: the cut would eat the column
+        rk = keep[0]
+        s_end = float(s[K + 1 + low.index(rk)])
+        n_move = K + rk                    # ids[:n_move] are re-spaced over [cut, s_end)
+        ns = cut_s[c] + (s_end - cut_s[c]) * np.arange(n_move) / n_move
+        newp = np.c_[np.interp(ns, s, Q[:, 0]), np.interp(ns, s, Q[:, 1]), np.interp(ns, s, Q[:, 2])]
+        for i, p, si in zip(ids[:n_move], newp, ns):
+            verts[i] = tuple(float(v) for v in p)
+            if si < s[K]:
+                cap_set.add(int(i))
+            else:
+                cap_set.discard(int(i))
+    for r in range(rows - 1):
+        for c in range(span):
+            c2 = (c + 1) % nc
+            if r < r_band and c in window:
+                continue
+            faces.append((tid[r, c], tid[r, c2], tid[r + 1, c2], tid[r + 1, c]))
+            u1 = u_of(c + 1)
+            fuv.append(((u_of(c), v_rows(r)), (u1, v_rows(r)), (u1, v_rows(r + 1)), (u_of(c), v_rows(r + 1))))
     collar = bod.get("collar") in ("stand", "lapel")
     nring = K + (COLLAR_RINGS if collar else 0)
     for k in range(K + 1, nring + 1):
         for c in range(nc):
             x, y, z = verts[cid[K, c]]
             sh = 0.97 ** (k - K)
+            # the stand lowers along a cut front (never to zero: a zero-length edge has no rest length)
+            step = COLLAR_STEP_M * max(0.25, 1.0 - cut_s[c] / 0.05)
             cid[k, c] = len(verts)
-            verts.append((ncx + (x - ncx) * sh, ncy + (y - ncy) * sh, z + COLLAR_STEP_M * (k - K)))
+            verts.append((ncx + (x - ncx) * sh, ncy + (y - ncy) * sh, z + step * (k - K)))
     for k in range(nring):
         v0 = UV_CAP[0] + (UV_CAP[1] - UV_CAP[0]) * k / K if k < K else UV_COLLAR[0]
         v1 = UV_CAP[0] + (UV_CAP[1] - UV_CAP[0]) * (k + 1) / K if k + 1 <= K else UV_COLLAR[1]
         for c in range(span):
             c2 = (c + 1) % nc
-            if cutcol[c] or cutcol[c2]:
-                continue
             faces.append((cid[k, c], cid[k, c2], cid[k + 1, c2], cid[k + 1, c]))
             u1 = u_of(c + 1)
             fuv.append(((u_of(c), v0), (u1, v0), (u1, v1), (u_of(c), v1)))
+    # the binding: the neck rim and the next ring in (the innermost two rings of every meridian, or the collar)
+    rib_ids = sorted({int(cid[k, c]) for c in range(nc) for k in (nring, nring - 1)})
     # sleeves: ring 0 = the armhole loop
     sleeve_rows = {}
     if sleeves:
@@ -309,8 +381,9 @@ def build_bodice(spec, btree, ftree, centre, arm):
     faces = [f for f, _ in keep]
     fuv = [uv for _, uv in keep]
     used = {i for f in faces for i in f}
-    cap_ids = sorted({int(i) for i in cid[1:].ravel()} & used)
-    info = {"cap_ids": cap_ids, "sleeve_rings": {k: len(v) - 1 for k, v in sleeve_rows.items()}, "cap_rings": K,
+    cap_ids = sorted(cap_set & used)
+    info = {"cap_ids": cap_ids, "rib_ids": sorted(set(rib_ids) & used),
+            "cut_s": [round(x, 3) for x in cut_s], "sleeve_rings": {k: len(v) - 1 for k, v in sleeve_rows.items()}, "cap_rings": K,
             "collar_rings": nring - K, "columns": nc, "r_band": r_band}
     return verts, faces, fuv, info
 
@@ -328,12 +401,8 @@ def bodice_pins(obj, bod, ncx, ncy):
     and the rest of the body hang free."""
     co = np.array([v.co for v in obj.data.vertices])
     top = co[:, 2].max()
-    cap = np.zeros(len(co), bool)
-    g = obj.vertex_groups.get("cap")
-    if g is not None:
-        for v in obj.data.vertices:
-            if any(ge.group == g.index for ge in v.groups):
-                cap[v.index] = True
+    cap = _group_mask(obj, "cap")
+    rib = _group_mask(obj, "rib")
     # the yoke lying on the shoulders is pinned whole within pin_half_x; the torso rows only across the shoulder
     strip = (np.abs(co[:, 0] - ncx) < bod["pin_half_x"]) & (
         cap | ((co[:, 2] > top - bod["pin_band_m"]) & (np.abs(co[:, 1] - ncy) < bod["neck_r"] + PIN_DEPTH_M)))
@@ -342,7 +411,87 @@ def bodice_pins(obj, bod, ncx, ncy):
     reach = bod["neck_r"] + 0.04
     near_neck = (np.hypot(co[:, 0] - ncx, co[:, 1] - ncy) < reach + float(bod.get("depth_m") or 0.0)) \
         & (co[:, 2] > top - float(bod.get("depth_m") or 0.0) - 0.08)
-    return np.where(strip | (rim & near_neck))[0]
+    return np.where(strip | rib | (rim & near_neck))[0]
+
+
+def _group_mask(obj, name):
+    out = np.zeros(len(obj.data.vertices), bool)
+    g = obj.vertex_groups.get(name)
+    if g is not None:
+        for v in obj.data.vertices:
+            if any(ge.group == g.index for ge in v.groups):
+                out[v.index] = True
+    return out
+
+
+#: Ruling A144 neckline metric: the rim loop resampled to NECK_SAMPLES points by arc length, low-passed to its first
+#: NECK_HARMONICS Fourier harmonics (a clean scoop / crew / V is smooth at that scale; a staircase or a flap is not).
+NECK_SAMPLES = 128
+NECK_HARMONICS = 6
+
+
+def boundary_loops(obj, co):
+    """The boundary loops of ``obj`` as ordered vertex index lists."""
+    E = {}
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    for e in bm.edges:
+        if e.is_boundary:
+            a, b = e.verts[0].index, e.verts[1].index
+            E.setdefault(a, []).append(b)
+            E.setdefault(b, []).append(a)
+    bm.free()
+    seen, loops = set(), []
+    for start in E:
+        if start in seen:
+            continue
+        loop, prev, cur = [start], None, start
+        seen.add(start)
+        while True:
+            nxt = [n for n in E[cur] if n != prev and n not in seen]
+            if not nxt:
+                break
+            prev, cur = cur, nxt[0]
+            seen.add(cur)
+            loop.append(cur)
+        loops.append(loop)
+    return loops
+
+
+def neck_loop(obj, co, ncx, ncy):
+    """The neckline: the boundary loop closest to the neck axis at the top (vertex indices in loop order)."""
+    loops = [lp for lp in boundary_loops(obj, co) if len(lp) >= 8]
+    if not loops:
+        return []
+    top = co[:, 2].max()
+
+    def score(lp):
+        p = co[lp]
+        return float(np.hypot(p[:, 0].mean() - ncx, p[:, 1].mean() - ncy)) + 2.0 * float(top - p[:, 2].max())
+    return min(loops, key=score)
+
+
+def neck_metrics(p):
+    """Waviness of a neckline loop (``p`` = its points in loop order): ``max_dev_mm`` / ``rms_dev_mm`` from its
+    low-passed curve, ``z_turns`` (sign changes of the height along the loop beyond 1.5 mm steps: 2 for a clean
+    neckline that is high at the back and low at the front), ``drop_mm`` (front-to-back height of the smooth curve)."""
+    if len(p) < 8:
+        return {}
+    closed = np.vstack([p, p[:1]])
+    s = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(closed, axis=0), axis=1))]
+    t = np.linspace(0, s[-1], NECK_SAMPLES, endpoint=False)
+    q = np.c_[[np.interp(t, s, closed[:, k]) for k in range(3)]].T
+    F = np.fft.rfft(q, axis=0)
+    F[NECK_HARMONICS + 1:] = 0
+    lp_q = np.fft.irfft(F, n=NECK_SAMPLES, axis=0)
+    dev = np.linalg.norm(q - lp_q, axis=1)
+    dz = np.diff(np.r_[lp_q[:, 2], lp_q[:1, 2]])
+    raw_dz = np.diff(np.r_[q[:, 2], q[:1, 2]])
+    sg = np.sign(raw_dz[np.abs(raw_dz) > 0.0015])
+    turns = int((sg != np.roll(sg, 1)).sum()) if len(sg) else 0
+    return {"max_dev_mm": round(float(dev.max() * 1000), 1), "rms_dev_mm": round(float(np.sqrt((dev ** 2).mean()) * 1000), 2),
+            "z_turns": turns, "loop_verts": len(p), "length_m": round(float(s[-1]), 3),
+            "drop_mm": round(float((lp_q[:, 2].max() - lp_q[:, 2].min()) * 1000), 1)}
 
 
 def split_slit(obj, angles, slit, hem_z, centre):
@@ -776,6 +925,7 @@ def run(a):
         obj = bpy.data.objects.new(prm["node"], me)
         bpy.context.scene.collection.objects.link(obj)
         obj.vertex_groups.new(name="cap").add(binfo.pop("cap_ids"), 1.0, "REPLACE")
+        obj.vertex_groups.new(name="rib").add(binfo.pop("rib_ids"), 1.0, "REPLACE")
         bm = bmesh.new()
         bm.from_mesh(me)
         loose = [v for v in bm.verts if not v.link_faces]
@@ -827,11 +977,23 @@ def run(a):
     me = obj.data
     co1 = np.array([v.co for v in me.vertices])
     st = np.linalg.norm(co1[edges[:, 0]] - co1[edges[:, 1]], axis=1) / np.maximum(rest_len, 1e-6)
+    # an edge built shorter than MIN_EDGE_M (where re-spaced columns meet an armhole corner) is no fabric: its ratio
+    # says nothing (0.1 mm -> 0.19 mm read as stretch 1.87, A144)
+    st = np.where(rest_len < MIN_EDGE_M, 1.0, st)
     worst = co0[edges[int(st.argmax())]].mean(0)
     worst_at = {"z": round(float(worst[2]), 3),
                 "deg": round(math.degrees(math.atan2(worst[1] - centre[1], worst[0] - centre[0])) % 360, 1),
-                "over_1_3": int((st > 1.3).sum())}
+                "over_1_3": int((st > 1.3).sum()), "short_edges": int((rest_len < MIN_EDGE_M).sum()), "rest_mm": round(float(rest_len[int(st.argmax())]) * 1000, 1),
+                "x": round(float(worst[0]), 3), "y": round(float(worst[1]), 3)}
     n_single = len(me.vertices)
+    neck = {}
+    nlp = []
+    if bod:
+        nj = bod["joints"].get("neck")
+        built = np.array([obj.matrix_world @ Vector(c) for c in co0])
+        nlp = neck_loop(obj, built, *((nj[0], -nj[2]) if nj else (centre[0], centre[1])))
+        neck["built"] = neck_metrics(built[nlp])
+        neck["draped"] = neck_metrics(gd.world_coords(obj)[0][nlp])
     skirtish = prm.get("kind") in ("skirt", "dress")
     hem, up = hem_sets(obj, top_z) if skirtish else (np.zeros(0, int), np.zeros(0, int))
     if bod and len(hem):                   # the hem only: armholes, straps and the neckline are boundaries too
@@ -958,6 +1120,8 @@ def run(a):
             lm = gd.measure_pose(arm, lo, obj, pose, rest2, edges2, rim)
             measured[pose][f"layer_poke_share_{k}"] = lm["poke_share"]
             measured[pose][f"layer_region_{k}"] = lm["region_body_verts"]
+        if len(nlp):
+            measured[pose]["neck"] = neck_metrics(gd.world_coords(obj)[0][nlp])
         measured[pose]["shapes"] = {k: round(v, 4) for k, v in inf.items()}
         if prm.get("render"):
             t_r = time.time()
@@ -988,7 +1152,7 @@ def run(a):
         if q.is_file():
             outputs[f"posed_{pose}"] = str(q)
     data = {"verts": len(obj.data.vertices), "pins": int(len(pin)), "slit_edges": int(slit_edges),
-            "bodice": binfo, "lower_layers": len(lower),
+            "bodice": binfo, "neck": neck, "lower_layers": len(lower),
             "drape": {"cpu_s": cpu, "wall_s": wall, "pin_drift_mm": drift,
                       "stretch_max": round(float(st.max()), 3), "stretch_at": worst_at, "stretch_p99": round(float(np.percentile(st, 99)), 3),
                       "quality": int(fab["quality"])},

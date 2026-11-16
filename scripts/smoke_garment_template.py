@@ -61,8 +61,9 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
     * bodice_spec, short sleeves, sleeve fit 0.3: length 0.3 * 0.50 = 0.15; ease 1 + 0.05 + 0.4 * 0.3 = 1.17; ring 0
       (share 0, left of the samples -> 0.34) 0.34 * 1.17 + 0.02 = 0.4178; rings every 2.5 cm 0 .. 0.15 = 7; the last
       (share 0.3: 0.26 - 0.02 * 0.05 / 0.25 = 0.256) 0.256 * 1.17 + 0.02 = 0.31952. neck_r = 0.33 / 2pi + 0.012 =
-      0.06452; pin_half_x 0.75 * 0.195 = 0.14625; crew depth 0.03 (NECK_DEPTH). Boat: neck_r = 0.62 * 0.195 = 0.1209.
-      Lapel: neckline "v", depth max(0.15, 1.415 - 1.275 + 0.04) = 0.18, front open. No sleeves -> sleeve None.
+      0.06452; pin_half_x 0.75 * 0.195 = 0.14625; crew depth 0.01 below front_y = shoulder_y 1.37 (NECK_DEPTH, Ruling
+      A144). Boat: neck_r = 0.62 * 0.195 = 0.1209. Lapel: neckline "v", depth below the notch max(0.12, 1.37 - 1.275 +
+      0.04 = 0.135) = 0.135, front open. No sleeves -> sleeve None.
     * shape_groups: a top with hem 0.865 above hip_y 0.85 -> the two arm groups (arms_down, arms_forward, arms_up),
       no leg group; length 0.6 (hem 0.815 < 0.85) adds the leg group with "sit" only; a strapless dress -> legs
       (sit, kneel) only; a covered dress with sleeves -> legs + both arms with "arms_down" only.
@@ -326,12 +327,12 @@ sl = b["sleeve"]
 check("[12] sleeve 0.15 m, 7 rings", close(sl["len_m"], 0.15) and len(sl["rings"]) == 7, sl)
 check("[12] ring 0 0.4178, last 0.31952", close(sl["rings"][0][1], 0.4178) and close(sl["rings"][-1][1], 0.3195),
       sl["rings"])
-check("[12] neck_r 0.06452, pin 0.14625, crew 0.03", close(b["neck_r"], 0.0645) and close(b["pin_half_x"], 0.1462)
-      and close(b["depth_m"], 0.03), b)
+check("[12] neck_r 0.06452, pin 0.14625, crew 0.01 under front_y 1.37", close(b["neck_r"], 0.0645)
+      and close(b["pin_half_x"], 0.1462) and close(b["depth_m"], 0.01) and close(b["front_y"], 1.37), b)
 boat = gt.bodice_spec(gt.validate_params({"kind": "top", "neckline": "boat"})[0], MU)
 check("[12] boat neck 0.1209", close(boat["neck_r"], 0.1209), boat["neck_r"])
 lap = gt.bodice_spec(gt.validate_params({"kind": "jacket", "collar": "lapel"})[0], MU)
-check("[12] lapel = open v 0.18", lap["neckline"] == "v" and close(lap["depth_m"], 0.18) and lap["front_open"], lap)
+check("[12] lapel = open v 0.135", lap["neckline"] == "v" and close(lap["depth_m"], 0.135) and lap["front_open"], lap)
 check("[12] no sleeves -> None", gt.bodice_spec(gt.validate_params({"kind": "top"})[0], MU)["sleeve"] is None)
 spec_t = gt.panel_spec(top, MU)
 check("[12] panel_spec carries bodice + sleeve panel", "bodice" in spec_t

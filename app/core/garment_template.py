@@ -56,7 +56,7 @@ SCRIPT = "garment_template_build"
 #: The spike's evaluator script (modes mesh / panels / from_body / necklace).
 SPIKE_SCRIPT = "garment_template_drape.py"
 #: Bumped when the same parameters drape differently.
-TEMPLATE_VERSION = 3
+TEMPLATE_VERSION = 4
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.
@@ -79,9 +79,9 @@ SLEEVES = ("none", "cap", "short", "elbow", "long")
 #: body: 0.249 m upper arm + 0.245 m forearm), long = to the wrist.
 SLEEVE_SHARE = {"none": 0.0, "cap": 0.12, "short": 0.3, "elbow": 0.52, "long": 0.97}
 NECKLINES = ("crew", "v", "scoop", "boat")
-#: The neckline's depth below the shoulder line at the front centre when ``neck_depth_m`` is 0 (metres; a crew neck
-#: sits on the sternal notch, ~3 cm under the shoulder line on the reference body).
-NECK_DEPTH = {"crew": 0.03, "v": 0.15, "scoop": 0.11, "boat": 0.015}
+#: The neckline's depth at the front centre below the jugular notch (``front_y`` = the shoulder-joint height, Ruling
+#: A144) when ``neck_depth_m`` is 0 (metres; a crew neck sits ~1 cm under the notch).
+NECK_DEPTH = {"crew": 0.01, "v": 0.12, "scoop": 0.08, "boat": 0.0}
 SHOULDERS = ("strapless", "straps", "covered")
 FRONTS = ("closed", "open")
 COLLARS = ("none", "stand", "lapel")
@@ -580,7 +580,7 @@ def bodice_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
     depth = params["neck_depth_m"] or NECK_DEPTH[neckline]
     if collar == "lapel":
         neckline = "v"
-        depth = max(depth, shape["top_y"] - meas["band_y"] + 0.04)
+        depth = max(depth, meas["shoulder_y"] - meas["band_y"] + 0.04)
     if neckline == "boat":
         neck_r = max(neck_r, BOAT_SHARE * half_sh)
     sleeve = None
@@ -598,6 +598,7 @@ def bodice_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
                                                   + EASE_M, 4)])
         sleeve = {"len_m": round(length, 4), "rings": rings}
     return {"band_y": meas["band_y"], "top_y": shape["top_y"], "neck_y": meas["neck_y"], "neck_r": round(neck_r, 4),
+            "front_y": meas["shoulder_y"],
             "neckline": neckline, "depth_m": round(float(depth), 4), "shoulders": params["shoulders"],
             "strap_x": round(0.5 * (neck_r + PIN_SHARE * half_sh), 4), "strap_w": STRAP_W_M,
             "pin_half_x": round(PIN_SHARE * half_sh, 4), "pin_band_m": PIN_BAND_M, "sleeve": sleeve,
