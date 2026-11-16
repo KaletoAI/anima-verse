@@ -270,7 +270,7 @@ export { POSTURE, SUPPORT_CAPSULES, POSTURE_ANGLE_CAP_DEG, postureAngleCapDeg, s
   postureReport } from './postureSupport'
 export type { SupportSample, PostureReport } from './postureSupport'
 export { solveChainBend, bendLimitAt, bendLimitsOf, bendJoints, bendLamp, quatOf, quatMul, quatRotate, quatAngle,
-  BEND_LIMITS_DEFAULT, ROOT_SWEEPS, BEND_JOINTS, BEND_SWEEPS, BEND_BISECT, BEND_AT_LIMIT, BEND_NEAR_M } from './chainBend'
-export type { BendLimit, BendLimits, BendResult, BendFrame, Quat as BendQuat } from './chainBend'
+  rootTurnOf, rootAngleOf, ROOT_PITCH_MAX_DEG, ROOT_YAW_MAX_DEG, BEND_LIMITS_DEFAULT, BEND_JOINTS, BEND_SWEEPS, BEND_BISECT, BEND_AT_LIMIT, BEND_NEAR_M } from './chainBend'
+export type { BendLimit, BendLimits, BendResult, BendFrame, RootAngle, Quat as BendQuat } from './chainBend'
 export type { FitSample, PairFix, FitBounds, FitOptions, PairFitState, ClearLamp } from './pairFit'
 export { attachedPartIndex, partBoneNames, PART_WEIGHT_SHARE } from './attachedPart'

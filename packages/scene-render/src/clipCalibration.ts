@@ -19,7 +19,7 @@
 import type { ContactTarget } from './contactTarget'
 import { clipHeightGroup, clipHipsDrop, clipShiftM, FIGURE_HEIGHT_M } from './figure'
 import type { ClipHeightOffsetsCm, ClipShiftCm } from './figure'
-import type { BendLimits } from './chainBend'
+import type { BendLimits, RootAngle } from './chainBend'
 
 export type Vec3 = { x: number; y: number; z: number }
 type Mat3 = [number, number, number, number, number, number, number, number, number]
@@ -42,6 +42,8 @@ export interface AlignmentDraft {
   contactRelations?: readonly ContactRelation[]
   /** Ruling A145: how far the attached part may bend toward its target (absent = `BEND_LIMITS_DEFAULT`). */
   bendLimits?: BendLimits
+  /** Ruling A158: the attached part's direct root angle (absent = 0/0), applied live by the preview. */
+  rootAngle?: RootAngle
 }
 
 /** Ruling A139: one contact of a clip — place `part`'s attached part aims at `target` of place `at`. */

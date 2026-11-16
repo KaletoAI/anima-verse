@@ -42,8 +42,8 @@
  * turn costs `POSTURE.turnCostM` · √N per radian — so the solve shifts along the surface first, turns only a little and
  * only about the support, and leaves what the posture cannot give as the residual. A standing or lying place type caps
  * the turn at a few degrees (`FitOptions.group`, `postureAngleCapDeg`). The runtime follow keeps the support in the
- * band too (its vertical share is clamped). A sample may also carry the body `frame` (side/up axes): then the bend's
- * root lever (`chainBend.ts` THE ROOT, Ruling A150) pitches the part at its attachment first.
+ * band too (its vertical share is clamped). The clip's root angle (`chainBend.ts` THE ROOT ANGLE, Ruling A158) is
+ * already on the rendered chain a sample is read from; the bend starts from it and never changes it.
  *
  * THE HONEST CHECK (`pairInterpenetration`): the deepest overlap of two different figures' capsules where ONLY the
  * pairs the channel allows are exempt — an attached-part capsule of the entering figure against one of the receiving
@@ -63,10 +63,8 @@ export interface FitSample extends ContactSample {
   chain?: Vec3[]
   raised?: number
   channel?: boolean
-  /** Ruling A150: the entering figure's support this frame (absent = no posture term) and its body axes (absent = the
-   *  root lever stays off). */
+  /** Ruling A150: the entering figure's support this frame (absent = no posture term). */
   support?: SupportSample | null
-  frame?: BendFrame | null
 }
 export interface PairFix { shift: Vec3; turn: Vec3 }
 export interface FitBounds { maxShiftM: number; maxAngleDeg: number }
@@ -144,7 +142,7 @@ export function supportDelta(s: FitSample, fix: PairFix): number | null {
  *  from the bent chain — and the bend; the sample unchanged (bend null) without a chain. */
 export function bendSample(s: FitSample, limits: BendLimits): { sample: FitSample; bend: BendResult | null } {
   if (!s.chain || s.chain.length < 2) return { sample: s, bend: null }
-  const bend = solveChainBend(s.chain, s.o, s.u, bendLimitAt(limits, s.raised ?? 0), { channel: !!s.channel, frame: s.frame })
+  const bend = solveChainBend(s.chain, s.o, s.u, bendLimitAt(limits, s.raised ?? 0), { channel: !!s.channel })
   const pts = bend.points
   return { sample: { ...s, chain: pts, tip: pts[pts.length - 1], base: pts[0] }, bend }
 }
@@ -283,7 +281,7 @@ export function fixAnglesDeg(fix: PairFix, axes: readonly Vec3[]): number[] {
 export function turnAxes(frame: readonly number[]): [Vec3, Vec3] {
   return [[frame[0], frame[3], frame[6]], [frame[2], frame[5], frame[8]]]
 }
-/** Ruling A150: the body axes the bend's root lever turns about — side (+X) and up (+Y) of the root frame. */
+/** The body axes of a row-major root frame — side (+X) and up (+Y); what the root angle turns about (Ruling A158). */
 export function bendFrameOf(frame: readonly number[]): BendFrame {
   return { side: [frame[0], frame[3], frame[6]], up: [frame[1], frame[4], frame[7]] }
 }
@@ -324,17 +322,15 @@ export interface PairFitState {
   bendDeg: number[]
   bendLimitDeg: number
   bendAtLimit: number
-  /** Ruling A150: the place type (turn cap) and, since the fit, the root pitch used per frame (degrees) and the
-   *  support change per frame (mm, + = float). */
+  /** Ruling A150: the place type (turn cap) and, since the fit, the support change per frame (mm, + = float). */
   group: string | null
-  rootPitchDeg: number[]
   supportMm: number[]
 }
 
 export function createPairFit(bend: BendLimits | null = null, group: string | null = null): PairFitState {
   return { phase: 'collect', samples: [], fix: NO_FIX, follow: [0, 0, 0],
     followTable: Array.from({ length: FOLLOW.bins }, () => [0, 0, 0] as Vec3), period: 0, lastPhase: -1, armed: false,
-    lateralMm: [], bend, bendDeg: [], bendLimitDeg: 0, bendAtLimit: 0, group, rootPitchDeg: [], supportMm: [] }
+    lateralMm: [], bend, bendDeg: [], bendLimitDeg: 0, bendAtLimit: 0, group, supportMm: [] }
 }
 
 const binOf = (st: PairFitState, phase: number) =>
@@ -389,7 +385,6 @@ export function pairFitObserve(st: PairFitState, measured: FitSample, phase: num
       st.bendDeg.push(b.bend.totalDeg)
       st.bendLimitDeg = b.bend.limit.totalDeg
       if (b.bend.atLimit) st.bendAtLimit++
-      st.rootPitchDeg.push(b.bend.rootPitchDeg)
     }
   }
   const rel = sub(measured.tip, measured.o)

@@ -31,7 +31,8 @@
  * `three` is a parameter, never an import (package rule).
  */
 import type { Object3D, Vector3 } from 'three'
-import { TARGET_BONE_NAMES, targetFrames, type TargetBones, type TargetFrame } from './contactTarget'
+import { POINT_TARGET_OPS, TARGET_BONE_NAMES, targetFrames, type TargetBones, type TargetFrame } from './contactTarget'
+import { rootTurnOf, type RootAngle } from './chainBend'
 import { normBoneName } from './clipRetarget'
 import { createSecondaryMotion, withoutHairGroups } from './secondaryMotion'
 import type { SecondaryMotion, SecondaryMotionPayload } from './secondaryMotion'
@@ -117,6 +118,8 @@ export class FigureRuntime {
   /** Phase A's record for phase B (null = nothing posed since the last phase B; several phase A calls add up). */
   private pendingSecondary: { realDelta: number; frozen: boolean; far: boolean } | null = null
   private disposed = false
+  /** Ruling A158: the running clip's direct root angle of the attached part (null = none). */
+  private rootAngle: RootAngle | null = null
 
   /** Hands the strand record (undefined = still loading, null = none). Set by the owner after construction. */
   loadStrandRecord?: () => HairStrandRecord | null | undefined
@@ -222,7 +225,33 @@ export class FigureRuntime {
       this.strand.update(pending.realDelta, { frozen: pending.frozen })
     }
     this.secondary.update(pending.realDelta, { frozen: pending.frozen, far: pending.far, partners, interaction })
+    this.applyRootAngle()
     return true
+  }
+
+  /** Ruling A158: the attached part's direct root angle of the clip this figure plays (null / 0 = none). Applied at
+   *  the end of every phase B, before anything inspects or bends the chain (`chainBend.ts` THE ROOT ANGLE). */
+  setRootAngle(angle: RootAngle | null): void {
+    this.rootAngle = angle && (angle.pitchDeg || angle.yawDeg) ? { pitchDeg: angle.pitchDeg, yawDeg: angle.yawDeg } : null
+  }
+
+  /** The root turn on this frame's rendered bones: the first chain with a point-target op, about the figure root's
+   *  side (+X) and up (+Y) axes in world space. */
+  private applyRootAngle(): void {
+    const angle = this.rootAngle
+    if (!angle || this.disposed) return
+    const chains = this.secondary.opChains()
+    const ci = chains.findIndex(c => c.segments.length > 0 && POINT_TARGET_OPS.includes(c.op))
+    if (ci < 0) return
+    const segs = chains[ci].segments
+    const points = [...segs.map(seg => seg.a), segs[segs.length - 1].b]
+    const e = this.root.matrixWorld.elements
+    const unit = (x: number, y: number, z: number): [number, number, number] => {
+      const l = Math.hypot(x, y, z) || 1
+      return [x / l, y / l, z / l]
+    }
+    const got = rootTurnOf(points, { side: unit(e[0], e[1], e[2]), up: unit(e[4], e[5], e[6]) }, angle)
+    if (got) this.secondary.bendChain(ci, [{ joint: 0, q: got.q }])
   }
 
   /** What occupies the PARTNERS' channels from this figure's chains, as last rendered (Ruling A102). */
