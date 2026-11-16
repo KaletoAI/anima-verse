@@ -2075,6 +2075,8 @@ class GarmentFitSettingsRequest(BaseModel):
     trunk: Any = None
     # Ruling A48d: auto / as_generated / shell — the piece's mesh shape
     mesh_shape: Any = None
+    # Ruling A122: split / cut — a boot past the knee: a leg part over the shoe, or cut off at the shoe top
+    shaft: Any = None
 
 
 class PieceViewSourceRequest(BaseModel):
@@ -2940,7 +2942,8 @@ def set_character_garment_fit_settings(character_name: str, item_id: str, body: 
     (auto / generated / wider / fitted), ``allowance`` (auto / 0 / 3 / 6 / 10, percent of width) and ``depth``
     (Ruling A68: 0 / 3 / 6 / 10, percent of the torso's half depth, added after the push-out) and ``trunk``
     (Ruling A83: auto / generated / fitted — the trunk laid onto the body) and ``mesh_shape`` (Ruling A48d: auto /
-    as_generated / shell — the shell from the body, made on the CPU), stored on the character
+    as_generated / shell — the shell from the body, made on the CPU) and ``shaft`` (Ruling A122: split / cut, a piece
+    on the feet and the legs), stored on the character
     (``garment_fit_settings.set_fit_settings``). Runs nothing: a fit made with other settings reads due and the next
     run refits it on the CPU (no hub job). ``{fit_settings}`` — ``garments.fit_settings_info`` now.
     Admin-only. 404 for an item that is no clothing garment of the character, 400 for a bad value."""

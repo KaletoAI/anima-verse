@@ -14,6 +14,9 @@ may add — ``garment_fit.fit_clothing``'s ``settings``:
 - ``trunk`` (Ruling A83): ``garment_fit.TRUNK_CHOICES`` — "auto" (the fit decides, ``garment_fit.auto_trunk``),
   "generated" (as generated) or "fitted" (laid onto the body, ``garment_fit.place_trunk``; before the depth
   allowance).
+- ``shaft`` (Ruling A122): ``garment_shaft.SHAFT_CHOICES`` — a piece on the feet AND the legs (a boot past the
+  knee): "split" (the default; a shoe part and a leg part that overlaps it by 20 cm) or "cut" (the shoe part
+  only, everything above the shoe top dropped). Ignored for every other piece.
 - ``mesh_shape`` (Ruling A48d): ``garment_shell.SHAPE_CHOICES`` — "auto" (``garment_shell.auto_shape``: a shell for
   a close-fitting piece), "as_generated" (the generated mesh, fitted) or "shell" (the piece's mesh made from the
   body's surface over its region, ``garment_shell.build_shell``; CPU only). The fit records the shape it made
@@ -27,14 +30,14 @@ fit records the settings it was made with (``inputs.fit_settings``) and a fit ma
 from typing import Any, Dict, Optional
 
 #: Profile key of the per-piece fit settings: ``{item_id: {sleeves_left, sleeves_right, allowance, depth, trunk,
-#: mesh_shape}}``.
+#: mesh_shape, shaft}}``.
 SETTINGS_KEY = "garment_fit_settings"
 SIDES = ("left", "right")
 
 
 def defaults() -> Dict[str, Any]:
     return {"sleeves_left": "auto", "sleeves_right": "auto", "allowance": "auto", "depth": 0, "trunk": "auto",
-            "mesh_shape": "auto"}
+            "mesh_shape": "auto", "shaft": "split"}
 
 
 def normalise(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -49,6 +52,8 @@ def normalise(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     out["allowance"] = garment_fit.allowance_choice(raw)
     out["depth"] = garment_fit.depth_choice(raw)
     out["trunk"] = garment_fit.trunk_choice(raw)
+    from app.core import garment_shaft
+    out["shaft"] = garment_shaft.shaft_choice(raw)
     from app.core import garment_shell
     out["mesh_shape"] = garment_shell.shape_choice(raw)
     return out
@@ -118,6 +123,11 @@ def validate(changes: Dict[str, Any]) -> Dict[str, Any]:
             from app.core import garment_shell
             if not isinstance(value, str) or value not in garment_shell.SHAPE_CHOICES:
                 raise ValueError(f"mesh_shape must be one of {', '.join(garment_shell.SHAPE_CHOICES)}")
+            out[key] = value
+        elif key == "shaft":
+            from app.core import garment_shaft
+            if not isinstance(value, str) or value not in garment_shaft.SHAFT_CHOICES:
+                raise ValueError(f"shaft must be one of {', '.join(garment_shaft.SHAFT_CHOICES)}")
             out[key] = value
         elif key == "trunk":
             if not isinstance(value, str) or value not in garment_fit.TRUNK_CHOICES:

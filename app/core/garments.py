@@ -5230,6 +5230,23 @@ def slot_labels(character_name: str) -> Dict[str, str]:
         return dict(body_slots.DEFAULT_PIECE_SLOT_LABELS)
 
 
+def shaft_view(record: Dict[str, Any], current: Dict[str, Any], item_id: str) -> Optional[Dict[str, Any]]:
+    """Ruling A122 — the shaft choice of a piece on the feet and the legs (``garment_shaft.applies``; None for any
+    other piece): ``{setting, choices, shoe_top_mm, cut_mm, overlap_mm, made (the shown fit's report["shaft"], None
+    without one), cost {hub_jobs: 0, where: "cpu"}}``."""
+    from app.core import garment_shaft
+    from app.models.inventory import get_item
+    item = get_item(item_id) if item_id else None
+    slots = ((item or {}).get("outfit_piece") or {}).get("slots") or []
+    if not garment_shaft.applies(slots):
+        return None
+    return {"setting": current.get("shaft", garment_shaft.SPLIT), "choices": list(garment_shaft.SHAFT_CHOICES),
+            "shoe_top_mm": round(garment_shaft.shoe_top_m() * 1000.0),
+            "cut_mm": round(garment_shaft.cut_m() * 1000.0),
+            "overlap_mm": round(garment_shaft.OVERLAP_M * 1000.0),
+            "made": (record.get("report") or {}).get("shaft"), "cost": {"hub_jobs": 0, "where": "cpu"}}
+
+
 def fit_settings_view(record: Dict[str, Any], current: Dict[str, Any], *, accepted: bool,
                       item_id: str = "", character_name: str = "") -> Dict[str, Any]:
     """``fit_settings_info``'s shape for ONE fit record (or kept attempt; {} = none): what the fit settings box
@@ -5256,6 +5273,7 @@ def fit_settings_view(record: Dict[str, Any], current: Dict[str, Any], *, accept
         "depth": report.get("depth"),
         "arm_light": report.get("arm_light"),
         "numbers": numbers, "accepted": accepted,
+        "shaft": shaft_view(record, current, item_id),
         "built_at": record.get("created_at") or ((record.get("attempt") or {}).get("at") if record else None),
         "choices": {"sleeves": list(garment_fit.SLEEVE_CHOICES), "allowance": list(garment_fit.ALLOWANCE_CHOICES),
                     "depth": list(garment_fit.DEPTH_CHOICES), "trunk": list(garment_fit.TRUNK_CHOICES)},

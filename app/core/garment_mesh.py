@@ -146,7 +146,8 @@ def component_numbers(path: Path) -> Dict[str, Any]:
     """The component numbers of a static GLB after welding coincident
     vertices (``garment_fit.weld``): ``largest_component_share`` = the
     largest component's share of the area WITHOUT the crumbs (the gate
-    number), ``largest_component_share_all`` = its share of the whole area,
+    number; Ruling A122: a mirrored pair's two components together, ``component_pair`` True),
+    ``largest_component_share_all`` = the largest's share of the whole area,
     ``dropped_share`` / ``dropped_components`` = the crumbs (components below
     ``garment_fit.MIN_COMPONENT_SHARE`` of the whole area — the rule of the
     fit's ``drop_small``, so the fit sees exactly the kept components) and
@@ -155,12 +156,15 @@ def component_numbers(path: Path) -> Dict[str, Any]:
     from app.core import garment_fit, glb_mesh
     positions, faces, uvs = glb_mesh.static_arrays(Path(path).read_bytes())[:3]
     welded, welded_faces, _inv = garment_fit.weld(positions, faces, uvs)
-    _labels, shares = garment_fit.components(welded, welded_faces)
+    labels, shares = garment_fit.components(welded, welded_faces)
     shares = np.asarray(shares, dtype=float).ravel()
     crumb = shares < garment_fit.MIN_COMPONENT_SHARE
     kept = float(shares[~crumb].sum())
     largest = float(shares.max()) if shares.size else 0.0
-    return {"largest_component_share": largest / kept if kept > 0 else 0.0,
+    # Ruling A122: a mirrored pair (boots, gloves) counts as one piece (``garment_fit.pair_share``).
+    gated, paired = garment_fit.pair_share(welded, labels, shares)
+    return {"largest_component_share": gated / kept if kept > 0 else 0.0,
+            "component_pair": bool(paired),
             "largest_component_share_all": largest,
             "dropped_share": float(shares[crumb].sum()),
             "dropped_components": int(crumb.sum()),

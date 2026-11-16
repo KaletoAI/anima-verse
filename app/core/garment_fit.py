@@ -573,6 +573,42 @@ def components(Pw, Fw) -> Tuple[np.ndarray, np.ndarray]:
     return labels, (area / total if total > 0 else np.zeros(count))
 
 
+#: Ruling A122 — the pair-aware component gate: the two largest components count as ONE piece when they are a
+#: mirrored pair (boots, gloves, stockings): they lie on opposite sides of the mesh's midline (at most
+#: ``PAIR_CROSS_SHARE`` of either's vertices across it — fitted on the body, the inner sides of thigh-high boots reach
+#: 1.4 / 0.4 cm past the midline, Glut 2026-11-16, so a strict "no x overlap" refuses the pair it is for), and the
+#: smaller has at least ``PAIR_SHARE_RATIO`` of the larger's area (A121: Glut's boots 0.487 / 0.475 in the mesh,
+#: 0.481 / 0.479 fitted).
+PAIR_SHARE_RATIO = 0.85
+PAIR_CROSS_SHARE = 0.05
+
+
+def pair_share(P, labels, share) -> Tuple[float, bool]:
+    """``(gate share, paired)``: the largest component's area share, or the two largest together when they form a
+    mirrored pair (``PAIR_SHARE_RATIO``). ``labels`` / ``share`` = ``components``; midline = the centre of the
+    vertices' x range."""
+    P = np.asarray(P, np.float64)
+    share = np.asarray(share, np.float64).ravel()
+    if share.size == 0:
+        return 0.0, False
+    order = np.argsort(-share, kind="stable")
+    if share.size < 2 or share[order[1]] <= 0:
+        return float(share[order[0]]), False
+    a, b = int(order[0]), int(order[1])
+    xa, xb = P[labels == a, 0], P[labels == b, 0]
+    if not len(xa) or not len(xb):
+        return float(share[a]), False
+    mid = 0.5 * (float(P[:, 0].min()) + float(P[:, 0].max()))
+    sa, sb = np.sign(float(xa.mean()) - mid), np.sign(float(xb.mean()) - mid)
+    opposite = sa * sb < 0
+    apart = (float((np.sign(xa - mid) != sa).mean()) <= PAIR_CROSS_SHARE
+             and float((np.sign(xb - mid) != sb).mean()) <= PAIR_CROSS_SHARE)
+    mirrored = share[b] >= PAIR_SHARE_RATIO * share[a]
+    if apart and opposite and mirrored:
+        return float(share[a] + share[b]), True
+    return float(share[a]), False
+
+
 def drop_small(Pw, Fw, min_share: float = MIN_COMPONENT_SHARE) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Drop components below ``min_share`` of the area -> ``(Pk, Fk, keep)``; ``keep`` indexes ``Pw`` (vertices
     used by no remaining face go too)."""
@@ -3505,13 +3541,17 @@ def clothing_metrics(X, Fw, Q0_pre, Q_post, transfer_report: Dict[str, Any],
         push = np.maximum(push - np.asarray(lift, np.float64), 0.0)
     if exclude is not None and len(exclude) == len(push) and np.any(exclude):
         push = np.where(np.asarray(exclude, bool), 0.0, push)
-    _, share = components(X, Fw)
+    labels, share = components(X, Fw)
+    paired_share, paired = pair_share(X, labels, share)
     stretch = transfer_report.get("sleeve_stretch") or {}
     return {
         "max_push_m": round(float(push.max()) if len(push) else 0.0, 4),
         "moved_share": round(float((push > MOVED_EPS_M).mean()) if len(push) else 0.0, 4),
         "deep_push_share": round(float((push > DEEP_PUSH_M).mean()) if len(push) else 0.0, 4),
-        "largest_component_share": round(float(share.max()) if len(share) else 0.0, 4),
+        # Ruling A122: a mirrored pair counts as one piece (``pair_share``); the single largest is recorded beside it
+        "largest_component_share": round(paired_share, 4),
+        "largest_single_share": round(float(share.max()) if len(share) else 0.0, 4),
+        "component_pair": bool(paired),
         "rigged_inside_share": round(float(transfer_report.get("rigged_inside_share", float("nan"))), 4),
         "rigged_push_max_m": round(float(transfer_report.get("rigged_push_max_m", float("nan"))), 4),
         "rigged_push_p95_m": round(float(transfer_report.get("rigged_push_p95_m", float("nan"))), 4),
@@ -3979,7 +4019,8 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
     ``sleeves_right`` (``SLEEVE_CHOICES``; ``place_sleeves``, report ``transfer.sleeves``) and ``allowance``
     (``ALLOWANCE_CHOICES``; ``scale_retry``, report ``scale_retry.allowance``) and ``depth`` (Ruling A68,
     ``DEPTH_CHOICES``; ``depth_shift`` after the push-out, report ``depth``) and ``trunk`` (Ruling A83,
-    ``TRUNK_CHOICES``; ``place_trunk``, report ``transfer.trunk``). The vertices laid onto the arm are
+    ``TRUNK_CHOICES``; ``place_trunk``, report ``transfer.trunk``) and ``shaft`` (Ruling A122,
+    ``garment_shaft.SHAFT_CHOICES``; a piece on the feet and the legs only, report ``shaft``). The vertices laid onto the arm are
     left out of the placement push numbers. ``metrics`` adds the skin seen in each sleeve
     (``sleeve_skin_left_cm2`` / ``sleeve_skin_right_cm2``, ``sleeve_skin_seen``; ``report["arm_light"]``), the
     trunk's tight share and the sleeve stretch.
@@ -4131,4 +4172,13 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
     result.report["depth"] = {"setting": depth, "ease_mm": round(ease_u[0] * k * 1000.0, 1),
                               "half_depth_mm": round(half_depth * k * 1000.0, 1),
                               "inherited": bool(torso_source and depth)}
+    # Ruling A122: a boot past the knee (slots feet + legs) is served as a shoe part and a leg part, or cut off at
+    # the shoe top (``garment_shaft``); the gates above judged the fitted pair.
+    from app.core import garment_shaft
+    if garment_shaft.applies(slots):
+        from app.core.glb_mesh import joint_bind_matrices
+        shaft = garment_shaft.shaft_choice(settings)
+        result.garment, result.report["shaft"] = garment_shaft.split(result.garment, body_r,
+                                                                     joint_bind_matrices(rigged_base_glb), shaft)
+        result.report["fit_settings"]["shaft"] = shaft
     return result
