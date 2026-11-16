@@ -8,6 +8,8 @@
     }
   },
   "translations": {
+        "Show the reference as it is again": "Referenzbild wieder unverändert zeigen",
+        "Shows the processed reference in its place — nothing is stored.": "Zeigt das bearbeitete Referenzbild an seiner Stelle — es wird nichts gespeichert.",
     "Alignment": "Ausrichtung",
     "Clip": "Clip",
     "pose": "Pose",
@@ -6248,7 +6250,5 @@
     "core default": "Kernvorgabe",
     "No operations installed": "Keine Operationen installiert",
     "(not installed)": "(nicht installiert)"
-  },
-    "Show the reference as it is again": "Referenzbild wieder unverändert zeigen",
-    "Shows the processed reference in its place — nothing is stored.": "Zeigt das bearbeitete Referenzbild an seiner Stelle — es wird nichts gespeichert."
+  }
 }
