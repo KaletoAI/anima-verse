@@ -55,9 +55,18 @@ the whole trunk by dy: ``garment_gates.register`` finds shift_px [dy, 0]
 [4] Manual Re-render (explicit run of "worn", force): the copies go,
     the chain renders: 4 renders, 1 mesh call; fit record refitted False,
     source.fsig F2 (its own base copy of B2); garment_info.refit None.
-[5] B3 (dy 80): the refit from F2 is refused (0.06 Hb > 0.04) -> the same
-    run renders the chain: 4 renders, 1 mesh call, ok; fit record F3
-    refitted False, source.fsig F3; no file of F3 carries copied_from.
+[5] B3 (dy 80): the refit from F2 is refused (0.06 Hb > 0.04). Ruling A162:
+    the run STOPS — 0 renders, 0 mesh calls, refused at "fit" with the
+    refit offer {reason FRAME_REFUSED…, source_fsig F2, attempt False}; the
+    copies are dropped (no file of F3 carries copied_from); the persisted
+    failure carries the offer and garment_info.refit_stopped names it.
+    The smoke's bases share one rigged body, so F2's fit is still served on
+    B3 (keep_available False); F2's record re-stamped on another model by hand
+    (a body change) -> nothing served, keep_available True. "Keep the old
+    fit": F2's fit is served on B3 (record kept_by_user, 0 jobs),
+    the offer reads kept and the Build plan has no step for the piece. Then the
+    user's "Make a new mesh" (explicit run of "worn", force): 4
+    renders, 1 mesh call, ok; fit record F3 refitted False, source.fsig F3.
 [6] The piece's own inputs changed (the dress text FRAGMENT2; base
     unchanged): no source names the current inputs -> no refit: 4 renders,
     1 mesh call.
@@ -96,7 +105,8 @@ the whole trunk by dy: ``garment_gates.register`` finds shift_px [dy, 0]
     ``check_sleeves``, which reads the same limb_numbers, stubbed to None — the rendered chain's own fit is not
     what [8] wires):
     B4 (dy 60; from the [6] group on B3, dy 80: shift -20 px = 0.02 Hb, inside
-    the caps) -> the limb gate refuses the refit, the same run renders the
+    the caps) -> the limb gate refuses the refit; Ruling A162: the run stops
+    (0 renders, 0 mesh calls, refit offer); then "Make a new mesh" renders the
     chain: ok, 4 renders, 1 mesh call, the fit refitted False, no file carries
     copied_from, no limbs/ file left for F4.
 [9] align_limbs (garment_fit) by hand. Source left arm = [7]'s chain (shoulder
@@ -568,13 +578,57 @@ def main() -> int:
         check("garment_info.refit None", garments.garment_info("Demo", hid).get("refit"), None)
 
         # --- [5] ---------------------------------------------------------------------
-        print("[5] B3 (dy 80): refit refused -> full chain in the same run")
+        print("[5] B3 (dy 80): refit refused -> the run stops (Ruling A162), then Make a new mesh")
         b3 = use_profile_image(3)
         write_base(b3, 80)
         f3 = gs.garment_fsig("Demo", hid)
         check("fsig changed", f3 not in (f1, f2), True)
         before = counts()
         res = garments.run_garment("Demo", hid)
+        offer = res.get(garments.REFIT_OFFER) or {}
+        check("stopped at fit, nothing spent", (res.get("ok"), res.get("step"), delta(before)[:2]),
+              (False, "fit", (0, 0)))
+        check("offer: frame refused, from F2, nothing to accept",
+              (str(offer.get("reason") or "").startswith("fit refused — " + garment_source.FRAME_REFUSED)
+               or str(offer.get("reason") or "").startswith(garment_source.FRAME_REFUSED),
+               offer.get("source_fsig"), offer.get("attempt")), (True, f2, False))
+        dropped = [p.name for p in gs.stored_groups("Demo").get((hid, f3), [])
+                   if p.suffix == ".png" and gs.read_record(p.with_suffix(".json")).get("copied_from")]
+        check("copies dropped", dropped, [])
+        persisted = gs.chain_failure("Demo", hid, f3, base_model_sha=base_body.current_base("Demo")[1]) or {}
+        check("persisted offer", (persisted.get("step"), (persisted.get("refit_offer") or {}).get("source_fsig")),
+              ("fit", f2))
+        stopped = garments.garment_info("Demo", hid).get("refit_stopped") or {}
+        check("garment_info.refit_stopped", (stopped.get("source_fsig"), stopped.get("kept"), stopped.get("attempt")),
+              (f2, False, False))
+        # The smoke's bases share one rigged body: F2's fit is still served on B3, nothing to keep.
+        model_sha = base_body.current_base("Demo")[1]
+        served = gs.accepted_fit("Demo", hid, base_model_sha=model_sha)
+        check("same body: F2 still served, no keep offered",
+              (served[0].name if served else None, stopped.get("keep_available")), (f"{hid}_{f2}.glb", False))
+        # A body change: F2's fit made on another model (its record re-stamped by hand) -> no longer served.
+        from app.core import model_geometry
+        f2_json = gs.garment_path("Demo", hid, f2, "fit").with_suffix(".json")
+        f2_rec = gs.read_record(f2_json)
+        f2_rec.pop(model_geometry.FIELD, None)
+        gs.write_record(f2_json, {**f2_rec, "base_model_sha256": "0" * 64, "body_sha256": "0" * 64})
+        check("other body: nothing served, keep offered",
+              (gs.accepted_fit("Demo", hid, base_model_sha=model_sha),
+               (garments.garment_info("Demo", hid).get("refit_stopped") or {}).get("keep_available")), (None, True))
+        before = counts()
+        kept = garments.keep_previous_fit("Demo", hid)
+        served = gs.accepted_fit("Demo", hid, base_model_sha=model_sha)
+        check("Keep: F2's fit served on B3, nothing spent",
+              (kept.get("kept"), served[0].name if served else None, delta(before)[:2]),
+              (f"{hid}_{f2}.glb", f"{hid}_{f2}.glb", (0, 0)))
+        check("Keep: kept_by_user, offer kept", (bool(served[1].get("kept_by_user")) if served else None,
+                                                 (garments.garment_info("Demo", hid).get("refit_stopped") or {})
+                                                 .get("kept")), (True, True))
+        from app.core import figure_build
+        check("Keep: the Build plan leaves the piece alone",
+              figure_build._chain_step("Demo", "pieces", hid, "Dress", gs._profile_of("Demo", None)), None)
+        before = counts()
+        res = garments.run_garment("Demo", hid, steps="worn", force=True)
         check("ok, whole chain", (res.get("ok"), res.get("ran")), (True, ["worn", "ghost", "cutout", "mesh", "fit"]))
         check("4 renders, 1 mesh", delta(before)[:2], (4, 1))
         rec5 = fit_record(f3)
@@ -636,6 +690,11 @@ def main() -> int:
             f4 = gs.garment_fsig("Demo", hid)
             before = counts()
             res = garments.run_garment("Demo", hid)
+            check("stopped, nothing spent (Ruling A162)", (res.get("ok"), res.get("step"), delta(before)[:2],
+                                                           bool(res.get(garments.REFIT_OFFER))),
+                  (False, "fit", (0, 0), True))
+            before = counts()
+            res = garments.run_garment("Demo", hid, steps="worn", force=True)
         finally:
             garment_source.source_limbs, garment_source.limb_numbers = real_source_limbs, real_limb_numbers
             garment_source.check_sleeves = real_check_sleeves
