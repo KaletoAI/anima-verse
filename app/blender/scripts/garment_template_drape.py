@@ -288,10 +288,47 @@ def axis_points(pts, segs):
     return q[np.arange(len(pts)), k]
 
 
+_DOMINANT = {}
+
+
+def dominant_segments(obj, seg_names):
+    """Ruling A144: per vertex of ``obj`` the segment index of its strongest bone weight (-1 without one). The
+    nearest bone axis is the wrong ray origin where limbs lie against the torso: with the arms lowered the side of
+    the bust is nearer the upper-arm axis than the spine, and the ray from the arm crossed the shirt lying on the
+    flank (arms_down "poke" 4.7 %, A142 — a measuring artefact, uneven left / right with the body's own asymmetry)."""
+    key = (obj.name, len(obj.data.vertices), tuple(seg_names))
+    if key in _DOMINANT:
+        return _DOMINANT[key]
+    by_name = {n: k for k, n in enumerate(seg_names)}
+    gmap = {g.index: by_name.get(g.name.replace(P, ""), -1) for g in obj.vertex_groups}
+    out = np.full(len(obj.data.vertices), -1)
+    for v in obj.data.vertices:
+        best, w = -1, 0.0
+        for ge in v.groups:
+            k = gmap.get(ge.group, -1)
+            if k >= 0 and ge.weight > w:
+                best, w = k, ge.weight
+        out[v.index] = best
+    _DOMINANT[key] = out
+    return out
+
+
+def axis_points_on(pts, segs, idx):
+    """Nearest point of segment ``idx[i]`` for every point (the nearest segment where ``idx`` is -1)."""
+    q = axis_points(pts, segs)
+    ok = idx >= 0
+    if ok.any():
+        a, b = segs[idx[ok], 0], segs[idx[ok], 1]
+        ab = b - a
+        t = np.clip(np.einsum("pd,pd->p", pts[ok] - a, ab) / np.maximum((ab * ab).sum(1), 1e-12), 0, 1)
+        q[ok] = a + t[:, None] * ab
+    return q
+
+
 def measure_pose(arm, body, piece, pose, rest_edges_len, edges, rim):
     """Winding-free tests (the generated bodies mix face windings, so no normal is
     trusted): every ray starts on the SKELETON and runs out through the point.
-    * a body vertex POKES when the piece is met between the bone and the vertex
+    * a body vertex POKES when the piece is met between its bone (the strongest weight, Ruling A144) and the vertex
       (piece under the skin) and COVERED when it is met within 8 cm beyond it;
       skin within RIM_BAND_M of a piece opening is not judged;
     * a piece vertex is INSIDE when the body surface is met beyond it on that ray."""
@@ -326,7 +363,8 @@ def measure_pose(arm, body, piece, pose, rest_edges_len, edges, rim):
             if n.startswith(side) and any(x in n for x in ("Leg", "Foot", "Toe")):
                 return side + "Leg"
         return "Trunk"
-    ax = axis_points(bco[cand], segs) if len(cand) else np.zeros((0, 3))
+    dom = dominant_segments(body, seg_names)
+    ax = axis_points_on(bco[cand], segs, dom[cand]) if len(cand) else np.zeros((0, 3))
     region = poke = contact = 0
     poked = []
     for i, q in zip(cand, ax):
@@ -374,10 +412,11 @@ def measure_pose(arm, body, piece, pose, rest_edges_len, edges, rim):
     sample = np.arange(0, len(gco), max(1, len(gco) // 4000))
     all_share, all_mm = inside(sample)
     ln = np.linalg.norm(gco[edges[:, 0]] - gco[edges[:, 1]], axis=1)
-    ratio = ln / np.maximum(rest_edges_len, 1e-6)
+    ratio = np.where(rest_edges_len < 0.001, 1.0, ln / np.maximum(rest_edges_len, 1e-6))   # Ruling A144: < 1 mm = no fabric
     by_bone = {}
     if poked:
-        for k in axis_index(bco[np.asarray(poked)], segs):
+        pk = np.asarray(poked)
+        for k in np.where(dom[pk] >= 0, dom[pk], axis_index(bco[pk], segs)):
             by_bone[seg_names[k]] = by_bone.get(seg_names[k], 0) + 1
     return {
         "poke_share": round(poke / max(region, 1), 5), "region_body_verts": int(region),
