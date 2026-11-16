@@ -271,11 +271,15 @@ def _attributes(character_name: str, profile: Dict[str, Any]) -> str:
     """THE person description of the image prompts (``person_description``) of ``profile`` as it is (its worn
     pieces decide which body-slot texts show), neutral (no state modifier), plus the height phrase when the
     description does not carry it (``base_body.base_appearance``'s rule). The ordinary description, not the
-    mesh-input one (Ruling A93), without the mesh-part slots (A93b, module docstring)."""
+    mesh-input one (Ruling A93), without the mesh-part slots (A93b, module docstring) and — the render is an edit
+    of a picture of the person — without the appearance the picture shows (Ruling A143, ``picture_reference``).
+    The height phrase stays: the source is often a portrait, the reference is where the body's proportions
+    enter the chain (``base_body.edit_character`` relies on the reference showing them)."""
     from app.core.height import height_phrase
     from app.core.prompt_builder import person_description
     text = person_description(character_name, apply_state_modifiers=False, mesh_input=False, body_profile=profile,
-                              neutral_state=True, appearance_reference=True)
+                              neutral_state=True, appearance_reference=True,
+                              picture_reference=True)
     height = height_phrase(profile, character_name)
     if height and height not in text:
         text = ", ".join(p for p in (text, height) if p)

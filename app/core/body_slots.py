@@ -345,7 +345,8 @@ def prompt_fragments(character_name: str,
                      neutral_state: bool = False,
                      portrait_only: bool = False,
                      base_body: bool = False,
-                     appearance_reference: bool = False) -> Dict[str, List[str]]:
+                     appearance_reference: bool = False,
+                     without_face: bool = False) -> Dict[str, List[str]]:
     """Prompt fragments for all applicable slots.
 
     Returns ``{"general": [...], "exposed": [...]}`` — general carries
@@ -371,6 +372,11 @@ def prompt_fragments(character_name: str,
     whether its switch is on or off: a mesh is made from what the reference
     shows. While such a slot is uncovered its ``mesh_part.reference_prompt``
     (Ruling A95) says what the region shows instead, as an exposed fragment.
+    ``without_face`` leaves out the texts of every slot declared ``face:
+    true`` (Ruling A143: a render that slots a picture of the person takes
+    hair, eyes and skin from it — ``prompt_builder.person_description(
+    picture_reference=True)``); their ``mesh_input_prompt`` line stays (it
+    places the hair, it does not describe it).
     """
     specs = slots_for_character(character_name, profile=profile)
     reference_parts = []
@@ -406,12 +412,15 @@ def prompt_fragments(character_name: str,
     for spec in specs:
         slot_stored = stored.get(spec.id) or {}
         vals = _slot_text_values(spec, profile)
-        frag = _render(spec.prompt.get("always", ""), vals)
+        describe = not (without_face and getattr(spec, "face", False))
+        frag = _render(spec.prompt.get("always", ""), vals) if describe else ""
         if frag:
             general.append(frag)
         if base_body:
             continue
-        if is_slot_exposed(spec, profile) and not (back_view and not spec.back):
+        if not describe:
+            pass
+        elif is_slot_exposed(spec, profile) and not (back_view and not spec.back):
             # Per-character override of the exposed fragment (stored under
             # the reserved 'exposed_prompt' slot value); the manifest text
             # is only the default. Placeholders resolve in both.
@@ -822,7 +831,8 @@ def appearance_suffix(character_name: str, face_only: bool = False,
                       include_exposed: bool = True,
                       neutral_state: bool = False,
                       portrait_only: bool = False,
-                      appearance_reference: bool = False) -> str:
+                      appearance_reference: bool = False,
+                      without_face: bool = False) -> str:
     """Combined fragment text appended to the character's appearance
     (PromptBuilder; face_only for portrait/expression prompts; ``profile``
     overrides the stored profile for dry-run previews). Empty without
@@ -832,11 +842,11 @@ def appearance_suffix(character_name: str, face_only: bool = False,
     of slots declared ``back: true`` survive. ``include_exposed=False``
     leaves the exposed fragments out for a caller that names them on their
     own (the "uncovered:" part of what a character sees of the others).
-    ``appearance_reference``: ``prompt_fragments``' (Ruling A93b)."""
+    ``appearance_reference`` / ``without_face``: ``prompt_fragments``' (Rulings A93b / A143)."""
     frags = prompt_fragments(character_name, face_only=face_only,
                              profile=profile, back_view=back_view, mesh_input=mesh_input,
                              neutral_state=neutral_state, portrait_only=portrait_only,
-                             appearance_reference=appearance_reference)
+                             appearance_reference=appearance_reference, without_face=without_face)
     parts = frags["general"] + (frags["exposed"] if include_exposed else [])
     return ", ".join(parts)
 

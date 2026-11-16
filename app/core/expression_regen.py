@@ -1135,8 +1135,18 @@ def render_character_image(character_name: str, *, output_stem: Path,
         _state_fp = state_fingerprint(character_name)
     from app.core.prompt_builder import PromptBuilder
 
+    # Ruling A143: a mesh-input render that slots a picture of the person (the T-pose views) takes the
+    # appearance from it — the person description keeps only what the render must enforce.
+    _picture_ref = reference_image is not None and _mesh_input
     if bare_prompt is not None:
         appearance, actor_label = "", character_name
+    elif _picture_ref:
+        from app.core.prompt_builder import person_description
+        appearance = person_description(character_name, apply_state_modifiers=apply_state_modifiers,
+                                        back_view=back_view, mesh_input=_mesh_text,
+                                        body_profile=_render_profile, neutral_state=neutral_state,
+                                        appearance_reference=_appearance_ref, picture_reference=True)
+        actor_label = character_name
     else:
         _expr_builder = PromptBuilder(character_name,
                                       apply_state_modifiers=apply_state_modifiers,

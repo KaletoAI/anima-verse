@@ -32,9 +32,9 @@ hub job c265fd78: that output → the A-pose front, A74b's edit prompt):
 [2] Generate the plain body's reference (generate_base(Demo)): ONE render — occasion "base_reference", use case
     "base_reference", reference a frozen copy named Demo_1.png in model_refs/.editref_*, require_reference True,
     postprocess False, no equipped pieces;
-      style_character = "female, 30 years old, freckles, long dark hair, green eyes, olive skin, average height,
-        athletic build"  (the appearance text resolved, hair included, then the slots — the attribute block
-        alone, no body-state words: those belong to the A-pose edit, Ruling A87b);
+      style_character = "average height, athletic build"  (Ruling A143: the render edits a picture of the person,
+        so neither the appearance text nor the face slots hair/eyes/skin — only the non-face slots, the build
+        carrying the height; no body-state words: those belong to the A-pose edit, Ruling A87b);
       composed prompt (Ruling A95, the user's validated shape of 2026-11-15) = "Full body shot from head to feet
         inside the frame, " + that + ", neutral studio lighting, plain clean background, photorealistic, high
         detail" (no edit prefix, no pose words);
@@ -59,8 +59,8 @@ hub job c265fd78: that output → the A-pose front, A74b's edit prompt):
     'return {"method": FRONT_FROM_REFERENCE, "image": image.name, "sha256": sha,' is in it.
 [6] Generate an outfit's reference: with the plain body's reference set its source is that picture (kind
     "full_body"), cleared it is the profile image; occasion / use case "outfit_reference", require_reference,
-    style_character = outfit_block (the figure as dressed now: "female, 30 years old, freckles, long dark hair,
-    green eyes, olive skin, average height, athletic build" — nothing worn in the fixture, so no "wearing");
+    style_character = outfit_block (the figure as dressed now: "average height, athletic build" (A143)
+    — nothing worn in the fixture, so no "wearing");
     recorded under the outfit key of the worn combination with origin "generated".
 [7] Uploads (the routes on a test app, the cap patched to 1000 bytes): 2000 declared bytes -> 413 for both upload
     routes; bytes that are no image -> 415; an 8x8 PNG -> 200, record origin "upload".
@@ -351,7 +351,7 @@ def upload_checks(full_body_reference):
               full_body_reference.base_record("Demo")["sha256"], hashlib.sha256(png_bytes(90)).hexdigest())
 
 
-def mesh_part_checks(human, *, want_block):
+def mesh_part_checks(human, *, want_block, ordinary_block):
     print("[10] a mesh-part slot: the full-body reference names nothing of it and drops its LoRAs (A93 / A93b)")
     from app.core import expression_regen, full_body_reference as fbr
     from app.core.prompt_builder import person_description
@@ -412,7 +412,7 @@ def mesh_part_checks(human, *, want_block):
                    body_slots.appearance_reference_negative(name, profile=stored)), (["exposed wide surface"], ""))
         if switch == "off":
             check(f"{name}: A93's ordinary description still named it", a93,
-                  want_block + ", exposed large alpha region, exposed wide surface")   # manifest slot order
+                  ordinary_block + ", exposed large alpha region, exposed wide surface")   # manifest slot order
         payloads.clear()
         with patch("app.imagegen.service.get_image_service", return_value=Service()):
             check(f"{name}: real renderer behind generate_base", _raises(lambda: fbr.generate_base(name)),
@@ -588,13 +588,12 @@ def main() -> int:
 
         routing_checks(profile_file)
 
-        mesh_part_checks(human, want_block="female, 30 years old, freckles, long dark hair, green eyes, olive skin, "
-                                           "average height, athletic build")
+        mesh_part_checks(human, want_block="average height, athletic build", ordinary_block="female, 30 years old, freckles, long dark hair, green eyes, olive skin, average height, athletic build")
 
         expression_regen.render_character_image = recorder
 
         print("[2] generate the plain body's full-body reference")
-        want_block = "female, 30 years old, freckles, long dark hair, green eyes, olive skin, average height, athletic build"
+        want_block = "average height, athletic build"   # Ruling A143: the picture shows the rest
         check("tile prompt before the click", fbr.base_tile("Demo")["generate"]["prompt"], framed(want_block))
         record = fbr.generate_base("Demo")
         one = CALLS[0] if len(CALLS) == 1 else {}
@@ -690,8 +689,7 @@ def main() -> int:
         got = fbr.generate_outfit("Demo")
         out = CALLS[0] if len(CALLS) == 1 else {}
         key = outfit_references.outfit_key({}, [])
-        want_outfit = "female, 30 years old, freckles, long dark hair, green eyes, olive skin, average height, " \
-                      "athletic build"
+        want_outfit = "average height, athletic build"
         check("outfit render",
               (out.get("occasion"), out.get("image_use_case"), out.get("ref_name"), bool(out.get("require_reference")),
                out.get("style_character"), composed("outfit_reference", out)),

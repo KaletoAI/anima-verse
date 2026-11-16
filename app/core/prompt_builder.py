@@ -250,7 +250,8 @@ def person_description(name: str, *,
                        include_exposed: bool = True,
                        neutral_state: bool = False,
                        for_llm: bool = False,
-                       appearance_reference: bool = False) -> str:
+                       appearance_reference: bool = False,
+                       picture_reference: bool = False) -> str:
     """THE text description of a person for image prompts.
 
     Every path that describes a person — PromptBuilder (chat images,
@@ -275,11 +276,20 @@ def person_description(name: str, *,
 
     ``appearance_reference``: a full-body reference (Ruling A93b) — a body
     slot that declares a ``mesh_part`` names nothing
-    (``body_slots.prompt_fragments``)."""
+    (``body_slots.prompt_fragments``).
+
+    ``picture_reference`` (Ruling A143): the render slots a picture of this
+    person (a figure, base-body, outfit or view edit) — the picture is the
+    appearance. Only what the render must ENFORCE stays: the body slots that
+    are not ``face: true`` (body proportions — the build and height a
+    portrait source cannot show — and the uncovered body surface), never the
+    free-text ``character_appearance`` (face, marks, hair, eyes, age,
+    posture, accessories) and never the face slots (hair, eyes, skin)."""
     from app.models.character import get_character_appearance, get_character_profile
     from app.models.character_template import get_template, resolve_profile_tokens
-    appearance = ((body_profile or {}).get("character_appearance", "")
-                  if body_profile is not None else get_character_appearance(name)) or ""
+    appearance = "" if picture_reference else (
+        ((body_profile or {}).get("character_appearance", "")
+         if body_profile is not None else get_character_appearance(name)) or "")
     if appearance and "{" in appearance:
         try:
             profile = body_profile if body_profile is not None else get_character_profile(name)
@@ -299,7 +309,8 @@ def person_description(name: str, *,
         suffix = appearance_suffix(name, profile=body_profile, back_view=back_view,
                                    mesh_input=mesh_input, include_exposed=include_exposed,
                                    neutral_state=neutral_state,
-                                   appearance_reference=appearance_reference)
+                                   appearance_reference=appearance_reference,
+                                   without_face=picture_reference)
     except Exception:
         suffix = ""
     if suffix:
