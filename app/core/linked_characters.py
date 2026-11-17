@@ -502,32 +502,50 @@ def _know_location(name: str, location_id: str) -> None:
 def _switch_avatars(old: str, new: str) -> List[str]:
     """Every user whose active character is ``old`` now controls ``new`` (and
     is allowed it). Background-safe: the users table, no request context.
-    Returns the switched user ids."""
+    Returns the switched user ids.
+
+    SERIALIZED PER USER like ``account._update_current_user_settings`` (the
+    layout autosave, named-layout save and avatar switch): the same
+    ``keyed_lock("user_settings", <id>)``, the user re-read INSIDE it and only
+    the changed keys merged into that fresh blob. Merging into the
+    ``list_users`` snapshot would drop a layout key saved in between, and a
+    save that read before this write would put ``old`` back as the avatar.
+    The lock is a leaf here (only users-table reads/writes inside it).
+    """
     from app.core import sync_topics
-    from app.core.users import list_users, update_user
+    from app.core.keyed_lock import keyed_lock
+    from app.core.users import get_user_by_id, list_users, update_user
     switched: List[str] = []
-    for user in list_users():
-        settings = dict(user.get("settings") or {})
-        if settings.get("avatar_released"):
+    for listed in list_users():
+        user_id = str(listed.get("id") or "")
+        if not user_id:
             continue
-        active = str(settings.get("active_character")
-                     or settings.get("current_character") or "").strip()
-        if not active or active != old:
-            continue
-        settings["active_character"] = new
-        settings["current_character"] = new
-        if settings.get("default_character") == old:
-            settings["default_character"] = new
-        fields: Dict[str, Any] = {"settings": settings}
-        allowed = list(user.get("allowed_characters") or [])
-        if new not in allowed:
-            fields["allowed_characters"] = allowed + [new]
         try:
-            if update_user(user["id"], **fields):
-                switched.append(str(user["id"]))
+            with keyed_lock("user_settings", user_id):
+                user = get_user_by_id(user_id)
+                if not user:
+                    continue
+                settings = dict(user.get("settings") or {})
+                if settings.get("avatar_released"):
+                    continue
+                active = str(settings.get("active_character")
+                             or settings.get("current_character") or "").strip()
+                if not active or active != old:
+                    continue
+                changed: Dict[str, Any] = {"active_character": new,
+                                           "current_character": new}
+                if settings.get("default_character") == old:
+                    changed["default_character"] = new
+                settings.update(changed)
+                fields: Dict[str, Any] = {"settings": settings}
+                allowed = list(user.get("allowed_characters") or [])
+                if new not in allowed:
+                    fields["allowed_characters"] = allowed + [new]
+                if update_user(user_id, **fields):
+                    switched.append(user_id)
         except Exception as e:  # noqa: BLE001
             logger.warning("swap: avatar of %s not switched to %s: %s",
-                           user.get("username"), new, e)
+                           listed.get("username"), new, e)
     for user_id in switched:
         sync_topics.rebind_user(user_id)
     return switched
@@ -827,17 +845,28 @@ def avatar_owner(name: str) -> str:
 
 
 def _grant_like_leader(body: str, leader: str) -> None:
-    """Add ``body`` to ``allowed_characters`` of every user allowed ``leader``."""
-    from app.core.users import list_users, update_user
-    for user in list_users():
-        allowed = list(user.get("allowed_characters") or [])
-        if leader in allowed and body not in allowed:
-            allowed.append(body)
-            try:
-                update_user(user["id"], allowed_characters=allowed)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("link: allowed_characters of %s not updated: %s",
-                               user.get("username"), e)
+    """Add ``body`` to ``allowed_characters`` of every user allowed ``leader``.
+
+    Per user under ``keyed_lock("user_settings", <id>)`` with the list re-read
+    inside it (see :func:`_switch_avatars`), so a concurrent avatar switch of
+    the same user cannot lose this grant or have its own grant overwritten."""
+    from app.core.keyed_lock import keyed_lock
+    from app.core.users import get_user_by_id, list_users, update_user
+    for listed in list_users():
+        user_id = str(listed.get("id") or "")
+        if not user_id:
+            continue
+        try:
+            with keyed_lock("user_settings", user_id):
+                user = get_user_by_id(user_id)
+                if not user:
+                    continue
+                allowed = list(user.get("allowed_characters") or [])
+                if leader in allowed and body not in allowed:
+                    update_user(user_id, allowed_characters=allowed + [body])
+        except Exception as e:  # noqa: BLE001
+            logger.warning("link: allowed_characters of %s not updated: %s",
+                           listed.get("username"), e)
 
 
 def link(body: str, leader: str, *, shared: Any = DEFAULT_SHARED_SOUL) -> Dict[str, Any]:
