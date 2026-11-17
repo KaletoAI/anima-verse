@@ -45,8 +45,33 @@ MESH_GATES: Dict[str, Tuple[str, Any, str]] = {
     # its cut-out — the heel stem's thickness and the topline curve differ between a painted image and an
     # orthographic projection, not the shoe. (The 3/4-view cut-outs that read 0.66–0.76 are excluded upstream:
     # the empty edit always runs, FOOTWEAR_SOURCE_VERSION 2.)
-    "mesh_iou": ("min", 0.75, "side-silhouette IoU against the empty-shoe cut-out"),
+    # 0.55 since A187 (2026-11-17), and an instance setting (``server.footwear_mesh_iou_min``, ``mesh_gates``):
+    # six meshes of an open slide sandal read 0.59-0.63 against its cut-out — the painted image fills the space
+    # between the straps and the heel line the mesh leaves open — while every accepted closed shoe / boot of the
+    # test world reads 0.78-0.97. 0.55 keeps a margin below the sandals and still refuses a different object.
+    "mesh_iou": ("min", 0.55, "side-silhouette IoU against the empty-shoe cut-out"),
 }
+
+
+def mesh_iou_min() -> float:
+    """The ``mesh_iou`` limit: the instance setting ``server.footwear_mesh_iou_min``, clamped to the schema's
+    bounds; the ``MESH_GATES`` default when unset or unparsable."""
+    from app.core import config
+    from app.core.config_schema import SECTIONS
+    field = SECTIONS["server"]["fields"]["footwear_mesh_iou_min"]
+    try:
+        value = float(config.get("server.footwear_mesh_iou_min", None))
+    except (TypeError, ValueError):
+        return float(MESH_GATES["mesh_iou"][1])
+    if not math.isfinite(value):
+        return float(MESH_GATES["mesh_iou"][1])
+    return max(float(field["min"]), min(float(field["max"]), value))
+
+
+def mesh_gates() -> Dict[str, Tuple[str, Any, str]]:
+    """``MESH_GATES`` with the configured ``mesh_iou`` limit (``mesh_iou_min``)."""
+    kind, _, label = MESH_GATES["mesh_iou"]
+    return {**MESH_GATES, "mesh_iou": (kind, mesh_iou_min(), label)}
 
 #: Share of the footprint length at each end; the taller end is the heel and
 #: its maximum height the heel-counter height.

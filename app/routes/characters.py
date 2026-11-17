@@ -2202,7 +2202,7 @@ def _garment_limits(kind: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
         fit_gates.update({key: (kind_, limit, footwear_cut.GATE_LABELS[key])
                           for key, (kind_, limit) in footwear_cut.CUT_GATES.items()})
         return {"empty": _footwear_gate_limits(footwear_gates.EMPTY_GATES),
-                "mesh": _footwear_gate_limits(footwear_gates.MESH_GATES),
+                "mesh": _footwear_gate_limits(footwear_gates.mesh_gates()),
                 "insole": _footwear_gate_limits({**footwear_insole.INSOLE_GATES, **footwear_insole.SHAFT_GATES}),
                 "fit": _footwear_gate_limits(fit_gates)}
     if kind != "clothing":

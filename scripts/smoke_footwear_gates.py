@@ -322,7 +322,7 @@ def main():
           and fg.EMPTY_GATES["aspect"][:2] == ("range", (0.5, 2.6))
           and fg.EMPTY_GATES["iou_below_topline"][:2] == ("min", 0.85), fg.EMPTY_GATES)
     check("[G8] MESH_GATES", fg.MESH_GATES["component_share"][:2] == ("min", 0.98)
-          and fg.MESH_GATES["mesh_iou"][:2] == ("min", 0.75), fg.MESH_GATES)
+          and fg.MESH_GATES["mesh_iou"][:2] == ("min", 0.55), fg.MESH_GATES)
     ok, reasons = fg.check_gates({"component_share": 0.99}, fg.MESH_GATES)
     check("[G8] missing mesh_iou refuses", not ok and reasons and reasons[0].startswith("mesh_iou"), reasons)
     ok, reasons = fg.check_gates({"component_share": 0.99}, fg.MESH_GATES, optional=("mesh_iou",))

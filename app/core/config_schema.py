@@ -317,6 +317,19 @@ SECTIONS = {
                                "process, one character at a time. Every refit shows as a running job in the "
                                "header (provider CPU).",
             },
+            "footwear_mesh_iou_min": {
+                "type": "float",
+                "label": "Shoe mesh: minimum side-silhouette match",
+                "default": 0.55,
+                "min": 0.3,
+                "max": 0.95,
+                "description": "A delivered shoe mesh is accepted only when its side silhouette overlaps the "
+                               "empty-shoe cut-out by at least this IoU (0..1). Closed shoes and boots read "
+                               "0.78-0.97; open footwear (sandals, slides) 0.59-0.63, because the painted "
+                               "cut-out fills what the mesh leaves open between the straps. A refused mesh that "
+                               "passes a lowered value is accepted on the next Build or Retry without a new "
+                               "hub job.",
+            },
             "blender_max_concurrent": {
                 "type": "int",
                 "label": "Max. concurrent Blender processes",
