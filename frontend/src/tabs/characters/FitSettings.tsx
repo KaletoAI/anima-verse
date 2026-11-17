@@ -22,7 +22,7 @@ import { StepLight } from './StepRows'
 import { stampLabel } from './freshnessText'
 import {
   ALLOWANCE_CHOICES, ALLOWANCE_HINT, DEPTH_CHOICES, DEPTH_HINT, SLEEVE_CHOICES, SLEEVE_HINTS, SLEEVE_LABELS,
-  SHAFT_LABELS, OVERLAP_HINT, overlapChoices, TRUNK_CHOICES, TRUNK_HINTS, TRUNK_LABELS, allowanceLabel, shaftHint, shaftReason, allowanceNumbers, allowanceReason, armLightColour,
+  SHAFT_LABELS, OVERLAP_HINT, overlapChoices, BODY_OVERLAP_HINT, bodyOverlapChoices, TRUNK_CHOICES, TRUNK_HINTS, TRUNK_LABELS, allowanceLabel, shaftHint, shaftReason, allowanceNumbers, allowanceReason, armLightColour,
   armLightText, depthLabel, depthReason, sleeveReason, trunkReason, manualFitChanges, RESET_FIT, RESET_FIT_HINT,
 } from './fitSettingsModel'
 import type {
@@ -167,6 +167,27 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
                     ))}
                   </select>
                   <span className="ga-hint" style={REASON} title={t(OVERLAP_HINT)}>
+                    {made === undefined ? t('Re-fit applies it (no hub job)')
+                      : Math.round(made / 10) === overlap ? `${t('Shown fit')}: ${Math.round(made / 10)} cm`
+                        : `${t('Shown fit')}: ${Math.round(made / 10)} cm · ${t('Re-fit applies it (no hub job)')}`}
+                  </span>
+                </>
+              )
+            })() : null}
+            {value === 'whole' ? (() => {
+              const overlap = values.body_overlap ?? shaft.body_overlap_cm ?? 20
+              const made = shaft.made?.mode === 'whole' ? shaft.made.body_overlap_mm : undefined
+              return (
+                <>
+                  <label htmlFor="fit-body-overlap">{t('Overlap inside the boot')}</label>
+                  <select id="fit-body-overlap" className="ga-input" style={SELECT} value={String(overlap)}
+                    disabled={busy || saving !== null} title={t(BODY_OVERLAP_HINT)}
+                    onChange={(e) => { void save({ body_overlap: Number(e.target.value) }) }}>
+                    {bodyOverlapChoices(shaft, overlap).map((c) => (
+                      <option key={c} value={String(c)}>{c} cm{c === 20 ? ` (${t('default')})` : ''}</option>
+                    ))}
+                  </select>
+                  <span className="ga-hint" style={REASON} title={t(BODY_OVERLAP_HINT)}>
                     {made === undefined ? t('Re-fit applies it (no hub job)')
                       : Math.round(made / 10) === overlap ? `${t('Shown fit')}: ${Math.round(made / 10)} cm`
                         : `${t('Shown fit')}: ${Math.round(made / 10)} cm · ${t('Re-fit applies it (no hub job)')}`}

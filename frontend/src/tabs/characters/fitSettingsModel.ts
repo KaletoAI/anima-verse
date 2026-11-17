@@ -91,6 +91,8 @@ export interface FitSettingsValues {
   shaft?: ShaftChoice
   /** A177: cm the leg part reaches into the shoe part; a server before it sends none. */
   shaft_overlap?: number
+  /** A182: cm the body leg reaches up into a whole boot below its top edge; a server before it sends none. */
+  body_overlap?: number
   /** A166: mm a shell stands off the skin; a server before it sends none. */
   shell_offset?: number
 }
@@ -98,12 +100,13 @@ export interface FitSettingsValues {
 /** A166: the automatic fit (server `garment_fit_settings.defaults`, the mesh shape aside — it has its own control). */
 export const FIT_AUTOMATIC: Omit<FitSettingsValues, 'mesh_shape'> = {
   sleeves_left: 'auto', sleeves_right: 'auto', allowance: 'auto', depth: 0, trunk: 'auto', shaft: 'split',
-  shaft_overlap: 10 }
+  shaft_overlap: 10, body_overlap: 20 }
 /** A166: the settings that differ from the automatic fit (the mesh shape aside); {} when none. */
 export function manualFitChanges(v: FitSettingsValues): Partial<FitSettingsValues> {
   const out: Partial<FitSettingsValues> = {}
   for (const [k, auto] of Object.entries(FIT_AUTOMATIC) as [keyof typeof FIT_AUTOMATIC, unknown][]) {
     const now = k === 'shaft' ? (v.shaft ?? 'split') : k === 'shaft_overlap' ? (v.shaft_overlap ?? 10)
+      : k === 'body_overlap' ? (v.body_overlap ?? 20)
       : k === 'depth' ? (v.depth ?? 0) : v[k]
     if (now !== auto) (out as Record<string, unknown>)[k] = auto
   }
@@ -123,7 +126,7 @@ export const RESET_FIT_HINT = 'Sets sleeves, trunk, shaft, width and depth allow
 
 /** Ruling A122: a boot past the knee — the shaft above the shoe kept as a leg part, or cut off
  *  (`garment_shaft.SHAFT_CHOICES`). */
-export type ShaftChoice = 'split' | 'cut'
+export type ShaftChoice = 'split' | 'cut' | 'whole'
 
 /** Ruling A122: `garments.shaft_view` — only for a piece on the feet and the legs. */
 export interface ShaftInfo {
@@ -135,8 +138,12 @@ export interface ShaftInfo {
   /** A177: the overlap setting (cm) and its bounds; a server before it sends none. */
   overlap_cm?: number
   overlap_range_cm?: [number, number]
+  /** A182: the body overlap of a whole boot (cm) and its bounds. */
+  body_overlap_cm?: number
+  body_overlap_range_cm?: [number, number]
   /** `report.shaft` of the shown fit (null: no fit yet, or one made before A122). */
-  made: { mode: ShaftChoice; overlap_mm?: number
+  made: { mode: ShaftChoice; overlap_mm?: number; body_overlap_mm?: number
+    sides?: Record<string, { rim_low_mm?: number; body_cut_mm?: number }>
     faces: { shoe: number; leg: number; overlap: number; dropped: number } } | null
   cost: { hub_jobs: number; where: string }
 }
@@ -196,11 +203,16 @@ export const TRUNK_CHOICES: TrunkChoice[] = ['auto', 'generated', 'fitted']
 export const SHAFT_LABELS: Record<ShaftChoice, string> = {
   split: 'Keep (shoe + leg part)',
   cut: 'Cut off at the shoe top',
+  whole: 'Whole boot, body leg cut off inside',
 }
 const cmOf = (mm: number) => String(Math.round(mm / 10))
 
 /** The hint of a shaft choice, with the numbers of the server. */
 export function shaftHint(choice: ShaftChoice, info: ShaftInfo, t: T): string {
+  if (choice === 'whole') {
+    return t('The boot stays one piece (shoe part and its full shaft, rigged to the leg). The body’s leg is cut off inside it, {overlap} cm below the boot’s top edge, so no skin can show through the boot. Re-fit: 0 hub jobs.')
+      .replace('{overlap}', String(info.body_overlap_cm ?? 20))
+  }
   const text = choice === 'split'
     ? t('The shoe part (up to {top} cm) follows the foot and the shin; the leg part above {cut} cm is fitted to its own leg and overlaps the shoe part by {overlap} cm, so no gap opens when the knee or the ankle bends. Re-fit: 0 hub jobs.')
     : t('Only the shoe part up to {top} cm is kept; everything above it is dropped. Re-fit: 0 hub jobs.')
@@ -212,6 +224,11 @@ export function shaftHint(choice: ShaftChoice, info: ShaftInfo, t: T): string {
 export function shaftReason(info: ShaftInfo, t: T): string {
   const m = info.made
   if (!m) return t('Re-fit applies it (no hub job)')
+  if (m.mode === 'whole') {
+    const cuts = Object.entries(m.sides ?? {}).filter(([, s]) => s.rim_low_mm !== undefined)
+      .map(([side, s]) => `${t(side === 'left' ? 'left' : 'right')} ${cmOf(s.rim_low_mm ?? 0)}/${cmOf(s.body_cut_mm ?? 0)}`)
+    return t('Shown fit: boot top / body cut (cm) {sides}').replace('{sides}', cuts.join(' · '))
+  }
   if (m.mode === 'cut') {
     return t('Shown fit: cut at {top} cm, {n} faces dropped').replace('{top}', cmOf(info.shoe_top_mm))
       .replace('{n}', String(m.faces.dropped))
@@ -228,6 +245,17 @@ export function overlapChoices(info: ShaftInfo, current: number): number[] {
   if (!out.includes(current)) out.push(current)
   return out.sort((a, b) => a - b)
 }
+/** A182: the body overlap choices (cm, inside the server's bounds), the current value always among them. */
+export function bodyOverlapChoices(info: ShaftInfo, current: number): number[] {
+  const [lo, hi] = info.body_overlap_range_cm ?? [5, 40]
+  const out = [5, 10, 15, 20, 25, 30, 40].filter((c) => c >= lo && c <= hi)
+  if (!out.includes(current)) out.push(current)
+  return out.sort((a, b) => a - b)
+}
+export const BODY_OVERLAP_HINT = 'How far below the boot’s top edge the body’s leg ends inside the boot. Enough that '
+  + 'the cut never shows when the knee bends; not so much that skin shows through holes in the shaft. Saving makes the '
+  + 'fit due; Re-fit applies it on the CPU (0 hub jobs), then the figure is re-assembled.'
+
 export const OVERLAP_HINT = 'How far the leg part reaches down into the shoe part (both carry the same weights there, so '
   + 'no gap opens when the knee or the ankle bends). Saving makes the fit due; Re-fit applies it on the CPU (0 hub jobs).'
 
