@@ -26,6 +26,8 @@ the binding coordinator decision 2).
 ``explain_image_routing`` never probes (it reads the cached availability and
 the cooldowns); only a real render probes the intended entry's candidates once.
 """
+import contextlib
+import contextvars
 import fnmatch
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -96,13 +98,53 @@ class Route:
     overflow_from: str = ""
     overflow_waited_s: float = 0.0
     fallback_position: Optional[int] = None
+    # Gate-retry attempt (``retry_attempt``): the attempt number and the chain
+    # position it was aimed at. The aimed entry is the intended one for this
+    # render, so landing there is no fallback.
+    attempt: int = 0
+    attempt_position: Optional[int] = None
 
     @property
     def is_fallback(self) -> bool:
         position = (self.fallback_position if self.fallback_position is not None
                     else self.position)
-        return (position is not None and self.first_position is not None
-                and position != self.first_position)
+        reference = (self.attempt_position if self.attempt_position is not None
+                     else self.first_position)
+        return (position is not None and reference is not None
+                and position != reference)
+
+
+# Gate-retry attempt of the current render (1 = first try). Set by the retry
+# loops of quality-gated steps through ``retry_attempt``; read only by
+# ``run_routed``. An explicit backend pick never consults it.
+_ATTEMPT: contextvars.ContextVar[int] = contextvars.ContextVar("image_route_attempt", default=1)
+
+
+@contextlib.contextmanager
+def retry_attempt(attempt: int):
+    """Run the routed renders inside the block as gate-retry ``attempt``
+    (1-based): attempt N aims at the N-th entry of the occasion's chain,
+    clamped to the last entry — the second try of a gated step runs on the
+    SECOND backend of its chain. A single-entry or empty chain is unchanged."""
+    token = _ATTEMPT.set(max(1, int(attempt or 1)))
+    try:
+        yield
+    finally:
+        _ATTEMPT.reset(token)
+
+
+def current_attempt() -> int:
+    return _ATTEMPT.get()
+
+
+def attempt_order(n_entries: int, attempt: int) -> List[int]:
+    """Chain indices in the order a gate-retry ``attempt`` tries them: the
+    aimed index ``min(attempt, n) - 1`` first, then the later entries, then the
+    earlier ones walking back toward the first. Attempt 1 = plain chain order."""
+    if n_entries <= 0:
+        return []
+    k = min(max(1, attempt), n_entries) - 1
+    return list(range(k, n_entries)) + list(range(k - 1, -1, -1))
 
 
 def normalize_spec(spec: Any) -> str:
@@ -341,8 +383,13 @@ def resolve_image_route(occasion: str, *, character: str = "",
                         has_ref: bool = False, exclude: Iterable[str] = (),
                         probe: bool = False, pool: Any = None,
                         not_applicable: Optional[Dict[str, str]] = None,
-                        advance_rotation: bool = True) -> Route:
+                        advance_rotation: bool = True,
+                        attempt: int = 1) -> Route:
     """Resolve the chain of ``occasion`` to ONE backend (see module doc).
+
+    ``attempt`` (gate retry, see ``retry_attempt``): entries are tried in
+    ``attempt_order`` — attempt N starts at the N-th entry; availability,
+    cooldown and the configuration filters apply exactly as for attempt 1.
 
     ``exclude``: backend names that already failed in this routed call.
     ``probe``: run ``check_availability`` once on the INTENDED entry's
@@ -379,30 +426,44 @@ def resolve_image_route(occasion: str, *, character: str = "",
         return Route(occasion, b, None, "", "", None, [])
 
     chain: List[Dict[str, Any]] = []
-    chosen: Optional[Tuple[Any, int, str]] = None
+    lives: List[List[Any]] = []
     for spec, source, pos in entries:
         status, live, names = _evaluate(occasion, spec, backends, excl, has_ref)
         row = {"spec": spec, "source": source, "position": pos, "status": status,
                "backend": "", "matches": names}
         if status == STATUS_OK:
-            if chosen is None:
-                b = p.pick_lowest_cost(live, rotation_key=f"route:{occasion}:{spec}",
-                                      advance_rotation=advance_rotation)
-                chosen = (b, pos, spec)
-                row["backend"] = b.name
-            else:
-                row["backend"] = _cheapest_no_rotation(live).name
+            row["backend"] = _cheapest_no_rotation(live).name
         reasons = {n: reason for n, reason in rejected.items()
                    if fnmatch.fnmatch(n.lower(), spec.lower())}
         if reasons:
             row["not_applicable"] = reasons
         chain.append(row)
+        lives.append(live)
+    # Attempt N counts only entries the configuration lets run (a typo or a
+    # wrong-kind entry is no "backend" of the chain).
+    usable = [i for i, r in enumerate(chain) if r["status"] not in CONFIG_SKIP_STATUSES]
+    order = [usable[j] for j in attempt_order(len(usable), attempt)]
+    chosen: Optional[Tuple[Any, int, str]] = None
+    for i in order:
+        if chain[i]["status"] != STATUS_OK:
+            continue
+        spec, pos = chain[i]["spec"], chain[i]["position"]
+        b = p.pick_lowest_cost(lives[i], rotation_key=f"route:{occasion}:{spec}",
+                               advance_rotation=advance_rotation)
+        chain[i]["backend"] = b.name
+        chosen = (b, pos, spec)
+        break
     if chosen is None:
         raise NoRouteError(occasion, chain)
     intended = intended_entry(chain)
-    return Route(occasion, chosen[0], chosen[1], chosen[2],
-                 intended["spec"] if intended else "",
-                 intended["position"] if intended else None, chain)
+    route = Route(occasion, chosen[0], chosen[1], chosen[2],
+                  intended["spec"] if intended else "",
+                  intended["position"] if intended else None, chain)
+    if attempt > 1 and order:
+        aimed = chain[order[0]]
+        route.attempt = attempt
+        route.attempt_position = aimed["position"]
+    return route
 
 
 def _channel_room(name: str) -> bool:
@@ -519,9 +580,18 @@ def _explain_one(row: Dict[str, Any], character: str, backends: List[Any],
     if chain and chain[0]["source"] == "default":
         reason += " (default chain)"
     intended = intended_entry(chain)
+    # Which entry a gate retry (attempt 2) aims at — ``resolve_image_route``
+    # with ``attempt=2`` counts the configuration-passing entries.
+    usable = [r for r in chain if r["status"] not in CONFIG_SKIP_STATUSES]
+    retry = None
+    if len(usable) >= 2:
+        retry = {"position": usable[1]["position"], "spec": usable[1]["spec"]}
+    elif usable:
+        retry = {"position": usable[0]["position"], "spec": usable[0]["spec"]}
     return {**row, "chain": chain, "resolved": resolved, "position": position,
             "via": via, "reason": reason,
-            "intended_spec": intended["spec"] if intended else ""}
+            "intended_spec": intended["spec"] if intended else "",
+            "retry_entry": retry}
 
 
 def explain_occasion(occasion: str, character: str = "", pool: Any = None, *,
@@ -568,6 +638,10 @@ def route_meta(route: Optional[Route]) -> Dict[str, Any]:
         meta["fallback_from"] = {"occasion": route.occasion,
                                  "intended_spec": route.intended_spec,
                                  "position": route.first_position}
+    if route.attempt > 1:
+        meta["attempt_entry"] = {"attempt": route.attempt,
+                                 "aimed_position": route.attempt_position,
+                                 "position": route.position}
     if route.overflow_from:
         meta["overflow_from"] = {"backend": route.overflow_from,
                                  "waited_s": int(route.overflow_waited_s)}
@@ -621,8 +695,9 @@ def run_routed(occasion: str, render: Callable[[Any], Any], *,
     from app.imagegen.base import (BackendFailedError, BackendNotApplicableError,
                                    ChannelOverflow, OverflowWatch, OVERFLOW_WATCH,
                                    image_overflow_after_seconds)
+    attempt = current_attempt()
     route = resolve_image_route(occasion, character=character, has_ref=has_ref,
-                                probe=True, pool=pool)
+                                probe=True, pool=pool, attempt=attempt)
     failed: List[str] = []
     rejected: Dict[str, str] = {}
     left: set = set()
@@ -670,7 +745,8 @@ def run_routed(occasion: str, render: Callable[[Any], Any], *,
             try:
                 route = resolve_image_route(occasion, character=character,
                                             has_ref=has_ref, exclude=failed,
-                                            pool=pool, not_applicable=rejected)
+                                            pool=pool, not_applicable=rejected,
+                                            attempt=attempt)
             except NoRouteError:
                 # Preserve the mesh rejection reason for the asynchronous job.
                 raise e
@@ -690,7 +766,8 @@ def run_routed(occasion: str, render: Callable[[Any], Any], *,
             try:
                 route = resolve_image_route(occasion, character=character,
                                             has_ref=has_ref, exclude=failed,
-                                            pool=pool, not_applicable=rejected)
+                                            pool=pool, not_applicable=rejected,
+                                            attempt=attempt)
             except NoRouteError as nr:
                 raise nr from e
             if route.backend.name in left:
