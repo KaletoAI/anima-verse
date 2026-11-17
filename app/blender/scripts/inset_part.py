@@ -11,7 +11,7 @@ from pathlib import Path
 _SCRIPT_DIR = str(Path(__file__).parent)
 sys.path.insert(0, _SCRIPT_DIR)
 import _common
-from attached_part import resolve_bone
+from attached_part import base_color_source, resolve_bone
 import extension_bones
 sys.path.remove(_SCRIPT_DIR)
 import bpy
@@ -889,13 +889,20 @@ def blend_band_weights(obj, bone):
 
 
 def body_roughness(bsdf):
-    """``(image, value)``: the image whose green channel feeds the body's roughness (glTF metallic-roughness), or
-    None and the input's own value when it is not textured that way."""
+    """``(image, value, factor)``: the image whose green channel feeds the body's roughness (glTF
+    metallic-roughness), the input's own value, and the product of the constant factors of the MULTIPLY Math nodes
+    on the way (the importer inserts one for roughnessFactor != 1, so the body renders green x factor). The image
+    is None when the roughness is not textured that way."""
     node = bsdf.inputs['Roughness'].links[0].from_node if bsdf.inputs['Roughness'].links else None
+    factor = 1.
     while node is not None and node.type != 'TEX_IMAGE':
+        if node.type == 'MATH' and node.operation == 'MULTIPLY':
+            for i in list(node.inputs)[:2]:
+                if not i.links:
+                    factor *= float(i.default_value)
         linked = [i for i in node.inputs if i.links]
         node = linked[0].links[0].from_node if linked else None
-    return (node.image if node is not None else None), float(bsdf.inputs['Roughness'].default_value)
+    return (node.image if node is not None else None), float(bsdf.inputs['Roughness'].default_value), factor
 
 
 def pieces(bm):
@@ -1275,8 +1282,10 @@ def build_part(group, output):
         uv = (su[loop.vertex_index] - lo) / span + .01
         bake_uv.data[loop.index].uv = tuple(uv)
     body_bsdf = next(nd for nd in body.active_material.node_tree.nodes if nd.type == 'BSDF_PRINCIPLED')
-    img = body_bsdf.inputs['Base Color'].links[0].from_node.image
-    rough_image, rough_value = body_roughness(body_bsdf)
+    img, base_factor = base_color_source(body_bsdf.inputs['Base Color'])
+    if img is None:
+        raise ValueError('Body Base Color has no image texture')
+    rough_image, rough_value, rough_factor = body_roughness(body_bsdf)
     bimg = bpy.data.images.new('part_baked', P['bake'], P['bake'], alpha=False)
     bimg.generated_color = (.8, .65, .6, 1)
     mat = bpy.data.materials.new('part_bake')
@@ -1313,7 +1322,14 @@ def build_part(group, output):
             nt.nodes.remove(node)
             bpy.data.images.remove(image)
 
-    raw = bake_layer(tex.outputs['Color'])
+    colour_out = tex.outputs['Color']
+    if any(abs(f - 1) > 1e-6 for f in base_factor):
+        # The body shows texture x baseColorFactor (the importer's Multiply Mix); the patch must bake the same.
+        bmix = Nd('ShaderNodeMix'); bmix.data_type = 'RGBA'; bmix.blend_type = 'MULTIPLY'
+        bmix.inputs['Factor'].default_value = 1
+        nt.links.new(colour_out, bmix.inputs[6]); bmix.inputs[7].default_value = (*base_factor, 1)
+        colour_out = bmix.outputs[2]
+    raw = bake_layer(colour_out)
     rough_px = None
     if rough_image is not None:
         # The body's roughness rides along like its colour (A169): a constant on the part stood out at the border.
@@ -1321,9 +1337,11 @@ def build_part(group, output):
         rsep = Nd('ShaderNodeSeparateColor')
         nt.links.new(uvn.outputs['UV'], rtex.inputs['Vector'])
         nt.links.new(rtex.outputs['Color'], rsep.inputs['Color'])
-        rough_px = bake_layer(rsep.outputs['Green'], data=True)[..., 0]
+        # The body renders green x roughnessFactor (the importer's Multiply Math), so the patch carries that product.
+        rough_px = np.clip(bake_layer(rsep.outputs['Green'], data=True)[..., 0] * rough_factor, 0, 1)
     tint_px = bake_layer(att.outputs['Color'])
-    clean_px = bake_layer(cla.outputs['Fac'])[..., 0]
+    # A factor, not a colour: read back unconverted (an sRGB byte image returned .5 as about .735).
+    clean_px = bake_layer(cla.outputs['Fac'], data=True)[..., 0]
     cover = bake_layer(white.outputs[0])[..., 0] > .5
 
     # Average 4x4 blocks; pad only to preserve arbitrary positive bake sizes.

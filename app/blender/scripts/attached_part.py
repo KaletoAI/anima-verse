@@ -290,6 +290,40 @@ def skin_texel_fallback(pixels):
     return np.median(pixels[..., :3].reshape(-1, 3), axis=0)
 
 
+def base_color_source(socket, seen=None):
+    """``(image, factor)`` for a colour socket: the image texture that feeds it and the linear RGB product of the
+    constant colour factors met on the way. The glTF importer puts a MULTIPLY Mix between Base Color and the
+    texture whenever baseColorFactor != 1 or the primitive carries COLOR_0 (a vertex colour counts as 1 here);
+    any other node is followed through its first linked input. ``image`` is None when no texture feeds it."""
+    seen = set() if seen is None else seen
+    if not socket.is_linked:
+        return None, tuple(socket.default_value[:3])
+    node = socket.links[0].from_node
+    if node.name in seen:
+        return None, (1., 1., 1.)
+    seen.add(node.name)
+    if node.type == 'TEX_IMAGE':
+        return node.image, (1., 1., 1.)
+    if node.type == 'MIX' and node.data_type == 'RGBA' and node.blend_type == 'MULTIPLY':
+        image, factor = None, (1., 1., 1.)
+        for inp in node.inputs:
+            if inp.identifier in ('A_Color', 'B_Color'):
+                found, f = base_color_source(inp, seen)
+                image = image or found
+                factor = tuple(a * b for a, b in zip(factor, f))
+        return image, factor
+    linked = [i for i in node.inputs if i.is_linked]
+    return base_color_source(linked[0], seen) if linked else (None, (1., 1., 1.))
+
+
+def srgb_times_linear(rgb, factor):
+    """sRGB values times a linear colour factor, back in sRGB: what the shader shows for texture x factor."""
+    rgb = np.clip(np.asarray(rgb, np.float64), 0, 1)
+    lin = np.where(rgb <= .04045, rgb / 12.92, ((rgb + .055) / 1.055) ** 2.4) * np.asarray(factor, np.float64)
+    lin = np.clip(lin, 0, 1)
+    return np.where(lin <= .0031308, lin * 12.92, 1.055 * lin ** (1 / 2.4) - .055)
+
+
 def arc_point(t, stations, points):
     """The point at arc-length fraction ``t`` of a sampled curve: ``stations``
     are the samples' arc fractions (increasing), ``points`` their positions,
@@ -397,12 +431,17 @@ def build_part(group, companions, output):
         known.add(link['bone'].rsplit(':', 1)[-1].lower())
     if not body.data.uv_layers.active:
         raise ValueError('Body requires a UV map')
-    img = [nd.inputs['Base Color'].links[0].from_node.image for nd in body.active_material.node_tree.nodes
-           if nd.type == 'BSDF_PRINCIPLED'][0]
+    img, base_factor = base_color_source([nd for nd in body.active_material.node_tree.nodes
+                                         if nd.type == 'BSDF_PRINCIPLED'][0].inputs['Base Color'])
+    if img is None:
+        raise ValueError('Body Base Color has no image texture')
     texture_width, texture_height = img.size
     pixels = np.empty(texture_width * texture_height * 4, np.float32)
     img.pixels.foreach_get(pixels)
     pixels = pixels.reshape(texture_height, texture_width, 4)
+    if any(abs(f - 1) > 1e-6 for f in base_factor):
+        # The body shows texture x baseColorFactor; every skin sample below must see the same colour.
+        pixels[..., :3] = srgb_times_linear(pixels[..., :3], base_factor)
     body_matrix = body.matrix_world.copy()
     body_inverse = body_matrix.inverted()
     normal_matrix, inverse_normal_matrix = body_matrix.to_3x3(), body_inverse.to_3x3()
