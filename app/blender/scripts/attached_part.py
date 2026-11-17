@@ -290,6 +290,68 @@ def skin_texel_fallback(pixels):
     return np.median(pixels[..., :3].reshape(-1, 3), axis=0)
 
 
+def close_free_holes(obj, skin, root_local, band, matrix):
+    """Fills each open border loop of ``obj`` except the one passing closest to
+    ``root_local`` whose median distance to ``skin`` (an object-space BVH-like
+    ``find_nearest``), measured in world metres through ``matrix``, exceeds
+    ``band``. Returns the number of loops closed."""
+    import bmesh
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    seen, loops = set(), []
+    for edge in bm.edges:
+        if not edge.is_boundary or edge in seen:
+            continue
+        loop, stack = [], [edge]
+        seen.add(edge)
+        while stack:
+            e = stack.pop()
+            loop.append(e)
+            for v in e.verts:
+                for f in v.link_edges:
+                    if f.is_boundary and f not in seen:
+                        seen.add(f)
+                        stack.append(f)
+        loops.append(loop)
+    closed = 0
+    if len(loops) > 1:
+        def verts_of(loop):
+            return {v for e in loop for v in e.verts}
+        attach = min(range(len(loops)), key=lambda k: min((v.co - root_local).length for v in verts_of(loops[k])))
+        for k, loop in enumerate(loops):
+            if k == attach:
+                continue
+            gaps = sorted((matrix @ v.co - matrix @ skin.find_nearest(v.co)[0]).length for v in verts_of(loop))
+            if gaps[len(gaps) // 2] > band:
+                # A fan around the loop's centroid: it closes a loop that
+                # touches itself too (holes_fill leaves such a loop open). The
+                # centre takes the mean of the loop's weights.
+                ring = verts_of(loop)
+                deform = bm.verts.layers.deform.active
+                centre = bm.verts.new(sum((v.co for v in ring), Vector()) / len(ring))
+                if deform is not None:
+                    mean = {}
+                    for v in ring:
+                        for g, w in v[deform].items():
+                            mean[g] = mean.get(g, 0.) + w / len(ring)
+                    for g, w in mean.items():
+                        centre[deform][g] = w
+                for e in loop:
+                    face = e.link_faces[0]
+                    a, b = e.verts
+                    # Opposite winding to the face the edge already has.
+                    for corner in face.loops:
+                        if corner.vert == a and corner.link_loop_next.vert == b:
+                            a, b = b, a
+                            break
+                    bm.faces.new((a, b, centre))
+                closed += 1
+    bm.to_mesh(obj.data)
+    bm.free()
+    obj.data.update()
+    return closed
+
+
 def build_part(group, companions, output):
     """Run the accepted field, surface-net, skin-transfer and bake sequence."""
     settings = parameters(group.get('params', {}))
@@ -672,13 +734,17 @@ def build_part(group, companions, output):
     seam_cracks = sum(max((c.co - grp[0].co).length for c in grp) > 1e-6 for grp in keyv.values() if len(grp) > 1)
     bmb.to_mesh(body.data); bmb.free(); body.data.update()
     print('window verts flattened', flat, 'of', len(mask))
-    # Transfer only radial upper-leg influences to the anchor.
+    # Transfer only radial upper-leg influences to the anchor. The band grows
+    # with the part like its window does: a larger part's attachment border
+    # reaches further onto the thigh crease, and skin there on thigh weights
+    # pulled that border (and the part with it) toward the legs (A180).
     hips_g = body.vertex_groups[anchor_name]
     legs = [g for g in body.vertex_groups if g.name.endswith('UpLeg')]
     moved = 0
+    reweight_from, reweight_to = settings['reweight']['from'] * size_factor, settings['reweight']['to'] * size_factor
     for v in body.data.vertices:
         d = (body_matrix @ v.co - root).length
-        f = float(np.clip(1 - (d - settings['reweight']['from']) / (settings['reweight']['to'] - settings['reweight']['from']), 0, 1))
+        f = float(np.clip(1 - (d - reweight_from) / (reweight_to - reweight_from), 0, 1))
         if f <= 0:
             continue
         f = f * f * (3 - 2 * f)
@@ -1126,6 +1192,12 @@ def build_part(group, companions, output):
     # and drops the copy, which opened a pinhole no border pass had seen.
     # Validate now, so every border is final from here on.
     partobj.data.validate()
+    # A hole loop that ends away from the skin is a gap in the part's own
+    # closed surface (the cut left it where the part only rested on a thigh);
+    # landing it on the nearest skin drew faces across to the thigh (A180).
+    # It is closed with the vertices it has; the attachment loop (closest to
+    # the root) and a hole lying on the skin stay open and land below.
+    holes_closed = close_free_holes(partobj, bvh, body_inverse @ root, settings['seam']['band'], body_matrix)
     final_positions = np.array([tuple(body_matrix @ v.co) for v in partobj.data.vertices])
     final_ds, final_t = shaft_sdf(final_positions)
     final_dc = pods_sdf(final_positions)
@@ -1136,6 +1208,34 @@ def build_part(group, companions, output):
     final_border = {vi for edge, count in edge_counts.items() if count == 1 for vi in edge}
     seam = settings['seam']
     strip = border_strip(final_positions, edge_counts, final_border, seam['band'])
+    # Only the attachment loop (the border loop passing closest to the root)
+    # moves with the skin it grows from. A hole loop left where the part only
+    # rests on a thigh took that thigh's weights at full share, so a pose that
+    # parted the legs pulled strands from the part to the thigh (A180): such a
+    # loop and its strip stay on the part's side of the weights.
+    border_links = {}
+    for (a, b), count in edge_counts.items():
+        if count == 1:
+            border_links.setdefault(a, []).append(b)
+            border_links.setdefault(b, []).append(a)
+    border_loops, seen_ = [], set()
+    for start in border_links:
+        if start in seen_:
+            continue
+        loop_, stack_ = [], [start]
+        seen_.add(start)
+        while stack_:
+            v_ = stack_.pop()
+            loop_.append(v_)
+            for w_ in border_links[v_]:
+                if w_ not in seen_:
+                    seen_.add(w_)
+                    stack_.append(w_)
+        border_loops.append(loop_)
+    root_xyz = np.array(tuple(root))
+    attach_border = set(min(border_loops, key=lambda loop_: np.linalg.norm(final_positions[loop_] - root_xyz, axis=1).min())) if border_loops else set()
+    hole_border = final_border - attach_border
+    attach_strip = border_strip(final_positions, edge_counts, attach_border, seam['band'])
     # Preserve the reference's interpolated weights after both modifiers.
     # Reclassifying a smoothed vertex by its new station creates hard seams.
     tip_count = int(np.count_nonzero((final_t >= tip_start + .015) & (final_ds < final_dc)))
@@ -1144,12 +1244,12 @@ def build_part(group, companions, output):
         # Incidental skin contacts must not give the free shell thigh motion.
         # The root's skin transfer remains intact within the 35 mm root ball,
         # and a border strip keeps the skin's weights: it moves with the skin.
-        if (Vector(final_positions[i]) - root).length > .035 and strip[i] < 1:
+        if (Vector(final_positions[i]) - root).length > .035 and attach_strip[i] < 1:
             take = 0.
             for group_, weight_ in [(e.group, e.weight) for e in vertex.groups]:
                 vg = partobj.vertex_groups[group_]
                 if vg.name.endswith('UpLeg'):
-                    moved_ = weight_ * (1 - strip[i])
+                    moved_ = weight_ * (1 - attach_strip[i])
                     take += moved_
                     if weight_ - moved_ > 1e-4:
                         vg.add([i], weight_ - moved_, 'REPLACE')
@@ -1193,7 +1293,10 @@ def build_part(group, companions, output):
         if height <= 0 or seam_share[i] <= 0:
             continue
         g = float(np.clip(1 - height / seam['band'], 0, 1))
-        move = height * max(g * g * (3 - 2 * g), strip[i]) * seam_share[i]
+        # Whatever its height only the attachment loop lands: a hole loop
+        # landed on the nearest skin, a thigh 10 cm away beside the tip, and
+        # its faces spanned the gap (A180). It lands within `band` only.
+        move = height * max(g * g * (3 - 2 * g), attach_strip[i]) * seam_share[i]
         if move > 1e-7:
             pme.vertices[i].co = body_inverse @ (point - nb * move)
             skin_height[i] -= move
@@ -1206,6 +1309,8 @@ def build_part(group, companions, output):
             point = body_matrix @ pme.vertices[i].co
             hit_ = bvh.find_nearest(body_inverse @ point)
             q, normal_ = body_matrix @ hit_[0], (normal_matrix @ hit_[1]).normalized()
+            if i in hole_border and (point - q).length > seam['band']:
+                continue
             beside = bvh.inside_beside(body_inverse @ point, hit_)
             if beside is None:
                 height = (point - q).dot(normal_) + seam['tuck']
@@ -1215,12 +1320,19 @@ def build_part(group, companions, output):
                 pme.vertices[i].co = body_inverse @ (q - normal_ * seam['tuck'])
     # Decimation blended a trace of the part's bones back into the border; on
     # the skin's weights alone it stays where the skin is in every pose.
+    hole_leg_moved = 0
     for i in final_border:
         point = body_matrix @ pme.vertices[i].co
         q, _, fi, _ = bvh.find_nearest(body_inverse @ point)
         for entry in list(pme.vertices[i].groups):
             partobj.vertex_groups[entry.group].remove([i])
-        for name_, weight_ in skin_weights_at(body_matrix @ q, fi).items():
+        skin_ = skin_weights_at(body_matrix @ q, fi)
+        if i in hole_border and (Vector(final_positions[i]) - root).length > .035:
+            leg_ = sum(w_ for n_, w_ in skin_.items() if n_.endswith('UpLeg'))
+            skin_ = {n_: w_ for n_, w_ in skin_.items() if not n_.endswith('UpLeg')}
+            skin_[anchor_name] = skin_.get(anchor_name, 0.) + leg_
+            hole_leg_moved += leg_ > 1e-4
+        for name_, weight_ in skin_.items():
             if weight_ > 1e-4:
                 vg = partobj.vertex_groups.get(name_) or partobj.vertex_groups.new(name=name_)
                 vg.add([i], weight_, 'REPLACE')
@@ -1409,7 +1521,7 @@ def build_part(group, companions, output):
         'reweighted_vertices': moved, 'part_tris': sum(len(poly.vertices) - 2 for poly in partobj.data.polygons),
         'skin_patch_px': S_, 'skin_patch_cm': S_ * mpp * 100,
         'tip_vertices': tip_count,
-        'border_vertices': len(final_border),
+        'border_vertices': len(final_border), 'hole_border_leg_moved': hole_leg_moved, 'free_holes_closed': holes_closed,
         'seam_vertices': seam_moved, 'seam_opposed_normals': opposed,
         'hole_border_vertices': len(hole_points), 'hole_border_vertices_left': holes_left,
         'cracked_seam_groups': int(seam_cracks), 'flatten_outward_m': flatten_outward,
