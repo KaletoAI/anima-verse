@@ -5,8 +5,10 @@ body, and the signed distance field of a crop taken from it (plan 2026-11-12 fit
 HairDeck hair, layers, the limb source's trunk check) goes through it.
 
 The solid (``body_solid``):
-- Surface voxelisation at the 5 x 5 barycentric samples of every triangle (``garment_fit._surface_samples``), one
-  dilation, hole fill (``fit_kernels.fill_holes``), the seal of cavities (``_seal_cavities``) and the 2-D hole fill
+- Surface voxelisation at the 5 x 5 barycentric samples of every triangle (``garment_fit._surface_samples``) — a
+  triangle with an edge longer than ``SAMPLE_STEPS`` voxels also at a grid of at most one voxel spacing
+  (``_dense_samples``; a coarse body's fills used to leak through the sample gaps and read its inside as OUTSIDE) —,
+  one dilation, hole fill (``fit_kernels.fill_holes``), the seal of cavities (``_seal_cavities``) and the 2-D hole fill
   of every slice along x, y AND z (``fit_kernels.fill_slices``; Task 1):
   - A hollow body is sealed: an outfit body meshed from its dressed views can be a SHELL — an outer and an inner
     wall, the inner one facing into a cavity — whose cavity is reached from outside through a slit or an opening of
@@ -67,6 +69,9 @@ from app.core.garment_fit import SDF_EXACT_BAND_VOX, SDF_SEAL_THICK_VOX, SDF_ZER
 
 #: Solids kept per process (a worker holds about 80 MB per body at ``garment_fit.VOX_M``).
 BODY_CACHE_SIZE = 4
+#: The 5 x 5 barycentric samples space a triangle edge in 4 steps: a triangle whose longest edge is longer than 4
+#: voxels gets a denser grid (``_dense_samples``).
+SAMPLE_STEPS = 4
 
 _CACHE: "OrderedDict[str, BodySolid]" = OrderedDict()
 _LOCK = threading.Lock()
@@ -133,7 +138,7 @@ def _build(P: np.ndarray, F: np.ndarray, vox: float, key: str) -> BodySolid:
         raise ValueError("The body has no triangles")
     lo = np.floor((P.min(0) - 2 * vox) / vox) * vox
     shape = np.ceil(((P.max(0) + 2 * vox) - lo) / vox).astype(np.int64) + 1
-    pts, tri_of = _surface_samples(P, F)
+    pts, tri_of = _dense_samples(P, F, vox)
     idx = np.clip(np.round((pts - lo) / vox).astype(np.int64), 0, shape - 1)
     surf = np.zeros(tuple(shape), bool)
     surf[idx[:, 0], idx[:, 1], idx[:, 2]] = True
@@ -146,6 +151,30 @@ def _build(P: np.ndarray, F: np.ndarray, vox: float, key: str) -> BodySolid:
     for a in (inside, F, pts, tri_of):                         # shared by every crop; P stays writeable for numba
         a.flags.writeable = False
     return BodySolid(key=key, inside=inside, lo=lo, vox=vox, P=P, F=F, pts=pts, tri_of=tri_of)
+
+
+def _dense_samples(P: np.ndarray, F: np.ndarray, vox: float) -> tuple:
+    """``_surface_samples`` (5 x 5 per triangle) plus, for every triangle whose longest edge is longer than
+    ``SAMPLE_STEPS`` voxels, a barycentric grid of ``n = ceil(longest edge / vox)`` steps per edge — sample spacing at
+    most one voxel, so the dilated surface stays closed and the fills cannot leak (a 4 cm triangle edge at 3.4 mm left
+    gaps of 10 mm). A body whose triangles are all finer gets exactly the 5 x 5 samples, in the same order."""
+    pts, tri_of = _surface_samples(P, F)
+    tri = P[F]
+    longest = np.linalg.norm(tri - np.roll(tri, 1, axis=1), axis=2).max(axis=1)
+    steps = np.ceil(longest / vox).astype(np.int64)
+    coarse = steps > SAMPLE_STEPS
+    if not coarse.any():
+        return pts, tri_of
+    extra_pts, extra_tri = [pts], [tri_of]
+    for n in np.unique(steps[coarse]):
+        which = np.flatnonzero(coarse & (steps == n))
+        uv = np.array([(i / n, j / n) for i in range(n + 1) for j in range(n + 1 - i)])
+        t = tri[which]                                                       # (k, 3, 3)
+        grid = (t[:, None, 0] * (1 - uv[:, 0] - uv[:, 1])[None, :, None] + t[:, None, 1] * uv[None, :, 0, None]
+                + t[:, None, 2] * uv[None, :, 1, None])                      # (k, m, 3)
+        extra_pts.append(grid.reshape(-1, 3))
+        extra_tri.append(np.repeat(which, len(uv)))
+    return np.concatenate(extra_pts), np.concatenate(extra_tri)
 
 
 def field(solid: BodySolid, bounds, *, zero_offset_vox: Optional[float] = None,
