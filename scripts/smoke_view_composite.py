@@ -75,8 +75,8 @@ Expected values, derived by hand:
         composite_record.empty True (base_body.composite_sidecar).
     The garment chain's own refusal (worn back, rule "piece") is
     smoke_garment_clothing_back.py [4].
-[6] Job counts: dressed_view_jobs() = 1 + (views - 1): front + back -> 2,
-    with left + right -> 4 (was 3 / 7 with the fit). garments.HUB_JOBS
+[6] Job counts: dressed_view_jobs() = 1 + 2 * (views - 1) (Ruling A175: a turn
+    + a draft per non-front view): front + back -> 3, with left + right -> 7. garments.HUB_JOBS
     clothing:edit_chain worn 2 (front edit + back draft; was 3),
     BACK_JOBS worn 1 (was 2), ghost unchanged 1.
 [7] Catalog: outfit_back / outfit_side are no occasion (OCCASIONS,
@@ -272,6 +272,8 @@ def main() -> int:
         from app.core import base_body_gates
         real_gates = (base_body_gates.noise_gate, base_body_gates.framing_gate)
         base_body.render_view_edit = render_draft
+        real_turn = base_body.turned_cutout
+        base_body.turned_cutout = lambda *a, stem, front, **k: front   # Ruling A175: turn + cut-out stubbed
         base_body.draft_prompt = lambda *a, **k: ("p", "n")
         vc.compose = compose
         base_body.view_guard = lambda view, path, views, front=None: {"ok": True, "best": view}
@@ -314,6 +316,7 @@ def main() -> int:
                   ("composite", "empty", True))
         finally:
             base_body.render_view_edit, base_body.draft_prompt, vc.compose, base_body.view_guard = real
+            base_body.turned_cutout = real_turn
             base_body_gates.noise_gate, base_body_gates.framing_gate = real_gates
 
         print("[6] job counts")
@@ -325,7 +328,7 @@ def main() -> int:
             four = base_body.dressed_view_jobs()
         finally:
             base_body.dressed_views = real_views
-        check("dressed_view_jobs", (two, four), (2, 4))
+        check("dressed_view_jobs", (two, four), (3, 7))
         check("garment worn", (garments.HUB_JOBS["clothing:edit_chain"]["worn"], garments.BACK_JOBS["worn"],
                                garments.BACK_JOBS["ghost"]), (2, 1, 1))
 

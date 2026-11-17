@@ -441,11 +441,11 @@ def failure_section():
     cached.clear()
     fbp.W = fbp.World(base="older", painted=("blouse",))
     manual = fb.plan("Kira", profile={}, explicit=True)
-    check("[9a] manual plan", fbp.names(manual), [("plain_body", 6), ("texture", 2), ("assemble", 0)])
+    check("[9a] manual plan", fbp.names(manual), [("plain_body", 6), ("texture", 3), ("assemble", 0)])
     check("[9a] plain body marked", manual[0].manual, "Base body outdated — Build to refresh")
     auto = fb.plan("Kira", profile={}, explicit=False)
     check("[9a] automatic plan lists the plain body", fbp.names(auto),
-          [("plain_body", 6), ("texture", 2), ("assemble", 0)])
+          [("plain_body", 6), ("texture", 3), ("assemble", 0)])
     check("[9a] automatic runnable: no base step", [st.name for st in fb._runnable(auto, False)],
           ["texture", "assemble"])
     check("[9a] a trigger (auto on)", fb.request("Kira", "outfit_change"), True)
@@ -457,7 +457,7 @@ def failure_section():
     first = (info["cost"]["steps"] or [{}])[0]
     check("[9a] GET: the pending base step with its cost",
           (info["status"], first.get("name"), first.get("manual"), first.get("jobs"), info["cost"]["hub_jobs"]),
-          ("changes", "plain_body", "Base body outdated — Build to refresh", 6, 8))
+          ("changes", "plain_body", "Base body outdated — Build to refresh", 6, 9))
     check("[9a] the body change's note (figure.pending_changes; smoke_figure_delivered [5])", figure.BASE_OUTDATED,
           manual[0].manual)
     fbp.W.calls.clear()
@@ -473,7 +473,7 @@ def failure_section():
     check("[9b] automatic start", fb.start("Kira", reason="body_change", automatic=True)["status"], "current")
     check("[9b] no producer called", fbp.W.calls, [])
     check("[9b] manual plan", fbp.names(fb.plan("Kira", profile={}, explicit=True)),
-          [("plain_body", 6), ("texture", 2), ("assemble", 0)])
+          [("plain_body", 6), ("texture", 3), ("assemble", 0)])
 
 
 def baseline_section():

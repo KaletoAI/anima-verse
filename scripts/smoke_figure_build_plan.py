@@ -31,14 +31,14 @@ body makes every view and the stored shape count as missing):
     ``missing``, views front/back/left/right, model True; without
     ``missing`` → reason "" (the improvement's roster is unchanged). Views
     current, no base model → ``missing``, views [], model True.
-    ``dressed_view_jobs()`` == 2 (front + back), 4 with the side views on
+    ``dressed_view_jobs()`` == 3 (front + back turn + back draft, Ruling A175), 7 with the side views on
     (1 + 3 drafts).
 [1] Everything built → ``plan == []``, ``cost.hub_jobs == 0``, GET status
     ``up_to_date``. With ``collision.channels_due`` True (a channel setting saved, not applied — cross-person
     collision Task 15) → the plan is the collision step alone, 0 hub jobs (CPU).
 [2] Base missing + coat in_body + trousers own (no mesh) + blouse painted →
     plain_body (views 4 + mesh + rig = 6), shape (2 + 2 = 4), pieces
-    trousers (6), texture (2), fits (0), assemble (0) → ``hub_jobs == 18``
+    trousers (6), texture (3), fits (0), assemble (0) → ``hub_jobs == 20`` (A175: views 3)
     (6 + 4 + 6 + 2), in that order. Ruling A119: no interim step (the
     trousers and the coat are simply left off meanwhile), so shape and
     texture carry no ``manual`` (``""``).
@@ -364,9 +364,9 @@ def real_sections(root: Path):
         check("[0] no model without missing=True: reason", base_body.base_refresh_plan("Kira", profile={})["reason"],
               "")
         base_body.side_views_dressed = lambda: False
-        check("[0] dressed_view_jobs front+back", base_body.dressed_view_jobs(), 2)
+        check("[0] dressed_view_jobs front+back", base_body.dressed_view_jobs(), 3)
         base_body.side_views_dressed = lambda: True
-        check("[0] dressed_view_jobs with the sides", base_body.dressed_view_jobs(), 4)
+        check("[0] dressed_view_jobs with the sides", base_body.dressed_view_jobs(), 7)
     finally:
         (base_body.base_prompts_freshness, base_body.base_view_states, model3d.find_model3d,
          base_body.base_model_sha256, base_body.side_views_dressed, base_body.base_signature) = saved
@@ -399,21 +399,21 @@ def stub_sections():
               meshed=(), model=False)
     steps = fb.plan("Kira", profile={})
     check("[2] steps (Ruling A119: no interim step)", names(steps),
-          [("plain_body", 6), ("shape", 4), ("pieces", "trousers", 6), ("texture", 2), ("fits", 0), ("assemble", 0)])
+          [("plain_body", 6), ("shape", 5), ("pieces", "trousers", 6), ("texture", 3), ("fits", 0), ("assemble", 0)])
     check("[2] plain body label", steps[0].label, "Plain body: views 4 + mesh + rig")
     check("[2] piece label", steps[2].label, "Own mesh · Tailored Black")
     check("[2] shape / texture take nothing out: manual", [s.manual for s in steps if s.name in
                                                            ("shape", "texture")], ["", ""])
-    check("[2] hub_jobs", fb.cost("Kira", steps)["hub_jobs"], 18)
+    check("[2] hub_jobs", fb.cost("Kira", steps)["hub_jobs"], 20)
     check("[2] step order follows STEP_ORDER",
           [s.name for s in steps] == sorted((s.name for s in steps), key=fb.STEP_ORDER.index), True)
 
     print("[3] hair body -> HairDeck on a haired base (older prompts)")
     W = World(base="older", painted=("blouse",), hair="hairdeck", hair_done=False)
     steps = fb.plan("Kira", profile={})
-    check("[3] steps", names(steps), [("plain_body", 6), ("hair", "hair_kira", 1), ("texture", 2), ("fits", 0),
+    check("[3] steps", names(steps), [("plain_body", 6), ("hair", "hair_kira", 1), ("texture", 3), ("fits", 0),
                                       ("assemble", 0)])
-    check("[3] hub_jobs", fb.cost("Kira", steps)["hub_jobs"], 9)
+    check("[3] hub_jobs", fb.cost("Kira", steps)["hub_jobs"], 10)
 
     print("[4] run_estimate unknown for one piece")
     W = World(base="missing", in_body=("coat",), painted=("blouse",), own=("trousers",), shape_stored=False,
@@ -496,7 +496,7 @@ def c4_section():
     check("[9a] delivered: plain body, the coat left off, nothing painted",
           (d.shape, d.left_out, d.painted, d.texture), (BSIG, {"coat": figure.LEFT_OFF_SHAPE}, (), ""))
     check("[9a] plan: shape (views 2 + mesh + rig), assemble — no interim, no texture",
-          names(fb.plan("Kira", profile={})), [("shape", 4), ("assemble", 0)])
+          names(fb.plan("Kira", profile={})), [("shape", 5), ("assemble", 0)])
     W.calls.clear()
     fb.start("Kira", reason="manual")
     check("[9a] run ended", wait_idle(fb), True)
@@ -522,7 +522,7 @@ def c4_section():
 
     W = World(in_body=("coat",), painted=("blouse",), shape_stored=False, model=False)
     check("[9c] a painted piece: shape, texture (views 2), assemble",
-          names(fb.plan("Kira", profile={})), [("shape", 4), ("texture", 2), ("assemble", 0)])
+          names(fb.plan("Kira", profile={})), [("shape", 5), ("texture", 3), ("assemble", 0)])
     W.calls.clear()
     fb.start("Kira", reason="manual")
     check("[9c] run ended", wait_idle(fb), True)

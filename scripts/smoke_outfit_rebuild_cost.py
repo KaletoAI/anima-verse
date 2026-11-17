@@ -28,7 +28,7 @@ an outfit body 2 = img2mesh + rig; retexture repaint = CPU):
 
 [O1] retexture mode, older base, NO dressed view of the current base, side
      views off (dressed views front + back) → views_needed True, image
-     1 + 1·1 = 2, mesh 0, hub 2; body_needed False; note "older base: views 2
+     1 + 2·1 = 3 (A175 turn + draft), mesh 0, hub 3; body_needed False; note "older base: views 3
      (first attempts)".
 [O2] the world setting ``base_body.dressed_side_views`` on (dressed views
      front, back, left, right) → image 1 + 1·3 = 4, hub 4.
@@ -37,7 +37,7 @@ an outfit body 2 = img2mesh + rig; retexture repaint = CPU):
      that is not stored → body 2, plus the shape's own views (none stored)
      2; nothing is painted on the shape (the Dress is in it: texture "") so
      the outfit's views are copies, 0 → {image 2, mesh 2, hub 4}, note
-     "older base: views 2 + body 2 (first attempts)".
+     "older base: views 3 + body 2 (first attempts)".
 [O4] "mesh", the outfit's dressed front + back current (made on the plain
      body meanwhile): the shape is still missing with its views → still
      {image 2, mesh 2, hub 4}; ``figure.stored_shape`` patched to answer a
@@ -181,24 +181,24 @@ def main() -> int:
         check("outfit_info stale older_base", base_body.outfit_info("Kira", signature=sig)["stale_reason"],
               "older_base")
         got, full = cost()
-        check("cost", got, {"image_jobs": 2, "mesh_jobs": 0, "hub_jobs": 2})
+        check("cost", got, {"image_jobs": 3, "mesh_jobs": 0, "hub_jobs": 3})
         check("views/body needed", (full["views_needed"], full["body_needed"]), (True, False))
-        check("note", full["note"], "older base: views 2 (first attempts)")
+        check("note", full["note"], "older base: views 3 (first attempts)")
 
         # --- [O2] -------------------------------------------------------------------
         print("[O2] dressed side views on")
         side_views(True)
         check("dressed views", base_body.dressed_views(), ("front", "back", "left", "right"))
         got, _ = cost()
-        check("cost", got, {"image_jobs": 4, "mesh_jobs": 0, "hub_jobs": 4})
+        check("cost", got, {"image_jobs": 7, "mesh_jobs": 0, "hub_jobs": 7})
         side_views(False)
 
         # --- [O3] -------------------------------------------------------------------
         print("[O3] mesh mode, no dressed view, no body")
         set_mode("mesh")
         got, full = cost()
-        check("cost", got, {"image_jobs": 2, "mesh_jobs": 2, "hub_jobs": 4})
-        check("note", full["note"], "older base: views 2 + body 2 (first attempts)")
+        check("cost", got, {"image_jobs": 3, "mesh_jobs": 2, "hub_jobs": 5})
+        check("note", full["note"], "older base: views 3 + body 2 (first attempts)")
 
         # --- [O4] -------------------------------------------------------------------
         print("[O4] mesh mode, views current")
@@ -206,7 +206,7 @@ def main() -> int:
         check("dressed front current", base_body.dressed_image("Kira", "front", sig, bsig) is not None, True)
         got, full = cost()
         check("no body stored: the shape and its views", (got, full["note"]),
-              ({"image_jobs": 2, "mesh_jobs": 2, "hub_jobs": 4}, "older base: views 2 + body 2 (first attempts)"))
+              ({"image_jobs": 3, "mesh_jobs": 2, "hub_jobs": 5}, "older base: views 3 + body 2 (first attempts)"))
         with patch.object(figure, "stored_shape", return_value={"rig": "mixamo"}):
             got, full = cost()
         check("body stored: nothing", (got, full["note"]),
@@ -234,7 +234,7 @@ def main() -> int:
               ({"image_jobs": 0, "mesh_jobs": 0, "hub_jobs": 0}, "other figure: repaint on the CPU"))
         set_mode("mesh")
         got, _ = cost()
-        check("in the body: views 2 + body 2", got, {"image_jobs": 2, "mesh_jobs": 2, "hub_jobs": 4})
+        check("in the body: views 3 + body 2", got, {"image_jobs": 3, "mesh_jobs": 2, "hub_jobs": 5})
         set_mode("retexture")
 
         # --- [O7] -------------------------------------------------------------------

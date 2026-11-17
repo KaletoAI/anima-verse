@@ -400,29 +400,29 @@ def main() -> int:
 
         # --- [c] estimate ------------------------------------------------------------------------------------
         print("[c] estimate")
-        check("one set", base_body.dressed_view_jobs(), 2)
+        check("one set", base_body.dressed_view_jobs(), 3)
         fig = figure.Figure(signature="sig1", bsig=BSIG, shape=BSIG, texture=TSIG, in_body=(), painted=(), own=())
         outfit_views = {}
         sha = base_body.file_sha256
         with patch.object(base_body, "dressed_image",
                           lambda _c, v, *_a, **_k: outfit_views.get(v)):
-            check("no store: 2", base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 2)
+            check("no store: 3 (front 1 + back turn + draft, A175)", base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 3)
             store = base_body.texture_refs_dir("Demo")
             s_front = image(store / f"tpose_{TSIG}.png", colour=(1, 2, 3), meta={
                 "base_signature": BSIG, "base_image_sha256": sha(base_front), "dressed": True})
-            check("store front: 1", base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 1)
+            check("store front: 2", base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 2)
             draft = image(store / base_body.DRAFT_DIR / f"tpose_back_{TSIG}.png", colour=(4, 5, 6),
                           meta={"front_sha256": sha(s_front)})
             image(store / f"tpose_back_{TSIG}.png", colour=(7, 8, 9), meta={
                 "base_signature": BSIG, "base_image_sha256": sha(base_back), "back_draft_sha256": sha(draft)})
             check("store front + back: 0", base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 0)
             draft.with_suffix(".json").write_text(json.dumps({"front_sha256": "other"}), encoding="utf-8")
-            check("back from another front: 1",
-                  base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 1)
+            check("back from another front: 2",
+                  base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 2)
             draft.with_suffix(".json").write_text(json.dumps({"front_sha256": sha(s_front)}), encoding="utf-8")
             outfit_views["front"] = image(refs / "tpose_sig1.png", colour=(9, 9, 9), meta={})
-            check("own other front stored, back missing: 1",
-                  base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 1)
+            check("own other front stored, back missing: 2",
+                  base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 2)
             outfit_views.clear()
             from dataclasses import replace
             check("no texture: 0",

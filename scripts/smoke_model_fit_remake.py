@@ -221,7 +221,7 @@ def stage_character(refs: Path, *, draft_img=None, draft_front_sha=None, extra=N
     front = put_view(folder, f"tpose_{sig}", figure(BODY + [SKIRT]), {"base_signature": BSIG, "dressed": True})
     draft = put_view(folder / "drafts", f"tpose_back_{sig}", figure(BODY + [SKIRT]) if draft_img is None else draft_img,
                      {"front_sha256": draft_front_sha or sha(front), "base_signature": BSIG, "dressed": True,
-                      "draft_method": "base_edit"})
+                      "draft_method": "base_edit", "turned_second": True})
     meta = {"prompt": "edit the first image", "base_signature": BSIG, "dressed": True,
             "base_image_sha256": sha(base_back), "back_draft": draft.name, "back_draft_sha256": sha(draft),
             "fit_gate": {"ok": True, "chosen": 1, "attempts": []}, "outfit_body": {"body_id": "x"},
@@ -428,6 +428,7 @@ def dress_view_section(tmp: Path):
         renders.append(view)
         return save(figure(BODY + [SKIRT]), Path(f"{stem}.png"))
     base_body.render_view_edit = render_draft
+    base_body.turned_cutout = lambda *a, front, **k: front   # Ruling A175: the turn stubbed (no hub job)
     views = {v: refs / f"tpose_{'' if v == 'front' else v + '_'}{BSIG}.png" for v in ("front", "back")}
     views.update(left=None, right=None)
     kw = dict(signature=SIG, bsig=BSIG, pieces={}, items=[], profile={}, front=front, base_views=views,

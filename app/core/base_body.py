@@ -2139,11 +2139,11 @@ def dressed_views() -> Tuple[str, ...]:
 
 def dressed_view_jobs() -> int:
     """Hub jobs of ONE set of dressed views on its first attempts: the front
-    edit plus a draft per other ``dressed_views()`` view — the composite onto
+    edit plus a turn and a draft per other ``dressed_views()`` view (Ruling A175) — the composite onto
     the base view is CPU work (Task 11g) — 2 with front + back, 4 with the
-    side views on (``rebuild_cost`` and the Build's plan, ``figure_build``,
+    side views on — now 3 / 7 with the turn (``rebuild_cost`` and the Build's plan, ``figure_build``,
     count with it)."""
-    return 1 + (len(dressed_views()) - 1)
+    return 1 + 2 * (len(dressed_views()) - 1)
 
 
 def side_arm_margin() -> float:
@@ -2867,7 +2867,9 @@ def stored_draft(character_name: str, view: str, signature: str, front: Optional
     meta = _ref_sidecar(draft)
     sha = meta.get("front_sha256")
     # Ruling A125: only a draft that is an edit of the base view is composited again.
-    return draft if sha and sha == file_sha256(front) and meta.get("draft_method") == DRAFT_BASE_EDIT else None
+    # Ruling A175: a draft whose second picture was not the cut-out turned front is never reused.
+    return (draft if sha and sha == file_sha256(front) and meta.get("draft_method") == DRAFT_BASE_EDIT
+            and meta.get("turned_second") else None)
 
 
 # --- Refused views (Ruling FR-I3) ---------------------------------------------------------
@@ -3281,6 +3283,11 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
     is not in the draft's reference either — no outfit text is sent — and
     the record goes into the draft's and the view's sidecar.
 
+    0. TURN + CUT OUT (Ruling A175, ``turned_cutout``): the dressed front
+       turned to the view (occasion ``TURN_OCCASION``, the angle LoRA's
+       prompt, ``turn_loras``), its background removed on the CPU — the
+       draft's SECOND picture; the draft's prompt names no clothing
+       (``picture_edit_prompt``). A second hub job per view.
     1. DRAFT (occasion ``DRAFT_OCCASIONS[view]``: ``outfit_back_draft`` /
        ``outfit_side_draft`` — the view's only hub job). Ruling A125: an
        EDIT of the base view of the same direction (input 1) with
@@ -3362,15 +3369,26 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
             draft_stem.parent.mkdir()
             try:
                 with _image_routing.retry_attempt(n):
+                    # Ruling A175: TURN the dressed front (step 1), CUT it OUT (step 2), then DRESS the
+                    # base view with the cut-out as the second picture and no clothing list (step 3).
+                    turn_stem = Path(staging) / f"turn{n}" / f"{kind}_{signature}_turn"
+                    turn_stem.parent.mkdir()
+                    second = turned_cutout(character_name, view, stem=turn_stem, front=front, refs_dir=refs_dir,
+                                           common=common, sidecar_extra={"dressed": True, f"{view}_turn": True,
+                                                                         "front_sha256": file_sha256(front)})
+                    if second is None:
+                        raise OutfitError(f"Dressed {view} turn failed")
                     draft = render_view_edit(
                         character_name, view, stem=draft_stem, base_view=base_view,
-                        second=reference if reference is not None else front, refs_dir=refs_dir,
-                        prompt=_view_edit_prompt(character_name, view, text=text, front=front, pieces=pieces,
-                                                 items=items, profile=profile, bald=bald, hair=hair,
-                                                 hair_edit=hair_edit),
+                        second=second, refs_dir=refs_dir,
+                        prompt=(picture_edit_prompt(character_name, view, profile=profile, bald=bald, hair=hair)
+                                if not hair_edit else
+                                _view_edit_prompt(character_name, view, text=text, front=front, pieces=pieces,
+                                                  items=items, profile=profile, bald=bald, hair=hair,
+                                                  hair_edit=hair_edit)),
                         occasion=DRAFT_OCCASIONS[view], common=common,
                         sidecar_extra={"base_signature": bsig, "dressed": True, f"{view}_draft": True,
-                                       "draft_method": DRAFT_BASE_EDIT,
+                                       "draft_method": DRAFT_BASE_EDIT, "turned_second": True,
                                        "front_sha256": file_sha256(front),
                                        **({"mesh_items": mesh_items} if mesh_items else {}), **(texture or {})})
             except Exception as e:  # noqa: BLE001 — a later draft never loses an earlier composite
@@ -3728,7 +3746,7 @@ def dressed_view_estimate(character_name: str, fig, signature: str, *,
     (``_reuse_texture_views``: the store's front made from the current base
     front, or one ``_adopt_texture_views`` would adopt; a back/side the
     store holds — or the adopted outfit has — following that front), else
-    the front 1 job (the edit) and every other view 1 (the draft; its
+    the front 1 job (the edit) and every other view 2 (the turn + the draft, Ruling A175; its
     composite onto the base view is CPU work, Task 11g) — 0 while the stored
     front stays and the view's stored draft follows it (``stored_draft``,
     Ruling C2: composited again, no job). A figure without a
@@ -3740,7 +3758,8 @@ def dressed_view_estimate(character_name: str, fig, signature: str, *,
                if dressed_image(character_name, v, signature, fig.bsig, fig=fig) is None]
     if not missing or not fig.texture:
         return 0
-    jobs = {v: 1 for v in missing}
+    # Ruling A175: a back/side view is a turn + a draft (2 jobs), the front 1.
+    jobs = {v: 1 if v == "front" else 2 for v in missing}
     if "front" not in missing:
         # Ruling C2: a back/side whose stored draft follows the outfit's front is composited from it again.
         front_now = find_ref_image(character_name, "tpose", signature)
@@ -4243,6 +4262,84 @@ def edit_second_picture(view: str) -> str:
     return EDIT_SECOND_PICTURE.format(seen=_EDIT_SEEN.get(view, ""))
 
 
+#: Ruling A175 (user method 2026-11-17): step 1 of a dressed back/side view
+#: turns the dressed front with a camera-angle LoRA; ``[SUBJECT]`` is filled
+#: like the turn prompts (``DRAFT_PROMPTS``: "the same person").
+TURN_OCCASION = "outfit_back_turn"
+#: The angle LoRA's trained prompts, verbatim (user, 2026-11-17), keyed by
+#: shot; ``TURN_VIEW_SHOTS`` picks the one per dressed view.
+ANGLE_LORA_PROMPTS = {
+    "front": "Make the shot a full body front view of the [SUBJECT].",
+    "three_quarter_left": "Make the shot a full body three-quarter view of the [SUBJECT] facing left.",
+    "three_quarter_right": "Make the shot a full body three-quarter view of the [SUBJECT] facing right.",
+    "side_left": "Make the shot a full body side view of the [SUBJECT] facing left.",
+    "side_right": "Make the shot a full body side view of the [SUBJECT] facing right.",
+    "three_quarter_rear_left": "Make the shot a full body three-quarter rear view of the [SUBJECT] turned left.",
+    "three_quarter_rear_right": "Make the shot a full body three-quarter rear view of the [SUBJECT] turned right.",
+    "rear": "Make the shot a full body rear view of the [SUBJECT].",
+    "waist_front": "Make the shot a waist up front view of the [SUBJECT].",
+    "waist_three_quarter_left": "Make the shot a waist up three-quarter view of the [SUBJECT] facing left.",
+    "waist_three_quarter_right": "Make the shot a waist up three-quarter view of the [SUBJECT] facing right.",
+    "waist_side_left": "Make the shot a waist up side view of the [SUBJECT] facing left.",
+    "waist_side_right": "Make the shot a waist up side view of the [SUBJECT] facing right.",
+    "high_angle": "Make the shot a high angle view of the [SUBJECT].",
+}
+#: The base view "left" is the figure in profile facing the LEFT edge of the
+#: frame (``DRESS_VIEW``), so it takes "facing left"; "right" likewise.
+TURN_VIEW_SHOTS = {"back": "rear", "left": "side_left", "right": "side_right"}
+TURN_PROMPTS = {view: ANGLE_LORA_PROMPTS[shot] for view, shot in TURN_VIEW_SHOTS.items()}
+TURN_SUBJECT = "person"
+
+
+def turn_prompt(view: str) -> str:
+    return TURN_PROMPTS[view].replace("[SUBJECT]", TURN_SUBJECT)
+
+
+def turn_loras() -> list:
+    """The configured turn LoRA (``image_generation.outfit_turn_lora``) as a
+    STORED LoRA list — the library gate drops it per backend (no hardcoded
+    model, any backend may be routed)."""
+    from app.core import config
+    name = str(config.get("image_generation.outfit_turn_lora", "") or "").strip()
+    if not name:
+        return []
+    try:
+        strength = float(config.get("image_generation.outfit_turn_lora_strength", 1.0))
+    except (TypeError, ValueError):
+        strength = 1.0
+    return [{"name": name, "strength": strength}]
+
+
+def render_turn(character_name: str, view: str, *, stem: Path, front: Path, refs_dir: Path,
+                common: Dict[str, Any], sidecar_extra: Dict[str, Any]) -> Optional[Path]:
+    """Step 1 (Ruling A175): the dressed ``front`` turned to ``view`` (occasion
+    ``TURN_OCCASION``, prompt ``turn_prompt``, LoRA ``turn_loras``), cut back
+    to the front's frame. None when the render returned nothing."""
+    from app.core import expression_regen
+    from app.core.garment_images import square_reference
+    with square_reference(front, refs_dir) as (reference, side, offset, source_size):
+        return expression_regen.render_character_image(
+            character_name, output_stem=stem, bare_prompt=turn_prompt(view), extra_negative="",
+            occasion=TURN_OCCASION, reference_image=reference, require_reference=True,
+            expression_set_loras=turn_loras(), sidecar_extra=sidecar_extra,
+            **{**common, "image_use_case": DRESS_USE_CASE, "override_width": side, "override_height": side,
+               "crop_back_to": (side, offset, source_size)})
+
+
+def turned_cutout(character_name: str, view: str, *, stem: Path, front: Path, refs_dir: Path,
+                  common: Dict[str, Any], sidecar_extra: Dict[str, Any]) -> Optional[Path]:
+    """Steps 1+2 (Ruling A175): ``render_turn`` then its background removed
+    (``cut_out``, CPU) into ``<stem>_cut.png`` — the draft edit's second
+    picture. None when the turn returned nothing."""
+    turned = render_turn(character_name, view, stem=stem, front=front, refs_dir=refs_dir, common=common,
+                         sidecar_extra=sidecar_extra)
+    if turned is None:
+        return None
+    out = stem.parent / f"{stem.name}_cut.png"
+    cut_out(Path(turned)).save(out)
+    return out
+
+
 def render_view_edit(character_name: str, view: str, *, stem: Path, base_view: Path, second: Optional[Path],
                      refs_dir: Path, prompt: Tuple[str, str], occasion: str, common: Dict[str, Any],
                      sidecar_extra: Dict[str, Any]) -> Optional[Path]:
@@ -4285,6 +4382,14 @@ def _view_edit_prompt(character_name: str, view: str, *, text: str, front: Path,
                                 bald=bald, hair=hair, hair_edit=hair_edit)
         except ValueError:
             continue
+    return picture_edit_prompt(character_name, view, profile=profile, bald=bald, hair=hair)
+
+
+def picture_edit_prompt(character_name: str, view: str, *, profile: Dict[str, Any], bald: bool,
+                        hair: Optional[str]) -> Tuple[str, str]:
+    """The back/side edit whose clothing comes ONLY from the second picture
+    (Ruling A175: the cut-out turned front): the view sentence, the keep
+    sentence and ``EDIT_FROM_SECOND_PICTURE`` — no clothing list."""
     from app.core.garment_hair import BALD
     haired = bool(hair_text(character_name, profile=profile) if hair is None else ("" if hair == BALD else hair))
     keep = DRESS_KEEP_HAIR if haired and not bald else DRESS_KEEP
