@@ -927,6 +927,8 @@ const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() 
 // Eight clips bound each work slice; 12 ms leaves time for rendering at 60 Hz.
 const FIT_SLICE_CLIPS = 8;
 const FIT_SLICE_MS = 12;
+/** A strand record that failed for a passing reason is asked for again after this long (`strandRecord`). */
+const STRAND_RETRY_MS = 30_000;
 
 export class FigureLibrary {
   state: 'loading' | 'ready' | 'failed' = 'loading';
@@ -971,9 +973,12 @@ export class FigureLibrary {
   private apiRevision = new Map<string, string>();
   private motionState = new Map<string, { payload: MotionPayload | undefined }>();
   /** Strand records by sha256 (`ApiModel.hairStrands`): the record, null when
-   *  it could not be had, a promise while it loads. Several figures of one
-   *  model — and a tier swap back — share one download. */
+   *  there is none (404, another record version), a promise while it loads.
+   *  Several figures of one model — and a tier swap back — share one download. */
   private strandRecords = new Map<string, HairStrandRecord | null | Promise<void>>();
+  /** A sha whose download failed for a passing reason (network, 5xx, the server
+   *  already serving another record): not before this time (ms) again. */
+  private strandRetryAt = new Map<string, number>();
   private modelQueue = createFocusQueue({ max: 3 }); // Limit concurrent model downloads and builds.
   private modelFocus: (name: string) => { distance: number; avatar: boolean } =
     () => ({ distance: 0, avatar: false });
@@ -1277,21 +1282,30 @@ export class FigureLibrary {
   }
   private clipListingAtLoad = new Map<string, string>();
 
-  /** The strand record `ref` names: the record, null when it cannot be had
-   *  (404, network, another record version), undefined while it loads (the
-   *  first call starts the download). */
+  /** The strand record `ref` names: the record, null when there is none (404,
+   *  another record version), undefined while it loads (the first call starts
+   *  the download). The URL always serves the CURRENT record: an answer whose
+   *  ETag is not `"<sha256>"` belongs to another model and is never kept under
+   *  this sha (its rows would land on the wrong cards); it and a network error
+   *  or 5xx stay undefined and are asked again after `STRAND_RETRY_MS`. */
   strandRecord(ref: { url: string; sha256: string }): HairStrandRecord | null | undefined {
     const hit = this.strandRecords.get(ref.sha256);
     if (hit === undefined) {
+      if (performance.now() < (this.strandRetryAt.get(ref.sha256) ?? 0)) return undefined;
+      const later = (why: unknown) => {
+        console.warn('[figures] strand record not loadable now, retrying later:', ref.url, why);
+        this.strandRecords.delete(ref.sha256);
+        this.strandRetryAt.set(ref.sha256, performance.now() + STRAND_RETRY_MS);
+      };
       this.strandRecords.set(ref.sha256, fetch(ref.url)
         .then(async (res) => {
-          const record = res.ok ? await res.json() as HairStrandRecord : null;
+          if (res.status === 404) { this.strandRecords.set(ref.sha256, null); return; }
+          if (!res.ok) { later(res.status); return; }
+          if (res.headers.get('ETag') !== `"${ref.sha256}"`) { later(`ETag ${res.headers.get('ETag')}`); return; }
+          const record = await res.json() as HairStrandRecord;
           this.strandRecords.set(ref.sha256, record && record.version === STRAND_RECORD_VERSION ? record : null);
         })
-        .catch((e) => {
-          console.warn('[figures] strand record not loadable:', ref.url, e);
-          this.strandRecords.set(ref.sha256, null);
-        }));
+        .catch(later));
       return undefined;
     }
     return hit instanceof Promise ? undefined : hit;
