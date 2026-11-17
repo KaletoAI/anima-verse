@@ -87,11 +87,14 @@ def _members(profile: Dict[str, Any], leaving: str) -> Dict[str, str]:
 
 def covered(start: str, target: str, start_role: str = "", target_role: str = "") -> bool:
     """Whether a rule plays an existing bridge clip for this switch — the
-    lookup the clients switch by, for the role on the multi-person side."""
-    from app.core.animation_clips import clip_meta, resolve_pose_transition, rule_kind
+    lookup the clients switch by, for the role on the multi-person side.
+    The bridge counts when a SOLO clip of its kind exists in any set of
+    either library — the availability the runtime table uses
+    (``effective_transitions``); a sidecar is not needed to play a clip."""
+    from app.core.animation_clips import clip_entries, resolve_pose_transition, rule_kind
     rule = resolve_pose_transition(start, target)
     kind = rule_kind(rule, start_role or target_role) if rule else ""
-    return bool(kind and clip_meta(kind))
+    return bool(kind) and any(e["kind"] == kind and not e["role"] for e in clip_entries())
 
 
 def _count(name: str, src: str, dst: str, start_role: str, target_role: str, cset: str) -> None:

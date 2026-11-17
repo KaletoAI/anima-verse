@@ -31,6 +31,12 @@ ones: none at first. Hand-derived from ``transition_misses``:
       names p-lost ("pose animation missing from library").
   [9] dismiss hides the row; dismissing an unknown row answers False; the
       routes answer the same list and 404 for an unknown row.
+  [10] a bridge that lives only in a SET and has no sidecar still covers
+      (review 04#8): ``female/bow-wave.fbx`` (no ``bow-wave.json`` anywhere),
+      world rule p-bow -> p-wave with bridge "bow-wave" → the row
+      p-bow -> p-wave (count 1 from [3]) leaves the suggestions, and a new
+      switch p-bow -> p-wave is not counted (still 1). The old check asked
+      for a ROOT sidecar (``clip_meta(kind)``) and kept listing it.
 """
 import asyncio
 import json
@@ -166,6 +172,18 @@ def main():
             assert e.status_code == 404
         assert asyncio.run(post({"start_pose": "p-wave", "target_pose": "walking", "cset": "female"})) == {"ok": True}
         print("[9] PASS: dismiss and the routes")
+
+        (ROOT / "free" / "female").mkdir()
+        (ROOT / "free" / "female" / "bow-wave.fbx").write_bytes(b"dummy")
+        clips.reload_clip_caches()
+        clips.replace_world_transitions(
+            [{"from": "p-wave", "to": "p-bow", "kind": "wave-bow", "accel": 0},
+             {"from": "p-bow", "to": "p-wave", "kind": "bow-wave", "accel": 0}])
+        assert ("p-bow", "p-wave", "", "") not in listed(), listed().keys()
+        assert rows()[("p-bow", "p-wave", "", "")][1] == 1
+        M.note_switch("Ava", "p-bow", "p-wave")
+        assert rows()[("p-bow", "p-wave", "", "")][1] == 1, rows()
+        print("[10] PASS: a set-only bridge without a sidecar covers its switch")
 
 
 if __name__ == "__main__":
