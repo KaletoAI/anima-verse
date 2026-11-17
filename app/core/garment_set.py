@@ -380,6 +380,16 @@ LAYER_STACKS: Tuple[Tuple[str, ...], ...] = (
 )
 
 
+#: A192: the slots worn UNDER the shoe (hosiery). Footwear is rigid and keeps its fit: the piece under it is taken
+#: into the shoe like the foot is (``garment_assembly``: the shoe's body cut applied to the piece).
+UNDER_FOOTWEAR_SLOTS: Tuple[str, ...] = ("legs",)
+
+
+def under_footwear(item: Optional[Dict[str, Any]]) -> bool:
+    """Whether the outfit piece ``item`` is worn under the shoe (a slot of ``UNDER_FOOTWEAR_SLOTS``)."""
+    return bool(_worn_slots(item or {}) & set(UNDER_FOOTWEAR_SLOTS))
+
+
 def _stacked_over(upper: set, lower: set) -> bool:
     """Whether a piece worn on ``upper`` lies over one worn on ``lower`` by ``LAYER_STACKS``."""
     return any(a in stack and b in stack and stack.index(a) > stack.index(b)

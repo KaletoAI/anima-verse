@@ -874,6 +874,30 @@ def _uppers(grafted: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
     return out
 
 
+def _into_shoe(mesh: Any, garment: Dict[str, Any], shoe: Dict[str, Any], body_blob: bytes) -> Optional[Tuple[Any, Dict[str, Any]]]:
+    """A192: a piece worn under the shoe (``garment_set.under_footwear``: hosiery) is taken into the shoe the way
+    the foot is — the shoe's fit record ``cut`` applied to the piece (``footwear_cut.apply_cut``: what stands
+    outside the shoe's inside is drawn in, what lies inside the shoe is removed), so the stocking ends at the shoe's
+    opening instead of standing through its upper. The shoe keeps its fit. None for a piece that is not worn under
+    the shoe, has morph targets or lacks the foot joints; else ``(mesh, stats)``."""
+    from app.core import footwear_cut, garment_set, glb_mesh
+    from app.core.garment_layers import _mesh_prim, _prim_mesh
+    cut = (shoe.get("record") or {}).get("cut")
+    if (not garment_set.under_footwear(garment.get("item")) or mesh.targets or mesh.extra_attributes
+            or not isinstance(cut, dict)):
+        return None
+    try:
+        prim, stats = footwear_cut.apply_cut(_mesh_prim(mesh), cut, glb_mesh.joint_bind_matrices(body_blob))
+    except ValueError as e:
+        logger.info("Garment assembly: %s is not taken into the shoe %s: %s", garment["item_id"], shoe["item_id"], e)
+        return None
+    out = {"shoe": shoe["item_id"], "removed_faces": int(stats["removed_faces"]),
+           "bisected_faces": int(stats["bisected_faces"]), "new_vertices": int(stats["new_vertices"])}
+    logger.info("Garment assembly: %s taken into the shoe %s — %d faces removed / %d bisected", garment["item_id"],
+                shoe["item_id"], out["removed_faces"], out["bisected_faces"])
+    return _prim_mesh(prim, mesh), out
+
+
 def _hide_under_upper(mesh: Any, body_blob: bytes, uppers: List[Dict[str, Any]], tier: str) -> Dict[str, Any]:
     """Drop the faces of the lower template piece ``mesh`` (in place) that the ``uppers`` cover; returns the stats.
     Vertices and morph targets stay (only the index list shrinks)."""
@@ -971,6 +995,7 @@ def _build(character_name: str, directory: Path, bare: Path,
         blob = without_covered_parts(blob, list(hidden))
     grafted = [g for g in wanted if g["fit"] is not None]  # never a pending one (``_wanted`` with build_layers fits first)
     foot_pose: Optional[Dict[str, Any]] = None
+    shoe: Optional[Dict[str, Any]] = None
     for garment in grafted:
         if garment["kind"] != FOOTWEAR:
             continue
@@ -978,6 +1003,7 @@ def _build(character_name: str, directory: Path, bare: Path,
         if not isinstance(pose, dict):
             raise ValueError(f"footwear fit {garment['item_id']} {garment['fsig']} carries no foot_pose")
         blob = _cut_body(blob, garment, tier)
+        shoe = garment
         # The BARE body's rest measurements ride with the record (``footwear_rest``, Task 20b): the served
         # body is cut under the shoe, so the renderers' bind-pose anchor and rest soles must not read it.
         # Measured on ``data`` — the very bare file this assembly is built from — and overriding what the fit
@@ -1016,6 +1042,11 @@ def _build(character_name: str, directory: Path, bare: Path,
                                           material_overrides=material_overrides)
             continue
         mesh = glb_mesh.garment_arrays(source)
+        if shoe is not None and garment["kind"] == CLOTHING:
+            taken = _into_shoe(mesh, garment, shoe, blob)
+            if taken is not None:
+                mesh = taken[0]
+                cover.setdefault("under_shoe", {})[garment["item_id"]] = taken[1]
         if under.get(garment["item_id"]):
             cover.setdefault("under", {})[garment["item_id"]] = _hide_under_upper(mesh, data, under[garment["item_id"]],
                                                                                    tier)
