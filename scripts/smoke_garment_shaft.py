@@ -43,6 +43,23 @@ Expected, by hand:
 [S9] (A177) push_exempt on the boot pair with ring spacing 0.0099 m (ring i at h = 0.0099 i; ring 48 at 0.4752 <=
      0.48, ring 49 at 0.4851 > 0.48) and translated by (0.3, 1.0, 0.2) (the rule is frame-free): split -> rings
      0..48 = 49 rings x 16 x 2 sides = 1568 of 2592 vertices; cut -> all 2592.
+[S10] (A182) split(.., "whole"): one part, every face: shoe 2 x 80 bands x 32 = 5120, leg 0, dropped 0. The top
+     ring (h 0.80) is the highest vertex of every sector -> rim_low = rim_high = 800 mm; body_overlap 20 cm (default)
+     -> body_cut_mm 600, body_cut_y_m 0.6 (sole y 0); body_overlap_m 0.15 -> 650. The whole boot's shaft weights:
+     a vertex on ring 0.30 carries Leg 1.0 as in [S4].
+[S11] (A182) push_exempt "whole" on the [S9] pair (top ring 80 at 0.792): below 0.792 - 0.20 = 0.592 -> rings
+     0..59 (ring 59 at 0.5841, ring 60 at 0.594) = 60 rings x 32 = 1920 (the shoe rings 0..48 are inside them).
+     gate_exempt "whole" on the unscaled pair, body_overlap 0.205 (cut 0.595, clear of a ring): rings 0..59 = 1920;
+     gate_exempt "split" -> None.
+[S12] (A182) garment_assembly.cut_legs: a left strip (x 0.10/0.11) and a right strip (x -0.10/-0.11), vertex pairs
+     at y = 0.0 .. 0.5 step 0.1, two faces per segment (10 per strip), weighted LeftLeg / RightLeg 1.0, and one Hips
+     triangle at y 0.05: 21 faces. Cut {"left": 0.25}: the left segments whose 4 corners lie below 0.25 = segments
+     0 (0.0-0.1) and 1 (0.1-0.2) -> 4 faces dropped, 17 kept; vertices left unused: the 4 at y 0.0 and 0.1; skin
+     ends at 0.2 (ring 2 is still used by segment 2). The right strip and the Hips triangle (below the cut, but no
+     leg weight) stay.
+[S13] (A182) settings: normalise({})["body_overlap"] 20; validate({"body_overlap": 25}) -> 25; 4, 41, 7.5, True
+     refused; body_overlap_cm({"body_overlap": 99}) -> 40; "whole" in SHAFT_CHOICES; leg_cut_of reads a whole
+     record's body_cut_y_m per side and gives None for a split record.
 """
 import math
 import sys
@@ -224,6 +241,63 @@ ex = garment_shaft.push_exempt(P9, g9.indices, "split")
 check("[S9] split exempts rings 0..48", int(ex.sum()) == 1568 and len(ex) == 2592, f"{int(ex.sum())} / {len(ex)}")
 ex = garment_shaft.push_exempt(P9, g9.indices, "cut")
 check("[S9] cut exempts all", int(ex.sum()) == 2592, str(int(ex.sum())))
+
+# --- A182: the whole boot, body leg cut off inside -------------------------------------------------------------
+g10, rep = garment_shaft.split(boot(), B, JOINTS, "whole")
+f = rep["faces"]
+check("[S10] whole faces", (f["shoe"], f["leg"], f["dropped"]) == (5120, 0, 0), str(f))
+sides = rep["sides"]
+check("[S10] rim + body cut", all((sides[s]["rim_low_mm"], sides[s]["rim_high_mm"], sides[s]["body_cut_mm"],
+                                   sides[s]["body_cut_y_m"]) == (800, 800, 600, 0.6) for s in ("left", "right")),
+      str(sides["left"]))
+_g, rep15 = garment_shaft.split(boot(), B, JOINTS, "whole", body_overlap_m=0.15)
+check("[S10] body overlap 15", rep15["sides"]["left"]["body_cut_mm"] == 650, str(rep15["sides"]["left"]))
+Pw = np.asarray(g10.positions); row = int(np.nonzero((np.abs(Pw[:, 1] - 0.30) < 1e-9) & (Pw[:, 0] > 0))[0][0])
+names = {g10.joint_names[j]: w for j, w in zip(g10.joints[row], g10.weights[row]) if w > 0}
+check("[S10] shaft weights Leg", list(names) == ["LeftLeg"] and abs(names["LeftLeg"] - 1) < 1e-9, str(names))
+ex = garment_shaft.push_exempt(P9, g9.indices, "whole")
+check("[S11] push_exempt whole rings 0..59", int(ex.sum()) == 1920, str(int(ex.sum())))
+gb = boot()
+ex = garment_shaft.gate_exempt(gb.positions, gb.indices, "whole", 0.1, -0.1, 0.205)
+check("[S11] gate_exempt whole rings 0..59", ex is not None and int(ex.sum()) == 1920,
+      str(None if ex is None else int(ex.sum())))
+check("[S11] gate_exempt split None", garment_shaft.gate_exempt(gb.positions, gb.indices, "split", 0.1, -0.1) is None)
+
+from app.core.garment_assembly import cut_legs  # noqa: E402
+from app.core.glb_mesh import Prim  # noqa: E402
+P12, F12, J12, W12 = [], [], [], []
+for x0, dx, j in ((0.10, 0.01, 1), (-0.10, -0.01, 2)):
+    base = len(P12)
+    for i in range(6):
+        P12 += [(x0, 0.1 * i, 0.0), (x0 + dx, 0.1 * i, 0.0)]
+        J12 += [(j, 0, 0, 0)] * 2; W12 += [(1, 0, 0, 0)] * 2
+    for i in range(5):
+        a = base + 2 * i
+        F12 += [(a, a + 1, a + 3), (a, a + 3, a + 2)]
+base = len(P12)
+P12 += [(0, 0.05, 0), (0.01, 0.05, 0), (0, 0.06, 0)]; J12 += [(0, 0, 0, 0)] * 3; W12 += [(1, 0, 0, 0)] * 3
+F12 += [(base, base + 1, base + 2)]
+prim = Prim(positions=np.array(P12, float), faces=np.array(F12, np.int64), joints=np.array(J12, np.int64),
+            weights=np.array(W12, float), joint_names=["mixamorig:Hips", "mixamorig:LeftLeg", "mixamorig:RightLeg"])
+out, st = cut_legs([prim], {"left": 0.25})
+left = st["sides"]["left"]
+check("[S12] 4 faces dropped, 17 kept", 0 in out and len(out[0].faces) == 17 and left["removed_faces"] == 4, str(st))
+check("[S12] 4 vertices unused, skin ends at 0.2", left["removed_vertices"] == 4
+      and abs(left["skin_end_y_m"] - 0.2) < 1e-9, str(left))
+kept = {tuple(f) for f in out[0].faces.tolist()}
+check("[S12] right strip + hips kept", all(tuple(f) in kept for f in F12[10:]))
+
+check("[S13] default 20", garment_fit_settings.normalise({})["body_overlap"] == 20)
+check("[S13] validate 25", garment_fit_settings.validate({"body_overlap": 25}) == {"body_overlap": 25})
+for bad in (4, 41, 7.5, True):
+    try:
+        garment_fit_settings.validate({"body_overlap": bad}); check(f"[S13] {bad!r} refused", False)
+    except ValueError:
+        check(f"[S13] {bad!r} refused", True)
+check("[S13] clamp + choices", garment_shaft.body_overlap_cm({"body_overlap": 99}) == 40
+      and "whole" in garment_shaft.SHAFT_CHOICES)
+check("[S13] leg_cut_of", garment_shaft.leg_cut_of({"report": {"shaft": rep}}) == {"left": 0.6, "right": 0.6}
+      and garment_shaft.leg_cut_of({"report": {"shaft": {"mode": "split"}}}) is None)
 
 print("FAILED: " + ", ".join(FAILS) if FAILS else "all passed")
 sys.exit(1 if FAILS else 0)
