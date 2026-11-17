@@ -34,6 +34,12 @@ async function render(url: string, width: number, height: number): Promise<strin
   const object = gltf.scene
   try {
     zeroViewerMetalness(object)
+    // The browser drops the OLDEST WebGL context once too many are live — often this long-kept one. A lost
+    // context draws nothing, so it is replaced, and a picture made on one is refused (never cached blank).
+    if (renderer?.getContext().isContextLost()) {
+      renderer.dispose()
+      renderer = null
+    }
     if (!renderer) {
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true })
       renderer.setPixelRatio(2)
@@ -65,6 +71,7 @@ async function render(url: string, width: number, height: number): Promise<strin
     camera.lookAt(centre)
     renderer.setClearColor(0x000000, 0)
     renderer.render(scene, camera)
+    if (renderer.getContext().isContextLost()) throw new Error('WebGL context lost')
     return renderer.domElement.toDataURL('image/png')
   } finally {
     disposeScene(object)
