@@ -115,6 +115,8 @@ _again: set = set()
 # (character, signature) -> the input key of a build that failed: the same
 # inputs are not retried on every request (a new bare file, fit or equip is).
 _failed: Dict[Tuple[str, str], str] = {}
+# (character, signature) -> the error of that failed build (A181: the Build reports it).
+_errors: Dict[Tuple[str, str], str] = {}
 
 #: The ``garment_warnings`` entry of a second footwear piece in one outfit (spec § 11: a data error, left off).
 FOOTWEAR_SECOND = "{item}: a second shoe piece in one outfit — left off"
@@ -1051,13 +1053,14 @@ def _input_key(character_name: str, signature: str) -> str:
                         _hidden_parts(character_name, bare_meta)] for t in TIERS], sort_keys=True)
 
 
-def schedule(character_name: str, signature: Optional[str] = None) -> bool:
+def schedule(character_name: str, signature: Optional[str] = None, *, retry: bool = False) -> bool:
     """Ask for a background (re)build of the assembled model of ``signature``
     (None = the model the current outfit serves, else the current outfit
     signature). One build per (character, signature) at a time — a request
     while one runs makes it run once more. Inside a staged model operation
     the request waits for that operation's publication. A build that failed
-    is not retried with unchanged inputs. True if started (or deferred)."""
+    is not retried with unchanged inputs unless ``retry`` (a manual Build, A181). True if started (or
+    deferred)."""
     try:
         model3d = _model3d()
         if signature is None:
@@ -1077,6 +1080,9 @@ def schedule(character_name: str, signature: Optional[str] = None) -> bool:
             requests.add(signature)
             return True
         key = (character_name, signature)
+        if retry:
+            _failed.pop(key, None)
+            _errors.pop(key, None)
         directory = model3d.get_model3d_dir(character_name)
         if not _wanted_for(character_name, directory, signature) and not any(
                 p.exists() for t in TIERS
@@ -1112,8 +1118,10 @@ def _run(key: Tuple[str, str]) -> None:
                 result, inputs = {"ok": False, "error": str(e)}, ""
             if result.get("ok"):
                 _failed.pop(key, None)
+                _errors.pop(key, None)
             elif inputs:
                 _failed[key] = inputs
+                _errors[key] = str(result.get("error") or "failed")
             with _lock:
                 # Leave the in-flight set in the same critical section that
                 # saw no new request, so no request falls between the two.
@@ -1125,6 +1133,31 @@ def _run(key: Tuple[str, str]) -> None:
             _building.discard(key)
             _again.discard(key)
         raise
+
+
+def wait_for(character_name: str, signature: str, timeout: float = 300.0) -> bool:
+    """Block until no background build of ``(character_name, signature)`` runs. True when it is done."""
+    import time
+    key = (character_name, signature)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with _lock:
+            if key not in _building:
+                return True
+        time.sleep(0.05)
+    return False
+
+
+def failure(character_name: str, signature: str) -> str:
+    """The error of the last build of ``signature`` when it failed and its inputs are still the same, else ""
+    (A181: the Build's assembly step reports it instead of a silent bare figure). Never raises."""
+    key = (character_name, signature)
+    try:
+        if key in _failed and _failed.get(key) == _input_key(character_name, signature):
+            return _errors.get(key, "failed")
+    except Exception:  # noqa: BLE001
+        logger.debug("Garment assembly %s: failure not read", character_name, exc_info=True)
+    return ""
 
 
 def wait_idle(timeout: float = 30.0) -> bool:

@@ -1917,12 +1917,27 @@ def _run_assemble(character_name: str, step: Step, explicit: bool = False) -> st
     error = _outfit_model(character_name, wanted.signature)
     if not error:
         base_body.clear_assemble_refusal(character_name, wanted.signature)
-        garment_assembly.schedule(character_name, wanted.signature)
+        # A181: the garment assembly is what puts the pieces on — a manual Build retries a failed one, and the
+        # step waits for it so a failure is the step's error, never a silently bare figure.
+        garment_assembly.schedule(character_name, wanted.signature, retry=explicit)
+        if not garment_assembly.wait_for(character_name, wanted.signature, timeout=ASSEMBLY_WAIT_S):
+            return ASSEMBLY_SLOW
+        failed = garment_assembly.failure(character_name, wanted.signature)
+        if failed:
+            return ASSEMBLY_FAILED.format(error=failed)
     elif base_body.outfit_refusal(character_name, wanted.signature) == error:
         # Ruling A61: the same inputs would be refused again — recorded for the figure delivered NOW, the one the
         # next plan judges; an automatic Build waits for a person or a change of the inputs.
         base_body.record_assemble_refusal(character_name, wanted.signature, _now(character_name)[2], error)
     return error
+
+
+#: How long the assembly step waits for the garment assembly it scheduled (A181; CPU, measured ~2 s on Kai).
+ASSEMBLY_WAIT_S = 600.0
+#: The assembly step's error when the garment assembly failed (A181): the figure stays bare until it is fixed.
+ASSEMBLY_FAILED = "Pieces not put on — the garment assembly failed: {error}"
+#: ... and when it did not finish in time.
+ASSEMBLY_SLOW = "Pieces not put on yet — the garment assembly is still running"
 
 
 _RUNNERS: Dict[str, Callable[[str, Step, bool], str]] = {

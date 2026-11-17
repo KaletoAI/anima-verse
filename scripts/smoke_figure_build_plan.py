@@ -306,7 +306,7 @@ def install_stubs():
         W.model_fig = W.delivered().as_dict()
         return {"ok": True}
     model3d.generate_for_current_outfit = outfit_model
-    garment_assembly.schedule = lambda c, sig=None: (W.record("schedule"), True)[1]
+    garment_assembly.schedule = lambda c, sig=None, **_k: (W.record("schedule"), True)[1]
 
     @contextlib.contextmanager
     def slot(c, poll_s=1.0):
