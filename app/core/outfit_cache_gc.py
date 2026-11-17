@@ -281,24 +281,27 @@ def _ref_files(character_name: str) -> Dict[str, List[Path]]:
 
 def _mesh_files(character_name: str) -> Dict[str, List[Path]]:
     """signature → its mesh files (model + sidecar + texture), including the
-    reduced tiers (``low/``), the raw backups (``raw/``), a base body's
+    reduced tiers (``low/``), the raw backups (``raw/``), the mesher's
+    original of the unrigged source (``unrigged/mesher/``, read only beside
+    ``unrigged/<sig>.glb`` of the same signature), a base body's
     covered variant (``covered/``) and the garment
     assemblies (``assembled/``, ``assembled/low/``) of the same signature —
     exactly what ``model3d._purge_combination`` removes."""
     from app.blender.refine import RAW_DIR_NAME
-    from app.core.model3d import ASSEMBLED_DIR, COVERED_DIR, FULL_TIER, MODEL_EXTS, MODEL_TIERS
+    from app.core.model3d import ASSEMBLED_DIR, COVERED_DIR, FULL_TIER, MESHER_DIR, MODEL_EXTS, MODEL_TIERS
     from app.models.character import get_character_dir
     out: Dict[str, List[Path]] = {}
     d = get_character_dir(character_name) / "model3d"
     if not d.exists():
         return out
     keep = MODEL_EXTS + (".json", ".png", ".jpg", ".jpeg")
-    subdirs = [d / t for t in MODEL_TIERS if t != FULL_TIER] + [d / "unrigged", d / "facefix", d / "facefix-ref", d / RAW_DIR_NAME, d / "prerig", d / "low" / "prerig", d / "low" / RAW_DIR_NAME,
+    mesher = d / MESHER_DIR
+    subdirs = [d / t for t in MODEL_TIERS if t != FULL_TIER] + [d / "unrigged", mesher, d / "facefix", d / "facefix-ref", d / RAW_DIR_NAME, d / "prerig", d / "low" / "prerig", d / "low" / RAW_DIR_NAME,
                                                                d / COVERED_DIR, d / ASSEMBLED_DIR, d / ASSEMBLED_DIR / "low"]
     for folder in [d] + subdirs:
         if not folder.is_dir():
             continue
-        any_suffix = folder.name in (RAW_DIR_NAME, "prerig", "unrigged", "facefix", "facefix-ref")    # the purger takes raw/<sig>.*
+        any_suffix = folder == mesher or folder.name in (RAW_DIR_NAME, "prerig", "unrigged", "facefix", "facefix-ref")    # the purger takes raw/<sig>.*
         for p in sorted(folder.iterdir()):
             if p.is_file() and (any_suffix or p.suffix.lower() in keep):
                 out.setdefault(p.stem, []).append(p)
