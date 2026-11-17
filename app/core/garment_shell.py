@@ -25,6 +25,14 @@ by ``garment_fit.fit_clothing``. ``shape_of`` is the one rule: the shape a fit o
    eroded ghost mask (no background grey), a side sample the median of the 12 nearest head-on samples at the band's
    matched height, blended front→back along the arc.
 
+**Side views** (A185, the piece's fit setting "Side views for the shell", ``shell_sides``, off by default): the piece
+also has left / right piece-only views, and ``build_shell`` reads them as 3rd / 4th views — projected along the body's
+depth (z horizontal, the camera on the ±x side the silhouette names). A side view counts a point only where it sees
+it well (``side_view_ok``: normal · view >= ``SIDE_FACING_MIN``, depth window 1.5 cm like the front / back) and
+neither the front nor the back sees it frontally (>= ``FRONTAL_MIN``): there the front / back masks decide and a
+side never adds. In the side band its mask replaces the bridge's estimate; it colours what it sees. "Take from the
+body" and "Fill holes up to" apply after the merge as before.
+
 The shell is already on the body (bind space of the rigged base), so the fit step only grafts it: no placement, no
 push, no allowance (the width/depth/sleeve settings do not apply to a shell). Its record names ``mesh_shape:
 "shell"`` and the metrics (``inside_share`` = vertices more than 2 mm under the skin, exact point-triangle distance).
@@ -84,8 +92,22 @@ def shell_fill_choice(raw: Optional[Dict[str, Any]]) -> int:
     return FILL_DEFAULT
 
 
+def shell_sides_choice(raw: Optional[Dict[str, Any]]) -> bool:
+    """"Side views for the shell" (``shell_sides``, A185): True only for a stored ``True`` (default off)."""
+    return isinstance(raw, dict) and raw.get("shell_sides") is True
+
+
+#: A185: the views a shell piece with "Side views for the shell" adds as its 3rd / 4th piece-only views.
+SIDE_VIEWS: Tuple[str, ...] = ("left", "right")
+#: A185: a side view counts a body vertex as covered only where the surface faces its camera at least this much
+#: (normal · view direction; measured on Glut's bra, see the A185 report) — a grazing surface is seen too thin.
+SIDE_FACING_MIN = 0.5
+#: A185: where the front or back camera sees a vertex at least this frontally, ITS mask decides and a side view never
+#: adds the vertex (front/back win where they look frontally).
+FRONTAL_MIN = 0.6
+
 #: The fit settings that shape a shell only (a generated mesh's fit is not due for them).
-SHELL_SETTING_KEYS: Tuple[str, ...] = ("shell_offset", "shell_margin", "shell_fill")
+SHELL_SETTING_KEYS: Tuple[str, ...] = ("shell_offset", "shell_margin", "shell_fill", "shell_sides")
 #: Texture size of the baked shell (px).
 TEXTURE_PX = 2048
 #: A vertex this far under the skin (m) counts as inside (``inside_share``).
@@ -509,6 +531,15 @@ def fill_small_holes(P, F, attrs, max_area: float):
             np.concatenate([attrs, np.array(newA)]), len(newP))
 
 
+def side_view_ok(seen_s, facing_s, seen_f, facing_f, seen_b, facing_b) -> np.ndarray:
+    """A185: per point, whether a side view's mask may decide it — the side view sees it (``seen_s``, the depth
+    window) facing its camera at least ``SIDE_FACING_MIN`` (normal · view direction), and neither the front nor the
+    back sees it at least ``FRONTAL_MIN`` frontally (there the front / back masks decide, a side never adds)."""
+    frontal = ((np.asarray(seen_f, bool) & (np.abs(facing_f) >= FRONTAL_MIN))
+               | (np.asarray(seen_b, bool) & (np.abs(facing_b) >= FRONTAL_MIN)))
+    return np.asarray(seen_s, bool) & (np.asarray(facing_s, float) >= SIDE_FACING_MIN) & ~frontal
+
+
 class ShellRefused(ValueError):
     """The shell cannot be made (no region, empty masks)."""
 
@@ -553,7 +584,9 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
                               "margin_mm": float(margin_mm), "fill_cm2": float(fill_cm2)}
 
     masks = {}
-    for key, w in (("front", "f"), ("back", "b")):
+    # A185: the side views of a piece with "Side views for the shell" (left / right), read when given
+    sides = [(key, w) for key, w in (("left", "l"), ("right", "r")) if views.get(key)]
+    for key, w in (("front", "f"), ("back", "b"), *sides):
         v = views.get(key) or {}
         bm, gm = gf._mask(v["body_mask"]), gf._mask(v["ghost_mask"])
         if not bm.any():
@@ -562,16 +595,20 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
         masks[w] = (bm, gm, img)
     if not (masks["f"][1].any() or masks["b"][1].any()):
         raise ShellRefused("The piece-only views show no piece")
-    colour_mask = {w: masks[w][1] for w in ("f", "b")}
-    frames = {w: gf._frame(Pu, masks[w][0]) for w in ("f", "b")}
+    keys = list(masks)
+    colour_mask = {w: masks[w][1] for w in keys}
+    frames = {w: gf._frame(Pu, masks[w][0]) for w in keys}
     # mm per pixel of each view on the rigged body
-    mm_px = {w: frames[w][0] * k * 1000.0 for w in ("f", "b")}
-    filled = {w: _fill_glints(masks[w][1], fill_cm2 * 100.0 / mm_px[w] ** 2) for w in ("f", "b")}
+    mm_px = {w: frames[w][0] * k * 1000.0 for w in keys}
+    filled = {w: _fill_glints(masks[w][1], fill_cm2 * 100.0 / mm_px[w] ** 2) for w in keys}
+    #: the image's horizontal axis per view: x for front / back, z (the body's depth) for a side view
+    HAXIS = {"f": 0, "b": 0, "l": 2, "r": 2}
 
     def project(P, which, mirror):
         sb, cb, mb = frames[which]
         sx = -1.0 if mirror else 1.0
-        return cb[0] + sx * (P[:, 0] - mb[0]) / sb, cb[1] - (P[:, 1] - mb[1]) / sb
+        a = HAXIS[which]
+        return cb[0] + sx * (P[:, a] - mb[a]) / sb, cb[1] - (P[:, 1] - mb[1]) / sb
 
     def sil_iou(bm, which, mirror):
         X = samples(Pu, bu.faces, float(np.ptp(Pu[:, 1])) / 1500)[0]
@@ -584,18 +621,27 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
         return float((m & bm).sum() / max((m | bm).sum(), 1))
     mirror_b = sil_iou(masks["b"][0], "b", True) >= sil_iou(masks["b"][0], "b", False)
     report["back_mirrored"] = bool(mirror_b)
-    VIEWS = [("f", False, 1.0), ("b", mirror_b, -1.0)]
+    #: per view: (key, mirrored, toward, depth axis) — the camera looks along -toward on the depth axis
+    VIEWS = [("f", False, 1.0, 2), ("b", mirror_b, -1.0, 2)]
+    for _key, w in sides:
+        # A side profile: the body's front (+z) to the image's left means the camera stands on the body's +x side
+        # (it sees the left flank, the base view "left"); mirrored, on the -x side. The silhouette decides (like the
+        # back's mirror), the camera side follows from it.
+        front_left = sil_iou(masks[w][0], w, True) >= sil_iou(masks[w][0], w, False)
+        VIEWS.append((w, front_left, 1.0 if front_left else -1.0, 0))
+        report[f"{_key}_camera"] = "+x" if front_left else "-x"
+    DEPTH = {which: axis for which, _m, _t, axis in VIEWS}
     zbuf = {}
     Xs = samples(Pu, bu.faces, float(np.ptp(Pu[:, 1])) / 2500)[0]
-    for which, mir, toward in VIEWS:
+    for which, mir, toward, axis in VIEWS:
         h, w = masks[which][0].shape
         px, py = project(Xs, which, mir)
         ok = (px >= 0) & (px < w) & (py >= 0) & (py < h)
         zb = np.full((h, w), -np.inf)
-        np.maximum.at(zb, (py[ok].astype(int), px[ok].astype(int)), toward * Xs[ok, 2])
+        np.maximum.at(zb, (py[ok].astype(int), px[ok].astype(int)), toward * Xs[ok, axis])
         zbuf[which] = ndimage.maximum_filter(zb, size=3)
     maskinfo = {}
-    for which, _mir, _t in VIEWS:
+    for which, _mir, _t, _a in VIEWS:
         inner = ndimage.binary_erosion(colour_mask[which], iterations=1)
         _, ind = ndimage.distance_transform_edt(~inner, return_indices=True)
         gm = filled[which]
@@ -604,15 +650,21 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
 
     def view_state(Pq, Nq):
         out = {}
-        for which, mir, toward in VIEWS:
+        for which, mir, toward, axis in VIEWS:
             h, w = masks[which][0].shape
             x, y = project(Pq, which, mir)
             i, j = np.clip(y.astype(int), 0, h - 1), np.clip(x.astype(int), 0, w - 1)
-            seen = toward * Pq[:, 2] >= zbuf[which][i, j] - 0.015 / k
+            seen = toward * Pq[:, axis] >= zbuf[which][i, j] - 0.015 / k
             sb = frames[which][0] * k * 1000
-            out[which] = {"seen": seen, "facing": toward * Nq[:, 2], "sd_mm": maskinfo[which][1][i, j] * sb,
+            out[which] = {"seen": seen, "facing": toward * Nq[:, axis], "sd_mm": maskinfo[which][1][i, j] * sb,
                           "i": i, "j": j, "in": filled[which][i, j]}
         return out
+
+    side_keys = [w for _key, w in sides]
+
+    def side_ok(st_, w):
+        return side_view_ok(st_[w]["seen"], st_[w]["facing"], st_["f"]["seen"], st_["f"]["facing"],
+                            st_["b"]["seen"], st_["b"]["facing"])
 
     # 1. coverage on the unrigged body
     corr_u2r, _ = gf.uv_correspondence(bu, br)
@@ -623,9 +675,13 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     Nu = gf._unit(gf.vertex_normals(Pu, bu.faces))
     vs = view_state(Pu, Nu)
     cov = np.zeros(len(Pu), bool)
-    for which, _m, _t in VIEWS:
+    for which, _m, _t, _a in VIEWS:
         gmd = ndimage.binary_dilation(filled[which], iterations=2 + int(np.ceil(margin_mm / mm_px[which])))
-        cov |= vs[which]["seen"] & gmd[vs[which]["i"], vs[which]["j"]]
+        seen_ok = vs[which]["seen"] if which in ("f", "b") else side_ok(vs, which)
+        hit = seen_ok & gmd[vs[which]["i"], vs[which]["j"]]
+        if which not in ("f", "b"):
+            report[f"side_{which}_added_vertices"] = int((hit & ~cov).sum())
+        cov |= hit
     cov &= armw < 0.3
     Pw_u, Fw_u, inv_u = gf.weld(Pu, bu.faces)
     covw = np.zeros(len(Pw_u), bool)
@@ -650,8 +706,12 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     for _ in range(2 + int(np.ceil(margin_mm / 10.0))):
         c2 = np.minimum(1, c2 + (A @ c2 > 0))
     seen_w = np.zeros(len(Pw_u), bool)
-    for which, _m, _t in VIEWS:
-        np.logical_or.at(seen_w, inv_u, vs[which]["seen"] & (np.abs(vs[which]["facing"]) >= 0.6))
+    for which, _m, _t, _a in VIEWS:
+        if which in ("f", "b"):
+            np.logical_or.at(seen_w, inv_u, vs[which]["seen"] & (np.abs(vs[which]["facing"]) >= 0.6))
+        else:
+            # A185: a side view decides the band it sees well — the region does not grow blindly into it
+            np.logical_or.at(seen_w, inv_u, side_ok(vs, which))
     for _ in range(8):
         c2 = np.minimum(1, c2 + ((A @ c2 > 0) & ~seen_w))
     cand_u = ((c2 > 0) & (armw_w < 0.3))[inv_u]
@@ -736,6 +796,13 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     if near_side.any():
         m2 = bridge.query(Pref[near_side])[0]
         s[near_side] = np.where(m2 > 0, _bridge_mm(m2, M), s[near_side])
+    for w in side_keys:
+        # A185: where a side view sees the point well, its mask is the measurement: it replaces the bridge's
+        # estimate in the side band and may add to a grazing front / back point (never to a frontal one, side_ok)
+        ok_s = side_ok(st, w)
+        sd_s = np.clip(st[w]["sd_mm"] + M, -5, 5 + M)
+        s = np.where(ok_s & side, sd_s, s)
+        s = np.where(ok_s & ~side, np.maximum(s, sd_s), s)
     report["bridge_window"] = {str(k_): list(v) for k_, v in bridge.window.items()}
     Aw = (gf._adjacency(Fw, len(Vw))[0] > 0).astype(float)
     degw = np.asarray(Aw.sum(1)).ravel()
@@ -771,26 +838,35 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     Nq = gf._unit(gf._unit(gf.vertex_normals(Puc, Fc))[Fc[tri]].mean(1))
     stq = view_state(Puq, Nq)
     cols, valid = {}, {}
-    for which, _m, _t in VIEWS:
+    for which, _m, _t, _a in VIEWS:
         ind, _ = maskinfo[which]
         i, j = stq[which]["i"], stq[which]["j"]
         ii, jj = ind[0][i, j], ind[1][i, j]
         near_ok = (np.hypot(ii - i, jj - j) <= 3) | filled[which][i, j]
-        valid[which] = stq[which]["seen"] & ((np.abs(stq[which]["facing"]) >= 0.3)
-                                             | (stq[which]["sd_mm"] > 10)) & near_ok
+        if which in ("f", "b"):
+            valid[which] = stq[which]["seen"] & ((np.abs(stq[which]["facing"]) >= 0.3)
+                                                 | (stq[which]["sd_mm"] > 10)) & near_ok
+        else:
+            valid[which] = side_ok(stq, which) & near_ok
         cols[which] = masks[which][2][ii, jj]
     nz = Nq[:, 2]
     wf = np.clip(0.5 + nz, 0, 1) * valid["f"]
     wb = np.clip(0.5 - nz, 0, 1) * valid["b"]
-    real = (wf + wb) > 0
+    # A185: a side view colours what it sees well, weighted by how squarely it faces it
+    ws = {w: np.clip(stq[w]["facing"] - 0.3, 0, 1) * valid[w] for w in side_keys}
+    wsum = wf + wb + sum(ws.values(), np.zeros(len(Puq)))
+    real = wsum > 0
     col = np.zeros((len(Puq), 3))
-    col[real] = ((cols["f"] * wf[:, None] + cols["b"] * wb[:, None]) / np.maximum(wf + wb, 1e-9)[:, None])[real]
+    acc = cols["f"] * wf[:, None] + cols["b"] * wb[:, None]
+    for w in side_keys:
+        acc = acc + cols[w] * ws[w][:, None]
+    col[real] = (acc / np.maximum(wsum, 1e-9)[:, None])[real]
     side_q = ~real
     src_dist = np.zeros(len(Puq))
     if side_q.any() and real.any():
         Pq_m = Puq * k
         _marg, t_q, yf_q, yb_q, th_q, fe_q, be_q = bridge.query(Pq_m[side_q])
-        rf = np.nonzero(real & (wf >= wb))[0]
+        rf = np.nonzero(real & (wf >= wb) & (wf > 0))[0]
         rb = np.nonzero(real & (wb > wf))[0]
         th_all, y_all, _ = frame.coords(Pq_m)
         sc = np.array([1.5, 1000.0])
@@ -870,11 +946,13 @@ def shell_glb(garment) -> bytes:
                       material={"name": "shell", "doubleSided": True}, name="shell")
 
 
-def shell_views(character_name: str, item_id: str, fsig: str, bsig: str) -> Dict[str, Dict[str, Any]]:
+def shell_views(character_name: str, item_id: str, fsig: str, bsig: str, *,
+                sides: bool = False) -> Dict[str, Dict[str, Any]]:
     """The two views ``build_shell`` reads, from the piece's stored files: per view the base body's figure mask (the
     bald base view the body was meshed from, flattened like the fit's), the accepted ghost view's mask in that frame
     and the ghost image. ``base_body.MissingInput`` when a view is missing; ``garment_source.FrameRefused`` when the
-    front cannot be framed."""
+    front cannot be framed. ``sides`` (A185, "Side views for the shell"): the left / right views too — the base side
+    view's figure mask and the piece-only side view's mask in its frame (both in the base side view's size)."""
     from PIL import Image
     from app.core import base_body, garment_source
     from app.core import garment_images as gi
@@ -902,4 +980,18 @@ def shell_views(character_name: str, item_id: str, fsig: str, bsig: str) -> Dict
             if rgb.size != (w, h):
                 rgb = rgb.resize((w, h))
             out[view] = {"body_mask": np.asarray(bm), "ghost_mask": np.asarray(gm), "image": np.asarray(rgb)}
+    for view in (SIDE_VIEWS if sides else ()):
+        base_s = find_ref_image(character_name, base_body._kind(view), bsig)
+        if base_s is None:
+            raise base_body.MissingInput(base_body.BASE_IMAGES_MISSING)
+        ghost = gs.garment_path(character_name, item_id, fsig, "image", step="ghost", view=view)
+        if not ghost.is_file():
+            raise base_body.MissingInput(f"The ghost {view} image is missing — run the ghost step first")
+        body_s, size_s = garment_source._flat_mask(Path(base_s), get_model_refs_dir(character_name))
+        with Image.open(ghost) as im:
+            rgb = im.convert("RGB")
+            if rgb.size != tuple(size_s):
+                rgb = rgb.resize(tuple(size_s))
+        out[view] = {"body_mask": np.asarray(body_s), "ghost_mask": np.asarray(gi._mask(ghost, size_s)),
+                     "image": np.asarray(rgb)}
     return out

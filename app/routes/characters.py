@@ -2123,6 +2123,8 @@ class GarmentFitSettingsRequest(BaseModel):
     # A184: mm the shell's border grows around the piece's outline / cm² of gaps it closes (garment_shell choices)
     shell_margin: Any = None
     shell_fill: Any = None
+    # A185: the shell piece's left / right piece-only views are made and read (bool)
+    shell_sides: Any = None
 
 
 class PieceViewSourceRequest(BaseModel):
@@ -3119,8 +3121,8 @@ def get_character_garment_image(character_name: str, item_id: str, step: str, vi
     from app.core.garment_images import ATTEMPTS
     if step not in gs.IMAGE_STEPS:
         raise HTTPException(status_code=400, detail=f"step must be one of {', '.join(gs.IMAGE_STEPS)}")
-    if view not in gs.GARMENT_VIEWS:
-        raise HTTPException(status_code=400, detail=f"view must be one of {', '.join(gs.GARMENT_VIEWS)}")
+    if view not in gs.IMAGE_VIEWS:
+        raise HTTPException(status_code=400, detail=f"view must be one of {', '.join(gs.IMAGE_VIEWS)}")
     if not 0 <= attempt <= ATTEMPTS:
         raise HTTPException(status_code=400, detail=f"attempt must be 0..{ATTEMPTS}")
     _require_character(character_name)
@@ -3321,8 +3323,8 @@ def use_character_garment_attempt(character_name: str, item_id: str, step: str, 
     from app.core.garment_images import ATTEMPTS, AttemptUnusable
     if step not in gs.IMAGE_STEPS:
         raise HTTPException(status_code=400, detail=f"step must be one of {', '.join(gs.IMAGE_STEPS)}")
-    if view not in gs.GARMENT_VIEWS:
-        raise HTTPException(status_code=400, detail=f"view must be one of {', '.join(gs.GARMENT_VIEWS)}")
+    if view not in gs.IMAGE_VIEWS:
+        raise HTTPException(status_code=400, detail=f"view must be one of {', '.join(gs.IMAGE_VIEWS)}")
     if not 1 <= attempt <= ATTEMPTS:
         raise HTTPException(status_code=400, detail=f"attempt must be 1..{ATTEMPTS}")
     _require_character(character_name)
@@ -3350,8 +3352,8 @@ async def upload_character_garment_view(character_name: str, item_id: str, step:
     from app.models.inventory import safe_item_id
     if step not in gs.IMAGE_STEPS:
         raise HTTPException(status_code=400, detail=f"step must be one of {', '.join(gs.IMAGE_STEPS)}")
-    if view not in gs.GARMENT_VIEWS:
-        raise HTTPException(status_code=400, detail=f"view must be one of {', '.join(gs.GARMENT_VIEWS)}")
+    if view not in gs.IMAGE_VIEWS:
+        raise HTTPException(status_code=400, detail=f"view must be one of {', '.join(gs.IMAGE_VIEWS)}")
     if safe_item_id(item_id) != item_id:
         raise HTTPException(status_code=404, detail="Unknown item")
     _require_character(character_name)

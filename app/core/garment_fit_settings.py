@@ -31,6 +31,8 @@ made shape is not the current one is due (``changed``).
 - ``shell_margin`` (A184, "Take from the body"): ``garment_shell.MARGIN_CHOICES`` — mm the shell's border is moved
   outward around the piece's outline in its views (default 3); ``shell_fill`` ("Fill holes up to"):
   ``garment_shell.FILL_CHOICES`` — cm² of an enclosed gap that is closed (default 2). Shell-mode pieces only.
+- ``shell_sides`` (A185, "Side views for the shell"): bool, default off — the shell piece gets left / right piece-only
+  views and the shell reads them too. Shell-mode pieces only.
 
 Stored on the character profile (``SETTINGS_KEY``: ``{item_id: {key: value}}``, only the values that differ from
 the defaults). Not part of the fingerprint: a change keeps every image and the mesh and only makes the fit due — the
@@ -47,7 +49,7 @@ SIDES = ("left", "right")
 
 def defaults() -> Dict[str, Any]:
     from app.core.garment_shell import FILL_DEFAULT, MARGIN_DEFAULT, SHELL_OFFSET_DEFAULT
-    return {"shell_margin": MARGIN_DEFAULT, "shell_fill": FILL_DEFAULT, "sleeves_left": "auto", "sleeves_right": "auto", "allowance": "auto", "depth": 0, "trunk": "auto",
+    return {"shell_sides": False, "shell_margin": MARGIN_DEFAULT, "shell_fill": FILL_DEFAULT, "sleeves_left": "auto", "sleeves_right": "auto", "allowance": "auto", "depth": 0, "trunk": "auto",
             "shaft": "split", "shaft_overlap": 10, "body_overlap": 20, "shell_offset": SHELL_OFFSET_DEFAULT}
 
 
@@ -71,6 +73,7 @@ def normalise(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     out["shell_offset"] = garment_shell.shell_offset_choice(raw)
     out["shell_margin"] = garment_shell.shell_margin_choice(raw)
     out["shell_fill"] = garment_shell.shell_fill_choice(raw)
+    out["shell_sides"] = garment_shell.shell_sides_choice(raw)
     return out
 
 
@@ -178,6 +181,10 @@ def validate(changes: Dict[str, Any]) -> Dict[str, Any]:
                 raise ValueError(f"{key} must be one of " + ", ".join(str(c) for c in choices)
                                  + (" (mm)" if key == "shell_margin" else " (cm²)"))
             out[key] = int(value)
+        elif key == "shell_sides":
+            if not isinstance(value, bool):
+                raise ValueError("shell_sides must be true or false")
+            out[key] = value
         elif key == "trunk":
             if not isinstance(value, str) or value not in garment_fit.TRUNK_CHOICES:
                 raise ValueError(f"trunk must be one of {', '.join(garment_fit.TRUNK_CHOICES)}")
