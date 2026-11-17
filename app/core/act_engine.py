@@ -347,7 +347,10 @@ async def _run_storyteller_agent(
         return ("", [])
     st_llm = st_inst.create_llm()
 
-    tool_inst = resolve_llm("intent", agent_name=actor) or st_inst
+    # No quota reservation: outside rp_first the tool client may never be
+    # sent, and an unused reservation holds a provider slot for a whole
+    # window. A send without one claims a free slot at send time.
+    tool_inst = resolve_llm("intent", agent_name=actor, reserve=False) or st_inst
     tool_llm = tool_inst.create_llm()
 
     tool_model_name = (tool_inst.model if tool_inst else "") or ""

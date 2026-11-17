@@ -340,7 +340,12 @@ def build_chat_context(
 
     # Mode detection: load the tool_llm early for determine_mode + system prompt
     from app.core.dependencies import determine_mode
-    _tool_instance = resolve_llm("intent", agent_name=character_name) if agent_tools else None
+    # No quota reservation: in single mode the tool LLM is only sent for an
+    # open question, and an unused reservation would hold a slot of the
+    # provider's window until it expires. A send without one claims a free
+    # slot (the queue defers until there is one).
+    _tool_instance = (resolve_llm("intent", agent_name=character_name, reserve=False)
+                      if agent_tools else None)
     tool_llm = _tool_instance.create_llm() if _tool_instance else None
     mode = determine_mode(agent_tools, tool_llm, agent_config)
     tools_enabled = mode != "no_tools"

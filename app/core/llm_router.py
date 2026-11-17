@@ -497,6 +497,21 @@ def _reserve_instance(instance):
     return instance
 
 
+def release_reservation(instance) -> None:
+    """Gives back the quota slot ``resolve_llm`` booked for ``instance``.
+
+    For a caller that resolved WITH a reservation and then ends up not
+    sending on that instance: an unused reservation otherwise holds a slot of
+    the provider's window until it expires a whole window later. Safe on
+    ``None``, on an unreserved instance and twice in a row."""
+    token = getattr(instance, "_quota_reservation", None)
+    provider = getattr(instance, "_provider", None)
+    if token is None or provider is None:
+        return
+    provider.quota.release(token)
+    instance._quota_reservation = None
+
+
 def _instance_for(task: str, entry: dict, provider: Provider) -> LLMInstance:
     """The LLMInstance of a routing entry — the same settings whether the
     entry is the regular choice or an overflow target."""

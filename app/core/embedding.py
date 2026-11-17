@@ -449,10 +449,15 @@ def _embed_internal_many(texts: List[str]) -> List[Optional[List[float]]]:
 # ── external (routed /v1/embeddings provider) ────────────────────────────
 
 def _resolve_external():
-    """(inst, provider) for the ``pose_embedding`` task, or (None, None)."""
+    """(inst, provider) for the ``pose_embedding`` task, or (None, None).
+
+    Resolves WITHOUT a quota reservation: the vectors go out over a plain
+    ``httpx.post`` that never consumes one, and ``current_model_id`` /
+    ``effective_backend`` only look — a booked slot would sit in the
+    provider's window until it expires and starve real calls there."""
     try:
         from app.core.llm_router import resolve_llm
-        inst = resolve_llm("pose_embedding")
+        inst = resolve_llm("pose_embedding", reserve=False)
         if inst is None:
             return None, None
         prov = inst._provider

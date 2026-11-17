@@ -2456,7 +2456,12 @@ class StreamingAgent:
         if not self.log_task:
             return None
         instance = resolve_llm(self.log_task, agent_name=self.agent_name)
-        if instance is None or (instance.provider_name, instance.model) in tried:
+        if instance is not None and (instance.provider_name, instance.model) in tried:
+            # Not sent: its booked quota slot must not sit out the window.
+            from app.core.llm_router import release_reservation
+            release_reservation(instance)
+            instance = None
+        if instance is None:
             logger.warning(
                 "Stream-Fallback erschoepft (task=%s, fehlgeschlagen=%s/%s): %s",
                 self.log_task, prov_name, failed_model, str(err)[:160])

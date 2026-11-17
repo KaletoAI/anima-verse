@@ -355,7 +355,11 @@ class ThoughtRunner:
             logger.info("Tool-Whitelist aktiv fuer %s: %s von %s",
                         character_name, [t.name for t in agent_tools], _before)
 
-        _tool_inst = resolve_llm("intent", agent_name=character_name) if agent_tools else None
+        # The tool instance books a quota slot only in fast mode, where it
+        # narrates the turn for sure; otherwise it may never be sent (single
+        # mode), and a send without a reservation claims a free slot then.
+        _tool_inst = (resolve_llm("intent", agent_name=character_name, reserve=bool(fast))
+                      if agent_tools else None)
         tool_llm = _tool_inst.create_llm() if _tool_inst else None
 
         # Fast mode: the tool LLM takes over the whole thought (no dual pass).
@@ -366,6 +370,9 @@ class ThoughtRunner:
             llm = tool_llm
             tool_llm = None
             _is_fast = True
+            # The thought instance is not sent in fast mode: give its slot back.
+            from app.core.llm_router import release_reservation
+            release_reservation(_thought_inst)
             logger.info("Fast mode: the tool LLM writes the thought instead of the chat LLM")
 
         # Anti-repetition: the thought prompt hands the character its own last
