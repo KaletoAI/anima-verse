@@ -11,6 +11,9 @@
  *                  surface radius (`channelOpening.ts`), the channel readouts and lamp. Its frame, with H the head
  *                  bone, T the head-top end, L = |T − H| and the head's up h = (T − H)/L — without T, L = `MOUTH.lengthM`
  *                  × the head bone's world scale and h = its +Y (rigs without a head-top end) — and the face direction f (the eyes' midpoint − H, else the head bone's local +Z, made orthogonal to h):
+ *                    O = the MEASURED opening on the lips, u = toward the throat (Ruling A193: the collision
+ *                        record's `mouth`, `app/core/mouth_landmark.py`, bound to the head joint, so it follows
+ *                        every head turn and tilt); a record without one keeps the formula
  *                    O = H + f · `MOUTH.forward` · L + h · `MOUTH.up` · L     (≈ 10 cm forward, 3 cm up for L = 0.2 m)
  *                    u = −f                                                  (into the head, along the face normal)
  *                    D = `MOUTH.depth` · L,  R = `MOUTH.radius` · L,  F = `MOUTH.funnel` · L,  α = `MOUTH.coneDeg`
@@ -70,6 +73,10 @@ export interface TargetBones {
   headZ?: Vec3
   /** The head bone's local +Y column in the world, NOT normalised (its length = the head bone's world scale). */
   headY?: Vec3
+  /** The MEASURED mouth opening and a point toward the throat (collision v9 `mouth`, through the head joint;
+   *  Ruling A193). Both present = they replace the formula's O and u. */
+  mouthO?: Vec3
+  mouthB?: Vec3
 }
 export const TARGET_BONE_NAMES: readonly (keyof TargetBones)[] = ['lefthand', 'lefthandmiddle1', 'lefthandindex1',
   'lefthandpinky1', 'righthand', 'righthandmiddle1', 'righthandindex1', 'righthandpinky1', 'head', 'headtop_end',
@@ -119,8 +126,11 @@ export function mouthChannel(bones: TargetBones, suppress: ReadonlySet<string> =
   const fr = headFrame(bones)
   if (!fr) return null
   const { H, L, h, f } = fr
+  const measured = bones.mouthO && bones.mouthB ? unit(sub(bones.mouthB, bones.mouthO)) : null
   return {
-    id: MOUTH_CHANNEL_ID, o: add(add(H, mul(f, MOUTH.forward * L)), mul(h, MOUTH.up * L)), u: mul(f, -1),
+    id: MOUTH_CHANNEL_ID,
+    o: measured ? bones.mouthO! : add(add(H, mul(f, MOUTH.forward * L)), mul(h, MOUTH.up * L)),
+    u: measured ?? mul(f, -1),
     depth: MOUTH.depth * L, r: MOUTH.radius * L, coneDeg: MOUTH.coneDeg, funnel: MOUTH.funnel * L,
     accepts: POINT_TARGET_OPS, minLength: MOUTH.minLength, compressMin: MOUTH.compressMin, kinds: null, suppress,
   }

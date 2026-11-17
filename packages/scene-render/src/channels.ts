@@ -358,9 +358,22 @@ export function guideRod(ch: ChannelNow, rod: { length: number; radius: number; 
  * preview; `app/core/collision_channels.py` `resolve_channels`): `a_pos` and `b_pos` move by
  * (draft − applied)·`offset_mm` / 1000 along the record's `frame` (side, up, front); r scales by
  * draft / applied `radius_scale`; the bottom moves along the axis so the depth scales by draft / applied
- * `depth_scale`; `cone_deg` is the draft's; `applied` becomes the draft. `applied` null = no override (offset 0,
- * scales 1). `suppress` stays the record's (the server recomputes it on the next fit). The record is not mutated.
+ * `depth_scale`; the axis turns by draft − applied `tilt_deg` about the frame's side axis (+ = toward the back,
+ * `collision_channels.tilted`); `cone_deg` is the draft's; `applied` becomes the draft. `applied` null = no override
+ * (offset 0, scales 1, tilt 0). `suppress` stays the record's (the server recomputes it on the next fit). The record
+ * is not mutated.
  */
+/** `v` turned by `rad` about the unit-ish axis `k` (Rodrigues). */
+function turnAbout(v: Vec3, k: Vec3, rad: number): Vec3 {
+  if (rad === 0) return v
+  const kl = len(k)
+  const n: Vec3 = [k[0] / kl, k[1] / kl, k[2] / kl]
+  const c = Math.cos(rad), s = Math.sin(rad), kv = dot(n, v)
+  const kx: Vec3 = [n[1] * v[2] - n[2] * v[1], n[2] * v[0] - n[0] * v[2], n[0] * v[1] - n[1] * v[0]]
+  return [v[0] * c + kx[0] * s + n[0] * kv * (1 - c), v[1] * c + kx[1] * s + n[1] * kv * (1 - c),
+    v[2] * c + kx[2] * s + n[2] * kv * (1 - c)]
+}
+
 export function previewChannel(record: ChannelRecord, applied: ChannelOverride | null,
   draft: ChannelOverride): ChannelRecord {
   const was = applied ?? { offset_mm: [0, 0, 0], radius_scale: 1, depth_scale: 1, cone_deg: record.cone_deg }
@@ -368,7 +381,8 @@ export function previewChannel(record: ChannelRecord, applied: ChannelOverride |
   const d = [0, 1, 2].map(i => (draft.offset_mm[i] - was.offset_mm[i]) / 1000)
   const shift = add(add(scale(side, d[0]), scale(up, d[1])), scale(front, d[2]))
   const aPos = add(record.a_pos, shift)
-  const bPos = add(aPos, scale(sub(record.b_pos, record.a_pos), draft.depth_scale / was.depth_scale))
+  const turn = -((draft.tilt_deg ?? 0) - (was.tilt_deg ?? 0)) * DEG
+  const bPos = add(aPos, scale(turnAbout(sub(record.b_pos, record.a_pos), side, turn), draft.depth_scale / was.depth_scale))
   return {
     ...record,
     a_pos: aPos,
@@ -525,9 +539,17 @@ export function bindChannels(_three: Three, root: Object3D,
     if ((k === 'head' || k === 'headtop_end' || k === 'lefteye' || k === 'righteye') && !headBones.has(k)) headBones.set(k, o)
   })
   const headSuppress: ReadonlySet<string> = new Set(payload.capsules.filter(c => c.region === 'head').map(c => c.id))
+  // Ruling A193: the measured opening and its throat direction, fixed to the head joint like a capsule end.
+  const mouthJoint = payload.mouth ? joints.get(normBoneName(payload.mouth.a)) ?? null : null
   const mouthNow = (): ChannelNow | null => {
     if (!headBones.has('head')) return null
     const tb: TargetBones = {}
+    if (payload.mouth && mouthJoint) {
+      const j = jointRefNow(mouthJoint)
+      const cap = capsuleNow({ r: 0, a_pos: payload.mouth.a_pos, b_pos: payload.mouth.b_pos }, j, j)
+      tb.mouthO = cap.a
+      tb.mouthB = cap.b
+    }
     for (const [k, o] of headBones) {
       const e = o.matrixWorld.elements
       tb[k] = [e[12], e[13], e[14]]

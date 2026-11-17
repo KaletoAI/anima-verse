@@ -54,13 +54,24 @@ export interface CollisionCapsule {
  * The per-character correction of one channel (`model3d_opts.collision_channels[<channel id>]`,
  * server `app/core/collision_channels.py` `validate_overrides`): an offset of the opening in mm along the
  * body frame `[side, up, front]` (each within ±50), the radius and depth scales (0.5–2) and the funnel
- * half-angle `cone_deg` (0 < cone ≤ 60).
+ * half-angle `cone_deg` (0 < cone ≤ 60); `tilt_deg` turns the axis about the frame's side axis, + = toward the back
+ * (±45, Ruling A193; absent = 0).
  */
 export interface ChannelOverride {
   offset_mm: [number, number, number]
   radius_scale: number
   depth_scale: number
   cone_deg: number
+  tilt_deg?: number
+}
+
+/** The mouth opening measured on the body (collision v9, `app/core/mouth_landmark.py`): `a_pos` the opening on the
+ *  lips, `b_pos` a point toward the throat (only the direction counts), both bind-space points fixed to the head
+ *  joint `a`. */
+export interface MouthRecord {
+  a: string
+  a_pos: Vec3
+  b_pos: Vec3
 }
 
 /**
@@ -99,6 +110,9 @@ export interface CollisionPayload {
   version: number
   capsules: CollisionCapsule[]
   skipped?: Array<{ id: string; a?: string; b?: string; reason: string }>
+  /** The measured mouth opening (version 9); absent = the head-bone formula (`mouth_skipped` says why). */
+  mouth?: MouthRecord
+  mouth_skipped?: string
   /** The declared channels the model carries (version 7); absent or empty = none. */
   channels?: ChannelRecord[]
   /** A declared channel the model does not carry, with the reason (covered, a missing joint, no opening). */
@@ -137,7 +151,7 @@ export interface CollisionPayload {
  * froze an older list, the strand hair's, binds it under this one — never
  * under its own number, `hairSim.ts`).
  */
-export const COLLISION_VERSION = 8
+export const COLLISION_VERSION = 9
 
 /**
  * Regions whose capsules are for HAIR only (`garmentCollision.ts`

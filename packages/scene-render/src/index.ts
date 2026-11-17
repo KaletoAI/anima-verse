@@ -185,7 +185,7 @@ export type { GaitBone, GaitBox, GaitChain } from './proceduralGait'
 export { COLLISION_VERSION, HAIR_ONLY_REGIONS, PARTNER_ONLY_REGIONS, CAPSULE_REGION_COLORS, mat4Multiply, transformPoint, linearScale, jointNowFrom,
   capsuleNow, capsuleLineSegments, bindCollision, capsuleWireframe, placeCapsuleWireframe,
   createCollisionOverlay } from './collision'
-export type { CollisionCapsule, CollisionPayload, ChannelRecord, ChannelOverride, CapsuleNow, JointNow, BoundCapsule,
+export type { CollisionCapsule, CollisionPayload, ChannelRecord, ChannelOverride, MouthRecord, CapsuleNow, JointNow, BoundCapsule,
   CollisionBinding, CollisionOverlay } from './collision'
 
 export { COLLIDE_MAX, COLLIDE_PASSES, COLLIDE_EPS, COLLIDE_MIN_D, SQUEEZE_ROUNDS, SQUEEZE_STEPS, SQUEEZE_MIN_N,
