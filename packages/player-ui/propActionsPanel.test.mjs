@@ -39,6 +39,19 @@ const translate = source => de[source] || source;
 assert.equal(propActionReason('start_not_walkable', translate), 'Geh zuerst etwas vom Möbelstück weg');
 assert.equal(propActionReason('future_code', translate), 'Zurzeit nicht möglich');
 assert.equal(propActionReason('constructor', translate), 'Zurzeit nicht möglich');
+// Review 13-playerui#2: a refused request/respond/cancel/hold/alt reaches the panel as an ApiError whose detail
+// carries the code (the route's HTTPException detail); a known code is shown as its sentence, an unknown one and any
+// other error keep their own message.
+{
+  const { propActionErrorText } = await import(moduleUrl(new URL('./src/propActionReasons.ts', import.meta.url)));
+  const { ApiError } = await import(moduleUrl(new URL('./src/api.ts', import.meta.url)));
+  const refused = reason => new ApiError(409, { execution_id: '', status: 'refused', reason }, reason);
+  assert.equal(propActionErrorText(refused('slot_claim_lost'), translate), 'Der reservierte Platz ist nicht mehr verfügbar');
+  assert.equal(propActionErrorText(refused('not_active'), translate), 'Diese Aktion läuft nicht mehr');
+  assert.equal(propActionErrorText(refused('unsupported'), translate), 'Diese Aktion unterstützt das nicht');
+  assert.equal(propActionErrorText(refused('future_code'), translate), 'future_code');
+  assert.equal(propActionErrorText(new Error('offline'), translate), 'offline');
+}
 const render = (Component, props) => renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(Component, props)));
 const target = { location_id: 'house', room_id: 'lounge', placement_id: 'sofa-2', variant_uid: 'green' };
 const offer = { action_id: 'rest', definition_revision: 'rev-7', placement_id: 'sofa-2', variant_uid: 'green', target, label: 'Rest', description: 'On the sofa', prop_label: 'Sofa', distance_m: 1.5, enabled: true, reason: '', required_partner: true, available_targets: [{ partner: 'Kira', enabled: false, reason: 'slot_occupied' }, { partner: 'Mira', enabled: true, reason: '' }], effects: [{ when: 'success', target: 'actor', stat: 'energy', amount: 5 }] };

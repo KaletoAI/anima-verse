@@ -3,7 +3,7 @@ import { apiPost } from './api'
 import { groupFit, groupMostOthers, groupPickRange, pieceText } from './actionsTreeModel'
 import { HoverHint } from './HoverHint'
 import { useI18n } from './I18nProvider'
-import { propActionReason } from './propActionReasons'
+import { propActionErrorText, propActionReason } from './propActionReasons'
 import { usePropActions } from './usePropActions'
 import { cancelPropAction, checkPropAction, holdPropActionMeter, notifyLocalPropActionChange, requestPropAction, respondPropAction, setPropActionAlt,
   type PropActionChoice, type PropActionConsent, type PropActionExecution, type PropActionMeter, type PropActionOffer } from './propActions'
@@ -352,7 +352,7 @@ export function PropActionsPanel({ partner, showOffers = true, showState = true,
     setBusy(true)
     setNote('')
     try { await operation() }
-    catch (e) { setNote(e instanceof Error ? e.message : String(e)) }
+    catch (e) { setNote(propActionErrorText(e, t)) }
     finally { await refresh(); setBusy(false) }
   }
   const ownRuns = (runs: PropActionExecution[]) => partner

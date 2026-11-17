@@ -1,3 +1,5 @@
+import { ApiError } from './api'
+
 /** Player-facing reasons from Core offers/check and their access/departure helpers. */
 const REASONS: Record<string, string> = {
   incompatible_prop_dependency: "The furniture setup does not support this action",
@@ -90,9 +92,22 @@ const REASONS: Record<string, string> = {
   phases_completed: "The action completed successfully",
   awake: "The participant woke up",
   cancelled: "The action was cancelled",
+  // The running action's own controls (/hold, /alt).
+  not_active: "This action is not running any more",
+  unsupported: "This action does not support that",
+  invalid: "That choice is not valid",
 }
 
 /** Unknown server codes stay inspectable in the caller's title tooltip. */
 export function propActionReason(reason: string, t: (source: string) => string): string {
   return t(Object.prototype.hasOwnProperty.call(REASONS, reason) ? REASONS[reason] : 'Not possible right now')
+}
+
+/** The text of a failed prop-action call: a refusal code the table knows (the answer's `detail.reason`) as its
+ *  sentence, anything else as the error's own message — so an unknown code stays inspectable. */
+export function propActionErrorText(e: unknown, t: (source: string) => string): string {
+  const detail = e instanceof ApiError ? e.detail : undefined
+  const reason = detail && typeof detail === 'object' ? (detail as { reason?: unknown }).reason : undefined
+  if (typeof reason === 'string' && Object.prototype.hasOwnProperty.call(REASONS, reason)) return propActionReason(reason, t)
+  return e instanceof Error ? e.message : String(e)
 }

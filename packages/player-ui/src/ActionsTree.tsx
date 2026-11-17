@@ -37,7 +37,7 @@ import { isMember, type InteractionMembers } from './interactionMembers'
 import { usePairOptions, usePairPropose } from './pairActions'
 import { freePoseHint, offerKind, partnerNodes, partyInviteVerdict, pieceGroups, pieceNodes, pieceText,
   type PartyInviteState, type PieceNode } from './actionsTreeModel'
-import { propActionReason } from './propActionReasons'
+import { propActionErrorText, propActionReason } from './propActionReasons'
 import { GroupPicker, type OfferGroup } from './PropActionsPanel'
 import { usePropActions } from './usePropActions'
 import { notifyLocalPropActionChange, requestPropAction, type PropActionConsent,
@@ -293,13 +293,13 @@ export function ActionsTree({ avatar, present, busy: busyPeople, interaction, pa
   </div>
 }
 
-/** A refusal as a sentence: the endpoint's own codes get words, anything
- *  else is the server's message as it came. */
+/** A refusal as a sentence: the endpoint's own codes and the prop-action
+ *  refusal codes get words, anything else is the server's message as it came. */
 function refusalText(e: unknown, t: (s: string) => string): string {
   const detail = e instanceof ApiError ? e.detail : undefined
   if (detail === 'no_free_place') return t('There is no free place for that here.')
   if (detail === 'pair_pose') return t('That takes two — use the action chips on their card.')
-  return e instanceof Error ? e.message : String(e)
+  return propActionErrorText(e, t)
 }
 
 /** One level of the tree: a ▸/▾ row that opens its children. A disabled
