@@ -22,7 +22,7 @@ import { StepLight } from './StepRows'
 import { stampLabel } from './freshnessText'
 import {
   ALLOWANCE_CHOICES, ALLOWANCE_HINT, DEPTH_CHOICES, DEPTH_HINT, SLEEVE_CHOICES, SLEEVE_HINTS, SLEEVE_LABELS,
-  SHAFT_LABELS, TRUNK_CHOICES, TRUNK_HINTS, TRUNK_LABELS, allowanceLabel, shaftHint, shaftReason, allowanceNumbers, allowanceReason, armLightColour,
+  SHAFT_LABELS, OVERLAP_HINT, overlapChoices, TRUNK_CHOICES, TRUNK_HINTS, TRUNK_LABELS, allowanceLabel, shaftHint, shaftReason, allowanceNumbers, allowanceReason, armLightColour,
   armLightText, depthLabel, depthReason, sleeveReason, trunkReason, manualFitChanges, RESET_FIT, RESET_FIT_HINT,
 } from './fitSettingsModel'
 import type {
@@ -153,6 +153,27 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
               {shaft.made && shaft.made.mode === value ? shaftReason(shaft, t)
                 : `${shaftReason(shaft, t)}${shaft.made ? ` · ${t('Re-fit applies it (no hub job)')}` : ''}`}
             </span>
+            {value === 'split' ? (() => {
+              const overlap = values.shaft_overlap ?? shaft.overlap_cm ?? 10
+              const made = shaft.made?.mode === 'split' ? shaft.made.overlap_mm : undefined
+              return (
+                <>
+                  <label htmlFor="fit-shaft-overlap">{t('Overlap with the shoe')}</label>
+                  <select id="fit-shaft-overlap" className="ga-input" style={SELECT} value={String(overlap)}
+                    disabled={busy || saving !== null} title={t(OVERLAP_HINT)}
+                    onChange={(e) => { void save({ shaft_overlap: Number(e.target.value) }) }}>
+                    {overlapChoices(shaft, overlap).map((c) => (
+                      <option key={c} value={String(c)}>{c} cm{c === 10 ? ` (${t('default')})` : ''}</option>
+                    ))}
+                  </select>
+                  <span className="ga-hint" style={REASON} title={t(OVERLAP_HINT)}>
+                    {made === undefined ? t('Re-fit applies it (no hub job)')
+                      : Math.round(made / 10) === overlap ? `${t('Shown fit')}: ${Math.round(made / 10)} cm`
+                        : `${t('Shown fit')}: ${Math.round(made / 10)} cm · ${t('Re-fit applies it (no hub job)')}`}
+                  </span>
+                </>
+              )
+            })() : null}
           </>
         )
       })() : null}
