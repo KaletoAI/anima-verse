@@ -27,6 +27,7 @@ Expected values, derived by hand:
 * A146 leftovers: a view processed in place (16 dark pixels removed, original kept in ``postprocessed/``, sidecar
   record) is restored byte for byte and the kept dir removed; a record without a result (nothing was found) is
   only dropped from the sidecar, the bytes unchanged.
+* A contributor answering a LIST lists every descriptor (``words_only`` and ``words_two`` from one owner).
 * Choices (A196, no world default): character {"stand_in": False} -> on = []; {} -> []; {"stand_in": True} ->
   ["stand_in"]. A prompt-only descriptor (no ``apply``) is listed by ``operations`` but never processes the
   reference: base_source with it checked alone is the reference file; preview of it raises KeyError.
@@ -202,10 +203,12 @@ check(not (refs / vp.KEEP_DIR).exists(), "legacy: kept dir removed")
 check(json.loads(view.with_suffix(".json").read_text()).get("base_signature") == "base0", "legacy: sidecar kept")
 
 # --- choices + base_source --------------------------------------------------------------
-hooks.register_provider(vp.CAPABILITY, lambda: {"id": "words_only", "label": "Words", "edit_prompt": "w"},
+hooks.register_provider(vp.CAPABILITY, lambda: [{"id": "words_only", "label": "Words", "edit_prompt": "w"},
+                                                 {"id": "words_two", "label": "Words 2"}],
                         owner="smoke_words", multiple=True)
 avail = vp.operations()
 check("words_only" in avail and not vp.is_image_op(avail["words_only"]), "prompt-only option listed, no image op")
+check("words_two" in avail, "a contributor may answer a list of descriptors")
 check(vp.enabled_ids({"reference_postprocess": {"stand_in": False}}, avail) == [], "own off -> off")
 check(vp.enabled_ids({}, avail) == [], "no own choice -> off (no world default)")
 check(vp.enabled_ids({"reference_postprocess": {"stand_in": True}}, avail)[:1] == ["stand_in"], "own on -> on")
@@ -237,6 +240,21 @@ for stored, wanted, reason in ((plain, done_, base_body.FRONT_POSTPROCESS_ON),
     base_body.stored_front_reference = lambda c, b, _s=stored: dict(_s)
     got = base_body.front_reference_state(CHAR, "base0", profile={})["reason"]
     check(got == reason, f"front reason {bool(stored.get('postprocess'))}->{bool(wanted.get('postprocess'))}: {got!r}")
+
+# --- A196: a checked option's edit texts are part of the front's edit fingerprint --------------------------
+# Hand-derived: with the block "x", prompt "p", negative "n", no text option checked the fingerprint is
+# md5(json ["x", "p", "n"])[:12] — what it was before A196; "words_only" (edit_prompt "w", no negative) checked
+# appends [["w"], []]; "words_two" (no text) checked changes nothing.
+import hashlib  # noqa: E402
+base_body.base_prompt = lambda c, v, profile=None, picture=False: ("p", "n")
+base_body._edit_character_fingerprint_form = lambda c, p: "x"
+plain_fp = hashlib.md5(json.dumps(["x", "p", "n"], ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
+words_fp = hashlib.md5(json.dumps(["x", "p", "n", [["w"], []]], ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
+check(base_body._edit_fingerprint(CHAR, {}) == plain_fp, "fingerprint without a text option: as before A196")
+check(base_body._edit_fingerprint(CHAR, {"reference_postprocess": {"words_two": True}}) == plain_fp,
+      "fingerprint: an option without text changes nothing")
+check(base_body._edit_fingerprint(CHAR, {"reference_postprocess": {"words_only": True}}) == words_fp,
+      "fingerprint: a checked text option is part of it")
 
 print("FAILED: %d" % len(FAILS) if FAILS else "all passed")
 sys.exit(1 if FAILS else 0)

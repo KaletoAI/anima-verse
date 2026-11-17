@@ -11,7 +11,8 @@ portrait used everywhere else, and a generated view is not the reference.
 
 An OPERATION is an image-in, image-out step on the CPU, no image job. The core names no operation. A package
 registers a contributor of ``CAPABILITY``
-(``hooks.register_provider(CAPABILITY, describe, owner=<package>, multiple=True)``); ``describe()`` answers::
+(``hooks.register_provider(CAPABILITY, describe, owner=<package>, multiple=True)``); ``describe()`` answers one
+descriptor or a list of them (A196 — one contributor per owner)::
 
     {"id": str, "label": str, "description": str,
      "views": [view, ...],                        # the views it applies to; the reference is a "front" picture
@@ -39,7 +40,9 @@ world default any more.
 
 PROMPT-ONLY OPTIONS (A196): a descriptor without ``apply`` changes no picture; it only adds its ``edit_prompt`` /
 ``edit_negative`` (str or ``fn(profile) -> str``, Ruling A157) to the base front edit while checked. Such an option
-is offered beside the CPU operations, never processes the reference and has no preview.
+is offered beside the CPU operations, never processes the reference and has no preview. A descriptor may name
+``migrate_from: <op id>``: the one-time ``scripts/migrate_reference_postprocess_a196.py`` checks it for every
+character whose own choice of that operation was on (read by that script only, never at run time).
 
 A146 LEFTOVERS: A146 processed the stored base VIEWS in place, keeping their originals in
 ``model_refs/postprocessed/``. ``restore_legacy_views`` gives those originals back (first touch of the character's
@@ -94,8 +97,10 @@ def operations() -> Dict[str, Dict[str, Any]]:
         except Exception:  # noqa: BLE001 — one package never breaks the others
             logger.exception("A %s contributor failed", CAPABILITY)
             continue
-        if isinstance(desc, dict) and desc.get("id"):
-            out[str(desc["id"])] = desc
+        # Ruling A196: one contributor per package (hooks keys contributors by owner) may describe several.
+        for one in (desc if isinstance(desc, list) else [desc]):
+            if isinstance(one, dict) and one.get("id"):
+                out[str(one["id"])] = one
     return out
 
 
