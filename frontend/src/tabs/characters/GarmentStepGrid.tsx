@@ -456,6 +456,14 @@ function jobsText(n: number, t: (s: string) => string): string {
   return n === 0 ? t('no hub job') : n === 1 ? t('1 hub job') : t('{n} hub jobs').replace('{n}', String(n))
 }
 
+/** A190: the retry line of a view's cost — a piece-only view spends at most `max_jobs` per run, then it is offered. */
+function attemptsText(plan: ViewRunPlan | undefined, t: (s: string) => string): string {
+  return plan?.max_jobs
+    ? t('At most {n} hub jobs for this piece-only view per run — after that it is offered: Use this, Upload or Regenerate.')
+      .replace('{n}', String(plan.max_jobs))
+    : t('First attempts — a refused attempt is tried once more.')
+}
+
 /** "up to 1 hub job" / "up to 3 hub jobs" / "no hub job" (first attempts; a refused attempt retries). */
 /** Ruling A58: the running mesh job of the Mesh row — since when (and how long), which hub job of up to how many,
  *  and, when another mesh was chosen during it, that its result will stay a kept mesh. Ticks every second. */
@@ -553,7 +561,8 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   const { t } = useI18n()
   const [pickMesh, setPickMesh] = useState(false)
   const viewLabel = (view: GarmentView) => (view === 'front' ? t('Front view') : view === 'back' ? t('Back view')
-    : view === 'left' ? t('Left view') : t('Right view'))
+    // A190: side views exist only for shell pieces, and their worn / piece-only views show the arms raised
+    : view === 'left' ? t('Left view · arms up') : t('Right view · arms up'))
   /** "Piece-only · Back view" — a view of a step, as the cells name it. */
   const viewName = (step: string, view: GarmentView) => `${t(stepLabels[step] || step)} · ${viewLabel(view)}`
   const steps = garment?.steps ?? {}
@@ -609,7 +618,7 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
     const costTitle = plan ? [
       `${t('This view')}: ${jobsText(plan.jobs, t)}`,
       ...plan.follow_up.map((f) => `${t('Then')} ${viewName(f.step, f.view)}: ${jobsText(f.jobs, t)} — ${t(NEED_TEXT[f.why])}`),
-      t('First attempts — a refused attempt is tried once more.'),
+      attemptsText(plan, t),
     ].join('\n') : ''
     const needsTitle = missing.length ? [
       ...missing.map((m) => `${viewName(m.step, m.view)} — ${t(NEED_TEXT[m.why])}`),
@@ -758,7 +767,7 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
                   ...missing.map((m) => `${viewName(m.step, m.view)}: ${jobsText(m.jobs, t)} — ${t(NEED_TEXT[m.why])}`),
                   `${t('Then')} ${label}: ${jobsText(plan?.jobs ?? 0, t)}`,
                   ...(plan?.follow_up ?? []).map((f) => `${t('Then')} ${viewName(f.step, f.view)}: ${jobsText(f.jobs, t)}`),
-                  t('First attempts — a refused attempt is tried once more.'),
+                  attemptsText(plan, t),
                 ].join('\n')}
                 label={`${t('Render {what} first').replace('{what}', missing.length === 1
                   ? viewName(missing[0].step, missing[0].view) : t('{n} views').replace('{n}', String(missing.length)))}`

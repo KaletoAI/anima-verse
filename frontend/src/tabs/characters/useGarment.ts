@@ -799,6 +799,8 @@ export interface ViewRunPlan {
   step: string
   view: GarmentView
   jobs: number
+  /** A190: a piece-only view spends at most this many hub jobs per run (refusals included); null for other steps. */
+  max_jobs?: number | null
   skipped: string | null
   missing: Array<{ step: string; view: GarmentView; why: ViewNeed; for: [string, GarmentView]; jobs: number }>
   prerequisite_jobs: number
