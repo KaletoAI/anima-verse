@@ -1608,7 +1608,21 @@ def _accept_claimed(inv: Dict[str, Any]) -> Dict[str, Any]:
     """A yes for the invitation this call has claimed (``answering``): start
     the pair, walk over when only the metres are missing, or fail it with its
     reason. The answer to an invitation and an unanswered or accepted react
-    pair (:func:`react`) end here alike."""
+    pair (:func:`react`) end here alike.
+
+    An unexpected error fails the claimed row before it propagates: nothing
+    else moves a row out of ``answering``, so it would hold the pair's
+    question open until the sweep (``_fail_invite`` only touches a row that
+    is still ``answering``)."""
+    try:
+        return _accept_claimed_steps(inv)
+    except Exception:
+        _fail_invite(inv, "an internal error")
+        raise
+
+
+def _accept_claimed_steps(inv: Dict[str, Any]) -> Dict[str, Any]:
+    """The steps of :func:`_accept_claimed`."""
     invite_id = inv["invite_id"]
     out = {k: v for k, v in inv.items() if k != "status"}
     blocked = check_can_pair(inv["inviter"], inv["invitee"], inv["pose_key"])
