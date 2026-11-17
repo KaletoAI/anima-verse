@@ -1216,8 +1216,18 @@ def import_alt(kind: str, role: str, alt: str, file: Any, *, clip_set: str = "",
             if not res["ok"]:
                 raise ClipImportError(str(res.get("error") or "blender run failed"))
             data = res.get("data") or {}
+            # The sidecar read above may be stale by now (a loop/role-gender
+            # edit, an orient): re-read it under the lock, check the frame
+            # against ITS geometry and add only the alt's own keys to it.
+            try:
+                meta = json.loads(sidecar.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as e:
+                raise ClipImportError(
+                    f"'{kind}' has no readable sidecar in the {target} library any more: {e}")
+            if not isinstance(meta, dict):
+                raise ClipImportError(f"{sidecar.name} is not an object")
             got = (data.get("geometry") or {}).get("roles") or {}
-            want = geometry.get("roles") or {}
+            want = (meta.get("geometry") or {}).get("roles") or {}
             drift = {r: math.dist(got[r]["anchor_xz_m"], want[r]["anchor_xz_m"])
                      for r in roles if r in got and r in want}
             if len(drift) != len(roles) or max(drift.values()) > ALT_FRAME_TOLERANCE_M:
