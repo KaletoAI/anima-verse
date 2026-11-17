@@ -345,6 +345,9 @@ export function footContactsNow(three: Three, root: Object3D, fp: FootPose | nul
 /** The seated knee-raise fades in over this half-width (metres) around d = 0 (`seatRaise`). */
 export const SEAT_FADE_M = 0.015
 
+/** Per leg bone `seatFootLift` turned: the clip's local rotation it replaced and the one it wrote (x, y, z, w). */
+const SEAT_WRITTEN = new WeakMap<Object3D, { clip: [number, number, number, number]; wrote: [number, number, number, number] }>()
+
 /**
  * The seated raise r(d) of a leg whose lowest sole contact lies `d` BELOW the
  * floor (d = floorY − lowest contact y): 0 for d ≤ −SEAT_FADE_M (the foot
@@ -376,19 +379,38 @@ export function seatRaise(d: number): number {
  * clip-ground placement, with `floorY` = the floor the figure was seated ON in
  * world units (the owner's stand height; in the admin viewer the shipped bare
  * sole plane of `footPoseRest`, never a measurement on the cut body).
+ *
+ * The lift is applied to the CLIP pose, never on top of itself: three's mixer
+ * re-writes a bone only when its track value changed since the last frame (a
+ * held or constant leg pose is not re-applied), so a bone that still holds the
+ * rotation written here is put back to the clip rotation it replaced before
+ * measuring (`SEAT_WRITTEN`). Otherwise the next frame read d ≈ 0, raised by
+ * seatRaise(0) again and the foot crept up to SEAT_FADE_M over the floor.
  */
 export function seatFootLift(three: Three, root: Object3D, fp: FootPose | null | undefined,
   floorY: number): Record<FootSide, number> {
   const res: Record<FootSide, number> = { left: 0, right: 0 }
   if (!usable(fp)) return res
-  root.updateMatrixWorld(true)
-  const contacts = footContactsNow(three, root, fp)
   const bones = new Map<string, Object3D>()
   root.traverse(o => {
     if (!(o as Bone).isBone) return
     const key = normBoneName(o.name)
     if (!bones.has(key)) bones.set(key, o)
   })
+  for (const side of SIDES) {
+    for (const name of [`${side}upleg`, `${side}leg`, `${side}foot`]) {
+      const bone = bones.get(name)
+      const mark = bone && SEAT_WRITTEN.get(bone)
+      if (!bone || !mark) continue
+      SEAT_WRITTEN.delete(bone)
+      const q = bone.quaternion
+      if (q.x === mark.wrote[0] && q.y === mark.wrote[1] && q.z === mark.wrote[2] && q.w === mark.wrote[3]) {
+        q.set(mark.clip[0], mark.clip[1], mark.clip[2], mark.clip[3])
+      }
+    }
+  }
+  root.updateMatrixWorld(true)
+  const contacts = footContactsNow(three, root, fp)
   const vec = (v: Vector3): Vec3 => [v.x, v.y, v.z]
   const quat = (q: Quat): Quaternion => new three.Quaternion(q[1], q[2], q[3], q[0])   // Quat is (w, x, y, z)
   for (const side of SIDES) {
@@ -414,9 +436,14 @@ export function seatFootLift(three: Three, root: Object3D, fp: FootPose | null |
     const wFoot = foot.getWorldQuaternion(new three.Quaternion())
     const nUpper = du.clone().multiply(wUpper)
     const nLower = dl.clone().multiply(du).multiply(wLower)
-    upper.quaternion.copy(wUpperParent.clone().invert().multiply(nUpper))
-    lower.quaternion.copy(nUpper.clone().invert().multiply(nLower))
-    foot.quaternion.copy(nLower.clone().invert().multiply(wFoot))
+    const write = (bone: Object3D, q: Quaternion) => {
+      const c = bone.quaternion
+      SEAT_WRITTEN.set(bone, { clip: [c.x, c.y, c.z, c.w], wrote: [q.x, q.y, q.z, q.w] })
+      c.copy(q)
+    }
+    write(upper, wUpperParent.clone().invert().multiply(nUpper))
+    write(lower, nUpper.clone().invert().multiply(nLower))
+    write(foot, nLower.clone().invert().multiply(wFoot))
     upper.updateMatrixWorld(true)
     res[side] = r
   }

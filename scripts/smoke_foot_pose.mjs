@@ -124,6 +124,13 @@
  *     r(0.015) = 0.015 (C¹ at both ends), r(0.03) = 0.03. A contact 0.10
  *     ABOVE the floor (floor y = −0.14, a crossed leg): d = −0.10 → r = 0,
  *     the knee does not move, {0, 0}. null fp → {0, 0}, nothing moves.
+ * [12b] The same leg one held frame later (the mixer re-writes no unchanged
+ *     value, so the bones still hold the lift): r = 0.04 again, the same knee
+ *     and ankle, and after 60 more such frames the heel is still ON the floor
+ *     (the old lift read its own result: r(0) = 0.00375 per frame, creeping).
+ * [12c] Only the Foot re-written by the mixer (local R(+y, 30°)): UpLeg/Leg go
+ *     back to the clip, the Foot keeps the mixer's value → r 0.04, the knee of
+ *     [12], Foot world R(+y, 30°) = (0, 0.258819, 0, 0.965926).
  * [N1] A NEGATIVE turn and a NEGATIVE lift pass through unchanged (boots plan
  *     Task 1, spec 2026-11-11 § 13.2: a flat shoe dorsiflexes a foot whose
  *     bind pose stands heel-up and the root goes DOWN). The chain of [1] with
@@ -439,6 +446,29 @@ async function main() {
   check('lowest contact ON the floor (heel follows the ankle up by 0.04)', near(after.left[0].y, 0, 1e-6), after.left[0].y.toFixed(7))
   check('seatRaise: r(0) = 0.00375, r(−0.02) = 0, r(−0.015) = 0, r(0.015) = 0.015, r(0.03) = 0.03',
     near(seatRaise(0), 0.00375, 1e-12) && seatRaise(-0.02) === 0 && seatRaise(-0.015) === 0 && near(seatRaise(0.015), 0.015, 1e-12) && near(seatRaise(0.03), 0.03, 1e-12))
+  // [12b] review 13-contact#3: the next frame of a HELD seat pose — the mixer did not re-write the unchanged leg
+  // values, so the bones still hold the lift. The lift is measured on the clip pose again: d = 0.04, r = 0.04, the
+  // same knee/ankle as [12], the heel ON the floor. The old code read its own result (d = 0 → r = seatRaise(0) =
+  // 0.00375) and lifted the ankle to 0.04375, creeping towards SEAT_FADE_M over the floor frame by frame.
+  const held = seatFootLift(THREE, seat.root, fpSeat, 0)
+  seat.root.updateMatrixWorld(true)
+  check('[12b] held pose, second frame: r 0.04 again, knee (0, 0.489996, 0.448219), ankle (0, 0.04, 0.45)',
+    near(held.left, 0.04, 1e-9) && nearV(worldOf(seat.lo), [0, 0.489996, 0.448219]) && nearV(worldOf(seat.ft), [0, 0.04, 0.45]),
+    `${held.left} ${fmt(worldOf(seat.ft))}`)
+  for (let f = 0; f < 60; f++) seatFootLift(THREE, seat.root, fpSeat, 0)
+  seat.root.updateMatrixWorld(true)
+  check('[12b] 60 more held frames: the heel stays ON the floor (no creep)',
+    near(footContactsNow(THREE, seat.root, fpSeat).left[0].y, 0, 1e-6), footContactsNow(THREE, seat.root, fpSeat).left[0].y.toFixed(7))
+  // [12c] the mixer wrote a NEW foot value (local R(+y, 30°), about the vertical) but left the legs: UpLeg and Leg go
+  // back to the clip's identity, the Foot keeps the mixer's value — the lift is again r = 0.04 with the same knee,
+  // and the Foot's world quaternion is R(+y, 30°) = (0, 0.258819, 0, 0.965926) (up and leg at identity).
+  seat.ft.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), 30 * Math.PI / 180)
+  const mixed = seatFootLift(THREE, seat.root, fpSeat, 0)
+  seat.root.updateMatrixWorld(true)
+  const fq = worldQ(seat.ft)
+  check('[12c] a bone the mixer re-wrote is not restored: r 0.04, knee as [12], Foot world R(+y, 30°)',
+    near(mixed.left, 0.04, 1e-9) && nearV(worldOf(seat.lo), [0, 0.489996, 0.448219])
+    && nearQ(new THREE.Quaternion(...fq), [0, 0.258819, 0, 0.965926], 1e-6), fmt(fq))
   const crossed = leg()
   const r2 = seatFootLift(THREE, crossed.root, fpSeat, -0.14)
   crossed.root.updateMatrixWorld(true)
