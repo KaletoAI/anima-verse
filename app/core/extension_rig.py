@@ -250,8 +250,10 @@ def extension_bone_names(character_name, profile=None):
 # mended (Ruling A77c). 7: the op reports its opening (centre and inward axis in bind space) for a channel region
 # declared ``from_rig`` — a build-6 sidecar lacks it. 8: the pelvis rule — a declared share of the part's skin
 # weight on the pelvis bone, blended over a band around the welded border, so the opening region stays on the pelvis
-# when the legs flex (Ruling A117).
-PART_BUILDS = {"attached_part": 13, "inset_part": 8}
+# when the legs flex (Ruling A117). 9: the fit at the border (A169) — the inward-facing skin under the region stays
+# (removing it opened the outer skin and cut a strip of skin loose), the band's weights are a harmonic blend on the
+# welded mesh, the part is one-sided and carries the body's roughness.
+PART_BUILDS = {"attached_part": 13, "inset_part": 9}
 # The same for the other operations; pair_tip 1: a geometry apex (no colour
 # marker) is a tip suggestion too, and the tip override moves it. 2: the tip
 # settles onto the levelled skin and the levelling is measured in the frame

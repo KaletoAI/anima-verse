@@ -215,7 +215,7 @@ def probe(directory):
         expected = (raw*(1-clean[...,None]) + captured['fill']*clean[...,None])*captured['tint_px'][...,:3]
         assert np.max(abs(baked[covered]-expected[covered])) < .5/255 + 1e-6, ('blend error', np.max(abs(baked[covered]-expected[covered])))
         print('PASS stripe fill, constant interior within .025, raw border and clean ramp')
-    assert metrics['inner_wall_faces_removed'] > 0, metrics
+    assert metrics['inner_wall_faces_kept'] > 0 and metrics['cut_loose_vertices_removed'] == 0, metrics
     opening = metrics['opening']
     assert set(opening) == {'centre', 'axis'} and len(opening['centre']) == len(opening['axis']) == 3, opening
     assert abs(np.linalg.norm(opening['axis']) - 1) < 1e-6, opening
@@ -225,14 +225,15 @@ def probe(directory):
         assert math.degrees(math.acos(min(1., cosine))) < 1., opening
     assert np.all(captured['fac_b'][captured['near']] > .2)
     assert np.max(np.abs(captured['r_b'][(np.abs(captured['u_b']) < 1e-6) & captured['near']])) < .001
-    assert len(captured['inner_wall']) == metrics['inner_wall_faces_removed']
+    assert len(captured['inner_wall']) == metrics['inner_wall_faces_kept']
     assert not (captured['inner_wall'] & captured['sel_polys'])
     position_key = lambda p: tuple(round(float(x)/1e-6) for x in p)
-    removed_faces = {frozenset(position_key(positions[v]) for v in source_faces[i])
-                     for i in captured['inner_wall']}
+    kept_faces = {frozenset(position_key(positions[v]) for v in source_faces[i])
+                  for i in captured['inner_wall']}
     remaining_faces = {frozenset(position_key(body.matrix_world @ body.data.vertices[v].co) for v in face.vertices)
                        for face in body.data.polygons if face.material_index == 0}
-    assert removed_faces.isdisjoint(remaining_faces)
+    # The inward shell under the region stays (A169): removing it opened the outer skin.
+    assert kept_faces <= remaining_faces
     if '--fallback' in sys.argv:
         assert metrics['underside_m'] == .138 and metrics['scale'] == 1., metrics
     elif '--short' in sys.argv:

@@ -264,6 +264,18 @@ def opening_metric(prof, pn, S, s_mid, xm, Mi, Ni3):
 SLIVER_ASPECT = 20.          # longest edge over its height: a face past it is a sliver (A77b)
 MEND_ROUNDS = 3               # mend-and-place rounds of the displaced patch (A77c)
 LEVEL_GRID_M = .0015
+# The fit at the border (A169), measured on a mesher-built base model (2026-11-17) with thighs flexed 0/60/90/120
+# degrees: (1) the inward-facing skin under the region is no longer removed — removing it opened 330 border edges on
+# the outer skin (a gap when the thighs part) and cut a 290-vertex strip of skin loose, which kept its leg weights
+# while everything around it rode the pelvis and stood out as a flap; a piece the region's replacement still cuts
+# loose is deleted; (2) the part is one-sided like the body (double-sided, it showed its dark back wherever the skin
+# folded over it) and carries the body's roughness instead of a constant .55; (3) inside the
+# pelvis band the weights are the harmonic blend (inverse-edge-length Laplace, conjugate gradients) between the core
+# and the untouched skin around it, solved on the welded mesh so the border has no kink: the band's smoothstep in
+# skin distance folded 3.4 % of the region's area at 60 degrees where the source folded none.
+HARMONIC_ITERATIONS = 4000
+HARMONIC_TOLERANCE = 1e-7
+BAND_ATTRIBUTE = '_inset_band'
 LEVEL_FIT_ITERATIONS = 6
 
 
@@ -761,6 +773,165 @@ def pelvis_weights(weights, floors, bone):
     return out
 
 
+def harmonic_fill(n, edges, lengths, free, X, iterations=HARMONIC_ITERATIONS, tolerance=HARMONIC_TOLERANCE):
+    """``X`` (n x k) with the rows of ``free`` (bool, n) replaced by the harmonic interpolation of the other rows
+    along ``edges`` (m x 2) weighted by inverse length: the solution of the graph Laplace equation, by conjugate
+    gradients per column started at ``X``. A free row joined to no fixed row through free rows keeps its start."""
+    X = np.array(X, float)
+    edges = np.asarray(edges, int).reshape(-1, 2)
+    w = 1. / np.maximum(np.asarray(lengths, float), 1e-5)
+    free = np.asarray(free, bool)
+    a, b = edges[:, 0], edges[:, 1]
+    keep = free[a] | free[b]
+    a, b, w = a[keep], b[keep], w[keep]
+    if not free.any() or not len(a):
+        return X
+    degree = np.bincount(a, w, n) + np.bincount(b, w, n)
+
+    def spread(Y):
+        return np.stack([np.bincount(a, w * Y[b, k], n) + np.bincount(b, w * Y[a, k], n) for k in range(Y.shape[1])], 1)
+
+    def apply(Y):
+        out = degree[:, None] * Y - spread(Y)
+        out[~free] = 0
+        return out
+
+    fixed = X.copy()
+    fixed[free] = 0
+    rhs = spread(fixed)
+    rhs[~free] = 0
+    Y = X.copy()
+    Y[~free] = 0
+    r = rhs - apply(Y)
+    d = r.copy()
+    rr = (r * r).sum(0)
+    limit = tolerance ** 2 * np.maximum((rhs * rhs).sum(0), 1e-30)
+    for _ in range(iterations):
+        if (rr <= limit).all():
+            break
+        Ad = apply(d)
+        dAd = (d * Ad).sum(0)
+        alpha = np.where(dAd > 0, rr / np.where(dAd > 0, dAd, 1), 0)
+        Y += alpha * d
+        r -= alpha * Ad
+        rr_new = (r * r).sum(0)
+        d = r + np.where(rr > 0, rr_new / np.where(rr > 0, rr, 1), 0) * d
+        rr = rr_new
+    return np.where(free[:, None], Y, X)
+
+
+def position_groups(coordinates, quantum=1e-5):
+    """One id per distinct position (``quantum`` grid): the seam copies of a vertex share it."""
+    keys = np.round(np.asarray(coordinates, float) / quantum).astype(np.int64)
+    _, ids = np.unique(keys, axis=0, return_inverse=True)
+    return ids.ravel()
+
+
+def blend_band_weights(obj, bone):
+    """Replace the weights of the vertices flagged in BAND_ATTRIBUTE by the harmonic blend of the others (A169), on
+    the welded mesh: seam copies are one node, an edge between two nodes weighs by its inverse length. Groups with
+    no weight in or around the band are left alone; the result is normalised to the vertex's former total, weights
+    under .001 dropped. Returns the number of band nodes and how many bones the blend covered."""
+    me = obj.data
+    flag = np.zeros(len(me.vertices))
+    me.attributes[BAND_ATTRIBUTE].data.foreach_get('value', flag)
+    co = np.zeros(len(me.vertices) * 3)
+    me.vertices.foreach_get('co', co)
+    co = co.reshape(-1, 3)
+    gid = position_groups(co)
+    n = int(gid.max()) + 1
+    free = np.zeros(n, bool)
+    np.logical_or.at(free, gid, flag > .5)
+    ev = np.zeros(len(me.edges) * 2, int)
+    me.edges.foreach_get('vertices', ev)
+    ev = gid[ev.reshape(-1, 2)]
+    ev = ev[ev[:, 0] != ev[:, 1]]
+    ev = np.unique(np.sort(ev, 1), axis=0)
+    pos = np.zeros((n, 3))
+    pos[gid] = co
+    lengths = np.linalg.norm(pos[ev[:, 0]] - pos[ev[:, 1]], axis=1)
+    near = free.copy()
+    near[ev[free[ev[:, 0]], 1]] = True
+    near[ev[free[ev[:, 1]], 0]] = True
+    names = [g.name for g in obj.vertex_groups]
+    W = np.zeros((len(me.vertices), len(names)))
+    for v in me.vertices:
+        if near[gid[v.index]]:
+            for g in v.groups:
+                W[v.index, g.group] = g.weight
+    total = W.sum(1)
+    Wn = W / np.where(total > 0, total, 1)[:, None]
+    G = np.zeros((n, len(names)))
+    G[gid] = Wn
+    cols = np.nonzero(G[near].max(0) > 0)[0]
+    if bone in names:
+        cols = np.union1d(cols, [names.index(bone)])
+    sub = np.unique(np.concatenate([np.nonzero(near)[0]]))
+    index = -np.ones(n, int)
+    index[sub] = np.arange(len(sub))
+    inside = (index[ev[:, 0]] >= 0) & (index[ev[:, 1]] >= 0)
+    H = harmonic_fill(len(sub), index[ev[inside]], lengths[inside], free[sub], G[np.ix_(sub, cols)])
+    H = np.clip(H, 0, None)
+    H[H < 1e-3] = 0
+    H /= np.maximum(H.sum(1, keepdims=True), 1e-12)
+    for v in me.vertices:
+        node = gid[v.index]
+        if not free[node]:
+            continue
+        row = H[index[node]] * (total[v.index] if total[v.index] > 0 else 1.)
+        for k in cols:
+            group = obj.vertex_groups[int(k)]
+            if row[list(cols).index(k)] > 0:
+                group.add([v.index], float(row[list(cols).index(k)]), 'REPLACE')
+            else:
+                group.remove([v.index])
+    return int(free.sum()), len(cols)
+
+
+def body_roughness(bsdf):
+    """``(image, value)``: the image whose green channel feeds the body's roughness (glTF metallic-roughness), or
+    None and the input's own value when it is not textured that way."""
+    node = bsdf.inputs['Roughness'].links[0].from_node if bsdf.inputs['Roughness'].links else None
+    while node is not None and node.type != 'TEX_IMAGE':
+        linked = [i for i in node.inputs if i.links]
+        node = linked[0].links[0].from_node if linked else None
+    return (node.image if node is not None else None), float(bsdf.inputs['Roughness'].default_value)
+
+
+def pieces(bm):
+    """Per vertex of ``bm`` the id of its connected piece, seam copies joined by position."""
+    bm.verts.ensure_lookup_table()
+    bm.verts.index_update()
+    gid = position_groups([tuple(v.co) for v in bm.verts])
+    parent = list(range(int(gid.max()) + 1))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    for e in bm.edges:
+        a, b = find(gid[e.verts[0].index]), find(gid[e.verts[1].index])
+        if a != b:
+            parent[a] = b
+    return np.array([find(g) for g in gid])
+
+
+def cut_loose(bm, before):
+    """The vertices of ``bm`` cut loose by a face removal: ``before`` (an int vertex layer) holds each vertex's piece
+    from ``pieces`` before the removal; of the pieces one former piece fell into, all but the largest go."""
+    after = pieces(bm)
+    former = np.array([v[before] for v in bm.verts])
+    sizes = {}
+    for f, a in zip(former, after):
+        sizes[(f, a)] = sizes.get((f, a), 0) + 1
+    keep = {}
+    for (f, a), n in sizes.items():
+        if n > keep.get(f, (None, -1))[1]:
+            keep[f] = (a, n)
+    return [v for v, f, a in zip(bm.verts, former, after) if keep[f][0] != a]
+
+
 def skin_distance(adjacency, positions, seeds, limit):
     """Shortest distance along mesh edges from ``seeds`` (vertex indices) to every vertex within ``limit``."""
     import heapq
@@ -1071,12 +1242,17 @@ def build_part(group, output):
             for g, x in new.items():
                 vg = body.vertex_groups.get(g) or body.vertex_groups.new(name=g)
                 vg.add([i_], x, 'REPLACE')
+        band_body = np.zeros(len(V))
+        band_body[hull_idx] = 1.
         pelvis = {'bone': pelvis_bone, 'share': pv['share'], 'ring_m': round(float(inner_m), 4),
                   'spread_m': round(float(outer_m), 4), 'depth_max_m': round(float(depth.max()), 4),
                   'raised': int((after > before + 1e-9).sum()), 'core_vertices': int((floors >= pv['share'] - 1e-9).sum()),
                   'skin_raised': hull_raised,
                   'mean_share_before': round(float(before.mean()), 3), 'mean_share_after': round(float(after.mean()), 3)}
         print('pelvis rule', pelvis)
+    band_part = np.zeros(len(Q))
+    if pelvis is not None:
+        band_part = (floors < pv['share'] - 1e-9).astype(float)
     for i, w in enumerate(qw):
         for g, x in w.items():
             if x > 0:
@@ -1098,7 +1274,9 @@ def build_part(group, output):
     for loop in me.loops:
         uv = (su[loop.vertex_index] - lo) / span + .01
         bake_uv.data[loop.index].uv = tuple(uv)
-    img = next(nd.inputs['Base Color'].links[0].from_node.image for nd in body.active_material.node_tree.nodes if nd.type == 'BSDF_PRINCIPLED')
+    body_bsdf = next(nd for nd in body.active_material.node_tree.nodes if nd.type == 'BSDF_PRINCIPLED')
+    img = body_bsdf.inputs['Base Color'].links[0].from_node.image
+    rough_image, rough_value = body_roughness(body_bsdf)
     bimg = bpy.data.images.new('part_baked', P['bake'], P['bake'], alpha=False)
     bimg.generated_color = (.8, .65, .6, 1)
     mat = bpy.data.materials.new('part_bake')
@@ -1118,9 +1296,11 @@ def build_part(group, output):
     sc.render.engine = 'CYCLES'; sc.cycles.device = 'CPU'; sc.cycles.samples = 1; sc.render.bake.margin = 24
     BS = P['bake']
 
-    def bake_layer(socket):
-        """Read each emission layer back in the same image space."""
+    def bake_layer(socket, data=False):
+        """Read each emission layer back in the same image space (``data``: unconverted values, no colour space)."""
         image = bpy.data.images.new('layer', BS, BS, alpha=False)
+        if data:
+            image.colorspace_settings.name = 'Non-Color'
         image.generated_color = (0, 0, 0, 1)
         node = Nd('ShaderNodeTexImage'); node.image = image; nt.nodes.active = node
         nt.links.new(socket, emit.inputs['Color'])
@@ -1134,6 +1314,14 @@ def build_part(group, output):
             bpy.data.images.remove(image)
 
     raw = bake_layer(tex.outputs['Color'])
+    rough_px = None
+    if rough_image is not None:
+        # The body's roughness rides along like its colour (A169): a constant on the part stood out at the border.
+        rtex = Nd('ShaderNodeTexImage'); rtex.image = rough_image
+        rsep = Nd('ShaderNodeSeparateColor')
+        nt.links.new(uvn.outputs['UV'], rtex.inputs['Vector'])
+        nt.links.new(rtex.outputs['Color'], rsep.inputs['Color'])
+        rough_px = bake_layer(rsep.outputs['Green'], data=True)[..., 0]
     tint_px = bake_layer(att.outputs['Color'])
     clean_px = bake_layer(cla.outputs['Fac'])[..., 0]
     cover = bake_layer(white.outputs[0])[..., 0] > .5
@@ -1170,7 +1358,21 @@ def build_part(group, output):
     nt.nodes.clear()
     out = Nd('ShaderNodeOutputMaterial'); bsdf = Nd('ShaderNodeBsdfPrincipled'); tb = Nd('ShaderNodeTexImage'); tb.image = bimg
     nt.links.new(tb.outputs['Color'], bsdf.inputs['Base Color']); nt.links.new(bsdf.outputs['BSDF'], out.inputs['Surface'])
-    bsdf.inputs['Roughness'].default_value = .55
+    bsdf.inputs['Roughness'].default_value = rough_value
+    if rough_px is not None:
+        rimg = bpy.data.images.new('part_rough', BS, BS, alpha=False)
+        rimg.colorspace_settings.name = 'Non-Color'
+        rpx = np.ones((BS, BS, 4), np.float32)
+        rpx[..., 0] = rpx[..., 2] = 0
+        rpx[..., 1] = rough_px
+        rimg.pixels.foreach_set(rpx.ravel())
+        rimg.pack()
+        tr = Nd('ShaderNodeTexImage'); tr.image = rimg
+        rs = Nd('ShaderNodeSeparateColor')
+        nt.links.new(tr.outputs['Color'], rs.inputs['Color'])
+        nt.links.new(rs.outputs['Green'], bsdf.inputs['Roughness'])
+    # One-sided like the body (A169): a double-sided part showed its dark back wherever the skin folded over it.
+    mat.use_backface_culling = True
     me.uv_layers.remove(me.uv_layers['body'])
     me.uv_layers['bake'].name = uvname
     me.attributes.remove(clean_attribute)
@@ -1181,14 +1383,32 @@ def build_part(group, output):
     _bmp = bmesh.new(); _bmp.from_mesh(me)
     part_border_local = [v.co.copy() for v in _bmp.verts if v.is_boundary]
     _bmp.free()
-    bmb = bmesh.new(); bmb.from_mesh(body.data); bmb.faces.ensure_lookup_table()
+    # The skin facing inward under the region (the inner wall of a double-walled body, a fold's underside) stays
+    # (A169): one-sided like the rest of the body it is not seen from outside, and removing it opened the outer skin.
+    # In the pelvis band it is blended with the skin around it, so it moves with it.
     inner_wall = {t.polygon_index for t in body.data.loop_triangles if all(
         fac_b[v] < -.2 and -.04 < r_b[v] < 0
         and R['s0'] - R['fall'] < s_b[v] < R['s1'] + R['fall']
         and abs(u_b[v]) < R['u'] + R['fall'] for v in t.vertices)}
-    print('inner wall faces removed', len(inner_wall))
-    bmesh.ops.delete(bmb, geom=[bmb.faces[i] for i in sel_polys | inner_wall], context='FACES')
+    print('inner wall faces kept', len(inner_wall))
+    if pelvis is not None:
+        for pi in inner_wall:
+            band_body[list(body.data.polygons[pi].vertices)] = 1.
+        body.data.attributes.new(BAND_ATTRIBUTE, 'FLOAT', 'POINT').data.foreach_set('value', band_body.astype(np.float32))
+    bmb = bmesh.new(); bmb.from_mesh(body.data); bmb.faces.ensure_lookup_table()
+    piece_layer = bmb.verts.layers.int.new('_piece')
+    for v, piece in zip(bmb.verts, pieces(bmb)):
+        v[piece_layer] = int(piece)
+    bmesh.ops.delete(bmb, geom=[bmb.faces[i] for i in sel_polys], context='FACES')
+    loose = cut_loose(bmb, piece_layer)
+    if loose:
+        bmesh.ops.delete(bmb, geom=loose, context='VERTS')
+    print('cut-loose skin vertices removed', len(loose))
+    bmb.verts.layers.int.remove(piece_layer)
     bmb.to_mesh(body.data); bmb.free()
+    if pelvis is not None:
+        part_band = me.attributes.new(BAND_ATTRIBUTE, 'FLOAT', 'POINT')
+        part_band.data.foreach_set('value', band_part.astype(np.float32))
     for o in bpy.context.scene.objects:
         o.select_set(o in (body, part))
     bpy.context.view_layer.objects.active = body
@@ -1207,6 +1427,11 @@ def build_part(group, output):
         if e.is_boundary and any(f.material_index == mi_part for f in e.link_faces):
             open_left += 1
     bmb.free()
+    if pelvis is not None:
+        nodes, bones = blend_band_weights(body, pelvis['bone'])
+        pelvis['band_nodes'] = nodes
+        print('pelvis band blended harmonically', nodes, 'nodes', bones, 'bones')
+        body.data.attributes.remove(body.data.attributes[BAND_ATTRIBUTE])
     print('open patch border edges after weld', open_left, 'part material', body.data.materials[mi_part].name, 'body tris', len(body.data.polygons))
 
     bpy.ops.export_scene.gltf(filepath=str(output), export_format='GLB', export_apply=False,
@@ -1217,7 +1442,7 @@ def build_part(group, output):
     opening = opening_metric(prof, pn, S, s_open, xm, Mi, Ni3) if s_open is not None else None
     return {'status': 'applied', 'reason': '', 'anchor': prof[i0].tolist(),
             'underside_m': underside, 'scale': scale, 'front_corner': prof[i0].tolist(),
-            'inner_wall_faces_removed': len(inner_wall),
+            'inner_wall_faces_kept': len(inner_wall), 'cut_loose_vertices_removed': len(loose),
             'patch_tris': patch_tris,
             'border_vertices': int(border.sum()), 'open_border_edges': open_left,
             'border_max_abs_h': float(np.abs(hq[border]).max()) if border.any() else 0.,
