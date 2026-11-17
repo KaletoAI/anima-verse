@@ -26,7 +26,8 @@ Temporary NPCs are the characters whose template carries the feature ``temporary
 (``character.is_temporary_npc``); the template is read from ``shared/templates/character/<template>.json``.
 
 Nothing is deleted: everything is MOVED to ``<world>/.purge-backup-a197-<stamp>/`` under the same relative path,
-the DB rows go to ``db_rows.json`` there, ``manifest.json`` lists every move.
+the DB rows go to ``db_rows.json`` there, ``manifest.json`` lists every move (written before the first move,
+so an interrupted ``--apply`` is undone by ``--restore`` too).
 
 Usage (server STOPPED — ``./start.sh --stop``):
     ./.venv/bin/python scripts/purge_meshes_a197.py --world "worlds/Anima Divide"            # dry run
@@ -300,10 +301,28 @@ def _prune_empty(world: Path, rels: List[str]) -> None:
             full.rmdir()
 
 
+def _write_json(path: Path, data: Dict) -> None:
+    """Atomic JSON write (temp sibling + ``os.replace``): a crash leaves the old or the new file, never half."""
+    tmp = path.with_name(path.name + ".a197tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def apply(world: Path, p: Dict, stamp: Optional[str] = None) -> Path:
     stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
     backup = world / f"{BACKUP_PREFIX}{stamp}"
     backup.mkdir()
+    rows = [h["row"] for h in p["hub_ops"]]
+    # Manifest + DB rows are written BEFORE the first move, listing the whole plan: a run that dies
+    # half-way (one unreadable file, a full disk, a record that changed since the plan) still leaves a
+    # backup that --restore undoes — restore brings back exactly the entries that reached the backup.
+    planned = ([e["path"] for c in p["characters"].values() for e in c["files"]]
+               + [e["path"] for f in p["footwear"] for e in f["files"]]
+               + [e["path"] for h in p["hub_ops"] for e in h["files"]])
+    _write_json(backup / "db_rows.json", {"hub_ops": rows})
+    _write_json(backup / "manifest.json", {"moved": planned, "complete": False,
+                                           "records_rewritten": [f["record"] for f in p["footwear"]
+                                                                 if f["record"]]})
     moves: List[str] = []
     records: List[str] = []
     for c in p["characters"].values():
@@ -323,14 +342,10 @@ def apply(world: Path, p: Dict, stamp: Optional[str] = None) -> Path:
             tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
             os.replace(tmp, rec)
             records.append(f["record"])
-    rows = [h["row"] for h in p["hub_ops"]]
     for h in p["hub_ops"]:
         for e in h["files"]:
             _move(world, backup, e["path"], moves)
-    (backup / "db_rows.json").write_text(json.dumps({"hub_ops": rows}, ensure_ascii=False, indent=2),
-                                         encoding="utf-8")
-    (backup / "manifest.json").write_text(json.dumps({"moved": moves, "records_rewritten": records},
-                                                     ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_json(backup / "manifest.json", {"moved": moves, "records_rewritten": records, "complete": True})
     if rows:
         con = sqlite3.connect(str(world / "world.db"))
         try:
@@ -344,14 +359,19 @@ def apply(world: Path, p: Dict, stamp: Optional[str] = None) -> Path:
 
 def restore(world: Path, backup: Path) -> None:
     man = json.loads((backup / "manifest.json").read_text(encoding="utf-8"))
-    clash = [r for r in man["moved"] if (world / r).exists()]
+    # An interrupted apply leaves the planned list: only what actually reached the backup comes back.
+    moved = [r for r in man["moved"] if os.path.lexists(backup / r)]
+    clash = [r for r in moved if os.path.lexists(world / r)]
     if clash:
         raise SystemExit(f"refusing to restore: {len(clash)} target files exist again, e.g. {clash[0]}")
-    for r in man["moved"]:
+    for r in moved:
         (world / r).parent.mkdir(parents=True, exist_ok=True)
         os.replace(backup / r, world / r)
     for r in man["records_rewritten"]:
-        os.replace(backup / r, world / r)
+        # The original is copied aside before the rewrite; a copy that exists is the original.
+        if os.path.lexists(backup / r):
+            os.replace(backup / r, world / r)
+    # Rows an interrupted apply never deleted are re-inserted unchanged (INSERT OR REPLACE, same values).
     rows = json.loads((backup / "db_rows.json").read_text(encoding="utf-8")).get("hub_ops") or []
     if rows:
         con = sqlite3.connect(str(world / "world.db"))

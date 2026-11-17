@@ -16,6 +16,13 @@ The fake world (hand-built, sizes chosen so the totals are derivable by hand):
 Expected by hand: purged = Ann, Bob. Ann: 100+200+50+7 = 357 B in 4 files; Bob: 350 B in 3 files;
 footwear item_boot: 30+20+5 = 55 B in 3 files; hub op hop_a: 4 B in 1 file.
 Total = 357 + 350 + 55 + 4 = 766 B, 11 files, 1 DB row. Images (worn_front, tpose, cutout) all stay.
+
+Interrupted apply (review 14#4): on a fresh copy of the same world, ``_move`` raises OSError on its 6th call.
+Move order is Ann (4 files) then Bob, so exactly 5 files reach the backup, no footwear record is rewritten and
+hop_a is not deleted. The manifest exists already (written before the first move, ``complete`` false, the
+11 planned paths); ``restore`` then brings back exactly those 5 files: the snapshot equals the one before,
+hub ops stay hop_a/hop_g/hop_p, the backup folder is gone. (On the old code the manifest was written only
+after the last move, so restore died on the missing manifest.json.)
 """
 import io
 import json
@@ -139,6 +146,43 @@ def main() -> int:
         con.close()
         check(ops == ["hop_a", "hop_g", "hop_p"], f"hub ops after restore {ops}")
         check(not backup.exists(), "backup removed after restore")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        world = Path(tmp) / "w"
+        world.mkdir()
+        build(world)
+        before = snapshot(world)
+        p = pm.plan(world, ["Spoty", "Gelina"])
+        real_move, calls = pm._move, []
+
+        def failing_move(*args):
+            calls.append(args[2])
+            if len(calls) == 6:
+                raise OSError("disk full (smoke)")
+            real_move(*args)
+
+        pm._move = failing_move
+        try:
+            pm.apply(world, p, stamp="crash")
+            check(False, "interrupted apply raised")
+        except OSError:
+            pass
+        finally:
+            pm._move = real_move
+        backup = world / f"{pm.BACKUP_PREFIX}crash"
+        man = json.loads((backup / "manifest.json").read_text()) if (backup / "manifest.json").is_file() else None
+        check(man is not None and man.get("complete") is False and len(man["moved"]) == 11,
+              f"manifest before the first move: {man and (man.get('complete'), len(man['moved']))}")
+        moved = sorted(str(f.relative_to(backup)) for f in backup.rglob("*")
+                       if f.is_file() and f.name not in ("manifest.json", "db_rows.json"))
+        check(len(moved) == 5, f"5 files reached the backup, got {len(moved)}")
+        pm.restore(world, backup)
+        check(snapshot(world) == before, "restore after an interrupted apply brings every file back")
+        con = sqlite3.connect(str(world / "world.db"))
+        ops = sorted(r[0] for r in con.execute("SELECT op_id FROM hub_ops"))
+        con.close()
+        check(ops == ["hop_a", "hop_g", "hop_p"], f"hub ops after interrupted apply + restore {ops}")
+        check(not backup.exists(), "backup removed after restore of an interrupted apply")
     print("FAILED" if FAIL else "OK purge_meshes_a197")
     return 1 if FAIL else 0
 
