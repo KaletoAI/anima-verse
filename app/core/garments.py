@@ -4329,8 +4329,10 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
         if job is None:
             job = wanted
             queue.append(job)
-        # A click is never held by the pause (Ruling A42) — nor the waiting run it attached to.
+        # A click is never held by the pause (Ruling A42) — nor the waiting run it attached to — and is an
+        # explicit run: a waiting automatic run it took over no longer honours ``cached_failure`` (review 01#4).
         job.clicked = True
+        job.automatic = False
         if track and not job.track:
             job.track, track = track, ""
         if not gs.status(character_name, item_id).get("running_step"):
