@@ -33,8 +33,11 @@ import json
 import math
 import os
 import re
+import shutil
 import struct
 import tempfile
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -905,16 +908,52 @@ def delete_inbox(name: str) -> bool:
 
 
 def preview_dir() -> Path:
-    """Where a probe conversion lands (inside the inbox, hidden, overwritten
-    by the next probe)."""
+    """Where probe conversions land (inside the inbox, hidden): one run
+    directory per probe, ``.preview/<token>/``."""
     return get_clips_inbox_dir() / ".preview"
 
 
+#: How long a probe's files stay fetchable: a later probe removes run
+#: directories older than this, never a younger one — two tabs (or a double
+#: click) probing at once must not delete each other's files.
+PREVIEW_KEEP_S = 3600
+
+#: ``<token>-preview.fbx`` / ``<token>-preview__<role>.fbx`` — the ONE path
+#: segment a probe URL carries; the token names the run directory.
+_PREVIEW_NAME_RE = re.compile(r"^([0-9a-f]{12})-(preview(?:__[a-e])?\.fbx)$")
+
+
+def _new_preview_run() -> Tuple[str, Path]:
+    """A fresh run directory for one probe, after sweeping old ones."""
+    root = preview_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    horizon = time.time() - PREVIEW_KEEP_S
+    for old in root.iterdir():
+        try:
+            if old.is_dir() and old.stat().st_mtime < horizon:
+                shutil.rmtree(old, ignore_errors=True)
+            elif old.is_file() and old.name.startswith("preview"):
+                old.unlink(missing_ok=True)     # the single-folder layout before runs
+        except OSError:
+            continue
+    while True:
+        token = uuid.uuid4().hex[:12]
+        run = root / token
+        try:
+            run.mkdir()
+            return token, run
+        except FileExistsError:
+            continue
+
+
 def preview_clip_path(name: str) -> Optional[Path]:
-    """A probe clip by file name — only the names the probe writes."""
-    if name != "preview.fbx" and name not in {f"preview__{r}.fbx" for r in CLIP_ROLES}:
+    """A probe clip by its URL name — only the names a probe hands out."""
+    m = _PREVIEW_NAME_RE.match(str(name or ""))
+    if not m:
         return None
-    p = preview_dir() / name
+    if m.group(2) != "preview.fbx" and m.group(2) not in {f"preview__{r}.fbx" for r in CLIP_ROLES}:
+        return None
+    p = preview_dir() / m.group(1) / m.group(2)
     return p if p.is_file() else None
 
 
@@ -1025,15 +1064,13 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
         yaw_deg=yaw_deg, level_head=level_head)
     if preview:
         params["kind"] = "preview"
-        out = preview_dir()
-        out.mkdir(parents=True, exist_ok=True)
-        for stale in out.glob("preview*"):
-            stale.unlink()
+        token, out = _new_preview_run()
         res = runner.run("fbx_clip", inputs=inputs, params=params, out_dir=out,
                          timeout_s=timeout_s)
         if not res["ok"]:
+            shutil.rmtree(out, ignore_errors=True)
             raise ClipImportError(str(res.get("error") or "blender run failed"))
-        base = "/assets/clips-inbox/preview-clip/"
+        base = f"/assets/clips-inbox/preview-clip/{token}-"
         urls = ({r: base + f"preview__{r}.fbx" for r in params["roles"]}
                 if len(paths_in) >= 2 else {"solo": base + "preview.fbx"})
         return {"preview": True, "pair": len(paths_in) >= 2,

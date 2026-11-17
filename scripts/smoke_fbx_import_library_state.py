@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Smoke: what an inbox import leaves in the clip library besides its own
-outputs (review 04#3, 04#5).
+outputs (review 04#3, 04#5, 04#10).
 
 Blender is stood in for (``runner.run`` / ``runner.status`` patched, the
 source probe ``_prepare_source`` patched to a fixed family); every directory
@@ -39,6 +39,17 @@ Usage: ./.venv/bin/python scripts/smoke_fbx_import_library_state.py
     with overwrite: afterwards the only clip file of kind hug is ``hug.fbx``
     (beside ``hug.json``, now a solo sidecar) — no ``hug__a``, ``hug__b``,
     ``hug__b~wave``.
+[E] two probes (``preview=True``) one after the other, A from a.fbx, B from
+    b.fbx (04#10). Each answers its own URL
+    ``/assets/clips-inbox/preview-clip/<12 hex>-preview.fbx``; the tokens
+    differ, and AFTER B ran A's URL still resolves (``preview_clip_path``)
+    to A's file (b"preview-a.fbx"), B's to B's. The old code wrote every
+    probe to ``.preview/preview.fbx`` and deleted the folder's files first:
+    both URLs were the same name and A's served B's bytes.
+    ``preview_clip_path`` refuses ``preview.fbx`` (no token), a token with
+    a path part, a non-probe name; a run directory last touched 2 h ago is
+    swept by the next probe, one touched 10 min ago stays (PREVIEW_KEEP_S =
+    3600 s).
 """
 import json
 import os
@@ -101,7 +112,9 @@ def fake_run(script, *, inputs=None, params=None, out_dir=None, timeout_s=0):
     if params.get("export") != "alts":
         kind, roles = params["kind"], params.get("roles") or []
         for stem in ([f"{kind}__{r}" for r in roles] or [kind]):
-            (out / f"{stem}.fbx").write_bytes(b"new-" + stem.encode())
+            data = (b"preview-" + Path(inputs["src"]).name.encode() if kind == "preview"
+                    else b"new-" + stem.encode())
+            (out / f"{stem}.fbx").write_bytes(data)
             outputs[stem] = str(out / f"{stem}.fbx")
         side = {"kind": kind, "pair": bool(roles), "roles": roles}
         (out / f"{kind}.json").write_text(json.dumps(side), encoding="utf-8")
@@ -252,6 +265,36 @@ def test_overwrite_pair_as_solo():
           json.loads((LICENSED / "hug.json").read_text()).get("pair") is False)
 
 
+def test_previews_do_not_collide():
+    import time
+    print("[E] each probe keeps its own files and URL")
+    a = fbx_import.import_fbx("x", [{"name": "a.fbx", "take": None}], preview=True)
+    b = fbx_import.import_fbx("x", [{"name": "b.fbx", "take": None}], preview=True)
+    ua, ub = a["urls"]["solo"], b["urls"]["solo"]
+    import re
+    shape = re.compile(r"^/assets/clips-inbox/preview-clip/[0-9a-f]{12}-preview\.fbx$")
+    check("both URLs have the probe shape", bool(shape.match(ua) and shape.match(ub)), f"{ua} {ub}")
+    check("the two probes have different URLs", ua != ub, ua)
+    pa = fbx_import.preview_clip_path(ua.rsplit("/", 1)[1])
+    pb = fbx_import.preview_clip_path(ub.rsplit("/", 1)[1])
+    check("A's URL still serves A's file after B ran",
+          pa is not None and pa.read_bytes() == b"preview-a.fbx", str(pa))
+    check("B's URL serves B's file", pb is not None and pb.read_bytes() == b"preview-b.fbx", str(pb))
+    token = ua.rsplit("/", 1)[1][:12]
+    for name in ("preview.fbx", f"{token}-../preview.fbx", f"{token}-walk.fbx", f"{token}-preview__z.fbx"):
+        check(f"preview_clip_path refuses {name!r}", fbx_import.preview_clip_path(name) is None)
+    root = fbx_import.preview_dir()
+    old_run, young_run = root / "0123456789ab", root / "ba9876543210"
+    for run, age in ((old_run, 7200), (young_run, 600)):
+        run.mkdir()
+        (run / "preview.fbx").write_bytes(b"x")
+        os.utime(run, (time.time() - age, time.time() - age))
+    fbx_import.import_fbx("x", [{"name": "a.fbx", "take": None}], preview=True)
+    check("a run directory 2 h old is swept by the next probe", not old_run.exists())
+    check("a run directory 10 min old stays", (young_run / "preview.fbx").is_file())
+    check("A's run (seconds old) stays", pa.is_file())
+
+
 def main():
     INBOX.mkdir(parents=True, exist_ok=True)
     for name in ("a.fbx", "b.fbx", "alt.fbx"):
@@ -264,6 +307,7 @@ def main():
         test_alt_checks_current_frame()
         test_overwrite_group_as_pair()
         test_overwrite_pair_as_solo()
+        test_previews_do_not_collide()
     print("FAIL" if FAIL else "PASS", f"({len(FAIL)} failing)" if FAIL else "")
     return 1 if FAIL else 0
 
