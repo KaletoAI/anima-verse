@@ -102,6 +102,8 @@ SKIN_SHADE = 12.0            # shade distance within which a pixel has the skin'
 SKIN_LUM = 0.55              # ... and at least this share of the skin's brightness
 SKIN_OPEN = 2                # skin pixels form an area after this opening (px @1536)
 SKIN_GROW = 3                # ... which is grown by this before it is taken out (its shaded rim)
+SKIN_TEXTURE_PX = 5          # window (px @1536) of the local brightness spread an area is judged by
+SKIN_TEXTURE_SD = 6.0        # an area whose median local spread is above this is the piece's texture, not skin
 OPEN_PX = 1                  # opening of the piece mask (px @1536)
 CLOSE_PX = 2                 # closing of the piece mask (px @1536)
 PART_SHARE = 0.2             # a part is kept from this share of the largest part's area
@@ -242,6 +244,10 @@ def piece_mask(base_rgb, base_mask, worn_rgb, *,
             skinlike = (mask & (to_skin <= gg.shade_distance(worn, piece)) & (to_skin <= SKIN_SHADE)
                         & (worn.mean(2) >= SKIN_LUM * float(skin.mean())))
             area = ndimage.binary_opening(skinlike, iterations=_px(SKIN_OPEN, height))
+            # A166: skin is smooth; a lit patch of the piece's own texture (the glowing scales of Glut's cups,
+            # median spread 13 against the bare skin's 2.6) has the skin's hue and brightness too — it stays.
+            area, textured = _smooth_areas(worn, area, height)
+            numbers["skin_textured_kept_px"] = textured
             area = ndimage.binary_dilation(area, iterations=_px(SKIN_GROW, height)) if area.any() else area
             numbers["skin_removed_px"] = int((mask & area).sum())
             mask &= ~area
@@ -283,6 +289,24 @@ def piece_mask(base_rgb, base_mask, worn_rgb, *,
              else inner.astype(np.float32))
     alpha = np.where(mask, alpha, 0.0)
     return mask, alpha, numbers
+
+
+def _smooth_areas(worn: np.ndarray, area: np.ndarray, height: int) -> Tuple[np.ndarray, int]:
+    """``(the areas of ``area`` that are smooth like skin, the pixels of the textured ones dropped)``: per
+    connected area the median of the worn view's local brightness spread (standard deviation over a
+    ``SKIN_TEXTURE_PX`` window) — above ``SKIN_TEXTURE_SD`` it is the piece's own pattern."""
+    from scipy import ndimage
+    if not area.any():
+        return area, 0
+    lum = worn.mean(2)
+    size = max(3, _px(SKIN_TEXTURE_PX, height) | 1)
+    mean = ndimage.uniform_filter(lum, size)
+    spread = np.sqrt(np.maximum(ndimage.uniform_filter(lum * lum, size) - mean * mean, 0.0))
+    labels, count = ndimage.label(area)
+    medians = ndimage.median(spread, labels, index=np.arange(1, count + 1))
+    smooth = [i + 1 for i, m in enumerate(np.atleast_1d(medians)) if m <= SKIN_TEXTURE_SD]
+    kept = np.isin(labels, smooth)
+    return kept, int((area & ~kept).sum())
 
 
 def compose(worn_rgb, alpha, background=None) -> np.ndarray:
