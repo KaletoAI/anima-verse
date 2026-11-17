@@ -1334,6 +1334,9 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
                              # Ruling A129: partner B's renderer-only tilt/roll [deg], applied at placement.
                              "partner_turn_deg": read_partner_turn(shift_geometry.get("partner_turn_deg")
                                                                    if isinstance(shift_geometry, dict) else None),
+                             # Ruling A165: partner B's renderer-only yaw about its own vertical axis [deg].
+                             "partner_yaw_deg": read_partner_yaw(shift_geometry.get("partner_yaw_deg")
+                                                                 if isinstance(shift_geometry, dict) else None),
                              # D3 (Ruling A110): the place check the admin passed all-green, or None —
                              # cleared by the next bake.
                              "checked": (shift_geometry.get("checked")
@@ -2269,6 +2272,29 @@ def validate_partner_turn(value: Optional[Sequence[float]]) -> List[float]:
     return [float(v) for v in value]
 
 
+def validate_partner_yaw(value: Any) -> float:
+    """Ruling A165: one edit of partner B's renderer-only yaw about its own vertical axis, degrees within ±180."""
+    if value is None:
+        return 0.0
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or abs(value) > 180:
+        raise ClipLibraryError("partner_yaw_deg must be a number from -180 to 180")
+    return float(value)
+
+
+def read_partner_yaw(value: Any) -> float:
+    """The saved cumulative partner yaw, wrapped to -180..180; invalid data means zero."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return 0.0
+    return wrap_yaw(float(value))
+
+
+def wrap_yaw(deg: float) -> float:
+    """Degrees wrapped to (-180, 180]."""
+    w = math.fmod(deg + 180.0, 360.0)
+    w = w + 360.0 if w <= 0 else w
+    return round(w - 180.0, 2)
+
+
 def read_partner_turn(value: Any) -> List[float]:
     """The saved cumulative partner turn; invalid data means zero."""
     if (not isinstance(value, (list, tuple)) or len(value) != 2
@@ -2340,6 +2366,7 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
                 role_shift_cm: Optional[Dict[str, Sequence[float]]] = None,
                 shift_cm: Optional[Sequence[float]] = None,
                 partner_turn_deg: Optional[Sequence[float]] = None,
+                partner_yaw_deg: Optional[float] = None,
                 with_finales: bool = True,
                 checked: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Turns and lifts a clip IN THE FILE — the import dial, after the fact.
@@ -2379,6 +2406,10 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
     ``partner_turn_deg`` (Ruling A129) is a pair's cumulative renderer-only
     [tilt, roll] of partner B in degrees (``geometry.partner_turn_deg``),
     turned about B's hips at placement — no Blender.
+    ``partner_yaw_deg`` (Ruling A165) is a pair's cumulative renderer-only yaw
+    of partner B about its own vertical axis through its hips
+    (``geometry.partner_yaw_deg``, wrapped to ±180), applied before the
+    tilt/roll — no Blender.
     ``shift_cm`` is a cumulative renderer-only [side, forward] correction,
     -200..200 cm per edit, shared by both pair halves. It is applied after
     placement in the horizontal clip frame, independent of height and lean.
@@ -2411,6 +2442,7 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
         raise ClipLibraryError("partner_shift_cm must be three numbers from -100 to 100")
     horizontal = validate_clip_shift(shift_cm)
     turn = validate_partner_turn(partner_turn_deg)
+    pyaw = validate_partner_yaw(partner_yaw_deg)
     per_role: Dict[str, List[float]] = {}
     for r, v in (role_shift_cm or {}).items():
         vals = [float(x) for x in (v or ())] if isinstance(v, (list, tuple)) else []
@@ -2421,7 +2453,7 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
     kind, _role = parse_clip_role(path.name)
     root = library_root(library).resolve()
     cset = path.parent.name if path.parent.resolve() != root else ""
-    if not per_role and not any(abs(v) > 1e-9 for v in (yaw, tilt, roll, height, *shift, *horizontal, *turn)):
+    if not per_role and not any(abs(v) > 1e-9 for v in (yaw, tilt, roll, height, *shift, *horizontal, *turn, pyaw)):
         return [_view_of(path, cset, library)]               # nothing dialled
 
     siblings = _role_siblings(path)
@@ -2430,7 +2462,7 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
     if len(siblings) > 1 and any(abs(v) > 1e-9 for v in shift):
         raise ClipLibraryError(
             f"'{kind}' is a group clip — move its roles with role_shift_cm")
-    if any(abs(v) > 1e-9 for v in turn) and len(siblings) != 1:
+    if any(abs(v) > 1e-9 for v in (*turn, pyaw)) and len(siblings) != 1:
         raise ClipLibraryError(f"'{kind}' is not a pair clip — only a pair turns partner B")
     if per_role and len(siblings) < 2:
         raise ClipLibraryError(
@@ -2571,6 +2603,12 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
             geometry["partner_turn_deg"] = total
         else:
             geometry.pop("partner_turn_deg", None)
+    if abs(pyaw) > 1e-9:
+        total_yaw = wrap_yaw(read_partner_yaw(geometry.get("partner_yaw_deg")) + pyaw)
+        if abs(total_yaw) > 1e-9:
+            geometry["partner_yaw_deg"] = total_yaw
+        else:
+            geometry.pop("partner_yaw_deg", None)
     geometry.pop("checked", None)
     if checked:
         geometry["checked"] = dict(checked)
@@ -2592,7 +2630,8 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
                                      roll_deg=roll, height_cm=height,
                                      partner_shift_cm=shift if any(abs(v) > 1e-9 for v in shift) else None,
                                      role_shift_cm=per_role or None,
-                                     shift_cm=horizontal, partner_turn_deg=turn, with_finales=False)
+                                     shift_cm=horizontal, partner_turn_deg=turn,
+                                     partner_yaw_deg=pyaw, with_finales=False)
             except ClipLibraryError as e:
                 raise ClipLibraryError(
                     f"'{kind}' was changed, but its finale '{parse_clip_role(finale.name)[0]}' "

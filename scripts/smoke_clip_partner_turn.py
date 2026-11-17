@@ -8,6 +8,10 @@ Hand derivation: [10, -5] + [-2.5, 1] = [7.5, -4] degrees (cumulative, like ``sh
 the key. Both halves of the pair list the same value. A solo clip refuses a turn (400); a value beyond ±45 per edit,
 a boolean, a string or a wrong length is a 400 and writes nothing. Dummy FBX bytes make an accidental Blender run fail,
 and the FBX bytes stay unchanged.
+
+Ruling A165 — ``partner_yaw_deg``, B's yaw about its own vertical axis: 150 + 60 = 210 wraps to -150 (cumulative,
+wrapped to ±180); adding 150 removes the key; the tilt/roll stays untouched by a yaw edit. A solo clip refuses a yaw;
+beyond ±180 per edit, a boolean or a string is a 400 and writes nothing.
 """
 import asyncio
 import json
@@ -82,6 +86,35 @@ def main():
                 raise AssertionError(f"accepted invalid turn {value}")
             assert before == {str(p): p.read_bytes() for p in (root / "free").rglob("*") if p.is_file()}
         assert ac.read_partner_turn("x") == [0.0, 0.0]
+
+        def yaw(rel, value):
+            return asyncio.run(request(rel, {"partner_yaw_deg": value}))["clips"]
+        turn("pair__a.fbx", [3, 0])
+        rows = yaw("pair__a.fbx", 150)
+        assert all(r["orientation"]["partner_yaw_deg"] == 150 for r in rows), rows
+        rows = yaw("pair__b.fbx", 60)
+        assert len(rows) == 2 and all(r["orientation"]["partner_yaw_deg"] == -150 for r in rows), rows
+        assert all(r["orientation"]["partner_turn_deg"] == [3, 0] for r in rows)
+        assert json.loads(shared.read_text())["geometry"]["partner_yaw_deg"] == -150
+        yaw("pair__a.fbx", 150)
+        assert "partner_yaw_deg" not in json.loads(shared.read_text())["geometry"]
+        try:
+            yaw("solo.fbx", 10)
+        except HTTPException as e:
+            assert e.status_code == 400
+        else:
+            raise AssertionError("a solo clip accepted a partner yaw")
+        for value in (181, -180.5, True, "9", float("inf")):
+            before = {str(p): p.read_bytes() for p in (root / "free").rglob("*") if p.is_file()}
+            try:
+                yaw("pair__a.fbx", value)
+            except (HTTPException, ValueError) as e:
+                assert isinstance(e, ValueError) or e.status_code == 400, (value, e)
+            else:
+                raise AssertionError(f"accepted invalid yaw {value}")
+            assert before == {str(p): p.read_bytes() for p in (root / "free").rglob("*") if p.is_file()}
+        assert ac.read_partner_yaw("x") == 0.0 and ac.wrap_yaw(180) == 180 and ac.wrap_yaw(-180) == 180
+        assert a.read_bytes() == fbx
         print("OK: cumulative partner turn, shared pair sidecar, solo refused, validation, FBX untouched")
 
 
