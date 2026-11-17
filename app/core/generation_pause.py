@@ -56,6 +56,7 @@ never data.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -81,20 +82,42 @@ BUILD_REASONS = {
 GARMENT_TABS = {"hair": "Hairstyles", "clothing": "Wardrobe", "footwear": "Footwear"}
 
 
+#: How often Resume fires one held trigger again before it gives up on it (a replay that raises stays held).
+MAX_REPLAY_ATTEMPTS = 3
+#: The payload field that counts the failed replays of a held trigger (the replays read only their own fields).
+_ATTEMPTS = "_replay_attempts"
+
+#: Held triggers whose record in ``task_queue.db`` failed: kept here instead (this process only), listed in the
+#: waiting list and fired on Resume like the recorded ones. ``{character: {key: {key, label, payload}}}``.
+_unrecorded: Dict[str, Dict[str, Dict[str, Any]]] = {}
+_unrecorded_lock = threading.Lock()
+_unreadable_logged = False
+
+
 def _queue():
     from app.core.task_queue import get_task_queue
     return get_task_queue()
 
 
 def is_paused(character_name: str) -> bool:
-    """Whether the character's automatic generation is paused. Never raises (False on any error)."""
+    """Whether the character's automatic generation is paused. Never raises.
+
+    Fails CLOSED: the pause is mirrored in memory by the queue, so the only failure is that the queue cannot be
+    opened at all — then the persisted pauses are unknown, and an unknown pause counts as paused (a trigger is
+    held and fires on Resume) rather than letting automatic generation through behind the user's back."""
+    global _unreadable_logged
     if not character_name:
         return False
     try:
-        return _queue().character_paused(character_name)
+        paused = _queue().character_paused(character_name)
     except Exception:  # noqa: BLE001 — a trigger check never breaks its caller
-        logger.debug("Pause state of %s not read", character_name, exc_info=True)
-        return False
+        if not _unreadable_logged:
+            _unreadable_logged = True
+            logger.warning("Generation pause state unreadable — automatic generation is held until it can be "
+                           "read", exc_info=True)
+        return True
+    _unreadable_logged = False
+    return paused
 
 
 def _notify() -> None:
@@ -102,17 +125,42 @@ def _notify() -> None:
     sync_topics.notify(TOPIC, to=sync_topics.Admins())
 
 
-def hold(character_name: str, key: str, label: str, payload: Optional[Dict[str, Any]] = None) -> bool:
-    """A trigger's check: while the character is paused, record ``key`` as held (Resume fires it again through
-    ``_REPLAY``) and return True — the caller starts nothing. False when not paused. Never raises."""
-    if not is_paused(character_name):
-        return False
+def _record(character_name: str, key: str, label: str, payload: Optional[Dict[str, Any]]) -> None:
+    """Record a held trigger in the queue; when that write fails, keep it in ``_unrecorded`` so it still fires
+    on Resume (and shows in the waiting list). Never raises."""
     try:
         _queue().hold_trigger(character_name, key, label, payload)
-        logger.info("Automatic generation of %s paused — held: %s", character_name, label)
+    except Exception:  # noqa: BLE001 — kept in memory instead, never lost
+        logger.warning("Held trigger %s of %s not recorded in the queue — kept in memory until Resume",
+                       key, character_name, exc_info=True)
+        with _unrecorded_lock:
+            _unrecorded.setdefault(character_name, {})[key] = {"key": key, "label": label,
+                                                               "payload": dict(payload or {})}
+        return
+    with _unrecorded_lock:
+        # The recorded entry supersedes an in-memory one of the same key.
+        _unrecorded.get(character_name, {}).pop(key, None)
+
+
+def _unrecorded_of(character_name: str) -> List[Dict[str, Any]]:
+    with _unrecorded_lock:
+        return [dict(e) for e in (_unrecorded.get(character_name) or {}).values()]
+
+
+def hold(character_name: str, key: str, label: str, payload: Optional[Dict[str, Any]] = None) -> bool:
+    """A trigger's check: while the character is paused, record ``key`` as held (Resume fires it again through
+    ``_REPLAY``) and return True — the caller starts nothing. False when not paused. Never raises.
+
+    A failed record does not let the work through (the user paused it) and does not lose it either: the
+    trigger is kept in memory (``_record``) and fires on Resume like a recorded one."""
+    if not is_paused(character_name):
+        return False
+    _record(character_name, key, label, payload)
+    logger.info("Automatic generation of %s paused — held: %s", character_name, label)
+    try:
         _notify()
-    except Exception:  # noqa: BLE001 — held or not, nothing starts while paused
-        logger.warning("Held trigger %s of %s not recorded", key, character_name, exc_info=True)
+    except Exception:  # noqa: BLE001 — the signal is a courtesy, the hold stands
+        logger.debug("Pause signal of %s not sent", character_name, exc_info=True)
     return True
 
 
@@ -183,19 +231,38 @@ def _release(character_name: str) -> None:
     except Exception:  # noqa: BLE001 — one source never keeps the others held
         logger.exception("Held garment runs of %s not released", character_name)
     queue = _queue()
-    for entry in queue.held_triggers(character_name):
+    recorded = queue.held_triggers(character_name)
+    seen = {str(e["key"]) for e in recorded}
+    entries = [(e, True) for e in recorded] + [(e, False) for e in _unrecorded_of(character_name)
+                                                if str(e["key"]) not in seen]
+    for entry, in_queue in entries:
         if is_paused(character_name):
             return   # paused again meanwhile: the rest stays held
-        queue.drop_trigger(character_name, entry["key"])
-        replay = _REPLAY.get(str(entry["key"]).split(":", 1)[0])
+        key = str(entry["key"])
+        # Taken off the list BEFORE the replay (a replay that is held again re-records its own key), and put
+        # back when the replay raises — a failed replay never loses the trigger.
+        if in_queue:
+            queue.drop_trigger(character_name, key)
+        else:
+            with _unrecorded_lock:
+                (_unrecorded.get(character_name) or {}).pop(key, None)
+        replay = _REPLAY.get(key.split(":", 1)[0])
         if replay is None:
-            logger.warning("Held trigger %s of %s has no replay — dropped", entry["key"], character_name)
+            logger.warning("Held trigger %s of %s has no replay — dropped", key, character_name)
             continue
+        payload = dict(entry.get("payload") or {})
+        attempts = int(payload.pop(_ATTEMPTS, 0) or 0) + 1
         try:
-            replay(character_name, entry.get("payload") or {})
-            logger.info("Resume %s: %s fired again", character_name, entry.get("label") or entry["key"])
+            replay(character_name, payload)
+            logger.info("Resume %s: %s fired again", character_name, entry.get("label") or key)
         except Exception:  # noqa: BLE001
-            logger.exception("Resume %s: %s not fired again", character_name, entry["key"])
+            if attempts >= MAX_REPLAY_ATTEMPTS:
+                logger.exception("Resume %s: %s not fired again (attempt %d of %d) — dropped", character_name,
+                                 key, attempts, MAX_REPLAY_ATTEMPTS)
+                continue
+            logger.exception("Resume %s: %s not fired again (attempt %d of %d) — kept held for the next Resume",
+                             character_name, key, attempts, MAX_REPLAY_ATTEMPTS)
+            _record(character_name, key, str(entry.get("label") or key), {**payload, _ATTEMPTS: attempts})
 
 
 # --- The waiting list -----------------------------------------------------------------------------------------
@@ -259,7 +326,9 @@ def waiting(character_name: str) -> List[Dict[str, Any]]:
     garments_held = _garment_entries(character_name)
     held_items = {e["id"].split(":", 1)[1] for e in garments_held}
     out: List[Dict[str, Any]] = []
-    for entry in queue.held_triggers(character_name):
+    recorded = queue.held_triggers(character_name)
+    seen = {str(e["key"]) for e in recorded}
+    for entry in recorded + [e for e in _unrecorded_of(character_name) if str(e["key"]) not in seen]:
         key = str(entry["key"])
         row = {"id": f"trigger:{key}", "source": "trigger", "tab": "", "label": str(entry.get("label") or key),
                "detail": "", "jobs": None}
@@ -326,7 +395,9 @@ def cancel(character_name: str, entry_id: str) -> Dict[str, Any]:
     queue = _queue()
     done = False
     if source == "trigger" and rest:
-        done = queue.drop_trigger(character_name, rest)
+        with _unrecorded_lock:
+            in_memory = (_unrecorded.get(character_name) or {}).pop(rest, None) is not None
+        done = queue.drop_trigger(character_name, rest) or in_memory
     elif source == "garment" and rest:
         from app.core import garments
         done = garments.cancel_held(character_name, rest) > 0
