@@ -649,6 +649,14 @@ def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str
         from app.core import garment_shell
         if (record.get("inputs") or {}).get("shell_version") != garment_shell.SHELL_VERSION:
             return "stale"
+        # A177: the shell's inputs are its piece-only (ghost) views — one replaced since (another source, a
+        # re-render, "Use this" on an attempt) makes the shell due, as a replaced mesh does for a generated piece.
+        # A record without the shas (none are written without them) is left alone.
+        inputs = record.get("inputs") or {}
+        for view in ("front", "back"):
+            made = inputs.get(f"ghost_{view}_sha256")
+            if made and made != _sha(_image(character_name, item_id, fsig, "ghost", view)):
+                return "outdated"
     elif (record.get("inputs") or {}).get("prepared_sha256") != _sha(prepared) or not prepared.is_file():
         return "outdated"
     if _settings_changed(character_name, item_id, record, profile):
