@@ -63,10 +63,13 @@ def undo_dir(character_name: str, item_id: str, fsig: str) -> Path:
 
 def _later_views(kind_module, order, step: str, view: str) -> Dict[str, List[str]]:
     """The image steps per view a "Use this" on ``view`` of ``step`` replaces or drops (``garment_images._publish``):
-    the step and its later steps of the view, and for a new front of a drafted step the back's too."""
+    the step and its later steps of the view, and for a new front of a drafted step every drafted view's too (the
+    back and, A185, a shell piece's left/right — ``garment_images.DRAFTED_VIEWS``, as ``_publish`` drops them)."""
+    from app.core.garment_images import DRAFTED_VIEWS
     out = {view: list(order[order.index(step):])}
     if view == "front" and (getattr(kind_module, "EDIT_STEPS", {}).get(step) or {}).get("back") == "draft":
-        out["back"] = list(order[order.index(step):])
+        for drafted in DRAFTED_VIEWS:
+            out[drafted] = list(order[order.index(step):])
     return out
 
 
