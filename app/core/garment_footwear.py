@@ -1259,7 +1259,24 @@ def _fit_info(character_name: str, item_id: str, fsig: Optional[str], body_sha: 
             # the row's pill already says "Refused (gate)": the reason without the fit path's own prefix
             "freshness": fresh, "created_at": record.get("fitted_at"),
             "error": _strip_refused(error) if isinstance(error, str) else error,
-            "split": _split_view(record), "shaft": _fit_shaft_view(record)}
+            "split": _split_view(record), "shaft": _fit_shaft_view(record), "open": _open_view(record)}
+
+
+def _open_view(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """``open`` of a fit (A189): for the accepted record of an OPEN shoe (``shoe_kind`` "open") ``{widened,
+    height_factor, strap_gap_mm, strap_push_max_mm}`` — the sole's widening and the upper's raise the fit applied
+    (``scale.open``), the strap's median distance from the skin and its farthest push (the worse side); None for a
+    closed shoe or without a record. Under an open shoe the body is not cut."""
+    if (record or {}).get("shoe_kind") != "open":
+        return None
+    scale = (record.get("scale") or {}).get("open") or {}
+    sides = [s.get("open") or {} for s in (record.get("sides") or {}).values() if isinstance(s, dict)]
+
+    def worst(key: str) -> Optional[float]:
+        values = [float(s[key]) for s in sides if isinstance(s.get(key), (int, float))]
+        return max(values) if values else None
+    return {"widened": scale.get("widened"), "height_factor": scale.get("height_factor"),
+            "strap_gap_mm": worst("strap_gap_p50_mm"), "strap_push_max_mm": worst("strap_push_max_mm")}
 
 
 def preview_frame(record: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -1363,7 +1380,9 @@ def _fit_shaft_view(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def _insole_view(insole: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """``insole`` of ``info``: ``insole.json``'s ``{version, nominal, gates, overlay, frame}`` plus ``shaft`` — for a
+    """``insole`` of ``info``: ``insole.json``'s ``{version, nominal, gates, overlay, frame}``, ``kind`` ("open" |
+    "closed"; a file without the key is closed) and ``open`` (``footwear_insole``'s toe / heel / strap measures, None
+    for a file without them; A189) plus ``shaft`` — for a
     boot (shaft class other than ``none``) ``{class, collar_h_m (nominal), top_m (the top closed slab above the
     ground, nominal), closed_share, cap_removed, slabs, slabs_closed}``, else None — and ``overlay.slabs``: per tube
     slab its measured extent as a closed ring ``{points [[x, y, z] x5], closed}`` in the mesh's own coordinates (the
@@ -1372,6 +1391,8 @@ def _insole_view(insole: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     from app.core import footwear_insole
     view = {k: insole.get(k) for k in ("version", "nominal", "gates", "overlay", "frame")}
+    view["kind"] = insole.get("kind") or footwear_insole.KIND_CLOSED
+    view["open"] = insole.get("open") if isinstance(insole.get("open"), dict) else None
     shaft = insole.get("shaft") if isinstance(insole.get("shaft"), dict) else {}
     if shaft.get("class") in (None, "none"):
         view["shaft"] = None

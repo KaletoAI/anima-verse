@@ -2196,7 +2196,8 @@ def _garment_limits(kind: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
     fit gates (``footwear_fit.FIT_GATES``, the split fit's ``SHAFT_GATES`` —
     the chips show a recorded-only one as "Reported, not gated" by the
     record's ``gating`` — plus the body-cut gates ``footwear_cut.CUT_GATES``,
-    which the fit step runs and records under the same ``gates``)."""
+    which the fit step runs and records under the same ``gates``; an OPEN
+    shoe's ``OPEN_GATES`` of the insole and of the fit, A189)."""
     from app.core import garment_fit, garment_gates, garment_mesh
     if kind == "footwear":
         from app.core import footwear_cut, footwear_fit, footwear_gates, footwear_insole
@@ -2204,9 +2205,13 @@ def _garment_limits(kind: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
                      for key, (kind_, limit) in {**footwear_fit.FIT_GATES, **footwear_fit.SHAFT_GATES}.items()}
         fit_gates.update({key: (kind_, limit, footwear_cut.GATE_LABELS[key])
                           for key, (kind_, limit) in footwear_cut.CUT_GATES.items()})
+        # A189: an open shoe's own gates (its record carries them instead of the cut gates)
+        fit_gates.update({key: (kind_, limit, footwear_fit.OPEN_GATE_LABELS[key])
+                          for key, (kind_, limit) in footwear_fit.OPEN_GATES.items()})
         return {"empty": _footwear_gate_limits(footwear_gates.EMPTY_GATES),
                 "mesh": _footwear_gate_limits(footwear_gates.mesh_gates()),
-                "insole": _footwear_gate_limits({**footwear_insole.INSOLE_GATES, **footwear_insole.SHAFT_GATES}),
+                "insole": _footwear_gate_limits({**footwear_insole.INSOLE_GATES, **footwear_insole.SHAFT_GATES,
+                                                 **footwear_insole.OPEN_GATES}),
                 "fit": _footwear_gate_limits(fit_gates)}
     if kind != "clothing":
         return {}
