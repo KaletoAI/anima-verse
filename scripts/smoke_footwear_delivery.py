@@ -475,7 +475,9 @@ def main() -> int:
                       "shaft_push_p95_m", "shaft_push_max_m", "shaft_inside_share", "seam_gap_p95_mm",
                       "seam_stretch_max", "shaft_leg_follow_deg", "shaft_clip_m", "knee_margin_m",
                       "deep_outside", "visible_poke", "throat_ledge_p95_mm", "toe_conform_m", "shaft_poke",
-                      "collar_conform_m", "collar_flex_poke"]))
+                      "collar_conform_m", "collar_flex_poke",
+                      # A189: an open shoe's own fit gates (footwear_fit.OPEN_GATES)
+                      "strap_inside_share", "strap_push_max_mm", "sole_cover", "sole_sink_mm"]))
         check("D8 knee gate limits (Task 14)", (limits["fit"].get("shaft_clip_m"), limits["fit"].get("knee_margin_m")),
               ({"op": "le", "value": 0.05}, {"op": "ge", "value": 0.04}))
         check("D8 shaft_poke / collar_conform_m / collar_flex_poke limits (CUT_VERSION 6)",

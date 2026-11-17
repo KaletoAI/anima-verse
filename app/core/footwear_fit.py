@@ -177,9 +177,10 @@ the shoe is made to fit the foot instead:
   (``footwear_cut._open_description``): ``apply_cut`` leaves the body untouched, ``cut_gates`` judges nothing.
 Measured 2026-11-17 on copies — Dario's base (``base4b00ccc7``, foot 30.6 cm, instep 60 – 90 mm over the insole
 where the band's roof stood at 24 – 60 mm) in the six sandal meshes: all six accepted; before the height factor
-92 % of the band lay inside the foot and a push alone moved it 26 – 36 mm and tore it; with it (factor 1.57 – 1.80,
-sole widened x1.04 – 1.10) the push is 13.6 – 17.1 mm at most, 0 strap vertices inside the skin in the stand,
-sole_cover 0.93 – 0.94, sole_sink 3.2 – 6.0 mm (report ``a189-report.md``).
+92 % of the band lay inside the foot and a push alone moved it 26 – 36 mm and tore it; with it (factor 1.51 – 1.74,
+sole widened x1.04 – 1.10) the push is 14.6 – 17.7 mm at most, 0 strap vertices inside the skin in the stand and
+in a toe-off step, 0.3 – 4.8 % of them (at most 6.9 mm deep) with the toes bent 40 deg; sole_cover 0.930 – 0.941,
+sole_sink 3.3 – 6.0 mm, the band's median distance from the skin 8 – 11 mm (report ``a189-report.md``).
 
 **Calibration of the step-1 rule (fit version 5, 2026-11-11) — REAL material, offline, no hub.** Measured with
 this module on read-only copies of the base bodies (mm above the body's lowest vertex; L / R). Kira
