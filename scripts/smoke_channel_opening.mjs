@@ -64,6 +64,17 @@
  *     f = 0.0187939 + 0.012·(1 − 0.447474)² = 0.0187939 + 0.012·0.305285 = 0.0224573 → push 0.0036634 each side,
  *     along ±(cos 20°, 0, −sin 20°) (perpendicular to the rod): d± = ±(0.0034425, 0, −0.0012530), point-symmetric
  *     about the crossing.
+ * [8] TWO channels on ONE body mesh (review 13-contact#2): the [6] mesh plus a copy of every ring shifted +0.5 in bind
+ *     x; channel x as in [6], channel m the same axis through bind (0.5, 0, 0), i.e. world O = (1, 0, −0.5) (R_y(90°)
+ *     maps (x, y, z) to (z, y, −x)), u = (1, 0, 0), each with the [3] rod. The two candidate sets are disjoint (0.5 m
+ *     apart ≫ ρ ≤ 0.12), 48 each. The s 0.05 wall of each must end at ρ 0.0375355 from ITS axis AT THE SAME TIME.
+ *     Without a shared clone (two bindings, one clone each — the figure runtime's old way) the mesh wears only the
+ *     clone applied last: x's wall reads 0.02 (the defect). With the figure's shared `OpeningGeometries`:
+ *     (a) both applied → both walls 0.0375355 on ONE clone; x restored → x's wall 0.02, m's still 0.0375355, the clone
+ *     still on the mesh; m restored → the template back, bit-identical; both disposed → the clone disposed exactly
+ *     once, the pool empty. (b) m bound while x is open (the clone with x's opening on the mesh): the same two walls;
+ *     released and disposed in bind order (the old code left the mesh on x's disposed clone) → the template on the
+ *     mesh, bit-identical, the clone disposed once.
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -200,6 +211,76 @@ async function main() {
   check('[7] the opening is centred on the crossing: push 0.0036634 on both sides, point-symmetric',
     !!dPlus && !!dMinus && near(len7(dPlus), 0.0036634, 2e-7) && near(len7(dMinus), 0.0036634, 2e-7)
     && vn(dPlus, [0.0034425, 0, -0.0012530], 2e-7) && vn(dMinus, [-0.0034425, 0, 0.0012530], 2e-7), `${dPlus} ${dMinus}`)
+
+  // [8] two channels on ONE body mesh (review 13-contact#2)
+  {
+    const pts2 = [...pts, ...pts.map((x, i) => (i % 3 === 0 ? x + 0.5 : x))]
+    const geo2 = new THREE.BufferGeometry()
+    geo2.setAttribute('position', new THREE.Float32BufferAttribute(pts2, 3))
+    const n2 = pts2.length / 3
+    geo2.setAttribute('normal', new THREE.Float32BufferAttribute(Array.from({ length: n2 * 3 }, (_, i) => (i % 3 === 2 ? 1 : 0)), 3))
+    geo2.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(new Array(n2 * 4).fill(0), 4))
+    geo2.setAttribute('skinWeight', new THREE.Float32BufferAttribute(Array.from({ length: n2 * 4 }, (_, i) => (i % 4 === 0 ? 1 : 0)), 4))
+    const bone2 = new THREE.Bone()
+    const mesh2 = new THREE.SkinnedMesh(geo2, new THREE.MeshBasicMaterial())
+    const root2 = new THREE.Group()
+    root2.add(bone2, mesh2)
+    root2.updateMatrixWorld(true)
+    mesh2.bind(new THREE.Skeleton([bone2]))
+    bone2.position.set(1, 0, 0)
+    bone2.rotation.y = Math.PI / 2
+    root2.updateMatrixWorld(true)
+    const pos0 = new Float32Array(geo2.attributes.position.array), nrm0 = new Float32Array(geo2.attributes.normal.array)
+    const chX = { ...ch, id: 'x', o: [1, 0, 0], u: [1, 0, 0] }
+    const chM = { ...ch, id: 'm', o: [1, 0, -0.5], u: [1, 0, 0] }
+    const rodX = [{ a: [0.9, 0, 0], b: [1.15, 0, 0], r: 0.03 }], rodM = [{ a: [0.9, 0, -0.5], b: [1.15, 0, -0.5], r: 0.03 }]
+    const v8 = new THREE.Vector3()
+    const rhoX = (i) => { mesh2.getVertexPosition(i, v8).applyMatrix4(mesh2.matrixWorld); return Math.hypot(v8.y, v8.z) }
+    const rhoM = (i) => { mesh2.getVertexPosition(i, v8).applyMatrix4(mesh2.matrixWorld); return Math.hypot(v8.y, v8.z + 0.5) }
+    const M0 = rings.length * N   // the first vertex of the second copy (channel m's s 0.05 wall)
+    const pristine = () => mesh2.geometry === geo2 && geo2.attributes.position.array.every((x, i) => x === pos0[i])
+      && geo2.attributes.normal.array.every((x, i) => x === nrm0[i])
+    // The old per-binding clone (no shared pool = what figureRuntime did): only the last applied opening shows.
+    const oldX = O.bindChannelOpening(THREE, root2, chX), oldM = O.bindChannelOpening(THREE, root2, chM)
+    oldX.apply(chX, rodX); oldM.apply(chM, rodM)
+    const oldRho = [rhoX(0), rhoM(M0)]
+    const oldShows = near(oldRho[0], 0.0375355, 1e-5) && near(oldRho[1], 0.0375355, 1e-5)
+    oldX.dispose(); oldM.dispose()
+    check('[8] without a shared clone the first opening is hidden (the defect)', !oldShows, oldRho.join(' '))
+    // (a) both bound, both applied: both openings on the one clone.
+    const pool = new Map()
+    const bx = O.bindChannelOpening(THREE, root2, chX, {}, pool), bm = O.bindChannelOpening(THREE, root2, chM, {}, pool)
+    const cx = bx.apply(chX, rodX), cm = bm.apply(chM, rodM)
+    const clone = mesh2.geometry
+    let cloneDisposed = 0
+    clone.addEventListener('dispose', () => { cloneDisposed++ })
+    check('[8a] both openings at once: x wall 0.0375355, m wall 0.0375355, 48 + 48 candidates, one clone',
+      near(rhoX(0), 0.0375355, 1e-5) && near(rhoM(M0), 0.0375355, 1e-5) && cx.moved === 48 && cm.moved === 48
+      && bx.candidates === 48 && bm.candidates === 48 && clone !== geo2 && pool.size === 1,
+      `${rhoX(0)} ${rhoM(M0)} ${cx.moved}/${cm.moved} ${bx.candidates}/${bm.candidates}`)
+    // Release x: its wall back to 0.02, m stays open, the clone stays on the mesh.
+    bx.restore()
+    check('[8a] x released: x wall 0.02, m wall still 0.0375355, clone still on the mesh',
+      near(rhoX(0), 0.02, 1e-5) && near(rhoM(M0), 0.0375355, 1e-5) && mesh2.geometry === clone, `${rhoX(0)} ${rhoM(M0)}`)
+    bm.restore()
+    check('[8a] both released: the template back, bit-identical', pristine())
+    // (b) m bound WHILE x is open: m's candidates come from the template; dispose in bind order leaves the template.
+    bx.dispose(); bm.dispose()
+    check('[8a] disposed: clone freed once, pool empty, template on the mesh', cloneDisposed === 1 && pool.size === 0 && pristine(),
+      `${cloneDisposed} ${pool.size}`)
+    const px = O.bindChannelOpening(THREE, root2, chX, {}, pool)
+    px.apply(chX, rodX)
+    const pm = O.bindChannelOpening(THREE, root2, chM, {}, pool)
+    pm.apply(chM, rodM)
+    const clone2 = mesh2.geometry
+    let clone2Disposed = 0
+    clone2.addEventListener('dispose', () => { clone2Disposed++ })
+    check('[8b] m bound while x is open: both open on the same clone', near(rhoX(0), 0.0375355, 1e-5)
+      && near(rhoM(M0), 0.0375355, 1e-5) && pool.size === 1, `${rhoX(0)} ${rhoM(M0)}`)
+    px.restore(); pm.restore(); px.dispose(); pm.dispose()
+    check('[8b] released + disposed in bind order: template on the mesh, bit-identical, clone freed once',
+      pristine() && clone2Disposed === 1 && pool.size === 0, `${mesh2.geometry === geo2} ${clone2Disposed}`)
+  }
 
   if (failures.length) { console.error(`\nFAILED: ${failures.join(', ')}`); process.exit(1) }
   console.log('\nALL OK')

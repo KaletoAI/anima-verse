@@ -24,8 +24,13 @@
  * - THE THREE BINDING (`bindChannelOpening`): the displacement acts on the SKINNED world positions (after the pose)
  *   and is written back into the bind-space `position` attribute through the inverse of each vertex's blended skin
  *   matrix, so the GPU skinning lands it exactly. The normals of the candidates are recomputed from their triangles
- *   (bind space; the GPU skins them). It owns a clone of each touched geometry (a figure shares its buffers with its
- *   template); `restore()` puts the original geometry back, `dispose()` frees the clone.
+ *   (bind space; the GPU skins them). It works on a clone of each touched geometry (a figure shares its buffers with
+ *   its template) — ONE clone per mesh, shared by every opening binding of the figure (`OpeningGeometries`): two
+ *   occupied channels on one body mesh displace the same clone, each only its own candidates (rest positions and
+ *   normals read from the template), so both openings show at once. `restore()` puts this binding's candidates back
+ *   and the original geometry back on the mesh once no binding of it is open; the clone is disposed when the last
+ *   binding of the mesh is disposed — never the template. Candidates of two channels are disjoint in practice; a
+ *   shared vertex takes the displacement of the binding that applied last.
  *
  * A push of at most 1 µm counts as none (float noise).
  *
@@ -202,8 +207,8 @@ export function displaceInto(px: number, py: number, pz: number, ch: ChannelNow,
 }
 
 /** The candidates' skin indices / weights as typed arrays, and the bones they use. */
-function skinOf(mesh: SkinnedMesh, idx: readonly number[]): { skinI: Uint16Array; skinW: Float32Array; usedBones: number[] } {
-  const si = mesh.geometry.attributes.skinIndex, sw = mesh.geometry.attributes.skinWeight
+function skinOf(geometry: BufferGeometry, idx: readonly number[]): { skinI: Uint16Array; skinW: Float32Array; usedBones: number[] } {
+  const si = geometry.attributes.skinIndex, sw = geometry.attributes.skinWeight
   const skinI = new Uint16Array(idx.length * 4), skinW = new Float32Array(idx.length * 4)
   const used = new Set<number>()
   idx.forEach((i, k) => {
@@ -235,20 +240,33 @@ export interface ChannelOpeningBinding {
    *  candidates are skinned to moved more than `tolM` or turned more than `tolDeg` (world). False = the last result
    *  still holds; the caller may skip the apply. */
   changed(ch: ChannelNow, segments: readonly OpeningSegment[], tolM?: number, tolDeg?: number): boolean
-  /** Every candidate back to its rest and the original geometry back on its mesh (exactly as before). */
+  /** Every candidate back to its rest and the original geometry back on its mesh (exactly as before) — once no other
+   *  binding sharing the mesh's clone is open. */
   restore(): void
-  /** `restore()` and free the cloned geometries. */
+  /** `restore()` and free the clone once no other binding holds it. */
   dispose(): void
 }
 
-interface MeshEntry {
-  mesh: SkinnedMesh
+/** A body mesh's template geometry and the one clone every opening binding of the figure displaces: `active` = the
+ *  bindings currently open on it (the clone is on the mesh while any is), `refs` = the bindings holding it. */
+export interface OpeningMeshGeometry {
   original: BufferGeometry
   clone: BufferGeometry | null
+  active: Set<object>
+  refs: number
+}
+/** Per figure: one `OpeningMeshGeometry` per body mesh, handed to every `bindChannelOpening` of that figure. */
+export type OpeningGeometries = Map<SkinnedMesh, OpeningMeshGeometry>
+export function createOpeningGeometries(): OpeningGeometries { return new Map() }
+
+interface MeshEntry {
+  mesh: SkinnedMesh
+  shared: OpeningMeshGeometry
   idx: number[]
   /** Bind-time channel coordinates of each candidate (the per-frame narrowing). */
   sBind: Float32Array
   rhoBind: Float32Array
+  /** The candidates' template positions and normals (bind space). */
   rest: Float32Array
   restNormal: Float32Array | null
   /** The triangles (vertex index triples) touching a candidate, and the candidate slot of a vertex (−1 none). */
@@ -271,10 +289,13 @@ interface MeshEntry {
 
 /**
  * Bind the opening of `ch` to the BODY meshes under `root` (skinned, never a garment's, `inGarment`): per mesh the
- * candidates in the current pose. Null when no body vertex is a candidate.
+ * candidates in the current pose (of the template geometry). Null when no body vertex is a candidate. `shared`: the
+ * figure's `OpeningGeometries` when it may open more than one channel (module docstring THE THREE BINDING); omitted =
+ * a pool of this binding alone.
  */
 export function bindChannelOpening(three: Three, root: Object3D, ch: ChannelNow,
-  options: OpeningOptions & { slack?: number } = {}): ChannelOpeningBinding | null {
+  options: OpeningOptions & { slack?: number } = {}, shared: OpeningGeometries = createOpeningGeometries()):
+  ChannelOpeningBinding | null {
   root.updateMatrixWorld(true)
   const falloff = options.falloff ?? OPENING_FALLOFF_M
   const meshes: SkinnedMesh[] = []
@@ -285,14 +306,22 @@ export function bindChannelOpening(three: Three, root: Object3D, ch: ChannelNow,
   const v = new three.Vector3()
   const entries: MeshEntry[] = []
   for (const mesh of meshes) {
-    const pos = mesh.geometry.attributes.position
+    // Another binding of the figure may have its clone (displaced) on the mesh: candidates come from the template.
+    const sh: OpeningMeshGeometry = shared.get(mesh) ?? { original: mesh.geometry, clone: null, active: new Set(), refs: 0 }
+    const geometry = sh.original
+    const pos = geometry.attributes.position
     const world = new Float32Array(pos.count * 3)
+    const current = mesh.geometry
+    mesh.geometry = geometry
     for (let i = 0; i < pos.count; i++) {
       mesh.getVertexPosition(i, v).applyMatrix4(mesh.matrixWorld)
       world[3 * i] = v.x; world[3 * i + 1] = v.y; world[3 * i + 2] = v.z
     }
+    mesh.geometry = current
     const idx = openingCandidates(world, ch, falloff, options.slack ?? OPENING_SLACK_M)
     if (!idx.length) continue
+    shared.set(mesh, sh)
+    sh.refs++
     const slot = new Int32Array(pos.count).fill(-1)
     idx.forEach((i, k) => { slot[i] = k })
     const sBind = new Float32Array(idx.length), rhoBind = new Float32Array(idx.length)
@@ -300,7 +329,7 @@ export function bindChannelOpening(three: Three, root: Object3D, ch: ChannelNow,
       const c = channelCoords([world[3 * i], world[3 * i + 1], world[3 * i + 2]], ch)
       sBind[k] = c.s; rhoBind[k] = c.rho
     })
-    const index = mesh.geometry.index
+    const index = geometry.index
     const tri: number[] = []
     const triCount = Math.floor((index ? index.count : pos.count) / 3)
     for (let f = 0; f < triCount; f++) {
@@ -316,11 +345,18 @@ export function bindChannelOpening(three: Three, root: Object3D, ch: ChannelNow,
       if (g === undefined) { g = groupOf.size; groupOf.set(key, g) }
       group[k] = g
     })
-    entries.push({ mesh, original: mesh.geometry, clone: null, idx, sBind, rhoBind, rest: new Float32Array(idx.length * 3),
-      restNormal: null, tris: new Uint32Array(tri), slot, group, groups: groupOf.size, moved: new Uint8Array(idx.length),
-      ...skinOf(mesh, idx), m: new Float64Array(16), accN: new Float64Array(groupOf.size * 3),
-      touched: new Uint8Array(groupOf.size) })
+    const rest = new Float32Array(idx.length * 3)
+    idx.forEach((i, k) => { rest[3 * k] = pos.getX(i); rest[3 * k + 1] = pos.getY(i); rest[3 * k + 2] = pos.getZ(i) })
+    const nrm0 = geometry.attributes.normal
+    const restNormal = nrm0 ? new Float32Array(idx.length * 3) : null
+    if (nrm0 && restNormal) idx.forEach((i, k) => { restNormal[3 * k] = nrm0.getX(i); restNormal[3 * k + 1] = nrm0.getY(i); restNormal[3 * k + 2] = nrm0.getZ(i) })
+    entries.push({ mesh, shared: sh, idx, sBind, rhoBind, rest, restNormal, tris: new Uint32Array(tri), slot, group,
+      groups: groupOf.size, moved: new Uint8Array(idx.length), ...skinOf(geometry, idx), m: new Float64Array(16),
+      accN: new Float64Array(groupOf.size * 3), touched: new Uint8Array(groupOf.size) })
   }
+  /** This binding's mark in each mesh's `active` set. */
+  const token = {}
+  let disposed = false
   if (!entries.length) return null
   const boneM = new three.Matrix4(), meshM = new three.Matrix4()
   /** Per mesh this frame: the matrix bind position → world of each bone the candidates use
@@ -392,16 +428,19 @@ export function bindChannelOpening(three: Three, root: Object3D, ch: ChannelNow,
   let active = false
   const putBack = () => {
     for (const e of entries) {
-      if (!e.clone) continue
-      const pos = e.clone.attributes.position as BufferAttribute
-      const nrm = e.clone.attributes.normal as BufferAttribute | undefined
+      const sh = e.shared
+      if (!sh.clone || !sh.active.has(token)) continue
+      const pos = sh.clone.attributes.position as BufferAttribute
+      const nrm = sh.clone.attributes.normal as BufferAttribute | undefined
       e.idx.forEach((i, k) => {
         pos.setXYZ(i, e.rest[3 * k], e.rest[3 * k + 1], e.rest[3 * k + 2])
         if (nrm && e.restNormal) nrm.setXYZ(i, e.restNormal[3 * k], e.restNormal[3 * k + 1], e.restNormal[3 * k + 2])
       })
       pos.needsUpdate = true
       if (nrm) nrm.needsUpdate = true
-      e.mesh.geometry = e.original
+      sh.active.delete(token)
+      // Another channel still open on this mesh keeps the clone (with its opening) on it.
+      if (!sh.active.size) e.mesh.geometry = sh.original
     }
     active = false
   }
@@ -445,17 +484,12 @@ export function bindChannelOpening(three: Three, root: Object3D, ch: ChannelNow,
       const reach = openingReach(segments, now, opts)
       let maxPush = 0, moved = 0, visited = 0
       for (const e of entries) {
-        if (!e.clone) e.clone = e.original.clone()
-        const pos = e.clone.attributes.position as BufferAttribute
-        const nrm = e.clone.attributes.normal as BufferAttribute | undefined
-        if (!active) {
-          e.idx.forEach((i, k) => { e.rest[3 * k] = pos.getX(i); e.rest[3 * k + 1] = pos.getY(i); e.rest[3 * k + 2] = pos.getZ(i) })
-          if (nrm) {
-            e.restNormal ??= new Float32Array(e.idx.length * 3)
-            e.idx.forEach((i, k) => { e.restNormal![3 * k] = nrm.getX(i); e.restNormal![3 * k + 1] = nrm.getY(i); e.restNormal![3 * k + 2] = nrm.getZ(i) })
-          }
-        }
-        e.mesh.geometry = e.clone
+        const sh = e.shared
+        if (!sh.clone) sh.clone = sh.original.clone()
+        const pos = sh.clone.attributes.position as BufferAttribute
+        const nrm = sh.clone.attributes.normal as BufferAttribute | undefined
+        sh.active.add(token)
+        e.mesh.geometry = sh.clone
         let any = false
         const M = frameBones(e)
         const m = e.m
@@ -513,7 +547,17 @@ export function bindChannelOpening(three: Three, root: Object3D, ch: ChannelNow,
     restore() { if (active) putBack() },
     dispose() {
       putBack()
-      for (const e of entries) { e.clone?.dispose(); e.clone = null }
+      if (disposed) return
+      disposed = true
+      for (const e of entries) {
+        const sh = e.shared
+        if (--sh.refs > 0) continue
+        // The last binding of this mesh: the template back on it, the clone (ours, never the template) freed.
+        if (e.mesh.geometry === sh.clone) e.mesh.geometry = sh.original
+        sh.clone?.dispose()
+        sh.clone = null
+        if (shared.get(e.mesh) === sh) shared.delete(e.mesh)
+      }
     },
   }
 }

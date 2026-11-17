@@ -47,7 +47,7 @@ import type { HairStrandRecord } from './hairSimMath'
 import { bindCollision, COLLISION_VERSION } from './collision'
 import type { CapsuleNow, CollisionBinding, CollisionPayload } from './collision'
 import { bindChannels } from './channels'
-import { bindChannelOpening } from './channelOpening'
+import { bindChannelOpening, createOpeningGeometries } from './channelOpening'
 import type { ChannelOpeningBinding, OpeningSegment } from './channelOpening'
 import { bodySphere, consumerPartnerCapsules, reachSphere, snapshotPartner } from './partnerContact'
 import type { PartnerSnapshot, Sphere } from './partnerContact'
@@ -135,6 +135,8 @@ export class FigureRuntime {
   private partnerRefused = false
   private partnerChannels: ReturnType<typeof bindChannels> = null
   private openings = new Map<string, ChannelOpeningBinding | null>()
+  /** One geometry clone per body mesh, shared by all of `openings` (two open channels on one mesh). */
+  private readonly openingGeometries = createOpeningGeometries()
   private openingsOn: Object3D | null = null
   /** What the last opening pass put on each of this figure's channels (`inspect`): per occupied channel. */
   private openingState = new Map<string, OpeningInspection>()
@@ -321,7 +323,7 @@ export class FigureRuntime {
       if (binding === undefined) {
         if (!(budget.left > 0)) continue
         budget.left--
-        binding = bindChannelOpening(this.three, inst, ch)
+        binding = bindChannelOpening(this.three, inst, ch, {}, this.openingGeometries)
         this.openings.set(ch.id, binding)
       }
       // Ruling A161: the opening's band follows the grown radius (the candidates' 8 cm slack covers the growth).
