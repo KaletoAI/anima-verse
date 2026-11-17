@@ -653,8 +653,8 @@ def _profile(character_name: str, profile: Optional[Dict[str, Any]]) -> Dict[str
 
 
 #: A187: the body row's line while the shoe itself (a source step) is refused — no fit was made on this body.
-SHOE_STEP_REFUSED = ("Not fitted yet — the shoe itself was refused (see its steps), not this body. Accept it "
-                     "anyway or regenerate it there; the fit runs on the next Build")
+SHOE_STEP_REFUSED = ("Not fitted yet — the shoe itself was refused (see its steps above), not this body. The fit "
+                     "runs on the next Build once the shoe passes")
 
 
 def fit_status(character_name: str, item_id: str, body: str, *,

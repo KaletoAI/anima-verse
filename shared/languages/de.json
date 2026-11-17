@@ -6435,6 +6435,6 @@
     "Uploaded — its gate passed": "Hochgeladen — Prüfung bestanden",
     "Uploaded — accepted by you; its gate refused it": "Hochgeladen — von dir angenommen; die Prüfung lehnte es ab",
     "Not uploaded": "Nicht hochgeladen",
-    "Not fitted yet — the shoe itself was refused (see its steps), not this body. Accept it anyway or regenerate it there; the fit runs on the next Build": "Noch nicht angepasst — abgelehnt wurde der Schuh selbst (siehe seine Schritte), nicht dieser Körper. Trotzdem übernehmen oder dort neu erzeugen; die Anpassung läuft beim nächsten Build"
+    "Not fitted yet — the shoe itself was refused (see its steps above), not this body. The fit runs on the next Build once the shoe passes": "Noch nicht angepasst — abgelehnt wurde der Schuh selbst (siehe seine Schritte oben), nicht dieser Körper. Die Anpassung läuft beim nächsten Build, sobald der Schuh besteht"
   }
 }
