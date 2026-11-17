@@ -2348,6 +2348,34 @@ def _cleanup_failed_character_dir(character_name: str) -> None:
                        "'%s' after a failed save: %s", character_name, e)
 
 
+def _grant_to_creator(creator: Dict[str, Any], character_name: str) -> None:
+    """Add ``character_name`` to the creator's ``allowed_characters``.
+
+    Under ``keyed_lock("user_settings", <id>)`` with the list re-read inside
+    it (like ``linked_characters._grant_like_leader``): ``creator`` is the
+    request's user, read at authentication, and appending to that copy would
+    drop a grant or an avatar switch that landed since. The lock is a leaf
+    (two users-table statements) and is held only for those.
+    """
+    from app.core.keyed_lock import keyed_lock
+    from app.core.users import get_user_by_id, update_user
+    user_id = str(creator["id"])
+    try:
+        with keyed_lock("user_settings", user_id):
+            fresh = get_user_by_id(user_id)
+            if not fresh:
+                return
+            allowed = list(fresh.get("allowed_characters") or [])
+            if character_name not in allowed:
+                update_user(user_id, allowed_characters=allowed + [character_name])
+    except Exception as e:
+        logger.warning(
+            "create_character: could not update allowed_characters "
+            "for user=%s: %s",
+            creator.get("username"), e,
+        )
+
+
 async def create_character_core(request) -> Dict[str, Any]:
     """Creates a new character with an empty profile and an assigned template."""
     from app.models.account import get_language_settings, set_current_character
@@ -2426,20 +2454,9 @@ async def create_character_core(request) -> Dict[str, Any]:
     # Auto-assign the new character to the creator's allowed_characters list
     # so they can immediately see and use it without a separate admin step.
     from app.core.auth_dependency import get_current_user_optional
-    from app.core.users import update_user
     creator = get_current_user_optional(request)
     if creator and creator.get("id"):
-        allowed = list(creator.get("allowed_characters") or [])
-        if character_name not in allowed:
-            allowed.append(character_name)
-            try:
-                update_user(creator["id"], allowed_characters=allowed)
-            except Exception as e:
-                logger.warning(
-                    "create_character: could not update allowed_characters "
-                    "for user=%s: %s",
-                    creator.get("username"), e,
-                )
+        _grant_to_creator(creator, character_name)
 
     # Set as current character
     set_current_character(character_name)

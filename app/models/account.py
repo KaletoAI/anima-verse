@@ -396,37 +396,49 @@ def release_active_character() -> None:
 
 
 def restore_avatar_on_login(user: Dict[str, Any]) -> None:
-    """Beim Login den Avatar des Users materialisieren und — falls er ein
-    avatar-only Character ist und offmap liegt — zurueck in die Welt holen.
+    """On login, materialize the user's avatar and — if it is an avatar-only
+    character lying off-map — bring it back into the world.
 
-    Hintergrund: Logout/Reaper leeren ``active_character`` und setzen einen
-    avatar-only Char offmap. Der Login erstellt nur eine Session und ruft
-    ``set_active_character`` NICHT auf; ``get_active_character`` maskiert den
-    leeren Zustand zudem mit ``allowed[0]``. Ohne diesen Schritt bliebe der
-    Avatar offmap ("ohne Raum") und unbenutzbar.
+    Background: logout and the reaper clear ``active_character`` and put an
+    avatar-only character off-map. The login only creates a session and does
+    NOT call ``set_active_character``; ``get_active_character`` additionally
+    masks the empty state with ``allowed[0]``. Without this step the avatar
+    would stay off-map ("no room") and unusable.
 
-    Laeuft im Login-Request, wo es noch keinen ``current_user_ctx`` gibt — daher
-    direkt ueber ``user["id"]`` statt ``set_active_character``.
+    Runs in the login request, where there is no ``current_user_ctx`` yet —
+    hence directly via ``user["id"]`` instead of ``set_active_character``.
+
+    SERIALIZED PER USER like ``_update_current_user_settings``: the settings
+    are re-read under ``keyed_lock("user_settings", <id>)`` and only the three
+    avatar keys are merged — ``user`` was read when the password was checked,
+    and merging into it would drop a layout save or an avatar switch of
+    another session that landed in between. The lock is a leaf: the
+    ``appear_in_world`` below runs after it is released.
     """
     try:
-        from app.core.users import update_user
-        settings = dict(user.get("settings") or {})
-        resolved = (
-            settings.get("active_character")
-            or settings.get("current_character")
-            or settings.get("default_character")
-            or ""
-        ).strip()
-        allowed = user.get("allowed_characters") or []
-        if not resolved or (user.get("role") != "admin" and resolved not in allowed):
-            resolved = (allowed[0] if allowed else "").strip()
-        # A fresh login always ends spectator mode, even without an allowed avatar.
-        settings.update(avatar_released=False, active_character=resolved, current_character=resolved)
-        update_user(user["id"], settings=settings)
+        from app.core.keyed_lock import keyed_lock
+        from app.core.users import get_user_by_id, update_user
+        user_id = str(user["id"])
+        with keyed_lock("user_settings", user_id):
+            fresh = get_user_by_id(user_id) or user
+            settings = dict(fresh.get("settings") or {})
+            resolved = (
+                settings.get("active_character")
+                or settings.get("current_character")
+                or settings.get("default_character")
+                or ""
+            ).strip()
+            allowed = fresh.get("allowed_characters") or []
+            if not resolved or (fresh.get("role") != "admin" and resolved not in allowed):
+                resolved = (allowed[0] if allowed else "").strip()
+            # A fresh login always ends spectator mode, even without an allowed avatar.
+            settings.update(avatar_released=False, active_character=resolved,
+                            current_character=resolved)
+            update_user(user_id, settings=settings)
         user["settings"] = settings
         if not resolved:
             return
-        # Avatar-only Char zurueck in die Welt holen (idempotent — no-op wenn schon da).
+        # Bring an avatar-only character back into the world (idempotent — no-op if already there).
         if _has_avatar_only_presence(resolved):
             from app.models.character import appear_in_world
             appear_in_world(resolved)
@@ -436,49 +448,75 @@ def restore_avatar_on_login(user: Dict[str, Any]) -> None:
 
 
 def reap_orphaned_avatars() -> int:
-    """Verwaiste Avatars freigeben: hat ein User ein ``active_character`` gesetzt,
-    aber keine gueltige (nicht abgelaufene) Session mehr — z.B. Session-Timeout
-    ohne Logout-Request — gilt der Char faelschlich als gesteuert und bleibt
-    praesent. Hier wird die stale Kontrolle geleert und ein avatar-only Character,
-    den dann niemand mehr steuert, offmap gesetzt.
+    """Release orphaned avatars: a user with an ``active_character`` but no
+    valid (unexpired) session any more — e.g. a session timeout without a
+    logout request — wrongly counts as controlling the character, which then
+    stays present. The stale control is cleared here, and an avatar-only
+    character that nobody controls any more is put off-map.
 
-    Laeuft periodisch (periodic_jobs). Returns Anzahl verschwundener Chars.
+    Each clear runs under ``keyed_lock("user_settings", <id>)`` on a fresh
+    read (only the two avatar keys change), and the user's session is checked
+    again INSIDE the lock: a login between the session scan and the clear
+    creates its session before it stores the avatar (``auth._login_sync``), so
+    the re-check keeps a freshly logged-in avatar, and a layout save of the
+    user is not overwritten by the list snapshot. The lock is a leaf: the
+    off-map step runs after it is released.
+
+    Runs periodically (periodic_jobs). Returns the number of characters that vanished.
     """
     try:
         from app.core.db import get_connection
-        from app.core.users import list_users, update_user
+        from app.core.keyed_lock import keyed_lock
+        from app.core.users import get_user_by_id, list_users, update_user
         from app.core.timeutils import utc_now, parse_iso
     except Exception:
         return 0
 
     now = utc_now()
-    # user_ids mit gueltiger Session
+
+    def _live(exp: Any) -> bool:
+        try:
+            return bool(exp) and parse_iso(exp) > now
+        except Exception:
+            return False
+
+    # user ids with a valid session
     active_uids: set = set()
     try:
         conn = get_connection()
         for r in conn.execute("SELECT user_id, expires_at FROM user_sessions").fetchall():
             uid = r["user_id"] if hasattr(r, "keys") else r[0]
             exp = r["expires_at"] if hasattr(r, "keys") else r[1]
-            try:
-                if exp and parse_iso(exp) > now:
-                    active_uids.add(uid)
-            except Exception:
-                pass
+            if _live(exp):
+                active_uids.add(uid)
     except Exception:
         return 0
 
-    # User mit gesetztem Avatar ohne aktive Session -> Kontrolle freigeben
+    # Users with an avatar but no live session -> release the control
     freed: set = set()
     try:
-        for u in list_users():
-            uid = u.get("id")
-            settings = dict(u.get("settings") or {})
-            ac = (settings.get("active_character") or settings.get("current_character") or "").strip()
-            if not ac or uid in active_uids:
+        for listed in list_users():
+            uid = str(listed.get("id") or "")
+            listed_settings = listed.get("settings") or {}
+            if (not uid or uid in active_uids
+                    or not (listed_settings.get("active_character")
+                            or listed_settings.get("current_character"))):
                 continue
-            settings["active_character"] = ""
-            settings["current_character"] = ""
-            update_user(uid, settings=settings)
+            with keyed_lock("user_settings", uid):
+                u = get_user_by_id(uid)
+                if not u:
+                    continue
+                settings = dict(u.get("settings") or {})
+                ac = (settings.get("active_character") or settings.get("current_character") or "").strip()
+                if not ac:
+                    continue
+                rows = get_connection().execute(
+                    "SELECT expires_at FROM user_sessions WHERE user_id=?", (uid,)).fetchall()
+                if any(_live(r["expires_at"] if hasattr(r, "keys") else r[0]) for r in rows):
+                    continue
+                settings["active_character"] = ""
+                settings["current_character"] = ""
+                update_user(uid, settings=settings)
             freed.add(ac)
     except Exception:
         from app.core.log import get_logger
