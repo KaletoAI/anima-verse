@@ -937,7 +937,20 @@ LIVE_STAGES = {
 }
 
 
+def _register_cpu_labels() -> None:
+    """A194: the drape's stage keys are ``cpu_progress`` labels too (the shared live line)."""
+    from app.core import cpu_progress
+    cpu_progress.register_labels({k: v for k, v in LIVE_STAGES.items()})
+
+
+_register_cpu_labels()
+
+
 def _live_stage(key: Optional[Tuple[str, str]], stage: str, **fields: Any) -> None:
+    if stage != "blender":
+        # A194: the same stage into the shared live line (the Blender run attaches itself in ``runner.run``).
+        from app.core import cpu_progress
+        cpu_progress.stage(stage)
     if key is None:
         return
     import time
@@ -982,6 +995,8 @@ def live_progress(character_name: str, item_id: str) -> Optional[Dict[str, Any]]
     out["label"] = LIVE_STAGES.get(out["stage"], out["stage"])
     out["elapsed_s"] = round(now - float(entry.get("started") or now), 1)
     out["stage_s"] = round(now - float(entry.get("stage_at") or now), 1)
+    from app.core import cpu_progress
+    out["cpu"] = cpu_progress.snapshot(f"piece:{character_name}:{item_id}")  # A194: the shared live line
     return out
 
 
@@ -1255,10 +1270,12 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
     body = get_character_dir(character_name) / "model3d" / f"{base[0]}.glb"
     params = params_of(item)
     key = (character_name, item_id)
-    _live_stage(key, "waiting")
+    from app.core import cpu_progress
     try:
-        return _build_drape(character_name, item_id, key=key, profile=profile, base=base, base_sha=base_sha,
-                            lower=lower, item=item, sig=sig, sources=sources, body=body, params=params)
+        with cpu_progress.scope(f"piece:{character_name}:{item_id}"):  # A194: the piece dialog's live line
+            _live_stage(key, "waiting")
+            return _build_drape(character_name, item_id, key=key, profile=profile, base=base, base_sha=base_sha,
+                                lower=lower, item=item, sig=sig, sources=sources, body=body, params=params)
     finally:
         _live_end(key)
 

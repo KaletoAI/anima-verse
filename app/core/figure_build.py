@@ -931,7 +931,10 @@ def state(character_name: str) -> Dict[str, Any]:
         current = dict(_current.get(character_name) or {})
         queued = len(_queues.get(character_name) or ())
         last = dict(_last.get(character_name) or {})
-    return {"running": running, "step": current.get("step") if running else None, "queued": queued,
+    step = current.get("step") if running else None
+    if step:
+        step = {**step, "live": live_step(character_name)}  # A194
+    return {"running": running, "step": step, "queued": queued,
             "deferred": deferred, "paused": dict(last["paused"]) if last.get("paused") else None,
             "failed": dict(last.get("failed") or {}), "skipped": list(last.get("skipped") or []),
             "superseded": dict(last["superseded"]) if last.get("superseded") else None,
@@ -1205,6 +1208,7 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
                     queue.track_update_label(task_id, label)
                 except Exception:  # noqa: BLE001
                     logger.debug("Build track %s not relabelled", task_id, exc_info=True)
+                _tracks[character_name] = (queue, task_id, label)
             if DEPENDS.get(step.name, set()) & (set(failed) | set(skipped)):
                 if step.name not in skipped:
                     skipped.append(step.name)
@@ -1305,8 +1309,28 @@ def _paused_here(character_name: str, reason: str, step: Step, queue, task_id: s
 
 # --- Steps (each returns "" or the error) --------------------------------------------
 
+#: A194: the task-queue row of the Build in flight per character — ``(queue, task_id, label)`` — so the live CPU
+#: progress of the running step reaches the row ("Build · Kai (3/7 Fit …) — Garment fit · Cloth substeps 96/400 · 42 s").
+_tracks: Dict[str, Tuple[Any, str, str]] = {}
+
+
+def live_step(character_name: str) -> Optional[Dict[str, Any]]:
+    """A194: the live CPU progress of the step in flight (``cpu_progress.snapshot``), None when none reports."""
+    from app.core import cpu_progress
+    return cpu_progress.snapshot(f"figure:{character_name}")
+
+
 def _run_step(character_name: str, step: Step, explicit: bool) -> str:
-    """Run one step: "" or its error (an exception is the error)."""
+    """Run one step: "" or its error (an exception is the error). A194: the step runs in the character's
+    ``cpu_progress`` scope, so every Blender run / refit compute in it reports into the Build's live line."""
+    from app.core import cpu_progress
+    track = _tracks.pop(character_name, None)
+    relabel = cpu_progress.track_relabel(*track) if track else None
+    with cpu_progress.scope(f"figure:{character_name}", relabel=relabel):
+        return _run_step_inner(character_name, step, explicit)
+
+
+def _run_step_inner(character_name: str, step: Step, explicit: bool) -> str:
     from app.core import model3d
     try:
         if step.name in SLOT_STEPS:
@@ -2508,6 +2532,7 @@ def base_run_all(character_name: str, *, profile: Optional[Dict[str, Any]] = Non
     with _lock:
         state_now = {"running": character_name in _run_all_active,
                      "last": dict(_run_all_last[character_name]) if character_name in _run_all_last else None}
+    state_now["live"] = live_step(character_name)  # A194: the CPU line of whatever base run goes now
     out: Dict[str, Any] = {"kind": "", "steps": [], "hub_jobs": 0, "note": "", "face_due": "", **state_now}
     try:
         profile = _profile_of(character_name, profile)
@@ -2623,9 +2648,12 @@ def start_base_run_all(character_name: str) -> Dict[str, Any]:
 
     def run() -> None:
         from app.core.timeutils import utc_now_iso
-        queue, task_id = _tracked(character_name, f"Base body · {character_name} (Run all)")
+        label = f"Base body · {character_name} (Run all)"
+        queue, task_id = _tracked(character_name, label)
         error = "Run all failed"
         try:
+            if queue is not None and task_id:
+                _tracks[character_name] = (queue, task_id, label)  # A194: the row follows the live line
             error = _run_step(character_name, step, True)
         finally:
             base_body.release_views(character_name, views)
@@ -2681,7 +2709,9 @@ def _start_collision_run_all(character_name: str) -> Dict[str, Any]:
             logger.info("Base Run all %s (collision) ended%s", character_name, f": {error}" if error else "")
 
     try:
-        threading.Thread(target=run, daemon=True, name=f"base-run-all-collision-{character_name}").start()
+        from app.core import cpu_progress
+        threading.Thread(target=cpu_progress.scoped(f"figure:{character_name}", run),  # A194: live line
+                         daemon=True, name=f"base-run-all-collision-{character_name}").start()
     except Exception:
         lock.release()
         with _lock:

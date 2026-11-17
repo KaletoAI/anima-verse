@@ -3236,7 +3236,9 @@ def _store_unrigged_model(character_name: str, signature: str, result: Dict[str,
             face_cleanup = {"status": "skipped", "reason": "disabled for this character", "at": utc_now_iso()}
         else:
             try:
-                blob, face_cleanup = _face_cleanup.clean_face(blob)
+                from app.core import cpu_progress
+                with cpu_progress.attach("face_cleanup"):  # A194: the live step names it
+                    blob, face_cleanup = _face_cleanup.clean_face(blob)
                 if face_cleanup.get("status") == "applied":
                     verdict = validate_source(blob)
                     if not verdict.get("ok"):
@@ -5158,7 +5160,8 @@ def trigger_face_retexture(character_name: str, signature: str, *,
                 with _lock:
                     _face_retexture_results[character_name] = {**result, 'task_id': task_id}
                     _generating.discard(character_name)
-    threading.Thread(target=run, daemon=True).start()
+    from app.core import cpu_progress
+    threading.Thread(target=cpu_progress.scoped(f"figure:{character_name}", run), daemon=True).start()  # A194
     return {'status': 'generating', 'task_id': task_id}
 
 
@@ -5283,7 +5286,9 @@ def _reclean_face_source(character_name: str, signature: str, *, from_stored: bo
         mesher.parent.mkdir(parents=True, exist_ok=True)
         _publish_model_bytes(mesher, blob)
     try:
-        cleaned, record = face_cleanup.clean_face(blob) if lips else face_cleanup.clean_face(blob, lips=False)
+        from app.core import cpu_progress
+        with cpu_progress.attach("face_cleanup"):  # A194: the live step names it
+            cleaned, record = face_cleanup.clean_face(blob) if lips else face_cleanup.clean_face(blob, lips=False)
         if record.get("status") == "applied":
             verdict = validate_source(cleaned)
             if not verdict.get("ok"):
@@ -5421,7 +5426,8 @@ def trigger_face_cleanup(character_name: str, signature: str) -> Dict[str, Any]:
                                                              "error": result.get("error", ""),
                                                              "task_id": task_id, "follow_up": follow_up}
                     _generating.discard(character_name)
-    threading.Thread(target=run, daemon=True).start()
+    from app.core import cpu_progress
+    threading.Thread(target=cpu_progress.scoped(f"figure:{character_name}", run), daemon=True).start()  # A194
     return {"status": "generating", "task_id": task_id, "follow_up": follow_up, "jobs": state["jobs"]}
 
 

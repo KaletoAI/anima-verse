@@ -4024,7 +4024,22 @@ def _refit_body_job(character_name: str, job: "_Job") -> Dict[str, Any]:
 
 def _execute(character_name: str, job: "_Job") -> Optional[str]:
     """Run one job (the FIFO worker's and a refit's beside it): ``job.result`` is set, the tracked CPU task
-    ends; returns the error of a run that raised, else None."""
+    ends; returns the error of a run that raised, else None. A194: the job runs in the piece's ``cpu_progress``
+    scope (the Wardrobe chip's live line), its tracked row follows the line."""
+    from app.core import cpu_progress, refit_pool
+    relabel = None
+    if job.track:
+        try:
+            from app.core.task_queue import get_task_queue
+            relabel = cpu_progress.track_relabel(get_task_queue(), job.track,
+                                                 refit_pool.fits_label(character_name, 1))
+        except Exception:  # noqa: BLE001 — the row is display only
+            relabel = None
+    with cpu_progress.scope(f"piece:{character_name}:{job.item_id}", relabel=relabel):
+        return _execute_inner(character_name, job)
+
+
+def _execute_inner(character_name: str, job: "_Job") -> Optional[str]:
     error: Optional[str] = None
     if job.track:
         from app.core import refit_pool

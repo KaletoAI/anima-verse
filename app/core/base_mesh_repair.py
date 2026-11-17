@@ -921,7 +921,9 @@ def start_repair(character_name: str, signature: str) -> bool:
         _running[character_name] = signature
         _results.pop(character_name, None)
     try:
-        _threading.Thread(target=_apply, args=(character_name, signature), daemon=True,
+        from app.core import cpu_progress
+        _threading.Thread(target=cpu_progress.scoped(f"figure:{character_name}", _apply),  # A194: live line
+                          args=(character_name, signature), daemon=True,
                           name=f"mesh-repair-{character_name}").start()
     except BaseException:
         with _lock:

@@ -2287,6 +2287,8 @@ def get_character_garment(character_name: str, item_id: str,
                                                   base_model_sha=base[1] if base else "").get(item_id),
                    left_out=left_out),
                "garment": info, "limits": _garment_limits(kind),
+               # A194: the live CPU line of the piece's step in flight ("Stage · i/n · 42 s"), None when idle.
+               "live": garment_set.piece_live(character_name, item_id),
                # Ruling A31: the Details preview's body switch — each body's fit attempt, its status and reason;
                # Ruling A67: the base body and the current body only (``fit_attempts.bodies``; [] off the pipeline
                # and for hair).

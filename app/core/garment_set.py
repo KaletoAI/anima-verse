@@ -240,6 +240,23 @@ def _accepted_images(steps: Dict[str, Any]) -> bool:
     return False
 
 
+def piece_live(character_name: str, item_id: str) -> Optional[Dict[str, Any]]:
+    """A194: the live CPU line of a piece in flight (``cpu_progress.snapshot``) — its own garment run / drape, else
+    the character's Build while its step in flight is this piece's; None when nothing of it runs. Never raises."""
+    from app.core import cpu_progress
+    snap = cpu_progress.snapshot(f"piece:{character_name}:{item_id}")
+    if snap:
+        return snap
+    try:
+        from app.core import figure_build
+        step = figure_build.state(character_name).get("step") or {}
+        if step.get("item_id") == item_id:
+            return step.get("live")
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def piece_status(info: Dict[str, Any], *, worn: bool, base_model_ready: bool,
                  layers: Optional[Dict[str, List[str]]] = None, left_out: bool = False) -> Dict[str, Any]:
     """The Wardrobe row chip of an own-mesh piece from its
@@ -527,6 +544,7 @@ def wardrobe(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -
         items[item_id] = piece_status(info, worn=pipeline and item_id in worn,
                                       base_model_ready=bool(base and base[1]), layers=layers.get(item_id),
                                       left_out=item_id in left_out)
+        items[item_id]["live"] = piece_live(character_name, item_id)  # A194
     overlaps = (mesh_overlaps(pieces, slot_order=body_slots.piece_slots_for_character(character_name))
                 if pipeline else [])
     queue = garments.queue_state(character_name)
