@@ -33,8 +33,11 @@ ones too):
 A failure is logged as a WARNING with the path and the migration goes on; the
 flag is set anyway (a half-run retry at every start would be worse) — the log
 names what stayed. Only a character list that cannot be read leaves the flag
-unset. No hub job, no generation: a HairDeck character's next run builds
-fresh from what it kept, a ``body`` character has no hair item to build.
+unset. The flag itself is read strictly: a read error raises before anything
+is touched (the boot's ``try`` logs it, the next start reads again) — a
+migrated world never runs this again on a failed read. No hub job, no
+generation: a HairDeck character's next run builds fresh from what it kept,
+a ``body`` character has no hair item to build.
 """
 from __future__ import annotations
 
@@ -371,7 +374,9 @@ def delete_all_hair_once() -> Optional[Dict[str, Any]]:
     from app.models import inventory
     from app.models.character import list_available_characters
     from app.models.world import get_world_setting, set_world_setting
-    if get_world_setting(HAIR_FLAG):
+    # Strict: a flag that cannot be read is no "not migrated yet" — on a migrated world this migration would
+    # delete hairstyles. The error leaves this boot without it (the boot logs it), the next start reads again.
+    if get_world_setting(HAIR_FLAG, strict=True):
         return None
     # A list that cannot be read is no reason to call the world migrated.
     names = list_available_characters(include_pooled=True, include_dormant=True, strict=True)

@@ -32,9 +32,12 @@ name)``, the ``outfit_body_mode`` key is popped from the profile.
 
 The order is items first, profiles second: a run that dies in between keeps
 the profile keys the next run's judgement needs (the flag is not set yet).
-A failed write is logged as a WARNING and the migration goes on; the flag is
-set anyway (as ``hair_migration`` does — a half-run retry at every start
-would be worse), the log names what stayed. Only an item list, the character
+A failed write is logged as a WARNING and the migration goes on. An item
+that was not saved (a world item, or the shared write) keeps its wearers'
+``outfit_body_mode`` — the only record of their choice — and leaves the
+flag unset, so the next start judges it again (idempotent: a stored mode is
+kept, rule 1); a failed profile write is logged and the flag is set anyway,
+the log names what stayed. Only an item list, the character
 list or a wearer's profile that cannot be read raises before anything is
 written and leaves the flag unset (the boot logs it, the next start retries).
 
@@ -258,10 +261,14 @@ def migrate_modes_once() -> Optional[Dict[str, Any]]:
     shared_items = [] if shared_done else inventory._load_shared_items(strict=True)
 
     judged, changed = _migrate(world_items, worn, modes, "world")
+    unsaved: List[str] = []
     for item in changed:
         if not inventory._save_items([item]):
             logger.warning("Worn-piece mode migration: world item %s not saved", item.get("id"))
+            unsaved.append(str(item.get("id") or ""))
             judged.pop(str(item.get("id") or ""), None)
+    # The wearers of an item that was not saved keep the key its judgement needs: the next start judges it again.
+    keep = {wearer for item_id in unsaved for wearer in worn.get(item_id, [])}
     if shared_done:
         logger.info("Worn-piece mode migration: the shared library was migrated before (installation "
                     "marker) — its modes stay as they are")
@@ -275,9 +282,14 @@ def migrate_modes_once() -> Optional[Dict[str, Any]]:
         except Exception as e:  # noqa: BLE001 — the marker stays unset: the next boot retries
             logger.warning("Worn-piece mode migration: shared items not saved (%s): %s",
                            ", ".join(str(i.get("id")) for i in shared_changed) or "-", e)
+            keep.update(w for i in shared_changed for w in worn.get(str(i.get("id") or ""), []))
 
     profiles: List[str] = []
     for name in ([] if world_done else names):
+        if name in keep:
+            logger.warning("Worn-piece mode migration %s: %s stays — a piece it wears was not saved",
+                           name, PROFILE_KEY)
+            continue
         try:
             if _drop_profile_key(name):
                 profiles.append(name)
@@ -285,7 +297,12 @@ def migrate_modes_once() -> Optional[Dict[str, Any]]:
             logger.warning("Worn-piece mode migration %s: profile step failed: %s", name, e)
 
     if not world_done:
-        set_world_setting(FLAG, "1")
+        if unsaved or keep:
+            logger.warning("Worn-piece mode migration not done — items not saved (world: %s), %s kept by %s; "
+                           "retried at the next start", ", ".join(unsaved) or "-", PROFILE_KEY,
+                           ", ".join(sorted(keep)) or "-")
+        else:
+            set_world_setting(FLAG, "1")
     logger.info("Worn-piece mode migration done: %d item(s) judged, %d profile(s) without %s",
                 len(judged), len(profiles), PROFILE_KEY)
     return {"items": judged, "profiles": profiles}
@@ -1050,9 +1067,13 @@ def drop_pipeline_key_once() -> Optional[Dict[str, str]]:
 # exception, a profile that was not saved) is a WARNING naming the character
 # and the migration goes on; the flag is set only when every character went
 # through (Ruling FR-minors) — else the next start runs it again, which finds
-# a minted hairstyle instead of minting another. A character list or profile
-# that cannot be read raises before anything is written and leaves the flag
-# unset.
+# a minted hairstyle instead of minting another and leaves every character
+# the earlier pass finished untouched (no legacy key left and a hairstyle
+# that names its mode: no item write, no profile write — the user may have
+# changed its hairstyles since); a minted hairstyle whose profile write
+# failed keeps its mode and text, only the profile is finished. A character
+# list or profile that cannot be read raises before anything is written and
+# leaves the flag unset.
 
 #: world_kv key of the done flag.
 HAIRSTYLE_FLAG = "migrated_hairstyle_items"
@@ -1061,6 +1082,13 @@ HAIRSTYLE_FLAG = "migrated_hairstyle_items"
 def _legacy_settings(profile: Dict[str, Any]) -> Dict[str, Any]:
     from app.core.garment_hair import SETTING_KEYS
     return {k: profile[k] for k in SETTING_KEYS if profile.get(k) not in (None, "")}
+
+
+def _is_minted(item: Optional[Dict[str, Any]]) -> bool:
+    """Whether a hair item already is a hairstyle — its ``garment`` names a mode (this migration or
+    ``garment_hair.create_hairstyle`` made it); a hair item from before hairstyles names none
+    (``garment_hair.hairstyle_mode``)."""
+    return bool(((item or {}).get("garment") or {}).get("mesh_mode"))
 
 
 def _hairstyle_of(name: str, profile: Dict[str, Any]) -> str:
@@ -1084,6 +1112,10 @@ def _hairstyle_of(name: str, profile: Dict[str, Any]) -> str:
     item = next((i for i in owned if i.get("id") == worn), owned[0] if owned else None)
     if item is None:
         return str(garment_hair._mint_hairstyle(name, slot.id, text, mode, settings)["id"])
+    if _is_minted(item):
+        # A pass before this one made it a hairstyle (its profile write failed): its mode, text and settings
+        # stay as they are — the profile step below only finishes what that pass left.
+        return str(item["id"])
     garment = dict(item.get("garment") or {})
     garment.update({"mesh_mode": mode, "description": text, **settings})
     garment.setdefault("body_slot", slot.id)
@@ -1093,13 +1125,19 @@ def _hairstyle_of(name: str, profile: Dict[str, Any]) -> str:
 
 
 def _migrate_hairstyle(name: str) -> Tuple[str, List[str]]:
-    """``(hairstyle id or "", profile keys dropped)`` of one character."""
+    """``(hairstyle id or "", profile keys dropped)`` of one character. A character an earlier pass migrated —
+    no legacy key left in its profile and a hairstyle owned (``_is_minted``) — is left exactly as it is: no item
+    write, no profile write (``("", [])``); the user may have changed its hairstyles since."""
     from app.core import garment_hair
     from app.core.hair_migration import LEGACY_METHOD_KEY
     from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile, save_character_profile
     with keyed_lock("garment_item", name):
-        item_id = _hairstyle_of(name, get_character_profile(name, strict=True) or {})
+        profile = get_character_profile(name, strict=True) or {}
+        if not any(k in profile for k in (LEGACY_METHOD_KEY, *garment_hair.SETTING_KEYS)) \
+                and any(_is_minted(i) for i in garment_hair.hairstyles(name)):
+            return "", []
+        item_id = _hairstyle_of(name, profile)
         with keyed_lock("character_profile", name):
             profile = get_character_profile(name, strict=True) or {}
             dropped = [k for k in (LEGACY_METHOD_KEY, *garment_hair.SETTING_KEYS) if k in profile]
