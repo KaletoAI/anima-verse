@@ -158,13 +158,17 @@ const DEFS: Record<string, GlobDef | LoraDef> = {
 const recordLoads = new Map<string, Promise<StoredOverride>>()
 const backendLoads = new Map<string, Promise<string[]>>()
 
+/** One request per key while it is IN FLIGHT: the sections of one tab mount together and share it. A
+ *  settled load is not remembered — `savedSignal` starts at 0 again when the tab remounts, so a kept
+ *  answer would be the record from before a save (and a LoRA edit would then send that stale list). */
 function cached<T>(cache: Map<string, Promise<T>>, key: string, load: () => Promise<T>): Promise<T> {
   let p = cache.get(key)
   if (!p) {
-    p = load()
-    // A failed load is not remembered — the next mount asks again.
-    p.catch(() => cache.delete(key))
-    cache.set(key, p)
+    const own = load()
+    p = own
+    const drop = () => { if (cache.get(key) === own) cache.delete(key) }
+    own.then(drop, drop)
+    cache.set(key, own)
   }
   return p
 }
