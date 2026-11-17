@@ -215,10 +215,19 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
     move being refused. The answer carries the touched clips in the shape of
     the listing.
     """
+    import asyncio
     try:
         body = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="invalid JSON body")
+    # The writers take the clip-library lock, which an import holds for its
+    # whole Blender run: waiting for it must not stall the event loop.
+    return await asyncio.to_thread(_patch_animation_clip_sync, library, rel, body)
+
+
+def _patch_animation_clip_sync(library: str, rel: str, body: Any) -> Dict[str, Any]:
+    """The blocking body of ``patch_animation_clip`` — runs in the
+    threadpool."""
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="object expected")
     if not any(k in body for k in
@@ -319,10 +328,19 @@ async def post_animation_clip_orient(library: str, rel: str, request: Request,
     every dial is 0; a check that is not green is a 400. Every bake without
     it clears the old one.
     """
+    import asyncio
     try:
         body = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="invalid JSON body")
+    # Blender (its availability probe included) and the clip-library lock
+    # run in the threadpool, never on the event loop.
+    return await asyncio.to_thread(_post_animation_clip_orient_sync, library, rel, body)
+
+
+def _post_animation_clip_orient_sync(library: str, rel: str, body: Any) -> Dict[str, Any]:
+    """The blocking body of ``post_animation_clip_orient`` — runs in the
+    threadpool."""
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="object expected")
     if "height_cm" in body:
@@ -403,10 +421,17 @@ async def put_clip_transitions(request: Request,
     refused. ``kind`` must exist as a solo clip (400 otherwise). Answers the
     stored list, in the shape the listing carries under ``transitions``.
     """
+    import asyncio
     try:
         body = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="invalid JSON body")
+    return await asyncio.to_thread(_put_clip_transitions_sync, body)
+
+
+def _put_clip_transitions_sync(body: Any) -> Dict[str, Any]:
+    """The blocking body of ``put_clip_transitions`` — runs in the threadpool
+    (``save_transitions`` waits for the clip-library lock)."""
     rules = body.get("transitions") if isinstance(body, dict) else body
     try:
         save_transitions(rules)
