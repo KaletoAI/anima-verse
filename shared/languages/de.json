@@ -6294,6 +6294,9 @@
     "Pitches the part at its root about the body’s side axis: up toward the belly, or down away from it.": "Neigt das Teil an seiner Wurzel um die Seitenachse des Körpers: nach oben zum Bauch oder nach unten davon weg.",
     "Turns the part at its root about the body’s up axis, to the figure’s own left or right.": "Dreht das Teil an seiner Wurzel um die Hochachse des Körpers, zur eigenen linken oder rechten Seite der Figur.",
     "Stores the root angle with the clip (all its sets and halves); the 3D client plays it too.": "Speichert den Wurzelwinkel mit dem Clip (alle Sets und Hälften); der 3D-Client spielt ihn ebenfalls ab.",
-    "{mm} mm above the surface": "{mm} mm über der Fläche"
+    "{mm} mm above the surface": "{mm} mm über der Fläche",
+    "Dismissed — the next Build tries this step again": "Verworfen — der nächste Build versucht diesen Schritt erneut",
+    "Forgets this failure — the status stops saying a step failed; the next Build tries it again": "Vergisst diesen Fehler — der Status meldet ihn nicht mehr; der nächste Build versucht den Schritt erneut",
+    "Template drape": "Vorlagen-Drapierung"
   }
 }

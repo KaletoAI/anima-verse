@@ -82,7 +82,7 @@ import { useFigure } from './useFigure'
 import { imageRefusal } from './refusedAttemptsModel'
 import {
   BUILD_DEFERRED_NOTE, BUILD_RUNNING_NOTE, BUILD_STATUS, ESTIMATE_NOTE, HAIR_MODE_LABELS, MESH_MODE_LABELS,
-  FRONT_WAITS_FOR_BUILD, NO_BASE_BODY_NOTE, REFIT_LABEL, autoBuildNote, baseBodyLine, bodyRows, buildButton,
+  FRONT_WAITS_FOR_BUILD, NO_BASE_BODY_NOTE, REFIT_LABEL, STEP_NAMES, autoBuildNote, baseBodyLine, bodyRows, buildButton,
   changeLine, frontBuildCovers, frontRegenerate, hairState, headerLine, noBaseBody, planRows, regenerateMeshLabel,
   retryLabel, servedLines, shortCost, stateMeshAction, stateToggleNote, statusLight, templateBuilt, templateCost,
   templateSummary, wornState,
@@ -151,6 +151,11 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
   }), [post, t, toast])
 
   const reload = useCallback(() => startPoll(0), [startPoll])
+
+  /** A166: forget a failed step of the last Build — the status stops saying it failed; the next Build tries again. */
+  const dismiss = useCallback((step: string) => post('figure/dismiss-failure', { step }, () => {
+    toast(t('Dismissed — the next Build tries this step again'), 'success')
+  }), [post, t, toast])
 
   /** Ruling A86: the front's Regenerate on the plain body's change — the front tile's own action (Base body tab). */
   const regenerateFront = useCallback(() => post('base-body/images', { view: 'front', force: true }, () => {
@@ -233,7 +238,8 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
           )}
         </div>
         <div className="ga-split-col" style={PANEL}>
-          <FigureNotices data={data} posting={posting} onBuild={build} onRegenerateFront={() => { void regenerateFront() }}
+          <FigureNotices data={data} posting={posting} onBuild={build} onDismiss={(step) => { void dismiss(step) }}
+            onRegenerateFront={() => { void regenerateFront() }}
             onOpenBaseBody={onOpenBaseBody}>
             {data.generation_pause ? (
               <GenerationPausePanel gp={data.generation_pause} busy={posting} onResume={() => { void setPaused(false) }}
@@ -323,7 +329,7 @@ function FigureHeader({ data, posting, autoSaved, onBuild, onAutoBuild, onPause 
   const listed = data.changes.filter((c) => c !== frontChange)
   const due = listed.map((c) => changeLine(c, t))
   const served = data.served_state && data.served_state.light === 'green' ? t(data.served_state.state) : ''
-  const head = headerLine(data.status, data.changes.length, t)
+  const head = headerLine(data.status, data.changes.length, t, data.problem?.step_label)
   const autoNote = autoSaved ? autoBuildNote(data.auto_build, t)
     : data.auto_build ? t('Changes start the Build by themselves') : t('Changes wait for Build')
   return (
@@ -368,10 +374,12 @@ const NEW_BODY_NOTE = 'New body being built — the pieces are fitted again afte
  *  failed steps, the plain body's outdated front with its Regenerate (Ruling A86), the full-body reference
  *  information (Ruling A87), and the caller's (the generation pause, the served figure's lacks). Nothing to say → no
  *  list. */
-function FigureNotices({ data, posting, onBuild, onRegenerateFront, onOpenBaseBody, children }: {
+function FigureNotices({ data, posting, onBuild, onDismiss, onRegenerateFront, onOpenBaseBody, children }: {
   data: FigurePayload
   posting: boolean
   onBuild: () => void
+  /** A166: forget a failed step of the last Build (POST …/figure/dismiss-failure). */
+  onDismiss: (step: string) => void
   /** Ruling A86: the front's Regenerate (POST …/base-body/images {view: "front", force: true}). */
   onRegenerateFront: () => void
   onOpenBaseBody?: () => void
@@ -403,10 +411,21 @@ function FigureNotices({ data, posting, onBuild, onRegenerateFront, onOpenBaseBo
       {actions}
     </div>,
   )
+  const dismissButton = (step: string) => (
+    <button type="button" className="ga-btn ga-btn-sm" disabled={posting} onClick={() => onDismiss(step)}
+      title={t('Forgets this failure — the status stops saying a step failed; the next Build tries it again')}>
+      {t('Dismiss')}
+    </button>
+  )
   if (!running && data.problem) {
-    lines.push(<BuildProblemView key="problem" problem={data.problem} busy={posting} onRun={onBuild} compact />)
+    const problemStep = data.problem.step
+    lines.push(<BuildProblemView key="problem" problem={data.problem} busy={posting} onRun={onBuild} compact
+      extra={data.build.failed?.[problemStep] || data.problem.held ? dismissButton(problemStep) : undefined} />)
   }
-  if (!running) others.forEach(([name, f]) => line(`failed-${name}`, 'red', `${name}: ${f.error}`))
+  if (!running) {
+    others.forEach(([name, f]) => line(`failed-${name}`, 'red',
+      `${t(STEP_NAMES[name] || name)}: ${f.error}`, undefined, dismissButton(name)))
+  }
   if (frontChange) {
     const jobs = data.body?.plain.jobs
     const action = frontRegenerate(frontChange.front, jobs, t)

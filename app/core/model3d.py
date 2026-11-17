@@ -3377,7 +3377,7 @@ def _resume_entry(op, staged_call, character_name: str):
     return hub_ops.resume(op, staged_call, agent_name=character_name)
 
 
-def _ensure_covered_variant(character_name: str) -> None:
+def ensure_covered_variant(character_name: str) -> None:
     """Before an outfit model on the base body is built: a base whose
     exposed-only extension groups apply gets its covered variant
     (``_auto_covered_variant``) when it has none built from its current
@@ -3633,7 +3633,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
     if op is not None and op.status == hub_ops.RUNNING and _drop_partial_body_op(op):
         op = None  # a front-only outfit body record: this run builds it anew
     if op is None and not base and outfit_body is None:
-        _ensure_covered_variant(character_name)
+        ensure_covered_variant(character_name)
     if op is not None:
         return _resume_entry(op, lambda: _generate_for_current_outfit(
             character_name, signature=op.inputs["signature"], _op_ctx={"op": op}),

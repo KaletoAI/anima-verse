@@ -512,6 +512,7 @@ check('[8] 2 changes', m.headerLine('changes', 2), '2 changes');
 check('[8] 1 change', m.headerLine('changes', 1), '1 change');
 check('[8] 0 changes', m.headerLine('changes', 0), 'Out of date');
 check('[8] failed', m.headerLine('failed', 1), '1 change · a step failed');
+check('[8] failed with step (A166)', m.headerLine('failed', 0, undefined, 'Assemble the figure'), 'Out of date · Assemble the figure failed');
 check('[8] building 2', m.headerLine('building', 2), 'Building now · 2 changes');
 check('[8] building 0', m.headerLine('building', 0), 'Building now');
 check('[8] lights', ['up_to_date', 'changes', 'failed', 'building'].map((x) => m.statusLight(x)),
@@ -594,7 +595,7 @@ const posts = [...fieldFigure.matchAll(/\bpost\(\s*['`]([^'`]+)['`]/g)].map((x) 
 // the front's Regenerate on the plain body's change (the Base body tab's own action).
 check('[12] FieldFigure starts only the Build (+ the other state\'s mesh, the CPU Re-fit, the front)', [[...new Set(posts)].sort(),
   (fieldFigure.match(/\bapiPost\b/g) || []).length],
-  [['base-body/images', 'figure/auto-build', 'figure/build', 'figure/generation-pause', 'figure/refit', 'figure/waiting/cancel',
+  [['base-body/images', 'figure/auto-build', 'figure/build', 'figure/dismiss-failure', 'figure/generation-pause', 'figure/refit', 'figure/waiting/cancel',
     'garments/{}/run'], 2]);
 const tmpl = JSON.parse(src('shared/templates/character/base-character.json') || '{"tabs":[],"sections":[]}');
 const tab = tmpl.tabs.find((x) => x.id === 'figure_tab') || {};

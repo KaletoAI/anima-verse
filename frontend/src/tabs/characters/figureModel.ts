@@ -582,12 +582,14 @@ export function changeLine(c: FigureChange, t: Tr = EN): string {
 
 /** The flow head's status words beside its light (Task UI5): what holds — the Build button beside it names the cost,
  *  so the line does not repeat it. "Up to date" · "2 changes" · "Out of date" (steps without a change of a piece) ·
- *  "1 change · a step failed" · "Building · 2 changes". */
-export function headerLine(status: FigureStatus, changes: number, t: Tr = EN): string {
+ *  "1 change · a step failed" (with `failedStep`: "1 change · Assemble the figure failed") · "Building · 2 changes". */
+export function headerLine(status: FigureStatus, changes: number, t: Tr = EN, failedStep?: string): string {
   if (status === 'up_to_date') return t('Up to date')
   if (status === 'building') return changes > 0 ? `${t('Building now')} · ${changesText(changes, t)}` : t('Building now')
   const head = changes > 0 ? changesText(changes, t) : t('Out of date')
-  return status === 'failed' ? `${head} · ${t('a step failed')}` : head
+  if (status !== 'failed') return head
+  // A166: the failed step by name ("Out of date · Assemble the figure failed"), the generic words only without one.
+  return failedStep ? `${head} · ${t('{step} failed').replace('{step}', t(failedStep))}` : `${head} · ${t('a step failed')}`
 }
 
 /** The flow head's light (checklist 8): green up to date · yellow changes · red a step failed · blue building. */
@@ -1131,6 +1133,11 @@ export const HAIRSTYLE_SAVED_NOTE = 'Saved — nothing runs. Run all or Re-fit a
  * first, `jobs` that step's hub jobs; `kind` failed: any other failed step, `detail` its error, `action` retry (a
  * manual Build), `jobs` what the Build spends. `held`: automatic Builds do not repeat it until its inputs change.
  */
+/** A166: a failed step's words when only its key is known (`figure_build.STEP_LABELS`). */
+export const STEP_NAMES: Record<string, string> = { plain_body: 'Plain body', shape: 'Body shape', pieces: 'Own mesh',
+  template: 'Template drape', hair: 'Hair', texture: 'Texture', fits: 'Fits on the CPU', assemble: 'Assemble the figure',
+  collision: 'Collision capsules', build: 'Build' }
+
 export interface BuildProblem {
   kind: 'mesh_mismatch' | 'failed'
   step: string

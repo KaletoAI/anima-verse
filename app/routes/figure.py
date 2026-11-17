@@ -143,7 +143,7 @@ body actions):
 """
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app.core.auth_dependency import require_admin
@@ -281,6 +281,18 @@ def base_state_motion(character_name: str, state: str,
 def build_figure(character_name: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     _require_character(character_name)
     return start_manual_build(character_name)
+
+
+@router.post("/{character_name}/figure/dismiss-failure")
+def dismiss_figure_failure(character_name: str, body: Dict[str, Any] = Body(...),
+                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """A166: forget a failed step of the last Build (``figure_build.dismiss_failure``); ``{step}``."""
+    from app.core import figure_build
+    _require_character(character_name)
+    step = str((body or {}).get("step") or "")
+    if not step:
+        raise HTTPException(status_code=400, detail="step missing")
+    return {"ok": True, "dismissed": figure_build.dismiss_failure(character_name, step)}
 
 
 def start_manual_build(character_name: str) -> Dict[str, Any]:

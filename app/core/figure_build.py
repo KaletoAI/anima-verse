@@ -920,6 +920,32 @@ def state(character_name: str) -> Dict[str, Any]:
             "finished_at": last.get("finished_at")}
 
 
+def dismiss_failure(character_name: str, step: str) -> bool:
+    """A166: forget the last run's failure of ``step`` (and, for ``assemble``, the recorded refusal of the figure
+    delivered now) — the status no longer says "a step failed" for it; the next Build tries it again. A chain that
+    failed for its current input stays listed (its own row offers its fix). True when something was dropped."""
+    from app.core import base_body
+    dropped = False
+    with _lock:
+        last = _last.get(character_name)
+        failed = (last or {}).get("failed") or {}
+        if step in failed:
+            failed.pop(step)
+            dropped = True
+    if step == "assemble":
+        try:
+            _profile, wanted, _delivered, _items = _now(character_name)
+            if base_body.assemble_refusal(character_name, wanted.signature, _delivered) is not None:
+                dropped = True
+            base_body.clear_assemble_refusal(character_name, wanted.signature)
+        except Exception:  # noqa: BLE001 — the last run's record is dropped either way
+            logger.debug("Build %s: assembly refusal not cleared", character_name, exc_info=True)
+    if dropped:
+        base_body._invalidate_figure()
+        _notify_build_changed()
+    return dropped
+
+
 #: The Build steps whose failure names ONE piece (``Step.item_id``): its garment chain (``_chain``: the error
 #: "<garment step> — <reason>") and the Re-fit run's fit (``_run_refit``: ``fits``, the refused fit itself).
 PIECE_FAILURE_STEPS = ("pieces", "hair", "fits")
@@ -1773,7 +1799,11 @@ def _run_assemble(character_name: str, step: Step, explicit: bool = False) -> st
     """The outfit model of the figure delivered now (Ruling A119: the newest body, the ready pieces on it, the
     rest left off), then the garment assembly — CPU only."""
     from app.core import base_body, garment_assembly
+    from app.core import model3d
     _profile, wanted, _delivered, _items = _now(character_name)
+    # A166: the painted region and the side views need the covered variant (it shares the unrigged source's UVs);
+    # a variant that failed or went missing is built again here, before the outfit model is painted.
+    model3d.ensure_covered_variant(character_name)
     views = base_body.ensure_figure_views(character_name, wanted.signature)
     if views is not None and not views.get("ok"):
         return str(views.get("error") or "views failed")

@@ -179,10 +179,10 @@ Expected, derived by hand from the brief:
         of the outfit's texture, plan 2026-11-10), base_variant rigged, batch
         [jiggle, tip] from the prerig, atlas kept. Flag false -> asked again;
         forced run -> covered.
-    (d) covered file deleted, _ensure_covered_variant stubbed off -> forced
+    (d) covered file deleted, ensure_covered_variant stubbed off -> forced
         run: base_variant rigged, covered_missing true, COVERED_MISSING in
         view_warnings, and the model stays current (no rebuild loop).
-    (e) Forced run with the real _ensure_covered_variant: base extension rig
+    (e) Forced run with the real ensure_covered_variant: base extension rig
         [jiggle, tip] (its state was [jiggle]), then the covered build
         [jiggle]; covered sidecar source_sha256 = sha256(prerig),
         groups_removed [tip], extension_rig groups [jiggle]; base sidecar
@@ -1000,12 +1000,12 @@ def main() -> int:
             # loop) until a newer covered variant exists.
             covered_path.unlink()
             covered_path.with_suffix(".json").unlink()
-            ensure_original = model3d._ensure_covered_variant
-            model3d._ensure_covered_variant = lambda name: None
+            ensure_original = model3d.ensure_covered_variant
+            model3d.ensure_covered_variant = lambda name: None
             try:
                 result = model3d.generate_for_current_outfit("Demo", force=True)
             finally:
-                model3d._ensure_covered_variant = ensure_original
+                model3d.ensure_covered_variant = ensure_original
             meta12 = model3d._read_sidecar(model)
             check("fallback: rigged + warning", (result.get("ok"), meta12.get("base_variant"),
                                                  meta12.get("covered_missing"),
