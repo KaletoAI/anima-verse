@@ -811,6 +811,54 @@ def drape_state(character_name: str, item_id: str, *, base_sha: str, lower: List
     return {"state": "missing", "reason": NOT_DRAPED, "tsig": sig, "path": None, "record": {}}
 
 
+#: The steps of a template piece's progress (``piece_progress``), in chain order.
+PROGRESS_STEPS: Tuple[Tuple[str, str], ...] = (("params", "Parameters"), ("picture", "Picture"),
+                                               ("drape", "Drape (CPU)"))
+
+
+def piece_progress(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None,
+                   item: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """What the parameter dialog shows of ONE template piece on ``character_name`` (A168) — the same rule as the
+    Figure tab's row (``drape_state`` on the current base model, with the other worn mesh pieces as lower layers):
+    ``{state ("ready" / "missing" / "failed" / "blocked" / "running"), reason, built_at, error, worn, steps}`` —
+    ``steps`` in the step-list shape of ``model_overview`` (``{id, label, status, detail, numbers}``: parameters
+    stored, a picture to colour it from, the drape). ``running``: a Build of the character runs (it drapes the worn
+    template pieces). Read-only."""
+    from app.core import base_body, figure, figure_build
+    from app.models.inventory import get_item
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    item = item if item is not None else get_item(item_id)
+    sets = figure.worn_sets(character_name, profile=profile)
+    worn = item_id in set(sets.pieces.values())
+    base = base_body.current_base(character_name, profile=profile)
+    drape = drape_state(character_name, item_id, base_sha=base[1] if base else "",
+                        lower=lower_layers(sets.own, item_id) if worn else [], item=item)
+    record = drape["record"] or {}
+    params = params_of(item)
+    sources = texture_sources(character_name, item_id)
+    building = worn and figure_build.running(character_name)
+    state = "running" if building and drape["state"] != "ready" else drape["state"]
+    metrics = record.get("metrics") or {}
+    steps = [
+        {"id": "params", "label": "Parameters", "status": "done" if params else "missing",
+         "detail": "" if params else NEEDS_PARAMS,
+         "numbers": {"kind": params["kind"], "fabric": params["fabric"]} if params else {}},
+        {"id": "picture", "label": "Picture", "status": "done" if sources else "missing",
+         "detail": {"cutout": "the piece-only cut-out views", "item_image": "the item picture"}.get(
+             sources.get("source", ""), "") if sources else "No picture of the piece yet", "numbers": {}},
+        {"id": "drape", "label": "Drape (CPU)",
+         "status": {"ready": "done", "failed": "failed", "running": "due"}.get(state, "missing"),
+         "detail": "Draping now (the Build runs)" if state == "running" else drape["reason"] or "",
+         "numbers": {k: v for k, v in (("wall_s", metrics.get("wall_total_s")),
+                                       ("stretch_max", (metrics.get("drape") or {}).get("stretch_max")),
+                                       ("coverage", (metrics.get("bake") or {}).get("coverage"))) if v is not None}},
+    ]
+    return {"state": state, "reason": drape["reason"], "built_at": record.get("created_at") or "",
+            "error": str(record.get("error") or "") if drape["state"] == "failed" else "", "worn": worn, "steps": steps}
+
+
 # --- the drape run ----------------------------------------------------------------
 
 def build_args(params: Dict[str, Any], spec: Dict[str, Any], *, item_id: str, render: bool = False,
