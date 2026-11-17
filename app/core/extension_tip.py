@@ -255,7 +255,9 @@ def rebuild_running(character_name: str) -> str:
 def start_tip_rebuild(character_name: str, signature: str) -> bool:
     """Rebuild the extension rig of the stored model ``signature`` in a worker thread with the saved settings (the
     CPU rebuild of ``model3d.rebuild_extension_rig``, forced so a failed attempt is retried; no hub job). False
-    when a rebuild of the character already runs. ValueError when the model is missing."""
+    when a rebuild of the character already runs. ValueError when the model is missing. The rebuild holds the
+    character's 3D generation slot (``model3d.generation_slot``), as the base mesh repair and the Build's model
+    steps do: never two rebuilds of the same model at once."""
     from app.core.model3d import find_model3d
     if find_model3d(character_name, signature) is None:
         raise ValueError("Stored model not found for signature")
@@ -277,7 +279,7 @@ def start_tip_rebuild(character_name: str, signature: str) -> bool:
 
 
 def _apply(character_name: str, signature: str) -> None:
-    from app.core.model3d import rebuild_extension_rig
+    from app.core.model3d import generation_slot, rebuild_extension_rig
     from app.core.task_queue import get_task_queue
     from app.core.timeutils import utc_now_iso
     error, task_id = "", ""
@@ -288,7 +290,8 @@ def _apply(character_name: str, signature: str) -> None:
     except Exception:  # noqa: BLE001 — tracking is display only
         task_id = ""
     try:
-        result = rebuild_extension_rig(character_name, signature, force=True)
+        with generation_slot(character_name):
+            result = rebuild_extension_rig(character_name, signature, force=True)
         if not result.get("ok"):
             error = (result.get("error") or (result.get("extension_rig") or {}).get("reason")
                      or "Extension rebuild failed")

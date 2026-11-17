@@ -906,12 +906,22 @@ def run_state(character_name: str) -> Dict[str, Any]:
                 "last": dict(_results[character_name]) if character_name in _results else None}
 
 
+def repair_running(character_name: str) -> str:
+    """The base model signature the character's "Repair again" run works on now, "" when none (Ruling A26: a
+    Build does not start beside it, ``figure_build.base_step_in_flight``)."""
+    with _lock:
+        return str(_running.get(character_name) or "")
+
+
 def start_repair(character_name: str, signature: str) -> bool:
     """Repair the stored base model ``signature`` again in a worker thread: the forced CPU rebuild of its
     extension rig from the clean prerig source (``model3d.rebuild_extension_rig(repair=True)``) — the repair with
     the saved settings, then the extension parts on the repaired mesh, the covered variant, the capsules; no hub
     job. A changed base then refits what is fitted on it (``model3d.after_base_face_change``). False when a
-    repair of the character already runs; ValueError when the model is missing."""
+    repair of the character already runs; ValueError when the model is missing. The rebuild holds the
+    character's 3D generation slot (``model3d.generation_slot``, as the Build's ``base_repair`` /
+    ``tip_smoothing`` steps and ``extension_tip.start_tip_rebuild`` do), so no second rebuild of the same model
+    runs beside it; a Build does not start while it runs (``repair_running``)."""
     from app.core.model3d import find_model3d
     if find_model3d(character_name, signature) is None:
         raise ValueError("Stored model not found for signature")
@@ -934,7 +944,7 @@ def start_repair(character_name: str, signature: str) -> bool:
 
 def _apply(character_name: str, signature: str) -> None:
     import logging
-    from app.core.model3d import rebuild_extension_rig
+    from app.core.model3d import generation_slot, rebuild_extension_rig
     from app.core.task_queue import get_task_queue
     from app.core.timeutils import utc_now_iso
     logger = logging.getLogger(__name__)
@@ -946,7 +956,8 @@ def _apply(character_name: str, signature: str) -> None:
     except Exception:  # noqa: BLE001 — tracking is display only
         task_id = ""
     try:
-        result = rebuild_extension_rig(character_name, signature, force=True, repair=True)
+        with generation_slot(character_name):
+            result = rebuild_extension_rig(character_name, signature, force=True, repair=True)
         if not result.get("ok"):
             error = (result.get("error") or (result.get("extension_rig") or {}).get("reason")
                      or "Base mesh repair failed")

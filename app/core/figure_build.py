@@ -657,6 +657,8 @@ def running(character_name: str) -> bool:
 #: skin step rewrote the base front 60 s into a Build, the dressed front was edited from the old one). ``step``
 #: is ``base_step_in_flight``'s name of it.
 BASE_STEP_RUNNING = "{step} is running — Build once it is done"
+#: A Build whose plan raised (a malformed profile or item): recorded as its failure, nothing was built.
+PLAN_FAILED = "The Build could not be planned — nothing was built: {error}"
 #: Ruling A26 b: the base views changed under a running Build (a step that slipped in beside it) — it stops at
 #: the next step instead of failing with "views missing". ``step`` is the step it stopped at.
 BASE_CHANGED = "Base body changed during the Build ({step}) — Build again"
@@ -674,7 +676,7 @@ def base_step_in_flight(character_name: str) -> str:
     (``base_body.base_steps_running``: a view's render, the skin step, Run all's views, the base model — each
     from its click on), the character's 3D generation guard when a base step holds it
     (``model3d.generation_holder``: re-rig, face retexture / cleanup, a fetched or resumed mesh job, the base
-    refresh / face Improvements) and an extension tip rebuild."""
+    refresh / face Improvements), an extension tip rebuild and a base mesh repair ("Repair again")."""
     with _lock:
         if character_name in _run_all_active:
             return "Base body Run all"
@@ -687,6 +689,9 @@ def base_step_in_flight(character_name: str) -> str:
         return holder
     if extension_tip.rebuild_running(character_name):
         return "Extension tip rebuild"
+    from app.core import base_mesh_repair
+    if base_mesh_repair.repair_running(character_name):
+        return "Base mesh repair"
     return ""
 
 
@@ -1158,8 +1163,16 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
     from app.core import figure
     from app.core.timeutils import utc_now_iso
     explicit = not automatic
-    resolved = figure._delivered(character_name, profile=profile)
-    steps = plan(character_name, profile=profile, explicit=explicit, resolved=resolved)
+    try:
+        resolved = figure._delivered(character_name, profile=profile)
+        steps = plan(character_name, profile=profile, explicit=explicit, resolved=resolved)
+    except Exception as e:  # noqa: BLE001 — a plan that raises is the Build's failure, never a silent run
+        message = PLAN_FAILED.format(error=str(e) or type(e).__name__)
+        logger.exception("Build %s (%s): %s", character_name, reason, message)
+        with _lock:
+            _last[character_name] = {"failed": {"build": {"error": message, "item_id": ""}}, "skipped": [],
+                                     "reason": reason, "finished_at": utc_now_iso(), "superseded": None}
+        return
     if automatic:
         # Rulings 8a / A11: the plain body and the take-out stay listed (the UI's pending change), an automatic
         # run never builds them.
