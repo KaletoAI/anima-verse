@@ -31,6 +31,7 @@ finally:
     _common.main = _main
 sys.path.remove(_SCRIPTS_DIR)
 import bpy
+import numpy as np
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
@@ -39,6 +40,34 @@ def _srgb(v):
     """Convert linear colour to sRGB for the colour tests in spec § 4.1."""
     v = max(0.0, min(1.0, v))
     return 12.92 * v if v <= 0.0031308 else 1.055 * v ** (1 / 2.4) - 0.055
+
+
+def _linear(v):
+    """Decode one stored sRGB channel to linear (the inverse of ``_srgb``)."""
+    v = max(0.0, min(1.0, v))
+    return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+
+
+def _texel_linear(texel, stored_srgb):
+    """The linear colour of one texel as ``image.pixels`` returns it.
+
+    ``pixels`` hands out the STORED values without a colour transform: a byte
+    image in the sRGB colour space is already encoded and must be decoded
+    before it is multiplied with other factors; a float or non-colour image
+    stores linear values."""
+    return tuple(_linear(c) for c in texel) if stored_srgb else tuple(texel)
+
+
+def _shade(factors):
+    """sRGB of the product of linear colour factors (texel, vertex colour,
+    constant base colour) — what the BSDF receives, encoded once for the
+    spec § 4.1 thresholds. No factor at all means no colour evidence."""
+    if not factors:
+        return None
+    rgb = [1.0, 1.0, 1.0]
+    for factor in factors:
+        rgb = [a * b for a, b in zip(rgb, factor)]
+    return tuple(_srgb(c) for c in rgb)
 
 
 def _raster_mesh(objects, fix):
@@ -105,40 +134,98 @@ def _cell_hit(bvh, x, z, top, clearance):
     )
 
 
+def _input(node, identifier):
+    return next((i for i in node.inputs if i.identifier == identifier), None)
+
+
+def _base_terms(socket, seen):
+    """The factors whose product feeds a colour socket: ``("image", img)``,
+    ``("vcol", None)`` and ``("const", linear rgb)`` (spec § 4.1).
+
+    The glTF importer puts a MULTIPLY Mix (Factor 1) in front of Base Color
+    whenever baseColorFactor != 1 or the primitive carries COLOR_0, so both of
+    its colour inputs are followed; any other node is followed through its
+    first linked input, as ``picture_areas._base_image`` does."""
+    if not socket.is_linked:
+        return [("const", tuple(socket.default_value[:3]))]
+    node = socket.links[0].from_node
+    if node.name in seen:
+        return []
+    seen.add(node.name)
+    if node.type == "TEX_IMAGE":
+        return [("image", node.image)] if node.image is not None else []
+    if node.type == "VERTEX_COLOR":
+        return [("vcol", None)]
+    if node.type == "MIX" and node.data_type == "RGBA" and node.blend_type == "MULTIPLY":
+        fac = _input(node, "Factor_Float")
+        a, b = _input(node, "A_Color"), _input(node, "B_Color")
+        if fac is not None and not fac.is_linked and abs(fac.default_value - 1.0) < 1e-6:
+            return _base_terms(a, seen) + _base_terms(b, seen)
+        return _base_terms(a, seen)
+    linked = [i for i in node.inputs if i.is_linked]
+    return _base_terms(linked[0], seen) if linked else []
+
+
+def _texel(image, uvs, weights, images):
+    """The linear colour of the image at the interpolated UV, nearest texel,
+    wrapping; None when the image cannot be sampled. Pixels are read once per
+    image into a float32 array (``foreach_get``: a Python list of a 2048²
+    texture costs about 1 GB)."""
+    key = image.as_pointer()
+    if key not in images:
+        w, h, n = int(image.size[0]), int(image.size[1]), int(image.channels)
+        if w <= 0 or h <= 0 or n <= 0:
+            images[key] = None
+        else:
+            buf = np.empty(w * h * n, dtype=np.float32)
+            image.pixels.foreach_get(buf)
+            stored_srgb = (not image.is_float
+                           and image.colorspace_settings.name == "sRGB")
+            images[key] = (w, h, n, buf, stored_srgb)
+    entry = images[key]
+    if entry is None or not uvs:
+        return None
+    w, h, n, buf, stored_srgb = entry
+    u, v = [sum((uvs[i][k] * weights[i] for i in range(3))) % 1 for k in (0, 1)]
+    offset = n * (min(h - 1, int(v * h)) * w + min(w - 1, int(u * w)))
+    texel = [float(c) for c in buf[offset : offset + min(n, 3)]]
+    texel += [texel[-1]] * (3 - len(texel))
+    return _texel_linear(texel, stored_srgb)
+
+
 def _colour(mat, uvs, cols, weights, images):
-    """Sample image, material or vertex colour in that order (spec § 4.1).
+    """The sRGB colour the face shows at the hit (spec § 4.1): the product of
+    the Base Color chain's image texel, vertex colour and constant factor; a
+    mesh without material shows its vertex colour.
 
     Interpolate UVs/attributes with hit weights and cache pixels per image."""
-    base = None
-    texture = None
-    if mat:
-        base = mat.diffuse_color[:3]
-        if mat.use_nodes and mat.node_tree:
-            bsdf = next(
-                (n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None
-            )
-            if bsdf:
-                socket = bsdf.inputs.get("Base Color")
-                base = socket.default_value[:3]
-                if socket.is_linked:
-                    node = socket.links[0].from_node
-                    if node.type == "TEX_IMAGE":
-                        texture = node.image
-    if texture and uvs and texture.size[0] and texture.size[1]:
-        key = texture.as_pointer()
-        if key not in images:
-            images[key] = (texture.size[0], texture.size[1], list(texture.pixels[:]))
-        w, h, pixels = images[key]
-        u, v = [sum((uvs[i][k] * weights[i] for i in range(3))) % 1 for k in (0, 1)]
-        offset = 4 * (min(h - 1, int(v * h)) * w + min(w - 1, int(u * w)))
-        return tuple((_srgb(c) for c in pixels[offset : offset + 3]))
-    if base is not None:
-        return tuple((_srgb(c) for c in base))
-    if cols:
-        return tuple(
-            (_srgb(sum((cols[i][k] * weights[i] for i in range(3)))) for k in range(3))
+    vcol = (
+        tuple(sum(cols[i][k] * weights[i] for i in range(3)) for k in range(3))
+        if cols
+        else None
+    )
+    if not mat:
+        return _shade([vcol] if vcol else [])
+    terms = [("const", tuple(mat.diffuse_color[:3]))]
+    if mat.use_nodes and mat.node_tree:
+        bsdf = next(
+            (n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None
         )
-    return None
+        socket = bsdf.inputs.get("Base Color") if bsdf else None
+        if socket is not None:
+            terms = _base_terms(socket, set())
+    factors = []
+    for kind, value in terms:
+        if kind == "const":
+            factors.append(value)
+        elif kind == "vcol":
+            if vcol:
+                factors.append(vcol)
+        else:
+            texel = _texel(value, uvs, weights, images)
+            if texel is not None:
+                factors.append(texel)
+    return _shade(factors)
 
 
 def _blue(rgb):
