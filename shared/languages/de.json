@@ -6399,6 +6399,17 @@
     "painted body reused": "gemalter Körper wiederverwendet",
     "painted per outfit — the only painted piece of this outfit": "pro Outfit gemalt — das einzige gemalte Stück dieses Outfits",
     "painted per outfit, together with: {names}": "pro Outfit gemalt, zusammen mit: {names}",
-    "{n} missing — the Build renders them ({cost})": "{n} fehlen — der Build rendert sie ({cost})"
+    "{n} missing — the Build renders them ({cost})": "{n} fehlen — der Build rendert sie ({cost})",
+    "Collar, sleeves and hem": "Kragen, Ärmel und Saum",
+    "Waistband and leg openings": "Bund und Beinöffnungen",
+    "Person removed only": "Nur Person entfernt",
+    "Piece-only text": "Text für Teil allein",
+    "What the piece-only render asks for. Collar, sleeves and hem: tops, dresses, jackets. Waistband and leg openings: trousers, skirts, briefs. Person removed only: a bra, gloves, warmers, a belt — nothing inside to reconstruct.": "Was das Bild „Teil allein“ verlangt. Kragen, Ärmel und Saum: Oberteile, Kleider, Jacken. Bund und Beinöffnungen: Hosen, Röcke, Slips. Nur Person entfernt: BH, Handschuhe, Stulpen, Gürtel — innen nichts zu ergänzen.",
+    "Saving runs nothing and makes nothing due: the next piece-only render says it.": "Speichern startet nichts und macht nichts fällig: das nächste Bild „Teil allein“ verwendet ihn.",
+    "Upload piece-only view…": "Ansicht „Teil allein“ hochladen…",
+    "An image made outside (same framing as the base view: the worn view as input). It is registered and gated like a render and becomes this view — refused by its gate, it is accepted by you. No hub job; the mesh and the fit become due. Undo takes it back.": "Ein außerhalb erzeugtes Bild (gleicher Ausschnitt wie die Basisansicht: die getragene Ansicht als Eingabe). Es wird wie ein Render ausgerichtet und geprüft und wird diese Ansicht — lehnt die Prüfung es ab, gilt es als von dir angenommen. Kein Hub-Job; Mesh und Anpassung werden fällig. Rückgängig nimmt es zurück.",
+    "Uploaded — its gate passed": "Hochgeladen — Prüfung bestanden",
+    "Uploaded — accepted by you; its gate refused it": "Hochgeladen — von dir angenommen; die Prüfung lehnte es ab",
+    "Not uploaded": "Nicht hochgeladen"
   }
 }

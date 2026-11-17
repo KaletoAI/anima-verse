@@ -68,7 +68,7 @@ import { GARMENT_VIEWS, runMark, runSlot } from './useGarment'
 import type { FitBody, FitBodyFit } from './figureModel'
 import type {
   AttemptUsePlan, AttemptUsePlans, CutoutOpeningChoice, CutoutOpeningInfo, GarmentImageStep, GarmentInfo,
-  GarmentMeshJob, GarmentRunState, GarmentView, GateLimit, PieceViewChoice, PieceViewDue, PieceViewInfo, PieceViewOption, RunFeedback, ViewNeed, ViewRunPlan,
+  GarmentMeshJob, GarmentRunState, GarmentView, GateLimit, GhostTextChoice, GhostTextClass, GhostTextInfo, PieceViewChoice, PieceViewDue, PieceViewInfo, PieceViewOption, RunFeedback, ViewNeed, ViewRunPlan,
   ViewRunPlans,
 } from './useGarment'
 
@@ -339,6 +339,66 @@ function PieceViewSourcePicker({ info, label, disabled, onSet }: {
   )
 }
 
+const GHOST_TEXT_NAME: Record<GhostTextClass, string> = {
+  collar: 'Collar, sleeves and hem',
+  waistband: 'Waistband and leg openings',
+  plain: 'Person removed only',
+}
+
+/** A183, "Piece-only text": which text the piece's piece-only renders say — Auto (by the slots), the collar text, the
+ *  waistband text or the person removed only (a bra, gloves, a belt). Saving runs nothing and makes nothing due. */
+function GhostTextPicker({ info, disabled, onSet }: {
+  info: GhostTextInfo
+  disabled: boolean
+  onSet: (choice: GhostTextChoice) => void
+}) {
+  const { t } = useI18n()
+  const choices: GhostTextChoice[] = ['auto', 'collar', 'waistband', 'plain']
+  const name = (c: GhostTextChoice) => c === 'auto' ? `${t('Auto')} (→ ${t(GHOST_TEXT_NAME[info.auto])})` : t(GHOST_TEXT_NAME[c])
+  const title = [
+    t('Piece-only text'),
+    t('What the piece-only render asks for. Collar, sleeves and hem: tops, dresses, jackets. Waistband and leg openings: trousers, skirts, briefs. Person removed only: a bra, gloves, warmers, a belt — nothing inside to reconstruct.'),
+    `${t('Now')}: ${info.texts[info.effective].back}`,
+    t('Saving runs nothing and makes nothing due: the next piece-only render says it.'),
+  ].join('\n')
+  return (
+    <label style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap', fontSize: '0.75em' }} title={title}>
+      <span>{t('Piece-only text')}</span>
+      <select className="ga-input" style={{ fontSize: '0.95em', padding: '0 2px', maxWidth: '100%' }}
+        value={info.choice} disabled={disabled} aria-label={t('Piece-only text')}
+        onChange={(e) => onSet(e.target.value as GhostTextChoice)}>
+        {choices.map((c) => <option key={c} value={c}>{name(c)}</option>)}
+      </select>
+    </label>
+  )
+}
+
+/** A183, "Upload piece-only view…": a file picker behind a button; the image becomes the view (gated, a refused one
+ *  accepted by you), no hub job. */
+function UploadViewButton({ label, disabled, onUpload }: {
+  label: string
+  disabled: boolean
+  onUpload: (file: File) => void
+}) {
+  const { t } = useI18n()
+  return (
+    <label className="ga-btn ga-btn-sm" style={{ fontSize: '0.75em', cursor: disabled ? 'default' : 'pointer',
+      opacity: disabled ? 0.5 : 1, alignSelf: 'flex-start' }}
+      title={[`${t('Upload piece-only view…')} · ${label}`,
+        t('An image made outside (same framing as the base view: the worn view as input). It is registered and gated like a render and becomes this view — refused by its gate, it is accepted by you. No hub job; the mesh and the fit become due. Undo takes it back.'),
+      ].join('\n')}>
+      {t('Upload piece-only view…')}
+      <input type="file" accept="image/png,image/jpeg,image/webp" disabled={disabled} style={{ display: 'none' }}
+        aria-label={`${t('Upload piece-only view…')} · ${label}`}
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          e.target.value = ''
+          if (file) onUpload(file)
+        }} />
+    </label>
+  )
+}
+
 const OPENING_CHOICE: Record<CutoutOpeningChoice, string> = { auto: 'Auto', off: 'Off' }
 
 /** "Openings from the worn view" of one cut-out view (Ruling A60): the picker (each option with what it makes due)
@@ -430,7 +490,7 @@ function upToText(n: number, t: (s: string) => string): string {
 }
 
 export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitChips, busy, onRun, feedback,
-  viewRuns = null, useRuns = null, onUse, onPieceView, onCutoutOpening, meshFetchUrl = null, onMeshFetched, pieceName = '',
+  viewRuns = null, useRuns = null, onUse, onPieceView, onCutoutOpening, onUploadView, onGhostText, meshFetchUrl = null, onMeshFetched, pieceName = '',
   meshAllowance = null, refitOn = '', refitBlock = '', shownFit = null, onMeshUse, imageUseBusy, onMeshDelete,
   onMeshDeleteAll, meshDeleteBlock = '' }: {
   garment: GarmentInfo | null
@@ -453,6 +513,10 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   /** Ruling A60: "Openings from the worn view" of a cut-out view changed (saves only; the caller posts it and
    *  reloads). Absent = no picker. */
   onCutoutOpening?: (view: GarmentView, choice: CutoutOpeningChoice) => void
+  /** A183: "Upload piece-only view…" of a view (the caller posts the file and reloads). Absent = no button. */
+  onUploadView?: (view: GarmentView, file: File) => void
+  /** A183: "Piece-only text" changed (saves only; the caller posts it and reloads). Absent = no picker. */
+  onGhostText?: (choice: GhostTextChoice) => void
   /** "Fetch finished job…" on the mesh row (MeshJobFetch): its POST url, null hides it. */
   meshFetchUrl?: string | null
   /** The mesh record changed through a fetched job: reload the panel. */
@@ -658,6 +722,14 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
           {pieceView?.options && onPieceView ? (
             <PieceViewSourcePicker info={pieceView} label={label} disabled={busy || !garment}
               onSet={(choice) => onPieceView(view, choice)} />
+          ) : null}
+          {step === 'ghost' && !img?.skipped && onUploadView ? (
+            <UploadViewButton label={label} disabled={busy || !garment || !!imageUseBusy}
+              onUpload={(file) => onUploadView(view, file)} />
+          ) : null}
+          {step === 'ghost' && view === 'front' && garment?.ghost_text && onGhostText ? (
+            <GhostTextPicker info={garment.ghost_text} disabled={busy || !garment}
+              onSet={(choice) => onGhostText(choice)} />
           ) : null}
           {openingInfo?.options && onCutoutOpening ? (
             <CutoutOpeningsPicker info={openingInfo} label={label} disabled={busy || !garment}

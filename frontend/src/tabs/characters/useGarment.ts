@@ -364,6 +364,19 @@ export interface CutoutOpening {
   choice?: CutoutOpeningChoice
   reason?: string | null
 }
+/** A183, "Piece-only text": which text the piece-only render says (`garment_clothing.ghost_text_info`). */
+export type GhostTextClass = 'collar' | 'waistband' | 'plain'
+export type GhostTextChoice = 'auto' | GhostTextClass
+export interface GhostTextInfo {
+  choice: GhostTextChoice
+  /** The class the slots give (what Auto says). */
+  auto: GhostTextClass
+  /** The class the next piece-only render says. */
+  effective: GhostTextClass
+  /** The prompt of each class per view. */
+  texts: Record<GhostTextClass, Record<GarmentView, string>>
+}
+
 /** One view's "Openings from the worn view" (`garments.cutout_openings_info`): the setting, the cut-out's record,
  *  what is due now and what each choice would make due before it is saved. */
 export interface CutoutOpeningInfo {
@@ -436,6 +449,8 @@ export interface GarmentInfo {
   preview_freshness?: Freshness | null
   /** Ruling A46: where each piece-only view comes from; null/absent for a piece without the choice. */
   piece_views?: Partial<Record<GarmentView, PieceViewInfo>> | null
+  /** A183: the piece-only (ghost) prompt's class — setting, the slots' class, the texts; null/absent otherwise. */
+  ghost_text?: GhostTextInfo | null
   /** Ruling A60: per view whether the cut-out opens where the worn view shows the body; null/absent otherwise. */
   cutout_openings?: Partial<Record<GarmentView, CutoutOpeningInfo>> | null
   /** Ruling A47: the sleeves per side, the width allowance and the arm light (`garments.fit_settings_info`). */

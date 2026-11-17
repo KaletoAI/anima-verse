@@ -65,7 +65,7 @@ import type { CSSProperties, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { ConfirmDialog } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
-import { ApiError, apiGet, apiPost, apiPut, setPieceState } from '../../lib/api'
+import { ApiError, apiGet, apiPost, apiPut, apiUpload, setPieceState } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { useClockSettings } from '../../lib/clockFormat'
 import { GarmentFailure, GateChips, RefitNotice, RunButton, RunStatusLine } from './GarmentSteps'
@@ -89,7 +89,7 @@ import { ModelSteps } from './ModelSteps'
 import type { ModelStep } from './ModelSteps'
 import { footwearOf, garmentRunning, useGarment, useGarmentRun } from './useGarment'
 import type {
-  CutoutOpeningChoice, CutoutOpeningInfo, GarmentItemInfo, GarmentView, ItemWearers, PieceMaterial,
+  CutoutOpeningChoice, CutoutOpeningInfo, GarmentItemInfo, GhostTextChoice, GarmentView, ItemWearers, PieceMaterial,
   PieceMaterialInfo, PieceStatus, PieceViewChoice, PieceViewInfo,
 } from './useGarment'
 import {
@@ -839,6 +839,42 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
     }
     startPoll(0)
   }
+  /** A183, "Upload piece-only view…": the file becomes the view — gated like a render, a refused one accepted by
+   *  you; no hub job. The toast says the verdict and what is due now; Undo takes it back. */
+  const onUploadView = async (view: GarmentView, file: File) => {
+    if (using) return
+    setUsing(true)
+    try {
+      const d = await apiUpload<{ passing: boolean; gate?: { reasons?: string[] } | null;
+        follow_up?: { steps?: string[]; hub_jobs?: number | null } }>(
+        `/characters/${enc}/garments/${encodeURIComponent(itemId)}/images/ghost/${view}/upload`, file)
+      const verdict = d.passing ? t('Uploaded — its gate passed')
+        : `${t('Uploaded — accepted by you; its gate refused it')}: ${(d.gate?.reasons || []).join('; ')}`
+      const steps = d.follow_up?.steps || []
+      toast(`${verdict} · ${steps.length ? `${t('Now due')}: ${steps.join(', ')}` : t('nothing becomes due')}`,
+        d.passing ? 'success' : 'info')
+    } catch (e) {
+      toast(e instanceof ApiError && e.status === 409 ? t('Not uploaded') + ': ' + (e as Error).message
+        : t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setUsing(false)
+    }
+    startPoll(0)
+  }
+  /** A183, "Piece-only text": SAVED on its own — nothing runs and nothing becomes due. */
+  const onGhostText = async (choice: GhostTextChoice) => {
+    if (using) return
+    setUsing(true)
+    try {
+      await apiPost(`/characters/${enc}/garments/${encodeURIComponent(itemId)}/ghost-text`, { choice })
+      toast(`${t('Saved')} · ${t('nothing becomes due')}`, 'success')
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setUsing(false)
+    }
+    startPoll(0)
+  }
   /** Ruling A60, "Openings from the worn view": SAVED on its own — nothing runs; the toast names what is due now
    *  (the cut-out, the mesh and the fit; Run all or the Build makes them). */
   const onCutoutOpening = async (view: GarmentView, choice: CutoutOpeningChoice) => {
@@ -1103,6 +1139,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             onUse={(step, view, attempt) => { void onUse(step, view, attempt) }}
             onPieceView={(view, choice) => { void onPieceView(view, choice) }}
             onCutoutOpening={(view, choice) => { void onCutoutOpening(view, choice) }}
+            onUploadView={(view, file) => { void onUploadView(view, file) }}
+            onGhostText={(choice) => { void onGhostText(choice) }}
             meshFetchUrl={meshFetchUrl}
             onMeshFetched={onMeshFetched}
             pieceName={info.name || name}
