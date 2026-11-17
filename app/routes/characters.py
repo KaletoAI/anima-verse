@@ -2116,6 +2116,8 @@ class GarmentFitSettingsRequest(BaseModel):
     mesh_shape: Any = None
     # Ruling A122: split / cut — a boot past the knee: a leg part over the shoe, or cut off at the shoe top
     shaft: Any = None
+    # A166: mm a shell stands off the skin (garment_shell.SHELL_OFFSET_CHOICES)
+    shell_offset: Any = None
 
 
 class PieceViewSourceRequest(BaseModel):

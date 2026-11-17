@@ -1519,7 +1519,8 @@ def _fit_shell(character_name: str, item_id: str, kind: str, fsig: str, bsig: st
         # One shell build at a time in this server (peak ~3.6 GB each): the lock is held around the pool call, so
         # a second shell waits here and never takes a refit-pool slot; other fits keep their slots.
         with _SHELL_BUILD_LOCK:
-            result = refit_pool.run(garment_shell.build_shell, rigged, unrigged, views)
+            result = refit_pool.run(garment_shell.build_shell, rigged, unrigged, views,
+                                    offset_m=fit_settings["shell_offset"] / 1000.0)
     except (garment_shell.ShellRefused, garment_source.FrameRefused) as e:
         error = f"shell refused — {e}"
         gates = {"ok": False, "reasons": [str(e)]}
@@ -5309,9 +5310,18 @@ def mesh_shape_view(record: Dict[str, Any], current: Dict[str, Any], item_id: st
     metrics = record.get("metrics") or {}
     shell = None
     if made == garment_shell.SHELL:
-        shell = {k: metrics.get(k) for k in ("shell_faces", "inside_share", "side_colour_within_2cm", "seconds")}
+        shell = {k: metrics.get(k) for k in ("shell_faces", "inside_share", "side_colour_within_2cm", "seconds",
+                                               "over_skin_p50_mm")}
+    # A166: the shell's offset from the skin — the setting, what the shown fit was made with, its choices.
+    offset = {"setting": garment_shell.shell_offset_choice(current),
+              "made": (garment_shell.shell_offset_choice(garment_fit_settings.recorded(record))
+                       if made == garment_shell.SHELL else None),
+              "choices": list(garment_shell.SHELL_OFFSET_CHOICES), "default": garment_shell.SHELL_OFFSET_DEFAULT}
     return {"setting": setting, "resolved": resolved, "auto": {"shape": auto, "reason": reason, "details": details},
-            "made": made, "due": made is not None and made != resolved,
+            "offset": offset,
+            "made": made, "due": made is not None and (made != resolved or (
+                resolved == garment_shell.SHELL and offset["made"] is not None
+                and offset["made"] != offset["setting"])),
             "choices": list(garment_shell.SHAPE_CHOICES), "cost": {"hub_jobs": 0, "where": "cpu"}, "shell": shell,
             "slot_labels": slot_labels(character_name)}
 

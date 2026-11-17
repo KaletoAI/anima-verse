@@ -87,6 +87,8 @@ export interface FitSettingsValues {
   mesh_shape?: MeshShapeChoice
   /** Ruling A122; a server before it sends none. */
   shaft?: ShaftChoice
+  /** A166: mm a shell stands off the skin; a server before it sends none. */
+  shell_offset?: number
 }
 
 /** A166: the automatic fit (server `garment_fit_settings.defaults`, the mesh shape aside — it has its own control). */
@@ -101,6 +103,14 @@ export function manualFitChanges(v: FitSettingsValues): Partial<FitSettingsValue
   }
   return out
 }
+/** A166: a shell offset choice in words — "4 mm (default)". */
+export function shellOffsetLabel(mm: number, fallback: number, t: (k: string) => string): string {
+  return mm === fallback ? `${mm} mm (${t('default')})` : `${mm} mm`
+}
+export const SHELL_OFFSET_HINT = 'How far the shell stands off the skin, along the body’s surface normal. More lifts a '
+  + 'molded cup off the breast; a slip lies close at the default. A change makes only this piece’s fit due (CPU, 0 hub '
+  + 'jobs).'
+
 export const RESET_FIT = 'Reset to the automatic fit'
 export const RESET_FIT_HINT = 'Sets sleeves, trunk, shaft, width and depth allowance back to Auto — the mesh shape stays. '
   + 'Saves at once; the fit becomes due and the next Build re-fits it on the CPU (0 hub jobs).'
@@ -136,7 +146,9 @@ export interface MeshShapeInfo {
   choices: MeshShapeChoice[]
   cost: { hub_jobs: number; where: string }
   shell: { shell_faces?: number | null; inside_share?: number | null; side_colour_within_2cm?: number | null
-    seconds?: number | null } | null
+    seconds?: number | null; over_skin_p50_mm?: number | null } | null
+  /** A166: the shell's offset from the skin (mm) — the setting, the shown fit's (null: no shell fit), the choices. */
+  offset?: { setting: number; made: number | null; choices: number[]; default: number }
   /** The character's clothing-slot labels (English; translated here). */
   slot_labels?: Record<string, string>
 }

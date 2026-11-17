@@ -28,7 +28,8 @@ has at least one slot and EVERY slot is a close-fitting one (``CLOSE_SLOTS``: ``
    matched front↔back by height and carried around the side; a grazing point seen deep inside a mask is a bump, not
    a side), smoothed 4 passes, and the triangles CLIPPED at its zero line (marching triangles on the unwelded mesh,
    UV seams intact): the border follows the scalar, not the pixel grid.
-4. Offset ``THICKNESS_M`` (4 mm) along the smoothed outward normals; skin weights = the body's top 4.
+4. Offset along the smoothed outward normals by the piece's ``shell_offset`` (A166; default ``THICKNESS_M`` = 4 mm,
+   ``SHELL_OFFSET_CHOICES``); skin weights = the body's top 4.
 5. Texture baked at ``TEXTURE_PX`` in the body's UV atlas: a head-on sample takes the nearest pixel inside the
    eroded ghost mask (no background grey), a side sample the median of the 12 nearest head-on samples at the band's
    matched height, blended front→back along the arc.
@@ -52,8 +53,21 @@ AS_GENERATED = "as_generated"
 SHELL = "shell"
 #: The close-fitting slots (``app.models.inventory.VALID_PIECE_SLOTS``) Auto makes a shell for.
 CLOSE_SLOTS: Tuple[str, ...] = ("underwear_top", "underwear_bottom", "legs")
-#: The shell's distance from the skin (m).
+#: The shell's distance from the skin (m) — the default of the per-piece setting ``shell_offset``.
 THICKNESS_M = 0.004
+#: A166: the choices of the per-piece shell offset (mm along the smoothed outward normal; ``garment_fit_settings``
+#: key ``shell_offset``): a molded cup stands off the breast, a slip lies on the skin.
+SHELL_OFFSET_CHOICES: Tuple[int, ...] = (4, 6, 8, 10, 12, 16)
+SHELL_OFFSET_DEFAULT = 4
+
+
+def shell_offset_choice(raw: Optional[Dict[str, Any]]) -> int:
+    """The shell offset (mm) of a piece's fit settings (``shell_offset``): one of ``SHELL_OFFSET_CHOICES``, else the
+    default."""
+    value = (raw or {}).get("shell_offset") if isinstance(raw, dict) else None
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value in SHELL_OFFSET_CHOICES:
+        return int(value)
+    return SHELL_OFFSET_DEFAULT
 #: Texture size of the baked shell (px).
 TEXTURE_PX = 2048
 #: A vertex this far under the skin (m) counts as inside (``inside_share``).
@@ -437,7 +451,7 @@ def _fill_glints(m):
 
 
 def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]], *,
-                arm_tokens: Iterable[str] = ("Arm", "Hand", "Shoulder")):
+                arm_tokens: Iterable[str] = ("Arm", "Hand", "Shoulder"), offset_m: float = THICKNESS_M):
     """The shell of a piece on the body (module docstring) -> ``garment_fit.FitResult`` (``garment`` in the rigged
     body's bind space, skinned; ``metrics``: ``shell_faces``, ``inside_share``, ``over_skin_p50_mm``,
     ``side_colour_within_{1,2,5}cm``, ``seconds``). ``views``: ``{"front": {...}, "back": {...}}``, each
@@ -456,7 +470,7 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     Pu = np.asarray(bu.positions, np.float64)
     R = np.asarray(br.positions, np.float64)
     k = float(np.ptp(R[:, 1])) / float(np.ptp(Pu[:, 1]))
-    report: Dict[str, Any] = {"shell_version": SHELL_VERSION}
+    report: Dict[str, Any] = {"shell_version": SHELL_VERSION, "offset_mm": round(offset_m * 1000.0, 1)}
 
     masks = {}
     for key, w in (("front", "f"), ("back", "b")):
@@ -662,7 +676,7 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     volb = np.einsum("ij,ij->i", R[br.faces[:, 0]], np.cross(R[br.faces[:, 1]], R[br.faces[:, 2]])).sum() / 6
     Nw_ = gf._unit(gf._smooth(gf._unit(gf.vertex_normals(Vcw, Fcw)) * np.sign(volb),
                               gf._adjacency(Fcw, len(Vcw)), 3))
-    X = Vc + Nw_[cinv] * THICKNESS_M
+    X = Vc + Nw_[cinv] * offset_m
 
     # 5. colour, baked in the body's UV atlas
     Xq_, _, tri, bary = samples(Vc, Fc, 0.0008)

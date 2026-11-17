@@ -21,6 +21,8 @@ may add — ``garment_fit.fit_clothing``'s ``settings``:
   a close-fitting piece), "as_generated" (the generated mesh, fitted) or "shell" (the piece's mesh made from the
   body's surface over its region, ``garment_shell.build_shell``; CPU only). The fit records the shape it made
   (``inputs.mesh_shape``); a fit whose made shape is not what the current choice resolves to is due (``changed``).
+- ``shell_offset`` (A166): ``garment_shell.SHELL_OFFSET_CHOICES`` — mm the shell stands off the skin (default 4);
+  only a shell's fit becomes due for it.
 
 Stored on the character profile (``SETTINGS_KEY``: ``{item_id: {key: value}}``, only the values that differ from
 the defaults). Not part of the fingerprint: a change keeps every image and the mesh and only makes the fit due — the
@@ -36,8 +38,9 @@ SIDES = ("left", "right")
 
 
 def defaults() -> Dict[str, Any]:
+    from app.core.garment_shell import SHELL_OFFSET_DEFAULT
     return {"sleeves_left": "auto", "sleeves_right": "auto", "allowance": "auto", "depth": 0, "trunk": "auto",
-            "mesh_shape": "auto", "shaft": "split"}
+            "mesh_shape": "auto", "shaft": "split", "shell_offset": SHELL_OFFSET_DEFAULT}
 
 
 def normalise(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -56,6 +59,7 @@ def normalise(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     out["shaft"] = garment_shaft.shaft_choice(raw)
     from app.core import garment_shell
     out["mesh_shape"] = garment_shell.shape_choice(raw)
+    out["shell_offset"] = garment_shell.shell_offset_choice(raw)
     return out
 
 
@@ -88,10 +92,15 @@ def changed(record: Optional[Dict[str, Any]], profile: Optional[Dict[str, Any]],
     """Whether the fit ``record`` was made with other fit settings than the current ones — or made another mesh
     shape than the current choice resolves to (Auto may resolve differently than when the fit was made). The shape
     is compared by what it resolves to: Auto → As generated on a piece Auto keeps as generated changes nothing."""
+    from app.core import garment_shell
     current = fit_settings(profile, item_id)
     made = recorded(record)
     made.pop("mesh_shape", None)
     now = {k: v for k, v in current.items() if k != "mesh_shape"}
+    if current_shape(current, item_id) != garment_shell.SHELL:
+        # A166: the shell offset shapes a shell only — a generated mesh's fit is not due for it.
+        made.pop("shell_offset", None)
+        now.pop("shell_offset", None)
     return made != now or made_shape(record) != current_shape(current, item_id)
 
 
@@ -129,6 +138,13 @@ def validate(changes: Dict[str, Any]) -> Dict[str, Any]:
             if not isinstance(value, str) or value not in garment_shaft.SHAFT_CHOICES:
                 raise ValueError(f"shaft must be one of {', '.join(garment_shaft.SHAFT_CHOICES)}")
             out[key] = value
+        elif key == "shell_offset":
+            from app.core import garment_shell
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or value not in garment_shell.SHELL_OFFSET_CHOICES):
+                raise ValueError("shell_offset must be one of "
+                                 + ", ".join(str(c) for c in garment_shell.SHELL_OFFSET_CHOICES) + " (mm)")
+            out[key] = int(value)
         elif key == "trunk":
             if not isinstance(value, str) or value not in garment_fit.TRUNK_CHOICES:
                 raise ValueError(f"trunk must be one of {', '.join(garment_fit.TRUNK_CHOICES)}")

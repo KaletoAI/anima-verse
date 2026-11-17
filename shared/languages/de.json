@@ -6300,6 +6300,10 @@
     "Template drape": "Vorlagen-Drapierung",
     "Reset to the automatic fit": "Auf die automatische Passform zurücksetzen",
     "Sets sleeves, trunk, shaft, width and depth allowance back to Auto — the mesh shape stays. Saves at once; the fit becomes due and the next Build re-fits it on the CPU (0 hub jobs).": "Setzt Ärmel, Rumpf, Schaft, Weiten- und Tiefenzugabe auf Auto zurück — die Mesh-Form bleibt. Speichert sofort; die Passform wird fällig und der nächste Build passt sie auf der CPU neu an (0 Hub-Jobs).",
-    "Manual settings: {n}": "Manuelle Einstellungen: {n}"
+    "Manual settings: {n}": "Manuelle Einstellungen: {n}",
+    "Shell offset from the skin": "Abstand der Schale zur Haut",
+    "How far the shell stands off the skin, along the body’s surface normal. More lifts a molded cup off the breast; a slip lies close at the default. A change makes only this piece’s fit due (CPU, 0 hub jobs).": "Wie weit die Schale entlang der Flächennormale von der Haut absteht. Mehr hebt ein geformtes Körbchen von der Brust ab; ein Slip liegt beim Standard eng an. Eine Änderung macht nur die Passform dieses Teils fällig (CPU, 0 Hub-Jobs).",
+    "the shown shell was made at {mm} mm": "die gezeigte Schale wurde mit {mm} mm gemacht",
+    "CPU, 0 hub jobs": "CPU, 0 Hub-Jobs"
   }
 }
