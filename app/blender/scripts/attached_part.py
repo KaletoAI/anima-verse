@@ -290,6 +290,16 @@ def skin_texel_fallback(pixels):
     return np.median(pixels[..., :3].reshape(-1, 3), axis=0)
 
 
+def arc_point(t, stations, points):
+    """The point at arc-length fraction ``t`` of a sampled curve: ``stations``
+    are the samples' arc fractions (increasing), ``points`` their positions,
+    interpolated per axis. Bones are placed by this parameter because the
+    weights (``part_station``) cut the links by it too; a lookup by curve
+    parameter put every joint 2-8 mm short of its weight boundary."""
+    points = np.asarray(points, float)
+    return [float(np.interp(t, stations, points[:, k])) for k in range(points.shape[1])]
+
+
 def close_free_holes(obj, skin, root_local, band, matrix):
     """Fills each open border loop of ``obj`` except the one passing closest to
     ``root_local`` whose median distance to ``skin`` (an object-space BVH-like
@@ -1160,7 +1170,7 @@ def build_part(group, companions, output):
     bpy.ops.object.mode_set(mode='EDIT')
     eb = armature.data.edit_bones
     ami = armature.matrix_world.inverted()
-    idx_t = lambda t: Vector(centerline[12 + int(round(t * (sweep_samples - 1)))])
+    idx_t = lambda t: Vector(arc_point(t, stations[12:], centerline[12:]))
     for b in range(link_count):
         t0, t1 = link_edges[b], link_edges[b + 1]
         bone = eb.new(chain[b]['bone'])
