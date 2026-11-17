@@ -409,11 +409,14 @@ def _encode(array: np.ndarray, component: int, normalized: bool) -> np.ndarray:
     return np.ascontiguousarray(np.rint(array), dtype=dtype)
 
 
-def _int_component(values: np.ndarray, original: Optional[int]) -> int:
-    """The original unsigned component type when every value fits it, else the smallest that does."""
+def _int_component(values: np.ndarray, original: Optional[int], *, indices: bool = False) -> int:
+    """The original unsigned component type when every value fits it, else the smallest that does. ``indices``:
+    the type's maximum is the primitive-restart value (glTF 2.0 § 3.7.2.1 forbids it in an index accessor; WebGL2
+    always restarts there, so three.js drops every triangle using it), so it must stay below that maximum."""
     top = int(values.max()) if values.size else 0
     for component in ((original,) if original in (5121, 5123, 5125) else ()) + (5121, 5123, 5125):
-        if top <= np.iinfo(_COMPONENT_DTYPE[component]).max:
+        limit = int(np.iinfo(_COMPONENT_DTYPE[component]).max)
+        if top < limit or (top == limit and not indices):
             return component
     raise ValueError("An index exceeds 32 bits")
 
@@ -439,13 +442,65 @@ def _walk_accessor_refs(gltf: dict):
                     yield sampler, key
 
 
+def _accessor_views(accessor: dict) -> List[Tuple[dict, str]]:
+    """``(container, key)`` of every bufferView reference of one accessor: its own and, for a sparse accessor, those
+    of ``sparse.indices`` / ``sparse.values`` (glTF 2.0 § 3.6.2.3)."""
+    refs: List[Tuple[dict, str]] = [(accessor, "bufferView")] if "bufferView" in accessor else []
+    sparse = accessor.get("sparse")
+    if isinstance(sparse, dict):
+        for part in ("indices", "values"):
+            if isinstance(sparse.get(part), dict) and "bufferView" in sparse[part]:
+                refs.append((sparse[part], "bufferView"))
+    return refs
+
+
+def _drop_primitives(gltf: dict, emptied: set) -> None:
+    """Remove the primitives ``emptied`` (``(mesh, primitive)``) from ``gltf`` in place, and every mesh left without a
+    primitive (``rewrite_body_primitives``): its nodes lose ``mesh`` / ``skin`` / ``weights``, an animation channel
+    on their morph ``weights`` is dropped, the later mesh indices move down."""
+    meshes = gltf["meshes"]
+    for mi in {m for m, _p in emptied}:
+        meshes[mi]["primitives"] = [p for pi, p in enumerate(meshes[mi]["primitives"]) if (mi, pi) not in emptied]
+    gone = {mi for mi, mesh in enumerate(meshes) if not mesh.get("primitives")}
+    if not gone:
+        return
+    mesh_map = {old: new for new, old in enumerate(mi for mi in range(len(meshes)) if mi not in gone)}
+    detached = set()
+    for ni, node in enumerate(gltf.get("nodes") or []):
+        if "mesh" not in node:
+            continue
+        if node["mesh"] in gone:
+            for key in ("mesh", "skin", "weights"):
+                node.pop(key, None)
+            detached.add(ni)
+        else:
+            node["mesh"] = mesh_map[node["mesh"]]
+    gltf["meshes"] = [mesh for mi, mesh in enumerate(meshes) if mi not in gone]
+    if not gltf.get("animations"):
+        return
+    for animation in gltf["animations"]:
+        animation["channels"] = [c for c in animation.get("channels") or []
+                                 if not ((c.get("target") or {}).get("node") in detached
+                                         and (c.get("target") or {}).get("path") == "weights")]
+    # an animation needs at least one channel (glTF 2.0 schema); one that only drove those weights goes
+    gltf["animations"] = [a for a in gltf["animations"] if a["channels"]]
+    if not gltf["animations"]:
+        del gltf["animations"]
+
+
 def rewrite_body_primitives(glb: bytes, replaced: Dict[int, Prim]) -> bytes:
     """``glb`` with the body primitives ``replaced[i]`` (``i`` = the index in ``body_primitive_arrays`` order)
     rewritten from their ``Prim`` arrays. A primitive not in ``replaced`` keeps its accessors, and their bytes stay
     identical (only offsets move); the accessors used only by replaced primitives are dropped together with the
     bufferViews only they used, and the buffer is repacked. Attributes keep their accessor's component type
-    (joint and index widths widen when the new values need it); a replaced primitive must carry the same
-    attribute and target names as before."""
+    (joint and index widths widen when the new values need it; an index never takes its type's restart value); a
+    replaced primitive must carry the same attribute and target names as before.
+
+    A replaced primitive left WITHOUT faces (a leg cut or the clothing cover took them all) is removed from its
+    mesh — glTF has no empty index accessor (``count`` >= 1), and ``accessor_array`` refuses one. A mesh left with
+    no primitive at all is removed too: every node using it keeps its place, name, TRS and children (the joints
+    stay where the skin needs them) but loses ``mesh`` / ``skin`` / ``weights``, and an animation channel driving
+    that node's morph ``weights`` goes with it. ValueError when no body face would remain."""
     parsed = _parse(glb, "Body")
     source = parsed["gltf"]
     binary = parsed["bin"]
@@ -507,6 +562,7 @@ def rewrite_body_primitives(glb: bytes, replaced: Dict[int, Prim]) -> bytes:
         return add_accessor(_encode(arr, component, normalized), component, kind, _ARRAY_BUFFER,
                             minmax=has_minmax, normalized=normalized)
 
+    emptied: set = set()                   # (mesh, primitive) of the replaced primitives left without faces
     for order, prim in replaced.items():
         mi, pi = located[order]
         target_prim = gltf["meshes"][mi]["primitives"][pi]
@@ -522,6 +578,9 @@ def rewrite_body_primitives(glb: bytes, replaced: Dict[int, Prim]) -> bytes:
         F = np.asarray(prim.faces, np.int64).reshape(-1, 3)
         if n == 0 or (len(F) and (F.min() < 0 or F.max() >= n)):
             raise ValueError("A replaced primitive has no vertices or faces out of range")
+        if not len(F):
+            emptied.add((mi, pi))
+            continue
         wanted = {"POSITION"} | set(prim.attributes)
         if len(prim.joints) == n and "JOINTS_0" in old_attrs:
             wanted |= {"JOINTS_0", "WEIGHTS_0"}
@@ -552,16 +611,21 @@ def rewrite_body_primitives(glb: bytes, replaced: Dict[int, Prim]) -> bytes:
         if new_targets:
             target_prim["targets"] = new_targets
         component = _int_component(F, source["accessors"][target_prim["indices"]]["componentType"]
-                                   if "indices" in target_prim else None)
+                                   if "indices" in target_prim else None, indices=True)
         target_prim["indices"] = add_accessor(_encode(F.reshape(-1, 1), component, False), component, "SCALAR",
                                               _ELEMENT_ARRAY_BUFFER, minmax=False, normalized=False)
+
+    if emptied:
+        if len(emptied) == len(prims):
+            raise ValueError("The rewrite leaves the body without a face")
+        _drop_primitives(gltf, emptied)
 
     used_accessors = {container[key] for container, key in _walk_accessor_refs(gltf)}
     drop_accessors = {i for i in freed if i not in used_accessors}
     view_users: Dict[int, set] = {}
     for i, accessor in enumerate(accessors):
-        if "bufferView" in accessor:
-            view_users.setdefault(accessor["bufferView"], set()).add(i)
+        for ref in _accessor_views(accessor):
+            view_users.setdefault(ref[0][ref[1]], set()).add(i)
     for image in gltf.get("images") or []:
         if "bufferView" in image:
             view_users.setdefault(image["bufferView"], set()).add(-1)
@@ -590,9 +654,9 @@ def rewrite_body_primitives(glb: bytes, replaced: Dict[int, Prim]) -> bytes:
     for i, accessor in enumerate(accessors):
         if i in drop_accessors:
             continue
-        entry = dict(accessor)
-        if "bufferView" in entry:
-            entry["bufferView"] = view_map[entry["bufferView"]]
+        entry = copy.deepcopy(accessor)
+        for container, key in _accessor_views(entry):
+            container[key] = view_map[container[key]]
         accessor_map[i] = len(kept_accessors)
         kept_accessors.append(entry)
     for container, key in _walk_accessor_refs(gltf):
