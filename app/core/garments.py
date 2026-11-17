@@ -219,6 +219,11 @@ NO_HAIR_NOTES = ("no hair found", "no person found")
 NO_HAIR_ERROR = "HairDeck found no hair in the profile picture"
 #: The view order of the edit steps: the back first, it gives the front its length.
 EDIT_VIEW_ORDER: Tuple[str, ...] = ("back", "front")
+#: A185: the views a drafted step drafts from its front (the back; the side views of a shell piece).
+DRAFTED_VIEWS: Tuple[str, ...] = ("back", "left", "right")
+SIDE_DRAFTED: Tuple[str, ...] = ("left", "right")
+#: Every view, in the order a sort of mixed views uses.
+IMAGE_VIEW_ALL: Tuple[str, ...] = ("front", "back", "left", "right")
 INPUTS_CHANGED_ERROR = ("The base views or the garment's description changed during the run "
                         "— run the chain again to start from the new ones")
 #: Ruling A20: checked BEFORE each composite onto a base view (``garment_images._drafted_back``) — a base view
@@ -270,13 +275,39 @@ def _footwear() -> str:
 def _check_view(kind: str, view: Optional[str]) -> None:
     """ValueError for a ``view`` that is no garment view, and for any view of
     footwear (its steps are per item, without views)."""
-    from app.core.garment_store import GARMENT_VIEWS
+    from app.core.garment_store import IMAGE_VIEWS
     if view is None:
         return
     if kind == _footwear():
         raise ValueError("Footwear has no views")
-    if view not in GARMENT_VIEWS:
+    if view not in IMAGE_VIEWS:
         raise ValueError(f"Unknown garment view {view!r}")
+
+
+def piece_views(character_name: str, item_id: str, profile: Optional[Dict[str, Any]] = None) -> Tuple[str, ...]:
+    """A185: the views of the item's worn / piece-only images — ``GARMENT_VIEWS``, plus ``SIDE_VIEWS`` (left, right)
+    for a clothing piece in mode shell whose fit setting "Side views for the shell" (``shell_sides``) is on. The
+    cut-out keeps ``GARMENT_VIEWS`` (a shell has none). ``profile`` read when not given."""
+    from app.core import garment_fit_settings, garment_set, garment_shell
+    from app.core.garment_store import GARMENT_VIEWS, SIDE_VIEWS
+    from app.models.inventory import get_item
+    item = get_item(item_id) if isinstance(item_id, str) and item_id else None
+    if (not item or garment_set.garment_kind_of(item) != garment_set.CLOTHING
+            or garment_shell.shape_of(item) != garment_shell.SHELL):
+        return GARMENT_VIEWS
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    if garment_shell.shell_sides_choice(garment_fit_settings.fit_settings(profile, item_id)):
+        return GARMENT_VIEWS + SIDE_VIEWS
+    return GARMENT_VIEWS
+
+
+def _step_views(character_name: str, item_id: str, step: str,
+                profile: Optional[Dict[str, Any]] = None) -> Tuple[str, ...]:
+    """The views of image ``step`` of the item (``piece_views``; the cut-out never has side views)."""
+    from app.core.garment_store import GARMENT_VIEWS
+    return GARMENT_VIEWS if step == "cutout" else piece_views(character_name, item_id, profile)
 
 
 def _check_view_steps(wanted: Optional[List[str]], view: Optional[str]) -> None:
@@ -653,7 +684,7 @@ def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str
         # re-render, "Use this" on an attempt) makes the shell due, as a replaced mesh does for a generated piece.
         # A record without the shas (none are written without them) is left alone.
         inputs = record.get("inputs") or {}
-        for view in ("front", "back"):
+        for view in ("front", "back", "left", "right"):
             made = inputs.get(f"ghost_{view}_sha256")
             if made and made != _sha(_image(character_name, item_id, fsig, "ghost", view)):
                 return "outdated"
@@ -706,7 +737,8 @@ def _done(character_name: str, item_id: str, kind: str, fsig: str, step: str, ba
         from app.core import garment_footwear
         return garment_footwear.step_done(item_id, step)
     if step in IMAGE_STEPS:
-        if not all(_view_done(character_name, item_id, fsig, step, v) for v in GARMENT_VIEWS):
+        if not all(_view_done(character_name, item_id, fsig, step, v)
+                   for v in _step_views(character_name, item_id, step)):
             return False
         return step != _kind_module(kind).PAIR_STEP or _pair(character_name, item_id, kind, fsig)[0]
     if step == "mesh":
@@ -1502,7 +1534,8 @@ def _fit_shell(character_name: str, item_id: str, kind: str, fsig: str, bsig: st
                           refit_pool)
     from app.core.garment_store import garment_path, write_record
     from app.core.timeutils import utc_now_iso
-    for view in ("front", "back"):
+    views_used = piece_views(character_name, item_id, profile)
+    for view in views_used:
         if not _accepted(_image(character_name, item_id, fsig, "ghost", view)):
             raise base_body.MissingInput(f"The ghost {view} image is missing — run the ghost step first")
     if body_snapshot is None:
@@ -1513,17 +1546,17 @@ def _fit_shell(character_name: str, item_id: str, kind: str, fsig: str, bsig: st
         rigged, unrigged, body_sha = body_snapshot["rigged"], body_snapshot["unrigged"], body_snapshot["sha"]
     base_sha = body_sha if not body else base_body_sha(character_name, bsig)
     fit_settings = garment_fit_settings.fit_settings(profile, item_id)
-    ghosts = {v: _sha(_image(character_name, item_id, fsig, "ghost", v)) for v in ("front", "back")}
+    ghosts = {v: _sha(_image(character_name, item_id, fsig, "ghost", v)) for v in views_used}
     base_record = {"kind": kind, "item_id": item_id, "fsig": fsig, "base_signature": bsig,
                    "base_model_sha256": base_sha, **model_geometry.stamp_on(character_name, bsig, base_sha),
                    "body_id": body or bsig, "body_sha256": body_sha,
                    "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
-                              "ghost_front_sha256": ghosts["front"], "ghost_back_sha256": ghosts["back"],
+                              **{f"ghost_{v}_sha256": ghosts[v] for v in views_used},
                               "fit_settings": fit_settings, "mesh_shape": garment_shell.SHELL,
                               "shell_version": garment_shell.SHELL_VERSION}}
     base_record.update(extra or {})
     try:
-        views = garment_shell.shell_views(character_name, item_id, fsig, bsig)
+        views = garment_shell.shell_views(character_name, item_id, fsig, bsig, sides=len(views_used) > 2)
         # One shell build at a time in this server (peak ~3.6 GB each): the lock is held around the pool call, so
         # a second shell waits here and never takes a refit-pool slot; other fits keep their slots.
         with _SHELL_BUILD_LOCK:
@@ -2563,6 +2596,11 @@ def run_estimate(character_name: str, item_id: str, *,
     costs = dict(HUB_JOBS.get(f"{kind}:{method}") or {})
     if not costs:
         return _unknown_estimate(f"no cost table for {kind} by {method}")
+    # A185: a shell piece with "Side views for the shell" renders a worn and a piece-only view per side too
+    views = piece_views(character_name, item_id, profile)
+    for s_, n_ in BACK_JOBS.items():
+        if s_ in costs:
+            costs[s_] += n_ * (len(views) - len(gs.GARMENT_VIEWS))
     if kind == _footwear():
         from app.core import footwear_source
         image = footwear_source._item_image(item_id)
@@ -2597,13 +2635,13 @@ def run_estimate(character_name: str, item_id: str, *,
         # one a stored attempt passes once judged again with the hem snap (Ruling A27).
         from app.core.garment_images import rejudge_expected
         assumed = _ASSUMED.get() or {}
-        kept = sum(1 for v in gs.GARMENT_VIEWS if _view_done(character_name, item_id, fsig, first, v)
+        kept = sum(1 for v in views if _view_done(character_name, item_id, fsig, first, v)
                    or ((first, v) not in assumed and rejudge_expected(character_name, item_id, fsig, first, v)))
         parts[0] = (first, max(parts[0][1] - kept, 0))
         if first == "cutout":
             # Ruling A60: a cut-out due for its opening alone is made again from its own colours — no upscale.
             from app.core.garment_images import cutout_reusable
-            reused = sum(1 for v in gs.GARMENT_VIEWS if (first, v) not in assumed
+            reused = sum(1 for v in views if (first, v) not in assumed
                          and not _view_done(character_name, item_id, fsig, first, v)
                          and cutout_reusable(character_name, item_id, fsig, v))
             parts[0] = (first, max(parts[0][1] - reused, 0))
@@ -2622,16 +2660,20 @@ def run_estimate(character_name: str, item_id: str, *,
             _view_done(character_name, item_id, fsig, first, v)
             or (garment_images.source_due(character_name, item_id, fsig, first, v)
                 and not garment_images.rejudge_expected(character_name, item_id, fsig, first, v))
-            for v in gs.GARMENT_VIEWS)
+            for v in views)
+        # A185: only side views are missing (a shell piece's "Side views for the shell" turned on) — the front and back
+        # of every later step stay as they are, only the sides and the shell are made.
+        sides_only = first in gs.IMAGE_STEPS and len(views) > len(gs.GARMENT_VIEWS) and all(
+            _view_done(character_name, item_id, fsig, first, v) for v in gs.GARMENT_VIEWS)
         for i, (s, n) in enumerate(parts):
-            if n and s in gs.IMAGE_STEPS and setting_only and s != first:
+            if n and s in gs.IMAGE_STEPS and (setting_only or sides_only) and s != first:
                 upto = image_order[:image_order.index(s) + 1]
-                kept_later = sum(1 for v in gs.GARMENT_VIEWS
+                kept_later = sum(1 for v in views
                                  if all(_view_done(character_name, item_id, fsig, e, v) for e in upto))
                 parts[i] = (s, max(n - kept_later, 0))
                 n = parts[i][1]
             if n and s in gs.IMAGE_STEPS:
-                worn_views = [v for v in gs.GARMENT_VIEWS
+                worn_views = [v for v in views
                               if (garment_images.piece_source(character_name, item_id, fsig, s, v) or {})
                               .get("source") == "worn"
                               and not (s == first and (_view_done(character_name, item_id, fsig, s, v)
@@ -2705,13 +2747,15 @@ class PrerequisiteMissing(Exception):
         self.missing = missing
 
 
-def _view_order(kind: str, step: str) -> Tuple[str, ...]:
+def _view_order(kind: str, step: str, views: Optional[Tuple[str, ...]] = None) -> Tuple[str, ...]:
     """The render order of the views of image ``step``: the cut-out front first, an edit step its own
-    (``EDIT_STEPS[step]["views"]``: clothing ``worn`` the front first) or ``EDIT_VIEW_ORDER``."""
+    (``EDIT_STEPS[step]["views"]``: clothing ``worn`` the front first) or ``EDIT_VIEW_ORDER``. ``views`` (A185,
+    ``piece_views``): side views a shell piece adds come after those (a side is drafted from the front)."""
     from app.core.garment_store import GARMENT_VIEWS
     if step == "cutout":
         return GARMENT_VIEWS
-    return tuple(_kind_module(kind).EDIT_STEPS[step].get("views", EDIT_VIEW_ORDER))
+    order = tuple(_kind_module(kind).EDIT_STEPS[step].get("views", EDIT_VIEW_ORDER))
+    return order + tuple(v for v in (views or ()) if v not in order)
 
 
 def view_needs(kind: str, step: str, view: str) -> List[Tuple[str, str, str]]:
@@ -2729,7 +2773,7 @@ def view_needs(kind: str, step: str, view: str) -> List[Tuple[str, str, str]]:
         spec = module.EDIT_STEPS[step]
         if spec.get("source") not in (None, "base"):
             out.append((spec["source"], view, NEEDS_SOURCE))
-        if view == "back" and spec.get("back") == "draft":
+        if view in DRAFTED_VIEWS and spec.get("back") == "draft":
             out.append((step, "front", NEEDS_DRAFT))
         if view == "front" and step == module.PAIR_STEP:
             out.append((step, "back", NEEDS_PAIR))
@@ -2746,7 +2790,7 @@ def _view_cost(character_name: str, item_id: str, kind: str, fsig: str, step: st
     from app.core import garment_images
     total = int(costs.get(step, 0))
     back = BACK_JOBS.get(step, total // 2)
-    jobs = back if view == "back" else total - back
+    jobs = back if view != "front" else total - back   # A185: a side view costs what the back does
     if (garment_images.piece_source(character_name, item_id, fsig, step, view) or {}).get("source") == "worn":
         return 0  # Ruling A46: made from the worn view minus the base view — no render
     if step == "cutout" and garment_images.cutout_reusable(character_name, item_id, fsig, view):
@@ -2800,15 +2844,17 @@ def _missing_views(character_name: str, item_id: str, kind: str, fsig: str, step
             todo.append((ns, nv))
     order = image_steps(kind)
     return sorted(found.values(), key=lambda m: (order.index(m["step"]),
-                                                 _view_order(kind, m["step"]).index(m["view"])))
+                                                 _view_order(kind, m["step"], IMAGE_VIEW_ALL).index(m["view"])))
 
 
-def _follow_ups(kind: str, step: str, view: str) -> List[Tuple[str, str, str]]:
+def _follow_ups(kind: str, step: str, view: str,
+               views: Optional[Tuple[str, ...]] = None) -> List[Tuple[str, str, str]]:
     """The views a new ``view`` of ``step`` renders again in the same run (Ruling A33 c): a new front of a
     DRAFTED step drops the back drafted from it (``garment_images._publish``), which is drafted again from the
-    new front. A new image's LATER steps and the mesh are only dropped — Run all makes them again."""
+    new front — and (A185) the piece's side views (``views``, ``piece_views``) drafted from it. A new image's LATER
+    steps and the mesh are only dropped — Run all makes them again."""
     if view == "front" and (_kind_module(kind).EDIT_STEPS.get(step) or {}).get("back") == "draft":
-        return [(step, "back", NEEDS_DRAFT)]
+        return [(step, v, NEEDS_DRAFT) for v in ("back", *(v for v in (views or ()) if v in SIDE_DRAFTED))]
     return []
 
 
@@ -2848,6 +2894,7 @@ def _view_context(character_name: str, item_id: str, profile: Optional[Dict[str,
         return None
     run_profile = _run_profile(profile, item_id, state) or profile
     return {"kind": kind, "method": method, "fsig": fsig, "costs": dict(HUB_JOBS.get(f"{kind}:{method}") or {}),
+            "views": piece_views(character_name, item_id, profile),
             "open": kind == _clothing() and state == "open", "profile": run_profile,
             "materialized": garment_source.is_materialized(character_name, item_id, fsig)}
 
@@ -2862,20 +2909,20 @@ def _plan_of(character_name: str, item_id: str, ctx: Dict[str, Any], step: str, 
                if spec.get("back") == "draft"}
     for m in missing:
         # A drafted back whose front renders first is drafted from the NEW front: no stored attempt counts.
-        front_changes = (m["view"] == "back" and m["step"] in drafted
+        front_changes = (m["view"] in DRAFTED_VIEWS and m["step"] in drafted
                          and any(o["step"] == m["step"] and o["view"] == "front" for o in missing))
         m["jobs"] = _view_cost(character_name, item_id, kind, fsig, m["step"], m["view"], forced=False,
                                front_changes=front_changes, **args)
     follow = [{"step": s, "view": v, "why": why,
                "jobs": _view_cost(character_name, item_id, kind, fsig, s, v, forced=False, front_changes=True,
                                   **args)}
-              for s, v, why in _follow_ups(kind, step, view)]
+              for s, v, why in _follow_ups(kind, step, view, ctx.get("views"))]
     jobs = 0 if skipped else _view_cost(character_name, item_id, kind, fsig, step, view, forced=True, **args)
     if step == "cutout" and not skipped and any(m["view"] == view for m in missing):
         # Ruling A60: a new piece-only image comes first — the cut-out cannot reuse its stored colours.
         total = int(ctx["costs"].get(step, 0))
         back = BACK_JOBS.get(step, total // 2)
-        jobs = back if view == "back" else total - back
+        jobs = back if view != "front" else total - back   # A185: a side view costs what the back does
     return {"step": step, "view": view, "jobs": jobs, "skipped": skipped or None,
             "missing": missing, "prerequisite_jobs": sum(m["jobs"] for m in missing),
             "follow_up": follow, "follow_up_jobs": sum(f["jobs"] for f in follow)}
@@ -2904,7 +2951,8 @@ def view_plans(character_name: str, item_id: str, *, profile: Optional[Dict[str,
     ctx = _view_context(character_name, item_id, profile, state)
     if ctx is None:
         return None
-    return {step: {view: _plan_of(character_name, item_id, ctx, step, view) for view in GARMENT_VIEWS}
+    return {step: {view: _plan_of(character_name, item_id, ctx, step, view)
+                   for view in (GARMENT_VIEWS if step == "cutout" else ctx["views"])}
             for step in image_steps(ctx["kind"])}
 
 
@@ -2925,7 +2973,8 @@ def _use_assumption(kind: str, step: str, view: str, gate: Optional[Dict[str, An
     out: Dict[Tuple[str, str], Optional[Dict[str, Any]]] = {(step, view): {"gate": gate, "user": not passing}}
     out.update({(s, view): None for s in later})
     if view == "front" and (_kind_module(kind).EDIT_STEPS.get(step) or {}).get("back") == "draft":
-        out.update({(s, "back"): None for s in (step, *later)})
+        for drafted in DRAFTED_VIEWS:   # A185: a side view of a shell piece is drafted from the front too
+            out.update({(s, drafted): None for s in (step, *later)})
     return out
 
 
@@ -2949,7 +2998,7 @@ def use_plans(character_name: str, item_id: str, *, profile: Optional[Dict[str, 
     kind, fsig = ctx["kind"], ctx["fsig"]
     out: Dict[str, Dict[str, Dict[str, Dict[str, Any]]]] = {}
     for step in getattr(_kind_module(kind), "EDIT_STEPS", {}) or {}:
-        for view in GARMENT_VIEWS:
+        for view in ctx["views"]:
             final = _image(character_name, item_id, fsig, step, view)
             final_record = read_record(final.with_suffix(".json")) if final.is_file() else {}
             for n in range(1, garment_images.ATTEMPTS + 1):
@@ -2987,15 +3036,17 @@ def use_attempt(character_name: str, item_id: str, step: str, view: str, attempt
     ``{item_id, step, view, attempt, changed, passing, user_accepted, follow_up}`` — ``follow_up`` the chain's
     estimate now (``run_estimate``). ``garment_images.AttemptUnusable`` / ValueError for a bad request."""
     from app.core import garment_store as gs
-    from app.core.garment_store import GARMENT_VIEWS
+    from app.core.garment_store import IMAGE_VIEWS
     from app.models.character import get_character_profile
-    if view not in GARMENT_VIEWS:
+    if view not in IMAGE_VIEWS:
         raise ValueError(f"invalid view {view!r}")
     if profile is None:
         profile = get_character_profile(character_name) or {}
     ctx = _view_context(character_name, item_id, profile, None)
     if ctx is None:
         raise ValueError("This piece has no image steps to take an attempt from")
+    if view not in ctx["views"]:
+        raise ValueError(f"This piece has no {view} view — turn on Side views for the shell")
     kind, fsig = ctx["kind"], ctx["fsig"]
     lock = gs.run_item_lock(character_name, item_id)
     if not lock.acquire(blocking=False):
@@ -3019,15 +3070,17 @@ def upload_view(character_name: str, item_id: str, step: str, view: str, data: b
     (the upload's gate record). ``AttemptUnusable`` / ValueError for a bad request or image."""
     from app.core import garment_images
     from app.core import garment_store as gs
-    from app.core.garment_store import GARMENT_VIEWS
+    from app.core.garment_store import IMAGE_VIEWS
     from app.models.character import get_character_profile
-    if view not in GARMENT_VIEWS:
+    if view not in IMAGE_VIEWS:
         raise ValueError(f"invalid view {view!r}")
     if profile is None:
         profile = get_character_profile(character_name) or {}
     ctx = _view_context(character_name, item_id, profile, None)
     if ctx is None:
         raise ValueError("This piece has no image steps to upload a view to")
+    if view not in ctx["views"]:
+        raise ValueError(f"This piece has no {view} view — turn on Side views for the shell")
     kind, fsig = ctx["kind"], ctx["fsig"]
     lock = gs.run_item_lock(character_name, item_id)
     if not lock.acquire(blocking=False):
@@ -3359,7 +3412,8 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
         if view is not None and method == gs.EDIT_CHAIN:
             # Ruling A33: the views it needs (allowed: ``prerequisites``), the view, its follow-up — nothing else.
             targets = ([(m["step"], m["view"]) for m in missing] + [(first, view)]
-                       + [(s, v) for s, v, _why in _follow_ups(kind, first, view)])
+                       + [(s, v) for s, v, _why in _follow_ups(kind, first, view,
+                                                                _step_views(character_name, item_id, first, profile))])
             for step, v in targets:
                 f = force and (step, v) == (first, view)
                 if not f and _view_done(character_name, item_id, fsig, step, v):
@@ -3405,7 +3459,7 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
             gs.start(character_name, item_id, step)
             produced = False
             if step in gs.IMAGE_STEPS:
-                for v in _view_order(kind, step):
+                for v in _view_order(kind, step, _step_views(character_name, item_id, step, profile)):
                     # Ruling A17 (d): an accepted view the current gate refuses is rendered again, not reused.
                     stale = (garment_images.stale_accepted(character_name, item_id, fsig, step, v)
                              # Ruling A46: the piece-only setting names another source than the image's.
@@ -5293,7 +5347,7 @@ def _piece_view_due(view: str, source: str, made: Optional[str]) -> List[Dict[st
     if made is None or made == source:
         return []
     costs = HUB_JOBS["clothing:edit_chain"]
-    ghost = 0 if source == "worn" else (BACK_JOBS["ghost"] if view == "back" else costs["ghost"] - BACK_JOBS["ghost"])
+    ghost = 0 if source == "worn" else (BACK_JOBS["ghost"] if view != "front" else costs["ghost"] - BACK_JOBS["ghost"])
     return [{"step": "ghost", "view": view, "jobs": ghost},
             {"step": "cutout", "view": view, "jobs": costs["cutout"] // 2},
             {"step": "mesh", "jobs": costs["mesh"]}, {"step": "fit", "jobs": costs["fit"]}]
@@ -5404,13 +5458,17 @@ def mesh_shape_view(record: Dict[str, Any], current: Dict[str, Any], item_id: st
     fill = {"setting": garment_shell.shell_fill_choice(current),
             "made": garment_shell.shell_fill_choice(made_with) if made_with else None,
             "choices": list(garment_shell.FILL_CHOICES), "default": garment_shell.FILL_DEFAULT}
+    # A185: "Side views for the shell" — the setting and whether the shown shell read the side views
+    sides = {"setting": garment_shell.shell_sides_choice(current),
+             "made": garment_shell.shell_sides_choice(made_with) if made_with else None,
+             "default": False}
     # a shell made by another construction version is due as well (garments._fit_state reads it stale)
     version_due = made == garment_shell.SHELL and (record.get("inputs") or {}).get(
         "shell_version") != garment_shell.SHELL_VERSION
-    return {"resolved": resolved, "offset": offset, "margin": margin, "fill": fill, "made": made,
+    return {"resolved": resolved, "offset": offset, "margin": margin, "fill": fill, "sides": sides, "made": made,
             "due": made is not None and (made != resolved or (
                 resolved == garment_shell.SHELL and (version_due or any(
-                    v["made"] is not None and v["made"] != v["setting"] for v in (offset, margin, fill))))),
+                    v["made"] is not None and v["made"] != v["setting"] for v in (offset, margin, fill, sides))))),
             "cost": {"hub_jobs": 0, "where": "cpu"}, "shell": shell, "slot_labels": slot_labels(character_name)}
 
 
@@ -5513,7 +5571,7 @@ def piece_views_info(character_name: str, item_id: str, fsig: str,
         checking = regate_shown(character_name, item_id, garment_images._item_kind(item_id), fsig)
     checked = {c["view"] for c in checking if c.get("step") == fw.STEP}
     out: Dict[str, Dict[str, Any]] = {}
-    for view in GARMENT_VIEWS:
+    for view in piece_views(character_name, item_id):
         skipped = garment_images.skipped_view(character_name, item_id, fsig, fw.STEP, view)
         if skipped:
             out[view] = {"choice": fw.choice_of(item, view), "skipped": skipped}
@@ -5724,7 +5782,8 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     if fsig:
         for step in gs.steps_for(kind, method):
             if step in gs.IMAGE_STEPS:
-                steps[step] = {v: _image_info(character_name, item_id, fsig, step, v) for v in gs.GARMENT_VIEWS}
+                steps[step] = {v: _image_info(character_name, item_id, fsig, step, v)
+                               for v in _step_views(character_name, item_id, step, profile)}
             elif step == "mesh":
                 steps[step] = _mesh_info(character_name, item_id, fsig)
             elif step == "hairdeck":
@@ -5853,6 +5912,8 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
         "base_ready": bool(base[1]),
         # Ruling A162: the CPU refit was refused and the run stopped before any hub job — keep / accept / new mesh.
         "refit_stopped": refit_stopped,
+        # A185: the views of the worn / piece-only images (left / right too for a shell piece with side views).
+        "views": list(piece_views(character_name, item_id, profile)),
         # Ruling A46: where each piece-only view comes from (the setting, the reason, what is due).
         "piece_views": (piece_views_info(character_name, item_id, fsig, _item_, checking=checking)
                         if fsig and method == gs.EDIT_CHAIN and kind == _clothing() else None),
