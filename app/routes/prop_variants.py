@@ -336,14 +336,19 @@ def prop_variant_models(prop_id: str, index: int) -> Dict[str, Any]:
 async def prop_variant_model_select(prop_id: str, index: int,
                                     request: Request) -> Dict[str, Any]:
     """Make a stored mesh the ACTIVE one of a resolution tier IN THIS VARIANT
-    (body: ``{file, tier?}``)."""
+    (body: ``{file, tier?}``).
+
+    The selection re-runs the landing chain (``props._store_bbox``: Blender
+    bake, re-encode, measurement, each waiting for a Blender slot), so it runs
+    in the threadpool — on the event loop it froze every client."""
     from app.core.props import select_model
     from app.routes.world import _tier
-    _variant(prop_id, index)
+    await asyncio.to_thread(_variant, prop_id, index)
     data = await _body(request)
     filename = str(data.get("file") or "").strip()
     tier = _tier(data.get("tier"))
-    if not select_model(prop_id, filename, tier=tier, variant=index):
+    if not await asyncio.to_thread(select_model, prop_id, filename,
+                                   tier=tier, variant=index):
         raise HTTPException(status_code=404, detail="Model not found")
     result_payload = {"status": "success", "active": filename, "tier": tier}
     invalidate_prop_lib_token()
@@ -415,16 +420,21 @@ async def prop_variant_upload(prop_id: str, index: int,
                               tier: str = Form(""),
                               force: str = Form("")) -> Dict[str, Any]:
     """Upload a GLB as a new mesh of THIS variant (same validation and the
-    same ``force`` escape hatch as the unqualified upload route)."""
+    same ``force`` escape hatch as the unqualified upload route).
+
+    The body is read on the loop; validation and the landing chain
+    (``props._store_bbox``: Blender bake, picture-area split, re-encode,
+    measurement, each waiting for a Blender slot) run in the threadpool — on
+    the event loop they froze every client for up to minutes."""
     from app.core.model_validate import validate_static_glb
     from app.core.props import save_uploaded_glb
     from app.core.upload_limits import (MODEL_UPLOAD_MAX_BYTES,
                                         read_upload_capped)
     from app.routes.world import _tier
-    _variant(prop_id, index)
+    await asyncio.to_thread(_variant, prop_id, index)
     contents = await read_upload_capped(file, max_bytes=MODEL_UPLOAD_MAX_BYTES,
                                         what="Prop model")
-    result = validate_static_glb(contents)
+    result = await asyncio.to_thread(validate_static_glb, contents)
     forced = str(force or "").strip().lower() in ("1", "true", "yes")
     if not result["ok"] and not forced:
         raise HTTPException(status_code=422, detail={
@@ -432,7 +442,8 @@ async def prop_variant_upload(prop_id: str, index: int,
             "errors": result["errors"],
             "warnings": result["warnings"],
         })
-    if not save_uploaded_glb(prop_id, contents, _tier(tier), variant=index):
+    if not await asyncio.to_thread(save_uploaded_glb, prop_id, contents,
+                                   _tier(tier), variant=index):
         raise HTTPException(status_code=404, detail="Prop not found")
     result_payload = {"status": "ok", "warnings": result["warnings"]}
     invalidate_prop_lib_token()
