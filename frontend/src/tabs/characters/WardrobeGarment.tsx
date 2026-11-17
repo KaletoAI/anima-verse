@@ -1056,7 +1056,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
           ) : null}
           <ConfirmDialog open={del !== null} danger confirmLabel={t('Delete')}
             title={del?.slot === null ? t('Delete all meshes of this piece') : `${t('Delete')} · ${del?.label || ''}`}
-            message={meshDeleteMessage(del?.slot ?? null, delPreview, delImages, t)}
+            message={meshDeleteMessage(del?.slot ?? null, delPreview, delImages, t,
+              garment?.steps.mesh?.view?.in_use === 'shell')}
             onConfirm={() => { void onDelete() }} onClose={() => setDel(null)}>
             {del?.slot === null ? (
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, fontSize: '0.85em' }}>
@@ -1235,9 +1236,13 @@ function dueText(c: MeshDeleteCost, t: (s: string) => string): string {
 
 /** The confirmation's text (Ruling A128): what goes, what stays, and the hub jobs making it again costs. */
 function meshDeleteMessage(slot: number | null, p: MeshDeletePreview | null, images: boolean,
-  t: (s: string) => string): string {
+  t: (s: string) => string, shellInUse = false): string {
   if (slot !== null && slot > 0) {
     return t('This kept mesh is deleted. The mesh in use and the fit stay; nothing becomes due.')
+  }
+  if (slot === 0 && shellInUse) {
+    // A171: a shell piece's fit never reads its generated mesh.
+    return t('The unused generated mesh is deleted. The piece is a shell from the body: the shell and the fit stay, nothing becomes due.')
   }
   const cost = p ? costText(images ? p.rebuild_all : p.rebuild_mesh, t) : t('Loading…')
   if (slot === 0) {

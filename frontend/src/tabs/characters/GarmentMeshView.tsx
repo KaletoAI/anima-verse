@@ -61,8 +61,9 @@ export interface MeshSource {
   note: string
   /** Ruling A58: the kept mesh's slot (the `Use this` target); 0 for the mesh in use. */
   slot: number
-  /** Ruling A58: what the kept mesh is (refused attempt / earlier mesh / a job's result). */
-  origin: GarmentMeshAttempt['origin'] | 'in_use' | 'earlier_body'
+  /** Ruling A58: what the kept mesh is (refused attempt / earlier mesh / a job's result). A171: `unused` = the
+   *  generated mesh of a piece whose shell is in use (the fit never reads it). */
+  origin: GarmentMeshAttempt['origin'] | 'in_use' | 'earlier_body' | 'unused'
   /** Finished while another mesh was chosen — kept, not applied (Ruling A58). */
   notApplied: boolean
   /** Why "Use this" waits ("" when it can). */
@@ -81,16 +82,24 @@ function meshSources(view: GarmentMeshView | undefined, builtAt: string | null, 
   t: (s: string) => string, earlier: GarmentEarlierMesh[] = []): MeshSource[] {
   if (!view) return []
   const out: MeshSource[] = []
-  if (view.prepared || view.raw) {
-    out.push({ id: 'accepted', label: view.prepared ? (userAccepted ? t('Mesh in use · accepted by you') : t('Accepted mesh'))
-      : t('Raw mesh'), prepared: view.prepared, raw: view.raw, builtAt, refused: !view.prepared, note: '', slot: 0,
-    origin: 'in_use', notApplied: false, useBlock: '' })
-  }
+  // A171: a shell piece's fit uses the shell — the shell tile comes first as the one in use, the generated mesh
+  // (made before the piece became a shell) after it as an unused, deletable alternative.
+  const shellInUse = view.in_use === 'shell'
   if (view.shell) {
     // Ruling A48d: the shell from the body the last shell fit made — shown as its Prepared mesh, beside the generated
     out.push({ id: 'shell', label: t('Shell from the body'), prepared: view.shell, raw: null, builtAt, refused: false,
       note: t('Made from the body\'s surface over the piece\'s region — local on the CPU, 0 hub jobs'), slot: 0,
-      origin: 'in_use', notApplied: false, useBlock: '' })
+      origin: shellInUse ? 'in_use' : 'unused', notApplied: false, useBlock: '' })
+  }
+  if (view.prepared || view.raw) {
+    const generated = {
+      id: 'accepted', prepared: view.prepared, raw: view.raw, builtAt, refused: !view.prepared, slot: 0,
+      notApplied: false, useBlock: '' }
+    out.push(shellInUse
+      ? { ...generated, label: t('Generated mesh · not used'), origin: 'unused',
+        note: t('The piece is a shell from the body: its fit does not read this generated mesh. Deleting it changes nothing that is shown.') }
+      : { ...generated, label: view.prepared ? (userAccepted ? t('Mesh in use · accepted by you') : t('Accepted mesh'))
+        : t('Raw mesh'), origin: 'in_use', note: '' })
   }
   for (const a of view.attempts) {
     if (!a.prepared && !a.raw) continue
@@ -160,8 +169,10 @@ function MeshTile({ source, onOpen, onUse, useDisabled, onDelete, deleteBlock = 
   }, [url])
   if (!file) return null
   const built = stampLabel(source.builtAt)
-  const colour = source.refused ? 'var(--danger, #f85149)' : 'var(--success, #3fb950)'
-  const gate = source.refused ? t('Gate: refused') : t('Gate: passed')
+  // A171: an unused mesh is grey — only the mesh the fit uses is green.
+  const unused = source.origin === 'unused'
+  const colour = source.refused ? 'var(--danger, #f85149)' : unused ? 'var(--text-muted, #6e7681)' : 'var(--success, #3fb950)'
+  const gate = unused ? t('Not used by the fit') : source.refused ? t('Gate: refused') : t('Gate: passed')
   const title = [source.label, gate, source.note, `${t('Triangles')} ${file.tris?.toLocaleString() ?? '–'}`,
     built ? `${t('Built')} ${built}` : '', t('Click to open the 3D view')].filter(Boolean).join('\n')
   const useTitle = source.useBlock ? t(source.useBlock) : [t('Use this mesh — 0 hub jobs, then the fit on the CPU'),
@@ -179,8 +190,9 @@ function MeshTile({ source, onOpen, onUse, useDisabled, onDelete, deleteBlock = 
       </button>
       <span className="ga-hint" style={{ fontSize: '0.7em', textAlign: 'center', lineHeight: 1.2 }} title={title}>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-          <StepLight light={source.refused ? 'red' : 'green'} title={gate} />
-          {source.id === 'shell' ? source.label : source.origin === 'in_use' ? t('In use') : source.label}
+          <StepLight light={source.refused ? 'red' : unused ? 'grey' : 'green'} title={gate} />
+          {source.origin === 'in_use' ? (source.id === 'shell' ? `${t('In use')} · ${source.label}` : t('In use'))
+            : source.label}
         </span>
         <br />{built ? `${t('Built')} ${built}` : ''}
         <br />{trisText(file.tris)}
@@ -202,7 +214,9 @@ function MeshTile({ source, onOpen, onUse, useDisabled, onDelete, deleteBlock = 
       {onDelete && source.id !== 'shell' && source.origin !== 'earlier_body' ? (
         <button type="button" className="ga-btn ga-btn-sm ga-btn-danger" style={{ fontSize: '0.72em', padding: '1px 6px' }}
           disabled={useDisabled || !!deleteBlock}
-          title={deleteBlock || (source.origin === 'in_use'
+          title={deleteBlock || (source.origin === 'unused'
+            ? t('Delete the unused generated mesh — the shell and the fit stay, nothing becomes due (asks first)')
+            : source.origin === 'in_use'
             ? t('Delete the mesh in use — the mesh step becomes due (asks first, names the hub jobs)')
             : t('Delete this kept mesh — 0 hub jobs, it cannot be brought back'))}
           aria-label={`${t('Delete')} · ${source.label}`}

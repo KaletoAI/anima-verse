@@ -691,7 +691,8 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   // Ruling A58: the piece's mesh job in flight — its time and hub-job count; the tiles and Re-fit stay usable.
   const meshJob = mesh?.job ?? null
   const meshText = [
-    shellPiece && (!mesh || mesh.status === 'missing') ? t('Shell from the body') : !mesh || mesh.status === 'missing' ? t('Not built yet') : mesh.status === 'refused' ? t('Refused')
+    // A171: a shell piece's stored generated mesh is not used — the line says so instead of "Accepted".
+    shellPiece ? (!mesh || mesh.status === 'missing' ? t('Shell from the body') : t('Generated mesh · not used')) : !mesh || mesh.status === 'missing' ? t('Not built yet') : mesh.status === 'refused' ? t('Refused')
       : mesh.user_accepted ? t('Accepted by you') : t('Accepted'),
     trisRaw != null && trisPrepared != null
       ? `${t('Triangles')} ${trisRaw.toLocaleString()} → ${trisPrepared.toLocaleString()}`

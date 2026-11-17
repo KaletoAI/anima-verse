@@ -146,6 +146,9 @@ export interface GarmentMeshView {
   raw: GarmentMeshFile | null
   /** Ruling A48d: the shell from the body of the last shell fit (none before one). */
   shell?: GarmentMeshFile | null
+  /** A171: the mesh the fit uses — "shell" for a piece in mode Shell from the body (a stored generated mesh is then
+   *  not used and can be deleted without touching the fit), else "generated". */
+  in_use?: 'shell' | 'generated'
   attempts: GarmentMeshAttempt[]
 }
 
