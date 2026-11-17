@@ -188,11 +188,11 @@
  *     gates both behind `channelTools` (default false: `hasChannels = channelTools && …`); FieldBaseBody.tsx is the
  *     ONE file passing `channelTools`, none of the other viewers (FieldModel3D, FieldFigure, garment, hairstyle,
  *     footwear, wardrobe, building, room, prop) does.
- *     The panel rendered (react-dom/server, en) after a Save, i.e. with the step "due": the legend "Channels", the six
- *     fields Side / Up / Front / Radius / Depth / Cone (six range inputs), the line "Placed at the declared offset",
+ *     The panel rendered (react-dom/server, en) after a Save, i.e. with the step "due": the legend "Channels", the seven
+ *     fields Side / Up / Front / Radius / Depth / Cone / Tilt (seven range inputs, Tilt since A193), the line "Placed at the declared offset",
  *     the step "Collision capsules · Due" with "Channel settings changed — recompute to apply" and the link
  *     "Go to “Recompute collision capsules”"; Save disabled (no draft). With the step "done" no link. Without a base
- *     model (no payload, reason "No base model yet"): the reason line, still the six fields.
+ *     model (no payload, reason "No base model yet"): the reason line, still the seven fields.
  *     baseBodyModel: runAllStep("collision") → "Collision capsules (local)"; runAllWhat("collision") names "no hub
  *     job"; runAllButton({kind collision, hub_jobs 0}) → "Run all (0 hub jobs)", enabled.
  *     Source greps: CollisionChannels saves through saveChannelOverrides and names neither recomputePath nor
@@ -760,11 +760,11 @@ async function renderChannels(props) {
   }
 }
 const dueHtml = await renderChannels({ collision: PAYLOAD, overrides: null, declarations: [DECL], step: stepOf('due') });
-const labelsOf = (html) => ['Side', 'Up', 'Front', 'Radius', 'Depth', 'Cone']
+const labelsOf = (html) => ['Side', 'Up', 'Front', 'Radius', 'Depth', 'Cone', 'Tilt']
   .map((l) => html.includes(`<span>${l}</span>`));
-check('[15] panel: legend, six fields, the placement', [dueHtml.includes('<legend>Channels</legend>'), labelsOf(dueHtml),
+check('[15] panel: legend, seven fields, the placement', [dueHtml.includes('<legend>Channels</legend>'), labelsOf(dueHtml),
   (dueHtml.match(/type="range"/g) || []).length, dueHtml.includes('Placed at the declared offset')],
-[true, [true, true, true, true, true, true], 6, true]);
+[true, [true, true, true, true, true, true, true], 7, true]);
 check('[15] after Save the step reads due, with the link', [dueHtml.includes('Collision capsules · Due'),
   dueHtml.includes('Channel settings changed — recompute to apply'),
   dueHtml.includes('Go to “Recompute collision capsules”')], [true, true, true]);
@@ -775,7 +775,7 @@ check('[15] current: no link', [doneHtml.includes('Collision capsules · Current
 const noModelHtml = await renderChannels({ collision: null, overrides: null, step: null,
   declarations: [{ ...DECL, placement: null, reason: 'No base model yet' }] });
 check('[15] no base model: the reason, the fields', [noModelHtml.includes('No base model yet'),
-  (noModelHtml.match(/type="range"/g) || []).length], [true, 6]);
+  (noModelHtml.match(/type="range"/g) || []).length], [true, 7]);
 check('[15] Run all of kind collision', [m.runAllStep('collision'), /no hub job/.test(m.runAllWhat('collision')),
   m.runAllButton({ kind: 'collision', hub_jobs: 0, steps: [{ name: 'collision', jobs: 0 }], running: false })],
 ['Collision capsules (local)', true, { label: 'Run all (0 hub jobs)', disabled: false, reason: null }]);

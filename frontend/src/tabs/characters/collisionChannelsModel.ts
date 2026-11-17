@@ -5,8 +5,9 @@
  *
  * - The per-character override of a declared channel (`model3d_opts.collision_channels[<id>]`,
  *   `app/core/collision_channels.py` `validate_overrides`): an offset in mm along the body frame (side, up, front),
- *   a radius scale, a depth scale (0.5–2) and the funnel half-angle. The server needs all four keys per entry; an
- *   entry equal to the default (offset 0, scales 1, the declared cone) is left out of the saved map.
+ *   a radius scale, a depth scale (0.5–2), the funnel half-angle and the axis tilt (±45°, + = toward the back,
+ *   Ruling A193). The server needs the first four keys per entry (tilt absent = 0); an entry equal to the default
+ *   (offset 0, scales 1, the declared cone, tilt 0) is left out of the saved map.
  * - SAVE STORES ONLY (ruling R4): `saveChannelOverrides` posts `…/model3d/collision/channels` — never
  *   `…/model3d/collision`, the step that applies it. The collision step then reads "due"
  *   (`model_overview.CHANNELS_CHANGED`) until the step, Run all or the Build applies it.
@@ -49,19 +50,20 @@ export const SCALE_MIN = 0.5
 export const SCALE_MAX = 2
 export const CONE_MIN = 1
 export const CONE_MAX = 60
+export const TILT_MAX = 45
 
 /** The override a channel starts from: the stored one, else the default (offset 0, scales 1, the declared cone). */
 export function overrideOf(stored: ChannelOverrides | null | undefined, id: string, coneDeg: number): ChannelOverride {
   const entry = stored?.[id]
   if (entry) return { offset_mm: [...entry.offset_mm] as [number, number, number], radius_scale: entry.radius_scale,
-    depth_scale: entry.depth_scale, cone_deg: entry.cone_deg }
-  return { offset_mm: [0, 0, 0], radius_scale: 1, depth_scale: 1, cone_deg: coneDeg }
+    depth_scale: entry.depth_scale, cone_deg: entry.cone_deg, tilt_deg: entry.tilt_deg ?? 0 }
+  return { offset_mm: [0, 0, 0], radius_scale: 1, depth_scale: 1, cone_deg: coneDeg, tilt_deg: 0 }
 }
 
 export function sameOverride(a: ChannelOverride, b: ChannelOverride): boolean {
   const near = (x: number, y: number) => Math.abs(x - y) < 1e-6
   return a.offset_mm.every((v, i) => near(v, b.offset_mm[i])) && near(a.radius_scale, b.radius_scale)
-    && near(a.depth_scale, b.depth_scale) && near(a.cone_deg, b.cone_deg)
+    && near(a.depth_scale, b.depth_scale) && near(a.cone_deg, b.cone_deg) && near(a.tilt_deg ?? 0, b.tilt_deg ?? 0)
 }
 
 /** The map to save: every declared channel's draft unless it is the default; ids no declaration names any more keep

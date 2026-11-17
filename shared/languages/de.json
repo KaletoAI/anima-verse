@@ -5808,6 +5808,7 @@
     "How wide the channel is, as a factor of the declared radius {r} cm": "Wie weit der Kanal ist, als Faktor des deklarierten Radius {r} cm",
     "How deep the channel is, as a factor of the declared depth {d} cm": "Wie tief der Kanal ist, als Faktor der deklarierten Tiefe {d} cm",
     "Cone": "Trichter",
+    "Turns the channel’s direction toward the back (+) or the front (−), in degrees": "Dreht die Richtung des Kanals nach hinten (+) oder nach vorn (−), in Grad",
     "The half-angle of the entry funnel in front of the opening, in degrees": "Der halbe Öffnungswinkel des Eingangstrichters vor der Öffnung, in Grad",
     "Stores the values only — nothing is recomputed, no jobs": "Legt nur die Werte ab — nichts wird neu berechnet, keine Jobs",
     "Stores the declared values for every channel": "Legt für jeden Kanal die deklarierten Werte ab",

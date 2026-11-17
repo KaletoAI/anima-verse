@@ -23,7 +23,7 @@ import { useToast } from '../../lib/Toast'
 import type { ModelStep } from './ModelSteps'
 import { StepLight, SubTabs } from './StepRows'
 import { LIGHT_COLOR } from './stepStyle'
-import { CONE_MAX, CONE_MIN, OFFSET_MM_MAX, SCALE_MAX, SCALE_MIN, channelLabel, collisionStepLine, declarationDetail,
+import { CONE_MAX, TILT_MAX, CONE_MIN, OFFSET_MM_MAX, SCALE_MAX, SCALE_MIN, channelLabel, collisionStepLine, declarationDetail,
   declarationLine, overrideOf, overridesToSave, previewPayload, saveChannelOverrides, sameOverride } from './collisionChannelsModel'
 import type { ChannelDeclaration, ChannelOverrides } from './collisionChannelsModel'
 
@@ -162,6 +162,9 @@ export function CollisionChannels({ character, collision, overrides, declaration
               <Field label={t('Cone')} shown={`${draft.cone_deg.toFixed(0)}°`} value={draft.cone_deg} min={CONE_MIN}
                 max={CONE_MAX} step={1} disabled={busy} onChange={(v) => set({ cone_deg: v })}
                 title={t('The half-angle of the entry funnel in front of the opening, in degrees')} />
+              <Field label={t('Tilt')} shown={`${(draft.tilt_deg ?? 0).toFixed(0)}°`} value={draft.tilt_deg ?? 0}
+                min={-TILT_MAX} max={TILT_MAX} step={1} disabled={busy} onChange={(v) => set({ tilt_deg: v })}
+                title={t('Turns the channel’s direction toward the back (+) or the front (−), in degrees')} />
             </div>
           ) : null}
           <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap', marginTop: 2 }}>
