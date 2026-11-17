@@ -355,6 +355,18 @@ def _lay_path(tree, knots, clear):
     return Q, idx
 
 
+def window_cols(need_rad, n):
+    """A179 — the half width of the armhole window in columns: enough of the ``n`` columns round the body to span
+    ``need_rad`` either side of the side seam, between WINDOW_COLS and WINDOW_COLS_MAX."""
+    return min(WINDOW_COLS_MAX, max(WINDOW_COLS, int(math.ceil(need_rad / (2 * math.pi / n) - 1e-9))))
+
+
+def sleeve_ring_count(girths, loop_n):
+    """A179 — the vertices of a sleeve ring: the sleeve's mean girth at SLEEVE_EDGE_M a vertex, at least 12 and at
+    most the armhole loop's ``loop_n``."""
+    return min(int(loop_n), max(12, int(round(float(np.mean(girths)) / SLEEVE_EDGE_M))))
+
+
 def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008):
     """Ruling A142 — the vertices, faces and per-corner UVs of a piece with a bodice (Blender world, Z up, front =
     -Y): the torso rows wrapped round the body like a skirt (row 0 = the shoulder line), a yoke ("cap") from the
@@ -427,7 +439,7 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008):
                 p = arm_ring(side, phi)
                 if p is not None:      # the angle about the bodice axis under which this side of the arm root lies
                     need = max(need, math.atan2(abs(p[1] - centre[1]) + WINDOW_ROOM_M, abs(xs - centre[0])))
-        wcols = min(WINDOW_COLS_MAX, max(WINDOW_COLS, int(math.ceil(need / (2 * math.pi / N)))))
+        wcols = window_cols(need, N)
     window, border, interior = set(), set(), set()
     if not straps:
         for sc_ in side_c.values():
@@ -450,11 +462,21 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008):
                 # leaves open: a chest-band vertex built in that crease stood 12-22 mm inside the collider. Such a
                 # vertex is laid on the nearest point outside it (under the arm), not farther out along its ray —
                 # there the T-posed arm is in the way
+                # (where the surface faces outward the vertex only moves out along its own ray, so two neighbours
+                # never land on one point: under a bust they stood 1.4 mm apart and that edge read 2.07)
                 for c in range(N):
+                    d = Vector((math.cos(angles[c]), math.sin(angles[c]), 0.0))
                     v = Vector((xy[c, 0], xy[c, 1], z))
-                    loc, out = gd.signed_out(ctree, v, 0.12)
-                    if loc is not None and (v - loc).dot(out) < clear:
-                        laid[(r, c)] = tuple(loc + out * clear)
+                    for _ in range(3):
+                        loc, out = gd.signed_out(ctree, v, 0.12)
+                        if loc is None or (v - loc).dot(out) >= clear - 1e-5:
+                            break
+                        if out.dot(d) < MIN_COS:
+                            v = loc + out * clear
+                            laid[(r, c)] = tuple(v)
+                            break
+                        v = v + d * ((clear - (v - loc).dot(out)) / out.dot(d))
+                        xy[c] = (v.x, v.y)
         else:
             sections += 1
             xy, r0, state = sec
@@ -559,9 +581,13 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008):
             elif ctree is not None:
                 z_hi = z_ring + min(0.10, float(np.linalg.norm(xy - inner[c])))
                 zs = _surface_z(ctree, xy[0], xy[1], z_hi, floor_z)
-                if zs is None:             # under a ridge that stands above the ceiling: its top
-                    zs = _surface_z(ctree, xy[0], xy[1], z_hi + 0.08, z_hi)
-                capz[k, c] = max(floor_z, zs[0] + CAP_CLEAR_M / max(0.5, zs[1])) if zs is not None else floor_z
+                if zs is not None:
+                    capz[k, c] = max(floor_z, zs[0] + CAP_CLEAR_M / max(0.5, zs[1]))
+                else:
+                    # no surface under the ceiling: the point lies inside the body there (hair hanging over the
+                    # shoulder, a ridge of the trapezius) or beside it. It keeps the height of the ring before it
+                    # (the shoulder line's own height at the outer end) and ``_lay_path`` lays it outside.
+                    capz[k, c] = capz[k - 1, c] if k else top_z
             else:
                 zs = _ray_down(ftree, xy[0], xy[1], top=max(top_z, bod["neck_y"]) + 0.035)
                 capz[k, c] = max(floor_z, (zs + CAP_CLEAR_M) if zs is not None else floor_z)
@@ -752,7 +778,7 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008):
             # the armhole loop: Blender's cloth mass is PER VERTEX, so a ring of 48 vertices 7-10 mm apart (the loop
             # of a wide armhole) weighed twice the torso's cloth and stretched the sleeve's top to 1.33. The first
             # ring is joined to the loop by quads and triangles.
-            Ms = min(M, max(12, int(round(float(np.mean([c for _d, c in ring_ds])) / SLEEVE_EDGE_M))))
+            Ms = sleeve_ring_count([c for _d, c in ring_ds], M)
             at = np.arange(Ms) * M / Ms                                  # each ring vertex's place along the loop
             phi_c = np.r_[phi, phi[0] + turn]
             L_c = np.vstack([L, L[:1]])
