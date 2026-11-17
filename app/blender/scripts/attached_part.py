@@ -710,7 +710,6 @@ def build_part(group, companions, output):
         if d > 0:
             for c in grp:
                 c.co = orig[v] - n * d
-            flatten_outward = max(flatten_outward, (grp[0].co - orig[v]).dot(n))
             flat += len(grp)
     # Each window vertex moved along its own normal, its neighbours outside the
     # window not at all: on a coarse body the window's edge became a serrated
@@ -737,6 +736,11 @@ def build_part(group, companions, output):
     for g, s_ in zip(skin_groups, shift_):
         for c in g:
             c.co = orig_all[c.index] + s_
+    # Measured on the final skin positions: the flatten step itself only moves
+    # inward (d > 0), so only the smoothing could push skin out.
+    for g, s_ in zip(skin_groups, shift_):
+        n = sum((c.normal for c in g), Vector()).normalized()
+        flatten_outward = max(flatten_outward, s_.dot(n))
     from mathutils.interpolate import poly_3d_calc
     wall_moved = 0
     for grp, face_, hit_ in wall_pairs.values():
