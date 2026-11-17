@@ -228,9 +228,15 @@ class Roots:
     hair_items: Set[str] = field(default_factory=set)
     running_sigs: Set[str] = field(default_factory=set)
     running_items: Set[str] = field(default_factory=set)
+    #: why the work in progress could not be read completely ("" = it could): then nothing is deleted
+    running_unknown: str = ""
     reachable: Optional[Callable[[], Set[str]]] = None
     #: why the reachable set could not be computed ("" = it could / was not needed)
     undetermined: str = ""
+
+
+#: ``collect``'s ``aborted`` (and ``running_state``'s ``unknown``) when the work in progress cannot be read.
+RUNNING_UNKNOWN = "cannot tell what is running — nothing deleted; unreadable: "
 
 
 class GcOverBudget(RuntimeError):
@@ -379,9 +385,20 @@ def scan(character_name: str) -> Tuple[List[Node], List[Path]]:
 # --- Roots ----------------------------------------------------------------------
 
 def running_keys(character_name: str) -> Tuple[Set[str], Set[str]]:
-    """``(signatures, garment items)`` with work in progress for the character."""
+    """``(signatures, garment items)`` with work in progress for the character — what could be read
+    (``running_state`` says whether that is everything)."""
+    sigs, items, _unknown = running_state(character_name)
+    return sigs, items
+
+
+def running_state(character_name: str) -> Tuple[Set[str], Set[str], str]:
+    """``(signatures, garment items, unknown)`` with work in progress for the character. ``unknown`` names
+    the registries that could not be read ("" = all were): the sets are then incomplete, and a run that is
+    not in them may still be writing — every deleting caller deletes NOTHING then (``collect``,
+    ``delete_body``)."""
     sigs: Set[str] = set()
     items: Set[str] = set()
+    unread: List[str] = []
     try:
         from app.core import model3d
         for _path, (name, sig) in model3d.active_stages().items():
@@ -389,6 +406,7 @@ def running_keys(character_name: str) -> Tuple[Set[str], Set[str]]:
                 sigs.add(str(sig))
     except Exception:
         logger.exception("Artefact GC %s: stage registry unreadable", character_name)
+        unread.append("stage registry")
     try:
         from app.core import base_body
         with base_body._status_lock:
@@ -398,6 +416,7 @@ def running_keys(character_name: str) -> Tuple[Set[str], Set[str]]:
         sigs.update(s for s in [model_sig, *outfit_sigs] if s)
     except Exception:
         logger.exception("Artefact GC %s: base body status unreadable", character_name)
+        unread.append("base body status")
     try:
         from app.core import hub_ops
         prefix = f"model3d:{character_name}:"
@@ -406,6 +425,7 @@ def running_keys(character_name: str) -> Tuple[Set[str], Set[str]]:
                 sigs.add(str(op.subject)[len(prefix):])
     except Exception:
         logger.exception("Artefact GC %s: hub operations unreadable", character_name)
+        unread.append("hub operations")
     try:
         from app.core import garment_store, garments
         with garment_store._status_lock:
@@ -415,7 +435,8 @@ def running_keys(character_name: str) -> Tuple[Set[str], Set[str]]:
             items.update(garments._side.get(character_name) or ())   # refits beside the FIFO (Ruling A30)
     except Exception:
         logger.exception("Artefact GC %s: garment runs unreadable", character_name)
-    return sigs, items
+        unread.append("garment runs")
+    return sigs, items, (RUNNING_UNKNOWN + ", ".join(unread)) if unread else ""
 
 
 def compute_roots(character_name: str) -> Roots:
@@ -434,7 +455,7 @@ def compute_roots(character_name: str) -> Roots:
     garment = ocg._garment_roots(character_name)
     if garment is not None:
         roots.garment_keep, roots.garment_items, roots.hair_items = garment
-    roots.running_sigs, roots.running_items = running_keys(character_name)
+    roots.running_sigs, roots.running_items, roots.running_unknown = running_state(character_name)
     memo: List[Set[str]] = []
 
     def reachable() -> Set[str]:
@@ -1009,7 +1030,9 @@ def collect(character_name: str, *, dry_run: bool = False, explicit: bool = Fals
     unknown: [...], totals: {category: {total, reachable, orphans, bytes}},
     seconds, aborted}``. ``budget_s``: a judgement that runs past it is
     abandoned and NOTHING is deleted (``aborted`` names why) — an automatic
-    caller must never hang on a pathological wardrobe. Never mints a
+    caller must never hang on a pathological wardrobe. The same when the
+    work in progress cannot be read (``running_state``: ``aborted`` =
+    ``RUNNING_UNKNOWN`` + the registries), dry run or not. Never mints a
     directory for a vanished character."""
     report: Dict[str, Any] = {"character": character_name, "reason": reason, "dry_run": dry_run,
                               "explicit": explicit, "orphans": [], "deleted_files": 0, "freed_bytes": 0,
@@ -1026,6 +1049,13 @@ def collect(character_name: str, *, dry_run: bool = False, explicit: bool = Fals
         report["seconds"] = round(time.monotonic() - started, 2)
         logger.warning("Artefact GC %s (%s): abandoned after %.1f s (budget %.0f s) — nothing deleted",
                        character_name, reason or "manual", report["seconds"], budget_s)
+        return report
+    if analysis.roots.running_unknown:
+        # A run that is not in the (incomplete) running set may be writing a node judged an orphan: this pass
+        # deletes nothing, and says so like an over-budget pass (the improvement keeps its step pending).
+        report["aborted"] = analysis.roots.running_unknown
+        report["seconds"] = round(time.monotonic() - started, 2)
+        logger.warning("Artefact GC %s (%s): %s", character_name, reason or "manual", report["aborted"])
         return report
     wanted = _descendants(analysis.nodes, set(keys)) if keys is not None else None
     for category in CATEGORIES:
@@ -1082,14 +1112,15 @@ def _body_delete_nodes(character_name: str, root: Path, body_id: str) -> List[Tu
     views, the texture's source, and stay); ``running`` = work in progress protects the node."""
     nodes, _unknown = scan(character_name)
     wanted = body_chain(nodes, root, body_id)
-    running, _items = running_keys(character_name)
+    running, _items, unknown = running_state(character_name)
     out: List[Tuple[Node, bool]] = []
     for node in nodes:
         if node.key not in wanted or node.kind not in ("body", "body_fit", "outfit"):
             continue
         if node.kind == "outfit" and node.category != "meshes":
             continue
-        out.append((node, node.key in running
+        # Work in progress that cannot be read protects every node of the chain.
+        out.append((node, bool(unknown) or node.key in running
                     or (node.kind == "body_fit" and node.parents.get("body_id") in running)))
     return out
 

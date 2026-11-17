@@ -20,7 +20,8 @@ semantics (``explicit=False``: a node with a file younger than
 the admin's explicit delete (``explicit=True``).
 
 Both collectors run under ``artefact_graph.HOOK_BUDGET_S`` (read at call
-time); a collect over it is abandoned without a delete — ``aborted``: the
+time); a collect over it — or one that cannot read the work in progress
+(``artefact_graph.running_state``) — is abandoned without a delete — ``aborted``: the
 candidate stays listed (dropping it would close its pending step as done
 although nothing was cleaned), ``CandidateBusy`` in a step. What the collector skips
 (running, locked) is no failure: the step is done, its result note says so,
