@@ -2219,7 +2219,8 @@ def _plain_fit_refusal(character_name: str, item_id: str, profile: Optional[Dict
     piece without that fit has none on a body shape either —, "" without one."""
     from app.core import fit_attempts
     try:
-        failure = fit_attempts.fit_status(character_name, item_id, "", profile=profile).get("failure")
+        st = fit_attempts.fit_status(character_name, item_id, "", profile=profile)
+        failure = st.get("failure") or st.get("source_failure")  # A187: a refused shoe step names the piece too
     except Exception:  # noqa: BLE001 — the reason falls back to the general one
         logger.debug("Plain fit status of %s/%s unreadable", character_name, item_id, exc_info=True)
         return ""

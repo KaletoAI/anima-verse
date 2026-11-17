@@ -6434,6 +6434,7 @@
     "An image made outside (same framing as the base view: the worn view as input). It is registered and gated like a render and becomes this view — refused by its gate, it is accepted by you. No hub job; the mesh and the fit become due. Undo takes it back.": "Ein außerhalb erzeugtes Bild (gleicher Ausschnitt wie die Basisansicht: die getragene Ansicht als Eingabe). Es wird wie ein Render ausgerichtet und geprüft und wird diese Ansicht — lehnt die Prüfung es ab, gilt es als von dir angenommen. Kein Hub-Job; Mesh und Anpassung werden fällig. Rückgängig nimmt es zurück.",
     "Uploaded — its gate passed": "Hochgeladen — Prüfung bestanden",
     "Uploaded — accepted by you; its gate refused it": "Hochgeladen — von dir angenommen; die Prüfung lehnte es ab",
-    "Not uploaded": "Nicht hochgeladen"
+    "Not uploaded": "Nicht hochgeladen",
+    "Not fitted yet — the shoe itself was refused (see its steps), not this body. Accept it anyway or regenerate it there; the fit runs on the next Build": "Noch nicht angepasst — abgelehnt wurde der Schuh selbst (siehe seine Schritte), nicht dieser Körper. Trotzdem übernehmen oder dort neu erzeugen; die Anpassung läuft beim nächsten Build"
   }
 }

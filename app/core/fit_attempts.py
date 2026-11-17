@@ -652,6 +652,11 @@ def _profile(character_name: str, profile: Optional[Dict[str, Any]]) -> Dict[str
     return get_character_profile(character_name) or {}
 
 
+#: A187: the body row's line while the shoe itself (a source step) is refused — no fit was made on this body.
+SHOE_STEP_REFUSED = ("Not fitted yet — the shoe itself was refused (see its steps), not this body. Accept it "
+                     "anyway or regenerate it there; the fit runs on the next Build")
+
+
 def fit_status(character_name: str, item_id: str, body: str, *,
                profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The item's fit on ``body`` as the readers judge it NOW: ``{fsig, state, failure, body_sha, base_fit_sha}``
@@ -674,7 +679,13 @@ def fit_status(character_name: str, item_id: str, body: str, *,
             failure = (gs.body_failure(character_name, item_id, fsig, body, body_sha=body_sha, base_fit_sha="",
                                        fit_version=garment_fit.FIT_VERSION[kind]) if body
                        else gs.chain_failure(character_name, item_id, fsig, base_model_sha=base_sha))
-        return {**out, "fsig": fsig, "state": state, "failure": failure, "body_sha": body_sha}
+        source_failure = None
+        if not body and failure is not None and failure.get("step") != "fit":
+            # A187: a refused SHOE step (its mesh, cut-out, insole) is the shoe's, not the body's fit — the base
+            # body row must not read "refused"; the shoe's own steps carry the refusal and its offer.
+            source_failure, failure = failure, None
+        return {**out, "fsig": fsig, "state": state, "failure": failure, "body_sha": body_sha,
+                "source_failure": source_failure}
     if kind != "clothing" or not base_sha:
         return out
     if body:
@@ -1395,6 +1406,8 @@ def _entry(character_name: str, item_id: str, body: str, profile: Dict[str, Any]
         error = str((status["failure"] or {}).get("error") or attempt.get("error") or "")
         same = current_attempt and strip_prefix(attempt.get("error") or "") == strip_prefix(error)
         words(error, attempt.get("gates") if same else None)
+    elif status.get("source_failure") is not None:
+        entry["reason"] = SHOE_STEP_REFUSED
     elif status["state"] in ("stale", "outdated") or (current_attempt and attempt):
         entry.update(status="stale", reason=("Made on an older body, piece or fit algorithm, or with other fit "
                                              "settings — Re-fit with this body selected, or the next Build, fits "
