@@ -226,6 +226,12 @@ NO_BASE = "no_base"
 RETRY_LATER_ERRORS: Tuple[str, ...] = ("BackendBusyError", "MediaGenerationDisabled")
 
 
+#: A176: item steps whose gate refusal a DEFAULT run (a Build, a trigger, a plain Run) never runs again — the mesh is
+#: a long hub job; only the step's own Regenerate / Run asks the mesher again (Dario's sandals, 2026-11-17: a Build
+#: queued behind a click's run meshed the just-refused shoe twice more).
+KEEP_REFUSED: Tuple[str, ...] = ("mesh",)
+
+
 def _fsig(character_name: str, item_id: str, profile: Dict[str, Any]) -> str:
     from app.core import garment_store as gs
     return gs.garment_fsig(character_name, item_id, profile=profile)
@@ -278,7 +284,8 @@ def run_chain(character_name: str, item: Dict[str, Any], wanted: Optional[List[s
                 footwear_source.regenerate(item_id, first)
                 fsig = _fsig(character_name, item_id, profile)
             steps = item_steps[item_steps.index(first):]
-            res = footwear_source.run_source(item_id, steps=steps, on_step=on_step)
+            res = footwear_source.run_source(item_id, steps=steps, on_step=on_step,
+                                             keep_refused=() if wanted else KEEP_REFUSED)
             ran = list(res.get("ran") or [])
             if res.get("ok") and "insole" in steps and "insole" not in ran:
                 version = footwear_source.step_record(item_id, res["ssig"], "insole").get("version")
