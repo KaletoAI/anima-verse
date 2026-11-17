@@ -84,13 +84,17 @@ export function RelationshipAddresses({ character }: { character: string }) {
   const save = async (other: string) => {
     const row = draft[other]
     if (!row) return
+    const it = items.find((i) => i.other === other)
+    // Only the directions the user changed: a direction sent unchanged would overwrite a newer
+    // stored value (a linked body's own direction is its leader's, written there by the server).
+    const body: Partial<RowState> = {}
+    if (!it || row.outgoing !== it.outgoing) body.outgoing = row.outgoing
+    if (!it || row.incoming !== it.incoming) body.incoming = row.incoming
+    if (!Object.keys(body).length) return
     setBusy(other)
     try {
-      await apiPut(`/characters/${enc}/relationships/${encodeURIComponent(other)}/address`, {
-        outgoing: row.outgoing,
-        incoming: row.incoming,
-      })
-      setItems((prev) => prev.map((i) => (i.other === other ? { ...i, ...row } : i)))
+      await apiPut(`/characters/${enc}/relationships/${encodeURIComponent(other)}/address`, body)
+      setItems((prev) => prev.map((i) => (i.other === other ? { ...i, ...body } : i)))
       toast(t('Saved'), 'success')
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
@@ -103,9 +107,15 @@ export function RelationshipAddresses({ character }: { character: string }) {
     if (!picked) return
     setBusy(picked)
     try {
+      // The server creates the pair on any address write, and an empty text CLEARS a direction.
+      // So the pair is created through the other one's direction (whose speaker is the picked
+      // character — this character's own direction may be its leader's stored address), and that
+      // direction gets the value it already has: read from the picked character's own list.
+      const theirs = await apiGet<{ items?: AddressItem[] }>(
+        `/characters/${encodeURIComponent(picked)}/relationships/addresses`)
+      const current = theirs.items?.find((i) => i.other === character)?.outgoing ?? ''
       await apiPut(`/characters/${enc}/relationships/${encodeURIComponent(picked)}/address`, {
-        outgoing: '',
-        incoming: '',
+        incoming: current,
       })
       setPicked('')
       await load()
