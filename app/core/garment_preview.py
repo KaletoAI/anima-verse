@@ -135,10 +135,22 @@ class Registration:
         self.mask = frame["mask"]
         self.top, self.feet = frame["top_px"], frame["feet_px"]
         self.floor, self.height = float(meas["floor_y"]), float(meas["height"])
-        self.scale = (self.feet - self.top) / self.height
         j = meas.get("joints") or {}
         xs = [j[k][0] for k in ("hips", "neck") if k in j]
         self.x0 = float(sum(xs) / len(xs)) if xs else 0.0
+        cam = frame.get("camera")
+        #: A195: a picture rendered with a known camera (``front_camera``) maps metres EXACTLY; the silhouette only
+        #: gives the body's extent then.
+        self.exact = cam is not None
+        if cam is not None:
+            from app.core import front_camera
+            self.scale = float(cam["ppm"])
+            self._xref, self._col0 = float(cam["cx"]), cam["w"] / 2.0
+            self._feet_f = front_camera.to_px(cam, 0.0, self.floor)[1]
+            self.cx = self._col0 + (self.x0 - self._xref) * self.scale
+            return
+        self.scale = (self.feet - self.top) / self.height
+        self._feet_f = float(self.feet)
         centres = []
         guess = frame["w"] / 2.0
         for y in np.arange(meas["hip_y"], meas["band_y"], 0.02):
@@ -147,16 +159,31 @@ class Registration:
             if run:
                 centres.append((run[0] + run[1]) / 2.0)
         self.cx = float(np.median(centres)) if centres else guess
+        self._xref, self._col0 = self.x0, self.cx
 
     # metres <-> pixels
     def row(self, y: float) -> int:
-        return int(round(min(self.feet - 1, max(self.top, self.feet - (y - self.floor) * self.scale))))
+        return int(round(min(self.feet - 1, max(self.top, self._feet_f - (y - self.floor) * self.scale))))
 
     def px(self, x: float, y: float) -> List[float]:
-        return [round(self.cx + (x - self.x0) * self.scale, 1), round(self.feet - (y - self.floor) * self.scale, 1)]
+        return [round(self._col0 + (x - self._xref) * self.scale, 1),
+                round(self._feet_f - (y - self.floor) * self.scale, 1)]
 
     def metres(self, col: float, row: float) -> Tuple[float, float]:
-        return (col - self.cx) / self.scale + self.x0, (self.feet - row) / self.scale + self.floor
+        return (col - self._col0) / self.scale + self._xref, (self._feet_f - row) / self.scale + self.floor
+
+    def joint_arm_axis(self, side: int) -> Optional[Tuple[Tuple[float, float], Tuple[float, float]]]:
+        """A195: on an exactly mapped render (the model's own T-pose) the arm IS the model's: shoulder joint ->
+        hand joint (``(root, unit direction)``); None on the A-posed base picture or without the joints."""
+        j = self.meas.get("joints") or {}
+        a, h = ("leftarm", "lefthand") if side > 0 else ("rightarm", "righthand")
+        if not self.exact or a not in j or h not in j:
+            return None
+        dx, dy = j[h][0] - j[a][0], j[h][1] - j[a][1]
+        n = math.hypot(dx, dy)
+        if n < 1e-6:
+            return None
+        return (j[a][0], self.meas["shoulder_y"]), (dx / n, dy / n)
 
     def _run_at(self, r: int, col: float) -> Optional[Tuple[int, int]]:
         for a, b in _runs(self.mask[r]):
@@ -478,7 +505,7 @@ def _sleeves(p, m, reg: Registration, spec, add, mark) -> None:
     for side, key in ((1, "leftarm"), (-1, "rightarm")):
         if key not in j:
             continue
-        axis = reg.arm_axis(side, (j[key][0], m["shoulder_y"]))
+        axis = reg.joint_arm_axis(side) or reg.arm_axis(side, (j[key][0], m["shoulder_y"]))
         ja, u = axis if axis else ((j[key][0], m["shoulder_y"]), (float(side), 0.0))
         w0 = rings[0][1] / math.pi
         w1 = rings[-1][1] / math.pi
@@ -566,23 +593,34 @@ NO_BASE_MODEL = "No plain body model yet — the overlay needs its measurements 
 
 
 def overlay(character_name: str, item_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
-    """The dialog's picture with the piece on it: ``{ok, reason?, picture {url, w, h}, px_per_m, landmarks, colour,
-    shapes, marks, params}`` (``params`` validated). Nothing generated."""
+    """The dialog's picture with the piece on it: ``{ok, reason?, picture {url, w, h, dressed}, figure {state,
+    reason?, error?}, px_per_m, landmarks, colour, shapes, marks, params}`` (``params`` validated). Nothing generated.
+
+    A195: the picture is the character DRESSED without this piece (``garment_preview_front``, a local front render
+    with a known camera — exact metres) once rendered; until then (``figure.state`` ``rendering``) and without a
+    figure or after a failed render the plain base-body front of A188 stands in, registered by its silhouette."""
     from urllib.parse import quote
-    from app.core import base_body
+    from app.core import base_body, garment_preview_front
     from app.core import garment_template as gt
     from app.models.character import get_character_dir
     params, errors = gt.validate_params(params)
     out: Dict[str, Any] = {"ok": False, "params": params, "errors": errors}
-    path = base_body.base_image_path(character_name, "front")
-    if path is None or not Path(path).is_file():
-        out["reason"] = NO_BASE_PICTURE
-        return out
-    url = f"/characters/{quote(character_name, safe='')}/base-body/images/front"
-    frame = picture_frame(Path(path))
-    out["picture"] = {"url": url, "w": frame["w"], "h": frame["h"]}
     base = base_body.current_base(character_name)
     glb = get_character_dir(character_name) / "model3d" / f"{base[0]}.glb" if base else None
+    dressed = garment_preview_front.state(character_name, item_id)
+    out["figure"] = {k: v for k, v in dressed.items() if k in ("state", "reason", "error")}
+    c, i = quote(character_name, safe=""), quote(item_id, safe="")
+    if dressed["state"] == "ready" and glb is not None and glb.is_file():
+        frame = dict(picture_frame(dressed["png"]), camera=dressed["record"]["camera"])
+        url = f"/characters/{c}/figure/template/{i}/front/{dressed['key']}.png"
+    else:
+        path = base_body.base_image_path(character_name, "front")
+        if path is None or not Path(path).is_file():
+            out["reason"] = NO_BASE_PICTURE
+            return out
+        url = f"/characters/{c}/base-body/images/front"
+        frame = picture_frame(Path(path))
+    out["picture"] = {"url": url, "w": frame["w"], "h": frame["h"], "dressed": "camera" in frame}
     if glb is None or not glb.is_file():
         out["reason"] = NO_BASE_MODEL
         return out

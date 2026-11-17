@@ -920,7 +920,7 @@ def _attach_strands(character_name: str, garment: Dict[str, Any], source: bytes,
 def _build(character_name: str, directory: Path, bare: Path,
            wanted: List[Dict[str, Any]], tier: str,
            warnings: Optional[List[str]] = None, *,
-           hidden: Optional[List[str]] = None) -> Tuple[bytes, Dict[str, Any], list]:
+           hidden: Optional[List[str]] = None, validate: bool = True) -> Tuple[bytes, Dict[str, Any], list]:
     """Read the bare file + its sidecar under the publication lock (so bytes
     and revision belong together), cut the body for a footwear piece, graft
     every garment (a footwear piece as its shoe nodes — the two foot nodes,
@@ -928,7 +928,8 @@ def _build(character_name: str, directory: Path, bare: Path,
     ``warnings``: the assembly's own ``garment_warnings`` (``_wanted``),
     appended to the bare sidecar's in the assembled sidecar. ``hidden``: the
     attached-part groups a covering worn piece hides (``_hidden_parts``),
-    dropped from the body and recorded as ``hidden_parts``. Returns (bytes,
+    dropped from the body and recorded as ``hidden_parts``. ``validate`` False (a picture only, never published:
+    the template dialog's dressed front, A195) skips the rig validation. Returns (bytes,
     sidecar, captured revision)."""
     import hashlib
     from app.core import glb_mesh
@@ -1023,10 +1024,10 @@ def _build(character_name: str, directory: Path, bare: Path,
             extras["pose_shapes"] = shapes
         blob = glb_mesh.graft(blob, mesh, name=f"garment_{garment['kind']}_{garment['item_id']}", extras=extras,
                               material_overrides=overrides)
-    verdict = model3d._validator_for("mixamo", character_name)(blob)
+    verdict = model3d._validator_for("mixamo", character_name)(blob) if validate else {"ok": True}
     if not verdict.get("ok"):
         raise ValueError("assembled model failed validation: " + "; ".join(verdict.get("errors") or []))
-    frames = rig_frames_preserved(data, blob)
+    frames = rig_frames_preserved(data, blob) if validate else {"ok": True}
     if not frames.get("ok"):
         raise ValueError("assembled model rewrote the rig frames: " + "; ".join(frames.get("errors") or []))
     side = {**meta, "garments": _state(wanted, tier, alpha_cutoff=cutoff, character_name=character_name),

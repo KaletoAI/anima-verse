@@ -449,6 +449,29 @@ def preview_template_params(character_name: str, item_id: str, body: TemplatePre
         return {"ok": False, "reason": str(e)}
 
 
+@router.get("/{character_name}/figure/template/{item_id}/front/{key}.png")
+def template_front_picture(character_name: str, item_id: str, key: str,
+                           _: Dict[str, Any] = Depends(require_admin)):
+    """A195: the dressed front without the piece (``garment_preview_front``), by its content key — immutable."""
+    from fastapi.responses import FileResponse
+    from app.core import garment_preview_front
+    _template_item(character_name, item_id)
+    hit = garment_preview_front.cached(character_name, key)
+    if hit is None:
+        raise HTTPException(status_code=404, detail="no such picture")
+    return FileResponse(hit[0], media_type="image/png", headers={"Cache-Control": "private, max-age=31536000, immutable"})
+
+
+@router.post("/{character_name}/figure/template/{item_id}/front/retry")
+def retry_template_front(character_name: str, item_id: str,
+                         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """A195: forget a failed dressed-front render so the next preview starts it again."""
+    from app.core import garment_preview_front
+    _template_item(character_name, item_id)
+    garment_preview_front.retry(character_name, item_id)
+    return {"ok": True}
+
+
 class RefitRequest(BaseModel):
     item_id: str
 
