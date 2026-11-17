@@ -196,12 +196,22 @@ def stage_kwargs(params: Dict[str, Any],
 
 
 def stage_cancel(params: Dict[str, Any]) -> Optional[Callable[[], bool]]:
-    """The cancel check of the run's hub operation — set only on a RESUMED
-    operation (its display row's cancel button, spec D6); None otherwise, so
-    a normal run polls exactly as before."""
+    """The cancel check of the run's hub operation — set on a RESUMED
+    operation (its display row's cancel button, spec D6) — and (A191) of the
+    caller's cancel scope (``base.CANCEL_SCOPE``: a garment run's Cancel, a
+    render's queue-panel Cancel); None when there is neither, so a normal run
+    polls exactly as before. A true check cancels the gateway job
+    (``poll_job``)."""
+    from app.imagegen.base import CANCEL_SCOPE
     stage = (params or {}).get("hub_stage")
     op = getattr(stage, "op", None)
-    return getattr(op, "should_cancel", None)
+    op_check = getattr(op, "should_cancel", None)
+    scope = CANCEL_SCOPE.get()
+    if scope is None:
+        return op_check
+    if op_check is None:
+        return scope.is_set
+    return lambda: bool(op_check()) or scope.is_set()
 
 
 def _cancel_lost_job(backend: ImageBackend, job_id: str) -> None:

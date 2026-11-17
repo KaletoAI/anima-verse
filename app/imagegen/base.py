@@ -41,6 +41,41 @@ OVERFLOW_WATCH: contextvars.ContextVar[Optional[OverflowWatch]] = contextvars.Co
 )
 
 
+class CancelScope:
+    """A191: the cancel switch of one piece of work that renders (a garment run, one image render): every GPU task
+    submitted while it is the current scope (``CANCEL_SCOPE``) is cancelled once it is set — a waiting one leaves its
+    channel, a running one ends as ``GpuTaskCancelled`` (``ProviderQueue``), and a gateway job the backend polls is
+    cancelled on the gateway through ``_gateway_job.poll_job``'s cancel path (``stage_cancel``). Scopes nest: a
+    scope is set when it or any outer scope is."""
+
+    def __init__(self, parent: Optional["CancelScope"] = None):
+        import threading
+        self._event = threading.Event()
+        self.parent = parent
+
+    def cancel(self) -> None:
+        self._event.set()
+
+    def is_set(self) -> bool:
+        scope: Optional[CancelScope] = self
+        while scope is not None:
+            if scope._event.is_set():
+                return True
+            scope = scope.parent
+        return False
+
+
+CANCEL_SCOPE: contextvars.ContextVar[Optional[CancelScope]] = contextvars.ContextVar(
+    "render_cancel_scope", default=None,
+)
+
+
+def cancel_requested() -> bool:
+    """A191: whether the current ``CANCEL_SCOPE`` (or one around it) was cancelled."""
+    scope = CANCEL_SCOPE.get()
+    return scope is not None and scope.is_set()
+
+
 def image_overflow_after_seconds() -> float:
     """Read the live image overflow threshold; zero disables overflow."""
     from app.core import config

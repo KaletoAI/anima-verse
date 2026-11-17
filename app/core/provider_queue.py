@@ -585,6 +585,21 @@ class ProviderQueue:
         callable_fn,
         agent_name: str = "", label: str = "") -> Any:
         """The queueing half of :meth:`submit_gpu_task`, past the admission."""
+        # A191: the caller's cancel scope (a garment run, one image render) — a cancelled scope queues nothing, and
+        # the callable runs under it in the channel worker so a polling backend's gateway job sees it too.
+        from app.imagegen.base import CANCEL_SCOPE, GpuTaskCancelled
+        scope = CANCEL_SCOPE.get()
+        if scope is not None:
+            if scope.is_set():
+                raise GpuTaskCancelled("GPU task cancelled before it was queued")
+            inner_fn = callable_fn
+
+            def callable_fn(inner_fn=inner_fn, scope=scope):
+                token = CANCEL_SCOPE.set(scope)
+                try:
+                    return inner_fn()
+                finally:
+                    CANCEL_SCOPE.reset(token)
         task = LLMTask(
             task_id=f"gpu_{uuid.uuid4().hex[:8]}",
             task_type=task_type,
@@ -616,6 +631,7 @@ class ProviderQueue:
             started = time.monotonic()
             wait_slice = min(1.0, watch.after_s)
             while not task._done_event.wait(wait_slice):
+                self._cancel_on_scope(task, scope)
                 waited = time.monotonic() - started
                 if waited >= watch.after_s:
                     with self._lock:
@@ -625,9 +641,13 @@ class ProviderQueue:
                         if target is not None and self._withdraw_gpu_task(task):
                             raise ChannelOverflow(self.provider.name, waited, target)
                 wait_slice = 1.0
-        else:
+        elif scope is None:
             # Block until worker sets the result (unchanged without a watch).
             task._done_event.wait()
+        else:
+            # A191: the same wait, watching the caller's cancel scope.
+            while not task._done_event.wait(1.0):
+                self._cancel_on_scope(task, scope)
 
         # Remove from pending
         with self._lock:
@@ -1064,6 +1084,11 @@ class ProviderQueue:
         else:
             logger.info("[%s] Chat beendet: %s (%s) — Queue bleibt pausiert (%d aktive Chats)",
                         self._queue_name, agent, task_id, remaining)
+
+    def _cancel_on_scope(self, task: LLMTask, scope) -> None:
+        """A191: cancel ``task`` (pending or running, ``cancel_task``) once the caller's cancel scope is set."""
+        if scope is not None and not task._cancelled and scope.is_set():
+            self.cancel_task(task.task_id)
 
     def cancel_task(self, task_id: str) -> bool:
         """Cancels a pending or running task. Returns True if found and cancelled."""

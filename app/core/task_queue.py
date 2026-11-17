@@ -151,6 +151,8 @@ class TaskQueue:
         # for hours (a hub job collected after a restart): the stale reaper
         # leaves them alone. Process-local, like the reaper itself.
         self._held_tracks: set = set()
+        #: A191: what a tracked task's Cancel also stops (``on_track_cancel``) — the render behind the row.
+        self._track_cancel_hooks: Dict[str, Callable[[], None]] = {}
         # Ruling A42: the characters whose automatic generation is paused —
         # the persisted table mirrored in memory (this object is its only
         # writer), so the many trigger checks never touch the DB.
@@ -1059,10 +1061,25 @@ class TaskQueue:
                 (now, duration_s, task_id))
             conn.commit()
 
+        hook = self._track_cancel_hooks.pop(task_id, None)
         if cur.rowcount:
             logger.info("Track cancelled: %s", task_id)
+            if hook is not None:
+                try:
+                    hook()
+                except Exception:  # noqa: BLE001 — the row is cancelled either way
+                    logger.exception("Cancel hook of %s failed", task_id)
             return True
         return False
+
+    def on_track_cancel(self, task_id: str, fn: Callable[[], None]) -> None:
+        """A191: ``fn`` runs when the tracked task ``task_id`` is cancelled (``track_cancel``, the queue panel) —
+        it stops the work behind the row (a render's cancel scope). ``drop_track_cancel`` forgets it."""
+        if task_id:
+            self._track_cancel_hooks[task_id] = fn
+
+    def drop_track_cancel(self, task_id: str) -> None:
+        self._track_cancel_hooks.pop(task_id, None)
 
     def track_discard(self, task_id: str) -> bool:
         """Remove a tracked placeholder entry entirely (no history row).

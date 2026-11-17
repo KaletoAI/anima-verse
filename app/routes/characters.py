@@ -3131,11 +3131,13 @@ def fetch_character_garment_mesh_job(character_name: str, item_id: str, body: Ga
 @router.post("/{character_name}/garments/{item_id}/cancel")
 def cancel_character_garment(character_name: str, item_id: str,
                              _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Cancel the item's WAITING run(s) in the character's garment queue
-    (hair and own-mesh pieces share it; ``garments.cancel_garment``): the
-    runs behind move up, the item's queued mark ends. 409 when the item's
-    run has already started (a running run is never cancelled), 404 when no
-    run of the item waits. ``{item_id, cancelled, queue_running, queue}``."""
+    """Cancel the item's run(s) in the character's garment queue (hair and
+    own-mesh pieces share it; ``garments.cancel_garment``): the WAITING runs
+    leave the queue (the runs behind move up) and (A191) the run in flight
+    stops — its render is cancelled, a polled hub job on the gateway too, and
+    the run ends at that step without recording a failure. 409 when the
+    item's only run is a CPU refit beside the queue, 404 when the item has
+    no run. ``{item_id, cancelled, stopping, queue_running, queue}``."""
     from app.core import garments
     _require_character(character_name)
     try:

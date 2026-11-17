@@ -3059,8 +3059,18 @@ class ImageService:
                     b, _gen, task_type="image_generation",
                     agent_name=character_name)
 
-            images, backend = self.run_on_backend(
-                backend, op=_op, character_name=character_name)
+            # A191: the queue panel's Cancel of this render's track stops the render (its GPU task, a polled
+            # gateway job) — before, it only marked the row while the render went on.
+            from app.imagegen.base import CANCEL_SCOPE, CancelScope
+            _scope = CancelScope(parent=CANCEL_SCOPE.get())
+            _tq.on_track_cancel(_track_id, _scope.cancel)
+            _scope_token = CANCEL_SCOPE.set(_scope)
+            try:
+                images, backend = self.run_on_backend(
+                    backend, op=_op, character_name=character_name)
+            finally:
+                CANCEL_SCOPE.reset(_scope_token)
+                _tq.drop_track_cancel(_track_id)
 
             _gen_duration = time.time() - _gen_start
             logger.info("SUCCESS - %d image(s) generated via %s (%.1fs)", len(images), backend.name, _gen_duration)

@@ -3602,6 +3602,8 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
         # An attempt failed outright (no backend, worker crash, decimation):
         # the failure carries every attempt, an earlier refusal's numbers too.
         # Chained to load or the media switch it is neither: retry later.
+        if _is_cancel(e):
+            return _cancelled_run(character_name, item_id, fsig, e.step, ran)
         if _is_load(e):
             return _retry_later(character_name, item_id, fsig, e.step, e, ran)
         logger.warning("Garment run %s/%s failed at %s: %s", character_name, item_id, e.step, e)
@@ -3609,6 +3611,8 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
     except _Refused as e:
         return _refusal(character_name, item_id, fsig, e.step, e.error, e.gates, ran)
     except Exception as e:  # noqa: BLE001 — reported as the step's failure
+        if _is_cancel(e):
+            return _cancelled_run(character_name, item_id, fsig, step, ran)
         if _is_load(e):
             return _retry_later(character_name, item_id, fsig, step, e, ran)
         logger.warning("Garment run %s/%s failed at %s: %s", character_name, item_id, step, e)
@@ -3702,6 +3706,37 @@ def _is_load(e: BaseException) -> bool:
     return footwear_source.failure_of(e)[0] == footwear_source.LOAD
 
 
+def _is_cancel(e: BaseException) -> bool:
+    """A191: whether a failed step was cancelled by the user — the run's Cancel (its ``CANCEL_SCOPE`` is set) or a
+    render's Cancel in the queue panel (``GpuTaskCancelled`` / ``GenerationCancelled`` anywhere in the exception
+    chain). No defect of the item: nothing is persisted and the run ends there (no next attempt, no next step)."""
+    from app.imagegen.base import GenerationCancelled, GpuTaskCancelled, cancel_requested
+    if cancel_requested():
+        return True
+    seen = set()
+    cur: Optional[BaseException] = e
+    while cur is not None and id(cur) not in seen:
+        if isinstance(cur, (GenerationCancelled, GpuTaskCancelled)):
+            return True
+        seen.add(id(cur))
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
+#: A191: the error a cancelled run ends with (the step's status and the run's result).
+RUN_CANCELLED = "Cancelled by the user"
+
+
+def _cancelled_run(character_name: str, item_id: str, fsig: str, step: str, ran: List[str]) -> Dict[str, Any]:
+    """A191: the result of a run the user cancelled — ``retry_later`` so ``_note_outcome`` persists nothing (the
+    chain is no failure of the item; a later run starts where this one stopped)."""
+    from app.core import garment_store as gs
+    logger.info("Garment run %s/%s cancelled at %s", character_name, item_id, step)
+    gs.end(character_name, item_id, step, error=RUN_CANCELLED, gates=None)
+    return {"ok": False, "fsig": fsig, "step": step, "error": RUN_CANCELLED, "gates": None, "ran": ran,
+            "retry_later": True, "cancelled": True}
+
+
 def _retry_later(character_name: str, item_id: str, fsig: str, step: str, e: BaseException,
                  ran: List[str]) -> Dict[str, Any]:
     """The result of a step that met load or the media switch: ``retry_later``
@@ -3789,6 +3824,9 @@ class _Job:
         #: character's pause of automatic generation (Ruling A42).
         self.clicked = not automatic
         self.done = threading.Event()
+        #: A191: the run's Cancel (``cancel_garment`` on a run in flight) — its renders are cancelled through it.
+        from app.imagegen.base import CancelScope
+        self.cancel_scope = CancelScope()
         self.result: Dict[str, Any] = {}
         #: The tracked CPU task of a fit-only run (``refit_pool.track``), "" for any other run.
         self.track = ""
@@ -3991,6 +4029,8 @@ def _execute(character_name: str, job: "_Job") -> Optional[str]:
     if job.track:
         from app.core import refit_pool
         refit_pool.activate(job.track)
+    from app.imagegen.base import CANCEL_SCOPE
+    scope_token = CANCEL_SCOPE.set(job.cancel_scope)
     try:
         failure = cached_failure(character_name, job.item_id) if job.automatic else None
         if failure is not None:
@@ -4019,6 +4059,10 @@ def _execute(character_name: str, job: "_Job") -> Optional[str]:
         logger.error("Garment run %s/%s failed: %s", character_name, job.item_id, e)
         error = str(e) or type(e).__name__
         job.result = {"ok": False, "error": error}
+    finally:
+        CANCEL_SCOPE.reset(scope_token)
+    if job.cancel_scope.is_set() and not job.result.get("ok"):
+        job.result = {**job.result, "ok": False, "cancelled": True, "error": RUN_CANCELLED}
     _end_track(job, "" if job.result.get("ok") else str(job.result.get("error") or "the fit was refused"))
     return error
 
@@ -4331,32 +4375,39 @@ def enqueue_garment(character_name: str, item_id: str, *, automatic: bool = True
 
 
 class RunStarted(Exception):
-    """``cancel_garment``: the item's run has started — it cannot be cancelled."""
+    """``cancel_garment``: the item's only run in flight is a CPU refit beside the queue — it is not cancelled."""
 
 
 #: ``cancel_garment``'s refusal (409) and the result a cancelled job's waiters get.
-ALREADY_RUNNING = "The run has already started — a running run cannot be cancelled"
+ALREADY_RUNNING = "A CPU re-fit runs (0 hub jobs) — it ends on its own and cannot be cancelled"
 NOT_QUEUED = "No run of this item waits in the queue"
 CANCELLED = "Cancelled while queued"
 
 
 def cancel_garment(character_name: str, item_id: str) -> Dict[str, Any]:
     """Take the item's WAITING runs out of the character's FIFO (atomic under
-    ``_lock``; the runs behind them move up). A run in flight is never
-    touched: ``RunStarted`` when the item only has that one, ``LookupError``
+    ``_lock``; the runs behind them move up) and (A191) stop its run in flight
+    in the FIFO: its cancel scope is set, so its render waiting in a channel
+    leaves it, a running one ends (a polled gateway job is cancelled on the
+    gateway) and the run ends at that step without recording a failure
+    (``_cancelled_run``). A CPU refit beside the FIFO (Ruling A30) is not
+    cancelled: ``RunStarted`` when the item only has that one; ``LookupError``
     when the item has no run at all. The item's ``queued`` mark ends unless
     its run is in flight; a waiter of a cancelled job (``run_queued``) gets
     ``{ok: False, cancelled: True, error}``. Returns ``{item_id, cancelled
-    (count), queue_running, queue}``."""
+    (count of waiting runs), stopping (the run in flight was told to stop),
+    queue_running, queue}``."""
     from app.core import garment_store as gs
     with _lock:
         queue = _queues.get(character_name)
         dropped = [j for j in queue or () if j.item_id == item_id]
         current = _current.get(character_name)
+        running = current if current is not None and current.item_id == item_id else None
         # A refit beside the FIFO (Ruling A30) is in flight as well.
-        in_flight = (current is not None and current.item_id == item_id) or \
-            item_id in (_side.get(character_name) or {})
-        if not dropped:
+        in_flight = running is not None or item_id in (_side.get(character_name) or {})
+        if running is not None:
+            running.cancel_scope.cancel()
+        if not dropped and running is None:
             if in_flight:
                 raise RunStarted(ALREADY_RUNNING)
             raise LookupError(NOT_QUEUED)
@@ -4368,9 +4419,10 @@ def cancel_garment(character_name: str, item_id: str) -> Dict[str, Any]:
             job.result = {"ok": False, "cancelled": True, "error": CANCELLED, "ran": []}
             job.done.set()
             _end_track(job, discard=True)
-        waiting = [j.item_id for j in queue]
-    logger.info("Garment %s/%s: %d waiting run(s) cancelled", character_name, item_id, len(dropped))
-    return {"item_id": item_id, "cancelled": len(dropped),
+        waiting = [j.item_id for j in queue or ()]
+    logger.info("Garment %s/%s: %d waiting run(s) cancelled%s", character_name, item_id, len(dropped),
+                ", the run in flight stops" if running is not None else "")
+    return {"item_id": item_id, "cancelled": len(dropped), "stopping": running is not None,
             "queue_running": current.item_id if current is not None else None, "queue": waiting}
 
 
