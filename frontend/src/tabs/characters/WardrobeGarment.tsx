@@ -673,7 +673,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
   const { toast } = useToast()
   const enc = encodeURIComponent(character)
   const url = character && itemId ? `/characters/${enc}/garments/${encodeURIComponent(itemId)}` : null
-  const { info, startPoll } = useGarment<GarmentItemInfo & { steps?: ModelStep[] }>(url)
+  const { info, error: pollError, startPoll } = useGarment<GarmentItemInfo & { steps?: ModelStep[] }>(url)
   const { feedback, start, cancel } = useGarmentRun(character, itemId, info, startPoll)
 
   useEffect(() => { if (info?.status) onStatus(itemId, info.status) }, [info, itemId, onStatus])
@@ -1234,6 +1234,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
               ? <RunStatusLine garment={runState} feedback={feedback} stepLabels={stepLabels} bare
                 live={info?.live ?? info?.status?.live ?? null} onCancel={() => { void cancel() }} />
               : info?.status ? <PieceStatusChip status={info.status} name={info.name || name} /> : null}
+            {/* A failed poll keeps the shown state and polls on; it only says so, with the error as the hover. */}
+            {pollError ? <div className="ga-hint" title={pollError}>{t('Could not refresh — retrying')}</div> : null}
             {/* Ruling A140: without Run all the head still names the next step and its cost. */}
             {noRunAll && next && !running && feedback.pending === null ? (
               <div className="ga-hint" title={info?.run?.note || ''}>

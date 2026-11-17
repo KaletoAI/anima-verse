@@ -453,7 +453,7 @@ function HairstyleDetail({ character, entry, built, onChanged, onRunEnded, onOpe
   const { toast } = useToast()
   const enc = encodeURIComponent(character)
   const itemId = entry.id
-  const { info, startPoll } = useGarment<HairDetail>(
+  const { info, error: pollError, startPoll } = useGarment<HairDetail>(
     `/characters/${enc}/hair?item_id=${encodeURIComponent(itemId)}`)
   const { feedback, start, cancel } = useGarmentRun(character, itemId, info, startPoll)
   const [posting, setPosting] = useState(false)
@@ -558,7 +558,10 @@ function HairstyleDetail({ character, entry, built, onChanged, onRunEnded, onOpe
   const focus = useMemo(() => (pivot ? { center: [pivot[0], pivot[1] - 0.04, pivot[2] - 0.02] as Vec3,
     radius: 0.24, side } : null), [pivot, side])
 
-  if (!info) return <div className="ga-hint">{t('Loading…')}</div>
+  // A failed poll keeps the shown state and polls on; it only says so, with the error as the hover.
+  const pollNote = pollError
+    ? <span className="ga-hint" title={pollError}>{t('Could not refresh — retrying')}</span> : null
+  if (!info) return <div className="ga-hint">{t('Loading…')}{pollNote ? <> {pollNote}</> : null}</div>
   if (!info.humanoid) return <div className="ga-hint">{t('Hairstyles are for humanoid characters only.')}</div>
 
   const mode: HairMode = (HAIR_MODES as string[]).includes(info.method) ? info.method as HairMode : 'hairdeck'
@@ -636,6 +639,7 @@ function HairstyleDetail({ character, entry, built, onChanged, onRunEnded, onOpe
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', minHeight: 30 }}>
         <strong style={{ fontSize: 14 }}>{title}</strong>
         {entry.worn ? <span className="ga-hint">{t('Worn')}</span> : null}
+        {pollNote}
         {actions.runAll && info.pipeline ? (
           <>
             <RunButton feedback={feedback} slot="all" primary

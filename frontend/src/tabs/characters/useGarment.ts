@@ -7,7 +7,8 @@
  * as useBaseBody: one load, then a 3 s tick while a step runs (no give-up —
  * an edit may wait minutes in the GPU queue; after 40 ticks the tick slows
  * down), stopped when nothing runs, on unmount and when the URL changes
- * (another character or item; null = nothing to load).
+ * (another character or item; null = nothing to load). A failed GET keeps the
+ * last answer, reports `error` and polls on (`garmentPollAnswer`).
  */
 import type { CpuProgress } from '../../lib/cpuProgress'
 import type { UseUndoState } from './refusedAttemptsModel'
@@ -881,8 +882,22 @@ export const garmentRunning = (d: { garment?: GarmentInfo | null } | null | unde
 export const garmentChecking = (d: { garment?: GarmentInfo | null } | null | undefined) =>
   !!d?.garment?.regate_checking?.length
 
+/** One poll answer of useGarment → what changes. An answer replaces the shown info and goes on only while a
+ *  step runs or images are re-gated. A FAILED GET (`info` undefined = keep the last good answer) keeps polling at
+ *  the usual interval: blanking the dialog would unmount its viewer and live drafts, and stopping would leave it
+ *  stale even though the run goes on — the next answer that arrives decides. */
+export function garmentPollAnswer<T extends { garment?: GarmentInfo | null }>(
+  answer: { data: T | null } | { error: string },
+): { info?: T | null; error: string; again: boolean } {
+  if ('error' in answer) return { error: answer.error || 'request failed', again: true }
+  const d = answer.data
+  return { info: d, error: '', again: garmentRunning(d) || garmentChecking(d) }
+}
+
 export function useGarment<T extends { garment?: GarmentInfo | null }>(url: string | null) {
   const [info, setInfo] = useState<T | null>(null)
+  /** The last poll's failure ('' after an answer): shown beside the kept info, the poll goes on. */
+  const [error, setError] = useState('')
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Poll generation: a tick of a stopped/restarted chain drops its result.
   const pollIdRef = useRef(0)
@@ -900,15 +915,17 @@ export function useGarment<T extends { garment?: GarmentInfo | null }>(url: stri
       let n = 0
       const tick = async () => {
         timerRef.current = null
-        let d: T | null = null
+        let answer: { data: T | null } | { error: string }
         try {
-          d = url ? await apiGet<T>(url) : null
-        } catch {
-          d = null
+          answer = { data: url ? await apiGet<T>(url) : null }
+        } catch (e) {
+          answer = { error: (e as Error)?.message || String(e) }
         }
         if (pollIdRef.current !== id) return
-        setInfo(d)
-        if (!garmentRunning(d) && !garmentChecking(d)) return
+        const next = garmentPollAnswer(answer)
+        if (next.info !== undefined) setInfo(next.info)
+        setError(next.error)
+        if (!next.again) return
         n += 1
         timerRef.current = setTimeout(tick, n >= POLL_SLOW_AFTER ? POLL_SLOW_MS : POLL_MS)
       }
@@ -919,6 +936,7 @@ export function useGarment<T extends { garment?: GarmentInfo | null }>(url: stri
 
   useEffect(() => {
     setInfo(null)
+    setError('')
     if (!url) return stopPoll
     startPoll()
     // Ruling A136: a Build or re-fit of the character started or ended (`figure_build._notify_build_changed`) —
@@ -927,7 +945,7 @@ export function useGarment<T extends { garment?: GarmentInfo | null }>(url: stri
     return () => { off(); stopPoll() }
   }, [url, startPoll, stopPoll])
 
-  return { info, setInfo, startPoll }
+  return { info, error, setInfo, startPoll }
 }
 
 /** One wearer of an item (GET /inventory/items/{id}/wearers): its pending changes, "Build automatically",

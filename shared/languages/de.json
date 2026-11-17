@@ -6519,6 +6519,7 @@
     "Template drape (Blender)": "Vorlagen-Drapierung (Blender)",
     "Working": "Läuft",
     "Writing the model": "Modell wird geschrieben",
-    "~{n} s left": "noch ~{n} s"
+    "~{n} s left": "noch ~{n} s",
+    "Could not refresh — retrying": "Aktualisieren fehlgeschlagen — neuer Versuch läuft"
   }
 }
