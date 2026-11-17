@@ -34,7 +34,7 @@ Fixtures (disjoint axis-aligned squares in z = 0, area = side^2; total 1.0):
     drops them); record: largest_component_share 0.969697,
     largest_component_share_all 0.96, dropped_share 0.01, dropped_components
     10, min_component_share 0.90, crumb_share 0.002, gate_version 2.
-[3] SPLIT on both attempts (fsig "0000000000a2"): 2 calls, MeshGateRefused,
+[3] SPLIT (fsig "0000000000a2"): 1 call (A176), MeshGateRefused,
     record accepted False, share 0.858586, gate_version 2, reason names
     "crumbs left out".
 [4] Stored raw re-judged (fsig "0000000000a3"): raw = JACKET written AFTER
@@ -206,7 +206,7 @@ def main() -> int:
         except gm.MeshGateRefused as e:
             refused = e
         check("refused", refused is not None, True)
-        check("two calls", len(rec.calls), 2)
+        check("one call (A176)", len(rec.calls), 1)
         r = gs.read_record(gs.garment_path("Demo", hid, A2, "prepared").with_suffix(".json"))
         check("record refused", (r.get("accepted"), r.get("gate_version")), (False, 2))
         near("record share 0.85/0.99", r.get("largest_component_share"), 0.85 / 0.99)
