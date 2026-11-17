@@ -138,7 +138,7 @@ def due(character_name: str, item_id: str, view: str, *, profile: Optional[Dict[
         return 0
     base = find_ref_image(character_name, base_body._kind(view), bsig)
     if base is None:
-        return 0
+        return 1   # the base view comes first; its variant is made after it
     return 0 if current(character_name, view, bsig, variant, base) is not None else 1
 
 
