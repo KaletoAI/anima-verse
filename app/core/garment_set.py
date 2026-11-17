@@ -371,6 +371,21 @@ def _slot_order(slot_order: Optional[Sequence[str]]) -> List[str]:
     return list(VALID_PIECE_SLOTS)
 
 
+#: A192: the slots worn in layers on the same part of the body, inner → outer. A piece worn on a later slot of a
+#: stack is OVER a piece worn on an earlier one, whatever its ``covers`` say (a jacket on ``outer`` lies over a
+#: T-shirt on ``top`` although the item only names ``underwear_top`` as covered).
+LAYER_STACKS: Tuple[Tuple[str, ...], ...] = (
+    ("underwear_top", "top", "outer"),
+    ("underwear_bottom", "legs", "bottom", "outer"),
+)
+
+
+def _stacked_over(upper: set, lower: set) -> bool:
+    """Whether a piece worn on ``upper`` lies over one worn on ``lower`` by ``LAYER_STACKS``."""
+    return any(a in stack and b in stack and stack.index(a) > stack.index(b)
+               for stack in LAYER_STACKS for a in upper for b in lower)
+
+
 def layer_order(item_ids: Iterable[str], *, slot_order: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     """The layer order of worn own-mesh pieces (plan
     ``docs/superpowers/plans/2026-11-10-texture-body-reuse-and-layering.md``,
@@ -378,16 +393,19 @@ def layer_order(item_ids: Iterable[str], *, slot_order: Optional[Sequence[str]] 
 
     A piece is OVER another when the slots it is worn on or covers (``slots``
     ∪ ``covers`` ∪ ``partially_covers``) include a slot the other is worn on:
-    a coat that covers ``top`` is over a dress worn on ``top``. Pieces that
+    a coat that covers ``top`` is over a dress worn on ``top`` — or when its
+    worn slot comes later in a layer stack (``LAYER_STACKS``, A192: ``outer``
+    over ``top`` over ``underwear_top``). Pieces that
     are over each other (a top that partially covers ``bottom`` and a
     high-waisted skirt that covers ``top``; any longer cycle too) have no
     order of their own: they are put in SLOT RANK order — the rank of a piece
     is its first worn slot in ``slot_order`` (default
     ``inventory.VALID_PIECE_SLOTS``, which runs from the underwear out;
     unknown slots after every known one), ties by item id — the lower rank
-    inner, and the cycle is reported. Only own-mesh clothing
-    (``garment_kind_of`` == ``clothing``) takes part; unknown ids are
-    skipped.
+    inner, and the cycle is reported. Own-mesh clothing
+    (``garment_kind_of`` == ``clothing``) and template pieces (A192: a draped
+    top is the layer a generated jacket is fitted over) take part; unknown
+    ids are skipped.
 
     Returns ``{order, under, cycles}``: ``order`` inner → outer (a piece
     after every piece it is over; independent pieces by slot rank, item id),
@@ -402,7 +420,7 @@ def layer_order(item_ids: Iterable[str], *, slot_order: Optional[Sequence[str]] 
     items: Dict[str, Dict[str, Any]] = {}
     for item_id in sorted({str(i) for i in item_ids if i}):
         item = get_item(item_id)
-        if garment_kind_of(item) == CLOTHING:
+        if garment_kind_of(item) == CLOTHING or mesh_mode_of(item) == TEMPLATE:
             items[item_id] = item
     ids = sorted(items)
     worn = {i: _worn_slots(items[i]) for i in ids}
@@ -412,7 +430,7 @@ def layer_order(item_ids: Iterable[str], *, slot_order: Optional[Sequence[str]] 
         return min((order_of.get(slot, len(order_of)) for slot in worn[item_id]), default=len(order_of)), item_id
 
     # over[a] = the pieces a is over (direct relation)
-    over = {a: {b for b in ids if b != a and cover[a] & worn[b]} for a in ids}
+    over = {a: {b for b in ids if b != a and (cover[a] & worn[b] or _stacked_over(worn[a], worn[b]))} for a in ids}
 
     def reach(a: str) -> set:
         seen, todo = set(), [a]
@@ -490,14 +508,16 @@ def worn_layers(character_name: str, *, profile: Optional[Dict[str, Any]] = None
     layers = layer_order(_ids(pieces), slot_order=body_slots.piece_slots_for_character(character_name))
     out: Dict[str, Dict[str, List[str]]] = {}
     fitted: Dict[str, bool] = {}
+    template = {i for i in layers["order"] if mesh_mode_of(get_item(i)) == TEMPLATE}
     for item_id, inner in layers["under"].items():
-        if not inner:
+        if not inner or item_id in template:      # a template drapes on the body: it is fitted over nothing here
             continue
         entry: Dict[str, List[str]] = {"over": [], "without": []}
         for other in inner:
             if other not in fitted:
-                fitted[other] = garment_store.accepted_fit(character_name, other, base_model_sha=base_model_sha,
-                                                           profile=profile) is not None
+                # a template piece under it is draped, never painted on: the outer piece goes over its drape
+                fitted[other] = other in template or garment_store.accepted_fit(
+                    character_name, other, base_model_sha=base_model_sha, profile=profile) is not None
             name = str((get_item(other) or {}).get("name") or other)
             entry["over" if fitted[other] else "without"].append(name)
         out[item_id] = entry

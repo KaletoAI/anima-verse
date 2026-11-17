@@ -227,8 +227,14 @@ def _valid(record: Dict[str, Any], *, lsig: str, base_sha: str, base_fit_sha: st
 def plan(character_name: str, item_ids: Iterable[str], *, base_sha: str,
          profile: Optional[Dict[str, Any]] = None, intended: Iterable[str] = (),
          fits: Optional[Dict[str, Tuple[Path, Dict[str, Any]]]] = None,
-         body: str = "", hem: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
+         body: str = "", hem: Optional[Dict[str, Any]] = None,
+         fixed: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Dict[str, Any]]:
     """What to serve per own-mesh piece of an outfit — read only, never builds.
+
+    ``fixed`` (A192): the READY template drapes of the outfit, ``{item: {"source": drape GLB, "fsig": tsig}}`` —
+    layers that are never fitted here (a drape lies on the body and its lower drapes) but that an own-mesh piece
+    over them is pushed over like over any inner piece; they get an entry (``fixed`` True, no ``lsig``) and their
+    file's sha256 is part of the outer piece's ``lsig``.
 
     ``item_ids``: the pieces worn as meshes (with an accepted body fit on ``base_sha``; ``fits`` may hand those
     ``(fit GLB, record)`` in, else ``garment_store.accepted_fit``); ``intended``: every own-mesh piece the outfit
@@ -246,6 +252,7 @@ def plan(character_name: str, item_ids: Iterable[str], *, base_sha: str,
     while pending). A boot fit without a shaft node is ignored."""
     from app.core import body_slots, garment_set, garment_store
     pieces = sorted({str(i) for i in item_ids if i})
+    fixed = {str(i): e for i, e in (fixed or {}).items() if str(i) not in pieces}
     if not pieces or not base_sha:
         return {}
     hem_in: Optional[Dict[str, Any]] = None
@@ -261,10 +268,15 @@ def plan(character_name: str, item_ids: Iterable[str], *, base_sha: str,
             fit = garment_store.accepted_fit(character_name, item_id, base_model_sha=base_sha, profile=profile)
             if fit is not None:
                 fits[item_id] = fit
-    layers = garment_set.layer_order(set(pieces) | {str(i) for i in intended or () if i},
+    layers = garment_set.layer_order(set(pieces) | set(fixed) | {str(i) for i in intended or () if i},
                                      slot_order=body_slots.piece_slots_for_character(character_name))
     out: Dict[str, Dict[str, Any]] = {}
     for item_id in layers["order"] + [p for p in pieces if p not in layers["order"]]:
+        if item_id in fixed:
+            out[item_id] = {"fsig": str(fixed[item_id].get("fsig") or ""), "fit": Path(fixed[item_id]["source"]),
+                            "record": {}, "source": Path(fixed[item_id]["source"]), "low": None, "lsig": "",
+                            "inner": {}, "pending": False, "without": [], "fixed": True}
+            continue
         if item_id not in pieces or item_id not in fits:
             continue
         fit, record = fits[item_id]
@@ -276,7 +288,7 @@ def plan(character_name: str, item_ids: Iterable[str], *, base_sha: str,
         entry: Dict[str, Any] = {
             "fsig": fsig, "fit": fit, "record": record, "source": fit,
             "low": body_low if body_low.is_file() else None, "lsig": "", "inner": {}, "pending": False,
-            "without": [u for u in layers["under"].get(item_id, []) if u not in fits]}
+            "without": [u for u in layers["under"].get(item_id, []) if u not in fits and u not in fixed]}
         below = [u for u in layers["under"].get(item_id, []) if u in out]
         inner = {u: _sha(out[u]["source"]) for u in below}
         mode, plane_m = "", None
@@ -306,7 +318,8 @@ def plan(character_name: str, item_ids: Iterable[str], *, base_sha: str,
 def ensure(character_name: str, item_ids: Iterable[str], *, base_sha: str,
            profile: Optional[Dict[str, Any]] = None, intended: Iterable[str] = (),
            fits: Optional[Dict[str, Tuple[Path, Dict[str, Any]]]] = None,
-           body: str = "", hem: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
+           body: str = "", hem: Optional[Dict[str, Any]] = None,
+           fixed: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Dict[str, Any]]:
     """``plan`` after building every missing layered fit, inner → outer (each build changes the inner sha its
     outer pieces are keyed by, so the plan is taken again after it). A build that fails is logged, remembered
     for its inputs and left ``pending`` (the piece keeps its body fit). Serialised per character. ``body`` and
@@ -317,7 +330,7 @@ def ensure(character_name: str, item_ids: Iterable[str], *, base_sha: str,
     with keyed_lock("garment_layers", character_name):
         tried: set = set()
         current = plan(character_name, pieces, base_sha=base_sha, profile=profile, intended=intended, fits=fits,
-                       body=body, hem=hem)
+                       body=body, hem=hem, fixed=fixed)
         _log_cycles(character_name, pieces, intended)
         for _ in range(len(current) + 1):
             todo = next((i for i, e in current.items() if e["pending"] and i not in tried
@@ -335,7 +348,7 @@ def ensure(character_name: str, item_ids: Iterable[str], *, base_sha: str,
                 with _lock:
                     _failed[_failure_key(character_name, todo, entry, base_sha)] = str(e) or type(e).__name__
             current = plan(character_name, pieces, base_sha=base_sha, profile=profile, intended=intended,
-                           fits=fits, body=body, hem=hem)
+                           fits=fits, body=body, hem=hem, fixed=fixed)
         return current
 
 

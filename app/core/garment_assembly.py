@@ -403,13 +403,15 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
                 and outfit_options.hem_eligible(boot["record"], trousers["record"])[0]:
             hem = {"boot": boot["item_id"], "fit": boot["fit"], "trousers": trousers_id,
                    "mode": outfit_options.boot_hem(profile)}
-    if bare_meta is not None and (len(layered) > 1 or hem is not None):
+    # A192: a ready template drape is a layer an own-mesh piece over it is fitted over (``garment_layers`` fixed)
+    drapes = {g["item_id"]: {"source": g["fit"], "fsig": g["fsig"]} for g in out if g.get("template")}
+    if bare_meta is not None and layered and (len(layered) > 1 or hem is not None or drapes):
         from app.core import garment_layers
         from app.core.base_body import mesh_items_intended
         args = dict(base_sha=str(bare_meta.get("body_sha256") or "") if on_body else base[1], profile=profile,
                     intended=mesh_items_intended(bare_meta),
                     fits={g["item_id"]: (g["fit"], g["record"]) for g in layered},
-                    **({"body": body_id} if on_body else {}), hem=hem)
+                    **({"body": body_id} if on_body else {}), hem=hem, fixed=drapes)
         items = [g["item_id"] for g in layered]
         layers = (garment_layers.ensure if build_layers else garment_layers.plan)(character_name, items, **args)
         for g in layered:
@@ -845,16 +847,31 @@ def _cut_whole_boot_legs(blob: bytes, clothing: List[Dict[str, Any]], tier: str)
     return blob, stats
 
 
-def _template_uppers(grafted: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-    """Ruling A144: per template piece, the template pieces of a higher layer rank worn over it (a jacket over a
-    top) — their cover hides the lower piece's faces under them (``body_cover.covered_under``)."""
+def _uppers(grafted: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """Per grafted piece, the pieces worn OVER it whose cover hides its faces under them
+    (``body_cover.covered_under``): the template pieces of a higher layer rank over a template piece (Ruling A144,
+    a jacket over a top), and — A192 — every piece layered over it (its ``over.items``, ``garment_layers``: an
+    own-mesh jacket over a draped top, jeans over a shell)."""
     from app.core import garment_template
+    by_id = {g["item_id"]: g for g in grafted}
     tpl = [g for g in grafted if g.get("template")]
 
     def rank(g: Dict[str, Any]) -> int:
         kind = str(((g.get("record") or {}).get("params") or {}).get("kind") or "")
         return garment_template.LAYER_RANK.get(kind, 0)
-    return {g["item_id"]: [u for u in tpl if rank(u) > rank(g)] for g in tpl if any(rank(u) > rank(g) for u in tpl)}
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for g in tpl:
+        for u in tpl:
+            if rank(u) > rank(g):
+                out.setdefault(g["item_id"], []).append(u)
+    for g in grafted:
+        over = g.get("over") or {}
+        if over.get("pending"):
+            continue
+        for inner in over.get("items") or []:
+            if inner in by_id and g not in out.setdefault(inner, []):
+                out[inner].append(g)
+    return out
 
 
 def _hide_under_upper(mesh: Any, body_blob: bytes, uppers: List[Dict[str, Any]], tier: str) -> Dict[str, Any]:
@@ -971,7 +988,7 @@ def _build(character_name: str, directory: Path, bare: Path,
     # A182: a whole boot's leg goes first, then what the clothing still covers
     blob, leg_cut = _cut_whole_boot_legs(blob, [g for g in grafted if g["kind"] == CLOTHING], tier)
     blob, cover = _hide_covered_body(blob, [g for g in grafted if g["kind"] == CLOTHING], tier)
-    under = _template_uppers(grafted)
+    under = _uppers(grafted)
     scalp_tints: Dict[str, Any] = {}
     for garment in grafted:
         source = _source(garment, tier).read_bytes()
