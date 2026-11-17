@@ -212,6 +212,9 @@ const CHIP: CSSProperties = {
 }
 
 /** Ruling A134: the offer beside a stale fit whose kept mesh only needs a CPU fit on this body. */
+/** A174: the piece's dialog while the character's current base body is not built. */
+const BASE_MISSING_TEXT = 'The base body for the current look is not built yet — build it first: Figure tab → Build base body. Then Re-fit runs on the CPU.'
+const BASE_MISSING_TITLE = 'The profile picture or the body changed, so the character stands on a new base body. Until it is built, no piece can be fitted, re-fitted or rendered on it.'
 const REFIT_OFFER_TEXT = 'the current mesh keeps working: it is fitted on this body on the CPU (0 hub jobs) — now or at the next Build'
 const REFIT_OFFER_TITLE = 'The mesh made for the earlier body is fitted onto the current one; no images or mesh are made again.'
 const REGENERATE_OPTIONAL_TITLE = 'Optional: renders new images and a new mesh on the current body — a closer fit where the body shape changed a lot. The current mesh stays in use until the new one is fitted.'
@@ -1017,7 +1020,13 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
       <div className="ga-garment-dialog-body">
         <div className="ga-garment-dialog-col">
           {/* A fit-settings change alone is shown (with its CPU-only Re-fit) in the fit settings beside the viewer. */}
-          {garment?.refit_stopped ? (
+          {garment && garment.base_ready === false ? (
+            // A174: no base body for the current identity — no Re-fit / Regenerate offer, they would only refuse.
+            <div style={{ ...ROW, gap: 8, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--warning, #d29922)' }}
+              data-garment-base-missing="">
+              <span style={WARN_STYLE} title={t(BASE_MISSING_TITLE)}>{t(BASE_MISSING_TEXT)}</span>
+            </div>
+          ) : garment?.refit_stopped ? (
             <RefitStoppedOffer character={character} itemId={itemId} stopped={garment.refit_stopped}
               regenerate={garment.regenerate} feedback={feedback} busy={busy} onRun={onRun}
               onChanged={() => startPoll(0)} />

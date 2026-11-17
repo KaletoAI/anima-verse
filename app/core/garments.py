@@ -5471,12 +5471,17 @@ def cpu_refit_suffices(character_name: str, item_id: str, *, profile: Optional[D
 
 
 def _refit_offer(character_name: str, item_id: str, kind: str, method: str, fsig: Optional[str],
-                 steps: Dict[str, Any], stale: List[str], profile: Dict[str, Any]) -> Dict[str, Any]:
+                 steps: Dict[str, Any], stale: List[str], profile: Dict[str, Any],
+                 base_ready: bool = True) -> Dict[str, Any]:
     """``{cpu_refit, regenerate}`` of ``garment_info`` (Ruling A134): ``cpu_refit`` True when the current fsig has
     no accepted fit on this body and the plain run is a CPU fit only (``cpu_refit_suffices``); ``regenerate``
     ``{step, hub_jobs}`` — the OPTIONAL forced run of the whole chain (``run_estimate(from_step=…)``) offered
-    beside a stale fit — else None."""
+    beside a stale fit — else None. A174: without a current base model (``base_ready`` False — the base body of
+    the character's current identity is not built yet) neither is offered: nothing can be fitted or rendered on it
+    (Kira's Black Blazer offered "Re-fit now", which then refused with "Base body images missing")."""
     from app.core import garment_store as gs
+    if not base_ready:
+        return {"cpu_refit": False, "regenerate": None}
     fitted = bool(fsig and (steps.get("fit") or {}).get("status") == "accepted")
     cpu = bool(fsig and not fitted and cpu_refit_suffices(character_name, item_id, profile=profile))
     regenerate = None
@@ -5728,7 +5733,8 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
                      "registration": {"shift": reg.get("shift_abs"), "scale": reg.get("scale")} if reg else None,
                      "first_step": next(iter(gs.steps_for(kind, method)), None),
                      "created_at": fit_record.get("created_at")}
-    refit_offer = _refit_offer(character_name, item_id, kind, method, fsig, steps, stale, profile)
+    refit_offer = _refit_offer(character_name, item_id, kind, method, fsig, steps, stale, profile,
+                               base_ready=bool(base[1]))
     refit_stopped = refit_stopped_info(character_name, item_id, fsig, base[1] or "", profile) if fsig else None
     status = gs.status(character_name, item_id)
     queue = queue_state(character_name, item_id)
@@ -5762,6 +5768,9 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
         # Ruling A134: the fit is due but a CPU re-fit of the kept mesh on this body suffices (``cpu_refit``, the
         # next Build does it, 0 hub jobs); ``regenerate`` is the optional full re-make and its hub jobs.
         **refit_offer,
+        # A174: the base body of the character's current identity is built (its model exists) — else no fit, re-fit
+        # or render of the piece can run; the dialog points to the Figure tab's base body Build instead.
+        "base_ready": bool(base[1]),
         # Ruling A162: the CPU refit was refused and the run stopped before any hub job — keep / accept / new mesh.
         "refit_stopped": refit_stopped,
         # Ruling A46: where each piece-only view comes from (the setting, the reason, what is due).

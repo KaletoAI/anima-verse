@@ -425,6 +425,9 @@ export interface GarmentInfo {
   refit?: GarmentRefit | null
   /** Ruling A134: the fit is due but a CPU fit of the kept mesh on this body suffices (0 hub jobs; the next Build). */
   cpu_refit?: boolean
+  /** A174: the base body of the character's current identity is built — false: nothing can be fitted or rendered
+   *  on it yet (the Figure tab's base body Build comes first). */
+  base_ready?: boolean
   /** Ruling A134: the OPTIONAL forced run of the whole chain from `step` and its hub jobs (null = unknown). */
   regenerate?: { step: string; hub_jobs: number | null } | null
   /** Ruling A162: the CPU refit was refused and the run stopped before any hub job (null/absent otherwise). */
