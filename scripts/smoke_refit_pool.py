@@ -25,7 +25,9 @@ start/end (time.time) in ``report.smoke``; ``raise``: ValueError("smoke refusal"
 after 0.2 s; ``det``: no sleep, no pid (byte-identical across processes).
 
 Fixture per character X, items ``hair_<x>_<n>``: fit record accepted, kind hair, method hairdeck, fit_version 1
-(< FIT_VERSION hair 13: outdated), base_model_sha256 sha(RIGGED), inputs {seed 1, hsig H}; the old fit GLB b"OLD";
+(< the current ``FIT_VERSION['hair']``: outdated), base_model_sha256 sha(RIGGED), inputs {seed 1, hsig H}; the old
+fit GLB b"OLD"; the fsig stub ignores ``swing=`` (the Swing-off fsig = the current one), so
+``swing_default_fits`` lists nothing and only ``outdated_fits`` refits;
 hairdeck_dir(X, item, H)/hair_seed1_nohead.glb = the hair bytes, hair_seed1.glb = b"PROXY".
 
 Expected, derived by hand from the spec:
@@ -52,7 +54,7 @@ Expected, derived by hand from the spec:
     exactly Bea, Cat, Dan (Eli has no work → none), labels "Refit · Bea (2 fits)", "Refit · Cat (2 fits)",
     "Refit · Dan (1 fit)", provider CPU; Dan (3rd with 2 slots) observed pending → running → completed;
     every row completed at the end; /queue/status (the route) listed rows with provider CPU while they ran, at
-    least one running AND one pending at the same poll; active_tasks empty afterwards. Records fit_version 13.
+    least one running AND one pending at the same poll; active_tasks empty afterwards. Records carry the current FIT_VERSION['hair'].
 [4] Failure: Fay (mode raise) and Gus (timed) in one sweep → Fay's fit refused (old fit kept, its failure
     recorded with "smoke refusal"), Gus's accepted. Hal (mode crash) and Ida (timed, in flight while Hal's worker
     dies) → Ida accepted (its call ran once more on its own), Hal refused with "crashed"; afterwards a probe
@@ -228,7 +230,7 @@ def main() -> int:
         base_body._snapshot_base_model = lambda name, bsig: {"rigged": RIGGED}
         charmod.get_character_profile = lambda name: {}
         FSIG = {}
-        gs.garment_fsig = lambda name, item_id, profile=None: FSIG[item_id]
+        gs.garment_fsig = lambda name, item_id, profile=None, swing=None: FSIG[item_id]
         gs.garment_method = lambda name, item_id, profile=None: gs.HAIRDECK
         gs.garment_hsig = lambda name, item_id, profile=None: H
         garments._stored_seeds = lambda name, item_id, hsig: [1]
@@ -330,7 +332,9 @@ def main() -> int:
         check("pool used", refit_pool._pool is not None, True)
         check("same files", sorted(f2), sorted(f1))
         check("same bytes", [k for k in f1 if f1[k] != f2.get(k)], [])
-        check("fit_version 13", [record("Ann", i).get("fit_version") for i in ("hair_ann_1", "hair_ann_2")], [13, 13])
+        hair_v = garment_fit.FIT_VERSION["hair"]
+        check(f"fit_version {hair_v} (current)", [record("Ann", i).get("fit_version") for i in ("hair_ann_1", "hair_ann_2")],
+              [hair_v, hair_v])
         check("no temp file left", [p.name for p in gs._root("Ann").rglob(".*.refit.tmp")], [])
 
         coat, slip = _tube(0.1080, 0.80, 1.40), _tube(0.1125, 1.00, 1.40)
