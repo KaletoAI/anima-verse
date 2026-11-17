@@ -33,11 +33,14 @@ shares a serialize group with the backend would deadlock). The two places:
 
 Shortening: the LLM task ``image_prompt_shorten`` (template
 ``tasks/image_prompt_shorten.md``, unrouted → ``image_prompt``) condenses the
-prompt; its answer must keep every reference token of the prompt. A failed,
+prompt; its answer must keep every reference token of the prompt and every
+KEPT word the caller names (``keep``: the LoRA trigger words ``generate()``
+prepended — a LoRA rendered without its trigger loses its effect). A failed,
 empty, refused or token-dropping answer falls back to the cut; an answer
 still over the limit is cut too. The cut ends at the last comma or sentence
 boundary at or under the limit (else the last word boundary, else a hard
-cut), and never inside a reference token such as ``<Picture 1>``.
+cut), and never inside a reference token such as ``<Picture 1>`` or a kept
+word.
 """
 from __future__ import annotations
 
@@ -48,7 +51,7 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote
 
 from app.core.log import get_logger
@@ -188,26 +191,43 @@ def resolve_limit(backend: Any) -> Optional[int]:
 
 # ── the cut ──────────────────────────────────────────────────────────────
 
-def cut_to_limit(text: str, limit: int) -> str:
+def _kept_spans(text: str, keep: Iterable[str]) -> List[Tuple[int, int]]:
+    """``(start, end)`` of every occurrence of a kept word in ``text`` (case-insensitive)."""
+    spans = []
+    lowered = text.lower()
+    for word in keep:
+        word = str(word or "").strip().lower()
+        if not word:
+            continue
+        start = lowered.find(word)
+        while start >= 0:
+            spans.append((start, start + len(word)))
+            start = lowered.find(word, start + 1)
+    return spans
+
+
+def cut_to_limit(text: str, limit: int, keep: Iterable[str] = ()) -> str:
     """``text`` cut to at most ``limit`` characters: at the last comma or
     sentence boundary that keeps it within the limit, else at the last word
-    boundary, else hard — and never inside a reference token."""
+    boundary, else hard — and never inside a reference token or a ``keep``
+    word."""
     if limit <= 0 or len(text) <= limit:
         return text
     end = 0
     for m in _BOUNDARY.finditer(text):
-        keep = m.start() + (1 if text[m.start()] in ".!?" else 0)
-        if keep > limit:
+        stop_at = m.start() + (1 if text[m.start()] in ".!?" else 0)
+        if stop_at > limit:
             break
-        end = keep
+        end = stop_at
     if end < limit * _MIN_BOUNDARY_SHARE:
         space = text.rfind(" ", 0, limit + 1)
         end = space if space >= limit * _MIN_BOUNDARY_SHARE else limit
-    for m in _PROTECTED.finditer(text):
-        if m.start() < end < m.end():
-            end = m.start()
+    spans = sorted([(m.start(), m.end()) for m in _PROTECTED.finditer(text)] + _kept_spans(text, keep))
+    for start, stop in spans:
+        if start < end < stop:
+            end = start
             break
-        if m.start() >= end:
+        if start >= end:
             break
     out = text[:end].rstrip(" \t\n,;:-")
     return out or text[:limit]
@@ -251,18 +271,22 @@ def _clean_answer(answer: str) -> str:
     return text
 
 
-def _missing_references(original: str, answer: str) -> list:
-    """Reference tokens of ``original`` the answer no longer contains."""
+def _missing_references(original: str, answer: str, keep: Iterable[str] = ()) -> list:
+    """Reference tokens — and ``keep`` words — of ``original`` the answer no longer contains."""
     have = {re.sub(r"\s+", " ", m.group(0)).lower() for m in REFERENCE_TOKEN.finditer(answer)}
     want = []
     for m in REFERENCE_TOKEN.finditer(original):
         token = re.sub(r"\s+", " ", m.group(0)).lower()
         if token not in have and token not in want:
             want.append(token)
+    for word in keep:
+        word = str(word or "").strip().lower()
+        if word and word in original.lower() and word not in answer.lower() and word not in want:
+            want.append(word)
     return want
 
 
-def _llm_shorten(prompt: str, limit: int, character: str) -> Optional[str]:
+def _llm_shorten(prompt: str, limit: int, character: str, keep: Iterable[str] = ()) -> Optional[str]:
     """One LLM pass; the cleaned answer, or None when it is unusable."""
     try:
         from app.core.llm_router import llm_call
@@ -283,40 +307,51 @@ def _llm_shorten(prompt: str, limit: int, character: str) -> Optional[str]:
         logger.warning("Prompt shortening: LLM answer too short (%d chars for a limit "
                        "of %d) — looks like a refusal; cutting instead", len(answer), limit)
         return None
-    missing = _missing_references(prompt, answer)
+    missing = _missing_references(prompt, answer, keep)
     if missing:
-        logger.warning("Prompt shortening: LLM answer dropped reference wording %s "
+        logger.warning("Prompt shortening: LLM answer dropped reference wording or trigger words %s "
                        "— cutting instead", missing)
         return None
     return answer
 
 
+#: The kept words of a bounced prompt (``PromptOverLimit``), by ``cache_key``: the shortening on the caller's
+#: thread (``run_on_backend_channel`` → ``shorten``) finds them without that caller passing them.
+_bounced_keep: "OrderedDict[str, Tuple[str, ...]]" = OrderedDict()
+
+
 def shorten(prompt: str, limit: int, *, character: str = "",
-            use_llm: bool = True) -> Tuple[str, str]:
+            use_llm: bool = True, keep: Optional[Iterable[str]] = None) -> Tuple[str, str]:
     """``(text, method)`` with ``len(text) <= limit``.
 
     method: ``none`` (fits already), ``llm`` (the LLM's condensed prompt),
     ``cut`` (the cut — of the LLM answer when it was still too long, else of
     the original). Blocking when ``use_llm``: call it where no GPU slot is
-    held. LLM results are cached by sha(prompt + limit)."""
+    held. LLM results are cached by sha(prompt + limit). ``keep``: words the
+    result must still contain; None = the ones the bounce of this very prompt
+    recorded (``PromptOverLimit``), if any."""
     if not limit or len(prompt) <= limit:
         return prompt, "none"
     key = cache_key(prompt, limit)
+    if keep is None:
+        with _cache_lock:
+            keep = _bounced_keep.get(key, ())
+    keep = tuple(keep)
     if use_llm:
         hit = _cache_get(key)
         if hit is not None:
             return hit
-        answer = _llm_shorten(prompt, limit, character)
+        answer = _llm_shorten(prompt, limit, character, keep)
         if answer is not None:
             if len(answer) <= limit:
                 _cache_put(key, answer, "llm")
                 return answer, "llm"
             logger.info("Prompt shortening: LLM answer still %d chars over a limit of %d "
                         "— cutting it", len(answer), limit)
-            text = cut_to_limit(answer, limit)
+            text = cut_to_limit(answer, limit, keep)
             _cache_put(key, text, "cut")
             return text, "cut"
-    return cut_to_limit(prompt, limit), "cut"
+    return cut_to_limit(prompt, limit, keep), "cut"
 
 
 # ── the channel bounce ───────────────────────────────────────────────────
@@ -345,12 +380,19 @@ class PromptOverLimit(BaseException):
     wrapper in ``run_on_backend_channel`` catches it and shortens outside the
     slot."""
 
-    def __init__(self, prompt: str, limit: int, character: str):
+    def __init__(self, prompt: str, limit: int, character: str, keep: Iterable[str] = ()):
         super().__init__(f"prompt of {len(prompt)} chars over a limit of {limit}")
         self.prompt = prompt
         self.limit = limit
         self.character = character
+        self.keep = tuple(keep)
         self.key = cache_key(prompt, limit)
+        if self.keep:
+            with _cache_lock:
+                _bounced_keep[self.key] = self.keep
+                _bounced_keep.move_to_end(self.key)
+                while len(_bounced_keep) > CACHE_SIZE:
+                    _bounced_keep.popitem(last=False)
 
 
 @dataclass
@@ -361,9 +403,10 @@ class FitResult:
     unshortened: str
 
 
-def fit_prompt(backend: Any, prompt: str, *, character: str = "") -> FitResult:
+def fit_prompt(backend: Any, prompt: str, *, character: str = "", keep: Iterable[str] = ()) -> FitResult:
     """The prompt ``backend`` gets sent — called by ``generate()`` on the
-    final prompt. No limit, or within it: the prompt unchanged."""
+    final prompt. No limit, or within it: the prompt unchanged. ``keep``:
+    words a shortened prompt must still contain (the LoRA trigger words)."""
     if not prompt:
         return FitResult(prompt, None, "none", prompt)
     ctx = CHANNEL.get()
@@ -377,11 +420,11 @@ def fit_prompt(backend: Any, prompt: str, *, character: str = "") -> FitResult:
             decided = _cache_get(key)
         if decided is None:
             if ctx.may_bounce:
-                raise PromptOverLimit(prompt, limit, character)
-            decided = (cut_to_limit(prompt, limit), "cut")
+                raise PromptOverLimit(prompt, limit, character, keep)
+            decided = (cut_to_limit(prompt, limit, keep), "cut")
         text, method = decided
     else:
-        text, method = shorten(prompt, limit, character=character)
+        text, method = shorten(prompt, limit, character=character, keep=keep)
     logger.info("%s: prompt shortened %d -> %d chars (limit %d, %s)",
                 getattr(backend, "name", "?"), len(prompt), len(text), limit, method)
     return FitResult(text, limit, method, prompt)

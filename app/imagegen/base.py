@@ -8,7 +8,7 @@ import re
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 
@@ -623,26 +623,28 @@ class ImageBackend(ABC):
         """Checks whether the API is reachable. Sets self.available."""
         pass
 
-    def _inject_lora_triggers(self, prompt: str, params: Dict[str, Any]) -> str:
+    def _inject_lora_triggers(self, prompt: str, params: Dict[str, Any]) -> Tuple[str, List[str]]:
         """Prepends the activation words of the active LoRAs to the prompt
-        (from the instance-owned lora_library.json). Cloud
-        backends without LoRAs (lora_inputs popped) get nothing."""
+        (from the instance-owned lora_library.json): ``(prompt, words)`` —
+        the words go on to the prompt limit, which keeps them in a shortened
+        prompt. Cloud backends without LoRAs (lora_inputs popped) get
+        nothing."""
         try:
             names = [str(l.get("name")).strip()
                      for l in (params.get("lora_inputs") or params.get("loras") or [])
                      if isinstance(l, dict) and (l.get("name") or "").strip()
                      and l.get("name") != "None"]
             if not names:
-                return prompt
+                return prompt, []
             from app.core.config import get_lora_trigger_words
             words = get_lora_trigger_words(names)
             if not words:
-                return prompt
+                return prompt, []
             logger.info("%s: LoRA trigger words added: %s", self.name, ", ".join(words))
-            return ", ".join(words) + ", " + prompt
+            return ", ".join(words) + ", " + prompt, [str(w) for w in words]
         except Exception as e:
             logger.debug("LoRA trigger injection failed: %s", e)
-            return prompt
+            return prompt, []
 
     def generate(self, prompt: str, negative_prompt: str, params: Dict[str, Any],
                  log_meta: Optional[Dict[str, Any]] = None) -> List[bytes]:
@@ -666,7 +668,7 @@ class ImageBackend(ABC):
         import time as _time
         # Include the LoRA activation words (per-world repository) centrally in
         # the prompt — applies to ALL backends/paths as soon as a LoRA is active.
-        final_prompt = self._inject_lora_triggers(prompt, params)
+        final_prompt, trigger_words = self._inject_lora_triggers(prompt, params)
 
         # A backend that addresses its reference images its own way (P-H3:
         # "<Picture N>") gets the ordinal wording rewritten — the ONE place
@@ -707,7 +709,7 @@ class ImageBackend(ABC):
         # the prompt stays byte-identical.
         from app.imagegen.prompt_limit import fit_prompt
         fit = fit_prompt(self, final_prompt,
-                         character=str((log_meta or {}).get("agent_name") or ""))
+                         character=str((log_meta or {}).get("agent_name") or ""), keep=trigger_words)
         final_prompt = fit.prompt
 
         _t0 = _time.time()

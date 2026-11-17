@@ -68,6 +68,21 @@ I) Stub backend type 2 (video, no manual limit, hub says 1500 for its model):
    _generate gets the 1300 chars, method "llm".
 J) A second pass without a decision (cache cleared, may_bounce False) cuts in
    place: 1487 chars, no LLM call.
+K) LoRA trigger words are kept (review 09#8). ``get_lora_trigger_words`` answers
+   ["zxq-style"] for the LoRA "k.safetensors"; backend manual 1500; the caller's
+   prompt P4 = P with "seg " -> "sek " (1551, a new cache key). generate()
+   prepends "zxq-style, " -> the final prompt has 9 + 2 + 1551 = 1562 chars.
+   The LLM answers ANSWER (1200 chars, keeps "<Picture 1>", lacks "zxq-style")
+   -> rejected -> the cut of the final prompt: HEAD now starts at 11, its comma
+   at 58, the comma after SEK_j at 58 + 32j; largest j with 58 + 32j <= 1500 is
+   45 -> 1498 chars, starting "zxq-style, Keep the person", ending "sek 45 with
+   plain filler texts", method "cut" — through the bounce, whose shortening on
+   the caller's thread is handed no keep words by its caller (service.py).
+   (Fails on 1dbf8d3af: _generate got the 1200-char answer without the trigger.)
+   The cut alone: cut_to_limit("one, my trigger word here and more text", 12)
+   -> comma boundary at 3 < 6 (half the limit) -> last space at or under 12 is
+   7 -> "one, my"; with keep ["my trigger word"] (span 5..20) the end 7 lies
+   inside it -> moved to 5 -> "one, " stripped -> "one".
 """
 import json
 import os
@@ -368,6 +383,27 @@ finally:
 check("1487 chars, method cut, no LLM call",
       (len(fit.prompt), fit.method, llm["calls"]) == (1487, "cut", []),
       (len(fit.prompt), fit.method, llm["calls"]))
+
+print("K) LoRA trigger words survive the shortening")
+reset()
+import app.core.config as config_mod  # noqa: E402
+config_mod.get_lora_trigger_words = lambda names: ["zxq-style"] if "k.safetensors" in names else []
+trig = StubImageBackend("Trig", "stub_image", "SMOKE_PL_K_", manual=1500, model="", url="")
+P4 = P.replace("seg ", "sek ")
+llm["answer"] = ANSWER
+run_on_channel(trig, lambda: trig.generate(P4, "", {"loras": [{"name": "k.safetensors"}]},
+                                           log_meta={"agent_name": "Demo"}),
+               task_type="image_generation", agent_name="Demo")
+sent = trig.sent[0] if trig.sent else ""
+check("the LLM was asked once", llm["calls"] == ["image_prompt_shorten"], llm["calls"])
+check("the cut was sent: 1498 chars", len(sent) == 1498, len(sent))
+check("it starts with the trigger word", sent.startswith("zxq-style, Keep the person"), sent[:30])
+check("it ends with SEK 45", sent.endswith("sek 45 with plain filler texts"), sent[-30:])
+check("jsonl: method cut", last_row().get("shorten_method") == "cut", last_row().get("shorten_method"))
+T = "one, my trigger word here and more text"
+check("cut without keep", pl.cut_to_limit(T, 12) == "one, my", pl.cut_to_limit(T, 12))
+check("cut never ends inside a kept word", pl.cut_to_limit(T, 12, ["my trigger word"]) == "one",
+      pl.cut_to_limit(T, 12, ["my trigger word"]))
 
 print()
 if failures:
