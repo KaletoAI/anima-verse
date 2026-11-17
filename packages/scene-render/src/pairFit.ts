@@ -22,6 +22,10 @@
  * bounds (`RUNTIME_FIT`: ±5 cm, ±10°) — one whole loop, from the first wrap of the clip phase to the next, at least
  * `FIT_MIN_SAMPLES` samples — and keeps
  * that fix for the interaction. The stored clip offset stays the coarse one; every pair gets its own fine one.
+ * THE SLICED SOLVE (`createPairFit(…, CLIENT_PAIR_FIT)`, the 3D client): the solve then runs over at most
+ * `maxSamples` samples spread over the loop and does at most `sliceMs` of work per observed frame (`solvePairFixSteps`
+ * yields after every sample's bend), so no frame stalls; the fix lands some frames after the wrap, the same fix the
+ * unsliced solve gives on those samples. Until then the total stays the zero fix and nothing is sampled.
  *
  * THE FOLLOW (`pairFitObserve`): per frame a small extra shift of the entering figure (its pelvis, the whole body
  * rigidly) that keeps the tip on the channel axis through the stroke. The clip LOOPS, so the correction is learnt per
@@ -171,11 +175,17 @@ export function fixRoot(fix: PairFix, pivot: Vec3, position: Vec3): { position: 
   return { position: fixPoint(fix, pivot, position), quaternion: [fix.turn[0] * s, fix.turn[1] * s, fix.turn[2] * s, Math.cos(h)] }
 }
 
-function residuals(samples: readonly FitSample[], fix: PairFix, lambda: number, W: number,
-  bend: BendLimits | null = null, posture = false): number[] {
+/** The residual vector of `fix` (module docstring THE SOLVE). A generator that yields after every sample's bend — the
+ *  expensive part — so a sliced solve (THE RUNTIME FIT) can stop between samples; `solvePairFix` runs it through. */
+function* residuals(samples: readonly FitSample[], fix: PairFix, lambda: number, W: number,
+  bend: BendLimits | null = null, posture = false): Generator<void, number[], void> {
   const out: number[] = []
   let e = -1, min = Infinity
-  const moved = samples.map((x) => (bend ? bendSample(fixSample(x, fix), bend).sample : fixSample(x, fix)))
+  const moved: FitSample[] = []
+  for (const x of samples) {
+    moved.push(bend ? bendSample(fixSample(x, fix), bend).sample : fixSample(x, fix))
+    yield
+  }
   moved.forEach((x, i) => { const s = dot(sub(x.tip, x.o), x.u); if (s < min) { min = s; e = i } })
   for (const x of moved) {
     const lat = lateral(sub(x.tip, x.o), x.u)
@@ -223,6 +233,13 @@ function solveLinear(A: number[][], b: number[]): number[] | null {
 
 /** The fix for the entering figure (module docstring THE SOLVE); NO_FIX without samples. */
 export function solvePairFix(samples: readonly FitSample[], opts: FitOptions): PairFix {
+  const steps = solvePairFixSteps(samples, opts)
+  for (;;) { const r = steps.next(); if (r.done) return r.value }
+}
+
+/** `solvePairFix` as a resumable computation: every `next()` does at most one sample's residual work, the last one
+ *  returns the fix — the same numbers in the same order, so the result is identical however it is sliced. */
+export function* solvePairFixSteps(samples: readonly FitSample[], opts: FitOptions): Generator<void, PairFix, void> {
   if (!samples.length) return NO_FIX
   const lambda = opts.angleWeightM ?? FIT_ANGLE_WEIGHT_M
   const W = (opts.entryWeight ?? CONTACT_ENTRY_WEIGHT) * samples.length
@@ -239,14 +256,14 @@ export function solvePairFix(samples: readonly FitSample[], opts: FitOptions): P
   let x = new Array(n).fill(0)
   const cost = (r: number[]) => r.reduce((a, v) => a + v * v, 0)
   const bend = opts.bend ?? null
-  let r = residuals(samples, toFix(x), lambda, W, bend, posture)
+  let r = yield* residuals(samples, toFix(x), lambda, W, bend, posture)
   let c = cost(r)
   const iterations = opts.iterations ?? 20
   for (let it = 0; it < iterations; it++) {
     const J: number[][] = []
     for (let k = 0; k < n; k++) {
       const xp = x.slice(); xp[k] += 1e-6
-      const rp = residuals(samples, toFix(xp), lambda, W, bend, posture)
+      const rp = yield* residuals(samples, toFix(xp), lambda, W, bend, posture)
       J.push(rp.map((v, i) => (v - r[i]) / 1e-6))
     }
     const A = Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_, j) => {
@@ -260,7 +277,7 @@ export function solvePairFix(samples: readonly FitSample[], opts: FitOptions): P
     let t = 1, accepted = false
     for (let ls = 0; ls < 8; ls++) {
       const xn = project(x.map((v, i) => v + t * step[i]))
-      const rn = residuals(samples, toFix(xn), lambda, W, bend, posture)
+      const rn = yield* residuals(samples, toFix(xn), lambda, W, bend, posture)
       const cn = cost(rn)
       if (cn < c) { const moved = Math.max(...xn.map((v, i) => Math.abs(v - x[i]))); x = xn; r = rn; c = cn; accepted = moved > 1e-7; break }
       t /= 2
@@ -338,12 +355,55 @@ export interface PairFitState {
   /** Ruling A150: the place type (turn cap) and, since the fit, the support change per frame (mm, + = float). */
   group: string | null
   supportMm: number[]
+  /** THE SLICED SOLVE (`PairFitRuntime`): the solve work allowed per observed frame (ms; 0 = the whole solve in the
+   *  wrap frame). A caller may lower it frame by frame to share one frame budget between several fits. */
+  sliceMs: number
+  /** At most this many samples of the loop enter the solve, evenly spaced (0 = all). */
+  maxSamples: number
+  /** Whether `lateralMm` / `bendDeg` / `supportMm` are recorded (the preview's readout). */
+  evidence: boolean
+  /** The solve in progress while sliced (the phase stays 'collect' until it returns). */
+  solver: Generator<void, PairFix, void> | null
 }
 
-export function createPairFit(bend: BendLimits | null = null, group: string | null = null): PairFitState {
+/** How a fit runs (module docstring THE RUNTIME FIT). The defaults are the Library preview's: the solve over every
+ *  sample in the wrap frame and the evidence recorded for its readout. */
+export interface PairFitRuntime { sliceMs?: number; maxSamples?: number; evidence?: boolean }
+
+/** THE SLICED SOLVE — the 3D client's settings. A whole-loop solve in the wrap frame costs about 8 ms per sample
+ *  (Gauss–Newton: up to 20 iterations × (6 Jacobian + ≤ 8 line-search) residual passes, each bending every sample's
+ *  chain — 1 s at 120 samples, 4 s at 600), so the client:
+ *  - solves over at most 32 samples evenly spaced over the loop: more than the follow's `FOLLOW.bins` (24) phase bins,
+ *    so the stroke keeps at least the resolution the follow corrects with (a 2 s loop at 60 fps is 120 frames of a
+ *    smooth stroke; the entry frame moves by at most half a step, ≤ 1/64 of the loop);
+ *  - spends at most `sliceMs` = 3 ms of solve work per frame (the solve yields after every sample's bend, ≈ 0.1 ms,
+ *    so a frame's overrun is one sample's work), the fit landing ≈ 300 ms / 3 ms ≈ 100 frames after the wrap;
+ *  - records no evidence (nothing in the client reads it; it grew by up to three numbers per frame without bound). */
+export const CLIENT_PAIR_FIT: Readonly<Required<PairFitRuntime>> = Object.freeze({ sliceMs: 3, maxSamples: 32, evidence: false })
+
+export function createPairFit(bend: BendLimits | null = null, group: string | null = null,
+  runtime: PairFitRuntime = {}): PairFitState {
   return { phase: 'collect', samples: [], fix: NO_FIX, follow: [0, 0, 0],
     followTable: Array.from({ length: FOLLOW.bins }, () => [0, 0, 0] as Vec3), period: 0, lastPhase: -1, armed: false,
-    lateralMm: [], bend, bendDeg: [], bendLimitDeg: 0, bendAtLimit: 0, group, supportMm: [] }
+    lateralMm: [], bend, bendDeg: [], bendLimitDeg: 0, bendAtLimit: 0, group, supportMm: [],
+    sliceMs: runtime.sliceMs ?? 0, maxSamples: runtime.maxSamples ?? 0, evidence: runtime.evidence ?? true, solver: null }
+}
+
+/** `m` samples evenly spaced over the loop (the first kept); all of them when `m` is 0 or not smaller. */
+function spread<T>(xs: readonly T[], m: number): T[] {
+  if (!(m > 0) || xs.length <= m) return [...xs]
+  return Array.from({ length: m }, (_, i) => xs[Math.floor(i * xs.length / m)])
+}
+
+/** Advance the sliced solve by at most `st.sliceMs` of work; true when the fix is in. */
+function stepSolve(st: PairFitState): boolean {
+  if (!st.solver) return true
+  const end = performance.now() + st.sliceMs
+  for (;;) {
+    const r = st.solver.next()
+    if (r.done) { st.fix = r.value; st.solver = null; return true }
+    if (performance.now() >= end) return false
+  }
 }
 
 const binOf = (st: PairFitState, phase: number) =>
@@ -364,6 +424,13 @@ export function pairFitObserve(st: PairFitState, measured: FitSample, phase: num
   const wrapped = st.lastPhase >= 0 && phase < st.lastPhase
   if (wrapped) st.period = Math.max(st.period, st.lastPhase)
   if (st.phase === 'collect') {
+    if (st.solver) {
+      // THE SLICED SOLVE in progress: no sampling, only its share of work; the frame that ends it was rendered
+      // before the fit, like the wrap frame of the unsliced solve.
+      st.lastPhase = phase
+      if (stepSolve(st)) st.phase = 'fitted'
+      return
+    }
     // Nothing of the follow is applied while collecting: the total is the (zero) fix.
     const total = pairFitTotal(st)
     const raw: FitSample = { ...measured, tip: unfixPoint(total, measured.pivot, measured.tip),
@@ -371,9 +438,16 @@ export function pairFitObserve(st: PairFitState, measured: FitSample, phase: num
       ...(measured.chain ? { chain: measured.chain.map((p) => unfixPoint(total, measured.pivot, p)) } : {}),
       ...(measured.support ? { support: { ...measured.support, pts: measured.support.pts.map((p) => unfixPoint(total, measured.pivot, p)) } } : {}) }
     if (wrapped && st.armed && st.samples.length >= FIT_MIN_SAMPLES) {
-      st.fix = solvePairFix(st.samples, { ...bounds, axes, bend: st.bend, group: st.group })
-      st.phase = 'fitted'
+      st.samples = spread(st.samples, st.maxSamples)
       st.lastPhase = phase
+      const opts: FitOptions = { ...bounds, axes, bend: st.bend, group: st.group }
+      if (st.sliceMs > 0) {
+        st.solver = solvePairFixSteps(st.samples, opts)
+        if (stepSolve(st)) st.phase = 'fitted'
+        return
+      }
+      st.fix = solvePairFix(st.samples, opts)
+      st.phase = 'fitted'
       return   // this frame was rendered before the fit: it teaches the follow nothing
     }
     if (wrapped) st.armed = true
@@ -388,14 +462,14 @@ export function pairFitObserve(st: PairFitState, measured: FitSample, phase: num
     const total = pairFitTotal(st, phase)
     const base = s0.base ?? supportHeight(s0.pts.map((p) => unfixPoint(total, measured.pivot, p)), s0.r)
     supportNow = supportHeight(s0.pts, s0.r) - base
-    st.supportMm.push(supportNow * 1000)
+    if (st.evidence) st.supportMm.push(supportNow * 1000)
   }
   // What was rendered: the evidence (lateral through the stroke, once fitted) — the BENT tip (A145).
   if (st.bend && measured.chain) {
     const b = bendSample(measured, st.bend)
     measured = b.sample
     if (b.bend) {
-      st.bendDeg.push(b.bend.totalDeg)
+      if (st.evidence) st.bendDeg.push(b.bend.totalDeg)
       st.bendLimitDeg = b.bend.limit.totalDeg
       if (b.bend.atLimit) st.bendAtLimit++
     }
@@ -403,7 +477,7 @@ export function pairFitObserve(st: PairFitState, measured: FitSample, phase: num
   const rel = sub(measured.tip, measured.o)
   const s = dot(rel, measured.u)
   const lat = lateral(rel, measured.u)
-  if (s >= 0) st.lateralMm.push(len(lat) * 1000)
+  if (s >= 0 && st.evidence) st.lateralMm.push(len(lat) * 1000)
   const b = binOf(st, phase)
   const cell = st.followTable[b]
   if (!follow) { st.followTable[b] = [0, 0, 0]; st.follow = [0, 0, 0]; return }

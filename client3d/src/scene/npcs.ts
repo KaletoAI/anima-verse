@@ -18,7 +18,7 @@ import type { PhotoSubject } from '../game/photoView';
 import { bodyYawForView, eyeHeight } from './cameraFraming';
 import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
 import { pickStrandFigures, STRAND_LIMITS, eulerYXZ, fixPivot, fixRoot, partnerTurnFix, composeFix, createPairFit,
-  pairFitObserve, pairFitTotal, findContact, contactSampleOf, turnAxes, RUNTIME_FIT,
+  pairFitObserve, pairFitTotal, findContact, contactSampleOf, turnAxes, RUNTIME_FIT, CLIENT_PAIR_FIT,
   type PairFix, type PairFitState, type RootAngle, bendSample } from '@anima/scene-render';
 import { OPENING_BUDGET, runFigureFrame, strandCandidates, type FrameEntry, type FrameLoopState,
   type StrandFigureView } from '@anima/scene-render';
@@ -74,6 +74,8 @@ export interface GroundMove {
 const WALK_TARGET_COLOR = 0xf2d98c;
 /** Thin flat ring marking a walk destination, not a selected figure. */
 const WALK_TARGET_RADIUS = 0.55;
+/** The pair-fit solve work a fit still gets once the frame's shared budget is spent (ms, > 0: 0 would solve at once). */
+const PAIR_FIT_MIN_SLICE_MS = 0.25;
 
 function ringColor(name: string): string {
   const rnd = seededRandom(name);
@@ -2392,8 +2394,10 @@ export class NpcManager {
 
   /** Ruling A129.3: after phase B, every two-figure pair interaction measures its contact (the attached part of one
    *  figure, the channel of the other that accepts it) and feeds the shared fine fit. A pair without such a contact
-   *  is marked and not inspected again until its clip changes. */
+   *  is marked and not inspected again until its clip changes. All fits of a frame share ONE solve budget
+   *  (`CLIENT_PAIR_FIT.sliceMs`): a fit that solves after another one used it up gets only `PAIR_FIT_MIN_SLICE_MS`. */
   private observePairFits(): void {
+    const frameEnd = performance.now() + CLIENT_PAIR_FIT.sliceMs;
     const groups = new Map<string, Npc[]>();
     for (const npc of this.npcs.values()) {
       if (!npc.interaction || !npc.figure) continue;
@@ -2411,18 +2415,19 @@ export class NpcManager {
       const rels = list.map((n) => n.figure!.contactRelations).find((r) => r.length) ?? [];
       if (!rels.length && list.length !== 2) continue;
       const jobs = rels.length ? rels.map((r, i) => ({ k: `${id}|${i}`, rel: r })) : [{ k: `${id}|auto`, rel: null }];
-      for (const job of jobs) this.observePairFit(id, key, job.k, job.rel, list, roleOf);
+      for (const job of jobs) this.observePairFit(id, key, job.k, job.rel, list, roleOf, frameEnd);
     }
   }
 
   private observePairFit(id: string, key: string, k: string, rel: ContactRelation | null, list: Npc[],
-    roleOf: (n: Npc) => string): void {
+    roleOf: (n: Npc) => string, frameEnd: number): void {
     {
       let rec = this.pairFits.get(k);
       if (!rec || rec.key !== key) {
         // Ruling A145: the attached part bends first, within the clip's bend limits.
         const bend = list.map((n) => n.figure!.bendLimits)[0] ?? null;
-        rec = { key, st: createPairFit(bend), entering: '', receiving: '', hit: null, none: false, pivot: null, axes: [],
+        rec = { key, st: createPairFit(bend, null, CLIENT_PAIR_FIT), entering: '', receiving: '', hit: null, none: false,
+          pivot: null, axes: [],
           interaction: id };
         this.pairFits.set(k, rec);
       }
@@ -2465,6 +2470,7 @@ export class NpcManager {
         const b = bendSample(sample, rec.st.bend).bend;
         if (b) e.figure!.bendChain(rec.hit.chain, b.turns);
       }
+      rec.st.sliceMs = Math.max(PAIR_FIT_MIN_SLICE_MS, frameEnd - performance.now());
       pairFitObserve(rec.st, sample, it.clipT % it.clipDuration, rec.axes, RUNTIME_FIT, true);
     }
   }

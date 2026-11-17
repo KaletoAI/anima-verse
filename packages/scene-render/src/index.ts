@@ -263,7 +263,7 @@ export type { ContactSample, ContactReport, ContactLamp } from './channelContact
 export { CONTACT_TARGETS, POINT_TARGETS, POINT_TARGET_OPS, TARGET_RADIUS_M, MOUTH, MOUTH_CHANNEL_ID, mouthChannel, TARGET_BONE_NAMES, isContactTarget,
   isPointTarget, targetFrame, targetFrames, orientAlong, targetLamp } from './contactTarget'
 export type { ContactTarget, PointTarget, TargetBones, TargetFrame } from './contactTarget'
-export { solvePairFix, fixPoint, unfixPoint, fixSample, fixRoot, composeFix, turnMatrix, matrixTurn, fixAnglesDeg,
+export { solvePairFix, solvePairFixSteps, CLIENT_PAIR_FIT, fixPoint, unfixPoint, fixSample, fixRoot, composeFix, turnMatrix, matrixTurn, fixAnglesDeg,
   findContact, contactSampleOf, turnAxes, createPairFit, pairFitTotal, pairFitObserve, FIT_MIN_SAMPLES, FOLLOW, partnerTurnFix, partnerYawFix, fixPivot, ALIGN_FIT, RUNTIME_FIT, FIT_ANGLE_WEIGHT_M, NO_FIX,
   pairInterpenetration, clearLamp, PART_REGIONS, CLEAR_GREEN_MM, CLEAR_YELLOW_MM, bendSample, BEND_STAY, supportDelta, bendFrameOf } from './pairFit'
 export { POSTURE, SUPPORT_CAPSULES, POSTURE_ANGLE_CAP_DEG, postureAngleCapDeg, supportSample, supportHeight, postureExcess,
@@ -272,5 +272,5 @@ export type { SupportSample, PostureReport } from './postureSupport'
 export { solveChainBend, bendLimitAt, bendLimitsOf, bendJoints, bendLamp, quatOf, quatMul, quatRotate, quatAngle,
   rootTurnOf, rootAngleOf, bodyFrameOf, ROOT_PITCH_MAX_DEG, ROOT_YAW_MAX_DEG, BEND_LIMITS_DEFAULT, BEND_JOINTS, BEND_SWEEPS, BEND_BISECT, BEND_AT_LIMIT, BEND_NEAR_M } from './chainBend'
 export type { BendLimit, BendLimits, BendResult, BendFrame, RootAngle, Quat as BendQuat } from './chainBend'
-export type { FitSample, PairFix, FitBounds, FitOptions, PairFitState, ClearLamp } from './pairFit'
+export type { FitSample, PairFix, FitBounds, FitOptions, PairFitState, PairFitRuntime, ClearLamp } from './pairFit'
 export { attachedPartIndex, partBoneNames, PART_WEIGHT_SHARE } from './attachedPart'
