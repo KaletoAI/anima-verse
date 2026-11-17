@@ -27,9 +27,13 @@ Expectations, by hand from § 6.6 and artefact_graph's module docstring:
 [A3] X planted again with FRESH mtimes: grace ``on`` → the dry run lists X as protected "grace" →
      no candidate; grace ``off`` (explicit) → the candidate is back (same label as A1).
 [A4] A manifest-less outfit entry ``model3d/cccccccccccc.glb`` + ``.json`` (no pieces: the only
-     shape that forces the reachable set) and ``artefact_graph.HOOK_BUDGET_S`` patched to 0 →
-     the dry run is ``aborted`` → no candidate; ``apply`` on ``character:demo`` → CandidateBusy, and
-     nothing was deleted (X still there). Budget back, the entry and X removed by hand.
+     shape that forces the reachable set). A standing entry scanned with the budget in place → step
+     ``character:demo`` pending. Then ``artefact_graph.HOOK_BUDGET_S`` patched to 0 →
+     the dry run is ``aborted`` → the candidate stays listed as ``demo · size unknown`` (review 09#5:
+     dropping it closed the pending step as done although nothing was cleaned — fails on 3f2ce338e
+     with no candidate and the rescan ``closed`` 1); the rescan → {added 0, closed 0}, the step still
+     pending; ``is_done`` False; ``apply`` on ``character:demo`` → CandidateBusy, and nothing was
+     deleted (X still there). Budget back, the entry, X and cccccccccccc removed by hand.
 [A5] Painted bodies — a consumer of the painted-body reachability fix (commit 72e260fb: a texture lives
      while a live outfit would paint it NOW; a tsig a live outfit only names is outdated). TK =
      ``figure.predicted_keys(demo, {top: dress}, [], bsig=bsig)[1]`` (what the worn
@@ -211,12 +215,19 @@ def main() -> int:
         age(x_files, AGED_S)
         bare = [touch(M / "cccccccccccc.glb"), touch(M / "cccccccccccc.json", {"rig": "mixamo"})]
         age(bare, AGED_S)
+        entry = store.create(typ.id, "Cleanup", typ.validate({}), "standing")["id"]
+        check("scan with the budget", engine.scan(entry), {"added": 1, "closed": 0})
         with patch.object(ag, "HOOK_BUDGET_S", 0):
             check("the dry run is aborted",
                   bool(ag.collect("demo", dry_run=True, budget_s=ag.HOOK_BUDGET_S)["aborted"]), True)
-            check("no candidate", cands(), [])
+            check("the candidate stays listed", [(c.key, c.label, c.hub_jobs) for c in cands()],
+                  [("character:demo", "demo · size unknown", 0)])
+            check("rescan closes nothing", engine.scan(entry), {"added": 0, "closed": 0})
+            check("the step is still pending", step_of(entry, "character:demo")["status"], "pending")
+            check("is_done", typ.is_done(Candidate("character:demo", "demo"), typ.validate({})), False)
             raises("apply → CandidateBusy",
                    lambda: typ.apply(Candidate("character:demo", "demo"), typ.validate({}), "t"), CandidateBusy)
+        store.delete(entry)
         check("nothing deleted", [p.exists() for p in x_files + bare], [True] * 4)
         for p in x_files + bare:
             p.unlink()

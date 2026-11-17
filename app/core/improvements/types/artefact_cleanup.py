@@ -11,7 +11,8 @@ rule (a texture lives while a live outfit would paint it now, commit
 
 Subjects: every character (``subjects.characters()``, pipeline or not) with
 any of ``artefact_graph.ROOT_DIRS``; a character is a candidate when its dry
-run lists orphans that are not all protected and was not ``aborted``. Plus,
+run lists orphans that are not all protected, or when the dry run was
+``aborted`` (what it would free is unknown — not "nothing"). Plus,
 with no character chosen, one world candidate for the shoe sources
 (``footwear_source.collect``). ``grace`` ``on`` (default) = the sweep's
 semantics (``explicit=False``: a node with a file younger than
@@ -19,8 +20,9 @@ semantics (``explicit=False``: a node with a file younger than
 the admin's explicit delete (``explicit=True``).
 
 Both collectors run under ``artefact_graph.HOOK_BUDGET_S`` (read at call
-time); a collect over it is abandoned without a delete — ``aborted``: no
-candidate in a scan, ``CandidateBusy`` in a step. What the collector skips
+time); a collect over it is abandoned without a delete — ``aborted``: the
+candidate stays listed (dropping it would close its pending step as done
+although nothing was cleaned), ``CandidateBusy`` in a step. What the collector skips
 (running, locked) is no failure: the step is done, its result note says so,
 and the next scan lists what is still orphaned. ``needs_media`` is False —
 CPU only, the entry keeps running with the media switch off.
@@ -71,6 +73,12 @@ def _character_candidate(name: str, report: Dict[str, Any]) -> Candidate:
     return Candidate(f"{CHARACTER_PREFIX}{name}",
                      f"{name} · {n} node{'' if n == 1 else 's'} · {files} file(s) · {_mb(size)}",
                      hub_jobs=0, note=" · ".join(parts))
+
+
+def _aborted_candidate(name: str, report: Dict[str, Any]) -> Candidate:
+    """A character whose dry run went over the budget: listed with what it would free unknown."""
+    return Candidate(f"{CHARACTER_PREFIX}{name}", f"{name} · size unknown", hub_jobs=0,
+                     note=f"dry run aborted: {report.get('aborted')}")
 
 
 def _tree_size(path: Path) -> int:
@@ -143,9 +151,10 @@ class ArtefactCleanup(ImprovementType):
         out: List[Candidate] = []
         for name in self._names(params):
             report = _dry_run(name, explicit)
-            if report.get("aborted") or not _deletable(report):
-                continue
-            out.append(_character_candidate(name, report))
+            if report.get("aborted"):
+                out.append(_aborted_candidate(name, report))
+            elif _deletable(report):
+                out.append(_character_candidate(name, report))
         if not params.get("character"):
             out += _world_candidate()
         return sorted(out, key=lambda c: (c.label.lower(), c.key))
@@ -157,7 +166,7 @@ class ArtefactCleanup(ImprovementType):
         if name not in self._names(params):
             return True
         report = _dry_run(name, self._explicit(params))
-        return bool(report.get("aborted")) or not _deletable(report)
+        return not report.get("aborted") and not _deletable(report)
 
     # --- apply -----------------------------------------------------------------
 
