@@ -293,7 +293,17 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
           )}
         </div>
       ) : (
-        <div style={SPAN} className="ga-hint">{t('Each setting saves on its own and runs nothing.')}</div>
+        <div style={SPAN}>
+          <span className="ga-hint">{t('Each setting saves on its own and runs nothing.')}</span>
+          {/* A191: a fit made with these settings can still be fitted again on demand (it was hidden while nothing
+              was due, so a changed setting already applied looked like it could not be re-fitted) */}
+          {noRunAll || !info.recorded ? null : (
+            <RunButton feedback={feedback} slot="fitsettings" disabled={busy}
+              title={t('Fits the piece again with the same settings on the CPU — 0 hub jobs; the figure is assembled again from it')}
+              label={refitOn ? `${t('Re-fit (0 hub jobs)')} · ${refitOn}` : t('Re-fit (0 hub jobs)')}
+              onClick={() => onRun({ step: 'fit', force: true }, 'fitsettings')} />
+          )}
+        </div>
       )}
     </div>
   )

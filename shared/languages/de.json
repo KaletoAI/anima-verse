@@ -5405,6 +5405,7 @@
     "Fit settings": "Anpassungs-Einstellungen",
     "Fit settings changed": "Anpassungs-Einstellungen geändert",
     "Fits the piece again with these settings on the CPU — 0 hub jobs; the shown fit stays in use until then": "Passt das Teil mit diesen Einstellungen auf der CPU neu an — 0 Hub-Jobs; bis dahin bleibt die gezeigte Anpassung in Gebrauch",
+    "Fits the piece again with the same settings on the CPU — 0 hub jobs; the figure is assembled again from it": "Passt das Teil mit denselben Einstellungen auf der CPU neu an — 0 Hub-Jobs; die Figur wird daraus neu zusammengesetzt",
     "Fitted to the arm": "An den Arm angelegt",
     "Fitted to the arm when the sleeve sits more than 2 cm off the arm, has less than 1.2 cm of room or lies more than 20 % inside the arm; else as generated": "An den Arm angelegt, wenn der Ärmel mehr als 2 cm neben dem Arm sitzt, weniger als 1,2 cm Spiel hat oder zu mehr als 20 % im Arm liegt; sonst wie generiert",
     "Inside the arm": "Im Arm",
