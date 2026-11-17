@@ -796,13 +796,26 @@ def save_transitions(entries: Any,
         free = {e["kind"] for root, source in get_animation_clips_dirs()
                 if source == "free" and root.exists()
                 for e in _scan_library(root, source) if not e["role"]}
+        # A STORED rule whose bridge clip has gone (deleted, not installed
+        # here) is sent back unchanged by the editor; it must not block saving
+        # the other rules. Only a new or changed rule has to name a clip.
+        stored = {(r.get("store", "shared"), r["from"], r["to"]): r["kind"]
+                  for r in load_transitions(path)}
         # Validate each row with its original position for useful editor errors.
         for i, raw in enumerate(entries):
-            rule = _validate_transitions([raw], offset=i, solo=solo)[0]
-            store = raw.get("store", "shared")
+            store = raw.get("store", "shared") if isinstance(raw, dict) else "shared"
+            kept = set()
+            if isinstance(raw, dict):
+                key = (store, str(raw.get("from") or "").strip().lower(),
+                       str(raw.get("to") or "").strip().lower())
+                if key in stored and normalize_rule_kind(raw.get("kind")) == stored[key]:
+                    kept = set(rule_kinds({"kind": stored[key]}))
+            rule = _validate_transitions([raw], offset=i, solo=solo | kept)[0]
             if store not in ("shared", "world"):
                 raise ClipLibraryError(f"rule {i + 1}: store must be shared or world")
-            licensed = [k for k in rule_kinds(rule) if k not in free]
+            # An existing clip outside the free library is licensed; a kept
+            # rule's missing clip is no licence question.
+            licensed = [k for k in rule_kinds(rule) if k not in free and k in solo]
             if store == "shared" and licensed:
                 raise ClipLibraryError(
                     f"rule {i + 1}: bridge clip {licensed[0]} is licensed — it belongs to the world layer")
@@ -1024,21 +1037,26 @@ def annotated_transitions(rules=None) -> List[Dict[str, Any]]:
 
 
 def rename_transition_pose(old: str, new: str) -> int:
-    """Rename references in both layers, counting even hidden shared rules."""
-    count = 0
-    for rules, write in ((load_shared_transitions(), _write_transitions),
-                         (world_transitions(), _write_world_transitions)):
-        changed = 0
-        for rule in rules:
-            if old in (rule["from"], rule["to"]):
-                changed += 1
-                for side in ("from", "to"):
-                    if rule[side] == old:
-                        rule[side] = new
-        if changed:
-            write(rules)
-        count += changed
-    return count
+    """Rename references in both layers, counting even hidden shared rules.
+
+    A read-modify-write of the same table ``save_transitions`` writes, so it
+    holds the same clip-library lock (callers must not hold a pose catalog
+    transaction — the lock order is clip_library first)."""
+    with keyed_lock("clip_library", "write"):
+        count = 0
+        for rules, write in ((load_shared_transitions(), _write_transitions),
+                             (world_transitions(), _write_world_transitions)):
+            changed = 0
+            for rule in rules:
+                if old in (rule["from"], rule["to"]):
+                    changed += 1
+                    for side in ("from", "to"):
+                        if rule[side] == old:
+                            rule[side] = new
+            if changed:
+                write(rules)
+            count += changed
+        return count
 
 
 def drop_transition_pose(key: str) -> int:

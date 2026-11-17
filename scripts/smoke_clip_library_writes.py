@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Smoke: how the clip-library writers of ``app/core/animation_clips.py``
-write (review 04#6).
+write (review 04#6, 04#7).
 
 All libraries, the world and the transition seed are temporary
 (ANIMATION_CLIPS_DIR / ANIMATION_CLIPS_LICENSED_DIR / ANIMATION_CLIPS_INBOX_DIR
@@ -25,6 +25,19 @@ Usage: ./.venv/bin/python scripts/smoke_clip_library_writes.py
     contact word "head_front"); the
     sidecars written over a 0644 file are still 0644 (a stage is created
     0600 by mkstemp — copying the mode keeps them readable).
+[7] Transition-rule maintenance (04#7). Seed: ``standing → walking`` with
+    bridge ``get-up`` (shared), whose clip does NOT exist (deleted).
+    (a) saving that rule unchanged plus a NEW rule ``sitting → standing``
+        with the existing solo clip ``walk`` succeeds; the seed then holds
+        both, in that order (old code: "no solo clip of kind 'get-up'").
+    (b) a NEW rule naming the missing ``get-up`` (``lying → standing``) is
+        still refused (ClipLibraryError naming get-up).
+    (c) the stored rule CHANGED to another missing clip ``jump-up`` is
+        refused too — only an unchanged stored rule may keep its gap.
+    (d) ``rename_transition_pose`` takes the clip-library lock: with the
+        lock held by another thread it has not finished after 0.3 s; after
+        the release it renames ``sitting`` → ``seated`` in the seed and
+        returns 1 (old code: finished at once, without the lock).
 """
 import json
 import os
@@ -130,10 +143,60 @@ def test_atomic_writes():
           str([p.name for p in FREE.iterdir()]))
 
 
+def test_transition_maintenance():
+    import threading
+    from app.core.keyed_lock import keyed_lock
+    print("[7] transition rules: a stored dangling bridge does not block, rename takes the lock")
+    TRANSITIONS.write_text(json.dumps({"transitions": [
+        {"from": "standing", "to": "walking", "kind": "get-up"}]}), encoding="utf-8")
+    kept = {"from": "standing", "to": "walking", "kind": "get-up", "accel": 0, "store": "shared"}
+    added = {"from": "sitting", "to": "standing", "kind": "walk", "accel": 0, "store": "shared"}
+    try:
+        clips.save_transitions([kept, added], path=TRANSITIONS)
+        saved = [(r["from"], r["to"], r["kind"]) for r in read(TRANSITIONS)["transitions"]]
+        check("(a) the stored rule with a missing bridge does not block a new one",
+              saved == [("standing", "walking", "get-up"), ("sitting", "standing", "walk")], str(saved))
+    except clips.ClipLibraryError as e:
+        check("(a) the stored rule with a missing bridge does not block a new one", False, str(e))
+    for label, rows in (
+            ("(b) a new rule naming the missing clip is refused",
+             [kept, added, {"from": "lying", "to": "standing", "kind": "get-up", "store": "shared"}]),
+            ("(c) the stored rule changed to another missing clip is refused",
+             [dict(kept, kind="jump-up"), added])):
+        try:
+            clips.save_transitions(rows, path=TRANSITIONS)
+            check(label, False, "saved")
+        except clips.ClipLibraryError as e:
+            check(label, "no solo clip" in str(e), str(e))
+
+    taken, release = threading.Event(), threading.Event()
+
+    def holder():
+        with keyed_lock("clip_library", "write"):
+            taken.set()
+            release.wait(10)
+
+    result = {}
+    h = threading.Thread(target=holder)
+    h.start()
+    taken.wait(10)
+    r = threading.Thread(target=lambda: result.setdefault("n", clips.rename_transition_pose("sitting", "seated")))
+    r.start()
+    r.join(0.3)
+    check("(d) rename_transition_pose waits for the clip-library lock", r.is_alive())
+    release.set()
+    r.join(10)
+    h.join(10)
+    saved = [(x["from"], x["to"]) for x in read(TRANSITIONS)["transitions"]]
+    check("(d) after the release it renamed one rule", result.get("n") == 1
+          and ("seated", "standing") in saved, f"{result} {saved}")
+
+
 def main():
     write_fixture()
     with patch.object(clips, "clip_transitions_path", return_value=TRANSITIONS):
         test_atomic_writes()
+        test_transition_maintenance()
     print("FAIL" if FAIL else "PASS", f"({len(FAIL)} failing)" if FAIL else "")
     return 1 if FAIL else 0
 
