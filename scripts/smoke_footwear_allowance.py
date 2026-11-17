@@ -15,7 +15,9 @@ Fixture: the closed clog ``fx.clog()`` (its insole arc 0.255 m at the fit), the 
 
 Expected, derived by hand from the ruling:
 
-[1] Steps (0, 2, 4, 6, 8, 10, 12, 15, 20); ``allowance_shares({"width": 10, "length": 4})`` = (0.10, 0.04); 3 / 25 /
+[1] Steps (-10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10, 12, 15, 20) (A174: negative = tighter);
+    ``allowance_shares({"width": -6, "length": -4})`` = (-0.06, -0.04);
+    ``allowance_shares({"width": 10, "length": 4})`` = (0.10, 0.04); 3 / 25 /
     True / "4" -> ValueError. ``validate_allowance``: {"length": "auto"} ok; {"length": 3}, {"height": 2}, {} and
     {"width": True} -> ValueError.
 [2] ``fit_pair`` on the clog:
@@ -24,6 +26,10 @@ Expected, derived by hand from the ruling:
     - Length +10 %: heel room = F x 0.10 = 0.025 m; the insole arc = F x 1.1 + A = 0.28 m (+0 %: F + A = 0.255 m);
       ``size`` = 0.28 / 0.255 = 1.098039; k(+10) / k(+0) = size; the toe room stays 5.0 mm; the width in metres
       k x width factor is unchanged (the factor divided by size): k0 x wf0 = k10 x wf10;
+    - A174, Length -4 %: heel room = F x -0.04 = -0.010 m; the insole arc = F x 0.96 + A = 0.245 m; ``size`` =
+      0.245 / 0.255 = 0.960784; k(-4) / k(+0) = size (a shorter shoe — accepted or refused by the gates, never
+      clamped: the record names it either way);
+    - A174, Width -6 %: k unchanged, width factor = 0.94 x the +0 factor;
     - Width +10 %: k unchanged, width factor = 1.1 x wf0; ``scale.allowance`` = {width_pct 10, length_pct 0,
       heel_room_m 0, size 1}.
 [3] ``garment_fsig`` (storage): Demo wears the footwear item "heels". Auto/Auto = the fingerprint F0 (no
@@ -184,7 +190,9 @@ def main() -> int:
 
         # --- [1] ------------------------------------------------------------------------------------------------
         print("[1] steps and validation")
-        check("steps", ff.ALLOWANCE_STEPS, (0, 2, 4, 6, 8, 10, 12, 15, 20))
+        check("steps", ff.ALLOWANCE_STEPS, (-10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10, 12, 15, 20))
+        check("negative shares", ff.allowance_shares({"width": -6, "length": -4}), (-0.06, -0.04))
+        check("validate negative", gf.validate_allowance({"width": -6}), {"width": -6})
         check("shares", ff.allowance_shares({"width": 10, "length": 4}), (0.1, 0.04))
         for bad in (3, 25, True, "4"):
             raises(f"share {bad!r}", lambda bad=bad: ff.allowance_shares({"length": bad}))
@@ -202,7 +210,8 @@ def main() -> int:
         shoe = fx.shoe_garment(P, F)
         fits = {key: ff.fit_pair(insole, shoe, body, joints, allowance=a) for key, a in (
             ("none", None), ("00", {"width": 0, "length": 0}), ("L10", {"width": 0, "length": 10}),
-            ("W10", {"width": 10, "length": 0}))}
+            ("W10", {"width": 10, "length": 0}), ("Lm4", {"width": 0, "length": -4}),
+            ("Wm6", {"width": -6, "length": 0}))}
 
         def blob(fit):
             return json.dumps(fit.record, sort_keys=True, default=str)
@@ -218,7 +227,8 @@ def main() -> int:
                             h.update(np.ascontiguousarray(value).tobytes())
             return h.hexdigest()
 
-        check("all accepted", {k: f.ok for k, f in fits.items()}, {"none": True, "00": True, "L10": True, "W10": True})
+        check("all accepted", {k: f.ok for k in ("none", "00", "L10", "W10") for f in [fits[k]]},
+              {"none": True, "00": True, "L10": True, "W10": True})
         check("0/0 record = no allowance", blob(fits["00"]) == blob(fits["none"]), True)
         check("0/0 parts = no allowance", parts_sha(fits["00"]) == parts_sha(fits["none"]), True)
         check("0/0 no scale.allowance", "allowance" in fits["00"].record["scale"], False)
@@ -236,6 +246,15 @@ def main() -> int:
         near("W10 k", sw["k_m_per_unit"], s0["k_m_per_unit"], 1e-9)
         near("W10 width factor", sw["width_factor"], 1.1 * s0["width_factor"], 1e-5)
         check("W10 allowance", sw["allowance"], {"width_pct": 10.0, "length_pct": 0.0, "heel_room_m": 0.0, "size": 1.0})
+        sl, swm = fits["Lm4"].record["scale"], fits["Wm6"].record["scale"]
+        near("arc -4", sl["insole_arc_m"], 0.245, 1e-4)
+        near("size -4", sl["allowance"]["size"], 0.245 / 0.255, 1e-4)
+        near("k ratio -4", sl["k_m_per_unit"] / s0["k_m_per_unit"], 0.245 / 0.255, 1e-4)
+        near("heel room -4", sl["allowance"]["heel_room_m"], -0.010, 1e-9)
+        near("Wm6 k", swm["k_m_per_unit"], s0["k_m_per_unit"], 1e-9)
+        near("Wm6 width factor", swm["width_factor"], 0.94 * s0["width_factor"], 1e-5)
+        print(f"  info: -4 % length {'accepted' if fits['Lm4'].ok else 'refused: ' + str(fits['Lm4'].reasons)}; "
+              f"-6 % width {'accepted' if fits['Wm6'].ok else 'refused: ' + str(fits['Wm6'].reasons)}")
 
         # --- [3] ------------------------------------------------------------------------------------------------
         print("[3] the fingerprint and the stored settings")

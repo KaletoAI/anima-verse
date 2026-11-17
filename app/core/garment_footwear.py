@@ -633,7 +633,7 @@ def fit_compute(prepared: bytes, insole: Dict[str, Any], rigged: bytes, cap: Opt
     tried: List[int] = [length]
     if auto_length and not att["ok"] and "replaced" in att and any(
             str(r).split(" ", 1)[0] in AUTO_LENGTH_GATES for r in att["reasons"]):
-        for step in footwear_fit.ALLOWANCE_STEPS[1:]:
+        for step in (s for s in footwear_fit.ALLOWANCE_STEPS if s > 0):  # Auto only ever adds heel room
             tried.append(step)
             longer = attempt({"width": width, "length": step})
             if longer["ok"]:

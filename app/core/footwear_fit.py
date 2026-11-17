@@ -325,7 +325,9 @@ ALLOW_M = 0.005
 #: step leaves the shoe's width in metres as it was. ``width``: the fitted width factor times (1 + share) — the shoe
 #: that much wider than the fit made it (at the default cap a shoe without a shaft is as wide as the foot, so the share
 #: is of the foot's ball width). 0 / 0 is byte-identical to fit version 18 (nothing becomes due).
-ALLOWANCE_STEPS: Tuple[int, ...] = (0, 2, 4, 6, 8, 10, 12, 15, 20)
+#: A174: negative steps make the shoe tighter (narrower / shorter, the heel contact that much further back); the
+#: fit's gates still refuse a shoe the foot pokes out of — a negative step is never clamped.
+ALLOWANCE_STEPS: Tuple[int, ...] = (-10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10, 12, 15, 20)
 #: Half-width of the Foot -> ToeBase smoothstep around the ball (metres).
 BLEND_M = 0.015
 #: The largest width factor a fit may apply (spec § 5.5), also the default cap — the cap of a boot (an item whose
@@ -1147,7 +1149,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     width_share, length_share = allow
     heel_room = foot_len * length_share
     k0 = k
-    if heel_room > 0.0:
+    if heel_room != 0.0:  # A174: a negative length step is a shorter shoe (less heel room)
         k, x_end = _scale(ins, foot_len + heel_room, toe_h)
     size = k / k0
 

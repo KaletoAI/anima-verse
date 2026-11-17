@@ -1,6 +1,6 @@
 /**
  * FootwearAllowance — Ruling A82: the footwear piece's Width and Length allowance beside the shod preview, each on its
- * own: Auto or +0 … +20 % (`footwear_fit.ALLOWANCE_STEPS`), the millimetres beside the step (Length = that share of
+ * own: Auto or −10 … +20 % (`footwear_fit.ALLOWANCE_STEPS`; a negative step is tighter, A174), the millimetres beside the step (Length = that share of
  * the foot's length, all of it heel room; Width = that share of the shoe's ball width). Dragging previews the shoe
  * live in the viewer (`footwearAllowanceModel.ts`, the fit's rule); Save stores the settings only (POST
  * …/garments/{item}/footwear/allowance) — the fit becomes due and Re-fit / Run all / the Figure tab's Build applies it
@@ -25,6 +25,8 @@ const HINTS: Record<AllowanceName, string> = {
   width: 'Makes the shoe wider across the foot by this share of its width at the ball. Auto adds nothing: the fit already widens a shoe to the foot.',
   length: 'Makes the shoe one size longer: all of it is room behind the heel, the toes keep their place. Auto takes the smallest step the checks accept when the foot pokes out of the shoe.',
 }
+/** A174: below 0 the shoe is tighter; the fit's checks still refuse a shoe the foot pokes out of. */
+const NEGATIVE_HINT = 'Below 0 the shoe is tighter; the checks still refuse a shoe the foot pokes out of.'
 const LABELS: Record<AllowanceName, string> = { width: 'Width', length: 'Length' }
 const WHAT: Record<AllowanceName, string> = { width: 'across the ball', length: 'heel room' }
 const ARIA: Record<AllowanceName, string> = { width: 'Width allowance', length: 'Length allowance' }
@@ -77,12 +79,12 @@ export function FootwearAllowance({ character, itemId, view, draft, onDraft, bus
     const pct = resolved(view, name, s)
     const index = Math.max(0, view.steps.indexOf(pct))
     return (
-      <div key={name} style={{ display: 'flex', flexDirection: 'column', gap: 2 }} title={t(HINTS[name])}>
+      <div key={name} style={{ display: 'flex', flexDirection: 'column', gap: 2 }} title={`${t(HINTS[name])} ${t(NEGATIVE_HINT)}`}>
         <div style={ROW}>
           <span className="ga-hint" style={{ width: 48 }}>{t(LABELS[name])}</span>
           <button type="button" className={`ga-btn ga-btn-sm${s === 'auto' ? ' ga-btn-primary' : ''}`}
             aria-pressed={s === 'auto'} onClick={() => onDraft({ ...draft, [name]: 'auto' })}
-            title={t(HINTS[name])}>{t('Auto')}</button>
+            title={`${t(HINTS[name])} ${t(NEGATIVE_HINT)}`}>{t('Auto')}</button>
           <input type="range" min={0} max={view.steps.length - 1} step={1} value={index}
             style={{ flex: '1 1 0', minWidth: 60 }} aria-label={t(ARIA[name])}
             aria-valuetext={stepText(view, name, pct)} data-footwear-allowance={name}

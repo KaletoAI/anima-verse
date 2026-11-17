@@ -134,8 +134,13 @@ export function stepMm(view: FootwearAllowanceView | null | undefined, name: All
   return ref == null ? null : (ref * pct) / 100
 }
 
-/** "+4 % = +9.6 mm" */
+/** A signed number: "+4", "−4" (A174: a negative step makes the shoe tighter). */
+function signed(v: number, digits = 0): string {
+  return `${v < 0 ? '−' : '+'}${Math.abs(v).toFixed(digits)}`
+}
+
+/** "+4 % = +9.6 mm" / "−4 % = −9.6 mm" */
 export function stepText(view: FootwearAllowanceView | null | undefined, name: AllowanceName, pct: number): string {
   const mm = stepMm(view, name, pct)
-  return `+${pct} %${mm != null ? ` = +${mm.toFixed(1)} mm` : ''}`
+  return `${signed(pct)} %${mm != null ? ` = ${signed(mm, 1)} mm` : ''}`
 }
