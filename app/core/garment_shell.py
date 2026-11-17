@@ -48,6 +48,15 @@ THICKNESS_M = 0.004
 #: key ``shell_offset``): a molded cup stands off the breast, a slip lies on the skin.
 SHELL_OFFSET_CHOICES: Tuple[int, ...] = (4, 6, 8, 10, 12, 16)
 SHELL_OFFSET_DEFAULT = 4
+#: A184 (cause of the holes and lost straps on a bra): the region step excluded every vertex weighted > 0.3 on a
+#: ``Shoulder`` bone too — the Mixamo shoulder bones weigh the trapezius and collarbone where straps lie. Arms and
+#: hands stay excluded.
+#: A184: "Take from the body" — mm the shell's border is moved outward around the piece's outline in its views.
+MARGIN_CHOICES: Tuple[int, ...] = (0, 3, 6, 10, 15)
+MARGIN_DEFAULT = 3
+#: A184: "Fill holes up to" — cm² of an enclosed gap in the piece's outline / body region that is closed.
+FILL_CHOICES: Tuple[int, ...] = (0, 2, 5, 10, 20, 50)
+FILL_DEFAULT = 2
 
 
 def shell_offset_choice(raw: Optional[Dict[str, Any]]) -> int:
@@ -57,12 +66,32 @@ def shell_offset_choice(raw: Optional[Dict[str, Any]]) -> int:
     if isinstance(value, (int, float)) and not isinstance(value, bool) and value in SHELL_OFFSET_CHOICES:
         return int(value)
     return SHELL_OFFSET_DEFAULT
+
+
+def shell_margin_choice(raw: Optional[Dict[str, Any]]) -> int:
+    """"Take from the body" (mm, ``shell_margin``, A184): one of ``MARGIN_CHOICES``, else the default."""
+    value = (raw or {}).get("shell_margin") if isinstance(raw, dict) else None
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value in MARGIN_CHOICES:
+        return int(value)
+    return MARGIN_DEFAULT
+
+
+def shell_fill_choice(raw: Optional[Dict[str, Any]]) -> int:
+    """"Fill holes up to" (cm², ``shell_fill``, A184): one of ``FILL_CHOICES``, else the default."""
+    value = (raw or {}).get("shell_fill") if isinstance(raw, dict) else None
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value in FILL_CHOICES:
+        return int(value)
+    return FILL_DEFAULT
+
+
+#: The fit settings that shape a shell only (a generated mesh's fit is not due for them).
+SHELL_SETTING_KEYS: Tuple[str, ...] = ("shell_offset", "shell_margin", "shell_fill")
 #: Texture size of the baked shell (px).
 TEXTURE_PX = 2048
 #: A vertex this far under the skin (m) counts as inside (``inside_share``).
 INSIDE_M = 0.002
 #: Bumped when the shell's construction changes: a shell made by another version reads stale.
-SHELL_VERSION = 1
+SHELL_VERSION = 2
 
 BIN_M = 0.002
 WINDOWS = ((6.0, 0), (20.0, 1))
@@ -401,30 +430,41 @@ class SideBridge:
 
 # --- the shell ------------------------------------------------------------------------------------------------------
 
+def _bridge_mm(marg, margin_mm: float):
+    """The side bridge's margin (m) as membership mm, grown by ``margin_mm`` where the bridge measured a real margin
+    (its "no bridge" value -0.01 m stays outside)."""
+    mm = np.asarray(marg, np.float64) * 1000.0
+    return np.clip(np.where(mm > -9.99, mm + margin_mm, mm), -5, 5 + margin_mm)
+
+
 class ShellRefused(ValueError):
     """The shell cannot be made (no region, empty masks)."""
 
 
-def _fill_glints(m):
-    """Close holes in a ghost mask below 0.1 % of its area (specular glints)."""
+def _fill_glints(m, max_px: float = 0.0):
+    """Close holes in a ghost mask below 0.1 % of its area (specular glints) or below ``max_px`` pixels (the
+    piece's "Fill holes up to", A184), whichever is larger."""
     from scipy import ndimage
     holes = ndimage.binary_fill_holes(m) & ~m
     lab, n = ndimage.label(holes)
     if n:
         sz = np.bincount(lab.ravel())
         sz[0] = 0
-        m = m | np.isin(lab, np.nonzero((sz > 0) & (sz < 0.001 * m.sum()))[0])
+        m = m | np.isin(lab, np.nonzero((sz > 0) & (sz < max(0.001 * m.sum(), max_px)))[0])
     return m
 
 
 def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]], *,
-                arm_tokens: Iterable[str] = ("Arm", "Hand", "Shoulder"), offset_m: float = THICKNESS_M):
+                arm_tokens: Iterable[str] = ("Arm", "Hand"), offset_m: float = THICKNESS_M,
+                margin_mm: float = MARGIN_DEFAULT, fill_cm2: float = FILL_DEFAULT):
     """The shell of a piece on the body (module docstring) -> ``garment_fit.FitResult`` (``garment`` in the rigged
     body's bind space, skinned; ``metrics``: ``shell_faces``, ``inside_share``, ``over_skin_p50_mm``,
     ``side_colour_within_{1,2,5}cm``, ``seconds``). ``views``: ``{"front": {...}, "back": {...}}``, each
     ``body_mask`` (bool, the base view's figure), ``ghost_mask`` (bool, the piece-only view's), ``image`` (the
     piece-only view, RGB uint8, same size as its masks); the back view is mirrored onto the body when that matches
-    its silhouette better. ``ShellRefused`` when no region is found."""
+    its silhouette better. ``margin_mm`` (A184, "Take from the body"): the membership border is moved this far
+    outward around the piece's outline in its views; ``fill_cm2`` ("Fill holes up to"): enclosed gaps of the
+    piece's outline and of the body region up to this area are closed. ``ShellRefused`` when no region is found."""
     from scipy import ndimage
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
@@ -437,7 +477,8 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     Pu = np.asarray(bu.positions, np.float64)
     R = np.asarray(br.positions, np.float64)
     k = float(np.ptp(R[:, 1])) / float(np.ptp(Pu[:, 1]))
-    report: Dict[str, Any] = {"shell_version": SHELL_VERSION, "offset_mm": round(offset_m * 1000.0, 1)}
+    report: Dict[str, Any] = {"shell_version": SHELL_VERSION, "offset_mm": round(offset_m * 1000.0, 1),
+                              "margin_mm": float(margin_mm), "fill_cm2": float(fill_cm2)}
 
     masks = {}
     for key, w in (("front", "f"), ("back", "b")):
@@ -450,8 +491,10 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     if not (masks["f"][1].any() or masks["b"][1].any()):
         raise ShellRefused("The piece-only views show no piece")
     colour_mask = {w: masks[w][1] for w in ("f", "b")}
-    filled = {w: _fill_glints(masks[w][1]) for w in ("f", "b")}
     frames = {w: gf._frame(Pu, masks[w][0]) for w in ("f", "b")}
+    # mm per pixel of each view on the rigged body
+    mm_px = {w: frames[w][0] * k * 1000.0 for w in ("f", "b")}
+    filled = {w: _fill_glints(masks[w][1], fill_cm2 * 100.0 / mm_px[w] ** 2) for w in ("f", "b")}
 
     def project(P, which, mirror):
         sb, cb, mb = frames[which]
@@ -509,7 +552,7 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     vs = view_state(Pu, Nu)
     cov = np.zeros(len(Pu), bool)
     for which, _m, _t in VIEWS:
-        gmd = ndimage.binary_dilation(filled[which], iterations=2)
+        gmd = ndimage.binary_dilation(filled[which], iterations=2 + int(np.ceil(margin_mm / mm_px[which])))
         cov |= vs[which]["seen"] & gmd[vs[which]["i"], vs[which]["j"]]
     cov &= armw < 0.3
     Pw_u, Fw_u, inv_u = gf.weld(Pu, bu.faces)
@@ -532,7 +575,7 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     used = np.unique(Fr_)
     keepv[used] = (share >= 0.05)[labels[used]]
     c2 = keepv.astype(np.float32)
-    for _ in range(2):
+    for _ in range(2 + int(np.ceil(margin_mm / 10.0))):
         c2 = np.minimum(1, c2 + (A @ c2 > 0))
     seen_w = np.zeros(len(Pw_u), bool)
     for which, _m, _t in VIEWS:
@@ -569,7 +612,7 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
         leak[lab_[x[bad]]] = True
     area_ = gf.triangle_areas(R, br.faces)
     comp_area = np.bincount(lab_[cand], weights=area_[cand], minlength=len(leak))
-    fillc = (~leak) & (comp_area < 8e-4)
+    fillc = (~leak) & (comp_area < max(8e-4, fill_cm2 * 1e-4))
     add = cand & fillc[np.maximum(lab_, 0)] & (lab_ >= 0)
     report["region_holes_closed_faces"] = int(add.sum())
     selr = selr | add
@@ -602,9 +645,10 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     Pref = Puw * k
     head_on = {w: st[w]["seen"] & (np.abs(st[w]["facing"]) >= 0.3) for w in ("f", "b")}
     side = ~(head_on["f"] | head_on["b"])
+    M = float(margin_mm)
     s = np.full(len(Vw), -5.0)
     for w in ("f", "b"):
-        s = np.where(head_on[w], np.maximum(np.where(s > -5, s, -1e9), st[w]["sd_mm"]), s)
+        s = np.where(head_on[w], np.maximum(np.where(s > -5, s, -1e9), st[w]["sd_mm"] + M), s)
     memb_f = head_on["f"] & st["f"]["in"]
     memb_b = head_on["b"] & st["b"]["in"]
     torso = armw < 0.3
@@ -612,18 +656,18 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     bridge = SideBridge(frame, Pref, head_on["f"], head_on["b"], memb_f, memb_b)
     if side.any():
         marg = bridge.query(Pref[side])[0]
-        s[side] = np.clip(marg * 1000, -5, 5)
+        s[side] = _bridge_mm(marg, M)
     for w in ("f", "b"):
         bump = side & st[w]["seen"] & (st[w]["sd_mm"] > 10)
-        s = np.where(bump, np.maximum(s, st[w]["sd_mm"]), s)
+        s = np.where(bump, np.maximum(s, st[w]["sd_mm"] + M), s)
     near_side = (np.abs(st["f"]["facing"]) < 0.6) & (np.abs(st["b"]["facing"]) < 0.6) & ~side & (s < 0)
     if near_side.any():
         m2 = bridge.query(Pref[near_side])[0]
-        s[near_side] = np.where(m2 > 0, np.clip(m2 * 1000, -5, 5), s[near_side])
+        s[near_side] = np.where(m2 > 0, _bridge_mm(m2, M), s[near_side])
     report["bridge_window"] = {str(k_): list(v) for k_, v in bridge.window.items()}
     Aw = (gf._adjacency(Fw, len(Vw))[0] > 0).astype(float)
     degw = np.asarray(Aw.sum(1)).ravel()
-    sm = np.clip(s, -5, 5)
+    sm = np.clip(s, -5, 5 + M)
     for _ in range(4):
         sm = 0.5 * sm + 0.5 * (Aw @ sm) / np.maximum(degw, 1)
     Vc, Fc, Ac = clip_triangles(V, F, sm[winv], ATTR)
