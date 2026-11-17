@@ -1538,6 +1538,20 @@ def _finale_files(path: Path) -> List[Path]:
     return out
 
 
+def _refuse_alt(path: Path, action: str) -> None:
+    """An ALT half (``hug__b~wave.fbx``) is not addressable on its own for a
+    whole-scene edit: the sibling set of an alt skips the scene's own half of
+    that role, so only some files would move or turn while the sidecar's
+    ``alts`` still names the alt. The scene's half is the address — its alt
+    halves go with it."""
+    alt = parse_clip_alt(path.name)
+    if alt:
+        kind, role = parse_clip_role(path.name)
+        raise ClipLibraryError(
+            f"{path.name} is the alt half '{alt}' of {kind} — {action} the scene "
+            f"through {kind}{ROLE_SEPARATOR}{role}{path.suffix}; its alt halves go with it")
+
+
 def _rel_in(path: Path, library: str) -> str:
     """``[<set>/]<file>`` of a file inside one library."""
     return path.resolve().relative_to(library_root(library).resolve()).as_posix()
@@ -1632,6 +1646,7 @@ def delete_clip(library: str, rel: str) -> Dict[str, Any]:
     library root).
     """
     path = resolve_clip(library, rel)
+    _refuse_alt(path, "delete")
     if not path.is_file():
         raise ClipNotFound(f"{rel} does not exist in the {library} library")
     kind, _role = parse_clip_role(path.name)
@@ -1688,6 +1703,7 @@ def rename_clip(library: str, rel: str, *, kind: Optional[str] = None,
     Returns the moved clips as listing views.
     """
     src = resolve_clip(library, rel)
+    _refuse_alt(src, "rename or move")
     if not src.is_file():
         raise ClipNotFound(f"{rel} does not exist in the {library} library")
     src_root = library_root(library).resolve()
@@ -2484,6 +2500,7 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
     from app.blender import runner
 
     path = resolve_clip(library, rel)
+    _refuse_alt(path, "orient")
     if not path.is_file():
         raise ClipNotFound(f"{rel} does not exist in the {library} library")
     yaw, tilt, roll = float(yaw_deg or 0.0), float(tilt_deg or 0.0), float(roll_deg or 0.0)

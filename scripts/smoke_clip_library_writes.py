@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Smoke: how the clip-library writers of ``app/core/animation_clips.py``
-write (review 04#6, 04#7).
+write (review 04#6, 04#7, 04#12).
 
 All libraries, the world and the transition seed are temporary
 (ANIMATION_CLIPS_DIR / ANIMATION_CLIPS_LICENSED_DIR / ANIMATION_CLIPS_INBOX_DIR
@@ -38,6 +38,16 @@ Usage: ./.venv/bin/python scripts/smoke_clip_library_writes.py
         lock held by another thread it has not finished after 0.3 s; after
         the release it renames ``sitting`` → ``seated`` in the seed and
         returns 1 (old code: finished at once, without the lock).
+[12] An alt rel is refused by delete / rename / orient (04#12). Pair
+    ``kiss__a.fbx`` / ``kiss__b.fbx`` with the alt ``kiss__b~wave.fbx`` and
+    ``kiss.json`` (alts b: [wave]). ``delete_clip``, ``rename_clip``
+    (kind "smooch") and ``orient_clip`` (yaw 90) on ``kiss__b~wave.fbx`` each
+    raise ClipLibraryError naming "alt half"; all three files and the sidecar
+    are untouched afterwards. (Old code, delete: the alt's siblings are role
+    a's half only — kiss__a and the alt went, kiss__b stayed, the sidecar
+    still listed the alt.) The scene's own half is the address: renaming
+    ``kiss__b.fbx`` to "smooch" moves all three → ``smooch__a``,
+    ``smooch__b``, ``smooch__b~wave``.
 """
 import json
 import os
@@ -192,11 +202,37 @@ def test_transition_maintenance():
           and ("seated", "standing") in saved, f"{result} {saved}")
 
 
+def test_alt_rel_refused():
+    print("[12] an alt rel is refused by delete, rename and orient")
+    for name in ("kiss__a.fbx", "kiss__b.fbx", "kiss__b~wave.fbx"):
+        (FREE / name).write_bytes(name.encode())
+    (FREE / "kiss.json").write_text(json.dumps(
+        {"kind": "kiss", "pair": True, "roles": ["a", "b"], "alts": {"b": ["wave"]}}), encoding="utf-8")
+    clips.reload_clip_caches()
+    before = sorted(p.name for p in FREE.iterdir() if p.name.startswith("kiss"))
+    for label, call in (
+            ("delete", lambda: clips.delete_clip("free", "kiss__b~wave.fbx")),
+            ("rename", lambda: clips.rename_clip("free", "kiss__b~wave.fbx", kind="smooch")),
+            ("orient", lambda: clips.orient_clip("free", "kiss__b~wave.fbx", yaw_deg=90))):
+        try:
+            call()
+            check(f"{label} of the alt rel is refused", False, "accepted")
+        except clips.ClipLibraryError as e:
+            check(f"{label} of the alt rel is refused", "alt half" in str(e), str(e))
+    after = sorted(p.name for p in FREE.iterdir() if p.name.startswith("kiss"))
+    check("the scene's files are untouched", after == before, f"{before} -> {after}")
+    clips.rename_clip("free", "kiss__b.fbx", kind="smooch")
+    moved = sorted(p.name for p in FREE.iterdir() if p.name.startswith(("kiss", "smooch")))
+    check("renaming the scene's own half moves the alt along",
+          moved == ["smooch.json", "smooch__a.fbx", "smooch__b.fbx", "smooch__b~wave.fbx"], str(moved))
+
+
 def main():
     write_fixture()
     with patch.object(clips, "clip_transitions_path", return_value=TRANSITIONS):
         test_atomic_writes()
         test_transition_maintenance()
+        test_alt_rel_refused()
     print("FAIL" if FAIL else "PASS", f"({len(FAIL)} failing)" if FAIL else "")
     return 1 if FAIL else 0
 
