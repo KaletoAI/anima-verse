@@ -14,6 +14,9 @@ Hand-derived expectation for close_free_holes:
   returns 1; B gets one centre vertex at (.2, 0, .12) and 4 fan triangles (+1 vertex, +4 faces);
   open border edges go from 12 to 8 (A's 4 and C's 4); the centre of B carries the mean of its
   ring's weights: ring weights 1, 1, 0, 0 on group "g" -> .5.
+  The centre also takes the ring mean of every point layer (review 03#9): 'Col' (FLOAT_COLOR)
+  ring (1,0,0,1), (1,0,0,1), (0,0,1,1), (0,0,1,1) -> (.5, 0, .5, 1); 'tip' (FLOAT) ring
+  .2, .4, .6, .8 -> .5. Without it the centre keeps the layer default, which differs from both.
   Every new fan face's normal points +z (outward through the former top opening of B).
 Also the thigh reweight band of the part grows with the size: from/to .045/.095 m x 1.6 =
 .072/.152 m (checked on the source text, the build uses exactly that product).
@@ -57,6 +60,11 @@ def blender_side(scripts, out):
     # B's top ring is vertices 12..15: weights 1, 1, 0, 0.
     g.add([12, 13], 1.0, 'REPLACE')
     g.add([14, 15], 0.0, 'REPLACE')
+    col = me.color_attributes.new('Col', 'FLOAT_COLOR', 'POINT')
+    tip = me.attributes.new('tip', 'FLOAT', 'POINT')
+    for i, (c, t) in enumerate(zip(((1, 0, 0, 1), (1, 0, 0, 1), (0, 0, 1, 1), (0, 0, 1, 1)), (.2, .4, .6, .8))):
+        col.data[12 + i].color = c
+        tip.data[12 + i].value = t
 
     def border_edges():
         count = {}
@@ -72,6 +80,8 @@ def blender_side(scripts, out):
     fan = [p for p in obj.data.polygons if len(p.vertices) == 3]
     Path(out).write_text(json.dumps({
         'closed': closed, 'before': before, 'after': after, 'centre': list(centre.co), 'weight': weight,
+        'centre_col': list(obj.data.color_attributes['Col'].data[centre.index].color),
+        'centre_tip': obj.data.attributes['tip'].data[centre.index].value,
         'fan_normals_z': [p.normal.z for p in fan]}))
 
 
@@ -102,6 +112,9 @@ def main():
     check('[4] centre at (.2, 0, .12)', abs(c[0] - .2) < 1e-6 and abs(c[1]) < 1e-6 and abs(c[2] - .12) < 1e-6, c)
     check('[5] centre weight .5', abs(d['weight'] - .5) < 1e-6, d['weight'])
     check('[6] fan faces face +z', len(d['fan_normals_z']) == 4 and min(d['fan_normals_z']) > .99, d['fan_normals_z'])
+    check('[5b] centre Col = ring mean (.5, 0, .5, 1)',
+          all(abs(a - b) < 1e-6 for a, b in zip(d['centre_col'], (.5, 0, .5, 1))), d['centre_col'])
+    check('[5c] centre tip = ring mean .5', abs(d['centre_tip'] - .5) < 1e-6, d['centre_tip'])
     src = (ROOT / 'app/blender/scripts/attached_part.py').read_text()
     check('[7] reweight band x size_factor',
           "settings['reweight']['from'] * size_factor, settings['reweight']['to'] * size_factor" in src)

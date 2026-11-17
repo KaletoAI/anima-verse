@@ -325,7 +325,9 @@ def close_free_holes(obj, skin, root_local, band, matrix):
             if gaps[len(gaps) // 2] > band:
                 # A fan around the loop's centroid: it closes a loop that
                 # touches itself too (holes_fill leaves such a loop open). The
-                # centre takes the mean of the loop's weights.
+                # centre takes the mean of the loop's weights and of every
+                # point layer (the 'Col' tint and the 'tip'/'skin' shares
+                # multiply the bake; a layer default drew a disc at the centre).
                 ring = verts_of(loop)
                 deform = bm.verts.layers.deform.active
                 centre = bm.verts.new(sum((v.co for v in ring), Vector()) / len(ring))
@@ -336,6 +338,11 @@ def close_free_holes(obj, skin, root_local, band, matrix):
                             mean[g] = mean.get(g, 0.) + w / len(ring)
                     for g, w in mean.items():
                         centre[deform][g] = w
+                for layers in (bm.verts.layers.float_color, bm.verts.layers.color):
+                    for layer in layers.values():
+                        centre[layer] = sum((Vector(v[layer]) for v in ring), Vector((0., 0., 0., 0.))) / len(ring)
+                for layer in bm.verts.layers.float.values():
+                    centre[layer] = sum(v[layer] for v in ring) / len(ring)
                 for e in loop:
                     face = e.link_faces[0]
                     a, b = e.verts
