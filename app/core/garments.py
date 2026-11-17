@@ -678,7 +678,7 @@ def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str
     if (record.get("inputs") or {}).get("mesh_shape") == "shell":
         # Ruling A48d: a shell is made from the body and the ghost views, never from the prepared mesh
         from app.core import garment_shell
-        if (record.get("inputs") or {}).get("shell_version") != garment_shell.SHELL_VERSION:
+        if garment_shell.construction_due(record.get("inputs")):
             return "stale"
         # A177: the shell's inputs are its piece-only (ghost) views — one replaced since (another source, a
         # re-render, "Use this" on an attempt) makes the shell due, as a replaced mesh does for a generated piece.
@@ -1553,7 +1553,8 @@ def _fit_shell(character_name: str, item_id: str, kind: str, fsig: str, bsig: st
                    "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
                               **{f"ghost_{v}_sha256": ghosts[v] for v in views_used},
                               "fit_settings": fit_settings, "mesh_shape": garment_shell.SHELL,
-                              "shell_version": garment_shell.SHELL_VERSION}}
+                              "shell_version": garment_shell.SHELL_VERSION,
+                              **({"shell_sides_version": garment_shell.SIDES_VERSION} if len(views_used) > 2 else {})}}
     base_record.update(extra or {})
     try:
         views = garment_shell.shell_views(character_name, item_id, fsig, bsig, sides=len(views_used) > 2)
@@ -5494,8 +5495,7 @@ def mesh_shape_view(record: Dict[str, Any], current: Dict[str, Any], item_id: st
              "made": garment_shell.shell_sides_choice(made_with) if made_with else None,
              "default": False}
     # a shell made by another construction version is due as well (garments._fit_state reads it stale)
-    version_due = made == garment_shell.SHELL and (record.get("inputs") or {}).get(
-        "shell_version") != garment_shell.SHELL_VERSION
+    version_due = made == garment_shell.SHELL and garment_shell.construction_due(record.get("inputs"))
     return {"resolved": resolved, "offset": offset, "margin": margin, "fill": fill, "sides": sides, "made": made,
             "due": made is not None and (made != resolved or (
                 resolved == garment_shell.SHELL and (version_due or any(

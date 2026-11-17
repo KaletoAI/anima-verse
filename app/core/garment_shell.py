@@ -128,6 +128,18 @@ ARM_CHAIN = ("Arm", "ForeArm", "Hand")
 ARMS_UP_IOU_MIN = 0.8
 #: Bumped when the shell's construction changes: a shell made by another version reads stale.
 SHELL_VERSION = 2
+#: A191: bumped when only the side-view merge changes — a shell made WITH side views by another version reads stale
+#: (1: the arm no longer occludes the flank for a side view); a shell without side views is not touched by it.
+SIDES_VERSION = 1
+
+
+def construction_due(inputs: Optional[Dict[str, Any]]) -> bool:
+    """Whether a shell fit's recorded ``inputs`` were made by another construction: another ``SHELL_VERSION``, or
+    (A191) side views read by another ``SIDES_VERSION``."""
+    inputs = inputs or {}
+    if inputs.get("shell_version") != SHELL_VERSION:
+        return True
+    return bool(shell_sides_choice(inputs.get("fit_settings"))) and inputs.get("shell_sides_version") != SIDES_VERSION
 
 BIN_M = 0.002
 WINDOWS = ((6.0, 0), (20.0, 1))
@@ -610,6 +622,21 @@ def side_view_ok(seen_s, facing_s, seen_f, facing_f, seen_b, facing_b) -> np.nda
     return np.asarray(seen_s, bool) & (np.asarray(facing_s, float) >= SIDE_FACING_MIN) & ~frontal
 
 
+#: A191: a sample of a face whose vertices carry this much arm weight or more is the arm (as ``cov &= armw < 0.3``).
+ARM_MAX = 0.3
+
+
+def occluding_samples(which: str, X, tri, faces, armw) -> np.ndarray:
+    """The body samples ``X`` (on faces ``tri``) that may hide a point from view ``which`` (its z-buffer): all of them
+    for the front / back ("f" / "b"); for a side view only the trunk's — A191: the arm hangs beside the trunk in the
+    base side view and the piece-only side view shows the piece where the arm was, so the arm never occludes the
+    flank for a side view (with it the flank under the arm was never "seen" and the side views added little)."""
+    X = np.asarray(X)
+    if which in ("f", "b"):
+        return X
+    return X[np.asarray(armw, float)[np.asarray(faces)[np.asarray(tri)]].max(1) < ARM_MAX]
+
+
 class ShellRefused(ValueError):
     """The shell cannot be made (no region, empty masks)."""
 
@@ -714,12 +741,21 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
         VIEWS.append((w, front_left, 1.0 if front_left else -1.0, 0))
         report[f"{_key}_camera"] = "+x" if front_left else "-x"
     DEPTH = {which: axis for which, _m, _t, axis in VIEWS}
+    # the arm weight of every unrigged vertex (the shell never takes the arm, ``cov &= armw < 0.3`` below)
+    if corr_u2r is None:
+        corr_u2r, _ = gf.uv_correspondence(bu, br)
+    Wd = np.zeros((len(R), len(br.joint_names)))
+    np.add.at(Wd, (np.repeat(np.arange(len(R)), 4), br.joints.ravel()), br.weights.ravel())
+    arm_cols = [i for i, n in enumerate(br.joint_names) if any(t in n for t in arm_tokens)]
+    armw = Wd[corr_u2r][:, arm_cols].sum(1) if arm_cols else np.zeros(len(Pu))
     zbuf = {}
     Xs, _n, tri_s, bary_s = samples(Pu, bu.faces, float(np.ptp(Pu[:, 1])) / 2500)
     Xs_posed = np.einsum("nk,nkj->nj", bary_s, Pp[bu.faces[tri_s]]) if posed_keys else Xs
     for which, mir, toward, axis in VIEWS:
         h, w = masks[which][0].shape
-        Xv = Xs_posed if which in posed_keys else Xs
+        # A190: an arms-up side view reads the posed body (the arm is above the head, never in front of the flank);
+        # A191: an arms-down (legacy) side view occludes with the trunk only — the arm hangs in front of the flank
+        Xv = Xs_posed if which in posed_keys else occluding_samples(which, Xs, tri_s, bu.faces, armw)
         px, py = project(Xv, which, mir)
         ok = (px >= 0) & (px < w) & (py >= 0) & (py < h)
         zb = np.full((h, w), -np.inf)
@@ -755,12 +791,6 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
                             st_["b"]["seen"], st_["b"]["facing"])
 
     # 1. coverage on the unrigged body
-    if corr_u2r is None:
-        corr_u2r, _ = gf.uv_correspondence(bu, br)
-    Wd = np.zeros((len(R), len(br.joint_names)))
-    np.add.at(Wd, (np.repeat(np.arange(len(R)), 4), br.joints.ravel()), br.weights.ravel())
-    arm_cols = [i for i, n in enumerate(br.joint_names) if any(t in n for t in arm_tokens)]
-    armw = Wd[corr_u2r][:, arm_cols].sum(1) if arm_cols else np.zeros(len(Pu))
     Nu = gf._unit(gf.vertex_normals(Pu, bu.faces))
     Np = gf._unit(gf.vertex_normals(Pp, bu.faces)) if posed_keys else Nu
     # A190: the posed body keeps the rest body's vertex order — a vertex an arms-up view shows covered is that index
