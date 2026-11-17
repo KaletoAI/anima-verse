@@ -852,6 +852,8 @@ SECTIONS = {
                     "model_ref_debounce_seconds",
                     "outfit_image_width",
                     "outfit_image_height",
+                    "outfit_turn_lora",
+                    "outfit_turn_lora_strength",
                     "expression_image_width",
                     "expression_image_height",
                     "location_image_width",
@@ -903,6 +905,8 @@ SECTIONS = {
             "postprocess_enabled": {"type": "bool", "label": "Post-processing enabled", "default": False, "description": "Notify an external post-processing service after generating an eligible image. The service reads the image itself (gallery API / filesystem) and writes the result back through the API endpoint. This application does not process images itself or send image bytes."},
             "postprocess_trigger_url": {"type": "str", "label": "Post-Processing Trigger URL", "default": "", "description": "Base URL notified after generation. The application appends parameters (world-relative image path). NO image bytes are sent. Example: http://127.0.0.1:8005/trigger"},
 
+            "outfit_turn_lora": {"type": "str", "label": "Outfit turn LoRA", "default": "", "description": "LoRA file name (as listed in the LoRA library for the backend routed on occasion outfit_back_turn) sent with the TURN of a dressed outfit: step 1 of a dressed back/side view renders the dressed front as a rear (or side) view with this camera-angle LoRA, the turned picture is cut out on the CPU and handed to the edit of the base view as its second picture. Empty = the turn runs without a LoRA. A LoRA the library does not associate with the routed backend is dropped with a warning."},
+            "outfit_turn_lora_strength": {"type": "float", "label": "Outfit turn LoRA strength", "default": 1.0, "min": 0, "max": 2, "step": 0.05, "description": "Strength of the Outfit turn LoRA."},
             "prop_variant_max": {"type": "int", "label": "Prop Model Variants (max)", "default": 4, "min": 1, "max": 16, "description": "How many ACTIVE 3D model variants one prop may carry. Scatter and repeated placements spread over the variants, so a wood is not the same tree twenty times. Every active variant is another mesh a client downloads for the same object — raise it only for props that are placed in large numbers. Generating a model appends a variant until this cap is reached."},
             "scene_render_mode": {"type": "select", "label": "Scene Render Mode", "choices": ["multi_ref", "only_background"], "default": "multi_ref", "description": "How the 'Rendered' view builds its request. 'multi_ref': background + the present characters' expression images as reference images, pose from text. 'only_background': only the background as reference — every person is described in text (appearance + pose). Both work with any generate backend (Qwen, Flux, Krea2, …)."},
             "scene_render_cooldown_s": {"type": "int", "label": "Scene Render Cooldown (s)", "default": 120, "min": 0, "description": "Minimum seconds between fresh scene generations (cache misses) — panel remounts and signature churn (variant updates, presence changes) must not burn renders back to back. While cooling down, the newest existing scene image is served. 0 = off; the ⟳ button always bypasses. SYSTEM time."},

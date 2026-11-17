@@ -153,6 +153,16 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
          "char_spec_fallback": "tpose_view_workflow"}, needs_ref_slot=True,
         hint="An edit of a reference picture: a backend that takes a reference image is required. Generated only "
              "by a click on Generate (Figure → Dressed views)."), "requires_chain": True},
+    # Ruling A175: step 1 of a dressed back/side view — the dressed front
+    # TURNED to a rear/side view with a camera-angle LoRA (image_generation.
+    # outfit_turn_lora); its cut-out is the second picture of the draft edit.
+    "outfit_back_turn": _image(
+        "Outfit — turn (back/side)", "Figure tab, Dressed views: the dressed front turned to a rear or side view "
+                                     "(step 1 of a dressed back/side view; cut out, then the draft's second picture)",
+        ["outfit_edit"], _WORLD,
+        hint="A view-change edit of the dressed front with the camera-angle LoRA of Media Generation → Reference "
+             "renders → Outfit turn LoRA. Freely routable: the LoRA is sent only to a backend the LoRA library "
+             "associates it with — any other renders the turn without it (one warning)."),
     "outfit_back_draft": _image(
         "Outfit — back draft", "Figure tab, Dressed views: back draft, an edit of the base back view (the outfit's "
                                "reference or the dressed front as a second picture)",

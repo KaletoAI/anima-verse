@@ -9,7 +9,7 @@ scan callers by AST/text, and Part D checks the service with transport doubles.
 
 PART A — THE CATALOG, DERIVED BY HAND FROM THE SPEC
 ---------------------------------------------------
-A1. Exactly these 39 occasions (§ 1 table, minus `mesh_low` which the review
+A1. Exactly these 40 occasions (§ 1 table, minus `mesh_low` which the review
     DROPS, plus `frame` which the review ADDS, plus `tpose_view` from
     plan-tier-animationen.md P1, plus `garment_view` and `mesh_garment` from
     the base-body phase-4 plan, R4, plus the five base-body steps of the
@@ -31,9 +31,11 @@ A1. Exactly these 39 occasions (§ 1 table, minus `mesh_low` which the review
     `outfit_back` and `outfit_side` — the second step of a dressed back/side
     view is the CPU composite (Task 11g, Ruling C1)); plus `hair_strands`
     (mesh/txt2hair, character-scoped on hair_strands_workflow: HAAR strands
-    from text, strand-hair plan 2026-11-13 Task 11) right after hair_mesh):
+    from text, strand-hair plan 2026-11-13 Task 11) right after hair_mesh); plus
+    `outfit_back_turn` (image, world-only: the turn step of a dressed back/side
+    view, Ruling A175) right before outfit_back_draft):
       photo instagram profile expression tpose tpose_view garment_view
-      base_front base_view outfit_front outfit_back_draft
+      base_front base_view outfit_front outfit_back_turn outfit_back_draft
       outfit_side_draft scene_view
       location timevariant event prop surface_texture item regenerate frame video
       mesh_humanoid mesh_creature rig_humanoid rig_creature upscale face_retexture
@@ -46,7 +48,7 @@ P2 adds upscale (image/upscale), P1 adds face_retexture (mesh/face_retexture).
 A3. media: video -> "video"; the five mesh_*, both rigs, face_retexture,
     hair_mesh, hair_strands, mesh_footwear -> "mesh";
     pose_animation -> "animation"; 23 occasions "image" (24 + footwear_empty
-    - outfit_back - outfit_side, Task 11g).
+    - outfit_back - outfit_side, Task 11g; 26 since earlier additions + outfit_back_turn, A175).
 A4. P1/P2: all mesh_* occasions require img2mesh/none. rig_humanoid
     requires mesh2rig/mixamo; rig_creature mesh2rig/generic.
     pose_animation requires mesh2anim; image/video occasions use category render.
@@ -95,7 +97,7 @@ A9. mesh_occasion_for_rig: mixamo -> mesh_humanoid, generic -> mesh_creature,
     review carry-over: guessing mesh_humanoid for it would mesh with a
     skeleton nobody asked for). Fails on commit 4893221f, which answered
     "mesh_humanoid" for "bogus".
-A10. catalog_payload() has 39 rows in catalog order, each with the keys
+A10. catalog_payload() has 40 rows in catalog order, each with the keys
     id, label, media, category, rig, character_scoped, needs_ref_slot, covers,
     pose_check, hint, default_chain;
     every label is a non-empty English string.
@@ -198,7 +200,7 @@ def part_a():
     # Ruling A87: base_reference / outfit_reference — the full-body references the A-pose fronts are edits of.
     expected_ids = ["photo", "instagram", "profile", "expression", "tpose", "tpose_view",
                     "garment_view", "base_front", "base_reference", "base_view", "outfit_front",
-                    "outfit_reference", "outfit_back_draft",
+                    "outfit_reference", "outfit_back_turn", "outfit_back_draft",
                     "outfit_side_draft", "scene_view", "location",
                     "timevariant", "event", "prop",
                     "surface_texture", "item", "regenerate", "frame", "video",
@@ -207,7 +209,7 @@ def part_a():
                     "footwear_empty", "hair_mesh", "hair_strands",
                     "pose_animation",
                     "pose_transition"]
-    check("A1 the 39 occasions in catalog order", occ.occasion_ids(), expected_ids)
+    check("A1 the 40 occasions in catalog order", occ.occasion_ids(), expected_ids)
 
     try:
         occ.get_occasion("mesh_low")
@@ -220,7 +222,7 @@ def part_a():
     check("A3 mesh media", sorted(i for i, m in media.items() if m == "mesh"),
           ["face_retexture", "hair_mesh", "hair_strands", "mesh_building", "mesh_creature", "mesh_footwear", "mesh_garment", "mesh_humanoid",
            "mesh_object", "rig_creature", "rig_humanoid"])
-    check("A3 image media count", sum(1 for m in media.values() if m == "image"), 25)
+    check("A3 image media count", sum(1 for m in media.values() if m == "image"), 26)
 
     check("A4 rigs", {i: occ.get_occasion(i).get("rig") for i in
                       ("mesh_humanoid", "mesh_creature", "mesh_object", "mesh_building",
