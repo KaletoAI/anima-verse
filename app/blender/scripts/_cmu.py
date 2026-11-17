@@ -713,7 +713,8 @@ def resample_indices(n_frames: int, source_fps: float, fps: float,
     stepping the converter uses (``cmu_clip._Take``). ``speed`` is the
     playback factor: 0.5 plays the take at half speed — twice the output
     frames over the same source window. ``start_s``/``end_s`` stay SOURCE
-    seconds."""
+    seconds. Every index is a frame of the take: a ``t`` just below the end
+    rounds up to ``n_frames`` and is clamped to the last frame."""
     first = int(round(start_s * source_fps))
     last = n_frames if end_s is None else min(n_frames, int(round(end_s * source_fps)))
     speed = float(speed) if speed and speed > 0 else 1.0
@@ -721,6 +722,6 @@ def resample_indices(n_frames: int, source_fps: float, fps: float,
     idx = []
     t = float(first)
     while t < last - 1e-6:
-        idx.append(int(round(t)))
+        idx.append(min(int(round(t)), n_frames - 1))
         t += step
     return idx
