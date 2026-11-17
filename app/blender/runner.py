@@ -63,6 +63,12 @@ _VERSION_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
 
 #: ``(path, st_mtime_ns, st_ino)`` -> version string of a completed probe.
 _version_cache: Dict[Tuple[str, int, int], str] = {}
+#: How long a failed or timed-out probe of one binary identity is remembered
+#: before it is tried again (``status()`` runs before every job and in routes;
+#: a hanging binary would otherwise cost the 30 s probe timeout every time).
+NEG_TTL_S = 60.0
+#: ``(path, st_mtime_ns, st_ino)`` -> ``time.monotonic()`` of the failed probe.
+_version_failed: Dict[Tuple[str, int, int], float] = {}
 
 
 def _config(path: str, default: Any) -> Any:
@@ -136,28 +142,37 @@ def _binary_identity(exe: str) -> Optional[Tuple[str, int, int]]:
 def version(executable: str = "") -> str:
     """Version string of the binary (e.g. "4.2.5 LTS"), "" if unusable.
 
-    Only a probe that ran to completion (exit 0) is cached, keyed on the
-    binary's identity: a timeout or a failed start (a host under load at boot)
-    is tried again on the next call instead of rejecting Blender until a
-    restart, and an upgrade at the same path is probed afresh."""
+    A probe that ran to completion (exit 0) is cached, keyed on the binary's
+    identity, so an upgrade at the same path is probed afresh. A timeout, a
+    failed start or a non-zero exit (a host under load at boot) is remembered
+    for ``NEG_TTL_S`` only and then tried again, instead of rejecting Blender
+    until a restart."""
     exe = executable or find_executable()
     if not exe:
         return ""
     key = _binary_identity(exe)
-    if key is not None and key in _version_cache:
-        return _version_cache[key]
+    if key is not None:
+        if key in _version_cache:
+            return _version_cache[key]
+        failed_at = _version_failed.get(key)
+        if failed_at is not None and time.monotonic() - failed_at < NEG_TTL_S:
+            return ""
     try:
         proc = subprocess.run([exe, "--version"], capture_output=True, text=True,
                               errors="replace", timeout=30)
     except Exception as e:
         logger.debug("Blender version unreadable (%s): %s", exe, e)
+        proc = None
+    if proc is None or proc.returncode != 0:
+        if proc is not None:
+            logger.debug("Blender version probe failed (%s): exit %d", exe, proc.returncode)
+        if key is not None:
+            _version_failed[key] = time.monotonic()
         return ""
     first = (proc.stdout.strip().splitlines() or [""])[0]
     ver = first.replace("Blender", "").strip()
-    if proc.returncode != 0:
-        logger.debug("Blender version probe failed (%s): exit %d", exe, proc.returncode)
-        return ""
     if key is not None:
+        _version_failed.pop(key, None)
         _version_cache[key] = ver
     return ver
 
