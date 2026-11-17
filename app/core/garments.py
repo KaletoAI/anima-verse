@@ -3748,8 +3748,10 @@ class _Job:
 
     def __init__(self, item_id: str, steps: Union[None, str, Iterable[str]], view: Optional[str],
                  force: bool, automatic: bool = False, state: Optional[str] = None, only: bool = False,
-                 prerequisites: bool = False, body: str = ""):
+                 prerequisites: bool = False, body: str = "", backend: str = ""):
         self.item_id, self.steps, self.view, self.force = item_id, steps, view, force
+        #: A187: the explicit mesh backend of a mesh Regenerate ("" = Auto (routing); ``mesh_pick``).
+        self.backend = backend
         #: Ruling A50: the outfit body a fit-only run re-fits on ("" = the plain body, ``refit_on_body``).
         self.body = body
         #: Only the named steps, nothing after them (``run_garment(only=…)``, ruling F13 d); a view run always.
@@ -3779,15 +3781,17 @@ class _Job:
     @property
     def plain(self) -> bool:
         """A default run (first missing step on, the worn state) — what a trigger asks for."""
-        return self.steps is None and self.view is None and not self.force and self.state is None and not self.body
+        return (self.steps is None and self.view is None and not self.force and self.state is None and not self.body
+                and not self.backend)
 
-    def key(self) -> Tuple[str, Any, Optional[str], bool, Optional[str], bool, bool, str]:
+    def key(self) -> Tuple[str, Any, Optional[str], bool, Optional[str], bool, bool, str, str]:
         """What makes two runs the same request (the steps as a tuple, the state, ``only``, ``prerequisites``,
         the body)."""
         steps = self.steps
         if steps is not None and not isinstance(steps, str):
             steps = tuple(steps)
-        return self.item_id, steps, self.view, bool(self.force), self.state, self.only, self.prerequisites, self.body
+        return (self.item_id, steps, self.view, bool(self.force), self.state, self.only, self.prerequisites, self.body,
+                self.backend)
 
 
 def _fit_only(steps: Union[None, str, Iterable[str]]) -> bool:
@@ -3986,9 +3990,11 @@ def _execute(character_name: str, job: "_Job") -> Optional[str]:
                                      force=job.force, state=job.state, only=job.only, beside=True)
         else:
             # ``prerequisites`` only when asked (Ruling A33): every other run keeps its call as before.
-            job.result = run_garment(character_name, job.item_id, steps=job.steps, view=job.view,
-                                     force=job.force, state=job.state, only=job.only,
-                                     **({"prerequisites": True} if job.prerequisites else {}))
+            from app.core import mesh_pick
+            with mesh_pick.use(job.backend):  # A187: a mesh Regenerate's explicit backend, "" = routing
+                job.result = run_garment(character_name, job.item_id, steps=job.steps, view=job.view,
+                                         force=job.force, state=job.state, only=job.only,
+                                         **({"prerequisites": True} if job.prerequisites else {}))
     except Exception as e:  # noqa: BLE001 — a worker thread reports, never raises
         logger.error("Garment run %s/%s failed: %s", character_name, job.item_id, e)
         error = str(e) or type(e).__name__
@@ -4148,7 +4154,7 @@ def _position_locked(character_name: str, job: "_Job") -> Dict[str, Any]:
 def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, Iterable[str]] = None,
                   view: Optional[str] = None, force: bool = False,
                   state: Optional[str] = None, only: bool = False,
-                  prerequisites: bool = False, body: str = "") -> Dict[str, Any]:
+                  prerequisites: bool = False, body: str = "", backend: str = "") -> Dict[str, Any]:
     """Run ``run_garment`` in the character's worker thread — at once when
     the character has no garment run, else queued behind its runs (never
     refused). An identical waiting run (same item, steps, view, force) is not
@@ -4187,13 +4193,18 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
 
     ``body`` (Ruling A50, a fit-only run of a clothing or footwear piece): the outfit body the Re-fit fits on
     (``refit_on_body``, after the plain body's fit when that is due) — "" the plain body; ValueError otherwise
-    (``check_body_run``)."""
+    (``check_body_run``).
+
+    ``backend`` (A187): the explicit img2mesh backend of a mesh Regenerate (``steps`` "mesh" only, ValueError
+    otherwise) — ``mesh_pick``; "" = the occasion's routing chain."""
     from app.core import garment_store as gs
+    if backend and steps != "mesh":
+        raise ValueError("A backend can only be picked for the mesh step")
     check_run(character_name, item_id, steps=steps, view=view, state=state,
               **({"prerequisites": True} if prerequisites else {}))
     check_body_run(character_name, item_id, steps=steps, body=body)
     wanted = _Job(item_id, steps, view, bool(force), state=state, only=only, prerequisites=prerequisites,
-                  body=body or "")
+                  body=body or "", backend=backend or "")
     # A default run builds the worn state: an explicit run of the OTHER state never takes its place.
     takes_default = wanted.state is None or wanted.state == _worn_state(character_name, item_id)
     # A fit-only run is a CPU refit: tracked from the click on (pending while it waits behind other runs).
@@ -4235,6 +4246,7 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
                 # Explicit wins, the place in the queue stays.
                 job.steps, job.view, job.force, job.state = wanted.steps, wanted.view, wanted.force, wanted.state
                 job.only, job.prerequisites, job.body = wanted.only, wanted.prerequisites, wanted.body
+                job.backend = wanted.backend
         if job is None:
             job = wanted
             queue.append(job)

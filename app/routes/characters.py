@@ -2159,6 +2159,9 @@ class GarmentRunRequest(BaseModel):
     # With a view (Ruling A33): run the view's missing prerequisite views first (the button's explicit "first"
     # action); without it a missing one is a 409 before anything is spent.
     prerequisites: bool = False
+    # A187: with step "mesh", an explicit img2mesh backend (the Regenerate dialog's pick); absent / "" = Auto
+    # (the piece's routing occasion). Checked before anything is queued: 503 when it is not available.
+    backend: Optional[str] = None
     # Ruling A50: with step "fit", the body shape the Re-fit fits on (an outfit body id; "plain" / None = the plain
     # body) — the piece dialog's selected body.
     body: Optional[str] = None
@@ -2897,6 +2900,29 @@ def set_character_outfit_options(character_name: str, body: OutfitOptionsRequest
     return {"boot_hem": mode, "applicable": hem_applicable(character_name, profile=get_character_profile(character_name) or {})}
 
 
+@router.get("/{character_name}/garments/{item_id}/mesh-backends")
+def character_garment_mesh_backends(character_name: str, item_id: str,
+                                    _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """A187: the choices of a piece's mesh Regenerate dialog — ``{occasion, backends: [{name, model, cost}],
+    default}``: every enabled img2mesh backend (each serves every img2mesh occasion) and what "Auto (routing)"
+    resolves the piece's occasion (``mesh_garment`` for clothing, ``mesh_footwear`` for a shoe) to now.
+    404 for an item that is no clothing / footwear garment of the character. Admin-only."""
+    from app.core import footwear_source, garment_mesh, garments
+    from app.core.model3d import list_mesh_backends
+    _require_character(character_name)
+    try:
+        _item_, kind = garments._item(character_name, item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if kind not in ("clothing", "footwear"):
+        raise HTTPException(status_code=404, detail="Only clothing and footwear pieces have a generated mesh")
+    occasion = footwear_source.MESH_OCCASION if kind == "footwear" else garment_mesh.mesh_occasion(kind)
+    listed = list_mesh_backends(occasion=occasion)
+    return {"occasion": occasion, "default": listed.get("default") or "",
+            "backends": [{"name": b["name"], "model": b.get("model") or "", "cost": b.get("cost") or 0}
+                         for b in listed.get("backends") or []]}
+
+
 @router.post("/{character_name}/garments/{item_id}/run", status_code=202)
 def run_character_garment(character_name: str, item_id: str, body: GarmentRunRequest,
                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
@@ -2927,10 +2953,16 @@ def run_character_garment(character_name: str, item_id: str, body: GarmentRunReq
         if base_body.current_base(character_name) is None:
             raise ValueError(f"{character_name} is not on the base-body pipeline")
         on = "" if body.body in (None, "", "plain") else str(body.body)
+        pick = str(body.backend or "").strip()
+        if pick:
+            if body.step != "mesh":
+                raise ValueError("A backend can only be picked for the mesh step")
+            from app.core.explicit_backend import require_explicit_backend
+            require_explicit_backend(pick, "mesh", has_input_image=True)  # 503 before anything is queued
         return garments.start_garment(character_name, item_id, steps=body.step, view=body.view,
                                       force=body.force, state=body.state,
                                       only=bool(body.step) and (not body.chain or body.view is not None),
-                                      prerequisites=body.prerequisites, body=on)
+                                      prerequisites=body.prerequisites, body=on, backend=pick)
     except garments.PrerequisiteMissing as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:

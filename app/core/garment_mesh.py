@@ -716,12 +716,13 @@ def _attempt(name: str, kind: str, cut: Dict[str, Path], raw: Path, candidate: P
              attempt: int) -> Dict[str, Any]:
     """One fresh generation + decimation + gate; the attempt's record.
     Raises when the generation or the decimation fails."""
+    from app.core import mesh_pick
     from app.imagegen.service import get_image_service
     res = get_image_service().generate_mesh(
         source_image_path=str(cut["front"]), output_path=str(raw),
         character_name=name, mesh_name=f"{name}-{kind}",
         view_images={view: str(path) for view, path in cut.items() if view != "front"},
-        occasion=mesh_occasion(kind),
+        occasion=mesh_occasion(kind), backend_glob=mesh_pick.current(),
         face_num=FACE_NUM, material="dielectric", alpha="opaque")
     if not res.get("ok"):
         raise RuntimeError(f"garment mesh generation failed: {res.get('error') or 'unknown error'}")

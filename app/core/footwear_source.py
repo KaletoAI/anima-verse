@@ -501,9 +501,11 @@ def _step_cutout(iid: str, ssig: str, seed: int, d: Path) -> None:
 def _mesh_attempt(iid: str, cutout: Path, raw: Path, candidate: Path, alpha, attempt: int) -> Dict[str, Any]:
     """One fresh mesher call + decimation + gates; the attempt's record. Raises when
     the generation or the decimation fails."""
+    from app.core import mesh_pick
     from app.imagegen.service import get_image_service
     res = get_image_service().generate_mesh(
         source_image_path=str(cutout), output_path=str(raw), occasion=MESH_OCCASION,
+        backend_glob=mesh_pick.current(),
         mesh_name=f"footwear-{iid}", face_num=FACE_NUM, material="dielectric", alpha="opaque")
     if not res.get("ok"):
         raise RuntimeError(f"shoe mesh generation failed: {res.get('error') or 'unknown error'}")
