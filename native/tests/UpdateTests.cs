@@ -155,6 +155,17 @@ public class UpdateTests
             RestartArguments.FromLinuxCommandLine(raw));
     }
 
+    [Fact]
+    public void RestartArgumentsDropAppRunsLogFilePairs()
+    {
+        // AppRun's own pair (and two accumulated by older restarts) go; the engine/client split stays.
+        var raw = Encoding.UTF8.GetBytes("/mounted/client\0--log-file\0/logs/b.engine.log\0--log-file\0/logs/a.engine.log\0--headless\0--\0--log-file\0client value\0");
+        Assert.Equal(new[] { "--headless", "--", "--log-file", "client value" },
+            RestartArguments.FromLinuxCommandLine(raw));
+        var dangling = Encoding.UTF8.GetBytes("/mounted/client\0--log-file\0");
+        Assert.Equal(new[] { "--log-file" }, RestartArguments.FromLinuxCommandLine(dangling));
+    }
+
     private static HttpResponseMessage Manifest(string file = "release.AppImage", int? size = null, string? sha = null)
         => new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(new {
             version = Newer, file, size = size ?? Payload.Length,
