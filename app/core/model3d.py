@@ -5453,16 +5453,21 @@ def run_face_cleanup(character_name: str, signature: str, follow_up: str, *, fro
 
 def face_cleanup_rerun_state(character_name: str) -> Optional[Dict[str, Any]]:
     """What the improvement "Re-run face cleanup" may do for a character:
-    None when nothing (no humanoid source, the switch off, a run going, the
-    source not cleaned or already at ``face_cleanup.VERSION``), else
+    None when nothing (no humanoid source, the switch off, the source not
+    cleaned or already at ``face_cleanup.VERSION``), else
     ``{signature, from_stored, follow_up, jobs, version}`` — ``from_stored``
     when the mesher's original is not retained (the cleanup starts from the
-    stored, already cleaned source)."""
+    stored, already cleaned source).
+
+    A run of the character that is going does NOT make it None: the work is
+    still due (None would close the improvement step as done, and the type's
+    own ``apply`` holds the generation guard while it asks — it saw itself as
+    "running" and never ran). Whoever runs it takes the guard first."""
     signature = face_cleanup_signature(character_name)
     if not signature:
         return None
     state = face_cleanup_state(character_name, signature)
-    if not (state["humanoid"] and state["stored"] and state["enabled"]) or state["running"]:
+    if not (state["humanoid"] and state["stored"] and state["enabled"]):
         return None
     if state["status"] != "applied" or state["version"] == state["current_version"]:
         return None
