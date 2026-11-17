@@ -602,7 +602,9 @@ export interface ApiClip {
    *  null/missing = endless (§ A8, the sidecar's `loop_count`) */
   loop_count?: number | null;
   height_offsets_cm?: Partial<Record<'ground' | 'seat' | 'lie', number>>;
-  orientation?: { shift_cm?: [number, number] | null; partner_turn_deg?: [number, number] | null };
+  orientation?: { shift_cm?: [number, number] | null; partner_turn_deg?: [number, number] | null;
+    /** Ruling A165: partner B's yaw about its own vertical axis (degrees). */
+    partner_yaw_deg?: number | null };
   /** Ruling A139: the contact relations of a pair/group clip (`[]` = automatic channel detection). */
   contact_target?: { relations: { part: string; at: string; target: 'channel' | 'mouth' | 'hand_left' | 'hand_right' | 'none' }[]; source: string } | null;
   /** Ruling A145: how far the attached part may bend toward its target, per state (degrees). */

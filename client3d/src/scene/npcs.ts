@@ -1529,7 +1529,8 @@ export class NpcManager {
     return true;
   }
 
-  /** Ruling A129: partner B's stored turn (`orientation.partner_turn_deg`, renderer-only) about its bind hips —
+  /** Ruling A129: partner B's stored turn (`orientation.partner_turn_deg`, renderer-only; A165: with its yaw about its
+   *  own vertical axis, `partner_yaw_deg`) about its bind hips —
    *  the same `partnerTurnFix` / `fixPivot` / `fixRoot` the Library's place preview applies. */
   private pairFixOf(npc: Npc, base: string, yaw: number): { fix: PairFix; frame: number[]; pivot: [number, number, number] } | null {
     const fig = npc.figure;
@@ -1538,8 +1539,8 @@ export class NpcManager {
     const p = npc.root.position;
     const pivot = fixPivot([p.x, p.y, p.z], frame, fig.pairHipsBind);
     const role = base.slice(base.lastIndexOf('__') + 2);
-    const [tilt, roll] = role === 'b' ? fig.pairTurnDeg : [0, 0];
-    return { fix: partnerTurnFix(tilt, roll, frame), frame, pivot };
+    const [tilt, roll, ownYaw] = role === 'b' ? fig.pairTurnDeg : [0, 0, 0];
+    return { fix: partnerTurnFix(tilt, roll, frame, ownYaw), frame, pivot };
   }
 
   private applyPairFix(npc: Npc, base: string, yaw: number, interactionId: string): void {
