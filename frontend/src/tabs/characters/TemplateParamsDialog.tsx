@@ -275,7 +275,9 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                 ) : null}
                 {!data.params && !saved ? (
                   <div className="ga-hint" style={WARN}>
-                    {t('Not saved yet — starting values for a {kind} (from the item); Suggest or adjust, then Save')
+                    {t(draft.kind === data.default_kind
+                      ? 'Not saved yet — starting values for a {kind} (from the item); Suggest or adjust, then Save'
+                      : 'Not saved yet — starting values for a {kind}; Suggest or adjust, then Save')
                       .replace('{kind}', t(TEMPLATE_CHOICE_LABELS[draft.kind] || draft.kind).toLowerCase())}
                   </div>
                 ) : null}
@@ -319,7 +321,8 @@ function TemplateProgressBox({ character, progress, onStarted }: {
 }) {
   const { t } = useI18n()
   const p = progress
-  const why = p.state === 'failed' && p.error ? `${t('Drape failed')}: ${p.error}` : p.state === 'ready' ? '' : t(p.reason)
+  const why = p.state === 'failed' && p.error ? `${t('Drape failed')}: ${p.error}`
+    : p.state === 'ready' || p.state === 'running' ? '' : t(p.reason)
   const at = p.built_at ? t('draped {at}').replace('{at}', p.built_at.replace('T', ' ').slice(0, 16)) : ''
   return (
     <div role="status" aria-label={t('Drape progress')} data-template-state={p.state}

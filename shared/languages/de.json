@@ -8,6 +8,7 @@
     }
   },
   "translations": {
+    "Not saved yet — starting values for a {kind}; Suggest or adjust, then Save": "Noch nicht gespeichert — Startwerte für {kind}; vorschlagen lassen oder anpassen, dann Speichern",
     "frame {n}/{m}": "Frame {n}/{m}",
     "retry with finer cloth": "zweiter Versuch mit feinerem Stoff",
     "Not saved yet — starting values for a {kind} (from the item); Suggest or adjust, then Save": "Noch nicht gespeichert — Startwerte für {kind} (aus dem Gegenstand); vorschlagen lassen oder anpassen, dann Speichern",
