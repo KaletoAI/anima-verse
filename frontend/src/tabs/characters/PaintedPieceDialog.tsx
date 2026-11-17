@@ -87,22 +87,29 @@ export function PaintedPieceDialog({ character, itemId, name, onClose, initialIn
   // The viewer's model: the painted body in the colour shown (the draft while one is picked).
   const lastUrl = useRef('')
   const timer = useRef<number | null>(null)
+  // Only the newest request may show its answer (an older build can finish last); bumped on unmount too,
+  // so a late answer releases its blob instead of creating a URL nobody revokes.
+  const previewSeq = useRef(0)
   const loadPreview = useCallback((c: PaintedColour) => {
     if (timer.current) window.clearTimeout(timer.current)
     timer.current = window.setTimeout(async () => {
+      timer.current = null
+      const seq = ++previewSeq.current
       setPreviewing(true)
       try {
         const res = await fetch(`${base}/preview.glb`, { method: 'POST', credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c) })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const url = URL.createObjectURL(await res.blob())
+        const blob = await res.blob()
+        if (seq !== previewSeq.current) return
+        const url = URL.createObjectURL(blob)
         if (lastUrl.current) URL.revokeObjectURL(lastUrl.current)
         lastUrl.current = url
         setPreviewUrl(url)
       } catch {
-        setPreviewUrl('')
+        if (seq === previewSeq.current) setPreviewUrl('')
       } finally {
-        setPreviewing(false)
+        if (seq === previewSeq.current) setPreviewing(false)
       }
     }, 250)
   }, [base])
@@ -110,7 +117,11 @@ export function PaintedPieceDialog({ character, itemId, name, onClose, initialIn
     if (info?.texture && built) loadPreview(shown)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [built, shown.hex, shown.strength, loadPreview])
-  useEffect(() => () => { if (lastUrl.current) URL.revokeObjectURL(lastUrl.current) }, [])
+  useEffect(() => () => {
+    previewSeq.current += 1
+    if (timer.current) window.clearTimeout(timer.current)
+    if (lastUrl.current) URL.revokeObjectURL(lastUrl.current)
+  }, [])
 
   const saveColour = async (c: PaintedColour | null) => {
     setPosting(true)
