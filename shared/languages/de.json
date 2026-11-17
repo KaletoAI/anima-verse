@@ -6064,7 +6064,7 @@
     "Shell made from replaced piece-only views — rebuild it": "Hülle aus ersetzten Nur-Teil-Ansichten — neu erstellen",
     "Makes the shell again from the body and the piece-only views, on the CPU (0 hub jobs). Piece-only views that are due (another source chosen) are made first.": "Erstellt die Hülle neu aus dem Körper und den Nur-Teil-Ansichten, auf der CPU (0 Hub-Jobs). Fällige Nur-Teil-Ansichten (andere Quelle gewählt) werden zuerst erstellt.",
     "Overlap with the shoe": "Überlappung mit dem Schuh",
-    "Whole boot, body leg cut off inside": "Ganzer Stiefel, Bein im Stiefel abgeschnitten",
+    "Whole boot over cut leg": "Ganzer Stiefel, Bein gekürzt",
     "The boot stays one piece (shoe part and its full shaft, rigged to the leg). The body’s leg is cut off inside it, {overlap} cm below the boot’s top edge, so no skin can show through the boot. Re-fit: 0 hub jobs.": "Der Stiefel bleibt ein Stück (Schuhteil und ganzer Schaft, am Bein geriggt). Das Bein des Körpers wird darin abgeschnitten, {overlap} cm unter dem oberen Stiefelrand, so dass keine Haut durch den Stiefel scheinen kann. Neu anpassen: 0 Hub-Jobs.",
     "Shown fit: boot top / body cut (cm) {sides}": "Gezeigte Anpassung: Stiefelrand / Körperschnitt (cm) {sides}",
     "Overlap inside the boot": "Überlappung im Stiefel",

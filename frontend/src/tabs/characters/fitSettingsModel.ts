@@ -203,7 +203,7 @@ export const TRUNK_CHOICES: TrunkChoice[] = ['auto', 'generated', 'fitted']
 export const SHAFT_LABELS: Record<ShaftChoice, string> = {
   split: 'Keep (shoe + leg part)',
   cut: 'Cut off at the shoe top',
-  whole: 'Whole boot, body leg cut off inside',
+  whole: 'Whole boot over cut leg',
 }
 const cmOf = (mm: number) => String(Math.round(mm / 10))
 
