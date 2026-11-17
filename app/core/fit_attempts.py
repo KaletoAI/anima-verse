@@ -276,24 +276,32 @@ def covered_part_groups(character_name: str, item_id: str, *,
     ``partially_covers`` does not count. [] when nothing is covered or on any failure (the preview then shows the
     stored file)."""
     try:
-        from app.core.body_slots import is_slot_exposed
         from app.models.inventory import get_item
-        from app.plugins.registry import packages
         profile = _profile(character_name, profile)
         pieces = {str(k): str(v) for k, v in (profile.get("equipped_pieces") or {}).items() if v}
         if item_id not in pieces.values():
             for slot in ((get_item(item_id) or {}).get("outfit_piece") or {}).get("slots") or []:
                 pieces[str(slot)] = item_id
-        view = {**profile, "equipped_pieces": pieces}
-        out = set()
-        for package in packages():
-            for slot in package.body_slots:
-                if slot.mesh_part and not is_slot_exposed(slot, view):
-                    out.update(rig.id for rig in slot.rigs)
-        return sorted(out)
+        return covered_part_groups_of(pieces, profile)
     except Exception:  # noqa: BLE001 — a preview detail, never a failure of the route
         logger.exception("Covered part groups of %s/%s unreadable", character_name, item_id)
         return []
+
+
+def covered_part_groups_of(pieces: Dict[str, str], profile: Dict[str, Any]) -> List[str]:
+    """The rig groups of every body slot with a separate mesh part (``mesh_part``) that the outfit ``pieces``
+    (``{clothing slot: item id}``) cover, sorted — ``body_slots.is_slot_exposed`` False under ``profile`` with
+    ``pieces`` as its worn pieces. Every worn piece counts in whatever mesh mode it is built (own mesh, template,
+    shell, painted, in the body): the rule reads slots and ``covers`` only. Raises on a broken package registry."""
+    from app.core.body_slots import is_slot_exposed
+    from app.plugins.registry import packages
+    view = {**(profile or {}), "equipped_pieces": {str(k): str(v) for k, v in (pieces or {}).items() if v}}
+    out = set()
+    for package in packages():
+        for slot in package.body_slots:
+            if slot.mesh_part and not is_slot_exposed(slot, view):
+                out.update(rig.id for rig in slot.rigs)
+    return sorted(out)
 
 
 def covered_parts_token(groups: List[str]) -> str:

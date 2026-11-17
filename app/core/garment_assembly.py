@@ -621,11 +621,29 @@ def _state(wanted: List[Dict[str, Any]], tier: str, *,
     return out
 
 
-def _current(assembled: Path, bare: Path, state: Dict[str, Any]) -> bool:
+def _current(assembled: Path, bare: Path, state: Dict[str, Any], hidden: Optional[List[str]] = None) -> bool:
     if not assembled.is_file():
         return False
     meta = _read_json(assembled.with_suffix(".json"))
-    return meta.get("bare_revision") == bare_revision(bare) and meta.get("garments") == state
+    return (meta.get("bare_revision") == bare_revision(bare) and meta.get("garments") == state
+            and list(meta.get("hidden_parts") or []) == list(hidden or []))
+
+
+def _hidden_parts(character_name: str, bare_meta: Optional[Dict[str, Any]]) -> List[str]:
+    """The attached-part groups an assembly of ``bare_meta`` drops (``fit_attempts.covered_part_groups_of`` over its
+    ``pieces``): the plain body served for a worn outfit (Ruling A119, ``bare_meta_of``) carries the part of every
+    slot with a separate mesh part (Ruling A49), and a covering piece — grafted, painted or in the body alike — must
+    hide it. A model without that part node is left as it is (``without_covered_parts``). [] on any failure."""
+    pieces = (bare_meta or {}).get("pieces")
+    if not isinstance(pieces, dict) or not pieces:
+        return []
+    try:
+        from app.core.fit_attempts import covered_part_groups_of
+        from app.models.character import get_character_profile
+        return covered_part_groups_of(pieces, get_character_profile(character_name) or {})
+    except Exception:  # noqa: BLE001 — nothing hidden, never a failure of serving
+        logger.exception("Covered parts of %s unreadable", character_name)
+        return []
 
 
 # --- Serving ------------------------------------------------------------------
@@ -650,12 +668,14 @@ def served(character_name: str, path: Optional[Path], tier: str) -> Optional[Pat
             return path
         signature = path.stem
         assembled = assembled_path(directory, signature, tier)
-        wanted = _wanted_for(character_name, directory, signature)
+        bare_meta = bare_meta_of(character_name, directory, signature)
+        wanted = _wanted(character_name, bare_meta=bare_meta)
         if not wanted:
             if assembled.exists():
                 schedule(character_name, signature)  # takes the leftover away
             return path
-        if _current(assembled, path, _state(wanted, tier, character_name=character_name)):
+        if _current(assembled, path, _state(wanted, tier, character_name=character_name),
+                    _hidden_parts(character_name, bare_meta)):
             return assembled
         schedule(character_name, signature)
         return path
@@ -824,13 +844,16 @@ def _attach_strands(character_name: str, garment: Dict[str, Any], source: bytes,
 
 def _build(character_name: str, directory: Path, bare: Path,
            wanted: List[Dict[str, Any]], tier: str,
-           warnings: Optional[List[str]] = None) -> Tuple[bytes, Dict[str, Any], list]:
+           warnings: Optional[List[str]] = None, *,
+           hidden: Optional[List[str]] = None) -> Tuple[bytes, Dict[str, Any], list]:
     """Read the bare file + its sidecar under the publication lock (so bytes
     and revision belong together), cut the body for a footwear piece, graft
     every garment (a footwear piece as its shoe nodes — the two foot nodes,
     and a boot's two shaft nodes, each read by its exact name), validate.
     ``warnings``: the assembly's own ``garment_warnings`` (``_wanted``),
-    appended to the bare sidecar's in the assembled sidecar. Returns (bytes,
+    appended to the bare sidecar's in the assembled sidecar. ``hidden``: the
+    attached-part groups a covering worn piece hides (``_hidden_parts``),
+    dropped from the body and recorded as ``hidden_parts``. Returns (bytes,
     sidecar, captured revision)."""
     import hashlib
     from app.core import glb_mesh
@@ -850,6 +873,9 @@ def _build(character_name: str, directory: Path, bare: Path,
     if meta.get("rig") != "mixamo":
         raise ValueError(f"bare model {bare.name} is no rigged outfit model (rig {meta.get('rig')!r})")
     blob = data
+    if hidden:
+        from app.core.fit_attempts import without_covered_parts
+        blob = without_covered_parts(blob, list(hidden))
     grafted = [g for g in wanted if g["fit"] is not None]  # never a pending one (``_wanted`` with build_layers fits first)
     foot_pose: Optional[Dict[str, Any]] = None
     for garment in grafted:
@@ -927,7 +953,7 @@ def _build(character_name: str, directory: Path, bare: Path,
     if not frames.get("ok"):
         raise ValueError("assembled model rewrote the rig frames: " + "; ".join(frames.get("errors") or []))
     side = {**meta, "garments": _state(wanted, tier, alpha_cutoff=cutoff, character_name=character_name),
-            "bare_revision": revision,
+            "bare_revision": revision, "hidden_parts": list(hidden or []),
             "assembled_at": utc_now_iso()}
     if scalp_tints:
         side["scalp_tint"] = scalp_tints
@@ -964,8 +990,9 @@ def assemble(character_name: str, signature: str, *,
     directory = model3d.get_model3d_dir(character_name)
     # The layered fits of pieces worn over each other are built here (CPU, no hub job), never while serving.
     warnings: List[str] = []
-    wanted = _wanted(character_name, bare_meta=bare_meta_of(character_name, directory, signature),
-                     build_layers=True, warnings=warnings)
+    bare_meta = bare_meta_of(character_name, directory, signature)
+    wanted = _wanted(character_name, bare_meta=bare_meta, build_layers=True, warnings=warnings)
+    hidden = _hidden_parts(character_name, bare_meta)
     statuses: Dict[str, str] = {}
     errors: List[str] = []
     changed = False
@@ -980,11 +1007,11 @@ def assemble(character_name: str, signature: str, *,
             changed |= removed
             statuses[tier] = "removed" if removed else "none"
             continue
-        if _current(target, bare, _state(wanted, tier, character_name=character_name)):
+        if _current(target, bare, _state(wanted, tier, character_name=character_name), hidden):
             statuses[tier] = "current"
             continue
         try:
-            blob, side, revision = _build(character_name, directory, bare, wanted, tier, warnings)
+            blob, side, revision = _build(character_name, directory, bare, wanted, tier, warnings, hidden=hidden)
         except Exception as e:  # noqa: BLE001 — one tier's failure is reported, the bare file keeps serving
             logger.warning("Garment assembly %s/%s (%s) failed: %s", character_name, signature, tier, e)
             statuses[tier] = "failed"
@@ -1017,9 +1044,11 @@ def _input_key(character_name: str, signature: str) -> str:
     """What a build of ``signature`` would read now (both tiers' bare
     revisions + wanted garments) — the failure memo's key."""
     directory = _model3d().get_model3d_dir(character_name)
-    wanted = _wanted_for(character_name, directory, signature)
+    bare_meta = bare_meta_of(character_name, directory, signature)
+    wanted = _wanted(character_name, bare_meta=bare_meta)
     return json.dumps([[bare_revision(bare_path(directory, signature, t)),
-                        _state(wanted, t, character_name=character_name)] for t in TIERS], sort_keys=True)
+                        _state(wanted, t, character_name=character_name),
+                        _hidden_parts(character_name, bare_meta)] for t in TIERS], sort_keys=True)
 
 
 def schedule(character_name: str, signature: Optional[str] = None) -> bool:
