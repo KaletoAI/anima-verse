@@ -12,7 +12,9 @@
  * THE CASES, DERIVED BY HAND (plan "Global Constraints", Task 9 "Interfaces", spec rulings 3, 5, 6)
  * ============================================================================
  * [1] Labels, verbatim from the plan:
- *       MESH_MODE_LABELS  own_mesh → "Own mesh", painted → "Painted", in_body → "In the body"
+ *       MESH_MODE_LABELS  own_mesh → "Own mesh", shell → "Shell from the body" (A168: its own mode), painted →
+ *                         "Painted", in_body → "In the body", template → "Template (fabric)"; the select's order
+ *                         own_mesh, shell, template, painted, in_body (the two own-mesh chains first, A168)
  *       HAIR_MODE_LABELS  hairdeck → "HairDeck", haar → "HAAR", body → "In the body"
  *     MESH_MODES / HAIR_MODES list them in that order (the select's order).
  * [2] hairModeDisabled(mode, built): data-driven since H3 — with the server's built list ['hairdeck', 'haar', 'body']
@@ -420,10 +422,11 @@ try {
 
 // [1]
 check('[1] MESH_MODE_LABELS', m.MESH_MODE_LABELS,
-  { own_mesh: 'Own mesh', painted: 'Painted', in_body: 'In the body', template: 'Template (fabric)' });
+  { own_mesh: 'Own mesh', shell: 'Shell from the body', painted: 'Painted', in_body: 'In the body',
+    template: 'Template (fabric)' });
 check('[1] HAIR_MODE_LABELS', m.HAIR_MODE_LABELS,
   { hairdeck: 'HairDeck', haar: 'HAAR', body: 'In the body' });
-check('[1] MESH_MODES order', m.MESH_MODES, ['own_mesh', 'painted', 'in_body', 'template']);
+check('[1] MESH_MODES order', m.MESH_MODES, ['own_mesh', 'shell', 'template', 'painted', 'in_body']);
 // Ruling A138: the template row's summary and cost line, and its due light.
 check('[1] templateSummary', m.templateSummary({ kind: 'skirt', length_m: 0.45, flare: 0.4, waist_height: 'natural',
   slit: 'left', slit_m: 0.2, sleeves: 'none', fabric: 'medium' }),
