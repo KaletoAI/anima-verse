@@ -881,6 +881,10 @@ def update_item(item_id: str,
         prev_cutout_openings = prev_piece.get("cutout_openings")
         # Same for ``closable``: kept when the update does not name it.
         prev_closable = prev_piece.get("closable")
+        # A172: the template parameters (``garment_template.set_params``) — kept when the update does not name
+        # them, a dict replaces them, anything else clears them. Without this every save of the piece (the
+        # parameter dialog's Save included) dropped them while reporting success.
+        prev_template = prev_piece.get("template")
         prev_exposed_detail = _clean_exposed_detail((item.get("outfit_piece") or {}).get("exposed_detail"))
         # Same for ``lift``; an explicit null resets it to the slot default.
         prev_lift = (item.get("outfit_piece") or {}).get("lift")
@@ -929,6 +933,9 @@ def update_item(item_id: str,
                 item["outfit_piece"]["closable"] = _clean_closable(op.get("closable"), slots)
             elif prev_closable is not None:
                 item["outfit_piece"]["closable"] = _clean_closable(prev_closable, slots)
+            template = op.get("template") if "template" in op else prev_template
+            if isinstance(template, dict) and template:
+                item["outfit_piece"]["template"] = template
             lift = _lift(op.get("lift") if "lift" in op else prev_lift)
             if lift is not None:
                 item["outfit_piece"]["lift"] = lift
