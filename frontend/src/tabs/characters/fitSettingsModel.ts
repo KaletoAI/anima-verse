@@ -98,6 +98,8 @@ export interface FitSettingsValues {
   /** A184: mm the shell's border grows around the piece's outline; cm² of gaps it closes. */
   shell_margin?: number
   shell_fill?: number
+  /** A185: "Side views for the shell" — left / right piece-only views made and read by the shell. */
+  shell_sides?: boolean
 }
 /** A166/A184: one shell setting — the setting, the shown fit's (null: no shell fit), the choices. */
 export interface ShellChoice { setting: number; made: number | null; choices: number[]; default: number }
@@ -124,6 +126,10 @@ export const SHELL_OFFSET_HINT = 'How far the shell stands off the skin, along t
 export const SHELL_MARGIN_HINT = 'How much of the body around the piece’s outline in its views the shell takes. More '
   + 'closes gaps at cup edges and thin straps; too much reaches past the piece. A change makes only this piece’s fit due '
   + '(CPU, 0 hub jobs).'
+export const SHELL_SIDES_HINT = 'The shell also reads a left and a right piece-only view, so the flanks and the band '
+  + 'under the arms come from what the side views show instead of being bridged between front and back. On: the '
+  + 'piece gets a worn and a piece-only view per side (each an edit like the back) — only those and the shell become '
+  + 'due. The front and back views still decide where they look frontally.'
 export const SHELL_FILL_HINT = 'Gaps inside the piece’s outline up to this area are closed. Keep it below the piece’s '
   + 'own openings (lattice windows, cut-outs). A change makes only this piece’s fit due (CPU, 0 hub jobs).'
 /** A184: a shell choice in words with its unit — "3 mm (default)", "0 cm² (off)". */
@@ -179,6 +185,8 @@ export interface MeshShapeInfo {
   /** A184: "Take from the body" (mm the border grows around the piece's outline) and "Fill holes up to" (cm²). */
   margin?: ShellChoice
   fill?: ShellChoice
+  /** A185: "Side views for the shell" — the setting and whether the shown shell read side views (null: no shell). */
+  sides?: { setting: boolean; made: boolean | null; default: boolean }
   /** The character's clothing-slot labels (English; translated here). */
   slot_labels?: Record<string, string>
 }

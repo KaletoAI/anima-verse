@@ -8,6 +8,15 @@
     }
   },
   "translations": {
+    "Side views and the shell due — Rebuild shell makes the views first": "Seitenansichten und Hülle fällig — „Hülle neu bauen“ macht zuerst die Ansichten",
+    "Side views for the shell": "Seitenansichten für die Hülle",
+    "Off (default)": "Aus (Standard)",
+    "On — left and right piece-only views": "An — Teil-Ansichten links und rechts",
+    "the shown shell was made with side views": "die gezeigte Hülle wurde mit Seitenansichten gemacht",
+    "the shown shell was made without side views": "die gezeigte Hülle wurde ohne Seitenansichten gemacht",
+    "the shell reads 4 views": "die Hülle liest 4 Ansichten",
+    "front and back only": "nur vorne und hinten",
+    "The shell also reads a left and a right piece-only view, so the flanks and the band under the arms come from what the side views show instead of being bridged between front and back. On: the piece gets a worn and a piece-only view per side (each an edit like the back) — only those and the shell become due. The front and back views still decide where they look frontally.": "Die Hülle liest zusätzlich eine linke und eine rechte Teil-Ansicht: Flanken und der Bereich unter den Armen kommen aus dem, was die Seitenansichten zeigen, statt zwischen vorne und hinten überbrückt zu werden. An: das Teil bekommt pro Seite eine getragene und eine Teil-Ansicht (je eine Bearbeitung wie die Rückansicht) — nur diese und die Hülle werden fällig. Wo vorne und hinten frontal hinschauen, entscheiden weiterhin sie.",
     "Not saved yet — starting values for a {kind}; Suggest or adjust, then Save": "Noch nicht gespeichert — Startwerte für {kind}; vorschlagen lassen oder anpassen, dann Speichern",
     "frame {n}/{m}": "Frame {n}/{m}",
     "retry with finer cloth": "zweiter Versuch mit feinerem Stoff",

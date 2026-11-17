@@ -24,7 +24,9 @@ import type { MeshMode } from './figureModel'
 import type { HaarPanel } from './hairstylesModel'
 
 export const GARMENT_VIEWS = ['front', 'back'] as const
-export type GarmentView = typeof GARMENT_VIEWS[number]
+/** A185: the side views a shell piece with "Side views for the shell" adds (server `garment_store.SIDE_VIEWS`). */
+export const SIDE_VIEWS = ['left', 'right'] as const
+export type GarmentView = typeof GARMENT_VIEWS[number] | typeof SIDE_VIEWS[number]
 
 /** The image steps of clothing: worn → ghost → cutout (`garment_store.GARMENT_STEPS`). */
 export type GarmentImageStep = 'worn' | 'ghost' | 'cutout'
@@ -447,6 +449,9 @@ export interface GarmentInfo {
   refit_stopped?: RefitStopped | null
   /** Current fsig fit on screen, or an older one and why (server). */
   preview_freshness?: Freshness | null
+  /** A185: the views of the worn / piece-only images (front, back — left, right too for a shell piece with side
+   *  views); absent from a server before it. */
+  views?: GarmentView[]
   /** Ruling A46: where each piece-only view comes from; null/absent for a piece without the choice. */
   piece_views?: Partial<Record<GarmentView, PieceViewInfo>> | null
   /** A183: the piece-only (ghost) prompt's class — setting, the slots' class, the texts; null/absent otherwise. */

@@ -548,10 +548,13 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
 }) {
   useClockSettings()
   const { t } = useI18n()
-  const viewLabel = (view: GarmentView) => (view === 'front' ? t('Front view') : t('Back view'))
+  const viewLabel = (view: GarmentView) => (view === 'front' ? t('Front view') : view === 'back' ? t('Back view')
+    : view === 'left' ? t('Left view') : t('Right view'))
   /** "Piece-only · Back view" — a view of a step, as the cells name it. */
   const viewName = (step: string, view: GarmentView) => `${t(stepLabels[step] || step)} · ${viewLabel(view)}`
   const steps = garment?.steps ?? {}
+  // A185: a shell piece with "Side views for the shell" has left / right worn and piece-only views too
+  const views: readonly GarmentView[] = garment?.views?.length ? garment.views : GARMENT_VIEWS
   // A view left out after an empty drafted back counts as done.
   const accepted = (step: GarmentImageStep, view: GarmentView) =>
     !!steps[step]?.[view]?.accepted || !!steps[step]?.[view]?.skipped
@@ -565,17 +568,22 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   // Ruling A140: a shell piece's fit runs once its piece-only views (the last image step it keeps) are accepted.
   const shellViewsStep = imageSteps.map((x) => x.step).filter((x) => x !== 'cutout').pop()
   // A177: piece-only views due for a shell piece (another source chosen): the shell's rebuild makes them first.
-  const viewsDueJobs = shellPiece ? GARMENT_VIEWS.reduce((n, v) => n + (garment?.piece_views?.[v]?.due ?? [])
-    .filter((d) => d.step === 'ghost').reduce((m, d) => m + (d.jobs || 0), 0), 0) : 0
-  const viewsDue = shellPiece && GARMENT_VIEWS.some((v) => (garment?.piece_views?.[v]?.due ?? [])
-    .some((d) => d.step === 'ghost'))
+  // A185: side views turned on but not made yet count as due too — their worn and piece-only views, by the plans
+  const sideSteps = imageSteps.map((x) => x.step).filter((x) => x !== 'cutout')
+  const sidesMissing = shellPiece ? views.filter((v) => !GARMENT_VIEWS.includes(v as typeof GARMENT_VIEWS[number]))
+    .flatMap((v) => sideSteps.filter((st) => !accepted(st, v)).map((st) => ({ step: st, view: v }))) : []
+  const viewsDueJobs = (shellPiece ? GARMENT_VIEWS.reduce((n, v) => n + (garment?.piece_views?.[v]?.due ?? [])
+    .filter((d) => d.step === 'ghost').reduce((m, d) => m + (d.jobs || 0), 0), 0) : 0)
+    + sidesMissing.reduce((n, m) => n + (viewRuns?.[m.step]?.[m.view]?.jobs ?? 1), 0)
+  const viewsDue = shellPiece && (sidesMissing.length > 0 || GARMENT_VIEWS.some((v) => (garment?.piece_views?.[v]?.due ?? [])
+    .some((d) => d.step === 'ghost')))
   const fitGate = fitRowGate({
     shell: shellPiece, meshAccepted: mesh?.status === 'accepted',
-    viewsReady: !!shellViewsStep && GARMENT_VIEWS.every((v) => accepted(shellViewsStep, v)),
+    viewsReady: !!shellViewsStep && views.every((v) => accepted(shellViewsStep, v)),
     fitMade: !!fit && fit.status !== 'missing', refitBlock: refitBlock || '', buildRunning: !!garment?.build_fits_piece,
     viewsDue: viewsDue && !refitOn,
   })
-  const columns = `minmax(110px, 140px) repeat(${GARMENT_VIEWS.length}, minmax(0, 1fr))`
+  const columns = `minmax(110px, 140px) repeat(${views.length}, minmax(0, 1fr))`
 
   const imageCell = (spec: ImageStepSpec, index: number, view: GarmentView): ReactNode => {
     const { step, chips } = spec
@@ -813,22 +821,22 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   return (
     <div className="ga-step-grid" style={{ gridTemplateColumns: columns }}>
       <div />
-      {GARMENT_VIEWS.map((v) => <div key={v} className="ga-step-grid-head">{viewLabel(v)}</div>)}
+      {views.map((v) => <div key={v} className="ga-step-grid-head">{viewLabel(v)}</div>)}
 
       {imageSteps.map((spec, index) => (
         <Fragment key={spec.step}>
           <StepLabel garment={garment} step={spec.step} label={stepLabels[spec.step] || spec.step}
             help={STEP_HELP[spec.step] || ''} />
           {shellPiece && spec.step === 'cutout' ? (
-            <div className="ga-step-grid-row" style={{ gridColumn: `span ${GARMENT_VIEWS.length}` }}>
+            <div className="ga-step-grid-row" style={{ gridColumn: `span ${views.length}` }}>
               <span className="ga-hint">{t('Not needed: the shell is made from the piece-only views')}</span>
             </div>
-          ) : GARMENT_VIEWS.map((view) => imageCell(spec, index, view))}
+          ) : views.map((view) => imageCell(spec, index, view))}
         </Fragment>
       ))}
 
       <StepLabel garment={garment} step="mesh" label={stepLabels.mesh || 'Mesh'} help={STEP_HELP.mesh} />
-      <div className="ga-step-grid-row" style={{ gridColumn: `span ${GARMENT_VIEWS.length}` }}>
+      <div className="ga-step-grid-row" style={{ gridColumn: `span ${views.length}` }}>
         <GateIcon specs={MESH_CHIPS} record={mesh?.metrics} limits={limits.mesh} extra={[meshText, ...meshAttempts]} />
         <RunBadge mark={runMark(feedback, garment, order, 'mesh')} />
         <span className="ga-hint" style={{ minWidth: 0 }}>{meshText}</span>
@@ -864,7 +872,7 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
       </div>
 
       <StepLabel garment={garment} step="fit" label={stepLabels.fit || 'Fit'} help={STEP_HELP.fit} />
-      <div className="ga-step-grid-row" style={{ gridColumn: `span ${GARMENT_VIEWS.length}` }}>
+      <div className="ga-step-grid-row" style={{ gridColumn: `span ${views.length}` }}>
         <GateIcon specs={fitChips} record={fitRecord} limits={limits.fit} extra={[fitText]} />
         {!shownFit && fit?.status === 'accepted' && fit.user_accepted ? (
           // Ruling A69: the plain body's fit its checks refused, accepted by the user — as an image or a mesh.

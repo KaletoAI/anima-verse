@@ -23,7 +23,7 @@ import { stampLabel } from './freshnessText'
 import {
   ALLOWANCE_CHOICES, ALLOWANCE_HINT, DEPTH_CHOICES, DEPTH_HINT, SLEEVE_CHOICES, SLEEVE_HINTS, SLEEVE_LABELS,
   SHAFT_LABELS, OVERLAP_HINT, overlapChoices, BODY_OVERLAP_HINT, bodyOverlapChoices, TRUNK_CHOICES, TRUNK_HINTS, TRUNK_LABELS, allowanceLabel, shaftHint, shaftReason, allowanceNumbers, allowanceReason, armLightColour,
-  armLightText, depthLabel, SHELL_FILL_HINT, SHELL_MARGIN_HINT, shellChoiceLabel, depthReason, sleeveReason, trunkReason, manualFitChanges, RESET_FIT, RESET_FIT_HINT,
+  armLightText, depthLabel, SHELL_FILL_HINT, SHELL_MARGIN_HINT, SHELL_SIDES_HINT, shellChoiceLabel, depthReason, sleeveReason, trunkReason, manualFitChanges, RESET_FIT, RESET_FIT_HINT,
 } from './fitSettingsModel'
 import type {
   AllowanceChoice, DepthChoice, FitSettingsInfo, FitSettingsValues, ShaftChoice, SleeveChoice, SleeveSideKey,
@@ -68,7 +68,9 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
     try {
       const d = await apiPost<{ fit_settings: FitSettingsInfo }>(
         `/characters/${encodeURIComponent(character)}/garments/${encodeURIComponent(itemId)}/fit-settings`, change)
-      toast(`${t('Saved')} · ${d.fit_settings.due || d.fit_settings.mesh_shape?.due ? t('Fit due — refits on the CPU, 0 hub jobs')
+      // A185: side views turned on are new images (hub jobs) before the shell — the Fit row's button names their count
+      toast(`${t('Saved')} · ${change.shell_sides === true ? t('Side views and the shell due — Rebuild shell makes the views first')
+        : d.fit_settings.due || d.fit_settings.mesh_shape?.due ? t('Fit due — refits on the CPU, 0 hub jobs')
         : t('nothing becomes due')}`, 'success')
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
@@ -141,6 +143,27 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
           </span>
         </Fragment>
       ) : null) : null}
+      {info.mesh_shape?.resolved === 'shell' && info.mesh_shape.sides ? (() => {
+        // A185: "Side views for the shell" — left / right piece-only views, read by the shell beside front / back
+        const sides = info.mesh_shape.sides
+        const on = values.shell_sides ?? sides.setting
+        return (
+          <>
+            <label htmlFor="fit-shell-sides" title={t(SHELL_SIDES_HINT)}>{t('Side views for the shell')}</label>
+            <select id="fit-shell-sides" className="ga-input" style={SELECT} value={on ? 'on' : 'off'}
+              disabled={busy || saving !== null} title={t(SHELL_SIDES_HINT)}
+              onChange={(e) => { void save({ shell_sides: e.target.value === 'on' }) }}>
+              <option value="off">{t('Off (default)')}</option>
+              <option value="on">{t('On — left and right piece-only views')}</option>
+            </select>
+            <span className="ga-hint" style={REASON} title={t(SHELL_SIDES_HINT)}>
+              {sides.made != null && sides.made !== on
+                ? t(sides.made ? 'the shown shell was made with side views' : 'the shown shell was made without side views')
+                : on ? t('the shell reads 4 views') : t('front and back only')}
+            </span>
+          </>
+        )
+      })() : null}
       {sleeveRow('left')}
       {sleeveRow('right')}
       <label htmlFor="fit-trunk">{t('Trunk')}</label>
