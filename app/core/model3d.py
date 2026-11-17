@@ -5377,7 +5377,9 @@ def trigger_face_cleanup(character_name: str, signature: str) -> Dict[str, Any]:
         raise ValueError(state["blocked"])
     follow_up = state["follow_up"]
     if follow_up == "face_retexture":
-        problems = face_check(character_name, signature)["problems"] + face_runnable(character_name)["problems"]
+        from app.core.face_retexture import blocking_problems
+        # A163: the follow-up face retexture renders a missing / stale face view first (``ensure_face_view``).
+        problems = blocking_problems(face_check(character_name, signature)) + face_runnable(character_name)["problems"]
     else:
         from app.imagegen.routing import chain_candidates
         from app.imagegen.service import get_image_service

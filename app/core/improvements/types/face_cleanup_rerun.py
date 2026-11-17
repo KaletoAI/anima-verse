@@ -66,8 +66,8 @@ class FaceCleanupRerun(ImprovementType):
             if state is None or state['signature'] != signature:
                 return
             if state['follow_up'] == 'face_retexture':
-                from app.core.face_retexture import check, runnable
-                problems = check(name, signature)['problems'] + runnable(name)['problems']
+                from app.core.face_retexture import blocking_problems, check, runnable
+                problems = blocking_problems(check(name, signature)) + runnable(name)['problems']
             else:
                 from app.imagegen.routing import chain_candidates
                 from app.imagegen.service import get_image_service

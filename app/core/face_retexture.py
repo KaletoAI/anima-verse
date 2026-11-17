@@ -113,6 +113,14 @@ def face_view_due(character: str) -> str:
     return '' if meta.get('reference_sha256') == expected else 'face_stale'
 
 
+def blocking_problems(eligibility: dict) -> list:
+    """``check``'s problems without the ones a run fixes itself (A163): with the face view as the source, a
+    missing / stale / unverified face view (``FACE_VIEW_DUE_CODES``) is rendered first by the run
+    (``ensure_face_view``), so it never refuses a start."""
+    return [p for p in eligibility.get('problems') or []
+            if not (eligibility.get('reference') == 'face' and p.get('code') in FACE_VIEW_DUE_CODES)]
+
+
 def ensure_face_view(character: str) -> dict | None:
     """Render the face view as a step of the calling run when the setting is ``face`` and the view is missing,
     stale or unverified (``model_refs.generate_face_view`` — an image job on its routed occasion). Returns None
