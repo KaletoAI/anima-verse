@@ -526,14 +526,20 @@ export const FIT_FIRST = 'Fit now (CPU, 0 hub jobs)'
 export const FIT_WAITS_BUILD = 'Waits for the running Build — it fits this piece too'
 export const FIT_NEEDS_VIEWS = 'Needs both piece-only views accepted first'
 export const FIT_NEEDS_MESH = 'Needs an accepted mesh first'
+/** A177: a shell piece's Re-fit is the shell's rebuild; with piece-only views due (another source chosen) the
+ *  button runs the chain — those views first, then the shell — never a shell from the replaced views. */
+export const SHELL_REBUILD = 'Rebuild shell (CPU, 0 hub jobs)'
+export const SHELL_REBUILD_VIEWS = 'Rebuild shell — piece-only views first'
 export function fitRowGate(a: { shell: boolean; meshAccepted: boolean; viewsReady: boolean; fitMade: boolean;
-  refitBlock: string; buildRunning: boolean }): FitRowGate {
+  refitBlock: string; buildRunning: boolean; viewsDue?: boolean }): FitRowGate {
   // A166: `buildRunning` is true only while the running Build fits THIS piece (`build_fits_piece`), never for a
   // Build planned before the piece became due.
-  const label = a.fitMade ? FIT_REFIT : FIT_FIRST
+  const viewsDue = a.shell && !!a.viewsDue
+  const label = viewsDue ? SHELL_REBUILD_VIEWS : a.fitMade ? (a.shell ? SHELL_REBUILD : FIT_REFIT) : FIT_FIRST
   const no = (reason: string): FitRowGate => ({ disabled: true, label, reason, primary: false })
   if (a.refitBlock) return no(a.refitBlock)
   if (a.buildRunning) return no(FIT_WAITS_BUILD)
+  if (viewsDue) return { disabled: false, label, reason: '', primary: true }
   if (a.shell && !a.viewsReady) return no(FIT_NEEDS_VIEWS)
   if (!a.shell && !a.meshAccepted) return no(FIT_NEEDS_MESH)
   return { disabled: false, label, reason: '', primary: !a.fitMade }

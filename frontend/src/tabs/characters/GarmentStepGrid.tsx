@@ -53,7 +53,7 @@ import {
   pieceViewReason, queueText, shownRecord, upscaleText, warningLines,
 } from './garmentStyle'
 import type { AttemptTile, ChipSpec, GarmentLimits, GarmentRunBody, LightState } from './garmentStyle'
-import { fitRowGate } from './garmentStyle'
+import { SHELL_REBUILD_VIEWS, fitRowGate } from './garmentStyle'
 
 /** A blocked button's visible reason (Ruling A140). */
 const WARN_HINT: CSSProperties = { color: 'var(--warning, #d29922)' }
@@ -85,6 +85,8 @@ const FIT_STATUS: Record<string, string> = {
   outdated: 'Fitted from a replaced mesh',
   missing: 'Not fitted yet',
 }
+/** A177: a shell's fit is made from the piece-only views, not from a mesh. */
+const SHELL_OUTDATED = 'Shell made from replaced piece-only views — rebuild it'
 /** A selected body shape's fit in the fit row (Ruling A50b, `fit_attempts` entry status). */
 const BODY_FIT_STATUS: Record<FitBody['status'], string> = {
   accepted: 'Accepted',
@@ -498,10 +500,16 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   const shellPiece = meshAllowance?.info.mesh_shape?.resolved === 'shell'
   // Ruling A140: a shell piece's fit runs once its piece-only views (the last image step it keeps) are accepted.
   const shellViewsStep = imageSteps.map((x) => x.step).filter((x) => x !== 'cutout').pop()
+  // A177: piece-only views due for a shell piece (another source chosen): the shell's rebuild makes them first.
+  const viewsDueJobs = shellPiece ? GARMENT_VIEWS.reduce((n, v) => n + (garment?.piece_views?.[v]?.due ?? [])
+    .filter((d) => d.step === 'ghost').reduce((m, d) => m + (d.jobs || 0), 0), 0) : 0
+  const viewsDue = shellPiece && GARMENT_VIEWS.some((v) => (garment?.piece_views?.[v]?.due ?? [])
+    .some((d) => d.step === 'ghost'))
   const fitGate = fitRowGate({
     shell: shellPiece, meshAccepted: mesh?.status === 'accepted',
     viewsReady: !!shellViewsStep && GARMENT_VIEWS.every((v) => accepted(shellViewsStep, v)),
     fitMade: !!fit && fit.status !== 'missing', refitBlock: refitBlock || '', buildRunning: !!garment?.build_fits_piece,
+    viewsDue: viewsDue && !refitOn,
   })
   const columns = `minmax(110px, 140px) repeat(${GARMENT_VIEWS.length}, minmax(0, 1fr))`
 
@@ -724,7 +732,7 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
       : ''
   const fitText = [
     shownFit ? `${shownFit.name}: ${t(shownFit.fit ? BODY_FIT_STATUS[shownFit.status] : BODY_FIT_STATUS.missing)}`
-      : t(FIT_STATUS[fit?.status || 'missing']),
+      : t(shellPiece && fit?.status === 'outdated' ? SHELL_OUTDATED : FIT_STATUS[fit?.status || 'missing']),
     widenText,
     fitTris ? `${t('Triangles')} ${fitTris.toLocaleString()}` : '',
     fitBuilt ? formatDateTime(fitBuilt, clockSettings()) : '',
@@ -814,9 +822,11 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
           disabled={busy || !garment || fitGate.disabled}
           title={fitGate.reason ? t(fitGate.reason) : refitOn
             ? t('Fits the piece on the selected body shape again on the CPU — 0 hub jobs. The plain body is fitted first when its fit is due.')
-            : t(STEP_HELP.fit)}
-          label={refitOn ? `${t(fitGate.label)} · ${refitOn}` : t(fitGate.label)}
-          onClick={() => onRun({ step: 'fit', force: true })}
+            : shellPiece ? t('Makes the shell again from the body and the piece-only views, on the CPU (0 hub jobs). Piece-only views that are due (another source chosen) are made first.')
+              : t(STEP_HELP.fit)}
+          label={refitOn ? `${t(fitGate.label)} · ${refitOn}` : fitGate.label === SHELL_REBUILD_VIEWS
+            ? `${t(fitGate.label)} · ${t('{n} hub jobs').replace('{n}', String(viewsDueJobs))}` : t(fitGate.label)}
+          onClick={() => onRun(fitGate.label === SHELL_REBUILD_VIEWS ? {} : { step: 'fit', force: true })}
         />
         {garment && fitGate.reason ? <span className="ga-hint" style={WARN_HINT}>{t(fitGate.reason)}</span> : null}
       </div>

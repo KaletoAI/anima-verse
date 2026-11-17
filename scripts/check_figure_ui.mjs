@@ -829,8 +829,15 @@ check('[21] Figure tab source', [/<StepRowView\b/.test(fieldFigure), /<SubTabs\b
   const g = await loadBundled(join(ROOT, 'frontend/src/tabs/characters/garmentStyle.ts'));
   const gate = (buildRunning) => g.fitRowGate({ shell: true, meshAccepted: false, viewsReady: true, fitMade: true,
     refitBlock: '', buildRunning });
-  check('[A166] a Build that does not fit it', [gate(false).disabled, gate(false).label], [false, g.FIT_REFIT]);
+  check('[A166] a Build that does not fit it', [gate(false).disabled, gate(false).label], [false, g.SHELL_REBUILD]);
   check('[A166] a Build that fits it', [gate(true).disabled, gate(true).reason], [true, g.FIT_WAITS_BUILD]);
+  // A177: a shell piece whose piece-only views are due — the button runs the chain (views first), enabled even
+  // before the new views exist; a generated piece ignores viewsDue.
+  const due = (shell, viewsReady) => g.fitRowGate({ shell, meshAccepted: true, viewsReady, fitMade: true,
+    refitBlock: '', buildRunning: false, viewsDue: true });
+  check('[A177] shell, views due', [due(true, false).disabled, due(true, false).label, due(true, false).primary],
+    [false, g.SHELL_REBUILD_VIEWS, true]);
+  check('[A177] generated piece ignores viewsDue', due(false, true).label, g.FIT_REFIT);
 }
 {
   const w = await loadBundled(join(ROOT, 'frontend/src/tabs/characters/fitWiden.ts'));
