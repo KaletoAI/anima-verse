@@ -570,7 +570,7 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   // A177: piece-only views due for a shell piece (another source chosen): the shell's rebuild makes them first.
   // A185: side views turned on but not made yet count as due too — their worn and piece-only views, by the plans
   const sideSteps = imageSteps.map((x) => x.step).filter((x) => x !== 'cutout')
-  const sidesMissing = shellPiece ? views.filter((v) => !GARMENT_VIEWS.includes(v as typeof GARMENT_VIEWS[number]))
+  const sidesMissing = shellPiece && !!steps.fit && steps.fit.status !== 'missing' ? views.filter((v) => !GARMENT_VIEWS.includes(v as typeof GARMENT_VIEWS[number]))
     .flatMap((v) => sideSteps.filter((st) => !accepted(st, v)).map((st) => ({ step: st, view: v }))) : []
   const viewsDueJobs = (shellPiece ? GARMENT_VIEWS.reduce((n, v) => n + (garment?.piece_views?.[v]?.due ?? [])
     .filter((d) => d.step === 'ghost').reduce((m, d) => m + (d.jobs || 0), 0), 0) : 0)
