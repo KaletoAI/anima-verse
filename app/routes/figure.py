@@ -53,6 +53,8 @@ body actions):
 * ``POST /characters/{c}/figure/template/{item_id}/suggest`` — ONE queued vision call (``TASK``) reads the item's
   picture and text: ``{params, errors, raw}``; saves nothing. 400 without a picture / for no outfit piece, 502
   when the LLM fails or answers no JSON.
+* ``POST /characters/{c}/figure/template/{item_id}/preview {params}`` — A188: the draft drawn on the plain base-body
+  front (``garment_preview.overlay``), pixel polygons; nothing saved.
 * ``PUT  /characters/{c}/figure/template/{item_id} {params, source}`` — store the parameters on the ITEM
   (every wearer; ``garment_template.set_params``); spends nothing — the next Build re-drapes. 400 with the
   validation errors (nothing stored).
@@ -428,6 +430,23 @@ def put_template_params(character_name: str, item_id: str, body: TemplateParamsR
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"item_id": item_id, **record}
+
+
+class TemplatePreviewRequest(BaseModel):
+    params: Dict[str, Any]
+
+
+@router.post("/{character_name}/figure/template/{item_id}/preview")
+def preview_template_params(character_name: str, item_id: str, body: TemplatePreviewRequest,
+                            _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """A188: the dialog's draft drawn on the character's plain base-body front (``garment_preview.overlay``): the
+    picture, its pixel <-> metre registration and the piece as pixel polygons. Nothing saved or generated."""
+    from app.core import garment_preview
+    _template_item(character_name, item_id)
+    try:
+        return garment_preview.overlay(character_name, item_id, body.params)
+    except ValueError as e:
+        return {"ok": False, "reason": str(e)}
 
 
 class RefitRequest(BaseModel):
