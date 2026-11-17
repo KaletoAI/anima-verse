@@ -264,7 +264,9 @@ PART_BUILDS = {"attached_part": 13, "inset_part": 9}
 # (underside crease, side, inner edge, top line; apex in the middle) before the
 # crest search (Ruling A160). 3: full weight over the whole outline, then a falloff
 # into the torso, long upward and short below the crease (Ruling A164).
-OP_BUILDS = {**PART_BUILDS, "pair_protrusion": 3, "pair_tip": 2}
+# 4: full weight inside the measured outline itself and inward up to a narrow strip
+# at the sternum, the depth gate follows the underside down to the crease (Ruling A173).
+OP_BUILDS = {**PART_BUILDS, "pair_protrusion": 4, "pair_tip": 2}
 
 
 def extension_rig_fingerprint(groups, overrides=None):

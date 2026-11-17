@@ -381,6 +381,9 @@ OUTLINE_BUMP_SIGMAS_M = (.006,.04)
 # upper slope and leaves it 1 cm above the centre; the shading fades 3 cm above).
 OUTLINE_TOP_MIN = .75
 UPPER_CHEST_SLOPE = .7
+UNDERSIDE_SLOPE = 1.5
+# Metres: the strip at the sternum over which the pair's weight fades to zero.
+MIDLINE_STRIP_M = .01
 OUTER_SIDE_SLOPE = .35
 
 
@@ -822,7 +825,17 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
     exclusion = [sum(ge.weight for ge in mesh.data.vertices[vi].groups if mesh.vertex_groups[ge.group].name in excluded)
                  for mesh,vi in owners]
     links,weights,placements = [],{},[]
-    for chain,sign,apex,(c,n,points),(_,note) in zip(chains,(1,-1),apexes,fitted,markers):
+    # The measured outline (an ellipse in side coordinates) the region is
+    # built on: fresh from the locator, or kept with a pinned placement.
+    if outline and 'pinned' not in outline:
+        shapes = [outline]*2
+    elif colour and extent and 'pinned' not in extent:
+        shapes = [extent]*2
+    elif pinned is not None:
+        shapes = [row.get('outline') for row in pinned]
+    else:
+        shapes = [None,None]
+    for chain,sign,apex,(c,n,points),(_,note),shape in zip(chains,(1,-1),apexes,fitted,markers,shapes):
         depth = (apex-c).dot(n)
         base = sum(points,Vector())/len(points)
         foot = base-n*((base-c).dot(n))
@@ -832,39 +845,61 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
         links.append((link['bone'],head,apex.copy(),link['parent']))
         w = {}
         sagittal = Vector((0,n.y,n.z)).normalized()
+        if shape:
+            (cd,cz),(ha,hb) = shape['centre'],shape['half']
+            z_lo,z_hi = shape['bottom'],shape['top']
+            d_hi = cd+ha
+        else:
+            z_lo,z_hi = apex.z-(reach[K//2] or p['boundary_s_min']),apex.z+(reach[0] or p['boundary_s_min'])
+            d_hi = sign*(apex.x-mid)+(reach[K//4] or p['boundary_s_min'])
         for i,v in enumerate(co):
             rx,rz = (v.x-apex.x)*sign,v.z-apex.z
+            d = sign*(v.x-mid)
             # Above the apex the region follows the upper chest back: it leans
             # back about .4-.7 m per metre of height (side profiles of the
             # measured models), so the depth gate moves back with it there;
             # toward the outer side the half-round's own side face curves back
             # the same way (Kira, Rosi), at half the slope, so the flank of
-            # the torso 9-10 cm behind stays out.
+            # the torso 9-10 cm behind stays out; below the apex the underside
+            # folds back onto the torso down to the crease (Rosi: 9 cm deep
+            # over 2 cm of height), so the gate follows it steeply there, but
+            # only inside the outline's outer side: beyond it the torso's
+            # flank at that height stays out (Gelina).
             # The gate takes the wall's sagittal tilt only: with its lateral
             # tilt the torso's flank, which faces sideways, counted as in
             # front of the wall once the falloff reached past the outline.
-            dist = (v-c).dot(sagittal)+UPPER_CHEST_SLOPE*max(rz,0.)+OUTER_SIDE_SLOPE*max(rx,0.)
-            if sign*(v.x-mid) < p['side_margin'] or dist < -p['front_margin']:
+            dist = ((v-c).dot(sagittal)+UPPER_CHEST_SLOPE*max(rz,0.)+OUTER_SIDE_SLOPE*max(rx,0.)
+                    +(UNDERSIDE_SLOPE*max(-rz,0.) if d <= d_hi else 0.))
+            if d < p['side_margin'] or dist < -p['front_margin']:
                 continue
-            t = (math.atan2(rx,rz)%(2*math.pi))/(2*math.pi)*K
-            k = int(t)%K
-            f = t-int(t)
-            radius = (reach[k] if reach[k] is not None else p['boundary_s_min'])*(1-f)+(reach[(k+1)%K] if reach[(k+1)%K] is not None else p['boundary_s_min'])*f
-            r = math.hypot(rx,rz)
-            # Full weight over the whole outline, then a falloff into the torso
-            # (Ruling A164): long upward, where the half-round runs flat into
-            # the upper chest toward the armpit, short downward, where the
-            # crease ends it and the torso below must stay put; in between
-            # by the direction's height.
-            fade = radius*(p['fade_down']+(p['fade_up']-p['fade_down'])*(1+rz/max(r,1e-9))/2)
-            value = smooth((radius+fade-r)/fade)
-            if rx < 0:
-                # The region ends at the midline margin, also where clothing
-                # bridges the gap, fading over the direction's falloff before it.
-                edge = (sign*(apex.x-mid)-p['side_margin'])*r/-rx
-                if r >= edge:
-                    continue
-                value = min(value,smooth((edge-r)/fade))
+            if shape:
+                # Full weight inside the measured outline itself (Ruling A173:
+                # an apex near the outline's edge, Rosi's low marker 2 cm above
+                # the crease, left the star reach a few millimetres there),
+                # then the falloff by the direction's height from its centre.
+                ex,ez = (d-cd)/ha,(v.z-cz)/hb
+                rho = math.hypot(ex,ez)
+                share = p['fade_down']+(p['fade_up']-p['fade_down'])*(1+ez/max(rho,1e-9))/2
+                value = smooth((1+share-rho)/share)
+                inward = d < cd
+            else:
+                t = (math.atan2(rx,rz)%(2*math.pi))/(2*math.pi)*K
+                k = int(t)%K
+                f = t-int(t)
+                radius = (reach[k] if reach[k] is not None else p['boundary_s_min'])*(1-f)+(reach[(k+1)%K] if reach[(k+1)%K] is not None else p['boundary_s_min'])*f
+                r = math.hypot(rx,rz)
+                # Full weight over the whole outline, then a falloff into the
+                # torso (Ruling A164): long upward, short downward, in between
+                # by the direction's height.
+                fade = radius*(p['fade_down']+(p['fade_up']-p['fade_down'])*(1+rz/max(r,1e-9))/2)
+                value = smooth((radius+fade-r)/fade)
+                inward = rx < 0
+            # Toward the midline the half-round is weighted fully up to the
+            # cleavage over its whole height (Ruling A173); only a narrow
+            # strip at the sternum fades, also where clothing bridges the gap.
+            if inward and z_lo <= v.z <= z_hi:
+                value = 1.
+            value *= smooth((d-p['side_margin'])/MIDLINE_STRIP_M)
             # Never above the band top (the armpit level): on a full pair the
             # upward falloff would otherwise reach the collarbone.
             value *= smooth((hi-v.z)/p['depth_ramp'])
@@ -875,9 +910,7 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
             raise ValueError('empty pair weight region')
         weights[link['bone']] = w
         placements.append({'head':list(head),'tip':list(apex),'apex_source':'colour' if colour else 'outline' if outline else 'geometry',
-                           **({'outline':outline} if outline and 'pinned' not in outline else
-                              {'outline':extent} if colour and extent and 'pinned' not in extent else
-                              {'outline':pinned[len(placements)]['outline']} if colour and extent else {}),
+                           **({'outline':shape} if shape else {}),
                            'marker_area':marker_areas[len(placements)] if colour else None,'marker_note':note,'reach':reach.copy(),'wall_centre':list(c),'wall_normal':list(n),'depth':depth,
                            'anchor_blend':anchor_blend(w,owners,bones)})
     return links,weights,{'placement':placements,'leak':False},set(),[]

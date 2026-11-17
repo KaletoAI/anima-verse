@@ -604,18 +604,20 @@ sagittal (y-z) normal and staying within `marker_search_radius`, and the wall is
 measured once more. The tangent search rarely finds a real boundary on fabric,
 so the outline becomes round with the median reach. The bone
 runs from `head_wall_depth` behind the wall (at the wall points' mean) to
-the tip. Weights combine a radial term over the star-shaped outline `R(angle)`
-(linear between the directions; without a marker the measured outline, with a
-marker the outline too when it is found, else the tangent reach): full weight
-inside `R`, then `smooth` down to zero at `R*(1+fade)`, where `fade` runs from
-`fade_down` straight below the tip to `fade_up` straight above it by the
-direction's height (short under the crease, long into the upper chest); never
-above the band top (`band_upper_bone` + `band_upper_offset`), fading over
-`depth_ramp`; toward the midline the weight fades to zero where the ray from
-the tip meets `side_margin`, even when fabric bridges the gap; a depth ramp of
-`depth_ramp` that starts `front_margin` behind the wall's sagittal plane, moved
-back by .7 x the height above the tip and .35 x the distance outward of it (the
-upper chest and the outer side lean back); and
+the tip. Weights combine a radial term — with a measured outline (always without
+a marker, with a marker when the locator finds one) the ellipse itself: full weight
+inside it, `smooth` down to zero at `1+fade` half-axes from its centre; without one
+the star-shaped tangent outline `R(angle)` around the tip, full inside `R`, zero at
+`R*(1+fade)` — where `fade` runs from `fade_down` straight below to `fade_up`
+straight above by the direction's height (short under the crease, long into the
+upper chest); toward the midline full weight over the outline's whole height up
+to a 1 cm strip at the sternum, where it fades to zero at `side_margin`, even when
+fabric bridges the gap; never above the band top (`band_upper_bone` +
+`band_upper_offset`), fading over `depth_ramp`; a depth ramp of `depth_ramp` that
+starts `front_margin` behind the wall's sagittal plane, moved back by .7 x the
+height above the tip, .35 x the distance outward of it and, inside the outline's
+outer side, 1.5 x the depth below it (upper chest, outer side and underside lean
+back); and
 `1 - w/exclude_weight` for a vertex's current weight `w` on `exclude_bones` and
 their descendants. Parameter changes alter the fingerprint and rebuild from the
 clean prerig.
