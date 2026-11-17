@@ -5880,8 +5880,10 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
         try:
             # Ruling A75: the preview drops a covered attached part — the URL names what is covered.
             from app.core.fit_attempts import covered_part_groups, covered_parts_token
+            from app.core.fit_attempts import LEG_CUT_TOKEN, leg_cuts_of_file
             preview_url = _url(character_name, item_id, "model", preview_version(preview) + covered_parts_token(
-                covered_part_groups(character_name, item_id, profile=profile)))
+                covered_part_groups(character_name, item_id, profile=profile))
+                + (LEG_CUT_TOKEN if leg_cuts_of_file(preview) else ""))
         except OSError:
             preview_url = None
     try:

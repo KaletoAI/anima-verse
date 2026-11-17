@@ -332,6 +332,40 @@ def without_covered_parts(glb: bytes, groups: List[str]) -> bytes:
     return pack_glb(gltf, parsed["bin"]) if hit else glb
 
 
+def leg_cuts_of_file(path: Optional[Path]) -> Optional[Dict[str, float]]:
+    """A191: the whole boot's leg cut (``garment_shaft.leg_cut_of``, ``{side: y}``) recorded beside a shown fit file
+    (``<fit>.json``), None for any other piece, a fit made without Shaft = whole or an unreadable record."""
+    if path is None:
+        return None
+    try:
+        from app.core import garment_shaft
+        record = json.loads(Path(path).with_suffix(".json").read_text(encoding="utf-8"))
+        return garment_shaft.leg_cut_of(record)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+#: A191: the preview version suffix of a fit shown with the body's leg cut inside the whole boot (a preview cached
+#: before the cut was applied there must not be served for it).
+LEG_CUT_TOKEN = "-legcut1"
+
+
+def with_leg_cut(glb: bytes, cuts: Optional[Dict[str, float]]) -> bytes:
+    """A191: ``glb`` (a fit preview: the rigged body with the piece grafted) with the body's leg cut off inside the
+    whole boot as the figure's assembly cuts it (``garment_assembly.cut_legs``) — the Details previews showed the
+    whole leg, so Shaft = "Whole boot over cut leg" looked as if it did nothing. ``glb`` itself without ``cuts``
+    or on any failure (a preview detail; the stored fit stays whole either way)."""
+    if not cuts:
+        return glb
+    try:
+        from app.core import garment_assembly, glb_mesh
+        replaced, _stats = garment_assembly.cut_legs(glb_mesh.body_primitive_arrays(glb), cuts)
+        return glb_mesh.rewrite_body_primitives(glb, replaced) if replaced else glb
+    except Exception:  # noqa: BLE001 — the preview shows the uncut body rather than nothing
+        logger.exception("Leg cut of a fit preview failed")
+        return glb
+
+
 # --- Store ----------------------------------------------------------------------------------------------
 
 def _file_sha(path: Optional[Path]) -> str:
@@ -1308,7 +1342,8 @@ def bodies(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any
                 try:
                     entry["url"] = (f"{url_base or ''}/characters/{quote(character_name, safe='')}/garments/"
                                     f"{quote(item_id, safe='')}/fits/{entry['key']}/model?"
-                                    f"v={content_version(shown[0])}{'m' if shown[1] else ''}{covered}")
+                                    f"v={content_version(shown[0])}{'m' if shown[1] else ''}{covered}"
+                                    f"{LEG_CUT_TOKEN if leg_cuts_of_file(shown[0]) else ''}")
                 except OSError:
                     entry["url"] = None
             out.append(entry)

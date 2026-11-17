@@ -3625,6 +3625,9 @@ def get_character_garment_model(character_name: str, item_id: str, request: Requ
     # Ruling A75: the plain body's attached part is not shown where the worn outfit covers its slot.
     hidden = fit_attempts.covered_part_groups(character_name, item_id)
     covered = fit_attempts.covered_parts_token(hidden)
+    # A191: a whole boot's preview shows the body's leg cut inside it, as the figure does
+    cuts = fit_attempts.leg_cuts_of_file(fit)
+    covered += fit_attempts.LEG_CUT_TOKEN if cuts else ""
     version += covered
     asked = request.query_params.get("v")
     if etag_matches(request.headers.get("if-none-match"), f'"{version}"'):
@@ -3634,7 +3637,7 @@ def get_character_garment_model(character_name: str, item_id: str, request: Requ
     if built is None:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     data, version = built
-    data, version = fit_attempts.without_covered_parts(data, hidden), version + covered
+    data, version = fit_attempts.with_leg_cut(fit_attempts.without_covered_parts(data, hidden), cuts), version + covered
     cache = "public, max-age=31536000, immutable" if asked == version else "no-cache"
     return Response(content=data, media_type="model/gltf-binary",
                     headers={"ETag": f'"{version}"', "Cache-Control": cache})
@@ -3702,7 +3705,9 @@ def get_character_garment_fit_model(character_name: str, item_id: str, body: str
     path, marks = shown
     # Ruling A75: the plain body's attached part is not shown where the worn outfit covers its slot.
     hidden = fit_attempts.covered_part_groups(character_name, item_id)
-    if marks is None and not hidden:
+    # A191: a whole boot's fit shows the body's leg cut inside it, as the figure's assembly cuts it
+    cuts = fit_attempts.leg_cuts_of_file(path)
+    if marks is None and not hidden and not cuts:
         return snapshot_response(path, request, media_type="model/gltf-binary",
                                  version=request.query_params.get("v"))
     try:
@@ -3711,7 +3716,8 @@ def get_character_garment_fit_model(character_name: str, item_id: str, body: str
     except OSError:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     marked = f"-{mst.st_size:x}-{mst.st_mtime_ns:x}" if mst is not None else ""
-    etag = f'"a31-{st.st_size:x}-{st.st_mtime_ns:x}{marked}{fit_attempts.covered_parts_token(hidden)}"'
+    etag = (f'"a31-{st.st_size:x}-{st.st_mtime_ns:x}{marked}{fit_attempts.covered_parts_token(hidden)}'
+            f'{fit_attempts.LEG_CUT_TOKEN if cuts else ""}"')
     headers = {"ETag": etag, "Cache-Control": "no-cache"}
     if etag_matches(request.headers.get("if-none-match"), etag):
         return Response(status_code=304, headers=headers)
@@ -3719,8 +3725,8 @@ def get_character_garment_fit_model(character_name: str, item_id: str, body: str
         blob = fit_attempts.marked_glb(path, marks, item_id) if marks is not None else path.read_bytes()
     except OSError:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-    return Response(content=fit_attempts.without_covered_parts(blob, hidden), media_type="model/gltf-binary",
-                    headers=headers)
+    return Response(content=fit_attempts.with_leg_cut(fit_attempts.without_covered_parts(blob, hidden), cuts),
+                    media_type="model/gltf-binary", headers=headers)
 
 
 def _fit_accept_call(fn, character_name: str, item_id: str, body: str) -> Dict[str, Any]:
