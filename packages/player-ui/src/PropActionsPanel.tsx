@@ -72,18 +72,21 @@ export function GroupPicker({ group, busy, nameProps, onPick, onClose }: {
   const [picked, setPicked] = useState<string[]>([])
   const [verdicts, setVerdicts] = useState<Record<string, PropActionChoice>>({})
   const { fewest, most, candidates } = groupPickRange(group.entries.map(entry => entry.offer))
-  const complete = picked.length >= fewest
+  // Only who is still a candidate counts: a picked person who left the room drops out of the pick by itself
+  // instead of greying every entry and holding a slot nobody can untoggle.
+  const chosen = picked.filter(name => candidates.includes(name))
+  const complete = chosen.length >= fewest
   const entryKey = (offer: PropActionOffer) => JSON.stringify([offer.target, offer.action_id])
-  const checkKey = complete ? JSON.stringify([picked, group.entries.map(entry => entryKey(entry.offer))]) : ''
+  const checkKey = complete ? JSON.stringify([chosen, group.entries.map(entry => entryKey(entry.offer))]) : ''
   useEffect(() => {
     setVerdicts({})
     if (!checkKey) return
     let live = true
     for (const entry of group.entries) {
       const offer = entry.offer
-      if (!offer.enabled || groupFit(offer, picked.length) !== 'fits'
-        || !picked.every(name => offer.candidates?.includes(name))) continue
-      checkPropAction(offer.action_id, offer.target, offer.definition_revision, picked)
+      if (!offer.enabled || groupFit(offer, chosen.length) !== 'fits'
+        || !chosen.every(name => offer.candidates?.includes(name))) continue
+      checkPropAction(offer.action_id, offer.target, offer.definition_revision, chosen)
         .then(verdict => { if (live) setVerdicts(v => ({ ...v, [entryKey(offer)]: verdict })) })
         .catch((e: unknown) => {
           if (live) setVerdicts(v => ({ ...v, [entryKey(offer)]: { enabled: false, reason: e instanceof Error ? e.message : String(e) } }))
@@ -92,8 +95,10 @@ export function GroupPicker({ group, busy, nameProps, onPick, onClose }: {
     return () => { live = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [checkKey])
-  const toggle = (name: string) => setPicked(list => list.includes(name) ? list.filter(n => n !== name)
-    : list.length < most ? [...list, name] : list)
+  const toggle = (name: string) => setPicked(all => {
+    const list = all.filter(n => candidates.includes(n))
+    return list.includes(name) ? list.filter(n => n !== name) : list.length < most ? [...list, name] : list
+  })
   const choose = most > fewest
     ? t('choose {min}–{max}').replace('{min}', String(fewest)).replace('{max}', String(most))
     : t('choose {n}').replace('{n}', String(fewest))
@@ -102,25 +107,25 @@ export function GroupPicker({ group, busy, nameProps, onPick, onClose }: {
   return <div className="player-prop-offers-row" style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' }}>
     <span style={{ opacity: 0.7 }}>{group.label} · {choose}:</span>
     {candidates.map(name => {
-      const on = picked.includes(name)
+      const on = chosen.includes(name)
       return <button key={`who:${name}`} type="button" className={`player-chip${on ? ' on' : ''}`} aria-pressed={on}
-        disabled={busy || (!on && picked.length >= most)} onClick={() => toggle(name)}>{name}</button>
+        disabled={busy || (!on && chosen.length >= most)} onClick={() => toggle(name)}>{name}</button>
     })}
     {complete && group.entries.map(entry => {
       const verdict = verdicts[entryKey(entry.offer)]
-      const tooMany = groupFit(entry.offer, picked.length) === 'too_many'
-      const fits = picked.every(name => entry.offer.candidates?.includes(name))
+      const tooMany = groupFit(entry.offer, chosen.length) === 'too_many'
+      const fits = chosen.every(name => entry.offer.candidates?.includes(name))
       const enabled = entry.enabled && !tooMany && fits && !!verdict?.enabled
       const reason = tooMany ? '' : !entry.enabled ? entry.reason : !fits ? 'participant_unavailable'
         : verdict && !verdict.enabled ? verdict.reason : ''
       const hint = tooMany ? t('Takes at most {n} others').replace('{n}', String(groupMostOthers(entry.offer)))
-        : reason ? propActionReason(reason, t) : t('Ask {name} first').replace('{name}', picked.join(', '))
+        : reason ? propActionReason(reason, t) : t('Ask {name} first').replace('{name}', chosen.join(', '))
       const action = actions ? `${entry.offer.label} · ` : ''
       const piece = (group.entries.length > 1 && !actions) || nameProps ? `${pieceText(entry.offer)} · ` : ''
       return <HoverHint key={`ask:${entryKey(entry.offer)}`} text={hint}>
         <button type="button" className="player-chip" disabled={busy || !enabled} aria-disabled={!enabled ? true : undefined}
           style={{ pointerEvents: !enabled ? 'none' : undefined }}
-          onClick={() => onPick(entry.offer, picked)}>
+          onClick={() => onPick(entry.offer, chosen)}>
           {action}{piece}{verdict || reason || tooMany ? t('Ask') : '…'}
         </button>
       </HoverHint>

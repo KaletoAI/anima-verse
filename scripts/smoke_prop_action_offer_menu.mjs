@@ -43,6 +43,7 @@
  *    most 2 others" and NOT checked; Circle checked once with [Mia, Ben, Ola]
  *    and usable. Kai stays pickable (3 < 4). The canvas menu's own picker for
  *    Circle alone reads "Circle · choose 2–4:" and asks with two people.
+ * g. A picked person who leaves before "Ask" drops out of the pick (derived at the case).
  * Design: 976efe70 (compact rows), a1c5af11 (per-request consent choices).
  */
 import assert from 'node:assert/strict';
@@ -288,3 +289,24 @@ await Promise.resolve(); await Promise.resolve();
 assert.deepEqual(buttons.slice(4).map(b => [b[0], b[1]]), [['Ask', false], ['✕', false]]);
 assert.equal(JSON.stringify(checks.map(c => c[3])), JSON.stringify([['Kai', 'Mia']]));
 console.log('PASS f: a smaller group: 2 up to the most, one picker for a piece, too small actions greyed');
+
+// g. review 13-playerui#4: a picked person leaves the room before "Ask". Trio (choose 2 of Mia, Ben, Ola): Mia + Ben
+//    picked → Ola disabled (2 = most). The next offers read drops Ben (candidates Mia, Ola; most min(2, 2) = 2): the
+//    pick is just [Mia] — Mia on, Ola pickable again, no Ask (1 < 2). Picking Ola checks [Mia, Ola], never Ben.
+//    The old picker kept Ben in its state: Ola stayed disabled and every entry greyed as participant_unavailable.
+{
+  states = []; effects = []; checks = []; verdict = { enabled: true, reason: '' };
+  const trioWith = names => ({ key: 'trio', label: 'Trio', usable: true,
+    entries: [{ offer: { ...groupTrio, candidates: names }, enabled: true, reason: '' }] });
+  [, buttons] = renderPiece(trioWith(['Mia', 'Ben', 'Ola']));
+  buttons[0][3].props.onClick(); [, buttons] = renderPiece(trioWith(['Mia', 'Ben', 'Ola']));
+  buttons[1][3].props.onClick(); [, buttons] = renderPiece(trioWith(['Mia', 'Ben', 'Ola']));
+  assert.equal(buttons[2][1], true, 'Ola disabled while Mia + Ben are picked');
+  checks = [];
+  [, buttons] = renderPiece(trioWith(['Mia', 'Ola']));
+  assert.deepEqual(buttons.map(b => [b[0], b[1]]), [['Mia', false], ['Ola', false], ['✕', false]],
+    'Ben left: Mia stays picked, Ola pickable, no Ask yet');
+  buttons[1][3].props.onClick(); renderPiece(trioWith(['Mia', 'Ola']));
+  assert.equal(JSON.stringify(checks.map(c => c[3])), JSON.stringify([['Mia', 'Ola']]));
+}
+console.log('PASS g: a picked person who left drops out of the pick');
