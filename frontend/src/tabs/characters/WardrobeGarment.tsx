@@ -896,6 +896,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
   // "Fetch finished job…" on the mesh row: the shoe source's own route for footwear.
   const meshFetchUrl = info?.pipeline && itemId
     ? `/characters/${enc}/garments/${encodeURIComponent(itemId)}/${footwear ? 'footwear/mesh' : 'mesh'}/fetch` : null
+  const meshBackendsUrl = info?.pipeline && itemId
+    ? `/characters/${enc}/garments/${encodeURIComponent(itemId)}/mesh-backends` : null
   const onMeshFetched = () => startPoll(0)
   const previewPose = PREVIEW_POSES.find((p) => p.key === pose) || PREVIEW_POSES[0]
   const fit = garment?.steps.fit
@@ -997,7 +999,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             </div>
           ) : null}
           <FootwearSteps info={footwear} limits={info.limits || {}} busy={busy} feedback={feedback} onRun={onRun}
-            onWidthCap={(cap) => { void onWidthCap(cap) }} meshFetchUrl={meshFetchUrl}
+            onWidthCap={(cap) => { void onWidthCap(cap) }} meshFetchUrl={meshFetchUrl} meshBackendsUrl={meshBackendsUrl}
             onMeshFetched={onMeshFetched} />
         </div>
         <div className="ga-garment-dialog-col">
@@ -1141,7 +1143,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             onCutoutOpening={(view, choice) => { void onCutoutOpening(view, choice) }}
             onUploadView={(view, file) => { void onUploadView(view, file) }}
             onGhostText={(choice) => { void onGhostText(choice) }}
-            meshFetchUrl={meshFetchUrl}
+            meshFetchUrl={meshFetchUrl} meshBackendsUrl={meshBackendsUrl}
             onMeshFetched={onMeshFetched}
             pieceName={info.name || name}
             meshAllowance={garment?.fit_settings ? { character, itemId, info: garment.fit_settings, busy,

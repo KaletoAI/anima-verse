@@ -6435,6 +6435,9 @@
     "Uploaded — its gate passed": "Hochgeladen — Prüfung bestanden",
     "Uploaded — accepted by you; its gate refused it": "Hochgeladen — von dir angenommen; die Prüfung lehnte es ab",
     "Not uploaded": "Nicht hochgeladen",
-    "Not fitted yet — the shoe itself was refused (see its steps above), not this body. The fit runs on the next Build once the shoe passes": "Noch nicht angepasst — abgelehnt wurde der Schuh selbst (siehe seine Schritte oben), nicht dieser Körper. Die Anpassung läuft beim nächsten Build, sobald der Schuh besteht"
+    "Not fitted yet — the shoe itself was refused (see its steps above), not this body. The fit runs on the next Build once the shoe passes": "Noch nicht angepasst — abgelehnt wurde der Schuh selbst (siehe seine Schritte oben), nicht dieser Körper. Die Anpassung läuft beim nächsten Build, sobald der Schuh besteht",
+    "Makes a new mesh of this piece from its cut-outs, then fits it on the CPU.": "Erzeugt ein neues Mesh dieses Teils aus seinen Freistellern und passt es dann auf der CPU an.",
+    "Only this backend — no routing and no fallback; refused at once when it is not available.": "Nur dieses Backend — kein Routing und kein Ausweichen; sofort abgelehnt, wenn es nicht verfügbar ist.",
+    "The piece's routing chain decides, with its fallbacks.": "Die Routing-Kette des Teils entscheidet, mit ihren Ausweichstufen."
   }
 }

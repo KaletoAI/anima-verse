@@ -48,6 +48,7 @@ import { AttemptThumbs, GateIcon, StepLabel } from './GarmentStepGrid'
 import { ERROR_STYLE, FOOTWEAR_STEP_LABELS, WARN_STYLE, num, upscaleText } from './garmentStyle'
 import type { ChipSpec, GarmentLimits, GarmentRunBody } from './garmentStyle'
 import { MeshJobFetch } from './MeshJobFetch'
+import { MeshRegenerateDialog } from './MeshRegenerateDialog'
 import { Model3DViewer } from './Model3DViewer'
 import { RefImage } from './RefImage'
 import { FOOTWEAR_STEPS, runMark, runSlot } from './useGarment'
@@ -159,7 +160,7 @@ const SHAFT_CLASS_TEXT: Record<string, string> = {
 }
 
 export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap, meshFetchUrl = null,
-  onMeshFetched }: {
+  meshBackendsUrl = null, onMeshFetched }: {
   info: FootwearInfo
   limits: GarmentLimits
   busy: boolean
@@ -169,6 +170,8 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
   onWidthCap: (cap: number | null) => void
   /** "Fetch finished job…" on the mesh row (MeshJobFetch): its POST url, null hides it. */
   meshFetchUrl?: string | null
+  /** A187: the mesh Regenerate dialog's backend choices (`GET …/mesh-backends`). */
+  meshBackendsUrl?: string | null
   /** The mesh record changed through a fetched job: reload the panel. */
   onMeshFetched?: () => void
 }) {
@@ -176,6 +179,7 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
   const { t } = useI18n()
   // The slider's draft while it is dragged; saved on release (one fit, not one per step).
   const [capDraft, setCapDraft] = useState(info.width_cap)
+  const [pickMesh, setPickMesh] = useState(false)
   useEffect(() => { setCapDraft(info.width_cap) }, [info.width_cap])
   const { steps } = info
   const order = FOOTWEAR_STEPS as readonly string[]
@@ -350,8 +354,15 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
           title={meshBlocked || t('1 mesh job, shared by every wearer')}
           ariaLabel={`${mesh?.url ? t('Regenerate') : t('Generate')} · ${label('mesh')}`}
           label={mesh?.url ? t('Regenerate') : t('Generate')}
-          onClick={() => onRun({ step: 'mesh', force: true, chain: true })}
+          onClick={() => setPickMesh(true)}
         />
+        <MeshRegenerateDialog open={pickMesh} url={meshBackendsUrl}
+          title={`${mesh?.url ? t('Regenerate') : t('Generate')} · ${label('mesh')}`}
+          onClose={() => setPickMesh(false)}
+          onConfirm={(backend) => {
+            setPickMesh(false)
+            onRun({ step: 'mesh', force: true, chain: true, ...(backend ? { backend } : {}) }, runSlot({ step: 'mesh' }))
+          }} />
         <MeshJobFetch url={meshBlocked ? null : meshFetchUrl} disabled={busy} onDone={() => onMeshFetched?.()} />
       </div>
       {info.mesh_url ? (

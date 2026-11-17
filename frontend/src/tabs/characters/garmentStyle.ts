@@ -54,6 +54,8 @@ export interface GarmentRunBody {
   step?: string; view?: string; force?: boolean; chain?: boolean; prerequisites?: boolean
   /** Ruling A50: with step "fit", the body shape the Re-fit fits on (an outfit body id); absent = the plain body. */
   body?: string
+  /** A187: with step "mesh", the explicit img2mesh backend of the Regenerate dialog; absent = Auto (routing). */
+  backend?: string
 }
 
 /** One chip: which number of a gate record, how it reads, how it scales.

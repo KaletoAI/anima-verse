@@ -61,6 +61,7 @@ import { GarmentMeshTiles } from './GarmentMeshView'
 import type { MeshAllowance } from './GarmentMeshView'
 import { MeshShapeControl } from './MeshShapeControl'
 import { MeshJobFetch } from './MeshJobFetch'
+import { MeshRegenerateDialog } from './MeshRegenerateDialog'
 import { StepLight } from './StepRows'
 import { armLightColour, armLightShort, armLightText } from './fitSettingsModel'
 import { RefImage } from './RefImage'
@@ -490,7 +491,7 @@ function upToText(n: number, t: (s: string) => string): string {
 }
 
 export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitChips, busy, onRun, feedback,
-  viewRuns = null, useRuns = null, onUse, onPieceView, onCutoutOpening, onUploadView, onGhostText, meshFetchUrl = null, onMeshFetched, pieceName = '',
+  viewRuns = null, useRuns = null, onUse, onPieceView, onCutoutOpening, onUploadView, onGhostText, meshFetchUrl = null, meshBackendsUrl = null, onMeshFetched, pieceName = '',
   meshAllowance = null, refitOn = '', refitBlock = '', shownFit = null, onMeshUse, imageUseBusy, onMeshDelete,
   onMeshDeleteAll, meshDeleteBlock = '' }: {
   garment: GarmentInfo | null
@@ -519,6 +520,8 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   onGhostText?: (choice: GhostTextChoice) => void
   /** "Fetch finished job…" on the mesh row (MeshJobFetch): its POST url, null hides it. */
   meshFetchUrl?: string | null
+  /** A187: the mesh Regenerate dialog's backend choices (`GET …/mesh-backends`). */
+  meshBackendsUrl?: string | null
   /** The mesh record changed through a fetched job: reload the panel. */
   onMeshFetched?: () => void
   /** The piece's name (the mesh viewer's title). */
@@ -548,6 +551,7 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
 }) {
   useClockSettings()
   const { t } = useI18n()
+  const [pickMesh, setPickMesh] = useState(false)
   const viewLabel = (view: GarmentView) => (view === 'front' ? t('Front view') : view === 'back' ? t('Back view')
     : view === 'left' ? t('Left view') : t('Right view'))
   /** "Piece-only · Back view" — a view of a step, as the cells name it. */
@@ -852,8 +856,15 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
             : [t(STEP_HELP.mesh), meshJob ? t('queues behind the running job') : ''].filter(Boolean).join('\n')}
           ariaLabel={`${mesh && mesh.status !== 'missing' ? t('Regenerate') : t('Generate')} · ${t('Mesh')} · ${upToText(MESH_ATTEMPTS, t)}${meshJob ? ` · ${t('queues behind the running job')}` : ''}`}
           label={mesh && mesh.status !== 'missing' ? t('Regenerate') : t('Generate')}
-          onClick={() => onRun({ step: 'mesh', force: true })}
+          onClick={() => setPickMesh(true)}
         />
+        <MeshRegenerateDialog open={pickMesh} url={meshBackendsUrl}
+          title={`${mesh && mesh.status !== 'missing' ? t('Regenerate') : t('Generate')} · ${t('Mesh')}`}
+          onClose={() => setPickMesh(false)}
+          onConfirm={(backend) => {
+            setPickMesh(false)
+            onRun({ step: 'mesh', force: true, ...(backend ? { backend } : {}) }, runSlot({ step: 'mesh' }))
+          }} />
         <span className="ga-hint" title={t(STEP_HELP.mesh)}>
           {`${upToText(MESH_ATTEMPTS, t)} · ${t('then the fit on the CPU')}${meshJob ? ` · ${t('queues behind the running job')}` : ''}`}
         </span>
