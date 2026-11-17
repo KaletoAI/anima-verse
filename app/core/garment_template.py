@@ -57,7 +57,7 @@ SCRIPT = "garment_template_build"
 #: The spike's evaluator script (modes mesh / panels / from_body / necklace).
 SPIKE_SCRIPT = "garment_template_drape.py"
 #: Bumped when the same parameters drape differently.
-TEMPLATE_VERSION = 4
+TEMPLATE_VERSION = 5
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.
@@ -157,6 +157,11 @@ UPPER_LEG_POSES = ("sit",)
 #: skinned rest collider (no remesh per pose): the blazer 70.7 -> 44.6 s, its pose numbers unchanged (stretch p99
 #: arms_down 1.25, arms_up 1.40; sit poke 0).
 BODICE_FRAMES = 30
+#: A179: the main drape of a bodice runs at this multiple of the fabric's cloth quality (the pose shapes keep the
+#: fabric's own). Measured on two copies: at quality 6-7 the largest stretch sat on single edges beside the armholes
+#: and moved between 1.17 and 1.40 with every small change of the built mesh (under-resolved: the solver, not the
+#: load); at x1.5 it is 1.16 / 1.23, at x2 1.12 / 1.20. x1.5 costs ~4.5 s wall.
+BODICE_DRAPE_QUALITY = 1.5
 ARM_SHAPE_FRAMES = 12
 UPPER_SIT_FRAMES = 16
 #: Ruling A144: a dress with a bodice drapes its sit / kneel shapes with this many frames (40 put a sleeved dress at
@@ -991,6 +996,7 @@ def build_args(params: Dict[str, Any], spec: Dict[str, Any], *, item_id: str, re
     long_top = bool(meas) and hem_y < meas.get("hip_y", 0.0)
     groups = shape_groups(params, long_top=long_top) if corrective else []
     return {"spec": spec, "fabric": fabric, "torso_half_m": round(torso, 4), "slit": {"side": params["slit"], "depth_m": params["slit_m"]},
+            "drape_quality": int(round(fabric["quality"] * (BODICE_DRAPE_QUALITY if has_bodice(params) else 1.0))),
             "pin": "top", "kind": params["kind"], "item_id": item_id, "node": f"garment_template_{item_id}",
             "render": bool(render), "poses": list(poses or measured_poses(params)),
             "frames": BODICE_FRAMES if has_bodice(params) else 50, "thickness": 0.004,

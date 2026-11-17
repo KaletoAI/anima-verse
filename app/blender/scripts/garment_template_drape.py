@@ -534,17 +534,22 @@ def _remesh(col, faces):
     bpy.ops.object.modifier_apply(modifier=dec.name)
 
 
-def skinned_collider(body, arm, faces=80000):
+def skinned_collider(body, arm, faces=80000, rest=None):
     """Ruling A144: the body remeshed ONCE in the rest pose (closed, wound outward) and skinned like the body, so a
-    pose's collider is an armature evaluation instead of a remesh + decimate (~2 s each)."""
+    pose's collider is an armature evaluation instead of a remesh + decimate (~2 s each). ``rest`` (A179) = the mesh
+    of a ``rest_collider`` already built for this body: it is skinned instead of remeshing the body again."""
     arm.data.pose_position = "REST"
     bpy.context.view_layer.update()
-    dg = bpy.context.evaluated_depsgraph_get()
-    col = bpy.data.objects.new("collider_rest", bpy.data.meshes.new_from_object(body.evaluated_get(dg)))
+    if rest is not None:
+        col = bpy.data.objects.new("collider_rest", rest)
+    else:
+        dg = bpy.context.evaluated_depsgraph_get()
+        col = bpy.data.objects.new("collider_rest", bpy.data.meshes.new_from_object(body.evaluated_get(dg)))
     col.matrix_world = body.matrix_world.copy()
     bpy.context.scene.collection.objects.link(col)
     arm.data.pose_position = "POSE"
-    _remesh(col, faces)
+    if rest is None:
+        _remesh(col, faces)
     bind_to_armature(col, body, arm)
     col.hide_render = True
     return col
