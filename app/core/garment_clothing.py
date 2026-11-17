@@ -276,7 +276,13 @@ def edit_prompt(character_name: str, step: str, view: str, *,
     prof = _profile_of(character_name, profile)
     text = _fragment_of(item, state=state_of(item, prof))
     if step == "worn":
-        from app.core.base_body import hair_text
+        from app.core import shell_base_views
+        from app.core.base_body import HAIR_NEGATIVE, hair_text
+        if shell_base_views._shell_piece(str(item.get("id") or item_id or "")):
+            # A190: a shell piece is worn on a bald figure (the bald variant of a haired base view) — hair never
+            # covers the piece in the views the shell is projected from.
+            return (f"{WORN.format(fragment=worn_text(item, text, state_of(item, prof)))} "
+                    f"{shell_base_views.WORN_BALD_LINE}"), f"{_worn_negative(text)}, {HAIR_NEGATIVE}"
         haired = bool(hair_text(character_name, profile=prof))
         return WORN.format(fragment=worn_text(item, text, state_of(item, prof))), \
             _worn_negative(text, keep_hair=haired)
@@ -400,7 +406,18 @@ def draft_prompt(character_name: str, step: str, *, profile: Optional[Dict[str, 
     item = _item_of(item_id)
     prof = _profile_of(character_name, profile)
     text = _back_text_of(item) if view == "back" else _fragment_of(item, state=state_of(item, prof))
-    prompt, negative = base_body.draft_prompt(character_name, view, profile=prof)
+    from app.core import shell_base_views
+    variant = shell_base_views.variant_for(character_name, str(item.get("id") or item_id or ""), view, profile=prof)
+    if variant:
+        # A190: a shell piece's worn back / sides are drafted bald (the bald worn front, never the plain body's hair)
+        # and a side view with the arms raised (the arms-up base side view it is composited onto).
+        from app.core.garment_hair import BALD
+        prompt, negative = base_body.draft_prompt(character_name, view, profile=prof, hair=BALD)
+        if shell_base_views.arms_up(variant):
+            prompt = (prompt.replace("same A-pose", shell_base_views.DRAFT_ARMS_UP_LINE, 1)
+                      if "same A-pose" in prompt else f"{prompt} {shell_base_views.DRAFT_ARMS_UP_LINE}")
+    else:
+        prompt, negative = base_body.draft_prompt(character_name, view, profile=prof)
     return prompt, ", ".join(p for p in (negative, _worn_negative(text)) if p)
 
 

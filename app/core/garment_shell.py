@@ -33,6 +33,12 @@ neither the front nor the back sees it frontally (>= ``FRONTAL_MIN``): there the
 side never adds. In the side band its mask replaces the bridge's estimate; it colours what it sees. "Take from the
 body" and "Fill holes up to" apply after the merge as before.
 
+**Arms up** (A190): a side view made from the ARMS-UP base side view (``shell_base_views``; the view's ``arms_up``)
+is projected onto the body POSED the same way (``pose_arms_up``: the rigged body's arm chains turned about the
+shoulder joints until the arm points ``ARMS_UP_TILT_DEG`` off vertical, linear blend skinning on the CPU). The posed
+positions keep the rest mesh's vertex indices, so what the posed body shows covered maps back to the rest mesh by
+index; every later step (region, clip, colour) reads that view through the posed positions carried alongside.
+
 The shell is already on the body (bind space of the rigged base), so the fit step only grafts it: no placement, no
 push, no allowance (the width/depth/sleeve settings do not apply to a shell). Its record names ``mesh_shape:
 "shell"`` and the metrics (``inside_share`` = vertices more than 2 mm under the skin, exact point-triangle distance).
@@ -112,6 +118,14 @@ SHELL_SETTING_KEYS: Tuple[str, ...] = ("shell_offset", "shell_margin", "shell_fi
 TEXTURE_PX = 2048
 #: A vertex this far under the skin (m) counts as inside (``inside_share``).
 INSIDE_M = 0.002
+#: A190: the arms-up pose of a side view — each arm points this many degrees off vertical, outward (the base side
+#: view's edit asks for "both arms straight up above the head").
+ARMS_UP_TILT_DEG = 12.0
+#: A190: the joints that turn with an arm — a joint whose name ends with ``<side>`` + one of these (Mixamo names;
+#: the fingers hang under the hand: every name holding ``<side>Hand``).
+ARM_CHAIN = ("Arm", "ForeArm", "Hand")
+#: A190: an arms-up base side view passes when its figure matches the posed body's silhouette at least this well.
+ARMS_UP_IOU_MIN = 0.8
 #: Bumped when the shell's construction changes: a shell made by another version reads stale.
 SHELL_VERSION = 2
 
@@ -158,6 +172,58 @@ def samples(P, F, px: float, seed: int = 1):
     a, b, c = 1 - s, s * (1 - r2), s * r2
     X = A[tri] * a[:, None] + B[tri] * b[:, None] + C[tri] * c[:, None]
     return X, N[tri], tri, np.stack([a, b, c], 1)
+
+
+def _rotation(a, b) -> np.ndarray:
+    """The rotation matrix turning unit direction ``a`` onto unit direction ``b`` (Rodrigues)."""
+    a = np.asarray(a, np.float64) / np.linalg.norm(a)
+    b = np.asarray(b, np.float64) / np.linalg.norm(b)
+    v, c = np.cross(a, b), float(a @ b)
+    if np.linalg.norm(v) < 1e-12:
+        return np.eye(3) if c > 0 else -np.eye(3)
+    K = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+    return np.eye(3) + K + K @ K * (1.0 / (1.0 + c))
+
+
+def arm_joints(joint_names: List[str], side: str) -> Tuple[Optional[int], Optional[int], List[int]]:
+    """``(upper arm joint, hand joint, every joint of the chain)`` of ``side`` ("Left" / "Right") by name (A190)."""
+    def ends(name, tail):
+        return name.split(":")[-1] == f"{side}{tail}"
+    upper = next((i for i, n in enumerate(joint_names) if ends(n, "Arm")), None)
+    hand = next((i for i, n in enumerate(joint_names) if ends(n, "Hand")), None)
+    chain = [i for i, n in enumerate(joint_names)
+             if any(ends(n, t) for t in ARM_CHAIN) or f"{side}Hand" in n.split(":")[-1]]
+    return upper, hand, chain
+
+
+def pose_arms_up(P, joints, weights, joint_names: List[str], joint_positions: Dict[str, np.ndarray], *,
+                 tilt_deg: float = ARMS_UP_TILT_DEG) -> np.ndarray:
+    """A190: the body ``P`` (bind space, skinned by ``joints`` / ``weights``) with both arms raised: per side the arm
+    chain (``arm_joints``) turns rigidly about the upper-arm joint's head until the upper arm → hand direction points
+    ``tilt_deg`` off vertical toward the shoulder's side of the body (+y up, the depth component dropped), blended by the skin weights
+    (linear blend skinning; a vertex weighted half on the arm moves half). The result keeps ``P``'s vertex order —
+    index i of the posed body is index i of the rest body. A side without its joints stays as it is."""
+    P = np.asarray(P, np.float64)
+    J = np.asarray(joints, np.int64)
+    W = np.asarray(weights, np.float64)
+    disp = np.zeros_like(P)
+    for side in ("Left", "Right"):
+        upper, hand, chain = arm_joints(joint_names, side)
+        if upper is None or hand is None:
+            continue
+        a = np.asarray(joint_positions.get(joint_names[upper]), np.float64)
+        h = np.asarray(joint_positions.get(joint_names[hand]), np.float64)
+        if a.shape != (3,) or h.shape != (3,):
+            continue
+        out = 1.0 if a[0] >= float(np.mean(P[:, 0])) else -1.0   # outward: the shoulder's side of the body
+        t = np.radians(tilt_deg)
+        Rm = _rotation(h - a, np.array([out * np.sin(t), np.cos(t), 0.0]))
+        moved = (P - a) @ Rm.T + a - P
+        w = np.zeros(len(P))
+        for j in chain:
+            w += (W * (J == j)).sum(1)
+        disp += np.clip(w, 0.0, 1.0)[:, None] * moved
+    return P + disp
 
 
 def outer_faces(P, F, px: float = 0.002, tol: float = 0.0025) -> np.ndarray:
@@ -597,7 +663,20 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
         raise ShellRefused("The piece-only views show no piece")
     keys = list(masks)
     colour_mask = {w: masks[w][1] for w in keys}
-    frames = {w: gf._frame(Pu, masks[w][0]) for w in keys}
+    # A190: a side view made from the arms-up base side view is read on the body posed the same way; its positions
+    # keep the rest mesh's indices (``pose_arms_up``)
+    posed_keys = [w for key, w in sides if (views.get(key) or {}).get("arms_up")]
+    corr_u2r = None
+    Pp = Pu
+    if posed_keys:
+        corr_u2r, _ = gf.uv_correspondence(bu, br)
+        Rp = pose_arms_up(R, br.joints, br.weights, br.joint_names, br.joint_positions)
+        Pp = Pu + (Rp - R)[corr_u2r] / k
+        report["arms_up_views"] = [key for key, w in sides if w in posed_keys]
+        report["arms_up_tilt_deg"] = ARMS_UP_TILT_DEG
+    #: the positions each view sees the body in (the posed ones for an arms-up side view)
+    PV = {w: (Pp if w in posed_keys else Pu) for w in keys}
+    frames = {w: gf._frame(PV[w], masks[w][0]) for w in keys}
     # mm per pixel of each view on the rigged body
     mm_px = {w: frames[w][0] * k * 1000.0 for w in keys}
     filled = {w: _fill_glints(masks[w][1], fill_cm2 * 100.0 / mm_px[w] ** 2) for w in keys}
@@ -611,7 +690,7 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
         return cb[0] + sx * (P[:, a] - mb[a]) / sb, cb[1] - (P[:, 1] - mb[1]) / sb
 
     def sil_iou(bm, which, mirror):
-        X = samples(Pu, bu.faces, float(np.ptp(Pu[:, 1])) / 1500)[0]
+        X = samples(PV[which], bu.faces, float(np.ptp(Pu[:, 1])) / 1500)[0]
         px, py = project(X, which, mirror)
         h, w = bm.shape
         m = np.zeros_like(bm)
@@ -632,13 +711,15 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
         report[f"{_key}_camera"] = "+x" if front_left else "-x"
     DEPTH = {which: axis for which, _m, _t, axis in VIEWS}
     zbuf = {}
-    Xs = samples(Pu, bu.faces, float(np.ptp(Pu[:, 1])) / 2500)[0]
+    Xs, _n, tri_s, bary_s = samples(Pu, bu.faces, float(np.ptp(Pu[:, 1])) / 2500)
+    Xs_posed = np.einsum("nk,nkj->nj", bary_s, Pp[bu.faces[tri_s]]) if posed_keys else Xs
     for which, mir, toward, axis in VIEWS:
         h, w = masks[which][0].shape
-        px, py = project(Xs, which, mir)
+        Xv = Xs_posed if which in posed_keys else Xs
+        px, py = project(Xv, which, mir)
         ok = (px >= 0) & (px < w) & (py >= 0) & (py < h)
         zb = np.full((h, w), -np.inf)
-        np.maximum.at(zb, (py[ok].astype(int), px[ok].astype(int)), toward * Xs[ok, axis])
+        np.maximum.at(zb, (py[ok].astype(int), px[ok].astype(int)), toward * Xv[ok, axis])
         zbuf[which] = ndimage.maximum_filter(zb, size=3)
     maskinfo = {}
     for which, _mir, _t, _a in VIEWS:
@@ -648,15 +729,18 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
         sdf = ndimage.distance_transform_edt(gm) - ndimage.distance_transform_edt(~gm)
         maskinfo[which] = (ind, sdf)
 
-    def view_state(Pq, Nq):
+    def view_state(Pq, Nq, Qq=None, NQq=None):
+        """Per view what it shows of the points ``Pq`` (normals ``Nq``); an arms-up view reads their posed
+        positions ``Qq`` / normals ``NQq`` (A190; same order as ``Pq``)."""
         out = {}
         for which, mir, toward, axis in VIEWS:
             h, w = masks[which][0].shape
-            x, y = project(Pq, which, mir)
+            P_, N_ = (Qq, NQq) if (which in posed_keys and Qq is not None) else (Pq, Nq)
+            x, y = project(P_, which, mir)
             i, j = np.clip(y.astype(int), 0, h - 1), np.clip(x.astype(int), 0, w - 1)
-            seen = toward * Pq[:, axis] >= zbuf[which][i, j] - 0.015 / k
+            seen = toward * P_[:, axis] >= zbuf[which][i, j] - 0.015 / k
             sb = frames[which][0] * k * 1000
-            out[which] = {"seen": seen, "facing": toward * Nq[:, axis], "sd_mm": maskinfo[which][1][i, j] * sb,
+            out[which] = {"seen": seen, "facing": toward * N_[:, axis], "sd_mm": maskinfo[which][1][i, j] * sb,
                           "i": i, "j": j, "in": filled[which][i, j]}
         return out
 
@@ -667,13 +751,16 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
                             st_["b"]["seen"], st_["b"]["facing"])
 
     # 1. coverage on the unrigged body
-    corr_u2r, _ = gf.uv_correspondence(bu, br)
+    if corr_u2r is None:
+        corr_u2r, _ = gf.uv_correspondence(bu, br)
     Wd = np.zeros((len(R), len(br.joint_names)))
     np.add.at(Wd, (np.repeat(np.arange(len(R)), 4), br.joints.ravel()), br.weights.ravel())
     arm_cols = [i for i, n in enumerate(br.joint_names) if any(t in n for t in arm_tokens)]
     armw = Wd[corr_u2r][:, arm_cols].sum(1) if arm_cols else np.zeros(len(Pu))
     Nu = gf._unit(gf.vertex_normals(Pu, bu.faces))
-    vs = view_state(Pu, Nu)
+    Np = gf._unit(gf.vertex_normals(Pp, bu.faces)) if posed_keys else Nu
+    # A190: the posed body keeps the rest body's vertex order — a vertex an arms-up view shows covered is that index
+    vs = view_state(Pu, Nu, Pp, Np)
     cov = np.zeros(len(Pu), bool)
     for which, _m, _t, _a in VIEWS:
         gmd = ndimage.binary_dilation(filled[which], iterations=2 + int(np.ceil(margin_mm / mm_px[which])))
@@ -763,17 +850,19 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     ui0 = np.where(ui0 < 0, cKDTree(bu.uvs).query(br.uvs[usedr])[1], ui0)
     # only the joints that weigh anything in the region travel through the subdivision (memory)
     jcols = np.nonzero(Wd[usedr].max(0) > 0)[0]
-    ATTR = np.hstack([br.uvs[usedr], Pu[ui0], Wd[usedr][:, jcols]])   # uv(2) unrigged position(3) weights
+    # uv(2), unrigged position(3), its posed position(3, A190: = the rest one without an arms-up view), weights
+    ATTR = np.hstack([br.uvs[usedr], Pu[ui0], Pp[ui0], Wd[usedr][:, jcols]])
     for _ in range(2):
         V, F, ATTR = subdivide(V, F, ATTR)
 
     # 3. membership scalar + clip
     Vw, Fw, winv = gf.weld(V, F)
-    ATw = np.zeros((len(Vw), 5))
-    np.add.at(ATw, winv, ATTR[:, :5])
+    ATw = np.zeros((len(Vw), 8))
+    np.add.at(ATw, winv, ATTR[:, :8])
     ATw /= np.maximum(np.bincount(winv, minlength=len(Vw)), 1)[:, None]
-    Puw = ATw[:, 2:5]
-    st = view_state(Puw, gf._unit(gf.vertex_normals(Puw, Fw)))
+    Puw, Ppw = ATw[:, 2:5], ATw[:, 5:8]
+    st = view_state(Puw, gf._unit(gf.vertex_normals(Puw, Fw)), Ppw,
+                    gf._unit(gf.vertex_normals(Ppw, Fw)) if posed_keys else None)
     Pref = Puw * k
     head_on = {w: st[w]["seen"] & (np.abs(st[w]["facing"]) >= 0.3) for w in ("f", "b")}
     side = ~(head_on["f"] | head_on["b"])
@@ -822,7 +911,7 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     # A184: holes the clip left inside the region, up to "Fill holes up to", closed with a fan
     Vc, Fc, Ac, closed = fill_small_holes(Vc, Fc, Ac, fill_cm2 * 1e-4)
     report["shell_holes_closed"] = int(closed)
-    UVc, Puc, Wc = Ac[:, :2], Ac[:, 2:5], Ac[:, 5:]
+    UVc, Puc, Ppc, Wc = Ac[:, :2], Ac[:, 2:5], Ac[:, 5:8], Ac[:, 8:]
 
     # 4. offset along the smoothed outward normals
     Vcw, Fcw, cinv = gf.weld(Vc, Fc)
@@ -833,10 +922,11 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
 
     # 5. colour, baked in the body's UV atlas
     Xq_, _, tri, bary = samples(Vc, Fc, 0.0008)
-    Aq = np.einsum("nk,nkj->nj", bary, np.hstack([UVc, Puc])[Fc[tri]])
-    UVq, Puq = Aq[:, :2], Aq[:, 2:5]
+    Aq = np.einsum("nk,nkj->nj", bary, np.hstack([UVc, Puc, Ppc])[Fc[tri]])
+    UVq, Puq, Ppq = Aq[:, :2], Aq[:, 2:5], Aq[:, 5:8]
     Nq = gf._unit(gf._unit(gf.vertex_normals(Puc, Fc))[Fc[tri]].mean(1))
-    stq = view_state(Puq, Nq)
+    NPq = gf._unit(gf._unit(gf.vertex_normals(Ppc, Fc))[Fc[tri]].mean(1)) if posed_keys else None
+    stq = view_state(Puq, Nq, Ppq, NPq)
     cols, valid = {}, {}
     for which, _m, _t, _a in VIEWS:
         ind, _ = maskinfo[which]
@@ -938,6 +1028,54 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
                         report={"mesh_shape": SHELL, **report})
 
 
+def silhouette_mask(P, F, mask_shape: Tuple[int, int], body_mask, *, haxis: int, mirror: bool) -> np.ndarray:
+    """The silhouette of the mesh ``(P, F)`` in a view of ``mask_shape`` framed like ``body_mask`` (``garment_fit.
+    _frame``: the height is the scale), the image's horizontal axis the mesh axis ``haxis`` (0 front / back, 2 side),
+    ``mirror`` flipping it. Closed 2 px like ``build_shell``'s silhouette check."""
+    from scipy import ndimage
+    from app.core import garment_fit as gf
+    P = np.asarray(P, np.float64)
+    sb, cb, mb = gf._frame(P, body_mask)
+    X = samples(P, F, float(np.ptp(P[:, 1])) / 1500)[0]
+    sx = -1.0 if mirror else 1.0
+    px = cb[0] + sx * (X[:, haxis] - mb[haxis]) / sb
+    py = cb[1] - (X[:, 1] - mb[1]) / sb
+    h, w = mask_shape
+    m = np.zeros((h, w), bool)
+    ok = (px >= 0) & (px < w) & (py >= 0) & (py < h)
+    m[py[ok].astype(int), px[ok].astype(int)] = True
+    return ndimage.binary_closing(m, iterations=2)
+
+
+def iou(a, b) -> float:
+    a, b = np.asarray(a, bool), np.asarray(b, bool)
+    return float((a & b).sum() / max((a | b).sum(), 1))
+
+
+def arms_up_check(rigged: bytes, unrigged: bytes, side_mask) -> Dict[str, Any]:
+    """A190, the gate of an arms-up base side view: its figure mask ``side_mask`` against the silhouette of the base
+    body posed with ``pose_arms_up`` (the camera side the better match names) — ``{iou_posed, iou_rest, mirror, ok}``:
+    ok when the posed body matches at least ``ARMS_UP_IOU_MIN`` and better than the body at rest (the arms really
+    went up)."""
+    from app.core import garment_fit as gf
+    from app.core import glb_mesh
+    bu, br = glb_mesh.body_arrays(unrigged), glb_mesh.body_arrays(rigged)
+    Pu = np.asarray(bu.positions, np.float64)
+    R = np.asarray(br.positions, np.float64)
+    k = float(np.ptp(R[:, 1])) / float(np.ptp(Pu[:, 1]))
+    corr, _ = gf.uv_correspondence(bu, br)
+    Pp = Pu + (pose_arms_up(R, br.joints, br.weights, br.joint_names, br.joint_positions) - R)[corr] / k
+    mask = np.asarray(side_mask, bool)
+    best = None
+    for mirror in (False, True):
+        posed = iou(silhouette_mask(Pp, bu.faces, mask.shape, mask, haxis=2, mirror=mirror), mask)
+        if best is None or posed > best[0]:
+            best = (posed, mirror)
+    rest = iou(silhouette_mask(Pu, bu.faces, mask.shape, mask, haxis=2, mirror=best[1]), mask)
+    return {"iou_posed": round(best[0], 3), "iou_rest": round(rest, 3), "mirror": best[1],
+            "ok": bool(best[0] >= ARMS_UP_IOU_MIN and best[0] > rest)}
+
+
 def shell_glb(garment) -> bytes:
     """The shell alone as a static textured GLB (the Mesh step's 3D view): positions in the body's bind space."""
     from app.core.glb_mesh import static_glb
@@ -959,10 +1097,14 @@ def shell_views(character_name: str, item_id: str, fsig: str, bsig: str, *,
     from app.core import garment_store as gs
     from app.core.model_refs import find_ref_image, get_model_refs_dir
     out: Dict[str, Dict[str, Any]] = {}
+    from app.core import shell_base_views
     front = find_ref_image(character_name, base_body._kind("front"), bsig)
     back = find_ref_image(character_name, base_body._kind("back"), bsig)
     if front is None or back is None:
         raise base_body.MissingInput(base_body.BASE_IMAGES_MISSING)
+    # A190: the frame of the base-view variant the worn views were made on (bald / arms up), when there is one
+    front = shell_base_views.base_for(character_name, item_id, "front", bsig, front, make=False)[0]
+    back = shell_base_views.base_for(character_name, item_id, "back", bsig, back, make=False)[0]
     for view in ("front", "back"):
         ghost = gs.garment_path(character_name, item_id, fsig, "image", step="ghost", view=view)
         if not ghost.is_file():
@@ -984,6 +1126,16 @@ def shell_views(character_name: str, item_id: str, fsig: str, bsig: str, *,
         base_s = find_ref_image(character_name, base_body._kind(view), bsig)
         if base_s is None:
             raise base_body.MissingInput(base_body.BASE_IMAGES_MISSING)
+        # A190: a worn side made on the arms-up base side view is read on the posed body, framed by that view
+        worn = gs.garment_path(character_name, item_id, fsig, "image", step="worn", view=view)
+        made_on = str(gs.read_record(worn.with_suffix(".json")).get("base_variant") or "")
+        posed = shell_base_views.arms_up(made_on)
+        if made_on:
+            hit = shell_base_views.current(character_name, view, bsig, made_on, base_s)
+            if hit is None:
+                raise base_body.MissingInput(f"The {view} base view with the arms up is missing — run the worn "
+                                             f"{view} view again")
+            base_s = hit
         ghost = gs.garment_path(character_name, item_id, fsig, "image", step="ghost", view=view)
         if not ghost.is_file():
             raise base_body.MissingInput(f"The ghost {view} image is missing — run the ghost step first")
@@ -993,5 +1145,5 @@ def shell_views(character_name: str, item_id: str, fsig: str, bsig: str, *,
             if rgb.size != tuple(size_s):
                 rgb = rgb.resize(tuple(size_s))
         out[view] = {"body_mask": np.asarray(body_s), "ghost_mask": np.asarray(gi._mask(ghost, size_s)),
-                     "image": np.asarray(rgb)}
+                     "image": np.asarray(rgb), "arms_up": posed}
     return out
