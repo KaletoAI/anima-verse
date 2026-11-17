@@ -19,6 +19,10 @@ Hips share never decreases with x, and from x = .02 (the rim and deeper) it is e
 ``skin_distance`` on a path 0-1-2-3 at x = 0, .01, .03, .06, seed 0, limit .04: {0: 0, 1: .01, 2: .03}; 3 is
 past the limit. Vertex 4 coincides with 2 (a seam copy, joined at length 0): .03. Vertex 5 at (.01, .01) joined to
 0 and 2: |5| = .014142, and the path to 2 through it (.014142 + sqrt(.02^2 + .01^2) = .036503) loses to .03.
+``harmonic_fill`` (A169, the band's blend on the welded mesh) on a path 0-1-2-3-4 of equal edges, 0 fixed at 1 and 4
+at 0: the free nodes take the straight line .75 / .5 / .25. On 0-1-2 with edges .01 and .03 (weights 100 and 100/3),
+0 fixed at 1, 2 at 0: node 1 = 100 / (100 + 100/3) = .75. Two columns are solved at once (the second, 0 -> 0 and
+2 -> 1, gives .25). A free node 5 joined only to a free node 6 keeps its start value .4.
 Parameters: share 0 (off), ring .5, spread .5 by default; share 1.1, ring 0, ring 1.5, spread -.1, spread 4.5 fail.
 """
 import ast
@@ -32,12 +36,13 @@ import numpy as np
 def main():
     source = Path(__file__).resolve().parents[1] / 'app/blender/scripts/inset_part.py'
     module = ast.parse(source.read_text())
-    names = ('parameters', 'pelvis_level', 'pelvis_weights', 'skin_distance')
+    names = ('parameters', 'pelvis_level', 'pelvis_weights', 'skin_distance', 'harmonic_fill')
     definitions = [n for n in module.body if isinstance(n, ast.FunctionDef) and n.name in names
-                   or isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'DEFAULTS' for t in n.targets)]
+                   or isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id in ('DEFAULTS', 'HARMONIC_ITERATIONS', 'HARMONIC_TOLERANCE') for t in n.targets)]
     scope = {'copy': copy, 'math': math, 'np': np}
     exec(compile(ast.Module(body=definitions, type_ignores=[]), str(source), 'exec'), scope)
     level, weights, distance, parameters = (scope[n] for n in ('pelvis_level', 'pelvis_weights', 'skin_distance', 'parameters'))
+    harmonic = scope['harmonic_fill']
     close = lambda a, b: abs(a - b) < 1e-9
 
     got = level(np.array([-.05, -.04, -.01, 0., .02, .03]), .02, .04)
@@ -66,6 +71,13 @@ def main():
     d = distance(adjacency, pos, [0], .04)
     assert set(d) == {0, 1, 2, 4, 5}, d
     assert close(d[0], 0) and close(d[1], .01) and close(d[2], .03) and close(d[4], .03) and close(d[5], math.sqrt(2) * .01)
+
+    line5 = harmonic(5, [[0, 1], [1, 2], [2, 3], [3, 4]], [1.] * 4, [False, True, True, True, False], np.array([[1.], [0], [0], [0], [0]]))
+    assert np.allclose(line5[:, 0], [1, .75, .5, .25, 0], atol=1e-6), line5
+    two = harmonic(7, [[0, 1], [1, 2], [5, 6]], [.01, .03, .01], [False, True, False, False, False, True, True],
+                   np.array([[1., 0], [0, 0], [0, 1], [0, 0], [0, 0], [.4, .4], [.4, .4]]))
+    assert abs(two[1, 0] - .75) < 1e-6 and abs(two[1, 1] - .25) < 1e-6, two
+    assert np.allclose(two[5], .4) and np.allclose(two[6], .4), two
 
     p = parameters({})['pelvis']
     assert p == {'bone': 'Hips', 'share': 0.0, 'ring': .5, 'spread': .5}, p
