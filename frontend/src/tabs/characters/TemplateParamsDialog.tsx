@@ -218,7 +218,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
   const kindBuilt = !draft || !data || data.built.includes(draft.kind)
   return createPortal(
     <div className="ga-modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose() }}>
-      <div className="ga-modal" role="dialog" aria-modal="true" aria-label={title} style={{ maxWidth: 980 }}>
+      <div className="ga-modal" role="dialog" aria-modal="true" aria-label={title} style={{ maxWidth: 1200 }}>
         <div className="ga-modal-header"><h3>{title}</h3></div>
         <div className="ga-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13 }}>
           {!data && !error ? <div className="ga-hint">{t('Loading…')}</div> : null}

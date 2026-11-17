@@ -10,6 +10,10 @@
   "translations": {
     "The piece on the plain body": "Das Stück auf dem Grundkörper",
     "Plain body front — the piece drawn at its parameters": "Grundkörper von vorn — das Stück nach seinen Parametern gezeichnet",
+    "Rendering the figure… (the plain body is shown meanwhile)": "Die Figur wird gerendert … (bis dahin der Grundkörper)",
+    "Dressed without this piece — the piece drawn at its parameters": "Angezogen ohne dieses Stück — das Stück nach seinen Parametern gezeichnet",
+    "The figure could not be rendered:": "Die Figur konnte nicht gerendert werden:",
+    "No 3D figure yet — the plain body front is shown (Figure tab → Build)": "Noch keine 3D-Figur — der Grundkörper von vorn wird gezeigt (Reiter Figur → Bauen)",
     "No plain body front yet — build the plain body first (Figure tab)": "Noch keine Vorderansicht des Grundkörpers — zuerst den Grundkörper erstellen (Reiter Figur)",
     "No plain body model yet — the overlay needs its measurements (Figure tab → Build)": "Noch kein Grundkörper-Modell — die Zeichnung braucht seine Maße (Reiter Figur → Build)",
     "Side views and the shell due — Rebuild shell makes the views first": "Seitenansichten und Hülle fällig — „Hülle neu bauen“ macht zuerst die Ansichten",
