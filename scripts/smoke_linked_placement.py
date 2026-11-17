@@ -37,6 +37,11 @@ unplaced. Obs (unlinked) in Inn/taproom.
     apply_place_on_map(Glut, Inn) -> 409 "Nobody of Glut's linked family
     stands in the world." and Glut stays unplaced; the payload of Glut has
     current_location_id "" and synced_with "".
+    save_character_current_room(Glut, "taproom") stores nothing and returns
+    normally (the "not stored" warning, no exception — it formatted the
+    undefined name ``room`` until 2026-11-18, a NameError): no exception,
+    Glut raw ("", ""), Tilda's raw room still "yard" (the last move of [D]
+    put her into Mill, whose entry room is yard).
 """
 import asyncio
 import json
@@ -199,6 +204,14 @@ check("Glut still unplaced", raw("Glut"), ("", ""))
 _p = character_ops.build_current_location_payload("Glut")
 check("payload nobody: location", _p.get("current_location_id"), "")
 check("payload nobody: synced_with", _p.get("synced_with"), "")
+try:
+    ch.save_character_current_room("Glut", "taproom")
+    _err = ""
+except Exception as e:  # noqa: BLE001 — the NameError this pins
+    _err = f"{type(e).__name__}: {e}"
+check("room setter nobody: no exception", _err, "")
+check("room setter nobody: Glut unplaced", raw("Glut"), ("", ""))
+check("room setter nobody: Tilda room kept", raw("Tilda")[1], "yard")
 
 print(f"\n{CHECKED - len(FAILURES)}/{CHECKED} checks passed")
 if FAILURES:

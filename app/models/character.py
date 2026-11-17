@@ -2696,7 +2696,7 @@ def save_character_current_room(character_name: str, room_id: str,
     if _owner != character_name:
         if not _owner:
             logger.warning("%s: nobody of the linked family stands in the world — "
-                           "%s not stored", character_name, room)
+                           "%s not stored", character_name, room_id)
             return
         character_name = _owner
     from app.core.keyed_lock import keyed_lock
