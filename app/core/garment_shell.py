@@ -127,7 +127,7 @@ ARM_CHAIN = ("Arm", "ForeArm", "Hand")
 #: A190: an arms-up base side view passes when its figure matches the posed body's silhouette at least this well.
 ARMS_UP_IOU_MIN = 0.8
 #: Bumped when the shell's construction changes: a shell made by another version reads stale.
-SHELL_VERSION = 2
+SHELL_VERSION = 3
 #: A191: bumped when only the side-view merge changes — a shell made WITH side views by another version reads stale
 #: (1: the arm no longer occludes the flank for a side view); a shell without side views is not touched by it.
 SIDES_VERSION = 1
@@ -532,6 +532,64 @@ class SideBridge:
         return margin, t_out, yf, yb, th, fe_out, be_out
 
 
+# --- limb rings (A192) ----------------------------------------------------------------------------------------------
+
+#: A192: the limbs a shell is closed round. The torso's side bridge works in ONE frame round the trunk's axis; a leg
+#: has a side of its own toward the other leg and one outward, and neither camera sees them head-on — the lace
+#: stockings stayed open in a strip down both sides of each leg. Per limb: the joint-name tokens whose weights mark it.
+LIMBS: Tuple[Tuple[str, ...], ...] = (("LeftUpLeg", "LeftLeg", "LeftFoot", "LeftToe"),
+                                      ("RightUpLeg", "RightLeg", "RightFoot", "RightToe"))
+#: Height of a limb ring (m).
+RING_BIN_M = 0.004
+#: A ring's view counts with at least this many head-on points; it is "worn" when this share of them is.
+RING_MIN_POINTS = 3
+RING_SHARE = 0.5
+
+
+def limb_columns(joint_names, limbs: Tuple[Tuple[str, ...], ...] = LIMBS) -> List[List[int]]:
+    """Per limb the indices in ``joint_names`` of its joints (a name that contains one of the limb's tokens)."""
+    return [[i for i, n in enumerate(joint_names) if any(t in str(n) for t in limb)] for limb in limbs]
+
+
+def ring_worn(y, limb, head_f, memb_f, head_b, memb_b, front_facing):
+    """A192, the limb rule: a point of ``limb`` (bool) that no view sees head-on is worn when the limb's head-on
+    points in its ring (``RING_BIN_M`` of height ``y``) are — in the front view AND in the back view; where only one
+    view has head-on points in the ring, or the two disagree (a slanted top edge), the view the point faces
+    (``front_facing``) decides. Returns bool (worn by the ring); False outside the limb and in a ring without
+    head-on points."""
+    from scipy import ndimage
+    y = np.asarray(y, np.float64)
+    out = np.zeros(len(y), bool)
+    if not limb.any():
+        return out
+    y0 = y[limb].min()
+    b = np.clip(((y - y0) / RING_BIN_M).astype(int), 0, None)
+    nb = int(b[limb].max()) + 1
+    state = {}
+    for key, head, memb in (("f", head_f, memb_f), ("b", head_b, memb_b)):
+        n = np.bincount(b[limb & head], minlength=nb)[:nb]
+        m = np.bincount(b[limb & head & memb], minlength=nb)[:nb]
+        known = n >= RING_MIN_POINTS
+        worn = known & (m >= RING_SHARE * np.maximum(n, 1))
+        if known.sum() > 5:
+            worn = known & (ndimage.median_filter(np.where(known, worn, False).astype(np.uint8), 5) > 0)
+        state[key] = (known, worn)
+    (kf, wf), (kb, wb) = state["f"], state["b"]
+    bi = b[limb]
+    ff = np.asarray(front_facing, bool)[limb]
+    pick_f = np.where(kf[bi] & kb[bi], np.where(wf[bi] == wb[bi], True, ff), kf[bi])
+    out[limb] = np.where(pick_f, wf[bi], wb[bi]) & (kf[bi] | kb[bi])
+    return out
+
+
+def mirror_into(x, lo, hi):
+    """``x`` folded back into [``lo``, ``hi``] like a pattern mirrored at both ends (a triangle wave): the picture
+    between ``lo`` and ``hi`` continues past either end without a seam."""
+    span = np.maximum(np.asarray(hi, np.float64) - lo, 1e-9)
+    u = np.mod(np.asarray(x, np.float64) - lo, 2.0 * span)
+    return lo + np.where(u > span, 2.0 * span - u, u)
+
+
 # --- the shell ------------------------------------------------------------------------------------------------------
 
 def _bridge_mm(marg, margin_mm: float):
@@ -889,6 +947,7 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     jcols = np.nonzero(Wd[usedr].max(0) > 0)[0]
     # uv(2), unrigged position(3), its posed position(3, A190: = the rest one without an arms-up view), weights
     ATTR = np.hstack([br.uvs[usedr], Pu[ui0], Pp[ui0], Wd[usedr][:, jcols]])
+    limb_cols = limb_columns([br.joint_names[i] for i in jcols])
     for _ in range(2):
         V, F, ATTR = subdivide(V, F, ATTR)
 
@@ -915,6 +974,20 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     if side.any():
         marg = bridge.query(Pref[side])[0]
         s[side] = _bridge_mm(marg, M)
+    # A192: round a limb the ring decides what no view sees head-on (``ring_worn``) — it only ever adds
+    limb_w = np.zeros((len(Vw), len(limb_cols)))
+    for li, cols_ in enumerate(limb_cols):
+        if cols_:
+            np.add.at(limb_w[:, li], winv, ATTR[:, 8:][:, cols_].sum(1))
+    limb_w /= np.maximum(np.bincount(winv, minlength=len(Vw)), 1)[:, None]
+    ring_added = 0
+    for li in range(len(limb_cols)):
+        on_limb = limb_w[:, li] > 0.5
+        worn = ring_worn(Pref[:, 1], on_limb, head_on["f"], memb_f, head_on["b"], memb_b, st["f"]["facing"] >= 0)
+        add = worn & side & (s <= 0)
+        ring_added += int(add.sum())
+        s = np.where(add, 5.0 + M, s)
+    report["limb_ring_added_vertices"] = ring_added
     for w in ("f", "b"):
         bump = side & st[w]["seen"] & (st[w]["sd_mm"] > 10)
         s = np.where(bump, np.maximum(s, st[w]["sd_mm"] + M), s)
@@ -1016,6 +1089,83 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
         cbq = np.median(col[jb], 1) if jb is not None else cfq
         col[side_q] = cfq * (1 - tq[:, None]) + cbq * tq[:, None]
         src_dist[side_q] = np.where(tq < 0.5, dfq, dbq)
+    # A192: round a limb the side takes the PATTERN, not a median colour — the front picture is continued past its
+    # head-on edge along the surface at its own scale (mirrored back and forth between the limb's two head-on
+    # edges, ``mirror_into``), the back picture likewise from the other end, cross-faded over the side.
+    tiled = 0
+    if side_q.any() and real.any():
+        Wq = np.einsum("nk,nkj->nj", bary, Wc[Fc[tri]])
+        Pm = Puq * k
+        for cols_ in limb_cols:
+            on = Wq[:, cols_].sum(1) > 0.5 if cols_ else np.zeros(len(Pm), bool)
+            todo = np.nonzero(on & side_q)[0]
+            if not len(todo) or not (on & real).any():
+                continue
+            y0 = Pm[on, 1].min()
+            rb_ = np.clip(((Pm[:, 1] - y0) / RING_BIN_M).astype(int), 0, None)
+            nbin = int(rb_[on].max()) + 1
+            # the limb's axis per ring: the middle of its extent
+            ax = np.full((nbin, 2), np.nan)
+            for a_, lo_hi in ((0, 0), (2, 1)):
+                lo = np.full(nbin, np.inf)
+                hi = np.full(nbin, -np.inf)
+                np.minimum.at(lo, rb_[on], Pm[on, a_])
+                np.maximum.at(hi, rb_[on], Pm[on, a_])
+                ax[:, lo_hi] = 0.5 * (lo + hi)
+            dx, dz = Pm[:, 0] - ax[rb_.clip(0, nbin - 1), 0], Pm[:, 2] - ax[rb_.clip(0, nbin - 1), 1]
+            rad = np.hypot(dx, dz)
+            acc_c = np.zeros((len(todo), 3))
+            acc_w = np.zeros(len(todo))
+            for which, front in (("f", True), ("b", False)):
+                src = on & real & ((wf >= wb) & (wf > 0) if front else (wb > wf))
+                if not src.any():
+                    continue
+                jj = stq[which]["j"].astype(np.float64)
+                # arc from the view's centre line (the front's +z, the back's -z), signed by the image column
+                jc = np.full(nbin, np.nan)
+                jlo = np.full(nbin, np.inf)
+                jhi = np.full(nbin, -np.inf)
+                np.minimum.at(jlo, rb_[src], jj[src])
+                np.maximum.at(jhi, rb_[src], jj[src])
+                okb = np.isfinite(jlo) & (jhi - jlo >= 4)
+                if okb.sum() < 2:
+                    continue
+                idx = np.arange(nbin)
+                jlo = np.interp(idx, idx[okb], jlo[okb])
+                jhi = np.interp(idx, idx[okb], jhi[okb])
+                jc = 0.5 * (jlo + jhi)
+                ang = np.abs(np.arctan2(dx, dz if front else -dz))            # 0 at the view's centre line .. pi
+                # the head-on edge's angle per ring and image side
+                right = jj >= jc[rb_.clip(0, nbin - 1)]
+                edge = np.zeros((nbin, 2))
+                for sd in (0, 1):
+                    m_ = src & (right == bool(sd))
+                    e_ = np.zeros(nbin)
+                    np.maximum.at(e_, rb_[m_], ang[m_])
+                    have = e_ > 0
+                    edge[:, sd] = np.interp(idx, idx[have], e_[have]) if have.sum() >= 2 else np.radians(72.0)
+                q = todo
+                bq_ = rb_[q].clip(0, nbin - 1)
+                sd_q = right[q].astype(int)
+                e_q = edge[bq_, sd_q]
+                arc_px = rad[q] * np.maximum(ang[q] - e_q, 0.0) * 1000.0 / mm_px[which]
+                j_edge = np.where(sd_q == 1, jhi[bq_], jlo[bq_])
+                j_src = mirror_into(j_edge - np.where(sd_q == 1, 1.0, -1.0) * arc_px, jlo[bq_], jhi[bq_])
+                ind, _ = maskinfo[which]
+                h_, w_ = masks[which][0].shape
+                i_s = stq[which]["i"][q]
+                j_s = np.clip(np.rint(j_src).astype(int), 0, w_ - 1)
+                c_ = masks[which][2][ind[0][i_s, j_s], ind[1][i_s, j_s]]
+                # weight: 1 at this view's edge, 0 at the other view's (the far side of the limb)
+                span = np.maximum(np.pi - e_q - np.radians(72.0), 1e-3)
+                t_ = np.clip((ang[q] - e_q) / span, 0, 1)
+                w_v = 1.0 - t_ * t_ * (3 - 2 * t_)
+                acc_c += c_ * w_v[:, None]
+                acc_w += w_v
+            got = acc_w > 1e-6
+            col[todo[got]] = acc_c[got] / acc_w[got][:, None]
+            tiled += int(got.sum())
+    report["limb_side_samples_tiled"] = tiled
     side_s = np.abs(nz) < 0.3
     metrics: Dict[str, Any] = {}
     for ncm in (1, 2, 5):
