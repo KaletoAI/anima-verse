@@ -154,6 +154,33 @@ The record's ``insole`` block also carries ``wall_top_raw`` — the shoe's wall 
 lower of the two sides' top edges, every point farther than ``WALL_SIDE_M`` from the midline counted) — which
 ``footwear_cut.cut_description`` turns into the cut's cap; insole.json keeps only the analysis' topline.
 
+**Open footwear** (A189; ``insole["kind"] == "open"`` — sandals, slides, strap shoes; no version bump, a closed
+shoe's fit is byte-identical). The bare foot SHOWS under an open shoe: nothing of it is slimmed, hidden or cut, so
+the shoe is made to fit the foot instead:
+- **Scale** (step 2): no toe box ends the foot — it lies on the whole insole, ``OPEN_ALLOW_M`` shorter than the
+  insole's arc, the heel ``OPEN_EDGE_M`` in from its rear end (the length allowance adds heel room as before).
+- **Pose / placement / lift** (steps 3–5): unchanged — heel and ball contact on the insole, the heel's rise turns
+  the foot (``foot_pose``), a heeled sandal lifts the root as a pump does. The midline is fitted over the whole foot
+  (up to the toes), not only up to the ball.
+- **Sole width**: after the ball rule, the one width factor grows in steps of ``OPEN_WIDEN_STEP`` (up to the width
+  cap) until ``OPEN_SOLE_COVER`` of each foot's plantar vertices stand over the insole map.
+- **Upper height** (4b): per roofed station the foot's top above the insole plus ``STRAP_CLEAR_M`` against the
+  inner roof; one factor for the pair (the ``OPEN_HEIGHT_PCT`` percentile, the higher side, at most
+  ``OPEN_HEIGHT_CAP``), applied to every vertex's height above the insole profile, weighted in from the insole
+  (``OPEN_UPPER_FROM_M`` .. + ``OPEN_UPPER_BAND_M``) so the sole stays as it is.
+- **Strap push** (4c, ``_open_upper``): the upper (same weighting) is pushed ``STRAP_CLEAR_M`` off the body skinned
+  to the shod stand (``garment_fit.body_sdf`` / ``push_out``; a pushed vertex carries its neighbours within
+  ``STRAP_SPREAD_M``, so a strap keeps its thickness).
+- **Bind**: rigid on Foot / ToeBase with the ball blend, as every shoe.
+- **Gates** (``OPEN_GATES``, with ``FIT_GATES``): ``strap_inside_share``, ``strap_push_max_mm``, ``sole_cover``,
+  ``sole_sink_mm``. **The cut** is ``{"open": True, sides: {frame, joints, ...}}``
+  (``footwear_cut._open_description``): ``apply_cut`` leaves the body untouched, ``cut_gates`` judges nothing.
+Measured 2026-11-17 on copies — Dario's base (``base4b00ccc7``, foot 30.6 cm, instep 60 – 90 mm over the insole
+where the band's roof stood at 24 – 60 mm) in the six sandal meshes: all six accepted; before the height factor
+92 % of the band lay inside the foot and a push alone moved it 26 – 36 mm and tore it; with it (factor 1.57 – 1.80,
+sole widened x1.04 – 1.10) the push is 13.6 – 17.1 mm at most, 0 strap vertices inside the skin in the stand,
+sole_cover 0.93 – 0.94, sole_sink 3.2 – 6.0 mm (report ``a189-report.md``).
+
 **Calibration of the step-1 rule (fit version 5, 2026-11-11) — REAL material, offline, no hub.** Measured with
 this module on read-only copies of the base bodies (mm above the body's lowest vertex; L / R). Kira
 ``base20d5701a`` (the clone body the round-1 heels were accepted on; ankle 111 / 107 mm): ``measure_feet`` reads
@@ -536,6 +563,47 @@ WALL_SIDE_M = 0.004
 
 SIDES = ("left", "right")
 _UP = np.array([0.0, 1.0, 0.0])
+
+# --- open footwear (A189, module docstring "Open footwear") ------------------------------------------------------------
+#: The sole of an open shoe is this much longer than the foot (heel edge + toe edge) ...
+OPEN_ALLOW_M = 0.014
+#: ... and the heel stands this far in from the insole's rear end (the rest of ``OPEN_ALLOW_M`` lies before the toes).
+OPEN_EDGE_M = 0.005
+#: The upper of an open shoe (straps, bands, a toe post): what stands at least ``OPEN_UPPER_FROM_M`` above the insole
+#: profile; the push fades in over ``OPEN_UPPER_BAND_M`` above that, so a strap stays rooted in its sole.
+OPEN_UPPER_FROM_M = 0.003
+OPEN_UPPER_BAND_M = 0.008
+#: A strap keeps this distance from the skin; a pushed inner face carries the strap's outer face within
+#: ``STRAP_SPREAD_M`` with it (``garment_fit.push_out``'s spread — the strap keeps its thickness).
+STRAP_CLEAR_M = 0.002
+STRAP_SPREAD_M = 0.012
+#: The sole of an open shoe is widened (one factor for the pair, steps of ``OPEN_WIDEN_STEP``, up to the width cap)
+#: until this share of each foot's sole stands on it — nothing slims a foot onto a narrow sole.
+OPEN_SOLE_COVER = 0.93
+OPEN_WIDEN_STEP = 0.02
+#: The upper of an open shoe is raised over a higher foot: one height factor for the pair, the
+#: ``OPEN_HEIGHT_PCT`` percentile of what the roofed stations need, at most ``OPEN_HEIGHT_CAP``; the push does the rest.
+OPEN_HEIGHT_CAP = 2.0
+OPEN_HEIGHT_PCT = 90.0
+#: A strap vertex counts as inside the skin below this field value (a quarter voxel of ``garment_fit.VOX_M``).
+STRAP_INSIDE_M = -0.0005
+#: The gates of an open shoe (``_fit``; judged with ``FIT_GATES``): the strap vertices left inside the skin, the
+#: farthest a strap vertex was pushed (a strap moved further is not this shoe any more), the share of the foot's
+#: sole that stands on the insole, and how deep the foot's sole lies under the insole surface (95th percentile).
+OPEN_GATES: Dict[str, Tuple[str, Any]] = {
+    "strap_inside_share": ("max", 0.02),
+    "strap_push_max_mm": ("max", 30.0),
+    "sole_cover": ("min", 0.90),
+    "sole_sink_mm": ("max", 8.0),
+}
+OPEN_GATE_LABELS = {
+    "strap_inside_share": "share of the strap vertices left inside the skin, worse side",
+    "strap_push_max_mm": "farthest a strap was pushed off the foot, worse side",
+    "sole_cover": "share of the foot's sole standing on the shoe's sole, worse side",
+    "sole_sink_mm": "depth of the foot's sole under the insole surface (95th percentile), worse side",
+}
+#: The worse side of these open gates is the SMALLER value.
+OPEN_WORST_IS_MIN = ("sole_cover",)
 
 
 @dataclass
@@ -1125,6 +1193,80 @@ def upper_height_map(Q: np.ndarray, insole: Dict[str, Any], height: Optional[Dic
     return out, n / np.where(ln > 0, ln, 1.0)
 
 
+def _open_upper(Pw: np.ndarray, Q: np.ndarray, faces: np.ndarray, ins: "_Insole", imap: np.ndarray, k: float,
+                body: glb_mesh.BodyMesh, P: np.ndarray, w: Dict[str, Any]) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Step 4c of an OPEN shoe (module docstring "Open footwear") for one side: ``Pw`` (the shoe in the shod stand,
+    before the root lift) with its upper pushed off the skin, and the side's open record — the four ``OPEN_GATES``
+    values plus diagnostics. ``Q`` = the shoe in its frame (raw units), ``imap`` the insole map, ``w`` the side's
+    work dict (``fm``, ``Bf``, ``Bt``, ``Pf``).
+
+    The upper = the vertices ``OPEN_UPPER_FROM_M`` above the insole profile of their station, weighted in over
+    ``OPEN_UPPER_BAND_M``; the sole below never moves (the foot stands ON it: heel and ball contact, step 3/4). The
+    body is skinned to the shod stand and read as a solid (``garment_fit.body_sdf``); the welded upper is pushed to
+    ``STRAP_CLEAR_M`` outside it, a pushed vertex carrying its neighbours within ``STRAP_SPREAD_M``
+    (``garment_fit.push_out`` with the whole upper as its spread zone — a strap is a thin solid, its outer face goes
+    out with its inner face), the displacement scaled by the vertex's weight. The
+    foot itself is not touched: nothing of it is slimmed, hidden or cut under an open shoe."""
+    from app.core.garment_fit import SDF_MARGIN_M, VOX_M, body_sdf, push_out, weld
+    fm = w["fm"]
+    mats = {fm.foot_index: w["Bf"], fm.toe_index: w["Bt"]}
+    above = (Q[:, 1] - ins.z(np.clip(Q[:, 0], ins.x0, ins.x1))) * k
+    wu = _smoothstep((above - OPEN_UPPER_FROM_M) / OPEN_UPPER_BAND_M)
+    rows = np.nonzero(wu > 0.0)[0]
+    rec: Dict[str, Any] = {"upper_vertices": int((wu >= 1.0).sum()), "strap_inside_share": 0.0,
+                           "strap_inside_before": 0.0, "strap_push_max_mm": 0.0, "strap_push_p95_mm": 0.0,
+                           "strap_gap_p50_mm": None}
+    out = Pw
+    Pposed = _skin(P, body, np.arange(len(P)), mats)
+    if len(rows) >= 3:
+        lo = Pw[rows].min(0) - SDF_MARGIN_M
+        hi = Pw[rows].max(0) + SDF_MARGIN_M
+        sdf = body_sdf(Pposed, body.faces, vox=VOX_M, bounds=(lo, hi))
+        local = np.full(len(Pw), -1, np.int64)
+        local[rows] = np.arange(len(rows))
+        side_faces = faces[np.all(wu[faces] > 0.0, axis=1)]
+        Pwld, Fwld, inv = weld(Pw[rows], local[side_faces])
+        _Qw, dispw = push_out(Pwld, Fwld, sdf, clear=STRAP_CLEAR_M, spread=STRAP_SPREAD_M, spread_depth=np.inf)
+        disp = dispw[inv] * wu[rows][:, None]
+        out = Pw.copy()
+        out[rows] = Pw[rows] + disp
+        full = wu[rows] >= 1.0
+        dn = np.linalg.norm(disp, axis=1)[full] * 1000.0
+        d0, d1 = sdf.sample(Pw[rows])[full], sdf.sample(out[rows])[full]
+        if full.any():
+            rec.update({"strap_inside_share": float((d1 < STRAP_INSIDE_M).mean()),
+                        "strap_inside_before": float((d0 < STRAP_INSIDE_M).mean()),
+                        "strap_push_max_mm": float(dn.max()), "strap_push_p95_mm": float(np.percentile(dn, 95)),
+                        # how the strap sits: the median skin distance of the strap vertices nearer than 15 mm
+                        "strap_gap_p50_mm": (float(np.median(d1[d1 < 0.015])) * 1000.0 if (d1 < 0.015).any()
+                                             else None)})
+    # the foot's sole against the shoe's: the plantar vertices over the insole map (after the width factor)
+    pl = _apply(np.linalg.inv(w["Pf"]), Pposed[fm.plantar])
+    cover, sink, gap = _sole_contact(pl, ins, imap, k)
+    rec.update({"sole_cover": cover,
+                "sole_sink_mm": float(np.percentile(sink, 95)) if len(sink) else 0.0,
+                "sole_gap_p50_mm": float(np.percentile(gap, 50)) if len(gap) else None,
+                "sole_gap_p95_mm": float(np.percentile(gap, 95)) if len(gap) else None,
+                "plantar_vertices": int(len(pl))})
+    return out, rec
+
+
+def _sole_contact(pl: np.ndarray, ins: "_Insole", imap: np.ndarray, k: float) -> Tuple[float, np.ndarray, np.ndarray]:
+    """The foot's sole against the shoe's: ``pl`` = the plantar vertices in the shoe frame (raw units) ->
+    ``(cover, sink_mm, gap_mm)``: the share of them over an insole cell of ``imap`` (nearest cell), and for those the
+    depth under / the height above the insole surface in millimetres (each clipped at 0)."""
+    gx, gz = ins.gx, ins.gz
+    ix = np.rint((pl[:, 0] - gx[0]) / (gx[1] - gx[0])).astype(np.int64)
+    iz = np.rint((pl[:, 2] - gz[0]) / (gz[1] - gz[0])).astype(np.int64)
+    inside = (ix >= 0) & (ix < len(gx)) & (iz >= 0) & (iz < len(gz))
+    zi = np.full(len(pl), np.nan)
+    zi[inside] = imap[ix[inside], iz[inside]]
+    on = ~np.isnan(zi)
+    sink = np.clip(zi[on] - pl[on, 1], 0.0, None) * k * 1000.0
+    gap = np.clip(pl[on, 1] - zi[on], 0.0, None) * k * 1000.0
+    return (float(on.mean()) if len(on) else 0.0), sink, gap
+
+
 def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.BodyMesh,
          joints: Dict[str, np.ndarray], feet: Dict[str, FootMeasure], width_cap: float,
          cap_applied: float, fit_height: bool = False,
@@ -1143,15 +1285,24 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     # 2. one scale for the pair
     foot_len = max(f.length_m for f in feet.values())
     toe_h = max(f.toe_height_m for f in feet.values())
-    k, x_end = _scale(ins, foot_len, toe_h)
+    # A189: an open shoe (``insole["kind"] == "open"``) has no toe box to end the foot in — the foot lies on the
+    # whole insole, ``OPEN_ALLOW_M`` shorter than it
+    open_kind = insole.get("kind") == "open"
+
+    def _size(length: float) -> Tuple[float, float]:
+        if open_kind:
+            return (length + OPEN_ALLOW_M) / ins.arc_at(ins.x1), ins.x1
+        return _scale(ins, length, toe_h)
+    k, x_end = _size(foot_len)
     # Ruling A82 (``ALLOWANCE_STEPS``): the length allowance is heel room — the scale of the longer foot, the heel
     # contact that much further in; ``size`` = the scale ratio the width factor is divided by
     width_share, length_share = allow
     heel_room = foot_len * length_share
     k0 = k
     if heel_room != 0.0:  # A174: a negative length step is a shorter shoe (less heel room)
-        k, x_end = _scale(ins, foot_len + heel_room, toe_h)
+        k, x_end = _size(foot_len + heel_room)
     size = k / k0
+    heel_edge = OPEN_EDGE_M if open_kind else 0.0
 
     def insole_cols(x: float) -> Tuple[int, np.ndarray]:
         i = int(np.argmin(np.abs(gx - x)))
@@ -1161,7 +1312,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     work: Dict[str, Dict[str, Any]] = {}
     for side, fm in feet.items():
         # 3. extension: the 2-point chord minus the rest pitch; the ToeBase back onto the forepart slope
-        xh = ins.x0 + (fm.d_heel_m + heel_room) / k
+        xh = ins.x0 + (fm.d_heel_m + heel_room + heel_edge) / k
         # The ball the shoe is placed on is the ball AS SKINNED (Foot and ToeBase): the ToeBase
         # counter-turn moves the plantar ball vertices off the Foot-rigid point — 4–5 mm on the real
         # material — and the shoe has to meet the ball the clips show. That ball depends on the pose,
@@ -1200,7 +1351,10 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
         # the midline: foot slab middle - insole middle along the shoe, a line fitted to it
         Xf = _skin(P, body, fm.vertex_ids, mats)
         C = _apply(np.linalg.inv(P4), Xf)
-        edges = np.linspace(xh, xb + MIDLINE_PAST_BALL_M / k, MIDLINE_SLABS + 1)
+        # (an open shoe: up to the toes — nothing slims them into a toe box, they have to lie on the sole)
+        x_mid_end = (min(float(C[:, 0].max()) - OPEN_EDGE_M / k, ins.x1) if open_kind
+                     else xb + MIDLINE_PAST_BALL_M / k)
+        edges = np.linspace(xh, x_mid_end, MIDLINE_SLABS + 1)
         dm, xm = [], []
         for xa, xc_ in zip(edges[:-1], edges[1:]):
             q = C[(C[:, 0] >= xa) & (C[:, 0] < xc_)]
@@ -1229,17 +1383,33 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     width_factor = min(cap_applied, max(1.0, max(needed.values()) * size))
     if width_share or heel_room:
         width_factor = width_factor * (1.0 + width_share) / size
-    slim = {s: max(0.0, 1.0 - w["iw_ball"] * width_factor / w["fw_ball"]) for s, w in work.items()}
 
-    for side, w in work.items():
-        fm = w["fm"]
+    def placed(w: Dict[str, Any], wf: float) -> np.ndarray:
         a = math.atan(w["sl"])
         c, s_ = math.cos(a), math.sin(a)
         R4 = np.eye(4)
         R4[:3, :3] = [[c, 0.0, -s_], [0.0, 1.0, 0.0], [s_, 0.0, c]]
-        D4 = np.diag([1.0, 1.0, width_factor, 1.0])
+        D4 = np.diag([1.0, 1.0, wf, 1.0])
         A = _translation([w["xc"], 0.0, w["off"] + w["sl"] * w["xc"]]) @ R4 @ _translation([-w["xc"], 0.0, 0.0]) @ D4
-        Pf = w["P4"] @ A                          # shoe frame -> posed body (before the root lift)
+        return w["P4"] @ A                        # shoe frame -> posed body (before the root lift)
+
+    open_widened = 1.0
+    if open_kind:
+        # A189: the sole under the WHOLE foot — widened in steps until each foot's sole stands on it
+        base_factor = width_factor
+        for w in work.values():
+            fm = w["fm"]
+            w["plantar_posed"] = _skin(P, body, fm.plantar, {fm.foot_index: w["Bf"], fm.toe_index: w["Bt"]})
+        while (width_factor + OPEN_WIDEN_STEP <= cap_applied + 1e-9 and min(
+                _sole_contact(_apply(np.linalg.inv(placed(w, width_factor)), w["plantar_posed"]), ins, imap, k)[0]
+                for w in work.values()) < OPEN_SOLE_COVER):
+            width_factor += OPEN_WIDEN_STEP
+        open_widened = width_factor / base_factor
+    slim = {s: max(0.0, 1.0 - w["iw_ball"] * width_factor / w["fw_ball"]) for s, w in work.items()}
+
+    for side, w in work.items():
+        fm = w["fm"]
+        Pf = placed(w, width_factor)
         w["Pf"] = Pf
         w["lift"] = floor - float(Pf[1, 3])       # the shoe ground (frame height 0) onto the floor
         Cf = _apply(np.linalg.inv(Pf), w["Xf"])
@@ -1299,14 +1469,36 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     roof_ok = np.where(np.isnan(ins.cav), False, ins.cav * k >= CAVITY_MIN_M)
     instep_roof = float(roof_ok[span].mean()) if span.any() else 0.0
     wanted = [v for v in height_needed.values() if v is not None]
-    height_ready = bool(cap_applied >= SHOE_WIDTH_CAP - 1e-9 and roofed.any() and instep_roof >= INSTEP_ROOF_SHARE
-                        and wanted and max(wanted) > 1.0)
+    height_ready = bool(not open_kind and cap_applied >= SHOE_WIDTH_CAP - 1e-9 and roofed.any()
+                        and instep_roof >= INSTEP_ROOF_SHARE and wanted and max(wanted) > 1.0)
     height_factor = min(HEIGHT_CAP, max(wanted)) if fit_height and height_ready else 1.0
     height: Optional[Dict[str, Any]] = None
     if height_factor > 1.0:
         height = {"factor": height_factor, "cap": HEIGHT_CAP, "x_from_raw": ins.x0 + HEEL_SEAT_M / k,
                   "x_full_raw": float(gx[roofed].min())}
         Q = upper_height_map(Q, insole, height)[0]
+
+    open_height = 1.0
+    open_height_needed: Dict[str, Optional[float]] = {}
+    if open_kind:
+        # 4b for an open shoe (A189): the upper raised over the foot — per roofed station the foot's top above the
+        # insole (+ the strap clearance) against the inner roof; one factor for the pair, about the insole profile
+        for side, w in work.items():
+            Cf = _apply(np.linalg.inv(w["Pf"]), w["Xf"])
+            ratios = []
+            for i in np.nonzero(~np.isnan(ins.cav) & ins.ok)[0]:
+                sel = np.abs(Cf[:, 0] - gx[i]) <= half
+                if not sel.any() or ins.cav[i] <= 0.0:
+                    continue
+                ratios.append((float(Cf[sel, 1].max()) - float(ins.z(gx[i])) + STRAP_CLEAR_M / k) / float(ins.cav[i]))
+            open_height_needed[side] = float(np.percentile(ratios, OPEN_HEIGHT_PCT)) if ratios else None
+        wanted_open = [v for v in open_height_needed.values() if v is not None]
+        open_height = min(OPEN_HEIGHT_CAP, max(1.0, max(wanted_open))) if wanted_open else 1.0
+        if open_height > 1.0:
+            base_y = ins.z(np.clip(Q[:, 0], ins.x0, ins.x1))
+            wu = _smoothstep(((Q[:, 1] - base_y) * k - OPEN_UPPER_FROM_M) / OPEN_UPPER_BAND_M)
+            Q = Q.copy()
+            Q[:, 1] = base_y + (Q[:, 1] - base_y) * (1.0 + (open_height - 1.0) * wu)
 
     # 5. the root lift
     root_lift = max(w["lift"] for w in work.values())
@@ -1325,12 +1517,16 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
         collar_raw = shaft_raw
     shaft_metrics: Dict[str, List[float]] = {name: [] for name in SHAFT_GATES}
     any_split = False
+    open_recs: Dict[str, Dict[str, Any]] = {}
     for side, w in work.items():
         fm = w["fm"]
         M = w["Pf"] @ FrameM                      # mesh coordinates -> posed body
         # the upper fitted in height (4b) lives in Q; without it the direct map (the same bytes as before)
-        Pw = _apply(w["Pf"], Q) if height is not None else _apply(M, S_pos)
+        Pw = _apply(w["Pf"], Q) if height is not None or open_height > 1.0 else _apply(M, S_pos)
         lowest.append(float(Pw[:, 1].min()) + root_lift - floor)
+        if open_kind:
+            # 4c. open footwear: the straps off the skin, the foot's sole against the shoe's sole
+            Pw, open_recs[side] = _open_upper(Pw, Q, S_idx, ins, imap, k, body, P, w)
         wt = _smoothstep((Q[:, 0] - (w["xb_final"] - BLEND_M / k)) / (2.0 * BLEND_M / k))
         Bfi, Bti = np.linalg.inv(w["Bf"]), np.linalg.inv(w["Bt"])
         n_v = len(S_pos)
@@ -1615,6 +1811,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
                                         if not shaft_rec["clip_m"] else shaft_rec["clip_y_m"])},
             "parts": {name: int(len(mesh.indices)) for name, mesh in side_parts.items()},
             **({"shaft": shaft_rec} if is_boot else {}),
+            **({"open": open_recs[side]} if open_kind else {}),
         }
 
     ball_mm = max(w["ball_err"] for w in work.values()) * 1000.0
@@ -1631,13 +1828,20 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
                         for name, values in shaft_metrics.items()})
         table.update({name: (kind, limit, GATE_LABELS[name]) for name, (kind, limit) in SHAFT_GATES.items()
                       if SHAFT_GATING[name]})
+    labels = dict(GATE_LABELS)
+    if open_kind:
+        # A189: the open shoe's own gates, the worse side
+        metrics.update({name: (min if name in OPEN_WORST_IS_MIN else max)(r[name] for r in open_recs.values())
+                        for name in OPEN_GATES})
+        labels.update(OPEN_GATE_LABELS)
+        table.update({name: (kind, limit, OPEN_GATE_LABELS[name]) for name, (kind, limit) in OPEN_GATES.items()})
     # the follow measure is None without a ring (Ruling 8b): recorded, not a refusal, ``ok`` None
     ok, reasons = check_gates(metrics, table, optional=FOLLOW_OPTIONAL)
     gates: Dict[str, Any] = {}
     for name, value in metrics.items():
-        kind, limit = (FIT_GATES.get(name) or SHAFT_GATES[name])
+        kind, limit = (FIT_GATES.get(name) or OPEN_GATES.get(name) or SHAFT_GATES[name])
         passed = (None if value is None and name in FOLLOW_OPTIONAL
-                  else check_gates({name: value}, {name: (kind, limit, GATE_LABELS[name])})[0])
+                  else check_gates({name: value}, {name: (kind, limit, labels[name])})[0])
         gates[name] = {"value": value, "limit": list(limit) if isinstance(limit, tuple) else limit,
                        "ok": passed, "gating": bool(SHAFT_GATING.get(name, True))}
 
@@ -1663,6 +1867,9 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             "insole_arc_m": ins.arc_at(x_end) * k, "foot_len_m": foot_len, "toe_h_m": toe_h,
             **({"allowance": {"width_pct": round(width_share * 100.0, 6), "length_pct": round(length_share * 100.0, 6),
                               "heel_room_m": heel_room, "size": size}} if width_share or heel_room else {}),
+            **({"open": {"allow_m": OPEN_ALLOW_M, "edge_m": OPEN_EDGE_M, "widened": open_widened,
+                         "height_factor": open_height, "height_needed": open_height_needed,
+                         "height_cap": OPEN_HEIGHT_CAP}} if open_kind else {}),
         },
         "sides": sides,
         "root_lift_m": root_lift,
@@ -1677,6 +1884,8 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             "image": insole.get("image"),
         },
         "split": {"is_boot": any_split, "band_m": SPLIT_BAND_M, "margin_m": SPLIT_MARGIN_M},
+        # A189: only an open shoe's record names it (a closed shoe's record is what it was)
+        **({"shoe_kind": "open"} if open_kind else {}),
         "shaft": {
             "class": shaft_in.get("class"), "cap_removed": shaft_in.get("cap_removed"),
             "closed_share": shaft_in.get("closed_share"), "top_m": topline_m,

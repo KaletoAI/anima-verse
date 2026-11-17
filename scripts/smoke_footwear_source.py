@@ -82,8 +82,9 @@ Expected, by hand:
      0.175) x 48 columns -> vamp_cover = 19 * 48 / (91 * 86) = 912 / 7826 = 0.1165 < 0.6. Opening: the
      topline is A's top edge 0.13 at every station; the profile (the middle columns j 22..63, all in B) is
      0.03 at B's stations 72..167 (x in [0.0753, 0.1747]) and 0.13 elsewhere -> walls >= AIR above the
-     insole at 96 of 240 stations -> opening_share 0.4 < 0.5 -> the closed box is SOLID (that reason wins
-     over vamp_cover) -> run_source {ok False, step "insole", ran ["mesh"]}, the error starts with
+     insole at 96 of 240 stations -> opening_share 0.4 < 0.5 -> the closed box is SOLID (since A189: the mesh
+     is read as an open shoe by its vamp, and its profile's jump 0.10 / 0.25 = 0.4 L > insole_step 0.035
+     refuses it with the same text) -> run_source {ok False, step "insole", ran ["mesh"]}, the error starts with
      SOLID_REFUSED, insole.json (version 8) written with gates.refusal SOLID_REFUSED, record insole accepted
      False.
 [S5b] the wedge pump of scripts/_footwear_fixtures.py written as W's prepared.glb, run_source(W,

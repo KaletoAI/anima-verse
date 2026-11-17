@@ -100,6 +100,22 @@ Blender:
   top surface read as the insole, no side walls above it) has none (refusal ``SOLID_REFUSED``, judged
   before ``vamp_cover`` so a solid shoe never gets the sandal message). ``boot`` (``BOOT_MARGIN_M`` above the
   ankle, ``BOOT_REFUSED``) needs a body and is judged at the fit.
+- **Open footwear** (A189, no version bump: a closed shoe's analysis is what it was). ``kind`` = ``"open"`` for a
+  shoe WITHOUT a shaft whose toes stand free (``open.toe_cover`` — the roofed share of the footprint in front of
+  ``TOE_FROM_SHARE`` L — below ``OPEN_TOE_MAX``), whose heel stands free (``open.heel_wall`` — the share of the
+  stations behind ``HEEL_WALL_SHARE`` L with side walls — below ``OPEN_HEEL_MAX``) or whose ``vamp_cover`` is under
+  the closed shoe's gate (a strap shoe with a toe cap and a heel counter); else ``"closed"`` (an ``insole.json``
+  without the key is closed). An open shoe is judged by ``OPEN_GATES`` instead of ``vamp_cover`` /
+  ``opening_share`` (both stay at the top level of ``insole.json``, out of ``gates``): ``insole_cover`` as before;
+  ``strap_share`` = the share of the profile stations with anything above the insole — a hit above it or side walls
+  (refusal ``STRAPLESS_REFUSED``: a solid mesh whose top was read as the insole, or a bare sole); ``insole_step`` =
+  the largest jump of the profile between neighbouring stations as a share of the length (refusal
+  ``SOLID_REFUSED``: a mesh closed over part of its opening reads the lid as insole and drops into the rest).
+  Measured 2026-11-17 on the six UniForge meshes of ``item_braided_leather_sandals`` (a slide: sole, block heel,
+  one braided band): toe_cover 0.0, heel_wall 0.0, strap_share 0.52 – 0.55, insole_step 0.002 – 0.016,
+  insole_cover 0.971 – 0.986 (vamp_cover 0.54 – 0.59 and opening_share 0.496 – 0.52 refused all six before);
+  the closed shoes and boots of the same world: toe_cover 0.37 – 0.99, heel_wall 0.86 – 1.0, all still closed.
+  ``OPEN_REFUSED`` is left for a BOOT whose vamp is open. The fit of an open shoe: ``footwear_fit`` "Open footwear".
 - ``cavity_end_x``: the first roofed station in front of the ball whose insole-to-roof gap is below
   ``CAVITY_MIN_M`` (nominal), else the last insole station — where the insole arc for the scale ends.
 - ``contacts`` (frame coordinates, on the sole): ``heel_tip`` = the centroid of the ground cells within
@@ -249,7 +265,26 @@ SHAFT_GATES: Dict[str, Tuple[str, Any, str]] = {
 #: The boot gate (judged at the fit): a topline above the ankle joint + this margin.
 BOOT_MARGIN_M = 0.03
 BOOT_REFUSED = "Boots are not supported yet"
-OPEN_REFUSED = "Open shoes and sandals are not supported yet"
+OPEN_REFUSED = "Open boots are not supported yet"
+#: Open footwear (A189, module docstring "Open footwear"): the toe zone starts at this share of the length, the heel
+#: zone ends at this share.
+TOE_FROM_SHARE = 0.85
+HEEL_WALL_SHARE = 0.25
+#: A shoe without a shaft is OPEN when less than this share of its toe zone's footprint is under an upper (the six
+#: slide sandals of ``item_braided_leather_sandals`` read 0.0, the closed shoes of the test world 0.37 – 0.99) ...
+OPEN_TOE_MAX = 0.15
+#: ... or less than this share of its heel zone's stations has side walls — no heel counter (the sandals 0.0, the
+#: closed shoes 0.86 – 1.0) — or its ``vamp_cover`` is below the closed shoe's gate (a strap shoe with a toe cap).
+OPEN_HEEL_MAX = 0.5
+#: The kinds ``insole.json`` names (``kind``); a file without the key (INSOLE_VERSION 8 before A189) is closed.
+KIND_CLOSED, KIND_OPEN = "closed", "open"
+#: The gates of an open shoe (instead of ``vamp_cover`` / ``opening_share``, which describe a closed upper).
+OPEN_GATES: Dict[str, Tuple[str, Any, str]] = {
+    "insole_cover": ("min", 0.80, "share of the footprint with a tracked insole"),
+    "strap_share": ("min", 0.08, "share of the insole stations with a strap, wall or upper above the insole"),
+    "insole_step": ("max", TOL_SHARE, "largest jump of the insole between neighbouring stations, share of the length"),
+}
+STRAPLESS_REFUSED = "Solid mesh or bare sole: nothing stands above the insole"
 INSOLE_REFUSED = "No insole found in the shoe mesh"
 SOLID_REFUSED = "Solid mesh: no shoe opening found"
 OVERKNEE_REFUSED = "Over-knee boots are not supported yet"
@@ -998,17 +1033,46 @@ def _measure(P: np.ndarray, F: np.ndarray, frame: ShoeFrame) -> Dict[str, Any]:
     opening_share = float(walls.sum() / with_prof.sum()) if with_prof.any() else 0.0
     shaft = _shaft_block(pf, F, used, gx, top, prof, cav, roof, seat, k, L, top_hi)
     has_shaft = bool(shaft["has_shaft"])
-    metrics = {"insole_cover": insole_cover, "vamp_cover": vamp_cover, "opening_share": opening_share,
-               "shaft_closed_share": shaft["closed_share"] if has_shaft else None,
-               "overknee": shaft["collar_h_nominal"] if has_shaft else None}
-    ok, reasons = check_gates(metrics, {**INSOLE_GATES, **SHAFT_GATES}, optional=tuple(SHAFT_GATES))
-    refusal = None
-    if not ok:
-        failed = {r.split(" ")[0].rstrip(":") for r in reasons}
-        refusal = next((text for key, text in (("insole_cover", INSOLE_REFUSED), ("opening_share", SOLID_REFUSED),
-                                               ("vamp_cover", OPEN_REFUSED), ("overknee", OVERKNEE_REFUSED),
-                                               ("shaft_closed_share", SHAFT_OPEN_REFUSED)) if key in failed),
-                       OPEN_REFUSED)
+    # open footwear (A189): the toe zone's roofed share, the heel zone's walled share, the stations with anything
+    # above the insole — a shoe without a shaft whose toes or heel stand free is OPEN and judged by OPEN_GATES
+    toe_zone = footprint & (gx >= TOE_FROM_SHARE * L)[:, None]
+    toe_cover = float((covered & toe_zone).sum() / toe_zone.sum()) if toe_zone.any() else 0.0
+    heel_zone = with_prof & (gx <= HEEL_WALL_SHARE * L)
+    heel_wall = float((walls & heel_zone).sum() / heel_zone.sum()) if heel_zone.any() else 0.0
+    strapped = with_prof & ((covered & footprint).any(axis=1) | walls)
+    strap_share = float(strapped.sum() / with_prof.sum()) if with_prof.any() else 0.0
+    toe_open, heel_open = toe_cover < OPEN_TOE_MAX, heel_wall < OPEN_HEEL_MAX
+    low_vamp = vamp_cover < INSOLE_GATES["vamp_cover"][1]
+    kind = KIND_OPEN if not has_shaft and (toe_open or heel_open or low_vamp) else KIND_CLOSED
+    # a real insole is one continuous surface; a mesh closed over part of its opening reads its lid as "insole" and
+    # jumps from the lid down into the rest of the opening
+    pv = prof[with_prof]
+    insole_step = float(np.abs(np.diff(pv)).max() / L) if len(pv) >= 2 and L > 0 else 0.0
+    open_block = {"toe_cover": toe_cover, "heel_wall": heel_wall, "strap_share": strap_share,
+                  "insole_step": insole_step,
+                  "toe_open": bool(toe_open), "heel_open": bool(heel_open), "low_vamp": bool(low_vamp)}
+    if kind == KIND_OPEN:
+        # vamp_cover / opening_share describe a closed upper: kept at the top level of insole.json, not in the gates
+        metrics = {"insole_cover": insole_cover, "strap_share": strap_share, "insole_step": insole_step,
+                   "shaft_closed_share": None, "overknee": None}
+        ok, reasons = check_gates(metrics, OPEN_GATES, optional=("shaft_closed_share", "overknee"))
+        refusal = None
+        if not ok:
+            failed = {r.split(" ")[0].rstrip(":") for r in reasons}
+            refusal = (INSOLE_REFUSED if "insole_cover" in failed else SOLID_REFUSED if "insole_step" in failed
+                       else STRAPLESS_REFUSED)
+    else:
+        metrics = {"insole_cover": insole_cover, "vamp_cover": vamp_cover, "opening_share": opening_share,
+                   "shaft_closed_share": shaft["closed_share"] if has_shaft else None,
+                   "overknee": shaft["collar_h_nominal"] if has_shaft else None}
+        ok, reasons = check_gates(metrics, {**INSOLE_GATES, **SHAFT_GATES}, optional=tuple(SHAFT_GATES))
+        refusal = None
+        if not ok:
+            failed = {r.split(" ")[0].rstrip(":") for r in reasons}
+            refusal = next((text for key, text in (("insole_cover", INSOLE_REFUSED), ("opening_share", SOLID_REFUSED),
+                                                   ("vamp_cover", OPEN_REFUSED), ("overknee", OVERKNEE_REFUSED),
+                                                   ("shaft_closed_share", SHAFT_OPEN_REFUSED)) if key in failed),
+                           OPEN_REFUSED)
 
     finite_top = top[~np.isnan(top)]
     # overlay polylines in the mesh's own coordinates
@@ -1032,6 +1096,8 @@ def _measure(P: np.ndarray, F: np.ndarray, frame: ShoeFrame) -> Dict[str, Any]:
         "insole_cover": insole_cover,
         "vamp_cover": vamp_cover,
         "opening_share": opening_share,
+        "kind": kind,
+        "open": open_block,
         "cavity_end_x": cavity_end,
         "shaft_h_raw": float(finite_top.max()) if len(finite_top) else None,
         "shaft": shaft,

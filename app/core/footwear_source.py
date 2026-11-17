@@ -665,11 +665,12 @@ def _step_insole(iid: str, ssig: str, seed: int, d: Path) -> None:
     shaft = res.get("shaft") or {}
     _set_step(d, "insole", _entry(accepted=bool(gates["ok"]), gates=gates, version=footwear_insole.INSOLE_VERSION,
                                   nominal=res["nominal"], shaft_class=shaft.get("class"),
+                                  shoe_kind=res.get("kind") or "closed",
                                   cap_removed=int(shaft.get("cap_removed") or 0), prepared_restored=restored,
                                   **({} if gates["ok"] else {"failure": GATE})))
-    logger.info("Shoe source %s/%s: insole %s (cover %.3f, vamp %.3f, shaft %s)", iid, ssig,
-                "accepted" if gates["ok"] else "refused", gates["insole_cover"], gates["vamp_cover"],
-                shaft.get("class"))
+    logger.info("Shoe source %s/%s: insole %s (%s shoe, cover %.3f, vamp %.3f, shaft %s)", iid, ssig,
+                "accepted" if gates["ok"] else "refused", res.get("kind") or "closed", gates["insole_cover"],
+                res["vamp_cover"], shaft.get("class"))
     if not gates["ok"]:
         raise StepRefused(f"{gates.get('refusal') or 'insole refused'} ({'; '.join(gates['reasons'])})", gates)
 

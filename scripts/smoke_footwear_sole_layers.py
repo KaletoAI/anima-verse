@@ -141,6 +141,10 @@ def build(layers, wall, heel_wall, roof_y, half_toe=False):
     return P, np.asarray(F, np.int64)
 
 
+#: The refusal text of the pinned old commit (A189 reworded the constant: open shoes are supported now).
+OLD_OPEN_REFUSED = "Open shoes and sandals are not supported yet"
+
+
 def main() -> int:
     from app.core import footwear_cut as fc
     from app.core import footwear_fit as ff
@@ -161,7 +165,7 @@ def main() -> int:
     check("A gates", (a["gates"]["ok"], a["gates"].get("refusal")), (True, None))
     ao = oi.analyse_arrays(PA, FA)
     check(f"A on {OLD}: flipped, refused as open", (ao["frame"]["flipped"], ao["vamp_cover"], ao["gates"].get("refusal")),
-          (True, 0.0, fi.OPEN_REFUSED))
+          (True, 0.0, OLD_OPEN_REFUSED))
 
     print("[B] the open seed")
     sole = [(0.0, -1), (0.005, 1), (0.022, -1), (0.025, 1)]
@@ -183,7 +187,7 @@ def main() -> int:
     check("C vamp_cover, gates", (c["vamp_cover"], c["gates"]["ok"]), (1.0, True))
     co = oi.analyse_arrays(PC, FC)
     check(f"C on {OLD}: the roof dropped", (co["cavity"][200], co["vamp_cover"], co["gates"].get("refusal")),
-          (None, 0.0, fi.OPEN_REFUSED))
+          (None, 0.0, OLD_OPEN_REFUSED))
 
     print("[D] the floor")
     got = [round(float(v), 6) for v in ff.foot_floor_m([0.0, 0.10, 0.36, 0.55, 0.70, 0.9, 0.23], 0.27)]

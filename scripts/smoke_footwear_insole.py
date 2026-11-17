@@ -43,7 +43,8 @@ Expected, by hand:
      numbers (profile, topline, covers, nominal, contacts within 1e-9); the overlay points (mesh coords) are
      the original's times (-1, 1, -1).
 [I5] the sandal (roof only over [0.24, 0.26]) -> vamp_cover 0.02 / 0.0988 = 0.202 (19/91 = 0.2088; +-0.02)
-     < 0.6 -> gates not ok, refusal OPEN_REFUSED.
+     < 0.6 -> since A189 an OPEN shoe (kind "open", scripts/smoke_a189_open_footwear.py [O2]): accepted by the
+     open gates, no refusal (before: refused "Open shoes and sandals are not supported yet").
 [I7] the pump plus a vertical fin at z = 0 over [0.24, 0.26] up to 0.15: the provisional heel is the TOE
      end (0.15 > 0.12) -> shoe_frame gives x_axis (-1, 0, 0). After tracking the insole at 0.10 L (toe,
      0.01) is lower than at 0.90 L (heel, 0.09) -> flipped: frame x_axis (1, 0, 0), frame.flipped True, and
@@ -55,8 +56,9 @@ Expected, by hand:
      the refusal texts (boot, open, solid).
 [I11] the closed solid wedge (sole alone: side faces only up to h(x), no roof): the top faces up with nothing
      above -> the insole everywhere, insole_cover 1.0; the topline per station is the top edge h(x) = the
-     profile -> no station has walls AIR = 0.0065 above the insole -> opening_share 0.0 < 0.5 -> refused with
-     SOLID_REFUSED (vamp_cover is 0.0 too, but the solid reason wins: never the sandal message). The pump
+     profile -> no station has walls AIR = 0.0065 above the insole -> opening_share 0.0; since A189 it is
+     read as an open shoe (no toe roof, no heel walls) with nothing above its insole: strap_share 0.0 < 0.08 ->
+     refused with STRAPLESS_REFUSED (smoke_a189_open_footwear [O3]). The pump
      and the sandal have walls 0.03 >= AIR above the insole at every profile station -> opening_share 1.0.
 [I10] the pump with every up-facing triangle reversed (nothing faces up any more): no candidate anywhere ->
      no seed -> insole_cover 0.0 -> refused with INSOLE_REFUSED; the nominal numbers are None; no
@@ -286,7 +288,7 @@ def main():
     check("INSOLE_GATES", {k: v[:2] for k, v in fi.INSOLE_GATES.items()},
           {"insole_cover": ("min", 0.80), "vamp_cover": ("min", 0.6), "opening_share": ("min", 0.5)})
     check("refusal texts", (fi.BOOT_REFUSED, fi.OPEN_REFUSED, fi.SOLID_REFUSED),
-          ("Boots are not supported yet", "Open shoes and sandals are not supported yet",
+          ("Boots are not supported yet", "Open boots are not supported yet",
            "Solid mesh: no shoe opening found"))
 
     print("[I6] vertical_hits on one triangle")
@@ -356,7 +358,8 @@ def main():
     sandal = fi.analyse_arrays(Ps, Fs)
     near("sandal vamp_cover", sandal["vamp_cover"], 0.202, 0.02)
     near("sandal vamp_cover (19/91)", sandal["vamp_cover"], 19 / 91, 1e-6)
-    check("sandal refused", (sandal["gates"]["ok"], sandal["gates"].get("refusal")), (False, fi.OPEN_REFUSED))
+    check("sandal: open, accepted", (sandal["kind"], sandal["gates"]["ok"], sandal["gates"].get("refusal")),
+          ("open", True, None))
     near("sandal insole_cover", sandal["insole_cover"], 1.0, 1e-9)
 
     print("[I7] fin: provisional heel wrong, flipped after tracking")
@@ -376,7 +379,7 @@ def main():
     near("solid insole_cover", solid["insole_cover"], 1.0, 1e-9)
     near("solid opening_share", solid["opening_share"], 0.0, 1e-9)
     near("solid vamp_cover", solid["vamp_cover"], 0.0, 1e-9)
-    check("solid refused", (solid["gates"]["ok"], solid["gates"].get("refusal")), (False, fi.SOLID_REFUSED))
+    check("solid refused", (solid["gates"]["ok"], solid["gates"].get("refusal")), (False, fi.STRAPLESS_REFUSED))
     near("pump opening_share", pump["opening_share"], 1.0, 1e-9)
     near("sandal opening_share", sandal["opening_share"], 1.0, 1e-9)
 

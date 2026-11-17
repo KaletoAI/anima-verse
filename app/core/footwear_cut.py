@@ -145,6 +145,12 @@ retexture mode, three garments) the boot reads the same: the live refit (version
 1.59–1.74 %; idle sole −2.1 mm; walk stance −3.0 … +2.2 mm; strike −0.3 … 1.8 mm and off −3.0 … −0.3 mm; seat
 floor 3.1–7.4 mm; thigh in shaft 0 %.
 
+**Open footwear** (A189). The fit of an open shoe (``record["shoe_kind"] == "open"``) describes no cut:
+``cut_description`` returns ``_open_description`` — ``{"version", "open": True, "sides": {side: frame, joints, pose,
+footprint, insole, stations}}`` — ``apply_cut`` returns the primitive unchanged with zero stats and ``cut_gates``
+is ok without gates (``is_open``). The bare foot shows under an open shoe; what keeps the straps out of the skin
+is the fit's push (``footwear_fit`` "Open footwear"), judged there.
+
 **Calibration (P3 acceptance, Task 21, 2026-11-11) — REAL material.** Kira's base body (``base20d5701a``) in the
 Business Heels (UniForge mesh of the Qwen side-view empty shoe, 98 507 → 57 527 tris at ``TARGET_TRIS`` 60 000, width
 cap 1.10, ``FOOTWEAR_FIT_VERSION`` 4 / ``CUT_VERSION`` 2), the clone chain live: ``slim_needed`` 0.151 (limit 0.18);
@@ -375,6 +381,8 @@ def cut_description(fit: Any, insole: Dict[str, Any]) -> Dict[str, Any]:
     sides_rec = record.get("sides") or {}
     if not sides_rec:
         raise ValueError("The fit has no sides to cut for")
+    if record.get("shoe_kind") == "open":
+        return _open_description(fit, insole)
     wall_raw = (record.get("insole") or {}).get("wall_top_raw")
     if wall_raw is None:
         raise ValueError("The fit record carries no insole.wall_top_raw (fit it again)")
@@ -469,6 +477,59 @@ def cut_description(fit: Any, insole: Dict[str, Any]) -> Dict[str, Any]:
                         "toe": {"clearance_m": TOE_CLEARANCE_M, "fade_m": TOE_FADE_M}},
         }
     return _r({"version": CUT_VERSION, "sides": sides})
+
+
+def _open_description(fit: Any, insole: Dict[str, Any]) -> Dict[str, Any]:
+    """The ``cut`` of an OPEN shoe (A189): ``{"version", "open": True, "sides": {side: {foot_joint, toe_joint,
+    frame, extension, toe_counter, footprint, insole, foot, stations}}}`` — the cut frame and the foot's pose as a
+    closed shoe's description names them (the allowance preview and an outfit body's derived fit read them), and
+    nothing to cut by: ``apply_cut`` leaves the body as it is and ``cut_gates`` has nothing to judge (``is_open``).
+    Under an open shoe the bare foot shows — its toes, its heel, the skin between the straps."""
+    record = fit.record
+    k = float(record["scale"]["k_m_per_unit"])
+    wf = float(record["scale"]["width_factor"])
+    Dm = np.diag([k, k, k * wf, 1.0])
+    FrameM = _frame_matrix(insole)
+    gx = _floats(insole["stations"])
+    prof = _floats(insole["profile"])
+    if not (~np.isnan(prof)).any():
+        raise ValueError("The insole has no profile")
+    outline = np.asarray(insole["footprint_outline"], np.float64).reshape(-1, 2) * np.array([k, k * wf])
+    insole_line = np.stack([gx[~np.isnan(prof)] * k, prof[~np.isnan(prof)] * k], axis=1)
+    x_min, x_max = (float(outline[:, 0].min()), float(outline[:, 0].max())) if len(outline) else (0.0, 0.0)
+    diag = record.get("diagnostics") or {}
+    sides: Dict[str, Any] = {}
+    for side, rec in record["sides"].items():
+        shoe = ((fit.parts or {}).get(side) or {}).get("foot")
+        if shoe is None or len(shoe.joint_names) < 2:
+            raise ValueError(f"The fit has no bound shoe for the {side} side")
+        d = diag.get(side) or {}
+        sides[side] = {
+            "foot_joint": str(shoe.joint_names[0]), "toe_joint": str(shoe.joint_names[1]),
+            "frame": Dm @ FrameM @ np.linalg.inv(np.asarray(rec["placement_bind"], np.float64)),
+            "extension": {"axis_local": rec["extension"]["axis_local"], "deg": rec["extension"]["deg"]},
+            "toe_counter": {"axis_local": rec["toe_counter"]["axis_local"], "deg": rec["toe_counter"]["deg"]},
+            "footprint": outline, "insole": insole_line,
+            "foot": ({"toe_x_m": float(rec["toe_x_m"]), "length_m": float(rec["foot_len_m"])}
+                     if rec.get("toe_x_m") is not None and rec.get("foot_len_m") else None),
+            "stations": {"heel_x": d.get("heel_x_m"), "ball_x": d.get("ball_x_m"),
+                         "heel_seat_x": float(gx[~np.isnan(prof)].min()) * k + HEEL_SEAT_M,
+                         "x_min": x_min, "x_max": x_max},
+        }
+    return _r({"version": CUT_VERSION, "open": True, "sides": sides})
+
+
+def is_open(cut: Optional[Dict[str, Any]]) -> bool:
+    """True for the ``cut`` of an open shoe (``_open_description``): the body is not cut under it."""
+    return bool((cut or {}).get("open"))
+
+
+def _no_cut_stats(cut: Dict[str, Any]) -> Dict[str, Any]:
+    zero = {name: 0.0 for name in (cut.get("sides") or {})}
+    return {"removed_faces": 0, "bisected_faces": 0, "new_vertices": 0, "slim_share": dict(zero),
+            "slim_needed": dict(zero), "throat_moved": {name: 0 for name in zero}, "toe_conform": dict(zero),
+            "toe_pull": dict(zero), "collar_pull": dict(zero), "collar_squeeze": dict(zero),
+            "sides": {name: {"removed_faces": 0, "bisected_faces": 0, "new_vertices": 0} for name in zero}}
 
 
 # --- the collar (boots, CUT_VERSION 5) -------------------------------------------------------------------------------
@@ -1271,7 +1332,10 @@ def apply_cut(prim: Prim, cut: Dict[str, Any], joints: Dict[str, np.ndarray]) ->
     """``prim`` with the cut applied for every side of ``cut`` (module docstring: conform, then removal and
     bisection, then the normals of touched vertices), and the stats ``{removed_faces, bisected_faces,
     new_vertices, slim_share: {side}, throat_moved: {side}}``. ``joints`` = ``glb_mesh.joint_bind_matrices`` of the
-    body the primitive belongs to. ValueError when the body lacks a side's joints."""
+    body the primitive belongs to. ValueError when the body lacks a side's joints. The cut of an OPEN shoe
+    (``is_open``, A189) changes nothing: ``prim`` itself comes back with zero stats — the bare foot shows."""
+    if is_open(cut):
+        return prim, _no_cut_stats(cut)
     out, info = conform_body(prim, cut, joints)
     touched = info["touched"]
     stats: Dict[str, Any] = {"removed_faces": 0, "bisected_faces": 0, "new_vertices": 0,
@@ -1639,7 +1703,11 @@ def cut_gates(body_after: Prim, parts: Dict[str, Dict[str, glb_mesh.GarmentMesh]
     it after the conform, the rest on ``body_after``; ``parts`` = the fit's bind-space parts per side
     (``footwear_fit.FootwearFit.parts``: ``foot``, and ``shaft`` for a split fit — then ``shaft_poke`` is judged,
     None and ``ok`` None without a shin vertex in its range); ``joints`` = ``glb_mesh.joint_bind_matrices`` of
-    the body."""
+    the body. An OPEN shoe (``is_open``, A189) cuts nothing and so has no cut gate: ``ok`` True, no gates — the
+    open shoe's own gates are the fit's (``footwear_fit.OPEN_GATES``)."""
+    if is_open(cut):
+        return {"ok": True, "reasons": [], "gates": {}, "sides": {name: {} for name in (cut.get("sides") or {})},
+                "marks": None}
     before, cinfo = conform_body(body_before, cut, joints)
     sides: Dict[str, Any] = {}
     any_shaft = False
