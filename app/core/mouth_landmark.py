@@ -2,8 +2,7 @@
 
 The renderers build the mouth channel (``@anima/scene-render`` ``contactTarget.ts`` ``mouthChannel``) on the head
 bone. Before A193 its opening was a fixed offset from the head joint (0.5 L forward, 0.15 L up) and its axis the
-face normal straight back. Measured on two mesher-built bodies the mouth lay 30-58 mm BELOW that point and 10-25 mm
-in front of it, and the axis ran horizontally into the back of the head instead of toward the throat. This module
+face normal straight back. Measured on six mesher-built bodies the mouth lay 20-80 mm BELOW that point, and the axis ran horizontally into the back of the head instead of toward the throat. This module
 measures both in bind space; the collision record carries the result (``mouth``) bound to the head joint, so the
 channel follows every head turn and tilt.
 
@@ -13,13 +12,16 @@ Method (bind space, the body frame of ``collision_channels.body_frame``: side / 
    the head joint in ``BIN_M`` bins over ``[V_MIN, V_MAX]``; per bin the front-most offset along ``front`` (the face's
    outline seen from the side), then a running max over ``DILATE`` bins either way (a thin band leaves holes where
    only the back of the head is hit).
-2. NOSE TIP v_n: the profile's maximum over ``NOSE_WINDOW`` (above the chin, below the brow).
-3. CHIN EDGE v_c: going down from v_n, the first bin whose profile lies more than ``CHIN_DROP_M`` behind the nose
-   tip — the underside of the chin, where the outline falls back to the neck.
+2. NOSE TIP v_n: the bin with the front-most vertex over ``NOSE_WINDOW`` (above the chin, below the brow; the
+   undilated outline, so the tip is not shifted down by the running max).
+3. CHIN EDGE v_c: going down from v_n, the first bin whose dilated profile lies more than ``CHIN_DROP_M`` behind
+   the nose tip, moved back up by the ``DILATE`` bins the running max reaches below the chin — the underside of the
+   chin, where the outline falls back to the neck.
 4. MOUTH: v_m = v_c + ``MOUTH_FRACTION`` · (v_n − v_c); the opening centre O = the head joint's side position, v_m
    up, and the profile's front at v_m (the lips' surface).
-5. AXIS: from O toward the throat — the Neck joint (the oral cavity runs back, the pharynx down; the straight line
-   from the lips to the top of the neck lies between both).
+5. AXIS: from O toward the top of the throat — the midpoint of the Head and Neck joints (the oral cavity runs back,
+   the pharynx down; the straight line from the lips to that point lies between both). Aimed at the Neck joint itself
+   the channel left the head under the jaw on both measured faces (A193 renders).
 
 ``locate_mouth`` returns ``{"a": <head joint name>, "a_pos", "b_pos"}`` with ``b_pos`` = O + axis · ``AXIS_LENGTH_M``
 (only the direction is read), or a reason string when the head, the neck or the profile does not allow it — the
@@ -37,7 +39,7 @@ V_MIN, V_MAX = -0.15, 0.15
 DILATE = 2
 NOSE_WINDOW = (-0.05, 0.08)
 CHIN_DROP_M = 0.05
-MOUTH_FRACTION = 0.5
+MOUTH_FRACTION = 0.75
 AXIS_LENGTH_M = 0.1
 MIN_BAND_VERTICES = 40
 
@@ -72,11 +74,11 @@ def locate_mouth(names, index_of: Dict[str, int], positions: np.ndarray, body_po
     window = (centres >= NOSE_WINDOW[0] * scale) & (centres <= NOSE_WINDOW[1] * scale) & np.isfinite(profile)
     if not window.any():
         return "no face outline in front of the head joint"
-    nose = int(np.flatnonzero(window)[np.argmax(profile[window])])
+    nose = int(np.flatnonzero(window)[np.argmax(raw[window])])
     chin = None
     for i in range(nose, -1, -1):
-        if profile[i] < profile[nose] - CHIN_DROP_M * scale:
-            chin = i
+        if profile[i] < raw[nose] - CHIN_DROP_M * scale:
+            chin = min(i + DILATE, nose)
             break
     if chin is None:
         return "no chin edge below the nose"
@@ -85,7 +87,7 @@ def locate_mouth(names, index_of: Dict[str, int], positions: np.ndarray, body_po
     if not np.isfinite(profile[m]):
         return "no lips on the mid-plane"
     O = H + frame["up"] * v_m + frame["front"] * profile[m]
-    toward = positions[neck] - O
+    toward = (positions[head] + positions[neck]) / 2.0 - O
     length = float(np.linalg.norm(toward))
     if length < 1e-6:
         return "degenerate mouth axis"

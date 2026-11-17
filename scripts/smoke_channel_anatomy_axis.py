@@ -20,11 +20,12 @@ Usage: ./.venv/bin/python scripts/smoke_channel_anatomy_axis.py   (no server, no
     neck i = 0..29 at front 0.03, face i = 30..59 (c −0.0585 … 0.0285) at front 0.11, plus the nose tip at i = 53
     (c 0.0105) at front 0.14. Dilated profile (max over i ± 2): 0.14 on i 51..55, 0.11 on 28..50 and 56..61, 0.03
     below 28.
-    Nose: the first maximum in the window [−0.05, 0.08] → i 51, v_n = 0.0045. Chin: going down from 51 the first
-    bin under 0.14 − 0.05 = 0.09 → i 27, v_c = −0.0675. Mouth v_m = −0.0675 + 0.5·(0.0045 + 0.0675) = −0.0315
-    → bin 39, front 0.11: O = (0, 1.6 − 0.0315, 0.11) = (0, 1.5685, 0.11).
-    Axis toward the Neck: (0, 1.5 − 1.5685, −0.01 − 0.11) = (0, −0.0685, −0.12), |·| = 0.138170 → u =
-    (0, −0.495766, −0.868495), 29.72° below the horizontal; B = O + 0.1·u = (0, 1.518923, 0.023150).
+    Nose: the front-most raw bin in the window [−0.05, 0.08] → i 53, v_n = 0.0105. Chin: going down from 53 the
+    first bin whose dilated profile is under 0.14 − 0.05 = 0.09 is i 27, moved up by DILATE 2 → i 29, v_c = −0.0615.
+    Mouth v_m = −0.0615 + 0.75·(0.0105 + 0.0615) = −0.0075 → bin 47 (dilated window 45..49, no nose), front 0.11:
+    O = (0, 1.6 − 0.0075, 0.11) = (0, 1.5925, 0.11).
+    Axis toward the midpoint of Head and Neck (0, 1.55, −0.005): (0, −0.0425, −0.115), |·| = 0.122602 → u =
+    (0, −0.346650, −0.937994), 20.28° below the horizontal; B = O + 0.1·u = (0, 1.557835, 0.016201).
 [6] A head without a Neck joint → a reason, not a record.
 """
 from __future__ import annotations
@@ -91,10 +92,10 @@ got = locate_mouth(names, index_of, positions, np.array(pts))
 check("[5] a record", isinstance(got, dict), got)
 if isinstance(got, dict):
     check("[5] joint", got["a"] == "mixamorig:Head", got["a"])
-    check("[5] O", near(got["a_pos"], [0, 1.5685, 0.11], 1e-4), got["a_pos"])
-    check("[5] B", near(got["b_pos"], [0, 1.518923, 0.02315], 1e-4), got["b_pos"])
+    check("[5] O", near(got["a_pos"], [0, 1.5925, 0.11], 1e-4), got["a_pos"])
+    check("[5] B", near(got["b_pos"], [0, 1.557835, 0.016201], 1e-4), got["b_pos"])
     u = np.subtract(got["b_pos"], got["a_pos"])
-    check("[5] 29.7° down", abs(math.degrees(math.asin(-u[1] / np.linalg.norm(u))) - 29.72) < 0.05, u)
+    check("[5] 20.3° down", abs(math.degrees(math.asin(-u[1] / np.linalg.norm(u))) - 20.28) < 0.05, u)
 # [6]
 no_neck = {k: v for k, v in joints.items() if k != "Neck"}
 got = locate_mouth([f"mixamorig:{n}" for n in no_neck], {n.lower(): i for i, n in enumerate(no_neck)},
