@@ -640,6 +640,11 @@ function irOverviewBody(data) {
                  + (row.backend ? '<span class="rt-muted">→ ' + irEsc(row.backend) + '</span>' : '')
                  + '</div>';
         }
+        if (o.retry_entry && (o.chain || []).length) {
+            const rp = o.retry_entry.position === 0 ? IR_TEXT.ovCharPos : String(o.retry_entry.position);
+            html += '<div class="desc rt-muted">Gate retries (attempt 2+) start at entry ' + irEsc(rp) + '. '
+                 + irEsc(o.retry_entry.spec) + ' — attempt N uses entry N, the last entry beyond the chain end.</div>';
+        }
         const targets = [...new Set((o.chain || []).flatMap(row => row.overflow_targets || []))];
         if (targets.length) {
             const configured = (CONFIG.image_generation || {}).overflow_after_seconds;
