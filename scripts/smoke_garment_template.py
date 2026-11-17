@@ -72,6 +72,39 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
 [13] Ruling A142 layering: a jacket worn with a template top lists the top as its collider (collider_pieces), the
      top lists nothing (rank 1 < 2 only one way); an own-mesh piece is no collider. The jacket's key changes when
      the TOP's parameters change; the top's key does not change with the jacket's.
+[14] The skirt profile is never narrower than the body (``_skirt_knots``): inside the torso profile every height
+     gets max(cone, body girth + EASE_M 0.02), a knot at each torso sample; the legs below keep the cone. Body T:
+     waist_y 1.00, waist_c 0.70, hip_y 0.80, hip_c 0.90, band_y 1.275, band_c 0.90, torso [[0.92, 0.76],
+     [0.94, 0.74], [0.96, 0.70], [0.98, 0.68], [1.00, 0.71]]. Skirt natural, flare 0, length 0.5: line 1.00, frac 1
+     -> old top 0.70 + 0.02 = 0.72; hem max(0.90 * 1.04, 0.72) = 0.936 at y 0.50 (below the profile: the cone);
+     cone(h) = 0.936 - 0.432 h.
+     * h 0.42 (y 0.92): cone 0.75456, body 0.78 -> 0.78 (body); h 0.44: cone 0.74592, body 0.76 -> 0.76 (body);
+       h 0.46: cone 0.73728, body 0.72 -> 0.73728 (cone); h 0.48: cone 0.72864, body 0.70 -> 0.72864 (cone); the
+       sample at 1.00 IS the top: no knot of its own; top h 0.50: cone 0.72, body 0.71 + 0.02 = 0.73 -> 0.73.
+       Six knots: (0, 0.936), (0.42, 0.78), (0.44, 0.76), (0.46, 0.73728), (0.48, 0.72864), (0.50, 0.73).
+     * every knot inside the torso range (y 0.92 .. 1.00) >= _torso_girth + 0.02 (- 1e-9), and so is every panel
+       row there (2 x row width at the row's own grid height; the body is linear between its samples, so is the
+       cone).
+     * below the lowest sample (legs) no body floor: the profile runs straight from the hem knot (0, 0.936) to
+       (0.42, 0.78) — 0.936 - 0.156 h / 0.42, at h 0.20: 0.936 - 0.074286 = 0.861714 — never under the cone
+       (0.936 - 0.432 * 0.20 = 0.8496); every panel row below y 0.92 >= the cone at its height.
+     * panel_spec on it: rows round(0.5 / 0.015) + 1 = 34, top row width 0.73 / 2 = 0.365, hem row 0.936 / 2 =
+       0.468; the pygarment front panel has 2 x 6 = 12 edges (hem, 5 right, top, 5 left).
+     * a strapless dress on T: the same six skirt knots + the band knot (0.5 + 0.275 = 0.775, 0.92).
+     * a covered dress on T (+ the [12] upper body): its 2 cm grid from the hem 0.50 reads the skirt profile —
+       y 0.92 (h 0.42) 0.78, y 0.96 (h 0.46) round(0.73728, 4) = 0.7373, y 0.70 (h 0.20) round(0.861714, 4) = 0.8617;
+       every knot up to the waist >= body + 0.02 less the 4-decimal rounding (5e-5).
+     * body T0 = T with torso [[0.92, 0.70], [0.96, 0.68], [1.00, 0.68]]: body + 0.02 = 0.72 / 0.70 / 0.70 against
+       the cone 0.75456 / 0.73728 / 0.72 -> cleared everywhere: exactly the two old knots [(0, 0.936), (0.5, 0.72)],
+       the outline identical (==) to T0 without a torso profile, and ``_skirt_knots`` hands the covered dress the
+       very same two-knot list it interpolated before.
+     * Gelina regression (the user's failed low-waist skirt, numbers typed from its failure record): waist_y 1.0475,
+       waist_c 0.578, hip_y 0.7925, hip_c 0.9279, torso 0.66 .. 0.92 + the 0.94 sample (0.7937); kind skirt,
+       length 0.76, flare 0.68, waist low, slit left 0.6, fabric flowing. Line 1.0475 - 0.5 * 0.255 = 0.92,
+       frac 0.5 -> old top 0.9279 - 0.17495 + 0.02 = 0.77295; hem max(0.965016, 0.77295) * 2.02 = 1.94933 (y 0.16,
+       legs: unchanged). Top knot max(0.77295, 0.8217 + 0.02) = 0.8417. y 0.82 (h 0.66): cone 1.94933 -
+       1.17638 * 0.66 / 0.76 = 0.92774 < 0.9178 + 0.02 = 0.9378 -> 0.9378; y 0.80 (h 0.64): cone 1.94933 -
+       0.99063 = 0.95870 > 0.9459 -> 0.9587. Knots: hem + the 13 samples 0.66 .. 0.90 + top = 15.
 """
 import json
 import shutil
@@ -379,6 +412,96 @@ lay["tp"]["outfit_piece"]["template"]["params"]["sleeves"] = "none"
 kt1b = gt.key_for("K", "tp", base_sha="s", lower=["bt", "jk"], item=lay["tp"])[0]
 check("[13] top change re-keys the jacket", kj1 and kj2 and kj1 != kj2)
 check("[13] jacket change keeps the top's key", kt1 == kt1b, (kt1, kt1b, kt2))
+
+# [14]
+import numpy as np  # noqa: E402
+T = {"height": 1.7, "floor_y": 0.0, "waist_y": 1.0, "waist_c": 0.70, "hip_y": 0.80, "hip_c": 0.90,
+     "band_y": 1.275, "band_c": 0.90,
+     "torso": [[0.92, 0.76], [0.94, 0.74], [0.96, 0.70], [0.98, 0.68], [1.00, 0.71]]}
+E = gt.EASE_M
+
+
+def knots_match(got, want, tol=1e-6):
+    return len(got) == len(want) and all(close(a, c, tol) and close(b, d, tol) for (a, b), (c, d) in zip(got, want))
+
+
+def clears(meas, knots, hem_y, tol=1e-9):
+    lo, hi = meas["torso"][0][0], meas["torso"][-1][0]
+    return [(h, c) for h, c in knots if lo <= hem_y + h <= hi and c < gt._torso_girth(meas, hem_y + h) + E - tol]
+
+
+sk14, _ = gt.validate_params({"kind": "skirt", "length_m": 0.5, "flare": 0.0, "waist_height": "natural"})
+o = gt.outline(sk14, T)
+want = [(0.0, 0.936), (0.42, 0.78), (0.44, 0.76), (0.46, 0.73728), (0.48, 0.72864), (0.50, 0.73)]
+check("[14] T skirt: six knots, body-governed 0.78 / 0.76 / top 0.73, cone 0.73728 / 0.72864",
+      knots_match(o["knots"], want), o["knots"])
+hem14 = o["top_y"] - o["length"]
+check("[14] T skirt: every knot in the torso range clears body + ease", clears(T, o["knots"], hem14) == [],
+      clears(T, o["knots"], hem14))
+spec14 = gt.panel_spec(sk14, T)
+g = spec14["panels"][0]["grid_m"]
+check("[14] panel_spec: rows 34", spec14["rows"] == 34, spec14["rows"])
+check("[14] panel_spec: top row 0.365 = top knot / 2, hem row 0.468",
+      close(g[0][-1][0] - g[0][0][0], o["knots"][-1][1] / 2) and close(g[0][-1][0] - g[0][0][0], 0.365)
+      and close(g[-1][-1][0] - g[-1][0][0], 0.468), (g[0][-1][0] - g[0][0][0], g[-1][-1][0] - g[-1][0][0]))
+rows14 = [(hem14 + row[0][1], 2 * (row[-1][0] - row[0][0])) for row in g]     # (world y, circumference)
+inside = [(y, c) for y, c in rows14 if 0.92 <= y <= 1.0]
+check("[14] panel_spec: every row in the torso range clears body + ease",
+      inside and all(c >= gt._torso_girth(T, y) + E - 1e-9 for y, c in inside),
+      [(y, c, gt._torso_girth(T, y) + E) for y, c in inside])
+check("[14] legs: h 0.20 on the hem -> lowest-sample line 0.861714", close(np.interp(
+    0.20, [h for h, _c in o["knots"]], [c for _h, c in o["knots"]]), 0.861714, 1e-6))
+legs = [(y, c) for y, c in rows14 if y < 0.92]
+check("[14] legs: every row below the profile >= the cone", legs and all(
+    c >= 0.936 - 0.432 * (y - hem14) - 1e-9 for y, c in legs), legs)
+fp = spec14["pygarment"]["panels"]["front"]["panels"]["front"]
+check("[14] pygarment front panel: 12 edges", len(fp["edges"]) == 12, len(fp["edges"]))
+dr14, _ = gt.validate_params({"kind": "dress", "length_m": 0.5, "flare": 0.0})
+od = gt.outline(dr14, T)
+check("[14] strapless dress: the skirt knots + band (0.775, 0.92)",
+      knots_match(od["knots"], want + [(0.775, 0.92)]), od["knots"])
+TU = dict(T, shoulder_y=1.37, shoulder_w=0.39, neck_y=1.42, neck_c=0.33, arm_len=0.50,
+          arm_c=[[0.05, 0.34], [0.25, 0.26], [0.5, 0.24], [0.97, 0.17]], joints={})
+dc14, _ = gt.validate_params({"kind": "dress", "length_m": 0.5, "flare": 0.0, "shoulders": "covered"})
+ob = gt.outline(dc14, TU)
+by_h = {round(h, 2): c for h, c in ob["knots"]}
+check("[14] covered dress grid: 0.78 at h 0.42, 0.7373 at h 0.46, 0.8617 at h 0.20",
+      close(by_h.get(0.42, 0), 0.78) and close(by_h.get(0.46, 0), 0.7373) and close(by_h.get(0.2, 0), 0.8617),
+      ob["knots"][:26])
+skirt_part = [(h, c) for h, c in ob["knots"] if h <= 0.5 + 1e-9]
+check("[14] covered dress: skirt knots clear body + ease (less the 4-decimal rounding)",
+      clears(TU, skirt_part, 0.5, tol=5e-5) == [], clears(TU, skirt_part, 0.5, tol=5e-5))
+T0 = dict(T, torso=[[0.92, 0.70], [0.96, 0.68], [1.00, 0.68]])
+T0_bare = {k: v for k, v in T0.items() if k != "torso"}
+o0 = gt.outline(sk14, T0)
+check("[14] cleared body: exactly the two old knots (0, 0.936), (0.5, 0.72)",
+      knots_match(o0["knots"], [(0.0, 0.936), (0.5, 0.72)]), o0["knots"])
+check("[14] cleared body: outline identical to the measure without a torso", o0 == gt.outline(sk14, T0_bare),
+      (o0, gt.outline(sk14, T0_bare)))
+check("[14] cleared body: no knot off the cone line",
+      all(close(c, 0.936 - 0.432 * h, 1e-9) for h, c in o0["knots"]), o0["knots"])
+two = gt._skirt_knots(T0, 1.0, 0.5, 0.936, 0.72)
+check("[14] cleared body: the covered dress interpolates the same two knots", two == [(0.0, 0.936), (0.5, 0.72)], two)
+GEL = {"height": 1.65, "floor_y": 0.0, "waist_y": 1.0475, "waist_c": 0.578, "hip_y": 0.7925, "hip_c": 0.9279,
+       "band_y": 1.2375, "band_c": 0.9976,
+       "torso": [[0.66, 0.8568], [0.68, 0.8705], [0.70, 0.884], [0.72, 0.8957], [0.74, 0.9077], [0.76, 0.9145],
+                 [0.78, 0.9264], [0.80, 0.9259], [0.82, 0.9178], [0.84, 0.9007], [0.86, 0.8775], [0.88, 0.8592],
+                 [0.90, 0.8388], [0.92, 0.8217], [0.94, 0.7937]]}
+gp, ge = gt.validate_params({"kind": "skirt", "length_m": 0.76, "flare": 0.68, "waist_height": "low",
+                             "slit": "left", "slit_m": 0.6, "fabric": "flowing"})
+og = gt.outline(gp, GEL)
+gk = og["knots"]
+gby = {round(og["top_y"] - og["length"] + h, 2): c for h, c in gk}
+check("[14] Gelina: params valid, top_y 0.92", ge == [] and close(og["top_y"], 0.92), (ge, og["top_y"]))
+check("[14] Gelina: top knot 0.8417 (was 0.77295)", close(gk[-1][1], 0.8417), gk[-1])
+check("[14] Gelina: hem 1.94933 unchanged (legs)", close(gk[0][1], 1.94933), gk[0])
+check("[14] Gelina: y 0.82 -> 0.9378 (body), y 0.80 -> 0.9587 (cone)",
+      close(gby.get(0.82, 0), 0.9378) and close(gby.get(0.8, 0), 0.9587), gby)
+check("[14] Gelina: 15 knots, all clear body + ease", len(gk) == 15 and clears(GEL, gk, og["top_y"] - og["length"]) == [],
+      (len(gk), clears(GEL, gk, og["top_y"] - og["length"])))
+sg = gt.panel_spec(gp, GEL)
+gg = sg["panels"][1]["grid_m"]
+check("[14] Gelina: panel top row = 0.8417 / 2", close(gg[0][-1][0] - gg[0][0][0], 0.42085), gg[0][-1][0] - gg[0][0][0])
 
 print("\n" + ("all checks passed" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}"))
 sys.exit(1 if FAILS else 0)

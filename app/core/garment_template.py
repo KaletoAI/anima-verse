@@ -539,18 +539,26 @@ COLS = 41
 
 def outline(params: Dict[str, Any], meas: Dict[str, float]) -> Dict[str, Any]:
     """The piece's side profile: ``knots`` = [(height above the hem in metres, full circumference)]
-    from the hem (0) to the top, the top height ``top_y`` (Y-up world) and the pinned top. A skirt
-    runs waist → hem; a dress runs chest band → waist → hem."""
+    ascending from the hem (0) to the top, the top height ``top_y`` (Y-up world) and the pinned top. A skirt
+    runs waist → hem; a dress runs chest band → waist → hem.
+
+    The skirt part starts as a straight cone: at the waist line chosen the waist / hip girths interpolated
+    linearly + ``EASE_M``, at the hem ``max(hip_c * 1.04, that) * (1 + 1.5 * flare)``. The body is not linear
+    between waist and hips, so the cone alone can start INSIDE a wide hip (a low waist line); ``_skirt_knots``
+    therefore holds the skirt part to max(cone, body girth + ``EASE_M``) at every height inside the measured torso
+    profile (a knot at each torso sample, the top knot included). The hem knot keeps the cone value (the legs below
+    the profile get no body floor), the profile is never narrower than the cone, and a body the cone already clears
+    (or a measure without a ``torso`` profile) keeps the two cone knots unchanged."""
     waist_y = _waist_line(params, meas)
     # circumference at the waist line actually chosen
     frac = (waist_y - meas["hip_y"]) / max(1e-6, meas["waist_y"] - meas["hip_y"])
     waist_c = meas["hip_c"] + (meas["waist_c"] - meas["hip_c"]) * min(1.0, max(0.0, frac)) + EASE_M
     hem_c = max(meas["hip_c"] * 1.04, waist_c) * (1.0 + 1.5 * params["flare"])
     length = params["length_m"]
-    knots = [(0.0, hem_c), (length, waist_c)]
     top_y = waist_y
     if has_bodice(params):
         return _bodice_outline(params, meas, waist_y, waist_c, hem_c)
+    knots = _skirt_knots(meas, waist_y, length, hem_c, waist_c)
     if params["kind"] == "dress":
         bodice = max(0.08, meas["band_y"] - waist_y)
         knots.append((length + bodice, meas["band_c"] + EASE_M))
@@ -592,25 +600,77 @@ def _torso_girth(meas: Dict[str, Any], y: float) -> float:
     return float(np.interp(y, ys, cs, left=meas.get("hip_c", cs[0]), right=cs[-1]))
 
 
+#: A torso sample closer than this to the hem or the top of a skirt part adds no knot of its own (no near-zero
+#: panel edge); the end knot itself still keeps clear of the body there.
+SKIRT_KNOT_GAP_M = 0.001
+
+
+def _skirt_knots(meas: Dict[str, Any], top_y: float, length: float, hem_c: float,
+                 top_c: float) -> List[Tuple[float, float]]:
+    """The skirt part's side profile [(height above the hem, full circumference)] from the hem (``top_y -
+    length``, height 0) up to ``top_y`` (height ``length``): the straight cone ``hem_c`` -> ``top_c``, but never
+    narrower than the body. At every height inside the measured torso profile (``meas["torso"]``, sampled every
+    2 cm from 40 % of the height up) the circumference is max(cone, ``_torso_girth`` + ``EASE_M``), with a knot at
+    each torso sample between the ends and at both ends; below the profile's lowest sample there are only legs and no
+    body floor: the hem knot keeps the cone value and the profile runs straight from it to the lowest sample's knot
+    — the cone itself while that sample is on the cone, otherwise a straighter line above it (never narrower than
+    the cone, and no step under the thighs). The body is linear between its samples and so is the cone, so the
+    profile interpolated between these knots clears body + ``EASE_M`` everywhere in the torso range, not only at
+    the knots.
+    Exactly the two cone knots ``[(0, hem_c), (length, top_c)]`` when nothing is narrower than the body, and when
+    the measure has no torso profile (``_torso_girth`` then answers the chest band, no floor for a skirt)."""
+    cone = [(0.0, hem_c), (length, top_c)]
+    prof = meas.get("torso") or []
+    if not prof or length <= 0:
+        return cone
+    hem_y = top_y - length
+    lo, hi = float(prof[0][0]) - 1e-9, float(prof[-1][0]) + 1e-9
+    governed = False
+
+    def at(y: float, c: float) -> float:
+        nonlocal governed
+        if not lo <= y <= hi:
+            return c
+        body = _torso_girth(meas, y) + EASE_M
+        if body > c:
+            governed = True
+            return body
+        return c
+
+    knots = [(0.0, at(hem_y, hem_c))]
+    for y, _g in prof:
+        h = float(y) - hem_y
+        if SKIRT_KNOT_GAP_M < h < length - SKIRT_KNOT_GAP_M:
+            knots.append((h, at(float(y), hem_c + (top_c - hem_c) * h / length)))
+    knots.append((length, at(top_y, top_c)))
+    return knots if governed else cone
+
+
 def _bodice_outline(params: Dict[str, Any], meas: Dict[str, Any], waist_y: float, waist_c: float,
                     hem_c: float) -> Dict[str, Any]:
     """The side profile of a piece with a bodice (Ruling A142): from the hem up the body's own girth with the ease
-    (``BODICE_EASE``; a dress's skirt part keeps the skirt knots below its waist line) to the shoulder line
+    (``BODICE_EASE``; a dress's skirt part follows the skirt profile ``_skirt_knots`` below its waist line, read at
+    this 2 cm grid) to the shoulder line
     ``top_y`` = shoulder joints + ``SHOULDER_TOP_M``."""
     import numpy as np
     if "shoulder_y" not in meas:
         raise ValueError("the body has no arm / neck joints to fit a bodice to")
     top_y = meas["shoulder_y"] + SHOULDER_TOP_M
     ease = 1.0 + BODICE_EASE[0] + BODICE_EASE[1] * params["fit"] + (JACKET_EASE if params["kind"] == "jacket" else 0)
+    skirt_h: List[float] = []
+    skirt_c: List[float] = []
     if params["kind"] == "dress":
         hem_y = waist_y - params["length_m"]
+        # the skirt part: the skirt's own profile (never narrower than the body), read at this grid
+        skirt = _skirt_knots(meas, waist_y, waist_y - hem_y, hem_c, waist_c)
+        skirt_h, skirt_c = [h for h, _c in skirt], [c for _h, c in skirt]
     else:
         hem_y = max(meas["floor_y"] + 0.2, top_y - params["length_m"])
     knots = []
     for y in np.arange(hem_y, top_y - 1e-6, 0.02):
         y = float(y)
         if params["kind"] == "dress" and y <= waist_y:
-            c = float(np.interp(y - hem_y, [0.0, waist_y - hem_y], [hem_c, waist_c]))
+            c = float(np.interp(y - hem_y, skirt_h, skirt_c))
         else:
             c = _torso_girth(meas, y) * ease + EASE_M
         knots.append((round(y - hem_y, 4), round(c, 4)))
