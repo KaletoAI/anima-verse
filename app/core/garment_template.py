@@ -949,7 +949,10 @@ def piece_progress(character_name: str, item_id: str, *, profile: Optional[Dict[
     record = drape["record"] or {}
     params = params_of(item)
     sources = texture_sources(character_name, item_id)
-    building = worn and figure_build.running(character_name)
+    # A176: only while the Build still has this piece's drape ahead of it (or runs it) — a Build that already
+    # draped it and now waits on another piece (Dario, 2026-11-17: 11 min behind a shoe mesh) shows the outcome,
+    # never "running" until the whole Build ends.
+    building = worn and figure_build.fits_piece(character_name, item_id)
     live = live_progress(character_name, item_id)
     state = "running" if (building or live) and drape["state"] != "ready" else drape["state"]
     metrics = record.get("metrics") or {}
