@@ -85,7 +85,7 @@ import {
   FRONT_WAITS_FOR_BUILD, NO_BASE_BODY_NOTE, REFIT_LABEL, STEP_NAMES, autoBuildNote, baseBodyLine, bodyRows, buildButton,
   changeLine, frontBuildCovers, frontRegenerate, hairState, headerLine, noBaseBody, planRows, regenerateMeshLabel,
   retryLabel, servedLines, shortCost, stateMeshAction, stateToggleNote, statusLight, templateBuilt, templateCost,
-  templateSummary, wornState,
+  templateSummary, wornState, isOwnMeshMode,
 } from './figureModel'
 import type { FigurePayload, FigureWornRow, GenerationPause, HairMode, PieceState, WaitingJob } from './figureModel'
 import type { Light } from './hairstylesModel'
@@ -538,7 +538,7 @@ function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairst
             aside={<span className="ga-hint">· {t(MESH_MODE_LABELS[row.mode] || row.mode)}</span>}>
             <div style={BUTTONS}>
               {wardrobe}
-              {row.mode === 'own_mesh' ? (
+              {isOwnMeshMode(row.mode) ? (
                 <button type="button" className="ga-btn ga-btn-sm" aria-haspopup="dialog"
                   title={row.state === 'fit_refused'
                     ? t('Details shows the refused fit on each body, marked where it fails, and can accept it.')
@@ -590,7 +590,7 @@ function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairst
                 <span className="ga-hint">{stateToggleNote(row, data.auto_build, t)}</span>
               </div>
             ) : null}
-            {row.mode === 'own_mesh' && other ? (
+            {isOwnMeshMode(row.mode) && other ? (
               row.other_state_jobs === 0 ? (
                 <div className="ga-hint">{stateMeshAction(other, 0, t)}</div>
               ) : (

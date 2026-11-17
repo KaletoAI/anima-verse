@@ -83,8 +83,6 @@ export interface FitSettingsValues {
   allowance: AllowanceChoice
   depth: DepthChoice
   trunk: TrunkChoice
-  /** Ruling A48d; a server before it sends none. */
-  mesh_shape?: MeshShapeChoice
   /** Ruling A122; a server before it sends none. */
   shaft?: ShaftChoice
   /** A166: mm a shell stands off the skin; a server before it sends none. */
@@ -131,19 +129,16 @@ export interface ShaftInfo {
   cost: { hub_jobs: number; where: string }
 }
 
-/** Ruling A48d: the piece's mesh shape (`garment_shell.SHAPE_CHOICES`). */
-export type MeshShapeChoice = 'auto' | 'as_generated' | 'shell'
+/** Ruling A48d: the shape a fit makes — since A168 the item's mode decides it (mode "shell" → shell), no setting. */
+export type MeshShape = 'as_generated' | 'shell'
 
 /** Ruling A48d: `garments.mesh_shape_view`. */
 export interface MeshShapeInfo {
-  setting: MeshShapeChoice
-  resolved: Exclude<MeshShapeChoice, 'auto'>
-  auto: { shape: Exclude<MeshShapeChoice, 'auto'>; reason: 'close_slots' | 'no_slots' | 'loose_slot' | 'covers' | 'closable'
-    details: { slots?: string[]; covers?: string[] } }
+  /** What the item's mode makes now. */
+  resolved: MeshShape
   /** The shape of the shown fit (null: no fit yet). */
-  made: Exclude<MeshShapeChoice, 'auto'> | null
+  made: MeshShape | null
   due: boolean
-  choices: MeshShapeChoice[]
   cost: { hub_jobs: number; where: string }
   shell: { shell_faces?: number | null; inside_share?: number | null; side_colour_within_2cm?: number | null
     seconds?: number | null; over_skin_p50_mm?: number | null } | null
@@ -234,27 +229,8 @@ export const TRUNK_HINTS: Record<TrunkChoice, string> = {
   fitted: 'Laid onto the body with 12 mm of room from the narrowest waist up to the shoulders; half of its folds is kept, the texture stays; below the waist it stays free (a peplum keeps its flare). Runs before the depth allowance.',
 }
 
-export const MESH_SHAPE_CHOICES: MeshShapeChoice[] = ['auto', 'as_generated', 'shell']
-export const MESH_SHAPE_LABELS: Record<MeshShapeChoice, string> = {
-  auto: 'Auto', as_generated: 'As generated', shell: 'Shell from the body',
-}
-export const MESH_SHAPE_HINTS: Record<MeshShapeChoice, string> = {
-  auto: 'Shell from the body for a close-fitting piece (every slot underwear or legs, covers nothing, cannot be worn open); else as generated',
-  as_generated: 'The generated mesh, placed on the body and fitted',
-  shell: 'The piece is made from the surface of the body where the piece-only views show it, 4 mm over the skin, coloured from those views — the generated mesh is not used',
-}
-
-/** Ruling A48d: why Auto chose what it chose, in plain words. */
-export function meshShapeReason(info: MeshShapeInfo, t: T): string {
-  const a = info.auto
-  const list = (xs?: string[]) => (xs || []).map((x) => t(info.slot_labels?.[x] || x)).join(', ')
-  switch (a.reason) {
-    case 'close_slots': return t('close-fitting slots only: {slots}').replace('{slots}', list(a.details.slots))
-    case 'loose_slot': return t('worn in a slot that is not close-fitting: {slots}').replace('{slots}', list(a.details.slots))
-    case 'covers': return t('it covers another slot: {slots}').replace('{slots}', list(a.details.covers))
-    case 'closable': return t('it can be worn open')
-    default: return t('the piece has no slot')
-  }
+export const MESH_SHAPE_LABELS: Record<MeshShape, string> = {
+  as_generated: 'As generated', shell: 'Shell from the body',
 }
 
 export function allowanceLabel(choice: AllowanceChoice, t: T): string {

@@ -17,17 +17,18 @@ import { filesLabel, sizeLabel } from './hairstylesModel'
 import type { Light } from './hairstylesModel'
 
 /** How an outfit piece reaches the figure (`garment_set.MESH_MODES`). */
-export type MeshMode = 'own_mesh' | 'painted' | 'in_body' | 'template'
+export type MeshMode = 'own_mesh' | 'shell' | 'painted' | 'in_body' | 'template'
 /** How the hair reaches the figure: HairDeck cards from the profile picture, HAAR strands from the text (H3), or
  *  in the body. */
 export type HairMode = 'hairdeck' | 'haar' | 'body'
 
 /** The select's order. */
-export const MESH_MODES: MeshMode[] = ['own_mesh', 'painted', 'in_body', 'template']
+export const MESH_MODES: MeshMode[] = ['own_mesh', 'shell', 'template', 'painted', 'in_body']
 export const HAIR_MODES: HairMode[] = ['hairdeck', 'haar', 'body']
 
 export const MESH_MODE_LABELS: Record<MeshMode, string> = {
   own_mesh: 'Own mesh',
+  shell: 'Shell from the body',
   painted: 'Painted',
   in_body: 'In the body',
   template: 'Template (fabric)',
@@ -42,6 +43,7 @@ export const HAIR_MODE_LABELS: Record<HairMode, string> = {
 /** What each mode does, one line (the select's hint). */
 export const MESH_MODE_HINTS: Record<MeshMode, string> = {
   own_mesh: 'A finished mesh of its own, fitted on top of the body.',
+  shell: 'Made from the body’s own surface where the piece-only views show the piece, 4 mm over the skin, coloured from those views — no generated mesh and no cut-outs (0 hub jobs after the views), fitted on the CPU. For close-fitting pieces: underwear, tights.',
   painted: "Painted onto the body's texture.",
   in_body: 'Meshed as part of the body.',
   template: 'A sewing pattern sized to the body and draped as cloth on the CPU (0 hub jobs); 1 LLM call suggests its parameters from the item picture. Skirts and dresses today.',
@@ -60,7 +62,13 @@ export function hairModeDisabled(m: HairMode, built: readonly string[] = HAIR_MO
 }
 
 export function isMeshMode(v: unknown): v is MeshMode {
-  return v === 'own_mesh' || v === 'painted' || v === 'in_body' || v === 'template'
+  return v === 'own_mesh' || v === 'shell' || v === 'painted' || v === 'in_body' || v === 'template'
+}
+
+/** The modes whose piece is a fitted mesh of its own and runs the own-mesh chain (`garment_set.OWN_MESH_MODES`):
+ *  Own mesh, and Shell from the body (the same chain without the cut-outs and the hub mesh job). */
+export function isOwnMeshMode(m: string | null | undefined): boolean {
+  return m === 'own_mesh' || m === 'shell'
 }
 
 /** The default mode of a piece worn on `slots` (`garment_set.default_mesh_mode`): in the body for every slot
@@ -172,10 +180,11 @@ export interface OwnMeshFiles {
   world: { files: number; bytes: number }
 }
 
-/** The switch leaves Own mesh — the only switch that can hand stored files to the cleanup (Painted ↔ In the body
- *  drops no own-mesh file: the server counts 0 for a piece that is no own mesh). */
+/** The switch leaves Own mesh / Shell from the body for a mode without a mesh of its own — the only switch that can
+ *  hand stored files to the cleanup (Own mesh ↔ Shell keeps the piece's views and fits; Painted ↔ In the body drops
+ *  no own-mesh file: the server counts 0 for a piece that is no own mesh). */
 export function leavesOwnMesh(current: MeshMode, next: MeshMode): boolean {
-  return current === 'own_mesh' && next !== 'own_mesh'
+  return isOwnMeshMode(current) && !isOwnMeshMode(next)
 }
 
 /** The in-app confirmation before switching `current` → `next` (Ruling A63), or null when there is nothing to
@@ -786,7 +795,7 @@ export function wornState(row: Pick<FigureWornRow, 'state' | 'mode' | 'jobs' | '
       if (row.mode === 'template') {
         return { light: 'yellow', text: t('Due: template drape · CPU, 0 hub jobs'), sub: null, detail: '' }
       }
-      return row.mode === 'own_mesh'
+      return isOwnMeshMode(row.mode)
         ? { light: 'yellow', text: t('Due: own mesh · {cost}').replace('{cost}', jobsTr(row.jobs, t)), sub: null, detail: '' }
         : { light: 'yellow', text: t('Waits for the Build'), sub: null, detail: '' }
   }
@@ -988,7 +997,7 @@ export function planRows(f: Pick<FigurePayload, 'cost' | 'build'>, t: Tr = EN): 
 export function stateToggleNote(row: Pick<FigureWornRow, 'mode' | 'other_state_jobs'>, autoBuild: boolean,
   t: Tr = EN): string {
   if (!autoBuild) return t('Saved at once — nothing runs; the change waits for Build')
-  if (row.mode === 'own_mesh' && row.other_state_jobs !== null) {
+  if (isOwnMeshMode(row.mode) && row.other_state_jobs !== null) {
     return row.other_state_jobs === 0 ? t('Switching starts the Build — no hub job (that mesh is built)')
       : t('Switching starts the Build — {cost} for that mesh').replace('{cost}', jobsTr(row.other_state_jobs, t))
   }

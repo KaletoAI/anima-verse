@@ -27,7 +27,7 @@ import { FieldModelRefs } from './FieldModelRefs'
 import {
   ClosableCheckbox, GarmentPieceDialog, MaterialSelect, MeshModeSelect, PieceStateToggle, PieceStatusChip, WearersLine,
 } from './WardrobeGarment'
-import { closableDisabled, hairstyleLabel, meshModeOf } from './figureModel'
+import { closableDisabled, hairstyleLabel, isOwnMeshMode, meshModeOf } from './figureModel'
 import { useWardrobeGarments } from './useGarment'
 import { ConfirmDialog, PromptPreview } from '@anima/player-ui'
 import { thumbUrl, thumbWidth } from '@anima/player-ui'
@@ -534,7 +534,7 @@ export function WardrobeTab({ character, onOpenFigure }: {
                       setModeChanged((prev) => ({ ...prev, [it.item_id]: (prev[it.item_id] || 0) + 1 }))
                       void load()
                     }} />
-                  {garments.pipeline && garments.modes?.[it.item_id] === 'own_mesh'
+                  {garments.pipeline && isOwnMeshMode(garments.modes?.[it.item_id])
                     && garments.materials?.[it.item_id] ? (
                       <MaterialSelect itemId={it.item_id} material={garments.materials[it.item_id]} disabled={busy}
                         onChanged={() => { void reloadGarments() }} />
