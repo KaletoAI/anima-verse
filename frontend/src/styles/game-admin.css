@@ -3629,3 +3629,8 @@ a.ga-btn {
 .ga-poses-sub h3 { font-size: 15px; }
 .ga-poses-sub .ga-input { font-size: 13px; }
 .ga-poses-inner { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
+/* A165: the clip alignment column — compact rows so the 3D view and the dial being moved stay in sight together. */
+.ga-align-col .ga-input { padding: 1px 4px; font-size: 12px; }
+.ga-align-col .ga-btn-sm { padding: 1px 6px; font-size: 11px; }
+.ga-align-col input[type='range'] { height: 14px; margin: 0; }
+.ga-align-col table td, .ga-align-col table th { padding-top: 0; padding-bottom: 0; }

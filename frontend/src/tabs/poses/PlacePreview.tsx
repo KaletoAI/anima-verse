@@ -77,7 +77,7 @@ interface PropRow {
 export interface PlaceClip {
   role?: string; set?: string; url: string
   height_offsets_cm?: ClipHeightOffsetsCm
-  orientation?: { shift_cm?: [number, number] | null; partner_turn_deg?: [number, number] | null } | null
+  orientation?: { shift_cm?: [number, number] | null; partner_turn_deg?: [number, number] | null; partner_yaw_deg?: number | null } | null
 }
 /** A pose that plays this clip (read-only here, D2). */
 export interface PlacePose { key: string; yaw_offset?: number; group?: string }
@@ -362,7 +362,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   // The SAVED calibration per role, read live in the frame loop: after Apply the listing (new shift_cm / heights)
   // arrives after the clip reload, and the figures must take it the moment it does — never a stale copy.
   const savedRef = useRef<Record<string, { shiftCm: [number, number] | null; heightOffsetsCm: ClipHeightOffsetsCm | null
-    partnerTurnDeg: [number, number] | null }>>({})
+    partnerTurnDeg: [number, number] | null; partnerYawDeg: number }>>({})
   {
     const want = set.trim()
     const out: typeof savedRef.current = {}
@@ -370,7 +370,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
       const c = (want ? clips.find((x) => (x.role || '') === role && (x.set || '') === want) : undefined)
         || clips.find((x) => (x.role || '') === role && !x.set) || clips.find((x) => (x.role || '') === role)
       if (c) out[role] = { shiftCm: c.orientation?.shift_cm ?? null, heightOffsetsCm: c.height_offsets_cm ?? null,
-        partnerTurnDeg: c.orientation?.partner_turn_deg ?? null }
+        partnerTurnDeg: c.orientation?.partner_turn_deg ?? null, partnerYawDeg: c.orientation?.partner_yaw_deg ?? 0 }
     }
     savedRef.current = out
   }
@@ -681,7 +681,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           mixer: InstanceType<typeof THREE.AnimationMixer>; path: RootPath; duration: number
           hips: Object3D | null; hipsBind: { x: number; y: number; z: number }
           bindInv: InstanceType<typeof THREE.Quaternion>; runtime: FigureRuntime; hasRecord: boolean
-          saved: { shiftCm: [number, number] | null; heightOffsetsCm: ClipHeightOffsetsCm | null; partnerTurnDeg: [number, number] | null }
+          saved: { shiftCm: [number, number] | null; heightOffsetsCm: ClipHeightOffsetsCm | null; partnerTurnDeg: [number, number] | null
+            partnerYawDeg: number }
           anchor: { x: number; y: number; z: number }; placeYaw: number
           arrow: InstanceType<typeof THREE.ArrowHelper>; yawS: number[]; posS: number[]
           medYaw: number; medPos: number; dyaw: number; dpos: number; chains: number
@@ -771,7 +772,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           figs.push({ letter: p.letter, bodyMeshes, partMeshes, character: a.character, role: a.role, place: p, root, inst, mixer, path: clip.path,
             duration: clip.raw.duration, hips, hipsBind: { x: hb.x, y: hb.y, z: hb.z }, bindInv, runtime, hasRecord,
             saved: { shiftCm: o?.shift_cm ?? null, heightOffsetsCm: clip.file.height_offsets_cm ?? null,
-              partnerTurnDeg: o?.partner_turn_deg ?? null },
+              partnerTurnDeg: o?.partner_turn_deg ?? null, partnerYawDeg: o?.partner_yaw_deg ?? 0 },
             anchor, placeYaw, arrow, yawS: [], posS: [], medYaw: NaN, medPos: NaN, dyaw: 0, dpos: 0,
             chains: Object.keys(answer?.motion?.groups ?? {}).length, head, tips, tipRest: new Map() })
           disposers.push(() => { mixer.stopAllAction(); mixer.uncacheRoot(inst); runtime.dispose() })
@@ -888,9 +889,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           if (!solo) {
             const saved = f.role === 'b' ? (savedRef.current[f.role] ?? f.saved).partnerTurnDeg ?? [0, 0] : [0, 0]
             const turn = f.role === 'b' ? draft.partnerTurnDeg ?? [0, 0] : [0, 0]
-            const base = partnerTurnFix(saved[0] + turn[0], saved[1] + turn[1], cal.frame)
-            const fix: PairFix = { shift: extra.shift, turn: [base.turn[0] + extra.turn[0], base.turn[1] + extra.turn[1],
-              base.turn[2] + extra.turn[2]] }
+            // Ruling A165: B's yaw about its own vertical axis (saved + draft) goes first; Auto-align and the pair
+            // check start from it and never change it (their trial fix rides on the tilt/roll in `extra`).
+            const yaw = f.role === 'b' ? ((savedRef.current[f.role] ?? f.saved).partnerYawDeg ?? 0) + (draft.partnerYawDeg ?? 0) : 0
+            const fix: PairFix = partnerTurnFix(saved[0] + turn[0], saved[1] + turn[1], cal.frame, yaw, extra)
             if (fix.turn.some((v) => v) || fix.shift.some((v) => v)) {
               const r = fixRoot(fix, pivot, [at.x, at.y, at.z])
               f.root.position.set(r.position[0], r.position[1], r.position[2])

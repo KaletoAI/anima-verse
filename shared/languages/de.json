@@ -8,6 +8,12 @@
     }
   },
   "translations": {
+    "Check": "Prüfen",
+    "Bend & root angle": "Biegung & Wurzelwinkel",
+    "B yaw": "B drehen",
+    "B yaw 0°": "B Drehung 0°",
+    "partner B yaw": "Partner B Drehung",
+    "Turns partner B about its own vertical axis through its hips, before the tilt/roll — renderer-only, saved beside the clip. Positive turns B’s forward towards its left. Auto-align and the pair check start from it and never change it.": "Dreht Partner B um seine eigene senkrechte Achse durch die Hüfte, vor Neigen/Rollen — nur im Renderer, neben dem Clip gespeichert. Positiv dreht Bs Vorwärts nach links. Auto-Ausrichten und Paarprüfung gehen davon aus und ändern sie nie.",
         "Show the reference as it is again": "Referenzbild wieder unverändert zeigen",
         "Shows the processed reference in its place — nothing is stored.": "Zeigt das bearbeitete Referenzbild an seiner Stelle — es wird nichts gespeichert.",
     "Alignment": "Ausrichtung",
@@ -30,7 +36,7 @@
     "surface heights go to the sidecar and apply in game": "Flächenhöhen gehen ins Sidecar und gelten im Spiel",
     "the finale clips change the same way: {kinds}": "die Finale-Clips ändern sich genauso: {kinds}",
     "the green place check is stored": "die grüne Platzprüfung wird gespeichert",
-    "the side/forward shift and partner B’s tilt/roll go to the sidecar": "die Seit-/Vorwärtsverschiebung und Partner Bs Neigung/Rollen gehen ins Sidecar",
+    "the side/forward shift and partner B’s tilt/roll/yaw go to the sidecar": "die Seit-/Vorwärtsverschiebung und Partner Bs Neigung/Rollen/Drehung gehen ins Sidecar",
     "the stored place check is cleared": "die gespeicherte Platzprüfung wird gelöscht",
     "turn/tilt/roll and role offsets are baked into the clip file (one Blender run, no hub jobs)": "Drehen/Kippen/Rollen und Rollenversatz werden in die Clip-Datei gebrannt (ein Blender-Lauf, keine Hub-Jobs)",
     "used or not": "benutzt oder nicht",

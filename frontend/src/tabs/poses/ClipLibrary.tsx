@@ -227,9 +227,31 @@ const DIAL = { sliderWidth: 'auto', sliderStyle: { flex: 1, minWidth: 40 }, inpu
   style: { display: 'flex', width: '100%', fontSize: 12 } } as const
 const DIAL_LABEL = { width: 74, flex: '0 0 74px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } as const
 const FILTER = { fontSize: 12, padding: '2px 4px', minWidth: 0 } as const
-const COL_HEAD = { fontSize: 12, fontWeight: 600, opacity: 0.85, margin: '6px 0 2px' } as const
+const COL_HEAD = { fontSize: 12, fontWeight: 600, opacity: 0.85, margin: '3px 0 1px' } as const
+/** What sits above and below the clip viewer canvas in Game-Admin (header, tabs, the viewer toolbar, its caption), px. */
+const PAGE_CHROME_PX = 340
+/** Where the alignment column starts below the window top (header, Poses tabs, the kind's head line), px. */
+const COL_TOP_PX = 240
+/** Degrees wrapped to (−180, 180]. */
+function wrapDeg(v: number): number {
+  const w = ((v + 180) % 360 + 360) % 360
+  return +((w === 0 ? 360 : w) - 180).toFixed(2)
+}
 
 type InnerTab = 'places' | 'clip' | 'files' | 'used'
+/** A165: the alignment column's tabs — every setting stays reachable, one group at a time. */
+type AlignTab = 'clip' | 'partner' | 'contacts' | 'bend' | 'check'
+
+/** The window's inner height, live — the preview and the alignment column size themselves to it (A165). */
+function useViewportHeight(): number {
+  const [h, setH] = useState(() => (typeof window === 'undefined' ? 900 : window.innerHeight))
+  useEffect(() => {
+    const on = () => setH(window.innerHeight)
+    window.addEventListener('resize', on)
+    return () => window.removeEventListener('resize', on)
+  }, [])
+  return h
+}
 
 export function ClipLibrary({
   listing,
@@ -288,6 +310,12 @@ export function ClipLibrary({
   const [partnerShift, setPartnerShift] = useState<[number, number, number]>([0, 0, 0])
   // Ruling A129: partner B's [tilt, roll] degrees about its hips — renderer-only, stored in the sidecar like shift_cm.
   const [partnerTurn, setPartnerTurn] = useState<[number, number]>([0, 0])
+  // Ruling A165: partner B's yaw about its own vertical axis — the draft DELTA to the saved value (the slider shows
+  // saved + delta), renderer-only and stored beside the clip like the tilt/roll.
+  const [partnerYaw, setPartnerYaw] = useState(0)
+  // A165: the alignment column is split into tabs so the 3D view stays in sight while a dial moves.
+  const [alignTab, setAlignTab] = useState<AlignTab>('clip')
+  const viewH = useViewportHeight()
   // A group's roles, each against the scene: {role: [side, up, forward]} cm,
   // baked like the partner shift; `shiftRole` is the one the sliders move.
   const [roleShift, setRoleShift] = useState<Record<string, [number, number, number]>>({})
@@ -417,6 +445,7 @@ export function ClipLibrary({
     setRollDeg(0)
     setPartnerShift([0, 0, 0])
     setPartnerTurn([0, 0])
+    setPartnerYaw(0)
     setRoleShift({})
     setShiftRole('a')
     setClipShift([0, 0])
@@ -532,7 +561,8 @@ export function ClipLibrary({
   const isGroupTarget = orientTarget?.role === 'a' && (row?.roles ?? 0) > 2
   const groupRoles = isGroupTarget ? (['a', 'b', 'c', 'd', 'e'] as const).slice(0, row?.roles ?? 0) : []
   const shiftDirty = isPairTarget && partnerShift.some((v) => v !== 0)
-  const turnDirty = isPairTarget && partnerTurn.some((v) => v !== 0)
+  const turnDirty = isPairTarget && (partnerTurn.some((v) => v !== 0) || partnerYaw !== 0)
+  const savedPartnerYaw = orientTarget?.orientation?.partner_yaw_deg ?? 0
   const movedRoles = useMemo(() => (isGroupTarget
     ? Object.fromEntries(Object.entries(roleShift).filter(([, v]) => v.some((x) => x !== 0)))
     : {}), [isGroupTarget, roleShift])
@@ -550,10 +580,11 @@ export function ClipLibrary({
         : {},
     heightCm: heightDraft,
     partnerTurnDeg: isPairTarget ? partnerTurn : undefined,
+    partnerYawDeg: isPairTarget ? partnerYaw : undefined,
     contactRelations: contactDraft,
     bendLimits: bendLimitsOf(bendDraft),
     rootAngle: { pitchDeg: rootDraft.pitch_deg, yawDeg: rootDraft.yaw_deg },
-  }), [bendDraft, rootDraft, contactDraft, clipShift, heightDraft, isGroupTarget, isPairTarget, partnerShift, partnerTurn, roleShift, rollDeg, tiltDeg, yawDeg])
+  }), [bendDraft, rootDraft, contactDraft, clipShift, heightDraft, isGroupTarget, isPairTarget, partnerShift, partnerTurn, partnerYaw, roleShift, rollDeg, tiltDeg, yawDeg])
   const draftRef = useRef(alignmentDraft)
   draftRef.current = alignmentDraft
   /** The check to store with Apply/Save: only when every figure reads green (D3/D4). */
@@ -588,7 +619,7 @@ export function ClipLibrary({
     greenCheck: !!placeCheck && (orientDirty || heightDirty || !checkStored), savedCheck: !!savedCheck,
   }).map((step) => ({
     bake: t('turn/tilt/roll and role offsets are baked into the clip file (one Blender run, no hub jobs)'),
-    shift: t('the side/forward shift and partner B’s tilt/roll go to the sidecar'),
+    shift: t('the side/forward shift and partner B’s tilt/roll/yaw go to the sidecar'),
     heights: t('surface heights go to the sidecar and apply in game'),
     finales: t('the finale clips change the same way: {kinds}').replace('{kinds}', finaleKinds.join(', ')),
     check: t('the green place check is stored'),
@@ -608,7 +639,8 @@ export function ClipLibrary({
           ...(shiftDirty ? { partner_shift_cm: partnerShift } : {}),
           ...(roleShiftDirty ? { role_shift_cm: movedRoles } : {}),
           ...(clipShiftDirty ? { shift_cm: clipShift } : {}),
-          ...(turnDirty ? { partner_turn_deg: partnerTurn } : {}),
+          ...(turnDirty && partnerTurn.some((v) => v !== 0) ? { partner_turn_deg: partnerTurn } : {}),
+          ...(turnDirty && partnerYaw !== 0 ? { partner_yaw_deg: partnerYaw } : {}),
           ...(placeCheck ? { checked: placeCheck } : {}),
         })
         setOrientSeconds(typeof res.seconds === 'number' ? res.seconds : null)
@@ -629,6 +661,7 @@ export function ClipLibrary({
       setRollDeg(0)
       setPartnerShift([0, 0, 0])
       setPartnerTurn([0, 0])
+      setPartnerYaw(0)
       setRoleShift({})
       setClipShift([0, 0])
       setHeightDraft({})
@@ -642,7 +675,7 @@ export function ClipLibrary({
       setHeightBusy(false)
     }
   }, [canSave, clipShift, clipShiftDirty, heightDirty, heightDraft, movedRoles, onReload, orientDirty, orientTarget,
-    partnerShift, partnerTurn, placeCheck, roleShiftDirty, rollDeg, shiftDirty, tiltDeg, turnDirty, yawDeg])
+    partnerShift, partnerTurn, partnerYaw, placeCheck, roleShiftDirty, rollDeg, shiftDirty, tiltDeg, turnDirty, yawDeg])
 
   /** Saved angles and calibration, including every earlier apply. */
   const savedNote = useMemo(() => {
@@ -659,6 +692,7 @@ export function ClipLibrary({
         : '',
       o.partner_turn_deg?.some((v) => v !== 0)
         ? `${t('partner B tilt / roll')} ${o.partner_turn_deg[0]} / ${o.partner_turn_deg[1]}°` : '',
+      o.partner_yaw_deg ? `${t('partner B yaw')} ${o.partner_yaw_deg}°` : '',
       ...Object.entries(o.role_shift_cm || {}).map(([r, v]) =>
         `${t('role {r} forward / side / up').replace('{r}', r.toUpperCase())} ${v[2]} / ${v[0]} / ${v[1]} cm`),
     ].filter(Boolean)
@@ -1003,6 +1037,15 @@ export function ClipLibrary({
   }
 
   const dialLabel = (text: string) => <span style={DIAL_LABEL} title={text}>{text}</span>
+  // A165: the column's tabs — a solo clip has only its own dials; a pair/group adds partner, contacts, bend, check.
+  const multi = isPairTarget || isGroupTarget
+  const alignTabs: [AlignTab, string][] = [['clip', t('Clip')],
+    ...(multi ? [['partner', isPairTarget ? t('Partner B') : t('Roles')], ['contacts', t('Contacts')],
+      ['bend', t('Bend & root angle')], ['check', t('Check')]] as [AlignTab, string][] : [])]
+  const shownAlignTab: AlignTab = alignTabs.some(([id]) => id === alignTab) ? alignTab : 'clip'
+  // The 3D view and the column fit the window, so the view stays in sight while a dial moves (A165).
+  const previewH = Math.max(300, Math.min(600, viewH - PAGE_CHROME_PX))
+  const colMaxH = Math.max(320, viewH - COL_TOP_PX)
   const usedCount = row?.used.length ?? 0
   const fileCount = row ? row.clips.length : 0
 
@@ -1170,12 +1213,12 @@ export function ClipLibrary({
               </div>
             ) : null}
 
-            <div style={{ display: 'grid', gridTemplateColumns: orientTarget ? 'minmax(0, 1fr) 290px' : 'minmax(0, 1fr)', gap: 10, alignItems: 'start' }}>
-              <div style={{ minWidth: 0 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: orientTarget ? 'minmax(0, 1fr) 320px' : 'minmax(0, 1fr)', gap: 8, alignItems: 'start' }}>
+              <div style={{ minWidth: 0, position: 'sticky', top: 0, zIndex: 1 }} data-testid="clip-viewer">
                 {innerTab === 'places' && !row.missing ? (
                   /* A110 phase 2: the clip on a prop's places, through the shared per-figure runtime. */
                   <PlacePreview kind={row.kind} set={previewSet} roles={row.roles ?? 0} clips={row.clips}
-                    draftRef={draftRef} draftSeq={alignmentDraft} bust={seq} height={600}
+                    draftRef={draftRef} draftSeq={alignmentDraft} bust={seq} height={previewH}
                     poses={poses.filter((p) => (p.animation || '').trim() === row.kind)}
                     onOpenPose={onOpenPose} onReadout={setPlaceReadout} autoAlignRef={autoAlignRef}
                     pairCheckRef={pairCheckRef} />
@@ -1185,7 +1228,7 @@ export function ClipLibrary({
                     key={`${row.kind}:${previewSet}:${seq}`}
                     kind={row.kind}
                     set={previewSet}
-                    height={600}
+                    height={previewH}
                     importYaw={yawDeg}
                     importTilt={tiltDeg}
                     importRoll={rollDeg}
@@ -1234,9 +1277,10 @@ export function ClipLibrary({
 
               {/* ── the alignment column, beside the viewer: every drag moves the figures live ── */}
               {orientTarget ? (
-                <div data-testid="align-col"
-                  style={{ border: '1px solid var(--border, #30363d)', borderRadius: 6, padding: '6px 8px',
-                    display: 'flex', flexDirection: 'column', gap: 3, fontSize: 12 }}
+                <div data-testid="align-col" className="ga-align-col"
+                  style={{ border: '1px solid var(--border, #30363d)', borderRadius: 6, padding: '4px 6px',
+                    display: 'flex', flexDirection: 'column', gap: 2, fontSize: 12, position: 'sticky', top: 0,
+                    maxHeight: colMaxH, overflowY: 'auto' }}
                   title={orientTarget.has_sidecar === false
                     ? t('Without a sidecar there is nowhere to store the flag — import the clip again.')
                     : undefined}>
@@ -1247,6 +1291,15 @@ export function ClipLibrary({
                       {orientDirty || heightDirty ? t('draft — the viewer shows it live') : t('saved state')}
                     </span>
                   </div>
+                  <nav className="ga-subtabs" data-testid="align-tabs" style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                    {alignTabs.map(([id, label]) => (
+                      <button key={id} type="button" data-testid={`align-tab-${id}`}
+                        className={`ga-btn ga-btn-sm${alignTab === id ? ' ga-btn-primary' : ''}`}
+                        aria-pressed={alignTab === id}
+                        onClick={() => setAlignTab(id)}>{label}</button>
+                    ))}
+                  </nav>
+                  {shownAlignTab === 'clip' ? (<>
                   <div style={COL_HEAD}>{t('Rotation')}</div>
                   <SliderInput label={dialLabel(t('Turn'))} unit="°"
                     title={t('Degrees the clip turns about the vertical — the import dial, applied after the fact. A lying clip is aimed at the bed with it.')}
@@ -1289,7 +1342,8 @@ export function ClipLibrary({
                     min={-50} max={50} step={1} value={heightCm}
                     onChange={(cm) => setHeightDraft((prev) => ({ ...prev, [heightGroup]: cm }))}
                     disabled={heightLocked} {...DIAL} />
-                  {isPairTarget ? (
+                  </>) : null}
+                  {isPairTarget && shownAlignTab === 'partner' ? (
                     <>
                       <div style={COL_HEAD}
                         title={t('Moves partner B against partner A in the clip file — the import offset, after the fact. Forward is the clip’s forward axis, side positive is its left.')}>
@@ -1312,17 +1366,34 @@ export function ClipLibrary({
                           onChange={(v) => setPartnerTurn((prev) => axis === 0 ? [v, prev[1]] : [prev[0], v])}
                           disabled={orientLocked} {...DIAL} />
                       ))}
+                      <SliderInput label={dialLabel(t('B yaw'))} unit="°"
+                        title={t('Turns partner B about its own vertical axis through its hips, before the tilt/roll — renderer-only, saved beside the clip. Positive turns B’s forward towards its left. Auto-align and the pair check start from it and never change it.')}
+                        min={-180} max={180} step={5} fineStep={1} value={wrapDeg(savedPartnerYaw + partnerYaw)}
+                        onChange={(v) => setPartnerYaw(wrapDeg(v - savedPartnerYaw))}
+                        disabled={orientLocked} {...DIAL} />
+                      <div style={{ display: 'flex', gap: 4, paddingLeft: 80 }}>
+                        <button type="button" className="ga-btn ga-btn-sm" data-testid="partner-yaw-zero"
+                          disabled={orientLocked || wrapDeg(savedPartnerYaw + partnerYaw) === 0}
+                          onClick={() => setPartnerYaw(wrapDeg(-savedPartnerYaw))}>{t('B yaw 0°')}</button>
+                        <button type="button" className="ga-btn ga-btn-sm" disabled={orientLocked}
+                          onClick={() => setPartnerYaw((v) => wrapDeg(v + 180))}>180°</button>
+                      </div>
                     </>
                   ) : null}
                   {(isPairTarget || isGroupTarget) && orientTarget ? (
                     <>
+                      {shownAlignTab === 'contacts' ? (
                       <ContactRelations roles={(['a', 'b', 'c', 'd', 'e'] as const).slice(0, row?.roles ?? 2)}
                         saved={savedContacts} draft={contactDraft} onDraft={setContactDraft} busy={busy}
                         onSave={(next) => { void run(orientTarget, { contact_target: next }) }} />
+                      ) : null}
+                      {shownAlignTab === 'bend' ? (<>
                       <BendLimitsEditor saved={savedBend} draft={bendDraft} onDraft={setBendDraft} busy={busy}
                         onSave={(next) => { void run(orientTarget, { bend_limits: next }) }} />
                       <RootAngleEditor saved={savedRoot} draft={rootDraft} onDraft={setRootDraft} busy={busy}
                         onSave={(next) => { void run(orientTarget, { root_angle: next }) }} />
+                      </>) : null}
+                      {shownAlignTab === 'check' ? (<>
                       <button type="button" className="ga-btn ga-btn-sm" data-testid="align-auto"
                         disabled={orientLocked || innerTab !== 'places'}
                         title={innerTab !== 'places'
@@ -1497,9 +1568,10 @@ export function ClipLibrary({
                           ) : <span style={{ color: 'var(--danger, #f85149)' }}>{autoAlign.reason}</span>}
                         </div>
                       ) : null}
+                      </>) : null}
                     </>
                   ) : null}
-                  {isGroupTarget ? (
+                  {isGroupTarget && shownAlignTab === 'partner' ? (
                     <>
                       <div style={{ ...COL_HEAD, display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}
                         title={t('Moves the selected role against the others in the clip files — its own half and its alt halves. Forward is the clip’s forward axis, side positive is its left.')}>
@@ -1534,10 +1606,11 @@ export function ClipLibrary({
                   ) : null}
 
                   {/* THE one save path, its consequence spelled out before the click. */}
-                  <div style={{ borderTop: '1px solid var(--border, #30363d)', marginTop: 6, paddingTop: 6 }}
+                  <div style={{ borderTop: '1px solid var(--border, #30363d)', marginTop: 4, paddingTop: 4,
+                    position: 'sticky', bottom: -4, background: 'var(--bg, #0d1117)', paddingBottom: 4 }}
                     data-testid="align-consequence">
                     {saveConsequence.length ? (
-                      <ul style={{ margin: '0 0 4px 14px', padding: 0 }}>
+                      <ul style={{ margin: '0 0 2px 14px', padding: 0, fontSize: 11 }}>
                         {saveConsequence.map((line) => <li key={line}>{line}</li>)}
                       </ul>
                     ) : (
