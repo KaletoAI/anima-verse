@@ -7,7 +7,7 @@ y = 0.05 (inside the segment, so the distance is the radius), radii 0.010 + 0.00
 MIN_VERTICES, skipped). numpy's linear quantile: p75 at index 0.75·19 = 14.25 → 0.024 + 0.25·0.001 = 0.02425;
 p95 at 0.95·19 = 18.05 → 0.028 + 0.05·0.001 = 0.02805. Margin 0, scale 1, unit 1 → r 0.0242 (rounded to 4 places:
 0.02425 → 0.0242 or 0.0243 — Python rounds half to even on the float, so compared at 1e-4), r_surface 0.0281 (0.02805 →
-0.028 or 0.0281, the same tolerance). A scale of 1.5 gives 0.036375 and 0.042075. VERSION is 8.
+0.028 or 0.0281, the same tolerance). A scale of 1.5 gives 0.036375 and 0.042075. VERSION is 9 (A193: the mouth record).
 """
 import math
 import sys
@@ -44,7 +44,7 @@ def fit(scale):
     return capsules, skipped
 
 
-check("VERSION 8", collision.VERSION == 8, collision.VERSION)
+check("VERSION 9", collision.VERSION == 9, collision.VERSION)
 check("SURFACE_QUANTILE 0.95", collision.SURFACE_QUANTILE == 0.95)
 caps, skipped = fit(1.0)
 check("one capsule (J1), J2 skipped", len(caps) == 1 and len(skipped) == 1, (caps, skipped))

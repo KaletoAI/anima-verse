@@ -53,7 +53,8 @@ Expected, derived by hand:
     sqrt(0.1² + 0.02²) = 0.101980 > 0.086). Without the opening metric → no channel, skipped "Rig pkgx_chain reports no
     opening …"; with status "failed" → skipped "Rig pkgx_chain is not built on this model" (never the declared offset).
     The opening is part of channels_sig (another centre → another sig).
-[4] Override {offset_mm [0, 10, −5], radius_scale 1.5, depth_scale 0.5, cone_deg 20} (through the profile's
+[4] Override {offset_mm [0, 10, −5], radius_scale 1.5, depth_scale 0.5, cone_deg 20} (tilt_deg absent → 0, written
+    back as 0.0 — A193) (through the profile's
     model3d_opts.collision_channels): a_pos = (0, 0.90 + 0.010, 0.05 − 0.005) = (0, 0.91, 0.045); depth 0.12·0.5 =
     0.06 → b_pos (0, 0.97, 0.045); r 0.02·1.5 = 0.03; cone 20; applied = the override. The override is in the sig.
 [5] Review Focus 2: the base record (ensure_path on base00000001) carries channels [pkgx:chan]. The outfit sidecar
@@ -232,7 +233,8 @@ def main() -> int:
     near_vec("a_pos", rec["a_pos"], [0, 0.91, 0.045])
     near_vec("b_pos", rec["b_pos"], [0, 0.97, 0.045])
     check("r / cone / applied", (rec["r"], rec["cone_deg"], rec["applied"]),
-          (0.03, 20.0, {"offset_mm": [0.0, 10.0, -5.0], "radius_scale": 1.5, "depth_scale": 0.5, "cone_deg": 20.0}))
+          (0.03, 20.0, {"offset_mm": [0.0, 10.0, -5.0], "radius_scale": 1.5, "depth_scale": 0.5, "cone_deg": 20.0,
+                                                    "tilt_deg": 0.0}))
 
     # Characters on disk.
     fits = []
@@ -290,7 +292,7 @@ def main() -> int:
     record_before = json.loads(sidecar_before)["collision"]
     answer = routes._set_character_collision_channels_sync("demo2", {"channels": {"pkgx:chan": OVERRIDE}})
     stored = {"pkgx:chan": {"offset_mm": [0.0, 10.0, -5.0], "radius_scale": 1.5, "depth_scale": 0.5,
-                            "cone_deg": 20.0}}
+                            "cone_deg": 20.0, "tilt_deg": 0.0}}
     check("route answer", answer, {"channels": stored, "due": True})
     check("profile holds the override", get_character_profile("demo2")["model3d_opts"]["collision_channels"], stored)
     n = len(fits)

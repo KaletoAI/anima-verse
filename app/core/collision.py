@@ -7,7 +7,7 @@ once per model and applied by both renderers every frame (``@anima/scene-render`
 
 PAYLOAD (sidecar key ``collision``, delivered next to ``extension_rig``)::
 
-    {"version": 8,
+    {"version": 9,
      "capsules": [{"id": "left_thigh", "a": "mixamorig:LeftUpLeg", "b": "mixamorig:LeftLeg",
                    "r": 0.1, "region": "leg"},
                   {"id": "head", "a": "mixamorig:Head", "b": "mixamorig:Head",
@@ -103,6 +103,13 @@ contact pushes with. Only the opening of a channel (``channelOpening.ts``) reads
 part's actual thickness, so a part whose surface lies beyond its p75 core no longer pokes through the opened wall
 (measured on a thick attached part: p75 27–31 mm, p95 28–36 mm per link). Table capsules have no ``r_surface``.
 
+MOUTH (version 9, Ruling A193; ``mouth_landmark.py``). ``mouth`` = ``{a, a_pos, b_pos}``: the mouth opening
+measured on the body's face outline (``a_pos``, bind space) and a point toward the throat (``b_pos``, the Neck
+joint's direction), both fixed to the head joint ``a``. The renderers' mouth channel takes its opening and axis from
+it; without it (``mouth_skipped`` gives the reason) they keep the head-bone formula. Version 9 also re-reads every
+``from_rig`` channel's axis in the pelvis frame (``collision_channels.pelvis_frame``) and adds the ``tilt_deg``
+override.
+
 CHANNELS (version 7; ``collision_channels.py``). A package may declare ``channel`` regions on a body slot
 (``extension_rig.region_declarations_for``): an inside capsule another figure's accepted chain may slide into instead
 of being pushed out. Each applicable, exposed channel is resolved into this record's bind space (``channels``):
@@ -136,7 +143,7 @@ from app.core.log import get_logger
 
 logger = get_logger("collision")
 
-VERSION = 8
+VERSION = 9
 #: The fixed table's regions, then the extension regions (``EXTENSION_CAPSULES``), then the partner-only table
 #: region (version 6).
 REGIONS = ("leg", "arm", "torso", "head", "shoulder_hair", "chest", "chest_hair", "attached_part", "appendage",
@@ -536,7 +543,10 @@ def fit_capsules(rigged_glb: bytes, *, scales: Optional[Dict[str, Any]] = None,
         _fit_extension_capsules(extension, index_of=index_of, names=names, positions=positions,
                                 body_positions=figure_positions, dominant=figure_dominant, unit=unit,
                                 scales=scales, capsules=capsules, skipped=skipped)
-    return {"version": VERSION, "capsules": capsules, "skipped": skipped, "scales": scales}
+    from app.core.mouth_landmark import locate_mouth
+    mouth = locate_mouth(names, index_of, positions, body.positions, unit)
+    located = {"mouth": mouth} if isinstance(mouth, dict) else {"mouth_skipped": mouth}
+    return {"version": VERSION, "capsules": capsules, "skipped": skipped, "scales": scales, **located}
 
 
 def _fit_outer(points: np.ndarray, a: np.ndarray, b: np.ndarray, toe: np.ndarray, span: Tuple[float, float], *,

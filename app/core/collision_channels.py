@@ -9,11 +9,14 @@ renderers read (``collision.py`` "CHANNELS (version 7)"), with
 
 - the PLACEMENT: ``declared`` = owning joint + ``offset`` along the frame, axis = ``axis`` in the frame; ``rig`` =
   the ``opening`` the region's ``from_rig`` op reports in its build metrics (``extension_rig.metrics[rig].opening``,
-  bind space). A ``from_rig`` region whose rig reports no opening (not built on this model, an older build, or no
+  bind space) gives the opening CENTRE, and the axis is the declared ``axis`` read in the PELVIS frame
+  (``pelvis_frame``: the pelvis' own up Hips → Spine; Ruling A193 — the reported surface normal is not anatomical and
+  measured 10° forward to 67° sideways on six bodies). A ``from_rig`` region whose rig reports no opening (not built on this model, an older build, or no
   pocket left after levelling) gets NO channel — the reason is listed in ``channels_skipped`` (the panel shows it);
   it never falls back to the declared offset;
 - the per-character OVERRIDE (``model3d_opts.collision_channels[<channel id>]``, ``validate_overrides``): an offset in
-  mm along the frame axes added to the opening, a radius scale, a depth scale and the funnel half-angle;
+  mm along the frame axes added to the opening, a radius scale, a depth scale, the funnel half-angle and the axis
+  tilt ``tilt_deg`` (turned about the frame's side axis, + = toward the back, ±45°; Ruling A193);
 - EXPOSURE: an ``exposed_only`` channel exists only on a model whose worn pieces leave its slot uncovered
   (``extension_rig.hides_exposed_detail`` over the model's ``pieces`` — the item's ``exposed_detail`` switch shows it
   through); a base model is exposed. Exposure is identity: it is applied whenever a record is written (fit, relabel,
@@ -41,11 +44,16 @@ logger = get_logger("collision")
 
 #: The per-character override (``validate_overrides``): offset per frame axis in mm, the two scales, the cone.
 OVERRIDE_KEYS = ("offset_mm", "radius_scale", "depth_scale", "cone_deg")
+#: The optional override key (Ruling A193): the axis turned about the frame's side axis, degrees, + = toward the back.
+TILT_KEY = "tilt_deg"
+TILT_DEG_MAX = 45.0
 OFFSET_MM_MAX = 50.0
 OVERRIDE_SCALE_MIN, OVERRIDE_SCALE_MAX = 0.5, 2.0
 CONE_DEG_MAX = 60.0
 #: The joints of the body frame (``body_frame``), base names.
 FRAME_JOINTS = ("Hips", "Head", "LeftArm", "RightArm", "LeftFoot", "LeftToeBase")
+#: The joints of the pelvis frame (``pelvis_frame``): Hips, then the first spine joint the rig has.
+PELVIS_JOINTS = ("Hips", "Spine", "Spine1")
 #: ``channels_skipped`` reason of an ``exposed_only`` channel a worn piece covers.
 COVERED = "Covered by the worn outfit"
 #: ``declarations_info``'s reason of every channel while the character has no base model to place it on.
@@ -79,6 +87,33 @@ def body_frame(joints: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
     return {"side": side, "up": up, "front": front}
 
 
+def pelvis_frame(joints: Dict[str, np.ndarray], frame: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+    """The PELVIS frame a ``from_rig`` channel's axis is read in (Ruling A193): ``side`` of the body frame,
+    ``up`` = unit(Spine − Hips without its component along ``side``; Spine1 on a rig without Spine) — the
+    pelvis' own tilt, not the trunk's — and ``front`` = side × up, on the body frame's front side. ValueError
+    without Hips or a spine joint."""
+    from app.core.rig_contract import norm_bone_name
+    by_key = {norm_bone_name(str(name)): np.asarray(value, np.float64) for name, value in joints.items()}
+    spine = next((by_key[k] for k in (norm_bone_name(n) for n in PELVIS_JOINTS[1:]) if k in by_key), None)
+    if norm_bone_name("Hips") not in by_key or spine is None:
+        raise ValueError("joint Hips or Spine missing")
+    side = frame["side"]
+    rise = spine - by_key[norm_bone_name("Hips")]
+    up = _unit(rise - (rise @ side) * side, "pelvis axis (Hips → Spine)")
+    front = np.cross(side, up)
+    if float(front @ frame["front"]) < 0:
+        front = -front
+    return {"side": side, "up": up, "front": front}
+
+
+def tilted(axis: np.ndarray, side: np.ndarray, tilt_deg: float) -> np.ndarray:
+    """``axis`` turned about ``side`` by ``tilt_deg`` toward the back (−front, with front = side × up): Rodrigues'
+    rotation by −tilt about ``side``."""
+    t = -math.radians(tilt_deg)
+    k = side / np.linalg.norm(side)
+    return axis * math.cos(t) + np.cross(k, axis) * math.sin(t) + k * float(k @ axis) * (1.0 - math.cos(t))
+
+
 def _number(value: Any, what: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         raise ValueError(f"{what} must be a number")
@@ -87,8 +122,9 @@ def _number(value: Any, what: str) -> float:
 
 def validate_overrides(raw: Any) -> Dict[str, Dict[str, Any]]:
     """The per-character channel overrides, ``{<channel id>: {offset_mm: [side, up, front], radius_scale,
-    depth_scale, cone_deg}}`` — every key required; offsets within ±50 mm, the scales within [0.5, 2], ``cone_deg``
-    within (0, 60]. ValueError otherwise. An id no declaration names any more is kept (the declaration may come
+    depth_scale, cone_deg, tilt_deg}}`` — every key but ``tilt_deg`` required (absent = 0, always written back);
+    offsets within ±50 mm, the scales within [0.5, 2], ``cone_deg`` within (0, 60], ``tilt_deg`` within ±45.
+    ValueError otherwise. An id no declaration names any more is kept (the declaration may come
     back). None = no overrides."""
     if raw is None:
         return {}
@@ -98,8 +134,9 @@ def validate_overrides(raw: Any) -> Dict[str, Dict[str, Any]]:
     for channel_id, value in raw.items():
         if not isinstance(channel_id, str) or not channel_id:
             raise ValueError("a channel id must be a non-empty string")
-        if not isinstance(value, dict) or set(value) != set(OVERRIDE_KEYS):
-            raise ValueError(f"the override of '{channel_id}' needs exactly {', '.join(OVERRIDE_KEYS)}")
+        if not isinstance(value, dict) or set(value) - {TILT_KEY} != set(OVERRIDE_KEYS):
+            raise ValueError(f"the override of '{channel_id}' needs exactly {', '.join(OVERRIDE_KEYS)} "
+                             f"(and optionally {TILT_KEY})")
         offset = value["offset_mm"]
         if not isinstance(offset, (list, tuple)) or len(offset) != 3:
             raise ValueError(f"offset_mm of '{channel_id}' must be [side, up, front]")
@@ -116,7 +153,11 @@ def validate_overrides(raw: Any) -> Dict[str, Dict[str, Any]]:
         cone = _number(value["cone_deg"], f"cone_deg of '{channel_id}'")
         if not 0 < cone <= CONE_DEG_MAX:
             raise ValueError(f"cone_deg of '{channel_id}' must be within (0, {CONE_DEG_MAX:g}]")
-        out[channel_id] = {"offset_mm": [round(v, 2) for v in offset], **scales, "cone_deg": round(cone, 2)}
+        tilt = _number(value.get(TILT_KEY, 0.0), f"{TILT_KEY} of '{channel_id}'")
+        if abs(tilt) > TILT_DEG_MAX:
+            raise ValueError(f"{TILT_KEY} of '{channel_id}' must be within ±{TILT_DEG_MAX:g}°")
+        out[channel_id] = {"offset_mm": [round(v, 2) for v in offset], **scales, "cone_deg": round(cone, 2),
+                           TILT_KEY: round(tilt, 2)}
     return out
 
 
@@ -248,11 +289,19 @@ def resolve_channels(rigged_glb: bytes, capsules: List[Dict[str, Any]], wanted: 
     names, index_of, positions = bind_joints(rigged_glb)
     frame_error = ""
     frame: Optional[Dict[str, np.ndarray]] = None
+    pelvis: Optional[Dict[str, np.ndarray]] = None
+    pelvis_error = ""
     try:
         frame = body_frame({name: positions[index_of[norm_bone_name(name)]] for name in FRAME_JOINTS
                             if norm_bone_name(name) in index_of})
     except ValueError as exc:
         frame_error = f"No body frame: {exc}"
+    if frame is not None:
+        try:
+            pelvis = pelvis_frame({name: positions[index_of[norm_bone_name(name)]] for name in PELVIS_JOINTS
+                                   if norm_bone_name(name) in index_of}, frame)
+        except ValueError as exc:
+            pelvis_error = f"No pelvis frame: {exc}"
     segments = [(capsule, capsule_segment(capsule, index_of, positions)) for capsule in capsules or []]
     channels: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []
@@ -275,8 +324,14 @@ def resolve_channels(rigged_glb: bytes, capsules: List[Dict[str, Any]], wanted: 
             if not opening:
                 skipped.append({"id": channel_id, "reason": str(entry.get("opening_reason") or "No opening")})
                 continue
+            if pelvis is None:
+                skipped.append({"id": channel_id, "reason": pelvis_error})
+                continue
+            # The opening's CENTRE comes from the build; its surface normal does not set the axis (Ruling A193:
+            # measured 10° forward to 67° sideways on six bodies). The axis is the declared one in the pelvis frame.
             a_pos = np.asarray(opening["centre"], np.float64)
-            axis = _unit(np.asarray(opening["axis"], np.float64), "opening axis")
+            axis = _unit(np.asarray(entry["axis"], np.float64) @ np.stack([pelvis["side"], pelvis["up"],
+                                                                            pelvis["front"]]), "channel axis")
             placement = "rig"
         else:
             a_pos = positions[index] + np.asarray(entry["offset"], np.float64) @ basis
@@ -289,6 +344,7 @@ def resolve_channels(rigged_glb: bytes, capsules: List[Dict[str, Any]], wanted: 
             depth *= float(override["depth_scale"])
             radius *= float(override["radius_scale"])
             cone = float(override["cone_deg"])
+            axis = tilted(axis, frame["side"], float(override.get(TILT_KEY, 0.0)))
         b_pos = a_pos + axis * depth
         suppress = []
         for capsule, segment in segments:
