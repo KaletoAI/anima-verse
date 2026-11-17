@@ -178,6 +178,11 @@ _SEED_DIR_RE = re.compile(r"s([1-9][0-9]{0,8})")
 #: The only method of footwear (no method choice for ``feet``).
 SHOE = "shoe"
 GARMENT_VIEWS: Tuple[str, ...] = ("front", "back")
+#: A185: the side views a shell piece with "Side views for the shell" adds (``garments.piece_views``) — image files
+#: only; never part of a fingerprint (``base_images`` hashes ``GARMENT_VIEWS``).
+SIDE_VIEWS: Tuple[str, ...] = ("left", "right")
+#: Every view an image file may name.
+IMAGE_VIEWS: Tuple[str, ...] = GARMENT_VIEWS + SIDE_VIEWS
 #: Every step of any kind that stores images (the rest store meshes); the
 #: order of one kind is ``image_steps``.
 IMAGE_STEPS: Tuple[str, ...] = ("worn", "ghost", "cutout")
@@ -309,7 +314,7 @@ def garment_path(character_name: str, item_id: str, fsig: str, part: str, *,
     if part == "image":
         if step not in IMAGE_STEPS:
             raise ValueError(f"no image step {step!r}")
-        if view not in GARMENT_VIEWS:
+        if view not in IMAGE_VIEWS:
             raise ValueError(f"no garment view {view!r}")
         tail = f".try{int(attempt)}.png" if attempt else ".png"
         path = root / PART_DIRS[part] / f"{iid}_{fsig}_{step}_{view}{tail}"

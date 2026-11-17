@@ -322,10 +322,10 @@ def compose(worn_rgb, alpha, background=None) -> np.ndarray:
 
 def clean_setting(raw: Any) -> Dict[str, str]:
     """``{view: choice}`` with the known views and a choice other than Auto (Auto = no key)."""
-    from app.core.garment_store import GARMENT_VIEWS
+    from app.core.garment_store import IMAGE_VIEWS
     if not isinstance(raw, dict):
         return {}
-    return {v: str(raw[v]) for v in GARMENT_VIEWS if str(raw.get(v) or "") in (GENERATED, WORN)}
+    return {v: str(raw[v]) for v in IMAGE_VIEWS if str(raw.get(v) or "") in (GENERATED, WORN)}
 
 
 def choice_of(item: Optional[Dict[str, Any]], view: str) -> str:
@@ -343,11 +343,12 @@ def set_choice(character_name: str, item_id: str, view: str, choice: str) -> Dic
     """Store the choice of ``view`` (``auto`` drops the key) on the item in ONE read-modify-write under
     ``keyed_lock("garment_item", character_name)``; runs nothing. The stored setting. ValueError for a bad
     view or choice or an item that is no outfit piece."""
-    from app.core.garment_store import GARMENT_VIEWS
+    from app.core.garment_store import IMAGE_VIEWS
     from app.core.keyed_lock import keyed_lock
     from app.models import inventory
-    if view not in GARMENT_VIEWS:
-        raise ValueError(f"view must be one of {', '.join(GARMENT_VIEWS)}")
+    if view not in IMAGE_VIEWS:
+        # A185: left / right are the side views of a shell piece with "Side views for the shell"
+        raise ValueError(f"view must be one of {', '.join(IMAGE_VIEWS)}")
     if choice not in CHOICES:
         raise ValueError(f"choice must be one of {', '.join(CHOICES)}")
     with keyed_lock("garment_item", character_name):

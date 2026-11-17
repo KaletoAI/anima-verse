@@ -535,17 +535,21 @@ def skipped_view(character_name: str, item_id: str, fsig: str, step: str, view: 
     return EMPTY_BACK if empty_back(character_name, item_id, fsig) else None
 
 
+#: The views of a drafted step that are drafted from its accepted front (A185: the side views of a shell piece too).
+DRAFTED_VIEWS: Tuple[str, ...] = ("back", "left", "right")
+
+
 def _drafted(kind, step: str) -> bool:
     """Whether the kind's ``step`` drafts its back from its front."""
     return (getattr(kind, "EDIT_STEPS", {}).get(step) or {}).get("back") == "draft"
 
 
-def draft_path(character_name: str, item_id: str, fsig: str, step: str) -> Path:
-    """The draft of a drafted back: ``images/{item}_{fsig}_{step}draft_back.png``
+def draft_path(character_name: str, item_id: str, fsig: str, step: str, view: str = "back") -> Path:
+    """The draft of a drafted view: ``images/{item}_{fsig}_{step}draft_{view}.png``
     (a stored garment name, swept with its fsig group)."""
     from app.core.garment_store import garment_path
-    final = garment_path(character_name, item_id, fsig, "image", step=step, view="back")
-    return final.with_name(f"{item_id}_{fsig}_{step}draft_back.png")
+    final = garment_path(character_name, item_id, fsig, "image", step=step, view=view)
+    return final.with_name(f"{item_id}_{fsig}_{step}draft_{view}.png")
 
 
 def accepted_record(path: Path) -> Optional[Dict[str, Any]]:
@@ -673,7 +677,8 @@ def _publish(character_name: str, item_id: str, fsig: str, step: str, view: str,
         "gates": {_ORDINALS[n]: r for n, r in enumerate(records)}})
     _drop_later(character_name, item_id, fsig, step, view)
     if view == "front" and _drafted(kind, step):
-        _drop_later(character_name, item_id, fsig, step, "back", inclusive=True)
+        for drafted in DRAFTED_VIEWS:
+            _drop_later(character_name, item_id, fsig, step, drafted, inclusive=True)
     return final
 
 
@@ -722,7 +727,8 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
 
     final = garment_path(character_name, item_id, fsig, "image", step=step, view=view)
     kind = _kind_module(item_id)
-    drafted = view == "back" and _drafted(kind, step)
+    # A185: the side views of a shell piece are drafted from the front like the back (turn, then composite)
+    drafted = view in DRAFTED_VIEWS and _drafted(kind, step)
     copied = isinstance(read_record(final.with_suffix(".json")).get("copied_from"), dict)
     if not force and _accepted(final) and (
             not (drafted or copied) or _follows_front(character_name, item_id, fsig, step, final)):
@@ -749,7 +755,7 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
     if drafted:
         return _drafted_back(character_name, item_id, fsig, step, kind, profile=profile, base=base, force=force,
                              refs_dir=refs_dir, final=final, pair_check=pair_check,
-                             before_composite=before_composite)
+                             before_composite=before_composite, view=view)
     source_step = kind.EDIT_STEPS[step]["source"]
     if source_step == "base":
         source = base
@@ -1563,7 +1569,7 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
                   profile: Dict[str, Any], base: Path, refs_dir: Path, final: Path,
                   pair_check: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
                   stored_only: bool = False, force: bool = False,
-                  before_composite: Optional[Callable[[], None]] = None) -> Path:
+                  before_composite: Optional[Callable[[], None]] = None, view: str = "back") -> Path:
     """The back of a drafted step (module docstring): up to ``ATTEMPTS``
     DRAFTs from the accepted front, each COMPOSITED onto the base back on the
     CPU (``view_composite``, rule "piece") and — when the composite passes
@@ -1580,7 +1586,11 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
     draft rendered (attempt 2). ``stored_only`` (the boot re-make of a model
     fit, ``remake_model_fit_back``): never renders — ``StoredDraftUnusable``
     instead. ``before_composite`` (Ruling A20) runs before every composite
-    and refuses (raises) when the base view changed meanwhile."""
+    and refuses (raises) when the base view changed meanwhile.
+
+    ``view`` (A185): ``back``, or a side view (``left`` / ``right``) of a shell piece with "Side views for the
+    shell" — drafted with the base draft's side sentence and composited onto the base side view the same way; the
+    back-only check ``kind.back_reasons`` (a front opening on the back) is not applied to a side."""
     from app.core import base_body, view_composite
     from app.core.base_body import file_sha256
     from app.core.garment_store import garment_path, read_record, write_record
@@ -1591,21 +1601,22 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
     if front_gate is None:
         raise base_body.MissingInput(f"The {step} front image is missing — the back is drafted from it")
     front_sha = file_sha256(front)
-    meta = {"item_id": item_id, "fsig": fsig, "step": step, "view": "back"}
+    meta = {"item_id": item_id, "fsig": fsig, "step": step, "view": view}
     with neutral_view_reference(base, refs_dir) as flat_base:
         base_size = _image_size(flat_base)
         base_rgb = _rgb(flat_base)
         base_mask = _mask(flat_base, base_size)
 
     def gate_composite(path: Path, support) -> Dict[str, Any]:
-        record = kind.gate(step, "back", base_rgb=base_rgb, base_mask=base_mask, source_rgb=None, source_mask=None,
+        record = kind.gate(step, view, base_rgb=base_rgb, base_mask=base_mask, source_rgb=None, source_mask=None,
                            edit_rgb=_rgb(path, base_size), edit_mask=_mask(path, base_size),
                            item_id=item_id, front_gate=front_gate, composite_support=support)
-        return _with_pair(record, pair_check, list(kind.back_reasons(front_gate, record)))
+        extra = list(kind.back_reasons(front_gate, record)) if view == "back" else []
+        return _with_pair(record, pair_check, extra)
 
     def empty_record() -> Dict[str, Any]:
         # The base back unchanged: nothing to gate (module docstring).
-        return {"view": "back", "ok": True, "reasons": [], "empty": True,
+        return {"view": view, "ok": True, "reasons": [], "empty": True,
                 "gate_version": (getattr(kind, "GATE_VERSIONS", None) or {}).get(step)}
 
     def support_of(path: Path, sidecar: Dict[str, Any]):
@@ -1613,7 +1624,7 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
         stored = view_composite.read_support(support_path(path), base_size)
         if stored is not None:
             return stored
-        draft = draft_path(character_name, item_id, fsig, step)
+        draft = draft_path(character_name, item_id, fsig, step, view)
         if not sidecar.get("draft_sha256") or not draft.is_file() or file_sha256(draft) != sidecar["draft_sha256"]:
             return None
         view_composite.write_support(view_composite.support_mask(base, draft, rule="piece"), support_path(path))
@@ -1636,7 +1647,7 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
         """The prompt a new draft is made with now (None: the piece has no text to draft it)."""
         if not current_prompt:
             try:
-                current_prompt.append(kind.draft_prompt(character_name, step, profile=profile, item_id=item_id)[0])
+                current_prompt.append(kind.draft_prompt(character_name, step, profile=profile, item_id=item_id, view=view)[0])
             except ValueError:
                 current_prompt.append(None)
         return current_prompt[0]
@@ -1649,7 +1660,7 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
         # Only a stored COMPOSITE that passed its checks is re-gated — never a
         # model fit of before Task 11g, never a refused composite, never one
         # whose draft was made with another prompt (Ruling A29).
-        hit = _regate_stored(character_name, item_id, fsig, step, "back", kind, final=final,
+        hit = _regate_stored(character_name, item_id, fsig, step, view, kind, final=final,
                              regate=lambda path, _old: regate_attempt(path),
                              keep=lambda sidecar: (sidecar.get("front_sha256") == front_sha and composite_ok(sidecar)
                                                    and made_with_current_prompt(sidecar.get("draft_prompt"))),
@@ -1663,17 +1674,17 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
     # ``raise_load``: the draft is a garment step — load is retry_later,
     # never a refusal record (the outfit's own dressed views keep their
     # None-on-failure contract).
-    common = {**base_body._dress_common("back", pieces={}, items=[], profile=mesh_profile, size=_tpose_size()),
+    common = {**base_body._dress_common(view, pieces={}, items=[], profile=mesh_profile, size=_tpose_size()),
               "raise_load": True}
-    draft_stem = draft_path(character_name, item_id, fsig, step).with_suffix("")
-    stored = draft_path(character_name, item_id, fsig, step)
+    draft_stem = draft_path(character_name, item_id, fsig, step, view).with_suffix("")
+    stored = draft_path(character_name, item_id, fsig, step, view)
     # ``force`` (Regenerate): a new draft, never the stored one again. Ruling A29: a stored draft made with
     # another prompt is not composited again — except by the boot re-make (``stored_only``) of an ACCEPTED back.
     stored_record = read_record(stored.with_suffix(".json")) if stored.is_file() else {}
     reuse = (not force and stored.is_file() and stored_record.get("front_sha256") == front_sha
              and (stored_only or made_with_current_prompt(stored_record.get("prompt"))))
     if stored_only and not reuse:
-        raise StoredDraftUnusable(f"The {step} back has no stored draft made from the current front")
+        raise StoredDraftUnusable(f"The {step} {view} has no stored draft made from the current front")
     records: List[Dict[str, Any]] = []
     for attempt in range(1, ATTEMPTS + 1):
         if attempt == 1 and reuse:
@@ -1685,18 +1696,18 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
         else:
             # Every new attempt drafts into the one draft file: the stored
             # draft is the one the last attempt was composited from.
-            prompt = kind.draft_prompt(character_name, step, profile=profile, item_id=item_id)
+            prompt = kind.draft_prompt(character_name, step, profile=profile, item_id=item_id, view=view)
             drafted_with = prompt[0]
             with _image_routing.retry_attempt(attempt):
                 draft = base_body.render_draft(
-                    character_name, "back", stem=draft_stem, front=front, refs_dir=refs_dir, prompt=prompt,
+                    character_name, view, stem=draft_stem, front=front, refs_dir=refs_dir, prompt=prompt,
                     profile=profile, common=common,
                     sidecar_extra={"garment": {**meta, "attempt": attempt, "stage": "draft"},
                                    "front_sha256": front_sha})
         if draft is None:
-            raise RuntimeError(f"The {step} back draft rendered nothing")
+            raise RuntimeError(f"The {step} {view} draft rendered nothing")
         draft = Path(draft)
-        target = garment_path(character_name, item_id, fsig, "image", step=step, view="back", attempt=attempt)
+        target = garment_path(character_name, item_id, fsig, "image", step=step, view=view, attempt=attempt)
         if before_composite is not None:
             before_composite()   # Ruling A20: never a composite onto a base view rendered again meanwhile
         composite = view_composite.compose(base, draft, target, rule="piece", background=VIEW_REFERENCE_BACKGROUND,
@@ -1710,19 +1721,19 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
             record = gate_composite(target, view_composite.read_support(support_path(target), base_size))
         else:
             # Refused without a gate: the numbers go into the refusal text.
-            record = {"view": "back", "ok": False,
+            record = {"view": view, "ok": False,
                       "reasons": [f"composite refused — {view_composite.summary(composite)}"]}
         record.update(attempt=attempt, composite=view_composite.summary(composite))
         records.append(record)
         write_record(target.with_suffix(".json"), {
             "garment": {**meta, "attempt": attempt, "stage": "composite"}, **follow,
             "base_image_sha256": file_sha256(base), "created_at": utc_now_iso(), "gate": record})
-        logger.info("Garment %s %s back (draft + composite) attempt %d: %s %s", character_name, step, attempt,
+        logger.info("Garment %s %s %s (draft + composite) attempt %d: %s %s", character_name, step, view, attempt,
                     "accepted" if record["ok"] else "refused", record.get("reasons") or "")
         if record["ok"]:
-            return _publish(character_name, item_id, fsig, step, "back", kind, target, final, records,
+            return _publish(character_name, item_id, fsig, step, view, kind, target, final, records,
                             attempt, follow)
-    raise GateRefused(step, "back", records)
+    raise GateRefused(step, view, records)
 
 
 def cut_out(character_name: str, item_id: str, fsig: str, view: str, *, force: bool = False) -> Path:

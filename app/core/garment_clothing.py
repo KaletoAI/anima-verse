@@ -99,8 +99,14 @@ GHOST_TEXTS = {"collar": GHOST, "waistband": GHOST_WAISTBAND, "plain": GHOST_PLA
 #: The slots whose pieces have a collar, sleeves and a hem by default (tops, dresses, jackets, coats, shirts). A bra
 #: slotted ``top`` or gloves slotted ``outer`` say so with the piece's "Piece-only text" choice (``ghost_text``).
 COLLAR_SLOTS = frozenset({"top", "outer"})
-#: After the user's text on every BACK view.
-GHOST_SIDE = {"back": "Seen from behind; the back view stays a back view."}
+#: After the user's text on every BACK view — and (A185) on the side views of a shell piece with "Side views for the
+#: shell", each naming the way the figure faces as the base view of that name does ("left" = profile facing the left
+#: edge of the frame, ``base_body.DRAFT_PROMPTS``).
+GHOST_SIDE = {"back": "Seen from behind; the back view stays a back view.",
+              "left": "Seen from the side, facing left; the side view stays a side view.",
+              "right": "Seen from the side, facing right; the side view stays a side view."}
+#: The views a clothing edit knows (A185: the side views of a shell piece).
+EDIT_VIEWS = ("front", "back", "left", "right")
 #: After the user's text (and the side) on both views of a waistband piece.
 GHOST_STANCE = "The legs stay apart at exactly the same angle as in the image."
 #: The noun of a piece without a name (``garment_noun``).
@@ -262,10 +268,10 @@ def edit_prompt(character_name: str, step: str, view: str, *,
     fragment."""
     if step not in EDIT_STEPS:
         raise ValueError(f"no clothing edit step {step!r}")
-    if view not in ("front", "back"):
+    if view not in EDIT_VIEWS:
         raise ValueError(f"no clothing edit view {view!r}")
-    if step == "worn" and view == "back":
-        raise ValueError("the worn back is drafted from the worn front — draft_prompt, then the composite")
+    if step == "worn" and view != "front":
+        raise ValueError(f"the worn {view} is drafted from the worn front — draft_prompt, then the composite")
     item = _item_of(item_id)
     prof = _profile_of(character_name, profile)
     text = _fragment_of(item, state=state_of(item, prof))
@@ -317,7 +323,7 @@ def ghost_text_info(item: Dict[str, Any]) -> Dict[str, Any]:
     choice = stored if stored in GHOST_TEXTS else GHOST_TEXT_AUTO
     auto = ghost_text_class({k: v for k, v in piece.items() if k != "ghost_text"})
     return {"choice": choice, "auto": auto, "effective": ghost_text_class(piece),
-            "texts": {cls: {view: ghost_prompt({"ghost_text": cls}, view) for view in ("front", "back")}
+            "texts": {cls: {view: ghost_prompt({"ghost_text": cls}, view) for view in EDIT_VIEWS}
                       for cls in GHOST_TEXTS}}
 
 
@@ -378,7 +384,7 @@ def _back_text_of(item: Dict[str, Any]) -> str:
 
 
 def draft_prompt(character_name: str, step: str, *, profile: Optional[Dict[str, Any]] = None,
-                 item_id: Optional[str] = None) -> Tuple[str, str]:
+                 item_id: Optional[str] = None, view: str = "back") -> Tuple[str, str]:
     """``(prompt, negative)`` of the DRAFT of the worn back: the prompt is
     ``base_body.draft_prompt``'s back sentence as it is — the draft only turns
     the accepted worn front around, so it never names the piece (Ruling A29:
@@ -386,14 +392,15 @@ def draft_prompt(character_name: str, step: str, *, profile: Optional[Dict[str, 
     a blouse; the reference shows the piece). Negative: the draft's + the
     worn negative (the garment words the piece's back text,
     ``_back_text_of``, does not name). ValueError for another step, a missing
-    item or no fragment."""
+    item or no fragment. ``view`` (A185): ``back`` or a side view of a shell piece — the base draft's sentence of
+    that view; a side's negative reads the front text (the side shows the front's edges)."""
     from app.core import base_body
     if EDIT_STEPS.get(step, {}).get("back") != "draft":
         raise ValueError(f"the clothing step {step!r} has no drafted back")
     item = _item_of(item_id)
     prof = _profile_of(character_name, profile)
-    text = _back_text_of(item)
-    prompt, negative = base_body.draft_prompt(character_name, "back", profile=prof)
+    text = _back_text_of(item) if view == "back" else _fragment_of(item, state=state_of(item, prof))
+    prompt, negative = base_body.draft_prompt(character_name, view, profile=prof)
     return prompt, ", ".join(p for p in (negative, _worn_negative(text)) if p)
 
 
