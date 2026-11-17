@@ -35,9 +35,10 @@ hairstyle went — the Build is requested (``figure_build.request(name, "outfit_
 automatically" decides; else it stays a pending change). ``delete_estimate`` says before the click what that Build
 costs (``figure_build.plan`` of the profile without the hairstyle — like ``garment_hair.wear_estimate``).
 
-Refused (``HairstyleBusy``, a 409) while a run of the hairstyle works or waits (``artefact_graph.running_keys``,
-``garment_store.run_item_lock``) or a Build of the character runs (``figure_build.build_lock``): nothing is
-deleted then.
+Refused (``HairstyleBusy``, a 409) while a run of the hairstyle works or waits (``artefact_graph.running_state``,
+``garment_store.run_item_lock``), while what is running cannot be read at all (``running_state``'s unknown — its
+``artefact_graph.RUNNING_UNKNOWN`` text is the refusal), or while a Build of the character runs
+(``figure_build.build_lock``): nothing is deleted then.
 """
 from __future__ import annotations
 
@@ -415,7 +416,7 @@ def _remove_shapes(character_name: str, item_id: str, text: str) -> Tuple[List[s
 def delete_hairstyle(character_name: str, item_id: str) -> Dict[str, Any]:
     """Delete the character's hairstyle ``item_id`` with its files (module docstring). ValueError for an invalid
     id or a shared item (400), LookupError for no hairstyle of the character (404), ``HairstyleBusy`` while a run
-    of it or a Build of the character works (409), RuntimeError when the profile or the item cannot be written
+    of it or a Build of the character works, or what runs cannot be read (409), RuntimeError when the profile or the item cannot be written
     (500). Returns ``{item_id, worn, plain, outfit_sets, deleted_files, freed_bytes, assembled, shapes_deleted,
     kept, build_requested}``."""
     from app.core import artefact_graph, figure, figure_build, garment_hair, garment_store
@@ -431,7 +432,11 @@ def delete_hairstyle(character_name: str, item_id: str) -> Dict[str, Any]:
         if not run.acquire(blocking=False):
             raise HairstyleBusy(HAIR_RUNNING)
         try:
-            if item_id in artefact_graph.running_keys(character_name)[1]:
+            _sigs, running_items, unknown = artefact_graph.running_state(character_name)
+            if unknown:
+                # A run of it may be working unseen: delete nothing (review 09#7).
+                raise HairstyleBusy(unknown)
+            if item_id in running_items:
                 raise HairstyleBusy(HAIR_RUNNING)
             with keyed_lock("garment_item", character_name):
                 _checked(character_name, item_id)

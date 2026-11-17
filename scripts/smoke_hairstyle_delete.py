@@ -38,6 +38,10 @@ EXPECTED, BY HAND
     strand records 5, Fits on body shapes 3, Refused attempts 4, Failure records 1 (total 16); item_files 1;
     assembled 1 (sigA's sidecar — the low tier has none); shapes [ob00000001] (hair = H1's text; H2's text differs),
     outfit_sets ["Day"]; estimate None (neither worn nor the plain body's: the figure does not change).
+[1b] What runs cannot be read (``hub_ops.list_ops`` raising, review 09#7): DELETE H1 -> 409 with the detail
+    ``artefact_graph.RUNNING_UNKNOWN`` + "hub operations"; the character and item directories byte-identical,
+    the item still there, no ``figure.delete_stored`` call. ``list_ops`` back -> [2] runs normally.
+    (Fails on 85e4091cd: the old check read the partial set and deleted -> 200.)
 [2] Delete H1 (the unworn one): 200; deleted_files 16, assembled 2 (sigA.glb + sigA.json), outfit_sets ["Day"],
     worn False, plain False, shapes_deleted [ob00000001] (``figure.stored`` says deletable), build_requested False
     — no ``figure_build.request``. After: every H1 path gone, the item ``hair_kai`` gone and its media folder
@@ -208,6 +212,23 @@ def main() -> int:
         check("preview totals", (p.get("total_files"), p.get("item_files"), p.get("assembled")), (16, 1, 1))
         check("preview shapes", [(s["key"], s["deletable"]) for s in p.get("shapes", [])], [("ob00000001", True)])
         check("preview sets / estimate", (p.get("outfit_sets"), p.get("estimate")), (["Day"], None))
+
+        print("[1b] what runs cannot be read")
+        from app.core import artefact_graph, hub_ops
+        real_list_ops = hub_ops.list_ops
+
+        def broken_list_ops(*_a, **_k):
+            raise RuntimeError("hub operations unreadable")
+        hub_ops.list_ops = broken_list_ops
+        before = tree_hashes(char, get_storage_dir() / "items")
+        try:
+            r = client.delete(f"/characters/Kai/hairstyles/{h1}", headers=admin)
+        finally:
+            hub_ops.list_ops = real_list_ops
+        check("refused 409 with the true reason", (r.status_code, (r.json() if r.status_code == 409 else {}).get("detail")),
+              (409, artefact_graph.RUNNING_UNKNOWN + "hub operations"))
+        check("nothing changed", tree_hashes(char, get_storage_dir() / "items") == before, True)
+        check("item still there, no shape delete", (inventory.get_item(h1) is not None, deleted_shapes), (True, []))
 
         print("[2] delete the unworn H1")
         kept_files = h2_paths + other_paths + [asm / "sigB.glb", asm / "sigB.json", asm / "sigC.glb",
