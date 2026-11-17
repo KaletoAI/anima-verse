@@ -38,6 +38,8 @@ export interface AlignmentDraft {
   heightCm: ClipHeightOffsetsCm
   /** Ruling A129: a pair's partner B turned about its hips, renderer-only [tilt, roll] degrees (`partnerTurnFix`). */
   partnerTurnDeg?: readonly [number, number]
+  /** Ruling A165: partner B's renderer-only yaw about its own vertical axis, degrees (`partnerTurnFix`'s `yawDeg`). */
+  partnerYawDeg?: number
   /** Ruling A139: the clip's contact relations (part place → anchor place, target); empty/absent = auto-detect (A126). */
   contactRelations?: readonly ContactRelation[]
   /** Ruling A145: how far the attached part may bend toward its target (absent = `BEND_LIMITS_DEFAULT`). */
@@ -63,7 +65,7 @@ export interface SavedCalibration {
 export function isEmptyDraft(d: AlignmentDraft): boolean {
   return !d.yawDeg && !d.tiltDeg && !d.rollDeg && !d.shiftCm[0] && !d.shiftCm[1]
     && !Object.values(d.roleShiftM).some((v) => v.some((x) => x))
-    && !Object.keys(d.heightCm).length && !(d.partnerTurnDeg && (d.partnerTurnDeg[0] || d.partnerTurnDeg[1]))
+    && !Object.keys(d.heightCm).length && !(d.partnerTurnDeg && (d.partnerTurnDeg[0] || d.partnerTurnDeg[1])) && !d.partnerYawDeg
 }
 
 const RAD = Math.PI / 180

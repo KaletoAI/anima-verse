@@ -285,11 +285,24 @@ export function turnAxes(frame: readonly number[]): [Vec3, Vec3] {
 export function bendFrameOf(frame: readonly number[]): BendFrame {
   return { side: [frame[0], frame[3], frame[6]], up: [frame[1], frame[4], frame[7]] }
 }
-/** Partner B's stored/drafted turn (Ruling A129) as a fix: tilt about the side axis, roll about the forward axis. */
-export function partnerTurnFix(tiltDeg: number, rollDeg: number, frame: readonly number[]): PairFix {
+/** Partner B's stored/drafted turn (Ruling A129) as a fix: tilt about the side axis, roll about the forward axis.
+ *  Ruling A165: `yawDeg` turns B about its OWN vertical axis — the root frame's up through the fix pivot (B's bind
+ *  hips) — FIRST; the tilt/roll (plus `extra`, a solve's trial or fitted fix, added to it as before) follows. Yaw 0
+ *  is the A129 fix unchanged. */
+export function partnerTurnFix(tiltDeg: number, rollDeg: number, frame: readonly number[], yawDeg = 0,
+  extra: PairFix = NO_FIX): PairFix {
   const [side, fwd] = turnAxes(frame)
   const a = tiltDeg * Math.PI / 180, b = rollDeg * Math.PI / 180
-  return { shift: [0, 0, 0], turn: [side[0] * a + fwd[0] * b, side[1] * a + fwd[1] * b, side[2] * a + fwd[2] * b] }
+  const tr: PairFix = { shift: [extra.shift[0], extra.shift[1], extra.shift[2]],
+    turn: [side[0] * a + fwd[0] * b + extra.turn[0], side[1] * a + fwd[1] * b + extra.turn[1],
+      side[2] * a + fwd[2] * b + extra.turn[2]] }
+  return yawDeg ? composeFix(partnerYawFix(yawDeg, frame), tr) : tr
+}
+/** Ruling A165: partner B's yaw about its own vertical axis (the root frame's up, +Y) as a fix — a positive yaw turns
+ *  B's forward (+Z) towards its left (+X), like the clip's own turn dial. */
+export function partnerYawFix(yawDeg: number, frame: readonly number[]): PairFix {
+  const c = yawDeg * Math.PI / 180
+  return { shift: [0, 0, 0], turn: [frame[1] * c, frame[4] * c, frame[7] * c] }
 }
 /** THE PIVOT both renderers turn the entering figure about: its root (before any fix) plus its hips bind turned by
  *  the root frame — the bind hips point, the same at solve and at apply. */

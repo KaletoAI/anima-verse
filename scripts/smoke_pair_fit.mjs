@@ -20,6 +20,11 @@
  *   Δ = (−0.01, 0.02, 0.05) (the angle term is constant there: the shaft lies on the axis direction).
  *   [5] solvePairFix(no axes) = (−0.01, 0.02, 0.05) ± 1e-6.
  * [6] partnerTurnFix(10, −5, identity frame) = turn (10°, 0, −5°) in radians: (0.17453293, 0, −0.08726646).
+ * [6b] Ruling A165, partner B's yaw about its own vertical axis (identity frame, pivot p = (1, 0, 2)):
+ *     yaw 90° first, then tilt 10° about +X. Point p + (0, 0, 1): Ry(90°) maps (0, 0, 1) to (1, 0, 0), Rx leaves +X
+ *     alone → (2, 0, 2). Point p + (0, 1, 0): Ry keeps it, Rx(10°) maps (0, 1, 0) to (0, cos 10°, sin 10°) →
+ *     (1, 0.98480775, 2.17364818). Yaw 0 with extra {shift (0.1, 0, 0), turn (0.01, 0, 0)} = the A129 fix plus extra:
+ *     turn x 0.18453293, shift x 0.1. partnerYawFix(90, Ry(90°) frame) turns about that frame's up (0, 1, 0): π/2 on y.
  * [7] fixPivot((1, 0, 2), Ry(90°) row-major [0,0,1, 0,1,0, −1,0,0], hips (0, 0.9, 0.1)) = (1 + 0.1, 0.9, 2 − 0) =
  *     (1.1, 0.9, 2).
  * FIXTURE C — THE RUNTIME FIT (A129.3). Same channel; ten frames per loop at phase k/10, tip T = (0.01, 0, −0.02 +
@@ -94,6 +99,16 @@ const fb = SR.solvePairFix(B, { axes: [], maxShiftM: 0.5, maxAngleDeg: 20 })    
 ;[-0.01, 0.02, 0.05].forEach((v, i) => near(fb.shift[i], v, 1e-6, 'shift-only'))
 const pt = SR.partnerTurnFix(10, -5, [1, 0, 0, 0, 1, 0, 0, 0, 1])                            // [6]
 near(pt.turn[0], 0.17453293, 1e-8, 'turn x'); near(pt.turn[1], 0, 1e-12, 'turn y'); near(pt.turn[2], -0.08726646, 1e-8, 'turn z')
+{                                                                                             // [6b]
+  const I = [1, 0, 0, 0, 1, 0, 0, 0, 1], p = [1, 0, 2]
+  const yt = SR.partnerTurnFix(10, 0, I, 90)
+  ;[2, 0, 2].forEach((v, i) => near(SR.fixPoint(yt, p, [1, 0, 3])[i], v, 1e-9, 'yaw then tilt, forward point'))
+  ;[1, 0.98480775, 2.17364818].forEach((v, i) => near(SR.fixPoint(yt, p, [1, 1, 2])[i], v, 1e-8, 'yaw then tilt, up point'))
+  const ex = SR.partnerTurnFix(10, -5, I, 0, { shift: [0.1, 0, 0], turn: [0.01, 0, 0] })
+  near(ex.turn[0], 0.18453293, 1e-8, 'extra turn'); near(ex.shift[0], 0.1, 1e-12, 'extra shift')
+  const yf = SR.partnerYawFix(90, [0, 0, 1, 0, 1, 0, -1, 0, 0])
+  near(yf.turn[1], Math.PI / 2, 1e-12, 'yaw axis'); near(yf.turn[0], 0, 1e-12, 'yaw x'); near(yf.turn[2], 0, 1e-12, 'yaw z')
+}
 const pv = SR.fixPivot([1, 0, 2], [0, 0, 1, 0, 1, 0, -1, 0, 0], [0, 0.9, 0.1])               // [7]
 ;[1.1, 0.9, 2].forEach((v, i) => near(pv[i], v, 1e-12, 'pivot'))
 const runLoops = (x0, loops) => {
