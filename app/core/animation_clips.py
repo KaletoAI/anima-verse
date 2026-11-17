@@ -57,7 +57,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import quote
 
-from app.core.http_files import atomic_replace, content_version
+from app.core.http_files import atomic_replace, content_version, sibling_stage
 
 from app.core.keyed_lock import keyed_lock
 from app.core.log import get_logger
@@ -114,6 +114,22 @@ class ClipNotFound(ClipLibraryError):
 
 class ClipExists(ClipLibraryError):
     """The target name is already taken (route: 409)."""
+
+
+def _write_json_atomic(path: Path, data: Any) -> None:
+    """Writes a sidecar or the transition seed WHOLE: staged beside the
+    target, then swapped in with one rename. Readers run concurrently (the
+    listing, ``clip_meta`` from a play poll, the transition resolver) and a
+    truncate-then-write let them read an empty or partial file. The staged
+    file takes the target's permission bits (0644 for a new file), so a
+    rewrite never narrows who may read it."""
+    path = Path(path)
+    mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
+    with sibling_stage(path) as stage:
+        stage.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                         encoding="utf-8")
+        os.chmod(stage, mode)
+        atomic_replace(stage, path)
 
 
 def parse_clip_name(filename: str) -> str:
@@ -871,8 +887,7 @@ def _write_transitions(entries: List[Dict[str, Any]], path: Optional[Path] = Non
     """Persist rules; reference maintenance must preserve unavailable bridges."""
     target = path or clip_transitions_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps({"transitions": entries}, indent=2,
-                                 ensure_ascii=False) + "\n", encoding="utf-8")
+    _write_json_atomic(target, {"transitions": entries})
     logger.info("clip transitions saved: %d rule(s)", len(entries))
 
 
@@ -1756,8 +1771,7 @@ def _write_kind_flag(library: str, rel: str, what: str, mutate) -> List[Dict[str
         if not isinstance(data, dict):
             raise ClipLibraryError(f"{target.name} is not an object")
         mutate(data)
-        target.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-                          encoding="utf-8")
+        _write_json_atomic(target, data)
     reload_clip_caches()
     return [_view_of(p, cset, library) for p in files]
 
@@ -1855,8 +1869,7 @@ def set_clip_role_gender(library: str, rel: str,
         data["role_gender"] = value
     else:
         data.pop("role_gender", None)
-    sidecar.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-                       encoding="utf-8")
+    _write_json_atomic(sidecar, data)
     reload_clip_caches()
     logger.info("clip role genders: %s%s (%s) -> %s", f"{cset}/" if cset else "",
                 kind, library, value or "not assigned")
@@ -1926,7 +1939,7 @@ def migrate_contact_target_words() -> int:
             data["contact_relations"] = [
                 {**r, "target": RENAMED_CONTACT_TARGETS[r["target"]]}
                 if isinstance(r, dict) and r.get("target") in RENAMED_CONTACT_TARGETS else r for r in rels]
-            sidecar.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            _write_json_atomic(sidecar, data)
             changed += 1
     if changed:
         reload_clip_caches()
@@ -2001,7 +2014,7 @@ def set_clip_contact_target(library: str, rel: str, relations: Any) -> List[Dict
         data.pop("contact_relations", None)
     else:
         data["contact_relations"] = validate_contact_relations(relations, _meta_roles(data))
-    sidecar.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    _write_json_atomic(sidecar, data)
     reload_clip_caches()
     logger.info("clip contact relations: %s%s (%s) -> %s", f"{cset}/" if cset else "", kind, library,
                 data.get("contact_relations") or "inherited")
@@ -2124,7 +2137,7 @@ def set_clip_bend_limits(library: str, rel: str, limits: Any) -> List[Dict[str, 
     else:
         pkg = package_bend_limits()
         data["bend_limits"] = validate_bend_limits(limits, pkg.get(kind) or pkg.get("*"))
-    sidecar.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    _write_json_atomic(sidecar, data)
     reload_clip_caches()
     logger.info("clip bend limits: %s%s (%s) -> %s", f"{cset}/" if cset else "", kind, library,
                 data.get("bend_limits") or "inherited")
@@ -2188,7 +2201,7 @@ def set_clip_root_angle(library: str, rel: str, angle: Any) -> List[Dict[str, An
         data.pop("root_angle", None)
     else:
         data["root_angle"] = got
-    sidecar.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    _write_json_atomic(sidecar, data)
     reload_clip_caches()
     logger.info("clip root angle: %s%s (%s) -> %s", f"{cset}/" if cset else "", kind, library,
                 data.get("root_angle") or "0/0")
@@ -2255,15 +2268,7 @@ def set_clip_height_offsets(library: str, rel: str,
             data.pop("height_offsets_cm", None)
         updates.append((target, data))
     for target, data in updates:
-        fd, name = tempfile.mkstemp(dir=target.parent, suffix=".clip-tmp")
-        os.close(fd)
-        stage = Path(name)
-        try:
-            stage.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-                             encoding="utf-8")
-            atomic_replace(stage, target)
-        finally:
-            stage.unlink(missing_ok=True)
+        _write_json_atomic(target, data)
     reload_clip_caches()
     # A shared solo sidecar also affects its variants; report all of them.
     if not role and sidecar.name == f"{kind}.json":
@@ -2640,8 +2645,7 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
     geometry.pop("checked", None)
     if checked:
         geometry["checked"] = dict(checked)
-    sidecar.write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n",
-                       encoding="utf-8")
+    _write_json_atomic(sidecar, meta)
 
     reload_clip_caches()
     logger.info("clip oriented: %s%s (%s) yaw %+.1f tilt %+.1f roll %+.1f "
@@ -2727,7 +2731,7 @@ def mark_clip_checked(library: str, rel: str, checked: Dict[str, Any]) -> List[D
     if not isinstance(geometry, dict):
         geometry = meta["geometry"] = {}
     geometry["checked"] = dict(checked)
-    sidecar.write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    _write_json_atomic(sidecar, meta)
     reload_clip_caches()
     logger.info("clip place check stored: %s%s (%s) on %s/%s", f"{cset}/" if cset else "", kind,
                 library, checked.get("prop"), checked.get("place"))
@@ -2822,8 +2826,7 @@ def _rewrite_sidecar_kind(target: Path, new_kind: str) -> None:
         return
     if isinstance(data, dict) and data.get("kind") != new_kind:
         data["kind"] = new_kind
-        target.write_text(json.dumps(data, indent=2, ensure_ascii=False),
-                          encoding="utf-8")
+        _write_json_atomic(target, data)
 
 
 _UNSAFE_KIND_CHARS = re.compile(r"[^a-z0-9 _-]+")
