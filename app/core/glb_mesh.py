@@ -131,12 +131,14 @@ def accessor_array(parsed: dict, index: int) -> np.ndarray:
     """Read packed or interleaved GLB accessors without reading stride padding.
 
     ``parsed`` is ``model_validate.parse_glb`` output. Returns an ``(count, components)`` view (or a float64 copy
-    for normalized integer data). Sparse accessors and anything outside buffer 0 are refused.
+    for normalized integer data). A sparse accessor (glTF 2.0 § 3.6.2.3 — Blender writes the shape keys of a
+    template drape that way, A181) is returned as a dense copy: its base (the bufferView, or zeros without one)
+    with the listed values substituted. Anything outside buffer 0 is refused.
     """
     gltf, binary = parsed['gltf'], parsed['bin']
     accessor = gltf['accessors'][index]
     if accessor.get('sparse') is not None:
-        raise ValueError('Sparse geometry accessors are unsupported')
+        return _sparse_array(parsed, accessor)
     dtype = np.dtype({5120: 'i1', 5121: 'u1', 5122: '<i2', 5123: '<u2',
                       5125: '<u4', 5126: '<f4'}[accessor['componentType']])
     components = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4}[accessor['type']]
@@ -158,6 +160,50 @@ def accessor_array(parsed: dict, index: int) -> np.ndarray:
         if dtype.kind == 'i':
             array = np.maximum(array, -1)
     return array
+
+
+def _view_array(parsed: dict, view_index: int, offset: int, dtype: np.dtype, count: int,
+                components: int) -> np.ndarray:
+    """``count`` tightly packed elements of a bufferView (the indices / values of a sparse accessor)."""
+    gltf, binary = parsed['gltf'], parsed['bin']
+    view = gltf['bufferViews'][view_index]
+    start = int(view.get('byteOffset', 0)) + int(offset)
+    size = dtype.itemsize * components * count
+    if (view.get('buffer', 0) != 0 or count <= 0 or offset < 0 or start < 0
+            or offset + size > view['byteLength'] or start + size > len(binary)):
+        raise ValueError('Sparse geometry accessor is truncated or invalid')
+    return np.frombuffer(binary, dtype=dtype, count=count * components, offset=start).reshape(count, components)
+
+
+def _sparse_array(parsed: dict, accessor: dict) -> np.ndarray:
+    """The dense ``(count, components)`` array of a sparse accessor (``accessor_array``)."""
+    sparse = accessor['sparse']
+    dtype = np.dtype({5120: 'i1', 5121: 'u1', 5122: '<i2', 5123: '<u2',
+                      5125: '<u4', 5126: '<f4'}[accessor['componentType']])
+    components = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4}[accessor['type']]
+    count = int(accessor['count'])
+    if count <= 0:
+        raise ValueError('Geometry accessor is truncated or invalid')
+    if accessor.get('bufferView') is not None:
+        base = {k: v for k, v in accessor.items() if k not in ('sparse', 'normalized')}
+        dense = np.array(accessor_array({'gltf': {**parsed['gltf'], 'accessors': [base]}, 'bin': parsed['bin']}, 0),
+                         dtype=dtype)
+    else:
+        dense = np.zeros((count, components), dtype=dtype)
+    n = int(sparse['count'])
+    idx_spec, val_spec = sparse['indices'], sparse['values']
+    idx_dtype = np.dtype({5121: 'u1', 5123: '<u2', 5125: '<u4'}[idx_spec['componentType']])
+    indices = _view_array(parsed, idx_spec['bufferView'], int(idx_spec.get('byteOffset', 0)), idx_dtype, n, 1)[:, 0]
+    values = _view_array(parsed, val_spec['bufferView'], int(val_spec.get('byteOffset', 0)), dtype, n, components)
+    if n and int(indices.max()) >= count:
+        raise ValueError('Sparse geometry accessor is truncated or invalid')
+    dense[indices.astype(np.int64)] = values
+    if accessor.get('normalized') and dtype.kind in 'iu':
+        limits = np.iinfo(dtype)
+        dense = dense.astype(np.float64) / limits.max
+        if dtype.kind == 'i':
+            dense = np.maximum(dense, -1)
+    return dense
 
 
 # --- reading -------------------------------------------------------------------------------------------------------
