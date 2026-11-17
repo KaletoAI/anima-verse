@@ -210,13 +210,22 @@ def row_radii(btree, centre, angles, z, circ, w=1.0):
 
 
 
+#: ``_surface_z``: the ray starts inside the body and never leaves it.
+INSIDE = ()
+
+
 def _surface_z(tree, x, y, z_hi, floor):
     """A179 — the height of the body's top surface under (x, y), seen from ``z_hi`` down to ``floor``, and the Z of
     its normal: the first upward-facing entry, unless an air gap larger than LAYER_GAP_M opens below it — then what
     was met is an overhang (the chin or beard of a head bent forward; a ray that STARTS inside it leaves it first)
     and the entry under the gap is the surface (A178's tongue: the yoke climbed 13 cm to the chin there). None when
-    the ray starts inside the body and never leaves it, or meets nothing."""
+    there is no surface down to ``floor`` (beside the body, or under an overhang in front of it); INSIDE when the ray
+    starts inside the body and never leaves it (hair hanging over a shoulder, a ridge above ``z_hi``)."""
     cand, last_exit, z = None, None, z_hi
+    first = tree.ray_cast(Vector((x, y, z_hi)), Vector((0, 0, -1)), z_hi - floor)
+    if first[0] is None:
+        up = tree.ray_cast(Vector((x, y, z_hi)), Vector((0, 0, 1)), 1.0)
+        return INSIDE if up[0] is not None and up[1].z > 0 else None
     for _ in range(16):
         if z <= floor:
             break
@@ -581,12 +590,14 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008):
             elif ctree is not None:
                 z_hi = z_ring + min(0.10, float(np.linalg.norm(xy - inner[c])))
                 zs = _surface_z(ctree, xy[0], xy[1], z_hi, floor_z)
-                if zs is not None:
+                if zs:
                     capz[k, c] = max(floor_z, zs[0] + CAP_CLEAR_M / max(0.5, zs[1]))
+                elif zs is None:           # beside the body, or in front of it under the chin
+                    capz[k, c] = floor_z
                 else:
-                    # no surface under the ceiling: the point lies inside the body there (hair hanging over the
-                    # shoulder, a ridge of the trapezius) or beside it. It keeps the height of the ring before it
-                    # (the shoulder line's own height at the outer end) and ``_lay_path`` lays it outside.
+                    # INSIDE the body there (hair hanging over the shoulder, a ridge of the trapezius): the point
+                    # keeps the height of the ring before it (the shoulder line's own height at the outer end) and
+                    # ``_lay_path`` lays it outside
                     capz[k, c] = capz[k - 1, c] if k else top_z
             else:
                 zs = _ray_down(ftree, xy[0], xy[1], top=max(top_z, bod["neck_y"]) + 0.035)
@@ -819,7 +830,7 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008):
                     if ctree is not None and float(np.dot(p - Q, f2)) > 0:
                         # the armhole's top carried out along a thinning arm floats over it: lowered onto the arm
                         zs = _surface_z(ctree, p[0], p[1], float(p[2]) + 1e-3, float(Q[2]))
-                        if zs is not None:
+                        if zs:
                             p[2] = min(p[2], zs[0] + SLEEVE_CLEAR_M / max(0.5, zs[1]))
                     cur.append(len(verts))
                     verts.append(tuple(p))
