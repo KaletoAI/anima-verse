@@ -78,7 +78,8 @@ Expected, derived by hand:
     sidecar; a second call fits nothing (fit counter unchanged); new file bytes (no LeftFoot: 18 − left_shin −
     4 outer = 13 capsules) → refitted (counter +1).
     Outfit (sidecar source "base_body", base_signature B, base_model_sha256 S) carrying the base record
-    (source own, sha256 S) → current, relabelled {source base, base_signature B}, NOT refitted.
+    (source own, sha256 S, extension_groups [] — no extension rig on either) → current, relabelled {source base,
+    base_signature B}, NOT refitted.
     The same outfit with base_model_sha256 S2 (built on another base) → refitted on its own file, record
     sha256 S2 / source base (Review Focus 1: the set follows the base it was built on, never a stale copy).
     Changed scales → refitted. rig "generic" → None, nothing written. A file that is not a GLB body →
@@ -450,7 +451,7 @@ def main() -> int:
 
     outfit = d / "bbbbbbbbbbbb.glb"
     outfit.write_bytes(body + b"")
-    base_record = {**real_fit(body), "source": "own", "sha256": "S", "computed_at": "t"}
+    base_record = {**real_fit(body), "source": "own", "sha256": "S", "extension_groups": [], "computed_at": "t"}
     outfit.with_suffix(".json").write_text(json.dumps({
         "rig": "mixamo", "source": "base_body", "base_signature": "baseB0000000", "base_model_sha256": "S",
         "collision": base_record}))

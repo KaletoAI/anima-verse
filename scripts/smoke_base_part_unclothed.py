@@ -198,7 +198,7 @@ with tempfile.TemporaryDirectory() as tmp:
     scales = {'leg': 1.0}
     meta = {'source': 'base_body', 'base_model_sha256': 'b' * 64, 'base_signature': 'basefix', 'rig': 'mixamo',
             'collision': {'version': collision.VERSION, 'sha256': 'b' * 64, 'scales': scales, 'source': 'own',
-                          'capsules': capsules},
+                          'capsules': capsules, 'extension_groups': ['chain']},   # the base's record: chain built
             'extension_rig': {'status': 'not_found', 'groups': ['chain'], 'group_ops': {'chain': 'appendage_chain'}}}
     assert collision.refresh(NAME, Path(tmp) / 'outfit.glb', meta, scales=scales)
     assert [c['id'] for c in meta['collision']['capsules']] == ['left_thigh']

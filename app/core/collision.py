@@ -28,6 +28,7 @@ PAYLOAD (sidecar key ``collision``, delivered next to ``extension_rig``)::
      "source":   "own" | "base",       # fitted on this file / the base body it was built on
      "base_signature": "<bsig>",       # only with source "base"
      "sha256":   "<file the set describes>",
+     "extension_groups": ["<group>", ...],   # the model's extension groups the capsules were built for (sorted)
      "computed_at": "<ISO>"}
 
 ``a``/``b`` are the joint names AS IN THE MODEL (matched through ``rig_contract.norm_bone_name``), ``r`` in
@@ -54,9 +55,11 @@ capsules of every group the outfit does not carry built (a part the base shows a
 model on a MESHED SHAPE (an outfit body, sidecar ``body_id`` = ``ob…``) carries that body's set the same way
 (``source "body"``, ``sha256`` = its ``body_sha256``).
 
-A record's CAPSULES are current when ``version``, ``sha256`` (the identity above) and ``scales`` (the character's
-region scales, ``model3d_opts.collision_scales``) all match (``is_current``); its CHANNELS are current when its
-``channels_sig`` matches as well (``channels_current``, version 7). ``ensure`` / ``ensure_path`` refit and store a
+A record's CAPSULES are current when ``version``, ``sha256`` (the identity above), ``scales`` (the character's
+region scales, ``model3d_opts.collision_scales``) and ``extension_groups`` (the groups of ``extension_chains`` — of
+THIS model's sidecar, which under an inherited identity can change while the identity stays: an outfit's extension
+rig applied on a later pass, an override switching a group) all match (``is_current``); its CHANNELS are current
+when its ``channels_sig`` matches as well (``channels_current``, version 7). ``ensure`` / ``ensure_path`` refit and store a
 record whose capsules are not current — every refit resolves the channels too; the post-rig chain
 (``model3d._auto_collision``) refreshes it right after the extension rig. A record whose capsules are current but
 whose ``channels_sig`` differs is returned UNCHANGED (ruling R4, Save never executes: the Channels panel only stores
@@ -744,10 +747,13 @@ def identity(path: Path, meta: Dict[str, Any]) -> Tuple[str, str]:
     return "own", _file_sha256(path)
 
 
-def is_current(record: Any, sha256: str, scales: Dict[str, float]) -> bool:
-    """Whether a record's CAPSULES describe the file of identity ``sha256`` at ``scales`` (module docstring)."""
+def is_current(record: Any, sha256: str, scales: Dict[str, float],
+               extension_groups: Optional[List[str]] = None) -> bool:
+    """Whether a record's CAPSULES describe the file of identity ``sha256`` at ``scales`` (module docstring) and, given
+    ``extension_groups`` (``extension_chains``' group ids, sorted), were built for exactly those groups."""
     return (isinstance(record, dict) and record.get("version") == VERSION and bool(sha256)
-            and record.get("sha256") == sha256 and record.get("scales") == scales)
+            and record.get("sha256") == sha256 and record.get("scales") == scales
+            and (extension_groups is None or record.get("extension_groups") == extension_groups))
 
 
 def channels_current(record: Any, channels_sig: str) -> bool:
@@ -764,7 +770,8 @@ def record_state(character_name: str, path: Path, meta: Dict[str, Any], *,
     from app.core import collision_channels
     profile = collision_channels._profile(character_name, profile)
     record = meta.get("collision")
-    current = is_current(record, identity(path, meta)[1], character_scales(character_name, profile=profile))
+    current = is_current(record, identity(path, meta)[1], character_scales(character_name, profile=profile),
+                         [entry["group"] for entry in extension_chains(meta)])
     _wanted, sig = collision_channels.wanted_channels(character_name, path, meta, profile=profile)
     return {"current": current, "channels_current": channels_current(record, sig)}
 
@@ -775,9 +782,11 @@ def applies(path: Optional[Path], meta: Dict[str, Any]) -> bool:
             and (meta.get("rig") or "mixamo") == "mixamo")
 
 
-def _record(fitted: Dict[str, Any], *, source: str, sha256: str, meta: Dict[str, Any]) -> Dict[str, Any]:
+def _record(fitted: Dict[str, Any], *, source: str, sha256: str, meta: Dict[str, Any],
+            extension_groups: List[str]) -> Dict[str, Any]:
     from app.core.timeutils import utc_now_iso
-    record = {**fitted, "source": source, "sha256": sha256, "computed_at": utc_now_iso()}
+    record = {**fitted, "source": source, "sha256": sha256, "extension_groups": list(extension_groups),
+              "computed_at": utc_now_iso()}
     if source == "base":
         record["base_signature"] = str(meta.get("base_signature") or "")
     return record
@@ -820,10 +829,20 @@ def refresh(character_name: str, path: Path, meta: Dict[str, Any], *,
     source, sha = identity(path, meta)
     wanted, sig = collision_channels.wanted_channels(character_name, path, meta, profile=profile)
     exposed = collision_channels.exposure(meta)
+    chains = extension_chains(meta)
+    groups = [entry["group"] for entry in chains]
     record = meta.get("collision")
-    if not force and is_current(record, sha, scales):
-        if record.get("source") == source and (source != "base"
-                                               or record.get("base_signature") == meta.get("base_signature")):
+    labelled = isinstance(record, dict) and record.get("source") == source and (
+        source != "base" or record.get("base_signature") == meta.get("base_signature"))
+    # The extension groups the record's capsules were built for: an inherited (not yet labelled) set keeps, under the
+    # base identity, only the groups this model carries (the filter below). A record whose groups differ from the
+    # model's — the outfit's extension rig applied after its first pass failed, an override switched a group — is
+    # refitted on this file under the same identity: the inherited copy lacks those capsules for good.
+    built = record.get("extension_groups") if isinstance(record, dict) else None
+    if not labelled and isinstance(built, list) and source == "base":
+        built = [g for g in built if g in groups]
+    if not force and is_current(record, sha, scales) and built == groups:
+        if labelled:
             if channels_current(record, sig) or not apply_channels:
                 return False
             try:
@@ -839,9 +858,10 @@ def refresh(character_name: str, path: Path, meta: Dict[str, Any], *,
         # THIS model's worn pieces cover (exposure is identity, never deferred).
         relabelled = {k: v for k, v in record.items() if k != "base_signature"}
         relabelled["source"] = source
+        relabelled["extension_groups"] = groups
         if source == "base":
             relabelled["base_signature"] = str(meta.get("base_signature") or "")
-            carried = {entry["group"] for entry in extension_chains(meta)}
+            carried = set(groups)
             relabelled["capsules"] = [c for c in record.get("capsules") or []
                                       if ":" not in str(c.get("id") or "")
                                       or str(c.get("id")).split(":", 1)[0] in carried]
@@ -860,13 +880,13 @@ def refresh(character_name: str, path: Path, meta: Dict[str, Any], *,
         return True
     try:
         data = path.read_bytes()
-        fitted = fit_capsules(data, scales=scales, extension=extension_chains(meta))
+        fitted = fit_capsules(data, scales=scales, extension=chains)
     except Exception as exc:  # noqa: BLE001 — a model without capsules is still a model
         logger.warning("Collision capsules of %s (%s) failed: %s", character_name, path.name, exc)
         data = b""
         fitted = {"version": VERSION, "capsules": [], "skipped": [], "scales": scales, "error": str(exc)}
-    meta["collision"] = _with_channels(_record(fitted, source=source, sha256=sha, meta=meta), data, wanted, sig,
-                                       exposed)
+    meta["collision"] = _with_channels(_record(fitted, source=source, sha256=sha, meta=meta, extension_groups=groups),
+                                       data, wanted, sig, exposed)
     return True
 
 
