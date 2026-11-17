@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Smoke: what an inbox import leaves in the clip library besides its own
-outputs (review 04#3, 04#5, 04#10).
+outputs (review 04#3, 04#5, 04#10; the CMU import for 04#5 too).
 
 Blender is stood in for (``runner.run`` / ``runner.status`` patched, the
 source probe ``_prepare_source`` patched to a fixed family); every directory
@@ -50,6 +50,17 @@ Usage: ./.venv/bin/python scripts/smoke_fbx_import_library_state.py
     a path part, a non-probe name; a run directory last touched 2 h ago is
     swept by the next probe, one touched 10 min ago stays (PREVIEW_KEEP_S =
     3600 s).
+[F] the CMU import (``cmu_import.convert_take``, ``take_files`` stubbed,
+    the ``cmu_clip`` run stood in for) re-imports the GROUP ``wave`` of the
+    free root as a pair with overwrite. Before: ``wave__a/b/c.fbx``, the alt
+    ``wave__c~x.fbx``, the role sidecar ``wave__b.json``, the numbered take
+    ``wave__a_02.fbx`` and the other kind ``wave-hand.fbx``. The run writes
+    ``wave__a.fbx``, ``wave__b.fbx``, ``wave.json``. Expected afterwards:
+    exactly those three plus ``wave__a_02.fbx`` and ``wave-hand.fbx``
+    (unchanged bytes). The old CMU path removed nothing.
+[G] the free pair ``bow`` (``bow__a/b.fbx``, alt ``bow__b~deep.fbx``,
+    ``bow.json``) re-imported from ONE take (a solo) with overwrite: the only
+    clip file of kind bow afterwards is ``bow.fbx``.
 """
 import json
 import os
@@ -109,6 +120,15 @@ def fake_run(script, *, inputs=None, params=None, out_dir=None, timeout_s=0):
     file per role (or the solo file) plus ``<kind>.json``."""
     out = Path(out_dir)
     outputs = {}
+    if script == "cmu_clip":
+        kind, pair = params["kind"], "asf_a" in (inputs or {})
+        for stem in ([f"{kind}__a", f"{kind}__b"] if pair else [kind]):
+            (out / f"{stem}.fbx").write_bytes(b"cmu-" + stem.encode())
+            outputs[stem] = str(out / f"{stem}.fbx")
+        side = {"kind": kind, "pair": pair, "roles": ["a", "b"] if pair else []}
+        (out / f"{kind}.json").write_text(json.dumps(side), encoding="utf-8")
+        outputs["sidecar"] = str(out / f"{kind}.json")
+        return {"ok": True, "outputs": outputs, "data": side, "seconds": 0.1}
     if params.get("export") != "alts":
         kind, roles = params["kind"], params.get("roles") or []
         for stem in ([f"{kind}__{r}" for r in roles] or [kind]):
@@ -295,6 +315,40 @@ def test_previews_do_not_collide():
     check("A's run (seconds old) stays", pa.is_file())
 
 
+def test_cmu_overwrite_removes_old_shape():
+    from app.core import cmu_import
+    print("[F] CMU overwrite import of a group kind as a pair removes the old shape")
+    FREE.mkdir(parents=True, exist_ok=True)
+    before = {"wave__a.fbx": b"old-a", "wave__b.fbx": b"old-b", "wave__c.fbx": b"old-c",
+              "wave__c~x.fbx": b"old-alt", "wave__b.json": b"{}", "wave__a_02.fbx": b"take2",
+              "wave-hand.fbx": b"hand",
+              "wave.json": json.dumps({"kind": "wave", "roles": ["a", "b", "c"]}).encode()}
+    for name, data in before.items():
+        (FREE / name).write_bytes(data)
+    clips.reload_clip_caches()
+    stub = TMP / "take.asf", TMP / "take.amc"
+    with patch.object(cmu_import, "take_files", return_value=stub):
+        cmu_import.convert_take("wave", "01_01", "01_02", overwrite=True, source_fps=120)
+        got = names_of_kind(FREE, "wave")
+        want = sorted(["wave__a.fbx", "wave__b.fbx", "wave.json", "wave__a_02.fbx", "wave-hand.fbx"])
+        check("only the new pair, the numbered take and the other kind are left", got == want,
+              f"{got} != {want}")
+        check("the numbered take and the other kind are untouched",
+              all((FREE / n).read_bytes() == before[n] for n in ("wave__a_02.fbx", "wave-hand.fbx")))
+        check("the halves are the new ones", (FREE / "wave__a.fbx").read_bytes() == b"cmu-wave__a")
+
+        print("[G] CMU overwrite import of a pair kind as a solo removes the halves and alts")
+        for name in ("bow__a.fbx", "bow__b.fbx", "bow__b~deep.fbx"):
+            (FREE / name).write_bytes(b"old")
+        (FREE / "bow.json").write_text(json.dumps({"kind": "bow", "pair": True}), encoding="utf-8")
+        clips.reload_clip_caches()
+        cmu_import.convert_take("bow", "02_01", overwrite=True, source_fps=120)
+        got = sorted(p.name for p in FREE.iterdir()
+                     if p.is_file() and p.suffix.lower() in clips.CLIP_EXTS
+                     and clips.parse_clip_role(p.name)[0] == "bow")
+        check("only bow.fbx is left of kind bow", got == ["bow.fbx"], str(got))
+
+
 def main():
     INBOX.mkdir(parents=True, exist_ok=True)
     for name in ("a.fbx", "b.fbx", "alt.fbx"):
@@ -308,6 +362,7 @@ def main():
         test_overwrite_group_as_pair()
         test_overwrite_pair_as_solo()
         test_previews_do_not_collide()
+        test_cmu_overwrite_removes_old_shape()
     print("FAIL" if FAIL else "PASS", f"({len(FAIL)} failing)" if FAIL else "")
     return 1 if FAIL else 0
 

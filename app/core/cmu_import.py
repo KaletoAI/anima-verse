@@ -28,7 +28,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.blender import runner
 from app.core import paths
 from app.core.animation_clips import (CLIP_EXTS, ROOT_MOTION_MODES,
-                                      library_write_lock, parse_clip_name)
+                                      library_write_lock, parse_clip_name,
+                                      remove_stale_kind_files)
 from app.core.log import get_logger
 
 logger = get_logger(__name__)
@@ -259,6 +260,14 @@ def convert_take(kind: str, take_a: str, take_b: str = "", *,
                     res["outputs"][slot] = str(target)
         if not res["ok"]:
             raise ClipImportError(str(res.get("error") or "blender run failed"))
+        # An overwrite replaces the whole clip of the kind, not just the files
+        # of the new shape: the old shape's halves, alts and own sidecars go
+        # too, as in the inbox import (``remove_stale_kind_files``).
+        stale = remove_stale_kind_files(
+            out, kind, [Path(p) for p in (res.get("outputs") or {}).values()])
+        if stale:
+            logger.info("cmu clip import replaced: %s removed from %s%s", ", ".join(stale),
+                        f"{cset}/" if cset else "", kind)
         return {"kind": kind, "set": cset, "dir": out,
                 "sidecar": res.get("data") or {},
                 "outputs": res.get("outputs") or {},
