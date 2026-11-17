@@ -192,8 +192,13 @@ def publish(kind: str, *, replace: bool = False, commit: bool = True, trailer: s
     from animstudio.dsl import validate, PairAnimation, Reversed
     bridge = not isinstance(anim, PairAnimation) and anim.bridge
     if isinstance(anim, Reversed):
-        from animstudio.reverse import source_clip
-        source_clip(anim)
+        from animstudio.reverse import source_clip, source_sha
+        src_fbx, src_side, _ = source_clip(anim)
+        # spec_sha covers only anims/<kind>.py; the reversal is just as stale
+        # when its SOURCE clip was republished after the build.
+        if built.get("source_sha") != source_sha(src_fbx, src_side):
+            raise StudioError(f"the source clip {anim.source!r} changed after the last build "
+                              "- build again")
     elif not isinstance(anim, PairAnimation):
         validate(anim)
     if not bridge:

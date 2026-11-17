@@ -1,4 +1,5 @@
 """Build a bridge from a finished, license-free solo clip."""
+import hashlib
 import json
 import math
 from dataclasses import asdict
@@ -33,10 +34,26 @@ def source_clip(anim):
     return fbx, side, meta
 
 
+def source_sha(fbx, side) -> str:
+    """Content identity of the source clip a reversal is built from: the
+    SHA-256 over the FBX bytes and the sidecar bytes (each length-prefixed,
+    so moving bytes between the two files changes the hash). ``build.json``
+    records it; ``publish`` refuses when the source changed since."""
+    h = hashlib.sha256()
+    for path in (fbx, side):
+        data = Path(path).read_bytes()
+        h.update(len(data).to_bytes(8, 'big'))
+        h.update(data)
+    return h.hexdigest()
+
+
 def build_reversed(anim, sha):
     from app.blender import runner
     from app.core import paths
     fbx, side, original = source_clip(anim)
+    # Hashed BEFORE the run: a source republished during the build then
+    # mismatches at publish instead of being stamped as the new identity.
+    src_sha = source_sha(fbx, side)
     out = animstudio.OUT / anim.kind
     out.mkdir(parents=True, exist_ok=True)
     res = runner.run('reverse_clip', inputs={'src': fbx, 'sidecar': side,
@@ -77,7 +94,8 @@ def build_reversed(anim, sha):
               Check('tracks', measure['tracks'] >= MIN_TRACKS, measure['tracks'], f'>= {MIN_TRACKS}'),
               Check('bridge_travel', motion['mode'] == 'keep' and error <= .01,
                     error, '<= 0.01 m', f'expected {expected}')]
-    report = {'kind': anim.kind, 'spec_sha': sha, 'ok': all(c.ok for c in checks),
+    report = {'kind': anim.kind, 'spec_sha': sha, 'source_sha': src_sha,
+              'ok': all(c.ok for c in checks),
               'checks': [asdict(c) for c in checks], 'fbx': res['outputs'][anim.kind],
               'sidecar': res['outputs']['sidecar']}
     (out / 'build.json').write_text(json.dumps(report, indent=1), encoding='utf-8')
