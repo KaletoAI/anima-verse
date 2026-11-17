@@ -95,7 +95,12 @@ export interface FitSettingsValues {
   body_overlap?: number
   /** A166: mm a shell stands off the skin; a server before it sends none. */
   shell_offset?: number
+  /** A184: mm the shell's border grows around the piece's outline; cm² of gaps it closes. */
+  shell_margin?: number
+  shell_fill?: number
 }
+/** A166/A184: one shell setting — the setting, the shown fit's (null: no shell fit), the choices. */
+export interface ShellChoice { setting: number; made: number | null; choices: number[]; default: number }
 
 /** A166: the automatic fit (server `garment_fit_settings.defaults`, the mesh shape aside — it has its own control). */
 export const FIT_AUTOMATIC: Omit<FitSettingsValues, 'mesh_shape'> = {
@@ -112,13 +117,21 @@ export function manualFitChanges(v: FitSettingsValues): Partial<FitSettingsValue
   }
   return out
 }
-/** A166: a shell offset choice in words — "4 mm (default)". */
-export function shellOffsetLabel(mm: number, fallback: number, t: (k: string) => string): string {
-  return mm === fallback ? `${mm} mm (${t('default')})` : `${mm} mm`
-}
 export const SHELL_OFFSET_HINT = 'How far the shell stands off the skin, along the body’s surface normal. More lifts a '
   + 'molded cup off the breast; a slip lies close at the default. A change makes only this piece’s fit due (CPU, 0 hub '
   + 'jobs).'
+
+export const SHELL_MARGIN_HINT = 'How much of the body around the piece’s outline in its views the shell takes. More '
+  + 'closes gaps at cup edges and thin straps; too much reaches past the piece. A change makes only this piece’s fit due '
+  + '(CPU, 0 hub jobs).'
+export const SHELL_FILL_HINT = 'Gaps inside the piece’s outline up to this area are closed. Keep it below the piece’s '
+  + 'own openings (lattice windows, cut-outs). A change makes only this piece’s fit due (CPU, 0 hub jobs).'
+/** A184: a shell choice in words with its unit — "3 mm (default)", "0 cm² (off)". */
+export function shellChoiceLabel(v: number, fallback: number, unit: string, t: (k: string) => string): string {
+  const base = `${v} ${unit}`
+  if (v === fallback) return `${base} (${t('default')})`
+  return v === 0 ? `${base} (${t('off')})` : base
+}
 
 export const RESET_FIT = 'Reset to the automatic fit'
 export const RESET_FIT_HINT = 'Sets sleeves, trunk, shaft, width and depth allowance back to Auto — the mesh shape stays. '
@@ -162,7 +175,10 @@ export interface MeshShapeInfo {
   shell: { shell_faces?: number | null; inside_share?: number | null; side_colour_within_2cm?: number | null
     seconds?: number | null; over_skin_p50_mm?: number | null } | null
   /** A166: the shell's offset from the skin (mm) — the setting, the shown fit's (null: no shell fit), the choices. */
-  offset?: { setting: number; made: number | null; choices: number[]; default: number }
+  offset?: ShellChoice
+  /** A184: "Take from the body" (mm the border grows around the piece's outline) and "Fill holes up to" (cm²). */
+  margin?: ShellChoice
+  fill?: ShellChoice
   /** The character's clothing-slot labels (English; translated here). */
   slot_labels?: Record<string, string>
 }

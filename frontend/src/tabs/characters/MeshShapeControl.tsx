@@ -3,15 +3,16 @@
  * own mode on the item (Wardrobe → Mode), so the shape is only SHOWN here: the shape the mode makes, a fit made as the
  * other shape (due — refits on the CPU, 0 hub jobs) and the shell's numbers. For a shell-mode piece the box keeps the
  * shell's offset from the skin (A166) — it SAVES on its own (POST …/garments/{item}/fit-settings `{shell_offset}`)
- * and runs nothing; only this piece's fit becomes due.
+ * and runs nothing; only this piece's fit becomes due. A184 adds "Take from the body" (`shell_margin`, mm) and "Fill
+ * holes up to" (`shell_fill`, cm²) the same way.
  */
 import { useState } from 'react'
 import type { CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { MESH_SHAPE_LABELS, SHELL_OFFSET_HINT, shellOffsetLabel } from './fitSettingsModel'
-import type { FitSettingsInfo } from './fitSettingsModel'
+import { MESH_SHAPE_LABELS, SHELL_FILL_HINT, SHELL_MARGIN_HINT, SHELL_OFFSET_HINT, shellChoiceLabel } from './fitSettingsModel'
+import type { FitSettingsInfo, ShellChoice } from './fitSettingsModel'
 
 const BOX: CSSProperties = {
   display: 'flex', flexDirection: 'column', gap: 3, padding: '4px 8px', flexBasis: '100%',
@@ -28,27 +29,31 @@ export function MeshShapeControl({ character, itemId, info, busy, onSaved }: {
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
-  const [savingOffset, setSavingOffset] = useState<number | null>(null)
+  const [saving, setSaving] = useState<{ key: string; value: number } | null>(null)
   const shape = info.mesh_shape
   if (!shape) return null
 
-  /** A166: the shell's offset saves on its own (POST …/fit-settings `{shell_offset}`). */
-  const saveOffset = async (mm: number) => {
-    setSavingOffset(mm)
+  /** A166/A184: each shell setting saves on its own (POST …/fit-settings `{shell_offset|shell_margin|shell_fill}`). */
+  const save = async (key: string, value: number) => {
+    setSaving({ key, value })
     try {
       const d = await apiPost<{ fit_settings: FitSettingsInfo }>(
         `/characters/${encodeURIComponent(character)}/garments/${encodeURIComponent(itemId)}/fit-settings`,
-        { shell_offset: mm })
+        { [key]: value })
       toast(`${t('Saved')} · ${d.fit_settings.mesh_shape?.due || d.fit_settings.due
         ? t('Fit due — refits on the CPU, 0 hub jobs') : t('nothing becomes due')}`, 'success')
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     } finally {
-      setSavingOffset(null)
+      setSaving(null)
       onSaved()
     }
   }
-  const offset = shape.offset
+  const rows: { key: string; label: string; hint: string; unit: string; choice?: ShellChoice }[] = [
+    { key: 'shell_offset', label: 'Shell offset from the skin', hint: SHELL_OFFSET_HINT, unit: 'mm', choice: shape.offset },
+    { key: 'shell_margin', label: 'Take from the body', hint: SHELL_MARGIN_HINT, unit: 'mm', choice: shape.margin },
+    { key: 'shell_fill', label: 'Fill holes up to', hint: SHELL_FILL_HINT, unit: 'cm²', choice: shape.fill },
+  ]
 
   const pct = (v: number | null | undefined) => (v != null ? `${(v * 100).toFixed(1)} %` : '–')
   return (
@@ -58,23 +63,24 @@ export function MeshShapeControl({ character, itemId, info, busy, onSaved }: {
         <span>{t(MESH_SHAPE_LABELS[shape.resolved])}</span>
         <span className="ga-hint">{t('set by the mode in the Wardrobe')}</span>
       </div>
-      {shape.resolved === 'shell' && offset ? (
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }} title={t(SHELL_OFFSET_HINT)}>
-          <label htmlFor={`shell-offset-${itemId}`}>{t('Shell offset from the skin')}</label>
-          <select id={`shell-offset-${itemId}`} className="ga-input" style={{ padding: '1px 4px' }}
-            value={String(savingOffset ?? offset.setting)} disabled={busy || savingOffset !== null}
-            onChange={(e) => { void saveOffset(Number(e.target.value)) }}>
-            {offset.choices.map((mm) => (
-              <option key={mm} value={String(mm)}>{shellOffsetLabel(mm, offset.default, t)}</option>
+      {shape.resolved === 'shell' ? rows.map(({ key, label, hint, unit, choice }) => choice ? (
+        <div key={key} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }} title={t(hint)}
+          data-shell-setting={key}>
+          <label htmlFor={`${key}-${itemId}`}>{t(label)}</label>
+          <select id={`${key}-${itemId}`} className="ga-input" style={{ padding: '1px 4px' }}
+            value={String(saving?.key === key ? saving.value : choice.setting)} disabled={busy || saving !== null}
+            onChange={(e) => { void save(key, Number(e.target.value)) }}>
+            {choice.choices.map((v) => (
+              <option key={v} value={String(v)}>{shellChoiceLabel(v, choice.default, unit, t)}</option>
             ))}
           </select>
           <span className="ga-hint">
-            {offset.made != null && offset.made !== offset.setting
-              ? t('the shown shell was made at {mm} mm').replace('{mm}', String(offset.made))
+            {choice.made != null && choice.made !== choice.setting
+              ? t('the shown shell was made at {value}').replace('{value}', `${choice.made} ${unit}`)
               : t('CPU, 0 hub jobs')}
           </span>
         </div>
-      ) : null}
+      ) : null) : null}
       {shape.due ? (
         <span className="ga-hint" data-mesh-shape-due="" style={{ color: 'var(--warning, #d29922)' }}>
           {`${t('The fit was made as {shape}').replace('{shape}', t(MESH_SHAPE_LABELS[shape.made ?? 'as_generated']))} · ${t('Fit due — refits on the CPU, 0 hub jobs')}`}
