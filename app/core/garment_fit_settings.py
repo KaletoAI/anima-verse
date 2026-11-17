@@ -7,10 +7,11 @@ may add — ``garment_fit.fit_clothing``'s ``settings``:
   ``garment_fit.auto_sleeve``), "generated" (as generated, re-centred on the arm), "wider" (+20 % about the arm
   axis) or "fitted" (laid onto the arm).
 - ``allowance``: ``garment_fit.ALLOWANCE_CHOICES`` — "auto" (the width allowance of ``garment_fit.scale_retry``) or
-  a fixed percent of width (0 / 3 / 6 / 10).
+  a fixed percent of the torso's half width, applied as room over the whole piece after the clearance pass
+  (``garment_fit.room_offset``, A174; negative = tighter, never closer than the clearance).
 - ``depth`` (Ruling A68): ``garment_fit.DEPTH_CHOICES`` — room in front of and behind the trunk added after the
-  push-out (``garment_fit.depth_ease``), a percent of the torso's half depth (0 / 3 / 6 / 10; default 0, Auto never
-  adds depth).
+  push-out, a percent of the torso's half depth (default 0, Auto never adds depth; A174: room over the whole piece,
+  ``garment_fit.room_offset``, negative = tighter).
 - ``trunk`` (Ruling A83): ``garment_fit.TRUNK_CHOICES`` — "auto" (the fit decides, ``garment_fit.auto_trunk``),
   "generated" (as generated) or "fitted" (laid onto the body, ``garment_fit.place_trunk``; before the depth
   allowance).
@@ -117,13 +118,14 @@ def validate(changes: Dict[str, Any]) -> Dict[str, Any]:
                 out[key] = "auto"
             elif (isinstance(value, bool) or not isinstance(value, (int, float))
                   or value not in garment_fit.ALLOWANCE_CHOICES):
-                raise ValueError("allowance must be auto, 0, 3, 6 or 10")
+                raise ValueError("allowance must be auto or one of "
+                                 + ", ".join(str(c) for c in garment_fit.ALLOWANCE_CHOICES if c != "auto"))
             else:
                 out[key] = int(value)
         elif key == "depth":
             if (isinstance(value, bool) or not isinstance(value, (int, float))
                     or value not in garment_fit.DEPTH_CHOICES):
-                raise ValueError("depth must be 0, 3, 6 or 10")
+                raise ValueError("depth must be one of " + ", ".join(str(c) for c in garment_fit.DEPTH_CHOICES))
             out[key] = int(value)
         elif key == "shaft":
             from app.core import garment_shaft

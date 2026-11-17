@@ -258,13 +258,22 @@ def placement(P, F, body_P, masks) -> Tuple[float, np.ndarray]:
     return s, t
 
 
+def preview_depth_choices() -> Tuple[int, ...]:
+    """A174: the depth choices the view previews — the non-negative ones of ``garment_fit.DEPTH_CHOICES`` (a negative
+    depth tightens after the fit's clearance pass, ``garment_fit.room_offset``; the Fit settings set it)."""
+    from app.core import garment_fit as gf
+    return tuple(c for c in gf.DEPTH_CHOICES if c >= 0)
+
+
 def allowance_factors() -> Tuple[float, ...]:
     """Every width factor the fit allowance can apply (Ruling A47): 1.0, the settable choices
     (``garment_fit.ALLOWANCE_CHOICES`` in percent) and the automatic steps (``SCALE_RETRY_STEPS``), sorted —
     at most 16, so one 16-bit mask word per face holds them all (Ruling A76: nine since the choices reach +20 %)."""
     from app.core import garment_fit as gf
     out = {1.0} | {round(float(v), 4) for v in gf.SCALE_RETRY_STEPS}
-    out |= {round(1.0 + float(c) / 100.0, 4) for c in gf.ALLOWANCE_CHOICES if c != "auto"}
+    # A174: the negative choices tighten the piece AFTER the fit's clearance pass (``garment_fit.room_offset``) —
+    # nothing a widening before the push could preview; the Fit settings set them.
+    out |= {round(1.0 + float(c) / 100.0, 4) for c in gf.ALLOWANCE_CHOICES if c != "auto" and c >= 0}
     factors = tuple(sorted(out))
     assert len(factors) <= 16
     return factors
@@ -312,7 +321,7 @@ def depth_gaps(Qb, sdf, frame: Dict[str, float], *, k: float, depths=None) -> li
     fit's push-out, like the trunk gap; None for an empty sector."""
     from app.core import garment_fit as gf
     Qb = np.asarray(Qb, np.float64)
-    depths = gf.DEPTH_CHOICES if depths is None else depths
+    depths = preview_depth_choices() if depths is None else depths
     front, back = gf.front_back_rows(Qb, frame["centre_x"], frame["centre_z"])
     args = {key: frame[key] for key in ("centre_x", "centre_z", "x_limit", "y_limit", "ramp")}
     out = []
@@ -379,7 +388,7 @@ def allowance_table(P, F, body_P, body_F, *, s: float, t, axis: Dict[str, float]
     hi = np.maximum(Q.max(0), widened(Q, factors[-1]).max(0))
     if frame is not None:
         # The field must reach the largest depth shift too (it samples clamped beyond its bounds).
-        ease_max = max(gf.DEPTH_CHOICES) / 100.0 * frame["half_depth"]
+        ease_max = max(preview_depth_choices()) / 100.0 * frame["half_depth"]
         lo, hi = lo - np.array([0.0, 0.0, ease_max]), hi + np.array([0.0, 0.0, ease_max])
     margin = gf.SDF_MARGIN_M * vox / gf.VOX_M
     sdf = gf.body_sdf(np.asarray(body_P, np.float64), np.asarray(body_F, np.int64).reshape(-1, 3), vox=vox,
@@ -408,8 +417,9 @@ def allowance_table(P, F, body_P, body_F, *, s: float, t, axis: Dict[str, float]
     out = {"factors": list(factors), "steps": steps, "band_vertices": int(rows.sum()), "union": bits > 0,
            "bits": bits}
     if frame is not None:
-        out["depth"] = {"choices": list(gf.DEPTH_CHOICES),
-                        "ease_mm": [round(c / 100.0 * frame["half_depth"] * k * 1000.0, 1) for c in gf.DEPTH_CHOICES]}
+        out["depth"] = {"choices": list(preview_depth_choices()),
+                        "ease_mm": [round(c / 100.0 * frame["half_depth"] * k * 1000.0, 1)
+                                    for c in preview_depth_choices()]}
     return out
 
 

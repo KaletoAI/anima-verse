@@ -7,9 +7,10 @@
 import type { Light } from './hairstylesModel'
 
 export type SleeveChoice = 'auto' | 'generated' | 'wider' | 'fitted'
-export type AllowanceChoice = 'auto' | 0 | 3 | 6 | 10 | 15 | 20
-/** Ruling A68: room in front of and behind the trunk, percent of the torso's half depth (no Auto). */
-export type DepthChoice = 0 | 3 | 6 | 10 | 15 | 20
+export type AllowanceChoice = 'auto' | -10 | -6 | -3 | 0 | 3 | 6 | 10 | 15 | 20
+/** Ruling A68: room in front of and behind the trunk, percent of the torso's half depth (no Auto; A174: negative =
+ *  tighter). */
+export type DepthChoice = -10 | -6 | -3 | 0 | 3 | 6 | 10 | 15 | 20
 export type SleeveSideKey = 'left' | 'right'
 /** Ruling A83: the trunk as generated or laid onto the body (`garment_fit.TRUNK_CHOICES`). */
 export type TrunkChoice = 'auto' | 'generated' | 'fitted'
@@ -67,6 +68,9 @@ export interface AllowanceInfo {
   attempts?: Array<{ scale: number; ok: boolean; improves?: boolean; clears?: boolean;
     deep_push_share?: number | null; torso_tight_share?: number | null }>
   inherited?: boolean
+  /** A174: a fixed choice's room over the whole piece (mm, negative = tighter) and the torso's half width. */
+  room_mm?: number
+  half_width_mm?: number
 }
 
 /** Ruling A68: the depth allowance the shown fit was made with (`report.depth`). */
@@ -178,8 +182,8 @@ export interface FitSettingsInfo {
 type T = (s: string) => string
 
 export const SLEEVE_CHOICES: SleeveChoice[] = ['auto', 'generated', 'wider', 'fitted']
-export const ALLOWANCE_CHOICES: AllowanceChoice[] = ['auto', 0, 3, 6, 10, 15, 20]
-export const DEPTH_CHOICES: DepthChoice[] = [0, 3, 6, 10, 15, 20]
+export const ALLOWANCE_CHOICES: AllowanceChoice[] = ['auto', -10, -6, -3, 0, 3, 6, 10, 15, 20]
+export const DEPTH_CHOICES: DepthChoice[] = [-10, -6, -3, 0, 3, 6, 10, 15, 20]
 export const TRUNK_CHOICES: TrunkChoice[] = ['auto', 'generated', 'fitted']
 export const SHAFT_LABELS: Record<ShaftChoice, string> = {
   split: 'Keep (shoe + leg part)',
@@ -234,18 +238,23 @@ export const MESH_SHAPE_LABELS: Record<MeshShape, string> = {
 }
 
 export function allowanceLabel(choice: AllowanceChoice, t: T): string {
-  return choice === 'auto' ? t('Auto') : `+${choice} %`
+  return choice === 'auto' ? t('Auto') : `${signedPct(choice)} %`
 }
 
-export const ALLOWANCE_HINT = 'Widens the piece about the body’s centre before the fit pushes it out: the sides, and front and back in proportion (where the piece lies inside the body, the push-out takes that back). Auto widens a fit that passes but lies tight — more than 8 % pushed out over 3 cm, or more than 18 % of the trunk closer than 1.5 cm — by the smallest step up to 8 % that passes every check. A fixed value fits exactly that much wider, with no automatic step.'
+/** "+6" / "−6" (A174: a negative allowance makes the piece tighter). */
+export function signedPct(v: number): string {
+  return `${v < 0 ? '−' : '+'}${Math.abs(v)}`
+}
+
+export const ALLOWANCE_HINT = 'A fixed value is room over the whole piece, added after the fit pushes it out: every part moves away from the body by this share of the torso’s half width — the sides and the inner legs fully, front and back by the depth allowance. Negative values make it tighter, never closer to the skin than the clearance. Auto widens a fit that passes but lies tight — more than 8 % pushed out over 3 cm, or more than 18 % of the trunk closer than 1.5 cm — by the smallest step up to 8 % that passes every check.'
 
 /** Ruling A68. */
-export const DEPTH_HINT = 'Room in front of and behind the trunk, added after the fit pushes the piece out: the front and the back stand off by this share of the torso’s half depth. Sleeves, the collar and the neck opening keep their size. Auto never adds depth; the default is +0 %.'
+export const DEPTH_HINT = 'Room in front and behind over the whole piece, added after the fit pushes it out: every part facing forward or back moves away from the body by this share of the torso’s half depth. Negative values make it tighter, never closer to the skin than the clearance. Sleeves, the collar and the neck opening keep their size. Auto never adds depth; the default is +0 %.'
 
 /** "+6 %", with the room in mm when the torso's half depth is known ("+6 % · 8.0 mm", Ruling A76). */
 export function depthLabel(choice: DepthChoice, halfDepthMm?: number | null): string {
   return halfDepthMm != null && Number.isFinite(halfDepthMm)
-    ? `+${choice} % · ${((choice / 100) * halfDepthMm).toFixed(1)} mm` : `+${choice} %`
+    ? `${signedPct(choice)} % · ${((choice / 100) * halfDepthMm).toFixed(1)} mm` : `${signedPct(choice)} %`
 }
 
 const WHERE: Record<string, string> = { 'upper arm': 'upper arm', forearm: 'forearm', wrist: 'wrist' }
@@ -331,8 +340,8 @@ export function allowanceNumbers(info: FitSettingsInfo, t: T): string {
     width,
   ]
   const d = info.depth
-  if (d && d.setting > 0) {
-    parts.push(t('depth +{pct} % ({mm} mm)').replace('{pct}', String(d.setting)).replace('{mm}', d.ease_mm.toFixed(1)))
+  if (d && d.setting !== 0) {
+    parts.push(t('depth {pct} % ({mm} mm)').replace('{pct}', signedPct(d.setting)).replace('{mm}', d.ease_mm.toFixed(1)))
   }
   if (n.trunk_front_gap_p50_m != null && n.trunk_back_gap_p50_m != null) {
     parts.push(`${t('Gap front / back')} ${(n.trunk_front_gap_p50_m * 1000).toFixed(1)} / ${
@@ -346,7 +355,11 @@ export function allowanceReason(info: FitSettingsInfo, t: T): string {
   const a = info.allowance
   if (!a) return ''
   if (a.inherited) return t('On a body shape the width comes from the plain body’s fit')
-  if (a.setting !== 'auto') return a.setting === 0 ? t('Set: no extra width') : t('Set: exactly this much wider')
+  if (a.setting !== 'auto') {
+    if (a.setting === 0) return t('Set: no extra width')
+    const room = a.room_mm != null ? ` (${signedPct(a.room_mm)} mm)` : ''
+    return (a.setting < 0 ? t('Set: this much tighter over the whole piece') : t('Set: this much more room over the whole piece')) + room
+  }
   if (!a.trigger?.length) return t('Auto: the fit does not lie tight — not widened')
   const why = a.trigger.map((k) => (k === 'deep_push_share' ? t('more than 8 % pushed out over 3 cm')
     : t('more than 18 % of the trunk closer than 1.5 cm'))).join(` ${t('and')} `)
@@ -360,6 +373,7 @@ export function depthReason(info: FitSettingsInfo, t: T): string {
   const d = info.depth
   if (!d) return info.recorded ? t('Shown fit: no extra depth') : ''
   if (d.inherited) return t('On a body shape the depth comes from the plain body’s fit')
+  if (d.setting < 0) return t('Shown fit: {mm} mm tighter in front and behind').replace('{mm}', Math.abs(d.ease_mm).toFixed(1))
   return d.setting > 0
     ? t('Shown fit: {mm} mm more room in front and behind').replace('{mm}', d.ease_mm.toFixed(1))
     : t('Shown fit: no extra depth')
