@@ -437,6 +437,78 @@ def _bridge_mm(marg, margin_mm: float):
     return np.clip(np.where(mm > -9.99, mm + margin_mm, mm), -5, 5 + margin_mm)
 
 
+def boundary_loops(P, F) -> List[List[int]]:
+    """The boundary loops of the mesh ``(P, F)`` (vertex indices into ``P``, welded by position first; each loop as
+    a list of ORIGINAL vertex indices, one representative per welded vertex)."""
+    from app.core import garment_fit as gf
+    Pw, Fw, inv = gf.weld(P, F)
+    rep = np.zeros(len(Pw), np.int64)
+    rep[inv] = np.arange(len(inv))
+    E = np.concatenate([Fw[:, [0, 1]], Fw[:, [1, 2]], Fw[:, [2, 0]]])
+    key = np.sort(E, 1)
+    u, cnt = np.unique(key, axis=0, return_counts=True)
+    border = {(int(a), int(b)) for a, b in u[cnt == 1]}
+    nxt: Dict[int, int] = {}
+    for a, b in E:
+        if (min(a, b), max(a, b)) in border:
+            nxt[int(a)] = int(b)
+    seen: set = set()
+    loops = []
+    for start in list(nxt):
+        if start in seen:
+            continue
+        loop = [start]
+        seen.add(start)
+        v = nxt[start]
+        while v != start and v in nxt and v not in seen:
+            loop.append(v)
+            seen.add(v)
+            v = nxt[v]
+        if v == start and len(loop) >= 3:
+            loops.append([int(rep[w]) for w in loop])
+    return loops
+
+
+def loop_area(P, loop) -> float:
+    """Area (m²) of the fan over a closed loop of points (the hole it encloses)."""
+    Q = P[loop]
+    c = Q.mean(0)
+    return float(0.5 * np.linalg.norm(np.cross(Q - c, np.roll(Q, -1, 0) - c).sum(0)))
+
+
+def fill_small_holes(P, F, attrs, max_area: float):
+    """A184: close every hole of the mesh smaller than ``max_area`` (m²) with a fan from its centroid — a hole is
+    a boundary loop that is not the longest loop of its connected part. Returns ``(P, F, attrs, closed)``."""
+    from app.core import garment_fit as gf
+    if max_area <= 0 or len(F) == 0:
+        return P, F, attrs, 0
+    loops = boundary_loops(P, F)
+    if not loops:
+        return P, F, attrs, 0
+    Pw, Fw, inv = gf.weld(P, F)
+    lab, _ = gf.components(Pw, Fw)
+    per = [float(np.linalg.norm(P[lp] - P[np.roll(lp, -1)], axis=1).sum()) for lp in loops]
+    longest: Dict[int, int] = {}
+    for i, lp in enumerate(loops):
+        c = int(lab[inv[lp[0]]])
+        if c not in longest or per[i] > per[longest[c]]:
+            longest[c] = i
+    newP, newA, newF = [], [], []
+    n = len(P)
+    for i, lp in enumerate(loops):
+        if longest.get(int(lab[inv[lp[0]]])) == i or loop_area(P, lp) >= max_area:
+            continue
+        ci = n + len(newP)
+        newP.append(P[lp].mean(0))
+        newA.append(attrs[lp].mean(0))
+        # the loop runs with the boundary edges' orientation: the fan reverses it to match the faces' winding
+        newF += [[lp[(k + 1) % len(lp)], lp[k], ci] for k in range(len(lp))]
+    if not newP:
+        return P, F, attrs, 0
+    return (np.concatenate([P, np.array(newP)]), np.concatenate([F, np.array(newF, np.int64)]),
+            np.concatenate([attrs, np.array(newA)]), len(newP))
+
+
 class ShellRefused(ValueError):
     """The shell cannot be made (no region, empty masks)."""
 
@@ -680,6 +752,9 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     rm = np.full(len(Vc), -1)
     rm[usedc] = np.arange(len(usedc))
     Vc, Fc, Ac = Vc[usedc], rm[Fc], Ac[usedc]
+    # A184: holes the clip left inside the region, up to "Fill holes up to", closed with a fan
+    Vc, Fc, Ac, closed = fill_small_holes(Vc, Fc, Ac, fill_cm2 * 1e-4)
+    report["shell_holes_closed"] = int(closed)
     UVc, Puc, Wc = Ac[:, :2], Ac[:, 2:5], Ac[:, 5:]
 
     # 4. offset along the smoothed outward normals

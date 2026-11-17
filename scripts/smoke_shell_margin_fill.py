@@ -14,6 +14,10 @@ Expected values derived by hand:
      bool reads the default; validate refuses 4 and True with ValueError.
 [M5] the region excludes arms and hands only: the default ``arm_tokens`` of ``build_shell`` are ("Arm", "Hand") —
      a "Shoulder" token dropped every strap over the trapezius (Glut's bra, A184).
+[M6] ``fill_small_holes``: a 4x4-vertex grid of 1 cm squares (9 squares, 18 triangles) with the centre square
+     removed (16 triangles) has 2 boundary loops: the outer one (perimeter 12 cm) and the centre hole (4 cm, area
+     exactly 1 cm² = 1e-4 m²). Fill up to 2 cm² closes it: 1 centroid vertex at the centre (1.5, 1.5) cm, 4 fan
+     triangles -> 20 faces, then only the outer loop is left. Fill up to 0.5 cm² closes nothing (16 faces).
 [M4] due: a shell fit made with margin 3 is due when the setting is 6; a generated-mesh fit is not
      (``garment_fit_settings.changed`` drops the shell keys for a non-shell piece).
 """
@@ -67,6 +71,21 @@ check("[M4] shell piece due", fs.changed(record, profile, "x"), True)
 shape = gs.AS_GENERATED
 record_gen = {"inputs": {"fit_settings": {"shell_margin": 3}}}
 check("[M4] generated piece not due", fs.changed(record_gen, profile, "x"), False)
+V = np.array([[x * 0.01, y * 0.01, 0.0] for y in range(4) for x in range(4)])
+F = []
+for y in range(3):
+    for x in range(3):
+        if (x, y) == (1, 1):
+            continue
+        a = y * 4 + x
+        F += [[a, a + 1, a + 5], [a, a + 5, a + 4]]
+F = np.array(F)
+A = V[:, :2].copy()
+check("[M6] loops before", len(gs.boundary_loops(V, F)), 2)
+P2, F2, A2, n = gs.fill_small_holes(V, F, A, 2e-4)
+check("[M6] closed at 2 cm²", (n, len(F2), [round(float(c), 4) for c in P2[-1][:2]], len(gs.boundary_loops(P2, F2))),
+      (1, 20, [0.015, 0.015], 1))
+check("[M6] none at 0.5 cm²", (gs.fill_small_holes(V, F, A, 0.5e-4)[3], len(F)), (0, 16))
 import inspect
 check("[M5] arm tokens", inspect.signature(gs.build_shell).parameters["arm_tokens"].default, ("Arm", "Hand"))
 print("all pass" if not fails else f"{fails} FAILED")
