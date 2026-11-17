@@ -2432,8 +2432,10 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
     if beside and wanted != ["fit"]:
         raise ValueError("Only a run of the fit step alone runs beside the character's other garment runs")
     import contextlib
+    from app.core.garment_images import run_budget
+    # A190: one run — each piece-only view spends at most ``GHOST_RUN_JOBS`` image jobs in it.
     with (contextlib.nullcontext() if beside else gs.char_lock(character_name)), \
-            gs.run_item_lock(character_name, item_id):
+            gs.run_item_lock(character_name, item_id), run_budget():
         result = _run_locked(character_name, item, kind, wanted, view, bool(force), state, only=bool(only),
                              **({"prerequisites": True} if prerequisites else {}))
         _note_outcome(character_name, item_id, result)
@@ -2680,6 +2682,17 @@ def run_estimate(character_name: str, item_id: str, *,
                                                        or garment_images.rejudge_expected(
                                                            character_name, item_id, fsig, s, v)))]
                 parts[i] = (s, max(n - len(worn_views), 0))
+    if method == gs.EDIT_CHAIN and kind == _clothing():
+        # A190: the bald / arms-up base views a shell piece's worn views are made on — one job each that is not made
+        # yet, for the worn views this run makes.
+        from app.core import shell_base_views
+        worn_step = next((s for s in steps if (_kind_module(kind).EDIT_STEPS.get(s) or {}).get("source") == "base"),
+                         None)
+        if worn_step is not None:
+            variant_jobs = sum(shell_base_views.due(character_name, item_id, v, profile=profile) for v in views
+                               if from_step or not _view_done(character_name, item_id, fsig, worn_step, v))
+            if variant_jobs:
+                parts.insert([s for s, _n in parts].index(worn_step), ("base views", variant_jobs))
     reused = []
     if kind == _clothing() and method == gs.EDIT_CHAIN and state == "open":
         # Ruling F15 i-1: the open state's backs are the closed state's — copied when it has them.
@@ -2787,10 +2800,13 @@ def _view_cost(character_name: str, item_id: str, kind: str, fsig: str, step: st
     ``BACK_JOBS``); 0 for a view a stored attempt passes once judged again (Ruling A27) — never for a drafted
     back whose front ``front_changes``: its attempts follow the old front — and for an OPEN back copied from the
     closed state (ruling F15 i-1; a forced back is rendered from the closed texts instead)."""
-    from app.core import garment_images
+    from app.core import garment_images, shell_base_views
     total = int(costs.get(step, 0))
     back = BACK_JOBS.get(step, total // 2)
     jobs = back if view != "front" else total - back   # A185: a side view costs what the back does
+    if (_kind_module(kind).EDIT_STEPS.get(step) or {}).get("source") == "base":
+        # A190: the bald / arms-up base view a shell piece's worn view is made on, when it is not made yet
+        jobs += shell_base_views.due(character_name, item_id, view, profile=profile)
     if (garment_images.piece_source(character_name, item_id, fsig, step, view) or {}).get("source") == "worn":
         return 0  # Ruling A46: made from the worn view minus the base view — no render
     if step == "cutout" and garment_images.cutout_reusable(character_name, item_id, fsig, view):
@@ -2923,7 +2939,10 @@ def _plan_of(character_name: str, item_id: str, ctx: Dict[str, Any], step: str, 
         total = int(ctx["costs"].get(step, 0))
         back = BACK_JOBS.get(step, total // 2)
         jobs = back if view != "front" else total - back   # A185: a side view costs what the back does
-    return {"step": step, "view": view, "jobs": jobs, "skipped": skipped or None,
+    from app.core.garment_images import GHOST_RUN_JOBS, _capped
+    # A190: a piece-only view never spends more than ``GHOST_RUN_JOBS`` image jobs in one run (refusals included).
+    max_jobs = GHOST_RUN_JOBS if jobs and _capped(_kind_module(kind), step) else None
+    return {"step": step, "view": view, "jobs": jobs, "max_jobs": max_jobs, "skipped": skipped or None,
             "missing": missing, "prerequisite_jobs": sum(m["jobs"] for m in missing),
             "follow_up": follow, "follow_up_jobs": sum(f["jobs"] for f in follow)}
 

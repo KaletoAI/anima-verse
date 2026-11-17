@@ -170,6 +170,7 @@ import re
 import shutil
 import tempfile
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -191,6 +192,54 @@ MASK_THRESHOLD = 128
 #: The edit attempts per step (R5).
 ATTEMPTS = 2
 _ORDINALS = ("first", "second", "third")
+
+
+#: A190: the image jobs one piece-only (ghost) view may spend in one run (``run_budget``) — its attempts, the
+#: attempts of a pair repair and of every re-run of the step together. After that many refusals the view is offered
+#: (Use this / Upload / Regenerate) and nothing renders it again in the same run.
+GHOST_RUN_JOBS = 2
+#: The run's spend per ``(character, item, fsig, step, view)`` (``run_budget``); None outside a run (then one call
+#: of ``run_edit_step`` is its own run: ``ATTEMPTS``).
+_RUN_SPENT: ContextVar[Optional[Dict[Tuple[str, str, str, str, str], int]]] = ContextVar("garment_run_spent",
+                                                                                          default=None)
+#: The refusal reason when the run's jobs of a piece-only view are spent.
+BUDGET_SPENT = "{n} image jobs of this piece-only view were spent in this run — pick an attempt, upload, or regenerate"
+
+
+@contextmanager
+def run_budget():
+    """A190: one garment run — every piece-only view spends at most ``GHOST_RUN_JOBS`` image jobs inside it. Nested
+    runs share the outermost budget."""
+    if _RUN_SPENT.get() is not None:
+        yield
+        return
+    token = _RUN_SPENT.set({})
+    try:
+        yield
+    finally:
+        _RUN_SPENT.reset(token)
+
+
+def _capped(kind, step: str) -> bool:
+    """Whether ``step`` is the kind's piece-only step whose jobs per view and run are capped (A190)."""
+    return step == getattr(kind, "FROM_WORN_STEP", None)
+
+
+def jobs_left(character_name: str, item_id: str, fsig: str, step: str, view: str, kind=None) -> int:
+    """A190: how many image jobs ``view`` of ``step`` may still spend in the current run (``ATTEMPTS`` for a step
+    without a cap)."""
+    kind = kind if kind is not None else _kind_module(item_id)
+    if not _capped(kind, step):
+        return ATTEMPTS
+    spent = (_RUN_SPENT.get() or {}).get((character_name, item_id, fsig, step, view), 0)
+    return max(0, GHOST_RUN_JOBS - spent)
+
+
+def _spend(character_name: str, item_id: str, fsig: str, step: str, view: str) -> None:
+    spent = _RUN_SPENT.get()
+    if spent is not None:
+        key = (character_name, item_id, fsig, step, view)
+        spent[key] = spent.get(key, 0) + 1
 
 
 class GateRefused(RuntimeError):
@@ -750,12 +799,21 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
     base = find_ref_image(character_name, base_body._kind(view), bsig)
     if base is None:
         raise base_body.MissingInput(base_body.BASE_IMAGES_MISSING)
+    # A190: a shell piece's worn views are made on a bald / arms-up variant of the base view (made here, for the
+    # worn step, when it is missing); its piece-only views are judged on the same one.
+    from app.core import shell_base_views
+    try:
+        base, base_variant = shell_base_views.base_for(character_name, item_id, view, bsig, base, profile=profile,
+                                                       make=kind.EDIT_STEPS.get(step, {}).get("source") == "base")
+    except shell_base_views.VariantRefused as e:
+        raise GateRefused(step, view, [{"view": view, "ok": False, "reasons": [str(e)], "base_variant_refused": True,
+                                        "variant_gates": e.records}]) from e
     refs_dir = get_model_refs_dir(character_name)
     final.parent.mkdir(parents=True, exist_ok=True)
     if drafted:
         return _drafted_back(character_name, item_id, fsig, step, kind, profile=profile, base=base, force=force,
                              refs_dir=refs_dir, final=final, pair_check=pair_check,
-                             before_composite=before_composite, view=view)
+                             before_composite=before_composite, view=view, base_variant=base_variant)
     source_step = kind.EDIT_STEPS[step]["source"]
     if source_step == "base":
         source = base
@@ -771,7 +829,7 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
     try:
         return _render_edit_step(character_name, item_id, fsig, step, view, kind, profile=profile, base=base,
                                  source=source, refs_dir=refs_dir, final=final, pair_check=pair_check,
-                                 prompt_hints=prompt_hints)
+                                 prompt_hints=prompt_hints, base_variant=base_variant)
     except GateRefused as e:
         # Ruling A46: Auto on a close-fitting piece — a refused generated view is made from the worn view now.
         after = piece_source(character_name, item_id, fsig, step, view) if choice is not None else None
@@ -849,7 +907,7 @@ def _gate_attempt(kind, step: str, view: str, path: Path, base_size: Tuple[int, 
 def _render_edit_step(character_name: str, item_id: str, fsig: str, step: str, view: str, kind, *,
                       profile: Dict[str, Any], base: Path, source: Path, refs_dir: Path, final: Path,
                       pair_check: Optional[Callable[[Dict[str, Any]], Optional[str]]],
-                      prompt_hints: Optional[Dict[str, Any]]) -> Path:
+                      prompt_hints: Optional[Dict[str, Any]], base_variant: str = "") -> Path:
     """The rendered (generated) edit of ``view`` of ``step`` (``run_edit_step``): stored attempts judged again
     first, then up to ``ATTEMPTS`` renders. ``GateRefused`` when every attempt is refused."""
     from app.core import expression_regen
@@ -888,14 +946,23 @@ def _render_edit_step(character_name: str, item_id: str, fsig: str, step: str, v
                                                   _mask(path, base_size))
 
         hit = _regate_stored(character_name, item_id, fsig, step, view, kind, final=final, regate=regate,
+                             # A190: an attempt made on another base-view variant (hair, arms) is never reused
+                             keep=lambda sidecar: str(sidecar.get("base_variant") or "") == base_variant,
                              closeness=closeness if position is not None else None)
         if hit is not None:
             return hit
 
     records: List[Dict[str, Any]] = []
-    for attempt in range(1, ATTEMPTS + 1):
+    # A190: a piece-only view spends at most ``GHOST_RUN_JOBS`` jobs per run, re-runs and pair repairs included.
+    allowed = min(ATTEMPTS, jobs_left(character_name, item_id, fsig, step, view, kind))
+    if allowed <= 0:
+        raise GateRefused(step, view, [{"view": view, "ok": False, "budget": True,
+                                        "reasons": [BUDGET_SPENT.format(n=GHOST_RUN_JOBS)]}])
+    for attempt in range(1, allowed + 1):
         target = garment_path(character_name, item_id, fsig, "image", step=step, view=view, attempt=attempt)
         stem = target.with_suffix("")
+        if _capped(kind, step):
+            _spend(character_name, item_id, fsig, step, view)
         with _image_routing.retry_attempt(attempt), \
                 square_reference(source, refs_dir) as (reference, side, offset, source_size):
             path = expression_regen.render_character_image(
@@ -912,6 +979,7 @@ def _render_edit_step(character_name: str, item_id: str, fsig: str, step: str, v
                 reference_image=reference,
                 sidecar_extra={"garment": {"item_id": item_id, "fsig": fsig, "step": step,
                                            "view": view, "attempt": attempt},
+                              "base_variant": base_variant,
                               "edit_canvas": {"side": side, "offset": list(offset),
                                               "crop": list(source_size)}},
                 character_loras=False,
@@ -1084,12 +1152,33 @@ def stale_accepted(character_name: str, item_id: str, fsig: str, step: str, view
     (``regate_accepted``) and refused by a rule that makes it stale (the
     kind's keys for the step) — never counted as done (``garments``),
     rendered again, not reused (Ruling A17 d)."""
+    if variant_stale(character_name, item_id, fsig, step, view):
+        return True
     keys = _stale_keys(_kind_module(item_id), step)
     if not keys:
         return False
     record = accepted_record(_final(character_name, item_id, fsig, step, view))
     return (isinstance(record, dict) and "regated_from" in record
             and any(record.get(k) is True for k in keys))
+
+
+def variant_stale(character_name: str, item_id: str, fsig: str, step: str, view: str) -> bool:
+    """A190: whether the accepted WORN ``view`` was made on another base-view variant than its piece needs now
+    (``shell_base_views.variant_for``: a shell piece on a haired plain body is worn bald, its side views with the
+    arms up) — recorded as ``base_variant`` ("" for a view made before A190 or on the plain base view). Such a view
+    is stale: made again, the views after it with it. Taken by the user (Use this / Upload) is never stale so."""
+    from app.core.garment_store import read_record
+    kind = _kind_module(item_id)
+    if (getattr(kind, "EDIT_STEPS", {}).get(step) or {}).get("source") != "base":
+        return False
+    final = _final(character_name, item_id, fsig, step, view)
+    if not _accepted(final):
+        return False
+    record = read_record(final.with_suffix(".json"))
+    if isinstance(record.get("user_accepted"), dict) or isinstance(record.get("copied_from"), dict):
+        return False
+    from app.core import shell_base_views
+    return str(record.get("base_variant") or "") != shell_base_views.variant_for(character_name, item_id, view)
 
 
 def _final(character_name: str, item_id: str, fsig: str, step: str, view: str) -> Path:
@@ -1569,7 +1658,8 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
                   profile: Dict[str, Any], base: Path, refs_dir: Path, final: Path,
                   pair_check: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
                   stored_only: bool = False, force: bool = False,
-                  before_composite: Optional[Callable[[], None]] = None, view: str = "back") -> Path:
+                  before_composite: Optional[Callable[[], None]] = None, view: str = "back",
+                  base_variant: str = "") -> Path:
     """The back of a drafted step (module docstring): up to ``ATTEMPTS``
     DRAFTs from the accepted front, each COMPOSITED onto the base back on the
     CPU (``view_composite``, rule "piece") and — when the composite passes
@@ -1663,7 +1753,8 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
         hit = _regate_stored(character_name, item_id, fsig, step, view, kind, final=final,
                              regate=lambda path, _old: regate_attempt(path),
                              keep=lambda sidecar: (sidecar.get("front_sha256") == front_sha and composite_ok(sidecar)
-                                                   and made_with_current_prompt(sidecar.get("draft_prompt"))),
+                                                   and made_with_current_prompt(sidecar.get("draft_prompt"))
+                                                   and str(sidecar.get("base_variant") or "") == base_variant),
                              follow_keys=DRAFT_FOLLOW_KEYS)
         if hit is not None:
             return hit
@@ -1713,6 +1804,7 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
         composite = view_composite.compose(base, draft, target, rule="piece", background=VIEW_REFERENCE_BACKGROUND,
                                            mask_target=support_path(target))
         follow = {"front_sha256": front_sha, "draft": draft.name, "draft_sha256": file_sha256(draft),
+                  "base_variant": base_variant,
                   **({"draft_prompt": drafted_with} if drafted_with else {}),
                   **view_composite.sidecar_fields(composite)}
         if composite["ok"] and view_composite.is_empty(composite):
