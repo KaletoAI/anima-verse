@@ -38,9 +38,14 @@ stop at .055 comes later), up/down .09, diagonal ellipse boundary
 at .0625 by ~2 mm, which moves it one step to .065. The round outline takes
 the median of [.09,d,.05,d]x2 = d with d in {.0625,.065}.
 Every wall point lies on the plane, so the wall is y=-.1, depth .05.
-Midline cap: for x<=.0075, |rx|>=.0525 and R<=.055*r/|rx|, so
-1-r/R<=1-.0525/.055=.04545 and weight<=smooth(.04545/.4)=.03581 (+fp). Without the
-cap R=1.15*d>=.071875 gives at least smooth((1-.055/.071875)/.4)=.626 at the margin.
+Midline cap (Ruling A164 region): with fade F=R*s, s=fade_down..fade_up=.15..1.1,
+the weight is at most min(smooth((R+F-r)/F), smooth((E-r)/F)) with the midline edge
+E=.055*r/|rx|. For x<=.0075, |rx|>=.0525, so E-r<=r*(.055/.0525-1)=.047619*r.
+The first term falls and the second rises with r; their bound is largest where
+R+F-r=.047619*r, r=(R+F)/1.047619, giving smooth(.045455*(R/F+1)), largest at
+the smallest share s=.15: smooth(.045455*7.6667)=smooth(.34848)=.2952 (+fp).
+Without the cap, at the margin r=.055: R+F>=.0625*1.15=.071875, so
+(R+F-r)/F>=(.071875-.055)/.009375>1 and the weight would be 1.
 """
 import sys
 import tempfile
@@ -63,7 +68,7 @@ p=dict(band_lower_bone='Lower',band_upper_bone='Upper',band_lower_offset=0.,band
  marker_area_min=.0001,marker_area_max=.003,marker_spread_max=.02,marker_pair_dz=.02,marker_pair_dx=.03,
  apex_smooth_radius=.015,apex_plateau_depth=.003,apex_context_radius=.05,
  boundary_directions=8,boundary_s_min=.03,boundary_s_max=.13,boundary_step=.0025,
- radius_plateau=.6,radius_scale=1.15,front_margin=.03,depth_ramp=.02,head_wall_depth=.04,
+ fade_down=.15,fade_up=1.1,front_margin=.03,depth_ramp=.02,head_wall_depth=.04,
  weight_min=.003,exclude_bones=['Exclude'],exclude_weight=.3,
  lateral_positive_bone='SideLeft',lateral_negative_bone='SideRight')
 group={'chains':[[{'bone':'ExampleLeft','parent':'Base'}],[{'bone':'ExampleRight','parent':'Base'}]]}
@@ -182,7 +187,7 @@ def fixture(kind):
    assert abs(s['depth']-.05)<.001, s
   for name,sign in (('ExampleLeft',1),('ExampleRight',-1)):
    near=[w for i,w in plan[1][name].items() if sign*co[i].x<=.0075+1e-9]
-   assert max(near,default=0.)<=.0359, (name,max(near))
+   assert max(near,default=0.)<=.2953, (name,max(near))
  print('PASS fixture',kind)
 for kind in ('A','B','C','D','E'): fixture(kind)
 fixture('X')

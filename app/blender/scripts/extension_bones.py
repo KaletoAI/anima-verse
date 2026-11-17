@@ -68,8 +68,8 @@ PARAMETERS = {'pair_protrusion': {'band_lower_bone': 'bone',
                      'exclude_weight': 'number',
                      'exclude_bones': 'bones',
                      'head_wall_depth': 'number',
-                     'radius_plateau': 'number',
-                     'radius_scale': 'number',
+                     'fade_down': 'number',
+                     'fade_up': 'number',
                      'side_margin': 'number',
                      'front_margin': 'number',
                      'depth_ramp': 'number',
@@ -204,7 +204,7 @@ def parameters(group):
                     raise ValueError(key + ' must contain finite numbers')
                 if kind == 'vector3' and len(value) != 3:
                     raise ValueError(key + ' must have three components')
-    positive = ('radius_scale', 'marker_search_radius', 'apex_smooth_radius', 'apex_plateau_depth', 'apex_context_radius', 'marker_grid_step', 'marker_area_min',
+    positive = ('marker_search_radius', 'apex_smooth_radius', 'apex_plateau_depth', 'apex_context_radius', 'marker_grid_step', 'marker_area_min',
                 'marker_area_max', 'marker_spread_max', 'marker_pair_dz', 'marker_pair_dx',
                 'boundary_s_min', 'boundary_s_max', 'boundary_step', 'exclude_weight', 'depth_ramp', 'slice_size', 'part_half_width',
                 'candidate_lateral_max', 'protrusion_threshold', 'weld_distance',
@@ -233,8 +233,8 @@ def parameters(group):
     if not 0 <= p['weight_min'] < 1:
         raise ValueError('weight_min must be in [0,1)')
     if op == 'pair_protrusion':
-        if not 0 <= p['radius_plateau'] < 1:
-            raise ValueError('radius_plateau must be in [0,1)')
+        if not 0 < p['fade_down'] <= p['fade_up']:
+            raise ValueError('fade_down must be positive and fade_up at least fade_down')
         if not 0 <= p['lateral_min'] < p['lateral_max']:
             raise ValueError('invalid lateral range')
         if not 0 < p['marker_dark_min'] < 1:
@@ -380,6 +380,8 @@ OUTLINE_BUMP_SIGMAS_M = (.006,.04)
 # its centre (Vallerie: the upper chest line runs on into the half-round's
 # upper slope and leaves it 1 cm above the centre; the shading fades 3 cm above).
 OUTLINE_TOP_MIN = .75
+UPPER_CHEST_SLOPE = .7
+OUTER_SIDE_SLOPE = .35
 
 
 def outline_locate(p, front, mid, lo, hi):
@@ -463,7 +465,9 @@ def outline_locate(p, front, mid, lo, hi):
     cd,cz = float(c[0]),float(c[1])
     radius = math.sqrt(max(c[2]+cd*cd+cz*cz,0.))
     rms = float(np.sqrt(((np.hypot(P[:,0]-cd,P[:,1]-cz)-radius)**2).mean()))
-    if rms > OUTLINE_RMS_MAX_M or not p['boundary_s_min'] <= radius <= p['boundary_s_max'] or cd-radius < -p['side_margin']:
+    # The circle may reach past the midline (a wide pair, Gelina: centre 4.8 cm,
+    # radius 7.4 cm): the outline's inner edge is measured on its own below.
+    if rms > OUTLINE_RMS_MAX_M or not p['boundary_s_min'] <= radius <= p['boundary_s_max']:
         return None,'outline: circle d %.3f r %.3f rms %.4f'%(cd,radius,rms)
     # Top: per column near the centre, the upper chest line fitted above the
     # band top, extended down; the highest point standing in front of it.
@@ -678,6 +682,7 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
         # keeps its crest apex and its round outline, no new crest search;
         # an outline placement keeps its apex and its measured outline.
         colour = all(row['apex_source']=='colour' for row in pinned)
+        extent = {'pinned':[row['reach'] for row in pinned]} if colour and all(row.get('outline') for row in pinned) else None
         outline = {'pinned':[row['reach'] for row in pinned]} if all(row['apex_source']=='outline' for row in pinned) else None
     else:
         found = [marker(v,sign) for v,sign in zip(frontmost,(1,-1))]
@@ -695,8 +700,13 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
                            key=lambda pair:pair[0][0].y+pair[1][0].y)[:1]
         colour = bool(pairs)
         outline = None
-        if not colour:
-            outline,outline_note = outline_locate(p,front,mid,lo,hi)
+        outline,outline_note = outline_locate(p,front,mid,lo,hi)
+        # With a marker the outline still sets the region (Ruling A164): the
+        # tangent reach mirrors the medial side onto the lateral one and
+        # stops short of the outer side and the top on a full pair.
+        extent = outline if colour else None
+        if colour:
+            outline = None
         if colour:
             markers = [(c[0],c[2] if c[3] else c[2]+'; at crest') for c in pairs[0]]
             marker_areas = [c[1] for c in pairs[0]]
@@ -786,7 +796,10 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
     else:
         cell,pick,initial = crest_search()
         apexes = initial
-    if not outline:
+    if colour and extent:
+        reach,fitted = walls(apexes,extent['pinned'] if 'pinned' in extent else
+                             [outline_reach(extent,sign*(a.x-mid),a.z,directions) for a,sign in zip(apexes,(1,-1))])
+    elif not outline:
         reach,fitted = walls(apexes)
     elif 'pinned' in outline:
         reach,fitted = walls(apexes,outline['pinned'])
@@ -818,29 +831,53 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
         lookup(bones,link['parent'])
         links.append((link['bone'],head,apex.copy(),link['parent']))
         w = {}
+        sagittal = Vector((0,n.y,n.z)).normalized()
         for i,v in enumerate(co):
-            dist = (v-c).dot(n)
+            rx,rz = (v.x-apex.x)*sign,v.z-apex.z
+            # Above the apex the region follows the upper chest back: it leans
+            # back about .4-.7 m per metre of height (side profiles of the
+            # measured models), so the depth gate moves back with it there;
+            # toward the outer side the half-round's own side face curves back
+            # the same way (Kira, Rosi), at half the slope, so the flank of
+            # the torso 9-10 cm behind stays out.
+            # The gate takes the wall's sagittal tilt only: with its lateral
+            # tilt the torso's flank, which faces sideways, counted as in
+            # front of the wall once the falloff reached past the outline.
+            dist = (v-c).dot(sagittal)+UPPER_CHEST_SLOPE*max(rz,0.)+OUTER_SIDE_SLOPE*max(rx,0.)
             if sign*(v.x-mid) < p['side_margin'] or dist < -p['front_margin']:
                 continue
-            rx,rz = (v.x-apex.x)*sign,v.z-apex.z
             t = (math.atan2(rx,rz)%(2*math.pi))/(2*math.pi)*K
             k = int(t)%K
             f = t-int(t)
-            radius = ((reach[k] if reach[k] is not None else p['boundary_s_min'])*(1-f)+(reach[(k+1)%K] if reach[(k+1)%K] is not None else p['boundary_s_min'])*f)*p['radius_scale']
+            radius = (reach[k] if reach[k] is not None else p['boundary_s_min'])*(1-f)+(reach[(k+1)%K] if reach[(k+1)%K] is not None else p['boundary_s_min'])*f
             r = math.hypot(rx,rz)
+            # Full weight over the whole outline, then a falloff into the torso
+            # (Ruling A164): long upward, where the half-round runs flat into
+            # the upper chest toward the armpit, short downward, where the
+            # crease ends it and the torso below must stay put; in between
+            # by the direction's height.
+            fade = radius*(p['fade_down']+(p['fade_up']-p['fade_down'])*(1+rz/max(r,1e-9))/2)
+            value = smooth((radius+fade-r)/fade)
             if rx < 0:
-                # The outline ends at the midline margin, also where clothing bridges the gap.
-                radius = min(radius,(sign*(apex.x-mid)-p['side_margin'])*r/-rx)
-                if radius <= 0:
+                # The region ends at the midline margin, also where clothing
+                # bridges the gap, fading over the direction's falloff before it.
+                edge = (sign*(apex.x-mid)-p['side_margin'])*r/-rx
+                if r >= edge:
                     continue
-            value = smooth((1-r/radius)/(1-p['radius_plateau']))*smooth((dist+p['front_margin'])/p['depth_ramp'])*max(0.,1-exclusion[i]/p['exclude_weight'])
+                value = min(value,smooth((edge-r)/fade))
+            # Never above the band top (the armpit level): on a full pair the
+            # upward falloff would otherwise reach the collarbone.
+            value *= smooth((hi-v.z)/p['depth_ramp'])
+            value *= smooth((dist+p['front_margin'])/p['depth_ramp'])*max(0.,1-exclusion[i]/p['exclude_weight'])
             if value > p['weight_min']:
                 w[i] = value
         if not w:
             raise ValueError('empty pair weight region')
         weights[link['bone']] = w
         placements.append({'head':list(head),'tip':list(apex),'apex_source':'colour' if colour else 'outline' if outline else 'geometry',
-                           **({'outline':outline} if outline and 'pinned' not in outline else {}),
+                           **({'outline':outline} if outline and 'pinned' not in outline else
+                              {'outline':extent} if colour and extent and 'pinned' not in extent else
+                              {'outline':pinned[len(placements)]['outline']} if colour and extent else {}),
                            'marker_area':marker_areas[len(placements)] if colour else None,'marker_note':note,'reach':reach.copy(),'wall_centre':list(c),'wall_normal':list(n),'depth':depth,
                            'anchor_blend':anchor_blend(w,owners,bones)})
     return links,weights,{'placement':placements,'leak':False},set(),[]

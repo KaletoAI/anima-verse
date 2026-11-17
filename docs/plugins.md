@@ -605,11 +605,17 @@ measured once more. The tangent search rarely finds a real boundary on fabric,
 so the outline becomes round with the median reach. The bone
 runs from `head_wall_depth` behind the wall (at the wall points' mean) to
 the tip. Weights combine a radial term over the star-shaped outline `R(angle)`
-(linear between the directions): `smooth((1-r/(R*radius_scale))/(1-radius_plateau))`,
-full through `radius_plateau*R*radius_scale`, zero at `R*radius_scale`; toward
-the midline `R*radius_scale` is capped where the ray from the tip meets
-`side_margin`, so weight fades to zero there even when fabric bridges the gap; a depth
-ramp of `depth_ramp` that starts `front_margin` behind the wall; and
+(linear between the directions; without a marker the measured outline, with a
+marker the outline too when it is found, else the tangent reach): full weight
+inside `R`, then `smooth` down to zero at `R*(1+fade)`, where `fade` runs from
+`fade_down` straight below the tip to `fade_up` straight above it by the
+direction's height (short under the crease, long into the upper chest); never
+above the band top (`band_upper_bone` + `band_upper_offset`), fading over
+`depth_ramp`; toward the midline the weight fades to zero where the ray from
+the tip meets `side_margin`, even when fabric bridges the gap; a depth ramp of
+`depth_ramp` that starts `front_margin` behind the wall's sagittal plane, moved
+back by .7 x the height above the tip and .35 x the distance outward of it (the
+upper chest and the outer side lean back); and
 `1 - w/exclude_weight` for a vertex's current weight `w` on `exclude_bones` and
 their descendants. Parameter changes alter the fingerprint and rebuild from the
 clean prerig.
@@ -758,8 +764,8 @@ each group complete or absent, and checks non-base parents by exact name.
 | `exclude_bones` | `[]` |
 | `exclude_weight` | `0.3` |
 | `head_wall_depth` | `0.04` |
-| `radius_plateau` | `0.6` |
-| `radius_scale` | `1.15` |
+| `fade_down` | `0.15` |
+| `fade_up` | `1.1` |
 | `side_margin` | `0.005` |
 | `front_margin` | `0.03` |
 | `depth_ramp` | `0.04` |

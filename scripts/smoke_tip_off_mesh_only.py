@@ -282,6 +282,13 @@ def part_b():
     # The old script imports ``_common`` from its own folder: let it find the current one.
     prefix = prefix.replace("source=Path(job['params']['source']);",
                             "sys.path.append(job['params']['scripts']); source=Path(job['params']['source']);")
+    # The old script still declares the radial plateau and scale the pair region
+    # used before the falloff shares (Ruling A164); the region itself does not
+    # enter these checks.
+    anchor = "lateral_positive_bone='SideLeft',lateral_negative_bone='SideRight')\n"
+    assert anchor in prefix
+    prefix = prefix.replace(anchor, anchor + "if job['params'].get('old_repair'):\n"
+                            " p.pop('fade_down'); p.pop('fade_up'); p.update(radius_plateau=.6,radius_scale=1.15)\n")
     scripts = str(runner.SCRIPTS_DIR)
     results = {}
     with tempfile.TemporaryDirectory(prefix="tip-off-mesh-only-") as tmp:

@@ -260,8 +260,9 @@ PART_BUILDS = {"attached_part": 13, "inset_part": 8}
 # skin tone ignores cells below the darkness gate (hair across the window,
 # Ruling A120). 2: without a marker the pair is located by its measured outline
 # (underside crease, side, inner edge, top line; apex in the middle) before the
-# crest search (Ruling A160).
-OP_BUILDS = {**PART_BUILDS, "pair_protrusion": 2, "pair_tip": 2}
+# crest search (Ruling A160). 3: full weight over the whole outline, then a falloff
+# into the torso, long upward and short below the crease (Ruling A164).
+OP_BUILDS = {**PART_BUILDS, "pair_protrusion": 3, "pair_tip": 2}
 
 
 def extension_rig_fingerprint(groups, overrides=None):

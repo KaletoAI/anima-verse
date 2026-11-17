@@ -24,9 +24,12 @@ LeftUpLeg=0. This interior blend probe has only the two extension influences.
 The separate radial probe verifies full surface weight independent of contact_ramp. At (.2,.1,1.1), outside both
 operation envelopes, the four original per-joint weights stay unchanged.
 At the pair apex (.1,-.23,1.4), envelope w=1 leaves only ExampleLeft=1.
-Probe (.12,-.23,1.4): R=.051, scaled R=.05865, r=.02; inside .6 plateau, w=1.
-Probe (.14,-.23,1.4): radial t=(1-.04/.05865)/.4=1865/2346;
-w=t*t*(3-2*t), depth factor=1. Retain the new joint and the three
+Probes (.12,-.23,1.4) and (.14,-.23,1.4): R=.051, r=.02 and .04, inside the
+outline, w=1 (Ruling A164: full weight over the whole outline).
+Probe (.17,-.23,1.4): r=.07, straight outward (rz=0), so the falloff share is
+fade_down+(fade_up-fade_down)*.5=.15+.95*.5=.625 and F=.051*.625=.031875;
+radial t=(R+F-r)/F=.012875/.031875=103/255; w=t*t*(3-2*t), depth factor=1
+(the gate only moves back outward). Retain the new joint and the three
 largest source influences (.35,.25,.20), divide by w+.8*(1-w).
 A second source assigns five equal .20 weights outside both envelopes.
 Its lowest four joint indices survive with .25 each (joint-index tie rule).
@@ -130,8 +133,8 @@ DECLARED_PARAMS = {'pair_protrusion': {'band_lower_bone': 'Spine1',
                      'exclude_bones': [],
                      'exclude_weight': 0.3,
                      'head_wall_depth': 0.04,
-                     'radius_plateau': 0.6,
-                     'radius_scale': 1.15,
+                     'fade_down': 0.15,
+                     'fade_up': 1.1,
                      'side_margin': 0.005,
                      'front_margin': 0.03,
                      'depth_ramp': 0.04,
@@ -320,6 +323,7 @@ if p.get('under_contact'):
             a=off+iz*32+j; b=off+iz*32+(j+1)%32
             faces.append((a,b,b+32,a+32))
 off=len(vertices); vertices.extend(((.12,-.23,1.4),(.14,-.23,1.4),(.14,-.23,1.401))); faces.append((off,off+1,off+2))
+off=len(vertices); vertices.extend(((.17,-.23,1.4),(.172,-.23,1.4),(.17,-.23,1.401))); faces.append((off,off+1,off+2))
 off=len(vertices); vertices.extend(((0,.23,0),(0,.23,1.7),(.001,.23,0))); faces.append((off,off+1,off+2))
 meshdata=bpy.data.meshes.new('Surface')
 meshdata.from_pydata(vertices,[],faces); meshdata.update()
@@ -977,10 +981,11 @@ def main():
         assert_joint_weights(rows,[.2,1.1,-.1],{'mixamorig:Hips':.2,'mixamorig:Spine':.35,'mixamorig:Spine1':.25,'mixamorig:LeftUpLeg':.2},'unaffected mixed source weights by joint')
         assert_joint_weights(rows,[.1,1.4,.23],{'ExampleLeft':1.},'pair apex weight by joint')
         assert_joint_weights(rows,[.12,1.4,.23],{'ExampleLeft':1.},'plateau full weight before reduction')
-        t=1865/2346; radial=t*t*(3-2*t)
+        assert_joint_weights(rows,[.14,1.4,.23],{'ExampleLeft':1.},'full weight over the outline')
+        t=103/255; radial=t*t*(3-2*t)
         ramp={'ExampleLeft':radial,'mixamorig:Spine':.35*(1-radial),'mixamorig:Spine1':.25*(1-radial),'mixamorig:Hips':.20*(1-radial)}
         total=sum(ramp.values()); ramp={k:v/total for k,v in ramp.items()}
-        assert_joint_weights(rows,[.14,1.4,.23],ramp,'hand-derived radial ramp and reduction')
+        assert_joint_weights(rows,[.17,1.4,.23],ramp,'hand-derived radial ramp and reduction')
         after_doc=parse_glb(full.read_bytes())['gltf']
         after_frames={n['name']:{k:n.get(k) for k in ('translation','rotation','scale','matrix')} for n in after_doc['nodes'] if n.get('name','').startswith('mixamorig:')}
         defaults={'translation':[0,0,0],'rotation':[0,0,0,1],'scale':[1,1,1],'matrix':[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]}
@@ -1055,13 +1060,13 @@ def main():
         restored=model3d.rebuild_extension_rig('demo','example')
         check(restored['ok'] and full.read_bytes()==original and clean.read_bytes()==source,'restoring overrides reapplies from clean source without attenuation')
         fingerprint=json.loads(full.with_suffix('.json').read_text())['extension_rig']['fingerprint']
-        changed.params['radius_scale']=1.0
+        changed.params['fade_up']=1.0
         rebuilt=model3d.rebuild_extension_rig('demo','example')
-        check(rebuilt['ok'] and full.read_bytes()!=original and clean.read_bytes()==source,'radius scale rebuilds from clean prerig')
-        check(json.loads(full.with_suffix('.json').read_text())['extension_rig']['fingerprint']!=fingerprint,'radius parameter changes fingerprint')
-        changed.params['radius_scale']=1.15
+        check(rebuilt['ok'] and full.read_bytes()!=original and clean.read_bytes()==source,'falloff share rebuilds from clean prerig')
+        check(json.loads(full.with_suffix('.json').read_text())['extension_rig']['fingerprint']!=fingerprint,'falloff parameter changes fingerprint')
+        changed.params['fade_up']=1.1
         rebuilt=model3d.rebuild_extension_rig('demo','example')
-        check(rebuilt['ok'] and full.read_bytes()==original,'restoring radius reconstructs original weights')
+        check(rebuilt['ok'] and full.read_bytes()==original,'restoring the falloff reconstructs original weights')
         changed.params['lateral_min']=3
         changed.params['lateral_max']=4
         keep=full.read_bytes()
@@ -1073,7 +1078,7 @@ def main():
         rejected=root/'rejected.glb'; rejected.write_bytes(source)
         gate=refine.apply_script(rejected,'extension_bones',{'groups':groups},require_smaller=False,validator=lambda _: {'ok':False,'errors':['synthetic gate rejection']})
         check(not gate['applied'] and rejected.read_bytes()==source,'failed validation gate keeps original')
-        for key in ('band_lower_bone','radius_plateau'):
+        for key in ('band_lower_bone','fade_down'):
             missing=copy.deepcopy(groups); del missing[0]['params'][key]
             absent=runner.run('extension_bones',inputs={'model':Path(normal['outputs']['model'])},params={'groups':missing},out_dir=root/('missing-'+key))
             check(absent['data']['status']=='failed' and 'missing required params' in absent['data']['reason'] and key in absent['data']['reason'] and not absent['outputs'],'missing required '+key+' fails with explicit reason')
@@ -1082,13 +1087,13 @@ def main():
         res=runner.run('extension_bones',inputs={'model':Path(normal['outputs']['model'])},params={'groups':invalid},out_dir=root/'invalid',timeout_s=180)
         check(res['ok'] and res['data']['status']=='failed' and not res['outputs'],'invalid declaration aborts whole request')
         check(all(v.get('reason') for v in res['data']['groups'].values()),'abort carries reason for every group')
-        for key,value in (('radius_plateau',-0.1),('radius_plateau',1),('radius_scale',0)):
+        for key,value in (('fade_down',0),('fade_down',2),('fade_up',0.1)):
             invalid=copy.deepcopy(groups); invalid[0]['params'][key]=value
             res=runner.run('extension_bones',inputs={'model':Path(normal['outputs']['model'])},params={'groups':invalid},out_dir=root/('invalid-'+key+str(value)),timeout_s=180)
             check(res['data']['status']=='failed' and key in res['data']['reason'] and not res['outputs'],'range validation '+key+str(value))
-        missing=copy.deepcopy(groups); del missing[0]['params']['radius_scale']
+        missing=copy.deepcopy(groups); del missing[0]['params']['fade_up']
         res=runner.run('extension_bones',inputs={'model':Path(normal['outputs']['model'])},params={'groups':missing},out_dir=root/'missing-scale',timeout_s=180)
-        check(res['data']['status']=='failed' and 'radius_scale' in res['data']['reason'],'missing required radius scale')
+        check(res['data']['status']=='failed' and 'fade_up' in res['data']['reason'],'missing required upward falloff')
         flipped=copy.deepcopy(groups[1]); flipped['flip']=True
         res=runner.run('extension_bones',inputs={'model':Path(normal['outputs']['model'])},params={'groups':[flipped]},out_dir=root/'flipped',timeout_s=180)
         check(res['ok'] and res['data']['status']=='applied','flipped fixture applied: '+str(res['data']))
