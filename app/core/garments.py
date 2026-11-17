@@ -3260,6 +3260,10 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                 refit = _refit_from_source(character_name, item_id, kind, method, fsig, bsig, profile)
                 if refit is not None and refit.get("ok"):
                     return refit
+                if refit is not None and refit.get("missing_input"):
+                    # A174: the current base lacks an input (base views / model not rendered yet) — the plain
+                    # missing-input refusal, without the keep / accept / new-mesh offer (nothing was fitted).
+                    return _refusal(character_name, item_id, fsig, "fit", str(refit.get("error") or ""), None, ran)
                 if refit is not None:
                     # Ruling A162: a refused refit never falls through to the image chain on its own — the hub
                     # jobs of a new mesh are the user's choice (the piece's offer: keep / accept anyway / new mesh,
@@ -3507,7 +3511,7 @@ def _refit_from_source(character_name: str, item_id: str, kind: str, method: str
     can accept that refit as it is (``fits/plain/accept``) and the next default run fits the same copies again
     (``group`` already materialised: no second copy); any other refusal (the framing beyond the caps, a missing
     source file) drops them again — there is nothing to accept."""
-    from app.core import fit_attempts, garment_source, garment_store as gs
+    from app.core import base_body, fit_attempts, garment_source, garment_store as gs
     if method != gs.EDIT_CHAIN:
         return None
     if garment_source.has_own_images(character_name, item_id, kind, method, fsig):
@@ -3531,6 +3535,9 @@ def _refit_from_source(character_name: str, item_id: str, kind: str, method: str
         ran = ["fit"]
     except Exception as e:  # noqa: BLE001 — any refusal or missing source: the piece's offer (Ruling A162)
         error = e.error if isinstance(e, _Refused) else (str(e) or type(e).__name__)
+        # A174: a missing input of the CURRENT base (its views or model not rendered yet) is no refused refit —
+        # nothing was fitted, so there is nothing to keep, accept or re-mesh; the caller names the missing input.
+        missing_input = isinstance(e, base_body.MissingInput)
         found = fit_attempts.attempt_of(character_name, item_id, "") if isinstance(e, _Refused) else None
         attempt = bool(found and found[0] is not None and str(found[1].get("fsig") or "") == fsig)
         if not attempt:
@@ -3542,7 +3549,7 @@ def _refit_from_source(character_name: str, item_id: str, kind: str, method: str
         logger.info("Garment %s/%s: refit from %s (made on %s) refused at %s — %s; no new mesh is made on its own "
                     "(%s)", character_name, item_id, source["fsig"], source.get("bsig"), step, error,
                     "the refused fit is kept to accept" if attempt else "nothing to accept")
-        return {"ok": False, "error": error, "refit": source, "attempt": attempt}
+        return {"ok": False, "error": error, "refit": source, "attempt": attempt, "missing_input": missing_input}
     gs.end(character_name, item_id, step)
     logger.info("Garment %s/%s: refitted from %s (made on %s) onto %s — no image or mesh job", character_name,
                 item_id, source["fsig"], source.get("bsig"), bsig)
@@ -5512,6 +5519,9 @@ def refit_stopped_info(character_name: str, item_id: str, fsig: str, base_sha: s
     (``REFIT_STOPPED``), for the piece dialog's offer — ``{reason, source_fsig, source_bsig, attempt (a refused fit
     to accept anyway), kept (the old fit is kept), keep_available, error}`` — else None."""
     from app.core import garment_store as gs
+    if not base_sha:
+        # A174: no current base model — nothing could be fitted, kept or accepted on it (render the base first).
+        return None
     record = gs.chain_failure(character_name, item_id, fsig, base_model_sha=base_sha)
     offer = (record or {}).get(REFIT_OFFER)
     if not isinstance(offer, dict):
