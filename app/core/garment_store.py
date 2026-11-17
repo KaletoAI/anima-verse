@@ -890,6 +890,11 @@ def user_accept_holds(record: Dict[str, Any], character_name: str = "") -> bool:
                                 "prepared")
         except ValueError:
             return False
+        if not path.is_file():
+            # A198 (review 05 #2): the mesh in use was deleted (``garment_mesh_delete.delete_mesh(0)``) or dropped by a
+            # "Use this" on an image (``garments._drop_mesh``) — nothing REPLACED the mesh the user saw, and both
+            # promise the fit stays served until the next fit. Only another stored mesh voids the acceptance.
+            return True
         return file_sha256(path) == prepared
     return True
 
