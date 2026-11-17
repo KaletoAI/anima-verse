@@ -921,8 +921,13 @@ def _edit_fingerprint(character_name: str, profile: Dict[str, Any]) -> str:
     """12 hex over the texts the front edit is made with (block, pose text,
     negative) — part of ``front_reference``."""
     prompt, negative = base_prompt(character_name, "front", profile=profile, picture=True)
-    raw = json.dumps([_fingerprint_form(_edit_character_fingerprint_form(character_name, profile)), prompt, negative],
-                     ensure_ascii=False)
+    parts = [_fingerprint_form(_edit_character_fingerprint_form(character_name, profile)), prompt, negative]
+    # Ruling A196: a checked option's edit texts are part of what the front is made with — checking or unchecking
+    # one outdates the front. Absent while none adds text, so a front without one keeps its fingerprint.
+    texts = [_postprocess_edit_texts(profile), _postprocess_edit_texts(profile, key="edit_negative")]
+    if any(texts):
+        parts.append(texts)
+    raw = json.dumps(parts, ensure_ascii=False)
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
 
 
@@ -1752,6 +1757,7 @@ PP_NO_FRONT = "no_front"              # no stored front: the first render is mad
 PP_UNCHANGED = "unchanged"            # the reference stays the same picture (nothing found / already so)
 PP_CHANGES = "changes"                # the reference changes: the front is outdated, the views + model follow
 PP_MAY_CHANGE = "may_change"          # turning on, not run yet: changes the reference when it finds something
+PP_PROMPT_CHANGES = "prompt_changes"  # A196: a prompt-only option changes the front edit's text: front outdated
 
 _RESTORED: set = set()
 _RESTORED_LOCK = threading.Lock()
@@ -1791,7 +1797,9 @@ def postprocess_ops_applied(character_name: str, used: Optional[Path], profile: 
     original = full_body_reference.base_image(character_name, profile=profile)
     if used is None or original is None or Path(used) == Path(original):
         return []
-    return view_postprocess.enabled_ids(profile)
+    available = view_postprocess.operations()
+    return [op for op in view_postprocess.enabled_ids(profile, available)
+            if view_postprocess.is_image_op(available[op])]
 
 
 def _reference_state(character_name: str, profile: Dict[str, Any], available: Dict[str, Any]
@@ -1814,6 +1822,8 @@ def postprocess_followup(character_name: str, bsig: str, op_id: str, enable: boo
     from app.core import full_body_reference, model_refs
     profile = _profile_of(character_name, profile)
     available = view_postprocess.operations()
+    if op_id in available and not view_postprocess.is_image_op(available[op_id]):
+        return _prompt_option_followup(character_name, bsig, op_id, enable, profile, available)
     original = full_body_reference.base_image(character_name, profile=profile)
     if original is None:
         return {"kind": PP_NO_REFERENCE, "jobs": 0, "note": "", "dressed": False}
@@ -1837,17 +1847,41 @@ def postprocess_followup(character_name: str, bsig: str, op_id: str, enable: boo
     return {"kind": kind, "jobs": cost.get("hub_jobs"), "note": cost.get("note") or "", "dressed": True}
 
 
+def _prompt_option_followup(character_name: str, bsig: str, op_id: str, enable: bool, profile: Dict[str, Any],
+                            available: Dict[str, Any]) -> Dict[str, Any]:
+    """Ruling A196: what checking (``enable``) or unchecking a prompt-only option makes due. Its texts go into the
+    base front EDIT only: with a stored front made from a picture whose edit fingerprint changes by the click, the
+    front is outdated and the next Run all / Build renders the four views and the base model again (``jobs``);
+    a front made from text, or no front yet, makes nothing due."""
+    from app.core import model_refs
+    if model_refs.find_ref_image(character_name, _kind("front"), bsig) is None:
+        return {"kind": PP_NO_FRONT, "jobs": 0, "note": "", "dressed": False}
+    if front_reference(character_name, profile=profile).get("method") != FRONT_FROM_REFERENCE:
+        return {"kind": PP_UNCHANGED, "jobs": 0, "note": "", "dressed": False}
+    after = deepcopy(profile)
+    choices = view_postprocess.character_choices(after)
+    if enable:
+        choices[op_id] = True
+    else:
+        choices.pop(op_id, None)
+    after[view_postprocess.PROFILE_KEY] = choices
+    if _edit_fingerprint(character_name, after) == _edit_fingerprint(character_name, profile):
+        return {"kind": PP_UNCHANGED, "jobs": 0, "note": "", "dressed": False}
+    cost = base_rebuild_cost(character_name, profile=profile,
+                             plan={"signature": bsig, "views": list(BASE_VIEWS), "model": True,
+                                   "reason": "reference"})
+    return {"kind": PP_PROMPT_CHANGES, "jobs": cost.get("hub_jobs"), "note": cost.get("note") or "", "dressed": True}
+
+
 def postprocess_info(character_name: str, bsig: str, profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """The full-body reference's post-process block: every supplied operation with the character's choice, the
-    world default, whether it is on, and the followup of a click (``postprocess_followup``); ``reference``: whether
+    """The full-body reference's post-process block: every supplied operation (A196: CPU operations and
+    prompt-only options, ``image_op``) with the character's checkbox (``enabled``), and the followup of a click (``postprocess_followup``); ``reference``: whether
     a full-body reference is set, and what its processed copy found (``steps``, ``error``, ``processed``: the
     front is made from a processed copy now). None when no package supplies an operation (the block is hidden)."""
     try:
         available = view_postprocess.operations()
         if not any(view_postprocess.applies(d, profile) for d in available.values()):
             return None
-        own = view_postprocess.character_choices(profile)
-        world = set(view_postprocess.world_default_ids())
         on = set(view_postprocess.enabled_ids(profile, available))
         state = _reference_state(character_name, profile, available)
         rec = state["record"] or {}
@@ -1856,7 +1890,7 @@ def postprocess_info(character_name: str, bsig: str, profile: Dict[str, Any]) ->
             if not view_postprocess.applies(desc, profile):
                 continue  # Ruling A170: not offered for this character
             entry = view_postprocess.public_descriptor(desc)
-            entry.update(own=own.get(op_id), world_default=op_id in world, enabled=op_id in on,
+            entry.update(enabled=op_id in on, image_op=view_postprocess.is_image_op(desc),
                          followup=postprocess_followup(character_name, bsig, op_id, op_id not in on,
                                                        profile=profile) if bsig else None)
             ops.append(entry)
@@ -1869,8 +1903,8 @@ def postprocess_info(character_name: str, bsig: str, profile: Dict[str, Any]) ->
         return None
 
 
-def set_base_postprocess(character_name: str, op_id: str, enabled: Optional[bool]) -> Dict[str, Any]:
-    """Store the character's choice for ``op_id`` (None = follow the world default) and make the processed copy
+def set_base_postprocess(character_name: str, op_id: str, enabled: bool) -> Dict[str, Any]:
+    """Store the character's checkbox for ``op_id`` (Ruling A196) and make the processed copy
     of the full-body reference at once (CPU, no image job). Nothing renders: the stored front shows as outdated
     when the reference it is made from changed (``postprocess_followup``). Returns ``{enabled, reference}``
     (``postprocess_info``'s ``reference``). Raises ``KeyError`` for an operation nobody supplies,

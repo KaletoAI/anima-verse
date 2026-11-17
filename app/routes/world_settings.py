@@ -21,15 +21,9 @@ router = APIRouter(prefix="/admin/world-settings", tags=["world-settings"],
                    dependencies=[Depends(require_admin)])
 
 
-def _reference_postprocess_ops() -> list:
-    from app.core import view_postprocess
-    return [{"value": op_id, "label": str(d.get("label") or op_id), "description": str(d.get("description") or "")}
-            for op_id, d in sorted(view_postprocess.operations().items())]
-
-
 #: ``options_source`` of a schema field -> resolver of its options ``[{value, label, description}]``.
 #: The options are what is installed NOW; a stored value the resolver does not list stays the client's to show.
-OPTION_SOURCES = {"reference_postprocess_ops": _reference_postprocess_ops}
+OPTION_SOURCES: dict = {}  # Ruling A196: the reference post-process world default is gone; none today
 
 
 def _resolve_options(node) -> None:

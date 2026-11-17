@@ -33,8 +33,13 @@ is over the original's content and the operations with their params, so another 
 another copy (the previous copies of that original are dropped). Turning the operation off = the original is used
 again, byte for byte. Nothing found = the original is used (``result_sha256`` None).
 
-SETTING. Per world ``base_body.reference_postprocess`` (operation ids, comma separated) is the default; a
-character may turn one operation on or off for itself (profile ``reference_postprocess``: ``{op id: bool}``).
+SETTING (Ruling A196, user 2026-11-18): per character only — one checkbox per operation (profile
+``reference_postprocess``: ``{op id: True}``); an operation the character has not checked is off. There is no
+world default any more.
+
+PROMPT-ONLY OPTIONS (A196): a descriptor without ``apply`` changes no picture; it only adds its ``edit_prompt`` /
+``edit_negative`` (str or ``fn(profile) -> str``, Ruling A157) to the base front edit while checked. Such an option
+is offered beside the CPU operations, never processes the reference and has no preview.
 
 A146 LEFTOVERS: A146 processed the stored base VIEWS in place, keeping their originals in
 ``model_refs/postprocessed/``. ``restore_legacy_views`` gives those originals back (first touch of the character's
@@ -63,8 +68,6 @@ PROCESSED_DIR = "postprocessed"
 REFERENCE_VIEW = "front"
 #: Profile key of the per-character choices.
 PROFILE_KEY = "reference_postprocess"
-#: World config key of the default operations.
-CONFIG_KEY = "base_body.reference_postprocess"
 
 NOT_RESTORABLE = ("The view changed since it was processed (rendered or edited again) — its kept original "
                   "no longer belongs to it")
@@ -91,9 +94,14 @@ def operations() -> Dict[str, Dict[str, Any]]:
         except Exception:  # noqa: BLE001 — one package never breaks the others
             logger.exception("A %s contributor failed", CAPABILITY)
             continue
-        if isinstance(desc, dict) and desc.get("id") and callable(desc.get("apply")):
+        if isinstance(desc, dict) and desc.get("id"):
             out[str(desc["id"])] = desc
     return out
+
+
+def is_image_op(desc: Dict[str, Any]) -> bool:
+    """Ruling A196: the descriptor changes the picture (it has ``apply``); else it is a prompt-only option."""
+    return callable((desc or {}).get("apply"))
 
 
 def public_descriptor(desc: Dict[str, Any]) -> Dict[str, Any]:
@@ -105,25 +113,16 @@ def default_params(desc: Dict[str, Any]) -> Dict[str, Any]:
     return {k: spec.get("default") for k, spec in (desc.get("params") or {}).items() if isinstance(spec, dict)}
 
 
-def world_default_ids() -> List[str]:
-    from app.core import config
-    raw = config.get(CONFIG_KEY, "") or ""
-    if isinstance(raw, (list, tuple)):
-        return [str(x).strip() for x in raw if str(x).strip()]
-    return [x.strip() for x in str(raw).split(",") if x.strip()]
-
-
 def character_choices(profile: Optional[Dict[str, Any]]) -> Dict[str, bool]:
     raw = (profile or {}).get(PROFILE_KEY)
     return {str(k): bool(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
 
 
 def enabled_ids(profile: Optional[Dict[str, Any]], available: Optional[Dict[str, Any]] = None) -> List[str]:
-    """The operations on for a character: its own choice, else the world default — only supplied ones."""
+    """The operations checked for a character (Ruling A196: no world default) — only supplied, applying ones."""
     available = operations() if available is None else available
     own = character_choices(profile)
-    world = set(world_default_ids())
-    return [op for op in available if applies(available[op], profile) and own.get(op, op in world)]
+    return [op for op in available if applies(available[op], profile) and own.get(op, False)]
 
 
 def applies(desc: Dict[str, Any], profile: Optional[Dict[str, Any]]) -> bool:
@@ -138,17 +137,17 @@ def applies(desc: Dict[str, Any], profile: Optional[Dict[str, Any]]) -> bool:
         return False
 
 
-def set_character_choice(character_name: str, op_id: str, enabled: Optional[bool]) -> bool:
-    """Store a character's own choice for ``op_id`` (None = follow the world default)."""
+def set_character_choice(character_name: str, op_id: str, enabled: bool) -> bool:
+    """Store a character's checkbox for ``op_id`` (unchecked = the key is dropped)."""
     from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile, save_character_profile
     with keyed_lock("character_profile", character_name):
         profile = get_character_profile(character_name) or {}
         choices = character_choices(profile)
-        if enabled is None:
-            choices.pop(op_id, None)
+        if enabled:
+            choices[op_id] = True
         else:
-            choices[op_id] = bool(enabled)
+            choices.pop(op_id, None)
         if choices:
             profile[PROFILE_KEY] = choices
         else:
@@ -238,7 +237,7 @@ def reference_record(character_name: str, original: Optional[Path], ops: List[st
     """The stored record of ``original`` processed by ``ops`` (``{..., "path": copy | None}``), None when it was not
     made yet (or ``ops`` is empty). Read-only, cheap — what a poll uses."""
     available = operations() if available is None else available
-    ops = [op for op in ops if op in available]
+    ops = [op for op in ops if op in available and is_image_op(available[op])]
     if original is None or not ops:
         return None
     try:
@@ -265,7 +264,7 @@ def processed_reference(character_name: str, original: Optional[Path], ops: List
     from app.core.view_facing import _atomic_write
     from app.core.timeutils import utc_now_iso
     available = operations() if available is None else available
-    ops = [op for op in ops if op in available]
+    ops = [op for op in ops if op in available and is_image_op(available[op])]
     if original is None or not ops:
         return original
     original = Path(original)
@@ -324,7 +323,7 @@ def preview(original: Path, op_id: str, params: Optional[Dict[str, Any]] = None)
     """``{before, after|None, found, seconds}`` (bytes) of ``op_id`` over the reference ``original``; nothing
     stored. ``KeyError`` for an operation nobody supplies."""
     desc = operations().get(op_id)
-    if desc is None:
+    if desc is None or not is_image_op(desc):
         raise KeyError(op_id)
     data = Path(original).read_bytes()
     res = run(data, REFERENCE_VIEW, desc, params)

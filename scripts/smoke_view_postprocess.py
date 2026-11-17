@@ -27,7 +27,9 @@ Expected values, derived by hand:
 * A146 leftovers: a view processed in place (16 dark pixels removed, original kept in ``postprocessed/``, sidecar
   record) is restored byte for byte and the kept dir removed; a record without a result (nothing was found) is
   only dropped from the sidecar, the bytes unchanged.
-* Choices: world default ["stand_in"], character {"stand_in": False} -> on = []; character {} -> ["stand_in"].
+* Choices (A196, no world default): character {"stand_in": False} -> on = []; {} -> []; {"stand_in": True} ->
+  ["stand_in"]. A prompt-only descriptor (no ``apply``) is listed by ``operations`` but never processes the
+  reference: base_source with it checked alone is the reference file; preview of it raises KeyError.
 * ``full_body_reference.base_source``: without an operation on -> the reference file; with one on -> the copy.
 * The front's reason: a front made from the plain reference while the processed one is wanted ->
   ``FRONT_POSTPROCESS_ON``; the other way -> ``FRONT_POSTPROCESS_OFF``; the same record -> "" (current).
@@ -200,15 +202,29 @@ check(not (refs / vp.KEEP_DIR).exists(), "legacy: kept dir removed")
 check(json.loads(view.with_suffix(".json").read_text()).get("base_signature") == "base0", "legacy: sidecar kept")
 
 # --- choices + base_source --------------------------------------------------------------
-vp.world_default_ids = lambda: ["stand_in"]
+hooks.register_provider(vp.CAPABILITY, lambda: {"id": "words_only", "label": "Words", "edit_prompt": "w"},
+                        owner="smoke_words", multiple=True)
 avail = vp.operations()
-check(vp.enabled_ids({"reference_postprocess": {"stand_in": False}}, avail) == [], "own off beats world default")
-check(vp.enabled_ids({}, avail)[:1] == ["stand_in"], "world default applies without own choice")
+check("words_only" in avail and not vp.is_image_op(avail["words_only"]), "prompt-only option listed, no image op")
+check(vp.enabled_ids({"reference_postprocess": {"stand_in": False}}, avail) == [], "own off -> off")
+check(vp.enabled_ids({}, avail) == [], "no own choice -> off (no world default)")
+check(vp.enabled_ids({"reference_postprocess": {"stand_in": True}}, avail)[:1] == ["stand_in"], "own on -> on")
 
 fbr.base_image = lambda c, profile=None: ref
+ON = {"reference_postprocess": {"stand_in": True}}
 check(fbr.base_source(CHAR, profile={"reference_postprocess": {"stand_in": False}}) == ref,
       "base_source: off -> the reference file")
-check(fbr.base_source(CHAR, profile={}) == out, "base_source: on -> the processed copy")
+check(fbr.base_source(CHAR, profile={}) == ref, "base_source: unchecked -> the reference file")
+check(fbr.base_source(CHAR, profile={"reference_postprocess": {"words_only": True}}) == ref,
+      "base_source: only a prompt-only option -> the reference file")
+check(fbr.base_source(CHAR, profile=ON) == out, "base_source: on -> the processed copy")
+check(fbr.base_source(CHAR, profile={"reference_postprocess": {"stand_in": True, "words_only": True}}) == out,
+      "base_source: a prompt-only option beside it -> the same processed copy")
+try:
+    vp.preview(ref, "words_only")
+    check(False, "preview of a prompt-only option raises")
+except KeyError:
+    check(True, "preview of a prompt-only option raises")
 
 # --- the front's reason (base_body.front_reference_state) ----------------------------------
 from app.core import base_body  # noqa: E402

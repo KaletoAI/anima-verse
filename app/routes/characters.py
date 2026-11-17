@@ -1950,8 +1950,8 @@ def mirror_character_base_body_view(character_name: str, view: str,
 @router.post("/{character_name}/base-body/postprocess/{op_id}")
 def set_character_base_body_postprocess(character_name: str, op_id: str, body: Dict[str, Any],
                                         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Turn a reference post-process operation on or off for the character (``{"enabled": true|false|null}``,
-    null = the world default). It runs on the full-body reference only (CPU, a derived copy — Ruling A149,
+    """Check or uncheck a reference post-process option for the character (``{"enabled": true|false}``; Ruling A196:
+    no world default). A CPU operation runs on the full-body reference only (CPU, a derived copy — Ruling A149,
     ``base_body.set_base_postprocess``); nothing renders, the front shows as outdated when its reference changed.
     404 for an operation no package supplies, 409 while a base-body step, a 3D run or a Build of the character
     goes."""
@@ -1959,8 +1959,8 @@ def set_character_base_body_postprocess(character_name: str, op_id: str, body: D
     _require_character(character_name)
     _refuse_during_build(character_name)
     enabled = body.get("enabled")
-    if enabled is not None and not isinstance(enabled, bool):
-        raise HTTPException(status_code=400, detail="enabled must be true, false or null")
+    if not isinstance(enabled, bool):
+        raise HTTPException(status_code=400, detail="enabled must be true or false")
     try:
         return base_body.set_base_postprocess(character_name, op_id, enabled)
     except base_body.MirrorRefused as e:

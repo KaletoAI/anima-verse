@@ -15,12 +15,9 @@ D: Reposting GET values changes neither file's mtime_ns; materialized shipped
    seasons remain in memory but are pruned from the file (Review Focus 4).
 E: Resetting chat.top_p restores the shipped value, leaving {} and no overrides.
 F: An unreadable existing world file is protected with 409 and left intact.
-G (A153): base_body.reference_postprocess is a "str" with widget "checklist" and options_source
-   "reference_postprocess_ops". With two operations registered by hand — "zeta" (label "Zeta op",
-   description "z") and "alpha" (label "Alpha op", no description) — the payload's field carries
-   options == [{alpha, "Alpha op", ""}, {zeta, "Zeta op", "z"}] (sorted by id), the shared schema
-   itself gets no "options" key, and saving "alpha,gone" stores exactly that string (the unknown id
-   "gone" is kept; it is the client's to show as not installed) and returns it as the value.
+G (A196, replaces A153): the world default of the reference post-process is gone — the Setup schema's
+   base_body group has no "reference_postprocess" field, even with an operation registered by hand
+   (the choice is per character only, a checkbox on Characters -> Figure).
 """
 import json
 import os
@@ -114,22 +111,12 @@ def main():
         print("F: write refusal passed")
         world_file.write_text("{}", encoding="utf-8")
         config.reload()
-        from app.core import hooks, view_postprocess, config_scope
+        from app.core import hooks, view_postprocess
         noop = lambda image, **kw: {"image": None}
         hooks.register_provider(view_postprocess.CAPABILITY, lambda: {
             "id": "zeta", "label": "Zeta op", "description": "z", "apply": noop}, owner="smoke_a", multiple=True)
-        hooks.register_provider(view_postprocess.CAPABILITY, lambda: {
-            "id": "alpha", "label": "Alpha op", "apply": noop}, owner="smoke_b", multiple=True)
-        field = get_world_settings()["schema"]["base_body"]["fields"]["reference_postprocess"]
-        assert (field["type"], field["widget"], field["options_source"]) == ("str", "checklist", "reference_postprocess_ops")
-        assert field["options"] == [{"value": "alpha", "label": "Alpha op", "description": ""},
-                                    {"value": "zeta", "label": "Zeta op", "description": "z"}], field["options"]
-        assert "options" not in config_scope.schema_for(config_scope.WORLD)["base_body"]["fields"]["reference_postprocess"]
-        saved = put({"values": {"base_body": {"reference_postprocess": "alpha,gone"}}})
-        assert json.loads(world_file.read_text()) == {"base_body": {"reference_postprocess": "alpha,gone"}}
-        assert saved["values"]["base_body"]["reference_postprocess"] == "alpha,gone"
-        assert view_postprocess.world_default_ids() == ["alpha", "gone"]
-        print("G: checklist options + round trip passed")
+        assert "reference_postprocess" not in get_world_settings()["schema"]["base_body"]["fields"]
+        print("G: no world default field passed")
     print("OK — world settings route")
 
 
