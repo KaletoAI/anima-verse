@@ -403,10 +403,34 @@ def build_bodice(spec, btree, ftree, centre, arm):
     fuv = [uv for _, uv in keep]
     used = {i for f in faces for i in f}
     cap_ids = sorted(cap_set & used)
+    loops = {int(i) for rows_ids in sleeve_rows.values() for i in rows_ids[0]}
+    slv = {int(i) for rows_ids in sleeve_rows.values() for ring in rows_ids[1:] for i in ring}
+    yoke = {int(i) for i in cid[1:nring + 1].ravel()}
+    upper = {int(i) for i in tid[:r_band].ravel()} - loops
+    regions = {"yoke": yoke, "upper_rows": upper, "armhole": loops, "sleeves": slv,
+               "lower_rows": {int(i) for i in tid[r_band:].ravel()} - loops}
     info = {"cap_ids": cap_ids, "rib_ids": sorted(set(rib_ids) & used),
+            "regions": {k: sorted(v & used) for k, v in regions.items()},
             "cut_s": [round(x, 3) for x in cut_s], "sleeve_rings": {k: len(v) - 1 for k, v in sleeve_rows.items()}, "cap_rings": K,
             "collar_rings": nring - K, "columns": nc, "r_band": r_band}
     return verts, faces, fuv, info
+
+
+def inside_report(tree, verts, regions, thickness):
+    """A179 — where the piece stands against the drape's collider AS BUILT (before the clearance pass), per region
+    (``yoke``, ``upper_rows`` = the torso rows above the chest band, ``armhole`` = the armhole loops, ``sleeves``,
+    ``lower_rows``): ``verts``, ``inside`` (vertices inside the body) with ``max_inside_mm`` (the deepest), and
+    ``short`` (vertices closer than the pre-inflate's ``thickness`` + 3 mm) — the pre-inflate moves exactly those."""
+    V = np.array(verts, float)
+    out = {}
+    for name, ids in regions.items():
+        if not ids:
+            continue
+        sd = gd.signed_depth(tree, V[ids])
+        out[name] = {"verts": len(ids), "inside": int((sd < 0).sum()),
+                     "max_inside_mm": round(float(max(0.0, -sd.min())) * 1000, 1),
+                     "short": int((sd < thickness + 0.003).sum())}
+    return out
 
 
 #: The pinned shoulder strip reaches this far in front of / behind the neck opening: farther, the front and back
@@ -984,7 +1008,10 @@ def run(a):
         # the torso axis of a bodice is the spine (the slice at the shoulder line holds the arms' roots)
         sp = _bone_world(arm, "Spine2")
         centre = np.array([sp[0], sp[1]])
+        thickness = float(prm.get("thickness", 0.004))
+        col, ctree = gd.rest_collider(body, extra=lower)
         verts, faces, fuv, binfo = build_bodice(spec, btree, ftree, centre, arm)
+        binfo["inside"] = inside_report(ctree, verts, binfo.pop("regions"), thickness)
         me = bpy.data.meshes.new("template")
         me.from_pydata(verts, [], faces)
         uvl = me.uv_layers.new(name="UVMap")
@@ -1008,9 +1035,10 @@ def run(a):
         slit_edges = 0
         # A178: a bodice built inside the arm root (armhole window, neckline chords through a high shoulder) is laid
         # out of the body smoothly here, before its rest lengths are taken
-        binfo["clear"] = gd.clear_of_body(obj, body, thickness=float(prm.get("thickness", 0.004)), extra=lower)
+        binfo["clear"] = gd.clear_of_body(obj, ctree, thickness=thickness)
     else:
         binfo = {}
+        col = None
         verts, faces, uvs, angles = wrap(spec, btree, centre)
         me = bpy.data.meshes.new("template")
         me.from_pydata(verts, [], faces)
@@ -1049,7 +1077,7 @@ def run(a):
     gd.progress(stage="drape", frame=0, frames=int(prm.get("frames", 50)))
     cpu, wall, drift = gd.drape(obj, body, pin, int(prm.get("frames", 50)), quality=int(fab["quality"]),
                                 bending=float(fab["bending"]), shrink=float(fab.get("shrink", 0.0)),
-                                self_collision=False, thickness=thickness, extra=lower, crop_m=CROP_M)
+                                self_collision=False, thickness=thickness, extra=lower, crop_m=CROP_M, collider=col)
     me = obj.data
     co1 = np.array([v.co for v in me.vertices])
     st = np.linalg.norm(co1[edges[:, 0]] - co1[edges[:, 1]], axis=1) / np.maximum(rest_len, 1e-6)

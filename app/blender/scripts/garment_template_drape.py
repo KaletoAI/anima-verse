@@ -573,25 +573,48 @@ BUILD_CLEAR_PASSES = 80
 BUILD_CLEAR_RINGS = 4
 
 
-def clear_of_body(obj, body, *, thickness, extra=(), collider_faces=80000):
-    """A178 — lay every built vertex outside the drape's collider BEFORE the rest lengths are taken. The pre-inflate in
-    ``drape`` pushes each vertex inside the body on its own (23-32 mm at an armhole cut through a high shoulder),
-    while its neighbours stay: that alone read as stretch 1.8. Here the vertices are moved like a cloth without
-    gravity (position-based): per pass every edge SHORTER than built pushes its ends half-way apart again (Jacobi,
-    averaged per vertex; a longer edge is left alone, or the pass would pull the cloth back into the body), then every vertex short of ``thickness + BUILD_CLEAR_EXTRA_M`` outside the closed, outward-wound
-    collider (the same voxel remesh ``drape`` builds) is projected out along the surface normal. A push in a crease
-    (the armpit) thus slides the neighbours along instead of squeezing the edges between them. Returns
-    ``{moved, passes, max_push_mm, left, min_ratio}`` (``left`` = vertices still short after the last pass,
-    ``min_ratio`` = the shortest edge over its built length)."""
+def rest_collider(body, extra=(), faces=80000):
+    """A179 — the drape's collider in the rest pose, built ONCE per piece: the body (+ the ``extra`` lower layers,
+    thickened) voxel-remeshed, so it is closed and wound outward. The bodice builder reads its sections from it, the
+    clearance pass projects onto it and ``drape`` collides with it (``collider=``): what is built outside it starts
+    outside the collider the cloth meets. Returns ``(object, BVH tree)``; ``drape`` takes the object over."""
     t0 = time.time()
     dg = bpy.context.evaluated_depsgraph_get()
-    col = bpy.data.objects.new("clear_collider", bpy.data.meshes.new_from_object(body.evaluated_get(dg)))
+    col = bpy.data.objects.new("collider", bpy.data.meshes.new_from_object(body.evaluated_get(dg)))
     col.matrix_world = body.matrix_world.copy()
     bpy.context.scene.collection.objects.link(col)
     for ex in extra:
         _join_extra(col, ex, dg)
-    _remesh(col, collider_faces)
+    _remesh(col, faces)
     tree = BVHTree.FromObject(col, bpy.context.evaluated_depsgraph_get())
+    COLLIDER_S.append(round(time.time() - t0, 2))
+    return col, tree
+
+
+def signed_depth(tree, pts, reach=0.15):
+    """A179 — per point its signed distance to the collider surface (metres; negative = inside the body, ``reach``
+    when nothing is that close)."""
+    out = np.full(len(pts), float(reach))
+    for i, p in enumerate(pts):
+        v = Vector(p)
+        loc, o = signed_out(tree, v, reach)
+        if loc is not None:
+            out[i] = float((v - loc).dot(o))
+    return out
+
+
+def clear_of_body(obj, tree, *, thickness):
+    """A178 — lay every built vertex outside the drape's collider BEFORE the rest lengths are taken. The pre-inflate in
+    ``drape`` pushes each vertex inside the body on its own (23-32 mm at an armhole cut through a high shoulder),
+    while its neighbours stay: that alone read as stretch 1.8. Here the vertices are moved like a cloth without
+    gravity (position-based): per pass every edge SHORTER than built pushes its ends half-way apart again (Jacobi,
+    averaged per vertex; a longer edge is left alone, or the pass would pull the cloth back into the body), then
+    every vertex short of ``thickness + BUILD_CLEAR_EXTRA_M`` outside the closed, outward-wound collider (``tree`` of
+    ``rest_collider``) is projected out along the surface normal. A push in a crease (the armpit) thus slides the
+    neighbours along instead of squeezing the edges between them. Returns
+    ``{moved, passes, max_push_mm, inside, left, min_ratio}`` (``inside`` = vertices short before the first pass,
+    ``left`` = still short after the last, ``min_ratio`` = the shortest edge over its built length)."""
+    t0 = time.time()
     mw = obj.matrix_world
     mwi = mw.inverted()
     co = np.array([tuple(mw @ v.co) for v in obj.data.vertices])
@@ -639,7 +662,6 @@ def clear_of_body(obj, body, *, thickness, extra=(), collider_faces=80000):
     for v, p in zip(obj.data.vertices, co):
         v.co = mwi @ Vector(p)
     obj.data.update()
-    bpy.data.objects.remove(col)
     push = np.linalg.norm(co - start, axis=1)
     ratio = np.linalg.norm(co[e[:, 1]] - co[e[:, 0]], axis=1) / np.maximum(built, 1e-9)
     return {"moved": int((push > 1e-4).sum()), "passes": passes, "max_push_mm": round(float(push.max()) * 1000, 1),
@@ -648,7 +670,7 @@ def clear_of_body(obj, body, *, thickness, extra=(), collider_faces=80000):
 
 
 def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collision, thickness, extra=(),
-          collider_faces=80000, collision_quality=4, crop_m=None, prebuilt=None):
+          collider_faces=80000, collision_quality=4, crop_m=None, prebuilt=None, collider=None):
     """Collider = decimated rest copy of the body (+ the ``extra`` lower garment layers). Returns CPU seconds and
     pin drift (mm). ``crop_m`` (Ruling A144): collider faces farther than this outside the cloth's box are dropped
     after the remesh (a jacket never reaches the shins; the collision tests scale with the faces)."""
@@ -659,7 +681,9 @@ def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collisio
     # even after recalc + parity) - a flipped patch pulls the cloth INTO the body.
     # A voxel remesh of the posed body is closed and wound outward by construction.
     t_col = time.time()
-    if prebuilt is not None and not extra:
+    if collider is not None:
+        col = collider                     # A179: ``rest_collider`` of this piece (body + extra), taken over
+    elif prebuilt is not None and not extra:
         # Ruling A144: the remeshed rest collider skinned to the armature (``skinned_collider``), evaluated in the pose
         col = bpy.data.objects.new("collider", bpy.data.meshes.new_from_object(prebuilt.evaluated_get(dg)))
         col.matrix_world = prebuilt.matrix_world.copy()
