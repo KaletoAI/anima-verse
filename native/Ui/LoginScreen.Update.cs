@@ -21,9 +21,8 @@ public partial class LoginScreen
     private string _localVersion = "", _checkedServer = "";
     private UpdateRelease? _release;
     private CancellationTokenSource? _updateStop;
-    private Godot.Timer? _updateDebounce;
     private Task _updateCheck = Task.CompletedTask;
-    private bool _installing, _loginStarted;
+    private bool _installing, _loginStarted, _updatePending;
     private double _downloadProgress;
     private int _updateGeneration;
 
@@ -41,17 +40,17 @@ public partial class LoginScreen
             LauncherStore.Update(s => s.SkipUpdate(_checkedServer, release.Version), _launcherPath);
             _updateBox.Visible = false;
         };
-        _updateDebounce = new Godot.Timer { OneShot = true, WaitTime = 0.4 };
-        AddChild(_updateDebounce);
-        _updateDebounce.Timeout += () => _updateCheck = CheckServerAsync();
+        // An address being typed is never contacted (a half-typed one may name another host): the check
+        // runs for the stored address, on Enter in the server field and before Enter world.
         _server.TextChanged += _ =>
         {
             _updateGeneration++;
             _updateStop?.Cancel();
             _release = null;
             _updateBox.Visible = false;
-            _updateDebounce.Start();
+            _updatePending = true;
         };
+        _server.TextSubmitted += _ => ConfirmServerForUpdates();
         _updateCheck = CheckServerAsync();
     }
 
@@ -76,15 +75,18 @@ public partial class LoginScreen
         _updateBox.Visible = true;
     }
 
+    private void ConfirmServerForUpdates()
+    {
+        if (!_updatePending) return;
+        _updatePending = false;
+        _updateCheck = CheckServerAsync();
+    }
+
     private async Task FinishUpdateCheckAsync()
     {
         if (_updater is null) return;
-        // Enter world flushes the typing debounce, so the anonymous check always precedes login.
-        if (_updateDebounce is { } timer && !timer.IsStopped())
-        {
-            timer.Stop();
-            _updateCheck = CheckServerAsync();
-        }
+        // Enter world confirms an address typed since the last check, so the anonymous check always precedes login.
+        ConfirmServerForUpdates();
         await _updateCheck;
     }
 
@@ -92,7 +94,7 @@ public partial class LoginScreen
     {
         _loginStarted = true;
         _updateGeneration++;
-        _updateDebounce?.Stop();
+        _updatePending = false;
         _updateStop?.Cancel();
         _updateBox.Visible = false;
     }
