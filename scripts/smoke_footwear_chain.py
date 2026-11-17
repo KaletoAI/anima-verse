@@ -106,7 +106,7 @@ So ONE run of an item from nothing costs (upscale, edit, mesh) = (1, 1, 1).
        side 5 m away (area 6 * 0.01 = 0.06 m^2, its own component outside the
        wedge's bbox) -> component_share = wedge / (wedge + 0.06) < 0.98 for
        any wedge area below 2.94 m^2 (the wedge is a 0.26 m shoe) -> refused
-       after 2 mesher calls; steps.mesh.status "refused".
+       after 1 mesher call (A176); steps.mesh.status "refused".
 """
 import io
 import json
@@ -496,7 +496,7 @@ def main() -> int:
                 res = garments.run_garment("Kira", heels)
             finally:
                 svc.mesh_bytes = good
-            check("C8 gate refusal: 2 mesher calls", tuple(b - a for a, b in zip(c0, svc.counts())), (0, 0, 2))
+            check("C8 gate refusal: 1 mesher call (A176)", tuple(b - a for a, b in zip(c0, svc.counts())), (0, 0, 1))
             m = mesh_step()
             check("C8 gate -> refused", (res.get("ok"), m.get("status"), m.get("gates", {}).get("component_share", 1) < 0.98),
                   (False, "refused", True))

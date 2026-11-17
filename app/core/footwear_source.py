@@ -75,8 +75,9 @@ FOOTWEAR_SOURCE_VERSION = 2
 MIN_SIDE = 1024
 #: Image-edit attempts of the ``empty`` step before it is refused.
 EMPTY_ATTEMPTS = 2
-#: Mesher attempts of the ``mesh`` step before it is refused (``garment_mesh.MAX_ATTEMPTS``).
-MESH_ATTEMPTS = 2
+#: Mesher attempts of the ``mesh`` step before it is refused (``garment_mesh.MAX_ATTEMPTS``). A176: ONE — a mesh
+#: is a long hub job; a gate refusal stops with the offer (Regenerate mesh / accept), never a silent second job.
+MESH_ATTEMPTS = 1
 EDIT_OCCASION = "footwear_empty"
 MESH_OCCASION = "mesh_footwear"
 USE_CASE = "footwear_source"
@@ -685,8 +686,14 @@ def _lock(iid: str):
     return keyed_lock("footwear_source", iid)
 
 
+#: A176: ``run_source``'s error for a step kept refused (``keep_refused``) — the offer, no new job.
+KEPT_REFUSED = ("{step} was refused by its gates — not run again on its own; Regenerate the {step} in the piece "
+                "dialog (one hub job) or accept the refused result")
+
+
 def run_source(item_id: str, *, steps: Optional[List[str]] = None, force: bool = False,
-               on_step: Callable[[str], None] = lambda s: None) -> Dict[str, Any]:
+               on_step: Callable[[str], None] = lambda s: None,
+               keep_refused: Tuple[str, ...] = ()) -> Dict[str, Any]:
     """Run the item's source steps (all of them, or ``steps``) under the item
     lock; a done step is skipped unless ``force``. ``on_step(step)`` is called
     before a step runs. -> ``{ok True, ssig, ran}`` or ``{ok False, ssig,
@@ -706,6 +713,14 @@ def run_source(item_id: str, *, steps: Optional[List[str]] = None, force: bool =
         for step in _RUNNERS:
             if step not in wanted or (not force and step_done(iid, ssig, step)):
                 continue
+            record = step_record(iid, ssig, step)
+            if (not force and step in keep_refused and record.get("accepted") is False
+                    and str(record.get("failure") or GATE) == GATE):
+                # A176: read under the item lock — a run queued behind the one that was refused sees its record.
+                logger.info("Shoe source %s/%s: %s refused by its gates — kept, not run again", iid, ssig, step)
+                return {"ok": False, "ssig": ssig, "step": step, "error": KEPT_REFUSED.format(step=step),
+                        "gates": record.get("gates") or {}, "error_type": "GateRefused", "failure": GATE,
+                        "kept_refused": True, "ran": ran}
             on_step(step)
             d.mkdir(parents=True, exist_ok=True)
             _drop_from(d, step)

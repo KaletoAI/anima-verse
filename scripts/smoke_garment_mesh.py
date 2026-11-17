@@ -46,24 +46,20 @@ Fixture GLBs (positions, TEXCOORD_0, uint32 indices; 2 disjoint quads = 4 tris):
       1 attempt.
 [2] Cache: a second generate makes NO service call and returns the same path;
     force=True makes exactly one more call.
-[3] BAD on both attempts (fsig G = "00000000bad0"): 2 service calls, then
-    MeshGateRefused with 2 records; record accepted False,
-    largest_component_share 0.85 (+-1e-6), attempts [0.85, 0.85], both ok
+[3] BAD (fsig G = "00000000bad0"): ONE service call (A176: a refusal is offered, never meshed again on
+    its own), then MeshGateRefused with 1 record; record accepted False,
+    largest_component_share 0.85 (+-1e-6), attempts [0.85], ok
     False with a reason naming "largest component"; no prepared GLB left,
     no candidate file left in prepared/.
-[4] BAD then GOOD (fsig M = "0000000000c4"): 2 calls, accepted at attempt 2;
-    record attempts[0].ok False (0.85), attempts[1].ok True (0.99).
+[4] BAD then GOOD scripted (fsig M = "0000000000c4"): 1 call, refused (A176: no second call); a forced run
+    then takes GOOD: 1 more call, accepted, its record holds that one attempt (0.99).
 [5] A missing back cut-out (fsig N = "0000000000d5", front only) ->
     FileNotFoundError, no service call.
 [6] The service answering {"ok": False, "error": "down"} (fsig E =
     "0000000000e6") -> RuntimeError naming "down", no record, no prepared GLB.
-[6b] BAD on attempt 1, then the service RAISING "no backend available ..."
-    on attempt 2 (fsig R = "0000000000f7"; bug C1 of the 2026-11-09 end-to-end
-    run): MeshAttemptFailed (a RuntimeError) with 2 records — [attempt 1 ok
-    False, share 0.85; attempt 2 ok False, error naming "no backend"]; the
-    message names the error and "attempt 1 refused"; record accepted False
-    with both attempts, share 0.85 (the gated attempt), error set; no
-    prepared GLB, no candidate. The service raising on attempt 1 (fsig
+[6b] BAD on attempt 1 with the service set to RAISE on a second call (fsig R = "0000000000f7"): A176 — no
+    second call is made: MeshGateRefused after ONE call; record accepted False with its one attempt, share 0.85;
+    no prepared GLB, no candidate. The service raising on attempt 1 (fsig
     S = "0000000000f6"): MeshAttemptFailed with ONE record, no step record.
 [7] decimate_to with stubbed runner:
     - measure reports 100000 tris, target 25000 -> ratio 0.25, the lod output
@@ -398,16 +394,17 @@ def main() -> int:
         except gm.MeshGateRefused as e:
             refused = e
         check("refused", refused is not None, True)
-        check("two calls", len(rec.calls), 2)
-        check("refusal records", len(getattr(refused, "records", []) or []), 2)
+        # A176: ONE mesher call — a refusal is offered, never meshed again on its own
+        check("one call", len(rec.calls), 1)
+        check("refusal records", len(getattr(refused, "records", []) or []), 1)
         check("refusal step", getattr(refused, "step", None), "mesh")
         prep_g = gs.garment_path("Demo", hid, G, "prepared")
         rec_g = gs.read_record(prep_g.with_suffix(".json"))
         check("failure record accepted", rec_g.get("accepted"), False)
         near("failure share", rec_g.get("largest_component_share"), 0.85, 1e-6)
         shares = [round(a.get("largest_component_share", -1), 6) for a in rec_g.get("attempts") or []]
-        check("attempt shares", shares, [0.85, 0.85])
-        check("attempts not ok", [a.get("ok") for a in rec_g.get("attempts") or []], [False, False])
+        check("attempt shares", shares, [0.85])
+        check("attempts not ok", [a.get("ok") for a in rec_g.get("attempts") or []], [False])
         check("reason names the gate",
               all("largest component" in " ".join(a.get("reasons") or []) for a in rec_g.get("attempts") or []),
               True)
@@ -415,18 +412,23 @@ def main() -> int:
         leftovers = sorted(p.name for p in prep_g.parent.iterdir() if p.name.startswith("."))
         check("no candidate left", leftovers, [])
 
-        print("[4] fail then pass")
+        print("[4] fail, no second call; the explicit run takes the next")
         M = "0000000000c4"
         cutouts(M)
         rec.calls.clear()
         rec.script = [BAD, GOOD]
-        p_m = gm.generate("Demo", hid, M)
-        check("two calls", len(rec.calls), 2)
+        try:
+            gm.generate("Demo", hid, M)
+            refused_m = False
+        except gm.MeshGateRefused:
+            refused_m = True
+        check("refused after one call", (refused_m, len(rec.calls)), (True, 1))
+        p_m = gm.generate("Demo", hid, M, force=True)
+        check("explicit run: one more call", len(rec.calls), 2)
         rec_m = gs.read_record(p_m.with_suffix(".json"))
-        check("accepted at 2", rec_m.get("accepted"), True)
-        check("attempt oks", [a.get("ok") for a in rec_m.get("attempts") or []], [False, True])
+        check("accepted", rec_m.get("accepted"), True)
         check("attempt shares", [round(a.get("largest_component_share", -1), 6)
-                                 for a in rec_m.get("attempts") or []], [0.85, 0.99])
+                                 for a in rec_m.get("attempts") or []], [0.99])
 
         print("[5] missing cut-out")
         N = "0000000000d5"
@@ -453,7 +455,7 @@ def main() -> int:
         check("no record", prep_e.with_suffix(".json").exists(), False)
         check("no prepared", prep_e.exists(), False)
 
-        print("[6b] attempt 2 fails at the backend")
+        print("[6b] a refused attempt 1 never reaches a second backend call (A176)")
         R = "0000000000f7"
         cutouts(R)
         rec.calls.clear()
@@ -464,19 +466,11 @@ def main() -> int:
         except RuntimeError as e:
             failed = e
         rec.raise_at = 0
-        check("MeshAttemptFailed", type(failed).__name__, "MeshAttemptFailed")
-        records = list(getattr(failed, "records", []) or [])
-        check("two records", [r.get("attempt") for r in records], [1, 2])
-        if len(records) == 2:
-            check("record 1 = gate", (records[0].get("ok"), round(records[0].get("largest_component_share", -1), 6)),
-                  (False, 0.85))
-            check("record 2 = error", (records[1].get("ok"), "no backend" in (records[1].get("error") or "")),
-                  (False, True))
-        check("message names both", ("no backend" in str(failed), "attempt 1 refused" in str(failed)), (True, True))
+        check("refused, one call", (type(failed).__name__, len(rec.calls)), ("MeshGateRefused", 1))
         prep_r = gs.garment_path("Demo", hid, R, "prepared")
         rec_r = gs.read_record(prep_r.with_suffix(".json"))
-        check("record refused with both", (rec_r.get("accepted"), len(rec_r.get("attempts") or []),
-                                           "no backend" in (rec_r.get("error") or "")), (False, 2, True))
+        check("record refused with its one attempt", (rec_r.get("accepted"), len(rec_r.get("attempts") or [])),
+              (False, 1))
         near("record share = gated attempt", rec_r.get("largest_component_share"), 0.85, 1e-6)
         check("no prepared / candidate", (prep_r.exists(),
                                           sorted(p.name for p in prep_r.parent.iterdir() if p.name.startswith("."))),

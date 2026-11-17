@@ -72,8 +72,8 @@ import type {
   ViewRunPlans,
 } from './useGarment'
 
-/** First attempt plus one more when the gate refuses it (`garment_mesh.MAX_ATTEMPTS`). */
-const MESH_ATTEMPTS = 2
+/** One mesher job per run; a refusal is offered, never meshed again on its own (`garment_mesh.MAX_ATTEMPTS`, A176). */
+const MESH_ATTEMPTS = 1
 
 /** Thumbnail height of an image cell (px). */
 const THUMB_H = 112

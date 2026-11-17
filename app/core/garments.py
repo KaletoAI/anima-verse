@@ -2481,7 +2481,8 @@ def cached_failure(character_name: str, item_id: str, *,
 #: ``garment_images.CUTOUT_MIN_SIDE`` goes through the ``upscale`` occasion — counted on first attempts, Ruling A25);
 #: the insole and every fit are CPU work. Footwear ``source`` is computed per item (the
 #: upscale, only for an item image below ``footwear_source.MIN_SIDE``). A
-#: chain may spend one more per refused attempt (R5) — this is the estimate
+#: chain may spend one more per refused image attempt (R5; a mesh step never — A176: ONE mesher job, a refusal is
+#: offered) — this is the estimate
 #: ``run_estimate`` hands the improvements queue, not a cap.
 HUB_JOBS: Dict[str, Dict[str, int]] = {
     "clothing:edit_chain": {"worn": 2, "ghost": 2, "cutout": 2, "mesh": 1, "fit": 0},

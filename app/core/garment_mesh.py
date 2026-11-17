@@ -98,8 +98,9 @@ MIN_COMPONENT_SHARE = 0.90
 #: Version of the gate rule, stamped on the step record: a stored raw refused under an older version is judged
 #: again before the mesher is asked (``generate``). 2 = crumbs left out, limit 0.90 (2026-11-12).
 GATE_VERSION = 2
-#: Fresh backend calls before the step is refused (R5).
-MAX_ATTEMPTS = 2
+#: Fresh backend calls before the step is refused (R5). A176: ONE — a refused mesh is kept and offered ("Use this"
+#: / Regenerate), never meshed again on its own.
+MAX_ATTEMPTS = 1
 #: Ruling A58: slots of the kept meshes of one fsig (refused attempts, the meshes a run or a pick replaced, a
 #: result that finished while another mesh was chosen). Enough for two runs of two attempts plus the meshes in
 #: between; a full set drops its oldest refused attempt first (``_free_slot``).

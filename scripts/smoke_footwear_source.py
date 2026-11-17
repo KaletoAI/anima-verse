@@ -71,7 +71,7 @@ Expected, by hand:
      are cropped to their bbox and resampled -> 1.0 (+-0.02) >= 0.80. -> accepted, prepared.glb exists.
      Item X = shoe(1), its empty edit answered with shoe(4) (accepted, 1.0 as in S2): box B moved OUTSIDE A
      (x offset 0.5 m) on both attempts -> component_share = 0.89290 <
-     0.98 -> 2 mesher calls, refused, no prepared.glb.
+     0.98 -> 1 mesher call (A176), refused, no prepared.glb.
      The same run goes on to the insole of the two boxes (footwear_insole, L = 0.25, AIR = 0.00625,
      TOL = 0.00875; 240 stations x int(240 * 0.09 / 0.25) = 86 columns): A's top (0.13) faces up with
      nothing above, B's top (0.03) faces up with 0.10 of air -> both candidates. Seed station 132
@@ -598,7 +598,7 @@ def main():
             res = fs.run_source("shoe_x")
             ssig_x = fs.current_ssig("shoe_x")
             check("X refused", (res.get("ok"), res.get("step")), (False, "mesh"))
-            check("X mesher calls", len(svc.meshes) - n0, 2)
+            check("X mesher calls (A176: one)", len(svc.meshes) - n0, 1)
             rec = fs.step_record("shoe_x", ssig_x, "mesh")
             near("X component_share", (rec.get("gates") or {}).get("component_share"), 0.1334 / 0.1494, 1e-4)
             check("X no prepared", (fs.source_dir("shoe_x", ssig_x) / "prepared.glb").exists(), False)

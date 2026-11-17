@@ -28,7 +28,7 @@ Meshes (``box(n)``: the six faces of the cube [-1, 1]³, each an n × n quad gri
     J3 = box 6 (432 tris)  the old-code proof's job result
 
 [1] Job held: ``start_garment(mesh, force, only)`` -> started; the stub backend is in its first call. ``running_job``
-    -> fsig F, hub_jobs 1, max_hub_jobs 2 (``MAX_ATTEMPTS``), phase "hub". The panel's ``steps.mesh.job`` names the
+    -> fsig F, hub_jobs 1, max_hub_jobs 1 (``MAX_ATTEMPTS``, A176), phase "hub". The panel's ``steps.mesh.job`` names the
     same id, hub_jobs 1, chosen False; ``view.attempts`` = [slot 1, origin previous, ok, use_block ""]. The status
     running_step is "mesh". The raw file of the mesh in use is still R0 (the generator writes a staging file).
 [2] "Use this" on slot 1 through the route while held -> 200, during_job True, user_accepted False, the fit's start
@@ -271,7 +271,7 @@ def main() -> int:
             check("in the hub call", in_hub.setdefault(1, threading.Event()).wait(20), True)
             job = garment_mesh.running_job("Demo", dress) or {}
             check("running job", (job.get("fsig"), job.get("hub_jobs"), job.get("max_hub_jobs"), job.get("phase")),
-                  (F, 1, 2, "hub"))
+                  (F, 1, 1, "hub"))
             panel = client.get(f"/characters/Demo/garments/{dress}").json()
             mesh = ((panel.get("garment") or {}).get("steps") or {}).get("mesh") or {}
             check("panel job", ((mesh.get("job") or {}).get("id"), (mesh.get("job") or {}).get("hub_jobs"),
