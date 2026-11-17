@@ -2680,7 +2680,8 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
                      sleeves: Optional[Dict[str, str]] = None,
                      room: Optional[Dict[str, Any]] = None,
                      lift: Optional[np.ndarray] = None,
-                     trunk: str = "auto") -> Tuple[np.ndarray, Dict[str, Any]]:
+                     trunk: str = "auto",
+                     gate_exclude=None) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Carry welded clothing positions ``Q`` (unrigged units) into the rigged bind space (metres) by the body's own
     skinning -> ``(X, report)``. ``limbs`` (a refit, ``fit_clothing``): the source fit per welded vertex (``x0``,
     ``w0``, ``names0``, ``frames``, ``kinds``) — its limb part is aligned onto this body's limbs (``align_limbs``)
@@ -2846,6 +2847,11 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
     band = trunk_band(X, Wg, body_rigged)
     tight_band = band & ~trunk_fitted
     stretch = sleeve_stretch(X, Xs, faces, sleeve_region) if sleeve_region.any() else None
+    # A182: ``gate_exclude(X)`` -> vertices the rigged gates leave out (a whole boot below the body cut), or None
+    judged = gate_exclude(X) if gate_exclude is not None else None
+    judged = None if judged is None or not (~np.asarray(judged, bool)).any() else ~np.asarray(judged, bool)
+    rp = rigged_push if judged is None else rigged_push[judged]
+    dg = d if judged is None else d[judged]
     report = {
         "method": "skinned",
         "scale_k": float(k),
@@ -2859,11 +2865,12 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
         "sleeve_cuff_vertices": int((cuff > 0).sum()),
         "armpit_seam": seam_report,
         "relaxed_vertices": int(relaxed),
-        "rigged_push_max_m": float(rigged_push.max()) if len(rigged_push) else 0.0,
-        "rigged_push_p95_m": float(np.percentile(rigged_push, 95)) if len(rigged_push) else 0.0,
-        "rigged_deep_push_share": float((rigged_push > DEEP_PUSH_M).mean()) if len(rigged_push) else 0.0,
-        "rigged_clearance_p1_m": float(np.percentile(d, 1)),
-        "rigged_inside_share": float((d < 0).mean()),
+        "rigged_push_max_m": float(rp.max()) if len(rp) else 0.0,
+        "rigged_push_p95_m": float(np.percentile(rp, 95)) if len(rp) else 0.0,
+        "rigged_deep_push_share": float((rp > DEEP_PUSH_M).mean()) if len(rp) else 0.0,
+        "rigged_clearance_p1_m": float(np.percentile(dg, 1)),
+        "rigged_inside_share": float((dg < 0).mean()),
+        **({"rigged_gate_exempt": int(len(d) - len(dg))} if len(dg) != len(d) else {}),
         "torso_tight_share": float((d[tight_band] < TORSO_TIGHT_M).mean()) if tight_band.any() else 0.0,
         "torso_gap_p50_m": float(np.median(d[band])) if band.any() else 0.0,
         **_front_back_gaps(X, d, band, Pr),
@@ -4130,8 +4137,19 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
     # A177: a boot past the knee — the push gates leave out its shoe part (and, cut, the dropped shaft):
     # ``garment_shaft.push_exempt``.
     from app.core import garment_shaft
-    shaft_exempt = (garment_shaft.push_exempt(Q * k, Fk, garment_shaft.shaft_choice(settings))
+    shaft_exempt = (garment_shaft.push_exempt(Q * k, Fk, garment_shaft.shaft_choice(settings),
+                                               garment_shaft.body_overlap_cm(settings) / 100.0)
                     if garment_shaft.applies(slots) else None)
+    # A182: with a whole boot the rigged gates leave out the boot below the body cut (the body leg is gone there)
+    gate_exclude = None
+    if garment_shaft.applies(slots) and garment_shaft.shaft_choice(settings) == garment_shaft.WHOLE:
+        from app.core.glb_mesh import joint_bind_matrices as _jbm
+        _feet = _jbm(rigged_base_glb)
+        _lx, _rx = float(_feet["leftfoot"][0, 3]), float(_feet["rightfoot"][0, 3])
+        _bo = garment_shaft.body_overlap_cm(settings) / 100.0
+
+        def gate_exclude(X):
+            return garment_shaft.gate_exempt(X, Fk, garment_shaft.WHOLE, _lx, _rx, _bo)
     limbs, limbs_skipped = None, ""
     if limb_source is not None:
         src = _out_index(Pd, Fd, inv, new_of_welded, lining)
@@ -4182,7 +4200,8 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
                 if any(room_u[0]) else None)
         X, transfer_report = transfer_skinned(Qp, body_u, body_r, faces=Fk, k=k, split_y=split_y, limbs=limbs,
                                               Q_pre=Qs, sleeves=choices, room=room,
-                                              lift=None if lift_u[0] is None else lift_u[0] * k, trunk=trunk)
+                                              lift=None if lift_u[0] is None else lift_u[0] * k, trunk=trunk,
+                                              gate_exclude=gate_exclude)
         fitted = transfer_report.pop("sleeve_fitted", None)
         if fitted_rows[0] is None and fitted is not None and np.any(fitted):
             fitted_rows[0] = fitted
@@ -4275,10 +4294,13 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
         from app.core.glb_mesh import joint_bind_matrices
         shaft = garment_shaft.shaft_choice(settings)
         overlap = garment_shaft.overlap_cm(settings)
+        body_overlap = garment_shaft.body_overlap_cm(settings)
         result.garment, result.report["shaft"] = garment_shaft.split(result.garment, body_r,
                                                                      joint_bind_matrices(rigged_base_glb), shaft,
-                                                                     overlap_m=overlap / 100.0)
+                                                                     overlap_m=overlap / 100.0,
+                                                                     body_overlap_m=body_overlap / 100.0)
         result.report["shaft"]["push_exempt_vertices"] = int(shaft_exempt.sum()) if shaft_exempt is not None else 0
         result.report["fit_settings"]["shaft"] = shaft
         result.report["fit_settings"]["shaft_overlap"] = overlap
+        result.report["fit_settings"]["body_overlap"] = body_overlap
     return result

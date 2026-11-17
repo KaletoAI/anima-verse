@@ -20,6 +20,9 @@ may add — ``garment_fit.fit_clothing``'s ``settings``:
   only, everything above the shoe top dropped). Ignored for every other piece.
 - ``shaft_overlap`` (A177): cm the leg part reaches down into the shoe part with ``split``
   (``garment_shaft.OVERLAP_CM_MIN``..``OVERLAP_CM_MAX``, default ``OVERLAP_CM_DEFAULT`` 10). Ignored elsewhere.
+- ``body_overlap`` (A182): with ``shaft`` "whole" (the whole boot, the body's leg cut off inside it) the cm the body
+  leg reaches up into the boot below its top edge (``garment_shaft.BODY_OVERLAP_CM_MIN``..``BODY_OVERLAP_CM_MAX``,
+  default ``BODY_OVERLAP_CM_DEFAULT`` 20). Only a "whole" fit becomes due for it.
 The mesh shape (Ruling A48d) is no setting: the item's mode decides it (``garment_shell.shape_of``: mode ``shell``
 → the shell from the body, else as generated). The fit records the shape it made (``inputs.mesh_shape``); a fit whose
 made shape is not the current one is due (``changed``).
@@ -42,7 +45,7 @@ SIDES = ("left", "right")
 def defaults() -> Dict[str, Any]:
     from app.core.garment_shell import SHELL_OFFSET_DEFAULT
     return {"sleeves_left": "auto", "sleeves_right": "auto", "allowance": "auto", "depth": 0, "trunk": "auto",
-            "shaft": "split", "shaft_overlap": 10, "shell_offset": SHELL_OFFSET_DEFAULT}
+            "shaft": "split", "shaft_overlap": 10, "body_overlap": 20, "shell_offset": SHELL_OFFSET_DEFAULT}
 
 
 def normalise(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -60,6 +63,7 @@ def normalise(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     from app.core import garment_shaft
     out["shaft"] = garment_shaft.shaft_choice(raw)
     out["shaft_overlap"] = garment_shaft.overlap_cm(raw)
+    out["body_overlap"] = garment_shaft.body_overlap_cm(raw)
     from app.core import garment_shell
     out["shell_offset"] = garment_shell.shell_offset_choice(raw)
     return out
@@ -102,6 +106,11 @@ def changed(record: Optional[Dict[str, Any]], profile: Optional[Dict[str, Any]],
         # A166: the shell offset shapes a shell only — a generated mesh's fit is not due for it.
         made.pop("shell_offset", None)
         now.pop("shell_offset", None)
+    from app.core import garment_shaft
+    if current.get("shaft") != garment_shaft.WHOLE:
+        # A182: the body overlap shapes a whole boot only
+        made.pop("body_overlap", None)
+        now.pop("body_overlap", None)
     return made != now or made_shape(record) != current_shape(current, item_id)
 
 
@@ -141,6 +150,13 @@ def validate(changes: Dict[str, Any]) -> Dict[str, Any]:
                     or not garment_shaft.OVERLAP_CM_MIN <= value <= garment_shaft.OVERLAP_CM_MAX):
                 raise ValueError(f"shaft_overlap must be a whole number of cm from {garment_shaft.OVERLAP_CM_MIN} "
                                  f"to {garment_shaft.OVERLAP_CM_MAX}")
+            out[key] = int(value)
+        elif key == "body_overlap":
+            from app.core import garment_shaft
+            if (isinstance(value, bool) or not isinstance(value, (int, float)) or int(value) != value
+                    or not garment_shaft.BODY_OVERLAP_CM_MIN <= value <= garment_shaft.BODY_OVERLAP_CM_MAX):
+                raise ValueError(f"body_overlap must be a whole number of cm from {garment_shaft.BODY_OVERLAP_CM_MIN} "
+                                 f"to {garment_shaft.BODY_OVERLAP_CM_MAX}")
             out[key] = int(value)
         elif key == "shell_offset":
             from app.core import garment_shell

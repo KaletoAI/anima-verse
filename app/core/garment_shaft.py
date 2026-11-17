@@ -23,6 +23,14 @@ fitted pair afterwards (``split``), on the CPU, from the same prepared mesh (a r
   meet. The leg part stands ``LEG_OVER_M`` outward along its normals (turned away from the nearest body point) so
   the two surfaces do not fight for the same pixels.
 - **cut** (``SHAFT_CHOICES``) — the shoe part only: everything above the shoe top is dropped.
+- **whole** (A182) — the boot stays one piece, shoe part and full shaft (the shoe part's weights: rigid on the
+  foot below the ankle, the side's Leg / UpLeg above), and the BODY's leg is cut off inside it: the assembly drops
+  every body face of that leg below ``body_cut`` = the boot's top edge minus the fit setting ``body_overlap`` (cm,
+  ``BODY_OVERLAP_CM_DEFAULT`` 20). The top edge is measured per side on the fitted boot (``rim_heights``: the
+  boot's highest point per sector around the leg, the lowest of those, so a slanted rim never shows the cut) and
+  recorded as ``report["shaft"]["sides"][side]["body_cut_y_m"]`` (bind space) — ``leg_cut_of`` reads it,
+  ``garment_assembly._cut_legs`` applies it. No skin is left below the cut to poke through, so the push gates and
+  the rigged gates leave out the boot below the cut (``push_exempt`` / ``gate_exempt``).
 
 The pair-aware component gate (``garment_fit.pair_share``) judges the fitted pair before the split; the split's
 numbers go to ``report["shaft"]``. The unrigged PUSH gates (``deep_push_share``, ``max_push_m``) leave out what the
@@ -40,10 +48,14 @@ import numpy as np
 #: The per-piece choice (fit setting ``shaft``): keep the shaft above the shoe as a leg part, or cut it off.
 SPLIT = "split"
 CUT = "cut"
-SHAFT_CHOICES: Tuple[str, ...] = (SPLIT, CUT)
+WHOLE = "whole"
+SHAFT_CHOICES: Tuple[str, ...] = (SPLIT, CUT, WHOLE)
 #: The overlap of leg part and shoe part, fit setting ``shaft_overlap`` in cm (A177: the user's 10 cm; bounds).
 OVERLAP_CM_DEFAULT = 10
 OVERLAP_CM_MIN, OVERLAP_CM_MAX = 2, 30
+#: How far the body leg reaches up into a ``WHOLE`` boot below its top edge, fit setting ``body_overlap`` in cm (A182).
+BODY_OVERLAP_CM_DEFAULT = 20
+BODY_OVERLAP_CM_MIN, BODY_OVERLAP_CM_MAX = 5, 40
 #: How far the leg part stands outside the shoe part (along its normals).
 LEG_OVER_M = 0.002
 
@@ -64,15 +76,51 @@ def overlap_cm(settings: Optional[Dict[str, Any]]) -> int:
     return int(min(max(round(value), OVERLAP_CM_MIN), OVERLAP_CM_MAX))
 
 
+def body_overlap_cm(settings: Optional[Dict[str, Any]]) -> int:
+    """The piece's fit setting ``body_overlap`` (cm); missing or invalid = ``BODY_OVERLAP_CM_DEFAULT``."""
+    value = (settings or {}).get("body_overlap")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return BODY_OVERLAP_CM_DEFAULT
+    return int(min(max(round(value), BODY_OVERLAP_CM_MIN), BODY_OVERLAP_CM_MAX))
+
+
+#: A182: sectors around the leg axis in which the boot's top edge is measured (``rim_heights``).
+RIM_SECTORS = 16
+
+
+def rim_heights(P: np.ndarray, F: np.ndarray, h: np.ndarray, on: np.ndarray) -> Optional[Tuple[float, float]]:
+    """``(low, high)`` heights (``h`` per vertex, along the leg) of the top edge of the side ``on`` (vertex mask):
+    around the leg axis (the x/z centre of the side's upper half) the boot's highest vertex per ``RIM_SECTORS``
+    sector; ``low`` is the lowest of those (a slanted edge is measured where it is lowest, so the cut never shows),
+    ``high`` the highest. Read from the vertices, not from boundary loops: a generated boot carries holes and
+    capped tops (Glut's: no open rim, 3891 non-manifold edges). None for an empty side. ``F`` is unused (kept for
+    the callers' signature)."""
+    P = np.asarray(P, np.float64)
+    on = np.asarray(on, bool)
+    if not on.any():
+        return None
+    hs = h[on]
+    upper = on & (h >= 0.5 * float(hs.max()))
+    cx, cz = float(P[upper, 0].mean()), float(P[upper, 2].mean())
+    ang = np.arctan2(P[on, 2] - cz, P[on, 0] - cx)
+    sector = np.minimum(((ang + np.pi) / (2 * np.pi) * RIM_SECTORS).astype(np.int64), RIM_SECTORS - 1)
+    tops = np.full(RIM_SECTORS, -np.inf)
+    np.maximum.at(tops, sector, hs)
+    tops = tops[np.isfinite(tops)]
+    return float(tops.min()), float(tops.max())
+
+
 def cut_m(overlap: float = OVERLAP_CM_DEFAULT / 100.0) -> float:
     """Where the leg part begins: the shoe top minus the overlap (metres)."""
     return shoe_top_m() - overlap
 
 
-def push_exempt(P: np.ndarray, F: np.ndarray, mode: str) -> np.ndarray:
+def push_exempt(P: np.ndarray, F: np.ndarray, mode: str,
+                body_overlap_m: float = BODY_OVERLAP_CM_DEFAULT / 100.0) -> np.ndarray:
     """Per vertex of a placed pair (metres; any frame with y up): True where the clothing push gates do not judge
     (module docstring, A177) — the shoe region (``h <= shoe_top_m()`` above its side's sole) and, with ``CUT``,
-    everything above it too. Sides by component centroid against the pair's area-weighted x centre (frame-free:
+    everything above it too; with ``WHOLE`` (A182) also everything below the body cut (the side's rim low point
+    minus ``body_overlap_m``: no skin is left there). Sides by component centroid against the pair's area-weighted x centre (frame-free:
     the unrigged placement has no foot joints)."""
     from app.core.garment_fit import triangle_areas
     P = np.asarray(P, np.float64)
@@ -88,7 +136,49 @@ def push_exempt(P: np.ndarray, F: np.ndarray, mode: str) -> np.ndarray:
         on = side == s
         if on.any():
             h[on] = P[on, 1] - P[on, 1].min()
-    return np.ones(len(P), bool) if mode == CUT else h <= shoe_top_m()
+    if mode == CUT:
+        return np.ones(len(P), bool)
+    out = h <= shoe_top_m()
+    if mode == WHOLE:
+        for s in ("left", "right"):
+            on = side == s
+            rim = rim_heights(P, F, h, on) if on.any() else None
+            top = rim[0] if rim else (float(h[on].max()) if on.any() else 0.0)
+            out |= on & (h < top - body_overlap_m)
+    return out
+
+
+def gate_exempt(X: np.ndarray, F: np.ndarray, mode: str, left_x: float, right_x: float,
+                body_overlap_m: float = BODY_OVERLAP_CM_DEFAULT / 100.0) -> Optional[np.ndarray]:
+    """A182: per vertex of the fitted pair in bind space (``X``, metres), True where the RIGGED gates do not judge —
+    with ``WHOLE`` the boot below the body cut (the body leg is gone there); None for every other mode."""
+    if mode != WHOLE or not len(X):
+        return None
+    X = np.asarray(X, np.float64)
+    side = sides_of(X, F, left_x, right_x)
+    out = np.zeros(len(X), bool)
+    for s in ("left", "right"):
+        on = side == s
+        if not on.any():
+            continue
+        h = X[:, 1] - float(X[on, 1].min())
+        rim = rim_heights(X, F, h, on)
+        top = rim[0] if rim else float(h[on].max())
+        out |= on & (h < top - body_overlap_m)
+    return out
+
+
+def leg_cut_of(record: Optional[Dict[str, Any]]) -> Optional[Dict[str, float]]:
+    """A182: ``{side: body_cut_y_m}`` of a fit record made with ``WHOLE`` (bind space), else None."""
+    shaft = ((record or {}).get("report") or {}).get("shaft")
+    if not isinstance(shaft, dict) or shaft.get("mode") != WHOLE:
+        return None
+    out: Dict[str, float] = {}
+    for s, rec in (shaft.get("sides") or {}).items():
+        y = (rec or {}).get("body_cut_y_m") if isinstance(rec, dict) else None
+        if s in ("left", "right") and isinstance(y, (int, float)) and not isinstance(y, bool):
+            out[s] = float(y)
+    return out or None
 
 
 def applies(slots: Optional[Sequence[str]]) -> bool:
@@ -132,7 +222,8 @@ def sides_of(P: np.ndarray, F: np.ndarray, left_x: float, right_x: float) -> np.
 
 
 def split(garment, body, joints: Dict[str, np.ndarray], mode: str,
-          overlap_m: float = OVERLAP_CM_DEFAULT / 100.0) -> Tuple[Any, Dict[str, Any]]:
+          overlap_m: float = OVERLAP_CM_DEFAULT / 100.0,
+          body_overlap_m: float = BODY_OVERLAP_CM_DEFAULT / 100.0) -> Tuple[Any, Dict[str, Any]]:
     """The fitted pair ``garment`` (``glb_mesh.GarmentMesh`` on the rigged ``body``; ``joints`` =
     ``glb_mesh.joint_bind_matrices`` of the rigged body) as shoe part + leg part (``SPLIT``) or shoe part alone
     (``CUT``) — module docstring. Returns ``(new GarmentMesh, report)``."""
@@ -154,8 +245,14 @@ def split(garment, body, joints: Dict[str, np.ndarray], mode: str,
         h[on] = P[on, 1] - floors[s]
     fh = h[F].mean(1)
     face_side = side[F[:, 0]]
-    shoe_f = fh <= top
+    # A182: the whole boot is one part on the shoe part's weights (rigid foot, shaft on the own leg above)
+    shoe_f = np.ones(len(F), bool) if mode == WHOLE else fh <= top
     leg_f = (fh >= cut) if mode == SPLIT else np.zeros(len(F), bool)
+    rims: Dict[str, Optional[Tuple[float, float]]] = {}
+    if mode == WHOLE:
+        for s in ("left", "right"):
+            on = side == s
+            rims[s] = rim_heights(P, F, h, on) if on.any() else None
 
     # dense weights over the body's joints
     n_j = len(body.joint_names)
@@ -238,4 +335,17 @@ def split(garment, body, joints: Dict[str, np.ndarray], mode: str,
         "leg_vertices": int(np.concatenate(is_leg).sum()),
         "dropped_above_mm": round(top * 1000.0) if mode == CUT else None,
     }
+    if mode == WHOLE:
+        report["body_overlap_mm"] = round(body_overlap_m * 1000.0)
+        for s in ("left", "right"):
+            on = side == s
+            if not on.any():
+                continue
+            rim = rims.get(s)
+            rim_low = rim[0] if rim else float(h[on].max())
+            cut_h = max(rim_low - body_overlap_m, 0.0)
+            report["sides"][s].update({
+                "rim_low_mm": round(rim_low * 1000.0), "rim_high_mm": round((rim[1] if rim else rim_low) * 1000.0),
+                "body_cut_mm": round(cut_h * 1000.0),
+                "body_cut_y_m": round(floors[s] + cut_h, 5)})
     return out, report

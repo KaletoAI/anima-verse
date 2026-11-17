@@ -5365,7 +5365,7 @@ def slot_labels(character_name: str) -> Dict[str, str]:
 
 def shaft_view(record: Dict[str, Any], current: Dict[str, Any], item_id: str) -> Optional[Dict[str, Any]]:
     """Ruling A122 — the shaft choice of a piece on the feet and the legs (``garment_shaft.applies``; None for any
-    other piece): ``{setting, choices, shoe_top_mm, cut_mm, overlap_mm, made (the shown fit's report["shaft"], None
+    other piece): ``{setting, choices, shoe_top_mm, cut_mm, overlap_mm, body_overlap_cm (A182), made (the shown fit's report["shaft"], None
     without one), cost {hub_jobs: 0, where: "cpu"}}``."""
     from app.core import garment_shaft
     from app.models.inventory import get_item
@@ -5379,6 +5379,9 @@ def shaft_view(record: Dict[str, Any], current: Dict[str, Any], item_id: str) ->
             "overlap_mm": garment_shaft.overlap_cm(current) * 10,
             "overlap_cm": garment_shaft.overlap_cm(current),
             "overlap_range_cm": [garment_shaft.OVERLAP_CM_MIN, garment_shaft.OVERLAP_CM_MAX],
+            # A182: the whole boot — the body leg ends this far below the boot's top edge
+            "body_overlap_cm": garment_shaft.body_overlap_cm(current),
+            "body_overlap_range_cm": [garment_shaft.BODY_OVERLAP_CM_MIN, garment_shaft.BODY_OVERLAP_CM_MAX],
             "made": (record.get("report") or {}).get("shaft"), "cost": {"hub_jobs": 0, "where": "cpu"}}
 
 
@@ -5397,11 +5400,14 @@ def fit_settings_view(record: Dict[str, Any], current: Dict[str, Any], *, accept
     numbers["scale"] = metrics.get("scale_retry")
     made_with = garment_fit_settings.recorded(record) if record else None
     shape = mesh_shape_view(record, current, item_id, character_name)
+    from app.core import garment_shaft
+    skip = {"shell_offset"} | ({"body_overlap"} if current.get("shaft") != garment_shaft.WHOLE else set())
     return {
         "settings": current, "recorded": made_with,
         # the shell offset is compared in shape["due"] (a shell only, A166)
-        "due": bool(record) and ({k: v for k, v in made_with.items() if k != "shell_offset"}
-                                 != {k: v for k, v in current.items() if k != "shell_offset"} or shape["due"]),
+        # A182: the body overlap counts for a whole boot only
+        "due": bool(record) and ({k: v for k, v in made_with.items() if k not in skip}
+                                 != {k: v for k, v in current.items() if k not in skip} or shape["due"]),
         "mesh_shape": shape,
         "sleeves": (report.get("transfer") or {}).get("sleeves") or {},
         "trunk": (report.get("transfer") or {}).get("trunk"),

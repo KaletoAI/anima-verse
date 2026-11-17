@@ -772,6 +772,79 @@ def _hide_covered_body(blob: bytes, clothing: List[Dict[str, Any]], tier: str) -
     return blob, stats
 
 
+#: A182: the normalised joints of a leg whose weights mark a body vertex as that leg's
+LEG_CHAIN = ("upleg", "leg", "foot", "toebase", "toe_end")
+
+
+def cut_legs(prims: List[Any], cuts: Dict[str, float]) -> Tuple[Dict[int, Any], Dict[str, Any]]:
+    """A182 — the body primitives (``glb_mesh.Prim``) with each whole boot's leg cut off inside it: per side in
+    ``cuts`` (``{side: y}``, bind space, ``garment_shaft.leg_cut_of``) every face whose three vertices lie below
+    ``y`` AND belong to that leg (more than half their skin weight on the side's ``LEG_CHAIN``) is dropped; the
+    vertices stay (only the index list shrinks, as ``body_cover.hide_under``). The skin left therefore ends at most
+    one edge below the cut, inside the boot. Returns ``(replaced {index: Prim}, stats)``."""
+    import numpy as np
+    from dataclasses import replace
+    from app.core.rig_contract import norm_bone_name
+    out: Dict[int, Any] = {}
+    per_side = {s: {"cut_y_m": round(float(y), 5), "removed_faces": 0, "removed_vertices": 0, "skin_end_y_m": None}
+                for s, y in cuts.items()}
+    total = 0
+    for i, prim in enumerate(prims):
+        P = np.asarray(prim.positions, np.float64)
+        F = np.asarray(prim.faces, np.int64).reshape(-1, 3)
+        total += len(F)
+        if not len(F) or not len(prim.joint_names) or not len(prim.joints):
+            continue
+        names = [norm_bone_name(n) for n in prim.joint_names]
+        J = np.asarray(prim.joints, np.int64)
+        W = np.asarray(prim.weights, np.float64)
+        drop = np.zeros(len(F), bool)
+        for s, y in cuts.items():
+            cols = np.array([j for j, n in enumerate(names) if n in {f"{s}{c}" for c in LEG_CHAIN}], np.int64)
+            if not len(cols):
+                continue
+            share = (W * np.isin(J, cols)).sum(1)
+            on = (share > 0.5) & (P[:, 1] < float(y))
+            gone = on[F].all(1) & ~drop
+            if not gone.any():
+                continue
+            drop |= gone
+            rec = per_side[s]
+            rec["removed_faces"] += int(gone.sum())
+            kept_v = np.zeros(len(P), bool)
+            kept_v[F[~drop].ravel()] = True
+            lost = np.zeros(len(P), bool)
+            lost[F[gone].ravel()] = True
+            rec["removed_vertices"] += int((lost & ~kept_v).sum())
+            leg_kept = kept_v & (share > 0.5)
+            if leg_kept.any():
+                low = float(P[leg_kept, 1].min())
+                rec["skin_end_y_m"] = round(low if rec["skin_end_y_m"] is None else min(rec["skin_end_y_m"], low), 5)
+        if drop.any():
+            out[i] = replace(prim, faces=F[~drop])
+    return out, {"sides": per_side, "faces": total,
+                 "removed_faces": sum(r["removed_faces"] for r in per_side.values())}
+
+
+def _cut_whole_boot_legs(blob: bytes, clothing: List[Dict[str, Any]], tier: str) -> Tuple[bytes, Dict[str, Any]]:
+    """A182: ``blob`` with the leg cut off inside every whole boot among the ``clothing`` pieces (``cut_legs``; the
+    cut heights ride with the fit record, ``garment_shaft.leg_cut_of``) and the stats per item ({} without one).
+    Only the assembly's copy loses faces; the bare file stays whole."""
+    from app.core import garment_shaft, glb_mesh
+    stats: Dict[str, Any] = {}
+    for garment in clothing:
+        cuts = garment_shaft.leg_cut_of(garment.get("record"))
+        if not cuts:
+            continue
+        replaced, rec = cut_legs(glb_mesh.body_primitive_arrays(blob), cuts)
+        if replaced:
+            blob = glb_mesh.rewrite_body_primitives(blob, replaced)
+        stats[garment["item_id"]] = rec
+        logger.info("Garment assembly: %s cut the %s body leg inside the boot — %s", garment["item_id"], tier,
+                    {s: (r["removed_faces"], r["cut_y_m"]) for s, r in rec["sides"].items()})
+    return blob, stats
+
+
 def _template_uppers(grafted: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
     """Ruling A144: per template piece, the template pieces of a higher layer rank worn over it (a jacket over a
     top) — their cover hides the lower piece's faces under them (``body_cover.covered_under``)."""
@@ -894,6 +967,8 @@ def _build(character_name: str, directory: Path, bare: Path,
         from app.core.footwear_rest import rest_measurement
         foot_pose = {**pose, "rest": rest_measurement(data),
                      "source": {"item_id": garment["item_id"], "fsig": garment["fsig"], "glb_sha256": ""}}
+    # A182: a whole boot's leg goes first, then what the clothing still covers
+    blob, leg_cut = _cut_whole_boot_legs(blob, [g for g in grafted if g["kind"] == CLOTHING], tier)
     blob, cover = _hide_covered_body(blob, [g for g in grafted if g["kind"] == CLOTHING], tier)
     under = _template_uppers(grafted)
     scalp_tints: Dict[str, Any] = {}
@@ -961,6 +1036,8 @@ def _build(character_name: str, directory: Path, bare: Path,
         side["scalp_tint"] = scalp_tints
     if cover:
         side["body_cover"] = cover
+    if leg_cut:
+        side["leg_cut"] = leg_cut
     if foot_pose is not None:
         foot_pose["source"]["glb_sha256"] = hashlib.sha256(blob).hexdigest()
         side["foot_pose"] = foot_pose
