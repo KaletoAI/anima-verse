@@ -824,6 +824,22 @@ def _from_worn(character_name: str, item_id: str, fsig: str, view: str, kind, *,
                                        choice=choice, gate_record=gate_record, pair_check=pair_check)
 
 
+def _gate_attempt(kind, step: str, view: str, path: Path, base_size: Tuple[int, int], gate_args: Dict[str, Any],
+                  position, pair_check: Optional[Callable[[Dict[str, Any]], Optional[str]]]) -> Dict[str, Any]:
+    """Register the attempt file at ``path`` onto ``position`` (a step with one; ``_register`` rewrites the file and
+    keeps the rendered bytes as its raw sibling) and gate it — a render's and an upload's (A183) gate alike."""
+    edit_rgb, edit_mask = _rgb(path, base_size), _mask(path, base_size)
+    registration = None
+    if position is not None:
+        edit_rgb, edit_mask, registration = _register(kind, step, view, path, base_size, position,
+                                                      gate_args=gate_args, edit_rgb=edit_rgb, edit_mask=edit_mask)
+    record = kind.gate(step, view, edit_rgb=edit_rgb, edit_mask=edit_mask, **gate_args)
+    if registration is not None:
+        record = _with_registration(record, registration)
+    # Ruling A27: a hem-only refusal is snapped to the worn hem (and gated again in full).
+    return _snap_hem(kind, step, view, path, base_size, gate_args, position, edit_mask, record, pair_check)
+
+
 def _render_edit_step(character_name: str, item_id: str, fsig: str, step: str, view: str, kind, *,
                       profile: Dict[str, Any], base: Path, source: Path, refs_dir: Path, final: Path,
                       pair_check: Optional[Callable[[Dict[str, Any]], Optional[str]]],
@@ -838,20 +854,7 @@ def _render_edit_step(character_name: str, item_id: str, fsig: str, step: str, v
     base_size, gate_args, position = _gate_inputs(kind, step, base, source, refs_dir, item_id)
 
     def gate_file(path: Path) -> Dict[str, Any]:
-        """Register the attempt file at ``path`` onto ``position`` (a step
-        with one; ``_register`` rewrites the file and keeps the rendered
-        bytes as its raw sibling) and gate it."""
-        edit_rgb, edit_mask = _rgb(path, base_size), _mask(path, base_size)
-        registration = None
-        if position is not None:
-            edit_rgb, edit_mask, registration = _register(kind, step, view, path, base_size, position,
-                                                          gate_args=gate_args, edit_rgb=edit_rgb,
-                                                          edit_mask=edit_mask)
-        record = kind.gate(step, view, edit_rgb=edit_rgb, edit_mask=edit_mask, **gate_args)
-        if registration is not None:
-            record = _with_registration(record, registration)
-        # Ruling A27: a hem-only refusal is snapped to the worn hem (and gated again in full).
-        return _snap_hem(kind, step, view, path, base_size, gate_args, position, edit_mask, record, pair_check)
+        return _gate_attempt(kind, step, view, path, base_size, gate_args, position, pair_check)
 
     if not _accepted(final):
         def regate(path: Path, old: Dict[str, Any]) -> Dict[str, Any]:
@@ -1387,6 +1390,86 @@ def use_attempt(character_name: str, item_id: str, fsig: str, step: str, view: s
     logger.info("Garment %s %s %s of %s: attempt %d used by hand (%s)", character_name, step, view, item_id,
                 attempt, "passing" if passing else "refused — accepted by the user")
     return {"changed": True, "passing": passing, "user_accepted": not passing}
+
+
+#: A183: an uploaded piece-only view — larger than this side is refused before it is decoded further.
+UPLOAD_MAX_SIDE = 8192
+
+
+def _upload_slot(character_name: str, item_id: str, fsig: str, step: str, view: str) -> int:
+    """The attempt slot an upload of ``view`` of ``step`` is stored in (A183): the first empty one, else the oldest
+    stored attempt that is not the accepted image's."""
+    from app.core.garment_store import garment_path, read_record
+    final = garment_path(character_name, item_id, fsig, "image", step=step, view=view)
+    current = int(read_record(final.with_suffix(".json")).get("attempt") or 0) if _accepted(final) else 0
+    stored: List[Tuple[str, int]] = []
+    for n in range(1, ATTEMPTS + 1):
+        path = garment_path(character_name, item_id, fsig, "image", step=step, view=view, attempt=n)
+        if not path.is_file():
+            return n
+        if n != current:
+            stored.append((str(read_record(path.with_suffix(".json")).get("created_at") or ""), n))
+    return min(stored)[1] if stored else ATTEMPTS
+
+
+def store_upload(character_name: str, item_id: str, fsig: str, step: str, view: str, data: bytes) -> int:
+    """A183, "Upload piece-only view…": store the image ``data`` as an attempt of ``view`` of the kind's
+    ``FROM_WORN_STEP`` (clothing: the ghost) and gate it like a render — the attempt slot ``_upload_slot``, the
+    returned number. The image is taken as rendered on the step's edit canvas: the source (the worn view) centred
+    on its square (``square_frame``), so a square upload of any size is scaled to that square and the source frame
+    cut back (``crop_back``, the render's own path) — an image of the source's own aspect is scaled to it. Then the
+    registration and the gate (``_gate_attempt``); the sidecar carries ``uploaded {at, size, sha256}``. Publishing
+    is the caller's (``use_attempt``: a refused upload is accepted by the user). ``AttemptUnusable`` when the step
+    takes no upload or its source is not accepted, ValueError for an image that cannot be read. The caller holds
+    the item's run lock."""
+    import hashlib
+    from PIL import Image
+    from app.core import base_body
+    from app.core.garment_store import garment_path, write_record
+    from app.core.model_refs import find_ref_image, get_model_refs_dir
+    from app.core.timeutils import utc_now_iso
+    from app.models.character import get_character_profile
+    kind = _kind_module(item_id)
+    if step != getattr(kind, "FROM_WORN_STEP", None) or step not in (getattr(kind, "EDIT_STEPS", {}) or {}):
+        raise AttemptUnusable("Only a piece-only view can be uploaded")
+    profile = get_character_profile(character_name) or {}
+    if view == "back" and _open_state(character_name, item_id, profile, None):
+        raise AttemptUnusable("The open state's back is the closed one's — upload it there")
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            if max(im.size) > UPLOAD_MAX_SIDE:
+                raise ValueError(f"The image is larger than {UPLOAD_MAX_SIDE} px on a side")
+            uploaded = im.convert("RGB")
+    except (OSError, Image.DecompressionBombError) as e:
+        raise ValueError(f"The image cannot be read: {e}") from e
+    bsig = base_body.base_signature(character_name, profile=profile)
+    base = find_ref_image(character_name, base_body._kind(view), bsig)
+    if base is None:
+        raise base_body.MissingInput(base_body.BASE_IMAGES_MISSING)
+    source = garment_path(character_name, item_id, fsig, "image", step=kind.EDIT_STEPS[step]["source"], view=view)
+    if not _accepted(source):
+        raise AttemptUnusable(SOURCE_NOT_ACCEPTED)
+    refs_dir = get_model_refs_dir(character_name)
+    slot = _upload_slot(character_name, item_id, fsig, step, view)
+    target = garment_path(character_name, item_id, fsig, "image", step=step, view=view, attempt=slot)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with Image.open(source) as im:
+        size = im.size
+    side, offset = square_frame(size)
+    tmp = target.with_name(f".upload_{target.name}")
+    uploaded.save(tmp, format="PNG")
+    raw_path(target).unlink(missing_ok=True)   # the slot's earlier rendering is not this image's
+    crop_back(tmp, target, side, offset, size)
+    base_size, gate_args, position = _gate_inputs(kind, step, base, source, refs_dir, item_id)
+    record = _gate_attempt(kind, step, view, target, base_size, gate_args, position, None)
+    record["attempt"] = slot
+    sidecar = {"created_at": utc_now_iso(),
+               "uploaded": {"at": utc_now_iso(), "size": list(uploaded.size),
+                            "sha256": hashlib.sha256(data).hexdigest()}}
+    write_record(target.with_suffix(".json"), _attempt_sidecar(sidecar, record))
+    logger.info("Garment %s %s %s of %s: image uploaded as attempt %d (%s %s)", character_name, step, view, item_id,
+                slot, "passing" if record.get("ok") else "refused", record.get("reasons") or "")
+    return slot
 
 
 #: The gate numbers a registration corrects; after it they are the residual.

@@ -3331,6 +3331,42 @@ def use_character_garment_attempt(character_name: str, item_id: str, step: str, 
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/{character_name}/garments/{item_id}/images/{step}/{view}/upload")
+async def upload_character_garment_view(character_name: str, item_id: str, step: str, view: str, request: Request,
+                                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """A183, "Upload piece-only view…": an image file (multipart field ``file``) becomes the accepted piece-only
+    view of ``view`` (``garments.upload_view``): taken as rendered on the edit canvas (a square image is scaled to
+    the source's square and cut back to its frame), registered and gated like a render, then used — a refused
+    upload is accepted by the user with its reasons recorded. Spends no job; the mesh goes and the shell / fit read
+    due (A177); Undo takes it back. Admin-only. 400 for a bad step / view / image, 409 while a garment run of the
+    piece is in progress or when the view cannot take an upload, 413 / 415 for an oversized or non-image body."""
+    from starlette.concurrency import run_in_threadpool
+    from app.core import base_body, garments
+    from app.core import garment_store as gs
+    from app.core.garment_images import AttemptUnusable
+    from app.models.inventory import safe_item_id
+    if step not in gs.IMAGE_STEPS:
+        raise HTTPException(status_code=400, detail=f"step must be one of {', '.join(gs.IMAGE_STEPS)}")
+    if view not in gs.GARMENT_VIEWS:
+        raise HTTPException(status_code=400, detail=f"view must be one of {', '.join(gs.GARMENT_VIEWS)}")
+    if safe_item_id(item_id) != item_id:
+        raise HTTPException(status_code=404, detail="Unknown item")
+    _require_character(character_name)
+    guard_content_length(request, what="Piece-only view")
+    form = await request.form()
+    file = form.get("file")
+    if file is None or isinstance(file, str):
+        raise HTTPException(status_code=400, detail="No file uploaded")
+    contents = await read_upload_capped(file, what="Piece-only view")
+    ensure_image(contents, filename=str(getattr(file, "filename", "") or ""), what="Piece-only view")
+    try:
+        return await run_in_threadpool(garments.upload_view, character_name, item_id, step, view, contents)
+    except (AttemptUnusable, garments.UseBusy, base_body.MissingInput) as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/{character_name}/garments/{item_id}/images/undo-use")
 def undo_character_garment_attempt_use(character_name: str, item_id: str,
                                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
