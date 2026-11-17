@@ -501,7 +501,7 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   const fitGate = fitRowGate({
     shell: shellPiece, meshAccepted: mesh?.status === 'accepted',
     viewsReady: !!shellViewsStep && GARMENT_VIEWS.every((v) => accepted(shellViewsStep, v)),
-    fitMade: !!fit && fit.status !== 'missing', refitBlock: refitBlock || '', buildRunning: !!garment?.build_running,
+    fitMade: !!fit && fit.status !== 'missing', refitBlock: refitBlock || '', buildRunning: !!garment?.build_fits_piece,
   })
   const columns = `minmax(110px, 140px) repeat(${GARMENT_VIEWS.length}, minmax(0, 1fr))`
 

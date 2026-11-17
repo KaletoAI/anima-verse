@@ -3003,6 +3003,10 @@ def set_character_garment_fit_settings(character_name: str, item_id: str, body: 
         raise HTTPException(status_code=400, detail=str(e))
     if not saved:
         raise HTTPException(status_code=500, detail="Saving the character profile failed")
+    # A166: the fit is due now — an automatic Build re-fits it (kept as the follow-up when one runs), so "Fit due"
+    # is followed by a fit without another click.
+    from app.core import figure_build
+    figure_build.request(character_name, "fit_settings")
     profile = get_character_profile(character_name) or {}
     try:
         fsig = gs.garment_fsig(character_name, item_id, profile=profile)

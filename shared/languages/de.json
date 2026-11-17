@@ -6297,6 +6297,9 @@
     "{mm} mm above the surface": "{mm} mm über der Fläche",
     "Dismissed — the next Build tries this step again": "Verworfen — der nächste Build versucht diesen Schritt erneut",
     "Forgets this failure — the status stops saying a step failed; the next Build tries it again": "Vergisst diesen Fehler — der Status meldet ihn nicht mehr; der nächste Build versucht den Schritt erneut",
-    "Template drape": "Vorlagen-Drapierung"
+    "Template drape": "Vorlagen-Drapierung",
+    "Reset to the automatic fit": "Auf die automatische Passform zurücksetzen",
+    "Sets sleeves, trunk, shaft, width and depth allowance back to Auto — the mesh shape stays. Saves at once; the fit becomes due and the next Build re-fits it on the CPU (0 hub jobs).": "Setzt Ärmel, Rumpf, Schaft, Weiten- und Tiefenzugabe auf Auto zurück — die Mesh-Form bleibt. Speichert sofort; die Passform wird fällig und der nächste Build passt sie auf der CPU neu an (0 Hub-Jobs).",
+    "Manual settings: {n}": "Manuelle Einstellungen: {n}"
   }
 }

@@ -4605,6 +4605,15 @@ def _build_running(character_name: str) -> bool:
         return False
 
 
+def _build_fits_piece(character_name: str, item_id: str) -> bool:
+    """``figure_build.fits_piece``; False when unreadable."""
+    try:
+        from app.core import figure_build
+        return figure_build.fits_piece(character_name, item_id)
+    except Exception:  # noqa: BLE001 — a hint, never a failure of the dialog
+        return False
+
+
 def _earlier_meshes(character_name: str, item_id: str, fsig: str) -> List[Dict[str, Any]]:
     """Ruling A131: the meshes the piece keeps from an EARLIER fingerprint (``garment_store.earlier_mesh_fsigs`` — a
     clothing fsig carries the base body, so a new base body leaves the current fsig empty while these stay stored),
@@ -5711,6 +5720,8 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
         # Ruling A131: the character's Build runs (it may make a new body and refit this piece) — the dialog's
         # delete buttons wait for it.
         "build_running": _build_running(character_name),
+        # A166: whether that Build fits THIS piece (its plan names the piece's chain) — only then the fit row waits.
+        "build_fits_piece": _build_fits_piece(character_name, item_id),
         "queue_position": queue["queue_position"], "queue_running": queue["queue_running"],
         "queue_beside": queue["queue_beside"],
         "failed": failed, "preview_url": preview_url,

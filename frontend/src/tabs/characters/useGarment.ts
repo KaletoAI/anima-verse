@@ -402,6 +402,8 @@ export interface GarmentInfo {
   started_at: string | null
   /** Ruling A131: the character's figure Build runs (it may make a new body and refit this piece). */
   build_running?: boolean
+  /** A166: the running Build fits this piece (its plan names the piece's chain). */
+  build_fits_piece?: boolean
   /** The 1-based place of the item's next waiting run in the character's
    *  garment queue (null = none waits) and the item id in flight (null =
    *  idle) — `garments.queue_state`; absent on an older server. */

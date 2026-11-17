@@ -814,6 +814,21 @@ check('[21] Figure tab source', [/<StepRowView\b/.test(fieldFigure), /<SubTabs\b
 //      +10 % says nothing about Auto); "PwAAAQ==" is base64 of the bytes 63, 0, 0, 1: the little-endian 16-bit words 63
 //      (bits 0..5) and 256 (bit 8, Ruling A76: nine factors since the choices reach +20 %); the factor list
 //      [1, 1.02, 1.03, 1.04, 1.06, 1.08, 1.1] puts ×1.06 at bit 4; a gap of −3 mm reads "−3.0 mm".
+// [A166] Reset to the automatic fit: Glut's boots (allowance 6, depth 20, shaft cut) reset exactly those three to
+//        Auto / 0 / split; the mesh shape (its own control) is never touched; all-automatic → nothing to reset.
+//        The fit row waits only for a Build that fits the piece: build_fits_piece false → the Re-fit is offered.
+{
+  const f = await loadBundled(join(ROOT, 'frontend/src/tabs/characters/fitSettingsModel.ts'));
+  const boots = { sleeves_left: 'auto', sleeves_right: 'auto', allowance: 6, depth: 20, trunk: 'auto',
+    mesh_shape: 'shell', shaft: 'cut' };
+  check('[A166] reset of the boots', f.manualFitChanges(boots), { allowance: 'auto', depth: 0, shaft: 'split' });
+  check('[A166] automatic → nothing', f.manualFitChanges({ ...boots, allowance: 'auto', depth: 0, shaft: 'split' }), {});
+  const g = await loadBundled(join(ROOT, 'frontend/src/tabs/characters/garmentStyle.ts'));
+  const gate = (buildRunning) => g.fitRowGate({ shell: true, meshAccepted: false, viewsReady: true, fitMade: true,
+    refitBlock: '', buildRunning });
+  check('[A166] a Build that does not fit it', [gate(false).disabled, gate(false).label], [false, g.FIT_REFIT]);
+  check('[A166] a Build that fits it', [gate(true).disabled, gate(true).reason], [true, g.FIT_WAITS_BUILD]);
+}
 {
   const w = await loadBundled(join(ROOT, 'frontend/src/tabs/characters/fitWiden.ts'));
   const choices = ['auto', 0, 3, 6, 10];

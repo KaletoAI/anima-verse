@@ -611,6 +611,25 @@ def runs_chain(character_name: str, item_id: str) -> bool:
         return item_id in _own_chains.get(character_name, ())
 
 
+#: The Build steps that run ONE piece's own chain (its fit included).
+PIECE_CHAIN_STEPS = ("pieces", "hair", "template")
+
+
+def fits_piece(character_name: str, item_id: str) -> bool:
+    """A166: whether the character's running Build still fits ``item_id`` — its chain runs now (``runs_chain``) or
+    a step of the piece's chain comes later in the run's plan. A Build planned before the piece became due does not
+    (Glut's briefs, 2026-11-17: the dialog waited for a Build that never fitted them). False when no Build runs."""
+    with _lock:
+        if character_name not in _active:
+            return False
+        if item_id in _own_chains.get(character_name, ()):
+            return True
+        current = _current.get(character_name) or {}
+        steps = list(current.get("steps") or [])
+        index = int((current.get("step") or {}).get("index") or 1)
+    return any(s.get("item_id") == item_id and s.get("name") in PIECE_CHAIN_STEPS for s in steps[index - 1:])
+
+
 #: 409 of a manual render of the dressed views while a Build of the character runs (ruling F16, fix round
 #: T12-F1 — like Delete's ``figure.BUILD_RUNNING``, ruling 10a): the Build renders the views its figure needs;
 #: a manual run beside it would render the same views twice (since ruling A14 no dressed render waits for the

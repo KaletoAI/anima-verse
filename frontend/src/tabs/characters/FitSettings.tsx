@@ -23,7 +23,7 @@ import { stampLabel } from './freshnessText'
 import {
   ALLOWANCE_CHOICES, ALLOWANCE_HINT, DEPTH_CHOICES, DEPTH_HINT, SLEEVE_CHOICES, SLEEVE_HINTS, SLEEVE_LABELS,
   SHAFT_LABELS, TRUNK_CHOICES, TRUNK_HINTS, TRUNK_LABELS, allowanceLabel, shaftHint, shaftReason, allowanceNumbers, allowanceReason, armLightColour,
-  armLightText, depthLabel, depthReason, sleeveReason, trunkReason,
+  armLightText, depthLabel, depthReason, sleeveReason, trunkReason, manualFitChanges, RESET_FIT, RESET_FIT_HINT,
 } from './fitSettingsModel'
 import type {
   AllowanceChoice, DepthChoice, FitSettingsInfo, FitSettingsValues, ShaftChoice, SleeveChoice, SleeveSideKey,
@@ -60,6 +60,8 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
   useClockSettings()
   const [saving, setSaving] = useState<Partial<FitSettingsValues> | null>(null)
   const values: FitSettingsValues = { ...info.settings, ...(saving || {}) }
+  // A166: what differs from the automatic fit — the reset puts exactly those back.
+  const manual = manualFitChanges(values)
 
   const save = async (change: Partial<FitSettingsValues>) => {
     setSaving(change)
@@ -179,6 +181,13 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
       <span className="ga-hint" style={REASON} title={t(DEPTH_HINT)}>
         {info.recorded ? depthReason(info, t) : t('Auto never adds depth')}
       </span>
+      {Object.keys(manual).length ? (
+        <div style={SPAN}>
+          <button type="button" className="ga-btn ga-btn-sm" disabled={busy || saving !== null}
+            title={t(RESET_FIT_HINT)} onClick={() => { void save(manual) }}>↺ {t(RESET_FIT)}</button>
+          <span className="ga-hint">{t('Manual settings: {n}').replace('{n}', String(Object.keys(manual).length))}</span>
+        </div>
+      ) : null}
       {info.recorded ? (
         <div style={SPAN} className="ga-hint" title={t(ALLOWANCE_HINT)}>
           {numbersOf ? `${numbersOf}: ` : ''}{allowanceNumbers(info, t)}

@@ -528,6 +528,8 @@ export const FIT_NEEDS_VIEWS = 'Needs both piece-only views accepted first'
 export const FIT_NEEDS_MESH = 'Needs an accepted mesh first'
 export function fitRowGate(a: { shell: boolean; meshAccepted: boolean; viewsReady: boolean; fitMade: boolean;
   refitBlock: string; buildRunning: boolean }): FitRowGate {
+  // A166: `buildRunning` is true only while the running Build fits THIS piece (`build_fits_piece`), never for a
+  // Build planned before the piece became due.
   const label = a.fitMade ? FIT_REFIT : FIT_FIRST
   const no = (reason: string): FitRowGate => ({ disabled: true, label, reason, primary: false })
   if (a.refitBlock) return no(a.refitBlock)

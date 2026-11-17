@@ -89,6 +89,22 @@ export interface FitSettingsValues {
   shaft?: ShaftChoice
 }
 
+/** A166: the automatic fit (server `garment_fit_settings.defaults`, the mesh shape aside — it has its own control). */
+export const FIT_AUTOMATIC: Omit<FitSettingsValues, 'mesh_shape'> = {
+  sleeves_left: 'auto', sleeves_right: 'auto', allowance: 'auto', depth: 0, trunk: 'auto', shaft: 'split' }
+/** A166: the settings that differ from the automatic fit (the mesh shape aside); {} when none. */
+export function manualFitChanges(v: FitSettingsValues): Partial<FitSettingsValues> {
+  const out: Partial<FitSettingsValues> = {}
+  for (const [k, auto] of Object.entries(FIT_AUTOMATIC) as [keyof typeof FIT_AUTOMATIC, unknown][]) {
+    const now = k === 'shaft' ? (v.shaft ?? 'split') : k === 'depth' ? (v.depth ?? 0) : v[k]
+    if (now !== auto) (out as Record<string, unknown>)[k] = auto
+  }
+  return out
+}
+export const RESET_FIT = 'Reset to the automatic fit'
+export const RESET_FIT_HINT = 'Sets sleeves, trunk, shaft, width and depth allowance back to Auto — the mesh shape stays. '
+  + 'Saves at once; the fit becomes due and the next Build re-fits it on the CPU (0 hub jobs).'
+
 /** Ruling A122: a boot past the knee — the shaft above the shoe kept as a leg part, or cut off
  *  (`garment_shaft.SHAFT_CHOICES`). */
 export type ShaftChoice = 'split' | 'cut'
