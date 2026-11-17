@@ -4,11 +4,13 @@
  * click makes due are on mouse-over, and Preview shows the processed picture in the reference's own place. The operation runs on that one picture only; the
  * front and every view are generated from the processed copy, no generated view is processed.
  * One compact row per operation a package supplies (server `base_body.postprocess_info`; hidden without one):
- * the switch (this character: on / off / world default), the cost line "CPU, no image job", what a click makes
+ * Ruling A196: a checkbox per option for this character (no world default) — a CPU operation over the reference or a
+ * text-only option of the front edit (`image_op` false: no preview, cost "Text of the front edit, no image job"; a click
+ * outdates a front made from a picture, `prompt_changes`). The row shows the cost line, what a click makes
  * due (the reference changes → the front is outdated → the next Run all / Build renders the views and the base
  * model again, counted in hub jobs by the server — `postprocess_followup`), and a before/after preview of the
  * reference that stores nothing (POST …/base-body/postprocess-preview/{op}).
- * The switch saves at once and renders nothing: POST …/base-body/postprocess/{op} {enabled}.
+ * The checkbox saves at once and renders nothing: POST …/base-body/postprocess/{op} {enabled: true|false}.
  */
 import { useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -28,11 +30,11 @@ export interface PostprocessOperation {
   id: string
   label: string
   description?: string
-  /** The character's own choice (null/undefined = the world default). */
-  own?: boolean | null
-  world_default: boolean
+  /** Checked for this character (Ruling A196: a checkbox per character, no world default). */
   enabled: boolean
-  /** What clicking the switch now makes due. */
+  /** A CPU operation over the reference (true) or a text-only option of the front edit (false). */
+  image_op?: boolean
+  /** What clicking the checkbox now makes due. */
   followup?: PostprocessFollowup | null
 }
 
@@ -51,11 +53,13 @@ export interface BasePostprocessInfo {
 }
 
 const POSTPROCESS_COST = 'CPU, no image job'
+const PROMPT_OPTION_COST = 'Text of the front edit, no image job'
 const FOLLOWUP: Record<string, string> = {
   no_reference: 'Nothing changes — there is no full-body reference to process.',
   no_front: 'No front yet — it is made from the reference as switched when it is rendered.',
   unchanged: 'The reference stays the same picture — nothing becomes due.',
   changes: 'The reference changes: the front shows as outdated, and the next Run all or Build renders the four views and the base model again ({jobs}).',
+  prompt_changes: 'The front edit text changes: the front shows as outdated, and the next Run all or Build renders the four views and the base model again ({jobs}).',
   may_change: 'If it finds something, the reference changes: the front shows as outdated, and the next Run all or Build renders the four views and the base model again ({jobs}).',
 }
 const POSTPROCESS_DRESSED = 'Dressed views made on these views follow at their next Build.'
@@ -88,12 +92,13 @@ function OperationRow({ character, op, hasReference, stateLine, busy, onChanged,
 
   const stopPreview = () => { setPreviewing(false); onPreview(null) }
 
-  const set = async (enabled: boolean | null) => {
+  const set = async (enabled: boolean) => {
     setPosting(true)
     try {
       const d = await apiPost<{ enabled: boolean; reference?: { error?: string } | null }>(
         `/characters/${enc}/base-body/postprocess/${encodeURIComponent(op.id)}`, { enabled })
       if (d?.reference?.error) toast(t(d.reference.error), 'error')
+      else if (op.image_op === false) toast(t('Saved — nothing renders now'))
       else toast(t(d?.enabled ? 'Applied to the full-body reference — nothing renders now' : 'The original full-body reference is used again — nothing renders now'))
       stopPreview()
       onChanged()
@@ -121,26 +126,31 @@ function OperationRow({ character, op, hasReference, stateLine, busy, onChanged,
     }
   }
 
-  const choice = op.own === true ? 'on' : op.own === false ? 'off' : 'world'
+  const imageOp = op.image_op !== false
   const due = postprocessDue(op.followup, t)
-  const title = [op.description ? t(op.description) : '', stateLine, t(POSTPROCESS_COST),
-    due ? `${t(op.enabled ? 'Turning it off:' : 'Turning it on:')} ${due}` : ''].filter(Boolean).join('\n')
+  const dueLine = due ? `${t(op.enabled ? 'Unchecking it:' : 'Checking it:')} ${due}` : ''
+  const cost = t(imageOp ? POSTPROCESS_COST : PROMPT_OPTION_COST)
+  const title = [op.description ? t(op.description) : '', imageOp ? stateLine : '', cost, dueLine]
+    .filter(Boolean).join('\n')
   return (
-    <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
-      <select className="ga-input ga-input-sm" style={{ width: 'auto', maxWidth: '100%' }} disabled={busy || posting}
-        value={choice} title={title} aria-label={t(op.label)}
-        onChange={(e) => { void set(e.target.value === 'on' ? true : e.target.value === 'off' ? false : null) }}>
-        <option value="world">{t(op.label)}: {t('World default')} ({op.world_default ? t('on') : t('off')})</option>
-        <option value="on">{t(op.label)}: {t('on')}</option>
-        <option value="off">{t(op.label)}: {t('off')}</option>
-      </select>
-      {hasReference ? (
-        <button type="button" className={`ga-btn ga-btn-sm${previewing ? ' ga-btn-primary' : ''}`} disabled={busy || posting}
-          aria-pressed={previewing} onClick={() => { void togglePreview() }}
-          title={t(previewing ? 'Show the reference as it is again' : 'Shows the processed reference in its place — nothing is stored.')}>
-          {t('Preview')}
-        </button>
-      ) : null}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+      <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+        <label style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }} title={title}>
+          <input type="checkbox" checked={op.enabled} disabled={busy || posting}
+            onChange={(e) => { void set(e.target.checked) }} />
+          <span>{t(op.label)}</span>
+        </label>
+        {imageOp && hasReference ? (
+          <button type="button" className={`ga-btn ga-btn-sm${previewing ? ' ga-btn-primary' : ''}`} disabled={busy || posting}
+            aria-pressed={previewing} onClick={() => { void togglePreview() }}
+            title={t(previewing ? 'Show the reference as it is again' : 'Shows the processed reference in its place — nothing is stored.')}>
+            {t('Preview')}
+          </button>
+        ) : null}
+      </div>
+      <div className="ga-hint ga-one-line" title={title}>
+        {[t('Saved at once'), cost, dueLine].filter(Boolean).join(' · ')}
+      </div>
     </div>
   )
 }
