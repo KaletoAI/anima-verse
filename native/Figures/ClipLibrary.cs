@@ -140,7 +140,6 @@ public sealed class ClipLibrary
         => Index.BySet.TryGetValue(kind, out var bySet) && bySet.TryGetValue(set, out var c) ? c : null;
 
     private JsonObject _lastListing = new();
-    private readonly List<Animation> _retiredSources = new();
     private bool _released;
 
     public void Parse(JsonElement root)
@@ -301,11 +300,17 @@ public sealed class ClipLibrary
             }
             if (_released) throw new OperationCanceledException();
             var nextIndex = ClipLibraryRules.CommitInListOrder(staged.Entries, results, new CommitOps());
-            _retiredSources.AddRange(Index.BySet.Values.SelectMany(s => s.Values).Select(c => c.Anim));
-            _retiredSources.AddRange(created);
+            // Nothing plays a source animation: figures play their own fitted copies (TemplateClips), and a fit reads
+            // the keys copied out at import (ClipSource.RotationKeys/PositionKeys), never Anim. So a source that left
+            // the index (replaced, removed, or a fresh import that lost its slot) is released now, not at logout.
+            var kept = new HashSet<Animation>(nextIndex.BySet.Values.SelectMany(s => s.Values).Select(c => c.Anim));
+            var replaced = Index.BySet.Values.SelectMany(s => s.Values).Select(c => c.Anim).Concat(created)
+                                .Where(a => !kept.Contains(a)).Distinct().ToList();
             Index = nextIndex;
             Parse(listing);
             applied = true;
+            foreach (var anim in replaced)
+                if (GodotObject.IsInstanceValid(anim)) anim.Dispose();
             return diff;
         }
         finally
@@ -704,9 +709,8 @@ public sealed class ClipLibrary
     public void Release()
     {
         _released = true;
-        foreach (var anim in Index.BySet.Values.SelectMany(s => s.Values).Select(c => c.Anim).Concat(_retiredSources).Distinct())
+        foreach (var anim in Index.BySet.Values.SelectMany(s => s.Values).Select(c => c.Anim).Distinct())
             if (GodotObject.IsInstanceValid(anim)) anim.Dispose();
-        _retiredSources.Clear();
         Index = new ClipIndex<ClipSource>();
     }
 
