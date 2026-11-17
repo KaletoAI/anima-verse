@@ -5,7 +5,7 @@ import { HoverHint } from './HoverHint'
 import { useI18n } from './I18nProvider'
 import { propActionReason } from './propActionReasons'
 import { usePropActions } from './usePropActions'
-import { cancelPropAction, checkPropAction, holdPropActionMeter, notifyPropActionChanged, requestPropAction, respondPropAction, setPropActionAlt,
+import { cancelPropAction, checkPropAction, holdPropActionMeter, notifyLocalPropActionChange, requestPropAction, respondPropAction, setPropActionAlt,
   type PropActionChoice, type PropActionConsent, type PropActionExecution, type PropActionMeter, type PropActionOffer } from './propActions'
 
 export interface OfferChoice { offer: PropActionOffer; partner?: string; enabled: boolean; reason: string }
@@ -329,7 +329,7 @@ export function PropActionExecutionRow({ run, kind, busy, perform }: {
       onClick={() => perform(async () => {
         // Existing player wake path; Core clears sleep and semantic bed ownership.
         await apiPost('/play/self/activity', { activity: '' })
-        notifyPropActionChanged()
+        notifyLocalPropActionChange()
       })}>{t('Wake up')}</button>}
   </div>
 }

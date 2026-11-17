@@ -218,8 +218,10 @@ const stateRead = cachedRead(() => apiGet<PropActionState>('/play/prop-actions/s
 export function invalidatePropActionOffers(coalescePending = false): void { offersRead.invalidate(coalescePending) }
 
 const CHANGED = 'prop-actions:changed'
-/** Hosts receive mutation answers immediately; uncorrelated events invalidate status. */
-export type PropActionSource = 'request' | 'respond' | 'cancel'
+/** Hosts receive mutation answers immediately. An uncorrelated lifecycle notice keeps the read cadence; a change
+ *  the player made here without a mutation answer (hold, alt half, wake up, solo pose — source `local`) invalidates
+ *  the cached reads like a mutation, so the next read shows it at once. */
+export type PropActionSource = 'request' | 'respond' | 'cancel' | 'local'
 export function onPropActionChanged(listener: (requestId?: string, result?: PropActionResult, source?: PropActionSource) => void): () => void {
   const changed = (event: Event) => {
     const detail = (event as CustomEvent<{ request_id?: string; result?: PropActionResult; source?: PropActionSource }>).detail
@@ -229,10 +231,15 @@ export function onPropActionChanged(listener: (requestId?: string, result?: Prop
   return () => window.removeEventListener(CHANGED, changed)
 }
 export function notifyPropActionChanged(requestId?: string, result?: PropActionResult, source?: PropActionSource): void {
-  if (requestId !== undefined) {
+  if (requestId !== undefined || source === 'local') {
     offersRead.invalidate(); stateRead.invalidate()
   }
   window.dispatchEvent(new CustomEvent(CHANGED, { detail: { request_id: requestId, result, source } }))
+}
+/** The player changed their own prop-action state here (hold, alt half, wake up, solo pose): every reader — this
+ *  window's and, through the HUD bridge, the scene's — reads fresh. */
+export function notifyLocalPropActionChange(): void {
+  notifyPropActionChanged(undefined, undefined, 'local')
 }
 export function getPropActions(): Promise<PropActionOffer[]> {
   return hosted ? Promise.resolve(hostSnapshot?.offers ?? []) : offersRead.read()
@@ -293,11 +300,11 @@ export function cancelPropAction(executionId: string): Promise<PropActionResult>
 /** The own avatar plays an alt half of its role ("" = its own half again). */
 export async function setPropActionAlt(executionId: string, alt: string): Promise<void> {
   await apiPost('/play/prop-actions/alt', { execution_id: executionId, alt })
-  notifyPropActionChanged()
+  notifyLocalPropActionChange()
 }
 
 /** The own avatar holds its gauge back in a running action (or lets go). */
 export async function holdPropActionMeter(executionId: string, hold: boolean): Promise<void> {
   await apiPost('/play/prop-actions/hold', { execution_id: executionId, hold })
-  notifyPropActionChanged()
+  notifyLocalPropActionChange()
 }

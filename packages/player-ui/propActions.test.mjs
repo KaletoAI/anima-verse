@@ -138,6 +138,28 @@ for (let step = 0; step < 60; step++) {
 }
 assert.ok(burstStates - afterBurst <= 1, 'lifecycle notices keep the normal cadence');
 console.log(`POLL-MEASURE JS after own mutation 5s offers=${burstOffers} state=${burstStates}; following 3s state=${burstStates - afterBurst}`);
+// Review 13-playerui#1: a local change without a mutation answer (hold, alt half, wake up, solo pose) reads fresh
+// at once — before, only a request id invalidated, so the chip showed the old state for a whole poll period. An
+// uncorrelated lifecycle notice still keeps the cadence (above).
+{
+  let localReads = 0;
+  globalThis.fetch = async path => {
+    if (path.endsWith('/state')) localReads++;
+    return new Response(JSON.stringify(path.endsWith('/state') ? { incoming: [], outgoing: [], current: [], recent_results: [] } : {}), { status: 200 });
+  };
+  now += 10000;
+  await actions.getPropActionState(); await actions.getPropActionState();
+  assert.equal(localReads, 1, 'one read per period');
+  await actions.holdPropActionMeter('run-8', true); await actions.getPropActionState();
+  assert.equal(localReads, 2, 'hold invalidates the cached state');
+  await actions.setPropActionAlt('run-8', 'b'); await actions.getPropActionState();
+  assert.equal(localReads, 3, 'alt invalidates the cached state');
+  actions.notifyLocalPropActionChange(); await actions.getPropActionState();
+  assert.equal(localReads, 4, 'wake up / solo pose invalidate the cached state');
+  actions.notifyPropActionChanged(); await actions.getPropActionState();
+  assert.equal(localReads, 4, 'an uncorrelated lifecycle notice keeps the cadence');
+  console.log('PASS local changes read fresh state');
+}
 // A push-connected world uses the existing six-second cadence.
 now += 10000;
 actions.setPropActionPollPeriod(6000);

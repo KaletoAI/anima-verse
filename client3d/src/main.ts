@@ -5219,6 +5219,8 @@ async function startApp(username: string, role: string) {
     const state = await api.getPropActionState();
     if (stateEpoch !== propStateEpoch) return;
     adoptPropState(state);
+    // The hosted HUD reads only this snapshot: hand it the fresh state now, not at the next worldmap poll.
+    setGameState({ propActionSnapshot: { offers: semanticOffers, state } });
     propStateUncertain = false;
     propPreparation.adoptFreshState();
   }

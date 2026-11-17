@@ -40,7 +40,7 @@ import { freePoseHint, offerKind, partnerNodes, partyInviteVerdict, pieceGroups,
 import { propActionReason } from './propActionReasons'
 import { GroupPicker, type OfferGroup } from './PropActionsPanel'
 import { usePropActions } from './usePropActions'
-import { notifyPropActionChanged, requestPropAction, type PropActionConsent,
+import { notifyLocalPropActionChange, requestPropAction, type PropActionConsent,
   type PropActionOffer } from './propActions'
 
 export interface SoloPose { key: string; label: string }
@@ -115,7 +115,7 @@ export function ActionsTree({ avatar, present, busy: busyPeople, interaction, pa
     void perform(() => requestPropAction(offer.action_id, offer.target, offer.definition_revision, members, consent))
   const strike = (pose: SoloPose) => void perform(async () => {
     await apiPost('/play/self/activity', { pose_key: pose.key })
-    notifyPropActionChanged()
+    notifyLocalPropActionChange()
   })
   /** Invite one person into the avatar's party. An answer given at once
    *  goes into the note; an open one (an NPC is asked at once, a player sees
