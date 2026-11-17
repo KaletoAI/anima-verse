@@ -702,14 +702,19 @@ def ensure_outfit(character_name: str, pieces: Optional[Dict[str, str]], open_id
     deadline = time.monotonic() + AUTO_WAIT_S
     source_sha = _source_sha(character_name)
     error = ""
+    load = False
     while True:
         try:
             generate_outfit(character_name, key=key, painted=painted)
             break
         except Exception as e:  # noqa: BLE001 — never blocks the pass (Ruling A104)
             from app.core import base_body
-            if raise_load and base_body._is_load(e):
-                raise
+            if base_body._is_load(e):
+                if raise_load:
+                    raise
+                # Load or the media switch, not a defect: this pass falls back, the next one tries again.
+                load, error = True, str(e) or type(e).__name__
+                break
             if not (isinstance(e, RuntimeError) and str(e) == ALREADY_RUNNING):
                 error = str(e) or type(e).__name__
                 break
@@ -727,7 +732,8 @@ def ensure_outfit(character_name: str, pieces: Optional[Dict[str, str]], open_id
             _auto_failed.pop((character_name, key), None)
         else:
             _auto_notes[(character_name, key)] = AUTO_FAILED.format(error=error)
-            _auto_failed[(character_name, key)] = source_sha
+            if not load:
+                _auto_failed[(character_name, key)] = source_sha
     if record is None:
         logger.warning("Automatic full-body reference of %s (outfit %s) failed: %s — front made from the base front",
                        character_name, key, error)

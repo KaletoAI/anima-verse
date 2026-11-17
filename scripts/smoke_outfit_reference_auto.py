@@ -41,6 +41,11 @@ Frontansicht erzeugt werden"):
 (f) the run lock: another run of Demo holds the lock (``_reserve(Demo, "base")``); ensure_outfit waits, the other
     run records Demo_2.png and releases after ~0.3 s -> ensure_outfit returns that record with note "", the
     stand-in raised ALREADY_RUNNING once and made nothing itself (made 0).
+(i) a busy backend is load, not a failure (review 09#6): the record cleared and the failure marks dropped
+    (clear_auto_failure), the stand-in raises ``BackendBusyError("backend busy")``; generate_dressed_images
+    (no raise_load) -> one attempt (attempts 2), ONE old-path render (DRESS_USE_CASE), auto_note = AUTO_FAILED
+    with error "backend busy", and auto_due STAYS True (the next pass tries again; fails on 3f2ce338e: False). The
+    same with RuntimeError("boom") -> attempts 3, auto_due False (a real failure still blocks).
 """
 from __future__ import annotations
 
@@ -182,6 +187,9 @@ def main() -> int:
             try:
                 if stand["mode"] == "boom":
                     raise RuntimeError("boom")
+                if stand["mode"] == "busy":
+                    from app.imagegen.base import BackendBusyError
+                    raise BackendBusyError("backend busy")
                 stand["made"] += 1
                 from app.core.outfit_references import references_dir   # a generated picture lives there
                 references_dir(character_name).mkdir(parents=True, exist_ok=True)
@@ -303,6 +311,21 @@ def main() -> int:
         record, note = fbr.ensure_outfit("Demo", {}, (), painted=())
         check("waited and used its record", (bool(record) and record.get("image"), note, stand["attempts"],
                                              stand["made"]), ("Demo_2.png", "", 1, 0))
+
+        print("(i) a busy backend is load")
+        outfit_references.clear_reference("Demo", key)
+        fbr.clear_auto_failure("Demo")
+        check("due again", fbr.auto_due("Demo", {}, (), painted=()), True)
+        stand["mode"] = "busy"
+        calls = dress_front()
+        check("one attempt", stand["attempts"], 2)
+        check("old path", [c.get("image_use_case") for c in calls], [base_body.DRESS_USE_CASE])
+        check("auto_note", fbr.auto_note("Demo", key), fbr.AUTO_FAILED.format(error="backend busy"))
+        check("still due: the next pass tries again", fbr.auto_due("Demo", {}, (), painted=()), True)
+        stand["mode"] = "boom"
+        dress_front()
+        check("a real failure: attempts", stand["attempts"], 3)
+        check("a real failure blocks", fbr.auto_due("Demo", {}, (), painted=()), False)
 
     print("outbound attempts")
     check("outbound", OUTBOUND, [])
