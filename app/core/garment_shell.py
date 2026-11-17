@@ -211,8 +211,12 @@ def pose_arms_up(P, joints, weights, joint_names: List[str], joint_positions: Di
         upper, hand, chain = arm_joints(joint_names, side)
         if upper is None or hand is None:
             continue
-        a = np.asarray(joint_positions.get(joint_names[upper]), np.float64)
-        h = np.asarray(joint_positions.get(joint_names[hand]), np.float64)
+        def head(name):
+            # ``BodyMesh.joint_positions`` keys are the bare lower-case names ("leftarm"); accept the full name too
+            found = joint_positions.get(name)
+            return found if found is not None else joint_positions.get(name.split(":")[-1].lower())
+        a = np.asarray(head(joint_names[upper]), np.float64)
+        h = np.asarray(head(joint_names[hand]), np.float64)
         if a.shape != (3,) or h.shape != (3,):
             continue
         out = 1.0 if a[0] >= float(np.mean(P[:, 0])) else -1.0   # outward: the shoulder's side of the body
