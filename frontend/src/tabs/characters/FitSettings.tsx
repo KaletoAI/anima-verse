@@ -9,7 +9,7 @@
  * …/garments/{item}/fit-settings) and runs nothing; a fit made with other settings reads "Fit due — refits on the
  * CPU, 0 hub jobs" with its Re-fit beside it (the Figure tab: the next Build refits it).
  */
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
@@ -23,7 +23,7 @@ import { stampLabel } from './freshnessText'
 import {
   ALLOWANCE_CHOICES, ALLOWANCE_HINT, DEPTH_CHOICES, DEPTH_HINT, SLEEVE_CHOICES, SLEEVE_HINTS, SLEEVE_LABELS,
   SHAFT_LABELS, OVERLAP_HINT, overlapChoices, BODY_OVERLAP_HINT, bodyOverlapChoices, TRUNK_CHOICES, TRUNK_HINTS, TRUNK_LABELS, allowanceLabel, shaftHint, shaftReason, allowanceNumbers, allowanceReason, armLightColour,
-  armLightText, depthLabel, depthReason, sleeveReason, trunkReason, manualFitChanges, RESET_FIT, RESET_FIT_HINT,
+  armLightText, depthLabel, SHELL_FILL_HINT, SHELL_MARGIN_HINT, shellChoiceLabel, depthReason, sleeveReason, trunkReason, manualFitChanges, RESET_FIT, RESET_FIT_HINT,
 } from './fitSettingsModel'
 import type {
   AllowanceChoice, DepthChoice, FitSettingsInfo, FitSettingsValues, ShaftChoice, SleeveChoice, SleeveSideKey,
@@ -68,7 +68,7 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
     try {
       const d = await apiPost<{ fit_settings: FitSettingsInfo }>(
         `/characters/${encodeURIComponent(character)}/garments/${encodeURIComponent(itemId)}/fit-settings`, change)
-      toast(`${t('Saved')} · ${d.fit_settings.due ? t('Fit due — refits on the CPU, 0 hub jobs')
+      toast(`${t('Saved')} · ${d.fit_settings.due || d.fit_settings.mesh_shape?.due ? t('Fit due — refits on the CPU, 0 hub jobs')
         : t('nothing becomes due')}`, 'success')
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
@@ -118,6 +118,29 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
         </span>
         {built ? <span className="ga-hint">{t('Built')} {built}</span> : null}
       </div>
+      {info.mesh_shape?.resolved === 'shell' ? ([
+        // A184: how much the shell takes from the body around the piece's outline, and the gaps it closes
+        { key: 'shell_margin', id: 'fit-shell-margin', label: 'Take from the body', hint: SHELL_MARGIN_HINT, unit: 'mm',
+          choice: info.mesh_shape.margin },
+        { key: 'shell_fill', id: 'fit-shell-fill', label: 'Fill holes up to', hint: SHELL_FILL_HINT, unit: 'cm²',
+          choice: info.mesh_shape.fill },
+      ] as const).map(({ key, id, label, hint, unit, choice }) => choice ? (
+        <Fragment key={key}>
+          <label htmlFor={id} title={t(hint)}>{t(label)}</label>
+          <select id={id} className="ga-input" style={SELECT} value={String(values[key] ?? choice.setting)}
+            disabled={busy || saving !== null} title={t(hint)}
+            onChange={(e) => { void save({ [key]: Number(e.target.value) }) }}>
+            {choice.choices.map((v) => (
+              <option key={v} value={String(v)}>{shellChoiceLabel(v, choice.default, unit, t)}</option>
+            ))}
+          </select>
+          <span className="ga-hint" style={REASON} title={t(hint)}>
+            {choice.made != null && choice.made !== choice.setting
+              ? t('the shown shell was made at {value}').replace('{value}', `${choice.made} ${unit}`)
+              : t('CPU, 0 hub jobs')}
+          </span>
+        </Fragment>
+      ) : null) : null}
       {sleeveRow('left')}
       {sleeveRow('right')}
       <label htmlFor="fit-trunk">{t('Trunk')}</label>
@@ -235,7 +258,7 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
           {numbersOf ? `${numbersOf}: ` : ''}{allowanceNumbers(info, t)}
         </div>
       ) : null}
-      {info.due ? (
+      {info.due || info.mesh_shape?.due ? (
         <div style={SPAN}>
           <StepLight light="yellow" />
           <span>{t('Fit due — refits on the CPU, 0 hub jobs')}</span>

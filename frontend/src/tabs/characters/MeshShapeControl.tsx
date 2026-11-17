@@ -3,15 +3,15 @@
  * own mode on the item (Wardrobe → Mode), so the shape is only SHOWN here: the shape the mode makes, a fit made as the
  * other shape (due — refits on the CPU, 0 hub jobs) and the shell's numbers. For a shell-mode piece the box keeps the
  * shell's offset from the skin (A166) — it SAVES on its own (POST …/garments/{item}/fit-settings `{shell_offset}`)
- * and runs nothing; only this piece's fit becomes due. A184 adds "Take from the body" (`shell_margin`, mm) and "Fill
- * holes up to" (`shell_fill`, cm²) the same way.
+ * and runs nothing; only this piece's fit becomes due. "Take from the body" and "Fill holes up to" (A184) live in the
+ * Fit settings box (`FitSettings`).
  */
 import { useState } from 'react'
 import type { CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { MESH_SHAPE_LABELS, SHELL_FILL_HINT, SHELL_MARGIN_HINT, SHELL_OFFSET_HINT, shellChoiceLabel } from './fitSettingsModel'
+import { MESH_SHAPE_LABELS, SHELL_OFFSET_HINT, shellChoiceLabel } from './fitSettingsModel'
 import type { FitSettingsInfo, ShellChoice } from './fitSettingsModel'
 
 const BOX: CSSProperties = {
@@ -33,7 +33,7 @@ export function MeshShapeControl({ character, itemId, info, busy, onSaved }: {
   const shape = info.mesh_shape
   if (!shape) return null
 
-  /** A166/A184: each shell setting saves on its own (POST …/fit-settings `{shell_offset|shell_margin|shell_fill}`). */
+  /** A166: the shell's offset saves on its own (POST …/fit-settings `{shell_offset}`). */
   const save = async (key: string, value: number) => {
     setSaving({ key, value })
     try {
@@ -51,8 +51,6 @@ export function MeshShapeControl({ character, itemId, info, busy, onSaved }: {
   }
   const rows: { key: string; label: string; hint: string; unit: string; choice?: ShellChoice }[] = [
     { key: 'shell_offset', label: 'Shell offset from the skin', hint: SHELL_OFFSET_HINT, unit: 'mm', choice: shape.offset },
-    { key: 'shell_margin', label: 'Take from the body', hint: SHELL_MARGIN_HINT, unit: 'mm', choice: shape.margin },
-    { key: 'shell_fill', label: 'Fill holes up to', hint: SHELL_FILL_HINT, unit: 'cm²', choice: shape.fill },
   ]
 
   const pct = (v: number | null | undefined) => (v != null ? `${(v * 100).toFixed(1)} %` : '–')
