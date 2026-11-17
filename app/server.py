@@ -790,6 +790,15 @@ async def lifespan(app: FastAPI):
     except Exception as _fgd:
         logger.warning("Removed fit globs clean-up failed (retried at the next start): %s", _fgd)
 
+    # Migration (A168): "Shell from the body" is its own mode — every own-mesh piece whose fits were shells under
+    # the removed per-character mesh-shape setting becomes mode "shell", and the setting leaves the profiles. Item
+    # and profile writes only (no Build, no hub job); after the mode migrations above, before the refit sweep.
+    try:
+        from app.core.shell_mode_migration import migrate_shell_mode_once
+        migrate_shell_mode_once()
+    except Exception as _sme:
+        logger.warning("Shell mode migration failed (retried at the next start): %s", _sme)
+
     # Migration (same plan, Task 13, D3): hairstyles are items — every humanoid
     # gets ONE hairstyle from today's hair (text, stored method, colour /
     # placement / motion keys), worn and the plain body's own; the legacy

@@ -1,14 +1,13 @@
-"""Smoke: Ruling A48d — the mesh shape "Shell from the body" (``app/core/garment_shell.py``).
+"""Smoke: Ruling A48d — the mesh mode "Shell from the body" (``app/core/garment_shell.py``; its own mode since A168).
 
 Usage: ./.venv/bin/python scripts/smoke_garment_shell.py   (no server, no world; pure functions + monkeypatched items)
 
 Expected values, derived by hand:
 
-[1] Auto rule table (``auto_reason``): slots ⊆ {underwear_top, underwear_bottom, legs}, no ``covers``, not closable
-    → shell. underwear_top → shell/close_slots; underwear_bottom → shell; legs → shell; [underwear_top, top] →
-    as_generated/loose_slot ["top"]; outer (a blazer) → as_generated/loose_slot ["outer"]; bottom (a skirt) →
-    as_generated; underwear_top covering underwear_bottom → as_generated/covers; underwear_top closable →
-    as_generated/closable; no slots → as_generated/no_slots.
+[1] The old Auto rule, now only the migration's (``close_fitting``): slots ⊆ {underwear_top, underwear_bottom,
+    legs}, no ``covers``, not closable → True. underwear_top / underwear_bottom / legs → True; [underwear_top, top],
+    outer, bottom, underwear_top covering underwear_bottom, underwear_top closable, no slots → False.
+    ``shape_of``: mode shell → shell; own_mesh, painted, in_body, template, no mode → as_generated.
 [2] Region → shell faces: a region of n body faces, two midpoint subdivisions → 16·n faces (each split makes 4);
     clipped with a scalar >= 0 everywhere it keeps all 16·n. Here n = 2 (a unit square of two triangles) → 32.
 [3] Clip by marching triangles: the triangle (0,0),(1,0),(0,1) with s = (1, -1, -1) keeps the corner triangle up
@@ -17,11 +16,10 @@ Expected values, derived by hand:
 [4] Outer wall only: a closed cube of side 1 (12 triangles) with a second closed cube of side 0.5 inside it (12
     triangles): from all 26 directions only the outer cube is front-most → 12 outer faces, the inner 12 never.
 [5] Inside share 0: points 4 mm outside a unit sphere mesh → 0.0; points 0.1 inside → 1.0 (> 2 mm under).
-[6] Due-ness (``garment_fit_settings.changed``): a fit made as generated (no ``inputs.mesh_shape``) with default
-    settings — for the underwear piece Auto now resolves to shell → due; for the outer piece → not due; the
-    outer piece set explicitly to as_generated → still not due (same made shape); a shell fit of the underwear
-    piece under Auto → not due; setting the underwear piece's shape leaves the other piece's verdict unchanged
-    (settings are keyed per item).
+[6] Due-ness (``garment_fit_settings.changed``): the underwear piece in mode shell, the outer piece in own_mesh.
+    A fit made as generated (no ``inputs.mesh_shape``) with default settings: underwear → due (its mode makes a
+    shell); outer → not due; a shell fit of the underwear piece → not due; a shell fit of the outer piece → due.
+    ``mesh_shape`` is no setting any more: ``validate({"mesh_shape": "shell"})`` is refused as unknown.
 [7] The chain of a shell piece (``garments.shell_order`` / ``run_estimate``): clothing order worn → ghost →
     cutout → mesh → fit; a shell piece drops cutout + mesh → worn → ghost → fit; an outer piece keeps all five.
     Costs (``HUB_JOBS``): worn 2, ghost 2, cutout 2, mesh 1, fit 0. Nothing done: shell piece 2 + 2 = 4 hub jobs,
@@ -52,28 +50,26 @@ def check(name, ok, detail=""):
         FAILS.append(name)
 
 
-def item(slots, covers=(), closable=False):
-    return {"category": "outfit_piece",
-            "outfit_piece": {"slots": list(slots), "covers": list(covers), "closable": closable}}
+def item(slots, covers=(), closable=False, mode=None):
+    piece = {"slots": list(slots), "covers": list(covers), "closable": closable}
+    if mode:
+        piece["mesh_mode"] = mode
+    return {"category": "outfit_piece", "outfit_piece": piece}
 
 
 # [1]
 table = [
-    (item(["underwear_top"]), "shell", "close_slots"),
-    (item(["underwear_bottom"]), "shell", "close_slots"),
-    (item(["legs"]), "shell", "close_slots"),
-    (item(["underwear_top", "top"]), "as_generated", "loose_slot"),
-    (item(["outer"]), "as_generated", "loose_slot"),
-    (item(["bottom"]), "as_generated", "loose_slot"),
-    (item(["underwear_top"], covers=["underwear_bottom"]), "as_generated", "covers"),
-    (item(["underwear_top"], closable=True), "as_generated", "closable"),
-    (item([]), "as_generated", "no_slots"),
+    (item(["underwear_top"]), True), (item(["underwear_bottom"]), True), (item(["legs"]), True),
+    (item(["underwear_top", "top"]), False), (item(["outer"]), False), (item(["bottom"]), False),
+    (item(["underwear_top"], covers=["underwear_bottom"]), False), (item(["underwear_top"], closable=True), False),
+    (item([]), False),
 ]
-for it, shape, reason in table:
-    got = gsh.auto_reason(it)
-    check(f"[1] auto {it['outfit_piece']['slots']} {it['outfit_piece']['covers']} "
-          f"closable={it['outfit_piece']['closable']}", got[:2] == (shape, reason), str(got))
-check("[1] loose slots named", gsh.auto_reason(item(["underwear_top", "top"]))[2] == {"slots": ["top"]})
+for it, want in table:
+    check(f"[1] close_fitting {it['outfit_piece']['slots']} {it['outfit_piece']['covers']} "
+          f"closable={it['outfit_piece']['closable']} -> {want}", gsh.close_fitting(it) is want)
+for mode, want in (("shell", "shell"), ("own_mesh", "as_generated"), ("painted", "as_generated"),
+                   ("in_body", "as_generated"), ("template", "as_generated"), (None, "as_generated")):
+    check(f"[1] shape_of mode {mode} -> {want}", gsh.shape_of(item(["underwear_top"], mode=mode)) == want)
 
 # [2]
 V = np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]], float)
@@ -133,23 +129,19 @@ check("[5] 0.1 inside → inside share 1", gsh.inside_share(probe * 0.9, u, SF) 
 # [6]
 from app.core import garment_fit_settings as gfs  # noqa: E402
 import app.models.inventory as inv  # noqa: E402
-ITEMS = {"item_under": item(["underwear_top"]), "item_outer": item(["outer"])}
+ITEMS = {"item_under": item(["underwear_top"], mode="shell"), "item_outer": item(["outer"], mode="own_mesh")}
 inv.get_item = lambda iid: ITEMS.get(iid)
 generated = {"inputs": {"fit_settings": gfs.defaults()}}
 shell_fit = {"inputs": {"fit_settings": gfs.defaults(), "mesh_shape": "shell"}}
-check("[6] underwear: as-generated fit, Auto → shell → due", gfs.changed(generated, {}, "item_under"))
-check("[6] outer: as-generated fit, Auto → as generated → not due", not gfs.changed(generated, {}, "item_outer"))
-prof = {gfs.SETTINGS_KEY: {"item_outer": {"mesh_shape": "as_generated"}}}
-check("[6] outer set to as_generated explicitly → not due", not gfs.changed(generated, prof, "item_outer"))
-check("[6] underwear shell fit under Auto → not due", not gfs.changed(shell_fit, {}, "item_under"))
-prof2 = {gfs.SETTINGS_KEY: {"item_under": {"mesh_shape": "as_generated"}}}
-check("[6] underwear set to as_generated → its shell fit due", gfs.changed(shell_fit, prof2, "item_under"))
-check("[6] … the outer piece's verdict unchanged", not gfs.changed(generated, prof2, "item_outer"))
+check("[6] underwear (shell mode): as-generated fit → due", gfs.changed(generated, {}, "item_under"))
+check("[6] outer (own mesh): as-generated fit → not due", not gfs.changed(generated, {}, "item_outer"))
+check("[6] underwear shell fit → not due", not gfs.changed(shell_fit, {}, "item_under"))
+check("[6] outer shell fit → due", gfs.changed(shell_fit, {}, "item_outer"))
 try:
-    gfs.validate({"mesh_shape": "lifted"})
-    check("[6] bad mesh_shape refused", False)
+    gfs.validate({"mesh_shape": "shell"})
+    check("[6] mesh_shape is no setting", False)
 except ValueError:
-    check("[6] bad mesh_shape refused", True)
+    check("[6] mesh_shape is no setting", True)
 
 # [7]
 from app.core import garments, base_body, garment_images, garment_source  # noqa: E402

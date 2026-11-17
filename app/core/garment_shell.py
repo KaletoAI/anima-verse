@@ -1,19 +1,10 @@
-"""Mesh shape "Shell from the body" of a clothing piece (Ruling A48d; spikes A48 / A48b B1, no lift).
+"""Mesh mode "Shell from the body" of a clothing piece (Ruling A48d; spikes A48 / A48b B1, no lift; its own mode
+since A168).
 
-A clothing piece carries, per character, a **mesh shape** (``garment_fit_settings`` key ``mesh_shape``):
-
-- ``as_generated``: the generated mesh is placed and fitted (``garment_fit.fit_clothing``), as before;
-- ``shell``: the piece's mesh is made from the BASE BODY's own surface over the region the piece covers in its worn
-  views — the generated mesh is not used. CPU only, no hub job;
-- ``auto`` (the default): ``resolve_shape`` — shell for a close-fitting piece, as generated otherwise.
-
-**The Auto rule** (``auto_shape``) reads only the piece's ``outfit_piece`` data, no geometry: shell when the piece
-has at least one slot and EVERY slot is a close-fitting one (``CLOSE_SLOTS``: ``underwear_top``,
-``underwear_bottom``, ``legs`` — underwear, swimwear-like tops and slips, tights / stockings), it covers no other slot
-(``covers`` empty — a piece that hides another slot stands off the body) and it cannot be worn open
-(``closable`` False — an opening front is a jacket's). Everything else (``top``, ``bottom``, ``outer``, ``feet``,
-``neck``, ``head``, any mix with them: blouses, skirts, trousers, jackets, blazers, coats, dresses) stays
-``as_generated``. ``auto_reason`` names the deciding signal in words.
+An outfit piece in mode ``shell`` (``garment_set.SHELL``, on the ITEM like every mode) gets its mesh made from the
+BASE BODY's own surface over the region the piece covers in its worn views — no generated mesh, no cut-outs, CPU
+only, no hub job. A piece in mode ``own_mesh`` always uses its generated mesh (``as_generated``), placed and fitted
+by ``garment_fit.fit_clothing``. ``shape_of`` is the one rule: the shape a fit of an item makes.
 
 **How the shell is made** (``build_shell``, pure: bytes and arrays in, a ``garment_fit.FitResult`` out):
 
@@ -47,11 +38,9 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 
-#: The choices of the per-piece mesh shape (``garment_fit_settings`` key ``mesh_shape``).
-SHAPE_CHOICES: Tuple[str, ...] = ("auto", "as_generated", "shell")
 AS_GENERATED = "as_generated"
 SHELL = "shell"
-#: The close-fitting slots (``app.models.inventory.VALID_PIECE_SLOTS``) Auto makes a shell for.
+#: The close-fitting slots (``app.models.inventory.VALID_PIECE_SLOTS``) the old Auto rule made a shell for.
 CLOSE_SLOTS: Tuple[str, ...] = ("underwear_top", "underwear_bottom", "legs")
 #: The shell's distance from the skin (m) — the default of the per-piece setting ``shell_offset``.
 THICKNESS_M = 0.004
@@ -81,47 +70,25 @@ MATCH_M = 0.03
 EXT_M = 0.008
 
 
-# --- Auto rule ------------------------------------------------------------------------------------------------------
+# --- The shape of a piece ----------------------------------------------------------------------------------------
 
-def _piece(item: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    piece = (item or {}).get("outfit_piece")
-    return piece if isinstance(piece, dict) else {}
-
-
-def auto_shape(item: Optional[Dict[str, Any]]) -> str:
-    """What Auto resolves to for the outfit piece ``item`` (module docstring)."""
-    return auto_reason(item)[0]
-
-
-def auto_reason(item: Optional[Dict[str, Any]]) -> Tuple[str, str, Dict[str, Any]]:
-    """``(shape, reason code, details)`` of Auto for ``item``. Codes: ``close_slots`` (shell), ``no_slots``,
-    ``loose_slot`` (details ``slots``: the slots that are not close-fitting), ``covers`` (details ``covers``),
-    ``closable``."""
-    piece = _piece(item)
-    slots = [str(s) for s in (piece.get("slots") or [])]
-    if not slots:
-        return AS_GENERATED, "no_slots", {}
-    loose = [s for s in slots if s not in CLOSE_SLOTS]
-    if loose:
-        return AS_GENERATED, "loose_slot", {"slots": loose}
-    covers = [str(s) for s in (piece.get("covers") or [])]
-    if covers:
-        return AS_GENERATED, "covers", {"covers": covers}
+def shape_of(item: Optional[Dict[str, Any]]) -> str:
+    """The shape a fit of the outfit piece ``item`` makes: ``shell`` for an item in mode ``shell``
+    (``garment_set.SHELL``), ``as_generated`` for every other."""
     from app.core import garment_set
-    if garment_set.closable_of(item):
-        return AS_GENERATED, "closable", {}
-    return SHELL, "close_slots", {"slots": slots}
+    return SHELL if garment_set.mesh_mode_of(item) == garment_set.SHELL else AS_GENERATED
 
 
-def shape_choice(raw: Optional[Dict[str, Any]]) -> str:
-    """The stored mesh shape of a settings dict (``auto`` when missing or unknown)."""
-    value = (raw or {}).get("mesh_shape") if isinstance(raw, dict) else None
-    return value if isinstance(value, str) and value in SHAPE_CHOICES else "auto"
-
-
-def resolve_shape(choice: str, item: Optional[Dict[str, Any]]) -> str:
-    """The shape a fit makes: the choice, Auto resolved by ``auto_shape``."""
-    return auto_shape(item) if choice == "auto" else choice
+def close_fitting(item: Optional[Dict[str, Any]]) -> bool:
+    """Whether ``item`` is a close-fitting piece (the old Auto rule of the mesh shape, read once by the mode
+    migration ``shell_mode_migration``): at least one slot, EVERY slot in ``CLOSE_SLOTS``, no ``covers`` and not
+    closable."""
+    from app.core import garment_set
+    piece = (item or {}).get("outfit_piece")
+    piece = piece if isinstance(piece, dict) else {}
+    slots = [str(s) for s in (piece.get("slots") or [])]
+    return (bool(slots) and all(s in CLOSE_SLOTS for s in slots) and not (piece.get("covers") or [])
+            and not garment_set.closable_of(item))
 
 
 # --- geometry helpers ------------------------------------------------------------------------------------------------

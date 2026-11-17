@@ -56,7 +56,12 @@ FOOTWEAR_SLOT = "feet"
 OWN_MESH, PAINTED, IN_BODY = "own_mesh", "painted", "in_body"
 #: A sewing-pattern template draped onto the plain body on the CPU (``garment_template``, Ruling A138).
 TEMPLATE = "template"
-MESH_MODES: Tuple[str, ...] = (OWN_MESH, PAINTED, IN_BODY, TEMPLATE)
+#: A mesh of its own made from the plain body's surface over the region the piece covers (``garment_shell``,
+#: Ruling A48d; its own mode since A168): the own-mesh chain without the cut-outs and the hub mesh job.
+SHELL = "shell"
+MESH_MODES: Tuple[str, ...] = (OWN_MESH, SHELL, PAINTED, IN_BODY, TEMPLATE)
+#: The modes whose piece is a fitted mesh of its own (the own-mesh chain, ``garment_kind_of``).
+OWN_MESH_MODES: Tuple[str, ...] = (OWN_MESH, SHELL)
 
 
 def default_mesh_mode(slots: Iterable[str]) -> str:
@@ -129,7 +134,10 @@ def garment_kind_of(item: Optional[Dict[str, Any]]) -> Optional[str]:
     if category == "garment":
         kind = str((item.get("garment") or {}).get("kind") or "")
         return HAIR if kind == HAIR else None
-    if mesh_mode_of(item) == OWN_MESH:
+    mode = mesh_mode_of(item)
+    if mode == SHELL:
+        return CLOTHING  # a shell is made from the body's skin: never a shoe
+    if mode == OWN_MESH:
         return FOOTWEAR if set(_slots_of(_piece_of(item))) == {FOOTWEAR_SLOT} else CLOTHING
     return None
 

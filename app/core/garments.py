@@ -5295,17 +5295,16 @@ def fit_settings_info(character_name: str, item_id: str, fsig: str, base_model_s
 
 def mesh_shape_view(record: Dict[str, Any], current: Dict[str, Any], item_id: str,
                     character_name: str = "") -> Dict[str, Any]:
-    """Ruling A48d — the mesh shape of a clothing piece for the Mesh step: ``{setting, resolved (what the setting
-    makes now), auto {shape, reason, details} (``garment_shell.auto_reason``), made (the shape of the shown fit, None
-    without one), due (a fit exists and made another shape), choices, cost {hub_jobs: 0, where: "cpu"},
-    slot_labels (the character's clothing-slot labels, ``body_slots.piece_slot_labels``), shell
-    {faces, inside_share, side_colour_within_2cm, seconds} (the shown fit's, when it is a shell)}``."""
+    """Ruling A48d — the mesh shape of a clothing piece for the Mesh step: ``{resolved (what its mode makes now,
+    ``garment_shell.shape_of``: mode shell → shell, else as generated), made (the shape of the shown fit, None
+    without one), due (a fit exists and made another shape), cost {hub_jobs: 0, where: "cpu"}, slot_labels (the
+    character's clothing-slot labels, ``body_slots.piece_slot_labels``), shell {faces, inside_share,
+    side_colour_within_2cm, seconds, over_skin_p50_mm} (the shown fit's, when it is a shell), offset {setting, made,
+    choices, default} (A166: the shell's distance from the skin, ``current["shell_offset"]``)}``. The shape is the
+    item's mode since A168, no setting."""
     from app.core import garment_fit_settings, garment_shell
     from app.models.inventory import get_item
-    item = get_item(item_id) if item_id else None
-    auto, reason, details = garment_shell.auto_reason(item)
-    setting = current.get("mesh_shape", "auto")
-    resolved = auto if setting == "auto" else setting
+    resolved = garment_shell.shape_of(get_item(item_id) if item_id else None)
     made = garment_fit_settings.made_shape(record) if record else None
     metrics = record.get("metrics") or {}
     shell = None
@@ -5317,13 +5316,11 @@ def mesh_shape_view(record: Dict[str, Any], current: Dict[str, Any], item_id: st
               "made": (garment_shell.shell_offset_choice(garment_fit_settings.recorded(record))
                        if made == garment_shell.SHELL else None),
               "choices": list(garment_shell.SHELL_OFFSET_CHOICES), "default": garment_shell.SHELL_OFFSET_DEFAULT}
-    return {"setting": setting, "resolved": resolved, "auto": {"shape": auto, "reason": reason, "details": details},
-            "offset": offset,
-            "made": made, "due": made is not None and (made != resolved or (
+    return {"resolved": resolved, "offset": offset, "made": made,
+            "due": made is not None and (made != resolved or (
                 resolved == garment_shell.SHELL and offset["made"] is not None
                 and offset["made"] != offset["setting"])),
-            "choices": list(garment_shell.SHAPE_CHOICES), "cost": {"hub_jobs": 0, "where": "cpu"}, "shell": shell,
-            "slot_labels": slot_labels(character_name)}
+            "cost": {"hub_jobs": 0, "where": "cpu"}, "shell": shell, "slot_labels": slot_labels(character_name)}
 
 
 def slot_labels(character_name: str) -> Dict[str, str]:
@@ -5371,8 +5368,9 @@ def fit_settings_view(record: Dict[str, Any], current: Dict[str, Any], *, accept
     shape = mesh_shape_view(record, current, item_id, character_name)
     return {
         "settings": current, "recorded": made_with,
-        "due": bool(record) and ({k: v for k, v in made_with.items() if k != "mesh_shape"}
-                                 != {k: v for k, v in current.items() if k != "mesh_shape"} or shape["due"]),
+        # the shell offset is compared in shape["due"] (a shell only, A166)
+        "due": bool(record) and ({k: v for k, v in made_with.items() if k != "shell_offset"}
+                                 != {k: v for k, v in current.items() if k != "shell_offset"} or shape["due"]),
         "mesh_shape": shape,
         "sleeves": (report.get("transfer") or {}).get("sleeves") or {},
         "trunk": (report.get("transfer") or {}).get("trunk"),

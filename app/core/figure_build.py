@@ -1994,9 +1994,9 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
                      "refused_on": names.get(delivered.fit_refused_on, "") if refused else "",
                      "piece_broken": bool(words["piece"]), "piece_state": piece_state,
                      "accepted_by_user": (_accepted_by_user(character_name, item_id, delivered.shape, profile, names)
-                                          if mode == garment_set.OWN_MESH and not refused else None),
+                                          if mode in garment_set.OWN_MESH_MODES and not refused else None),
                      "other_state_jobs": (_other_state_jobs(character_name, item_id, piece_state, profile)
-                                          if closable and mode == garment_set.OWN_MESH else None),
+                                          if closable and mode in garment_set.OWN_MESH_MODES else None),
                      "regenerate_jobs": (_regenerate_jobs(character_name, item_id, profile)
                                          if state == "fit_refused" and words["piece"] else None),
                      "template": (_template_row(character_name, item_id, item, wanted, profile)
@@ -2818,7 +2818,7 @@ def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[st
     if new_body:
         for row in worn:
             # a running Build's own-mesh row has no left-off reason of its own yet; a left-off row keeps its own
-            if row["mode"] == garment_set.OWN_MESH and row["state"] == "building" and not row["left_out"]:
+            if row["mode"] in garment_set.OWN_MESH_MODES and row["state"] == "building" and not row["left_out"]:
                 row["left_out"] = row["note"] = figure.LEFT_OFF_NEW_BODY
     served_state = _served_state(character_name, profile=profile)
     _not_on_figure(served_state, changes, worn)
