@@ -19,7 +19,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { TEMPLATE_CHOICE_LABELS, TEMPLATE_FIELD_LABELS, UPPER_KINDS, cm, lengthLabel, templateCost } from './figureModel'
-import { TEMPLATE_STATE_COLOR, TEMPLATE_STATE_LABELS } from './figureModel'
+import { TEMPLATE_STATE_COLOR, TEMPLATE_STATE_LABELS, templateLiveText } from './figureModel'
 import type { TemplateFieldSpec, TemplateInfo, TemplateParams, TemplateProgress } from './figureModel'
 import { FigureBuildButton } from './FigureBuildButton'
 import { ModelSteps } from './ModelSteps'
@@ -36,6 +36,10 @@ interface TemplatePayload {
   kind_fields: Record<string, (keyof TemplateParams)[]>
   cost: TemplateInfo['cost']
   progress?: TemplateProgress
+  /** A172: the kind the item most likely is (slots / name) — the starting kind with nothing stored. */
+  default_kind?: string
+  /** A172: the starting values per kind (a kind change starts from them). */
+  kind_defaults?: Record<string, TemplateParams>
 }
 
 const GRID: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px 12px' }
@@ -59,9 +63,11 @@ function shown(key: keyof TemplateParams, p: TemplateParams, fields: Record<stri
   return true
 }
 
-function defaults(spec: TemplatePayload['spec']): TemplateParams {
+function defaults(p: TemplatePayload, kind?: string): TemplateParams {
+  const k = kind || p.default_kind || ''
+  if (k && p.kind_defaults?.[k]) return { ...p.kind_defaults[k] }
   const out: Record<string, string | number> = {}
-  for (const key of ORDER) out[key] = spec[key].default
+  for (const key of ORDER) out[key] = p.spec[key].default
   return out as unknown as TemplateParams
 }
 
@@ -154,7 +160,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
       .then((p) => {
         if (gone) return
         setData(p)
-        setDraft(p.params || defaults(p.spec))
+        setDraft(p.params || defaults(p))
         setSource(p.source === 'llm' ? 'llm' : 'user')
       })
       .catch((e) => { if (!gone) setError((e as Error).message) })
@@ -169,12 +175,13 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
   const running = data?.progress?.state === 'running'
   useEffect(() => {
     if (!running) return
-    const id = window.setInterval(reloadProgress, 3000)
+    const id = window.setInterval(reloadProgress, 1500)
     return () => window.clearInterval(id)
   }, [running, reloadProgress])
   const set = (key: keyof TemplateParams, value: string | number) => {
-    if (!draft) return
-    setDraft({ ...draft, [key]: value })
+    if (!draft || !data) return
+    // A172: a kind change starts from that kind's values (a top's length and sleeves are no skirt's); the fabric stays
+    setDraft(key === 'kind' ? { ...defaults(data, String(value)), fabric: draft.fabric } : { ...draft, [key]: value })
     setSource('user')
     setSaved('')
   }
@@ -266,6 +273,12 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                     {t('The suggestion had {n} value(s) out of range — corrected').replace('{n}', String(warnings.length))}
                   </div>
                 ) : null}
+                {!data.params && !saved ? (
+                  <div className="ga-hint" style={WARN}>
+                    {t('Not saved yet — starting values for a {kind} (from the item); Suggest or adjust, then Save')
+                      .replace('{kind}', t(TEMPLATE_CHOICE_LABELS[draft.kind] || draft.kind).toLowerCase())}
+                  </div>
+                ) : null}
                 <div className="ga-hint">
                   {source === 'llm' ? t('Values from the picture suggestion') : t('Values set by hand')}
                   {data.updated_at ? ` · ${t('saved {at}').replace('{at}', data.updated_at.replace('T', ' ').slice(0, 16))}` : ''}
@@ -320,6 +333,12 @@ function TemplateProgressBox({ character, progress, onStarted }: {
       </div>
       {why ? (
         <div className="ga-hint" style={p.state === 'failed' ? { color: 'var(--danger, #f85149)' } : WARN}>{why}</div>
+      ) : null}
+      {p.state === 'running' ? (
+        <div className="ga-hint" data-template-live={p.live?.stage || 'waiting'}
+          style={{ color: 'var(--accent, #6aa9ff)' }}>
+          {p.live ? templateLiveText(p.live, t) : t('The Build runs — the drape starts at its step')}
+        </div>
       ) : null}
       <ModelSteps steps={p.steps} />
       {!p.worn ? (

@@ -1217,6 +1217,37 @@ export interface TemplateProgress {
   /** The character wears the piece now (only a worn piece is draped by the Build). */
   worn: boolean
   steps: ModelStep[]
+  /** A172: what the drape in flight does now (`garment_template.live_progress`); null when it is not draping. */
+  live?: TemplateLive | null
+}
+
+/** A172: the live step of a drape in flight. `label` is the stage (a translatable key); frame / pose / index are
+ *  null where the stage has none. */
+export interface TemplateLive {
+  stage: string
+  label: string
+  frame: number | null
+  frames: number | null
+  pose: string | null
+  index: number | null
+  count: number | null
+  attempt: number
+  elapsed_s: number
+  stage_s: number
+}
+
+/** A172: one line of a drape in flight — "Draping the pose shapes 2/4 (sit) · frame 8/16 · retry · 34 s". */
+export function templateLiveText(live: TemplateLive, t: (s: string) => string): string {
+  const parts = [t(live.label)]
+  if (live.index && live.count) {
+    parts[0] += ` ${live.index}/${live.count}${live.pose ? ` (${live.pose.replace(/_/g, ' ')})` : ''}`
+  }
+  if (live.frame && live.frames) {
+    parts.push(t('frame {n}/{m}').replace('{n}', String(live.frame)).replace('{m}', String(live.frames)))
+  }
+  if (live.attempt > 1) parts.push(t('retry with finer cloth'))
+  parts.push(`${Math.round(live.elapsed_s)} s`)
+  return parts.join(' · ')
 }
 
 export const TEMPLATE_STATE_LABELS: Record<TemplateProgress['state'], string> = {

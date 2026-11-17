@@ -94,7 +94,7 @@ import type {
 } from './useGarment'
 import {
   ACCEPTED_BY_YOU, AUTO_BUILD_NOTE, BUILD_STATUS, MESH_MODES, MESH_MODE_HINTS, MESH_MODE_LABELS, PIECE_STATES,
-  TEMPLATE_STATE_COLOR, TEMPLATE_STATE_LABELS,
+  TEMPLATE_STATE_COLOR, TEMPLATE_STATE_LABELS, templateLiveText,
   PIECE_STATE_LABELS, acceptedWhat, closableDisabled, defaultBodyKey, fitBodyName, leavesOwnMesh, refitSlot,
   showBodySwitch, switchOffWarning, wearersLine,
 } from './figureModel'
@@ -523,7 +523,7 @@ export function TemplatePieceControls({ character, itemId, version = 0 }: {
   useEffect(() => { void load() }, [load, version])
   useEffect(() => {
     if (progress?.state !== 'running') return
-    const id = window.setInterval(() => { void load() }, 3000)
+    const id = window.setInterval(() => { void load() }, 1500)
     return () => window.clearInterval(id)
   }, [progress?.state, load])
   const state = progress?.state
@@ -535,6 +535,7 @@ export function TemplatePieceControls({ character, itemId, version = 0 }: {
         <span data-template-state={state} title={[t(TEMPLATE_STATE_LABELS[state]), why].filter(Boolean).join('\n')}
           style={{ ...CHIP, border: `1px solid ${TEMPLATE_STATE_COLOR[state]}` }}>
           {t(TEMPLATE_STATE_LABELS[state])}
+          {state === 'running' ? ` ${progress?.live ? templateLiveText(progress.live, t) : t('waiting for its step')}` : ''}
         </span>
       ) : null}
       <button type="button" className="ga-btn ga-btn-sm" aria-haspopup="dialog" style={{ marginLeft: 'auto' }}
