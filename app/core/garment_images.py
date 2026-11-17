@@ -173,6 +173,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from app.imagegen import routing as _image_routing
 from app.core.log import get_logger
 
 logger = get_logger("garment_images")
@@ -886,7 +887,8 @@ def _render_edit_step(character_name: str, item_id: str, fsig: str, step: str, v
     for attempt in range(1, ATTEMPTS + 1):
         target = garment_path(character_name, item_id, fsig, "image", step=step, view=view, attempt=attempt)
         stem = target.with_suffix("")
-        with square_reference(source, refs_dir) as (reference, side, offset, source_size):
+        with _image_routing.retry_attempt(attempt), \
+                square_reference(source, refs_dir) as (reference, side, offset, source_size):
             path = expression_regen.render_character_image(
                 character_name,
                 output_stem=stem,
@@ -1602,11 +1604,12 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
             # draft is the one the last attempt was composited from.
             prompt = kind.draft_prompt(character_name, step, profile=profile, item_id=item_id)
             drafted_with = prompt[0]
-            draft = base_body.render_draft(
-                character_name, "back", stem=draft_stem, front=front, refs_dir=refs_dir, prompt=prompt,
-                profile=profile, common=common,
-                sidecar_extra={"garment": {**meta, "attempt": attempt, "stage": "draft"},
-                               "front_sha256": front_sha})
+            with _image_routing.retry_attempt(attempt):
+                draft = base_body.render_draft(
+                    character_name, "back", stem=draft_stem, front=front, refs_dir=refs_dir, prompt=prompt,
+                    profile=profile, common=common,
+                    sidecar_extra={"garment": {**meta, "attempt": attempt, "stage": "draft"},
+                                   "front_sha256": front_sha})
         if draft is None:
             raise RuntimeError(f"The {step} back draft rendered nothing")
         draft = Path(draft)

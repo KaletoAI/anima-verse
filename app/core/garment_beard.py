@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from app.imagegen import routing as _image_routing
 from app.core.log import get_logger
 
 logger = get_logger("garment_beard")
@@ -252,7 +253,8 @@ def beard_free_input(character_name: str, source: Path, folder: Path) -> Tuple[P
     target = folder / RESULT_NAME
     for attempt in range(1, ATTEMPTS + 1):
         candidate = folder / f"beard_free.try{attempt}.png"
-        with square_reference(Path(source), refs_dir) as (reference, side, offset, source_size):
+        with _image_routing.retry_attempt(attempt), \
+                square_reference(Path(source), refs_dir) as (reference, side, offset, source_size):
             path = expression_regen.render_character_image(
                 character_name,
                 output_stem=candidate.with_suffix(""),

@@ -90,6 +90,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote
 
+from app.imagegen import routing as _image_routing
 from app.core import view_facing, view_postprocess
 from app.core.log import get_logger
 
@@ -1418,7 +1419,8 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
                     stem = Path(staging) / f"attempt{n}" / final.name
                     stem.parent.mkdir()
                     try:
-                        path = draw("front", stem, reference)
+                        with _image_routing.retry_attempt(n):
+                            path = draw("front", stem, reference)
                     except Exception as e:  # noqa: BLE001 — keep what was rendered
                         if not attempts:
                             raise
@@ -3357,17 +3359,18 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
             draft_stem = Path(staging) / f"draft{n}" / f"{kind}_{signature}"
             draft_stem.parent.mkdir()
             try:
-                draft = render_view_edit(
-                    character_name, view, stem=draft_stem, base_view=base_view,
-                    second=reference if reference is not None else front, refs_dir=refs_dir,
-                    prompt=_view_edit_prompt(character_name, view, text=text, front=front, pieces=pieces,
-                                             items=items, profile=profile, bald=bald, hair=hair,
-                                             hair_edit=hair_edit),
-                    occasion=DRAFT_OCCASIONS[view], common=common,
-                    sidecar_extra={"base_signature": bsig, "dressed": True, f"{view}_draft": True,
-                                   "draft_method": DRAFT_BASE_EDIT,
-                                   "front_sha256": file_sha256(front),
-                                   **({"mesh_items": mesh_items} if mesh_items else {}), **(texture or {})})
+                with _image_routing.retry_attempt(n):
+                    draft = render_view_edit(
+                        character_name, view, stem=draft_stem, base_view=base_view,
+                        second=reference if reference is not None else front, refs_dir=refs_dir,
+                        prompt=_view_edit_prompt(character_name, view, text=text, front=front, pieces=pieces,
+                                                 items=items, profile=profile, bald=bald, hair=hair,
+                                                 hair_edit=hair_edit),
+                        occasion=DRAFT_OCCASIONS[view], common=common,
+                        sidecar_extra={"base_signature": bsig, "dressed": True, f"{view}_draft": True,
+                                       "draft_method": DRAFT_BASE_EDIT,
+                                       "front_sha256": file_sha256(front),
+                                       **({"mesh_items": mesh_items} if mesh_items else {}), **(texture or {})})
             except Exception as e:  # noqa: BLE001 — a later draft never loses an earlier composite
                 if not attempts or (raise_load and _is_load(e)):
                     raise
@@ -4937,7 +4940,8 @@ def _guard_dressed_views(character_name: str, signature: str, bsig: str,
             retry: Dict[str, Any] = {"ok": False, "skipped": "no outfit manifest to re-render from"}
             if rerender is not None:
                 try:
-                    path = rerender(v)
+                    with _image_routing.retry_attempt(2):
+                        path = rerender(v)
                 except Exception as e:  # noqa: BLE001 — the old verdict stands
                     logger.warning("Dressed %s %s re-render failed: %s", character_name, v, e)
                     path = None
@@ -4945,9 +4949,10 @@ def _guard_dressed_views(character_name: str, signature: str, bsig: str,
                          else {"ok": False, "skipped": "re-render failed"})
             elif manifest:
                 try:
-                    generate_dressed_images(character_name, pieces=manifest.get("pieces"),
-                                            items=manifest.get("items"), signature=signature,
-                                            force=True, view=v)
+                    with _image_routing.retry_attempt(2):
+                        generate_dressed_images(character_name, pieces=manifest.get("pieces"),
+                                                items=manifest.get("items"), signature=signature,
+                                                force=True, view=v)
                 except Exception as e:  # noqa: BLE001 — the old verdict stands
                     logger.warning("Dressed %s %s re-render failed: %s", character_name, v, e)
                 path = dressed_image(character_name, v, signature, bsig)
