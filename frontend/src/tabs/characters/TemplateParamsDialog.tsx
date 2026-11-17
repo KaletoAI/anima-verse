@@ -2,8 +2,8 @@
  * TemplateParamsDialog — the parameter dialog of an outfit piece in mode "template" (Rulings A138, A142): the
  * sewing-pattern parameters the drape is made from — only the fields of the chosen kind (`kind_fields` of the server:
  * a skirt has length / flare / waistband / slit, a top sleeves / fit / neckline, a jacket also front and collar, a
- * dress its shoulders) — with a 1.70 m reference figure that draws the piece at its length, flare, sleeves and
- * neckline (checklist 7). "Suggest from picture" asks the vision task
+ * dress its shoulders) — drawn on the character (A188, below).
+ * "Suggest from picture" asks the vision task
  * ONCE (1 LLM call, nothing saved) and fills the fields; Save stores them on the ITEM (every wearer) and spends
  * nothing — the next Build re-drapes (CPU, 0 hub jobs). Rendered through a portal; no native dialogs.
  *
@@ -12,11 +12,10 @@
  * the same ModelSteps list the own-mesh dialog shows), polled while a Build drapes it; a missing or failed drape of a
  * worn piece offers the Build (FigureBuildButton — the one start of a drape, CPU, 0 hub jobs).
  *
- * A186: beside the fields a dressed FRONT picture, so lengths can be judged against the character: this piece's worn
- * front view, else the dressed front of the outfit worn now (while the piece is worn), else the item's own picture —
- * captioned with which one it is (`front_picture` of the GET; existing images only, nothing is generated). Click
- * enlarges it. No length guide lines are drawn on it: the dressed front is an image edit whose framing (where head
- * and feet sit in the picture) is not recorded, so a line at "the hem" would be a guess.
+ * A188: the piece is drawn ON the character's plain base-body front, live while the fields change (TemplateOverlay —
+ * the server registers the picture to the body's metres and returns the piece as pixel polygons); the 1.70 m
+ * reference figure is gone (the person is the reference). The A186 dressed front stays as a small thumbnail under the
+ * fields (click enlarges): its framing is not recorded, so nothing is drawn on it.
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
@@ -29,6 +28,7 @@ import { TEMPLATE_CHOICE_LABELS, TEMPLATE_FIELD_LABELS, UPPER_KINDS, cm, lengthL
 import { TEMPLATE_STATE_COLOR, TEMPLATE_STATE_LABELS, templateLiveText } from './figureModel'
 import type { TemplateFieldSpec, TemplateInfo, TemplateParams, TemplateProgress } from './figureModel'
 import { FigureBuildButton } from './FigureBuildButton'
+import { TemplateOverlay } from './TemplateOverlay'
 import { ModelSteps } from './ModelSteps'
 
 interface TemplatePayload {
@@ -59,10 +59,10 @@ const PICTURE_HINTS: Record<string, string> = {
   outfit: 'The outfit dressed, front view',
   item: 'No dressed front yet — the item’s own picture',
 }
-const PICTURE_H = 320
+const PICTURE_H = 120
 /** A full-body reference that came landscape is cut to a square around its centre (the person stands there); a
  *  T-pose view (worn front / outfit dressed front) is never cut — its arms carry the sleeves. */
-const PICTURE_W = { portrait: 210, square: PICTURE_H }
+const PICTURE_W = { portrait: 80, square: PICTURE_H }
 
 /** A186: the dressed front beside the fields — small, captioned with its source, click enlarges it. */
 function FrontPicture({ picture }: { picture?: TemplatePayload['front_picture'] }) {
@@ -114,9 +114,6 @@ const ORDER: (keyof TemplateParams)[] = ['kind', 'fabric', 'length_m', 'flare', 
   'shoulders', 'fit', 'neckline', 'neck_depth_m', 'sleeves', 'sleeve_fit', 'front', 'collar']
 /** Fields shown as a 0…1 number rather than centimetres. */
 const SHARES = new Set<keyof TemplateParams>(['flare', 'fit', 'sleeve_fit'])
-/** Shoulder line and arm of the reference figure (metres; the reference body: shoulder joints 1.37 m, arm 0.49 m). */
-const SHOULDER_M = 1.415
-const SLEEVE_SHARE: Record<string, number> = { none: 0, cap: 0.12, short: 0.3, elbow: 0.52, long: 0.97 }
 
 /** Whether a field is shown for the draft: the kind's fields, minus the ones another field switches off. */
 function shown(key: keyof TemplateParams, p: TemplateParams, fields: Record<string, (keyof TemplateParams)[]>): boolean {
@@ -135,72 +132,6 @@ function defaults(p: TemplatePayload, kind?: string): TemplateParams {
   const out: Record<string, string | number> = {}
   for (const key of ORDER) out[key] = p.spec[key].default
   return out as unknown as TemplateParams
-}
-
-/** The 1.70 m reference figure with the piece drawn at its length and flare (checklist 7: a metre value has a
- *  reference). Scale: 1 m = 100 px; waist at 1.05 m (the reference body), chest band at 1.275 m. */
-function ReferenceFigure({ p }: { p: TemplateParams }) {
-  const { t } = useI18n()
-  const H = 170
-  const y = (m: number) => H + 10 - m * 100
-  const upper = UPPER_KINDS.includes(p.kind)
-  const waist = p.waist_height === 'high' ? 1.08 : p.waist_height === 'low' ? 0.98 : 1.05
-  const bodice = upper || (p.kind === 'dress' && p.shoulders !== 'strapless')
-  const top = bodice ? SHOULDER_M : p.kind === 'dress' ? 1.275 : waist
-  const hem = Math.max(0.05, upper ? SHOULDER_M - p.length_m : waist - p.length_m)
-  const halfTop = bodice ? 20 : p.kind === 'dress' ? 14 : 12
-  const halfHem = upper ? 16 * (1 + 0.3 * p.fit) : 16 * (1 + 1.5 * p.flare)
-  const cx = 60
-  const sleeve = bodice && p.shoulders !== 'straps' ? (SLEEVE_SHARE[p.sleeves] ?? 0) * 49 : 0
-  const depth = bodice ? (p.neck_depth_m || { crew: 0.03, v: 0.15, scoop: 0.11, boat: 0.015 }[p.neckline] || 0) : 0
-  const pts = upper
-    ? [[cx - halfTop, y(top)], [cx + halfTop, y(top)], [cx + 13, y(1.2)], [cx + halfHem, y(hem)],
-      [cx - halfHem, y(hem)], [cx - 13, y(1.2)]]
-    : [[cx - halfTop, y(top)], [cx + halfTop, y(top)], [cx + 11, y(waist)], [cx + halfHem, y(hem)],
-      [cx - halfHem, y(hem)], [cx - 11, y(waist)]]
-  return (
-    <svg width={120} height={H + 20} role="img" aria-label={t('1.70 m reference figure')}
-      style={{ border: '1px solid var(--border, #30363d)', borderRadius: 4, flex: '0 0 auto' }}>
-      {[0, 0.5, 1.0, 1.5].map((m) => (
-        <g key={m}>
-          <line x1={0} x2={8} y1={y(m)} y2={y(m)} stroke="currentColor" opacity={0.5} />
-          <text x={10} y={y(m) + 3} fontSize={8} fill="currentColor" opacity={0.7}>{m.toFixed(1)} m</text>
-        </g>
-      ))}
-      <circle cx={cx} cy={y(1.58)} r={9} fill="none" stroke="currentColor" opacity={0.6} />
-      <line x1={cx} x2={cx} y1={y(1.49)} y2={y(0.9)} stroke="currentColor" opacity={0.6} />
-      <line x1={cx - 49} x2={cx + 49} y1={y(1.37)} y2={y(1.37)} stroke="currentColor" opacity={0.6} />
-      <line x1={cx} x2={cx - 10} y1={y(0.9)} y2={y(0.02)} stroke="currentColor" opacity={0.6} />
-      <line x1={cx} x2={cx + 10} y1={y(0.9)} y2={y(0.02)} stroke="currentColor" opacity={0.6} />
-      <polygon fill="var(--accent, #6aa9ff)" opacity={0.55} points={pts.map((q) => q.join(',')).join(' ')} />
-      {sleeve > 0 ? (
-        <>
-          <rect x={cx + halfTop - 2} y={y(1.42)} width={sleeve} height={9} fill="var(--accent, #6aa9ff)" opacity={0.55} />
-          <rect x={cx - halfTop + 2 - sleeve} y={y(1.42)} width={sleeve} height={9} fill="var(--accent, #6aa9ff)" opacity={0.55} />
-        </>
-      ) : null}
-      {p.kind === 'dress' && p.shoulders === 'straps' ? (
-        <>
-          <line x1={cx - 9} x2={cx - 9} y1={y(1.275)} y2={y(SHOULDER_M)} stroke="var(--accent, #6aa9ff)" strokeWidth={3} />
-          <line x1={cx + 9} x2={cx + 9} y1={y(1.275)} y2={y(SHOULDER_M)} stroke="var(--accent, #6aa9ff)" strokeWidth={3} />
-        </>
-      ) : null}
-      {depth > 0 ? (
-        <polygon fill="var(--bg, #0d1117)" points={p.neckline === 'v'
-          ? `${cx - 8},${y(SHOULDER_M)} ${cx + 8},${y(SHOULDER_M)} ${cx},${y(SHOULDER_M - depth)}`
-          : `${cx - 8},${y(SHOULDER_M)} ${cx + 8},${y(SHOULDER_M)} ${cx + 5},${y(SHOULDER_M - depth)} ${cx - 5},${y(SHOULDER_M - depth)}`} />
-      ) : null}
-      {p.kind === 'jacket' && p.front === 'open' ? (
-        <line x1={cx} x2={cx} y1={y(SHOULDER_M - depth)} y2={y(hem)} stroke="var(--bg, #0d1117)" strokeWidth={2} />
-      ) : null}
-      {p.slit !== 'none' && p.slit_m > 0 && !upper ? (
-        <line x1={p.slit === 'left' ? cx + halfHem - 3 : p.slit === 'right' ? cx - halfHem + 3 : cx}
-          x2={p.slit === 'left' ? cx + halfHem - 3 : p.slit === 'right' ? cx - halfHem + 3 : cx}
-          y1={y(hem)} y2={y(hem + p.slit_m)} stroke="var(--bg, #0d1117)" strokeWidth={2} />
-      ) : null}
-      <text x={cx + halfHem + 2} y={y(hem) + 3} fontSize={8} fill="currentColor">{cm(hem)}</text>
-    </svg>
-  )
 }
 
 export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
@@ -293,8 +224,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
           {!data && !error ? <div className="ga-hint">{t('Loading…')}</div> : null}
           {data && draft ? (
             <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-              <FrontPicture picture={data.front_picture} />
-              <ReferenceFigure p={draft} />
+              <TemplateOverlay path={path} draft={draft} />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: '1 1 340px', minWidth: 0 }}>
                 <div style={GRID}>
                   {ORDER.filter((key) => data.spec[key] && shown(key, draft, data.kind_fields || {})).map((key) => {
@@ -354,6 +284,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                 </div>
                 <div className="ga-hint">{templateCost(data.cost, t)}</div>
                 {saved ? <div className="ga-hint" style={{ color: 'var(--success, #3fb950)' }}>{saved}</div> : null}
+                <FrontPicture picture={data.front_picture} />
               </div>
             </div>
           ) : null}

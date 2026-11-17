@@ -8,6 +8,10 @@
     }
   },
   "translations": {
+    "The piece on the plain body": "Das Stück auf dem Grundkörper",
+    "Plain body front — the piece drawn at its parameters": "Grundkörper von vorn — das Stück nach seinen Parametern gezeichnet",
+    "No plain body front yet — build the plain body first (Figure tab)": "Noch keine Vorderansicht des Grundkörpers — zuerst den Grundkörper erstellen (Reiter Figur)",
+    "No plain body model yet — the overlay needs its measurements (Figure tab → Build)": "Noch kein Grundkörper-Modell — die Zeichnung braucht seine Maße (Reiter Figur → Build)",
     "Side views and the shell due — Rebuild shell makes the views first": "Seitenansichten und Hülle fällig — „Hülle neu bauen“ macht zuerst die Ansichten",
     "Side views for the shell": "Seitenansichten für die Hülle",
     "Off (default)": "Aus (Standard)",
