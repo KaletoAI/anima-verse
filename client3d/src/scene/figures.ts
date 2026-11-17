@@ -239,6 +239,9 @@ interface LoadedModel {
   template: THREE.Group;
   clips: THREE.AnimationClip[];
   ownClips?: THREE.AnimationClip[];
+  /** The clips a pool rig without its own clips or a fitting library borrowed from a donor rig
+   *  (`loadManifestModels`): what a clip-reload refit keeps when it again finds nothing of its own. */
+  borrowedClips?: THREE.AnimationClip[];
   scale: number;
   height: number; // world height after scaling
   assignOnly: boolean;
@@ -1307,7 +1310,9 @@ export class FigureLibrary {
       void this.prepareReloadClips().then(async () => {
         const fit = await this.fitLibraryAsync(name, model.template, model.ownClips ?? [], model.scale,
           model.footPose ?? null);
-        figure.replaceClips([...(model.ownClips ?? []), ...fit.extra]);
+        const next = [...(model.ownClips ?? []), ...fit.extra];
+        // A rig that plays donor clips: nothing of its own again → keep the borrowed set, never an empty vocabulary.
+        figure.replaceClips(next.length || !model.borrowedClips ? next : model.borrowedClips);
         epoch = wanted;
       }).catch(e => console.warn('[figures] clip refit failed', e)).finally(() => { preparing = false; });
     };
@@ -1412,6 +1417,7 @@ export class FigureLibrary {
       // A borrowed bridge travel is the DONOR's, rescaled by the hips ratio —
       // re-locked on this skeleton exactly like a library clip.
       relockOnRig(m.name, m.clips, m.template, m.scale, m.footPose ?? null);
+      if (m.clips.length) m.borrowedClips = m.clips;
     }
     return results.filter((r) => r.status === 'fulfilled').length;
   }
@@ -2429,9 +2435,12 @@ export class Figure {
   prepareClips?: () => void;
   private disposed = false;
 
-  /** Replace the vocabulary only. Current and bridge actions keep ownership. */
+  /** Replace the vocabulary only. Current and bridge actions keep ownership. An action the new vocabulary
+   *  dropped is freed from the mixer's cache — unless it is still scheduled or held (current, bridge, travel,
+   *  turn, lift): that one stays with its owner. */
   replaceClips(clips: THREE.AnimationClip[]): void {
     if (this.disposed) return;
+    const before = new Set(this.actions.values());
     this.actions.clear();
     const byName = new Map(clips.map(c => [c.name.toLowerCase(), c]));
     for (const [kind, clip] of byName) this.actions.set(kind, this.mixer.clipAction(clip));
@@ -2439,6 +2448,12 @@ export class Figure {
       if (this.actions.has(kind)) continue;
       const name = resolveClipName([...byName.keys()], needles);
       if (name) this.actions.set(kind, this.mixer.clipAction(byName.get(name)!));
+    }
+    const kept = new Set(this.actions.values());
+    const held = [this.current, this.transition, this.travelAction, this.turnAction, this.liftAction];
+    for (const action of before) {
+      if (kept.has(action) || held.includes(action) || action.isScheduled()) continue;
+      this.mixer.uncacheAction(action.getClip(), action.getRoot());
     }
   }
 

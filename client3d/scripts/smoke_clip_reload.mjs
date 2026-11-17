@@ -107,4 +107,36 @@ assert.equal(figure.actions.has('dance'),false);
 figure.play('idle');
 figure.dispose();
 console.log('PASS [changed-url] (new and removed kinds included)');
-console.log('PASS smoke_clip_reload: 5 cases');
+
+// Review 13-hair#1: a pool rig that borrowed its clips from a donor (ownClips [], no library fit). A reload whose
+// refit again finds nothing of its own must keep the borrowed kinds; the old refit handed replaceClips([]) and
+// every later play found no action.
+const borrowed = [clip('idle'), clip('walk')];
+const pooled = {name:'pool-smoke', template:new THREE.Group(), clips:borrowed, ownClips:[], borrowedClips:borrowed,
+  scale:1, height:1.7, libraryFits:false};
+lib.apiModels.set('pooled', pooled);
+const pf = lib.instantiate('pooled');
+lib.fitLibraryAsync = async () => ({extra:[], fits:false});
+revision = 'seven'; await lib.reloadClips();
+pf.play('walk'); await sleep(20);
+assert.ok(pf.actions.has('walk') && pf.actions.has('idle'), 'the borrowed kinds survive the refit');
+assert.equal(pf.actions.get('walk').getClip(), borrowed[1]);
+pf.dispose();
+console.log('PASS [borrowed]');
+
+// Review 13-hair#1: replaced actions leave the mixer's cache. Clips idle, a, b → 3 cached actions (one per clip;
+// the synonym kinds reuse them). replaceClips([the same idle, c]) keeps idle's action, adds c's, and frees a's and
+// b's (neither scheduled nor held) → 2. Without the uncache the mixer keeps 4.
+const idleClip = clip('idle');
+lib.apiModels.set('cache', {name:'cache-smoke', template:new THREE.Group(), clips:[idleClip, clip('a'), clip('b')],
+  ownClips:[], scale:1, height:1.7, libraryFits:true});
+const cf = lib.instantiate('cache');
+cf.prepareClips = undefined;   // only the direct replaceClips is measured here
+const cached0 = cf.mixer.stats.actions.total;
+cf.replaceClips([idleClip, clip('c')]);
+assert.equal(cached0, 3);
+assert.equal(cf.mixer.stats.actions.total, 2, 'replaced actions are uncached');
+assert.equal(cf.actions.has('a'), false);
+cf.dispose();
+console.log('PASS [uncache]');
+console.log('PASS smoke_clip_reload: 7 cases');
