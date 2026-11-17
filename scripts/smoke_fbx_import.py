@@ -1482,15 +1482,21 @@ def test_bvh() -> None:
         path.write_bytes(body.replace(field, b""))
         probe = fbx_import.probe_fbx(path)
         check("missing " + field.decode().strip() + " fails closed", bool(probe.get("error")) and probe["skeleton_family"] == "", str(probe))
-    from fastapi import UploadFile
+    from starlette.requests import Request
     for name, expected in (("uploaded.bvh", 200), ("refused.txt", 400)):
-        stream = tempfile.SpooledTemporaryFile(max_size=1024 * 1024)
-        stream.write(body)
-        stream.seek(0)
-        upload = UploadFile(filename=name, file=stream)
-        code = status_of(lambda: asyncio.run(assets.post_clips_inbox_upload([upload], None)))
+        # The route parses its own multipart body (after the length guard).
+        data = (b"--smokeboundary\r\nContent-Disposition: form-data; name=\"files\"; filename=\""
+                + name.encode() + b"\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+                + body + b"\r\n--smokeboundary--\r\n")
+
+        async def receive(data=data):
+            return {"type": "http.request", "body": data, "more_body": False}
+
+        request = Request({"type": "http", "method": "POST", "path": "/", "headers": [
+            (b"content-type", b"multipart/form-data; boundary=smokeboundary"),
+            (b"content-length", str(len(data)).encode())]}, receive)
+        code = status_of(lambda: asyncio.run(assets.post_clips_inbox_upload(request, None)))
         check(name + " upload status", code == expected, str(code))
-        stream.close()
     check("BVH upload stores the original bytes", (INBOX / "uploaded.bvh").is_file()
           and (INBOX / "uploaded.bvh").read_bytes() == body)
     (INBOX / "uploaded.bvh").unlink(missing_ok=True)

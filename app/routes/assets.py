@@ -44,7 +44,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 
 from app.blender import runner as blender_runner
@@ -623,6 +623,10 @@ def _post_clip_catalog_import_sync(take_id: str, _: Dict[str, Any],
 #: mis-drop (a whole model pack) is refused instead of filling the disk.
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 
+#: What the multipart framing (boundary lines, part headers) may add to a
+#: request on top of the file bytes it carries.
+_MULTIPART_SLACK_BYTES = 1024 * 1024
+
 #: Everything an upload's file name may consist of — the name is rebuilt from
 #: this class, so nothing a browser sends can leave the inbox.
 _UPLOAD_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -650,47 +654,62 @@ def get_clips_inbox(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any
 
 
 @router.post("/clips-inbox/upload")
-async def post_clips_inbox_upload(files: List[UploadFile] = File(...),
+async def post_clips_inbox_upload(request: Request,
                                   _: Dict[str, Any] = Depends(require_admin)
                                   ) -> Dict[str, Any]:
-    """Uploads one or more FBX files into the inbox.
+    """Uploads one or more FBX files into the inbox (multipart, field
+    ``files``; the Poses tab sends one file per request).
 
     The stored name is REBUILT from the upload's base name (directory parts
     dropped, everything outside ``[A-Za-z0-9._-]`` replaced), so the browser
-    never decides where a byte lands. A file above ``MAX_UPLOAD_BYTES`` is
-    refused with 413 and its partial write removed.
+    never decides where a byte lands. A request whose declared length is past
+    ``MAX_UPLOAD_BYTES`` (plus the multipart framing) is refused before its
+    body is parsed; a file above ``MAX_UPLOAD_BYTES`` is refused with 413
+    while it streams. Each file is written into a hidden sibling stage and
+    renamed over the inbox file only once it is complete, so a refused upload
+    leaves a same-named inbox file (perhaps a scene source a pair sidecar
+    names) exactly as it was.
     """
+    from app.core.http_files import atomic_replace, sibling_stage
+    from app.core.upload_limits import guard_content_length
+    guard_content_length(request, max_bytes=MAX_UPLOAD_BYTES + _MULTIPART_SLACK_BYTES,
+                         what="Clip upload")
+    form = await request.form()
+    files = [f for f in form.getlist("files") if not isinstance(f, str)]
+    if not files:
+        raise HTTPException(status_code=400, detail="No file uploaded")
     root = fbx_import.get_clips_inbox_dir()
     root.mkdir(parents=True, exist_ok=True)
     stored: List[Dict[str, Any]] = []
-    for upload in files:
-        base = Path(str(upload.filename or "")).name
-        name = _UPLOAD_NAME_RE.sub("_", base).lstrip(".")
-        if Path(name).suffix.lower() not in fbx_import.INBOX_EXTS:
-            raise HTTPException(status_code=400,
-                                detail=f"{base or 'file'}: only "
-                                       f"{', '.join(fbx_import.INBOX_EXTS)} files")
-        dest = root / fbx_import.safe_inbox_name(name)
-        size = 0
-        try:
-            with dest.open("wb") as fh:
-                while True:
-                    chunk = await upload.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    size += len(chunk)
-                    if size > MAX_UPLOAD_BYTES:
-                        raise HTTPException(
-                            status_code=413,
-                            detail=f"{name} is larger than "
-                                   f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
-                    fh.write(chunk)
-        except HTTPException:
-            dest.unlink(missing_ok=True)
-            raise
-        finally:
+    try:
+        for upload in files:
+            base = Path(str(upload.filename or "")).name
+            name = _UPLOAD_NAME_RE.sub("_", base).lstrip(".")
+            if Path(name).suffix.lower() not in fbx_import.INBOX_EXTS:
+                raise HTTPException(status_code=400,
+                                    detail=f"{base or 'file'}: only "
+                                           f"{', '.join(fbx_import.INBOX_EXTS)} files")
+            dest = root / fbx_import.safe_inbox_name(name)
+            size = 0
+            with sibling_stage(dest) as stage:
+                with stage.open("wb") as fh:
+                    while True:
+                        chunk = await upload.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        size += len(chunk)
+                        if size > MAX_UPLOAD_BYTES:
+                            raise HTTPException(
+                                status_code=413,
+                                detail=f"{name} is larger than "
+                                       f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
+                        fh.write(chunk)
+                stage.chmod(0o644)
+                atomic_replace(stage, dest)
+            stored.append({"name": dest.name, "size": size})
+    finally:
+        for upload in files:
             await upload.close()
-        stored.append({"name": dest.name, "size": size})
     logger.info("clip inbox upload: %s", ", ".join(s["name"] for s in stored))
     return {"stored": stored, **get_clips_inbox(None)}
 
