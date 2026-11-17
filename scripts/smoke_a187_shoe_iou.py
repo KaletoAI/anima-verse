@@ -24,6 +24,12 @@ Expected, derived by hand:
 [3] ``fit_attempts.fit_status`` of a shoe on the plain body whose chain failure is the step "mesh":
     failure None, source_failure the record (old code: failure = the mesh record -> "refused");
     with a chain failure of step "fit": failure the record, source_failure None.
+[4] the mesh Regenerate's backend pick:
+    a) inside ``mesh_pick.use("mesh-x")`` the shoe's mesh attempt calls ``generate_mesh`` with backend_glob "mesh-x",
+       outside it with "" (Auto); the garment mesh attempt the same;
+    b) two runs differing only in the pick are two requests (``_Job.key``), a picked run is no default run;
+    c) the route: backend "mesh-x" with step "fit" -> 400, nothing started; with step "mesh" and the pick not
+       available -> 503, nothing started; available -> started with backend "mesh-x"; no backend -> started with "".
 """
 import os
 import sys
@@ -131,6 +137,58 @@ def main() -> int:
     gs.chain_failure = lambda c, i, f, base_model_sha="": fit_failure
     st = fit_attempts.fit_status("Demo", item, "", profile={})
     check("fit failure -> failure", (st["failure"], st["source_failure"]), (fit_failure, None))
+
+    print("[4] the backend pick")
+    from app.core import garment_mesh, garments, mesh_pick
+    import app.imagegen.service as svc_mod
+    seen = []
+
+    class Svc:
+        def generate_mesh(self, **kw):
+            seen.append(kw.get("backend_glob"))
+            return {"ok": False, "error": "stub"}
+    svc_mod.get_image_service = lambda: Svc()
+    for pick in ("mesh-x", ""):
+        with mesh_pick.use(pick):
+            for call in (lambda: fs._mesh_attempt(item, d / "cutout.png", d / "raw.glb", d / ".c.glb", None, 1),
+                         lambda: garment_mesh._attempt("Demo", "clothing", {"front": d / "cutout.png"},
+                                                       d / "raw2.glb", d / ".c2.glb", 1)):
+                try:
+                    call()
+                except RuntimeError:
+                    pass
+    check("a) backend_glob per pick", seen, ["mesh-x", "mesh-x", "", ""])
+    a = garments._Job(item, "mesh", None, True, backend="mesh-x")
+    b = garments._Job(item, "mesh", None, True)
+    check("b) the pick is part of the request", (a.key() != b.key(), garments._Job(item, None, None, False,
+                                                                                    backend="x").plain), (True, False))
+    from fastapi import HTTPException
+    from app.routes import characters as rc
+    import app.core.explicit_backend as eb
+    started = []
+    rc._require_character = lambda n: None
+    garments.check_run = lambda *a, **k: None
+    base_body.current_base = lambda c, profile=None: ("base0", "sha0")
+    garments.start_garment = lambda c, i, **k: started.append(k.get("backend")) or {"started": True}
+    available = {"ok": False}
+
+    def require(name, media="image", has_input_image=False):
+        if not available["ok"]:
+            raise HTTPException(status_code=503, detail="not available")
+        return object()
+    eb.require_explicit_backend = require
+
+    def post(**body):
+        try:
+            rc.run_character_garment("Demo", item, rc.GarmentRunRequest(**body), {})
+            return 202
+        except HTTPException as e:
+            return e.status_code
+    check("c) pick on the fit step", (post(step="fit", backend="mesh-x"), started), (400, []))
+    check("c) pick not available", (post(step="mesh", force=True, backend="mesh-x"), started), (503, []))
+    available["ok"] = True
+    check("c) pick available", (post(step="mesh", force=True, backend="mesh-x"), started), (202, ["mesh-x"]))
+    check("c) Auto", (post(step="mesh", force=True), started[-1]), (202, ""))
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
     return 1 if FAILS else 0
