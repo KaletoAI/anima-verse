@@ -366,11 +366,15 @@ def run(script: str, *, inputs: Optional[Dict[str, Path]] = None,
 
         result_file = job / "result.json"
         args_file = job / "args.json"
+        # A194: every run reports its stages into a progress file (``_common.progress``); a caller that already
+        # chose one (the template drape's ``progress_file``) keeps it. Read by ``cpu_progress.snapshot``.
+        progress_file = str((params or {}).get("progress_file") or (job / "progress.json"))
         args_file.write_text(json.dumps({
             "inputs": slots,
             "params": dict(params or {}),
             "out_dir": str(job_out),
             "result": str(result_file),
+            "progress": progress_file,
         }, ensure_ascii=False), encoding="utf-8")
 
         cmd = [st["executable"], "--background", "--factory-startup",
@@ -381,7 +385,8 @@ def run(script: str, *, inputs: Optional[Dict[str, Path]] = None,
         logger.debug("Blender: %s (timeout %ds)", script, timeout)
         try:
             # The timeout covers Blender itself, not the wait for a slot.
-            with blender_slot(script):
+            from app.core import cpu_progress
+            with blender_slot(script), cpu_progress.attach(f"blender:{script}", progress_file):
                 proc = _spawn(cmd, timeout, env)
         except subprocess.TimeoutExpired:
             logger.error("Blender %s: timeout after %ds", script, timeout)

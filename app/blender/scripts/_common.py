@@ -56,6 +56,33 @@ def write_result(args, ok, data=None, outputs=None, error=""):
     }, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+#: A194: the run's progress file (``args["progress"]``, set by ``main``) and the stage clock.
+_PROGRESS = {"file": None, "stage": None, "t0": None, "last": 0.0}
+
+
+def progress(stage, i=None, n=None, label=None):
+    """Report what the run does now — ``stage`` (a short key the server labels, e.g. ``"bones"``), optionally
+    ``i`` of ``n`` — into the progress file the server shows live (A194). Throttled inside a stage; a write that
+    fails is ignored: progress is never worth a failed run. No-op without a progress file."""
+    import time
+    path = _PROGRESS["file"]
+    if not path:
+        return
+    now = time.time()
+    if _PROGRESS["stage"] != stage:
+        _PROGRESS["stage"], _PROGRESS["t0"] = stage, now
+    elif i is not None and n is not None and 0 < i < n and now - _PROGRESS["last"] < 0.25:
+        return
+    _PROGRESS["last"] = now
+    try:
+        tmp = Path(str(path) + ".tmp")
+        tmp.write_text(json.dumps({"stage": stage, "label": label, "i": i, "n": n,
+                                   "t0": _PROGRESS["t0"], "t": now}), encoding="utf-8")
+        tmp.replace(path)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def main(fn):
     """Runs ``fn(args)`` and turns anything it raises into a failed result.
 
@@ -66,6 +93,7 @@ def main(fn):
     args = None
     try:
         args = read_args()
+        _PROGRESS["file"] = args.get("progress") or None
         data, outputs = fn(args)
         write_result(args, True, data=data, outputs=outputs)
     except BaseException as e:                    # noqa: BLE001 - last resort
@@ -98,6 +126,7 @@ def import_model(path, *, gltf_merge_vertices=False):
     object that falsified measurements — is solved by DELETING the bone
     custom shapes after import instead.
     """
+    progress("loading")
     import bpy
     ext = Path(path).suffix.lower()
     kind = IMPORTERS.get(ext)
