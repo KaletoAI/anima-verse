@@ -11,10 +11,17 @@
  * drape of the piece (`progress` of the GET: state, reason, error, and the step list Parameters → Picture → Drape in
  * the same ModelSteps list the own-mesh dialog shows), polled while a Build drapes it; a missing or failed drape of a
  * worn piece offers the Build (FigureBuildButton — the one start of a drape, CPU, 0 hub jobs).
+ *
+ * A186: beside the fields a dressed FRONT picture, so lengths can be judged against the character: this piece's worn
+ * front view, else the dressed front of the outfit worn now (while the piece is worn), else the item's own picture —
+ * captioned with which one it is (`front_picture` of the GET; existing images only, nothing is generated). Click
+ * enlarges it. No length guide lines are drawn on it: the dressed front is an image edit whose framing (where head
+ * and feet sit in the picture) is not recorded, so a line at "the hem" would be a guess.
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
+import { thumbUrl, thumbWidth } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -40,6 +47,65 @@ interface TemplatePayload {
   default_kind?: string
   /** A172: the starting values per kind (a kind change starts from them). */
   kind_defaults?: Record<string, TemplateParams>
+  /** A186: the dressed front shown beside the fields (`source` "" = none exists). */
+  front_picture?: { source: '' | 'worn' | 'outfit' | 'item'; url: string; label?: string; earlier?: boolean } | null
+}
+
+const PICTURE_CAPTIONS: Record<string, string> = {
+  worn: 'Worn front view', outfit: 'Outfit front', item: 'Item picture',
+}
+const PICTURE_HINTS: Record<string, string> = {
+  worn: 'This piece worn by the character, front view',
+  outfit: 'The outfit dressed, front view',
+  item: 'No dressed front yet — the item’s own picture',
+}
+const PICTURE_H = 320
+/** A full-body reference that came landscape is cut to a square around its centre (the person stands there); a
+ *  T-pose view (worn front / outfit dressed front) is never cut — its arms carry the sleeves. */
+const PICTURE_W = { portrait: 210, square: PICTURE_H }
+
+/** A186: the dressed front beside the fields — small, captioned with its source, click enlarges it. */
+function FrontPicture({ picture }: { picture?: TemplatePayload['front_picture'] }) {
+  const { t } = useI18n()
+  const [big, setBig] = useState(false)
+  const [broken, setBroken] = useState(false)
+  const [wide, setWide] = useState(false)
+  const box: CSSProperties = { width: wide ? PICTURE_W.square : PICTURE_W.portrait, height: PICTURE_H, border: '1px solid var(--border, #30363d)',
+    borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+    background: 'var(--bg-subtle, #161b22)' }
+  const src = picture?.source && picture.url && !broken ? picture.url : ''
+  const caption = src ? t(picture!.earlier ? 'Outfit front (earlier outfit)' : PICTURE_CAPTIONS[picture!.source]) : ''
+  const hint = src ? [t(PICTURE_HINTS[picture!.source]), picture!.label || ''].filter(Boolean).join(' — ') : ''
+  return (
+    <figure style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: 4, flex: '0 0 auto' }}
+      data-front-picture={src ? picture?.source : 'none'}>
+      {src ? (
+        <button type="button" style={{ ...box, padding: 0, cursor: 'zoom-in' }} onClick={() => setBig(true)}
+          title={`${hint}\n${t('click to enlarge')}`}>
+          <img src={thumbUrl(src, thumbWidth(PICTURE_H))} alt={caption}
+            onError={() => setBroken(true)}
+            onLoad={(e) => setWide(e.currentTarget.naturalWidth >= 0.9 * e.currentTarget.naturalHeight)}
+            style={wide && picture!.url.includes('/reference-image/')
+              ? { width: '100%', height: '100%', objectFit: 'cover' }
+              : { maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+        </button>
+      ) : (
+        <div style={box} className="ga-hint">{t('No dressed front yet')}</div>
+      )}
+      <figcaption className="ga-form-hint" style={{ textAlign: 'center', maxWidth: wide ? PICTURE_W.square : PICTURE_W.portrait }}>
+        {src ? caption : t('Generated with the outfit’s dressed views (Figure tab)')}
+        {src && picture!.source === 'item' ? <><br />{t('No dressed front yet')}</> : null}
+      </figcaption>
+      {big && src ? createPortal(
+        <div className="ga-modal-backdrop" style={{ zIndex: 2000, cursor: 'zoom-out' }} onMouseDown={() => setBig(false)}
+          role="dialog" aria-modal="true" aria-label={caption}>
+          <img src={src} alt={caption}
+            style={{ maxWidth: '92vw', maxHeight: '92vh', objectFit: 'contain', margin: 'auto', display: 'block' }} />
+        </div>,
+        document.body,
+      ) : null}
+    </figure>
+  )
 }
 
 const GRID: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px 12px' }
@@ -168,7 +234,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
   }, [path])
   /** Re-read only the progress (after a save, a started Build, and every 3 s while a Build drapes it). */
   const reloadProgress = useCallback(() => {
-    apiGet<TemplatePayload>(path)
+    apiGet<TemplatePayload>(`${path}?picture=0`)
       .then((p) => setData((d) => (d ? { ...d, progress: p.progress, params: p.params, updated_at: p.updated_at } : p)))
       .catch(() => { /* the last known progress stays */ })
   }, [path])
@@ -221,14 +287,15 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
   const kindBuilt = !draft || !data || data.built.includes(draft.kind)
   return createPortal(
     <div className="ga-modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose() }}>
-      <div className="ga-modal" role="dialog" aria-modal="true" aria-label={title} style={{ maxWidth: 720 }}>
+      <div className="ga-modal" role="dialog" aria-modal="true" aria-label={title} style={{ maxWidth: 980 }}>
         <div className="ga-modal-header"><h3>{title}</h3></div>
         <div className="ga-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13 }}>
           {!data && !error ? <div className="ga-hint">{t('Loading…')}</div> : null}
           {data && draft ? (
-            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+              <FrontPicture picture={data.front_picture} />
               <ReferenceFigure p={draft} />
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: '1 1 340px', minWidth: 0 }}>
                 <div style={GRID}>
                   {ORDER.filter((key) => data.spec[key] && shown(key, draft, data.kind_fields || {})).map((key) => {
                     const f = data.spec[key]
