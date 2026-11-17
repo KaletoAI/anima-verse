@@ -5218,7 +5218,10 @@ def face_cleanup_state(character_name: str, signature: str) -> Dict[str, Any]:
     summary = (str(record.get("error") or "") if status == "failed"
                else str(record.get("reason") or "") if status == "skipped" and record.get("reason")
                else face_cleanup.summary(record) if record else "")
-    applied_now = status == "applied" and record.get("version") == face_cleanup.VERSION
+    # A177: a cleanup of the current version that found nothing to do (eyes not found, …) is a result, not
+    # missing work — "skipped" with this version counts as current like "applied" (Gelina: listed due after
+    # every run). The "disabled for this character" skip carries no version and stays due once switched on.
+    applied_now = status in ("applied", "skipped") and record.get("version") == face_cleanup.VERSION
     mesher_retained = bool(stored and _mesher_source(directory, signature).is_file())
     follow_up = "face_retexture" if humanoid and stored and (
         options.get("face_before_rig") or (directory / "facefix" / f"{signature}.glb").is_file()) else "rerig"
@@ -5228,7 +5231,8 @@ def face_cleanup_state(character_name: str, signature: str) -> Dict[str, Any]:
     blocked = ("Humanoid models only." if not humanoid
                else "No retained unrigged mesh — generate the model again." if not stored
                else "Switch the face cleanup on first." if not enabled
-               else "Already applied to the stored mesh." if applied_now
+               else ("Already applied to the stored mesh." if status == "applied"
+                     else "Already run on the stored mesh at this version; it found nothing to change.") if applied_now
                else MESHER_MISSING if status == "applied" and not mesher_retained
                else "A 3D model run of this character is going." if running else "")
     return {"signature": signature, "enabled": enabled, "humanoid": humanoid, "stored": stored,
