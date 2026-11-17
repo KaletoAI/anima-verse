@@ -3,12 +3,11 @@
 
 What changes for the stored data:
   1. The world default ``base_body.reference_postprocess`` (config.json of the world) is gone. A character that
-     only followed it (no own value) is UNCHECKED from now on; the script lists those characters (one line each,
-     with the operation ids it followed) and, with ``--apply``, removes the key from the world's config.json.
+     only followed it (no own value) gets those operations CHECKED explicitly — its current state, so nothing
+     becomes outdated and no job is due; the script lists those characters and, with ``--apply``, removes the key
+     from the world's config.json.
   2. A character's own ``False`` is dropped from its profile (unchecked = no entry); its own ``True`` stays.
-  3. An option whose descriptor names ``migrate_from: <op id>`` is checked for every character whose own value of
-     that operation was ``True`` and to which the option applies (``applies(profile)``) — e.g. a package that
-     split one operation into a picture step and a text option keeps the old behaviour for those characters.
+  No other option is checked: an own ``True`` stays exactly that operation.
 
 The descriptors come from the world's ENABLED packages (their manifests and ``on_load`` registration code only;
 no task, no server, no network).
@@ -55,21 +54,16 @@ def _world_default(cfg: dict) -> list:
 
 
 def plan_profile(profile: dict, available: dict, world: list) -> dict:
-    """``{"choices": new {op: True} or None (unchanged), "followed_world": [ids], "copied": [ids]}`` for one
+    """``{"choices": new {op: True} or None (unchanged), "followed_world": [ids checked from the default]}`` for one
     profile — pure, so the smoke checks it by hand."""
     from app.core import view_postprocess as vp
     raw = profile.get(vp.PROFILE_KEY)
     own = {str(k): bool(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
     followed = [op for op in world if op not in own and op in available and vp.applies(available[op], profile)]
     new = {op: True for op, v in own.items() if v}
-    copied = []
-    for op_id, desc in available.items():
-        src = desc.get("migrate_from")
-        if src and own.get(str(src)) is True and op_id not in new and vp.applies(desc, profile):
-            new[op_id] = True
-            copied.append(op_id)
+    new.update({op: True for op in followed})
     changed = new != (raw if isinstance(raw, dict) else {})
-    return {"choices": new if changed else None, "followed_world": followed, "copied": copied}
+    return {"choices": new if changed else None, "followed_world": followed}
 
 
 def main() -> int:
@@ -112,11 +106,10 @@ def main() -> int:
         plan = plan_profile(profile, available, world)
         if plan["followed_world"]:
             print(f"  {name} ({profile.get('gender') or '?'}): followed the world default "
-                  f"{plan['followed_world']} — now unchecked")
+                  f"{plan['followed_world']} — now checked explicitly")
         if plan["choices"] is None:
             continue
-        print(f"  {name}: {profile.get(vp.PROFILE_KEY)} -> {plan['choices']}"
-              + (f" (checked from migrate_from: {plan['copied']})" if plan["copied"] else ""))
+        print(f"  {name}: {profile.get(vp.PROFILE_KEY)} -> {plan['choices']}")
         if args.apply:
             with keyed_lock("character_profile", name):
                 fresh = get_character_profile(name) or {}

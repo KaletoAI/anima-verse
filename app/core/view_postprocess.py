@@ -40,9 +40,8 @@ world default any more.
 
 PROMPT-ONLY OPTIONS (A196): a descriptor without ``apply`` changes no picture; it only adds its ``edit_prompt`` /
 ``edit_negative`` (str or ``fn(profile) -> str``, Ruling A157) to the base front edit while checked. Such an option
-is offered beside the CPU operations, never processes the reference and has no preview. A descriptor may name
-``migrate_from: <op id>``: the one-time ``scripts/migrate_reference_postprocess_a196.py`` checks it for every
-character whose own choice of that operation was on (read by that script only, never at run time).
+is offered beside the CPU operations, never processes the reference and has no preview. The one-time
+``scripts/migrate_reference_postprocess_a196.py`` checks explicitly what a character followed from the old world default.
 
 A146 LEFTOVERS: A146 processed the stored base VIEWS in place, keeping their originals in
 ``model_refs/postprocessed/``. ``restore_legacy_views`` gives those originals back (first touch of the character's
