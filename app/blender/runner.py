@@ -61,7 +61,8 @@ MIN_VERSION = (5, 2)
 MAX_VERSION_EXCL = (6, 0)
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
 
-_version_cache: Dict[str, str] = {}
+#: ``(path, st_mtime_ns, st_ino)`` -> version string of a completed probe.
+_version_cache: Dict[Tuple[str, int, int], str] = {}
 
 
 def _config(path: str, default: Any) -> Any:
@@ -122,22 +123,42 @@ def find_executable() -> str:
     return _discover()[0]
 
 
+def _binary_identity(exe: str) -> Optional[Tuple[str, int, int]]:
+    """``(path, st_mtime_ns, st_ino)`` of the binary, None when it cannot be
+    stat'ed. An upgrade in place (new file, or rewritten one) changes it."""
+    try:
+        st = os.stat(shutil.which(exe) or exe)
+    except OSError:
+        return None
+    return exe, st.st_mtime_ns, st.st_ino
+
+
 def version(executable: str = "") -> str:
-    """Version string of the binary (e.g. "4.2.5 LTS"), "" if unusable."""
+    """Version string of the binary (e.g. "4.2.5 LTS"), "" if unusable.
+
+    Only a probe that ran to completion (exit 0) is cached, keyed on the
+    binary's identity: a timeout or a failed start (a host under load at boot)
+    is tried again on the next call instead of rejecting Blender until a
+    restart, and an upgrade at the same path is probed afresh."""
     exe = executable or find_executable()
     if not exe:
         return ""
-    if exe in _version_cache:
-        return _version_cache[exe]
+    key = _binary_identity(exe)
+    if key is not None and key in _version_cache:
+        return _version_cache[key]
     try:
-        out = subprocess.run([exe, "--version"], capture_output=True, text=True,
-                             timeout=30).stdout
-        first = (out.strip().splitlines() or [""])[0]
-        ver = first.replace("Blender", "").strip()
+        proc = subprocess.run([exe, "--version"], capture_output=True, text=True,
+                              errors="replace", timeout=30)
     except Exception as e:
         logger.debug("Blender version unreadable (%s): %s", exe, e)
-        ver = ""
-    _version_cache[exe] = ver
+        return ""
+    first = (proc.stdout.strip().splitlines() or [""])[0]
+    ver = first.replace("Blender", "").strip()
+    if proc.returncode != 0:
+        logger.debug("Blender version probe failed (%s): exit %d", exe, proc.returncode)
+        return ""
+    if key is not None:
+        _version_cache[key] = ver
     return ver
 
 
