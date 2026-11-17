@@ -476,6 +476,15 @@ def _clean_cutout_openings(raw) -> Dict[str, str]:
     return clean_setting(raw)
 
 
+def _clean_ghost_text(raw) -> Optional[str]:
+    """``outfit_piece.ghost_text`` (A183): the piece-only (ghost) prompt's class chosen by hand — a key of
+    ``garment_clothing.GHOST_TEXTS``; Auto (and anything else) is no key (the slots decide,
+    ``garment_clothing.ghost_text_class``). Never part of a 2D key (``_render_relevant_fields``) nor of the
+    garment fingerprint: it changes only the next ghost render's text."""
+    from app.core.garment_clothing import GHOST_TEXTS
+    return raw if isinstance(raw, str) and raw in GHOST_TEXTS else None
+
+
 def _clean_closable(raw, slots: List[str]) -> bool:
     """``outfit_piece.closable``: whether the piece can be worn open (plan
     2026-11-12-unified-worn-pieces Addendum A). A bool is kept, anything else
@@ -749,6 +758,9 @@ def add_item(name: str,
         cutout_openings = _clean_cutout_openings(outfit_piece.get("cutout_openings"))
         if cutout_openings:
             item["outfit_piece"]["cutout_openings"] = cutout_openings
+        ghost_text = _clean_ghost_text(outfit_piece.get("ghost_text"))
+        if ghost_text is not None:
+            item["outfit_piece"]["ghost_text"] = ghost_text
         lift = _lift(outfit_piece.get("lift"))
         if lift is not None:
             item["outfit_piece"]["lift"] = lift
@@ -879,6 +891,7 @@ def update_item(item_id: str,
         prev_material = prev_piece.get("material")
         prev_piece_views = prev_piece.get("piece_views")
         prev_cutout_openings = prev_piece.get("cutout_openings")
+        prev_ghost_text = prev_piece.get("ghost_text")
         # Same for ``closable``: kept when the update does not name it.
         prev_closable = prev_piece.get("closable")
         # A172: the template parameters (``garment_template.set_params``) — kept when the update does not name
@@ -929,6 +942,10 @@ def update_item(item_id: str,
                                                      else prev_cutout_openings)
             if cutout_openings:
                 item["outfit_piece"]["cutout_openings"] = cutout_openings
+            # A183, "Piece-only text": kept when the update does not name it, Auto = no key.
+            ghost_text = _clean_ghost_text(op.get("ghost_text") if "ghost_text" in op else prev_ghost_text)
+            if ghost_text is not None:
+                item["outfit_piece"]["ghost_text"] = ghost_text
             if "closable" in op:
                 item["outfit_piece"]["closable"] = _clean_closable(op.get("closable"), slots)
             elif prev_closable is not None:

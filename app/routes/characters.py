@@ -2128,6 +2128,11 @@ class PieceViewSourceRequest(BaseModel):
     choice: str
 
 
+class GhostTextRequest(BaseModel):
+    # A183: "auto" / "collar" / "waistband" / "plain" — validated by garment_clothing.set_ghost_text.
+    choice: str
+
+
 class CutoutOpeningsRequest(BaseModel):
     # Ruling A60: "front" / "back" and "auto" / "off" — validated by garment_openings.set_choice.
     view: str
@@ -2951,6 +2956,28 @@ def set_character_garment_piece_view(character_name: str, item_id: str, body: Pi
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"piece_views": garments.piece_views_info(character_name, item_id, fsig)}
+
+
+@router.post("/{character_name}/garments/{item_id}/ghost-text")
+def set_character_garment_ghost_text(character_name: str, item_id: str, body: GhostTextRequest,
+                                     _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """A183, "Piece-only text": which text the piece-only (ghost) render of an own-mesh clothing piece says —
+    ``auto`` (by the slots), ``collar`` (the inside of collar, sleeves and hem reconstructed), ``waistband`` or
+    ``plain`` (the person removed, nothing more) — on the ITEM (``garment_clothing.set_ghost_text``). Runs nothing
+    and makes nothing due: the next ghost render says it. ``{ghost_text}`` — ``garment_clothing.ghost_text_info``.
+    Admin-only. 404 for an item that is no clothing garment of the character, 400 for a bad choice."""
+    from app.core import garment_clothing, garments
+    _require_character(character_name)
+    try:
+        _item_, kind = garments._item(character_name, item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if kind != "clothing":
+        raise HTTPException(status_code=404, detail="Only an own-mesh clothing piece has a piece-only text")
+    try:
+        return {"ghost_text": garment_clothing.set_ghost_text(character_name, item_id, body.choice)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/{character_name}/garments/{item_id}/cutout-openings")

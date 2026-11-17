@@ -5263,6 +5263,11 @@ def _opening_due(view: str, due: bool, reusable: bool) -> List[Dict[str, Any]]:
             {"step": "mesh", "jobs": costs["mesh"]}, {"step": "fit", "jobs": costs["fit"]}]
 
 
+def _ghost_text_info(item: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    from app.core.garment_clothing import ghost_text_info
+    return ghost_text_info(item or {})
+
+
 def cutout_openings_info(character_name: str, item_id: str, fsig: str,
                          item: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Dict[str, Any]]]:
     """Ruling A60, the Wardrobe's "Openings from the worn view" per view: ``{view: {choice, made, opening, legacy,
@@ -5793,6 +5798,8 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
         # Ruling A46: where each piece-only view comes from (the setting, the reason, what is due).
         "piece_views": (piece_views_info(character_name, item_id, fsig, _item_, checking=checking)
                         if fsig and method == gs.EDIT_CHAIN and kind == _clothing() else None),
+        # A183: the piece-only (ghost) prompt's class — the setting, the slots' class and the texts.
+        "ghost_text": (_ghost_text_info(_item_) if fsig and method == gs.EDIT_CHAIN and kind == _clothing() else None),
         # Ruling A60: per view whether the cut-out opens where the worn view shows the body (setting, record, due).
         "cutout_openings": (cutout_openings_info(character_name, item_id, fsig, _item_)
                             if fsig and method == gs.EDIT_CHAIN and kind == _clothing() else None),

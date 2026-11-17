@@ -84,11 +84,21 @@ WORN_CLOSED = ("worn closed, its fronts fastened together at the centre (buttone
 #: / ``GHOST_KEEP`` "Keep the {noun} exactly as it is …", see git history) was
 #: measured on 2026-11-11: a back without its side drew a front and waistband
 #: legs came out straight — hence the side and stance lines after the user's text.
-GHOST = ("Remove the person completely, leaving only the clothes in the exact same position, pose, and shape "
-         "as if worn by an invisible mannequin. Reconstruct the inside of the collar, sleeves, and hem "
+#: User decision 2026-11-17 (A183): the first sentence alone is the text of a piece without a collar, sleeves or
+#: hem to reconstruct (a bra, gloves, arm / leg warmers, a belt, a harness …) — the user's tested hub jobs ae52d455
+#: (bra back) and fb597ef6 (opera gloves back) used exactly it plus the side line.
+GHOST_PLAIN = ("Remove the person completely, leaving only the clothes in the exact same position, pose, and shape "
+               "as if worn by an invisible mannequin.")
+GHOST = (GHOST_PLAIN + " Reconstruct the inside of the collar, sleeves, and hem "
          "naturally, and fill in the background behind the removed body parts seamlessly.")
 #: A waistband piece (``garment_gates.waistband_piece``, both views): its openings in place of the collar's.
 GHOST_WAISTBAND = GHOST.replace("the collar, sleeves, and hem", "the waistband and the leg openings")
+#: The ghost text classes (A183), ``ghost_text_class``: the stored choice ``outfit_piece.ghost_text`` when it names
+#: one, else by the slots — a waistband piece, a piece on ``COLLAR_SLOTS``, every other piece ``plain``.
+GHOST_TEXTS = {"collar": GHOST, "waistband": GHOST_WAISTBAND, "plain": GHOST_PLAIN}
+#: The slots whose pieces have a collar, sleeves and a hem by default (tops, dresses, jackets, coats, shirts). A bra
+#: slotted ``top`` or gloves slotted ``outer`` say so with the piece's "Piece-only text" choice (``ghost_text``).
+COLLAR_SLOTS = frozenset({"top", "outer"})
 #: After the user's text on every BACK view.
 GHOST_SIDE = {"back": "Seen from behind; the back view stays a back view."}
 #: After the user's text (and the side) on both views of a waistband piece.
@@ -267,8 +277,7 @@ def edit_prompt(character_name: str, step: str, view: str, *,
     if view == "back":
         text = _back_text_of(item)
     negative = ", ".join(t for t in (_worn_negative(text), *GHOST_NEGATIVE) if t)
-    slots = (item.get("outfit_piece") or {}).get("slots") or []
-    return ghost_prompt(slots, view), negative
+    return ghost_prompt(item.get("outfit_piece") or {}, view), negative
 
 
 def worn_text(item: Dict[str, Any], text: str, state: str) -> str:
@@ -281,18 +290,71 @@ def worn_text(item: Dict[str, Any], text: str, state: str) -> str:
     return text
 
 
-def ghost_prompt(slots, view: str) -> str:
-    """The ghost prompt of a piece with ``slots`` for ``view`` (Ruling A57):
-    the user's text (``GHOST``; a waistband piece says its waistband and
-    leg openings, ``GHOST_WAISTBAND``), then the side on a back
-    (``GHOST_SIDE``), then the stance of a waistband piece
-    (``GHOST_STANCE``)."""
+def ghost_text_class(piece: Optional[Dict[str, Any]]) -> str:
+    """The ghost text class of an ``outfit_piece`` (A183): its stored ``ghost_text`` when that names a class of
+    ``GHOST_TEXTS``; else ``waistband`` for a waistband piece (``garment_gates.waistband_piece``), ``collar`` for a
+    piece on a ``COLLAR_SLOTS`` slot, ``plain`` for every other piece."""
     from app.core.garment_gates import waistband_piece
-    waist = waistband_piece(slots)
-    parts = [GHOST_WAISTBAND if waist else GHOST]
+    piece = piece if isinstance(piece, dict) else {}
+    chosen = piece.get("ghost_text")
+    if chosen in GHOST_TEXTS:
+        return str(chosen)
+    slots = {str(s) for s in piece.get("slots") or ()}
+    if waistband_piece(slots):
+        return "waistband"
+    return "collar" if slots & COLLAR_SLOTS else "plain"
+
+
+GHOST_TEXT_AUTO = "auto"
+
+
+def ghost_text_info(item: Dict[str, Any]) -> Dict[str, Any]:
+    """The piece dialog's "Piece-only text" (A183): ``{choice, auto, effective, texts}`` — ``choice`` the stored
+    class or ``auto``, ``auto`` the class the slots give, ``effective`` the class the next ghost render says,
+    ``texts`` ``{class: {front, back}}`` the prompt of each class per view."""
+    piece = (item or {}).get("outfit_piece") or {}
+    stored = piece.get("ghost_text")
+    choice = stored if stored in GHOST_TEXTS else GHOST_TEXT_AUTO
+    auto = ghost_text_class({k: v for k, v in piece.items() if k != "ghost_text"})
+    return {"choice": choice, "auto": auto, "effective": ghost_text_class(piece),
+            "texts": {cls: {view: ghost_prompt({"ghost_text": cls}, view) for view in ("front", "back")}
+                      for cls in GHOST_TEXTS}}
+
+
+def set_ghost_text(character_name: str, item_id: str, choice: str) -> Dict[str, Any]:
+    """Store the piece's "Piece-only text" (A183; ``auto`` drops the key) in ONE read-modify-write under
+    ``keyed_lock("garment_item", character_name)``. Runs nothing and ages nothing: the text is no fingerprint
+    input, the next ghost render of the piece says it. ``ghost_text_info`` now. ValueError for a bad choice or an
+    item that is no outfit piece."""
+    from app.core.keyed_lock import keyed_lock
+    from app.models import inventory
+    if choice != GHOST_TEXT_AUTO and choice not in GHOST_TEXTS:
+        raise ValueError(f"choice must be one of {', '.join((GHOST_TEXT_AUTO, *GHOST_TEXTS))}")
+    with keyed_lock("garment_item", character_name):
+        item = inventory.get_item(item_id)
+        if not isinstance(item, dict) or item.get("category") != "outfit_piece":
+            raise ValueError(f"{str(item_id)[:80]!r} is no outfit piece")
+        piece = dict(item.get("outfit_piece") or {})
+        # None, not a missing key: ``update_item`` keeps a stored value the update does not name.
+        piece["ghost_text"] = None if choice == GHOST_TEXT_AUTO else choice
+        saved = inventory.update_item(item_id, {"outfit_piece": piece})
+        if saved is None:
+            raise ValueError(f"{str(item_id)[:80]!r} could not be saved")
+    return ghost_text_info(saved if isinstance(saved, dict) else inventory.get_item(item_id) or {})
+
+
+def ghost_prompt(piece: Optional[Dict[str, Any]], view: str) -> str:
+    """The ghost prompt of an ``outfit_piece`` for ``view`` (Ruling A57, A183):
+    the user's text of the piece's class (``ghost_text_class``: ``GHOST``,
+    ``GHOST_WAISTBAND`` or ``GHOST_PLAIN``), then the side on a back
+    (``GHOST_SIDE``), then the stance of a waistband piece
+    (``GHOST_STANCE``). The text is no fingerprint input: changing it ages
+    no stored view."""
+    cls = ghost_text_class(piece)
+    parts = [GHOST_TEXTS[cls]]
     if view in GHOST_SIDE:
         parts.append(GHOST_SIDE[view])
-    if waist:
+    if cls == "waistband":
         parts.append(GHOST_STANCE)
     return " ".join(parts)
 
