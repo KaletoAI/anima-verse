@@ -1844,7 +1844,7 @@ def postprocess_info(character_name: str, bsig: str, profile: Dict[str, Any]) ->
     front is made from a processed copy now). None when no package supplies an operation (the block is hidden)."""
     try:
         available = view_postprocess.operations()
-        if not available:
+        if not any(view_postprocess.applies(d, profile) for d in available.values()):
             return None
         own = view_postprocess.character_choices(profile)
         world = set(view_postprocess.world_default_ids())
@@ -1853,6 +1853,8 @@ def postprocess_info(character_name: str, bsig: str, profile: Dict[str, Any]) ->
         rec = state["record"] or {}
         ops = []
         for op_id, desc in available.items():
+            if not view_postprocess.applies(desc, profile):
+                continue  # Ruling A170: not offered for this character
             entry = view_postprocess.public_descriptor(desc)
             entry.update(own=own.get(op_id), world_default=op_id in world, enabled=op_id in on,
                          followup=postprocess_followup(character_name, bsig, op_id, op_id not in on,

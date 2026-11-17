@@ -123,7 +123,19 @@ def enabled_ids(profile: Optional[Dict[str, Any]], available: Optional[Dict[str,
     available = operations() if available is None else available
     own = character_choices(profile)
     world = set(world_default_ids())
-    return [op for op in available if own.get(op, op in world)]
+    return [op for op in available if applies(available[op], profile) and own.get(op, op in world)]
+
+
+def applies(desc: Dict[str, Any], profile: Optional[Dict[str, Any]]) -> bool:
+    """Ruling A170: an operation may declare ``applies`` (profile -> bool); one that does not apply to the
+    character is never on for it and is not offered — no processing, no edit text."""
+    test = desc.get("applies")
+    if not callable(test):
+        return True
+    try:
+        return bool(test(profile or {}))
+    except Exception:  # noqa: BLE001 — a package failure counts as "does not apply"
+        return False
 
 
 def set_character_choice(character_name: str, op_id: str, enabled: Optional[bool]) -> bool:
