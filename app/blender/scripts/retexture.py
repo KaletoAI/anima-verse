@@ -77,7 +77,10 @@ def retexture(args):
         # Everything below keeps the model itself identical — this step is
         # about bytes in the images, nothing else.
         export_apply=False, export_yup=True, export_skins=True,
-        export_animations=True, export_morph=True)
+        export_animations=True, export_morph=True,
+        # Material and node extras carry markers (a procedural part's
+        # ``attached_part``) that the readers of the base colour rely on.
+        export_extras=True)
 
     before = Path(src).stat().st_size
     after = out.stat().st_size
