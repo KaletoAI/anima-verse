@@ -24,10 +24,13 @@ except ValueError:
     pass
 assert fs.recorded({"inputs": {"fit_settings": {}}})["shell_offset"] == 4
 rec = {"inputs": {"fit_settings": {}, "mesh_shape": "shell"}}
-fs.current_shape = lambda settings, item_id: settings.get("mesh_shape") if settings.get("mesh_shape") != "auto" else "shell"
-prof = {fs.SETTINGS_KEY: {"x": {"shell_offset": 10, "mesh_shape": "shell"}}}
+# A168: the shape is the item's mode (no setting) — stand in for the item's mode here.
+MODE = {"x": "shell"}
+fs.current_shape = lambda settings, item_id: MODE[item_id]
+prof = {fs.SETTINGS_KEY: {"x": {"shell_offset": 10}}}
 assert fs.changed(rec, prof, "x") is True
-rec2 = {"inputs": {"fit_settings": {"mesh_shape": "as_generated"}}}
-prof2 = {fs.SETTINGS_KEY: {"x": {"shell_offset": 10, "mesh_shape": "as_generated"}}}
+MODE["x"] = "as_generated"
+rec2 = {"inputs": {"fit_settings": {}, "mesh_shape": "as_generated"}}
+prof2 = {fs.SETTINGS_KEY: {"x": {"shell_offset": 10}}}
 assert fs.changed(rec2, prof2, "x") is False
 print("OK smoke_shell_offset")
