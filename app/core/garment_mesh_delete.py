@@ -4,7 +4,8 @@ Two actions, both admin-only through ``routes/characters.py`` and both spending 
 
 - ``delete_mesh(n)``: one tile of the Mesh row of the piece's worn state. ``n`` > 0 is a KEPT mesh (Ruling A58: its
   slot files ``attempts/mesh/{item}_{fsig}.try{n}[.raw].glb`` and its ``kept`` entry in the step record go). ``n`` = 0
-  is the mesh IN USE and needs ``in_use=True`` (the dialog's confirmation): its prepared + raw GLB go and the step
+  is the mesh IN USE and needs ``in_use=True`` (the dialog's confirmation; A171: not for a piece in mode Shell from the
+  body, whose fit never reads the generated mesh — deleting it changes nothing that is served): its prepared + raw GLB go and the step
   record keeps only the kept list — the Mesh row reads ``missing``, so the mesh step is due; the fit stays served
   (like ``garments._drop_mesh``: it reads as outdated until the next fit).
 - ``delete_all(include_images)``: every stored file of the piece's fingerprint groups (``garment_store.stored_groups``
@@ -124,7 +125,10 @@ def delete_mesh(character_name: str, item_id: str, n: int, *, in_use: bool = Fal
     _clothing_item(character_name, item_id)
     if isinstance(n, bool) or not isinstance(n, int) or not 0 <= n <= garment_mesh.KEPT_MAX:
         raise ValueError(f"mesh slot must be 0..{garment_mesh.KEPT_MAX}")
-    if n == 0 and not in_use:
+    from app.core import garments
+    # A171: a shell piece's generated mesh is not in use (the fit builds the shell from the body) — no confirmation.
+    generated_in_use = garments.generated_or_shell(item_id) == "generated"
+    if n == 0 and generated_in_use and not in_use:
         raise InUseNeedsConfirm("Deleting the mesh in use needs the confirmation")
     root = gs.garments_dir(character_name)
     fsig = gs.garment_fsig(character_name, item_id)
@@ -157,8 +161,9 @@ def delete_mesh(character_name: str, item_id: str, n: int, *, in_use: bool = Fal
             else:
                 deleted += _unlink(root, record_path)
     logger.info("garment mesh %s/%s: deleted %s (%d files)", character_name, item_id,
-                "the mesh in use" if n == 0 else f"kept mesh {n}", deleted)
-    return {"item_id": item_id, "n": n, "deleted": deleted, "in_use": n == 0,
+                ("the mesh in use" if generated_in_use else "the unused generated mesh") if n == 0
+                else f"kept mesh {n}", deleted)
+    return {"item_id": item_id, "n": n, "deleted": deleted, "in_use": n == 0 and generated_in_use,
             "follow_up": _estimate(character_name, item_id)}
 
 

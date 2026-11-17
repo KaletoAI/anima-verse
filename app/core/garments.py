@@ -4643,6 +4643,16 @@ def _earlier_meshes(character_name: str, item_id: str, fsig: str) -> List[Dict[s
     return out
 
 
+def generated_or_shell(item_id: str) -> str:
+    """A171: the mesh a clothing piece's fit uses — ``"shell"`` when its mode is Shell from the body
+    (``garment_shell.shape_of``: the fit builds the shell from the body and never reads the generated mesh), else
+    ``"generated"``."""
+    from app.core import garment_shell
+    from app.models.inventory import get_item
+    return "shell" if garment_shell.shape_of(get_item(item_id) if item_id else None) == garment_shell.SHELL \
+        else "generated"
+
+
 def _mesh_view_info(character_name: str, item_id: str, fsig: str, record: Dict[str, Any], *,
                     accepted: bool) -> Dict[str, Any]:
     """The Mesh row's 3D view (Ruling A48a, ``garment_mesh_view``): ``{prepared, raw, shell, attempts}`` — each mesh
@@ -4676,6 +4686,9 @@ def _mesh_view_info(character_name: str, item_id: str, fsig: str, record: Dict[s
         "raw": file(garment_path(character_name, item_id, fsig, "raw"), "raw", 0, record.get("tris_raw")),
         # Ruling A48d: the shell from the body the last shell fit made (on the base body), beside the generated mesh
         "shell": file(garment_path(character_name, item_id, fsig, "shell"), "shell", 0, None),
+        # A171: which mesh the fit uses — "shell" for a piece in mode Shell from the body (its generated mesh, if
+        # one is stored, is not read and may be deleted freely), else "generated".
+        "in_use": generated_or_shell(item_id),
         "attempts": [],
     }
     block = _mesh_use_block(character_name, item_id)
