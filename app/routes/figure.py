@@ -327,11 +327,12 @@ def _template_item(character_name: str, item_id: str) -> Dict[str, Any]:
 
 
 @router.get("/{character_name}/figure/template/{item_id}")
-def get_template_params(character_name: str, item_id: str,
+def get_template_params(character_name: str, item_id: str, picture: bool = True,
                         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     from app.core import garment_template as gt
     item = _template_item(character_name, item_id)
     stored = gt.template_of(item)
+    progress = gt.piece_progress(character_name, item_id, item=item)
     spec = {}
     for key, (kind, rule, default) in gt.PARAM_SPEC.items():
         spec[key] = ({"type": "choice", "choices": list(rule), "default": default} if kind == "choice"
@@ -345,7 +346,58 @@ def get_template_params(character_name: str, item_id: str,
             "kind_defaults": {k: gt.kind_defaults(k) for k in gt.KINDS},
             "cost": {"llm_calls": 1, "hub_jobs": 0, "cpu_s": gt.CPU_ESTIMATE_S},
             # A168: this character's drape of the piece — state, reason and the step list (``piece_progress``)
-            "progress": gt.piece_progress(character_name, item_id, item=item)}
+            "progress": progress,
+            # A186: the dressed front picture beside the fields (existing images only, nothing generated)
+            # (``picture=0``: the dialog's progress poll, which keeps the picture it has)
+            "front_picture": (_front_picture(character_name, item_id, item, worn=bool(progress.get("worn")))
+                              if picture else None)}
+
+
+def _front_picture(character_name: str, item_id: str, item: Dict[str, Any], *, worn: bool) -> Dict[str, Any]:
+    """A186: the picture the template dialog shows beside its fields — the first that exists of: this piece's
+    worn front view (the clothing chain's ``worn`` step), the dressed front of the outfit worn now (only while the
+    piece is worn and painted into it — its sidecar says so), the full-body reference of the outfit worn now or of the newest earlier
+    outfit with this piece (``earlier``), the item's own picture. ``{source ("worn" / "outfit" / "item" / ""),
+    url}``; existing files only, nothing is generated."""
+    from urllib.parse import quote
+    enc, item_enc = quote(character_name, safe=""), quote(item_id, safe="")
+    try:
+        from app.core import garments
+        path = garments.image_path(character_name, item_id, "worn", "front")
+        if path is not None and path.is_file():
+            return {"source": "worn", "url": f"/characters/{enc}/garments/{item_enc}/images/worn/front"}
+    except Exception:   # no garment of this character / no worn step: the next source
+        pass
+    if worn:
+        try:
+            import json
+            from app.core.model_refs import find_ref_image
+            path = find_ref_image(character_name, "tpose")
+            meta = json.loads(path.with_suffix(".json").read_text(encoding="utf-8")) if path is not None else None
+            # only a front that shows the piece: dressed, and the piece painted into it (a template / own-mesh piece
+            # is left out of the dressed front's text — that front shows the body without it)
+            if isinstance(meta, dict) and meta.get("dressed") is not False \
+                    and item_id not in ((meta.get("mesh_items") or {}).get("unpainted") or []):
+                return {"source": "outfit", "url": f"/characters/{enc}/model-refs/tpose"}
+        except Exception:
+            pass
+    # the full-body reference picture of an outfit with this piece: the outfit worn now first, then the newest
+    # earlier one — only one whose pieces name it (a record keeps the painted pieces' names, not the ids)
+    try:
+        from app.core import outfit_references
+        ref = outfit_references.info(character_name)
+        name = str(item.get("name") or "").strip()
+        candidates = [{"label": ref.get("label") or "", "url": ref.get("url") or ""}] + list(ref.get("others") or [])
+        for i, cand in enumerate(candidates):
+            parts = [x.strip() for x in str(cand.get("label") or "").split(",")]
+            if cand.get("url") and name and name in parts and (i > 0 or worn):
+                return {"source": "outfit", "url": str(cand["url"]), "label": str(cand.get("label") or ""),
+                        "earlier": i > 0}
+    except Exception:
+        pass
+    if item.get("image"):
+        return {"source": "item", "url": f"/inventory/items/{item_enc}/image"}
+    return {"source": "", "url": ""}
 
 
 @router.post("/{character_name}/figure/template/{item_id}/suggest")
