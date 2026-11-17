@@ -90,6 +90,7 @@ def child(spec):
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     runner.subprocess = types.SimpleNamespace(run=fake_run, TimeoutExpired=subprocess.TimeoutExpired,
+                                              SubprocessError=subprocess.SubprocessError,
                                               CompletedProcess=subprocess.CompletedProcess)
     model = Path(spec["model"])
 

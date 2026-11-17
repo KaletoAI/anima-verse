@@ -323,10 +323,19 @@ def blender_slot(label: str = "") -> Iterator[None]:
             os.close(fd)  # closing the descriptor drops the flock
 
 
+def _tail(data: Any) -> str:
+    """The last ``LOG_TAIL_CHARS`` of a captured stream (str, bytes or None)."""
+    if isinstance(data, bytes):
+        data = data.decode("utf-8", errors="replace")
+    return (data or "")[-LOG_TAIL_CHARS:]
+
+
 def _spawn(cmd: List[str], timeout: int, env: Dict[str, str]) -> subprocess.CompletedProcess:
-    """The one Blender subprocess (a seam the limit smoke stubs)."""
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                          env=env, start_new_session=True)
+    """The one Blender subprocess (a seam the limit smoke stubs). Output that
+    is not valid in the locale encoding (imported asset names) is replaced,
+    never raised."""
+    return subprocess.run(cmd, capture_output=True, text=True, errors="replace",
+                          timeout=timeout, env=env, start_new_session=True)
 
 
 def run(script: str, *, inputs: Optional[Dict[str, Path]] = None,
@@ -375,15 +384,21 @@ def run(script: str, *, inputs: Optional[Dict[str, Path]] = None,
                 return {"ok": False, "error": f"input '{slot}' not found: {src}",
                         "data": {}, "outputs": {}, "seconds": 0.0}
             dst = in_dir / f"{slot}{src.suffix.lower()}"
-            shutil.copy2(src, dst)
-            slots[slot] = str(dst)
-            # An FBX carries its texture as a sibling file, not embedded — copy
-            # a same-stem image along so the script can find it.
-            for ext in (".png", ".jpg", ".jpeg"):
-                tex = src.with_suffix(ext)
-                if tex.is_file():
-                    shutil.copy2(tex, dst.with_suffix(ext))
-                    break
+            try:
+                shutil.copy2(src, dst)
+                slots[slot] = str(dst)
+                # An FBX carries its texture as a sibling file, not embedded —
+                # copy a same-stem image along so the script can find it.
+                for ext in (".png", ".jpg", ".jpeg"):
+                    tex = src.with_suffix(ext)
+                    if tex.is_file():
+                        shutil.copy2(tex, dst.with_suffix(ext))
+                        break
+            except OSError as e:
+                # The store file was replaced or purged after the check above.
+                logger.warning("Blender %s: input '%s' unreadable: %s", script, slot, e)
+                return {"ok": False, "error": f"input '{slot}' unreadable: {e}",
+                        "data": {}, "outputs": {}, "seconds": 0.0}
 
         result_file = job / "result.json"
         args_file = job / "args.json"
@@ -409,14 +424,20 @@ def run(script: str, *, inputs: Optional[Dict[str, Path]] = None,
             from app.core import cpu_progress
             with blender_slot(script), cpu_progress.attach(f"blender:{script}", progress_file):
                 proc = _spawn(cmd, timeout, env)
-        except subprocess.TimeoutExpired:
-            logger.error("Blender %s: timeout after %ds", script, timeout)
+        except subprocess.TimeoutExpired as exc:
+            logger.error("Blender %s: timeout after %ds\n%s", script, timeout,
+                         _tail(exc.stderr) or _tail(exc.stdout))
             return {"ok": False, "error": f"timeout after {timeout}s",
+                    "data": {}, "outputs": {}, "seconds": time.time() - started}
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            # The binary vanished or lost +x since discovery, or the start failed.
+            logger.error("Blender %s: could not run %s: %s", script, st["executable"], exc)
+            return {"ok": False, "error": f"blender could not be started: {exc}",
                     "data": {}, "outputs": {}, "seconds": time.time() - started}
 
         seconds = time.time() - started
         if not result_file.is_file():
-            tail = (proc.stderr or proc.stdout or "")[-LOG_TAIL_CHARS:]
+            tail = _tail(proc.stderr) or _tail(proc.stdout)
             logger.error("Blender %s: no result (exit %d)\n%s",
                          script, proc.returncode, tail)
             return {"ok": False,
