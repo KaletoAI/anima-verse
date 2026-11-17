@@ -14,7 +14,8 @@ rings every 0.01 m from y = 0 to 0.80 -> 80 bands of 32 triangles; a band k (0..
 y = (k + 0.5) cm (two of three corners on one ring, one on the other: (2k + (k+1))/3 or (k + 2(k+1))/3 -> k + 1/3 or
 k + 2/3 cm; the rule only needs which side of a whole-centimetre threshold they lie on).
 
-Constants: SHOE_TOP_M = SHAFT_CLASS_M["knee"] 0.48, OVERLAP_M 0.20 -> CUT_M 0.28.
+Constants: SHOE_TOP_M = SHAFT_CLASS_M["knee"] 0.48; [S1]..[S5] pass overlap_m 0.20 explicitly (the A122 rule)
+-> cut 0.28; the default overlap since A177 is 10 cm ([S8]).
 
 Expected, by hand:
 [S1] faces per side: shoe = bands with centroid <= 0.48 -> k = 0..47 = 48 bands = 1536; leg (split) = centroid >=
@@ -35,6 +36,13 @@ Expected, by hand:
      -> (largest 0.5, False).
 [S7] settings: normalise({}) shaft "split"; validate({"shaft": "cut"}) -> {"shaft": "cut"}; "keep" -> ValueError;
      applies: feet+legs True, feet False, legs False.
+[S8] (A177) default overlap 10 cm: split(..) without overlap_m -> cut 0.38: leg bands k = 38..79 = 42 bands = 1344
+     per side, 2688 total; overlap k = 38..47 = 10 bands = 320 per side, 640 total; report cut_mm 380, overlap_mm
+     100. Settings: normalise({})["shaft_overlap"] 10; validate({"shaft_overlap": 15}) -> 15; 1, 31, 7.5, True and
+     "10" -> ValueError; overlap_cm({"shaft_overlap": 99}) -> 30 (clamped), ({}) -> 10.
+[S9] (A177) push_exempt on the boot pair with ring spacing 0.0099 m (ring i at h = 0.0099 i; ring 48 at 0.4752 <=
+     0.48, ring 49 at 0.4851 > 0.48) and translated by (0.3, 1.0, 0.2) (the rule is frame-free): split -> rings
+     0..48 = 49 rings x 16 x 2 sides = 1568 of 2592 vertices; cut -> all 2592.
 """
 import math
 import sys
@@ -104,7 +112,7 @@ def boot():
 
 B = body()
 for mode in ("split", "cut"):
-    g, rep = garment_shaft.split(boot(), B, JOINTS, mode)
+    g, rep = garment_shaft.split(boot(), B, JOINTS, mode, overlap_m=0.20)
     f = rep["faces"]
     if mode == "split":
         check("[S1] split faces", (f["shoe"], f["leg"], f["overlap"], f["dropped"]) == (3072, 3328, 1280, 0), str(f))
@@ -195,6 +203,27 @@ except ValueError:
     check("[S7] bad value refused", True)
 check("[S7] applies", garment_shaft.applies(["feet", "legs"]) and not garment_shaft.applies(["feet"])
       and not garment_shaft.applies(["legs"]))
+
+_g, rep = garment_shaft.split(boot(), B, JOINTS, "split")
+f = rep["faces"]
+check("[S8] default overlap faces", (f["leg"], f["overlap"]) == (2688, 640), str(f))
+check("[S8] default overlap report", (rep["cut_mm"], rep["overlap_mm"]) == (380, 100), str(rep["cut_mm"]))
+check("[S8] normalise default 10", garment_fit_settings.normalise({})["shaft_overlap"] == 10)
+check("[S8] validate 15", garment_fit_settings.validate({"shaft_overlap": 15}) == {"shaft_overlap": 15})
+for bad in (1, 31, 7.5, True, "10"):
+    try:
+        garment_fit_settings.validate({"shaft_overlap": bad}); check(f"[S8] {bad!r} refused", False)
+    except ValueError:
+        check(f"[S8] {bad!r} refused", True)
+check("[S8] overlap_cm clamps / defaults", garment_shaft.overlap_cm({"shaft_overlap": 99}) == 30
+      and garment_shaft.overlap_cm({}) == 10)
+
+g9 = boot()
+P9 = np.asarray(g9.positions, np.float64) * np.array([1.0, 0.99, 1.0]) + np.array([0.3, 1.0, 0.2])
+ex = garment_shaft.push_exempt(P9, g9.indices, "split")
+check("[S9] split exempts rings 0..48", int(ex.sum()) == 1568 and len(ex) == 2592, f"{int(ex.sum())} / {len(ex)}")
+ex = garment_shaft.push_exempt(P9, g9.indices, "cut")
+check("[S9] cut exempts all", int(ex.sum()) == 2592, str(int(ex.sum())))
 
 print("FAILED: " + ", ".join(FAILS) if FAILS else "all passed")
 sys.exit(1 if FAILS else 0)

@@ -14,8 +14,10 @@ fitted pair afterwards (``split``), on the CPU, from the same prepared mesh (a r
   ``footwear_fit.SPLIT_BAND_M`` the foot part on the side's Foot / ToeBase only, above the ankle plus the band the
   shaft on the side's Leg / UpLeg only (``garment_fit.clothing_weights`` with ``columns``), smoothstep across the
   band.
-- **Leg part** (``split`` only) — every face whose centroid lies at ``h >= CUT_M`` = ``SHOE_TOP_M - OVERLAP_M``:
-  the shaft above the cut, and the ``OVERLAP_M`` (0.20 m, the user's rule) below the shoe top a second time. It is
+- **Leg part** (``split`` only) — every face whose centroid lies at ``h >= cut_m(overlap)`` = ``SHOE_TOP_M -
+  overlap``: the shaft above the cut, and the overlap below the shoe top a second time. The overlap is the piece's fit
+  setting ``shaft_overlap`` (cm, ``OVERLAP_CM_DEFAULT`` 10 — the user's rule of 2026-11-17, A177; it was a fixed
+  20 cm under A122). It is
   skinned to its OWN leg only (Leg / UpLeg of its side) by the same call as the shoe's shaft, so in the overlap both
   parts carry the same weights at the same points and move together in every pose: no seam can open where they
   meet. The leg part stands ``LEG_OVER_M`` outward along its normals (turned away from the nearest body point) so
@@ -23,7 +25,11 @@ fitted pair afterwards (``split``), on the CPU, from the same prepared mesh (a r
 - **cut** (``SHAFT_CHOICES``) — the shoe part only: everything above the shoe top is dropped.
 
 The pair-aware component gate (``garment_fit.pair_share``) judges the fitted pair before the split; the split's
-numbers go to ``report["shaft"]``.
+numbers go to ``report["shaft"]``. The unrigged PUSH gates (``deep_push_share``, ``max_push_m``) leave out what the
+clothing push does not decide (``push_exempt``, A177): the shoe part — rigid, on the foot joints, standing off the
+foot by its heel and sole as a shoe does (the footwear path has no push gate) — and, with ``cut``, the dropped shaft.
+Glut's thigh-high boots were refused there (deep push 0.1244 > 0.12, 1414 of the 2492 deep vertices in the shoe
+part), so neither the split nor the cut was ever published. The rigged gates still judge every vertex.
 """
 from __future__ import annotations
 
@@ -35,8 +41,9 @@ import numpy as np
 SPLIT = "split"
 CUT = "cut"
 SHAFT_CHOICES: Tuple[str, ...] = (SPLIT, CUT)
-#: The overlap of leg part and shoe part (the user's rule: "mit 20 cm Überlappung").
-OVERLAP_M = 0.20
+#: The overlap of leg part and shoe part, fit setting ``shaft_overlap`` in cm (A177: the user's 10 cm; bounds).
+OVERLAP_CM_DEFAULT = 10
+OVERLAP_CM_MIN, OVERLAP_CM_MAX = 2, 30
 #: How far the leg part stands outside the shoe part (along its normals).
 LEG_OVER_M = 0.002
 
@@ -49,9 +56,39 @@ def shoe_top_m() -> float:
     return float(SHAFT_CLASS_M["knee"])
 
 
-def cut_m() -> float:
-    """Where the leg part begins: the shoe top minus the overlap."""
-    return shoe_top_m() - OVERLAP_M
+def overlap_cm(settings: Optional[Dict[str, Any]]) -> int:
+    """The piece's fit setting ``shaft_overlap`` (cm); missing or invalid = ``OVERLAP_CM_DEFAULT``."""
+    value = (settings or {}).get("shaft_overlap")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return OVERLAP_CM_DEFAULT
+    return int(min(max(round(value), OVERLAP_CM_MIN), OVERLAP_CM_MAX))
+
+
+def cut_m(overlap: float = OVERLAP_CM_DEFAULT / 100.0) -> float:
+    """Where the leg part begins: the shoe top minus the overlap (metres)."""
+    return shoe_top_m() - overlap
+
+
+def push_exempt(P: np.ndarray, F: np.ndarray, mode: str) -> np.ndarray:
+    """Per vertex of a placed pair (metres; any frame with y up): True where the clothing push gates do not judge
+    (module docstring, A177) — the shoe region (``h <= shoe_top_m()`` above its side's sole) and, with ``CUT``,
+    everything above it too. Sides by component centroid against the pair's area-weighted x centre (frame-free:
+    the unrigged placement has no foot joints)."""
+    from app.core.garment_fit import triangle_areas
+    P = np.asarray(P, np.float64)
+    F = np.asarray(F, np.int64).reshape(-1, 3)
+    if not len(P) or not len(F):
+        return np.zeros(len(P), bool)
+    area = triangle_areas(P, F)
+    cx = (P[F[:, 0], 0] + P[F[:, 1], 0] + P[F[:, 2], 0]) / 3.0
+    mid = float((area * cx).sum() / max(float(area.sum()), 1e-18))
+    side = sides_of(P, F, mid + 1.0, mid - 1.0)
+    h = np.zeros(len(P))
+    for s in ("left", "right"):
+        on = side == s
+        if on.any():
+            h[on] = P[on, 1] - P[on, 1].min()
+    return np.ones(len(P), bool) if mode == CUT else h <= shoe_top_m()
 
 
 def applies(slots: Optional[Sequence[str]]) -> bool:
@@ -94,7 +131,8 @@ def sides_of(P: np.ndarray, F: np.ndarray, left_x: float, right_x: float) -> np.
     return np.where(np.abs(comp_x[labels] - left_x) <= np.abs(comp_x[labels] - right_x), "left", "right")
 
 
-def split(garment, body, joints: Dict[str, np.ndarray], mode: str) -> Tuple[Any, Dict[str, Any]]:
+def split(garment, body, joints: Dict[str, np.ndarray], mode: str,
+          overlap_m: float = OVERLAP_CM_DEFAULT / 100.0) -> Tuple[Any, Dict[str, Any]]:
     """The fitted pair ``garment`` (``glb_mesh.GarmentMesh`` on the rigged ``body``; ``joints`` =
     ``glb_mesh.joint_bind_matrices`` of the rigged body) as shoe part + leg part (``SPLIT``) or shoe part alone
     (``CUT``) — module docstring. Returns ``(new GarmentMesh, report)``."""
@@ -107,7 +145,7 @@ def split(garment, body, joints: Dict[str, np.ndarray], mode: str) -> Tuple[Any,
     ankles = {s: np.asarray(joints[f"{s}foot"], np.float64)[:3, 3] for s in ("left", "right")}
     knees = {s: np.asarray(joints[f"{s}leg"], np.float64)[:3, 3] for s in ("left", "right")}
     side = sides_of(P, F, float(ankles["left"][0]), float(ankles["right"][0]))
-    top, cut = shoe_top_m(), cut_m()
+    top, cut = shoe_top_m(), cut_m(overlap_m)
     h = np.zeros(len(P))
     floors: Dict[str, float] = {}
     for s in ("left", "right"):
@@ -188,7 +226,7 @@ def split(garment, body, joints: Dict[str, np.ndarray], mode: str) -> Tuple[Any,
                       mr_mime=garment.mr_mime)
     report: Dict[str, Any] = {
         "mode": mode, "shoe_top_mm": round(top * 1000.0), "cut_mm": round(cut * 1000.0) if mode == SPLIT else None,
-        "overlap_mm": round(OVERLAP_M * 1000.0) if mode == SPLIT else 0,
+        "overlap_mm": round(overlap_m * 1000.0) if mode == SPLIT else 0,
         "faces": {"in": int(len(F)), "shoe": int(shoe_f.sum()), "leg": int(leg_f.sum()),
                   "overlap": int((shoe_f & leg_f).sum()), "dropped": int((~shoe_f & ~leg_f).sum())},
         "sides": {s: {"shoe_faces": int((shoe_f & (face_side == s)).sum()),

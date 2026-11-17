@@ -2114,6 +2114,8 @@ class GarmentFitSettingsRequest(BaseModel):
     trunk: Any = None
     # Ruling A122: split / cut — a boot past the knee: a leg part over the shoe, or cut off at the shoe top
     shaft: Any = None
+    # A177: cm the leg part reaches into the shoe part (garment_shaft.OVERLAP_CM_MIN..MAX)
+    shaft_overlap: Any = None
     # A166: mm a shell stands off the skin (garment_shell.SHELL_OFFSET_CHOICES)
     shell_offset: Any = None
 

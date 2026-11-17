@@ -5366,8 +5366,10 @@ def shaft_view(record: Dict[str, Any], current: Dict[str, Any], item_id: str) ->
         return None
     return {"setting": current.get("shaft", garment_shaft.SPLIT), "choices": list(garment_shaft.SHAFT_CHOICES),
             "shoe_top_mm": round(garment_shaft.shoe_top_m() * 1000.0),
-            "cut_mm": round(garment_shaft.cut_m() * 1000.0),
-            "overlap_mm": round(garment_shaft.OVERLAP_M * 1000.0),
+            "cut_mm": round(garment_shaft.cut_m(garment_shaft.overlap_cm(current) / 100.0) * 1000.0),
+            "overlap_mm": garment_shaft.overlap_cm(current) * 10,
+            "overlap_cm": garment_shaft.overlap_cm(current),
+            "overlap_range_cm": [garment_shaft.OVERLAP_CM_MIN, garment_shaft.OVERLAP_CM_MAX],
             "made": (record.get("report") or {}).get("shaft"), "cost": {"hub_jobs": 0, "where": "cpu"}}
 
 

@@ -16,8 +16,10 @@ may add — ``garment_fit.fit_clothing``'s ``settings``:
   "generated" (as generated) or "fitted" (laid onto the body, ``garment_fit.place_trunk``; before the depth
   allowance).
 - ``shaft`` (Ruling A122): ``garment_shaft.SHAFT_CHOICES`` — a piece on the feet AND the legs (a boot past the
-  knee): "split" (the default; a shoe part and a leg part that overlaps it by 20 cm) or "cut" (the shoe part
+  knee): "split" (the default; a shoe part and a leg part that overlaps it) or "cut" (the shoe part
   only, everything above the shoe top dropped). Ignored for every other piece.
+- ``shaft_overlap`` (A177): cm the leg part reaches down into the shoe part with ``split``
+  (``garment_shaft.OVERLAP_CM_MIN``..``OVERLAP_CM_MAX``, default ``OVERLAP_CM_DEFAULT`` 10). Ignored elsewhere.
 The mesh shape (Ruling A48d) is no setting: the item's mode decides it (``garment_shell.shape_of``: mode ``shell``
 → the shell from the body, else as generated). The fit records the shape it made (``inputs.mesh_shape``); a fit whose
 made shape is not the current one is due (``changed``).
@@ -40,7 +42,7 @@ SIDES = ("left", "right")
 def defaults() -> Dict[str, Any]:
     from app.core.garment_shell import SHELL_OFFSET_DEFAULT
     return {"sleeves_left": "auto", "sleeves_right": "auto", "allowance": "auto", "depth": 0, "trunk": "auto",
-            "shaft": "split", "shell_offset": SHELL_OFFSET_DEFAULT}
+            "shaft": "split", "shaft_overlap": 10, "shell_offset": SHELL_OFFSET_DEFAULT}
 
 
 def normalise(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -57,6 +59,7 @@ def normalise(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     out["trunk"] = garment_fit.trunk_choice(raw)
     from app.core import garment_shaft
     out["shaft"] = garment_shaft.shaft_choice(raw)
+    out["shaft_overlap"] = garment_shaft.overlap_cm(raw)
     from app.core import garment_shell
     out["shell_offset"] = garment_shell.shell_offset_choice(raw)
     return out
@@ -132,6 +135,13 @@ def validate(changes: Dict[str, Any]) -> Dict[str, Any]:
             if not isinstance(value, str) or value not in garment_shaft.SHAFT_CHOICES:
                 raise ValueError(f"shaft must be one of {', '.join(garment_shaft.SHAFT_CHOICES)}")
             out[key] = value
+        elif key == "shaft_overlap":
+            from app.core import garment_shaft
+            if (isinstance(value, bool) or not isinstance(value, (int, float)) or int(value) != value
+                    or not garment_shaft.OVERLAP_CM_MIN <= value <= garment_shaft.OVERLAP_CM_MAX):
+                raise ValueError(f"shaft_overlap must be a whole number of cm from {garment_shaft.OVERLAP_CM_MIN} "
+                                 f"to {garment_shaft.OVERLAP_CM_MAX}")
+            out[key] = int(value)
         elif key == "shell_offset":
             from app.core import garment_shell
             if (isinstance(value, bool) or not isinstance(value, (int, float))
