@@ -2144,140 +2144,239 @@ def _resume_sleep(run):
     _commit(run, ("success",))
 
 
+#: Runs whose scheduler step raised: execution_id -> (consecutive failures,
+#: SYSTEM monotonic stamp of the last one). A step's effects and progress
+#: share one transaction, so a failed step rolled back and is simply tried
+#: again — a passing fault (a busy database) costs nothing. STEP_FAIL_LIMIT
+#: failures in a row end the run (``_abort_failed_step``); ``due_in_s`` gives
+#: a failed run no beat for STEP_RETRY_S, so the travel ticker never retries
+#: it on its 0.1 s overdue beat.
+_STEP_FAILED: dict = {}
+STEP_FAIL_LIMIT = 3
+STEP_RETRY_S = 5.0
+#: Terminal runs whose pending cleanup raised, and runs whose end itself
+#: failed (each logged once).
+_CLEANUP_FAILED: set = set()
+_END_FAILED: set = set()
+
+
+def _step_failed(execution_id):
+    """Book one failed step of ``execution_id`` (inside ``advance``'s except
+    branch); the traceback is logged for the first failure in a row only.
+    The limit reached, the run is ended."""
+    count = _STEP_FAILED.get(execution_id, (0, 0.0))[0] + 1
+    _STEP_FAILED[execution_id] = (count, time.monotonic())
+    if count == 1:
+        logger.exception("prop action %s: step failed, retried (ended after %d failures in a row)",
+                         execution_id, STEP_FAIL_LIMIT)
+    if count >= STEP_FAIL_LIMIT:
+        _abort_failed_step(execution_id)
+
+
+def _abort_failed_step(execution_id):
+    """End a run whose step kept failing, so it neither keeps its claims nor
+    its people.
+
+    The regular end first (``_finish`` "failed"/"engine_error": final
+    effects, claim release, cleanup). When that raises as well — its final
+    effect commit reads the same state that keeps failing — the run is ended
+    WITHOUT effects: the terminal save drops its claims in the same write,
+    and ``_cleanup`` releases the people (a cleanup that raises stays
+    pending and ``advance`` retries it). A run that cannot even be saved
+    terminal keeps its failure record and is tried again by the next
+    ``advance`` (``due_in_s`` still holds its beat back for STEP_RETRY_S)."""
+    try:
+        with _lock(execution_id):
+            run = store.get(execution_id)
+            if run and run["status"] not in store.TERMINAL:
+                logger.warning("prop action %s: step failed %d times in a row, ending the run",
+                               execution_id, STEP_FAIL_LIMIT)
+                try:
+                    _finish(run, "failed", "engine_error")
+                except Exception:
+                    logger.exception("prop action %s: regular end failed, ending it without effects",
+                                     execution_id)
+                run = store.get(execution_id)
+                if run and run["status"] not in store.TERMINAL:
+                    run.update(status="failed", reason="engine_error")
+                    run["data"]["cleanup_pending"] = True
+                    _end_finales(execution_id)
+                    _save(run)
+                    try:
+                        _cleanup(run)
+                    except Exception:
+                        # Saved terminal with cleanup_pending: advance retries it.
+                        _CLEANUP_FAILED.add(execution_id)
+                        logger.exception("prop action %s: cleanup failed, retried each tick",
+                                         execution_id)
+        _STEP_FAILED.pop(execution_id, None)
+        _END_FAILED.discard(execution_id)
+    except Exception as exc:
+        _STEP_FAILED[execution_id] = (STEP_FAIL_LIMIT, time.monotonic())
+        if execution_id not in _END_FAILED:
+            _END_FAILED.add(execution_id)
+            logger.warning("prop action %s: could not end the run (%s), tried again next tick",
+                           execution_id, exc)
+
+
 def advance(now: GameTime) -> int:
     """One scheduler step over every live run. Besides the run lifecycle it
     drops expired finales and, after every lock, fires
     ``prop_action.active(execution_id, members, pose_key, delta_game_s)`` for
     each run that spent online game time active — the beat a package counts
-    on (a frozen world and offline time give none)."""
+    on (a frozen world and offline time give none).
+
+    Each run steps on its own: one that raises is rolled back, logged and
+    retried, the others still advance; STEP_FAIL_LIMIT failures in a row end
+    it (``_step_failed``)."""
     from app.core.keyed_lock import _after_locks
     from app.core.hooks import emit
     register_owner()
     advanced = 0
     beats = []
     for pending in store.pending_cleanup():
-        with _lock(pending["execution_id"]):
-            _cleanup(pending)
+        try:
+            with _lock(pending["execution_id"]):
+                _cleanup(pending)
+            _CLEANUP_FAILED.discard(pending["execution_id"])
+        except Exception:
+            # Stays pending and is tried again next tick; logged once.
+            if pending["execution_id"] not in _CLEANUP_FAILED:
+                _CLEANUP_FAILED.add(pending["execution_id"])
+                logger.exception("prop action %s: cleanup failed, retried each tick",
+                                 pending["execution_id"])
     for snapshot in store.live_runs():
-        with _lock(snapshot["execution_id"]):
-            run = store.get(snapshot["execution_id"])
-            if run["status"] in store.TERMINAL:
-                continue
-            delta, motion_delta = _clock(run, now)
-            if is_world_frozen():
-                _save(run)
-                continue
-            if run["status"] == "active" and run["definition"]["ability"] != "sleep":
-                if run["definition"]["ability"] == "combined":
-                    duration = sum(p["duration_game_s"] for p in run["definition"]["phases"])
-                    delta = min(delta, max(0, duration - run["data"].get("active_game_s", 0)))
-                run["data"]["active_game_s"] += delta
-            if (run["status"] == "sleeping" and not C.is_character_sleeping(run["actor"])
-                    and store.db.get_connection().execute("SELECT 1 FROM characters WHERE name=?", (run["actor"],)).fetchone()):
-                _finish(run, "completed", "awake")
-                continue
-            if run["status"] == "active" and run["definition"]["ability"] == "sleep":
-                _resume_sleep(run)
-                advanced += 1
-                continue
-            # An invitation leaves the two's current runs going until the
-            # "yes" (request_with_creation): those are not a busy participant.
-            invited = run["status"] == "awaiting_consent"
-            reason = _validate(run, require_claims=not invited,
-                               presence=run["status"] in ("awaiting_consent", "approaching") or run["definition"]["interrupt_on_presence_change"],
-                               replaces=_replaced_runs(run["actor"], run["members"], run["target"], run["action_id"])
-                               if invited else ())
-            if reason:
-                _finish(run, "failed", reason)
-                continue
-            data = run["data"]
-            if run["status"] == "awaiting_consent":
-                # The invitation waits on the motion clock (real seconds the
-                # world ran), never on game time: see CONSENT_WINDOW_S.
-                data["consent_wait_s"] = data.get("consent_wait_s", 0.0) + motion_delta
-                if data["consent_wait_s"] >= consent_window_s(run):
-                    data["expired_at_s"] = data["last_motion"]
-                    _finish(run, "cancelled", "consent_expired")
-                    continue
-            elif run["status"] == "approaching":
-                if run["phase"] == "entry":
-                    data["entry_elapsed"] += motion_delta
-                    if data["entry_elapsed"] >= _entry_seconds(data):
-                        _activate(run)
-                        advanced += 1
-                        continue
-                elif len(data["arrived"]) == len(_members(run)):
-                    # Both are there: a react run waits for the partner's
-                    # reaction (no approach deadline), the others go in.
-                    if not _awaits_reaction(run):
-                        _begin_entry(run)
-                        advanced += 1
-                        continue
-                else:
-                    data["elapsed"] += motion_delta
-                    if data["elapsed"] > data.get("deadline", 60):
-                        _finish(run, "failed", "approach_timeout")
-                        continue
-                    for _role, name in _members(run):
-                        if name in data["arrived"]:
-                            continue
-                        profile = C.get_character_profile(name)
-                        if profile.get("journey") and _own_journey(run, name, profile["journey"]):
-                            continue
-                        receipt = profile.get("last_journey_result") or {}
-                        if _own_journey(run, name, receipt) and receipt["status"] == "arrived":
-                            # Actual durable arrival proof and exact floor point.
-                            access = data["plans"][name]["access"]
-                            pos = C.get_character_pos(name)
-                            if pos and math.dist((pos["x"], pos["z"]), (access["x"], access["z"])) <= .02:
-                                data["arrived"].append(name)
-                                continue
-                        _finish(run, "failed", "approach_journey_lost")
-                        break
-                    if (run["status"] not in store.TERMINAL and len(data["arrived"]) == len(_members(run))
-                            and not _awaits_reaction(run)):
-                        _begin_entry(run)
-                        advanced += 1
-                        continue
-            elif run["status"] == "sleeping":
-                if not C.is_character_sleeping(run["actor"]):
-                    _finish(run, "completed", "awake")
-                    continue
-            elif run["status"] == "active":
-                limit = data.get("follow_limit_s")
-                if limit and data.get("active_game_s", 0) >= limit:
-                    # An NPC's follow pose runs out; it gets up (no further step).
-                    _finish(run, "completed", "follow_elapsed")
-                    continue
-                if run["definition"]["ability"] == "combined":
-                    phases = run["definition"]["phases"]
-                    index = next(i for i, p in enumerate(phases) if p["id"] == run["phase"])
-                    data["phase_elapsed"] += delta
-                    while data["phase_elapsed"] >= phases[index]["duration_game_s"]:
-                        data["phase_elapsed"] -= phases[index]["duration_game_s"]
-                        index += 1
-                        if index == len(phases):
-                            _finish(run, "completed", "phases_completed", follow=True)
-                            break
-                        run["phase"] = phases[index]["id"]
-                        # Pose and phase/effect progress commit together below.
-            if run["status"] == "active" and run["definition"]["ability"] != "sleep":
-                runtime = None
-                if run["definition"]["ability"] == "combined":
-                    phase = next(p for p in run["definition"]["phases"] if p["id"] == run["phase"])
-                    runtime = {run["actor"]: {"pose_key": phase["pose_key"]}}
-                _commit(run, ("active",), runtime=runtime, now=now)
-                if delta > 0:
-                    beats.append(dict(execution_id=run["execution_id"],
-                                      members=[name for _, name in _members(run)],
-                                      pose_key=_held_pose(run), delta_game_s=delta))
-            elif run["status"] not in store.TERMINAL:
-                _save(run)
-            advanced += 1
+        execution_id = snapshot["execution_id"]
+        if _STEP_FAILED.get(execution_id, (0, 0.0))[0] >= STEP_FAIL_LIMIT:
+            # Its end failed last time: try ending it again, no further step.
+            _abort_failed_step(execution_id)
+            continue
+        try:
+            advanced += _advance_run(execution_id, now, beats)
+        except Exception:
+            _step_failed(execution_id)
+        else:
+            _STEP_FAILED.pop(execution_id, None)
     _end_finales(expired_only=True)
     for beat in beats:
         _after_locks(lambda beat=beat: emit("prop_action.active", **beat))
     return advanced
+
+
+def _advance_run(execution_id, now, beats) -> int:
+    """One scheduler step of one live run (``advance``): 1 when it moved,
+    0 when it was skipped. A due active beat is appended to ``beats``."""
+    with _lock(execution_id):
+        run = store.get(execution_id)
+        if not run or run["status"] in store.TERMINAL:
+            return 0
+        delta, motion_delta = _clock(run, now)
+        if is_world_frozen():
+            _save(run)
+            return 0
+        if run["status"] == "active" and run["definition"]["ability"] != "sleep":
+            if run["definition"]["ability"] == "combined":
+                duration = sum(p["duration_game_s"] for p in run["definition"]["phases"])
+                delta = min(delta, max(0, duration - run["data"].get("active_game_s", 0)))
+            run["data"]["active_game_s"] += delta
+        if (run["status"] == "sleeping" and not C.is_character_sleeping(run["actor"])
+                and store.db.get_connection().execute("SELECT 1 FROM characters WHERE name=?", (run["actor"],)).fetchone()):
+            _finish(run, "completed", "awake")
+            return 0
+        if run["status"] == "active" and run["definition"]["ability"] == "sleep":
+            _resume_sleep(run)
+            return 1
+        # An invitation leaves the two's current runs going until the
+        # "yes" (request_with_creation): those are not a busy participant.
+        invited = run["status"] == "awaiting_consent"
+        reason = _validate(run, require_claims=not invited,
+                           presence=run["status"] in ("awaiting_consent", "approaching") or run["definition"]["interrupt_on_presence_change"],
+                           replaces=_replaced_runs(run["actor"], run["members"], run["target"], run["action_id"])
+                           if invited else ())
+        if reason:
+            _finish(run, "failed", reason)
+            return 0
+        data = run["data"]
+        if run["status"] == "awaiting_consent":
+            # The invitation waits on the motion clock (real seconds the
+            # world ran), never on game time: see CONSENT_WINDOW_S.
+            data["consent_wait_s"] = data.get("consent_wait_s", 0.0) + motion_delta
+            if data["consent_wait_s"] >= consent_window_s(run):
+                data["expired_at_s"] = data["last_motion"]
+                _finish(run, "cancelled", "consent_expired")
+                return 0
+        elif run["status"] == "approaching":
+            if run["phase"] == "entry":
+                data["entry_elapsed"] += motion_delta
+                if data["entry_elapsed"] >= _entry_seconds(data):
+                    _activate(run)
+                    return 1
+            elif len(data["arrived"]) == len(_members(run)):
+                # Both are there: a react run waits for the partner's
+                # reaction (no approach deadline), the others go in.
+                if not _awaits_reaction(run):
+                    _begin_entry(run)
+                    return 1
+            else:
+                data["elapsed"] += motion_delta
+                if data["elapsed"] > data.get("deadline", 60):
+                    _finish(run, "failed", "approach_timeout")
+                    return 0
+                for _role, name in _members(run):
+                    if name in data["arrived"]:
+                        continue
+                    profile = C.get_character_profile(name)
+                    if profile.get("journey") and _own_journey(run, name, profile["journey"]):
+                        continue
+                    receipt = profile.get("last_journey_result") or {}
+                    if _own_journey(run, name, receipt) and receipt["status"] == "arrived":
+                        # Actual durable arrival proof and exact floor point.
+                        access = data["plans"][name]["access"]
+                        pos = C.get_character_pos(name)
+                        if pos and math.dist((pos["x"], pos["z"]), (access["x"], access["z"])) <= .02:
+                            data["arrived"].append(name)
+                            continue
+                    _finish(run, "failed", "approach_journey_lost")
+                    break
+                if (run["status"] not in store.TERMINAL and len(data["arrived"]) == len(_members(run))
+                        and not _awaits_reaction(run)):
+                    _begin_entry(run)
+                    return 1
+        elif run["status"] == "sleeping":
+            if not C.is_character_sleeping(run["actor"]):
+                _finish(run, "completed", "awake")
+                return 0
+        elif run["status"] == "active":
+            limit = data.get("follow_limit_s")
+            if limit and data.get("active_game_s", 0) >= limit:
+                # An NPC's follow pose runs out; it gets up (no further step).
+                _finish(run, "completed", "follow_elapsed")
+                return 0
+            if run["definition"]["ability"] == "combined":
+                phases = run["definition"]["phases"]
+                index = next(i for i, p in enumerate(phases) if p["id"] == run["phase"])
+                data["phase_elapsed"] += delta
+                while data["phase_elapsed"] >= phases[index]["duration_game_s"]:
+                    data["phase_elapsed"] -= phases[index]["duration_game_s"]
+                    index += 1
+                    if index == len(phases):
+                        _finish(run, "completed", "phases_completed", follow=True)
+                        break
+                    run["phase"] = phases[index]["id"]
+                    # Pose and phase/effect progress commit together below.
+        if run["status"] == "active" and run["definition"]["ability"] != "sleep":
+            runtime = None
+            if run["definition"]["ability"] == "combined":
+                phase = next(p for p in run["definition"]["phases"] if p["id"] == run["phase"])
+                runtime = {run["actor"]: {"pose_key": phase["pose_key"]}}
+            _commit(run, ("active",), runtime=runtime, now=now)
+            if delta > 0:
+                beats.append(dict(execution_id=run["execution_id"],
+                                  members=[name for _, name in _members(run)],
+                                  pose_key=_held_pose(run), delta_game_s=delta))
+        elif run["status"] not in store.TERMINAL:
+            _save(run)
+        return 1
 
 
 #: REAL seconds between two beats of a run that fills gauges (see due_in_s)
@@ -2297,6 +2396,10 @@ def due_in_s(now: GameTime):
     factor = game_speed_factor()
     now_s = _motion_now()
     for run in store.live_runs():
+        failed = _STEP_FAILED.get(run.get("execution_id"))
+        if failed is not None and time.monotonic() - failed[1] < STEP_RETRY_S:
+            # Its last step failed (_step_failed): no early beat for it yet.
+            continue
         data = run["data"]
         if (run["status"] == "approaching" and run["phase"] != "entry"
                 and len(data.get("arrived", [])) == len(_members(run))

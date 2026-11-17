@@ -298,8 +298,11 @@ class Effects(unittest.TestCase):
         S.tick(5)
         with db.transaction() as conn:
             conn.execute("CREATE TRIGGER effects_rollback BEFORE INSERT ON prop_action_effect_receipts BEGIN SELECT RAISE(ABORT,'effects stop'); END")
-        with self.assertRaises(Exception):
+        # The failed step is rolled back and booked for a retry; advance
+        # itself carries on with the other runs (review 11#2).
+        with patch.object(A.logger, 'exception'):
             S.tick(5)
+        self.assertEqual(A._STEP_FAILED[ref][0], 1)
         self.assertEqual(value(name), 40)
         self.assertEqual(R.get(ref)['phase'], 'drink')
         self.assertEqual(R.get(ref)['status'], 'active')
@@ -307,6 +310,7 @@ class Effects(unittest.TestCase):
         with db.transaction() as conn:
             conn.execute('DROP TRIGGER effects_rollback')
         A.advance(F.game_time())
+        self.assertNotIn(ref, A._STEP_FAILED)
         self.assertEqual(value(name), 55)
         self.assertEqual(R.get(ref)['status'], 'completed')
 
@@ -658,8 +662,10 @@ class Effects(unittest.TestCase):
         with db.transaction() as conn:
             conn.execute("CREATE TRIGGER entry_stop BEFORE INSERT ON prop_action_effect_receipts BEGIN SELECT RAISE(ABORT,'entry rollback'); END")
         try:
-            with self.assertRaises(Exception):
+            # Rolled back and booked for a retry, not raised (review 11#2).
+            with patch.object(A.logger, 'exception'):
                 S.tick(2)
+            self.assertEqual(A._STEP_FAILED[ref][0], 1)
             self.assertEqual(R.get(ref)['status'], 'approaching')
             self.assertEqual(R.get(ref)['phase'], 'entry')
             self.assertEqual(F.C.get_character_pos(name), access)
@@ -689,11 +695,8 @@ def execution_scenario(stage):
     if stage == 'rollback':
         with db.transaction() as conn:
             conn.execute("CREATE TRIGGER scenario_stop BEFORE INSERT ON prop_action_effect_receipts BEGIN SELECT RAISE(ABORT,'real rollback'); END")
-        try:
-            S.tick(5)
-        except Exception:
-            pass
-        else:
+        S.tick(5)  # a failed step is booked for a retry, not raised (review 11#2)
+        if A._STEP_FAILED.get(ref, (0, 0.0))[0] != 1:
             raise AssertionError('receipt write did not fail')
         assert value(name) == 40 and R.get(ref)['status'] == 'active' and not receipts(ref)
         with db.transaction() as conn:
