@@ -683,7 +683,10 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     masks = {}
     # A185: the side views of a piece with "Side views for the shell" (left / right), read when given
     sides = [(key, w) for key, w in (("left", "l"), ("right", "r")) if views.get(key)]
-    for key, w in (("front", "f"), ("back", "b"), *sides):
+    from app.core import cpu_progress
+    shell_views = (("front", "f"), ("back", "b"), *sides)
+    for view_no, (key, w) in enumerate(shell_views, 1):
+        cpu_progress.sub("shell_views", view_no, len(shell_views))  # A194: live i/n, never raises
         v = views.get(key) or {}
         bm, gm = gf._mask(v["body_mask"]), gf._mask(v["ghost_mask"])
         if not bm.any():

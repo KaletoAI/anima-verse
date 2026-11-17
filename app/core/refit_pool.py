@@ -285,6 +285,25 @@ def _run_alone(fn: Callable[..., Any], args: Any, kwargs: Any) -> Any:
 
 
 def run(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """``_run`` reporting live progress (A194): with a ``cpu_progress`` scope open, the call is named
+    ``cpu:<function>`` and its inner ``cpu_progress.sub`` reports reach the scope — through a progress file when it
+    runs in a worker process. Without a scope it is ``_run`` as is."""
+    from app.core import cpu_progress
+    if not cpu_progress.active():
+        return _run(fn, *args, **kwargs)
+    head = f"cpu:{getattr(fn, '__name__', 'compute')}"
+    if workers() <= 1:
+        with cpu_progress.attach(head):
+            return fn(*args, **kwargs)
+    try:
+        path: Optional[str] = cpu_progress.progress_path("refit")
+    except OSError:
+        path = None
+    with cpu_progress.attach(head, path):
+        return _run(cpu_progress.run_reporting, path, fn, *args, **kwargs)
+
+
+def _run(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     """``fn(*args, **kwargs)`` — in a worker process when the pool is on
     (``workers() > 1``), else right here. ``fn`` must be a module-level pure
     function (picklable, like its arguments and result). Blocks until done; an

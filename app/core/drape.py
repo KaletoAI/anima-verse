@@ -710,7 +710,10 @@ def run(X0, F, rest, pinned, field: "garment_fit.Sdf", params: DrapeParams, *, c
         grown = int(np.ceil(GROW_SHARE * N)) if params.grow > 0 or per_point or box is not None else 0
         calm, ran, rest_stop = 0, N, False
         t0 = time.time()
+        from app.core import cpu_progress
         for s_ in range(N):
+            if s_ % 16 == 0:
+                cpu_progress.sub("drape_substeps", s_, N)  # A194: live i/n, throttled, never raises
             clr = clear
             if params.grow > 0 and not per_point:
                 clr = clear - params.grow * max(0.0, 1 - s_ / (GROW_SHARE * N))

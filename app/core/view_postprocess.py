@@ -186,6 +186,8 @@ def run(data: bytes, view: str, desc: Dict[str, Any], params: Optional[Dict[str,
     import numpy as np
     from PIL import Image
     merged = {**default_params(desc), **(params or {})}
+    from app.core import cpu_progress
+    cpu_progress.sub("postprocess")  # A194: the live step names the operation's run, never raises
     with Image.open(io.BytesIO(data)) as opened:
         fmt = opened.format or "PNG"
         src = opened.convert("RGBA")

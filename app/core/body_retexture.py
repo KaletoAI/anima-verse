@@ -148,6 +148,7 @@ def retexture(glb_in: Path, views: dict[str, tuple[Path, Path]], out_glb: Path,
 
     logger.info("Body retexture start: %s (%s), timeout %d s",
                 Path(glb_in).name, ",".join(n for n in BASE_VIEWS if n in views), timeout)
+    from app.core import cpu_progress
     try:
         proc = subprocess.Popen(argv, cwd=str(worker_dir), stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -155,7 +156,9 @@ def retexture(glb_in: Path, views: dict[str, tuple[Path, Path]], out_glb: Path,
     except OSError as exc:
         raise RetextureUnavailable(f"Body retexture worker could not start: {exc}") from exc
     try:
-        _stdout, stderr = proc.communicate(timeout=timeout)
+        # A194: the external worker writes no progress of its own — the live step names it and counts seconds.
+        with cpu_progress.attach("worker:body_retexture"):
+            _stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         _kill_group(proc)
         logger.warning("Body retexture timed out after %d s: %s", timeout, Path(glb_in).name)

@@ -1848,6 +1848,8 @@ def cut_out(character_name: str, item_id: str, fsig: str, view: str, *, force: b
     did not fall back reuses its own stored colours (``_stored_colours``: the
     upscale of the same input, transparent pixels included) — no hub job; the
     sidecar says ``colours: "reused"``."""
+    from app.core import cpu_progress
+    cpu_progress.sub("matte")  # A194: live step, never raises
     from PIL import Image
     import numpy as np
     from app.core import base_body, garment_openings
