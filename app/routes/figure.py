@@ -47,7 +47,8 @@ body actions):
 * ``GET  /characters/{c}/figure/template/{item_id}`` — a template piece's parameter dialog (Ruling A138,
   ``garment_template``): ``{item_id, name, params (None: none stored), source, updated_at, spec (the field
   schema: ``{field: {type, choices | min/max, default}}``), built (the kinds draped today), cost {llm_calls,
-  hub_jobs, cpu_s}, progress (A168: this character's drape — ``garment_template.piece_progress``)}``; 404 for an
+  hub_jobs, cpu_s}, progress (A168: this character's drape — ``garment_template.piece_progress``, with ``live``
+  while it drapes, A172), default_kind + kind_defaults (A172: the starting values with nothing stored)}``; 404 for an
   unknown character or item.
 * ``POST /characters/{c}/figure/template/{item_id}/suggest`` — ONE queued vision call (``TASK``) reads the item's
   picture and text: ``{params, errors, raw}``; saves nothing. 400 without a picture / for no outfit piece, 502
@@ -338,6 +339,10 @@ def get_template_params(character_name: str, item_id: str,
     return {"item_id": item_id, "name": str(item.get("name") or item_id), "params": gt.params_of(item),
             "source": stored.get("source") or "", "updated_at": stored.get("updated_at") or "", "spec": spec,
             "built": list(gt.BUILT_KINDS), "kind_fields": {k: list(v) for k, v in gt.KIND_FIELDS.items()},
+            # A172: with nothing stored the dialog starts from the kind the item most likely is (slots / name),
+            # and a kind change starts from that kind's values
+            "default_kind": gt.default_kind(item),
+            "kind_defaults": {k: gt.kind_defaults(k) for k in gt.KINDS},
             "cost": {"llm_calls": 1, "hub_jobs": 0, "cpu_s": gt.CPU_ESTIMATE_S},
             # A168: this character's drape of the piece — state, reason and the step list (``piece_progress``)
             "progress": gt.piece_progress(character_name, item_id, item=item)}

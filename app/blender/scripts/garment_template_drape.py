@@ -42,6 +42,27 @@ sys.path.insert(0, str(Path(__file__).parent))
 from _common import main  # noqa: E402
 sys.path.pop(0)
 
+#: A172: the live progress side channel of a run — ``progress_file`` of the job params (the server reads it while the
+#: run is in flight, the dialog shows it). A small JSON object, replaced atomically; never part of the result.
+PROGRESS = {"file": None, "state": {}}
+
+
+def progress(**fields):
+    """Merge ``fields`` into the run's progress record and write it (no-op without a ``progress_file``; a write that
+    fails is ignored — progress is never worth a failed drape)."""
+    path = PROGRESS["file"]
+    if not path:
+        return
+    PROGRESS["state"].update(fields)
+    try:
+        import json
+        tmp = Path(str(path) + ".tmp")
+        tmp.write_text(json.dumps(PROGRESS["state"]), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        pass
+
+
 P = "mixamorig:"
 # world-axis rotations (deg) per pose; the glTF import faces -Y, so a NEGATIVE X
 # rotation flexes a thigh forward and a positive one bends a knee back
@@ -612,6 +633,7 @@ def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collisio
     t0, c0 = time.time(), time.process_time()
     for f in range(1, frames + 1):
         sc.frame_set(f)
+        progress(frame=f, frames=frames)
     cpu, wall = time.process_time() - c0, time.time() - t0
     freeze(obj)
     sc.frame_set(1)

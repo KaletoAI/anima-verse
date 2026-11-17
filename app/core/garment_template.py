@@ -47,6 +47,7 @@ import json
 import logging
 import math
 import re
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -288,6 +289,46 @@ def validate_params(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
         params["slit_m"] = round(min(0.25, params["length_m"] * 0.4), 3)
     params["slit_m"] = round(min(params["slit_m"], params["length_m"] * 0.8), 3)
     return params, errors
+
+
+#: A172: the starting values of a kind that differ from ``PARAM_SPEC``'s (those are a skirt's) — what the dialog
+#: shows for a piece with no stored parameters and what a kind change resets to. Lengths are measured as in
+#: ``PARAM_SPEC`` (top / jacket from the shoulder line down: 0.6 m ends at the hip on the 1.70 m reference body).
+KIND_DEFAULTS: Dict[str, Dict[str, Any]] = {
+    "skirt": {},
+    "trousers": {"length_m": 1.0},
+    "dress": {"length_m": 0.6, "shoulders": "straps"},
+    "top": {"length_m": 0.6, "sleeves": "short", "fit": 0.4},
+    "jacket": {"length_m": 0.7, "sleeves": "long", "fit": 0.5, "collar": "lapel", "front": "open"},
+}
+_TROUSER_WORDS = re.compile(r"\b(trousers?|pants|jeans|shorts|leggings|slacks|chinos)\b", re.IGNORECASE)
+_DRESS_WORDS = re.compile(r"\b(dress|gown|sundress|frock)\b", re.IGNORECASE)
+_JACKET_WORDS = re.compile(r"\b(jacket|blazer|coat|cardigan|hoodie|parka)\b", re.IGNORECASE)
+
+
+def default_kind(item: Optional[Dict[str, Any]]) -> str:
+    """A172: the template kind an outfit piece most likely is, from its slots, then its name and prompt text — the
+    starting kind of the parameter dialog when nothing is stored (Suggest and Save still decide). ``outer`` →
+    jacket; ``top`` with ``bottom`` → dress; ``top`` → top (a dress / jacket word wins); ``bottom`` → trousers for a
+    trouser word, else skirt (a dress word → dress); nothing that fits → skirt (``PARAM_SPEC``'s default)."""
+    item = item if isinstance(item, dict) else {}
+    piece = item.get("outfit_piece") if isinstance(item.get("outfit_piece"), dict) else {}
+    slots = {str(x) for x in piece.get("slots") or []}
+    text = f"{item.get('name') or ''} {item.get('prompt_fragment') or ''}"
+    if _DRESS_WORDS.search(text) or {"top", "bottom"} <= slots:
+        return "dress"
+    if "outer" in slots or ("top" in slots and _JACKET_WORDS.search(text)):
+        return "jacket"
+    if "top" in slots:
+        return "top"
+    if "bottom" in slots and _TROUSER_WORDS.search(text):
+        return "trousers"
+    return "skirt"
+
+
+def kind_defaults(kind: str) -> Dict[str, Any]:
+    """The validated starting parameters of ``kind`` (``PARAM_SPEC`` defaults + ``KIND_DEFAULTS``)."""
+    return validate_params({k: v[2] for k, v in PARAM_SPEC.items()} | {"kind": kind} | KIND_DEFAULTS.get(kind, {}))[0]
 
 
 _FENCE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
@@ -811,6 +852,76 @@ def drape_state(character_name: str, item_id: str, *, base_sha: str, lower: List
     return {"state": "missing", "reason": NOT_DRAPED, "tsig": sig, "path": None, "record": {}}
 
 
+# --- live progress of a drape in flight (A172) ---------------------------------------
+#: What a drape in flight is doing now, per (character, item): ``{stage, started, stage_at, attempt, file}`` —
+#: ``build`` / ``run_drape`` set the server-side stages, the Blender run writes its own (frame, pose shape i/n, bake,
+#: measure) into ``file`` (``progress_file`` of the job params). Read by ``live_progress``; gone when the run ends.
+_live: Dict[Tuple[str, str], Dict[str, Any]] = {}
+_live_lock = threading.Lock()
+#: The stage labels the dialog shows (translatable keys); Blender's stages are the last four.
+LIVE_STAGES = {
+    "waiting": "Waiting for the layers under it",
+    "measure_body": "Measuring the body",
+    "views": "Preparing the picture views",
+    "setup": "Cutting the panels in Blender",
+    "drape": "Draping the cloth on the CPU",
+    "shapes": "Draping the pose shapes",
+    "bake": "Texturing from the picture",
+    "measure": "Measuring the poses",
+    "judge": "Checking the drape",
+}
+
+
+def _live_stage(key: Optional[Tuple[str, str]], stage: str, **fields: Any) -> None:
+    if key is None:
+        return
+    import time
+    with _live_lock:
+        entry = _live.setdefault(key, {"started": time.monotonic(), "attempt": 1, "file": None})
+        entry.update(fields)
+        entry["stage"] = stage
+        entry["stage_at"] = time.monotonic()
+
+
+def _live_end(key: Optional[Tuple[str, str]]) -> None:
+    if key is not None:
+        with _live_lock:
+            _live.pop(key, None)
+
+
+def live_progress(character_name: str, item_id: str) -> Optional[Dict[str, Any]]:
+    """A172: the drape of ``item_id`` on ``character_name`` in flight now — ``{stage, label, frame, frames, pose,
+    index, count, attempt, elapsed_s, stage_s}`` (the Blender run's own record from its progress file wins over the
+    server stage while the run is in Blender) — or None when none runs. Read-only, never raises."""
+    import time
+    with _live_lock:
+        entry = dict(_live.get((character_name, item_id)) or {})
+    if not entry:
+        return None
+    out: Dict[str, Any] = {"stage": entry.get("stage") or "", "frame": None, "frames": None, "pose": None,
+                           "index": None, "count": None, "attempt": int(entry.get("attempt") or 1)}
+    path = entry.get("file")
+    if path and entry.get("stage") == "blender":
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        if isinstance(data, dict):
+            out.update({k: data.get(k) for k in ("frame", "frames", "pose", "index", "count")})
+            out["stage"] = str(data.get("stage") or "setup")
+        else:
+            out["stage"] = "setup"
+    if out["stage"] == "blender":
+        out["stage"] = "setup"
+    now = time.monotonic()
+    out["label"] = LIVE_STAGES.get(out["stage"], out["stage"])
+    out["elapsed_s"] = round(now - float(entry.get("started") or now), 1)
+    out["stage_s"] = round(now - float(entry.get("stage_at") or now), 1)
+    return out
+
+
+#: The drape step's detail while the character's Build runs but has not reached this piece's drape yet (A172).
+WAITING_FOR_STEP = "The Build runs — the drape starts at its step"
 #: The steps of a template piece's progress (``piece_progress``), in chain order.
 PROGRESS_STEPS: Tuple[Tuple[str, str], ...] = (("params", "Parameters"), ("picture", "Picture"),
                                                ("drape", "Drape (CPU)"))
@@ -839,7 +950,8 @@ def piece_progress(character_name: str, item_id: str, *, profile: Optional[Dict[
     params = params_of(item)
     sources = texture_sources(character_name, item_id)
     building = worn and figure_build.running(character_name)
-    state = "running" if building and drape["state"] != "ready" else drape["state"]
+    live = live_progress(character_name, item_id)
+    state = "running" if (building or live) and drape["state"] != "ready" else drape["state"]
     metrics = record.get("metrics") or {}
     steps = [
         {"id": "params", "label": "Parameters", "status": "done" if params else "due",
@@ -850,13 +962,14 @@ def piece_progress(character_name: str, item_id: str, *, profile: Optional[Dict[
              sources.get("source", ""), "") if sources else "No picture of the piece yet", "numbers": {}},
         {"id": "drape", "label": "Drape (CPU)",
          "status": {"ready": "done", "failed": "failed", "blocked": "skipped"}.get(state, "due"),
-         "detail": "Draping now (the Build runs)" if state == "running" else drape["reason"] or "",
+         "detail": (live["label"] if live else WAITING_FOR_STEP) if state == "running" else drape["reason"] or "",
          "numbers": {k: v for k, v in (("wall_s", metrics.get("wall_total_s")),
                                        ("stretch_max", (metrics.get("drape") or {}).get("stretch_max")),
                                        ("coverage", (metrics.get("bake") or {}).get("coverage"))) if v is not None}},
     ]
     return {"state": state, "reason": drape["reason"], "built_at": record.get("created_at") or "",
-            "error": str(record.get("error") or "") if drape["state"] == "failed" else "", "worn": worn, "steps": steps}
+            "error": str(record.get("error") or "") if drape["state"] == "failed" else "", "worn": worn, "steps": steps,
+            "live": live if state == "running" else None}
 
 
 # --- the drape run ----------------------------------------------------------------
@@ -986,7 +1099,8 @@ def prepare_view(src: str, dst: Path, *, tolerance: int = 24, garment_only: bool
 def run_drape(body_glb: Path, params: Dict[str, Any], sources: Dict[str, str], *, item_id: str,
               out_dir: Path, render: bool = False, poses: Optional[Tuple[str, ...]] = None,
               timeout_s: int = 300, corrective: bool = True,
-              lower: Optional[List[Tuple[Path, Any]]] = None) -> Dict[str, Any]:
+              lower: Optional[List[Tuple[Path, Any]]] = None,
+              live: Optional[Tuple[str, str]] = None) -> Dict[str, Any]:
     """Measure, make the panels and drape on ``body_glb`` (one Blender run; one retry with doubled
     quality when the stretch is above ``RETRY_STRETCH``). ``lower`` = [(drape GLB, its pose-shape payload)] of the
     lower layers the piece drapes over (colliders, Ruling A142). Returns ``{ok, error, data, glb, rows}`` —
@@ -994,10 +1108,13 @@ def run_drape(body_glb: Path, params: Dict[str, Any], sources: Dict[str, str], *
     import time
     from app.blender import runner
     started = time.time()
+    _live_stage(live, "measure_body")
     meas = measure_body(Path(body_glb).read_bytes())
     spec = panel_spec(params, meas)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    progress_file = out_dir / "progress.json"
+    _live_stage(live, "views")
     views = {side: out_dir / f"view_{side}.png" for side in ("front", "back")}
     view_info = {side: prepare_view(sources[side], views[side],
                                     garment_only=sources.get("source") != "cutout") for side in views}
@@ -1008,10 +1125,13 @@ def run_drape(body_glb: Path, params: Dict[str, Any], sources: Dict[str, str], *
         inputs = {"body": Path(body_glb), "front": views["front"], "back": views["back"]}
         for i, (path, _payload) in enumerate(lower or []):
             inputs[f"lower_{i}"] = Path(path)
-        res = runner.run(SCRIPT, inputs=inputs,
-                         params=build_args(params, spec, item_id=item_id, render=render, poses=poses,
-                                           quality_scale=scale, corrective=corrective,
-                                           lower_shapes=[payload for _p, payload in lower or []]),
+        args = build_args(params, spec, item_id=item_id, render=render, poses=poses, quality_scale=scale,
+                          corrective=corrective, lower_shapes=[payload for _p, payload in lower or []])
+        if live is not None:
+            progress_file.unlink(missing_ok=True)
+            args["progress_file"] = str(progress_file)
+            _live_stage(live, "blender", file=str(progress_file), attempt=1 if scale == 1.0 else 2)
+        res = runner.run(SCRIPT, inputs=inputs, params=args,
                          out_dir=Path(out_dir), timeout_s=timeout_s)
         data = dict(res.get("data") or {})
         if not res.get("ok"):
@@ -1034,6 +1154,7 @@ def run_drape(body_glb: Path, params: Dict[str, Any], sources: Dict[str, str], *
     if not res.get("ok"):
         return {"ok": False, "error": str(res.get("error") or "blender failed"), "data": data, "glb": None,
                 "rows": []}
+    _live_stage(live, "judge")
     rows = judge_build(data)
     bad = [r for r in rows if r["gate"] and not r["ok"]]
     glb = (res.get("outputs") or {}).get("glb")
@@ -1046,12 +1167,9 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
           lower: Optional[List[str]] = None, force: bool = False) -> Dict[str, Any]:
     """Drape one template piece for the character's CURRENT plain body (the Build's ``template``
     step). Writes ``templates/{item}_{tsig}.glb + .json`` (accepted) or the failure record. Returns
-    the new ``drape_state``. A ready drape is kept unless ``force``."""
-    import shutil
-    import tempfile
+    the new ``drape_state``. A ready drape is kept unless ``force``. While it runs, ``live_progress`` reports what
+    it does (A172)."""
     from app.core import base_body, figure
-    from app.core.garment_store import write_record
-    from app.core.timeutils import utc_now_iso
     from app.models.character import get_character_dir, get_character_profile
     from app.models.inventory import get_item
     profile = profile if profile is not None else (get_character_profile(character_name) or {})
@@ -1067,6 +1185,24 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
     sources = texture_sources(character_name, item_id)
     body = get_character_dir(character_name) / "model3d" / f"{base[0]}.glb"
     params = params_of(item)
+    key = (character_name, item_id)
+    _live_stage(key, "waiting")
+    try:
+        return _build_drape(character_name, item_id, key=key, profile=profile, base=base, base_sha=base_sha,
+                            lower=lower, item=item, sig=sig, sources=sources, body=body, params=params)
+    finally:
+        _live_end(key)
+
+
+def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], profile: Dict[str, Any], base,
+                 base_sha: str, lower: List[str], item: Optional[Dict[str, Any]], sig: str, sources: Dict[str, str],
+                 body: Path, params: Dict[str, Any]) -> Dict[str, Any]:
+    """``build``'s drape itself, with its live progress registered under ``key`` (A172)."""
+    import shutil
+    import tempfile
+    from app.core import figure
+    from app.core.garment_store import write_record
+    from app.core.timeutils import utc_now_iso
     # Ruling A142: the lower template layers first (a jacket drapes over the top's drape); one not drapable is
     # simply not a collider
     colliders = []
@@ -1074,9 +1210,10 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
         sub = build(character_name, other, profile=profile, lower=_lower_of(other, item_id, lower))
         if sub["state"] == "ready":
             colliders.append((sub["path"], sub["record"].get("pose_shapes")))
+    _live_stage(key, "measure_body")
     scratch = Path(tempfile.mkdtemp(prefix="av-template-"))
     try:
-        result = run_drape(body, params, sources, item_id=item_id, out_dir=scratch, lower=colliders)
+        result = run_drape(body, params, sources, item_id=item_id, out_dir=scratch, lower=colliders, live=key)
         folder = templates_dir(character_name)
         folder.mkdir(parents=True, exist_ok=True)
         record = {"item_id": item_id, "tsig": sig, "params": params, "version": TEMPLATE_VERSION,

@@ -936,6 +936,8 @@ def run(a):
     t_all, c_all = time.time(), time.process_time()
     inp, prm = a["inputs"], a["params"]
     out = Path(a["out_dir"])
+    gd.PROGRESS["file"] = prm.get("progress_file") or None
+    gd.progress(stage="setup", frame=None, frames=None, index=None, count=None, pose=None)
     arm, body, _g = gd.load_fit(inp["body"])
     spec = prm["spec"]
     bod = spec.get("bodice")
@@ -1027,6 +1029,7 @@ def run(a):
         pin = np.where(co0[:, 2] > top_z - 0.004)[0]
     fab = prm["fabric"]
     thickness = float(prm.get("thickness", 0.004))
+    gd.progress(stage="drape", frame=0, frames=int(prm.get("frames", 50)))
     cpu, wall, drift = gd.drape(obj, body, pin, int(prm.get("frames", 50)), quality=int(fab["quality"]),
                                 bending=float(fab["bending"]), shrink=float(fab.get("shrink", 0.0)),
                                 self_collision=False, thickness=thickness, extra=lower, crop_m=CROP_M)
@@ -1071,6 +1074,7 @@ def run(a):
     ncx = (bod["joints"].get("neck") or [centre[0]])[0] if bod else centre[0]
     band = bod["band_y"] if bod else 9.0
     waist_z = (spec.get("outline") or {}).get("waist_y", -9.0)
+    shape_todo = list(dict.fromkeys(p for g in groups for p in g.get("poses") or []))
     for g in groups:
         g["targets"] = []
         for pose in g["poses"]:
@@ -1081,6 +1085,8 @@ def run(a):
                 arm_pose = g["name"] != "legs"
                 if arm_pose and collider is None and not lower:
                     collider = gd.skinned_collider(body, arm)
+                gd.progress(stage="shapes", pose=pose, index=shape_todo.index(pose) + 1 if pose in shape_todo else None,
+                            count=len(shape_todo), frame=0, frames=None)
                 d, info = pose_shape(arm, body, obj, pose, pin, names, W, rest_world, fab, thickness, lower=lower,
                                      frames=frames, collider=collider if arm_pose else None)
                 deltas.setdefault("_raw", {})[pose] = d
@@ -1155,6 +1161,7 @@ def run(a):
                            "sigma": g["sigma"], "targets": list(g["targets"]), "samples": samples})
     gd.set_pose(arm, "rest")
     pose_shapes = {"version": 2, "targets": targets, "groups": out_groups} if targets else None
+    gd.progress(stage="bake", pose=None, index=None, count=None, frame=None, frames=None)
     t_bake = time.time()
     views = {"view_front": inp["front"], "view_back": inp["back"]}
     bake_info = {}
@@ -1173,7 +1180,9 @@ def run(a):
     t_meas = time.time()
     render_s = 0.0
     measured = {}
-    for pose in prm.get("poses") or ["rest"]:
+    measure_poses = list(prm.get("poses") or ["rest"])
+    for pose in measure_poses:
+        gd.progress(stage="measure", pose=pose, index=measure_poses.index(pose) + 1, count=len(measure_poses))
         gd.set_pose(arm, pose)
         inf = blend_groups(arm, out_groups) if pose_shapes else {}
         for name in targets:
