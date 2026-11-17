@@ -1342,6 +1342,7 @@ def build_part(group, output):
         f[unknown] = rs[known].mean(0) if known.any() else rs[unknown].mean(0)
     wv = vs.astype(float)[..., None]
     # Jacobi: each unknown uses four covered neighbours from the previous step.
+    _common.progress('filling')
     for _ in range(P['fill_iterations']):
         acc = np.zeros_like(f); cnt = np.zeros_like(wv)
         for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
@@ -1434,6 +1435,7 @@ def build_part(group, output):
         body.data.attributes.remove(body.data.attributes[BAND_ATTRIBUTE])
     print('open patch border edges after weld', open_left, 'part material', body.data.materials[mi_part].name, 'body tris', len(body.data.polygons))
 
+    _common.progress('exporting')
     bpy.ops.export_scene.gltf(filepath=str(output), export_format='GLB', export_apply=False,
                               export_yup=True, export_skins=True, export_animations=True,
                               export_morph=True, export_extras=True, export_all_influences=False)
@@ -1461,6 +1463,7 @@ def inset_part(args):
     _common.reset_scene()
     _common.import_model(args['inputs']['model'])
     output = Path(args['out_dir']) / 'model.glb'
+    _common.progress('building_part')
     metrics = build_part(groups[0], output)
     per_group = {groups[0]['id']: metrics}
     return {'status': 'applied', 'reason': '', 'metrics': per_group, 'groups': per_group}, {'model': str(output)}

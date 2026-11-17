@@ -70,6 +70,7 @@ def retexture(args):
             w, h, scaled = nw, nh, True
         images.append({"name": img.name, "size": [w, h], "scaled": scaled})
 
+    _common.progress("exporting")
     out = Path(args["out_dir"]) / Path(src).name
     bpy.ops.export_scene.gltf(
         filepath=str(out), export_format="GLB",

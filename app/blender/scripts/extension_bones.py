@@ -3069,6 +3069,7 @@ def extension_bones(args):
         return {'status':'none_applicable','reason':'','groups':{}},{}
     _common.reset_scene()
     _common.import_model(args['inputs']['model'])
+    _common.progress('bones', 0, len(enabled))
     arms = [o for o in bpy.context.scene.objects if o.type=='ARMATURE']
     meshes = [o for o in bpy.context.scene.objects if o.type=='MESH' and any(m.type=='ARMATURE' and m.object in arms for m in o.modifiers)]
     def skip(reason,failed=None,status='not_found'):
@@ -3438,6 +3439,7 @@ def extension_bones(args):
                                        'off_60':[before_census['off_60'],after_census['off_60']]}}
     metrics.update(soft)
     output=Path(args['out_dir'])/'model.glb'
+    _common.progress('exporting')
     bpy.ops.export_scene.gltf(filepath=str(output),export_format='GLB',export_apply=False,export_yup=True,export_skins=True,export_animations=True,export_morph=True,export_all_influences=False,export_extras=True)
     _common.body_meshes_first(output)
     return {'status':'applied','reason':'','groups':metrics,'metrics':metrics},{'model':str(output)}

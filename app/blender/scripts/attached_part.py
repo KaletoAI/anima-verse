@@ -1513,6 +1513,7 @@ def build_part(group, companions, output):
     for im in (im_shaft, im_tip):
         bpy.data.images.remove(im)
     print('baked', BS)
+    _common.progress('exporting')
     bpy.ops.export_scene.gltf(filepath=str(output), export_format='GLB', export_apply=False, export_yup=True, export_skins=True, export_animations=True, export_morph=True, export_all_influences=False, export_extras=True)
     _common.body_meshes_first(output)
     return {
@@ -1597,6 +1598,7 @@ def attached_part(args):
     _common.reset_scene()
     _common.import_model(args['inputs']['model'])
     output = Path(args['out_dir']) / 'model.glb'
+    _common.progress('building_part')
     metrics = build_part(parts[0], companions, output)
     per_group = {parts[0]['id']: metrics}
     for companion in companions:

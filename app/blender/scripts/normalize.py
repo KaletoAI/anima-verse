@@ -373,6 +373,7 @@ def _restore_posture(source_path):
     bpy.ops.object.mode_set(mode="POSE")
     applied = {b: 0.0 for b in POSTURE_CHAIN}
     for step_no in range(POSTURE_PASSES):
+        _common.progress("posture", step_no + 1, POSTURE_PASSES)
         if step_no:
             phi, _ = fit(_Profile(rigged(), fraction["hips"]))
             if phi is None:

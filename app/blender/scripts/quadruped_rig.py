@@ -460,7 +460,8 @@ def bake_clips(body, arm, sources, catalog, reference_v, target_v, mode):
     lengths = np.linalg.norm(target_v[edges[:, 0]] - target_v[edges[:, 1]], axis=1)
     valid = lengths > 1e-8 * target_lm['L']
     metrics, actions, idle_offset = {}, [], None
-    for take, declaration in catalog.items():
+    for take_no, (take, declaration) in enumerate(catalog.items(), 1):
+        _common.progress('takes', take_no, len(catalog))
         src, source_actions, source_v = sources[declaration['src']]
         action = source_actions.get(declaration['action'])
         if action is None:
@@ -708,6 +709,7 @@ def run(job):
         fox.animation_data_clear()
         sources['fox'] = (fox, {a.name: a for a in bpy.data.actions}, reference_v)
     metrics = fit(body, arm, reference_v, target_v)
+    _common.progress('skinning')
     skin(body, arm, metrics['dims_m'][1])
     # Preserve the separate, unchanged PNG and bind it to the mesh material.
     image = bpy.data.images.load(inputs['texture'], check_existing=True)
@@ -739,6 +741,7 @@ def run(job):
     body.select_set(True)
     arm.select_set(True)
     bpy.context.view_layer.objects.active = arm
+    _common.progress('exporting')
     bpy.ops.export_scene.fbx(filepath=str(fbx), use_selection=True,
         object_types={'ARMATURE', 'MESH'}, add_leaf_bones=False, bake_anim=bool(catalog),
         bake_anim_use_nla_strips=True, bake_anim_use_all_actions=False,

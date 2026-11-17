@@ -73,7 +73,8 @@ def lod(args):
     stem = Path(src).stem
 
     stages, outputs = [], {}
-    for ratio in sorted(ratios, reverse=True):
+    for level, ratio in enumerate(sorted(ratios, reverse=True), 1):
+        _common.progress("levels", level, len(ratios))
         # Fresh import per stage: decimating an already decimated mesh would
         # compound the error, and the ratios are meant to be of the ORIGINAL.
         _common.reset_scene()
