@@ -787,17 +787,23 @@ def ensure_hairstyle(character_name: str) -> str:
     ``default_mode``) — before a plain body is rendered for it, so the plain
     body is that hairstyle's body. "" for a character that wears none but
     owns some (one was taken off), and for a character without any hair text
-    (bald). ValueError like ``create_hairstyle`` otherwise."""
+    (bald). ValueError like ``create_hairstyle`` otherwise.
+
+    Check and create run under ``keyed_lock("garment_item", name)`` — the lock every hairstyle mint holds
+    (``create_hairstyle``, the boot migration), taken before the profile lock as they do — so two concurrent
+    callers never both mint a first hairstyle. Nothing in it waits on a render or an LLM."""
+    from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile
-    profile = get_character_profile(character_name) or {}
-    worn = worn_hair_id(character_name, profile)
-    if worn:
-        return worn
-    if hairstyles(character_name):
-        return ""
-    if not appearance_hair_text(character_name, profile=profile):
-        return ""
-    return create_hairstyle(character_name, "", "")
+    with keyed_lock("garment_item", character_name):
+        profile = get_character_profile(character_name) or {}
+        worn = worn_hair_id(character_name, profile)
+        if worn:
+            return worn
+        if hairstyles(character_name):
+            return ""
+        if not appearance_hair_text(character_name, profile=profile):
+            return ""
+        return create_hairstyle(character_name, "", "")
 
 
 def wear_hairstyle(character_name: str, item_id: str, *, request: bool = True) -> bool:
