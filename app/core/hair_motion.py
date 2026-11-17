@@ -74,9 +74,6 @@ HAIR_SAG_MAX_DEG = 10.0
 GROUP_ID = "hair_c{index:02d}"
 
 
-# character -> (cache key, chains summary or None)
-_SERVED: Dict[str, Tuple[Tuple[Any, ...], Optional[Dict[str, Any]]]] = {}
-_SERVED_LOCK = threading.Lock()
 # (fit GLB path, st_mtime_ns, st_size, head scale) -> rigid joint names
 _RIGID: Dict[Tuple[str, int, int, float], FrozenSet[str]] = {}
 _RIGID_LOCK = threading.Lock()
@@ -236,43 +233,39 @@ def with_rigid(chains: Optional[Dict[str, Any]], rigid: Optional[FrozenSet[str]]
     return out
 
 
-def served_chains(character_name: str, profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """``report.chains`` of the newest accepted HairDeck fit of the worn hairstyle (``garments._newest_fit``), None
-    for a hairstyle that is no HairDeck hair (in the body mesh, HAAR), without a worn hairstyle, without such a fit
-    or for a fit from before the spring chains. With Swing off ``motion_groups`` emits nothing whatever this fit
-    is; a fit made with Swing off has no weighted joint, so it gives no group either.
+def _served_fit(character_name: str, item_id: str, profile: Dict[str, Any]) -> Optional[Tuple[Path, Dict[str, Any]]]:
+    """``(fit GLB, record)`` of the hair the served model grafts: the garment assembly's resolver
+    (``garment_assembly._wanted`` → ``garment_store.accepted_fit`` on the CURRENT base model,
+    ``base_body.current_base``), None off the pipeline, without a base model or without such a fit."""
+    from app.core import base_body
+    from app.core import garment_store as gs
+    base = base_body.current_base(character_name, profile=profile)
+    if not base or not base[1]:
+        return None
+    return gs.accepted_fit(character_name, item_id, base_model_sha=base[1], profile=profile)
 
-    Cached per (character, ``garments/`` directory ``st_mtime_ns``, worn item id, the worn item's ``garment``
-    — mode and settings, one item read —, head capsule scale): a fit or record write replaces a file in that
-    directory, so an unchanged directory costs one ``stat`` and one item read per worldmap poll.
+
+def served_chains(character_name: str, profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """``report.chains`` of the HairDeck fit the served model carries for the worn hairstyle (``_served_fit`` — the
+    fit of the current fingerprint on the current base, as the garment assembly grafts it; never merely the newest
+    fit, which may be another base's or another Swing's), None for a hairstyle that is no HairDeck hair (in the
+    body mesh, HAAR), without a worn hairstyle, without such a fit or for a fit from before the spring chains. With
+    Swing off ``motion_groups`` emits nothing whatever this fit is; a fit made with Swing off has no weighted
+    joint, so it gives no group either.
+
+    The fit is resolved on every call (one record read, as the assembly does); the costly part — the rigid
+    joints of the fit GLB — is cached per file identity and head scale (``_rigid_of_fit``).
 
     Each chain's ``rigid`` is filled from the fit GLB (``rigid_joints``, Ruling H10)."""
-    import json as _json
     from app.core import garment_hair
-    from app.core import garment_store as gs
     item = garment_hair.worn_hairstyle(character_name, profile)
     if item is None or garment_hair.hairstyle_mode(item) != garment_hair.HAIRDECK_MODE:
         return None
-    try:
-        stamp = os.stat(gs._root(character_name)).st_mtime_ns  # a read path never creates garments/
-    except OSError:
+    fit = _served_fit(character_name, str(item["id"]), profile)
+    found = ((fit[1].get("report") or {}).get("chains")) if fit else None
+    if not isinstance(found, dict):
         return None
-    head_scale = _head_scale(character_name, profile)
-    key = (character_name, stamp, str(item.get("id") or ""),
-           _json.dumps(item.get("garment") or {}, sort_keys=True, default=str), head_scale)
-    with _SERVED_LOCK:
-        hit = _SERVED.get(character_name)
-    if hit is not None and hit[0] == key:
-        return hit[1]
-    from app.core import garments
-    chains: Optional[Dict[str, Any]] = None
-    newest = garments._newest_fit(character_name, str(item["id"]), gs.HAIRDECK)
-    found = ((newest[1].get("report") or {}).get("chains")) if newest else None
-    if isinstance(found, dict):
-        chains = with_rigid(found, _rigid_of_fit(newest[0], head_scale))
-    with _SERVED_LOCK:
-        _SERVED[character_name] = (key, chains)
-    return chains
+    return with_rigid(found, _rigid_of_fit(fit[0], _head_scale(character_name, profile)))
 
 
 def _defaults() -> Dict[str, Any]:

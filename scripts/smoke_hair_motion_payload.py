@@ -9,7 +9,9 @@ Usage:
 Runs against a THROWAWAY storage + instance directory (``paths.init`` before any world-DB import) — no real world,
 no hub, no GPU, no server process. No skill package is loaded, so the character has no pack motion groups. The fit
 record is a stub: ``garments/hair_demo_<fsig>.{glb,json}`` with ``accepted`` true, method ``hairdeck`` and a
-hand-written ``report.chains``. The characters router is mounted on a bare FastAPI app with real sessions
+hand-written ``report.chains`` and ``base_model_sha256`` BASE_SHA; ``base_body.current_base`` is a stand-in naming
+that base (no base model is built here), so ``garment_store.accepted_fit`` — the resolver the served model uses —
+serves it: its name's fsig is no current one, so the newest accepted HairDeck fit on that base. The characters router is mounted on a bare FastAPI app with real sessions
 (pattern of scripts/smoke_hair_tab_method.py).
 
 EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE LEDGER (K = HAIR_FREQ_PER_STIFFNESS = 3.7 Hz per
@@ -49,10 +51,10 @@ unit, Ruling H1a; zeta 0.5; limits 0.8..6.0 Hz)
     Stiffness factor 1.5 (set_hair_motion) -> rev changes, freq_hz 2.22. Swing off -> groups {} and the rev equals
     the no-hair rev of the old code (``_revision({"declarations": []})``), so a character without hair keeps its
     rev byte for byte. The fixture hairstyle has hair_swing "on" (explicit; the default is on since Ruling H-R1).
-    served_chains cache: a second call with the garments/ directory unchanged does not call _newest_fit again
-    (1 call for 2 polls); a new record file in garments/ (a newer fit, chain 3 stiffness 0.6) changes the
-    directory mtime -> re-read, freq_hz = 0.6·3.7 = 2.22. A worn hairstyle in mode "body" -> None. No worn
-    hair -> None.
+    served_chains resolves the served fit on every call (``garment_store.accepted_fit``: 1 call per poll, 2 for 2
+    polls); a newer accepted fit on the same base (chain 3 stiffness 0.6, no current fsig either) is the one served
+    -> freq_hz = 0.6·3.7 = 2.22. A worn hairstyle in mode "body" -> None. No worn hair -> None. Which fit is served
+    when the newest is NOT the served one: scripts/smoke_hair_served_fit.py.
 [5] panel(Demo, hairstyle settings, record): {count 2, links 2 (chain 3's two bones; chain 5 has none), swing True,
     stiffness 1.0, limits [0.5, 2.0], fitted True}; record None -> {count None, links 0, fitted False}; a record
     without report.chains -> fitted False, count None. garments.hairdeck_panel(Demo, hair_demo)["chains"] is that
@@ -85,6 +87,8 @@ sys.path.insert(0, str(ROOT))
 
 FAILS = []
 FSIG_BASE = "47290755"
+#: The stand-in base model's sha256 the fixture fits are accepted on.
+BASE_SHA = "5" * 64
 BASE_COMMIT = "8076597d"
 
 
@@ -138,7 +142,8 @@ def main() -> int:
         db.init_schema()
 
         from app.core import hair_motion as hm
-        from app.core import extension_rig, garments, sessions, users
+        from app.core import base_body, extension_rig, garment_store, garments, sessions, users
+        base_body.current_base = lambda name, profile=None: ("b" * 12, BASE_SHA)  # the stand-in base model
         from app.core.keyed_lock import keyed_lock
         from app.models import inventory
         from app.models.character import get_character_dir, get_character_profile, save_character_profile
@@ -253,21 +258,21 @@ def main() -> int:
         gdir.mkdir(parents=True, exist_ok=True)
         (gdir / "hair_demo_aaaaaaaaaaaa.glb").write_bytes(b"glb-stub")
         (gdir / "hair_demo_aaaaaaaaaaaa.json").write_text(json.dumps(
-            {"accepted": True, "method": "hairdeck", "report": {"chains": summary()}}))
+            {"accepted": True, "method": "hairdeck", "base_model_sha256": BASE_SHA, "report": {"chains": summary()}}))
         calls = []
-        real_newest = garments._newest_fit
+        real_accepted = garment_store.accepted_fit
 
         def counted(*a, **k):
             calls.append(a)
-            return real_newest(*a, **k)
+            return real_accepted(*a, **k)
 
-        garments._newest_fit = counted
+        garment_store.accepted_fit = counted
         p1 = extension_rig.motion_payload("Demo")
         check("hair groups without pack groups", sorted(p1["groups"]), ["hair_c03"])
         close("freq_hz 1.48", p1["groups"].get("hair_c03", {}).get("freq_hz"), 1.48)
         check("gravity_scale = the profile's", p1["groups"].get("hair_c03", {}).get("gravity_scale"), 0.5)
         extension_rig.motion_payload("Demo")
-        check("served_chains cache: 1 _newest_fit for 2 polls", len(calls), 1)
+        check("served fit resolved per poll: 2 accepted_fit calls for 2 polls", len(calls), 2)
 
         # fails on the old code: extension_rig.py of the task BASE, loaded from git
         try:
@@ -291,19 +296,20 @@ def main() -> int:
               extension_rig._revision({"declarations": []}))
         check("back to defaults", hm.set_hair_motion("Demo", "hair_demo", True, None), True)
 
-        # a newer fit record in garments/ -> new directory mtime -> re-read
+        # a newer accepted fit on the same base -> served from the next poll on
         time.sleep(0.01)
         newer = gdir / "hair_demo_bbbbbbbbbbbb.glb"
         newer.write_bytes(b"glb-stub-2")
         later = time.time() + 5
         os.utime(newer, (later, later))
         (gdir / "hair_demo_bbbbbbbbbbbb.json").write_text(json.dumps(
-            {"accepted": True, "method": "hairdeck", "report": {"chains": summary(0.6)}}))
+            {"accepted": True, "method": "hairdeck", "base_model_sha256": BASE_SHA,
+             "report": {"chains": summary(0.6)}}))
         n = len(calls)
         p4 = extension_rig.motion_payload("Demo")
-        check("directory change re-reads", len(calls), n + 1)
-        close("newest fit: freq_zeta(0.6) = 2.22", p4["groups"]["hair_c03"]["freq_hz"], 2.22)
-        garments._newest_fit = real_newest
+        check("the next poll resolves again", len(calls), n + 1)
+        close("newest fit on the base: freq_zeta(0.6) = 2.22", p4["groups"]["hair_c03"]["freq_hz"], 2.22)
+        garment_store.accepted_fit = real_accepted
         check("body hairstyle worn -> None",
               hm.served_chains("Demo", {**profile(), "equipped_mesh_pieces": {"hair": "hair_body"}}), None)
         check("no worn hair -> None", hm.served_chains("Demo", {**profile(), "equipped_mesh_pieces": {}}), None)
@@ -323,7 +329,7 @@ def main() -> int:
             block = (garments.hairdeck_panel("Demo", "hair_demo", profile=profile()) or {}).get("chains")
         except Exception as e:  # noqa: BLE001 — reported as a failure below
             block = f"{type(e).__name__}: {e}"
-        newest = real_newest("Demo", "hair_demo", "hairdeck")
+        newest = garments._newest_fit("Demo", "hair_demo", "hairdeck")
         check("hairdeck_panel carries the block", block,
               hm.panel("Demo", hairstyle(), newest[1] if newest else None, newest[0] if newest else None,
                        profile=profile()))

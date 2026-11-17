@@ -30,10 +30,13 @@ GLB has no body to fit one on. Segment (0, 1.5, 0)–(0, 1.6, 0); distances by h
     stiffness 0.4 and c01 weighted [_00, _01], stiffness 0.32, both ``rigid: []`` as fit_hairdeck records them):
     c00 rigid [c00_00], c01 rigid [c01_00]; motion_groups → hair_c00 bones [_01, _02], freq_hz 0.4 × 3.7 = 1.48,
     hair_c01 bones [_01], freq_hz 0.32 × 3.7 = 1.184 — EXACTLY (rounded to 3 decimals; the float product is
-    1.1840000000000002), zeta 0.5. Cache: a second poll does not read the fit again; a change of the worn
-    hairstyle's hair (its hair_forward_m — the settings are the item's since plan 2026-11-12-unified-worn-pieces
-    Task 13) is a miss; head scale 0.9 (model3d_opts.collision_scales) is a miss and gives c01 rigid [] → hair_c01
-    bones [_00, _01].
+    1.1840000000000002), zeta 0.5. The fit is the one the served model grafts (``garment_store.accepted_fit`` on
+    the current base — ``base_body.current_base`` is a stand-in naming BASE_SHA, the record's
+    ``base_model_sha256``). Cache (``_rigid_of_fit``, per file identity and head scale): a second poll parses the
+    fit GLB no more (1 ``rigid_joints`` call for 2 polls); a change of the worn hairstyle's hair (its
+    hair_forward_m — the settings are the item's since plan 2026-11-12-unified-worn-pieces Task 13) serves the same
+    fit file: still 1; head scale 0.9 (model3d_opts.collision_scales) is a miss (2) and gives c01 rigid [] →
+    hair_c01 bones [_00, _01].
 [4] panel(Demo, hairstyle settings, record, path): links = 2 + 1 = 3 at scale 1 (5 without the path — the recorded
     lists).
 [5] FAILS ON THE OLD CODE (pinned c061f759): that commit's hair_motion.py, loaded from git, serves the same fit with
@@ -54,6 +57,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 OLD_COMMIT = "c061f759"
+#: The stand-in base model's sha256 the fixture fit is accepted on.
+BASE_SHA = "5" * 64
 FAILS = []
 
 
@@ -94,7 +99,7 @@ def fixture_glb() -> bytes:
 
 
 def record():
-    return {"accepted": True, "method": "hairdeck", "report": {"chains": {
+    return {"accepted": True, "method": "hairdeck", "base_model_sha256": BASE_SHA, "report": {"chains": {
         "count": 2, "dropped": 0, "cards_bound": 4, "cards_rigid": 0, "match": "ok",
         "chains": [{"index": 0, "bones": ["HairGen_c00_00", "HairGen_c00_01", "HairGen_c00_02", "HairGen_c00_end"],
                     "weighted": ["HairGen_c00_00", "HairGen_c00_01", "HairGen_c00_02"], "stiffness": 0.4,
@@ -160,7 +165,8 @@ def main() -> int:
 
         # --- [3] served_chains ---------------------------------------------------------
         print("[3] served_chains / motion_groups")
-        from app.core import garment_hair
+        from app.core import base_body, garment_hair
+        base_body.current_base = lambda name, profile=None: ("b" * 12, BASE_SHA)  # the stand-in base model
         check("create Demo", save_character_profile("Demo", {"template": "human-roleplay", "gender": "female"},
                                                     create_new=True), True)
         inventory.add_item(name="Hair", category="garment", owner="Demo", item_id="hair_demo",
@@ -177,13 +183,13 @@ def main() -> int:
         fit_path.write_bytes(glb)
         (gdir / "hair_demo_aaaaaaaaaaaa.json").write_text(json.dumps(record()))
         calls = []
-        real_newest = garments._newest_fit
+        real_rigid = hm.rigid_joints
 
         def counted(*a, **k):
             calls.append(a)
-            return real_newest(*a, **k)
+            return real_rigid(*a, **k)
 
-        garments._newest_fit = counted
+        hm.rigid_joints = counted
         profile = get_character_profile("Demo")
         served = hm.served_chains("Demo", profile)
         check("rigid filled", [c["rigid"] for c in served["chains"]], [["HairGen_c00_00"], ["HairGen_c01_00"]])
@@ -193,19 +199,19 @@ def main() -> int:
         check("freq_hz exactly 1.48 / 1.184, zeta 0.5",
               [(v["freq_hz"], v["zeta"]) for v in groups.values()], [(1.48, 0.5), (1.184, 0.5)])
         hm.served_chains("Demo", profile)
-        check("second poll: no re-read", len(calls), 1)
+        check("second poll: no GLB re-read", len(calls), 1)
         garment = dict(inventory.get_item("hair_demo")["garment"], hair_forward_m=0.002)
         inventory.update_item("hair_demo", {"garment": garment})
         hm.served_chains("Demo", profile)
-        check("hairstyle hair change: miss", len(calls), 2)
+        check("hairstyle hair change: the same fit file, no GLB re-read", len(calls), 1)
         scaled = {**profile, "model3d_opts": {"collision_scales": {"head": 0.9}}}
         served9 = hm.served_chains("Demo", scaled)
-        check("head scale change: miss", len(calls), 3)
+        check("head scale change: miss", len(calls), 2)
         check("head scale 0.9: c01 rigid []", [c["rigid"] for c in served9["chains"]], [["HairGen_c00_00"], []])
         check("head scale 0.9: hair_c01 bones",
               hm.motion_groups(served9, {"swing": True, "stiffness": 1.0})["hair_c01"]["bones"],
               ["HairGen_c01_00", "HairGen_c01_01"])
-        garments._newest_fit = real_newest
+        hm.rigid_joints = real_rigid
         check("stored record unchanged",
               [c["rigid"] for c in json.loads((gdir / "hair_demo_aaaaaaaaaaaa.json").read_text())
                ["report"]["chains"]["chains"]], [[], []])
