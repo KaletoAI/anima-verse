@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Smoke: what an inbox import leaves in the clip library besides its own
-outputs (review 04#3).
+outputs (review 04#3, 04#5).
 
 Blender is stood in for (``runner.run`` / ``runner.status`` patched, the
 source probe ``_prepare_source`` patched to a fixed family); every directory
@@ -25,6 +25,20 @@ Usage: ./.venv/bin/python scripts/smoke_fbx_import_library_state.py
     ClipImportError, no ``hug__b~cheer.fbx``, sidecar unchanged
     (b anchor 0.6, no alt "cheer"). The old code checked against the
     pre-wait anchors (drift 0) and published the alt into a stale frame.
+[C] overwrite import of a GROUP kind as a pair (04#5). Before, in the
+    licensed root: ``dance__a/b/c.fbx``, the alt ``dance__b~x.fbx``, the
+    role sidecar ``dance__a.json``, a stray ``dance.glb``, the numbered
+    takes ``dance__a_02.fbx`` / ``dance__b_02.fbx``, and the other kinds
+    ``dance-slow.fbx`` + ``dance-slow.json`` and ``dancer.fbx``. The import
+    writes ``dance__a.fbx``, ``dance__b.fbx``, ``dance.json``.
+    Expected afterwards: role c, the alt, the role sidecar and the .glb are
+    gone (they are kind "dance", unnumbered, not written); the numbered
+    takes and the other kinds stay byte-identical; the new halves carry the
+    new bytes. The old code removed nothing.
+[D] the pair ``hug`` (with alt ``b~wave`` from [A]) re-imported as a SOLO
+    with overwrite: afterwards the only clip file of kind hug is ``hug.fbx``
+    (beside ``hug.json``, now a solo sidecar) — no ``hug__a``, ``hug__b``,
+    ``hug__b~wave``.
 """
 import json
 import os
@@ -79,10 +93,20 @@ ANCHORS = {"a": [0.0, 0.0], "b": [0.5, 0.0]}
 
 
 def fake_run(script, *, inputs=None, params=None, out_dir=None, timeout_s=0):
-    """The fbx_clip contract for ``export: alts``: only the alt file, and the
-    scene's role points as rebuilt from its sources (ANCHORS)."""
+    """The fbx_clip contract. ``export: alts``: only the alt file, and the
+    scene's role points as rebuilt from its sources (ANCHORS). Otherwise one
+    file per role (or the solo file) plus ``<kind>.json``."""
     out = Path(out_dir)
     outputs = {}
+    if params.get("export") != "alts":
+        kind, roles = params["kind"], params.get("roles") or []
+        for stem in ([f"{kind}__{r}" for r in roles] or [kind]):
+            (out / f"{stem}.fbx").write_bytes(b"new-" + stem.encode())
+            outputs[stem] = str(out / f"{stem}.fbx")
+        side = {"kind": kind, "pair": bool(roles), "roles": roles}
+        (out / f"{kind}.json").write_text(json.dumps(side), encoding="utf-8")
+        outputs["sidecar"] = str(out / f"{kind}.json")
+        return {"ok": True, "outputs": outputs, "data": side, "seconds": 0.1}
     for alt in params.get("alts") or []:
         stem = f"{params['kind']}__{alt['role']}~{alt['name']}"
         (out / f"{stem}.fbx").write_bytes(b"alt-" + stem.encode())
@@ -184,6 +208,50 @@ def test_alt_checks_current_frame():
           and "cheer" not in ((meta.get("alts") or {}).get("b") or []), str(meta))
 
 
+def names_of_kind(directory, *kinds):
+    return sorted(p.name for p in directory.iterdir()
+                  if p.is_file() and any(p.name.startswith(k) for k in kinds))
+
+
+def test_overwrite_group_as_pair():
+    print("[C] overwrite import of a group kind as a pair removes the old shape")
+    before = {"dance__a.fbx": b"old-a", "dance__b.fbx": b"old-b", "dance__c.fbx": b"old-c",
+              "dance__b~x.fbx": b"old-alt", "dance__a.json": b"{}", "dance.glb": b"old-glb",
+              "dance__a_02.fbx": b"take2-a", "dance__b_02.fbx": b"take2-b",
+              "dance-slow.fbx": b"slow", "dance-slow.json": b"{}", "dancer.fbx": b"dancer",
+              "dance.json": json.dumps({"kind": "dance", "roles": ["a", "b", "c"]}).encode()}
+    for name, data in before.items():
+        (LICENSED / name).write_bytes(data)
+    clips.reload_clip_caches()
+    fbx_import.import_fbx("dance", [{"name": "a.fbx", "take": None}, {"name": "b.fbx", "take": None}],
+                          overwrite=True, target="licensed")
+    got = names_of_kind(LICENSED, "dance")
+    want = sorted(["dance__a.fbx", "dance__b.fbx", "dance.json", "dance__a_02.fbx",
+                   "dance__b_02.fbx", "dance-slow.fbx", "dance-slow.json", "dancer.fbx"])
+    check("only the new pair, the numbered takes and the other kinds are left", got == want,
+          f"{got} != {want}")
+    check("the numbered takes and other kinds are untouched",
+          all((LICENSED / n).read_bytes() == before[n] for n in
+              ("dance__a_02.fbx", "dance__b_02.fbx", "dance-slow.fbx", "dance-slow.json", "dancer.fbx")))
+    check("the halves are the new ones",
+          (LICENSED / "dance__a.fbx").read_bytes() == b"new-dance__a"
+          and (LICENSED / "dance__b.fbx").read_bytes() == b"new-dance__b")
+
+
+def test_overwrite_pair_as_solo():
+    print("[D] overwrite import of a pair kind as a solo removes the halves and alts")
+    check("the pair and its alt are there before", all(
+        (LICENSED / n).is_file() for n in ("hug__a.fbx", "hug__b.fbx", "hug__b~wave.fbx")))
+    fbx_import.import_fbx("hug", [{"name": "a.fbx", "take": None}], overwrite=True,
+                          target="licensed")
+    got = sorted(p.name for p in LICENSED.iterdir()
+                 if p.is_file() and p.suffix.lower() in clips.CLIP_EXTS
+                 and clips.parse_clip_role(p.name)[0] == "hug")
+    check("only hug.fbx is left of kind hug", got == ["hug.fbx"], str(got))
+    check("hug.json is the solo sidecar",
+          json.loads((LICENSED / "hug.json").read_text()).get("pair") is False)
+
+
 def main():
     INBOX.mkdir(parents=True, exist_ok=True)
     for name in ("a.fbx", "b.fbx", "alt.fbx"):
@@ -194,6 +262,8 @@ def main():
          patch.object(fbx_import.runner, "run", fake_run):
         test_alt_keeps_concurrent_edit()
         test_alt_checks_current_frame()
+        test_overwrite_group_as_pair()
+        test_overwrite_pair_as_solo()
     print("FAIL" if FAIL else "PASS", f"({len(FAIL)} failing)" if FAIL else "")
     return 1 if FAIL else 0
 

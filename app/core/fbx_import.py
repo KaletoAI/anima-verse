@@ -42,7 +42,8 @@ from app.blender import runner
 from app.core import cmu_import
 from app.core.animation_clips import (ALT_NAME_RE, ALT_SEPARATOR, CLIP_ROLES,
                                      ROLE_SEPARATOR, clip_entries, clip_role_gender,
-                                     library_write_lock, reload_clip_caches)
+                                     library_write_lock, reload_clip_caches,
+                                     remove_stale_kind_files)
 from app.core.clip_catalog import ClipKindExists, existing_kinds
 from app.core.cmu_import import ClipImportError
 from app.core.log import get_logger
@@ -1048,6 +1049,14 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
             raise ClipKindExists(f"'{kind}' already exists in the {target} library")
         out.mkdir(parents=True, exist_ok=True)
         res = _run_source(inputs, params, out, timeout_s)
+        # An overwrite replaces the whole clip of the kind, not just the
+        # files of the new shape: the old shape's halves, alts and own
+        # sidecars go too (``remove_stale_kind_files``).
+        stale = remove_stale_kind_files(
+            out, kind, [Path(p) for p in (res.get("outputs") or {}).values()])
+        if stale:
+            logger.info("fbx clip import replaced: %s removed from %s%s", ", ".join(stale),
+                        f"{cset}/" if cset else "", kind)
 
         # The clip entry cache, the pose dropdown and the animation-set fallback
         # all have to see a fresh kind at once, not after a restart — the ONE

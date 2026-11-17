@@ -1425,6 +1425,34 @@ def _kind_files(directory: Path, kind: str) -> List[Path]:
             and parse_clip_role(p.name)[0] == kind]
 
 
+def remove_stale_kind_files(directory: Path, kind: str, keep: Sequence[Path]) -> List[str]:
+    """After an import of ``kind`` into ``directory``: removes what an older
+    clip of that kind left there and the import did not write — the solo
+    file, the role halves and the alt halves of the UNNUMBERED clip, and the
+    sidecars of their own (``hug__a.json`` would override the new
+    ``hug.json``). A pair re-imported as a solo, or a group as a pair, must
+    not keep the other shape's files beside it, and an alt half was fitted to
+    the old frame.
+
+    Only files whose parsed KIND is ``kind`` are touched (``hug-big.fbx`` is
+    another kind), and numbered variants (``hug_02.fbx``, ``hug__a_02.fbx``)
+    are other takes and stay. ``keep`` are the files the import published.
+    The caller holds the library lock. Returns the removed file names."""
+    kept = {Path(p).resolve() for p in keep}
+    removed: List[str] = []
+    for path in _kind_files(directory, kind):
+        if _split_stem(path.stem)[2]:
+            continue                                     # a numbered variant
+        own = _own_sidecar(path)
+        if own is not None and own.resolve() not in kept:
+            own.unlink(missing_ok=True)
+            removed.append(own.name)
+        if path.resolve() not in kept:
+            path.unlink(missing_ok=True)
+            removed.append(path.name)
+    return removed
+
+
 def _alt_files(path: Path) -> List[Path]:
     """The ALT halves of the pair or group clip ``path`` belongs to, in the
     same directory — they move, turn and go with the scene's own halves.
