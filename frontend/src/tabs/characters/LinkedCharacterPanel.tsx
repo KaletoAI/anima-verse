@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ConfirmDialog } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPut } from '../../lib/api'
@@ -71,11 +71,17 @@ export function LinkedCharacterPanel({
     setShared(s.leader ? s.shared_soul_sections : ['soul', 'beliefs', 'lessons'])
   }, [])
 
+  // Only the newest load may land: after a character switch an older, slower answer would show the
+  // previous character's link state.
+  const loadSeq = useRef(0)
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current
     setError('')
     try {
-      apply(await apiGet<LinkState>(`/characters/${encodeURIComponent(character)}/link`))
+      const s = await apiGet<LinkState>(`/characters/${encodeURIComponent(character)}/link`)
+      if (seq === loadSeq.current) apply(s)
     } catch (e) {
+      if (seq !== loadSeq.current) return
       setState(null)
       setError((e as Error).message)
     }

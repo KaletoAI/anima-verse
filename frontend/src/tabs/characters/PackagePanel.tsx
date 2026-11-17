@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError, ConfirmDialog } from '@anima/player-ui'
 import { PromptDialog } from '../../components/PromptDialog'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -167,13 +167,19 @@ export function PackagePanel({
   const base = `/characters/${encodeURIComponent(character)}/panels/${encodeURIComponent(packageId)}`
   const q = `?lang=${encodeURIComponent(lang)}`
 
+  // Only the newest load may land: after a character switch an older, slower answer would show the
+  // previous character's cards under this character's base URL (and a Save would write them there).
+  const loadSeq = useRef(0)
   const reload = useCallback(async () => {
+    const seq = ++loadSeq.current
     try {
       const d = await apiGet<Panel>(base + q)
+      if (seq !== loadSeq.current) return
       setPanel(d)
       setGone(false)
       setLoadError('')
     } catch (e) {
+      if (seq !== loadSeq.current) return
       // 404 = the package (or its panel) is gone: show nothing.
       if (e instanceof ApiError && e.status === 404) {
         setGone(true)

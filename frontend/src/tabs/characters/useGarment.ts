@@ -973,13 +973,19 @@ export interface ItemWearers {
  *  hidden). */
 export function useWardrobeGarments(character: string) {
   const [data, setData] = useState<WardrobeGarments | null>(null)
+  // Only the newest load may land: after a character switch an older, slower answer would put the previous
+  // character's modes and piece states under this character's Wardrobe rows.
+  const loadSeq = useRef(0)
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current
     if (!character) { setData(null); return }
+    let next: WardrobeGarments | null = null
     try {
-      setData(await apiGet<WardrobeGarments>(`/characters/${encodeURIComponent(character)}/garments`))
+      next = await apiGet<WardrobeGarments>(`/characters/${encodeURIComponent(character)}/garments`)
     } catch {
-      setData(null)
+      next = null
     }
+    if (seq === loadSeq.current) setData(next)
   }, [character])
   /** A panel's newer row status, without reloading the overview. */
   const setStatus = useCallback((itemId: string, status: PieceStatus) => {
