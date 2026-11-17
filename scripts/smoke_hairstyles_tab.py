@@ -40,6 +40,13 @@ EXPECTED, BY HAND FROM THE BRIEF AND app/core/garments.py (HUB_JOBS "hair:hairde
     is worn (equipped_mesh_pieces.hair still hair_kai_body) and no Build is requested. {hairstyle ""} -> 200,
     the set leaves the hair as it is (""). {hairstyle hair_ana} -> 400 (no hairstyle of Kai), set unchanged;
     unknown set -> 404; a player of Kai -> 403.
+[7] A set deleted WHILE its hairstyle is set (review 10#3): a second set ``set2``; the route's existence check
+    (its first ``get_character_outfits`` call) starts ``delete_character_outfit(Kai, set2)`` in another thread
+    and waits 0.3 s for it. The delete takes ``keyed_lock("character_profile", Kai)``, which the route holds
+    around check + write, so it is still running after 0.3 s -> True; the route writes the existing set2 ->
+    200 {outfit_id set2, hairstyle hair_kai_deck}; then the delete runs. Kai's set ids afterwards: [set1] only —
+    no phantom set. (Unlocked, the delete finished inside the 0.3 s, ``add_character_outfit`` found no set2
+    and appended a new empty set "Outfit1": two sets.)
 """
 import json
 import os
@@ -219,6 +226,36 @@ def main() -> int:
                   .get("hairstyle"), "")
             check("unknown set -> 404", client.post("/inventory/characters/Kai/outfit-sets/nope/hairstyle",
                                                     json={"hairstyle": ""}).status_code, 404)
+
+            # --- [7] ---------------------------------------------------------------------------------------------
+            print("[7] a set deleted while its hairstyle is set")
+            import threading
+            from app.models import character as ch_mod
+            set2 = add_character_outfit("Kai", {"id": "", "name": "Set two", "pieces": [], "remove_slots": []})
+            real_get = ch_mod.get_character_outfits
+            race = {}
+
+            def racing_get(name):
+                result = real_get(name)
+                if "thread" not in race:
+                    race["thread"] = threading.Thread(target=ch_mod.delete_character_outfit, args=("Kai", set2))
+                    race["thread"].start()
+                    race["thread"].join(0.3)
+                    race["delete_waited"] = race["thread"].is_alive()
+                return result
+
+            ch_mod.get_character_outfits = racing_get
+            try:
+                r = client.post(f"/inventory/characters/Kai/outfit-sets/{set2}/hairstyle",
+                                json={"hairstyle": "hair_kai_deck"})
+            finally:
+                ch_mod.get_character_outfits = real_get
+            race["thread"].join(5)
+            check("delete waited for the route's lock", race.get("delete_waited"), True)
+            check("route wrote the existing set", (r.status_code, r.json()),
+                  (200, {"outfit_id": set2, "hairstyle": "hair_kai_deck"}))
+            check("no phantom set", [o.get("id") for o in real_get("Kai")], [set_id])
+
             client.cookies.set(sessions.SESSION_COOKIE_NAME, tokens[users.ROLE_USER])
             check("player -> 403", client.post(url, json={"hairstyle": "hair_kai_deck"}).status_code, 403)
 

@@ -1252,14 +1252,21 @@ async def set_outfit_set_hairstyle_route(character_name: str, outfit_id: str, re
 
 
 def _set_outfit_set_hairstyle_sync(character_name: str, outfit_id: str, hairstyle: str) -> Dict[str, Any]:
-    """The blocking body of ``set_outfit_set_hairstyle_route``."""
+    """The blocking body of ``set_outfit_set_hairstyle_route``.
+
+    The existence check and the write sit under the ``character_profile`` lock
+    that ``delete_character_outfit`` and the hairstyle delete also take: an
+    unknown id makes ``add_character_outfit`` create a NEW empty set, so a set
+    deleted between an unlocked check and the write came back as a phantom."""
     from app.core.garment_hair import is_hairstyle
+    from app.core.keyed_lock import keyed_lock
     from app.models.character import add_character_outfit, get_character_outfits
-    if not any(o.get("id") == outfit_id for o in get_character_outfits(character_name)):
-        raise HTTPException(status_code=404, detail="outfit not found")
-    if hairstyle and not is_hairstyle(get_item(hairstyle), character_name):
-        raise HTTPException(status_code=400, detail=f"{hairstyle[:80]} is no hairstyle of {character_name}")
-    add_character_outfit(character_name, {"id": outfit_id, "hairstyle": hairstyle})
+    with keyed_lock("character_profile", character_name):
+        if not any(o.get("id") == outfit_id for o in get_character_outfits(character_name)):
+            raise HTTPException(status_code=404, detail="outfit not found")
+        if hairstyle and not is_hairstyle(get_item(hairstyle), character_name):
+            raise HTTPException(status_code=400, detail=f"{hairstyle[:80]} is no hairstyle of {character_name}")
+        add_character_outfit(character_name, {"id": outfit_id, "hairstyle": hairstyle})
     return {"outfit_id": outfit_id, "hairstyle": hairstyle}
 
 
