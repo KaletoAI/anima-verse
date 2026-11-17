@@ -28,6 +28,9 @@ The mesh shape (Ruling A48d) is no setting: the item's mode decides it (``garmen
 made shape is not the current one is due (``changed``).
 - ``shell_offset`` (A166): ``garment_shell.SHELL_OFFSET_CHOICES`` — mm the shell stands off the skin (default 4);
   only a shell-mode piece's fit becomes due for it.
+- ``shell_margin`` (A184, "Take from the body"): ``garment_shell.MARGIN_CHOICES`` — mm the shell's border is moved
+  outward around the piece's outline in its views (default 3); ``shell_fill`` ("Fill holes up to"):
+  ``garment_shell.FILL_CHOICES`` — cm² of an enclosed gap that is closed (default 2). Shell-mode pieces only.
 
 Stored on the character profile (``SETTINGS_KEY``: ``{item_id: {key: value}}``, only the values that differ from
 the defaults). Not part of the fingerprint: a change keeps every image and the mesh and only makes the fit due — the
@@ -43,8 +46,8 @@ SIDES = ("left", "right")
 
 
 def defaults() -> Dict[str, Any]:
-    from app.core.garment_shell import SHELL_OFFSET_DEFAULT
-    return {"sleeves_left": "auto", "sleeves_right": "auto", "allowance": "auto", "depth": 0, "trunk": "auto",
+    from app.core.garment_shell import FILL_DEFAULT, MARGIN_DEFAULT, SHELL_OFFSET_DEFAULT
+    return {"shell_margin": MARGIN_DEFAULT, "shell_fill": FILL_DEFAULT, "sleeves_left": "auto", "sleeves_right": "auto", "allowance": "auto", "depth": 0, "trunk": "auto",
             "shaft": "split", "shaft_overlap": 10, "body_overlap": 20, "shell_offset": SHELL_OFFSET_DEFAULT}
 
 
@@ -66,6 +69,8 @@ def normalise(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     out["body_overlap"] = garment_shaft.body_overlap_cm(raw)
     from app.core import garment_shell
     out["shell_offset"] = garment_shell.shell_offset_choice(raw)
+    out["shell_margin"] = garment_shell.shell_margin_choice(raw)
+    out["shell_fill"] = garment_shell.shell_fill_choice(raw)
     return out
 
 
@@ -104,8 +109,9 @@ def changed(record: Optional[Dict[str, Any]], profile: Optional[Dict[str, Any]],
     now = dict(current)
     if current_shape(current, item_id) != garment_shell.SHELL:
         # A166: the shell offset shapes a shell only — a generated mesh's fit is not due for it.
-        made.pop("shell_offset", None)
-        now.pop("shell_offset", None)
+        for key in garment_shell.SHELL_SETTING_KEYS:
+            made.pop(key, None)
+            now.pop(key, None)
     from app.core import garment_shaft
     if current.get("shaft") != garment_shaft.WHOLE:
         # A182: the body overlap shapes a whole boot only
@@ -164,6 +170,13 @@ def validate(changes: Dict[str, Any]) -> Dict[str, Any]:
                     or value not in garment_shell.SHELL_OFFSET_CHOICES):
                 raise ValueError("shell_offset must be one of "
                                  + ", ".join(str(c) for c in garment_shell.SHELL_OFFSET_CHOICES) + " (mm)")
+            out[key] = int(value)
+        elif key in ("shell_margin", "shell_fill"):
+            from app.core import garment_shell
+            choices = garment_shell.MARGIN_CHOICES if key == "shell_margin" else garment_shell.FILL_CHOICES
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or value not in choices:
+                raise ValueError(f"{key} must be one of " + ", ".join(str(c) for c in choices)
+                                 + (" (mm)" if key == "shell_margin" else " (cm²)"))
             out[key] = int(value)
         elif key == "trunk":
             if not isinstance(value, str) or value not in garment_fit.TRUNK_CHOICES:

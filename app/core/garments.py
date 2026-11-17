@@ -1528,7 +1528,8 @@ def _fit_shell(character_name: str, item_id: str, kind: str, fsig: str, bsig: st
         # a second shell waits here and never takes a refit-pool slot; other fits keep their slots.
         with _SHELL_BUILD_LOCK:
             result = refit_pool.run(garment_shell.build_shell, rigged, unrigged, views,
-                                    offset_m=fit_settings["shell_offset"] / 1000.0)
+                                    offset_m=fit_settings["shell_offset"] / 1000.0,
+                                    margin_mm=fit_settings["shell_margin"], fill_cm2=fit_settings["shell_fill"])
     except (garment_shell.ShellRefused, garment_source.FrameRefused) as e:
         error = f"shell refused — {e}"
         gates = {"ok": False, "reasons": [str(e)]}
@@ -5395,10 +5396,21 @@ def mesh_shape_view(record: Dict[str, Any], current: Dict[str, Any], item_id: st
               "made": (garment_shell.shell_offset_choice(garment_fit_settings.recorded(record))
                        if made == garment_shell.SHELL else None),
               "choices": list(garment_shell.SHELL_OFFSET_CHOICES), "default": garment_shell.SHELL_OFFSET_DEFAULT}
-    return {"resolved": resolved, "offset": offset, "made": made,
+    # A184: how much the shell takes from the body and the holes it closes — same shape as the offset
+    made_with = garment_fit_settings.recorded(record) if made == garment_shell.SHELL else None
+    margin = {"setting": garment_shell.shell_margin_choice(current),
+              "made": garment_shell.shell_margin_choice(made_with) if made_with else None,
+              "choices": list(garment_shell.MARGIN_CHOICES), "default": garment_shell.MARGIN_DEFAULT}
+    fill = {"setting": garment_shell.shell_fill_choice(current),
+            "made": garment_shell.shell_fill_choice(made_with) if made_with else None,
+            "choices": list(garment_shell.FILL_CHOICES), "default": garment_shell.FILL_DEFAULT}
+    # a shell made by another construction version is due as well (garments._fit_state reads it stale)
+    version_due = made == garment_shell.SHELL and (record.get("inputs") or {}).get(
+        "shell_version") != garment_shell.SHELL_VERSION
+    return {"resolved": resolved, "offset": offset, "margin": margin, "fill": fill, "made": made,
             "due": made is not None and (made != resolved or (
-                resolved == garment_shell.SHELL and offset["made"] is not None
-                and offset["made"] != offset["setting"])),
+                resolved == garment_shell.SHELL and (version_due or any(
+                    v["made"] is not None and v["made"] != v["setting"] for v in (offset, margin, fill))))),
             "cost": {"hub_jobs": 0, "where": "cpu"}, "shell": shell, "slot_labels": slot_labels(character_name)}
 
 
@@ -5448,10 +5460,11 @@ def fit_settings_view(record: Dict[str, Any], current: Dict[str, Any], *, accept
                                             "sleeve_skin_left_cm2", "sleeve_skin_right_cm2",
                                             "trunk_front_gap_p50_m", "trunk_back_gap_p50_m")}
     numbers["scale"] = metrics.get("scale_retry")
+    from app.core import garment_shell
     made_with = garment_fit_settings.recorded(record) if record else None
     shape = mesh_shape_view(record, current, item_id, character_name)
     from app.core import garment_shaft
-    skip = {"shell_offset"} | ({"body_overlap"} if current.get("shaft") != garment_shaft.WHOLE else set())
+    skip = set(garment_shell.SHELL_SETTING_KEYS) | ({"body_overlap"} if current.get("shaft") != garment_shaft.WHOLE else set())
     return {
         "settings": current, "recorded": made_with,
         # the shell offset is compared in shape["due"] (a shell only, A166)

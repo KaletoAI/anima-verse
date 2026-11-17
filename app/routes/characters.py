@@ -2120,6 +2120,9 @@ class GarmentFitSettingsRequest(BaseModel):
     body_overlap: Any = None
     # A166: mm a shell stands off the skin (garment_shell.SHELL_OFFSET_CHOICES)
     shell_offset: Any = None
+    # A184: mm the shell's border grows around the piece's outline / cm² of gaps it closes (garment_shell choices)
+    shell_margin: Any = None
+    shell_fill: Any = None
 
 
 class PieceViewSourceRequest(BaseModel):
