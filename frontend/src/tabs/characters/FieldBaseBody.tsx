@@ -84,6 +84,7 @@
  * …/images/front?variant=neutral serves it), GET …/model3d (useModel3DStatus), POST …/model3d/options (the
  * settings).
  */
+import { cpuProgressText } from '../../lib/cpuProgress'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -430,6 +431,10 @@ function RunAllHeader({ runAll, lights, busy, buildRunning, activity, fullBody, 
         : button.reason ? <div className="ga-hint" style={{ fontSize: 12 }}>{button.reason}</div> : null}
       {!activity?.base && activity?.other ? (
         <div className="ga-hint" role="status" style={{ fontSize: 12 }}>{t(activity.other)}</div>
+      ) : null}
+      {runAll?.live ? (
+        <div className="ga-hint ga-one-line" role="status" style={{ fontSize: 12, color: 'var(--accent, #6aa9ff)' }}
+          title={runAll.live.line}>{t('Running')}: {cpuProgressText(runAll.live, t)}</div>
       ) : null}
       {lastError ? <div className="ga-hint" style={{ ...ERROR_STYLE, fontSize: 12 }}>{t('Run all')}: {lastError}</div> : null}
     </div>

@@ -10,6 +10,7 @@
  * Build (one per character) makes what is missing. Returned strings are
  * English; the components put them through `t()`.
  */
+import { cpuProgressText, type CpuProgress } from '../../lib/cpuProgress'
 import type { FootPose } from '@anima/scene-render'
 import type { ModelStep } from './ModelSteps'
 import type { ArmLight, FitSettingsInfo } from './fitSettingsModel'
@@ -434,7 +435,7 @@ export interface FigurePayload {
   build: {
     running: boolean
     /** The step in flight; `index` counts from 1. */
-    step: (FigureStep & { index?: number; count?: number }) | null
+    step: (FigureStep & { index?: number; count?: number; label?: string; live?: CpuProgress | null }) | null
     queued: number
     /** Ruling A26 a: the reason of an automatic Build that waits for a base-body step, else null. */
     deferred?: string | null
@@ -1234,10 +1235,14 @@ export interface TemplateLive {
   attempt: number
   elapsed_s: number
   stage_s: number
+  /** A194: the shared live line of the drape (`cpu_progress`), null when it reports nothing. */
+  cpu?: CpuProgress | null
 }
 
 /** A172: one line of a drape in flight — "Draping the pose shapes 2/4 (sit) · frame 8/16 · retry · 34 s". */
 export function templateLiveText(live: TemplateLive, t: (s: string) => string): string {
+  // A194: the shared line ("Stage · i/n · 42 s") wherever the server has one; the A172 record otherwise.
+  if (live.cpu) return cpuProgressText(live.cpu, t) + (live.attempt > 1 ? ` · ${t('retry with finer cloth')}` : '')
   const parts = [t(live.label)]
   if (live.index && live.count) {
     parts[0] += ` ${live.index}/${live.count}${live.pose ? ` (${live.pose.replace(/_/g, ' ')})` : ''}`

@@ -16,6 +16,7 @@
  * state (Queued / Generating… / Will be redone — `runMark`) and the panel's
  * sticky status line (RunStatusLine) says what the item waits for.
  */
+import { cpuProgressText, type CpuProgress } from '../../lib/cpuProgress'
 import { Fragment } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -103,8 +104,10 @@ export function RunButton({ feedback, slot, label, disabled, title, ariaLabel, s
  *  the item's run WAITS (`queue_position`), a Cancel button takes it out of
  *  the queue (`onCancel`, useGarmentRun's cancel); (A191) while it RUNS the
  *  same button stops it — its render and a hub job are cancelled. */
-export function RunStatusLine({ garment, feedback, stepLabels, bare = false, onCancel }: {
+export function RunStatusLine({ garment, feedback, stepLabels, bare = false, onCancel, live }: {
   garment: GarmentRunState | null
+  /** A194: the live CPU line of the step in flight ("Stage · i/n · 42 s"), null when it reports nothing. */
+  live?: CpuProgress | null
   feedback?: RunFeedback
   stepLabels: Record<string, string>
   /** Inline in a header: no sticky box of its own. */
@@ -130,7 +133,7 @@ export function RunStatusLine({ garment, feedback, stepLabels, bare = false, onC
   } else if (running === 'queued') {
     text = queueText(garment, feedback, stepLabels, t)
   } else {
-    text = `${t('Running')}: ${t(stepLabels[running] || running)}`
+    text = `${t('Running')}: ${t(stepLabels[running] || running)}${live ? ` — ${cpuProgressText(live, t)}` : ''}`
   }
   return (
     <div className={bare ? 'ga-hint ga-run-status-bare' : 'ga-hint ga-run-status'} role="status">

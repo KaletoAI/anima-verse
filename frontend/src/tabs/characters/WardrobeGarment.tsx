@@ -60,6 +60,7 @@
  * …/garments/{item}/fits/{body}/model — a refused fit with the failing region marked), and Accept / Undo accept of
  * a refused fit.
  */
+import { cpuProgressText } from '../../lib/cpuProgress'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
@@ -230,6 +231,7 @@ export function PieceStatusChip({ status, name }: { status: PieceStatus; name: s
     text = status.step === 'queued'
       ? t('Queued')
       : `${progress} ${t(STEP_LABELS[status.step || ''] || status.step || '')}`.trim()
+        + (status.live ? ` · ${cpuProgressText(status.live, t)}` : '')
     color = 'var(--accent, #6aa9ff)'
   } else if (status.missing) {
     // Mesh mode: not painted into the outfit body, so not shown until the mesh is accepted.
@@ -1230,7 +1232,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
           <div style={{ flex: '1 1 auto', minWidth: 0, fontWeight: 400 }}>
             {running || feedback.pending !== null
               ? <RunStatusLine garment={runState} feedback={feedback} stepLabels={stepLabels} bare
-                onCancel={() => { void cancel() }} />
+                live={info?.live ?? info?.status?.live ?? null} onCancel={() => { void cancel() }} />
               : info?.status ? <PieceStatusChip status={info.status} name={info.name || name} /> : null}
             {/* Ruling A140: without Run all the head still names the next step and its cost. */}
             {noRunAll && next && !running && feedback.pending === null ? (

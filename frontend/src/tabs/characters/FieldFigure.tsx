@@ -61,6 +61,7 @@
  * model it has and the button reads "Build base body (N hub jobs)" with NO_BASE_BODY_NOTE under it. Polls GET
  * …/figure while a Build runs (useFigure); the tab re-reads on the push topic `generation`.
  */
+import { cpuProgressText } from '../../lib/cpuProgress'
 import { useCallback, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -403,7 +404,8 @@ function FigureNotices({ data, posting, onBuild, onDismiss, onRegenerateFront, o
       .filter(Boolean).join(' · ') : ''
   const fullBodyFailed = data.full_body_reference?.outfit_failed || ''
   const runningText = running
-    ? (step ? `${t('Running')}: ${step.index && step.count ? `${step.index}/${step.count} ` : ''}${step.label}` : t('Running')) : ''
+    ? (step ? `${t('Running')}: ${step.index && step.count ? `${step.index}/${step.count} ` : ''}${step.label}`
+      + (step.live ? ` — ${cpuProgressText(step.live, t)}` : '') : t('Running')) : ''
   const lines: ReactNode[] = []
   const line = (key: string, light: Light | null, text: string, title?: string, actions?: ReactNode) => lines.push(
     <div key={key} className="ga-notice" title={title || text}>

@@ -9,6 +9,7 @@
  * down), stopped when nothing runs, on unmount and when the URL changes
  * (another character or item; null = nothing to load).
  */
+import type { CpuProgress } from '../../lib/cpuProgress'
 import type { UseUndoState } from './refusedAttemptsModel'
 import type { FitSettingsInfo } from './fitSettingsModel'
 import type { AllowanceView } from './fitWiden'
@@ -744,6 +745,8 @@ export interface PieceStatus {
   state: 'running' | 'fitted' | 'mesh' | 'images' | 'missing'
   /** The step in flight while running. */
   step: string | null
+  /** A194: the live CPU line of the piece's step in flight (`garment_set.piece_live`), null when none reports. */
+  live?: CpuProgress | null
   /** Outfit body mode mesh only: worn without an accepted fit — never painted (meshed) into the outfit body,
    *  so it is missing from the outfit model until its mesh is accepted (ruling 2026-11-10). */
   missing?: boolean
@@ -855,6 +858,8 @@ export interface GarmentItemInfo {
   mesh_mode: MeshMode
   worn: boolean
   status: PieceStatus
+  /** A194: the live CPU line of the piece in flight, null when idle. */
+  live?: CpuProgress | null
   garment: GarmentInfo | null
   limits: Partial<Record<string, Record<string, GateLimit>>>
   /** What "Run all" runs now (`garments.run_estimate`; null off the pipeline): the steps from the first one

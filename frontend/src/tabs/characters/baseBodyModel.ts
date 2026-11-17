@@ -7,6 +7,8 @@
  */
 import type { ExtensionTipOverride, ExtensionTipPanelInfo } from './useBaseBody'
 
+import type { CpuProgress } from '../../lib/cpuProgress'
+
 /** What "Run all" runs now (`figure_build.base_run_all`): the plain body's refresh, the face cleanup of the
  *  stored base mesh, its missing or outdated face retexture, the base mesh repair after a saved repair setting or a
  *  new repair version (Ruling A34), the extension rebuild of a base whose tip smoothing is not recorded yet (Ruling
@@ -28,6 +30,8 @@ export interface BaseRunAll {
   face_due?: '' | 'missing' | 'changed'
   /** A Run all of the character goes now. */
   running: boolean
+  /** A194: the live CPU line of the base run in flight, null when none reports. */
+  live?: CpuProgress | null
   /** Its last outcome ("" = it ended without an error). */
   last: { error: string; finished_at: string } | null
 }
