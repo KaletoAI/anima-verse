@@ -93,11 +93,16 @@ COLLAR_RINGS = 3
 NECK_CUT_WIDEN_M = 0.03
 #: Ruling A144: below the neckline cut a column's vertices are re-spaced over this arc length (or twice the cut).
 NECK_BLEND_M = 0.08
+#: A178: the re-spaced vertices of a meridian stand at least this far apart (where the column is long enough).
+NECK_MIN_STEP_M = 0.010
 #: Edges built shorter than this are left out of the stretch ratio.
 MIN_EDGE_M = 0.001
 #: The yoke reaches at least this far outward from the neck opening.
 CAP_MIN_M = 0.03
 COLLAR_STEP_M = 0.012
+#: A178: a yoke ray in front of the neck that meets the body higher than this above the neck base met the chin (a head
+#: bent forward: the ray starts inside the beard) — a 13 cm spike up to the chin on two meridians hung as a tongue.
+HEAD_HIT_M = 0.01
 #: Ruling A144: a stand collar runs only where the neckline is cut less than this (down a V it stood as a 3 mm band
 #: the lower layer stretched to 4x).
 COLLAR_CUT_MAX_M = 0.03
@@ -152,6 +157,8 @@ def row_radii(btree, centre, angles, z, circ, w=1.0):
     perim = float(np.sum(np.hypot(np.diff(np.r_[xs, xs[:1]]), np.diff(np.r_[ys, ys[:1]]))))
     shaped = r0 + min(ROW_EASE_MAX_M, max(0.0, (circ - perim) / (2 * math.pi)))
     return w * shaped + (1 - w) * np.maximum(circle, r0)
+
+
 
 
 def build_bodice(spec, btree, ftree, centre, arm):
@@ -235,6 +242,8 @@ def build_bodice(spec, btree, ftree, centre, arm):
         for c in range(nc):
             xy = (1 - t) * outer[c] + t * inner[c]
             zs = _ray_down(ftree, xy[0], xy[1], top=ray_top)
+            if zs is not None and xy[1] < ncy and zs > bod["neck_y"] + HEAD_HIT_M:
+                zs = None                  # A178: the chin of a head bent forward, not the yoke's surface
             capz[k, c] = max(top_z - 0.08, (zs + CAP_CLEAR_M) if zs is not None else top_z - 0.08)
             if k:
                 cid[k, c] = len(verts)
@@ -269,8 +278,13 @@ def build_bodice(spec, btree, ftree, centre, arm):
         keep = [r for r in low if row_y[r] <= z_lo]
         if len(keep) < 2:
             continue                       # never on a sane body: the cut would eat the column
-        rk = keep[0]
-        s_end = float(s[K + 1 + low.index(rk)])
+        # A178: the re-spaced stretch reaches down until its vertices stand NECK_MIN_STEP_M apart (crowded into a
+        # short arc under a deep front cut they stood 4-7 mm apart, and a short edge takes the drape's pull as a
+        # large ratio: p99 1.23 against 1.03 for 14-30 mm edges on the copies)
+        for rk in keep:
+            s_end = float(s[K + 1 + low.index(rk)])
+            if (s_end - cut_s[c]) / (K + rk) >= NECK_MIN_STEP_M:
+                break
         n_move = K + rk                    # ids[:n_move] are re-spaced over [cut, s_end)
         ns = cut_s[c] + (s_end - cut_s[c]) * np.arange(n_move) / n_move
         newp = np.c_[np.interp(ns, s, Q[:, 0]), np.interp(ns, s, Q[:, 1]), np.interp(ns, s, Q[:, 2])]
@@ -992,6 +1006,9 @@ def run(a):
         bm.to_mesh(me)
         bm.free()
         slit_edges = 0
+        # A178: a bodice built inside the arm root (armhole window, neckline chords through a high shoulder) is laid
+        # out of the body smoothly here, before its rest lengths are taken
+        binfo["clear"] = gd.clear_of_body(obj, body, thickness=float(prm.get("thickness", 0.004)), extra=lower)
     else:
         binfo = {}
         verts, faces, uvs, angles = wrap(spec, btree, centre)

@@ -550,6 +550,103 @@ def skinned_collider(body, arm, faces=80000):
     return col
 
 
+def signed_out(tree, p, reach):
+    """A178 — the nearest collider point to ``p`` and the unit direction "out" there: from that point towards ``p``
+    when ``p`` lies on the outer side of the nearest face, else the face normal. The plain offset . normal read a
+    point 33 mm in front of a navel as 8 mm out (the nearest face is the navel's side wall), and the push then moved
+    it INTO the navel. Returns ``(None, None)`` when nothing is within ``reach``."""
+    loc, nrm, _f, _d = tree.find_nearest(p, reach)
+    if loc is None:
+        return None, None
+    off = p - loc
+    if off.dot(nrm) > 0 and off.length > 1e-9:
+        return loc, off.normalized()
+    return loc, nrm
+
+
+#: A178: how far out of the collider a built vertex is laid before the drape (above the pre-inflate's
+#: thickness + 3 mm, so that one finds nothing left to push).
+BUILD_CLEAR_EXTRA_M = 0.004
+#: A178: passes of the clearance pass (edge relaxation + projection out of the collider).
+BUILD_CLEAR_PASSES = 80
+#: A178: how many edge rings round a pushed vertex the relaxation may move (the rest of the piece stays as built).
+BUILD_CLEAR_RINGS = 4
+
+
+def clear_of_body(obj, body, *, thickness, extra=(), collider_faces=80000):
+    """A178 — lay every built vertex outside the drape's collider BEFORE the rest lengths are taken. The pre-inflate in
+    ``drape`` pushes each vertex inside the body on its own (23-32 mm at an armhole cut through a high shoulder),
+    while its neighbours stay: that alone read as stretch 1.8. Here the vertices are moved like a cloth without
+    gravity (position-based): per pass every edge SHORTER than built pushes its ends half-way apart again (Jacobi,
+    averaged per vertex; a longer edge is left alone, or the pass would pull the cloth back into the body), then every vertex short of ``thickness + BUILD_CLEAR_EXTRA_M`` outside the closed, outward-wound
+    collider (the same voxel remesh ``drape`` builds) is projected out along the surface normal. A push in a crease
+    (the armpit) thus slides the neighbours along instead of squeezing the edges between them. Returns
+    ``{moved, passes, max_push_mm, left, min_ratio}`` (``left`` = vertices still short after the last pass,
+    ``min_ratio`` = the shortest edge over its built length)."""
+    t0 = time.time()
+    dg = bpy.context.evaluated_depsgraph_get()
+    col = bpy.data.objects.new("clear_collider", bpy.data.meshes.new_from_object(body.evaluated_get(dg)))
+    col.matrix_world = body.matrix_world.copy()
+    bpy.context.scene.collection.objects.link(col)
+    for ex in extra:
+        _join_extra(col, ex, dg)
+    _remesh(col, collider_faces)
+    tree = BVHTree.FromObject(col, bpy.context.evaluated_depsgraph_get())
+    mw = obj.matrix_world
+    mwi = mw.inverted()
+    co = np.array([tuple(mw @ v.co) for v in obj.data.vertices])
+    start = co.copy()
+    n = len(co)
+    e = edges_of(obj)
+    deg = np.bincount(e.ravel(), minlength=n).astype(float)
+    built = np.linalg.norm(co[e[:, 1]] - co[e[:, 0]], axis=1)
+    target = thickness + BUILD_CLEAR_EXTRA_M
+
+    hit = np.zeros(n, bool)                # every vertex ever projected
+
+    def project():
+        short = 0
+        for i in range(n):
+            p = Vector(co[i])
+            loc, out = signed_out(tree, p, 0.1)
+            if loc is None:
+                continue
+            sd = float((p - loc).dot(out))
+            if sd < target - 1e-5:
+                co[i] = np.array(loc + out * target)
+                hit[i] = True
+                short += 1
+        return short
+
+    passes = 0
+    left = first = project()
+    while left and passes < BUILD_CLEAR_PASSES:
+        passes += 1
+        free = hit.copy()                  # the relaxation moves only BUILD_CLEAR_RINGS rings round the pushed ones
+        for _ in range(BUILD_CLEAR_RINGS):
+            grow = free.copy()
+            grow[e[free[e[:, 0]], 1]] = True
+            grow[e[free[e[:, 1]], 0]] = True
+            free = grow
+        d = co[e[:, 1]] - co[e[:, 0]]
+        L = np.maximum(np.linalg.norm(d, axis=1), 1e-9)
+        corr = d * (np.minimum(L - built, 0.0) / L)[:, None] * 0.5   # only a squeezed edge pushes apart
+        acc = np.zeros((n, 3))
+        np.add.at(acc, e[:, 0], corr)
+        np.add.at(acc, e[:, 1], -corr)
+        co += np.where(free[:, None], acc / np.maximum(deg, 1.0)[:, None], 0.0)
+        left = project()
+    for v, p in zip(obj.data.vertices, co):
+        v.co = mwi @ Vector(p)
+    obj.data.update()
+    bpy.data.objects.remove(col)
+    push = np.linalg.norm(co - start, axis=1)
+    ratio = np.linalg.norm(co[e[:, 1]] - co[e[:, 0]], axis=1) / np.maximum(built, 1e-9)
+    return {"moved": int((push > 1e-4).sum()), "passes": passes, "max_push_mm": round(float(push.max()) * 1000, 1),
+            "inside": int(first), "left": int(left), "min_ratio": round(float(ratio[built > 1e-3].min()), 3),
+            "wall_s": round(time.time() - t0, 2)}
+
+
 def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collision, thickness, extra=(),
           collider_faces=80000, collision_quality=4, crop_m=None, prebuilt=None):
     """Collider = decimated rest copy of the body (+ the ``extra`` lower garment layers). Returns CPU seconds and
@@ -618,12 +715,12 @@ def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collisio
     pin_set = set(int(i) for i in pin_idx)
     for v in obj.data.vertices:
         w = obj.matrix_world @ v.co
-        loc, nrm, _f, _d = ctree.find_nearest(w, 0.05)
+        loc, out = signed_out(ctree, w, 0.05)
         if loc is None:
             continue
-        sd = (w - loc).dot(nrm)
+        sd = (w - loc).dot(out)
         if sd < thickness + 0.003:
-            v.co = mwi @ (loc + nrm * (thickness + 0.003))
+            v.co = mwi @ (loc + out * (thickness + 0.003))
             pushed += 1
     obj.data.update()
     bpy.context.view_layer.update()
