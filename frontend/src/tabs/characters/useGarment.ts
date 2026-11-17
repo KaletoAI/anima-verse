@@ -1116,9 +1116,9 @@ export function useGarmentRun(character: string, itemId: string,
     }
   }, [enc, info, itemId, loadOthers, pending, startPoll])
 
-  /** Take the item's waiting run out of the character's garment queue
-   *  (POST …/garments/{item}/cancel); a run that already started is refused
-   *  (409) and its message shown beside the button. */
+  /** Take the item's waiting run out of the character's garment queue and
+   *  stop its run in flight (POST …/garments/{item}/cancel, A191); a refusal
+   *  (409: a CPU re-fit beside the queue) is shown beside the button. */
   const cancel = useCallback(async () => {
     if (!itemId || cancelState?.pending) return
     setCancelState({ pending: true, since: undefined, error: null })

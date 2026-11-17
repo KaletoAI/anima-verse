@@ -101,7 +101,8 @@ export function RunButton({ feedback, slot, label, disabled, title, ariaLabel, s
  *  stays in view while the steps scroll: Starting… / Queued (behind the
  *  character's other runs) / Running: <step>, with the start time. While
  *  the item's run WAITS (`queue_position`), a Cancel button takes it out of
- *  the queue (`onCancel`, useGarmentRun's cancel); a run in flight has none. */
+ *  the queue (`onCancel`, useGarmentRun's cancel); (A191) while it RUNS the
+ *  same button stops it — its render and a hub job are cancelled. */
 export function RunStatusLine({ garment, feedback, stepLabels, bare = false, onCancel }: {
   garment: GarmentRunState | null
   feedback?: RunFeedback
@@ -141,10 +142,11 @@ export function RunStatusLine({ garment, feedback, stepLabels, bare = false, onC
           running && garment?.started_at ? `${t('started')} ${formatDateTime(garment.started_at, clockSettings())}` : '',
         ].filter(Boolean).join(' · ')}
       </span>
-      {onCancel && waits && !cancel?.done ? (
+      {onCancel && (waits || (running && running !== 'queued')) && !cancel?.done ? (
         <button type="button" className="ga-btn ga-btn-sm" disabled={cancel?.pending}
           aria-busy={cancel?.pending || undefined}
-          title={t('Removes this waiting run from the queue — nothing of it has started')}
+          title={waits ? t('Removes this waiting run from the queue — nothing of it has started')
+            : t('Stops this run: its image or mesh job is cancelled (on the hub too); what it made so far stays')}
           onClick={onCancel}>
           {cancel?.pending ? t('Cancelling…') : t('Cancel')}
         </button>
