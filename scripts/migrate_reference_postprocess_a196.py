@@ -5,7 +5,8 @@ What changes for the stored data:
   1. The world default ``base_body.reference_postprocess`` (config.json of the world) is gone. A character that
      only followed it (no own value) gets those operations CHECKED explicitly — its current state, so nothing
      becomes outdated and no job is due; the script lists those characters and, with ``--apply``, removes the key
-     from the world's config.json.
+     from the world's config.json (backed up into ``.config-history/`` first) — but only when every profile save
+     succeeded; otherwise the key stays, the script exits 1 and a re-run continues.
   2. A character's own ``False`` is dropped from its profile (unchecked = no entry); its own ``True`` stays.
   No other option is checked: an own ``True`` stays exactly that operation.
 
@@ -95,12 +96,27 @@ def main() -> int:
             _run_on_load(pkg, rel)
     from app.core import view_postprocess as vp
     from app.core.db import get_connection
-    from app.core.keyed_lock import keyed_lock
-    from app.models.character import get_character_profile, save_character_profile
     available = vp.operations()
     print(f"world default {'.'.join(WORLD_KEY)}: {world or '(none)'}; options: {sorted(available)}")
 
     names = [r[0] for r in get_connection().execute("SELECT name FROM characters ORDER BY name")]
+    failed = migrate_profiles(names, available, world, args.apply)
+    if failed:
+        print(f"{len(failed)} profile save(s) FAILED ({', '.join(failed)}): the world default "
+              f"{'.'.join(WORLD_KEY)} stays in {cfg_path} — fix the cause and run again", file=sys.stderr)
+        return 1
+    if args.apply and drop_world_default(storage, world_cfg, failed):
+        print(f"removed {'.'.join(WORLD_KEY)} from {cfg_path}")
+    print("applied" if args.apply else "report only (no --apply)")
+    return 0
+
+
+def migrate_profiles(names: list, available: dict, world: list, apply: bool) -> list:
+    """Report (and with ``apply`` store) every character's new choices; returns the names whose save FAILED."""
+    from app.core import view_postprocess as vp
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile, save_character_profile
+    failed = []
     for name in names:
         profile = get_character_profile(name) or {}
         plan = plan_profile(profile, available, world)
@@ -110,7 +126,7 @@ def main() -> int:
         if plan["choices"] is None:
             continue
         print(f"  {name}: {profile.get(vp.PROFILE_KEY)} -> {plan['choices']}")
-        if args.apply:
+        if apply:
             with keyed_lock("character_profile", name):
                 fresh = get_character_profile(name) or {}
                 again = plan_profile(fresh, available, world)["choices"]
@@ -121,14 +137,27 @@ def main() -> int:
                         fresh.pop(vp.PROFILE_KEY, None)
                     if not save_character_profile(name, fresh):
                         print(f"  {name}: SAVE FAILED")
-    if args.apply and isinstance(world_cfg.get(WORLD_KEY[0]), dict) and WORLD_KEY[1] in world_cfg[WORLD_KEY[0]]:
-        world_cfg[WORLD_KEY[0]].pop(WORLD_KEY[1])
-        if not world_cfg[WORLD_KEY[0]]:
-            world_cfg.pop(WORLD_KEY[0])
-        cfg_path.write_text(json.dumps(world_cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        print(f"removed {'.'.join(WORLD_KEY)} from {cfg_path}")
-    print("applied" if args.apply else "report only (no --apply)")
-    return 0
+                        failed.append(name)
+    return failed
+
+
+def drop_world_default(storage: Path, world_cfg: dict, failed: list) -> bool:
+    """Remove the world key from ``<storage>/config.json`` — only when no profile save failed: a character
+    whose save failed still follows the default, and the default is what a re-run needs. The old file is
+    backed up into ``.config-history/`` first and the new one replaces it atomically. True = removed."""
+    if failed or not (isinstance(world_cfg.get(WORLD_KEY[0]), dict) and WORLD_KEY[1] in world_cfg[WORLD_KEY[0]]):
+        return False
+    from app.core import config
+    cfg_path = storage / "config.json"
+    world_cfg[WORLD_KEY[0]].pop(WORLD_KEY[1])
+    if not world_cfg[WORLD_KEY[0]]:
+        world_cfg.pop(WORLD_KEY[0])
+    config.snapshot_layer(storage)
+    tmp = cfg_path.with_name(cfg_path.name + ".a196tmp")
+    tmp.write_text(json.dumps(world_cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.chmod(tmp, cfg_path.stat().st_mode & 0o777)
+    os.replace(tmp, cfg_path)
+    return True
 
 
 if __name__ == "__main__":
