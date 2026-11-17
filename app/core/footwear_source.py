@@ -520,14 +520,14 @@ def _prepare_mesh(raw: Path, candidate: Path, alpha, attempt: int, res: Dict[str
     by a fresh attempt and a collected job (``collect_mesh_job``). Raises when the decimation fails."""
     from app.blender import refine
     from app.core import glb_mesh
-    from app.core.footwear_gates import MESH_GATES, check_gates, component_shares, side_silhouette, silhouette_iou
+    from app.core.footwear_gates import check_gates, component_shares, mesh_gates, side_silhouette, silhouette_iou
     dec = refine.decimate_to(raw, TARGET_TRIS, candidate, merge_vertices=True)
     if not dec.get("ok"):
         raise RuntimeError(f"shoe mesh decimation failed: {dec.get('error') or 'unknown error'}")
     positions, faces = glb_mesh.static_arrays(candidate.read_bytes())[:2]
     largest, enclosed = component_shares(positions, faces)
     iou = silhouette_iou(side_silhouette(positions, faces), alpha >= 128)
-    ok, reasons = check_gates({"component_share": enclosed, "mesh_iou": iou}, MESH_GATES)
+    ok, reasons = check_gates({"component_share": enclosed, "mesh_iou": iou}, mesh_gates())
     return {"attempt": attempt, "ok": ok,
             "gates": {"ok": ok, "reasons": reasons, "component_share": enclosed, "largest_share": largest,
                       "mesh_iou": iou},
@@ -686,6 +686,41 @@ def _lock(iid: str):
     return keyed_lock("footwear_source", iid)
 
 
+def _regate_stored_mesh(iid: str, ssig: str, d: Path, record: Dict[str, Any]) -> bool:
+    """A187: a mesh step refused by its gates whose stored delivery (``raw.glb``) now passes them — the limit is
+    an instance setting and may have been lowered since — is prepared and accepted again from that file, without
+    a mesher call. Only when the record's measured numbers already pass ``mesh_gates()`` (cheap test first); the
+    decimation + gates then run for real (``_prepare_mesh``) and decide. ``True`` when the step is now accepted."""
+    from app.core.footwear_gates import check_gates, mesh_gates
+    gates = record.get("gates") or {}
+    raw = d / "raw.glb"
+    if (record.get("accepted") is not False or str(record.get("failure") or GATE) != GATE
+            or not raw.is_file() or not (d / "cutout.png").is_file()):
+        return False
+    if not check_gates({k: gates.get(k) for k in ("component_share", "mesh_iou")}, mesh_gates())[0]:
+        return False
+    candidate = d / ".prepared.candidate.glb"
+    try:
+        entry = _prepare_mesh(raw, candidate, _cutout_alpha(d / "cutout.png"), 1,
+                              {"backend": record.get("backend", ""), "routing": record.get("routing") or {}})
+        logger.info("Shoe source %s/%s: stored mesh re-gated %s (component %.4f, iou %.4f)", iid, ssig,
+                    "accepted" if entry["ok"] else "refused", entry["gates"]["component_share"],
+                    entry["gates"]["mesh_iou"])
+        if not entry["ok"]:
+            return False
+        _drop_from(d, "insole")
+        os.replace(candidate, d / "prepared.glb")
+        extra = {k: record[k] for k in ("collected_job", "fallback_from") if record.get(k)}
+        _set_step(d, "mesh", _mesh_record(entry, list(record.get("attempts") or []) + [entry], True,
+                                          prepared_sha256=_sha256(d / "prepared.glb"), regated=True, **extra))
+        return True
+    except Exception as e:  # noqa: BLE001 — the refusal stays as it was
+        logger.warning("Shoe source %s/%s: re-gating the stored mesh failed: %s", iid, ssig, e)
+        return False
+    finally:
+        candidate.unlink(missing_ok=True)
+
+
 #: A176: ``run_source``'s error for a step kept refused (``keep_refused``) — the offer, no new job.
 KEPT_REFUSED = ("{step} was refused by its gates — not run again on its own; Regenerate the {step} in the piece "
                 "dialog (one hub job) or accept the refused result")
@@ -714,6 +749,9 @@ def run_source(item_id: str, *, steps: Optional[List[str]] = None, force: bool =
             if step not in wanted or (not force and step_done(iid, ssig, step)):
                 continue
             record = step_record(iid, ssig, step)
+            if not force and step == "mesh" and _regate_stored_mesh(iid, ssig, d, record):
+                ran.append(step)  # A187: the stored delivery passes the current limit — no new hub job
+                continue
             if (not force and step in keep_refused and record.get("accepted") is False
                     and str(record.get("failure") or GATE) == GATE):
                 # A176: read under the item lock — a run queued behind the one that was refused sees its record.
