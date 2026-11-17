@@ -528,6 +528,10 @@ export interface FootwearInsole {
     shank_slope_deg?: number | null
   } | null
   gates: GateRecord & { refusal?: string | null } | null
+  /** A189: an open shoe (sandal, slide, strap shoe) is fitted on the bare foot, which stays visible. */
+  kind?: 'open' | 'closed'
+  /** What made it open: the toes free, the heel free, or a low vamp (`footwear_insole` "Open footwear"). */
+  open?: { toe_open?: boolean; heel_open?: boolean; low_vamp?: boolean } | null
   /** `slabs` = per tube slab of a boot its measured extent as a closed ring (`garment_footwear._insole_view`). */
   overlay: {
     insole?: [number, number, number][]
@@ -610,6 +614,10 @@ export interface FootwearFitInfo {
   /** The split and the shaft of the accepted record (null without one; `shaft` null for a shoe). */
   split?: FootwearFitSplit | null
   shaft?: FootwearFitShaft | null
+  /** A189: an open shoe's fit — the sole's widening, the upper's raise, the strap's median distance from the
+   *  skin and its farthest push (worse side); null for a closed shoe. */
+  open?: { widened: number | null; height_factor: number | null; strap_gap_mm: number | null
+    strap_push_max_mm: number | null } | null
 }
 
 /** One row of `fits`: the base model first, then (outfit body mode mesh) every stored outfit body. */

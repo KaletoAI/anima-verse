@@ -104,7 +104,7 @@ import { TemplateParamsDialog } from './TemplateParamsDialog'
 
 /** A piece worn in slot feet alone is footwear (`garment_set.garment_kind_of`): a shoe or a boot (boots spec
  *  2026-11-11 § 15). */
-const OWN_MESH_SHOE_HINT = 'Made once per item from the item image; fitted onto each wearer on the CPU. Shoes, ankle boots and knee-high boots; sandals and open shoes are not supported yet; socks stay painted.'
+const OWN_MESH_SHOE_HINT = 'Made once per item from the item image; fitted onto each wearer on the CPU. Shoes, ankle boots, knee-high boots, and open shoes such as sandals and slides (the bare foot stays visible); socks stay painted.'
 
 const STEP_LABELS: Record<string, string> = {
   queued: 'Queued',

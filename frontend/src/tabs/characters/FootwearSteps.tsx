@@ -70,8 +70,8 @@ const STEP_HELP: Record<string, string> = {
   empty: 'Empty shoe: one empty shoe in side view, made by an image edit of the item image. Regenerate: 1 image job, shared by every wearer; the later steps run again.',
   cutout: 'Cut-out: the empty shoe cut out and squared as the mesh input — local, no hub job.',
   mesh: 'Mesh: a 3D mesh of the shoe alone, built from the cut-out. Regenerate: 1 mesh job, shared by every wearer; the insole is measured again.',
-  insole: "Insole: the shoe mesh measured on the CPU — pitch, heel seat, heel rise, insole cover, a boot's shaft and the type gates. Local, no hub job.",
-  fit: "Fit: the shoe source placed on this wearer's foot on the CPU — one scale per pair, the foot extended onto the insole, the root lifted by the heel; a boot is split at the wearer's ankle into a rigid foot part and a shaft that follows the shin. One fit per body. Local, no hub job.",
+  insole: "Insole: the shoe mesh measured on the CPU — pitch, heel seat, heel rise, insole cover, a boot's shaft, whether the shoe is open (sandal, slide, strap shoe) and the type gates. Local, no hub job.",
+  fit: "Fit: the shoe source placed on this wearer's foot on the CPU — one scale per pair, the foot extended onto the insole, the root lifted by the heel; a boot is split at the wearer's ankle into a rigid foot part and a shaft that follows the shin; an open shoe is fitted around the bare foot, which stays visible. One fit per body. Local, no hub job.",
 }
 
 const STATUS_TEXT: Record<FootwearStepInfo['status'], string> = {
@@ -123,6 +123,11 @@ const FIT_CHIPS: ChipSpec[] = [
   { key: 'visible_poke', label: 'Foot poking through (cut)', scale: 100, unit: '%', digits: 2 },
   { key: 'throat_ledge_p95_mm', label: 'Throat ledge (cut)', scale: 1, unit: 'mm', digits: 1 },
   { key: 'toe_conform_m', label: 'Toe conform (cut)', scale: 1000, unit: 'mm', digits: 1 },
+  // An open shoe (A189, footwear_fit.OPEN_GATES): the body is not cut, so it carries these instead of the cut gates.
+  { key: 'strap_inside_share', label: 'Straps inside the skin', scale: 100, unit: '%', digits: 2 },
+  { key: 'strap_push_max_mm', label: 'Straps pushed off the foot (max)', scale: 1, unit: 'mm', digits: 1 },
+  { key: 'sole_cover', label: 'Foot on the sole', scale: 100, unit: '%', digits: 1 },
+  { key: 'sole_sink_mm', label: 'Foot sunk into the sole (p95)', scale: 1, unit: 'mm', digits: 1 },
   // A split fit only (footwear_cut.SHAFT_CUT_GATES, cut version 5): the leg is cut away under the collar and its
   // edge pulled into the boot's opening; the poke reads that edge against the opening, None without one. Cut
   // version 6 reads the same edge at ±25° ankle flex (out through the wall or up out of the rim).
@@ -145,8 +150,11 @@ const CAP_MAX = 1.1
 
 const INSOLE_CHIPS: ChipSpec[] = [
   { key: 'insole_cover', label: 'Insole cover', scale: 100, unit: '%', digits: 1 },
-  { key: 'vamp_cover', label: 'Vamp cover (open shoe)', scale: 100, unit: '%', digits: 1 },
+  // A closed shoe: its vamp and its opening. An open shoe (A189, footwear_insole.OPEN_GATES) carries the two below.
+  { key: 'vamp_cover', label: 'Vamp cover (closed shoe)', scale: 100, unit: '%', digits: 1 },
   { key: 'opening_share', label: 'Opening (solid mesh)', scale: 100, unit: '%', digits: 1 },
+  { key: 'strap_share', label: 'Straps above the sole', scale: 100, unit: '%', digits: 1 },
+  { key: 'insole_step', label: 'Insole jump (solid mesh)', scale: 100, unit: '% L', digits: 1 },
   // footwear_insole.SHAFT_GATES — a boot only (a shoe carries neither value).
   { key: 'shaft_closed_share', label: 'Shaft closed share', scale: 100, unit: '%', digits: 1 },
   { key: 'overknee', label: 'Collar height (over-knee limit)', scale: 100, unit: 'cm', digits: 1 },
@@ -418,6 +426,17 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
           ].join(' · ')}
         </span>
       ) : null}
+      {info.insole?.kind === 'open' ? (
+        <span title={t('An open shoe is fitted around the bare foot: the sole under it, the straps pushed off the skin. The foot is not hidden or cut — toes and heel stay visible.')}>
+          {[
+            t('Open shoe'),
+            info.insole.open?.toe_open ? t('open toes') : '',
+            info.insole.open?.heel_open ? t('open heel') : '',
+            info.insole.open?.low_vamp && !info.insole.open?.toe_open && !info.insole.open?.heel_open
+              ? t('strap upper') : '',
+          ].filter(Boolean).join(' · ')}
+        </span>
+      ) : null}
       {shaft ? (
         <span title={t('The boot shaft at a nominal shoe length of 26 cm: collar height above the heel seat, the top closed tube slab above the ground')}>
           {[
@@ -494,7 +513,9 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
       ) : null,
       toeRoom.endsWith(' ') ? null : toeRoom,
     ].filter((x) => x !== null && x !== '')
-    const slim = fitted ? pair(m, 'slim_needed', (v) => `${(v * 100).toFixed(1)} %`) : ''
+    // A189: nothing slims the bare foot under an open shoe
+    const slim = fitted && !row.open ? pair(m, 'slim_needed', (v) => `${(v * 100).toFixed(1)} %`) : ''
+    const openFit = fitted ? row.open : null
     const split = fitted ? row.split : null
     const sideNum = (key: 'y_m' | 'collar_above_ankle_mm', f: (v: number) => string) => {
       const l = num(split?.sides?.left?.[key])
@@ -537,6 +558,19 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
         </div>
         {parts.length ? (
           <span>{parts.map((part, i) => <Fragment key={i}>{i ? ' · ' : ''}{part}</Fragment>)}</span>
+        ) : null}
+        {openFit ? (
+          <span title={t('An open shoe is fitted around the bare foot: the sole is widened until the foot stands on it, the upper is raised over the foot and the straps are pushed off the skin. The body is not cut — toes and heel stay visible.')}>
+            {[
+              t('Open shoe — the bare foot stays visible'),
+              num(openFit.widened) != null && (openFit.widened as number) > 1 + 1e-6
+                ? `${t('Sole widened')} ×${(openFit.widened as number).toFixed(2)}` : '',
+              num(openFit.height_factor) != null && (openFit.height_factor as number) > 1 + 1e-6
+                ? `${t('Upper raised')} ×${(openFit.height_factor as number).toFixed(2)}` : '',
+              num(openFit.strap_gap_mm) != null
+                ? `${t('Strap off the skin (median)')} ${(openFit.strap_gap_mm as number).toFixed(0)} mm` : '',
+            ].filter(Boolean).join(' · ')}
+          </span>
         ) : null}
         {slim ? (
           <span title={t('Share of the ball width the forefoot slimming must take off — not applied yet')}>
