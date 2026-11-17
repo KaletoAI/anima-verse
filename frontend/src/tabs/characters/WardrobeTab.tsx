@@ -25,7 +25,8 @@ import { useToast } from '../../lib/Toast'
 import { FilterChipRow } from '../../components/FilterChipRow'
 import { FieldModelRefs } from './FieldModelRefs'
 import {
-  ClosableCheckbox, GarmentPieceDialog, MaterialSelect, MeshModeSelect, PieceStateToggle, PieceStatusChip, WearersLine,
+  ClosableCheckbox, GarmentPieceDialog, MaterialSelect, MeshModeSelect, PieceStateToggle, PieceStatusChip,
+  TemplatePieceControls, WearersLine,
 } from './WardrobeGarment'
 import { closableDisabled, hairstyleLabel, isOwnMeshMode, meshModeOf } from './figureModel'
 import { useWardrobeGarments } from './useGarment'
@@ -549,6 +550,11 @@ export function WardrobeTab({ character, onOpenFigure }: {
                       onChanged={() => { void reloadGarments(); void load() }} />
                   ) : null}
                   {garmentStatus ? <PieceStatusChip status={garmentStatus} name={it.name} /> : null}
+                  {garments.pipeline && garments.modes?.[it.item_id] === 'template' ? (
+                    // A168: the template piece's drape state and its parameter dialog, here like in the Figure tab.
+                    <TemplatePieceControls character={character} itemId={it.item_id}
+                      version={modeChanged[it.item_id] || 0} />
+                  ) : null}
                   {garmentStatus && !(it.equipped && garments.pipeline) ? (
                     <button style={{ ...btn(), marginLeft: 'auto' }} aria-haspopup="dialog"
                       onClick={() => setOpenGarment(it.item_id)}>

@@ -6,15 +6,23 @@
  * neckline (checklist 7). "Suggest from picture" asks the vision task
  * ONCE (1 LLM call, nothing saved) and fills the fields; Save stores them on the ITEM (every wearer) and spends
  * nothing — the next Build re-drapes (CPU, 0 hub jobs). Rendered through a portal; no native dialogs.
+ *
+ * A168: opened from the Figure tab's row AND from the Wardrobe's piece row. Its progress box shows this character's
+ * drape of the piece (`progress` of the GET: state, reason, error, and the step list Parameters → Picture → Drape in
+ * the same ModelSteps list the own-mesh dialog shows), polled while a Build drapes it; a missing or failed drape of a
+ * worn piece offers the Build (FigureBuildButton — the one start of a drape, CPU, 0 hub jobs).
  */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { TEMPLATE_CHOICE_LABELS, TEMPLATE_FIELD_LABELS, UPPER_KINDS, cm, lengthLabel, templateCost } from './figureModel'
-import type { TemplateFieldSpec, TemplateInfo, TemplateParams } from './figureModel'
+import { TEMPLATE_STATE_COLOR, TEMPLATE_STATE_LABELS } from './figureModel'
+import type { TemplateFieldSpec, TemplateInfo, TemplateParams, TemplateProgress } from './figureModel'
+import { FigureBuildButton } from './FigureBuildButton'
+import { ModelSteps } from './ModelSteps'
 
 interface TemplatePayload {
   item_id: string
@@ -27,6 +35,7 @@ interface TemplatePayload {
   /** Ruling A142: the fields that mean something per kind (`garment_template.KIND_FIELDS`). */
   kind_fields: Record<string, (keyof TemplateParams)[]>
   cost: TemplateInfo['cost']
+  progress?: TemplateProgress
 }
 
 const GRID: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px 12px' }
@@ -151,6 +160,18 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
       .catch((e) => { if (!gone) setError((e as Error).message) })
     return () => { gone = true }
   }, [path])
+  /** Re-read only the progress (after a save, a started Build, and every 3 s while a Build drapes it). */
+  const reloadProgress = useCallback(() => {
+    apiGet<TemplatePayload>(path)
+      .then((p) => setData((d) => (d ? { ...d, progress: p.progress, params: p.params, updated_at: p.updated_at } : p)))
+      .catch(() => { /* the last known progress stays */ })
+  }, [path])
+  const running = data?.progress?.state === 'running'
+  useEffect(() => {
+    if (!running) return
+    const id = window.setInterval(reloadProgress, 3000)
+    return () => window.clearInterval(id)
+  }, [running, reloadProgress])
   const set = (key: keyof TemplateParams, value: string | number) => {
     if (!draft) return
     setDraft({ ...draft, [key]: value })
@@ -182,6 +203,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
       setSaved(t('Saved — the next Build drapes it (CPU, 0 hub jobs)'))
       toast(t('Template parameters saved'), 'success')
       onSaved()
+      reloadProgress()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -253,6 +275,9 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
               </div>
             </div>
           ) : null}
+          {data?.progress ? (
+            <TemplateProgressBox character={character} progress={data.progress} onStarted={reloadProgress} />
+          ) : null}
           {error ? <div className="ga-hint" style={WARN}>{error}</div> : null}
         </div>
         <div className="ga-modal-footer" style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
@@ -269,5 +294,42 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
       </div>
     </div>,
     document.body,
+  )
+}
+
+/** A168: this character's drape of the piece — one state line (state, reason / error, when it was draped), the step
+ *  list (ModelSteps, as in the own-mesh dialog) and, for a worn piece that is not draped or failed, the Build. */
+function TemplateProgressBox({ character, progress, onStarted }: {
+  character: string
+  progress: TemplateProgress
+  onStarted: () => void
+}) {
+  const { t } = useI18n()
+  const p = progress
+  const why = p.state === 'failed' && p.error ? `${t('Drape failed')}: ${p.error}` : p.state === 'ready' ? '' : t(p.reason)
+  const at = p.built_at ? t('draped {at}').replace('{at}', p.built_at.replace('T', ' ').slice(0, 16)) : ''
+  return (
+    <div role="status" aria-label={t('Drape progress')} data-template-state={p.state}
+      style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '6px 8px',
+        border: '1px solid var(--border, #30363d)', borderRadius: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <strong>{t('Drape on {name}').replace('{name}', character)}</strong>
+        <span style={{ padding: '1px 6px', borderRadius: 8, fontSize: '0.85em',
+          border: `1px solid ${TEMPLATE_STATE_COLOR[p.state]}` }}>{t(TEMPLATE_STATE_LABELS[p.state])}</span>
+        {at ? <span className="ga-hint">{at}</span> : null}
+      </div>
+      {why ? (
+        <div className="ga-hint" style={p.state === 'failed' ? { color: 'var(--danger, #f85149)' } : WARN}>{why}</div>
+      ) : null}
+      <ModelSteps steps={p.steps} />
+      {!p.worn ? (
+        <div className="ga-hint">{t('Not worn now — the Build drapes it once it is worn')}</div>
+      ) : p.state === 'missing' || p.state === 'failed' ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <FigureBuildButton character={character} onStarted={onStarted} />
+          <span className="ga-hint">{t('The drape runs in the Build — CPU, 0 hub jobs')}</span>
+        </div>
+      ) : null}
+    </div>
   )
 }

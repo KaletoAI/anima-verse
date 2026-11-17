@@ -11,6 +11,7 @@
  * English; the components put them through `t()`.
  */
 import type { FootPose } from '@anima/scene-render'
+import type { ModelStep } from './ModelSteps'
 import type { ArmLight, FitSettingsInfo } from './fitSettingsModel'
 import type { ShoeFrame } from './footwearAllowanceModel'
 import { filesLabel, sizeLabel } from './hairstylesModel'
@@ -1205,4 +1206,24 @@ export function problemText(p: BuildProblem, t: Tr = EN): {
     note: p.held ? t(HELD_NOTE) : '',
     detail: p.detail,
   }
+}
+
+/** A168: `garment_template.piece_progress` — this character's drape of the piece. */
+export interface TemplateProgress {
+  state: 'ready' | 'missing' | 'failed' | 'blocked' | 'running'
+  reason: string
+  built_at: string
+  error: string
+  /** The character wears the piece now (only a worn piece is draped by the Build). */
+  worn: boolean
+  steps: ModelStep[]
+}
+
+export const TEMPLATE_STATE_LABELS: Record<TemplateProgress['state'], string> = {
+  ready: 'Draped', missing: 'Not draped yet', failed: 'Drape failed', blocked: 'Cannot drape yet',
+  running: 'Draping…',
+}
+export const TEMPLATE_STATE_COLOR: Record<TemplateProgress['state'], string> = {
+  ready: 'var(--success, #3fb950)', missing: 'var(--warning, #d29922)', failed: 'var(--danger, #f85149)',
+  blocked: 'var(--warning, #d29922)', running: 'var(--accent, #6aa9ff)',
 }

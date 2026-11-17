@@ -94,11 +94,13 @@ import type {
 } from './useGarment'
 import {
   ACCEPTED_BY_YOU, AUTO_BUILD_NOTE, BUILD_STATUS, MESH_MODES, MESH_MODE_HINTS, MESH_MODE_LABELS, PIECE_STATES,
+  TEMPLATE_STATE_COLOR, TEMPLATE_STATE_LABELS,
   PIECE_STATE_LABELS, acceptedWhat, closableDisabled, defaultBodyKey, fitBodyName, leavesOwnMesh, refitSlot,
   showBodySwitch, switchOffWarning, wearersLine,
 } from './figureModel'
-import type { FitBody, MeshMode, OwnMeshFiles, PieceState } from './figureModel'
+import type { FitBody, MeshMode, OwnMeshFiles, PieceState, TemplateProgress } from './figureModel'
 import { chainRunAll, jobsTr } from './baseBodyModel'
+import { TemplateParamsDialog } from './TemplateParamsDialog'
 
 /** A piece worn in slot feet alone is footwear (`garment_set.garment_kind_of`): a shoe or a boot (boots spec
  *  2026-11-11 § 15). */
@@ -488,6 +490,68 @@ export function ClosableCheckbox({ itemId, closable, slots, namesState = false, 
         </span>
       ) : null}
     </span>
+  )
+}
+
+/** A168: a template piece's row controls in the Wardrobe — its drape state on this character as a chip (the
+ *  parameter dialog's `progress`: Draped · Not draped yet · Drape failed · Cannot drape yet · Draping…, the reason in
+ *  its tooltip and under it when something is missing) and "Template parameters…", which opens the parameter dialog
+ *  (TemplateParamsDialog) with the progress box. Reads GET …/figure/template/{item}; re-reads after the dialog closes
+ *  and every 3 s while a Build drapes it. */
+export function TemplatePieceControls({ character, itemId, version = 0 }: {
+  character: string
+  itemId: string
+  /** Bumped by the row on a mode change: re-read. */
+  version?: number
+}) {
+  const { t } = useI18n()
+  const [progress, setProgress] = useState<TemplateProgress | null>(null)
+  const [hasParams, setHasParams] = useState(false)
+  const [error, setError] = useState('')
+  const [open, setOpen] = useState(false)
+  const path = `/characters/${encodeURIComponent(character)}/figure/template/${encodeURIComponent(itemId)}`
+  const load = useCallback(async () => {
+    try {
+      const d = await apiGet<{ progress?: TemplateProgress; params: unknown }>(path)
+      setProgress(d.progress || null)
+      setHasParams(!!d.params)
+      setError('')
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }, [path])
+  useEffect(() => { void load() }, [load, version])
+  useEffect(() => {
+    if (progress?.state !== 'running') return
+    const id = window.setInterval(() => { void load() }, 3000)
+    return () => window.clearInterval(id)
+  }, [progress?.state, load])
+  const state = progress?.state
+  const why = !progress ? '' : state === 'failed' && progress.error
+    ? `${t('Drape failed')}: ${progress.error}` : state === 'ready' ? '' : t(progress.reason)
+  return (
+    <>
+      {progress && state ? (
+        <span data-template-state={state} title={[t(TEMPLATE_STATE_LABELS[state]), why].filter(Boolean).join('\n')}
+          style={{ ...CHIP, border: `1px solid ${TEMPLATE_STATE_COLOR[state]}` }}>
+          {t(TEMPLATE_STATE_LABELS[state])}
+        </span>
+      ) : null}
+      <button type="button" className="ga-btn ga-btn-sm" aria-haspopup="dialog" style={{ marginLeft: 'auto' }}
+        title={t('The sewing-pattern parameters this piece is draped from, and its drape on this character')}
+        onClick={() => setOpen(true)}>
+        {hasParams ? t('Template parameters…') : t('Set parameters…')}
+      </button>
+      {why && state !== 'running' ? (
+        <span className="ga-hint" style={{ flexBasis: '100%', fontSize: '0.72em',
+          color: state === 'failed' ? 'var(--danger, #f85149)' : 'var(--warning, #d29922)' }}>{why}</span>
+      ) : null}
+      {error ? <span className="ga-hint" style={{ ...WARN_STYLE, flexBasis: '100%', fontSize: '0.72em' }}>{error}</span> : null}
+      {open ? (
+        <TemplateParamsDialog character={character} itemId={itemId}
+          onClose={() => { setOpen(false); void load() }} onSaved={() => { void load() }} />
+      ) : null}
+    </>
   )
 }
 
