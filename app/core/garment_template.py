@@ -842,14 +842,14 @@ def piece_progress(character_name: str, item_id: str, *, profile: Optional[Dict[
     state = "running" if building and drape["state"] != "ready" else drape["state"]
     metrics = record.get("metrics") or {}
     steps = [
-        {"id": "params", "label": "Parameters", "status": "done" if params else "missing",
+        {"id": "params", "label": "Parameters", "status": "done" if params else "due",
          "detail": "" if params else NEEDS_PARAMS,
          "numbers": {"kind": params["kind"], "fabric": params["fabric"]} if params else {}},
-        {"id": "picture", "label": "Picture", "status": "done" if sources else "missing",
+        {"id": "picture", "label": "Picture", "status": "done" if sources else "due",
          "detail": {"cutout": "the piece-only cut-out views", "item_image": "the item picture"}.get(
              sources.get("source", ""), "") if sources else "No picture of the piece yet", "numbers": {}},
         {"id": "drape", "label": "Drape (CPU)",
-         "status": {"ready": "done", "failed": "failed", "running": "due"}.get(state, "missing"),
+         "status": {"ready": "done", "failed": "failed", "blocked": "skipped"}.get(state, "due"),
          "detail": "Draping now (the Build runs)" if state == "running" else drape["reason"] or "",
          "numbers": {k: v for k, v in (("wall_s", metrics.get("wall_total_s")),
                                        ("stretch_max", (metrics.get("drape") or {}).get("stretch_max")),
