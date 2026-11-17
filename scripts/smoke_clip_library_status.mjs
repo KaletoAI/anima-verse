@@ -14,6 +14,12 @@
  *   save steps: the order bake, shift, heights, finales, check | clear-check;
  *     finales only when something is written; a stored check is cleared by a bake or shift that
  *     carries no green check (the server clears on every orient write), never by heights alone.
+ *   save writes (review 12#3): the requests run in order and stop at the first failure; `applied`
+ *     names those that went through, so the caller clears exactly their drafts. The orient write is a
+ *     DELTA (server: the sidecar's angles add up), so after "orient ok, heights PATCH 502" applied must
+ *     be ['orient'] — the old Save cleared the dials only after all three succeeded, so a retry baked the
+ *     same yaw a second time (30° → 60°). orient failing → [] and the PATCH is never sent;
+ *     heights ok, check failing → ['heights']; no writes → [] without an error.
  *
  * Usage: node scripts/smoke_clip_library_status.mjs   (no server, no world; bundles the module with esbuild)
  */
@@ -87,6 +93,25 @@ try {
   check('shift over a stored check', S.saveSteps({ ...base, shift: true, savedCheck: true, finales: 1 }), ['shift', 'finales', 'clear-check'])
   check('heights only keep the check', S.saveSteps({ ...base, heights: true, savedCheck: true }), ['heights'])
   check('finales alone write nothing', S.saveSteps({ ...base, finales: 3 }), [])
+
+  console.log('[6] save writes (which drafts were applied)')
+  const calls = []
+  const ok = (name) => async () => { calls.push(name) }
+  const bad = (name) => async () => { calls.push(name); throw new Error(`${name} 502`) }
+  let r = await S.runSaveWrites([['orient', ok('orient')], ['heights', ok('heights')]])
+  check('all through → both applied, no error', [r.applied, r.error], [['orient', 'heights'], null])
+  calls.length = 0
+  r = await S.runSaveWrites([['orient', ok('orient')], ['heights', bad('heights')], ['check', ok('check')]])
+  check('PATCH fails after the bake → orient applied (its draft is cleared), stops there',
+    [r.applied, r.error?.message, calls], [['orient'], 'heights 502', ['orient', 'heights']])
+  calls.length = 0
+  r = await S.runSaveWrites([['orient', bad('orient')], ['heights', ok('heights')]])
+  check('bake fails → nothing applied, heights not sent', [r.applied, r.error?.message, calls],
+    [[], 'orient 502', ['orient']])
+  r = await S.runSaveWrites([['heights', ok('heights')], ['check', bad('check')]])
+  check('check alone fails after heights → heights applied', r.applied, ['heights'])
+  r = await S.runSaveWrites([])
+  check('nothing to write', [r.applied, r.error], [[], null])
 } finally {
   await rm(dir, { recursive: true, force: true })
 }

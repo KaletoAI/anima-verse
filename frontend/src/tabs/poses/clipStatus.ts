@@ -60,6 +60,27 @@ export function saveSteps(s: { bake: boolean; shift: boolean; heights: boolean; 
   return out
 }
 
+/** One request of a Save: the orient write (bake/shift/check), the heights PATCH, or a check alone. */
+export type SaveWrite = 'orient' | 'heights' | 'check'
+
+/** Runs a Save's requests in order and stops at the first failure. `applied` names every request that went
+ *  through — the caller clears exactly those drafts, whatever failed after them: the orient write is a DELTA
+ *  (the server adds the angles and shifts up), so a draft kept after it landed would be baked twice. */
+export async function runSaveWrites(
+  writes: ReadonlyArray<readonly [SaveWrite, () => Promise<unknown>]>,
+): Promise<{ applied: SaveWrite[]; error: unknown }> {
+  const applied: SaveWrite[] = []
+  for (const [name, write] of writes) {
+    try {
+      await write()
+    } catch (error) {
+      return { applied, error: error ?? new Error('save failed') }
+    }
+    applied.push(name)
+  }
+  return { applied, error: null }
+}
+
 // ── Entries, Transitions, Import (Ruling A110 phase 5) ─────────────────────────────────────
 
 /** A pose's clip coverage: green = a file in every base set (the instance's `clip_sets`), yellow =

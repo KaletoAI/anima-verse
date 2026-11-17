@@ -60,7 +60,8 @@ import { bridgeKinds, orderSets } from './clipSets'
 import type { ApiClipRow as BaseApiClipRow, BendLimitsWire, ClipListing, RootAngleWire } from './clipSets'
 import { rootMotionSummary } from './rootMotion'
 import { generatedBadge, isStudioClip } from './generatedClip'
-import { clipLamp, finaleKinds as finaleKindsOf, kindLamp, saveSteps, setLetter } from './clipStatus'
+import { clipLamp, finaleKinds as finaleKindsOf, kindLamp, runSaveWrites, saveSteps, setLetter } from './clipStatus'
+import type { SaveWrite } from './clipStatus'
 import { LampDot } from './StatusLamp'
 
 interface ApiClipRow extends BaseApiClipRow {
@@ -632,8 +633,9 @@ export function ClipLibrary({
     setHeightBusy(heightDirty)
     setOrientError('')
     const touched = new Set<string>()
-    try {
-      if (orientDirty) {
+    const writes: Array<readonly [SaveWrite, () => Promise<unknown>]> = []
+    if (orientDirty) {
+      writes.push(['orient', async () => {
         const res = await apiPost<{ seconds?: number; clips?: { kind: string }[] }>(`${clipPath(orientTarget)}/orient`, {
           yaw_deg: yawDeg, tilt_deg: tiltDeg, roll_deg: rollDeg,
           ...(shiftDirty ? { partner_shift_cm: partnerShift } : {}),
@@ -645,29 +647,44 @@ export function ClipLibrary({
         })
         setOrientSeconds(typeof res.seconds === 'number' ? res.seconds : null)
         otherKinds(res.clips, orientTarget.kind).forEach((k) => touched.add(k))
-      }
-      if (heightDirty) {
+      }])
+    }
+    if (heightDirty) {
+      writes.push(['heights', async () => {
         const res = await apiPatch<{ clips?: { kind: string }[] }>(clipPath(orientTarget), { height_offsets_cm: heightDraft })
         otherKinds(res.clips, orientTarget.kind).forEach((k) => touched.add(k))
+      }])
+    }
+    // Heights are not a bake, and a check with nothing dialled is stored on its own (D3).
+    if (!orientDirty && placeCheck) {
+      writes.push(['check', () => apiPost(`${clipPath(orientTarget)}/orient`, { checked: placeCheck })])
+    }
+    try {
+      const { applied, error } = await runSaveWrites(writes)
+      if (applied.length) {
+        setFinalesTouched(Array.from(touched))
+        // The new saved values first, THEN the draft back to zero: in between the figures would jump.
+        // A failed reload still clears the applied drafts — kept, they would be baked a second time.
+        invalidateAnimationPreviewClips()
+        let reloadError: unknown = null
+        try { await onReload() } catch (e) { reloadError = e }
+        if (applied.includes('orient')) {
+          setYawDeg(0)
+          setTiltDeg(0)
+          setRollDeg(0)
+          setPartnerShift([0, 0, 0])
+          setPartnerTurn([0, 0])
+          setPartnerYaw(0)
+          setRoleShift({})
+          setClipShift([0, 0])
+        }
+        if (applied.includes('heights')) setHeightDraft({})
+        // The file keeps its URL, so the preview has to be rebuilt AND the
+        // clip re-fetched — `seq` does both (component key + cache buster).
+        if (applied.includes('orient') || applied.includes('heights')) setSeq((n) => n + 1)
+        if (!error && reloadError) setOrientError((reloadError as Error).message)
       }
-      // Heights are not a bake, and a check with nothing dialled is stored on its own (D3).
-      if (!orientDirty && placeCheck) await apiPost(`${clipPath(orientTarget)}/orient`, { checked: placeCheck })
-      setFinalesTouched(Array.from(touched))
-      // The new saved values first, THEN the draft back to zero: in between the figures would jump.
-      invalidateAnimationPreviewClips()
-      await onReload()
-      setYawDeg(0)
-      setTiltDeg(0)
-      setRollDeg(0)
-      setPartnerShift([0, 0, 0])
-      setPartnerTurn([0, 0])
-      setPartnerYaw(0)
-      setRoleShift({})
-      setClipShift([0, 0])
-      setHeightDraft({})
-      // The file keeps its URL, so the preview has to be rebuilt AND the
-      // clip re-fetched — `seq` does both (component key + cache buster).
-      if (orientDirty || heightDirty) setSeq((n) => n + 1)
+      if (error) setOrientError((error as Error).message)
     } catch (e) {
       setOrientError((e as Error).message)
     } finally {
