@@ -8,7 +8,7 @@ import ts from 'typescript';
 import React from 'react';
 const require = createRequire(import.meta.url);
 const cache = new Map(), requests = [];
-let portal, control;
+let portal, control, refuseRegen = false;
 const options = { resolved: 'A', pose_check: { supported: true, default: true }, options: [
   { name: 'A', has_loras: true, lora_options: [{ name: 'style-a' }, { name: 'shared' }] },
   { name: 'B', has_loras: true, lora_options: [{ name: 'style-b' }, { name: 'shared' }] },
@@ -40,6 +40,7 @@ function load(path) {
       return url.startsWith('/world/imagegen-options') ? (url.includes('occasion=video') ? videoOptions : options) : {};
     }, apiPost: async (url, body) => {
       requests.push({ url, body });
+      if (refuseRegen && url.endsWith('/regenerate')) throw new Error('Backend B is unavailable');
       if (url === '/world/imagegen-enhance-prompt') return { prompt: 'Improved motion' };
       return url.endsWith('/detect-characters') ? { detected: ['Ann'], available: [{ name: 'Ann' }] } : {};
     } };
@@ -146,6 +147,18 @@ for (const surface of ['gallery', 'instagram']) {
   all(renderPicker(tree), n => n.type === 'input' && n.props.type === 'number')[0].props.onChange({ target: { value: '0.65' } });
   tree = draw(); await tree.props.onSubmit();
   assert.deepEqual(requests.at(-1).body.loras, [{ name: 'style-b', strength: 0.65 }]);
+  if (surface === 'gallery') {
+    // Review 13-playerui#3: a refused regenerate (503 explicit backend offline, 422, 409) reaches the dialog frame,
+    // which shows it and stays open; the old handler swallowed it and the dialog closed without a word.
+    let reopened = panel(props); btn(reopened, 'photo.png').props.onClick(); reopened = panel(props);
+    await btn(reopened, 'Regenerate image').props.onClick(); panel(props);
+    tree = draw();
+    refuseRegen = true;
+    await assert.rejects(tree.props.onSubmit(), /Backend B is unavailable/);
+    refuseRegen = false;
+    control = null; panel(props);
+    assert.ok(control, 'the regenerate dialog stays open after a refusal');
+  }
 }
 {
   // Animate dialog: the same picker on the "video" occasion + the improver in video mode.

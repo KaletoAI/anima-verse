@@ -153,9 +153,9 @@ export function GalleryPanel({ regenDialog }: GalleryPanelProps = {}) {
     if (payload.use_room === false) body.use_room = false
     if (payload.use_source_as_reference) body.use_source_as_reference = true
     if (typeof payload.pose_check === 'boolean') body.pose_check = payload.pose_check
-    try {
-      await apiPost(`/characters/${encodeURIComponent(selected)}/images/${encodeURIComponent(img.name)}/regenerate`, body)
-    } catch { /* gallery poll picks up the result */ }
+    // A refusal (an explicit backend offline, no stored prompt, media generation off) throws on: the dialog
+    // frame shows it and stays open. Accepted, the gallery poll picks up the result.
+    await apiPost(`/characters/${encodeURIComponent(selected)}/images/${encodeURIComponent(img.name)}/regenerate`, body)
     setRegenImg(null); setCharOpts(null); setZoom(null)
   }, [regenImg, selected])
 
