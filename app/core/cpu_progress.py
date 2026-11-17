@@ -80,7 +80,6 @@ LABELS: Dict[str, str] = {
     "assemble": "Assembling the figure",
     "postprocess": "Post-processing the view",
     "matte": "Cutting out the piece",
-    "iterate": "Iterating",
     # Blender sub-stages (``_common.progress``)
     "loading": "Loading the model",
     "exporting": "Writing the model",
@@ -92,14 +91,8 @@ LABELS: Dict[str, str] = {
     # Python compute sub-stages (``cpu_progress.sub``)
     "drape_substeps": "Cloth substeps",
     "shell_views": "Shell views",
-    "insole_feet": "Feet",
-    "frame": "Frame",
     "bones": "Bones",
-    "parts": "Parts",
     "levels": "Levels",
-    "views": "Views",
-    "pieces": "Pieces",
-    "poses": "Poses",
     "working": "Working",
 }
 
