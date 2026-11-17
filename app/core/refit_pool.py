@@ -36,8 +36,17 @@ there).
   caller records it as today). A crashed worker breaks the pool
   (``BrokenProcessPool``): the pool is dropped (the next call creates a new
   one) and every call it took down runs once more in a worker process of its
-  own — the call that crashes again fails alone (``WorkerCrashed``), the other
+  own, one such re-run at a time (the worker limit holds after a break) — the
+  call that crashes again fails alone (``WorkerCrashed``), the other
   characters' calls that were in flight complete.
+- **Interruption** (review 01#1/#2): a call the POOL ended — the server stops
+  (``shutdown``: its workers terminated, its queued calls cancelled) — raises
+  ``RefitInterrupted``: no re-run, no defect of the piece. Callers record
+  nothing for it (the next sweep / trigger fits the piece again). From the
+  stop on (``closing``) every call raises it at once — none computes
+  in-process any more, no pool is created — so the process exits promptly; the
+  workers of every pool this process made (a pool replaced by a resize, a
+  crash re-run's own) are ended with the current one.
 
 The per-character runs are tracked tasks (``track`` / ``activate`` /
 ``finish``): ``task_type`` ``TASK_TYPE``, provider ``CPU_PROVIDER``,
@@ -68,12 +77,37 @@ _lock = threading.Lock()
 _pool: Any = None
 _pool_size = 0
 _enabled = False
+#: Set by the terminating ``shutdown`` (the server stops), cleared by ``enable``: every call raises
+#: ``RefitInterrupted`` and no pool is created any more.
+_closing = False
+#: Crash re-runs' own pools while they compute (``_run_alone``): ``shutdown`` ends their workers too.
+_alone: set = set()
+#: Worker processes of pools replaced by a resize (shut down, their running calls still computing): a
+#: shut-down ``ProcessPoolExecutor`` forgets its processes, so ``_get_pool`` keeps them for ``shutdown``.
+_retired: list = []
+#: One crash re-run at a time (``_run_alone``): a pool break never multiplies the worker processes.
+_ALONE_LOCK = threading.Lock()
 #: True inside a worker process (``_initializer``): a nested ``run`` computes in place.
 _IN_WORKER = False
 
 
 class WorkerDatabaseAccess(RuntimeError):
     """A refit worker process tried to open a database."""
+
+
+class RefitInterrupted(RuntimeError):
+    """The refit pool ended this call — the server stops (``shutdown``), or the call was cancelled in the pool.
+    No defect of the piece: callers record no refusal for it and stamp nothing, so the next sweep or trigger fits
+    the piece again."""
+
+
+def closing() -> bool:
+    """The server stops (the terminating ``shutdown`` ran): refit work ends instead of starting."""
+    return _closing
+
+
+def _interrupted(what: Any) -> RefitInterrupted:
+    return RefitInterrupted(f"refit interrupted — the refit pool was shut down ({getattr(what, '__name__', what)})")
 
 
 def auto_workers() -> int:
@@ -110,9 +144,11 @@ def workers() -> int:
 
 
 def enable(on: bool = True) -> None:
-    """Allow the pool (the server lifespan; smokes that test it)."""
-    global _enabled
+    """Allow the pool (the server lifespan; smokes that test it); ``on`` also ends a previous stop's ``closing``."""
+    global _enabled, _closing
     _enabled = bool(on)
+    if on:
+        _closing = False
 
 
 #: Seconds a worker waits between two looks at its parent (``_watch_parent``).
@@ -121,17 +157,18 @@ PARENT_POLL_S = 1.0
 TERMINATE_GRACE_S = 3.0
 
 
+def _alive(proc: Any) -> bool:
+    try:
+        return bool(proc.is_alive())
+    except (OSError, ValueError, AssertionError):
+        return False
+
+
 def _worker_processes(pool: Any) -> list:
-    """The worker processes of ``pool`` (a ``ProcessPoolExecutor``) that are still alive."""
+    """The worker processes of ``pool`` (a ``ProcessPoolExecutor``) that are still alive (none once it is shut
+    down: the executor forgets them then)."""
     procs = getattr(pool, "_processes", None) or {}
-    out = []
-    for proc in list(procs.values()):
-        try:
-            if proc.is_alive():
-                out.append(proc)
-        except (OSError, ValueError, AssertionError):
-            continue
-    return out
+    return [proc for proc in list(procs.values()) if _alive(proc)]
 
 
 def _end_processes(procs: list, grace: float = TERMINATE_GRACE_S) -> None:
@@ -156,19 +193,31 @@ def _end_processes(procs: list, grace: float = TERMINATE_GRACE_S) -> None:
 def shutdown(wait: bool = False, terminate: bool = True) -> None:
     """Shut the pool down (the lifespan exit) and disable it. ``terminate``
     (the default, Ruling A64): the workers are ended now — a computing one too,
-    its refit is lost and runs again on the next trigger — so none of them
-    outlives the server; ``wait`` True instead waits for the running calls."""
-    global _pool, _pool_size, _enabled
+    its call raises ``RefitInterrupted`` and its refit runs again on the next
+    trigger — so none of them outlives the server, and from now on every call
+    raises ``RefitInterrupted`` (``closing``: nothing is re-run, nothing
+    computes in-process, no pool is created). The workers of every pool this
+    process made are ended: the current one, a crash re-run's own, one
+    replaced by a resize. ``wait`` True instead waits for the running calls
+    (queued ones are cancelled: ``RefitInterrupted``) and later calls run
+    in-process (the smokes)."""
+    global _pool, _pool_size, _enabled, _closing
+    ending = terminate and not wait
     with _lock:
+        if ending:
+            _closing = True
         pool, _pool, _pool_size = _pool, None, 0
         _enabled = False
-    if pool is None:
-        return
-    procs = _worker_processes(pool) if terminate and not wait else []
-    try:
-        pool.shutdown(wait=wait, cancel_futures=True)
-    except Exception:  # noqa: BLE001
-        logger.exception("Refit pool: shutdown failed")
+        pools = ([pool] if pool is not None else []) + list(_alone)
+        retired = list(_retired) if ending else []
+        _retired.clear()
+    procs = ([p for each in pools for p in _worker_processes(each)] + [p for p in retired if _alive(p)]
+             if ending else [])
+    for each in pools:
+        try:
+            each.shutdown(wait=wait, cancel_futures=True)
+        except Exception:  # noqa: BLE001
+            logger.exception("Refit pool: shutdown failed")
     if procs:
         _end_processes(procs)
         logger.info("Refit pool: %d worker process(es) ended", len(procs))
@@ -232,36 +281,47 @@ def _initializer(blender_slots: Optional[tuple] = None, fit_threads: Optional[in
         pass
 
 
-def _new_pool(size: int) -> Any:
+def _new_pool(size: int, share: Optional[int] = None) -> Any:
+    """A pool of ``size`` workers whose fit kernels get ``(cores - 2) // share`` threads each (``share`` default
+    ``size``: the cores less two, shared evenly by the workers)."""
     import multiprocessing
     from concurrent.futures import ProcessPoolExecutor
     from app.blender import runner
-    # the cores less two, shared evenly by the workers
-    fit_threads = max(1, ((os.cpu_count() or 1) - 2) // size)
+    fit_threads = max(1, ((os.cpu_count() or 1) - 2) // max(1, share or size))
     return ProcessPoolExecutor(max_workers=size, mp_context=multiprocessing.get_context("spawn"),
                                initializer=_initializer, initargs=(runner.spawn_slots(), fit_threads, os.getpid()))
 
 
 def _get_pool(size: int) -> Any:
     """The pool of ``size`` workers, created on first use (or after a resize /
-    a break)."""
+    a break). ``RefitInterrupted`` once the server stops (``closing``). A pool
+    replaced by a resize finishes the calls it holds; its workers are kept
+    for ``shutdown``."""
     global _pool, _pool_size
     with _lock:
+        if _closing:
+            raise RefitInterrupted("refit interrupted — the server stops")
         if _pool is not None and _pool_size == size:
             return _pool
         old, _pool, _pool_size = _pool, _new_pool(size), size
+        pool = _pool
+        if old is not None:
+            _retired[:] = [p for p in _retired if _alive(p)] + _worker_processes(old)
         logger.info("Refit pool: %d worker process(es)", size)
     if old is not None:
         old.shutdown(wait=False)
-    return _pool
+    return pool
 
 
 def _drop(pool: Any) -> None:
-    """Forget a broken pool (the next call creates a new one)."""
+    """Forget a broken pool (the next call creates a new one). Only the CURRENT pool is shut down here: one
+    already replaced (a resize, another caller's drop) is not this caller's to cancel — its other callers' queued
+    calls would end as cancelled (review 01#2)."""
     global _pool, _pool_size
     with _lock:
-        if _pool is pool:
-            _pool, _pool_size = None, 0
+        if _pool is not pool:
+            return
+        _pool, _pool_size = None, 0
     try:
         pool.shutdown(wait=False, cancel_futures=True)
     except Exception:  # noqa: BLE001
@@ -273,15 +333,34 @@ class WorkerCrashed(RuntimeError):
 
 
 def _run_alone(fn: Callable[..., Any], args: Any, kwargs: Any) -> Any:
-    """``fn`` in a worker process of its own (after a pool break): a crash here is this call's alone."""
+    """``fn`` in a worker process of its own (after a pool break): a crash here is this call's alone. One re-run
+    at a time (``_ALONE_LOCK``) with the fit threads of one regular slot, so the calls a break took down never
+    run beside each other in fresh processes beyond the worker limit (review 01#5). ``RefitInterrupted`` when
+    the server stops meanwhile."""
+    from concurrent.futures import CancelledError
     from concurrent.futures.process import BrokenProcessPool
-    ex = _new_pool(1)
-    try:
-        return ex.submit(fn, *args, **kwargs).result()
-    except BrokenProcessPool as e:
-        raise WorkerCrashed(f"the refit worker process crashed in {getattr(fn, '__name__', fn)}") from e
-    finally:
-        ex.shutdown(wait=False, cancel_futures=True)
+    with _ALONE_LOCK:
+        with _lock:
+            if _closing:
+                raise _interrupted(fn)
+            ex = _new_pool(1, share=max(1, _pool_size or configured_workers()))
+            _alone.add(ex)
+        try:
+            return ex.submit(fn, *args, **kwargs).result()
+        except CancelledError as e:
+            raise _interrupted(fn) from e
+        except BrokenProcessPool as e:
+            if _closing:
+                raise _interrupted(fn) from e
+            raise WorkerCrashed(f"the refit worker process crashed in {getattr(fn, '__name__', fn)}") from e
+        except RuntimeError as e:
+            if _closing:  # shut down by ``shutdown`` before the submit
+                raise _interrupted(fn) from e
+            raise
+        finally:
+            with _lock:
+                _alone.discard(ex)
+            ex.shutdown(wait=False, cancel_futures=True)
 
 
 def run(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -289,6 +368,8 @@ def run(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     ``cpu:<function>`` and its inner ``cpu_progress.sub`` reports reach the scope — through a progress file when it
     runs in a worker process. Without a scope it is ``_run`` as is."""
     from app.core import cpu_progress
+    if _closing:
+        raise _interrupted(fn)
     if not cpu_progress.active():
         return _run(fn, *args, **kwargs)
     head = f"cpu:{getattr(fn, '__name__', 'compute')}"
@@ -310,26 +391,54 @@ def _run(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     exception of ``fn`` is raised here. A pool broken by a crashed worker is
     dropped (the next call creates a new one) and every call it took down is
     run once more in a worker process of its own — so a call that crashes
-    again fails alone (``WorkerCrashed``) and the others complete."""
+    again fails alone (``WorkerCrashed``) and the others complete. A call the
+    pool ended (the server stops: ``closing``; cancelled in the pool) raises
+    ``RefitInterrupted`` and is not run again."""
+    if _closing:
+        raise _interrupted(fn)
     size = workers()
     if size <= 1:
         return fn(*args, **kwargs)
+    from concurrent.futures import CancelledError
     from concurrent.futures.process import BrokenProcessPool
     pool = _get_pool(size)
     try:
         future = pool.submit(fn, *args, **kwargs)
-    except (BrokenProcessPool, RuntimeError):
-        # Broken or shut down meanwhile (a break / resize by another thread): a fresh pool.
+    except BrokenProcessPool:
+        # Broken meanwhile (a crash in another thread's call): a fresh pool.
         _drop(pool)
         pool = _get_pool(size)
-        future = pool.submit(fn, *args, **kwargs)
+        future = _submit_again(pool, fn, args, kwargs)
+    except RuntimeError as e:
+        # Shut down meanwhile: replaced by a resize (its calls finish there; this one goes to the new pool) or
+        # the server stops.
+        if _closing:
+            raise _interrupted(fn) from e
+        pool = _get_pool(size)
+        future = _submit_again(pool, fn, args, kwargs)
     try:
         return future.result()
-    except BrokenProcessPool:
+    except CancelledError as e:
+        # Only a shutdown cancels a queued call (``cancel_futures``) — never a defect of the call.
+        raise _interrupted(fn) from e
+    except BrokenProcessPool as e:
+        if _closing:
+            # The stop terminated the workers: no crash, nothing runs again.
+            raise _interrupted(fn) from e
         _drop(pool)
         logger.warning("Refit pool broke during %s — recreated; the call runs once more on its own",
                        getattr(fn, "__name__", fn))
         return _run_alone(fn, args, kwargs)
+
+
+def _submit_again(pool: Any, fn: Callable[..., Any], args: Any, kwargs: Any) -> Any:
+    """The second submit of ``_run`` (onto a fresh pool): a pool that is shut down or broken again at once was
+    ended by the pool's own lifecycle (the stop, another resize) — ``RefitInterrupted``, never the call's
+    defect."""
+    try:
+        return pool.submit(fn, *args, **kwargs)
+    except RuntimeError as e:
+        raise _interrupted(fn) from e
 
 
 # --- shared compute ----------------------------------------------------------------
@@ -390,12 +499,13 @@ def activate(task_id: str, label: Optional[str] = None) -> None:
 
 
 def finish(task_id: str, error: str = "") -> None:
-    """The tracked refit ended (done, or failed with ``error``)."""
+    """The tracked refit ended (done, or failed with ``error``) — only while its row is still open: one cancelled in
+    the TaskPanel stays cancelled (review 01#3)."""
     if not task_id:
         return
     try:
         from app.core.task_queue import get_task_queue
-        get_task_queue().track_finish(task_id, error=error)
+        get_task_queue().track_finish_if_open(task_id, error=error)
     except Exception:  # noqa: BLE001
         logger.exception("Refit task %s: finish failed", task_id)
 

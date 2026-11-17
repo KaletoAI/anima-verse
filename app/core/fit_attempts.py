@@ -558,12 +558,17 @@ def store(character_name: str, item_id: str, fsig: str, *, body: str, kind: str,
     ``DERIVED`` keeps a body shape's refused derived shoe beside the body's last attempt (Ruling A40). ``carry``
     (the clothing fits, Ruling A72b): a user's acceptance on (item, fsig, body) whose refusal this one ``carries``
     publishes this attempt as the user-accepted fit — True then, and the caller treats the fit as published. Never
-    raises: a refusal stays a refusal when its attempt cannot be kept (False)."""
+    raises — a refusal stays a refusal when its attempt cannot be kept (False) — except
+    ``refit_pool.RefitInterrupted``: the server stops while the attempt is grafted, and the fit's outcome is unknown
+    (a carried acceptance would have published it), so the caller records no refusal for it (review 01#2)."""
+    from app.core import refit_pool
     if kind not in KINDS or slot not in SLOTS:
         return False
     try:
         return _store(character_name, item_id, fsig, body=body, kind=kind, record=record, error=error, gates=gates,
                       rigged=rigged, garment=garment, glb=glb, tris=tris, marks=marks, slot=slot, carry=carry)
+    except refit_pool.RefitInterrupted:
+        raise
     except Exception:  # noqa: BLE001 — the attempt is a view on the refusal, never its outcome
         logger.exception("Fit attempt %s/%s (%s) on %s not kept", character_name, item_id, fsig, body or "plain body")
         return False

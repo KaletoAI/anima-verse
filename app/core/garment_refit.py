@@ -75,6 +75,12 @@ alongside. A refused refit is recorded like a refused run's fit
 (``garments._note_outcome``) — the old fit stays served, automatic triggers
 skip it until an explicit run. One log line per refit. Asset maintenance like
 the outfit GC: a world freeze does not stop it.
+
+A refit the refit pool ENDED (``refit_pool.RefitInterrupted``: the server
+stops) is no refusal: nothing is recorded or stamped, the character's run ends
+there and the next sweep fits the piece again. From the stop on
+(``refit_pool.closing``) the sweep starts no character any more and finishes
+the tracked rows of those it did not reach (``STOPPED``).
 """
 from __future__ import annotations
 
@@ -93,6 +99,8 @@ SWEEP_PAUSE_S = 2.0
 #: A busy character (garment chain running) is retried this often, this far apart.
 BUSY_RETRIES = 20
 BUSY_RETRY_S = 30.0
+#: The error of a tracked refit the server stop left undone (``refit_pool.closing``).
+STOPPED = "the server stopped — left for the next start"
 
 
 def inputs_id(character_name: str, item_id: str, fsig: str, method: str, base_sha: str, *,
@@ -393,7 +401,7 @@ def outdated_body_fits(character_name: str, *, profile: Optional[Dict[str, Any]]
 def _refit_bodies(character_name: str, profile: Dict[str, Any], base_sha: str) -> List[str]:
     """Refit ``outdated_body_fits``, then ``refused_body_fits`` (caller holds
     the run lock). Returns ``"<item>@<body id>"`` per refitted fit."""
-    from app.core import garment_fit, garments, garment_store as gs
+    from app.core import garment_fit, garments, refit_pool, garment_store as gs
     from app.core.keyed_lock import keyed_lock
     done: List[str] = []
     outdated = outdated_body_fits(character_name, profile=profile)
@@ -416,6 +424,8 @@ def _refit_bodies(character_name: str, profile: Dict[str, Any], base_sha: str) -
                 else:
                     garments.fit_on_body(character_name, item_id, body_id=body_id, base_fit=base_fit,
                                          profile=profile)
+        except refit_pool.RefitInterrupted:
+            raise  # no refusal on that body: the pool ended the call (the server stops)
         except Exception as e:  # noqa: BLE001 — recorded on that body, the old fit stays served
             error = e.error if isinstance(e, garments._Refused) else (str(e) or type(e).__name__)
             gs.record_body_failure(character_name, item_id, fsig, body_id, error=error,
@@ -439,7 +449,7 @@ def _retry_refused(character_name: str, profile: Dict[str, Any], bsig: str,
     ``skip`` (refitted just now) left out; the outcome is recorded like a
     run's fit (``garments._note_outcome``: a new refusal stamped). Returns
     the item ids fitted."""
-    from app.core import base_body, garments, garment_store as gs
+    from app.core import base_body, garments, refit_pool, garment_store as gs
     done: List[str] = []
     for item_id, kind, fsig, _method in refused_fits(character_name, profile=profile):
         if item_id in skip:
@@ -451,6 +461,9 @@ def _retry_refused(character_name: str, profile: Dict[str, Any], bsig: str,
             gs.end(character_name, item_id, "fit")
             logger.info("Garment refit %s/%s (%s): skipped — %s", character_name, item_id, fsig, e)
             continue
+        except refit_pool.RefitInterrupted:
+            gs.end(character_name, item_id, "fit")  # no refusal: the pool ended the call (the server stops)
+            raise
         except garments._Refused as e:
             result = garments._refusal(character_name, item_id, fsig, "fit", e.error, e.gates, [])
         except Exception as e:  # noqa: BLE001 — reported as the fit's failure, the sweep goes on
@@ -543,10 +556,13 @@ def _fit_footwear(character_name: str, item_id: str, fsig: str, profile: Dict[st
                   stamp: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """One footwear fit on the base model under the run lock, reported and noted like every refit; the result.
     ``stamp`` (``refusal_stamp``): carried by a refusal's failure record."""
-    from app.core import garment_footwear, garments, garment_store as gs
+    from app.core import garment_footwear, garments, refit_pool, garment_store as gs
     gs.start(character_name, item_id, "fit")
     try:
         garment_footwear.fit(character_name, item_id, fsig, profile=profile, schedule=False)
+    except refit_pool.RefitInterrupted:
+        gs.end(character_name, item_id, "fit")  # no refusal: the pool ended the call (the server stops)
+        raise
     except garments._Refused as e:
         result = garments._refusal(character_name, item_id, fsig, "fit", e.error, e.gates, [])
     except Exception as e:  # noqa: BLE001 — reported as the fit's failure, the sweep goes on
@@ -563,7 +579,7 @@ def _fit_footwear(character_name: str, item_id: str, fsig: str, profile: Dict[st
 def _refit_footwear_bodies(character_name: str, item_id: str, old_fsig: str, profile: Dict[str, Any]) -> List[str]:
     """Refit the item on every stored outfit body whose fit of ``old_fsig`` was accepted
     (``garment_footwear.body_fit`` with ``build``); ``"<item>@<body id>"`` per body fitted."""
-    from app.core import garment_footwear, garments, garment_store as gs
+    from app.core import garment_footwear, garments, refit_pool, garment_store as gs
     from app.core.keyed_lock import keyed_lock
     done: List[str] = []
     for body_id in garment_footwear.stored_outfit_bodies(character_name):
@@ -576,6 +592,8 @@ def _refit_footwear_bodies(character_name: str, item_id: str, old_fsig: str, pro
             with keyed_lock("garment_body_fit", f"{character_name}:{body_id}"):
                 garment_footwear.body_fit(character_name, item_id, body_id=body_id, body_sha=body_sha,
                                           profile=profile, build=True)
+        except refit_pool.RefitInterrupted:
+            raise
         except Exception as e:  # noqa: BLE001 — recorded on that body by body_fit, the sweep goes on
             logger.info("Garment refit %s/%s (footwear) on outfit body %s: %s", character_name, item_id,
                         body_id, str(e) or type(e).__name__)
@@ -676,7 +694,7 @@ def _refit_swing_default(character_name: str, profile: Dict[str, Any], base: Tup
     """Refit ``swing_default_fits`` under their current fsig from the stored seeds (caller holds the run lock;
     Ruling H-R9), reported and noted like every refit, a refusal stamped (``refusal_stamp``). Returns the item
     ids fitted."""
-    from app.core import base_body, garment_set, garments, garment_store as gs
+    from app.core import base_body, garment_set, garments, refit_pool, garment_store as gs
     done: List[str] = []
     for item_id, old_fsig, fsig in swing_default_fits(character_name, profile=profile):
         stamp = refusal_stamp(character_name, item_id, garment_set.HAIR, fsig, gs.HAIRDECK, base[1], profile=profile)
@@ -687,6 +705,9 @@ def _refit_swing_default(character_name: str, profile: Dict[str, Any], base: Tup
             gs.end(character_name, item_id, "fit")
             logger.info("Garment refit %s/%s (%s): skipped — %s", character_name, item_id, fsig, e)
             continue
+        except refit_pool.RefitInterrupted:
+            gs.end(character_name, item_id, "fit")  # no refusal: the pool ended the call (the server stops)
+            raise
         except garments._Refused as e:
             result = garments._refusal(character_name, item_id, fsig, "fit", e.error, e.gates, [])
         except Exception as e:  # noqa: BLE001 — reported as the fit's failure, the sweep goes on
@@ -703,20 +724,25 @@ def _refit_swing_default(character_name: str, profile: Dict[str, Any], base: Tup
     return done
 
 
-def refit_character(character_name: str) -> Optional[List[str]]:
+def refit_character(character_name: str, *, on_hold: Optional[Any] = None) -> Optional[List[str]]:
     """Refit the character's outdated fits (``outdated_fits``, the Swing
     default's ``swing_default_fits``, the too-small refusals ``refused_fits``,
     then ``outdated_body_fits`` / ``refused_body_fits``) under its garment run lock (``garments.hold_all``:
     no CPU refit starts beside the FIFO meanwhile, Ruling A30). None when a
     chain runs (lock held / FIFO active / a refit beside it) — nothing was
     touched; else the item ids refitted (``"<item>@<body id>"`` for a fit on
-    an outfit body)."""
-    from app.core import base_body, garment_fit, garments, garment_store as gs
+    an outfit body). ``on_hold()`` runs once the lock is held, before the
+    first refit (the sweep's tracked row turns ``running`` only then).
+    ``refit_pool.RefitInterrupted`` (the server stops) ends the run: nothing
+    is recorded for the piece it hit, the exception propagates."""
+    from app.core import base_body, garment_fit, garments, refit_pool, garment_store as gs
     from app.models.character import get_character_profile
     if not garments.hold_all(character_name):
         return None
     done: List[str] = []
     try:
+        if on_hold is not None:
+            on_hold()
         profile = get_character_profile(character_name) or {}
         base = base_body.current_base(character_name, profile=profile)
         try:
@@ -749,6 +775,9 @@ def refit_character(character_name: str) -> Optional[List[str]]:
                 gs.end(character_name, item_id, "fit")
                 logger.info("Garment refit %s/%s (%s): skipped — %s", character_name, item_id, fsig, e)
                 continue
+            except refit_pool.RefitInterrupted:
+                gs.end(character_name, item_id, "fit")  # no refusal: the pool ended the call (the server stops)
+                raise
             except garments._Refused as e:
                 result = garments._refusal(character_name, item_id, fsig, "fit", e.error, e.gates, [])
             except Exception as e:  # noqa: BLE001 — reported as the fit's failure, the sweep goes on
@@ -837,71 +866,142 @@ def tracked(character_name: str, run: Any) -> Optional[List[str]]:
     return done
 
 
-def _sweep_one(name: str, *, task_id: str, pause: float, retries: int, retry_s: float) -> List[str]:
-    """The serial sweep's unit (today's order): posture once, then ``refit_character`` retried while busy."""
-    from app.core import refit_pool
-    if refit_pool.cancelled(task_id):
-        logger.info("Garment refit sweep: %s cancelled while it waited", name)
-        refit_pool.release(task_id)
-        return []
-    label = refit_pool.fits_label(name, _count(name)) if task_id else ""
-    if task_id:
-        refit_pool.activate(task_id, label)
-    with refit_pool.blender_wait_label(task_id, label):
-        out = _posture(name)
+def _posture_due(name: str) -> bool:
+    """Whether the character has stale outfit-body postures (``outfit_bodies.stale_posture_bodies``): the
+    posture match does work. True when unreadable (the match runs and says so itself)."""
     try:
+        from app.core import outfit_bodies
+        return bool(outfit_bodies.stale_posture_bodies(name))
+    except Exception:  # noqa: BLE001 — the label of the row only
+        return True
+
+
+class _Row:
+    """A sweep character's tracked row (review 01#6): ``running`` only while work is done — before the posture
+    match when it has work, else once ``refit_character`` holds the run lock (``on_hold``). When the posture work
+    ran and then the garment chain turned out busy, ``wait_again`` ends that row (completed: its posture work is
+    in the history) and the rest waits under a new ``pending`` row — the task queue has no way back from
+    ``running`` to ``pending``. A row cancelled in the TaskPanel stays cancelled."""
+
+    def __init__(self, name: str, task_id: str, label: str):
+        self.name, self.task_id, self.label, self.active = name, task_id, label, False
+
+    def activate(self) -> None:
+        from app.core import refit_pool
+        if self.task_id and not self.active:
+            refit_pool.activate(self.task_id, self.label)
+            self.active = True
+
+    def wait_again(self) -> str:
+        from app.core import refit_pool
+        if self.active and self.task_id and not refit_pool.cancelled(self.task_id):
+            refit_pool.finish(self.task_id)
+            self.label = refit_pool.fits_label(self.name, _count(self.name))
+            self.task_id = refit_pool.track(self.name, self.label, pending=True)
+        self.active = False
+        return self.task_id
+
+
+def _stopped(name: str, task_id: str) -> bool:
+    """The server stops (``refit_pool.closing``): the character's tracked row ends (``STOPPED``) — True."""
+    from app.core import refit_pool
+    if not refit_pool.closing():
+        return False
+    logger.info("Garment refit sweep: %s left for the next start — the server stops", name)
+    refit_pool.finish(task_id, error=STOPPED)
+    return True
+
+
+def _cancelled(name: str, task_id: str) -> bool:
+    """The character's tracked row was cancelled in the TaskPanel (it stays cancelled) — True."""
+    from app.core import refit_pool
+    if not refit_pool.cancelled(task_id):
+        return False
+    logger.info("Garment refit sweep: %s cancelled while it waited", name)
+    refit_pool.release(task_id)
+    return True
+
+
+def _sweep_one(name: str, *, task_id: str, pause: float, retries: int, retry_s: float) -> List[str]:
+    """The serial sweep's unit (today's order): posture once, then ``refit_character`` retried while busy — a
+    cancel or the server stop between two tries ends it."""
+    from app.core import refit_pool
+    if _stopped(name, task_id) or _cancelled(name, task_id):
+        return []
+    row = _Row(name, task_id, refit_pool.fits_label(name, _count(name)) if task_id else "")
+    out: List[str] = []
+    try:
+        if _posture_due(name):
+            row.activate()
+        with refit_pool.blender_wait_label(row.task_id, row.label):
+            out = _posture(name)
         for attempt in range(retries + 1):
-            with refit_pool.blender_wait_label(task_id, label):
-                done = refit_character(name)
+            with refit_pool.blender_wait_label(row.task_id, row.label):
+                done = refit_character(name, on_hold=row.activate)
             if done is not None:
                 break
+            row.wait_again()
             if attempt < retries:
                 time.sleep(retry_s)
+                if _stopped(name, row.task_id) or _cancelled(name, row.task_id):
+                    return out
         else:
             logger.info("Garment refit sweep: %s stayed busy — left for the next start", name)
-            refit_pool.finish(task_id, error="garment run in progress — left for the next start")
+            refit_pool.finish(row.task_id, error="garment run in progress — left for the next start")
             return out
-        refit_pool.finish(task_id)
+        refit_pool.finish(row.task_id)
         return out + done
+    except refit_pool.RefitInterrupted as e:
+        logger.info("Garment refit sweep: %s interrupted — %s", name, e)
+        refit_pool.finish(row.task_id, error=STOPPED)
+        return out
     except Exception as e:  # noqa: BLE001 — one character never stops the sweep
         logger.exception("Garment refit sweep: %s failed", name)
-        refit_pool.finish(task_id, error=str(e) or type(e).__name__)
+        refit_pool.finish(row.task_id, error=str(e) or type(e).__name__)
         return out
     finally:
-        if pause:
+        if pause and not refit_pool.closing():
             time.sleep(pause)
 
 
-def _attempt(name: str, task_id: str, first: bool, pause: float) -> Tuple[str, List[str]]:
+def _attempt(name: str, tracks: Dict[str, str], first: bool, pause: float) -> Tuple[str, List[str]]:
     """The parallel sweep's unit, on an orchestrator thread: posture on the ``first`` attempt, then one
-    ``refit_character``. ``(BUSY, posture part)`` when the garment chain runs (the track stays pending, the
-    scheduler retries later), else ``("done", what was refitted)``; a failure finishes the track failed and
-    returns the posture part as done."""
+    ``refit_character``. ``(BUSY, posture part)`` when the garment chain runs (the track waits ``pending``, the
+    scheduler retries later; ``tracks[name]`` names the row it waits under), else ``("done", what was
+    refitted)``; a failure finishes the track failed and returns the posture part as done. A row cancelled in the
+    TaskPanel (on every attempt) or the server stop ends it without a try."""
     from app.core import refit_pool
-    if first and refit_pool.cancelled(task_id):
-        logger.info("Garment refit sweep: %s cancelled while it waited", name)
-        refit_pool.release(task_id)
+    task_id = tracks.get(name, "")
+    if _stopped(name, task_id) or _cancelled(name, task_id):
         return "done", []
     if _busy(name):
         return BUSY, []
-    label = refit_pool.fits_label(name, _count(name)) if task_id else ""
-    if task_id:
-        refit_pool.activate(task_id, label)
-    with refit_pool.blender_wait_label(task_id, label):
-        out = _posture(name) if first else []
+    row = _Row(name, task_id, refit_pool.fits_label(name, _count(name)) if task_id else "")
+    out: List[str] = []
     try:
-        with refit_pool.blender_wait_label(task_id, label):
-            done = refit_character(name)
+        if first:
+            if _posture_due(name):
+                row.activate()
+            with refit_pool.blender_wait_label(row.task_id, row.label):
+                out = _posture(name)
+        with refit_pool.blender_wait_label(row.task_id, row.label):
+            done = refit_character(name, on_hold=row.activate)
+    except refit_pool.RefitInterrupted as e:
+        logger.info("Garment refit sweep: %s interrupted — %s", name, e)
+        refit_pool.finish(row.task_id, error=STOPPED)
+        return "done", out
     except Exception as e:  # noqa: BLE001 — fails this character only
         logger.exception("Garment refit sweep: %s failed", name)
-        refit_pool.finish(task_id, error=str(e) or type(e).__name__)
+        refit_pool.finish(row.task_id, error=str(e) or type(e).__name__)
         return "done", out
     finally:
-        if pause:
+        if pause and not refit_pool.closing():
             time.sleep(pause)
     if done is None:
+        if task_id:
+            tracks[name] = row.wait_again()
         return BUSY, out
-    refit_pool.finish(task_id)
+    refit_pool.finish(row.task_id)
     return "done", out + done
 
 
@@ -917,7 +1017,9 @@ def _sweep_parallel(names: List[str], tracks: Dict[str, str], workers: int, *, p
                     retry_s: float) -> Dict[str, List[str]]:
     """Up to ``workers`` characters at once, each on its own orchestrator thread (its fits in order, under its
     run lock); the compute goes to the refit pool. A busy character goes back to the end and is tried again
-    ``retry_s`` later (at most ``retries`` times) without holding a slot."""
+    ``retry_s`` later (at most ``retries`` times) without holding a slot. The server stop
+    (``refit_pool.closing``) cancels the characters not started yet and finishes their rows (``STOPPED``) —
+    the executor's exit hook would otherwise run every queued character before the process can end."""
     from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
     from app.core import refit_pool
     out: Dict[str, List[str]] = {}
@@ -925,13 +1027,22 @@ def _sweep_parallel(names: List[str], tracks: Dict[str, str], workers: int, *, p
     partial: Dict[str, List[str]] = {}
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="garment-refit",
                             initializer=_nice_thread) as ex:
-        running = {ex.submit(_attempt, name, tracks.get(name, ""), True, pause): (name, 0) for name in names}
+        running = {ex.submit(_attempt, name, tracks, True, pause): (name, 0) for name in names}
         while running or later:
+            if refit_pool.closing():
+                ex.shutdown(wait=False, cancel_futures=True)
+                for fut, (name, _attempt_no) in running.items():
+                    if fut.cancelled():
+                        refit_pool.finish(tracks.get(name, ""), error=STOPPED)
+                for _due, name, _attempt_no in later:
+                    refit_pool.finish(tracks.get(name, ""), error=STOPPED)
+                logger.info("Garment refit sweep: stopped — the server stops")
+                break
             now = time.monotonic()
             for item in [x for x in later if x[0] <= now]:
                 later.remove(item)
                 _due, name, attempt = item
-                running[ex.submit(_attempt, name, tracks.get(name, ""), False, pause)] = (name, attempt)
+                running[ex.submit(_attempt, name, tracks, False, pause)] = (name, attempt)
             if not running:
                 time.sleep(max(0.0, min(x[0] for x in later) - time.monotonic()))
                 continue
@@ -987,6 +1098,10 @@ def sweep(characters: Optional[Iterable[str]] = None, *, pause: float = SWEEP_PA
         if n > 1 and len(names) > 1:
             return _sweep_parallel(names, tracks, min(n, len(names)), pause=pause, retries=retries, retry_s=retry_s)
         for name in names:
+            if refit_pool.closing():
+                # The server stops: no character starts any more, each waiting row ends at once.
+                _stopped(name, tracks.get(name, ""))
+                continue
             done = _sweep_one(name, task_id=tracks.get(name, ""), pause=pause, retries=retries, retry_s=retry_s)
             if done:
                 out[name] = done

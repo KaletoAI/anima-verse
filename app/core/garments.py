@@ -3701,8 +3701,17 @@ def _is_load(e: BaseException) -> bool:
     """Whether a failed step is load or the media switch — a ``BackendBusyError``
     or ``MediaGenerationDisabled`` anywhere in the exception chain
     (``footwear_source.failure_of``'s walk of ``__cause__`` / ``__context__``)
-    — and so no defect of the item: nothing to persist, try again later."""
-    from app.core import footwear_source
+    — or a compute call the refit pool ended (``refit_pool.RefitInterrupted``:
+    the server stops) — and so no defect of the item: nothing to persist, try
+    again later."""
+    from app.core import footwear_source, refit_pool
+    seen = set()
+    cur: Optional[BaseException] = e
+    while cur is not None and id(cur) not in seen:
+        if isinstance(cur, refit_pool.RefitInterrupted):
+            return True
+        seen.add(id(cur))
+        cur = cur.__cause__ or cur.__context__
     return footwear_source.failure_of(e)[0] == footwear_source.LOAD
 
 
@@ -4043,6 +4052,12 @@ def _execute_inner(character_name: str, job: "_Job") -> Optional[str]:
     error: Optional[str] = None
     if job.track:
         from app.core import refit_pool
+        if refit_pool.cancelled(job.track):
+            # Cancelled in the TaskPanel while it waited (review 01#3): it does not run, its row stays cancelled.
+            logger.info("Garment run %s/%s: the re-fit was cancelled while it waited", character_name, job.item_id)
+            job.result = {"ok": False, "cancelled": True, "error": CANCELLED, "ran": []}
+            job.track = ""
+            return None
         refit_pool.activate(job.track)
     from app.imagegen.base import CANCEL_SCOPE
     scope_token = CANCEL_SCOPE.set(job.cancel_scope)
@@ -4333,6 +4348,11 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
         # explicit run: a waiting automatic run it took over no longer honours ``cached_failure`` (review 01#4).
         job.clicked = True
         job.automatic = False
+        if track and job.track:
+            from app.core import refit_pool
+            if refit_pool.cancelled(job.track):
+                # The waiting run's row was cancelled in the TaskPanel: this click's row takes its place.
+                job.track = ""
         if track and not job.track:
             job.track, track = track, ""
         if not gs.status(character_name, item_id).get("running_step"):

@@ -148,7 +148,7 @@ class FitRefit(ImprovementType):
         return not _work(name, _profile(name))
 
     def apply(self, candidate: Candidate, params: Dict[str, Any], task_id: str) -> None:
-        from app.core import garment_refit, outfit_bodies
+        from app.core import garment_refit, outfit_bodies, refit_pool
         name = candidate.key.removeprefix("character:")
         # A garment chain of the character runs or waits: load, and nothing
         # is touched — the posture match below refits garments on the body.
@@ -157,8 +157,20 @@ class FitRefit(ImprovementType):
         # The sweep's order: stale postures first (the bodies are turned and
         # their garments refitted inside), then the character's fits — one
         # tracked CPU task, like the sweep's (Game-Admin's header).
+        busy: List[bool] = []
+
         def run():
-            outfit_bodies.match_stale_postures(name)
-            return garment_refit.refit_character(name)
-        if garment_refit.tracked(name, run) is None:
+            postures = outfit_bodies.match_stale_postures(name)
+            done = garment_refit.refit_character(name)
+            if done is None:
+                # The chain started meanwhile: busy. Posture work that was done keeps its row (review 01#6).
+                busy.append(True)
+                return [f"posture@{body_id}" for body_id in postures] or None
+            return done
+        try:
+            garment_refit.tracked(name, run)
+        except refit_pool.RefitInterrupted as e:
+            # The refit pool ended the run (the server stops): no defect of the subject — it stays due.
+            raise CandidateBusy(f"{name}: {e}") from e
+        if busy:
             raise CandidateBusy(f"{name}: garment run in progress")
