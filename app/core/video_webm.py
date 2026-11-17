@@ -14,7 +14,10 @@ GENERATION. Right after a video lands (``schedule_webm``, daemon thread, never
 blocks the caller) and lazily on the first request for an existing video
 (``ensure_webm``). Both go through one single-flight table keyed by the
 companion path, so concurrent requests run ONE ffmpeg job. A missing ffmpeg is
-logged once and answered with ``None``; it never raises.
+logged once and answered with ``None``; it never raises. A FAILED encode is
+remembered for that mp4 (its mtime and size) for ``FAILED_RETRY_S``: until then
+a request answers ``None`` at once instead of running ffmpeg again for up to
+``ENCODE_TIMEOUT_S``; a replaced mp4 is tried again right away.
 
 ENCODER. ``libvpx-vp9 -deadline realtime -cpu-used 8 -row-mt 1 -crf 33 -b:v 0``:
 generated clips are a few seconds long, a request may be waiting for the
@@ -27,8 +30,9 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
-from typing import Dict, Iterable, Optional
+from typing import Dict, Iterable, Optional, Tuple
 
 from app.core.log import get_logger
 
@@ -38,9 +42,16 @@ WEBM_DIR = ".video-webm"
 WEBM_MEDIA_TYPE = "video/webm"
 #: Upper bound of one encode; a clip that needs longer is not a gallery clip.
 ENCODE_TIMEOUT_S = 300
+#: How long a failed encode of one mp4 (same mtime and size) is not tried again.
+FAILED_RETRY_S = 3600
+#: A temp file of an encode is never older than its encode (``ENCODE_TIMEOUT_S``); the sweep leaves younger
+#: ones alone — they may belong to an encode that is still running.
+STRAY_TMP_AGE_S = ENCODE_TIMEOUT_S + 60
 
 _lock = threading.Lock()
 _inflight: Dict[str, threading.Event] = {}
+#: companion path -> ((mp4 mtime_ns, mp4 size), monotonic stamp of the failure)
+_failed: Dict[str, Tuple[Tuple[int, int], float]] = {}
 _ffmpeg_missing_logged = False
 
 
@@ -79,6 +90,36 @@ def _fresh(video: Path, webm: Path) -> bool:
         return False
 
 
+def _identity(video: Path) -> Optional[Tuple[int, int]]:
+    try:
+        st = video.stat()
+    except OSError:
+        return None
+    return st.st_mtime_ns, st.st_size
+
+
+def _remember_failure(video: Path, target: Path) -> None:
+    identity = _identity(video)
+    if identity is not None:
+        with _lock:
+            _failed[str(target)] = (identity, time.monotonic())
+
+
+def _failed_recently(video: Path, target: Path) -> bool:
+    """Whether an encode of exactly this mp4 failed less than ``FAILED_RETRY_S`` ago."""
+    with _lock:
+        entry = _failed.get(str(target))
+    if entry is None:
+        return False
+    identity, at = entry
+    if identity == _identity(video) and time.monotonic() - at < FAILED_RETRY_S:
+        return True
+    with _lock:
+        if _failed.get(str(target)) == entry:
+            _failed.pop(str(target), None)
+    return False
+
+
 def _encode(video: Path, target: Path) -> bool:
     global _ffmpeg_missing_logged
     ffmpeg = shutil.which("ffmpeg")
@@ -99,11 +140,15 @@ def _encode(video: Path, target: Path) -> bool:
         if result.returncode != 0 or not tmp.is_file() or tmp.stat().st_size == 0:
             logger.warning("WebM encode failed for %s: %s", video.name,
                            result.stderr.decode("utf-8", "replace")[-300:])
+            _remember_failure(video, target)
             return False
         os.replace(tmp, target)
+        with _lock:
+            _failed.pop(str(target), None)
         return True
     except (subprocess.TimeoutExpired, OSError) as exc:
         logger.warning("WebM encode failed for %s: %s", video.name, exc)
+        _remember_failure(video, target)
         return False
     finally:
         try:
@@ -116,7 +161,8 @@ def ensure_webm(video: Path, wait: Optional[float] = None) -> Optional[Path]:
     """The up-to-date companion, creating it when needed. Single-flight: a
     concurrent caller waits for the running job (at most ``wait`` seconds,
     ``None`` = until it ends) instead of starting a second one. ``None`` when
-    it could not be produced (or the wait ran out)."""
+    it could not be produced (or the wait ran out), also at once while an
+    encode of this very mp4 failed less than ``FAILED_RETRY_S`` ago."""
     try:
         video = Path(video)
         if not video.is_file():
@@ -126,6 +172,8 @@ def ensure_webm(video: Path, wait: Optional[float] = None) -> Optional[Path]:
         return None
     if _fresh(video, target):
         return target
+    if _failed_recently(video, target):
+        return None
     key = str(target)
     with _lock:
         event = _inflight.get(key)
@@ -167,17 +215,27 @@ def remove_companion(video: Path) -> int:
 
 
 def sweep_orphans(video_dirs: Iterable[Path]) -> int:
-    """Remove companions whose mp4 no longer exists in each directory."""
+    """Remove companions whose mp4 no longer exists in each directory, and temp
+    files of encodes that ended without cleaning up — never a temp file younger
+    than ``STRAY_TMP_AGE_S`` (an encode may still be writing it)."""
     from app.core import media_cleanup
     removed = 0
+    now = time.time()
     for directory in video_dirs:
         companions = Path(directory) / WEBM_DIR
         if companions.is_symlink() or not companions.is_dir():
             continue
         for webm in companions.glob("*.webm"):
+            if webm.name.startswith("."):
+                continue   # a temp file (``glob`` matches dot names too): judged below by its age
             if not (Path(directory) / f"{webm.stem}.mp4").is_file():
                 removed += media_cleanup.remove_files([webm])
         for stray in companions.glob(".*.tmp.webm"):
+            try:
+                if now - stray.stat().st_mtime < STRAY_TMP_AGE_S:
+                    continue
+            except OSError:
+                continue
             removed += media_cleanup.remove_files([stray])
     return removed
 
