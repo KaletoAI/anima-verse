@@ -10,6 +10,15 @@ A continuation that writes on to the length limit is kept: content as sent,
 finish "length", budget_overrun, NOT unenforceable, nothing remembered, so the
 next call (one cut thought + one clean answer) is budgeted again. Gemma
 prefill is exactly <|channel>thought\nR<channel|>; echoed tags extract the answer.
+
+Cool-off (review 11#3; NO_CONTINUE_COOLOFF_S 600, SYSTEM clock patched): an
+empty continuation, a 400 'unsupported continuation' and a 422 without the
+field names each switch thinking off until T0+600. At T0+599 the next call is
+one plain call; at T0+601 the entry is dropped and the call is budgeted again
+(cut thought + clean answer = 2 calls, content "fine", not unenforceable,
+nothing remembered). A 400/422 naming continue_final_message is the proof the
+server cannot continue: thinking stays off for good (None), so at T0+601 and
+at T0+100000 each call is still one plain call, and the warning is logged once.
 """
 import copy
 import sys
@@ -127,7 +136,50 @@ def main():
     assert routing['fields']['thinking_budget']['max'] == 32000
     assert all(k in next(p for p in routing['pages'] if p['id'] == 'llms')['fields']
                for k in ('thinking', 'thinking_budget'))
-    print('Thinking budget: under-budget, continuation, parser/echo, partial answer, fallback, routing OK')
+    cooloff_checks()
+    print('Thinking budget: under-budget, continuation, parser/echo, partial answer, fallback, cool-off, routing OK')
+
+
+def cooloff_checks():
+    from datetime import timedelta
+    from app.core import timeutils
+    t0 = timeutils.utc_now()
+    clock = [t0]
+    key = ('http://fake/v1', 'budget-model')
+    unnamed422 = Rejected('context length briefly exceeded')
+    unnamed422.status_code = 422
+    with patch.object(timeutils, 'utc_now', side_effect=lambda: clock[0]):
+        for failure in (response(''), Rejected('unsupported continuation'), unnamed422):
+            llm._NO_CONTINUE.clear()
+            clock[0] = t0
+            client, calls = client_for([response('', 'R', 'length'), failure, response('ok'),
+                                        response('plain'),
+                                        response('', 'R', 'length'), response('fine')])
+            assert client.invoke('ping').content == 'ok' and len(calls) == 3
+            assert llm._NO_CONTINUE[key] == t0 + timedelta(seconds=600), llm._NO_CONTINUE
+            clock[0] = t0 + timedelta(seconds=599)
+            result = client.invoke('ping')
+            assert result.content == 'plain' and result.budget_unenforceable and len(calls) == 4
+            clock[0] = t0 + timedelta(seconds=601)
+            result = client.invoke('ping')
+            assert result.content == 'fine' and not result.budget_unenforceable and len(calls) == 6
+            assert key not in llm._NO_CONTINUE
+        for status in (400, 422):
+            llm._NO_CONTINUE.clear()
+            clock[0] = t0
+            named = Rejected('Unrecognized request argument supplied: continue_final_message')
+            named.status_code = status
+            client, calls = client_for([response('', 'R', 'length'), named, response('ok'),
+                                        response('plain'), response('still plain')])
+            with patch.object(llm.logger, 'warning') as warning:
+                assert client.invoke('ping').content == 'ok' and len(calls) == 3
+                assert llm._NO_CONTINUE[key] is None
+                clock[0] = t0 + timedelta(seconds=601)
+                assert client.invoke('ping').content == 'plain' and len(calls) == 4
+                clock[0] = t0 + timedelta(seconds=100000)
+                assert client.invoke('ping').content == 'still plain' and len(calls) == 5
+                assert warning.call_count == 1
+    llm._NO_CONTINUE.clear()
 
 if __name__ == '__main__':
     main()

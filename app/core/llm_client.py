@@ -208,12 +208,19 @@ def usage_from_openai(usage: Any, timings: Any = None) -> Optional[Dict[str, int
 THINK_OPEN = "<think>\n"
 THINK_CLOSE = "\n</think>\n\n"
 # (base_url, model) pairs that could not continue a capped thought (400/422
-# or an empty answer); budgeted calls then run without thinking. A continuation
-# that writes on to the token limit is NOT such a failure: measured on Gemma 4
-# (llama.cpp) and Qwen3.5 (vLLM), a model sometimes answers and then keeps
-# thinking aloud in the answer — that one call is cut off (finish "length",
-# ``budget_overrun``), the next may be fine.
-_NO_CONTINUE: set = set()
+# or an empty answer) -> until when budgeted calls run without thinking
+# (SYSTEM time, ``timeutils.utc_now``), None = for good. Only a 400/422 that
+# names the continuation fields (``_rejects_continuation``) proves the server
+# does not support it; an empty answer or any other 400/422 may be one bad
+# call (a model that stopped right after the close marker, a context briefly
+# over the limit), so it switches thinking off for NO_CONTINUE_COOLOFF_S only
+# and the next budgeted call after that tries the continuation again. A
+# continuation that writes on to the token limit is NOT such a failure:
+# measured on Gemma 4 (llama.cpp) and Qwen3.5 (vLLM), a model sometimes
+# answers and then keeps thinking aloud in the answer — that one call is cut
+# off (finish "length", ``budget_overrun``), the next may be fine.
+_NO_CONTINUE: Dict[Tuple[str, str], Any] = {}
+NO_CONTINUE_COOLOFF_S = 600.0
 # (base_url, model) pairs whose server refused ``stream_options``. The OpenAI
 # SDK only sends the final usage chunk on request, and a strict or older
 # OpenAI-compatible server may answer that field with a 400 — such a server
@@ -227,6 +234,30 @@ def _rejects_stream_options(err: BaseException) -> bool:
     """True when a 400/422 names ``stream_options`` as the unaccepted field."""
     status = getattr(err, "status_code", None)
     return status in (400, 422) and "stream_options" in str(err).lower()
+
+
+def _rejects_continuation(err: BaseException) -> bool:
+    """True when a 400/422 names the continuation fields as the unaccepted
+    ones — the one proof that the server cannot continue a capped thought."""
+    status = getattr(err, "status_code", None)
+    text = str(err).lower()
+    return status in (400, 422) and ("continue_final_message" in text
+                                     or "add_generation_prompt" in text)
+
+
+def _continue_off(key) -> bool:
+    """Whether budgeted calls to ``key`` run without thinking right now; an
+    expired cool-off is dropped here."""
+    if key not in _NO_CONTINUE:
+        return False
+    until = _NO_CONTINUE[key]
+    if until is None:
+        return True
+    from app.core.timeutils import utc_now
+    if utc_now() < until:
+        return True
+    _NO_CONTINUE.pop(key, None)
+    return False
 
 
 def _is_gemma_model(model_name: str) -> bool:
@@ -448,7 +479,7 @@ class LLMClient:
             response.budget_unenforceable = True
             return response
 
-        if key in _NO_CONTINUE:
+        if _continue_off(key):
             return plain()
         kwargs = self._build_kwargs()
         kwargs["max_tokens"] = budget
@@ -483,11 +514,22 @@ class LLMClient:
             if getattr(exc, "status_code", None) not in (400, 422):
                 raise
             final = None
+            unsupported = _rejects_continuation(exc)
+        else:
+            unsupported = False
         if final is None:
-            if key not in _NO_CONTINUE:
-                _NO_CONTINUE.add(key)
-                logger.warning("%s @ %s cannot continue a capped thought — disabling thinking for budgeted calls",
-                               self.model, self.base_url)
+            if unsupported:
+                if _NO_CONTINUE.get(key, 0) is not None:
+                    _NO_CONTINUE[key] = None
+                    logger.warning("%s @ %s rejects continuing a capped thought — disabling thinking "
+                                   "for budgeted calls", self.model, self.base_url)
+            elif key not in _NO_CONTINUE:
+                from datetime import timedelta
+                from app.core.timeutils import utc_now
+                _NO_CONTINUE[key] = utc_now() + timedelta(seconds=NO_CONTINUE_COOLOFF_S)
+                logger.warning("%s @ %s could not continue a capped thought — thinking off for "
+                               "budgeted calls for %d s", self.model, self.base_url,
+                               NO_CONTINUE_COOLOFF_S)
             final = plain()
             answer = final.content
         usage = None
