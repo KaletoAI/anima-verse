@@ -56,7 +56,6 @@ smoke_stat_skill_costs	STALE: prepare fixed (Request double); play_scene_photo i
 smoke_texture_body_reuse	STALE: A175 turn step: 3 image jobs instead of 2
 smoke_tip_off_mesh_only	REAL: [4] normals after tip with offset: 49 inverted / 85 off >60 deg at HEAD; passes alone at 40013ae71 (HEAD~1) — regression by de54012a3 (triangulate every quad after the tip subdivision, TIP_SMOOTHING_VERSION 3)
 smoke_tool_step_prompt	STALE: tool_step_presence now reads perception.addressable_for; the smoke patches the per-character readers it used to read (roster/places), so the expected roster no longer arrives — not re-derived
-smoke_tool_turn_availability	REAL: PropAction brief in plugins/set_pose/templates/llm/skills/prop_action.md is 211 chars (> 200 limit, since 88649a49e); fixture part fixed: prop-action runs carry members (G2c be09adc7e)
 smoke_travel_beat	STALE: places compose twice per fingerprint ([['l','l']]) — the travel-beat place cache changed; not root-caused
 smoke_travel_ticker	STALE: a follower's own journey now survives the leader's arrival and the drag hook moves followers differently (party/journey rework 9b920eaa0); not re-derived
 smoke_view_prompts_no_clothing	REAL: guard hit: unreviewed view-change wordings base_body.ANGLE_LORA_PROMPTS, base_body.TURN_PROMPTS, model_overview.MESH_VIEW_MISMATCH and a second fragment .format in garment_clothing.edit_prompt — each must be checked to name no clothing and registered in the smoke's owner lists
