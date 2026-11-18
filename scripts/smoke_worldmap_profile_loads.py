@@ -390,6 +390,69 @@ def load_head_module():
     return mod
 
 
+#: npc_walker's travel row in an unfogged view (module docstring, [3]).
+WALKER_TRAVEL = {
+    "target_id": None, "journey_id": None, "paces_m_s_real": [1.0],
+    "waypoints": [[0.0, 0.0], [4000.0, 0.0]], "progress_m": 0.0, "total_m": 4000.0,
+    "floor_y": None, "eta_game": "Y0002-D100T13:06:40", "eta_hhmm": "13:06",
+    "eta_label": "Winter, day 10 · 13:06 · Year 2", "starts_in_s": None,
+    "speed_m_s_real": 1.0, "pace_m_s_real": 1.0, "gait": "walk"}
+_THIN_TRAVEL = {key: None for key in WALKER_TRAVEL}
+_THIN_TRAVEL["gait"] = "walk"
+
+
+def align_to_baseline(old_payload, new_payload, *, avatar, fogged, journeys):
+    """``(old, new)`` ready for the strict comparison of [3] (module
+    docstring): the old payload gains every field added after
+    ``BASELINE_REV``, hand-derived for this seed, and loses nothing.
+
+    ``journeys``: name -> target of every character that holds a
+    ``started_at_s`` journey in this build. 718322ce cannot read one, so its
+    travel row must be null and is replaced by the derived one; the names it
+    replaced are left under ``_unreadable_journeys`` for the caller to check.
+    Under fog a foreign journey is thinned (target and gait only, no
+    starts_in_s: every journey here starts on the pinned motion clock); an
+    unfogged row is derived only for npc_walker's journey (``WALKER_TRAVEL``)."""
+    new = dict(new_payload)
+    old = dict(old_payload)
+    # The revision is an opaque token whose encoding changed after
+    # 718322ce (raw -> hashed); the caller checks it, it is not compared.
+    new.pop("locations_rev", None)
+    old.pop("locations_rev", None)
+    unreadable = []
+    rows = []
+    for c in old["characters"]:
+        name = c["name"]
+        # P1's origin and the avatar's facing: nobody reported a position.
+        # No profile holds a prop approach or entry, nobody runs an action.
+        # The avatar's travel_speed_factor: no shipped travel_speed rule fires.
+        c = dict(c, pos_origin=None, yaw=None, local_approach=None,
+                 prop_action_entry=None, finale=None,
+                 travel_speed_factor=1.0 if name == avatar else None)
+        if name in journeys:
+            if c["travel"] is None:
+                unreadable.append(name)
+            if fogged and name != avatar:
+                travel = dict(_THIN_TRAVEL)
+            elif name == "npc_walker":
+                travel = dict(WALKER_TRAVEL)
+            else:
+                raise AssertionError(f"no unfogged travel row derived for {name}")
+            travel["target_id"] = journeys[name]
+            c["travel"] = travel
+        rows.append(c)
+    old["characters"] = rows
+    old["_unreadable_journeys"] = unreadable
+    # Measured ages depend on execution time, not profile-read behavior.
+    # Require both age keys but exclude their values; retain any other
+    # sync keys so an unexpected addition still fails strict comparison.
+    new["sync"] = dict(new["sync"])
+    del new["sync"]["clock_age_ms"]
+    del new["sync"]["build_ms"]
+    old["sync"] = {}
+    return old, new
+
+
 def main() -> int:
     print("[0] the seed")
     admin, calls, secs = build_counted(world_ops.build_worldmap_payload,
@@ -471,53 +534,11 @@ def main() -> int:
             revision = new_payload.get("locations_rev")
             check(f"{label} locations_rev is a non-empty string",
                   isinstance(revision, str) and bool(revision), True)
-            # The revision is an opaque token whose encoding changed after
-            # 718322ce (raw -> hashed); it is checked above, not compared.
-            comparable = dict(new_payload)
-            comparable.pop("locations_rev", None)
-            old_payload = dict(old_payload)
-            old_payload.pop("locations_rev", None)
-            # P1 adds a mandatory nullable origin to every row. These fixtures
-            # contain no position reports, so the hand-derived origin is null.
-            old_payload["characters"] = [dict(c, pos_origin=None)
-                                         for c in old_payload["characters"]]
-            # T2: 4000 m / 4000 game-s * factor 1 = 1 m/real-s.
-            # npc_walker is foreign to npc_lead, so fog withholds the list.
-            # This hand-written legacy journey has no journey_id in either view.
-            for c in old_payload["characters"]:
-                if c["travel"] is not None:
-                    c["travel"] = dict(c["travel"], journey_id=None,
-                                       paces_m_s_real=[1.0] if label == "admin" else None)
-            # Fields added after 718322ce (module docstring, [3]).
-            for c in old_payload["characters"]:
-                c.update(yaw=None, local_approach=None, prop_action_entry=None,
-                         finale=None,
-                         travel_speed_factor=(1.0 if label == "fogged" and c["name"] == "npc_lead"
-                                              else None))
-                if c["name"] == "npc_walker":
-                    check(f"{label} 718322ce cannot read a started_at_s journey", c["travel"], None)
-                    admin_view = label == "admin"
-                    c["travel"] = {
-                        "target_id": MARKET, "journey_id": None,
-                        "paces_m_s_real": [1.0] if admin_view else None,
-                        "waypoints": [[0.0, 0.0], [4000.0, 0.0]] if admin_view else None,
-                        "progress_m": 0.0 if admin_view else None,
-                        "total_m": 4000.0 if admin_view else None,
-                        "floor_y": None,
-                        "eta_game": "Y0002-D100T13:06:40" if admin_view else None,
-                        "eta_hhmm": "13:06" if admin_view else None,
-                        "eta_label": "Winter, day 10 · 13:06 · Year 2" if admin_view else None,
-                        "starts_in_s": None,
-                        "speed_m_s_real": 1.0 if admin_view else None,
-                        "pace_m_s_real": 1.0 if admin_view else None,
-                        "gait": "walk"}
-            # Measured ages depend on execution time, not profile-read behavior.
-            # Require both age keys but exclude their values; retain any other
-            # sync keys so an unexpected addition still fails strict comparison.
-            comparable["sync"] = dict(comparable["sync"])
-            del comparable["sync"]["clock_age_ms"]
-            del comparable["sync"]["build_ms"]
-            old_payload["sync"] = {}
+            old_payload, comparable = align_to_baseline(
+                old_payload, new_payload, avatar=None if label == "admin" else "npc_lead",
+                fogged=label == "fogged", journeys={"npc_walker": MARKET})
+            check(f"{label} 718322ce cannot read a started_at_s journey",
+                  old_payload.pop("_unreadable_journeys"), ["npc_walker"])
             check(f"{label} entire canonical JSON identical",
                   json.dumps(old_payload, sort_keys=True, default=str) ==
                   json.dumps(comparable, sort_keys=True, default=str), True)

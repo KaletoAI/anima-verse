@@ -4,7 +4,12 @@
 Six hand-derived cases: unknown location hides; show_all includes; distant point
 journey hides; stale destination and v1 journeys count as resting; valid location
 journey remains visible on explored wilderness. A poll-to-poll move must hide
-without loading the moved NPC. All payload fields match the explicit baseline.
+without loading the moved NPC. All payload fields match the explicit baseline,
+plus the fields added after it as the seed derives them
+(``smoke_worldmap_profile_loads.align_to_baseline``): 718322ce reads the journey
+format before 9b920eaa0 (``started_at_game``), so every started_at_s journey —
+npc_walker's, and npc_still's where it is shown — is a null travel row there and
+the derived one here (under fog: target and gait only).
 Usage: ./.venv/bin/python scripts/smoke_worldmap_fog_first.py
 """
 from collections import Counter
@@ -67,12 +72,21 @@ for label, loc, route, target, show_all, visible in cases:
     fixture(loc, route, target)
     current, loads = build(world_ops.build_worldmap_payload, show_all)
     present = bool(seed.row(current, NPC))
+    journeys = {"npc_walker": seed.MARKET}
+    if route and "started_at_s" in route:
+        journeys[NPC] = route["target"]
+    old, aligned = seed.align_to_baseline(old, current, avatar=AVATAR,
+                                          fogged=not show_all, journeys=journeys)
+    shown = {c["name"] for c in current["characters"]} & set(journeys)
+    same = sorted(old.pop("_unreadable_journeys")) == sorted(shown) and old == aligned
     # v1 cleanup uses set_movement_target plus its save-time is_temporary_npc
     # reader: two existing profile reads, without building a hidden row.
     # That is distinct from loading the profile to build a hidden map row.
     budget = 2 if label == "v1 journey" else int(visible)
-    ok = present == visible and loads <= budget and old == current
-    print(f"{'OK' if ok else 'FAIL'} {label}: visible={present}, loads={loads}, baseline={old == current}")
+    ok = present == visible and loads <= budget and same
+    print(f"{'OK' if ok else 'FAIL'} {label}: visible={present}, loads={loads}, baseline={same}")
+    if not same:
+        seed.print_json_differences(old, aligned)
     if not ok:
         failures.append(label)
 
