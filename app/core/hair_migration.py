@@ -376,7 +376,9 @@ def delete_all_hair_once() -> Optional[Dict[str, Any]]:
     from app.models.world import get_world_setting, set_world_setting
     # Strict: a flag that cannot be read is no "not migrated yet" — on a migrated world this migration would
     # delete hairstyles. The error leaves this boot without it (the boot logs it), the next start reads again.
-    if get_world_setting(HAIR_FLAG, strict=True):
+    # A world of the hairstyle era (``figure_migration.HAIRSTYLE_FLAG``) never needs it either (review 07 #1).
+    from app.core.figure_migration import HAIRSTYLE_FLAG
+    if get_world_setting(HAIR_FLAG, strict=True) or get_world_setting(HAIRSTYLE_FLAG, strict=True):
         return None
     # A list that cannot be read is no reason to call the world migrated.
     names = list_available_characters(include_pooled=True, include_dormant=True, strict=True)
