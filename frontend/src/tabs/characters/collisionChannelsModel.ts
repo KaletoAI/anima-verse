@@ -36,6 +36,9 @@ export interface ChannelDeclaration {
   compress_min: number
   exposed_only: boolean
   from_rig: string | null
+  /** The channel's geometry is built into the body (the mouth, Ruling A203): offset, radius, depth and tilt take
+   *  effect with the next extension build, not with the collision step. */
+  built?: boolean
   /** `rig` (the opening the package op reported) / `declared` (joint + offset); null = not on this model. */
   placement: 'rig' | 'declared' | null
   /** Why the channel is not on this model ("" when it is). */
@@ -110,6 +113,7 @@ export function previewPayload(payload: CollisionPayload | null | undefined,
 
 /** One line per declaration: where it sits on this model, or why it is not there. */
 export function declarationLine(d: ChannelDeclaration): { light: Light; text: string } {
+  if (d.placement === 'rig' && d.built) return { light: 'green', text: 'Built into the body: the channel is the opening the build cut' }
   if (d.placement === 'rig') return { light: 'green', text: "Placed at the opening the part's build reported" }
   if (d.placement === 'declared') return { light: 'green', text: 'Placed at the declared offset' }
   return { light: d.reason === 'Covered by the worn outfit' ? 'grey' : 'yellow', text: d.reason || 'Not computed' }
@@ -120,7 +124,7 @@ export function declarationDetail(d: ChannelDeclaration): string {
   const ops = d.accepts ?? []
   return [`${d.id} · joint ${d.bone}`, `depth ${(d.depth * 100).toFixed(1)} cm · radius ${(d.radius * 100).toFixed(1)} cm`
     + ` · funnel ${(d.funnel * 100).toFixed(1)} cm at ${d.cone_deg}°`,
-  d.from_rig ? `opening from part ${d.from_rig}` : `offset ${d.offset.map(v => (v * 100).toFixed(1)).join(' / ')} cm`,
+  d.built ? `built into the body by ${d.from_rig}` : d.from_rig ? `opening from part ${d.from_rig}` : `offset ${d.offset.map(v => (v * 100).toFixed(1)).join(' / ')} cm`,
   `accepts ${ops.join(', ') || '–'} · min length ×${d.min_length} · compress to ×${d.compress_min}`].join('\n')
 }
 

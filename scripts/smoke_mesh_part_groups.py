@@ -34,7 +34,7 @@ with tempfile.TemporaryDirectory() as tmp:
     profile = {'body_slots': {'slot': {'switch': 'on', 'type': 'b', 'inner': 'medium'}}}
     with patch.object(bs, '_species_packages_for', return_value=[pkg]), patch(
             'app.plugins.registry.packages', return_value=[pkg]):
-        groups = er.rig_groups_for('', profile)
+        groups = er.package_rig_groups_for('', profile)
         assert groups[0]['op'] == 'inset_part' and groups[0]['params'] == {'inner_scale': .5}
         assert er.extension_bone_names('', profile) == {}
         assert er.declared_motion_groups() == []
@@ -43,12 +43,12 @@ with tempfile.TemporaryDirectory() as tmp:
         with patch.dict(er.OP_BUILDS, inset_part=er.OP_BUILDS["inset_part"] + 1):
             assert fingerprint != er.extension_rig_fingerprint(groups)
         profile['body_slots']['slot']['inner'] = 'small'
-        assert er.rig_groups_for('', profile)[0]['params'] == {'inner_scale': 0}
-        assert fingerprint != er.extension_rig_fingerprint(er.rig_groups_for('', profile))
+        assert er.package_rig_groups_for('', profile)[0]['params'] == {'inner_scale': 0}
+        assert fingerprint != er.extension_rig_fingerprint(er.package_rig_groups_for('', profile))
         profile['body_slots']['slot']['inner'] = 'custom'
-        assert er.rig_groups_for('', profile)[0]['params'] == {}
+        assert er.package_rig_groups_for('', profile)[0]['params'] == {}
         profile['body_slots']['slot']['switch'] = 'off'
-        assert er.rig_groups_for('', profile) == []
+        assert er.package_rig_groups_for('', profile) == []
     from app.core.character_ops import build_body_slots
     attrs['inner']['applies_to'] = {'attributes.type': ['b', None], 'category': ['neutral']}
     profile['category'] = 'neutral'
@@ -94,13 +94,13 @@ with tempfile.TemporaryDirectory() as tmp:
     dressed = {**naked, 'equipped_pieces': {'bottom': 'item_x'}}
     with patch.object(bs, '_species_packages_for', return_value=[cpkg]), patch(
             'app.plugins.registry.packages', return_value=[cpkg]):
-        ops = lambda prof, variant=None: {g['id']: g['op'] for g in er.rig_groups_for('', prof, variant)}
+        ops = lambda prof, variant=None: {g['id']: g['op'] for g in er.package_rig_groups_for('', prof, variant)}
         assert ops(naked) == {'chain': 'attached_part', 'sack': 'attached_part_bone'}
         assert ops(dressed) == {'chain': 'appendage_chain'}
         assert ops(naked, '') == {'chain': 'appendage_chain'}
         assert ops(dressed, token) == {'chain': 'attached_part', 'sack': 'attached_part_bone'}
         from app.core.model_refs import mesh_variant
         assert mesh_variant('', profile=naked) == token and mesh_variant('', profile=dressed) == ''
-        assert er.extension_rig_fingerprint(er.rig_groups_for('', naked, token)) != \
-            er.extension_rig_fingerprint(er.rig_groups_for('', naked, ''))
+        assert er.extension_rig_fingerprint(er.package_rig_groups_for('', naked, token)) != \
+            er.extension_rig_fingerprint(er.package_rig_groups_for('', naked, ''))
 print('PASS inset declarations: mapped .5/0/default, empty motion, build identity, attribute conditions, coverage')

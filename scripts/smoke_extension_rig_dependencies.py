@@ -26,7 +26,7 @@ def main():
         config.load(paths.get_config_path(),instance_path=root/'instance.json')
         from app.plugins import registry
         from app.plugins.loader import _resolve_rig_dependencies, discover_packages
-        from app.core.extension_rig import rig_groups_for, resolved_extension_groups, motion_payload
+        from app.core.extension_rig import package_rig_groups_for, resolved_extension_groups, motion_payload
         from app.plugins.registry import RigSpec
         def rig(id,bone,parent,**values):
             return dict(id=id,op='fixture',chains=[[dict(bone=bone,parent=parent)]],templates='*',**values)
@@ -68,11 +68,11 @@ def main():
             path.write_text(yaml.safe_dump(data));discover_packages(plugins,force=True)
         load(manifest)
         profile=dict(template='human-default')
-        assert [g['id'] for g in rig_groups_for('fixture',profile)]==['z_source','a_child','b_third']
+        assert [g['id'] for g in package_rig_groups_for('fixture',profile)]==['z_source','a_child','b_third']
         disabled=copy.deepcopy(profile);disabled['model3d_opts']={'extension_rig_models':{'model':{'z_source':{'enabled':False}}}}
-        assert all(not g['enabled'] for g in resolved_extension_groups('fixture',disabled,'model'))
+        assert all(not g['enabled'] for g in resolved_extension_groups('fixture',disabled,'model') if g['id'] != 'mouth_channel')
         data=copy.deepcopy(manifest);data['body_slots'][0]['rigs'][2]['applies_to']={'flag':[True]};load(data)
-        assert rig_groups_for('fixture',profile)==[]
+        assert package_rig_groups_for('fixture',profile)==[]
         data=copy.deepcopy(manifest);data['body_slots'][0]['rigs']=[child];data['body_slots'].append(dict(id='other',rigs=[source]));load(data)
         assert registry.get_package('fixture').body_slots[0].rigs==[]
         data=copy.deepcopy(manifest);data['body_slots'][0]['rigs'][2]['length']=99;load(data)
@@ -114,11 +114,11 @@ def main():
             else: raise AssertionError('invalid override accepted')
         from app.core.extension_rig import declared_motion_groups, extension_rig_fingerprint
         from app.core.prompt_filters import validate_bone_pose
-        before = extension_rig_fingerprint(rig_groups_for('fixture', profile))
+        before = extension_rig_fingerprint(package_rig_groups_for('fixture', profile))
         data = copy.deepcopy(manifest)
         data['body_slots'][0]['rigs'][2]['controls'] = ['length']
         load(data)
-        assert extension_rig_fingerprint(rig_groups_for('fixture', profile)) == before
+        assert extension_rig_fingerprint(package_rig_groups_for('fixture', profile)) == before
         assert next(g for g in declared_motion_groups() if g['id'] == 'z_source')['controls'] == ['length']
         assert next(g for g in declared_motion_groups() if g['id'] == 'a_child')['controls'] is None
         validate_motion_overrides({'groups': {'unloaded': {'gravity': 1}}})

@@ -93,7 +93,7 @@ def main():
         from app.core import base_body as _legacy_bb
         _legacy_bb.is_base_pipeline = lambda *_a, **_k: False
         from app.core.extension_rig import (extension_bone_names, extension_metadata,
-                                           motion_payload, rig_groups_for)
+                                           motion_payload, package_rig_groups_for)
         from app.core.model_validate import validate_glb
         from app.core.rig_contract import BASE_JOINT_NAMES
         from app.plugins import registry
@@ -152,28 +152,28 @@ def main():
             cases[label] = glb(base, mutate=mutate)
         for label, contents in cases.items():
             check(not validate_glb(contents, extension_names=context)["ok"], "reject " + label)
-        check(rig_groups_for("demo", profile)[0]["params"] == rig["params"], "opaque params")
+        check(package_rig_groups_for("demo", profile)[0]["params"] == rig["params"], "opaque params")
         for key in ("example_profile", "example_attribute"):
             changed = copy.deepcopy(profile)
             if key == "example_profile":
                 changed[key] = "disabled"
             else:
                 changed["body_slots"]["example_slot"][key] = "disabled"
-            check(rig_groups_for("demo", changed) == [], "applicability " + key)
+            check(package_rig_groups_for("demo", changed) == [], "applicability " + key)
         slot = registry.get_package("example_a").body_slots[0]
         for condition in ("example_profile", "example_attribute", "attributes.example_attribute"):
             slot.applies_to = {condition: ["disabled"]}
-            check(rig_groups_for("demo", profile) == [], "slot applicability " + condition)
+            check(package_rig_groups_for("demo", profile) == [], "slot applicability " + condition)
             slot.applies_to = {condition: ["ENABLED"]}
-            check(len(rig_groups_for("demo", profile)) == 1, "slot case-insensitive " + condition)
+            check(len(package_rig_groups_for("demo", profile)) == 1, "slot case-insensitive " + condition)
         for target in (slot, slot.rigs[0]):
             saved_conditions = target.applies_to
             target.applies_to = {"optional": [None]}
             for value in ({}, {"optional": None}):
-                check(len(rig_groups_for("demo", {**profile, **value})) == 1,
+                check(len(package_rig_groups_for("demo", {**profile, **value})) == 1,
                       "null condition matches missing/explicit null")
             for value in ("", "none"):
-                check(rig_groups_for("demo", {**profile, "optional": value}) == [],
+                check(package_rig_groups_for("demo", {**profile, "optional": value}) == [],
                       "null differs from literal string")
             target.applies_to = saved_conditions
         slot.applies_to = {}
@@ -186,7 +186,7 @@ def main():
         saved_conditions = slot.rigs[0].applies_to
         slot.rigs[0].applies_to = {"gender": ["female"]}
         npc = {"template": "npc-temporary", "gender": "female"}
-        check(len(rig_groups_for("demo", npc)) == 1, "rig template bypasses package selector")
+        check(len(package_rig_groups_for("demo", npc)) == 1, "rig template bypasses package selector")
         check(slots_for_character("demo", profile=npc) == [], "rig selector leaves slot attributes and coverage inactive")
         check(prompt_fragments("demo", profile=npc) == {"general": [], "exposed": []},
               "rig selector leaves slot prompts inactive")
@@ -194,11 +194,11 @@ def main():
         check(save_character_profile("sample", npc, create_new=True), "rig-only NPC profile")
         check(get_body_slots("sample")["slots"] == [], "body slots coverage API stays empty for rig-only NPC")
         check(prompt_fragments("sample") == {"general": [], "exposed": []}, "stored NPC prompt isolation")
-        check(rig_groups_for("demo", {**npc, "gender": "male"}) == [], "rig gender condition still filters")
+        check(package_rig_groups_for("demo", {**npc, "gender": "male"}) == [], "rig gender condition still filters")
         slot.rigs[0].templates = {"feature": "humanoid"}
-        check(len(rig_groups_for("demo", npc)) == 1, "rig feature template selector")
+        check(len(package_rig_groups_for("demo", npc)) == 1, "rig feature template selector")
         slot.rigs[0].templates = "*"
-        check(len(rig_groups_for("demo", npc)) == 1, "rig wildcard template selector")
+        check(len(package_rig_groups_for("demo", npc)) == 1, "rig wildcard template selector")
         slot.rigs[0].templates = None
         slot.rigs[0].applies_to = saved_conditions
         pkg.apply_to = saved_selector
@@ -441,7 +441,7 @@ def main():
 
         shutil.rmtree(package)
         discover_packages(plugins, force=True)
-        check(rig_groups_for("demo", profile) == [] and extension_bone_names("demo", profile) == {},
+        check(package_rig_groups_for("demo", profile) == [] and extension_bone_names("demo", profile) == {},
               "package deletion removes groups")
         check(validate_glb(glb(base))["ok"] and not validate_glb(data)["ok"], "deletion restores strict base contract")
         check(extension_metadata("demo", profile)["status"] == "none_applicable", "deletion metadata")

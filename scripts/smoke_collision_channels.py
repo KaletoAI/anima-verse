@@ -285,8 +285,9 @@ def main() -> int:
         check(f"{label}: channels", [c["id"] for c in rec["channels"]], want)
         check(f"{label}: sig inherited", rec["channels_sig"], base_rec["channels_sig"])
         if not want:
+            # The core's mouth channel (Ruling A203) is listed first on every humanoid model; none is built here.
             check("covered: skipped reason", rec["channels_skipped"],
-                  [{"id": "pkgx:chan", "reason": collision_channels.COVERED}])
+                  [{"id": "mouth", "reason": "Rig mouth_channel is not built on this model"}, {"id": "pkgx:chan", "reason": collision_channels.COVERED}])
         else:
             check("exposed_detail: the base's channel", rec["channels"], base_rec["channels"])
 
@@ -321,7 +322,7 @@ def main() -> int:
     check("Improvements: not done", improvement.is_done(candidate, {}), False)
     check("panel before applying: placement of the old record", [
         (e["id"], e["placement"]) for e in collision_channels.declarations_info("demo2", base2, meta)],
-        [("pkgx:chan", "declared")])
+        [("mouth", None), ("pkgx:chan", "declared")])
     out = routes.recompute_character_model3d_collision("demo2", signature="base00000001", _={})
     rec = channel(out["collision"]["channels"], "pkgx:chan")
     near_vec("applied: a_pos", rec["a_pos"], [0, 0.91, 0.045])
@@ -365,7 +366,8 @@ def main() -> int:
           (seen, after, busy),
           ([("Collision capsules (Improvements)", True)] * 2, False, "CandidateBusy"))
     check("panel info", [(e["id"], e["placement"], e["reason"]) for e in
-                         collision_channels.declarations_info("demo2", base2, meta)], [("pkgx:chan", "declared", "")])
+                         collision_channels.declarations_info("demo2", base2, meta)],
+          [("mouth", None, "Rig mouth_channel is not built on this model"), ("pkgx:chan", "declared", "")])
 
     print("[7] validation")
     for label, raw in (("offset 51 mm", {"c": {**OVERRIDE, "offset_mm": [0, 51, 0]}}),

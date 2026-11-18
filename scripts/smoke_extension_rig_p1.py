@@ -927,7 +927,7 @@ def main():
         check(not ExtensionRigRebuild().is_done(Candidate('character:demo','demo'),{'character':'demo'}),'placeholder is pending in Improvements')
         from app.core.model_refs import is_humanoid
         info = model3d.get_model3d_info('demo')
-        check(is_humanoid('demo') and len(info['extension_groups']) == 2,
+        check(is_humanoid('demo') and len([g for g in info['extension_groups'] if g['id'] != 'mouth_channel']) == 2,
               'temporary NPC resolves humanoid pipeline and Extension bones panel groups')
         from app.core.body_slots import slots_for_character
         check(not slots_for_character('demo'), 'temporary NPC pipeline does not activate package slots')

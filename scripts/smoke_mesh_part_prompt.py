@@ -35,7 +35,7 @@ with tempfile.TemporaryDirectory() as tmp:
             assert bs.exposed_slot_loras('', profile=profile, mesh_input=True) == []
         assert bs.prompt_fragments('', profile=profile)['exposed'] == ['visible large part']
         assert len(bs.exposed_slot_loras('', profile=profile)) == 1
-        group = er.rig_groups_for('', profile)[0]
+        group = er.package_rig_groups_for('', profile)[0]
         assert group['op'] == 'attached_part' and group['params'] == {'radius': .02, 'size_factor': 1.5}
         profile['body_slots']['slot']['switch'] = 'off'
         assert bs.prompt_fragments('', profile=profile, mesh_input=True)['exposed'] == ['visible large part']

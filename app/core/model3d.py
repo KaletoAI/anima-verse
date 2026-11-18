@@ -2091,7 +2091,7 @@ def _extension_rig_once(character_name: str, path: Path,
                            or "limb_weights" in (source_blender.get("steps") or [])))
     # A failed part publishes the body without it while the aggregate stays
     # "applied"; a forced rebuild must still retry the part.
-    part_failed = any(op in ("attached_part", "inset_part") and ((previous.get("metrics") or {}).get(gid) or {}).get("status") == "failed"
+    part_failed = any(op in ("attached_part", "inset_part", "mouth_part") and ((previous.get("metrics") or {}).get(gid) or {}).get("status") == "failed"
                       for gid, op in (previous.get("group_ops") or {}).items())
     # A base body's mesh is repaired on the way (Ruling A34, ``_repaired_base``): a record of other settings (or
     # of an older repair version) makes the rebuild due even when the extension groups are current.
@@ -2161,15 +2161,20 @@ def _extension_rig_once(character_name: str, path: Path,
         state.update(status="failed", reason="Clean source preparation failed: " + str(e))
         return {"ok": False, "applied": False, "extension_rig": state, "error": state["reason"]}
     _publish_sidecar(source, source_meta)
-    if not groups:
+    mouth_groups = [g for g in groups if g["op"] == "mouth_part"]
+    if len(mouth_groups) == len(groups):
+        # No group but (at most) the core's mouth channel (Ruling A203): the clean body as ever, with the mouth
+        # built into it where the face allows — a mouth that cannot be built leaves this path as it was.
         meta.pop("tip_smoothing", None)
         clean = _repaired_base(character_name, source.read_bytes(), meta)
+        if mouth_groups:
+            clean = _with_mouth_channel(character_name, path, clean, mouth_groups, state)
         changed = path.read_bytes() != clean
         if changed:
             _publish_model_bytes(path, clean)
         if changed:
             meta["blender"] = source_meta.get("blender") or {}
-        state["has_applied"] = False
+        state["has_applied"] = state["status"] == "applied"
         return {"ok": True, "applied": changed, "extension_rig": state}
     with tempfile.TemporaryDirectory(prefix=".extension-", dir=path.parent) as tmp:
         staged = Path(tmp) / path.name
@@ -2178,14 +2183,19 @@ def _extension_rig_once(character_name: str, path: Path,
         staged.write_bytes(_repaired_base(character_name, staged.read_bytes(), meta))
         attached = [g for g in groups if g["op"] == "attached_part"]
         companions = [g for g in groups if g["op"] == "attached_part_bone"]
-        remaining = [g for g in groups if g["op"] not in ("attached_part", "attached_part_bone", "inset_part")]
+        remaining = [g for g in groups if g["op"] not in ("attached_part", "attached_part_bone", "inset_part",
+                                                          "mouth_part")]
         validator = _validator_for("mixamo", character_name)
         inset = [g for g in groups if g["op"] == "inset_part"]
         part_applied = False
         # Each operation is isolated so a failed later part preserves earlier work.
         batches = [("attached_part", attached + companions)] if attached else []
         batches.extend(("inset_part", [group]) for group in inset)
-        for operation, batch in batches:
+        # The core's mouth channel (Ruling A203): its own isolated run, on every humanoid model. Unlike a part, a
+        # mouth that could not be built publishes nothing by itself (``mouth_applied``).
+        mouth_batches = [("mouth_part", [group]) for group in groups if group["op"] == "mouth_part"]
+        mouth_applied = False
+        for operation, batch in batches + mouth_batches:
             before_part = staged.read_bytes()
             try:
                 part_result = refine.apply_script(
@@ -2198,6 +2208,7 @@ def _extension_rig_once(character_name: str, path: Path,
             part_metrics = part_data.get("metrics") or part_data.get("groups") or {}
             applied = bool(part_result.get("applied"))
             part_applied = part_applied or applied
+            mouth_applied = mouth_applied or (applied and operation == "mouth_part")
             reason = part_data.get("reason") or part_result.get("error") or "Part build produced no model"
             for group in batch:
                 state["metrics"][group["id"]] = {
@@ -2229,7 +2240,7 @@ def _extension_rig_once(character_name: str, path: Path,
         state["reason"] = data.get("reason") or result.get("error") or ""
         # A failed part publishes a validated clean body (with other extensions
         # when available), replacing any stale part from a previous build.
-        publish = bool(result.get("applied")) or bool(batches) or bool(stale_parts)
+        publish = bool(result.get("applied")) or bool(batches) or bool(stale_parts) or mouth_applied
         if publish:
             verdict = validator(staged.read_bytes())
             if not verdict.get("ok"):
@@ -2253,7 +2264,7 @@ def _extension_rig_once(character_name: str, path: Path,
                     meta["mesh_repair"]["orient_parts"] = {"status": "failed", "error": f"Orientation failed: {exc}"}
             _publish_model_bytes(path, staged.read_bytes())
             meta["blender"] = source_meta.get("blender") or {}
-            if result.get("applied") or batches:
+            if result.get("applied") or batches or mouth_applied:
                 state.update(status="applied", has_applied=part_applied or bool(remaining and result.get("applied")))
             else:
                 # Published only to take a stale part off (``stale_parts``): the clean body, nothing built.
@@ -2278,6 +2289,37 @@ def _extension_rig_once(character_name: str, path: Path,
             key: state[key] for key in ("fingerprint", "groups", "status", "reason", "metrics", "attempted", "attempted_at")}
         return {"ok": state["status"] != "failed", "applied": publish,
                 "extension_rig": state, "error": state["reason"]}
+
+
+def _with_mouth_channel(character_name: str, path: Path, clean: bytes, mouth_groups, state: Dict[str, Any]) -> bytes:
+    """``clean`` (a humanoid GLB without any other extension group) with the core's mouth channel built into it
+    (``mouth_part``, Ruling A203), or ``clean`` itself when the build finds no mouth. Records the group's metrics
+    in ``state`` and sets its status to "applied" when built."""
+    import tempfile
+    from app.blender import refine
+    with tempfile.TemporaryDirectory(prefix=".mouth-", dir=path.parent) as tmp:
+        staged = Path(tmp) / path.name
+        staged.write_bytes(clean)
+        try:
+            result = refine.apply_script(staged, "mouth_part", {"groups": mouth_groups},
+                                         validator=_validator_for("mixamo", character_name), require_smaller=False,
+                                         keep_original=False, base_joints_only=True, timeout_s=600)
+        except Exception as exc:  # noqa: BLE001 — the body is published without the mouth
+            result = {"applied": False, "error": str(exc)}
+        data = result.get("data") or {}
+        metrics = data.get("metrics") or data.get("groups") or {}
+        applied = bool(result.get("applied"))
+        reason = data.get("reason") or result.get("error") or "Mouth build produced no model"
+        for group in mouth_groups:
+            state["metrics"][group["id"]] = {**metrics.get(group["id"], {}),
+                                             "status": "applied" if applied else "failed",
+                                             "reason": "" if applied else reason}
+        if not applied:
+            # As without the mouth group: nothing applies to this body.
+            state["status"] = "none_applicable"
+            return clean
+        state["status"] = "applied"
+        return staged.read_bytes()
 
 
 def _extension_state_current(character_name: str, path: Path, meta: Dict[str, Any]) -> bool:
@@ -3229,7 +3271,8 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
         from app.core.extension_rig import resolved_extension_groups
         measured_groups = [g for g in resolved_extension_groups(character_name, signature=path.stem,
                                                                 mesh_variant=stored_mesh_variant(character_name, meta))
-                           if g["enabled"] and g["op"] not in ("attached_part", "attached_part_bone", "inset_part")]
+                           if g["enabled"] and g["op"] not in ("attached_part", "attached_part_bone", "inset_part",
+                                                               "mouth_part")]
         if (meta.get("extension_rig") or {}).get("status") == "applied" and measured_groups:
             measured = runner.run("extension_bones", inputs={"model": next(iter(res["outputs"].values()))},
                                   params={"groups": measured_groups, "metrics_only": True})

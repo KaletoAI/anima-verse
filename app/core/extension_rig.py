@@ -47,7 +47,18 @@ def _rule_applies(slot, rule, values, profile, template_name, template, active_s
 
 
 def rig_groups_for(character_name, profile=None, mesh_variant=None):
-    """Applicable groups, with package physics defaults and ordered chains.
+    """Every extension group of a character: the packages' (``package_rig_groups_for``) and, last, the core's own
+    mouth channel group (``mouth_channel.group``, Ruling A203 — every character carries it; it is built on a
+    humanoid model)."""
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    from app.core import mouth_channel
+    return package_rig_groups_for(character_name, profile, mesh_variant) + [mouth_channel.group(profile)]
+
+
+def package_rig_groups_for(character_name, profile=None, mesh_variant=None):
+    """Applicable PACKAGE groups, with package physics defaults and ordered chains.
 
     Effective motion layers are resolved separately by motion_payload.
     Conditions use profile fields or ``attributes.<key>`` for this slot.
@@ -268,7 +279,8 @@ PART_BUILDS = {"attached_part": 14, "inset_part": 9}
 # into the torso, long upward and short below the crease (Ruling A164).
 # 4: full weight inside the measured outline itself and inward up to a narrow strip
 # at the sternum, the depth gate follows the underside down to the crease (Ruling A173).
-OP_BUILDS = {**PART_BUILDS, "pair_protrusion": 4, "pair_tip": 2}
+# mouth_part 1: the skin cut along the measured lip line with a closed pouch behind it (Ruling A203).
+OP_BUILDS = {**PART_BUILDS, "pair_protrusion": 4, "pair_tip": 2, "mouth_part": 1}
 
 
 def extension_rig_fingerprint(groups, overrides=None):
@@ -538,7 +550,8 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
     from app.core import hair_motion
-    declarations = rig_groups_for(character_name, profile)
+    # The packages' groups: the core's mouth channel has no motion of its own.
+    declarations = package_rig_groups_for(character_name, profile)
     scale = profile.get("motion_gravity_scale", 1)
     try:
         scale = float(scale)
@@ -705,12 +718,15 @@ def extension_metadata(character_name, profile=None, signature=None, mesh_varian
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
     groups = rig_groups_for(character_name, profile, mesh_variant)
+    from app.core import mouth_channel
+    packaged = [g for g in groups if g["op"] != mouth_channel.OP]
     overrides = model_extension_overrides(profile, signature)
     return {"fingerprint": extension_rig_fingerprint(groups, overrides),
             "groups": [g["id"] for g in groups],
             "group_ops": {g["id"]: g["op"] for g in groups},
             "group_params": {g["id"]: g["params"] for g in groups if g["op"] in PART_BUILDS},
             "attempted": False,
-            "status": "not_found" if groups else "none_applicable",
-            "reason": "No extension operation has run" if groups else "",
+            # The core's mouth channel alone leaves the placeholder as it was for a character without groups.
+            "status": "not_found" if packaged else "none_applicable",
+            "reason": "No extension operation has run" if packaged else "",
             "metrics": {}, "per_tier": {}}

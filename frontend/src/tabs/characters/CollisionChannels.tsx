@@ -14,6 +14,8 @@
  * - The declarations are listed one line each: placed at the reported opening / the declared offset, or the plain
  *   reason the shown model has none (covered, no opening, no base model yet). Details on mouse-over.
  * - More than one channel: one sub-tab per channel instead of a long column; the six fields sit in a 3-column grid.
+ * - A BUILT channel (the mouth, Ruling A203; `built`): its geometry is part of the body, so a saved offset, radius,
+ *   depth or tilt makes the extension step due (the Build applies it, local); a note under the fields says so.
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { ChannelOverride, CollisionPayload } from '@anima/scene-render'
@@ -165,6 +167,11 @@ export function CollisionChannels({ character, collision, overrides, declaration
               <Field label={t('Tilt')} shown={`${(draft.tilt_deg ?? 0).toFixed(0)}°`} value={draft.tilt_deg ?? 0}
                 min={-TILT_MAX} max={TILT_MAX} step={1} disabled={busy} onChange={(v) => set({ tilt_deg: v })}
                 title={t('Turns the channel’s direction toward the back (+) or the front (−), in degrees')} />
+            </div>
+          ) : null}
+          {current?.built ? (
+            <div className="ga-hint" style={{ fontSize: 10, margin: 0 }} role="note">
+              {t('This channel is built into the body: the wire shows the new values at once, the opening itself follows with the next Build (extension step, local, 0 jobs).')}
             </div>
           ) : null}
           <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap', marginTop: 2 }}>

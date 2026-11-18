@@ -61,7 +61,7 @@ import type { ChannelOverride, ChannelRecord, CollisionPayload, JointRef, Vec3 }
 import type { PartnerSnapshot } from './partnerContact'
 import { normBoneName } from './clipRetarget'
 import { inGarment } from './figure'
-import { mouthChannel, type TargetBones } from './contactTarget'
+import { MOUTH_CHANNEL_ID, mouthChannel, type TargetBones } from './contactTarget'
 
 type Three = typeof import('three')
 
@@ -490,7 +490,8 @@ function endpointSkin(meshes: readonly SkinnedMesh[], p: Vec3): EndpointSkin | n
  * after `updateMatrixWorld`) and puts a fresh `ChannelNow` into each slot, so a snapshot that copied the array keeps
  * its frame. Ruling A159: a figure with a head (`head` bone plus the eyes or the head bone's +Z) also gets its MOUTH
  * channel LAST (`contactTarget.ts` `mouthChannel`, rebuilt from the head bones on every `update()`; it skips the
- * payload's `head`-region capsules). Null for a payload of another version, or when neither a declared channel's
+ * payload's `head`-region capsules) — unless the payload's channels already hold the BUILT mouth (id
+ * `MOUTH_CHANNEL_ID`, Ruling A203), which then is the figure's mouth channel. Null for a payload of another version, or when neither a declared channel's
  * joint nor a head is on the figure. `_three` keeps the signature of `bindCollision`; the current-frame rule needs no
  * three object here.
  */
@@ -561,7 +562,10 @@ export function bindChannels(_three: Three, root: Object3D,
     }
     return mouthChannel(tb, headSuppress)
   }
-  const hasMouth = mouthNow() !== null
+  // Ruling A203: a model whose mouth channel was BUILT carries it as a declared channel under the mouth's id (its
+  // opening, axis, depth and radius are the built geometry's); the head-bone mouth is then not added beside it.
+  const builtMouth = usable.some(entry => entry.record.id === MOUTH_CHANNEL_ID)
+  const hasMouth = !builtMouth && mouthNow() !== null
   if (!usable.length && !hasMouth) return null
   const channels: ChannelNow[] = []
   const update = () => {

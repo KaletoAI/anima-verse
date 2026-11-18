@@ -79,7 +79,7 @@ with tempfile.TemporaryDirectory() as tmp:
     def ops(meta, profile=clothed):
         variant = model3d.stored_mesh_variant(NAME, meta)
         return {g['id']: g['op'] for g in model3d._extension_groups_for(
-            meta, er.rig_groups_for(NAME, profile, variant))}
+            meta, er.package_rig_groups_for(NAME, profile, variant))}
 
     refs = get_model_refs_dir(NAME)
     refs.mkdir(parents=True, exist_ok=True)
@@ -99,7 +99,7 @@ with tempfile.TemporaryDirectory() as tmp:
             patch('app.plugins.registry.packages', return_value=[pkg]):
         # The fixture profile really is clothed over the slot: the worn outfit alone resolves the part off.
         assert not bs.is_slot_exposed(slot, clothed) and bs.mesh_part_active(slot, clothed)
-        assert {g['id']: g['op'] for g in er.rig_groups_for(NAME, clothed)} == OFF
+        assert {g['id']: g['op'] for g in er.package_rig_groups_for(NAME, clothed)} == OFF
 
         # [1] base model recording the token.
         base_new = {'base': True, 'mesh_variant': TOKEN}
@@ -111,11 +111,11 @@ with tempfile.TemporaryDirectory() as tmp:
         base_record = {'status': 'applied', 'has_applied': True, 'attempted': True,
                        'group_ops': dict(ON), 'metrics': {'chain': {'status': 'applied'},
                                                           'companion': {'status': 'applied'}}}
-        declarations = model3d._extension_groups_for(outfit, er.rig_groups_for(NAME, clothed, ''))
+        declarations = model3d._extension_groups_for(outfit, er.package_rig_groups_for(NAME, clothed, ''))
         assert model3d._stale_part_groups(base_record, declarations) == ['chain', 'companion']
         # The base itself keeps them (nothing stale), and a part that failed on the base is not in the bytes.
         assert model3d._stale_part_groups(base_record, model3d._extension_groups_for(
-            base_new, er.rig_groups_for(NAME, clothed, TOKEN))) == []
+            base_new, er.package_rig_groups_for(NAME, clothed, TOKEN))) == []
         failed = {**base_record, 'metrics': {'chain': {'status': 'failed'}, 'companion': {'status': 'failed'}}}
         assert model3d._stale_part_groups(failed, declarations) == []
         # The covered variant of a base (and an outfit body) never carries a part op.
@@ -153,13 +153,13 @@ with tempfile.TemporaryDirectory() as tmp:
                'groups': ['chain'], 'group_ops': {'chain': 'appendage_chain'},
                'metrics': {'chain': {'reason': 'no protrusion candidates'}}}
         now_on = [{**g, 'enabled': True} for g in model3d._extension_groups_for(
-            base_new, er.rig_groups_for(NAME, clothed, TOKEN))]
+            base_new, er.package_rig_groups_for(NAME, clothed, TOKEN))]
         lights = model3d.extension_group_lights(clothed, base_new, now_on, kai, TOKEN)
         assert lights['chain'] == {'light': 'yellow', 'state': model3d.EXT_STATE_NOT_BUILT,
                                    'reason': model3d.EXT_REASON_PART_DUE, 'detail': 'no protrusion candidates'}
         assert lights['companion']['light'] == 'yellow' and lights['companion']['reason'] == model3d.EXT_REASON_NEW_GROUP
         assert model3d.extension_groups_changed({'extension_rig': kai}, now_on)
-        still_off = [{**g, 'enabled': True} for g in er.rig_groups_for(NAME, clothed, '')]
+        still_off = [{**g, 'enabled': True} for g in er.package_rig_groups_for(NAME, clothed, '')]
         lights = model3d.extension_group_lights(clothed, base_old, still_off, kai, '')
         assert lights['chain']['light'] == 'yellow' and lights['chain']['reason'] == model3d.EXT_REASON_OLD_INPUTS
         assert not model3d.extension_groups_changed({'extension_rig': kai}, still_off)
@@ -181,13 +181,13 @@ with tempfile.TemporaryDirectory() as tmp:
         mdir.mkdir(parents=True, exist_ok=True)
         (mdir / 'basefix.glb').write_bytes(b'glTF')
         # The record's fingerprint is the one of the groups it was built with (appendage_chain, no overrides).
-        kai_stored = {**kai, 'fingerprint': er.extension_rig_fingerprint(er.rig_groups_for(NAME, clothed, ''), {})}
+        kai_stored = {**kai, 'fingerprint': er.extension_rig_fingerprint(er.package_rig_groups_for(NAME, clothed, ''), {})}
         (mdir / 'basefix.json').write_text(json.dumps({**base_new, 'rig': 'mixamo', 'extension_rig': kai_stored}))
         with patch('app.models.character.get_character_profile', return_value=clothed), \
                 patch.object(model3d, '_current_base', return_value=None):
             state = model3d.model_extension_state(NAME, 'basefix')
         assert state is not None
-        assert {g['id']: g['op'] for g in state['groups']} == ON
+        assert {g['id']: g['op'] for g in state['groups'] if g['id'] != 'mouth_channel'} == ON
         assert state['lights']['chain']['reason'] == model3d.EXT_REASON_PART_DUE
         assert state['due'] is True and state['due_reason'] == 'groups'
 
@@ -218,9 +218,9 @@ with tempfile.TemporaryDirectory() as tmp2:
     with patch.object(bs, '_species_packages_for', return_value=[pkg]), \
             patch('app.plugins.registry.packages', return_value=[pkg]):
         old_1 = {g['id']: g['op'] for g in old_groups_for(
-            {'base': True, 'mesh_variant': TOKEN}, er.rig_groups_for(NAME, clothed, TOKEN))}
+            {'base': True, 'mesh_variant': TOKEN}, er.package_rig_groups_for(NAME, clothed, TOKEN))}
         old_3 = {g['id']: g['op'] for g in old_groups_for(
-            {'base': True}, er.rig_groups_for(NAME, clothed, ''))}
+            {'base': True}, er.package_rig_groups_for(NAME, clothed, ''))}
 assert old_1 == {} and old_3 == OFF, (old_1, old_3)
 assert old_1 != ON and old_3 != ON
 

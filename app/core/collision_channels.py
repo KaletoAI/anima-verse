@@ -197,9 +197,13 @@ def _opening(state: Any, rig: str) -> Tuple[Optional[Dict[str, List[float]]], st
         axis = [_number(v, "axis") for v in opening["axis"]]
         if len(centre) != 3 or len(axis) != 3 or math.hypot(*axis) < 1e-9:
             raise ValueError("opening")
+        # What a build that follows the override reports besides (the mouth channel, Ruling A203).
+        built = {key: _number(opening[key], key) for key in ("depth", "radius") if key in opening}
+        if isinstance(opening.get("override"), dict):
+            built["override"] = dict(opening["override"])
     except (TypeError, KeyError, ValueError):
         return None, f"Rig {rig} reports no opening (an older build, or no pocket left after levelling)"
-    return {"centre": centre, "axis": axis}, ""
+    return {"centre": centre, "axis": axis, **built}, ""
 
 
 def wanted_channels(character_name: str, path: Optional[Path], meta: Dict[str, Any], *,
@@ -209,6 +213,17 @@ def wanted_channels(character_name: str, path: Optional[Path], meta: Dict[str, A
     (``override``, None without one) and, for a ``from_rig`` region, the rig's reported ``opening`` (None plus
     ``opening_reason`` without one) — and ``channels_sig``, the sha256 of that list. Exposure is NOT in the sig."""
     wanted: List[Dict[str, Any]] = []
+    from app.core import mouth_channel
+    if path is not None and mouth_channel.applies(meta):
+        # The core's mouth channel (Ruling A203), before the packages' declarations.
+        profile = _profile(character_name, profile)
+        declaration = mouth_channel.region()
+        entry = {key: declaration[key] for key in (
+            "id", "bone", "offset", "axis", "depth", "radius", "cone_deg", "funnel", "accepts", "min_length",
+            "compress_min", "interaction_kinds", "exposed_only", "covered_by", "from_rig", "built")}
+        entry["override"] = character_overrides(character_name, profile=profile).get(declaration["id"])
+        entry["opening"], entry["opening_reason"] = _opening(meta.get("extension_rig"), declaration["from_rig"])
+        wanted.append(entry)
     if _any_region_declared():
         from app.core.extension_rig import region_declarations_for
         profile = _profile(character_name, profile)
@@ -319,7 +334,28 @@ def resolve_channels(rigged_glb: bytes, capsules: List[Dict[str, Any]], wanted: 
             skipped.append({"id": channel_id, "reason": frame_error})
             continue
         basis = np.stack([frame["side"], frame["up"], frame["front"]])
-        if entry.get("from_rig"):
+        depth, radius, cone = float(entry["depth"]), float(entry["radius"]), float(entry["cone_deg"])
+        override = entry.get("override") or None
+        if entry.get("built"):
+            # A channel whose GEOMETRY the build made (the mouth, Ruling A203): centre, axis, depth and radius are
+            # the built ones — the build applied the override it was given, nothing is applied on top; only the
+            # cone (no geometry) follows the stored override at once.
+            opening = entry.get("opening")
+            if not opening:
+                skipped.append({"id": channel_id, "reason": str(entry.get("opening_reason") or "No opening")})
+                continue
+            a_pos = np.asarray(opening["centre"], np.float64)
+            axis = _unit(np.asarray(opening["axis"], np.float64), "channel axis")
+            depth, radius = float(opening.get("depth", depth)), float(opening.get("radius", radius))
+            if override:
+                cone = float(override["cone_deg"])
+            used = opening.get("override") or {}
+            override = ({"offset_mm": list(used.get("offset_mm") or [0.0, 0.0, 0.0]),
+                         "radius_scale": float(used.get("radius_scale", 1.0)),
+                         "depth_scale": float(used.get("depth_scale", 1.0)), "cone_deg": round(cone, 2),
+                         TILT_KEY: float(used.get(TILT_KEY, 0.0))} if used or override else None)
+            placement = "rig"
+        elif entry.get("from_rig"):
             opening = entry.get("opening")
             if not opening:
                 skipped.append({"id": channel_id, "reason": str(entry.get("opening_reason") or "No opening")})
@@ -337,9 +373,7 @@ def resolve_channels(rigged_glb: bytes, capsules: List[Dict[str, Any]], wanted: 
             a_pos = positions[index] + np.asarray(entry["offset"], np.float64) @ basis
             axis = _unit(np.asarray(entry["axis"], np.float64) @ basis, "channel axis")
             placement = "declared"
-        depth, radius, cone = float(entry["depth"]), float(entry["radius"]), float(entry["cone_deg"])
-        override = entry.get("override") or None
-        if override:
+        if override and not entry.get("built"):
             a_pos = a_pos + (np.asarray(override["offset_mm"], np.float64) / 1000.0) @ basis
             depth *= float(override["depth_scale"])
             radius *= float(override["radius_scale"])
@@ -413,6 +447,7 @@ def declarations_info(character_name: str, path: Optional[Path], meta: Dict[str,
         channel = placed.get(entry["id"])
         info = {key: entry[key] for key in ("id", "bone", "offset", "axis", "depth", "radius", "cone_deg", "funnel",
                                             "accepts", "min_length", "compress_min", "exposed_only", "from_rig")}
+        info["built"] = bool(entry.get("built"))
         info["placement"] = channel.get("placement") if channel else None
         info["reason"] = (NO_MODEL if path is None else "" if channel
                           else reasons.get(entry["id"], "Not computed"))

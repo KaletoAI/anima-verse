@@ -111,7 +111,7 @@ def fixture(root, installed):
 
 def assert_visible(root, skills, expected):
     from app.core import body_slots, hooks, prompt_templates
-    from app.core.extension_rig import rig_groups_for
+    from app.core.extension_rig import package_rig_groups_for
     from app.models import character_template
     from app.plugins import registry
 
@@ -131,7 +131,7 @@ def assert_visible(root, skills, expected):
         p + "_slot" for p in expected}
     assert set(body_slots.prompt_fragments("fixture", profile=profile)["general"]) == {
         p + " body" for p in expected}, "body prompt contributions differ"
-    assert {r["id"] for r in rig_groups_for("fixture", profile)} == (
+    assert {r["id"] for r in package_rig_groups_for("fixture", profile)} == (
         {"shared_group"} if "unrelated_probe" in expected else set())
     for package_id in PACKAGE_IDS:
         active = package_id in expected
