@@ -903,6 +903,8 @@ imports anything that opens a database, and a tool meant for a real world gets `
   the plugin manifest reference and the callable core API a package may use.
 - **[`docs/hub-job-resume.md`](docs/hub-job-resume.md)** — how long AI-hub jobs survive a restart:
   operation records, who resumes, lost jobs and the submission gap.
+- **[`docs/gpu-compute.md`](docs/gpu-compute.md)** — local compute jobs (the hair drape) on the GPU with a
+  CPU fallback: device choice, the `render` group, the GPU job limit and the CPU thread budget.
 - **[`docs/schnittstellen-3d.md`](docs/schnittstellen-3d.md)** — the 3D payload contract that the
   server and both renderers agree on.
 - **[`docker/DEPLOYMENT.md`](docker/DEPLOYMENT.md)** — reproducible Docker deployment against a

@@ -276,6 +276,30 @@ run a different world, set it in `docker-compose.yml`:
       WORLD: myworld     # opens /app/worlds/myworld
 ```
 
+### Optional: the GPU for local compute jobs
+
+Local compute jobs (today the cloth/hair drape of the hair fits) run on the GPU
+through Vulkan when the server process can use one, else on the CPU
+(`app/core/gpu_compute.py`, setting `server.gpu_compute_device`). The image as
+shipped has no Vulkan loader or GPU driver, so a container computes on the CPU,
+and /admin/settings → Server → "Local compute device" says why. NOT tested in a
+container; what it needs on a host with an AMD or Intel GPU:
+
+- the loader and the Mesa drivers in the runtime image
+  (`apt-get install libvulkan1 mesa-vulkan-drivers` in the Dockerfile's runtime
+  stage); an NVIDIA GPU needs the NVIDIA Container Toolkit instead;
+- the render node passed in, in `docker-compose.yml` under `app:`:
+
+  ```yaml
+      devices:
+        - /dev/dri:/dev/dri
+  ```
+
+  The app runs as root inside the container, so no `group_add` is needed; a
+  non-root user would need the host's numeric `render` GID
+  (`group_add: ["<getent group render | cut -d: -f3>"]`). In an LXC container
+  the host must pass `/dev/dri/renderD128` through as well.
+
 ---
 
 ## Troubleshooting
