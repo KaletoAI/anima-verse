@@ -166,6 +166,14 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _file_sha(path: Path) -> str:
+    """sha256 of a file through the stat-keyed cache (``base_body.file_sha256``: hashed again only when size,
+    mtime or inode change) — the Figure tab's poll asks for the reference and its copy many times a tick
+    (review 08b#1). "" when the file is missing."""
+    from app.core.base_body import file_sha256
+    return file_sha256(Path(path))
+
+
 def _encode(image, fmt: str) -> bytes:
     out = io.BytesIO()
     image.save(out, format=fmt, **({"quality": 95} if fmt in ("JPEG", "WEBP") else {}))
@@ -246,17 +254,15 @@ def reference_record(character_name: str, original: Optional[Path], ops: List[st
     ops = [op for op in ops if op in available and is_image_op(available[op])]
     if original is None or not ops:
         return None
-    try:
-        source_sha = _sha(Path(original).read_bytes())
-    except OSError:
+    source_sha = _file_sha(Path(original))
+    if not source_sha:
         return None
     image, sidecar = _copy_paths(character_name, Path(original), _key(source_sha, ops, available))
     rec = _read_json(sidecar)
     if rec.get("source_sha256") != source_sha:
         return None
     rec = dict(rec)
-    rec["path"] = image if rec.get("result_sha256") and image.is_file() and \
-        _sha(image.read_bytes()) == rec["result_sha256"] else None
+    rec["path"] = image if rec.get("result_sha256") and _file_sha(image) == rec["result_sha256"] else None
     return rec
 
 
@@ -274,17 +280,22 @@ def processed_reference(character_name: str, original: Optional[Path], ops: List
     if original is None or not ops:
         return original
     original = Path(original)
-    try:
-        data = original.read_bytes()
-    except OSError:
+    source_sha = _file_sha(original)
+    if not source_sha:
         return original
-    source_sha = _sha(data)
-    key = _key(source_sha, ops, available)
-    image, sidecar = _copy_paths(character_name, original, key)
+    image, sidecar = _copy_paths(character_name, original, _key(source_sha, ops, available))
     with keyed_lock("reference_postprocess", str(image)):
         rec = reference_record(character_name, original, ops, available)
         if rec is not None:
             return rec["path"] or original
+        # Not made yet: read the bytes once, and name the copy by what is processed (the file may have changed
+        # since its hash above).
+        try:
+            data = original.read_bytes()
+        except OSError:
+            return original
+        source_sha = _sha(data)
+        image, sidecar = _copy_paths(character_name, original, _key(source_sha, ops, available))
         steps: List[Dict[str, Any]] = []
         current, error = data, ""
         for op in ops:
