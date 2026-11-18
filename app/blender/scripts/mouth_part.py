@@ -980,8 +980,7 @@ def build(group, output):
                               export_yup=True, export_skins=True, export_animations=True,
                               export_morph=True, export_extras=True, export_all_influences=False)
     _common.body_meshes_first(output)
-    if teeth.get('status') == 'applied':
-        _common.vertex_colors_only_on(output, {mouth_teeth.TEETH_MATERIAL})
+    _common.keep_mouth_teeth_colours(output)
     front_shift = np.array([0., -o['offset_mm'][2] / 1000, 0.])
     return {'status': 'applied', 'reason': '',
             'opening': {'centre': [round(c, 5) for c in _gltf(O + front_shift)],

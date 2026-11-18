@@ -37,6 +37,13 @@ No server, no world DB, no Blender (``mouth_teeth.py`` imports bpy: its defaults
 [8] The opening pass leaves the teeth alone: channelOpening.ts filters a mesh by `isRigidTeeth` in
     `bindChannelOpening`'s traverse; at 7458a196e the filter had no such test (every skinned body mesh was bound).
     The numbers of the pass itself: scripts/smoke_mouth_open.mjs [5].
+[10] Every re-export of a rigged body keeps COLOR_0 on the teeth only (_common.keep_mouth_teeth_colours, called after
+    the export in mouth_part, extension_bones, hand_restore, limb_weights and posture_match). Synthetic GLB: mesh 0 =
+    primitives skin (POSITION acc 0, COLOR_0 acc 1), mouth_teeth (POSITION 2, COLOR_0 3), mouth_tongue (POSITION 4,
+    COLOR_0 5); mesh 1 = a garment with its own COLOR_0 (POSITION 6, COLOR_0 7); 8 accessors of 3 vertices on 8 views
+    (36 bytes each for VEC3, 48 for VEC4 colours). After: skin and tongue without COLOR_0, teeth and garment keep theirs;
+    2 accessors and 2 views gone -> 6 accessors, 6 views, binary 4 x 40 (36 padded to 8) + 2 x 48 = 256 bytes; the kept accessors
+    read back the same bytes (teeth colour 0.75, garment 0.2). A file without teeth: byte-identical.
 [9] lod.py removes the teeth and tongue faces (``_drop_mouth_teeth``, materials mouth_teeth / mouth_tongue) BEFORE it
     adds the DECIMATE modifier, in the same loop over the meshes.
 """
@@ -168,6 +175,77 @@ lod = (ROOT / "app/blender/scripts/lod.py").read_text()
 loop = lod[lod.index("for obj in _mesh_objects():\n            if obj.get(\"lod_preserve\")"):]
 check("_drop_mouth_teeth before DECIMATE", 0 <= loop.index("_drop_mouth_teeth(obj)") < loop.index('type="DECIMATE"'))
 check("both materials named", 'MOUTH_TEETH_MATERIALS = ("mouth_teeth", "mouth_tongue")' in lod)
+
+print("[10] re-exports keep vertex colours on the teeth only")
+import json as _json  # noqa: E402
+import struct  # noqa: E402
+import tempfile  # noqa: E402
+import _common  # noqa: E402
+
+
+def synthetic(with_teeth=True):
+    names = ["skin", "mouth_teeth" if with_teeth else "lips", "mouth_tongue", "cloth"]
+    chunks, views, accs = [], [], []
+    def add(values, kind):
+        data = struct.pack(f"<{len(values)}f", *values)
+        views.append({"buffer": 0, "byteOffset": sum(len(c) for c in chunks), "byteLength": len(data)})
+        chunks.append(data)
+        accs.append({"bufferView": len(views) - 1, "componentType": 5126, "count": 3, "type": kind})
+        return len(accs) - 1
+    prims = []
+    for k, colour in enumerate((0.9, 0.75, 0.5, 0.2)):
+        pos = add([float(k)] * 9, "VEC3")
+        col = add([colour] * 12, "VEC4")
+        prims.append({"attributes": {"POSITION": pos, "COLOR_0": col}, "material": k})
+    binary = b"".join(chunks)
+    doc = {"asset": {"version": "2.0"}, "materials": [{"name": n} for n in names],
+           "meshes": [{"primitives": prims[:3]}, {"primitives": prims[3:]}], "accessors": accs, "bufferViews": views,
+           "buffers": [{"byteLength": len(binary)}]}
+    raw = _json.dumps(doc).encode()
+    raw += b" " * (-len(raw) % 4)
+    blob = struct.pack("<4sII", b"glTF", 2, 20 + len(raw) + 8 + len(binary)) + struct.pack("<II", len(raw), 0x4E4F534A) \
+        + raw + struct.pack("<II", len(binary), 0x004E4942) + binary
+    path = Path(tempfile.mkdtemp()) / "m.glb"
+    path.write_bytes(blob)
+    return path
+
+
+def read(path):
+    blob = path.read_bytes()
+    size = struct.unpack_from("<I", blob, 12)[0]
+    doc = _json.loads(blob[20:20 + size])
+    rest = blob[20 + size:]
+    return doc, rest[8:8 + struct.unpack_from("<I", rest, 0)[0]]
+
+
+def first_float(doc, binary, acc):
+    view = doc["bufferViews"][doc["accessors"][acc]["bufferView"]]
+    return struct.unpack_from("<f", binary, view.get("byteOffset", 0))[0]
+
+
+path = synthetic()
+_common.keep_mouth_teeth_colours(path)
+doc, binary = read(path)
+p0, p1 = doc["meshes"][0]["primitives"], doc["meshes"][1]["primitives"]
+check("skin and tongue lose COLOR_0, teeth and garment keep it", "COLOR_0" not in p0[0]["attributes"]
+      and "COLOR_0" in p0[1]["attributes"] and "COLOR_0" not in p0[2]["attributes"] and "COLOR_0" in p1[0]["attributes"])
+check("6 accessors, 6 views, 256 bytes", len(doc["accessors"]) == 6 and len(doc["bufferViews"]) == 6
+      and len(binary) == 256, (len(doc["accessors"]), len(doc["bufferViews"]), len(binary)))
+check("kept colours read back 0.75 / 0.2", near(first_float(doc, binary, p0[1]["attributes"]["COLOR_0"]), .75)
+      and near(first_float(doc, binary, p1[0]["attributes"]["COLOR_0"]), .2))
+check("positions read back 0 / 1 / 2 / 3", [round(first_float(doc, binary, p["attributes"]["POSITION"])) for p in p0 + p1]
+      == [0, 1, 2, 3])
+plain = synthetic(False)
+before = plain.read_bytes()
+_common.keep_mouth_teeth_colours(plain)
+check("without teeth: byte-identical", plain.read_bytes() == before)
+for script in ("mouth_part", "extension_bones", "hand_restore", "limb_weights", "posture_match"):
+    text = (ROOT / f"app/blender/scripts/{script}.py").read_text()
+    check(f"{script} calls it after its export", "_common.keep_mouth_teeth_colours(" in text
+          and text.index("_common.keep_mouth_teeth_colours(") > text.index("export_scene.gltf("))
+check("material name agrees", _common.MOUTH_TEETH_MATERIAL == next(
+    ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
+    and any(getattr(t, "id", "") == "TEETH_MATERIAL" for t in n.targets)))
 
 print("ALL OK" if not failed else f"FAILED ({failed})")
 sys.exit(1 if failed else 0)

@@ -132,6 +132,7 @@ def posture_match(args):
                 axis=[round(v, 6) for v in turn.axis], ground_shift_m=[round(v, 5) for v in shift])
     path = Path(args["out_dir"]) / Path(src).name
     bpy.ops.export_scene.gltf(filepath=str(path), export_format="GLB")
+    _common.keep_mouth_teeth_colours(path)
     return data, {"model": str(path)}
 
 

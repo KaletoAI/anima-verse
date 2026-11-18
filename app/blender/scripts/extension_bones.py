@@ -3528,6 +3528,7 @@ def extension_bones(args):
     _common.progress('exporting')
     bpy.ops.export_scene.gltf(filepath=str(output),export_format='GLB',export_apply=False,export_yup=True,export_skins=True,export_animations=True,export_morph=True,export_all_influences=False,export_extras=True)
     _common.body_meshes_first(output)
+    _common.keep_mouth_teeth_colours(output)
     return {'status':'applied','reason':'','groups':metrics,'metrics':metrics},{'model':str(output)}
 
 

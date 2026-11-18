@@ -229,11 +229,22 @@ def body_meshes_first(path):
                      + struct.pack('<II', len(raw), 0x4E4F534A) + raw + rest)
 
 
+MOUTH_TEETH_MATERIAL = 'mouth_teeth'
+
+
+def keep_mouth_teeth_colours(path):
+    """The post-export step of every script that re-exports a rigged body (Ruling A206): Blender writes the body's
+    colour attribute — which only the built teeth use — into every primitive of the body mesh again, so the skin and
+    the tongue would start to carry vertex colours. A no-op for a file without teeth."""
+    vertex_colors_only_on(path, {MOUTH_TEETH_MATERIAL})
+
+
 def vertex_colors_only_on(path, material_names):
-    """Keep ``COLOR_0`` only on the primitives whose material is one of ``material_names``: Blender writes a mesh's
-    colour attribute into every primitive of it, and a body skin must not start to carry vertex colours because
-    one built part uses them. The accessors and buffer views nothing uses any more are dropped and the binary
-    chunk is repacked (8-byte aligned views)."""
+    """Keep ``COLOR_0`` only on the primitives whose material is one of ``material_names``, within the meshes that
+    have such a primitive (another mesh's own vertex colours are left alone): Blender writes a mesh's colour
+    attribute into every primitive of it, and a body skin must not start to carry vertex colours because one built
+    part uses them. The accessors and buffer views nothing uses any more are dropped and the binary chunk is
+    repacked (8-byte aligned views)."""
     import json
     import struct
     blob = path.read_bytes()
@@ -244,9 +255,14 @@ def vertex_colors_only_on(path, material_names):
     binary = rest[8:8 + bin_len]
     materials = doc.get('materials', [])
     changed = False
+    def name_of(prim):
+        return materials[prim['material']].get('name') if 'material' in prim else None
+
     for mesh in doc.get('meshes', []):
+        if not any(name_of(prim) in material_names for prim in mesh.get('primitives', [])):
+            continue
         for prim in mesh.get('primitives', []):
-            name = materials[prim['material']].get('name') if 'material' in prim else None
+            name = name_of(prim)
             if 'COLOR_0' in prim.get('attributes', {}) and name not in material_names:
                 del prim['attributes']['COLOR_0']
                 changed = True

@@ -21,6 +21,7 @@ def limb_weights(args):
         return report, {}
     path = Path(args['out_dir']) / Path(src).name
     bpy.ops.export_scene.gltf(filepath=str(path), export_format='GLB')
+    _common.keep_mouth_teeth_colours(path)
     return report, {'model': str(path)}
 
 
