@@ -4497,7 +4497,6 @@ def _render_views(character_name: str, *, signature: str, pieces: Optional[Dict[
     superseding A74b — ``_edit_front`` / ``render_view_edit``: each view is
     an edit of the shape's view of the same direction), and every view
     written records ``outfit_reference_sha256``."""
-    import shutil
     from app.core.model_refs import _tpose_size, get_model_refs_dir, mesh_items_token, mesh_variant
     refs_dir = get_model_refs_dir(character_name)
     results: Dict[str, Optional[str]] = {}
@@ -4514,8 +4513,6 @@ def _render_views(character_name: str, *, signature: str, pieces: Optional[Dict[
             token = mesh_items_token(character_name, dict(pieces or {}), profile)
             for v in todo:
                 source = registrations[v]
-                target = refs_dir / f"{_kind(v)}_{signature}{source.suffix}"
-                shutil.copyfile(source, target)
                 meta = {k: val for k, val in _ref_sidecar(source).items() if k != "outfit_body"}
                 meta.update({"created_at": utc_now_iso(),
                              "equipped_pieces": dict(pieces or {}), "equipped_items": list(items or []),
@@ -4524,8 +4521,10 @@ def _render_views(character_name: str, *, signature: str, pieces: Optional[Dict[
                              "texture_signature": tsig})
                 if token:
                     meta["mesh_token"] = token
-                target.with_suffix(".json").write_text(json.dumps(meta, ensure_ascii=False, indent=2),
-                                                       encoding="utf-8")
+                # Review 08b#5: onto the live reference atomically (image, then its sidecar — a reader between the
+                # two sees the new picture with the old record, which reads as outdated, never the reverse), and
+                # a stored picture of the stem with another extension goes.
+                target = _copy_ref(source, refs_dir / f"{_kind(v)}_{signature}", meta)
                 results[_kind(v)] = str(target)
         else:
             width, height = _tpose_size()
