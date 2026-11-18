@@ -42,6 +42,13 @@ def main():
         config_path.write_text(json.dumps({"packages": {"enabled": "talk_to,send_message"}}))
         config.load(config_path)
         db.init_schema()
+        # The place everybody stands in exists: TalkTo asks the shared
+        # addressability rule (perception.addressable_for, since 08b953def),
+        # whose room roster resolves the location, and a location id the world
+        # does not hold has nobody in any of its rooms.
+        from app.models.world import upsert_location
+        assert upsert_location({"id": "fixture", "name": "Fixture",
+                                "rooms": [{"id": "room", "name": "Room"}]}, sync_world=False)
         from app.core.db import get_connection, transaction
         from app.core.stat_sources import (
             StatSourceCollector, bind_stat_sources, collect_stat_source,
