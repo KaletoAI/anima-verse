@@ -553,7 +553,8 @@ def after_front_render(character_name: str, front: Path, *, bsig: str, profile: 
         shutil.copyfile(front, neutral)
         if front.with_suffix(".json").is_file():
             shutil.copyfile(front.with_suffix(".json"), neutral.with_suffix(".json"))
-        record = run_step(character_name, front, neutral, profile=profile, raise_load=raise_load)
+        record = run_step(character_name, front, neutral, profile=profile,
+                          **({"raise_load": True} if raise_load else {}))
         _set_front_record(front, record)
         logger.info("Skin step %s (%s): %s%s", character_name, bsig, record.get("outcome"),
                     f" ({record.get('error')})" if record.get("error") else "")
