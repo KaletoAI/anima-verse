@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { Field } from '@anima/player-ui'
+import { ConfirmDialog, Field } from '@anima/player-ui'
 import { PackagePanel } from './PackagePanel'
 
 /**
@@ -92,6 +92,15 @@ export function SkillsTab({
   const [optionSources, setOptionSources] = useState<Record<string, ChoiceOption[]>>({})
   const [loading, setLoading] = useState(false)
   const [selected, setSelected] = useState<string>('')  // skill_id shown in the detail pane
+  /** The package panel shown here holds an unsaved card draft — another skill
+   *  replaces the panel, and the draft with it, so that switch asks first. */
+  const panelDirtyRef = useRef(false)
+  const onDirty = useCallback((dirty: boolean) => {
+    panelDirtyRef.current = dirty
+    onPanelDirty?.(dirty)
+  }, [onPanelDirty])
+  /** A skill switch waiting for "discard the card draft?" (in-app, never window.confirm). */
+  const [pendingSkill, setPendingSkill] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
     if (!character) return
@@ -248,7 +257,11 @@ export function SkillsTab({
         {visible.map((s) => {
           const active = current?.skill_id === s.skill_id
           return (
-            <div key={s.skill_id} onClick={() => setSelected(s.skill_id)}
+            <div key={s.skill_id} onClick={() => {
+              if (active) return
+              if (panelDirtyRef.current) setPendingSkill(s.skill_id)
+              else setSelected(s.skill_id)
+            }}
               style={{
                 display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px',
                 borderRadius: 6, cursor: 'pointer',
@@ -306,7 +319,7 @@ export function SkillsTab({
               </div>
             ) : current.panel_package ? (
               <PackagePanel character={character} packageId={current.panel_package}
-                onOpenCharacter={onOpenCharacter} onDirty={onPanelDirty} />
+                onOpenCharacter={onOpenCharacter} onDirty={onDirty} />
             ) : null}
             {current.enabled && fields.length > 0 && (
               <div className="ga-form" style={{ marginTop: 14, gap: 8 }}>
@@ -336,6 +349,11 @@ export function SkillsTab({
           </div>
         )}
       </div>
+      <ConfirmDialog open={pendingSkill !== null} title={t('Discard unsaved changes?')}
+        message={t('The changes to this entry are lost.')}
+        confirmLabel={t('Discard')} danger
+        onConfirm={() => { const to = pendingSkill; setPendingSkill(null); if (to !== null) setSelected(to) }}
+        onClose={() => setPendingSkill(null)} />
     </div>
   )
 }

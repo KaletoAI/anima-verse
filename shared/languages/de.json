@@ -6528,6 +6528,7 @@
     "Could not refresh — retrying": "Aktualisieren fehlgeschlagen — neuer Versuch läuft",
     "A package card holds edits that were never saved. Opening another character discards them.": "Eine Paket-Karte enthält Änderungen, die nie gespeichert wurden. Einen anderen Charakter zu öffnen verwirft sie.",
     "The open clip has edits that were never saved (dials, heights, contacts, bend limits or root angle). Opening another clip or set discards them.": "Der offene Clip hat Änderungen, die nie gespeichert wurden (Regler, Höhen, Kontakte, Biegegrenzen oder Wurzelwinkel). Einen anderen Clip oder ein anderes Set zu öffnen verwirft sie.",
-    "The Clip Library holds edits of the open clip that were never saved. Leaving it discards them.": "Die Clip-Bibliothek enthält Änderungen am offenen Clip, die nie gespeichert wurden. Wer sie verlässt, verwirft sie."
+    "The Clip Library holds edits of the open clip that were never saved. Leaving it discards them.": "Die Clip-Bibliothek enthält Änderungen am offenen Clip, die nie gespeichert wurden. Wer sie verlässt, verwirft sie.",
+    "A package card holds edits that were never saved. Opening another tab discards them.": "Eine Paket-Karte enthält Änderungen, die nie gespeichert wurden. Einen anderen Tab zu öffnen verwirft sie."
   }
 }

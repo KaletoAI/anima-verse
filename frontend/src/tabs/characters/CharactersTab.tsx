@@ -187,6 +187,17 @@ export function CharactersTab() {
    *  panel's own button, not by this sheet's Save — so it is not part of
    *  `dirtyCount`, but every guard below counts it. */
   const [panelDirty, setPanelDirty] = useState(false)
+  /** `panelDirty` for handlers that run after an await (a panel action's
+   *  `open_character` result). */
+  const panelDirtyRef = useRef(false)
+  panelDirtyRef.current = panelDirty
+  /** The sub-tab a switch wants to open while a package card draft is open —
+   *  the sheet's own buffer survives a sub-tab switch, the card draft does not
+   *  (the panel unmounts). Answered in the same dialog as `leaveTo`. */
+  const [leaveSubTab, setLeaveSubTab] = useState<string | null>(null)
+  /** The sub-tab a panel's `open_character` opens once the character switch
+   *  it started goes through (`goTo`); cleared by "Stay". */
+  const leaveToSubTab = useRef<string | null>(null)
   // Per-character config (chat_mode, behavior toggles, …).
   const [cfg, setCfg] = useState<Record<string, unknown>>({})
   const [savingField, setSavingField] = useState<string>('')
@@ -381,6 +392,8 @@ export function CharactersTab() {
       setConfirmDel(false)
       setSelected(name)
       reloadCurrent(name)
+      if (leaveToSubTab.current) setSubTab(leaveToSubTab.current)
+      leaveToSubTab.current = null
     },
     [reloadCurrent],
   )
@@ -841,17 +854,35 @@ export function CharactersTab() {
     }
   }, [subTabs, subTab, fieldTabs])
 
+  /** Open another sub-tab — asking first while a package card holds a draft:
+   *  leaving a package panel (its own sub-tab or the Skills tab hosting it)
+   *  unmounts it, and the draft with it. The sheet's field buffer lives here
+   *  and survives the switch, so only the card draft asks. */
+  const selectSubTab = useCallback((id: string) => {
+    if (id === subTab) return
+    if (panelDirtyRef.current) { setLeaveSubTab(id); return }
+    setSubTab(id)
+  }, [subTab])
+
   /** A package panel action created/named a character (`open_character`):
    *  refresh the list and open it on its first field tab for editing. */
   const openFromPanel = useCallback((name: string) => {
     const open = () => {
-      onSelect(name)
-      if (fieldTabs.length) setSubTab(fieldTabs[0].id)
+      const first = fieldTabs.length ? fieldTabs[0].id : null
+      if (name !== selected) {
+        // The sub-tab follows the character switch: switched now, it would
+        // unmount the panel — and its card draft — while `onSelect` still
+        // asks whether to leave.
+        leaveToSubTab.current = first
+        onSelect(name)
+      } else if (first) {
+        selectSubTab(first)
+      }
     }
     loadCharacters()
       .then((list) => { setCharacters(list); open() })
       .catch(open)
-  }, [onSelect, fieldTabs])
+  }, [onSelect, fieldTabs, selected, selectSubTab])
 
   // Animation sets: the base sets (female/male/animal — they follow from
   // gender + the humanoid feature) plus every set found in the clips. The
@@ -1110,7 +1141,7 @@ export function CharactersTab() {
                   key={tab.id}
                   type="button"
                   className={`ga-btn ga-btn-sm${subTab === tab.id ? ' ga-btn-primary' : ''}`}
-                  onClick={() => setSubTab(tab.id)}
+                  onClick={() => selectSubTab(tab.id)}
                 >
                   {tab.translated ? tab.label : t(tab.label)}
                 </button>
@@ -1289,10 +1320,10 @@ export function CharactersTab() {
             )}
           </>
         )}
-        {/* The character-switch guard. The same question the shell asks
-            before a tab switch, asked here because a character switch stays
+        {/* The character-switch and sub-tab-switch guard. The same question
+            the shell asks before a tab switch, asked here because both stay
             inside the tab — and asked as UI, never as window.confirm. */}
-        {leaveTo !== null ? (
+        {leaveTo !== null || leaveSubTab !== null ? (
           <div className="ga-modal-backdrop" role="presentation">
             <div className="ga-modal" role="dialog" aria-modal="true"
               aria-label={t('Unsaved changes')} style={{ maxWidth: 460 }}>
@@ -1300,24 +1331,45 @@ export function CharactersTab() {
                 <h3>{t('Unsaved changes')}</h3>
               </div>
               <div className="ga-modal-body">
-                {dirtyCount > 0 ? (
+                {leaveSubTab !== null ? (
+                  // A sub-tab switch loses only the card draft: the field
+                  // buffer stays with this character.
                   <p style={{ margin: 0 }}>
-                    {t('This character holds {n} field changes that were never saved. Opening another character discards them.')
-                      .replace('{n}', String(dirtyCount))}
+                    {t('A package card holds edits that were never saved. Opening another tab discards them.')}
                   </p>
-                ) : null}
-                {panelDirty ? (
-                  <p style={{ margin: dirtyCount > 0 ? '8px 0 0' : 0 }}>
-                    {t('A package card holds edits that were never saved. Opening another character discards them.')}
-                  </p>
-                ) : null}
+                ) : (
+                  <>
+                    {dirtyCount > 0 ? (
+                      <p style={{ margin: 0 }}>
+                        {t('This character holds {n} field changes that were never saved. Opening another character discards them.')
+                          .replace('{n}', String(dirtyCount))}
+                      </p>
+                    ) : null}
+                    {panelDirty ? (
+                      <p style={{ margin: dirtyCount > 0 ? '8px 0 0' : 0 }}>
+                        {t('A package card holds edits that were never saved. Opening another character discards them.')}
+                      </p>
+                    ) : null}
+                  </>
+                )}
               </div>
               <div className="ga-modal-footer">
-                <button className="ga-btn" onClick={() => setLeaveTo(null)}>
+                <button className="ga-btn" onClick={() => {
+                  setLeaveTo(null)
+                  setLeaveSubTab(null)
+                  leaveToSubTab.current = null
+                }}>
                   {t('Stay')}
                 </button>
                 <button className="ga-btn ga-btn-danger"
-                  onClick={() => goTo(leaveTo)}>
+                  onClick={() => {
+                    if (leaveSubTab !== null) {
+                      setLeaveSubTab(null)
+                      setSubTab(leaveSubTab)
+                    } else if (leaveTo !== null) {
+                      goTo(leaveTo)
+                    }
+                  }}>
                   {t('Leave and discard')}
                 </button>
               </div>
