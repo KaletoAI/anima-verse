@@ -46,9 +46,11 @@ PRESETS: Dict[str, Dict[str, Any]] = {
 }
 
 #: Keywords per preset, lower case (English and German). A keyword of 5 letters or more also matches inside a
-#: compound ("Lederjacke") and, of 6 or more, a word within ``FUZZY_RATIO`` of it ("lether").
+#: compound at a part boundary (``_in_compound``: "Lederjacke", "Kunstlederjacke" — never "Fledermaus") and, of 6 or
+#: more, a word within ``FUZZY_RATIO`` of it ("lether"). A keyword of several words (a space or a hyphen) matches as
+#: that phrase at a word start ("biker jacket", "t-shirt").
 KEYWORDS: Dict[str, Tuple[str, ...]] = {
-    "leather": ("leather", "leder", "suede", "wildleder", "nappa", "lambskin", "biker"),
+    "leather": ("leather", "leder", "suede", "wildleder", "nappa", "lambskin", "biker jacket", "bikerjacke"),
     "denim": ("denim", "jeans", "jean", "chambray"),
     "knit": ("knit", "knitted", "strick", "wool", "wolle", "woollen", "cashmere", "kaschmir", "mohair",
              "sweater", "pullover", "cardigan", "jumper", "beanie"),
@@ -58,13 +60,27 @@ KEYWORDS: Dict[str, Tuple[str, ...]] = {
     "metal": ("metal", "metall", "steel", "stahl", "iron", "eisen", "chainmail", "kettenhemd", "plate armor",
               "plate armour", "chrome"),
 }
-#: Words that contain a keyword but name no such material ("metallic" is a sheen of colour, not metal).
-NOT_MATERIAL = frozenset({"metallic", "metallisch", "metallisches", "metallischer", "metallische"})
+#: Words that contain a keyword but name no such material ("metallic" is a sheen of colour, not metal; "gunmetal"
+#: and "monochrome" are colour words).
+NOT_MATERIAL = frozenset({"metallic", "metallisch", "metallisches", "metallischer", "metallische", "gunmetal",
+                          "monochrome"})
+#: Colour words (English and German stems). A material word right before one ("steel blue", "iron grey",
+#: "chrome-yellow") or a compound of a material keyword and one ("stahlblau", "eisengraue") names a colour, not the
+#: material.
+COLOUR_WORDS = frozenset({
+    "grey", "gray", "blue", "yellow", "silver", "gold", "golden", "black", "white", "red", "green", "brown", "pink",
+    "purple", "violet", "orange", "beige", "navy", "teal", "turquoise", "cyan",
+    "grau", "blau", "gelb", "silber", "schwarz", "weiss", "weiß", "rot", "grün", "braun", "rosa", "lila"})
+#: Letters a compound's first part has at least when a keyword stands inside a word (not at its start or end):
+#: "Kunst|leder|jacke" (5) counts, "F|leder|maus" (1) does not.
+COMPOUND_HEAD = 3
 #: ``difflib.SequenceMatcher`` ratio a word needs to count as a typo of a keyword of 6 letters or more.
 FUZZY_RATIO = 0.83
 #: Weight of a keyword hit per text: the name says most.
 _FIELD_WEIGHTS = (("name", 3), ("prompt_fragment", 2), ("description", 1))
-_WORD_RE = re.compile(r"[a-zäöüß]+(?:-[a-zäöüß]+)*")
+_WORD_RE = re.compile(r"[a-zäöüß]+")
+#: What may stand between a modifier and the colour word it modifies (no comma: "leather, black" is two things).
+_MODIFIER_GAP = re.compile(r"[\s-]+")
 
 
 def clean(raw: Any) -> Optional[str]:
@@ -78,21 +94,58 @@ def choice_of(item: Optional[Dict[str, Any]]) -> str:
     return clean(((item or {}).get("outfit_piece") or {}).get("material")) or AUTO
 
 
+def _colour(word: str) -> bool:
+    """Whether ``word`` is a colour word (``COLOUR_WORDS``, also with a German or plural ending: "blaue", "greys")."""
+    return word in COLOUR_WORDS or (len(word) > 3 and (word[:-1] in COLOUR_WORDS or word[:-2] in COLOUR_WORDS))
+
+
+def _in_compound(word: str, keyword: str) -> bool:
+    """Whether ``keyword`` stands in ``word`` as a part of a compound: at its start or after a first part of at
+    least ``COMPOUND_HEAD`` letters, and not as the material of a colour compound ("stahlblau")."""
+    at = word.find(keyword)
+    while at >= 0:
+        rest = word[at + len(keyword):]
+        if (at == 0 or at >= COMPOUND_HEAD) and not (rest and _colour(rest)):
+            return True
+        at = word.find(keyword, at + 1)
+    return False
+
+
+def _phrase_hits(words: List[str], parts: List[str]) -> int:
+    """Hits of a keyword of several words ``parts`` in ``words``: the first part ends a word (the word itself, or a
+    compound by ``_in_compound``'s rule for keywords of 5 letters or more: "breastplate armor"), the middle parts are
+    the next words, the last part starts the word after them ("t-shirts")."""
+    k, n = len(parts), 0
+    for i in range(len(words) - k + 1):
+        head = words[i]
+        if not (head == parts[0] or (len(parts[0]) >= 5 and head.endswith(parts[0])
+                                     and len(head) - len(parts[0]) >= COMPOUND_HEAD)):
+            continue
+        if words[i + 1:i + k - 1] == parts[1:-1] and words[i + k - 1].startswith(parts[-1]):
+            n += 1
+    return n
+
+
 def _hits(text: str) -> Dict[str, int]:
-    """``{preset: number of keyword hits}`` in ``text``."""
+    """``{preset: number of keyword hits}`` in ``text``. A word that only modifies the colour word after it
+    ("steel blue", "iron-grey"; ``COLOUR_WORDS``) is a colour and counts for no preset."""
     low = (text or "").lower()
-    words = _WORD_RE.findall(low)
+    spans = list(_WORD_RE.finditer(low))
+    words = [m.group() for m in spans]
+    modifier = [i + 1 < len(spans) and _MODIFIER_GAP.fullmatch(low[spans[i].end():spans[i + 1].start()]) is not None
+                and _colour(words[i + 1]) for i in range(len(spans))]
     out: Dict[str, int] = {}
     for preset, keywords in KEYWORDS.items():
         n = 0
         for keyword in keywords:
-            if " " in keyword:
-                n += low.count(keyword)
+            parts = _WORD_RE.findall(keyword)
+            if len(parts) > 1:
+                n += _phrase_hits(words, parts)
                 continue
-            for word in words:
-                if word in NOT_MATERIAL:
+            for word, colour in zip(words, modifier):
+                if word in NOT_MATERIAL or colour:
                     continue
-                if word == keyword or (len(keyword) >= 5 and keyword in word):
+                if word == keyword or (len(keyword) >= 5 and _in_compound(word, keyword)):
                     n += 1
                 elif len(keyword) >= 6 and abs(len(word) - len(keyword)) <= 2 \
                         and difflib.SequenceMatcher(None, word, keyword).ratio() >= FUZZY_RATIO:

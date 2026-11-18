@@ -21,6 +21,20 @@ node (skipped with a note when esbuild or node is missing).
     - "denim and leather vest": leather 3, denim 3 -> tie -> leather (earlier in PRESET_NAMES).
     - ``resolve``: {material: "denim"} on the jacket -> ("denim", "denim"); no key -> ("auto", "leather");
       "auto"/"shiny" stored -> clean() None -> auto.
+    Colour words and compound boundaries (review 08b#3; the old code matched every keyword of 5+ letters as a
+    substring, kept "metallic-silver" as one token and had "biker" as a leather keyword, so each of the first
+    eight below came out metal or leather):
+    - "Steel blue blouse": "steel" stands right before the colour word "blue" -> a colour, no hit; "blouse" names
+      no keyword -> None.  Likewise "Iron grey suit" -> None, "Chrome yellow raincoat" -> None.
+    - "Gunmetal grey dress": "gunmetal" is a colour word (NOT_MATERIAL) and stands before "grey" -> None.
+    - "metallic-silver party dress": split at the hyphen -> "metallic" (NOT_MATERIAL), "silver" -> None.
+    - "stahlblaue Bluse": "stahl" starts the word, the rest "blaue" is a colour ("blau" + e) -> None.
+    - "Fledermaus cape": "leder" stands after ONE letter ("f"), not at a compound boundary (>= 3) -> None.
+    - "Biker shorts": "biker" alone is no keyword any more (only "biker jacket" / "bikerjacke") -> None.
+    Real pieces still found:
+    - "Biker jacket" -> the phrase "biker jacket" -> leather.  "Kunstlederjacke": "leder" after "kunst" (5 letters)
+      -> leather.  "Steel breastplate": "steel" before "breastplate" (no colour) -> metal.  "Iron helmet" -> metal.
+    - "Boots: leather, black": a comma stands between "leather" and "black" -> no modifier -> leather.
 [2] The generator's roughness map survives the graft: fixture garment G + ``mr_image`` M (16x16 PNG, colour
     (0, 102, 0): G = 102/255 = 0.4) -> the grafted material has ``metallicRoughnessTexture`` whose image bytes are M,
     beside the base colour; ``garment_arrays`` of the result gives M back (the assembly's read), and a graft of that
@@ -164,6 +178,12 @@ def part_guess():
     check("resolve auto", pm.resolve(jacket()), ("auto", "leather"))
     check("stored auto is no key", pm.clean("auto"), None)
     check("unknown value is no key", pm.resolve(jacket("shiny")), ("auto", "leather"))
+    for name, want in (("Steel blue blouse", None), ("Iron grey suit", None), ("Chrome yellow raincoat", None),
+                       ("Gunmetal grey dress", None), ("metallic-silver party dress", None),
+                       ("stahlblaue Bluse", None), ("Fledermaus cape", None), ("Biker shorts", None),
+                       ("Biker jacket", "leather"), ("Kunstlederjacke", "leather"), ("Steel breastplate", "metal"),
+                       ("Iron helmet", "metal"), ("Boots: leather, black", "leather")):
+        check(f"{name!r} -> {want}", pm.guess({"name": name}), want)
 
 
 def part_graft(fx):
