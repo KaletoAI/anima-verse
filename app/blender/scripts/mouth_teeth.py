@@ -76,7 +76,7 @@ PROFILES = {
 #: Ring points per tooth: the upper front teeth get the most (they are what an open mouth shows).
 RING_POINTS = {('upper', 'front'): 10, ('lower', 'front'): 8, ('upper', 'back'): 8, ('lower', 'back'): 8}
 GUM_SAMPLES = 13            # per half arch
-TONGUE_GRID = (8, 7)        # along x across
+TONGUE_GRID = (13, 11)      # along x across (a round tip outline at full opening; 240 triangles)
 
 
 def options(raw):
@@ -167,8 +167,9 @@ def build_teeth(ctx, raw_options):
             kinds = [k for k, _w, _h, _t in table] + ['molar']
             x, d, s = arch_curve(d0, opt['front_w'] * f, opt['front_l'] * f, limit, D * .75)
             spans = tooth_spans(widths, float(s[-1]))
-            if len(spans) < len(widths):
-                raise ValueError('The %s arch is too short for its teeth (%.1f mm)' % (part, s[-1] * 1000))
+            if len(spans) < 3:
+                raise ValueError('The %s arch (%.1f mm) is too short even for the front teeth' % (part, s[-1] * 1000))
+            heights, thick = heights[:len(spans)], thick[:len(spans)]
             end = spans[-1][1]
 
             def at(sv):
@@ -248,7 +249,7 @@ def build_teeth(ctx, raw_options):
                     mesh.tri(loop[0], loop[j], loop[j + 1], fl)
             upper_tip_point = world(0., d0, tip_h, front)
             tips[part] = upper_tip_point
-            report['arches'][part] = {'teeth': tooth_count, 'front_mm': round(d0 * 1000, 2),
+            report['arches'][part] = {'teeth': tooth_count, 'left_out': len(widths) - len(spans), 'front_mm': round(d0 * 1000, 2),
                                       'half_width_back_mm': round(float(x[np.searchsorted(s, end) - 1]) * 1000, 2),
                                       'depth_back_mm': round(float(np.interp(end, s, d)) * 1000, 2),
                                       'arc_mm': round(end * 1000, 2)}
@@ -267,7 +268,7 @@ def build_teeth(ctx, raw_options):
                 u = i / (nu - 1)
                 dv = start + length * u
                 inner = float(np.interp(dv, ld_, lx_)) - ts['inset']
-                half = min(ts['width'] * f / 2, inner) * (.75 + .25 * math.sin(min(u / .25, 1.) * math.pi / 2))
+                half = min(ts['width'] * f / 2, inner) * (.3 + .7 * math.sqrt(max(0., 1 - (1 - min(u / .3, 1.)) ** 2)))
                 height = (ts['tip'] + (ts['height'] - ts['tip']) * float(_sstep(u / .5))) * f
                 row = []
                 for j in range(nv):
@@ -353,6 +354,10 @@ def build_teeth(ctx, raw_options):
         if not moved:
             break
     face_bad = sum(1 for f in F if not all(skin.inside(q, 0.)[0] for q in samples(f)))
+    uncovered_vertices = sum(1 for p in P if not skin.inside(p, 0.)[0])
+    if face_bad or uncovered_vertices:
+        # The gate: teeth that would show through the closed mouth are not built (the mouth is published without).
+        raise ValueError('%d teeth faces would show through the closed mouth' % max(face_bad, uncovered_vertices))
     dist = np.array([skin.inside(p, opt['clearance'])[1] for p in P])
     covered = np.array([skin.inside(p, 0.)[0] for p in P])
     bad = np.nonzero((dist < opt['clearance'] - 1e-6) | ~covered)[0]

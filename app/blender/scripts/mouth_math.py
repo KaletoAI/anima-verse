@@ -207,15 +207,22 @@ def arch_curve(d0, front_w, front_l, limit, d_max, step=.0005):
     return x, d, s
 
 
-def tooth_spans(widths, total):
+TOOTH_MIN_WIDTH = .003
+
+
+def tooth_spans(widths, total, min_width=TOOTH_MIN_WIDTH):
     """Where each tooth sits along the half arch: ``[(start, end)]`` arc lengths, the teeth side by side from the
-    midline; the last entry (the molar block) is cut back to ``total`` when the arch is shorter. Teeth that start
-    past ``total`` are left out."""
+    midline. A shorter arch (a small depth scale, a large size) loses its back teeth: only the last entry (the molar
+    block) may be cut back to ``total``, and only while it keeps ``min_width``; a cut tooth or a thinner block is
+    left out — never a sliver."""
     out, at = [], 0.
-    for w in widths:
-        if at >= total - 1e-9:
+    for k, w in enumerate(widths):
+        if at + w <= total + 1e-9:
+            out.append((at, at + w))
+        elif k == len(widths) - 1 and total - at >= min_width - 1e-12:
+            out.append((at, total))
+        else:
             break
-        out.append((at, min(at + w, total)))
         at += w
     return out
 

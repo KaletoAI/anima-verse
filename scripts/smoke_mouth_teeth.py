@@ -19,7 +19,9 @@ No server, no world DB, no Blender (``mouth_teeth.py`` imports bpy: its defaults
     widest x is 0.016 (the raw limit at the front would allow 0.0195).
 [4] tooth_spans(widths, total): widths [0.0085, 0.0065, 0.0075, 0.007, 0.0065, 0.01] side by side from 0 ->
     (0, 0.0085), (0.0085, 0.015), (0.015, 0.0225), (0.0225, 0.0295), (0.0295, 0.036), (0.036, 0.046); total 0.04 cuts
-    the last to (0.036, 0.04); total 0.03 -> five spans, the fifth (0.0295, 0.03), the molar block left out.
+    the molar block to (0.036, 0.04) (4 mm >= the 3 mm minimum); total 0.038 would leave it 2 mm -> left out, five
+    spans; total 0.03 would cut the fifth tooth to 0.5 mm -> a cut tooth is left out, four spans ending at 0.0295
+    (before the review the fifth stayed as a 0.5 mm sliver, at the review commit the arch raised "too short").
 [5] teeth_gap: upper incisal edge U = (0, 0, 0), lower L = (0, 0.002, 0.0005) (2 mm behind, 0.5 mm over it), hinge
     H = (0, 0.08, 0.03), theta 30 degrees, up +Z. L - H = (0, -0.078, -0.0295); turned about +X by 30 degrees:
     y' = -0.078 x 0.8660254 + 0.0295 x 0.5 = -0.0528000, z' = -0.078 x 0.5 - 0.0295 x 0.8660254 = -0.0645477 ->
@@ -106,9 +108,10 @@ sp = mm.tooth_spans(widths, .04)
 want = [(0, .0085), (.0085, .015), (.015, .0225), (.0225, .0295), (.0295, .036), (.036, .04)]
 check("six spans, the last cut to 0.04", len(sp) == 6 and all(near(a, c, 1e-12) and near(b, e, 1e-12)
                                                             for (a, b), (c, e) in zip(sp, want)), sp)
+sp = mm.tooth_spans(widths, .038)
+check("total 0.038: the 2 mm block left out, five spans", len(sp) == 5 and near(sp[-1][1], .036, 1e-12), sp)
 sp = mm.tooth_spans(widths, .03)
-check("total 0.03: five, the fifth (0.0295, 0.03)", len(sp) == 5 and near(sp[4][0], .0295, 1e-12)
-      and near(sp[4][1], .03, 1e-12), sp)
+check("total 0.03: the cut tooth left out, four spans to 0.0295", len(sp) == 4 and near(sp[-1][1], .0295, 1e-12), sp)
 
 print("[5] teeth_gap")
 U, L, H = np.zeros(3), np.array([0, .002, .0005]), np.array([0, .08, .03])
