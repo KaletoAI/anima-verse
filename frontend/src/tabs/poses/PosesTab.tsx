@@ -252,8 +252,12 @@ export function PosesTab() {
    *  every view switch away from the Library — both unmount it, and its drafts with it. */
   const libraryUnsavedRef = useRef(false)
   const onLibraryUnsaved = useCallback((unsaved: boolean) => { libraryUnsavedRef.current = unsaved }, [])
+  /** The open catalog entry's draft differs from the entry as opened or last saved (`entryDirty`, below).
+   *  The draft survives a view switch on the pose axis, but not a tab switch, another entry, a new one or
+   *  an axis switch — those ask through `guardEntry`, the tab switch through the shell's guard. */
+  const entryDirtyRef = useRef(false)
   useEffect(() => {
-    setUnsavedGuard(() => libraryUnsavedRef.current)
+    setUnsavedGuard(() => libraryUnsavedRef.current || entryDirtyRef.current)
     return () => setUnsavedGuard(null)
   }, [])
   /** A view switch waiting for "discard the Library's unsaved edits?" (in-app, never window.confirm). */
@@ -270,6 +274,31 @@ export function PosesTab() {
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [selected, setSelected] = useState<string>('')
   const [draft, setDraft] = useState<Entry | null>(null)
+  /** The open entry as it was opened or last saved, as JSON — the draft is unsaved while it differs. */
+  const [draftBase, setDraftBase] = useState('null')
+  /** Open `next` as the draft AND as its baseline: an entry just opened holds no unsaved edit. */
+  const openDraft = useCallback((next: Entry | null) => {
+    setDraft(next)
+    setDraftBase(JSON.stringify(next))
+  }, [])
+  /** A change the SERVER already holds (a published clip, a renamed key) is no unsaved edit: it goes into
+   *  the baseline the same way it goes into the draft. */
+  const patchDraftBase = useCallback((fn: (entry: Entry) => Entry) => {
+    setDraftBase((base) => {
+      const entry = JSON.parse(base) as Entry | null
+      return entry ? JSON.stringify(fn(entry)) : base
+    })
+  }, [])
+  const entryDirty = draft !== null && JSON.stringify(draft) !== draftBase
+  entryDirtyRef.current = entryDirty
+  /** A switch waiting for "discard the open entry's unsaved changes?" (in-app, never window.confirm). */
+  const [leaveEntry, setLeaveEntry] = useState<(() => void) | null>(null)
+  /** Runs `fn` — something that replaces or drops the open entry draft — at once while it is clean,
+   *  otherwise after the user confirmed. */
+  const guardEntry = useCallback((fn: () => void) => {
+    if (entryDirtyRef.current) setLeaveEntry(() => fn)
+    else fn()
+  }, [])
   const [isNew, setIsNew] = useState(false)
   // raw_text of the candidate the open draft was started from ('' = plain new entry)
   const [approveOf, setApproveOf] = useState('')
@@ -425,10 +454,12 @@ export function PosesTab() {
         if (disposed) return
         const ready = pending.map(({ job }) => job)
         if (axis === 'pose') {
-          setDraft((current) => {
-            const job = ready.find((item) => item.key === current?.key && item.state === 'published')
-            return current && job?.kind ? { ...current, animation: job.kind } : current
-          })
+          const published = (entry: Entry) => {
+            const job = ready.find((item) => item.key === entry.key && item.state === 'published')
+            return job?.kind ? { ...entry, animation: job.kind } : entry
+          }
+          setDraft((current) => (current ? published(current) : current))
+          patchDraftBase(published)
         }
         for (const job of ready) {
           toast((awaitingChoice(job) ? t('Variants ready — choose one') : t('Animation ready'))
@@ -472,7 +503,7 @@ export function PosesTab() {
     }
     void poll()
     return () => { disposed = true; clearTimeout(timer) }
-  }, [axis, jobsRefresh, reloadLibrary, t, toast])
+  }, [axis, jobsRefresh, patchDraftBase, reloadLibrary, t, toast])
 
   const closeAnimationDialog = useCallback(() => setAnimationDialog(null), [])
   const animationStarted = (taskId: string, request: PoseAnimationRequest) => {
@@ -659,9 +690,9 @@ export function PosesTab() {
       setIsNew(false)
       setApproveOf('')
       setEntryTab('entry')
-      setDraft({ ...p, synonyms: [...p.synonyms] })
+      openDraft({ ...p, synonyms: [...p.synonyms] })
     },
-    [data.entries],
+    [data.entries, openDraft],
   )
 
   const addNew = useCallback(() => {
@@ -669,8 +700,8 @@ export function PosesTab() {
     setSelected('')
     setIsNew(true)
     setApproveOf('')
-    setDraft({ ...EMPTY })
-  }, [])
+    openDraft({ ...EMPTY })
+  }, [openDraft])
 
   /** "Create pose entry" out of the catalog browser: back to the entry editor
    *  with a fresh pose draft whose animation is the kind just imported. The
@@ -685,19 +716,19 @@ export function PosesTab() {
       setSelected('')
       setIsNew(true)
       setApproveOf('')
-      setDraft({ ...EMPTY, key: animation, animation, store })
+      openDraft({ ...EMPTY, key: animation, animation, store })
       await load()
     },
-    [load],
+    [load, openDraft],
   )
 
   const startApprove = useCallback((c: Candidate) => {
     setSelected('')
     setIsNew(true)
     setApproveOf(c.raw_text)
-    setDraft({ ...EMPTY, key: c.raw_text })
+    openDraft({ ...EMPTY, key: c.raw_text })
     setEntryTab('entry')
-  }, [])
+  }, [openDraft])
 
   const save = useCallback(async () => {
     if (!draft) return
@@ -763,6 +794,7 @@ export function PosesTab() {
       setIsNew(false)
       setApproveOf('')
       setSelected(key)
+      setDraftBase(JSON.stringify(draft))
       await load()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
@@ -803,8 +835,9 @@ export function PosesTab() {
         if (r.references?.failed?.length) {
           toast(t('Not updated for') + ': ' + r.references.failed.join(', '), 'error')
         }
-        setDraft((d) => (d ? { ...d, key: r.key,
-          synonyms: d.synonyms.filter((s) => s !== r.key) } : d))
+        const renamed = (d: Entry) => ({ ...d, key: r.key, synonyms: d.synonyms.filter((s) => s !== r.key) })
+        setDraft((d) => (d ? renamed(d) : d))
+        patchDraftBase(renamed)
         setSelected(r.key)
         await loadClips()
         await load()
@@ -812,7 +845,7 @@ export function PosesTab() {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
       }
     },
-    [axis, expressionSet, isPose, draft, isNew, load, loadClips, t, toast],
+    [axis, expressionSet, isPose, draft, isNew, load, loadClips, patchDraftBase, t, toast],
   )
 
   const asSynonym = useCallback(
@@ -957,6 +990,17 @@ export function PosesTab() {
     ? (clipList.transitions || []).filter((rule) => rule.from === draft.key || rule.to === draft.key).length
     : 0
 
+  /** "Create pose entry" from the catalog browser or the inbox replaces the open draft — asks first. */
+  const createPoseFromClip = (animation: string, store?: Store) => guardEntry(() => { void startFromClip(animation, store) })
+
+  const entryGuardDialog = (
+    <ConfirmDialog open={leaveEntry !== null} title={t('Discard unsaved changes?')}
+      message={t('The open entry has changes that were never saved. Continuing discards them.')}
+      confirmLabel={t('Discard')} danger
+      onConfirm={() => { const fn = leaveEntry; setLeaveEntry(null); fn?.() }}
+      onClose={() => setLeaveEntry(null)} />
+  )
+
   const viewSwitch = (
     <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
       {(['entries', 'library', 'catalog', 'inbox', 'transitions'] as View[]).map((v) => (
@@ -973,8 +1017,11 @@ export function PosesTab() {
               if (v !== 'entries') setAxis('pose')
               setView(v)
             }
-            if (v !== view) guardLeaveLibrary(go)
-            else go()
+            if (v === view) go()
+            // Pinning the axis drops an expression draft (the axis-change reset); the Library and the
+            // other views only ever run on the pose axis, so that question never meets the Library's.
+            else if (v !== 'entries' && axis !== 'pose') guardEntry(go)
+            else guardLeaveLibrary(go)
           }}
         >
           {t(VIEW_LABELS[v])}
@@ -996,13 +1043,14 @@ export function PosesTab() {
         ) : null}
         <ClipLibrary listing={clipList} poses={data.entries} onReload={reloadLibrary}
           rootDropOf={rootDropOf} focus={libraryFocus}
-          onOpenPose={(key) => guardLeaveLibrary(() => { setView('entries'); select(key) })}
+          onOpenPose={(key) => guardLeaveLibrary(() => guardEntry(() => { setView('entries'); select(key) }))}
           onUnsaved={onLibraryUnsaved} />
         <ConfirmDialog open={leaveLibrary !== null} title={t('Discard unsaved changes?')}
           message={t('The Clip Library holds edits of the open clip that were never saved. Leaving it discards them.')}
           confirmLabel={t('Discard')} danger
           onConfirm={() => { const fn = leaveLibrary; setLeaveLibrary(null); fn?.() }}
           onClose={() => setLeaveLibrary(null)} />
+        {entryGuardDialog}
       </div>
     )
   }
@@ -1073,8 +1121,9 @@ export function PosesTab() {
       <div className="ga-poses-sub" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
         {viewSwitch}
         {view === 'catalog'
-          ? <ClipCatalog onCreatePose={startFromClip} rootDropOf={rootDropOf} />
-          : <ClipInbox onCreatePose={startFromClip} rootDropOf={rootDropOf} />}
+          ? <ClipCatalog onCreatePose={createPoseFromClip} rootDropOf={rootDropOf} />
+          : <ClipInbox onCreatePose={createPoseFromClip} rootDropOf={rootDropOf} />}
+        {entryGuardDialog}
       </div>
     )
   }
@@ -1097,7 +1146,7 @@ export function PosesTab() {
         <ListPane id="poses" label={t('Catalog')}>
             <ListHeader
             title={t('Catalog')}
-            onNew={addNew}
+            onNew={() => guardEntry(addNew)}
           />
 
           <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}
@@ -1107,7 +1156,7 @@ export function PosesTab() {
                 key={a}
                 type="button"
                 className={`ga-btn ga-btn-sm${axis === a ? ' ga-btn-primary' : ''}`}
-                onClick={() => setAxis(a)}
+                onClick={() => { if (a !== axis) guardEntry(() => setAxis(a)) }}
               >
                 {a === 'pose' ? t('Poses') : t('Expressions')}
               </button>
@@ -1357,7 +1406,7 @@ export function PosesTab() {
                 <button
                   type="button"
                   className={`ga-list-row${selected === p.key ? ' is-active' : ''}`}
-                  onClick={() => select(p.key)}
+                  onClick={() => guardEntry(() => select(p.key))}
                 >
                   {isPose ? (() => {
                     const l = poseLamp(p.animation, clipList.clips, baseSets)
@@ -1530,7 +1579,7 @@ export function PosesTab() {
                         <button
                           type="button"
                           className="ga-btn ga-btn-sm"
-                          onClick={() => startApprove(c)}
+                          onClick={() => guardEntry(() => startApprove(c))}
                         >
                           {t('Approve')}
                         </button>
@@ -1974,6 +2023,7 @@ export function PosesTab() {
           .replace('{n}', String(toAnimate.length)).replace('{v}', String(animMeta.variants))
           .replace('{jobs}', String(toAnimate.length * animMeta.variants)).replace('{keys}', toAnimate.join(', '))}
         onConfirm={() => { void runAll() }} onClose={() => setRunAllOpen(false)} />
+      {entryGuardDialog}
       <ConfirmDialog open={pendingSet !== null} title={t('Discard unsaved changes?')}
         message={t('Switching expression sets discards the open entry draft.')}
         confirmLabel={t('Discard')}
@@ -2009,8 +2059,9 @@ export function PosesTab() {
             setJobsRefresh((value) => value + 1)
             void reloadLibrary()
             if (kind && axis === 'pose') {
-              setDraft((current) => current && current.key === decided.key
-                ? { ...current, animation: kind } : current)
+              const chosen = (entry: Entry) => (entry.key === decided.key ? { ...entry, animation: kind } : entry)
+              setDraft((current) => (current ? chosen(current) : current))
+              patchDraftBase(chosen)
             }
           }} />
       ) : null}
