@@ -1,6 +1,6 @@
 ---
 name: PropAction
-brief: Use furniture: pass the object after "=" in its menu line exactly ({"furniture":…,"action":…, "partner" only on a line with someone}). To get up or leave the piece in use, call {"stop":true}.
+brief: Use furniture — pass the object after "=" in its menu line exactly ({"furniture":…,"action":…, "partner" only on a line with someone}). To get up or leave the piece in use, call {"stop":true}.
 action_hint: Use offered furniture; to get up from or leave the piece in use, call {"stop":true}.
 ---
 Use a furniture action offered in this room: {"furniture": "<furniture name>", "action": "<action name>", "partner": "<name, only for an action with partners>"} — names exactly as listed. The server picks the nearest free piece of that name. To stop your own action or withdraw your question: {"stop": true}.
