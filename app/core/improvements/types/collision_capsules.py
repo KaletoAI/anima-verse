@@ -49,13 +49,20 @@ class CollisionCapsules(ImprovementType):
     def apply(self, candidate: Candidate, params: Dict[str, Any], task_id: str) -> None:
         from app.core import collision, model3d
         name, signature = candidate.key.removeprefix('character:').rsplit(':', 1)
+        # Held for the whole fit, like the other model-writing types: no Build or rebuild of the character starts
+        # while the capsules are fitted from its model file (``collision.ensure`` takes no guard itself).
         with model3d._lock:
             if name in model3d._generating:
                 raise CandidateBusy(f'{name}: model generation already running')
-        if self.is_done(candidate, params):
-            return
-        record = collision.ensure(name, signature, apply_channels=True)
-        if record is None:
-            raise CandidateBusy(f'{name}: model replaced while fitting')
-        if record.get('error'):
-            raise RuntimeError(record['error'])
+            model3d._generating.add(name, 'Collision capsules (Improvements)')
+        try:
+            if self.is_done(candidate, params):
+                return
+            record = collision.ensure(name, signature, apply_channels=True)
+            if record is None:
+                raise CandidateBusy(f'{name}: model replaced while fitting')
+            if record.get('error'):
+                raise RuntimeError(record['error'])
+        finally:
+            with model3d._lock:
+                model3d._generating.discard(name)

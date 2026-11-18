@@ -69,6 +69,11 @@ Expected, derived by hand:
     changed — recompute to apply"; the Improvements ``collision_capsules`` is_done is False. ``POST …/collision``
     (force + apply_channels) then carries the [4] channel (a_pos (0, 0.91, 0.045)) and the step is "done";
     channels_due False; is_done True; the panel info lists pkgx:chan with placement "declared", reason "".
+    Review 09b#4: the Improvements apply HOLDS the generation guard while it fits — with ``is_done`` forced False and
+    ``collision.ensure`` stubbed, the stub sees generation_holder("demo2") = "Collision capsules (Improvements)";
+    afterwards generation_running is False, also when the stub raises; while another run holds the guard the apply
+    raises CandidateBusy and never reaches ``ensure`` (stub calls stay 2). The old apply only CHECKED the guard: the
+    stub saw "" and generation_running False.
 [7] validate_overrides refuses offset 51 mm, radius_scale 0.4, cone_deg 0, a non-dict override, a non-dict map, a
     missing key; keeps an id no declaration names; None → {}. The route answers 400 for {channels: {pkgx:chan:
     {…cone_deg 0}}}, {} and {channels: {}, x: 1}, and stores nothing; an unknown character → 404.
@@ -326,6 +331,39 @@ def main() -> int:
     check("applied: step done", collision_row(meta, state)["status"], "done")
     check("applied: nothing due", collision.channels_due("demo2"), False)
     check("applied: Improvements done", improvement.is_done(candidate, {}), True)
+    from app.core.improvements.base import CandidateBusy
+    seen, real_ensure = [], collision.ensure
+
+    def stub_ensure(name, signature, **_kw):
+        seen.append((model3d.generation_holder(name), model3d.generation_running(name)))
+        if len(seen) == 2:
+            raise RuntimeError("stub failure")
+        return {"capsules": []}
+    improvement.is_done = lambda _c, _p: False
+    collision.ensure = stub_ensure
+    try:
+        improvement.apply(candidate, {}, "task-x")
+        try:
+            improvement.apply(candidate, {}, "task-y")
+        except RuntimeError:
+            pass
+        after = model3d.generation_running("demo2")
+        with model3d._lock:
+            model3d._generating.add("demo2", "Build")
+        try:
+            improvement.apply(candidate, {}, "task-z")
+            busy = "no CandidateBusy"
+        except CandidateBusy:
+            busy = "CandidateBusy"
+        finally:
+            with model3d._lock:
+                model3d._generating.discard("demo2")
+    finally:
+        collision.ensure = real_ensure
+        del improvement.is_done
+    check("apply holds the guard while fitting, releases it (also on error), refuses a held one",
+          (seen, after, busy),
+          ([("Collision capsules (Improvements)", True)] * 2, False, "CandidateBusy"))
     check("panel info", [(e["id"], e["placement"], e["reason"]) for e in
                          collision_channels.declarations_info("demo2", base2, meta)], [("pkgx:chan", "declared", "")])
 
