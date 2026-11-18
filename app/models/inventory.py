@@ -832,6 +832,25 @@ def item_write_lock():
     return keyed_lock("item_write", "items")
 
 
+def outfit_piece_lock(item_id: str):
+    """The lock of ONE item's ``outfit_piece`` record (review 05#12): every
+    read-modify-write of it — ``get_item`` → copy the piece → change one key →
+    ``update_item`` — holds it around the read AND the write, keyed by the ITEM
+    id. The piece is shared by every wearer, so a lock per character
+    (``garment_item``) does not serialize two wearers' saves; and
+    ``update_item`` replaces every key the update names, so an unlocked stale
+    snapshot puts an earlier key's old value back. Re-entrant (RLock).
+
+    Lock order: ``garment_item`` (character) → ``outfit_piece`` (item) →
+    ``item_write``. Never taken while ``character_profile`` or the places lock
+    is held (``update_item``'s follow-ups may request a wearer's Build). Never
+    held across an LLM / HTTP / image / Blender call — a long job re-reads the
+    item under it at the end and writes only the key it owns.
+    ``scripts/smoke_outfit_piece_rmw_lock.py`` guards it."""
+    from app.core.keyed_lock import keyed_lock
+    return keyed_lock("outfit_piece", str(item_id))
+
+
 def _clean_back_text(item: Dict[str, Any]) -> None:
     """``prompt_fragment_back`` (``piece_back_text.FIELD``, Task 11e): an outfit
     piece's optional back description — whitespace collapsed, no trailing full

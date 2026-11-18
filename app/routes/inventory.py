@@ -10,7 +10,7 @@ from app.core import users
 from app.core.log import get_logger
 from app.core.paths import get_storage_dir
 from app.models.inventory import (
-    list_items, get_item, add_item, update_item, delete_item,
+    list_items, get_item, add_item, update_item, delete_item, outfit_piece_lock,
     set_item_image_meta, replace_item_image,
     get_room_items, add_item_to_room, remove_item_from_room,
     get_character_inventory, add_to_inventory, remove_from_inventory,
@@ -256,14 +256,16 @@ def _update_item_route_sync(item_id: str, body: Any) -> Dict[str, Any]:
 
     # Keep the old prompt_fragment: invalidate variants only when this value
     # changes. Their cache depends on the prompt, not the name or image.
-    prev = get_item(item_id) or {}
-    prev_fragment = (prev.get("prompt_fragment") or "").strip()
-
     updates = {k: v for k, v in body.items() if k != "user_id"}
-    try:
-        updated = update_item(item_id, updates)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    # Under the piece's item lock (review 05#12): no garment setting's read-modify-write runs between
+    # this read and the write.
+    with outfit_piece_lock(item_id):
+        prev = get_item(item_id) or {}
+        prev_fragment = (prev.get("prompt_fragment") or "").strip()
+        try:
+            updated = update_item(item_id, updates)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
     if not updated:
         raise HTTPException(status_code=404, detail="Item not found")
 

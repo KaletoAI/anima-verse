@@ -335,14 +335,15 @@ def ghost_text_info(item: Dict[str, Any]) -> Dict[str, Any]:
 
 def set_ghost_text(character_name: str, item_id: str, choice: str) -> Dict[str, Any]:
     """Store the piece's "Piece-only text" (A183; ``auto`` drops the key) in ONE read-modify-write under
-    ``keyed_lock("garment_item", character_name)``. Runs nothing and ages nothing: the text is no fingerprint
+    ``keyed_lock("garment_item", character_name)`` and
+    ``inventory.outfit_piece_lock(item_id)`` (the piece is shared by every wearer, review 05#12). Runs nothing and ages nothing: the text is no fingerprint
     input, the next ghost render of the piece says it. ``ghost_text_info`` now. ValueError for a bad choice or an
     item that is no outfit piece."""
     from app.core.keyed_lock import keyed_lock
     from app.models import inventory
     if choice != GHOST_TEXT_AUTO and choice not in GHOST_TEXTS:
         raise ValueError(f"choice must be one of {', '.join((GHOST_TEXT_AUTO, *GHOST_TEXTS))}")
-    with keyed_lock("garment_item", character_name):
+    with keyed_lock("garment_item", character_name), inventory.outfit_piece_lock(item_id):
         item = inventory.get_item(item_id)
         if not isinstance(item, dict) or item.get("category") != "outfit_piece":
             raise ValueError(f"{str(item_id)[:80]!r} is no outfit piece")

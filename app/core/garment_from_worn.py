@@ -341,7 +341,8 @@ def is_loose(item: Optional[Dict[str, Any]]) -> bool:
 
 def set_choice(character_name: str, item_id: str, view: str, choice: str) -> Dict[str, str]:
     """Store the choice of ``view`` (``auto`` drops the key) on the item in ONE read-modify-write under
-    ``keyed_lock("garment_item", character_name)``; runs nothing. The stored setting. ValueError for a bad
+    ``keyed_lock("garment_item", character_name)`` and
+    ``inventory.outfit_piece_lock(item_id)`` (the piece is shared by every wearer, review 05#12); runs nothing. The stored setting. ValueError for a bad
     view or choice or an item that is no outfit piece."""
     from app.core.garment_store import IMAGE_VIEWS
     from app.core.keyed_lock import keyed_lock
@@ -351,7 +352,7 @@ def set_choice(character_name: str, item_id: str, view: str, choice: str) -> Dic
         raise ValueError(f"view must be one of {', '.join(IMAGE_VIEWS)}")
     if choice not in CHOICES:
         raise ValueError(f"choice must be one of {', '.join(CHOICES)}")
-    with keyed_lock("garment_item", character_name):
+    with keyed_lock("garment_item", character_name), inventory.outfit_piece_lock(item_id):
         item = inventory.get_item(item_id)
         if not isinstance(item, dict) or item.get("category") != "outfit_piece":
             raise ValueError(f"{str(item_id)[:80]!r} is no outfit piece")

@@ -408,19 +408,21 @@ def set_params(item_id: str, params: Dict[str, Any], *, source: str = "user") ->
     record. ValueError for an item that is no outfit piece or for parameters with errors (nothing is
     stored then). Storing spends nothing: the next Build re-drapes (a new ``tsig``)."""
     from app.core.timeutils import utc_now_iso
-    from app.models.inventory import get_item, update_item
-    item = get_item(item_id)
-    if not item or item.get("category") != "outfit_piece":
-        raise ValueError(f"{item_id} is no outfit piece")
-    clean, errors = validate_params(params)
-    if errors:
-        raise ValueError("; ".join(errors))
-    piece = dict(item.get("outfit_piece") or {})
-    record = {"params": clean, "source": source if source in ("llm", "user") else "user",
-              "updated_at": utc_now_iso()}
-    piece["template"] = record
-    if update_item(item_id, {"outfit_piece": piece}) is None:
-        raise ValueError(f"{item_id} could not be saved")
+    from app.models.inventory import get_item, outfit_piece_lock, update_item
+    # One read-modify-write of the shared piece under its item lock (review 05#12).
+    with outfit_piece_lock(item_id):
+        item = get_item(item_id)
+        if not item or item.get("category") != "outfit_piece":
+            raise ValueError(f"{item_id} is no outfit piece")
+        clean, errors = validate_params(params)
+        if errors:
+            raise ValueError("; ".join(errors))
+        piece = dict(item.get("outfit_piece") or {})
+        record = {"params": clean, "source": source if source in ("llm", "user") else "user",
+                  "updated_at": utc_now_iso()}
+        piece["template"] = record
+        if update_item(item_id, {"outfit_piece": piece}) is None:
+            raise ValueError(f"{item_id} could not be saved")
     from app.core import figure
     figure.invalidate()
     return record
