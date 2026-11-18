@@ -2,6 +2,10 @@
 
 Usage: ./.venv/bin/python scripts/smoke_stat_skill_costs.py
 Hand-derived: 12 fuel minus 5 = 7; 4 < 5 refuses. Error leaves 7.
+The player photo: prepare is free (12 stays); since 09ff16d3a the submission
+answers 202 ``accepted`` and the background render charges the route's skill
+only after ``take_scene_photo`` succeeded (``scene_photo_jobs._render``) —
+here the render runs inline behind a stubbed preflight: 12 - 5 = 7.
 Missing stats and unconfigured comment verbs cost zero. Boosts affect
 eligibility; deductions affect the stored stat and record skill provenance.
 """
@@ -66,10 +70,21 @@ def main():
             with patch('app.models.character.get_character_skill_config', return_value={'enabled': True}), patch(
                     'app.models.account.get_active_character', return_value='Tester'), patch(
                     'app.core.scene_photo.prepare_scene_photo', return_value={'ok': True}), patch(
-                    'app.core.scene_photo.take_scene_photo', return_value={'ok': True}):
+                    'app.core.scene_photo.take_scene_photo',
+                    return_value={'ok': True, 'filename': 'p.png', 'url': '/p.png'}):
                 assert asyncio.run(play.play_scene_photo_prepare(Request(), user={}))['ok']
                 assert character.get_character_profile('Tester')['status_effects']['fuel'] == 12
-                assert asyncio.run(play.play_scene_photo(Request(), user={}))['ok']
+                from app.core import scene_photo_jobs
+
+                def accept_inline(avatar, options, user_id, skill_id):
+                    # The preflight (world, backend, discovery) is not the cost rule; the
+                    # render that pays is the real one, run here instead of on its thread.
+                    scene_photo_jobs._render(avatar, options, user_id, skill_id, {'photo_id': 'p1'})
+                    return {'status': 'accepted', 'photo_id': 'p1', 'discovered_by': []}
+                with patch.object(scene_photo_jobs, 'accept_photo', accept_inline):
+                    answer = asyncio.run(play.play_scene_photo(Request(), user={'id': 'u1'}))
+                assert answer.status_code == 202, answer.status_code
+                assert json.loads(answer.body)['status'] == 'accepted', answer.body
                 assert character.get_character_profile('Tester')['status_effects']['fuel'] == 7
             stat_rules.save_setting('skill_costs', {'fake_photo': {'fuel': 5}, 'fake_move': {'fuel': 5}})
             character.adjust_status_effects('Tester', {'fuel': 5})
