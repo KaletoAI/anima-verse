@@ -31,7 +31,7 @@ class ProviderQuota:
     """A send window plus reservations for routed calls that have not sent yet.
 
     A reservation expires one window after booking unless its call is
-    waiting in a provider queue (``hold``)."""
+    waiting in a provider queue or for a streaming cache lane (``hold``)."""
 
     def __init__(self, capacity=0, window=60, *, clock=None):
         self.capacity = max(0, int(capacity))
@@ -111,7 +111,9 @@ class ProviderQuota:
         slot there handed it to the next fresh ``resolve_llm`` and left the
         older call to find the window full at dequeue, again and again.
         ``ProviderQueue.submit`` holds the reservation for the time the call
-        is in the queue and calls ``unhold`` when it leaves. Returns False
+        is in the queue and calls ``unhold`` when it leaves;
+        ``ProviderManager.register_chat_active`` does the same for a
+        streaming call while it waits for its cache lane. Returns False
         when the token is no longer booked (expired before the hand-off)."""
         with self._lock:
             self._prune(self._clock())
@@ -120,11 +122,20 @@ class ProviderQuota:
             self._held.add(token)
             return True
 
-    def unhold(self, token):
-        """The call left the queue: an unsent reservation expires by age again."""
+    def unhold(self, token, *, renew=False):
+        """The call left the queue: an unsent reservation expires by age again.
+
+        ``renew`` re-books it at the moment the wait ended, for a caller that
+        sends only AFTER this call (a streaming call that was just granted
+        its lane): measured from the old booking, a wait longer than the
+        window would drop the slot right here, before its send. Renewed, it
+        still expires one window from now if that send never comes."""
         with self._lock:
+            now = self._clock()
             self._held.discard(token)
-            self._prune(self._clock())
+            if renew and token in self._reservations:
+                self._reservations[token] = now
+            self._prune(now)
 
     def wait_for_send(self, reservation=None):
         """Queued work may use its own reservation, but respects a remote 429."""

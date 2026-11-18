@@ -603,44 +603,67 @@ class ProviderManager:
         movable = (overflow and is_background(task_type)
                    and bool(getattr(llm_instance, "tasks", ()))
                    and not getattr(llm_instance, "pinned", False))
-        while True:
-            if cancel is not None and cancel.is_set():
-                raise LaneWaitCancelled()
-            pq = self.get_queue_for_instance(llm_instance) or self.get_first_queue()
-            if not pq:
-                raise Exception("No channel available for chat registration")
-            model = getattr(llm_instance, "model", "") if llm_instance else ""
-            pool = pool_key_for(pq.provider.name, model)
-            threshold = configured_lane_rules().overflow_after
-            if arrived is None:
-                arrived = manager.now()
-            # The budget is measured from arrival, which must survive retries
-            # for ageing. Extend it by one threshold to avoid immediate expiry.
-            max_wait = (manager.now() - arrived + threshold
-                        if movable and threshold > 0 else None)
-            try:
-                task_id = pq.register_chat_active(
-                    agent_name, model=model, task_type=task_type, label=label,
-                    cancel=cancel, max_wait=max_wait, arrived=arrived,
-                    overflow_from=ov.origin)
-                return (task_id, llm_instance) if overflow else task_id
-            except LaneWaitExpired as exc:
-                arrived = exc.arrived
+        # The quota slot routing booked for this call stays booked while the
+        # call waits for its lane, however long that takes — the streaming
+        # counterpart of ProviderQueue.submit's hold (review 11#4): a booking
+        # that expired in the wait went to the next fresh resolve, and the
+        # stream then found the window full at its send. A granted lane
+        # re-books the slot at the grant, because the send follows only after
+        # this returns; any other exit lets it expire by its original age.
+        held = []
+        granted = False
+
+        def hold(inst):
+            quota = getattr(getattr(inst, "_provider", None), "quota", None)
+            token = getattr(inst, "_quota_reservation", None)
+            if quota is not None and quota.hold(token):
+                held.append((quota, token))
+
+        hold(llm_instance)
+        try:
+            while True:
                 if cancel is not None and cancel.is_set():
                     raise LaneWaitCancelled()
-                alt = overflow_target(llm_instance.tasks[0], agent_name,
-                                      exclude_pools=ov.left | {pool})
-                if alt is None:
-                    continue
-                if getattr(llm_instance, "_quota_reservation", None) is not None:
-                    llm_instance._provider.quota.release(llm_instance._quota_reservation)
-                target_pool = pool_key_for(alt.provider_name, alt.model)
-                ov = ov.leaving(pool)
-                manager.note_overflow(pool, target_pool)
-                logger.info("[lanes] overflow %s %s: %s → %s after %.1fs (waited)",
-                            task_type, agent_name, pool, target_pool, manager.now() - arrived)
-                llm_instance = alt
-                arrived = None
+                pq = self.get_queue_for_instance(llm_instance) or self.get_first_queue()
+                if not pq:
+                    raise Exception("No channel available for chat registration")
+                model = getattr(llm_instance, "model", "") if llm_instance else ""
+                pool = pool_key_for(pq.provider.name, model)
+                threshold = configured_lane_rules().overflow_after
+                if arrived is None:
+                    arrived = manager.now()
+                # The budget is measured from arrival, which must survive retries
+                # for ageing. Extend it by one threshold to avoid immediate expiry.
+                max_wait = (manager.now() - arrived + threshold
+                            if movable and threshold > 0 else None)
+                try:
+                    task_id = pq.register_chat_active(
+                        agent_name, model=model, task_type=task_type, label=label,
+                        cancel=cancel, max_wait=max_wait, arrived=arrived,
+                        overflow_from=ov.origin)
+                    granted = True
+                    return (task_id, llm_instance) if overflow else task_id
+                except LaneWaitExpired as exc:
+                    arrived = exc.arrived
+                    if cancel is not None and cancel.is_set():
+                        raise LaneWaitCancelled()
+                    alt = overflow_target(llm_instance.tasks[0], agent_name,
+                                          exclude_pools=ov.left | {pool})
+                    if alt is None:
+                        continue
+                    if getattr(llm_instance, "_quota_reservation", None) is not None:
+                        llm_instance._provider.quota.release(llm_instance._quota_reservation)
+                    target_pool = pool_key_for(alt.provider_name, alt.model)
+                    ov = ov.leaving(pool)
+                    manager.note_overflow(pool, target_pool)
+                    logger.info("[lanes] overflow %s %s: %s → %s after %.1fs (waited)",
+                                task_type, agent_name, pool, target_pool, manager.now() - arrived)
+                    llm_instance = alt
+                    hold(alt)
+                    arrived = None
+        finally:
+            for quota, token in held:
+                quota.unhold(token, renew=granted)
 
     def chat_overflow_from(self, task_id: str) -> str:
         """The pool a streaming registration overflowed FROM ("" = it did not

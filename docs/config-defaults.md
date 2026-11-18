@@ -39,8 +39,9 @@ For Infermatic's whole-key limit, use **9**, **60**, and **1** respectively.
 The sliding window counts actual LLM HTTP requests, including streaming,
 continuations and retries, across every model of that provider. Routing reserves
 the first request slot; a full provider is skipped for the next task-chain entry.
-A reservation stays booked while its call waits in the provider queue, however long
-the lanes keep it there; an unsent reservation outside the queue expires after one window.
+A reservation stays booked while its call waits in the provider queue, or a streaming
+call waits for its cache lane, however long the lanes keep it there (a granted streaming
+lane re-books it at the grant); an unsent reservation outside those waits expires after one window.
 External embedding requests book no slot, and their routing ignores the quota, so the
 embedding model never changes with load: a full window or a 429 waits up to
 `embedding.max_wait_seconds` (default **5**), then that call returns no vector.
