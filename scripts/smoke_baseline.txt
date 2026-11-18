@@ -31,5 +31,4 @@ smoke_prop_action_review	STALE: unittest review cases: admission expects 'approa
 smoke_reference_front	STALE: edit-block wording changed (bald + "natural matte look"), and the routed backend in the fixture takes no reference image
 smoke_refit_selected_body	STALE: [4e] the fit settings dict gained keys (shell_*, sleeves_*, shaft ...) the expected piece settings lack
 smoke_sleeve_fit	STALE: [6] normalise of the sleeve settings changed; not re-derived
-smoke_texture_body_reuse	STALE: A175 turn step: 3 image jobs instead of 2
 smoke_tip_off_mesh_only	REAL: [4] normals after tip with offset: 49 inverted / 85 off >60 deg at HEAD; passes alone at 40013ae71 (HEAD~1) — regression by de54012a3 (triangulate every quad after the tip subdivision, TIP_SMOOTHING_VERSION 3)

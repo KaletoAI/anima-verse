@@ -51,9 +51,11 @@ Expected, derived by hand from the plan's Global Constraints:
     separators "," ":", UTF-8)[:12]. The bare body (C, D): texts {"front": "",
     "back": ""} -> written out below, hashed by hand. Another base signature
     or variant -> another tsig.
-[2] Review Focus 1. A: generate_model_ref_images -> 2 image jobs (front edit,
-    back draft — the back's composite onto the base back is CPU work since
-    Task 11g); generate_for_current_outfit(Demo) -> 1 worker run,
+[2] Review Focus 1. A: generate_model_ref_images -> 3 image jobs (front edit;
+    since A175 (070594e79) the back is the dressed front TURNED with the angle
+    LoRA, then the back draft edits the base back with that turn as its second
+    picture — the turn's cut-out and the composite onto the base back are CPU
+    work); generate_for_current_outfit(Demo) -> 1 worker run,
     model3d/texture/<tA>.glb exists, the model names texture_signature tA,
     texture_reused False. B (dress own mesh, fit ok): 0 image jobs; its views
     tpose[_back]_<sigB> are byte-equal to A's, name tA, carry B's manifest
@@ -65,8 +67,8 @@ Expected, derived by hand from the plan's Global Constraints:
     the bare tsig); build -> 0 worker runs, model dressed False, texture
     signature = the hand-hashed bare tsig. D (nothing worn) -> the SAME tsig
     and body file, 0 worker runs.
-[4] Review Focus 2. dress flag OFF, B worn -> another outfit signature; 2 image
-    jobs, the front prompt names "a long red dress"; tsig tBp != tA; 1 worker
+[4] Review Focus 2. dress flag OFF, B worn -> another outfit signature; 3 image
+    jobs (front, turn, back draft), the front prompt names "a long red dress"; tsig tBp != tA; 1 worker
     run. Flag on again. E (coat own mesh): 0 image jobs, 0 worker runs,
     texture tA — the old body stays reusable.
 [5] Review Focus 3. COVERED = {coat}: E2's texture_variant is "covered", its
@@ -87,7 +89,7 @@ Expected, derived by hand from the plan's Global Constraints:
     front's recorded prompt is exactly the front edit of A's text; F's front
     and back are byte-equal to A's; the store holds tA's front + back again
     with dress_text; build -> 0 worker runs (tA's body is current). G (skirt
-    painted): 2 image jobs (no false adoption).
+    painted): 3 image jobs (front, turn, back draft — no false adoption).
 [8] GC (a texture lives while a live outfit would paint it NOW —
     artefact_graph._current_textures). Models of A, B, E, F name tA; E2 tE2;
     C, D the bare tsig; Bp tBp; G tG. Current: tA, the bare tsig and tG. NOT
@@ -404,7 +406,7 @@ def main() -> int:
         print("[2] two outfits differing only in an own-mesh piece share one painted body")
         sig_a = wear(A)
         jobs, runs, result = render_and_build()
-        check("A: 2 image jobs, 1 worker run, ok", (jobs, runs, result.get("ok")), (2, 1, True))
+        check("A: 3 image jobs (A175 turn), 1 worker run, ok", (jobs, runs, result.get("ok")), (3, 1, True))
         body = mdir / "texture" / f"{t_a}.glb"
         check("A: body stored", body.is_file(), True)
         meta_a = model_meta(sig_a)
@@ -459,7 +461,7 @@ def main() -> int:
         r0 = len(RENDERS)
         jobs, runs, result = render_and_build()
         fronts = [r for r in RENDERS[r0:] if r["occasion"] == "outfit_front"]
-        check("Bp: 2 jobs, 1 run", (jobs, runs, result.get("ok")), (2, 1, True))
+        check("Bp: 3 jobs (A175 turn), 1 run", (jobs, runs, result.get("ok")), (3, 1, True))
         check("Bp: dress painted", bool(fronts) and FRAG["dress"] in fronts[0]["prompt"], True)
         t_bp = model_meta(sig_bp).get("texture_signature")
         check("Bp: new tsig", base_body.is_texture_signature(t_bp) and t_bp != t_a, True)
@@ -538,7 +540,7 @@ def main() -> int:
                                                  if (store / f"{k}_{t_a}.json").is_file()], [True, True])
         sig_g = wear({**A, "bottom": "skirt"})
         jobs, runs, result = render_and_build()
-        check("G: 2 jobs (no false adoption)", (jobs, result.get("ok")), (2, True))
+        check("G: 3 jobs (no false adoption)", (jobs, result.get("ok")), (3, True))
 
         # --- [8] GC ---------------------------------------------------------------------------
         print("[8] cache GC keeps referenced painted bodies")
