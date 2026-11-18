@@ -40,8 +40,9 @@ own facing; after the fit the same vertex index must lie nearer the Head.tip
 bone than Tail_Tip, and the head bones must own it (weight > .5). A run with
 ``facing`` inverted must end NotApplicable "reversed skeleton" (the check that
 would have caught the reviewed failure). Through ``runner.run`` (the job
-directory the server uses) the symmetric creature comes back ok False with
-data.not_applicable.
+directory the server uses): the fox reports its progress stages up to
+"exporting" into the progress file (review 04b#3), and the symmetric creature
+comes back ok False with data.not_applicable.
 Usage: ./.venv/bin/python scripts/smoke_quadruped_facing.py [--pure-only]
 """
 import ast
@@ -300,6 +301,26 @@ def check_blender(creature):
             print('PASS', label, json.dumps(entry) if isinstance(entry, dict) else entry)
         # The server's path: job dir, args.json, the script's own entry point.
         runner.pin_slots(str(root/'slots'), 1)
+        progress = root/'progress.json'
+        seen = {}
+        spawn = runner._spawn
+
+        def keep_progress(cmd, timeout, env):
+            # The runner deletes the progress file when the run ends; read it first.
+            proc = spawn(cmd, timeout, env)
+            seen['progress'] = progress.read_text() if progress.is_file() else None
+            return proc
+        runner._spawn = keep_progress
+        res = runner.run('quadruped_rig', inputs={'mesh': root/'fox-0.glb', 'texture': root/'texture.png',
+                         'ref': assets/'fox-animations.glb'},
+                         params={'clips': {}, 'tail_motion': 'calm', 'progress_file': str(progress)},
+                         out_dir=root/'runner-fox', timeout_s=300)
+        runner._spawn = spawn
+        assert res['ok'], res
+        assert seen.get('progress'), 'the script wrote no progress file'
+        stage = json.loads(seen['progress'])
+        assert stage['stage'] == 'exporting', stage
+        print('PASS runner: fox ok, progress file reached stage', stage['stage'])
         res = runner.run('quadruped_rig', inputs={'mesh': root/'symmetric.glb', 'texture': root/'texture.png',
                          'ref': assets/'fox-animations.glb'},
                          params={'clips': {}, 'tail_motion': 'calm'}, out_dir=root/'runner-sym', timeout_s=300)

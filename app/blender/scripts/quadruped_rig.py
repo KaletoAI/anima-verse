@@ -882,7 +882,10 @@ def run(job):
 
 
 if __name__ == '__main__':
+    # _common.main cannot write the NotApplicable result shape, so this script
+    # keeps its own entry point and makes the same progress setup main makes.
     job = _common.read_args()
+    _common._PROGRESS['file'] = job.get('progress') or None
     try:
         data, outputs = run(job)
         _common.write_result(job, True, data=data, outputs=outputs)
