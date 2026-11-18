@@ -2368,14 +2368,21 @@ def _edit_prompt(view: str, text: str, *, bald: bool = False, haired: bool = Fal
 
 
 # Outfit status, in memory like the base status: (character, stage) ->
-# signature of the run in progress (stage "images" or "model"), and the last
-# failure per (character, signature).
+# a signature whose run of that stage is in progress (stage "images",
+# "model" or "body") — listed while ANY run of the stage goes; the runs
+# themselves are counted per (character, stage, signature) in
+# ``_outfit_runs`` (review 08b#6: a shape's views and an outfit's views
+# overlap, and the one ending first must not unlist the other) — and the
+# last failure per (character, signature).
 _outfit_running: Dict[Tuple[str, str], str] = {}
+_outfit_runs: Dict[Tuple[str, str, str], int] = {}
 _outfit_failed: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
 
 def _outfit_start(character_name: str, signature: str, stage: str) -> None:
     with _status_lock:
+        key = (character_name, stage, signature)
+        _outfit_runs[key] = _outfit_runs.get(key, 0) + 1
         _outfit_running[(character_name, stage)] = signature
 
 
@@ -2387,17 +2394,29 @@ def outfit_running(character_name: str) -> bool:
 
 
 def _outfit_end(character_name: str, signature: str, stage: str, error: Optional[str], *,
-                interrupted: bool = False, refused: bool = False) -> None:
+                interrupted: bool = False, refused: bool = False, started: bool = True) -> None:
     """End a stage: a failure is stored for the signature; a success clears
     a failure of the same stage (a model success clears every failure).
     ``interrupted`` (load or the media switch stopped the stage): the stage
     ends without touching any failure record — neither stored nor cleared.
     ``refused`` (Ruling A61): the failure is one the same inputs repeat
-    (``outfit_refusal``)."""
+    (``outfit_refusal``). ``started`` False: only the outcome of a call that
+    never started the stage (it found nothing to do) — no run of it ends."""
     from app.core.timeutils import utc_now
     with _status_lock:
-        if _outfit_running.get((character_name, stage)) == signature:
-            _outfit_running.pop((character_name, stage), None)
+        if started:
+            run = (character_name, stage, signature)
+            left = _outfit_runs.pop(run, 0) - 1
+            if left > 0:
+                _outfit_runs[run] = left
+            elif _outfit_running.get((character_name, stage)) == signature:
+                # Review 08b#6: another signature of the stage still runs — it stays listed.
+                other = next((sig for (name, st, sig) in _outfit_runs if name == character_name and st == stage),
+                             None)
+                if other is None:
+                    _outfit_running.pop((character_name, stage), None)
+                else:
+                    _outfit_running[(character_name, stage)] = other
         if interrupted and error is None:
             return
         key = (character_name, signature)
@@ -4229,7 +4248,7 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
                                       items=list(items or []))
     todo = [v for v in wanted if force or dressed_image(character_name, v, signature, bsig, fig=fig) is None]
     if not todo:
-        _outfit_end(character_name, signature, "images", None)
+        _outfit_end(character_name, signature, "images", None, started=False)
         return {}
     # Own-mesh pieces: the figure delivered now decides — no chain runs first (ruling A14: a piece without its
     # mesh is in the body shape meanwhile, A11); the other views follow the stored front's record.
@@ -4244,7 +4263,8 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
     registrations = {v: find_ref_image(character_name, _kind(v), on) for v in BASE_VIEWS}
     if any(registrations[v] is None for v in todo):
         logger.warning("Dressed images %s (%s): views of %s missing", character_name, signature, on)
-        _outfit_end(character_name, signature, "images", SHAPE_VIEWS_MISSING if meshed else BASE_IMAGES_MISSING)
+        _outfit_end(character_name, signature, "images", SHAPE_VIEWS_MISSING if meshed else BASE_IMAGES_MISSING,
+                    started=False)
         return {}
     texts = figure_texts(character_name, fig, items, profile=profile)
     dressed = _paints(fig, texts)
@@ -6201,8 +6221,8 @@ def outfit_info(character_name: str, *, base_sig: Optional[str] = None,
         base_sig = base_signature(character_name)
     current = (base_sig, base_model_sha256(character_name, base_sig))
     with _status_lock:
-        running = any(sig == signature for (name, _stage), sig in _outfit_running.items()
-                      if name == character_name)
+        running = any(sig == signature for (name, _stage, sig) in _outfit_runs if name == character_name) or \
+            any(sig == signature for (name, _stage), sig in _outfit_running.items() if name == character_name)
         failure = dict(_outfit_failed.get((character_name, signature)) or {})
     path = model3d.find_model3d(character_name, signature, include_stale=True)
     meta = model3d._read_sidecar(path) if path else {}
