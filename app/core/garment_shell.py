@@ -127,7 +127,13 @@ ARM_CHAIN = ("Arm", "ForeArm", "Hand")
 #: A190: an arms-up base side view passes when its figure matches the posed body's silhouette at least this well.
 ARMS_UP_IOU_MIN = 0.8
 #: Bumped when the shell's construction changes: a shell made by another version reads stale.
-SHELL_VERSION = 3
+#: 4 (A199, review 06#4): the body's z-buffer samples are spaced by the views' mask pixel (``ZBUF_SPACING_PX``)
+#: instead of 1/2500 of the body height — ~13 samples per mask pixel became ~4, a third of the memory.
+SHELL_VERSION = 4
+#: A199: the spacing of the body's z-buffer samples (``samples``' ``px``: about 4 per spacing²) in mask pixels of
+#: the finest view. 4 random samples per pixel leave a pixel empty with p ≈ e⁻⁴ on a face-on surface; the 3×3
+#: maximum filter of the z-buffer closes such a pixel.
+ZBUF_SPACING_PX = 1.0
 #: A191: bumped when only the side-view merge changes — a shell made WITH side views by another version reads stale
 #: (1: the arm no longer occludes the flank for a side view); a shell without side views is not touched by it.
 SIDES_VERSION = 1
@@ -833,7 +839,7 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     arm_cols = [i for i, n in enumerate(br.joint_names) if any(t in n for t in arm_tokens)]
     armw = Wd[corr_u2r][:, arm_cols].sum(1) if arm_cols else np.zeros(len(Pu))
     zbuf = {}
-    Xs, _n, tri_s, bary_s = samples(Pu, bu.faces, float(np.ptp(Pu[:, 1])) / 2500)
+    Xs, _n, tri_s, bary_s = samples(Pu, bu.faces, ZBUF_SPACING_PX * min(frames[w][0] for w in keys))
     Xs_posed = _posed_samples(bary_s, Pp, bu.faces, tri_s) if posed_keys else Xs
     del bary_s
     for which, mir, toward, axis in VIEWS:
