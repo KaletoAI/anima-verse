@@ -93,7 +93,7 @@ def factor(name: str, qid: str, *, profile: dict | None = None,
                 context = (get_character_current_location(name, profile=profile) or '',
                            get_character_current_room(name, profile=profile) or '')
             with missing_stats_fail():
-                passed = evaluate_condition(condition, name, *context)[0]
+                passed = evaluate_condition(condition, name, *context, profile=profile)[0]
             if not passed:
                 continue
         result *= clamp_factor(modifier.get('factor', 1))

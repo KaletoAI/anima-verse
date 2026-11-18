@@ -49,6 +49,11 @@ Hand-derived expectations
     get_character_config (1), _avatar_loc (1), current_location_id (1).
     Fogged total = 5 + 4 = 9. The avatar is npc_lead, one of the five.
     Counts are upper bounds; removing another reader may lower them.
+    The avatar row's ``travel_speed_factor`` (cb965fa4d) reads the party:
+    npc_still's profile once in ``travel_pace_factor``; the condition of the
+    shipped travel_speed rule reads the profile ``modifiers.factor`` was
+    handed (``evaluate_condition(profile=)``), not a fresh load per member —
+    with those two reloads the fogged build counted 10 > 9 (now 8).
 
 [2] The payload is unchanged. Every field the loop now reads out of ``_prof``
     is recomputed through the plain readers WITHOUT ``profile=`` (the old
@@ -65,11 +70,42 @@ Hand-derived expectations
     without git history is not a defect of this fix.
 
     T2 comparison additions are hand-derived: the clock factor is pinned to
-    1, so the sole journey's 4000 m / 4000 game-s * 1 gives paces [1.0]
+    1, so the sole journey's 4000 m / 4000 real s gives paces [1.0]
     in the admin view and null under foreign fog. Its manually seeded journey
     has no ID, so journey_id is null in both views. Only the measured sync
     ages are excluded; their values vary with build duration. All other keys
     and values, including any unexpected sync key, remain compared strictly.
+
+    Row fields added after 718322ce, hand-derived from the seed:
+      yaw                 null on every row — like pos_origin it is the
+                          avatar's reported facing, and nobody reported one.
+      local_approach,     null on every row — no profile holds a prop
+      prop_action_entry   approach or a prop-action entry.
+      finale              null on every row — nobody runs an action.
+      travel_speed_factor null on every row of the admin view (no avatar);
+                          in the fogged view the avatar npc_lead's row holds
+                          the minimum over itself and its follower npc_still
+                          of the ``travel_speed`` factor: 1.0, because the
+                          only shipped travel_speed rule (default_tired_legs,
+                          stamina<30 -> 0.7) does not fire — neither has a
+                          stamina stat, and ``modifiers.factor`` counts a
+                          missing stat as not met. Every other row: null.
+    And npc_walker's ``travel``: 718322ce reads ``started_at_game``, the
+    journey format before 9b920eaa0, so for today's ``started_at_s`` journey
+    it reports null. The row it would have to show is derived instead. The
+    motion clock is pinned (``timeutils.motion_time``) and the journey starts
+    on it, so progress is 0:
+      admin   target MARKET, journey_id null, paces [1.0], waypoints
+              [[0, 0], [4000, 0]] (x/z only), progress_m 0.0, total_m 4000.0,
+              floor_y null, eta = FROZEN + 4000 s * factor 1 =
+              Y0002-D100T13:06:40, "13:06", and on the shipped calendar
+              (4 seasons x 30 days) day 100 is Winter day 10:
+              "Winter, day 10 · 13:06 · Year 2"; starts_in_s null (under way),
+              speed_m_s_real 1.0, pace_m_s_real 1.0 (4000 m / 4000 s),
+              gait "walk" (the journey names none).
+      fogged  npc_walker is foreign to npc_lead: everything route-shaped is
+              null — target_id MARKET and gait "walk" stay, and journey_id is
+              null (not the avatar's journey).
 
 Usage:  ./.venv/bin/python scripts/smoke_worldmap_profile_loads.py
 """
@@ -152,6 +188,10 @@ FROZEN = GameTime.parse("Y0002-D100T12:00:00")
 timeutils.game_time = lambda: FROZEN
 timeutils.game_time_exact = lambda: (FROZEN, 0.0)
 timeutils.set_game_factor(1.0)
+# The motion clock too: journeys are a function of it, and a few real
+# milliseconds between the seed and a build would move npc_walker.
+MOTION_NOW = 1000.0
+timeutils.motion_time = lambda: MOTION_NOW
 
 # ── a private pose catalog: the shipped one must not be edited ──────────
 CAT = Path(tempfile.mkdtemp(prefix="worldmap-loads-cat-"))
@@ -237,7 +277,7 @@ _prof["journey"] = {
     # 4000 m at 1 m per REAL second (motion clock) — still on the first leg
     # for the whole run.
     "waypoints": [[0.0, 0.0, 0.0], [4000.0, 0.0, 4000.0]],
-    "started_at_s": timeutils.motion_time(),
+    "started_at_s": MOTION_NOW,
     "speed_m_s": 1.0,
     "entry_edge": "",
 }
@@ -249,9 +289,12 @@ _real_gcp = character_mod.get_character_profile
 _calls = {"n": 0}
 
 
-def _counting_gcp(character_name):
+def _counting_gcp(character_name, *args, **kwargs):
+    # Keywords pass through: since 2405fef22 the condition evaluator asks with
+    # ``strict=``, and a stub that refused it made every stat condition fail
+    # into its "met" fallback (stamina<30 -> a 0.7 travel factor).
     _calls["n"] += 1
-    return _real_gcp(character_name)
+    return _real_gcp(character_name, *args, **kwargs)
 
 
 def build_counted(fn, *args, **kwargs):
@@ -445,6 +488,29 @@ def main() -> int:
                 if c["travel"] is not None:
                     c["travel"] = dict(c["travel"], journey_id=None,
                                        paces_m_s_real=[1.0] if label == "admin" else None)
+            # Fields added after 718322ce (module docstring, [3]).
+            for c in old_payload["characters"]:
+                c.update(yaw=None, local_approach=None, prop_action_entry=None,
+                         finale=None,
+                         travel_speed_factor=(1.0 if label == "fogged" and c["name"] == "npc_lead"
+                                              else None))
+                if c["name"] == "npc_walker":
+                    check(f"{label} 718322ce cannot read a started_at_s journey", c["travel"], None)
+                    admin_view = label == "admin"
+                    c["travel"] = {
+                        "target_id": MARKET, "journey_id": None,
+                        "paces_m_s_real": [1.0] if admin_view else None,
+                        "waypoints": [[0.0, 0.0], [4000.0, 0.0]] if admin_view else None,
+                        "progress_m": 0.0 if admin_view else None,
+                        "total_m": 4000.0 if admin_view else None,
+                        "floor_y": None,
+                        "eta_game": "Y0002-D100T13:06:40" if admin_view else None,
+                        "eta_hhmm": "13:06" if admin_view else None,
+                        "eta_label": "Winter, day 10 · 13:06 · Year 2" if admin_view else None,
+                        "starts_in_s": None,
+                        "speed_m_s_real": 1.0 if admin_view else None,
+                        "pace_m_s_real": 1.0 if admin_view else None,
+                        "gait": "walk"}
             # Measured ages depend on execution time, not profile-read behavior.
             # Require both age keys but exclude their values; retain any other
             # sync keys so an unexpected addition still fails strict comparison.

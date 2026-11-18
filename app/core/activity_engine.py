@@ -47,6 +47,12 @@ _STRICT_CONTEXT: ContextVar[tuple[str, dict] | None] = ContextVar(
     "strict_condition_context", default=None)
 _STRICT_STATES: ContextVar[frozenset[tuple[str, str]]] = ContextVar(
     "strict_condition_states", default=frozenset())
+# The profile a NON-strict caller already holds (``evaluate_condition(...,
+# profile=)``): every atom of that character reads it instead of loading the
+# profile again — a poll that evaluates conditions per character must not
+# reload what it holds.
+_HELD_PROFILE: ContextVar[tuple[str, dict] | None] = ContextVar(
+    "held_condition_profile", default=None)
 
 # Both validation and evaluation use these atom families. Legacy matching
 # retains its historical prefix matches; strict matching consumes the atom.
@@ -140,6 +146,9 @@ def _condition_profile(character_name: str) -> dict:
     context = _STRICT_CONTEXT.get()
     if context is not None and context[0] == character_name:
         return context[1]
+    held = _HELD_PROFILE.get()
+    if context is None and held is not None and held[0] == character_name:
+        return held[1]
     from app.models.character import get_character_profile
     profile = get_character_profile(character_name, strict=context is not None)
     if context is not None and not profile:
@@ -252,12 +261,26 @@ def evaluate_condition_strict(
 def evaluate_condition(
     condition: str, character_name: str,
     location_id: str = "",
-    room_id: str = "") -> Tuple[bool, str]:
+    room_id: str = "", *, profile: dict | None = None) -> Tuple[bool, str]:
     """Evaluate a condition expression.
+
+    ``profile``: the character's own profile when the caller already holds
+    it — the atoms read it instead of loading it again.
 
     Returns:
         (passed: bool, reason: str) - reason is empty when passed=True
     """
+    if profile is None:
+        return _evaluate_condition(condition, character_name, location_id, room_id)
+    token = _HELD_PROFILE.set((character_name, profile))
+    try:
+        return _evaluate_condition(condition, character_name, location_id, room_id)
+    finally:
+        _HELD_PROFILE.reset(token)
+
+
+def _evaluate_condition(condition: str, character_name: str,
+                        location_id: str, room_id: str) -> Tuple[bool, str]:
     global _last_matched_partner
     _last_matched_partner = None
 
