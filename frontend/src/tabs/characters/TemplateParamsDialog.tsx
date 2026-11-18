@@ -22,7 +22,7 @@ import type { CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { thumbUrl, thumbWidth } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPost, apiPut } from '../../lib/api'
+import { apiDelete, apiGet, apiPost, apiPut, apiUpload } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { TEMPLATE_CHOICE_LABELS, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_LABELS, UPPER_KINDS, cm, lengthLabel, templateCost } from './figureModel'
 import { TEMPLATE_STATE_COLOR, TEMPLATE_STATE_LABELS, failureLines, templateLiveText } from './figureModel'
@@ -50,6 +50,30 @@ interface TemplatePayload {
   kind_defaults?: Record<string, TemplateParams>
   /** A186: the dressed front shown beside the fields (`source` "" = none exists). */
   front_picture?: { source: '' | 'worn' | 'outfit' | 'item'; url: string; label?: string; earlier?: boolean } | null
+  /** A205: the piece-only views the bake reads (`garment_template_views.status`). */
+  views?: TemplateViews
+}
+
+interface TemplateViewAttempt { n: number; ok: boolean; reasons: string[]; skin?: number | null; stamp: number }
+interface TemplateViewCell {
+  view: 'front' | 'back'
+  accepted: boolean
+  stamp: number
+  source: string
+  accepted_by_user: boolean
+  skin?: number | null
+  attempts: TemplateViewAttempt[]
+  running: boolean
+  error: string
+  max_jobs: number
+}
+interface TemplateViews {
+  views: TemplateViewCell[]
+  sheer: boolean
+  required: boolean
+  missing: string[]
+  hub_jobs: number
+  max_jobs: number
 }
 
 const PICTURE_CAPTIONS: Record<string, string> = {
@@ -302,6 +326,10 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
               </div>
             </div>
           ) : null}
+          {data?.views ? (
+            <TemplateViewsBox path={path} views={data.views}
+              onChange={(v) => { setData((d) => (d ? { ...d, views: v } : d)); reloadProgress() }} />
+          ) : null}
           {data?.progress ? (
             <TemplateProgressBox character={character} progress={data.progress} onStarted={reloadProgress} />
           ) : null}
@@ -375,6 +403,121 @@ function TemplateProgressBox({ character, progress, onStarted }: {
           <span className="ga-hint">{t('The drape runs in the Build — CPU, 0 hub jobs')}</span>
         </div>
       ) : null}
+    </div>
+  )
+}
+
+const VIEW_LABEL: Record<string, string> = { front: 'Front view', back: 'Back view' }
+
+/** A205: the piece-only views (front + back, the piece alone, cut out) the drape's texture is baked from — one cell
+ *  per view: the accepted view, its attempts (Use this), Generate / Regenerate (at most 2 hub jobs per view) and
+ *  Upload. A sheer piece needs both; any other piece uses them when present, else the item picture. */
+function TemplateViewsBox({ path, views, onChange }: {
+  path: string
+  views: TemplateViews
+  onChange: (v: TemplateViews) => void
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [busy, setBusy] = useState('')
+  const running = views.views.some((v) => v.running)
+  const reload = useCallback(() => {
+    apiGet<TemplateViews>(`${path}/views`).then(onChange).catch(() => { /* the last state stays */ })
+  }, [path, onChange])
+  useEffect(() => {
+    if (!running) return
+    const id = window.setInterval(reload, 2000)
+    return () => window.clearInterval(id)
+  }, [running, reload])
+  const act = async (key: string, fn: () => Promise<TemplateViews>, done: string) => {
+    setBusy(key)
+    try {
+      onChange(await fn())
+      if (done) toast(t(done), 'success')
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    } finally {
+      setBusy('')
+    }
+  }
+  const cost = views.hub_jobs
+    ? t('{n} hub jobs (at most {max} when an attempt is refused)').replace('{n}', String(views.hub_jobs))
+      .replace('{max}', String(views.max_jobs))
+    : t('Both views exist — Regenerate spends 1 hub job (at most 2) per view')
+  return (
+    <div role="group" aria-label={t('Piece-only views')} data-template-views={views.missing.length ? 'due' : 'done'}
+      style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '6px 8px',
+        border: '1px solid var(--border, #30363d)', borderRadius: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <strong>{t('Piece-only views')}</strong>
+        <span className="ga-hint">{cost}</span>
+      </div>
+      <div className="ga-hint" style={views.required && views.missing.length ? WARN : undefined}>
+        {t(views.sheer
+          ? 'Sheer fabric: the texture is baked only from these views — the fabric alone, nothing behind or through it. Required.'
+          : 'The texture is baked from these views when they exist, else from the item picture. A new view re-drapes the piece at the next Build (CPU).')}
+      </div>
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        {views.views.map((c) => {
+          const enc = `${path}/views/${c.view}`
+          return (
+            <div key={c.view} data-view-cell={c.view} data-view-state={c.accepted ? 'done' : 'due'}
+              style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 220 }}>
+              <span className="ga-form-hint">{t(VIEW_LABEL[c.view])} · {c.accepted
+                ? t(c.source === 'upload' ? 'uploaded' : 'made') : t('due')}</span>
+              <div style={{ width: 220, height: 220, border: '1px solid var(--border, #30363d)', borderRadius: 4,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: 'repeating-conic-gradient(#2a2f36 0% 25%, #1c2026 0% 50%) 50% / 16px 16px' }}>
+                {c.accepted
+                  ? <img src={`${enc}.png?v=${c.stamp}`} alt={t(VIEW_LABEL[c.view])} style={{ maxWidth: '100%', maxHeight: '100%' }} />
+                  : <span className="ga-hint">{c.running ? t('Rendering…') : t('No view yet')}</span>}
+              </div>
+              {c.accepted_by_user ? (
+                <span className="ga-hint" style={WARN}>{t('Accepted by you despite the check')}</span>
+              ) : null}
+              {c.error ? <span className="ga-hint" style={{ color: 'var(--danger, #f85149)' }}>{c.error}</span> : null}
+              {c.attempts.length && !c.running ? (
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  {c.attempts.map((a) => (
+                    <figure key={a.n} style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: 2, width: 100 }}
+                      title={a.reasons.join('\n') || t('Passed')}>
+                      <img src={`${enc}.png?attempt=${a.n}&v=${a.stamp}`} alt={`${t('Attempt')} ${a.n}`}
+                        style={{ width: 100, height: 100, objectFit: 'contain',
+                          border: `1px solid ${a.ok ? 'var(--success, #3fb950)' : 'var(--danger, #f85149)'}` }} />
+                      <button type="button" className="ga-btn ga-btn-sm" disabled={!!busy}
+                        onClick={() => { void act(`use-${c.view}-${a.n}`, () => apiPost<TemplateViews>(`${enc}/use/${a.n}`, {}), 'View used') }}>
+                        {t('Use this')}
+                      </button>
+                    </figure>
+                  ))}
+                </div>
+              ) : null}
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                <button type="button" className="ga-btn ga-btn-sm" disabled={!!busy || c.running}
+                  title={t('At most {n} hub jobs for this piece-only view per click — after that it is offered: Use this, Upload or Regenerate.').replace('{n}', String(c.max_jobs))}
+                  onClick={() => { void act(`gen-${c.view}`, () => apiPost<TemplateViews>(`${enc}/generate`, {}), '') }}>
+                  {c.running ? t('Rendering…') : t(c.accepted || c.attempts.length ? 'Regenerate (1–2 hub jobs)' : 'Generate (1–2 hub jobs)')}
+                </button>
+                <label className="ga-btn ga-btn-sm" style={{ cursor: busy ? 'default' : 'pointer' }}>
+                  {t('Upload…')}
+                  <input type="file" accept="image/*" hidden disabled={!!busy}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0]
+                      e.target.value = ''
+                      if (f) void act(`up-${c.view}`, () => apiUpload<TemplateViews>(`${enc}/upload`, f), 'View uploaded')
+                    }} />
+                </label>
+                {c.accepted ? (
+                  <button type="button" className="ga-btn ga-btn-sm" disabled={!!busy}
+                    onClick={() => { void act(`del-${c.view}`, () => apiDelete<TemplateViews>(enc), 'View removed') }}>
+                    {t('Remove')}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
