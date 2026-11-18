@@ -875,10 +875,10 @@ public static class CheckRunner
         }
 
         // End to end on Ada: evaluate the bound clip, read the skeleton.
-        var ada = refDoc.RootElement.GetProperty("models").EnumerateArray().First(m => m.GetProperty("name").GetString() == "Ada Wren");
+        var adaRef = refDoc.RootElement.GetProperty("models").EnumerateArray().First(m => m.GetProperty("name").GetString() == "Ada Wren");
         var player = ada.Player!;
         var skelA = ada.Skeleton!;
-        foreach (var sample in ada.GetProperty("samples").EnumerateArray())
+        foreach (var sample in adaRef.GetProperty("samples").EnumerateArray())
         {
             var role = SampleKind(sample);
             double t = sample.GetProperty("time").GetDouble();
