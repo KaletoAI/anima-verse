@@ -60,6 +60,7 @@ sys.path.insert(0, _SCRIPT_DIR)
 import _common
 from attached_part import base_color_source, resolve_bone
 from inset_part import harmonic_fill
+import mouth_teeth
 from mouth_math import (_smooth, _sstep, corners, jaw_hinge, lip_fillet, lip_row, lower_follow, ring_depths,
                         track_line, turned)
 import mouth_math
@@ -85,7 +86,7 @@ DEFAULTS = {
     'rings': {'first': .003, 'growth': 1.15, 'taper': .03, 'flatten': .02, 'column': .003},
     # The jaw's hinge behind / above the opening (for a body whose Hips-to-Head distance is ``reference``; scaled
     # with it within ``scale``) and its full opening angle.
-    'jaw': {'back': .085, 'up': .03, 'open_deg': 26., 'reference': .6, 'scale': [.8, 1.25]},
+    'jaw': {'back': .085, 'up': .03, 'open_deg': 30., 'reference': .6, 'scale': [.8, 1.25]},
     # The jaw share's fixed regions (module docstring 5) and the upper lip's lift with the mouth fully open.
     'share': {'chin': .010, 'chin_reach': .045, 'chin_back': .03, 'chin_width': .6, 'corner': .008, 'above': .012,
               'reach': .075, 'below': .09, 'behind': .09, 'tear': .5},
@@ -341,7 +342,9 @@ def _split_faces(bm, faces, made, tag):
 
 def build(group, output):
     """Measure, cut, build the pouch, export. Returns the metrics."""
-    P = parameters(group.get('params', {}))
+    raw = dict(group.get('params') or {})
+    teeth_options = raw.pop('teeth', None)
+    P = parameters(raw)
     arms = [o for o in bpy.context.scene.objects if o.type == 'ARMATURE']
     if len(arms) != 1:
         raise ValueError('Requires one armature')
@@ -841,6 +844,7 @@ def build(group, output):
     bm.verts.ensure_lookup_table()
     bm.verts.index_update()
     rest_co = np.array([tuple(world(v)) for v in bm.verts])
+    lower_wall_idx = [v.index for v, (wall, _k, _i) in role.items() if wall == 1]
     jaw_share = np.array([v[w_layer] for v in bm.verts])
     # The upper lip's lift: the skin above the line and the pouch's upper wall (a rim copy counts by its side).
     f_all = rest_co[:, 2] - _line_z(coef, s0, rest_co[:, 0])
@@ -954,17 +958,37 @@ def build(group, output):
     for i_ in np.nonzero(moved)[0]:
         key.data[int(i_)].co = Vector(local[i_])
 
+    # THE TEETH (step 7, Ruling A206): a failure here publishes the mouth without them.
+    teeth = {'status': 'off', 'reason': 'switched off'}
+    if (teeth_options or {}).get('enabled', True) is not False:
+        _common.progress('teeth')
+        try:
+            if not jaw_name:
+                raise ValueError('No jaw bone to carry the lower teeth')
+            teeth = mouth_teeth.build_teeth(_teeth_context(body, arm, group, P, inside_slot, lower_wall_idx, jaw_name, {
+                'O': O, 'axis': axis, 'lateral': lateral, 'up': normal, 'widest': widest, 'R': R, 'D': D,
+                'taper': P['rings']['taper'], 'flatten': P['rings']['flatten'], 'across_sorted': across[order],
+                'rest_up': rest_up, 'hinge': hinge, 'theta': theta}), teeth_options)
+        except Exception as exc:  # noqa: BLE001 — the mouth is published without teeth, never discarded
+            import traceback
+            traceback.print_exc()
+            teeth = {'status': 'failed', 'reason': str(exc) or type(exc).__name__}
+    print('teeth', teeth.get('status'), teeth.get('reason', ''))
+
     _common.progress('exporting')
     bpy.ops.export_scene.gltf(filepath=str(output), export_format='GLB', export_apply=False,
                               export_yup=True, export_skins=True, export_animations=True,
                               export_morph=True, export_extras=True, export_all_influences=False)
     _common.body_meshes_first(output)
+    if teeth.get('status') == 'applied':
+        _common.vertex_colors_only_on(output, {mouth_teeth.TEETH_MATERIAL})
     front_shift = np.array([0., -o['offset_mm'][2] / 1000, 0.])
     return {'status': 'applied', 'reason': '',
             'opening': {'centre': [round(c, 5) for c in _gltf(O + front_shift)],
                         'axis': [round(c, 6) for c in _gltf(axis)], 'depth': round(D, 4),
                         'radius': round(R, 4), 'half_width': round(widest, 4),
                         'open_height': round(float(np.linalg.norm(turned(O[None], hinge, theta)[0] - O)), 4),
+                        **({'teeth_gap': teeth['teeth_gap']} if teeth.get('status') == 'applied' else {}),
                         'override': {'offset_mm': list(o['offset_mm']), 'radius_scale': o['radius_scale'],
                                      'depth_scale': o['depth_scale'], 'tilt_deg': o['tilt_deg']}},
             'lip_line': {'s0': round(s0, 4), 'coef': [round(c, 5) for c in coef], 'contrast': round(m['contrast'], 3),
@@ -979,7 +1003,25 @@ def build(group, output):
             'inside': {'lip_line_rgb': [round(float(c), 3) for c in lip_rgb],
                        'base_color_linear': [round(float(c), 4) for c in inside_rgb]},
             'pouch_tris': pouch_tris, 'skin_tris': skin_tris, 'rim_segments': len(open_edges),
-            'unmatched_open_edges': unmatched}
+            'unmatched_open_edges': unmatched, 'teeth': teeth}
+
+
+def _teeth_context(body, arm, group, P, inside_slot, lower_wall_idx, jaw_name, frame):
+    """What ``mouth_teeth.build_teeth`` reads besides the channel's frame: the body, its bones, the outer skin
+    (without the pouch) and the lower wall's vertices with their weights."""
+    me = body.data
+    M = body.matrix_world
+    me.calc_loop_triangles()
+    V = np.array([tuple(M @ v.co) for v in me.vertices])
+    tris = np.array([tuple(t.vertices) for t in me.loop_triangles])
+    skip = {i for i, t in enumerate(me.loop_triangles) if t.material_index == inside_slot}
+    names = [g.name for g in body.vertex_groups]
+    wall = [(V[i], {names[g.group]: g.weight for g in me.vertices[i].groups if g.weight > 0})
+            for i in lower_wall_idx]
+    return {**frame, 'body': body, 'arm': arm, 'group_id': group['id'],
+            'head_bone': resolve_bone(arm.data.bones, P['head_bone']).name,
+            'jaw_bone': jaw_name, 'lower_wall': wall,
+            'outer_skin': mouth_teeth.OuterSkin(V, tris, skip, frame['O'])}
 
 
 def mouth_part(args):

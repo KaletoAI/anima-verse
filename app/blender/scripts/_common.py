@@ -227,3 +227,98 @@ def body_meshes_first(path):
     rest = blob[20 + size:]
     path.write_bytes(struct.pack('<4sII', b'glTF', 2, 20 + len(raw) + len(rest))
                      + struct.pack('<II', len(raw), 0x4E4F534A) + raw + rest)
+
+
+def vertex_colors_only_on(path, material_names):
+    """Keep ``COLOR_0`` only on the primitives whose material is one of ``material_names``: Blender writes a mesh's
+    colour attribute into every primitive of it, and a body skin must not start to carry vertex colours because
+    one built part uses them. The accessors and buffer views nothing uses any more are dropped and the binary
+    chunk is repacked (8-byte aligned views)."""
+    import json
+    import struct
+    blob = path.read_bytes()
+    size = struct.unpack_from('<I', blob, 12)[0]
+    doc = json.loads(blob[20:20 + size])
+    rest = blob[20 + size:]
+    bin_len = struct.unpack_from('<I', rest, 0)[0]
+    binary = rest[8:8 + bin_len]
+    materials = doc.get('materials', [])
+    changed = False
+    for mesh in doc.get('meshes', []):
+        for prim in mesh.get('primitives', []):
+            name = materials[prim['material']].get('name') if 'material' in prim else None
+            if 'COLOR_0' in prim.get('attributes', {}) and name not in material_names:
+                del prim['attributes']['COLOR_0']
+                changed = True
+    if not changed:
+        return
+    used = set()
+    for mesh in doc.get('meshes', []):
+        for prim in mesh.get('primitives', []):
+            used.update(prim.get('attributes', {}).values())
+            if 'indices' in prim:
+                used.add(prim['indices'])
+            for target in prim.get('targets') or []:
+                used.update(target.values())
+    for skin in doc.get('skins', []):
+        if 'inverseBindMatrices' in skin:
+            used.add(skin['inverseBindMatrices'])
+    for anim in doc.get('animations', []):
+        for sampler in anim.get('samplers', []):
+            used.update((sampler['input'], sampler['output']))
+    order = sorted(used)
+    acc_map = {old: new for new, old in enumerate(order)}
+    accessors = [doc['accessors'][i] for i in order]
+    for mesh in doc.get('meshes', []):
+        for prim in mesh.get('primitives', []):
+            prim['attributes'] = {k: acc_map[v] for k, v in prim['attributes'].items()}
+            if 'indices' in prim:
+                prim['indices'] = acc_map[prim['indices']]
+            if prim.get('targets'):
+                prim['targets'] = [{k: acc_map[v] for k, v in t.items()} for t in prim['targets']]
+    for skin in doc.get('skins', []):
+        if 'inverseBindMatrices' in skin:
+            skin['inverseBindMatrices'] = acc_map[skin['inverseBindMatrices']]
+    for anim in doc.get('animations', []):
+        for sampler in anim.get('samplers', []):
+            sampler['input'], sampler['output'] = acc_map[sampler['input']], acc_map[sampler['output']]
+    doc['accessors'] = accessors
+    views = set()
+    for acc in accessors:
+        if 'bufferView' in acc:
+            views.add(acc['bufferView'])
+        sparse = acc.get('sparse')
+        if sparse:
+            views.update((sparse['indices']['bufferView'], sparse['values']['bufferView']))
+    for image in doc.get('images', []):
+        if 'bufferView' in image:
+            views.add(image['bufferView'])
+    view_order = sorted(views)
+    view_map = {old: new for new, old in enumerate(view_order)}
+    out = bytearray()
+    new_views = []
+    for old in view_order:
+        view = dict(doc['bufferViews'][old])
+        start = view.get('byteOffset', 0)
+        chunk = binary[start:start + view['byteLength']]
+        out += b'\0' * (-len(out) % 8)
+        view['byteOffset'] = len(out)
+        out += chunk
+        new_views.append(view)
+    doc['bufferViews'] = new_views
+    for acc in accessors:
+        if 'bufferView' in acc:
+            acc['bufferView'] = view_map[acc['bufferView']]
+        sparse = acc.get('sparse')
+        if sparse:
+            sparse['indices']['bufferView'] = view_map[sparse['indices']['bufferView']]
+            sparse['values']['bufferView'] = view_map[sparse['values']['bufferView']]
+    for image in doc.get('images', []):
+        if 'bufferView' in image:
+            image['bufferView'] = view_map[image['bufferView']]
+    out += b'\0' * (-len(out) % 4)
+    doc['buffers'][0]['byteLength'] = len(out)
+    raw = json.dumps(doc, separators=(',', ':')).encode()
+    raw += b' ' * (-len(raw) % 4)
+    body = struct.pack('<II', len(raw), 0x4E4F534A) + raw + struct.pack('<II', len(out), 0x004E4942) + bytes(out)
+    path.write_bytes(struct.pack('<4sII', b'glTF', 2, 12 + len(body)) + body)

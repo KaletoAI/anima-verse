@@ -100,6 +100,33 @@ def _hand_guard(obj):
     return group
 
 
+#: The built mouth's teeth and tongue (``mouth_teeth.py``, Ruling A206): left out of a reduced tier — at the
+#: distance it is shown from they cover less than two pixels, and a collapse would wreck them.
+MOUTH_TEETH_MATERIALS = ("mouth_teeth", "mouth_tongue")
+
+
+def _drop_mouth_teeth(obj):
+    """Remove the faces of the mouth's teeth and tongue materials (and the vertices only they used) and the
+    teeth's colour attribute; the reduced tier is the mouth without them."""
+    slots = {i for i, m in enumerate(obj.data.materials)
+             if m is not None and m.name.split(".")[0] in MOUTH_TEETH_MATERIALS}
+    if not slots:
+        return 0
+    import bmesh
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    faces = [f for f in bm.faces if f.material_index in slots]
+    bmesh.ops.delete(bm, geom=faces, context="FACES")
+    loose = [v for v in bm.verts if not v.link_faces]
+    bmesh.ops.delete(bm, geom=loose, context="VERTS")
+    bm.to_mesh(obj.data)
+    bm.free()
+    colors = obj.data.color_attributes.get("Color")
+    if colors is not None:
+        obj.data.color_attributes.remove(colors)
+    return len(faces)
+
+
 def _mesh_objects():
     return [o for o in bpy.context.scene.objects if o.type == "MESH"]
 
@@ -142,6 +169,7 @@ def lod(args):
         for obj in _mesh_objects():
             if obj.get("lod_preserve"):
                 continue
+            _drop_mouth_teeth(obj)
             if obj.data.shape_keys:
                 # A modifier cannot be applied to a mesh with shape keys, and a morph target does not survive a
                 # collapse (its deltas are per source vertex): the reduced tier is the rest shape. What a bone
