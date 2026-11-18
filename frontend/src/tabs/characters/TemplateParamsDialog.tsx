@@ -24,7 +24,7 @@ import { thumbUrl, thumbWidth } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { TEMPLATE_CHOICE_LABELS, TEMPLATE_FIELD_LABELS, UPPER_KINDS, cm, lengthLabel, templateCost } from './figureModel'
+import { TEMPLATE_CHOICE_LABELS, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_LABELS, UPPER_KINDS, cm, lengthLabel, templateCost } from './figureModel'
 import { TEMPLATE_STATE_COLOR, TEMPLATE_STATE_LABELS, templateLiveText } from './figureModel'
 import type { TemplateFieldSpec, TemplateInfo, TemplateParams, TemplateProgress } from './figureModel'
 import { FigureBuildButton } from './FigureBuildButton'
@@ -110,15 +110,16 @@ function FrontPicture({ picture }: { picture?: TemplatePayload['front_picture'] 
 
 const GRID: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px 12px' }
 const WARN: CSSProperties = { color: 'var(--warning, #d29922)' }
-const ORDER: (keyof TemplateParams)[] = ['kind', 'fabric', 'length_m', 'flare', 'waist_height', 'slit', 'slit_m',
+const ORDER: (keyof TemplateParams)[] = ['kind', 'fabric', 'opacity', 'length_m', 'flare', 'waist_height', 'slit', 'slit_m',
   'shoulders', 'fit', 'neckline', 'neck_depth_m', 'sleeves', 'sleeve_fit', 'front', 'collar']
 /** Fields shown as a 0…1 number rather than centimetres. */
-const SHARES = new Set<keyof TemplateParams>(['flare', 'fit', 'sleeve_fit'])
+const SHARES = new Set<keyof TemplateParams>(['flare', 'fit', 'sleeve_fit', 'opacity'])
 
 /** Whether a field is shown for the draft: the kind's fields, minus the ones another field switches off. */
 function shown(key: keyof TemplateParams, p: TemplateParams, fields: Record<string, (keyof TemplateParams)[]>): boolean {
   if (!(fields[p.kind] || ORDER).includes(key)) return false
   if (key === 'slit_m' && p.slit === 'none') return false
+  if (key === 'opacity' && p.fabric !== 'sheer') return false
   const bodice = UPPER_KINDS.includes(p.kind) || p.shoulders === 'covered'
   if ((key === 'sleeves' || key === 'neckline' || key === 'neck_depth_m') && !bodice) return false
   if (key === 'fit' && p.kind === 'dress' && p.shoulders === 'strapless') return false
@@ -178,7 +179,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
   const set = (key: keyof TemplateParams, value: string | number) => {
     if (!draft || !data) return
     // A172: a kind change starts from that kind's values (a top's length and sleeves are no skirt's); the fabric stays
-    setDraft(key === 'kind' ? { ...defaults(data, String(value)), fabric: draft.fabric } : { ...draft, [key]: value })
+    setDraft(key === 'kind' ? { ...defaults(data, String(value)), fabric: draft.fabric, opacity: draft.opacity } : { ...draft, [key]: value })
     setSource('user')
     setSaved('')
   }
@@ -253,6 +254,18 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                             </span>
                           </span>
                         )}
+                        {key === 'fabric' && TEMPLATE_FABRIC_NOTES[draft.fabric] ? (
+                          <span className="ga-form-hint" data-fabric-note={draft.fabric}>
+                            {t(TEMPLATE_FABRIC_NOTES[draft.fabric])}
+                            {data.params && data.params.fabric !== draft.fabric
+                              ? ` ${t('Switching the fabric re-drapes the piece on the CPU (0 hub jobs).')}` : ''}
+                          </span>
+                        ) : null}
+                        {key === 'opacity' ? (
+                          <span className="ga-form-hint">
+                            {t('Only the material: a change re-assembles the figure, no new drape.')}
+                          </span>
+                        ) : null}
                       </label>
                     )
                   })}

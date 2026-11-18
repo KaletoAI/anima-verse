@@ -8,6 +8,15 @@
     }
   },
   "translations": {
+    "Sheer (chiffon, voile)": "Durchscheinend (Chiffon, Voile)",
+    "Opacity (0.2 sheer … 1 opaque)": "Deckkraft (0,2 durchscheinend … 1 blickdicht)",
+    "Holds its shape: few, wide folds.": "Hält die Form: wenige, breite Falten.",
+    "Ordinary cotton: the usual drape.": "Gewöhnliche Baumwolle: der übliche Fall.",
+    "Soft folds that follow the body.": "Weiche Falten, die dem Körper folgen.",
+    "Very light, fine folds that flutter; see-through — the body and what is worn under it show.": "Sehr leicht, feine Falten, die flattern; durchscheinend — Körper und Darunterliegendes sind sichtbar.",
+    "Switching the fabric re-drapes the piece on the CPU (0 hub jobs).": "Ein Stoffwechsel drapiert das Stück neu auf der CPU (0 Hub-Jobs).",
+    "Only the material: a change re-assembles the figure, no new drape.": "Nur das Material: eine Änderung setzt die Figur neu zusammen, ohne neue Drapierung.",
+    "opacity {n}": "Deckkraft {n}",
     "The piece on the plain body": "Das Stück auf dem Grundkörper",
     "Plain body front — the piece drawn at its parameters": "Grundkörper von vorn — das Stück nach seinen Parametern gezeichnet",
     "Rendering the figure… (the plain body is shown meanwhile)": "Die Figur wird gerendert … (bis dahin der Grundkörper)",

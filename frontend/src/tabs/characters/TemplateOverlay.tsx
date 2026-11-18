@@ -41,7 +41,7 @@ const PAD_DRESSED = 0.12
 
 const pts = (s: Shape) => s.points.map((q) => q.join(',')).join(' ')
 
-function OverlaySvg({ data, height }: { data: TemplatePreview; height: number }) {
+function OverlaySvg({ data, height, sheer }: { data: TemplatePreview; height: number; sheer?: number }) {
   const { t } = useI18n()
   const pic = data.picture!
   const pad = pic.w * (pic.dressed ? PAD_DRESSED : PAD)
@@ -67,7 +67,8 @@ function OverlaySvg({ data, height }: { data: TemplatePreview; height: number })
       </defs>
       {/* the outline of the UNION of the cloth: every piece stroked twice as wide, then every fill drawn over it
           (no seam lines where a sleeve overlaps the body); one group opacity, so overlaps never darken */}
-      <g mask={`url(#${maskId})`} opacity={0.6}>
+      {/* A204: a sheer fabric is drawn as thin as it will be worn (never thicker than the usual 0.6) */}
+      <g mask={`url(#${maskId})`} opacity={sheer !== undefined ? Math.min(0.6, sheer) : 0.6} data-sheer={sheer ?? ''}>
         {under.map((s, i) => (
           <polygon key={`o${i}`} points={pts(s)} fill={colour} stroke="#1f4fd1" strokeWidth={stroke * 2}
             strokeLinejoin="round" />
@@ -96,6 +97,7 @@ const RENDER_POLL_MS = 1500
 
 /** The picture with the draft on it; re-asks the server 120 ms after the last change. */
 export function TemplateOverlay({ path, draft }: { path: string; draft: TemplateParams }) {
+  const sheer = draft.fabric === 'sheer' ? Number(draft.opacity ?? 0.4) : undefined
   const { t } = useI18n()
   const [data, setData] = useState<TemplatePreview | null>(null)
   const [error, setError] = useState('')
@@ -131,7 +133,7 @@ export function TemplateOverlay({ path, draft }: { path: string; draft: Template
       {ready ? (
         <button type="button" style={{ ...box, padding: 0, cursor: 'zoom-in', position: 'relative' }}
           onClick={() => setBig(true)} title={t('click to enlarge')}>
-          <OverlaySvg data={data} height={VIEW_H - 2} />
+          <OverlaySvg data={data} height={VIEW_H - 2} sheer={sheer} />
           {figState === 'rendering' ? (
             <span className="ga-hint" role="status" style={{ position: 'absolute', top: 8, left: 8, right: 8,
               padding: '4px 8px', borderRadius: 4, background: 'rgba(255,255,255,0.9)', color: '#111' }}>
@@ -162,7 +164,7 @@ export function TemplateOverlay({ path, draft }: { path: string; draft: Template
         <div className="ga-modal-backdrop" style={{ zIndex: 2000, cursor: 'zoom-out' }} onMouseDown={() => setBig(false)}
           role="dialog" aria-modal="true" aria-label={t('The piece on the plain body')}>
           <div style={{ margin: 'auto', background: '#f4f4f4', borderRadius: 6 }}>
-            <OverlaySvg data={data} height={Math.round(window.innerHeight * 0.92)} />
+            <OverlaySvg data={data} height={Math.round(window.innerHeight * 0.92)} sheer={sheer} />
           </div>
         </div>,
         document.body,

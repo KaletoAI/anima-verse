@@ -289,6 +289,8 @@ export interface TemplateParams {
   front: string
   collar: string
   fabric: string
+  /** A204: sheer only — how much of the cloth's colour covers (0.2 … 1). */
+  opacity: number
 }
 
 /** Ruling A142: the kinds with a bodice over the shoulders (the length counts from the shoulder line). */
@@ -325,6 +327,7 @@ export const TEMPLATE_CHOICE_LABELS: Record<string, string> = {
   crew: 'Crew', v: 'V-neck', scoop: 'Scoop', boat: 'Boat',
   closed: 'Closed', open: 'Open', stand: 'Stand collar', lapel: 'Lapels',
   stiff: 'Stiff (denim, wool)', medium: 'Medium (cotton, linen)', flowing: 'Flowing (silk, jersey)',
+  sheer: 'Sheer (chiffon, voile)',
 }
 
 /** The parameter dialog's field labels. */
@@ -333,6 +336,15 @@ export const TEMPLATE_FIELD_LABELS: Record<keyof TemplateParams, string> = {
   waist_height: 'Waistband', slit: 'Slit', slit_m: 'Slit height from the hem', sleeves: 'Sleeves', fabric: 'Fabric',
   shoulders: 'Shoulders', sleeve_fit: 'Sleeve fit (0 tight … 1 loose)', fit: 'Body fit (0 tight … 1 loose)',
   neckline: 'Neckline', neck_depth_m: 'Neckline depth (0 = usual)', front: 'Front', collar: 'Collar',
+  opacity: 'Opacity (0.2 sheer … 1 opaque)',
+}
+
+/** A204: one line per fabric under the select — what the cloth does and what a switch costs. */
+export const TEMPLATE_FABRIC_NOTES: Record<string, string> = {
+  stiff: 'Holds its shape: few, wide folds.',
+  medium: 'Ordinary cotton: the usual drape.',
+  flowing: 'Soft folds that follow the body.',
+  sheer: 'Very light, fine folds that flutter; see-through — the body and what is worn under it show.',
 }
 
 /** The length field's label for a kind (Ruling A142: a top or jacket counts from the shoulder line). */
@@ -358,6 +370,7 @@ export function templateSummary(p: TemplateParams | null, t: Tr = EN): string {
   if (UPPER_KINDS.includes(p.kind) || p.shoulders === 'covered') parts.push(t(TEMPLATE_CHOICE_LABELS[p.neckline] || p.neckline))
   if (p.kind === 'jacket' && p.front === 'open') parts.push(t('open front'))
   parts.push(t(TEMPLATE_CHOICE_LABELS[p.fabric] || p.fabric))
+  if (p.fabric === 'sheer') parts.push(t('opacity {n}').replace('{n}', Number(p.opacity ?? 0.4).toFixed(2)))
   if (p.slit !== 'none') parts.push(t('slit {side} {cm}').replace('{side}', t(TEMPLATE_CHOICE_LABELS[p.slit] || p.slit))
     .replace('{cm}', cm(p.slit_m)))
   return parts.join(' · ')
