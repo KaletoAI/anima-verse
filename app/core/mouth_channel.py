@@ -5,7 +5,8 @@ humanoid GLB that goes through the extension step (``model3d._extension_rig_once
 "none applicable" as for any group).
 
 - THE GROUP ``mouth_channel`` (op ``mouth_part``, Blender script ``mouth_part.py``): the skin is cut along the
-  measured lip line and a closed pouch is built behind it, along the axis toward the top of the throat. Its
+  measured lip line and a closed pouch is built behind it, along the axis toward the top of the throat; the bone
+  ``Jaw`` (``JAW``) opens it, the shape key ``mouth_open`` adds the upper lip's lift. Its
   ``params.override`` is the character's channel override for ``mouth`` (``model3d_opts.collision_channels``,
   without the cone, which has no geometry) — so a saved override changes the extension fingerprint and the
   extension step reads "due" until it is rebuilt (CPU only).
@@ -37,6 +38,10 @@ CONE_DEG = 35.0
 FUNNEL_M = 0.03
 MIN_LENGTH = 0.0
 COMPRESS_MIN = 0.6
+#: The jaw bone the build creates (part 3): an extension bone under Head that owns the chin, the lower lip and the
+#: channel's lower wall by computed weights. No motion group drives it (``extension_rig.motion_payload`` reads the
+#: packages' groups only); the renderers turn it (``mouthOpen.ts``), a clip may.
+JAW = {"bone": "mixamorig:Jaw", "parent": "Head"}
 #: The override keys the build reads (``collision_channels`` override without ``cone_deg``).
 BUILD_OVERRIDE_KEYS = ("offset_mm", "radius_scale", "depth_scale", "tilt_deg")
 
@@ -55,11 +60,12 @@ def build_override(profile: Dict[str, Any]) -> Dict[str, Any]:
 
 def group(profile: Dict[str, Any]) -> Dict[str, Any]:
     """The core extension group, shaped like a package's (``dataclasses.asdict`` of a ``RigSpec``) so every reader
-    of ``rig_groups_for`` finds the keys it expects; no chains, no clothing slot covers it."""
+    of ``rig_groups_for`` finds the keys it expects; one chain (the jaw bone), no clothing slot covers it."""
     from dataclasses import asdict
     from app.plugins.registry import RigSpec
     override = build_override(profile)
-    declared = asdict(RigSpec(id=GROUP_ID, op=OP, chains=[], params={"override": override} if override else {}))
+    declared = asdict(RigSpec(id=GROUP_ID, op=OP, chains=[[dict(JAW)]],
+                              params={"override": override} if override else {}))
     declared["covered_by"] = []
     return declared
 

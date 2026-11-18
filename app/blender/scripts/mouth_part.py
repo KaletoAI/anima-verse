@@ -19,7 +19,8 @@ The mesher delivers a face whose mouth is drawn, not open. This op (Ruling A203,
 3. BUILDS the channel: a pouch whose rim is the ripped path, running ``depth`` along the axis from the opening
    toward the top of the throat (the midpoint of the head and neck joints, the A193 axis), its width going from the
    mouth's to 2 x ``radius``. Upper and lower wall coincide at rest (the mouth is closed) and share their side and
-   back vertices, so the pouch is closed. Its faces take the darkest lip-line texel of the body's own texture.
+   back vertices, so the pouch is closed. It has its own material without a texture: the colour of the darkest
+   lip-line texel, darkened (``inside.shade``) and fully rough.
 4. CLEARS the space the open channel takes: meshers leave walls and lumps inside the head (an inner shell a few
    millimetres under the skin, a modelled oral cavity). A face that is neither the cut skin nor the pouch, has a
    vertex inside the channel's core (from ``clear.start`` behind the opening, ``clear.margin`` inside its width,
@@ -37,6 +38,11 @@ The mesher delivers a face whose mouth is drawn, not open. This op (Ruling A203,
    would tear (shares more than ``share.tear`` apart) is removed. The pouch's lower wall follows the jaw by
    ``lower_follow`` (1 at the lips, 0 at the back), the upper wall stays, their shared sides lie between.
 
+6. THE JAW BONE (part 3): when the group declares a bone (``chains``: Jaw, child of Head), it is created at the
+   hinge and the jaw share becomes its WEIGHT (taken from each vertex's other weights in proportion). Turning the
+   bone about the body's side axis by ``jaw.open_deg`` (written on the bone as ``mouth_open_deg``) opens the mouth;
+   the shape key then holds only what a bone cannot do — the upper lip's lift and the dome.
+
 The op reports its ``opening`` (centre, inward axis, depth, radius, half width; glTF axes, bind space) for the
 mouth channel of the collision record. The per-character override (``override``: offset_mm [side, up, front],
 radius_scale, depth_scale, tilt_deg) moves the measured line, scales the pouch and tilts its axis; the opening
@@ -51,7 +57,7 @@ _SCRIPT_DIR = str(Path(__file__).parent)
 sys.path.insert(0, _SCRIPT_DIR)
 import _common
 from attached_part import base_color_source, resolve_bone
-from inset_part import harmonic_fill
+from inset_part import body_roughness, harmonic_fill
 from mouth_math import (_smooth, _sstep, corners, jaw_hinge, lip_row, lower_follow, ring_depths, track_line,
                         turned)
 import mouth_math
@@ -74,7 +80,7 @@ DEFAULTS = {
     'patch': {'margin': .006, 'height': .012, 'behind': .012, 'near': .004, 'edge_near': .002, 'edge_far': .003},
     'depth': .08, 'radius': .02,
     # Ring spacing of the pouch (first step, growth), where its width and the lip curve have blended out.
-    'rings': {'first': .003, 'growth': 1.3, 'taper': .03, 'flatten': .02, 'column': .002},
+    'rings': {'first': .003, 'growth': 1.15, 'taper': .03, 'flatten': .02, 'column': .003},
     # The jaw's hinge behind / above the opening (for a body whose Hips-to-Head distance is ``reference``; scaled
     # with it within ``scale``) and its full opening angle.
     'jaw': {'back': .085, 'up': .03, 'open_deg': 26., 'reference': .6, 'scale': [.8, 1.25]},
@@ -84,9 +90,11 @@ DEFAULTS = {
     'lift': {'height': .0025, 'band': .008, 'depth': .015},
     'dome': {'height': .008, 'blend': .012},
     'clear': {'start': .004, 'margin': .002, 'above': .003, 'below': .003},
+    'inside': {'shade': .6},
     'override': {'offset_mm': [0., 0., 0.], 'radius_scale': 1., 'depth_scale': 1., 'tilt_deg': 0.},
 }
 SHAPE_KEY = 'mouth_open'
+INSIDE_MATERIAL = 'mouth_channel'
 SNAP_M = .00004               # a vertex closer to the line than this is moved off it before the cut
 
 
@@ -118,6 +126,8 @@ def parameters(raw):
             or not 0 < jaw['open_deg'] <= 45 or min(p['clear'].values()) < 0:
         raise ValueError('Jaw: positive lengths, open_deg within (0, 45]; clear: nonnegative lengths')
     line = p['line']
+    if not 0 < p['inside']['shade'] <= 1:
+        raise ValueError('Inside: shade within (0, 1]')
     if min(p['dome'].values()) <= 0 or min(p['share'].values()) <= 0 \
             or min(p['lift']['band'], p['lift']['depth']) <= 0 or p['lift']['height'] < 0:
         raise ValueError('Share and lift: positive lengths')
@@ -189,6 +199,18 @@ def measure(body, arm, P):
     hit_uv = (uv[tri_loops[fi, 0]] * (1 - b1 - b2)[:, None] + uv[tri_loops[fi, 1]] * b1[:, None]
               + uv[tri_loops[fi, 2]] * b2[:, None])
     colour = px[(np.floor(hit_uv[:, 1] % 1 * H).astype(int)) % H, (np.floor(hit_uv[:, 0] % 1 * W).astype(int)) % W, :3]
+    # Roughness at the hits (the glTF green channel x factor; a constant without a texture).
+    rough_image, rough_value, rough_factor = body_roughness(bsdf)
+    rough = np.full(depth.shape, float(rough_value))
+    if rough_image is not None:
+        RW, RH = rough_image.size
+        rpx = np.empty(RW * RH * 4, np.float32)
+        rough_image.pixels.foreach_get(rpx)
+        rpx = rpx.reshape(RH, RW, 4)
+        rough[ok] = np.clip(rpx[(np.floor(hit_uv[:, 1] % 1 * RH).astype(int)) % RH,
+                                (np.floor(hit_uv[:, 0] % 1 * RW).astype(int)) % RW, 1] * rough_factor, 0, 1)
+    rgb = np.full(depth.shape + (3,), np.nan)
+    rgb[ok] = colour
     lum = np.full(depth.shape, np.nan)
     lum[ok] = colour @ np.array([.3, .6, .1])
     red = np.full(depth.shape, np.nan)
@@ -234,6 +256,7 @@ def measure(body, arm, P):
     coef = coef.copy()
     coef[0] += o['offset_mm'][1] / 1000
     return {'V': V, 'tris': tris, 'bvh': bvh, 'S': S, 'Z': Z, 'depth': depth, 'lum': lum, 'uv': uv_grid,
+            'rough': rough, 'rgb': rgb,
             'head': head, 'neck': neck, 's0': float(s0), 'hw': hw, 'coef': [float(c) for c in coef],
             'nose': [float(S[nose_j]), nose_y, float(Z[nose_i])], 'chin_z': float(Z[chin_i]),
             'contrast': contrast, 'tracked_half_width': float(half)}
@@ -497,15 +520,31 @@ def build(group, output):
         keep = 1 - _sstep(d / P['rings']['flatten'])
         return O + axis * d + lateral * (across * widen)[:, None] + rest * keep
 
-    # Darkest lip-line texel near the middle: the colour of the pouch.
-    dark_uv, dark = None, np.inf
+    # The pouch's material: its own, without a texture — the colour of the darkest lip-line texel near the
+    # middle, darkened by ``inside.shade``, fully rough. (One texel of the body's own texture was tried first: lips
+    # are glossy on these bodies, roughness .02-.5 and no matt texel of a similar colour anywhere on the face, so
+    # the inside of the open mouth shone white in the clients.) It carries the part mark ``attached_part``, so
+    # the readers of the body's base colour leave it alone.
+    dark_uv, dark, dark_at = None, np.inf, None
     for x in np.arange(s0 - hw * .5, s0 + hw * .5, .001):
         z = float(_line_z(coef, s0, x))
         value = _grid_at(m['lum'], S, Z, x, z)
         if np.isfinite(value) and value < dark:
-            dark, dark_uv = float(value), _grid_at(m['uv'], S, Z, x, z)
+            dark, dark_uv, dark_at = float(value), _grid_at(m['uv'], S, Z, x, z), (x, z)
     if dark_uv is None:
         raise ValueError('No texel on the lip line')
+    lip_rgb = np.clip(np.asarray(_grid_at(m['rgb'], S, Z, *dark_at), float), 0, 1)
+    inside_rgb = np.where(lip_rgb <= .04045, lip_rgb / 12.92, ((lip_rgb + .055) / 1.055) ** 2.4) * P['inside']['shade']
+    inside = bpy.data.materials.new(INSIDE_MATERIAL)
+    inside.use_nodes = True
+    inside['attached_part'] = group['id']
+    inside.use_backface_culling = True
+    shader = next(nd for nd in inside.node_tree.nodes if nd.type == 'BSDF_PRINCIPLED')
+    shader.inputs['Base Color'].default_value = (*[float(c) for c in inside_rgb], 1.)
+    shader.inputs['Roughness'].default_value = 1.
+    shader.inputs['Metallic'].default_value = 0.
+    body.data.materials.append(inside)
+    inside_slot = len(body.data.materials) - 1
 
     def new_vert(p, like):
         v = bm.verts.new(Mi @ Vector(p))
@@ -522,7 +561,6 @@ def build(group, output):
             keep_cols.append(i)
     keep_cols.append(n - 1)
     rings_pos = [ring(k) for k in range(K)]
-    material = source[centre_i].link_faces[0].material_index
     pouch = []
 
     def face(tri, flip):
@@ -532,7 +570,7 @@ def build(group, output):
             fc = bm.faces.new(tri[::-1] if flip else tri)
         except ValueError:
             return
-        fc.material_index = material
+        fc.material_index = inside_slot
         fc.smooth = True
         fc[tag] = 2
         for loop in fc.loops:
@@ -799,8 +837,39 @@ def build(group, output):
     bm.free()
     body.data.update()
 
-    # The shape key: the jaw's turn by each vertex's share, plus the lift.
-    opened = turned(rest_co, hinge, jaw_share * theta)
+    # The jaw (part 3): with a declared bone the turn is the BONE's — the share becomes its weight, taken from the
+    # vertex's other weights in proportion — and the shape key keeps what a bone cannot do (the upper lip's lift,
+    # the dome). Without one the shape key carries the turn as well.
+    chains = group.get('chains') or []
+    jaw_name = chains[0][0]['bone'] if chains and chains[0] else None
+    if jaw_name:
+        parent = resolve_bone(arm.data.bones, chains[0][0]['parent']).name
+        bpy.context.view_layer.objects.active = arm
+        bpy.ops.object.mode_set(mode='EDIT')
+        to_arm = arm.matrix_world.inverted()
+        bone = arm.data.edit_bones.new(jaw_name)
+        bone.head = to_arm @ Vector(hinge)
+        # Toward the chin: from the hinge to a point under the opening.
+        bone.tail = to_arm @ Vector(hinge + (O + np.array([0., 0., -.03]) - hinge) * .6)
+        bone.parent = arm.data.edit_bones[parent]
+        bone.use_connect = False
+        bone.use_deform = True
+        jaw_name = bone.name
+        bpy.ops.object.mode_set(mode='OBJECT')
+        arm.data.bones[jaw_name]['mouth_open_deg'] = float(P['jaw']['open_deg'])
+        jaw_group = body.vertex_groups.get(jaw_name) or body.vertex_groups.new(name=jaw_name)
+        for i_ in np.nonzero(jaw_share > 1e-4)[0]:
+            vertex = body.data.vertices[int(i_)]
+            share_ = float(min(jaw_share[i_], 1.))
+            total = sum(g_.weight for g_ in vertex.groups) or 1.
+            for g_ in vertex.groups:
+                g_.weight = g_.weight * (1. - share_)
+            jaw_group.add([int(i_)], share_ * total, 'REPLACE')
+        opened = rest_co.copy()
+        moved = (lift > 1e-7) | (np.abs(rise).sum(1) > 1e-7)
+    else:
+        opened = turned(rest_co, hinge, jaw_share * theta)
+        moved = (jaw_share > 1e-5) | (lift > 1e-7) | (np.abs(rise).sum(1) > 1e-7)
     opened[:, 2] += lift
     opened += rise
     if body.data.shape_keys is None:
@@ -808,7 +877,6 @@ def build(group, output):
     key = body.data.shape_keys.key_blocks.get(SHAPE_KEY) or body.shape_key_add(name=SHAPE_KEY, from_mix=False)
     key.slider_min, key.slider_max, key.value = 0., 1., 0.
     local = np.array([tuple(Mi @ Vector(p)) for p in opened])
-    moved = (jaw_share > 1e-5) | (lift > 1e-7) | (np.abs(rise).sum(1) > 1e-7)
     for i_ in np.nonzero(moved)[0]:
         key.data[int(i_)].co = Vector(local[i_])
 
@@ -831,8 +899,11 @@ def build(group, output):
             'throat_reach': round(reach, 4), 'rim_points': n, 'rings': K,
             'jaw': {'hinge': [round(c, 5) for c in _gltf(hinge)], 'open_deg': P['jaw']['open_deg'],
                     'scale': round(jaw_scale, 3)},
-            'shape_key': SHAPE_KEY, 'moved_vertices': int(moved.sum()), 'torn_faces_removed': len(torn),
+            'shape_key': SHAPE_KEY, 'moved_vertices': int(moved.sum()),
+            'jaw_bone': jaw_name, 'jaw_vertices': int((jaw_share > 1e-4).sum()) if jaw_name else 0, 'torn_faces_removed': len(torn),
             'cleared_faces': cleared, 'pouch_uv': [float(dark_uv[0]), float(dark_uv[1])],
+            'inside': {'lip_line_rgb': [round(float(c), 3) for c in lip_rgb],
+                       'base_color_linear': [round(float(c), 4) for c in inside_rgb]},
             'pouch_tris': pouch_tris, 'skin_tris': skin_tris, 'rim_segments': len(open_edges),
             'unmatched_open_edges': unmatched}
 

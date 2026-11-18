@@ -126,7 +126,8 @@ with tempfile.TemporaryDirectory() as tmp:
 
         # The validation context names the bones of the part resolution too, whatever outfit is worn: a base
         # that shows the part (and its companion bone C) is not refused while the character is clothed.
-        assert set(er.extension_bone_names(NAME, clothed)) == {'mixamorig:G1', 'mixamorig:G2', 'mixamorig:C'}
+        # (besides the core's own jaw bone, Ruling A203)
+        assert set(er.extension_bone_names(NAME, clothed)) - {'mixamorig:Jaw'} == {'mixamorig:G1', 'mixamorig:G2', 'mixamorig:C'}
 
         # [3] old base record without the key, inputs rendered with the part.
         base_old = {'base': True, 'source_image': front.name, 'source_image_sha256': sha_v1}

@@ -13,7 +13,9 @@ without packages was empty; [0] proves that against that commit.
 FIXTURE: the synthetic body of ``smoke_collision_capsules.make_body`` (Head joint (0, 1.6, 0), body frame side +x,
 up +y, front +z).
 
-[1] The group: every character gets ``{id "mouth_channel", op "mouth_part", chains [], params {}}``; with the
+[1] The group: every character gets ``{id "mouth_channel", op "mouth_part", chains [[Jaw under Head]], params
+    {}}`` — the jaw is an extension bone: ``extension_bone_names`` names it, so the model validator accepts a model
+    carrying it (53 joints) and refuses it without that context; no motion group drives it; with the
     stored override mouth = {offset_mm [1, 2, 3], radius_scale 1.5, depth_scale 0.5, cone_deg 40, tilt_deg 10} its
     params are {"override": the same without cone_deg} (the cone has no geometry). The extension fingerprint
     differs between the two (a saved override makes the extension step due) and changes with the op's build.
@@ -86,8 +88,19 @@ def main():
     stored = {"offset_mm": [1, 2, 3], "radius_scale": 1.5, "depth_scale": 0.5, "cone_deg": 40, "tilt_deg": 10}
     profile = {"model3d_opts": {"collision_channels": {"mouth": stored}}}
     plain = mouth_channel.group({})
-    check("id, op, no chains, no params", (plain["id"], plain["op"], plain["chains"], plain["params"])
-          == ("mouth_channel", "mouth_part", [], {}), plain)
+    check("id, op, the jaw chain, no params", (plain["id"], plain["op"], plain["chains"], plain["params"])
+          == ("mouth_channel", "mouth_part", [[{"bone": "mixamorig:Jaw", "parent": "Head"}]], {}), plain)
+    names = extension_rig.extension_bone_names("demo", profile={})
+    check("the validator's context names the jaw", names == {
+        "mixamorig:Jaw": {"parent": "Head", "group": "mouth_channel"}}, names)
+    from app.core.model_validate import validate_glb
+    from app.core.rig_contract import BASE_JOINT_NAMES
+    from scripts.smoke_extension_rig_p0 import glb as fixture_glb
+    base_names = ["mixamorig:" + name for name in BASE_JOINT_NAMES]
+    with_jaw = fixture_glb(base_names + ["mixamorig:Jaw"], extra_parents={"mixamorig:Jaw": "mixamorig:Head"})
+    check("a model with the jaw: refused without the context, accepted with it",
+          (validate_glb(with_jaw)["ok"], validate_glb(with_jaw, extension_names=names)["ok"]) == (False, True),
+          (validate_glb(with_jaw), validate_glb(with_jaw, extension_names=names)))
     tuned = mouth_channel.group(profile)
     check("override without the cone", tuned["params"] == {"override": {
         "offset_mm": [1.0, 2.0, 3.0], "radius_scale": 1.5, "depth_scale": 0.5, "tilt_deg": 10.0}}, tuned["params"])

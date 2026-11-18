@@ -36,7 +36,7 @@ with tempfile.TemporaryDirectory() as tmp:
             'app.plugins.registry.packages', return_value=[pkg]):
         groups = er.package_rig_groups_for('', profile)
         assert groups[0]['op'] == 'inset_part' and groups[0]['params'] == {'inner_scale': .5}
-        assert er.extension_bone_names('', profile) == {}
+        assert set(er.extension_bone_names('', profile)) == {'mixamorig:Jaw'}  # only the core's jaw (Ruling A203)
         assert er.declared_motion_groups() == []
         assert er.motion_payload('', profile)['groups'] == {}
         fingerprint = er.extension_rig_fingerprint(groups)

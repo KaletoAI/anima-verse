@@ -441,7 +441,7 @@ def main():
 
         shutil.rmtree(package)
         discover_packages(plugins, force=True)
-        check(package_rig_groups_for("demo", profile) == [] and extension_bone_names("demo", profile) == {},
+        check(package_rig_groups_for("demo", profile) == [] and set(extension_bone_names("demo", profile)) == {"mixamorig:Jaw"},
               "package deletion removes groups")
         check(validate_glb(glb(base))["ok"] and not validate_glb(data)["ok"], "deletion restores strict base contract")
         check(extension_metadata("demo", profile)["status"] == "none_applicable", "deletion metadata")

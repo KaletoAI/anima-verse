@@ -207,7 +207,8 @@ profile reads (no DB query per call).
 Ruling A139. A pair/group clip says which place's attached part aims at which
 target of which other place: `[{"part": "b", "at": "a", "target": t}]`,
 `t` ∈ `channel` (a declared channel) · `mouth` (the mouth opening every
-humanoid figure carries on its head, Ruling A159 — a channel built from the head
+humanoid figure carries on its head, Ruling A159 — the built mouth channel of
+Ruling A203 where the model has one, else a channel built from the head
 bones) · `hand_left` · `hand_right` · `none`. A package defaults its own kinds with
 `register_provider("clip_contact_target_defaults", fn, owner="<package id>", multiple=True)`,
 `fn() -> {kind: relations | target word}` (a bare word = one relation B → A).

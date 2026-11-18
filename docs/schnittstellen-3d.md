@@ -12410,7 +12410,20 @@ chain may enter during a running pair interaction, instead of being pushed out o
 applicable channel per model into the bind space of the collision record (`app/core/collision_channels.py`). The
 guidance rule exists once, in `packages/scene-render/src/channels.ts`. The 3D client applies it to the figures on
 the map (`secondaryMotion.ts`, phase B). The admin viewer draws it and drives a test rod through it. No package in
-this repository declares a region, so every record here carries `channels: []`.
+this repository declares a region; the one channel the core itself declares is the mouth (below).
+
+**The built mouth (Ruling A203).** Every humanoid model carries the core's extension group `mouth_channel`
+(`app/core/mouth_channel.py`, Blender op `mouth_part`): the skin is cut along the measured lip line, a closed pouch
+runs from it toward the top of the throat, the extension bone `Jaw` (a child of Head at the jaw's hinge, weights
+computed) opens it and the morph target `mouth_open` adds the upper lip's lift. Its channel record has the id
+`mouth` — the renderers' mouth channel id, so a figure that carries it gets no head-bone mouth beside it — with
+`placement: "rig"`, `a_pos` / `b_pos` / `r` of the BUILT geometry, `applied` = the override the build used, and
+`open_height` (metres): the opening's height with the mouth fully open. A renderer opens the mouth with ONE number
+0…1 (`packages/scene-render/src/mouthOpen.ts`): the jaw turns about the model's side axis by value × the bone's
+`mouth_open_deg` (node `extras`), the morph target's influence is the value; contact asks for
+`(2 · radius + 4 mm) / open_height`. A model whose face shows no lip line has no such record
+(`channels_skipped` gives the reason) and keeps the measured `mouth` of version 9. The reduced tier carries the
+bone and its weights but no morph target.
 
 **The record** (`ChannelRecord` / `ChannelOverride` in `packages/scene-render/src/collision.ts`):
 

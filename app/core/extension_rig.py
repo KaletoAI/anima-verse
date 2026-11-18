@@ -281,7 +281,8 @@ PART_BUILDS = {"attached_part": 14, "inset_part": 9}
 # at the sternum, the depth gate follows the underside down to the crease (Ruling A173).
 # mouth_part 1: the skin cut along the measured lip line with a closed pouch behind it (Ruling A203).
 # 2: the shape key ``mouth_open`` (the jaw's turn by the computed share, the upper lip's lift, the dome).
-OP_BUILDS = {**PART_BUILDS, "pair_protrusion": 4, "pair_tip": 2, "mouth_part": 2}
+# 3: the bone Jaw owns the turn by computed weights, the shape key keeps the lift and the dome.
+OP_BUILDS = {**PART_BUILDS, "pair_protrusion": 4, "pair_tip": 2, "mouth_part": 3}
 
 
 def extension_rig_fingerprint(groups, overrides=None):
@@ -551,8 +552,9 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
     from app.core import hair_motion
-    # The packages' groups: the core's mouth channel has no motion of its own.
-    declarations = package_rig_groups_for(character_name, profile)
+    # Without the core's mouth channel: its jaw bone has no motion of its own (the renderers turn it).
+    from app.core import mouth_channel
+    declarations = [g for g in rig_groups_for(character_name, profile) if g.get("op") != mouth_channel.OP]
     scale = profile.get("motion_gravity_scale", 1)
     try:
         scale = float(scale)

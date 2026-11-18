@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Ruling A203 part 2: the morph target `mouth_open` and who drives it. Numbers by hand (§ B5a).
+ * Ruling A203 parts 2 and 3: the morph target `mouth_open`, the bone `Jaw` and who drives them. Numbers by hand (§ B5a).
  *
  * Usage: node scripts/smoke_mouth_open.mjs   (no server, no world; bundles scene-render with esbuild)
  *
@@ -15,6 +15,19 @@
  *     segment radius x w = 0.01 -> (0.02 + 0.004) / 0.04 = 0.6; an occupant of ANOTHER channel changes nothing;
  *     no occupant -> 0; setMouthOpen(0.25) -> 0.25 without contact, 0.6 with it (max); inspect().mouthOpen says the
  *     same. A payload without open_height -> contact opens nothing (0), the manual value still applies.
+ * [4] THE JAW BONE (part 3). Head at (0, 1.6, 0), Jaw its child at local (0, -0.02, 0.02) = model (0, 1.58, 0.02),
+ *     no bind rotation, `mouth_open_deg` 20 on the bone; a vertex at model (0, 1.5, 0.1) weighted 1 to the jaw.
+ *     Value 0.5 -> the jaw turns 10 degrees about the model's +X: local quaternion (sin 5, 0, 0, cos 5) =
+ *     (0.0871557, 0, 0, 0.9961947). The vertex, rel. to the hinge (0, -0.08, 0.08): y' = y cos - z sin =
+ *     -0.078785 - 0.013892 = -0.092677, z' = y sin + z cos = -0.013892 + 0.078785 = 0.064893 -> (0, 1.487323,
+ *     0.084893): the front goes DOWN. Value 0 again -> the rest quaternion. Never driven -> the bone is not
+ *     touched (a clip's rotation stays).
+ *     With the Head's BIND turned 90 degrees about +Y the model's +X is the jaw's local -Z... by hand: R_y(90) maps
+ *     local x -> model (0, 0, -1), local z -> model (1, 0, 0); the first row of R is (0, 0, 1), so the model's +X is
+ *     the bone's local +Z and the same 10 degrees give the local quaternion (0, 0, 0.0871557, 0.9961947) — the
+ *     vertex lands on the same (0, 1.487323, 0.084893).
+ *     Without `mouth_open_deg` the full angle is JAW_OPEN_DEG = 26: value 1 -> (sin 13, 0, 0, cos 13) =
+ *     (0.2249511, 0, 0, 0.9743701).
  */
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -119,6 +132,57 @@ rt.applyChannelOpenings([{ channel: 'mouth', w: 1, segments: [seg(0.02)] }], { l
 check('[3] no open height: contact opens nothing', mesh.morphTargetInfluences[1] === 0, mesh.morphTargetInfluences[1])
 rt.setMouthOpen(0.4)
 check('[3] ... the manual value still applies', near(mesh.morphTargetInfluences[1], 0.4, 1e-12))
+
+// [4]
+const jawFixture = (headTurnY = 0, deg = 20) => {
+  const root = new THREE.Group()
+  const inst = new THREE.Group(); root.add(inst)
+  const hips = new THREE.Bone(); hips.name = 'mixamorig:Hips'; inst.add(hips)
+  const head = new THREE.Bone(); head.name = 'mixamorig:Head'; head.position.set(0, 1.6, 0); head.rotation.y = headTurnY
+  hips.add(head)
+  const jaw = new THREE.Bone(); jaw.name = 'mixamorig:Jaw'
+  if (deg) jaw.userData.mouth_open_deg = deg
+  head.add(jaw)
+  // The jaw at model (0, 1.58, 0.02) whatever the head's bind turn: its local offset is the model offset turned back.
+  jaw.position.copy(new THREE.Vector3(0, -0.02, 0.02).applyQuaternion(head.quaternion.clone().invert()))
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute([0, 1.5, 0.1, 0, 1.7, 0.1, 0, 1.6, 0.2], 3))
+  geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute([2, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], 4))
+  geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], 4))
+  const mesh = new THREE.SkinnedMesh(geo, new THREE.MeshBasicMaterial())
+  inst.add(mesh); root.updateMatrixWorld(true)
+  mesh.bind(new THREE.Skeleton([hips, head, jaw]))
+  const vertex = () => {
+    root.updateMatrixWorld(true)
+    const p = new THREE.Vector3(0, 1.5, 0.1)
+    return p.applyMatrix4(mesh.skeleton.boneInverses[2]).applyMatrix4(jaw.matrixWorld).toArray()
+  }
+  return { inst, jaw, vertex }
+}
+const q = (b) => [b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w]
+let j = jawFixture()
+let jo = SR.bindMouthOpen(j.inst)
+check('[4] a body with a jaw and no target binds', jo !== null)
+jo.setManual(0.5)
+check('[4] 10 degrees about local X', vnear(q(j.jaw), [0.0871557, 0, 0, 0.9961947], 1e-6), fmt(q(j.jaw)))
+check('[4] the jaw vertex goes down', vnear(j.vertex(), [0, 1.487323, 0.084893], 1e-5), fmt(j.vertex()))
+jo.setManual(0)
+check('[4] back to rest', vnear(q(j.jaw), [0, 0, 0, 1], 1e-9), fmt(q(j.jaw)))
+j = jawFixture()
+jo = SR.bindMouthOpen(j.inst)
+j.jaw.quaternion.set(0, 0.1, 0, Math.sqrt(1 - 0.01))
+jo.setContact(0)
+check('[4] never driven: a clip keeps the bone', near(j.jaw.quaternion.y, 0.1, 1e-12), fmt(q(j.jaw)))
+j = jawFixture(Math.PI / 2)
+jo = SR.bindMouthOpen(j.inst)
+jo.setManual(0.5)
+check('[4] bind turned 90 about Y: local Z', vnear(q(j.jaw), [0, 0, 0.0871557, 0.9961947], 1e-6), fmt(q(j.jaw)))
+check('[4] ... the same vertex position', vnear(j.vertex(), [0, 1.487323, 0.084893], 1e-5), fmt(j.vertex()))
+j = jawFixture(0, 0)
+jo = SR.bindMouthOpen(j.inst)
+jo.setManual(1)
+check('[4] no angle on the bone: 26 degrees', vnear(q(j.jaw), [0.2249511, 0, 0, 0.9743701], 1e-6) && SR.JAW_OPEN_DEG === 26,
+  fmt(q(j.jaw)))
 
 console.log(failed ? `FAILED (${failed})` : 'ALL OK')
 process.exit(failed ? 1 : 0)
