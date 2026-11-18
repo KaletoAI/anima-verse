@@ -51,14 +51,14 @@ border and crossing normals tilt beyond the limits and its apex normal points
 at the root: at least two sizes x three checks fail there.
 """
 import json
-import os
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-BLENDER = Path.home() / 'tools/blender-5.2.2-linux-x64/blender'
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _smoke_attached_part as _ap  # noqa: E402  (shared Blender harness)
+BLENDER = _ap.BLENDER
 OLD_COMMIT = 'a269ae4d218c2510fa6ed35e48a8b5995aca8357'
 SIZES = (1.0, 1.6)
 TUCK_MM, STEP_TOLERANCE_MM, CREASE_LIMIT_DEG, CROSSING_LIMIT_DEG = .4, .05, 1.0, 8.0
@@ -130,17 +130,7 @@ def blender_side(scripts, directory):
 
 
 def run_blender(scripts, directory):
-    env = {**os.environ, 'OMP_NUM_THREADS': '2', 'OPENBLAS_NUM_THREADS': '1', 'PYTHONUNBUFFERED': '1'}
-    Path(directory).mkdir()
-    log = Path(directory) / 'blender.log'
-    with log.open('w') as stream:
-        result = subprocess.run(['nice', '-n', '15', 'timeout', '900', str(BLENDER), '-b', '-noaudio', '--factory-startup',
-                                 '--python-exit-code', '1', '--python', str(Path(__file__).resolve()), '--',
-                                 '--blender', scripts, directory], stdout=stream, stderr=subprocess.STDOUT, env=env)
-    if result.returncode:
-        print(log.read_text()[-6000:])
-        raise SystemExit(result.returncode)
-    return json.loads((Path(directory) / 'seam.json').read_text())
+    return _ap.run_blender(__file__, scripts, directory, 'seam.json')
 
 
 def failures(data):
@@ -183,12 +173,7 @@ def main():
                   'deg; crossing crease max', round(max(row['crossing'], default=0.), 2), 'deg over',
                   len(row['crossing']), 'edges; apex facing', round(row['apex_facing'], 2))
         # The same checks against the builder before Ruling A65b.
-        old = Path(directory) / 'old-scripts'
-        old.mkdir()
-        for name in ('attached_part.py', '_common.py'):
-            source = subprocess.run(['git', '-C', str(ROOT), 'show', f'{OLD_COMMIT}:app/blender/scripts/{name}'],
-                                    capture_output=True, text=True, check=True).stdout
-            (old / name).write_text(source)
+        old = _ap.old_scripts(Path(directory) / 'old-scripts', OLD_COMMIT)
         old_problems = failures(run_blender(str(old), str(Path(directory) / 'old')))
         assert len(old_problems) >= 6, old_problems
         print('old builder', OLD_COMMIT[:9], 'fails', len(old_problems), 'checks, e.g.', old_problems[0])
@@ -196,18 +181,4 @@ def main():
 
 
 if __name__ == '__main__':
-    if '--blender' in sys.argv:
-        try:
-            index = sys.argv.index('--blender')
-            blender_side(sys.argv[index + 1], sys.argv[index + 2])
-        except BaseException:
-            import traceback
-            traceback.print_exc()
-            sys.stdout.flush()
-            sys.stderr.flush()
-            os._exit(1)
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os._exit(0)
-    else:
-        main()
+    _ap.blender_entry(blender_side, main)

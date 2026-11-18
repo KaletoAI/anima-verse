@@ -52,14 +52,14 @@ meet the wall first), reports neither metric, turns neighbouring faces by up to
 """
 import json
 import math
-import os
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-BLENDER = Path.home() / 'tools/blender-5.2.2-linux-x64/blender'
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _smoke_attached_part as _ap  # noqa: E402  (shared Blender harness)
+BLENDER = _ap.BLENDER
 OLD_COMMIT = '63a161e12e525cca182ec4acbcc5cd3e3d9c8223'
 BUMP_H, BUMP_R, BUMP_BELOW, INNER = .012, .015, .045, .004
 TURN_DEG = math.degrees(2 * BUMP_H / BUMP_R ** 2 * .005)
@@ -173,17 +173,7 @@ def blender_side(scripts, directory):
 
 
 def run_blender(scripts, directory):
-    env = {**os.environ, 'OMP_NUM_THREADS': '2', 'OPENBLAS_NUM_THREADS': '1', 'PYTHONUNBUFFERED': '1'}
-    Path(directory).mkdir()
-    log = Path(directory) / 'blender.log'
-    with log.open('w') as stream:
-        result = subprocess.run(['nice', '-n', '15', 'timeout', '900', str(BLENDER), '-b', '-noaudio', '--factory-startup',
-                                 '--python-exit-code', '1', '--python', str(Path(__file__).resolve()), '--',
-                                 '--blender', scripts, directory], stdout=stream, stderr=subprocess.STDOUT, env=env)
-    if result.returncode:
-        print(log.read_text()[-6000:])
-        raise SystemExit(result.returncode)
-    return json.loads((Path(directory) / 'window.json').read_text())
+    return _ap.run_blender(__file__, scripts, directory, 'window.json')
 
 
 def failures(data):
@@ -226,12 +216,7 @@ def main():
               round(min(r['hits'][1][0] - r['hits'][0][0] for r in window['rays'] if len(r['hits']) == 2) * 1000, 2),
               'mm behind; sharpest turn', round(max(t['after'] for t in window['turns']), 1), 'degrees (limit',
               round(TURN_DEG, 1), ')')
-        old = Path(directory) / 'old-scripts'
-        old.mkdir()
-        for name in ('attached_part.py', '_common.py'):
-            source = subprocess.run(['git', '-C', str(ROOT), 'show', f'{OLD_COMMIT}:app/blender/scripts/{name}'],
-                                    capture_output=True, text=True, check=True).stdout
-            (old / name).write_text(source)
+        old = _ap.old_scripts(Path(directory) / 'old-scripts', OLD_COMMIT)
         old_problems = failures(run_blender(str(old), str(Path(directory) / 'old')))
         assert len(old_problems) >= 5, old_problems
         print('old builder', OLD_COMMIT[:9], 'fails', len(old_problems), 'checks, e.g.', old_problems[0])
@@ -240,18 +225,4 @@ def main():
 
 
 if __name__ == '__main__':
-    if '--blender' in sys.argv:
-        try:
-            index = sys.argv.index('--blender')
-            blender_side(sys.argv[index + 1], sys.argv[index + 2])
-        except BaseException:
-            import traceback
-            traceback.print_exc()
-            sys.stdout.flush()
-            sys.stderr.flush()
-            os._exit(1)
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os._exit(0)
-    else:
-        main()
+    _ap.blender_entry(blender_side, main)

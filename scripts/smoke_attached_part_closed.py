@@ -49,14 +49,14 @@ least 10 of the 14 checks fail there.
 """
 import json
 import math
-import os
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-BLENDER = Path.home() / 'tools/blender-5.2.2-linux-x64/blender'
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _smoke_attached_part as _ap  # noqa: E402  (shared Blender harness)
+BLENDER = _ap.BLENDER
 OLD_COMMIT = 'd6a5fce3a83f5258524b503d0a0323f95023a5c9'
 ROOT_Z = 1.0 - .00172
 FLOOR_BELOW = {1.0: .058, 1.6: .084}
@@ -163,17 +163,7 @@ def blender_side(scripts, directory):
 
 
 def run_blender(scripts, directory):
-    env = {**os.environ, 'OMP_NUM_THREADS': '2', 'OPENBLAS_NUM_THREADS': '1', 'PYTHONUNBUFFERED': '1'}
-    Path(directory).mkdir()
-    log = Path(directory) / 'blender.log'
-    with log.open('w') as stream:
-        result = subprocess.run(['nice', '-n', '15', 'timeout', '900', str(BLENDER), '-b', '-noaudio', '--factory-startup',
-                                 '--python-exit-code', '1', '--python', str(Path(__file__).resolve()), '--',
-                                 '--blender', scripts, directory], stdout=stream, stderr=subprocess.STDOUT, env=env)
-    if result.returncode:
-        print(log.read_text()[-6000:])
-        raise SystemExit(result.returncode)
-    return json.loads((Path(directory) / 'closed.json').read_text())
+    return _ap.run_blender(__file__, scripts, directory, 'closed.json')
 
 
 def failures(data):
@@ -224,12 +214,7 @@ def main():
                   round(max(a['h_mm'] for a, _ in on_skin), 2), 'mm, moved by the lift',
                   round(max(abs(a['h_mm'] - b['h_mm']) for a, b in on_skin), 4), 'mm')
         # The same checks against the builder before Ruling A65c.
-        old = Path(directory) / 'old-scripts'
-        old.mkdir()
-        for name in ('attached_part.py', '_common.py'):
-            source = subprocess.run(['git', '-C', str(ROOT), 'show', f'{OLD_COMMIT}:app/blender/scripts/{name}'],
-                                    capture_output=True, text=True, check=True).stdout
-            (old / name).write_text(source)
+        old = _ap.old_scripts(Path(directory) / 'old-scripts', OLD_COMMIT)
         old_problems = failures(run_blender(str(old), str(Path(directory) / 'old')))
         assert len(old_problems) >= 10, old_problems
         print('old builder', OLD_COMMIT[:9], 'fails', len(old_problems), 'checks, e.g.', old_problems[0])
@@ -237,18 +222,4 @@ def main():
 
 
 if __name__ == '__main__':
-    if '--blender' in sys.argv:
-        try:
-            index = sys.argv.index('--blender')
-            blender_side(sys.argv[index + 1], sys.argv[index + 2])
-        except BaseException:
-            import traceback
-            traceback.print_exc()
-            sys.stdout.flush()
-            sys.stderr.flush()
-            os._exit(1)
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os._exit(0)
-    else:
-        main()
+    _ap.blender_entry(blender_side, main)
