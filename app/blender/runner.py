@@ -17,7 +17,13 @@ Two deliberate choices:
   breaks the first time a version adds a line.
 * **A script-side failure is a RETURN VALUE, not an exception.** Every caller
   here has the same fallback — keep the untouched original — so making them
-  all write try/except would only invite one of them to forget.
+  all write try/except would only invite one of them to forget. The result
+  names HOW the run ended (``outcome``, ``app.blender.outcome``): a verdict
+  about the input, a timeout, an interruption, Blender unavailable or a
+  defect — callers decide by it, never by the ``error`` text.
+
+Blender's own output is kept in ``logs/blender.log`` (``LOG_FILE``), one block
+per run; a failed run's result carries its end as ``log_tail``.
 
 ``--factory-startup`` drops user preferences and third-party add-ons, so a
 result does not depend on how the host's Blender happens to be set up. The
@@ -66,10 +72,6 @@ from app.core.log import get_logger
 logger = get_logger(__name__)
 
 SCRIPTS_DIR = Path(__file__).parent / "scripts"
-
-# Tail of the Blender log kept on failure — enough for a traceback, not enough
-# to bloat a log line.
-LOG_TAIL_CHARS = 4000
 
 # Blender 5.1 made transform_apply flip normals on negatively scaled objects
 # (corrective_flip_normals, enabled by default); 5.0 does not. Require 5.2 so
@@ -394,11 +396,79 @@ def blender_slot(label: str = "") -> Iterator[None]:
             os.close(fd)  # closing the descriptor drops the flock
 
 
-def _tail(data: Any) -> str:
-    """The last ``LOG_TAIL_CHARS`` of a captured stream (str, bytes or None)."""
+def _text(data: Any) -> str:
+    """A captured stream as text (str, bytes or None)."""
     if isinstance(data, bytes):
         data = data.decode("utf-8", errors="replace")
-    return (data or "")[-LOG_TAIL_CHARS:]
+    return data or ""
+
+
+# --- the Blender log ------------------------------------------------------------
+
+#: ``logs/blender.log`` of the installation — the directory the server logs to, derived from this package's
+#: location (like ``SCRIPTS_DIR``), so a process started elsewhere (the animation studio runs from
+#: ``animation-studio/``) writes the same file. ``start.sh`` archives it at every server start.
+LOG_FILE = Path(__file__).resolve().parents[2] / "logs" / "blender.log"
+#: Blender output kept in the log for a run that did not end ok: the last 64 KB. A traceback with the operator
+#: output before it is a few KB, so this is every script's whole output in practice, while a script that prints
+#: per frame cannot grow the file by more than this per failed run.
+LOG_FAILED_BYTES = 64 * 1024
+#: ... for a run that ended ok: the last 2 KB (the closing lines) — ok runs are the bulk and their output is
+#: rarely read.
+LOG_OK_BYTES = 2 * 1024
+#: ``run()``'s ``log_tail`` of a run that did not end ok: the last 40 lines, at most 4 KB.
+TAIL_LINES = 40
+TAIL_BYTES = 4 * 1024
+
+_log_warned = False
+
+
+def _last_bytes(text: str, limit: int) -> str:
+    raw = text.encode("utf-8", errors="replace")
+    if len(raw) <= limit:
+        return text
+    return "[… cut]\n" + raw[-limit:].decode("utf-8", errors="replace")
+
+
+def _output(stdout: Any, stderr: Any) -> str:
+    """Blender's stdout then its stderr (the traceback last, where a tail looks)."""
+    out, err = _text(stdout), _text(stderr)
+    if out and err and not out.endswith("\n"):
+        out += "\n"
+    return out + err
+
+
+def log_tail(output: str) -> str:
+    """The last ``TAIL_LINES`` lines of ``output``, at most ``TAIL_BYTES``."""
+    lines = output.rstrip("\n").splitlines()[-TAIL_LINES:]
+    raw = "\n".join(lines).encode("utf-8", errors="replace")[-TAIL_BYTES:]
+    return raw.decode("utf-8", errors="ignore")
+
+
+def _write_log(script: str, outcome_: str, seconds: float, job: Path, exit_code: Optional[int],
+               output: str) -> None:
+    """Append ONE block for this run to ``LOG_FILE``: a header line, then the output (``LOG_FAILED_BYTES`` /
+    ``LOG_OK_BYTES`` of it). One ``os.write`` on an ``O_APPEND`` descriptor opened by path for this block: blocks
+    of concurrent processes never interleave, and a rotation by rename loses none. A failure warns once and never
+    fails the run."""
+    global _log_warned
+    from app.core.timeutils import utc_now_iso
+    from app.blender import outcome as oc
+    body = _last_bytes(output, LOG_OK_BYTES if outcome_ == oc.OK else LOG_FAILED_BYTES)
+    head = (f"=== {utc_now_iso()} script={script} outcome={outcome_} seconds={seconds:.2f} pid={os.getpid()} "
+            f"job={job.name} exit={'-' if exit_code is None else exit_code} ===\n")
+    block = head + body + ("" if not body or body.endswith("\n") else "\n")
+    try:
+        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(LOG_FILE), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            os.write(fd, block.encode("utf-8", errors="replace"))
+        finally:
+            os.close(fd)
+    except OSError as e:
+        if not _log_warned:
+            _log_warned = True
+            logger.warning("Blender log %s not writable (%s) — runs go on without it", LOG_FILE, e)
 
 
 #: First bytes ``_PDEATH_EXEC`` writes to stderr when it could not exec the
@@ -639,6 +709,18 @@ def _sweep_once_in_background() -> None:
         logger.exception("Blender: could not start the job folder sweep")
 
 
+#: Signals that end Blender from OUTSIDE without a verdict (a stop, the OOM killer, the death signal of a dead
+#: host): ``INTERRUPTED``. Any other signal (SIGSEGV, SIGABRT, SIGBUS, …) is Blender failing: ``CRASHED``.
+_INTERRUPT_SIGNALS = frozenset({9, 15, 2, 1})  # SIGKILL, SIGTERM, SIGINT, SIGHUP
+
+
+def _result(outcome_: str, error: str = "", *, data: Optional[Dict[str, Any]] = None,
+            outputs: Optional[Dict[str, str]] = None, seconds: float = 0.0, tail: str = "") -> Dict[str, Any]:
+    from app.blender import outcome as oc
+    return {"ok": outcome_ == oc.OK, "outcome": outcome_, "error": error, "data": data or {},
+            "outputs": outputs or {}, "seconds": seconds, "log_tail": "" if outcome_ == oc.OK else tail}
+
+
 def run(script: str, *, inputs: Optional[Dict[str, Path]] = None,
         params: Optional[Dict[str, Any]] = None,
         out_dir: Optional[Path] = None,
@@ -651,27 +733,47 @@ def run(script: str, *, inputs: Optional[Dict[str, Path]] = None,
     declares under ``outputs`` is MOVED there, and the returned paths point at
     the moved files. Without it a produced file would die with the job dir.
 
-    Returns ``{"ok", "error", "data", "outputs", "seconds"}``. ``ok`` False
-    covers everything: Blender missing, disabled by config, crash, timeout,
-    unreadable result, or a script reporting failure itself.
+    Returns ``{"ok", "outcome", "error", "data", "outputs", "seconds",
+    "log_tail"}``. ``outcome`` is one of ``app.blender.outcome.ALL`` — what a
+    caller decides by (``ok`` is ``outcome == OK``): ``UNAVAILABLE`` (disabled,
+    not found, not startable), ``TIMEOUT``, ``INTERRUPTED`` (killed by a stop
+    signal), ``REJECTED`` (the script reported failure itself) or ``CRASHED``
+    (unknown script, input vanished, no or unreadable result, a declared output
+    missing, a crash signal). ``log_tail`` is the end of Blender's output for
+    every outcome but ``OK``. Every run that got a job folder is one block in
+    ``LOG_FILE``; the three answers before it (disabled, not found, unknown
+    script) start nothing and write none.
     """
+    from app.blender import outcome as oc
     st = status()
     if not st["enabled"]:
-        return {"ok": False, "error": "blender refinement is disabled",
-                "data": {}, "outputs": {}, "seconds": 0.0}
+        return _result(oc.UNAVAILABLE, "blender refinement is disabled")
     if not st["executable"]:
-        return {"ok": False, "error": st["error"],
-                "data": {}, "outputs": {}, "seconds": 0.0}
+        return _result(oc.UNAVAILABLE, st["error"])
 
     script_path = SCRIPTS_DIR / f"{script}.py"
     if not script_path.is_file():
-        return {"ok": False, "error": f"unknown blender script: {script}",
-                "data": {}, "outputs": {}, "seconds": 0.0}
+        return _result(oc.CRASHED, f"unknown blender script: {script}")
 
     timeout = int(timeout_s or _config("image_generation.blender_timeout_s", 120))
     _sweep_once_in_background()
     job = Path(tempfile.mkdtemp(prefix=JOB_DIR_PREFIX))
     started = time.time()
+    ran: Dict[str, Any] = {"output": "", "exit": None}
+
+    def done(outcome_: str, error: str = "", **fields: Any) -> Dict[str, Any]:
+        """The run's result, its block in the Blender log and its one main.log line."""
+        seconds = time.time() - started
+        output = ran["output"]
+        _write_log(script, outcome_, seconds, job, ran["exit"], output)
+        if outcome_ == oc.OK:
+            moved = fields.get("outputs") or {}
+            logger.info("Blender %s: ok (%.2fs%s)", script, seconds, f", {len(moved)} file(s)" if moved else "")
+        else:
+            log = logger.error if outcome_ == oc.CRASHED else logger.warning
+            log("Blender %s: %s — %s (output in %s)", script, outcome_, error, LOG_FILE)
+        return _result(outcome_, error, seconds=seconds, tail=log_tail(output), **fields)
+
     try:
         try:
             _write_owner_marker(job)
@@ -688,8 +790,7 @@ def run(script: str, *, inputs: Optional[Dict[str, Path]] = None,
         for slot, src in (inputs or {}).items():
             src = Path(src)
             if not src.is_file():
-                return {"ok": False, "error": f"input '{slot}' not found: {src}",
-                        "data": {}, "outputs": {}, "seconds": 0.0}
+                return done(oc.CRASHED, f"input '{slot}' not found: {src}")
             dst = in_dir / f"{slot}{src.suffix.lower()}"
             try:
                 shutil.copy2(src, dst)
@@ -703,9 +804,7 @@ def run(script: str, *, inputs: Optional[Dict[str, Path]] = None,
                         break
             except OSError as e:
                 # The store file was replaced or purged after the check above.
-                logger.warning("Blender %s: input '%s' unreadable: %s", script, slot, e)
-                return {"ok": False, "error": f"input '{slot}' unreadable: {e}",
-                        "data": {}, "outputs": {}, "seconds": 0.0}
+                return done(oc.CRASHED, f"input '{slot}' unreadable: {e}")
 
         result_file = job / "result.json"
         args_file = job / "args.json"
@@ -732,61 +831,41 @@ def run(script: str, *, inputs: Optional[Dict[str, Path]] = None,
             with blender_slot(script), cpu_progress.attach(f"blender:{script}", progress_file):
                 proc = _spawn(cmd, timeout, env)
         except subprocess.TimeoutExpired as exc:
-            logger.error("Blender %s: timeout after %ds\n%s", script, timeout,
-                         _tail(exc.stderr) or _tail(exc.stdout))
-            return {"ok": False, "error": f"timeout after {timeout}s",
-                    "data": {}, "outputs": {}, "seconds": time.time() - started}
+            ran["output"] = _output(exc.stdout, exc.stderr)
+            return done(oc.TIMEOUT, f"timeout after {timeout}s")
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
             # The binary vanished or lost +x since discovery, or the start failed.
-            logger.error("Blender %s: could not run %s: %s", script, st["executable"], exc)
-            return {"ok": False, "error": f"blender could not be started: {exc}",
-                    "data": {}, "outputs": {}, "seconds": time.time() - started}
+            return done(oc.UNAVAILABLE, f"blender could not be started: {exc}")
+        ran["output"], ran["exit"] = _output(proc.stdout, proc.stderr), proc.returncode
 
-        seconds = time.time() - started
         if not result_file.is_file():
-            tail = _tail(proc.stderr) or _tail(proc.stdout)
-            logger.error("Blender %s: no result (exit %d)\n%s",
-                         script, proc.returncode, tail)
-            return {"ok": False,
-                    "error": f"script wrote no result (exit {proc.returncode})",
-                    "data": {}, "outputs": {}, "seconds": seconds}
+            if proc.returncode < 0:
+                signal_no = -proc.returncode
+                return done(oc.INTERRUPTED if signal_no in _INTERRUPT_SIGNALS else oc.CRASHED,
+                            f"blender was killed by signal {signal_no}")
+            return done(oc.CRASHED, f"script wrote no result (exit {proc.returncode})")
         try:
             res = json.loads(result_file.read_text(encoding="utf-8"))
         except (ValueError, OSError) as e:
-            return {"ok": False, "error": f"result unreadable: {e}",
-                    "data": {}, "outputs": {}, "seconds": seconds}
+            return done(oc.CRASHED, f"result unreadable: {e}")
 
         if not res.get("ok"):
-            logger.warning("Blender %s reported failure: %s", script,
-                           res.get("error") or "?")
-            return {"ok": False, "error": str(res.get("error") or "script failed"),
-                    "data": res.get("data") or {}, "outputs": {},
-                    "seconds": seconds}
+            return done(oc.REJECTED, str(res.get("error") or "script failed"), data=res.get("data") or {})
 
         moved: Dict[str, str] = {}
         declared = res.get("outputs") or {}
         if declared and not out_dir:
-            return {"ok": False,
-                    "error": "script produced files but no out_dir was given",
-                    "data": res.get("data") or {}, "outputs": {},
-                    "seconds": seconds}
+            return done(oc.CRASHED, "script produced files but no out_dir was given", data=res.get("data") or {})
         for slot, rel in declared.items():
             src = Path(rel)
             if not src.is_absolute():
                 src = job_out / rel
             if not src.is_file():
-                return {"ok": False,
-                        "error": f"declared output '{slot}' is missing: {rel}",
-                        "data": res.get("data") or {}, "outputs": {},
-                        "seconds": seconds}
+                return done(oc.CRASHED, f"declared output '{slot}' is missing: {rel}", data=res.get("data") or {})
             dst = Path(out_dir) / src.name
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), str(dst))
             moved[slot] = str(dst)
-
-        logger.info("Blender %s: ok (%.2fs%s)", script, seconds,
-                    f", {len(moved)} file(s)" if moved else "")
-        return {"ok": True, "error": "", "data": res.get("data") or {},
-                "outputs": moved, "seconds": seconds}
+        return done(oc.OK, data=res.get("data") or {}, outputs=moved)
     finally:
         shutil.rmtree(job, ignore_errors=True)
