@@ -300,8 +300,12 @@ of that variant answered 400 — the smoke saves it again to prove it passes.
 ---------------------------------------------------------------------------
 [14] A FAILED RUN SAYS SO AND DELETES NOTHING
 ---------------------------------------------------------------------------
-`_areas_after_landing` with `detect_areas` raising `BlenderUnavailable`
-("busy") — the LOAD condition, not a statement about the prop:
+`_areas_after_landing` with every Blender slot busy (``refine.take_lod_slot``
+answers False, so the real ``_areas_run`` raises `BlenderUnavailable` "busy"
+WITH the snapshot of the mesh it was about to process — since cb2279657 a
+failure is stored only on the exact source it names; a bare exception names
+none and stamps nothing) — the LOAD condition, not a statement about the
+prop:
 
     areas          []      (the freshly landed mesh really is unsplit)
     area_defaults  {glass_1: glass}   KEPT
@@ -1052,11 +1056,14 @@ def part2() -> None:
     store._source_file(pid14, 0, create=True).write_bytes(b"\x89PNG-source")
     store.set_variant_area_defaults(pid14, 0, {"glass_1": {"preset": "glass"}})
     v14 = store.add_picture_variant(pid14, {"picture_1": {"image": IMG}}, "Keep")
-    store.detect_areas = unavailable
+    from app.blender import refine as _refine
+    real_slot, real_reason = _refine.take_lod_slot, _refine.unavailable_reason
+    _refine.take_lod_slot = lambda *_a, **_k: False
+    _refine.unavailable_reason = lambda *_a, **_k: ""
     try:
         store._areas_after_landing(pid14, 0)
     finally:
-        store.detect_areas = real_detect
+        _refine.take_lod_slot, _refine.unavailable_reason = real_slot, real_reason
     t14 = store.get_prop(pid14)["variant_tiers"][0]
     check("the unsplit mesh names no area — that much IS a reading",
           t14["areas"] == [], str(t14["areas"]))
