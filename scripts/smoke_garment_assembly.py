@@ -112,6 +112,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import numpy as np  # noqa: E402
+from app.core import glb_mesh as ga_glb  # noqa: E402  (the module ``garment_assembly._build`` grafts through)
 
 FAILS = []
 
@@ -400,6 +401,37 @@ def main() -> int:
         check("scheduled", SCHEDULED, [("Demo", osig)])
         check("reassemble both", ga.assemble("Demo", osig)["tiers"], {"full": "assembled", "low": "assembled"})
         check("new sha in sidecar", json.loads(asm.with_suffix(".json").read_text())["garments"][hid]["sha256"],
+              sha(fit))
+
+        print("[7b] re-fit DURING a build (A198)")
+        # A fit republished at the same path while the build grafts the bytes it read: the sidecar must name the
+        # sha the build started from (the old fit), so the next look reads "not current" and rebuilds. Pre-fix
+        # (e846d7d02) the sidecar hashed the file after the grafts -> the NEW sha over old geometry, "current".
+        old_fit_sha = sha(fit)
+        newer = glb_mesh.GarmentMesh(**{**g4.__dict__, "positions": g4.positions + np.array([0, 0, 0.02])})
+        newer_bytes = glb_mesh.graft(body, newer, name=node_name, extras=extras)
+        real_graft = ga_glb.graft
+        swapped = []
+
+        def graft_then_refit(*a, **k):
+            out = real_graft(*a, **k)
+            if not swapped:
+                swapped.append(True)
+                republish(fit, newer_bytes)
+            return out
+        republish(bare, body)
+        ga_glb.graft = graft_then_refit
+        try:
+            ga.assemble("Demo", osig, tiers=("full",))
+        finally:
+            ga_glb.graft = real_graft
+        check("fit replaced mid-build", (bool(swapped), sha(fit) != old_fit_sha), (True, True))
+        check("sidecar names the sha the build read",
+              json.loads(asm.with_suffix(".json").read_text())["garments"][hid]["sha256"], old_fit_sha)
+        SCHEDULED.clear()
+        check("served = bare (not current)", ga.served("Demo", bare, "full"), bare)
+        check("rebuild", ga.assemble("Demo", osig, tiers=("full",))["tiers"]["full"], "assembled")
+        check("sidecar now the new sha", json.loads(asm.with_suffix(".json").read_text())["garments"][hid]["sha256"],
               sha(fit))
 
         print("[8] real schedule")

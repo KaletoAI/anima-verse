@@ -982,6 +982,10 @@ def _build(character_name: str, directory: Path, bare: Path,
     model3d = _model3d()
     # One read of the world setting per build: the grafts and the sidecar state carry the same value.
     cutoff = hair_cards.alpha_cutoff()
+    # A198 (review 06 #2 / 06B #1): the sidecar's input state is captured BEFORE any garment file is read — a fit
+    # republished mid-build (same path) then leaves the sidecar naming the OLD sha, so ``_current`` reads the new
+    # file as "not current" and rebuilds, instead of pairing old geometry with the new sha for good.
+    state = _state(wanted, tier, alpha_cutoff=cutoff, character_name=character_name)
     with keyed_lock("model3d_publication", str(directory)):
         revision = bare_revision(bare)
         data = bare.read_bytes()
@@ -1078,7 +1082,7 @@ def _build(character_name: str, directory: Path, bare: Path,
     frames = rig_frames_preserved(data, blob) if validate else {"ok": True}
     if not frames.get("ok"):
         raise ValueError("assembled model rewrote the rig frames: " + "; ".join(frames.get("errors") or []))
-    side = {**meta, "garments": _state(wanted, tier, alpha_cutoff=cutoff, character_name=character_name),
+    side = {**meta, "garments": state,
             "bare_revision": revision, "hidden_parts": list(hidden or []),
             "assembled_at": utc_now_iso()}
     if scalp_tints:
