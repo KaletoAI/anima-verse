@@ -40,12 +40,15 @@
  * green place check (D3) — and says so, finale clips included, before the
  * click. The lamp per clip: green = checked on a place, yellow = sidecar
  * without a check, grey = no sidecar; "Built <time>" is the file's mtime.
+ * A draft is never dropped silently: opening another clip or set asks first,
+ * and `onUnsaved` tells the host (PosesTab), whose tab and view guards ask too.
  *
  *   PATCH  /assets/animation-clips/{library}/{rel}     {kind?, set?, library?, loop?, loop_count?, overwrite?}
  *   POST   /assets/animation-clips/{library}/{rel}/orient  {yaw_deg?, tilt_deg?, roll_deg?, partner_shift_cm?, role_shift_cm?, shift_cm?}
  *   DELETE /assets/animation-clips/{library}/{rel}
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ConfirmDialog } from '@anima/player-ui'
 import { bendLimitsOf, POSTURE, clipHeightGroup, type ClipHeightOffsetsCm } from '@anima/scene-render'
 import { BendLimitsEditor, ContactRelations, RootAngleEditor } from './ContactRelations'
 import { hasInside, targetWordOf } from './contactWords'
@@ -261,6 +264,7 @@ export function ClipLibrary({
   rootDropOf,
   focus,
   onOpenPose,
+  onUnsaved,
 }: {
   listing: ClipListing
   /** the pose catalog entries — the "Used by" column reads their `animation` */
@@ -276,6 +280,9 @@ export function ClipLibrary({
   focus?: { kind: string; seq: number } | null
   /** open a pose entry in Entries (the place preview's yaw-offset link, D2) */
   onOpenPose?: (key: string) => void
+  /** The open clip holds edits that were never saved (dials, heights, contacts, bend limits, root angle) — the
+   *  host's tab and view guards count it. Reported false again when the library unmounts. */
+  onUnsaved?: (unsaved: boolean) => void
 }) {
   const { t } = useI18n()
   const [search, setSearch] = useState('')
@@ -346,6 +353,16 @@ export function ClipLibrary({
   const [pairCheck, setPairCheck] = useState<PairCheckResult | null>(null)
   /** Finale clips the server changed along with the last apply/save. */
   const [finalesTouched, setFinalesTouched] = useState<string[]>([])
+  /** Whether the open clip holds unsaved edits — set below, read by `guardSwitch` from event handlers. */
+  const unsavedRef = useRef(false)
+  /** A clip switch waiting for "discard the unsaved edits?" (in-app, never window.confirm). */
+  const [pendingSwitch, setPendingSwitch] = useState<(() => void) | null>(null)
+  /** Runs `fn` — a switch to another clip or set, which resets every draft — at once while nothing is unsaved,
+   *  otherwise after the user confirmed. */
+  const guardSwitch = useCallback((fn: () => void) => {
+    if (unsavedRef.current) setPendingSwitch(() => fn)
+    else fn()
+  }, [])
 
   const clips = useMemo(() => listing.clips || [], [listing.clips])
   const pairKinds = useMemo(
@@ -570,6 +587,16 @@ export function ClipLibrary({
   const roleShiftDirty = Object.keys(movedRoles).length > 0
   const clipShiftDirty = clipShift.some((v) => v !== 0)
   const orientDirty = !!(yawDeg || tiltDeg || rollDeg) || shiftDirty || roleShiftDirty || clipShiftDirty || turnDirty
+  // The three drafts with a Save button of their own, dirty by the same rule their editor shows "unsaved" by
+  // (ContactRelations / BendLimitsEditor / RootAngleEditor).
+  const contactsDirty = JSON.stringify(contactDraft) !== savedContactsKey
+  const bendDirty = !!savedBend && JSON.stringify(bendDraft) !== savedBendKey
+  const rootDirty = rootDraft.pitch_deg !== (savedRoot?.pitch_deg ?? 0) || rootDraft.yaw_deg !== (savedRoot?.yaw_deg ?? 0)
+  /** Everything a clip switch, a view switch or a tab switch would throw away. */
+  const unsaved = orientDirty || heightDirty || contactsDirty || bendDirty || rootDirty
+  unsavedRef.current = unsaved
+  useEffect(() => { onUnsaved?.(unsaved) }, [onUnsaved, unsaved])
+  useEffect(() => () => onUnsaved?.(false), [onUnsaved])
   // ONE draft object for the place preview, read through a ref in its frame loop (a drag reloads nothing).
   const alignmentDraft = useMemo<AlignmentDraft>(() => ({
     yawDeg, tiltDeg, rollDeg, shiftCm: clipShift,
@@ -786,7 +813,7 @@ export function ClipLibrary({
       <span key={col || 'neutral'} className={`ga-tag${cell.licensed.length ? ' ga-tag-tier' : ''}`}
         style={{ padding: '0 4px', fontSize: 11, cursor: 'pointer' }}
         title={`${col || t('neutral')}: ${libs.join(', ')}${n > 1 ? ` ×${n}` : ''}`}
-        onClick={(e) => { e.stopPropagation(); pick(r.kind, col) }}>
+        onClick={(e) => { e.stopPropagation(); guardSwitch(() => pick(r.kind, col)) }}>
         {setLetter(col)}{n > 1 ? <sup>{n}</sup> : null}
       </span>
     )
@@ -1135,7 +1162,7 @@ export function ClipLibrary({
             <div
               key={r.kind}
               data-kind={r.kind}
-              onClick={() => pick(r.kind)}
+              onClick={() => guardSwitch(() => pick(r.kind))}
               style={{
                 display: 'flex', gap: 6, alignItems: 'center', padding: '3px 4px', cursor: 'pointer',
                 borderBottom: '1px solid var(--border, #21262d)',
@@ -1188,7 +1215,7 @@ export function ClipLibrary({
                   className={`ga-btn ga-btn-sm${previewSet === s ? ' ga-btn-primary' : ''}`}
                   disabled={orientBusy || heightBusy}
                   title={t('Set the viewer and the dials act on')}
-                  onClick={() => { resetDials(); setPreviewSet(s) }}
+                  onClick={() => guardSwitch(() => { resetDials(); setPreviewSet(s) })}
                 >
                   {s || t('neutral')}
                 </button>
@@ -1439,7 +1466,7 @@ export function ClipLibrary({
                       <button type="button" className="ga-btn ga-btn-sm" data-testid="align-all"
                         disabled={innerTab !== 'places' || orientBusy || heightBusy}
                         title={t('Runs Auto-align on every pair clip in the list, one after the other, with the pair each clip’s Places view fills in (the persons you picked stay). Nothing is saved: open a clip from the table and Save it there.')}
-                        onClick={() => { if (alignAll?.running) alignAllStop.current = true; else void runAlignAll() }}>
+                        onClick={() => { if (alignAll?.running) alignAllStop.current = true; else guardSwitch(() => { void runAlignAll() }) }}>
                         {alignAll?.running ? t('Stop ({n} done)').replace('{n}', String(alignAll.done))
                           : t('Align all pair and group clips ({n})').replace('{n}', String(shown.filter((r) => (r.roles ?? 0) >= 2 && !r.missing).length))}
                       </button>
@@ -1463,7 +1490,7 @@ export function ClipLibrary({
                                     <td style={{ textAlign: 'right' }}>{x.result.overlapAfterMm.toFixed(0)}</td>
                                   </>
                                 ) : <td colSpan={6} style={{ color: 'var(--danger, #f85149)' }} title={x.result.reason}>{x.result.reason}</td>}
-                                <td><button type="button" className="ga-btn ga-btn-sm" onClick={() => pick(x.kind, x.set)}
+                                <td><button type="button" className="ga-btn ga-btn-sm" onClick={() => guardSwitch(() => pick(x.kind, x.set))}
                                   disabled={alignAll.running}>{t('Open')}</button></td>
                               </tr>
                             ))}
@@ -1671,6 +1698,11 @@ export function ClipLibrary({
           </div>
         )}
       </section>
+      <ConfirmDialog open={pendingSwitch !== null} title={t('Discard unsaved changes?')}
+        message={t('The open clip has edits that were never saved (dials, heights, contacts, bend limits or root angle). Opening another clip or set discards them.')}
+        confirmLabel={t('Discard')} danger
+        onConfirm={() => { const fn = pendingSwitch; setPendingSwitch(null); fn?.() }}
+        onClose={() => setPendingSwitch(null)} />
     </div>
   )
 }

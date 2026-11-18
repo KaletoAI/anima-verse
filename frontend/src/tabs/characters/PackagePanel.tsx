@@ -132,10 +132,14 @@ function fieldSpan(f: PanelField): number {
 }
 
 export function PackagePanel({
-  character, packageId, onOpenCharacter, onShowCharacter, onRosterChanged,
+  character, packageId, onOpenCharacter, onShowCharacter, onRosterChanged, onDirty,
 }: {
   character: string
   packageId: string
+  /** The open card (or create form) holds edits that were never saved — the
+   *  host's character-switch and tab-switch guards count it. Reported false
+   *  again when the panel unmounts. */
+  onDirty?: (dirty: boolean) => void
   /** Opens a character in the editor — an action result's `open_character`. */
   onOpenCharacter?: (name: string) => void
   /** Switches the editor to another character on the same sub-tab (a core
@@ -158,6 +162,10 @@ export function PackagePanel({
   // The open section ('' = the first).
   const [section, setSection] = useState('')
   const [dirty, setDirty] = useState(false)
+  // The card draft is local, but losing it is the host's question too: a
+  // character or tab switch replaces this whole panel.
+  useEffect(() => { onDirty?.(dirty) }, [dirty, onDirty])
+  useEffect(() => () => onDirty?.(false), [onDirty])
   const [pendingSwitch, setPendingSwitch] = useState<{ to: string | null; section?: string } | null>(null)
   // A panel-level action waiting for its confirmation or its input.
   const [panelPending, setPanelPending] = useState<PanelAction | null>(null)

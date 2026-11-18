@@ -73,7 +73,7 @@ export interface PanelTabInfo {
 }
 
 export function SkillsTab({
-  character, onOpenCharacter, panelTabs, onSkillsChanged,
+  character, onOpenCharacter, panelTabs, onSkillsChanged, onPanelDirty,
 }: {
   character: string
   /** Opens another character in the editor (a package panel action may ask for it). */
@@ -82,6 +82,8 @@ export function SkillsTab({
   panelTabs?: PanelTabInfo[]
   /** A skill was switched on or off. */
   onSkillsChanged?: () => void
+  /** The package panel shown here holds an unsaved card draft (PackagePanel `onDirty`). */
+  onPanelDirty?: (dirty: boolean) => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -89,7 +91,7 @@ export function SkillsTab({
   const [locations, setLocations] = useState<LocationOpt[]>([])
   const [optionSources, setOptionSources] = useState<Record<string, ChoiceOption[]>>({})
   const [loading, setLoading] = useState(false)
-  const [selected, setSelected] = useState<string>('')  // skill_id im Detail-Pane
+  const [selected, setSelected] = useState<string>('')  // skill_id shown in the detail pane
 
   const reload = useCallback(async () => {
     if (!character) return
@@ -268,7 +270,7 @@ export function SkillsTab({
         })}
       </div>
 
-      {/* Detail des gewählten Skills */}
+      {/* Detail of the selected skill */}
       <div style={{ flex: 1, minWidth: 0 }}>
         {!current ? (
           <div className="ga-placeholder">{t('Select a skill.')}</div>
@@ -304,7 +306,7 @@ export function SkillsTab({
               </div>
             ) : current.panel_package ? (
               <PackagePanel character={character} packageId={current.panel_package}
-                onOpenCharacter={onOpenCharacter} />
+                onOpenCharacter={onOpenCharacter} onDirty={onPanelDirty} />
             ) : null}
             {current.enabled && fields.length > 0 && (
               <div className="ga-form" style={{ marginTop: 14, gap: 8 }}>

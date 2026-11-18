@@ -183,6 +183,10 @@ export function CharactersTab() {
   /** How much is unsaved, readable from an event handler without making every
    *  handler depend on the count (the guards below are registered once). */
   const dirtyRef = useRef(0)
+  /** A package panel's card draft (PackagePanel `onDirty`): saved by the
+   *  panel's own button, not by this sheet's Save — so it is not part of
+   *  `dirtyCount`, but every guard below counts it. */
+  const [panelDirty, setPanelDirty] = useState(false)
   // Per-character config (chat_mode, behavior toggles, …).
   const [cfg, setCfg] = useState<Record<string, unknown>>({})
   const [savingField, setSavingField] = useState<string>('')
@@ -519,7 +523,10 @@ export function CharactersTab() {
 
   /** Everything unsaved on this sheet — the number in the Save button. */
   const dirtyCount = pendingFieldCount(buf) + placementDirty
-  dirtyRef.current = dirtyCount
+  /** What a character or tab switch would throw away: the sheet's fields plus
+   *  an open package card draft (counted as one). */
+  const unsavedCount = dirtyCount + (panelDirty ? 1 : 0)
+  dirtyRef.current = unsavedCount
   // A Discard that is armed while nothing is left to throw away would fire on
   // the next unrelated click.
   useEffect(() => { if (!dirtyCount) setDiscardArmed(false) }, [dirtyCount])
@@ -618,7 +625,7 @@ export function CharactersTab() {
   // tab is unmounted then, and the draft would die with it), ours for a
   // switch to another character (see `onSelect`).
   useEffect(() => {
-    if (!dirtyCount) return
+    if (!unsavedCount) return
     const warn = (e: BeforeUnloadEvent) => {
       e.preventDefault()
       // The browser shows its own generic wording; the value only needs to be
@@ -627,7 +634,7 @@ export function CharactersTab() {
     }
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
-  }, [dirtyCount])
+  }, [unsavedCount])
   useEffect(() => {
     setUnsavedGuard(() => dirtyRef.current > 0)
     return () => setUnsavedGuard(null)
@@ -1246,6 +1253,7 @@ export function CharactersTab() {
                 onOpenCharacter={openFromPanel}
                 panelTabs={panelTabs}
                 onSkillsChanged={() => setPanelTabsRev((n) => n + 1)}
+                onPanelDirty={setPanelDirty}
               />
             ) : subTab.startsWith(PANEL_TAB) ? (
               <PackagePanel
@@ -1253,6 +1261,7 @@ export function CharactersTab() {
                 packageId={subTab.slice(PANEL_TAB.length)}
                 onOpenCharacter={openFromPanel}
                 onShowCharacter={onSelect}
+                onDirty={setPanelDirty}
                 onRosterChanged={() => {
                   loadCharacters().then(setCharacters).catch(() => undefined)
                   setPanelTabsRev((n) => n + 1)
@@ -1291,8 +1300,17 @@ export function CharactersTab() {
                 <h3>{t('Unsaved changes')}</h3>
               </div>
               <div className="ga-modal-body">
-                {t('This character holds {n} field changes that were never saved. Opening another character discards them.')
-                  .replace('{n}', String(dirtyCount))}
+                {dirtyCount > 0 ? (
+                  <p style={{ margin: 0 }}>
+                    {t('This character holds {n} field changes that were never saved. Opening another character discards them.')
+                      .replace('{n}', String(dirtyCount))}
+                  </p>
+                ) : null}
+                {panelDirty ? (
+                  <p style={{ margin: dirtyCount > 0 ? '8px 0 0' : 0 }}>
+                    {t('A package card holds edits that were never saved. Opening another character discards them.')}
+                  </p>
+                ) : null}
               </div>
               <div className="ga-modal-footer">
                 <button className="ga-btn" onClick={() => setLeaveTo(null)}>

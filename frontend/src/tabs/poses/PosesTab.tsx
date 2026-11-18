@@ -21,6 +21,7 @@
  */
 import { ConfirmDialog } from '@anima/player-ui'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { setUnsavedGuard } from '../../lib/unsavedGuard'
 import { PoseAnimationDialog } from './PoseAnimationDialog'
 import { ExpressionSetsEditor } from './ExpressionSetsEditor'
 import type { PoseAnimationRequest } from './PoseAnimationDialog'
@@ -246,6 +247,20 @@ export function PosesTab() {
     setAxis('pose')
     setLibraryFocus((prev) => ({ kind, pose, seq: (prev?.seq || 0) + 1 }))
     setView('library')
+  }, [])
+  /** The Clip Library's unsaved edits (ClipLibrary `onUnsaved`): the shell's tab-switch guard asks it, and so does
+   *  every view switch away from the Library — both unmount it, and its drafts with it. */
+  const libraryUnsavedRef = useRef(false)
+  const onLibraryUnsaved = useCallback((unsaved: boolean) => { libraryUnsavedRef.current = unsaved }, [])
+  useEffect(() => {
+    setUnsavedGuard(() => libraryUnsavedRef.current)
+    return () => setUnsavedGuard(null)
+  }, [])
+  /** A view switch waiting for "discard the Library's unsaved edits?" (in-app, never window.confirm). */
+  const [leaveLibrary, setLeaveLibrary] = useState<(() => void) | null>(null)
+  const guardLeaveLibrary = useCallback((fn: () => void) => {
+    if (libraryUnsavedRef.current) setLeaveLibrary(() => fn)
+    else fn()
   }, [])
   const [data, setData] = useState<CatalogData>({ entries: [], kinds: [], problems: [] })
   const loadCounter = useRef(0)
@@ -950,12 +965,16 @@ export function PosesTab() {
           type="button"
           className={`ga-btn ga-btn-sm${view === v ? ' ga-btn-primary' : ''}`}
           onClick={() => {
-            // Every other surface is about POSE animations — pinning the axis
-            // here keeps "create pose entry" (and the Library's "Used by")
-            // from landing on the expression catalog, and out of reach of the
-            // axis-change reset.
-            if (v !== 'entries') setAxis('pose')
-            setView(v)
+            const go = () => {
+              // Every other surface is about POSE animations — pinning the axis
+              // here keeps "create pose entry" (and the Library's "Used by")
+              // from landing on the expression catalog, and out of reach of the
+              // axis-change reset.
+              if (v !== 'entries') setAxis('pose')
+              setView(v)
+            }
+            if (v !== view) guardLeaveLibrary(go)
+            else go()
           }}
         >
           {t(VIEW_LABELS[v])}
@@ -970,14 +989,20 @@ export function PosesTab() {
         {viewSwitch}
         {libraryFocus?.pose ? (
           <div style={{ marginBottom: 8 }}>
-            <button type="button" className="ga-btn ga-btn-sm" onClick={() => setView('entries')}>
+            <button type="button" className="ga-btn ga-btn-sm" onClick={() => guardLeaveLibrary(() => setView('entries'))}>
               ← {t('Back to the pose')} <code>{libraryFocus.pose}</code>
             </button>
           </div>
         ) : null}
         <ClipLibrary listing={clipList} poses={data.entries} onReload={reloadLibrary}
           rootDropOf={rootDropOf} focus={libraryFocus}
-          onOpenPose={(key) => { setView('entries'); select(key) }} />
+          onOpenPose={(key) => guardLeaveLibrary(() => { setView('entries'); select(key) })}
+          onUnsaved={onLibraryUnsaved} />
+        <ConfirmDialog open={leaveLibrary !== null} title={t('Discard unsaved changes?')}
+          message={t('The Clip Library holds edits of the open clip that were never saved. Leaving it discards them.')}
+          confirmLabel={t('Discard')} danger
+          onConfirm={() => { const fn = leaveLibrary; setLeaveLibrary(null); fn?.() }}
+          onClose={() => setLeaveLibrary(null)} />
       </div>
     )
   }
