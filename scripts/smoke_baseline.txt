@@ -21,7 +21,6 @@ smoke_hair_strands_graft	STALE: [4] the build's sidecar no longer carries the st
 smoke_image_routing_migration	DECISION: since d4aa4edd8 _seed_default_mesh_backends appends quadruped-local to EVERY existing backend list on every load (its docstring says so), so C3 gets (True,2)/(True,2)/(True,12)/[quadruped-local] where it pins (False,1)/(False,1)/(True,11)/[] — question: may an admin who emptied the list or removed quadruped-local keep it that way (then: a one-time migration with a marker), or is quadruped-local mandatory?
 smoke_improvement_base_refresh	STALE: estimate of an older-prompt base refresh is 8 hub jobs (was 7): the full-body reference step (A87 c24544018) adds one
 smoke_model3d_stale_base	STALE: A119/b25bbbe39 serving rule: a humanoid is never served another figure's stored model, so the "stale older base" fixture model is not served
-smoke_outfit_body_full_views	STALE: A175 turn step: the back of an outfit body renders a "_turn" image first (an extra image job)
 smoke_outfit_body_mesh	STALE: A175 turn step: 3 image jobs instead of 2
 smoke_outfit_body_mesh_items	STALE: A175 turn step: the build also renders the "turn" view
 smoke_outfit_body_mode_switch	STALE: the Build plan gained base_repair (A34 mesh repair) and a later step aborts (rc -6, a model sidecar missing); not re-derived

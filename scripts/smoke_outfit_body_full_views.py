@@ -46,8 +46,10 @@ Expected, derived by hand from the ruling:
     in-body pieces LEFT OFF, nothing is painted (was: 1, the painted interim
     front) — no back. The same holds for every outfit render below (G main
     view, H/K/L full render: 0, was 1 / 2). The build renders the shape's views FIRST — EVENTS
-    of the build = [image tpose_<bA> (its front edit), image tpose_back_<bA>
-    (draft; its composite onto the base back is CPU work since Task 11g —
+    of the build = [image tpose_<bA> (its front edit), image tpose_back_<bA>_turn
+    (since A175, 070594e79: the dressed front turned with the angle LoRA; its
+    cut-out is CPU work), image tpose_back_<bA>
+    (draft, the turn as its second picture; its composite onto the base back is CPU work since Task 11g —
     ``view_composite.compose`` stubbed to copy the draft), mesh <bA>]: exactly 1 mesh job, its
     inputs the shape's front + views {back} (images=2); the body's parent
     record used_views [front, back]; ok.
@@ -56,12 +58,15 @@ Expected, derived by hand from the ruling:
     refused, 0 mesh jobs and 0 hub-op records; result ok False, error "Back
     view missing — not meshed from the front alone (fit refused)";
     outfit_info(G) status "failed" with that error; no body file. The
-    refusal lifted: the next build renders the shape's back (1 image job,
-    its draft tpose_back_<bG>) and meshes ONCE with views {back}.
+    refusal lifted: the next build renders the shape's back (2 image jobs,
+    the turn tpose_back_<bG>_turn, then its draft tpose_back_<bG>) and meshes
+    ONCE with views {back}.
 [3] H, every outfit view rendered beforehand (no view picked: 2 image
-    jobs, front + back draft): the build renders the shape's two (was 0 — the outfit's views
+    jobs, front + back draft): the build renders the shape's three (front,
+    the back's turn, the back draft; was 0 — the outfit's views
     are no mesher input since Task 6) and makes exactly 1 mesh job with views
-    {back}; every image of the build is the shape's (stem key <bH>).
+    {back}; every image of the build is the shape's (stem key <bH>, the
+    turn's stem with its "_turn" suffix).
 [4] Resume of a front-only record (K): a build with the OLD behaviour
     (dressed views patched to ("front",)) dies in its mesh job (a
     BaseException, as a process death) and leaves its record: views sent
@@ -345,7 +350,8 @@ def main() -> int:
         result, events, ops = build()
         check("A build: ok", result.get("ok"), True)
         check("A build: the shape's front, the back's draft, then the mesh", events,
-              [("image", f"tpose_{b_a}"), ("image", f"tpose_back_{b_a}"), ("mesh", b_a)])
+              [("image", f"tpose_{b_a}"), ("image", f"tpose_back_{b_a}_turn"),
+               ("image", f"tpose_back_{b_a}"), ("mesh", b_a)])
         check("A build: exactly 1 mesh job, front + back", (len(MESH_CALLS) - m0, MESH_CALLS[-1] if MESH_CALLS else None),
               (1, {"source": f"tpose_{b_a}.png", "views": ["back"]}))
         parent = model3d._read_sidecar(mdir / f"{b_a}.glb").get("outfit_body") or {}
@@ -373,10 +379,11 @@ def main() -> int:
         base_body._dress_view = real_dress_view
         m0 = len(MESH_CALLS)
         result, events, ops = build()
-        check("G lifted: back (1 image job) then 1 mesh job",
-              (result.get("ok"), kinds(events)[:2], len(MESH_CALLS) - m0, MESH_CALLS[-1]["views"]),
-              (True, ["image", "mesh"], 1, ["back"]))
-        check("G lifted: the shape's back", events[:1], [("image", f"tpose_back_{b_g}")])
+        check("G lifted: back (the turn + the draft: 2 image jobs) then 1 mesh job",
+              (result.get("ok"), kinds(events)[:3], len(MESH_CALLS) - m0, MESH_CALLS[-1]["views"]),
+              (True, ["image", "image", "mesh"], 1, ["back"]))
+        check("G lifted: the shape's back", events[:2],
+              [("image", f"tpose_back_{b_g}_turn"), ("image", f"tpose_back_{b_g}")])
 
         # --- [3] every view present -> 1 mesh job ----------------------------------------------
         print("[3] all views present: no image job, one mesh job")
@@ -384,10 +391,11 @@ def main() -> int:
         check("H full render: 0 image jobs (A119)", len(render_views()), 0)
         m0 = len(MESH_CALLS)
         result, events, ops = build()
-        check("H build: ok, the shape's 2 image jobs, 1 mesh job",
+        check("H build: ok, the shape's 3 image jobs (A175 turn), 1 mesh job",
               (result.get("ok"), kinds(events).count("image"), len(MESH_CALLS) - m0, MESH_CALLS[-1]["views"]),
-              (True, 2, 1, ["back"]))
-        check("H build: the views are the shape's", sorted({e[1].rsplit("_", 1)[-1] for e in events}), [body_of(sig_h)])
+              (True, 3, 1, ["back"]))
+        check("H build: the views are the shape's",
+              sorted({e[1].removesuffix("_turn").rsplit("_", 1)[-1] for e in events}), [body_of(sig_h)])
 
         # --- [4] resume of a front-only record is dropped ----------------------------------------
         print("[4] a front-only record from before the restart is dropped on resume")
