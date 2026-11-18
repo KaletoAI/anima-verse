@@ -163,3 +163,65 @@ def rim_share(x, ends_x, corner, lower_side):
     x = np.asarray(x, float)
     t = _sstep(np.minimum(np.abs(x - ends_x[0]), np.abs(x - ends_x[1])) / corner)
     return .5 + .5 * t if lower_side else .5 - .5 * t
+
+
+# THE TEETH (Ruling A206): the pure half of ``mouth_teeth.py``. Millimetre tables, metre results.
+
+#: Per arch, from the midline outward: (kind, mesio-distal width, crown height, labio-lingual thickness) in mm —
+#: the anatomical means of the permanent dentition (upper central incisor 8.5 x 10.5).
+UPPER_TEETH = (('incisor', 8.5, 10.5, 7.0), ('incisor', 6.5, 9.0, 6.0), ('canine', 7.5, 10.0, 8.0),
+               ('premolar', 7.0, 8.0, 9.0), ('premolar', 6.5, 7.5, 9.0))
+LOWER_TEETH = (('incisor', 5.0, 9.0, 6.0), ('incisor', 5.5, 9.5, 6.0), ('canine', 7.0, 11.0, 7.5),
+               ('premolar', 7.0, 8.0, 7.5), ('premolar', 7.0, 8.0, 8.0))
+#: The molar block closing each side of an arch: (width, crown height, thickness) in mm.
+UPPER_MOLAR = (10.0, 7.0, 10.0)
+LOWER_MOLAR = (11.0, 7.0, 10.0)
+#: The mouth half width the tables are drawn for (m), and the clamp of the mouth's scale against it.
+TEETH_REFERENCE_HALF_WIDTH = .0265
+TEETH_SCALE_CLAMP = (.85, 1.15)
+
+
+def teeth_scale(half_width, size=1.):
+    """The teeth's scale: the measured mouth half width over ``TEETH_REFERENCE_HALF_WIDTH`` (clamped to
+    ``TEETH_SCALE_CLAMP``) times the character's ``size`` option."""
+    return float(np.clip(half_width / TEETH_REFERENCE_HALF_WIDTH, *TEETH_SCALE_CLAMP)) * float(size)
+
+
+def channel_half_width(d, widest, radius, taper):
+    """The pouch's half width at depth ``d``: from the mouth's ``widest`` to ``radius`` by a smoothstep over
+    ``taper`` (the ring rule of ``mouth_part.build``)."""
+    return widest * (1 + (radius / widest - 1) * _sstep(np.asarray(d, float) / taper))
+
+
+def arch_curve(d0, front_w, front_l, limit, d_max, step=.0005):
+    """One half of a teeth arch's LABIAL line (x >= 0): samples ``(x, d, s)`` — side offset, depth behind the
+    opening, arc length from the midline. The front is the parabola x = front_w sqrt((d - d0) / front_l) from the
+    midline at depth ``d0``, capped by the narrowest ``limit`` (the channel's half width less the margin) from ``d``
+    back to ``d_max``: the arch follows the channel but never narrows toward the back (a narrowing arch lines its
+    back teeth up behind the canines); it runs to ``d_max``."""
+    d = np.arange(d0, d_max + step / 2, step)
+    cap = np.minimum.accumulate(np.asarray(limit(d), float)[::-1])[::-1]
+    x = np.minimum(front_w * np.sqrt(np.clip((d - d0) / front_l, 0, None)), cap)
+    x = np.maximum(x, 0.)
+    s = np.concatenate([[0.], np.cumsum(np.hypot(np.diff(x), np.diff(d)))])
+    return x, d, s
+
+
+def tooth_spans(widths, total):
+    """Where each tooth sits along the half arch: ``[(start, end)]`` arc lengths, the teeth side by side from the
+    midline; the last entry (the molar block) is cut back to ``total`` when the arch is shorter. Teeth that start
+    past ``total`` are left out."""
+    out, at = [], 0.
+    for w in widths:
+        if at >= total - 1e-9:
+            break
+        out.append((at, min(at + w, total)))
+        at += w
+    return out
+
+
+def teeth_gap(upper_tip, lower_tip, hinge, theta, up):
+    """The free height between the upper and the lower incisal edge with the jaw turned by ``theta`` (radians)
+    about the side axis through ``hinge``: (upper - lower turned) along ``up`` (metres; negative = they overlap)."""
+    lower = turned(np.asarray(lower_tip, float)[None], np.asarray(hinge, float), theta)[0]
+    return float((np.asarray(upper_tip, float) - lower) @ np.asarray(up, float))
