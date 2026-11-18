@@ -17,6 +17,11 @@ Hand-derived expectations:
   [F] assembly: ``_uppers`` — a sheer template draped over an inner piece hides nothing of it ({} for that inner),
       while the same piece in medium lists itself as the inner's upper; ``_merge_overrides`` keeps a material
       preset's keys and adds the sheer ones; ``_state``'s material entry carries "+sheer:0.35" for a sheer piece.
+  [G] wall budget: ``wall_limit`` 60 s for stiff / medium / flowing (BUILD_WALL_S x 1.0), 120 s for sheer (x 2.0);
+      ``judge_build`` with wall 100 s: fails at limit 60 without ``wall_limit_s`` (the row as before A204), passes with
+      ``wall_limit_s`` 120. ``run_drape``: a first run failing ONLY ``build_wall_s`` (GLB written) runs once more and
+      the second result stands with ``wall_retry.first_wall_s``; a run failing ``stretch_max`` (or wall + stretch, or
+      no GLB) is not retried — 1 call.
 """
 import subprocess
 import sys
@@ -126,6 +131,35 @@ check("is_sheer", garment_assembly._is_sheer({"template": True, "item": item("sh
       and not garment_assembly._is_sheer({"template": True, "item": item("flowing")}))
 src = (ROOT / "app/core/garment_assembly.py").read_text()
 check("body cover skips sheer pieces", 'g["kind"] == CLOTHING and not _is_sheer(g)]' in src)
+
+print("[G] wall budget")
+for fabric, lim in (("stiff", 60.0), ("medium", 60.0), ("flowing", 60.0), ("sheer", 120.0)):
+    check(f"{fabric}: wall limit {lim}", gt.wall_limit({"fabric": fabric}) == lim)
+row = lambda d: next(r for r in gt.judge_build(d) if r["check"] == "build_wall_s")  # noqa: E731
+r60 = row({"wall_total_s": 100.0})
+r120 = row({"wall_total_s": 100.0, "wall_limit_s": 120.0})
+check("100 s fails the plain 60 s row", r60 == {"check": "build_wall_s", "value": 100.0, "limit": 60.0, "ok": False,
+                                               "gate": True}, r60)
+check("100 s passes a 120 s limit", r120["ok"] and r120["limit"] == 120.0)
+WALL = {"check": "build_wall_s", "gate": True, "ok": False, "value": 70.0}
+STRETCH = {"check": "stretch_max", "gate": True, "ok": False, "value": 1.4}
+GOOD = {"ok": True, "glb": "x.glb", "rows": [], "data": {}}
+orig_once = gt._run_drape_once
+for label, first, calls_expected, ok_expected in (
+        ("wall only -> retried", {"ok": False, "glb": "x.glb", "rows": [WALL], "data": {}}, 2, True),
+        ("stretch -> not retried", {"ok": False, "glb": "x.glb", "rows": [STRETCH], "data": {}}, 1, False),
+        ("wall + stretch -> not retried", {"ok": False, "glb": "x.glb", "rows": [WALL, STRETCH], "data": {}}, 1, False),
+        ("wall, no GLB -> not retried", {"ok": False, "glb": None, "rows": [WALL], "data": {}}, 1, False)):
+    calls = []
+    gt._run_drape_once = lambda *a, _f=first, **k: (calls.append(k["out_dir"]), _f if len(calls) == 1 else dict(GOOD, data={}))[1]
+    try:
+        res = gt.run_drape(Path("b.glb"), {}, {}, item_id="i", out_dir=Path(TMP))
+    finally:
+        gt._run_drape_once = orig_once
+    check(f"{label}: {calls_expected} call(s)", len(calls) == calls_expected and bool(res.get("ok")) == ok_expected,
+          len(calls))
+    if calls_expected == 2:
+        check("the retry keeps the first wall", res["data"].get("wall_retry") == {"first_wall_s": 70.0})
 
 if failures:
     print(f"FAILED: {len(failures)}")

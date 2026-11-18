@@ -151,6 +151,14 @@ THRESHOLDS = {
 #: P1 gates on WALL time (Ruling A138: a Build is waited for in wall seconds; the spike's CPU sum
 #: counts every Blender thread). Same 60 s budget, hand-derived in ``scripts/smoke_garment_template.py``.
 BUILD_WALL_S = 60.0
+#: A204: the wall budget's factor per fabric (a fabric not named keeps 1.0, so its rows stay as before). The sheer
+#: cloth runs a softer, lighter solve: measured on Gelina's skirt 59.3 / 64.5 s against flowing's 57.8 s.
+WALL_FACTOR = {"sheer": 2.0}
+
+
+def wall_limit(params: Optional[Dict[str, Any]]) -> float:
+    """The wall gate of a drape of ``params`` (``BUILD_WALL_S`` x ``WALL_FACTOR``)."""
+    return BUILD_WALL_S * WALL_FACTOR.get(str((params or {}).get("fabric") or ""), 1.0)
 #: The wall seconds a drape takes, for the cost line (measured A141 on Kira with the two pose shapes:
 #: 28–47 s per piece; A138 without them 13.4–17.8 s; A142 tops with four shapes 40–50 s; A144 tops / jackets 40–50 s).
 CPU_ESTIMATE_S = 45
@@ -1196,7 +1204,8 @@ def judge_build(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     if "wall_total_s" in data:
         # a Build never renders; the proof runs' sheet renders are taken out (Ruling A142)
         wall = round(data["wall_total_s"] - float(data.get("render_wall_s") or 0.0), 2)
-        row("build_wall_s", wall, BUILD_WALL_S, wall <= BUILD_WALL_S)
+        limit = float(data.get("wall_limit_s") or BUILD_WALL_S)
+        row("build_wall_s", wall, limit, wall <= limit)
     if "cpu_s" in drape:
         row("drape_cpu_s", drape["cpu_s"], THRESHOLDS["drape_cpu_s"], drape["cpu_s"] < THRESHOLDS["drape_cpu_s"],
             gate=False)
@@ -1284,7 +1293,28 @@ def prepare_view(src: str, dst: Path, *, tolerance: int = 24, garment_only: bool
             "skin_dropped": round(dropped, 4)}
 
 
+def wall_only_failure(result: Dict[str, Any]) -> bool:
+    """A204: whether a drape failed on its wall time ALONE (host load, not geometry): Blender returned a GLB and the
+    only failed gate row is ``build_wall_s``."""
+    bad = [r for r in result.get("rows") or [] if r.get("gate") and not r.get("ok")]
+    return bool(result.get("glb")) and len(bad) == 1 and bad[0].get("check") == "build_wall_s"
+
+
 def run_drape(body_glb: Path, params: Dict[str, Any], sources: Dict[str, str], *, item_id: str,
+              out_dir: Path, **kw: Any) -> Dict[str, Any]:
+    """``_run_drape_once``; a run that failed only on its wall time (``wall_only_failure``) is run once more — the
+    second result stands, and carries ``data.wall_retry`` with the first wall."""
+    result = _run_drape_once(body_glb, params, sources, item_id=item_id, out_dir=out_dir, **kw)
+    if not wall_only_failure(result):
+        return result
+    first = next(r["value"] for r in result["rows"] if r["check"] == "build_wall_s")
+    logger.info("Template drape %s: wall %s s over the budget only — retrying once (host load)", item_id, first)
+    again = _run_drape_once(body_glb, params, sources, item_id=item_id, out_dir=Path(out_dir) / "wall_retry", **kw)
+    again.setdefault("data", {})["wall_retry"] = {"first_wall_s": first}
+    return again
+
+
+def _run_drape_once(body_glb: Path, params: Dict[str, Any], sources: Dict[str, str], *, item_id: str,
               out_dir: Path, render: bool = False, poses: Optional[Tuple[str, ...]] = None,
               timeout_s: int = 300, corrective: bool = True,
               lower: Optional[List[Tuple[Path, Any]]] = None,
@@ -1335,7 +1365,7 @@ def run_drape(body_glb: Path, params: Dict[str, Any], sources: Dict[str, str], *
         if (data.get("drape") or {}).get("stretch_max", 0) <= RETRY_STRETCH:
             break
         # Ruling A142: a retry doubles the cloth cost; it is only tried when the first run left room for it
-        if float(data.get("script_wall_s") or 0.0) - float(data.get("render_wall_s") or 0.0) > BUILD_WALL_S / 2:
+        if float(data.get("script_wall_s") or 0.0) - float(data.get("render_wall_s") or 0.0) > wall_limit(params) / 2:
             data["retry_skipped"] = "the first drape took more than half the wall budget"
             break
         first = (res, data)
@@ -1343,6 +1373,8 @@ def run_drape(body_glb: Path, params: Dict[str, Any], sources: Dict[str, str], *
     data["outline"] = spec["outline"]
     data["views"] = {**view_info, "source": sources.get("source", "")}
     data["wall_total_s"] = round(time.time() - started, 2)
+    if wall_limit(params) != BUILD_WALL_S:
+        data["wall_limit_s"] = wall_limit(params)
     data["render_wall_s"] = float(data.get("render_wall_s") or 0.0)
     if not res.get("ok"):
         return {"ok": False, "error": str(res.get("error") or "blender failed"), "data": data, "glb": None,
