@@ -1695,6 +1695,9 @@ def _extension_groups_for(meta: Dict[str, Any], groups):
         groups = [g for g in groups if g["op"] not in PART_OPS]
     if meta.get("base_variant") == "covered":
         groups = [g for g in groups if not g.get("exposed_only")]
+    if meta.get("rig") not in (None, "", "mixamo"):
+        # The core's mouth channel is built on a humanoid rig only (Ruling A203): another rig never lists it.
+        groups = [g for g in groups if g["op"] != "mouth_part"]
     return groups
 
 
@@ -1763,6 +1766,8 @@ EXT_REASON_SWITCH_OFF = ("The mesh has no protrusion here, so there is nothing t
                          "part in the body editor to have the part built.")
 EXT_REASON_NOT_FOUND = "No matching shape was found in the mesh here, so these bones were not built."
 EXT_REASON_FAILED = "The build failed. Rebuild (local, no hub job) tries again."
+EXT_REASON_NO_MOUTH = "No lip line was found on this face, so the mouth stays closed."
+EXT_REASON_NO_BLENDER = "Blender is not available here, so the mouth was not built."
 
 
 def _part_slot_of(group_id: str):
@@ -1811,6 +1816,11 @@ def extension_group_lights(profile: Dict[str, Any], meta: Dict[str, Any], groups
 
         if group.get("enabled") is False:
             lights[gid] = light("grey", EXT_STATE_OFF, EXT_REASON_OFF, "")
+            continue
+        if group["op"] == "mouth_part" and metric.get("status") in (MOUTH_NOT_FOUND, MOUTH_UNAVAILABLE):
+            # The core's mouth channel on a face that shows no lip line, or without Blender: not a failure.
+            lights[gid] = light("grey", EXT_STATE_NOT_BUILT, EXT_REASON_NO_MOUTH
+                                if metric.get("status") == MOUTH_NOT_FOUND else EXT_REASON_NO_BLENDER)
             continue
         if not result.get("attempted"):
             lights[gid] = light("yellow", EXT_STATE_DUE, EXT_REASON_NOT_YET, "")
@@ -2091,8 +2101,10 @@ def _extension_rig_once(character_name: str, path: Path,
                            or "limb_weights" in (source_blender.get("steps") or [])))
     # A failed part publishes the body without it while the aggregate stays
     # "applied"; a forced rebuild must still retry the part.
-    part_failed = any(op in ("attached_part", "inset_part", "mouth_part") and ((previous.get("metrics") or {}).get(gid) or {}).get("status") == "failed"
-                      for gid, op in (previous.get("group_ops") or {}).items())
+    # A failed group of ANY op counts (a mouth run that crashed, bones that failed beside a built mouth).
+    part_failed = any(isinstance(metric, dict) and metric.get("status") == "failed"
+                      for gid, metric in (previous.get("metrics") or {}).items()
+                      if gid in (previous.get("group_ops") or {}))
     # A base body's mesh is repaired on the way (Ruling A34, ``_repaired_base``): a record of other settings (or
     # of an older repair version) makes the rebuild due even when the extension groups are current.
     repair_due = _mesh_repair_due(character_name, path, meta)
@@ -2119,10 +2131,14 @@ def _extension_rig_once(character_name: str, path: Path,
         state.update(status="none_applicable", reason="Extension bones require a humanoid GLB")
         return {"ok": True, "applied": False, "extension_rig": state}
     source = path.parent / "prerig" / path.name
-    if not groups and not state["has_applied"] and not repair_due:
+    mouth_groups = [g for g in groups if g["op"] == "mouth_part"]
+    others = [g for g in groups if g["op"] != "mouth_part"]
+    if not others and not state["has_applied"] and not repair_due:
         # A failed later attempt can still leave a previously rigged mesh;
         # its existing prerig source drives the removal path below.
-        return {"ok": True, "applied": False, "extension_rig": state}
+        # No package group and nothing of one applied: the model as it is, with at most the core's mouth channel
+        # built into it (Ruling A203) — without the forced clean source and normalising the groups need.
+        return _mouth_only(character_name, path, meta, state, mouth_groups, previous, source)
     if not source.exists():
         # Never mistake a rigged asset for an unattenuated source.
         try:
@@ -2161,8 +2177,7 @@ def _extension_rig_once(character_name: str, path: Path,
         state.update(status="failed", reason="Clean source preparation failed: " + str(e))
         return {"ok": False, "applied": False, "extension_rig": state, "error": state["reason"]}
     _publish_sidecar(source, source_meta)
-    mouth_groups = [g for g in groups if g["op"] == "mouth_part"]
-    if len(mouth_groups) == len(groups):
+    if not others:
         # No group but (at most) the core's mouth channel (Ruling A203): the clean body as ever, with the mouth
         # built into it where the face allows — a mouth that cannot be built leaves this path as it was.
         meta.pop("tip_smoothing", None)
@@ -2191,11 +2206,11 @@ def _extension_rig_once(character_name: str, path: Path,
         # Each operation is isolated so a failed later part preserves earlier work.
         batches = [("attached_part", attached + companions)] if attached else []
         batches.extend(("inset_part", [group]) for group in inset)
-        # The core's mouth channel (Ruling A203): its own isolated run, on every humanoid model. Unlike a part, a
-        # mouth that could not be built publishes nothing by itself (``mouth_applied``).
-        mouth_batches = [("mouth_part", [group]) for group in groups if group["op"] == "mouth_part"]
+        # The core's mouth channel (Ruling A203) runs after the parts, isolated (``_run_mouth``). A built mouth is
+        # published with the body, but the step's STATUS is the other groups' (below): it never reads "applied"
+        # over extension bones that failed or found nothing.
         mouth_applied = False
-        for operation, batch in batches + mouth_batches:
+        for operation, batch in batches:
             before_part = staged.read_bytes()
             try:
                 part_result = refine.apply_script(
@@ -2208,7 +2223,6 @@ def _extension_rig_once(character_name: str, path: Path,
             part_metrics = part_data.get("metrics") or part_data.get("groups") or {}
             applied = bool(part_result.get("applied"))
             part_applied = part_applied or applied
-            mouth_applied = mouth_applied or (applied and operation == "mouth_part")
             reason = part_data.get("reason") or part_result.get("error") or "Part build produced no model"
             for group in batch:
                 state["metrics"][group["id"]] = {
@@ -2217,6 +2231,8 @@ def _extension_rig_once(character_name: str, path: Path,
                     "reason": "" if applied else reason}
             if not applied:
                 staged.write_bytes(before_part)
+        if mouth_groups:
+            mouth_applied = _run_mouth(character_name, staged, mouth_groups, state)
         if remaining:
             result = refine.apply_script(staged, "extension_bones", {"groups": remaining, "neutralise": neutralise},
                                          validator=validator,
@@ -2264,13 +2280,23 @@ def _extension_rig_once(character_name: str, path: Path,
                     meta["mesh_repair"]["orient_parts"] = {"status": "failed", "error": f"Orientation failed: {exc}"}
             _publish_model_bytes(path, staged.read_bytes())
             meta["blender"] = source_meta.get("blender") or {}
-            if result.get("applied") or batches or mouth_applied:
-                state.update(status="applied", has_applied=part_applied or bool(remaining and result.get("applied")))
+            if result.get("applied") or batches:
+                state.update(status="applied", has_applied=part_applied or mouth_applied
+                             or bool(remaining and result.get("applied")))
+            elif mouth_applied:
+                # Published for the mouth alone: the extension bones did not apply, and the status says so (a
+                # failed run is tried again, a forced rebuild is no no-op).
+                state.update(status=data.get("status") if data.get("status") in ("not_found", "failed")
+                             else "failed", has_applied=True)
             else:
                 # Published only to take a stale part off (``stale_parts``): the clean body, nothing built.
                 state.update(status=data.get("status") if data.get("status") in ("not_found", "failed")
                              else "failed", has_applied=False)
-            if tip_ids or neutral_ids:
+            if (tip_ids or neutral_ids) and not (result.get("applied") or batches):
+                # Published for the mouth (or a stale part) alone: the tips were not built by this run.
+                meta["tip_smoothing"] = extension_tip.tip_smoothing_failed(
+                    meta.get("tip_smoothing"), state["reason"] or data.get("reason") or "", utc_now_iso())
+            elif tip_ids or neutral_ids:
                 meta["tip_smoothing"] = extension_tip.tip_smoothing_record(state["metrics"], tip_ids, utc_now_iso(),
                                                                            neutral_ids)
             else:
@@ -2291,35 +2317,128 @@ def _extension_rig_once(character_name: str, path: Path,
                 "extension_rig": state, "error": state["reason"]}
 
 
+#: The mouth group's own metric statuses besides "applied": the face shows no mouth (a finding about the body —
+#: current until its inputs change), the run failed (a script error, a timeout — a rebuild tries again), Blender is
+#: not available on this installation.
+MOUTH_NOT_FOUND = "not_found"
+MOUTH_FAILED = "failed"
+MOUTH_UNAVAILABLE = "unavailable"
+
+
+def _run_mouth(character_name: str, staged: Path, mouth_groups, state: Dict[str, Any]) -> bool:
+    """Build the core's mouth channel (``mouth_part``, Ruling A203) into the staged humanoid GLB; True when built.
+    ``staged`` is left as it was otherwise. Records each group's metric in ``state`` with its status: "applied",
+    ``MOUTH_NOT_FOUND`` (the op ran and found no lip line), ``MOUTH_UNAVAILABLE`` (no Blender) or
+    ``MOUTH_FAILED`` (anything else)."""
+    from app.blender import refine
+    blocked = refine.unavailable_reason()
+    if blocked:
+        for group in mouth_groups:
+            state["metrics"][group["id"]] = {"status": MOUTH_UNAVAILABLE, "reason": "Mouth channel not built: " + blocked}
+        return False
+    before = staged.read_bytes()
+    try:
+        result = refine.apply_script(staged, "mouth_part", {"groups": mouth_groups},
+                                     validator=_validator_for("mixamo", character_name), require_smaller=False,
+                                     keep_original=False, base_joints_only=True, timeout_s=600)
+    except Exception as exc:  # noqa: BLE001 — the body goes on without the mouth
+        result = {"applied": False, "error": str(exc)}
+    data = result.get("data") or {}
+    metrics = data.get("metrics") or data.get("groups") or {}
+    applied = bool(result.get("applied"))
+    if not applied:
+        staged.write_bytes(before)
+    found_nothing = not applied and data.get("status") == MOUTH_NOT_FOUND
+    reason = (data.get("reason") if found_nothing else result.get("error") or data.get("reason")) \
+        or "Mouth build produced no model"
+    for group in mouth_groups:
+        state["metrics"][group["id"]] = {
+            **(metrics.get(group["id"]) if isinstance(metrics.get(group["id"]), dict) else {}),
+            "status": "applied" if applied else MOUTH_NOT_FOUND if found_nothing else MOUTH_FAILED,
+            "reason": "" if applied else reason}
+    return applied
+
+
 def _with_mouth_channel(character_name: str, path: Path, clean: bytes, mouth_groups, state: Dict[str, Any]) -> bytes:
     """``clean`` (a humanoid GLB without any other extension group) with the core's mouth channel built into it
-    (``mouth_part``, Ruling A203), or ``clean`` itself when the build finds no mouth. Records the group's metrics
-    in ``state`` and sets its status to "applied" when built."""
+    (``_run_mouth``), or ``clean`` itself when it is not built. Sets the state's status to "applied" when built,
+    else to "none_applicable" (as without the mouth group)."""
     import tempfile
-    from app.blender import refine
     with tempfile.TemporaryDirectory(prefix=".mouth-", dir=path.parent) as tmp:
         staged = Path(tmp) / path.name
         staged.write_bytes(clean)
-        try:
-            result = refine.apply_script(staged, "mouth_part", {"groups": mouth_groups},
-                                         validator=_validator_for("mixamo", character_name), require_smaller=False,
-                                         keep_original=False, base_joints_only=True, timeout_s=600)
-        except Exception as exc:  # noqa: BLE001 — the body is published without the mouth
-            result = {"applied": False, "error": str(exc)}
-        data = result.get("data") or {}
-        metrics = data.get("metrics") or data.get("groups") or {}
-        applied = bool(result.get("applied"))
-        reason = data.get("reason") or result.get("error") or "Mouth build produced no model"
-        for group in mouth_groups:
-            state["metrics"][group["id"]] = {**metrics.get(group["id"], {}),
-                                             "status": "applied" if applied else "failed",
-                                             "reason": "" if applied else reason}
-        if not applied:
-            # As without the mouth group: nothing applies to this body.
+        if not _run_mouth(character_name, staged, mouth_groups, state):
             state["status"] = "none_applicable"
             return clean
         state["status"] = "applied"
         return staged.read_bytes()
+
+
+def _mouth_only(character_name: str, path: Path, meta: Dict[str, Any], state: Dict[str, Any], mouth_groups,
+                previous: Dict[str, Any], source: Path) -> Dict[str, Any]:
+    """The extension step of a humanoid model that carries no package group and never had one applied: at most
+    the core's mouth channel (Ruling A203). Nothing here forces a clean source or a normalising run:
+
+    - the mouth is built on the model's PRE-MOUTH bytes: ``prerig/<file>`` when it exists (a rebuild, or a clean
+      source an earlier step left), else the stored model itself — which is then kept as ``prerig/<file>`` (as it
+      is, not normalised), but only once a mouth was really built into the model; a model that gets no mouth gets
+      no copy either. A model that already carries the jaw bone without that copy cannot be rebuilt and says so;
+    - Blender not available, or a face without a lip line: nothing changes, status "none_applicable" with the
+      reason (the group's metric says which, ``_run_mouth``); a failed run likewise, and a forced rebuild tries
+      it again (``part_failed``);
+    - the mouth group switched off after it was built: the pre-mouth bytes come back.
+
+    ``has_applied`` stays False (it speaks of package groups: their removal path needs a normalised source)."""
+    import tempfile
+    from app.core.mouth_channel import GROUP_ID, JAW
+    from app.core.model_validate import parse_glb
+    from app.core.rig_contract import norm_bone_name
+    state["has_applied"] = False
+    built_before = ((previous.get("metrics") or {}).get(GROUP_ID) or {}).get("status") == "applied"
+    if not mouth_groups:
+        if built_before and source.exists():
+            clean = source.read_bytes()
+            changed = path.read_bytes() != clean
+            if changed:
+                _publish_model_bytes(path, clean)
+            return {"ok": True, "applied": changed, "extension_rig": state}
+        return {"ok": True, "applied": False, "extension_rig": state}
+    if source.exists():
+        clean = source.read_bytes()
+    else:
+        clean = path.read_bytes()
+        try:
+            gltf = parse_glb(clean)["gltf"]
+            nodes = gltf.get("nodes") or []
+            has_jaw = any(norm_bone_name(nodes[j].get("name", "")) == norm_bone_name(JAW["bone"])
+                          for skin in gltf.get("skins", []) for j in skin.get("joints", []))
+        except (ValueError, KeyError, IndexError, TypeError):
+            has_jaw = False
+        if has_jaw:
+            state.update(status="failed", reason="The model already carries a mouth and its source before the mouth "
+                                                 "is missing")
+            return {"ok": False, "applied": False, "extension_rig": state, "error": state["reason"]}
+    with tempfile.TemporaryDirectory(prefix=".mouth-", dir=path.parent) as tmp:
+        staged = Path(tmp) / path.name
+        staged.write_bytes(clean)
+        built = _run_mouth(character_name, staged, mouth_groups, state)
+        metric = state["metrics"].get(mouth_groups[0]["id"]) or {}
+        if not built:
+            state.update(status="none_applicable", reason=str(metric.get("reason") or ""))
+            # A mouth built before stays in the model (its pre-mouth copy too): this run changed nothing.
+            return {"ok": True, "applied": False, "extension_rig": state}
+        if not source.exists():
+            source.parent.mkdir(exist_ok=True)
+            _publish_model_bytes(source, clean)
+            _publish_sidecar(source, {"blender": meta.get("blender") or {}, "rig": "mixamo"})
+        result = staged.read_bytes()
+    changed = path.read_bytes() != result
+    if changed:
+        _publish_model_bytes(path, result)
+    state["status"] = "applied"
+    state["per_tier"][LOW_TIER if path.parent.name == LOW_TIER else FULL_TIER] = {
+        key: state[key] for key in ("fingerprint", "groups", "status", "reason", "metrics", "attempted", "attempted_at")}
+    return {"ok": True, "applied": changed, "extension_rig": state}
 
 
 def _extension_state_current(character_name: str, path: Path, meta: Dict[str, Any]) -> bool:

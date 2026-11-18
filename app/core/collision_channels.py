@@ -186,10 +186,18 @@ def _any_region_declared() -> bool:
     return any(slot.regions for package in packages() for slot in package.body_slots)
 
 
-def _opening(state: Any, rig: str) -> Tuple[Optional[Dict[str, List[float]]], str]:
+def _opening(state: Any, rig: str, *, own_status: bool = False) -> Tuple[Optional[Dict[str, List[float]]], str]:
     """The ``opening`` metric of the built rig ``rig`` on a model (``extension_rig`` sidecar record), or the reason
-    there is none."""
-    if not isinstance(state, dict) or state.get("status") != "applied" or rig not in (state.get("groups") or []):
+    there is none. ``own_status`` (the core's mouth channel): the GROUP's own metric decides, not the step's status
+    — a mouth is built and published beside extension bones that found nothing — and the metric's reason (no lip
+    line, no Blender, the error) is passed on."""
+    if own_status:
+        metric = ((state.get("metrics") or {}).get(rig) or {}) if isinstance(state, dict) else {}
+        if not isinstance(metric, dict) or metric.get("status") != "applied" \
+                or rig not in (state.get("groups") or []):
+            why = str(metric.get("reason") or "") if isinstance(metric, dict) else ""
+            return None, f"Rig {rig} is not built on this model" + (f": {why}" if why else "")
+    elif not isinstance(state, dict) or state.get("status") != "applied" or rig not in (state.get("groups") or []):
         return None, f"Rig {rig} is not built on this model"
     opening = ((state.get("metrics") or {}).get(rig) or {}).get("opening")
     try:
@@ -222,7 +230,8 @@ def wanted_channels(character_name: str, path: Optional[Path], meta: Dict[str, A
             "id", "bone", "offset", "axis", "depth", "radius", "cone_deg", "funnel", "accepts", "min_length",
             "compress_min", "interaction_kinds", "exposed_only", "covered_by", "from_rig", "built")}
         entry["override"] = character_overrides(character_name, profile=profile).get(declaration["id"])
-        entry["opening"], entry["opening_reason"] = _opening(meta.get("extension_rig"), declaration["from_rig"])
+        entry["opening"], entry["opening_reason"] = _opening(meta.get("extension_rig"), declaration["from_rig"],
+                                                             own_status=True)
         wanted.append(entry)
     if _any_region_declared():
         from app.core.extension_rig import region_declarations_for

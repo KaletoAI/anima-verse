@@ -34,6 +34,30 @@ up +y, front +z).
 [4] The extension step runs the mouth in its own isolated run, after the parts and before the extension bones:
     groups [capture, mouth, inset, attached] -> calls attached_part, inset_part, mouth_part, extension_bones;
     a failing mouth run restores the bytes before it (the model still gets the other groups: bytes A I C).
+[5] A model WITHOUT package groups (review of A203: the mouth group must not drag it through the clean-source and
+    normalising machinery). Fixture: model bytes X, no ``prerig/``; ``_auto_normalize`` raises when called.
+    a. Blender off (``refine.unavailable_reason`` = "blender refinement is disabled"): ok, nothing applied, status
+       none_applicable with reason "Mouth channel not built: blender refinement is disabled", the group's metric
+       "unavailable"; bytes X, no prerig copy, no Blender call; the same call again is a no-op.
+    b. Blender on, the mouth builds (the mock appends M): model X M, ``prerig/`` holds X exactly (not normalised),
+       status applied, has_applied False. With a saved override (another fingerprint) the rebuild starts from the
+       prerig copy: X M again, never X M M.
+    c. No lip line (the script's answer: no output, data status not_found, reason "no lip line (contrast 0.010)"):
+       bytes X, no prerig copy, status none_applicable, metric not_found with that reason; again = no-op.
+    d. A script error ("timeout"): metric failed, status none_applicable; not forced = no-op (1 run), forced = a
+       second run (the failed group makes the forced rebuild run).
+    e. A model with a hair joint beside the 52 and no prerig: built like b (no "Clean prerig source is missing").
+    f. The mouth group switched off after b: the model is X again.
+[6] Extension bones that fail beside a mouth that builds (groups capture + mouth): the body is published with the
+    mouth (X M) but the step is NOT "applied": status failed, ok False, the capture group failed; the same call
+    again runs again (2 bone runs). Bones that find nothing (data status not_found): X M, status not_found, ok
+    True; forced, it runs again.
+[7] ``_extension_groups_for`` drops the mouth group for a model of another rig ("generic"); the group's light on a
+    humanoid: metric not_found -> grey "Not built" with "No lip line was found on this face, so the mouth stays
+    closed."; unavailable -> grey with the Blender sentence; failed -> red "Failed".
+[8] The channel's reason carries the metric's: metric {status not_found, reason "no lip line"} -> skipped "Rig
+    mouth_channel is not built on this model: no lip line". A step whose status is not_found (bones) with the
+    mouth's own metric applied still places the channel.
 """
 import json
 import os
@@ -117,7 +141,8 @@ def main():
     print("[2] the declaration")
     opening = {"centre": [0, 1.55, 0.1], "axis": [0, -0.6, -0.8], "depth": 0.06, "radius": 0.03, "open_height": 0.0365,
                "override": {"offset_mm": [1, 2, 3], "radius_scale": 1.5, "depth_scale": 0.75, "tilt_deg": 10}}
-    state = {"status": "applied", "groups": ["mouth_channel"], "metrics": {"mouth_channel": {"opening": opening}}}
+    state = {"status": "applied", "groups": ["mouth_channel"],
+             "metrics": {"mouth_channel": {"status": "applied", "opening": opening}}}
     path = tmp / "model.glb"
     wanted, _sig = collision_channels.wanted_channels("demo", path, {"rig": "mixamo", "extension_rig": state},
                                                       profile=profile)
@@ -202,6 +227,205 @@ def main():
               target.read_bytes()[len(clean):])
         status = meta["extension_rig"]["metrics"]["mouth_channel"]["status"]
         check(f"{label}: mouth status", status == ("failed" if failing else "applied") and result["ok"], status)
+
+    print("[5] a model without package groups")
+    mouth = {**mouth_channel.group({}), "enabled": True}
+    X = clean
+
+    def scene(name, model_bytes=X):
+        folder = tmp / name
+        folder.mkdir()
+        (folder / "model.glb").write_bytes(model_bytes)
+        return folder / "model.glb"
+
+    def step(model, meta, *, run, force=False, groups=None, blocked="", profile_groups=None):
+        calls = []
+
+        def apply(staged, operation, params, **kwargs):
+            calls.append(operation)
+            return run(staged, operation, params)
+        declared = groups if groups is not None else [mouth]
+        with ExitStack() as stack:
+            stack.enter_context(patch("app.models.character.get_character_profile", return_value={}))
+            stack.enter_context(patch.object(extension_rig, "rig_groups_for", return_value=profile_groups or declared))
+            stack.enter_context(patch.object(extension_rig, "resolved_extension_groups", return_value=declared))
+            stack.enter_context(patch.object(model3d, "_auto_normalize", side_effect=AssertionError("normalised")))
+            stack.enter_context(patch.object(model3d, "_validator_for",
+                                             return_value=lambda blob: {"ok": True, "errors": []}))
+            stack.enter_context(patch.object(refine, "unavailable_reason", return_value=blocked))
+            stack.enter_context(patch.object(refine, "apply_script", side_effect=apply))
+            result = model3d._extension_rig_once("fixture", model, meta, force=force)
+        return result, calls
+
+    def builds(staged, operation, params):
+        staged.write_bytes(staged.read_bytes() + b"M")
+        return {"applied": True, "data": {"metrics": {"mouth_channel": {"opening": opening}}}}
+
+    def no_line(staged, operation, params):
+        found = {"status": "not_found", "reason": "no lip line (contrast 0.010)"}
+        return {"ok": True, "applied": False, "error": "nothing to do",
+                "data": {**found, "metrics": {"mouth_channel": dict(found)}}}
+
+    def crashes(staged, operation, params):
+        raise RuntimeError("timeout")
+
+    model = scene("a")
+    meta = {"rig": "mixamo"}
+    result, calls = step(model, meta, run=builds, blocked="blender refinement is disabled")
+    st = meta["extension_rig"]
+    check("a: Blender off -> none_applicable with the reason, nothing run",
+          (result["ok"], result["applied"], st["status"], st["reason"], calls,
+           st["metrics"]["mouth_channel"]["status"]) ==
+          (True, False, "none_applicable", "Mouth channel not built: blender refinement is disabled", [],
+           "unavailable"), (result, st))
+    check("a: bytes untouched, no prerig copy", model.read_bytes() == X and not (model.parent / "prerig").exists())
+    again, calls = step(model, meta, run=builds, blocked="blender refinement is disabled")
+    check("a: the same call again is a no-op", again.get("noop") is True and calls == [], again)
+
+    model = scene("b")
+    meta = {"rig": "mixamo"}
+    result, calls = step(model, meta, run=builds)
+    st = meta["extension_rig"]
+    check("b: built -> X M, status applied, has_applied False",
+          (model.read_bytes(), st["status"], st["has_applied"], result["applied"], calls) ==
+          (X + b"M", "applied", False, True, ["mouth_part"]), (st, calls))
+    check("b: the prerig copy is X as it was", (model.parent / "prerig/model.glb").read_bytes() == X)
+    tuned_group = {**mouth, "params": {"override": {"offset_mm": [0, 1, 0]}}}
+    result, calls = step(model, meta, run=builds, groups=[tuned_group])
+    check("b: a rebuild starts from the prerig copy (X M, not X M M)",
+          model.read_bytes() == X + b"M" and calls == ["mouth_part"], model.read_bytes()[len(X):])
+    meta_b = meta
+
+    model = scene("c")
+    meta = {"rig": "mixamo"}
+    result, calls = step(model, meta, run=no_line)
+    st = meta["extension_rig"]
+    check("c: no lip line -> not_found on the group, none_applicable on the step",
+          (result["ok"], st["status"], st["metrics"]["mouth_channel"], model.read_bytes() == X,
+           (model.parent / "prerig").exists()) ==
+          (True, "none_applicable", {"status": "not_found", "reason": "no lip line (contrast 0.010)"}, True, False),
+          st)
+    again, calls = step(model, meta, run=no_line)
+    check("c: again = no-op", again.get("noop") is True and calls == [])
+
+    model = scene("d")
+    meta = {"rig": "mixamo"}
+    result, calls = step(model, meta, run=crashes)
+    st = meta["extension_rig"]
+    check("d: a script error -> failed on the group", (st["metrics"]["mouth_channel"], st["status"]) ==
+          ({"status": "failed", "reason": "timeout"}, "none_applicable"), st)
+    _again, calls_plain = step(model, meta, run=crashes)
+    _forced, calls_forced = step(model, meta, run=crashes, force=True)
+    check("d: not forced = no-op, forced = it runs again", (calls_plain, calls_forced) == ([], ["mouth_part"]),
+          (calls_plain, calls_forced))
+
+    hairy = glb(["mixamorig:" + name for name in BASE_JOINT_NAMES] + ["HairA"], extra_parents={"HairA": "mixamorig:Head"})
+    model = scene("e", hairy)
+    meta = {"rig": "mixamo"}
+    result, calls = step(model, meta, run=builds)
+    check("e: a hair joint and no prerig: built, no missing-source failure",
+          (result["ok"], meta["extension_rig"]["status"], model.read_bytes()) == (True, "applied", hairy + b"M"),
+          meta["extension_rig"])
+
+    model = tmp / "b" / "model.glb"
+    off = {**mouth, "enabled": False}
+    result, calls = step(model, meta_b, run=builds, groups=[off])
+    check("f: switched off -> the model is X again", model.read_bytes() == X and calls == [], model.read_bytes()[len(X):])
+
+    print("[6] failing extension bones beside a built mouth")
+    capture = dict(id="capture", op="fixture", params={}, chains=[], enabled=True)
+
+    def bones(status):
+        def run(staged, operation, params):
+            if operation == "mouth_part":
+                return builds(staged, operation, params)
+            return {"ok": True, "applied": False, "error": "boom" if status == "failed" else "nothing to do",
+                    "data": {"status": status, "reason": "boom" if status == "failed" else "no shape"}}
+        return run
+
+    def heavy(name):
+        folder = tmp / name
+        (folder / "prerig").mkdir(parents=True)
+        (folder / "prerig/model.glb").write_bytes(X)
+        (folder / "model.glb").write_bytes(X)
+        return folder / "model.glb"
+
+    def heavy_step(model, meta, run, force=False):
+        calls = []
+
+        def apply(staged, operation, params, **kwargs):
+            calls.append(operation)
+            return run(staged, operation, params)
+        declared = [capture, mouth]
+        with ExitStack() as stack:
+            stack.enter_context(patch("app.models.character.get_character_profile", return_value={}))
+            stack.enter_context(patch.object(extension_rig, "rig_groups_for", return_value=declared))
+            stack.enter_context(patch.object(extension_rig, "resolved_extension_groups", return_value=declared))
+            stack.enter_context(patch.object(model3d, "_auto_normalize"))
+            stack.enter_context(patch.object(model3d, "_validator_for",
+                                             return_value=lambda blob: {"ok": blob.startswith(X), "errors": []}))
+            stack.enter_context(patch.object(refine, "unavailable_reason", return_value=""))
+            stack.enter_context(patch.object(refine, "apply_script", side_effect=apply))
+            result = model3d._extension_rig_once("fixture", model, meta, force=force)
+        return result, calls
+
+    model = heavy("g")
+    meta = {"rig": "mixamo"}
+    result, calls = heavy_step(model, meta, bones("failed"))
+    st = meta["extension_rig"]
+    check("failed bones: the mouth is published (X M)", model.read_bytes() == X + b"M" and result["applied"],
+          model.read_bytes()[len(X):])
+    check("failed bones: the step is failed, not applied",
+          (st["status"], result["ok"], st["metrics"]["capture"]["status"], st["metrics"]["mouth_channel"]["status"])
+          == ("failed", False, "failed", "applied"), st)
+    _again, calls = heavy_step(model, meta, bones("failed"))
+    check("failed bones: the next call tries again", calls == ["mouth_part", "extension_bones"], calls)
+
+    model = heavy("h")
+    meta = {"rig": "mixamo"}
+    result, calls = heavy_step(model, meta, bones("not_found"))
+    st = meta["extension_rig"]
+    check("bones found nothing: X M, status not_found, ok",
+          (model.read_bytes(), st["status"], result["ok"]) == (X + b"M", "not_found", True), st)
+    again, calls_plain = heavy_step(model, meta, bones("not_found"))
+    _forced, calls_forced = heavy_step(model, meta, bones("not_found"), force=True)
+    check("bones found nothing: not forced = no-op, forced = runs again",
+          (again.get("noop"), calls_plain, calls_forced) == (True, [], ["mouth_part", "extension_bones"]),
+          (calls_plain, calls_forced))
+
+    print("[7] other rigs and the group's light")
+    check("another rig: the mouth group is not listed",
+          [g["id"] for g in model3d._extension_groups_for({"rig": "generic"}, [capture, mouth])] == ["capture"])
+    check("a humanoid lists it", [g["id"] for g in model3d._extension_groups_for({"rig": "mixamo"}, [capture, mouth])]
+          == ["capture", "mouth_channel"])
+
+    def light_of(metric):
+        record = {"attempted": True, "status": "none_applicable", "group_ops": {"mouth_channel": "mouth_part"},
+                  "metrics": {"mouth_channel": metric}}
+        return model3d.extension_group_lights({}, {"rig": "mixamo"}, [mouth], record, "")["mouth_channel"]
+    got = light_of({"status": "not_found", "reason": "no lip line (contrast 0.010)"})
+    check("no lip line: grey, not built, the plain sentence", (got["light"], got["state"], got["reason"]) ==
+          ("grey", "Not built", "No lip line was found on this face, so the mouth stays closed."), got)
+    got = light_of({"status": "unavailable", "reason": "x"})
+    check("no Blender: grey", (got["light"], got["reason"]) ==
+          ("grey", "Blender is not available here, so the mouth was not built."), got)
+    got = light_of({"status": "failed", "reason": "timeout"})
+    check("a failed run: red", (got["light"], got["state"]) == ("red", "Failed"), got)
+
+    print("[8] the channel's reason")
+    state_none = {"status": "none_applicable", "groups": ["mouth_channel"],
+                  "metrics": {"mouth_channel": {"status": "not_found", "reason": "no lip line"}}}
+    wanted_none, _ = collision_channels.wanted_channels("demo", path, {"rig": "mixamo", "extension_rig": state_none},
+                                                        profile={})
+    _channels, skipped = collision_channels.resolve_channels(body, fit["capsules"], wanted_none, exposed=lambda e: True)
+    check("the metric's reason is passed on", skipped == [
+        {"id": "mouth", "reason": "Rig mouth_channel is not built on this model: no lip line"}], skipped)
+    state_mixed = {**state, "status": "not_found"}
+    wanted_mixed, _ = collision_channels.wanted_channels("demo", path, {"rig": "mixamo", "extension_rig": state_mixed},
+                                                         profile={})
+    channels, skipped = collision_channels.resolve_channels(body, fit["capsules"], wanted_mixed, exposed=lambda e: True)
+    check("bones not found, mouth built: the channel is placed", [c["id"] for c in channels] == ["mouth"] and not skipped,
+          (channels, skipped))
 
     print("FAILED (%d)" % failed if failed else "ALL OK")
     return 1 if failed else 0
