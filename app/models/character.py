@@ -3038,9 +3038,11 @@ def _migrate_outfits(outfits: list) -> list:
                 o["options"] = {}   # a row from before the per-outfit options (boots plan Task 10)
             migrated.append(o)
             continue
-        # Old format: {location, activity, outfit}
+        # Old format: {location, activity, outfit}. A stored row keeps its id:
+        # saves upsert by id, so a fresh one per read would add a copy instead
+        # of replacing the row.
         migrated.append({
-            "id": uuid.uuid4().hex[:8],
+            "id": o.get("id") or uuid.uuid4().hex[:8],
             "name": "",
             "outfit": o.get("outfit", ""),
             "locations": [o["location"]] if o.get("location") else [],
@@ -3278,18 +3280,17 @@ def _load_outfits_file(character_name: str) -> List[Dict]:
     return outfits
 
 
-def _save_outfits_file(character_name: str, outfits: List[Dict]):
-    """Write outfit definitions to outfits_sets, excluding image_meta."""
+def _upsert_outfit_rows(character_name: str, outfits: List[Dict]) -> bool:
+    """Insert or update the named outfit sets in outfits_sets, excluding
+    image_meta. True when the write landed.
+
+    UPSERT ONLY: a set of the character that is missing from ``outfits`` stays
+    untouched — removing one is ``delete_character_outfit``. Deleting by
+    absence used to drop a set another writer had added after this caller
+    read its list."""
     now = utc_now_iso()
-    new_ids = {o.get("id") for o in outfits if o.get("id")}
     try:
         with transaction() as conn:
-            existing_ids = {r[0] for r in conn.execute(
-                "SELECT id FROM outfits_sets WHERE character_name=?",
-                (character_name,),
-            ).fetchall()}
-            for oid in existing_ids - new_ids:
-                conn.execute("DELETE FROM outfits_sets WHERE id=?", (oid,))
             for outfit in outfits:
                 oid = outfit.get("id")
                 if not oid:
@@ -3316,7 +3317,9 @@ def _save_outfits_file(character_name: str, outfits: List[Dict]):
                     outfit.get("created_at", now),
                 ))
     except Exception as e:
-        logger.error("_save_outfits_file DB-Fehler fuer %s: %s", character_name, e)
+        logger.error("Outfit sets of %s not written: %s", character_name, e)
+        return False
+    return True
 
 
 def _get_outfit_sidecar_path(character_name: str, image_filename: str) -> Path:
@@ -3365,14 +3368,24 @@ def find_outfit_by_image(character_name: str, image_filename: str) -> Optional[D
     return None
 
 
-def save_character_outfits(character_name: str, outfits: List[Dict]):
-    """Save outfit configuration to the DB, excluding image_meta.
+def save_character_outfits(character_name: str, outfits: List[Dict]) -> bool:
+    """Insert or update the given outfit sets, excluding image_meta. True when
+    the write landed.
 
-    image_meta belongs in the JSON sidecar beside the PNG, not the DB."""
-    for outfit in outfits:
-        if not outfit.get("name", "").strip():
-            outfit["name"] = _next_outfit_name(outfits)
-    _save_outfits_file(character_name, outfits)
+    Only the sets in ``outfits`` are written; every other set of the character
+    stays as it is (no delete by absence — ``delete_character_outfit`` removes
+    a set). A set without a name gets the next free ``OutfitN`` among the
+    stored sets and the given ones. image_meta belongs in the JSON sidecar
+    beside the PNG, not the DB."""
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", character_name):
+        taken = None
+        for outfit in outfits:
+            if not outfit.get("name", "").strip():
+                if taken is None:
+                    taken = get_character_outfits(character_name) + list(outfits)
+                outfit["name"] = _next_outfit_name(taken)
+        return _upsert_outfit_rows(character_name, outfits)
 
 
 def _next_outfit_name(outfits: List[Dict]) -> str:
@@ -3410,12 +3423,23 @@ def add_character_outfit(character_name: str, outfit_data: Dict) -> str:
     hairstyle?}
     (``options``: the per-outfit options of ``app.core.outfit_options``; a new set without them stores the
     character's live value. ``hairstyle``: the id of the character's hairstyle the set wears — plan
-    2026-11-12-unified-worn-pieces Task 13 / D5 — "" = the set leaves the hair as it is). Return the outfit ID."""
+    2026-11-12-unified-worn-pieces Task 13 / D5 — "" = the set leaves the hair as it is). Return the outfit ID.
+
+    Read and write sit under ``keyed_lock("character_profile", name)`` (the lock ``delete_character_outfit``
+    takes), and only THIS set is written: the other sets of the list read here are never written back, so a
+    set another writer added or changed meanwhile survives."""
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", character_name):
+        return _add_character_outfit_locked(character_name, outfit_data)
+
+
+def _add_character_outfit_locked(character_name: str, outfit_data: Dict) -> str:
+    """The body of ``add_character_outfit``; the caller holds the character's profile lock."""
     outfits = get_character_outfits(character_name)
     outfit_id = outfit_data.get("id", "")
 
     if outfit_id:
-        # Update bestehend
+        # Update an existing set
         for existing in outfits:
             if existing.get("id") == outfit_id:
                 name = outfit_data.get("name", existing.get("name", ""))
@@ -3438,16 +3462,15 @@ def add_character_outfit(character_name: str, outfit_data: Dict) -> str:
                     existing["hairstyle"] = str(outfit_data.get("hairstyle") or "").strip()
                 # Dead key of the abolished per-slot colour override.
                 existing.pop("pieces_colors", None)
-                save_character_outfits(character_name, outfits)
+                save_character_outfits(character_name, [existing])
                 return outfit_id
 
     # New outfit
-    from datetime import datetime
     outfit_id = uuid.uuid4().hex[:8]
     name = outfit_data.get("name", "")
     if not name or not name.strip():
         name = _next_outfit_name(outfits)
-    outfits.append({
+    new_outfit = {
         "id": outfit_id,
         "name": name,
         "outfit": outfit_data.get("outfit", ""),
@@ -3460,8 +3483,8 @@ def add_character_outfit(character_name: str, outfit_data: Dict) -> str:
         "options": _outfit_options(outfit_data, character_name, live=True),
         "hairstyle": str(outfit_data.get("hairstyle") or "").strip(),
         "created_at": outfit_data.get("created_at", utc_now_iso()),
-    })
-    save_character_outfits(character_name, outfits)
+    }
+    save_character_outfits(character_name, [new_outfit])
     return outfit_id
 
 
@@ -3640,31 +3663,33 @@ def update_outfit_image(character_name: str, outfit_id: str, image: str,
     """Update an outfit's image field.
 
     Write image_meta as outfits/<image>.json, never embedded in outfits.json.
-    Automatically delete this outfit's expression variants based on the old image."""
-    outfits = get_character_outfits(character_name)
-    for o in outfits:
-        if o.get("id") == outfit_id:
-            old_image = o.get("image", "")
-            o["image"] = image
-            save_character_outfits(character_name, outfits)
+    Automatically delete this outfit's expression variants based on the old image.
+    Only this set is written, under the character's profile lock (see ``add_character_outfit``)."""
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", character_name):
+        found = next((o for o in get_character_outfits(character_name) if o.get("id") == outfit_id), None)
+        if found is None:
+            return False
+        old_image = found.get("image", "")
+        found["image"] = image
+        if not save_character_outfits(character_name, [found]):
+            return False
 
-            # Write the new image sidecar if metadata is available.
-            if image and image_meta:
-                try:
-                    save_outfit_image_meta(character_name, image, image_meta)
-                except Exception as _se:
-                    logger.warning("Sidecar-Write fehlgeschlagen fuer %s: %s", image, _se)
+        # Write the new image sidecar if metadata is available.
+        if image and image_meta:
+            try:
+                save_outfit_image_meta(character_name, image, image_meta)
+            except Exception as _se:
+                logger.warning("Sidecar write failed for %s: %s", image, _se)
 
-            # Delete the old PNG and sidecar when replaced.
-            if old_image and old_image != image:
-                _delete_outfit_files(character_name, old_image)
+        # Delete the old PNG and sidecar when replaced.
+        if old_image and old_image != image:
+            _delete_outfit_files(character_name, old_image)
 
-            # Expression variants now depend on character, equipment, mood and
-            # activity. Outfit image changes no longer invalidate the cache;
-            # retain this no-op note for readability.
-
-            return True
-    return False
+        # Expression variants now depend on character, equipment, mood and
+        # activity. Outfit image changes no longer invalidate the cache;
+        # retain this no-op note for readability.
+    return True
 
 
 def _delete_outfit_files(character_name: str, image_filename: str) -> None:
