@@ -9,7 +9,7 @@
  * after ~2 min the tick slows down), stopped on unmount / character switch.
  */
 import type { BasePostprocessInfo } from './ViewPostprocessPanel'
-import type { ChannelDeclaration, ChannelOverrides } from './collisionChannelsModel'
+import type { ChannelDeclaration, ChannelOverrides, TeethOptions } from './collisionChannelsModel'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiGet } from '../../lib/api'
 import type { ImageTileMeta } from './RefImage'
@@ -211,6 +211,8 @@ export interface BaseBodyInfo {
   collision_scales?: Record<string, number>
   /** The stored per-channel overrides (`model3d_opts.collision_channels`; the Channels panel). */
   collision_channels?: ChannelOverrides
+  /** The mouth's teeth options, complete (`model3d_opts.mouth_teeth`, Ruling A206; the Channels panel's mouth tab). */
+  mouth_teeth?: TeethOptions
   /** Every declared channel with its placement on the base model or the plain reason there is none
    *  (`collision_channels.declarations_info`; without a base model each reads "No base model yet"). */
   channel_declarations?: ChannelDeclaration[]

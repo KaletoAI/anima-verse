@@ -18,6 +18,9 @@
  *   opening's height in millimetres; stored nowhere.
  * - A BUILT channel (the mouth, Ruling A203; `built`): its geometry is part of the body, so a saved offset, radius,
  *   depth or tilt makes the extension step due (the Build applies it, local); a note under the fields says so.
+ * - The mouth's TEETH (Ruling A206): Teeth and Tongue on/off, the tooth colour (three shades) and the size, saved by
+ *   the same Save (`saveTeeth`, `model3d_opts.mouth_teeth`) — stored only; the extension step becomes due and the
+ *   Build applies it (local, 0 jobs). With teeth the readout beside Open names the free height between them.
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { ChannelOverride, CollisionPayload } from '@anima/scene-render'
@@ -27,9 +30,10 @@ import { useToast } from '../../lib/Toast'
 import type { ModelStep } from './ModelSteps'
 import { StepLight, SubTabs } from './StepRows'
 import { LIGHT_COLOR } from './stepStyle'
-import { CONE_MAX, TILT_MAX, CONE_MIN, OFFSET_MM_MAX, SCALE_MAX, SCALE_MIN, channelLabel, collisionStepLine, declarationDetail,
-  declarationLine, overrideOf, overridesToSave, previewPayload, saveChannelOverrides, sameOverride } from './collisionChannelsModel'
-import type { ChannelDeclaration, ChannelOverrides } from './collisionChannelsModel'
+import { CONE_MAX, TILT_MAX, CONE_MIN, OFFSET_MM_MAX, SCALE_MAX, SCALE_MIN, TEETH_DEFAULTS, TEETH_SHADES, TEETH_SIZE_MAX,
+  TEETH_SIZE_MIN, channelLabel, collisionStepLine, declarationDetail, declarationLine, overrideOf, overridesToSave,
+  previewPayload, saveChannelOverrides, sameOverride, sameTeeth, saveTeeth, teethOf } from './collisionChannelsModel'
+import type { ChannelDeclaration, ChannelOverrides, TeethOptions } from './collisionChannelsModel'
 
 function Field({ label, shown, value, min, max, step, title, disabled, onChange }: {
   label: string; shown: string; value: number; min: number; max: number; step: number; title: string
@@ -48,8 +52,19 @@ function Field({ label, shown, value, min, max, step, title, disabled, onChange 
 
 const GRID3 = { display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '2px 8px' } as const
 
+function Check({ label, checked, title, disabled, onChange }: {
+  label: string; checked: boolean; title: string; disabled: boolean; onChange: (value: boolean) => void
+}) {
+  return (
+    <label title={title} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, minWidth: 0 }}>
+      <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+      <span>{label}</span>
+    </label>
+  )
+}
+
 export function CollisionChannels({ character, collision, overrides, declarations, disabled, onPreview, onSaved, step,
-  onShowStep, mouthOpen = 0, onMouthOpen }: {
+  onShowStep, mouthOpen = 0, onMouthOpen, teeth }: {
   character: string
   /** The shown model's capsule set with its channels (`model.collision`). */
   collision: CollisionPayload | null | undefined
@@ -68,11 +83,17 @@ export function CollisionChannels({ character, collision, overrides, declaration
    *  whose record carries `open_height`. A preview only — nothing is stored. */
   mouthOpen?: number
   onMouthOpen?: (value: number) => void
+  /** Ruling A206: the stored teeth options (`mouth_teeth`); edited on the built mouth's tab. */
+  teeth?: Partial<TeethOptions> | null
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
   // A poll brings new objects with the same values: the key, not the identity, decides whether the draft is replaced.
-  const storedKey = `${JSON.stringify(overrides || {})}|${declarations.map(d => `${d.id}:${d.cone_deg}`).join(',')}`
+  const teethKey = JSON.stringify(teeth || {})
+  const storedKey = `${JSON.stringify(overrides || {})}|${declarations.map(d => `${d.id}:${d.cone_deg}`).join(',')}|${teethKey}`
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const storedTeeth = useMemo(() => teethOf(teeth), [teethKey])
+  const [teethDraft, setTeethDraft] = useState<TeethOptions>(storedTeeth)
   const stored = useMemo(() => Object.fromEntries(declarations.map(d => [d.id, overrideOf(overrides, d.id, d.cone_deg)])),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [storedKey])
@@ -82,19 +103,23 @@ export function CollisionChannels({ character, collision, overrides, declaration
     // A reload with other stored values (or other declarations) replaces the draft.
     setSeenKey(storedKey)
     setDrafts(stored)
+    setTeethDraft(storedTeeth)
   }
   const [saving, setSaving] = useState(false)
   const [tab, setTab] = useState('')
   const current = declarations.find(d => d.id === tab) ?? declarations[0]
-  const changed = declarations.some(d => drafts[d.id] && !sameOverride(drafts[d.id], stored[d.id]))
+  const channelsChanged = declarations.some(d => drafts[d.id] && !sameOverride(drafts[d.id], stored[d.id]))
+  const changed = channelsChanged || !sameTeeth(teethDraft, storedTeeth)
 
-  useEffect(() => { onPreview(changed ? previewPayload(collision, drafts) : null) }, [changed, collision, drafts, onPreview])
+  useEffect(() => { onPreview(channelsChanged ? previewPayload(collision, drafts) : null) }, [channelsChanged, collision, drafts, onPreview])
   useEffect(() => () => onPreview(null), [onPreview])
 
-  const save = async (next: Record<string, ChannelOverride>) => {
+  const save = async (next: Record<string, ChannelOverride>, nextTeeth: TeethOptions) => {
     setSaving(true)
     try {
-      await saveChannelOverrides(apiPost, character, overridesToSave(overrides, declarations, next))
+      if (declarations.some(d => next[d.id] && !sameOverride(next[d.id], stored[d.id])))
+        await saveChannelOverrides(apiPost, character, overridesToSave(overrides, declarations, next))
+      if (!sameTeeth(nextTeeth, storedTeeth)) await saveTeeth(apiPost, character, nextTeeth)
       toast(t('Saved — nothing recomputed yet'))
       await onSaved()
     } catch (e) {
@@ -116,10 +141,13 @@ export function CollisionChannels({ character, collision, overrides, declaration
     set({ offset_mm: offset })
   }
   const mm = (v: number) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(0)} mm`
-  const openHeight = (collision?.channels ?? []).find(c => c.id === current?.id)?.open_height ?? 0
+  const record = (collision?.channels ?? []).find(c => c.id === current?.id)
+  const openHeight = record?.open_height ?? 0
+  const teethGap = record?.teeth_gap ?? 0
+  const setTeeth = (patch: Partial<TeethOptions>) => setTeethDraft(previous => ({ ...previous, ...patch }))
   const placed = (collision?.channels ?? []).length
   const defaults = Object.fromEntries(declarations.map(d => [d.id, overrideOf(null, d.id, d.cone_deg)]))
-  const atDefaults = declarations.every(d => sameOverride(stored[d.id], defaults[d.id]))
+  const atDefaults = declarations.every(d => sameOverride(stored[d.id], defaults[d.id])) && sameTeeth(storedTeeth, TEETH_DEFAULTS)
 
   return (
     <fieldset className="ga-fieldset ga-model3d-group"
@@ -182,22 +210,49 @@ export function CollisionChannels({ character, collision, overrides, declaration
                 value={mouthOpen} min={0} max={1} step={0.01} disabled={false} onChange={onMouthOpen}
                 title={t('Opens the mouth in the viewer: 0 = closed, 100 % = the jaw fully open ({mm} mm between the lips). A preview only — nothing is saved; in the world a part entering the mouth opens it.')
                   .replace('{mm}', (openHeight * 1000).toFixed(0))} />
+              {teethGap > 0 ? (
+                <div className="ga-hint" style={{ fontSize: 10, margin: 0, gridColumn: 'span 2', alignSelf: 'end' }}
+                  title={t('The free height between the upper and lower front teeth with the mouth fully open: a part up to this thickness passes without touching them. Contact opens the mouth by it.')}>
+                  {t('Between the teeth: {mm} mm at 100 %').replace('{mm}', (teethGap * 1000).toFixed(0))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {current?.built && current.id === 'mouth' ? (
+            <div style={GRID3}>
+              <Check label={t('Teeth')} checked={teethDraft.enabled} disabled={busy} onChange={(v) => setTeeth({ enabled: v })}
+                title={t('Builds teeth and gums into the open mouth (upper row on the head, lower row on the jaw). Off: the open mouth shows only its dark inside.')} />
+              <Check label={t('Tongue')} checked={teethDraft.tongue} disabled={busy || !teethDraft.enabled}
+                onChange={(v) => setTeeth({ tongue: v })}
+                title={t('A simple tongue on the floor of the mouth; an entering part pushes it down.')} />
+              <label className="ga-model3d-slider" style={{ gap: 0, fontSize: 10, minWidth: 0 }}
+                title={t('The colour of the teeth')}>
+                <span>{t('Colour')}</span>
+                <select value={teethDraft.shade} disabled={busy || !teethDraft.enabled}
+                  onChange={(e) => setTeeth({ shade: Number(e.target.value) as TeethOptions['shade'] })}>
+                  {TEETH_SHADES.map((name, i) => <option key={name} value={i}>{t(name)}</option>)}
+                </select>
+              </label>
+              <Field label={t('Size')} shown={`×${teethDraft.size.toFixed(2)}`} value={teethDraft.size}
+                min={TEETH_SIZE_MIN} max={TEETH_SIZE_MAX} step={0.05} disabled={busy || !teethDraft.enabled}
+                onChange={(v) => setTeeth({ size: Math.round(v * 100) / 100 })}
+                title={t('The teeth’s size as a factor of the size measured from the mouth’s width')} />
             </div>
           ) : null}
           {current?.built ? (
             <div className="ga-hint" style={{ fontSize: 10, margin: 0 }} role="note">
-              {t('This channel is built into the body: the wire shows the new values at once, the opening itself follows with the next Build (extension step, local, 0 jobs).')}
+              {t('This channel is built into the body: the wire shows the new values at once, the opening and the teeth follow with the next Build (extension step, local, 0 jobs).')}
             </div>
           ) : null}
           <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap', marginTop: 2 }}>
             <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy || !changed}
               title={t('Stores the values only — nothing is recomputed, no jobs')}
-              onClick={() => void save(drafts)}>{t('Save')}</button>
+              onClick={() => void save(drafts, teethDraft)}>{t('Save')}</button>
             <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !changed}
-              title={t('Back to the saved values')} onClick={() => setDrafts(stored)}>{t('Discard changes')}</button>
+              title={t('Back to the saved values')} onClick={() => { setDrafts(stored); setTeethDraft(storedTeeth) }}>{t('Discard changes')}</button>
             <button type="button" className="ga-btn ga-btn-sm" disabled={busy || atDefaults}
               title={t('Stores the declared values for every channel')}
-              onClick={() => void save(defaults)}>{t('Reset to default')}</button>
+              onClick={() => void save(defaults, TEETH_DEFAULTS)}>{t('Reset to default')}</button>
           </div>
           <div className="ga-hint" style={{ fontSize: 10 }}>{t('Saving stores only — no jobs. What becomes due shows here.')}</div>
         </>

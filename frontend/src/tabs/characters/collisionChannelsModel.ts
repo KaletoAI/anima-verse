@@ -193,3 +193,35 @@ export function rodReadoutLines(r: RodReadout | null, t: (s: string) => string =
       .replace('{n}', String(r.openingMoved)),
   ]
 }
+
+/** THE MOUTH'S TEETH (Ruling A206, `app/core/mouth_channel.py` `validate_teeth`): teeth on/off, tongue on/off, the
+ *  tooth colour (0 bright, 1 natural, 2 ivory) and the size (0.8–1.2). Stored as `model3d_opts.mouth_teeth`; the
+ *  extension step reads "due" and the Build applies it (local, 0 jobs). */
+export interface TeethOptions { enabled: boolean; tongue: boolean; shade: 0 | 1 | 2; size: number }
+export const TEETH_DEFAULTS: TeethOptions = { enabled: true, tongue: true, shade: 1, size: 1 }
+export const TEETH_SIZE_MIN = 0.8
+export const TEETH_SIZE_MAX = 1.2
+/** The three tooth colours, in `shade` order (English; the component puts them through `t()`). */
+export const TEETH_SHADES = ['Bright', 'Natural', 'Ivory'] as const
+
+/** The stored options, complete (a missing or malformed entry takes the default). */
+export function teethOf(stored: Partial<TeethOptions> | null | undefined): TeethOptions {
+  const s = stored ?? {}
+  const size = Number(s.size)
+  return {
+    enabled: typeof s.enabled === 'boolean' ? s.enabled : TEETH_DEFAULTS.enabled,
+    tongue: typeof s.tongue === 'boolean' ? s.tongue : TEETH_DEFAULTS.tongue,
+    shade: s.shade === 0 || s.shade === 1 || s.shade === 2 ? s.shade : TEETH_DEFAULTS.shade,
+    size: Number.isFinite(size) ? Math.min(TEETH_SIZE_MAX, Math.max(TEETH_SIZE_MIN, Math.round(size * 100) / 100)) : TEETH_DEFAULTS.size,
+  }
+}
+
+export function sameTeeth(a: TeethOptions, b: TeethOptions): boolean {
+  return a.enabled === b.enabled && a.tongue === b.tongue && a.shade === b.shade && Math.abs(a.size - b.size) < 1e-6
+}
+
+/** Stores the teeth options — `POST …/model3d/mouth-teeth`; stores only, never builds. */
+export function saveTeeth<T>(post: (path: string, body: unknown) => Promise<T>, character: string,
+  teeth: TeethOptions): Promise<T> {
+  return post(`/characters/${encodeURIComponent(character)}/model3d/mouth-teeth`, { teeth })
+}

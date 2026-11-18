@@ -726,7 +726,7 @@ export function FieldBaseBody({ character, onOpenFigure, onOpenGallery }: {
     <CollisionChannels character={character} collision={model?.collision}
       overrides={info.collision_channels} declarations={info.channel_declarations ?? []}
       disabled={modelBusy || recomputing} onPreview={setChannelsPreview} onSaved={reloadAll} step={collisionStep}
-      mouthOpen={mouthOpen} onMouthOpen={setMouthOpen}
+      mouthOpen={mouthOpen} onMouthOpen={setMouthOpen} teeth={info.mouth_teeth}
       onShowStep={() => {
         recomputeRef.current?.scrollIntoView({ block: 'nearest' })
         recomputeRef.current?.focus()
