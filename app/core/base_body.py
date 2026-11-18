@@ -1148,28 +1148,35 @@ def base_steps_running(character_name: str) -> List[str]:
     return out
 
 
-def _record(character_name: str, view: str, error: Optional[str], *, warning: bool = False) -> None:
+def _record(character_name: str, view: str, error: Optional[str], *, warning: bool = False,
+            signature: str = "") -> None:
     """The outcome of one view: ``error`` None = fine; with ``warning`` the
     text is a caveat on a view that WAS stored (``base_status`` reports it
-    as ``warning``, not as ``failed``)."""
+    as ``warning``, not as ``failed``). ``signature``: the base the run
+    rendered ("" when the run ended before it was known)."""
     from app.core.timeutils import utc_now
     with _status_lock:
         if error is None:
             _failed.pop((character_name, view), None)
         else:
-            _failed[(character_name, view)] = {"error": error, "warning": warning, "failed_at": utc_now()}
+            _failed[(character_name, view)] = {"error": error, "warning": warning, "failed_at": utc_now(),
+                                               "signature": signature}
 
 
-def base_status(character_name: str) -> Dict[str, Dict[str, Any]]:
+def base_status(character_name: str, signature: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
     """Per view: ``{running, started_at, failed, error, failed_at, warning}``
     — SYSTEM stamps (``utc_now``), shaped like
     ``model_refs.get_render_status``; ``warning`` is the caveat of a view
-    that was stored anyway (the hand gate), None otherwise."""
+    that was stored anyway (the hand gate), None otherwise. ``signature``
+    (the base the caller shows): a failure recorded for another base is
+    not reported (review 08b#4 — an appearance change made a new base)."""
     out: Dict[str, Dict[str, Any]] = {}
     with _status_lock:
         for view in BASE_VIEWS:
             started, _count = _running.get((character_name, view), (None, 0))
             failure = _failed.get((character_name, view)) or {}
+            if signature is not None and failure.get("signature") and failure["signature"] != signature:
+                failure = {}
             warned = bool(failure.get("warning"))
             out[view] = {"running": started is not None, "started_at": _iso(started),
                          "failed": bool(failure) and not warned,
@@ -1479,7 +1486,8 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
                 logger.warning("Base body %s %s (%s) failed: %s", character_name, v, bsig, e)
             finally:
                 release_views(character_name, (v,))
-            _record(character_name, v, error or warning, warning=error is None and warning is not None)
+            _record(character_name, v, error or warning, warning=error is None and warning is not None,
+                    signature=bsig)
             results[v] = str(path) if path else None
             return path
 
@@ -1490,7 +1498,7 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
                 logger.warning("Base body %s (%s): front failed, views skipped", character_name, bsig)
                 for v in todo:
                     if v != "front":
-                        _record(character_name, v, "front render failed")
+                        _record(character_name, v, "front render failed", signature=bsig)
                 return results
         views = [v for v in todo if v != "front"]
         if views and front is None:
@@ -1591,7 +1599,7 @@ def base_info(character_name: str) -> Dict[str, Any]:
             "prompt_fingerprint": current,
             "skin": _skin_info(character_name, signature) if humanoid else None,
             "postprocess": postprocess_info(character_name, signature, profile) if humanoid else None,
-            "status": base_status(character_name),
+            "status": base_status(character_name, signature if humanoid else None),
             "model": base_model_info(character_name, signature),
             "outfit": outfit_info(character_name, base_sig=signature) if pipeline else None,
             "hair": hair,
