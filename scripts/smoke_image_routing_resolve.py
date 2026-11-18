@@ -139,59 +139,27 @@ EXPECTATIONS, DERIVED BY HAND
     an empty chain: peek, peek, render, peek, render, peek selects A,A,A,B,B,A.
     Peeks neither consume a round-robin turn nor reset the already-used index.
 """
-import atexit
 import os
-import shutil
 import sys
-import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _smoke_image_routing import scratch  # noqa: E402
 
-
-def _scratch(prefix):
-    p = tempfile.mkdtemp(prefix=prefix)
-    atexit.register(shutil.rmtree, p, ignore_errors=True)
-    return p
-
-
-os.environ["ANIMATION_CLIPS_DIR"] = _scratch("routing-resolve-clips-")
+os.environ["ANIMATION_CLIPS_DIR"] = scratch("routing-resolve-clips-")
 from app.core import paths  # noqa: E402
-paths.init(_scratch("routing-resolve-storage-"))
+paths.init(scratch("routing-resolve-storage-"))
 
-from app.imagegen.base import ImageBackend  # noqa: E402
+from _smoke_image_routing import FAILS, check  # noqa: E402
+from _smoke_image_routing import Fake as _Fake  # noqa: E402
 from app.imagegen.selection import BackendPool  # noqa: E402
 from app.imagegen import routing  # noqa: E402
 from app.imagegen.occasions import UnknownOccasionError  # noqa: E402
 
-FAILS = []
 
-
-def check(label, got, expected):
-    ok = got == expected
-    print(f"  {'OK  ' if ok else 'FAIL'} {label}: {got!r}"
-          + ("" if ok else f" (expected {expected!r})"))
-    if not ok:
-        FAILS.append(label)
-
-
-class Fake(ImageBackend):
-    def __init__(self, name, media="image", category="txt2img", cost=0,
-                 ref=1, enabled=True):
-        super().__init__(name, "http://localhost", float(cost), "fake", "FAKE_ROUTING_")
-        self.MEDIA_TYPE = media
-        self.category = category
-        self.ref_slot_count = ref
-        self.instance_enabled = enabled
-        self._available = True
-        self.probes = 0
-
-    def check_availability(self):
-        self.probes += 1
-        return self.available
-
-    def _generate(self, prompt, negative_prompt, params):
-        return [b"x"]
+def Fake(name, media="image", category="txt2img", cost=0, ref=1, enabled=True):  # noqa: N802 — reads as the class
+    """The shared fake with this smoke's defaults (txt2img, cost 0) and its render result b"x"."""
+    return _Fake(name, cost, media=media, category=category, ref=ref, enabled=enabled, result=(b"x",))
 
 
 B = {b.name: b for b in [

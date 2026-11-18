@@ -87,6 +87,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 CONNECTS = []
 
 
@@ -110,34 +111,16 @@ db.init_schema()
 
 from app.imagegen import routing  # noqa: E402
 from app.imagegen import service as service_mod  # noqa: E402
-from app.imagegen.base import BackendBusyError, ImageBackend  # noqa: E402
+from app.imagegen.base import BackendBusyError  # noqa: E402
 from app.imagegen.selection import BackendPool  # noqa: E402
 import app.models.character as character_mod  # noqa: E402
 
-FAILS = []
+from _smoke_image_routing import FAILS, check  # noqa: E402 — the shared check; storage is set up above
+from _smoke_image_routing import Fake as _Fake  # noqa: E402
 
 
-def check(label, got, expected):
-    ok = got == expected
-    print(f"  {'OK  ' if ok else 'FAIL'} {label}: {got!r}"
-          + ("" if ok else f" (expected {expected!r})"))
-    if not ok:
-        FAILS.append(label)
-
-
-class Fake(ImageBackend):
-    def __init__(self, name, cost):
-        super().__init__(name, "http://localhost", float(cost), "fake", "FAKE_FACADE_")
-        self.category = "img2img"
-        self.ref_slot_count = 1
-        self.instance_enabled = True
-        self._available = True
-
-    def check_availability(self):
-        return self.available
-
-    def _generate(self, prompt, negative_prompt, params):
-        return [b"img"]
+def Fake(name, cost):  # noqa: N802 — reads as the class
+    return _Fake(name, cost, env_prefix="FAKE_FACADE_")
 
 
 RULES = {}
