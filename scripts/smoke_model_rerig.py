@@ -45,6 +45,12 @@ from app.imagegen.backends.openai_mesh import OpenAIMeshBackend
 from app.imagegen import routing
 from app.core import model3d, db
 db.init_schema()
+# The re-rig mechanics this smoke covers act on a stored model found by its signature. Since b25bbbe39 (Task 11h,
+# Ruling A13) every humanoid is on the base-body pipeline, and the profile-less "demo" counts as one: its fixture
+# model (no base_signature) would read as built on an older base and never be found (no previous sidecar, no low
+# tier to rebuild at its ratio). The fixture stays off the pipeline through this stub, as smoke_base_body_model does.
+from app.core import base_body as _legacy_bb
+_legacy_bb.is_base_pipeline = lambda *_a, **_k: False
 assert hasattr(model3d, 'rerig_model'), 'P3 core re-rig action missing'
 def color_png():
     image = Image.new('RGB', (16, 16), 'red')
@@ -174,7 +180,15 @@ def lod(name, signature=None, ratio=0.25):
     return {'ok': True}
 
 with patch('app.models.character.get_character_profile', return_value={'model3d_opts': {'no_fingers': True, 'auto_generate': True}}):
-    assert model3d.get_model3d_options('demo') == {'auto_generate': True, 'face_before_rig': False, 'face_photo': {}, 'extension_rig_models': {}, 'extension_motion': {}}
+    # The stored no_fingers is not an option any more (character finger settings are ignored); every other key
+    # reads its default: the switches False, face_source "face", the maps empty, the collision scales and the mesh
+    # repair settings their owners' defaults.
+    from app.core.collision import default_scales
+    from app.core.base_mesh_repair import validated_settings
+    assert model3d.get_model3d_options('demo') == {
+        'auto_generate': True, 'face_before_rig': False, 'face_cleanup': False, 'face_photo': {}, 'face_source': 'face',
+        'face_controls': {}, 'extension_rig_models': {}, 'extension_motion': {}, 'collision_scales': default_scales(),
+        'collision_channels': {}, 'mesh_repair': validated_settings(None)}
 
 real_normalize=model3d._auto_normalize
 with ExitStack() as stack:
