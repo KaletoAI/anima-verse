@@ -144,7 +144,8 @@ check("[1] defaults, no error", e == [] and p == {"kind": "skirt", "length_m": 0
                                                   "waist_height": "natural", "slit": "none", "slit_m": 0.0,
                                                   "shoulders": "strapless", "sleeves": "none", "sleeve_fit": 0.3,
                                                   "fit": 0.3, "neckline": "crew", "neck_depth_m": 0.0,
-                                                  "front": "closed", "collar": "none", "fabric": "medium"}, str((p, e)))
+                                                  "front": "closed", "collar": "none", "fabric": "medium",
+                                                  "opacity": 0.4}, str((p, e)))
 p, e = gt.validate_params({"length_m": 2.0, "kind": "cape"})
 check("[1] length clamped to 1.2 and reported", p["length_m"] == 1.2 and any("length_m" in x for x in e))
 check("[1] unknown kind reported, default skirt", p["kind"] == "skirt" and any("kind" in x for x in e))
