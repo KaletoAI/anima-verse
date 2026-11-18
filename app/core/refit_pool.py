@@ -62,6 +62,8 @@ import os
 import threading
 from typing import Any, Callable, Optional
 
+from app.blender import outcome as oc
+
 logger = logging.getLogger(__name__)
 
 #: The provider name of a CPU refit task (the TaskPanel / indicator show it).
@@ -98,7 +100,9 @@ class WorkerDatabaseAccess(RuntimeError):
 class RefitInterrupted(RuntimeError):
     """The refit pool ended this call — the server stops (``shutdown``), or the call was cancelled in the pool.
     No defect of the piece: callers record no refusal for it and stamp nothing, so the next sweep or trigger fits
-    the piece again."""
+    the piece again. Its ``outcome`` is ``INTERRUPTED`` (``app.blender.outcome.of_exception`` reads it)."""
+
+    outcome = oc.INTERRUPTED
 
 
 def closing() -> bool:
@@ -498,16 +502,44 @@ def activate(task_id: str, label: Optional[str] = None) -> None:
         logger.exception("Refit task %s: activation failed", task_id)
 
 
-def finish(task_id: str, error: str = "") -> None:
-    """The tracked refit ended (done, or failed with ``error``) — only while its row is still open: one cancelled in
-    the TaskPanel stays cancelled (review 01#3)."""
+#: The tracked row's status per outcome (``finish``): work left due ends ``interrupted`` — the status a restart gives
+#: an unfinished row — never ``failed``.
+_ROW_STATUS = {oc.OK: "completed", oc.REJECTED: "failed", oc.CRASHED: "failed", oc.TIMEOUT: "interrupted",
+               oc.INTERRUPTED: "interrupted", oc.UNAVAILABLE: "interrupted", oc.CANCELLED: "cancelled"}
+
+
+def finish(task_id: str, error: str = "", *, outcome: Optional[str] = None, log_tail: str = "") -> None:
+    """The tracked refit ended — only while its row is still open: one cancelled in the TaskPanel stays cancelled
+    (review 01#3). ``outcome`` (``app.blender.outcome``; default ``OK`` without ``error``, else ``CRASHED``) sets
+    the row's status (``_ROW_STATUS``) and lands with ``log_tail`` (a Blender run's end) in the row's progress
+    (``{"outcome", "log_tail"}``), where the TaskPanel and a later UI read it."""
     if not task_id:
         return
+    outcome = outcome or (oc.CRASHED if error else oc.OK)
     try:
         from app.core.task_queue import get_task_queue
-        get_task_queue().track_finish_if_open(task_id, error=error)
+        tq = get_task_queue()
+        if tq.track_finish_if_open(task_id, error=error, status=_ROW_STATUS.get(outcome)) and outcome != oc.OK:
+            tq.update_task_progress(task_id, {**tq.get_task_progress(task_id), "outcome": outcome,
+                                              **({"log_tail": log_tail} if log_tail else {})})
     except Exception:  # noqa: BLE001
         logger.exception("Refit task %s: finish failed", task_id)
+
+
+def end_of(e: BaseException) -> tuple:
+    """``(outcome, error, log_tail)`` of an exception that ended a tracked refit: the outcome its chain carries
+    (``RefitInterrupted`` → ``INTERRUPTED``, a ``RunFailed`` its own), else ``CRASHED``."""
+    return (oc.of_exception(e) or oc.CRASHED, str(e) or type(e).__name__,
+            next((getattr(x, "log_tail", "") for x in _chain(e) if getattr(x, "log_tail", "")), ""))
+
+
+def _chain(e: Optional[BaseException]) -> list:
+    out, seen = [], set()
+    while e is not None and id(e) not in seen:
+        out.append(e)
+        seen.add(id(e))
+        e = e.__cause__ or e.__context__
+    return out
 
 
 def discard(task_id: str) -> None:

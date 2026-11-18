@@ -2406,9 +2406,10 @@ def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
     beside the mesh, the pruning of THAT variant's defaults and values
     (ruling R15, per variant) and the texture slots.
 
-    Raises :class:`BlenderUnavailable` when Blender is missing or busy (503),
-    ``RuntimeError`` when the script fails (500), ``ValueError`` for a prop or
-    variant without a full-tier GLB."""
+    Raises :class:`BlenderUnavailable` when Blender is missing or busy, or the
+    run ended with a retryable outcome (timeout, interrupted, unavailable —
+    ``app.blender.outcome``) (503), ``RuntimeError`` when the script fails
+    (500), ``ValueError`` for a prop or variant without a full-tier GLB."""
     from app.blender import refine, runner
     from app.core.model_validate import validate_static_glb
     pid = safe_prop_id(prop_id)
@@ -2428,7 +2429,12 @@ def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
                 res = runner.run("picture_areas", inputs={"model": src},
                                  params=run_params, out_dir=Path(tmp), timeout_s=600)
                 if not res.get("ok"):
-                    raise RuntimeError(res.get("error") or "picture_areas failed")
+                    from app.blender import outcome as oc
+                    outcome = res.get("outcome") or oc.CRASHED
+                    if oc.is_retryable(outcome):  # a timeout, an interruption, Blender gone: 503, try again
+                        raise BlenderUnavailable(f"{res.get('error')} ({outcome}) — try again", snapshot)
+                    raise oc.RunFailed(res.get("error") or "picture_areas failed", outcome,
+                                       res.get("log_tail") or "")
                 data = res.get("data") or {}
                 produced = (res.get("outputs") or {}).get("model")
                 blob = Path(produced).read_bytes() if produced else None
@@ -2439,6 +2445,8 @@ def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
             if not verdict.get("ok"):
                 raise RuntimeError("split model failed validation: "
                                    + "; ".join(verdict.get("errors") or []))
+    except BlenderUnavailable:
+        raise
     except Exception as exc:
         raise AreaProcessingError(snapshot, exc) from exc
     return _land_areas_result(pid, snapshot, blob, data, params, default_source)
@@ -5693,7 +5701,9 @@ def _reduce_to_low(pid: str, src: Path, ratio: float,
                            "size_before": 0, "error": ""}
     res = refine.build_static_lod(src, ratio)
     if not res.get("ok"):
-        _lod_failed.add(key)
+        from app.blender import outcome as oc
+        if not oc.is_retryable(res.get("outcome")):
+            _lod_failed.add(key)  # a timeout / interruption / no Blender leaves it due: the next payload tries again
         out["error"] = res.get("error") or "distance mesh not built"
         return out
     gallery = model_gallery(pid, variant)

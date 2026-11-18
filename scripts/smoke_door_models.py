@@ -5,6 +5,10 @@ piece/outside/texture identity. Panel 0.9 x 2.1: casing adds 2*.07 = 1.04 width,
 top adds .07 = 2.17 height; leaf starts at .07+.005=.075, threshold+.005=.025.
 Last-use retention: 7*86400 SYSTEM seconds, touches at most every 86400 seconds.
 Only the external Blender boundary is replaced; storage is always temporary.
+A build whose run failed with a verdict or a crash (no ``outcome`` = crashed) is suppressed until restart
+(logged once). One whose run ended retryable (``outcome`` timeout, ``app.blender.outcome``) is held for
+RETRY_AFTER_S (300 s): an ensure right after queues nothing, no exception is logged; with the clock RETRY_AFTER_S
++ 1 s later the next ensure queues it again (the run is called a second time).
 """
 import json
 import os
@@ -112,7 +116,19 @@ def main():
             dm.ensure_door_model('panel',.92,2.1,.07)
             assert dm._queue.empty() and dm.generation()==generation
             assert logged.call_count==1
-        print('PASS door models: signature, texture identity, worker dedup, metadata, touch, thumbnail, sweep, failed-build suppression')
+        calls = []
+        def slow(*args, **kwargs):
+            calls.append(1); return {'ok':False,'error':'timeout after 120s','outcome':'timeout'}
+        with patch.object(dm,'_run_blender',slow), patch.object(dm.logger,'exception') as logged:
+            dm.ensure_door_model('panel',.94,2.1,.07); dm._queue.join()
+            dm.ensure_door_model('panel',.94,2.1,.07)
+            assert dm._queue.empty() and len(calls)==1 and logged.call_count==0
+            import time
+            later = time.monotonic() + dm.RETRY_AFTER_S + 1
+            with patch.object(time, 'monotonic', lambda: later):
+                dm.ensure_door_model('panel',.94,2.1,.07); dm._queue.join()
+            assert len(calls)==2 and logged.call_count==0
+        print('PASS door models: signature, texture identity, worker dedup, metadata, touch, thumbnail, sweep, failed-build suppression, retryable deferral')
 
 if __name__ == '__main__':
     main()

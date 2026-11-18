@@ -54,10 +54,18 @@ Expected, derived by hand:
     b) ``_retry_refused`` and ``_refit_bodies`` the same: ``RefitInterrupted`` propagates, neither
        ``_note_outcome`` nor ``garment_store.record_body_failure`` is called.
     c) ``garments._is_load``: ``RefitInterrupted`` → True, a ``ValueError`` raised ``from`` one → True,
-       ``RuntimeError`` → False (``run_garment`` then persists nothing: ``_retry_later``). The body before the
-       fix (``footwear_source.failure_of(e)[0] == LOAD``, run inline here) → False for ``RefitInterrupted``.
+       ``RuntimeError`` → False (``run_garment`` then persists nothing: ``_retry_later``). (Since the outcome
+       contract ``_is_load`` IS ``footwear_source.failure_of(e)[0] == LOAD``, which reads the chain's
+       ``app.blender.outcome``; the inline "body before the fix" proof is gone with it.)
     d) ``fit_attempts.store`` re-raises ``RefitInterrupted`` from ``_store``; a ``ValueError`` there still
        returns False ("never raises" for every other failure).
+    e) The outcome vocabulary (``app.blender.outcome``) on the CPU side, from the outcome table:
+       ``_is_load`` of ``RunFailed`` with timeout / interrupted / unavailable → True, rejected / crashed →
+       False, a ``ValueError`` raised from a timeout ``RunFailed`` → True; ``footwear_source.failure_of`` of a
+       timeout ``RunFailed`` → ``LOAD``. ``refit_pool.end_of``: ``RefitInterrupted`` → ("interrupted", its text,
+       ""), a ``ValueError("w")`` from ``RunFailed("d", "crashed", "TAIL")`` → ("crashed", "w", "TAIL"),
+       ``RuntimeError("x")`` → ("crashed", "x", ""). ``garments._result_outcome``: ok → ok, cancelled (+
+       retry_later) → cancelled, retry_later → interrupted, a refusal → rejected, a carried "timeout" → timeout.
 [5] A cancelled tracked refit (#3), real task queue:
     a) ``refit_pool.finish`` on a row cancelled in the TaskPanel → it stays ``cancelled`` (before:
        ``track_finish`` overwrote it with ``completed``).
@@ -81,10 +89,12 @@ Expected, derived by hand:
     d) The ``fit_refit`` improvement: postures matched, then busy → ``CandidateBusy``, and its row is
        ``completed`` (before: discarded — no trace of the posture work); ``refit_character`` raising
        ``RefitInterrupted`` → ``CandidateBusy`` (deferred, not a failed attempt).
-[8] The footwear chain (``garment_footwear.run_chain`` → ``_failure``, matched by the exception's type NAME): a
-    failure of type ``RefitInterrupted`` → ``retry_later`` True, so ``garments._note_outcome`` persists nothing;
-    control: ``RuntimeError`` → no ``retry_later``. Before: ``RETRY_LATER_ERRORS`` held only
-    ``BackendBusyError`` / ``MediaGenerationDisabled`` → the interruption was persisted as the fit's refusal.
+[8] The footwear chain (``garment_footwear.run_chain`` → ``_failure``; ``footwear_source.run_source`` and the
+    profile / fsig stubbed): ``run_source`` raising ``RefitInterrupted`` → ``retry_later`` True, so
+    ``garments._note_outcome`` persists nothing; raising ``RunFailed(…, "timeout")`` → True; raising
+    ``RuntimeError`` → no ``retry_later``. A source result with ``failure`` ``LOAD`` → True, with ``BACKEND`` →
+    none. Decided by the typed answers (``garments._is_load``, the result's ``failure``) since the outcome
+    contract — no exception type NAMES (``RETRY_LATER_ERRORS`` is gone).
 [9] ``body_fit`` with ``build`` (the assembly, a Build's re-fit, the per-body Re-fit), the body state stubbed as
     "missing", no failure, the body bytes current: a) ``garments.body_fit`` whose ``fit_on_body`` raises
     ``RefitInterrupted`` → it propagates, ``record_body_failure`` is not called; control ``RuntimeError`` →
@@ -104,7 +114,12 @@ Expected, derived by hand:
        ``cancelled`` / "Manuell abgebrochen"; b) open running row → True, ``completed`` / ""; a later cancel finds
        it closed → False; c) pending row with ``error="boom"`` → True, ``failed`` / "boom"; d) again with
        another error → False, ``failed`` / "boom" kept; e) unknown id → False; f) a queued (not tracked) row →
-       False, still ``pending``.
+       False, still ``pending``. g) ``status="interrupted"`` (``refit_pool.finish`` for work left due) → True,
+       ``interrupted`` with its error.
+[12] ``refit_pool.finish`` per outcome (``_ROW_STATUS``): ok → ``completed``; rejected, crashed → ``failed``;
+    timeout, interrupted, unavailable → ``interrupted``; cancelled → ``cancelled``. Every outcome but ok lands in
+    the row's progress as ``outcome``, a ``log_tail`` beside it when given; ``finish(tid, error="x")`` without an
+    outcome → ``failed`` / ``crashed``.
 """
 import os
 import sys
@@ -155,7 +170,7 @@ def main():
     refit_pool.track = lambda name, label, pending=True: f"t-{name}"
     refit_pool.activate = lambda task_id, label=None: None
     refit_pool.cancelled = lambda task_id: False
-    refit_pool.finish = lambda task_id, error="": finished.setdefault(task_id, error)
+    refit_pool.finish = lambda task_id, error="", **_outcome: finished.setdefault(task_id, error)
     refit_pool.release = lambda task_id: finished.setdefault(task_id, "")
     garment_refit._busy = lambda name: False
     garment_refit._count = lambda name: 1
@@ -495,8 +510,6 @@ def main() -> int:
             wrapped = e
         check("c) _is_load", [garments._is_load(interrupted), garments._is_load(wrapped),
                               garments._is_load(RuntimeError("x"))], [True, True, False])
-        check("c) the body before the fix said no",
-              footwear_source.failure_of(interrupted)[0] == footwear_source.LOAD, False)
         fit_attempts._store = raising(refit_pool.RefitInterrupted("refit interrupted — test"))
         try:
             fit_attempts.store("Kim", "coat", "f1f1f1f1f1f1", body="", kind="clothing", record={}, error="e", gates=None)
@@ -507,6 +520,31 @@ def main() -> int:
         fit_attempts._store = raising(ValueError("disk"))
         check("d) any other failure: False", fit_attempts.store("Kim", "coat", "f1f1f1f1f1f1", body="", kind="clothing",
                                                                 record={}, error="e", gates=None), False)
+        from app.blender import outcome as oc
+
+        def chained(outer, inner):
+            try:
+                try:
+                    raise inner
+                except Exception as e:
+                    raise outer from e
+            except Exception as e:
+                return e
+        check("e) _is_load per outcome",
+              [garments._is_load(oc.RunFailed("r", o)) for o in (oc.TIMEOUT, oc.INTERRUPTED, oc.UNAVAILABLE,
+                                                                  oc.REJECTED, oc.CRASHED)]
+              + [garments._is_load(chained(ValueError("w"), oc.RunFailed("d", oc.TIMEOUT)))],
+              [True, True, True, False, False, True])
+        check("e) failure_of a timeout", footwear_source.failure_of(oc.RunFailed("d", oc.TIMEOUT))[0],
+              footwear_source.LOAD)
+        check("e) end_of", [refit_pool.end_of(interrupted),
+                            refit_pool.end_of(chained(ValueError("w"), oc.RunFailed("d", oc.CRASHED, "TAIL"))),
+                            refit_pool.end_of(RuntimeError("x"))],
+              [("interrupted", "refit interrupted — test", ""), ("crashed", "w", "TAIL"), ("crashed", "x", "")])
+        check("e) _result_outcome", [garments._result_outcome(r) for r in (
+            {"ok": True}, {"ok": False, "cancelled": True, "retry_later": True}, {"ok": False, "retry_later": True},
+            {"ok": False, "error": "refused"}, {"ok": False, "retry_later": True, "outcome": "timeout"})],
+              ["ok", "cancelled", "interrupted", "rejected", "timeout"])
 
         # --- [5] cancelled tracked refits -----------------------------------------------------------------------
         print("[5] a cancelled tracked refit stays cancelled")
@@ -635,13 +673,24 @@ def main() -> int:
         # --- [8] the footwear chain: an interruption is retried later -----------------------------------------
         print("[8] the footwear chain answers retry_later for an interruption")
         from app.core import garment_footwear
-        name = type(refit_pool.RefitInterrupted("x")).__name__
-        check("the footwear failure of RefitInterrupted",
-              garment_footwear._failure("Kim", "shoe", "f1f1f1f1f1f1", "fit", "x", None, [], name).get("retry_later"),
-              True)
-        check("control: a plain failure is persisted",
-              garment_footwear._failure("Kim", "shoe", "f1f1f1f1f1f1", "fit", "x", None, [], "RuntimeError")
-              .get("retry_later"), None)
+        from app.blender import outcome as oc
+        saved_source, saved_fsig = footwear_source.run_source, garment_footwear._fsig
+        garment_footwear._fsig = lambda *a, **k: "f1f1f1f1f1f1"
+        try:
+            got = []
+            for exc in (refit_pool.RefitInterrupted("x"), oc.RunFailed("dec", oc.TIMEOUT), RuntimeError("boom")):
+                footwear_source.run_source = raising(exc)
+                got.append(garment_footwear.run_chain("Kim", {"id": "shoe"}, None, False).get("retry_later"))
+            check("raised: RefitInterrupted, a timeout RunFailed, RuntimeError", got, [True, True, None])
+            got = []
+            for failure in (footwear_source.LOAD, footwear_source.BACKEND):
+                footwear_source.run_source = (lambda f: lambda *a, **k: {
+                    "ok": False, "step": "mesh", "error": "x", "error_type": "RunFailed", "failure": f, "ran": []})(
+                        failure)
+                got.append(garment_footwear.run_chain("Kim", {"id": "shoe"}, None, False).get("retry_later"))
+            check("a source result: LOAD, BACKEND", got, [True, None])
+        finally:
+            footwear_source.run_source, garment_footwear._fsig = saved_source, saved_fsig
 
         # --- [9] body_fit records no body refusal for an interruption ------------------------------------------
         print("[9] body_fit: an interruption is no body refusal")
@@ -768,6 +817,29 @@ def main() -> int:
         queued = tq.submit("smoke_noop_type", {}, queue_name="smoke_paused")
         check("f) a queued (not tracked) row: False, untouched",
               (tq.track_finish_if_open(queued), row(queued)[0]), (False, "pending"))
+        left = refit_pool.track("Kim", "Refit · Kim (1 fit)", pending=False)
+        check("g) status override", (tq.track_finish_if_open(left, error="stop", status="interrupted"), row(left)),
+              (True, ("interrupted", "stop")))
+
+        # --- [12] refit_pool.finish per outcome -----------------------------------------------------------------
+        print("[12] refit_pool.finish: the row's status and progress per outcome")
+        from app.blender import outcome as oc
+        want = {oc.OK: "completed", oc.REJECTED: "failed", oc.CRASHED: "failed", oc.TIMEOUT: "interrupted",
+                oc.INTERRUPTED: "interrupted", oc.UNAVAILABLE: "interrupted", oc.CANCELLED: "cancelled"}
+        got, progress = {}, {}
+        for o in oc.ALL:
+            tid = refit_pool.track("Kim", f"Refit · {o}", pending=False)
+            refit_pool.finish(tid, "" if o == oc.OK else f"e-{o}", outcome=o, log_tail="TAIL" if o == oc.CRASHED else "")
+            got[o], progress[o] = tq.task_status(tid), tq.get_task_progress(tid)
+        check("statuses", got, want)
+        check("progress outcome", {o: p.get("outcome") for o, p in progress.items()},
+              {o: (None if o == oc.OK else o) for o in oc.ALL})
+        check("log_tail only where given", {o: p.get("log_tail") for o, p in progress.items() if p.get("log_tail")},
+              {oc.CRASHED: "TAIL"})
+        tid = refit_pool.track("Kim", "Refit · default", pending=False)
+        refit_pool.finish(tid, error="x")
+        check("an error without outcome", (tq.task_status(tid), tq.get_task_progress(tid).get("outcome")),
+              ("failed", "crashed"))
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
     return 1 if FAILS else 0

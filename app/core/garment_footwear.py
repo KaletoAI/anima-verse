@@ -221,11 +221,6 @@ def fsig_inputs(character_name: str, item: Dict[str, Any], *, profile: Dict[str,
 
 #: ``fit`` of a run result whose wearer has no base model yet: the item steps ran, nothing to fit onto.
 NO_BASE = "no_base"
-#: ``error_type`` of a failed item step that is load or the media switch, or a fit compute the refit pool ended
-#: (``refit_pool.RefitInterrupted``: the server stops) — not a defect of the item: the run fails without a
-#: persisted failure record (``retry_later``), so automatic triggers try again. Matched by the type NAME: a source
-#: step's result carries only its outermost exception's name (``footwear_source.run_source``), never the chain.
-RETRY_LATER_ERRORS: Tuple[str, ...] = ("BackendBusyError", "MediaGenerationDisabled", "RefitInterrupted")
 
 
 #: A176: item steps whose gate refusal a DEFAULT run (a Build, a trigger, a plain Run) never runs again — the mesh is
@@ -256,7 +251,9 @@ def run_chain(character_name: str, item: Dict[str, Any], wanted: Optional[List[s
     ``fit: NO_BASE``. ``fit`` in the result = the fit state after the run.
 
     -> ``{ok: True, fsig, ran, fit}`` or ``{ok: False, fsig, step, error, gates, error_type, ran}`` plus
-    ``retry_later: True`` for load / the media switch (``RETRY_LATER_ERRORS``: no failure record). A refused
+    ``retry_later: True`` for load / the media switch or a run left due — a source step whose ``failure`` is
+    ``footwear_source.LOAD``, an exception ``garments._is_load`` names (a retryable ``app.blender.outcome`` such as
+    a Blender timeout or ``refit_pool.RefitInterrupted``): no failure record. A refused
     fit is ``{ok: False, step "fit", error, gates}`` (``garments._note_outcome`` records it per fsig)."""
     from app.core import base_body, footwear_insole, footwear_source, garment_store as gs
     from app.core.garments import _Refused
@@ -301,7 +298,8 @@ def run_chain(character_name: str, item: Dict[str, Any], wanted: Optional[List[s
                 if running:
                     running.pop()
                 return _failure(character_name, item_id, fsig, step, str(res.get("error") or ""),
-                                res.get("gates"), ran, str(res.get("error_type") or ""))
+                                res.get("gates"), ran, str(res.get("error_type") or ""),
+                                retry_later=res.get("failure") == footwear_source.LOAD)
         if running:
             gs.end(character_name, item_id, running.pop())
         base = base_body.current_base(character_name, profile=profile)
@@ -323,18 +321,19 @@ def run_chain(character_name: str, item: Dict[str, Any], wanted: Optional[List[s
         logger.warning("Footwear run %s/%s failed at %s: %s", character_name, item_id, step, e)
         if running:
             running.pop()
+        from app.core.garments import _is_load
         return _failure(character_name, item_id, fsig, step, str(e) or type(e).__name__, None, ran,
-                        type(e).__name__)
+                        type(e).__name__, retry_later=_is_load(e))
 
 
 def _failure(character_name: str, item_id: str, fsig: str, step: str, error: str, gates: Any, ran: List[str],
-             error_type: str) -> Dict[str, Any]:
+             error_type: str, *, retry_later: bool = False) -> Dict[str, Any]:
     from app.core import garment_store as gs
     logger.info("Footwear run %s/%s refused at %s: %s", character_name, item_id, step, error)
     gs.end(character_name, item_id, step, error=error, gates=gates)
     out = {"ok": False, "fsig": fsig, "step": step, "error": error, "gates": gates, "error_type": error_type,
            "ran": ran}
-    if error_type in RETRY_LATER_ERRORS:
+    if retry_later:
         out["retry_later"] = True
     return out
 

@@ -260,7 +260,7 @@ def main() -> int:
         base_body.after_mesh_item_ready = lambda character_name, item_id: ready.append((character_name, item_id))
         refit_pool.track = fake_track
         refit_pool.activate = lambda task_id, label=None: tracks.append(("activate", task_id))
-        refit_pool.finish = lambda task_id, error="": tracks.append(("finish", task_id, error))
+        refit_pool.finish = lambda task_id, error="", **_outcome: tracks.append(("finish", task_id, error))
         refit_pool.discard = lambda task_id: tracks.append(("discard", task_id))
 
         def wait_for(pred, timeout=10.0):

@@ -31,7 +31,7 @@ import threading
 from collections import OrderedDict
 from pathlib import Path
 from app.core.model_surface import (
-    SURFACE_CLEARANCE_M, _norm_rotation, _source_of, block_sig, surface_scale,
+    SURFACE_CLEARANCE_M, _norm_rotation, _reason_of, _source_of, block_sig, surface_scale,
 )
 from app.core.timeutils import utc_now_iso
 from app.core.keyed_lock import keyed_lock
@@ -371,8 +371,8 @@ def detect_water(model_path, rotation, *, target_m, measure, wait_s=0.0, preview
     finally:
         refine.free_lod_slot()
     if not result.get("ok"):
-        logger.info("Water detection failed: %s: %s", model_path, result.get("error"))
-        return (None, "failed")
+        logger.info("Water detection failed: %s (%s): %s", model_path, result.get("outcome"), result.get("error"))
+        return (None, _reason_of(result.get("outcome")))
     data = dict(result.get("data") or {})
     data.update(
         version=1,

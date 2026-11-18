@@ -90,6 +90,8 @@ import threading
 import time
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from app.blender import outcome as oc
+
 logger = logging.getLogger(__name__)
 
 #: Seconds after the server start before the sweep begins (boot traffic first).
@@ -101,6 +103,9 @@ BUSY_RETRIES = 20
 BUSY_RETRY_S = 30.0
 #: The error of a tracked refit the server stop left undone (``refit_pool.closing``).
 STOPPED = "the server stopped — left for the next start"
+#: The error of a sweep row whose character's garment chain stayed busy through every retry. Like ``STOPPED`` its
+#: outcome is ``INTERRUPTED`` (``app.blender.outcome``): the work was left due, nothing judged the fits.
+LEFT_BUSY = "garment run in progress — left for the next start"
 
 
 def inputs_id(character_name: str, item_id: str, fsig: str, method: str, base_sha: str, *,
@@ -857,7 +862,8 @@ def tracked(character_name: str, run: Any) -> Optional[List[str]]:
         with refit_pool.blender_wait_label(tid, label):
             done = run()
     except Exception as e:  # noqa: BLE001 — finished failed, then raised to the caller
-        refit_pool.finish(tid, error=str(e) or type(e).__name__)
+        outcome, error, tail = refit_pool.end_of(e)
+        refit_pool.finish(tid, error, outcome=outcome, log_tail=tail)
         raise
     if done is None:
         refit_pool.discard(tid)
@@ -908,7 +914,7 @@ def _stopped(name: str, task_id: str) -> bool:
     if not refit_pool.closing():
         return False
     logger.info("Garment refit sweep: %s left for the next start — the server stops", name)
-    refit_pool.finish(task_id, error=STOPPED)
+    refit_pool.finish(task_id, error=STOPPED, outcome=oc.INTERRUPTED)
     return True
 
 
@@ -947,17 +953,18 @@ def _sweep_one(name: str, *, task_id: str, pause: float, retries: int, retry_s: 
                     return out
         else:
             logger.info("Garment refit sweep: %s stayed busy — left for the next start", name)
-            refit_pool.finish(row.task_id, error="garment run in progress — left for the next start")
+            refit_pool.finish(row.task_id, error=LEFT_BUSY, outcome=oc.INTERRUPTED)
             return out
         refit_pool.finish(row.task_id)
         return out + done
     except refit_pool.RefitInterrupted as e:
         logger.info("Garment refit sweep: %s interrupted — %s", name, e)
-        refit_pool.finish(row.task_id, error=STOPPED)
+        refit_pool.finish(row.task_id, error=STOPPED, outcome=oc.INTERRUPTED)
         return out
     except Exception as e:  # noqa: BLE001 — one character never stops the sweep
         logger.exception("Garment refit sweep: %s failed", name)
-        refit_pool.finish(row.task_id, error=str(e) or type(e).__name__)
+        outcome, error, tail = refit_pool.end_of(e)
+        refit_pool.finish(row.task_id, error, outcome=outcome, log_tail=tail)
         return out
     finally:
         if pause and not refit_pool.closing():
@@ -988,11 +995,12 @@ def _attempt(name: str, tracks: Dict[str, str], first: bool, pause: float) -> Tu
             done = refit_character(name, on_hold=row.activate)
     except refit_pool.RefitInterrupted as e:
         logger.info("Garment refit sweep: %s interrupted — %s", name, e)
-        refit_pool.finish(row.task_id, error=STOPPED)
+        refit_pool.finish(row.task_id, error=STOPPED, outcome=oc.INTERRUPTED)
         return "done", out
     except Exception as e:  # noqa: BLE001 — fails this character only
         logger.exception("Garment refit sweep: %s failed", name)
-        refit_pool.finish(row.task_id, error=str(e) or type(e).__name__)
+        outcome, error, tail = refit_pool.end_of(e)
+        refit_pool.finish(row.task_id, error, outcome=outcome, log_tail=tail)
         return "done", out
     finally:
         if pause and not refit_pool.closing():
@@ -1033,9 +1041,9 @@ def _sweep_parallel(names: List[str], tracks: Dict[str, str], workers: int, *, p
                 ex.shutdown(wait=False, cancel_futures=True)
                 for fut, (name, _attempt_no) in running.items():
                     if fut.cancelled():
-                        refit_pool.finish(tracks.get(name, ""), error=STOPPED)
+                        refit_pool.finish(tracks.get(name, ""), error=STOPPED, outcome=oc.INTERRUPTED)
                 for _due, name, _attempt_no in later:
-                    refit_pool.finish(tracks.get(name, ""), error=STOPPED)
+                    refit_pool.finish(tracks.get(name, ""), error=STOPPED, outcome=oc.INTERRUPTED)
                 logger.info("Garment refit sweep: stopped — the server stops")
                 break
             now = time.monotonic()
@@ -1062,8 +1070,7 @@ def _sweep_parallel(names: List[str], tracks: Dict[str, str], workers: int, *, p
                         later.append((time.monotonic() + retry_s, name, attempt + 1))
                     else:
                         logger.info("Garment refit sweep: %s stayed busy — left for the next start", name)
-                        refit_pool.finish(tracks.get(name, ""),
-                                          error="garment run in progress — left for the next start")
+                        refit_pool.finish(tracks.get(name, ""), error=LEFT_BUSY, outcome=oc.INTERRUPTED)
                         if partial.get(name):
                             out[name] = partial[name]
                     continue

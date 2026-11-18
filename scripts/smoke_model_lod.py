@@ -47,6 +47,9 @@ The automatic path remembers the skip, and a full upload forgets it again and
 drops a CPU-built (source "lod") low file, while an uploaded low file stays.
 The older stub sources have unknown counts (0) and keep today's reduction.
 
+A reduction whose run ended retryable (``outcome`` "timeout", ``app.blender.outcome``) is NOT remembered: the
+next request runs it again ([8b]); a failure without a retryable outcome is remembered as before ([8]).
+
 Usage:  ./.venv/bin/python scripts/smoke_model_lod.py
 """
 import os
@@ -306,6 +309,29 @@ def main() -> int:
     check("the admin's button ignores the memory", res["ok"] is True, str(res))
     check("...and the entry is gone after the success",
           pid4 not in props._lod_failed, str(props._lod_failed))
+
+    print("\n[8b] a reduction left due (a retryable outcome) is not remembered")
+    prop5 = props.create_prop(name="Lod Stool", width_m=0.5, depth_m=0.5, height_m=0.5)
+    pid5 = prop5["id"]
+    refine.auto_lod_enabled = lambda: False
+    props.save_uploaded_glb(pid5, b"glTF-full-5")
+    refine.auto_lod_enabled = lambda: True
+
+    def fake_timeout(path, ratio):
+        CALLS.append((Path(path).name, float(ratio)))
+        return {"ok": False, "blob": b"", "tris": None, "tris_before": None, "error": "timeout after 600s",
+                "outcome": "timeout", "log_tail": "T"}
+    refine.build_static_lod = fake_timeout
+    CALLS.clear()
+    props.request_low_tier(pid5)
+    check("the timed-out attempt runs", wait_for(lambda: bool(CALLS)), str(CALLS))
+    check("...and is not remembered", wait_for(lambda: props._lod_key(pid5) not in props._lod_failed
+                                               and not props._lod_building), str(props._lod_failed))
+    CALLS.clear()
+    props.request_low_tier(pid5)
+    check("...so the next request tries again", wait_for(lambda: bool(CALLS)), str(CALLS))
+    wait_for(lambda: not props._lod_building)
+    refine.build_static_lod = fake_build_static_lod
 
     print("\n[9] at most two background builds at a time (all stores)")
     slots = [refine.take_lod_slot(), refine.take_lod_slot()]

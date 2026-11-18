@@ -143,14 +143,18 @@ def _chain(e: BaseException) -> List[BaseException]:
 def failure_of(e: BaseException) -> Tuple[str, str]:
     """``(kind, text)`` of a failed attempt. ``kind`` = ``LOAD`` for load or
     the media switch anywhere in the chain (``BackendBusyError`` /
-    ``MediaGenerationDisabled``: retry later), else ``BACKEND``. ``text`` = the
-    first ``BackendFailedError`` of the chain — the backend's own words
-    ("<backend>: <cause>") — so a routing re-run that ends in ``NoRouteError``
-    ("… (cooling down)") reports what really failed; without one the
-    exception's own text."""
+    ``MediaGenerationDisabled``) or a retryable run outcome the chain carries
+    (``app.blender.outcome.of_exception``: a Blender timeout / interruption /
+    Blender unavailable, a call the refit pool ended) — retry later — else
+    ``BACKEND``. ``text`` = the first ``BackendFailedError`` of the chain — the
+    backend's own words ("<backend>: <cause>") — so a routing re-run that ends
+    in ``NoRouteError`` ("… (cooling down)") reports what really failed;
+    without one the exception's own text."""
+    from app.blender import outcome as oc
     from app.imagegen.base import BackendBusyError, BackendFailedError, MediaGenerationDisabled
     chain = _chain(e)
-    kind = LOAD if any(isinstance(x, (BackendBusyError, MediaGenerationDisabled)) for x in chain) else BACKEND
+    load = any(isinstance(x, (BackendBusyError, MediaGenerationDisabled)) for x in chain)
+    kind = LOAD if load or oc.is_retryable(oc.of_exception(e)) else BACKEND
     failed = next((x for x in chain if isinstance(x, BackendFailedError)), None)
     text = str(failed if failed is not None else e) or type(e).__name__
     return kind, text
@@ -525,7 +529,9 @@ def _prepare_mesh(raw: Path, candidate: Path, alpha, attempt: int, res: Dict[str
     from app.core.footwear_gates import check_gates, component_shares, mesh_gates, side_silhouette, silhouette_iou
     dec = refine.decimate_to(raw, TARGET_TRIS, candidate, merge_vertices=True)
     if not dec.get("ok"):
-        raise RuntimeError(f"shoe mesh decimation failed: {dec.get('error') or 'unknown error'}")
+        from app.blender import outcome as oc
+        raise oc.RunFailed(f"shoe mesh decimation failed: {dec.get('error') or 'unknown error'}",
+                           dec.get("outcome") or oc.CRASHED, dec.get("log_tail") or "")
     positions, faces = glb_mesh.static_arrays(candidate.read_bytes())[:2]
     largest, enclosed = component_shares(positions, faces)
     iou = silhouette_iou(side_silhouette(positions, faces), alpha >= 128)
@@ -617,7 +623,9 @@ def _restore_prepared(iid: str, ssig: str, d: Path) -> bool:
     try:
         dec = refine.decimate_to(raw, TARGET_TRIS, candidate, merge_vertices=True)
         if not dec.get("ok"):
-            raise RuntimeError(f"shoe mesh decimation failed: {dec.get('error') or 'unknown error'}")
+            from app.blender import outcome as oc
+            raise oc.RunFailed(f"shoe mesh decimation failed: {dec.get('error') or 'unknown error'}",
+                               dec.get("outcome") or oc.CRASHED, dec.get("log_tail") or "")
         os.replace(candidate, prepared)
     finally:
         candidate.unlink(missing_ok=True)

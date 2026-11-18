@@ -11,6 +11,7 @@ import re
 import tempfile
 import threading
 
+from app.blender import outcome as oc
 from app.blender import runner
 from app.core import paths, surface_textures
 from app.core.window_geometry import build_window
@@ -24,10 +25,28 @@ from app.core.timeutils import utc_now
 
 logger = get_logger(__name__)
 _run_blender = runner.run
+
+
+def _failed_run(result, default):
+    """The ``RunFailed`` of a failed Blender run, carrying its outcome (``app.blender.outcome``)."""
+    return oc.RunFailed(result.get('error') or default, result.get('outcome') or oc.CRASHED,
+                        result.get('log_tail') or '')
+
+
 _lock = threading.RLock()
 _queue = queue.Queue()
 _pending = set()
 _failed = set()
+#: key -> monotonic time before which a build left due (a retryable outcome: timeout, interrupted, no Blender) is
+#: not queued again — a scene compose asks for its doors on every poll, a failing Blender must not loop.
+_deferred = {}
+RETRY_AFTER_S = 300.0
+
+
+def _held(key):
+    """Whether ``ensure`` must not queue ``key``: failed for good, or left due less than RETRY_AFTER_S ago."""
+    import time
+    return key in _failed or _deferred.get(key, 0.0) > time.monotonic()
 _worker = None
 _generation = 0
 
@@ -180,7 +199,7 @@ def build_door_model(style_id, width, height, thickness, *, piece='single', outs
         job_path.write_text(json.dumps(job,sort_keys=True),encoding='utf-8')
         result = _run_blender('door_build',inputs={'job':job_path,**inputs},out_dir=work,timeout_s=120)
         if not result.get('ok'):
-            raise RuntimeError(result.get('error','door build failed'))
+            raise _failed_run(result, 'door build failed')
         model = work / 'model.glb'
         if not model.is_file() or (mode == 'thumbnail' and not (work/'thumbnail.png').is_file()):
             raise RuntimeError('door build missing output')
@@ -202,7 +221,16 @@ def _work():
         key, builder, style, dims, options = _queue.get()
         try:
             builder(style['id'],*dims,_style=style,_root_dir=key[0],**options)
-        except Exception:
+        except Exception as e:
+            if oc.is_retryable(oc.of_exception(e)):
+                # A timeout, an interrupted run or no Blender is no defect of the asset: ensure queues it again
+                # after RETRY_AFTER_S.
+                import time
+                with _lock:
+                    _deferred[key] = time.monotonic() + RETRY_AFTER_S
+                logger.warning('Model build for %s left due (%s), retried in %ds: %s', key[1],
+                               oc.of_exception(e), RETRY_AFTER_S, e)
+                continue
             with _lock:
                 _failed.add(key)
             logger.exception('Model build failed for %s; suppressed until restart',key[1])
@@ -231,7 +259,7 @@ def ensure_door_model(style_id,width,height,thickness,*,piece='single',outside=1
         if cached:
             return cached
         key = (root,sig)
-        if key not in _pending and key not in _failed:
+        if key not in _pending and not _held(key):
             _pending.add(key)
             _queue.put((key,build_door_model,style,dims,dict(piece=piece,outside=outside,color=color)))
             if _worker is None:
@@ -346,7 +374,7 @@ def build_window_model(style_id, width, height, thickness, *, outside=1, bars=Tr
         job_path.write_text(json.dumps(job,sort_keys=True),encoding='utf-8')
         result = _run_blender('door_build',inputs={'job':job_path,**inputs},out_dir=work,timeout_s=120)
         if not result.get('ok'):
-            raise RuntimeError(result.get('error','window build failed'))
+            raise _failed_run(result, 'window build failed')
         if not (work/'model.glb').is_file() or (mode == 'thumbnail' and not (work/'thumbnail.png').is_file()):
             raise RuntimeError('window build missing output')
         meta = dict(sig=sig,style_id=style_id,size_m=[round(v,4) for v in geometry['size_m']],
@@ -371,7 +399,7 @@ def ensure_window_model(style_or_id, width, height, thickness, *, outside=1, bar
         if cached:
             return cached
         key = (root,sig)
-        if key not in _pending and key not in _failed:
+        if key not in _pending and not _held(key):
             _pending.add(key)
             _queue.put((key,build_window_model,style,dims,
                         dict(outside=outside,bars=bars,color=color,glass=glass)))

@@ -30,6 +30,12 @@ Expected, derived by hand from ``app/models/inventory.py`` and ``app/core/garmen
 [6] the Blender scripts write the side channel: garment_template_drape.progress merges fields and replaces the
     file (checked by importing the function's source without bpy — the module needs Blender, so the function is
     exec'd alone).
+[7] ``_build_drape`` writes a failure record only for a verdict or a crash (the outcome contract,
+    ``app.blender.outcome``): ``run_drape``, ``collider_pieces``, ``drape_state`` (failed when the record file
+    exists, else missing / NOT_DRAPED) and ``figure.invalidate`` stubbed. A drape ending ``timeout`` or
+    ``unavailable`` → no record, state "missing" whose reason names the outcome and "the next Build tries again",
+    ``outcome`` carried; ``rejected`` (a gate row) → the record with outcome "rejected", error the gate text;
+    ``crashed`` with log_tail "TAIL" → the record with outcome "crashed" and log_tail "TAIL".
 """
 import ast
 import json
@@ -131,6 +137,30 @@ ns["progress"](stage="drape", frame=1, frames=30)
 ns["progress"](frame=7)
 got = json.loads((_SCRATCH / "bl.json").read_text())
 check("[6] side channel merges", got == {"stage": "drape", "frame": 7, "frames": 30}, str(got))
+
+# [7]
+from app.core import figure  # noqa: E402
+figure.invalidate = lambda *a, **k: None
+gt.collider_pieces = lambda *a, **k: []
+gt.drape_state = lambda c, i, **k: ({"state": "failed", "reason": "failed", "record": {}} if gt.failed_path(c, i, "sig7").is_file()
+                                    else {"state": "missing", "reason": gt.NOT_DRAPED, "record": {}})
+for outcome, error, tail in (("timeout", "timeout after 300s", "T1"), ("unavailable", "blender is not installed", ""),
+                             ("rejected", "stretch_max 1.4 (limit 1.2)", ""), ("crashed", "script wrote no result", "TAIL")):
+    gt.run_drape = lambda *a, **k: {"ok": False, "error": error, "data": {}, "glb": None, "rows": [],
+                                    "outcome": outcome, "log_tail": tail}
+    gt.failed_path("Demo", "shirt7", "sig7").unlink(missing_ok=True)
+    state = gt._build_drape("Demo", "shirt7", key=("Demo", "shirt7"), profile={}, base=("bsig", "bsha"), base_sha="bsha",
+                            lower=[], item=None, sig="sig7", sources={}, body=_SCRATCH / "body.glb",
+                            params={"kind": "top"})
+    rec_path = gt.failed_path("Demo", "shirt7", "sig7")
+    if outcome in ("timeout", "unavailable"):
+        check(f"[7] {outcome}: no record, left due", not rec_path.is_file() and state["state"] == "missing"
+              and outcome in state["reason"] and "the next Build tries again" in state["reason"]
+              and state.get("outcome") == outcome, str(state))
+    else:
+        rec = json.loads(rec_path.read_text()) if rec_path.is_file() else {}
+        check(f"[7] {outcome}: the failure record", state["state"] == "failed" and rec.get("outcome") == outcome
+              and rec.get("error") == error and rec.get("log_tail") == tail, str(rec)[:200])
 
 print("\nFAILED: " + ", ".join(FAILS) if FAILS else "\nall ok")
 sys.exit(1 if FAILS else 0)

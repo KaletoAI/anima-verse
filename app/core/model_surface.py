@@ -87,6 +87,16 @@ def _source_of(model_path: Path) -> Optional[Dict[str, Any]]:
 BAKE_REASONS = ("ok", "unreadable", "no_blender", "busy", "failed", "unstorable")
 
 
+def _reason_of(outcome: Any) -> str:
+    """The bake reason of a failed run (``app.blender.outcome``): Blender gone mid-run is ``no_blender`` like the
+    check before the slot, a timeout or an interrupted run ``busy`` (left due, the candidate stays missing), a
+    verdict or a crash ``failed``."""
+    from app.blender import outcome as oc
+    if outcome == oc.UNAVAILABLE:
+        return "no_blender"
+    return "busy" if oc.is_retryable(outcome) else "failed"
+
+
 def bake_surface_result(model_path: Path, rotation: Any, *,
                         wait_s: float = 0.0, target_m: float = 0.0,
                         measure: str = "xz") -> Tuple[Optional[Dict[str, Any]], str]:
@@ -139,9 +149,9 @@ def bake_surface_result(model_path: Path, rotation: Any, *,
     finally:
         refine.free_lod_slot()
     if not res.get("ok"):
-        logger.info("surface bake failed (%s): %s", Path(model_path).name,
-                    res.get("error"))
-        return None, "failed"
+        logger.info("surface bake failed (%s, %s): %s", Path(model_path).name,
+                    res.get("outcome"), res.get("error"))
+        return None, _reason_of(res.get("outcome"))
     data = dict(res["data"])
     surface = {"version": SURFACE_VERSION, "source": source,
                "rotation": _norm_rotation(rotation),

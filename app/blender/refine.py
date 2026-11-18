@@ -19,6 +19,12 @@ from app.core.timeutils import utc_now_iso
 logger = get_logger(__name__)
 
 
+def _outcome_of(res: Dict[str, Any]) -> str:
+    """The ``outcome`` of a ``runner.run`` answer (one without the key — a stand-in runner — by its ``ok``)."""
+    from app.blender import outcome as oc
+    return res.get("outcome") or (oc.OK if res.get("ok") else oc.CRASHED)
+
+
 def measure_file(path: Path) -> Optional[Dict[str, Any]]:
     """Real geometry of a model file, or None when it could not be measured.
 
@@ -83,8 +89,10 @@ def apply_script(path: Path, script: str, params: Dict[str, Any], *,
     kept under ``raw/`` first — an img2mesh bake is not reproducible, so
     without it a bad refinement would be final.
 
-    Returns ``{"ok", "applied", "data", "error"}``. ``ok`` says the script ran,
-    ``applied`` says the file on disk changed. ``extra_inputs`` are further
+    Returns ``{"ok", "applied", "data", "error", "outcome", "log_tail"}``.
+    ``ok`` says the script ran, ``applied`` says the file on disk changed;
+    ``outcome`` is the run's (``runner.run``), and ``REJECTED`` when a gate
+    here turned the result down — a verdict about this model. ``extra_inputs`` are further
     read-only files handed to the script under their slot names (normalize's
     ``source``, the unrigged mesh); the model itself stays slot ``model``.
     """
@@ -93,11 +101,14 @@ def apply_script(path: Path, script: str, params: Dict[str, Any], *,
     from app.blender import runner
 
     path = Path(path)
-    out: Dict[str, Any] = {"ok": False, "applied": False, "data": {}, "error": ""}
+    from app.blender import outcome as oc
+    out: Dict[str, Any] = {"ok": False, "applied": False, "data": {}, "error": "", "outcome": oc.OK,
+                           "log_tail": ""}
     with tempfile.TemporaryDirectory(prefix="av-refine-") as tmp:
         res = runner.run(script, inputs={"model": path, **(extra_inputs or {})}, params=params,
                          out_dir=Path(tmp), timeout_s=timeout_s)
         out["data"] = res.get("data") or {}
+        out["outcome"], out["log_tail"] = _outcome_of(res), res.get("log_tail") or ""
         if not res.get("ok"):
             out["error"] = res.get("error") or "script failed"
             return out
@@ -115,6 +126,7 @@ def apply_script(path: Path, script: str, params: Dict[str, Any], *,
         if validator is not None:
             verdict = validator(blob)
             if not verdict.get("ok"):
+                out["outcome"] = oc.REJECTED
                 out["error"] = ("refined model failed validation: "
                                 + "; ".join(verdict.get("errors") or []))
                 logger.warning("%s: %s — Original behalten", path.name,
@@ -132,6 +144,7 @@ def apply_script(path: Path, script: str, params: Dict[str, Any], *,
                                           base_joints_only=base_joints_only,
                                           allowed_deg=allowed)
             if not frames.get("ok"):
+                out["outcome"] = oc.REJECTED
                 out["error"] = ("refined model rewrote the rig frames: "
                                 + "; ".join(frames.get("errors") or []))
                 logger.warning("%s: %s — Original behalten", path.name,
@@ -444,16 +457,18 @@ def free_lod_slot() -> None:
 def build_static_lod(path: Path, ratio: float) -> Dict[str, Any]:
     """Reduces a static GLB to ``ratio`` of its triangles on the CPU.
 
-    Returns ``{"ok", "blob", "tris", "tris_before", "error"}`` — storage is
-    the caller's, because every gallery names, sidecars and selects its files
-    itself. The reduced mesh must pass the same validation as a freshly
-    delivered static model or nothing is returned (the 2.2 rule, unchanged).
+    Returns ``{"ok", "blob", "tris", "tris_before", "error", "outcome",
+    "log_tail"}`` — storage is the caller's, because every gallery names,
+    sidecars and selects its files itself. The reduced mesh must pass the same
+    validation as a freshly delivered static model or nothing is returned (the
+    2.2 rule, unchanged; ``outcome`` ``REJECTED``, like a file that is no GLB).
     """
     import tempfile
+    from app.blender import outcome as oc
     from app.blender import runner
     from app.core.model_validate import validate_static_glb
     out: Dict[str, Any] = {"ok": False, "blob": b"", "tris": None,
-                           "tris_before": None, "error": ""}
+                           "tris_before": None, "error": "", "outcome": oc.REJECTED, "log_tail": ""}
     path = Path(path)
     if path.suffix.lower() != ".glb":
         out["error"] = f"LOD handles GLB, not {path.suffix}"
@@ -462,7 +477,10 @@ def build_static_lod(path: Path, ratio: float) -> Dict[str, Any]:
         res = runner.run("lod", inputs={"model": path},
                          params={"ratios": [float(ratio)]}, out_dir=Path(tmp),
                          timeout_s=600)
+        out["outcome"], out["log_tail"] = _outcome_of(res), res.get("log_tail") or ""
         if not res.get("ok") or not res.get("outputs"):
+            if res.get("ok"):
+                out["outcome"] = oc.CRASHED  # ran ok, declared no stage
             out["error"] = (unavailable_reason() or res.get("error")
                             or "no stage produced")
             return out
@@ -470,6 +488,7 @@ def build_static_lod(path: Path, ratio: float) -> Dict[str, Any]:
         blob = Path(next(iter(res["outputs"].values()))).read_bytes()
     verdict = validate_static_glb(blob)
     if not verdict.get("ok"):
+        out["outcome"] = oc.REJECTED
         out["error"] = ("reduced mesh failed validation: "
                         + "; ".join(verdict.get("errors") or []))
         return out
@@ -499,24 +518,31 @@ def decimate_to(path_in: Path, target_tris: int, out: Path, *,
     the callers decide what a reduced mesh must satisfy (a garment is static,
     its fitted distance tier is skinned).
 
-    Returns ``{"ok", "path", "tris_before", "tris", "ratio", "error"}``;
-    ``ok`` False leaves ``out`` untouched.
+    Returns ``{"ok", "path", "tris_before", "tris", "ratio", "error",
+    "outcome", "log_tail"}``; ``ok`` False leaves ``out`` untouched.
+    ``outcome`` is that of the measuring or the reducing run (a measure that
+    ran but named no count: ``CRASHED``); a file that is no GLB or a count of
+    0 handed in is ``REJECTED``.
     """
     import os
     import tempfile
+    from app.blender import outcome as oc
     from app.blender import runner
     path_in, out = Path(path_in), Path(out)
     res: Dict[str, Any] = {"ok": False, "path": "", "tris_before": None,
-                           "tris": None, "ratio": None, "error": ""}
+                           "tris": None, "ratio": None, "error": "", "outcome": oc.REJECTED, "log_tail": ""}
     if path_in.suffix.lower() != ".glb":
         res["error"] = f"decimation handles GLB, not {path_in.suffix}"
         return res
     if tris is None:
-        measured = measure_file(path_in)
-        tris = int((measured or {}).get("tris") or 0)
+        measured = runner.run("measure", inputs={"model": path_in})
+        res["outcome"], res["log_tail"] = _outcome_of(measured), measured.get("log_tail") or ""
+        tris = int((measured.get("data") or {}).get("tris") or 0) if measured.get("ok") else 0
     tris = int(tris)
     if tris <= 0:
-        res["error"] = (unavailable_reason() or "could not measure the triangle count")
+        if res["outcome"] == oc.OK:
+            res["outcome"] = oc.CRASHED  # measured, but no triangle count
+        res["error"] = unavailable_reason() or "could not measure the triangle count"
         return res
     ratio = min(0.999, float(target_tris) / tris)
     res.update(tris_before=tris, ratio=ratio)
@@ -526,7 +552,10 @@ def decimate_to(path_in: Path, target_tris: int, out: Path, *,
                          params={"ratios": [ratio], "keep_uvs": True,
                                  "merge_vertices": bool(merge_vertices)},
                          out_dir=Path(tmp), timeout_s=600)
+        res["outcome"], res["log_tail"] = _outcome_of(run), run.get("log_tail") or ""
         if not run.get("ok") or not run.get("outputs"):
+            if run.get("ok"):
+                res["outcome"] = oc.CRASHED  # ran ok, declared no stage
             res["error"] = unavailable_reason() or run.get("error") or "no stage produced"
             return res
         stage = (run["data"].get("stages") or [{}])[0]

@@ -2421,9 +2421,9 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
     Returns ``{ok: True, fsig, ran: [steps that produced output]}`` or
     ``{ok: False, fsig, step, error, gates}`` (also recorded as the item's
     failed status; a failure that is load or the media switch — a
-    ``BackendBusyError`` / ``MediaGenerationDisabled`` in the exception chain
-    of any step, footwear's ``RETRY_LATER_ERRORS`` — carries ``retry_later:
-    True`` and is not persisted). ValueError for an invalid item, step or
+    ``BackendBusyError`` / ``MediaGenerationDisabled`` or a retryable run
+    outcome (``app.blender.outcome``) in the exception chain of any step
+    (``_is_load``) — carries ``retry_later: True`` and is not persisted). ValueError for an invalid item, step or
     view (any view of footwear).
 
     ``state`` (plan 2026-11-12-unified-worn-pieces Task 11b): the open /
@@ -3619,7 +3619,7 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
         if _is_load(e):
             return _retry_later(character_name, item_id, fsig, e.step, e, ran)
         logger.warning("Garment run %s/%s failed at %s: %s", character_name, item_id, e.step, e)
-        return _refusal(character_name, item_id, fsig, e.step, str(e), {"attempts": e.records}, ran)
+        return _refusal(character_name, item_id, fsig, e.step, str(e), {"attempts": e.records}, ran, crashed=e)
     except _Refused as e:
         return _refusal(character_name, item_id, fsig, e.step, e.error, e.gates, ran)
     except Exception as e:  # noqa: BLE001 — reported as the step's failure
@@ -3628,7 +3628,7 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
         if _is_load(e):
             return _retry_later(character_name, item_id, fsig, step, e, ran)
         logger.warning("Garment run %s/%s failed at %s: %s", character_name, item_id, step, e)
-        return _refusal(character_name, item_id, fsig, step, str(e) or type(e).__name__, None, ran)
+        return _refusal(character_name, item_id, fsig, step, str(e) or type(e).__name__, None, ran, crashed=e)
 
 
 def garment_source_materialized(character_name: str, item_id: str, fsig: str) -> bool:
@@ -3702,28 +3702,30 @@ def _refit_from_source(character_name: str, item_id: str, kind: str, method: str
 
 
 def _refusal(character_name: str, item_id: str, fsig: str, step: str, error: str, gates: Any,
-             ran: List[str]) -> Dict[str, Any]:
-    from app.core import garment_store as gs
+             ran: List[str], *, crashed: Optional[BaseException] = None) -> Dict[str, Any]:
+    """A failed run that ``_note_outcome`` records. Its ``outcome`` (``app.blender.outcome``) is ``REJECTED`` — a
+    verdict — unless ``crashed`` names the exception of a step that failed outright: then ``CRASHED`` (recorded
+    too: a defect repeats on the same input), with the end of a Blender run it carries as ``log_tail``."""
+    from app.blender import outcome as oc
+    from app.core import garment_store as gs, refit_pool
     logger.info("Garment run %s/%s refused at %s: %s", character_name, item_id, step, error)
     gs.end(character_name, item_id, step, error=error, gates=gates)
-    return {"ok": False, "fsig": fsig, "step": step, "error": error, "gates": gates, "ran": ran}
+    out = {"ok": False, "fsig": fsig, "step": step, "error": error, "gates": gates, "ran": ran,
+           "outcome": oc.REJECTED}
+    if crashed is not None:
+        out["outcome"], out["log_tail"] = oc.CRASHED, refit_pool.end_of(crashed)[2]
+    return out
 
 
 def _is_load(e: BaseException) -> bool:
     """Whether a failed step is load or the media switch — a ``BackendBusyError``
     or ``MediaGenerationDisabled`` anywhere in the exception chain
     (``footwear_source.failure_of``'s walk of ``__cause__`` / ``__context__``)
-    — or a compute call the refit pool ended (``refit_pool.RefitInterrupted``:
-    the server stops) — and so no defect of the item: nothing to persist, try
-    again later."""
-    from app.core import footwear_source, refit_pool
-    seen = set()
-    cur: Optional[BaseException] = e
-    while cur is not None and id(cur) not in seen:
-        if isinstance(cur, refit_pool.RefitInterrupted):
-            return True
-        seen.add(id(cur))
-        cur = cur.__cause__ or cur.__context__
+    — or a run the chain carries as retryable (``app.blender.outcome``: a
+    Blender timeout / interruption / Blender unavailable as ``RunFailed``, a
+    compute call the refit pool ended as ``refit_pool.RefitInterrupted``) —
+    and so no defect of the item: nothing to persist, try again later."""
+    from app.core import footwear_source
     return footwear_source.failure_of(e)[0] == footwear_source.LOAD
 
 
@@ -3751,11 +3753,12 @@ RUN_CANCELLED = "Cancelled by the user"
 def _cancelled_run(character_name: str, item_id: str, fsig: str, step: str, ran: List[str]) -> Dict[str, Any]:
     """A191: the result of a run the user cancelled — ``retry_later`` so ``_note_outcome`` persists nothing (the
     chain is no failure of the item; a later run starts where this one stopped)."""
+    from app.blender import outcome as oc
     from app.core import garment_store as gs
     logger.info("Garment run %s/%s cancelled at %s", character_name, item_id, step)
     gs.end(character_name, item_id, step, error=RUN_CANCELLED, gates=None)
     return {"ok": False, "fsig": fsig, "step": step, "error": RUN_CANCELLED, "gates": None, "ran": ran,
-            "retry_later": True, "cancelled": True}
+            "retry_later": True, "cancelled": True, "outcome": oc.CANCELLED}
 
 
 def _retry_later(character_name: str, item_id: str, fsig: str, step: str, e: BaseException,
@@ -3764,14 +3767,19 @@ def _retry_later(character_name: str, item_id: str, fsig: str, step: str, e: Bas
     — the item's status shows the text (the Wardrobe), ``_note_outcome``
     persists nothing, so automatic triggers (the outfit build, the
     improvements queue) try again instead of honouring a failure record. The
-    footwear chain answers the same way (``garment_footwear.RETRY_LATER_ERRORS``)."""
-    from app.core import footwear_source, garment_store as gs
+    footwear chain answers the same way (``garment_footwear._failure``).
+    ``outcome``: the retryable one the chain carries (a Blender timeout, a
+    refit the pool ended, …), ``INTERRUPTED`` for load / the media switch."""
+    from app.blender import outcome as oc
+    from app.core import footwear_source, garment_store as gs, refit_pool
     error = footwear_source.failure_of(e)[1]
-    logger.info("Garment run %s/%s deferred at %s (load or the media switch): %s",
+    logger.info("Garment run %s/%s deferred at %s (load, the media switch or a run left due): %s",
                 character_name, item_id, step, error)
     gs.end(character_name, item_id, step, error=error, gates=None)
+    carried = oc.of_exception(e)
     return {"ok": False, "fsig": fsig, "step": step, "error": error, "gates": None, "ran": ran,
-            "retry_later": True}
+            "retry_later": True, "outcome": carried if oc.is_retryable(carried) else oc.INTERRUPTED,
+            "log_tail": refit_pool.end_of(e)[2]}
 
 
 def check_run(character_name: str, item_id: str, *, steps: Union[None, str, Iterable[str]] = None,
@@ -3880,16 +3888,31 @@ def _fit_only(steps: Union[None, str, Iterable[str]]) -> bool:
     return ([steps] if isinstance(steps, str) else list(steps)) == ["fit"]
 
 
-def _end_track(job: "_Job", error: str = "", *, discard: bool = False) -> None:
-    """Finish (or, for a run that never ran, discard) the job's tracked CPU task."""
+def _end_track(job: "_Job", error: str = "", *, discard: bool = False, outcome: Optional[str] = None,
+               log_tail: str = "") -> None:
+    """Finish (or, for a run that never ran, discard) the job's tracked CPU task; ``outcome`` / ``log_tail`` go
+    to ``refit_pool.finish``."""
     if not job.track:
         return
     from app.core import refit_pool
     if discard:
         refit_pool.discard(job.track)
     else:
-        refit_pool.finish(job.track, error=error)
+        refit_pool.finish(job.track, error=error, outcome=outcome, log_tail=log_tail)
     job.track = ""
+
+
+def _result_outcome(result: Dict[str, Any]) -> str:
+    """The ``app.blender.outcome`` of a finished run's result: the one it carries, else ``OK`` / ``CANCELLED`` /
+    ``INTERRUPTED`` (``retry_later``: left due) / ``REJECTED`` (a refusal, a remembered one included)."""
+    from app.blender import outcome as oc
+    if result.get("outcome") in oc.ALL:
+        return result["outcome"]
+    if result.get("ok"):
+        return oc.OK
+    if result.get("cancelled"):
+        return oc.CANCELLED
+    return oc.INTERRUPTED if result.get("retry_later") else oc.REJECTED
 
 
 def _held_locked(character_name: str, job: "_Job") -> bool:
@@ -4099,13 +4122,16 @@ def _execute_inner(character_name: str, job: "_Job") -> Optional[str]:
                                          **({"prerequisites": True} if job.prerequisites else {}))
     except Exception as e:  # noqa: BLE001 — a worker thread reports, never raises
         logger.error("Garment run %s/%s failed: %s", character_name, job.item_id, e)
-        error = str(e) or type(e).__name__
-        job.result = {"ok": False, "error": error}
+        from app.core import refit_pool
+        outcome, error, tail = refit_pool.end_of(e)
+        job.result = {"ok": False, "error": error, "outcome": outcome, "log_tail": tail}
     finally:
         CANCEL_SCOPE.reset(scope_token)
     if job.cancel_scope.is_set() and not job.result.get("ok"):
-        job.result = {**job.result, "ok": False, "cancelled": True, "error": RUN_CANCELLED}
-    _end_track(job, "" if job.result.get("ok") else str(job.result.get("error") or "the fit was refused"))
+        from app.blender import outcome as oc
+        job.result = {**job.result, "ok": False, "cancelled": True, "error": RUN_CANCELLED, "outcome": oc.CANCELLED}
+    _end_track(job, "" if job.result.get("ok") else str(job.result.get("error") or "the fit was refused"),
+               outcome=_result_outcome(job.result), log_tail=str(job.result.get("log_tail") or ""))
     return error
 
 

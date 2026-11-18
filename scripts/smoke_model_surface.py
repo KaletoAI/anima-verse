@@ -11,6 +11,10 @@ candidate for good after two failed attempts, so it has to tell a busy machine �
 retry, no attempt counted — from a real defect (spec § 10). A path with no file
 behind it is stopped by `_source_of` before Blender is ever asked, so it answers
 (None, "unreadable"); `bake_surface` is the same call reduced to its first half.
+A run that failed answers by its outcome (`app.blender.outcome`), the slot check and
+the availability check stubbed and `runner.run` answering `{ok False, outcome}`:
+unavailable -> "no_blender", timeout / interrupted -> "busy" (left due, no attempt
+counted), rejected / crashed -> "failed". `model_water.detect_water` answers the same.
 
 --- PART 1: the bake (needs Blender; prints SKIP and exits 0 without it) -----
 A GLB written in pure Python, four axis-aligned boxes (glTF axes, y up):
@@ -269,6 +273,24 @@ def part0():
               ms.bake_surface(absent, {"x": 0}) is None)
         check("'unreadable' is one of the declared reasons",
               reason in ms.BAKE_REASONS, str(ms.BAKE_REASONS))
+        from unittest.mock import patch
+        from app.blender import refine, runner
+        from app.core import model_water as mw
+        present = Path(tmp) / "present.glb"
+        present.write_bytes(b"glTF-stub")
+        want = {"unavailable": "no_blender", "timeout": "busy", "interrupted": "busy", "rejected": "failed",
+                "crashed": "failed"}
+        got, water = {}, {}
+        for outcome in want:
+            answer = {"ok": False, "error": "x", "outcome": outcome, "data": {}}
+            with patch.object(runner, "is_available", lambda: True), \
+                    patch.object(refine, "take_lod_slot", lambda wait_s=0.0: True), \
+                    patch.object(refine, "free_lod_slot", lambda: None), \
+                    patch.object(runner, "run", lambda *a, **k: answer):
+                got[outcome] = ms.bake_surface_result(present, {"x": 0}, wait_s=0)[1]
+                water[outcome] = mw.detect_water(present, {"x": 0}, target_m=1.0, measure="xz")[1]
+        check("a failed run's reason by its outcome", got == want, str(got))
+        check("detect_water answers the same", water == want, str(water))
 
 
 def part1():

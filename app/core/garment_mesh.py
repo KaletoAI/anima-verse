@@ -744,7 +744,9 @@ def _prepare(kind: str, raw: Path, candidate: Path, attempt: int, res: Dict[str,
     # apart under the collapse (2026-11-09: share 0.982 -> 0.724).
     dec = refine.decimate_to(raw, target_tris(kind), candidate, merge_vertices=True)
     if not dec.get("ok"):
-        raise RuntimeError(f"garment mesh decimation failed: {dec.get('error') or 'unknown error'}")
+        from app.blender import outcome as oc
+        raise oc.RunFailed(f"garment mesh decimation failed: {dec.get('error') or 'unknown error'}",
+                           dec.get("outcome") or oc.CRASHED, dec.get("log_tail") or "")
     numbers = component_numbers(candidate)
     reasons = _gate(numbers["largest_component_share"])
     entry = {"attempt": attempt, "ok": not reasons, "reasons": reasons,

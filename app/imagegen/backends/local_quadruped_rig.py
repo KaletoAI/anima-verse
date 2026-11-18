@@ -10,7 +10,8 @@ import tempfile
 import threading
 from pathlib import Path
 
-from app.imagegen.base import ImageBackend, BackendNotApplicableError
+from app.blender import outcome
+from app.imagegen.base import BackendBusyError, ImageBackend, BackendNotApplicableError
 
 
 class LocalQuadrupedRigBackend(ImageBackend):
@@ -82,7 +83,11 @@ class LocalQuadrupedRigBackend(ImageBackend):
                 reason = data.get('reason') or result.get('error') or 'quadruped fitting failed'
                 if data.get('not_applicable'):
                     raise BackendNotApplicableError(self, reason)
-                raise RuntimeError(reason)
+                if outcome.is_retryable(result.get('outcome')):
+                    # A timeout, an interrupted run or Blender gone is load, not a defect: no cooldown.
+                    raise BackendBusyError(f"{reason} ({result['outcome']})")
+                raise outcome.RunFailed(reason, result.get('outcome') or outcome.CRASHED,
+                                        result.get('log_tail') or '')
             outputs = result['outputs']
             self.last_result_meta = json.loads(Path(outputs['metrics']).read_text())
             self.last_result_files = [

@@ -840,7 +840,9 @@ def _reduce_to_low(location_id: str, owner: str, room_id: str, src: Path,
                            "size_before": 0, "error": ""}
     res = refine.build_static_lod(src, ratio)
     if not res.get("ok"):
-        _lod_failed.add(key)
+        from app.blender import outcome as oc
+        if not oc.is_retryable(res.get("outcome")):
+            _lod_failed.add(key)  # a timeout / interruption / no Blender leaves it due: the next payload tries again
         out["error"] = res.get("error") or "distance mesh not built"
         return out
     gallery = _gallery(owner, room_id)

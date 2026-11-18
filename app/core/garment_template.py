@@ -1192,9 +1192,12 @@ def run_drape(body_glb: Path, params: Dict[str, Any], sources: Dict[str, str], *
               live: Optional[Tuple[str, str]] = None) -> Dict[str, Any]:
     """Measure, make the panels and drape on ``body_glb`` (one Blender run; one retry with doubled
     quality when the stretch is above ``RETRY_STRETCH``). ``lower`` = [(drape GLB, its pose-shape payload)] of the
-    lower layers the piece drapes over (colliders, Ruling A142). Returns ``{ok, error, data, glb, rows}`` —
-    ``ok`` False when Blender failed or a gate row failed (``error`` names it)."""
+    lower layers the piece drapes over (colliders, Ruling A142). Returns ``{ok, error, data, glb, rows, outcome,
+    log_tail}`` — ``ok`` False when Blender failed or a gate row failed (``error`` names it); ``outcome``
+    (``app.blender.outcome``) is the Blender run's when it failed, ``REJECTED`` for a failed gate row, ``CRASHED``
+    when no GLB came back."""
     import time
+    from app.blender import outcome as oc
     from app.blender import runner
     started = time.time()
     _live_stage(live, "measure_body")
@@ -1242,14 +1245,15 @@ def run_drape(body_glb: Path, params: Dict[str, Any], sources: Dict[str, str], *
     data["render_wall_s"] = float(data.get("render_wall_s") or 0.0)
     if not res.get("ok"):
         return {"ok": False, "error": str(res.get("error") or "blender failed"), "data": data, "glb": None,
-                "rows": []}
+                "rows": [], "outcome": res.get("outcome") or oc.CRASHED, "log_tail": res.get("log_tail") or ""}
     _live_stage(live, "judge")
     rows = judge_build(data)
     bad = [r for r in rows if r["gate"] and not r["ok"]]
     glb = (res.get("outputs") or {}).get("glb")
     error = "; ".join(f"{r['check']} {r['value']} (limit {r['limit']})" for r in bad)
     return {"ok": not bad and bool(glb), "error": error or ("" if glb else "no GLB written"), "data": data,
-            "glb": glb, "rows": rows, "outputs": res.get("outputs") or {}}
+            "glb": glb, "rows": rows, "outputs": res.get("outputs") or {},
+            "outcome": oc.REJECTED if bad else (oc.OK if glb else oc.CRASHED), "log_tail": ""}
 
 
 def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None,
@@ -1302,6 +1306,8 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
         if sub["state"] == "ready":
             colliders.append((sub["path"], sub["record"].get("pose_shapes")))
     _live_stage(key, "measure_body")
+    from app.blender import outcome as oc
+    left_due = ""
     scratch = Path(tempfile.mkdtemp(prefix="av-template-"))
     try:
         result = run_drape(body, params, sources, item_id=item_id, out_dir=scratch, lower=colliders, live=key)
@@ -1320,13 +1326,23 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
             failed = failed_path(character_name, item_id, sig)
             if failed.is_file():
                 failed.unlink()
+        elif oc.is_retryable(result["outcome"]):
+            # A timeout, an interrupted run or no Blender judges nothing: no failure record, the drape stays due.
+            left_due = (f"{result['error']} ({result['outcome']}) — not recorded as a failure, the next Build "
+                        f"tries again")
+            logger.warning("Template drape of %s for %s: %s", item_id, character_name, left_due)
         else:
-            write_record(failed_path(character_name, item_id, sig), {**record, "error": result["error"]})
+            write_record(failed_path(character_name, item_id, sig),
+                         {**record, "error": result["error"], "outcome": result["outcome"],
+                          "log_tail": result["log_tail"]})
             logger.warning("Template drape of %s for %s failed: %s", item_id, character_name, result["error"])
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     figure.invalidate()
-    return drape_state(character_name, item_id, base_sha=base_sha, lower=lower, item=item)
+    state = drape_state(character_name, item_id, base_sha=base_sha, lower=lower, item=item)
+    if left_due and state["state"] == "missing":
+        state = {**state, "reason": left_due, "outcome": result["outcome"]}
+    return state
 
 
 def clear_failure(character_name: str, item_id: str) -> int:

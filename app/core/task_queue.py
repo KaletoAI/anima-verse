@@ -1030,11 +1030,13 @@ class TaskQueue:
             "Track %s: %s (%.1fs)%s",
             status, task_id, duration_s, f" error={error}" if error else "")
 
-    def track_finish_if_open(self, task_id: str, error: str = "") -> bool:
+    def track_finish_if_open(self, task_id: str, error: str = "", status: Optional[str] = None) -> bool:
         """``track_finish`` for a safety net: finishes the tracked task only
         while it is still pending or running, so a track its owner already
         finished keeps its own status, error and duration. Returns True when
-        it finished the task.
+        it finished the task. ``status`` overrides the derived one
+        (``failed`` with an error, else ``completed``) — e.g. ``interrupted``
+        for work left due (``refit_pool.finish``).
 
         One conditional UPDATE: a cancel (``track_cancel``) that lands while
         this runs either closes the row first — then nothing is written — or
@@ -1042,7 +1044,7 @@ class TaskQueue:
         self._held_tracks.discard(task_id)
         t0 = self._track_start_times.pop(task_id, None)
         duration_s = round(time.monotonic() - t0, 2) if t0 else 0.0
-        status = "failed" if error else "completed"
+        status = status or ("failed" if error else "completed")
         now = utc_now_iso()
         with self._write_lock, self._connect() as conn:
             cur = conn.execute(
