@@ -51,9 +51,9 @@ unit, Ruling H1a; zeta 0.5; limits 0.8..6.0 Hz)
     Stiffness factor 1.5 (set_hair_motion) -> rev changes, freq_hz 2.22. Swing off -> groups {} and the rev equals
     the no-hair rev of the old code (``_revision({"declarations": []})``), so a character without hair keeps its
     rev byte for byte. The fixture hairstyle has hair_swing "on" (explicit; the default is on since Ruling H-R1).
-    served_chains resolves the served fit on every call (``garment_store.accepted_fit``: 1 call per poll, 2 for 2
-    polls); a newer accepted fit on the same base (chain 3 stiffness 0.6, no current fsig either) is the one served
-    -> freq_hz = 0.6·3.7 = 2.22. A worn hairstyle in mode "body" -> None. No worn hair -> None. Which fit is served
+    served_chains caches the resolved fit (``hair_motion._served_fit``: 1 ``garment_store.accepted_fit`` call for 2
+    polls of an unchanged world); a newer accepted fit on the same base (chain 3 stiffness 0.6, no current fsig
+    either) is the one served from the next poll on (resolved again: 1 more call) -> freq_hz = 0.6·3.7 = 2.22. A worn hairstyle in mode "body" -> None. No worn hair -> None. Which fit is served
     when the newest is NOT the served one: scripts/smoke_hair_served_fit.py.
 [5] panel(Demo, hairstyle settings, record): {count 2, links 2 (chain 3's two bones; chain 5 has none), swing True,
     stiffness 1.0, limits [0.5, 2.0], fitted True}; record None -> {count None, links 0, fitted False}; a record
@@ -256,6 +256,9 @@ def main() -> int:
         print("[4] motion_payload")
         gdir = get_character_dir("Demo") / "garments"
         gdir.mkdir(parents=True, exist_ok=True)
+        # A base-pipeline character has its model_refs/ folder; the first payload would create it
+        # (``model_refs.get_model_refs_dir``) and that change of a watched folder re-resolves once.
+        (get_character_dir("Demo") / "model_refs").mkdir(parents=True, exist_ok=True)
         (gdir / "hair_demo_aaaaaaaaaaaa.glb").write_bytes(b"glb-stub")
         (gdir / "hair_demo_aaaaaaaaaaaa.json").write_text(json.dumps(
             {"accepted": True, "method": "hairdeck", "base_model_sha256": BASE_SHA, "report": {"chains": summary()}}))
@@ -272,7 +275,7 @@ def main() -> int:
         close("freq_hz 1.48", p1["groups"].get("hair_c03", {}).get("freq_hz"), 1.48)
         check("gravity_scale = the profile's", p1["groups"].get("hair_c03", {}).get("gravity_scale"), 0.5)
         extension_rig.motion_payload("Demo")
-        check("served fit resolved per poll: 2 accepted_fit calls for 2 polls", len(calls), 2)
+        check("served fit cached: 1 accepted_fit call for 2 polls", len(calls), 1)
 
         # fails on the old code: extension_rig.py of the task BASE, loaded from git
         try:

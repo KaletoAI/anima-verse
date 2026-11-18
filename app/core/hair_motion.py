@@ -233,16 +233,83 @@ def with_rigid(chains: Optional[Dict[str, Any]], rigid: Optional[FrozenSet[str]]
     return out
 
 
-def _served_fit(character_name: str, item_id: str, profile: Dict[str, Any]) -> Optional[Tuple[Path, Dict[str, Any]]]:
+#: The longest a resolved served fit is reused (``_served_fit``): the backstop for an input outside the key.
+SERVED_TTL_S = 30.0
+# character -> (key, ((path, stat identity), ...), monotonic time, (fit GLB, record) or None)
+_SERVED: Dict[str, Tuple[Tuple[Any, ...], Tuple[Tuple[str, Any], ...], float,
+                         Optional[Tuple[Path, Dict[str, Any]]]]] = {}
+_SERVED_LOCK = threading.Lock()
+
+
+def _stat_id(path: Optional[Path]) -> Optional[Tuple[int, int, int]]:
+    """``(st_mtime_ns, st_size, st_ino)`` of ``path``, None when it is missing."""
+    if path is None:
+        return None
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return stat.st_mtime_ns, stat.st_size, stat.st_ino
+
+
+def _served_fit(character_name: str, item: Dict[str, Any],
+                profile: Dict[str, Any]) -> Optional[Tuple[Path, Dict[str, Any]]]:
     """``(fit GLB, record)`` of the hair the served model grafts: the garment assembly's resolver
     (``garment_assembly._wanted`` → ``garment_store.accepted_fit`` on the CURRENT base model,
-    ``base_body.current_base``), None off the pipeline, without a base model or without such a fit."""
-    from app.core import base_body
+    ``base_body.current_base``), None off the pipeline, without a base model or without such a fit.
+
+    Cached per character; resolving costs milliseconds (the base signature, the fingerprint's base images, the
+    record reads) and ``served_chains`` runs on every worldmap poll. An entry is reused only while ALL of these are
+    unchanged — each is something the answer is computed from:
+    - ``figure._generation``: moves with every config save (the HairDeck backend params of the hsig), garment
+      record write (``garment_store.write_record``: fits, refusals), model publication (the base model) and
+      base-body ref write or render (the base signature, the base images);
+    - the profile's content (sha1 of its pickle): the base identity inputs and the pipeline, the profile picture's
+      name, the worn hairstyle and every piece's open / closed state, the facial hair (beard inputs), the head scale;
+    - the worn item's content (its JSON): mode, description, Swing, colour, placement — the fingerprint's inputs;
+    - the stat identity (mtime_ns, size, inode) of the character's ``garments/``, ``model_refs/`` and ``model3d/``
+      directories (a fit or record added, replaced or removed; a stored base set appearing or going), of the
+      profile picture (the hsig's content hash), of the base model ``model3d/<bsig>.glb`` (its sha256 is what the
+      fits are accepted on) and of the served fit's GLB and record (a rewrite in place);
+    - ``SERVED_TTL_S``: the backstop for what the list above misses (a write landing in the same file-timestamp
+      tick as the previous one on a filesystem with coarse timestamps).
+    The generation is taken before the resolve and the entry stored only when it has not moved meanwhile."""
+    import hashlib
+    import json
+    import pickle
+    import time
+    from app.core import base_body, figure
     from app.core import garment_store as gs
+    from app.models.character import get_character_dir
+    generation = figure._generation[0]
+    try:   # pickle: ~4-30x cheaper than sorted JSON on a large profile; another key order only costs a miss
+        content = pickle.dumps(profile, 5)
+    except Exception:  # noqa: BLE001 — an unpicklable value: the JSON text stands in
+        content = json.dumps(profile, sort_keys=True, default=str).encode("utf-8")
+    key = (generation, hashlib.sha1(content).hexdigest(), json.dumps(item, sort_keys=True, default=str))
+    now = time.monotonic()
+    with _SERVED_LOCK:
+        hit = _SERVED.get(character_name)
+    if (hit is not None and hit[0] == key and now - hit[2] < SERVED_TTL_S
+            and all(_stat_id(Path(path)) == stat for path, stat in hit[1])):
+        return hit[3]
+    from app.core.model_refs import current_profile_image
+    folder = get_character_dir(character_name)   # a read path: creates nothing
+    picture = current_profile_image(character_name, profile=profile)
+    watched = [folder / "garments", folder / "model_refs", folder / "model3d", *([picture] if picture else [])]
+    before = [(str(path), _stat_id(path)) for path in watched]
     base = base_body.current_base(character_name, profile=profile)
-    if not base or not base[1]:
-        return None
-    return gs.accepted_fit(character_name, item_id, base_model_sha=base[1], profile=profile)
+    fit = (gs.accepted_fit(character_name, str(item["id"]), base_model_sha=base[1], profile=profile)
+           if base and base[1] else None)
+    files = ([folder / "model3d" / f"{base[0]}.glb"] if base else []) + (
+        [fit[0], fit[0].with_suffix(".json")] if fit else [])
+    deps = tuple(before + [(str(path), _stat_id(path)) for path in files])
+    with _SERVED_LOCK:
+        if figure._generation[0] == generation:
+            if len(_SERVED) > 512:
+                _SERVED.clear()
+            _SERVED[character_name] = (key, deps, now, fit)
+    return fit
 
 
 def served_chains(character_name: str, profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -253,15 +320,16 @@ def served_chains(character_name: str, profile: Dict[str, Any]) -> Optional[Dict
     Swing off ``motion_groups`` emits nothing whatever this fit is; a fit made with Swing off has no weighted
     joint, so it gives no group either.
 
-    The fit is resolved on every call (one record read, as the assembly does); the costly part — the rigid
-    joints of the fit GLB — is cached per file identity and head scale (``_rigid_of_fit``).
+    The fit comes from ``_served_fit`` (cached; its docstring lists what invalidates it); the rigid joints of the
+    fit GLB are cached per file identity and head scale (``_rigid_of_fit``). An unchanged world costs one profile
+    hash, one item read and a handful of ``stat`` calls per poll — no record read.
 
     Each chain's ``rigid`` is filled from the fit GLB (``rigid_joints``, Ruling H10)."""
     from app.core import garment_hair
     item = garment_hair.worn_hairstyle(character_name, profile)
     if item is None or garment_hair.hairstyle_mode(item) != garment_hair.HAIRDECK_MODE:
         return None
-    fit = _served_fit(character_name, str(item["id"]), profile)
+    fit = _served_fit(character_name, item, profile)
     found = ((fit[1].get("report") or {}).get("chains")) if fit else None
     if not isinstance(found, dict):
         return None
