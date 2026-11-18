@@ -408,14 +408,15 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="refit-interrupt-") as tmp:
         root = Path(tmp)
         os.environ["STORAGE_DIR"] = str(root / "world")
-        os.environ["INSTANCE_DIR"] = str(root / "instance")
-        (root / "instance").mkdir()
-        (root / "instance" / "config.json").write_text(json.dumps({}))
+        # A temp instance the storage lint can see as one (a name bound to tempfile.mkdtemp).
+        inst = Path(tempfile.mkdtemp(prefix="instance-", dir=tmp))
+        os.environ["INSTANCE_DIR"] = str(inst)
+        (inst / "config.json").write_text(json.dumps({}))
         from app.core import paths
         paths.init(root / "world")
-        paths.init_instance(root / "instance")
+        paths.init_instance(inst)
         from app.core import config
-        config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
+        config.load(paths.get_config_path(), instance_path=inst / "config.json")
         from app.core import db
         db.init_schema()
         from app.core import (base_body, fit_attempts, footwear_source, garment_refit, garment_source, garments,
