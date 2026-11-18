@@ -53,6 +53,9 @@ then raises. The tip group alone is reported {status failed, reason the
 error}; the pair group is still built (its bones exist, its metrics carry a
 placement, no status); the mesh is the one before the tip op, vertex for
 vertex (1e-9). Before A109 the whole build answered status "failed".
+Neutralfail (review 03#13): the same, but the tip is switched off (``neutralise``) and the levelling fails: the
+tip group alone is {status failed, mode neutralised, reason the error}, the pair group is built, the mesh is the
+one before, vertex for vertex. On 69aeeba75 the whole build answers status "failed".
 No expected value is recorded from a run.
 """
 import sys
@@ -159,9 +162,22 @@ if tipfail:
   scope['subdivide_around'](meshes[0],[Vector(rows[0]['tip'])],[.01])
   raise ValueError('forced tip failure')
  scope['tip_mesh']=failing_mesh
+neutralfail=job['params'].get('neutralfail',False)
+extra={}
+if neutralfail:
+ # Review 03#13: the tip is switched off (neutralise) and its levelling changes the skin, then fails.
+ groups=[group]; extra={'neutralise':[tip_group]}
+ original_neutral=scope['neutralise_mesh']
+ rest=[v.co.copy() for v in obj.data.vertices]
+ def failing_neutral(meshes,p,sources):
+  for mesh in meshes:
+   for v in mesh.data.vertices: v.co.y-=.01
+  scope['subdivide_around'](meshes[0],[Vector(sources[0]['tip'])],[.01])
+  raise ValueError('forced neutral failure')
+ scope['neutralise_mesh']=failing_neutral
 if job['params'].get('descendant',False):
  groups.insert(0,dict(group,id='Marker',chains=[[dict(bone='MarkerLeft',parent='TipLeft')],[dict(bone='MarkerRight',parent='TipRight')]]))
-result,outputs=scope['extension_bones']({'params':{'groups':groups},'inputs':{'model':'fixture'},'out_dir':str(Path(job['result']).parent)})
+result,outputs=scope['extension_bones']({'params':{'groups':groups,**extra},'inputs':{'model':'fixture'},'out_dir':str(Path(job['result']).parent)})
 scope['np'].linalg.lstsq=original_fit
 scope['tip_plan']=original_plan
 assert result['status']=='applied',result
@@ -169,6 +185,13 @@ if job['params'].get('descendant',False):
  assert arm.data.bones['MarkerLeft'].parent.name=='TipLeft'
  assert arm.data.bones['MarkerRight'].parent.name=='TipRight'
  assert 'Marker' in result['metrics'],result
+elif neutralfail:
+ scope['neutralise_mesh']=original_neutral
+ assert result['metrics']['Tip']=={'status':'failed','mode':'neutralised','reason':'forced neutral failure'},result['metrics']['Tip']
+ assert result['metrics']['Pair'].get('placement') and not result['metrics']['Pair'].get('status'),result['metrics']['Pair']
+ assert {'ExampleLeft','ExampleRight'}<=set(arm.data.bones.keys()) and not {'TipLeft','TipRight'}&set(arm.data.bones.keys())
+ assert len(obj.data.vertices)==len(rest)
+ assert all((v.co-c).length<1e-9 for v,c in zip(obj.data.vertices,rest))
 elif tipfail:
  scope['tip_mesh']=original_mesh
  assert result['metrics']['Tip']=={'status':'failed','reason':'forced tip failure'},result['metrics']['Tip']
@@ -320,7 +343,7 @@ Path(job['result']).write_text(json.dumps({'ok':True,'data':{},'outputs':{}}))
 def main():
     import argparse
     parser=argparse.ArgumentParser()
-    parser.add_argument('--case',choices=['crater','seam','geometry','refusal','descendant','modelled','tall','tipfail'])
+    parser.add_argument('--case',choices=['crater','seam','geometry','refusal','descendant','modelled','tall','tipfail','neutralfail'])
     selected=parser.parse_args().case
     from app.blender import runner
     if not runner.status()['executable']:
@@ -333,7 +356,7 @@ def main():
         (root/'probe.py').write_text(prefix+TIP_PROBE)
         source=runner.SCRIPTS_DIR/'extension_bones.py'
         with patch.object(runner,'SCRIPTS_DIR',root):
-            for label,options in [('crater',{}),('seam',{'seam':True}),('geometry',{'kind':'C'}),('refusal',{'noise':True}),('descendant',{'descendant':True}),('modelled',{'modelled':True}),('tall',{'kind':'C','tall':True}),('tipfail',{'tipfail':True})]:
+            for label,options in [('crater',{}),('seam',{'seam':True}),('geometry',{'kind':'C'}),('refusal',{'noise':True}),('descendant',{'descendant':True}),('modelled',{'modelled':True}),('tall',{'kind':'C','tall':True}),('tipfail',{'tipfail':True}),('neutralfail',{'neutralfail':True})]:
                 if selected and selected!=label: continue
                 result=runner.run('probe',params={'source':str(source),**options},out_dir=root/label,timeout_s=120)
                 assert result['ok'],(label,result)

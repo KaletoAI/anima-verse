@@ -3278,11 +3278,30 @@ def extension_bones(args):
             # offset moves only a part that is on (Ruling A53).
             p = parameters(g)
             sources = pinned[g['depends_on']]
-            if snapshot is None:
-                snapshot = position_snapshot(meshes)
-            centres = [Vector(row['tip']) for row in sources]
-            census[g['id']] = (centres,normal_census(meshes,centres))
-            neutral[g['id']] = neutralise_mesh(meshes,p,sources)
+            # A switched-off tip that cannot be levelled fails alone, like a
+            # switched-on one (Ruling A109; review 03#13): the mesh goes back to
+            # how it was before this group touched it, every other group is built.
+            saved = [mesh.data.copy() for mesh in meshes]
+            fresh = snapshot is None
+            try:
+                if fresh:
+                    snapshot = position_snapshot(meshes)
+                centres = [Vector(row['tip']) for row in sources]
+                census[g['id']] = (centres,normal_census(meshes,centres))
+                neutral[g['id']] = neutralise_mesh(meshes,p,sources)
+            except (ValueError,KeyError,TypeError,IndexError) as e:
+                for mesh,data in zip(meshes,saved):
+                    changed = mesh.data
+                    mesh.data = data
+                    bpy.data.meshes.remove(changed)
+                for store in (census,neutral):
+                    store.pop(g['id'],None)
+                if fresh:
+                    snapshot = None
+                soft[g['id']] = {'status':'failed','mode':'neutralised','reason':str(e)}
+                continue
+            for data in saved:
+                bpy.data.meshes.remove(data)
         if prepared or neutral:
             co,edges,owners,normals,faces = mesh_arrays(meshes)
             plans,failed,malformed = plan_sources(pinned)
