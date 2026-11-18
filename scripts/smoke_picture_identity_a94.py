@@ -22,18 +22,19 @@ Fixtures (template human-roleplay, profile image <name>_1.png, skin olive, eyes 
   ``Bare``       = Beard without a profile image: its front is made from text.
 
 Hand-derived from the ruling (the user: the reference image is the truth; precedent Ruling A29: a view change
-never re-describes what the picture shows) with BALD = "completely bald with a smooth bare scalp", BODY = "an
-unclothed body with the same skin and body surface as the person in the picture, realistic detailed texture,
-natural matte look" (Ruling A111; the human package adds no base-body text):
+never re-describes what the picture shows) with BALD = "completely bald with a smooth bare scalp" and, since
+Ruling A155 (65443b4d4: the picture is the source of face AND body), the identity clause naming "body" as the last
+thing kept and LOOK = "natural matte look" after it — no skin text, no body words, no package body texts; no
+reference post-process is on here, so none adds an edit text:
 
 [1] The Appearance's hair text of Beard is the hair slot's "{length} {color} hair" = "short auburn hair" (the beard
     clause names no \\bhair\\b) — the plain hair text, so hair_from_picture(Beard) True; Rewritten's plain text
     "a shaved undercut" is not "short black hair": False. Facial hair: Beard / BeardDeck True ("beard"), Deck /
     Rewritten False. edit_character:
-      Beard      "the same face, hair and facial hair as the person in the picture, " + BODY   (no "auburn")
-      BeardDeck  BALD + ", the same face and facial hair as the person in the picture, " + BODY
-      Deck       BALD + ", the same face as the person in the picture, " + BODY
-      Rewritten  "a shaved undercut, the same face as the person in the picture, " + BODY
+      Beard      "the same face, hair, facial hair and body as the person in the picture, " + LOOK   (no "auburn")
+      BeardDeck  BALD + ", the same face, facial hair and body as the person in the picture, " + LOOK
+      Deck       BALD + ", the same face and body as the person in the picture, " + LOOK
+      Rewritten  "a shaved undercut, the same face and body as the person in the picture, " + LOOK
 [2] base_prompt(picture=True). VIEW_HAIR = "the same hairstyle, hair length, hair volume and hair colour as the
     reference", BEARD = "the same facial hair as the reference":
       Beard back  = "The same person turned around, seen directly from behind, back view, same A-pose, same
@@ -85,7 +86,8 @@ OUTBOUND = []
 CALLS = []
 
 BALD = "completely bald with a smooth bare scalp"
-BODY = "an unclothed body with the same skin and body surface as the person in the picture, realistic detailed texture, natural matte look"
+#: Ruling A155: the only words after the identity clause of a front edit.
+LOOK = "natural matte look"
 #: The body text of the pinned old code (before Ruling A111).
 OLD_BODY = "an unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin"
 VIEW_HAIR = "the same hairstyle, hair length, hair volume and hair colour as the reference"
@@ -207,10 +209,10 @@ def main() -> int:
         check("facial hair", [base_body.has_facial_hair(n) for n in ("Beard", "BeardDeck", "Deck", "Rewritten")],
               [True, True, False, False])
         blocks = {
-            "Beard": "the same face, hair and facial hair as the person in the picture, " + BODY,
-            "BeardDeck": BALD + ", the same face and facial hair as the person in the picture, " + BODY,
-            "Deck": BALD + ", the same face as the person in the picture, " + BODY,
-            "Rewritten": "a shaved undercut, the same face as the person in the picture, " + BODY,
+            "Beard": "the same face, hair, facial hair and body as the person in the picture, " + LOOK,
+            "BeardDeck": BALD + ", the same face, facial hair and body as the person in the picture, " + LOOK,
+            "Deck": BALD + ", the same face and body as the person in the picture, " + LOOK,
+            "Rewritten": "a shaved undercut, the same face and body as the person in the picture, " + LOOK,
         }
         for name, want in blocks.items():
             check(f"edit block {name}", base_body.edit_character(name), want)
