@@ -105,6 +105,8 @@ export interface ChannelRecord {
   applied: ChannelOverride | null
   /** A BUILT mouth channel (Ruling A203): the opening's height in metres with the morph `mouth_open` at 1. */
   open_height?: number
+  /** The same mouth with teeth (Ruling A206): the free height between the incisal edges at `mouth_open` 1. */
+  teeth_gap?: number
 }
 
 /** The `collision` payload (model meta / model3d info). */

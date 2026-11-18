@@ -207,7 +207,7 @@ export { CHANNEL_BLEND_S, CHANNEL_HYST_M, CHANNEL_HYST_DEG, CHANNEL_GROW, channe
 export type { ChannelNow, Engagement } from './channels'
 export { OPENING_MARGIN_M, OPENING_FALLOFF_M, OPENING_SKIP_M, OPENING_SKIP_DEG, OPENING_BAND_M, OPENING_BAND_K, OPENING_SLACK_M, OPENING_POSE_SLACK_M, openingBand,
   openedDistance, openingWeight, openingCandidates, openingDisplacement, displaceInto, channelOpening, openingReach,
-  bindChannelOpening } from './channelOpening'
+  bindChannelOpening, MOUTH_TEETH_MATERIAL, isRigidTeeth } from './channelOpening'
 export type { OpeningSegment, OpeningOptions, ChannelOpeningBinding } from './channelOpening'
 
 export { PROBE_NAME, PROBE_COLOR, probeCapsules, probeSweepOffset, probeSweptPose, probeSnapshot } from './partnerProbe'
@@ -245,7 +245,7 @@ export type { FootPlantOptions } from './footPlant'
 // The per-figure runtime of the two-phase frame (Ruling A110): client3d's `Figure` wraps it, the Game-Admin
 // place preview drives it directly — one frame order, one secondary motion, one partner pass.
 export { FigureRuntime, createFigureRuntime } from './figureRuntime'
-export { MOUTH_OPEN_TARGET, MOUTH_OPEN_MARGIN_M, JAW_BONE, JAW_OPEN_DEG, bindMouthOpen, mouthOpenFor } from './mouthOpen'
+export { MOUTH_OPEN_TARGET, MOUTH_OPEN_MARGIN_M, JAW_BONE, JAW_OPEN_DEG, bindMouthOpen, mouthOpenFor, mouthPassHeight } from './mouthOpen'
 export type { MouthOpen } from './mouthOpen'
 export { bindPoseShapes, poseShapeInfluences, validPoseShapeGroup, validPoseShapes } from './poseShapes'
 export type { PoseShapeGroup, PoseShapes, PoseShapesPayload, PoseShapeSample } from './poseShapes'

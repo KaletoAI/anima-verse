@@ -32,6 +32,9 @@
  *   binding of the mesh is disposed — never the template. Candidates of two channels are disjoint in practice; a
  *   shared vertex takes the displacement of the binding that applied last.
  *
+ * - THE TEETH (Ruling A206) are rigid: a mesh whose material is `MOUTH_TEETH_MATERIAL` (teeth and gums of a built
+ *   mouth) is never bound — a part pushes the lips and the tongue (its own material, `mouth_tongue`), never a tooth.
+ *
  * A push of at most 1 µm counts as none (float noise).
  *
  * `three` is injected, never imported; the rule itself is pure.
@@ -60,6 +63,16 @@ export const OPENING_POSE_SLACK_M = 0.01
 /** One segment of the occupant: the axis a → b and its radius r (world). */
 export interface OpeningSegment { a: Vec3; b: Vec3; r: number }
 export interface OpeningOptions { margin?: number; falloff?: number; band?: number }
+
+/** The material of a built mouth's teeth and gums (`mouth_teeth.py`): never displaced by an opening. */
+export const MOUTH_TEETH_MATERIAL = 'mouth_teeth'
+
+/** Whether `mesh` is a built mouth's rigid teeth (its material, or every one of its materials, is
+ *  `MOUTH_TEETH_MATERIAL`; three appends `.001` … to a duplicate name, so only the base name counts). */
+export function isRigidTeeth(mesh: { material?: { name?: string } | readonly { name?: string }[] | null }): boolean {
+  const list = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : []
+  return list.length > 0 && list.every(m => (m?.name ?? '').split('.')[0] === MOUTH_TEETH_MATERIAL)
+}
 
 /** A102b: an opening is recomputed only when its inputs moved more than this (metres) … */
 export const OPENING_SKIP_M = 0.001
@@ -301,7 +314,8 @@ export function bindChannelOpening(three: Three, root: Object3D, ch: ChannelNow,
   const meshes: SkinnedMesh[] = []
   root.traverse(o => {
     const mesh = o as SkinnedMesh
-    if (mesh.isSkinnedMesh && mesh.skeleton && !inGarment(mesh) && mesh.geometry?.attributes?.position) meshes.push(mesh)
+    if (mesh.isSkinnedMesh && mesh.skeleton && !inGarment(mesh) && !isRigidTeeth(mesh as unknown as Parameters<typeof isRigidTeeth>[0])
+      && mesh.geometry?.attributes?.position) meshes.push(mesh)
   })
   const v = new three.Vector3()
   const entries: MeshEntry[] = []

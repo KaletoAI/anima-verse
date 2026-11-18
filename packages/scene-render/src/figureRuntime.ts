@@ -39,7 +39,7 @@ import type { SecondaryMotion, SecondaryMotionPayload } from './secondaryMotion'
 import { createGarmentCollision } from './garmentCollision'
 import type { GarmentCollision } from './garmentCollision'
 import { bindPoseShapes } from './poseShapes'
-import { bindMouthOpen, mouthOpenFor } from './mouthOpen'
+import { bindMouthOpen, mouthOpenFor, mouthPassHeight } from './mouthOpen'
 import type { MouthOpen } from './mouthOpen'
 import { MOUTH_CHANNEL_ID } from './contactTarget'
 import type { PoseShapes } from './poseShapes'
@@ -322,7 +322,8 @@ export class FigureRuntime {
   }
 
   /** Ruling A203: the chains engaged in this figure's mouth channel open the mouth as far as the thickest of them
-   *  needs (`mouthOpenFor` with the built channel's `open_height`); none = back to the manual value. */
+   *  needs (`mouthOpenFor` with the built channel's `mouthPassHeight`: its `teeth_gap` when it has teeth, Ruling
+   *  A206, else `open_height`); none = back to the manual value. */
   private driveMouth(occupants: readonly { channel: string; w: number; segments: readonly OpeningSegment[] }[]): void {
     const mouth = this.mouthNow()
     if (!mouth) return
@@ -331,7 +332,7 @@ export class FigureRuntime {
       if (occ.channel !== MOUTH_CHANNEL_ID) continue
       for (const seg of occ.segments) radius = Math.max(radius, seg.r * occ.w)
     }
-    const height = this.collisionPayload?.channels?.find(c => c.id === MOUTH_CHANNEL_ID)?.open_height ?? 0
+    const height = mouthPassHeight(this.collisionPayload?.channels?.find(c => c.id === MOUTH_CHANNEL_ID))
     mouth.setContact(mouthOpenFor(radius, height))
   }
 

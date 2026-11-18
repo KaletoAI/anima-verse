@@ -17,8 +17,10 @@
  *   `mouthOpenFor(radius, openHeight)` = (2 · radius + `MOUTH_OPEN_MARGIN_M`) / openHeight, clamped to [0, 1], with
  *   `radius` the occupant's largest segment radius × its engagement weight w (the same value the opening pass
  *   widens the surface to, `channelOpening.ts`) and `openHeight` the height of the opening at `mouth_open` 1 as the
- *   build measured it (the channel record's `open_height`). The surface pass still runs on top and shapes the lips
- *   around the part.
+ *   build measured it (the channel record's `open_height`). A body with TEETH (Ruling A206) passes `teeth_gap`
+ *   instead — the free height between the incisal edges at the same opening, which is smaller — so the mouth opens
+ *   far enough that the part clears the teeth (`mouthPassHeight`). The surface pass still runs on top and shapes
+ *   the lips around the part; it leaves the rigid teeth alone (`channelOpening.ts`).
  * - MANUAL: `setManual` (a preview slider, an expression) — the larger of the two applies.
  *
  * `bindMouthOpen` finds every skinned mesh of an instance that carries the target and the jaw bone of its skeleton;
@@ -32,9 +34,18 @@ import { normBoneName } from './clipRetarget'
 export const MOUTH_OPEN_TARGET = 'mouth_open'
 /** The jaw bone's name by `normBoneName`, and its full angle when the bone carries none (degrees). */
 export const JAW_BONE = 'jaw'
-export const JAW_OPEN_DEG = 26
+export const JAW_OPEN_DEG = 30
 /** Room around an entering part: the opening's height is its diameter plus this (metres). */
 export const MOUTH_OPEN_MARGIN_M = 0.004
+
+/** The height a part must pass with the mouth fully open: the free height between the teeth (`teeth_gap`, Ruling
+ *  A206) when the body has teeth, else the lips' opening (`open_height`); 0 without either. */
+export function mouthPassHeight(channel: { open_height?: number; teeth_gap?: number } | null | undefined): number {
+  const gap = channel?.teeth_gap
+  if (typeof gap === 'number' && gap > 0) return gap
+  const height = channel?.open_height
+  return typeof height === 'number' && height > 0 ? height : 0
+}
 
 /** How far the mouth must open for a part of `radius` (metres) when the fully open mouth is `openHeight` high. */
 export function mouthOpenFor(radius: number, openHeight: number): number {

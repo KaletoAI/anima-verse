@@ -23,7 +23,7 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   footPoseMatches, transplantedRestPose, measureClipGround, clipGroundOffset, plantFootPose,
   seatFootLift, createStrandHair, withoutHairGroups, bindCollision, inGarment, transformPoint, linearScale, capsuleWireframe,
   placeCapsuleWireframe, consumerPartnerCapsules, probeCapsules, probeSweepOffset, probeSweptPose, probeSnapshot,
-  PROBE_COLOR, CAPSULE_REGION_COLORS, CHANNEL_GROW, bindChannels, bindMouthOpen, mouthOpenFor, MOUTH_CHANNEL_ID, channelCoords, channelWireframe, guideRod, inZone,
+  PROBE_COLOR, CAPSULE_REGION_COLORS, CHANNEL_GROW, bindChannels, bindMouthOpen, mouthOpenFor, mouthPassHeight, MOUTH_CHANNEL_ID, channelCoords, channelWireframe, guideRod, inZone,
   placeChannelWireframe, stepEngagement, bindChannelOpening, OPENING_MARGIN_M, OPENING_FALLOFF_M,
   OPENING_BAND_M, OPENING_SLACK_M, bindPoseShapes, prepareSheerPieces } from '@anima/scene-render'
 import type { PoseShapes, SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm,
@@ -1832,7 +1832,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             }
             // Ruling A203: a rod in the built mouth opens the mouth as far as its thickness needs.
             mouth?.setContact(target.id === MOUTH_CHANNEL_ID ? mouthOpenFor(rod.radius * rodEngagement.w,
-              channelsFor?.channels?.find(entry => entry.id === MOUTH_CHANNEL_ID)?.open_height ?? 0) : 0)
+              mouthPassHeight(channelsFor?.channels?.find(entry => entry.id === MOUTH_CHANNEL_ID))) : 0)
             const segments: OpeningSegment[] = []
             for (let i = 0; i < links; i++) segments.push({ a: guided.joints[i], b: guided.joints[i + 1], r: rod.radius * metre })
             const opened = opening ? opening.apply(target, segments, { margin: OPENING_MARGIN_M * metre,
