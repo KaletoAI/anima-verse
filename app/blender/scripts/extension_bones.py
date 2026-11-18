@@ -1035,7 +1035,10 @@ def subdivide_where(mesh, passes, vectorised=False):
             selected = [e for e in bm.edges if accept(mesh.matrix_world@((e.verts[0].co+e.verts[1].co)/2))]
         if selected:
             bmesh.ops.subdivide_edges(bm,edges=selected,cuts=1,use_grid_fill=True,smooth=0.)
-            bmesh.ops.triangulate(bm,faces=[f for f in bm.faces if len(f.verts)>4])
+            # every face with more than 3 corners (A199, review 03#8): a rim triangle with one cut edge becomes
+            # a quad (A, M, B, C) whose corners A, M, B lie on a line — a zero-area triangle once exported, and a
+            # sliver folded over (A, B, C) when the levelling moves M off that line
+            bmesh.ops.triangulate(bm,faces=[f for f in bm.faces if len(f.verts)>3])
     deform = bm.verts.layers.deform.active
     deform_names = {bone.name for modifier in mesh.modifiers if modifier.type=='ARMATURE' and modifier.object
                     for bone in modifier.object.data.bones if bone.use_deform}
