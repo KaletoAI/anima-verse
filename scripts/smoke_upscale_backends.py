@@ -265,7 +265,8 @@ def main():
             part = {'image_generation': {'backends': entries, 'routing': rules}}
             config.save_part(config_scope.INSTANCE, part)
             config.load(world_config, instance_path=instance_config)
-            assert config.get('image_generation.routing') == rules
+            # The shipped routing carries the creature rig chain (62c7b7b51); it reads back beside the saved rules.
+            assert config.get('image_generation.routing') == {'rig_creature': ['quadruped-local'], **rules}
             expected = ['Iris-3B-Upscale', 'Real-ESRGAN-CPU'] if 'upscale' not in rules else rules['upscale']
             assert routing._rules('upscale') == expected
         assert not _validate_image_routing({'backends': entries, 'routing': {'upscale': ['configured-cpu']}})[0]

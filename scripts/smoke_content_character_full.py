@@ -58,10 +58,13 @@ Expectations, derived by hand from the seed above:
       files_imported      == 8      (all eight files, none skipped)
       every seeded file is back on disk with its original bytes, INCLUDING
       low/<SIG>.glb — the tier subdirectory is recreated, not flattened.
-      find_model3d_serving_tier(name, "low") resolves to that file, i.e. the
-      model store finds the imported tier, not just the raw bytes. It returns
-      (path, match, tier); tier == "low" is the load-bearing part — a missing
-      tier would silently fall back to "full".
+      tier_variant(<model3d>/<SIG>.glb, "low") resolves to that file, i.e. the
+      model store finds the imported tier, not just the raw bytes; a missing
+      tier would be None. (Not find_model3d_serving_tier any more: since
+      Ruling A119 / b25bbbe39 a humanoid is on the base-body pipeline, where
+      the serving chain never serves a stored model of another figure — the
+      seeded outfit model is not served, by design. The tier lookup it ends in
+      is tier_variant.)
   [3] Import into a SECOND, empty storage (a different world): the character
       arrives with its models from nothing but the ZIP. This is the case the
       export exists for; step 2 alone could pass on leftovers.
@@ -91,7 +94,7 @@ db.init_schema()
 from app.core.character_io import (  # noqa: E402
     export_character_to_zip, import_character_from_zip)
 from app.core.model3d import (  # noqa: E402
-    LOW_TIER, find_model3d_serving_tier, get_model3d_dir, tier_dir)
+    LOW_TIER, get_model3d_dir, tier_dir, tier_variant)
 from app.models.character import (  # noqa: E402
     get_character_dir, get_character_profile, save_character_profile)
 
@@ -214,10 +217,11 @@ for rel, expected in SEED_BYTES.items():
 check("the sidecar is back too",
       json.loads((mdir_after / f"{SIG}.json").read_text(encoding="utf-8"))["signature"],
       SIG)
-low_path, _low_match, low_tier = find_model3d_serving_tier(NAME, LOW_TIER)
+low_path = tier_variant(mdir_after / f"{SIG}.glb", LOW_TIER)
 check("the model store finds the imported low tier",
-      (low_path.name if low_path else None, low_tier, read_bytes(low_path)),
-      (f"{SIG}.glb", LOW_TIER, b"GLB-low"))
+      (low_path.parent.name if low_path else None, low_path.name if low_path else None,
+       read_bytes(low_path) if low_path else None),
+      (LOW_TIER, f"{SIG}.glb", b"GLB-low"))
 check("the profile survived the wipe+restore",
       (get_character_profile(NAME) or {}).get("height"), 170)
 
@@ -247,10 +251,10 @@ check("the new dir is really the second storage",
 for rel, expected in SEED_BYTES.items():
     check(f"arrived in the foreign world: {rel}",
           read_bytes(char_dir_b / rel), expected)
-low_path_b, _low_match_b, low_tier_b = find_model3d_serving_tier(NAME, LOW_TIER)
+low_path_b = tier_variant(get_model3d_dir(NAME) / f"{SIG}.glb", LOW_TIER)
 check("low tier resolves in the foreign world",
-      (low_path_b.name if low_path_b else None, low_tier_b,
-       read_bytes(low_path_b)), (f"{SIG}.glb", LOW_TIER, b"GLB-low"))
+      (low_path_b.parent.name if low_path_b else None, low_path_b.name if low_path_b else None,
+       read_bytes(low_path_b) if low_path_b else None), (LOW_TIER, f"{SIG}.glb", b"GLB-low"))
 check("the profile arrived", (get_character_profile(NAME) or {}).get("height"), 170)
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")

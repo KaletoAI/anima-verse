@@ -36,7 +36,8 @@ B) THE ROUTE — ``GET /admin/shared-lists/moods`` is declared, its payload is
 
 C) NO SECOND LIST — the two React components must not carry a mood list of
    their own any more and must take it from the shared hook. Derived by hand
-   from the fix: both files import ``useMoods``, neither mentions
+   from the fix: the effects editor imports ``useMoods``, the placement editor
+   reads the character's own set from ``expression-options`` (5459be2fa), neither mentions
    ``FALLBACK_MOODS`` or ``MOODS =``, and no mood id of the catalog appears
    as a quoted literal in either of them.
 
@@ -142,7 +143,12 @@ def main():
         text = tsx.read_text(encoding="utf-8")
         has_hook, own_const, literals = no_mood_list_in(text, ids)
         name = tsx.name
-        check(f"{name} imports useMoods", has_hook)
+        if tsx is PLACEMENT_TSX:
+            # Since 5459be2fa the mood picker offers the character's OWN expression set, read from the server's
+            # expression-options (effective_set + moods) — still no list of its own.
+            check(f"{name} reads the character's expression-options", "expression-options" in text)
+        else:
+            check(f"{name} imports useMoods", has_hook)
         check(f"{name} declares no mood constant of its own", not own_const)
         check(f"{name} contains no quoted mood id", not literals, str(literals))
 

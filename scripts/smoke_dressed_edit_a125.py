@@ -28,7 +28,10 @@ Expected, by hand:
     (200, 160, 130); require_reference True;
     extra_reference_images = one file whose pixels are OUTFIT's; extra_reference_prompt = EDIT_SECOND_PICTURE with
     ", as it looks from behind"; image_use_case "outfit_edit"; crop_back_to (208, (54, 4), (100, 200)); sidecar
-    draft_method "base_edit". Without ``second``: no extra picture and no sentence.
+    = the caller's extra plus ``second_picture`` = the outfit picture's name ({"k": 1, "second_picture":
+    "outfit.png"}) — ``draft_method`` "base_edit" is the CALLER's tag (``_dress_view`` passes it in its
+    sidecar_extra; render_view_edit never added it, not even in the commit that added this smoke, so the old
+    check of it here could not pass). Without ``second``: no extra picture and no sentence.
 [5] ``view_composite.compose(BASE, EDIT, base_alpha=True)``. EDIT = BASE with a garment: rows 90..129 of the figure
     painted (30, 40, 160) AND widened to columns 34..65 (a flare outside the base silhouette). Then:
     - alpha of the result == BASE alpha at every pixel (byte-identical);
@@ -183,7 +186,8 @@ def main():
         check("[4] use case outfit_edit, prompt kept", c["image_use_case"] == "outfit_edit"
               and c["bare_prompt"] == prompt[0] and c["extra_negative"] == "neg")
         check("[4] crop back", c["crop_back_to"] == (208, (54, 4), (100, 200)), c["crop_back_to"])
-        check("[4] sidecar method", c["sidecar_extra"].get("draft_method") == "base_edit")
+        check("[4] sidecar = the caller's extra + the second picture's name",
+              c["sidecar_extra"] == {"k": 1, "second_picture": "outfit.png"}, c["sidecar_extra"])
         check("[4] without a second picture", calls[1]["extra_reference_images"] == []
               and calls[1]["extra_reference_prompt"] == "")
 

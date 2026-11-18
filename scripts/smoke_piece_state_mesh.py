@@ -226,8 +226,11 @@ def main() -> int:
         check("back draft open", ("worn open" in back_text, back_text == closed_back), (False, True))
         closed_text = garment_clothing.edit_prompt("Demo", "worn", "front", profile=prof(), item_id=jacket)
         closed_text = closed_text[0] if isinstance(closed_text, tuple) else closed_text
-        check("closed says no state (A7)",
-              any(w in t for t in (closed_text, closed_back) for w in ("worn open", "worn closed")), False)
+        # Ruling A147 (c7db503a6) replaced A7's silence for the FRONT: a closable piece worn closed says so
+        # (WORN_CLOSED) and never the open words; the back still says no state.
+        check("closed front says closed (A147), never open; the back says no state",
+              (garment_clothing.WORN_CLOSED in closed_text, "worn open" in closed_text,
+               any(w in closed_back for w in ("worn open", "worn closed"))), (True, False, False))
 
         # --- [3] fits ----------------------------------------------------------------------------------------
         print("[3] fits")

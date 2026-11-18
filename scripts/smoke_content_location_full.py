@@ -288,9 +288,7 @@ action_document["actions"] = [{"id": "location-sit", "name": "Sit", "description
     "interrupt_on_presence_change": False, "phases": [], "requirements": [], "effects": []}]
 action_variant = action_document["model_variants"][0]
 action_variant["markers"] = [{"id": "seat", "group": "seat", "at": [.5, .5, .5], "facing": 0}]
-action_variant["action_bindings"] = [{"action_id": "location-sit", "variant_uid": action_variant["uid"],
-    "supported": True, "marker_ids": ["seat"], "access_points": {"actor": {"x": 0, "z": .75, "yaw": 180}},
-    "validation": "local_valid"}]
+# No action_bindings: since 705f52f6f they are derived from the markers + actions, never stored in the sidecar.
 prop_store._write_sidecar(prop_id, action_document)
 
 data = _load_world_data()
@@ -583,10 +581,8 @@ OAK_ACTIONS = [{"id": "oakobserve", "name": "Observe", "description": "", "enabl
 oak_document["actions"] = OAK_ACTIONS
 for variant in oak_document["model_variants"]:
     variant["markers"] = [{"id": "observe", "group": "stand", "at": [.5, .5, .5], "facing": 0}]
-    variant["action_bindings"] = [{"action_id": "oakobserve", "variant_uid": variant["uid"],
-        "supported": True, "marker_ids": ["observe"],
-        "access_points": {"actor": {"x": 0, "z": 1.5, "yaw": 180}}, "validation": "local_valid"}]
-OAK_BINDINGS = [v["action_bindings"] for v in oak_document["model_variants"]]
+# The bindings are derived from these markers (705f52f6f): the markers are what an export must carry.
+OAK_MARKERS = [v["markers"] for v in oak_document["model_variants"]]
 prop_store._write_sidecar(OAK, oak_document)
 check("Varianten-Meshzuordnung und Dimensionen wie erwartet",
       [{key: v[key] for key in ("stem", "active", *OAK_DIMS)}
@@ -784,8 +780,10 @@ check("Varianten-Meshzuordnung und Dimensionen wiederhergestellt",
 check("stabile Varianten-UUIDs wiederhergestellt",
       [v["uid"] for v in restored_oak["model_variants"]], OAK_UIDS)
 check("Handlungen wiederhergestellt", restored_oak["actions"], OAK_ACTIONS)
-check("Varianten-Bindings samt IDs und Zugang wiederhergestellt",
-      [v["action_bindings"] for v in restored_oak["model_variants"]], OAK_BINDINGS)
+check("variant markers (the source of the derived bindings) restored",
+      [v["markers"] for v in restored_oak["model_variants"]], OAK_MARKERS)
+check("no stored bindings (derived since 705f52f6f)",
+      ["action_bindings" in v for v in restored_oak["model_variants"]], [False, False])
 check("Selection inkl. __none__-Sentinel wiederhergestellt",
       read_json(odir / "selection.json"), OAK_SELECTION)
 check("Variante 0 Mesh", read_bytes(odir / "model_1.glb"), b"GLB-oak-full")

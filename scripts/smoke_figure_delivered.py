@@ -41,31 +41,37 @@ first 8 / 12 hex of sha256 — the rules of ``scripts/smoke_figure_keys.py``):
        BSIG, base_variant rigged, hair_in_body True, side_views False,
        dress_text {front/back: "wear:coat"}})             = "ob82e8f156"
   S2 = shape of {blouse, coat}    = same with "wear:blouse+coat" = "oba82e1f92"
+  Every texture key carries the painted pieces' paint_region (Ruling A127, 9df0b744a):
+  PR(slots) = {version 1, regions sorted(union of paint_region.SLOT_REGIONS[slot]), margin_mm 40};
+  top -> [forearm, shoulder, spine, upper_arm]; + bottom -> + [hips, lower_leg, upper_leg];
+  + outer -> + [hips, upper_leg].
   T(S, blouse)            = "tex" + h12({version 1, shape S, base_variant
-       rigged, dress_text {front/back: "wear:blouse"}})   = "texe57feda37703"
-  T(S, blouse+trousers)   = same with "wear:blouse+trousers" = "tex72b75ed8d6e3"
+       rigged, dress_text {front/back: "wear:blouse"}, paint_region PR(top)})
+                                                           = "tex78dbfeffc168"
+  T(S, blouse+trousers)   = same with "wear:blouse+trousers", PR(top, bottom) = "texe6d7593832c8"
   T(plain, blouse+coat)   = today's tsig: "tex" + h12({version 1,
        base_signature BSIG, base_variant rigged, side_views False,
-       dress_text {front/back: "wear:blouse+coat"}})     = "tex06c6eeeaa12a"
-  T(plain, blouse)        = the same rule with "wear:blouse"    = "texf4d3f232056c"
+       dress_text {front/back: "wear:blouse+coat"}, paint_region PR(top, outer)})
+                                                           = "tex162ae74891b8"
+  T(plain, blouse)        = the same rule with "wear:blouse", PR(top) = "texb271d38ed2aa"
   (computed in [2] from that dict with hashlib — not by the code under test).
 
 Expected, derived by hand from the brief's delivered rule:
 
 [1] All built: S stored, trousers fit on S (base fit + body fit), hair body,
     base haired -> delivered == wanted: shape S, texture T(S, blouse) =
-    "texe57feda37703", in_body (coat,), painted (blouse,), own (trousers,),
+    "tex78dbfeffc168", in_body (coat,), painted (blouse,), own (trousers,),
     no interim, no left_out, hair "body".
 [2] S not stored -> Ruling A119: the newest body is the plain body; the
     in-body coat is LEFT OFF (never painted meanwhile): shape BSIG, in_body
     (), painted (blouse,), own (trousers,) (its base fit is the fit on the
     plain body), left_out {coat: "Body shape not built"}, texture
-    T(plain, blouse) = "texf4d3f232056c" (coat and trousers out of the text).
+    T(plain, blouse) = "texb271d38ed2aa" (coat and trousers out of the text).
 [3] S stored, trousers WITHOUT a fit on S (base fit yes, body fit refused):
     Ruling A119 (was: an interim shape S3 with the trousers in the body) ->
     the trousers are left off: shape S, in_body (coat,), painted (blouse,),
     own (), left_out {trousers: "Fit refused — refused — stub"}, fit_refused
-    {trousers: "refused — stub"}, texture T(S, blouse) = "texe57feda37703".
+    {trousers: "refused — stub"}, texture T(S, blouse) = "tex78dbfeffc168".
     Branch False (S2 stored too, refused there as well) -> shape S2,
     in_body (blouse, coat), notes {blouse: "In the body here: painting needs
     the plain body"}, left_out {trousers: …}, painted (), texture "".
@@ -199,7 +205,7 @@ def main() -> int:
         wanted, got = both(profile())
         check("delivered == wanted", got, wanted)
         check("shape", got.shape, S)
-        check("texture", got.texture, "texe57feda37703")
+        check("texture", got.texture, "tex78dbfeffc168")
         check("in_body / painted / own", (got.in_body, got.painted, got.own), (("coat",), ("blouse",), ("trousers",)))
         check("no left_out / notes", (got.left_out, got.notes), ({}, {}))
         check("hair", got.hair, "body")
@@ -214,16 +220,18 @@ def main() -> int:
         import hashlib
         import json as _json
         plain = {"version": 1, "base_signature": BSIG, "base_variant": "rigged", "side_views": False,
-                 "dress_text": {"front": "wear:blouse", "back": "wear:blouse"}}
+                 "dress_text": {"front": "wear:blouse", "back": "wear:blouse"},
+                 "paint_region": {"version": 1, "regions": ["forearm", "shoulder", "spine", "upper_arm"],
+                                  "margin_mm": 40}}
         by_hand = "tex" + hashlib.sha256(_json.dumps(plain, sort_keys=True, separators=(",", ":"),
                                                       ensure_ascii=False).encode()).hexdigest()[:12]
-        check("T(plain, blouse) by hand", by_hand, "texf4d3f232056c")
+        check("T(plain, blouse) by hand", by_hand, "texb271d38ed2aa")
         check("shape = plain body", got.shape, BSIG)
         check("painted", got.painted, ("blouse",))
         check("in_body", got.in_body, ())
         check("left_out", got.left_out, {"coat": "Body shape not built"})
         check("own (base fit on the plain body)", got.own, ("trousers",))
-        check("texture = T(plain, blouse)", got.texture, "texf4d3f232056c")
+        check("texture = T(plain, blouse)", got.texture, "texb271d38ed2aa")
         check("the wanted shape is still S", figure.wanted_figure("Demo", profile=profile()).shape, S)
 
         print("[3] trousers without a fit on S: left off (A119)")
@@ -236,7 +244,7 @@ def main() -> int:
         check("True: own", got.own, ())
         check("True: left_out", got.left_out, {"trousers": "Fit refused — refused — stub"})
         check("True: fit_refused", got.fit_refused, {"trousers": "refused — stub"})
-        check("True: texture", got.texture, "texe57feda37703")
+        check("True: texture", got.texture, "tex78dbfeffc168")
         figure.PAINT_ON_SHAPE = False
         try:
             wanted, got = both(profile())
@@ -269,7 +277,7 @@ def main() -> int:
             check(f"{flag}: trousers grafted", got.own, ("trousers",))
             if flag:
                 check("True: shape S", got.shape, S)
-                check("True: texture", got.texture, "texe57feda37703")
+                check("True: texture", got.texture, "tex78dbfeffc168")
             else:
                 check("False: shape S2", got.shape, S2)
 

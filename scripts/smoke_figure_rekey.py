@@ -40,7 +40,9 @@ EXPECTED, BY HAND
   O1) (the build's variant of a dressed combination), H = garment_hair.hair_in_body(Kai) — both read from the code
   as INPUTS of the fixture, not under test.
   TK (plain body, figure.texture_key = today's tsig): "tex" + sha256(canonical {"version": 1, "base_signature":
-  bsigK, "base_variant": VK, "side_views": false, "dress_text": {"front": "wear:shirt", "back": "wear:shirt"}})[:12].
+  bsigK, "base_variant": VK, "side_views": false, "dress_text": {"front": "wear:shirt", "back": "wear:shirt"},
+  "paint_region": {"version": 1, "regions": ["forearm", "shoulder", "spine", "upper_arm"], "margin_mm": 40}})[:12]
+  — the paint_region of the painted shirt's slot top (Ruling A127, 9df0b744a: paint_region.SLOT_REGIONS["top"]).
 [1] worn_sets(Kai, O1): in_body (blouse, coat), painted (). K = the hand key; figure.shape_key agrees.
     rekey_bodies_once() = {Kai: {OLD: K, OLD2: "stale", OLD3: "stale", OLD4: "stale"}} (Kira has no body):
     OLD matches (base, in_body, variant V1, text "wear:coat+blouse" both views); OLD2: shirt is painted, nothing in
@@ -265,7 +267,9 @@ def main() -> int:
         VK = base_body.outfit_variant("Kira", O2)
         TK = "tex" + hashlib.sha256(canonical({"version": 1, "base_signature": bsigK, "base_variant": VK,
                                                "side_views": False, "dress_text": {"front": "wear:shirt",
-                                                                                   "back": "wear:shirt"}})).hexdigest()[:12]
+                                                                                   "back": "wear:shirt"},
+                                               "paint_region": {"version": 1, "margin_mm": 40, "regions": [
+                                                   "forearm", "shoulder", "spine", "upper_arm"]}})).hexdigest()[:12]
         sigK = sig_of("Kira", O2)
         front_refs(kdir, sigK, O2, "Kira")
         store(kdir, TK, "wear:shirt", bsigK)

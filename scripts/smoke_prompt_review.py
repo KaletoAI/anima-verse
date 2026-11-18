@@ -67,12 +67,8 @@ written, 1-based, split on whitespace).
     starts "Remove the person completely,", "position" is word 13 ("Remove
     the person completely, leaving only the clothes in the exact same" is 12
     words) of 44 (23 up to "mannequin." + 21 in the second sentence), no
-    "{" slot and no "no " in it; garment_hair._GHOST["front"]
-    starts "Keep the hair exactly as it is: the same position, outer outline,
-    width", contains neither "inner side" nor "no "; the back ends "seen
-    from behind.". garment_hair.length insertion: the front with length_t ->
-    "Keep the hair exactly as it is: …, the same background. The hair ends
-    <where>. Remove the person …" (sentence 2).
+    "{" slot and no "no " in it. (The hair ghost prompts went with the hair
+    edit chain in 8f4f306c9.)
 [8] Face view: the face_view style is "" in both families;
     FACE_VIEW_PROMPT_DEFAULT is at most 90 words, "completely bald" starts at
     word 16 ("a realistic 3D portrait of the head only of the same person as
@@ -236,15 +232,7 @@ def main() -> int:
               (ghost.startswith("Remove the person completely,"), word_at(ghost, "position"), len(words(ghost)),
                "{" in ghost), (True, 13, 44, False))
         check("no negation", "no " in ghost, False)
-        from app.core import garment_hair
-        front, back = garment_hair._GHOST["front"], garment_hair._GHOST["back"]
-        check("hair front opening",
-              front.startswith("Keep the hair exactly as it is: the same position, outer outline, width"), True)
-        check("hair front: no inner side, no negation", ("inner side" in front, "no " in front), (False, False))
-        check("hair back ends seen from behind", back.endswith("seen from behind."), True)
-        keep, rest = front.split(". ", 1)
-        check("length sentence slot", keep.endswith("the same background") and rest.startswith("Remove the person"),
-              True)
+        # The hair ghost prompts (garment_hair._GHOST) went with the hair edit chain in 8f4f306c9.
 
         print("[8] face view")
         for fam in ("qwen", "z_image"):

@@ -154,11 +154,9 @@ meta["model_variants"][1]["seasons"] = ["Winter"]
 meta["actions"] = [{"id": "barrel-rest", "name": "Rest", "description": "", "enabled": False,
     "ability": "pose", "pose_key": "sitting", "participants": 1, "presence": "any",
     "interrupt_on_presence_change": False, "phases": [], "requirements": [], "effects": []}]
+# No action_bindings: since 705f52f6f they are derived from the markers + actions, never stored in the sidecar.
 for variant in meta["model_variants"]:
     variant["markers"] = [{"id": "rest", "group": "seat", "at": [.5, .5, .5], "facing": 0}]
-    variant["action_bindings"] = [{"action_id": "barrel-rest", "variant_uid": variant["uid"],
-        "supported": True, "marker_ids": ["rest"], "access_points": {"actor": {"x": 0, "z": .8, "yaw": 180}},
-        "validation": "local_valid"}]
 props._write_sidecar(barrel, meta)
 bd = props._prop_dir(barrel)
 put(bd / "model_100.glb", b"GLB-full")
@@ -255,9 +253,11 @@ print("\n[5] roundtrip: the copy reads the same as the original")
 res = import_prop_from_zip(barrel_zip, overwrite=True)
 check("prop import status", res.get("status"), "success")
 check("slim action definitions survive", props.read_sidecar(barrel)["actions"], meta["actions"])
-check("slim stable bindings survive", [
-    v["action_bindings"] for v in props.read_sidecar(barrel)["model_variants"]],
-    [v["action_bindings"] for v in meta["model_variants"]])
+check("the markers the bindings are derived from survive", [
+    v["markers"] for v in props.read_sidecar(barrel)["model_variants"]],
+    [v["markers"] for v in meta["model_variants"]])
+check("no stored bindings (derived since 705f52f6f)", [
+    "action_bindings" in v for v in props.read_sidecar(barrel)["model_variants"]], [False, False])
 on_disk = sorted(p.relative_to(bd).as_posix() for p in bd.rglob("*") if p.is_file())
 check("prop dir after import", on_disk, BARREL_EXPECTED)
 check("LOW still answers the PARENT's rotation",

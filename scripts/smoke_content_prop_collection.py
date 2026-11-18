@@ -215,14 +215,13 @@ PID = prop["id"]
 PROP_DIR = _prop_dir(PID)
 from app.core import props as prop_store
 document = prop_store.read_sidecar(PID)
-document["actions"] = [{"id": "pack-sit", "name": "Sit", "description": "", "enabled": True,
+# An author action: its id must not start with "pack-", reserved for package actions since 106be6a36.
+document["actions"] = [{"id": "oak-sit", "name": "Sit", "description": "", "enabled": True,
     "ability": "pose", "pose_key": "sitting", "participants": 1, "presence": "any",
     "interrupt_on_presence_change": False, "phases": [], "requirements": [], "effects": []}]
 variant = document["model_variants"][0]
 variant["markers"] = [{"id": "seat", "group": "seat", "at": [.5, .5, .5], "facing": 0}]
-variant["action_bindings"] = [{"action_id": "pack-sit", "variant_uid": variant["uid"],
-    "supported": True, "marker_ids": ["seat"], "access_points": {"actor": {"x": 0, "z": .75, "yaw": 180}},
-    "validation": "local_valid"}]
+# No action_bindings: since 705f52f6f they are derived from the markers + actions, never stored in the sidecar.
 prop_store._write_sidecar(PID, document)
 SEED_FILES = {
     "model_1.glb": b"GLB-prop-mesh",
@@ -279,8 +278,10 @@ check("status", res["status"], "success")
 check("prop_id kept", res["prop_id"], PID)
 check("directory identical", dir_snapshot(), EXPORTED)
 check("prop actions survive standalone ingress", prop_store.read_sidecar(PID)["actions"], document["actions"])
-check("stable variant binding survives standalone ingress",
-      prop_store.read_sidecar(PID)["model_variants"][0]["action_bindings"], variant["action_bindings"])
+check("the variant markers (source of the derived bindings) survive standalone ingress",
+      prop_store.read_sidecar(PID)["model_variants"][0]["markers"], variant["markers"])
+check("no stored binding (derived since 705f52f6f)",
+      "action_bindings" in prop_store.read_sidecar(PID)["model_variants"][0], False)
 back = get_prop(PID)
 check("name", (back or {}).get("name"), "Oak Chair")
 check("dims survive",

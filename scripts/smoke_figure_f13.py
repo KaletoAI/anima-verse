@@ -655,7 +655,10 @@ def main() -> int:
         front_open = garment_clothing.edit_prompt("Demo", "worn", "front", profile=open_prof, item_id=jacket)[0]
         front_closed = garment_clothing.edit_prompt("Demo", "worn", "front", profile=prof(), item_id=jacket)[0]
         check("open front says it", oo.OPEN_IMAGE_WORDS in front_open, True)
-        check("closed front silent", bool(words.search(front_closed)), False)
+        # Ruling A147 (c7db503a6): a closable piece worn closed SAYS so in its worn front edit (WORN_CLOSED) —
+        # no longer silent; it never carries the open phrase.
+        check("closed front says closed, never open",
+              (garment_clothing.WORN_CLOSED in front_closed, oo.OPEN_IMAGE_WORDS in front_closed), (True, False))
         clear_group()
         fsig_o = gs.garment_fsig("Demo", jacket, state="open")
         build_chain(fsig_c)

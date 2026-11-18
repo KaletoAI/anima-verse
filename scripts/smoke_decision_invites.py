@@ -56,8 +56,10 @@ A8  the real invite_state (build_thought_context and get_relationship stubbed):
 A9  InteractWith called back by Kira (open invitation i9):
     accept -> record_outcome("pair_invite", "i9", {"answer": "accept"}),
     recorded BEFORE resolve_invite runs; "answer": "no" -> {"answer": "decline"}.
-A10 _answered_at_once for an ORDINARY NPC (not temporary): row "declined" ->
-    "Kira does not want to shaking hands right now."; row "pending" -> "".
+A10 _answered_at_once for an ORDINARY NPC (not temporary): row "failed" (reason "seat taken") ->
+    "Error: Kira cannot right now: seat taken."; row "declined" ->
+    "Error: Kira does not want to shaking hands right now."; row "pending" -> "".
+    (Both refusals are a ``ToolRefusal`` since 4192e42e4, which prefixes "Error: ".)
 
 """
 import json
@@ -312,10 +314,10 @@ check("A9 refusal resolve(i9, False)", _events("resolve"), [("i9", False)])
 print("A10 _answered_at_once for an ordinary NPC")
 INVITE_ROW[0] = {"status": "failed", "reason": "seat taken"}
 check("A10 failed", SKILL._answered_at_once(INVITEE, "i10", KEY),
-      "Kira cannot right now: seat taken.")
+      "Error: Kira cannot right now: seat taken.")
 INVITE_ROW[0] = {"status": "declined"}
 check("A10 declined", SKILL._answered_at_once(INVITEE, "i10", KEY),
-      "Kira does not want to shaking hands right now.")
+      "Error: Kira does not want to shaking hands right now.")
 INVITE_ROW[0] = {"status": "pending"}
 check("A10 pending", SKILL._answered_at_once(INVITEE, "i10", KEY), "")
 

@@ -96,7 +96,7 @@ from app.models.character import (  # noqa: E402
     get_character_pos, save_character_current_location,
     save_character_current_room, save_character_profile, set_character_pos)
 from app.models.world import (  # noqa: E402
-    _load_world_data, _save_world_data, add_location,
+    GROUND_ROOM_ID, _load_world_data, _save_world_data, add_location,
     update_location_position)
 
 FAILURES = []
@@ -270,9 +270,10 @@ check("empty-location write keeps the free point",
 
 print("[9] leaving every footprint clears location AND room")
 set_character_pos("probe_npc", 52, 53)          # back inside, location set
-save_character_current_room("probe_npc", "ground")
+# The inn's only room is its ground (GROUND_ROOM_ID); a room id the location does not hold is refused by the setter.
+save_character_current_room("probe_npc", GROUND_ROOM_ID)
 check("room set before the step out",
-      get_character_current_room("probe_npc"), "ground")
+      get_character_current_room("probe_npc"), GROUND_ROOM_ID)
 res = set_character_pos("probe_npc", 30, 30)
 check("derived location_id", res["location_id"], "")
 check("current_location cleared",

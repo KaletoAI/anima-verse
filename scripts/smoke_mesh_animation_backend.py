@@ -320,7 +320,10 @@ def variants_section():
     defaults = plain.motion_meta
     for key in fields:
         assert schema[key]["default"] == defaults[key], key
-        assert schema[key]["applicable_for"] == ["openai_mesh_animation"], key
+        # Some motion fields are shared with the motion-transition backend (openai_motion_transition) since it came.
+        applies = schema[key]["applicable_for"]
+        assert "openai_mesh_animation" in applies and set(applies) <= {
+            "openai_mesh_animation", "openai_motion_transition"}, (key, applies)
     print("PASS V5: config bridge carries every motion field; schema defaults = backend defaults")
 
 

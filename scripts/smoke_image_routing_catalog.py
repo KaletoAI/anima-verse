@@ -505,6 +505,11 @@ def part_c():
         if "run_routed" not in text and "resolve_image_route(" not in text:
             continue
         tree = ast.parse(text, filename=f)
+        # A module-level string constant (footwear_source.EDIT_OCCASION = "footwear_empty", 94d55a5f1) is a
+        # constant occasion too: it is checked against the catalog like a literal.
+        consts = {t.id: st.value.value for st in tree.body if isinstance(st, ast.Assign)
+                  and isinstance(st.value, ast.Constant) and isinstance(st.value.value, str)
+                  for t in st.targets if isinstance(t, ast.Name)}
         for fn in ast.walk(tree):
             if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -523,6 +528,8 @@ def part_c():
                 n_calls += 1
                 if isinstance(arg, ast.Constant):
                     check(f"C1 {f}:{fn.name} -> {arg.value}", arg.value in ids, True)
+                elif isinstance(arg, ast.Name) and arg.id in consts:
+                    check(f"C1 {f}:{fn.name} -> {arg.id} = {consts[arg.id]}", consts[arg.id] in ids, True)
                 else:
                     check(f"C1 {f}:{fn.name} passes a variable occasion",
                           (f, fn.name) in DYNAMIC_OK, True)
