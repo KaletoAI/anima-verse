@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""3D tab: an outfit model built on an older base body keeps its details
-(``model3d.get_model3d_info``, bug F of 2026-11-09).
+"""3D tab: an outfit model built on an older base body is never served, and its
+staleness is still reported (``model3d.get_model3d_info`` + ``base_body.outfit_info``;
+bug F of 2026-11-09, serving rule of Ruling A119).
 
 Usage:
     ./.venv/bin/python scripts/smoke_model3d_stale_base.py
@@ -17,16 +18,21 @@ SHA. OSIG = the current outfit signature; model3d/OSIG.glb = the body
 fixture with a sidecar {rig mixamo, base_signature, base_model_sha256} that
 the cases below rewrite.
 
-Expected, derived by hand from the serving rule (find_model3d_serving keeps
-an older-base model of THIS combination on screen as match "stale") and the
-fix (the info says so instead of the tab losing the model):
+Expected, derived by hand from the serving rule (Ruling A119, 0601436ce:
+``find_model3d_serving`` serves on the pipeline only the worn outfit's model
+built on the CURRENT base — "exact" — and otherwise the newest plain body
+model3d/BSIG.glb as "base"; never one built on an older body; was: the
+older-base model stayed on screen as match "stale") and bug F's fix (the
+staleness is said, not lost — today by ``base_body.outfit_info``, which the
+Figure tab's outfit row shows):
 [1] sidecar on another base (base_signature "base0ld00000", sha "0"*64):
-    info.model present, signature OSIG, match "stale", stale_base True,
-    stale_reason "older_base"; the face-retexture keys are there
-    (face_retexture_revert is a key of the model).
+    info.model present = the plain body: signature BSIG, match "base",
+    stale_base False (the plain body is the current base); the
+    face-retexture keys are there (face_retexture_revert is a key of the
+    model). outfit_info(Demo): status "stale", stale_reason "older_base".
 [2] sidecar without any base identity (a whole-body model from before the
-    pipeline): match "stale", stale_base True, stale_reason
-    "before_pipeline".
+    pipeline): served the plain body (BSIG, "base", stale_base False);
+    outfit_info: status "stale", stale_reason "before_pipeline".
 [3] sidecar on the current base (BSIG, SHA): match "exact", stale_base
     False, no stale_reason.
 (The former [4] "off the pipeline" case left with Task 11h: a humanoid
@@ -119,15 +125,20 @@ def main() -> int:
         print("[1] older base")
         sidecar(base_signature="base0ld00000", base_model_sha256="0" * 64)
         m = model()
-        check("model present", (m.get("signature"), m.get("match")), (osig, "stale"))
-        check("flag + reason", (m.get("stale_base"), m.get("stale_reason")), (True, "older_base"))
+        check("model present: the plain body (A119)", (m.get("signature"), m.get("match")), (bsig, "base"))
+        check("served file not stale", (m.get("stale_base"), "stale_reason" in m), (False, False))
+        info = base_body.outfit_info("Demo")
+        check("outfit model: stale, older base", (info["status"], info["stale_reason"]), ("stale", "older_base"))
         check("face retexture keys", "face_retexture_revert" in m, True)
 
         print("[2] before the pipeline")
         sidecar()
         m = model()
-        check("before pipeline", (m.get("match"), m.get("stale_base"), m.get("stale_reason")),
-              ("stale", True, "before_pipeline"))
+        check("before pipeline: the plain body served", (m.get("signature"), m.get("match"), m.get("stale_base")),
+              (bsig, "base", False))
+        info = base_body.outfit_info("Demo")
+        check("before pipeline: outfit model stale", (info["status"], info["stale_reason"]),
+              ("stale", "before_pipeline"))
 
         print("[3] current base")
         sidecar(base_signature=bsig, base_model_sha256=base_sha)
