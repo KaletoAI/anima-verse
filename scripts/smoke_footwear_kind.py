@@ -46,7 +46,7 @@ dress; Mira holds heels.
      round — a pre-fix skipped ``empty`` is unreachable; seed 0 = never
      regenerated) == footwear_source.current_ssig(heels).
      fsig = md5(json.dumps({"kind": "footwear", "ssig": ssig,
-     "insole_version": 8, "width_cap": 1.1, "fit_version": 18},
+     "insole_version": 9, "width_cap": 1.1, "fit_version": 18},
      sort_keys=True))[:12] — the width cap without an override is 1.10 (fit version 13..18: for a shoe without a
      shaft that default means "widened to the foot up to 1.65", footwear_fit.applied_width_cap; the fingerprint
      keeps 1.10).
@@ -269,7 +269,7 @@ def main() -> int:
         check("current_ssig", footwear_source.current_ssig(heels), ssig)
 
         def fsig_by_hand(cap):
-            return md5_12({"kind": "footwear", "ssig": ssig, "insole_version": 8, "width_cap": cap,
+            return md5_12({"kind": "footwear", "ssig": ssig, "insole_version": 9, "width_cap": cap,
                            "fit_version": 18})
         fsig = fsig_by_hand(1.1)
         kira_bsig = base_body.base_signature("Kira")

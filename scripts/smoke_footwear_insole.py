@@ -48,10 +48,11 @@ Expected, by hand:
 [I7] the pump plus a vertical fin at z = 0 over [0.24, 0.26] up to 0.15: the provisional heel is the TOE
      end (0.15 > 0.12) -> shoe_frame gives x_axis (-1, 0, 0). After tracking the insole at 0.10 L (toe,
      0.01) is lower than at 0.90 L (heel, 0.09) -> flipped: frame x_axis (1, 0, 0), frame.flipped True, and
-     every number equals [I1] (the fin is vertical -> no ray hit; it sits at z = 0 -> no topline side).
+     every number equals [I1] (the fin is vertical -> no ray hit; it sits at z = 0 -> no topline side). The pump's
+     underside is the ground everywhere, so its STACK rise (INSOLE_VERSION 9) is the insole rise, 0.08 >= 0.0026.
 [I8] analyse(static_glb(pump)) equals analyse_arrays(pump) within float32 (1e-5) and is JSON without NaN.
 (Every float in insole.json is rounded to 7 decimals, so the station-count checks hold to 1e-6.)
-[I9] constants: INSOLE_VERSION 8 (8 = the sole layers: the flip on 1 % L, the open seed, MAX_HITS 48; 7 = the insole measures the mesh step's prepared.glb, re-made from raw.glb when an older insole stripped it; 6 = a class-none shoe has no shaft; 5 = the cap inside the opening; 4 = the tube ring rules, 3 = the shaft block, 2 = the outsole footprint), DOWN_MAX -0.3, NOMINAL_LENGTH_M 0.26, STATIONS 240, AIR_SHARE 0.025, TOL_SHARE 0.035,
+[I9] constants: INSOLE_VERSION 9 (9 = the flip reads the stack, [I20]; 8 = the sole layers: the flip on 1 % L, the open seed, MAX_HITS 48; 7 = the insole measures the mesh step's prepared.glb, re-made from raw.glb when an older insole stripped it; 6 = a class-none shoe has no shaft; 5 = the cap inside the opening; 4 = the tube ring rules, 3 = the shaft block, 2 = the outsole footprint), DOWN_MAX -0.3, NOMINAL_LENGTH_M 0.26, STATIONS 240, AIR_SHARE 0.025, TOL_SHARE 0.035,
      INSOLE_GATES insole_cover min 0.80 / vamp_cover min 0.6 / opening_share min 0.5, BOOT_MARGIN_M 0.03,
      the refusal texts (boot, open, solid).
 [I11] the closed solid wedge (sole alone: side faces only up to h(x), no roof): the top faces up with nothing
@@ -187,6 +188,17 @@ with the disc: [I18] fails there.)
      empty (the lid stays). (On ebcd6c0b — INSOLE_VERSION 5 — the same fixture is refused SHAFT_OPEN_REFUSED on
      shaft_closed_share 0.5 < 0.9 and its cap rule takes the 24 lid triangles — the cap band's floor 0.20 - 0.02 x
      (0.20 - 0.04) = 0.1968 cuts the box's four walls, every lid centroid inside: [I19] fails there.)
+
+[I20] TOE SPRING is no heel (INSOLE_VERSION 9; Dario's braided sandals and Kai's sneakers 2026-11-18 were fitted
+     backwards). The shoe (``toe_spring_shoe``, built here, L = 0.26, width 0.08): a sole slab of constant thickness
+     0.02 whose underside u(x) = 0 on [0, 0.20] and rises linearly to 0.012 at 0.26 (the top u(x) + 0.02 rises with
+     it); zero-thickness side walls at z = +-0.04 from u(x) to u(x) + 0.05, a heel counter over x in [0, 0.06] up to
+     0.09. Silhouette: the rear 15 % (x <= 0.039) stands 0.09 tall, the front (x >= 0.221) at most 0.012 + 0.05 =
+     0.062 -> heel at x = 0: x_axis (1, 0, 0). Insole (the slab's top, nothing above it) at 0.10 L = 0.026: 0.02; at
+     0.90 L = 0.234: u = 0.012 x (0.234 - 0.20) / 0.06 = 0.0068 -> 0.0268. The INSOLE rises 0.0068 >= FLIP_MIN_SHARE
+     x L = 0.0026 — the version-8 rule flipped this shoe (the profile values are checked, so the old rule's input is
+     on record). The underside (the lowest hit) is 0 and 0.0068 there -> the STACK is 0.02 at both -> rise 0 < 0.0026
+     -> NOT flipped: frame x_axis (1, 0, 0), flipped False, origin (0, 0, 0).
 """
 import json
 import math
@@ -274,6 +286,32 @@ def strict_json(res) -> bool:
         return False
 
 
+def toe_spring_shoe():
+    """``(positions, faces)`` of [I20]: a flat slab with a toe spring, side walls, a taller heel counter."""
+    import numpy as np
+    P, F = [], []
+
+    def quad(a, b, c, d, facing):
+        a, b, c, d = (np.asarray(v, np.float64) for v in (a, b, c, d))
+        base = len(P)
+        P.extend([a, b, c, d])
+        flip = np.dot(np.cross(b - a, c - a), np.asarray(facing, np.float64)) < 0
+        for t in ((0, 1, 2), (0, 2, 3)):
+            F.append(tuple(base + i for i in ((t[0], t[2], t[1]) if flip else t)))
+
+    def u(x):
+        return 0.0 if x <= 0.20 else 0.012 * (x - 0.20) / 0.06
+    xs = [round(0.01 * i, 10) for i in range(27)]
+    for x0, x1 in zip(xs[:-1], xs[1:]):
+        u0, u1 = u(x0), u(x1)
+        quad((x0, u0 + 0.02, -0.04), (x1, u1 + 0.02, -0.04), (x1, u1 + 0.02, 0.04), (x0, u0 + 0.02, 0.04), (0, 1, 0))
+        quad((x0, u0, -0.04), (x1, u1, -0.04), (x1, u1, 0.04), (x0, u0, 0.04), (0, -1, 0))
+        t0, t1 = (0.09, 0.09) if x1 <= 0.06 + 1e-9 else (u0 + 0.05, u1 + 0.05)
+        for z, facing in ((0.04, (0, 0, 1)), (-0.04, (0, 0, -1))):
+            quad((x0, u0, z), (x1, u1, z), (x1, t1, z), (x0, t0, z), facing)
+    return np.asarray(P), np.asarray(F, np.int64)
+
+
 def main():
     import numpy as np
     from _footwear_fixtures import wedge
@@ -283,7 +321,7 @@ def main():
     print("[I9] constants")
     check("constants", (fi.INSOLE_VERSION, fi.NOMINAL_LENGTH_M, fi.STATIONS, fi.AIR_SHARE, fi.TOL_SHARE,
                         fi.BOOT_MARGIN_M, fi.DOWN_MAX),
-          (8, 0.26, 240, 0.025, 0.035, 0.03, -0.3))
+          (9, 0.26, 240, 0.025, 0.035, 0.03, -0.3))
     check("ring constants", (fi.RING_GAP_MAX_DEG, fi.RING_EXTENT_MIN_SHARE), (90.0, 0.10))
     check("INSOLE_GATES", {k: v[:2] for k, v in fi.INSOLE_GATES.items()},
           {"insole_cover": ("min", 0.80), "vamp_cover": ("min", 0.6), "opening_share": ("min", 0.5)})
@@ -337,7 +375,7 @@ def main():
     near("vamp_cover", pump["vamp_cover"], 0.810, 0.02)
     near("vamp_cover (station count 74/91)", pump["vamp_cover"], 74 / 91, 1e-6)
     check("gates", (pump["gates"]["ok"], pump["gates"]["reasons"], pump["gates"].get("refusal")), (True, [], None))
-    check("version", pump["version"], 8)
+    check("version", pump["version"], 9)
     near("pump footprint_ground", pump["footprint_ground"], 1.0, 1e-9)
 
     print("[I4] rotated 180 deg about Y")
@@ -579,6 +617,17 @@ def main():
     check("tongue: no cap — the lid stays (ebcd6c0b: 24 lid triangles removed)",
           (sg["cap_removed"], int(fi.cap_faces(Ptg, Ftg, tg).sum()), fi.strip_cap(Ptg, Ftg, tg)[2]), (0, 0, 0))
     check("tongue JSON strict", strict_json(tg), True)
+
+    print("[I20] toe spring: the stack decides, not the insole")
+    Pt, Ft = toe_spring_shoe()
+    vec_near("toe spring provisional x_axis", fi.shoe_frame(Pt, Ft).x_axis.tolist(), [1, 0, 0], 1e-9)
+    ts = fi.analyse_arrays(Pt, Ft)
+    near("toe spring insole at 0.10 L", interp(ts, "profile", 0.10 * 0.26), 0.02, 1e-6)
+    near("toe spring insole at 0.90 L (the version-8 rule's rise 0.0068 >= 0.0026)",
+         interp(ts, "profile", 0.90 * 0.26), 0.0268, 1e-6)
+    check("toe spring not flipped", ts["frame"]["flipped"], False)
+    vec_near("toe spring x_axis", ts["frame"]["x_axis"], [1, 0, 0], 1e-9)
+    vec_near("toe spring origin", ts["frame"]["origin"], [0, 0, 0], 1e-9)
 
     if FAILED:
         print(f"\n{len(FAILED)} check(s) failed: {FAILED}")

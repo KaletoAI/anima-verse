@@ -53,7 +53,7 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      every one). Record: method "shoe", kind "footwear", version 18, fit_version 18, accepted, ssig = the current
      ssig, body_id = bsig, body_sha256 = base_model_sha256 = sha(base) (the UNCUT bytes), base_signature bsig,
      parents {body_id, body_sha256, base_model_sha256, base_signature, source {ssig, empty_sha256 =
-     sha(empty.png), mesh_sha256 = sha(prepared.glb), insole_version 8}}; scale.k_m_per_unit 1.023599
+     sha(empty.png), mesh_sha256 = sha(prepared.glb), insole_version 9}}; scale.k_m_per_unit 1.023599
      (+-2e-4); sides.left.extension.deg 0 (|deg| <= 1e-6) both sides; root_lift_m 0.010236 (+-1e-5);
      insole_w_ball_mm 81.89 (+-0.05), width needed 1.0380 (+-0.002), applied 1.0380 (+-0.002), width_cap 1.10;
      slim_needed 0 (both sides); cut {version 3, sides left + right with foot_joint LeftFoot / RightFoot,
@@ -377,7 +377,7 @@ def main() -> int:
         check("P1 parents", rec.get("parents"), {
             "body_id": bsig, "body_sha256": base_sha, "base_model_sha256": base_sha, "base_signature": bsig,
             "source": {"ssig": ssig, "empty_sha256": sha(src / "empty.png"),
-                       "mesh_sha256": sha(src / "prepared.glb"), "insole_version": 8}})
+                       "mesh_sha256": sha(src / "prepared.glb"), "insole_version": 9}})
         scale = rec.get("scale") or {}
         near("P1 k", scale.get("k_m_per_unit"), 1.023599, 2e-4)
         for side in ("left", "right"):

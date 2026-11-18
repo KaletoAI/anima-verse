@@ -7,8 +7,11 @@ Blender:
 
 - **Frame** (``shoe_frame``): up = the mesher's +Y, x = the principal axis of the footprint, the
   provisional heel = the end whose rear ``HEEL_END_SHARE`` stands taller. After tracking, the frame is
-  flipped when the insole at 0.90 L stands at least ``FLIP_MIN_SHARE`` L above the insole at 0.10 L — a heel
-  decides toe and heel by its rise; a flat shoe keeps the silhouette's heel (INSOLE_VERSION 8).
+  flipped when the STACK at 0.90 L — the insole over the sole's underside (the lowest hit, median over the
+  profile's middle columns) — stands at least ``FLIP_MIN_SHARE`` L above the stack at 0.10 L — a heel decides toe
+  and heel by its rise; a flat shoe keeps the silhouette's heel (INSOLE_VERSION 8). Read on the stack, not on the
+  insole alone (INSOLE_VERSION 9): a toe spring lifts the underside WITH the insole, a heel stands its underside on
+  the ground ("Toe spring" below).
 - **Vertical rays** (``vertical_hits``) on ``STATIONS`` stations x the lateral columns: every triangle's
   xz bounding box is binned into the station grid and each (triangle, ray) pair is tested with the 2D
   barycentric point-in-triangle test (vertical rays need no Möller–Trumbore); the height is the
@@ -168,6 +171,17 @@ the "lining a few millimetres over the insole" (``footwear_fit.INSTEP_ROOF_SHARE
 within 0.2 mm / 0.5 deg: the Business Heels, the Work Shoes and both knee-high boots (cavity +1.6 / +4 mm at 0.36 /
 0.45 on the Work Shoes, the rest equal). The analysis takes 0.4–0.8 s per shoe (was 0.45–1.7 s); the most hits in
 one column on this material is 44 (the clone's knee-high boots).
+
+**Toe spring (INSOLE_VERSION 9, 2026-11-18).** A flat shoe whose sole curves up at the toe read its toe spring as a
+heel rise: the insole at 0.90 L stood above the insole at 0.10 L, the frame flipped and the fit put the foot in
+BACKWARDS — the heel under the toe straps, the toes in the heel counter. Measured on copies in the silhouette frame
+(percent of L; insole 0.10 / 0.90 L, underside 0.10 / 0.90 L): Dario's braided fisherman sandals
+(``item_braided_leather_sandals`` ``fad88e213cec`` / ``c062722cd315``) 10.34 / 11.74 and 10.16 / 13.37, underside
+0.78 / 3.17 and 1.03 / 4.97 — insole rise +1.40 / +3.22 (flipped), stack rise −0.99 / −0.72; Kai's sneakers
+``item_3c60cf62/dbb5faabb111`` +3.50 / −0.20 (both refused at the fit, "strap_push_max_mm 66.69 / 73.39 / 56.7 >
+30"). The eight other shoe sources of the world keep their frame and every measured number (insole rise −41.6 …
++0.13, stack rise −9.96 … −1.24; their underside at 0.90 L stands 1.8 – 5.8 % L off the ground — every one has a toe
+spring).
 """
 import math
 from dataclasses import dataclass
@@ -189,7 +203,9 @@ from app.core.footwear_gates import check_gates
 #: 8: the frame flips only on a clear insole rise (``FLIP_MIN_SHARE``), the tracking is seeded on the surface open to
 #:    the shaft opening (``_seed_open``) and every ray keeps ``MAX_HITS`` 48 hits — a flat sneaker's hollow sole plate
 #:    is no longer read as its insole (module docstring, "Sole layers"); stored insoles re-run on the CPU.
-INSOLE_VERSION = 8
+#: 9: the flip reads the stack (insole over the sole's underside), not the insole — a toe spring no longer flips a flat
+#:    shoe (module docstring, "Toe spring"); stored insoles re-run on the CPU.
+INSOLE_VERSION = 9
 
 #: Shoe length the per-item (nominal) numbers are given at.
 NOMINAL_LENGTH_M = 0.26
@@ -212,8 +228,9 @@ SEED_OPEN_MIN = 3
 #: boots; 36 on the sneakers); the hit search does not depend on it (every hit is computed, then ranked), only the
 #: (stations, columns, MAX_HITS, 2) array — 240 x 93 x 48 x 2 floats = 17 MB on the sneakers.
 MAX_HITS = 48
-#: The frame is flipped (the insole says the heel is the other end) only when the insole at 0.90 L stands at least
-#: this share of the length above the insole at 0.10 L; a smaller difference leaves the silhouette's heel
+#: The frame is flipped (the insole says the heel is the other end) only when the stack (insole over the sole's
+#: underside, INSOLE_VERSION 9) at 0.90 L stands at least this share of the length above the stack at 0.10 L; a
+#: smaller difference leaves the silhouette's heel
 #: (``shoe_frame``). A heel's rise is 4.7–35 % of the length (Work Shoes 1.2 cm, Business Heels 9.1 cm at 26 cm); a
 #: flat sneaker's two ends differ by its sole's noise — 1.1 mm (0.4 %) on ``item_3c60cf62``, which flipped it.
 FLIP_MIN_SHARE = 0.01
@@ -933,12 +950,15 @@ def _measure(P: np.ndarray, F: np.ndarray, frame: ShoeFrame) -> Dict[str, Any]:
     prof = np.full(STATIONS, np.nan)
     cav = np.full(STATIONS, np.nan)
     mid_z = np.full(STATIONS, np.nan)
+    # the sole's underside under the profile (the same middle columns): the flip reads the stack height above it
+    bottom = np.full(STATIONS, np.nan)
     for i in range(STATIONS):
         js = np.nonzero(found[i])[0]
         if len(js) < 4:
             continue
         c = _middle(js)
         prof[i] = float(np.median(ins[i, c]))
+        bottom[i] = float(np.median(low[i, c]))
         mid_z[i] = float(np.median(gz[c]))
         r = roof[i, c] - ins[i, c]
         if np.mean(~np.isnan(r)) > 0.5:
@@ -947,8 +967,12 @@ def _measure(P: np.ndarray, F: np.ndarray, frame: ShoeFrame) -> Dict[str, Any]:
     k = NOMINAL_LENGTH_M / L if L > 0 else float("nan")
     p_heel = _interp(PITCH_HEEL_SHARE * L, gx, prof)
     p_toe = _interp((1.0 - PITCH_HEEL_SHARE) * L, gx, prof)
-    # the insole overrides the silhouette's heel only on a clear rise (FLIP_MIN_SHARE, INSOLE_VERSION 8)
-    flip = p_heel is not None and p_toe is not None and p_toe - p_heel >= FLIP_MIN_SHARE * L
+    b_heel = _interp(PITCH_HEEL_SHARE * L, gx, bottom)
+    b_toe = _interp((1.0 - PITCH_HEEL_SHARE) * L, gx, bottom)
+    # the insole overrides the silhouette's heel only on a clear rise of the STACK — the insole over the sole's
+    # underside (FLIP_MIN_SHARE, INSOLE_VERSION 9): a toe spring lifts the underside with the insole, a heel does not
+    flip = (p_heel is not None and p_toe is not None and b_heel is not None and b_toe is not None
+            and (p_toe - b_toe) - (p_heel - b_heel) >= FLIP_MIN_SHARE * L)
 
     # vamp cover: forefoot footprint cells with a hit above the insole (a cell without its own
     # insole is judged against the station profile, interpolated where the station has none)
