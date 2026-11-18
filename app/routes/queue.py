@@ -3,14 +3,18 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.core.auth_dependency import require_admin
+from app.core import users
+from app.core.auth_dependency import get_current_user, require_admin
 
 router = APIRouter(prefix="/queue", tags=["queue"])
 
 
 @router.get("/status")
-async def queue_status() -> Dict[str, Any]:
+async def queue_status(user=Depends(get_current_user)) -> Dict[str, Any]:
     """The combined status of every task source.
+
+    A row's ``log_tail`` (the Blender output of a run left due) goes to admins only: it quotes
+    server paths, and this route is polled by every player's panel.
 
     Merges:
     - the provider queues (per-provider LLM calls, chat streaming)
@@ -43,6 +47,10 @@ async def queue_status() -> Dict[str, Any]:
         if t.get("task_origin") == "tracked":
             _active.append({**t, "status": "pending"})
 
+    recent_tasks = await asyncio.to_thread(tq.get_tracked_recent)
+    if not (isinstance(user, dict) and user.get("role") == users.ROLE_ADMIN):
+        recent_tasks = [{k: v for k, v in t.items() if k != "log_tail"} for t in recent_tasks]
+
     return {
         # Per-Channel Queues (each GPU = own channel with tasks)
         "providers": combined.get("providers", {}),
@@ -51,7 +59,7 @@ async def queue_status() -> Dict[str, Any]:
         "recent": combined["recent"],
         # Tracked + background tasks (unified)
         "active_tasks": _active,
-        "recent_tasks": await asyncio.to_thread(tq.get_tracked_recent),
+        "recent_tasks": recent_tasks,
         # Background tasks (flat, no named queues)
         "bg_tasks": tq_status,
         # World master switch (image_generation.enabled) — a plain in-memory
