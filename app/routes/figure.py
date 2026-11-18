@@ -349,6 +349,8 @@ def get_template_params(character_name: str, item_id: str, picture: bool = True,
             "cost": {"llm_calls": 1, "hub_jobs": 0, "cpu_s": gt.CPU_ESTIMATE_S},
             # A168: this character's drape of the piece — state, reason and the step list (``piece_progress``)
             "progress": progress,
+            # A205: the piece-only views the bake reads (``garment_template_views.status``)
+            "views": _template_views(character_name, item_id),
             # A186: the dressed front picture beside the fields (existing images only, nothing generated)
             # (``picture=0``: the dialog's progress poll, which keeps the picture it has)
             "front_picture": (_front_picture(character_name, item_id, item, worn=bool(progress.get("worn")))
@@ -881,3 +883,105 @@ def clear_base_reference(character_name: str, _: Dict[str, Any] = Depends(requir
     if not cleared:
         raise HTTPException(status_code=404, detail="The plain body has no full-body reference")
     return full_body_reference.base_tile(character_name)
+
+
+# --- A205: the piece-only views of a template piece ------------------------------------------------
+
+def _template_views(character_name: str, item_id: str) -> Dict[str, Any]:
+    from app.core import garment_template_views as tv
+    return tv.status(character_name, item_id)
+
+
+def _template_view_name(view: str) -> str:
+    from app.core import garment_template_views as tv
+    if view not in tv.VIEWS:
+        raise HTTPException(status_code=400, detail=f"view must be one of {', '.join(tv.VIEWS)}")
+    return view
+
+
+@router.get("/{character_name}/figure/template/{item_id}/views")
+def get_template_views(character_name: str, item_id: str,
+                       _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """A205: the template piece's piece-only views — per view the accepted view, its attempts and whether a
+    render runs; ``hub_jobs`` = the first attempts of the missing views."""
+    _template_item(character_name, item_id)
+    return _template_views(character_name, item_id)
+
+
+@router.post("/{character_name}/figure/template/{item_id}/views/{view}/generate")
+def generate_template_view(character_name: str, item_id: str, view: str,
+                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """A205, Generate / Regenerate: up to 2 image jobs (occasion ``garment_view``) for ONE view, in the
+    background. 409 while that view already renders."""
+    from app.core import garment_template_views as tv
+    from app.imagegen.base import media_generation_enabled
+    _template_item(character_name, item_id)
+    _template_view_name(view)
+    if not media_generation_enabled():
+        raise HTTPException(status_code=409, detail="Media generation is switched off")
+    if not tv.start(character_name, item_id, view):
+        raise HTTPException(status_code=409, detail="This view is being made already")
+    return _template_views(character_name, item_id)
+
+
+@router.post("/{character_name}/figure/template/{item_id}/views/{view}/use/{attempt}")
+def use_template_view(character_name: str, item_id: str, view: str, attempt: int,
+                      _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """A205, "Use this": a stored attempt becomes the view (a refused one accepted by the user). No job."""
+    from app.core import garment_template_views as tv
+    _template_item(character_name, item_id)
+    _template_view_name(view)
+    try:
+        tv.use_attempt(character_name, item_id, view, attempt)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return _template_views(character_name, item_id)
+
+
+@router.post("/{character_name}/figure/template/{item_id}/views/{view}/upload")
+async def upload_template_view(character_name: str, item_id: str, view: str, request: Request,
+                               _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """A205, Upload: an image file (multipart ``file``) becomes the view — cut out and checked like a render; a
+    refused upload is accepted by the user with its reasons recorded. No job. 413 / 415 for an oversized or
+    non-image body."""
+    from starlette.concurrency import run_in_threadpool
+    from app.core import garment_template_views as tv
+    from app.core.upload_limits import ensure_image, guard_content_length, read_upload_capped
+    _template_item(character_name, item_id)
+    _template_view_name(view)
+    guard_content_length(request, what="Piece-only view")
+    form = await request.form()
+    file = form.get("file")
+    if file is None or isinstance(file, str):
+        raise HTTPException(status_code=400, detail="No file uploaded")
+    data = await read_upload_capped(file, what="Piece-only view")
+    ensure_image(data, filename=str(getattr(file, "filename", "") or ""), what="Piece-only view")
+    try:
+        return await run_in_threadpool(tv.upload, character_name, item_id, view, data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/{character_name}/figure/template/{item_id}/views/{view}")
+def delete_template_view(character_name: str, item_id: str, view: str,
+                         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """A205: drop the accepted view (the bake falls back to the item picture; a sheer piece reads due)."""
+    from app.core import garment_template_views as tv
+    _template_item(character_name, item_id)
+    return tv.remove(character_name, item_id, _template_view_name(view))
+
+
+@router.get("/{character_name}/figure/template/{item_id}/views/{view}.png")
+def template_view_image(character_name: str, item_id: str, view: str, attempt: int = 0,
+                        _: Dict[str, Any] = Depends(require_admin)):
+    """A205: the accepted view (``attempt`` 0) or a stored attempt's cut-out."""
+    from fastapi.responses import FileResponse
+    from app.core import garment_template_views as tv
+    _template_item(character_name, item_id)
+    _template_view_name(view)
+    path = (tv.view_path(character_name, item_id, view) if attempt <= 0
+            else tv.attempt_path(character_name, item_id, view, attempt).with_name(
+                f"{item_id}_{view}.try{int(attempt)}.cut.png"))
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="No such view")
+    return FileResponse(str(path), media_type="image/png", headers={"Cache-Control": "no-cache"})
