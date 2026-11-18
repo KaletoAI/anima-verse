@@ -590,6 +590,7 @@ def fabric_colour(item_id: str) -> str:
 
 NO_BASE_PICTURE = "No plain body front yet — build the plain body first (Figure tab)"
 NO_BASE_MODEL = "No plain body model yet — the overlay needs its measurements (Figure tab → Build)"
+NO_UPPER_JOINTS = "The plain body has no arm or neck joints to place the piece by"
 
 
 def overlay(character_name: str, item_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -625,6 +626,11 @@ def overlay(character_name: str, item_id: str, params: Dict[str, Any]) -> Dict[s
         out["reason"] = NO_BASE_MODEL
         return out
     meas = body_measure(glb)
+    if "shoulder_y" not in meas or "neck_y" not in meas:
+        # A198 (review 06C #4): ``measure_body`` leaves the upper block out without the arm / neck joints — the
+        # registration and the landmarks need it; say so instead of a 500 on every slider move
+        out["reason"] = NO_UPPER_JOINTS
+        return out
     reg = register(frame, meas)
     drawn = shapes(params, meas, reg)
     out.update(ok=True, px_per_m=round(reg.scale, 3), landmarks=reg.landmarks(), colour=fabric_colour(item_id),
