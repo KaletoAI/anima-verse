@@ -141,6 +141,22 @@ def _sstep(x):
     return x * x * (3 - 2 * x)
 
 
+def lip_fillet(t, radius, on_wall):
+    """The move of a point at distance ``t`` from the cut's corner onto the fillet of ``radius`` that rounds it:
+    ``(back, into)`` — back along the channel's wall and into the lip (down the skin). ``on_wall`` False = a skin
+    point (t down the skin from the rim), True = a wall point (t back from the rim). With the corner at the origin,
+    the skin along +into and the wall along +back, the arc is (r - r cos a, r - r sin a), a = 0 at the skin's
+    tangent point (0, r) and 90 degrees at the wall's (r, 0): a skin point takes a = 45 deg (1 - t/r), a wall point
+    90 deg minus that, so the corner itself (t = 0) lands on the arc's middle from both sides. (0, 0) from r on."""
+    if t >= radius or radius <= 0:
+        return 0., 0.
+    a = np.pi / 4 * (1 - t / radius)
+    if on_wall:
+        a = np.pi / 2 - a
+        return float(radius - radius * np.cos(a) - t), float(radius - radius * np.sin(a))
+    return float(radius - radius * np.cos(a)), float(radius - radius * np.sin(a) - t)
+
+
 def rim_share(x, ends_x, corner, lower_side):
     """The jaw share fixed on the cut's rim at world x: the lower rim carries 1 and the upper rim 0, and within
     ``corner`` of the path's ends (``ends_x``) both meet at 1/2 by a smoothstep — the opening closes like a lens."""

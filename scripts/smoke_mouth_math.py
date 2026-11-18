@@ -35,6 +35,11 @@ No server, no world, no Blender. Every expected number is derived by hand here.
 [7] rim_share, ends at x = -0.025 and 0.025, corner 0.008: the middle (x = 0) is 8 mm+ from both ends -> lower 1,
     upper 0; an end -> 0.5 / 0.5; 4 mm from an end (t = 0.5, smoothstep 0.5) -> lower 0.75, upper 0.25: the
     opening there is half the full height.
+[8] lip_fillet(t, r = 4 mm): the cut corner rounded onto a quarter circle. The corner itself (t = 0) lands on the
+    arc's middle from the skin's and from the wall's side: r (1 - 1/sqrt 2) = 1.171573 mm back and into the lip.
+    t = r: no move. A skin point at t = 2: a = 22.5 deg, back = 4 - 4 cos a = 4 - 3.695518 = 0.304482, into =
+    4 - 4 sin a - 2 = 4 - 1.530734 - 2 = 0.469266; a wall point at t = 2 is its mirror: back 0.469266, into
+    0.304482 (both lie on the circle of radius 4 about (4, 4): e.g. (0.304482 - 4)^2 + (2 + 0.469266 - 4)^2 = 16).
 """
 import sys
 from pathlib import Path
@@ -97,6 +102,14 @@ ends = (-.025, .025)
 got = [float(mm.rim_share(x, ends, .008, low)) for x, low in ((0, True), (0, False), (.025, True), (.025, False),
                                                               (.021, True), (-.021, False))]
 check("[7] rim shares", np.allclose(got, [1, 0, .5, .5, .75, .25], atol=1e-12), got)
+
+r = .004
+got = [mm.lip_fillet(0., r, False), mm.lip_fillet(0., r, True), mm.lip_fillet(r, r, False), mm.lip_fillet(.002, r, False),
+       mm.lip_fillet(.002, r, True)]
+want = [(.001171573, .001171573), (.001171573, .001171573), (0., 0.), (.000304482, .000469266), (.000469266, .000304482)]
+check("[8] lip fillet", np.allclose(got, want, atol=1e-9), got)
+back, into = mm.lip_fillet(.002, r, False)
+check("[8] the skin point lies on the circle", abs((back - r) ** 2 + (.002 + into - r) ** 2 - r * r) < 1e-12)
 
 print("FAILED (%d)" % failed if failed else "ALL OK")
 sys.exit(1 if failed else 0)
