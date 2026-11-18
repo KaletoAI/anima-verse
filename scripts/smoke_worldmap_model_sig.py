@@ -34,6 +34,13 @@ The seed (hand-built, so every expectation below is derived from it):
     npc_empty    has a ``model3d/`` directory, but no mesh in it
     npc_bare     has no ``model3d/`` directory at all
 
+    All three are temporary NPCs (template ``npc-temporary``). Since
+    b25bbbe39 every other humanoid is on the base-body pipeline, where
+    (Ruling A119) only a model built as the delivered figure on the current
+    base body is served — a bare ``<signature>.glb`` would serve nothing. A
+    temporary NPC stays off that pipeline (Ruling A13a), so the outfit
+    signature file IS what the route serves.
+
 Hand-derived expectations
 -------------------------
 
@@ -52,6 +59,9 @@ Hand-derived expectations
 
       build 1 -> 2 calls (npc_meshed and npc_empty have a ``model3d/``
                  directory; npc_bare is skipped by the ``stat`` alone)
+      the route's read in [1] stores the mesh's collision capsules in its
+                 sidecar ``<signature>.json`` — a file the token watches
+                 since 85989c90a — so the next build -> 1 call (npc_meshed)
       build 2 -> 0 calls (nothing moved, so every token still matches)
 
     Before the fix the count would be 0 here and 3×N over the client's own
@@ -74,7 +84,8 @@ Hand-derived expectations
          chain's own verdict is ``model3d``'s business, not this payload's.
       b) a MESH for the new outfit lands in the directory -> the exact match
          is back and ``model_sig`` becomes the new stem.
-      c) nothing changes -> 0 calls again.
+      c) the route's first read of the new mesh writes its sidecar (as in
+         [2]) -> 1 call; then nothing changes -> 0 calls again.
 
 Usage:  ./.venv/bin/python scripts/smoke_worldmap_model_sig.py
 """
@@ -150,6 +161,7 @@ NAMES = ["npc_meshed", "npc_empty", "npc_bare"]
 
 def person(name: str, pieces=None) -> None:
     save_character_profile(name, {"current_location": "", "language": "en",
+                                  "template": "npc-temporary",
                                   "equipped_pieces": dict(pieces or {})},
                            create_new=True)
     save_character_current_location(name, DEPOT)
@@ -237,6 +249,9 @@ def main() -> int:
     print("\n[2] the derivation runs on a change, not on a poll")
     check("build 1 derives for the two with a model3d directory",
           c1["serving"], 2)
+    _, c_side = build()
+    check("the route's sidecar write (collision capsules) re-derives npc_meshed once",
+          c_side["serving"], 1)
     second, c2 = build()
     check("build 2 derives nothing", c2["serving"], 0)
     check("…and reports the same signature",
@@ -279,6 +294,8 @@ def main() -> int:
     check("…which /model3d confirms",
           (model3d.get_model3d_info("npc_meshed").get("model")
            or {}).get("signature"), SECOND_SIG)
+    _, c_side2 = build()
+    check("…whose sidecar write re-derives once", c_side2["serving"], 1)
     _, c5 = build()
     check("and a quiet poll derives nothing again", c5["serving"], 0)
 
