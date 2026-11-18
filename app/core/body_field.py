@@ -239,7 +239,7 @@ def _exact_outside_band(out: np.ndarray, solid: BodySolid, first: np.ndarray, ba
     """Replace the outside band ``0 < out <= band_vox`` voxels by the exact distance to the nearest of the
     triangles of their ``k`` nearest surface samples (in place; ``fit_kernels.band_distance``). A cell's point is
     ``L + (first + cell) * vox`` — counted on the body lattice, so the same cell of two crops is the same point."""
-    from pykdtree.kdtree import KDTree
+    from app.core.fit_kernels import kdtree as KDTree     # pykdtree on the fit budget
     vox = solid.vox
     band = (out > 0) & (out <= band_vox * vox)
     cells = np.argwhere(band)

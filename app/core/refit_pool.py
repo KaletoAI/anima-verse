@@ -21,7 +21,19 @@ there).
   lifespan, created lazily on the first call, ``shutdown()`` in the lifespan
   exit; scripts and smokes stay in-process unless they enable it.
 - **Start method** spawn (forking a threaded server is unsafe). A worker runs
-  at nice 10 with one BLAS thread (set before numpy is imported there).
+  at nice 10 with one BLAS thread (set before numpy is imported there) and
+  ``OMP_NUM_THREADS`` = its share of the cores when every worker computes
+  (``fit_threads_for(workers)``; for any other OpenMP user in the worker).
+- **Thread budget** (``fit_kernels.threads()``: numba kernels, cKDTree
+  ``workers=``, pykdtree's OpenMP threads (``fit_kernels.kdtree``), the EDT,
+  the drape's CPU arch, the onnxruntime session of a BiRefNet matte
+  (``character._get_rembg_session``)): one number the parent keeps
+  current in a shared int every worker reads at each kernel call —
+  ``fit_threads_for(n)`` with n = the calls computing in the pool right now.
+  A fit that runs alone gets up to ``FIT_THREADS_MAX`` threads; n fits side by
+  side share the cores less two, so they never oversubscribe them (the sum of
+  the budgets is at most ``cpu_count - 2``). The kernels give the same bits
+  for any thread count.
 - **GPU compute** (``gpu_compute``): the worker gets the server's GPU slot
   folder, ``server.gpu_compute_parallel`` and ``server.gpu_compute_device``
   at spawn and resolves its device at its first job.
@@ -77,6 +89,9 @@ TASK_TYPE = "cpu_refit"
 QUEUE_NAME = "cpu"
 #: Upper bound of the auto worker count.
 AUTO_MAX = 8
+#: Upper bound of one fit's thread budget (``fit_threads_for``): a lone fit gains up to ~16 threads and nothing
+#: past them (measured 2026-11-18, see ``fit_threads_for``).
+FIT_THREADS_MAX = 16
 
 _lock = threading.Lock()
 _pool: Any = None
@@ -94,6 +109,11 @@ _retired: list = []
 _ALONE_LOCK = threading.Lock()
 #: True inside a worker process (``_initializer``): a nested ``run`` computes in place.
 _IN_WORKER = False
+#: The workers' live thread budget: a shared int (``multiprocessing`` RawValue, handed to every worker at spawn),
+#: written by ``_computing_changed`` whenever a pool call starts or ends. None until the first pool exists.
+_BUDGET: Any = None
+#: Pool calls computing right now (``_run``), under ``_lock``.
+_computing = 0
 
 
 class WorkerDatabaseAccess(RuntimeError):
@@ -148,6 +168,31 @@ def workers() -> int:
     except Exception:  # noqa: BLE001 — a broken config never stops a refit
         logger.exception("Refit pool: worker count unreadable, running in-process")
         return 1
+
+
+def fit_threads_for(computing: int) -> int:
+    """One fit's thread budget while ``computing`` fits run side by side: ``(cpu_count - 2) // computing``, at most
+    ``FIT_THREADS_MAX``, at least 1. n fits never get more than the cores less two together."""
+    return max(1, min(FIT_THREADS_MAX, ((os.cpu_count() or 1) - 2) // max(1, int(computing))))
+
+
+def _budget() -> Any:
+    """The shared budget int (created with the first pool, in the spawn context its workers start in)."""
+    global _BUDGET
+    if _BUDGET is None:
+        import multiprocessing
+        _BUDGET = multiprocessing.get_context("spawn").RawValue("i", fit_threads_for(1))
+    return _BUDGET
+
+
+def _computing_changed(delta: int) -> None:
+    """A pool call starts (+1) or ends (-1): the workers' budget follows the number computing now (calls beyond the
+    pool's size wait for a worker and do not count)."""
+    global _computing
+    with _lock:
+        _computing = max(0, _computing + delta)
+        if _BUDGET is not None:
+            _BUDGET.value = fit_threads_for(min(_computing, _pool_size) if _pool_size else _computing)
 
 
 def enable(on: bool = True) -> None:
@@ -256,16 +301,22 @@ def _watch_parent(parent_pid: int, interval: float = PARENT_POLL_S) -> None:
     threading.Thread(target=loop, name="refit-parent-watch", daemon=True).start()
 
 
-def _initializer(blender_slots: Optional[tuple] = None, fit_threads: Optional[int] = None,
-                 parent_pid: Optional[int] = None, gpu: Optional[tuple] = None) -> None:
+def _initializer(blender_slots: Optional[tuple] = None, budget: Any = None,
+                 parent_pid: Optional[int] = None, gpu: Optional[tuple] = None,
+                 omp_threads: Optional[int] = None) -> None:
     """Runs first in every worker: no database, low priority, one BLAS thread;
     ``blender_slots`` (``runner.spawn_slots()`` of the server) pins the Blender
     limit's slot folder and count — a worker has no instance and no config;
-    ``fit_threads`` is the worker's share of the cores for the fit kernels and
-    KD-tree queries (``fit_kernels.set_threads``; None keeps its default);
+    ``budget`` is the parent's live thread budget (a shared int,
+    ``fit_kernels.follow``; None keeps the default);
     ``parent_pid`` (the server's pid) starts ``_watch_parent``, so the worker
     ends with the server (Ruling A64); ``gpu`` (``gpu_compute.spawn_spec()``)
-    pins the GPU slots and the device setting."""
+    pins the GPU slots and the device setting; ``omp_threads`` (default 1) is
+    ``OMP_NUM_THREADS`` for OpenMP users that do not follow the budget: the
+    pool's share at full load, so all workers together never oversubscribe
+    the cores (pykdtree and BiRefNet follow the budget itself since
+    2026-11-18 — on the old ``OMP_NUM_THREADS=1`` a matte took 21-25 s
+    instead of 6-8 s)."""
     global _IN_WORKER
     _IN_WORKER = True
     if parent_pid:
@@ -274,15 +325,16 @@ def _initializer(blender_slots: Optional[tuple] = None, fit_threads: Optional[in
         from app.blender import runner
         runner.pin_slots(*blender_slots)
     # numpy is not imported yet in a fresh spawned worker: these take effect.
-    for var in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
+    for var in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
         os.environ[var] = "1"
+    os.environ["OMP_NUM_THREADS"] = str(max(1, int(omp_threads or 1)))
     if gpu:
         from app.core import gpu_compute
         gpu_compute.pin(gpu)
-    if fit_threads:
+    if budget is not None:
         # after the BLAS variables: this import brings numpy in
         from app.core import fit_kernels
-        fit_kernels.set_threads(fit_threads)
+        fit_kernels.follow(budget)
     import sqlite3
     sqlite3.connect = _no_database  # type: ignore[assignment]
     sqlite3.dbapi2.connect = _no_database  # type: ignore[attr-defined]
@@ -293,16 +345,16 @@ def _initializer(blender_slots: Optional[tuple] = None, fit_threads: Optional[in
 
 
 def _new_pool(size: int, share: Optional[int] = None) -> Any:
-    """A pool of ``size`` workers whose fit kernels get ``(cores - 2) // share`` threads each (``share`` default
-    ``size``: the cores less two, shared evenly by the workers)."""
+    """A pool of ``size`` workers that follow the live thread budget (``_budget``); their fixed OpenMP pools get
+    ``fit_threads_for(share)`` threads (``share`` default ``size``: the share of each worker when all compute)."""
     import multiprocessing
     from concurrent.futures import ProcessPoolExecutor
     from app.blender import runner
     from app.core import gpu_compute
-    fit_threads = max(1, ((os.cpu_count() or 1) - 2) // max(1, share or size))
     return ProcessPoolExecutor(max_workers=size, mp_context=multiprocessing.get_context("spawn"),
-                               initializer=_initializer, initargs=(runner.spawn_slots(), fit_threads, os.getpid(),
-                                         gpu_compute.spawn_spec()))
+                               initializer=_initializer,
+                               initargs=(runner.spawn_slots(), _budget(), os.getpid(), gpu_compute.spawn_spec(),
+                                         fit_threads_for(share or size)))
 
 
 def _get_pool(size: int) -> Any:
@@ -347,8 +399,8 @@ class WorkerCrashed(RuntimeError):
 
 def _run_alone(fn: Callable[..., Any], args: Any, kwargs: Any) -> Any:
     """``fn`` in a worker process of its own (after a pool break): a crash here is this call's alone. One re-run
-    at a time (``_ALONE_LOCK``) with the fit threads of one regular slot, so the calls a break took down never
-    run beside each other in fresh processes beyond the worker limit (review 01#5). ``RefitInterrupted`` when
+    at a time (``_ALONE_LOCK``), on the live thread budget, so the calls a break took down never run beside each
+    other in fresh processes beyond the worker limit (review 01#5). ``RefitInterrupted`` when
     the server stops meanwhile."""
     from concurrent.futures import CancelledError
     from concurrent.futures.process import BrokenProcessPool
@@ -412,6 +464,15 @@ def _run(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     size = workers()
     if size <= 1:
         return fn(*args, **kwargs)
+    _computing_changed(+1)
+    try:
+        return _run_pooled(size, fn, args, kwargs)
+    finally:
+        _computing_changed(-1)
+
+
+def _run_pooled(size: int, fn: Callable[..., Any], args: Any, kwargs: Any) -> Any:
+    """``_run``'s pool path (counted in ``_computing``)."""
     from concurrent.futures import CancelledError
     from concurrent.futures.process import BrokenProcessPool
     pool = _get_pool(size)

@@ -3489,6 +3489,8 @@ def _add_character_outfit_locked(character_name: str, outfit_data: Dict) -> str:
 
 
 _REMBG_SESSIONS: dict = {}
+#: The thread count each cached session was made for (None = onnxruntime's from OMP_NUM_THREADS).
+_REMBG_THREADS: dict = {}
 _REMBG_SESSION_LOCK = None
 
 
@@ -3514,16 +3516,34 @@ def _get_rembg_session(model: str = "u2net"):
     Reusing a session avoids repeated model loads and onnxruntime's
     pthread_setaffinity_np error on new InferenceSessions without explicit
     intra_op_num_threads in SessionOptions. A missing model file is
-    downloaded into U2NET_HOME by rembg on first use."""
+    downloaded into U2NET_HOME by rembg on first use.
+
+    In a refit worker the session runs on the fit's live thread budget
+    (``fit_kernels.explicit_threads``) instead of the worker's
+    OMP_NUM_THREADS: a lone fit gets up to 16 threads, fits side by side
+    share the cores (BiRefNet-DIS, 2026-11-18: 22 s per image on the old
+    single thread, 6.3 s on 16, 7.8 s on 6). onnxruntime fixes its thread
+    count per session, so a session made for a budget more than 1.5x off the
+    current one is rebuilt (~5-6 s); elsewhere the count is None and nothing
+    changes."""
     global _REMBG_SESSION_LOCK
-    if model in _REMBG_SESSIONS:
+    from app.core import fit_kernels
+    threads = fit_kernels.explicit_threads()
+
+    def _fits(made_for) -> bool:
+        if threads is None or made_for is None:
+            return threads == made_for
+        return max(threads, made_for) <= 1.5 * min(threads, made_for)
+
+    if model in _REMBG_SESSIONS and _fits(_REMBG_THREADS.get(model)):
         return _REMBG_SESSIONS[model]
     if _REMBG_SESSION_LOCK is None:
         import threading as _t
         _REMBG_SESSION_LOCK = _t.Lock()
     with _REMBG_SESSION_LOCK:
-        if model in _REMBG_SESSIONS:
+        if model in _REMBG_SESSIONS and _fits(_REMBG_THREADS.get(model)):
             return _REMBG_SESSIONS[model]
+        _REMBG_SESSIONS.pop(model, None)        # the old one's memory goes before the new one loads
         # Set OMP_NUM_THREADS before importing rembg to keep onnxruntime
         # from attempting CPU affinity changes that fail inside containers.
         import os
@@ -3537,9 +3557,15 @@ def _get_rembg_session(model: str = "u2net"):
         # rembg still fills the thread counts from OMP_NUM_THREADS.
         opts = ort.SessionOptions()
         opts.enable_cpu_mem_arena = False
+        if threads:
+            # set: rembg then leaves them alone
+            opts.intra_op_num_threads = int(threads)
+            opts.inter_op_num_threads = 1
         _REMBG_SESSIONS[model] = new_session(model, sess_opts=opts)
-        logger.info("rembg session initialised (%s, OMP_NUM_THREADS=%s)",
-                    model, os.environ.get("OMP_NUM_THREADS"))
+        _REMBG_THREADS[model] = threads
+        logger.info("rembg session initialised (%s, %s)", model,
+                    f"{threads} threads (fit budget)" if threads
+                    else f"OMP_NUM_THREADS={os.environ.get('OMP_NUM_THREADS')}")
     return _REMBG_SESSIONS[model]
 
 

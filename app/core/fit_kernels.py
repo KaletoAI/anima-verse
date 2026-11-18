@@ -6,28 +6,100 @@
 - ``band_distance`` is the exact point-triangle distance of the field's outside band, a numba kernel that gives the
   same bits as ``garment_fit.point_triangle_distance(...).min(1)`` (Task 2).
 - ``threads`` / ``set_threads`` is the fit's thread budget: numba's thread count and the ``workers=`` of the fits'
-  KD-tree queries. A refit worker sets it from the pool initializer (``refit_pool._initializer``); elsewhere it is 4.
-  Every one of these kernels gives the same result for any thread count.
+  KD-tree queries. A refit worker follows the pool parent's live budget (``follow``, ``refit_pool``); elsewhere it is 4.
+  Every one of these kernels gives the same result for any thread count. Once the budget is explicit (a worker),
+  pykdtree's OpenMP threads (``kdtree``) and a BiRefNet matte's onnxruntime session follow it as well.
 """
 from __future__ import annotations
 
 import threading
+from typing import Any, Dict, Optional
 
 import numpy as np
 
 _THREADS = 4
+#: A refit worker's live budget (``follow``): a shared int the pool's parent keeps current.
+_LIVE = None
 
 
 def threads() -> int:
-    """The fit's thread budget (numba kernels, KD-tree ``workers=``); 4 unless ``set_threads`` changed it."""
+    """The fit's thread budget (numba kernels, KD-tree ``workers=``, the EDT, the drape's CPU arch): in a refit
+    worker the parent's live value (``follow``), else 4 unless ``set_threads`` changed it. Read it at each call —
+    in a worker it changes while the process runs."""
+    live = _LIVE
+    if live is not None:
+        try:
+            value = int(live.value)
+        except (AttributeError, TypeError, ValueError, OSError):
+            value = 0
+        if value > 0:
+            return value
     return _THREADS
 
 
 def set_threads(n: int) -> None:
     """Set the fit's thread budget (at least 1). numba's own thread count follows it on every kernel call (it is
     per calling thread there), capped at the pool numba started with."""
-    global _THREADS
+    global _THREADS, _EXPLICIT
     _THREADS = max(1, int(n))
+    _EXPLICIT = True
+
+
+def follow(shared) -> None:
+    """Read the budget from ``shared`` (an object with an int ``.value``: the refit pool's shared budget) from now
+    on (``refit_pool._initializer``); None returns to the fixed value."""
+    global _LIVE, _EXPLICIT
+    _LIVE = shared
+    _EXPLICIT = _EXPLICIT or shared is not None
+
+
+#: True once the budget was set on purpose (``set_threads`` / ``follow``: a refit worker, a bench). Only then do the
+#: thread pools that are NOT ours follow it (pykdtree's OpenMP, ``kdtree``; the BiRefNet session,
+#: ``character._get_rembg_session``) — the server process keeps their own defaults.
+_EXPLICIT = False
+_OMP: Dict[str, Any] = {"tried": False, "lib": None}
+_OMP_LOCAL = threading.local()
+
+
+def explicit_threads() -> Optional[int]:
+    """``threads()`` when the budget was set on purpose (a refit worker follows its parent's), else None."""
+    return threads() if _EXPLICIT else None
+
+
+def _gomp() -> Any:
+    """The OpenMP runtime pykdtree runs on (its wheel bundles its own libgomp; dlopen of the same file returns the
+    handle the extension already uses), else the system's; None when neither loads."""
+    if not _OMP["tried"]:
+        _OMP["tried"] = True
+        try:
+            import ctypes
+            import ctypes.util
+            from pathlib import Path
+            import pykdtree.kdtree as _kd
+            bundled = sorted((Path(_kd.__file__).resolve().parent.parent / "pykdtree.libs").glob("libgomp*.so*"))
+            name = str(bundled[0]) if bundled else ctypes.util.find_library("gomp")
+            if name:
+                lib = ctypes.CDLL(name)
+                lib.omp_set_num_threads.argtypes = [ctypes.c_int]
+                _OMP["lib"] = lib
+        except Exception:  # noqa: BLE001 — no OpenMP control: pykdtree keeps OMP_NUM_THREADS
+            _OMP["lib"] = None
+    return _OMP["lib"]
+
+
+def kdtree(data: np.ndarray, *args: Any, **kwargs: Any) -> Any:
+    """``pykdtree.kdtree.KDTree(data, ...)`` whose queries on THIS thread run on the fit budget: its OpenMP thread
+    count is fixed per process by ``OMP_NUM_THREADS`` otherwise, so a refit worker's queries would stay on the
+    worker's start share (1 thread before 2026-11-18: a KD query 0.93 s instead of 0.38 s per crop). Set only when
+    the budget is explicit (``explicit_threads``); the result is the same for any thread count."""
+    from pykdtree.kdtree import KDTree
+    n = explicit_threads()
+    if n is not None and getattr(_OMP_LOCAL, "n", None) != n:
+        lib = _gomp()
+        if lib is not None:
+            lib.omp_set_num_threads(int(n))      # the calling thread's ICV: the query below runs on it
+            _OMP_LOCAL.n = n
+    return KDTree(data, *args, **kwargs)
 
 
 def fill_holes(mask: np.ndarray) -> np.ndarray:
@@ -212,7 +284,7 @@ def band_distance(X: np.ndarray, P: np.ndarray, tris: np.ndarray) -> np.ndarray:
         return np.full(len(X), np.inf)
     kernel = _kernel()
     import numba
-    numba.set_num_threads(min(_THREADS, numba.config.NUMBA_NUM_THREADS))
+    numba.set_num_threads(min(threads(), numba.config.NUMBA_NUM_THREADS))
     if not _SERIAL:
         return kernel(X, P, tris)
     # numba's "workqueue" threading layer must never be entered from two threads at once (the server can run two

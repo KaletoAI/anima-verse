@@ -28,9 +28,18 @@ commit 8e67362b (Task 1 and its fix round, the last ``body_sdf`` before this tas
      lattice with pykdtree — small differences on purpose, checked by ``smoke_body_field_cache.py`` [C4]).
 [K4] ``set_threads(1)`` and ``set_threads(4)`` give equal ``band_distance`` output (bits) on 200 000 rows: the rows are
      independent, the thread count only splits them. ``threads()`` reads back 1 and 4.
-[K5] ``refit_pool._initializer(None, 3)`` leaves ``fit_kernels.threads() == 3`` — in a child process, since the
-     initializer disables sqlite and lowers the priority of the process it runs in. The same child first reads the
-     default ``threads() == 4``.
+[K5] The live budget (Build 3, 2026-11-18): ``refit_pool._initializer(None, v, None, None, 5)`` with ``v`` a shared
+     int holding 3 leaves ``fit_kernels.threads() == 3``; ``v.value = 8`` then reads 8 with no further call (a worker
+     follows its parent while it runs); ``OMP_NUM_THREADS`` is "5" (the fixed OpenMP share). In a child process,
+     since the initializer disables sqlite and lowers the priority of the process it runs in. The same child first
+     reads the default ``threads() == 4``.
+[K6] ``refit_pool.fit_threads_for(n)`` = min(16, (cpu_count - 2) // n), at least 1 — on 28 cores: n 1 -> 16,
+     2 -> 13, 3 -> 8, 4 -> 6, 6 -> 4, 8 -> 3; on any core count n fits get at most cpu_count - 2 together
+     (n x ((C - 2) // n) <= C - 2), checked for n 1..8 on this machine's count and on 28 and 4 (patched).
+[K7] pykdtree follows the budget once it is explicit (``fit_kernels.kdtree``; in a child with OMP_NUM_THREADS=2):
+     before any ``set_threads`` ``explicit_threads()`` is None and the OpenMP runtime pykdtree bundles still says 2
+     (the server process keeps its own); after ``set_threads(5)`` it says 5, after ``set_threads(1)`` 1, and the
+     8-nearest query (20 000 points, 50 000 queries) returns the same distances and indices on 2, 5 and 1 threads.
 """
 import math
 import subprocess
@@ -222,21 +231,61 @@ def test_k3(gf):
 
 
 def test_k5():
-    code = ("import sys; sys.path.insert(0, %r)\n"
+    code = ("import os, sys, multiprocessing; sys.path.insert(0, %r)\n"
             "from app.core import fit_kernels, refit_pool\n"
             "d = fit_kernels.threads()\n"
-            "refit_pool._initializer(None, 3)\n"
-            "print(d, fit_kernels.threads())\n") % str(ROOT)
+            "v = multiprocessing.get_context('spawn').RawValue('i', 3)\n"
+            "refit_pool._initializer(None, v, None, None, 5)\n"
+            "a = fit_kernels.threads()\n"
+            "v.value = 8\n"
+            "print(d, a, fit_kernels.threads(), os.environ['OMP_NUM_THREADS'])\n") % str(ROOT)
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=str(ROOT))
     got = out.stdout.split()
-    check(out.returncode == 0 and got == ["4", "3"],
-          f"[K5] default threads() 4, after refit_pool._initializer(None, 3) -> 3 (child said {got or out.stderr[-300:]})")
+    check(out.returncode == 0 and got == ["4", "3", "8", "5"],
+          f"[K5] default threads() 4; after _initializer with a live budget of 3 -> 3, the parent writes 8 -> 8; "
+          f"OMP_NUM_THREADS 5 (child said {got or out.stderr[-300:]})")
+
+
+def test_k6():
+    import os
+    from unittest import mock
+    from app.core import refit_pool
+    want28 = {1: 16, 2: 13, 3: 8, 4: 6, 6: 4, 8: 3}
+    with mock.patch.object(os, "cpu_count", return_value=28):
+        got28 = {n: refit_pool.fit_threads_for(n) for n in want28}
+    check(got28 == want28, f"[K6] 28 cores: {got28} == {want28}")
+    for cores in (os.cpu_count() or 1, 28, 4):
+        with mock.patch.object(os, "cpu_count", return_value=cores):
+            sums = {n: n * refit_pool.fit_threads_for(n) for n in range(1, 9)}
+        over = {n: v for n, v in sums.items() if v > max(cores - 2, n)}
+        check(not over, f"[K6] {cores} cores: n fits together get <= cores - 2 threads (1 each at least): {sums}")
+
+
+def test_k7():
+    code = ("import sys; sys.path.insert(0, %r)\n"
+            "import numpy as np\n"
+            "from app.core import fit_kernels as fk\n"
+            "rng = np.random.default_rng(3); P = rng.random((20000, 3)); X = rng.random((50000, 3))\n"
+            "e0 = fk.explicit_threads(); fk.kdtree(P); lib = fk._gomp(); m0 = lib.omp_get_max_threads()\n"
+            "a = fk.kdtree(P).query(X, k=8)\n"
+            "fk.set_threads(5); t = fk.kdtree(P); m5 = lib.omp_get_max_threads(); b = t.query(X, k=8)\n"
+            "fk.set_threads(1); fk.kdtree(P); m1 = lib.omp_get_max_threads(); c = fk.kdtree(P).query(X, k=8)\n"
+            "same = all(np.array_equal(x[i], y[i]) for x, y in ((a, b), (a, c)) for i in (0, 1))\n"
+            "print(e0, m0, fk.explicit_threads(), m5, m1, same)\n") % str(ROOT)
+    import os
+    env = dict(os.environ, OMP_NUM_THREADS="2")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=str(ROOT), env=env)
+    got = out.stdout.split()
+    check(out.returncode == 0 and got == ["None", "2", "1", "5", "1", "True"],
+          f"[K7] pykdtree's OpenMP: no explicit budget -> OMP_NUM_THREADS (2) untouched; set_threads(5) -> 5, "
+          f"set_threads(1) -> 1 threads for the next query; equal results (child said {got or out.stderr[-300:]})")
 
 
 def main():
     from app.core import fit_kernels as fk
     from app.core import garment_fit as gf
-    for fn, args in ((test_k1, (fk,)), (test_k2, (fk, gf)), (test_k3, (gf,)), (test_k4, (fk,)), (test_k5, ())):
+    for fn, args in ((test_k1, (fk,)), (test_k2, (fk, gf)), (test_k3, (gf,)), (test_k4, (fk,)), (test_k5, ()),
+                     (test_k6, ()), (test_k7, ())):
         try:
             fn(*args)
         except Exception as e:  # noqa: BLE001 - a missing kernel is a FAIL, not a crash

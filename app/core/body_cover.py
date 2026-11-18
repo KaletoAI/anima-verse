@@ -213,7 +213,7 @@ def _keep_bands(points: np.ndarray, covered: np.ndarray, exposed: np.ndarray, ri
                 stats: Dict[str, Any]) -> None:
     """Uncover (in place) the covered points within ``SEEN_BAND_M`` of an exposed one and within ``HEM_BAND_M`` of
     a border vertex."""
-    from pykdtree.kdtree import KDTree
+    from app.core.fit_kernels import kdtree as KDTree     # pykdtree on the fit budget
     for key, seeds, band in (("seen_kept", points[exposed], SEEN_BAND_M), ("hem_kept", rim, HEM_BAND_M)):
         stats[key] = 0
         cand = np.flatnonzero(covered)
@@ -229,7 +229,7 @@ def covered_vertices(body_pos: np.ndarray, body_faces: np.ndarray,
                      pieces: Sequence[Tuple[np.ndarray, np.ndarray]]) -> Tuple[np.ndarray, Dict[str, Any]]:
     """(bool mask over the body vertices, stats) — see the module rule. ``pieces`` = (positions, faces) of each
     clothing piece in the body's space."""
-    from pykdtree.kdtree import KDTree
+    from app.core.fit_kernels import kdtree as KDTree     # pykdtree on the fit budget
     B = np.ascontiguousarray(np.asarray(body_pos, np.float64))
     covered = np.zeros(len(B), bool)
     stats: Dict[str, Any] = {"pieces": len(pieces), "near": 0, "hem_kept": 0, "seen_kept": 0, "covered": 0}
@@ -263,7 +263,7 @@ def covered_vertices(body_pos: np.ndarray, body_faces: np.ndarray,
 def covered_under(lower_pos: np.ndarray, body_pos: np.ndarray,
                   pieces: Sequence[Tuple[np.ndarray, np.ndarray]]) -> Tuple[np.ndarray, Dict[str, Any]]:
     """(bool mask over the lower piece's vertices, stats): covered by the upper ``pieces`` — see the module rule."""
-    from pykdtree.kdtree import KDTree
+    from app.core.fit_kernels import kdtree as KDTree     # pykdtree on the fit budget
     L = np.ascontiguousarray(np.asarray(lower_pos, np.float64))
     covered = np.zeros(len(L), bool)
     stats: Dict[str, Any] = {"pieces": len(pieces), "hem_kept": 0, "seen_kept": 0, "covered": 0}
