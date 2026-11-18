@@ -564,7 +564,7 @@ export class StrandSim {
   private flyKey = NaN
   private readonly g = new Float32Array(3)
   /** The bind-rule factor tables of the last `FACTOR_TABLES_KEPT` capsule lists, newest first (`factors`). */
-  private capTables: { key: readonly unknown[]; fac: Float32Array }[] = []
+  private capTables: { key: readonly unknown[]; fac: Float32Array<ArrayBuffer> }[] = []
   private capFactors = new Float32Array(0)
   private readonly frames = new Float64Array(R * 9)
   /** The targets of the previous step (carried with the rows). Ruling H-R10: the step is Verlet in the TARGET's
