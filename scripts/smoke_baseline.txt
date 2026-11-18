@@ -23,7 +23,6 @@ smoke_garment_wardrobe_routes	STALE: clothing gate limits and the "no base model
 smoke_hair_strands_graft	STALE: [4] the build's sidecar no longer carries the strand attributes record the smoke expects; not re-derived
 smoke_image_routing_migration	STALE: _seed_default_mesh_backends appends quadruped-local to every existing list (d4aa4edd8/62c7b7b51, its docstring) and seeds 12 entries; C3 pins (False,1) / (True,11) / an emptied list staying [] — owner to confirm "emptied stays empty" vs the quadruped addition
 smoke_improvement_base_refresh	STALE: estimate of an older-prompt base refresh is 8 hub jobs (was 7): the full-body reference step (A87 c24544018) adds one
-smoke_interact_answer	STALE: "provider registered": the open-questions provider is not registered by importing plugins.interact.register in a world without schema ("no such table: characters"); not re-derived
 smoke_migrate_instance_config	STALE: the seeded routing now carries the newer occasions (base_front, base_view, outfit_*, ...); the expected chain set predates them
 smoke_model3d_stale_base	STALE: A119/b25bbbe39 serving rule: a humanoid is never served another figure's stored model, so the "stale older base" fixture model is not served
 smoke_npc_skills	STALE: 36ebf80d5 deliberately replaced the temporary-NPC 19-id brief set by the 26-skill set (incl. act, setlocation, go_to_character, outfit_change, prop_action, read_item); the smoke's hand-derived set, in-repo set and closed-list rules need re-deriving by the owner

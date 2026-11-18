@@ -30,7 +30,9 @@ EXPECTATIONS, DERIVED BY HAND
 5  the same with answer "no" -> resolve_invite("i1", False) — a no answers
    the open question — reply "Kira turns Halvard down — no hugging. ...".
 6  provider tool_decision.open_questions(Kira, [InteractWith]) with the open
-   "hugging" invitation -> exactly one line:
+   "hugging" invitation — one CONTRIBUTOR among several since b4e377104 (the
+   party package adds its trip questions; ``get_providers`` lists it, the
+   single-provider slot ``get_provider`` stays empty) -> exactly one line:
    'Halvard invited Kira to "hugging". Yes: InteractWith {"partner":
    "Halvard", "action": "hugging"} — exactly this action, even if the reply
    describes it in other words. No: InteractWith {"partner": "Halvard",
@@ -159,11 +161,11 @@ check("refuses hugging", "Kira turns Halvard down — no hugging." in r, True)
 
 print("6 open questions provider")
 import plugins.interact.register as REG  # noqa: E402
-from app.core.hooks import get_provider  # noqa: E402
+from app.core.hooks import get_providers  # noqa: E402
 LINE = ('Halvard invited Kira to "hugging". Yes: InteractWith {"partner": "Halvard", '
         '"action": "hugging"} — exactly this action, even if the reply describes it in '
         'other words. No: InteractWith {"partner": "Halvard", "action": "hugging", "answer": "no"}.')
-check("provider registered", get_provider("tool_decision.open_questions") is REG.open_questions, True)
+check("provider registered (a contributor)", REG.open_questions in get_providers("tool_decision.open_questions"), True)
 check("one exact line", REG.open_questions(ACTOR, ["InteractWith", "TalkTo"]), [LINE])
 check("nothing without the verb", REG.open_questions(ACTOR, ["TalkTo"]), [])
 
