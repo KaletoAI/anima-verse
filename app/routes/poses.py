@@ -860,10 +860,14 @@ def delete_entry(key: str, axis: str = Query("pose"),
                                     detail="the default entry cannot be deleted")
             data["entries"].pop(key, None)
             write_store(axis, data, store)
-            transitions_removed = 0
-            if axis == "pose" and key not in pose_catalog.get_catalog(axis):
-                from app.core.animation_clips import drop_transition_pose
-                transitions_removed = drop_transition_pose(key)
+            gone = axis == "pose" and key not in pose_catalog.get_catalog(axis)
+        # After the catalog transaction, like the rename route: the rule
+        # cleanup takes the clip-library lock, and that lock comes BEFORE a
+        # pose catalog transaction, never inside one.
+        transitions_removed = 0
+        if gone:
+            from app.core.animation_clips import drop_transition_pose
+            transitions_removed = drop_transition_pose(key)
         return {"status": "success", "key": key, "axis": axis, "store": store,
                 "transitions_removed": transitions_removed}
     except CatalogEditError as e:

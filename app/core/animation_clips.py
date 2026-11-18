@@ -1060,16 +1060,21 @@ def rename_transition_pose(old: str, new: str) -> int:
 
 
 def drop_transition_pose(key: str) -> int:
-    """Remove references from both layers, including hidden shared rules."""
-    count = 0
-    for rules, write in ((load_shared_transitions(), _write_transitions),
-                         (world_transitions(), _write_world_transitions)):
-        kept = [r for r in rules if key not in (r["from"], r["to"])]
-        removed = len(rules) - len(kept)
-        if removed:
-            write(kept)
-        count += removed
-    return count
+    """Remove references from both layers, including hidden shared rules.
+
+    A read-modify-write of the same table ``save_transitions`` writes, so it
+    holds the same clip-library lock (callers must not hold a pose catalog
+    transaction — the lock order is clip_library first)."""
+    with keyed_lock("clip_library", "write"):
+        count = 0
+        for rules, write in ((load_shared_transitions(), _write_transitions),
+                             (world_transitions(), _write_world_transitions)):
+            kept = [r for r in rules if key not in (r["from"], r["to"])]
+            removed = len(rules) - len(kept)
+            if removed:
+                write(kept)
+            count += removed
+        return count
 
 
 # ── The library view: one clip as the listing (and the editor) sees it ────

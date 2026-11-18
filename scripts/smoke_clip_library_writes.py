@@ -38,6 +38,18 @@ Usage: ./.venv/bin/python scripts/smoke_clip_library_writes.py
         lock held by another thread it has not finished after 0.3 s; after
         the release it renames ``sitting`` → ``seated`` in the seed and
         returns 1 (old code: finished at once, without the lock).
+    (e) ``drop_transition_pose`` takes the same lock: with it held elsewhere
+        it has not finished after 0.3 s; after the release it drops the one
+        rule naming ``seated`` and returns 1.
+    (f) the pose DELETE route (``poses.delete_entry``) of a world pose
+        ``p-gone`` with one rule ``p-gone → standing`` calls
+        ``drop_transition_pose`` only AFTER its catalog transaction: at that
+        call another thread can take ``keyed_lock("pose_catalog", "pose")``
+        at once (the lock order is clip_library → pose catalog, so taking
+        the clip lock inside the transaction could deadlock against the pose
+        animation publish, which holds clip_library and then waits for the
+        catalog). The answer reports ``transitions_removed`` 1 and the rule
+        is gone. (Old route: the transaction was still held at the call.)
 [12] An alt rel is refused by delete / rename / orient (04#12). Pair
     ``kiss__a.fbx`` / ``kiss__b.fbx`` with the alt ``kiss__b~wave.fbx`` and
     ``kiss.json`` (alts b: [wave]). ``delete_clip``, ``rename_clip``
@@ -200,6 +212,56 @@ def test_transition_maintenance():
     saved = [(x["from"], x["to"]) for x in read(TRANSITIONS)["transitions"]]
     check("(d) after the release it renamed one rule", result.get("n") == 1
           and ("seated", "standing") in saved, f"{result} {saved}")
+
+    taken, release = threading.Event(), threading.Event()
+    result = {}
+    h = threading.Thread(target=holder)
+    h.start()
+    taken.wait(10)
+    r = threading.Thread(target=lambda: result.setdefault("n", clips.drop_transition_pose("seated")))
+    r.start()
+    r.join(0.3)
+    check("(e) drop_transition_pose waits for the clip-library lock", r.is_alive())
+    release.set()
+    r.join(10)
+    h.join(10)
+    saved = [(x["from"], x["to"]) for x in read(TRANSITIONS)["transitions"]]
+    check("(e) after the release it dropped one rule", result.get("n") == 1
+          and all("seated" not in pair for pair in saved), f"{result} {saved}")
+
+    from app.core import pose_catalog
+    from app.routes import poses
+    entries = pose_catalog.world_entries("pose")
+    entries["p-gone"] = dict(participants=1, animation="walk", group="stand", places=1, prompt="p-gone")
+    pose_catalog.replace_world_entries("pose", entries)
+    pose_catalog.reload_catalogs()
+    TRANSITIONS.write_text(json.dumps({"transitions": [
+        {"from": "p-gone", "to": "standing", "kind": "walk"}]}), encoding="utf-8")
+    seen = {}
+    real_drop = clips.drop_transition_pose
+
+    def watched_drop(key):
+        free = []
+
+        def probe():
+            lock = keyed_lock("pose_catalog", "pose")
+            got = lock.acquire(blocking=False)
+            free.append(got)
+            if got:
+                lock.release()
+        t = threading.Thread(target=probe)
+        t.start()
+        t.join(5)
+        seen["catalog_free"] = free == [True]
+        return real_drop(key)
+
+    with patch.object(clips, "drop_transition_pose", watched_drop):
+        answer = poses.delete_entry("p-gone", "pose", {})
+    check("(f) the DELETE route drops rules only after its catalog transaction",
+          seen.get("catalog_free") is True, str(seen))
+    check("(f) it reports and removes the one rule",
+          answer.get("transitions_removed") == 1 and read(TRANSITIONS)["transitions"] == [],
+          f"{answer} {TRANSITIONS.read_text()}")
 
 
 def test_alt_rel_refused():
