@@ -246,11 +246,14 @@ def poll_job(backend: ImageBackend, job_id: str, *,
     the job best effort and raises ``GenerationCancelled(job_id)``.
 
     Returns the result blobs (or ``[]``). Raises ``BackendBusyError`` when the
-    job runs or waits past its budget (load, no cooldown). A lost job — 3
-    consecutive 404s, or more than 10 other failed polls — is cancelled
-    (best effort, ``_cancel_lost_job``) and returns ``[]`` (gone/broken ->
-    cooldown is correct). A job the gateway reports failed for any other
-    reason raises ``GatewayJobFailed`` with the gateway's error text.
+    job runs or waits past its budget (load, no cooldown). A job the gateway
+    no longer knows — 3 consecutive 404s, or one 410 — raises
+    ``GatewayRejectedError`` (terminal, no cooldown; there is nothing left to
+    cancel under that id). More than 10 other failed polls (5xx, connection
+    errors) make the job lost: it is cancelled (best effort,
+    ``_cancel_lost_job``) and ``[]`` is returned (broken -> cooldown is
+    correct). A job the gateway reports failed for any other reason raises
+    ``GatewayJobFailed`` with the gateway's error text.
 
     ``attach_since`` (SYSTEM epoch seconds of the original submission)
     switches to ATTACH semantics — collecting a job recorded before a restart

@@ -24,7 +24,6 @@ smoke_garment_refit_source	STALE: same dress fixture as smoke_garment_chain, ref
 smoke_garment_routes	STALE: hair payload and footwear gate limits changed since the smoke was written
 smoke_garment_store	STALE: "bad view" no longer raises: the view set grew (A185 garment_set GARMENT_VIEWS, 91f4908bf)
 smoke_garment_wardrobe_routes	STALE: clothing gate limits and the "no base model" status text changed
-smoke_gateway_503_mapping	REAL: C7a/C7d: after three 404 polls the job is rejected without the expected cancel POST; red already at its own commit 5ffbe7624 (tree snapshot)
 smoke_hair_strands_graft	STALE: [4] the build's sidecar no longer carries the strand attributes record the smoke expects; not re-derived
 smoke_heel_pose	REAL: guard hit: WardrobeGarment.tsx shows the served figure (figureNow.served_url, A136 b4787f2c7) in a viewer without footPose — a shod figure there plays bare-foot tracks
 smoke_hub_job_resume	STALE: B3 improvement-engine doubles are behind several API changes (store rows carry forced, ImprovementType needs_media/subject_character, the image service .pool for face_retexture routing); stopped after three layers

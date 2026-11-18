@@ -57,14 +57,24 @@ Hand-derived expectations
        routing a failed mesh/video is re-run on the next chain entry, so the
        abandoned job must not keep running on the gateway). Lost = 3
        consecutive 404s, or more than 10 (= 11) other failed polls:
-       C7a GET → 404 always          → 3 GETs, [] and exactly ONE POST to
+       C7a GET → 404 always          → 3 GETs, GatewayRejectedError
+                                       "gw-job: job j1 is no longer retrievable
+                                       (HTTP 404)" and NO cancel POST: since
+                                       78078fc94 a job the gateway no longer
+                                       knows is terminal like 410 (nothing is
+                                       left to cancel under that id), and
+                                       44ee198b0 made that the contract
+                                       (base.GatewayJobFailed, smoke
+                                       smoke_gateway_job_failure_class [F2]:
+                                       re-raised, no cooldown)
+       C7b GET → 500 always          → 11 GETs, [] and exactly ONE POST to
                                        http://gw.invalid/v1/jobs/j1/cancel
-       C7b GET → 500 always          → 11 GETs, [], one cancel POST
        C7c GET raises ConnectionError→ 11 GETs, [], one cancel POST
-       C7d GET → 404, the cancel POST raises → still [] (best effort: the
-                                       cancel never raises out of poll_job)
+       C7d GET → 500, the cancel POST raises → still [] and the one POST
+                                       (best effort: the cancel never raises
+                                       out of poll_job)
        C7e C6's "failed" job (the gateway ENDED it) → no cancel POST (0)
-       Fails on commit 4893221f: C7a-C7d see 0 cancel POSTs.
+       Fails on commit 4893221f: C7b-C7d see 0 cancel POSTs.
 [D] localai_video ``_generate``:
     D1 503 (no header), always   → 4 POSTs, waits [2, 8, 20], RuntimeError
     D2 503 Retry-After: 3        → 1 POST, BackendBusyError
@@ -99,7 +109,7 @@ import app.imagegen.backends._gateway_job as gj  # noqa: E402
 import app.imagegen.backends.localai_video as lv_mod  # noqa: E402
 import app.imagegen.backends.openai_chat as chat_mod  # noqa: E402
 import app.imagegen.backends.openai_diffusion as od  # noqa: E402
-from app.imagegen.base import BackendBusyError  # noqa: E402
+from app.imagegen.base import BackendBusyError, GatewayRejectedError  # noqa: E402
 from app.imagegen.selection import BackendPool  # noqa: E402
 
 FAILURES = []
@@ -336,8 +346,9 @@ def poll_lost(get_answer, cancel_raises=False):
 
 CANCEL = ["http://gw.invalid/v1/jobs/j1/cancel"]
 gets, posts, res = poll_lost(lambda: FakeResponse(404))
-check("C7a 3x404: 3 GETs, [], one cancel POST",
-      len(gets) == 3 and res == [] and posts == CANCEL,
+check("C7a 3x404: 3 GETs, GatewayRejectedError, no cancel POST",
+      len(gets) == 3 and isinstance(res, GatewayRejectedError)
+      and str(res) == "gw-job: job j1 is no longer retrievable (HTTP 404)" and posts == [],
       f"{len(gets)} {res!r} {posts}")
 gets, posts, res = poll_lost(lambda: FakeResponse(500))
 check("C7b 11x500: 11 GETs, [], one cancel POST",
@@ -348,7 +359,7 @@ gets, posts, res = poll_lost(
 check("C7c 11 poll exceptions: 11 GETs, [], one cancel POST",
       len(gets) == 11 and res == [] and posts == CANCEL,
       f"{len(gets)} {res!r} {posts}")
-gets, posts, res = poll_lost(lambda: FakeResponse(404), cancel_raises=True)
+gets, posts, res = poll_lost(lambda: FakeResponse(500), cancel_raises=True)
 check("C7d a failing cancel never raises: []",
       res == [] and posts == CANCEL, f"{res!r} {posts}")
 gets, posts, res = poll_lost(
