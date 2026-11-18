@@ -26,8 +26,15 @@
  *     local x -> model (0, 0, -1), local z -> model (1, 0, 0); the first row of R is (0, 0, 1), so the model's +X is
  *     the bone's local +Z and the same 10 degrees give the local quaternion (0, 0, 0.0871557, 0.9961947) — the
  *     vertex lands on the same (0, 1.487323, 0.084893).
- *     Without `mouth_open_deg` the full angle is JAW_OPEN_DEG = 26: value 1 -> (sin 13, 0, 0, cos 13) =
- *     (0.2249511, 0, 0, 0.9743701).
+ *     Without `mouth_open_deg` the full angle is JAW_OPEN_DEG = 30 (Ruling A206; 26 before): value 1 ->
+ *     (sin 15, 0, 0, cos 15) = (0.2588190, 0, 0, 0.9659258).
+ * [5] THE TEETH (Ruling A206). mouthPassHeight: {open_height 0.04, teeth_gap 0.025} -> 0.025 (the teeth decide);
+ *     {open_height 0.04} -> 0.04; {teeth_gap 0, open_height 0.04} -> 0.04; {} / null -> 0. FigureRuntime with the
+ *     record of [3] plus teeth_gap 0.025: the occupant of [3] (radius 0.02 x w 0.5 = 0.01) -> (0.02 + 0.004) / 0.025
+ *     = 0.96 (0.6 without teeth). isRigidTeeth: material 'mouth_teeth' and 'mouth_teeth.001' -> true, 'mouth_tongue',
+ *     'Material_0', [teeth, skin] and none -> false. bindChannelOpening on a figure whose ONLY mesh lies on the
+ *     channel axis inside the channel: material 'mouth_teeth' -> null (nothing bound, the teeth stay rigid);
+ *     'mouth_tongue' -> bound with all 4 vertices as candidates (the tongue is pushed).
  */
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -181,8 +188,45 @@ check('[4] ... the same vertex position', vnear(j.vertex(), [0, 1.487323, 0.0848
 j = jawFixture(0, 0)
 jo = SR.bindMouthOpen(j.inst)
 jo.setManual(1)
-check('[4] no angle on the bone: 26 degrees', vnear(q(j.jaw), [0.2249511, 0, 0, 0.9743701], 1e-6) && SR.JAW_OPEN_DEG === 26,
+check('[4] no angle on the bone: 30 degrees', vnear(q(j.jaw), [0.2588190, 0, 0, 0.9659258], 1e-6) && SR.JAW_OPEN_DEG === 30,
   fmt(q(j.jaw)))
+
+// [5]
+check('[5] teeth decide', SR.mouthPassHeight({ open_height: 0.04, teeth_gap: 0.025 }) === 0.025)
+check('[5] no teeth: the lips', SR.mouthPassHeight({ open_height: 0.04 }) === 0.04
+  && SR.mouthPassHeight({ teeth_gap: 0, open_height: 0.04 }) === 0.04)
+check('[5] neither', SR.mouthPassHeight({}) === 0 && SR.mouthPassHeight(null) === 0)
+{
+  const g = make()
+  const rt5 = SR.createFigureRuntime(THREE, { root: g.root, motion: () => undefined,
+    collision: { version: SR.COLLISION_VERSION, capsules: [], channels: [{ ...built(0.04), teeth_gap: 0.025 }] },
+    tier: 'full', bindRadius: 2 })
+  rt5.applyChannelOpenings([{ channel: 'mouth', w: 0.5, segments: [seg(0.02), seg(0.016)] }], { left: 0 })
+  check('[5] contact opens by the teeth gap: 0.96', near(g.mesh.morphTargetInfluences[1], 0.96, 1e-9), g.mesh.morphTargetInfluences[1])
+}
+const mat = (name) => ({ name })
+check('[5] isRigidTeeth', SR.isRigidTeeth({ material: mat('mouth_teeth') }) && SR.isRigidTeeth({ material: mat('mouth_teeth.001') })
+  && !SR.isRigidTeeth({ material: mat('mouth_tongue') }) && !SR.isRigidTeeth({ material: mat('Material_0') })
+  && !SR.isRigidTeeth({ material: [mat('mouth_teeth'), mat('Material_0')] }) && !SR.isRigidTeeth({ material: null }))
+const onAxisFigure = (material) => {
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute([0.02, 0, 0, 0.04, 0.001, 0, 0.06, 0, 0.001, 0.08, 0, 0], 3))
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(new Array(12).fill(0).map((_, i) => (i % 3 === 1 ? 1 : 0)), 3))
+  geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(new Array(16).fill(0), 4))
+  geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(new Array(16).fill(0).map((_, i) => (i % 4 === 0 ? 1 : 0)), 4))
+  geo.setIndex([0, 1, 2, 1, 3, 2])
+  const bone = new THREE.Bone()
+  const m = new THREE.MeshBasicMaterial(); m.name = material
+  const mesh = new THREE.SkinnedMesh(geo, m)
+  const root = new THREE.Group(); root.add(bone, mesh); root.updateMatrixWorld(true)
+  mesh.bind(new THREE.Skeleton([bone]))
+  return root
+}
+const ch5 = { id: 'mouth', o: [0, 0, 0], u: [1, 0, 0], depth: 0.08, r: 0.02, coneDeg: 35, funnel: 0.03, accepts: [],
+  minLength: 0, compressMin: 0.6, kinds: null, suppress: new Set() }
+check('[5] teeth: nothing bound', SR.bindChannelOpening(THREE, onAxisFigure('mouth_teeth'), ch5) === null)
+const tongue = SR.bindChannelOpening(THREE, onAxisFigure('mouth_tongue'), ch5)
+check('[5] tongue: bound, 4 candidates', tongue !== null && tongue.candidates === 4, tongue && tongue.candidates)
 
 console.log(failed ? `FAILED (${failed})` : 'ALL OK')
 process.exit(failed ? 1 : 0)
