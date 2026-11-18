@@ -20,6 +20,7 @@ import {
   rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM, clipShiftM, figureBox,
   applyFootPose, footPoseLiftM, footPoseMatches, plantFootPose, transplantedRestPose, seatFootLift,
   STRAND_RECORD_VERSION, consumerPartnerCapsules, createFigureRuntime, bendLimitsOf, BEND_LIMITS_DEFAULT, rootAngleOf,
+  prepareSheerPieces,
 } from '@anima/scene-render';
 import type { RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, CollisionPayload,
   FootPose, HairStrandRecord, StrandHair, CapsuleNow, PartnerSnapshot, OpeningSegment,
@@ -1922,6 +1923,9 @@ export class FigureLibrary {
     // Characters are DIELECTRICS: metalness forced to 0 (AV3D-14) — the
     // reasoning lives with `zeroFigureMetalness`.
     const matLog = zeroFigureMetalness(template);
+    // A204: a sheer piece (chiffon) shows the body through it — blended, no depth write, after the body.
+    const sheer = prepareSheerPieces(template, THREE.DoubleSide);
+    if (sheer) matLog.push(`${sheer} sheer piece mesh(es) blended`);
     if (matLog.length) console.info(`[figures] ${name}: ${matLog.join(' | ')}`);
 
     // The FIGURE's box (`figureBox`): garment meshes grafted onto the body

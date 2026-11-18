@@ -232,6 +232,48 @@ export function inGarment(o: Object3D): boolean {
   return false
 }
 
+/** A204: drawn after every opaque figure part (the body, the opaque pieces). */
+export const SHEER_RENDER_ORDER = 2
+
+/**
+ * A204: a see-through template piece (chiffon). The server grafts it with
+ * glTF alphaMode BLEND, double-sided, base-colour alpha = its opacity and
+ * `extras.anima_sheer` (GLTFLoader: `userData`) — `app/core/garment_template
+ * .material_overrides`. GLTFLoader already makes BLEND transparent without a
+ * depth write; this pins the rest for every renderer so the body and an inner
+ * piece show through it: transparent, no depth write (else the sheer layer
+ * would cut what lies behind it out of the depth buffer), both sides, and a
+ * render order after the opaque parts. `doubleSide` is three's `DoubleSide`
+ * (passed in: the package never imports three). Returns how many meshes it
+ * marked.
+ */
+export function prepareSheerPieces(root: Object3D, doubleSide: number): number {
+  let marked = 0
+  root.traverse((o: Object3D) => {
+    const mesh = o as Object3D & { isMesh?: boolean; material?: unknown }
+    if (!mesh.isMesh || !mesh.material) return
+    const mats = (Array.isArray(mesh.material) ? mesh.material : [mesh.material]) as Array<{
+      userData?: Record<string, unknown>; transparent: boolean; depthWrite: boolean; side: number
+      opacity: number; needsUpdate: boolean }>
+    let sheer = false
+    for (const m of mats) {
+      if (m.userData?.anima_sheer !== true) continue
+      sheer = true
+      m.transparent = true
+      m.depthWrite = false
+      m.side = doubleSide
+      const opacity = Number(m.userData.opacity)
+      if (Number.isFinite(opacity) && opacity > 0 && opacity <= 1) m.opacity = opacity
+      m.needsUpdate = true
+    }
+    if (sheer) {
+      o.renderOrder = SHEER_RENDER_ORDER
+      marked += 1
+    }
+  })
+  return marked
+}
+
 /**
  * The FIGURE's box: `Box3.setFromObject(root)` over everything EXCEPT
  * garment subtrees. A garment is not the figure — hair standing 8 cm over

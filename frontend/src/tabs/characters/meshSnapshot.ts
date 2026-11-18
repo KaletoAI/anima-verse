@@ -34,6 +34,8 @@ async function render(url: string, width: number, height: number): Promise<strin
   const object = gltf.scene
   try {
     zeroViewerMetalness(object)
+    const { prepareSheerPieces } = await import('@anima/scene-render')
+    prepareSheerPieces(object, THREE.DoubleSide)
     // The browser drops the OLDEST WebGL context once too many are live — often this long-kept one. A lost
     // context draws nothing, so it is replaced, and a picture made on one is refused (never cached blank).
     if (renderer?.getContext().isContextLost()) {

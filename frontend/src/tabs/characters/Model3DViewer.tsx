@@ -25,7 +25,7 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   placeCapsuleWireframe, consumerPartnerCapsules, probeCapsules, probeSweepOffset, probeSweptPose, probeSnapshot,
   PROBE_COLOR, CAPSULE_REGION_COLORS, CHANNEL_GROW, bindChannels, channelCoords, channelWireframe, guideRod, inZone,
   placeChannelWireframe, stepEngagement, bindChannelOpening, OPENING_MARGIN_M, OPENING_FALLOFF_M,
-  OPENING_BAND_M, OPENING_SLACK_M, bindPoseShapes } from '@anima/scene-render'
+  OPENING_BAND_M, OPENING_SLACK_M, bindPoseShapes, prepareSheerPieces } from '@anima/scene-render'
 import type { PoseShapes, SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm,
   CollisionOverlay, CollisionPayload, FootPose, GarmentCollision, HairStrandRecord, StrandHair, CapsuleNow,
   PartnerSnapshot, ProbeSourceCapsule, ChannelNow, Engagement, ChannelOpeningBinding,
@@ -1210,6 +1210,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         // roughness channel of the same map stays active), colours stay true —
         // except on a garment whose material preset sets it (Ruling A36).
         zeroViewerMetalness(object)
+        // A204: a sheer piece shows the body through it (blended, no depth write, drawn after the body)
+        prepareSheerPieces(object, THREE.DoubleSide)
 
         if (textureUrl) {
           const tex = await new THREE.TextureLoader().loadAsync(textureUrl)
