@@ -29,8 +29,10 @@ installation — server threads, refit pool workers, scripts: ``blender_slot``
 holds one of N slot files (``<instance>/.blender-slots/slot-<i>.lock``) under
 an exclusive ``flock`` while the subprocess runs. The kernel drops the lock
 when the holder's descriptor closes, so a killed process frees its slot by
-itself; a caller that finds every slot taken polls until one is free. Only
-the Blender subprocess holds the slot, not the input copies around it.
+itself — and on Linux its Blender child is killed with it (``_die_with_parent``),
+so a freed slot never hides a still-running orphan; a caller that finds every
+slot taken polls until one is free. Only the Blender subprocess holds the
+slot, not the input copies around it.
 """
 import contextlib
 import contextvars
@@ -39,6 +41,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -345,12 +348,67 @@ def _tail(data: Any) -> str:
     return (data or "")[-LOG_TAIL_CHARS:]
 
 
+#: First bytes ``_PDEATH_EXEC`` writes to stderr when it could not exec the
+#: binary, followed by ``<errno>:<message>``; ``_spawn`` turns it back into the
+#: ``OSError`` a direct start would have raised.
+_EXEC_FAILED_MARK = "anima-blender-exec-failed:"
+
+#: The exec wrapper Blender is started through on Linux. It runs in the child
+#: (own interpreter, ``-I -S``: stdlib only, nothing from the environment),
+#: asks the kernel for SIGKILL on the death of the thread that started it
+#: (``prctl(PR_SET_PDEATHSIG)``), exits when that parent is already gone (the
+#: race before the prctl), and then REPLACES itself with Blender (``execvp``:
+#: same pid, same session, the death signal survives the exec). Fork-safe by
+#: construction: nothing runs between fork and exec in the server process —
+#: the reason ``preexec_fn`` (which can deadlock a threaded parent) is not used.
+_PDEATH_EXEC = (
+    "import os, sys\n"
+    "parent, argv = int(sys.argv[1]), sys.argv[2:]\n"
+    "try:\n"
+    "    import ctypes\n"
+    "    u = ctypes.c_ulong\n"
+    "    ctypes.CDLL(None, use_errno=True).prctl(1, u(9), u(0), u(0), u(0))\n"
+    "except Exception:\n"
+    "    pass\n"
+    "if os.getppid() != parent:\n"
+    "    os._exit(1)\n"
+    "try:\n"
+    "    os.execvp(argv[0], argv)\n"
+    "except OSError as e:\n"
+    f"    sys.stderr.write('{_EXEC_FAILED_MARK}%d:%s\\n' % (e.errno or 0, e.strerror or e))\n"
+    "    sys.stderr.flush()\n"
+    "    os._exit(127)\n"
+)
+
+
+def _die_with_parent(cmd: List[str]) -> List[str]:
+    """``cmd`` started through ``_PDEATH_EXEC`` so Blender is killed when this
+    process dies (OOM kill, crash): without it Blender runs on in its own
+    session until its timeout while the restarted server, whose flock died
+    with it, starts new runs beside it. Unchanged off Linux (no prctl) or
+    without a known interpreter."""
+    if not sys.platform.startswith("linux") or not sys.executable:
+        return cmd
+    return [sys.executable, "-I", "-S", "-c", _PDEATH_EXEC, str(os.getpid()), *cmd]
+
+
 def _spawn(cmd: List[str], timeout: int, env: Dict[str, str]) -> subprocess.CompletedProcess:
     """The one Blender subprocess (a seam the limit smoke stubs). Output that
     is not valid in the locale encoding (imported asset names) is replaced,
-    never raised."""
-    return subprocess.run(cmd, capture_output=True, text=True, errors="replace",
+    never raised.
+
+    The child dies with this process (``_die_with_parent``). The death signal
+    follows the THREAD that forked: ``subprocess.run`` keeps that thread
+    blocked until the child has ended (a timeout kills and reaps it there
+    too), and the Popen never leaves this call, so it cannot fire early. It
+    is not inherited by Blender's own children (none are started by the
+    scripts here)."""
+    proc = subprocess.run(_die_with_parent(cmd), capture_output=True, text=True, errors="replace",
                           timeout=timeout, env=env, start_new_session=True)
+    if proc.returncode == 127 and (proc.stderr or "").startswith(_EXEC_FAILED_MARK):
+        code, _, msg = proc.stderr[len(_EXEC_FAILED_MARK):].strip().partition(":")
+        raise OSError(int(code) if code.isdigit() else 0, msg, cmd[0])
+    return proc
 
 
 def run(script: str, *, inputs: Optional[Dict[str, Path]] = None,
