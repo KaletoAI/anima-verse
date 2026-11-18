@@ -26,6 +26,24 @@ Walk amplitude is the peak-to-peak world x position of Tail_Tip's tail
 In-scene NLA evaluation yielded rigid poses and cannot test the client asset.
 Calm must be <=.25*full (specified damping is .2), and full must exceed
 .01*body length to prove the measurement sees the wag.
+Sampling (review 04b#2). The fox's keys start at frame 0.8 (Walk 0.8-24.0,
+Run 0.8-11.2, Sit 0.8-32.0 at 24 fps). Each take is sampled on a uniform grid
+of round(f1-f0) whole intervals over [f0, f1]; a loop's last sample is f0
+again (the client shows a looping clip's last key and its first at the same
+instant). By hand: walk 23 intervals of 23.2/23 = 1.00870 frames, sample 22 at
+0.8 + 22*23.2/23 = 22.99130, sample 23 at 0.8; run 10 intervals of 1.04,
+sample 9 at 10.16, sample 10 at 0.8; sit (one-shot) 31 intervals of 31.2/31,
+last sample 32.0. The replaced rule took whole frames from f0 and clamped
+the last one to f1: walk ..., 22.8, 23.8, 24.0, a final interval of 0.2 frames
+keyed one frame apart, the stall at every loop seam. A paw moving 0.02 per
+source frame with a 0.01 stillness tolerance is still in NO sample of the new
+grid (steps >= 1.0087*0.02 = 0.0202, the wrap of a non-periodic path even
+more); the replaced test called the clamped last sample still (0.004 to the
+previous one, 0 to itself as its own "next" neighbour), the lone contact
+frame at the seam. In the FBX the walk and run must close (last frame pose =
+first frame pose within 1e-3 body length) and their last frame-to-frame step
+must be at least half the median step (measured 1.0x/1.27x; replaced rule
+0.26x/0.0x).
 Usage: .venv/bin/python scripts/smoke_quadruped_clips.py [output-directory]
 Use --numpy-only to run only Blender-independent checks.
 Outputs remain in /tmp by default for smoke_quadruped_takes.mjs.
@@ -90,14 +108,21 @@ for src in ('fox',):
         source.animation_data.action=action
         if action.slots:source.animation_data.action_slot=action.slots[0]
         first,last=action.frame_range
+        loop=catalog[take]['loop']
+        # Docstring grid: whole intervals over [first,last]; a loop closes on first.
+        intervals=max(2 if loop else 1,int(round(last-first)))
+        times=[first+i*(last-first)/intervals for i in range(intervals+1)]
+        if loop:times[-1]=first
         points={pat:[] for pat in q.LEGS.values()}
-        for i in range(int(np.ceil(last-first))+1):
-            t=min(last,first+i)
+        for t in times:
             bpy.context.scene.frame_set(int(np.floor(t)),subframe=t-np.floor(t))
             for pat in points:points[pat].append((source.matrix_world@source.pose.bones[mapping[pat%'Tip']].tail).copy())
+        n=len(times)
+        def near(i):
+            if loop:return (i-1 if i>0 else n-2,i+1 if i<n-1 else 1)
+            return [j for j in (i-1,i+1) if 0<=j<n]
         contact_masks[take]={pat:[p.z-source_rest[pat]<=.02*source_height
-            and (p-ps[max(0,i-1)]).length<.01*source_length
-            and (p-ps[min(len(ps)-1,i+1)]).length<.01*source_length
+            and all((p-ps[j]).length<.01*source_length for j in near(i))
             for i,p in enumerate(ps)] for pat,ps in points.items()}
 results={}
 for mode in ('full','calm','still'):
@@ -151,9 +176,10 @@ for mode in ('full','calm','still'):
         if action.slots:arm.animation_data.action_slot=action.slots[0]
         first,last=map(int,action.frame_range)
         low=float('inf');tail_low=float('inf');stretch_max=0.;contact_error=0.;contact_samples=0
-        centroids={}
+        centroids={};heads=[]
         for frame in range(first,last+1):
             bpy.context.scene.frame_set(frame);bpy.context.view_layer.update()
+            heads.append([tuple(arm.matrix_world@pb.head) for pb in arm.pose.bones if not pb.name.startswith('Tail')])
             co=q.evaluated_vertices(body)
             excluded=np.zeros(len(co),dtype=bool)
             excluded[tail_indices]=True
@@ -176,6 +202,9 @@ for mode in ('full','calm','still'):
             'contact_err_max':100*contact_error/height,'contact_samples':contact_samples,
             'centroids':centroids,'centroid_first':centroids[str(first)],
             'centroid_mid':centroids[str((first+last)//2)],'centroid_last':centroids[str(last)]}
+        heads=np.array(heads);steps=np.linalg.norm(np.diff(heads,axis=0),axis=2).max(1)
+        measured[take]['seam']={'last_step_over_median':float(steps[-1]/np.median(steps)),
+            'closure':float(np.linalg.norm(heads[-1]-heads[0],axis=1).max()/body_length)}
     results[mode]={'metrics':metrics,'takes':list(actions),'clips':measured,'flight_frames':flight_frames,
         'yaw_amplitude':float(np.ptp(lateral)),'rest_centroid':rest_centroid,'body_length':body_length,'height':height}
 # Move only strongly tail-weighted rest vertices, after fitting and skinning,
@@ -293,9 +322,53 @@ def check_skin_weights():
     print('PASS NumPy skin weights: cap, normalisation, monotone strip, welds and isolated vertex',flush=True)
 
 
+def check_take_sampling():
+    """The docstring's hand-derived sample grids and stillness, without Blender."""
+    import numpy as np
+    script=Path(__file__).resolve().parents[1]/'app/blender/scripts/quadruped_rig.py'
+    tree=ast.parse(script.read_text())
+    helpers=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('take_times','still_frames')]
+    assert len(helpers)==2,'production take_times/still_frames missing'
+    scope={'np':np}
+    exec(compile(ast.Module(body=helpers,type_ignores=[]),str(script),'exec'),scope)
+    take_times,still_frames=scope['take_times'],scope['still_frames']
+    walk=take_times(.8,24.,True)
+    assert len(walk)==24 and walk[-1]==.8 and abs(walk[22]-22.991304347826087)<1e-9,walk
+    assert np.allclose(np.diff(walk[:-1]),23.2/23,rtol=0,atol=1e-12)
+    run=take_times(.8,11.2,True)
+    assert len(run)==11 and abs(run[9]-10.16)<1e-9 and run[-1]==.8,run
+    sit=take_times(.8,32.,False)
+    assert len(sit)==32 and sit[-1]==32. and np.allclose(np.diff(sit),31.2/31,rtol=0,atol=1e-12)
+    # The replaced grid, inlined as the control: whole frames from f0, the last clamped to f1.
+    old=[min(24.,.8+i) for i in range(int(np.ceil(24.-.8))+1)]
+    assert len(old)==25 and abs(old[-1]-old[-2]-.2)<1e-9,old
+    def path(times):
+        return [(0.,.02*t,0.) for t in times]
+    assert not any(still_frames(path(walk),0.,.1,.01,True)),'a moving paw passed the stillness test'
+    assert not any(still_frames(path(sit),0.,.1,.01,False))
+    p=path(old)
+    old_mask=[p[i][2]<=.1 and all(np.linalg.norm(np.subtract(p[i],p[j]))<.01
+              for j in (max(0,i-1),min(len(p)-1,i+1))) for i in range(len(p))]
+    assert old_mask==[False]*24+[True],old_mask
+    # Eleven samples, A = the origin, m_k 0.05*k along Y. [A, A, m1..m7, A, A]:
+    # a loop resting across its seam; frame 0 and its copy 10 both have the
+    # neighbours 9 and 1 (A, A): still, and equal. [A, m1..m8, A, A]: as a
+    # loop frame 10 wraps to frame 1 (m1, 0.05 away): not still; as a one-shot
+    # frame 10 has the one neighbour 9 (A): still.
+    A=(0.,0.,0.)
+    seam=[A,A]+[(0.,.05*k,0.) for k in range(1,8)]+[A,A]
+    assert still_frames(seam,0.,.1,.01,True)==[True]+[False]*9+[True]
+    ends=[A]+[(0.,.05*k,0.) for k in range(1,9)]+[A,A]
+    assert still_frames(ends,0.,.1,.01,True)==[False]*11
+    assert still_frames(ends,0.,.1,.01,False)==[False]*10+[True]
+    print('PASS take sampling: uniform grids walk/run/sit, closed loops, no stillness on a moving paw '
+          '(replaced rule: 0.2-frame last step, lone still last frame)',flush=True)
+
+
 def main():
     check_declarations_and_ground()
     check_skin_weights()
+    check_take_sampling()
     if "--numpy-only" in sys.argv:
         return
     if not runner.is_available():
@@ -337,6 +410,10 @@ def main():
             # contact point and frames the production metric above uses.
             assert metrics['clips'][name]['tail_clearance_unreached']==0,(name,metrics['clips'][name])
             assert clip['stretch_p999']<=4,(name,clip)
+        for take in ('walk','run'):
+            seam=mode['clips'][take]['seam']
+            assert seam['closure']<=1e-3,(take,seam)
+            assert seam['last_step_over_median']>=.5,(take,seam)
         assert mode['flight_frames']>=1,'run lost flight phase'
         assert mode['rest_centroid']>0,mode
     assert full['yaw_amplitude']>.01*full['body_length'],full

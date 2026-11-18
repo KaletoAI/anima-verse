@@ -535,6 +535,41 @@ def evaluated_vertices(body):
     return result
 
 
+def take_times(f0, f1, loop):
+    """Source frames of one take's baked samples, keyed one frame apart.
+
+    A uniform grid over the real key range [f0, f1] with a whole number of
+    intervals (the fox's keys start at frame 0.8, so a grid of whole frames
+    from f0 would end on a near-duplicate of the previous sample). A loop
+    plays [f0, f1] as one period and its last sample is f0 again: the client
+    shows a looping clip's last key and its first at the same instant, so the
+    closed clip continues from its last frame into its first.
+    """
+    intervals = max(2 if loop else 1, int(round(f1 - f0)))
+    times = [f0 + i * (f1 - f0) / intervals for i in range(intervals + 1)]
+    if loop:
+        times[-1] = f0
+    return times
+
+
+def still_frames(points, rest_z, height_tol, move_tol, loop):
+    """Per sample: the paw is near its rest height and moves less than
+    ``move_tol`` to each REAL neighbour sample. A loop's neighbours wrap (its
+    last sample is its first); a one-shot's end samples have one neighbour.
+    A sample is never its own neighbour."""
+    p = np.array([tuple(q) for q in points], dtype=float)
+    n = len(p)
+    result = []
+    for i in range(n):
+        if loop:
+            neighbours = (i - 1 if i > 0 else n - 2, i + 1 if i < n - 1 else 1)
+        else:
+            neighbours = tuple(j for j in (i - 1, i + 1) if 0 <= j < n)
+        result.append(bool(p[i, 2] - rest_z <= height_tol and
+                           all(np.linalg.norm(p[i] - p[j]) < move_tol for j in neighbours)))
+    return result
+
+
 def bake_clips(body, arm, sources, catalog, reference_v, target_v, mode):
     """24fps world-delta retarget, contact IK, tail clearance and NLA takes."""
     if mode not in ('full', 'calm', 'still'):
@@ -571,11 +606,10 @@ def bake_clips(body, arm, sources, catalog, reference_v, target_v, mode):
         source_lm = landmarks(source_v)
         ratio = target_lm['back'] / source_lm['back']
         assign_action(src, action)
-        f0, f1 = action.frame_range
-        count = int(math.ceil(f1 - f0)) + 1
+        times = take_times(*action.frame_range, declaration['loop'])
+        count = len(times)
         samples, contacts = [], {k: [] for k in LEGS}
-        for i in range(count):
-            t = min(f1, f0+i)
+        for t in times:
             bpy.context.scene.frame_set(int(math.floor(t)), subframe=t-math.floor(t))
             world = {b.name: src.matrix_world @ b.matrix for b in src.pose.bones}
             samples.append(world)
@@ -587,10 +621,8 @@ def bake_clips(body, arm, sources, catalog, reference_v, target_v, mode):
         masks = {}
         for key, points in contacts.items():
             source_rest_z = (src.matrix_world @ src.data.bones[mapping[LEGS[key] % 'Tip']].tail_local).z
-            masks[key] = [p.z - source_rest_z <= .02*source_lm['H']
-                and (p-points[max(0,i-1)]).length < .01*source_lm['L']
-                and (p-points[min(count-1,i+1)]).length < .01*source_lm['L']
-                for i,p in enumerate(points)]
+            masks[key] = still_frames(points, source_rest_z, .02*source_lm['H'], .01*source_lm['L'],
+                                      declaration['loop'])
         poses, errors = [], []
         for i, world in enumerate(samples):
             pose = {}
