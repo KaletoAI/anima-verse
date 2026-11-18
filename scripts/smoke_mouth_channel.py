@@ -55,6 +55,9 @@ up +y, front +z).
 [7] ``_extension_groups_for`` drops the mouth group for a model of another rig ("generic"); the group's light on a
     humanoid: metric not_found -> grey "Not built" with "No lip line was found on this face, so the mouth stays
     closed."; unavailable -> grey with the Blender sentence; failed -> red "Failed".
+[9] A non-humanoid character (``model_refs.is_humanoid`` False; user decision 2026-11-18) has NO mouth: no group in
+    ``rig_groups_for`` (so the fingerprint is the one of an empty list), no jaw in the validation context, no
+    channel declaration, no light.
 [8] The channel's reason carries the metric's: metric {status not_found, reason "no lip line"} -> skipped "Rig
     mouth_channel is not built on this model: no lip line". A step whose status is not_found (bones) with the
     mouth's own metric applied still places the channel.
@@ -93,6 +96,8 @@ def main():
     from app.core import collision, collision_channels, extension_rig, model3d, mouth_channel
     from app.blender import refine
     from app.plugins.loader import discover_packages
+    from app.core import db
+    db.init_schema()
     (tmp / "plugins").mkdir()
     discover_packages(tmp / "plugins", force=True)
 
@@ -411,6 +416,19 @@ def main():
           ("grey", "Blender is not available here, so the mouth was not built."), got)
     got = light_of({"status": "failed", "reason": "timeout"})
     check("a failed run: red", (got["light"], got["state"]) == ("red", "Failed"), got)
+
+    print("[9] a non-humanoid has no mouth at all")
+    with patch("app.core.model_refs.is_humanoid", return_value=False):
+        check("no group", extension_rig.rig_groups_for("fox", profile={}) == [])
+        check("the fingerprint is the one of no groups", extension_rig.extension_rig_fingerprint(
+            extension_rig.rig_groups_for("fox", profile={})) == extension_rig.extension_rig_fingerprint([]))
+        check("no jaw in the validation context", extension_rig.extension_bone_names("fox", profile={}) == {})
+        check("no placeholder group", extension_rig.extension_metadata("fox", {})["groups"] == [])
+        none, _ = collision_channels.wanted_channels("fox", path, {"rig": "mixamo", "extension_rig": state}, profile={})
+        check("no channel declaration, even on a humanoid rig file", none == [], none)
+        lights = model3d.extension_group_lights({}, {"rig": "generic"}, model3d._extension_groups_for(
+            {"rig": "generic"}, extension_rig.rig_groups_for("fox", profile={})), {}, "")
+        check("no light", lights == {}, lights)
 
     print("[8] the channel's reason")
     state_none = {"status": "none_applicable", "groups": ["mouth_channel"],

@@ -12412,7 +12412,8 @@ guidance rule exists once, in `packages/scene-render/src/channels.ts`. The 3D cl
 the map (`secondaryMotion.ts`, phase B). The admin viewer draws it and drives a test rod through it. No package in
 this repository declares a region; the one channel the core itself declares is the mouth (below).
 
-**The built mouth (Ruling A203).** Every humanoid model carries the core's extension group `mouth_channel`
+**The built mouth (Ruling A203).** Humanoids only — an animal or any other non-humanoid character has no mouth
+group and no mouth channel. Every humanoid model carries the core's extension group `mouth_channel`
 (`app/core/mouth_channel.py`, Blender op `mouth_part`): the skin is cut along the measured lip line, a closed pouch
 runs from it toward the top of the throat, the extension bone `Jaw` (a child of Head at the jaw's hinge, weights
 computed) opens it and the morph target `mouth_open` adds the upper lip's lift. Its channel record has the id

@@ -48,13 +48,17 @@ def _rule_applies(slot, rule, values, profile, template_name, template, active_s
 
 def rig_groups_for(character_name, profile=None, mesh_variant=None):
     """Every extension group of a character: the packages' (``package_rig_groups_for``) and, last, the core's own
-    mouth channel group (``mouth_channel.group``, Ruling A203 — every character carries it; it is built on a
-    humanoid model)."""
+    mouth channel group (``mouth_channel.group``, Ruling A203) for a HUMANOID character only
+    (``mouth_channel.for_character``): an animal or any other non-humanoid has no mouth group at all — not in
+    this list, so not in its fingerprint, its lights or its validation context."""
     if profile is None:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
     from app.core import mouth_channel
-    return package_rig_groups_for(character_name, profile, mesh_variant) + [mouth_channel.group(profile)]
+    groups = package_rig_groups_for(character_name, profile, mesh_variant)
+    if mouth_channel.for_character(character_name, profile):
+        groups = groups + [mouth_channel.group(profile)]
+    return groups
 
 
 def package_rig_groups_for(character_name, profile=None, mesh_variant=None):

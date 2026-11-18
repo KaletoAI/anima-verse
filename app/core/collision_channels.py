@@ -222,7 +222,8 @@ def wanted_channels(character_name: str, path: Optional[Path], meta: Dict[str, A
     ``opening_reason`` without one) — and ``channels_sig``, the sha256 of that list. Exposure is NOT in the sig."""
     wanted: List[Dict[str, Any]] = []
     from app.core import mouth_channel
-    if path is not None and mouth_channel.applies(meta):
+    if path is not None and mouth_channel.applies(meta) \
+            and mouth_channel.for_character(character_name, _profile(character_name, profile)):
         # The core's mouth channel (Ruling A203), before the packages' declarations.
         profile = _profile(character_name, profile)
         declaration = mouth_channel.region()

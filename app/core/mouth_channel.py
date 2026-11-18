@@ -1,8 +1,9 @@
 """The MOUTH CHANNEL every humanoid carries (Ruling A203): a core extension group and a core channel declaration.
 
-The mouth is not package content: the core declares it for every character, and it is built on every rigged
-humanoid GLB that goes through the extension step (``model3d._extension_rig_once``; a model of another rig records
-"none applicable" as for any group).
+The mouth is not package content: the core declares it for every HUMANOID character (``for_character``), and it
+is built on every rigged humanoid GLB that goes through the extension step (``model3d._extension_rig_once``). An
+animal or any other non-humanoid has no mouth group and no mouth channel at all; a humanoid character's model of
+another rig does not list them either (``model3d._extension_groups_for``, ``applies``).
 
 - THE GROUP ``mouth_channel`` (op ``mouth_part``, Blender script ``mouth_part.py``): the skin is cut along the
   measured lip line and a closed pouch is built behind it, along the axis toward the top of the throat; the bone
@@ -77,6 +78,13 @@ def region() -> Dict[str, Any]:
             "accepts": list(ACCEPTS), "min_length": MIN_LENGTH, "compress_min": COMPRESS_MIN,
             "exposed_only": False, "interaction_kinds": None, "from_rig": GROUP_ID, "covered_by": [],
             "built": True}
+
+
+def for_character(character_name: str, profile: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether the character has a mouth group at all: humanoids only (the template feature ``humanoid``,
+    ``model_refs.is_humanoid``; user decision 2026-11-18 — an animal gets no mouth, not a hidden one)."""
+    from app.core.model_refs import is_humanoid
+    return bool(is_humanoid(character_name, profile=profile))
 
 
 def applies(meta: Optional[Dict[str, Any]]) -> bool:
