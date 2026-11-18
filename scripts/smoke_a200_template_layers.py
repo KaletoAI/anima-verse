@@ -33,6 +33,17 @@ pumps (feet = footwear, takes no part).
     damped. Before A200 (104171a41) a piece with targets was refused (None).
 [6] ``garment_assembly._state``: a template piece worn on ``legs`` with a shoe in the set carries
     ``into_shoe`` = ``INTO_SHOE_VERSION`` (1); without a shoe, or an own-mesh legs piece, it does not.
+[7] Fallback (``garment_template.drape_with_fallback``, coordinator ruling): drapes D (one template drape) and own O
+    (one own-mesh fit). A fake ``run`` answers per attempt:
+    * full passes -> mode "full", one call, colliders [D, O], offsets [0, 0].
+    * full fails ``stretch_max`` (8.08), shrunk passes -> mode "shrunk"; the second call has offsets [0, -0.008]
+      (``INNER_SHRINK_M``, own only); failed = [{mode full, stretch_max 8.08}].
+    * full and shrunk fail (stretch / ``poke_share[rest]``) -> mode "dropped": third call colliders [D] alone,
+      offsets None; two failed entries.
+    * full fails ``build_wall_s`` only -> no fallback: mode "full", one call (the wall is load, not the colliders).
+    * no own pieces -> one call with [D], offsets None, mode "full".
+    ``_build_drape`` with that third answer writes ``inner_collider`` {mode dropped, failed 2} into the accepted
+    record and lists only D under ``colliders``; ``piece_progress`` hands it to the dialog.
 """
 from __future__ import annotations
 
@@ -226,6 +237,71 @@ check("[6] template legs + shoe", st["H"].get("into_shoe"), garment_assembly.INT
 check("[6] INTO_SHOE_VERSION", garment_assembly.INTO_SHOE_VERSION, 1)
 check("[6] own-mesh legs piece", "into_shoe" in st["S"], False)
 check("[6] no shoe", "into_shoe" in garment_assembly._state([hose], "full")["H"], False)
+
+# [7]
+def fake(answers):
+    calls = []
+
+    def run(cols, offsets, sub):
+        calls.append((sub, [str(c[0]) for c in cols], offsets))
+        bad = answers[len(calls) - 1]
+        rows = [{"check": bad, "value": 8.08, "ok": False, "gate": True}] if bad else []
+        return {"ok": not bad, "error": f"{bad} 8.08" if bad else "", "rows": rows,
+                "data": {"drape": {"stretch_max": 8.08 if bad == "stretch_max" else 1.1}}, "glb": None}
+    return run, calls
+
+
+DR, OW = [(Path("D"), {})], [(Path("O"), None)]
+run, calls = fake([None])
+_r, inner = garment_template.drape_with_fallback(run, DR, OW)
+check("[7] full passes", (inner["mode"], calls), ("full", [("full", ["D", "O"], [0.0, 0.0])]))
+run, calls = fake(["stretch_max", None])
+_r, inner = garment_template.drape_with_fallback(run, DR, OW)
+check("[7] shrunk", (inner["mode"], calls[1][2], [(f["mode"], f["stretch_max"]) for f in inner["failed"]]),
+      ("shrunk", [0.0, -0.008], [("full", 8.08)]))
+run, calls = fake(["stretch_max", "poke_share[rest]", None])
+_r, inner = garment_template.drape_with_fallback(run, DR, OW)
+check("[7] dropped", (inner["mode"], calls[2], len(inner["failed"])), ("dropped", ("dropped", ["D"], None), 2))
+run, calls = fake(["build_wall_s"])
+_r, inner = garment_template.drape_with_fallback(run, DR, OW)
+check("[7] wall only: no fallback", (inner["mode"], len(calls)), ("full", 1))
+run, calls = fake([None])
+_r, inner = garment_template.drape_with_fallback(run, DR, [])
+check("[7] no own pieces", (inner["mode"], calls), ("full", [("full", ["D"], None)]))
+check("[7] INNER_SHRINK_M", garment_template.INNER_SHRINK_M, -0.008)
+
+# [7] the record
+WROTE = {}
+glb = Path(TMP) / "drape.glb"
+answers = iter(["stretch_max", "poke_share[rest]", None])
+
+
+def fake_run_drape(body, params, sources, *, out_dir, lower, lower_offsets, **k):
+    bad = next(answers)
+    out = Path(TMP) / "d.glb"
+    out.write_bytes(b"drape")
+    rows = [{"check": bad, "value": 9, "ok": False, "gate": True}] if bad else []
+    return {"ok": not bad, "error": bad or "", "rows": rows, "data": {"drape": {}}, "glb": None if bad else out}
+
+
+garment_template.run_drape = fake_run_drape
+garment_template.collider_pieces = lambda *a, **k: [("TT", ITEMS["TT"])]
+garment_template.build = lambda *a, **k: {"state": "ready", "path": Path("D.glb"), "record": {"pose_shapes": {}}}
+garment_template.own_colliders = lambda *a, **k: [("OT", Path("O.glb"))]
+garment_template.templates_dir = lambda c: Path(TMP) / "templates"
+garment_template.drape_state = lambda *a, **k: {"state": "ready"}
+import app.core.garment_store as gs  # noqa: E402
+gs.write_record = lambda path, rec: WROTE.__setitem__(Path(path).name, rec)
+import app.core.figure as fig  # noqa: E402
+fig.invalidate = lambda *a, **k: None
+garment_template._build_drape("c", "JT", key=("c", "JT"), profile={}, base=("b0", "sha"), base_sha="sha",
+                              lower=ALL, item=ITEMS["JT"], sig="sig1", sources={}, body=Path("body.glb"),
+                              params=garment_template.params_of(ITEMS["JT"]))
+rec = WROTE.get("JT_sig1.json") or next(iter(WROTE.values()), {})
+check("[7] record accepted", rec.get("accepted"), True)
+check("[7] record inner_collider", ((rec.get("inner_collider") or {}).get("mode"),
+                                    len((rec.get("inner_collider") or {}).get("failed") or [])), ("dropped", 2))
+check("[7] record colliders", rec.get("colliders"), ["D.glb"])
 
 print(f"\n{len(FAILS)} failed" if FAILS else "\nall passed")
 sys.exit(1 if FAILS else 0)
