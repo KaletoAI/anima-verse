@@ -48,8 +48,10 @@ is a table is named per section. Expected values, derived by hand from Ruling A5
     show under the selected body; ``_garment_kind`` clothing, profile {} = the default settings): metrics == the
     attempt's metrics, created_at the attempt's "2026-11-14T19:00:00Z", gates_ok False, reasons [the refusal];
     fit_settings: arm_light the attempt's (worst 3.5), numbers sleeve skin 2.8 / 3.5 and scale 1.0, built_at the
-    attempt's — none of the plain record's 1.8 / 1.5 / 1.08; settings the piece's (shared, the defaults: sleeves
-    auto / auto, allowance auto, depth 0 (Ruling A68), trunk auto (Ruling A83)).
+    attempt's — none of the plain record's 1.8 / 1.5 / 1.08; settings the piece's (shared, the defaults the
+    garment_fit_settings module docstring lists, every key: sleeves auto / auto, allowance auto, depth 0
+    (Ruling A68), trunk auto (Ruling A83), shaft "split" (A122), shaft_overlap 10 cm (A177), body_overlap 20 cm
+    (A182), shell_offset 4 mm (A166), shell_margin 3 mm and shell_fill 2 cm2 (A184), shell_sides off (A185)).
     Nothing shown ({}) -> None (the dialog says "Not fitted yet on this body"). A body shape's chips are judged by
     ``garment_fit.clothing_gates(torso_mapped=True)`` (the route's ``fit_body`` limits): CLOTHING_GATES without
     deep_push_share and max_push_m (the placement push, recorded not gated).
@@ -296,7 +298,9 @@ def test_numbers(tmp: Path) -> None:
               (box["numbers"]["sleeve_skin_left_cm2"], box["numbers"]["sleeve_skin_right_cm2"], box["numbers"]["scale"],
                box["built_at"]), (2.8, 3.5, 1.0, "2026-11-14T19:00:00Z"))
         check("[4e] the settings are the piece's", box["settings"],
-              {"allowance": "auto", "sleeves_left": "auto", "sleeves_right": "auto", "depth": 0, "trunk": "auto"})
+              {"allowance": "auto", "sleeves_left": "auto", "sleeves_right": "auto", "depth": 0, "trunk": "auto",
+               "shaft": "split", "shaft_overlap": 10, "body_overlap": 20, "shell_offset": 4, "shell_margin": 3,
+               "shell_fill": 2, "shell_sides": False})
         check("[4e] nothing shown, no fit", fa.body_fit_view("item_jacket", {}, {}, accepted=False), None)
         from app.core import garment_fit as gfit
         check("[4e] a body shape's fit gates", sorted(gfit.clothing_gates(torso_mapped=True)),
