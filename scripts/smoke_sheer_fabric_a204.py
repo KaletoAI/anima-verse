@@ -138,8 +138,9 @@ for fabric, lim in (("stiff", 60.0), ("medium", 60.0), ("flowing", 60.0), ("shee
 row = lambda d: next(r for r in gt.judge_build(d) if r["check"] == "build_wall_s")  # noqa: E731
 r60 = row({"wall_total_s": 100.0})
 r120 = row({"wall_total_s": 100.0, "wall_limit_s": 120.0})
-check("100 s fails the plain 60 s row", r60 == {"check": "build_wall_s", "value": 100.0, "limit": 60.0, "ok": False,
-                                               "gate": True}, r60)
+# since fb483a19a (2026-11-18, owner) the wall row is REPORTED, never a gate: over the limit it reads not-ok, gate False
+check("100 s is over the plain 60 s row (reported, not gating)",
+      r60 == {"check": "build_wall_s", "value": 100.0, "limit": 60.0, "ok": False, "gate": False}, r60)
 check("100 s passes a 120 s limit", r120["ok"] and r120["limit"] == 120.0)
 WALL = {"check": "build_wall_s", "gate": True, "ok": False, "value": 70.0}
 STRETCH = {"check": "stretch_max", "gate": True, "ok": False, "value": 1.4}
