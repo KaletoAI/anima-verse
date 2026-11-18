@@ -38,7 +38,74 @@ def vertices(objects):
                      if o.type == 'MESH' for v in o.data.vertices])
 
 
-def alignment(points):
+def triangles(objects):
+    """Vertex index triples matching the row order of ``vertices(objects)``."""
+    result, offset = [], 0
+    for o in objects:
+        if o.type != 'MESH':
+            continue
+        o.data.calc_loop_triangles()
+        result.extend(tuple(offset + i for i in t.vertices) for t in o.data.loop_triangles)
+        offset += len(o.data.vertices)
+    return np.array(result, dtype=np.int64).reshape(-1, 3)
+
+
+#: Dead zones of the two facing signals. On the fox and its posed variants
+#: (tail raised 30-90 degrees, curled over the back, drooping, head lowered to
+#: graze) the lateral ratio is 1.6-5.3 and the lean 0.011-0.026 L; a symmetric
+#: body measures 1 and 0.
+FACING_LATERAL_MIN = math.log(1.15)
+FACING_LEAN_MIN = .004
+
+
+def facing(v, tris):
+    """+1 when the head lies towards -Y, -1 when towards +Y.
+
+    ``v`` is centred in x/y with its ground at the lowest point. Two signals
+    that pitching the tail or the head in the body's mid-plane cannot change:
+    the lateral spread of the surface beyond each paw pair (area times
+    distance from the paws' midline: head, ears and chest against rump and
+    tail; a rotation about X preserves both factors) and the lean of the lower
+    legs (toes point to the head, heels and hocks to the tail). Both must
+    clear their dead zone and agree, or the mesh is NotApplicable: a reversed
+    rig would still pass every later acceptance test.
+    """
+    lm = landmarks(v)
+    corners = v[tris]
+    area = .5 * np.linalg.norm(np.cross(corners[:, 1] - corners[:, 0],
+                                        corners[:, 2] - corners[:, 0]), axis=1)
+    centre = corners.mean(1)
+    midline = np.mean([p[0] for p in lm['paws'].values()])
+    # The legs leave the moment: hocks lean towards the tail, so the hind
+    # legs stand beyond the hind paws and would count as rear surface.
+    ground = v[:, 2].min()
+    levels = np.linspace(ground, max(lm['belly'], ground), 12)
+    below = centre[:, 2] <= lm['belly']
+    level = np.clip(np.round((centre[:, 2] - ground) / max(lm['belly'] - ground, 1e-12) * 11),
+                    0, 11).astype(int)
+    leg = np.zeros(len(centre), dtype=bool)
+    for key in LEGS:
+        trace = trace_leg(v, lm, key, levels)
+        axis = np.array([trace[z] for z in levels])[level]
+        leg |= below & (np.hypot(*(centre[:, :2] - axis).T) < .22 * lm['W'])
+    moment = np.where(leg, 0., area * np.abs(centre[:, 0] - midline))
+    front = moment[centre[:, 1] < lm['fy']].sum()
+    hind = moment[centre[:, 1] > lm['hy']].sum()
+    if min(front, hind) <= 0:
+        raise NotApplicable('facing: no surface beyond a paw pair')
+    lateral = math.log(front / hind)
+    heights = list(np.linspace(.08, .25, 10) * lm['H'] + ground)
+    lean = float(np.mean([[(trace[z][1] - lm['paws'][key][1]) / lm['L'] for z in heights]
+                          for key in LEGS for trace in [trace_leg(v, lm, key, heights)]]))
+    if (abs(lateral) < FACING_LATERAL_MIN or abs(lean) < FACING_LEAN_MIN
+            or (lateral > 0) != (lean > 0)):
+        raise NotApplicable('facing ambiguous, head end undecided: ' + json.dumps(
+            {'lateral_log_ratio': round(lateral, 4), 'leg_lean': round(lean, 4),
+             'lateral_min': round(FACING_LATERAL_MIN, 4), 'lean_min': FACING_LEAN_MIN}, sort_keys=True))
+    return 1 if lateral > 0 else -1
+
+
+def alignment(points, tris):
     """PCA only rotates the horizontal plane; preserve original size."""
     xy = points[:, :2] - points[:, :2].mean(0)
     _, basis = np.linalg.eigh(np.cov(xy.T))
@@ -48,15 +115,14 @@ def alignment(points):
     length = np.ptp(rotated[:, 1])
     if length <= 1e-9:
         raise NotApplicable('degenerate mesh: acceptance cannot be measured')
-    lo = rotated[rotated[:, 1] < rotated[:, 1].min() + .15 * length, 2].max()
-    hi = rotated[rotated[:, 1] > rotated[:, 1].max() - .15 * length, 2].max()
-    if hi > lo:
-        rotation = Matrix.Rotation(math.pi, 4, 'Z') @ rotation
-        rotated = np.array([tuple(rotation @ Vector(p)) for p in points])
     offset = Vector((-(rotated[:, 0].max() + rotated[:, 0].min()) / 2,
                      -(rotated[:, 1].max() + rotated[:, 1].min()) / 2,
                      -rotated[:, 2].min()))
-    return Matrix.Translation(offset) @ rotation
+    transform = Matrix.Translation(offset) @ rotation
+    # A half turn about Z keeps the centred bounding box centred.
+    if facing(rotated + np.array(offset), tris) < 0:
+        transform = Matrix.Rotation(math.pi, 4, 'Z') @ transform
+    return transform
 
 
 def landmarks(v):
@@ -334,12 +400,42 @@ def skin_weights(p, segs, edges, length):
     return weights
 
 
+HEAD_BONES = ('Head', 'Nose', 'Head.tip', 'Chin', 'Chin_Tip', 'Ear_L', 'Ear_Tip_L', 'Ear_R', 'Ear_Tip_R')
+
+
+def skinned_spread(p, tris, names, weights):
+    """Area-weighted mean |x| of the surface the head bones own, and of the tail's.
+
+    Measured on the fitted fox: head 0.128, tail 0.100 (its bushy tail is
+    THICKER than the head around the bones, but narrower); tail raised 30-90
+    degrees: tail 0.087-0.103. A skeleton fitted back to front swaps the two.
+    None for a family that owns no surface (a tailless animal).
+    """
+    corners = p[tris]
+    area = .5 * np.linalg.norm(np.cross(corners[:, 1] - corners[:, 0],
+                                        corners[:, 2] - corners[:, 0]), axis=1)
+    lateral = np.abs(corners.mean(1)[:, 0])
+    result = []
+    for owns in (lambda n: n in HEAD_BONES, lambda n: n.startswith('Tail')):
+        family = weights[:, [j for j, n in enumerate(names) if owns(n)]].sum(1)
+        mask = family[tris].mean(1) > .5
+        total = area[mask].sum()
+        result.append(float((area[mask] * lateral[mask]).sum() / total) if total > 0 else None)
+    return tuple(result)
+
+
 def skin(body, arm, length):
     p = vertices([body])
     segs = [(b.name, np.array(arm.matrix_world @ b.head_local), np.array(arm.matrix_world @ b.tail_local))
             for b in arm.data.bones if b.use_deform]
     edges = [tuple(e.vertices) for e in body.data.edges]
     weights = skin_weights(p, segs, edges, length)
+    # Acceptance: the fitted head must own the wider end. A reversed skeleton
+    # passes every paw, fold and stretch test, so it is caught here.
+    head, tail = skinned_spread(p, triangles([body]), [s[0] for s in segs], weights)
+    if head is not None and tail is not None and head <= tail:
+        raise NotApplicable('reversed skeleton: head bones own the narrower end: ' + json.dumps(
+            {'head_spread': round(head, 5), 'tail_spread': round(tail, 5)}, sort_keys=True))
     body.vertex_groups.clear()
     for j, (name, _, _) in enumerate(segs):
         group = body.vertex_groups.new(name=name)
@@ -349,6 +445,7 @@ def skin(body, arm, length):
     body.matrix_parent_inverse = arm.matrix_world.inverted()
     modifier = body.modifiers.new('Armature', 'ARMATURE')
     modifier.object = arm
+    return {'head_spread': head, 'tail_spread': tail}
 
 
 def assign_action(arm, action):
@@ -682,7 +779,7 @@ def run(job):
         bpy.ops.object.join()
     body = bpy.context.view_layer.objects.active
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
-    transform = alignment(vertices([body]))
+    transform = alignment(vertices([body]), triangles([body]))
     body.data.transform(transform)
     target_v = vertices([body])
     landmarks(target_v)  # Reject before importing reference assets.
@@ -694,7 +791,7 @@ def run(job):
         pb.matrix_basis = Matrix.Identity(4)
     bpy.context.view_layer.update()
     reference_v = vertices(ref_objects)
-    ref_transform = alignment(reference_v)
+    ref_transform = alignment(reference_v, triangles(ref_objects))
     reference_v = np.array([tuple(ref_transform @ Vector(p)) for p in reference_v])
     arm.matrix_world = ref_transform @ arm.matrix_world
     for o in ref_objects:
@@ -710,7 +807,7 @@ def run(job):
         sources['fox'] = (fox, {a.name: a for a in bpy.data.actions}, reference_v)
     metrics = fit(body, arm, reference_v, target_v)
     _common.progress('skinning')
-    skin(body, arm, metrics['dims_m'][1])
+    metrics['facing'] = skin(body, arm, metrics['dims_m'][1])
     # Preserve the separate, unchanged PNG and bind it to the mesh material.
     image = bpy.data.images.load(inputs['texture'], check_existing=True)
     material = bpy.data.materials.new('Quadruped basecolor')

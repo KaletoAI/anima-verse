@@ -69,13 +69,16 @@ print('PASS paw regression: Foot 0.3 + Foot_1 0.3 = 0.6; opposite leg excluded',
 contact_masks={}
 for src in ('fox',):
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    bpy.ops.import_scene.gltf(filepath=str(assets/(src+'-animations.glb')))
+    # The production importer: it drops the glTF bone display spheres, which
+    # are no part of the fox and would add stray points to the paw clusters.
+    q.import_objects(assets/(src+'-animations.glb'))
     source=next(o for o in bpy.data.objects if o.type=='ARMATURE')
     source.animation_data_create();source.animation_data.action=None
     source.data.pose_position='REST';bpy.context.view_layer.update()
-    source_v=np.concatenate([q.evaluated_vertices(o) for o in bpy.data.objects if o.type=='MESH'])
+    source_meshes=[o for o in bpy.data.objects if o.type=='MESH']
+    source_v=np.concatenate([q.evaluated_vertices(o) for o in source_meshes])
     source.data.pose_position='POSE'
-    transform=q.alignment(source_v)
+    transform=q.alignment(source_v,q.triangles(source_meshes))
     source.matrix_world=transform@source.matrix_world
     from mathutils import Vector
     source_v=np.array([tuple(transform@Vector(p)) for p in source_v])
@@ -179,11 +182,12 @@ for mode in ('full','calm','still'):
 # so the fixture cannot alter the canonical alignment or ground landmarks.
 original_skin=q.skin
 def dipping_tail(body,arm,height):
-    original_skin(body,arm,height)
+    facing=original_skin(body,arm,height)
     selected=[v for v in body.data.vertices if sum(g.weight for g in v.groups
         if body.vertex_groups[g.group].name.startswith('Tail'))>.5]
     assert selected
     for v in selected:v.co.z=-.05*height
+    return facing
 q.skin=dipping_tail
 out=folder/'dipping-tail';out.mkdir(exist_ok=True)
 fixture,_=q.run({'inputs':{'mesh':str(folder/'fox.glb'),'texture':str(folder/'texture.png'),
