@@ -56,6 +56,13 @@ vertex (1e-9). Before A109 the whole build answered status "failed".
 Neutralfail (review 03#13): the same, but the tip is switched off (``neutralise``) and the levelling fails: the
 tip group alone is {status failed, mode neutralised, reason the error}, the pair group is built, the mesh is the
 one before, vertex for vertex. On 69aeeba75 the whole build answers status "failed".
+Floating (review 03): Modelled plus the fill-ring noise of Refusal: the bump is levelled (recorded > 1 mm before —
+the noise lowers the fitted surface's accuracy, so not Modelled's 3.9 —, < .3 mm after), the fill is skipped, and
+the stub's tip comes down along its axis by the bump's recorded height (the source apex was the bump's top),
+within .3 mm: ``tip_settled_mm`` < 0, |tip - apex| = |tip_settled_mm|. On 69aeeba75 it stays on the old top.
+Refusal (fill skipped by noise) is the mirror case since then: the 3-5 mm crater is levelled up, and the stub
+settles out of the crater floor onto the levelled skin along its axis, by the recorded ``tip_settled_mm`` (> 0),
+instead of staying on the crater floor inside the skin (on 69aeeba75: tip == the source apex).
 No expected value is recorded from a run.
 """
 import sys
@@ -223,6 +230,19 @@ elif kind=='C':
  import struct
  raw=Path(outputs['model']).read_bytes(); size=struct.unpack_from('<I',raw,12)[0]; doc=json.loads(raw[20:20+size])
  assert sum(n.get('name') in ('TipLeft','TipRight') for n in doc['nodes'])==2
+elif job['params'].get('floating',False):
+ # Review 03: the modelled bump is levelled, the fill is refused (noise) — the stub comes down from the bump's old
+ # top onto the levelled skin along its axis, by the bump's recorded height (the apex was its top).
+ rows=result['metrics']['Tip']['placement']
+ for side,(name,row) in zip((1,-1),zip(('TipLeft','TipRight'),rows)):
+  t,axis=Vector(row['tip']),Vector(row['axis'])
+  assert row['fill'].startswith('skipped:'),row
+  level=row['source_level']; settled=level['tip_settled_mm']
+  assert level['bump_mm'][0]>1 and level['bump_mm'][1]<.3,level
+  assert settled<0 and abs(settled+level['bump_mm'][0])<.3,level
+  P=Vector(placement[0 if side==1 else 1]['tip'])
+  assert abs((t-P).length-abs(settled)/1000)<2e-6 and (P-t).normalized().dot(axis)>.999,(list(t),list(P))
+  assert (arm.data.bones[name].head_local-t).length<1e-4
 elif job['params'].get('modelled',False):
  rows=result['metrics']['Tip']['placement']
  for side,(name,row) in zip((1,-1),zip(('TipLeft','TipRight'),rows)):
@@ -246,7 +266,11 @@ else:
   assert arm.data.bones[name].parent.name==parent
   if job['params'].get('noise',False):
    assert row['fill'].startswith('skipped:'),row
-   assert (t-Vector(placement[0 if side==1 else 1]['tip'])).length<1e-4
+   # Review 03 (floating / sunk tip): the 3-5 mm crater is levelled up, the fill is refused, so the stub settles
+   # out of the crater floor onto the levelled skin along its normal (the axis without a fill) by the recorded
+   # tip_settled_mm (> 0: outward).
+   P=Vector(placement[0 if side==1 else 1]['tip']); settled=row['source_level']['tip_settled_mm']/1000
+   assert settled>0 and abs((t-P).length-settled)<2e-6 and (t-P).normalized().dot(axis)>.999,(list(t),list(P),settled)
   else:
    assert row['fill']=='applied',row
    assert abs(metrics['lift'][0 if side==1 else 1]-.003)<.0003,metrics
@@ -343,7 +367,7 @@ Path(job['result']).write_text(json.dumps({'ok':True,'data':{},'outputs':{}}))
 def main():
     import argparse
     parser=argparse.ArgumentParser()
-    parser.add_argument('--case',choices=['crater','seam','geometry','refusal','descendant','modelled','tall','tipfail','neutralfail'])
+    parser.add_argument('--case',choices=['crater','seam','geometry','refusal','descendant','modelled','tall','tipfail','neutralfail','floating'])
     selected=parser.parse_args().case
     from app.blender import runner
     if not runner.status()['executable']:
@@ -356,9 +380,9 @@ def main():
         (root/'probe.py').write_text(prefix+TIP_PROBE)
         source=runner.SCRIPTS_DIR/'extension_bones.py'
         with patch.object(runner,'SCRIPTS_DIR',root):
-            for label,options in [('crater',{}),('seam',{'seam':True}),('geometry',{'kind':'C'}),('refusal',{'noise':True}),('descendant',{'descendant':True}),('modelled',{'modelled':True}),('tall',{'kind':'C','tall':True}),('tipfail',{'tipfail':True}),('neutralfail',{'neutralfail':True})]:
+            for label,options in [('crater',{}),('seam',{'seam':True}),('geometry',{'kind':'C'}),('refusal',{'noise':True}),('descendant',{'descendant':True}),('modelled',{'modelled':True}),('tall',{'kind':'C','tall':True}),('tipfail',{'tipfail':True}),('neutralfail',{'neutralfail':True}),('floating',{'modelled':True,'noise':True,'floating':True})]:
                 if selected and selected!=label: continue
-                result=runner.run('probe',params={'source':str(source),**options},out_dir=root/label,timeout_s=120)
+                result=runner.run('probe',params={'source':str(source),**options},out_dir=root/label,timeout_s=600)
                 assert result['ok'],(label,result)
                 print('PASS pair tip',label)
 

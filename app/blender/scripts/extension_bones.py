@@ -1167,6 +1167,15 @@ def tip_mesh(meshes, p, placement, sources):
                     moved += 1
                 mesh.data.update()
         filled = tip+normal*float(coef[0]) if coef is not None else tip.copy()
+        if coef is None and side.get('level'):
+            # The levelling lowered the skin under the source apex by the bump's
+            # height, and without a fill nothing brings the tip down with it:
+            # it settles onto the skin along its normal, as a tip whose frame
+            # found no skin does (review 03, the floating tip).
+            hit = tree.ray_cast(tip+normal*.08,-normal,.2)[0]
+            if hit is not None:
+                side['tip_settled_mm'] = round(side.get('tip_settled_mm',0.)+float((hit-tip).dot(normal))*1000,3)
+                filled = hit.copy()
         axis = (normal-a*float(coef[1])-b*float(coef[2])).normalized() if coef is not None else normal
         rows.append({'tip':list(filled),'axis':list(axis),'radius':radius,'fill':fill if coef is not None else 'skipped: '+reason,
                      'fill_rms':rms,'fill_moved':moved,'fill_kept_by_tolerance':kept,
