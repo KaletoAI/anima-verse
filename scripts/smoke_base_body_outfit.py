@@ -76,10 +76,12 @@ Expected, derived by hand from the brief:
     the left|right edge of the frame; keep it a side profile view, do not
     turn the figure toward the camera. Keep …". Same negative.
 [3] Chain (Demo on the pipeline, wearing dress): _run_generation(Demo,
-    "tpose") (the debounce timer body) -> TWO render calls (user decision
+    "tpose") (the debounce timer body) -> THREE render calls (user decision
     2026-11-09: only front and back are dressed; Task 11g, Ruling C1: the
     back is a draft + a CPU composite, ``view_composite.compose`` — stubbed
-    here, the composite itself is ``smoke_view_composite.py``):
+    here, the composite itself is ``smoke_view_composite.py``; Ruling A175,
+    070594e79: the back's draft is preceded by a TURN of the dressed front,
+    cut out on the CPU, and the draft carries no clothing list):
     Ruling A125: both are edits of the base view of their direction, each composited back (the front too).
       front edit  stem tpose_<osig> in the staging dir "edit", reference tpose_<bsig>.png
                   centred on a grey SQUARE (fix round T12-F1, ruling F14 g:
@@ -90,12 +92,22 @@ Expected, derived by hand from the brief:
                   names the dress, occasion outfit_front, use case tpose,
                   sidecar_extra {base_signature, dressed: true,
                   base_image_sha256 = sha256(tpose_<bsig>.png)};
+      back turn   stem tpose_back_<osig>_turn in the staging dir turn1, reference =
+                  the dressed front tpose_<osig>.png on the 16 x 16 grey square
+                  ((0,0) grey; (4,4) the dressed front's own opaque colour — the
+                  stub render of stem tpose_<osig>, colour_of("tpose_<osig>"),
+                  the composite stub copies it unchanged), no second picture,
+                  extra_negative "", no character block, occasion
+                  outfit_back_turn, use case outfit_edit, back_view.
       back draft  stem tpose_back_<osig> in the staging dir draft1, reference = the
                   BASE back tpose_back_<bsig>.png on the same 16 x 16 grey
-                  square ((0,0) and (4,4) grey), the dressed front tpose_<osig>.png
-                  as the second picture, bare_prompt = DRESS_VIEW["back"] + " Keep
-                  the image exactly …" naming the dress, extra_negative = the
-                  front's, no character block, occasion outfit_back_draft, use
+                  square ((0,0) and (4,4) grey), the turn's cut-out
+                  tpose_back_<osig>_turn_cut.png as the second picture,
+                  bare_prompt = DRESS_VIEW["back"] + " Keep the image exactly …"
+                  NOT naming the dress, ending with EDIT_FROM_SECOND_PICTURE
+                  (``picture_edit_prompt``), extra_negative = DRAFT_NEGATIVE
+                  (Demo has no hair text: the front's negative names "hair"),
+                  no character block, occasion outfit_back_draft, use
                   case outfit_edit, back_view.
     Then ONE composite call: base view tpose_back_<bsig>.png, the draft
     (draft1/tpose_back_<osig>.png), target in the staging dir attempt1, rule
@@ -182,7 +194,11 @@ Expected, derived by hand from the brief:
     (d) covered file deleted, ensure_covered_variant stubbed off -> forced
         run: base_variant rigged, covered_missing true, COVERED_MISSING in
         view_warnings, and the model stays current (no rebuild loop).
-    (e) Forced run with the real ensure_covered_variant: base extension rig
+    (e) Forced run with the real ensure_covered_variant: first the finger
+        reset catches up on the base's prerig copy (1398fffc4: its sidecar
+        steps [normalize, limb_weights] predate the "hands" step, and the
+        extension rig re-reads it through normalize -> ONE batch hand_restore
+        with no groups), then the base extension rig
         [jiggle, tip] (its state was [jiggle]), then the covered build
         [jiggle]; covered sidecar source_sha256 = sha256(prerig),
         groups_removed [tip], extension_rig groups [jiggle]; base sidecar
@@ -203,12 +219,13 @@ Expected, derived by hand from the brief:
     is scripts/smoke_base_body_view_guard.py). The stub renders are opaque,
     so in [3]..[10] the real guard skips every view (no matte).
     (a) back fails once (the build's check): the back is re-rendered once —
-        draft 1 + its composite (attempt 1), whose gate check now passes; the
+        turn 1 + draft 1 (A175) + its composite (attempt 1), whose gate check now passes; the
         worker gets front and back; sidecar view_guard has only front and
         back: back ok + rerendered + first.ok False, front ok without
         "rerendered"; no view_warnings.
     (a') back fails four times: the build's check, both composites of the
-        re-render (draft 1 + draft 2 renders — a failed gate drafts anew) and
+        re-render (turn 1, draft 1, turn 2, draft 2 renders — a failed gate drafts anew, each
+        draft after its own turn, A175) and
         the re-check. The view keeps attempt 1 (no guard pass, noise unmeasurable -> the
         first) with fit_gate {ok False, chosen 1, 2 attempts, warning
         "Dressed back may be turned toward the camera (back check failed
@@ -655,39 +672,47 @@ def main() -> int:
             check("the pass asks the Build", REQUESTS, [("Demo", "outfit_change")])
             check("the Build's assemble step", build_model("Demo"), "")
             dressed_renders = [r for r in RENDERS if r["character"] == "Demo"]
-            check("front edit, back draft", [(r["stem"], r["dir"]) for r in dressed_renders],
-                  [(f"tpose_{osig}", "edit"), (f"tpose_back_{osig}", "draft1")])
-            front_r, draft_r = (dressed_renders + [{}] * 2)[:2]
+            check("front edit, back turn, back draft", [(r["stem"], r["dir"]) for r in dressed_renders],
+                  [(f"tpose_{osig}", "edit"), (f"tpose_back_{osig}_turn", "turn1"),
+                   (f"tpose_back_{osig}", "draft1")])
+            front_r, turn_r, draft_r = (dressed_renders + [{}] * 3)[:3]
             check("references", [r.get("reference_name") for r in dressed_renders],
-                  [f"tpose_{bsig}.png", f"tpose_back_{bsig}.png"])
+                  [f"tpose_{bsig}.png", f"tpose_{osig}.png", f"tpose_back_{bsig}.png"])
             # Front edit and draft: their source on the 16 x 16 grey square at
             # offset (4, 4) (F14 g) — (4,4) is the source's corner: the base
             # front's transparent corner -> grey, the opaque draft stub's colour.
             check("references on grey", [r.get("reference_px") for r in dressed_renders],
                   [((128, 128, 128), (128, 128, 128)),
+                   ((128, 128, 128), colour_of(f"tpose_{osig}")),
                    ((128, 128, 128), (128, 128, 128))])
             check("two composites: the front edit onto the base front, draft 1 onto the base back",
                   [c[:4] + ((".composite_" if str(c[4]).startswith(".composite_") else c[4]),) for c in COMPOSITES],
                   [(f"tpose_{bsig}.png", f"tpose_{osig}.png", "edit", "outfit", ".composite_"),
                    (f"tpose_back_{bsig}.png", f"tpose_back_{osig}.png", "draft1", "outfit", "attempt1")])
-            check("second picture: none on the front, the dressed front on the back",
+            check("second picture: none on the front or the turn, the turn's cut-out on the back",
                   [[Path(p).name for p in r.get("extra_reference_images") or []] for r in dressed_renders],
-                  [[], [f"tpose_{osig}.png"]])
+                  [[], [], [f"tpose_back_{osig}_turn_cut.png"]])
+            check("turn prompt and negative", (turn_r.get("bare_prompt"), turn_r.get("extra_negative")),
+                  (base_body.turn_prompt("back"), ""))
             check("front prompt", (front_r.get("bare_prompt", "").startswith("Keep the image exactly as it is"),
                                    "a fitted red cotton dress with white sneakers" in front_r.get("bare_prompt", "")),
                   (True, True))
-            check("draft prompt: the back view sentence, then the edit naming the dress",
+            check("draft prompt: the back view sentence, the edit from the second picture, no clothing list (A175)",
                   (draft_r.get("bare_prompt", "").startswith(base_body.DRESS_VIEW["back"] + " Keep the image exactly"),
-                   "a fitted red cotton dress with white sneakers" in draft_r.get("bare_prompt", "")), (True, True))
-            check("draft extra negative = the front's", draft_r.get("extra_negative"), front_r.get("extra_negative"))
+                   draft_r.get("bare_prompt", "").endswith(base_body.EDIT_FROM_SECOND_PICTURE),
+                   "a fitted red cotton dress with white sneakers" in draft_r.get("bare_prompt", "")),
+                  (True, True, False))
+            check("draft extra negative = the unhaired draft negative", draft_r.get("extra_negative"),
+                  base_body.DRAFT_NEGATIVE)
             check("no character block on any dressed render", [r.get("style_character") is not None
-                                                               for r in dressed_renders], [False, False])
-            check("occasions", [r.get("occasion") for r in dressed_renders], ["outfit_front", "outfit_back_draft"])
+                                                               for r in dressed_renders], [False, False, False])
+            check("occasions", [r.get("occasion") for r in dressed_renders],
+                  ["outfit_front", "outfit_back_turn", "outfit_back_draft"])
             # Front edit and draft render at their square canvas 16 (F14 g).
             check("render sizes", [(r.get("override_width"), r.get("override_height")) for r in dressed_renders],
-                  [(16, 16), (16, 16)])
-            check("use cases", [r.get("image_use_case") for r in dressed_renders], ["outfit_edit", "outfit_edit"])
-            check("character loras", [r.get("character_loras") for r in dressed_renders], [False] * 2)
+                  [(16, 16), (16, 16), (16, 16)])
+            check("use cases", [r.get("image_use_case") for r in dressed_renders], ["outfit_edit"] * 3)
+            check("character loras", [r.get("character_loras") for r in dressed_renders], [False] * 3)
             front_sha = hashlib.sha256((refs / f"tpose_{bsig}.png").read_bytes()).hexdigest()
             back_sha = hashlib.sha256((refs / f"tpose_back_{bsig}.png").read_bytes()).hexdigest()
             draft_file = refs / "drafts" / f"tpose_back_{osig}.png"
@@ -713,7 +738,7 @@ def main() -> int:
             check("back sidecar: the composite's record", stored_back.get("composite"),
                   {**COMPOSITE_OK, "version": view_composite.VERSION})
             check("front extra negative", front_r.get("extra_negative"), negative)
-            check("back view flag", [r.get("back_view") for r in dressed_renders], [None, True])
+            check("back view flag", [r.get("back_view") for r in dressed_renders], [None, True, True])
             check("draft stored beside the refs", (draft_file.is_file(),
                                                    model_refs.find_ref_image("Demo", "tpose_back", osig)),
                   (True, refs / f"tpose_back_{osig}.png"))
@@ -1019,7 +1044,8 @@ def main() -> int:
             result = model3d.generate_for_current_outfit("Demo", force=True)
             meta12 = model3d._read_sidecar(model)
             cmeta = model3d._read_sidecar(covered_path)
-            check("ensure: batches", SCRIPT_CALLS, [("extension_bones", ["jiggle", "tip"]),
+            check("ensure: batches", SCRIPT_CALLS, [("hand_restore", []),
+                                                     ("extension_bones", ["jiggle", "tip"]),
                                                      ("extension_bones", ["jiggle"])])
             check("ensure: covered sidecar", (covered_path.is_file(), cmeta.get("source_sha256"),
                                                cmeta.get("groups_removed"), cmeta["extension_rig"]["groups"]),
@@ -1082,8 +1108,8 @@ def main() -> int:
                 n_renders, n_calls = len(RENDERS), len(calls())
                 result = model3d.generate_for_current_outfit("Demo", force=True)
                 check("guarded run ok", result.get("ok"), True)
-                check("back re-rendered once: one draft", [(r["stem"], r["dir"]) for r in RENDERS[n_renders:]],
-                      [(f"tpose_back_{osig}", "draft1")])
+                check("back re-rendered once: one turn, one draft", [(r["stem"], r["dir"]) for r in RENDERS[n_renders:]],
+                      [(f"tpose_back_{osig}_turn", "turn1"), (f"tpose_back_{osig}", "draft1")])
                 runs = calls()[n_calls:]
                 check("one worker call", len(runs), 1)
                 if runs:
@@ -1106,8 +1132,9 @@ def main() -> int:
                 n_renders, n_calls = len(RENDERS), len(calls())
                 result = model3d.generate_for_current_outfit("Demo", force=True)
                 check("turned back: run ok", result.get("ok"), True)
-                check("two drafts", [(r["stem"], r["dir"]) for r in RENDERS[n_renders:]],
-                      [(f"tpose_back_{osig}", "draft1"), (f"tpose_back_{osig}", "draft2")])
+                check("two drafts, each after its turn", [(r["stem"], r["dir"]) for r in RENDERS[n_renders:]],
+                      [(f"tpose_back_{osig}_turn", "turn1"), (f"tpose_back_{osig}", "draft1"),
+                       (f"tpose_back_{osig}_turn", "turn2"), (f"tpose_back_{osig}", "draft2")])
                 runs = calls()[n_calls:]
                 if runs:
                     views = json.loads((runs[0] / "argv.json").read_text())["views"]
@@ -1155,8 +1182,8 @@ def main() -> int:
                         n_renders = len(RENDERS)
                         base_body.generate_dressed_images("Demo", pieces=state[0], items=state[1],
                                                           signature=osig, force=True, view="back")
-                        check(f"{label}: two drafts", [r["dir"] for r in RENDERS[n_renders:]],
-                              ["draft1", "draft2"])
+                        check(f"{label}: two drafts, each after its turn", [r["dir"] for r in RENDERS[n_renders:]],
+                              ["turn1", "draft1", "turn2", "draft2"])
                         gate = json.loads((refs / f"tpose_back_{osig}.json").read_text()).get("fit_gate") or {}
                         check(f"{label}: gate", (gate.get("ok"), gate.get("chosen"),
                                                  [a["noise"]["score"] for a in gate.get("attempts") or []],
