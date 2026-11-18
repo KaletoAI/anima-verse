@@ -58,12 +58,23 @@ flips V as for every other UV — nothing is pre-flipped here.
 
 THE ATLAS BACKUP LAYER: overwriting a face's UVs loses its atlas UVs, and a
 deleted area (or a re-run) has to put them back. So the first split copies
-the atlas UV layer into a second UV layer (exported as TEXCOORD_1, ignored by
-the renderers) — ALWAYS the LAST layer of the mesh. glTF carries no UV-layer
-names, so on re-import the marker is the presence of slot_<kind>_<k>
-materials: a mesh that has them and two or more layers keeps its backup in
-the last one. When the last area is dissolved the backup is removed again
-(layer 0 is the atlas once more), so a mesh does not grow a layer per cycle.
+the atlas UV layer (layer 0) into an extra UV layer (exported as a further
+TEXCOORD_n, ignored by the renderers). Inside a run that layer is the one
+NAMED ``atlas_uv`` (``ATLAS_LAYER_NAME``) — nothing else is ever read as the
+backup. glTF carries no UV-layer names (Blender 5.2 re-imports TEXCOORD_n as
+"UVMap", "UVMap.001", …; the ORDER survives), so the file carries the marker
+as a MESH extra: ``av_atlas_uv = <index of the backup layer>`` (exported with
+``export_extras``, re-imported as a mesh custom property). Right after the
+import the marked layer gets the reserved name back and the property goes
+(:func:`_claim_backup_marks`); right before the export every mesh that has
+the layer is stamped with its index again (:func:`_stamp_backup_marks`).
+NO MARKER = NO BACKUP, deterministically: a mesh with two native UV sets (a
+lightmap), or a split file whose marker another tool dropped, is never
+guessed at — its second layer stays an ordinary layer, a dissolve leaves
+layer 0 as it is, and the first UV write creates a fresh backup from the
+current layer 0. When the last area is dissolved the backup is removed
+again (layer 0 is the atlas once more), so a mesh does not grow a layer per
+cycle.
 
 THE DOOR LEAF (spec § 6, decision D7) is a NODE, not a material: the faces
 of the leaf become their own object ``leaf`` — materials and UVs untouched,
@@ -143,6 +154,9 @@ import numpy as np                                            # noqa: E402
 
 SLOT_PREFIX = "slot_"
 ATLAS_LAYER_NAME = "atlas_uv"
+#: The mesh extra (custom property) that names the backup layer's index in
+#: the FILE — the one marker that survives a glTF round trip.
+ATLAS_MARK = "av_atlas_uv"
 #: The door leaf's node name and the frame's (spec § 6) — object names in
 #: Blender, node names in the GLB, what the clients look up.
 LEAF_NAME = "leaf"
@@ -200,7 +214,6 @@ class Model:
         self.poly = []              # flat index -> (obj index, polygon index)
         self.base = []              # vertex offset per object
         self.layout = []
-        self.had_areas = []         # per object: slot materials present on import
         for oi, obj in enumerate(objects):
             _triangulate(obj)
             me = obj.data
@@ -214,7 +227,6 @@ class Model:
                 self.faces.append(tuple(base + i for i in t.vertices))
                 self.poly.append((oi, t.polygon_index))
             self.layout.append({"name": obj.name, "tri_count": len(me.loop_triangles)})
-            self.had_areas.append(any(_area_name(m.name) for m in me.materials if m))
 
     def weld(self, uvs=None):
         """``(faces, remap)`` over vertices FOLDED BY POSITION (5 decimals),
@@ -266,14 +278,17 @@ class Model:
         return uvs
 
     def _backup_layer(self, oi):
+        """The layer NAMED ``ATLAS_LAYER_NAME`` — never layer 0, never a
+        guess by position (see THE ATLAS BACKUP LAYER above)."""
         me = self.objects[oi].data
-        if self.had_areas[oi] and len(me.uv_layers) >= 2:
-            return me.uv_layers[len(me.uv_layers) - 1]
-        return None
+        layer = me.uv_layers.get(ATLAS_LAYER_NAME)
+        if layer is None or me.uv_layers.find(ATLAS_LAYER_NAME) == 0:
+            return None
+        return layer
 
     def ensure_backup(self, oi):
-        """The atlas backup layer of one mesh, created (as the LAST layer, a
-        copy of layer 0) on the first split of that mesh."""
+        """The atlas backup layer of one mesh, created (appended, a copy of
+        layer 0) on the first UV write to a mesh that has none."""
         layer = self._backup_layer(oi)
         if layer is not None:
             return layer
@@ -283,10 +298,12 @@ class Model:
         me.uv_layers.active_index = 0
         buf = np.empty(len(me.loops) * 2, dtype=np.float32)
         me.uv_layers[0].data.foreach_get("uv", buf)
-        me.uv_layers.new(name=ATLAS_LAYER_NAME, do_init=False)
-        me.uv_layers[len(me.uv_layers) - 1].data.foreach_set("uv", buf)
-        self.had_areas[oi] = True
-        return me.uv_layers[len(me.uv_layers) - 1]
+        layer = me.uv_layers.new(name=ATLAS_LAYER_NAME, do_init=False)
+        if layer is None or layer.name != ATLAS_LAYER_NAME:
+            raise ValueError(f"mesh {self.objects[oi].name!r}: no room for the "
+                             f"atlas backup UV layer")
+        layer.data.foreach_set("uv", buf)
+        return layer
 
     def drop_backup_if_unused(self, oi):
         """No area left on this mesh -> layer 0 IS the atlas again, the copy
@@ -295,9 +312,48 @@ class Model:
         if any(_area_name(m.name) for m in me.materials if m):
             return
         layer = self._backup_layer(oi)
-        if layer is not None and len(me.uv_layers) >= 2:
+        if layer is not None:
             me.uv_layers.remove(layer)
-        self.had_areas[oi] = False
+
+
+def _claim_backup_marks(objects):
+    """Right after the import: the layer a mesh's ``ATLAS_MARK`` extra names
+    gets the reserved name back, and the property goes (it is written anew
+    before the export). The marker counts only as an int index 1..n-1 (layer
+    0 is the working layer, never its own backup); anything else — absent,
+    out of range, not an int — means NO backup on that mesh. A layer that
+    already carries the reserved name without the marker naming it is
+    renamed away, so the name alone can never be a guess."""
+    seen = set()
+    for obj in objects:
+        me = obj.data
+        if me.name in seen:
+            continue
+        seen.add(me.name)
+        mark = me.get(ATLAS_MARK)
+        if ATLAS_MARK in me.keys():
+            del me[ATLAS_MARK]
+        valid = (isinstance(mark, int) and not isinstance(mark, bool)
+                 and 1 <= mark < len(me.uv_layers))
+        for i, layer in enumerate(me.uv_layers):
+            if layer.name == ATLAS_LAYER_NAME and not (valid and i == mark):
+                layer.name = f"UVMap.{i:03d}"
+        if valid:
+            me.uv_layers[mark].name = ATLAS_LAYER_NAME
+
+
+def _stamp_backup_marks():
+    """Right before the export: every mesh that has the backup layer names
+    its index in ``ATLAS_MARK`` (exported as a glTF mesh extra); a mesh
+    without one carries no marker. The exporter writes the UV layers as
+    TEXCOORD_0..n in layer order, so the index is the TEXCOORD index."""
+    for obj in _mesh_objects():
+        me = obj.data
+        idx = me.uv_layers.find(ATLAS_LAYER_NAME)
+        if idx >= 1:
+            me[ATLAS_MARK] = idx
+        elif ATLAS_MARK in me.keys():
+            del me[ATLAS_MARK]
 
 
 # ---------------------------------------------------------------------------
@@ -586,8 +642,8 @@ def _join_all(objects):
     _drop_empties()
     if len(objects) > 1:
         # Every UV layer any part carries has to exist on the target BEFORE
-        # the join, or the join drops it: the atlas backup layer (always the
-        # LAST layer) lives on the part that has slot areas — a leaf with a
+        # the join, or the join drops it: the atlas backup layer (NAMED
+        # ``ATLAS_LAYER_NAME``) lives on the part that has slot areas — a leaf with a
         # pane — and the frame's own loops take their layer-0 UVs as backup,
         # which is what they are.
         names = []
@@ -730,6 +786,7 @@ def picture_areas(args):
     objects = _mesh_objects()
     if not objects:
         raise RuntimeError("no mesh objects")
+    _claim_backup_marks(objects)
     model = Model(objects)
     existing = _existing_areas(model)
     changed = False
@@ -934,7 +991,11 @@ def picture_areas(args):
     if not changed:
         return data, {}
     out = Path(args["out_dir"]) / "model.glb"
-    bpy.ops.export_scene.gltf(filepath=str(out), export_format="GLB")
+    # The backup marker is a mesh extra, so the export carries extras (the
+    # input's own extras ride along instead of being dropped).
+    _stamp_backup_marks()
+    bpy.ops.export_scene.gltf(filepath=str(out), export_format="GLB",
+                              export_extras=True)
     if not out.is_file():
         raise RuntimeError(f"export wrote no file: {out}")
     return data, {"model": str(out)}
