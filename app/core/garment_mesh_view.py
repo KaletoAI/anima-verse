@@ -503,15 +503,16 @@ def _compute(character_name: str, item_id: str, inputs: Dict[str, Any]) -> Dict[
     k = height_r / height_u if height_u > 0 else float("nan")
     if not (k > 0 and np.isfinite(k)):
         raise ViewUnavailable("The base model's height cannot be measured")
+    P, F, _U, _image, _mime, _material = static_arrays(inputs["mesh"].read_bytes())
+    if inputs.get("which") == "shell":
+        # A198 (review 06 #8): a shell sits in bind space — it needs no placement, so no framing of the front
+        return _compute_shell(inputs, body_r, P, F, started)
     try:
         body_mask, ghost_mask, _frame = garment_source.fit_masks(character_name, item_id, inputs["fsig"],
                                                                  body_front=inputs["front"],
                                                                  base_front=inputs["front"])
     except garment_source.FrameRefused as e:
         raise ViewUnavailable(f"The piece cannot be placed on this body: {e}")
-    P, F, _U, _image, _mime, _material = static_arrays(inputs["mesh"].read_bytes())
-    if inputs.get("which") == "shell":
-        return _compute_shell(inputs, body_r, P, F, started)
     s, t = placement(P, F, body_u.positions, {"body": body_mask, "garment": ghost_mask})
     vox = garment_fit.VOX_M / k
     mask, share, face_share = inside_faces(P * s + t, F, body_u.positions, body_u.faces, vox=vox)
