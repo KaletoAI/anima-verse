@@ -38,6 +38,9 @@ Params (``args["params"]``)::
                 (so ``_next_k`` steps over it), and the detection never sees
                 their faces — it reads NON-area materials only. "leaf" in the
                 list keeps the leaf node uncut.
+    unmarked_backup_is_last_layer  bool — set by the HOST only when its own
+                records prove the file is a split from before the backup
+                marker (see THE ATLAS BACKUP LAYER); ignored for a marked file
     origins     {"<area id>": "<material name>"} — where dissolved faces go
                 (the server keeps it from the run that created the area);
                 without an entry the mesh's FIRST non-slot material takes them
@@ -72,7 +75,11 @@ NO MARKER = NO BACKUP, deterministically: a mesh with two native UV sets (a
 lightmap), or a split file whose marker another tool dropped, is never
 guessed at — its second layer stays an ordinary layer, a dissolve leaves
 layer 0 as it is, and the first UV write creates a fresh backup from the
-current layer 0. When the last area is dissolved the backup is removed
+current layer 0. The one exception is the host's knowledge, not a guess:
+with ``unmarked_backup_is_last_layer`` (the server proved the file is its
+own split from before the marker) an unmarked file is read by the old rule
+once — last layer of a mesh with slot materials — and leaves marked.
+When the last area is dissolved the backup is removed
 again (layer 0 is the atlas once more), so a mesh does not grow a layer per
 cycle.
 
@@ -316,14 +323,26 @@ class Model:
             me.uv_layers.remove(layer)
 
 
-def _claim_backup_marks(objects):
+def _claim_backup_marks(objects, unmarked_is_last=False):
     """Right after the import: the layer a mesh's ``ATLAS_MARK`` extra names
     gets the reserved name back, and the property goes (it is written anew
     before the export). The marker counts only as an int index 1..n-1 (layer
     0 is the working layer, never its own backup); anything else — absent,
     out of range, not an int — means NO backup on that mesh. A layer that
     already carries the reserved name without the marker naming it is
-    renamed away, so the name alone can never be a guess."""
+    renamed away, so the name alone can never be a guess.
+
+    ``unmarked_is_last`` (param ``unmarked_backup_is_last_layer``) is the
+    HOST's knowledge, never this script's guess: the server proved from its
+    own records that the file is a split written before the marker existed
+    (``props._legacy_atlas_backup_proven``). Only then, and only in a file
+    where NO mesh carries the marker at all (a marked file was written by
+    this version and is authoritative for every mesh), a mesh with slot
+    materials and two or more layers gets its LAST layer as the backup —
+    the old rule — and the export stamps the marker, so the file migrates
+    on that run. Returns how many meshes were claimed that way."""
+    marked_file = any(ATLAS_MARK in o.data.keys() for o in objects)
+    claimed = 0
     seen = set()
     for obj in objects:
         me = obj.data
@@ -335,11 +354,16 @@ def _claim_backup_marks(objects):
             del me[ATLAS_MARK]
         valid = (isinstance(mark, int) and not isinstance(mark, bool)
                  and 1 <= mark < len(me.uv_layers))
+        if (not marked_file and unmarked_is_last and len(me.uv_layers) >= 2
+                and any(_area_name(m.name) for m in me.materials if m)):
+            mark, valid = len(me.uv_layers) - 1, True
+            claimed += 1
         for i, layer in enumerate(me.uv_layers):
             if layer.name == ATLAS_LAYER_NAME and not (valid and i == mark):
                 layer.name = f"UVMap.{i:03d}"
         if valid:
             me.uv_layers[mark].name = ATLAS_LAYER_NAME
+    return claimed
 
 
 def _stamp_backup_marks():
@@ -786,7 +810,7 @@ def picture_areas(args):
     objects = _mesh_objects()
     if not objects:
         raise RuntimeError("no mesh objects")
-    _claim_backup_marks(objects)
+    _claim_backup_marks(objects, bool(params.get("unmarked_backup_is_last_layer")))
     model = Model(objects)
     existing = _existing_areas(model)
     changed = False

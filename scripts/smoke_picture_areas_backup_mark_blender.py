@@ -72,6 +72,33 @@ THE FIXTURE (glTF y-up, stdlib), ``plate_glb(materials, uv1, extras)``:
      was taken): the picture faces get (x + 0.5, 0.5 - y) back from the
      marked layer, glass_1 keeps (2x, -2y), marker still 1, TEXCOORD_1
      everywhere the atlas.
+
+[C] A SPLIT FROM BEFORE THE MARKER — the host's param
+  ``unmarked_backup_is_last_layer`` (set by ``props._areas_run`` only when
+  its records prove the file is its own old split; the proof itself is
+  ``scripts/smoke_picture_areas_legacy_proof.py``).
+  ``layered_glb``: the same plate, but every quad with its OWN four
+  vertices (a split file stores planar and atlas UVs per primitive), quads
+  q(0,0) q(1,1) on atlas, q(0,1) on slot_picture_1, q(1,0) on slot_glass_1.
+  The old script's output, exactly: TEXCOORD_0 = atlas (x + 0.5, 0.5 - y)
+  on atlas faces, planar (2x + 1, 1 - 2y) on picture_1, planar (2x, -2y)
+  on glass_1 (the [B] derivations); TEXCOORD_1 = the atlas everywhere (the
+  backup, LAST layer); NO extras.
+  C1 ``delete`` picture_1 WITH the param: the last layer is claimed ->
+     the four former picture faces read (x + 0.5, 0.5 - y) again, atlas 6
+     triangles, glass_1 2 with (2x, -2y); glass_1 is left, so the backup
+     stays: TEXCOORD_1 everywhere the atlas, and the file now carries
+     ``av_atlas_uv == 1`` (migrated).
+  C2 the same file and delete WITHOUT the param: the strict rule — no
+     backup, so the former picture faces keep (2x + 1, 1 - 2y) under the
+     atlas material; TEXCOORD_1 stays an ordinary layer (atlas everywhere);
+     no marker (no backup layer exists to name).
+  C3 A MARKED FILE IGNORES THE PARAM: three sets — TEXCOORD_0 as above,
+     TEXCOORD_1 the atlas, TEXCOORD_2 the constant (0.25, 0.75) (a native
+     extra set) — and ``av_atlas_uv: 1``. ``delete`` picture_1 WITH the
+     param: the marker names layer 1, so the picture faces read
+     (x + 0.5, 0.5 - y) — NOT (0.25, 0.75), which the last-layer rule
+     would have given; marker still 1, TEXCOORD_2 still (0.25, 0.75).
 """
 import json
 import os
@@ -176,6 +203,80 @@ def plate_glb(materials, uv1=None, extras=None) -> bytes:
             + struct.pack("<II", len(blob), 0x004E4942) + blob)
 
 
+def layered_glb(prims, layers, extras=None) -> bytes:
+    """``prims`` [(material, [quad, …])], ``layers`` [f(material, x, y) ->
+    (u, v)] = TEXCOORD_0..n; every quad has its own four vertices."""
+    n = 2
+    vchunks, ichunks, accessors, prim_json = [], [], [], []
+    for k, (name, qs) in enumerate(prims):
+        pos, uvs, idx = [], [[] for _ in layers], []
+        for (i, j) in qs:
+            base = len(pos)
+            for (di, dj) in ((0, 0), (1, 0), (1, 1), (0, 1)):
+                x, y = -0.5 + (i + di) / n, -0.5 + (j + dj) / n
+                pos.append((x, y, 0.0))
+                for li, f in enumerate(layers):
+                    uvs[li].append(f(name, x, y))
+            idx += [base, base + 1, base + 2, base, base + 2, base + 3]
+        attrs = {"POSITION": len(accessors)}
+        vchunks.append(b"".join(struct.pack("<fff", *p) for p in pos))
+        accessors.append({"count": len(pos), "type": "VEC3", "componentType": 5126,
+                          "min": [min(p[c] for p in pos) for c in range(3)],
+                          "max": [max(p[c] for p in pos) for c in range(3)]})
+        for li in range(len(layers)):
+            attrs[f"TEXCOORD_{li}"] = len(accessors)
+            vchunks.append(b"".join(struct.pack("<ff", *t) for t in uvs[li]))
+            accessors.append({"count": len(pos), "type": "VEC2", "componentType": 5126})
+        raw = b"".join(struct.pack("<H", q) for q in idx)
+        ichunks.append((len(accessors), raw + b"\0" * ((4 - len(raw) % 4) % 4), len(idx)))
+        accessors.append({"count": len(idx), "type": "SCALAR", "componentType": 5123})
+        prim_json.append({"attributes": attrs, "indices": ichunks[-1][0], "material": k})
+    # bufferViews in accessor order: vertex chunks and index chunks interleave per primitive
+    chunks, views, off, vi = [], [], 0, 0
+    index_at = {a: (raw, cnt) for a, raw, cnt in ichunks}
+    for a in range(len(accessors)):
+        if a in index_at:
+            ch, target = index_at[a][0], 34963
+        else:
+            ch, target = vchunks[vi], 34962
+            vi += 1
+        views.append({"buffer": 0, "byteOffset": off, "byteLength": len(ch), "target": target})
+        accessors[a]["bufferView"] = a
+        chunks.append(ch)
+        off += len(ch)
+    mesh = {"name": "plate", "primitives": prim_json}
+    if extras is not None:
+        mesh["extras"] = extras
+    blob = b"".join(chunks)
+    gltf = {
+        "asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0, "name": "plate"}], "meshes": [mesh],
+        "materials": [{"name": name, "pbrMetallicRoughness": {
+            "baseColorFactor": [0.5, 0.5, 0.5, 1.0], "metallicFactor": 0.0}}
+            for name, _qs in prims],
+        "buffers": [{"byteLength": len(blob)}], "bufferViews": views, "accessors": accessors,
+    }
+    js = json.dumps(gltf, separators=(",", ":")).encode()
+    js += b" " * ((4 - len(js) % 4) % 4)
+    total = 12 + 8 + len(js) + 8 + len(blob)
+    return (struct.pack("<III", 0x46546C67, 2, total)
+            + struct.pack("<II", len(js), 0x4E4F534A) + js
+            + struct.pack("<II", len(blob), 0x004E4942) + blob)
+
+
+def split_uv0(name, x, y):
+    """TEXCOORD_0 of a split file: planar on the areas, atlas elsewhere."""
+    if name == "slot_picture_1":
+        return (2 * x + 1, 1 - 2 * y)
+    if name == "slot_glass_1":
+        return (2 * x, -2 * y)
+    return (x + 0.5, 0.5 - y)
+
+
+SPLIT_PRIMS = [("atlas", [(0, 0), (1, 1)]), ("slot_picture_1", [(0, 1)]),
+               ("slot_glass_1", [(1, 0)])]
+
+
 # ── result reader (stdlib) ────────────────────────────────────────────────
 
 _CTYPE = {5120: ("b", 1), 5121: ("B", 1), 5122: ("h", 2), 5123: ("H", 2),
@@ -224,11 +325,13 @@ def read_model(path: Path):
             pos = accessor(gltf, blob, attrs["POSITION"])
             uv0 = accessor(gltf, blob, attrs["TEXCOORD_0"])
             uv1 = accessor(gltf, blob, attrs["TEXCOORD_1"]) if "TEXCOORD_1" in attrs else None
+            uv2 = accessor(gltf, blob, attrs["TEXCOORD_2"]) if "TEXCOORD_2" in attrs else None
             idx = [i[0] for i in accessor(gltf, blob, prim["indices"])]
             tris = [idx[k:k + 3] for k in range(0, len(idx), 3)]
             out["prims"].append({
                 "material": mats[prim["material"]] if "material" in prim else "",
-                "tris": [[(pos[i], uv0[i], uv1[i] if uv1 else None) for i in t] for t in tris],
+                "tris": [[(pos[i], uv0[i], uv1[i] if uv1 else None, uv2[i] if uv2 else None)
+                          for i in t] for t in tris],
                 "has_uv1": uv1 is not None})
     return out
 
@@ -244,8 +347,8 @@ def tri_count(model, material):
 
 def uv_is(corner_list, which, fn):
     """Every corner's TEXCOORD_<which> equals ``fn(x, y)`` (glTF y-up)."""
-    for pos, uv0, uv1 in corner_list:
-        uv = uv0 if which == 0 else uv1
+    for corner in corner_list:
+        pos, uv = corner[0], corner[1 + which]
         want = fn(pos[0], pos[1])
         if uv is None or abs(uv[0] - want[0]) > EPS or abs(uv[1] - want[1]) > EPS:
             return False
@@ -375,6 +478,43 @@ def main() -> int:
     check("B4: marker 1, TEXCOORD_1 everywhere the atlas",
           b4["extras"].get("av_atlas_uv") == 1 and uv_is(corners(b4), 1, atlas),
           str(b4["extras"]))
+
+    print("\n[C] a split from before the marker")
+    old = write("C.glb", layered_glb(SPLIT_PRIMS, [split_uv0, lambda n, x, y: atlas(x, y)]))
+    delete = {"mode": "delete", "area": "picture_1", "origins": {"picture_1": "atlas"}}
+    c1 = read_model(run(old, {**delete, "unmarked_backup_is_last_layer": True}, "C1"))
+    check("C1: atlas 6 triangles, slot_glass_1 2, no slot_picture_1",
+          tri_count(c1, "atlas") == 6 and tri_count(c1, "slot_glass_1") == 2
+          and tri_count(c1, "slot_picture_1") == 0)
+    check("C1: atlas faces (the former picture ones included) read (x + 0.5, 0.5 - y)",
+          uv_is(corners(c1, "atlas"), 0, atlas))
+    check("C1: glass keeps (2x, -2y)",
+          uv_is(corners(c1, "slot_glass_1"), 0, lambda x, y: (2 * x, -2 * y)))
+    check("C1: migrated — marker 1, TEXCOORD_1 everywhere the atlas",
+          c1["extras"].get("av_atlas_uv") == 1 and uv_is(corners(c1), 1, atlas)
+          and c1["texcoords"] == {"TEXCOORD_0", "TEXCOORD_1"},
+          f"{c1['extras']} {sorted(c1['texcoords'])}")
+    c2 = read_model(run(old, delete, "C2"))
+    def picture_quad(m):
+        """Corners of the atlas triangles whose centroid lies in q(0,1) (x < 0, y > 0)."""
+        return [c for p in m["prims"] if p["material"] == "atlas" for t in p["tris"]
+                if sum(c[0][0] for c in t) < 0 and sum(c[0][1] for c in t) > 0 for c in t]
+    check("C2: without the param the former picture faces keep (2x + 1, 1 - 2y)",
+          len(picture_quad(c2)) == 6
+          and uv_is(picture_quad(c2), 0, lambda x, y: (2 * x + 1, 1 - 2 * y)),
+          str(len(picture_quad(c2))))
+    check("C2: TEXCOORD_1 an ordinary layer (atlas everywhere), no marker",
+          uv_is(corners(c2), 1, atlas) and "av_atlas_uv" not in c2["extras"], str(c2["extras"]))
+
+    marked = write("C3.glb", layered_glb(
+        SPLIT_PRIMS, [split_uv0, lambda n, x, y: atlas(x, y), lambda n, x, y: (0.25, 0.75)],
+        extras={"av_atlas_uv": 1}))
+    c3 = read_model(run(marked, {**delete, "unmarked_backup_is_last_layer": True}, "C3"))
+    check("C3: marked file — picture faces restored from layer 1, not the last layer",
+          len(picture_quad(c3)) == 6 and uv_is(picture_quad(c3), 0, atlas), str(len(picture_quad(c3))))
+    check("C3: marker still 1, TEXCOORD_2 still (0.25, 0.75)",
+          c3["extras"].get("av_atlas_uv") == 1
+          and uv_is(corners(c3), 2, lambda x, y: (0.25, 0.75)), str(c3["extras"]))
 
     print()
     if FAILURES:

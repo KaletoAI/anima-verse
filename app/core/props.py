@@ -186,6 +186,7 @@ The one-time move of the five fields out of the prop record lives in
 import contextlib
 import contextvars
 import copy
+import filecmp
 import hashlib
 import json
 import math
@@ -254,7 +255,7 @@ from app.core.model_store import (DEFAULT_TIER, ModelGallery, companion_files,
                                   write_sidecar as write_model_sidecar)
 from app.core.model_validate import (MeshNotShrinkable, glb_bounds,
                                      glb_material_names_at, parse_glb,
-                                     shrink_capability)
+                                     read_glb_json, shrink_capability)
 from app.core.picture_areas import KINDS as COLOUR_KINDS
 from app.core.timeutils import utc_now_iso
 from app.core.view_prompts import (EXTRA_VIEWS, VIEWS, is_view,
@@ -2272,6 +2273,112 @@ def _land_split(gallery: ModelGallery, src: Path, blob: bytes,
     return target
 
 
+#: Run parameter of ``scripts/picture_areas.py``: an UNMARKED file may read
+#: its last UV layer as the atlas backup (the rule before the marker). Set
+#: ONLY when :func:`_legacy_atlas_backup_proven` holds — server knowledge,
+#: never a guess by the script.
+LEGACY_BACKUP_PARAM = "unmarked_backup_is_last_layer"
+#: The glTF mesh extra the script stamps on a mesh with an atlas backup.
+ATLAS_BACKUP_MARK = "av_atlas_uv"
+#: How many variant-copy / split hops the proof follows (a hand-edited
+#: sidecar pointing in a circle must not spin).
+_LEGACY_PROOF_DEPTH = 8
+
+
+def _glb_uv_facts(path: Path) -> Optional[Tuple[int, bool]]:
+    """``(most TEXCOORD sets on any primitive, does any mesh carry the
+    atlas backup marker)`` off a GLB's JSON chunk; None when unreadable."""
+    try:
+        gltf = read_glb_json(path)
+    except (OSError, ValueError, struct.error):
+        return None
+    most, marked = 0, False
+    for mesh in gltf.get("meshes") or []:
+        if not isinstance(mesh, dict):
+            continue
+        extras = mesh.get("extras")
+        if isinstance(extras, dict) and ATLAS_BACKUP_MARK in extras:
+            marked = True
+        for prim in mesh.get("primitives") or []:
+            attrs = prim.get("attributes") if isinstance(prim, dict) else None
+            if isinstance(attrs, dict):
+                most = max(most, sum(1 for k in attrs if str(k).startswith("TEXCOORD_")))
+    return most, marked
+
+
+def _stored_file(pid: str, name: str) -> Optional[Tuple[ModelGallery, Path]]:
+    """``(gallery, file)`` of the stored model file ``name`` in whichever
+    variant's gallery holds it — a variant copy names a file of ANOTHER
+    variant — or None."""
+    for i in range(len(_variant_list(read_sidecar(pid)))):
+        g = model_gallery(pid, i)
+        p = g.file(name) if g and name else None
+        if p:
+            return g, p
+    return None
+
+
+def _old_split_lineage(pid: str, path: Path, depth: int = 0) -> bool:
+    """Does the server's OWN record prove that every UV layer beyond the
+    first in ``path`` is an atlas backup its split wrote?
+
+    * ``source: areas`` — the file was written by :func:`_land_split` (a
+      split run, or the JSON-only kind rename) and only ever rewritten in
+      place by the texture re-encode, which keeps every UV layer. Its chain
+      ORIGIN (:func:`_split_origin`) must still be stored and carry at most
+      ONE UV set per primitive: then no layer beyond the first can be
+      native (a lightmap, another tool's split) — the old script added one
+      only as its backup, and reused it only as that. An origin with more
+      sets proves nothing, UNLESS it is itself a proven variant copy.
+    * ``source: variant-copy`` — byte-identical to the file it names in
+      ``copied_from`` (still stored in some variant's gallery), and THAT
+      file is proven.
+    Anything else — an upload, a generation, a missing origin, a copy whose
+    bytes differ from its source — is not proven."""
+    if depth > _LEGACY_PROOF_DEPTH:
+        return False
+    meta = read_model_sidecar(path)
+    source = meta.get("source")
+    if source == "areas":
+        held = _stored_file(pid, path.name)
+        if not held:
+            return False
+        gallery = held[0]
+        origin = gallery.file(_split_origin(gallery, path, meta))
+        if not origin or origin == path:
+            return False
+        facts = _glb_uv_facts(origin)
+        if facts is not None and facts[0] <= 1:
+            return True
+        return (read_model_sidecar(origin).get("source") == "variant-copy"
+                and _old_split_lineage(pid, origin, depth + 1))
+    if source == "variant-copy":
+        copied = meta.get(COPIED_FROM_KEY)
+        name = str(copied.get("file") or "") if isinstance(copied, dict) else ""
+        held = _stored_file(pid, name)
+        if not held or held[1] == path:
+            return False
+        try:
+            same = filecmp.cmp(path, held[1], shallow=False)
+        except OSError:
+            return False
+        return same and _old_split_lineage(pid, held[1], depth + 1)
+    return False
+
+
+def _legacy_atlas_backup_proven(pid: str, src: Path) -> bool:
+    """Set :data:`LEGACY_BACKUP_PARAM` for a run on ``src``? Only for a file
+    that carries NO backup marker, has two or more UV sets, and whose
+    lineage the server's own records prove (:func:`_old_split_lineage`) —
+    a split written before the marker existed. The run then migrates it:
+    the backup is restored from / kept as its last layer, and the exported
+    file carries the marker."""
+    facts = _glb_uv_facts(src)
+    if facts is None or facts[1] or facts[0] < 2:
+        return False
+    return _old_split_lineage(pid, src)
+
+
 def _area_model_token(src: Path) -> str:
     stat = src.stat()
     return _document_revision({"metadata": read_model_sidecar(src),
@@ -2287,7 +2394,8 @@ def _areas_snapshot(pid: str, variant: Any) -> Dict[str, Any]:
     if not src or src.suffix.lower() != ".glb":
         raise ValueError("this variant has no full-tier GLB to work on")
     return {"index": index, "src": src, "uid": _variant_list(meta)[index]["uid"],
-            "revision": _document_revision(meta), "model_token": _area_model_token(src)}
+            "revision": _document_revision(meta), "model_token": _area_model_token(src),
+            "legacy_backup": _legacy_atlas_backup_proven(pid, src)}
 
 
 def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
@@ -2315,8 +2423,10 @@ def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
     try:
         try:
             with tempfile.TemporaryDirectory(prefix="av-areas-") as tmp:
+                run_params = ({**params, LEGACY_BACKUP_PARAM: True}
+                              if snapshot.get("legacy_backup") else params)
                 res = runner.run("picture_areas", inputs={"model": src},
-                                 params=params, out_dir=Path(tmp), timeout_s=600)
+                                 params=run_params, out_dir=Path(tmp), timeout_s=600)
                 if not res.get("ok"):
                     raise RuntimeError(res.get("error") or "picture_areas failed")
                 data = res.get("data") or {}
