@@ -35,6 +35,9 @@ writes "restored" when it applies:
   * both refused (ok, not applied): bytes stay "rigged", collision 0,
     build_lod 0, decided -> no candidate (the step closes fulfilled).
   * the script crashes (ok False): ok False, nothing published, still due.
+  * "Repair rig weights" in place on that model (limb_weights nothing to do):
+    hand_restore 0 calls, bytes "rigged", still due (fails on 1398fffc4,
+    where the in-place catch-up moved the fingers without follow-ups).
   * prerig + applied extension rig: the source applied -> one forced
     rebuild_extension_rig; the source both kept -> no rebuild, the model
     takes the source's record.
@@ -431,6 +434,19 @@ def hand_restore_checks():
         assert 'hands' not in model3d._read_sidecar(full)['blender']['steps']
         assert keys() == ([f'character:hand:hand:{token}'], ()), keys()
         print('PASS a crashed run publishes nothing and stays due')
+
+        # "Repair rig weights" in place on a model without the reset: the weights only, the fingers stay —
+        # moving them there would skip the capsules / distance tier / Build follow-up (restore_model_hands has them).
+        script.update(ok=True, data=verdict, applied=True)
+        reset(); restore_call.reset_mock()
+        with patch.object(refine, 'auto_normalize_enabled', return_value=True), \
+             patch.object(refine, 'limb_weights', return_value={'ok': True, 'applied': False, 'data': {},
+                                                                 'error': 'nothing to do'}):
+            repaired = model3d.repair_model_weights('hand', 'hand')
+        assert repaired['ok'] and restore_call.call_count == 0, (repaired, restore_call.call_count)
+        assert full.read_bytes() == b'rigged'
+        assert keys() == ([f'character:hand:hand:{token}'], ()), keys()
+        print('PASS the in-place weight repair leaves the fingers to hand_restore')
 
         script.update(ok=True, data=verdict, applied=True)
         extension = {**normalized, 'extension_rig': {'status': 'applied', 'has_applied': True}}

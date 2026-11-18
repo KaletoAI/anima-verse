@@ -2563,7 +2563,7 @@ def _target_height_m(character_name: str) -> float:
 
 def _auto_normalize(character_name: str, path: Path,
                     meta: Dict[str, Any], *, required: bool = False,
-                    fail_on_error: bool = False) -> None:
+                    fail_on_error: bool = False, hands: bool = True) -> None:
     """Scales the fresh mesh to the character's height and grounds it, if
     switched on (plan-blender-veredelung.md § 2, decided 2026-08-06).
 
@@ -2572,6 +2572,10 @@ def _auto_normalize(character_name: str, path: Path,
     ``meta["blender"].steps`` is the idempotence guard (§ 2.3): a normalised
     file is never normalised again; the gates in ``refine.apply_script`` keep
     the original whenever the export fails the delivery validation (§ 2.2).
+
+    ``hands`` False: a normalised model's catch-up leaves the finger reset out — an in-place re-run on a
+    STORED model (``repair_model_weights``) would move its fingers without the capsules, distance tier and
+    Build follow-up that hang on them; those models get it from ``restore_model_hands``.
     """
     from app.blender import refine, runner
     if (not required and not refine.auto_normalize_enabled()) or path.suffix.lower() != ".glb":
@@ -2598,7 +2602,8 @@ def _auto_normalize(character_name: str, path: Path,
                 logger.warning("Model3D %s: weight repair failed (%s)", character_name, report["error"])
         # A model normalised before the finger reset existed catches up here, like the weight repair: on its
         # next pass through this function (the extension rig re-reads its clean prerig source through it).
-        _auto_hands(character_name, path, meta)
+        if hands:
+            _auto_hands(character_name, path, meta)
         return
     target = _target_height_m(character_name)
     # The unrigged mesh the rigger was given is the ground truth of the
@@ -2852,7 +2857,9 @@ def repair_model_weights(character_name: str, signature: str) -> Dict[str, Any]:
         tiers[LOW_TIER] = low
 
     def checked(tier, target, meta, *, required=False):
-        _auto_normalize(character_name, target, meta, required=required)
+        # A clean source (required) catches up the finger reset — the rebuild from it carries the follow-ups;
+        # a model repaired in place does not (``_auto_normalize`` ``hands``).
+        _auto_normalize(character_name, target, meta, required=required, hands=required)
         _publish_sidecar(target, meta)
         block = meta.get("blender") or {}
         report = block.get("limb_weights") or {}
