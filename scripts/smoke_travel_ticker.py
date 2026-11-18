@@ -96,7 +96,10 @@ Hand-derived expectations:
       point (0, 30) instead of entering a shed the party walks past.
       A follower that joined WHILE travelling keeps a journey of its own; the
       formation cancels it (whichever of the two writes lands last, the end
-      state is the same — pinned by asserting both).
+      state is the same — pinned by asserting both). A journey a follower
+      picks up later (f1, its road west from (0, 30), never into SHED: since
+      ac62eb83b a follower entering a location without its leader leaves the
+      party) is ended by the leader's arrival tick.
 
   [4] Access-blocked arrival: a block rule (action "enter", scope location,
       condition "always") on MARKET → the journey ends on the last point of
@@ -509,7 +512,11 @@ check("t=30 followers are in the wilderness too",
 
 # f1 picks up a LONG journey of its own (BARN, far from arriving at t=155) —
 # the leader's arrival tick has to end it, or the follower walks on alone.
-give_journey("f1_npc", BARN, waypoints=[[0, 30, 0], [0, 200, 10000]])
+# Its road leads WEST from (0, 30) (170 m in 10000 s: at t=155 near (-2.1, 30), in
+# the open): straight north it would walk into SHED (z in [31, 33]) by itself, and
+# since ac62eb83b a follower that enters a location without its leader leaves the
+# party — then nothing would be the leader's to end.
+give_journey("f1_npc", BARN, waypoints=[[0, 30, 0], [-170, 30, 10000]])
 tick_at(155)
 check("the leader arrived", get_character_current_location("lead_npc"), MARKET)
 check("the follower's own journey did not survive the arrival",
