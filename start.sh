@@ -248,6 +248,24 @@ kill_port() {
     done
 }
 
+# The group of the GPU render node when this process may not open it although the user is a member per the group
+# database (a login that predates the membership), and `sg` can switch to it; else nothing. The server and its
+# refit workers compute on the GPU through that node (app/core/gpu_compute.py); without it they run on the CPU.
+render_group_to_add() {
+    local node group user
+    command -v sg >/dev/null 2>&1 || return 0
+    user=$(id -un)
+    for node in /dev/dri/renderD*; do
+        [[ -e "$node" ]] || continue
+        [[ -r "$node" && -w "$node" ]] && return 0
+        group=$(stat -c %G "$node" 2>/dev/null) || continue
+        if [[ " $(id -nG "$user" 2>/dev/null) " == *" $group "* && " $(id -nG) " != *" $group "* ]]; then
+            echo "$group"
+            return 0
+        fi
+    done
+}
+
 start_main() {
     if is_running "$MAIN_PID"; then
         echo "[main] Already running (PID $(cat "$MAIN_PID"))"
@@ -259,13 +277,31 @@ start_main() {
     rotate_log_by_rename "$LOG_DIR/blender.log"
     echo "[main] Starting main app on port $MAIN_PORT..."
     cd "$SCRIPT_DIR"
-    # Its own process group (setsid, where available — it does not fork here, so $! stays the server's PID):
-    # stop_tree then reaches every process the server started, its refit workers included (Ruling A64).
-    local launcher=()
-    command -v setsid >/dev/null 2>&1 && launcher=(setsid)
-    nohup "${launcher[@]}" "$SCRIPT_DIR/.venv/bin/python" -m uvicorn app.server:app --host 0.0.0.0 --port 8000 \
-        >> "$MAIN_LOG" 2>&1 &
-    local pid=$!
+    local cmd=("$SCRIPT_DIR/.venv/bin/python" -m uvicorn app.server:app --host 0.0.0.0 --port "$MAIN_PORT")
+    local group pid
+    group=$(render_group_to_add)
+    if [[ -n "$group" ]] && command -v setsid >/dev/null 2>&1; then
+        # sg runs the command as its CHILD: the server makes itself a group leader there (setsid does not fork in a
+        # non-leader), and its PID — not sg's — goes into the PID file, so --status/--stop find the server itself.
+        echo "[main] Starting under the '$group' group (GPU access for local compute jobs)"
+        nohup sg "$group" -c "exec setsid $(printf '%q ' "${cmd[@]}")" >> "$MAIN_LOG" 2>&1 &
+        local sg_pid=$! i
+        pid=""
+        for ((i = 0; i < 50; i++)); do
+            pid=$(pgrep -P "$sg_pid" 2>/dev/null | head -1 || true)
+            [[ -n "$pid" ]] && break
+            kill -0 "$sg_pid" 2>/dev/null || break
+            sleep 0.1
+        done
+        pid=${pid:-$sg_pid}
+    else
+        # Its own process group (setsid, where available — it does not fork here, so $! stays the server's PID):
+        # stop_tree then reaches every process the server started, its refit workers included (Ruling A64).
+        local launcher=()
+        command -v setsid >/dev/null 2>&1 && launcher=(setsid)
+        nohup "${launcher[@]}" "${cmd[@]}" >> "$MAIN_LOG" 2>&1 &
+        pid=$!
+    fi
     echo "$pid" > "$MAIN_PID"
     echo "[main] Started (PID $pid, log: $MAIN_LOG)"
 }
