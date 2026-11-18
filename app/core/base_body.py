@@ -1493,7 +1493,8 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
                     if path is not None:
                         from app.core import base_skin
                         path = base_skin.after_front_render(character_name, path, bsig=bsig, profile=profile,
-                                                            source=str(front_ref.get("source") or ""))
+                                                            source=str(front_ref.get("source") or ""),
+                                                            **({"raise_load": True} if raise_load else {}))
                 else:
                     path = draw(v, final, reference)
                     if path is not None and v in view_facing.SIDE_VIEWS:
@@ -6377,6 +6378,7 @@ REFRESH_REASON_TEXT = {"older_prompts": "older prompts",
                        "views": "views not refreshed yet",
                        "model": "model built from older views",
                        "mesh_mismatch": "the mesh does not match its views",
+                       "skin": "the skin detail step met a busy backend",
                        "missing": "missing"}
 #: Hub jobs of one base view render on its first attempt (the front's hand
 #: gate may render it up to ``HAND_GATE_ATTEMPTS`` times).
@@ -6443,6 +6445,11 @@ def base_refresh_plan(character_name: str, *, profile: Optional[Dict[str, Any]] 
       refused the stored base mesh against one of them
       (``mesh_view_mismatch``): the model alone, a fresh mesh from the
       current views.
+    * ``skin`` (review 08b#2) — the stored front's skin detail step ended on
+      load (``skin_step.outcome`` busy) and the front is still the neutral
+      render (``_skin_step_due``): every view (the others edit the front),
+      then the model. Load is no failure, so the step stays due until it
+      lands; the improvement re-queues it at idle time.
     * ``""`` — nothing to do, or (without ``missing``) no stored front (a
       missing base is not an older one)."""
     from app.core import model3d, model_overview
@@ -6454,6 +6461,8 @@ def base_refresh_plan(character_name: str, *, profile: Optional[Dict[str, Any]] 
         return {**plan, "views": list(BASE_VIEWS), "model": True, "reason": "missing"} if missing else plan
     if prompts["state"] == model_overview.STALE:
         return {**plan, "views": list(BASE_VIEWS), "model": True, "reason": "older_prompts"}
+    if _skin_step_due(character_name, bsig, profile):
+        return {**plan, "views": list(BASE_VIEWS), "model": True, "reason": "skin"}
     if missing and not front_reference_state(character_name, bsig, profile=profile)["current"]:
         return {**plan, "views": list(BASE_VIEWS), "model": True, "reason": "reference"}
     states = base_view_states(character_name, profile=profile)
@@ -6470,6 +6479,23 @@ def base_refresh_plan(character_name: str, *, profile: Optional[Dict[str, Any]] 
     if missing and path is not None and mesh_view_mismatch(character_name, bsig) is not None:
         return {**plan, "model": True, "reason": "mesh_mismatch"}
     return plan
+
+
+def _skin_step_due(character_name: str, bsig: str, profile: Dict[str, Any]) -> bool:
+    """Whether the stored front of ``bsig`` still waits for its skin detail step (review 08b#2): its record says
+    the edit met load (``base_skin.BUSY``), the step applies to that front (``base_skin.applies`` with its stored
+    source) and the front is still the neutral render (same bytes as the kept neutral front, or no neutral kept)
+    — a later "Run skin step" that landed is not undone by a busy re-run after it."""
+    from app.core import base_skin
+    from app.core.model_refs import find_ref_image
+    if base_skin.step_record(character_name, bsig).get("outcome") != base_skin.BUSY:
+        return False
+    if not base_skin.applies(character_name, profile=profile,
+                             source=base_skin.front_source(character_name, bsig, profile=profile)):
+        return False
+    neutral = base_skin.neutral_path(character_name, bsig)
+    return neutral is None or file_sha256(find_ref_image(character_name, _kind("front"), bsig)) == \
+        file_sha256(neutral)
 
 
 def base_rebuild_steps(character_name: str, plan: Dict[str, Any]) -> List[Tuple[str, int]]:

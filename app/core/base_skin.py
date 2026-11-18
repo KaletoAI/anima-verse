@@ -51,7 +51,10 @@ sidecar records the step under ``skin_step``.
 NEVER FAILS THE BASE ("Nachschritte verwerfen nie"): an edit that is busy,
 refused or fails, a matte or transfer error — the neutral front stays the
 front and ``skin_step`` says why. ``apply_skin_step`` re-runs the step from
-the stored neutral without re-rendering the front.
+the stored neutral without re-rendering the front. Busy is load, not a
+failure (review 08b#2): a ``raise_load`` render gets the load back, and a
+front left neutral by it stays due (``base_body.base_refresh_plan`` reason
+``skin``) until the step lands.
 
 The world switch ``base_body.skin_detail_step`` (default on) turns it off;
 it is part of ``base_body.prompt_fingerprint`` (``fingerprint_part``) only
@@ -468,11 +471,15 @@ def _render_edit(character_name: str, reference: Path, stem: Path, *, size: Tupl
 
 
 def run_step(character_name: str, front: Path, neutral: Path, *,
-             profile: Dict[str, Any]) -> Dict[str, Any]:
+             profile: Dict[str, Any], raise_load: bool = False) -> Dict[str, Any]:
     """Run the step on ``neutral`` and, when it lands, write the detailed
     image onto ``front`` (atomic). Returns the ``skin_step`` record — never
     raises: load is ``BUSY``, a refused edit (silhouette) ``REFUSED``, every
-    other end ``FAILED``; the front then stays as it is."""
+    other end ``FAILED``; the front then stays as it is. ``raise_load`` (a
+    ``raise_load`` base render, review 08b#2): load is recorded as ``BUSY``
+    on the front's sidecar and then RAISED — the caller re-queues instead of
+    finishing on the neutral front; ``base_body.base_refresh_plan`` keeps
+    the step due while the front stays the neutral one."""
     from PIL import Image
     from app.core.base_body import _is_load
     from app.core.model_refs import _tpose_size
@@ -511,19 +518,25 @@ def run_step(character_name: str, front: Path, neutral: Path, *,
         busy = _is_load(e)
         logger.warning("Skin step %s (%s): %s — the neutral front stays: %s", character_name, front.name,
                        "busy" if busy else "failed", e)
-        return {**record, "applied": False, "outcome": BUSY if busy else FAILED,
-                "error": str(e) or type(e).__name__, "at": utc_now_iso()}
+        record = {**record, "applied": False, "outcome": BUSY if busy else FAILED,
+                  "error": str(e) or type(e).__name__, "at": utc_now_iso()}
+        if busy and raise_load:
+            _set_front_record(front, record)   # load, no failure: the step stays due
+            raise
+        return record
 
 
 def after_front_render(character_name: str, front: Path, *, bsig: str, profile: Dict[str, Any],
-                       source: str = "") -> Path:
+                       source: str = "", raise_load: bool = False) -> Path:
     """Right after a new base front landed on ``front`` (the hand-gated
     render; ``source`` its ``front_reference.source``): keep it as the
     neutral front, then — while the step ``applies`` (switch on, not made
     from the full-body reference) — run the step (``run_step``) and record it
     in the front's sidecar; else record ``OFF`` (with ``NOT_USED_FULL_BODY``
-    as ``reason`` for a full-body front). Returns ``front``; never raises."""
+    as ``reason`` for a full-body front). Returns ``front``; never raises —
+    except load under ``raise_load`` (recorded ``BUSY`` first, ``run_step``)."""
     import shutil
+    from app.core.base_body import _is_load
     try:
         stem = neutral_stem(front.parent, bsig)
         for old in front.parent.glob(f"{stem.name}.*"):
@@ -540,11 +553,13 @@ def after_front_render(character_name: str, front: Path, *, bsig: str, profile: 
         shutil.copyfile(front, neutral)
         if front.with_suffix(".json").is_file():
             shutil.copyfile(front.with_suffix(".json"), neutral.with_suffix(".json"))
-        record = run_step(character_name, front, neutral, profile=profile)
+        record = run_step(character_name, front, neutral, profile=profile, raise_load=raise_load)
         _set_front_record(front, record)
         logger.info("Skin step %s (%s): %s%s", character_name, bsig, record.get("outcome"),
                     f" ({record.get('error')})" if record.get("error") else "")
-    except Exception:  # noqa: BLE001 — the neutral front stays, the base never fails
+    except Exception as e:  # noqa: BLE001 — the neutral front stays, the base never fails
+        if raise_load and _is_load(e):
+            raise
         logger.exception("Skin step %s (%s) failed outside the edit", character_name, bsig)
     return front
 

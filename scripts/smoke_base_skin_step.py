@@ -77,6 +77,26 @@ Expected numbers, by hand:
 [E] ``ImageBackend.generate`` writes the prompt the engine received into the
     caller's ``log_meta["final_prompt"]`` (no LoRA, no fold: the prompt as
     sent) — the image meta's source.
+[F] load is no finished step (review 08b#2). ``Demo`` (human, no profile
+    image: the front from text, source "" — the step applies), the switch ON;
+    every base render is a stub writing an 8 x 8 PNG + the sidecar the real
+    render writes (``sidecar_extra``); the skin edit (occasion
+    ``outfit_front``) raises ``BackendBusyError``.
+    [F1] ``generate_base_images(raise_load=True)`` (the base_refresh
+         improvement) RAISES ``BackendBusyError``: two calls (the front, the
+         skin edit), no back/left/right render; the front's sidecar records
+         ``skin_step.outcome`` "busy"; ``base_status`` front neither failed
+         nor running (load is no failure record);
+         ``base_refresh_plan`` -> {views: all four, model: True, reason
+         "skin"} — on the old code the record was "busy" too but nothing read
+         it: the front's fingerprint is the current one, so the plan was
+         empty and the plastic front was meshed.
+    [F2] without ``raise_load`` (the Build, a click) nothing raises: front,
+         skin edit, back, left, right = 5 calls; the plan is still "skin".
+    [F3] the step then lands (the front's bytes differ from the kept neutral
+         — a "Run skin step" that worked): no longer "skin"; a "failed"
+         record on the neutral front is not "skin" either (a failure is not
+         re-spent automatically); switch OFF -> not "skin".
 
 Fails on 136313bb: there is no app/core/base_skin.py, base_body has no "skin
 front" step, and ImageBackend.generate never writes ``final_prompt`` back.
@@ -376,6 +396,77 @@ def section_final_prompt():
         ipl.log_image_prompt = real
 
 
+def section_load(config, paths, root):
+    import shutil
+    from PIL import Image
+    from app.core import base_body, db, expression_regen
+    from app.core.model_refs import get_model_refs_dir
+    from app.imagegen.base import BackendBusyError
+    from app.models.character import save_character_profile
+    from app.plugins.loader import discover_packages
+    print("[F] load is no finished step")
+
+    def configure(on):
+        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"},
+                                                       "base_body": {"skin_detail_step": on}}))
+        config.load(paths.get_config_path(), instance_path=paths.get_instance_dir() / "config.json")
+
+    configure(True)
+    db.init_schema()
+    plugins = root / "plugins"
+    shutil.copytree(ROOT / "plugins" / "human", plugins / "human")
+    discover_packages(plugins, force=True)
+    check("[F] create Demo", save_character_profile("Demo", {"template": "human-default", "gender": "female",
+                                                             "age": 30, "height": 168}, create_new=True))
+    calls = []
+
+    def stub(character_name, *, output_stem, **kw):
+        calls.append(kw.get("occasion"))
+        if kw.get("occasion") == "outfit_front":
+            raise BackendBusyError("Fake is busy")
+        path = output_stem.with_suffix(".png")
+        Image.new("RGBA", (8, 8), (200, 100, 50, 255)).save(path)
+        path.with_suffix(".json").write_text(json.dumps(kw.get("sidecar_extra") or {}))
+        return path
+
+    real = expression_regen.render_character_image
+    expression_regen.render_character_image = stub
+    try:
+        bsig = base_body.base_signature("Demo")
+        front = get_model_refs_dir("Demo") / f"tpose_{bsig}.png"
+        try:
+            base_body.generate_base_images("Demo", force=True, raise_load=True)
+            check("[F1] raise_load: the load is raised", "nothing raised", "BackendBusyError")
+        except BackendBusyError:
+            check("[F1] raise_load: the load is raised", "BackendBusyError", "BackendBusyError")
+        check("[F1] the front and the skin edit, no view after it", calls, ["base_front", "outfit_front"])
+        record = json.loads(front.with_suffix(".json").read_text()).get("skin_step") or {}
+        check("[F1] skin_step outcome", (record.get("applied"), record.get("outcome")), (False, "busy"))
+        status = base_body.base_status("Demo")["front"]
+        check("[F1] no failure record, not running", (status["failed"], status["running"]), (False, False))
+        plan = base_body.base_refresh_plan("Demo")
+        check("[F1] plan", (plan["views"], plan["model"], plan["reason"]), (list(base_body.BASE_VIEWS), True, "skin"))
+        calls.clear()
+        base_body.generate_base_images("Demo", force=True)
+        check("[F2] no raise_load: five calls", calls,
+              ["base_front", "outfit_front", "base_view", "base_view", "base_view"])
+        check("[F2] plan still skin", base_body.base_refresh_plan("Demo")["reason"], "skin")
+        meta = json.loads(front.with_suffix(".json").read_text())
+        Image.new("RGBA", (8, 8), (10, 20, 30, 255)).save(front)    # the step landed later
+        check("[F3] landed: not skin", base_body.base_refresh_plan("Demo")["reason"] != "skin", True)
+        shutil.copyfile(get_model_refs_dir("Demo") / f"tpose_neutral_{bsig}.png", front)
+        meta["skin_step"] = {**meta["skin_step"], "outcome": "failed"}
+        front.with_suffix(".json").write_text(json.dumps(meta))
+        check("[F3] failed: not skin", base_body.base_refresh_plan("Demo")["reason"] != "skin", True)
+        meta["skin_step"] = {**meta["skin_step"], "outcome": "busy"}
+        front.with_suffix(".json").write_text(json.dumps(meta))
+        check("[F3] busy again: skin", base_body.base_refresh_plan("Demo")["reason"], "skin")
+        configure(False)
+        check("[F3] switch off: not skin", base_body.base_refresh_plan("Demo")["reason"] != "skin", True)
+    finally:
+        expression_regen.render_character_image = real
+
+
 def main():
     baseline_proof()
     with tempfile.TemporaryDirectory(prefix="base-skin-step-") as tmp:
@@ -394,6 +485,7 @@ def main():
         section_fallback(config, paths, root)
         section_cost(config, paths)
         section_final_prompt()
+        section_load(config, paths, root)
     print()
     if FAILS:
         print(f"{len(FAILS)} failure(s): {', '.join(FAILS)}")
