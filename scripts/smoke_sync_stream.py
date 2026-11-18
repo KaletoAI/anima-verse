@@ -44,7 +44,7 @@ from app.core.timeutils import utc_now
 from app.models import account
 from app.models.character import save_character_profile
 
-ALL = ['presence', 'scene', 'notices', 'self', 'world']
+ALL = ['presence', 'scene', 'notices', 'self', 'world', 'clips', 'generation']  # sync_topics.TOPICS, as smoke_sync_topics
 uid = users.create_user('demo', 'demo-password', allowed_characters=['Ava', 'Bea'])
 # Empty synthetic login: no personal username is needed for this fixture.
 uid_b = users.create_user('', 'demo-password', allowed_characters=[])

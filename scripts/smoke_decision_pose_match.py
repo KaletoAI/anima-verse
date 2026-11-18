@@ -12,12 +12,13 @@ expression catalog is the working tree's.
 
 EXPECTATIONS, DERIVED BY HAND (the pose catalog at 1010e7d1:
 groups stand 43 / seat 14 / ground 5 / lie 3 entries, every entry grouped;
-expression catalog: 8 entries, no groups):
+expression catalog — the working tree's: set "humanoid" with 9 members, the 8 of 1010e7d1 plus
+"mischievous" (d98f8cec1)):
 Q1 catalog_questions("pose") -> first question "group" with the 4 group ids,
    and a then(); then({"group": seat}) -> "entry" with the 14 seat keys + "none"
    = 15 options; then({}) -> None (no confident group, stop).
-Q2 catalog_questions("expression") -> one question "entry" with 8 keys + "none"
-   = 9 options, then is None.
+Q2 catalog_questions("expression", set_id="humanoid") -> one question "entry" with the 9 member keys
+   + "none" = 10 options, then is None.
 R1 point inactive (is_active False) -> decide never called; an exact alias
    still resolves "exact" as before.
 R2 active, decide -> entry "sitting" (a real key) -> ("sitting", "decision"),
@@ -105,7 +106,7 @@ check("Q1 none option", DP.NONE_KEY in nxt["entry"].options, True)
 check("Q1 then({}) stops", then({}), None)
 first_e, then_e = DP.catalog_questions("expression", set_id="humanoid")
 check("Q2 expression entry only", list(first_e), ["entry"])
-check("Q2 expression options", len(first_e["entry"].options), 9)
+check("Q2 expression options", len(first_e["entry"].options), 10)
 check("Q2 no then", then_e, None)
 
 print("=== T option texts ===")

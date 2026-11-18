@@ -244,8 +244,11 @@ cases = [
     ({"kind": "clothing", "fit_version": 14, "report": {"opening": kept}}, gf.FIT_VERSION["clothing"]),
     ({"kind": "clothing", "fit_version": 15, "report": {"opening": kept}}, gf.FIT_VERSION["clothing"]),
     ({"kind": "clothing", "fit_version": 16, "report": {"opening": kept}}, gf.FIT_VERSION["clothing"]),
-    ({"kind": "clothing", "fit_version": 15, "report": {"opening": kept, "transfer": {"sleeve_share": 0.0}}}, 15),
-    ({"kind": "clothing", "fit_version": 16, "report": {"opening": kept, "transfer": {"sleeve_share": 0.0}}}, 16),
+    # sleeve_vertices 0: never walked (A199 ``walk_may_change``, 72ef9bc63), the older chain decides
+    ({"kind": "clothing", "fit_version": 15, "report": {"opening": kept, "transfer": {"sleeve_share": 0.0,
+                                                                                     "sleeve_vertices": 0}}}, 15),
+    ({"kind": "clothing", "fit_version": 16, "report": {"opening": kept, "transfer": {"sleeve_share": 0.0,
+                                                                                     "sleeve_vertices": 0}}}, 16),
     ({"kind": "hair", "fit_version": 12}, gf.FIT_VERSION["hair"]),
     ({"kind": "footwear", "fit_version": 12, "method": "shoe"}, gf.FIT_VERSION["footwear"]),
 ]

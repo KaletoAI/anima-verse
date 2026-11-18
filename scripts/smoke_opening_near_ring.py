@@ -126,7 +126,8 @@ check("[2] old: the same vertices", bool((lin2o == lin2).all()), (int(lin2o.sum(
 
 # [3] due rule
 def rec(v, opening=None, share=0.3):
-    r = {"kind": "clothing", "fit_version": v, "report": {"transfer": {"sleeve_share": share}}}
+    # sleeve_vertices 0: never walked (A199 ``walk_may_change``, 72ef9bc63), the older chain decides
+    r = {"kind": "clothing", "fit_version": v, "report": {"transfer": {"sleeve_share": share, "sleeve_vertices": 0}}}
     if opening is not None:
         r["report"]["opening"] = opening
     return r

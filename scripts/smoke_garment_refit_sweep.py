@@ -157,7 +157,9 @@ def main() -> int:
         SHA, OTHER = "s" * 64, "o" * 64
         FV = garment_fit.FIT_VERSION
         # Footwear follows garment_fit.FOOTWEAR_FIT_VERSION (bumped by the boots plan): read, not pinned.
-        check("FIT_VERSION", FV, {"hair": 18, "clothing": 17, "footwear": garment_fit.FOOTWEAR_FIT_VERSION})
+        # Versions only grow (as smoke_fit_honesty H4): the fixture reads FV, so >= keeps the check meaningful.
+        check("FIT_VERSION", (FV["hair"] >= 18, FV["clothing"] >= 17, FV["footwear"]),
+              (True, True, garment_fit.FOOTWEAR_FIT_VERSION))
         charmod.get_character_dir("Demo", create=True)
         garments_root = gs._root("Demo")
         garments_root.mkdir(parents=True, exist_ok=True)

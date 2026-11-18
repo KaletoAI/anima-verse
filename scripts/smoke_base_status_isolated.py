@@ -42,7 +42,8 @@ Expected, by hand from the brief and the code:
     (``base_step_in_flight``), other "" (base work wins; the outfit line is not shown beside it).
 [8] The reverse check on the Figure tab (``figureModel.bodyRows(body, [], [], t, buildStep)``, every body row
     ready): step "shape" → the body-shape row blue "Building now", plain and texture green "Current"; "interim" →
-    shape row blue; "base_repair" → plain row blue; "texture" → texture row blue; "pieces" (a worn piece's own row)
+    no row blue (Ruling A119, 0601436ce: the Build has no interim step any more, the name maps to no row);
+    "base_repair" → plain row blue; "texture" → texture row blue; "pieces" (a worn piece's own row)
     → no body row blue; null → none blue.
 [9] Wiring by source: FieldBaseBody calls ``baseHead(runAll, lights, !!activity?.base, t)``, hands
     ``activity={info.activity}`` and shows ``t(activity.other)``; ``BUILD_RUNNING_NOTE`` only with
@@ -267,7 +268,8 @@ if got:
     G, Y = "green", "Current"
     check("[8] Figure body rows, shape step", b["shape"],
           [["plain", G, Y], ["shape", "blue", "Building now"], ["texture", G, Y]])
-    check("[8] interim step → shape row", b["interim"][1], ["shape", "blue", "Building now"])
+    check("[8] interim (no step since A119) → no body row blue", b["interim"],
+          [["plain", G, Y], ["shape", G, Y], ["texture", G, Y]])
     check("[8] base_repair step → plain row", b["base_repair"][0], ["plain", "blue", "Building now"])
     check("[8] texture step → texture row", b["texture"][2], ["texture", "blue", "Building now"])
     check("[8] a piece's step / none → no body row blue", [b["pieces"], b["null"]],

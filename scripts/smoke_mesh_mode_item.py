@@ -17,8 +17,8 @@ Interfaces block.
 [1] default_mesh_mode — the default:
     ["feet"], ["outer"], ["top", "bottom"], ["top"], ["legs", "feet"],
     ["head"] -> "in_body" (was own_mesh / in_body / in_body / painted /
-    painted / painted under the kind default). MESH_MODES == ("own_mesh",
-    "painted", "in_body"). mesh_mode_of: None for a non-outfit-piece (a tool,
+    painted / painted under the kind default). MESH_MODES == ("own_mesh", "shell",
+    "painted", "in_body", "template") — shell A168 d59a6352a, template A138 5ab4c2971. mesh_mode_of: None for a non-outfit-piece (a tool,
     a hair garment, None).
 [2] add_item stores a mode only when the input names a valid one:
     Boots {"slots": ["feet"]} -> no "mesh_mode" key (mode in_body), no
@@ -152,7 +152,7 @@ def main() -> int:
         check("top", d(["top"]), "in_body")
         check("legs + feet", d(["legs", "feet"]), "in_body")
         check("head", d(["head"]), "in_body")
-        check("MESH_MODES", garment_set.MESH_MODES, ("own_mesh", "painted", "in_body"))
+        check("MESH_MODES", garment_set.MESH_MODES, ("own_mesh", "shell", "painted", "in_body", "template"))
         check("constants", (garment_set.OWN_MESH, garment_set.PAINTED, garment_set.IN_BODY),
               ("own_mesh", "painted", "in_body"))
         check("mode of a tool", garment_set.mesh_mode_of({"category": "tool"}), None)

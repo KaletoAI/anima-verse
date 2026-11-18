@@ -73,7 +73,8 @@ writes the same 99 under ``thoughts`` and sees it arrive.
 
 Beside the flat table there is a NESTED strip: ``image_generation.use_cases``
 entries whose render occasion is gone — ``map`` and ``mapfit``, removed with
-the map-icon teardown. They sit one level deeper than the table above, so the
+the map-icon teardown, and ``outfit_fit``, the style of the base-body back/side
+model fit that became the CPU composite (01bcf0155, Task 11g). They sit one level deeper than the table above, so the
 flat sweep walks past them; test 4c is their hand case, and the world fixture
 of tests 8/9 carries both so the end-to-end path proves it too.
 
@@ -182,7 +183,7 @@ EXPECTED_DEAD_TOPLEVEL_ONLY = {"item_image_width", "item_image_height"}
 EXPECTED_TOTAL = 20
 
 # The nested strip's table, by hand: use-case entries with no render occasion.
-EXPECTED_DEAD_USE_CASES = {"map", "mapfit"}
+EXPECTED_DEAD_USE_CASES = {"map", "mapfit", "outfit_fit"}
 
 # Living neighbours that must survive the strip untouched.
 LIVING = {
@@ -321,7 +322,7 @@ def main():
     check("inventory" not in cfgmod.DEAD_CONFIG_FIELDS,
           "no inventory entry (no schema section, dropped as unknown root)")
     check(set(cfgmod.DEAD_USE_CASES) == EXPECTED_DEAD_USE_CASES,
-          f"DEAD_USE_CASES == map + mapfit (got {set(cfgmod.DEAD_USE_CASES)})")
+          f"DEAD_USE_CASES == map + mapfit + outfit_fit (got {set(cfgmod.DEAD_USE_CASES)})")
     check(not (EXPECTED_DEAD_USE_CASES & set(cfgmod._DEFAULT_IMAGE_USE_CASES)),
           "neither dead use case is a built-in default any more")
 

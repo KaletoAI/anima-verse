@@ -39,7 +39,8 @@ EXPECTED_ON = {"consume_item", "instagram_comment", "instagram_reply", "interact
                "invite_to_party", "join_party", "leave_party", "read_item",
                "send_message", "set_pose", "sleep", "wakeup", "image_generation",
                "talk_to", "undress", "get_dressed", "enter_water", "dry_off",
-               "allow_exposed", "require_decency"}
+               "allow_exposed", "require_decency",
+               "prop_action"}  # set_pose package, default_enabled since 9e8262339
 EXPECTED_OFF = {"act", "instagram", "knowledge_extract", "knowledge_search",
                 "markdown_writer", "n8n", "retrospect", "searx"}
 

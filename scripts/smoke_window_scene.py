@@ -119,7 +119,7 @@ def main():
             missing_facts=hf.hull_facts(loc)
         with patch.object(dm,'ensure_window_model',side_effect=built):
             assert hf.hull_facts(loc)==missing_facts
-        assert sr.SCENE_RECIPE_VERSION==16
+        assert sr.SCENE_RECIPE_VERSION >= 16  # window specs arrived in v16; later bumps keep them
         print('PASS window scene: cascade, pane fallback, placement, dedup, small panes, sanitizers, v16')
 
 if __name__=='__main__':

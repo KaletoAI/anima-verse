@@ -221,7 +221,7 @@ def main():
             with patch.object(dm,"generation",return_value=1): one=sr.scene_fingerprint(location,"")
             with patch.object(dm,"generation",return_value=2): two=sr.scene_fingerprint(location,"")
             assert one != two
-        assert sr.SCENE_RECIPE_VERSION == 16
+        assert sr.SCENE_RECIPE_VERSION >= 16  # doors/windows arrived in v16; later bumps keep them
         print("PASS door scene: resolution, styles, sanitizers, placement, fallback, exterior, fingerprint, v16")
 
 if __name__ == "__main__":

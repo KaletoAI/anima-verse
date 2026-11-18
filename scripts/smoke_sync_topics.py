@@ -5,7 +5,7 @@ All cases are NEU: sync_topics is absent on a241a8aa (ModuleNotFoundError).
 thread: one broadcast = one presence, wake >=1. bundle: p,s,p => p,s.
 fog_move: X/Y recipients hit a/b, never Z; perceivers/owner hit only a.
 world hits all three; wilderness empty location hits nobody.
-overflow: 64+1 >64 => exactly one all-five resync, then empty.
+overflow: 64+1 >64 => exactly one resync of all seven topics, then empty.
 rebind_drops_queue/rebind_race: old-avatar signals cannot survive a switch.
 stale_recheck/stale_location: changed revision rejects the entire stale write.
 reconcile_race: A/X read loses to A/Z move; fresh B/Y read wins with resync.
@@ -13,7 +13,8 @@ note_location: revision +1, no resync, only new location matches.
 lag_pending/lag_inflight: t=29 is safe, t=31 exceeds 30; delivered clears
 only in-flight. lag_interleaved: B queued at 1 is 31 seconds old at 32,
 even if A was delivered at 29. never_raises: failing callbacks are contained.
-register_resync: first take is exactly the five topics with resync=True.
+register_resync: first take is exactly the seven topics with resync=True
+(the five of P4 B plus "clips", 09961ed76, and "generation", d27562fba).
 NEU initial_resync_lag: registration at 0 remains pending until 31 => reaped.
 NEU zero_timestamp: signal at 0 taken at 10 still ages from 0 => reaped at 31;
 the snippet must not replace the valid timestamp 0.0 with the take time.
@@ -26,7 +27,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core import sync_topics as b
 
-ALL = ['presence', 'scene', 'notices', 'self', 'world']
+ALL = ['presence', 'scene', 'notices', 'self', 'world', 'clips', 'generation']
 t = [0.0]
 b._clock = lambda: t[0]
 

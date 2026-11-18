@@ -403,8 +403,6 @@ DELETED = [
     ("GET", "/characters/skills/list"),
     ("POST", "/characters/{character_name}/enhance-image-prompt"),
     ("POST", "/characters/{character_name}/rebuild-image-prompt"),
-    ("POST", "/characters/{character_name}/images/{image_name}/suggest-animate-prompt"),
-    ("POST", "/characters/{character_name}/images/{image_name}/animate"),
     ("POST", "/world/locations/{location_name}/gallery/{image_name}/toggle-background"),
     # DE-7 — the per-field variant routes, superseded by the batch save.
     ("POST", "/world/props/{prop_id}/variants/{index}/face-targets"),
@@ -467,6 +465,9 @@ KEPT = [
     ("POST", "/characters/{character_name}/place-on-map"),
     ("POST", "/characters/{character_name}/clear-expression-cache"),
     ("POST", "/instagram/post/{post_id}/animate"),
+    # Deleted 2026-09-21, brought back WITH a UI (Game-Admin gallery "Generate video") in b2d7fbd13.
+    ("POST", "/characters/{character_name}/images/{image_name}/suggest-animate-prompt"),
+    ("POST", "/characters/{character_name}/images/{image_name}/animate"),
     ("POST", "/world/locations/{location_name}/gallery/{image_name}/room"),
     ("POST", "/world/locations/{location_id}/prompt-changed"),
     # The survivors of the three duplicate groups above (2026-09-21).

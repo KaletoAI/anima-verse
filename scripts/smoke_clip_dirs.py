@@ -200,7 +200,10 @@ def test_listing() -> None:
                                     "has_sidecar", "origin", "duration_s",
                                     "fps", "frames", "loop", "loop_count", "role_gender",
                                     "orientation", "root_motion", "generator",
-                                    "license", "height_offsets_cm"},
+                                    "license", "height_offsets_cm",
+                                    # built_s a80868999 (A110), contact_target da3ba7b0d (A139),
+                                    # bend_limits c39fa653e (A145), root_angle 7be5ff5d5 (A158)
+                                    "built_s", "contact_target", "bend_limits", "root_angle"},
           str(sorted(data["clips"][0])))
     check("pairs carries the sidecar of every complete pair",
           data["pair_kinds"] == ["hug"] and data["pairs"]["hug"]["duration_s"] == 2.0

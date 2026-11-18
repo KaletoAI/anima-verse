@@ -105,7 +105,7 @@ EXPECTED_FEATURES = {
     "storydev_enabled": False,
     "secrets_enabled": False,
     "inventory_enabled": False,
-    "mood_tracking_enabled": False,
+    "mood_tracking_enabled": True,  # on for new characters incl. temporary NPCs since 36ebf80d5
     "social_dialog_enabled": False,
     "random_events_enabled": False,
     "expression_variants_enabled": False,

@@ -54,6 +54,8 @@ does.
      17 with Ruling A84's armpit seam;
      hair 14: user test T-U1/T-U2, 15: Ruling A80, the cap above the brow, 16: A80b, the natural hairline) / footwear 18 (= ``FOOTWEAR_FIT_VERSION``;
      18: an outfit body's shoe is derived from the plain body's fit, Ruling A35), ``garment_layers.LAYER_VERSION`` 2.
+     Checked as AT LEAST these (>=, like smoke_armpit_seam): later intentional bumps (clothing 18..20, e.g. A199
+     72ef9bc63) keep every rule above; the footwear entry stays = ``FOOTWEAR_FIT_VERSION``.
 [H5] Ruling R7b on an outfit body (``garment_footwear.body_fit``; stubs: the shoe's current fsig
      ``fedcba987654``, its source ready, the stored body bytes ``"b" * 64``, the fit refuses). Stored: the shoe's
      fit of the OLD fsig ``0123456789ab`` on ``ob0000000a`` — accepted, fit_version 16, ``body_sha256`` "b" * 64,
@@ -242,10 +244,12 @@ def test_h3(gf, reasons):
 
 def test_h4(gf):
     from app.core import footwear_fit, garment_layers
-    check(gf.FIT_VERSION == {"hair": 18, "clothing": 17, "footwear": 18} and footwear_fit.FOOTWEAR_FIT_VERSION == 18
-          and garment_layers.LAYER_VERSION == 2,
+    check(set(gf.FIT_VERSION) == {"hair", "clothing", "footwear"} and gf.FIT_VERSION["hair"] >= 18
+          and gf.FIT_VERSION["clothing"] >= 17 and gf.FIT_VERSION["footwear"] >= 18
+          and gf.FIT_VERSION["footwear"] == footwear_fit.FOOTWEAR_FIT_VERSION
+          and garment_layers.LAYER_VERSION >= 2,
           f"[H4] FIT_VERSION {gf.FIT_VERSION}, FOOTWEAR_FIT_VERSION {footwear_fit.FOOTWEAR_FIT_VERSION}, "
-          f"LAYER_VERSION {garment_layers.LAYER_VERSION} (want hair 18 / clothing 17 / footwear 18, layers 2)")
+          f"LAYER_VERSION {garment_layers.LAYER_VERSION} (want hair >= 18 / clothing >= 17 / footwear >= 18 = FOOTWEAR_FIT_VERSION, layers >= 2)")
 
 
 def test_h5():

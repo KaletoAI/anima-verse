@@ -65,7 +65,9 @@ A) Every NON-virtual schema section declares ``scope`` and the value is one
 B) The scope table of the plan (spec § 5, E3, E4, E5), written out by hand:
      instance: server, providers, llm_retry, llm_routing, lanes, embedding,
                decision, tts, knowledge, content_marketplace, ui,
-               image_generation (section)
+               image_generation (section), llm_refusal (the refusal
+               phrases that send a non-chat call on to the next model marked
+               Uncensored in the shared model list, eb1b8ca0f)
      world:    chat, thoughts, intents, relationships, social_reactions,
                random_events, npc, story_engine, game, messaging_frame,
                game_calendar, game_seasons, memory (section), base_body
@@ -560,7 +562,7 @@ def part_a(schema):
 TABLE_INSTANCE = ["server", "providers", "llm_retry", "llm_routing", "lanes",
                   "embedding", "decision", "tts", "knowledge",
                   "content_marketplace", "ui", "image_generation", "model_test",
-                  "body_retexture"]
+                  "body_retexture", "llm_refusal"]
 TABLE_WORLD = ["extension_motion", "chat", "thoughts", "intents", "relationships", "social_reactions",
                "random_events", "npc", "story_engine", "game", "messaging_frame",
                "game_calendar", "game_seasons", "memory", "packages", "inventory", "base_body"]

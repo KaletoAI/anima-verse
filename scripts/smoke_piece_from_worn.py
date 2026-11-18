@@ -76,7 +76,7 @@ G = 120 + (y - 100) // 100, B = 90. The worn view = the base with a BAND x 120..
     - Shown while the background worker is busy (a blocker queued first): ``regate_shown`` names
       [ghost front] and queues ONE task (a second call while it is pending queues none); ``piece_views_info``
       front ``checking`` True, the back (no accepted ghost) False.
-    - After the worker: the sidecar's record is version 7, ``regated_from`` 6, ok False, ``added_refused``,
+    - After the worker: the sidecar's record is version 8 (GHOST_GATE_VERSION since A79), ``regated_from`` 6, ok False, ``added_refused``,
       reach 0.0715; the gate ran once (1 call); the file is unchanged (same bytes) and still accepted.
     - Auto now: ("worn", "added", "0.0715"), made from generated -> due [ghost front 0, cutout front 1, mesh 1,
       fit 0]; ``checking`` False.
@@ -494,9 +494,9 @@ def regate_part():
     garments._regate_worker.submit(lambda: None).result(timeout=60)
     record = gs.read_record(final.with_suffix(".json"))
     g = record["gates"]["first"]
-    check("re-gated: version 7 from 6, refused for the strap",
+    check("re-gated: version 8 from 6, refused for the strap",
           (g.get("gate_version"), g.get("regated_from"), g.get("ok"), g.get("added_refused"), g.get("added_reach")),
-          (7, 6, False, True, round(100 / 1399, 4)))
+          (8, 6, False, True, round(100 / 1399, 4)))  # GHOST_GATE_VERSION 8 since A79 (e791195da)
     check("the gate ran once; the file unchanged and still accepted",
           (len(calls), final.read_bytes() == stored, record.get("accepted")), (1, True, True))
     info = garments.piece_views_info("Demo", iid, fsig)
@@ -712,8 +712,8 @@ def cell_part():
                                                             got["pendingLight"]), ("pending", "image", "info"))
             check("1. pending: the accepted image a tile of its own, refused, 'To be replaced'", got["pendingTiles"],
                   [{"key": "accepted", "ok": False, "note": "To be replaced", "url": True}])
-            check("1. pending: the attempt in use judged by the final's v7 record", got["inUseTiles"],
-                  [{"key": "attempt-1", "ok": False, "version": 7, "note": "To be replaced"}])
+            check("1. pending: the attempt in use judged by the final's v8 record", got["inUseTiles"],
+                  [{"key": "attempt-1", "ok": False, "version": 8, "note": "To be replaced"}])
             check("1. image mode: the in-use tile has the newest verdict, no note", got["inUseTilesImageMode"],
                   [{"key": "attempt-1", "ok": False, "note": None}])
             check("1. from the worn view: mode, chips, record, light",
