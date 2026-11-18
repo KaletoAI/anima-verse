@@ -35,7 +35,9 @@ motion now (``_approach_start``, rounded UP to the millisecond; M = 1000.0):
 - exit 2.23 s, at factor 1 and factor 10 alike -> 1002.23
 A woken ticker starts its next pass at once instead of after its 5 s sleep.
 places._compose and room_stand.room_geometry compose once per scene
-fingerprint, recompose when it moves, and hand out private copies.
+fingerprint, recompose when it moves, and hand out private copies; since
+da084dc88 the fingerprint is the narrowed one (compose_recorded /
+narrowed_fingerprint) and places.invalidate() leaves the composed markers.
 """
 import asyncio
 import sys
@@ -199,9 +201,16 @@ def wake():
 
 
 def memos():
+    # Since da084dc88 both memos key on the props their own compose read: the key comes from
+    # ``scene_recipe.compose_recorded`` and a hit is checked with ``narrowed_fingerprint`` (their own rules are
+    # smoke_places_read_set.py's). Here both seams return the fixture's fingerprint; ``places.invalidate()``
+    # drops only the TTL inventory since then ("the composed markers stay"), so it composes nothing.
     loc = {"id": "l", "pos_x": 0.0, "pos_z": 0.0, "rooms": []}
     fingerprint = ["f1"]
     composed = []
+
+    def keyed(_loc, _lid, compose):
+        return compose(), frozenset(), fingerprint[0]
 
     def fresh(location_id, location):
         composed.append(location_id)
@@ -209,7 +218,8 @@ def memos():
 
     places.invalidate()
     with patch("app.models.world.get_location_by_id", return_value=loc), \
-            patch("app.core.scene_recipe.scene_fingerprint", side_effect=lambda *_: fingerprint[0]), \
+            patch("app.core.scene_recipe.compose_recorded", side_effect=keyed), \
+            patch("app.core.scene_recipe.narrowed_fingerprint", side_effect=lambda *_: fingerprint[0]), \
             patch.object(places, "_compose_fresh", side_effect=fresh):
         first = places._compose("l")
         first["r"][0]["slots"][0][0] = 99.0
@@ -221,7 +231,7 @@ def memos():
         check("places: a moved fingerprint recomposes", len(composed) == 2, composed)
         places.invalidate()
         places._compose("l")
-        check("places: invalidate() drops the memo", len(composed) == 3, composed)
+        check("places: invalidate() keeps the memo (da084dc88)", len(composed) == 2, composed)
 
     geometry = []
 
@@ -231,7 +241,8 @@ def memos():
 
     fingerprint[0] = "g1"
     with patch("app.models.world.get_location_by_id", return_value=loc), \
-            patch("app.core.scene_recipe.scene_fingerprint", side_effect=lambda *_: fingerprint[0]), \
+            patch("app.core.scene_recipe.compose_recorded", side_effect=keyed), \
+            patch("app.core.scene_recipe.narrowed_fingerprint", side_effect=lambda *_: fingerprint[0]), \
             patch.object(room_stand, "_room_geometry_fresh", side_effect=geometry_fresh):
         a = room_stand.room_geometry("l", "r")
         a[0][0] = (9.0, 9.0)
