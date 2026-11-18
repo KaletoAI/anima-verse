@@ -387,6 +387,20 @@ MIDLINE_STRIP_M = .01
 OUTER_SIDE_SLOPE = .35
 
 
+def set_co(mesh, vertex, co):
+    """Move ``vertex`` of ``mesh`` (an object) to ``co`` (local). With shape
+    keys the glTF exporter reads the Basis key, not ``vertex.co``, so every key
+    block moves by the same delta — the Basis follows, the morphs keep their
+    offsets (review 03, the ``vertex.co`` writes were lost on a body with
+    morphs)."""
+    keys = mesh.data.shape_keys
+    if keys is not None:
+        delta = co-vertex.co
+        for block in keys.key_blocks:
+            block.data[vertex.index].co += delta
+    vertex.co = co
+
+
 def outline_blur(a, sigma, step):
     """Separable Gaussian blur of the grid ``a`` (spacing ``step``), zero
     outside, output the shape of ``a``. ``np.convolve(..., 'same')`` returns
@@ -1149,7 +1163,7 @@ def tip_mesh(meshes, p, placement, sources):
                         kept += 1
                         continue
                     factor = smooth((fill_outer-r)/fill_blend)
-                    vertex.co = inverse@(tip+a*u+b*w+normal*(h*(1-factor)+fitted*factor))
+                    set_co(mesh,vertex,inverse@(tip+a*u+b*w+normal*(h*(1-factor)+fitted*factor)))
                     moved += 1
                 mesh.data.update()
         filled = tip+normal*float(coef[0]) if coef is not None else tip.copy()
@@ -1235,7 +1249,7 @@ def level_surface(meshes, tip, normal, full, inner):
         if abs(dh) > 1e-9:
             mesh = meshes[row[0]]
             vertex = mesh.data.vertices[row[1]]
-            vertex.co = mesh.matrix_world.inverted()@(mesh.matrix_world@vertex.co+normal*float(dh))
+            set_co(mesh,vertex,mesh.matrix_world.inverted()@(mesh.matrix_world@vertex.co+normal*float(dh)))
             moved += 1
     for mesh in meshes:
         mesh.data.update()
@@ -1795,7 +1809,7 @@ def tip_plan(group, p, co, source, rows, before, meshes):
     for mesh in meshes:
         inverse = mesh.matrix_world.inverted()
         for vertex in mesh.data.vertices:
-            vertex.co = inverse@co[offset+vertex.index]
+            set_co(mesh,vertex,inverse@co[offset+vertex.index])
         offset += len(mesh.data.vertices)
         mesh.data.update()
     links,weights,transfers = [],{},[]
