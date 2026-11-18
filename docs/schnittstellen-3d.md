@@ -12426,6 +12426,22 @@ computed) opens it and the morph target `mouth_open` adds the upper lip's lift. 
 (`channels_skipped` gives the reason) and keeps the measured `mouth` of version 9. The reduced tier carries the
 bone and its weights but no morph target.
 
+**The teeth (Ruling A206).** The same build puts teeth, gums and a tongue into the pouch (Blender `mouth_teeth.py`,
+step 7 of `mouth_part`, build 5; the jaw's full angle is 30°). Per character `model3d_opts.mouth_teeth` switches
+teeth and tongue and sets the shade and size (Channels panel, tab `mouth`; Save stores, the Build applies).
+- Geometry: the upper row and gum weighted 1.0 to `Head`, the lower row and gum 1.0 to `Jaw` (rigid); the tongue
+  copies the lower pouch wall's weights. Materials `mouth_teeth` (teeth and gums, colour in `COLOR_0`, present on
+  that primitive only) and `mouth_tongue` (flat colour). At rest nothing of them is seen from the front, ±45° or
+  30° below and every vertex keeps 1.5 mm to the outer skin; a build that cannot keep this publishes the mouth
+  without teeth.
+- The channel record adds `teeth_gap` (metres): the free height between the upper and lower front teeth with the
+  mouth fully open. CONTACT uses it instead of `open_height` when present: `(2 · radius + 4 mm) / teeth_gap`
+  (`mouthPassHeight`). `teeth` {status `applied`/`off`/`failed`, reason, left_out} says how the step went (for the
+  admin; renderers ignore it).
+- The opening pass (below) never displaces a mesh whose material is `mouth_teeth` (`isRigidTeeth`); the tongue is
+  displaced like the skin.
+- The reduced tier carries no teeth and no tongue (`lod.py` drops their faces before reducing).
+
 **The record** (`ChannelRecord` / `ChannelOverride` in `packages/scene-render/src/collision.ts`):
 
 ```
