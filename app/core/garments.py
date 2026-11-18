@@ -1535,8 +1535,11 @@ def _fit_shell(character_name: str, item_id: str, kind: str, fsig: str, bsig: st
     from app.core.garment_store import garment_path, write_record
     from app.core.timeutils import utc_now_iso
     views_used = piece_views(character_name, item_id, profile)
+    from app.core.garment_images import skipped_view
     for view in views_used:
-        if not _accepted(_image(character_name, item_id, fsig, "ghost", view)):
+        # A198 (review 06B #2): an EMPTY drafted back makes no ghost back by design — the shell reads it as empty
+        if (not _accepted(_image(character_name, item_id, fsig, "ghost", view))
+                and not skipped_view(character_name, item_id, fsig, "ghost", view)):
             raise base_body.MissingInput(f"The ghost {view} image is missing — run the ghost step first")
     if body_snapshot is None:
         snapshot = base_body._snapshot_base_model(character_name, bsig)

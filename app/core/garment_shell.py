@@ -1328,16 +1328,26 @@ def shell_views(character_name: str, item_id: str, fsig: str, bsig: str, *,
     # A190: the frame of the base-view variant the worn views were made on (bald / arms up), when there is one
     front = shell_base_views.base_for(character_name, item_id, "front", bsig, front, make=False)[0]
     back = shell_base_views.base_for(character_name, item_id, "back", bsig, back, make=False)[0]
+    # A198 (review 06B #2): an EMPTY drafted back (``garment_images.skipped_view``) has no ghost back by design —
+    # nothing of the piece shows from behind: the back reads as an empty ghost mask over the base back.
+    empty_back = bool(gi.skipped_view(character_name, item_id, fsig, "ghost", "back"))
     for view in ("front", "back"):
         ghost = gs.garment_path(character_name, item_id, fsig, "image", step="ghost", view=view)
-        if not ghost.is_file():
+        if not ghost.is_file() and not (view == "back" and empty_back):
             raise base_body.MissingInput(f"The ghost {view} image is missing — run the ghost step first")
     body_f, ghost_f, _frame = garment_source.fit_masks(character_name, item_id, fsig, body_front=front,
                                                         base_front=front)
     body_b, size_b = garment_source._flat_mask(Path(back), get_model_refs_dir(character_name))
     ghost_b_path = gs.garment_path(character_name, item_id, fsig, "image", step="ghost", view="back")
-    ghost_b = gi._mask(ghost_b_path, size_b)
-    for view, bm, gm in (("front", body_f, ghost_f), ("back", body_b, ghost_b)):
+    if empty_back and not ghost_b_path.is_file():
+        bm = np.asarray(body_b)
+        out["back"] = {"body_mask": bm, "ghost_mask": np.zeros(bm.shape[:2], bool),
+                       "image": np.zeros(bm.shape[:2] + (3,), np.uint8)}
+    else:
+        ghost_b = gi._mask(ghost_b_path, size_b)
+    for view, bm, gm in (("front", body_f, ghost_f), ("back", body_b, None if "back" in out else ghost_b)):
+        if view in out:
+            continue
         path = gs.garment_path(character_name, item_id, fsig, "image", step="ghost", view=view)
         with Image.open(path) as im:
             rgb = im.convert("RGB")
