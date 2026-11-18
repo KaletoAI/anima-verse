@@ -50,7 +50,9 @@ Computed once per input set and cached on disk under ``<storage>/.cache/garment_
 inside.glb}`` — ``key`` is a hash of ``VIEW_VERSION`` and the content versions of the mesh file, both base models,
 the bald front view, the ghost front and the group's base copy (the inputs of the placement and the field). A key
 is computed under ``keyed_lock("garment_mesh_view", key)``, so a second asker waits for the first and reads its
-files. ``_INFO`` counts computations and cache hits (``scripts/smoke_garment_mesh_view.py``).
+files. ``_INFO`` counts computations and cache hits (``scripts/smoke_garment_mesh_view.py``). Each JSON records its
+source files and their versions (``sources``); the daily ``sweep_cache`` drops entries whose sources changed and keeps
+at most ``SWEEP_KEEP`` current ones, least recently used first (a hit touches the JSON).
 """
 from __future__ import annotations
 
@@ -466,9 +468,12 @@ def _inputs(character_name: str, item_id: str, which: str, attempt: int) -> Dict
     versions = [_version(p) for p in (mesh, unrigged, rigged, Path(front), ghost)]
     if not all(versions[1:3]):
         raise ViewUnavailable("No base model yet — the body cannot be shown")
-    raw = f"a48a-v{VIEW_VERSION}|{'|'.join(versions)}|{_version(copy if copy.is_file() else None)}"
+    copy_version = _version(copy if copy.is_file() else None)
+    raw = f"a48a-v{VIEW_VERSION}|{'|'.join(versions)}|{copy_version}"
+    # 06B#5: the files and versions the key was made from — the sweep keeps an entry while they still hold.
+    sources = {str(p): v for p, v in zip((mesh, unrigged, rigged, Path(front), ghost, copy), versions + [copy_version])}
     return {"mesh": mesh, "fsig": fsig, "bsig": bsig, "front": Path(front), "versions": versions, "which": which,
-            "key": hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]}
+            "sources": sources, "key": hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]}
 
 
 def _compute_shell(inputs: Dict[str, Any], body_r, P, F, started: float) -> Dict[str, Any]:
@@ -484,6 +489,7 @@ def _compute_shell(inputs: Dict[str, Any], body_r, P, F, started: float) -> Dict
     result = {"key": inputs["key"], "share": round(share, 4), "face_share": round(face_share, 4),
               "faces": int(len(F)), "inside_faces": int(mask.sum()), "bsig": inputs["bsig"],
               "placement": {"scale": 1.0, "offset": [0.0, 0.0, 0.0], "k": 1.0}, "allowance": None,
+              "sources": inputs.get("sources") or {},
               "computed_at": utc_now_iso(), "seconds": round(time.monotonic() - started, 2)}
     _write_atomic(files["json"], json.dumps(result).encode("utf-8"))
     return result
@@ -532,6 +538,7 @@ def _compute(character_name: str, item_id: str, inputs: Dict[str, Any]) -> Dict[
               "faces": int(len(F)), "inside_faces": int(mask.sum()), "bsig": inputs["bsig"],
               "placement": {"scale": s, "offset": [float(v) for v in t], "k": float(k)},
               "allowance": allowance,
+              "sources": inputs.get("sources") or {},
               "computed_at": utc_now_iso(), "seconds": round(time.monotonic() - started, 2)}
     _write_atomic(files["json"], json.dumps(result).encode("utf-8"))
     logger.info("Mesh view %s/%s %s: %d of %d faces inside the body (%.1f %% of the area) in %.1f s",
@@ -549,7 +556,83 @@ def _cached(key: str) -> Optional[Dict[str, Any]]:
     if not files["ghost"].is_file() or (((result.get("allowance") or {}).get("mask_faces") or result.get("inside_faces"))
                                         and not files["inside"].is_file()):
         return None
+    try:
+        os.utime(files["json"])  # 06B#5: the sweep's least-recently-used order reads the JSON's mtime
+    except OSError:
+        pass
     return result
+
+
+#: 06B#5 — the sweep keeps at most this many CURRENT entries (least recently used go first); an entry whose
+#: source files changed or vanished goes at once (its key is never asked for again).
+SWEEP_KEEP = 64
+#: A ghost/inside GLB without its JSON younger than this may belong to a compute in flight (JSON is written last).
+_ORPHAN_GRACE_S = 3600
+
+
+def _entry_current(result: Dict[str, Any]) -> bool:
+    sources = result.get("sources")
+    if not isinstance(sources, dict) or not sources:
+        return False  # an entry before the sweep cannot be checked — made again on the next view
+    for path, version in sources.items():
+        p = Path(path)
+        if _version(p if p.is_file() else None) != version:
+            return False
+    return True
+
+
+def sweep_cache(*, keep: int = SWEEP_KEEP, now: Optional[float] = None) -> int:
+    """Daily (``periodic_jobs``): remove the cache entries whose sources changed (stale keys), then all but the
+    ``keep`` most recently used current ones, and old overlay files without a JSON. A key being computed (its
+    ``keyed_lock`` held) is left alone. The number of entries removed."""
+    from app.core.artefact_graph import _try_lock  # noqa: PLC2701 — non-blocking keyed lock helper
+    folder = _cache_dir()
+    if not folder.is_dir():
+        return 0
+    now = time.time() if now is None else now
+    removed = 0
+    current: list = []
+    keys = {f.name[:-5] for f in folder.glob("*.json")}
+    for key in sorted(keys):
+        lock = _try_lock("garment_mesh_view", key)
+        if lock is None:
+            continue
+        try:
+            files = _cache_files(key)
+            try:
+                result = json.loads(files["json"].read_text("utf-8"))
+                used = files["json"].stat().st_mtime
+            except (OSError, ValueError):
+                result, used = {}, 0.0
+            if _entry_current(result if isinstance(result, dict) else {}):
+                current.append((used, key))
+                continue
+            for f in files.values():
+                f.unlink(missing_ok=True)
+            removed += 1
+        finally:
+            lock.release()
+    current.sort(reverse=True)
+    for _used, key in current[max(0, keep):]:
+        lock = _try_lock("garment_mesh_view", key)
+        if lock is None:
+            continue
+        try:
+            for f in _cache_files(key).values():
+                f.unlink(missing_ok=True)
+            removed += 1
+        finally:
+            lock.release()
+    for f in folder.glob("*.glb"):
+        key = f.name.split(".", 1)[0]
+        try:
+            if key not in keys and now - f.stat().st_mtime > _ORPHAN_GRACE_S:
+                f.unlink(missing_ok=True)
+        except OSError:
+            pass
+    if removed:
+        logger.info("Mesh view cache: removed %d entries", removed)
+    return removed
 
 
 def body_view(character_name: str, item_id: str, which: str, attempt: int = 0) -> Dict[str, Any]:

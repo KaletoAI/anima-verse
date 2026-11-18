@@ -24,6 +24,7 @@ Sub-tasks that run per tick (each with its own sub-frequency):
     - pose_animation_candidates — daily (SYSTEM-time storage hygiene: generated
                                   pose-animation variants left undecided 7 days)
     - glb_delivery_cache         — daily (unused meshopt copies after 30 SYSTEM days)
+    - garment_mesh_view_cache    — daily (Wardrobe mesh-view entries of changed sources; LRU cap)
     - artefact_gc               — daily (derived 3D files no root reaches, app/core/artefact_graph.py)
     - package_tick              — registered package continuations (world tick)
 
@@ -429,6 +430,15 @@ def _sub_glb_delivery_cache():
         logger.debug("glb_delivery_cache sub error: %s", e)
 
 
+def _sub_garment_mesh_view_cache():
+    """Sweep stale and least-recently-used Wardrobe mesh-view cache entries daily (review 06B#5)."""
+    try:
+        from app.core.garment_mesh_view import sweep_cache
+        sweep_cache()
+    except Exception as e:
+        logger.debug("garment_mesh_view_cache sub error: %s", e)
+
+
 def _sub_pose_transition_candidates():
     """Remove transition candidates left undecided for seven SYSTEM days."""
     try:
@@ -654,6 +664,7 @@ _SUB_TASKS: List[tuple] = [
     (_sub_door_models,               86400,                 "door_models"),
     (_sub_artefact_gc,               86400,                 "artefact_gc"),
     (_sub_glb_delivery_cache,        86400,                 "glb_delivery_cache"),
+    (_sub_garment_mesh_view_cache,   86400,                 "garment_mesh_view_cache"),
     (_sub_chat_retention,            86400,                 "chat_retention"),
     (_sub_screenshot_uploads,        86400,                 "screenshot_uploads"),
     (_sub_video_webm_orphans,        86400,                 "video_webm_orphans"),
