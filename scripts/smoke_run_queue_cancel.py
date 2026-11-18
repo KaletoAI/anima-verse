@@ -17,7 +17,10 @@ on an event). Real: the FIFO and its worker thread, the in-memory garment run
 status (``garment_store.start`` / ``end`` / ``status``), the generation guard.
 
 Expected values (derived by hand from the rules in ``cancel_garment``: a
-waiting entry goes, the one in flight never does):
+waiting entry goes; since A191 (d778acb7d) the run in flight IN the FIFO is
+told to stop — its cancel scope is set, the answer says ``stopping`` — and only
+a CPU refit BESIDE the FIFO answers 409, which smoke_garment_run_cancel.py C7
+pins):
 
 GARMENTS (character Demo; items A, B, C)
 [1] start_garment(A) -> started (the recorder holds A). B through the trigger
@@ -25,18 +28,21 @@ GARMENTS (character Demo; items A, B, C)
     (steps "fit", force) merges into that job; start_garment(C) -> position 2.
     queue_state(Demo) = {queue_running "A", queue ["B", "C"], beside []}.
 [2] POST …/garments/B/cancel (admin) -> 200 {item_id "B", cancelled 1,
-    queue_running "A", queue ["C"]}. Afterwards queue_state(Demo, "C") ->
+    stopping False (B is not in flight), queue_running "A", queue ["C"]}. Afterwards queue_state(Demo, "C") ->
     queue_position 1 (it moved up); B's status running_step None (its
     "queued" mark ended, so no tile says "will be redone"); A's status still
     "queued" (start_garment marked it, the stub never reaches a step) and
     A still in flight (queue_running "A"); the trigger's job of B is done with
     {ok False, cancelled True, error CANCELLED, ran []}.
-[3] POST …/garments/A/cancel -> 409 (A runs, nothing of A waits), detail
-    ALREADY_RUNNING; the queue unchanged (["C"]).
+[3] POST …/garments/A/cancel -> 200 {item_id "A", cancelled 0 (nothing of
+    A waits), stopping True (A is the FIFO's run in flight), queue_running "A"
+    (it ends at its next step; the recorder stub has none, so it runs on until
+    released), queue ["C"]}; the queue unchanged (["C"]).
 [4] POST …/garments/Z/cancel (no run at all) -> 404; POST …/garments/B/cancel
     again -> 404 (already gone).
 [5] Auth: user -> 403 on C's cancel, anonymous -> 401; C still queued.
-[6] Released: the runs are exactly A then C (B never ran), idle afterwards.
+[6] Released: the runs are exactly A then C (B never ran; A's stop reaches
+    only a real step, and the stub has none), idle afterwards.
 
 """
 import json
@@ -125,7 +131,8 @@ def main() -> int:
         print("[2] cancel B: C moves up, A untouched")
         r = client.post("/characters/Demo/garments/B/cancel", headers=ADMIN)
         check("cancel B", (r.status_code, r.json()),
-              (200, {"item_id": "B", "cancelled": 1, "queue_running": "A", "queue": ["C"]}))
+              (200, {"item_id": "B", "cancelled": 1, "stopping": False, "queue_running": "A",
+                     "queue": ["C"]}))
         check("C position 1", garments.queue_state("Demo", "C")["queue_position"], 1)
         check("B mark gone", gs.status("Demo", "B")["running_step"], None)
         check("A status", gs.status("Demo", "A")["running_step"], "queued")
@@ -133,9 +140,11 @@ def main() -> int:
         check("trigger waiter of B", (trigger_b.done.is_set(), trigger_b.result),
               (True, {"ok": False, "cancelled": True, "error": garments.CANCELLED, "ran": []}))
 
-        print("[3] cancel A (running) -> 409")
+        print("[3] cancel A (in flight in the FIFO) -> told to stop (A191)")
         r = client.post("/characters/Demo/garments/A/cancel", headers=ADMIN)
-        check("cancel A", (r.status_code, r.json().get("detail")), (409, garments.ALREADY_RUNNING))
+        check("cancel A", (r.status_code, r.json()),
+              (200, {"item_id": "A", "cancelled": 0, "stopping": True, "queue_running": "A",
+                     "queue": ["C"]}))
         check("queue unchanged", garments.queue_state("Demo")["queue"], ["C"])
 
         print("[4] cancel unknown / gone -> 404")
