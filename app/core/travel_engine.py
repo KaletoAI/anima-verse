@@ -1853,7 +1853,17 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
 
     A journey without a location target is a POINT journey (E3-0) and settles
     somewhere else entirely — see :func:`_settle_point_arrival`.
+
+    ``journey`` is the ticker's snapshot. An owned journey was re-verified by
+    ``_execution_context``; an unowned one (every plain SetLocation journey) is
+    re-read here, once per arrival: a replacement journey stored since the
+    snapshot (a new SetLocation right after this one arrived) is not settled
+    as this arrival and is not ended by it. The cancels below name the
+    snapshot's ``journey_id`` for the same reason.
     """
+    if not _owned(journey) and get_journey(name) != journey:
+        logger.info("Journey arrival skipped: %s stores another journey now", name)
+        return
     if not (journey.get("target") or ""):
         _settle_point_arrival(name, journey, st)
         return
@@ -1905,7 +1915,7 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
         # the same reader, so it cannot walk anyone through the closed door.
         stand = _standoff_point(_walked_prefix(journey, st), st["pos"],
                                 target_id)
-        cancel_journey(name)
+        cancel_journey(name, journey_id=journey.get("journey_id"))
         if stand is not None:
             set_character_pos(name, stand[0], stand[1])
         else:
@@ -1984,7 +1994,7 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
     # changed and the clearing branch never ran — without this the arrival
     # would be re-settled on every single tick, forever.
     if get_movement_target(name):
-        cancel_journey(name, reason="arrived")
+        cancel_journey(name, journey_id=journey.get("journey_id"), reason="arrived")
     # The party ARRIVES in formation, not in a stack. The location write above
     # dragged every follower into the target and put them on its centre, i.e.
     # exactly on top of the leader — the same offsets the road used are the

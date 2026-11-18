@@ -95,6 +95,18 @@ Hand-derived expectations:
       journey dict, and the next tick must leave it in HOME instead of
       pulling it back onto its polyline.
 
+  [7] A REPLACEMENT journey stored between the ticker's read and the
+      settlement (review 09b#3). ``race_npc`` stands at (0, 10); journey A
+      (0, 10) → (30, 10) is 30 m / 3.0 m/s = 10.0 s, so at elapsed 11 s the
+      ticker's snapshot of A has arrived at (30, 10). Before it settles, a new
+      SetLocation stores journey B (0, 10) → (−30, 10) — the position is
+      still (0, 10), no tick ran for ``race_npc``. Settling the snapshot A
+      (``_settle_arrival(name, A, state_of_A)``, exactly what the ticker
+      calls) must leave B alone: the stored journey is still B (same
+      ``journey_id``) and the position stays (0, 10). The old settlement wrote
+      A's goal with a PLAIN ``set_character_pos`` — which ends whatever
+      journey is stored — so B was gone and the figure stood at (30, 10).
+
 Usage:  ./.venv/bin/python scripts/smoke_journey_point.py
 """
 import math
@@ -369,6 +381,28 @@ at(20)
 travel_engine.advance_all_journeys()
 check("… and the ticker does not drag it back out",
       get_character_current_location("home_npc"), HOME)
+
+# ── [7] a replacement journey stored mid-tick ───────────────────────────
+print("[7] the ticker's arrived snapshot never settles a newer journey")
+save_character_profile("race_npc", {"current_location": ""}, create_new=True)
+set_character_pos("race_npc", 0.0, 10.0)
+at(0)
+journey_a, reason_a = travel_engine.start_journey_to_point("race_npc", 30.0, 10.0)
+check("journey A starts", reason_a, "ok")
+snapshot_a = travel_engine.get_journey("race_npc")
+at(11)
+st_a = travel_engine.journey_state(snapshot_a["waypoints"], snapshot_a["started_at_s"],
+                                   timeutils.motion_time())
+check("the snapshot of A has arrived at (30, 10)",
+      (st_a["arrived"], round(st_a["pos"][0], 2), round(st_a["pos"][1], 2)), (True, 30.0, 10.0))
+journey_b, reason_b = travel_engine.start_journey_to_point("race_npc", -30.0, 10.0)
+check("journey B is stored in between", reason_b, "ok")
+travel_engine._settle_arrival("race_npc", snapshot_a, st_a)
+stored = travel_engine.get_journey("race_npc") or {}
+check("B survives the settlement of A",
+      stored.get("journey_id"), (journey_b or {}).get("journey_id"))
+pos = get_character_pos("race_npc")
+check("the figure is not put on A's goal", (pos["x"], pos["z"]), (0.0, 10.0))
 
 print()
 _ = timeutils.game_time()   # the game clock is still readable after all of the above
