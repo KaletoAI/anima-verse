@@ -7,6 +7,9 @@ Usage: ./.venv/bin/python scripts/smoke_pose_key_detail.py
 Offline: throwaway storage + world DB, `embedding.embed` stubbed to None so
 the resolver falls back by alias equality and never downloads a model.
 
+Every stage runs even when an earlier one failed or crashed; the run exits
+non-zero and names every failed stage.
+
 Stage 1 — split_key_detail, derived BY HAND from the shipped catalog file
 (`sitting` is a key, "sitzen" one of its synonyms, "foo" is nothing):
 - "sitting: reads a book"      -> ("sitting", "reads a book")
@@ -82,10 +85,63 @@ Stage 6 — dismiss all, derived BY HAND: after stages 2 and 4 the open list
 holds "quantum flux" and "leaning against counter"; dismiss_all_candidates
 ("pose") returns 2, the open list is empty, list_candidates(status=
 "dismissed") holds both texts; a second call returns 0.
+
+Stages 7..9 — the first-person normaliser of the pose flavor
+(plan-befundrunde-2026-09-29 B7.4, binding review note; formerly
+smoke_flavor_first_person: stage 7 = its [1], 8 = [1b], 9 = [2]). They run
+LAST: [2] reuses stage 2's 'demo' row (INSERT OR IGNORE; case a sets key and
+flavor explicitly, so the earlier stages' pose does not matter), and its
+resolve case must not add a candidate before stage 6 reads the exact open list.
+
+THE RULE
+---------------------------------------------------------------------------
+The flavor is what a BYSTANDER sees, in the third person. An RP line copied
+over ("ich greife nach meiner Tasche") rendered as "Vallerie is ich greife …".
+``pose_catalog.sanitize_flavor`` therefore drops a first-person sentence
+(returns ""), so the caller keeps the KEY and loses only the detail. The word
+list, verbatim from the binding note: ``\\bI\\b`` case-SENSITIVE, and
+``\\b(ich|mich|mir|mein(e[mnrs]?)?|wir|uns|unser(e[mnrs]?)?|my|me|we|us|our)\\b``
+case-insensitive. The keep branch of ``set_pose_key_detail`` must not wipe a
+good flavor with such a dropped detail.
+
+Hand-derived expectations
+---------------------------------------------------------------------------
+[1] dropped (→ ""):
+      "greift nach meiner Tasche"  (meiner = mein+e+r)
+      "Ich lehne mich zurück"      (Ich, case-insensitive; mich)
+      "I lean back"                (I)
+      "holding my cup"             (my)
+      "sits next to us"            (us)
+      "wir tanzen"                 (wir)
+      "hält unsere Karte"          (unsere)
+      "gibt mir das Glas"          (mir)
+    kept unchanged:
+      "leans back in the chair"
+      "greift nach ihrer Tasche"
+      "i lean back"                (lowercase i is no pronoun by the list)
+      "watches the dust swirl in the museum"   (no whole-word hit:
+                                                museum ≠ us, swirl ≠ wir)
+      "Iris lehnt am Tresen"      (Iris ≠ I)
+    quoted speech goes first: 'says "I am tired" and yawns' → "says and yawns"
+    only the FIRST sentence counts: "leans back. I wait." → "leans back."
+[1b] Ben's / Ben’s bedroom → bedroom; Bens Zimmer → Zimmer;
+     Benches unchanged; sitting with Cleo → sitting with; bare Ben'/Ben’
+     loses the apostrophe along with the stored name.
+[2] set_pose_key_detail on a one-row world ('demo'):
+    a ("sitting", "reads a book")                 → flavor "reads a book"
+    b ("", "greife nach meiner Tasche", keep)     → nothing written, returns
+                                                    "", flavor STAYS "reads a book"
+    c ("", "reaches for her bag", keep)           → flavor "reaches for her bag"
+    d ("sitting", "ich lese ein Buch")            → key sitting, flavor ""
+                                                    (key kept, detail dropped)
+    e ("", "I stand up", resolve)                 → a pose key is written
+                                                    (the resolver's fallback
+                                                    "standing"), flavor ""
 """
 import shutil
 import sys
 import tempfile
+import traceback
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -110,12 +166,24 @@ from app.core import places as _places  # noqa: E402
 _places.seat_missing = lambda *_a, **_k: False
 
 failures = []
+CURRENT = ""
 
 
 def check(cond, msg):
     if not cond:
         failures.append(msg)
 
+
+FP_CHECKED = 0
+
+
+def check_fp(label: str, ok: bool, detail: str = "") -> None:
+    """The printing check of stages 7..9 (from smoke_flavor_first_person)."""
+    global FP_CHECKED
+    FP_CHECKED += 1
+    print(f"  {'✓' if ok else '✗'} {label}{f' — {detail}' if detail else ''}")
+    if not ok:
+        failures.append(f"{CURRENT} {label}")
 
 def stage1():
     from app.core.pose_catalog import split_key_detail
@@ -310,15 +378,113 @@ def stage6():
     check(dismiss_all_candidates("pose") == 0, "stage6 second call changed rows")
 
 
+def stage7():
+    """[1] sanitize_flavor (formerly smoke_flavor_first_person [1])."""
+    from app.core.pose_catalog import sanitize_flavor
+    print("\n[1] sanitize_flavor")
+    for text in ("greift nach meiner Tasche", "Ich lehne mich zurück", "I lean back",
+                 "holding my cup", "sits next to us", "wir tanzen",
+                 "hält unsere Karte", "gibt mir das Glas"):
+        got = sanitize_flavor(text)
+        check_fp(f"dropped: {text!r}", got == "", repr(got))
+    for text in ("leans back in the chair", "greift nach ihrer Tasche", "i lean back",
+                 "watches the dust swirl in the museum", "Iris lehnt am Tresen"):
+        got = sanitize_flavor(text)
+        check_fp(f"kept: {text!r}", got == text, repr(got))
+    got = sanitize_flavor('says "I am tired" and yawns')
+    check_fp("quoted speech removed before the check", got == "says and yawns", repr(got))
+    got = sanitize_flavor("leans back. I wait.")
+    check_fp("only the first sentence counts", got == "leans back.", repr(got))
+
+
+def stage8():
+    """[1b] stored possessives (formerly smoke_flavor_first_person [1b])."""
+    from app.core import db as _db
+    from app.core.pose_catalog import sanitize_flavor
+    from app.core.timeutils import utc_now_iso
+    print("\n[1b] stored possessives")
+    ts = utc_now_iso()
+    with _db.transaction() as conn:
+        for name in ("Ben", "Cleo"):
+            conn.execute(
+                "INSERT INTO characters (name, template, profile_json, config_json,"
+                " created_at, updated_at) VALUES (?, '', '{}', '{}', ?, ?)",
+                (name, ts, ts))
+    for text, want in (
+        ("moving toward Ben's bedroom", "moving toward bedroom"),
+        ("moving toward Ben’s bedroom", "moving toward bedroom"),
+        ("geht in Bens Zimmer", "geht in Zimmer"),
+        ("Benches by the wall", "Benches by the wall"),
+        ("sitting with Cleo", "sitting with"),
+        ("beside Ben' chair", "beside chair"),
+        ("beside Ben’ chair", "beside chair"),
+    ):
+        got = sanitize_flavor(text)
+        check_fp(text, got == want, repr(got))
+
+
+def _fp_state(field):
+    from app.core import db as _db
+    row = _db.get_connection().execute(
+        f"SELECT {field} FROM character_state WHERE character_name='demo'").fetchone()
+    return row[0] if row else None
+
+
+def stage9():
+    """[2] set_pose_key_detail keeps a good flavor (formerly smoke_flavor_first_person [2])."""
+    from app.core import db as _db
+    from app.core.timeutils import utc_now_iso
+    from app.models import character as _ch
+    state = _fp_state
+    print("\n[2] set_pose_key_detail")
+    ts = utc_now_iso()
+    with _db.transaction() as conn:  # stage 2 made the row already: OR IGNORE
+        conn.execute(
+            "INSERT OR IGNORE INTO characters (name, template, profile_json, config_json,"
+            " created_at, updated_at) VALUES ('demo', '', '{}', '{}', ?, ?)", (ts, ts))
+
+
+    # (the seat gate is stubbed to "a seat is free" at the top of this file)
+    r = _ch.set_pose_key_detail("demo", "sitting", "reads a book")
+    check_fp("a key sitting, flavor 'reads a book'",
+          r == "sitting" and state("pose_flavor") == "reads a book",
+          f"{r!r} {state('pose_flavor')!r}")
+    r = _ch.set_pose_key_detail("demo", "", "greife nach meiner Tasche", unknown="keep")
+    check_fp("b first-person detail in keep: nothing written", r == "", repr(r))
+    check_fp("b the good flavor stays", state("pose_flavor") == "reads a book",
+          repr(state("pose_flavor")))
+    check_fp("b the key stays", state("pose_key") == "sitting", repr(state("pose_key")))
+    r = _ch.set_pose_key_detail("demo", "", "reaches for her bag", unknown="keep")
+    check_fp("c third-person detail in keep refreshes the flavor",
+          r == "sitting" and state("pose_flavor") == "reaches for her bag",
+          f"{r!r} {state('pose_flavor')!r}")
+    r = _ch.set_pose_key_detail("demo", "sitting", "ich lese ein Buch")
+    check_fp("d key kept, first-person detail dropped",
+          r == "sitting" and state("pose_key") == "sitting" and (state("pose_flavor") or "") == "",
+          f"{r!r} {state('pose_key')!r} {state('pose_flavor')!r}")
+    r = _ch.set_pose_key_detail("demo", "", "I stand up", unknown="resolve")
+    check_fp("e resolve path writes the fallback key, no first-person flavor",
+          r == "standing" and (state("pose_flavor") or "") == "",
+          f"{r!r} {state('pose_flavor')!r}")
+
+
+failed_stages = []
 try:
-    stage1()
-    stage2()
-    stage3()
-    stage4()
-    stage5()
-    stage6()
+    for _stage in (stage1, stage2, stage3, stage4, stage5, stage6, stage7, stage8, stage9):
+        CURRENT = _stage.__name__
+        _before = len(failures)
+        try:
+            _stage()
+        except Exception:  # noqa: BLE001 — a crash ends its stage only, the next one still runs
+            traceback.print_exc()
+            failures.append(f"{CURRENT} crashed")
+        if len(failures) > _before:
+            failed_stages.append(CURRENT)
 finally:
     shutil.rmtree(_tmp, ignore_errors=True)
 
+print(f"\n{FP_CHECKED} first-person checks run")
 print("FAIL:\n" + "\n".join(failures) if failures else "OK smoke_pose_key_detail")
+if failed_stages:
+    print("FAILED stage(s): " + ", ".join(failed_stages))
 sys.exit(1 if failures else 0)
