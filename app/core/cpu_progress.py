@@ -45,6 +45,7 @@ LABELS: Dict[str, str] = {
     "blender:inset_part": "Inset part (Blender)",
     "blender:normalize": "Normalising the model (Blender)",
     "blender:limb_weights": "Limb weights (Blender)",
+    "blender:hand_restore": "Restoring the fingers (Blender)",
     "blender:lod": "Level of detail (Blender)",
     "blender:meshopt": "Compressing the model (Blender)",
     "blender:measure": "Measuring the model (Blender)",
@@ -88,6 +89,8 @@ LABELS: Dict[str, str] = {
     "takes": "Baking the takes",
     "skinning": "Skinning",
     "posture": "Posture pass",
+    "hand_source": "Reading the unrigged mesh",
+    "hand_fit": "Fitting the fingers",
     # Python compute sub-stages (``cpu_progress.sub``)
     "drape_substeps": "Cloth substeps",
     "shell_views": "Shell views",

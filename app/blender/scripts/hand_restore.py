@@ -136,7 +136,7 @@ def hand_restore(args):
              for b in arm.data.bones}
 
     # The source mesh: imported, read, removed again (normalize._restore_posture does the same).
-    _common.progress("source")
+    _common.progress("hand_source")
     before_names = {o.name for o in bpy.data.objects}
     _common.import_model(source)
     new_objects = [o for o in bpy.data.objects if o.name not in before_names]
@@ -148,7 +148,7 @@ def hand_restore(args):
         report["error"] = "source holds no mesh"
         return report, {}
 
-    _common.progress("hands")
+    _common.progress("hand_fit")
     new, new_heads, sides = _hand_restore.restore(verts, tris, uv, weights, wtot, heads, src_verts, src_uv,
                                                   intersections=_intersections_counter(tris))
     report.update(sides)
