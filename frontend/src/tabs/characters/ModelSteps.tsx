@@ -13,8 +13,17 @@
  * e.g. the collision step after a Channels save); `detail` says which.
  * `label` is a fixed English phrase (translated); `detail` (server text with
  * the numbers in it) and `numbers` (the raw values) are the row's tooltip.
+ * `lines` (optional) are shown under the row, each `label: text — reasons`,
+ * all fixed English phrases (translated) — e.g. the finger reset per hand:
+ * restored / kept as rigged (why) / unchanged.
  */
 import { useI18n } from '../../i18n/I18nProvider'
+
+export interface ModelStepLine {
+  label: string
+  text: string
+  reasons?: string[]
+}
 
 export interface ModelStep {
   id: string
@@ -22,6 +31,25 @@ export interface ModelStep {
   status: 'done' | 'skipped' | 'warning' | 'failed' | 'missing' | 'due'
   detail: string
   numbers: Record<string, number | string>
+  lines?: ModelStepLine[]
+}
+
+/** The sub-lines of a step row (``ModelStep.lines``), translated, indented under the row. */
+export function ModelStepLines({ lines }: { lines?: ModelStepLine[] }) {
+  const { t } = useI18n()
+  if (!lines?.length) return null
+  return (
+    <>
+      {lines.map((line) => {
+        const reasons = (line.reasons || []).map((r) => t(r)).join('; ')
+        return (
+          <div key={line.label} className="ga-model3d-status-line">
+            {t(line.label)}: {t(line.text)}{reasons ? ` — ${reasons}` : ''}
+          </div>
+        )
+      })}
+    </>
+  )
 }
 
 const DOT: Record<ModelStep['status'], string> = {
@@ -55,10 +83,13 @@ export function ModelSteps({ steps }: { steps: ModelStep[] }) {
         const tip = [`${t(s.label)}: ${t(STATUS_LABEL[s.status] || s.status)}`, s.detail, numbers]
           .filter(Boolean).join('\n')
         return (
-          <div key={s.id} className="ga-model3d-status-row" title={tip}>
-            <span className={`ga-model3d-status-dot ga-model3d-status-${DOT[s.status] || 'grey'}`} />
-            <span className="ga-model3d-status-text">{t(s.label)} · {s.status === 'skipped' && s.detail
-              ? t(s.detail) : t(STATUS_LABEL[s.status] || s.status)}</span>
+          <div key={s.id}>
+            <div className="ga-model3d-status-row" title={tip}>
+              <span className={`ga-model3d-status-dot ga-model3d-status-${DOT[s.status] || 'grey'}`} />
+              <span className="ga-model3d-status-text">{t(s.label)} · {s.status === 'skipped' && s.detail
+                ? t(s.detail) : t(STATUS_LABEL[s.status] || s.status)}</span>
+            </div>
+            <ModelStepLines lines={s.lines} />
           </div>
         )
       })}

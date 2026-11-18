@@ -22,6 +22,9 @@ Expected values, derived by hand from the fixtures below:
                        -1.0 -> -1.0 = 0; the larger magnitude is 5.5
       normalize        done "×1.2500 · 1.70 m", height 1.36 -> 1.7
       limb_weights     done "12 vertices repaired"
+      hands            missing "Not checked" (Mixamo, normalised, no
+                       finger-reset record)
+      mesh_repair      missing "Not repaired yet" (no mesh_repair record)
       extension_rig    done "g1, g2", groups 2
       covered_variant  warning "without g2 · built from another clean source"
       collision        missing "Not computed" (no ``collision`` record; the
@@ -114,6 +117,22 @@ Expected values, derived by hand from the fixtures below:
     (``_plain_body``, GET /characters/{c}/figure?plain=1 since Task 11 of plan
     2026-11-12-unified-worn-pieces; was GET …/base-body in characters.py)
     calls annotate_base_info (AST).
+[6] The finger reset (step ``hands``) and the distance tier's finger guard:
+    gate reasons "spread_deg …; edge stretch 1.42x; fingers index-middle touch
+    …" -> the three phrases of ``HAND_REASONS`` in that order; "palm roll" twice
+    + an unknown "foo" -> one palm phrase + "the check found it worse".
+    Fixture A with ``hands`` in the steps, Left applied (moved 6.1 mm, 0.4 mm
+    left), Right refused "edge stretch 1.42x" (4.0 / 4.0): row "Hands" done,
+    detail "Left: rigger moved 6.1 mm, 0.4 mm left · Right: rigger moved 4.0
+    mm, 4.0 mm left (edge stretch 1.42x)", numbers left/right_moved_mm 6.1 /
+    4.0, lines Left "Restored to the mesher's fingers", Right "Kept as rigged"
+    with "the skin would tear at the knuckles". untouched / skipped -> the
+    unchanged / no-finger-bones phrases. A record with an error and no step
+    -> failed with the error as detail. rig generic -> no row. The low tier:
+    Mixamo + source lod + hand_guard 1 -> "Fingers kept apart"; without
+    hand_guard -> the "built before the finger guard" phrase; generic or not
+    built by build_lod -> None; the outfit model's lod row carries the line
+    and numbers tris 20000, hand_guard 1.
 """
 import ast
 import hashlib
@@ -205,6 +224,8 @@ def main() -> int:
         ("head_twist", "done", "corrected 5.5°"),
         ("normalize", "done", "×1.2500 · 1.70 m"),
         ("limb_weights", "done", "12 vertices repaired"),
+        ("hands", "missing", "Not checked"),
+        ("mesh_repair", "missing", "Not repaired yet"),
         ("extension_rig", "done", "g1, g2"),
         ("covered_variant", "warning", "without g2 · built from another clean source"),
         ("collision", "missing", "Not computed"),
@@ -452,6 +473,54 @@ def main() -> int:
             check(f"{node.name} -> {want[node.name]}", want[node.name] in calls, True)
             want[node.name] = None
     check("all five routes found", [k for k, v in want.items() if v], [])
+
+    print("[6] finger reset and the distance tier's finger guard")
+    check("reasons in plain words",
+          mo.hand_reasons("spread_deg 27.0 -> 31.0; edge stretch 1.42x; fingers index-middle touch (3.1 -> 1.2 mm)"),
+          ["the fingers would fan out further", "the skin would tear at the knuckles", "two fingers would touch"])
+    check("reasons deduplicated, unknown named", mo.hand_reasons("palm roll 2 -> 9; palm roll 1 -> 3; foo 1"),
+          ["the palm would turn further", "the check found it worse"])
+    hands = {"version": 1, "applied": True,
+             "Left": {"status": "applied", "max_displacement_mm": 6.1, "displacement_left_mm": 0.4},
+             "Right": {"status": "refused", "reason": "edge stretch 1.42x", "max_displacement_mm": 4.0,
+                       "displacement_left_mm": 4.0}}
+    reset = {**FIXTURE_A, "blender": {**FIXTURE_A["blender"], "steps": ["normalize", "limb_weights", "hands"],
+                                      "hands": hands}}
+    row = [s for s in mo.base_model_steps(reset, front_meta=None) if s["id"] == "hands"][0]
+    check("hands row", (row["label"], row["status"], row["detail"], row["numbers"]),
+          ("Hands", "done", "Left: rigger moved 6.1 mm, 0.4 mm left · Right: rigger moved 4.0 mm, 4.0 mm left "
+           "(edge stretch 1.42x)", {"left_moved_mm": 6.1, "right_moved_mm": 4.0}))
+    check("hands lines", row["lines"], [
+        {"label": "Left hand", "text": "Restored to the mesher's fingers", "reasons": []},
+        {"label": "Right hand", "text": "Kept as rigged", "reasons": ["the skin would tear at the knuckles"]}])
+    check("unchanged + no finger bones", [line["text"] for line in mo.hand_lines(
+        {"Left": {"status": "untouched"}, "Right": {"status": "skipped"}})],
+          ["Unchanged — the rigger did not move the fingers", "No finger bones"])
+    crashed = {**FIXTURE_A, "blender": {**FIXTURE_A["blender"], "hands": {"error": "blender missing", "version": 1}}}
+    row = [s for s in mo.base_model_steps(crashed, front_meta=None) if s["id"] == "hands"][0]
+    check("a run that did not finish", (row["status"], row["detail"]), ("failed", "blender missing"))
+    generic = {**reset, "rig": "generic"}
+    check("no row off Mixamo", [s["id"] for s in mo.base_model_steps(generic, front_meta=None) if s["id"] == "hands"],
+          [])
+    check("summary for the old-path panel", {k: v for k, v in mo.hand_summary(reset).items() if k != "lines"},
+          {"checked": True, "error": "",
+           "detail": "Left: rigger moved 6.1 mm, 0.4 mm left · Right: rigger moved 4.0 mm, 4.0 mm left "
+                     "(edge stretch 1.42x)"})
+    check("low tier guarded", mo.low_hands_line({"rig": "mixamo", "source": "lod", "hand_guard": 1}),
+          {"label": "Hands", "text": "Fingers kept apart", "reasons": []})
+    check("low tier before the guard", mo.low_hands_line({"rig": "mixamo", "source": "lod"})["text"],
+          "Built before the finger guard — rebuilt on its next request")
+    check("no line off Mixamo or off build_lod",
+          (mo.low_hands_line({"rig": "generic", "source": "lod"}), mo.low_hands_line({"rig": "mixamo"})),
+          (None, None))
+    lod = [s for s in mo.outfit_model_steps(FIXTURE_B, base=None, base_meta=None, wanted_variant=None, deciders=[],
+                                            shown=[], dressed_records={}, garments=[], tiers=["full", "low"],
+                                            low_tris=20000,
+                                            low_meta={"rig": "mixamo", "source": "lod", "hand_guard": 1})
+           if s["id"] == "lod"][0]
+    check("lod row with the guard", (lod["detail"], lod["numbers"], lod["lines"]),
+          ("20,000 tris", {"tris": 20000.0, "hand_guard": 1.0},
+           [{"label": "Hands", "text": "Fingers kept apart", "reasons": []}]))
 
     print(f"\n{'FAILED: ' + ', '.join(FAILS) if FAILS else 'all checks passed'}")
     return 1 if FAILS else 0

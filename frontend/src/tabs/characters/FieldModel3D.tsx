@@ -35,10 +35,10 @@ import { ApiError, apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { MeshBackendDialog } from '../../components/MeshBackendDialog'
 import { Model3DViewer } from './Model3DViewer'
-import { ModelSteps } from './ModelSteps'
+import { ModelStepLines, ModelSteps } from './ModelSteps'
 import { ModelFaceActions } from './ModelFaceActions'
 import type { FaceCleanupState, FaceReferenceState } from './ModelFaceActions'
-import type { ModelStep } from './ModelSteps'
+import type { ModelStep, ModelStepLine } from './ModelSteps'
 import type { Freshness } from './FreshnessBadge'
 import { OutfitBatchDialog } from './OutfitBatchDialog'
 import { BuildProblemNote } from './BuildProblem'
@@ -98,6 +98,12 @@ export interface ExtensionRigResult {
 export interface Model3DInfo {
   attached_part?: { status: string; reason: string; protrusion_mm: number | null; warning: boolean }
   limb_weights?: { checked: boolean; vertices: number; fully_foreign: number; error: string }
+  /** The file stands at its real height (normalize ran). */
+  normalized?: boolean
+  /** The finger reset after normalize (server: model_overview.hand_summary) — a line per hand. */
+  hands?: { checked: boolean; lines: ModelStepLine[]; error: string; detail: string }
+  /** The distance tier's finger guard (model_overview.low_hands_line), absent without such a tier. */
+  low_hands?: ModelStepLine
   tpose_status?: 'current' | 'changed' | 'other_outfit' | 'unknown'
   head_twist?: { current: number | null; corrected: number | null }
   clips?: Record<string, { loop: boolean }>
@@ -797,6 +803,7 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
     ? t('built — body still shows a protrusion of {n} mm; regenerate the pose render').replace('{n}', String(part.protrusion_mm))
     : t('built')) : part?.reason || t('not built')
   const weights = model?.limb_weights
+  const hands = model?.hands
   const weightsText = weights?.error ? t('Error') : !weights?.checked ? t('not checked')
     : weights.vertices > 0 ? t('{n} vertices repaired').replace('{n}', String(weights.vertices)) : t('clean')
   const statusPanel = model?.steps?.length ? <ModelSteps steps={model.steps} /> : <div className="ga-model3d-status">
@@ -808,6 +815,14 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
     {statusRow(t('Rig'), rigText, model?.rig_error ? 'red' : turned ? 'yellow' : model?.rig_backend && currentTwist != null ? 'green' : 'grey', model?.rig_error || rigText)}
     {mixamo && statusRow(t('Weights'), weightsText, weights?.error ? 'red' : weights?.checked ? 'green' : 'yellow',
       weights?.error || (weights?.checked ? weightsText : t('Run the improvement "Repair rig weights"')))}
+    {/* The finger reset (only where it can run: a normalised model with its unrigged source) and the
+        distance tier's finger guard — one line per hand under the row. */}
+    {mixamo && model?.normalized && hands && (hands.checked || model.has_unrigged_source) && statusRow(t('Hands'),
+      hands.error && !hands.checked ? t('Error') : hands.checked ? t('Done') : t('not checked'),
+      hands.error ? (hands.checked ? 'yellow' : 'red') : hands.checked ? 'green' : 'yellow',
+      hands.error || hands.detail || (hands.checked ? '' : t('Run the improvement "Restore the fingers"')))}
+    {mixamo && model?.normalized && <ModelStepLines lines={hands?.lines} />}
+    {mixamo && model?.low_hands && <ModelStepLines lines={[{ ...model.low_hands, label: 'Distance mesh' }]} />}
     {part && statusRow(t('Part'), partText, !partBuilt ? 'red' : part.warning ? 'yellow' : 'green', partText)}
     {statusRow(t('Face'), faceText, face?.status === 'failed' ? 'red' : face?.face_texture_lost ? 'yellow' : face?.status === 'applied' ? 'green' : 'grey', [face?.error || face?.reason, photoText.replace(/^ · /, '')].filter(Boolean).join('\n'))}
   </div>

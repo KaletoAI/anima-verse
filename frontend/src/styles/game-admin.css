@@ -2947,6 +2947,8 @@ a.ga-btn {
 .ga-model3d-status-row { display: flex; align-items: baseline; gap: 5px; min-width: 0; cursor: help; }
 /* One line per check: the short state shows, the details are the tooltip. */
 .ga-model3d-status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A step's sub-lines (e.g. the finger reset per hand), under the row's text. */
+.ga-model3d-status-line { padding-left: 11px; color: var(--text-muted, #888); overflow-wrap: anywhere; }
 .ga-model3d-status-dot { flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; align-self: center; background: var(--text-muted, #888); }
 .ga-model3d-status-green { background: var(--success, #55a96c); }
 .ga-model3d-status-yellow { background: var(--warning, #d6aa44); }

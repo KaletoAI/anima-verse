@@ -1325,6 +1325,13 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
                     "fully_foreign": weights.get("fully_foreign", 0),
                     "error": weights.get("error", ""),
                 }
+                # The finger reset per hand and the distance tier's finger guard (model_overview phrases).
+                from app.core.model_overview import hand_summary, low_hands_line
+                info["hands"] = hand_summary(meta)
+                low = tier_variant(path, LOW_TIER)
+                low_hands = low_hands_line(_read_sidecar(low)) if low else None
+                if low_hands is not None:
+                    info["low_hands"] = low_hands
                 if meta.get("rig"):
                     info["rig"] = meta["rig"]  # what it was ACTUALLY made with
             except (OSError, ValueError):

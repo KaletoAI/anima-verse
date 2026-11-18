@@ -299,6 +299,111 @@ def _limb_weights_step(blender: Dict[str, Any], rig: str) -> Optional[Dict[str, 
     return step("limb_weights", "Limb weights", DONE, detail, numbers)
 
 
+# The finger reset (``model3d._auto_hands``, step ``hands``): per hand what was done, and why a hand kept the
+# rigger's fingers — fixed English phrases the React tab translates.
+HAND_SIDES = (("Left", "Left hand"), ("Right", "Right hand"))
+HAND_RESTORED = "Restored to the mesher's fingers"
+HAND_KEPT = "Kept as rigged"
+HAND_UNCHANGED = "Unchanged — the rigger did not move the fingers"
+HAND_NO_BONES = "No finger bones"
+HAND_FAILED = "Not checked — the run failed"
+#: The gate's reasons (``_hand_restore.judge``, matched by their leading words) in plain words.
+HAND_REASONS = (
+    ("spread_deg", "the fingers would fan out further"),
+    ("elev_range_deg", "the fingers would tilt further against the palm"),
+    ("palm roll", "the palm would turn further"),
+    ("curl test", "fewer fingers would bend cleanly"),
+    ("fingers ", "two fingers would touch"),
+    ("edge stretch", "the skin would tear at the knuckles"),
+    ("band normal break", "the skin would crease at the knuckles"),
+    ("self-intersections", "the fingers would cut into each other more"),
+)
+HAND_REASON_OTHER = "the check found it worse"
+#: The distance tier's hand guard (``lod.py`` ``protect_hands``, ``model3d.LOD_HAND_GUARD``).
+LOW_HANDS_GUARDED = "Fingers kept apart"
+LOW_HANDS_OLD = "Built before the finger guard — rebuilt on its next request"
+
+
+def hand_reasons(reason: str) -> List[str]:
+    """The plain-words phrases of a gate reason string (``"spread_deg 27 -> 31; edge stretch 1.4x"``)."""
+    out: List[str] = []
+    for part in str(reason or "").split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        phrase = next((text for head, text in HAND_REASONS if part.startswith(head)), HAND_REASON_OTHER)
+        if phrase not in out:
+            out.append(phrase)
+    return out
+
+
+def hand_lines(report: Any) -> List[Dict[str, Any]]:
+    """``[{label, text, reasons}]`` per hand of a ``meta.blender.hands`` record — ``label`` / ``text`` /
+    ``reasons`` fixed English phrases (``reasons`` only for a hand kept as rigged)."""
+    report = _dict(report)
+    lines = []
+    for side, label in HAND_SIDES:
+        entry = _dict(report.get(side))
+        status = str(entry.get("status") or "")
+        if status == "applied":
+            lines.append({"label": label, "text": HAND_RESTORED, "reasons": []})
+        elif status == "refused":
+            lines.append({"label": label, "text": HAND_KEPT, "reasons": hand_reasons(entry.get("reason"))})
+        elif status == "untouched":
+            lines.append({"label": label, "text": HAND_UNCHANGED, "reasons": []})
+        elif status == "skipped":
+            lines.append({"label": label, "text": HAND_NO_BONES, "reasons": []})
+        elif status == "error" or report.get("error"):
+            lines.append({"label": label, "text": HAND_FAILED, "reasons": []})
+    return lines
+
+
+def hand_summary(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """What the 3D tab shows of a model's finger reset (old-path overview): ``{checked, lines, error,
+    detail}`` — ``checked`` once the step ran (``"hands"`` in the steps)."""
+    blender = _dict(meta.get("blender"))
+    report = _dict(blender.get("hands"))
+    return {"checked": "hands" in (blender.get("steps") or []), "lines": hand_lines(report),
+            "error": str(report.get("error") or ""), "detail": _hands_detail(report)}
+
+
+def _hands_detail(report: Dict[str, Any]) -> str:
+    parts = []
+    for side, _label in HAND_SIDES:
+        entry = _dict(report.get(side))
+        if entry.get("status") in ("applied", "refused"):
+            parts.append(f"{side}: rigger moved {entry.get('max_displacement_mm')} mm, "
+                         f"{entry.get('displacement_left_mm')} mm left"
+                         + (f" ({entry.get('reason')})" if entry.get("status") == "refused" else ""))
+        elif entry.get("status"):
+            parts.append(f"{side}: {entry.get('status')}")
+    if report.get("error"):
+        parts.append(str(report["error"]))
+    return " · ".join(parts)
+
+
+def _hands_step(blender: Dict[str, Any], rig: str) -> Optional[Dict[str, Any]]:
+    """The finger reset after normalize (``model3d._auto_hands``): one row, a line per hand. No row off
+    Mixamo; "Not checked" for a normalised model the step never ran on (before it existed, or without an
+    unrigged source)."""
+    if rig != "mixamo" or "normalize" not in (blender.get("steps") or []):
+        return None
+    report = _dict(blender.get("hands"))
+    ran = "hands" in (blender.get("steps") or [])
+    numbers = {f"{side.lower()}_moved_mm": _num(_dict(report.get(side)).get("max_displacement_mm"))
+               for side, _label in HAND_SIDES}
+    if not report:
+        return step("hands", "Hands", NOT_RECORDED, "Not checked")
+    lines = hand_lines(report)
+    if not ran:
+        row = step("hands", "Hands", FAILED, str(report.get("error") or "The finger reset did not run"), numbers)
+    else:
+        row = step("hands", "Hands", WARNING if report.get("error") and report.get("error") != "nothing to do"
+                   else DONE, _hands_detail(report), numbers)
+    row["lines"] = lines
+    return row
+
+
 def _mesh_repair_step(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """The base mesh repair (``base_mesh_repair``, Ruling A34): holes found / filled, the largest filled, what
     stayed open. None for a model that gets none (not a humanoid GLB)."""
@@ -439,13 +544,31 @@ def _measure_step(meta: Dict[str, Any]) -> Dict[str, Any]:
                 {"tris": tris, "bones": bones, "height_m": height})
 
 
-def _lod_step(meta: Dict[str, Any], tiers: List[str], low_tris: Any = None) -> Dict[str, Any]:
+def low_hands_line(low_meta: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The distance tier's finger guard as a step line (``{label, text, reasons}``): a Mixamo tier built by
+    ``build_lod`` with the current guard keeps the fingers apart; an older one is rebuilt lazily on its next
+    request (``model3d.find_model3d_serving_tier``). None for a tier without hands or not built here."""
+    low_meta = _dict(low_meta)
+    if low_meta.get("rig") != "mixamo" or low_meta.get("source") != "lod":
+        return None
+    from app.core.model3d import LOD_HAND_GUARD
+    current = int(low_meta.get("hand_guard") or 0) >= LOD_HAND_GUARD
+    return {"label": "Hands", "text": LOW_HANDS_GUARDED if current else LOW_HANDS_OLD, "reasons": []}
+
+
+def _lod_step(meta: Dict[str, Any], tiers: List[str], low_tris: Any = None,
+              low_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if meta.get("lod_error"):
         return step("lod", "Distance mesh", FAILED, str(meta["lod_error"]))
     if "low" in tiers:
         tris = _num(low_tris)
-        return step("lod", "Distance mesh", DONE, f"{int(tris):,} tris" if tris is not None else "",
-                    {"tris": tris})
+        hands = low_hands_line(low_meta)
+        row = step("lod", "Distance mesh", DONE, f"{int(tris):,} tris" if tris is not None else "",
+                   {"tris": tris, "hand_guard": _num(_dict(low_meta).get("hand_guard"))
+                    if hands is not None else None})
+        if hands is not None:
+            row["lines"] = [hands]
+        return row
     return step("lod", "Distance mesh", NOT_RECORDED, "Not built yet")
 
 
@@ -641,6 +764,7 @@ def base_model_steps(meta: Dict[str, Any], *, front_meta: Optional[Dict[str, Any
             _rig_step(meta)]
     for row in (_head_twist_step(blender), _posture_step(blender), _normalize_step(blender),
                 _limb_weights_step(blender, str(meta.get("rig") or "")),
+                _hands_step(blender, str(meta.get("rig") or "")),
                 _mesh_repair_step(meta),
                 _tip_smoothing_step(tip_smoothing),
                 _extension_step(_dict(meta.get("extension_rig"))),
@@ -778,6 +902,7 @@ def outfit_body_steps(meta: Dict[str, Any], *,
     for row in (_head_twist_step(blender), _posture_step(blender), _normalize_step(blender),
                 _posture_match_step(blender),
                 _limb_weights_step(blender, str(meta.get("rig") or "")),
+                _hands_step(blender, str(meta.get("rig") or "")),
                 _extension_step(_dict(meta.get("extension_rig"))),
                 _collision_step(meta, current=collision_current, channels_current=channels_current),
                 _texture_step(meta), _measure_step(meta)):
@@ -970,6 +1095,7 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
                        base_meta: Optional[Dict[str, Any]], wanted_variant: Optional[str],
                        deciders: List[str], shown: List[str], dressed_records: Dict[str, Optional[Dict[str, Any]]],
                        garments: List[Dict[str, Any]], tiers: List[str], low_tris: Any = None,
+                       low_meta: Optional[Dict[str, Any]] = None,
                        delta_limit: float = POOR_REGISTRATION_DELTA_E, covered_missing_text: str = "",
                        item_names: Optional[Dict[str, str]] = None,
                        texture_shared: Optional[int] = None,
@@ -985,7 +1111,7 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
     exposed-only groups / show them through (``exposed_detail``);
     ``dressed_records``: the sidecar of every dressed view the build looked
     at (front, back, sides), None when the file is gone; ``garments``: see
-    ``_garment_steps``; ``tiers`` / ``low_tris``: the distance mesh;
+    ``_garment_steps``; ``tiers`` / ``low_tris`` / ``low_meta``: the distance mesh (its sidecar for the finger guard);
     ``item_names``: item id -> name for the own-mesh pieces row;
     ``texture_shared``: how many stored outfit models use its painted body;
     ``body_meta``: the sidecar of the meshed shape it names (None when gone
@@ -1042,7 +1168,7 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
         rows.append(mesh_row)
     rows += _garment_steps(garments, [w for w in (meta.get("garment_warnings") or []) if isinstance(w, str)])
     rows.append(_measure_step(meta))
-    rows.append(_lod_step(meta, tiers, low_tris))
+    rows.append(_lod_step(meta, tiers, low_tris, low_meta))
     return rows
 
 
@@ -1430,7 +1556,8 @@ def outfit_model_overview(character_name: str,
         if isinstance(name, str) and name and Path(name).name == name:
             records[view] = _sidecar(refs / name) if (refs / name).is_file() else None
     low = tier_variant(path, "low")
-    low_tris = _sidecar(low).get("tris") if low else None
+    low_meta = _sidecar(low) if low else {}
+    low_tris = low_meta.get("tris") if low else None
     from app.core.motion_item_cache import item_snapshot
     items = item_snapshot() or {}
     garments, assembly_warnings = _assembled_garments(character_name, path.stem)
@@ -1443,7 +1570,7 @@ def outfit_model_overview(character_name: str,
         collision_state = {}
     steps = outfit_model_steps(meta, base=base, base_meta=base_meta, wanted_variant=wanted, deciders=deciders,
                                shown=shown, dressed_records=records, garments=garments,
-                               tiers=available_tiers(path), low_tris=low_tris,
+                               tiers=available_tiers(path), low_tris=low_tris, low_meta=low_meta,
                                covered_missing_text=base_body.COVERED_MISSING,
                                item_names={i: str((items.get(i) or {}).get("name") or i)
                                            for i in base_body.mesh_items_intended(meta)},
