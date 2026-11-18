@@ -237,7 +237,7 @@ def part_a():
     from app.core import paths
     paths.init(tmp)
     from app.core import garment_template as gt
-    check("[A1] TEMPLATE_VERSION 5", gt.TEMPLATE_VERSION == 5, gt.TEMPLATE_VERSION)
+    check("[A1] TEMPLATE_VERSION >= 5", gt.TEMPLATE_VERSION >= 5, gt.TEMPLATE_VERSION)   # A198 made it 6
     spec = {"row_y": [1.0], "measure": {}}
 
     def dq(scale=1.0, **p):

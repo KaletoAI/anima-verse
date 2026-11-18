@@ -57,7 +57,10 @@ SCRIPT = "garment_template_build"
 #: The spike's evaluator script (modes mesh / panels / from_body / necklace).
 SPIKE_SCRIPT = "garment_template_drape.py"
 #: Bumped when the same parameters drape differently.
-TEMPLATE_VERSION = 5
+#: 6 (A198): the texture projection paints the outer layer only (prints were mirrored), the bake pose search tries
+#: the arm angles it names, a lower layer's collider is thickened inward, a dress with a bodice keeps its slit and
+#: the rim metrics read the open borders.
+TEMPLATE_VERSION = 6
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.

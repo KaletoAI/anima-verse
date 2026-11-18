@@ -1529,6 +1529,11 @@ def run(a):
         # A178: a bodice built inside the arm root (armhole window, neckline chords through a high shoulder) is laid
         # out of the body smoothly here, before its rest lengths are taken
         binfo["clear"] = gd.clear_of_body(obj, ctree, thickness=thickness)
+        # A198 (review 03 #5): a dress with a bodice keeps its slit — the bodice's columns lie on the same 80-step
+        # angles from 1.5 pi as the skirt's wrap (``split_slit``'s step), measured up from its lowest row (the hem)
+        if prm.get("slit"):
+            hem_b = float(min(v.co.z for v in obj.data.vertices))
+            slit_edges = split_slit(obj, None, prm.get("slit") or {}, hem_b, centre)
     else:
         binfo = {}
         col = None
@@ -1656,6 +1661,10 @@ def run(a):
     # Solidify without the armature in the stack: its copy layer follows the original vertex order
     for m in list(obj.modifiers):
         obj.modifiers.remove(m)
+    # A198 (review 03 #1, #6): the single layer's faces and open borders, read BEFORE the Solidify — after it the
+    # copy layer shares the UVs (the projection must paint layer 0 only) and the rim closes every border edge
+    n_faces_single = len(obj.data.polygons)
+    rim_single = gd.boundary_verts(obj)
     sol = obj.modifiers.new("sol", "SOLIDIFY")
     sol.thickness = 0.0015
     sol.offset = 1
@@ -1710,14 +1719,15 @@ def run(a):
     if bod:
         deg, bco_, bnr_, sil = bake_pose(arm, obj, views)
         bake_info = {"arm_deg": deg, **sil}
-        tex = gd.project_bake(obj, views, out / "template_atlas.png", size=1024, co=bco_, nr=bnr_)
+        tex = gd.project_bake(obj, views, out / "template_atlas.png", size=1024, co=bco_, nr=bnr_,
+                              polys=n_faces_single)
     else:
-        tex = gd.project_bake(obj, views, out / "template_atlas.png", size=1024)
+        tex = gd.project_bake(obj, views, out / "template_atlas.png", size=1024, polys=n_faces_single)
     tex.update(bake_info)
     tex["wall_s"] = round(time.time() - t_bake, 2)
     edges2 = gd.edges_of(obj)
     rest2 = np.linalg.norm(co2[edges2[:, 0]] - co2[edges2[:, 1]], axis=1)
-    rim = gd.boundary_verts(obj)
+    rim = rim_single   # layer 0 keeps the single layer's vertex order (checked above)
     view = gd.frame_of(co2)
     t_meas = time.time()
     render_s = 0.0

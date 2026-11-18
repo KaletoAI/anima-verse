@@ -78,7 +78,8 @@ POSES = {
     "arms_up": [("LeftArm", "Y", -60), ("RightArm", "Y", 60)],
 }
 #: Poses that set the arms themselves (ARMS_DOWN is not added to them).
-ARM_POSES = ("rest", "arms_down", "arms_forward", "arms_up")
+ARM_POSES = ("rest", "arms_down", "arms_forward", "arms_up",
+             "_bake")   # A198: the bake pose search sets the arm angle it tries itself
 COLLIDER_VOXEL_M = 0.005  # closed, outward-wound collider (see drape)
 RIM_BAND_M = 0.02   # body vertices this close to a piece opening are not judged
 #: Ruling A142: a body vertex with other skin within this distance outward (arm on the flank, thigh on thigh) is a
@@ -499,12 +500,39 @@ EXTRA_SOLID_M = 0.008
 COLLIDER_S = []
 
 
+def _outer_layer_only(obj, col):
+    """A198 (review 03 #4): a lower garment exported by this script is already a CLOSED two-layer shell; the
+    Solidify below grows every face against its normal, so its inner layer (facing the body) grew OUTWARD through
+    the outer one and the collider stood ~6.5 mm outside the piece. For a closed mesh the faces whose normal points
+    toward what ``col`` holds (the body, earlier layers) are dropped first: what is left faces out and thickens
+    inward. An open sheet is left as it is."""
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    if any(e.is_boundary for e in bm.edges) or not len(bm.faces):
+        bm.free()
+        return
+    to_col = col.matrix_world.inverted() @ obj.matrix_world
+    rot = to_col.to_3x3()
+    tree = BVHTree.FromPolygons([v.co.copy() for v in col.data.vertices], [list(p.vertices) for p in col.data.polygons])
+    inward = []
+    for f in bm.faces:
+        c = to_col @ f.calc_center_median()
+        hit = tree.find_nearest(c)
+        if hit[0] is not None and (hit[0] - c).dot(rot @ f.normal) > 0:
+            inward.append(f)
+    if inward and len(inward) < len(bm.faces):
+        bmesh.ops.delete(bm, geom=inward, context="FACES")
+        bm.to_mesh(obj.data)
+    bm.free()
+
+
 def _join_extra(col, extra, dg):
     """Join the evaluated mesh of ``extra`` (a lower garment, Ruling A142) into the collider object ``col``,
     thickened to EXTRA_SOLID_M so the voxel remesh keeps it."""
     tmp = bpy.data.objects.new("extra_col", bpy.data.meshes.new_from_object(extra.evaluated_get(dg)))
     tmp.matrix_world = extra.matrix_world.copy()
     bpy.context.scene.collection.objects.link(tmp)
+    _outer_layer_only(tmp, col)
     so = tmp.modifiers.new("so", "SOLIDIFY")
     so.thickness = EXTRA_SOLID_M
     so.offset = -1.0
@@ -958,6 +986,8 @@ def island_mask(obj, size):
     mask = np.zeros((size, size), bool)
     me.calc_loop_triangles()
     for t in me.loop_triangles:
+        if polys is not None and t.polygon_index >= polys:
+            continue
         p = np.array([uv[i].uv for i in t.loops]) * size
         x0, y0 = np.floor(p.min(0)).astype(int)
         x1, y1 = np.ceil(p.max(0)).astype(int)
@@ -1174,11 +1204,12 @@ def run_panels(a):
             "bake": tex, "draped": m}, {"glb": str(out / "skirt_template.glb")}
 
 
-def project_bake(obj, a, out_png, size=1024, co=None, nr=None):
+def project_bake(obj, a, out_png, size=1024, co=None, nr=None, polys=None):
     """Projection bake of the front/back cut-out views onto obj's UVs (orthographic,
     registered by bounding box: the piece's projected bbox = the view's alpha bbox). ``co`` / ``nr`` = world
     positions / normals to project from instead of the rest mesh (Ruling A142: a top is projected in the arm pose
-    its picture shows)."""
+    its picture shows). ``polys`` (A198): only the polygons below that index are projected — after a Solidify the
+    copy layer shares the UVs and faces the other way, so it would paint the outside from the opposite view."""
     me = obj.data
     me.calc_loop_triangles()
     if co is None:
@@ -1199,6 +1230,8 @@ def project_bake(obj, a, out_png, size=1024, co=None, nr=None):
     mask = np.zeros((size, size), bool)
     uv = me.uv_layers.active.data
     for t in me.loop_triangles:
+        if polys is not None and t.polygon_index >= polys:
+            continue
         p = np.array([uv[i].uv for i in t.loops]) * size
         P3 = co[list(t.vertices)]
         N3 = nr[list(t.vertices)].mean(0)
