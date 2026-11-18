@@ -18,7 +18,7 @@ smoke_garment_routes	STALE: hair payload and footwear gate limits changed since 
 smoke_garment_store	STALE: "bad view" no longer raises: the view set grew (A185 garment_set GARMENT_VIEWS, 91f4908bf)
 smoke_garment_wardrobe_routes	STALE: clothing gate limits and the "no base model" status text changed
 smoke_hair_strands_graft	STALE: [4] the build's sidecar no longer carries the strand attributes record the smoke expects; not re-derived
-smoke_image_routing_migration	STALE: _seed_default_mesh_backends appends quadruped-local to every existing list (d4aa4edd8/62c7b7b51, its docstring) and seeds 12 entries; C3 pins (False,1) / (True,11) / an emptied list staying [] — owner to confirm "emptied stays empty" vs the quadruped addition
+smoke_image_routing_migration	DECISION: since d4aa4edd8 _seed_default_mesh_backends appends quadruped-local to EVERY existing backend list on every load (its docstring says so), so C3 gets (True,2)/(True,2)/(True,12)/[quadruped-local] where it pins (False,1)/(False,1)/(True,11)/[] — question: may an admin who emptied the list or removed quadruped-local keep it that way (then: a one-time migration with a marker), or is quadruped-local mandatory?
 smoke_improvement_base_refresh	STALE: estimate of an older-prompt base refresh is 8 hub jobs (was 7): the full-body reference step (A87 c24544018) adds one
 smoke_model3d_stale_base	STALE: A119/b25bbbe39 serving rule: a humanoid is never served another figure's stored model, so the "stale older base" fixture model is not served
 smoke_outfit_body_full_views	STALE: A175 turn step: the back of an outfit body renders a "_turn" image first (an extra image job)
