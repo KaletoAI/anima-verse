@@ -2199,8 +2199,10 @@ def body_fit(character_name: str, item_id: str, *, body_id: str, body_sha: str,
     the new body).
 
     Footwear dispatches to ``garment_footwear.body_fit``: the shoe source is
-    fitted on the outfit body directly, ``base_fit`` is not read."""
-    from app.core import garment_fit, garment_store as gs
+    fitted on the outfit body directly, ``base_fit`` is not read.
+    ``refit_pool.RefitInterrupted`` (the server stops) propagates and is not
+    recorded."""
+    from app.core import garment_fit, refit_pool, garment_store as gs
     from app.core.keyed_lock import keyed_lock
     try:
         footwear = gs._garment_kind(item_id) == _footwear()
@@ -2239,6 +2241,8 @@ def body_fit(character_name: str, item_id: str, *, body_id: str, body_sha: str,
                 try:
                     fit_on_body(character_name, item_id, body_id=body_id, base_fit=base_fit, profile=profile,
                                 schedule=False)
+                except refit_pool.RefitInterrupted:
+                    raise  # the pool ended the call (the server stops): no refusal on that body
                 except Exception as e:  # noqa: BLE001 — recorded per body, the assembly goes on
                     error = e.error if isinstance(e, _Refused) else (str(e) or type(e).__name__)
                     logger.warning("Garment fit %s/%s (%s) on outfit body %s failed: %s", character_name, item_id,

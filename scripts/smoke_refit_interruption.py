@@ -85,6 +85,11 @@ Expected, derived by hand:
     failure of type ``RefitInterrupted`` → ``retry_later`` True, so ``garments._note_outcome`` persists nothing;
     control: ``RuntimeError`` → no ``retry_later``. Before: ``RETRY_LATER_ERRORS`` held only
     ``BackendBusyError`` / ``MediaGenerationDisabled`` → the interruption was persisted as the fit's refusal.
+[9] ``body_fit`` with ``build`` (the assembly, a Build's re-fit, the per-body Re-fit), the body state stubbed as
+    "missing", no failure, the body bytes current: a) ``garments.body_fit`` whose ``fit_on_body`` raises
+    ``RefitInterrupted`` → it propagates, ``record_body_failure`` is not called; control ``RuntimeError`` →
+    recorded once. b) ``garment_footwear.body_fit`` whose ``fit`` raises it → the same; control → recorded once.
+    Before: both caught every exception and recorded it as the body's refusal.
 """
 import os
 import sys
@@ -621,6 +626,50 @@ def main() -> int:
         check("control: a plain failure is persisted",
               garment_footwear._failure("Kim", "shoe", "f1f1f1f1f1f1", "fit", "x", None, [], "RuntimeError")
               .get("retry_later"), None)
+
+        # --- [9] body_fit records no body refusal for an interruption ------------------------------------------
+        print("[9] body_fit: an interruption is no body refusal")
+        body_id = "ob0000beef"
+        base_glb = root / "coat_f1f1f1f1f1f1.glb"
+        base_glb.write_bytes(b"BASE FIT")
+        gs._garment_kind = lambda item_id: "clothing" if item_id == "coat" else "footwear"
+        garments.body_sha256 = lambda name, body: "bodysha"
+        garments.body_fit_state = lambda *a, **k: "missing"
+        gs.body_failure = lambda *a, **k: None
+
+        def body_fit_outcome(call):
+            body_failures.clear()
+            try:
+                call()
+                got = "returned"
+            except refit_pool.RefitInterrupted:
+                got = "RefitInterrupted"
+            except Exception as e:  # noqa: BLE001 — the control may stop later, on the stubbed state
+                got = type(e).__name__
+            return got, len(body_failures)
+
+        def clothing():
+            return garments.body_fit("Kim", "coat", body_id=body_id, body_sha="bodysha",
+                                     base_fit=(base_glb, {"kind": "clothing"}), profile={}, build=True)
+        garments.fit_on_body = raising(refit_pool.RefitInterrupted("refit interrupted — test"))
+        check("a) garments.body_fit: propagates, nothing recorded", body_fit_outcome(clothing)[0:2],
+              ("RefitInterrupted", 0))
+        garments.fit_on_body = raising(RuntimeError("boom"))
+        check("a) control: a real failure is recorded on the body", body_fit_outcome(clothing)[1], 1)
+
+        garment_footwear._fsig = lambda name, item_id, profile: "f2f2f2f2f2f2"
+        garment_footwear.fit_state = lambda *a, **k: "missing"
+        garment_footwear.source_ready = lambda item_id: True
+        garment_footwear._base_fit_sha = lambda *a, **k: "basefitsha"
+
+        def shoe():
+            return garment_footwear.body_fit("Kim", "shoe", body_id=body_id, body_sha="bodysha", profile={},
+                                             build=True)
+        garment_footwear.fit = raising(refit_pool.RefitInterrupted("refit interrupted — test"))
+        check("b) garment_footwear.body_fit: propagates, nothing recorded", body_fit_outcome(shoe),
+              ("RefitInterrupted", 0))
+        garment_footwear.fit = raising(RuntimeError("boom"))
+        check("b) control: a real failure is recorded on the body", body_fit_outcome(shoe)[1], 1)
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
     return 1 if FAILS else 0

@@ -1023,8 +1023,9 @@ def body_fit(character_name: str, item_id: str, *, body_id: str, body_sha: str, 
     of the footwear fsig) is served, ``error`` naming why (Ruling R7b, plan 2026-11-12 fit-sdf-speed-drape: a shoe
     never goes missing because of a version bump; was R11: nothing). Nothing of another body is served. Without a
     ready source nothing is fitted and nothing recorded (``SOURCE_NOT_READY``); nothing is fitted on a body whose
-    stored bytes are no longer ``body_sha``."""
-    from app.core import garment_fit, garment_store as gs, garments
+    stored bytes are no longer ``body_sha``. ``refit_pool.RefitInterrupted`` (the server stops) propagates and is
+    not recorded."""
+    from app.core import garment_fit, garment_store as gs, garments, refit_pool
     from app.core.keyed_lock import keyed_lock
     empty = {"fit": None, "low": None, "record": {}, "fsig": "", "pending": False}
     if not gs.is_body_id(body_id) or not body_sha:
@@ -1052,6 +1053,8 @@ def body_fit(character_name: str, item_id: str, *, body_id: str, body_sha: str, 
             if state != "accepted" and failure is None:
                 try:
                     fit(character_name, item_id, fsig, body=body_id, profile=profile, schedule=False)
+                except refit_pool.RefitInterrupted:
+                    raise  # the pool ended the call (the server stops): no refusal on that body
                 except Exception as e:  # noqa: BLE001 — recorded per body, the assembly goes on
                     error = e.error if isinstance(e, garments._Refused) else (str(e) or type(e).__name__)
                     logger.warning("Footwear fit %s/%s (%s) on outfit body %s failed: %s", character_name, item_id,
