@@ -239,6 +239,15 @@ NOT_DRAPED = "Not draped yet — Build drapes it (CPU, 0 hub jobs)"
 KIND_NOT_BUILT = "Template kind '{kind}' is not built yet (skirts, dresses, tops and jackets are) — choose another mode"
 DRAPE_FAILED = "Drape failed: {error} — Retry in the Figure tab"
 NO_BASE = "No plain body model yet — build the plain body first"
+#: The reason of a drape whose Blender run ended retryable (``app.blender.outcome``): nothing judged the drape, so
+#: no failure is recorded. Shown raw as the template step's error in the Figure tab (no ``t()`` there).
+LEFT_DUE = {
+    "timeout": "The drape ran out of time (the machine was busy). Nothing was recorded as failed — Build again.",
+    "interrupted": "The drape was stopped before it finished (the server stopped or Blender was ended). Nothing "
+                   "was recorded as failed — Build again.",
+    "unavailable": "Blender is not available right now, so the piece was not draped. Nothing was recorded as "
+                   "failed — Build again once Blender is back.",
+}
 
 
 # --- parameters ---------------------------------------------------------------
@@ -1328,9 +1337,9 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
                 failed.unlink()
         elif oc.is_retryable(result["outcome"]):
             # A timeout, an interrupted run or no Blender judges nothing: no failure record, the drape stays due.
-            left_due = (f"{result['error']} ({result['outcome']}) — not recorded as a failure, the next Build "
-                        f"tries again")
-            logger.warning("Template drape of %s for %s: %s", item_id, character_name, left_due)
+            left_due = LEFT_DUE.get(result["outcome"], LEFT_DUE[oc.INTERRUPTED])
+            logger.warning("Template drape of %s for %s left due (%s): %s", item_id, character_name,
+                           result["outcome"], result["error"])
         else:
             write_record(failed_path(character_name, item_id, sig),
                          {**record, "error": result["error"], "outcome": result["outcome"],

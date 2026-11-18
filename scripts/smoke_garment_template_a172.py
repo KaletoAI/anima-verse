@@ -33,8 +33,10 @@ Expected, derived by hand from ``app/models/inventory.py`` and ``app/core/garmen
 [7] ``_build_drape`` writes a failure record only for a verdict or a crash (the outcome contract,
     ``app.blender.outcome``): ``run_drape``, ``collider_pieces``, ``drape_state`` (failed when the record file
     exists, else missing / NOT_DRAPED) and ``figure.invalidate`` stubbed. A drape ending ``timeout`` or
-    ``unavailable`` → no record, state "missing" whose reason names the outcome and "the next Build tries again",
-    ``outcome`` carried; ``rejected`` (a gate row) → the record with outcome "rejected", error the gate text;
+    ``unavailable`` or ``interrupted`` → no record, state "missing" whose reason is that outcome's own plain
+    sentence (``LEFT_DUE``: timeout "The drape ran out of time …", unavailable "Blender is not available right now
+    …", interrupted "The drape was stopped before it finished …", each saying "Nothing was recorded as failed —
+    Build again"), ``outcome`` carried; ``rejected`` (a gate row) → the record with outcome "rejected", error the gate text;
     ``crashed`` with log_tail "TAIL" → the record with outcome "crashed" and log_tail "TAIL".
 """
 import ast
@@ -145,6 +147,7 @@ gt.collider_pieces = lambda *a, **k: []
 gt.drape_state = lambda c, i, **k: ({"state": "failed", "reason": "failed", "record": {}} if gt.failed_path(c, i, "sig7").is_file()
                                     else {"state": "missing", "reason": gt.NOT_DRAPED, "record": {}})
 for outcome, error, tail in (("timeout", "timeout after 300s", "T1"), ("unavailable", "blender is not installed", ""),
+                             ("interrupted", "blender was killed by signal 15", "T2"),
                              ("rejected", "stretch_max 1.4 (limit 1.2)", ""), ("crashed", "script wrote no result", "TAIL")):
     gt.run_drape = lambda *a, **k: {"ok": False, "error": error, "data": {}, "glb": None, "rows": [],
                                     "outcome": outcome, "log_tail": tail}
@@ -153,9 +156,13 @@ for outcome, error, tail in (("timeout", "timeout after 300s", "T1"), ("unavaila
                             lower=[], item=None, sig="sig7", sources={}, body=_SCRATCH / "body.glb",
                             params={"kind": "top"})
     rec_path = gt.failed_path("Demo", "shirt7", "sig7")
-    if outcome in ("timeout", "unavailable"):
+    if outcome in ("timeout", "unavailable", "interrupted"):
         check(f"[7] {outcome}: no record, left due", not rec_path.is_file() and state["state"] == "missing"
-              and outcome in state["reason"] and "the next Build tries again" in state["reason"]
+              and state["reason"] == gt.LEFT_DUE[outcome]
+              and "Nothing was recorded as failed — Build again" in state["reason"]
+              and state["reason"].startswith({"timeout": "The drape ran out of time",
+                                              "unavailable": "Blender is not available",
+                                              "interrupted": "The drape was stopped"}[outcome])
               and state.get("outcome") == outcome, str(state))
     else:
         rec = json.loads(rec_path.read_text()) if rec_path.is_file() else {}
