@@ -34,6 +34,9 @@ TINT_VISIBLE_M = 0.005
 TINT_FADE_M = 0.005
 TINT_ABOVE_BROW_M = 0.01
 TINT_PAD_PX = 2
+#: The hair's surface samples are splatted into the front raster in chunks of at most this many points
+#: (``_surface_raster``): 2^18 points x 3 x float64 = 6 MiB per array, whatever the hair's size.
+SAMPLE_CHUNK_POINTS = 1 << 18
 _UNSAFE_EXTENSIONS = ("EXT_meshopt_compression", "KHR_draco_mesh_compression", "KHR_texture_basisu")
 
 
@@ -144,6 +147,53 @@ def _surface_samples(P: np.ndarray, F: np.ndarray, step_m: float) -> np.ndarray:
     return np.concatenate(out)
 
 
+def _surface_raster(P: np.ndarray, F: np.ndarray, step_m: float, x0: float, y0: float,
+                    shape: Tuple[int, int]) -> np.ndarray:
+    """``_front_raster(_surface_samples(P, F, step_m), x0, y0, shape)`` — the same grid, bit for bit — without
+    materialising every sample. A sample is a convex combination of its triangle's corners, so it lies in the
+    triangle's x/y bounding box: a triangle whose box stays more than one cell clear of the raster's rectangle has
+    no sample ``_front_raster`` keeps (the cell of margin only absorbs the rounding of the combination) and is not
+    sampled — the hanging length of a hair below the scalp band. The rest is sampled with ``_surface_samples``'s
+    densities and splatted in chunks of at most ``SAMPLE_CHUNK_POINTS`` points; the per-cell maximum does not depend
+    on the order of the points."""
+    grid = np.full(shape, -np.inf)
+    F = np.asarray(F, np.int64).reshape(-1, 3)
+    if not len(F):
+        return grid
+    T = P[F]
+    lo, hi = T.min(axis=1), T.max(axis=1)
+    x1, y1 = x0 + shape[1] * TINT_CELL_M, y0 + shape[0] * TINT_CELL_M
+    reach = ((hi[:, 0] >= x0 - TINT_CELL_M) & (lo[:, 0] <= x1 + TINT_CELL_M)
+             & (hi[:, 1] >= y0 - TINT_CELL_M) & (lo[:, 1] <= y1 + TINT_CELL_M))
+    F, T = F[reach], T[reach]
+    del lo, hi, reach
+
+    def splat(X: np.ndarray) -> None:
+        ix = np.floor((X[:, 0] - x0) / TINT_CELL_M).astype(int)
+        iy = np.floor((X[:, 1] - y0) / TINT_CELL_M).astype(int)
+        ok = (ix >= 0) & (ix < shape[1]) & (iy >= 0) & (iy < shape[0])
+        np.maximum.at(grid, (iy[ok], ix[ok]), X[ok, 2])
+
+    corners = np.unique(F)
+    for start in range(0, len(corners), SAMPLE_CHUNK_POINTS):
+        splat(P[corners[start:start + SAMPLE_CHUNK_POINTS]])
+    if not len(F):
+        return grid
+    edge = np.max(np.linalg.norm(T - np.roll(T, 1, axis=1), axis=2), axis=1)
+    n_of = np.clip(np.ceil(edge / step_m).astype(int), 1, 64)
+    for n in np.unique(n_of):
+        a, b = np.meshgrid(np.arange(n + 1), np.arange(n + 1))
+        keep = a + b <= n
+        a, b = a[keep] / n, b[keep] / n
+        rows = np.nonzero(n_of == n)[0]
+        per_chunk = max(1, SAMPLE_CHUNK_POINTS // len(a))
+        for start in range(0, len(rows), per_chunk):
+            t = T[rows[start:start + per_chunk]]
+            splat((t[:, None, 0] * (1 - a - b)[None, :, None] + t[:, None, 1] * a[None, :, None]
+                   + t[:, None, 2] * b[None, :, None]).reshape(-1, 3))
+    return grid
+
+
 def tint_scalp(glb: bytes, hair) -> Tuple[bytes, Dict[str, Any]]:
     """``(glb with the scalp tinted under ``hair``, report)`` — module docstring. ``hair``: the fitted hair
     ``GarmentMesh`` in the body's bind space (what ``garment_assembly`` grafts)."""
@@ -178,11 +228,12 @@ def tint_scalp(glb: bytes, hair) -> Tuple[bytes, Dict[str, Any]]:
     on_head = Fall[head_v[Fall].all(1)]
     S = _surface_samples(P, on_head, TINT_CELL_M / 2)
     Hp = np.asarray(hair.positions, np.float64)
-    H = _surface_samples(Hp, np.asarray(hair.indices, np.int64).reshape(-1, 3), TINT_CELL_M / 2)
     x0, y0 = float(S[:, 0].min()) - 0.01, floor_y - TINT_FADE_M - 0.01
     shape = (int(math.ceil((top + 0.01 - y0) / TINT_CELL_M)), int(math.ceil((S[:, 0].max() + 0.01 - x0) / TINT_CELL_M)))
     skin = _front_raster(S, x0, y0, shape)
-    front_hair = _front_raster(H, x0, y0, shape)
+    # only the hair over the raster is sampled, in chunks: a long hair's cards below the band are never read
+    front_hair = _surface_raster(Hp, np.asarray(hair.indices, np.int64).reshape(-1, 3), TINT_CELL_M / 2,
+                                 x0, y0, shape)
     covered = np.isfinite(skin) & (front_hair >= skin - TINT_INSIDE_M)
     dist = (distance_transform_edt(~covered) * TINT_CELL_M) if covered.any() else np.full(shape, np.inf)
 
