@@ -43,6 +43,10 @@ export interface TrackedTaskInfo {
   queue_name?: string
   duration_s?: number
   error?: string
+  /** A finished tracked row that ended without success: how (`app/blender/outcome.py` — `refit_pool.finish` keeps it
+   *  in the row's progress) and the end of Blender's output, when there is one. */
+  outcome?: string
+  log_tail?: string
 }
 
 /** A finished task (LLM or tracked) for the "recently" block. */
@@ -61,6 +65,9 @@ export interface RecentTaskInfo {
   /** True only for a FAILED row of the persistent TaskQueue whose worker can
    *  really pick it up again — see collectRecent for why that is a small set. */
   retryable?: boolean
+  /** A tracked row's outcome and Blender output tail (TrackedTaskInfo). */
+  outcome?: string
+  log_tail?: string
 }
 
 /** A row of bg_tasks.recent (the persistent TaskQueue's own finished list). */
@@ -238,7 +245,7 @@ function collectRecent(d: QueueStatus): RecentTaskInfo[] {
     push({
       task_id: tk.task_id, label: tk.label, task_type: tk.task_type, agent_name: tk.agent_name,
       status: tk.status, duration_s: tk.duration_s, created_at: tk.created_at, error: tk.error,
-      provider: tk.provider,
+      provider: tk.provider, outcome: tk.outcome, log_tail: tk.log_tail,
     })
   }
   for (const tk of d.bg_tasks?.recent || []) {

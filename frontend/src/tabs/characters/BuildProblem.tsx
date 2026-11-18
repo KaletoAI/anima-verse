@@ -8,14 +8,83 @@
  * - `BuildProblemNote` reads `GET …/figure` itself (useFigure) and runs the fix as the Build does
  *   (`POST …/figure/build` — a manual Build: it makes the mesh again first, or retries the step once).
  */
-import { useCallback, useState, type ReactNode } from 'react'
+import { useCallback, useState, type CSSProperties, type ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { BUILD_STATUS, problemText, type BuildProblem } from './figureModel'
+import {
+  BUILD_STATUS, attemptLines, failureLines, failureRowText, isLeftDue, problemText, type BuildProblem,
+  type StepFailure,
+} from './figureModel'
 import { StepLight } from './StepRows'
 import { LIGHT_COLOR } from './stepStyle'
 import { useFigure } from './useFigure'
+
+const PRE: CSSProperties = { margin: '4px 0 0', padding: 6, maxHeight: 240, overflow: 'auto', fontSize: 11,
+  whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: 'var(--bg-subtle, rgba(127,127,127,0.08))',
+  borderRadius: 4 }
+const SUMMARY: CSSProperties = { cursor: 'pointer', fontSize: 12 }
+const CELL: CSSProperties = { padding: '1px 8px 1px 0', verticalAlign: 'top' }
+
+/**
+ * What stands behind a failed step's sentence, collapsed: "Details" — for a structured failure (`failure`) the table
+ * of every check (value, limit, passed / failed / slow, gating or reported) and the raw message, otherwise the raw
+ * message with one line per attempt (`attemptLines`) — and "Blender output" (`failure.log_tail`, monospace) when
+ * there is one. Nothing to show → nothing rendered.
+ */
+export function FailureDetails({ failure, detail }: { failure?: StepFailure | null; detail?: string }) {
+  const { t } = useI18n()
+  const raw = (failure?.error || detail || '').trim()
+  const rows = failure?.rows || []
+  const tail = failure?.log_tail || ''
+  if (!raw && !rows.length && !tail) return null
+  return (
+    <div style={{ paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {rows.length || raw ? (
+        <details>
+          <summary className="ga-hint" style={SUMMARY}>{t('Details')}</summary>
+          {rows.length ? (
+            <table style={{ fontSize: 11, marginTop: 4, borderCollapse: 'collapse', textAlign: 'left' }}>
+              <thead>
+                <tr>{[t('Drape check'), t('Value'), t('Limit'), t('Result'), t('Effect')].map((h) => (
+                  <th key={h} style={CELL}>{h}</th>))}</tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => {
+                  const w = failureRowText(r, t)
+                  return (
+                    <tr key={r.check} style={!r.ok ? { color: r.gate ? LIGHT_COLOR.red : LIGHT_COLOR.yellow } : undefined}>
+                      {[w.check, w.value, w.limit, w.result, w.effect].map((c, i) => <td key={i} style={CELL}>{c}</td>)}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          ) : null}
+          {raw ? <pre style={PRE}>{attemptLines(raw).join('\n')}</pre> : null}
+        </details>
+      ) : null}
+      {tail ? (
+        <details>
+          <summary className="ga-hint" style={SUMMARY}>{t('Blender output')}</summary>
+          <pre style={{ ...PRE, fontFamily: 'var(--font-mono, monospace)' }}>{tail}</pre>
+        </details>
+      ) : null}
+    </div>
+  )
+}
+
+/** The one-line attempts of a refusal (`attemptLines`) under its notice, each clipped with the whole on mouse-over;
+ *  nothing for a message of one attempt. */
+export function AttemptLines({ detail }: { detail: string }) {
+  const lines = attemptLines(detail)
+  if (lines.length < 2) return null
+  return (
+    <div style={{ paddingLeft: 16, display: 'flex', flexDirection: 'column' }}>
+      {lines.map((line, i) => <span key={i} className="ga-one-line ga-hint" title={line}>{line}</span>)}
+    </div>
+  )
+}
 
 export function BuildProblemView({ problem, busy, onRun, runLabel, extra, compact }: {
   problem: BuildProblem
@@ -32,31 +101,53 @@ export function BuildProblemView({ problem, busy, onRun, runLabel, extra, compac
 }) {
   const { t } = useI18n()
   const text = problemText(problem, t)
+  // A run that ended without a verdict (timeout, interrupted, Blender unavailable) is a note, not a red failure.
+  const leftDue = isLeftDue(problem.failure)
+  const light = leftDue ? 'grey' : 'red'
+  const color = leftDue ? undefined : LIGHT_COLOR.red
+  const role = leftDue ? 'status' : 'alert'
+  const below = (
+    <>
+      {problem.failure ? null : <AttemptLines detail={problem.detail} />}
+      <FailureDetails failure={problem.failure} detail={problem.detail} />
+    </>
+  )
   if (compact) {
     const title = [text.reason, text.detail, text.note].filter(Boolean).join('\n')
     return (
-      <div role="alert" className="ga-notice" title={title || undefined}>
-        <StepLight light="red" />
-        <span className="ga-one-line ga-notice-text" style={{ color: LIGHT_COLOR.red }}>
-          <strong>{text.title}</strong> · {text.reason}
-        </span>
-        {onRun ? (
-          <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy} onClick={onRun} title={title || undefined}>
-            {runLabel || text.action}
-          </button>
-        ) : <span className="ga-hint">{text.action}</span>}
-        {extra}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+        <div role={role} className="ga-notice" title={title || undefined}>
+          <StepLight light={light} />
+          <span className="ga-one-line ga-notice-text" style={color ? { color } : undefined}>
+            <strong>{text.title}</strong>{problem.failure?.lines.length ? '' : ` · ${text.reason}`}
+          </span>
+          {onRun ? (
+            <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy} onClick={onRun} title={title || undefined}>
+              {runLabel || text.action}
+            </button>
+          ) : <span className="ga-hint">{text.action}</span>}
+          {extra}
+        </div>
+        {problem.failure?.lines.length ? (
+          // The plain sentences in full (the one-line notice above carries only the step).
+          <div style={{ paddingLeft: 16, overflowWrap: 'anywhere', ...(color ? { color } : {}) }} className="ga-hint">
+            {failureLines(problem.failure, t).map((line, i) => <div key={i}>{line}</div>)}
+            {text.note ? <div>{text.note}</div> : null}
+          </div>
+        ) : null}
+        {below}
       </div>
     )
   }
   return (
-    <div role="alert" style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '6px 8px',
-      border: `1px solid ${LIGHT_COLOR.red}`, borderRadius: 6, fontSize: 13 }}>
+    <div role={role} style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '6px 8px',
+      border: `1px solid ${color || 'var(--border, #30363d)'}`, borderRadius: 6, fontSize: 13 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }} title={text.detail || undefined}>
-        <StepLight light="red" />
-        <strong style={{ color: LIGHT_COLOR.red }}>{text.title}</strong>
+        <StepLight light={light} />
+        <strong style={color ? { color } : undefined}>{text.title}</strong>
       </div>
       <div className="ga-hint" style={{ overflowWrap: 'anywhere' }} title={text.detail || undefined}>{text.reason}</div>
+      {below}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         {onRun ? (
           <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy} onClick={onRun}

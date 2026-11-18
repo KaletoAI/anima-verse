@@ -25,7 +25,8 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { TEMPLATE_CHOICE_LABELS, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_LABELS, UPPER_KINDS, cm, lengthLabel, templateCost } from './figureModel'
-import { TEMPLATE_STATE_COLOR, TEMPLATE_STATE_LABELS, templateLiveText } from './figureModel'
+import { TEMPLATE_STATE_COLOR, TEMPLATE_STATE_LABELS, failureLines, templateLiveText } from './figureModel'
+import { FailureDetails } from './BuildProblem'
 import type { TemplateFieldSpec, TemplateInfo, TemplateParams, TemplateProgress } from './figureModel'
 import { FigureBuildButton } from './FigureBuildButton'
 import { TemplateOverlay } from './TemplateOverlay'
@@ -332,8 +333,10 @@ function TemplateProgressBox({ character, progress, onStarted }: {
 }) {
   const { t } = useI18n()
   const p = progress
-  const why = p.state === 'failed' && p.error ? `${t('Drape failed')}: ${p.error}`
-    : p.state === 'ready' || p.state === 'running' ? '' : t(p.reason)
+  // A failed drape in plain words (its raw checks are behind Details below); the raw error only from an older server.
+  const plain = p.state === 'failed' && p.failure?.lines.length ? failureLines(p.failure, t).join(' ') : ''
+  const why = plain || (p.state === 'failed' && p.error ? `${t('Drape failed')}: ${p.error}`
+    : p.state === 'ready' || p.state === 'running' ? '' : t(p.reason))
   const at = p.built_at ? t('draped {at}').replace('{at}', p.built_at.replace('T', ' ').slice(0, 16)) : ''
   return (
     <div role="status" aria-label={t('Drape progress')} data-template-state={p.state}
@@ -348,6 +351,7 @@ function TemplateProgressBox({ character, progress, onStarted }: {
       {why ? (
         <div className="ga-hint" style={p.state === 'failed' ? { color: 'var(--danger, #f85149)' } : WARN}>{why}</div>
       ) : null}
+      {p.state === 'failed' && p.failure ? <FailureDetails failure={p.failure} /> : null}
       {p.state === 'running' ? (
         <div className="ga-hint" data-template-live={p.live?.stage || 'waiting'}
           style={{ color: 'var(--accent, #6aa9ff)' }}>

@@ -125,15 +125,19 @@ function RecentRow({ r, onRetry, retrying }: {
   const { t } = useI18n()
   const failed = (r.status || '') === 'failed'
   const cancelled = (r.status || '') === 'cancelled'
-  const icon = failed ? '✗' : cancelled ? '⊘' : '✓'
-  const color = failed ? '#e05656' : cancelled ? 'var(--text-muted, #8b949e)' : '#3fa45a'
+  // Ended without a verdict (a timeout, an interruption, Blender unavailable — `refit_pool.finish`): the work is left
+  // due, neither done nor failed. Its own neutral mark and the outcome in words.
+  const leftDue = (r.status || '') === 'interrupted'
+  const icon = failed ? '✗' : cancelled ? '⊘' : leftDue ? '◌' : '✓'
+  const color = failed ? '#e05656' : cancelled || leftDue ? 'var(--text-muted, #8b949e)' : '#3fa45a'
   const title = r.label || (r.agent_name || r.task_type || t('Task'))
   const dur = r.duration_s != null ? fmtDur(Math.round(r.duration_s)) : ''
   // Time of day of the entry — created_at is a UTC ISO stamp from the server,
   // rendered in the configured world timezone and clock format. A row of the
   // persistent queue carries completed_at instead; it is finished either way.
   const clock = formatTime(r.created_at || r.completed_at, clockSettings())
-  const meta = [clock, dur, r.provider, r.model].filter(Boolean).join(' · ')
+  const ended = leftDue ? `${t('left due')}: ${t(LEFT_DUE_WORDS[r.outcome || ''] || LEFT_DUE_WORDS.interrupted)}` : ''
+  const meta = [ended, clock, dur, r.provider, r.model].filter(Boolean).join(' · ')
   // Two lines like LLMRow/TrackedRow: the title with an ellipsis, the meta below
   // with wordBreak — in a narrow panel the meta line wraps instead of overlapping
   // the title.
@@ -165,8 +169,22 @@ function RecentRow({ r, onRetry, retrying }: {
           {meta}
         </div>
       ) : null}
+      {r.log_tail ? (
+        <details style={{ paddingLeft: 14 }}>
+          <summary style={{ cursor: 'pointer', fontSize: '0.94em', opacity: 0.8 }}>{t('Blender output')}</summary>
+          <pre style={{ margin: '2px 0 0', maxHeight: 200, overflow: 'auto', fontSize: '0.9em',
+                        whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'var(--font-mono, monospace)' }}>
+            {r.log_tail}
+          </pre>
+        </details>
+      ) : null}
     </div>
   )
+}
+
+/** The words of a tracked row's outcome when it was left due (`app/blender/outcome.py`; translatable). */
+const LEFT_DUE_WORDS: Record<string, string> = {
+  timeout: 'ran out of time', interrupted: 'interrupted', unavailable: 'Blender not available',
 }
 
 function TrackedRow({ tk, nowMs, onCancel, cancelling }: {

@@ -230,6 +230,8 @@ export interface FigureStep {
   failed: string
   /** Base-body work only a manual Build runs (ruling 8a): why it is listed. */
   manual: string
+  /** The cached failure as data (a template drape's, `garment_template.failure_info`); null otherwise. */
+  failure?: StepFailure | null
 }
 
 /** A worn piece of the Figure tab (`figure_build._worn_rows`). */
@@ -309,8 +311,10 @@ export interface TemplateInfo {
   metrics: { wall_s: number | null; cpu_s: number | null; stretch_max: number | null; coverage: number | null;
     texture: string; /** Rulings A141 / A142: the poses draped again as corrective shapes ("sit", "arms_down", …). */
     pose_shapes?: string[]; /** Ruling A142: how many lower template drapes it was draped over. */
-    layered_over?: number } | null
+    layered_over?: number; /** Over the time budget: shown as "slow" — never a refusal. */ slow?: boolean } | null
   cost: { llm_calls: number; hub_jobs: number; cpu_s: number }
+  /** The failed drape of the current key as data (`state` "failed"); null otherwise. */
+  failure?: StepFailure | null
 }
 
 /** One field of the parameter dialog's schema (GET …/figure/template/{item}). */
@@ -394,7 +398,10 @@ export function templateBuilt(info: TemplateInfo, t: Tr = EN): string {
   if (info.state !== 'ready' || !info.built_at) return ''
   const m = info.metrics
   const parts = [t('Draped {at}').replace('{at}', info.built_at.replace('T', ' ').slice(0, 16))]
-  if (m?.wall_s != null) parts.push(t('{s} s').replace('{s}', String(Math.round(m.wall_s))))
+  if (m?.wall_s != null) {
+    parts.push((m.slow ? t('{s} s — slow (over the time budget, accepted)') : t('{s} s'))
+      .replace('{s}', String(Math.round(m.wall_s))))
+  }
   if (m?.stretch_max != null) parts.push(t('stretch {n}').replace('{n}', m.stretch_max.toFixed(2)))
   if (m?.texture) parts.push(m.texture === 'cutout' ? t('texture from the cut-out views')
     : t('texture from the item picture'))
@@ -454,7 +461,10 @@ export interface FigurePayload {
     deferred?: string | null
     /** Ruling A42: the automatic run the character's pause stopped before `step`, else null. */
     paused?: { step: string; label: string; note: string } | null
-    failed: Record<string, { error: string; item_id?: string; items?: Record<string, string> }>
+    /** `failure`: the step's failure as data when it has one (a template drape's); `failures` the same per item
+     *  when several items of the step failed. */
+    failed: Record<string, { error: string; item_id?: string; items?: Record<string, string>
+      failure?: StepFailure | null; failures?: Record<string, StepFailure> }>
     skipped: string[]
     reason: string | null
     finished_at: string | null
@@ -1001,7 +1011,8 @@ export function planRows(f: Pick<FigurePayload, 'cost' | 'build'>, t: Tr = EN): 
     name: s.name === 'collision' ? t(s.label) : s.label,
     light: running && running.name === s.name && running.item_id === s.item_id ? 'blue' : s.failed ? 'red' : 'yellow',
     state: s.jobs === null ? t('cost unknown') : s.jobs ? jobsTr(s.jobs, t) : t('no hub job'),
-    reason: [s.failed ? `${t('Failed')}: ${s.failed}` : '', s.manual ? t(s.manual) : '',
+    reason: [s.failed ? `${t('Failed')}: ${s.failure?.lines.length ? failureLines(s.failure, t).join(' ') : s.failed}` : '',
+      s.manual ? t(s.manual) : '',
       s.name === 'collision' ? t(COLLISION_STEP_REASON) : ''].filter(Boolean).join(' · '),
   }))
 }
@@ -1172,6 +1183,70 @@ export interface BuildProblem {
   action: 'rebuild_mesh' | 'retry'
   jobs: number | null
   held: boolean
+  /** The structured failure of a step that has one (today the template drape, `garment_template.failure_info`);
+   *  null / absent otherwise. */
+  failure?: StepFailure | null
+}
+
+/** How a Blender run ended (`app/blender/outcome.py`). */
+export type RunOutcome = 'ok' | 'rejected' | 'timeout' | 'interrupted' | 'cancelled' | 'unavailable' | 'crashed'
+
+/** One check of a drape (`garment_template.judge_build`): `gate` false = reported only (the work time, CPU,
+ *  texture coverage) — over its limit it never refuses the drape. */
+export interface FailureRow { check: string; value: number | null; limit: number | null; ok: boolean; gate: boolean }
+
+/** A step's failure as data (`garment_template.failure_info`): `lines` the plain sentences (English with
+ *  `{placeholders}`, put through `t()` and filled from `values`), `rows` every check of the run, `log_tail` the end
+ *  of Blender's output ("" when there is none), `error` the raw message. */
+export interface StepFailure {
+  outcome: RunOutcome
+  lines: { text: string; values: Record<string, string> }[]
+  rows: FailureRow[]
+  log_tail: string
+  error: string
+}
+
+/** A run that ended without a verdict: nothing was judged, the work stays due — a note, never a red failure. */
+export function isLeftDue(f: Pick<StepFailure, 'outcome'> | null | undefined): boolean {
+  return !!f && (f.outcome === 'timeout' || f.outcome === 'interrupted' || f.outcome === 'unavailable')
+}
+
+/** The failure's plain sentences, translated and filled. */
+export function failureLines(f: StepFailure, t: Tr = EN): string[] {
+  return f.lines.map((l) => Object.entries(l.values || {})
+    .reduce((s, [k, v]) => s.split(`{${k}}`).join(v), t(l.text)))
+}
+
+/** A drape check's words in the Details table (`check` names of `judge_build`; `poke_share[<pose>]` per pose). */
+export const CHECK_LABELS: Record<string, string> = {
+  build_wall_s: 'Work time (s)', drape_cpu_s: 'Cloth CPU time (s)', pin_drift_mm: 'Top edge moved (mm)',
+  stretch_max: 'Largest stretch (×)', poke_share: 'Body through the fabric (share)',
+  bake_coverage: 'Texture coverage (share)',
+}
+/** The pose a per-pose check was measured in (`MEASURED_POSES` / `MEASURED_UPPER_POSES`). */
+export const POSE_WORDS: Record<string, string> = {
+  rest: 'rest pose', walk: 'walk pose', sit: 'sit pose', kneel: 'kneel pose', arms_down: 'arms down',
+  arms_forward: 'arms forward', arms_up: 'arms raised',
+}
+
+/** One row of the Details table: the check's words, the value against its limit, what it did — "passed", "failed"
+ *  (a gate), "slow" (the work time over its budget) or "over the limit" (reported only) — and its effect (a gate can
+ *  refuse the drape, the others are reported only). */
+export function failureRowText(r: FailureRow, t: Tr = EN): {
+  check: string; value: string; limit: string; result: string; effect: string
+} {
+  const m = /^([a-z_]+)\[([a-z_]+)\]$/.exec(r.check)
+  const base = m ? m[1] : r.check
+  const check = m ? `${t(CHECK_LABELS[base] || base)} — ${t(POSE_WORDS[m[2]] || m[2])}` : t(CHECK_LABELS[base] || base)
+  const result = r.ok ? t('passed') : r.gate ? t('failed') : base === 'build_wall_s' ? t('slow') : t('over the limit')
+  return { check, value: r.value == null ? '—' : String(r.value), limit: r.limit == null ? '—' : String(r.limit),
+    result, effect: r.gate ? t('can refuse the drape') : t('reported only') }
+}
+
+/** The attempts of a gate refusal joined by `garment_gates.gate_summary` ("… refused — attempt 1: … | attempt 2:
+ *  …"), one per line; a message without that seam is one line. */
+export function attemptLines(detail: string): string[] {
+  return detail.split(' | ').map((s) => s.trim()).filter(Boolean)
 }
 
 const VIEW_WORDS: Record<string, string> = { front: 'Front view', back: 'Back view', left: 'Left view',
@@ -1189,6 +1264,10 @@ export const HELD_NOTE = 'Automatic Builds do not repeat this step until its inp
 /** The reason of any other failed step: the worker's own message stays on mouse-over (it is not translated). */
 export const FAILED_AT_VIEW = 'The step stopped at the {view} — the message is on mouse-over.'
 export const FAILED_PLAIN = 'The step stopped with an error — the message is on mouse-over.'
+/** A step's reason when its message lists several attempts (`attemptLines`): each is a line of its own below. */
+export const FAILED_ATTEMPTS = 'The step was refused on every attempt — each attempt’s reasons are below.'
+/** The title of a step whose run ended without a verdict (`isLeftDue`): a note, not a failure. */
+export const LEFT_DUE_TITLE = '{step} — left due'
 export const MESH_HELD_NOTE = 'Automatic Builds never make a mesh — only this button does.'
 
 /** The lines of a `BuildProblem`: `title` "<step> failed — <view>", `reason` in plain words, `action` the button
@@ -1213,9 +1292,21 @@ export function problemText(p: BuildProblem, t: Tr = EN): {
     }
   }
   const viewPhrase = VIEW_PHRASES[p.view] ? t(VIEW_PHRASES[p.view]) : ''
+  if (p.failure && p.failure.lines.length) {
+    // The structured failure says what is wrong in plain words; the raw message goes behind "Details".
+    const leftDue = isLeftDue(p.failure)
+    return {
+      title: leftDue ? t(LEFT_DUE_TITLE).replace('{step}', step) : title,
+      reason: failureLines(p.failure, t).join(' '),
+      action: t('Retry this step — {cost}').replace('{cost}', cost),
+      note: p.held && !leftDue ? t(HELD_NOTE) : '',
+      detail: p.detail,
+    }
+  }
   return {
     title,
-    reason: viewPhrase ? t(FAILED_AT_VIEW).replace('{view}', viewPhrase) : t(FAILED_PLAIN),
+    reason: viewPhrase ? t(FAILED_AT_VIEW).replace('{view}', viewPhrase)
+      : attemptLines(p.detail).length > 1 ? t(FAILED_ATTEMPTS) : t(FAILED_PLAIN),
     action: t('Retry this step — {cost}').replace('{cost}', cost),
     note: p.held ? t(HELD_NOTE) : '',
     detail: p.detail,
@@ -1236,6 +1327,8 @@ export interface TemplateProgress {
   /** A200: how the own-mesh pieces under it took part in the ready drape (`full` / `shrunk` / `dropped`) and the
    *  attempts that failed a stretch / poke gate first; absent without own-mesh pieces under it. */
   inner_collider?: { mode: 'full' | 'shrunk' | 'dropped'; failed: { mode: string; error: string }[] } | null
+  /** The failed drape as data (`state` "failed"); null otherwise. */
+  failure?: StepFailure | null
 }
 
 /** A172: the live step of a drape in flight. `label` is the stage (a translatable key); frame / pose / index are

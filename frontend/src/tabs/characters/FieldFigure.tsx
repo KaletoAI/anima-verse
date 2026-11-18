@@ -78,13 +78,14 @@ import { OutfitReferenceRow } from './OutfitReferenceRow'
 import { fullBodyBuildNote } from './fullBodyReferenceModel'
 import { VIEWS_BY_BUILD } from './dressedViewsModel'
 import { GenerationPausePanel, GenerationPauseSwitch } from './GenerationPausePanel'
-import { BuildProblemView } from './BuildProblem'
+import { AttemptLines, BuildProblemView, FailureDetails } from './BuildProblem'
 import { StepLight, StepRowView, SubTabs } from './StepRows'
 import { LIGHT_COLOR, PANEL } from './stepStyle'
 import { useFigure } from './useFigure'
 import { imageRefusal } from './refusedAttemptsModel'
 import {
-  BUILD_DEFERRED_NOTE, BUILD_RUNNING_NOTE, BUILD_STATUS, ESTIMATE_NOTE, HAIR_MODE_LABELS, MESH_MODE_LABELS,
+  BUILD_DEFERRED_NOTE, BUILD_RUNNING_NOTE, BUILD_STATUS, ESTIMATE_NOTE, FAILED_ATTEMPTS, HAIR_MODE_LABELS,
+  MESH_MODE_LABELS, attemptLines, failureLines, isLeftDue,
   FRONT_WAITS_FOR_BUILD, NO_BASE_BODY_NOTE, REFIT_LABEL, STEP_NAMES, autoBuildNote, baseBodyLine, bodyRows, buildButton,
   changeLine, frontBuildCovers, frontRegenerate, hairState, headerLine, noBaseBody, planRows, regenerateMeshLabel,
   retryLabel, servedLines, shortCost, stateMeshAction, stateToggleNote, statusLight, templateBuilt, templateCost,
@@ -427,8 +428,17 @@ function FigureNotices({ data, posting, onBuild, onDismiss, onRegenerateFront, o
       extra={data.build.failed?.[problemStep] || data.problem.held ? dismissButton(problemStep) : undefined} />)
   }
   if (!running) {
-    others.forEach(([name, f]) => line(`failed-${name}`, 'red',
-      `${t(STEP_NAMES[name] || name)}: ${f.error}`, undefined, dismissButton(name)))
+    others.forEach(([name, f]) => {
+      // The step's failure as data says it in plain words (a run left due is a note, not red); the raw message, each
+      // attempt on a line of its own, and Blender's output stay behind "Details" / "Blender output".
+      const plain = f.failure?.lines.length ? failureLines(f.failure, t).join(' ') : ''
+      const attempts = plain ? [] : attemptLines(f.error)
+      line(`failed-${name}`, isLeftDue(f.failure) ? 'grey' : 'red',
+        `${t(STEP_NAMES[name] || name)}: ${plain || (attempts.length > 1 ? t(FAILED_ATTEMPTS) : f.error)}`,
+        [plain, f.error].filter(Boolean).join('\n'), dismissButton(name))
+      if (!plain && attempts.length > 1) lines.push(<AttemptLines key={`failed-${name}-attempts`} detail={f.error} />)
+      lines.push(<FailureDetails key={`failed-${name}-details`} failure={f.failure} detail={f.error} />)
+    })
   }
   if (frontChange) {
     const jobs = data.body?.plain.jobs
@@ -537,10 +547,16 @@ function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairst
         const note = row.note && row.state !== 'left_out'
           && row.state !== 'failed' && row.state !== 'fit_refused' ? t(row.note) : ''
         const other: PieceState | null = row.piece_state ? (row.piece_state === 'open' ? 'closed' : 'open') : null
+        // A failed drape says what is wrong in plain words instead of its raw checks (those are behind Details).
+        const drapeFailure = row.mode === 'template' && row.template?.state === 'failed' ? row.template.failure : null
+        // A refusal over several attempts: one line per attempt under the row, the raw message behind Details.
+        const attempts = row.state === 'failed' && !drapeFailure ? attemptLines(row.failure || '') : []
+        const sub = drapeFailure?.lines.length ? failureLines(drapeFailure, t).join(' ')
+          : attempts.length > 1 ? t(FAILED_ATTEMPTS) : cell.sub
         return (
           <StepRowView key={row.item_id}
             row={{ name: row.name, light: cell.light, state: cell.text, detail: cell.detail,
-              reason: [cell.sub, note].filter(Boolean).join(' · ') }}
+              reason: [sub, note].filter(Boolean).join(' · ') }}
             aside={<span className="ga-hint">· {t(MESH_MODE_LABELS[row.mode] || row.mode)}</span>}>
             <div style={BUTTONS}>
               {wardrobe}
@@ -588,6 +604,13 @@ function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairst
                 </>
               ) : null}
             </div>
+            {drapeFailure ? <FailureDetails failure={drapeFailure} /> : null}
+            {attempts.length > 1 ? (
+              <>
+                <AttemptLines detail={row.failure} />
+                <FailureDetails detail={row.failure} />
+              </>
+            ) : null}
             {row.mode === 'template' ? (
               <div className="ga-hint" title={templateCost(row.template?.cost, t)}>
                 {templateSummary(row.template?.params || null, t)}
