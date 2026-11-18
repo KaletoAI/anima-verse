@@ -46,6 +46,12 @@ Hand-derived expectations:
       ``status_effects`` lives in ``character_state.meta``, which
       ``save_character_profile`` re-merges inside its transaction, so the
       stat itself survives either way — the blob field next to it does not.
+      Since 1a059cad6 (transactional action effects) a ``*_change`` touches
+      only a stat the character's template DECLARES; stamina is declared by
+      the ``rp`` package's fragment (``plugins/rp/templates/character/rp.json``,
+      ``apply_to`` human-roleplay). So the world enables ``rp`` and the
+      character uses ``human-roleplay`` — with ``human-default`` the delta
+      is dropped by rule, which says nothing about the lock.
 
   [3] Control: with BOTH sides deliberately unlocked the loss still happens.
       This is what makes [1] and [2] a statement about the lock rather than
@@ -100,6 +106,10 @@ os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="lostupd-clips-")
 
 from app.core import paths  # noqa: E402
 paths.init(STORAGE)
+paths.init_instance(STORAGE / "instance")
+paths.get_config_path().write_text('{"packages": {"enabled": "rp"}}')
+from app.core import config  # noqa: E402
+config.load(paths.get_config_path(), instance_path=STORAGE / "instance" / "config.json")
 from app.core import db  # noqa: E402
 db.init_schema()
 
@@ -128,7 +138,7 @@ def seed():
     """Pre-state: a running journey plus an empty default_outfit."""
     save_character_profile(NAME, {
         "character_name": NAME,
-        "template": "human-default",
+        "template": "human-roleplay",
         "default_outfit": "",
         "status_effects": {"stamina": 80},
         "movement_target": "market",

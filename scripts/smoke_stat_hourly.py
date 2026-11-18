@@ -14,11 +14,21 @@ Hand-derived Task 2 cases (one game hour per tick):
     to -1, carry .04, value 61.
 [h] Courage 30, config baseline 70: (70-30)*.04=1.6 -> +2=32.
 [i] Case b writes one effects/hourly row: Base -2, Sleep at home +22.
-[j] Item Tea: stamina 70-10=60, one effects row with old/new and source.
+[j] Item Tea: stamina 70-10=60, one effects row with old/new, source and the
+    per-effect result. Since 1a059cad6 (transactional action effects) a legacy
+    ``*_change`` touches only a stat the character's INSTALLED template declares
+    (``effect_application.effect_catalogs`` walks ``list_templates``), and the
+    row carries ``effects`` = {effect id: result}: the effect id of a legacy
+    field is its key "stamina_change", the result {type stat_delta, stat
+    stamina, old 70, new 60, delta 60-70=-10, applied True}. The fixture's
+    template "hourly-test" is therefore listed as installed, not only resolvable.
 [k] No hourly_sleeping readers remain in app/, plugins/rp or shared/.
 
 Also guards the first-sight/hour gate, clamping, absent stats, additive
-rates, label fallback, world overrides, and failed-save history suppression.
+rates, label fallback, world overrides, and failed-save history suppression
+(the hourly tick through save_character_profile; an item effect through its
+same-connection write ``write_effect_profile``: a failing write raises and
+leaves neither a changed stat nor a history row).
 """
 import json
 import os
@@ -74,7 +84,9 @@ def main():
             engine.apply_hourly_status_tick(name)
             return chars.get_character_profile(name)["status_effects"]
 
+        installed = [{"name": "hourly-test", "label": "hourly-test", "type": "character"}]
         with patch("app.models.character_template.get_template", return_value=template), patch(
+                "app.models.character_template.list_templates", return_value=installed), patch(
                 "app.models.character_template.is_feature_enabled", return_value=True):
             for case, sleeping, location, expected in [
                 ("a", False, "loc_h", 48), ("b", True, "loc_h", 70),
@@ -109,7 +121,9 @@ def main():
             assert engine.apply_effects("b", {"stamina_change": -10}, source="item:Tea") == {
                 "stamina": {"old": 70, "new": 60}}
             assert rows("b")[-1]["metadata"] == {
-                "source": "item:Tea", "changes": {"stamina": {"old": 70, "new": 60}}}
+                "source": "item:Tea", "changes": {"stamina": {"old": 70, "new": 60}},
+                "effects": {"stamina_change": {"type": "stat_delta", "stat": "stamina", "old": 70,
+                                               "new": 60, "delta": -10, "applied": True}}}
             print("PASS [j]")
             from app.core.stat_rules import save_stat_override
             save_stat_override("stamina", {"per_hour": -3, "rates": [
@@ -122,8 +136,15 @@ def main():
                 {"label": "at_home", "delta": 4}]
             create("failed", {"stamina": 50})
             with patch("app.models.character.save_character_profile", return_value=False):
-                assert engine.apply_effects("failed", {"stamina_change": -10}) == {}
                 tick("failed")
+            with patch("app.models.character.write_effect_profile", side_effect=RuntimeError("disk")):
+                try:
+                    engine.apply_effects("failed", {"stamina_change": -10})
+                except RuntimeError:
+                    pass
+                else:
+                    raise AssertionError("a failing effect write must not report success")
+            assert chars.get_character_profile("failed")["status_effects"] == {"stamina": 50}
             assert rows("failed") == []
             print("PASS additional gates, clamping, rates and failed saves")
         found = subprocess.run(["git", "grep", "-n", "hourly_sleeping", "--", "app/", "plugins/rp", "shared/"],
