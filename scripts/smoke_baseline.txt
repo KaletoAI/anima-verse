@@ -20,5 +20,4 @@ smoke_outfit_body_mode_switch	STALE: the Build plan gained base_repair (A34 mesh
 smoke_outfit_rebuild_cost	STALE: "dressed front current" False: dressed views are edits of the base view with the outfit picture second since A125 (c510edc7c)
 smoke_painted_body_reachability	STALE: same as smoke_artefact_gc: the fixture's texture node T1 is not found (texture signature ''), not re-derived
 smoke_prop_action_review	STALE: unittest review cases: admission expects 'approaching' (gets 'active') and the planner test errors — prop-action engine changed since; not re-derived
-smoke_sleeve_fit	STALE: [6] normalise of the sleeve settings changed; not re-derived
 smoke_tip_off_mesh_only	REAL: [4] normals after tip with offset: 49 inverted / 85 off >60 deg at HEAD; passes alone at 40013ae71 (HEAD~1) — regression by de54012a3 (triangulate every quad after the tip subdivision, TIP_SMOOTHING_VERSION 3)
