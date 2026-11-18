@@ -34,6 +34,9 @@ matrices identity / translate(0, -0.1, 0), one material with a 2 x 2 PNG.
     failed/hair_x_a3a3a3a3a3a3.json {step fit, sha(B)}                  -> stamped G (sha(B) judged equivalent via hair_x_a1a1a1a1a1a1)
     raw/hair_x_s1/record.json results {"1": {sha(B)}}         -> stamped G
     second call                                               -> skipped "already judged"
+[4] the base file replaced by the same grid WITHOUT its skin (a build's static mesh before the rig), then 10 more
+    base_model_sha256 reads of the unchanged file: descriptor runs once (the old code ran it on all 11 reads and
+    logged 11 warnings), one warning "... failed: no skin", no id; then the skinned grid back with a new texture (a new sha) -> judged at once, id G.
 """
 
 from __future__ import annotations
@@ -93,8 +96,9 @@ def grid():
     return pos, np.array(tris, np.uint32), joints, weights
 
 
-def build(prims, *, image=None, spine_y=-0.1) -> bytes:
-    """``prims`` = [(positions, triangles, joints, weights)]."""
+def build(prims, *, image=None, spine_y=-0.1, skin=True) -> bytes:
+    """``prims`` = [(positions, triangles, joints, weights)]; ``skin=False``: the same file without its skin (the
+    static mesh a build publishes before the rig)."""
     binary = bytearray()
     views, accessors = [], []
 
@@ -133,6 +137,8 @@ def build(prims, *, image=None, spine_y=-0.1) -> bytes:
             "materials": [{"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}],
             "textures": [{"source": 0}], "images": [{"bufferView": len(views) - 1, "mimeType": "image/png"}],
             "accessors": accessors, "bufferViews": views, "buffers": [{"byteLength": len(binary)}]}
+    if not skin:
+        del gltf["skins"], gltf["nodes"][2]["skin"]
     return pack_glb(gltf, bytes(binary))
 
 
@@ -240,6 +246,36 @@ def main() -> int:
     check("HAAR verdict id", json.loads((garments_root / "raw" / "hair_x_s1" / "record.json").read_text())
           ["results"]["1"].get(mg.FIELD), current)
     check("second call", fm.judge_character("Demo")["skipped"], "already judged")
+
+    print("[4] a base file without a skin is judged once")
+    import logging
+    warnings = []
+
+    class Collect(logging.Handler):
+        def emit(self, rec):
+            warnings.append(rec.getMessage())
+
+    logging.getLogger(mg.__name__).addHandler(Collect(level=logging.WARNING))
+    calls = []
+    real_descriptor = mg.descriptor
+
+    def counting(glb):
+        calls.append(1)
+        return real_descriptor(glb)
+
+    mg.descriptor = counting
+    try:
+        sha_s = put(build([(pos, tris, joints, weights)], skin=False))
+        for _ in range(10):
+            base_body.base_model_sha256("Demo", bsig)
+        check("static mesh: no geometry id", mg.of_file_sha(sha_s), "")
+        check("static mesh: read and parsed once in 11 reads", len(calls), 1)
+        check("static mesh: one warning", [w for w in warnings if "no skin" in w], [
+            f"Geometry id of Demo ({bsig}) failed: no skin"])
+        sha_r = put(build([(pos, tris, joints, weights)], image=png((90, 90, 90, 255))))
+        check("rigged replacement (a new texture, a new sha) judged at once", mg.of_file_sha(sha_r), G)
+    finally:
+        mg.descriptor = real_descriptor
     shutil.rmtree(TMP, ignore_errors=True)
     print("FAILED" if FAILS else "all checks passed", f"({FAILS} failures)")
     return 1 if FAILS else 0

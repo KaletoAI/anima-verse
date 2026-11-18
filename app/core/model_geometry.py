@@ -48,6 +48,10 @@ _IDS_KEPT = 4             # descriptors kept per base signature (a file is compa
 
 _lock = threading.Lock()
 _by_file_sha: Dict[str, str] = {}
+#: File contents whose descriptor failed (no skin, no body mesh, compressed): the same bytes fail the same way, so
+#: each is read, parsed and logged once per process. During a build the base path holds the static mesh until the
+#: rigged model replaces it, and every status read asked again (405 warnings in four minutes for one build).
+_failed_file_shas: Dict[str, None] = {}
 
 
 # --- descriptor ------------------------------------------------------------------------------------------------
@@ -199,12 +203,18 @@ def lineage_id(character_name: str, bsig: str, model: Path, file_sha: str) -> st
         return ""
     with _lock:
         hit = _by_file_sha.get(file_sha)
+        failed = file_sha in _failed_file_shas
     if hit:
         return hit
+    if failed:
+        return ""
     from app.core.keyed_lock import keyed_lock
     try:
         folder = lineage_dir(character_name)
         with keyed_lock("model_geometry", f"{character_name}:{bsig}"):
+            with _lock:
+                if file_sha in _failed_file_shas:
+                    return ""  # judged by a caller this one waited for
             record_path = folder / f"{bsig}.json"
             record = _read_lineage(record_path)
             files = dict(record.get("files") or {})
@@ -215,7 +225,14 @@ def lineage_id(character_name: str, bsig: str, model: Path, file_sha: str) -> st
                 data = model.read_bytes()
                 if hashlib.sha256(data).hexdigest() != file_sha:
                     return ""  # the file moved on meanwhile; the next call judges the new one
-                desc = descriptor(data)
+                try:
+                    desc = descriptor(data)
+                except Exception:
+                    with _lock:
+                        _failed_file_shas[file_sha] = None
+                        while len(_failed_file_shas) > _FILES_KEPT:
+                            del _failed_file_shas[next(iter(_failed_file_shas))]
+                    raise
                 for known in _known_ids(folder, bsig):
                     stored = _load_desc(folder / bsig / f"{known}.npz")
                     if stored is not None and equivalent(desc, stored):
