@@ -49,6 +49,11 @@ TPOSE = [turnaround], no worn pieces (so no slot LoRAs are merged in):
 Portrait identity regressions exercise the real route core: a face prompt
 beats the body appearance, survives outfit changes unchanged, and an explicit
 dialog prompt takes precedence without rewriting the authored appearance.
+Since ad341e953 (prompt review 2026-11-11) the portrait text travels as the
+payload's ``style_character`` — the character block the "profile" style
+places after its subject sentence — and ``prompt`` stays "" so nothing follows
+the portrait rules. So [7] expects style_character == the face text (or the
+dialog prompt) and prompt == "".
 Framing itself needs a rendered-image inspection, not a literal wording pin.
 
 Usage:  ./.venv/bin/python scripts/smoke_profile_imagegen_default.py
@@ -263,7 +268,8 @@ save_character_profile(IDENTITY_CHAR, {
 route_target(IDENTITY_CHAR)
 original_payload = SERVICE.inputs[-1]
 check("face description reaches the profile consumer",
-      original_payload["prompt"], FACE)
+      original_payload.get("style_character"), FACE)
+check("nothing follows the portrait rules", original_payload["prompt"], "")
 check("the profile use case reaches the consumer",
       original_payload.get("image_use_case"), "profile")
 changed_profile = get_character_profile(IDENTITY_CHAR)
@@ -272,10 +278,10 @@ changed_profile.update(character_appearance="a stocky figure",
 save_character_profile(IDENTITY_CHAR, changed_profile)
 route_target(IDENTITY_CHAR)
 check("body and outfit changes leave the portrait input unchanged",
-      SERVICE.inputs[-1]["prompt"], original_payload["prompt"])
+      SERVICE.inputs[-1].get("style_character"), FACE)
 manual = "the same face with wind-tousled hair and a thoughtful expression"
 route_target(IDENTITY_CHAR, prompt=manual)
-check("an explicit dialog prompt wins", SERVICE.inputs[-1]["prompt"], manual)
+check("an explicit dialog prompt wins", SERVICE.inputs[-1].get("style_character"), manual)
 check("the authored face appearance is not rewritten",
       get_character_profile(IDENTITY_CHAR)["face_appearance"], FACE)
 

@@ -47,7 +47,6 @@ smoke_painted_body_reachability	STALE: same as smoke_artefact_gc: the fixture's 
 smoke_palm_axes	STALE: fbx_clip.run opens the rest FBX through the clip loader now, past the smoke's stubbed seams (_load_source, _rest_reference): "Cannot open file 't.fbx'"
 smoke_party_trip_lifetime	ENV: time-dependent: the fresh world's game clock sits near the epoch and game_time() - 1 s raises (GameTime cannot be before the epoch) when the step comes within the first game second — red alone, green in the --jobs 4 run
 smoke_picture_identity_a94	STALE: the identity edit block wording changed after A94 ("..., hair, facial hair and body ..., natural matte look")
-smoke_profile_imagegen_default	REAL: the face description and an explicit dialog prompt no longer reach the profile-picture consumer ('' instead of the text) — not root-caused
 smoke_prop_action_review	STALE: unittest review cases: admission expects 'approaching' (gets 'active') and the planner test errors — prop-action engine changed since; not re-derived
 smoke_props_areas	STALE: [14] a failed area run on a mesh-less fixture now still names auto areas; areas_info busy-Blender case changed
 smoke_reference_front	STALE: edit-block wording changed (bald + "natural matte look"), and the routed backend in the fixture takes no reference image
