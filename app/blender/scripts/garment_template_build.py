@@ -1797,7 +1797,8 @@ def run(a):
             "drape": {"cpu_s": cpu, "wall_s": wall, "pin_drift_mm": drift,
                       "stretch_max": round(float(st.max()), 3), "stretch_at": worst_at, "stretch_p99": round(float(np.percentile(st, 99)), 3),
                       "quality": int(prm.get("drape_quality") or fab["quality"])},
-            "weights": weights, "shapes": {"wall_s": shape_wall, **shape_info}, "collider_s": list(gd.COLLIDER_S), "pose_shapes": pose_shapes,
+            "weights": weights, "shapes": {"wall_s": shape_wall, **shape_info}, "collider_s": list(gd.COLLIDER_S),
+            "collider_inner": list(gd.COLLIDER_INNER), "pose_shapes": pose_shapes,
             "hem_verts": int(len(hem)),
             "bake": tex, "draped": measured, "measure_wall_s": meas_s, "render_wall_s": round(render_s, 2),
             "script_wall_s": round(time.time() - t_all, 2), "script_cpu_s": round(time.process_time() - c_all, 2)}

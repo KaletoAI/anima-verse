@@ -71,6 +71,17 @@ PATH_STEP_M 0.008, NECK_RING_CLEAR_M 0.012, SLEEVE_EDGE_M 0.015, WINDOW_COLS 5, 
      -> atan2(0.115, 0.20) = 29.90 deg -> ceil(6.64) = 7; 80 deg -> capped at 9; 0 -> 5.
 [B9] sleeve_ring_count: girths 0.45 and 0.39 -> mean 0.42 / 0.015 = 28 (loop of 48); girth 0.9, loop 36 -> 36
      (never more than the loop); girth 0.09 -> max(12, 6) = 12.
+[B10] gd._drop_inner_walls — the voxel collider of a thick-shell body whose inside opens to the outside is HOLLOW
+     (its inner wall faces into the body; a cloth vertex through the outer wall is held inside by it). A "thick shell"
+     object at location (1, 2, 0): outer box x, y in [-0.1, 0.1], z in [0, 1] wound outward + inner box x, y in
+     [-0.09, 0.09], z in [0.01, 0.99] wound INWARD; skeleton = one segment (1, 2, 0.3) - (1, 2, 0.7) in world
+     coordinates (so the object's transform is applied). Inner side face at local (0.09, 0, 0.5): nearest skeleton
+     point (0, 0, 0.5) local, normal (-1, 0, 0) . (0.09, 0, 0) < 0 (it faces the skeleton) and the +x ray from there
+     meets it first at 0.09 -> dropped; the inner top (0, 0, 0.99) from (0, 0, 0.7) and bottom (0, 0, 0.01) from
+     (0, 0, 0.3) the same way -> 6 dropped, the 8 inner corners go with them: 6 faces / 8 verts left, every normal
+     pointing away from the centre (0, 0, 0.5). The outer box alone: no face faces the skeleton -> 0 dropped. No
+     skeleton segments -> 0 dropped (12 faces stay). At d14315a7f ``_drop_inner_walls`` does not exist and
+     ``_remesh`` kept both walls (the Gelina skirt drape: stretch 4.77, rest poke 7.4 %).
 
 PART C — real drapes (optional ``data.json`` arguments): every region of ``bodice.inside`` has inside 0 and
 max_inside_mm 0.0, the clearance pass moved nothing farther than 5 mm, stretch_max <= 1.3, and every re-spaced
@@ -223,7 +234,41 @@ def part_b():
     check("[B8] window_cols 5 / 7 / 9 / 5", got == [5, 7, 9, 5], got)
     got = [gb.sleeve_ring_count([0.45, 0.39], 48), gb.sleeve_ring_count([0.9], 36), gb.sleeve_ring_count([0.09], 36)]
     check("[B9] sleeve_ring_count 28 / 36 / 12", got == [28, 36, 12], got)
-    consts = (gb.BODICE_CLEAR_M, gb.MIN_COS, gb.ARM_REACH_M, gb.LAYER_GAP_M, gb.PATH_STEP_M, gb.NECK_RING_CLEAR_M,
+
+    # [B10] a hollow collider loses its inner wall, a sealed one nothing
+    import bpy
+
+    def collider(boxes, loc):
+        verts, faces = [], []
+        for b, inward in boxes:
+            k = len(faces)
+            box(*b, verts, faces)
+            if inward:
+                faces[k:] = [tuple(reversed(f)) for f in faces[k:]]
+        me = bpy.data.meshes.new("b10")
+        me.from_pydata(verts, [], faces)
+        me.update()
+        ob = bpy.data.objects.new("b10", me)
+        ob.location = loc
+        bpy.context.scene.collection.objects.link(ob)
+        bpy.context.view_layer.update()
+        return ob
+
+    outer, inner = (-0.1, 0.1, -0.1, 0.1, 0.0, 1.0), (-0.09, 0.09, -0.09, 0.09, 0.01, 0.99)
+    spine = np.array([[(1.0, 2.0, 0.3), (1.0, 2.0, 0.7)]])
+    ob = collider([(outer, False), (inner, True)], (1.0, 2.0, 0.0))
+    dropped = gd._drop_inner_walls(ob, spine)
+    me = ob.data
+    out = all(float(np.dot(np.array(p.normal), np.array(p.center) - (0.0, 0.0, 0.5))) > 0 for p in me.polygons)
+    check("[B10] thick shell: the 6 inward faces go, 6 faces / 8 verts left, all facing out",
+          (dropped, len(me.polygons), len(me.vertices), out) == (6, 6, 8, True), (dropped, len(me.polygons), len(me.vertices), out))
+    ob = collider([(outer, False)], (1.0, 2.0, 0.0))
+    check("[B10] a sealed box: nothing goes", (gd._drop_inner_walls(ob, spine), len(ob.data.polygons)) == (0, 6),
+          len(ob.data.polygons))
+    ob = collider([(outer, False), (inner, True)], (1.0, 2.0, 0.0))
+    check("[B10] no skeleton: nothing goes", (gd._drop_inner_walls(ob, np.zeros((0, 2, 3))), len(ob.data.polygons)) == (0, 12),
+          len(ob.data.polygons))
+    consts =(gb.BODICE_CLEAR_M, gb.MIN_COS, gb.ARM_REACH_M, gb.LAYER_GAP_M, gb.PATH_STEP_M, gb.NECK_RING_CLEAR_M,
               gb.SLEEVE_EDGE_M, gb.WINDOW_COLS, gb.WINDOW_COLS_MAX, gb.NECK_MIN_STEP_M)
     check("[B] the constants the numbers above were derived from", consts == (0.01, 0.35, 0.08, 0.015, 0.008, 0.012, 0.015, 5, 9, 0.010), consts)
 

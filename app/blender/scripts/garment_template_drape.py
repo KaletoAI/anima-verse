@@ -550,7 +550,88 @@ def _join_extra(col, extra, dg):
     bpy.data.meshes.remove(me2)
 
 
-def _remesh(col, faces):
+#: The joints of the main bone chains (``core_segments``): joint to joint, the skeleton INSIDE the body. An extension
+#: bone (a breast tip) or a leaf bone's tail ends at or beyond the skin, so neither counts.
+CORE_CHAINS = (("Hips", "Spine", "Spine1", "Spine2", "Neck", "Head"),
+               ("Spine2", "LeftShoulder", "LeftArm", "LeftForeArm", "LeftHand"),
+               ("Spine2", "RightShoulder", "RightArm", "RightForeArm", "RightHand"),
+               ("Hips", "LeftUpLeg", "LeftLeg", "LeftFoot", "LeftToeBase"),
+               ("Hips", "RightUpLeg", "RightLeg", "RightFoot", "RightToeBase"))
+#: Inner-wall faces removed by each collider build (``_drop_inner_walls``), for the cost record.
+COLLIDER_INNER = []
+
+
+def armature_of(body):
+    """The armature deforming ``body`` (its Armature modifier's object), None without one."""
+    return next((m.object for m in body.modifiers if m.type == "ARMATURE" and m.object is not None), None)
+
+
+def core_segments(arm, rest=False):
+    """World joint-to-joint segments ``[k, 2, 3]`` of ``CORE_CHAINS`` — the pose's joints, or with ``rest`` the
+    bind pose's; a joint the rig lacks is skipped. Empty without an armature."""
+    segs = []
+    for chain in CORE_CHAINS if arm is not None else ():
+        pts = []
+        for name in chain:
+            if rest:
+                bone = arm.data.bones.get(P + name)
+                head = bone.head_local if bone is not None else None
+            else:
+                pb = arm.pose.bones.get(P + name)
+                head = pb.head if pb is not None else None
+            if head is not None:
+                pts.append(np.array(arm.matrix_world @ head))
+        segs += list(zip(pts[:-1], pts[1:]))
+    return np.array(segs, float).reshape(-1, 2, 3)
+
+
+def _drop_inner_walls(col, segs):
+    """The generated bodies are thick shells — the skin and a second, inward-facing one ~7 mm under it. The voxel
+    remesh fills the inside only while it is sealed; where it opens to the outside (a 3 cm passage at the crotch on
+    one body) its flood fill reaches the inside and the collider comes out as a HOLLOW skin whose inner wall faces into
+    the body. Collision is one-sided: a cloth vertex pushed through the 7 mm wall passes that inner wall from its back
+    and is then held inside the body by it (a low-waisted skirt sank into the hips: stretch 4.8, rest poke 7 %).
+    This removes that inner wall: every face the skeleton (``segs``, ``core_segments``) meets FIRST along the ray from
+    its nearest skeleton point, while facing that point. On a sealed collider the first face met from inside faces
+    away and (but for a few crease faces) nothing goes. Returns how many faces went."""
+    me = col.data
+    n = len(me.polygons)
+    if not n or not len(segs):
+        return 0
+    mw = np.array(col.matrix_world)
+    co = np.empty(len(me.vertices) * 3, np.float32)
+    me.vertices.foreach_get("co", co)
+    co = co.reshape(-1, 3) @ mw[:3, :3].T + mw[:3, 3]
+    tree = BVHTree.FromPolygons([tuple(v) for v in co], [tuple(p.vertices) for p in me.polygons])
+    cen = np.empty(n * 3, np.float32)
+    nrm = np.empty(n * 3, np.float32)
+    me.polygons.foreach_get("center", cen)
+    me.polygons.foreach_get("normal", nrm)
+    cen = cen.reshape(-1, 3) @ mw[:3, :3].T + mw[:3, 3]
+    nrm = nrm.reshape(-1, 3) @ np.linalg.inv(mw[:3, :3])      # normals take the inverse transpose
+    q = np.concatenate([axis_points(cen[k:k + 4000], segs) for k in range(0, n, 4000)])
+    to = cen - q
+    dist = np.linalg.norm(to, axis=1)
+    inner = []
+    for i in np.where((np.einsum("ij,ij->i", nrm, to) < 0) & (dist > 1e-6))[0]:
+        hit = tree.ray_cast(Vector(q[i]), Vector(to[i] / dist[i]), float(dist[i]) + 1e-3)
+        if hit[0] is not None and (hit[2] == i or (hit[0] - Vector(cen[i])).length < 1e-3):
+            inner.append(int(i))
+    if inner:
+        bm = bmesh.new()
+        bm.from_mesh(me)
+        bm.faces.ensure_lookup_table()
+        bmesh.ops.delete(bm, geom=[bm.faces[i] for i in inner], context="FACES_ONLY")
+        bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
+        bm.to_mesh(me)
+        bm.free()
+        me.update()
+    return len(inner)
+
+
+def _remesh(col, faces, segs=()):
+    """Voxel-remesh + decimate the collider ``col``, then drop a hollow skin's inner wall (``_drop_inner_walls``,
+    ``segs`` = the skeleton the mesh is posed in; none = left as remeshed)."""
     vox = col.modifiers.new("vox", "REMESH")
     vox.mode = "VOXEL"
     vox.voxel_size = COLLIDER_VOXEL_M
@@ -560,6 +641,8 @@ def _remesh(col, faces):
     dec.ratio = min(1.0, faces / max(1, len(col.data.polygons)))
     bpy.context.view_layer.objects.active = col
     bpy.ops.object.modifier_apply(modifier=dec.name)
+    if len(segs):
+        COLLIDER_INNER.append(_drop_inner_walls(col, segs))
 
 
 def skinned_collider(body, arm, faces=80000, rest=None):
@@ -577,7 +660,7 @@ def skinned_collider(body, arm, faces=80000, rest=None):
     bpy.context.scene.collection.objects.link(col)
     arm.data.pose_position = "POSE"
     if rest is None:
-        _remesh(col, faces)
+        _remesh(col, faces, core_segments(arm, rest=True))
     bind_to_armature(col, body, arm)
     col.hide_render = True
     return col
@@ -618,7 +701,7 @@ def rest_collider(body, extra=(), faces=80000):
     bpy.context.scene.collection.objects.link(col)
     for ex in extra:
         _join_extra(col, ex, dg)
-    _remesh(col, faces)
+    _remesh(col, faces, core_segments(armature_of(body)))
     tree = BVHTree.FromObject(col, bpy.context.evaluated_depsgraph_get())
     COLLIDER_S.append(round(time.time() - t0, 2))
     return col, tree
@@ -712,7 +795,8 @@ def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collisio
     # the collider must be wound OUTWARD everywhere: Blender's cloth collision is
     # one-sided, and the generated bodies mix windings (13 % of Kira's faces point in
     # even after recalc + parity) - a flipped patch pulls the cloth INTO the body.
-    # A voxel remesh of the posed body is closed and wound outward by construction.
+    # A voxel remesh of the posed body is closed and wound outward by construction; a hollow
+    # one (a thick-shell body open to the outside) loses its inner wall (``_drop_inner_walls``).
     t_col = time.time()
     if collider is not None:
         col = collider                     # A179: ``rest_collider`` of this piece (body + extra), taken over
@@ -727,7 +811,7 @@ def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collisio
         sc.collection.objects.link(col)
         for ex in extra:
             _join_extra(col, ex, dg)
-        _remesh(col, collider_faces)
+        _remesh(col, collider_faces, core_segments(armature_of(body)))
     if crop_m is not None:
         gco = np.array([obj.matrix_world @ v.co for v in obj.data.vertices])
         lo, hi = gco.min(0) - crop_m, gco.max(0) + crop_m

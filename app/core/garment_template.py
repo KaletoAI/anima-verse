@@ -60,7 +60,8 @@ SPIKE_SCRIPT = "garment_template_drape.py"
 #: 6 (A198): the texture projection paints the outer layer only (prints were mirrored), the bake pose search tries
 #: the arm angles it names, a lower layer's collider is thickened inward, a dress with a bodice keeps its slit and
 #: the rim metrics read the open borders.
-TEMPLATE_VERSION = 6
+#: 7: a hollow drape collider (a thick-shell body open to the outside) loses its inner wall (``_drop_inner_walls``).
+TEMPLATE_VERSION = 7
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.
