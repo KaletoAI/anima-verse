@@ -57,8 +57,9 @@ Expected, derived by hand from the brief (fix 6, user test 2026-11-09):
 [4] OFF (the default) — byte-identical to the front+back pipeline. Demo
     wears the dress (osig; dress and scarf are ``mesh_mode: painted`` — since
     9788164d the default is ``in_body``, which would mesh a shape), delta plan [2.9]: the tpose pass renders front
-    edit and back draft (dirs edit, draft1; occasions outfit_front,
-    outfit_back_draft) and composites the front (base tpose_<bsig>, the edit in "edit") and the back (base
+    edit, the back's TURN of the dressed front and the back draft (Ruling A175, 070594e79: turn, cut out on
+    the CPU, then edit the base view with the cut-out second; dirs edit, turn1, draft1; occasions outfit_front,
+    outfit_back_turn, outfit_back_draft) and composites the front (base tpose_<bsig>, the edit in "edit") and the back (base
     tpose_back_<bsig>, the draft in draft1), rule outfit (Ruling A125); the Build's
     assemble step (Task 8 of plan 2026-11-12-unified-worn-pieces; was: the
     auto hook after the pass) makes one worker call
@@ -70,14 +71,18 @@ Expected, derived by hand from the brief (fix 6, user test 2026-11-09):
     the old refit limit 4.0) renders nothing, makes ONE worker call and the
     model sidecar has no back_refit.
 [6] ON (dressed_side_views true, margin 0.05). Demo puts on the scarf
-    (sig2), plan [2.0] (the model by the Build's assemble step, as in [4]): the pass renders front edit, back draft,
-    left draft, right draft — dirs [edit, draft1, draft1, draft1] (Ruling A125: the front edit is staged and
-    composited back too), occasions [outfit_front, outfit_back_draft, outfit_side_draft,
-    outfit_side_draft], use cases outfit_edit x 4, back_view [None, True, False, False];
+    (sig2), plan [2.0] (the model by the Build's assemble step, as in [4]): the pass renders front edit, then per
+    view its turn and its draft (A175) — dirs [edit, turn1, draft1, turn1, draft1, turn1, draft1] (Ruling A125:
+    the front edit is staged and composited back too), occasions [outfit_front, outfit_back_turn,
+    outfit_back_draft, outfit_back_turn, outfit_side_draft, outfit_back_turn, outfit_side_draft] (every turn
+    routes through the one occasion outfit_back_turn), use cases outfit_edit x 7, back_view [None, True, True,
+    False, False, False, False] (the back's turn and draft are back views), stems tpose_<v>_<sig2>_turn
+    before each tpose_<v>_<sig2>;
     three composites (back, left, right: base tpose_<view>_<bsig>.png, the
     draft tpose_<view>_<sig2>.png in draft1, rule outfit). The left draft (Ruling A125, superseding A29 here):
     prompt = DRESS_VIEW["left"] + " Keep the image exactly …", no character block (None),
-    reference = the BASE left view tpose_left_<bsig>.png, the dressed front tpose_<sig2>.png second. The stored left view's
+    reference = the BASE left view tpose_left_<bsig>.png, the cut-out of the turned front
+    tpose_left_<sig2>_turn_cut.png second (A175; was the dressed front). The stored left view's
     sidecar: base_signature, dressed, base_image_sha256 =
     sha(tpose_left_<bsig>.png), left_draft = its name, left_draft_sha256,
     fit "composite". Stored: tpose_left/right_<sig2> with fit_gate ok,
@@ -443,8 +448,9 @@ def main() -> int:
             model_refs._run_generation("Demo", "tpose")
             wait_idle()
             check("the Build's assemble step", build_model(), "")
-            check("two renders", [(r["dir"], r.get("occasion")) for r in RENDERS],
-                  [("edit", "outfit_front"), ("draft1", "outfit_back_draft")])
+            check("three renders (the A175 turn before the back draft)",
+                  [(r["dir"], r.get("occasion")) for r in RENDERS],
+                  [("edit", "outfit_front"), ("turn1", "outfit_back_turn"), ("draft1", "outfit_back_draft")])
             check("two composites (A125: the front too)", COMPOSITES,
                   [(f"tpose_{bsig}.png", f"tpose_{osig}.png", "edit", "outfit"),
                    (f"tpose_back_{bsig}.png", f"tpose_back_{osig}.png", "draft1", "outfit")])
@@ -493,26 +499,29 @@ def main() -> int:
             wait_idle()
             check("the Build's assemble step", build_model(), "")
             rs = RENDERS[start_renders:]
-            check("four renders", [r["dir"] for r in rs], ["edit", "draft1", "draft1", "draft1"])
+            check("seven renders", [r["dir"] for r in rs],
+                  ["edit", "turn1", "draft1", "turn1", "draft1", "turn1", "draft1"])
             check("occasions", [r.get("occasion") for r in rs],
-                  ["outfit_front", "outfit_back_draft", "outfit_side_draft", "outfit_side_draft"])
+                  ["outfit_front", "outfit_back_turn", "outfit_back_draft", "outfit_back_turn",
+                   "outfit_side_draft", "outfit_back_turn", "outfit_side_draft"])
             check("use cases", [r.get("image_use_case") for r in rs],
-                  ["outfit_edit"] * 4)
-            check("back_view", [r.get("back_view") for r in rs], [None, True, False, False])
+                  ["outfit_edit"] * 7)
+            check("back_view", [r.get("back_view") for r in rs], [None, True, True, False, False, False, False])
             check("stems", [r["stem"] for r in rs],
-                  [f"tpose_{sig2}", f"tpose_back_{sig2}", f"tpose_left_{sig2}", f"tpose_right_{sig2}"])
+                  [f"tpose_{sig2}", f"tpose_back_{sig2}_turn", f"tpose_back_{sig2}", f"tpose_left_{sig2}_turn",
+                   f"tpose_left_{sig2}", f"tpose_right_{sig2}_turn", f"tpose_right_{sig2}"])
             check("three composites", COMPOSITES[-3:],
                   [(f"tpose_{v}_{bsig}.png", f"tpose_{v}_{sig2}.png", "draft1", "outfit")
                    for v in ("back", "left", "right")])
-            if len(rs) == 4:
-                ld = rs[2]
+            if len(rs) == 7:
+                ld = rs[4]
                 check("left draft prompt: the side sentence, then the edit (Ruling A125)",
                       ld.get("bare_prompt", "").startswith(base_body.DRESS_VIEW["left"] + " Keep the image exactly"),
                       True)
                 check("left draft block", ld.get("style_character"), None)
-                check("left draft reference: the base left view, the dressed front second",
+                check("left draft reference: the base left view, the turned front's cut-out second (A175)",
                       (ld["reference_name"], [Path(p).name for p in ld.get("extra_reference_images") or []]),
-                      (f"tpose_left_{bsig}.png", [f"tpose_{sig2}.png"]))
+                      (f"tpose_left_{bsig}.png", [f"tpose_left_{sig2}_turn_cut.png"]))
                 left_draft = refs / "drafts" / f"tpose_left_{sig2}.png"
                 stored_left = json.loads((refs / f"tpose_left_{sig2}.json").read_text())
                 # Texture fields (plan 2026-11-10) checked by smoke_texture_body_reuse.
