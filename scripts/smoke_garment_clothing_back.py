@@ -116,7 +116,9 @@ The other backs change nothing outside the jacket -> worn gate ok (outside 0).
     one draft per attempt (a refused composite drafts anew), the front
     before them. Draft call: occasion "outfit_back_draft", use case
     "base_view_back", reference = the worn front's file name,
-    character_loras True. Composite calls: base = the stored base back
+    character_loras False (A130, 269cd504e: ``base_body._dress_common``, which
+    this draft shares through ``render_draft``, carries no body LoRA — the
+    body comes from picture 1, here the worn front). Composite calls: base = the stored base back
     tpose_back_<bsig>.png, the draft = draft_path's file, rule "piece",
     background grey (128, 128, 128), targets attempt 1 / 2. Back attempt 1
     refused with the opening reason, attempt 2 accepted; the accepted back
@@ -466,7 +468,7 @@ def main() -> int:
         front_final = gs.garment_path("Demo", jid, fsig, "image", step="worn", view="front")
         check("draft call", (kw["occasion"], kw["image_use_case"], kw["character_loras"], kw["bare_prompt"],
                              Path(kw["reference_image"]).name, kw.get("postprocess", True)),
-              ("outfit_back_draft", "base_view_back", True, draft[0], front_final.name, True))
+              ("outfit_back_draft", "base_view_back", False, draft[0], front_final.name, True))
         draft_file = garment_images.draft_path("Demo", jid, fsig, "worn")
         back_1 = gs.garment_path("Demo", jid, fsig, "image", step="worn", view="back", attempt=1)
         back_2 = gs.garment_path("Demo", jid, fsig, "image", step="worn", view="back", attempt=2)

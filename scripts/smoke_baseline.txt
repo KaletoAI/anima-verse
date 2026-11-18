@@ -7,7 +7,6 @@ smoke_extension_rig_p3	STALE: seeds a stored outfit model and expects the worldm
 smoke_fbx_importer_parity	STALE: one-off parity proof vs the pinned pre-C++-importer scripts (a98f9ed5) compares WHOLE result dicts; later intentional output fields (turn_deg 339af01ee, shift_cm 6d1835805, and more) break it. Not deleted: its Blender per-take travel (+0.1/-0.2 m), sparse-take and multi-layer-rejection checks exist nowhere else
 smoke_footwear_refit	STALE: A107 (b1670f752) keys fits on geometry, not file bytes: the fixture's "body change" is a byte-only repack (new generator) and no longer makes the fit stale
 smoke_garment_chain	STALE: the own-mesh dress fixture is now refused by the fit gates (max_push_m 0.216 > 0.1, deep_push_share 0.50 > 0.12, new_edge_max_m 0.41 > 0.17) after the fit changes A174-A199; not re-derived
-smoke_garment_clothing_back	STALE: the back draft call changed with A175 (turn + cut-out step, 070594e79/26a3ea579)
 smoke_garment_fit_per_body	STALE: assembly tiers 'none' and no fits on body A — figure/assembly rework (A119 and later); not re-derived
 smoke_garment_layering	STALE: assembled coat entry ("over" key, sha) changed with A192 (71d6a896a outer over top over underwear)
 smoke_garment_outfit	STALE: reads Figure.in_body_own and the interim render step, both gone with A119 (0601436ce)
