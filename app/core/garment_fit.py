@@ -263,6 +263,12 @@ SIDE_DEEP_M = 0.03
 #: (``room_offset``) without a version step, so a fit made before it with either setting kept its old geometry as
 #: "accepted". A fit with Auto width and no depth (or a shell) is unchanged bit for bit and its version 18 fit (and
 #: the older ones the chain above keeps) stays current (``room_may_change``).
+#: clothing 20 (2026-11-18, A199 — a CPU refit of the clothing fits it can change, no hub job): the geodesic walks
+#: of the sleeve band (``blend_sleeves``, also the trunk's ``fit_trunk`` blend) and the sleeve cuffs (``sleeve_cuffs``)
+#: count each mesh edge once (``_walk_edges``); an edge two neighbouring faces of opposite winding both listed as
+#: ``(u, v)`` weighed twice its length, so the band / cuff reach stopped short there (review 06#9). A fit with no
+#: sleeve vertex and no sleeve or trunk blend never walked and its version 19 fit (and the older ones the chain above
+#: keeps) stays current (``walk_may_change``).
 #: footwear: its own fit (``footwear_fit``), versioned there.
 #: hair 17 (2026-11-15, Ruling A89 — a CPU refit of every HairDeck fit, no hub job): the cap's front edge is a
 #: hairline (``garment_hairdeck.hairline_offset``: an arc 6 mm higher at the temples, then a wide turn down towards
@@ -274,7 +280,7 @@ SIDE_DEEP_M = 0.03
 #: strands, fewer and shorter towards the hairline) instead of a band of straight-down cards; the cap under it is
 #: shaded root-dark to tip-light; every card's root end (and a fill card's tip) fades in vertex alpha
 #: (``root_fade``), so no card ends bluntly.
-FIT_VERSION: Dict[str, int] = {"hair": 18, "clothing": 19, "footwear": FOOTWEAR_FIT_VERSION}
+FIT_VERSION: Dict[str, int] = {"hair": 18, "clothing": 20, "footwear": FOOTWEAR_FIT_VERSION}
 #: The clothing fit version whose fits stay current under ``FIT_VERSION["clothing"]`` when Auto keeps their trunk as
 #: generated (Ruling A83, ``trunk_may_change``) and nothing rides an arm (Ruling A84, ``seam_may_change``).
 CLOTHING_TRUNK_UNCHANGED = 15
@@ -287,6 +293,9 @@ CLOTHING_SEEDS_UNCHANGED = 17
 #: The clothing fit version whose fits stay current under ``FIT_VERSION["clothing"]`` when they had no fixed width
 #: allowance and no depth allowance (A198, ``room_may_change``) — and so on down the chain above.
 CLOTHING_ROOM_UNCHANGED = 18
+#: The clothing fit version whose fits stay current under ``FIT_VERSION["clothing"]`` when they never walked the mesh
+#: (A199, ``walk_may_change``) — and so on down the chain above.
+CLOTHING_WALK_UNCHANGED = 19
 
 
 def fit_version_for(kind: str, method: str = "") -> Optional[int]:
@@ -307,6 +316,10 @@ def expected_fit_version(record: Dict[str, Any]) -> Optional[int]:
     Ruling A114)."""
     kind = str(record.get("kind") or "")
     version = record.get("fit_version")
+    if kind == "clothing" and walk_may_change(record):
+        return fit_version_for(kind, str(record.get("method") or ""))
+    if kind == "clothing" and version == CLOTHING_WALK_UNCHANGED:
+        return CLOTHING_WALK_UNCHANGED
     if kind == "clothing" and room_may_change(record):
         return fit_version_for(kind, str(record.get("method") or ""))
     if kind == "clothing" and version == CLOTHING_ROOM_UNCHANGED:
@@ -320,6 +333,27 @@ def expected_fit_version(record: Dict[str, Any]) -> Optional[int]:
         if version == CLOTHING_TRUNK_UNCHANGED and not trunk_may_change(record):
             return CLOTHING_TRUNK_UNCHANGED
     return fit_version_for(kind, str(record.get("method") or ""))
+
+
+def walk_may_change(record: Dict[str, Any]) -> bool:
+    """A199: whether a clothing fit made before the geodesic walks counted each edge once would come out differently
+    — its transfer report (``report.transfer``) has sleeve vertices (``sleeve_cuffs`` walks from them; a cuff count
+    of 0 may grow, the walk was too short) or a sleeve or trunk ``blend`` (``blend_sleeves`` walked the band). A
+    record without that report, or without a ``sleeve_vertices`` number, may have. A shell has no transfer walk."""
+    inputs = record.get("inputs") or {}
+    if inputs.get("mesh_shape") == "shell":
+        return False
+    transfer = (record.get("report") or {}).get("transfer")
+    if not isinstance(transfer, dict):
+        return True
+    count = transfer.get("sleeve_vertices")
+    if not isinstance(count, (int, float)) or isinstance(count, bool) or count > 0:
+        return True
+    for key in ("sleeves", "trunk"):
+        part = transfer.get(key)
+        if isinstance(part, dict) and part.get("blend") is not None:
+            return True
+    return False
 
 
 def room_may_change(record: Dict[str, Any]) -> bool:
@@ -1503,6 +1537,14 @@ def sleeve_vertices(Q, body_P, parts, faces, upper) -> np.ndarray:
 SLEEVE_CUFF_REACH_M = 0.10
 
 
+def _walk_edges(F: np.ndarray) -> np.ndarray:
+    """Each undirected edge of the faces ``F`` once (``(lo, hi)`` rows) — the edge list of a geodesic walk
+    (``dijkstra``). A COO graph sums duplicate entries, so an edge listed twice as ``(u, v)`` — two neighbouring
+    faces of opposite winding — would weigh twice its length (clothing 20, review 06#9)."""
+    E = np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]])
+    return np.unique(np.sort(E, 1), axis=0) if len(E) else E.reshape(0, 2)
+
+
 def sleeve_cuffs(Q, body_P, parts, faces, upper, sleeve, k: float) -> np.ndarray:
     """Per garment vertex the arm part (1 / 2, ``_donor_parts``; 0 none) of a sleeve's CUFF: a vertex below the
     waist that is not a sleeve (``sleeve_vertices``) but lies within ``SLEEVE_CUFF_REACH_M`` (``Q`` in unrigged
@@ -1526,7 +1568,7 @@ def sleeve_cuffs(Q, body_P, parts, faces, upper, sleeve, k: float) -> np.ndarray
         return out
     near = np.asarray(parts)[cKDTree(np.asarray(body_P, np.float64)).query(Q, workers=fit_kernels.threads())[1]]
     F = np.asarray(faces, np.int64).reshape(-1, 3)
-    E = np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]])
+    E = _walk_edges(F)
     length = np.linalg.norm(Q[E[:, 0]] - Q[E[:, 1]], axis=1) * float(k)
     best = np.full(n, np.inf)
     for side in (1, 2):
@@ -2206,7 +2248,7 @@ def blend_sleeves(X: np.ndarray, D: np.ndarray, Xs: np.ndarray, faces, adjacency
     if not moved.any():
         return X, report, moved
     F = np.asarray(faces, np.int64).reshape(-1, 3)
-    E = np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]])
+    E = _walk_edges(F)
     n = len(X)
     length = np.maximum(np.linalg.norm(X[E[:, 0]] - X[E[:, 1]], axis=1), 1e-9)
     graph = coo_matrix((length, (E[:, 0], E[:, 1])), shape=(n, n)).tocsr()

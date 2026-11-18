@@ -19,6 +19,9 @@ No server, no world DB. Pure record checks, every expectation derived by hand fr
     [7] version 17, unseeded opening, defaults -> chain keeps 17
     [8] version 19 anything                 -> 19
 
+A199 (clothing 20): the records carry ``sleeve_vertices`` 0 (they never walked, ``walk_may_change``), so a due one
+reads ``FIT_VERSION["clothing"]`` and [8] keeps 19.
+
 Pre-fix proof: at e846d7d02 FIT_VERSION["clothing"] == 18 and [1]/[2]/[6] read current (18 / 18 / 17).
 """
 import sys
@@ -45,20 +48,21 @@ def rec(v, settings=None, shell=False, opening=None):
         inputs["fit_settings"] = settings
     if shell:
         inputs["mesh_shape"] = "shell"
-    r = {"kind": "clothing", "fit_version": v, "inputs": inputs, "report": {"transfer": {"sleeve_share": 0.3}}}
+    r = {"kind": "clothing", "fit_version": v, "inputs": inputs, "report": {"transfer": {"sleeve_share": 0.3, "sleeve_vertices": 0}}}
     if opening is not None:
         r["report"]["opening"] = opening
     return r
 
 
-check("FIT_VERSION clothing 19", gf.FIT_VERSION["clothing"] == 19, gf.FIT_VERSION)
+check("FIT_VERSION clothing >= 19", gf.FIT_VERSION["clothing"] >= 19, gf.FIT_VERSION)
+DUE = gf.FIT_VERSION["clothing"]   # A199: 20; the records below never walked (sleeve_vertices 0)
 cases = [
-    ("[1] fixed width", rec(18, {"allowance": 10, "depth": 0}), 19),
-    ("[2] depth", rec(18, {"allowance": "auto", "depth": 3}), 19),
+    ("[1] fixed width", rec(18, {"allowance": 10, "depth": 0}), DUE),
+    ("[2] depth", rec(18, {"allowance": "auto", "depth": 3}), DUE),
     ("[3] room-free", rec(18, {"allowance": "auto", "depth": 0}), 18),
     ("[4] no settings", rec(18), 18),
     ("[5] shell", rec(18, {"allowance": 10, "depth": 0}, shell=True), 18),
-    ("[6] 17 with room", rec(17, {"allowance": 6, "depth": 0}, opening=unseeded), 19),
+    ("[6] 17 with room", rec(17, {"allowance": 6, "depth": 0}, opening=unseeded), DUE),
     ("[7] 17 room-free", rec(17, {"allowance": "auto", "depth": 0}, opening=unseeded), 17),
     ("[8] 19", rec(19, {"allowance": 10, "depth": 3}), 19),
 ]

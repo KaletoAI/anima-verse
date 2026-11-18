@@ -147,7 +147,8 @@ def test_versions(gf):
         r = {"kind": kind, "fit_version": version,
              "metrics": {} if room is None else {"torso_gap_p50_m": room, "trunk_front_gap_p50_m": front}}
         if share is not None:
-            r["report"] = {"transfer": {"sleeve_share": share}}
+            # sleeve_vertices 0: the record never walked (A199 ``walk_may_change``), so the older chain decides
+            r["report"] = {"transfer": {"sleeve_share": share, "sleeve_vertices": 0}}
         return r
     cases = [("v16 nothing on an arm stays current", rec(16, 0.0), 16),
              ("v16 Kira's blazer (0.3762) is due", rec(16, 0.3762), gf.FIT_VERSION["clothing"]),
