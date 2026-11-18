@@ -19,6 +19,7 @@ meanwhile) and refuse a piece whose mesh job runs (``DeleteBusy``); the step rec
 ``garments/`` before it is unlinked. ``preview`` says before the click what rebuilding costs (``garments.run_estimate``
 forced from the mesh step, or from the first image step when the images go too).
 """
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -67,6 +68,23 @@ def _groups(character_name: str, item_id: str) -> Dict[str, List[Path]]:
     return {fsig: paths for (iid, fsig), paths in gs.stored_groups(character_name).items() if iid == item_id}
 
 
+def _undo_snapshots(character_name: str, item_id: str) -> List[Path]:
+    """A198 (review 05 #13): the "Use this" Undo snapshots of the piece (``garment_use_undo.undo_dir`` of any fsig,
+    and a ``.pending`` one) — they hold copies of the meshes, so an Undo after "Delete all" would bring them back."""
+    import re
+    from app.core import garment_store as gs
+    from app.core.garment_use_undo import UNDO_DIR
+    folder = gs._root(character_name) / UNDO_DIR  # noqa: SLF001 — same subsystem
+    if not folder.is_dir():
+        return []
+    name = re.compile(re.escape(item_id) + r"_[0-9a-f]{12}(\.pending)?")
+    return sorted(p for p in folder.iterdir() if p.is_dir() and not p.is_symlink() and name.fullmatch(p.name))
+
+
+def _snapshot_files(path: Path) -> int:
+    return sum(1 for p in path.rglob("*") if p.is_file())
+
+
 def _is_image(path: Path) -> bool:
     from app.core import garment_store as gs
     return path.parent.name == gs.PART_DIRS["image"]
@@ -86,6 +104,7 @@ def preview(character_name: str, item_id: str) -> Dict[str, Any]:
                 images += 1
             else:
                 meshes += 1
+    meshes += sum(_snapshot_files(snap) for snap in _undo_snapshots(character_name, item_id))
     first = gs.GARMENT_STEPS[gs._garment_kind(item_id)][0] if gs._garment_kind(item_id) else ""  # noqa: SLF001
     return {"item_id": item_id, "files": {"meshes": meshes, "images": images},
             "rebuild_mesh": _estimate(character_name, item_id, "mesh"),
@@ -184,6 +203,11 @@ def delete_all(character_name: str, item_id: str, *, include_images: bool = Fals
                         images += _unlink(root, path)
                 else:
                     meshes += _unlink(root, path)
+        for snap in _undo_snapshots(character_name, item_id):
+            if not snap.resolve().is_relative_to(root.resolve()):
+                raise ValueError(f"garment path escapes {root}")
+            meshes += _snapshot_files(snap)
+            shutil.rmtree(snap, ignore_errors=True)
     logger.info("garment %s/%s: deleted all meshes (%d files)%s", character_name, item_id, meshes,
                 f" and {images} images" if include_images else "")
     return {"item_id": item_id, "deleted": {"meshes": meshes, "images": images},
