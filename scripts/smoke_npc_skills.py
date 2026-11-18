@@ -21,7 +21,14 @@ THE RULES, by hand — from the task brief:
 
      (`get_dressed`/`undress` joined later — plan-temp-npc-undress.md, task 2:
      a temporary NPC dresses from a free text and needs a verb to take it off
-     and put it back on.)
+     and put it back on.) Since 36ebf80d5 ("human-roleplay and npc-temporary
+     carry the 26-skill set") the template names seven more, in alphabetical
+     order with the rest: act, go_to_character, instagram, outfit_change,
+     prop_action, read_item, setlocation — all shipped by this repo
+     (plugins/act, plugins/movement x2, plugins/instagram, app/skills
+     outfit_change, plugins/set_pose prop_action, plugins/read_item).
+     outfit_change, prop_action and read_item are ALWAYS_LOAD: now LISTED, so
+     they get their `enabled: true` like every listed id.
 
      THE LIST IS CLOSED, and that follows from the manager's own resolution
      rule (`app/skills/skill_manager.py:173-179`), which decides a verb like
@@ -40,7 +47,7 @@ THE RULES, by hand — from the task brief:
      the list is written for a full installation, and packages that ship in a
      separate repo must not break an NPC spawn. Hand-derived expectations:
 
-       [1] The template carries exactly those 19 ids, in that order.
+       [1] The template carries exactly those 26 ids, in that order.
        [2] After `apply_npc` every id of the list that the running skill
            manager knows has `{"enabled": true}` in the NPC's skill config.
            Which half of the list is installed depends on the installation,
@@ -58,8 +65,10 @@ THE RULES, by hand — from the task brief:
            package's.) What the list DOES name is offered, minus what a skill
            hides from itself: `leave_party` (a character in no party cannot
            leave one), `interact` (no pair clips in this throwaway clip
-           library) and `get_dressed` (the NPC is dressed, so it is offered
-           `undress` instead) — skill logic, not activation.
+           library), `get_dressed` (the NPC is dressed, so it is offered
+           `undress` instead) and `read_item` (a temporary NPC keeps no
+           memories: ``ReadItemSkill.default_enabled_for``) — skill logic,
+           not activation.
        [3] Sleep is not planned for temporary NPCs, and it is off for the
            REAL reason: `sleep`/`wakeup` are `ALWAYS_LOAD`
            (`plugins/sleep/plugin.yaml:10,14`), so a missing config means off
@@ -262,25 +271,29 @@ def offered_ids(name):
 # The set the user read off the hand-configured NPC (task brief), plus the two
 # verbs of plugins/undress (plan-temp-npc-undress.md, task 2): a temporary NPC
 # dresses from a free text and needs a way to take it off and put it back on.
-EXPECTED_SET = ["allow_exposed", "cancel_travel", "consume_item", "dry_off",
-                "end_intimate", "enter_water", "get_dressed",
-                "image_generation", "instagram_comment", "instagram_reply",
+# Since 36ebf80d5 the 26-skill set (module docstring, A).
+EXPECTED_SET = ["act", "allow_exposed", "cancel_travel", "consume_item", "dry_off",
+                "end_intimate", "enter_water", "get_dressed", "go_to_character",
+                "image_generation", "instagram", "instagram_comment", "instagram_reply",
                 "interact", "invite_to_party", "join_party", "leave_party",
-                "require_decency", "set_pose", "start_intimate", "talk_to",
+                "outfit_change", "prop_action", "read_item",
+                "require_decency", "set_pose", "setlocation", "start_intimate", "talk_to",
                 "undress"]
 
 # The subset THIS repo ships itself — always installed, so always on.
-IN_REPO_SET = ["allow_exposed", "cancel_travel", "consume_item", "dry_off",
-               "enter_water", "get_dressed", "image_generation",
+# Not "instagram": its posting verb sits behind the package gate skills.instagram.enabled (default false,
+# plugins/instagram/plugin.yaml), so a throwaway world does not load it — the [4] rule skips it silently.
+IN_REPO_SET = ["act", "allow_exposed", "cancel_travel", "consume_item", "dry_off",
+               "enter_water", "get_dressed", "go_to_character", "image_generation",
                "instagram_comment", "instagram_reply", "interact",
-               "invite_to_party", "join_party", "leave_party",
-               "require_decency", "set_pose", "talk_to", "undress"]
+               "invite_to_party", "join_party", "leave_party", "outfit_change", "prop_action",
+               "read_item", "require_decency", "set_pose", "setlocation", "talk_to", "undress"]
 
 
 # ── [1] the set is template data ────────────────────────────────────────────
 print("[1] the standard set lives in the template")
 _TMPL = character_template.get_template("npc-temporary") or {}
-check("npc-temporary carries the brief's 19 ids",
+check("npc-temporary carries the 26 ids of 36ebf80d5",
       _TMPL.get("default_skills"), EXPECTED_SET)
 
 # ── [2] apply_npc switches on what is installed ─────────────────────────────
@@ -314,10 +327,11 @@ check("every other unlisted ordinary verb is written off too",
 check("what the list DOES name is offered, minus what a skill hides itself "
       "(leave_party: nobody in no party can leave one; interact: no pair "
       "clips in this throwaway clip library; get_dressed: the NPC is dressed, "
-      "so it is offered undress instead)",
+      "so it is offered undress instead; read_item: a temporary NPC keeps no "
+      "memories, ReadItemSkill.default_enabled_for says no)",
       sorted(sid for sid in EXPECTED_SET
              if sid in KNOWN_SKILL_IDS and sid not in offered_ids(NPC)),
-      ["get_dressed", "interact", "leave_party"])
+      ["get_dressed", "interact", "leave_party", "read_item"])
 
 # ── [3] sleep is not planned for temporary NPCs ─────────────────────────────
 print("[3] the sleep verbs stay off — because they are ALWAYS_LOAD")
