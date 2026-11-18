@@ -170,20 +170,43 @@ def close_fitting(item: Optional[Dict[str, Any]]) -> bool:
 
 # --- geometry helpers ------------------------------------------------------------------------------------------------
 
+#: Samples per chunk of ``samples`` / ``_posed_samples`` (A198: the body's z-buffer takes ~15 M samples; the whole
+#: (n, 3) corner gathers at once peaked near 2 GB per shell build).
+SAMPLE_CHUNK = 1_000_000
+
+
 def samples(P, F, px: float, seed: int = 1):
-    """Random points on the faces, about 4 per ``px``² (capped at 600 per face): ``(X, normals, tri)``."""
+    """Random points on the faces, about 4 per ``px``² (capped at 600 per face): ``(X, None, tri, bary)``. A198: the
+    second entry (per-sample face normals) is no longer built — no caller read it, and it cost ``3·n`` floats; the
+    points are computed in chunks of ``SAMPLE_CHUNK`` from the same random draws, so ``X`` is the same bit for bit."""
+    P = np.asarray(P)
+    F = np.asarray(F)
     rng = np.random.default_rng(seed)
     A, B, C = P[F[:, 0]], P[F[:, 1]], P[F[:, 2]]
-    N = np.cross(B - A, C - A)
-    area = np.linalg.norm(N, axis=1) / 2
-    N = N / np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-15)
+    area = np.linalg.norm(np.cross(B - A, C - A), axis=1) / 2
     n = np.clip(np.ceil(area / (px * px) * 4).astype(int), 1, 600)
     tri = np.repeat(np.arange(len(F)), n)
     r1, r2 = rng.random(len(tri)), rng.random(len(tri))
-    s = np.sqrt(r1)
-    a, b, c = 1 - s, s * (1 - r2), s * r2
-    X = A[tri] * a[:, None] + B[tri] * b[:, None] + C[tri] * c[:, None]
-    return X, N[tri], tri, np.stack([a, b, c], 1)
+    X = np.empty((len(tri), 3), np.result_type(P.dtype, np.float64))
+    bary = np.empty((len(tri), 3), np.float64)
+    for lo in range(0, len(tri), SAMPLE_CHUNK):
+        hi = min(lo + SAMPLE_CHUNK, len(tri))
+        t = tri[lo:hi]
+        s_ = np.sqrt(r1[lo:hi])
+        a, b, c = 1 - s_, s_ * (1 - r2[lo:hi]), s_ * r2[lo:hi]
+        X[lo:hi] = A[t] * a[:, None] + B[t] * b[:, None] + C[t] * c[:, None]
+        bary[lo:hi, 0], bary[lo:hi, 1], bary[lo:hi, 2] = a, b, c
+    return X, None, tri, bary
+
+
+def _posed_samples(bary, Pp, faces, tri) -> np.ndarray:
+    """``einsum("nk,nkj->nj", bary, Pp[faces[tri]])`` in chunks of ``SAMPLE_CHUNK`` (A198: the whole (n, 3, 3)
+    gather was ~1 GB for the body's z-buffer samples)."""
+    out = np.empty((len(tri), 3), np.float64)
+    for lo in range(0, len(tri), SAMPLE_CHUNK):
+        hi = min(lo + SAMPLE_CHUNK, len(tri))
+        out[lo:hi] = np.einsum("nk,nkj->nj", bary[lo:hi], Pp[faces[tri[lo:hi]]])
+    return out
 
 
 def _rotation(a, b) -> np.ndarray:
@@ -811,7 +834,8 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     armw = Wd[corr_u2r][:, arm_cols].sum(1) if arm_cols else np.zeros(len(Pu))
     zbuf = {}
     Xs, _n, tri_s, bary_s = samples(Pu, bu.faces, float(np.ptp(Pu[:, 1])) / 2500)
-    Xs_posed = np.einsum("nk,nkj->nj", bary_s, Pp[bu.faces[tri_s]]) if posed_keys else Xs
+    Xs_posed = _posed_samples(bary_s, Pp, bu.faces, tri_s) if posed_keys else Xs
+    del bary_s
     for which, mir, toward, axis in VIEWS:
         h, w = masks[which][0].shape
         # A190: an arms-up side view reads the posed body (the arm is above the head, never in front of the flank);
@@ -822,6 +846,7 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
         zb = np.full((h, w), -np.inf)
         np.maximum.at(zb, (py[ok].astype(int), px[ok].astype(int)), toward * Xv[ok, axis])
         zbuf[which] = ndimage.maximum_filter(zb, size=3)
+    del Xs, Xs_posed, tri_s, Xv, px, py, ok   # A198: the z-buffers are all they were for
     maskinfo = {}
     for which, _mir, _t, _a in VIEWS:
         inner = ndimage.binary_erosion(colour_mask[which], iterations=1)
@@ -1195,14 +1220,9 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     Image.fromarray(np.clip(img, 0, 255).astype(np.uint8)).save(buf, "PNG")
 
     # 6. weights: the body's top 4
-    order = np.argsort(-Wc, 1)[:, :4]
-    Wt = np.take_along_axis(Wc, order, 1)
-    Wt = Wt / np.maximum(Wt.sum(1, keepdims=True), 1e-9)
-    used_j = np.unique(order[Wt > 0])
-    jr = np.zeros(len(jcols), int)
-    jr[used_j] = np.arange(len(used_j))
+    joints_t, Wt, used_j = top4_weights(Wc)
     garment = glb_mesh.GarmentMesh(positions=X, normals=None, uvs=UVc, indices=Fc,
-                                   joints=np.where(Wt > 0, jr[order], 0), weights=Wt,
+                                   joints=joints_t, weights=Wt,
                                    joint_names=[br.joint_names[jcols[i]] for i in used_j], image=buf.getvalue(),
                                    mime="image/png", material={"doubleSided": True})
     over = signed_distance(X, R, br.faces)
@@ -1213,6 +1233,22 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
                     "seconds": round(time.monotonic() - started, 1)})
     return gf.FitResult(garment=garment, metrics=metrics, ok=True, reasons=[],
                         report={"mesh_shape": SHELL, **report})
+
+
+def top4_weights(Wc) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The shell's skin from the per-vertex weights ``Wc`` over the region's joint columns: ``(joints (n, 4) into
+    ``used``, weights (n, 4) summing to 1, used column indices)``. A198 (review 06 #7 / 06B #3): a region skinned to
+    fewer than 4 joints is padded with weight-0 columns, so the graft always gets (n, 4) arrays."""
+    Wc = np.asarray(Wc, np.float64)
+    if Wc.shape[1] < 4:
+        Wc = np.pad(Wc, ((0, 0), (0, 4 - Wc.shape[1])))
+    order = np.argsort(-Wc, 1)[:, :4]
+    Wt = np.take_along_axis(Wc, order, 1)
+    Wt = Wt / np.maximum(Wt.sum(1, keepdims=True), 1e-9)
+    used_j = np.unique(order[Wt > 0])
+    jr = np.zeros(Wc.shape[1], int)
+    jr[used_j] = np.arange(len(used_j))
+    return np.where(Wt > 0, jr[order], 0), Wt, used_j
 
 
 def silhouette_mask(P, F, mask_shape: Tuple[int, int], body_mask, *, haxis: int, mirror: bool) -> np.ndarray:
