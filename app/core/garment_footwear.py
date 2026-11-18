@@ -697,6 +697,24 @@ def _attempt_out(att: Dict[str, Any], rigged: bytes, kind: str, item_id: str, fs
             "tris": len(glb_mesh.static_arrays(blob)[1])}
 
 
+def derived_collar_bind(side: str, collar_bind_m: float, Jb: Dict[str, np.ndarray],
+                        moved: Dict[str, np.ndarray]) -> float:
+    """A boot's ``collar_bind_m`` carried onto a body shape (``derive_compute``): the collar rides the side's Leg
+    joint (``footwear_fit.fit_pair`` binds the shaft above the band to it), so the point at the collar height over the
+    base's Leg joint is mapped through that joint's ``J_shape · J_base^-1`` (``moved``, keyed by
+    ``rig_contract.norm_bone_name``) and its height read back. The Leg is resolved BY NAME — the shaft part read
+    back from a fit GLB carries the body's whole skin as its joint list (``glb_mesh.graft``), so a slot index names
+    whatever joint the body lists there (``mixamorig:Spine1`` on a Mixamo body). Unchanged when either body lacks
+    the joint."""
+    from app.core.footwear_fit import _apply
+    from app.core.rig_contract import norm_bone_name
+    leg = norm_bone_name(f"{side}Leg")
+    if leg not in moved or leg not in Jb:
+        return float(collar_bind_m)
+    p = np.array([Jb[leg][0, 3], float(collar_bind_m), Jb[leg][2, 3]])
+    return float(_apply(moved[leg], p)[1])
+
+
 def derive_compute(base_fit: bytes, base_record: Dict[str, Any], base_rigged: bytes, insole: Dict[str, Any],
                    rigged: bytes, kind: str, item_id: str, fsig: str, out: str) -> Dict[str, Any]:
     """The fit of an OUTFIT body (a body shape) derived from the accepted base fit of the same fsig (Ruling A35) —
@@ -842,10 +860,7 @@ def derive_compute(base_fit: bytes, base_record: Dict[str, Any], base_rigged: by
         contacts_pose[side] = pose
         split = rec.get("split") or {}
         if split.get("is_boot") and split.get("collar_bind_m") is not None and "shaft" in side_parts:
-            leg = norm_bone_name(side_parts["shaft"].joint_names[2]) if len(side_parts["shaft"].joint_names) > 2 else ""
-            if leg in moved:
-                p = np.array([Jb[leg][0, 3], float(split["collar_bind_m"]), Jb[leg][2, 3]])
-                split["collar_bind_m"] = float(_apply(moved[leg], p)[1])
+            split["collar_bind_m"] = derived_collar_bind(side, float(split["collar_bind_m"]), Jb, moved)
     if not lifts:
         return {"ok": False, "reasons": ["The base fit has no sides"], "gates": {"ok": False}}
     root_lift = max(lifts.values())
