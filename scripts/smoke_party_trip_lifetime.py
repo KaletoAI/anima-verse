@@ -13,6 +13,8 @@ With an activity, one party persists until its exact end; a pre-existing party
 keeps both followers; cancellation after consent leaves zero members. Recovery
 of a persisted done intent must also leave zero members, twice without effect.
 An existing follower returns refusal text and emits no ERROR traceback.
+The game clock is set to Y0001-D010T12:00:00 first, so the expiry stamp
+(game time - 1 s) never falls before the epoch.
 A plain avatar invitation still remains pending and accepts normally. No LLM
 or live world is used; paths are initialized before all world model imports.
 """
@@ -39,6 +41,12 @@ def main():
         from app.core import config, db
         config.load(root / 'world' / 'config.json')
         db.init_schema()
+        # A fresh world's game clock starts AT the epoch, and the expiry step below
+        # stamps game_time() - 1 s: within the first game second that is before the
+        # epoch and raises. The clock is set to a fixed point nine days on instead.
+        from app.core.game_time import GameTime
+        from app.core.timeutils import set_game_time
+        set_game_time(GameTime.parse('Y0001-D010T12:00:00'))
         cfg = config.get_all()
         cfg['packages'] = {'enabled': 'party'}
         cfg.setdefault('image_generation', {})['enabled'] = False
