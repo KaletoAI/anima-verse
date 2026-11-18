@@ -462,8 +462,10 @@ def group_tip_settings(panels: List[Dict[str, Any]], extension: Optional[Dict[st
 #: footprint + surface normals (Ruling A34), recorded with the normal counts (Ruling A43); 2 = the source bump levelled
 #: onto the fitted surface under a part that is on, and a part that is off levels the mesh only (Ruling A53); 3 = the
 #: subdivision under a tip (``extension_bones.subdivide_where``) triangulates every face with more than 3 corners, so
-#: no quad with three corners on a line is left to export as a zero-area triangle (A199, review 03#8).
-TIP_SMOOTHING_VERSION = 3
+#: no quad with three corners on a line is left to export as a zero-area triangle (A199, review 03#8); 4 = the source
+#: levelling's flat subdivision counts the stub passes that cover its whole disc, not those that merely reach the
+#: source point (A202, review 03 ``level_sides``).
+TIP_SMOOTHING_VERSION = 4
 
 
 def _source_smooth(values: Dict[str, Any]) -> Optional[Dict[str, Any]]:

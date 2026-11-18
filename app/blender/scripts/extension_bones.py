@@ -1301,6 +1301,24 @@ def level_full(p, radius):
     return max(NEUTRAL_SCALE*radius,NEUTRAL_MIN_M,p['tip_diameter']/2+p['tip_wall']+LEVEL_MARGIN_M)
 
 
+def source_passes(origin, targets, p, radius, full):
+    """The flat subdivision passes of the source region around ``origin``
+    (predicates for ``subdivide_where``; review 03 level_sides). Neutral pass
+    i (radius ``NEUTRAL_SUBDIVIDE[i] x full``, descending) cuts an edge whose
+    midpoint lies in its disc AND where fewer than i + 1 of the stub's passes
+    (``subdivide_radii x radius`` around a placed tip in ``targets``) have
+    cut already — so every point ends with as many cuts as the finer of the
+    two would give it alone, never more. The rule before counted the stub
+    passes that reached the source POINT and skipped that many neutral passes
+    for the whole disc, leaving the levelled band beyond the stub coarse."""
+    tips = [t for t in targets if t is not None]
+    stub = [level*radius for level in p['subdivide_radii']]
+    def cut_by_stub(point):
+        return sum(1 for r in stub if any((point-t).length <= r for t in tips))
+    return [lambda point,r=level*full,i=i: (point-origin).length <= r and cut_by_stub(point) < i+1
+            for i,level in enumerate(NEUTRAL_SUBDIVIDE)]
+
+
 def level_sides(meshes, p, radius, sources, placed=None):
     """Level each side's source bump onto the surface around it
     (``level_surface``) at ``sources`` — the apex the source group located
@@ -1323,16 +1341,13 @@ def level_sides(meshes, p, radius, sources, placed=None):
     origins = [Vector(row['tip']) for row in sources]
     targets = [Vector(row['tip']) for row in placed] if placed else [None]*len(origins)
     full = level_full(p,radius)
-    # A source the stub's subdivision already reached takes only the passes
-    # it still lacks, so the region is never cut finer than either would cut
-    # it alone.
+    # A source region the stub's subdivision already covers takes only the
+    # passes it still lacks, so the region is never cut finer than either
+    # would cut it alone (``source_passes``).
     for o in origins:
-        done = sum(1 for level in p['subdivide_radii']
-                   if placed and any((o-t).length <= level*radius for t in targets))
-        passes = [level*full for level in NEUTRAL_SUBDIVIDE][done:]
-        if passes:
-            for mesh in meshes:
-                subdivide_around(mesh,[o],passes)
+        passes = source_passes(o,targets if placed else [],p,radius,full)
+        for mesh in meshes:
+            subdivide_where(mesh,passes)
     tree = world_tree(meshes)
     inner = inner_walls(meshes,origins+[t for t in targets if t is not None],radius,p,tree)
     frames = [tip_frame(meshes,o,p,radius,inner,tree) for o in origins]

@@ -21,7 +21,7 @@ The script's metrics of T (the numbers measured on the Kira copy, see a43-report
 ``tip_normals = {region_mm 40, inverted [3, 0], off_60 [7, 0]}``; per side ``source_level`` (Ruling A53: the source
 bump above the fitted surface before → after and the placed tip's distance from the source apex — the A53 Kira copy):
 ``{bump_mm [1.81, 0.0], tip_from_source_mm 0.0}`` and ``{bump_mm [3.431, 0.0], tip_from_source_mm 0.0}``. ``V`` below
-is ``TIP_SMOOTHING_VERSION`` (2 since Ruling A53, 3 since A199).
+is ``TIP_SMOOTHING_VERSION`` (2 since Ruling A53, 3 since A199, 4 since A202).
 
 [1] Marker missing → due. The sidecar's extension state is current (same fingerprint, applied, source current) and
     has NO ``tip_smoothing``: ``tip_smoothing_due(None, ["T"])`` True; ``model_tip_smoothing_due`` True;
