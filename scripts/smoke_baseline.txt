@@ -1,0 +1,74 @@
+# Known-red smoke checks — read by scripts/run_smokes.py, one line per smoke: name<TAB>reason.
+# A smoke listed here is red today for the stated reason; any OTHER red smoke is a regression.
+# Reason tags: REAL = may show a product bug · STALE = pins an old expectation · ENV = machine/time/load · ? = unread.
+# Remove a line as soon as the smoke passes ("NOW GREEN" in the runner output). Sorted by name.
+smoke_artefact_gc	STALE: front_texture_signature of the fixture outfits is '' (texture keys now carry paint_region etc., A127 9df0b744a); the GC expectations need re-deriving
+smoke_base_body_outfit	STALE: pins the pre-A175 dressed-view pipeline (no turn step, second picture = dressed front, draft prompt naming the clothes); A175 (070594e79) changed all of it — new expectations need a full re-derivation
+smoke_base_body_side_views	STALE: pins the pre-A175 render list (no outfit_back_turn per back/side view); A175 (070594e79) — needs a re-derivation of renders/occasions/back_view/stems
+smoke_docs_scene_render_readme	REAL: packages/scene-render README misses 120 exports and 7 module rows
+smoke_docs_skill_core_api	REAL: docs/skill-core-api.md signatures drifted (appearance_suffix, prompt_fragments, TaskQueue.submit, generate_from_input, is_temporary_npc)
+smoke_extension_rig_p3	STALE: seeds a stored outfit model and expects the worldmap to serve it (model_sig); since b25bbbe39/A119 a humanoid is served only its current figure's model or the plain body — fixture needs a figure-exact model
+smoke_extension_rig_pivot	ENV: opt-in tool, not a standalone check: requires --model/--declaration/--group of a real rigged asset (argparse exit 2 without)
+smoke_extension_rig_real	ENV: opt-in tool: requires RUN_EXTENSION_RIG_REAL=1 and --model/--declaration/--group of a real asset
+smoke_extension_rig_robustness	ENV: opt-in tool: requires --model/--declaration/--group of a real rigged asset
+smoke_fbx_importer_parity	STALE: one-off parity proof vs the pinned pre-C++-importer scripts (a98f9ed5) compares WHOLE result dicts; later intentional output fields (turn_deg 339af01ee, shift_cm 6d1835805, and more) break it. Not deleted: its Blender per-take travel (+0.1/-0.2 m), sparse-take and multi-layer-rejection checks exist nowhere else
+smoke_foot_pose_call_sites	REAL: new clip path frontend/src/tabs/poses/PlacePreview.tsx (00702ff32, A110) calls bindRelativeClip without applyFootPose/plantFootPose: a shod figure in the place preview plays bare-foot tracks (or the site needs an explicit exemption)
+smoke_footwear_hem	REAL: layered-over trousers sit 0.2 mm (z) / 1.2 mm (x) inside the hand-derived shaft bound; red already at its own commits 004728b08 and b25bbbe39 (tree snapshots) — the derivation or the layering margin is off, unresolved
+smoke_footwear_refit	STALE: A107 (b1670f752) keys fits on geometry, not file bytes: the fixture's "body change" is a byte-only repack (new generator) and no longer makes the fit stale
+smoke_garment_chain	STALE: the own-mesh dress fixture is now refused by the fit gates (max_push_m 0.216 > 0.1, deep_push_share 0.50 > 0.12, new_edge_max_m 0.41 > 0.17) after the fit changes A174-A199; not re-derived
+smoke_garment_clothing_back	STALE: the back draft call changed with A175 (turn + cut-out step, 070594e79/26a3ea579)
+smoke_garment_fit_per_body	STALE: assembly tiers 'none' and no fits on body A — figure/assembly rework (A119 and later); not re-derived
+smoke_garment_layering	STALE: assembled coat entry ("over" key, sha) changed with A192 (71d6a896a outer over top over underwear)
+smoke_garment_outfit	STALE: reads Figure.in_body_own and the interim render step, both gone with A119 (0601436ce)
+smoke_garment_refit_source	STALE: same dress fixture as smoke_garment_chain, refused at fit
+smoke_garment_routes	STALE: hair payload and footwear gate limits changed since the smoke was written
+smoke_garment_store	STALE: "bad view" no longer raises: the view set grew (A185 garment_set GARMENT_VIEWS, 91f4908bf)
+smoke_garment_wardrobe_routes	STALE: clothing gate limits and the "no base model" status text changed
+smoke_gateway_503_mapping	REAL: C7a/C7d: after three 404 polls the job is rejected without the expected cancel POST; red already at its own commit 5ffbe7624 (tree snapshot)
+smoke_hair_strands_graft	STALE: [4] the build's sidecar no longer carries the strand attributes record the smoke expects; not re-derived
+smoke_heel_pose	REAL: guard hit: WardrobeGarment.tsx shows the served figure (figureNow.served_url, A136 b4787f2c7) in a viewer without footPose — a shod figure there plays bare-foot tracks
+smoke_hub_job_resume	STALE: B3 improvement-engine doubles are behind several API changes (store rows carry forced, ImprovementType needs_media/subject_character, the image service .pool for face_retexture routing); stopped after three layers
+smoke_i18n_orphans	REAL: orphan de.json key "Dressed front edit of the outfit's full-body reference failed" (shared/languages/de.json)
+smoke_image_routing_migration	STALE: _seed_default_mesh_backends appends quadruped-local to every existing list (d4aa4edd8/62c7b7b51, its docstring) and seeds 12 entries; C3 pins (False,1) / (True,11) / an emptied list staying [] — owner to confirm "emptied stays empty" vs the quadruped addition
+smoke_improvement_base_refresh	STALE: estimate of an older-prompt base refresh is 8 hub jobs (was 7): the full-body reference step (A87 c24544018) adds one
+smoke_influence_sources	REAL: run_turn regressions: "SKIP private prose lost its published speech", "Published tool-only speech lost its extraction", two outgoing sources -> None — not root-caused
+smoke_intent_shared_travel_consent	REAL: after JoinParty on the shared-trip invitation the intent is done and both stand in the kitchen, but the companion is in no party (get_party_of None) — not root-caused (smoke from 2026-10-18)
+smoke_interact_answer	STALE: "provider registered": the open-questions provider is not registered by importing plugins.interact.register in a world without schema ("no such table: characters"); not re-derived
+smoke_migrate_instance_config	STALE: the seeded routing now carries the newer occasions (base_front, base_view, outfit_*, ...); the expected chain set predates them
+smoke_model3d_stale_base	STALE: A119/b25bbbe39 serving rule: a humanoid is never served another figure's stored model, so the "stale older base" fixture model is not served
+smoke_model_overview	STALE: the fixture garment's steps shape no longer matches annotate_garment (int instead of a view map)
+smoke_model_rerig	STALE: get_model3d_options gained keys (face_cleanup, face_source, face_controls, collision_*, mesh_repair); behind that the rerig flow expects a low/mixamo.glb the fixture never gets — more than one layer, not re-derived
+smoke_motion_convert_fbx	STALE: pins frame counts of live library clips that were re-baked (celebrating.fbx 180 -> 741 in b3d10cb71, a second fixture 926); the docstring derivation (181 - 2 + 1) no longer applies
+smoke_npc_skills	STALE: 36ebf80d5 deliberately replaced the temporary-NPC 19-id brief set by the 26-skill set (incl. act, setlocation, go_to_character, outfit_change, prop_action, read_item); the smoke's hand-derived set, in-repo set and closed-list rules need re-deriving by the owner
+smoke_outfit_body_full_views	STALE: A175 turn step: the back of an outfit body renders a "_turn" image first (an extra image job)
+smoke_outfit_body_mesh	STALE: A175 turn step: 3 image jobs instead of 2
+smoke_outfit_body_mesh_items	STALE: A175 turn step: the build also renders the "turn" view
+smoke_outfit_body_mode_switch	STALE: the Build plan gained base_repair (A34 mesh repair) and a later step aborts (rc -6, a model sidecar missing); not re-derived
+smoke_outfit_rebuild_cost	STALE: "dressed front current" False: dressed views are edits of the base view with the outfit picture second since A125 (c510edc7c)
+smoke_painted_body_reachability	STALE: same as smoke_artefact_gc: the fixture's texture node T1 is not found (texture signature ''), not re-derived
+smoke_palm_axes	STALE: fbx_clip.run opens the rest FBX through the clip loader now, past the smoke's stubbed seams (_load_source, _rest_reference): "Cannot open file 't.fbx'"
+smoke_party_trip_lifetime	ENV: time-dependent: the fresh world's game clock sits near the epoch and game_time() - 1 s raises (GameTime cannot be before the epoch) when the step comes within the first game second — red alone, green in the --jobs 4 run
+smoke_picture_identity_a94	STALE: the identity edit block wording changed after A94 ("..., hair, facial hair and body ..., natural matte look")
+smoke_profile_imagegen_default	REAL: the face description and an explicit dialog prompt no longer reach the profile-picture consumer ('' instead of the text) — not root-caused
+smoke_profile_lost_update	REAL: [2] the stat delta does not land ({'stamina': 80}, expected 50) — same symptom as smoke_stat_hourly [j]
+smoke_prop_action_review	STALE: unittest review cases: admission expects 'approaching' (gets 'active') and the planner test errors — prop-action engine changed since; not re-derived
+smoke_props_areas	STALE: [14] a failed area run on a mesh-less fixture now still names auto areas; areas_info busy-Blender case changed
+smoke_reference_front	STALE: edit-block wording changed (bald + "natural matte look"), and the routed backend in the fixture takes no reference image
+smoke_refit_bypass_queue	STALE: A191 (d778acb7d): cancelling the FIFO's run in flight no longer raises RunStarted, it stops the run — the smoke's flow after that needs re-deriving
+smoke_refit_selected_body	STALE: [4e] the fit settings dict gained keys (shell_*, sleeves_*, shaft ...) the expected piece settings lack
+smoke_run_queue_cancel	STALE: A191 (d778acb7d) deliberately made the FIFO's run in flight cancellable (answer gains "stopping"); the 409 for a running CPU re-fit in the FIFO predates it — the route answer (200, None) still needs re-deriving
+smoke_scene_signature_superset	STALE: the scene signature inputs changed (equal inputs no longer give the [M0] hash; a byte-identical sidecar rewrite changes it) — not root-caused, may be REAL
+smoke_sleeve_fit	STALE: [6] normalise of the sleeve settings changed; not re-derived
+smoke_stat_hourly	REAL: [j] apply_effects("b", {"stamina_change": -10}, source="item:Tea") changes nothing ({}) for a declared stamina stat; smoke_profile_lost_update shows the same (stat delta not landing) — probably since 1a059cad6 (transactional action effects)
+smoke_stat_skill_costs	STALE: prepare fixed (Request double); play_scene_photo is now an async job (accept_photo, 202, user["id"]) — the photo cost expectation needs re-deriving
+smoke_texture_body_reuse	STALE: A175 turn step: 3 image jobs instead of 2
+smoke_tip_off_mesh_only	REAL: [4] normals after tip with offset: 49 inverted / 85 off >60 deg at HEAD; passes alone at 40013ae71 (HEAD~1) — regression by de54012a3 (triangulate every quad after the tip subdivision, TIP_SMOOTHING_VERSION 3)
+smoke_tool_step_prompt	STALE: tool_step_presence now reads perception.addressable_for; the smoke patches the per-character readers it used to read (roster/places), so the expected roster no longer arrives — not re-derived
+smoke_tool_turn_availability	REAL: PropAction brief in plugins/set_pose/templates/llm/skills/prop_action.md is 211 chars (> 200 limit, since 88649a49e); fixture part fixed: prop-action runs carry members (G2c be09adc7e)
+smoke_travel_beat	STALE: places compose twice per fingerprint ([['l','l']]) — the travel-beat place cache changed; not root-caused
+smoke_travel_ticker	STALE: a follower's own journey now survives the leader's arrival and the drag hook moves followers differently (party/journey rework 9b920eaa0); not re-derived
+smoke_view_prompts_no_clothing	REAL: guard hit: unreviewed view-change wordings base_body.ANGLE_LORA_PROMPTS, base_body.TURN_PROMPTS, model_overview.MESH_VIEW_MISMATCH and a second fragment .format in garment_clothing.edit_prompt — each must be checked to name no clothing and registered in the smoke's owner lists
+smoke_world_props	STALE: fix_euler is read per resolved variant since f192c580d; the fixture dials the rotation on the primary only and the row draws variant 1; red already at its own last commit 1e5459e63
+smoke_worldmap_fog_first	STALE: an unknown location is no longer delivered/loaded the way the smoke expects (fog rules changed); not root-caused
+smoke_worldmap_model_sig	STALE: the worldmap payload no longer carries model_sig for a meshed NPC the way the fixture builds it (A119 serving rule); not re-derived
+smoke_worldmap_profile_loads	STALE: the admin/fogged payloads are no longer canonical-JSON identical between the two load paths; not root-caused
