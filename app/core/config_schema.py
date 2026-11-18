@@ -630,7 +630,9 @@ SECTIONS = {
                 "choices": ["auto", "internal", "external"],
                 "default": "auto",
                 "description": "How pose-matching embeddings are produced. "
-                               "auto = built-in model if no external embedding model is routed (works out of the box). "
+                               "auto = built-in model if no external embedding model is routed (works out of the box); "
+                               "once one is routed, an outage of it never switches to the built-in model — "
+                               "embeddings return no vector until it is back (pose matching falls back to alias equality). "
                                "internal = always the built-in ONNX model (fastembed, CPU). "
                                "external = only the LLM-routed 'Pose Embedding' provider.",
             },

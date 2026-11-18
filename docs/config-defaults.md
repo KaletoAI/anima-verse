@@ -44,7 +44,9 @@ call waits for its cache lane, however long the lanes keep it there (a granted s
 lane re-books it at the grant); an unsent reservation outside those waits expires after one window.
 External embedding requests book no slot, and their routing ignores the quota, so the
 embedding model never changes with load: a full window or a 429 waits up to
-`embedding.max_wait_seconds` (default **5**), then that call returns no vector.
+`embedding.max_wait_seconds` (default **5**), then that call returns no vector. An outage of
+a routed embedding provider (unavailable, model cooldown) does not switch it either: `auto`
+stays external and returns no vector until the route is back.
 If the whole chain is blocked solely by quota, supported callers wait for the
 earliest slot. HTTP 429 gates the provider until Retry-After (otherwise the
 window end, or 60 seconds with no configured quota), without a health cooldown.

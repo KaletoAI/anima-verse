@@ -9,12 +9,16 @@ omitted; no crash, no queue block, ever.
 Backend choice via ``config.embedding.backend``:
   - ``auto`` (default): the external model when the ``pose_embedding`` task is
     routed, otherwise the built-in ONNX model. That makes catalog matching work
-    out of the box without an external embedding endpoint.
+    out of the box without an external embedding endpoint. A route that is
+    configured but out right now (provider unavailable, model cooldown) is an
+    OUTAGE, not "no route": the choice stays external and no vector comes back
+    until the route is up again.
   - ``internal``: always the built-in fastembed/ONNX model (CPU).
   - ``external``: only the routed ``/v1/embeddings`` provider.
 
-The choice never follows momentary LOAD: a provider whose request quota is
-full, or that answers HTTP 429, stays the chosen model. The call waits for a
+The choice never follows momentary LOAD or an OUTAGE: a provider whose
+request quota is full, or that answers HTTP 429, stays the chosen model, and
+an unreachable route yields ``None`` rather than the built-in model. The call waits for a
 slot within ``embedding.max_wait_seconds`` and otherwise returns ``None``; it
 never answers with the other model's vector, because vectors of two models
 are not comparable and every stored vector is stamped with
@@ -291,7 +295,8 @@ def effective_backend(embedding_cfg: Optional[dict] = None) -> str:
 
     The ONE place the three-way rule of ``config.embedding.backend`` is
     resolved — ``auto`` means external when the ``pose_embedding`` task is
-    routed and reachable, internal otherwise. ``embedding_cfg`` is the
+    routed (reachable right now or not, see :func:`_external_configured`),
+    internal otherwise. ``embedding_cfg`` is the
     ``embedding`` section (the admin form validates an unsaved one);
     ``None`` reads the live config.
     """
@@ -330,8 +335,10 @@ def _route():
     """``(kind, model id, inst, provider)`` in effect right now — the ONE
     resolution ``embed``/``embed_many`` and ``current_model_id`` share, so the
     stamp and the vector always name the same model. ``kind`` is
-    ``internal`` or ``external``; an unroutable explicit ``external`` gives
-    ``("external", "", None, None)``."""
+    ``internal`` or ``external``; an unroutable explicit ``external``, and an
+    ``auto`` whose configured route is out right now, give
+    ``("external", "", None, None)`` — no model, no vector, never the
+    built-in model in its place."""
     cfg = config.get("embedding", {}) or {}
     backend = (cfg.get("backend") or "auto").strip().lower()
     internal = ("internal", "internal:" + internal_model_id(cfg), None, None)
@@ -341,6 +348,9 @@ def _route():
     if inst is not None and prov is not None:
         return ("external", _external_model_id(inst), inst, prov)
     if backend == "external":
+        return ("external", "", None, None)
+    if _external_configured():
+        _log_route_out()
         return ("external", "", None, None)
     return internal
 
@@ -527,8 +537,54 @@ def _resolve_external():
 
 
 def _external_configured() -> bool:
-    inst, prov = _resolve_external()
-    return inst is not None and prov is not None
+    """Whether ``pose_embedding`` HAS a route, whether or not it can serve now.
+
+    True when the task is enabled and an enabled routing entry for it (or for
+    its ``fallback_parent`` chain, as ``resolve_llm`` follows it) names a model
+    on a provider that is loaded — not switched off in the admin — and has an
+    API base. Availability and model cooldown are deliberately NOT asked:
+    those are an outage, and ``auto`` must not switch to the built-in model
+    for one (vectors of two models are not comparable). Never raises."""
+    try:
+        from app.core import llm_router as router
+        from app.core.llm_task_state import is_enabled
+        task = "pose_embedding"
+        if not is_enabled(task):
+            return False
+        routing = router._load_routing()
+        candidates = router._candidates(task, routing)
+        while not candidates:
+            task = router.fallback_parent(task)
+            if not task or not is_enabled(task):
+                return False
+            candidates = router._candidates(task, routing)
+        off = router.disabled_providers()
+        pm = router.get_provider_manager()
+        for _, entry in candidates:
+            name = (entry.get("provider") or "").strip()
+            if not name or not (entry.get("model") or "").strip() or name in off:
+                continue
+            prov = pm.get_provider(name)
+            if prov is not None and (prov.api_base or "").strip():
+                return True
+        return False
+    except Exception as e:
+        logger.debug("embedding route check failed (%s): %s", type(e).__name__, e)
+        return False
+
+
+# Monotonic stamp of the last "route is out" INFO line (one per minute).
+_OUTAGE_LOGGED_AT = 0.0
+
+
+def _log_route_out() -> None:
+    global _OUTAGE_LOGGED_AT
+    now = time.monotonic()
+    if now - _OUTAGE_LOGGED_AT >= 60:
+        _OUTAGE_LOGGED_AT = now
+        logger.info("Embedding route (pose_embedding) is configured but unavailable right now; "
+                    "no vectors until it is back (backend auto never switches to the built-in "
+                    "model on an outage)")
 
 
 def _max_wait_seconds() -> float:

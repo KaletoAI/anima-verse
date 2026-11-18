@@ -55,8 +55,19 @@ external vector [1.0, 0.0])
 [7] Router flag. With E's window full: resolve_llm(reserve=False) is None
     (the old lookup), consult_quota=False picks E, used is unchanged by both,
     and consult_quota=False together with reserve=True raises ValueError.
-[8] Health is not load: E unavailable makes auto fall back to the built-in
-    model id, as before (an outage, not a busy provider).
+[8] An outage does not switch the model either (follow-up of review 11#1):
+    E is routed for pose_embedding, so with auto the choice stays external.
+    a) E unavailable: model id "" (no model, the stamping callers skip),
+       effective backend "external", embed() None, embed_many(["a","b"])
+       [None, None], embedder_for(current id)("x") None, no post, the
+       internal model never used.
+       Old code: ``internal:BAAI/bge-small-en-v1.5`` and [9.0].
+    b) E available but its model in cooldown: the same, id "" and None.
+    c) No outage, no route: E switched off in the admin (disabled_providers)
+       -> auto uses the built-in model, id ``internal:BAAI/bge-small-en-v1.5``
+       and embed() [9.0]; the same with the routing list empty, and with the
+       pose_embedding task disabled.
+    d) E back: id ``external:emb-model`` and the external vector again.
 
 Exit code 0 = all checks passed, 1 = at least one failed.
 """
@@ -244,14 +255,44 @@ with ExitStack() as stack:
         raised = True
     check("reserve + consult_quota=False raises", raised, True)
 
-    print("\n[8] an unavailable provider is an outage, not load")
+    print("\n[8] an outage of the routed provider does not switch the model")
+    internal_id = "internal:" + embedding.DEFAULT_INTERNAL_MODEL
+    now[0] = 4000.0
+
+    def outage_checks(label):
+        reset()
+        check(f"{label}: model id", embedding.current_model_id(), "")
+        check(f"{label}: effective backend", embedding.effective_backend(), "external")
+        check(f"{label}: embed -> None", embedding.embed("x"), None)
+        check(f"{label}: embed_many -> all None", embedding.embed_many(["a", "b"]), [None, None])
+        check(f"{label}: pinned embedder -> None",
+              embedding.embedder_for(embedding.current_model_id())("x"), None)
+        check(f"{label}: no post", len(posts), 0)
+        check(f"{label}: internal model never used", internal_calls, [])
+
     E.available = False
-    check("auto -> built-in id", embedding.current_model_id(),
-          "internal:" + embedding.DEFAULT_INTERNAL_MODEL)
+    outage_checks("a) unavailable")
     E.available = True
+    with patch.object(router, "_model_cooled_down", return_value=True):
+        outage_checks("b) cooldown")
+
+    reset()
+    with patch.object(router, "disabled_providers", return_value={"E"}):
+        check("c) switched off -> built-in id", embedding.current_model_id(), internal_id)
+        check("c) switched off -> built-in vector", embedding.embed("x"), [9.0])
+    saved = list(routing)
+    routing.clear()
+    check("c) no route -> built-in id", embedding.current_model_id(), internal_id)
+    routing.extend(saved)
+    with patch("app.core.llm_task_state.is_enabled", return_value=False):
+        check("c) task disabled -> built-in id", embedding.current_model_id(), internal_id)
+
+    reset()
+    check("d) back: model id", embedding.current_model_id(), "external:emb-model")
+    check("d) back: vector", embedding.embed("x"), EXT)
 
 print()
 if FAILED:
     print(f"FAILED: {len(FAILED)} check(s): {', '.join(FAILED)}")
     sys.exit(1)
-print("PASS: embeddings keep their model under load and wait within the budget")
+print("PASS: embeddings keep their model under load and on an outage, and wait within the budget")
