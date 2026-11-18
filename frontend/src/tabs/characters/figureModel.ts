@@ -1220,6 +1220,9 @@ export interface TemplateProgress {
   steps: ModelStep[]
   /** A172: what the drape in flight does now (`garment_template.live_progress`); null when it is not draping. */
   live?: TemplateLive | null
+  /** A200: how the own-mesh pieces under it took part in the ready drape (`full` / `shrunk` / `dropped`) and the
+   *  attempts that failed a stretch / poke gate first; absent without own-mesh pieces under it. */
+  inner_collider?: { mode: 'full' | 'shrunk' | 'dropped'; failed: { mode: string; error: string }[] } | null
 }
 
 /** A172: the live step of a drape in flight. `label` is the stage (a translatable key); frame / pose / index are

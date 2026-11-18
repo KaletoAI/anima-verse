@@ -1474,10 +1474,19 @@ def run(a):
     spec = prm["spec"]
     bod = spec.get("bodice")
     lower = []
+    offsets = list(prm.get("lower_offsets") or [])
     for i, payload in enumerate(prm.get("lower_shapes") or []):
         key = f"lower_{i}"
         if inp.get(key):
-            lower.append(load_lower(inp[key], arm, payload))
+            lo = load_lower(inp[key], arm, payload)
+            off = float(offsets[i]) if i < len(offsets) and offsets[i] else 0.0
+            if off:
+                # A200 fallback: an own-mesh collider shrunk toward the body (negative = inward, along its normals)
+                lo.data.update()
+                for v in lo.data.vertices:
+                    v.co = v.co + v.normal * off
+                lo.data.update()
+            lower.append(lo)
     bco, _bn, btri = gd.world_coords(body)
     # the radius tree is the torso + legs only: a T-posed arm beside the chest band would
     # otherwise be the "body" a ray from outside meets first (the band then spans the arms)

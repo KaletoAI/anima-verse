@@ -342,6 +342,14 @@ function TemplateProgressBox({ character, progress, onStarted }: {
         </div>
       ) : null}
       <ModelSteps steps={p.steps} />
+      {p.inner_collider && p.inner_collider.mode !== 'full' ? (
+        <div className="ga-hint" data-inner-collider={p.inner_collider.mode} style={WARN}
+          title={p.inner_collider.failed.map((f) => `${f.mode}: ${f.error}`).join('\n') || undefined}>
+          {t(p.inner_collider.mode === 'shrunk'
+            ? 'The pieces under it were made slimmer for the drape: it failed a check over them as they are'
+            : 'Draped without the pieces under it: it failed a check over them — their parts under it are hidden')}
+        </div>
+      ) : null}
       {!p.worn ? (
         <div className="ga-hint">{t('Not worn now — the Build drapes it once it is worn')}</div>
       ) : p.state === 'missing' || p.state === 'failed' ? (

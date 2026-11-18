@@ -6529,6 +6529,8 @@
     "A package card holds edits that were never saved. Opening another character discards them.": "Eine Paket-Karte enthält Änderungen, die nie gespeichert wurden. Einen anderen Charakter zu öffnen verwirft sie.",
     "The open clip has edits that were never saved (dials, heights, contacts, bend limits or root angle). Opening another clip or set discards them.": "Der offene Clip hat Änderungen, die nie gespeichert wurden (Regler, Höhen, Kontakte, Biegegrenzen oder Wurzelwinkel). Einen anderen Clip oder ein anderes Set zu öffnen verwirft sie.",
     "The Clip Library holds edits of the open clip that were never saved. Leaving it discards them.": "Die Clip-Bibliothek enthält Änderungen am offenen Clip, die nie gespeichert wurden. Wer sie verlässt, verwirft sie.",
-    "A package card holds edits that were never saved. Opening another tab discards them.": "Eine Paket-Karte enthält Änderungen, die nie gespeichert wurden. Einen anderen Tab zu öffnen verwirft sie."
+    "A package card holds edits that were never saved. Opening another tab discards them.": "Eine Paket-Karte enthält Änderungen, die nie gespeichert wurden. Einen anderen Tab zu öffnen verwirft sie.",
+    "The pieces under it were made slimmer for the drape: it failed a check over them as they are": "Die Teile darunter wurden fürs Drapieren schlanker gemacht: über ihnen, wie sie sind, fiel eine Prüfung durch",
+    "Draped without the pieces under it: it failed a check over them — their parts under it are hidden": "Ohne die Teile darunter drapiert: über ihnen fiel eine Prüfung durch — ihre Teile darunter werden ausgeblendet"
   }
 }

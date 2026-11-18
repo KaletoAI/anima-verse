@@ -1110,14 +1110,16 @@ def piece_progress(character_name: str, item_id: str, *, profile: Optional[Dict[
     ]
     return {"state": state, "reason": drape["reason"], "built_at": record.get("created_at") or "",
             "error": str(record.get("error") or "") if drape["state"] == "failed" else "", "worn": worn, "steps": steps,
-            "live": live if state == "running" else None}
+            "live": live if state == "running" else None,
+            "inner_collider": record.get("inner_collider") if drape["state"] == "ready" else None}
 
 
 # --- the drape run ----------------------------------------------------------------
 
 def build_args(params: Dict[str, Any], spec: Dict[str, Any], *, item_id: str, render: bool = False,
                poses: Optional[Tuple[str, ...]] = None, quality_scale: float = 1.0,
-               corrective: bool = True, lower_shapes: Optional[List[Any]] = None) -> Dict[str, Any]:
+               corrective: bool = True, lower_shapes: Optional[List[Any]] = None,
+               lower_offsets: Optional[List[float]] = None) -> Dict[str, Any]:
     """The ``params`` of one ``garment_template_build`` run. ``corrective`` False = the A138 drape
     (nearest-face weights, no pose shapes) — kept for the before/after measurement. ``lower_shapes`` = the pose-shape
     payloads of the lower drapes (inputs ``lower_<i>``; Ruling A142 layering), in input order."""
@@ -1135,7 +1137,7 @@ def build_args(params: Dict[str, Any], spec: Dict[str, Any], *, item_id: str, re
             "frames": BODICE_FRAMES if has_bodice(params) else 50, "thickness": 0.004,
             "smooth_weights": bool(corrective), "shape_groups": groups,
             "shape_poses": [p for g in groups if g["name"] == "legs" for p in g["poses"]],
-            "lower_shapes": list(lower_shapes or [])}
+            "lower_shapes": list(lower_shapes or []), "lower_offsets": list(lower_offsets or [])}
 
 
 def judge_build(data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1242,7 +1244,8 @@ def run_drape(body_glb: Path, params: Dict[str, Any], sources: Dict[str, str], *
               out_dir: Path, render: bool = False, poses: Optional[Tuple[str, ...]] = None,
               timeout_s: int = 300, corrective: bool = True,
               lower: Optional[List[Tuple[Path, Any]]] = None,
-              live: Optional[Tuple[str, str]] = None) -> Dict[str, Any]:
+              live: Optional[Tuple[str, str]] = None,
+              lower_offsets: Optional[List[float]] = None) -> Dict[str, Any]:
     """Measure, make the panels and drape on ``body_glb`` (one Blender run; one retry with doubled
     quality when the stretch is above ``RETRY_STRETCH``). ``lower`` = [(drape GLB, its pose-shape payload)] of the
     lower layers the piece drapes over (colliders, Ruling A142). Returns ``{ok, error, data, glb, rows, outcome,
@@ -1271,7 +1274,8 @@ def run_drape(body_glb: Path, params: Dict[str, Any], sources: Dict[str, str], *
         for i, (path, _payload) in enumerate(lower or []):
             inputs[f"lower_{i}"] = Path(path)
         args = build_args(params, spec, item_id=item_id, render=render, poses=poses, quality_scale=scale,
-                          corrective=corrective, lower_shapes=[payload for _p, payload in lower or []])
+                          corrective=corrective, lower_shapes=[payload for _p, payload in lower or []],
+                          lower_offsets=lower_offsets)
         if live is not None:
             progress_file.unlink(missing_ok=True)
             args["progress_file"] = str(progress_file)
@@ -1307,6 +1311,46 @@ def run_drape(body_glb: Path, params: Dict[str, Any], sources: Dict[str, str], *
     return {"ok": not bad and bool(glb), "error": error or ("" if glb else "no GLB written"), "data": data,
             "glb": glb, "rows": rows, "outputs": res.get("outputs") or {},
             "outcome": oc.REJECTED if bad else (oc.OK if glb else oc.CRASHED), "log_tail": ""}
+
+
+#: A200 fallback: the inward offset of an own-mesh collider in the second attempt (metres, along its normals).
+INNER_SHRINK_M = -0.008
+#: The gate rows whose failure makes a drape with own-mesh colliders try again with less of them.
+FALLBACK_GATES = ("stretch_max", "poke_share")
+
+
+def _gate_failed(result: Dict[str, Any]) -> bool:
+    """Whether ``result`` (``run_drape``) failed a stretch or poke gate (not the wall, not Blender itself)."""
+    return any(r.get("gate") and not r.get("ok") and str(r.get("check") or "").startswith(FALLBACK_GATES)
+               for r in result.get("rows") or [])
+
+
+def drape_with_fallback(run: Any, drapes: List[Tuple[Path, Any]],
+                        own: List[Tuple[Path, Any]]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """A200: drape with the own-mesh colliders ``own`` after the template ``drapes``; when that fails a stretch / poke
+    gate, once more with them shrunk ``INNER_SHRINK_M`` toward the body, and when that fails too, without them
+    (the template drapes only, as before A200 — the assembly still hides the inner piece's faces under the drape).
+    ``run(colliders, offsets, sub)`` runs one drape (``sub``: its scratch sub-folder). Returns ``(result,
+    {mode: "full" / "shrunk" / "dropped", failed: [{mode, error, stretch_max}]})``."""
+    def attempt(mode: str, cols, offsets):
+        return run(cols, offsets, mode)
+    if not own:
+        return attempt("full", drapes, None), {"mode": "full", "failed": []}
+    failed: List[Dict[str, Any]] = []
+    plans = (("full", drapes + own, [0.0] * len(drapes) + [0.0] * len(own)),
+             ("shrunk", drapes + own, [0.0] * len(drapes) + [INNER_SHRINK_M] * len(own)),
+             ("dropped", drapes, None))
+    result: Dict[str, Any] = {}
+    for mode, cols, offsets in plans:
+        result = attempt(mode, cols, offsets)
+        if result.get("ok") or not _gate_failed(result) or mode == "dropped":
+            if failed:
+                logger.info("Template drape: own-mesh colliders %s after %s", mode,
+                            "; ".join(f"{f['mode']}: {f['error']}" for f in failed))
+            return result, {"mode": mode, "failed": failed}
+        failed.append({"mode": mode, "error": str(result.get("error") or ""),
+                       "stretch_max": ((result.get("data") or {}).get("drape") or {}).get("stretch_max")})
+    return result, {"mode": "dropped", "failed": failed}
 
 
 def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None,
@@ -1359,20 +1403,25 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
         if sub["state"] == "ready":
             colliders.append((sub["path"], sub["record"].get("pose_shapes")))
     # A200: the own-mesh pieces under it — their plain-body fit, skinned, no pose shapes
-    colliders += [(fit, None) for _o, fit in own_colliders(character_name, item_id, params["kind"], lower,
-                                                           base_sha=base_sha) if fit is not None]
+    own = [(fit, None) for _o, fit in own_colliders(character_name, item_id, params["kind"], lower,
+                                                    base_sha=base_sha) if fit is not None]
     _live_stage(key, "measure_body")
     from app.blender import outcome as oc
     left_due = ""
     scratch = Path(tempfile.mkdtemp(prefix="av-template-"))
     try:
-        result = run_drape(body, params, sources, item_id=item_id, out_dir=scratch, lower=colliders, live=key)
+        result, inner = drape_with_fallback(
+            lambda cols, offsets, sub: run_drape(body, params, sources, item_id=item_id, out_dir=scratch / sub,
+                                                 lower=cols, live=key, lower_offsets=offsets),
+            colliders, own)
+        colliders = colliders + (own if inner["mode"] != "dropped" else [])
         folder = templates_dir(character_name)
         folder.mkdir(parents=True, exist_ok=True)
         record = {"item_id": item_id, "tsig": sig, "params": params, "version": TEMPLATE_VERSION,
                   "base_signature": base[0], "base_model_sha256": base_sha, "lower": lower,
                   "texture": {k: Path(v).name if k != "source" else v for k, v in sources.items()},
                   "colliders": [Path(c[0]).name for c in colliders],
+                  **({"inner_collider": inner} if own else {}),
                   "metrics": result["data"], "rows": result["rows"], "created_at": utc_now_iso(),
                   "pose_shapes": (result["data"] or {}).get("pose_shapes")}
         if result["ok"]:
