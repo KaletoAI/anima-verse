@@ -920,6 +920,10 @@ def _render_edit_step(character_name: str, item_id: str, fsig: str, step: str, v
     def gate_file(path: Path) -> Dict[str, Any]:
         return _gate_attempt(kind, step, view, path, base_size, gate_args, position, pair_check)
 
+    # A198 (review 05 #3): the accepted image of the step before that this edit is made from — every attempt
+    # records it (``source_sha256``), and only an attempt of that very image is re-gated or offered to "Use this".
+    source_sha = _source_sha(kind, step, source)
+
     if not _accepted(final):
         def regate(path: Path, old: Dict[str, Any]) -> Dict[str, Any]:
             raw = raw_path(path)
@@ -947,7 +951,8 @@ def _render_edit_step(character_name: str, item_id: str, fsig: str, step: str, v
 
         hit = _regate_stored(character_name, item_id, fsig, step, view, kind, final=final, regate=regate,
                              # A190: an attempt made on another base-view variant (hair, arms) is never reused
-                             keep=lambda sidecar: str(sidecar.get("base_variant") or "") == base_variant,
+                             keep=lambda sidecar: (str(sidecar.get("base_variant") or "") == base_variant
+                                                   and _same_source(sidecar, source_sha)),
                              closeness=closeness if position is not None else None)
         if hit is not None:
             return hit
@@ -995,6 +1000,8 @@ def _render_edit_step(character_name: str, item_id: str, fsig: str, step: str, v
         records.append(record)
         if path is not None:
             sidecar = read_record(target.with_suffix(".json"))
+            if source_sha:
+                sidecar["source_sha256"] = source_sha
             write_record(target.with_suffix(".json"), _attempt_sidecar(sidecar, record))
         logger.info("Garment %s %s %s attempt %d: %s %s", character_name, step, view, attempt,
                     "accepted" if record["ok"] else "refused", record.get("reasons") or "")
@@ -1387,6 +1394,24 @@ class AttemptUnusable(ValueError):
     the accepted one, or a step without attempts)."""
 
 
+def _source_sha(kind, step: str, source: Path) -> str:
+    """The sha256 of the accepted image of the step before that an edit of ``step`` is made from; "" for an edit of
+    the base view (the base is part of the fsig) or a missing file (A198)."""
+    from app.core.base_body import file_sha256
+    spec = (getattr(kind, "EDIT_STEPS", {}) or {}).get(step) or {}
+    if spec.get("source") in (None, "base"):
+        return ""
+    return file_sha256(source)
+
+
+def _same_source(sidecar: Dict[str, Any], source_sha: str) -> bool:
+    """Whether an attempt was made from the source image whose sha is ``source_sha`` (its sidecar's
+    ``source_sha256``, A198). True when either is unknown: an attempt stored before A198 is judged by
+    ``_made_before`` alone, an edit of the base view has no source to compare."""
+    made = sidecar.get("source_sha256")
+    return not made or not source_sha or made == source_sha
+
+
 def _made_before(sidecar: Dict[str, Any], source: Path) -> bool:
     """Whether an attempt (its sidecar's ``created_at``) was rendered before the accepted ``source`` image it
     edits was made (that final's ``created_at``): it was made from an earlier source. False when either time
@@ -1415,7 +1440,7 @@ def attempt_inputs(character_name: str, item_id: str, fsig: str, step: str, view
     spec = (getattr(kind, "EDIT_STEPS", {}) or {}).get(step)
     if spec is None:
         return NO_ATTEMPTS, {}
-    if view == "back" and _drafted(kind, step):
+    if view in DRAFTED_VIEWS and _drafted(kind, step):   # A198: a shell piece's left/right are drafted too (A185)
         front = garment_path(character_name, item_id, fsig, "image", step=step, view="front")
         if not _accepted(front):
             return FRONT_NOT_ACCEPTED, {}
@@ -1429,9 +1454,10 @@ def attempt_inputs(character_name: str, item_id: str, fsig: str, step: str, view
     source = garment_path(character_name, item_id, fsig, "image", step=source_step, view=view)
     if not _accepted(source):
         return SOURCE_NOT_ACCEPTED, {}
-    if _made_before(sidecar, source):
+    sha = file_sha256(source)
+    if not _same_source(sidecar, sha) or ("source_sha256" not in sidecar and _made_before(sidecar, source)):
         return EARLIER_SOURCE, {}
-    return "", {source.name: file_sha256(source)}
+    return "", {source.name: sha}
 
 
 def use_attempt(character_name: str, item_id: str, fsig: str, step: str, view: str, attempt: int) -> Dict[str, Any]:
@@ -1472,7 +1498,7 @@ def use_attempt(character_name: str, item_id: str, fsig: str, step: str, view: s
         records.append(rec if isinstance(rec, dict) else
                        {"view": view, "ok": False, "reasons": ["no stored attempt"], "attempt": n})
     extra: Dict[str, Any] = {}
-    if view == "back" and _drafted(kind, step):
+    if view in DRAFTED_VIEWS and _drafted(kind, step):
         extra.update({k: sidecar[k] for k in DRAFT_FOLLOW_KEYS if k in sidecar})
     extra["used_by_hand"] = {"at": utc_now_iso(), "attempt": attempt}
     if not passing:
@@ -1561,6 +1587,9 @@ def store_upload(character_name: str, item_id: str, fsig: str, step: str, view: 
     sidecar = {"created_at": utc_now_iso(),
                "uploaded": {"at": utc_now_iso(), "size": list(uploaded.size),
                             "sha256": hashlib.sha256(data).hexdigest()}}
+    source_sha = _source_sha(kind, step, source)
+    if source_sha:
+        sidecar["source_sha256"] = source_sha
     write_record(target.with_suffix(".json"), _attempt_sidecar(sidecar, record))
     logger.info("Garment %s %s %s of %s: image uploaded as attempt %d (%s %s)", character_name, step, view, item_id,
                 slot, "passing" if record.get("ok") else "refused", record.get("reasons") or "")
