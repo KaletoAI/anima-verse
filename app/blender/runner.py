@@ -37,6 +37,14 @@ animation studio, the clip repair scripts) shares the server's slots, limit,
 binary and switches only after ``use_instance_config`` bound it to the same
 instance; without it, it runs on the shipped defaults and a private slot
 folder.
+
+**Orphaned job directories** (a host process killed mid-run never reaches
+its ``rmtree``) are swept once per host process, in the background, when its
+first job starts (``sweep_orphan_job_dirs``). Each job directory carries an
+owner marker (``JOB_OWNER_FILE``: host pid, its start time, boot id, pid
+namespace), written before Blender starts; a directory is removed only when
+that owner is provably gone — several independent processes (server, refit
+workers, the animation studio, clip scripts) share the temp folder.
 """
 import contextlib
 import contextvars
@@ -44,9 +52,11 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
@@ -454,6 +464,181 @@ def _spawn(cmd: List[str], timeout: int, env: Dict[str, str]) -> subprocess.Comp
     return proc
 
 
+# --- orphaned job directories ---------------------------------------------------
+
+#: Prefix of every job directory (``tempfile.mkdtemp`` in the temp folder).
+JOB_DIR_PREFIX = "av-blender-"
+#: The owner marker in a job directory: ``{"pid", "start", "boot", "pidns"}``.
+JOB_OWNER_FILE = "owner.json"
+#: Age after which a job directory WITHOUT a marker counts as orphaned. Such a
+#: directory comes from code before the marker (or from a marker write that
+#: failed), so its owner cannot be checked and the age has to stand in for it.
+#: The longest run any caller asks for is 1800 s (the schema maximum of
+#: ``blender_timeout_s``, the studio's build), and before it the directory may
+#: wait for a slot behind a batch of other runs (a clip import) — hours, not
+#: days. A week is far beyond that, and waiting costs only disk: unmarked
+#: directories are a finite legacy set that no current process adds to. The
+#: age is taken from the newest mtime of the directory and its direct entries
+#: (``progress.json`` is rewritten while a run lasts).
+UNMARKED_MAX_AGE_S = 7 * 24 * 3600
+
+_sweep_lock = threading.Lock()
+_sweep_started = False
+
+
+def _proc_read(path: str) -> str:
+    with open(path, encoding="ascii", errors="replace") as f:
+        return f.read()
+
+
+def _proc_stat(pid: int) -> Tuple[str, int]:
+    """``(state, starttime)`` of ``pid`` from ``/proc/<pid>/stat``; raises
+    ``FileNotFoundError`` when no such process exists. The command name may
+    hold spaces and parentheses, so the fields are counted after its LAST
+    ``)``: state is field 3, starttime (clock ticks since boot) field 22."""
+    raw = _proc_read(f"/proc/{pid}/stat")
+    rest = raw[raw.rindex(")") + 2:].split()
+    return rest[0], int(rest[19])
+
+
+def _owner_identity() -> Optional[Dict[str, Any]]:
+    """This process as an owner marker records it; None where that cannot be
+    told (no ``/proc``, i.e. off Linux) — no marker is written then and the
+    sweep does nothing."""
+    try:
+        pid = os.getpid()
+        return {"pid": pid, "start": _proc_stat(pid)[1],
+                "boot": _proc_read("/proc/sys/kernel/random/boot_id").strip(),
+                "pidns": os.readlink("/proc/self/ns/pid")}
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _write_owner_marker(job: Path) -> None:
+    """Mark ``job`` as this process's (written whole, then renamed in, so a
+    sweeper never reads half a marker)."""
+    ident = _owner_identity()
+    if ident is None:
+        return
+    part = job / (JOB_OWNER_FILE + ".part")
+    part.write_text(json.dumps(ident), encoding="utf-8")
+    os.replace(part, job / JOB_OWNER_FILE)
+
+
+def _read_owner_marker(job: Path) -> Optional[Dict[str, Any]]:
+    """The marker of ``job``, None when it is absent, a symlink, not a regular
+    file or not a well-formed marker (then the directory counts as unmarked)."""
+    try:
+        fd = os.open(str(job / JOB_OWNER_FILE), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        with os.fdopen(fd, encoding="utf-8") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                return None
+            data = json.loads(f.read(4096))
+    except (OSError, ValueError):
+        return None
+    if not (isinstance(data, dict) and type(data.get("pid")) is int and type(data.get("start")) is int
+            and isinstance(data.get("boot"), str) and isinstance(data.get("pidns"), str)):
+        return None
+    return data
+
+
+def _owner_gone(marker: Dict[str, Any], me: Dict[str, Any]) -> Optional[bool]:
+    """True when the marker's owner is provably gone, False while it lives,
+    None when it cannot be told (another pid namespace, ``/proc`` unreadable)
+    — only True lets a directory be removed."""
+    if marker["boot"] != me["boot"]:
+        return True  # the machine rebooted since: every process of then is gone
+    if marker["pidns"] != me["pidns"]:
+        return None  # its pids mean something else here
+    try:
+        state, start = _proc_stat(marker["pid"])
+    except FileNotFoundError:
+        return True
+    except (OSError, ValueError, IndexError):
+        return None
+    if start != marker["start"]:
+        return True  # the pid now belongs to a later process
+    return state in ("Z", "X")  # exited, only not reaped yet: runs no job
+
+
+def _newest_mtime(job: Path) -> float:
+    newest = os.lstat(job).st_mtime
+    with os.scandir(job) as it:
+        for entry in it:
+            try:
+                newest = max(newest, entry.stat(follow_symlinks=False).st_mtime)
+            except OSError:
+                pass
+    return newest
+
+
+def sweep_orphan_job_dirs(now: Optional[float] = None) -> List[str]:
+    """Remove the job directories whose host process is gone; returns their
+    paths. Looked at: entries ``JOB_DIR_PREFIX*`` DIRECTLY in this process's
+    temp folder (where ``run`` creates them) that are real directories (a
+    symlink is never followed) owned by this uid. A marked one goes only when
+    ``_owner_gone`` proves its owner gone — never by age, a run may be long; an
+    unmarked one only past ``UNMARKED_MAX_AGE_S``. Does nothing without
+    ``/proc``. A directory that cannot be judged or removed is logged and
+    skipped."""
+    me = _owner_identity()
+    if me is None:
+        return []
+    root = Path(os.path.realpath(tempfile.gettempdir()))
+    uid = os.getuid()
+    now = time.time() if now is None else now
+    with os.scandir(root) as it:
+        names = [e.name for e in it if e.name.startswith(JOB_DIR_PREFIX)]
+    removed: List[str] = []
+    for name in names:
+        job = root / name
+        try:
+            st = os.lstat(job)
+            if not stat.S_ISDIR(st.st_mode) or st.st_uid != uid:
+                continue  # a symlink, a file, another user's
+            if Path(os.path.realpath(job)).parent != root:
+                continue
+            marker = _read_owner_marker(job)
+            if marker is not None:
+                if _owner_gone(marker, me) is not True:
+                    continue
+            elif now - _newest_mtime(job) < UNMARKED_MAX_AGE_S:
+                continue
+            shutil.rmtree(job)  # fd-based on Linux: never follows a link inside
+            removed.append(str(job))
+        except FileNotFoundError:
+            continue  # its owner, or another sweeper, removed it meanwhile
+        except OSError as exc:
+            logger.warning("Blender: orphaned job folder %s not removed: %s", job, exc)
+    return removed
+
+
+def _sweep_once_in_background() -> None:
+    """Start ``sweep_orphan_job_dirs`` once per process, on a daemon thread so
+    no job waits for it; a failure is logged, never raised."""
+    global _sweep_started
+    with _sweep_lock:
+        if _sweep_started:
+            return
+        _sweep_started = True
+
+    def work() -> None:
+        try:
+            gone = sweep_orphan_job_dirs()
+            if gone:
+                logger.info("Blender: removed %d orphaned job folder(s): %s", len(gone), ", ".join(gone))
+        except Exception:  # noqa: BLE001 — housekeeping never fails a job
+            logger.exception("Blender: sweeping orphaned job folders failed")
+
+    try:
+        threading.Thread(target=work, name="blender-job-sweep", daemon=True).start()
+    except Exception:  # noqa: BLE001
+        logger.exception("Blender: could not start the job folder sweep")
+
+
 def run(script: str, *, inputs: Optional[Dict[str, Path]] = None,
         params: Optional[Dict[str, Any]] = None,
         out_dir: Optional[Path] = None,
@@ -484,9 +669,15 @@ def run(script: str, *, inputs: Optional[Dict[str, Path]] = None,
                 "data": {}, "outputs": {}, "seconds": 0.0}
 
     timeout = int(timeout_s or _config("image_generation.blender_timeout_s", 120))
-    job = Path(tempfile.mkdtemp(prefix="av-blender-"))
+    _sweep_once_in_background()
+    job = Path(tempfile.mkdtemp(prefix=JOB_DIR_PREFIX))
     started = time.time()
     try:
+        try:
+            _write_owner_marker(job)
+        except OSError as e:
+            # Unmarked, the folder is swept only past UNMARKED_MAX_AGE_S if left behind.
+            logger.warning("Blender %s: job folder owner marker not written: %s", script, e)
         in_dir = job / "in"
         job_out = job / "out"
         tmp_dir = job / "tmp"
