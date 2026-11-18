@@ -130,7 +130,7 @@ import logging
 import re
 import threading
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
@@ -175,6 +175,17 @@ class BuildPaused(Exception):
     the garment FIFO. The run ends there — neither a failure nor superseded — and is held for the Resume."""
 
 
+class StepError(str):
+    """A step's error text that carries its failure as data (``failure``: ``garment_template.failure_info``) —
+    ``_run_planned`` stores both in ``failed[step]``. Compares and prints as the plain text."""
+    failure: Optional[Dict[str, Any]] = None
+
+    def __new__(cls, text: str, failure: Optional[Dict[str, Any]] = None) -> "StepError":
+        error = super().__new__(cls, text)
+        error.failure = failure
+        return error
+
+
 class StepSuperseded(Exception):
     """A step's pinned figure is no longer the one wanted / delivered (Ruling A18): the run ends there — neither
     a failure nor an error state — and ONE follow-up (``_keep_followup_locked``) re-plans and builds the figure
@@ -203,10 +214,12 @@ class Step:
     failed: str = ""
     #: Base-body work (ruling 8a): why it is listed; only a manual Build runs it.
     manual: str = ""
+    #: ``failed`` as data for the Figure tab (a template drape's ``garment_template.failure_info``), else None.
+    failure: Optional[Dict[str, Any]] = field(default=None, compare=False, hash=False)
 
     def as_dict(self) -> Dict[str, Any]:
         return {"name": self.name, "label": self.label, "jobs": self.jobs, "item_id": self.item_id,
-                "failed": self.failed, "manual": self.manual}
+                "failed": self.failed, "manual": self.manual, "failure": self.failure}
 
     def running_label(self, explicit: bool) -> str:
         """The label while the step runs: a cached chain failure that a manual
@@ -374,7 +387,7 @@ def _template_step(character_name: str, item_id: str, delivered, profile: Dict[s
         return Step("template", label, 0, item_id)
     if state["state"] == "failed":
         return Step("template", label + FAILED_SUFFIX, 0, item_id,
-                    failed=str(state["record"].get("error") or state["reason"]))
+                    failed=str(state["record"].get("error") or state["reason"]), failure=state.get("failure"))
     return None
 
 
@@ -1238,7 +1251,7 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
                                character_name, ", ".join(changed), step.label)
             elif step.failed and automatic:
                 # Ruling 7a: an automatic Build never spends a chain that failed for this input.
-                error = step.failed
+                error = StepError(step.failed, step.failure)
             else:
                 try:
                     if step.name not in UNPINNED_STEPS:
@@ -1280,11 +1293,15 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
                     changed = ["changed"]
             if error:
                 logger.warning("Build %s: %s failed: %s", character_name, step.label, error)
+                failure, error = getattr(error, "failure", None), str(error)
                 entry = failed.get(step.name)
                 if entry is None:
-                    failed[step.name] = {"error": error, "item_id": step.item_id}
+                    failed[step.name] = {"error": error, "item_id": step.item_id,
+                                         **({"failure": failure} if failure else {})}
                 else:
                     entry.setdefault("items", {entry["item_id"]: entry["error"]})[step.item_id] = error
+                    if failure:
+                        entry.setdefault("failures", {})[step.item_id] = failure
                 if step.name in STOP_STEPS or changed:
                     # Ruling C4: a refused view stops the Build here — nothing is meshed, painted or assembled
                     # from what it left; the figure delivered before stays served. Ruling A26 b: so does a base
@@ -1672,7 +1689,7 @@ def _run_template(character_name: str, step: Step, explicit: bool = False) -> st
     profile = _read_profile(character_name)
     state = garment_template.build(character_name, step.item_id, profile=profile)
     retry_budget.note(key, state.get("outcome") or {"ready": oc.OK, "failed": oc.REJECTED}.get(state["state"]))
-    return "" if state["state"] == "ready" else str(state["reason"])
+    return "" if state["state"] == "ready" else StepError(str(state["reason"]), state.get("failure"))
 
 
 #: The template step's error when the retry budget held an automatic Build's drape back (``_run_template``).
@@ -2223,10 +2240,13 @@ def _with_cached_failures(failed: Dict[str, Dict[str, Any]], steps: List[Step]) 
             continue
         entry = out.get(step.name)
         if entry is None:
-            out[step.name] = {"error": step.failed, "item_id": step.item_id}
+            out[step.name] = {"error": step.failed, "item_id": step.item_id,
+                              **({"failure": step.failure} if step.failure else {})}
         elif step.item_id != entry.get("item_id"):
             entry.setdefault("items", {entry.get("item_id"): entry.get("error")}).setdefault(step.item_id,
                                                                                            step.failed)
+            if step.failure:
+                entry["failures"] = {step.item_id: step.failure, **(entry.get("failures") or {})}
     return out
 
 
@@ -2933,7 +2953,7 @@ def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[st
     ``jobs`` its chain step plans), hair (with ``jobs``), body (``plain.jobs``:
     ``_plain_jobs``)}``. ``status``: ``building`` while a run goes, else ``failed`` /
     ``changes`` when the plan has steps (failed: the last run recorded a
-    failure, or a planned chain failed for its input — ``Step.failed``),
+    failure, or a planned chain failed for its input — ``Step.failed``; a step only left due is no failure),
     else ``up_to_date``. ``auto_build`` = ``auto_build_on``."""
     from app.core import base_body, figure, garment_set, model_refs
     pipeline = on_pipeline(character_name, profile=profile)
@@ -2952,7 +2972,8 @@ def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[st
     if build["running"]:
         status = "building"
     elif steps:
-        status = "failed" if failures else "changes"
+        # a step left due (a drape that ran out of time or was interrupted) is no failure: still a change to build
+        status = "failed" if any(not _left_due(e) for e in failures.values()) else "changes"
     else:
         status = "up_to_date"
     changes = _with_jobs(figure._pending(character_name, wanted, delivered, profile), steps)
@@ -3015,6 +3036,13 @@ def _full_body_note(character_name: str, profile: Optional[Dict[str, Any]]) -> O
         return None
 
 
+def _left_due(entry: Dict[str, Any]) -> bool:
+    """A ``failed`` entry whose step was only left due — its run ended retryable (``app.blender.outcome``: out of
+    time, interrupted, no Blender), so nothing judged it."""
+    from app.blender import outcome as oc
+    return oc.is_retryable((entry.get("failure") or {}).get("outcome"))
+
+
 #: ``problem.kind`` (Ruling A61): the body's mesh does not match its own views / any other failed step.
 PROBLEM_MESH, PROBLEM_FAILED = "mesh_mismatch", "failed"
 #: A failed step's label when the plan does not list it any more.
@@ -3038,7 +3066,9 @@ def _build_problem(character_name: str, steps: List[Step], failures: Dict[str, D
       ``view`` a view the error names, ``action`` ``retry`` = a manual Build; ``jobs`` the plan's hub jobs (None when
       unknown).
 
-    ``held``: automatic Builds do not run the step again until its inputs change (a cached failure). Never raises."""
+    ``held``: automatic Builds do not run the step again until its inputs change (a cached failure). ``failure``
+    (``failed`` only): the step's failure as data when it has one (``garment_template.failure_info``), else None.
+    Never raises."""
     from app.core import base_body, figure
     try:
         by_name = {s.name: s for s in steps}
@@ -3049,9 +3079,9 @@ def _build_problem(character_name: str, steps: List[Step], failures: Dict[str, D
             return {"kind": PROBLEM_MESH, "step": "assemble", "step_label": ASSEMBLE_LABEL, "view": mismatch["view"],
                     "body": "plain" if plain else "shape", "detail": mismatch["error"], "action": "rebuild_mesh",
                     "jobs": fix.jobs if fix is not None else None, "held": True}
-        name = next((n for n in STEP_ORDER if n in failures), None)
-        if name is None:
-            name = next((n for n in failures), None)
+        # a real failure first; a step only left due (``_left_due``) is the problem when nothing else failed
+        order = [n for n in STEP_ORDER if n in failures] + [n for n in failures if n not in STEP_ORDER]
+        name = next((n for n in order if not _left_due(failures[n])), order[0] if order else None)
         if name is None:
             return None
         entry = failures[name]
@@ -3065,7 +3095,7 @@ def _build_problem(character_name: str, steps: List[Step], failures: Dict[str, D
                 "view": base_body.registration_refusal_view(detail) or (found.group(1) if found else ""),
                 "body": "", "detail": detail, "action": "retry",
                 "jobs": None if unknown else sum(int(s.jobs or 0) for s in _runnable(steps, True)),
-                "held": bool(planned is not None and planned.failed)}
+                "held": bool(planned is not None and planned.failed), "failure": entry.get("failure")}
     except Exception:  # noqa: BLE001 — a line of the tab, never a failure of the poll
         logger.debug("Build problem of %s not read", character_name, exc_info=True)
         return None

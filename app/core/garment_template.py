@@ -264,7 +264,7 @@ KIND_NOT_BUILT = "Template kind '{kind}' is not built yet (skirts, dresses, tops
 DRAPE_FAILED = "Drape failed: {error} — Retry in the Figure tab"
 NO_BASE = "No plain body model yet — build the plain body first"
 #: The reason of a drape whose Blender run ended retryable (``app.blender.outcome``): nothing judged the drape, so
-#: no failure is recorded. Shown raw as the template step's error in the Figure tab (no ``t()`` there).
+#: no failure is recorded. The Figure tab shows it as a note through ``t()`` (``failure_info``'s line).
 LEFT_DUE = {
     "timeout": "The drape ran out of time (the machine was busy). Nothing was recorded as failed — Build again.",
     "interrupted": "The drape was stopped before it finished (the server stopped or Blender was ended). Nothing "
@@ -272,6 +272,75 @@ LEFT_DUE = {
     "unavailable": "Blender is not available right now, so the piece was not draped. Nothing was recorded as "
                    "failed — Build again once Blender is back.",
 }
+
+
+# --- a failed drape in plain words (owner 2026-11-18) ------------------------------------------------------------
+#: One sentence per GATED drape check (``judge_build``): what is wrong in the user's terms and what to do next.
+#: English with ``{value}`` / ``{limit}`` placeholders — the Figure tab puts the text through ``t()`` and fills them
+#: (``failure_info`` formats the numbers). What each check measures (``garment_template_build.py``):
+#:
+#: * ``stretch_max`` — after the main drape (rest pose), the longest edge of the cloth over its length in the cut
+#:   pattern. The pattern is cut no narrower than the body plus ease (``_skirt_knots`` / the bodice ease), so a cloth
+#:   stretched far beyond its cut has caught on something: on the body model (e08e95fdb — a hollow collider held a
+#:   vertex inside the hips, stretch 4.77) or on a piece under it — not a pattern too tight for the body.
+#: * ``poke_share[rest]`` — the share of the body's skin in the piece's region where the piece lies UNDER the skin
+#:   (a ray from the bone meets the cloth before the skin), in the rest pose: the body shows through.
+#: * ``pin_drift_mm`` — how far the fastened top rows (waistband or shoulder line) moved during the cloth run.
+FAILURE_SENTENCES = {
+    "stretch_max": ("The fabric is stretched to {value}× its cut length in one place (the limit is {limit}×). The "
+                    "pattern is cut wider than the body, so the cloth has most likely caught on the body model or on "
+                    "a piece under it rather than being too tight. Change the length, fit or waistband so it hangs "
+                    "differently, then Build again."),
+    "poke_share": ("The body shows through the fabric on {value} % of the skin it covers in the rest pose (the limit "
+                   "is {limit} %): the cloth slipped under the body's surface there. Change the length, fit or "
+                   "waistband so it hangs differently, then Build again."),
+    "pin_drift_mm": ("The fastened top edge of the piece (waistband or shoulder line) moved {value} mm during the "
+                     "drape (the limit is {limit} mm). Change the fit or the waistband, then Build again."),
+}
+#: The checks passed but no 3D model came back (``run_drape``: "no GLB written", outcome ``crashed``).
+NO_GLB_SENTENCE = ("The drape passed its checks but wrote no 3D model — a defect on our side, not a problem of the "
+                   "piece. The Blender output shows what happened; Build again to retry.")
+#: Blender itself failed (outcome ``crashed``).
+CRASHED_SENTENCE = ("The drape stopped with an error on our side — a defect, not a problem of the piece. The Blender "
+                    "output shows what went wrong; Build again to retry.")
+#: The Blender script refused the piece itself (outcome ``rejected`` without a failed check row).
+REJECTED_SENTENCE = ("Blender could not drape this piece — its reason is under Details. Change the parameters, then "
+                     "Build again.")
+
+
+def _num(value: Any, scale: float = 1.0) -> str:
+    """A check value for a sentence: at most two decimals, no trailing zeros ("4.77", "1.3", "0.5")."""
+    try:
+        return f"{float(value) * scale:.2f}".rstrip("0").rstrip(".")
+    except (TypeError, ValueError):
+        return "?"
+
+
+def failure_info(failed: Dict[str, Any]) -> Dict[str, Any]:
+    """A failed or left-due drape as data for the UI — ``{outcome, lines, rows, log_tail, error}``: ``lines`` the
+    plain sentences ``[{text, values}]`` (``FAILURE_SENTENCES`` per failed gate row; else ``LEFT_DUE`` for a run
+    left due, ``NO_GLB_SENTENCE`` / ``CRASHED_SENTENCE`` / ``REJECTED_SENTENCE``), ``rows`` every check of the run
+    (``judge_build``), ``log_tail`` the end of Blender's output, ``error`` the raw message. ``failed`` = a failure
+    record (``_build_drape``) or the same keys of a run's result. Never raises."""
+    from app.blender import outcome as oc
+    rows = [r for r in failed.get("rows") or [] if isinstance(r, dict)]
+    bad = [r for r in rows if r.get("gate") and not r.get("ok")]
+    error = str(failed.get("error") or "")
+    outcome = str(failed.get("outcome") or (oc.REJECTED if bad else oc.CRASHED))
+    lines: List[Dict[str, Any]] = []
+    for r in bad:
+        base = str(r.get("check") or "").split("[")[0]
+        if base in FAILURE_SENTENCES:
+            scale = 100.0 if base == "poke_share" else 1.0
+            lines.append({"text": FAILURE_SENTENCES[base],
+                          "values": {"value": _num(r.get("value"), scale), "limit": _num(r.get("limit"), scale)}})
+    if not lines:
+        text = (LEFT_DUE.get(outcome) if oc.is_retryable(outcome)
+                else NO_GLB_SENTENCE if rows and not bad
+                else REJECTED_SENTENCE if outcome == oc.REJECTED else CRASHED_SENTENCE)
+        lines.append({"text": text or LEFT_DUE[oc.INTERRUPTED], "values": {}})
+    return {"outcome": outcome, "lines": lines, "rows": rows, "log_tail": str(failed.get("log_tail") or ""),
+            "error": error}
 
 
 # --- parameters ---------------------------------------------------------------
@@ -1023,7 +1092,8 @@ def refused_only_by_time(failed: Dict[str, Any]) -> bool:
 def drape_state(character_name: str, item_id: str, *, base_sha: str, lower: List[str],
                 item: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """``{state, reason, tsig, path, record}`` — ``ready`` (the drape GLB of the current key exists
-    and its record passed), ``failed`` (the current key failed; reason = ``DRAPE_FAILED``),
+    and its record passed), ``failed`` (the current key failed; reason = ``DRAPE_FAILED``, plus ``failure`` =
+    ``failure_info`` of the record),
     ``missing`` (``NOT_DRAPED``; also a failure record ``refused_only_by_time``) or ``blocked`` (no key: reason
     from ``key_for``). Read-only."""
     from app.core.garment_store import read_record
@@ -1037,7 +1107,7 @@ def drape_state(character_name: str, item_id: str, *, base_sha: str, lower: List
     failed = read_record(failed_path(character_name, item_id, sig))
     if failed and not refused_only_by_time(failed):
         return {"state": "failed", "reason": DRAPE_FAILED.format(error=failed.get("error") or "?"), "tsig": sig,
-                "path": None, "record": failed}
+                "path": None, "record": failed, "failure": failure_info(failed)}
     return {"state": "missing", "reason": NOT_DRAPED, "tsig": sig, "path": None, "record": {}}
 
 
@@ -1135,7 +1205,8 @@ def piece_progress(character_name: str, item_id: str, *, profile: Optional[Dict[
                    item: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """What the parameter dialog shows of ONE template piece on ``character_name`` (A168) — the same rule as the
     Figure tab's row (``drape_state`` on the current base model, with the other worn mesh pieces as lower layers):
-    ``{state ("ready" / "missing" / "failed" / "blocked" / "running"), reason, built_at, error, worn, steps}`` —
+    ``{state ("ready" / "missing" / "failed" / "blocked" / "running"), reason, built_at, error, worn, steps,
+    failure}`` (``failure``: ``failure_info`` of a failed drape, else None) —
     ``steps`` in the step-list shape of ``model_overview`` (``{id, label, status, detail, numbers}``: parameters
     stored, a picture to colour it from, the drape). ``running``: a Build of the character runs (it drapes the worn
     template pieces). Read-only."""
@@ -1177,6 +1248,7 @@ def piece_progress(character_name: str, item_id: str, *, profile: Optional[Dict[
     return {"state": state, "reason": drape["reason"], "built_at": record.get("created_at") or "",
             "error": str(record.get("error") or "") if drape["state"] == "failed" else "", "worn": worn, "steps": steps,
             "live": live if state == "running" else None,
+            "failure": drape.get("failure") if drape["state"] == "failed" else None,
             "inner_collider": record.get("inner_collider") if drape["state"] == "ready" else None}
 
 
@@ -1550,7 +1622,9 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
     figure.invalidate()
     state = drape_state(character_name, item_id, base_sha=base_sha, lower=lower, item=item)
     if left_due and state["state"] == "missing":
-        state = {**state, "reason": left_due, "outcome": result["outcome"]}
+        state = {**state, "reason": left_due, "outcome": result["outcome"],
+                 "failure": failure_info({"outcome": result["outcome"], "error": result["error"],
+                                          "log_tail": result["log_tail"]})}
     return state
 
 

@@ -34,7 +34,9 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
     DRAPE_FAILED; a GLB + accepted record → ready.
     A record that failed ONLY on ``build_wall_s`` (written while the wall still gated; its stretch row passed) is no
     refusal any more → missing (NOT_DRAPED, due again); one that failed ``build_wall_s`` AND ``stretch_max`` →
-    failed. ``estimate_s``: no judged record → CPU_ESTIMATE_S 45; the failure record of the user's case (wall_total_s
+    failed, its ``failure`` (no ``outcome`` in the record, a failed gate row → "rejected") ONE line, the stretch
+    sentence with value 4.768 → "4.77" and limit 1.3 → "1.3" (the wall row is no gate in the sentences: its gate
+    flag was True in the old record, but only ``FAILURE_SENTENCES`` checks speak). ``estimate_s``: no judged record → CPU_ESTIMATE_S 45; the failure record of the user's case (wall_total_s
     77.34, slot_wait_s 25.0, no renders, rows present) → round(77.34 - 25.0) = round(52.34) = 52.
 [6] judge_build: wall 60.0 is within the budget, 60.01 is over it — reported (ok False), NEVER a gate since
     2026-11-18; drape CPU 126 s is reported and NOT a gate; poke at rest is a gate, at sit not. The user's case
@@ -42,6 +44,11 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
     build_wall_s 52.34, within the budget, and no gate row fails. ``run_drape`` with a stubbed runner whose two runs
     (stretch 1.6 > RETRY_STRETCH 1.5 starts the retry; script_wall_s 10 ≤ 30 leaves room) waited 3.0 s and 4.5 s for
     a slot → ``data["slot_wait_s"]`` 7.5; the second run's stretch 1.2 and rest poke 0 pass → ok True, outcome "ok".
+    ``failure_info`` (the plain sentences, owner 2026-11-18): a failed rest poke 0.0123 (limit 0.005) → the poke
+    sentence with "1.23" / "0.5" (×100, per cent); a failed pin drift 7.5 (limit 5.0) → "7.5" / "5"; a run left due
+    (outcome "timeout", log_tail "tail") → the LEFT_DUE["timeout"] sentence, outcome and log_tail passed through;
+    rows that all pass with outcome "crashed" → NO_GLB_SENTENCE; "crashed" without rows → CRASHED_SENTENCE;
+    "rejected" without rows → REJECTED_SENTENCE. Before this change none of these existed (no ``failure_info``).
 [7] prepare_view: a 40 x 40 picture, white background, a blue 20 x 20 block (rows 5-24, cols 10-29), under it a
     4 x 20 skin strip (rows 25-26 lit (224, 172, 140), rows 27-28 shaded (70, 40, 30)) and a blue 2 x 2 island at
     rows 35-36, cols 2-3: the white border is cut (alpha 0), blue kept; the skin strip is 80 / 484 = 16.5 % of the
@@ -252,8 +259,13 @@ try:
     check("[5] estimate from the judged record -> 52", gt.estimate_s("K", "i1") == 52, gt.estimate_s("K", "i1"))
     garment_store.write_record(gt.failed_path("K", "i1", st["tsig"]), {
         "error": "x", "rows": [wall_row, {**stretch_ok, "value": 4.768, "ok": False}]})
-    check("[5] wall + stretch -> still failed",
-          gt.drape_state("K", "i1", base_sha="s", lower=[], item=piece)["state"] == "failed")
+    st4 = gt.drape_state("K", "i1", base_sha="s", lower=[], item=piece)
+    check("[5] wall + stretch -> still failed", st4["state"] == "failed")
+    fl = st4.get("failure") or {}
+    check("[5] its failure: rejected, one stretch sentence 4.77 / 1.3",
+          fl.get("outcome") == "rejected" and len(fl.get("lines") or []) == 1
+          and fl["lines"][0] == {"text": gt.FAILURE_SENTENCES["stretch_max"],
+                                 "values": {"value": "4.77", "limit": "1.3"}} and len(fl.get("rows") or []) == 2, fl)
     glb = gt.drape_path("K", "i1", st["tsig"])
     glb.write_bytes(b"glb")
     garment_store.write_record(glb.with_suffix(".json"), {"accepted": True})
@@ -370,6 +382,24 @@ check("[6] run_drape: two runs, their slot waits summed (7.5)", len(_runs) == 2
 check("[6] run_drape: retry passes -> ok", res["ok"] and res["outcome"] == "ok", res["error"])
 check("[6] CPU reported, no gate", not by["drape_cpu_s"]["ok"] and not by["drape_cpu_s"]["gate"])
 check("[6] rest poke gates, sit not", by["poke_share[rest]"]["gate"] and not by["poke_share[sit]"]["gate"])
+_poke = gt.failure_info({"rows": [{"check": "poke_share[rest]", "value": 0.0123, "limit": 0.005, "ok": False,
+                                   "gate": True}]})
+check("[6] failure_info: rest poke in per cent 1.23 / 0.5", _poke["lines"] == [
+    {"text": gt.FAILURE_SENTENCES["poke_share"], "values": {"value": "1.23", "limit": "0.5"}}], _poke)
+_pin = gt.failure_info({"rows": [{"check": "pin_drift_mm", "value": 7.5, "limit": 5.0, "ok": False, "gate": True}]})
+check("[6] failure_info: pin drift 7.5 / 5", _pin["lines"] == [
+    {"text": gt.FAILURE_SENTENCES["pin_drift_mm"], "values": {"value": "7.5", "limit": "5"}}], _pin)
+_due = gt.failure_info({"outcome": "timeout", "error": "Blender timed out", "log_tail": "tail"})
+check("[6] failure_info: left due -> the LEFT_DUE sentence, outcome + log_tail kept",
+      _due["lines"] == [{"text": gt.LEFT_DUE["timeout"], "values": {}}] and _due["outcome"] == "timeout"
+      and _due["log_tail"] == "tail" and _due["error"] == "Blender timed out", _due)
+_ok_row = {"check": "stretch_max", "value": 1.1, "limit": 1.3, "ok": True, "gate": True}
+check("[6] failure_info: checks passed, crashed -> NO_GLB",
+      gt.failure_info({"outcome": "crashed", "rows": [_ok_row]})["lines"][0]["text"] == gt.NO_GLB_SENTENCE)
+check("[6] failure_info: crashed without rows -> CRASHED",
+      gt.failure_info({"outcome": "crashed"})["lines"][0]["text"] == gt.CRASHED_SENTENCE)
+check("[6] failure_info: rejected without rows -> REJECTED",
+      gt.failure_info({"outcome": "rejected"})["lines"][0]["text"] == gt.REJECTED_SENTENCE)
 
 # [11] texture_sources: cut-outs whenever any exists, the item picture only without one
 from app.core import garment_store  # noqa: E402

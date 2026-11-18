@@ -119,7 +119,9 @@ Expected, derived by hand:
 [12] ``refit_pool.finish`` per outcome (``_ROW_STATUS``): ok → ``completed``; rejected, crashed → ``failed``;
     timeout, interrupted, unavailable → ``interrupted``; cancelled → ``cancelled``. Every outcome but ok lands in
     the row's progress as ``outcome``, a ``log_tail`` beside it when given; ``finish(tid, error="x")`` without an
-    outcome → ``failed`` / ``crashed``.
+    outcome → ``failed`` / ``crashed``. ``get_tracked_recent`` (the TaskPanel's recent rows) lifts both out of the
+    progress: each row ``outcome`` (none for ok), ``log_tail`` "TAIL" only on crashed, no raw ``progress`` key —
+    before 2026-11-18 it selected no progress at all (every row: outcome None, log_tail None).
 [13] What a garment run reports to the retry budget (``garments._run_outcome``; ``app.blender.retry_budget``):
     ``_retry_later`` of a ``BackendBusyError`` (load) → None, of a ``RunFailed(timeout)`` → ``timeout``; a footwear
     ``_failure(retry_later=True)`` without an outcome (load) → None, with ``outcome="interrupted"`` →
@@ -847,6 +849,11 @@ def main() -> int:
         refit_pool.finish(tid, error="x")
         check("an error without outcome", (tq.task_status(tid), tq.get_task_progress(tid).get("outcome")),
               ("failed", "crashed"))
+        recent = {r["label"]: r for r in tq.get_tracked_recent(limit=50)}
+        check("recent rows carry outcome + log_tail (TaskPanel)",
+              {o: (recent[f"Refit · {o}"].get("outcome"), recent[f"Refit · {o}"].get("log_tail")) for o in oc.ALL},
+              {o: (None if o == oc.OK else o, "TAIL" if o == oc.CRASHED else None) for o in oc.ALL})
+        check("recent rows carry no raw progress", any("progress" in r for r in recent.values()), False)
 
         # --- [13] what a garment run reports to the retry budget --------------------------------------------------
         print("[13] garments._run_outcome / _note_outcome and the retry budget")

@@ -1119,12 +1119,13 @@ class TaskQueue:
         return False
 
     def get_tracked_recent(self, limit: int = 20) -> List[Dict[str, Any]]:
-        """Returns recently completed tracked tasks (for UI compatibility)."""
+        """Returns recently completed tracked tasks (for UI compatibility). A row that ended with an ``outcome``
+        and a ``log_tail`` in its progress (``refit_pool.finish``) carries both (the TaskPanel's "left due")."""
         conn = self._connect()
         try:
             rows = conn.execute(
                 """SELECT task_id, task_type, label, agent_name, status,
-                          created_at, duration_s, error, provider
+                          created_at, duration_s, error, provider, progress
                    FROM tasks
                    WHERE task_origin='tracked'
                    AND status IN ('completed','failed','interrupted','cancelled')
@@ -1135,6 +1136,12 @@ class TaskQueue:
                 d = dict(r)
                 if d.get("provider"):
                     d["provider_name"] = d["provider"]
+                try:
+                    progress = json.loads(d.pop("progress", None) or "{}")
+                except (ValueError, TypeError):
+                    progress = {}
+                if isinstance(progress, dict):
+                    d.update({k: str(progress[k]) for k in ("outcome", "log_tail") if progress.get(k)})
                 result.append(d)
             return result
         finally:

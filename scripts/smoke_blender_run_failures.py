@@ -61,6 +61,15 @@ stubbed monotonic clock starting at t = 1000:
      process and released by a timer after 1.0 s, the run waits until the first poll after the release → 1.0 ≤
      slot_wait_s < 1.0 + 2 polls + 0.5 s of scheduling slack, and ``seconds`` (the whole call) ≥ slot_wait_s.
      Before the field existed ``slot_wait_s`` was absent (read as -1 here) and both checks fail.
+[19] A drape left due as the Figure tab reads it (``figure_build``; the garment state, the profile read and the
+     retry budget stubbed): ``_run_template`` of a Build click whose drape ran out of time returns a ``StepError``
+     equal to LEFT_DUE["timeout"] that carries the drape's ``failure`` (outcome timeout), and notes ``timeout`` for
+     the key "drape:K:i1"; ``_left_due`` is True for a timeout failure, False for a rejected one or none;
+     ``_build_problem`` (no mesh mismatch) with only the left-due template entry → step "template" with that
+     failure; with a real hair failure beside it → step "hair" (STEP_ORDER puts template before hair, so this is the
+     left-due rule, not the order); ``_with_cached_failures`` of a step with ``failed`` + ``failure`` → the entry
+     carries ``failure``; a ``Step`` equals and hashes as the same step without ``failure``. Before 2026-11-18
+     there was no ``StepError`` / ``_left_due`` (AttributeError) and ``_build_problem`` had no ``failure``.
 """
 import json
 import logging
@@ -222,6 +231,40 @@ def budget_cases() -> None:
     finally:
         rb.logger.removeHandler(cap)
         rb.reset()
+
+
+def figure_cases() -> None:
+    """[19] — a drape left due as the Figure tab reads it (docstring); every world read stubbed."""
+    from app.blender import retry_budget as rb
+    from app.core import base_body, figure_build as fb, garment_template as gt
+    due = gt.failure_info({"outcome": oc.TIMEOUT, "error": "Blender timed out", "log_tail": "TAIL"})
+    # what ``_build_drape`` answers for a drape left due by a timeout
+    left = {"state": "missing", "reason": gt.LEFT_DUE[oc.TIMEOUT], "outcome": oc.TIMEOUT, "failure": due}
+    noted = []
+    with patch.object(gt, "build", lambda *a, **k: left), patch.object(fb, "_read_profile", lambda c: {}), \
+            patch.object(rb, "note", lambda key, o: noted.append((key, o))):
+        err = fb._run_template("K", fb.Step("template", "Template drape · Skirt", 0, "i1"), explicit=True)
+    check(isinstance(err, fb.StepError) and err == gt.LEFT_DUE[oc.TIMEOUT] and err.failure is due
+          and noted == [("drape:K:i1", oc.TIMEOUT)], f"[19] _run_template: the reason with its failure ({err!r})")
+    check(fb._left_due({"failure": due}) and not fb._left_due({"failure": {"outcome": oc.REJECTED}})
+          and not fb._left_due({"error": "x"}), "[19] _left_due: timeout yes, rejected / no failure no")
+    real = {"error": "stretch", "item_id": "i2", "failure": {"outcome": oc.REJECTED}}
+    with patch.object(base_body, "mesh_view_mismatch", lambda *a, **k: None):
+        only_due = fb._build_problem("K", [], {"template": {"error": str(err), "item_id": "i1", "failure": due}},
+                                     types.SimpleNamespace(shape=""))
+        both = fb._build_problem("K", [], {"template": {"error": str(err), "item_id": "i1", "failure": due},
+                                           "hair": real}, types.SimpleNamespace(shape=""))
+    check((only_due or {}).get("step") == "template" and (only_due or {}).get("failure") is due,
+          f"[19] _build_problem: the left-due step with its failure ({only_due})")
+    check((both or {}).get("step") == "hair" and (both or {}).get("failure") == real["failure"],
+          f"[19] _build_problem: a real failure (hair) before a left-due one (template) ({both})")
+    stepped = fb.Step("template", "x", 0, "i1", failed="refused", failure=real["failure"])
+    cached = fb._with_cached_failures({}, [stepped])
+    check(cached == {"template": {"error": "refused", "item_id": "i1", "failure": real["failure"]}}
+          and stepped == fb.Step("template", "x", 0, "i1", failed="refused")
+          and hash(stepped) == hash(fb.Step("template", "x", 0, "i1", failed="refused"))
+          and stepped.as_dict()["failure"] == real["failure"],
+          f"[19] a cached failure keeps its failure; Step equality and hash ignore it ({cached})")
 
 
 def main() -> int:
@@ -386,6 +429,7 @@ def main() -> int:
                   and res["seconds"] >= wait,
                   f"[18] both slots held 1 s: slot_wait_s {wait!r}, seconds {res.get('seconds')!r}")
         budget_cases()
+        figure_cases()
     finally:
         runner.logger.removeHandler(cap)
         runner.LOG_FILE = saved_log
