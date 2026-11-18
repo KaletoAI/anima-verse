@@ -54,7 +54,9 @@ Expected, derived by hand:
     - assemble(A) -> {full: assembled, low: assembled}; layers/coat_<F>_<lsig1>.glb + .json and
       layers/low/coat_<F>_<lsig1>.glb exist; the record: accepted, lsig1, base_model_sha256 sha(B),
       base_fit_sha256 sha(coat body fit), inner {slip: {fsig, sha256 sha(slip fit), lsig None}}; the assembled
-      sidecar garments.coat = {kind clothing, fsig F, sha256 sha(layer file), over lsig1, material "map"}; garments.slip has no
+      sidecar garments.coat = {kind clothing, fsig F, sha256 sha(layer file), over lsig1, material "map", cover
+      body_cover.VERSION (Ruling A133, 8192032b2: every clothing entry records the body-cover rule it was hidden
+      by, so a new rule re-assembles)}; garments.slip has no
       ``over``; the assembled coat node: r in [0.1239, 0.1270] over y [1.10, 1.30], extras.garment.over [slip];
       the low tier's coat node too (32 segments). served(A, full) = the assembled file. Hub counters 0, the
       coat's body fit bytes unchanged.
@@ -63,8 +65,8 @@ Expected, derived by hand:
       (0.1175 + 0.0119 = 0.1294); hub counters still 0, no fit step, coat body fit unchanged; both lsig1 and
       lsig2 files kept (the cache).
     - Worn WITHOUT the slip: outfit model C, mesh_items effective [coat] -> _wanted_for coat has no ``over``,
-      its source is the body fit; assemble(C) builds no layer (build counter 0); garments.coat.sha256 = sha(coat
-      body fit). Back to A: plan coat lsig2 valid (pending False) -> assemble(A) is ``current``, 0 builds.
+      its source is the body fit; assemble(C) builds no layer (build counter 0); garments.coat = {kind clothing,
+      fsig F, sha256 sha(coat body fit), material "map", cover body_cover.VERSION} (no over). Back to A: plan coat lsig2 valid (pending False) -> assemble(A) is ``current``, 0 builds.
     - Stale inner never used: base model rewritten (B2, new sha) with only the COAT refitted on B2 -> plan over
       [coat, slip] with base sha(B2): slip has no fit there -> coat lsig "" (body fit), no build.
       Slip refitted on B2 (r 0.1125) -> ensure builds coat over it: record base_model_sha256 sha(B2), inner
@@ -261,6 +263,7 @@ def main() -> int:
         from app.plugins.loader import discover_packages
         discover_packages(plugins, force=True)
 
+        from app.core import body_cover
         from app.core import (base_body, garment_assembly as ga, garment_images, garment_layers as gl,
                               garment_mesh, garment_set, garment_store as gs, garments, glb_mesh, model3d)
         from app.models import inventory
@@ -409,7 +412,8 @@ def main() -> int:
         asm = mdir / "assembled" / "outfitA.glb"
         side = json.loads(asm.with_suffix(".json").read_text())
         check("assembled coat entry", side["garments"]["coat"],
-              {"kind": "clothing", "fsig": fsig["coat"], "sha256": sha(layer), "over": lsig1, "material": "map"})
+              {"kind": "clothing", "fsig": fsig["coat"], "sha256": sha(layer), "over": lsig1, "material": "map",
+               "cover": body_cover.VERSION})
         check("assembled slip entry has no over", "over" in side["garments"]["slip"], False)
         n, g = node(asm.read_bytes(), "garment_clothing_coat")
         r = radii(g.positions)[band(g.positions, 1.10, 1.30)]
@@ -455,7 +459,8 @@ def main() -> int:
         check("assemble C", ga.assemble("Demo", "outfitC")["ok"], True)
         side = json.loads((mdir / "assembled" / "outfitC.json").read_text())
         check("C: coat entry = body fit", side["garments"]["coat"],
-              {"kind": "clothing", "fsig": fsig["coat"], "sha256": coat_body_sha, "material": "map"})
+              {"kind": "clothing", "fsig": fsig["coat"], "sha256": coat_body_sha, "material": "map",
+               "cover": body_cover.VERSION})
         check("C: served", ga.served("Demo", bare_c, "full"), mdir / "assembled" / "outfitC.glb")
         planned = gl.plan("Demo", ["coat", "slip"], base_sha=base_sha, intended=["coat", "slip"])
         check("A again: stored layer valid", (planned["coat"]["lsig"], planned["coat"]["pending"]), (lsig2, False))
