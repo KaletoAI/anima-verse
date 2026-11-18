@@ -290,16 +290,35 @@ async def update_user_route(
 
 def _update_user_route_sync(user_id: str, current: Dict[str, Any],
                             data: Any, keep_token: str = "") -> Dict[str, Any]:
-    """The blocking body of ``update_user_route`` — runs in the threadpool."""
+    """The blocking body of ``update_user_route`` — runs in the threadpool.
+
+    The body carries ``base_revision`` (the user's ``revision`` from
+    ``GET /auth/users``) and only the fields that changed. A user changed in
+    between — by another admin, or by the player's own actions — answers
+    409 ``stale`` and nothing is written; the answer carries the new
+    ``revision``.
+    """
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="body must be a JSON object")
+    if "base_revision" not in data:
+        raise HTTPException(status_code=428, detail={
+            "code": "revision_required",
+            "message": "base_revision missing — load the users first (GET /auth/users, field revision)"})
+    base_revision = data.pop("base_revision")
+    if not isinstance(base_revision, str):
+        raise HTTPException(status_code=400, detail="base_revision must be a string")
     password = data.pop("password", None)
-    changed_password = False
+    changed_password = bool(password)
     try:
-        if password:
-            changed_password = users.set_user_password(user_id, password)
-        updated = users.update_user(user_id, **data) if data else True
+        revision = users.update_user_checked(user_id, base_revision, data,
+                                             password=password or None)
+    except users.UserStale:
+        raise HTTPException(status_code=409, detail={
+            "code": "stale",
+            "message": "This user was changed since the page loaded it — reload and make the change again"})
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    if not updated and not changed_password:
+    if revision is None:
         raise HTTPException(status_code=404, detail="User not found")
 
     # A reset revokes the old credential, so the sessions that still hold it
@@ -311,7 +330,8 @@ def _update_user_route_sync(user_id: str, current: Dict[str, Any],
             sessions_ended = sessions.delete_other_sessions(user_id, keep_token)
         else:
             sessions_ended = sessions.delete_sessions_for_user(user_id)
-    return {"status": "success", "sessions_ended": sessions_ended}
+    return {"status": "success", "sessions_ended": sessions_ended,
+            "revision": revision}
 
 
 @router.delete("/users/{user_id}")

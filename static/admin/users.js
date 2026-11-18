@@ -7,6 +7,9 @@ let EDIT_ID = null;
 // question is asked in the row itself (the same inline strip the player
 // panels use).
 let CONFIRM_DELETE_ID = null;
+// Set when a save was refused as stale (409): closing the dialog then reloads
+// the list, so the next edit starts from the current state of the user.
+let RELOAD_ON_CLOSE = false;
 
 async function loadAll() {
     try {
@@ -78,6 +81,37 @@ function toggleAllChars(checked) {
 function closeEdit() {
     document.getElementById('modal-bg').classList.remove('show');
     EDIT_ID = null;
+    if (RELOAD_ON_CLOSE) {
+        RELOAD_ON_CLOSE = false;
+        loadAll();
+    }
+}
+
+// The FastAPI error detail as text: a plain string, or the {code, message}
+// object of a 409 stale / 428 revision_required answer.
+function detailText(d, fallback) {
+    const det = d && d.detail;
+    if (!det) return fallback;
+    if (typeof det === 'string') return det;
+    return det.message || fallback;
+}
+
+// The edit body: only the fields that differ from the state the list was
+// loaded with, plus the revision of that state. A character the checkbox list
+// does not show (not in /characters/list) stays assigned — the dialog never
+// removes what it did not offer.
+function editBody(u, username, role, chars) {
+    const body = { base_revision: u.revision };
+    if (username !== u.username) body.username = username;
+    if (role !== u.role) body.role = role;
+    const loaded = u.allowed_characters || [];
+    const shown = new Set(CHARS);
+    const checked = new Set(chars);
+    const next = loaded.filter(c => !shown.has(c) || checked.has(c))
+        .concat(chars.filter(c => !loaded.includes(c)));
+    const same = next.length === loaded.length && next.every((c, i) => c === loaded[i]);
+    if (!same) body.allowed_characters = next;
+    return body;
 }
 
 async function saveEdit() {
@@ -94,8 +128,15 @@ async function saveEdit() {
     try {
         let resp;
         if (EDIT_ID) {
-            const body = { username, role, allowed_characters: chars };
+            const u = USERS.find(x => x.id === EDIT_ID);
+            if (!u) { err.textContent = 'User not found — reload the page'; err.style.display = 'block'; return; }
+            const body = editBody(u, username, role, chars);
             if (password) body.password = password;
+            if (Object.keys(body).length === 1) {   // only base_revision: nothing changed
+                closeEdit();
+                toast('No changes');
+                return;
+            }
             resp = await fetch('/auth/users/' + EDIT_ID, {
                 method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
             });
@@ -107,7 +148,14 @@ async function saveEdit() {
         }
         if (!resp.ok) {
             const d = await resp.json().catch(() => ({}));
-            err.textContent = d.detail || 'Save error';
+            if (resp.status === 409 && d.detail && d.detail.code === 'stale') {
+                RELOAD_ON_CLOSE = true;
+                err.textContent = 'Not saved: this user was changed since the list was loaded '
+                    + '(by another admin, or by the player). Close this dialog to reload the list, '
+                    + 'then make your change again.';
+            } else {
+                err.textContent = detailText(d, 'Save error');
+            }
             err.style.display = 'block';
             return;
         }
@@ -153,7 +201,7 @@ async function deleteUser(userId) {
         const resp = await fetch('/auth/users/' + userId, { method: 'DELETE' });
         if (!resp.ok) {
             const d = await resp.json().catch(() => ({}));
-            toast(d.detail || 'Error', 'error');
+            toast(detailText(d, 'Error'), 'error');
             renderTable();
             return;
         }

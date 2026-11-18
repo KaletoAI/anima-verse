@@ -1,8 +1,9 @@
-"""User-Verwaltung (Multiuser Phase 1).
+"""User management (multiuser phase 1).
 
-Eine User-Tabelle pro Welt. Rollen: admin | user.
-Admin hat vollen Zugriff, user ist beschraenkt auf zugeordnete Characters.
+One users table per world. Roles: admin | user.
+An admin has full access, a user is limited to the assigned characters.
 """
+import hashlib
 import json
 import secrets
 import uuid
@@ -59,14 +60,35 @@ def _row_to_user(row) -> Dict[str, Any]:
     return d
 
 
+#: The fields ``update_user`` writes — and so the ones an admin edit could
+#: overwrite. The revision of a user covers exactly these: a change to any of
+#: them by another admin or by the player's own actions (an avatar switch, a
+#: character grant) makes an edit based on the older state stale.
+REVISION_FIELDS = ("username", "role", "allowed_characters", "theme", "settings")
+
+
+class UserStale(Exception):
+    """The user changed since the revision the edit was based on."""
+
+
+def user_revision(user: Dict[str, Any]) -> str:
+    """The revision token of a user dict (as ``get_user_by_id`` returns it). Pure."""
+    payload = json.dumps({f: user.get(f) for f in REVISION_FIELDS},
+                         sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
 def list_users() -> List[Dict[str, Any]]:
-    """Listet alle User (ohne password_hash)."""
+    """All users (without password_hash), each with its ``revision``."""
     conn = get_connection()
     rows = conn.execute(
         "SELECT id, username, role, allowed_characters, theme, settings, "
         "created_at, last_login FROM users ORDER BY created_at ASC"
     ).fetchall()
-    return [_row_to_user(r) for r in rows]
+    out = [_row_to_user(r) for r in rows]
+    for user in out:
+        user["revision"] = user_revision(user)
+    return out
 
 
 def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
@@ -98,7 +120,7 @@ def _get_password_hash(user_id: str) -> str:
 
 
 def check_user_password(username: str, password: str) -> Optional[Dict[str, Any]]:
-    """Prueft username+password. Returns User-Dict bei Erfolg, None bei Fehler."""
+    """Check username + password. The user dict on success, None otherwise."""
     user = get_user_by_username(username)
     if not user:
         return None
@@ -114,7 +136,7 @@ def create_user(
     role: str = ROLE_USER,
     allowed_characters: Optional[List[str]] = None,
 ) -> str:
-    """Legt einen neuen User an. Returns user_id."""
+    """Create a new user. Returns the user id."""
     if role not in VALID_ROLES:
         raise ValueError(f"Invalid role: {role}")
     if len(password) < MIN_PASSWORD_LENGTH:
@@ -160,6 +182,38 @@ def update_user(user_id: str, **fields) -> bool:
         return cur.rowcount > 0
 
 
+def update_user_checked(user_id: str, base_revision: str, fields: Dict[str, Any],
+                        password: Optional[str] = None) -> Optional[str]:
+    """An admin edit: write ``fields`` (and ``password`` when given) only if the
+    user is still at ``base_revision``. Returns the new revision, None for an
+    unknown user. Raises ``UserStale`` (nothing written) or ``ValueError``.
+
+    Runs under ``keyed_lock("user_settings", <id>)`` — the lock every other
+    writer of the users row takes (the avatar switch, the login restore, the
+    creator grant) — and re-reads the user INSIDE it, so no change can land
+    between the check and the write. Only the given fields are written; the
+    caller sends the ones that changed.
+    """
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("user_settings", user_id):
+        fresh = get_user_by_id(user_id)
+        if not fresh:
+            return None
+        if user_revision(fresh) != base_revision:
+            raise UserStale(user_id)
+        # Validate everything before the first write, so a refused value
+        # never leaves half an edit behind.
+        if "role" in fields and fields["role"] not in VALID_ROLES:
+            raise ValueError(f"Invalid role: {fields['role']}")
+        if password and len(password) < MIN_PASSWORD_LENGTH:
+            raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
+        if password:
+            set_user_password(user_id, password)
+        if fields:
+            update_user(user_id, **fields)
+        return user_revision(get_user_by_id(user_id) or {})
+
+
 def set_user_password(user_id: str, password: str) -> bool:
     if len(password) < MIN_PASSWORD_LENGTH:
         raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
@@ -185,13 +239,13 @@ def touch_last_login(user_id: str) -> None:
 
 
 def ensure_default_admin() -> None:
-    """Legt den Default-Admin an falls noch kein User existiert."""
+    """Create the default admin when no user exists yet."""
     conn = get_connection()
     count = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
     if count > 0:
         return
 
-    # Migration: alten account.user_name + password_hash uebernehmen falls vorhanden
+    # Migration: take over the old account.user_name + password_hash if present
     acc = conn.execute(
         "SELECT user_name, password_hash, theme, settings FROM account WHERE id=1"
     ).fetchone()

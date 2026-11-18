@@ -64,7 +64,9 @@ D) SUCCESS ENDS THE OTHER SESSIONS, NOT THIS ONE. The session token is stored
      the OLD password at POST /auth/login      -> 401
      the NEW password at POST /auth/login      -> 200
 
-E) AN ADMIN RESET (PATCH /auth/users/{id} with `password`).
+E) AN ADMIN RESET (PATCH /auth/users/{id} with `password`). Every PATCH sends
+   the target's current `base_revision` (the `revision` of GET /auth/users) —
+   the revision check itself is scripts/smoke_user_edit_revision.py.
 
      reset of ANOTHER user, who has 2 sessions -> sessions_ended == 2, both
                                                   tokens gone, the admin's own
@@ -147,6 +149,11 @@ def clear_failures(username):
 
 def session_alive(token):
     return sessions.get_session(token)[0] is not None
+
+
+def rev(user_id):
+    """The user's current revision, as GET /auth/users lists it."""
+    return next(u["revision"] for u in users.list_users() if u["id"] == user_id)
 
 
 print("A) reachability")
@@ -250,8 +257,8 @@ other_b = sessions.create_session(OTHER_ID)
 check("the other user has 3 sessions now",
       [session_alive(t) for t in (other_token, other_a, other_b)],
       [True, True, True])
-r = call("PATCH", f"/auth/users/{OTHER_ID}", {"password": "other-pass-2"},
-         admin_token)
+r = call("PATCH", f"/auth/users/{OTHER_ID}",
+         {"password": "other-pass-2", "base_revision": rev(OTHER_ID)}, admin_token)
 check("admin reset -> status", r.status_code, 200)
 check("admin reset -> sessions_ended", r.json().get("sessions_ended"), 3)
 check("every session of the target is gone",
@@ -262,14 +269,15 @@ check("the target's new password works",
       users.check_user_password("demo_other", "other-pass-2") is not None, True)
 
 # A PATCH that carries no password touches no session at all.
-r = call("PATCH", f"/auth/users/{OTHER_ID}", {"role": "user"}, admin_token)
+r = call("PATCH", f"/auth/users/{OTHER_ID}",
+         {"role": "user", "base_revision": rev(OTHER_ID)}, admin_token)
 check("PATCH without a password -> sessions_ended",
       r.json().get("sessions_ended"), 0)
 
 # The admin resets their OWN password: this session must survive.
 admin_second = sessions.create_session(ADMIN_ID)
-r = call("PATCH", f"/auth/users/{ADMIN_ID}", {"password": "admin-pass-2"},
-         admin_token)
+r = call("PATCH", f"/auth/users/{ADMIN_ID}",
+         {"password": "admin-pass-2", "base_revision": rev(ADMIN_ID)}, admin_token)
 check("admin resets own password -> status", r.status_code, 200)
 check("admin resets own password -> sessions_ended",
       r.json().get("sessions_ended"), 1)
@@ -280,7 +288,8 @@ check("the admin can still call an admin route",
 
 # A player may not reset anybody through the admin route.
 check("player PATCH /auth/users -> 403",
-      call("PATCH", f"/auth/users/{OTHER_ID}", {"password": "nope-12345"},
+      call("PATCH", f"/auth/users/{OTHER_ID}",
+           {"password": "nope-12345", "base_revision": rev(OTHER_ID)},
            fresh_token).status_code, 403)
 
 print()
