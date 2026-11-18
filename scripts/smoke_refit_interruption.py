@@ -81,6 +81,10 @@ Expected, derived by hand:
     d) The ``fit_refit`` improvement: postures matched, then busy → ``CandidateBusy``, and its row is
        ``completed`` (before: discarded — no trace of the posture work); ``refit_character`` raising
        ``RefitInterrupted`` → ``CandidateBusy`` (deferred, not a failed attempt).
+[8] The footwear chain (``garment_footwear.run_chain`` → ``_failure``, matched by the exception's type NAME): a
+    failure of type ``RefitInterrupted`` → ``retry_later`` True, so ``garments._note_outcome`` persists nothing;
+    control: ``RuntimeError`` → no ``retry_later``. Before: ``RETRY_LATER_ERRORS`` held only
+    ``BackendBusyError`` / ``MediaGenerationDisabled`` → the interruption was persisted as the fit's refusal.
 """
 import os
 import sys
@@ -606,6 +610,17 @@ def main() -> int:
         except CandidateBusy:
             got = "CandidateBusy"
         check("d) interrupted: CandidateBusy (deferred)", got, "CandidateBusy")
+
+        # --- [8] the footwear chain: an interruption is retried later -----------------------------------------
+        print("[8] the footwear chain answers retry_later for an interruption")
+        from app.core import garment_footwear
+        name = type(refit_pool.RefitInterrupted("x")).__name__
+        check("the footwear failure of RefitInterrupted",
+              garment_footwear._failure("Kim", "shoe", "f1f1f1f1f1f1", "fit", "x", None, [], name).get("retry_later"),
+              True)
+        check("control: a plain failure is persisted",
+              garment_footwear._failure("Kim", "shoe", "f1f1f1f1f1f1", "fit", "x", None, [], "RuntimeError")
+              .get("retry_later"), None)
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
     return 1 if FAILS else 0

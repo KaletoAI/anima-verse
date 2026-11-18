@@ -221,9 +221,11 @@ def fsig_inputs(character_name: str, item: Dict[str, Any], *, profile: Dict[str,
 
 #: ``fit`` of a run result whose wearer has no base model yet: the item steps ran, nothing to fit onto.
 NO_BASE = "no_base"
-#: ``error_type`` of a failed item step that is load or the media switch, not a defect of the item: the run
-#: fails without a persisted failure record (``retry_later``), so automatic triggers try again.
-RETRY_LATER_ERRORS: Tuple[str, ...] = ("BackendBusyError", "MediaGenerationDisabled")
+#: ``error_type`` of a failed item step that is load or the media switch, or a fit compute the refit pool ended
+#: (``refit_pool.RefitInterrupted``: the server stops) — not a defect of the item: the run fails without a
+#: persisted failure record (``retry_later``), so automatic triggers try again. Matched by the type NAME: a source
+#: step's result carries only its outermost exception's name (``footwear_source.run_source``), never the chain.
+RETRY_LATER_ERRORS: Tuple[str, ...] = ("BackendBusyError", "MediaGenerationDisabled", "RefitInterrupted")
 
 
 #: A176: item steps whose gate refusal a DEFAULT run (a Build, a trigger, a plain Run) never runs again — the mesh is
