@@ -162,8 +162,15 @@ def main():
             roster = names + ['Ada Example', 'Avatar Example', 'Elsewhere Example']
             # The room roster (``characters_in_room``) reads every place at
             # once through ``list_character_places``; it answers from the same
-            # two tables as the per-character readers, in roster order.
-            with patch('app.models.character.get_character_current_location',
+            # two tables as the per-character readers, in roster order. The
+            # speaker's own place is ONE read since 08b953def
+            # (``perception.addressable_for`` -> ``get_character_place``:
+            # location, room, metre point) — no point here, so no earshot circle.
+            positions = {}
+            with patch('app.models.character.get_character_place',
+                       side_effect=lambda name: (locations.get(name, ''), rooms.get(name, ''),
+                                                 positions.get(name))), \
+                 patch('app.models.character.get_character_current_location',
                        side_effect=lambda name: locations.get(name, '')), \
                  patch('app.models.character.get_character_current_room',
                        side_effect=lambda name: rooms.get(name, '')), \
@@ -179,6 +186,7 @@ def main():
                  patch('app.models.account.get_active_character', return_value='Avatar Example'):
                 assert streaming.tool_step_presence('Ada Example') == tuple(['Avatar Example'] + names)
                 locations['Ada Example'] = ''
+                positions['Ada Example'] = {'x': 1, 'z': 2}
                 with patch('app.models.character.get_character_pos', return_value={'x': 1, 'z': 2}), \
                      patch('app.models.character.list_available_characters',
                            return_value=['Ada Example', 'Earshot Example']), \
