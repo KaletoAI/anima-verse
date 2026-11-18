@@ -6556,6 +6556,7 @@
     "Building the part": "Teil wird gebaut",
     "Checking the model (Blender)": "Modell wird geprüft (Blender)",
     "Cloth substeps": "Stoff-Teilschritte",
+    "Waiting for the GPU": "Wartet auf die GPU",
     "Compressing the model (Blender)": "Modell wird komprimiert (Blender)",
     "Converting the clip (Blender)": "Clip wird umgewandelt (Blender)",
     "Cutting out the piece": "Stück wird freigestellt",

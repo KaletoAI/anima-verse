@@ -1483,8 +1483,16 @@ def _validate_pose_check(img_cfg: Any) -> str:
 
 @router.get("/settings/schema")
 def settings_schema(user=Depends(require_admin)):
-    """The schema of instance-scope settings."""
-    return config_scope.schema_for(config_scope.INSTANCE)
+    """The schema of instance-scope settings. The local compute device's description ends with its live status
+    (``gpu_compute.status_line``: what a job would run on now, and why)."""
+    schema = config_scope.schema_for(config_scope.INSTANCE)
+    try:
+        from app.core import gpu_compute
+        field = schema["server"]["fields"]["gpu_compute_device"]
+        field["description"] = f"{field.get('description', '')} Status: {gpu_compute.status_line()}."
+    except Exception:  # noqa: BLE001 — a status line never breaks the settings page
+        logger.debug("GPU compute status not added to the schema", exc_info=True)
+    return schema
 
 
 @router.get("/settings/origin")

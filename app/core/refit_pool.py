@@ -22,6 +22,9 @@ there).
   exit; scripts and smokes stay in-process unless they enable it.
 - **Start method** spawn (forking a threaded server is unsafe). A worker runs
   at nice 10 with one BLAS thread (set before numpy is imported there).
+- **GPU compute** (``gpu_compute``): the worker gets the server's GPU slot
+  folder, ``server.gpu_compute_parallel`` and ``server.gpu_compute_device``
+  at spawn and resolves its device at its first job.
 - **Lifetime** (Ruling A64): a worker never outlives the server. ``shutdown``
   (the lifespan exit) terminates the workers instead of letting them finish,
   and every worker watches its parent (``_watch_parent``): once the server
@@ -254,14 +257,15 @@ def _watch_parent(parent_pid: int, interval: float = PARENT_POLL_S) -> None:
 
 
 def _initializer(blender_slots: Optional[tuple] = None, fit_threads: Optional[int] = None,
-                 parent_pid: Optional[int] = None) -> None:
+                 parent_pid: Optional[int] = None, gpu: Optional[tuple] = None) -> None:
     """Runs first in every worker: no database, low priority, one BLAS thread;
     ``blender_slots`` (``runner.spawn_slots()`` of the server) pins the Blender
     limit's slot folder and count — a worker has no instance and no config;
     ``fit_threads`` is the worker's share of the cores for the fit kernels and
     KD-tree queries (``fit_kernels.set_threads``; None keeps its default);
     ``parent_pid`` (the server's pid) starts ``_watch_parent``, so the worker
-    ends with the server (Ruling A64)."""
+    ends with the server (Ruling A64); ``gpu`` (``gpu_compute.spawn_spec()``)
+    pins the GPU slots and the device setting."""
     global _IN_WORKER
     _IN_WORKER = True
     if parent_pid:
@@ -272,6 +276,9 @@ def _initializer(blender_slots: Optional[tuple] = None, fit_threads: Optional[in
     # numpy is not imported yet in a fresh spawned worker: these take effect.
     for var in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
         os.environ[var] = "1"
+    if gpu:
+        from app.core import gpu_compute
+        gpu_compute.pin(gpu)
     if fit_threads:
         # after the BLAS variables: this import brings numpy in
         from app.core import fit_kernels
@@ -291,9 +298,11 @@ def _new_pool(size: int, share: Optional[int] = None) -> Any:
     import multiprocessing
     from concurrent.futures import ProcessPoolExecutor
     from app.blender import runner
+    from app.core import gpu_compute
     fit_threads = max(1, ((os.cpu_count() or 1) - 2) // max(1, share or size))
     return ProcessPoolExecutor(max_workers=size, mp_context=multiprocessing.get_context("spawn"),
-                               initializer=_initializer, initargs=(runner.spawn_slots(), fit_threads, os.getpid()))
+                               initializer=_initializer, initargs=(runner.spawn_slots(), fit_threads, os.getpid(),
+                                         gpu_compute.spawn_spec()))
 
 
 def _get_pool(size: int) -> Any:

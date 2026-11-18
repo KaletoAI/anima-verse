@@ -332,6 +332,39 @@ SECTIONS = {
                                "of the server; running refit worker processes keep the value they were "
                                "started with.",
             },
+            "gpu_compute_device": {
+                "type": "select",
+                "label": "Local compute device",
+                "choices": ["auto", "cpu"],
+                "default": "auto",
+                "description": "Where local compute jobs run (today the cloth/hair drape of the HairDeck and strand "
+                               "hair fits; app/core/gpu_compute.py). auto = on the GPU through Vulkan when this "
+                               "server process may use one — a hardware driver is installed and the process can "
+                               "open the GPU (on Linux: the 'render' group) — else on the CPU; a software Vulkan "
+                               "device (llvmpipe) never counts. cpu = always on the CPU. The GPU drapes 2-10x "
+                               "faster; its results differ from the CPU's in the last digits (sub-millimetre, single "
+                               "points up to a few cm), so every fit records its device, and a fit made on the "
+                               "other device is NOT refitted for that. Read once per process: a change applies "
+                               "after a server restart.",
+            },
+            "gpu_compute_parallel": {
+                "type": "int",
+                "label": "Max. concurrent GPU compute jobs",
+                "default": 6,
+                "min": 1,
+                "max": 16,
+                "description": "How many local compute jobs may use the GPU at the same time, across the server and "
+                               "its refit worker processes (each worker has its own GPU context). A job that finds "
+                               "every slot taken waits for one (the live progress line says \"Waiting for the "
+                               "GPU\"); it never moves to the CPU on its own. Default 6, measured on one item "
+                               "(HairDeck drape, Radeon 8060S iGPU, 1-8 at once): the throughput rises up to 6 "
+                               "drapes at once (8 -> 47 per minute) and stays flat beyond; at 8 a single drape "
+                               "takes longer than the same drape alone on the CPU, although the GPU is still "
+                               "below 100 % — each job drives the GPU from one CPU core, and that, not the GPU, "
+                               "is the limit. A smaller value suits a GPU shared with other work. A change "
+                               "applies to the next job of the server; running refit worker processes keep the "
+                               "value they were started with.",
+            },
             "cors_origins": {
                 "type": "text",
                 "label": "Allowed CORS origins",

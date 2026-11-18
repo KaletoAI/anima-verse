@@ -67,6 +67,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
+from app.core import process_slots
 from app.core.log import get_logger
 
 logger = get_logger(__name__)
@@ -224,14 +225,12 @@ def is_available() -> bool:
 
 # --- the cross-process limit ---------------------------------------------------
 
-#: How often a caller that found every slot taken tries again.
-SLOT_POLL_S = 0.25
 #: Name of the slot folder under the instance directory.
 SLOT_DIR_NAME = ".blender-slots"
-
-#: Set in a process without a loaded config (a refit pool worker, at spawn):
-#: ``{"dir": <slot folder>, "limit": <n>}`` — see ``pin_slots``.
-_pinned: Dict[str, Any] = {}
+#: The slots (``app.core.process_slots``): ``server.blender_max_concurrent`` across every process.
+# the limit read goes through ``_config`` looked up at call time (a test may replace it)
+_SLOTS = process_slots.SlotPool(SLOT_DIR_NAME, "server.blender_max_concurrent", 2,
+                                read=lambda path, default: _config(path, default))
 
 #: ``callback(waiting: bool)`` of the caller's context: True when this run has
 #: to wait for a slot, False once it got one after waiting (``wait_notice``).
@@ -242,33 +241,14 @@ _wait_listener: contextvars.ContextVar[Optional[Callable[[bool], None]]] = \
 def max_concurrent() -> int:
     """``server.blender_max_concurrent`` resolved live (at least 1); the value
     pinned at spawn in a process without a config, else the schema default."""
-    if "limit" in _pinned:
-        return max(1, int(_pinned["limit"]))
-    try:
-        from app.core.config_schema import SECTIONS
-        default = int(SECTIONS["server"]["fields"]["blender_max_concurrent"]["default"])
-    except Exception:  # noqa: BLE001 — the limit never stops a run
-        default = 2
-    try:
-        return max(1, int(_config("server.blender_max_concurrent", default)))
-    except (TypeError, ValueError):
-        return max(1, default)
+    return _SLOTS.limit()
 
 
 def slot_dir() -> Path:
     """The folder of the slot files: pinned at spawn, else
     ``<instance>/.blender-slots``, else (a script without an instance) one
     per user in the system temp folder."""
-    if _pinned.get("dir"):
-        return Path(_pinned["dir"])
-    try:
-        from app.core import paths
-        if paths.instance_initialised():
-            return paths.get_instance_dir() / SLOT_DIR_NAME
-    except Exception:  # noqa: BLE001
-        pass
-    uid = os.getuid() if hasattr(os, "getuid") else 0
-    return Path(tempfile.gettempdir()) / f"anima-blender-slots-{uid}"
+    return _SLOTS.folder()
 
 
 def use_instance_config(default_dir: Path) -> Optional[Path]:
@@ -313,11 +293,7 @@ def use_instance_config(default_dir: Path) -> Optional[Path]:
 def pin_slots(directory: Optional[str], limit: Optional[int]) -> None:
     """Fix folder and limit for this process (a spawned worker without config
     or instance gets the server's values at spawn; they stay until it ends)."""
-    _pinned.clear()
-    if directory:
-        _pinned["dir"] = str(directory)
-    if limit:
-        _pinned["limit"] = int(limit)
+    _SLOTS.pin(directory, limit)
 
 
 def spawn_slots() -> Tuple[str, int]:
@@ -339,61 +315,19 @@ def wait_notice(callback: Callable[[bool], None]) -> Iterator[None]:
 
 def _notify(waiting: bool) -> None:
     cb = _wait_listener.get()
-    if cb is None:
-        return
-    try:
+    if cb is not None:
         cb(waiting)
-    except Exception:  # noqa: BLE001 — visibility only
-        logger.exception("Blender wait notice failed")
-
-
-def _try_slots(folder: Path, limit: int) -> Optional[int]:
-    """An open descriptor holding one of slots ``0..limit-1`` exclusively, else None."""
-    import fcntl
-    for i in range(limit):
-        fd = os.open(str(folder / f"slot-{i}.lock"), os.O_RDWR | os.O_CREAT, 0o600)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            os.close(fd)
-            continue
-        return fd
-    return None
 
 
 @contextlib.contextmanager
 def blender_slot(label: str = "") -> Iterator[None]:
     """Hold one of the ``max_concurrent()`` slots for the block — waiting,
-    polled every ``SLOT_POLL_S``, while all are taken. The limit is re-read on
-    every try, so a changed setting applies to callers that already wait. A
-    slot folder that cannot be created runs the block unlimited (logged)."""
-    folder = slot_dir()
-    try:
-        folder.mkdir(parents=True, exist_ok=True)
-    except OSError as e:
-        logger.warning("Blender limit: slot folder %s unusable (%s) — running unlimited", folder, e)
+    polled every ``process_slots.SLOT_POLL_S``, while all are taken. The limit
+    is re-read on every try, so a changed setting applies to callers that
+    already wait. A slot folder that cannot be created runs the block
+    unlimited (logged)."""
+    with process_slots.hold(slot_dir(), max_concurrent, what="Blender", label=label, on_wait=_notify):
         yield
-        return
-    fd: Optional[int] = None
-    waited = False
-    started = time.monotonic()
-    try:
-        while True:
-            fd = _try_slots(folder, max_concurrent())
-            if fd is not None:
-                break
-            if not waited:
-                waited = True
-                logger.info("Blender %s: waiting for a free slot (limit %d)", label or "run", max_concurrent())
-                _notify(True)
-            time.sleep(SLOT_POLL_S)
-        if waited:
-            logger.info("Blender %s: slot free after %.1fs", label or "run", time.monotonic() - started)
-            _notify(False)
-        yield
-    finally:
-        if fd is not None:
-            os.close(fd)  # closing the descriptor drops the flock
 
 
 def _text(data: Any) -> str:

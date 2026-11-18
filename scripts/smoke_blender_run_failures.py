@@ -86,6 +86,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.blender import outcome as oc  # noqa: E402
 from app.blender import runner  # noqa: E402
+from app.core import process_slots  # noqa: E402
 
 #: A block header of ``runner._write_log``.
 HEAD = re.compile(r"^=== (?P<stamp>\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\S*) script=(?P<script>\S+) "
@@ -417,15 +418,15 @@ def main() -> int:
 
             # [18]
             res = safe_run(inputs={"model": model}, timeout_s=30)
-            check(res.get("ok") is True and 0.0 <= res.get("slot_wait_s", -1) < runner.SLOT_POLL_S,
-                  f"[18] a free slot: slot_wait_s {res.get('slot_wait_s')!r} < {runner.SLOT_POLL_S}")
-            held = [runner._try_slots(tmp / "slots", 2) for _ in range(2)]
+            check(res.get("ok") is True and 0.0 <= res.get("slot_wait_s", -1) < process_slots.SLOT_POLL_S,
+                  f"[18] a free slot: slot_wait_s {res.get('slot_wait_s')!r} < {process_slots.SLOT_POLL_S}")
+            held = [process_slots.try_slots(tmp / "slots", 2) for _ in range(2)]
             release = threading.Timer(1.0, lambda: [os.close(fd) for fd in held if fd is not None])
             release.start()
             res = safe_run(inputs={"model": model}, timeout_s=30)
             release.join()
             wait = res.get("slot_wait_s", -1)
-            check(None not in held and res.get("ok") is True and 1.0 <= wait < 1.0 + 2 * runner.SLOT_POLL_S + 0.5
+            check(None not in held and res.get("ok") is True and 1.0 <= wait < 1.0 + 2 * process_slots.SLOT_POLL_S + 0.5
                   and res["seconds"] >= wait,
                   f"[18] both slots held 1 s: slot_wait_s {wait!r}, seconds {res.get('seconds')!r}")
         budget_cases()
