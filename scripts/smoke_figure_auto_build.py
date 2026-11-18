@@ -406,6 +406,9 @@ def failure_section():
     track_labels = []
 
     class RecordingTracks:
+        def character_paused(self, name):
+            return False   # nobody is paused (an unreadable pause counts as paused, generation_pause.is_paused)
+
         def track_start(self, *a, **k):
             return "t7"
 

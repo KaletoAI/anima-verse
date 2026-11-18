@@ -315,6 +315,9 @@ def install_stubs():
     model3d.generation_slot = slot
 
     class Tracks:
+        def character_paused(self, name):
+            return False   # nobody is paused (an unreadable pause counts as paused, generation_pause.is_paused)
+
         def track_start(self, *a, **k):
             return "t1"
 

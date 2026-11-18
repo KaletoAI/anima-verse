@@ -126,6 +126,9 @@ def copy_section(root: Path, source: Path):
                         painted=("item_black_lace_thong",), pieces={"underwear_bottom": "item_black_lace_thong"})
 
     class Tracks:
+        def character_paused(self, name):
+            return False   # nobody is paused (an unreadable pause counts as paused, generation_pause.is_paused)
+
         def track_start(self, *a, **k):
             return ""
     task_queue.get_task_queue = lambda: Tracks()
