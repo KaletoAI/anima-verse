@@ -1167,6 +1167,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
           ) : null}
           {shown === 'body' && figureNow?.served_url ? (
             <Model3DViewer key={`body:${figureNow.served_url}`} url={figureNow.served_url} format="glb" height={430}
+              footPose={figureNow.served_foot_pose ?? null}
+              clipGroup={figureNow.served_foot_pose ? 'ground' : undefined}
               statusPanel={info.steps?.length ? <ModelSteps steps={info.steps} /> : undefined} />
           ) : shown === 'fit' || shown === 'old' ? (
             <div style={shown === 'old' ? { outline: '3px solid rgba(187, 128, 9, 0.9)', borderRadius: 6 } : undefined}>

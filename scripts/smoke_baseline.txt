@@ -12,7 +12,6 @@ smoke_extension_rig_pivot	ENV: opt-in tool, not a standalone check: requires --m
 smoke_extension_rig_real	ENV: opt-in tool: requires RUN_EXTENSION_RIG_REAL=1 and --model/--declaration/--group of a real asset
 smoke_extension_rig_robustness	ENV: opt-in tool: requires --model/--declaration/--group of a real rigged asset
 smoke_fbx_importer_parity	STALE: one-off parity proof vs the pinned pre-C++-importer scripts (a98f9ed5) compares WHOLE result dicts; later intentional output fields (turn_deg 339af01ee, shift_cm 6d1835805, and more) break it. Not deleted: its Blender per-take travel (+0.1/-0.2 m), sparse-take and multi-layer-rejection checks exist nowhere else
-smoke_foot_pose_call_sites	REAL: new clip path frontend/src/tabs/poses/PlacePreview.tsx (00702ff32, A110) calls bindRelativeClip without applyFootPose/plantFootPose: a shod figure in the place preview plays bare-foot tracks (or the site needs an explicit exemption)
 smoke_footwear_hem	REAL: layered-over trousers sit 0.2 mm (z) / 1.2 mm (x) inside the hand-derived shaft bound; red already at its own commits 004728b08 and b25bbbe39 (tree snapshots) — the derivation or the layering margin is off, unresolved
 smoke_footwear_refit	STALE: A107 (b1670f752) keys fits on geometry, not file bytes: the fixture's "body change" is a byte-only repack (new generator) and no longer makes the fit stale
 smoke_garment_chain	STALE: the own-mesh dress fixture is now refused by the fit gates (max_push_m 0.216 > 0.1, deep_push_share 0.50 > 0.12, new_edge_max_m 0.41 > 0.17) after the fit changes A174-A199; not re-derived
@@ -25,7 +24,6 @@ smoke_garment_routes	STALE: hair payload and footwear gate limits changed since 
 smoke_garment_store	STALE: "bad view" no longer raises: the view set grew (A185 garment_set GARMENT_VIEWS, 91f4908bf)
 smoke_garment_wardrobe_routes	STALE: clothing gate limits and the "no base model" status text changed
 smoke_hair_strands_graft	STALE: [4] the build's sidecar no longer carries the strand attributes record the smoke expects; not re-derived
-smoke_heel_pose	REAL: guard hit: WardrobeGarment.tsx shows the served figure (figureNow.served_url, A136 b4787f2c7) in a viewer without footPose — a shod figure there plays bare-foot tracks
 smoke_hub_job_resume	STALE: B3 improvement-engine doubles are behind several API changes (store rows carry forced, ImprovementType needs_media/subject_character, the image service .pool for face_retexture routing); stopped after three layers
 smoke_i18n_orphans	REAL: orphan de.json key "Dressed front edit of the outfit's full-body reference failed" (shared/languages/de.json)
 smoke_image_routing_migration	STALE: _seed_default_mesh_backends appends quadruped-local to every existing list (d4aa4edd8/62c7b7b51, its docstring) and seeds 12 entries; C3 pins (False,1) / (True,11) / an emptied list staying [] — owner to confirm "emptied stays empty" vs the quadruped addition

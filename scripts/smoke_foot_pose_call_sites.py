@@ -40,6 +40,12 @@ its enclosing function):
                            member indentation): ``applyFootPose(…bindRelativeClip(…))``,
                            the plant behind it
     rebuildOverlay       — the marker figures of the floor-plan overlay: the same
+  frontend/src/tabs/poses/PlacePreview.tsx
+    useEffect            — the scene effect of the Poses tab's place preview
+                           (00702ff32, Ruling A110): a figure on a prop's place
+                           plays the edited clip through ``bindRelativeClip``;
+                           a shod body gets the client's ``prepareShoes`` step
+                           there (``applyFootPose`` + ``plantFootPose``)
 
 A NEW call site anywhere else fails [1]; a listed site whose body lost the
 pose fails [2]. [3] pins the definitions themselves: ``adaptExternalClips``
@@ -80,6 +86,7 @@ ALLOWED: dict[str, set[str]] = {
         "adaptExternalClips", "retargetClips", "buildModel", "fitLibraryAsync", "loadManifestModels",
     },
     "frontend/src/tabs/characters/Model3DViewer.tsx": {"useEffect", "rebuildOverlay"},
+    "frontend/src/tabs/poses/PlacePreview.tsx": {"useEffect"},
 }
 
 SCAN_DIRS = ("client3d/src", "frontend/src")

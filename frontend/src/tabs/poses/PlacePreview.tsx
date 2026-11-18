@@ -31,9 +31,10 @@ import { Fragment, useEffect, useMemo, useRef, useState, type MutableRefObject }
 import type { Object3D, AnimationClip } from 'three'
 import {
   CAPSULE_REGION_COLORS, FIGURE_HEIGHT_M, contactCapsules, OPENING_MARGIN_M, STRAND_RECORD_VERSION, alignmentDelta, alignmentLamp,
-  bindRelativeClip, calibratedRoot, capsuleWireframe, channelWireframe, clipCalibration,
-  installSkinnedNormalCorrection, median, pairYaw, pickModelVariant, placeCapsuleWireframe, placeChannelWireframe,
-  placeModelSpec, restCorrections, restPoseOf, strandCandidates,
+  applyFootPose, bindRelativeClip, calibratedRoot, capsuleWireframe, channelWireframe, clipCalibration,
+  footPoseLiftM, footPoseMatches, installSkinnedNormalCorrection, median, pairYaw, pickModelVariant,
+  placeCapsuleWireframe, placeChannelWireframe, placeModelSpec, plantFootPose, restCorrections, restPoseOf,
+  strandCandidates, transplantedRestPose, type FootPose,
   type AlignmentDraft, type ChannelNow, type FrameInspection, type AlignmentLamp, type ClipHeightOffsetsCm, type CollisionPayload, type FigureRuntime,
   type HairStrandRecord, type SceneMarker, type SceneModelSpec, type SecondaryMotionPayload,
   contactLamp, contactReport, solvePairFix, fixRoot, fixPivot, partnerTurnFix, turnAxes,
@@ -66,6 +67,8 @@ interface ModelAnswer {
   model?: {
     url?: string; collision?: CollisionPayload | null
     hair_strands?: { url?: string; sha256?: string } | null
+    /** The fitted shoe's foot pose of the served file (`model3d.py`, `garment_assembly.served_foot_pose`). */
+    foot_pose?: FootPose | null
   }
   motion?: SecondaryMotionPayload
 }
@@ -716,7 +719,23 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           }
           const tracks = clip.raw.tracks.filter((tr) => !(/hips/i.test(tr.name) && tr.name.endsWith('.position')))
           const inplace = new THREE.AnimationClip(clip.raw.name, clip.raw.duration, tracks)
-          const bound = rig ? bindRelativeClip(THREE, inplace, restCorrections(THREE, restPoseOf(THREE, rig), inst)) : inplace
+          // THE SHOD CLIP, the 3D client's `prepareShoes` step: only a body that carries exactly the fitted shoes
+          // (`footPoseMatches`) gets the extension right after the bind-relative step (relative to the rest the
+          // transplant plays, `transplantedRestPose`) and the per-frame foot plant on an unposed probe clone; a
+          // bare figure's clip passes through untouched.
+          const fp = answer?.model?.foot_pose
+          const shod = fp && footPoseMatches(model.template, fp) ? fp : null
+          const donor = rig ? restPoseOf(THREE, rig) : null
+          const corrections = donor ? restCorrections(THREE, donor, inst, undefined, shod) : null
+          const bareClip = corrections ? bindRelativeClip(THREE, inplace, corrections) : inplace
+          let bound = bareClip
+          if (shod) {
+            const rest = restPoseOf(THREE, inst)
+            const clipRest = donor && corrections?.size ? transplantedRestPose(THREE, donor, rest, corrections) : null
+            bound = applyFootPose(THREE, bareClip, shod, rest, clipRest)
+            if (bound !== bareClip) bound = plantFootPose(THREE, bound, bareClip, skclone(model.template) as Object3D, shod,
+              { rootY: footPoseLiftM(shod, 'ground'), unitsPerCm: 0.01 })
+          }
           const mixer = new THREE.AnimationMixer(inst)
           mixer.clipAction(bound).play()
           const m = p.marker
