@@ -4,7 +4,8 @@ Everything geometric the per-strand simulation needs is computed here, on the CP
 record; the clients (``@anima/scene-render`` ``hairSim``) decide no geometry. One record per hair fit, cached as
 two sidecars beside the fit — ``<fit stem>.strands.json`` (what the clients get) and ``<fit stem>.strands.npz``
 (the per-vertex binding the assembly writes into the served GLB, ``_STRAND_CARD`` / ``_STRAND_U``) — keyed by the
-fit GLB's sha256 (and the character's collision scales, which the capsules carry), so existing fits need no refit.
+fit GLB's sha256 (and the character's collision scales and the fit body's extension groups, which the capsules carry —
+``extension_sig``, review 07#4), so existing fits need no refit.
 
 The record (``build_record``):
 
@@ -366,7 +367,8 @@ def build_record(fit_glb: bytes, *, mode: str, item_id: str, fsig: str, layout: 
         "eye_box": [round(float(v), 6) for v in frame["eye_box"]],
         "landmarks": frame["landmarks"],
         "sdf": sdf_payload(sdf, floor_y=frame[SDF_FLOOR], neck=(frame["ear"], frame["cz"]) if SDF_NECK else None),
-        "capsules": {"version": fitted["version"], "capsules": fitted["capsules"], "scales": fitted["scales"]},
+        "capsules": {"version": fitted["version"], "capsules": fitted["capsules"], "scales": fitted["scales"],
+                     "extension_sig": extension_sig(extension)},
         "params": dict(PARAMS[mode]),
         "vertex_attributes": dict(VERTEX_ATTRIBUTES),
     }
@@ -421,22 +423,45 @@ def _read_json(path: Path) -> Tuple[str, Dict[str, Any]]:
     return sha, record
 
 
-def _fresh(record: Dict[str, Any], fit_sha: str, scales: Optional[Dict[str, float]]) -> bool:
+def extension_sig(extension: Optional[list]) -> str:
+    """Review 07#4: the content hash of the extension groups a record's capsules were made of (``fit_extension``) —
+    they follow the body's extension rig and the loaded packages' declarations, neither of which is in the fit's
+    bytes."""
+    return hashlib.sha256(json.dumps(extension or [], sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+def _fresh(record: Dict[str, Any], fit_sha: str, scales: Optional[Dict[str, float]],
+           ext_sig: Optional[str] = None) -> bool:
+    capsules = record.get("capsules") or {}
+    # a record from before 07#4 carries no sig: it was made of the extension groups of then — read as none
+    made_ext = capsules.get("extension_sig") or extension_sig([])
     return (record.get("version") == RECORD_VERSION and bool(fit_sha) and record.get("fit_sha256") == fit_sha
-            and (scales is None or (record.get("capsules") or {}).get("scales") == scales))
+            and (scales is None or capsules.get("scales") == scales)
+            and (ext_sig is None or made_ext == ext_sig))
 
 
 def current_sha(fit_path: Path, *, fit_sha256: Optional[str] = None,
                 scales: Optional[Dict[str, float]] = None) -> str:
     """Read-only: the sha256 of the fit's strands JSON when it is current — this version, made of the fit file's
-    bytes (``fit_sha256`` when the caller already has it) and, with ``scales``, of those collision scales —, else
-    ""."""
+    bytes (``fit_sha256`` when the caller already has it), with ``scales`` of those collision scales, and of the
+    extension groups the fit's body has now (``_extension_at``) —, else ""."""
     json_path, _ = sidecar_paths(fit_path)
     sha, record = _read_json(json_path)
     if not sha:
         return ""
     fit_sha = fit_sha256 if fit_sha256 is not None else _file_sha(Path(fit_path))
-    return sha if _fresh(record, fit_sha, scales) else ""
+    return sha if _fresh(record, fit_sha, scales, _extension_at(Path(fit_path))) else ""
+
+
+def _extension_at(fit_path: Path) -> Optional[str]:
+    """``extension_sig`` of the extension groups of the body the fit at ``fit_path`` was made on, its character
+    found from the path (``characters/<name>/garments/…``); None when the path is not under a ``garments/``."""
+    from app.core import garment_store as gs
+    garments = next((p for p in fit_path.parents if p.name == "garments"), None)
+    if garments is None:
+        return None
+    return extension_sig(_extension_of_body(garments.parent / "model3d",
+                                            gs.read_record(fit_path.with_suffix(".json"))))
 
 
 def _log_once(key: Tuple[str, str], message: str, *args) -> None:
@@ -471,13 +496,17 @@ def fit_extension(character_name: str, fit_record: Dict[str, Any]) -> list:
     """The extension groups that get capsules on the body the fit was made on (Ruling H-R4):
     ``collision.extension_chains`` of that body's model sidecar (``model3d/<body_id>.json``, the fit record's
     ``body_id``); ``[]`` without a body id, a sidecar or an applied extension rig."""
+    from app.models.character import get_character_dir
+    return _extension_of_body(get_character_dir(character_name) / "model3d", fit_record)
+
+
+def _extension_of_body(model_dir: Path, fit_record: Dict[str, Any]) -> list:
     from app.core import collision
     from app.core.model3d import _read_sidecar
-    from app.models.character import get_character_dir
-    body_id = str(fit_record.get("body_id") or "")
+    body_id = str((fit_record or {}).get("body_id") or "")
     if not _BODY_ID_RE.fullmatch(body_id):
         return []
-    meta = _read_sidecar(get_character_dir(character_name) / "model3d" / f"{body_id}.glb")
+    meta = _read_sidecar(model_dir / f"{body_id}.glb")
     return collision.extension_chains(meta) if meta else []
 
 
@@ -508,7 +537,8 @@ def record_for_fit(character_name: str, fit_path: Path) -> Optional[Dict[str, An
         scales = collision.character_scales(character_name)
         json_path, npz_path = sidecar_paths(fit_path)
         _sha, existing = _read_json(json_path)
-        if existing and _fresh(existing, fit_sha, scales) and npz_path.is_file():
+        extension = fit_extension(character_name, fit_record)
+        if existing and _fresh(existing, fit_sha, scales, extension_sig(extension)) and npz_path.is_file():
             return existing
         try:
             n_hair = int(((fit_record.get("report") or {}).get("vertices") or {})["hair"])
@@ -519,7 +549,7 @@ def record_for_fit(character_name: str, fit_path: Path) -> Optional[Dict[str, An
                       else hairdeck_layout(garment.positions, garment.indices, n_hair))
             record, arrays = build_record(blob, mode=mode, item_id=str(fit_record.get("item_id") or ""),
                                           fsig=str(fit_record.get("fsig") or ""), layout=layout, scales=scales,
-                                          extension=fit_extension(character_name, fit_record))
+                                          extension=extension)
         except Exception as exc:  # noqa: BLE001 — no record means static hair, never a failed assembly
             _log_once(key, "Hair strands %s: no record (%s)", fit_path.name, exc)
             return None
