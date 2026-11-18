@@ -69,7 +69,7 @@ What is expected, derived by hand from the spec (section numbers):
   C3 (§ 0 face) face retexture dying in its rig job leaves the corrected
               source, its sidecar and the replacement mask in the record's
               directory (the staging dir is gone); the resume publishes them.
-  C4 (§ 5.5 + § 3.6) start_resumer: a thread-owned prop record is resumed and
+  C4 (§ 5.5 + § 3.6) start_resumer: a thread-owned prop record (naming its variant uid; a legacy one is kept for repair) is resumed and
               its guard (props._generating) is taken BEFORE start_resumer
               returns; its prop was deleted, so the stage ends before any
               poll and its recorded hub job is cancelled; a task-owned record of a PAUSED queue is collected ahead
@@ -511,15 +511,17 @@ check("B2 task failed without retry", row["status"] == "failed" and row["retry_c
 
 # B3
 from app.core.improvements import engine  # noqa: E402
+from app.core.improvements.base import ImprovementType  # noqa: E402
 
 
-class _Type:
+class _Type(ImprovementType):
+    # the type contract's defaults (needs_media, subject_character) — only apply is this smoke's
     def apply(self, candidate, params, task_id):
         raise HubJobLost("gone")
 
 
 marks = []
-with patch.object(engine.store, "get", lambda i: {"id": i, "type_id": "t", "params": {},
+with patch.object(engine.store, "get", lambda i: {"id": i, "type_id": "t", "params": {}, "forced": False,
                                                   "failed_count": 0, "done_count": 0,
                                                   "mode": "standing", "status": "open"}), \
         patch.object(engine.store, "list_steps", lambda i: [{"candidate_key": "k", "candidate_label": "k",
@@ -543,6 +545,9 @@ char_dir = get_character_dir("demo", create=True)
 class _UpLost:
     face_calls = 0
     backends = []
+    # The face route is resolved on the service's pool (face_retexture._primary_backend): an empty pool has no
+    # face backend, so the photo controls run locally — the upscale is still the first hub job.
+    pool = __import__("app.imagegen.selection", fromlist=["BackendPool"]).BackendPool([])
 
     def upscale_image(self, *a, **k):
         raise HubJobLost("upscale job gone")
@@ -552,8 +557,18 @@ class _UpLost:
         return {"ok": False}
 
 
+def _eligible(*a, _snapshot=None, **k):
+    # The front view as the reference (an upscale is due: ``use_upscale("front", None)`` is True); the check hands
+    # the photo it read over through ``_snapshot`` (``face_retexture.check``).
+    if _snapshot is not None:
+        _snapshot["image"] = still().read_bytes()
+        _snapshot["rgba"] = still().read_bytes()
+    return {"problems": [], "ok": True, "reference": "front"}
+
+
 with patch.object(service_mod, "get_image_service", lambda: _UpLost()), \
-        patch.object(face_retexture, "check", lambda *a: {"problems": [], "ok": True}), \
+        patch.object(face_retexture, "check", _eligible), \
+        patch.object(face_retexture, "stored_source", lambda *a: "front"), \
         patch.object(face_retexture, "runnable", lambda *a: {"problems": [], "ok": True}), \
         patch.object(face_retexture, "photo_path", lambda *a: still()):
     try:
@@ -581,6 +596,9 @@ class StubService:
     """Stage-aware stand-in for the image service: a FRESH stage submits
     (records a job, then — when ``die`` is set — the process dies); a stage
     with a recorded job of an earlier process is collected (``attach``)."""
+
+    # the face route resolves on the service's pool: none here, the photo controls run locally (see _UpLost)
+    pool = _UpLost.pool
 
     def __init__(self):
         self.mesh_calls = 0
@@ -643,6 +661,10 @@ patches = [
     patch.object(model3d, "_attach_measurement", lambda *a, **k: None),
     patch.object(model3d, "request_lod", lambda *a, **k: None),
     patch("app.core.extension_rig.extension_metadata", lambda name, **kw: {}),
+    # The whole-body mesh chain (T-pose -> mesh -> rig) these cases resume is the path of a character off the
+    # base-body pipeline (a temporary NPC); since b25bbbe39 (Task 11h, Ruling A13) the profile-less humanoid "demo"
+    # would be on it and refused for its missing base model — the stub smoke_base_body_model uses keeps it off.
+    patch("app.core.base_body.is_base_pipeline", lambda *a, **k: False),
 ]
 for p in patches:
     p.start()
@@ -758,7 +780,8 @@ face = FaceStub()
 face.die.add("rig")
 (mdir / "unrigged" / "sigF.glb").write_bytes(b"glTF-original")
 with patch.object(service_mod, "get_image_service", lambda: face), \
-        patch.object(face_retexture, "check", lambda *a: {"problems": [], "ok": True}), \
+        patch.object(face_retexture, "check", _eligible), \
+        patch.object(face_retexture, "stored_source", lambda *a: "front"), \
         patch.object(face_retexture, "runnable", lambda *a: {"problems": [], "ok": True}), \
         patch.object(face_retexture, "photo_path", lambda *a: still()), \
         patch.object(face_retexture, "MAX_BYTES", 10 ** 9), \
@@ -799,8 +822,10 @@ for p in patches:
 HUB.reset()
 svc, video, mesh = restart()
 from app.core import location_model3d  # noqa: E402,F401  (registers its kinds)
+# A record that names its variant's uid (every record since 3ffb21a81): one WITHOUT it is a legacy record, whose
+# paid job is collected and kept for a manual repair (props._defer_legacy_mesh, dd06b1a96) instead of cancelled.
 thread_op = hub_ops.create("prop_mesh", "prop:smoke|0|x|", {
-    "prop_id": "gone-prop", "variant": 0, "guard_key": "gone-prop|0|x|",
+    "prop_id": "gone-prop", "variant": 0, "variant_uid": "v-gone", "guard_key": "gone-prop|0|x|",
     "src": "inputs/none.png"}, label="Prop: gone")
 jid_gone = HUB.new_job("running")
 thread_op.update_state(lambda st: st.setdefault("jobs", {}).update(mesh={
