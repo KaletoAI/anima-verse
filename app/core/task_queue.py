@@ -1034,15 +1034,29 @@ class TaskQueue:
         """``track_finish`` for a safety net: finishes the tracked task only
         while it is still pending or running, so a track its owner already
         finished keeps its own status, error and duration. Returns True when
-        it finished the task."""
+        it finished the task.
+
+        One conditional UPDATE: a cancel (``track_cancel``) that lands while
+        this runs either closes the row first — then nothing is written — or
+        finds it closed; it is never overwritten by a read-then-write."""
+        self._held_tracks.discard(task_id)
+        t0 = self._track_start_times.pop(task_id, None)
+        duration_s = round(time.monotonic() - t0, 2) if t0 else 0.0
+        status = "failed" if error else "completed"
+        now = utc_now_iso()
         with self._write_lock, self._connect() as conn:
-            row = conn.execute(
-                "SELECT status FROM tasks WHERE task_id=? AND task_origin='tracked'",
-                (task_id,)).fetchone()
-        if not row or row[0] not in ("pending", "running"):
-            self._held_tracks.discard(task_id)
+            cur = conn.execute(
+                """UPDATE tasks
+                   SET status=?, completed_at=?, duration_s=?, error=?
+                   WHERE task_id=? AND task_origin='tracked' AND status IN ('pending', 'running')""",
+                (status, now, duration_s, error, task_id))
+            conn.commit()
+        if not cur.rowcount:
             return False
-        self.track_finish(task_id, error=error)
+        log_fn = logger.warning if error else logger.info
+        log_fn(
+            "Track %s: %s (%.1fs)%s",
+            status, task_id, duration_s, f" error={error}" if error else "")
         return True
 
     def track_cancel(self, task_id: str) -> bool:

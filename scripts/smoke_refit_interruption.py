@@ -98,6 +98,13 @@ Expected, derived by hand:
     d) the TaskPanel keeps a 409's message (``ApiError.message`` = the server's ``detail``) and renders it through
        ``t()`` — before, its ``catch {}`` dropped it silently. Before the fix a) answered ``cancelled`` and marked
        the row cancelled while the refit went on.
+[11] ``TaskQueue.track_finish_if_open``. Old body (inline, verbatim from 101d1f505) with a cancel landing between
+    its SELECT and its ``track_finish`` → returns True and the row reads ``completed``: the cancel is lost. New:
+    a) a cancel landing before the write (hooked into the method's first step) → False, the row stays
+       ``cancelled`` / "Manuell abgebrochen"; b) open running row → True, ``completed`` / ""; a later cancel finds
+       it closed → False; c) pending row with ``error="boom"`` → True, ``failed`` / "boom"; d) again with
+       another error → False, ``failed`` / "boom" kept; e) unknown id → False; f) a queued (not tracked) row →
+       False, still ``pending``.
 """
 import os
 import sys
@@ -702,6 +709,64 @@ def main() -> int:
         check("d) the TaskPanel keeps a 409's message and renders it through t()",
               ("err.status === 409) setCancelRefused(err.message)" in panel, "{t(cancelRefused)}" in panel),
               (True, True))
+
+        # --- [11] track_finish_if_open never overwrites a cancel ---------------------------------------------------
+        print("[11] track_finish_if_open: one conditional write, a cancel stays cancelled")
+
+        def row(task_id):
+            with tq._connect() as conn:
+                r = conn.execute("SELECT status, error FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+            return (r[0], r[1]) if r else None
+
+        def old_track_finish_if_open(task_id, error=""):  # body at 101d1f505, verbatim
+            with tq._write_lock, tq._connect() as conn:
+                r = conn.execute("SELECT status FROM tasks WHERE task_id=? AND task_origin='tracked'",
+                                 (task_id,)).fetchone()
+            if not r or r[0] not in ("pending", "running"):
+                tq._held_tracks.discard(task_id)
+                return False
+            tq.track_finish(task_id, error=error)
+            return True
+
+        class CancelFirst(set):
+            """``_held_tracks`` whose ``discard`` lets a TaskPanel cancel land first (the first thing the method
+            does, before it writes) — once: ``track_cancel`` discards too."""
+            fired = False
+
+            def discard(self, task_id):
+                if not self.fired:
+                    self.fired = True
+                    tq.track_cancel(task_id)
+                super().discard(task_id)
+
+        live = tq.track_start("cpu_refit", "Refit · Ria", agent_name="Ria", start_running=True)
+        real_finish = tq.track_finish
+        tq.track_finish = lambda task_id, error="": (tq.track_cancel(task_id), real_finish(task_id, error))[1]
+        old_ret = old_track_finish_if_open(live)
+        tq.track_finish = real_finish
+        check("old body: a cancel between its read and its write is overwritten", (old_ret, row(live)[0]),
+              (True, "completed"))
+        held = tq._held_tracks
+        live = tq.track_start("cpu_refit", "Refit · Ria", agent_name="Ria", start_running=True)
+        tq._held_tracks = CancelFirst(held)
+        new_ret = tq.track_finish_if_open(live)
+        tq._held_tracks = held
+        check("a) a cancel landing before the write: False, the row stays cancelled", (new_ret, row(live)),
+              (False, ("cancelled", "Manuell abgebrochen")))
+        live = tq.track_start("cpu_refit", "Refit · Ria", agent_name="Ria", start_running=True)
+        check("b) open, no error: True, completed", (tq.track_finish_if_open(live), row(live)),
+              (True, ("completed", "")))
+        check("b) a cancel after it finds the row closed", tq.track_cancel(live), False)
+        live = tq.track_start("cpu_refit", "Refit · Ria", agent_name="Ria", start_running=False)
+        check("c) pending, with an error: True, failed", (tq.track_finish_if_open(live, error="boom"), row(live)),
+              (True, ("failed", "boom")))
+        check("d) already finished: False, its own status and error kept",
+              (tq.track_finish_if_open(live, error="other"), row(live)), (False, ("failed", "boom")))
+        check("e) unknown id: False", tq.track_finish_if_open("track_nope"), False)
+        tq.pause_queue("smoke_paused")  # no worker dequeues it meanwhile
+        queued = tq.submit("smoke_noop_type", {}, queue_name="smoke_paused")
+        check("f) a queued (not tracked) row: False, untouched",
+              (tq.track_finish_if_open(queued), row(queued)[0]), (False, "pending"))
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
     return 1 if FAILS else 0
