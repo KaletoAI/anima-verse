@@ -69,8 +69,9 @@ Fixture, W 1024 x H 1200 on grey 128, skin (200, 160, 140):
 [1] head_zone + gate numbers as derived above; limits("clothing") worn has
     no outside_dRGB limit (its chip is information); every worn record
     carries the current gate_version; GATE_VERSIONS["worn"] =
-    WORN_GATE_VERSION = 4 (2 + the gate audit's GARMENT_MIN / drift,
-    smoke_garment_gate_audit.py, 3; + the composite support, [7], 4); the
+    WORN_GATE_VERSION = 5 (2 + the gate audit's GARMENT_MIN / drift,
+    smoke_garment_gate_audit.py, 3; + the composite support, [7], 4; + the
+    base head left out of extra_part, smoke_garment_clothing_back.py [2], 5); the
     re-gate below re-judges a version-1 record into the current version.
 [2] Drafted back, the next chain run (garments.run_garment, no steps): the
     worn front is accepted (COLLAR, record of the current gate), the back has
@@ -282,7 +283,7 @@ def main() -> int:
               (tinted["ok"], tinted["outside_dRGB"], tinted["outside_xor"], tinted["head_garment"], tinted["reasons"]),
               (True, 16.0, 0.0, 0.0, []))
         check("record version", (collar["gate_version"], gg.WORN_GATE_VERSION,
-                                 garment_clothing.GATE_VERSIONS["worn"]), (4, 4, 4))
+                                 garment_clothing.GATE_VERSIONS["worn"]), (5, 5, 5))
         check("no colour limit (chip is information)", "outside_dRGB" in gg.limits("clothing")["worn"], False)
         check("outline limit unchanged", gg.limits("clothing")["worn"]["outside_xor"]["value"], 0.015)
 

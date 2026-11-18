@@ -119,8 +119,9 @@ cuts the 4 corner pixels of a rectangle), closing 3.
 [6] Fails on the old code (garment_gates.py PINNED at bc07100f, read with
     ``git show`` into a temp module): [1] CHOKER refused; [2] SEAM refused;
     [3] RIM refused; [4] LONG refused.
-[7] Versions: WORN_GATE_VERSION 4 (3 here; 4 = Task 11g fix round 1, the
-    composite support, smoke_garment_worn_regate.py [7]), GHOST_GATE_VERSION
+[7] Versions: WORN_GATE_VERSION 5 (3 here; 4 = Task 11g fix round 1, the
+    composite support, smoke_garment_worn_regate.py [7]; 5 = extra_part leaves
+    the base head out, smoke_garment_clothing_back.py [2]), GHOST_GATE_VERSION
     3, garment_clothing.GATE_VERSIONS = both -> a stored record of version 2
     is stale (re-gated from its files by the next run, no image job), a ghost
     record of version 3 is not.
@@ -462,7 +463,7 @@ def main() -> int:
 
         print("[7] versions")
         check("versions", (gg.WORN_GATE_VERSION, gg.GHOST_GATE_VERSION, garment_clothing.GATE_VERSIONS),
-              (4, 8, {"worn": 4, "ghost": 8}))
+              (5, 8, {"worn": 5, "ghost": 8}))
         check("version 2 stale", (garment_images._stale_gate(garment_clothing, "ghost", {"gate_version": 2}),
                                   garment_images._stale_gate(garment_clothing, "worn", {"gate_version": 2})),
               (True, True))

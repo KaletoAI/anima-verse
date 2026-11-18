@@ -170,7 +170,9 @@ GARMENT_MIN = 0.002         # garment region / base body area, at least (= one k
 #: composite's head share leaves its support out (``worn_gate(composite_support=…)``,
 #: Task 11g fix round 1: Kai's open jacket, a stand-up collar above the neck row,
 #: was refused at 0.066 although the composite takes every head pixel from the base).
-WORN_GATE_VERSION = 4
+#: 5: ``extra_part`` leaves the base head out while the head rule judges it (the block
+#: at ``BACK_EXTRA_MAX``: Gelina's re-lit skull, 2026-11-18).
+WORN_GATE_VERSION = 5
 OUTSIDE_XOR_MAX = 0.015     # outline change outside the garment region / base body area
 HEAD_ZONE = CHIN_ROW        # fallback end of the head: base figure rows above y0 + 0.13·Hb
 HEAD_GARMENT_MAX = 0.05     # share of the head zone inside the garment region
@@ -565,6 +567,27 @@ OUTSIDE_DRIFT_PX = 2.0      # mean outline drift @1536 an EDITED view may have o
 # 3.6x over the blazer's re-shading). A piece whose back reaches rows its
 # front does not show (a cape seen only from behind) would be refused —
 # known limit.
+#
+# The base head (worn gate version 5, 2026-11-18). Gelina's reed bandeau top
+# (item_reed_bandeau_top, fsig 2a9a3d31e4eb; a glossy translucent body,
+# BiRefNet-DIS masks as cached, 681 x 1536, base y0 36, Hb 1430, front rows
+# 0.236..0.362): both worn backs show the band alone and were refused at
+# 0.0215 / 0.0316. The part was the back of the SKULL, rows 39..158 / 37..161
+# (neck row 206), 0.0 / 0.0001 of it outside the base figure: the draft
+# re-renders the glossy head ~15 L darker in the same hue (Lab ΔL median -14 /
+# -16, Δa*b* 4.0 / 6.0, hue 6° / 7°), above the composite's ``SKIN_SAME_DL``,
+# so the composite pastes it (head_in_support 0.375 / 0.549) and the region
+# takes it at |ΔRGB| 41 / 46. The head rule already judges that zone (pixels in
+# the support are the composite's, version 4); ``extra_part`` now leaves out
+# the base head (rows above ``head_zone``, inside the base mask) while the
+# head is gated — what a back puts on BEYOND the head's outline still counts.
+# Re-measured: 0.0020 / 0.0037 (re-lit feet, Δa*b* 5.1..5.4); on copies of
+# attempt 2: black briefs painted over the buttocks 0.0785, a scarf at the
+# neck 0.0442, a hood 18 px beyond the head 0.0257 (0.0831 before) — all
+# refused. The 12 other accepted worn backs of that world with cached masks
+# keep their extra_part exactly (0 .. 0.0111). No colour test instead:
+# a re-lit part (Δa*b* 4.0 .. 8.8) and a skin-coloured garment (Ylva's brown
+# leather wrap skirt 6.7 / 7.4) share the same chroma difference.
 BACK_ROWS_MARGIN = 0.02     # ± Hb around the front garment's rows
 BACK_EXTRA_MAX = 0.02       # largest garment part of a back outside them / base body area
 
@@ -666,9 +689,11 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
     front garment's rows (``garment_rows`` of its record) — then
     ``extra_part`` = the largest connected part of G outside those rows
     (± ``BACK_ROWS_MARGIN`` Hb) / base body area is reported for
-    ``back_follows_front``. ``composite_support``: the worn image is a CPU
-    composite (``view_composite``, the drafted back) and this is its support —
-    every pixel it may have changed (bool, the base view's shape); outside it
+    ``back_follows_front``; while the head is gated, the base head zone
+    (inside the base mask) is the head rule's and left out of it (version
+    5). ``composite_support``: the worn image is a CPU composite
+    (``view_composite``, the drafted back) and this is its support — every
+    pixel it may have changed (bool, the base view's shape); outside it
     the composite IS the base. The head share then counts only G outside the
     support (``head_garment``, gated): a collar or hood the composite put over
     the neck is the garment, not a changed face, while a head change anywhere
@@ -711,11 +736,16 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
     else:
         head_garment = float((region & head).sum() / head_px)
     box = _bbox(region)
+    head_gated = "head" not in set(occupied or ())
     extra = None
     if front_rows is not None:
         t = (np.arange(height) - y0) / hb
         band = (t >= front_rows[0] - BACK_ROWS_MARGIN) & (t <= front_rows[1] + BACK_ROWS_MARGIN)
-        labels, count = ndimage.label(region & ~band[:, None])
+        beyond = region & ~band[:, None]
+        if head_gated:
+            # The base head is the head rule's (gate version 5, block at ``BACK_EXTRA_MAX``).
+            beyond &= ~head
+        labels, count = ndimage.label(beyond)
         extra = float(np.bincount(labels.ravel())[1:].max() / area) if count else 0.0
     reasons = []
     if not share >= GARMENT_MIN:
@@ -723,7 +753,6 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
     if not xor < xor_limit:
         reasons.append(f"body outline outside the garment changed: XOR {_r(xor, 4)} >= {_r(xor_limit, 4)}"
                        + (f" (drift {_r(drift, 2)} px >= {drift_px} px)" if drift is not None else ""))
-    head_gated = "head" not in set(occupied or ())
     if head_gated and head_garment > HEAD_GARMENT_MAX:
         reasons.append(f"head changed: {_r(head_garment, 3)} of the head > {HEAD_GARMENT_MAX}")
     depth = neckline(region)["depth"] / hb if box else None

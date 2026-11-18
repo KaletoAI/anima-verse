@@ -67,6 +67,28 @@ depth v px = v / 999 Hb.
                -> refused "back puts on more than the front"; it lies inside
                the figure, so the outline is unchanged (XOR 0, worn gate ok).
                BACK_OK with the front: extra_part 0.0 -> follows.
+  BACK_RELIT = BACK_OK + the skull re-lit: rows [130, 200) cols [452, 573)
+               in (160, 128, 112) = 0.8 x skin, the same hue (live 2026-11-18,
+               Gelina's glossy body: the draft re-renders the back of the head
+               darker, the composite pastes it). |ΔRGB| (40 + 32 + 28) / 3 =
+               33.3 > 20 -> garment; the rectangle (corner (452, 130): 60² +
+               70² = 8500 <= 100², inside the disc) is 70 x 121 = 8470 px,
+               the opening (a diamond of radius 2) cuts 3 px off each corner
+               -> 8458. The head zone of this base: no clear neck (the disc
+               narrows down to the shoulder row 100 + 0.19 x 999 = 289) ->
+               rule "chin", row 100 + int(0.13 x 999) = 229 (the derivation in
+               smoke_garment_worn_regate.py). Gated with its composite support
+               (the rectangle grown 4 px): head_garment 0.0. extra_part, a
+               non-head piece (slots [top]): the part lies on base-figure rows
+               < 229 -> left out (version 5) -> 0.0 -> follows. The same with
+               the head occupied (a hat: no head rule, the head counts as
+               before version 5): 8458 / 223416 = 0.03786 -> 0.0379 > 0.02
+               -> refused (the version-4 measure of the live refusal).
+  BACK_HOOD  = BACK_OK + green cols [620, 680) rows [110, 229) — beside the
+               head, outside the base figure (the disc reaches x 612): 60 x
+               119 = 7140 - 4 x 3 corners = 7128 / 223416 = 0.03190 -> 0.0319
+               > 0.02: what a back puts on BEYOND the head's outline still
+               counts -> refused "back puts on more than the front".
 The other backs change nothing outside the jacket -> worn gate ok (outside 0).
 
 [1] prompts: draft = base_body.draft_prompt(back) — the DRAFT_PROMPTS back
@@ -86,7 +108,9 @@ The other backs change nothing outside the jacket -> worn gate ok (outside 0).
     is gone (garment_clothing has no ``fit_prompt`` / ``FIT`` any more).
     edit_prompt(worn, back) -> ValueError. EDIT_STEPS worn views (front,
     back), back "draft"; ghost keeps the default order.
-[2] gate numbers (worn_gate + back_follows_front) as derived above.
+[2] gate numbers (worn_gate + back_follows_front) as derived above. On the
+    code before version 5 the BACK_RELIT check fails: its extra_part is the
+    0.0379 the head-occupied check shows, and the back is refused.
 [3] chain run from scratch, composites [BACK_FRONT, BACK_OK]: render order
     worn f1, worn bd1 (draft 1), worn bd2 (draft 2), ghost b1, ghost f1 —
     one draft per attempt (a refused composite drafts anew), the front
@@ -206,6 +230,10 @@ BACK_LEGS[850:1100, 392:402] = GREY
 BACK_LEGS[850:1100, 622:632] = GREY
 BACK_EXTRA = BACK_OK.copy()
 BACK_EXTRA[800:900, 392:632] = GREEN
+BACK_RELIT = BACK_OK.copy()
+BACK_RELIT[130:200, 452:573] = (160, 128, 112)
+BACK_HOOD = BACK_OK.copy()
+BACK_HOOD[110:229, 620:680] = GREEN
 
 
 def rembg_stub(data, model="u2net", **kwargs):
@@ -344,6 +372,29 @@ def main() -> int:
         real = fitted_back(BACK_OK)
         check("real back: nothing beyond the front rows", (real["extra_part"], gg.back_follows_front(front, real)),
               (0.0, []))
+        from scipy import ndimage
+
+        def support(arr):
+            """The composite support stand-in: every pixel the back changed against BACK_OK, grown 4 px."""
+            return ndimage.binary_dilation((arr != BACK_OK).any(2), iterations=4)
+
+        relit = garment_clothing.gate("worn", "back", base_rgb=BASE, base_mask=mask_of(BASE), source_rgb=None,
+                                      source_mask=None, edit_rgb=BACK_RELIT, edit_mask=mask_of(BACK_RELIT),
+                                      item_id=jid, front_gate=front, composite_support=support(BACK_RELIT))
+        check("re-lit skull: the head is the head rule's, nothing extra (version 5)",
+              (relit["ok"], relit["head_garment"], relit["extra_part"], gg.back_follows_front(front, relit)),
+              (True, 0.0, 0.0, []))
+        hat = gg.worn_gate(BASE, mask_of(BASE), BACK_RELIT, mask_of(BACK_RELIT), view="back", occupied=("head",),
+                           front_rows=gg.garment_rows(front), composite_support=support(BACK_RELIT))
+        check("re-lit skull, head occupied: the head counts (the version-4 measure)",
+              (hat["extra_part"], gg.back_follows_front(front, hat)),
+              (0.0379, ["back puts on more than the front: a part of 0.0379 of the body outside the front piece's "
+                        "rows > 0.02"]))
+        hood = fitted_back(BACK_HOOD)
+        check("beyond the head's outline: still extra",
+              (hood["extra_part"], [r for r in gg.back_follows_front(front, hood) if r.startswith("back puts on")]),
+              (0.0319, ["back puts on more than the front: a part of 0.0319 of the body outside the front piece's "
+                        "rows > 0.02"]))
         check("garment rows of the front", gg.garment_rows(front), ((320 - 100) / 999, (759 - 100) / 999))
         check("shallow front checks no opening", gg.back_follows_front({**front, "neckline_depth": 0.03}, copy), [])
         check("old record checks nothing", gg.back_follows_front({}, copy), [])
