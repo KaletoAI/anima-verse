@@ -418,11 +418,13 @@ def _serial_model(function):
                     raise generation_error
                 return result
             if name in ("rerig_model", "face_retexture_model", "revert_face_retexture", "repair_model_weights",
+                        "restore_model_hands",
                         "match_outfit_body_posture") and not result.get("ok"):
                 return result
             if not _publish_signature(character_name, directory, stage, signature, token,
                                       rollback_on_error=name in (
                                           "generate_for_current_outfit", "rerig_model", "face_retexture_model", "revert_face_retexture", "repair_model_weights",
+                                          "restore_model_hands",
                                           "match_outfit_body_posture"),
                                       invalidate=name == "delete_model3d"):
                 return stale("Model changed during processing; result discarded")
@@ -2648,7 +2650,8 @@ def _auto_normalize(character_name: str, path: Path,
 
 # The finger reset's record version (``meta["blender"]["hands"]["version"]``): raise it when the method or its
 # gate changes what a hand ends up as. Nothing re-runs by itself on a raise — ``"hands"`` in the steps keeps a
-# decided model decided, exactly like ``limb_weights``.
+# decided model decided, exactly like ``limb_weights``; the Improvements type ``hand_restore`` offers every model
+# without the step or with an older record (``restore_model_hands``).
 HANDS_VERSION = 1
 
 
@@ -2899,6 +2902,99 @@ def repair_model_weights(character_name: str, signature: str) -> Dict[str, Any]:
     except Exception as exc:
         logger.warning("Model3D %s: stored weight repair failed (%s)", character_name, exc)
         return {"ok": False, "repaired": repaired, "error": str(exc)}
+
+
+def hands_decided(meta: Dict[str, Any]) -> bool:
+    """The finger reset ran on this model under the current ``HANDS_VERSION`` (its verdict — a hand
+    restored, kept or unchanged — is final for this version)."""
+    block = meta.get("blender") or {}
+    record = block.get("hands") or {}
+    return "hands" in (block.get("steps") or []) and int(record.get("version") or 0) >= HANDS_VERSION
+
+
+def _hands_due(meta: Dict[str, Any]) -> None:
+    """Re-open the step of a model decided under an older ``HANDS_VERSION`` (``_auto_hands`` skips a model with
+    ``"hands"`` in its steps)."""
+    block = meta.setdefault("blender", {})
+    if not hands_decided(meta):
+        block["steps"] = [s for s in (block.get("steps") or []) if s != "hands"]
+
+
+@_serial_model
+def restore_model_hands(character_name: str, signature: str) -> Dict[str, Any]:
+    """The finger reset (``_auto_hands``) on a STORED Mixamo model that predates it — CPU only, no hub job.
+
+    The re-run paths of ``repair_model_weights``: the clean prerig source first; a model with applied extension
+    bones is then rebuilt from it (``rebuild_extension_rig``: bones, covered variant, collision capsules and the
+    distance tier on the new fingers; a base body hands its body change to the Build there), any other model is
+    reset in place, followed by its collision capsules, a base body's covered variant, its measurement and an
+    existing derived distance tier. ``{ok, hands, changed, followed_up, error}``: ``hands`` is the full model's
+    ``meta.blender.hands`` record, ``changed`` whether its bytes changed, ``followed_up`` whether the base body's
+    Build follow-up already ran (the caller runs the one of a changed base body / outfit body otherwise — after
+    publication, so it reads the new bytes). A script that did not run publishes nothing (``ok`` False)."""
+    path = find_model3d(character_name, signature)
+    if path is None:
+        return {"ok": False, "error": "no_model"}
+    meta = _read_sidecar(path)
+    if meta.get("rig") != "mixamo" or path.suffix.lower() != ".glb":
+        return {"ok": False, "error": "not a rigged humanoid GLB"}
+    if _unrigged_source(path) is None:
+        return {"ok": False, "error": "no unrigged source"}
+    original = path.read_bytes()
+    try:
+        source = path.parent / "prerig" / path.name
+        if source.is_file():
+            source_meta = _read_sidecar(source)
+            source_meta.setdefault("rig", "mixamo")
+            _hands_due(source_meta)
+            _auto_hands(character_name, source, source_meta)
+            _publish_sidecar(source, source_meta)
+            if not hands_decided(source_meta):
+                raise RuntimeError((source_meta["blender"].get("hands") or {}).get("error")
+                                   or "The finger reset did not run on the prerig source")
+        state = meta.get("extension_rig") or {}
+        rebuilt: Dict[str, Any] = {}
+        extension = source.is_file() and (state.get("status") == "applied" or state.get("has_applied"))
+        if extension and not (source_meta["blender"].get("hands") or {}).get("applied"):
+            # Both hands of the source kept (refused or unchanged): the model built from it carries the same
+            # fingers — its record is the source's, nothing is rebuilt (a forced rebuild would re-export the
+            # bytes and send a base body's figure through the Build for nothing).
+            _hands_due(meta)
+            block = meta.setdefault("blender", {})
+            block["hands"] = dict(source_meta["blender"]["hands"])
+            if "hands" not in (block.get("steps") or []):
+                block["steps"] = list(block.get("steps") or []) + ["hands"]
+            _publish_sidecar(path, meta)
+        elif extension:
+            rebuilt = rebuild_extension_rig(character_name, signature, force=True)
+            if not rebuilt.get("ok"):
+                raise RuntimeError(rebuilt.get("error") or "Extension rebuild failed")
+            meta = _read_sidecar(path)
+            if not hands_decided(meta):
+                raise RuntimeError("The rebuilt model is missing the finger reset")
+        else:
+            _hands_due(meta)
+            _auto_hands(character_name, path, meta)
+            if not hands_decided(meta):
+                raise RuntimeError((meta["blender"].get("hands") or {}).get("error")
+                                   or "The finger reset did not run")
+            if path.read_bytes() != original:
+                _auto_collision(character_name, path, meta)
+                if meta.get("base") and not meta.get("base_variant"):
+                    _auto_covered_variant(character_name, path, meta)
+                _attach_measurement(meta, path)
+            _publish_sidecar(path, meta)
+        changed = path.read_bytes() != original
+        low = tier_variant(path, LOW_TIER)
+        if changed and low is not None and _read_sidecar(low).get("source") == "lod" and not rebuilt.get("low"):
+            result = build_lod(character_name, signature, ratio=_auto_lod_ratio())
+            if not result.get("ok"):
+                raise RuntimeError(result.get("error") or "Low tier rebuild failed")
+        return {"ok": True, "hands": (meta.get("blender") or {}).get("hands") or {}, "changed": changed,
+                "followed_up": bool(rebuilt) and bool(meta.get("base")) and changed, "error": ""}
+    except Exception as exc:
+        logger.warning("Model3D %s: finger reset of stored model %s failed (%s)", character_name, signature, exc)
+        return {"ok": False, "error": str(exc) or type(exc).__name__}
 
 
 @_serial_model

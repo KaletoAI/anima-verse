@@ -3091,6 +3091,7 @@
     "{n} vertices repaired": "{n} Vertices repariert",
     "clean": "fehlerfrei",
     "Repair rig weights": "Rig-Gewichte reparieren",
+    "Restore the fingers": "Finger zurückstellen",
     "Run the improvement \"Restore the fingers\"": "Verbesserung „Finger zurückstellen“ ausführen",
     "Re-run face cleanup": "Gesichtsbereinigung erneut ausführen",
     "{watcher} catches {reader} reading {item}.": "{watcher} ertappt {reader} beim Lesen in {item}.",

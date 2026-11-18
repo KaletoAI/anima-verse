@@ -19,6 +19,29 @@ The rig_weight_repair candidate key is ``character:demo:demo:<t>``, <t> = the
 first 12 hex of sha256 over the JSON [created_at, job_id] of the sidecar —
 both absent in the fixture, so ["", ""].
 
+The hand_restore type (same re-run pattern, ``model3d.restore_model_hands``),
+character ``hand``, model ``hand.glb`` (bytes "rigged") with an unrigged
+source and a derived low tier; ``refine.hand_restore`` is a stand-in that
+writes "restored" when it applies:
+  * key ``character:hand:hand:<t>``, <t> = sha256 over JSON [1, "", ""]
+    (HANDS_VERSION 1, no created_at/job_id); a generic rig or a model without
+    the unrigged source is no candidate; a record of version 0 is due again;
+    the character in ``_generating`` -> no candidate, withheld
+    ("character:hand",).
+  * Left applied, Right refused "edge stretch 1.42x": in place, bytes
+    "restored", collision 1 call, build_lod 1 call (low source lod), result
+    "hand: Left hand: restored to the mesher's fingers · Right hand: kept as
+    rigged (the skin would tear at the knuckles)", no candidate any more.
+  * both refused (ok, not applied): bytes stay "rigged", collision 0,
+    build_lod 0, decided -> no candidate (the step closes fulfilled).
+  * the script crashes (ok False): ok False, nothing published, still due.
+  * prerig + applied extension rig: the source applied -> one forced
+    rebuild_extension_rig; the source both kept -> no rebuild, the model
+    takes the source's record.
+  * apply's follow-up of a changed model: base body -> after_base_face_change
+    once; outfit body -> refit_body + figure.invalidate + one Build request
+    "body_change"; already followed up -> none of them.
+
 """
 import hashlib
 import json
@@ -303,6 +326,150 @@ def application_checks(root):
     print('PASS force rebuild repairs a source that predates the weight repair, once')
 
 
+def hand_restore_checks():
+    """The hand_restore improvement and ``model3d.restore_model_hands`` (module docstring)."""
+    from app.core import model3d
+    from app.blender import refine
+    from app.core.improvements.types import subjects
+    from app.core.improvements.types.hand_restore import HandRestore, model_token
+    from app.models.character import get_character_dir
+    directory = get_character_dir('hand', create=True)/'model3d'
+    for sub in ('unrigged', 'low', 'prerig'):
+        (directory/sub).mkdir(parents=True, exist_ok=True)
+    full, low, pre = directory/'hand.glb', directory/'low'/'hand.glb', directory/'prerig'/'hand.glb'
+    (directory/'unrigged'/'hand.glb').write_bytes(b'mesher')
+    improvement = HandRestore()
+    token = hashlib.sha256(json.dumps([1, '', '']).encode('utf-8')).hexdigest()[:12]
+    assert model_token({}) == token
+    normalized = {'rig': 'mixamo', 'blender': {'steps': ['normalize']}}
+
+    def reset(meta=normalized):
+        full.write_bytes(b'rigged')
+        low.write_bytes(b'low')
+        pre.unlink(missing_ok=True)
+        model3d._publish_sidecar(full, json.loads(json.dumps(meta)))
+        model3d._publish_sidecar(low, {'rig': 'mixamo', 'source': 'lod'})
+
+    def keys():
+        listing = improvement.list_candidates({})
+        return [c.key for c in listing.candidates], listing.withheld
+
+    side = lambda status, reason='': {'status': status, 'reason': reason,  # noqa: E731
+                                      'max_displacement_mm': 4.0, 'displacement_left_mm': 4.0}
+    verdict = {'Left': side('applied'), 'Right': side('refused', 'edge stretch 1.42x')}
+    refused = {'Left': side('refused', 'spread_deg 20 -> 24'), 'Right': side('untouched')}
+    script = {'data': verdict, 'applied': True, 'ok': True}
+
+    def fake_restore(path, source, validator=None):
+        assert source.read_bytes() == b'mesher', source
+        if not script['ok']:
+            return {'ok': False, 'applied': False, 'data': {}, 'error': 'demo crash'}
+        if script['applied']:
+            path.write_bytes(b'restored')
+        return {'ok': True, 'applied': script['applied'], 'data': json.loads(json.dumps(script['data'])),
+                'error': '' if script['applied'] else 'nothing to do'}
+
+    def rebuild(name, signature, *, force):
+        assert force is True
+        here = model3d.get_model3d_dir(name)
+        meta = model3d._read_sidecar(here/f'{signature}.glb')
+        meta['blender'] = model3d._read_sidecar(here/'prerig'/f'{signature}.glb')['blender']
+        (here/f'{signature}.glb').write_bytes((here/'prerig'/f'{signature}.glb').read_bytes())
+        model3d._publish_sidecar(here/f'{signature}.glb', meta)
+        return {'ok': True, 'low': {'ok': True}}
+
+    with patch.object(subjects, 'characters', return_value=['hand']), \
+         patch.object(model3d, '_validator_for', return_value=None), \
+         patch.object(refine, 'hand_restore', side_effect=fake_restore) as restore_call, \
+         patch.object(model3d, '_attach_measurement'), \
+         patch.object(model3d, '_auto_collision', return_value=True) as collision, \
+         patch.object(model3d, 'build_lod', return_value={'ok': True}) as lod, \
+         patch.object(model3d, 'rebuild_extension_rig', side_effect=rebuild) as rebuild_call, \
+         patch('app.core.sync_topics.changed_at'):
+        reset({'rig': 'generic', 'blender': {'steps': ['normalize']}})
+        assert keys() == ([], ()), keys()
+        reset()
+        (directory/'unrigged'/'hand.glb').rename(directory/'unrigged'/'kept.glb')
+        assert keys() == ([], ()), keys()
+        (directory/'unrigged'/'kept.glb').rename(directory/'unrigged'/'hand.glb')
+        assert keys() == ([f'character:hand:hand:{token}'], ()), keys()
+        reset({'rig': 'mixamo', 'blender': {'steps': ['normalize', 'hands'], 'hands': {'version': 0}}})
+        assert keys() == ([f'character:hand:hand:{token}'], ()), keys()
+        with model3d._lock:
+            model3d._generating.add('hand', 'demo run')
+        try:
+            assert keys() == ([], ('character:hand',)), keys()
+        finally:
+            with model3d._lock:
+                model3d._generating.discard('hand')
+        print('PASS hand_restore candidates, token, versions and withheld')
+
+        reset()
+        candidate = improvement.list_candidates({}).candidates[0]
+        note = improvement.apply(candidate, {}, 'task')
+        assert note == ("hand: Left hand: restored to the mesher's fingers · Right hand: kept as rigged "
+                        "(the skin would tear at the knuckles)"), note
+        assert full.read_bytes() == b'restored'
+        assert (collision.call_count, lod.call_count) == (1, 1), (collision.call_count, lod.call_count)
+        assert model3d.hands_decided(model3d._read_sidecar(full))
+        assert keys() == ([], ()), keys()
+        print('PASS in-place reset, its follow-ups and the result line')
+
+        reset(); collision.reset_mock(); lod.reset_mock()
+        script.update(data=refused, applied=False)
+        result = model3d.restore_model_hands('hand', 'hand')
+        assert result['ok'] and not result['changed'], result
+        assert full.read_bytes() == b'rigged'
+        assert (collision.call_count, lod.call_count) == (0, 0)
+        assert keys() == ([], ()), keys()
+        print('PASS both hands kept: decided for this version, nothing rebuilt')
+
+        reset()
+        script.update(ok=False)
+        result = model3d.restore_model_hands('hand', 'hand')
+        assert not result['ok'] and result['error'] == 'demo crash', result
+        assert 'hands' not in model3d._read_sidecar(full)['blender']['steps']
+        assert keys() == ([f'character:hand:hand:{token}'], ()), keys()
+        print('PASS a crashed run publishes nothing and stays due')
+
+        script.update(ok=True, data=verdict, applied=True)
+        extension = {**normalized, 'extension_rig': {'status': 'applied', 'has_applied': True}}
+        reset(extension)
+        pre.write_bytes(b'rigged')
+        model3d._publish_sidecar(pre, json.loads(json.dumps(normalized)))
+        result = model3d.restore_model_hands('hand', 'hand')
+        assert result['ok'] and result['changed'] and rebuild_call.call_count == 1, result
+        assert full.read_bytes() == b'restored' and model3d.hands_decided(model3d._read_sidecar(full))
+        reset(extension); rebuild_call.reset_mock()
+        pre.write_bytes(b'rigged')
+        model3d._publish_sidecar(pre, json.loads(json.dumps(normalized)))
+        script.update(data=refused, applied=False)
+        result = model3d.restore_model_hands('hand', 'hand')
+        assert result['ok'] and not result['changed'] and rebuild_call.call_count == 0, result
+        assert model3d._read_sidecar(full)['blender']['hands']['Left']['status'] == 'refused'
+        assert model3d.hands_decided(model3d._read_sidecar(full))
+        print('PASS extension models rebuilt from the reset source only when a hand changed')
+        reset()
+        candidate = improvement.list_candidates({}).candidates[0]
+
+    done ={'ok': True, 'changed': True, 'followed_up': False, 'hands': verdict}
+    for base, body, followed, want in ((True, False, False, (1, 0, 0, 0)), (False, True, False, (0, 1, 1, 1)),
+                                       (True, False, True, (0, 0, 0, 0))):
+        with patch.object(model3d, 'restore_model_hands', return_value={**done, 'followed_up': followed}), \
+             patch('app.core.base_body.is_base_signature', return_value=base), \
+             patch('app.core.base_body.is_outfit_body_signature', return_value=body), \
+             patch.object(model3d, 'after_base_face_change') as after, \
+             patch('app.core.outfit_bodies.refit_body') as refit, \
+             patch('app.core.figure.invalidate') as invalidate, \
+             patch('app.core.figure_build.request') as request:
+            improvement.apply(candidate, {}, 'task')
+            got = (after.call_count, refit.call_count, invalidate.call_count, request.call_count)
+            assert got == want, (base, body, followed, got)
+            if body:
+                assert request.call_args.args == ('hand', 'body_change'), request.call_args
+    print('PASS follow-ups of a changed base body / outfit body')
+
+
 
 
 
@@ -312,6 +479,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='smoke-weights-') as tmp:
         root = Path(tmp)
         application_checks(root)
+        hand_restore_checks()
         status = runner.status()
         if not status['usable'] or not str(status.get('version', '')).startswith('5.2'):
             print('SKIP Blender 5.2:', status); return
