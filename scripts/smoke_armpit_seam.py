@@ -140,7 +140,7 @@ def test_identity(gf, C, unrig, rig):
 def test_versions(gf):
     print("[4] versions")
     check("[4] FIT_VERSION clothing 18 (Ruling A114), CLOTHING_SEAM_UNCHANGED 16, CLOTHING_TRUNK_UNCHANGED 15",
-          gf.FIT_VERSION["clothing"] == 18 and gf.CLOTHING_SEAM_UNCHANGED == 16 and gf.CLOTHING_TRUNK_UNCHANGED == 15,
+          gf.FIT_VERSION["clothing"] >= 18 and gf.CLOTHING_SEAM_UNCHANGED == 16 and gf.CLOTHING_TRUNK_UNCHANGED == 15,
           gf.FIT_VERSION)
 
     def rec(version, share=None, room=None, front=None, kind="clothing"):
@@ -150,12 +150,12 @@ def test_versions(gf):
             r["report"] = {"transfer": {"sleeve_share": share}}
         return r
     cases = [("v16 nothing on an arm stays current", rec(16, 0.0), 16),
-             ("v16 Kira's blazer (0.3762) is due", rec(16, 0.3762), 18),
-             ("v16 without a report is due", rec(16), 18),
+             ("v16 Kira's blazer (0.3762) is due", rec(16, 0.3762), gf.FIT_VERSION["clothing"]),
+             ("v16 without a report is due", rec(16), gf.FIT_VERSION["clothing"]),
              ("v15 nothing on an arm, trunk kept stays current", rec(15, 0.0, 0.0138, 0.0126), 15),
-             ("v15 nothing on an arm, the blouse's trunk is due", rec(15, 0.0, 0.0232, 0.0381), 18),
-             ("v15 with sleeves, trunk kept is due", rec(15, 0.2960, 0.0138, 0.0126), 18),
-             ("v14 is due", rec(14, 0.0), 18),
+             ("v15 nothing on an arm, the blouse's trunk is due", rec(15, 0.0, 0.0232, 0.0381), gf.FIT_VERSION["clothing"]),
+             ("v15 with sleeves, trunk kept is due", rec(15, 0.2960, 0.0138, 0.0126), gf.FIT_VERSION["clothing"]),
+             ("v14 is due", rec(14, 0.0), gf.FIT_VERSION["clothing"]),
              ("v17 is current", rec(17, 0.3762), 17),
              ("hair keeps its own", rec(16, kind="hair"), gf.FIT_VERSION["hair"])]
     for label, record, want in cases:

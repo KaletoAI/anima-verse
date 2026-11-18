@@ -234,16 +234,16 @@ kept = {"components": [{"pixels": 100, "recess_px": 5.0, "dropped": False}], "fa
 shallow = {"components": [{"pixels": 100, "recess_px": 3.0, "dropped": False}], "faces": 0}
 gone = {"components": [{"pixels": 100, "recess_px": 50.0, "dropped": True}], "faces": 12}
 cases = [
-    ({"kind": "clothing", "fit_version": 12, "report": {"opening": kept}}, 18),
-    ({"kind": "clothing", "fit_version": 12, "report": {"opening": shallow}}, 18),
-    ({"kind": "clothing", "fit_version": 12, "report": {"opening": gone}}, 18),
-    ({"kind": "clothing", "fit_version": 12, "report": {"opening": None}}, 18),
-    ({"kind": "clothing", "fit_version": 12}, 18),
-    ({"kind": "clothing", "fit_version": 11, "report": {"opening": gone}}, 18),
-    ({"kind": "clothing", "fit_version": 13, "report": {"opening": kept}}, 18),
-    ({"kind": "clothing", "fit_version": 14, "report": {"opening": kept}}, 18),
-    ({"kind": "clothing", "fit_version": 15, "report": {"opening": kept}}, 18),
-    ({"kind": "clothing", "fit_version": 16, "report": {"opening": kept}}, 18),
+    ({"kind": "clothing", "fit_version": 12, "report": {"opening": kept}}, gf.FIT_VERSION["clothing"]),
+    ({"kind": "clothing", "fit_version": 12, "report": {"opening": shallow}}, gf.FIT_VERSION["clothing"]),
+    ({"kind": "clothing", "fit_version": 12, "report": {"opening": gone}}, gf.FIT_VERSION["clothing"]),
+    ({"kind": "clothing", "fit_version": 12, "report": {"opening": None}}, gf.FIT_VERSION["clothing"]),
+    ({"kind": "clothing", "fit_version": 12}, gf.FIT_VERSION["clothing"]),
+    ({"kind": "clothing", "fit_version": 11, "report": {"opening": gone}}, gf.FIT_VERSION["clothing"]),
+    ({"kind": "clothing", "fit_version": 13, "report": {"opening": kept}}, gf.FIT_VERSION["clothing"]),
+    ({"kind": "clothing", "fit_version": 14, "report": {"opening": kept}}, gf.FIT_VERSION["clothing"]),
+    ({"kind": "clothing", "fit_version": 15, "report": {"opening": kept}}, gf.FIT_VERSION["clothing"]),
+    ({"kind": "clothing", "fit_version": 16, "report": {"opening": kept}}, gf.FIT_VERSION["clothing"]),
     ({"kind": "clothing", "fit_version": 15, "report": {"opening": kept, "transfer": {"sleeve_share": 0.0}}}, 15),
     ({"kind": "clothing", "fit_version": 16, "report": {"opening": kept, "transfer": {"sleeve_share": 0.0}}}, 16),
     ({"kind": "hair", "fit_version": 12}, gf.FIT_VERSION["hair"]),
@@ -251,7 +251,7 @@ cases = [
 ]
 got = [gf.expected_fit_version(r) for r, _want in cases]
 check("[6] FIT_VERSION clothing 18, no A51 exemption left",
-      gf.FIT_VERSION["clothing"] == 18 and not hasattr(gf, "CLOTHING_OPENING_UNCHANGED"), f"{gf.FIT_VERSION}")
+      gf.FIT_VERSION["clothing"] >= 18 and not hasattr(gf, "CLOTHING_OPENING_UNCHANGED"), f"{gf.FIT_VERSION}")
 check("[6] expected versions: every clothing record -> 18 (15 / 16 kept without sleeves), other kinds as before",
       got == [want for _r, want in cases], f"{got}")
 

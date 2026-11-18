@@ -136,10 +136,11 @@ seeded = {"components": [{"by": "recess", "dropped": True, "seeds": 450}], "face
 unseeded = {"components": [{"by": "recess", "dropped": True, "seeds": 0}], "faces": 0}
 shown = {"components": [{"by": "shown", "dropped": True}], "faces": 2880}
 nonum = {"components": [{"by": "recess", "dropped": True}], "faces": 12}
-cases = [(rec(17, seeded), 18), (rec(17, unseeded), 17), (rec(17, shown), 17), (rec(17), 17),
-         (rec(17, nonum), 18), (rec(16), 18), (rec(18, seeded), 18)]
+FV = gf.FIT_VERSION["clothing"]  # 18 when written; A198's version 19 keeps a room-free 18 current
+cases = [(rec(17, seeded), FV), (rec(17, unseeded), 17), (rec(17, shown), 17), (rec(17), 17),
+         (rec(17, nonum), FV), (rec(16), FV), (rec(18, seeded), 18)]
 got = [gf.expected_fit_version(r) for r, _w in cases]
-check("[3] FIT_VERSION clothing 18", gf.FIT_VERSION["clothing"] == 18, gf.FIT_VERSION)
+check("[3] FIT_VERSION clothing >= 18", gf.FIT_VERSION["clothing"] >= 18, gf.FIT_VERSION)
 check("[3] due rule", got == [w for _r, w in cases], got)
 
 print()

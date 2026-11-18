@@ -44,7 +44,7 @@ Expected, derived by hand from Ruling A31:
     (fit None), ``bodies`` no longer says "user_accepted" — "stale" (the kept attempt was made from the old base
     fit: nothing to accept, ``can_accept`` False); bytes back -> it holds again.
 [5] Changed body (BODY["sha"] "bodysha2"): void — fit None; back -> holds.
-[6] Changed fit version (record fit_version FV - 2 (two behind:
+[6] Changed fit version (record fit_version 14 (below CLOTHING_TRUNK_UNCHANGED 15; was FV - 2 until A198 made that 17, which the chain keeps; two behind:
     one behind without an opening Ruling A51 could change stays current)): ``body_fit`` fit None (``body_fit_state`` stale); back -> holds.
 [7] Undo (route): 200; the fit path is empty (nothing was displaced), the failure record E is back; ``_fit_on``
     -> (False, E) again; delivered own () again, fit_refused {jacket: E}.
@@ -298,7 +298,7 @@ def main() -> int:
 
         print("[6] a changed fit version voids it")
         rec = gs.read_record(fit_path.with_suffix(".json"))
-        gs.write_record(fit_path.with_suffix(".json"), {**rec, "fit_version": FV - 2})
+        gs.write_record(fit_path.with_suffix(".json"), {**rec, "fit_version": 14})   # below every version the chain keeps (A198: FV - 2 = 17 is kept)
         check("void", served(), None)
         gs.write_record(fit_path.with_suffix(".json"), rec)
         check("back: holds", served(), fit_path)

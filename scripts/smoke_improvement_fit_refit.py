@@ -23,7 +23,7 @@ real one (Kira has no outfit body: it matches nothing).
 Derived by hand from the candidate rule and ``refit_character``:
 
 [F1] An accepted clothing fit of the Dress on the current base sha under the
-     current fsig with ``fit_version`` FV - 2 
+     current fsig with ``fit_version`` 14 (FV - 2 until A198 bumped FV to 19: 17 is kept) 
      (two behind:
      one behind without an opening Ruling A51 could change stays current) → ``outdated_fits`` lists it →
      exactly one candidate ``character:Kira``, label "Kira · 1 fit: Dress"
@@ -44,7 +44,7 @@ Derived by hand from the candidate rule and ``refit_character``:
      {"ok": True}: the posture match ran once, ``_fit`` once for the Dress,
      the record now reads FV; 0 hub calls; rescan → no candidate; the one-shot
      worked itself off (``store.get`` None).
-[F5] A refused refit: the old record back at FV - 2 (still ``accepted``) +
+[F5] A refused refit: the old record back at 14 (still ``accepted``) +
      a failure record step "fit" on the current base sha (what
      ``_note_outcome`` writes) → ``garment_refit.outdated_fits`` STILL lists
      the Dress (the lister does not read failure records), but
@@ -52,11 +52,11 @@ Derived by hand from the candidate rule and ``refit_character``:
      ANOTHER base sha does not hold (``chain_failure`` ignores a fit failure
      of another base) → the candidate is back.
 [F6] An outfit body ob0000000a (``garments.body_sha256`` = "BODY"), the base
-     fit at FV again, a body fit of the Dress at FV - 2 on body sha "BODY" →
+     fit at FV again, a body fit of the Dress at 14 on body sha "BODY" →
      ``outdated_body_fits`` lists it → label "Kira · 1 fit: Dress@ob0000000a".
      A body failure on "BODY" from the current base fit (its sha) at FV
      (what ``_refit_bodies`` records for a refused body refit) → no
-     candidate; the same failure at FV - 2 (an older algorithm) does not hold
+     candidate; the same failure at 14 (an older algorithm) does not hold
      → the candidate is back.
 0 hub calls throughout.
 
@@ -166,6 +166,7 @@ def main() -> int:
         fsig = gs.garment_fsig("Kira", dress)
         base = base_body.current_base("Kira")
         FV = garment_fit.FIT_VERSION["clothing"]
+        STALE = 14   # below every version the chain keeps current (A198: FV - 2 = 17 is kept without a seeded opening)
         fit = gs.garment_path("Kira", dress, fsig, "fit")
         fit.parent.mkdir(parents=True, exist_ok=True)
         fit.write_bytes(b"OLD-FIT")
@@ -207,7 +208,7 @@ def main() -> int:
 
         # --- [F1] -------------------------------------------------------------------
         print("[F1] a clothing fit two versions behind is a candidate")
-        write_fit(FV - 2)
+        write_fit(STALE)
         check("outdated_fits lists the dress", garment_refit.outdated_fits("Kira"),
               [(dress, "clothing", fsig, gs.EDIT_CHAIN)])
         found = cands()
@@ -263,7 +264,7 @@ def main() -> int:
 
         # --- [F5] -------------------------------------------------------------------
         print("[F5] a refused refit is held back by its failure record")
-        write_fit(FV - 2)
+        write_fit(STALE)
         gs.record_failure("Kira", dress, fsig, step="fit", error="fit refused — x", base_model_sha=base[1])
         check("outdated_fits still lists the dress", [i for i, *_ in garment_refit.outdated_fits("Kira")], [dress])
         check("chain_failure honours it",
@@ -283,7 +284,7 @@ def main() -> int:
         body_fit.write_bytes(b"OLD-BODY-FIT")
         gs.write_record(body_fit.with_suffix(".json"), {
             "accepted": True, "kind": "clothing", "item_id": dress, "fsig": fsig, "body_id": BODY,
-            "body_sha256": "BODY", "fit_version": FV - 2})
+            "body_sha256": "BODY", "fit_version": STALE})
         check("outdated_body_fits lists it", garment_refit.outdated_body_fits("Kira"),
               [(dress, "clothing", fsig, BODY)])
         check("label names the body", [c.label for c in cands()], [f"Kira · 1 fit: Dress@{BODY}"])
@@ -292,7 +293,7 @@ def main() -> int:
                                base_fit_sha=base_fit_sha, fit_version=FV)
         check("a holding body failure: no candidate", cands(), [])
         gs.record_body_failure("Kira", dress, fsig, BODY, error="fit refused — y", body_sha="BODY",
-                               base_fit_sha=base_fit_sha, fit_version=FV - 2)
+                               base_fit_sha=base_fit_sha, fit_version=STALE)
         check("a failure of an older algorithm does not hold", [c.label for c in cands()],
               [f"Kira · 1 fit: Dress@{BODY}"])
         check("still no hub call", HUB, [])

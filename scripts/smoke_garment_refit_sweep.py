@@ -228,7 +228,7 @@ def main() -> int:
             gs.write_record(fit.with_suffix(".json"), record)
 
         put("hA", "hair", "a" * 12, SHA, None)
-        put("cB", "clothing", "b" * 12, SHA, FV["clothing"] - 2)  # two behind: outdated (A72 refits every clothing fit)
+        put("cB", "clothing", "b" * 12, SHA, 14)  # below every kept version: outdated (A198: FV - 2 = 17 is kept)
         put("cC", "clothing", "c" * 12, SHA, FV["clothing"])
         put("cD", "clothing", "d" * 12, SHA, 1)
         put("hE", "hair", "f" * 12, OTHER, None)
@@ -273,7 +273,7 @@ def main() -> int:
         check("assembly schedules", SCHEDULED, ["Demo", "Demo"])
         refits = [line for line in lines.lines if line.startswith("Garment refit Demo/")]
         check("log lines", len(refits), 2)
-        check("log cB", f"fit_version {FV['clothing'] - 2} -> {FV['clothing']}: ok" in refits[0] and "Demo/cB" in refits[0], True)
+        check("log cB", f"fit_version 14 -> {FV['clothing']}: ok" in refits[0] and "Demo/cB" in refits[0], True)
         check("log hA", "fit_version None -> 18: ok" in refits[1] and "Demo/hA" in refits[1], True)
         for item_id, fsig, version in (("hA", "a" * 12, 18), ("cB", "b" * 12, FV["clothing"])):
             r = json.loads(rec(item_id, fsig))

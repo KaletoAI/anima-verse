@@ -258,6 +258,11 @@ SIDE_DEEP_M = 0.03
 #: seeds changed, so a fit whose opening report has no recess component with a seed is unchanged bit for bit and its
 #: version 17 fit stays current (``opening_may_change``; in the worlds due at 17: that jacket on both bodies and
 #: Ylva's wrap skirt ``186f6282fd28``, which keeps the same 17 faces).
+#: clothing 19 (2026-11-18, A198 — a CPU refit of the clothing fits it can change, no hub job): A174 moved a fixed
+#: width allowance and a depth allowance to room along the body's outward normal after the clearance pass
+#: (``room_offset``) without a version step, so a fit made before it with either setting kept its old geometry as
+#: "accepted". A fit with Auto width and no depth (or a shell) is unchanged bit for bit and its version 18 fit (and
+#: the older ones the chain above keeps) stays current (``room_may_change``).
 #: footwear: its own fit (``footwear_fit``), versioned there.
 #: hair 17 (2026-11-15, Ruling A89 — a CPU refit of every HairDeck fit, no hub job): the cap's front edge is a
 #: hairline (``garment_hairdeck.hairline_offset``: an arc 6 mm higher at the temples, then a wide turn down towards
@@ -269,7 +274,7 @@ SIDE_DEEP_M = 0.03
 #: strands, fewer and shorter towards the hairline) instead of a band of straight-down cards; the cap under it is
 #: shaded root-dark to tip-light; every card's root end (and a fill card's tip) fades in vertex alpha
 #: (``root_fade``), so no card ends bluntly.
-FIT_VERSION: Dict[str, int] = {"hair": 18, "clothing": 18, "footwear": FOOTWEAR_FIT_VERSION}
+FIT_VERSION: Dict[str, int] = {"hair": 18, "clothing": 19, "footwear": FOOTWEAR_FIT_VERSION}
 #: The clothing fit version whose fits stay current under ``FIT_VERSION["clothing"]`` when Auto keeps their trunk as
 #: generated (Ruling A83, ``trunk_may_change``) and nothing rides an arm (Ruling A84, ``seam_may_change``).
 CLOTHING_TRUNK_UNCHANGED = 15
@@ -279,6 +284,9 @@ CLOTHING_SEAM_UNCHANGED = 16
 #: The clothing fit version whose fits stay current under ``FIT_VERSION["clothing"]`` when no recess opening of theirs
 #: had a seed (Ruling A114, ``opening_may_change``) — and so on down the chain above.
 CLOTHING_SEEDS_UNCHANGED = 17
+#: The clothing fit version whose fits stay current under ``FIT_VERSION["clothing"]`` when they had no fixed width
+#: allowance and no depth allowance (A198, ``room_may_change``) — and so on down the chain above.
+CLOTHING_ROOM_UNCHANGED = 18
 
 
 def fit_version_for(kind: str, method: str = "") -> Optional[int]:
@@ -299,6 +307,10 @@ def expected_fit_version(record: Dict[str, Any]) -> Optional[int]:
     Ruling A114)."""
     kind = str(record.get("kind") or "")
     version = record.get("fit_version")
+    if kind == "clothing" and room_may_change(record):
+        return fit_version_for(kind, str(record.get("method") or ""))
+    if kind == "clothing" and version == CLOTHING_ROOM_UNCHANGED:
+        return CLOTHING_ROOM_UNCHANGED
     if kind == "clothing" and not opening_may_change(record):
         if version == CLOTHING_SEEDS_UNCHANGED:
             return CLOTHING_SEEDS_UNCHANGED
@@ -308,6 +320,22 @@ def expected_fit_version(record: Dict[str, Any]) -> Optional[int]:
         if version == CLOTHING_TRUNK_UNCHANGED and not trunk_may_change(record):
             return CLOTHING_TRUNK_UNCHANGED
     return fit_version_for(kind, str(record.get("method") or ""))
+
+
+def room_may_change(record: Dict[str, Any]) -> bool:
+    """A198: whether a clothing fit made before A174's room allowance would come out differently — it was made with
+    a fixed width allowance (``allowance`` not "auto") or a depth allowance (``depth`` not 0) in its recorded
+    ``inputs.fit_settings``. A shell (``inputs.mesh_shape``) takes neither setting; a record without settings was
+    made with the defaults (Auto, 0)."""
+    inputs = record.get("inputs") or {}
+    if inputs.get("mesh_shape") == "shell":
+        return False
+    settings = inputs.get("fit_settings") or {}
+    if not isinstance(settings, dict):
+        return False
+    allowance = settings.get("allowance", "auto")
+    depth = settings.get("depth", 0)
+    return (allowance not in (None, "auto")) or (depth not in (None, 0))
 
 
 def opening_may_change(record: Dict[str, Any]) -> bool:
