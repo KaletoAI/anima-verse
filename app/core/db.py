@@ -475,6 +475,33 @@ def init_schema() -> None:
         except Exception as e:
             logger.warning("prop run members migration failed: %s", e)
 
+    # One-shot migration: the improvement step state `fulfilled`
+    # (app/core/improvements/store.py `replace_steps_scan`). Before it, a scan
+    # closed a pending step whose subject dropped off the candidate list as
+    # `done` — the same word as a step that ran — and a done key listed again
+    # was never offered again. Those scan-closed rows are recognisable: a run
+    # records a duration (mark_result from its started_at), a scan close never
+    # does. They become `fulfilled`, so a reason that recurred under the same
+    # key is offered again at the next scan; a row that RAN stays `done` until
+    # a scan sees its subject satisfied.
+    flag = conn.execute(
+        "SELECT value FROM schema_meta WHERE key='improvement_steps_fulfilled_v1'"
+    ).fetchone()
+    if not flag:
+        try:
+            cur = conn.execute(
+                "UPDATE improvement_steps SET status='fulfilled' "
+                "WHERE status='done' AND duration_s IS NULL")
+            if cur.rowcount and cur.rowcount > 0:
+                logger.info("improvement steps: %d scan-closed step(s) marked fulfilled",
+                            cur.rowcount)
+            conn.execute(
+                "INSERT INTO schema_meta (key, value) VALUES "
+                "('improvement_steps_fulfilled_v1', '1')"
+            )
+        except Exception as e:
+            logger.warning("improvement steps fulfilled migration failed: %s", e)
+
     # One-time migration: remove legacy keys from character_state.meta.
     # Plan section 8 (step-8 cleanup, May 2026):
     #   - runtime_outfit_skip -> outfit_intent.forbidden_slots (step 2)

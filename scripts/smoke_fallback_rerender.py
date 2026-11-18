@@ -37,8 +37,11 @@ B1 subject character_gallery -> ["gallery:Mara:c.png"]: c.png is a fresh
    marked image; a.png is NOT listed because part A already produced its
    replacement a_v1.png (source_file a.png, no marker) — that is "done";
    b.png carries no marker.
-B2 subject character_images -> ["character:Mara"] (p.png is the profile and
-   carries a marker).
+B2 subject character_images -> ["character:Mara:<t>"] (p.png is the profile
+   and carries a marker); <t> = the first 12 hex of sha256 over the JSON
+   ["p.png"] — the portrait's file name is the key token, so a NEW marked
+   portrait is a new step. The older key shape "character:Mara" still names
+   Mara (``_split``).
 B3 subject location_gallery -> ["location:<loc>:x.png"].
 B4 occasion filter: {"subject": "location_gallery", "occasion": "location"}
    -> [] (x.png's marker says "photo"); occasion "photo" -> the candidate.
@@ -47,7 +50,7 @@ B5 apply while "Big*" resolves to nothing (Big A cooling) -> CandidateBusy,
 B6 Big A healthy -> apply("gallery:Mara:c.png") renders EXPLICITLY on
    "Big A" with source_file "c.png"; the next scan no longer lists c.png
    (replacement with source_file c.png and no marker).
-B7 apply("character:Mara") runs the REAL regenerate_profile over the fake
+B7 apply("character:Mara:<t>") runs the REAL regenerate_profile over the fake
    producer: backend "Big A", source p.png, create_new, source_file "p.png";
    the profile is now p_v1.png without a marker -> not listed any more.
 B7b the old portrait p.png (still marked) is now a gallery image — it is NOT
@@ -70,6 +73,8 @@ B12 the backend drops out between resolve and render: the producer raises
    (regenerate_character_gallery_image, regenerate_profile) raise
    CandidateBusy, not a plain RuntimeError.
 """
+import hashlib
+import json
 import os
 import sys
 import tempfile
@@ -248,7 +253,12 @@ def part_b():
          subjects.gallery_images) = real
     check("B1b one read per character / location",
           (reads, len(loc_rows)), ({"gallery": 1, "profile": 1, "location": 1}, 1))
-    check("B2 portrait", cands({"subject": "character_images"}), ["character:Mara"])
+    portrait_key = "character:Mara:" + hashlib.sha256(json.dumps(["p.png"]).encode("utf-8")).hexdigest()[:12]
+    check("B2 portrait", cands({"subject": "character_images"}), [portrait_key])
+    from app.core.improvements.types import fallback_rerender
+    check("B2 the older key shape still parses",
+          (fallback_rerender._split("character:Mara"), fallback_rerender._split(portrait_key)),
+          (("character", "Mara"), ("character", "Mara")))
     loc = next(l["id"] for l in subjects.locations() if l.get("name") == "Harbour")
     check("B3 location", cands({"subject": "location_gallery"}), [f"location:{loc}:x.png"])
     check("B4 filter out", cands({"subject": "location_gallery", "occasion": "location"}), [])
@@ -270,7 +280,7 @@ def part_b():
           ("Big A", "c.png"))
     check("B6 done", cands({"subject": "character_gallery"}), [])
 
-    t.apply(Candidate("character:Mara", "Mara"), t.validate({"subject": "character_images"}), "t3")
+    t.apply(Candidate(portrait_key, "Mara"), t.validate({"subject": "character_images"}), "t3")
     call = REGEN_CALLS[-1]
     check("B7 portrait", (call["path"], call["backend_name"], call["create_new"], call["source_file"]),
           ("p.png", "Big A", True, "p.png"))

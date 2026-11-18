@@ -17,7 +17,7 @@ as ``smoke_improvements.py`` does).
        hub_jobs [2, 0, None] in LABEL order (A, B, C), and the entry's
        ``pending_hub_jobs`` is None — C is pending and unknown, and an unknown
        step makes the whole estimate unknown, never a silent 2.  A rescan that
-       lists only A(2), B(0) closes the vanished PENDING C as done, so the sum
+       lists only A(2), B(0) closes the vanished PENDING C as fulfilled, so the sum
        is 2 + 0 = 2.  A re-listed with hub_jobs 5 updates the pending row to 5
        (the estimate changes as the chain's steps get cached) → 5 + 0 = 5.
        ``mark_result(A, "done")`` leaves B alone → 0.
@@ -38,8 +38,8 @@ as ``smoke_improvements.py`` does).
   [C5] A skipped step stays skipped.  FakeType now lists only B; a pending D
        was listed before.  Rescan: A (skipped, refused) stays "skipped" — a
        refused candidate drops off the list because the type excludes it, and
-       "done" would claim an asset that does not exist; D (pending, vanished)
-       becomes "done"; closed == 1 (D only).
+       "fulfilled" would claim an asset that does not exist; D (pending,
+       vanished) becomes "fulfilled"; closed == 1 (D only).
 
   [C6] ``needs_media``.  ``media_generation_enabled`` patched False; entry1
        (type needs_media True, position 1) and entry2 (needs_media False) each
@@ -198,7 +198,7 @@ check("…in list_all too",
       [r["pending_hub_jobs"] for r in store.list_all() if r["id"] == E], [None])
 FakeType.candidates = [("a", "A", 2, ""), ("b", "B", 0, "")]
 check("rescan closes the vanished pending C", engine.scan(E), {"added": 0, "closed": 1})
-check("…as done", step_of(E, "c")["status"], "done")
+check("…as fulfilled", step_of(E, "c")["status"], "fulfilled")
 check("the sum is 2 + 0", store.get(E)["pending_hub_jobs"], 2)
 FakeType.candidates = [("a", "A", 5, "cached less"), ("b", "B", 0, "")]
 engine.scan(E)
@@ -264,9 +264,9 @@ check("A is refused, D pending",
 FakeType.candidates = [("b", "B", 0, "")]
 check("rescan closes only the vanished PENDING step",
       engine.scan(S), {"added": 1, "closed": 1})
-check("A stays skipped, D is done",
+check("A stays skipped, D is fulfilled",
       {s["candidate_key"]: s["status"] for s in store.list_steps(S)},
-      {"a": "skipped", "b": "pending", "d": "done"})
+      {"a": "skipped", "b": "pending", "d": "fulfilled"})
 check("…and A is still marked refused", step_of(S, "a")["refused"], 1)
 
 # ── C6 ───────────────────────────────────────────────────────────────────────

@@ -2083,6 +2083,7 @@
     "Failed": "Fehlgeschlagen",
     "Failed: {error}": "Fehlgeschlagen: {error}",
     "Skipped": "Übersprungen",
+    "Fulfilled": "Erfüllt",
     "OK": "OK",
     "Drag to reorder": "Zum Umsortieren ziehen",
     "New improvement": "Neue Verbesserung",

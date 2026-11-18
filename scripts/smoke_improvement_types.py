@@ -7,6 +7,12 @@ Every expectation below is derived BY HAND from the task contract and from the
 generator anchors it builds on — nothing here records what a run happened to
 produce.
 
+The key of every subject these types work on ends with a 12-hex TOKEN (the
+identity of what makes the work due — the types' docstrings; the values are
+derived in scripts/smoke_improvement_key_tokens.py). The expectations here name
+the SUBJECT: ``candidates`` strips a trailing ``:<12 hex>``; a gallery file key
+(``location:<id>:<file>``) has no token and stays as it is.
+
 The world is a throwaway storage dir. The two BLOCKING generators are replaced
 by fakes that persist exactly what the real ones persist (a mesh file plus its
 sidecar carrying `backend`), so the READERS stay real: `get_model3d_info` and
@@ -266,6 +272,7 @@ Usage:  ./.venv/bin/python scripts/smoke_improvement_types.py
 """
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -608,8 +615,13 @@ B = make_character("demo_b")
 TEMP = make_character("demo_temp", template="npc-temporary")
 
 
+def subject_key(key):
+    """The key without its trailing ``:<12 hex>`` token (unchanged without one)."""
+    return re.sub(r":[0-9a-f]{12}$", "", key)
+
+
 def candidates(improvement_type, params):
-    return [(c.key, c.label)
+    return [(subject_key(c.key), c.label)
             for c in improvement_type.find_candidates(improvement_type.validate(params))]
 
 
@@ -648,7 +660,7 @@ check("scanning for a backend nothing was made by finds nothing",
                                  "source_backend": "tr",
                                  "target_backend": "hy"}), [])
 check("a STORED equal-backend set yields no work either (is_done filter)",
-      [(c.key, c.label) for c in MODEL_REPLACE.find_candidates(
+      [(subject_key(c.key), c.label) for c in MODEL_REPLACE.find_candidates(
           {"subject": "character", "source_backend": "hy",
            "target_backend": "hy"})], [])
 # ── [3] apply generates with the TARGET backend ─────────────────────────────
@@ -861,7 +873,8 @@ finally:
     expression_regen.render_character_image = fake_expression_image
 assert expression_regen.get_cached_expression(expression_regen.expression_snapshot("demo_a")) is not None
 FILL_MISSING.apply(
-    next(c for c in FILL_MISSING.find_candidates(FILL_MISSING.validate(FILL_EXPR)) if c.key == "character:demo_b"),
+    next(c for c in FILL_MISSING.find_candidates(FILL_MISSING.validate(FILL_EXPR))
+         if subject_key(c.key) == "character:demo_b"),
     FILL_MISSING.validate(FILL_EXPR), "task-10")
 check("a cached variant → nobody is a candidate",
       candidates(FILL_MISSING, FILL_EXPR), [])
@@ -1201,10 +1214,10 @@ for backend in ('hy', 'tr', 'px'):
 _saved_inv = list(MESH_INVENTORY)
 MESH_INVENTORY[:] = [b for b in MESH_INVENTORY if b["name"] != "tr"]
 check("offline target keeps every candidate",
-      [(c.key, c.label) for c in MESH_FROM_TPOSE.find_candidates({"backend": "tr"})], expected)
+      [(subject_key(c.key), c.label) for c in MESH_FROM_TPOSE.find_candidates({"backend": "tr"})], expected)
 MESH_INVENTORY[:] = _saved_inv
 check("unconfigured target keeps candidates for explicit failure",
-      [(c.key, c.label) for c in MESH_FROM_TPOSE.find_candidates({"backend": "gone"})], expected)
+      [(subject_key(c.key), c.label) for c in MESH_FROM_TPOSE.find_candidates({"backend": "gone"})], expected)
 write_mesh_sidecar(D, "hy")
 check("model_replace hy -> tr selects the model by source",
       candidates(MODEL_REPLACE, {"subject": "character", "source_backend": "hy", "target_backend": "tr"}),
@@ -1253,7 +1266,7 @@ check('image fixture has two variants', [v['index'] for v in variants], [0, 1])
 (props.prop_dir(image_prop) / props.view_source_name(variants[1]['stem'], 'back')).write_bytes(b'back')
 params = {'subject': 'prop_images'}
 found = [c for c in FILL_MISSING.find_candidates(params) if c.key.startswith(f'prop:{image_prop}#')]
-check('only variant without front is a candidate', [(c.key, c.label) for c in found],
+check('only variant without front is a candidate', [(subject_key(c.key), c.label) for c in found],
       [(f'prop:{image_prop}#1', 'Sample prop · variant 2')])
 check('front source finishes the variant', FILL_MISSING.is_done(Candidate(f'prop:{image_prop}#0', ''), params), True)
 check('missing front is unfinished', FILL_MISSING.is_done(found[0], params), False)

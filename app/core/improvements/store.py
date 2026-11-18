@@ -19,7 +19,10 @@ DEFAULT_IDLE_MINUTES = 15
 _UPDATABLE = {"label", "params", "mode", "status", "last_scan_at",
               "done_count", "failed_count", "forced"}
 
-_STEP_STATUSES = ("pending", "running", "done", "failed", "skipped")
+# ``done`` = the step ran successfully; ``fulfilled`` = a scan saw its subject
+# satisfied (it dropped off the candidate list) — the one end state a later
+# scan reopens when the same key is listed again (``replace_steps_scan``).
+_STEP_STATUSES = ("pending", "running", "done", "fulfilled", "failed", "skipped")
 
 
 def _row_to_improvement(row) -> Dict[str, Any]:
@@ -92,7 +95,7 @@ def create(type_id: str, label: str, params: Dict[str, Any], mode: str) -> Dict[
 
 
 def get(improvement_id: str) -> Optional[Dict[str, Any]]:
-    """Row dict incl. the same counters as list_all() (pending/running/done/failed/skipped)."""
+    """Row dict incl. the same counters as list_all() (pending/running/done/fulfilled/failed/skipped)."""
     conn = get_connection()
     row = conn.execute(
         "SELECT * FROM improvements WHERE id=?", (improvement_id,)
@@ -113,7 +116,7 @@ def get(improvement_id: str) -> Optional[Dict[str, Any]]:
 
 def list_all() -> List[Dict[str, Any]]:
     """ORDER BY position, created_at; each row gets counters pending/running/
-    done/failed/skipped and ``pending_hub_jobs`` from improvement_steps (one
+    done/fulfilled/failed/skipped and ``pending_hub_jobs`` from improvement_steps (one
     GROUP BY query each); `params` already json-decoded."""
     conn = get_connection()
     counts = _counters()
@@ -166,14 +169,28 @@ def set_order(ids: List[str]) -> None:
 def replace_steps_scan(improvement_id: str,
                        candidates: List[Tuple[str, str, Optional[int], str]]
                        ) -> Dict[str, int]:
-    """candidates = [(key, label, hub_jobs, note)].  INSERT OR IGNORE new keys
-    as pending; a key that is already pending gets its ``hub_jobs``/``note``
-    refreshed (the estimate shrinks as the chain's steps get cached);
-    PENDING steps whose key is no longer listed -> done (is_done elsewhere).
-    A skipped step stays skipped — a refused candidate drops off the list
-    because the type excludes it, and "done" would then claim an asset that
-    does not exist.  running/done/failed rows untouched.
-    Returns {"added": n, "closed": m}."""
+    """candidates = [(key, label, hub_jobs, note)].  The scan's diff onto the
+    steps:
+
+    * a NEW key is inserted as pending; a key that is already pending gets its
+      ``hub_jobs``/``note`` refreshed (the estimate shrinks as the chain's
+      steps get cached);
+    * a key that is NOT listed any more means its subject is satisfied (the
+      type lists only what is not ``is_done``): a pending step, and a done one
+      (it ran, and this is the first scan that sees its subject satisfied),
+      become ``fulfilled``. A pending step closed this way gets no duration —
+      nothing was worked; a done one keeps the stamps of its run;
+    * a ``fulfilled`` key listed AGAIN is the same reason occurring anew: the
+      step is pending again with a clean slate (attempts, error, stamps);
+    * a ``done`` key that is still listed stays done — its run did not satisfy
+      the subject, and re-offering it would spend the same work endlessly; a
+      ``skipped`` key (given up, refused, cancelled) stays skipped, listed or
+      not — only Retry reopens it, and a refused candidate drops off the list
+      because the type excludes it, which satisfies nothing.
+
+    running/failed rows untouched.  Returns {"added": n, "closed": m} —
+    ``added`` counts the inserted and the reopened steps, ``closed`` the
+    pending ones that became fulfilled."""
     listed = {str(key) for key, _label, _hub, _note in candidates}
     now = utc_now_iso()
     added = 0
@@ -189,29 +206,43 @@ def replace_steps_scan(improvement_id: str,
             if cur.rowcount > 0:
                 added += 1
                 continue
+            cur = conn.execute(
+                "UPDATE improvement_steps SET status='pending', candidate_label=?, "
+                "attempts=0, error='', started_at=NULL, finished_at=NULL, "
+                "duration_s=NULL, refused=0, hub_jobs=?, note=? "
+                "WHERE improvement_id=? AND candidate_key=? AND status='fulfilled'",
+                (label or "", hub_jobs, note or "", improvement_id, str(key)),
+            )
+            if cur.rowcount > 0:
+                added += 1
+                continue
             conn.execute(
                 "UPDATE improvement_steps SET hub_jobs=?, note=? "
                 "WHERE improvement_id=? AND candidate_key=? AND status='pending'",
                 (hub_jobs, note or "", improvement_id, str(key)),
             )
-        open_keys = [
-            r["candidate_key"] for r in conn.execute(
-                "SELECT candidate_key FROM improvement_steps "
-                "WHERE improvement_id=? AND status='pending'",
-                (improvement_id,),
-            ).fetchall()
-        ]
-        for key in open_keys:
+        rows = conn.execute(
+            "SELECT candidate_key, status FROM improvement_steps "
+            "WHERE improvement_id=? AND status IN ('pending', 'done')",
+            (improvement_id,),
+        ).fetchall()
+        for row in rows:
+            key = row["candidate_key"]
             if key in listed:
                 continue
-            # Gone from the candidate list = the type no longer names it, which
-            # can only mean the subject is done. No duration: nothing was worked.
-            conn.execute(
-                "UPDATE improvement_steps SET status='done', error='', "
-                "finished_at=? WHERE improvement_id=? AND candidate_key=?",
-                (now, improvement_id, key),
-            )
-            closed += 1
+            if row["status"] == "pending":
+                conn.execute(
+                    "UPDATE improvement_steps SET status='fulfilled', error='', "
+                    "finished_at=? WHERE improvement_id=? AND candidate_key=?",
+                    (now, improvement_id, key),
+                )
+                closed += 1
+            else:
+                conn.execute(
+                    "UPDATE improvement_steps SET status='fulfilled' "
+                    "WHERE improvement_id=? AND candidate_key=?",
+                    (improvement_id, key),
+                )
     return {"added": added, "closed": closed}
 
 
@@ -319,23 +350,24 @@ def reset_running_to_pending() -> int:
 
 
 def recent_done(limit: int = 20) -> List[Dict[str, Any]]:
-    """done/skipped ORDER BY finished_at DESC, joined with improvement label/type."""
+    """done/fulfilled/skipped ORDER BY finished_at DESC, joined with improvement label/type."""
     conn = get_connection()
     return [dict(r) for r in conn.execute(
         "SELECT s.*, i.label AS label, i.type_id AS type_id "
         "FROM improvement_steps s JOIN improvements i ON i.id = s.improvement_id "
-        "WHERE s.status IN ('done', 'skipped') "
+        "WHERE s.status IN ('done', 'fulfilled', 'skipped') "
         "ORDER BY s.finished_at DESC LIMIT ?", (int(limit),),
     ).fetchall()]
 
 
 def avg_duration_by_type() -> Dict[str, float]:
-    """AVG(duration_s) of done steps grouped by improvements.type_id."""
+    """AVG(duration_s) of the steps that ran to success (done, or fulfilled
+    since; a step a scan closed has no duration) grouped by improvements.type_id."""
     conn = get_connection()
     return {r["type_id"]: float(r["avg_s"]) for r in conn.execute(
         "SELECT i.type_id AS type_id, AVG(s.duration_s) AS avg_s "
         "FROM improvement_steps s JOIN improvements i ON i.id = s.improvement_id "
-        "WHERE s.status='done' AND s.duration_s IS NOT NULL "
+        "WHERE s.status IN ('done', 'fulfilled') AND s.duration_s IS NOT NULL "
         "GROUP BY i.type_id"
     ).fetchall()}
 

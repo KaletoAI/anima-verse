@@ -1028,9 +1028,12 @@ SCHEMA_STATEMENTS = [
     # A standing order ("give every character a 3D model") plus one row per
     # subject it still has to work on. The order lives in `improvements`, the
     # work list in `improvement_steps` — rebuilt by each scan as a DIFF, so a
-    # subject that disappeared from the candidate list is done, and the
+    # subject that disappeared from the candidate list is `fulfilled`, and the
     # attempts/error of a subject already worked on survive every rescan.
-    # See app/core/improvements/store.py.
+    # Step status: pending | running | done (ran successfully) | fulfilled (a
+    # scan saw the subject satisfied — the one end state a scan reopens when
+    # the same key is listed again) | skipped (`refused` = terminal).
+    # See app/core/improvements/store.py (`replace_steps_scan`).
     """CREATE TABLE IF NOT EXISTS improvements (
         id TEXT PRIMARY KEY,
         type_id TEXT NOT NULL,

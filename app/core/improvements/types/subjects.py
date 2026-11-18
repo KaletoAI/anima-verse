@@ -23,10 +23,32 @@ engine calls them synchronously in a queue worker:
 from app.imagegen.routing import ROUTE_META_KEYS
 from app.imagegen.selection import is_generator_backend
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.improvements.base import CandidateBusy
+
+
+def key_token(*parts: Any) -> str:
+    """12 hex over ``parts`` (JSON, sorted keys) — the token a candidate key
+    ends with: the identity of what makes the subject's work due
+    (``Candidate.key``). Never a clock: the same inputs give the same token."""
+    raw = json.dumps(list(parts), sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def file_token(path: Optional[Path]) -> str:
+    """``key_token`` over the identity of one file — name, size, mtime_ns —
+    "" parts when it is absent or unreadable."""
+    if path is None:
+        return key_token("")
+    try:
+        st = Path(path).stat()
+    except OSError:
+        return key_token(Path(path).name)
+    return key_token(Path(path).name, st.st_size, st.st_mtime_ns)
 
 
 # ---------------------------------------------------------------------------
@@ -351,9 +373,14 @@ def prop_has_source(ident: str) -> bool:
     """Whether the addressed variant has the product shot a re-mesh needs.
     Without it there is nothing to generate FROM — such a prop is not a
     candidate for anything here."""
+    return prop_source_path(ident) is not None
+
+
+def prop_source_path(ident: str) -> Optional[Path]:
+    """The addressed variant's product shot (the file a mesh is made FROM), or None."""
     from app.core.props import source_path
     pid, variant = split_prop_ident(ident)
-    return source_path(pid, variant) is not None
+    return source_path(pid, variant)
 
 
 def generate_prop_model(ident: str, backend: str) -> None:
@@ -433,11 +460,20 @@ def generate_prop_image(ident: str, backend: str) -> None:
 
 def expression_missing(name: str) -> bool:
     """Whether the selected set's default image is missing for the worn outfit."""
+    return expression_missing_stem(name) is not None
+
+
+def expression_missing_stem(name: str) -> Optional[str]:
+    """The stem of the selected set's default image for the worn outfit (its
+    identity: set, member, outfit, contract) when that image is missing, ""
+    when it cannot be read ("not done", identity unknown), None when it is
+    there."""
     from app.core.expression_regen import expression_snapshot, get_cached_expression
     try:
-        return get_cached_expression(expression_snapshot(name)) is None
+        request = expression_snapshot(name)
+        return None if get_cached_expression(request) is not None else str(request.stem)
     except Exception:  # noqa: BLE001 — an unreadable cache is "not done"
-        return True
+        return ""
 
 
 def generate_expression(name: str) -> None:

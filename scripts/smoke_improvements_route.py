@@ -35,7 +35,8 @@ recorded from a run.  A mini FastAPI app carries only this router, and
 
   6. A shrinking candidate set: with the fake type reduced to one candidate,
      ``POST /{id}/rescan`` reports {added 0, closed 1} and the vanished step
-     is 'done' while the surviving one stays 'pending'.  (Editing an entry's
+     is 'fulfilled' (a scan saw it satisfied) while the surviving one stays
+     'pending'.  (Editing an entry's
      label/params had its own ``PATCH /improvements/{id}`` — deleted on
      2026-09-21 with DF-5, because no tab ever called it.)
 
@@ -310,10 +311,10 @@ print("\n6. POST /{id}/rescan closes a candidate that vanished")
 FakeType.candidates = [("k1", "Zeta")]
 check("the diff reports exactly one closure",
       client.post(f"/improvements/{A}/rescan").json(), {"added": 0, "closed": 1})
-check("…and the vanished step is done while the survivor stays pending",
+check("…and the vanished step is fulfilled while the survivor stays pending",
       {s["candidate_key"]: s["status"]
        for s in client.get(f"/improvements/{A}/steps").json()},
-      {"k1": "pending", "k2": "done"})
+      {"k1": "pending", "k2": "fulfilled"})
 
 # ── 7. pause / resume ────────────────────────────────────────────────────────
 print("\n7. POST /{id}/pause and /{id}/resume")
@@ -341,7 +342,7 @@ check("run-now starts a step past the engine switch",
 check("…the entry's first step by label",
       {s["candidate_key"]: s["status"]
        for s in client.get(f"/improvements/{A}/steps").json()
-       if s["status"] != "done"}, {"k1": "pending", "k3": "running"})
+       if s["status"] not in ("done", "fulfilled")}, {"k1": "pending", "k3": "running"})
 # With that step in flight a second click only arms the flag for the tick.
 r = client.post(f"/improvements/{A}/run-now")
 check("…a second click waits behind it",

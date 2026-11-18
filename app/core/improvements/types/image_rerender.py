@@ -12,11 +12,25 @@ derived from it — a re-rendered portrait plus a cleared expression cache moves
 a character's whole face onto the new backend.  A ``location_gallery``
 candidate is a single gallery FILE instead, because a location's images are
 independent pictures with their own prompts.
+
+Keys: a gallery image is ``location:<id>:<file>`` — the file IS the token, it
+never changes. A portrait is ``character:<name>:<token>``, the token over the
+current portrait's file name: a NEW portrait made by the source backend is a
+new reason, a new step, while the step of a portrait already worked on is not
+offered again. A portrait key of the older shape without a token still parses
+(``_split``).
 """
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from app.core.improvements.base import Candidate, ImprovementType, ParamField
 from app.core.improvements.types import subjects
+
+
+def _split(key: str) -> Tuple[str, str]:
+    """``(kind, ident)``: a portrait's ident is the name (its token dropped),
+    a gallery image's ``<location id>:<file>``."""
+    kind, _sep, rest = key.partition(":")
+    return kind, (rest.split(":")[0] if kind == "character" else rest)
 
 SUBJECTS = [
     {"value": "character_images", "label": "Character portraits"},
@@ -89,7 +103,8 @@ class ImageRerender(ImprovementType):
                 # this type could generate FROM.
                 if (profile and profile["backend"] == source
                         and profile["prompt"]):
-                    out.append(Candidate(f"character:{name}", name))
+                    out.append(Candidate(
+                        f"character:{name}:{subjects.key_token(profile['filename'])}", name))
         else:
             for location in subjects.locations():
                 loc_id = location.get("id") or ""
@@ -112,12 +127,12 @@ class ImageRerender(ImprovementType):
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
         """Whether the subject is on the target backend now — read back from
         what is persisted, never from what ``apply`` did."""
-        kind, ident = candidate.key.split(":", 1)
+        kind, ident = _split(candidate.key)
         done, _rerender = _HANDLERS[kind]
         return done(ident, params["target_backend"])
 
     def apply(self, candidate: Candidate, params: Dict[str, Any],
               task_id: str) -> None:
-        kind, ident = candidate.key.split(":", 1)
+        kind, ident = _split(candidate.key)
         _done, rerender = _HANDLERS[kind]
         rerender(ident, params["target_backend"])

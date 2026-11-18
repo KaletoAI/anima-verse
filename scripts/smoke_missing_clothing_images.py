@@ -11,8 +11,14 @@ need no render. A completed image appearing while queued must not be replaced.
 Run the real improvement engine, routing, item producer and DB/file publication
 against temporary storage. Only the external GPU backend and rembg are replaced.
 Backend load must leave attempts at zero; a real failure consumes one attempt.
+
+A candidate key is ``item:<id>:<t>``, <t> = the first 12 hex of sha256 over the
+JSON [image_prompt, prompt_fragment, name] — the item producer's subject text.
+The demo items set neither prompt, so <t> covers ["", "", <name>] (``ikey``).
 """
+import hashlib
 import io
+import json
 import os
 import sys
 import tempfile
@@ -46,9 +52,17 @@ def main():
         improvement_type = registry.get("fill_missing")
         params = improvement_type.validate({"subject": "clothing_images"})
 
+        names = {}
+
         def piece(name):
-            return inventory.add_item(name, category="outfit_piece",
-                                      outfit_piece={"slots": ["top"]})["id"]
+            item_id = inventory.add_item(name, category="outfit_piece",
+                                         outfit_piece={"slots": ["top"]})["id"]
+            names[item_id] = name
+            return item_id
+
+        def ikey(item_id):
+            token = hashlib.sha256(json.dumps(["", "", names[item_id]]).encode("utf-8")).hexdigest()[:12]
+            return f"item:{item_id}:{token}"
 
         def keys():
             return [c.key for c in improvement_type.find_candidates(params)]
@@ -63,7 +77,7 @@ def main():
         present_dir.mkdir(parents=True)
         kept = present_dir / "kept.png"
         kept.write_bytes(b"keep this image")
-        assert keys() == [f"item:{dangling}", f"item:{missing}"], keys()
+        assert keys() == [ikey(dangling), ikey(missing)], keys()
         print("OK: missing and dangling clothing images only; stable label order")
 
         candidates = {c.key: c for c in improvement_type.find_candidates(params)}
@@ -73,7 +87,7 @@ def main():
         inventory.delete_item(deleted)
         inventory.update_item(changed, {"category": "tool"})
         for item_id in (deleted, changed):
-            candidate = stale[f"item:{item_id}"]
+            candidate = stale[ikey(item_id)]
             assert improvement_type.is_done(candidate, params)
             improvement_type.apply(candidate, params, "")
         assert not (paths.get_storage_dir() / "items" / deleted).exists()
@@ -114,11 +128,11 @@ def main():
             entry = store.create("fill_missing", "Demo clothing", params, "one_shot")
             engine.scan(entry["id"])
             payload = {"improvement_id": entry["id"],
-                       "candidate_key": f"item:{missing}"}
+                       "candidate_key": ikey(missing)}
             svc._pool = BackendPool([])
             assert "busy" in engine.handle_step(payload)
             step = next(s for s in store.list_steps(entry["id"])
-                        if s["candidate_key"] == f"item:{missing}")
+                        if s["candidate_key"] == ikey(missing))
             assert (step["status"], step["attempts"]) == ("pending", 0), step
             svc._pool = BackendPool([backend])
             print("OK: an unavailable routing chain waits without consuming an attempt")
@@ -126,14 +140,14 @@ def main():
             backend.error = BackendBusyError("demo GPU busy")
             assert "busy" in engine.handle_step(payload)
             step = next(s for s in store.list_steps(entry["id"])
-                        if s["candidate_key"] == f"item:{missing}")
+                        if s["candidate_key"] == ikey(missing))
             assert (step["status"], step["attempts"]) == ("pending", 0), step
             print("OK: backend load leaves the step pending without an attempt")
 
             backend.error = RuntimeError("demo render failed")
             assert "error" in engine.handle_step(payload)
             step = next(s for s in store.list_steps(entry["id"])
-                        if s["candidate_key"] == f"item:{missing}")
+                        if s["candidate_key"] == ikey(missing))
             assert (step["status"], step["attempts"]) == ("pending", 1), step
             print("OK: real generation failure is not reported as success")
 
@@ -145,12 +159,12 @@ def main():
             meta = inventory.get_item(missing)["image_meta"]
             assert meta["routing"] == {"occasion": "item", "position": 1,
                                        "spec": "demo-image"}, meta
-            assert improvement_type.is_done(candidates[f"item:{missing}"], params)
-            assert keys() == [f"item:{dangling}"]
+            assert improvement_type.is_done(candidates[ikey(missing)], params)
+            assert keys() == [ikey(dangling)]
             print("OK: engine publishes the image and routing metadata; candidate disappears")
 
             backend.error = AssertionError("an existing image must not be rendered again")
-            improvement_type.apply(candidates[f"item:{missing}"], params, "")
+            improvement_type.apply(candidates[ikey(missing)], params, "")
             assert image_path.read_bytes() == blob.getvalue()
             assert kept.read_bytes() == b"keep this image"
             print("OK: queued candidates cannot replace an image filled in the meantime")

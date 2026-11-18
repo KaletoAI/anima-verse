@@ -5,9 +5,11 @@ from typing import Any, Dict, List, Optional
 
 @dataclass(frozen=True)
 class Candidate:
-    # Stable + unique per type, e.g. "character:Mira:<token>". A scan inserts only NEW keys and never re-opens a
-    # done step, so a type whose subject can go stale again puts the token that makes its work due (a version,
-    # a signature, a fingerprint of what ``is_done`` compares) into the key: a re-stale is a new key, a new step.
+    # Stable + unique per type, e.g. "character:Mira:<token>". A scan inserts NEW keys, and reopens a key only
+    # when its step is ``fulfilled`` (a scan saw the subject satisfied in between): a step that ran (``done``)
+    # or was given up (``skipped``) is never offered again under the same key. So every type puts the token
+    # that makes its work due (a version, a signature, the identity of the input it works from) into the key:
+    # a subject due again for a NEW reason is a new key, a new step.
     key: str
     label: str    # display
     # Estimated hub jobs the step will submit on its FIRST attempts (a chain
@@ -68,7 +70,7 @@ class ImprovementType:
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
         """The type's own finished-test, used INSIDE ``find_candidates`` — the
         engine never calls it; a subject that drops off the candidate list is
-        closed as done."""
+        closed as fulfilled."""
         raise NotImplementedError
 
     #: The candidate-key heads whose second part is a character name (``character:<name>[:…]``).

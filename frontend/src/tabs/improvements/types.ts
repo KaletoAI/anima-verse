@@ -48,6 +48,8 @@ export interface Improvement {
   pending: number
   running: number
   done: number
+  /** Steps a scan saw satisfied — reopened if the same reason recurs. */
+  fulfilled: number
   failed: number
   skipped: number
   /** The hub jobs its PENDING steps would still submit (first attempts);
@@ -60,7 +62,8 @@ export interface Step {
   improvement_id: string
   candidate_key: string
   candidate_label: string
-  /** 'pending' | 'running' | 'done' | 'failed' | 'skipped' */
+  /** 'pending' | 'running' | 'done' | 'fulfilled' | 'failed' | 'skipped' —
+   *  done = it ran; fulfilled = a scan saw its subject satisfied. */
   status: string
   attempts: number
   error: string
@@ -144,6 +147,7 @@ export const STEP_STATUS_LABELS: Record<string, string> = {
   pending: 'Pending',
   running: 'Running',
   done: 'Done',
+  fulfilled: 'Fulfilled',
   failed: 'Failed',
   skipped: 'Skipped',
   // Not a status of its own: a skipped step with the `refused` flag. The

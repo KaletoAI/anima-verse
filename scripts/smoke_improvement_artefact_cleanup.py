@@ -13,12 +13,15 @@ every character with derived directories) holding and wearing ``dress`` (slot to
 Synthetic bytes everywhere; only names and JSON sidecars matter to the collector.
 ``get_image_service`` is patched to raise in every case: the cleanup never touches the image service.
 
-Expectations, by hand from § 6.6 and artefact_graph's module docstring:
+Expectations, by hand from § 6.6 and artefact_graph's module docstring. A candidate key ends with the
+token of what the collect would delete (the type's docstring): ``character:demo:<t>``, <t> = the first 12 hex
+of sha256 over the JSON ``[[<sorted deletable orphan keys>]]`` (``ckey``), ``character:demo:aborted`` for an
+aborted dry run, ``footwear_sources:<t>`` with <t> over ``[[<sorted removed folder paths>]]`` (``wkey``):
 
 [A1] The worn outfit model group ``model3d/W.glb`` + ``W.json`` (2 files, manifest {top: dress}) and ONE
      orphan outfit group ``model3d/X.glb`` (2 000 000 bytes) + ``X.json`` (24 bytes, manifest
      {top: old} — an item nobody holds: "no producible outfit"), every mtime 11 min back (past
-     ``GRACE_S`` = 10 min) → exactly one candidate ``character:demo``, label
+     ``GRACE_S`` = 10 min) → exactly one candidate ``ckey(X)``, label
      ``demo · 1 node · 2 file(s) · 2.0 MB`` (2 000 024 bytes / 1e6 = 2.0), hub_jobs 0, note
      ``meshes 1 (2.0 MB)`` (the category of a model group). No world candidate: no ``footwear/`` yet.
 [A2] Through the engine (``handle_step``) → {"ok": True}; X's 2 files are gone, W's 2 files on disk;
@@ -28,12 +31,12 @@ Expectations, by hand from § 6.6 and artefact_graph's module docstring:
      no candidate; grace ``off`` (explicit) → the candidate is back (same label as A1).
 [A4] A manifest-less outfit entry ``model3d/cccccccccccc.glb`` + ``.json`` (no pieces: the only
      shape that forces the reachable set). A standing entry scanned with the budget in place → step
-     ``character:demo`` pending. Then ``artefact_graph.HOOK_BUDGET_S`` patched to 0 →
-     the dry run is ``aborted`` → the candidate stays listed as ``demo · size unknown`` (review 09#5:
-     dropping it closed the pending step as done although nothing was cleaned — fails on 3f2ce338e
-     with no candidate and the rescan ``closed`` 1); the rescan → {added 0, closed 0}, the step still
-     pending; ``is_done`` False; ``apply`` on ``character:demo`` → CandidateBusy, and nothing was
-     deleted (X still there). Budget back, the entry, X and cccccccccccc removed by hand.
+     ``ckey(X, cccccccccccc)`` pending. Then ``artefact_graph.HOOK_BUDGET_S`` patched to 0 →
+     the dry run is ``aborted`` → the candidate stays listed as ``character:demo:aborted``,
+     ``demo · size unknown`` (review 09#5: an unlisted subject would close a pending step although
+     nothing was cleaned); the rescan → {added 1 (the aborted key), closed 1 (the set's key: no longer
+     listed)}; the aborted step is pending; ``is_done`` False; ``apply`` → CandidateBusy, and nothing
+     was deleted (X still there). Budget back, the entry, X and cccccccccccc removed by hand.
 [A5] Painted bodies — a consumer of the painted-body reachability fix (commit 72e260fb: a texture lives
      while a live outfit would paint it NOW; a tsig a live outfit only names is outdated). TK =
      ``figure.predicted_keys(demo, {top: dress}, [], bsig=bsig)[1]`` (what the worn
@@ -48,15 +51,16 @@ Expectations, by hand from § 6.6 and artefact_graph's module docstring:
      parent ``built_on`` [W] (before 72e260fb a named tsig was kept); apply removes it, TK stays.
 [A6] World shoe sources: item ``heels`` (feet, own mesh, held by nobody) with its CURRENT ssig folder
      (``footwear_source.current_ssig``) holding one file, and a folder ``000000000000`` nobody names
-     holding one 16-byte file → candidate ``footwear_sources``, label
+     holding one 16-byte file → candidate ``wkey(<that folder>)``, label
      ``Shoe sources · 1 folder(s) · 0.0 MB``, hub_jobs 0; with a character chosen it is not listed;
      apply removes the stale folder, the current one stays; rescan → no world candidate.
 [A7] Media off (``media_generation_enabled`` False), engine enabled, idle 960 s, an orphan X planted
      (aged) and an entry scanned → ``engine.tick()`` submits the step (reason "ok", payload names the
-     entry and ``character:demo``) — ``needs_media`` is False.
+     entry and ``ckey(X)``) — ``needs_media`` is False.
 
 Fails on 193321cf: ModuleNotFoundError — app.core.improvements.types.artefact_cleanup.
 """
+import hashlib
 import json
 import os
 import shutil
@@ -179,6 +183,15 @@ def main() -> int:
         def step_of(entry, key):
             return [s for s in store.list_steps(entry) if s["candidate_key"] == key][0]
 
+        def token(values):
+            return hashlib.sha256(json.dumps([sorted(values)]).encode("utf-8")).hexdigest()[:12]
+
+        def ckey(*orphans):
+            return f"character:demo:{token(orphans)}"
+
+        def wkey(*folders):
+            return f"footwear_sources:{token(str(f) for f in folders)}"
+
         # --- [A1] ---------------------------------------------------------------
         print("[A1] one orphan outfit group, aged past the grace window")
         check("X sidecar is 24 bytes", len(X_JSON), 24)
@@ -186,17 +199,17 @@ def main() -> int:
         age(worn, AGED_S)
         found = cands()
         check("one candidate", [(c.key, c.label, c.hub_jobs, c.note) for c in found],
-              [("character:demo", "demo · 1 node · 2 file(s) · 2.0 MB", 0, "meshes 1 (2.0 MB)")])
+              [(ckey(X), "demo · 1 node · 2 file(s) · 2.0 MB", 0, "meshes 1 (2.0 MB)")])
         check("needs_media", typ.needs_media, False)
 
         # --- [A2] ---------------------------------------------------------------
         print("[A2] apply through the engine")
         entry = store.create(typ.id, "Cleanup", typ.validate({}), "standing")["id"]
         check("scan", engine.scan(entry), {"added": 1, "closed": 0})
-        check("handle_step ok", run_step(entry, "character:demo"), {"ok": True})
+        check("handle_step ok", run_step(entry, ckey(X)), {"ok": True})
         check("X gone", [p.exists() for p in x_files], [False, False])
         check("the worn group stays", [p.exists() for p in worn], [True, True])
-        check("the result note", step_of(entry, "character:demo")["note"],
+        check("the result note", step_of(entry, ckey(X))["note"],
               "deleted 2 file(s), freed 2.0 MB, 0 skipped")
         check("rescan: no candidate", cands(), [])
         store.delete(entry)
@@ -217,16 +230,18 @@ def main() -> int:
         age(bare, AGED_S)
         entry = store.create(typ.id, "Cleanup", typ.validate({}), "standing")["id"]
         check("scan with the budget", engine.scan(entry), {"added": 1, "closed": 0})
+        check("the set's key", [s["candidate_key"] for s in store.list_steps(entry)], [ckey(X, "cccccccccccc")])
         with patch.object(ag, "HOOK_BUDGET_S", 0):
             check("the dry run is aborted",
                   bool(ag.collect("demo", dry_run=True, budget_s=ag.HOOK_BUDGET_S)["aborted"]), True)
             check("the candidate stays listed", [(c.key, c.label, c.hub_jobs) for c in cands()],
-                  [("character:demo", "demo · size unknown", 0)])
-            check("rescan closes nothing", engine.scan(entry), {"added": 0, "closed": 0})
-            check("the step is still pending", step_of(entry, "character:demo")["status"], "pending")
-            check("is_done", typ.is_done(Candidate("character:demo", "demo"), typ.validate({})), False)
+                  [("character:demo:aborted", "demo · size unknown", 0)])
+            check("rescan: the aborted key in, the set's key out", engine.scan(entry), {"added": 1, "closed": 1})
+            check("the aborted step is pending", step_of(entry, "character:demo:aborted")["status"], "pending")
+            check("is_done", typ.is_done(Candidate("character:demo:aborted", "demo"), typ.validate({})), False)
             raises("apply → CandidateBusy",
-                   lambda: typ.apply(Candidate("character:demo", "demo"), typ.validate({}), "t"), CandidateBusy)
+                   lambda: typ.apply(Candidate("character:demo:aborted", "demo"), typ.validate({}), "t"),
+                   CandidateBusy)
         store.delete(entry)
         check("nothing deleted", [p.exists() for p in x_files + bare], [True] * 4)
         for p in x_files + bare:
@@ -250,7 +265,7 @@ def main() -> int:
               [(f"texture:{TO}", "textures", "no live outfit names it")])
         found = cands()
         check("candidate", [(c.key, c.label.startswith("demo · 1 node · 2 file(s) · ")) for c in found],
-              [("character:demo", True)])
+              [(ckey(f"texture:{TO}"), True)])
         typ.apply(found[0], typ.validate({}), "t")
         check("TO gone", [p.exists() for p in tex[TO]], [False, False])
         check("TK and the worn group stay", [p.exists() for p in tex[TK] + worn], [True] * 4)
@@ -280,7 +295,7 @@ def main() -> int:
         touch(stale / "upscaled.png")
         found = cands()
         check("world candidate", [(c.key, c.label, c.hub_jobs) for c in found],
-              [("footwear_sources", "Shoe sources · 1 folder(s) · 0.0 MB", 0)])
+              [(wkey(stale), "Shoe sources · 1 folder(s) · 0.0 MB", 0)])
         check("not with a character chosen", cands(character="demo"), [])
         typ.apply(found[0], typ.validate({}), "t")
         check("stale gone, current stays", (stale.exists(), current.exists()), (False, True))
@@ -305,7 +320,7 @@ def main() -> int:
         finally:
             conn.close()
         check("submitted", (result["reason"], bool(result["submitted"]), json.loads(rows[-1][0])),
-              ("ok", True, {"improvement_id": entry, "candidate_key": "character:demo"}))
+              ("ok", True, {"improvement_id": entry, "candidate_key": ckey(X)}))
 
     print(f"\n{len(FAILS)} failure(s)" + (": " + ", ".join(FAILS) if FAILS else ""))
     return 1 if FAILS else 0

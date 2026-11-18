@@ -373,7 +373,7 @@ export function QueueView() {
                     ? <span className="ga-list-row-sub">{row.error}</span>
                     : null}
                 </span>
-                <span className={row.status === 'done'
+                <span className={row.status === 'done' || row.status === 'fulfilled'
                   ? 'ga-status-ok' : 'ga-status-paused'}>
                   {statusLabel(stepStatus(row))} {clockDateTime(row.finished_at)}
                 </span>

@@ -10,6 +10,14 @@ request.
 A candidate is simply "a model file whose surface does not read back": absent,
 from another file, or baked under another fix all mean the same thing to
 :func:`model_surface.read_surface`, and all three want the same bake.
+
+The key is ``room:<location>/<room>:<token>`` / ``prop:<prop>/<variant>:<token>``,
+the token over exactly what ``read_surface`` checks a lattice against: the
+surface version, the model file (name, size, mtime) and its orientation fix
+(``surface_token``). A model replaced or turned after its bake is a new
+reason, a new step, also after the step of the old file was given up; the
+step of an unchanged file is not offered again. A key of the older shape
+without a token still parses (``_subject_key``).
 """
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -28,6 +36,19 @@ SUBJECTS = [
 #: ``apply`` runs in a TaskQueue worker, so waiting is what it is there for;
 #: giving up early would only hand the engine an attempt for pure load.
 SLOT_WAIT_S = 300.0
+
+
+def _subject_key(key: str) -> str:
+    """``<kind>:<a>/<b>[:<token>]`` → ``<kind>:<a>/<b>``, the ``_index`` key
+    (no id holds ":")."""
+    return ":".join(key.split(":")[:2])
+
+
+def surface_token(path: Path, rotation: Dict[str, Any]) -> str:
+    """The key token: what a stored lattice must match (``model_surface._valid``)."""
+    from app.core import model_surface
+    return subjects.key_token(model_surface.SURFACE_VERSION, model_surface._source_of(path),
+                              model_surface._norm_rotation(rotation))
 
 
 def _room_key(location_id: str, room_id: str) -> str:
@@ -84,23 +105,24 @@ class SurfaceBake(ImprovementType):
     def find_candidates(self, params: Dict[str, Any]) -> List[Candidate]:
         from app.core.model_surface import read_surface
         index = _index(params["subject"])
-        return sorted((Candidate(key, label)
+        return sorted((Candidate(f"{key}:{surface_token(path, rotation)}", label)
                        for key, (label, path, rotation, _t, _m) in index.items()
                        if read_surface(path, rotation) is None),
                       key=lambda c: (c.label.lower(), c.key))
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
         from app.core.model_surface import read_surface
-        entry = _index(params["subject"]).get(candidate.key)
+        entry = _index(params["subject"]).get(_subject_key(candidate.key))
         return entry is not None and read_surface(entry[1], entry[2]) is not None
 
     def apply(self, candidate: Candidate, params: Dict[str, Any],
               task_id: str) -> None:
         from app.core.model_surface import bake_surface_result
         subject = params["subject"]
-        entry = _index(subject).get(candidate.key)
+        key = _subject_key(candidate.key)
+        entry = _index(subject).get(key)
         if entry is None:
-            raise RuntimeError(f"{candidate.key}: no model to bake")
+            raise RuntimeError(f"{key}: no model to bake")
         _label, path, rotation, target_m, measure = entry
         # The bake never raises — it answers a reason. Which one it is decides
         # the step's fate, so the plain Optional is not enough here:
@@ -116,10 +138,10 @@ class SurfaceBake(ImprovementType):
             # machine happened to be busy twice (spec § 10 — "no free slot"
             # leaves the candidate MISSING). The engine leaves a busy step
             # pending without counting an attempt.
-            raise CandidateBusy(f"{candidate.key}: no Blender slot")
+            raise CandidateBusy(f"{key}: no Blender slot")
         if surface is None:
             # A real defect of this subject or of this installation — no
             # Blender, an unreadable model, a script that gave up. Two of those
             # SHOULD skip the candidate instead of retrying forever.
-            raise RuntimeError(f"surface bake {reason}: {candidate.key}")
-        _forget(subject, candidate.key)
+            raise RuntimeError(f"surface bake {reason}: {key}")
+        _forget(subject, key)

@@ -45,14 +45,15 @@ const CHARACTER_KEY = 'character:'
  *  or '' for any other step. */
 function artefactReportUrl(typeId: string, candidateKey: string): string {
   if (typeId !== CLEANUP_TYPE || !candidateKey.startsWith(CHARACTER_KEY)) return ''
-  const name = candidateKey.slice(CHARACTER_KEY.length)
+  // `character:<name>:<token>` — a name holds no ':'.
+  const name = candidateKey.slice(CHARACTER_KEY.length).split(':')[0]
   return name ? `/characters/${encodeURIComponent(name)}/artefacts/orphans` : ''
 }
 
 /** Green for a finished step, red for one that ended badly, muted for the
  *  ones that are still on their way. */
 function statusClass(status: string): string {
-  if (status === 'done') return 'ga-status-ok'
+  if (status === 'done' || status === 'fulfilled') return 'ga-status-ok'
   if (status === 'failed' || status === 'skipped' || status === 'refused') {
     return 'ga-status-danger'
   }

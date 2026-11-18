@@ -15,12 +15,26 @@ waiting cannot fix it, so the step spends its attempts and is skipped. Done =
 a replacement exists (``source_file`` = the candidate) without a marker —
 among the gallery images or, for a character, the current profile image; for
 a portrait: the current profile image has no marker.
+
+Keys: a gallery image is ``gallery:<name>:<file>`` / ``location:<id>:<file>``
+— the file IS the token, a fallback render is always a new file. A portrait is
+``character:<name>:<token>``, the token over the current portrait's file name:
+a NEW marked portrait is a new reason, a new step, while the step of a portrait
+already worked on is not offered again. A portrait key of the older shape
+without a token still parses (``_split``).
 """
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.core.improvements.base import (Candidate, CandidateBusy,
                                         ImprovementType, ParamField)
 from app.core.improvements.types import subjects
+
+
+def _split(key: str) -> Tuple[str, str]:
+    """``(kind, ident)``: a portrait's ident is the name (its token dropped),
+    a gallery image's ``<name or id>:<file>``."""
+    kind, _sep, rest = key.partition(":")
+    return kind, (rest.split(":")[0] if kind == "character" else rest)
 
 SUBJECTS = [
     {"value": "character_images", "label": "Character portraits"},
@@ -77,7 +91,8 @@ class FallbackRerender(ImprovementType):
                 prof = subjects.character_profile(name) or {}
                 # A marked current portrait is by definition not done.
                 if prof.get("prompt") and _wanted(prof.get("fallback_from"), occasion):
-                    out.append(Candidate(f"character:{name}", name))
+                    out.append(Candidate(
+                        f"character:{name}:{subjects.key_token(prof.get('filename') or '')}", name))
         elif subject == "character_gallery":
             for name in subjects.characters():
                 rows = subjects.character_gallery_images(name)
@@ -102,7 +117,7 @@ class FallbackRerender(ImprovementType):
         return sorted(out, key=lambda c: (c.label.lower(), c.key))
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
-        kind, ident = candidate.key.split(":", 1)
+        kind, ident = _split(candidate.key)
         if kind == "character":
             return not (subjects.character_profile(ident) or {}).get("fallback_from")
         if kind == "gallery":
@@ -130,7 +145,7 @@ class FallbackRerender(ImprovementType):
         from app.imagegen.routing import (STATUS_COOLDOWN, STATUS_TEXT,
                                           STATUS_UNAVAILABLE, resolve_spec)
         from app.imagegen.service import render_has_reference_image
-        kind, ident = candidate.key.split(":", 1)
+        kind, ident = _split(candidate.key)
         marker = self._marker(kind, ident)
         if not marker:
             return          # no marker any more — nothing to do (done on the next scan)

@@ -27,6 +27,15 @@ although nothing was cleaned), ``CandidateBusy`` in a step. What the collector s
 (running, locked) is no failure: the step is done, its result note says so,
 and the next scan lists what is still orphaned. ``needs_media`` is False —
 CPU only, the entry keeps running with the media switch off.
+
+Keys carry the token that makes the work due — what the collect would delete:
+``character:<name>:<token>`` with the token over the sorted keys of the
+deletable orphans (``aborted`` for an aborted dry run, whose orphans are
+unknown), ``footwear_sources:<token>`` over the sorted folders the shoe
+collect would remove. What a collect leaves behind is a smaller set, a new
+key, a new step; only a collect that deleted none of its set leaves the same
+key listed, and that done step is not run again until the set changes. A key
+of the older shape without a token still parses (``_name``, ``_is_world``).
 """
 from pathlib import Path
 from typing import Any, Dict, List
@@ -35,6 +44,7 @@ from app.core.improvements.base import Candidate, CandidateBusy, ImprovementType
 from app.core.improvements.types import subjects
 
 WORLD_KEY = "footwear_sources"
+ABORTED_TOKEN = "aborted"
 CHARACTER_PREFIX = "character:"
 GRACE_ON, GRACE_OFF = "on", "off"
 
@@ -60,6 +70,24 @@ def _deletable(report: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [e for e in report.get("orphans") or [] if not e.get("protected")]
 
 
+def _name(key: str) -> str:
+    """``character:<name>[:<token>]`` → ``name`` (a name holds no ":")."""
+    return key.split(":")[1]
+
+
+def _is_world(key: str) -> bool:
+    """``footwear_sources[:<token>]`` — the one world candidate."""
+    return key.split(":")[0] == WORLD_KEY
+
+
+def orphans_token(report: Dict[str, Any]) -> str:
+    """The key token of a character's dry run: over the sorted keys of its
+    deletable orphans, ``ABORTED_TOKEN`` when the dry run was aborted."""
+    if report.get("aborted"):
+        return ABORTED_TOKEN
+    return subjects.key_token(sorted(str(e.get("key") or "") for e in _deletable(report)))
+
+
 def _character_candidate(name: str, report: Dict[str, Any]) -> Candidate:
     from app.core.artefact_graph import CATEGORIES
     gone = _deletable(report)
@@ -71,14 +99,14 @@ def _character_candidate(name: str, report: Dict[str, Any]) -> Candidate:
         if group:
             parts.append(f"{category} {len(group)} ({_mb(sum(int(e.get('bytes') or 0) for e in group))})")
     n = len(gone)
-    return Candidate(f"{CHARACTER_PREFIX}{name}",
+    return Candidate(f"{CHARACTER_PREFIX}{name}:{orphans_token(report)}",
                      f"{name} · {n} node{'' if n == 1 else 's'} · {files} file(s) · {_mb(size)}",
                      hub_jobs=0, note=" · ".join(parts))
 
 
 def _aborted_candidate(name: str, report: Dict[str, Any]) -> Candidate:
     """A character whose dry run went over the budget: listed with what it would free unknown."""
-    return Candidate(f"{CHARACTER_PREFIX}{name}", f"{name} · size unknown", hub_jobs=0,
+    return Candidate(f"{CHARACTER_PREFIX}{name}:{ABORTED_TOKEN}", f"{name} · size unknown", hub_jobs=0,
                      note=f"dry run aborted: {report.get('aborted')}")
 
 
@@ -99,7 +127,8 @@ def _world_candidate() -> List[Candidate]:
     if not removed:
         return []
     size = sum(_tree_size(Path(p)) for p in removed)
-    return [Candidate(WORLD_KEY, f"Shoe sources · {len(removed)} folder(s) · {_mb(size)}", hub_jobs=0,
+    token = subjects.key_token(sorted(str(p) for p in removed))
+    return [Candidate(f"{WORLD_KEY}:{token}", f"Shoe sources · {len(removed)} folder(s) · {_mb(size)}", hub_jobs=0,
                       note=f"world footwear sources {len(removed)} ({_mb(size)})")]
 
 
@@ -161,9 +190,9 @@ class ArtefactCleanup(ImprovementType):
         return sorted(out, key=lambda c: (c.label.lower(), c.key))
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
-        if candidate.key == WORLD_KEY:
+        if _is_world(candidate.key):
             return not _world_candidate()
-        name = candidate.key.removeprefix(CHARACTER_PREFIX)
+        name = _name(candidate.key)
         if name not in self._names(params):
             return True
         report = _dry_run(name, self._explicit(params))
@@ -174,12 +203,12 @@ class ArtefactCleanup(ImprovementType):
     def apply(self, candidate: Candidate, params: Dict[str, Any], task_id: str) -> str:
         """One collect; returns the step's result note (deleted files, freed
         bytes, skipped nodes)."""
-        if candidate.key == WORLD_KEY:
+        if _is_world(candidate.key):
             from app.core import footwear_source
             report = footwear_source.collect()
         else:
             from app.core import artefact_graph
-            name = candidate.key.removeprefix(CHARACTER_PREFIX)
+            name = _name(candidate.key)
             report = artefact_graph.collect(name, dry_run=False, explicit=self._explicit(params),
                                             reason="improvements cleanup", budget_s=_budget())
             if report.get("aborted"):

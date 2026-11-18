@@ -7,8 +7,9 @@ Usage:
     ./.venv/bin/python scripts/smoke_improvement_restale.py
 
 Runs without the server, against a temp storage dir. The store diff
-(``store.replace_steps_scan``) is unchanged: it inserts only NEW keys and
-leaves done rows alone. What makes a re-stale a new step is the candidate key:
+(``store.replace_steps_scan``) inserts NEW keys and reopens only a FULFILLED
+step (a scan saw its subject satisfied); a done row that is still listed stays
+done. What makes a re-stale a new step is the candidate key:
 each type puts the token that makes its work due into the key (the
 face_cleanup_rerun pattern). Expected values, derived by hand from the module
 docstrings of the types:
@@ -21,14 +22,15 @@ docstrings of the types:
     done. A rescan that still lists the subject unchanged (the step ended
     done but the lister still names it) → {"added": 0, "closed": 0}: the done
     step is NOT re-offered. The subject fixed (no unit) → {"added": 0,
-    "closed": 0}. Then FIT_VERSION["clothing"] + 1 makes the Dress stale
-    again → the token changes → {"added": 1, "closed": 0}, the new step is
-    pending, the old one stays done (2 steps: done 1, pending 1). The old
+    "closed": 0} (``closed`` counts pending steps; the done one becomes
+    fulfilled silently). Then FIT_VERSION["clothing"] + 1 makes the Dress
+    stale again → the token changes → {"added": 1, "closed": 0}, the new step
+    is pending, the old one stays fulfilled (2 steps: fulfilled 1, pending 1). The old
     code keyed ``character:Mia`` both times: the second listing hit the done
     row (INSERT OR IGNORE) → added 0 — the regression.
 [2] A step stored in the OLDER key shape ``character:Mia`` (pending) is not
     listed by a scan any more → closed 1 (the store's rule for an unlisted
-    pending row), the token key added 1. The types still read the old shape:
+    pending row: fulfilled), the token key added 1. The types still read the old shape:
     fit_refit ``_name("character:Mia")`` = "Mia"; collision_capsules
     ``split_key("character:Mia:base1")`` = ("Mia", "base1"); garment_fill
     ``split_key("clothing:Mia:dress")`` = ("clothing", "Mia", "dress") and
@@ -107,9 +109,9 @@ def main() -> int:
         key2 = f"character:Mia:{fit_token(fit_version, 'SHA1')}"
         check("a version bump: a new key", key2 != key1, True)
         check("stale again: a new step", engine.scan(entry), {"added": 1, "closed": 0})
-        check("the old step stays done, the new one is pending",
+        check("the old step is fulfilled, the new one is pending",
               sorted((s["candidate_key"], s["status"]) for s in store.list_steps(entry)),
-              sorted([(key1, "done"), (key2, "pending")]))
+              sorted([(key1, "fulfilled"), (key2, "pending")]))
         check("the queue names the new step", [r["candidate_key"] for r in engine.ordered_queue()
                                                 if r["improvement_id"] == entry], [key2])
 

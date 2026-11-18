@@ -1348,8 +1348,10 @@ def face_targets_section() -> None:
     keys = [c.key for c in ModelReplace().find_candidates(
         {"subject": "prop", "source_backend": "old-mesh",
          "target_backend": "new-mesh"})]
+    # The key ends with the active model's 12-hex token (model_replace's docstring); the subject before it.
     check("model_replace names the VARIANT it addresses, index and all",
-          keys == [f"prop:{pair}#1"], str(keys))
+          [k.rsplit(":", 1)[0] for k in keys] == [f"prop:{pair}#1"]
+          and all(len(k.rsplit(":", 1)[1]) == 12 for k in keys), str(keys))
 
     print("\n[21d] the distance mesh turns the low target into a ratio")
     RATIOS: list = []

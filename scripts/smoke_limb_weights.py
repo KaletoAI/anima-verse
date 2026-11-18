@@ -15,7 +15,12 @@ Hips/LeftUpLeg/RightUpLeg each 1/3. C uses two outside-window anchors with
 that distribution to remain a valid exported triangle; its fixed point is
 also 1/3 each. All three changed counts and P/K/O/T expectations stay equal.
 
+The rig_weight_repair candidate key is ``character:demo:demo:<t>``, <t> = the
+first 12 hex of sha256 over the JSON [created_at, job_id] of the sidecar —
+both absent in the fixture, so ["", ""].
+
 """
+import hashlib
 import json
 import subprocess
 import sys
@@ -177,7 +182,9 @@ def application_checks(root):
          patch.object(subjects, 'character_model_signatures', return_value={'demo'}), \
          patch.object(model3d, 'get_model3d_dir', return_value=directory):
         candidates = improvement.find_candidates({})
-        assert [c.key for c in candidates] == ['character:demo:demo']
+        # The key token is over the sidecar's (created_at, job_id) — both absent here: JSON ["", ""].
+        token = hashlib.sha256(json.dumps(['', '']).encode('utf-8')).hexdigest()[:12]
+        assert [c.key for c in candidates] == [f'character:demo:demo:{token}'], [c.key for c in candidates]
         side.write_text(json.dumps({'rig': 'mixamo', 'blender': {'steps': ['limb_weights']}}))
         assert improvement.is_done(candidates[0], {})
         assert improvement.find_candidates({}) == []

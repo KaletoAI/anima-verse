@@ -16,23 +16,35 @@ combination is a candidate when ``model_refs/tpose_<sig>`` exists (the one input
 "tpose_animal" being a use-case style rather than a file kind) and
 ``model3d/<sig>.<ext>`` does not.  Nothing else can be generated, and nothing
 generatable is left out.
+
+The key is ``<character>:<signature>:<token>``, the token over the T-pose
+render's file identity (name, size, mtime — ``subjects.file_token``): a
+combination whose render was purged and made anew (an outfit piece edit keeps
+the ID-based signature) is a new reason, a new step, also after the step of
+the old render was given up. A key of the older shape ``<character>:
+<signature>`` still parses (``split_key``).
 """
 from typing import Any, Dict, List
 
 from app.core.improvements.base import Candidate, ImprovementType, ParamField
 from app.core.improvements.types import subjects
 
-#: Separates the character from the outfit signature in a candidate key.  A
-#: signature is hex, so it never contains one —
-#: the key is split from the RIGHT, which leaves a character name carrying a
-#: colon intact.
+#: Separates the parts of a candidate key. None of them contains one: a
+#: signature and a token are hex, a character name may not hold ":"
+#: (``character_name.validate_character_name``).
 KEY_SEP = ":"
 
 
 def split_key(key: str) -> tuple:
-    """``"<character>:<signature>"`` → ``(character, signature)``."""
-    name, _sep, signature = str(key or "").rpartition(KEY_SEP)
-    return name, signature
+    """``"<character>:<signature>[:<token>]"`` → ``(character, signature)``."""
+    parts = str(key or "").split(KEY_SEP)
+    return parts[0], parts[1] if len(parts) > 1 else ""
+
+
+def tpose_token(name: str, signature: str) -> str:
+    """The key token: the identity of the T-pose render the mesh is made from."""
+    from app.core.model_refs import find_ref_image
+    return subjects.file_token(find_ref_image(name, "tpose", signature))
 
 
 def _short_signature(signature: str) -> str:
@@ -67,7 +79,7 @@ class MeshFromTpose(ImprovementType):
                        - subjects.character_model_signatures(name))
             for signature in missing:
                 out.append(Candidate(
-                    f"{name}{KEY_SEP}{signature}",
+                    KEY_SEP.join((name, signature, tpose_token(name, signature))),
                     f"{name} · {_short_signature(signature)}"))
         return sorted(out, key=lambda c: (c.label.lower(), c.key))
 
@@ -84,11 +96,11 @@ class MeshFromTpose(ImprovementType):
         name, signature = split_key(candidate.key)
         from app.core.model_refs import is_state_fork
         if not signature or is_state_fork(signature):
-            raise RuntimeError(f"{candidate.key}: not an outfit combination")
+            raise RuntimeError(f"{name}{KEY_SEP}{signature}: not an outfit combination")
         try:
             subjects.generate_character_model(name, params["backend"],
                                               signature)
         except RuntimeError as e:
             # The producer's own words ("no_tpose_input") say nothing about
             # WHICH combination failed, and the step log is a list of them.
-            raise RuntimeError(f"{candidate.key}: {e}") from e
+            raise RuntimeError(f"{name}{KEY_SEP}{signature}: {e}") from e

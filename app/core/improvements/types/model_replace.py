@@ -4,6 +4,14 @@ The occasion this exists for: a better (or cheaper) mesh backend is configured,
 and the world is full of models from the old one.  The subject is *whatever the
 sidecar says made it* — no list is kept anywhere, the candidate set is derived
 from the stored models every scan.
+
+Keys end with the token of the ACTIVE model (``model_token``: its file name,
+``created_at`` and ``job_id``) — ``character:<name>:<t>``,
+``location:<id>:<t>``, ``prop:<ident>:<t>``. A new model the source backend
+made later (a click, another run) is a new reason, a new step, also after the
+step of the old model was given up; the step of a model already worked on is
+not offered again. A key of the older shape without a token still parses
+(``_split``).
 """
 from typing import Any, Dict, List
 
@@ -23,6 +31,18 @@ _HANDLERS = {
     "location": (subjects.building_model, subjects.generate_building_model),
     "prop": (subjects.prop_model, subjects.generate_prop_model),
 }
+
+
+def _split(key: str):
+    """``(kind, ident)`` of ``<kind>:<ident>[:<token>]`` (no ident holds ":")."""
+    parts = key.split(":")
+    return parts[0], parts[1]
+
+
+def model_token(model: Dict[str, Any]) -> str:
+    """The key token of an active model: the identity of that generation."""
+    return subjects.key_token(model.get("filename") or "", model.get("created_at") or "",
+                              model.get("job_id") or "")
 
 
 class ModelReplace(ImprovementType):
@@ -55,7 +75,7 @@ class ModelReplace(ImprovementType):
             for name in subjects.characters():
                 model = subjects.character_model(name)
                 if model and model.get("backend") == source:
-                    out.append(Candidate(f"character:{name}", name))
+                    out.append(Candidate(f"character:{name}:{model_token(model)}", name))
         elif subject == "location":
             for location in subjects.locations():
                 loc_id = location.get("id") or ""
@@ -63,7 +83,7 @@ class ModelReplace(ImprovementType):
                     continue
                 model = subjects.building_model(loc_id)
                 if model and model.get("backend") == source:
-                    out.append(Candidate(f"location:{loc_id}",
+                    out.append(Candidate(f"location:{loc_id}:{model_token(model)}",
                                          location.get("name") or loc_id))
         else:
             # EVERY MODEL VARIANT, not only the primary one
@@ -93,7 +113,7 @@ class ModelReplace(ImprovementType):
                     # version would be noise in a list of a hundred props.
                     label = (name if len(variants) < 2
                              else f"{name} · variant {index + 1}")
-                    out.append(Candidate(f"prop:{ident}", label))
+                    out.append(Candidate(f"prop:{ident}:{model_token(model)}", label))
         # The contract is "every subject NOT yet done".  `validate` already
         # rules out the case where source and target are the same backend, but
         # params come back out of the store as stored — an entry written before
@@ -102,13 +122,13 @@ class ModelReplace(ImprovementType):
         return sorted(out, key=lambda c: (c.label.lower(), c.key))
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
-        kind, ident = candidate.key.split(":", 1)
+        kind, ident = _split(candidate.key)
         read, _generate = _HANDLERS[kind]
         model = read(ident)
         return bool(model) and model.get("backend") == params["target_backend"]
 
     def apply(self, candidate: Candidate, params: Dict[str, Any],
               task_id: str) -> None:
-        kind, ident = candidate.key.split(":", 1)
+        kind, ident = _split(candidate.key)
         _read, generate = _HANDLERS[kind]
         generate(ident, params["target_backend"])

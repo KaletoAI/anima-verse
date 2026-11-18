@@ -212,7 +212,7 @@ export function EntriesView() {
                   {entry.forced ? ` · ${t('Run now active')}` : ''}
                 </span>
                 <span className="ga-list-row-sub">
-                  {entry.done}/{entry.done + entry.pending + entry.running}
+                  {entry.done + entry.fulfilled}/{entry.done + entry.fulfilled + entry.pending + entry.running}
                   {entry.skipped
                     ? ` · ${entry.skipped} ${statusLabel('skipped')}` : ''}
                   {entry.failed

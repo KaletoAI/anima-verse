@@ -5,6 +5,24 @@ one fills the holes.  A subject only counts as a hole when the generation could
 actually run: a prop without its product shot and a location without a building
 image have nothing to be generated FROM, so they are not candidates at all
 instead of failing twice and being skipped.
+
+Every key ends with the token of what the asset would be made FROM, so a
+subject whose input changed is a new step — also after a step of it was given
+up (skipped) — while the step of an unchanged input is not offered again
+until a scan saw it filled (``fulfilled``):
+
+* character model ``character:<name>:<t>`` — the worn outfit signature (the
+  combination the producer meshes);
+* building model ``location:<id>:<t>`` — the source image's file name;
+* prop model ``prop:<id>:<t>`` — the source image file (name, size, mtime);
+* prop image ``prop:<ident>:<t>`` — the variant's description and the prop's
+  name (what the product shot is rendered from);
+* expressions ``character:<name>:<t>`` — the wanted default image's stem
+  (set, member, outfit, contract — ``expression_regen``);
+* clothing image ``item:<id>:<t>`` — the item's image prompt, prompt
+  fragment and name (the item producer's subject text).
+
+A key of the older shape without a token still parses (``_ident``).
 """
 from typing import Any, Dict, List
 
@@ -38,8 +56,22 @@ def _require_route(occasion: str, character: str = "") -> None:
         raise CandidateBusy(f"no backend available for {occasion} right now")
 
 
+def _ident(key: str) -> str:
+    """``<kind>:<ident>[:<token>]`` → ``ident`` (no ident holds ":")."""
+    return key.split(":")[1]
+
+
+def _outfit_token(name: str) -> str:
+    from app.core.model_refs import current_outfit_state
+    try:
+        signature = current_outfit_state(name)[2]
+    except Exception:  # noqa: BLE001 — an unreadable outfit is no signature
+        signature = ""
+    return subjects.key_token(signature)
+
+
 def _missing_character_models() -> List[Candidate]:
-    return [Candidate(f"character:{n}", n) for n in subjects.characters()
+    return [Candidate(f"character:{n}:{_outfit_token(n)}", n) for n in subjects.characters()
             if subjects.character_model(n) is None]
 
 
@@ -49,9 +81,10 @@ def _missing_buildings() -> List[Candidate]:
         loc_id = location.get("id") or ""
         if not loc_id or subjects.building_model(loc_id) is not None:
             continue
-        if not subjects.building_source_image(loc_id):
+        source = subjects.building_source_image(loc_id)
+        if not source:
             continue
-        out.append(Candidate(f"location:{loc_id}",
+        out.append(Candidate(f"location:{loc_id}:{subjects.key_token(source)}",
                              location.get("name") or loc_id))
     return out
 
@@ -64,7 +97,8 @@ def _missing_prop_models() -> List[Candidate]:
             continue
         if not subjects.prop_has_source(prop_id):
             continue
-        out.append(Candidate(f"prop:{prop_id}", prop.get("name") or prop_id))
+        token = subjects.file_token(subjects.prop_source_path(prop_id))
+        out.append(Candidate(f"prop:{prop_id}:{token}", prop.get("name") or prop_id))
     return out
 
 
@@ -81,17 +115,25 @@ def _missing_prop_images() -> List[Candidate]:
             ident = subjects.prop_ident(prop_id, index)
             if not subjects.prop_has_source(ident):
                 label = name if len(variants) < 2 else f"{name} · variant {index + 1}"
-                out.append(Candidate(f"prop:{ident}", label))
+                token = subjects.key_token(entry.get("description") or "", prop.get("name") or "")
+                out.append(Candidate(f"prop:{ident}:{token}", label))
     return out
 
 
 def _missing_expressions() -> List[Candidate]:
-    return [Candidate(f"character:{n}", n) for n in subjects.characters()
-            if subjects.expression_missing(n)]
+    out = []
+    for n in subjects.characters():
+        stem = subjects.expression_missing_stem(n)
+        if stem is not None:
+            out.append(Candidate(f"character:{n}:{subjects.key_token(stem)}", n))
+    return out
 
 
 def _missing_clothing_images() -> List[Candidate]:
-    return [Candidate(f"item:{item['id']}", item.get("name") or item["id"])
+    return [Candidate(f"item:{item['id']}:" + subjects.key_token(item.get("image_prompt") or "",
+                                                                 item.get("prompt_fragment") or "",
+                                                                 item.get("name") or ""),
+                      item.get("name") or item["id"])
             for item in subjects.clothing_items()
             if not subjects.clothing_image_done(item["id"])]
 
@@ -155,12 +197,12 @@ class FillMissing(ImprovementType):
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
         _find, has, _generate = _HANDLERS[params["subject"]]
-        return has(candidate.key.split(":", 1)[1])
+        return has(_ident(candidate.key))
 
     def apply(self, candidate: Candidate, params: Dict[str, Any],
               task_id: str) -> None:
         _find, _has, generate = _HANDLERS[params["subject"]]
-        ident = candidate.key.split(":", 1)[1]
+        ident = _ident(candidate.key)
         subject = params["subject"]
         backend = params.get("mesh_backend", "")
         if subject in ("character_model", "building_model", "prop_model") and backend:

@@ -14,10 +14,11 @@ contract, never recorded from a run:
      {"added": 2, "closed": 0}.  ``next_pending`` orders by LABEL first, so
      "Alpha" (k2) is next even though it was inserted second.  A second scan
      that lists only k1 must CLOSE k2 — the subject vanished from the
-     candidate list, which can only mean it is done → {"added": 0, "closed": 1}
-     and k2.status == "done".  Counters afterwards: pending 1 (k1), done 1
-     (k2), everything else 0 — and ``get`` reports the same counters as
-     ``list_all``.
+     candidate list, which can only mean it is satisfied → {"added": 0,
+     "closed": 1} and k2.status == "fulfilled" (the scan saw it satisfied;
+     "done" is what a step that RAN is).  Counters afterwards: pending 1 (k1),
+     fulfilled 1 (k2), everything else 0 — and ``get`` reports the same
+     counters as ``list_all``.
 
   3. Attempts count attempts, not results.  ``mark_running`` puts k1 into
      'running' — which ``list_steps`` sorts to the front, ahead of the
@@ -35,8 +36,8 @@ contract, never recorded from a run:
      step is runnable again.  With k1 pending and B stepless,
      ``pending_count_by_type`` is {"fake": 1}.
 
-  3d. After a real completion (running → done) A holds two done steps, the
-     ONLY one with a duration is k1, so ``avg_duration_by_type`` has exactly
+  3d. After a real completion (running → done) A holds k1 done and k2
+     fulfilled, the ONLY one with a duration is k1, so ``avg_duration_by_type`` has exactly
      the key "fake", and ``recent_done`` lists both closed steps (k1, k2).
      Both finish inside the same wall-clock second, so only the SET of keys
      is asserted, never their order.
@@ -243,7 +244,7 @@ def raises(label, exc_type, fn, contains=""):
 
 def counters(row):
     return {k: row[k] for k in
-            ("pending", "running", "done", "failed", "skipped")}
+            ("pending", "running", "done", "fulfilled", "failed", "skipped")}
 
 
 # ── 1. create / order ────────────────────────────────────────────────────────
@@ -259,7 +260,7 @@ store.set_order([B, A])
 check("set_order rewrites the order", [r["label"] for r in store.list_all()],
       ["B", "A"])
 check("a fresh improvement has no steps", counters(store.get(A)),
-      {"pending": 0, "running": 0, "done": 0, "failed": 0, "skipped": 0})
+      {"pending": 0, "running": 0, "done": 0, "fulfilled": 0, "failed": 0, "skipped": 0})
 
 # ── 2. scan = diff ───────────────────────────────────────────────────────────
 print("\n2. replace_steps_scan is a diff")
@@ -274,11 +275,11 @@ check("re-scanning the same list changes nothing",
 check("a vanished candidate is closed",
       store.replace_steps_scan(A, [("k1", "Zeta", 0, "")]),
       {"added": 0, "closed": 1})
-check("…as done", {s["candidate_key"]: s["status"]
-                   for s in store.list_steps(A)},
-      {"k1": "pending", "k2": "done"})
+check("…as fulfilled", {s["candidate_key"]: s["status"]
+                        for s in store.list_steps(A)},
+      {"k1": "pending", "k2": "fulfilled"})
 check("get() counts the steps", counters(store.get(A)),
-      {"pending": 1, "running": 0, "done": 1, "failed": 0, "skipped": 0})
+      {"pending": 1, "running": 0, "done": 0, "fulfilled": 1, "failed": 0, "skipped": 0})
 check("…and list_all() counts them the same way",
       counters([r for r in store.list_all() if r["id"] == A][0]),
       counters(store.get(A)))
@@ -291,7 +292,7 @@ check("a running step sorts ahead of the labels",
 check("running_steps sees it",
       [s["candidate_key"] for s in store.running_steps()], ["k1"])
 check("counters follow", counters(store.get(A)),
-      {"pending": 0, "running": 1, "done": 1, "failed": 0, "skipped": 0})
+      {"pending": 0, "running": 1, "done": 0, "fulfilled": 1, "failed": 0, "skipped": 0})
 
 store.mark_result(A, "k1", status="pending", error="x", count_attempt=True)
 step = [s for s in store.list_steps(A) if s["candidate_key"] == "k1"][0]
@@ -326,8 +327,8 @@ check("pending_count_by_type", store.pending_count_by_type(), {"fake": 1})
 print("\n3d. a real completion")
 store.mark_running(A, "k1")
 store.mark_result(A, "k1", status="done", count_attempt=True)
-check("both steps are done now", counters(store.get(A)),
-      {"pending": 0, "running": 0, "done": 2, "failed": 0, "skipped": 0})
+check("both steps are closed now", counters(store.get(A)),
+      {"pending": 0, "running": 0, "done": 1, "fulfilled": 1, "failed": 0, "skipped": 0})
 check("only the worked step carries a duration",
       sorted(store.avg_duration_by_type().keys()), ["fake"])
 check("recent_done lists both closed steps",
