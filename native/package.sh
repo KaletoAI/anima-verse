@@ -1,15 +1,22 @@
 #!/usr/bin/env bash
 # Export, assemble a complete AppDir, and pack it with the official appimagetool.
-# Usage: native/package.sh [--publish] [out_dir] (default: native/export/appimage)
+# Usage: native/package.sh [--publish --signing-key=KEY] [out_dir] (default: native/export/appimage)
+# KEY: the release signing key from native/tools/make_update_signing_key.py (kept outside the repository).
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/.." && pwd)"
 publish=false
 out=""
-for arg in "$@"; do
+signing_key=""
+usage='Usage: native/package.sh [--publish --signing-key=KEY] [out_dir]'
+while [ "$#" -gt 0 ]; do
+  arg="$1"
+  shift
   case "$arg" in
     --publish) publish=true ;;
-    -h|--help) echo 'Usage: native/package.sh [--publish] [out_dir]'; exit 0 ;;
+    --signing-key=*) signing_key="${arg#--signing-key=}" ;;
+    --signing-key) [ "$#" -gt 0 ] || { echo '--signing-key needs a path' >&2; exit 2; }; signing_key="$1"; shift ;;
+    -h|--help) echo "$usage"; exit 0 ;;
     --*) echo "Unknown option: $arg" >&2; exit 2 ;;
     *) [ -z "$out" ] || { echo 'Only one output directory is allowed' >&2; exit 2; }; out="$arg" ;;
   esac
@@ -17,6 +24,11 @@ done
 version="$(bash "$here/version.sh")"
 if "$publish" && [[ "$version" == *-dirty ]]; then
   echo 'Publish requires a clean worktree (including untracked source files)' >&2
+  exit 1
+fi
+# Releases are always signed; refuse before the expensive export, not after it.
+if "$publish" && [ ! -f "$signing_key" ]; then
+  echo 'Publish requires --signing-key=KEY (native/tools/make_update_signing_key.py creates one)' >&2
   exit 1
 fi
 # appimagetool is host tooling, never a dependency stored in this repository.
@@ -83,6 +95,6 @@ if [[ "$version" != *-dirty ]]; then
 fi
 mv "$work/$file" "$out/$file"
 if "$publish"; then
-  python3 "$here/tools/publish_appimage.py" "$out/$file" "$version" "$root/static/native"
+  python3 "$here/tools/publish_appimage.py" --signing-key "$signing_key" "$out/$file" "$version" "$root/static/native"
 fi
 printf '== AppImage: %s (%s bytes)\n' "$out/$file" "$(stat -c %s "$out/$file")"

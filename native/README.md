@@ -198,7 +198,7 @@ this repository. The tool may download its AppImage runtime on first use;
 # From the repository root, with dotnet on PATH and GODOT set as above:
 bash native/package.sh                         # native/export/appimage/
 bash native/package.sh /absolute/output/path
-bash native/package.sh --publish               # clean worktree required
+bash native/package.sh --publish --signing-key=/secure/path/release.pem   # clean worktree + release key required
 python3 native/tests/package_test.py           # packaging contracts, no engine required
 
 image="$PWD/native/export/appimage/AnimaNative-<version>-x86_64.AppImage"
@@ -233,6 +233,44 @@ The image itself is also staged and renamed before the manifest becomes
 visible; older `AnimaNative-*-x86_64.AppImage` files are deleted afterwards.
 Concurrent publishers are serialized by `.publish.lock`. `static/native/` is
 ignored by git and served by the existing static route.
+
+**Signed releases.** Every release is signed; there is no unsigned publish.
+`--publish` (and `tools/publish_appimage.py`) refuses to run without
+`--signing-key=KEY`, an ECDSA P-256 private key in PEM that never lives in the
+repository. Create it once, outside the repository:
+
+```bash
+python3 native/tools/make_update_signing_key.py ~/keys/anima-native-release.pem
+```
+
+It writes the key with mode 0600, never overwrites an existing file, and prints
+the public key as base64 SubjectPublicKeyInfo. Paste that value into
+`PublicKeySpki` in `Core/Update/UpdateSignature.cs` and build the client from
+there. The publisher signs the canonical manifest bytes with `openssl dgst -sha256
+-sign` (DER signature), verifies the signature against the key's public half, and
+stages `version.json.sig` next to `version.json`. The signature file is renamed into
+place before the manifest. The canonical bytes are UTF-8 with LF line ends and a final LF:
+
+```
+anima-native-update-v1
+version=<version>
+file=<file>
+size=<decimal bytes>
+sha256=<lowercase hex>
+```
+
+`built_utc` is not signed. `scripts/smoke_update_signing.py` contains a worked
+example and checks signing, a one-byte change and refusal without a key.
+
+The client trusts neither the server nor the transport. It offers an update only
+when `version.json.sig` verifies with the baked key over those fields. Before
+installing, it verifies again; the downloaded size and SHA-256 must then match
+the signed values. With an empty `PublicKeySpki`, or with a missing or invalid
+signature, it offers and installs nothing and logs one `update:` line with the
+reason. A client built without a key therefore never updates itself. Install a
+client built with the key once by hand. Clients from before signing ignore
+`version.json.sig`. They update to the next published release as before; that
+release must already contain the key.
 
 The AppDir root holds `AppRun`, `anima-native.desktop`, `anima-native.svg`, and
 `.DirIcon`. `usr/bin/` holds the Godot executable (embedded PCK), .NET data

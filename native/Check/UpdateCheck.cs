@@ -21,6 +21,9 @@ public static class UpdateCheck
 {
     private const string Local = "20261029090000-1234abcd", Newer = "20261029100000-5678abcd";
     private static readonly byte[] Bytes = Encoding.UTF8.GetBytes("fixture AppImage bytes\n");
+    // A throwaway release key: the fixture server signs every manifest it serves, except in the "unsigned"/"tampered" cases.
+    private static readonly ECDsa ReleaseKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+    private static readonly string PublicKey = Convert.ToBase64String(ReleaseKey.ExportSubjectPublicKeyInfo());
 
     public static async Task<string> RunAsync(Node host)
     {
@@ -39,6 +42,14 @@ public static class UpdateCheck
             using var updater = Updater(remote);
             var result = await updater.CheckAsync("https://fixture.invalid", local);
             Expect("comparison " + remote, (result.Release is not null) == expected);
+            comparisons++;
+        }
+        // Fail closed: a newer release is offered only with a valid signature from the baked key.
+        foreach (var (scenario, key) in new[] { ("unsigned", PublicKey), ("tampered", PublicKey), ("success", ""), ("success", "not a key") })
+        {
+            using var updater = Updater(Newer, scenario, key);
+            var result = await updater.CheckAsync("https://fixture.invalid", Local);
+            Expect($"signature {scenario} key={key.Length}", result.Release is null);
             comparisons++;
         }
         var dir = Path.Combine(Path.GetTempPath(), "anima-update-check-" + Guid.NewGuid().ToString("N"));
@@ -142,25 +153,36 @@ public static class UpdateCheck
         }
     }
 
-    private static ClientUpdater Updater(string remote, string scenario = "success")
+    private static ClientUpdater Updater(string remote, string scenario = "success", string? publicKey = null)
         => new(new FixtureTransport(request =>
         {
             Expect("anonymous", request.Headers.Authorization is null && !request.Headers.Contains("Cookie"));
             if (remote == "offline") throw new HttpRequestException("fixture offline");
+            // "size"/"sha" are correctly signed manifests whose values the downloaded bytes do not match.
+            var size = Bytes.Length + (scenario == "size" ? 1 : 0);
+            var sha = scenario == "sha" ? new string('0', 64) : Convert.ToHexString(SHA256.HashData(Bytes));
             if (request.RequestUri!.AbsolutePath == "/static/native/version.json")
             {
                 var json = remote == "garbled" ? "{" : JsonSerializer.Serialize(new
                 {
-                    version = remote, file = "fixture.AppImage", size = Bytes.Length + (scenario == "size" ? 1 : 0),
-                    sha256 = scenario == "sha" ? new string('0', 64) : Convert.ToHexString(SHA256.HashData(Bytes)),
+                    version = remote, file = "fixture.AppImage", size,
+                    // "tampered": the signature below covers the honest SHA-256, this manifest names another one.
+                    sha256 = scenario == "tampered" ? new string('a', 64) : sha,
                     built_utc = "2026-10-29T10:00:00Z"
                 });
                 return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) };
             }
+            if (request.RequestUri.AbsolutePath == "/static/native/version.json.sig")
+            {
+                if (scenario == "unsigned") return new HttpResponseMessage(HttpStatusCode.NotFound);
+                var signature = ReleaseKey.SignData(UpdateSignature.Canonical(remote, "fixture.AppImage", size, sha),
+                    HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence);
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(signature) };
+            }
             Expect("download path", request.RequestUri.AbsoluteUri == "https://fixture.invalid/static/native/fixture.AppImage");
             if (scenario == "offline-download") throw new HttpRequestException("fixture download offline");
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(Bytes) };
-        }));
+        }), publicKey ?? PublicKey);
 
     private sealed class FixtureTransport(Func<HttpRequestMessage, HttpResponseMessage> response) : HttpMessageHandler
     {

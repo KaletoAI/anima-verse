@@ -72,9 +72,18 @@ class PackagingTests(unittest.TestCase):
             old.write_bytes(b"old")
             image = root / "AnimaNative-20261029090000-1234abcd-x86_64.AppImage"
             image.write_bytes(b"appimage payload")
-            command = ["python3", str(NATIVE / "tools/publish_appimage.py"), str(image), "20261029090000-1234abcd", str(dest)]
+            key = root / "keys/release.pem"
+            made = subprocess.run(["python3", str(NATIVE / "tools/make_update_signing_key.py"), str(key)], text=True, capture_output=True)
+            self.assertEqual(0, made.returncode, made.stderr)
+            unsigned = ["python3", str(NATIVE / "tools/publish_appimage.py"), str(image), "20261029090000-1234abcd", str(dest)]
+            refused = subprocess.run(unsigned, text=True, capture_output=True)
+            self.assertNotEqual(0, refused.returncode)
+            self.assertIn("--signing-key", refused.stderr)
+            self.assertFalse((dest / "version.json").exists())
+            command = unsigned[:2] + ["--signing-key", str(key)] + unsigned[2:]
             run = subprocess.run(command, text=True, capture_output=True)
             self.assertEqual(0, run.returncode, run.stderr)
+            self.assertEqual(0o644, (dest / "version.json.sig").stat().st_mode & 0o777)
             info = json.loads((dest / "version.json").read_text())
             self.assertEqual({"version", "file", "size", "sha256", "built_utc"}, set(info))
             self.assertEqual(image.name, info["file"])
@@ -86,7 +95,7 @@ class PackagingTests(unittest.TestCase):
             self.assertFalse(old.exists())
             datetime.datetime.strptime(info["built_utc"], "%Y-%m-%dT%H:%M:%SZ")
             before = (dest / "version.json").read_bytes()
-            dirty = subprocess.run(command[:3] + ["20261029090000-1234abcd-dirty", str(dest)], capture_output=True)
+            dirty = subprocess.run(command[:5] + ["20261029090000-1234abcd-dirty", str(dest)], capture_output=True)
             self.assertNotEqual(0, dirty.returncode)
             self.assertEqual(before, (dest / "version.json").read_bytes())
             image.unlink()

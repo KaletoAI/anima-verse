@@ -32,17 +32,23 @@ public static class ReleaseVersion
     public static bool IsClean(string version) => Parse(version) is not null;
 }
 
-public sealed record UpdateRelease(string Version, Uri DownloadUrl, long Size, string Sha256);
+/// <summary>A release whose manifest fields carry a verified <see cref="UpdateSignature"/>; install re-verifies it.</summary>
+public sealed record UpdateRelease(string Version, string File, Uri DownloadUrl, long Size, string Sha256, byte[] Signature);
 public sealed record UpdateCheckResult(UpdateRelease? Release, string Reason);
 public sealed record UpdateInstallResult(bool Success, string Reason);
 
 /// <summary>Anonymous update transport and verified same-directory AppImage replacement.</summary>
+/// <remarks>Only a manifest signed with the baked release key (<see cref="UpdateSignature.PublicKeySpki"/>) is offered
+/// or installed; the transport (plain HTTP by default) is not trusted.</remarks>
 public sealed class ClientUpdater : IDisposable
 {
     private readonly HttpClient _http;
+    private readonly string _publicKey;
 
-    public ClientUpdater(HttpMessageHandler? transport = null)
+    /// <param name="publicKeySpki">Release key override for tests; null = the key baked into this build.</param>
+    public ClientUpdater(HttpMessageHandler? transport = null, string? publicKeySpki = null)
     {
+        _publicKey = publicKeySpki ?? UpdateSignature.PublicKeySpki;
         // Keep this client separate from every authenticated API and the browser cookie jar.
         _http = new HttpClient(transport ?? new HttpClientHandler
         {
@@ -56,23 +62,16 @@ public sealed class ClientUpdater : IDisposable
         {
             var normalized = LauncherSettings.NormalizeServer(server);
             if (normalized is null) return new(null, "invalid server address");
+            if (!UpdateSignature.IsConfigured(_publicKey))
+                return new(null, "updates disabled: this build carries no release signing key");
             var baseUri = new Uri(normalized + "/");
             if (baseUri.UserInfo.Length != 0 || baseUri.Query.Length != 0 || baseUri.Fragment.Length != 0)
                 return new(null, "update server must have no credentials, query or fragment");
             using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
             stop.CancelAfter(TimeSpan.FromSeconds(5));
-            using var response = await _http.GetAsync(new Uri(baseUri, "static/native/version.json"), HttpCompletionOption.ResponseHeadersRead, stop.Token).ConfigureAwait(false);
-            response.EnsureSuccessStatusCode();
-            await using var body = await response.Content.ReadAsStreamAsync(stop.Token).ConfigureAwait(false);
-            using var manifest = new MemoryStream();
-            var chunk = new byte[4096];
-            int count;
-            while ((count = await body.ReadAsync(chunk, stop.Token).ConfigureAwait(false)) != 0)
-            {
-                if (manifest.Length + count > 16384) return new(null, "update manifest is too large");
-                manifest.Write(chunk, 0, count);
-            }
-            using var json = JsonDocument.Parse(manifest.ToArray());
+            var manifest = await GetCappedAsync(new Uri(baseUri, "static/native/version.json"), 16384, stop.Token).ConfigureAwait(false);
+            if (manifest is null) return new(null, "update manifest is too large");
+            using var json = JsonDocument.Parse(manifest);
             var root = json.RootElement;
             var version = root.GetProperty("version").GetString() ?? "";
             var file = root.GetProperty("file").GetString() ?? "";
@@ -83,9 +82,20 @@ public sealed class ClientUpdater : IDisposable
                 || size <= 0 || !Regex.IsMatch(sha, @"\A[0-9a-fA-F]{64}\z")
                 || !DateTimeOffset.TryParse(built, CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
                 return new(null, "invalid update manifest");
-            return ReleaseVersion.IsNewer(localVersion, version)
-                ? new(new(version, new Uri(baseUri, "static/native/" + file), size, sha), "newer release available")
-                : new(null, "no newer clean commit (or local development build)");
+            if (!ReleaseVersion.IsNewer(localVersion, version))
+                return new(null, "no newer clean commit (or local development build)");
+            byte[]? signature;
+            try
+            {
+                signature = await GetCappedAsync(new Uri(baseUri, "static/native/version.json.sig"), UpdateSignature.MaxSignatureBytes, stop.Token).ConfigureAwait(false);
+            }
+            catch (HttpRequestException e)
+            {
+                return new(null, $"update {version} not offered: release signature unavailable ({e.Message})");
+            }
+            if (!UpdateSignature.Verify(_publicKey, UpdateSignature.Canonical(version, file, size, sha), signature))
+                return new(null, $"update {version} not offered: release signature invalid");
+            return new(new(version, file, new Uri(baseUri, "static/native/" + file), size, sha, signature!), "newer signed release available");
         }
         catch (Exception e) when (e is HttpRequestException or IOException or OperationCanceledException or JsonException
                                   or InvalidOperationException or KeyNotFoundException or FormatException or UriFormatException)
@@ -117,6 +127,11 @@ public sealed class ClientUpdater : IDisposable
         try
         {
             if (!CanReplace(appImage)) return new(false, "The AppImage is not writable.");
+            // Re-verify the signed fields this install relies on: the size and SHA-256 checked below, and the file name
+            // the download URL ends in.
+            if (!release.DownloadUrl.AbsolutePath.EndsWith("/static/native/" + release.File, StringComparison.Ordinal)
+                || !UpdateSignature.Verify(_publicKey, UpdateSignature.Canonical(release.Version, release.File, release.Size, release.Sha256), release.Signature))
+                return new(false, "The update's release signature is invalid.");
             temp = appImage + ".update-" + Guid.NewGuid().ToString("N");
             backup = temp + ".backup";
             using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
@@ -169,6 +184,23 @@ public sealed class ClientUpdater : IDisposable
             TryDelete(temp);
             if (!retainBackup) TryDelete(backup);
         }
+    }
+
+    /// <summary>GET a small anonymous file; null when it exceeds <paramref name="limit"/> bytes.</summary>
+    private async Task<byte[]?> GetCappedAsync(Uri uri, int limit, CancellationToken cancellation)
+    {
+        using var response = await _http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellation).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        await using var body = await response.Content.ReadAsStreamAsync(cancellation).ConfigureAwait(false);
+        using var buffer = new MemoryStream();
+        var chunk = new byte[4096];
+        int count;
+        while ((count = await body.ReadAsync(chunk, cancellation).ConfigureAwait(false)) != 0)
+        {
+            if (buffer.Length + count > limit) return null;
+            buffer.Write(chunk, 0, count);
+        }
+        return buffer.ToArray();
     }
 
     [DllImport("libc", EntryPoint = "access", SetLastError = true)]
