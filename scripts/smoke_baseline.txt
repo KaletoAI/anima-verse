@@ -39,4 +39,3 @@ smoke_refit_selected_body	STALE: [4e] the fit settings dict gained keys (shell_*
 smoke_sleeve_fit	STALE: [6] normalise of the sleeve settings changed; not re-derived
 smoke_texture_body_reuse	STALE: A175 turn step: 3 image jobs instead of 2
 smoke_tip_off_mesh_only	REAL: [4] normals after tip with offset: 49 inverted / 85 off >60 deg at HEAD; passes alone at 40013ae71 (HEAD~1) — regression by de54012a3 (triangulate every quad after the tip subdivision, TIP_SMOOTHING_VERSION 3)
-smoke_world_props	STALE: fix_euler is read per resolved variant since f192c580d; the fixture dials the rotation on the primary only and the row draws variant 1; red already at its own last commit 1e5459e63

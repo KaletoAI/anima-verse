@@ -19,7 +19,8 @@ THE SEED (hand-built, so every expectation below follows from it):
     prop "Doomed"   — one mesh; deleted again in section [6]
 
     dims of every prop: width 2.0, height 3.0, depth 1.0  ->  max_m = 3.0
-    rotation of "Fence": {x: 0, y: 90, z: 0}
+    rotation of "Fence": {x: 0, y: 90, z: 0} on its SECOND variant (the one
+    the placement in [3] draws); the primary carries no fix
 
 HAND-DERIVED EXPECTATIONS
 
@@ -73,7 +74,9 @@ HAND-DERIVED EXPECTATIONS
           a resolved `variant`; the FIRST entry keeps the bare URL, the second
           carries `?variant=1`
         - `max_m` = 3.0 (largest real edge) and `measure` = "xyz"
-        - `fix_euler` of "Fence" = {x: 0, y: 90, z: 0}
+        - `fix_euler` of "Fence" = {x: 0, y: 90, z: 0}: since f192c580d the
+          row takes the fix of the variant it SHOWS (variant 1, dialled), not
+          the primary's (none — it would read {0, 0, 0})
         - a placement of "Ghost" (no mesh) is DROPPED from the block
         - `ground_offset_m` (the sink of the VARIANT the row draws — the
           prop's own until 2026-08-25) rides the row ONLY when it is not 0.0 —
@@ -273,7 +276,7 @@ def raises_gone(label: str, fn) -> None:
     FAILURES.append(label)
 
 
-def seed_prop(name: str, variants: int = 1, rotation=None) -> str:
+def seed_prop(name: str, variants: int = 1, rotation=None, rotation_variant: int = 0) -> str:
     """A prop record with `variants` active variants, each carrying ONE mesh.
 
     The bytes are not a real GLB — nothing here parses one. What matters is
@@ -292,15 +295,16 @@ def seed_prop(name: str, variants: int = 1, rotation=None) -> str:
         target.write_bytes(b"not-a-real-glb")
         g.select(target.name, "full")
     if rotation:
-        # The fix is the FILE's (spec-bild-props-v2.md E1): the primary
-        # variant's active full mesh carries it, so it is dialled once the
-        # mesh exists — and the world-prop row reads that primary file.
-        prop_store.set_rotation(pid, rotation)
+        # The fix is the FILE's (spec-bild-props-v2.md E1): the variant's
+        # active full mesh carries it, so it is dialled once the mesh exists —
+        # and the world-prop row reads the file of the variant it draws
+        # (f192c580d).
+        prop_store.set_rotation(pid, rotation, variant=rotation_variant)
     return pid
 
 
 BOULDER = seed_prop("Boulder")
-FENCE = seed_prop("Fence", variants=2, rotation={"x": 0, "y": 90, "z": 0})
+FENCE = seed_prop("Fence", variants=2, rotation={"x": 0, "y": 90, "z": 0}, rotation_variant=1)
 GHOST = prop_store.create_prop(name="Ghost", width_m=1.0, height_m=1.0,
                                depth_m=1.0)["id"]
 DOOMED = seed_prop("Doomed")
