@@ -5751,7 +5751,6 @@
     "Not used now: nothing is painted on this figure — its pieces are in the body shape or have their own mesh, so the dressed views are copies": "Derzeit nicht verwendet: Auf diese Figur wird nichts gemalt — ihre Teile sind in der Körperform oder haben ein eigenes Mesh, daher sind die angezogenen Ansichten Kopien",
     "The outfit's full-body reference is gone from the gallery — pick another one or clear it": "Die Ganzkörper-Referenz des Outfits ist nicht mehr in der Galerie — wähle eine andere oder entferne sie",
     "The outfit's full-body reference changed since it was picked — pick it again": "Die Ganzkörper-Referenz des Outfits hat sich seit der Auswahl geändert — wähle sie erneut",
-    "Dressed front edit of the outfit's full-body reference failed": "Bearbeitung der Ganzkörper-Referenz des Outfits zur angezogenen Vorderansicht fehlgeschlagen",
     "Made before the outfit's full-body reference was set — the Build renders it from the picture": "Erstellt, bevor die Ganzkörper-Referenz des Outfits gesetzt wurde — der Build rendert sie aus dem Bild",
     "Made from another full-body reference of the outfit — the Build renders it from the current one": "Aus einer anderen Ganzkörper-Referenz des Outfits erstellt — der Build rendert sie aus der aktuellen",
     "Made from a reference image that was cleared — the Build renders it without one": "Aus einem inzwischen entfernten Referenzbild erstellt — der Build rendert sie ohne",

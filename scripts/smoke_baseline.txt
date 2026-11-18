@@ -25,7 +25,6 @@ smoke_garment_store	STALE: "bad view" no longer raises: the view set grew (A185 
 smoke_garment_wardrobe_routes	STALE: clothing gate limits and the "no base model" status text changed
 smoke_hair_strands_graft	STALE: [4] the build's sidecar no longer carries the strand attributes record the smoke expects; not re-derived
 smoke_hub_job_resume	STALE: B3 improvement-engine doubles are behind several API changes (store rows carry forced, ImprovementType needs_media/subject_character, the image service .pool for face_retexture routing); stopped after three layers
-smoke_i18n_orphans	REAL: orphan de.json key "Dressed front edit of the outfit's full-body reference failed" (shared/languages/de.json)
 smoke_image_routing_migration	STALE: _seed_default_mesh_backends appends quadruped-local to every existing list (d4aa4edd8/62c7b7b51, its docstring) and seeds 12 entries; C3 pins (False,1) / (True,11) / an emptied list staying [] — owner to confirm "emptied stays empty" vs the quadruped addition
 smoke_improvement_base_refresh	STALE: estimate of an older-prompt base refresh is 8 hub jobs (was 7): the full-body reference step (A87 c24544018) adds one
 smoke_interact_answer	STALE: "provider registered": the open-questions provider is not registered by importing plugins.interact.register in a world without schema ("no such table: characters"); not re-derived
