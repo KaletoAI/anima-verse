@@ -6540,6 +6540,7 @@
     "The Clip Library holds edits of the open clip that were never saved. Leaving it discards them.": "Die Clip-Bibliothek enthält Änderungen am offenen Clip, die nie gespeichert wurden. Wer sie verlässt, verwirft sie.",
     "A package card holds edits that were never saved. Opening another tab discards them.": "Eine Paket-Karte enthält Änderungen, die nie gespeichert wurden. Einen anderen Tab zu öffnen verwirft sie.",
     "The pieces under it were made slimmer for the drape: it failed a check over them as they are": "Die Teile darunter wurden fürs Drapieren schlanker gemacht: über ihnen, wie sie sind, fiel eine Prüfung durch",
-    "Draped without the pieces under it: it failed a check over them — their parts under it are hidden": "Ohne die Teile darunter drapiert: über ihnen fiel eine Prüfung durch — ihre Teile darunter werden ausgeblendet"
+    "Draped without the pieces under it: it failed a check over them — their parts under it are hidden": "Ohne die Teile darunter drapiert: über ihnen fiel eine Prüfung durch — ihre Teile darunter werden ausgeblendet",
+    "The Clip Library holds edits of the open clip, and the open entry has changes — neither was saved. Opening the pose discards both.": "Die Clip-Bibliothek enthält Änderungen am offenen Clip, und der offene Eintrag hat Änderungen — beides wurde nie gespeichert. Die Pose zu öffnen verwirft beides."
   }
 }

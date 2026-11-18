@@ -262,6 +262,8 @@ export function PosesTab() {
   }, [])
   /** A view switch waiting for "discard the Library's unsaved edits?" (in-app, never window.confirm). */
   const [leaveLibrary, setLeaveLibrary] = useState<(() => void) | null>(null)
+  /** That question names the open entry's draft too (the Library's open-pose link replaces both at once). */
+  const [leaveBoth, setLeaveBoth] = useState(false)
   const guardLeaveLibrary = useCallback((fn: () => void) => {
     if (libraryUnsavedRef.current) setLeaveLibrary(() => fn)
     else fn()
@@ -1043,13 +1045,22 @@ export function PosesTab() {
         ) : null}
         <ClipLibrary listing={clipList} poses={data.entries} onReload={reloadLibrary}
           rootDropOf={rootDropOf} focus={libraryFocus}
-          onOpenPose={(key) => guardLeaveLibrary(() => guardEntry(() => { setView('entries'); select(key) }))}
+          onOpenPose={(key) => {
+            const open = () => { setView('entries'); select(key) }
+            // Both drafts would go: ONE question naming both, not the Library's and then the entry's.
+            if (libraryUnsavedRef.current && entryDirtyRef.current) {
+              setLeaveBoth(true)
+              setLeaveLibrary(() => open)
+            } else guardLeaveLibrary(() => guardEntry(open))
+          }}
           onUnsaved={onLibraryUnsaved} />
         <ConfirmDialog open={leaveLibrary !== null} title={t('Discard unsaved changes?')}
-          message={t('The Clip Library holds edits of the open clip that were never saved. Leaving it discards them.')}
+          message={leaveBoth
+            ? t('The Clip Library holds edits of the open clip, and the open entry has changes — neither was saved. Opening the pose discards both.')
+            : t('The Clip Library holds edits of the open clip that were never saved. Leaving it discards them.')}
           confirmLabel={t('Discard')} danger
-          onConfirm={() => { const fn = leaveLibrary; setLeaveLibrary(null); fn?.() }}
-          onClose={() => setLeaveLibrary(null)} />
+          onConfirm={() => { const fn = leaveLibrary; setLeaveLibrary(null); setLeaveBoth(false); fn?.() }}
+          onClose={() => { setLeaveLibrary(null); setLeaveBoth(false) }} />
         {entryGuardDialog}
       </div>
     )

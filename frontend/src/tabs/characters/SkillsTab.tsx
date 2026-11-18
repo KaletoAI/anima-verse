@@ -99,8 +99,9 @@ export function SkillsTab({
     panelDirtyRef.current = dirty
     onPanelDirty?.(dirty)
   }, [onPanelDirty])
-  /** A skill switch waiting for "discard the card draft?" (in-app, never window.confirm). */
-  const [pendingSkill, setPendingSkill] = useState<string | null>(null)
+  /** A skill switch — or an on/off switch that swaps the hosted panel for the "Configured in the … tab" note —
+   *  waiting for "discard the card draft?" (in-app, never window.confirm). */
+  const [pending, setPending] = useState<{ run: () => void } | null>(null)
 
   const reload = useCallback(async () => {
     if (!character) return
@@ -234,9 +235,16 @@ export function SkillsTab({
     membersOf(s).map((m) => m.blocked_reason).find(Boolean) || ''
   const onToggle = (s: SkillInfo, checked: boolean) => {
     const members = membersOf(s)
-    return members.length > 1
-      ? toggleGroup(members.map((m) => m.skill_id), checked)
-      : toggleEnabled(s, checked)
+    const run = () => {
+      void (members.length > 1
+        ? toggleGroup(members.map((m) => m.skill_id), checked)
+        : toggleEnabled(s, checked))
+    }
+    // Switching the shown panel's package on or off can move its panel into a sub-tab of its own (the "Configured
+    // in the … tab" note replaces it here) — an unsaved card draft would go with it, so that switch asks first.
+    if (panelDirtyRef.current && current?.panel_package
+      && members.some((m) => m.panel_package === current.panel_package)) setPending({ run })
+    else run()
   }
 
   const fields = current?.config_fields ? Object.entries(current.config_fields) : []
@@ -259,7 +267,7 @@ export function SkillsTab({
           return (
             <div key={s.skill_id} onClick={() => {
               if (active) return
-              if (panelDirtyRef.current) setPendingSkill(s.skill_id)
+              if (panelDirtyRef.current) setPending({ run: () => setSelected(s.skill_id) })
               else setSelected(s.skill_id)
             }}
               style={{
@@ -349,11 +357,11 @@ export function SkillsTab({
           </div>
         )}
       </div>
-      <ConfirmDialog open={pendingSkill !== null} title={t('Discard unsaved changes?')}
+      <ConfirmDialog open={pending !== null} title={t('Discard unsaved changes?')}
         message={t('The changes to this entry are lost.')}
         confirmLabel={t('Discard')} danger
-        onConfirm={() => { const to = pendingSkill; setPendingSkill(null); if (to !== null) setSelected(to) }}
-        onClose={() => setPendingSkill(null)} />
+        onConfirm={() => { const next = pending; setPending(null); next?.run() }}
+        onClose={() => setPending(null)} />
     </div>
   )
 }
