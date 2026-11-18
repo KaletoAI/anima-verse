@@ -188,21 +188,35 @@ def delete_mesh(character_name: str, item_id: str, n: int, *, in_use: bool = Fal
 
 def delete_all(character_name: str, item_id: str, *, include_images: bool = False) -> Dict[str, Any]:
     """Delete every mesh, kept mesh, shell, fit (every body), layer and failure record of the piece in every state;
-    its images too with ``include_images``. ``{item_id, deleted: {meshes, images}, follow_up}``. ``DeleteBusy``
+    its images too with ``include_images``. ``{item_id, deleted: {meshes, images}, kept, follow_up}`` — ``kept`` the
+    files of an outfit body that is being fitted right now (left in place, relative to ``garments/``, with why). ``DeleteBusy``
     while a run of the piece writes, ValueError for an item that is no own-mesh clothing piece."""
     from app.core import garment_mesh
     from app.core import garment_store as gs
     _clothing_item(character_name, item_id)
+    from app.core.artefact_graph import _try_lock  # noqa: PLC2701 — same lock helper as hairstyle_delete
     root = gs.garments_dir(character_name)
     meshes = images = 0
+    kept: List[str] = []
     with _RunLock(character_name, item_id), garment_mesh.mesh_lock(character_name, item_id):
         for fsig, paths in _groups(character_name, item_id).items():
             for path in paths:
                 if _is_image(path):
                     if include_images:
                         images += _unlink(root, path)
-                else:
+                    continue
+                # Review 05#14: an outfit-body fit is written under the body's ``garment_body_fit`` lock, not the
+                # run lock — a body being fitted keeps its files (the fit would write them back), named in ``kept``.
+                body = gs.body_of(path)
+                lock = _try_lock("garment_body_fit", f"{character_name}:{body}") if body else None
+                if body and lock is None:
+                    kept.append(f"{path.relative_to(root).as_posix()} (its body is being fitted)")
+                    continue
+                try:
                     meshes += _unlink(root, path)
+                finally:
+                    if lock is not None:
+                        lock.release()
         for snap in _undo_snapshots(character_name, item_id):
             if not snap.resolve().is_relative_to(root.resolve()):
                 raise ValueError(f"garment path escapes {root}")
@@ -210,5 +224,7 @@ def delete_all(character_name: str, item_id: str, *, include_images: bool = Fals
             shutil.rmtree(snap, ignore_errors=True)
     logger.info("garment %s/%s: deleted all meshes (%d files)%s", character_name, item_id, meshes,
                 f" and {images} images" if include_images else "")
-    return {"item_id": item_id, "deleted": {"meshes": meshes, "images": images},
+    if kept:
+        logger.info("garment %s/%s: kept %d files of bodies being fitted", character_name, item_id, len(kept))
+    return {"item_id": item_id, "deleted": {"meshes": meshes, "images": images}, "kept": kept,
             "follow_up": _estimate(character_name, item_id)}

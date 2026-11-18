@@ -808,12 +808,14 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
     try {
       const base = `/characters/${enc}/garments/${encodeURIComponent(itemId)}/mesh`
       const d = ask.slot === null
-        ? await apiPost<{ deleted: { meshes: number; images: number }; follow_up: MeshDeleteCost }>(
+        ? await apiPost<{ deleted: { meshes: number; images: number }; kept?: string[]; follow_up: MeshDeleteCost }>(
           `${base}/delete-all`, { include_images: delImages })
-        : await apiPost<{ deleted: number; follow_up: MeshDeleteCost }>(
+        : await apiPost<{ deleted: number; kept?: string[]; follow_up: MeshDeleteCost }>(
           `${base}/attempts/${ask.slot}/delete`, { in_use: ask.slot === 0 })
       const files = typeof d.deleted === 'number' ? d.deleted : d.deleted.meshes + d.deleted.images
-      toast(`${t('Deleted')} (${files} ${t('files')}) · ${dueText(d.follow_up, t)}`, 'success')
+      // Review 05#14: the files of an outfit body being fitted right now stay (the fit would write them back).
+      const kept = d.kept?.length ? ` · ${d.kept.length} ${t('kept: their body is being fitted')}` : ''
+      toast(`${t('Deleted')} (${files} ${t('files')})${kept} · ${dueText(d.follow_up, t)}`, 'success')
     } catch (e) {
       // Ruling A131: nothing was deleted — the dialog keeps its state and tiles; a 409 is a run holding the piece.
       setDelError(e instanceof ApiError && e.status === 409 ? t(DELETE_BUSY_MESSAGE)
