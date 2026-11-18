@@ -382,7 +382,8 @@ def _rigged_base(character_name: str, record: Dict[str, Any], base_sha: str, bod
 
 
 def _mesh_prim(g: Any):
-    """A ``GarmentMesh`` as a ``footwear_cut.Prim`` (NORMAL / TEXCOORD_0 / COLOR_0 as attributes) and back."""
+    """A ``GarmentMesh`` as a ``footwear_cut.Prim`` (NORMAL / TEXCOORD_0 / COLOR_0 as attributes, A200: the morph
+    targets as POSITION deltas — a cut carries them through) and back."""
     from app.core.glb_mesh import Prim
     attributes: Dict[str, np.ndarray] = {"TEXCOORD_0": np.asarray(g.uvs, np.float64)}
     if g.normals is not None:
@@ -391,14 +392,16 @@ def _mesh_prim(g: Any):
         attributes["COLOR_0"] = np.asarray(g.colors, np.float64)
     return Prim(positions=np.asarray(g.positions, np.float64), faces=np.asarray(g.indices, np.int64).reshape(-1, 3),
                 attributes=attributes, joints=np.asarray(g.joints, np.int64), weights=np.asarray(g.weights, np.float64),
-                targets=[], joint_names=list(g.joint_names))
+                targets=[{"POSITION": np.asarray(t, np.float64)} for t in g.targets or []],
+                joint_names=list(g.joint_names))
 
 
 def _prim_mesh(prim: Any, like: Any):
     from dataclasses import replace
     return replace(like, positions=prim.positions, indices=prim.faces, uvs=prim.attributes["TEXCOORD_0"],
                    normals=prim.attributes.get("NORMAL"), colors=prim.attributes.get("COLOR_0"),
-                   joints=prim.joints, weights=prim.weights)
+                   joints=prim.joints, weights=prim.weights,
+                   targets=[np.asarray(t["POSITION"], np.float64) for t in prim.targets])
 
 
 def tucked_poke(mesh: Any, shafts: Sequence[Any], plane_m: float, top_m: float) -> Dict[str, Any]:

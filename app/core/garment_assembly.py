@@ -120,6 +120,9 @@ _errors: Dict[Tuple[str, str], str] = {}
 
 #: The ``garment_warnings`` entry of a second footwear piece in one outfit (spec § 11: a data error, left off).
 FOOTWEAR_SECOND = "{item}: a second shoe piece in one outfit — left off"
+#: A200: a template piece worn under the shoe (hosiery with pose shapes) is taken into the shoe with its morph
+#: targets; in the assembly state of such a piece, so the assemblies that change are rebuilt once (CPU).
+INTO_SHOE_VERSION = 1
 
 
 # --- Paths and revisions ------------------------------------------------------
@@ -585,10 +588,12 @@ def _state(wanted: List[Dict[str, Any]], tier: str, *,
     collision scales of ``character_name`` when given; "" without one), the
     record whose per-vertex binding the build grafts (spec § 6.2.3). Every
     other piece adds ``material`` (``piece_material.state_key``, Ruling A36), a clothing piece also
-    ``cover`` (``body_cover.VERSION``, Ruling A133)."""
+    ``cover`` (``body_cover.VERSION``, Ruling A133) and a template piece worn under a shoe ``into_shoe``
+    (``INTO_SHOE_VERSION``, A200)."""
     from app.core import body_cover
-    from app.core.garment_set import CLOTHING, HAIR
+    from app.core.garment_set import CLOTHING, FOOTWEAR, HAIR, under_footwear
     out: Dict[str, Dict[str, Any]] = {}
+    shod = any(g["kind"] == FOOTWEAR and g["fit"] is not None for g in wanted)
     scales: Optional[Dict[str, float]] = None
     for g in wanted:
         if g["fit"] is None:
@@ -610,6 +615,9 @@ def _state(wanted: List[Dict[str, Any]], tier: str, *,
         if g["kind"] == CLOTHING:
             # the body faces this piece covers are dropped from the delivered body (``body_cover``, Ruling A133)
             entry["cover"] = body_cover.VERSION
+            if g.get("template") and shod and under_footwear(g.get("item")):
+                # A200: a draped piece under the shoe is taken into it (``_into_shoe``) since INTO_SHOE_VERSION 1
+                entry["into_shoe"] = INTO_SHOE_VERSION
         if g["kind"] == HAIR:
             if alpha_cutoff is None:
                 from app.core import hair_cards
@@ -849,21 +857,23 @@ def _cut_whole_boot_legs(blob: bytes, clothing: List[Dict[str, Any]], tier: str)
 
 def _uppers(grafted: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
     """Per grafted piece, the pieces worn OVER it whose cover hides its faces under them
-    (``body_cover.covered_under``): the template pieces of a higher layer rank over a template piece (Ruling A144,
-    a jacket over a top), and — A192 — every piece layered over it (its ``over.items``, ``garment_layers``: an
+    (``body_cover.covered_under``): every piece a template piece is draped over (``garment_template.inner_pieces``:
+    a jacket over a top, Ruling A144; A200: by ``LAYER_STACKS``, own-mesh pieces too — a draped jacket over a
+    generated top), and — A192 — every piece layered over it (its ``over.items``, ``garment_layers``: an
     own-mesh jacket over a draped top, jeans over a shell)."""
     from app.core import garment_template
+    from app.core.garment_set import CLOTHING
     by_id = {g["item_id"]: g for g in grafted}
-    tpl = [g for g in grafted if g.get("template")]
-
-    def rank(g: Dict[str, Any]) -> int:
-        kind = str(((g.get("record") or {}).get("params") or {}).get("kind") or "")
-        return garment_template.LAYER_RANK.get(kind, 0)
+    clothing = [g["item_id"] for g in grafted if g["kind"] == CLOTHING]
     out: Dict[str, List[Dict[str, Any]]] = {}
-    for g in tpl:
-        for u in tpl:
-            if rank(u) > rank(g):
-                out.setdefault(g["item_id"], []).append(u)
+    for g in grafted:
+        if not g.get("template"):
+            continue
+        kind = str(((g.get("record") or {}).get("params") or {}).get("kind") or "")
+        templates, own = garment_template.inner_pieces(g["item_id"], kind, clothing)
+        for inner, _it in templates + own:
+            if inner in by_id and g not in out.setdefault(inner, []):
+                out[inner].append(g)
     for g in grafted:
         over = g.get("over") or {}
         if over.get("pending"):
@@ -878,12 +888,15 @@ def _into_shoe(mesh: Any, garment: Dict[str, Any], shoe: Dict[str, Any], body_bl
     """A192: a piece worn under the shoe (``garment_set.under_footwear``: hosiery) is taken into the shoe the way
     the foot is — the shoe's fit record ``cut`` applied to the piece (``footwear_cut.apply_cut``: what stands
     outside the shoe's inside is drawn in, what lies inside the shoe is removed), so the stocking ends at the shoe's
-    opening instead of standing through its upper. The shoe keeps its fit. None for a piece that is not worn under
-    the shoe, has morph targets or lacks the foot joints; else ``(mesh, stats)``."""
+    opening instead of standing through its upper. The shoe keeps its fit. A200: a template's morph targets (its pose
+    shapes) are cut with it — a bisected edge's new vertex takes the lerp of its ends' deltas — and fade out by the
+    Foot + ToeBase weight inside a closed shoe. None for a piece that
+    is not worn under the shoe, carries extra vertex attributes or lacks the foot joints; else ``(mesh, stats)``."""
+    import numpy as np
     from app.core import footwear_cut, garment_set, glb_mesh
     from app.core.garment_layers import _mesh_prim, _prim_mesh
     cut = (shoe.get("record") or {}).get("cut")
-    if (not garment_set.under_footwear(garment.get("item")) or mesh.targets or mesh.extra_attributes
+    if (not garment_set.under_footwear(garment.get("item")) or mesh.extra_attributes
             or not isinstance(cut, dict)):
         return None
     try:
@@ -893,6 +906,16 @@ def _into_shoe(mesh: Any, garment: Dict[str, Any], shoe: Dict[str, Any], body_bl
         return None
     out = {"shoe": shoe["item_id"], "removed_faces": int(stats["removed_faces"]),
            "bisected_faces": int(stats["bisected_faces"]), "new_vertices": int(stats["new_vertices"])}
+    if prim.targets and not footwear_cut.is_open(cut):
+        # A200: the shoe is rigid — what is left of the piece in it follows the foot alone, so its pose shapes fade
+        # out by the vertex's Foot + ToeBase weight (else a shape pushes the drawn-in cloth back through the upper)
+        from app.core.rig_contract import norm_bone_name
+        share = sum(footwear_cut._weight_of(prim, norm_bone_name(f"mixamorig:{side}{bone}"))
+                    for side in ("Left", "Right") for bone in ("Foot", "ToeBase"))
+        keep = 1.0 - np.clip(share, 0.0, 1.0)
+        for target in prim.targets:
+            target["POSITION"] = np.asarray(target["POSITION"], np.float64) * keep[:, None]
+        out["shapes_damped"] = int((keep < 1.0).sum())
     logger.info("Garment assembly: %s taken into the shoe %s — %d faces removed / %d bisected", garment["item_id"],
                 shoe["item_id"], out["removed_faces"], out["bisected_faces"])
     return _prim_mesh(prim, mesh), out

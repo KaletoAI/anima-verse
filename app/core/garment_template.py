@@ -863,20 +863,60 @@ def lower_layers(mesh_ids: Any, item_id: str) -> List[str]:
     return sorted({str(i) for i in (mesh_ids or ())} - {item_id})
 
 
-def collider_pieces(item_id: str, kind: str, lower: List[str]) -> List[Tuple[str, Dict[str, Any]]]:
-    """Ruling A142 layering: the other worn TEMPLATE pieces of a lower layer rank than ``kind`` — ``[(item id, item)]``
-    in id order. A jacket drapes over these (their drapes are colliders, their keys part of its key)."""
+def _template_kind(item: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The built kind of a template piece, else None."""
+    from app.core import garment_set
+    if garment_set.mesh_mode_of(item) != garment_set.TEMPLATE:
+        return None
+    params = params_of(item)
+    return params["kind"] if params and params["kind"] in BUILT_KINDS else None
+
+
+def inner_pieces(item_id: str, kind: str, lower: List[str]) -> Tuple[List[Tuple[str, Dict[str, Any]]],
+                                                                     List[Tuple[str, Dict[str, Any]]]]:
+    """The worn pieces a template piece drapes OVER — ``(templates, own)``, each ``[(item id, item)]`` in id order.
+
+    A piece is under ``item_id`` when ``garment_set.layer_order`` over the worn set puts it there (``LAYER_STACKS``
+    and ``covers``, A200) or — for a template piece — by ``LAYER_RANK`` (Ruling A142: a jacket over a top or a
+    dress), unless the order puts it over ``item_id``. ``templates``: their drapes are colliders and their keys part
+    of this key; ``own``: own-mesh / shell clothing whose plain-body fit is a collider (A200, a draped jacket over a
+    generated top) and whose fit file's sha256 is part of this key."""
     from app.core import garment_set
     from app.models.inventory import get_item
+    others = sorted({str(i) for i in lower} - {item_id})
+    if not others:
+        return [], []
+    order = garment_set.layer_order(set(others) | {item_id})
+    below = set(order["under"].get(item_id, []))
     rank = LAYER_RANK.get(kind, 1)
-    out = []
-    for other in sorted(set(lower) - {item_id}):
+    templates, own = [], []
+    for other in others:
         it = get_item(other)
-        if garment_set.mesh_mode_of(it) != garment_set.TEMPLATE:
-            continue
-        params = params_of(it)
-        if params and params["kind"] in BUILT_KINDS and LAYER_RANK.get(params["kind"], 1) < rank:
-            out.append((other, it))
+        okind = _template_kind(it)
+        if okind is not None:
+            by_rank = LAYER_RANK.get(okind, 1) < rank and item_id not in order["under"].get(other, [])
+            if other in below or by_rank:
+                templates.append((other, it))
+        elif other in below and garment_set.garment_kind_of(it) == garment_set.CLOTHING:
+            own.append((other, it))
+    return templates, own
+
+
+def collider_pieces(item_id: str, kind: str, lower: List[str]) -> List[Tuple[str, Dict[str, Any]]]:
+    """The worn TEMPLATE pieces ``item_id`` drapes over (``inner_pieces``) — ``[(item id, item)]`` in id order."""
+    return inner_pieces(item_id, kind, lower)[0]
+
+
+def own_colliders(character_name: str, item_id: str, kind: str, lower: List[str], *,
+                  base_sha: str) -> List[Tuple[str, Optional[Path]]]:
+    """A200: the own-mesh / shell pieces under a template piece (``inner_pieces``) with their accepted fit on the
+    current base model (``garment_store.accepted_fit``; None while there is none — that piece is no collider yet,
+    and its ``-`` in the key re-drapes once it is fitted)."""
+    from app.core import garment_store
+    out: List[Tuple[str, Optional[Path]]] = []
+    for other, _it in inner_pieces(item_id, kind, lower)[1]:
+        fit = garment_store.accepted_fit(character_name, other, base_model_sha=base_sha) if base_sha else None
+        out.append((other, Path(fit[0]) if fit else None))
     return out
 
 
@@ -908,6 +948,10 @@ def key_for(character_name: str, item_id: str, *, base_sha: str, lower: List[str
         sub, _r, _s = key_for(character_name, other, base_sha=base_sha, lower=_lower_of(other, item_id, lower),
                               item=it)
         under.append(f"{other}:{sub or '-'}")
+    # A200: an own-mesh piece under it is a collider; its fit's identity re-drapes this piece when it changes
+    for other, fit in own_colliders(character_name, item_id, params["kind"], lower, base_sha=base_sha):
+        from app.core.base_body import file_sha256
+        under.append(f"{other}:fit:{file_sha256(fit) if fit is not None else '-'}")
     return tsig(params, base_sha=base_sha, texture_sha=tex, lower=lower + under), None, sources
 
 
@@ -1314,6 +1358,9 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
         sub = build(character_name, other, profile=profile, lower=_lower_of(other, item_id, lower))
         if sub["state"] == "ready":
             colliders.append((sub["path"], sub["record"].get("pose_shapes")))
+    # A200: the own-mesh pieces under it — their plain-body fit, skinned, no pose shapes
+    colliders += [(fit, None) for _o, fit in own_colliders(character_name, item_id, params["kind"], lower,
+                                                           base_sha=base_sha) if fit is not None]
     _live_stage(key, "measure_body")
     from app.blender import outcome as oc
     left_due = ""

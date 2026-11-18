@@ -1385,12 +1385,16 @@ def apply_shapes(obj, arm):
 
 
 def load_lower(path, arm, payload):
-    """Import a lower drape GLB (Ruling A142 layering) and skin its garment to OUR armature (same bone names)."""
+    """Import a lower drape GLB (Ruling A142 layering) or an own-mesh piece's fit GLB (A200) and skin its garment to
+    OUR armature (same bone names)."""
     import json
     before = set(bpy.data.objects)
     bpy.ops.import_scene.gltf(filepath=str(path))
     new = [o for o in bpy.data.objects if o not in before]
-    garment = max((o for o in new if o.type == "MESH"), key=lambda o: len(o.data.vertices))
+    meshes = [o for o in new if o.type == "MESH"]
+    # A200: an own-mesh piece's fit GLB carries the rigged body too — its garment node is the collider
+    named = [o for o in meshes if o.name.startswith("garment_")]
+    garment = max(named or meshes, key=lambda o: len(o.data.vertices))
     mw = garment.matrix_world.copy()
     garment.parent = arm
     garment.matrix_world = mw
