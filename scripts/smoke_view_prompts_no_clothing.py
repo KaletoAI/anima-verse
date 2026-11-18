@@ -41,6 +41,11 @@ Expected values, derived by hand:
     Control: the MAIN render of the same outfit (no view change) names "saffron corduroy blouson" — the fixture
     really reaches the prompt, only the views drop it.
 [4] The base views (``base_body.base_prompt`` back / left / right) == ``BASE_VIEW_PROMPTS`` — no clothing.
+[4b] The turn step of a dressed back/side view (Ruling A175, ``base_body.turn_prompt``, rendered as a bare prompt —
+    no outfit layer — on the dressed front as reference): the angle LoRA's trained sentence
+    (``ANGLE_LORA_PROMPTS`` via ``TURN_VIEW_SHOTS``) with [SUBJECT] = "person": back == "Make the shot a full body
+    rear view of the person.", left == "Make the shot a full body side view of the person facing left.", right ==
+    the same "facing right." — no clothing; the reference supplies it.
 [5] Not view changes, kept as they are and pinned so a change is seen: the ghost is an edit of the WORN image of
     the same view (``garment_clothing.EDIT_STEPS["ghost"]["source"] == "worn"``; the ghost back is made from the
     worn back, not from the ghost front); the worn front edit names its piece ("they now wear only …").
@@ -48,7 +53,9 @@ Expected values, derived by hand:
     view change (turned around / seen from behind / side profile view / …) belongs to a KNOWN owner — covered by
     a builder above or listed with the reason it is no character view change; no string constant carries an
     ``{outfit}`` / ``{fragment}`` placeholder except the worn FRONT edit (``garment_clothing.WORN``); no
-    ``.format(outfit=…)`` call remains; among the shipped use cases, the ones whose texts word a character view
+    ``.format(outfit=…)`` call remains and ``.format(fragment=…)`` only in ``garment_clothing.edit_prompt``, twice,
+    both the worn FRONT edit (``WORN.format``: the shell-piece branch of Ruling A190, which adds the bald line, and
+    the ordinary one); among the shipped use cases, the ones whose texts word a character view
     change are the known ones, and the reachable T-pose view use cases tell an LLM never to describe the
     clothing.
 """
@@ -117,6 +124,8 @@ VIEW_WORDS = re.compile(r"turned around|turned to a strict|turned sideways|turne
 KNOWN_VIEW_OWNERS = {
     ("app/core/base_body.py", "DRAFT_PROMPTS"): "[1] the draft sentences — validated wording, no clothing",
     ("app/core/base_body.py", "BASE_VIEW_PROMPTS"): "[4] the base views — the bald unclothed body",
+    ("app/core/base_body.py", "ANGLE_LORA_PROMPTS"): ("[4b] the turn step's angle-LoRA sentences (A175): camera "
+                                                      "and subject only, no clothing"),
     ("app/core/base_body.py", "DRESS_VIEW"): ("no view change: opens a dressed edit OF the base view itself "
                                               "(same view; production dresses only the front, the back and the "
                                               "sides are drafts)"),
@@ -134,12 +143,15 @@ KNOWN_VIEW_OWNERS = {
     ("app/core/garment_gates.py", "hems_reason"): "a refusal message",
     ("app/core/garment_gates.py", "worn_hems_reason"): "a refusal message",
     ("app/core/model_overview.py", "BASE_VIEW_CHANGED"): "a UI note",
+    ("app/core/model_overview.py", "MESH_VIEW_MISMATCH"): "a UI note (the mesh refused against one of its views)",
     ("app/core/model_overview.py", "_dressed_view_step"): "a UI note",
 }
 #: Module-level ``*_PROMPTS`` tables of app/core and what covers them.
 KNOWN_PROMPT_TABLES = {
     ("app/core/base_body.py", "DRAFT_PROMPTS"): "[1]",
     ("app/core/base_body.py", "BASE_VIEW_PROMPTS"): "[4]",
+    ("app/core/base_body.py", "ANGLE_LORA_PROMPTS"): "[4b]",
+    ("app/core/base_body.py", "TURN_PROMPTS"): "[4b] (ANGLE_LORA_PROMPTS picked per view)",
     ("app/core/base_body.py", "OLDER_PROMPTS"): "a freshness note, no prompt",
     ("app/core/config.py", "KEY_AREA_PROMPTS"): "key-area renders, no view change",
 }
@@ -208,7 +220,7 @@ def lint() -> None:
     check("every *_PROMPTS table is covered", sorted(tables - set(KNOWN_PROMPT_TABLES)), [])
     check("{outfit}/{fragment} placeholders: the worn front edit only", sorted(placeholders), sorted(KNOWN_PLACEHOLDERS))
     check("no .format(outfit=…/fragment=…) outside the worn front edit", outfit_formats,
-          [("app/core/garment_clothing.py", "edit_prompt", "fragment")])
+          [("app/core/garment_clothing.py", "edit_prompt", "fragment")] * 2)
     from app.core.config import _DEFAULT_IMAGE_USE_CASES
     view_use_cases = sorted(
         name for name, families in _DEFAULT_IMAGE_USE_CASES.items()
@@ -345,6 +357,12 @@ def main() -> int:
         for view in ("back", "left", "right"):
             prompt, negative = base_body.base_prompt("Demo", view)
             check(f"base {view}", (prompt, named(prompt + " " + negative)), (base_body.BASE_VIEW_PROMPTS[view], []))
+        print("[4b] the turn step of a dressed view")
+        for view, want in (("back", "Make the shot a full body rear view of the person."),
+                           ("left", "Make the shot a full body side view of the person facing left."),
+                           ("right", "Make the shot a full body side view of the person facing right.")):
+            prompt = base_body.turn_prompt(view)
+            check(f"turn {view}", (prompt, named(prompt)), (want, []))
 
         print("[5] not view changes, kept")
         check("the ghost edits the worn image of its own view", garment_clothing.EDIT_STEPS["ghost"]["source"],

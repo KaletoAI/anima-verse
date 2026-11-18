@@ -58,7 +58,6 @@ smoke_tip_off_mesh_only	REAL: [4] normals after tip with offset: 49 inverted / 8
 smoke_tool_step_prompt	STALE: tool_step_presence now reads perception.addressable_for; the smoke patches the per-character readers it used to read (roster/places), so the expected roster no longer arrives — not re-derived
 smoke_travel_beat	STALE: places compose twice per fingerprint ([['l','l']]) — the travel-beat place cache changed; not root-caused
 smoke_travel_ticker	STALE: a follower's own journey now survives the leader's arrival and the drag hook moves followers differently (party/journey rework 9b920eaa0); not re-derived
-smoke_view_prompts_no_clothing	REAL: guard hit: unreviewed view-change wordings base_body.ANGLE_LORA_PROMPTS, base_body.TURN_PROMPTS, model_overview.MESH_VIEW_MISMATCH and a second fragment .format in garment_clothing.edit_prompt — each must be checked to name no clothing and registered in the smoke's owner lists
 smoke_world_props	STALE: fix_euler is read per resolved variant since f192c580d; the fixture dials the rotation on the primary only and the row draws variant 1; red already at its own last commit 1e5459e63
 smoke_worldmap_fog_first	STALE: an unknown location is no longer delivered/loaded the way the smoke expects (fog rules changed); not root-caused
 smoke_worldmap_model_sig	STALE: the worldmap payload no longer carries model_sig for a meshed NPC the way the fixture builds it (A119 serving rule); not re-derived
