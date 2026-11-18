@@ -4523,6 +4523,32 @@ def _set_character_collision_channels_sync(character_name: str, body: Any) -> Di
     return {"channels": options["collision_channels"], "due": collision.channels_due(character_name)}
 
 
+@router.post("/{character_name}/model3d/mouth-teeth")
+async def set_character_mouth_teeth(character_name: str, request: Request,
+        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The mouth's teeth options (Ruling A206, ``mouth_channel.validate_teeth``). Body: ``{"teeth": {enabled,
+    tongue, shade, size}}`` (missing keys = the defaults). Stores ``model3d_opts.mouth_teeth`` ONLY — Save never
+    executes; the extension step reads "due" and the Build applies it (local, 0 jobs). ``{teeth: <complete>}``."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_set_character_mouth_teeth_sync, character_name, body)
+
+
+def _set_character_mouth_teeth_sync(character_name: str, body: Any) -> Dict[str, Any]:
+    """The blocking body of ``set_character_mouth_teeth``."""
+    from app.core import mouth_channel
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(404, "Character not found")
+    if not isinstance(body, dict) or set(body) != {"teeth"}:
+        raise HTTPException(400, "teeth options required")
+    try:
+        return {"teeth": mouth_channel.set_teeth_options(character_name, body["teeth"])}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(404, "Character not found") from exc
+
+
 @router.get("/{character_name}/model3d/collision/bind-pose")
 def get_character_collision_bind_pose(character_name: str,
         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:

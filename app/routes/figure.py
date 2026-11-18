@@ -240,6 +240,10 @@ def _plain_body_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, A
         info["tip_smoothing"] = None
         info["extension"] = None
         info["collision_channels"] = get_model3d_options(character_name).get("collision_channels") or {}
+        from app.core import mouth_channel
+        from app.models.character import get_character_profile
+        # The mouth's teeth options (Ruling A206), complete; the Channels panel's mouth tab edits them.
+        info["mouth_teeth"] = mouth_channel.teeth_options(get_character_profile(character_name) or {})
         info["channel_declarations"] = []
         if path is not None and model.get("status") != "running":
             info["mesh_repair"] = mesh_repair_state(character_name, bsig)
