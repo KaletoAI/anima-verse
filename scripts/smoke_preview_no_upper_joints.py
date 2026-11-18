@@ -10,11 +10,14 @@ leftarm/rightarm/lefthand/righthand/neck present, so a body without them measure
 ``neck_y``. By hand: overlay -> ok False, reason NO_UPPER_JOINTS, picture still named. Pre-fix (e846d7d02): KeyError
 ('shoulder_y' / 'neck_y') out of ``register`` / ``landmarks`` -> HTTP 500 (the route catches only ValueError).
 """
+import os
 import sys
 import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Pure, but it imports a world-DB module: a temp storage keeps any later reach off a real world.
+os.environ.setdefault("STORAGE_DIR", tempfile.mkdtemp(prefix="smoke_a198_preview_"))
 from app.core import base_body, garment_preview as gp, garment_preview_front  # noqa: E402
 import app.models.character as character  # noqa: E402
 

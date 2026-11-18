@@ -34,6 +34,8 @@ os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="uncovered-clips-")
 
 from app.core import paths  # noqa: E402
 paths.init(tempfile.mkdtemp(prefix="uncovered-storage-"))
+from app.core import db  # noqa: E402
+db.init_schema()  # a chat_moment render reads the actor's prop-action runs (9e8262339)
 
 from app.core import outfit_renderer as orr  # noqa: E402
 from app.core import thought_context as tc  # noqa: E402
@@ -126,7 +128,8 @@ def main() -> int:
         _env.loader.get_source(_env, "chat/chat_moment.md")[0]))
     ctx = dict.fromkeys(names, "")
     ctx.update(moment_notes=[], self_state_lines=[], partner_state_lines=[],
-               moment_facts=["Uncovered right now: you (bare feet)."])
+               moment_facts=["Uncovered right now: you (bare feet)."],
+               character_name="demo")  # the prop-action actor every chat_moment render needs (9e8262339)
     moment = render("chat/chat_moment.md", **ctx)
     check("a moment fact renders under 'This moment:' without a reply shape",
           "This moment:\n- Uncovered right now: you (bare feet).\n" in moment,

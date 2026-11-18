@@ -278,7 +278,7 @@ memory_service.extract_memories_from_exchange = (
 relationship_mod.record_interaction = (
     lambda char_a, char_b, **k: CALLS["relationship"].append(char_b) or {})
 intents_mod.parse_and_apply_intent_markers = (
-    lambda name, text: CALLS["intent"].append(name) or [])
+    lambda name, text, **_k: CALLS["intent"].append(name) or [])  # told_to= since the avatar-plan change
 # The three post-processing extractors hit config/LLM paths this smoke does not
 # care about; the gates under test sit after them.
 chat_routes._extract_mood = lambda *a, **k: None

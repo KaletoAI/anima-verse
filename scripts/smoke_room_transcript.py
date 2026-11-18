@@ -75,6 +75,8 @@ os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="room-transcript-cli
 from app.core import paths  # noqa: E402
 
 paths.init(tempfile.mkdtemp(prefix="room-transcript-storage-"))
+from app.core import db  # noqa: E402
+db.init_schema()  # a chat_moment render reads the actor's prop-action runs (9e8262339)
 
 from app.core.chat_engine import _messages_from_room_stream  # noqa: E402
 
@@ -218,7 +220,8 @@ def test_template_render():
                        addressed_names=addressed_names,
                        char_lines=[], partner_lines=[], partner_state_lines=[],
                        self_state_lines=[], moment_notes=[])
-            parts.append(render(tpl, **{k: v for k, v in ctx.items() if k in names}))
+            # character_name: the prop-action actor every chat_moment render needs (9e8262339)
+            parts.append(render(tpl, **{k: v for k, v in ctx.items() if k in names or k == "character_name"}))
         return "\n".join(parts)
 
     mine = _render(True, "")

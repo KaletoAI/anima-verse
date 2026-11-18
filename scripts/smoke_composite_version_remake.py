@@ -119,8 +119,11 @@ def main() -> int:
             return rec
 
         real = (base_body.render_view_edit, base_body.draft_prompt, vc.compose, base_body_gates.noise_gate,
-                base_body.shape_view_shas)
+                base_body.shape_view_shas, base_body.turned_cutout)
         base_body.render_view_edit = render_draft
+        # Ruling A175 (070594e79): the turn + cut-out of the dressed front comes before the draft — stubbed (no hub
+        # job), as in smoke_view_composite; the draft under test is still render_draft's.
+        base_body.turned_cutout = lambda *a, front, **k: front
         base_body.draft_prompt = lambda *a, **k: ("p", "n")
         vc.compose = compose
         base_body_gates.noise_gate = lambda *a, **k: {"ok": True, "score": 1.0}
@@ -173,7 +176,7 @@ def main() -> int:
                   base_body.shape_view("Demo", "back", "obshape01", "bsig"), None)
         finally:
             (base_body.render_view_edit, base_body.draft_prompt, vc.compose, base_body_gates.noise_gate,
-             base_body.shape_view_shas) = real
+             base_body.shape_view_shas, base_body.turned_cutout) = real
 
         print(f"[7] fails on the old code ({BASELINE})")
         old_vc = subprocess.run(["git", "-C", str(ROOT), "show", f"{BASELINE}:app/core/view_composite.py"],

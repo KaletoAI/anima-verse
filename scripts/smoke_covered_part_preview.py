@@ -82,7 +82,7 @@ Path(os.environ["INSTANCE_DIR"]).mkdir()
 from app.core import paths  # noqa: E402
 
 paths.init(os.environ["STORAGE_DIR"])
-paths.init_instance(os.environ["INSTANCE_DIR"])
+paths.init_instance(str(Path(TMP) / "instance"))
 
 from app.core import fit_attempts, figure_build  # noqa: E402
 import app.plugins.registry as registry  # noqa: E402

@@ -293,7 +293,9 @@ def use_sections(root: Path):
     from app.core.base_body import file_sha256
     print("[4] \"Use this\" on an image answers a Build failure at that step or later")
     CUR["fsig"] = F2
-    garments._view_context = lambda *_a, **_kw: {"kind": "clothing", "fsig": CUR["fsig"]}
+    # The jeans are a clothing piece not in mode shell: its views are GARMENT_VIEWS (garments.piece_views, A185 —
+    # the real _view_context names them since 91f4908bf).
+    garments._view_context = lambda *_a, **_kw: {"kind": "clothing", "fsig": CUR["fsig"], "views": gs.GARMENT_VIEWS}
 
     def use_attempt(c, item_id, fsig, step, view, attempt):
         final = gs.garment_path(c, item_id, fsig, "image", step=step, view=view)

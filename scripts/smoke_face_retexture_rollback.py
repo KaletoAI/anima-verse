@@ -576,6 +576,7 @@ def main():
                 from app.imagegen.backends import _gateway_job
                 from types import SimpleNamespace
                 hub = OpenAIUpscaleBackend('hub-cancel', 'https://gateway.invalid', 1, 'FACE_UPSCALE_SMOKE_')
+                hub.api_key = 'smoke-key'  # a keyless gateway backend is never probed (8ffa6e645)
                 hub._schema = (True, 'reference', frozenset({'scale'}))
                 hub._available = True
                 hub.instance_enabled = True

@@ -55,7 +55,8 @@ def main():
         print("PASS [a] awake and alone")
         assert is_distracted("A", profile={**base, "is_sleeping": True})
         print("PASS [b] sleeping")
-        pair = dict(id="pair", kind="pair", role="actor", partner="B",
+        # The interaction names its members {role: name}, roles a..e (8ab86ad8f, no partner key any more).
+        pair = dict(id="pair", kind="pair", role="a", members={"a": "A", "b": "B"},
                     started_at_game="Y0001-D001T12:00:00")
         assert is_distracted("A", profile={**base, "interaction": pair})
         print("PASS [c] pair interaction")

@@ -1798,7 +1798,7 @@ def part_h():
         model3d.trigger_generation = lambda *a, **k: mesh_calls.append(k) or True
         try:
             try:
-                characters_routes.generate_character_model3d("Nell", backend="Cloud")
+                characters_routes.generate_character_model3d("Nell", None, backend="Cloud")  # request: unused off the pipeline
                 check("H7 image backend as mesh pick", "no exception", 503)
             except HTTPException as e:
                 check("H7 image backend as mesh pick", e.status_code, 503)

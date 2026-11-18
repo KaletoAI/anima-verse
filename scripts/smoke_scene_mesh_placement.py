@@ -16,7 +16,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.core.scene_recipe import (
+import tempfile  # noqa: E402
+
+from app.core import paths  # noqa: E402
+
+# _building_model looks the location's model up in the world (location_model3d): a throwaway world, never a real one.
+paths.init(tempfile.mkdtemp(prefix="scene-mesh-placement-"))
+
+from app.core.scene_recipe import (  # noqa: E402
     _building_model, derive_scalars, scene_mesh_placement,
 )
 

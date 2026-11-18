@@ -105,7 +105,9 @@ def _scratch(prefix):
 os.environ["ANIMATION_CLIPS_DIR"] = _scratch("haar-route-clips-")
 from app.core import paths  # noqa: E402
 paths.init(_scratch("haar-route-storage-"))
-paths.init_instance(_scratch("haar-route-instance-"))
+_INSTANCE = tempfile.mkdtemp(prefix="haar-route-instance-")
+atexit.register(shutil.rmtree, _INSTANCE, ignore_errors=True)
+paths.init_instance(_INSTANCE)
 
 import numpy as np  # noqa: E402
 

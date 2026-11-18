@@ -78,6 +78,11 @@ from app.models.world import (  # noqa: E402
     GROUND_ROOM_ID, _load_world_data, _save_world_data, add_location, add_room,
     update_location_position)
 from app.plugins.context import PluginContext  # noqa: E402
+from app.core import places as _places  # noqa: E402
+
+# The seat gate (6faa73f21: a sitting pose needs a free place of its group) is not this smoke's subject and the
+# fixture room has no furniture: it is stubbed to "a seat is free".
+_places.seat_missing = lambda *_a, **_k: False
 
 FAILURES = []
 CHECKED = 0

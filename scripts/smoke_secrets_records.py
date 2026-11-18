@@ -70,7 +70,7 @@ def main():
                     'known_by': ['X'], 'known_at': {'X': f'Y0001-D001T{offset+i:02}:00:00'},
                     'created_at': '2099-01-01'})
         def prompt(data):
-            with patch.object(sec, '_load_secrets', side_effect=lambda owner: data.get(owner, [])):
+            with patch.object(sec, '_load_secrets', side_effect=lambda owner, strict=False: data.get(owner, [])):
                 return sec.build_secrets_prompt_section('X')
         lines = [line for line in prompt(fixtures).splitlines() if line.startswith('- About')]
         expected = [f'O1-fact-{i}' for i in (5, 4, 3)] + [f'O2-fact-{i}' for i in (7, 6, 5)]
@@ -113,7 +113,7 @@ def main():
         existing = context.split('ALREADY EXISTING', 1)[1]
         assert record['content'] not in existing and manual['content'] in existing
         print('PASS [d] generation context excludes records')
-        with patch.object(sec, 'list_secrets', side_effect=lambda name: [record] if name == 'O1' else []):
+        with patch.object(sec, 'list_secrets', side_effect=lambda name, strict=False: [record] if name == 'O1' else []):
             assert not _check_has_secret('O1')[0]
             assert not _try_generate_secret_hint_event('test', {}, ['O1', 'X'], {})
         # Inspect the actual candidate pool without invoking an LLM.
@@ -122,7 +122,7 @@ def main():
         def choose(candidates):
             assert candidates == [('O1', [manual])], candidates
             raise PoolChecked
-        with patch.object(sec, 'list_secrets', side_effect=lambda name: [record, manual] if name == 'O1' else []), patch('app.core.random_events.random.choice', side_effect=choose):
+        with patch.object(sec, 'list_secrets', side_effect=lambda name, strict=False: [record, manual] if name == 'O1' else []), patch('app.core.random_events.random.choice', side_effect=choose):
             try:
                 _try_generate_secret_hint_event('test', {}, ['O1', 'X'], {})
             except PoolChecked:

@@ -35,12 +35,15 @@ Expected, by hand:
     "right" (base view "left" = profile facing the LEFT edge of the frame, DRESS_VIEW).
 [7] No socket connect was attempted.
 """
+import os
 import socket
 import sys
 import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Pure, but it imports a world-DB module: a temp storage keeps any later reach off a real world.
+os.environ.setdefault("STORAGE_DIR", tempfile.mkdtemp(prefix="smoke_a175_"))
 
 CONNECTS = []
 

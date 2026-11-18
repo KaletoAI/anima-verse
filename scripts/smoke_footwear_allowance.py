@@ -301,8 +301,8 @@ def main() -> int:
             seen.append(int((k.get("allowance") or {}).get("length", 0)))
             return real_pair(*a, **k)
 
-        def att(result, prims, joints_):
-            out = real_attempt(result, prims, joints_)
+        def att(result, prims, joints_, insole=None):  # insole: A162 (fa4638e2a), passed through
+            out = real_attempt(result, prims, joints_, insole)
             length = seen[-1]
             if out.get("ok") and length < refuse["below"]:
                 reasons = [refuse["reason"]]
@@ -329,8 +329,9 @@ def main() -> int:
             check("other gate: no search", (out.get("ok"), sorted(set(seen))), (False, [0]))
             refuse.update(below=99, reason="visible_poke 0.02 > 0.005 (...)")
             out = compute(None)
+            # Auto tries 0 and then only the POSITIVE steps (A174, 5d3a9070e: "Auto only ever adds heel room").
             check("none accepted: all steps, +0 stands", (out.get("ok"), sorted(set(seen)), out.get("reasons")),
-                  (False, list(ff.ALLOWANCE_STEPS), [refuse["reason"]]))
+                  (False, [0, 2, 4, 6, 8, 10, 12, 15, 20], [refuse["reason"]]))
         finally:
             ff.fit_pair, gf._fit_attempt = real_pair, real_attempt
 

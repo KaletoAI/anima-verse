@@ -113,7 +113,8 @@ def main():
         # A real provider always carries a quota (Provider.__post_init__); 0 = no rate limit.
         provider = SimpleNamespace(name="P", type="openai", api_base="https://mock.test/v1",
                                    api_key="test-key", timeout=10, available=True,
-                                   quota=ProviderQuota(0, 60))
+                                   quota=ProviderQuota(0, 60),
+                                   thinking_off_params={})  # Provider's default (provider.py)
         manager = SimpleNamespace(get_provider=lambda name: provider if name == "P" else None,
                                   find_provider_for_model=lambda model: provider)
         with patch.object(llm_router, "get_provider_manager", return_value=manager), patch.object(

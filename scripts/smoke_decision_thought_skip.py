@@ -92,7 +92,7 @@ RUNNER_CALLS, DECIDE_CALLS, OUTCOMES, TAKEN = [], [], [], []
 RUNNER_RESULT = {}
 DECIDE_RESULT = [None]
 
-tc.build_thought_context = lambda name: dict(CTX)
+tc.build_thought_context = lambda name, tools_hint="": dict(CTX)  # signature since 7e5154d4b
 pt.render = lambda name, **kw: "system"
 ib.mark_thought_processed = lambda name: None
 se.maybe_activity_tick = lambda name: None

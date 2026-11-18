@@ -213,7 +213,7 @@ POOL = BackendPool(list(B.values()))
 RULES = {}
 CHAR_SPEC = {"value": ""}
 routing._rules = lambda occasion: list(RULES.get(occasion, []))
-routing._character_spec = lambda occ_def, character: (
+routing._character_spec = lambda occ_def, character, overrides=None: (  # spec_overrides: 998a19d86
     CHAR_SPEC["value"] if character and occ_def.get("character_scoped") else "")
 
 

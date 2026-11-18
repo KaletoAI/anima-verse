@@ -135,6 +135,10 @@ def state(field):
     return row[0] if row else None
 
 
+# The seat gate (6faa73f21: a sitting pose needs a free place of its group) is not this smoke's subject and the
+# one-row world has no furniture: it is stubbed to "a seat is free".
+from app.core import places as _places  # noqa: E402
+_places.seat_missing = lambda *_a, **_k: False
 r = _ch.set_pose_key_detail("demo", "sitting", "reads a book")
 check("a key sitting, flavor 'reads a book'",
       r == "sitting" and state("pose_flavor") == "reads a book",

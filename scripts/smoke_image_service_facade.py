@@ -143,7 +143,7 @@ class Fake(ImageBackend):
 RULES = {}
 CHAR = {"spec": ""}
 routing._rules = lambda occasion: list(RULES.get(occasion, []))
-routing._character_spec = lambda occ_def, character: (
+routing._character_spec = lambda occ_def, character, overrides=None: (  # spec_overrides: 998a19d86
     CHAR["spec"] if character and occ_def.get("character_scoped") else "")
 service_mod.render_has_reference_image = lambda *a, **k: False
 META_WRITES = []

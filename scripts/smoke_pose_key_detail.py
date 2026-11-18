@@ -104,6 +104,11 @@ _emb.embed = lambda text: None          # offline: alias equality only
 from app.core.db import init_schema  # noqa: E402
 init_schema()
 
+# The seat gate (6faa73f21: a sitting pose needs a free place of its group) is not this smoke's subject and the
+# fixture world has no furniture: it is stubbed to "a seat is free".
+from app.core import places as _places  # noqa: E402
+_places.seat_missing = lambda *_a, **_k: False
+
 failures = []
 
 

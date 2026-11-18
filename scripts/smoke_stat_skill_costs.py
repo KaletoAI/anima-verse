@@ -67,7 +67,7 @@ def main():
                     'app.models.account.get_active_character', return_value='Tester'), patch(
                     'app.core.scene_photo.prepare_scene_photo', return_value={'ok': True}), patch(
                     'app.core.scene_photo.take_scene_photo', return_value={'ok': True}):
-                assert asyncio.run(play.play_scene_photo_prepare(user={}))['ok']
+                assert asyncio.run(play.play_scene_photo_prepare(Request(), user={}))['ok']
                 assert character.get_character_profile('Tester')['status_effects']['fuel'] == 12
                 assert asyncio.run(play.play_scene_photo(Request(), user={}))['ok']
                 assert character.get_character_profile('Tester')['status_effects']['fuel'] == 7

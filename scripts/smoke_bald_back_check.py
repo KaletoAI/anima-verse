@@ -198,8 +198,12 @@ def main() -> int:
             rec["reasons"] = vc.check(rec)
             return rec
 
-        real = (base_body.render_view_edit, base_body.draft_prompt, vc.compose, base_body_gates.noise_gate)
+        real = (base_body.render_view_edit, base_body.draft_prompt, vc.compose, base_body_gates.noise_gate,
+                base_body.turned_cutout)
         base_body.render_view_edit = render_draft
+        # Ruling A175 (070594e79): the turn + cut-out of the dressed front comes before the draft — stubbed (no hub
+        # job), as in smoke_view_composite; the draft under test is still render_draft's.
+        base_body.turned_cutout = lambda *a, front, **k: front
         base_body.draft_prompt = lambda *a, **k: ("p", "n")
         vc.compose = compose
         base_body_gates.noise_gate = lambda *a, **k: {"ok": True, "score": 1.0}
@@ -253,7 +257,8 @@ def main() -> int:
             base_body._guard_dressed_views("Demo", "sig", "bsig", views, plain, rerender=rerender)
             check("one re-render", rerenders, ["back"])
         finally:
-            base_body.render_view_edit, base_body.draft_prompt, vc.compose, base_body_gates.noise_gate = real
+            (base_body.render_view_edit, base_body.draft_prompt, vc.compose, base_body_gates.noise_gate,
+             base_body.turned_cutout) = real
 
     print("FAIL: " + ", ".join(FAILS) if FAILS else "ALL OK")
     return 1 if FAILS else 0

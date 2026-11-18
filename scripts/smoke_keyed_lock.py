@@ -41,10 +41,11 @@ Cases [1]–[3] — the lock itself (`app/core/keyed_lock.py`):
     halves are checked, the blocking half with a timeout so a broken lock
     fails the run instead of hanging it.
 
-Case [4] — `app/routes/poses.py` catalog writes (finding 1):
+Case [4] — the pose catalog writes (finding 1; ``app/core/pose_catalog_edit.py`` since ab6589484 moved the
+route's ``_write`` there unchanged as ``write_store``):
   - ``_catalog_txn`` locks namespace "pose_catalog" keyed by the catalog FILE
     PATH: the same axis twice is one lock, pose vs expression are two.
-  - ``_write`` never truncates the target: at the moment of ``os.replace`` the
+  - ``write_store`` never truncates the target: at the moment of ``os.replace`` the
     catalog file on disk still holds the OLD document (the new bytes are in a
     temp file), and that temp file lies in the target's OWN directory —
     ``os.replace`` is atomic only within one filesystem.
@@ -254,7 +255,7 @@ def main() -> int:
 
     print("\n[4] the pose catalog: one lock per FILE, atomic write")
     import app.core.pose_catalog as pose_catalog
-    import app.routes.poses as poses
+    import app.core.pose_catalog_edit as pose_catalog_edit
 
     cat_dir = STORAGE / "catalogs"
     cat_dir.mkdir(parents=True, exist_ok=True)
@@ -281,7 +282,7 @@ def main() -> int:
         seen: list = []
         real_replace, os.replace = os.replace, replace_spy(seen)
         try:
-            poses._write("pose", {"entries": dict(old["entries"],
+            pose_catalog_edit.write_store("pose", {"entries": dict(old["entries"],
                                                   hovering={"prompt": "afloat"})})
         finally:
             os.replace = real_replace
@@ -302,7 +303,7 @@ def main() -> int:
         # A FAILING write must not leave a temp file either — and must not
         # touch the target at all.
         try:
-            poses._write("pose", {"entries": {"bad": object()}})
+            pose_catalog_edit.write_store("pose", {"entries": {"bad": object()}})
             failed = False
         except TypeError:
             failed = True

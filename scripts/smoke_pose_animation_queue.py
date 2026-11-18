@@ -73,7 +73,12 @@ def main():
         parser = SimpleNamespace(parse=lambda path: (tree, 7400))
         spec = importlib.util.spec_from_file_location("measure_fixture", Path(__file__).resolve().parents[1] / "app/blender/scripts/clip_measure.py")
         measurement = importlib.util.module_from_spec(spec)
-        with patch.dict(sys.modules, {"bpy": bpy, "mathutils": SimpleNamespace(Vector=lambda xyz: SimpleNamespace(y=xyz[1])), "io_scene_fbx": SimpleNamespace(parse_fbx=parser)}):
+        class Vector(tuple):
+            # clip_measure lists the joint positions (list(position(bone))) since it records them per frame.
+            x = property(lambda self: self[0])
+            y = property(lambda self: self[1])
+            z = property(lambda self: self[2])
+        with patch.dict(sys.modules, {"bpy": bpy, "mathutils": SimpleNamespace(Vector=Vector), "io_scene_fbx": SimpleNamespace(parse_fbx=parser)}):
             spec.loader.exec_module(measurement)
             data, outputs = measurement.run({"inputs": {"clip": "fixture.fbx"}})
             # Authored forbidden channels must survive even if their values are constant.

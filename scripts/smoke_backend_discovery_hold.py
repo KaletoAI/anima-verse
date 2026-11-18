@@ -147,7 +147,8 @@ check("[7] explicit fetch_loras reads at once", calls["loras"], 6)
 
 # ── Gateway mesh: alias schema ──────────────────────────────────────────
 calls.update(loras=0, schema=0)
-m = OpenAIMeshBackend("M", "http://gw", 0.0, "SMOKE_M_", model="mesh")
+# With a key: a keyless gateway mesh backend is never probed at all (8ffa6e645).
+m = OpenAIMeshBackend("M", "http://gw", 0.0, "SMOKE_M_", api_key="smoke-key", model="mesh")
 at(0); m.check_availability()
 check("[8a] first check reads the schema", calls["schema"], 1)
 at(100); m.check_availability()

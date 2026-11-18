@@ -12,10 +12,14 @@ The expected texts are written out by hand below from the user's decision, not t
   gloves ``outer`` — both are set to ``plain`` by hand).
 Pure: no storage, no world, no server.
 """
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Pure, but it imports a world-DB module: a temp storage keeps any later reach off a real world.
+os.environ.setdefault("STORAGE_DIR", tempfile.mkdtemp(prefix="smoke_ghost_text_"))
 
 from app.core.garment_clothing import ghost_prompt, ghost_text_class  # noqa: E402
 from app.models.inventory import _clean_ghost_text  # noqa: E402

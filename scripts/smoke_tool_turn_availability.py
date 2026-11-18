@@ -87,7 +87,7 @@ def main():
             pair.return_value = [{"inviter": "Mira", "invitee": "demo"}]
             assert "InteractWith" in offered()[0]
             pair.return_value = []
-            runs.return_value = [{"actor": "Mira", "partner": "demo", "status": "awaiting_consent"}]
+            runs.return_value = [{"actor": "Mira", "members": ["demo"], "status": "awaiting_consent"}]
             assert "InteractWith" in offered()[0]
             assert "PropAction" in offered()[1]
             runs.return_value = []
@@ -114,9 +114,9 @@ def main():
             offers.return_value[0]["available_targets"][0]["enabled"] = True
             assert "PropAction" in offered()[0]
             offers.return_value = []
-            runs.return_value = [{"actor": "demo", "partner": "", "status": "running"}]
+            runs.return_value = [{"actor": "demo", "members": [], "status": "running"}]
             assert "PropAction" in offered()[0]
-            runs.return_value = [{"actor": "Mira", "partner": "Pixel", "status": "running"}]
+            runs.return_value = [{"actor": "Mira", "members": ["Pixel"], "status": "running"}]
             assert "PropAction" in offered()[1]
             print("PASS [8] furniture requires requestable offers or own live run")
 

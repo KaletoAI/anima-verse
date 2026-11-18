@@ -212,6 +212,8 @@ class _FakeLLM:
 
 
 class _FakeInstance:
+    pinned = False  # LLMInstance.pinned default (llm_router)
+
     def __init__(self, provider_name, model):
         self.provider_name = provider_name
         self.model = model
@@ -243,7 +245,7 @@ class _FakeQueue:
         self.owner_seen = []
 
     def submit(self, task_type, priority, llm, messages_or_prompt,
-               agent_name="", label=""):
+               agent_name="", label="", **_kw):  # overflow= etc.: not this smoke's subject
         self.calls += 1
         # Same stamping as ProviderQueue.submit — read in the CALLER's context.
         task = LLMTask(task_id=f"llm_fake{self.calls}", task_type=task_type,
@@ -272,7 +274,7 @@ orig_resolve, orig_queue = lr.resolve_llm, lr.get_llm_queue
 try:
     fake_q = _FakeQueue(fail_times=1)
     seq = iter(instances)
-    lr.resolve_llm = lambda task, agent_name="": next(seq, None)
+    lr.resolve_llm = lambda task, agent_name="", **_kw: next(seq, None)
     lr.get_llm_queue = lambda: fake_q
     lr._MODEL_COOLDOWN.clear()
     handler.clear()
@@ -284,7 +286,7 @@ try:
 
     fake_q = _FakeQueue(fail_times=3)
     seq = iter(instances)
-    lr.resolve_llm = lambda task, agent_name="": next(seq, None)
+    lr.resolve_llm = lambda task, agent_name="", **_kw: next(seq, None)
     lr.get_llm_queue = lambda: fake_q
     lr._MODEL_COOLDOWN.clear()
     handler.clear()

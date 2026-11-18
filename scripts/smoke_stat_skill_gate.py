@@ -154,7 +154,7 @@ def main():
             with patch('app.models.account.get_active_character', return_value='Tester'):
                 assert refusal(play.play_travel(Request(), user={}))['reason'] == 'skill_blocked'
                 rule['target']['skills'].append('fake_photo')
-                assert refusal(play.play_scene_photo_prepare(user={}))['message'] == 'Rest first'
+                assert refusal(play.play_scene_photo_prepare(Request(), user={}))['message'] == 'Rest first'
                 assert refusal(play.play_scene_photo(Request(), user={}))['message'] == 'Rest first'
                 rule['target']['skills'].remove('fake_photo')
             character.adjust_status_effects('Tester', {'fuel': 10})

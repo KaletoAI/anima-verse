@@ -76,7 +76,7 @@ def main() -> int:
         model3d.current_outfit_state = lambda _c: (pieces, [], SIG)
         state = {"base": (BSIG, "basesha"), "older": set()}
         model3d._current_base = lambda _c: state["base"]
-        model3d._on_older_base = lambda p, _b: p.stem in state["older"]
+        model3d._on_older_base = lambda p, _b, **_kw: p.stem in state["older"]  # serving= kwarg since 4a84ebc73 (A148)
         model3d._stored_manifest = lambda _c, _s: {"pieces": pieces, "items": [], "mesh_variant": ""}
         import app.core.model_refs as model_refs
         model_refs.mesh_variant = lambda *_a, **_k: ""

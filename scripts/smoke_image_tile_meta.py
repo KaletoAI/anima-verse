@@ -115,10 +115,12 @@ def main() -> int:
     base_body._profile_of = lambda name, profile: {}
     base_body.base_signature = lambda name, profile=None: "base0000abcd"
     base_body.is_base_pipeline = lambda name, profile=None: False
-    base_body.base_status = lambda name: {}
+    base_body.base_status = lambda name, signature=None: {}
     base_body.base_model_info = lambda name, sig=None: None
     info = base_body.base_info("Demo")
-    check("[4] image_meta front", info["image_meta"]["front"], A_META)
+    # base_info adds the view's recorded prompt_fingerprint to its tile (base_body.recorded_fingerprint, a279e86d3 /
+    # A74a): "" for a sidecar that records none, as the fixture's.
+    check("[4] image_meta front", info["image_meta"]["front"], {**A_META, "prompt_fingerprint": ""})
     check("[4] image_meta others None", [info["image_meta"][v] for v in ("back", "left", "right")],
           [None, None, None])
     check("[4] images front url / others None",
