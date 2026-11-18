@@ -28,7 +28,8 @@ Expected, derived by hand:
     it); before Ruling A64 ``shutdown`` left it running until the call ended (60 s).
 [4] start.sh: ``process_tree`` / ``stop_tree`` (extracted from start.sh by their definitions) on a stand-in
     service that leads its own process group (setsid) and has a child and a grandchild, the stand-in ignoring
-    nothing: every process of the tree is gone afterwards; start_main launches uvicorn through setsid, and
+    nothing: every process of the tree is gone afterwards; start_main launches uvicorn through setsid (directly,
+    or as ``sg <group> -c "exec setsid ..."`` when the login lacks the render group, 2026-11-18), and
     stop_service / kill_port stop through stop_tree.
 """
 from __future__ import annotations
@@ -197,8 +198,9 @@ def case_shutdown():
 
 def case_start_sh():
     text = (ROOT / "start.sh").read_text()
-    check("launcher=(setsid)" in text and '"${launcher[@]}" "$SCRIPT_DIR/.venv/bin/python" -m uvicorn' in text,
-          "[4] start_main launches uvicorn through setsid (its own process group)")
+    check("launcher=(setsid)" in text and '"${launcher[@]}" "${cmd[@]}"' in text
+          and '"$SCRIPT_DIR/.venv/bin/python" -m uvicorn' in text and 'exec setsid $(printf' in text,
+          "[4] start_main launches uvicorn through setsid (its own process group), also under sg <render group>")
     stop_service = text.split("stop_service() {", 1)[1].split("\n}\n", 1)[0]
     kill_port = text.split("kill_port() {", 1)[1].split("\n}\n", 1)[0]
     check('stop_tree "$pid" "$name"' in stop_service and 'kill "$pid"' not in stop_service,
