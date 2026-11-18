@@ -28,7 +28,10 @@ def is_rate_limit_error(err):
 
 
 class ProviderQuota:
-    """A send window plus expiring reservations for calls still in the queue."""
+    """A send window plus reservations for routed calls that have not sent yet.
+
+    A reservation expires one window after booking unless its call is
+    waiting in a provider queue (``hold``)."""
 
     def __init__(self, capacity=0, window=60, *, clock=None):
         self.capacity = max(0, int(capacity))
@@ -37,6 +40,9 @@ class ProviderQuota:
         self._lock = threading.RLock()
         self._sends = deque()
         self._reservations = {}
+        # Reservations whose call is waiting in a provider queue: they do not
+        # expire by age until the call leaves the queue (see ``hold``).
+        self._held = set()
         self._blocked_until = 0.0
         self._full_logged = False
         self._last_exhausted_error = None
@@ -51,14 +57,17 @@ class ProviderQuota:
         while self._sends and self._sends[0] <= now - self.window:
             self._sends.popleft()
         self._reservations = {r: t for r, t in self._reservations.items()
-                              if t > now - self.window}
+                              if r in self._held or t > now - self.window}
         if not self._wait(now):
             self._full_logged = False
 
     def _wait(self, now):
         wait = max(0.0, self._blocked_until - now)
         if self.capacity and len(self._sends) + len(self._reservations) >= self.capacity:
-            stamps = list(self._sends) + list(self._reservations.values())
+            # A held slot becomes a send no earlier than now, so it frees no
+            # earlier than one window from now, however old its booking is.
+            stamps = list(self._sends) + [now if r in self._held else t
+                                          for r, t in self._reservations.items()]
             # If capacity was reduced, enough entries must expire to get below it.
             frees = sorted(stamps)[len(stamps) - self.capacity] + self.window
             wait = max(wait, frees - now)
@@ -90,6 +99,31 @@ class ProviderQuota:
     def release(self, token):
         with self._lock:
             self._reservations.pop(token, None)
+            self._held.discard(token)
+            self._prune(self._clock())
+
+    def hold(self, token):
+        """Keeps a queued call's reservation booked while it waits.
+
+        A reservation normally expires one window after it was booked, so a
+        leaked one cannot block the provider for good. A call that waits in
+        the provider queue for longer than that is not a leak: losing its
+        slot there handed it to the next fresh ``resolve_llm`` and left the
+        older call to find the window full at dequeue, again and again.
+        ``ProviderQueue.submit`` holds the reservation for the time the call
+        is in the queue and calls ``unhold`` when it leaves. Returns False
+        when the token is no longer booked (expired before the hand-off)."""
+        with self._lock:
+            self._prune(self._clock())
+            if token is None or token not in self._reservations:
+                return False
+            self._held.add(token)
+            return True
+
+    def unhold(self, token):
+        """The call left the queue: an unsent reservation expires by age again."""
+        with self._lock:
+            self._held.discard(token)
             self._prune(self._clock())
 
     def wait_for_send(self, reservation=None):
@@ -110,6 +144,7 @@ class ProviderQuota:
             if self._blocked_until > now or (not reserved and self._wait(now)):
                 raise QuotaUnavailable('Provider rate limit reached locally')
             self._reservations.pop(reservation, None)
+            self._held.discard(reservation)
             if self.capacity:
                 self._sends.append(now)
 

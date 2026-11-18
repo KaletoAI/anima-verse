@@ -39,6 +39,8 @@ For Infermatic's whole-key limit, use **9**, **60**, and **1** respectively.
 The sliding window counts actual LLM HTTP requests, including streaming,
 continuations and retries, across every model of that provider. Routing reserves
 the first request slot; a full provider is skipped for the next task-chain entry.
+A reservation stays booked while its call waits in the provider queue, however long
+the lanes keep it there; an unsent reservation outside the queue expires after one window.
 If the whole chain is blocked solely by quota, supported callers wait for the
 earliest slot. HTTP 429 gates the provider until Retry-After (otherwise the
 window end, or 60 seconds with no configured quota), without a health cooldown.

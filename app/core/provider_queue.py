@@ -502,15 +502,28 @@ class ProviderQueue:
             seq = self._seq_counter
             self._pending_tasks.append(task)
 
+        # The quota slot routing booked for this call stays booked while the
+        # call waits here, however long the lanes keep it: an expired booking
+        # went to the next fresh resolve and left this older call deferred
+        # behind every newer one (review 11#4). Released by age again once
+        # the call is out of the queue without having sent.
+        quota = getattr(llm, "provider_quota", None)
+        reservation = getattr(llm, "quota_reservation", None)
+        held = quota is not None and quota.hold(reservation)
+
         self._queue.put((priority, seq, task))
         label_suffix = f" label={label}" if label else ""
         logger.info("[%s] Eingereicht: %s (%s) prio=%d agent=%s%s",
                     self._queue_name, task.task_id, task_type, priority, agent_name, label_suffix)
 
-        self._ensure_workers()
+        try:
+            self._ensure_workers()
 
-        # Block until worker sets the result
-        task._done_event.wait()
+            # Block until worker sets the result
+            task._done_event.wait()
+        finally:
+            if held:
+                quota.unhold(reservation)
 
         # Remove from pending
         with self._lock:
