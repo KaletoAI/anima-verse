@@ -33,7 +33,10 @@ Expectations, derived by hand from § 6.5 and ``garments.HUB_JOBS``:
      worn, its hair in the body mesh → no candidate; the world default set
      to "hairdeck" changes no existing hairstyle → still none. Her
      hairstyle switched to "hairdeck" (``set_hairstyle_mode``) → exactly one
-     candidate ``character:Kira`` (Bald is no subject: [H6]): label "Kira ·
+     candidate ``character:Kira`` (the subject; the full key goes on with
+     ``:<hairstyle id>:<token>``, the token sha256 of "<fsig>:<current base
+     sha>", first 12 hex — the hair_fill module docstring) (Bald is no
+     subject: [H6]): label "Kira ·
      Medium blonde hair (HairDeck)" (the hairstyle's name: its text with a
      capital first letter), hub_jobs ``HUB_JOBS["hair:hairdeck"]`` 1 + 0 =
      1, note = run_estimate's "hairdeck 1" (the fit step costs no job and is
@@ -64,6 +67,7 @@ Expectations, derived by hand from § 6.5 and ``garments.HUB_JOBS``:
 
 Fails on 505c3076: ModuleNotFoundError — app.core.improvements.types.hair_fill.
 """
+import hashlib
 import json
 import os
 import shutil
@@ -193,7 +197,13 @@ def main() -> int:
             return typ.find_candidates(typ.validate(params))
 
         def rows(**params):
-            return [(c.key, c.label, c.hub_jobs, c.note) for c in cands(**params)]
+            return [(subject_of(c.key), c.label, c.hub_jobs, c.note) for c in cands(**params)]
+
+        def subject_of(key):
+            return ":".join(key.split(":")[:2])
+
+        def step_key(entry):
+            return store.list_steps(entry)[0]["candidate_key"]
 
         def run_step(entry, key):
             store.mark_running(entry, key)
@@ -216,13 +226,17 @@ def main() -> int:
             check("Kira's hairstyle -> hairdeck", garment_hair.set_hairstyle_mode("Kira", item_id, "hairdeck"), True)
             check("hairdeck", rows(), [("character:Kira", "Kira · Medium blonde hair (HairDeck)", 1,
                                         "hairdeck 1")])
+            check("the key: subject, hairstyle, fit token", [c.key for c in cands()],
+                  [f"character:Kira:{item_id}:" + hashlib.sha256(
+                      f"{gs.garment_fsig('Kira', item_id)}:{base_body.current_base('Kira')[1]}".encode("utf-8")
+                  ).hexdigest()[:12]])
             check("needs_media", typ.needs_media, True)
 
             # --- [H2] ---------------------------------------------------------------
             print("[H2] apply creates the item and runs the chain")
             entry = store.create(typ.id, "Hair", typ.validate({}), "one_shot")["id"]
             check("scan", engine.scan(entry), {"added": 1, "closed": 0})
-            check("handle_step ok", run_step(entry, "character:Kira"), {"ok": True})
+            check("handle_step ok", run_step(entry, step_key(entry)), {"ok": True})
             check("still one hairstyle, worn", ([h["id"] for h in garment_hair.hairstyles("Kira")],
                                                 garment_hair.worn_hair_id("Kira")), ([item_id], item_id))
             check("one run with that item", RUNS, [("Kira", item_id)])
@@ -243,7 +257,7 @@ def main() -> int:
             check("cached_failure", (garments.cached_failure("Kira", item_id) or {}).get("step"), "fit")
             check("no candidate", cands(), [])
             gs.clear_failure("Kira", item_id, fsig)
-            check("cleared: back", [c.key for c in cands()], ["character:Kira"])
+            check("cleared: back", [subject_of(c.key) for c in cands()], ["character:Kira"])
 
             # --- [H4] ---------------------------------------------------------------
             print("[H4] load is busy")
@@ -263,7 +277,7 @@ def main() -> int:
             ANSWER["result"] = {"ok": False, "step": "hairdeck", "error": garments.NO_HAIR_ERROR}
             entry = store.create(typ.id, "Hair", typ.validate({}), "one_shot")["id"]
             check("scan", engine.scan(entry), {"added": 1, "closed": 0})
-            result = run_step(entry, "character:Kira")
+            result = run_step(entry, step_key(entry))
             check("engine reports the refusal", list(result.keys()), ["refused"])
             step = store.list_steps(entry)[0]
             check("step skipped + refused after one attempt",

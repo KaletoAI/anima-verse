@@ -29,6 +29,13 @@ render or model run in progress elsewhere is not a candidate either; met at
 apply time it is busy. Load — the generation guard held, an occasion that
 resolves to nothing right now, a busy backend, the media switch,
 ``HubOpBusy`` — is busy, never an attempt.
+
+The key is ``base:<name>:<base signature>:<prompt fingerprint>`` — the
+current ``base_body.prompt_fingerprint``, what ``prompts_current`` compares
+the stored front against. A standing entry therefore offers a base whose
+prompt texts changed AGAIN after its refresh as a new step, never one whose
+step is done while the texts stay. A key of the older shape ``base:<name>``
+still parses (``_parse``).
 """
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -49,8 +56,8 @@ def _profile(name: str) -> Dict[str, Any]:
 
 
 def _parse(key: str) -> str:
-    """``base:<name>`` → ``name``."""
-    return key.split(":", 1)[1]
+    """``base:<name>[:<signature>:<fingerprint>]`` → ``name`` (a name holds no ":")."""
+    return key.split(":")[1]
 
 
 def _blocker(name: str) -> Tuple[str, str]:
@@ -170,12 +177,15 @@ class BaseRefresh(ImprovementType):
     # --- candidates ------------------------------------------------------------
 
     def find_candidates(self, params: Dict[str, Any]) -> List[Candidate]:
+        from app.core import base_body
         out: List[Candidate] = []
         for name in self._names(params):
-            cost = _judge(name, _profile(name))
+            profile = _profile(name)
+            cost = _judge(name, profile)
             if cost is None:
                 continue
-            out.append(Candidate(f"base:{name}", _label(name, cost["plan"]),
+            token = f"{cost['plan'].get('signature') or ''}:{base_body.prompt_fingerprint(name, profile=profile)}"
+            out.append(Candidate(f"base:{name}:{token}", _label(name, cost["plan"]),
                                  hub_jobs=cost.get("hub_jobs"), note=str(cost.get("note") or "")))
         return sorted(out, key=lambda c: (c.label.lower(), c.key))
 

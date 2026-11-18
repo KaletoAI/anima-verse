@@ -18,13 +18,19 @@ No automatic re-spend: a persisted chain failure of the item's current fsig
 HairDeck's ``NO_HAIR_ERROR``, a gate, any non-load failure — raises
 ``CandidateRefused``. Load (a run queued or in flight, an occasion that
 resolves to nothing right now, a chain result ``retry_later``) is busy.
+
+The key is ``character:<name>:<hairstyle id>:<token>``; the token is
+``garment_fill.fit_token`` — the fsig and the base model the fit is missing
+under. A standing entry therefore offers a character whose hair goes missing
+AGAIN under other inputs as a new step, never one whose step is done while
+its inputs stay. A key of the older shape ``character:<name>`` still parses.
 """
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.improvements.base import (Candidate, CandidateBusy, ImprovementType,
                                         ParamField)
 from app.core.improvements.types import subjects
-from app.core.improvements.types.garment_fill import _in_flight, _judge
+from app.core.improvements.types.garment_fill import _in_flight, _judge, fit_token
 
 #: The occasions each hair mode renders on (spec § 5.3); HairDeck's job
 #: runs on the ``hair_mesh`` occasion (``ImageService.generate_hair``).
@@ -105,19 +111,20 @@ class HairFill(ImprovementType):
             item_id, label = subject
             from app.core import garments
             est = garments.run_estimate(name, item_id, profile=profile)
-            out.append(Candidate(f"character:{name}", f"{name} · {label} (HairDeck)",
+            out.append(Candidate(f"character:{name}:{item_id}:{fit_token(name, profile, item_id)}",
+                                 f"{name} · {label} (HairDeck)",
                                  hub_jobs=est.get("hub_jobs"), note=str(est.get("note") or "")))
         return sorted(out, key=lambda c: (c.label.lower(), c.key))
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
-        name = candidate.key.split(":", 1)[1]
+        name = candidate.key.split(":")[1]
         return name not in self._names(params) or self._wanted(name, _profile(name)) is None
 
     # --- apply -----------------------------------------------------------------
 
     def apply(self, candidate: Candidate, params: Dict[str, Any], task_id: str) -> None:
         from app.core import garments
-        name = candidate.key.split(":", 1)[1]
+        name = candidate.key.split(":")[1]
         # Made, refused or taken off meanwhile: nothing to spend — the next
         # scan closes the step.
         subject = _subject(name, _profile(name))

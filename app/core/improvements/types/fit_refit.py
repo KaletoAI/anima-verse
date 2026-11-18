@@ -20,7 +20,20 @@ body as stored). Only the explicit paths (the Wardrobe) spend such a fit
 again, as everywhere else. The too-small refusals of ``refused_fits`` /
 ``refused_body_fits`` ARE failure records; they are listed by those listers
 until their one widened retry stamps them.
+
+The key is ``character:<name>:<token>``; the token (``version_token``) is
+what the listers compare the stored records against: the code versions
+(``garment_fit.FIT_VERSION``, ``SCALE_RETRY_VERSION``,
+``footwear_insole.INSOLE_VERSION``, ``outfit_body_posture.
+POSTURE_MATCH_VERSION``) and the current base model. A standing entry
+therefore offers a character again after a version bump or a new base made
+its fits stale AGAIN, never while those stay (the face_cleanup_rerun
+pattern). Not covered: a refusal recorded later under the same versions and
+base (an explicit Wardrobe run) — the boot sweep retries it. A key of the
+older shape ``character:<name>`` still parses (``_name``).
 """
+import hashlib
+import json
 from typing import Any, Dict, List, Tuple
 
 from app.core.improvements.base import Candidate, CandidateBusy, ImprovementType, ParamField
@@ -109,6 +122,20 @@ def _profile(name: str) -> Dict[str, Any]:
     return get_character_profile(name) or {}
 
 
+def _name(key: str) -> str:
+    """``character:<name>[:<token>]`` → ``name`` (a name holds no ":")."""
+    return key.split(":")[1]
+
+
+def version_token(name: str, profile: Dict[str, Any]) -> str:
+    """12 hex over the versions the listers compare and the current base model's sha."""
+    from app.core import base_body, footwear_insole, garment_fit, outfit_body_posture
+    base = base_body.current_base(name, profile=profile)
+    inputs = [garment_fit.FIT_VERSION, garment_fit.SCALE_RETRY_VERSION, footwear_insole.INSOLE_VERSION,
+              outfit_body_posture.POSTURE_MATCH_VERSION, str(base[1] or "") if base else ""]
+    return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+
+
 def _names(params: Dict[str, Any]) -> List[str]:
     """The pipeline roster (a ready base model), narrowed to the chosen one."""
     wanted = params.get("character") or ""
@@ -135,21 +162,23 @@ class FitRefit(ImprovementType):
     def find_candidates(self, params: Dict[str, Any]) -> List[Candidate]:
         out: List[Candidate] = []
         for name in _names(params):
-            work = _work(name, _profile(name))
+            profile = _profile(name)
+            work = _work(name, profile)
             if not work:
                 continue
             n = len(work)
-            out.append(Candidate(f"character:{name}", f"{name} · {n} fit{'' if n == 1 else 's'}: {', '.join(work)}",
+            out.append(Candidate(f"character:{name}:{version_token(name, profile)}",
+                                 f"{name} · {n} fit{'' if n == 1 else 's'}: {', '.join(work)}",
                                  hub_jobs=0, note="CPU only — no hub job"))
         return sorted(out, key=lambda c: (c.label.lower(), c.key))
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
-        name = candidate.key.removeprefix("character:")
+        name = _name(candidate.key)
         return not _work(name, _profile(name))
 
     def apply(self, candidate: Candidate, params: Dict[str, Any], task_id: str) -> None:
         from app.core import garment_refit, outfit_bodies, refit_pool
-        name = candidate.key.removeprefix("character:")
+        name = _name(candidate.key)
         # A garment chain of the character runs or waits: load, and nothing
         # is touched — the posture match below refits garments on the body.
         if garment_refit._busy(name):

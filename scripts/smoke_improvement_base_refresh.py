@@ -45,7 +45,8 @@ the front view, face; rig — normalize and the other Blender steps are CPU):
   + mesh + rig = 6 hub jobs (first attempts; the hand gate may render the
   front up to 2 more times)".
 
-[B1] the note → exactly one candidate ``base:Kira``, label "Kira · base body
+[B1] the note → exactly one candidate ``base:Kira`` (the subject; the full
+     key is ``base:Kira:<bsig>:<fp>`` — the base_refresh module docstring), label "Kira · base body
      · older prompts", hub_jobs 6, the note above; needs_media True.
      Through the engine (one_shot): handle_step → {"ok": True}; four renders
      in BASE_VIEWS order with occasions base_front, base_view ×3 and the
@@ -287,9 +288,13 @@ def main() -> int:
             return typ.find_candidates(typ.validate(params))
 
         def summary(**params):
-            return [(c.key, c.label, c.hub_jobs, c.note) for c in cands(**params)]
+            return [(subject_of(c.key), c.label, c.hub_jobs, c.note) for c in cands(**params)]
 
-        def run_step(entry, key):
+        def subject_of(candidate_key):
+            return ":".join(candidate_key.split(":")[:2])
+
+        def run_step(entry, subject):
+            key = next(s["candidate_key"] for s in store.list_steps(entry) if subject_of(s["candidate_key"]) == subject)
             store.mark_running(entry, key)
             return engine.handle_step({"improvement_id": entry, "candidate_key": key, "_task_id": "t"})
 
@@ -316,6 +321,8 @@ def main() -> int:
             # --- [B1] ---------------------------------------------------------------
             print("[B1] a base with the OLDER_PROMPTS note")
             check("one candidate", summary(), [(key, "Kira · base body · older prompts", 6, note6)])
+            check("the full key: subject, base signature, prompt fingerprint", [c.key for c in cands()],
+                  [f"base:Kira:{bsig}:{fp}"])
             check("needs_media", typ.needs_media, True)
             entry = store.create(typ.id, "Refresh", typ.validate({}), "one_shot")["id"]
             check("scan", engine.scan(entry), {"added": 1, "closed": 0})
@@ -343,7 +350,7 @@ def main() -> int:
             check("refreshed Kira: nothing", cands(), [])
             old_base()
             write_model()
-            check("filter Kira", [c.key for c in cands(character="Kira")], [key])
+            check("filter Kira", [subject_of(c.key) for c in cands(character="Kira")], [key])
             check("filter Mira", cands(character="Mira"), [])
             e = raises("filter Nope", lambda: typ.validate({"character": "Nope"}), ValueError)
             check("filter Nope message", str(e), "invalid value for 'character'")
@@ -356,7 +363,7 @@ def main() -> int:
             check("no front: missing is not older", cands(), [])
             for p in front_files:
                 p.with_name("hidden" + p.suffix).rename(p)
-            check("restored: the candidate is back", [c.key for c in cands()], [key])
+            check("restored: the candidate is back", [subject_of(c.key) for c in cands()], [key])
 
             # --- [B3] ---------------------------------------------------------------
             print("[B3] a failed last attempt is excluded; a failure in apply is terminal")
@@ -369,7 +376,7 @@ def main() -> int:
             check("(a) names the view", "left" in str(e), True)
             clear_status()
             base_body._record("Kira", "front", base_body.hand_gate_warning(3), warning=True)
-            check("(a) a hand-gate warning is no failure", [c.key for c in cands()], [key])
+            check("(a) a hand-gate warning is no failure", [subject_of(c.key) for c in cands()], [key])
             clear_status()
             with base_body._status_lock:
                 base_body._model_failed["Kira"] = {"signature": bsig, "error": "rig failed"}
@@ -397,7 +404,7 @@ def main() -> int:
             for v in base_body.BASE_VIEWS:
                 write_view(v, fp, "2026-11-02T10:00:00+00:00", (1, 2, base_body.BASE_VIEWS.index(v)))
             write_model(front_sha="0" * 64)
-            check("(d) model stale only", [(c.key, c.hub_jobs) for c in cands()], [(key, 2)])
+            check("(d) model stale only", [(subject_of(c.key), c.hub_jobs) for c in cands()], [(key, 2)])
             MODEL["mode"] = "fail"
             e = raises("(d) apply → CandidateRefused", lambda: typ.apply(cands()[0], typ.validate({}), "t"),
                        CandidateRefused)
@@ -462,7 +469,7 @@ def main() -> int:
                   [(v, False, False) for v in base_body.BASE_VIEWS])
             check("the build never called", BUILDS, [])
             check("still a candidate (older prompts)",
-                  [(c.key, c.label) for c in cands()], [(key, "Kira · base body · older prompts")])
+                  [(subject_of(c.key), c.label) for c in cands()], [(key, "Kira · base body · older prompts")])
             store.delete(entry)
 
         with patch.object(expression_regen, "render_character_image", recorder), \
@@ -482,7 +489,7 @@ def main() -> int:
                        CandidateBusy)
                 check(f"{mode}: no model failure", base_body.base_model_info("Kira")["status"], "ready")
                 check(f"{mode}: still a candidate (model)",
-                      [(c.key, c.label) for c in cands()], [(key, "Kira · base body · model built from older views")])
+                      [(subject_of(c.key), c.label) for c in cands()], [(key, "Kira · base body · model built from older views")])
             MODEL["mode"] = "ok"
             check("built twice, nothing rendered", (RENDERS, BUILDS), ([], [(True, bsig, True)] * 2))
 

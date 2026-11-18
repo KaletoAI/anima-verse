@@ -36,7 +36,9 @@ table (front 1 + 1 per other dressed view — its draft; the composite onto
 the base view is CPU work since Task 11g; retexture repaint = CPU):
 
 [B1] the worn model stale, no dressed view → one candidate
-     ``outfit:Kira:<sig>``, label "Kira · Dress · older base" (the outfit's
+     ``outfit:Kira:<sig>`` (the subject; the full key adds ``:<token>``, the
+     token sha256 of "<bsig>:<base model sha>:older_base", first 12 hex — the
+     outfit_rebuild module docstring), label "Kira · Dress · older base" (the outfit's
      piece name, no saved set matches; the reason text of "older_base"),
      hub_jobs 3 (front 1 + back turn 1 + back draft 1, A175), note "older base: views 3 (first
      attempts)".
@@ -263,7 +265,11 @@ def main() -> int:
         def cands(**params):
             return typ.find_candidates(typ.validate(params))
 
-        def run_step(entry, key):
+        def subject_of(candidate_key):
+            return ":".join(candidate_key.split(":")[:3])
+
+        def run_step(entry, subject):
+            key = next(s["candidate_key"] for s in store.list_steps(entry) if subject_of(s["candidate_key"]) == subject)
             store.mark_running(entry, key)
             return engine.handle_step({"improvement_id": entry, "candidate_key": key, "_task_id": "t"})
 
@@ -277,8 +283,13 @@ def main() -> int:
             print("[B1] a worn model on an older base")
             write_model(sig, pieces)
             found = cands()
-            check("one candidate", [(c.key, c.label, c.hub_jobs, c.note) for c in found],
+            check("one candidate", [(subject_of(c.key), c.label, c.hub_jobs, c.note) for c in found],
                   [(key, "Kira · Dress · older base", 3, "older base: views 3 (first attempts)")])
+            bsig_now = base_body.base_signature("Kira")
+            check("the full key: subject + the base and reason token", [c.key for c in found],
+                  [f"{key}:" + hashlib.sha256(
+                      f"{bsig_now}:{base_body.base_model_sha256('Kira', bsig_now)}:older_base".encode("utf-8")
+                  ).hexdigest()[:12]])
             check("needs_media", typ.needs_media, True)
 
             # --- [B2] ---------------------------------------------------------------
@@ -305,7 +316,7 @@ def main() -> int:
             check("no candidate", cands(), [])
             with base_body._status_lock:
                 base_body._outfit_failed.pop(("Kira", sig), None)
-            check("cleared: the candidate is back", [c.key for c in cands()], [key])
+            check("cleared: the candidate is back", [subject_of(c.key) for c in cands()], [key])
 
             # --- [B4] ---------------------------------------------------------------
             print("[B4] the model guard held / no route is load")
@@ -353,7 +364,7 @@ def main() -> int:
             with patch.object(base_body, "variant_current", return_value=False):
                 found = cands()
             check("views current (detail_changed): candidate at 0",
-                  [(c.key, c.hub_jobs, c.label.endswith("other body detail")) for c in found], [(key, 0, True)])
+                  [(subject_of(c.key), c.hub_jobs, c.label.endswith("other body detail")) for c in found], [(key, 0, True)])
             model_refs.set_auto_kinds("Kira", {"tpose": True})
 
             # --- [B7] ---------------------------------------------------------------
@@ -371,7 +382,7 @@ def main() -> int:
             write_model(sig2, {"neck": scarf})
             check("worn scope: nothing (the worn model is current)", cands(), [])
             found = cands(scope="saved")
-            check("saved scope: Evening only", [(c.key, c.label, c.hub_jobs) for c in found],
+            check("saved scope: Evening only", [(subject_of(c.key), c.label, c.hub_jobs) for c in found],
                   [(f"outfit:Kira:{sig2}", "Kira · Evening · older base", 3)])
             typ.apply(found[0], typ.validate({"scope": "saved"}), "t")
             check("non-worn: rendered the batch way, then built", CALLS,
@@ -414,7 +425,7 @@ def main() -> int:
              patch("app.imagegen.routing.explain_occasion", explain), \
              patch("app.imagegen.service.get_image_service", lambda: svc), \
              patch("app.imagegen.routing.run_routed", busy_backend):
-            check("views needed: cost 3", [(c.key, c.hub_jobs) for c in cands()], [(key, 3)])
+            check("views needed: cost 3", [(subject_of(c.key), c.hub_jobs) for c in cands()], [(key, 3)])
             print("[B9a] a busy backend through the engine")
             entry = store.create(typ.id, "Rebuild", typ.validate({}), "one_shot")["id"]
             check("scan", engine.scan(entry), {"added": 1, "closed": 0})
@@ -426,7 +437,7 @@ def main() -> int:
             check("one routed render, the dressed front", routed, ["outfit_front"])
             check("the build never called", CALLS, [])
             check("no failure recorded, the stage ended", failure(sig), (None, None))
-            check("still a candidate", [c.key for c in cands()], [key])
+            check("still a candidate", [subject_of(c.key) for c in cands()], [key])
             store.delete(entry)
 
             print("[B9b] the media switch off")
@@ -444,7 +455,7 @@ def main() -> int:
             drop_views(sig2)
             write_model(sig2, {"neck": scarf})
             found = cands(scope="saved")
-            check("saved scope: Evening, views needed", [(c.key, c.hub_jobs) for c in found],
+            check("saved scope: Evening, views needed", [(subject_of(c.key), c.hub_jobs) for c in found],
                   [(f"outfit:Kira:{sig2}", 3)])
             raises("busy → CandidateBusy", lambda: typ.apply(found[0], typ.validate({"scope": "saved"}), "t"),
                    CandidateBusy)
@@ -458,7 +469,7 @@ def main() -> int:
                 p.unlink()
             write_model(sig, pieces)
             found = cands()
-            check("worn: only the back missing, cost 3 (whole set)", [(c.key, c.hub_jobs) for c in found], [(key, 3)])
+            check("worn: only the back missing, cost 3 (whole set)", [(subject_of(c.key), c.hub_jobs) for c in found], [(key, 3)])
             raises("busy → CandidateBusy", lambda: typ.apply(found[0], typ.validate({}), "t"), CandidateBusy)
             check("one routed render, the back's turn (A175: turn before draft)", routed, ["outfit_back_turn"])
             check("no failure recorded", failure(sig), (None, None))

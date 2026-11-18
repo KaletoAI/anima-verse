@@ -26,7 +26,10 @@ Derived by hand from the candidate rule and ``refit_character``:
      current fsig with ``fit_version`` 14 (FV - 2 until A198 bumped FV to 19: 17 is kept) 
      (two behind:
      one behind without an opening Ruling A51 could change stays current) → ``outdated_fits`` lists it →
-     exactly one candidate ``character:Kira``, label "Kira · 1 fit: Dress"
+     exactly one candidate ``character:Kira:<token>`` (KEY: the token is
+     sha256 of the JSON ``[FIT_VERSION, SCALE_RETRY_VERSION, INSOLE_VERSION,
+     POSTURE_MATCH_VERSION, <current base sha>]``, sorted keys, first 12 hex —
+     the fit_refit module docstring), label "Kira · 1 fit: Dress"
      (one unit → singular), hub_jobs 0, note "CPU only — no hub job".
      ``needs_media`` False. The parameter ``character=Kira`` lists the same;
      ``character=Nora`` (a plain profile without a base model — on the
@@ -38,7 +41,7 @@ Derived by hand from the candidate rule and ``refit_character``:
 [F4] The media switch OFF (``engine.media_generation_enabled`` False), the
      engine enabled (idle 15 min = 900 s), the user idle 960 s →
      ``engine.tick()`` submits THIS entry's step (reason "ok", the task
-     payload ``{improvement_id, candidate_key: "character:Kira"}``)
+     payload ``{improvement_id, candidate_key: KEY}``)
      — ``needs_media`` False lets it pass the switch.
 [F2] That task handled (``handle_step``) with the switch still off →
      {"ok": True}: the posture match ran once, ``_fit`` once for the Dress,
@@ -62,6 +65,7 @@ Derived by hand from the candidate rule and ``refit_character``:
 
 Fails on d4c95738: ModuleNotFoundError — app.core.improvements.types.fit_refit.
 """
+import hashlib
 import json
 import os
 import shutil
@@ -167,6 +171,10 @@ def main() -> int:
         base = base_body.current_base("Kira")
         FV = garment_fit.FIT_VERSION["clothing"]
         STALE = 14   # below every version the chain keeps current (A198: FV - 2 = 17 is kept without a seeded opening)
+        from app.core import footwear_insole, outfit_body_posture
+        KEY = "character:Kira:" + hashlib.sha256(json.dumps(
+            [garment_fit.FIT_VERSION, garment_fit.SCALE_RETRY_VERSION, footwear_insole.INSOLE_VERSION,
+             outfit_body_posture.POSTURE_MATCH_VERSION, base[1]], sort_keys=True).encode("utf-8")).hexdigest()[:12]
         fit = gs.garment_path("Kira", dress, fsig, "fit")
         fit.parent.mkdir(parents=True, exist_ok=True)
         fit.write_bytes(b"OLD-FIT")
@@ -213,9 +221,9 @@ def main() -> int:
               [(dress, "clothing", fsig, gs.EDIT_CHAIN)])
         found = cands()
         check("one candidate", [(c.key, c.label, c.hub_jobs, c.note) for c in found],
-              [("character:Kira", "Kira · 1 fit: Dress", 0, "CPU only — no hub job")])
+              [(KEY, "Kira · 1 fit: Dress", 0, "CPU only — no hub job")])
         check("needs_media False", typ.needs_media, False)
-        check("character=Kira lists the same", [c.key for c in cands(character="Kira")], ["character:Kira"])
+        check("character=Kira lists the same", [c.key for c in cands(character="Kira")], [KEY])
         check("Nora (no ready base model) is never a subject", cands(character="Nora"), [])
 
         # --- [F3] -------------------------------------------------------------------
@@ -225,8 +233,8 @@ def main() -> int:
         with garments._lock:
             garments._active.add("Kira")
         try:
-            store.mark_running(entry, "character:Kira")
-            result = engine.handle_step({"improvement_id": entry, "candidate_key": "character:Kira",
+            store.mark_running(entry, KEY)
+            result = engine.handle_step({"improvement_id": entry, "candidate_key": KEY,
                                          "_task_id": "t"})
         finally:
             with garments._lock:
@@ -239,7 +247,7 @@ def main() -> int:
         # --- [F4] + [F2] ------------------------------------------------------------
         print("[F4] the media switch off: the tick submits this CPU-only step")
         store.set_order([entry])
-        engine._undefer(entry, "character:Kira")     # [F3]'s busy deferral (BUSY_DEFER_S) is over
+        engine._undefer(entry, KEY)     # [F3]'s busy deferral (BUSY_DEFER_S) is over
         store.set_settings(True, 15)                 # the engine on, idle threshold 15 min = 900 s
         user_activity._set_for_test(960)             # idle 960 s > 900 s
         with patch("app.core.improvements.engine.media_generation_enabled", return_value=False):
@@ -248,11 +256,11 @@ def main() -> int:
             tasks = step_tasks()
             check("submitted, reason ok",
                   (result["reason"], bool(result["submitted"]), tasks[-1]["payload"] if tasks else None),
-                  ("ok", True, {"improvement_id": entry, "candidate_key": "character:Kira"}))
+                  ("ok", True, {"improvement_id": entry, "candidate_key": KEY}))
 
             print("[F2] apply refits on the CPU, no service call")
             worker_done(result["submitted"])
-            done = engine.handle_step({"improvement_id": entry, "candidate_key": "character:Kira",
+            done = engine.handle_step({"improvement_id": entry, "candidate_key": KEY,
                                        "_task_id": result["submitted"]})
         check("handle_step ok", done, {"ok": True})
         check("posture match ran once", POSTURE, ["Kira"])

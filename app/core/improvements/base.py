@@ -5,7 +5,10 @@ from typing import Any, Dict, List, Optional
 
 @dataclass(frozen=True)
 class Candidate:
-    key: str      # stable + unique per type, e.g. "character:Mira"
+    # Stable + unique per type, e.g. "character:Mira:<token>". A scan inserts only NEW keys and never re-opens a
+    # done step, so a type whose subject can go stale again puts the token that makes its work due (a version,
+    # a signature, a fingerprint of what ``is_done`` compares) into the key: a re-stale is a new key, a new step.
+    key: str
     label: str    # display
     # Estimated hub jobs the step will submit on its FIRST attempts (a chain
     # may spend one more per refused attempt — the note says so where it

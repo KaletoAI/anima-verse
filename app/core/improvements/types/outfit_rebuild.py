@@ -29,7 +29,17 @@ terminal. Where the dressed views must be rendered and the character's
 outfit change would not render them either). Load — the model guard held, a
 build running, an occasion that resolves to nothing right now, a busy
 backend, the media switch, ``HubOpBusy`` — is busy, never an attempt.
+
+The key is ``outfit:<name>:<sig>:<token>``; the token (``stale_token``) is
+the base body the model is judged against (signature and model sha, what
+``built_on_current_base`` compares) and the ``stale_reason``. A standing
+entry therefore offers an outfit that goes stale AGAIN on a newer base, or
+for another reason, as a new step; one whose step is done stays done while
+both stay. Not covered: the same reason a second time on the same base (a
+second figure change) — that subject carries no stamp of its own here. A key
+of the older shape ``outfit:<name>:<sig>`` still parses (``_parse``).
 """
+import hashlib
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.improvements.base import (Candidate, CandidateBusy, CandidateRefused, ImprovementType,
@@ -51,9 +61,17 @@ def _profile(name: str) -> Dict[str, Any]:
 
 
 def _parse(key: str) -> Tuple[str, str]:
-    """``outfit:<name>:<sig>`` → ``(name, sig)`` (a signature never holds ":")."""
-    name, sig = key.split(":", 1)[1].rsplit(":", 1)
-    return name, sig
+    """``outfit:<name>:<sig>[:<token>]`` → ``(name, sig)`` (no part holds ":")."""
+    parts = key.split(":")
+    return parts[1], parts[2] if len(parts) > 2 else ""
+
+
+def stale_token(name: str, reason: Optional[str]) -> str:
+    """12 hex over the current base body (signature, model sha) and the stale reason."""
+    from app.core import base_body
+    bsig = base_body.base_signature(name)
+    identity = f"{bsig}:{base_body.base_model_sha256(name, bsig)}:{reason or ''}"
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
 
 
 def _outfits(name: str, scope: str) -> List[Tuple[str, str]]:
@@ -190,7 +208,9 @@ class OutfitRebuild(ImprovementType):
                 if judged is None:
                     continue
                 info, cost = judged
-                out.append(Candidate(f"outfit:{name}:{sig}", _label(name, sig, saved, info.get("stale_reason")),
+                reason = info.get("stale_reason")
+                out.append(Candidate(f"outfit:{name}:{sig}:{stale_token(name, reason)}",
+                                     _label(name, sig, saved, reason),
                                      hub_jobs=cost.get("hub_jobs"), note=str(cost.get("note") or "")))
         return sorted(out, key=lambda c: (c.label.lower(), c.key))
 

@@ -18,7 +18,10 @@ smoke_footwear_fit's business. Kira and Mira are on the pipeline with a ready
 base (``model3d/<bsig>.glb`` + sidecar rig mixamo). Clothing [G7] patches
 ``garments.run_garment`` with a recorder that writes an accepted fit.
 
-Derived by hand from the candidate rule and the chain:
+Derived by hand from the candidate rule and the chain. A key ends in its
+fit token (``garment_fill`` module docstring); the checks name the subject —
+the key without that last part — and [G7] checks the clothing token itself:
+sha256 of "<fsig>:<current base sha>", first 12 hex.
 
 [G1] Both wear the heels, no source yet → exactly one candidate
      ``footwear:<heels>`` (one chain per item), label "Heels · 2 wearers",
@@ -53,6 +56,7 @@ Derived by hand from the candidate rule and the chain:
 
 Fails on 193321cf: ModuleNotFoundError — app.core.improvements.types.garment_fill.
 """
+import hashlib
 import json
 import os
 import shutil
@@ -203,6 +207,9 @@ def main() -> int:
         def cands(**params):
             return typ.find_candidates(typ.validate(params))
 
+        def subject_of(key):
+            return key.rsplit(":", 1)[0]
+
         def fit_state(name, iid):
             base = base_body.current_base(name)
             return garment_footwear.fit_state(name, iid, gs.garment_fsig(name, iid), base[1])
@@ -216,7 +223,7 @@ def main() -> int:
 
             print("[G1] one candidate per footwear item")
             found = cands()
-            check("exactly one candidate", [c.key for c in found], [f"footwear:{heels}"])
+            check("exactly one candidate", [subject_of(c.key) for c in found], [f"footwear:{heels}"])
             c = found[0]
             check("label counts the wearers", c.label, "Heels · 2 wearers")
             check("hub_jobs: source 1 + empty 1 + mesh 1", c.hub_jobs, 3)
@@ -242,7 +249,7 @@ def main() -> int:
             svc.mesh_fails = True
             before = svc.counts()
             found = cands()
-            check("pumps listed", [c.key for c in found], [f"footwear:{pumps}"])
+            check("pumps listed", [subject_of(c.key) for c in found], [f"footwear:{pumps}"])
             e = raises("apply raises CandidateRefused", lambda: typ.apply(found[0], typ.validate({}), "t"),
                        CandidateRefused, "mesh — ")
             check("counters moved by (1, 1, 1)",
@@ -257,9 +264,11 @@ def main() -> int:
             wear("Mira", mules)
             entry = store.create(typ.id, "Fill", typ.validate({}), "one_shot")["id"]
             check("scan lists the mules", engine.scan(entry), {"added": 1, "closed": 0})
-            store.mark_running(entry, f"footwear:{mules}")
+            mules_key = store.list_steps(entry)[0]["candidate_key"]
+            check("the step names the mules", subject_of(mules_key), f"footwear:{mules}")
+            store.mark_running(entry, mules_key)
             meshes_before = svc.meshes
-            result = engine.handle_step({"improvement_id": entry, "candidate_key": f"footwear:{mules}",
+            result = engine.handle_step({"improvement_id": entry, "candidate_key": mules_key,
                                          "_task_id": "t"})
             check("engine reports the refusal", list(result.keys()), ["refused"])
             step = store.list_steps(entry)[0]
@@ -269,7 +278,7 @@ def main() -> int:
             check("rescan closes nothing, the step stays skipped",
                   (engine.scan(entry), store.list_steps(entry)[0]["status"]),
                   ({"added": 0, "closed": 0}, "skipped"))
-            check("retry refused", store.retry_step(entry, f"footwear:{mules}"), False)
+            check("retry refused", store.retry_step(entry, mules_key), False)
             check("the entry is done, not deleted", store.get(entry)["status"], "done")
             check("no further mesh call", svc.meshes - meshes_before, 1)
             svc.mesh_fails = False
@@ -279,11 +288,11 @@ def main() -> int:
             wear("Mira", boots)
             svc.mesh_raise = BackendBusyError("FakeMesh is busy")
             found = cands()
-            check("boots listed", [c.key for c in found], [f"footwear:{boots}"])
+            check("boots listed", [subject_of(c.key) for c in found], [f"footwear:{boots}"])
             raises("apply raises CandidateBusy", lambda: typ.apply(found[0], typ.validate({}), "t"),
                    CandidateBusy, "busy")
             check("refused_step None", footwear_source.refused_step(boots), None)
-            check("listed again on rescan", [c.key for c in cands()], [f"footwear:{boots}"])
+            check("listed again on rescan", [subject_of(c.key) for c in cands()], [f"footwear:{boots}"])
             svc.mesh_raise = None
 
             print("[G5] an unresolved occasion waits before any hub call")
@@ -300,9 +309,9 @@ def main() -> int:
             clogs = shoe_item("Clogs")
             wear("Kira", clogs)
             check("Mira holds the clogs", inventory.add_to_inventory("Mira", clogs), True)
-            worn = [c for c in cands(scope="worn") if c.key == f"footwear:{clogs}"]
+            worn = [c for c in cands(scope="worn") if subject_of(c.key) == f"footwear:{clogs}"]
             check("worn: one wearer", (worn[0].label, worn[0].note.split(" · ")[0]), ("Clogs · 1 wearer", "Kira"))
-            held = [c for c in cands(scope="held") if c.key == f"footwear:{clogs}"]
+            held = [c for c in cands(scope="held") if subject_of(c.key) == f"footwear:{clogs}"]
             check("held: two wearers", (held[0].label, held[0].note.split(" · ")[0]),
                   ("Clogs · 2 wearers", "Kira, Mira"))
             check("kind footwear only", {c.key.split(":")[0] for c in cands(kind="footwear")}, {"footwear"})
@@ -340,8 +349,11 @@ def main() -> int:
             gs.clear_failure("Kira", dress, fsig)
             found = clothing()
             check("nothing cached: the dress is a candidate",
-                  [(c.key, c.label, c.hub_jobs, c.note) for c in found],
+                  [(subject_of(c.key), c.label, c.hub_jobs, c.note) for c in found],
                   [(f"clothing:Kira:{dress}", "Kira · Dress", 7, "worn 2 + ghost 2 + cutout 2 + mesh 1")])
+            check("its token: the fsig and the current base sha",
+                  found[0].key.rsplit(":", 1)[1] if found else None,
+                  hashlib.sha256(f"{fsig}:{base[1]}".encode("utf-8")).hexdigest()[:12])
             check("Nora (no ready base model) is never a subject", clothing(character="Nora"), [])
             runs = []
 

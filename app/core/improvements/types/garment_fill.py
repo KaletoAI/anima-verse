@@ -16,7 +16,16 @@ refused raises ``CandidateRefused`` — terminal, the step is never re-spent
 by the engine. Load (a chain result ``retry_later``, an occasion that
 resolves to nothing right now, a run already queued or in flight) is
 ``CandidateBusy``.
+
+The key carries the token that makes the work due (``fit_token``: the fsig and
+the base model a fit is missing under) — ``clothing:<name>:<item>:<token>``,
+``footwear:<item>:<token>`` (over every wanting wearer's). A standing entry
+therefore offers a piece whose fit goes missing AGAIN under other inputs (an
+item edit, a rebuilt base) as a new step; a piece whose step is done is not
+offered again while its inputs stay. Keys of the older shape without a token
+still parse (``split_key``).
 """
+import hashlib
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.improvements.base import (Candidate, CandidateBusy, CandidateRefused, ImprovementType,
@@ -67,6 +76,29 @@ def _in_flight(name: str, item_id: str) -> bool:
     queue = garments.queue_state(name, item_id)
     return bool(queue["queue_running"] == item_id or queue.get("queue_position")
                 or gs.status(name, item_id)["running_step"])
+
+
+def split_key(key: str) -> Tuple[str, str, str]:
+    """``(kind, name, item id)`` of ``clothing:<name>:<item>[:<token>]`` or
+    ``footwear:<item>[:<token>]`` (name "" for footwear; no part holds ":")."""
+    kind, _sep, rest = key.partition(":")
+    parts = rest.split(":")
+    if kind == KIND_CLOTHING:
+        return kind, parts[0], parts[1] if len(parts) > 1 else ""
+    return kind, "", parts[0]
+
+
+def fit_token(name: str, profile: Dict[str, Any], item_id: str) -> str:
+    """12 hex over what ``_fit_missing`` compares: the item's current fsig and
+    the current base model's sha ("" parts when unreadable)."""
+    from app.core import base_body
+    from app.core import garment_store as gs
+    base = base_body.current_base(name, profile=profile)
+    try:
+        fsig = gs.garment_fsig(name, item_id, profile=profile)
+    except ValueError:
+        fsig = ""
+    return hashlib.sha256(f"{fsig}:{base[1] if base else ''}".encode("utf-8")).hexdigest()[:12]
 
 
 def _fit_missing(name: str, profile: Dict[str, Any], item_id: str, kind: str) -> bool:
@@ -171,7 +203,8 @@ class GarmentFill(ImprovementType):
                 if kind != KIND_CLOTHING or not _wants(name, profile, item_id, kind):
                     continue
                 est = garments.run_estimate(name, item_id, profile=profile)
-                out.append(Candidate(f"clothing:{name}:{item_id}", f"{name} · {subjects.item_name(item_id)}",
+                out.append(Candidate(f"clothing:{name}:{item_id}:{fit_token(name, profile, item_id)}",
+                                     f"{name} · {subjects.item_name(item_id)}",
                                      hub_jobs=est["hub_jobs"], note=est["note"]))
         return out
 
@@ -191,7 +224,9 @@ class GarmentFill(ImprovementType):
             # every later wearer finds the item steps done and only fits.
             est = garments.run_estimate(wearers[0], item_id, profile=profiles[wearers[0]])
             n = len(wearers)
-            out.append(Candidate(f"footwear:{item_id}",
+            token = hashlib.sha256(":".join(f"{w}={fit_token(w, profiles[w], item_id)}" for w in wearers)
+                                   .encode("utf-8")).hexdigest()[:12]
+            out.append(Candidate(f"footwear:{item_id}:{token}",
                                  f"{subjects.item_name(item_id)} · {n} wearer{'' if n == 1 else 's'}",
                                  hub_jobs=est["hub_jobs"], note=f"{', '.join(wearers)} · {est['note']}"))
         return out
@@ -208,25 +243,22 @@ class GarmentFill(ImprovementType):
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
         names, _kind, scope = _subjects(params)
-        kind, rest = candidate.key.split(":", 1)
+        kind, name, item_id = split_key(candidate.key)
         if kind == KIND_CLOTHING:
-            name, item_id = rest.split(":", 1)
             return not _wants(name, _profile(name), item_id, KIND_CLOTHING)
-        return not _footwear_wearers(rest, names, scope, {})
+        return not _footwear_wearers(item_id, names, scope, {})
 
     # --- apply -----------------------------------------------------------------
 
     def apply(self, candidate: Candidate, params: Dict[str, Any], task_id: str) -> None:
         from app.core import garments
-        kind, rest = candidate.key.split(":", 1)
+        kind, name, item_id = split_key(candidate.key)
         if kind == KIND_CLOTHING:
-            name, item_id = rest.split(":", 1)
             if _in_flight(name, item_id):
                 raise CandidateBusy(f"{name}: a garment run of {subjects.item_name(item_id)} is in flight")
             _require_routes(KIND_CLOTHING, name)
             _judge(garments.run_garment(name, item_id))
             return
-        item_id = rest
         names, _k, scope = _subjects(params)
         # Refused meanwhile (a click, another wearer's run): nothing to spend —
         # the next scan closes the step.

@@ -414,13 +414,16 @@ def main() -> int:
         # --- [H4] -----------------------------------------------------------------
         print("[H4] hair_fill candidates")
         typ = HairFill()
-        # Deck now wears an item without a fit: its candidate is the worn item ("missing").
+        # Deck now wears an item without a fit: its candidate is the worn item ("missing"). The key's
+        # head is the subject; the hairstyle and its fit token follow (hair_fill module docstring).
+        def subjects_of(candidates):
+            return [":".join(c.key.split(":")[:2]) for c in candidates]
         check("body characters are no candidates",
-              [c.key for c in typ.find_candidates(typ.validate({}))], ["character:Deck"])
+              subjects_of(typ.find_candidates(typ.validate({}))), ["character:Deck"])
         long_id = garment_hair.worn_hair_id("Long")
         check("Long -> hairdeck", garment_hair.set_hairstyle_mode("Long", long_id, "hairdeck"), True)
         check("a HairDeck hairstyle lists Long",
-              [c.key for c in typ.find_candidates(typ.validate({}))], ["character:Deck", "character:Long"])
+              subjects_of(typ.find_candidates(typ.validate({}))), ["character:Deck", "character:Long"])
         check("Long -> body", garment_hair.set_hairstyle_mode("Long", long_id, "body"), True)
 
         # --- [H5] -----------------------------------------------------------------
