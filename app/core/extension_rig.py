@@ -280,7 +280,8 @@ PART_BUILDS = {"attached_part": 14, "inset_part": 9}
 # 4: full weight inside the measured outline itself and inward up to a narrow strip
 # at the sternum, the depth gate follows the underside down to the crease (Ruling A173).
 # mouth_part 1: the skin cut along the measured lip line with a closed pouch behind it (Ruling A203).
-OP_BUILDS = {**PART_BUILDS, "pair_protrusion": 4, "pair_tip": 2, "mouth_part": 1}
+# 2: the shape key ``mouth_open`` (the jaw's turn by the computed share, the upper lip's lift, the dome).
+OP_BUILDS = {**PART_BUILDS, "pair_protrusion": 4, "pair_tip": 2, "mouth_part": 2}
 
 
 def extension_rig_fingerprint(groups, overrides=None):

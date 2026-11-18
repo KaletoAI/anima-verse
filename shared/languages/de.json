@@ -5887,6 +5887,8 @@
     "Opening widened by {cm} cm · {n} vertices moved": "Öffnung um {cm} cm geweitet · {n} Eckpunkte verschoben",
     "Placed at the declared offset": "Am deklarierten Versatz platziert",
     "Placed at the opening the part's build reported": "An der Öffnung platziert, die der Aufbau des Teils gemeldet hat",
+    "Mouth preview": "Mund-Vorschau",
+    "Opens the mouth in the viewer: 0 = closed, 100 % = the jaw fully open ({mm} mm between the lips). A preview only — nothing is saved; in the world a part entering the mouth opens it.": "Öffnet den Mund in der Ansicht: 0 = geschlossen, 100 % = Kiefer ganz offen ({mm} mm zwischen den Lippen). Nur eine Vorschau — nichts wird gespeichert; in der Welt öffnet ein eindringendes Teil den Mund.",
     "Built into the body: the channel is the opening the build cut": "In den Körper gebaut: Der Kanal ist die Öffnung, die der Aufbau geschnitten hat",
     "This channel is built into the body: the wire shows the new values at once, the opening itself follows with the next Build (extension step, local, 0 jobs).": "Dieser Kanal ist in den Körper gebaut: Das Drahtmodell zeigt die neuen Werte sofort, die Öffnung selbst folgt mit dem nächsten Build (Erweiterungs-Schritt, lokal, 0 Jobs).",
     "Mouth channel (Blender)": "Mundkanal (Blender)",

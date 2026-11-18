@@ -21,12 +21,13 @@ up +y, front +z).
     from_rig mouth_channel, accepts attached_part + appendage_chain, depth 0.08, radius 0.02, cone 35, funnel
     0.03, min_length 0, compress_min 0.6, not exposed_only. Another rig, or no model path: not listed.
 [3] resolve_channels with the build's opening {centre (0, 1.55, 0.1), axis (0, -0.6, -0.8), depth 0.06, radius
-    0.03, override {offset_mm [1, 2, 3], radius_scale 1.5, depth_scale 0.75, tilt_deg 10}} and the stored
+    0.03, open_height 0.0365, override {offset_mm [1, 2, 3], radius_scale 1.5, depth_scale 0.75, tilt_deg 10}} and the stored
     override of [1]: the record is the BUILT geometry — a_pos = the centre, b_pos = centre + axis x 0.06 =
     (0, 1.55 - 0.036, 0.1 - 0.048) = (0, 1.514, 0.052), r 0.03 (nothing applied on top: the stored depth scale 0.5
     and radius scale 1.5 would give 0.04 / 0.03 from the declaration and move the centre) — placement "rig",
     ``applied`` = the override the build used with the stored cone 40 (so the panel's preview starts from what
-    is built), cone_deg 40, suppress contains the head capsule.
+    is built), cone_deg 40, suppress contains the head capsule; the build's ``open_height`` 0.0365 (the opening's
+    height with the shape key ``mouth_open`` at 1, part 2) is carried as it is.
     Without an opening (rig not built): no channel, skipped with "Rig mouth_channel is not built on this model".
 [4] The extension step runs the mouth in its own isolated run, after the parts and before the extension bones:
     groups [capture, mouth, inset, attached] -> calls attached_part, inset_part, mouth_part, extension_bones;
@@ -101,7 +102,7 @@ def main():
     check("no motion group", extension_rig.motion_payload("demo", profile={})["groups"] == {})
 
     print("[2] the declaration")
-    opening = {"centre": [0, 1.55, 0.1], "axis": [0, -0.6, -0.8], "depth": 0.06, "radius": 0.03,
+    opening = {"centre": [0, 1.55, 0.1], "axis": [0, -0.6, -0.8], "depth": 0.06, "radius": 0.03, "open_height": 0.0365,
                "override": {"offset_mm": [1, 2, 3], "radius_scale": 1.5, "depth_scale": 0.75, "tilt_deg": 10}}
     state = {"status": "applied", "groups": ["mouth_channel"], "metrics": {"mouth_channel": {"opening": opening}}}
     path = tmp / "model.glb"
@@ -136,6 +137,7 @@ def main():
     check("applied = the build's override, the stored cone", rec.get("applied") == {
         "offset_mm": [1, 2, 3], "radius_scale": 1.5, "depth_scale": 0.75, "cone_deg": 40.0, "tilt_deg": 10.0},
         rec.get("applied"))
+    check("open_height carried for the renderers", rec.get("open_height") == 0.0365, rec.get("open_height"))
     check("cone 40, head capsule suppressed", rec.get("cone_deg") == 40.0 and "head" in rec.get("suppress", []), rec)
     bare, _ = collision_channels.wanted_channels("demo", path, {"rig": "mixamo"}, profile={})
     channels, skipped = collision_channels.resolve_channels(body, fit["capsules"], bare, exposed=lambda e: True)

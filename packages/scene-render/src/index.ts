@@ -245,6 +245,8 @@ export type { FootPlantOptions } from './footPlant'
 // The per-figure runtime of the two-phase frame (Ruling A110): client3d's `Figure` wraps it, the Game-Admin
 // place preview drives it directly — one frame order, one secondary motion, one partner pass.
 export { FigureRuntime, createFigureRuntime } from './figureRuntime'
+export { MOUTH_OPEN_TARGET, MOUTH_OPEN_MARGIN_M, bindMouthOpen, mouthOpenFor } from './mouthOpen'
+export type { MouthOpen } from './mouthOpen'
 export { bindPoseShapes, poseShapeInfluences, validPoseShapeGroup, validPoseShapes } from './poseShapes'
 export type { PoseShapeGroup, PoseShapes, PoseShapesPayload, PoseShapeSample } from './poseShapes'
 export type { FigureRuntimeOptions, ChannelOccupants, FigureInspection, OpeningInspection } from './figureRuntime'

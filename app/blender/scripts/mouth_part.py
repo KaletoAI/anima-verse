@@ -26,8 +26,8 @@ The mesher delivers a face whose mouth is drawn, not open. This op (Ruling A203,
    within the upper wall's rise) and is inner geometry (not reached from the cut through the mesh) is removed.
    Inner geometry under the pouch is not removed: it goes down with the lower wall (5), so nothing stands in the
    open mouth.
-5. Computes each vertex's JAW SHARE w (how much of the jaw's turn about its hinge it takes when the mouth opens;
-   this build uses it to decide what would stand in the open channel, the opening itself follows). It is computed,
+5. OPENS it (part 2): the shape key ``mouth_open`` (0..1, a glTF morph target). Every vertex turns about the jaw's
+   hinge (side axis) by its JAW SHARE w x ``jaw.open_deg``; the upper lip lifts by ``lift``. The share is computed,
    not painted: 1 on the lower rim of the cut and on the chin's front (``share.chin``), 0 on the upper rim (both
    rims meet at 1/2 within ``share.corner`` of the mouth corners), 0 above the upper lip and on the border of the
    lower face (``share.reach``); between them the harmonic interpolation
@@ -86,6 +86,7 @@ DEFAULTS = {
     'clear': {'start': .004, 'margin': .002, 'above': .003, 'below': .003},
     'override': {'offset_mm': [0., 0., 0.], 'radius_scale': 1., 'depth_scale': 1., 'tilt_deg': 0.},
 }
+SHAPE_KEY = 'mouth_open'
 SNAP_M = .00004               # a vertex closer to the line than this is moved off it before the cut
 
 
@@ -583,7 +584,7 @@ def build(group, output):
     rest_up = (rest @ normal)[order]
 
     def in_pouch(p):
-        """``(depth, height, within, widening)`` of a world point over the pouch's middle surface (continued sideways past
+        """``(depth, height, within, widening)`` of a world point over the pouch's middle surface (continued past
         its width) when it lies within the pouch's depth range, else None. Height: + above (the upper wall's
         side), - below; ``within`` = inside the pouch's width less ``clear.margin``."""
         rel_p = np.asarray(p, float) - O
@@ -798,6 +799,19 @@ def build(group, output):
     bm.free()
     body.data.update()
 
+    # The shape key: the jaw's turn by each vertex's share, plus the lift.
+    opened = turned(rest_co, hinge, jaw_share * theta)
+    opened[:, 2] += lift
+    opened += rise
+    if body.data.shape_keys is None:
+        body.shape_key_add(name='Basis', from_mix=False)
+    key = body.data.shape_keys.key_blocks.get(SHAPE_KEY) or body.shape_key_add(name=SHAPE_KEY, from_mix=False)
+    key.slider_min, key.slider_max, key.value = 0., 1., 0.
+    local = np.array([tuple(Mi @ Vector(p)) for p in opened])
+    moved = (jaw_share > 1e-5) | (lift > 1e-7) | (np.abs(rise).sum(1) > 1e-7)
+    for i_ in np.nonzero(moved)[0]:
+        key.data[int(i_)].co = Vector(local[i_])
+
     _common.progress('exporting')
     bpy.ops.export_scene.gltf(filepath=str(output), export_format='GLB', export_apply=False,
                               export_yup=True, export_skins=True, export_animations=True,
@@ -805,16 +819,19 @@ def build(group, output):
     _common.body_meshes_first(output)
     front_shift = np.array([0., -o['offset_mm'][2] / 1000, 0.])
     return {'status': 'applied', 'reason': '',
-            'opening': {'centre': _gltf(O + front_shift), 'axis': _gltf(axis), 'depth': round(D, 4),
+            'opening': {'centre': [round(c, 5) for c in _gltf(O + front_shift)],
+                        'axis': [round(c, 6) for c in _gltf(axis)], 'depth': round(D, 4),
                         'radius': round(R, 4), 'half_width': round(widest, 4),
+                        'open_height': round(float(np.linalg.norm(turned(O[None], hinge, theta)[0] - O)), 4),
                         'override': {'offset_mm': list(o['offset_mm']), 'radius_scale': o['radius_scale'],
                                      'depth_scale': o['depth_scale'], 'tilt_deg': o['tilt_deg']}},
             'lip_line': {'s0': round(s0, 4), 'coef': [round(c, 5) for c in coef], 'contrast': round(m['contrast'], 3),
                          'tracked_half_width': round(m['tracked_half_width'], 4), 'half_width': round(hw, 4),
                          'nose': [round(c, 4) for c in m['nose']], 'chin_z': round(m['chin_z'], 4)},
             'throat_reach': round(reach, 4), 'rim_points': n, 'rings': K,
-            'jaw': {'hinge': _gltf(hinge), 'open_deg': P['jaw']['open_deg'], 'scale': round(jaw_scale, 3)},
-            'torn_faces_removed': len(torn),
+            'jaw': {'hinge': [round(c, 5) for c in _gltf(hinge)], 'open_deg': P['jaw']['open_deg'],
+                    'scale': round(jaw_scale, 3)},
+            'shape_key': SHAPE_KEY, 'moved_vertices': int(moved.sum()), 'torn_faces_removed': len(torn),
             'cleared_faces': cleared, 'pouch_uv': [float(dark_uv[0]), float(dark_uv[1])],
             'pouch_tris': pouch_tris, 'skin_tris': skin_tris, 'rim_segments': len(open_edges),
             'unmatched_open_edges': unmatched}

@@ -23,7 +23,7 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   footPoseMatches, transplantedRestPose, measureClipGround, clipGroundOffset, plantFootPose,
   seatFootLift, createStrandHair, withoutHairGroups, bindCollision, inGarment, transformPoint, linearScale, capsuleWireframe,
   placeCapsuleWireframe, consumerPartnerCapsules, probeCapsules, probeSweepOffset, probeSweptPose, probeSnapshot,
-  PROBE_COLOR, CAPSULE_REGION_COLORS, CHANNEL_GROW, bindChannels, channelCoords, channelWireframe, guideRod, inZone,
+  PROBE_COLOR, CAPSULE_REGION_COLORS, CHANNEL_GROW, bindChannels, bindMouthOpen, mouthOpenFor, MOUTH_CHANNEL_ID, channelCoords, channelWireframe, guideRod, inZone,
   placeChannelWireframe, stepEngagement, bindChannelOpening, OPENING_MARGIN_M, OPENING_FALLOFF_M,
   OPENING_BAND_M, OPENING_SLACK_M, bindPoseShapes, prepareSheerPieces } from '@anima/scene-render'
 import type { PoseShapes, SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm,
@@ -352,7 +352,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   picking = false, onPickPoint, actionAccessPoints, spatialAuthoring = false, onPickGroundPoint,
   frontal = false, onFrontalChange, keepCamera = false,
   areaOutlines, polylines, slots, meshLayout, drawing = false, drawThrough = false,
-  onPolygonFaces, onDrawCancel, leafBbox, collision, showCollision = false, showChannels = false, channelTools = false, footPose = null, clipGroup,
+  onPolygonFaces, onDrawCancel, leafBbox, collision, showCollision = false, showChannels = false, channelTools = false, mouthOpen = 0, footPose = null, clipGroup,
   meshAdjust = null, focus = null, alphaCutoff, strandHair, strandNote, subject = 'model', extensionBones = false,
   companions, onCompanionState, deform = null, resetViewOnDoubleClick = false }:
   { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; statusPanel?: ReactNode; sideToolbar?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
@@ -561,6 +561,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
     /** Ruling A102: the channel display (the Channels toggle, wireframe, grid) and the test rod with its opening
      *  are offered ONLY where this is set — the Base body tab's viewer. Everywhere else they never show. */
     channelTools?: boolean
+    /** Ruling A203: how far the mouth is opened for the preview (0..1; the body's `mouth_open`), live while the
+     *  Channels panel's "Open" slider moves. A rod in the mouth channel opens it further. Nothing is saved. */
+    mouthOpen?: number
     /** THE FIT'S FOOT POSE (`foot_pose` of a footwear fit, footPose.ts of
      *  @anima/scene-render). Applied only when the loaded model carries the
      *  shoes it was fitted for (`footPoseMatches`): the extension is baked into
@@ -695,6 +698,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   const [rodReadout, setRodReadout] = useState<RodReadout | null>(null)
   const channelsRef = useRef({ on: channelsShownOn, rod: rodShownOn, settings: rodSettings, payload: collision ?? null })
   channelsRef.current = { on: channelsShownOn, rod: rodShownOn, settings: rodSettings, payload: collision ?? null }
+  const mouthOpenRef = useRef(mouthOpen)
+  mouthOpenRef.current = mouthOpen
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
   // Triangle/vertex count of the loaded mesh — every preview shows it, so
@@ -1700,9 +1705,13 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             rodLabel.position.set(at[0], at[1], at[2])
           }
         }
+        /** Ruling A203: the body's `mouth_open` (null = none): the panel's preview value, a rod in the mouth more. */
+        const mouth = bindMouthOpen(object)
         /** One frame of the channels and the rod (after the figure's pose is final). */
         const channelFrame = (dt: number) => {
           const state = channelsRef.current
+          mouth?.setManual(mouthOpenRef.current)
+          if (!state.rod) mouth?.setContact(0)
           const wanted = state.on || state.rod ? state.payload : null
           if (wanted !== channelsFor) {
             channelsFor = wanted
@@ -1821,6 +1830,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
                 slack: OPENING_SLACK_M * metre })
               openingFor = target.id
             }
+            // Ruling A203: a rod in the built mouth opens the mouth as far as its thickness needs.
+            mouth?.setContact(target.id === MOUTH_CHANNEL_ID ? mouthOpenFor(rod.radius * rodEngagement.w,
+              channelsFor?.channels?.find(entry => entry.id === MOUTH_CHANNEL_ID)?.open_height ?? 0) : 0)
             const segments: OpeningSegment[] = []
             for (let i = 0; i < links; i++) segments.push({ a: guided.joints[i], b: guided.joints[i + 1], r: rod.radius * metre })
             const opened = opening ? opening.apply(target, segments, { margin: OPENING_MARGIN_M * metre,

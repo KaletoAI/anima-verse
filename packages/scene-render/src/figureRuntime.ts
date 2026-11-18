@@ -39,6 +39,9 @@ import type { SecondaryMotion, SecondaryMotionPayload } from './secondaryMotion'
 import { createGarmentCollision } from './garmentCollision'
 import type { GarmentCollision } from './garmentCollision'
 import { bindPoseShapes } from './poseShapes'
+import { bindMouthOpen, mouthOpenFor } from './mouthOpen'
+import type { MouthOpen } from './mouthOpen'
+import { MOUTH_CHANNEL_ID } from './contactTarget'
 import type { PoseShapes } from './poseShapes'
 import { createStrandHair } from './hairSim'
 import type { StrandHair } from './hairSim'
@@ -90,6 +93,8 @@ export interface FigureInspection {
   /** This figure's chains engaged in a PARTNER's channel: weight w and the chain's largest segment radius (metres). */
   engaged: { partner: string; channel: string; w: number; radius: number }[]
   openings: OpeningInspection[]
+  /** Ruling A203: how far the mouth is open now (0..1); null = this body carries no `mouth_open`. */
+  mouthOpen: number | null
   /** Ruling A139: the point contact targets this figure's bones resolve now (hands, the head stand-in), world. */
   targets: TargetFrame[]
 }
@@ -140,6 +145,9 @@ export class FigureRuntime {
   private openingsOn: Object3D | null = null
   /** What the last opening pass put on each of this figure's channels (`inspect`): per occupied channel. */
   private openingState = new Map<string, OpeningInspection>()
+  /** Ruling A203: the open mouth of the instance shown now (null = its body carries none). */
+  private mouth: { on: Object3D | null; open: MouthOpen | null } = { on: null, open: null }
+  private mouthManual = 0
   private strandPartners = false
   private gpuPartners = false
 
@@ -291,6 +299,42 @@ export class FigureRuntime {
     this.openingsOn = null
   }
 
+  /** The open mouth of the instance shown now (bound on first use, again after a model swap). */
+  private mouthNow(): MouthOpen | null {
+    const inst = this.instance
+    if (this.disposed || !inst) return null
+    if (this.mouth.on !== inst) {
+      this.mouth = { on: inst, open: bindMouthOpen(inst) }
+      this.mouth.open?.setManual(this.mouthManual)
+    }
+    return this.mouth.open
+  }
+
+  /** Ruling A203: open the mouth by hand (a preview slider, an expression), 0..1; contact may open it further. */
+  setMouthOpen(value: number): void {
+    this.mouthManual = Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0
+    this.mouthNow()?.setManual(this.mouthManual)
+  }
+
+  /** The value the mouth is open by now (null = this body has no `mouth_open`). */
+  mouthOpenValue(): number | null {
+    return this.mouthNow()?.value ?? null
+  }
+
+  /** Ruling A203: the chains engaged in this figure's mouth channel open the mouth as far as the thickest of them
+   *  needs (`mouthOpenFor` with the built channel's `open_height`); none = back to the manual value. */
+  private driveMouth(occupants: readonly { channel: string; w: number; segments: readonly OpeningSegment[] }[]): void {
+    const mouth = this.mouthNow()
+    if (!mouth) return
+    let radius = 0
+    for (const occ of occupants) {
+      if (occ.channel !== MOUTH_CHANNEL_ID) continue
+      for (const seg of occ.segments) radius = Math.max(radius, seg.r * occ.w)
+    }
+    const height = this.collisionPayload?.channels?.find(c => c.id === MOUTH_CHANNEL_ID)?.open_height ?? 0
+    mouth.setContact(mouthOpenFor(radius, height))
+  }
+
   /** THE OPENING (Ruling A102/A102b), after every figure's phase B: the other figures' chains engaged in THIS
    *  figure's channels open its surface — each segment's radius × w. An unoccupied channel is restored; an
    *  occupied one is recomputed only when it `changed`, and only while `budget` lasts (one per recompute/bind). */
@@ -298,6 +342,7 @@ export class FigureRuntime {
     budget: { left: number } = { left: Infinity }): void {
     const before = this.openingState
     this.openingState = new Map()
+    this.driveMouth(occupants)
     if (!occupants.length && !this.openings.size) return
     const inst = this.instance
     const channels = this.partnerChannels
@@ -357,6 +402,7 @@ export class FigureRuntime {
       engaged: this.channelOccupants().map(o => ({ partner: o.partner, channel: o.channel, w: o.w,
         radius: o.segments.length ? Math.max(...o.segments.map(seg => seg.r)) : 0 })),
       openings: [...this.openingState.values()].map(o => ({ ...o })),
+      mouthOpen: this.mouthOpenValue(),
       targets: this.disposed ? [] : this.targetsNow(),
     }
   }

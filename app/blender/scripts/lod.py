@@ -142,6 +142,11 @@ def lod(args):
         for obj in _mesh_objects():
             if obj.get("lod_preserve"):
                 continue
+            if obj.data.shape_keys:
+                # A modifier cannot be applied to a mesh with shape keys, and a morph target does not survive a
+                # collapse (its deltas are per source vertex): the reduced tier is the rest shape. What a bone
+                # drives (weights) is kept by the collapse as ever.
+                obj.shape_key_clear()
             guard = _hand_guard(obj) if protect_hands else None
             mod = obj.modifiers.new(name="LOD", type="DECIMATE")
             mod.decimate_type = "COLLAPSE"

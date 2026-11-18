@@ -494,6 +494,8 @@ export function FieldBaseBody({ character, onOpenFigure, onOpenGallery }: {
   const [collisionPreview, setCollisionPreview] = useState<CollisionPayload | null>(null)
   /** Slider preview of the channel settings (CollisionChannels): the stored set with the channel drafts. */
   const [channelsPreview, setChannelsPreview] = useState<CollisionPayload | null>(null)
+  /** Ruling A203: the mouth preview of the Channels panel (0..1), not stored. */
+  const [mouthOpen, setMouthOpen] = useState(0)
   /** The collision step's own button (the Channels panel's link brings it into view). */
   const recomputeRef = useRef<HTMLButtonElement>(null)
   const [recomputing, setRecomputing] = useState(false)
@@ -724,6 +726,7 @@ export function FieldBaseBody({ character, onOpenFigure, onOpenGallery }: {
     <CollisionChannels character={character} collision={model?.collision}
       overrides={info.collision_channels} declarations={info.channel_declarations ?? []}
       disabled={modelBusy || recomputing} onPreview={setChannelsPreview} onSaved={reloadAll} step={collisionStep}
+      mouthOpen={mouthOpen} onMouthOpen={setMouthOpen}
       onShowStep={() => {
         recomputeRef.current?.scrollIntoView({ block: 'nearest' })
         recomputeRef.current?.focus()
@@ -819,6 +822,7 @@ export function FieldBaseBody({ character, onOpenFigure, onOpenGallery }: {
               format="glb" height={600} subject="figure"
               freshness={model.freshness} builtAt={model.created_at}
               collision={collision} showCollision={!!collisionPreview} showChannels={!!channelsPreview} channelTools
+              mouthOpen={mouthOpen}
               motion={ready ? previewMotion : undefined}
               surfacePoints={surfacePoints} />
             {/* Full / Distance (Ruling A45): which stored mesh the viewer and the box show; only once the

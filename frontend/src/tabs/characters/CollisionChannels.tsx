@@ -14,6 +14,8 @@
  * - The declarations are listed one line each: placed at the reported opening / the declared offset, or the plain
  *   reason the shown model has none (covered, no opening, no base model yet). Details on mouse-over.
  * - More than one channel: one sub-tab per channel instead of a long column; the six fields sit in a 3-column grid.
+ * - The mouth's "Open" slider (Ruling A203): a live preview of the body's `mouth_open` in the viewer, with the
+ *   opening's height in millimetres; stored nowhere.
  * - A BUILT channel (the mouth, Ruling A203; `built`): its geometry is part of the body, so a saved offset, radius,
  *   depth or tilt makes the extension step due (the Build applies it, local); a note under the fields says so.
  */
@@ -47,7 +49,7 @@ function Field({ label, shown, value, min, max, step, title, disabled, onChange 
 const GRID3 = { display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '2px 8px' } as const
 
 export function CollisionChannels({ character, collision, overrides, declarations, disabled, onPreview, onSaved, step,
-  onShowStep }: {
+  onShowStep, mouthOpen = 0, onMouthOpen }: {
   character: string
   /** The shown model's capsule set with its channels (`model.collision`). */
   collision: CollisionPayload | null | undefined
@@ -62,6 +64,10 @@ export function CollisionChannels({ character, collision, overrides, declaration
   step?: ModelStep | null
   /** Brings the step's own button ("Recompute collision capsules") into view. */
   onShowStep?: () => void
+  /** Ruling A203: the viewer's mouth preview (0..1) and its setter; the "Open" slider shows for a built channel
+   *  whose record carries `open_height`. A preview only — nothing is stored. */
+  mouthOpen?: number
+  onMouthOpen?: (value: number) => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -110,6 +116,7 @@ export function CollisionChannels({ character, collision, overrides, declaration
     set({ offset_mm: offset })
   }
   const mm = (v: number) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(0)} mm`
+  const openHeight = (collision?.channels ?? []).find(c => c.id === current?.id)?.open_height ?? 0
   const placed = (collision?.channels ?? []).length
   const defaults = Object.fromEntries(declarations.map(d => [d.id, overrideOf(null, d.id, d.cone_deg)]))
   const atDefaults = declarations.every(d => sameOverride(stored[d.id], defaults[d.id]))
@@ -167,6 +174,14 @@ export function CollisionChannels({ character, collision, overrides, declaration
               <Field label={t('Tilt')} shown={`${(draft.tilt_deg ?? 0).toFixed(0)}°`} value={draft.tilt_deg ?? 0}
                 min={-TILT_MAX} max={TILT_MAX} step={1} disabled={busy} onChange={(v) => set({ tilt_deg: v })}
                 title={t('Turns the channel’s direction toward the back (+) or the front (−), in degrees')} />
+            </div>
+          ) : null}
+          {current?.built && onMouthOpen && openHeight > 0 ? (
+            <div style={GRID3} aria-label={t('Mouth preview')}>
+              <Field label={t('Open')} shown={`${Math.round(mouthOpen * 100)} % · ${(mouthOpen * openHeight * 1000).toFixed(0)} mm`}
+                value={mouthOpen} min={0} max={1} step={0.01} disabled={false} onChange={onMouthOpen}
+                title={t('Opens the mouth in the viewer: 0 = closed, 100 % = the jaw fully open ({mm} mm between the lips). A preview only — nothing is saved; in the world a part entering the mouth opens it.')
+                  .replace('{mm}', (openHeight * 1000).toFixed(0))} />
             </div>
           ) : null}
           {current?.built ? (

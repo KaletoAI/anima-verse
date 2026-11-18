@@ -103,6 +103,8 @@ export interface ChannelRecord {
   frame: { side: Vec3; up: Vec3; front: Vec3 }
   placement: 'rig' | 'declared'
   applied: ChannelOverride | null
+  /** A BUILT mouth channel (Ruling A203): the opening's height in metres with the morph `mouth_open` at 1. */
+  open_height?: number
 }
 
 /** The `collision` payload (model meta / model3d info). */

@@ -198,7 +198,7 @@ def _opening(state: Any, rig: str) -> Tuple[Optional[Dict[str, List[float]]], st
         if len(centre) != 3 or len(axis) != 3 or math.hypot(*axis) < 1e-9:
             raise ValueError("opening")
         # What a build that follows the override reports besides (the mouth channel, Ruling A203).
-        built = {key: _number(opening[key], key) for key in ("depth", "radius") if key in opening}
+        built = {key: _number(opening[key], key) for key in ("depth", "radius", "open_height") if key in opening}
         if isinstance(opening.get("override"), dict):
             built["override"] = dict(opening["override"])
     except (TypeError, KeyError, ValueError):
@@ -394,6 +394,9 @@ def resolve_channels(rigged_glb: bytes, capsules: List[Dict[str, Any]], wanted: 
             "min_length": float(entry["min_length"]), "compress_min": float(entry["compress_min"])}
         if entry.get("interaction_kinds") is not None:
             record["interaction_kinds"] = list(entry["interaction_kinds"])
+        if entry.get("built") and "open_height" in entry["opening"]:
+            # The opening's height with the morph ``mouth_open`` at 1 (the renderers open the mouth by it).
+            record["open_height"] = round(float(entry["opening"]["open_height"]), 4)
         record.update({"suppress": suppress,
                        "frame": {key: [round(float(v), 6) for v in frame[key]] for key in ("side", "up", "front")},
                        "placement": placement, "applied": dict(override) if override else None})
