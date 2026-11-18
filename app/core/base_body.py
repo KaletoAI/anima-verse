@@ -695,9 +695,26 @@ def _stored_base_for(character_name: str, identity: str, profile_image: str,
     from app.core.model_refs import get_model_refs_dir
     refs = get_model_refs_dir(character_name)
     try:
-        names = [n for n in os.listdir(refs) if _BASE_FRONT_SIDECAR.match(n)]
+        listing = os.listdir(refs)
     except OSError:
         return None
+    names = sorted(n for n in listing if _BASE_FRONT_SIDECAR.match(n))
+    # Review 08b#7: memoised per character under a key that is everything the answer reads — the arguments, each
+    # front sidecar's stat (size, mtime_ns, inode: its content) and whether its picture is listed.
+    present = set(listing)
+    stats = []
+    for name in names:
+        try:
+            st = os.stat(refs / name)
+        except OSError:
+            stats.append((name,))
+            continue
+        stats.append((name, st.st_size, st.st_mtime_ns, st.st_ino, f"{name[:-len('.json')]}.png" in present))
+    key = (str(refs), identity, profile_image, appearance, tuple(stats))
+    with _status_lock:
+        memo = _stored_base_memo.get(character_name)
+    if memo is not None and memo[0] == key:
+        return memo[1]
     named: List[Tuple[str, str]] = []
     carried: List[Tuple[str, str]] = []
     legacy: List[Tuple[str, str]] = []
@@ -717,10 +734,14 @@ def _stored_base_for(character_name: str, identity: str, profile_image: str,
         first = refs_used.get("input_reference_image_1") if isinstance(refs_used, dict) else None
         if profile_image and first == profile_image:
             legacy.append((stamp, signature))
-    for pool in (named, carried, legacy):
-        if pool:
-            return max(pool)[1]
-    return None
+    found = next((max(pool)[1] for pool in (named, carried, legacy) if pool), None)
+    with _status_lock:
+        _stored_base_memo[character_name] = (key, found)
+    return found
+
+
+#: character -> (key, answer) of ``_stored_base_for`` (review 08b#7: the Figure tab's poll asks several times a tick).
+_stored_base_memo: Dict[str, Tuple[Any, Optional[str]]] = {}
 
 
 def base_signature(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
