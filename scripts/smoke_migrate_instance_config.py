@@ -31,6 +31,17 @@ EXPECTATIONS, derived by hand from the scope rules and the migrations:
     so expression and tpose both use ["flux*"]. Commit 861404c8 adds
     tpose_view as a copy; d4aa4edd adds the local quadruped backend to
     this custom list and seeds rig_creature = ["quadruped-local"].
+    The later copy seeds (``config._seed_routing_copies``: a missing target
+    copies its source once, a missing source seeds nothing), in run order:
+      97a97ad3d  garment_view <- tpose_view = ["flux*"];
+                 mesh_garment <- mesh_humanoid: no source, nothing
+      34526431a  mesh_footwear <- mesh_garment: no source, nothing;
+                 footwear_empty <- garment_view = ["flux*"]
+      a9854ea20  base_front <- tpose, base_view / outfit_front /
+                 outfit_back_draft <- tpose_view: all ["flux*"]
+      c24544018  base_reference <- base_front, outfit_reference <-
+                 outfit_front: ["flux*"]
+      40c105681  outfit_side_draft <- outfit_back_draft: ["flux*"]
   * instance/secrets.json holds the three keys in the by-NAME format
     (config._split_secrets on a named list); instance/config.json has the
     keys blanked.
@@ -178,7 +189,12 @@ EXPECTED_PROVIDERS = [
 ]
 EXPECTED_CHAT = {"chattiness": 0.8, "anti_rep_lookback": 9}
 EXPECTED_ROUTING = {"expression": ["flux*"], "tpose": ["flux*"],
-                    "tpose_view": ["flux*"], "rig_creature": ["quadruped-local"]}
+                    "tpose_view": ["flux*"], "rig_creature": ["quadruped-local"],
+                    # the copy seeds of the module docstring
+                    "garment_view": ["flux*"], "footwear_empty": ["flux*"],
+                    "base_front": ["flux*"], "base_view": ["flux*"], "outfit_front": ["flux*"],
+                    "outfit_back_draft": ["flux*"], "base_reference": ["flux*"],
+                    "outfit_reference": ["flux*"], "outfit_side_draft": ["flux*"]}
 EXPECTED_INSTANCE_SECRETS = {
     "providers": {"Local": {"api_key": "sk-local"}, "Cloud": {"api_key": "sk-cloud"}},
     "image_generation": {"backends": {"flux-a": {"api_key": "img-key"}}},
