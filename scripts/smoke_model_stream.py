@@ -13,7 +13,7 @@ that stream remains suspended, another thread must acquire the publication
 lock within 0.050 seconds. These catch eager read_bytes, strict ETag matching,
 path reopening mid-stream, and holding the publication lock during delivery.
 Version URL construction and replacement before iteration are covered by
-smoke_model_version.py instead.
+smoke_content_version.py [2] instead.
 """
 import asyncio
 import os
@@ -79,7 +79,7 @@ async def check_routes(characters, model3d, directory, source, texture):
             raise AssertionError("model assets must stream without Path.read_bytes")
         return original_read_bytes(path)
 
-    # Isolate outfit selection as in smoke_model_version; keep tier selection,
+    # Isolate outfit selection as in smoke_content_version [2]; keep tier selection,
     # texture lookup, route functions and snapshot delivery real.
     with (patch.object(model3d, "find_model3d_serving", return_value=(source, "exact")),
           patch.object(Path, "read_bytes", forbid_asset_read_bytes)):
