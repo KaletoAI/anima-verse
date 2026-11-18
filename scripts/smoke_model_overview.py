@@ -379,6 +379,26 @@ def main() -> int:
     check("covered current", [r for r in rows_of(out["model"]["steps"]) if r[0] == "covered_variant"],
           [("covered_variant", "done", "without g2")])
     check("model fresh", out["model"]["freshness"]["state"], C)
+    # Review 09b#2: the covered check hashes the prerig through the stat cache, so two
+    # more polls with the prerig file untouched read its bytes 0 times (the old
+    # ``hashlib.sha256(prerig.read_bytes())`` read it once per poll -> 2).
+    prerig_path = models / "prerig" / f"{bsig}.glb"
+    prerig_reads = []
+    real_read_bytes = Path.read_bytes
+
+    def counting_read_bytes(self):
+        if self == prerig_path:
+            prerig_reads.append(1)
+        return real_read_bytes(self)
+    Path.read_bytes = counting_read_bytes
+    try:
+        for _ in range(2):
+            out = mo.annotate_base_info("Ann", {"signature": bsig, "image_meta": {}, "model": {"status": "ready"}})
+    finally:
+        Path.read_bytes = real_read_bytes
+    check("covered check: prerig not re-read per poll", (len(prerig_reads),
+          [r for r in rows_of(out["model"]["steps"]) if r[0] == "covered_variant"]),
+          (0, [("covered_variant", "done", "without g2")]))
     (refs / f"tpose_{bsig}.png").write_bytes(b"front-2 longer")
     out = mo.annotate_base_info("Ann", {"signature": bsig, "image_meta": {}, "model": {"status": "ready"}})
     # Ruling UI3 a: the 3D previews' caption — the model's created_at, else the file's write time.

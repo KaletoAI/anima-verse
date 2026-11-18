@@ -1246,7 +1246,6 @@ def _base_model_path(character_name: str, bsig: str) -> Path:
 def base_model_overview(character_name: str, bsig: str) -> Optional[Dict[str, Any]]:
     """``{steps, freshness}`` of the stored base model of ``bsig``, None
     without one."""
-    import hashlib
     from app.core import base_body
     from app.core.model3d import COVERED_DIR
     from app.core.model_refs import find_ref_image
@@ -1261,10 +1260,9 @@ def base_model_overview(character_name: str, bsig: str) -> Optional[Dict[str, An
         prerig = path.parent / "prerig" / path.name
         recorded = _sidecar(covered).get("source_sha256")
         if prerig.is_file() and recorded:
-            try:
-                covered_current = hashlib.sha256(prerig.read_bytes()).hexdigest() == recorded
-            except OSError:
-                covered_current = None
+            # Stat-cached like every other hash here: the Figure tab polls this every 3 s.
+            digest = base_body.file_sha256(prerig)
+            covered_current = (digest == recorded) if digest else None
     from app.core import collision
     from app.core.extension_tip import tip_smoothing_state
     state = collision.record_state(character_name, path, meta) if meta.get("collision") else {}
