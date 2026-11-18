@@ -10,11 +10,11 @@ router = APIRouter(prefix="/queue", tags=["queue"])
 
 @router.get("/status")
 async def queue_status() -> Dict[str, Any]:
-    """Gibt den kombinierten Status aller Task-Quellen zurueck.
+    """The combined status of every task source.
 
-    Zusammenfuehrung von:
-    - Provider Queues (per-Provider LLM-Calls, Chat-Streaming)
-    - TaskQueue (persistente Background-Tasks + tracked GPU/TTS/Image Tasks)
+    Merges:
+    - the provider queues (per-provider LLM calls, chat streaming)
+    - the TaskQueue (persistent background tasks + tracked GPU/TTS/image tasks)
     """
     import asyncio
     from app.core.provider_manager import get_provider_manager
@@ -31,10 +31,10 @@ async def queue_status() -> Dict[str, Any]:
     # recurring loop stall (event-loop watchdog, 2026-08-23).
     tq_status = await asyncio.to_thread(tq.get_status)
 
-    # Active tracked tasks (running ODER pending) — Image-Gen, TTS, GPU-Tasks
-    # die ausserhalb der TaskQueue laufen aber im Panel sichtbar sein sollen.
-    # status explizit setzen — die running/pending-Queries selektieren die
-    # status-Spalte nicht, sonst kaeme im Frontend nie "running" an.
+    # Active tracked tasks (running OR pending) — image generation, TTS, GPU tasks
+    # that run outside the TaskQueue but must show in the panel. The status is
+    # set explicitly: the running/pending queries do not select the status
+    # column, so the frontend would never see "running" otherwise.
     _active = []
     for t in tq_status.get("running", []) or []:
         if t.get("task_origin") == "tracked":
@@ -61,27 +61,40 @@ async def queue_status() -> Dict[str, Any]:
     }
 
 
+#: 409 detail of a Cancel on a CPU refit that is computing (the TaskPanel shows it, through ``t()``).
+CPU_REFIT_RUNNING = "A CPU re-fit is computing and cannot be stopped — it ends on its own"
+
+
 @router.delete("/tasks/{task_id}")
 def cancel_task(task_id: str) -> Dict[str, Any]:
-    """Bricht einen wartenden oder laufenden Task in der Queue ab."""
+    """Cancel a waiting or running task of the queue. A CPU refit (``refit_pool.TASK_TYPE``) that is computing
+    cannot be stopped — its compute runs on to the end and publishes — so its Cancel is refused with 409
+    (``CPU_REFIT_RUNNING``) instead of marking a row cancelled whose work goes on; a waiting one is cancelled
+    (it does not run)."""
+    from app.core import refit_pool
     from app.core.provider_manager import get_provider_manager
     from app.core.task_queue import get_task_queue
+
+    tq = get_task_queue()
+    if any(t["task_id"] == task_id and t["status"] == "running"
+           for t in tq.list_tasks_of_type(refit_pool.TASK_TYPE)):
+        raise HTTPException(status_code=409, detail=CPU_REFIT_RUNNING)
 
     pm = get_provider_manager()
     cancelled = pm.cancel_task(task_id)
 
     if not cancelled:
-        # Fallback: Tracked tasks (image_generation, etc.)
-        cancelled = get_task_queue().track_cancel(task_id)
+        # Fallback: tracked tasks (image_generation, etc.)
+        cancelled = tq.track_cancel(task_id)
 
     if not cancelled:
         # Queued handler tasks have their own persistent cancellation state.
-        cancelled = get_task_queue().cancel_task(task_id)
+        cancelled = tq.cancel_task(task_id)
 
     if cancelled:
         return {"status": "cancelled", "task_id": task_id}
     return {"status": "not_found", "task_id": task_id,
-            "message": "Task nicht gefunden"}
+            "message": "Task not found"}
 
 
 @router.post("/force-resume")
@@ -111,14 +124,14 @@ async def force_resume_queues() -> Dict[str, Any]:
 
 @router.get("/tasks/status")
 def task_queue_status() -> Dict[str, Any]:
-    """Gibt Status aller persistenten Task-Queues zurück."""
+    """The status of every persistent task queue."""
     from app.core.task_queue import get_task_queue
     return get_task_queue().get_status()
 
 
 @router.post("/tasks/item/{task_id}/retry")
 def retry_bg_task(task_id: str) -> Dict[str, Any]:
-    """Setzt einen fehlgeschlagenen Task auf 'pending' zurück."""
+    """Put a failed task back to 'pending'."""
     from app.core.task_queue import get_task_queue
     ok = get_task_queue().retry_task(task_id)
     if ok:
@@ -138,7 +151,7 @@ def clear_bg_tasks(hours: float = 24.0, status: str = "",
 
 @router.post("/story-arc/generate", dependencies=[Depends(require_admin)])
 def trigger_story_arc_generate() -> Dict[str, Any]:
-    """Triggert manuell eine Story-Arc-Generierung."""
+    """Trigger a story arc generation by hand."""
     from app.core.task_queue import get_task_queue
     get_task_queue().submit("story_arc_generate", {"user_id": ""})
     return {"status": "submitted", "user_id": ""}
@@ -146,7 +159,7 @@ def trigger_story_arc_generate() -> Dict[str, Any]:
 
 @router.delete("/story-arc/{arc_id}", dependencies=[Depends(require_admin)])
 def delete_story_arc(arc_id: str) -> Dict[str, Any]:
-    """Löscht einen einzelnen Story Arc."""
+    """Delete one story arc."""
     from app.models.story_arcs import remove_arc
     success = remove_arc(arc_id)
     if not success:
@@ -156,7 +169,7 @@ def delete_story_arc(arc_id: str) -> Dict[str, Any]:
 
 @router.get("/story-arc/status", dependencies=[Depends(require_admin)])
 def story_arc_status() -> Dict[str, Any]:
-    """Zeigt alle Story Arcs eines Users."""
+    """All story arcs of a user."""
     from app.models.story_arcs import get_all_arcs
     arcs = get_all_arcs()
     active = [a for a in arcs if a.get("status") == "active"]

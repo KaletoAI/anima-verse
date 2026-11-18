@@ -90,6 +90,14 @@ Expected, derived by hand:
     ``RefitInterrupted`` → it propagates, ``record_body_failure`` is not called; control ``RuntimeError`` →
     recorded once. b) ``garment_footwear.body_fit`` whose ``fit`` raises it → the same; control → recorded once.
     Before: both caught every exception and recorded it as the body's refusal.
+[10] ``app.routes.queue.cancel_task`` (DELETE /queue/tasks/{id}, the TaskPanel's Cancel), called as a function:
+    a) a ``cpu_refit`` row that is running (``refit_pool.track(pending=False)``) → HTTPException 409 with
+       ``CPU_REFIT_RUNNING``, the row stays ``running`` (its compute cannot be stopped and publishes anyway);
+    b) a waiting ``cpu_refit`` row → ``{"status": "cancelled"}``, the row ``cancelled`` (it does not run);
+    c) control: a running tracked ``image_generation`` row → cancelled as before;
+    d) the TaskPanel keeps a 409's message (``ApiError.message`` = the server's ``detail``) and renders it through
+       ``t()`` — before, its ``catch {}`` dropped it silently. Before the fix a) answered ``cancelled`` and marked
+       the row cancelled while the refit went on.
 """
 import os
 import sys
@@ -670,6 +678,30 @@ def main() -> int:
               ("RefitInterrupted", 0))
         garment_footwear.fit = raising(RuntimeError("boom"))
         check("b) control: a real failure is recorded on the body", body_fit_outcome(shoe)[1], 1)
+
+        # --- [10] the TaskPanel Cancel of a CPU refit ----------------------------------------------------------
+        print("[10] DELETE /queue/tasks/{id}: a computing CPU refit answers 409, a waiting one is cancelled")
+        from fastapi import HTTPException
+        from app.routes import queue as queue_route
+
+        def delete(task_id):
+            try:
+                return queue_route.cancel_task(task_id).get("status")
+            except HTTPException as e:
+                return (e.status_code, e.detail)
+        computing = refit_pool.track("Pia", "Refit · Pia", pending=False)
+        check("a) computing: 409 with the reason", delete(computing), (409, queue_route.CPU_REFIT_RUNNING))
+        check("a) its row stays running", tq.task_status(computing), "running")
+        waiting = refit_pool.track("Pia", "Refit · Pia", pending=True)
+        check("b) waiting: cancelled", (delete(waiting), tq.task_status(waiting)), ("cancelled", "cancelled"))
+        other = tq.track_start("image_generation", "Image · Pia", agent_name="Pia", start_running=True)
+        check("c) control: a running tracked task of another type is cancelled",
+              (delete(other), tq.task_status(other)), ("cancelled", "cancelled"))
+        tq.track_finish_if_open(computing)
+        panel = (Path(__file__).resolve().parent.parent / "packages/player-ui/src/TaskPanel.tsx").read_text()
+        check("d) the TaskPanel keeps a 409's message and renders it through t()",
+              ("err.status === 409) setCancelRefused(err.message)" in panel, "{t(cancelRefused)}" in panel),
+              (True, True))
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
     return 1 if FAILS else 0

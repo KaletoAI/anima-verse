@@ -11,7 +11,7 @@
  * worker can really pick up again (see RecentRow).
  */
 import { useCallback, useEffect, useState } from 'react'
-import { apiDelete, apiPost } from './api'
+import { ApiError, apiDelete, apiPost } from './api'
 import { useI18n } from './I18nProvider'
 import { useQueue, elapsedSeconds, type LLMTaskInfo, type TrackedTaskInfo, type RecentTaskInfo } from './useQueue'
 import { EmptyState } from './EmptyState'
@@ -20,14 +20,15 @@ import { formatTime } from './clockFormat'
 import { clockSettings, useClockSettings } from './clockSettings'
 
 /**
- * Abbrechen-Knopf einer laufenden/wartenden Zeile (A6 des
- * plan-room-conversation-ergaenzungsplan.md). Ein Klick genügt — kein
- * Bestätigungsdialog: ein abgebrochener Task ist neu auslösbar, und ein Modal
- * für jede Kleinigkeit ist teurer als der seltene Fehlklick.
+ * Cancel button of a running/waiting row (A6 of
+ * plan-room-conversation-ergaenzungsplan.md). One click is enough — no
+ * confirmation dialog: a cancelled task can be started again, and a modal for
+ * every small thing costs more than the rare misclick.
  *
- * Nach dem Klick bleibt die Zeile stehen und wird blass, bis der 3-s-Poll sie
- * abräumt — das ist die Rückmeldung. Kommt sie zurück (der Task war schon
- * fertig oder unbekannt), wird der Knopf wieder aktiv.
+ * After the click the row stays and fades until the 3-s poll clears it — that
+ * is the feedback. When it comes back (the task was already done or unknown),
+ * the button is active again. A refusal with a reason (409: a CPU re-fit that
+ * is computing cannot be stopped) is shown above the list.
  */
 function CancelBtn({ onCancel, busy }: { onCancel: () => void; busy: boolean }) {
   const { t } = useI18n()
@@ -56,16 +57,16 @@ function LLMRow({ tk, nowMs, pending, onCancel, cancelling }: {
   onCancel?: (id: string) => void; cancelling?: boolean;
 }) {
   const { t } = useI18n()
-  // started_at wird erst bei Verarbeitungsstart gesetzt; chat_active-Tasks haben
-  // es oft (noch) nicht → created_at (Registrierungszeit) als Fallback, damit die
-  // Zeit von Anfang an mitläuft. Wartende Calls haben nur created_at.
+  // started_at is set only when processing starts; chat_active tasks often do
+  // not have it (yet) → created_at (registration time) as the fallback, so the
+  // time runs from the start. Waiting calls only have created_at.
   const elapsed = elapsedSeconds(pending ? tk.created_at : (tk.started_at || tk.created_at), nowMs)
   const eta = tk.estimated_duration_s && tk.estimated_duration_s > 0 ? tk.estimated_duration_s : null
   const iter = tk.iteration && tk.iteration > 0 ? `iter ${tk.iteration}/${tk.max_iterations || 1}` : ''
   const meta = [tk.provider_name, tk.model].filter(Boolean).join(' / ')
   const title = tk.label || (tk.agent_name ? `${tk.agent_name}` : tk.task_type || t('LLM call'))
-  // Sekundärzeile (Status · Dauer · Provider · Iteration) — als umbrechender
-  // Text, damit es bei schmaler Panel-Breite lesbar bleibt statt abzuschneiden.
+  // Second line (status · duration · provider · iteration) — as wrapping text,
+  // so it stays readable in a narrow panel instead of being cut off.
   const sub = pending
     ? [
         elapsed != null ? t('waiting {n}').replace('{n}', fmtDur(elapsed)) : t('pending'),
@@ -79,7 +80,7 @@ function LLMRow({ tk, nowMs, pending, onCancel, cancelling }: {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-        {/* laufend: gefüllter, pulsierender Punkt. wartend: hohler gestrichelter Ring. */}
+        {/* running: a filled, pulsing dot. waiting: a hollow dashed ring. */}
         {pending ? (
           <span style={{
             width: 8, height: 8, borderRadius: '50%', flex: '0 0 auto',
@@ -133,9 +134,9 @@ function RecentRow({ r, onRetry, retrying }: {
   // persistent queue carries completed_at instead; it is finished either way.
   const clock = formatTime(r.created_at || r.completed_at, clockSettings())
   const meta = [clock, dur, r.provider, r.model].filter(Boolean).join(' · ')
-  // Zwei Zeilen wie LLMRow/TrackedRow: Titel mit Ellipsis, Meta darunter mit
-  // wordBreak — bei schmaler Panel-Breite bricht die Meta-Zeile um, statt
-  // sich mit dem Titel zu ueberlagern.
+  // Two lines like LLMRow/TrackedRow: the title with an ellipsis, the meta below
+  // with wordBreak — in a narrow panel the meta line wraps instead of overlapping
+  // the title.
   return (
     <div title={r.error || ''}
       style={{ display: 'flex', flexDirection: 'column', gap: 1, fontSize: '0.74em', opacity: 0.7 }}>
@@ -177,7 +178,7 @@ function TrackedRow({ tk, nowMs, onCancel, cancelling }: {
   const elapsed = elapsedSeconds(tk.started_at, nowMs)
   const waited = elapsedSeconds(tk.created_at, nowMs)
   const title = tk.label || tk.task_type || t('Task')
-  // Sekundärzeile wie bei LLM-Calls: Status · Dauer · Backend · Agent.
+  // Second line like the LLM calls': status · duration · backend · agent.
   const sub = running
     ? [
         elapsed != null ? `${t('running')} ${fmtDur(elapsed)}` : t('running'),
@@ -191,8 +192,8 @@ function TrackedRow({ tk, nowMs, onCancel, cancelling }: {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-        {/* running: gefüllter, pulsierender Punkt (wie LLM). pending: hohler,
-            gestrichelter Ring → wartende Tasks klar abgesetzt. */}
+        {/* running: a filled, pulsing dot (like LLM). pending: a hollow,
+            dashed ring → waiting tasks clearly set apart. */}
         {running ? (
           <span className="player-task-pulse" style={{
             width: 8, height: 8, borderRadius: '50%', flex: '0 0 auto',
@@ -231,18 +232,23 @@ export function TaskPanel() {
   const { llmTasks, pendingLLM, trackedTasks, recent, channels, refresh } = useQueue(3000)
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [showRecent, setShowRecent] = useState(false)
-  // Ids whose cancel is on its way out. EIN Endpunkt für beide Gruppen:
-  // DELETE /queue/tasks/{id} versucht erst die Provider-Queue und fällt auf
-  // die getrackten Tasks zurück (app/routes/queue.py:58) — die Zeile muss
-  // also nicht wissen, in welcher Queue sie hängt.
+  // Ids whose cancel is on its way out. ONE endpoint for both groups:
+  // DELETE /queue/tasks/{id} tries the provider queue first and falls back to
+  // the tracked tasks (app/routes/queue.py cancel_task) — the row need not know
+  // which queue it sits in.
   const [cancelling, setCancelling] = useState<Record<string, boolean>>({})
+  // The server's reason when it refuses a cancel (409, e.g. a CPU re-fit that is
+  // computing) — English from the server, translated here; cleared by the next click.
+  const [cancelRefused, setCancelRefused] = useState('')
   const cancel = useCallback(async (id: string) => {
+    setCancelRefused('')
     setCancelling((c) => ({ ...c, [id]: true }))
     try {
       await apiDelete(`/queue/tasks/${encodeURIComponent(id)}`)
-    } catch {
-      // Nicht gefunden oder schon fertig: Knopf wieder freigeben, die Zeile
-      // verschwindet dann beim nächsten Poll von selbst — oder eben nicht.
+    } catch (err) {
+      // Not found or already done: free the button again, the row then goes
+      // away with the next poll on its own — or it does not. A refusal says why.
+      if (err instanceof ApiError && err.status === 409) setCancelRefused(err.message)
       setCancelling((c) => { const n = { ...c }; delete n[id]; return n })
     }
   }, [])
@@ -281,9 +287,9 @@ export function TaskPanel() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {shownChannels.length > 0 && (
-        // Mehrspaltige Tabelle: auto-fill Grid — so viele Spalten wie in die
-        // Panel-Breite passen; pro Zelle Status-Punkt | Name (Ellipsis) |
-        // Zaehler rechtsbuendig, damit die Spalten tabellarisch fluchten.
+        // Multi-column table: an auto-fill grid — as many columns as the panel
+        // width holds; per cell status dot | name (ellipsis) | counter right-
+        // aligned, so the columns line up like a table.
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))',
@@ -291,7 +297,7 @@ export function TaskPanel() {
         }}>
           {shownChannels.map((ch) => {
             const state = ch.healthy ? (ch.busy ? t('busy') : t('available')) : t('unavailable')
-            // Icon = Typ, Farbe = Status (wie die Panel-Leisten-Icons).
+            // Icon = type, colour = status (like the panel bar icons).
             const color = !ch.healthy ? '#e05656' : ch.busy ? 'var(--accent, #6aa9ff)' : '#3fa45a'
             const icon: IconName = ch.kind === 'llm' ? 'brain'
               : ch.type === 'a1111' ? 'sliders'
@@ -330,6 +336,11 @@ export function TaskPanel() {
       )}
       {shownChannels.length > 0 && hasTasks && (
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)' }} />
+      )}
+      {cancelRefused && (
+        <div role="alert" style={{ fontSize: '0.78em', color: '#e05656', lineHeight: 1.3 }}>
+          {t(cancelRefused)}
+        </div>
       )}
       {!hasTasks && (
         <EmptyState small icon="tasks" title={t('No active tasks')} />
