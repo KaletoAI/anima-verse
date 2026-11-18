@@ -1204,7 +1204,12 @@ def _fit_haar_seeds(character_name: str, item_id: str, ssig: str, seeds: List[in
         if entry["result"] is not None and body is None:
             from app.core.glb_mesh import body_arrays
             body = body_arrays(rigged)
-        entry["tile"] = _haar_tile(folder, seed, entry["result"], body)
+        if on_base:
+            entry["tile"] = _haar_tile(folder, seed, entry["result"], body)
+        else:
+            # A198 (review 05 #10): the seed folder's tile is the BASE fit's picture (the variants panel) — a fit on
+            # an outfit body neither redraws it from that body nor deletes it when that fit refuses
+            entry["tile"] = HAAR_TILE if (gs.haar_seed_dir(folder, seed) / HAAR_TILE).is_file() else None
         if on_base:
             _haar_cut_source(folder, seed, entry["result"])
         out[seed] = entry
