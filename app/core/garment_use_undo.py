@@ -230,10 +230,15 @@ def undo(character_name: str, item_id: str, fsig: str) -> Dict[str, Any]:
     root = gs._root(character_name)
     restored: List[str] = []
     removed: List[str] = []
-    for rel, sha in (manifest.get("files") or {}).items():
+    entries = [(rel, sha) for rel, sha in (manifest.get("files") or {}).items()
+               if (root / rel).resolve().is_relative_to(root.resolve())]
+    # A198 (review 05 #15): every kept copy is checked BEFORE anything is touched — a damaged one refuses the undo
+    # with the group as it is, never half-restored
+    for rel, sha in entries:
+        if sha is not None and (not (folder / rel).is_file() or file_sha256(folder / rel) != sha):
+            raise UndoUnavailable("The kept copy is damaged — use another attempt instead")
+    for rel, sha in entries:
         target = root / rel
-        if not (root / rel).resolve().is_relative_to(root.resolve()):
-            continue
         if sha is None:
             if target.is_file():
                 target.unlink()
