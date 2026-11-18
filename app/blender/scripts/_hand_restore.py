@@ -33,8 +33,14 @@ GATE (per hand; a hand that fails keeps the rigger's version — a post-step nev
   * gaps: neighbouring fingers that were apart (>= ``GAP_M`` between their distal halves) stay apart,
   * stretch: no edge of the hand longer than ``STRETCH_MAX`` times the LONGER of its two measured lengths
     (rigged, mesher scaled) — undoing the rigger's bend gives back the mesher's own edge lengths, which the
-    rigger had squashed at the knuckles by up to 5x, so the rigged length alone would refuse every reset; what
-    this catches is an edge that neither measured shape had (a wrong match, a torn blend),
+    rigger had squashed at the knuckles by up to 5x, so the rigged length alone would refuse every reset. What
+    this catches is an edge that NEITHER shape had: a torn transition band, where a vertex partly skinned to a
+    finger lands between its un-posed and its source place while its fully skinned neighbour lands on the
+    source place (a source finger no turn about its joint reaches). It does NOT catch a wrong vertex match:
+    the source edge between two wrongly matched vertices is as long as the new edge, so the ratio stays ~1.
+    What guards against a wrong match is the correspondence rule of step 1 — a vertex is matched only when
+    exactly ONE source UV lies within ``UV_EPS`` (overlapping or mirrored UV islands give two candidates and
+    therefore no match, and an unmatched vertex only follows its bones, it is never snapped),
   * the transition band (vertices partly skinned to a finger) keeps its surface continuous: its 99th
     percentile normal break (dihedral angle across an edge) must not grow by more than ``BAND_TOL_DEG``,
   * self-intersections (counted by the caller, which has a BVH) must not grow.
