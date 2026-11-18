@@ -29,7 +29,7 @@ import hashlib
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.improvements.base import (Candidate, CandidateBusy, CandidateRefused, ImprovementType,
-                                        ParamField)
+                                        Listing, ParamField)
 from app.core.improvements.types import subjects
 
 KIND_ALL, KIND_CLOTHING, KIND_FOOTWEAR = "all", "clothing", "footwear"
@@ -193,14 +193,19 @@ class GarmentFill(ImprovementType):
 
     # --- candidates ------------------------------------------------------------
 
-    def _clothing_candidates(self, names: List[str], scope: str,
-                             profiles: Dict[str, Dict[str, Any]]) -> List[Candidate]:
+    def _clothing_candidates(self, names: List[str], scope: str, profiles: Dict[str, Dict[str, Any]],
+                             withheld: List[str]) -> List[Candidate]:
         from app.core import garments
         out: List[Candidate] = []
         for name in names:
             profile = profiles.setdefault(name, _profile(name))
             for item_id, kind in _pieces(name, profile, scope).items():
-                if kind != KIND_CLOTHING or not _wants(name, profile, item_id, kind):
+                if kind != KIND_CLOTHING:
+                    continue
+                if _in_flight(name, item_id):
+                    withheld.append(f"clothing:{name}:{item_id}")
+                    continue
+                if not _wants(name, profile, item_id, kind):
                     continue
                 est = garments.run_estimate(name, item_id, profile=profile)
                 out.append(Candidate(f"clothing:{name}:{item_id}:{fit_token(name, profile, item_id)}",
@@ -208,15 +213,23 @@ class GarmentFill(ImprovementType):
                                      hub_jobs=est["hub_jobs"], note=est["note"]))
         return out
 
-    def _footwear_candidates(self, names: List[str], scope: str,
-                             profiles: Dict[str, Dict[str, Any]]) -> List[Candidate]:
+    def _footwear_candidates(self, names: List[str], scope: str, profiles: Dict[str, Dict[str, Any]],
+                             withheld: List[str], building: List[str]) -> List[Candidate]:
         from app.core import garments
-        items: List[str] = []
-        for name in names:
+        holders: Dict[str, List[str]] = {}
+        for name in names + building:
             profile = profiles.setdefault(name, _profile(name))
-            items += [i for i, k in _pieces(name, profile, scope).items() if k == KIND_FOOTWEAR]
+            for item_id, kind in _pieces(name, profile, scope).items():
+                if kind == KIND_FOOTWEAR:
+                    holders.setdefault(item_id, []).append(name)
         out: List[Candidate] = []
-        for item_id in sorted(set(items)):
+        for item_id in sorted(holders):
+            # A holder whose run of the item is in flight, or whose base model is being built, is not judged
+            # this scan: the item's other keys stay as they are (``base.Listing``).
+            if any(n in building or _in_flight(n, item_id) for n in holders[item_id]):
+                withheld.append(f"footwear:{item_id}")
+            if not any(n in names for n in holders[item_id]):
+                continue
             wearers = _footwear_wearers(item_id, names, scope, profiles)
             if not wearers:
                 continue
@@ -232,14 +245,24 @@ class GarmentFill(ImprovementType):
         return out
 
     def find_candidates(self, params: Dict[str, Any]) -> List[Candidate]:
-        names, kind, scope = _subjects(params)
+        return self.list_candidates(params).candidates
+
+    def list_candidates(self, params: Dict[str, Any]) -> Listing:
+        """Withheld (``base.Listing``): a wearer whose base model is being
+        built (off the ready roster for the moment) and a piece whose run is
+        queued or in flight — judged once that has ended. A persisted chain
+        failure is no transient: the piece drops off and its step closes."""
+        names, building = subjects.pipeline_roster(params.get("character") or "")
+        kind, scope = params.get("kind") or KIND_ALL, params.get("scope") or SCOPE_WORN
         profiles: Dict[str, Dict[str, Any]] = {}
         out: List[Candidate] = []
+        withheld: List[str] = []
         if kind in (KIND_ALL, KIND_CLOTHING):
-            out += self._clothing_candidates(names, scope, profiles)
+            withheld += [f"clothing:{name}" for name in building]
+            out += self._clothing_candidates(names, scope, profiles, withheld)
         if kind in (KIND_ALL, KIND_FOOTWEAR):
-            out += self._footwear_candidates(names, scope, profiles)
-        return sorted(out, key=lambda c: (c.label.lower(), c.key))
+            out += self._footwear_candidates(names, scope, profiles, withheld, building)
+        return Listing(sorted(out, key=lambda c: (c.label.lower(), c.key)), tuple(withheld))
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
         names, _kind, scope = _subjects(params)

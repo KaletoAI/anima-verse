@@ -36,7 +36,7 @@ import hashlib
 import json
 from typing import Any, Dict, List, Tuple
 
-from app.core.improvements.base import Candidate, CandidateBusy, ImprovementType, ParamField
+from app.core.improvements.base import Candidate, CandidateBusy, ImprovementType, Listing, ParamField
 from app.core.improvements.types import subjects
 
 # A unit of work: (item id, body id) — body "" = the base model; item "" =
@@ -136,12 +136,6 @@ def version_token(name: str, profile: Dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode("utf-8")).hexdigest()[:12]
 
 
-def _names(params: Dict[str, Any]) -> List[str]:
-    """The pipeline roster (a ready base model), narrowed to the chosen one."""
-    wanted = params.get("character") or ""
-    return [n for n in subjects.pipeline_characters() if not wanted or n == wanted]
-
-
 class FitRefit(ImprovementType):
     id = "fit_refit"
     label = "Refit stale fits (CPU)"
@@ -160,8 +154,14 @@ class FitRefit(ImprovementType):
         return out
 
     def find_candidates(self, params: Dict[str, Any]) -> List[Candidate]:
+        return self.list_candidates(params).candidates
+
+    def list_candidates(self, params: Dict[str, Any]) -> Listing:
+        """Withheld (``base.Listing``): a character whose base model is being
+        built — off the ready roster for the moment, its fits not judged."""
+        ready, building = subjects.pipeline_roster(params.get("character") or "")
         out: List[Candidate] = []
-        for name in _names(params):
+        for name in ready:
             profile = _profile(name)
             work = _work(name, profile)
             if not work:
@@ -170,7 +170,8 @@ class FitRefit(ImprovementType):
             out.append(Candidate(f"character:{name}:{version_token(name, profile)}",
                                  f"{name} · {n} fit{'' if n == 1 else 's'}: {', '.join(work)}",
                                  hub_jobs=0, note="CPU only — no hub job"))
-        return sorted(out, key=lambda c: (c.label.lower(), c.key))
+        return Listing(sorted(out, key=lambda c: (c.label.lower(), c.key)),
+                       tuple(f"character:{name}" for name in building))
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
         name = _name(candidate.key)

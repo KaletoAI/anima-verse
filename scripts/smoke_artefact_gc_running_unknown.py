@@ -25,9 +25,10 @@ Expected, by hand from the rule "a run that cannot be seen may be writing — de
        on disk.
     e) The improvement type: an entry scanned BEFORE the failure has one step ``character:demo:<orphan-set
        token>`` pending; a rescan under the failure lists the subject as ``character:demo:aborted`` (its
-       orphans are unknown — the type's key token) -> {added 1, closed 1}: the aborted step pending, the set's
-       step closed; the candidate is labelled ``demo · size unknown``; ``apply`` -> CandidateBusy; X on disk.
-       The work is never dropped: a pending step of the subject remains.
+       orphans are unknown — the type's key token) and withholds ``character:demo`` (``base.Listing``) ->
+       {added 1, closed 0}: the aborted step pending, the set's step still pending (never closed by a scan
+       that could not see); the candidate is labelled ``demo · size unknown``; ``apply`` -> CandidateBusy;
+       X on disk.
 [3] ``list_ops`` back: ``collect(explicit=True, keys=[X])`` -> aborted "", deleted_files 2, X gone, W stays.
 Fails on 1dbf8d3af in [2] (aborted ""; b deletes X and the body; the rescan closes the step as done).
 """
@@ -140,9 +141,8 @@ def main() -> int:
         body = ag.delete_body("demo", OB)
         check("d) delete_body", (body["deleted_files"], body["skipped"]), (0, [{"key": OB, "why": "running"}]))
         check("d) body files stay", [p.exists() for p in ob_files], [True, True])
-        check("e) rescan: the aborted key in, the set's key out", engine.scan(entry), {"added": 1, "closed": 1})
-        check("e) step pending", [s["status"] for s in store.list_steps(entry)
-                                  if s["candidate_key"] == "character:demo:aborted"], ["pending"])
+        check("e) rescan: the aborted key in, nothing closed", engine.scan(entry), {"added": 1, "closed": 0})
+        check("e) both steps pending", sorted(s["status"] for s in store.list_steps(entry)), ["pending", "pending"])
         check("e) candidate", [(c.key, c.label) for c in typ.find_candidates(typ.validate({}))],
               [("character:demo:aborted", "demo · size unknown")])
         try:

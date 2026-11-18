@@ -1,7 +1,7 @@
 """DB access for improvements + steps (world.db).  No engine logic here."""
 import json
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from app.core.db import get_connection, transaction
 from app.core.log import get_logger
@@ -166,8 +166,14 @@ def set_order(ids: List[str]) -> None:
                          (index, improvement_id))
 
 
+def _under(key: str, prefixes: Iterable[str]) -> bool:
+    """``key`` is a step of one of the subjects ``prefixes`` name: equal to one, or one followed by ":"."""
+    return any(key == prefix or key.startswith(prefix + ":") for prefix in prefixes)
+
+
 def replace_steps_scan(improvement_id: str,
-                       candidates: List[Tuple[str, str, Optional[int], str]]
+                       candidates: List[Tuple[str, str, Optional[int], str]],
+                       withheld: Iterable[str] = ()
                        ) -> Dict[str, int]:
     """candidates = [(key, label, hub_jobs, note)].  The scan's diff onto the
     steps:
@@ -186,12 +192,20 @@ def replace_steps_scan(improvement_id: str,
       the subject, and re-offering it would spend the same work endlessly; a
       ``skipped`` key (given up, refused, cancelled) stays skipped, listed or
       not — only Retry reopens it, and a refused candidate drops off the list
-      because the type excludes it, which satisfies nothing.
+      because the type excludes it, which satisfies nothing;
+    * an unlisted key under a ``withheld`` subject prefix (``base.Listing``: a
+      subject the type could not judge this scan — its run in progress
+      elsewhere, its state unreadable) is left as it is: neither due nor
+      satisfied, so a pending step stays pending and a done one done. Without
+      this a transient omission would turn a done step whose run did not
+      satisfy its subject into ``fulfilled``, and the next scan would reopen it
+      and spend the same run again — once per flicker.
 
     running/failed rows untouched.  Returns {"added": n, "closed": m} —
     ``added`` counts the inserted and the reopened steps, ``closed`` the
     pending ones that became fulfilled."""
     listed = {str(key) for key, _label, _hub, _note in candidates}
+    withheld = tuple(str(prefix) for prefix in withheld if prefix)
     now = utc_now_iso()
     added = 0
     closed = 0
@@ -228,7 +242,7 @@ def replace_steps_scan(improvement_id: str,
         ).fetchall()
         for row in rows:
             key = row["candidate_key"]
-            if key in listed:
+            if key in listed or _under(key, withheld):
                 continue
             if row["status"] == "pending":
                 conn.execute(

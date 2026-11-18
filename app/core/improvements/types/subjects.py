@@ -59,27 +59,43 @@ def characters() -> List[str]:
     """The roster an improvement may work on: every living character except the
     temporary NPCs (their assets are the spawn gate's job, and they are gone
     again before an idle pass would finish).  ``list_available_characters``
-    already leaves the pooled ones out."""
+    already leaves the pooled ones out. A roster read that fails RAISES
+    (``strict``): an empty roster would let a scan close every step as
+    fulfilled — and reopen them all at the next scan."""
     from app.models.character import is_temporary_npc, list_available_characters
-    return sorted(n for n in list_available_characters() if not is_temporary_npc(n))
+    return sorted(n for n in list_available_characters(strict=True) if not is_temporary_npc(n))
 
 
-def pipeline_characters() -> List[str]:
-    """``characters()`` narrowed to the base-body pipeline with a READY base
-    model (``base_body.is_base_pipeline`` + ``base_model_info`` status
-    ``ready``) — the roster of the figure-pipeline types; the profile is
-    loaded once per character."""
+def pipeline_roster(wanted: str = "") -> Tuple[List[str], List[str]]:
+    """``(ready, building)`` of ``characters()`` on the base-body pipeline
+    (``base_body.is_base_pipeline``), narrowed to ``wanted`` when given:
+    ``ready`` — a READY base model (``base_model_info`` status ``ready``), the
+    roster of the figure-pipeline types; ``building`` — the base model is
+    being built right now (status ``running``): off the roster for the moment
+    but not settled, so the figure types report these characters' subjects
+    as withheld (``base.Listing``). The profile is loaded once per character."""
     from app.core import base_body
     from app.models.character import get_character_profile
-    out: List[str] = []
+    ready: List[str] = []
+    building: List[str] = []
     for name in characters():
+        if wanted and name != wanted:
+            continue
         profile = get_character_profile(name) or {}
         if not base_body.is_base_pipeline(name, profile=profile):
             continue
-        info = base_body.base_model_info(name)
-        if info and info.get("status") == "ready":
-            out.append(name)
-    return out
+        status = (base_body.base_model_info(name) or {}).get("status")
+        if status == "ready":
+            ready.append(name)
+        elif status == "running":
+            building.append(name)
+    return ready, building
+
+
+def pipeline_characters() -> List[str]:
+    """``pipeline_roster()``'s ready characters — the roster of the
+    figure-pipeline types."""
+    return pipeline_roster()[0]
 
 
 def saved_outfit_signatures(name: str) -> List[Tuple[str, str]]:

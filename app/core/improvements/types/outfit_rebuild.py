@@ -43,7 +43,7 @@ import hashlib
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.improvements.base import (Candidate, CandidateBusy, CandidateRefused, ImprovementType,
-                                        ParamField)
+                                        Listing, ParamField)
 from app.core.improvements.types import subjects
 from app.imagegen.base import BackendBusyError, MediaGenerationDisabled
 
@@ -199,12 +199,27 @@ class OutfitRebuild(ImprovementType):
     # --- candidates ------------------------------------------------------------
 
     def find_candidates(self, params: Dict[str, Any]) -> List[Candidate]:
+        return self.list_candidates(params).candidates
+
+    def list_candidates(self, params: Dict[str, Any]) -> Listing:
+        """Withheld (``base.Listing``): a character whose base model is being
+        built (off the ready roster for the moment) and an outfit whose model
+        is being built (``outfit_info`` ``running``) — judged once that has
+        ended. A failed outfit, the T-pose toggle off and a reference-only
+        change are no transients: they drop off and their steps close."""
+        from app.core import base_body
         scope = params.get("scope") or SCOPE_WORN
+        ready, building = subjects.pipeline_roster(params.get("character") or "")
         out: List[Candidate] = []
-        for name in self._names(params):
+        withheld = [f"outfit:{name}" for name in building]
+        for name in ready:
             profile = _profile(name)
             for sig, saved in _outfits(name, scope):
-                judged = _judge(name, sig, profile)
+                info = base_body.outfit_info(name, signature=sig)
+                if info.get("status") == "running":
+                    withheld.append(f"outfit:{name}:{sig}")
+                    continue
+                judged = _judge(name, sig, profile, info)
                 if judged is None:
                     continue
                 info, cost = judged
@@ -212,7 +227,7 @@ class OutfitRebuild(ImprovementType):
                 out.append(Candidate(f"outfit:{name}:{sig}:{stale_token(name, reason)}",
                                      _label(name, sig, saved, reason),
                                      hub_jobs=cost.get("hub_jobs"), note=str(cost.get("note") or "")))
-        return sorted(out, key=lambda c: (c.label.lower(), c.key))
+        return Listing(sorted(out, key=lambda c: (c.label.lower(), c.key)), tuple(withheld))
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
         name, sig = _parse(candidate.key)

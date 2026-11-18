@@ -1352,7 +1352,7 @@ closed forever.
 
 **The class.** Subclass `app.core.improvements.base.ImprovementType`, set `id`
 (stable, it is stored with every entry), `label` (admin UI) and `params_schema`, then
-implement four methods:
+implement four methods (a fifth, `list_candidates`, only where the type withholds a subject):
 
 | Member | Semantik |
 |---|---|
@@ -1360,6 +1360,7 @@ implement four methods:
 | `validate(params) -> params` | Normalised parameters, or `ValueError(message)`. The base class checks required fields and option membership; override it (calling `super().validate`) for rules between fields — e.g. "source and target backend must differ" |
 | `find_candidates(params) -> List[Candidate]` | Every subject NOT yet done, in a stable order (`(label.lower(), key)`). `Candidate(key, label, hub_jobs=0, note="")`: the key is unique per type and is what a step row stores (`"character:<name>:<token>"`, `"location:<id>:<file>"`) — it ends with the token that makes the work due (a version, a signature, the identity of the input it works from), because a scan reopens a key only when its step is `fulfilled`, never a `done` or `skipped` one: a subject due again for a NEW reason must be a new key; `hub_jobs` estimates the hub jobs the step submits on its first attempts (`None` = unknown, listed as such, never as 0), `note` is one line saying what that estimate counts, or a dry-run summary. A subject that could not be worked at all (nothing to generate FROM) is not a candidate |
 | `is_done(candidate, params) -> bool` | The type's own "is this subject finished" test — read the persisted asset, never a cached answer. The engine never calls it; `find_candidates` uses it to decide what to list. A subject that drops off that list closes its pending or done (ran) step as `fulfilled`; a `fulfilled` key listed again is pending again (the same reason recurred), a `done` key still listed stays done (its run did not satisfy the subject — never re-spent), a `skipped` one stays skipped |
+| `list_candidates(params) -> Listing` | What the engine's scan diffs onto the steps: `Listing(candidates, withheld=())`. The default wraps `find_candidates`. A type that leaves a subject out for a TRANSIENT reason (its run in progress elsewhere, its base model being built, its running jobs unreadable) overrides it, reports the subject in `withheld` as a key prefix (a step key is under it when it equals the prefix or starts with it plus `:`), and returns `list_candidates(params).candidates` from `find_candidates`. An unlisted step under a withheld prefix is left as it is — not closed, not `fulfilled` — so a done step whose run did not satisfy its subject is not re-offered when the subject flickers out and back; a listed key under it is handled as usual. A permanent exclusion (a persisted failure, a setting, a scope) is not withheld: the subject drops off and its step closes as `fulfilled` |
 | `apply(candidate, params, task_id)` | Does the work SYNCHRONOUSLY: it returns only once whatever it made is persisted. It runs in a queue worker thread (no event loop of its own, and `user_activity` is suppressed for the duration), so it calls the blocking producer directly — never a `trigger_*` thread wrapper, which would report success while nothing had been generated |
 
 `ParamField.show_if` maps earlier parameter keys to allowed string values, for

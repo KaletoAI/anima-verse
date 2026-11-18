@@ -31,12 +31,16 @@ aborted dry run, ``footwear_sources:<t>`` with <t> over ``[[<sorted removed fold
      no candidate; grace ``off`` (explicit) → the candidate is back (same label as A1).
 [A4] A manifest-less outfit entry ``model3d/cccccccccccc.glb`` + ``.json`` (no pieces: the only
      shape that forces the reachable set). A standing entry scanned with the budget in place → step
-     ``ckey(X, cccccccccccc)`` pending. Then ``artefact_graph.HOOK_BUDGET_S`` patched to 0 →
-     the dry run is ``aborted`` → the candidate stays listed as ``character:demo:aborted``,
-     ``demo · size unknown`` (review 09#5: an unlisted subject would close a pending step although
-     nothing was cleaned); the rescan → {added 1 (the aborted key), closed 1 (the set's key: no longer
-     listed)}; the aborted step is pending; ``is_done`` False; ``apply`` → CandidateBusy, and nothing
-     was deleted (X still there). Budget back, the entry, X and cccccccccccc removed by hand.
+     ``ckey(X, cccccccccccc)`` pending; it is marked done (a run that deleted none of its set). Then
+     ``artefact_graph.HOOK_BUDGET_S`` patched to 0 → the dry run is ``aborted`` → the candidate is listed
+     as ``character:demo:aborted``, ``demo · size unknown`` (review 09#5: the state is shown), and the
+     character is WITHHELD (``base.Listing``: its orphans are unknown); the rescan → {added 1 (the aborted
+     key), closed 0}: the set's step stays done — not fulfilled; the aborted step is pending; ``is_done``
+     False; ``apply`` → CandidateBusy, and nothing was deleted (X still there). Budget back: the rescan
+     lists the set's key again → it stays done (a done key still listed is not re-offered — the flip
+     re-runs nothing), the aborted key is unlisted and not withheld → pending → fulfilled: {added 0,
+     closed 1}. Without the withholding the abort scan made the set's done step fulfilled and this rescan
+     reopened it ({added 1, closed 1}) — fails on 059b4de8a. The entry, X and cccccccccccc removed by hand.
 [A5] Painted bodies — a consumer of the painted-body reachability fix (commit 72e260fb: a texture lives
      while a live outfit would paint it NOW; a tsig a live outfit only names is outdated). TK =
      ``figure.predicted_keys(demo, {top: dress}, [], bsig=bsig)[1]`` (what the worn
@@ -230,18 +234,28 @@ def main() -> int:
         age(bare, AGED_S)
         entry = store.create(typ.id, "Cleanup", typ.validate({}), "standing")["id"]
         check("scan with the budget", engine.scan(entry), {"added": 1, "closed": 0})
-        check("the set's key", [s["candidate_key"] for s in store.list_steps(entry)], [ckey(X, "cccccccccccc")])
+        set_key = ckey(X, "cccccccccccc")
+        check("the set's key", [s["candidate_key"] for s in store.list_steps(entry)], [set_key])
+        store.mark_running(entry, set_key)
+        store.mark_result(entry, set_key, status="done", count_attempt=False)
         with patch.object(ag, "HOOK_BUDGET_S", 0):
             check("the dry run is aborted",
                   bool(ag.collect("demo", dry_run=True, budget_s=ag.HOOK_BUDGET_S)["aborted"]), True)
             check("the candidate stays listed", [(c.key, c.label, c.hub_jobs) for c in cands()],
                   [("character:demo:aborted", "demo · size unknown", 0)])
-            check("rescan: the aborted key in, the set's key out", engine.scan(entry), {"added": 1, "closed": 1})
+            check("withheld: the character", typ.list_candidates(typ.validate({})).withheld, ("character:demo",))
+            check("rescan: the aborted key in, the set's step untouched", engine.scan(entry),
+                  {"added": 1, "closed": 0})
             check("the aborted step is pending", step_of(entry, "character:demo:aborted")["status"], "pending")
+            check("the set's step stays done", step_of(entry, set_key)["status"], "done")
             check("is_done", typ.is_done(Candidate("character:demo:aborted", "demo"), typ.validate({})), False)
             raises("apply → CandidateBusy",
                    lambda: typ.apply(Candidate("character:demo:aborted", "demo"), typ.validate({}), "t"),
                    CandidateBusy)
+        check("budget back: the set listed again stays done, the aborted step fulfilled", engine.scan(entry),
+              {"added": 0, "closed": 1})
+        check("…no step to run", sorted((s["candidate_key"], s["status"]) for s in store.list_steps(entry)),
+              sorted([("character:demo:aborted", "fulfilled"), (set_key, "done")]))
         store.delete(entry)
         check("nothing deleted", [p.exists() for p in x_files + bare], [True] * 4)
         for p in x_files + bare:

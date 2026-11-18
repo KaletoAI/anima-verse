@@ -83,10 +83,11 @@ def scan(improvement_id: str) -> Dict[str, int]:
     improvement_type = registry.get(improvement["type_id"])
     if improvement_type is None:
         return {"added": 0, "closed": 0}
-    candidates = improvement_type.find_candidates(improvement["params"])
+    listing = improvement_type.list_candidates(improvement["params"])
     result = store.replace_steps_scan(
         improvement_id,
-        [(c.key, c.label, c.hub_jobs, c.note) for c in candidates])
+        [(c.key, c.label, c.hub_jobs, c.note) for c in listing.candidates],
+        withheld=listing.withheld)
     store.update(improvement_id, last_scan_at=utc_now_iso())
     # A one_shot whose scan finds nothing has nothing to do — ever. Without
     # this it would sit 'open' with 0/0 steps forever, because the only other

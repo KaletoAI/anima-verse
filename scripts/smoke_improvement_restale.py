@@ -67,7 +67,7 @@ db.init_schema()
 from app.core import base_body, footwear_insole, garment_fit, outfit_body_posture  # noqa: E402
 from app.core.improvements import engine, registry, store  # noqa: E402
 from app.core.improvements.types import (base_refresh, collision_capsules, extension_rig_rebuild,  # noqa: E402
-                                         fit_refit, garment_fill, outfit_rebuild)
+                                         fit_refit, garment_fill, outfit_rebuild, subjects)
 
 FAILS = []
 
@@ -89,7 +89,7 @@ def main() -> int:
     typ = registry.get("fit_refit")
     work = {"Mia": ["Dress"]}
     fit_version = dict(garment_fit.FIT_VERSION)
-    with patch.object(fit_refit, "_names", lambda params: ["Mia"]), \
+    with patch.object(subjects, "pipeline_roster", lambda wanted="": (["Mia"], [])), \
          patch.object(fit_refit, "_work", lambda name, profile: list(work[name])), \
          patch.object(fit_refit, "_profile", lambda name: {}), \
          patch.object(base_body, "current_base", lambda name, profile=None: ("base1", "SHA1")), \

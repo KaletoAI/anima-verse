@@ -27,7 +27,7 @@ its inputs stay. A key of the older shape ``character:<name>`` still parses.
 """
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.core.improvements.base import (Candidate, CandidateBusy, ImprovementType,
+from app.core.improvements.base import (Candidate, CandidateBusy, ImprovementType, Listing,
                                         ParamField)
 from app.core.improvements.types import subjects
 from app.core.improvements.types.garment_fill import _in_flight, _judge, fit_token
@@ -102,11 +102,22 @@ class HairFill(ImprovementType):
     # --- candidates ------------------------------------------------------------
 
     def find_candidates(self, params: Dict[str, Any]) -> List[Candidate]:
+        return self.list_candidates(params).candidates
+
+    def list_candidates(self, params: Dict[str, Any]) -> Listing:
+        """Withheld (``base.Listing``): a character whose base model is being
+        built (off the ready roster for the moment) and one whose hair run is
+        queued or in flight — judged once that has ended."""
+        ready, building = subjects.pipeline_roster(params.get("character") or "")
         out: List[Candidate] = []
-        for name in self._names(params):
+        withheld = [f"character:{name}" for name in building]
+        for name in ready:
             profile = _profile(name)
-            subject = self._wanted(name, profile)
+            subject = _subject(name, profile)
             if subject is None:
+                continue
+            if _in_flight(name, subject[0]):
+                withheld.append(f"character:{name}")
                 continue
             item_id, label = subject
             from app.core import garments
@@ -114,7 +125,7 @@ class HairFill(ImprovementType):
             out.append(Candidate(f"character:{name}:{item_id}:{fit_token(name, profile, item_id)}",
                                  f"{name} · {label} (HairDeck)",
                                  hub_jobs=est.get("hub_jobs"), note=str(est.get("note") or "")))
-        return sorted(out, key=lambda c: (c.label.lower(), c.key))
+        return Listing(sorted(out, key=lambda c: (c.label.lower(), c.key)), tuple(withheld))
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
         name = candidate.key.split(":")[1]

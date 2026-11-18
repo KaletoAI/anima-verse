@@ -131,6 +131,7 @@ NAME_ALIAS = {
     "apply": "app.core.improvements.base.ImprovementType.apply",
     "find_candidates": "app.core.improvements.base.ImprovementType.find_candidates",
     "is_done": "app.core.improvements.base.ImprovementType.is_done",
+    "list_candidates": "app.core.improvements.base.ImprovementType.list_candidates",
 }
 
 

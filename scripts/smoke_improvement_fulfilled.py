@@ -70,6 +70,44 @@ sort_keys=True)``:
       {"x": 0.0, "y": 90.0, "z": 0.0}); rotation {y: 180} → another token;
       ``_subject_key("room:l/r:abc")`` = "room:l/r", of the old shape "room:l/r"
       itself.
+[5] A subject the type could not judge (``base.Listing.withheld``, review
+    follow-up of 059b4de8a: a transient omission must not turn a done step
+    fulfilled and re-run it at the next scan):
+    store: K = ``s:A:t`` ran (done) but its subject is still due (listed →
+    stays done); a scan with K unlisted and ``s:A`` withheld → {"added": 0,
+    "closed": 0}, K done; listed again → {"added": 0, "closed": 0}, K done —
+    zero new runs. The same unlisted scan WITHOUT the withholding (a subject
+    genuinely satisfied) → K fulfilled, and the same reason again → {"added":
+    1, "closed": 0}, K pending. A pending step under a withheld prefix stays
+    pending (closed 0). ``s:A`` does not cover ``s:AB:t`` (pending →
+    fulfilled, closed 1), but covers the old token-less shape ``s:A`` itself.
+    A listed key ``s:B:t2`` under the withheld ``s:B`` is inserted (added 1)
+    while its unlisted sibling ``s:B:t`` stays pending; ``s:A:t`` and ``s:A``
+    (pending, ``s:A`` not withheld this time) close → closed 2.
+    hair_fill end to end (standing entry, roster ``(["Mia"], [])``, worn
+    hairstyle ``hair1`` missing, ``fit_token`` stubbed to "tokA" → key
+    ``character:Mia:hair1:tokA``): due → added 1; the step runs → done, the
+    hair still missing (still listed → stays done, {0, 0}); a run of the hair
+    in flight → withheld ``character:Mia``, not listed → {0, 0}, done; the
+    run ended, the hair still missing → listed → {0, 0}, done, the queue holds
+    no step of the entry (zero new runs). Then the hair made (``_subject``
+    None, nothing in flight → not withheld) → {0, 0}, fulfilled; missing again
+    under the same token → {"added": 1, "closed": 0}, pending.
+    What each figure type withholds (stubs): the roster ``([], ["Mia"])`` (a
+    base model being built) → base_refresh ("base:Mia",), fit_refit
+    ("character:Mia",), hair_fill ("character:Mia",), outfit_rebuild
+    ("outfit:Mia",), garment_fill kind clothing ("clothing:Mia",) — and no
+    candidate. Ready roster ``(["Mia"], [])``: base_refresh with a base render
+    running (``_blocker`` "running") → ("base:Mia",); outfit_rebuild with the
+    worn outfit sig1 ``outfit_info`` "running" → ("outfit:Mia:sig1",);
+    garment_fill with the dress in flight → ("clothing:Mia:dress",).
+    ``subjects.pipeline_roster``: Mia ready, Ann running, Bob failed (all on
+    the pipeline) → (["Mia"], ["Ann"]); narrowed to "Ann" → ([], ["Ann"]).
+    A roster read that fails raises (``list_available_characters`` strict):
+    ``subjects.characters()`` raises, and a scan of a mesh_from_tpose entry
+    raises and leaves its done step done.
+    Fails on 059b4de8a: ``replace_steps_scan`` takes no ``withheld`` (TypeError)
+    and the types have no ``list_candidates``.
 """
 import hashlib
 import json
@@ -335,11 +373,139 @@ def part4():
           (surface_bake._subject_key("room:l/r:abc"), surface_bake._subject_key("room:l/r")), ("room:l/r", "room:l/r"))
 
 
+def part5():
+    print("[5] withheld subjects")
+    entry = store.create("fake", "W", {}, "standing")["id"]
+    K = "s:A:t"
+    listed = [(K, "A", 2, "")]
+    store.replace_steps_scan(entry, listed)
+    store.mark_running(entry, K)
+    store.mark_result(entry, K, status="done", count_attempt=False)
+    check("ran, still due: stays done", store.replace_steps_scan(entry, listed), {"added": 0, "closed": 0})
+    check("withheld and unlisted: untouched", store.replace_steps_scan(entry, [], withheld=["s:A"]),
+          {"added": 0, "closed": 0})
+    check("…still done", step(entry, K)["status"], "done")
+    check("listed again: not re-offered", store.replace_steps_scan(entry, listed), {"added": 0, "closed": 0})
+    check("…still done, attempts unchanged", (step(entry, K)["status"], step(entry, K)["attempts"]), ("done", 0))
+    store.replace_steps_scan(entry, [])
+    check("genuinely satisfied (not withheld): fulfilled", step(entry, K)["status"], "fulfilled")
+    check("…and offered again when the reason recurs", store.replace_steps_scan(entry, listed),
+          {"added": 1, "closed": 0})
+    P, AB, OLD = "s:B:t", "s:AB:t", "s:A"
+    store.replace_steps_scan(entry, listed + [(P, "B", 0, ""), (AB, "AB", 0, ""), (OLD, "A old", 0, "")])
+    check("withheld s:A and s:B: only s:AB closes", store.replace_steps_scan(entry, [], withheld=["s:A", "s:B"]),
+          {"added": 0, "closed": 1})
+    check("…statuses", {k: step(entry, k)["status"] for k in (K, P, AB, OLD)},
+          {K: "pending", P: "pending", AB: "fulfilled", OLD: "pending"})
+    check("a listed key under a withheld prefix is inserted",
+          store.replace_steps_scan(entry, [("s:B:t2", "B", 0, "")], withheld=["s:B"]), {"added": 1, "closed": 2})
+    check("…its unlisted sibling stays", (step(entry, P)["status"], step(entry, "s:B:t2")["status"]),
+          ("pending", "pending"))
+    store.delete(entry)
+
+    from app.core import base_body
+    from app.core.improvements.types import base_refresh, garment_fill, hair_fill, outfit_rebuild
+    hf = registry.get("hair_fill")
+    hair = {"subject": ("hair1", "Bob cut"), "in_flight": False}
+    HK = "character:Mia:hair1:tokA"
+    with patch.object(subjects, "pipeline_roster", lambda wanted="": (["Mia"], [])), \
+         patch.object(hair_fill, "_profile", lambda name: {}), \
+         patch.object(hair_fill, "_subject", lambda name, profile: hair["subject"]), \
+         patch.object(hair_fill, "_in_flight", lambda name, item: hair["in_flight"]), \
+         patch.object(hair_fill, "fit_token", lambda name, profile, item: "tokA"), \
+         patch("app.core.garments.run_estimate", lambda name, item, profile=None: {"hub_jobs": 1, "note": ""}):
+        entry = store.create(hf.id, "Hair", {}, "standing")["id"]
+        check("hair_fill: due", engine.scan(entry), {"added": 1, "closed": 0})
+        check("…the key", [s["candidate_key"] for s in store.list_steps(entry)], [HK])
+        store.mark_running(entry, HK)
+        store.mark_result(entry, HK, status="done", count_attempt=False)
+        check("…ran, the hair still missing", engine.scan(entry), {"added": 0, "closed": 0})
+        hair["in_flight"] = True
+        check("…a hair run in flight: withheld", hf.list_candidates({}).withheld, ("character:Mia",))
+        check("…the scan leaves the step", engine.scan(entry), {"added": 0, "closed": 0})
+        check("…done", step(entry, HK)["status"], "done")
+        hair["in_flight"] = False
+        check("…the run ended, still missing: nothing re-offered", engine.scan(entry), {"added": 0, "closed": 0})
+        check("…done, no step queued", (step(entry, HK)["status"],
+                                        [r["candidate_key"] for r in engine.ordered_queue()
+                                         if r["improvement_id"] == entry]), ("done", []))
+        hair["subject"] = None
+        check("…the hair made: nothing new (a done step closes uncounted)", engine.scan(entry), {"added": 0, "closed": 0})
+        check("…fulfilled", step(entry, HK)["status"], "fulfilled")
+        hair["subject"] = ("hair1", "Bob cut")
+        check("…missing again, the same token: offered again", engine.scan(entry), {"added": 1, "closed": 0})
+        check("…pending", step(entry, HK)["status"], "pending")
+        store.delete(entry)
+
+    def withheld(typ, params):
+        listing = typ.list_candidates(params)
+        return listing.withheld, [c.key for c in listing.candidates]
+
+    with patch.object(subjects, "pipeline_roster", lambda wanted="": ([], ["Mia"])):
+        check("a base model being built: each figure type withholds the character",
+              [withheld(registry.get(t), p) for t, p in
+               (("base_refresh", {}), ("fit_refit", {}), ("hair_fill", {}), ("outfit_rebuild", {}),
+                ("garment_fill", {"kind": "clothing"}))],
+              [(("base:Mia",), []), (("character:Mia",), []), (("character:Mia",), []), (("outfit:Mia",), []),
+               (("clothing:Mia",), [])])
+    with patch.object(subjects, "pipeline_roster", lambda wanted="": (["Mia"], [])), \
+         patch.object(base_refresh, "_profile", lambda name: {}), \
+         patch.object(base_refresh, "_blocker", lambda name: ("running", "a base render is running")):
+        check("base_refresh: a base render running", withheld(registry.get("base_refresh"), {}),
+              (("base:Mia",), []))
+    with patch.object(subjects, "pipeline_roster", lambda wanted="": (["Mia"], [])), \
+         patch.object(outfit_rebuild, "_profile", lambda name: {}), \
+         patch.object(outfit_rebuild, "_outfits", lambda name, scope: [("sig1", "")]), \
+         patch.object(base_body, "outfit_info", lambda name, signature=None: {"status": "running"}):
+        check("outfit_rebuild: the outfit model being built", withheld(registry.get("outfit_rebuild"), {}),
+              (("outfit:Mia:sig1",), []))
+    with patch.object(subjects, "pipeline_roster", lambda wanted="": (["Mia"], [])), \
+         patch.object(garment_fill, "_profile", lambda name: {}), \
+         patch.object(garment_fill, "_pieces", lambda name, profile, scope: {"dress": "clothing"}), \
+         patch.object(garment_fill, "_in_flight", lambda name, item: True):
+        check("garment_fill: the dress in flight", withheld(registry.get("garment_fill"), {"kind": "clothing"}),
+              (("clothing:Mia:dress",), []))
+
+    status = {"Mia": "ready", "Ann": "running", "Bob": "failed"}
+    with patch.object(subjects, "characters", lambda: ["Ann", "Bob", "Mia"]), \
+         patch("app.models.character.get_character_profile", lambda name: {}), \
+         patch.object(base_body, "is_base_pipeline", lambda name, profile=None: True), \
+         patch.object(base_body, "base_model_info", lambda name, signature=None: {"status": status[name]}):
+        check("pipeline_roster: ready and building", subjects.pipeline_roster(), (["Mia"], ["Ann"]))
+        check("…narrowed", subjects.pipeline_roster("Ann"), ([], ["Ann"]))
+
+    def broken(*_a, strict=False, **_k):
+        if strict:
+            raise RuntimeError("roster unreadable")
+        return []
+    mt = registry.get("mesh_from_tpose")
+    entry = store.create(mt.id, "Meshes", {"backend": "hy"}, "standing")["id"]
+    store.replace_steps_scan(entry, [("Mia:sig1:t", "Mia", 0, "")])
+    store.mark_running(entry, "Mia:sig1:t")
+    store.mark_result(entry, "Mia:sig1:t", status="done", count_attempt=False)
+    with patch("app.models.character.list_available_characters", broken):
+        try:
+            subjects.characters()
+            got = "returned"
+        except RuntimeError:
+            got = "raised"
+        check("a failing roster read raises", got, "raised")
+        try:
+            engine.scan(entry)
+            got = "returned"
+        except RuntimeError:
+            got = "raised"
+        check("…the scan raises", got, "raised")
+    check("…and the done step stays done", step(entry, "Mia:sig1:t")["status"], "done")
+    store.delete(entry)
+
+
 def main() -> int:
     part1()
     part2()
     part3()
     part4()
+    part5()
     print("\nOK" if not FAILS else f"\nFAILED ({len(FAILS)}): {', '.join(FAILS)}")
     return 1 if FAILS else 0
 

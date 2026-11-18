@@ -22,8 +22,15 @@ the admin's explicit delete (``explicit=True``).
 Both collectors run under ``artefact_graph.HOOK_BUDGET_S`` (read at call
 time); a collect over it — or one that cannot read the work in progress
 (``artefact_graph.running_state``) — is abandoned without a delete — ``aborted``: the
-candidate stays listed (dropping it would close its pending step as done
-although nothing was cleaned), ``CandidateBusy`` in a step. What the collector skips
+character is listed as ``<name> · size unknown`` (the state is shown, review 09#7)
+and withheld (``base.Listing``) — what it would free is unknown, so the steps of
+its earlier sets stay as they are: a pending one is not closed, a done one is
+not marked fulfilled (and so not re-run when the set shows up again). The
+aborted step itself is a CPU collect (no hub job) and ``CandidateBusy`` while
+the state stays unreadable. A character whose dry run holds orphans a collect
+would skip now (``protected``: a run going on, the grace window) is withheld
+the same way, and so is the world candidate while a shoe source's chain holds
+its lock (the dry run's ``skipped``). What the collector skips
 (running, locked) is no failure: the step is done, its result note says so,
 and the next scan lists what is still orphaned. ``needs_media`` is False —
 CPU only, the entry keeps running with the media switch off.
@@ -40,7 +47,7 @@ of the older shape without a token still parses (``_name``, ``_is_world``).
 from pathlib import Path
 from typing import Any, Dict, List
 
-from app.core.improvements.base import Candidate, CandidateBusy, ImprovementType, ParamField
+from app.core.improvements.base import Candidate, CandidateBusy, ImprovementType, Listing, ParamField
 from app.core.improvements.types import subjects
 
 WORLD_KEY = "footwear_sources"
@@ -119,17 +126,24 @@ def _tree_size(path: Path) -> int:
         return 0
 
 
-def _world_candidate() -> List[Candidate]:
+def _world_listing() -> Listing:
     """The shoe sources' dry run as one candidate (sizes read here: the dry
-    run reports none), or nothing when it would remove nothing."""
+    run reports none), or nothing when it would remove nothing; withheld
+    while a source's chain holds its lock (the dry run's ``skipped``)."""
     from app.core import footwear_source
-    removed = footwear_source.collect(dry_run=True).get("removed") or []
+    report = footwear_source.collect(dry_run=True)
+    removed = report.get("removed") or []
+    withheld = (WORLD_KEY,) if report.get("skipped") else ()
     if not removed:
-        return []
+        return Listing([], withheld)
     size = sum(_tree_size(Path(p)) for p in removed)
     token = subjects.key_token(sorted(str(p) for p in removed))
-    return [Candidate(f"{WORLD_KEY}:{token}", f"Shoe sources · {len(removed)} folder(s) · {_mb(size)}", hub_jobs=0,
-                      note=f"world footwear sources {len(removed)} ({_mb(size)})")]
+    return Listing([Candidate(f"{WORLD_KEY}:{token}", f"Shoe sources · {len(removed)} folder(s) · {_mb(size)}",
+                              hub_jobs=0, note=f"world footwear sources {len(removed)} ({_mb(size)})")], withheld)
+
+
+def _world_candidate() -> List[Candidate]:
+    return _world_listing().candidates
 
 
 def _has_roots(name: str) -> bool:
@@ -177,17 +191,27 @@ class ArtefactCleanup(ImprovementType):
     # --- candidates ------------------------------------------------------------
 
     def find_candidates(self, params: Dict[str, Any]) -> List[Candidate]:
+        return self.list_candidates(params).candidates
+
+    def list_candidates(self, params: Dict[str, Any]) -> Listing:
         explicit = self._explicit(params)
         out: List[Candidate] = []
+        withheld: List[str] = []
         for name in self._names(params):
             report = _dry_run(name, explicit)
             if report.get("aborted"):
                 out.append(_aborted_candidate(name, report))
-            elif _deletable(report):
+                withheld.append(f"{CHARACTER_PREFIX}{name}")
+                continue
+            if any(e.get("protected") for e in report.get("orphans") or []):
+                withheld.append(f"{CHARACTER_PREFIX}{name}")
+            if _deletable(report):
                 out.append(_character_candidate(name, report))
         if not params.get("character"):
-            out += _world_candidate()
-        return sorted(out, key=lambda c: (c.label.lower(), c.key))
+            world = _world_listing()
+            out += world.candidates
+            withheld += world.withheld
+        return Listing(sorted(out, key=lambda c: (c.label.lower(), c.key)), tuple(withheld))
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
         if _is_world(candidate.key):

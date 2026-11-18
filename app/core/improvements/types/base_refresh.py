@@ -42,7 +42,7 @@ still parses (``_parse``).
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.improvements.base import (Candidate, CandidateBusy, CandidateRefused, ImprovementType,
-                                        ParamField)
+                                        Listing, ParamField)
 from app.core.improvements.types import subjects
 from app.imagegen.base import BackendBusyError, MediaGenerationDisabled
 
@@ -195,17 +195,30 @@ class BaseRefresh(ImprovementType):
     # --- candidates ------------------------------------------------------------
 
     def find_candidates(self, params: Dict[str, Any]) -> List[Candidate]:
+        return self.list_candidates(params).candidates
+
+    def list_candidates(self, params: Dict[str, Any]) -> Listing:
+        """Withheld (``base.Listing``): a character whose base model is being
+        built (off the ready roster for the moment) and one with a base render
+        or 3D generation running (``_blocker`` "running") — neither is judged
+        until it has ended. A failure record is no transient: that character
+        drops off and its step closes."""
         from app.core import base_body
+        ready, building = subjects.pipeline_roster(params.get("character") or "")
         out: List[Candidate] = []
-        for name in self._names(params):
+        withheld = [f"base:{name}" for name in building]
+        for name in ready:
             profile = _profile(name)
+            if _blocker(name)[0] == "running":
+                withheld.append(f"base:{name}")
+                continue
             cost = _judge(name, profile)
             if cost is None:
                 continue
             token = f"{cost['plan'].get('signature') or ''}:{base_body.prompt_fingerprint(name, profile=profile)}"
             out.append(Candidate(f"base:{name}:{token}", _label(name, cost["plan"]),
                                  hub_jobs=cost.get("hub_jobs"), note=str(cost.get("note") or "")))
-        return sorted(out, key=lambda c: (c.label.lower(), c.key))
+        return Listing(sorted(out, key=lambda c: (c.label.lower(), c.key)), tuple(withheld))
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
         name = _parse(candidate.key)

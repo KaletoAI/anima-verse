@@ -1,6 +1,6 @@
 """Contract every improvement type implements.  The engine never names a type."""
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -17,6 +17,21 @@ class Candidate:
     # applies). None = unknown: listed as such, never silently as 0.
     hub_jobs: Optional[int] = 0
     note: str = ""    # one line: what the estimate counts, or a dry-run summary
+
+
+@dataclass(frozen=True)
+class Listing:
+    """What a scan sees: the candidates, and the subjects it could NOT judge this time.
+
+    ``withheld`` holds subject key prefixes (a step key is under one when it equals it or starts with it plus
+    ":") — a subject whose state is in flux right now (its run in progress elsewhere, its base model being
+    built, its running jobs unreadable). Such a subject is neither due nor satisfied: the scan leaves an
+    unlisted step under it as it is — a pending one stays pending, a done one done (never ``fulfilled``, so it
+    is not re-offered when the subject shows up again under the same key). A listed key under a withheld
+    prefix is handled as any listed key. A permanent exclusion (a persisted failure, a setting, a scope) is
+    not withheld: the subject drops off the list and its step closes as fulfilled."""
+    candidates: List[Candidate]
+    withheld: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -66,6 +81,12 @@ class ImprovementType:
     def find_candidates(self, params: Dict[str, Any]) -> List[Candidate]:
         """Every subject NOT yet is_done, stable order (label, key)."""
         raise NotImplementedError
+
+    def list_candidates(self, params: Dict[str, Any]) -> Listing:
+        """What the scan diffs onto the steps (``Listing``). A type that leaves a subject out for a transient
+        reason overrides this and reports it as withheld; ``find_candidates`` then returns
+        ``list_candidates(params).candidates``."""
+        return Listing(self.find_candidates(params))
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
         """The type's own finished-test, used INSIDE ``find_candidates`` — the
