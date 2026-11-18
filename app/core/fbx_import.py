@@ -1150,6 +1150,98 @@ def _scene_source(name: str) -> Path:
     return hits[0]
 
 
+def rebuild_record(meta: Dict[str, Any], kind: str) -> Dict[str, Any]:
+    """The ``source.rebuild`` block of a scene's sidecar (``fbx_clip``; review
+    04#4): ``window_s`` [start, end|None] in source seconds, the import dial
+    ``yaw_deg``, ``level_head`` and the ordered ``orient_bakes``. A sidecar
+    written before the block existed does not say over which window its
+    halves were converted nor which turns and lifts were baked into them since
+    — an alt half built from it would cover another span or stand in another
+    frame. That is refused, never guessed."""
+    source = meta.get("source")
+    rebuild = source.get("rebuild") if isinstance(source, dict) else None
+    window = rebuild.get("window_s") if isinstance(rebuild, dict) else None
+    if not (isinstance(rebuild, dict) and isinstance(window, list) and len(window) == 2
+            and isinstance(rebuild.get("orient_bakes"), list)
+            and "yaw_deg" in rebuild and "level_head" in rebuild):
+        raise ClipImportError(
+            f"'{kind}' cannot take an alt half: its sidecar does not record the import "
+            "window and the orientation bakes of its halves (it was imported before "
+            "they were recorded), so a rebuilt half could cover a different span or "
+            "miss a later turn or lift — re-import the clip with overwrite, then "
+            "import the alt again")
+    for bake in rebuild["orient_bakes"]:
+        if not isinstance(bake, dict):
+            raise ClipImportError(f"'{kind}': an orientation bake in its sidecar is not an object")
+    return rebuild
+
+
+def _frame_inputs(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """What an alt run is built from, minus what may change between the read
+    before the library lock and the one under it (the orientation bakes, the
+    other alts): a difference means the scene was re-imported meanwhile."""
+    source = dict(meta.get("source") or {})
+    source.pop("alt_takes", None)
+    rebuild = source.get("rebuild")
+    if isinstance(rebuild, dict):
+        source["rebuild"] = {k: v for k, v in rebuild.items() if k != "orient_bakes"}
+    geometry = meta.get("geometry") or {}
+    return {"source": source, "roles": meta.get("roles"), "fps": meta.get("fps"),
+            "speed": meta.get("speed"), "frames": meta.get("frames"),
+            "anchor_s": geometry.get("anchor_s"), "anchor_frame": geometry.get("anchor_frame")}
+
+
+def replay_orient_bakes(files: Dict[str, Path], bakes: List[Dict[str, Any]], *,
+                        rig: Path, fps: int, anchor_frame: int, work: Path,
+                        timeout_s: int = 900) -> Tuple[Dict[str, Path], Dict[str, Dict[str, Any]]]:
+    """Runs the recorded orientation bakes again, in order, over freshly
+    converted files — one ``clip_orient`` run per bake with exactly the
+    numbers ``orient_clip`` gave it, so the files take the same turns, lifts
+    and shifts (and FBX round trips) the library's halves took.
+
+    ``files`` is ``{role key: path}`` with role keys as in the sidecar
+    (``"a"``, ``"b"``, ``"b~wave"``); a bake's ``role_shift_cm`` moves every
+    file of that base role, an alt half with its role — as ``orient_clip``
+    does. Returns the final paths and, per role key, the root measured on
+    the last written file the way ``orient_clip`` re-measures it
+    (``start_xz_m`` at the first frame, ``anchor_xz_m`` at ``anchor_frame``).
+    With no bake the files come back unchanged and nothing is measured."""
+    from app.core.animation_clips import _xz_m
+    current = dict(files)
+    measured: Dict[str, Dict[str, Any]] = {}
+    for i, bake in enumerate(bakes):
+        slots = {f"src_{n}": key for n, key in enumerate(current)}
+        shifts = bake.get("role_shift_cm") or {}
+        params = {k: float(bake.get(k) or 0.0)
+                  for k in ("yaw_deg", "tilt_deg", "roll_deg", "height_cm")}
+        params.update({
+            "fps": int(fps), "anchor_frame": int(anchor_frame),
+            "slot_shift_cm": {slot: [float(v) for v in shifts[key.split(ALT_SEPARATOR)[0]]]
+                              for slot, key in slots.items()
+                              if key.split(ALT_SEPARATOR)[0] in shifts}})
+        out = Path(work) / f"replay-{i}"
+        out.mkdir(parents=True, exist_ok=True)
+        inputs: Dict[str, Path] = {"rig": Path(rig)}
+        inputs.update({slot: current[key] for slot, key in slots.items()})
+        res = runner.run("clip_orient", inputs=inputs, params=params, out_dir=out,
+                         timeout_s=timeout_s)
+        if not res["ok"]:
+            raise ClipImportError(f"replaying orientation bake {i + 1} of {len(bakes)} "
+                                  f"failed: {res.get('error') or 'blender run failed'}")
+        written = res.get("outputs") or {}
+        clips = (res.get("data") or {}).get("clips") or {}
+        for slot, key in slots.items():
+            path = Path(written.get(slot) or "")
+            if not path.is_file():
+                raise ClipImportError(f"replaying orientation bake {i + 1}: "
+                                      f"the Blender run wrote no file for {key}")
+            current[key] = path
+            d = clips.get(slot) or {}
+            measured[key] = {"start_xz_m": _xz_m(d.get("root_after")),
+                             "anchor_xz_m": _xz_m(d.get("root_after_anchor"))}
+    return current, measured
+
+
 def import_alt(kind: str, role: str, alt: str, file: Any, *, clip_set: str = "",
                target: str = "licensed", timeout_s: int = 900) -> Dict[str, Any]:
     """Import an ALT half of a pair or group clip already in the library
@@ -1166,7 +1258,16 @@ def import_alt(kind: str, role: str, alt: str, file: Any, *, clip_set: str = "",
     frame was met is CHECKED, every recomputed role point has to lie within
     ``ALT_FRAME_TOLERANCE_M`` of the stored one, otherwise nothing is written.
     The sidecar gains ``alts.<role>`` (the names) and ``geometry.alts``
-    (the alt's root at start and anchor frame)."""
+    (the alt's root at start and anchor frame).
+
+    The alt FOLLOWS the scene's halves (review 04#4): it is converted over
+    the import window the sidecar records (``source.rebuild``), and the
+    orientation bakes applied to the halves since the import are replayed on
+    it in order (:func:`replay_orient_bakes`). With bakes recorded, the
+    scene's halves are rebuilt as files too, take the same replay, and the
+    frame check measures THEM the way ``orient_clip`` measured the library's.
+    The rebuilt frame count has to equal the scene's. A sidecar without the
+    ``rebuild`` block is refused (:func:`rebuild_record`)."""
     kind = cmu_import.validate_kind(kind)
     role = str(role or "").strip().lower()
     alt = str(alt or "").strip().lower()
@@ -1197,6 +1298,9 @@ def import_alt(kind: str, role: str, alt: str, file: Any, *, clip_set: str = "",
     if source.get("format") != "fbx" or len(files) != len(roles) or len(takes) != len(roles):
         raise ClipImportError(f"'{kind}' was not imported from FBX takes per role — "
                               "its frame cannot be rebuilt")
+    rebuild = rebuild_record(meta, kind)
+    frame_inputs = _frame_inputs(meta)
+    window = rebuild["window_s"]
 
     paths_in: List[Path] = []
     take_specs: List[Dict[str, Any]] = []
@@ -1235,13 +1339,16 @@ def import_alt(kind: str, role: str, alt: str, file: Any, *, clip_set: str = "",
     offsets = dict(source.get("offsets_m") or {})
     if source.get("offset_b_m"):
         offsets["b"] = list(source["offset_b_m"])
-    head = geometry.get("head_pitch_deg")
+    # The import's own dial and window, not ``geometry.yaw_deg`` (that also
+    # sums every later orient, which the bakes replay below).
     inputs, params = _prepare_job(
         kind, paths_in, take_specs, [str(f) for f in files], rest_path, rest_spec,
         fps=int(meta.get("fps") or 30), loops=bool(meta.get("loop")),
+        start_s=float(window[0] or 0.0),
+        end_s=None if window[1] is None else float(window[1]),
         offsets_m=offsets, speed=float(meta.get("speed") or 1.0),
-        yaw_deg=float(geometry.get("yaw_deg") or 0.0),
-        level_head=bool(head and any(v is not None for v in head)))
+        yaw_deg=float(rebuild["yaw_deg"] or 0.0),
+        level_head=bool(rebuild["level_head"]))
     params["anchor_s"] = geometry.get("anchor_s")
     slot = next((k for k, v in inputs.items() if k != "rig" and v == alt_path), "")
     if not slot:
@@ -1255,25 +1362,62 @@ def import_alt(kind: str, role: str, alt: str, file: Any, *, clip_set: str = "",
 
     import shutil
     from app.core.http_files import atomic_replace, sibling_stage
+    alt_key = f"{role}{ALT_SEPARATOR}{alt}"
     with library_write_lock(out):
+        # The sidecar read above may be stale by now (a loop/role-gender edit,
+        # an orient): re-read it under the lock — nothing writes it while the
+        # lock is held — take the bakes from it, check the frame against ITS
+        # geometry and add only the alt's own keys to it.
+        try:
+            meta = json.loads(sidecar.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise ClipImportError(
+                f"'{kind}' has no readable sidecar in the {target} library any more: {e}")
+        if not isinstance(meta, dict):
+            raise ClipImportError(f"{sidecar.name} is not an object")
+        bakes = list(rebuild_record(meta, kind)["orient_bakes"])
+        if _frame_inputs(meta) != frame_inputs:
+            raise ClipImportError(
+                f"'{kind}' was re-imported while the alt import waited — nothing was "
+                "written; run the alt import again")
+        geometry = meta.get("geometry") or {}
+        if bakes:
+            params["export_roles"] = True
         with tempfile.TemporaryDirectory(prefix=".clip-alt-", dir=out) as temporary:
             res = runner.run("fbx_clip", inputs=inputs, params=params,
                              out_dir=Path(temporary), timeout_s=timeout_s)
             if not res["ok"]:
                 raise ClipImportError(str(res.get("error") or "blender run failed"))
             data = res.get("data") or {}
-            # The sidecar read above may be stale by now (a loop/role-gender
-            # edit, an orient): re-read it under the lock, check the frame
-            # against ITS geometry and add only the alt's own keys to it.
-            try:
-                meta = json.loads(sidecar.read_text(encoding="utf-8"))
-            except (OSError, ValueError) as e:
+            outputs = res.get("outputs") or {}
+            produced = Path(outputs.get(stem) or "")
+            if not produced.is_file():
+                raise ClipImportError(f"the Blender run wrote no {stem}.fbx")
+            if data.get("frames") != meta.get("frames"):
                 raise ClipImportError(
-                    f"'{kind}' has no readable sidecar in the {target} library any more: {e}")
-            if not isinstance(meta, dict):
-                raise ClipImportError(f"{sidecar.name} is not an object")
-            got = (data.get("geometry") or {}).get("roles") or {}
-            want = (meta.get("geometry") or {}).get("roles") or {}
+                    f"the frame of '{kind}' could not be rebuilt from its sources "
+                    f"({data.get('frames')} frames instead of {meta.get('frames')}) "
+                    "— nothing was written")
+            if bakes:
+                halves: Dict[str, Path] = {}
+                for r in roles:
+                    half = Path(outputs.get(f"{kind}{ROLE_SEPARATOR}{r}") or "")
+                    if not half.is_file():
+                        raise ClipImportError(
+                            f"the Blender run wrote no rebuilt {kind}{ROLE_SEPARATOR}{r}.fbx")
+                    halves[r] = half
+                halves[alt_key] = produced
+                final, measured = replay_orient_bakes(
+                    halves, bakes, rig=inputs["rig"], fps=int(meta.get("fps") or 30),
+                    anchor_frame=int(geometry.get("anchor_frame") or 0),
+                    work=Path(temporary), timeout_s=timeout_s)
+                produced = final[alt_key]
+                got = {r: measured[r] for r in roles}
+                alt_geo = measured.get(alt_key)
+            else:
+                got = (data.get("geometry") or {}).get("roles") or {}
+                alt_geo = ((data.get("geometry") or {}).get("alts") or {}).get(alt_key)
+            want = geometry.get("roles") or {}
             drift = {r: math.dist(got[r]["anchor_xz_m"], want[r]["anchor_xz_m"])
                      for r in roles if r in got and r in want}
             if len(drift) != len(roles) or max(drift.values()) > ALT_FRAME_TOLERANCE_M:
@@ -1281,16 +1425,12 @@ def import_alt(kind: str, role: str, alt: str, file: Any, *, clip_set: str = "",
                     f"the frame of '{kind}' could not be rebuilt from its sources "
                     f"(role points off by {', '.join(f'{r} {d:.3f} m' for r, d in drift.items())}) "
                     "— nothing was written")
-            produced = Path((res.get("outputs") or {}).get(stem) or "")
-            if not produced.is_file():
-                raise ClipImportError(f"the Blender run wrote no {stem}.fbx")
             dest = out / f"{stem}.fbx"
             with sibling_stage(dest) as stage:
                 shutil.copy2(produced, stage)
                 atomic_replace(stage, dest)
         names = [n for n in (meta.get("alts") or {}).get(role) or [] if n != alt]
         meta.setdefault("alts", {})[role] = names + [alt]
-        alt_geo = ((data.get("geometry") or {}).get("alts") or {}).get(f"{role}{ALT_SEPARATOR}{alt}")
         if alt_geo:
             meta.setdefault("geometry", {}).setdefault("alts", {})[f"{role}{ALT_SEPARATOR}{alt}"] = alt_geo
         meta.setdefault("source", {}).setdefault("alt_takes", {})[f"{role}{ALT_SEPARATOR}{alt}"] = \
@@ -1303,7 +1443,7 @@ def import_alt(kind: str, role: str, alt: str, file: Any, *, clip_set: str = "",
                 f"{cset}/" if cset else "", stem, target, res.get("seconds") or 0.0)
     return {"kind": kind, "role": role, "alt": alt, "set": cset, "target": target,
             "file": f"{stem}.fbx", "alts": meta["alts"], "drift_m": {r: round(d, 4) for r, d in drift.items()},
-            "seconds": res.get("seconds") or 0.0}
+            "orient_bakes_replayed": len(bakes), "seconds": res.get("seconds") or 0.0}
 
 
 def _prepare_source(path: Path, take: Optional[int], *, name: Optional[str] = None,

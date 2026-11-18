@@ -10,8 +10,9 @@ ANIMATION_CLIPS_INBOX_DIR and ANIMATION_RIG_FILE point into one temp dir.
 Usage: ./.venv/bin/python scripts/smoke_fbx_import_library_state.py
 
 [A] ``import_alt`` and a concurrent sidecar edit (04#3). The scene ``hug``
-    (licensed, pair, sidecar ``hug.json`` with source files a.fbx/b.fbx and
-    role anchors a [0, 0], b [0.5, 0]) gets the alt ``b~wave``. The alt run
+    (licensed, pair, sidecar ``hug.json`` with source files a.fbx/b.fbx,
+    30 frames, a ``source.rebuild`` record with no window and no bakes (04#4)
+    and role anchors a [0, 0], b [0.5, 0]) gets the alt ``b~wave``. The alt run
     reads the sidecar, then waits for the library lock that a second thread
     holds; that thread sets ``loop`` (``set_clip_loop``) and releases. The
     stand-in run answers the scene's anchors unchanged (drift 0).
@@ -144,7 +145,8 @@ def fake_run(script, *, inputs=None, params=None, out_dir=None, timeout_s=0):
         stem = f"{params['kind']}__{alt['role']}~{alt['name']}"
         (out / f"{stem}.fbx").write_bytes(b"alt-" + stem.encode())
         outputs[stem] = str(out / f"{stem}.fbx")
-    data = {"geometry": {"roles": {r: {"anchor_xz_m": list(v)} for r, v in ANCHORS.items()},
+    data = {"frames": 30,
+            "geometry": {"roles": {r: {"anchor_xz_m": list(v)} for r, v in ANCHORS.items()},
                          "alts": {f"{a['role']}~{a['name']}": {"start_xz_m": [0, 0]}
                                   for a in params.get("alts") or []}}}
     return {"ok": True, "outputs": outputs, "data": data, "seconds": 0.1}
@@ -154,10 +156,13 @@ def write_scene():
     LICENSED.mkdir(parents=True, exist_ok=True)
     for role in ("a", "b"):
         (LICENSED / f"hug__{role}.fbx").write_bytes(b"half-" + role.encode())
-    meta = {"kind": "hug", "pair": True, "roles": ["a", "b"], "fps": 30, "loop": False,
+    meta = {"kind": "hug", "pair": True, "roles": ["a", "b"], "fps": 30, "frames": 30,
+            "loop": False,
             "geometry": {"roles": {r: {"anchor_xz_m": list(v)} for r, v in ANCHORS.items()},
                          "anchor_s": 0.5},
-            "source": {"format": "fbx", "files": ["a.fbx", "b.fbx"], "takes": [None, None]}}
+            "source": {"format": "fbx", "files": ["a.fbx", "b.fbx"], "takes": [None, None],
+                       "rebuild": {"window_s": [0.0, None], "yaw_deg": 0.0,
+                                   "level_head": False, "orient_bakes": []}}}
     (LICENSED / "hug.json").write_text(json.dumps(meta), encoding="utf-8")
     clips.reload_clip_caches()
 

@@ -877,7 +877,9 @@ def run_takes(takes, args, fps, source, alts=()):
     exactly like their base role, exported as ``<kind>__<role>~<name>.fbx``.
     With ``args["export"] == "alts"`` only those files are written and no
     sidecar — the scene's own halves are computed (they define the frame) but
-    the library copies stay untouched; the caller merges the result."""
+    the library copies stay untouched; the caller merges the result. With
+    ``args["export_roles"]`` as well, those halves are also baked and written
+    into ``out_dir`` (for the caller's comparison, never published)."""
     alts = list(alts)
     only_alts = args.get("export") == "alts"
     if alts and len(takes) < 2:
@@ -986,7 +988,12 @@ def run_takes(takes, args, fps, source, alts=()):
     geometry["rig_floor_shift_cm"] = round(-floor_cm, 2)
     geometry["rig_floor_min_cm"] = round(lows[0] - floor_cm, 2) if lows else 0.0
     spikes = {}
-    bakes = [] if only_alts else list(zip(takes, solved, scales, offsets, stands))
+    # ``export_roles`` (alt runs only): the scene's own halves are baked and
+    # written too — into the job directory, never the library — so the caller
+    # can replay the clip's orientation bakes on them and measure the rebuilt
+    # frame the way ``orient_clip`` measured the library's.
+    bakes = ([] if only_alts and not args.get("export_roles")
+             else list(zip(takes, solved, scales, offsets, stands)))
     if alts:
         bakes += zip(alts, solved_alt, [sol[4][0] for sol in solved_alt],
                      alt_offsets, [sol[4][1] for sol in solved_alt])

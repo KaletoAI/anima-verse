@@ -2430,6 +2430,31 @@ def _bump_angle(geometry: Dict[str, Any], field: str, delta: float) -> None:
         geometry[field] = total
 
 
+def record_orient_bake(meta: Dict[str, Any], bake: Dict[str, Any]) -> bool:
+    """Appends one orientation bake to ``source.rebuild.orient_bakes`` of a
+    sidecar (review 04#4) — the ordered list an alt import replays on its new
+    half, so the half follows every turn and lift the scene's files took.
+
+    ``bake`` is exactly what the ``clip_orient`` run got: ``yaw_deg``,
+    ``tilt_deg``, ``roll_deg``, ``height_cm`` and ``role_shift_cm``
+    (``{role: [x, y, z]}``, a pair's partner shift under ``"b"``), unrounded.
+    A sidecar without the ``rebuild`` block (written before it existed)
+    stays without it: its earlier bakes are unknown, and a list started now
+    would claim a history it does not have. Returns whether it was recorded."""
+    source = meta.get("source")
+    rebuild = source.get("rebuild") if isinstance(source, dict) else None
+    bakes = rebuild.get("orient_bakes") if isinstance(rebuild, dict) else None
+    if not isinstance(bakes, list):
+        return False
+    shifts = {r: [float(x) for x in v] for r, v in (bake.get("role_shift_cm") or {}).items()}
+    entry: Dict[str, Any] = {k: float(bake.get(k) or 0.0)
+                             for k in ("yaw_deg", "tilt_deg", "roll_deg", "height_cm")}
+    if shifts:
+        entry["role_shift_cm"] = shifts
+    bakes.append(entry)
+    return True
+
+
 @_library_writer
 def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
                 tilt_deg: float = 0.0, roll_deg: float = 0.0,
@@ -2456,7 +2481,9 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
     ``root_motion.travel_m`` turns by the same rotation, and a pair's
     ``roles.*.start_xz_m`` / ``anchor_xz_m`` and ``root_distance_m`` are
     RE-MEASURED on the written file instead of being predicted, because that
-    root path is what the clients read.
+    root path is what the clients read. Every bake (a Blender run) is also
+    appended to ``source.rebuild.orient_bakes`` (:func:`record_orient_bake`),
+    which an alt import replays in order on its new half.
 
     ``partner_shift_cm`` is ``[side, up, forward]`` in the clip frame (+X =
     the clip's left, +Y up, +Z forward), centimetres: it moves the B half of
@@ -2607,6 +2634,12 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
                     if stage.exists():
                         stage.unlink(missing_ok=True)
         data = (res["data"] or {}).get("clips") or {}
+    if baked:
+        role_shift = dict(per_role)
+        if shifted and any(abs(v) > 1e-9 for v in shift):
+            role_shift["b"] = shift                 # a pair's partner shift is role b's
+        record_orient_bake(meta, {"yaw_deg": yaw, "tilt_deg": tilt, "roll_deg": roll,
+                                  "height_cm": height, "role_shift_cm": role_shift})
     for field, delta in zip(ORIENT_ANGLES, (yaw, tilt, roll)):
         if abs(delta) > 1e-9:
             _bump_angle(geometry, field, delta)

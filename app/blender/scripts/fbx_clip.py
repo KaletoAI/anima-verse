@@ -40,6 +40,9 @@ Invoked through ``app.blender.runner.run("fbx_clip", inputs=…, params=…)``:
                             frame of the scene (``cmu_clip.run_takes``)
              export         "alts" = write only the alt halves and no
                             sidecar (the scene is already in the library)
+             export_roles   with export "alts": write the scene's own halves
+                            too (job directory only), so the caller can replay
+                            the clip's orientation bakes on them
 
 How it works — positions, not rotations
 ---------------------------------------
@@ -1195,7 +1198,23 @@ def run(job):
               "offsets_m": offsets,
               "rest_file": str(args.get("rest_name") or ""),
               # the reference TAKE too — an alt import rebuilds the frame from it
-              "rest_take": rest_pick[0] if rest else None}
+              "rest_take": rest_pick[0] if rest else None,
+              # The rest of what an alt import needs to rebuild a half of this
+              # clip identically (review 04#4): the import window in SOURCE
+              # seconds ([start, None] = to the end of the take), the
+              # orientation dial and the head levelling as they were ASKED
+              # for (``geometry.yaw_deg`` also sums every later orient), and
+              # the orientation bakes ``animation_clips.orient_clip`` writes
+              # into the files afterwards — it appends one entry per bake, in
+              # order. Always present in a new sidecar: an empty list means
+              # "nothing baked since", a missing block "not recorded".
+              "rebuild": {
+                  "window_s": [float(args.get("start_s", 0) or 0.0),
+                               None if args.get("end_s") is None else float(args["end_s"])],
+                  "yaw_deg": float(args.get("yaw_deg") or 0.0),
+                  "level_head": bool(args.get("level_head")),
+                  "orient_bakes": [],
+              }}
     if alt_takes:
         source["alt_takes"] = {r: t for r, _p, t, _c, _n in alt_entries}
     return cmu_clip.run_takes(takes, args, fps, source, alt_takes)
