@@ -2859,6 +2859,11 @@ Bewegung derselben Rolle):
 - Import: `fbx_import.import_alt(kind, role, alt, {name, take})` rechnet die
   Szene aus ihren Quellen neu und prüft, dass jeder Rollenpunkt auf 5 mm
   wiederkommt. Geschrieben wird nur die Alt-Datei.
+  Die Alt-Hälfte FOLGT der Szene: sie wird über das Importfenster aus
+  `source.rebuild` (`window_s`, `yaw_deg`, `level_head`) gerechnet, und die
+  dort geordnet vermerkten `orient_bakes` werden auf ihr wiederholt. Ein
+  Sidecar ohne `source.rebuild` (Import vor dieser Aufzeichnung) wird
+  abgelehnt — Clip mit Überschreiben neu importieren.
 - `GET /assets/animation-clips` führt sie NICHT in `clips`, sondern in
   `alt_clips` (Clip-Zeile plus `alt`); `pairs.<kind>.alts` und
   `groups.<kind>.alts` nennen die vorhandenen pro Rolle. Kein anderer Leser

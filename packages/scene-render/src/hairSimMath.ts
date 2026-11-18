@@ -537,8 +537,7 @@ const FACTOR_TABLES_KEPT = 2
 
 /** A capsule factor table, typed by inference: the two apps compile with different TypeScript versions, and only
  *  the newer one knows the generic `Float32Array<ArrayBuffer>` (the older one rejects it). */
-const EMPTY_FACTORS = new Float32Array(0)
-type FactorTable = typeof EMPTY_FACTORS
+type FactorTable = ReturnType<typeof Float32Array.from>
 
 export class StrandSim {
   readonly binding: StrandBinding
