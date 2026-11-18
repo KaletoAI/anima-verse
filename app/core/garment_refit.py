@@ -432,6 +432,13 @@ def _refit_bodies(character_name: str, profile: Dict[str, Any], base_sha: str) -
         except refit_pool.RefitInterrupted:
             raise  # no refusal on that body: the pool ended the call (the server stops)
         except Exception as e:  # noqa: BLE001 — recorded on that body, the old fit stays served
+            from app.blender import outcome as oc
+            if oc.is_retryable(oc.of_exception(e)):
+                # A Blender timeout / interruption / no Blender judges nothing: no record, the next start's sweep
+                # finds the fit outdated again (one try per start).
+                logger.warning("Garment refit %s/%s (%s) on outfit body %s left due (%s): %s", character_name,
+                               item_id, fsig, body_id, oc.of_exception(e), e)
+                continue
             error = e.error if isinstance(e, garments._Refused) else (str(e) or type(e).__name__)
             gs.record_body_failure(character_name, item_id, fsig, body_id, error=error,
                                    body_sha=str(old.get("body_sha256") or ""),
@@ -446,6 +453,16 @@ def _refit_bodies(character_name: str, profile: Dict[str, Any], base_sha: str) -
         logger.info("Garment refit %s/%s (%s, %s) on outfit body %s: %s: %s", character_name,
                     item_id, kind, fsig, body_id, why, outcome)
     return done
+
+
+def _fit_failure(character_name: str, item_id: str, fsig: str, e: BaseException) -> Dict[str, Any]:
+    """The result of a sweep fit that raised: load or a retryable Blender / CPU run end (``garments._is_load``) is
+    left due (``garments._retry_later`` — no record, the next start's sweep tries again), anything else is recorded
+    as a crash (``garments._refusal(crashed=)``)."""
+    from app.core import garments
+    if garments._is_load(e):
+        return garments._retry_later(character_name, item_id, fsig, "fit", e, [])
+    return garments._refusal(character_name, item_id, fsig, "fit", str(e) or type(e).__name__, None, [], crashed=e)
 
 
 def _retry_refused(character_name: str, profile: Dict[str, Any], bsig: str,
@@ -472,7 +489,7 @@ def _retry_refused(character_name: str, profile: Dict[str, Any], bsig: str,
         except garments._Refused as e:
             result = garments._refusal(character_name, item_id, fsig, "fit", e.error, e.gates, [])
         except Exception as e:  # noqa: BLE001 — reported as the fit's failure, the sweep goes on
-            result = garments._refusal(character_name, item_id, fsig, "fit", str(e) or type(e).__name__, None, [])
+            result = _fit_failure(character_name, item_id, fsig, e)
         else:
             gs.end(character_name, item_id, "fit")
             result = {"ok": True, "fsig": fsig, "ran": ["fit"]}
@@ -571,7 +588,7 @@ def _fit_footwear(character_name: str, item_id: str, fsig: str, profile: Dict[st
     except garments._Refused as e:
         result = garments._refusal(character_name, item_id, fsig, "fit", e.error, e.gates, [])
     except Exception as e:  # noqa: BLE001 — reported as the fit's failure, the sweep goes on
-        result = garments._refusal(character_name, item_id, fsig, "fit", str(e) or type(e).__name__, None, [])
+        result = _fit_failure(character_name, item_id, fsig, e)
     else:
         gs.end(character_name, item_id, "fit")
         result = {"ok": True, "fsig": fsig, "ran": ["fit"]}
@@ -622,7 +639,11 @@ def _refit_footwear(character_name: str, profile: Dict[str, Any], base: Tuple[st
             result = garments._refusal(character_name, item_id, fsig, str(res.get("step") or "insole"),
                                        str(res.get("error") or ""), res.get("gates"), [])
             if res.get("failure") == footwear_source.LOAD:
+                # Load or a retryable run end: left due, and only a run end counts on the retry budget.
                 result["retry_later"] = True
+                result.pop("outcome")
+                if res.get("outcome"):
+                    result["outcome"] = res["outcome"]
             garments._note_outcome(character_name, item_id, result)
             logger.info("Garment refit %s/%s (footwear): insole re-analysis refused — %s", character_name, item_id,
                         result.get("error"))
@@ -716,7 +737,7 @@ def _refit_swing_default(character_name: str, profile: Dict[str, Any], base: Tup
         except garments._Refused as e:
             result = garments._refusal(character_name, item_id, fsig, "fit", e.error, e.gates, [])
         except Exception as e:  # noqa: BLE001 — reported as the fit's failure, the sweep goes on
-            result = garments._refusal(character_name, item_id, fsig, "fit", str(e) or type(e).__name__, None, [])
+            result = _fit_failure(character_name, item_id, fsig, e)
         else:
             gs.end(character_name, item_id, "fit")
             result = {"ok": True, "fsig": fsig, "ran": ["fit"]}
@@ -786,8 +807,7 @@ def refit_character(character_name: str, *, on_hold: Optional[Any] = None) -> Op
             except garments._Refused as e:
                 result = garments._refusal(character_name, item_id, fsig, "fit", e.error, e.gates, [])
             except Exception as e:  # noqa: BLE001 — reported as the fit's failure, the sweep goes on
-                result = garments._refusal(character_name, item_id, fsig, "fit", str(e) or type(e).__name__,
-                                           None, [])
+                result = _fit_failure(character_name, item_id, fsig, e)
             else:
                 gs.end(character_name, item_id, "fit")
                 result = {"ok": True, "fsig": fsig, "ran": ["fit"]}
