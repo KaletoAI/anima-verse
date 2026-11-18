@@ -82,10 +82,14 @@ the front view, face; rig — normalize and the other Blender steps are CPU):
      (e) the views current, the model stale; MODEL "busy" → CandidateBusy,
      NO base model failure (status "ready"), still a candidate (reason
      model); MODEL "hubop" → CandidateBusy likewise.
-[B5] cost: (a) face before rig on, face route ok, no face view (reference
-     front → upscale): 4 + mesh + upscale + face + rig = 8, the note adds
+[B5] cost: (a) face before rig on, face route ok, face source "front" (set
+     explicitly — since A163, 9a2bad22d, the face view is the default source;
+     reference front → upscale): 4 + mesh + upscale + face + rig = 8, the note adds
      "the dark-face gate may retry the face once"; (b) the reference "face"
-     (patched): 7; (c) no face route (runnable not ok): 6; (d) face on but a
+     (patched; source front, so no face view is due): 7; (a2) source "face"
+     (the default), no face view stored → ``face_view_due`` "no_face_photo":
+     the run renders the face view first (A163, an image job), the reference
+     is the face → no upscale: 4 + mesh + face view + face + rig = 8; (c) no face route (runnable not ok): 6; (d) face on but a
      non-mixamo rig: face_before_rig_planned False. (e) only the back's
      fingerprint old (the front current) → reason "views", label "Kira ·
      base body · views not refreshed yet", hub 1 + 2 = 3, note "views not
@@ -497,8 +501,10 @@ def main() -> int:
             print("[B5] the cost")
             old_base()
             write_model()
-            check("(a) face option on", model3d.set_model3d_options("Kira", {"face_before_rig": True})
-                  .get("face_before_rig"), True)
+            # A163 (9a2bad22d): the face view is the default face source; the front reference is a setting now.
+            opts = model3d.set_model3d_options("Kira", {"face_before_rig": True, "face_source": "front"})
+            check("(a) face option on, source front", (opts.get("face_before_rig"), opts.get("face_source")),
+                  (True, "front"))
             check("(a) planned", model3d.face_before_rig_planned("Kira"), True)
             check("(d) not on a generic rig", model3d.face_before_rig_planned("Kira", "generic"), False)
             with patch.object(face_retexture, "runnable", lambda *a, **k: {"ok": True, "problems": []}):
@@ -513,6 +519,14 @@ def main() -> int:
                 figure_mod.invalidate()
                 with patch.object(face_retexture, "reference_info", lambda *a, **k: {"reference": "face"}):
                     check("(b) reference face → no upscale", [c.hub_jobs for c in cands()], [7])
+                # (a2) A163: source face (the default), no face view yet → the run renders it first.
+                model3d.set_model3d_options("Kira", {"face_source": "face"})
+                figure_mod.invalidate()
+                check("(a2) source face, no face view → the face view first, no upscale",
+                      [(c.hub_jobs, c.note) for c in cands()],
+                      [(8, "older prompts: views 4 + mesh + face view + face + rig = 8 hub jobs (first attempts; "
+                           "the hand gate may render the front up to 2 more times; "
+                           "the dark-face gate may retry the face once)")])
             # The face route's probe is memoised under the figure generation (model3d._face_route_ok): a route
             # going away shows after the next write or ``figure.MEMO_TTL_S`` — here at once.
             figure_mod.invalidate()
