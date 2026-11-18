@@ -32,14 +32,17 @@ A port of the drape spike (``~/claude-out/drape-spike/src/drape.py`` + ``refine.
   after the body, a free point inside it leaves by -x, +x or +y, never deeper than it started and released to
   the box's edge over the same ramp (``keep_out_kernel``, the spike's ``eyebox=2``).
 
-Taichi is started once per process (``_ti``: CPU, f32, ``cpu_max_num_threads = fit_kernels.threads()`` at that
-moment, the kernel cache in the temp directory, its version check off — no network); every kernel is compiled
-once, on dummy arrays, at that start (``t_jit_s`` of the first run, 0 after). The kernels take ndarrays, so one
-compiled kernel serves every mesh size. One drape runs at a time per process (``_RUN_LOCK``).
+Device (``app/core/gpu_compute.py``): a drape runs on the GPU (Vulkan) when the process can use one, else on
+Taichi's CPU backend (``cpu_max_num_threads = fit_kernels.threads()``); the module starts Taichi, holds one of the
+``server.gpu_compute_parallel`` GPU slots for the kernel phase and serialises the drapes of one process. Every
+kernel is compiled once per Taichi runtime, on dummy arrays (``_compile``; ``t_jit_s`` of the run that built them,
+0 after). The kernels take ndarrays, so one compiled kernel serves every mesh size. The report names the device
+(``device``: ``{"arch", "name"[, "threads", "reason"]}``) and the wait for a GPU slot (``t_slot_wait_s``). Vulkan is
+run-to-run deterministic but not bit-equal to the CPU arch (f32 rounding diverges at chaotic contacts; measured
+2026-11-18: p99 0.03-2.8 mm, single vertices up to 31 mm), so a record carries the device and no staleness rule
+reads it. A drape with more than ``GPU_MAX_COLOURS`` colours runs on the CPU arch (``gpu_compute`` rule 3).
 """
 # No ``from __future__ import annotations`` here: Taichi reads the kernels' annotations as objects.
-import os
-import tempfile
 import threading
 import time
 from dataclasses import dataclass, field as dc_field
@@ -47,7 +50,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
-from app.core import fit_kernels
+from app.core import gpu_compute
 
 # The body grows from (clear - grow) to clear over this share of the substeps.
 GROW_SHARE = 0.6
@@ -62,6 +65,14 @@ GLUE_MAX_LOAD = 2
 # the cap of the keep-out push per substep as a multiple of ``max_push`` (the spike's ``maxpush * 4``).
 ESCAPE_W = 1.5
 KEEP_OUT_PUSH = 4.0
+#: Above this many graph colours (= constraint launches per substep) a drape runs on the CPU arch: a launch costs
+#: ~40-55 us on Vulkan against 25-45 us on the CPU, whatever its size (bench 2026-11-18). Measured per substep —
+#: HairDeck 23-25 colours: CPU 2.6-2.8 ms, Vulkan 1.3 ms; a welded jacket 48: 5.5 / 2.2 ms; the same jacket
+#: unwelded, 3191: 143 / 175 ms. With ~400k constraints the CPU spends ~3.5 ms per substep on the work itself and
+#: the GPU loses ~5-10 us per colour on the launches, so the break-even lies near 400-700 colours; 256 keeps a
+#: margin and is 5x the largest real input (HairDeck 25, HAAR 6, a welded jacket 48). Decided by the input alone,
+#: so one input runs on the same arch on every machine.
+GPU_MAX_COLOURS = 256
 
 
 @dataclass(frozen=True)
@@ -336,11 +347,6 @@ def colour(pairs, n: int) -> Tuple[np.ndarray, np.ndarray]:
 
 # --- Taichi ------------------------------------------------------------------------------------------------------
 
-_TI: Optional[Dict[str, Any]] = None
-_TI_LOCK = threading.Lock()
-_RUN_LOCK = threading.Lock()
-
-
 def _build_kernels(ti) -> Dict[str, Any]:
     V3 = ti.types.ndarray(dtype=ti.math.vec3, ndim=1)
     I2 = ti.types.ndarray(dtype=ti.math.ivec2, ndim=1)
@@ -511,35 +517,21 @@ def _build_kernels(ti) -> Dict[str, Any]:
                 keep_out=keep_out_kernel, anchor=anchor, update=update, vmax=vmax)
 
 
-def _ti() -> Dict[str, Any]:
-    """Taichi, started once per process, with every kernel compiled -> ``{"ti", "k": kernels, "t_jit_s"}``."""
-    global _TI
-    if _TI is not None:
-        return _TI
-    with _TI_LOCK:
-        if _TI is None:
-            os.environ.setdefault("ENABLE_TAICHI_HEADER_PRINT", "0")
-            os.environ["TI_SKIP_VERSION_CHECK"] = "ON"            # ti.init would otherwise phone home
-            import taichi as ti
-            t0 = time.time()
-            ti.set_logging_level(ti.WARN)
-            ti.init(arch=ti.cpu, default_fp=ti.f32, cpu_max_num_threads=fit_kernels.threads(), offline_cache=True,
-                    offline_cache_file_path=os.path.join(tempfile.gettempdir(), "anima-taichi-cache"),
-                    fast_math=False, log_level=ti.WARN)
-            k = _build_kernels(ti)
-            # compile every kernel once, on a one-triangle dummy
-            st = _state(ti, np.zeros((3, 3)), np.ones(3, bool), np.zeros((1, 2), np.int64), np.ones(1),
-                        np.zeros(1, np.int64), np.zeros((1, 2), np.int64), np.ones(1), np.zeros((3, 3)),
-                        np.ones((2, 2, 2)))
-            _substep(k, st, 1e-3, 9.81, 0.0, 0.0, 0.004, 0.5, 0.001, 0.02, [(0, 1)], lra=True, anchor_r=0.01,
-                     lo=(0.0, 0.0, 0.0), vox=1.0)
-            _strand_state(ti, st, np.zeros(3), np.zeros((3, 3)), np.zeros(3))
-            _substep(k, st, 1e-3, 9.81, 0.0, 0.0, 0.004, 0.5, 0.001, 0.02, [(0, 1)], lra=True, anchor_r=0.0,
-                     lo=(0.0, 0.0, 0.0), vox=1.0, ramp=0.5, per_point=True, keep_out=(0.0, 1.0, 0.0, 1.0, 0.0))
-            k["vmax"](st["v"])
-            ti.sync()
-            _TI = {"ti": ti, "k": k, "t_jit_s": time.time() - t0, "jit_reported": False}
-    return _TI
+def _compile(ti) -> Dict[str, Any]:
+    """The drape's kernels for the current Taichi runtime, each compiled once on a one-triangle dummy
+    (``gpu_compute.kernels`` caches them until the runtime restarts)."""
+    k = _build_kernels(ti)
+    st = _state(ti, np.zeros((3, 3)), np.ones(3, bool), np.zeros((1, 2), np.int64), np.ones(1),
+                np.zeros(1, np.int64), np.zeros((1, 2), np.int64), np.ones(1), np.zeros((3, 3)),
+                np.ones((2, 2, 2)))
+    _substep(k, st, 1e-3, 9.81, 0.0, 0.0, 0.004, 0.5, 0.001, 0.02, [(0, 1)], lra=True, anchor_r=0.01,
+             lo=(0.0, 0.0, 0.0), vox=1.0)
+    _strand_state(ti, st, np.zeros(3), np.zeros((3, 3)), np.zeros(3))
+    _substep(k, st, 1e-3, 9.81, 0.0, 0.0, 0.004, 0.5, 0.001, 0.02, [(0, 1)], lra=True, anchor_r=0.0,
+             lo=(0.0, 0.0, 0.0), vox=1.0, ramp=0.5, per_point=True, keep_out=(0.0, 1.0, 0.0, 1.0, 0.0))
+    k["vmax"](st["v"])
+    ti.sync()
+    return k
 
 
 def _state(ti, X, pinned, CON, LEN, KIND, LRA, LRA_L, XA, S) -> Dict[str, Any]:
@@ -679,11 +671,9 @@ def run(X0, F, rest, pinned, field: "garment_fit.Sdf", params: DrapeParams, *, c
     pairs, lengths, kind = pairs[order], lengths[order], kind[order]
     seg = [(int(starts[k]), int(starts[k + 1])) for k in range(len(starts) - 1) if starts[k + 1] > starts[k]]
 
-    T = _ti()
-    ti, k = T["ti"], T["k"]
-    t_jit = 0.0 if T["jit_reported"] else T["t_jit_s"]
-    with _RUN_LOCK:
-        T["jit_reported"] = True
+    with gpu_compute.session("drape", _compile, cpu=len(seg) > GPU_MAX_COLOURS, label="drape") as sess:
+        ti, k = sess.ti, sess.kernels
+        t_jit = sess.t_jit_s
         st = _state(ti, X, pin, pairs, lengths, kind, np.stack([li, lp], 1) if len(li) else np.zeros((0, 2)), lL,
                     arrays["anchor"] if use_anchor else X, np.asarray(field.field))
         per_point = grow_from is not None
@@ -739,5 +729,6 @@ def run(X0, F, rest, pinned, field: "garment_fit.Sdf", params: DrapeParams, *, c
               "stretch": int((kind == 0).sum()) - int(len(G)), "bend": int((kind == 1).sum()), "glue": int(len(G)),
               "lra": int(len(li)), "pinned": int(pin.sum()), "rest_scale_c": round(c, 6),
               "t_jit_s": round(t_jit, 3), "t_run_s": round(t_run, 3), "vmax_tail": trace[-VMAX_TAIL:],
-              "substeps_run": int(ran), "rest_stop": bool(rest_stop)}
+              "substeps_run": int(ran), "rest_stop": bool(rest_stop), "device": sess.device,
+              "t_slot_wait_s": round(sess.slot_wait_s, 3)}
     return DrapeResult(X=Xd, report=report)

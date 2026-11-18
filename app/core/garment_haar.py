@@ -51,8 +51,10 @@ from app.core.garment_fit import VOX_M, FitResult, body_sdf, hair_weights, verte
 from app.core.glb_mesh import GarmentMesh, body_arrays
 
 #: Bumped when the HAAR fit's output changes for the same inputs (the boot refit sweep refits on the CPU). 4: the
-#: cards are cut (Ruling A71, ``hair_cut``).
-HAAR_FIT_VERSION = 4
+#: cards are cut (Ruling A71, ``hair_cut``). 5 (2026-11-18): the strand drape runs on the GPU when the process has one
+#: (``gpu_compute``; not bit-equal to the CPU arch, p99 0.03 mm, single points up to 15 mm), its report names the
+#: device (``drape.device``); the device is not part of staleness.
+HAAR_FIT_VERSION = 5
 #: Gate (spec § 6.3.2): a draped strand point above the chin deeper than this (mm) in the body refuses the seed.
 INSIDE_HEAD_MM = 3.0
 #: Gate: the tip p50 relative to the shoulder top (cm, + = above) above this refuses the seed as clearly too short —

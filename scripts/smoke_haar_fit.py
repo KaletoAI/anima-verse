@@ -51,7 +51,7 @@ Expected (by hand):
   [4] material path: garment.image == strip_atlas(); COLOR_0 of the card vertices == colour_linear (alpha 1) and of
       the scalp layer (H-R12) == colour_linear x SCALP_SHADE 0.6 = (0.18, 0.12, 0.06), alpha 1; the layer on the
       opaque patch (UV == SOLID_UV); report.layout "haar"; no chain joints (joint_parents / joint_binds empty);
-      weights Head / Neck / Spine2; report.fit_version == HAAR_FIT_VERSION == 4 (H-R14 changed the cards, A71 cut them).
+      weights Head / Neck / Spine2; report.fit_version == HAAR_FIT_VERSION == 5 (H-R14 changed the cards, A71 cut them, the drape on gpu_compute).
   [5] record_for_fit on the grafted HAAR fit (method "haar", report.vertices from [3]): mode "haar", params ==
       PARAMS["haar"] (root_deg 0), cards == K; the npz binds card k + 1 to vertices [34k, 34k + 34) with u = the row
       (0, 0, 1, 1, …, 16, 16) and the cap 0.
@@ -234,7 +234,7 @@ def run_checks(tmp):
     check(garment_haar.SCALP_SHADE == 0.6 and np.allclose(C[nv["hair"]:, :3], [0.18, 0.12, 0.06], atol=1e-12),
           f"[4] COLOR_0 of the scalp layer == colour x 0.6 = (0.18, 0.12, 0.06) (got {C[nv['hair'], :3]})")
     check(np.allclose(np.asarray(g.uvs)[nv["hair"]:], hair_cards.SOLID_UV), "[4] the layer on the opaque patch")
-    check(garment_haar.HAAR_FIT_VERSION == 4 and r.report["fit_version"] == 4, "[4] fit_version 4")
+    check(garment_haar.HAAR_FIT_VERSION == 5 and r.report["fit_version"] == 5, "[4] fit_version 5")
     check(r.report["layout"] == "haar" and not g.joint_parents and not g.joint_binds,
           "[4] layout haar, no chain joints")
     check([n.split(":")[-1] for n in g.joint_names] == ["Head", "Neck", "Spine2"], f"[4] joints {g.joint_names}")

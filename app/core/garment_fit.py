@@ -280,7 +280,11 @@ SIDE_DEEP_M = 0.03
 #: strands, fewer and shorter towards the hairline) instead of a band of straight-down cards; the cap under it is
 #: shaded root-dark to tip-light; every card's root end (and a fill card's tip) fades in vertex alpha
 #: (``root_fade``), so no card ends bluntly.
-FIT_VERSION: Dict[str, int] = {"hair": 18, "clothing": 20, "footwear": FOOTWEAR_FIT_VERSION}
+#: hair 19 (2026-11-18 — a CPU or GPU refit of every HairDeck fit, no hub job): the drape below the ear runs on the GPU
+#: when the process has one (``gpu_compute``; f32 on Vulkan is not bit-equal to the CPU arch: p99 0.46-2.85 mm, single
+#: vertices up to 31 mm), and its report names the device (``push.drape_xpbd.device``). The device is not part of
+#: staleness: a fit is never refitted because the device that made it differs from the current one.
+FIT_VERSION: Dict[str, int] = {"hair": 19, "clothing": 20, "footwear": FOOTWEAR_FIT_VERSION}
 #: The clothing fit version whose fits stay current under ``FIT_VERSION["clothing"]`` when Auto keeps their trunk as
 #: generated (Ruling A83, ``trunk_may_change``) and nothing rides an arm (Ruling A84, ``seam_may_change``).
 CLOTHING_TRUNK_UNCHANGED = 15
