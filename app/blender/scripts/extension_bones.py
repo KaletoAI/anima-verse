@@ -811,6 +811,20 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
         outline['apex'] = [cd,cz]
         reach,fitted = walls(apexes,[outline_reach(outline,cd,cz,directions)]*2)
         return apexes,reach,fitted
+    if colour and pinned is None:
+        # A colour pair is a tip only where it stands out of its wall. On a
+        # body whose reference had no tips (a mannequin chest), a warm band
+        # under the crease passes the colour test (Glut: 1.1-1.4 cm below the
+        # outline's bottom, 4.8 cm behind the front-most point, mean score
+        # 5-10, no darker than the skin) and its wall test failed the whole
+        # group. Such a pair is no marker: the marker-free path places the
+        # pair from the shape alone (outline, else crest).
+        try:
+            walls([c[0] for c in pairs[0]],[outline_reach(extent,sign*(c[0].x-mid),c[0].z,directions)
+                                             for c,sign in zip(pairs[0],(1,-1))] if extent else None)
+        except ValueError as e:
+            colour,outline,extent,marker_areas = False,extent,None,[None,None]
+            markers = [(None,'colour pair rejected: '+str(e)+'; '+outline_note)]*2
     if outline and pinned is None:
         try:
             apexes,reach,fitted = outline_plan()

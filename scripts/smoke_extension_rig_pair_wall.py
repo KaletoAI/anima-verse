@@ -38,6 +38,20 @@ stop at .055 comes later), up/down .09, diagonal ellipse boundary
 at .0625 by ~2 mm, which moves it one step to .065. The round outline takes
 the median of [.09,d,.05,d]x2 = d with d in {.0625,.065}.
 Every wall point lies on the plane, so the wall is y=-.1, depth .05.
+F (colour pair off the shape): E without the spike, plus a mirrored disc pair
+(the B colours, score 25.6) at x=+-.12, z=1.4 on the plane beside the bumps (the
+bump ends at x=.11) and a dimple there, y=-.1+.004*max(0,1-r^2/.012^2): the
+band a warm skin shows under a chest without tips. The front-most vertex is the
+bump top (+-.06,-.15,1.4); the disc centre lies .06 from it, inside the .07
+search radius, area pi*.009**2 = 2.5 cm2, mirrored exactly, so both discs pass
+as a colour pair with apex y=-.096. Every wall point of that apex lies on the
+plane or on the bump (y <= -.1), so the wall is y=-.1 with normal (0,-1,0) and
+depth -(-.096+.1) = -.004 <= 0: the old code raised 'apex does not protrude
+from wall' and the group failed. Now the pair is rejected (marker_area None,
+note 'colour pair rejected: ...') and the shape decides, as in E: the bumps are
+E's, the dimple (4 mm over r 1.2 cm, .06 beside the crest) moves the sigma-.05
+context by about .03 mm at the crest, so the crest, the reach and the depth .05
+are E's.
 Midline strip (Ruling A173): every weight is multiplied by
 smooth((d-side_margin)/.01) with d the distance from the midline; for x<=.0075 this
 is at most smooth((.0075-.005)/.01)=smooth(.25)=.15625 (+fp). Without the strip the
@@ -110,11 +124,13 @@ def fixture(kind):
     centre=Vector((sign*.15,-.1,1.4))-n*.056
     q=.106**2-(x-centre.x)**2-(z-centre.z)**2
     y=min(-.1+tilt*dz,centre.y-math.sqrt(q)) if q>=0 else -.1+tilt*dz
-   elif kind=='E':
+   elif kind in ('E','F'):
     r2=((x-sign*.06)/.05)**2+(dz/.09)**2
     y=-.1-.05*max(0.,1-r2)**.5
-    if (ix,iz)==(134,100):
+    if kind=='E' and (ix,iz)==(134,100):
      y=-.17
+    if kind=='F':
+     y+=.004*max(0.,1-((x-sign*.12)**2+dz**2)/.012**2)
    else:
     r2=(dx/.06)**2+(dz/.09)**2
     y=-.1-.05*max(0.,1-r2)**.5
@@ -140,6 +156,8 @@ def fixture(kind):
   import numpy as np
   size=1024; yy,xx=np.mgrid[:size,:size]; xx=(xx+.5)/size*.6-.3; yy=(yy+.5)/size*.6+1.1
   mask=((xx-.15)**2+(yy-1.41)**2<.009**2)|((xx+(.115 if kind=='X' else .15))**2+(yy-(1.37 if kind=='C' else 1.41))**2<.009**2)
+  if kind=='F':
+   mask=(np.abs(xx)-.12)**2+(yy-1.4)**2<.009**2
   pixels=np.empty((size,size,4),np.float32); pixels[:]=(.72,.52,.40,1); pixels[mask]=(.62,.28,.30,1)
   image=bpy.data.images.new('Marker',width=size,height=size); image.pixels.foreach_set(pixels.ravel())
   mat=bpy.data.materials.new('Colour'); mat.use_nodes=True
@@ -158,7 +176,7 @@ def fixture(kind):
  surface=scope['pair_surface']([obj]); bones={scope['bone_key'](b.name):b for b in data.bones}
  plan=scope['pair_plan'](group,p,co,bones,surface,[(obj,v.index) for v in me.vertices])
  sides=plan[2]['placement']
- assert all(s['apex_source']==('geometry' if kind in ('A','C','E','X') else 'colour') for s in sides), sides
+ assert all(s['apex_source']==('geometry' if kind in ('A','C','E','F','X') else 'colour') for s in sides), sides
  assert excluded not in plan[1]['ExampleLeft'], plan[1]['ExampleLeft'].get(excluded)
  if kind=='A':
   expected=Vector((.15,-.1,1.4))+n*.05
@@ -175,8 +193,12 @@ def fixture(kind):
   assert sides[0]['reach'][7]<.13, sides
   a,b=[s['wall_normal'] for s in sides]
   assert max(abs(a[0]+b[0]),abs(a[1]-b[1]),abs(a[2]-b[2]))<1e-6, sides
- if kind=='E':
-  spike=vertices[100*241+134]; assert abs(spike[0]-.035)<1e-9 and abs(spike[2]-1.35)<1e-9 and spike[1]==-.17
+ if kind=='F':
+  for s in sides:
+   assert s['marker_area'] is None and s['marker_note'].startswith('colour pair rejected: apex does not protrude from wall'), s
+ if kind in ('E','F'):
+  if kind=='E':
+   spike=vertices[100*241+134]; assert abs(spike[0]-.035)<1e-9 and abs(spike[2]-1.35)<1e-9 and spike[1]==-.17
   for sign,s in zip((1,-1),sides):
    assert (Vector(s['tip'])-Vector((sign*.06,-.15,1.4))).length<.0025, s
    assert len(set(s['reach']))==1 and min(abs(s['reach'][0]-d) for d in (.0625,.065))<1e-9, s
@@ -186,6 +208,7 @@ def fixture(kind):
    assert max(near,default=0.)<=.1563, (name,max(near))
  print('PASS fixture',kind)
 for kind in ('A','B','C','D','E'): fixture(kind)
+fixture('F')
 fixture('X')
 Path(job['result']).write_text(json.dumps({'ok':True,'data':{},'outputs':{}}))
 """
