@@ -204,13 +204,12 @@ def opening_s(pocket, s_end, fall):
     return (pocket['s0'] + s1) / 2 if s1 > pocket['s0'] else None
 
 
-def opening_metric(prof, pn, S, s_mid, xm, Mi, Ni3):
+def opening_metric(prof, pn, S, s_mid, xm):
     """``{"centre", "axis"}`` at chart s = ``s_mid``: the midline point (x = ``xm``) and the unit inward normal
-    (-``pn`` interpolated over ``S``), through the inverse world matrix ``Mi`` / ``Ni3`` into glTF bind space."""
-    point = np.array([xm, np.interp(s_mid, S, prof[:, 1]), np.interp(s_mid, S, prof[:, 2]), 1.])
-    inward = -np.array([np.interp(s_mid, S, pn[:, k]) for k in range(3)])
-    centre = (np.array(Mi, float) @ point)[:3]
-    axis = np.array(Ni3, float) @ inward
+    (-``pn`` interpolated over ``S``), in glTF axes. ``prof``/``pn`` are world space, and so is the bind space:
+    the exporter bakes the skinned body's world matrix into POSITION, so no inverse world matrix applies."""
+    centre = np.array([xm, np.interp(s_mid, S, prof[:, 1]), np.interp(s_mid, S, prof[:, 2])])
+    axis = -np.array([np.interp(s_mid, S, pn[:, k]) for k in range(3)])
     return {'centre': _gltf(centre), 'axis': _gltf(axis / np.linalg.norm(axis))}
 
 
@@ -1459,7 +1458,7 @@ def build_part(group, output):
                               export_morph=True, export_extras=True, export_all_influences=False)
     _common.body_meshes_first(output)
     s_open = opening_s(P['pocket'], s_end, R['fall'])
-    opening = opening_metric(prof, pn, S, s_open, xm, Mi, Ni3) if s_open is not None else None
+    opening = opening_metric(prof, pn, S, s_open, xm) if s_open is not None else None
     return {'status': 'applied', 'reason': '', 'anchor': prof[i0].tolist(),
             'underside_m': underside, 'scale': scale, 'front_corner': prof[i0].tolist(),
             'inner_wall_faces_kept': len(inner_wall), 'cut_loose_vertices_removed': len(loose),

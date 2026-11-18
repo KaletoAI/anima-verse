@@ -12,8 +12,12 @@ xm = .5, s_mid = .05 (halfway between the first two points).
 * Identity matrices: the midline point is (xm, -.05, -.1); glTF (x, z, -y) gives centre (.5, -.1, .05). The
   interpolated outward normal is (0, -.5, -.5), inward (0, .5, .5), unit (0, .707107, .707107); glTF
   (0, .707107, -.707107).
-* Mi = scale 2 plus translation (1, 2, 3), Ni3 = scale 2: the point becomes (2, 1.9, 2.8), glTF (2, 2.8, -1.9);
-  the uniform scale leaves the unit axis as before.
+  No matrix enters (review 03, inset opening): Blender's glTF exporter writes a skinned mesh's POSITION with the
+  body's world matrix baked in, so the opening stays in the world space the profile was measured in. Part B
+  (Blender >= 5.2, skipped without one) shows it: a skinned triangle (0,0,0), (1,0,0), (0,1,0) whose object has
+  world matrix translation (0, 0, 1) x scale 2, under an armature at translation (0, 0, .5), exports POSITION
+  min (0, 1, -2) / max (2, 1, 0) = glTF (x, z, -y) of the WORLD points (0,0,1), (2,0,1), (0,2,1) — not the local
+  ones, and not relative to the armature. The old Mi = inverse(world) moved the opening 1 m down and halved it.
 The opening's interval is the pocket as built: [s0, s1] without a part end; with one, the pocket's depth fades to
 zero over ``region.fall`` before ``s_end`` (smoothstep, half depth at s_end - fall/2), so the interval ends there:
 * pocket .048 to .094, no end: s_mid = (.048 + .094)/2 = .071.
@@ -62,21 +66,66 @@ def main():
     pn = np.array([[0, 0, -1], [0, -1, 0], [0, -1, 0]], float)
     S = np.array([0, .1, .3])
     r = .5 ** .5
-    opening = opening_metric(prof, pn, S, .05, .5, np.eye(4), np.eye(3))
+    opening = opening_metric(prof, pn, S, .05, .5)
     assert set(opening) == {'centre', 'axis'}, opening
     assert np.allclose(opening['centre'], [.5, -.1, .05], atol=1e-9), opening
     assert np.allclose(opening['axis'], [0, r, -r], atol=1e-9), opening
     assert all(isinstance(v, float) for v in opening['centre'] + opening['axis'])
-    Mi = np.diag([2., 2, 2, 1]); Mi[:3, 3] = (1, 2, 3)
-    opening = opening_metric(prof, pn, S, .05, .5, Mi, np.diag([2., 2, 2]))
-    assert np.allclose(opening['centre'], [2, 2.8, -1.9], atol=1e-9), opening
-    assert np.allclose(opening['axis'], [0, r, -r], atol=1e-9), opening
     pocket = {'s0': .048, 's1': .094}
     assert abs(opening_s(pocket, None, .012) - .071) < 1e-12
     assert abs(opening_s(pocket, .0592, .012) - .0506) < 1e-12
     assert abs(opening_s(pocket, .10, .012) - .071) < 1e-12
     assert opening_s(pocket, .05, .012) is None
     print('PASS inset_part defaults, nested overrides, invalid parameter cases, opening metric and interval')
+    exported_position_space()
+
+
+SKINNED = r'''
+import bpy, sys
+from pathlib import Path
+from mathutils import Matrix
+out = Path(sys.argv[sys.argv.index('--') + 1])
+for o in list(bpy.data.objects): bpy.data.objects.remove(o)
+arm = bpy.data.objects.new('Rig', bpy.data.armatures.new('Rig'))
+bpy.context.collection.objects.link(arm)
+bpy.context.view_layer.objects.active = arm
+bpy.ops.object.mode_set(mode='EDIT')
+b = arm.data.edit_bones.new('Hips'); b.head = (0, 0, 0); b.tail = (0, 0, .2)
+bpy.ops.object.mode_set(mode='OBJECT')
+me = bpy.data.meshes.new('Body')
+me.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
+body = bpy.data.objects.new('Body', me)
+bpy.context.collection.objects.link(body)
+body.vertex_groups.new(name='Hips').add([0, 1, 2], 1.0, 'REPLACE')
+body.parent = arm
+arm.matrix_world = Matrix.Translation((0, 0, .5))
+body.matrix_world = Matrix.Translation((0, 0, 1)) @ Matrix.Scale(2, 4)
+body.modifiers.new('Armature', 'ARMATURE').object = arm
+bpy.ops.export_scene.gltf(filepath=str(out / 'skinned.glb'), export_format='GLB', export_apply=False,
+                          export_skins=True)
+'''
+
+
+def exported_position_space():
+    import subprocess
+    import sys
+    import tempfile
+    root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(root))
+    from app.blender import runner
+    from app.core.model_validate import parse_glb
+    exe = runner.find_executable()
+    if not exe:
+        print('part B: SKIPPED — no Blender >= 5.2 found')
+        return
+    with tempfile.TemporaryDirectory(prefix='inset-opening-') as tmp:
+        (Path(tmp) / 'side.py').write_text(SKINNED)
+        subprocess.run([exe, '-b', '-noaudio', '--factory-startup', '--python-exit-code', '1', '--python',
+                        str(Path(tmp) / 'side.py'), '--', tmp], check=True, capture_output=True, timeout=120)
+        doc = parse_glb((Path(tmp) / 'skinned.glb').read_bytes())['gltf']
+    acc = doc['accessors'][doc['meshes'][0]['primitives'][0]['attributes']['POSITION']]
+    assert np.allclose(acc['min'], [0, 1, -2]) and np.allclose(acc['max'], [2, 1, 0]), acc
+    print('PASS part B: a skinned mesh exports POSITION in world space (the opening needs no matrix)')
 
 
 if __name__ == '__main__':
