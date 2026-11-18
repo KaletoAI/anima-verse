@@ -37,7 +37,6 @@ smoke_picture_identity_a94	STALE: the identity edit block wording changed after 
 smoke_prop_action_review	STALE: unittest review cases: admission expects 'approaching' (gets 'active') and the planner test errors — prop-action engine changed since; not re-derived
 smoke_props_areas	STALE: [14] a failed area run on a mesh-less fixture now still names auto areas; areas_info busy-Blender case changed
 smoke_reference_front	STALE: edit-block wording changed (bald + "natural matte look"), and the routed backend in the fixture takes no reference image
-smoke_refit_bypass_queue	STALE: A191 (d778acb7d): cancelling the FIFO's run in flight no longer raises RunStarted, it stops the run — the smoke's flow after that needs re-deriving
 smoke_refit_selected_body	STALE: [4e] the fit settings dict gained keys (shell_*, sleeves_*, shaft ...) the expected piece settings lack
 smoke_sleeve_fit	STALE: [6] normalise of the sleeve settings changed; not re-derived
 smoke_stat_skill_costs	STALE: prepare fixed (Request double); play_scene_photo is now an async job (accept_photo, 202, user["id"]) — the photo cost expectation needs re-deriving

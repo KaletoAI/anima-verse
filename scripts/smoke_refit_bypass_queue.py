@@ -72,10 +72,13 @@ Expected values, derived by hand from Ruling A30 and ``start_garment``:
        enqueue_garment(Demo, hair) -> queue ["hair"]. Releasing the blouse
        makes the hair job the FIFO's run: it holds the character lock and
        waits for the hair item lock — 0.5 s later hair has still started ONCE
-       (and cancel_garment(Demo, hair) -> RunStarted: nothing waits, a run is
-       in flight). Releasing hair: the side run ends, THEN the FIFO hair run
-       starts (step "hairdeck"); hair starts in all 2, the side end before the
-       second start.
+       (and cancel_garment(Demo, hair) -> {item_id "hair", cancelled 0,
+       stopping True, queue_running "hair", queue []}: nothing waits, and
+       since A191 (d778acb7d) the FIFO's run in flight is told to stop; its
+       scope reaches only a real step, which this recorder has none of).
+       Releasing hair: the side run ends, THEN the FIFO hair run starts (step
+       "hairdeck"); hair starts in all 2, the side end before the second
+       start.
 [3] A base step in flight still holds the refit as before (it queues behind
     the FIFO's run, exactly today's path):
     - blouse default blocked; base_body.reserve_views(Demo, ("front",),
@@ -379,11 +382,10 @@ def main() -> int:
               True)
         threading.Event().wait(0.5)
         check("FIFO hair waits for the item lock (1 start)", len(starts("Demo", "hair")), 1)
-        try:
-            garments.cancel_garment("Demo", "hair")
-            check("cancel refused", "no error", "RunStarted")
-        except garments.RunStarted:
-            check("cancel refused", "RunStarted", "RunStarted")
+        check("cancel tells the FIFO's run in flight to stop (A191)",
+              garments.cancel_garment("Demo", "hair"),
+              {"item_id": "hair", "cancelled": 0, "stopping": True, "queue_running": "hair",
+               "queue": []})
         hair.set()
         check("idle", garments.wait_idle(30), True)
         with ev_lock:
