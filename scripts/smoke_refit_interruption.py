@@ -120,6 +120,12 @@ Expected, derived by hand:
     timeout, interrupted, unavailable → ``interrupted``; cancelled → ``cancelled``. Every outcome but ok lands in
     the row's progress as ``outcome``, a ``log_tail`` beside it when given; ``finish(tid, error="x")`` without an
     outcome → ``failed`` / ``crashed``.
+[13] What a garment run reports to the retry budget (``garments._run_outcome``; ``app.blender.retry_budget``):
+    ``_retry_later`` of a ``BackendBusyError`` (load) → None, of a ``RunFailed(timeout)`` → ``timeout``; a footwear
+    ``_failure(retry_later=True)`` without an outcome (load) → None, with ``outcome="interrupted"`` →
+    ``interrupted``; ``_refusal`` → ``rejected``, ``_refusal(crashed=)`` → ``crashed``; ok → ``ok``; a held, a
+    paused and a cancelled result → None. ``_note_outcome`` of three ``timeout`` results in a row holds
+    ``budget_key`` (``may_run_automatically`` False); an ok result frees it.
 """
 import os
 import sys
@@ -447,6 +453,7 @@ def main() -> int:
         # --- [4] no refusal for an interruption -----------------------------------------------------------------
         print("[4] an interruption is no refusal")
         notes, body_failures = [], []
+        real_note_outcome = garments._note_outcome  # [13] drives the real one
         garments._note_outcome = lambda name, item_id, result: notes.append((item_id, dict(result)))
         gs.record_body_failure = lambda *a, **k: body_failures.append(a)
         charmod.get_character_profile = lambda name: {}
@@ -840,6 +847,38 @@ def main() -> int:
         refit_pool.finish(tid, error="x")
         check("an error without outcome", (tq.task_status(tid), tq.get_task_progress(tid).get("outcome")),
               ("failed", "crashed"))
+
+        # --- [13] what a garment run reports to the retry budget --------------------------------------------------
+        print("[13] garments._run_outcome / _note_outcome and the retry budget")
+        from app.blender import retry_budget
+        from app.core import garment_footwear
+        from app.imagegen.base import BackendBusyError
+        cases = {
+            "load": garments._retry_later("Kim", "item_x", "f1", "fit", BackendBusyError("busy"), []),
+            "timeout": garments._retry_later("Kim", "item_x", "f1", "fit", oc.RunFailed("t", oc.TIMEOUT, ""), []),
+            "shoe load": garment_footwear._failure("Kim", "item_x", "f1", "insole", "busy", None, [], "X",
+                                                   retry_later=True),
+            "shoe interrupted": garment_footwear._failure("Kim", "item_x", "f1", "insole", "stop", None, [], "X",
+                                                          retry_later=True, outcome=oc.INTERRUPTED),
+            "refusal": garments._refusal("Kim", "item_x", "f1", "fit", "no", None, []),
+            "crash": garments._refusal("Kim", "item_x", "f1", "fit", "boom", None, [], crashed=ValueError("boom")),
+            "ok": {"ok": True, "ran": ["fit"]},
+            "held": {"ok": False, "retry_later": True, "held": True, "ran": []},
+            "paused": {"ok": False, "paused": True},
+            "cancelled": {"ok": False, "cancelled": True, "outcome": oc.CANCELLED},
+        }
+        check("run outcomes", {k: garments._run_outcome(v) for k, v in cases.items()},
+              {"load": None, "timeout": oc.TIMEOUT, "shoe load": None, "shoe interrupted": oc.INTERRUPTED,
+               "refusal": oc.REJECTED, "crash": oc.CRASHED, "ok": oc.OK, "held": None, "paused": None,
+               "cancelled": None})
+        retry_budget.reset()
+        for _ in range(retry_budget.HOLD_AFTER):
+            real_note_outcome("Kim", "item_x", cases["timeout"])
+        held = garments.may_run_automatically("Kim", "item_x")
+        real_note_outcome("Kim", "item_x", cases["ok"])
+        check("three timeouts hold the piece, an ok frees it", (held, garments.may_run_automatically("Kim", "item_x")),
+              (False, True))
+        retry_budget.reset()
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
     return 1 if FAILS else 0

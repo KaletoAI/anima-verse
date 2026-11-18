@@ -779,9 +779,11 @@ def run_source(item_id: str, *, steps: Optional[List[str]] = None, force: bool =
                 logger.warning("Shoe source %s/%s: step %s failed: %s", iid, ssig, step, e)
                 cause = e.__cause__ if isinstance(e, StepRefused) and e.__cause__ is not None else e
                 failure, error = (e.failure, str(e)) if isinstance(e, StepRefused) else failure_of(e)
+                from app.blender import outcome as oc
+                ended = oc.of_exception(e)  # a retryable run end rides along: the retry budget counts it
                 return {"ok": False, "ssig": ssig, "step": step, "error": error or type(e).__name__,
                         "gates": getattr(e, "gates", {}), "error_type": type(cause).__name__, "failure": failure,
-                        "ran": ran}
+                        "ran": ran, **({"outcome": ended} if oc.is_retryable(ended) else {})}
             ran.append(step)
         return {"ok": True, "ssig": ssig, "ran": ran}
 

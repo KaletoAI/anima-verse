@@ -299,7 +299,7 @@ def run_chain(character_name: str, item: Dict[str, Any], wanted: Optional[List[s
                     running.pop()
                 return _failure(character_name, item_id, fsig, step, str(res.get("error") or ""),
                                 res.get("gates"), ran, str(res.get("error_type") or ""),
-                                retry_later=res.get("failure") == footwear_source.LOAD)
+                                retry_later=res.get("failure") == footwear_source.LOAD, outcome=res.get("outcome"))
         if running:
             gs.end(character_name, item_id, running.pop())
         base = base_body.current_base(character_name, profile=profile)
@@ -321,13 +321,15 @@ def run_chain(character_name: str, item: Dict[str, Any], wanted: Optional[List[s
         logger.warning("Footwear run %s/%s failed at %s: %s", character_name, item_id, step, e)
         if running:
             running.pop()
+        from app.blender import outcome as oc
         from app.core.garments import _is_load
+        ended = oc.of_exception(e)
         return _failure(character_name, item_id, fsig, step, str(e) or type(e).__name__, None, ran,
-                        type(e).__name__, retry_later=_is_load(e))
+                        type(e).__name__, retry_later=_is_load(e), outcome=ended if oc.is_retryable(ended) else None)
 
 
 def _failure(character_name: str, item_id: str, fsig: str, step: str, error: str, gates: Any, ran: List[str],
-             error_type: str, *, retry_later: bool = False) -> Dict[str, Any]:
+             error_type: str, *, retry_later: bool = False, outcome: Optional[str] = None) -> Dict[str, Any]:
     from app.core import garment_store as gs
     logger.info("Footwear run %s/%s refused at %s: %s", character_name, item_id, step, error)
     gs.end(character_name, item_id, step, error=error, gates=gates)
@@ -335,6 +337,8 @@ def _failure(character_name: str, item_id: str, fsig: str, step: str, error: str
            "ran": ran}
     if retry_later:
         out["retry_later"] = True
+    if outcome:
+        out["outcome"] = outcome  # a retryable Blender / CPU run end — the retry budget counts it, load it does not
     return out
 
 

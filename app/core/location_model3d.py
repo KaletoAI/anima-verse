@@ -839,10 +839,12 @@ def _reduce_to_low(location_id: str, owner: str, room_id: str, src: Path,
                            "tris": None, "tris_before": None, "size": 0,
                            "size_before": 0, "error": ""}
     res = refine.build_static_lod(src, ratio)
+    from app.blender import outcome as oc, retry_budget
+    ended = res.get("outcome") or (oc.OK if res.get("ok") else oc.CRASHED)
+    retry_budget.note(f"lod:location:{key}", ended)
     if not res.get("ok"):
-        from app.blender import outcome as oc
-        if not oc.is_retryable(res.get("outcome")):
-            _lod_failed.add(key)  # a timeout / interruption / no Blender leaves it due: the next payload tries again
+        if not oc.is_retryable(ended):
+            _lod_failed.add(key)  # a timeout / interruption / no Blender stays due on the retry budget
         out["error"] = res.get("error") or "distance mesh not built"
         return out
     gallery = _gallery(owner, room_id)
@@ -957,8 +959,9 @@ def request_low_tier(location_id: str, room_id: str = "",
     if not owner:
         return
     key = f"{owner}:{room_id}"
-    if key in _lod_failed:
-        return
+    from app.blender import retry_budget
+    if key in _lod_failed or not retry_budget.may_try(f"lod:location:{key}"):
+        return  # failed for good, or left due and not yet allowed again (``app.blender.retry_budget``)
     # An explicitly DESELECTED low tier is a decision, not a gap (user
     # finding 2026-08-20): the sentinel means "serve the full model at
     # distance", and refilling it here made the deselection impossible.

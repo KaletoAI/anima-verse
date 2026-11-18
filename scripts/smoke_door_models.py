@@ -6,9 +6,11 @@ top adds .07 = 2.17 height; leaf starts at .07+.005=.075, threshold+.005=.025.
 Last-use retention: 7*86400 SYSTEM seconds, touches at most every 86400 seconds.
 Only the external Blender boundary is replaced; storage is always temporary.
 A build whose run failed with a verdict or a crash (no ``outcome`` = crashed) is suppressed until restart
-(logged once). One whose run ended retryable (``outcome`` timeout, ``app.blender.outcome``) is held for
-RETRY_AFTER_S (300 s): an ensure right after queues nothing, no exception is logged; with the clock RETRY_AFTER_S
-+ 1 s later the next ensure queues it again (the run is called a second time).
+(logged once). One whose run ended retryable (``outcome`` timeout, ``app.blender.outcome``) is left due on the
+retry budget (``app.blender.retry_budget``: 300 s after the 1st, 1200 s after the 2nd, held after the 3rd), on a
+stubbed monotonic clock from t = 1000: run 1 at 1000 → an ensure at 1299 queues nothing, one at 1300 runs it
+again (run 2) → nothing at 1300+1199 = 2499, run 3 at 2500 → held: nothing at 2500 + 10**9, ONE budget warning
+naming the build and "held until restart", never an exception log.
 """
 import json
 import os
@@ -119,15 +121,25 @@ def main():
         calls = []
         def slow(*args, **kwargs):
             calls.append(1); return {'ok':False,'error':'timeout after 120s','outcome':'timeout'}
-        with patch.object(dm,'_run_blender',slow), patch.object(dm.logger,'exception') as logged:
+        import time
+        from app.blender import retry_budget
+        clock = [1000.0]
+        def ensure_at(t):
+            clock[0] = t
             dm.ensure_door_model('panel',.94,2.1,.07); dm._queue.join()
-            dm.ensure_door_model('panel',.94,2.1,.07)
-            assert dm._queue.empty() and len(calls)==1 and logged.call_count==0
-            import time
-            later = time.monotonic() + dm.RETRY_AFTER_S + 1
-            with patch.object(time, 'monotonic', lambda: later):
-                dm.ensure_door_model('panel',.94,2.1,.07); dm._queue.join()
-            assert len(calls)==2 and logged.call_count==0
+            return len(calls)
+        with patch.object(dm,'_run_blender',slow), patch.object(dm.logger,'exception') as logged, \
+                patch.object(time, 'monotonic', lambda: clock[0]), \
+                patch.object(retry_budget.logger, 'warning') as budget_warned:
+            assert ensure_at(1000) == 1
+            assert ensure_at(1299) == 1 and dm._queue.empty()
+            assert ensure_at(1300) == 2
+            assert ensure_at(2499) == 2
+            assert ensure_at(2500) == 3
+            assert ensure_at(2500 + 10 ** 9) == 3 and dm._queue.empty()
+            assert logged.call_count == 0 and budget_warned.call_count == 1
+            text = budget_warned.call_args[0][0] % budget_warned.call_args[0][1:]
+            assert "held until restart" in text and "door:" in text, text
         print('PASS door models: signature, texture identity, worker dedup, metadata, touch, thumbnail, sweep, failed-build suppression, retryable deferral')
 
 if __name__ == '__main__':

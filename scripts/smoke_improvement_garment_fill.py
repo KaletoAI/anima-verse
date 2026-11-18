@@ -49,7 +49,9 @@ sha256 of "<fsig>:<current base sha>", first 12 hex.
      → not a candidate; no fit + a persisted failure at ``ghost`` → not a
      candidate; nothing → candidate ``clothing:Kira:<dress>`` with hub_jobs
      7 and note "worn 2 + ghost 2 + cutout 2 + mesh 1" (worn = front edit + back
-     draft; the back's composite is CPU work since Task 11g; the cut-out's two upscales since Ruling A25); apply calls ``run_garment``
+     draft; the back's composite is CPU work since Task 11g; the cut-out's two upscales since Ruling A25); while the
+     retry budget holds the piece (``app.blender.retry_budget``, three timeouts in a row) apply is
+     ``CandidateBusy`` naming ``garments.LEFT_DUE_HELD`` and spends nothing; after a reset apply calls ``run_garment``
      (the recorder, once) → rescan → gone. A character without a ready base
      model is never a subject (Nora, a plain profile — on the pipeline since
      Task 11h, but without a base — lists nothing even wearing the dress).
@@ -362,7 +364,14 @@ def main() -> int:
                 write_fit(name)
                 return {"ok": True, "fsig": fsig, "ran": ["worn", "ghost", "cutout", "mesh", "fit"]}
 
+            from app.blender import retry_budget
+            for _ in range(retry_budget.HOLD_AFTER):
+                retry_budget.note(garments.budget_key("Kira", dress), "timeout")
             with patch.object(garments, "run_garment", fake_run_garment):
+                raises("held by the retry budget: CandidateBusy", lambda: typ.apply(
+                    found[0], typ.validate({"kind": "clothing"}), "t"), CandidateBusy, garments.LEFT_DUE_HELD)
+                check("...and run_garment was not called", runs, [])
+                retry_budget.reset()
                 typ.apply(found[0], typ.validate({"kind": "clothing"}), "t")
             check("run_garment called once", runs, [("Kira", dress)])
             check("rescan: gone", clothing(), [])

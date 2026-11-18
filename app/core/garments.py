@@ -2463,11 +2463,44 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
     return result
 
 
+def budget_key(character_name: str, item_id: str) -> str:
+    """The ``app.blender.retry_budget`` key of a piece's chain. Automatic runs (a FIFO job no click asked for, the
+    garment / hair fill improvements) ask ``may_run_automatically`` first; every run reports to it
+    (``_note_outcome``): a chain left due by a Blender timeout / interruption comes back only on the budget's growing
+    delays and is held until restart after the third in a row. A user's run is never held."""
+    return f"garment:{character_name}:{item_id}"
+
+
+def may_run_automatically(character_name: str, item_id: str) -> bool:
+    """Whether an automatic trigger may run the piece's chain now (``budget_key``)."""
+    from app.blender import retry_budget
+    return retry_budget.may_try(budget_key(character_name, item_id))
+
+
+#: The error of an automatic run the retry budget held back (``budget_key``).
+LEFT_DUE_HELD = ("Held back: this piece's last runs kept running out of time or being interrupted — automatic runs "
+                 "wait, Regenerate in the Wardrobe runs it now")
+
+
+def _run_outcome(result: Dict[str, Any]) -> Optional[str]:
+    """The outcome a run reports to the retry budget: None when no Blender / CPU run decided it (load, the media
+    switch, a pause, a cancel, a held run)."""
+    from app.blender import outcome as oc
+    if result.get("load") or result.get("paused") or result.get("cancelled") or result.get("held"):
+        return None
+    if result.get("retry_later") and result.get("outcome") not in oc.ALL:
+        return None  # load or the media switch (a footwear chain carries no outcome for it)
+    return _result_outcome(result)
+
+
 def _note_outcome(character_name: str, item_id: str, result: Dict[str, Any]) -> None:
     """Persist a failed run's step + error under its fsig (automatic
     triggers skip it, ``cached_failure``); a successful run clears it. A
     failure that is load or the media switch (``retry_later``, every chain)
-    is not persisted: automatic triggers try again."""
+    is not persisted: automatic triggers try again — a run left due by a
+    retryable Blender / CPU outcome on the retry budget (``budget_key``)."""
+    from app.blender import retry_budget
+    retry_budget.note(budget_key(character_name, item_id), _run_outcome(result))
     from app.core import base_body, garment_store as gs
     fsig = str(result.get("fsig") or "")
     if not fsig:
@@ -3777,9 +3810,10 @@ def _retry_later(character_name: str, item_id: str, fsig: str, step: str, e: Bas
                 character_name, item_id, step, error)
     gs.end(character_name, item_id, step, error=error, gates=None)
     carried = oc.of_exception(e)
+    run_left_due = oc.is_retryable(carried)
     return {"ok": False, "fsig": fsig, "step": step, "error": error, "gates": None, "ran": ran,
-            "retry_later": True, "outcome": carried if oc.is_retryable(carried) else oc.INTERRUPTED,
-            "log_tail": refit_pool.end_of(e)[2]}
+            "retry_later": True, "outcome": carried if run_left_due else oc.INTERRUPTED,
+            "log_tail": refit_pool.end_of(e)[2], **({} if run_left_due else {"load": True})}
 
 
 def check_run(character_name: str, item_id: str, *, steps: Union[None, str, Iterable[str]] = None,
@@ -4098,7 +4132,11 @@ def _execute_inner(character_name: str, job: "_Job") -> Optional[str]:
     scope_token = CANCEL_SCOPE.set(job.cancel_scope)
     try:
         failure = cached_failure(character_name, job.item_id) if job.automatic else None
-        if failure is not None:
+        if job.automatic and failure is None and not may_run_automatically(character_name, job.item_id):
+            logger.info("Garment run %s/%s skipped: left due by the retry budget — waits", character_name,
+                        job.item_id)
+            job.result = {"ok": False, "error": LEFT_DUE_HELD, "retry_later": True, "held": True, "ran": []}
+        elif failure is not None:
             # The run this job waited behind refused the same input: an
             # automatic run never spends the chain on it again.
             logger.info("Garment run %s/%s skipped: %s refused for this input (%s) — waits for an"

@@ -46,6 +46,16 @@ Expected, derived by hand from the runner.run docstring ("``ok`` False covers ev
      job=av-blender-<…> exit=<code or -> ===``, one per run that got a job folder (runs [1]..[11], [13], [14]
      plus the baseline: 14 blocks), outcomes ok, crashed, unavailable, unavailable,
      crashed, ok, timeout, rejected, interrupted, crashed, crashed, crashed, ok, crashed.
+
+The retry budget of automatic callers (``app.blender.retry_budget``; DELAYS_S (300, 1200), HOLD_AFTER 3), on a
+stubbed monotonic clock starting at t = 1000:
+[16] An unknown key may run. ``timeout`` at t=1000 → deferred until 1000+300 = 1300: may_try False at 1299.9,
+     True at 1300. ``interrupted`` at 1300 → until 1300+1200 = 2500: False at 2499.9, True at 2500.
+     ``unavailable`` at 2500 (the 3rd in a row) → held: may_try False at 2500 + 10**9, held() True, exactly ONE
+     WARNING naming the key and "kept timing out / being interrupted" and "held until restart". A 4th ``timeout``
+     → still held, still one warning. ``ok`` → cleared: may_try True at once, held() False.
+[17] ``rejected`` and ``crashed`` clear a deferred key; ``None`` and ``cancelled`` leave it deferred (until 1300
+     for a ``timeout`` at 1000); one key's deferral does not touch another key.
 """
 import json
 import logging
@@ -138,7 +148,9 @@ class Capture(logging.Handler):
         self.records = []
 
     def emit(self, record):
-        self.records.append(record.getMessage())
+        self.records.append(record.getMessage() if self.text else record)
+
+    text = True
 
 
 def safe_run(**kw):
@@ -147,6 +159,63 @@ def safe_run(**kw):
         return runner.run("meshopt", **kw)
     except Exception as e:  # noqa: BLE001 — exactly what the smoke looks for
         return {"ok": None, "error": f"RAISED {type(e).__name__}: {e}"}
+
+
+def budget_cases() -> None:
+    """[16] [17] — the retry budget on a stubbed clock (docstring)."""
+    from app.blender import retry_budget as rb
+    clock = [1000.0]
+    cap = Capture()
+    cap.text = False  # the records themselves: their level is checked
+    rb.logger.addHandler(cap)
+    try:
+        with patch.object(rb.time, "monotonic", lambda: clock[0]):
+            rb.reset()
+            key = "door:/x:arch"
+            check(rb.may_try(key), "[16] an unknown key may run")
+            rb.note(key, oc.TIMEOUT)
+            clock[0] = 1299.9
+            first_wait = rb.may_try(key)
+            clock[0] = 1300.0
+            check(not first_wait and rb.may_try(key), "[16] timeout at 1000: deferred until 1300")
+            rb.note(key, oc.INTERRUPTED)
+            clock[0] = 2499.9
+            second_wait = rb.may_try(key)
+            clock[0] = 2500.0
+            check(not second_wait and rb.may_try(key), "[16] interrupted at 1300: deferred until 2500")
+            rb.note(key, oc.UNAVAILABLE)
+            clock[0] = 2500.0 + 10 ** 9
+            warnings = [r for r in cap.records if r.levelno == logging.WARNING]
+            check(not rb.may_try(key) and rb.held(key), "[16] the 3rd in a row holds it until restart")
+            check(len(warnings) == 1 and key in warnings[0].getMessage()
+                  and "kept timing out / being interrupted" in warnings[0].getMessage()
+                  and "held until restart" in warnings[0].getMessage(),
+                  f"[16] one warning naming the key ({[w.getMessage() for w in warnings]})")
+            rb.note(key, oc.TIMEOUT)
+            warnings = [r for r in cap.records if r.levelno == logging.WARNING]
+            check(not rb.may_try(key) and len(warnings) == 1, "[16] a 4th: still held, still one warning")
+            rb.note(key, oc.OK)
+            check(rb.may_try(key) and not rb.held(key), "[16] ok clears it")
+            for ended in (oc.REJECTED, oc.CRASHED):
+                clock[0] = 1000.0
+                rb.note(key, oc.TIMEOUT)
+                rb.note(key, ended)
+                check(rb.may_try(key), f"[17] {ended} clears a deferred key")
+            for ended in (None, oc.CANCELLED):
+                clock[0] = 1000.0
+                rb.reset()
+                rb.note(key, oc.TIMEOUT)
+                rb.note(key, ended)
+                clock[0] = 1299.9
+                still = not rb.may_try(key)
+                clock[0] = 1300.0
+                check(still and rb.may_try(key), f"[17] {ended} leaves it deferred until 1300")
+            clock[0] = 1000.0
+            rb.note(key, oc.TIMEOUT)
+            check(rb.may_try("door:/x:other") and not rb.may_try(key), "[17] keys are independent")
+    finally:
+        rb.logger.removeHandler(cap)
+        rb.reset()
 
 
 def main() -> int:
@@ -296,6 +365,7 @@ def main() -> int:
             check(bool(heads) and all(HEAD.match(h) and HEAD.match(h).group("pid") == str(os.getpid())
                                       and HEAD.match(h).group("script") == "meshopt" for h in heads),
                   f"[15] every header in the format ({heads[0] if heads else ''!r})")
+        budget_cases()
     finally:
         runner.logger.removeHandler(cap)
         runner.LOG_FILE = saved_log

@@ -47,8 +47,12 @@ The automatic path remembers the skip, and a full upload forgets it again and
 drops a CPU-built (source "lod") low file, while an uploaded low file stays.
 The older stub sources have unknown counts (0) and keep today's reduction.
 
-A reduction whose run ended retryable (``outcome`` "timeout", ``app.blender.outcome``) is NOT remembered: the
-next request runs it again ([8b]); a failure without a retryable outcome is remembered as before ([8]).
+A reduction whose run ended retryable (``outcome`` "timeout", ``app.blender.outcome``) is NOT remembered as a
+failure ([8b]) but left due on the retry budget (``app.blender.retry_budget``: 300 s after the 1st, 1200 s after
+the 2nd, held after the 3rd), for a prop AND a location model, on a stubbed budget clock from t = 1000:
+request at 1000 → run 1; at 1299 → nothing; at 1300 → run 2; at 1300+1199 = 2499 → nothing; at 2500 → run 3; at
+2500 + 10**9 → nothing (held). The admin's forced build still runs while held, and its success frees the key.
+A failure without a retryable outcome is remembered as before ([8]).
 
 Usage:  ./.venv/bin/python scripts/smoke_model_lod.py
 """
@@ -322,16 +326,39 @@ def main() -> int:
         return {"ok": False, "blob": b"", "tris": None, "tris_before": None, "error": "timeout after 600s",
                 "outcome": "timeout", "log_tail": "T"}
     refine.build_static_lod = fake_timeout
-    CALLS.clear()
-    props.request_low_tier(pid5)
-    check("the timed-out attempt runs", wait_for(lambda: bool(CALLS)), str(CALLS))
-    check("...and is not remembered", wait_for(lambda: props._lod_key(pid5) not in props._lod_failed
-                                               and not props._lod_building), str(props._lod_failed))
-    CALLS.clear()
-    props.request_low_tier(pid5)
-    check("...so the next request tries again", wait_for(lambda: bool(CALLS)), str(CALLS))
-    wait_for(lambda: not props._lod_building)
+    import types
+    from unittest.mock import patch
+    from app.blender import retry_budget
+    clock = [1000.0]
+    budget_clock = patch.object(retry_budget, "time", types.SimpleNamespace(monotonic=lambda: clock[0]))
+    left_loc = add_location(name="Timeout Hall", description="smoke")["id"]
+    refine.auto_lod_enabled = lambda: False
+    location_model3d.save_uploaded_building(left_loc, b"glTF-full-timeout")
+    refine.auto_lod_enabled = lambda: True
+
+    def runs_at(t, ask, building):
+        """Runs of a request at budget time ``t`` (0 or 1), after the background build ended."""
+        clock[0] = t
+        CALLS.clear()
+        ask()
+        wait_for(lambda: not building, 0.3)
+        wait_for(lambda: not building)
+        return len(CALLS)
+
+    for label, ask, building, failed, key in (
+            ("prop", lambda: props.request_low_tier(pid5), props._lod_building, props._lod_failed,
+             props._lod_key(pid5)),
+            ("location", lambda: location_model3d.get_client_meta(left_loc), location_model3d._lod_building,
+             location_model3d._lod_failed, None)):
+        with budget_clock:
+            seen = [runs_at(t, ask, building) for t in (1000, 1299, 1300, 2499, 2500, 2500 + 10 ** 9)]
+        check(f"{label}: runs at 1000, 1300, 2500 only, then held ({seen})", seen == [1, 0, 1, 0, 1, 0])
+        check(f"...{label}: never remembered as a failure", (key not in failed) if key else not failed, str(failed))
     refine.build_static_lod = fake_build_static_lod
+    with budget_clock:
+        res = props.build_low_tier(pid5, force=True)
+        check("the admin's forced build runs while held", res["ok"] is True, str(res))
+        check("...and its success frees the key", retry_budget.may_try(f"lod:prop:{props._lod_key(pid5)}"))
 
     print("\n[9] at most two background builds at a time (all stores)")
     slots = [refine.take_lod_slot(), refine.take_lod_slot()]

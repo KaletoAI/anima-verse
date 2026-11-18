@@ -87,6 +87,12 @@ def _source_of(model_path: Path) -> Optional[Dict[str, Any]]:
 BAKE_REASONS = ("ok", "unreadable", "no_blender", "busy", "failed", "unstorable")
 
 
+def budget_key(model_path: Path) -> str:
+    """The ``app.blender.retry_budget`` key of a model's bake: the surface_bake improvement (an automatic loop that
+    comes back every ``BUSY_DEFER_S``) asks it before baking, every bake reports to it."""
+    return f"surface:{Path(model_path).resolve()}"
+
+
 def _reason_of(outcome: Any) -> str:
     """The bake reason of a failed run (``app.blender.outcome``): Blender gone mid-run is ``no_blender`` like the
     check before the slot, a timeout or an interrupted run ``busy`` (left due, the candidate stays missing), a
@@ -148,6 +154,8 @@ def bake_surface_result(model_path: Path, rotation: Any, *,
                                  "measure": str(measure or "xz")})
     finally:
         refine.free_lod_slot()
+    from app.blender import outcome as oc, retry_budget
+    retry_budget.note(budget_key(model_path), res.get("outcome") or (oc.OK if res.get("ok") else oc.CRASHED))
     if not res.get("ok"):
         logger.info("surface bake failed (%s, %s): %s", Path(model_path).name,
                     res.get("outcome"), res.get("error"))

@@ -1657,12 +1657,24 @@ def _run_pieces(character_name: str, step: Step, explicit: bool = False) -> str:
 
 def _run_template(character_name: str, step: Step, explicit: bool = False) -> str:
     """Drape one template piece (``garment_template.build``; a manual Build first forgets its failed drape)."""
+    from app.blender import outcome as oc, retry_budget
     from app.core import garment_template
     if explicit and step.failed:
         garment_template.clear_failure(character_name, step.item_id)
+    # An automatic Build asks the retry budget first: a drape left due by a timeout / interruption comes back only
+    # on its growing delays and is held until restart after the third in a row; a Build click always runs.
+    key = f"drape:{character_name}:{step.item_id}"
+    if not explicit and not retry_budget.may_try(key):
+        return DRAPE_HELD
     profile = _read_profile(character_name)
     state = garment_template.build(character_name, step.item_id, profile=profile)
+    retry_budget.note(key, state.get("outcome") or {"ready": oc.OK, "failed": oc.REJECTED}.get(state["state"]))
     return "" if state["state"] == "ready" else str(state["reason"])
+
+
+#: The template step's error when the retry budget held an automatic Build's drape back (``_run_template``).
+DRAPE_HELD = ("The drape kept running out of time or being interrupted, so automatic builds skip it for now. "
+              "Click Build to drape it now.")
 
 
 def _run_hair(character_name: str, step: Step, explicit: bool = False) -> str:

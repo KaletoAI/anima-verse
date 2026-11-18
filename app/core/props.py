@@ -5700,10 +5700,12 @@ def _reduce_to_low(pid: str, src: Path, ratio: float,
                            "tris": None, "tris_before": None, "size": 0,
                            "size_before": 0, "error": ""}
     res = refine.build_static_lod(src, ratio)
+    from app.blender import outcome as oc, retry_budget
+    ended = res.get("outcome") or (oc.OK if res.get("ok") else oc.CRASHED)
+    retry_budget.note(f"lod:prop:{key}", ended)
     if not res.get("ok"):
-        from app.blender import outcome as oc
-        if not oc.is_retryable(res.get("outcome")):
-            _lod_failed.add(key)  # a timeout / interruption / no Blender leaves it due: the next payload tries again
+        if not oc.is_retryable(ended):
+            _lod_failed.add(key)  # a timeout / interruption / no Blender stays due on the retry budget
         out["error"] = res.get("error") or "distance mesh not built"
         return out
     gallery = model_gallery(pid, variant)
@@ -5850,8 +5852,9 @@ def request_low_tier(prop_id: str, variant: Any = None) -> None:
     if not pid:
         return
     key = _lod_key(pid, variant)
-    if key in _lod_failed:
-        return
+    from app.blender import retry_budget
+    if key in _lod_failed or not retry_budget.may_try(f"lod:prop:{key}"):
+        return  # failed for good, or left due and not yet allowed again (``app.blender.retry_budget``)
     # An explicitly DESELECTED low tier is a decision, not a gap (user
     # finding 2026-08-20) — same rule as the location galleries.
     g = model_gallery(pid, variant)

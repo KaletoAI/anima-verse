@@ -145,4 +145,6 @@ class HairFill(ImprovementType):
         if _in_flight(name, item_id):
             raise CandidateBusy(f"{name}: a hair run is in flight")
         _require_routes("hairdeck", name)
+        if not garments.may_run_automatically(name, item_id):
+            raise CandidateBusy(f"{name}: {garments.LEFT_DUE_HELD}")  # the retry budget, no hub job spent
         _judge(garments.run_garment(name, item_id))

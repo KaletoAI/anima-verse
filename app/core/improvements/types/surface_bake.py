@@ -124,6 +124,13 @@ class SurfaceBake(ImprovementType):
         if entry is None:
             raise RuntimeError(f"{key}: no model to bake")
         _label, path, rotation, target_m, measure = entry
+        from app.blender import retry_budget
+        from app.core.model_surface import budget_key
+        if not retry_budget.may_try(budget_key(path)):
+            # Its bakes kept timing out / being interrupted (``app.blender.retry_budget``): no Blender is spent
+            # until the budget allows it again or, after the third in a row, the server restarts. Busy, not a
+            # failed attempt — the step stays pending and the engine comes back after BUSY_DEFER_S.
+            raise CandidateBusy(f"{key}: bake left due after a timeout — waiting before the next try")
         # The bake never raises — it answers a reason. Which one it is decides
         # the step's fate, so the plain Optional is not enough here:
         surface, reason = bake_surface_result(path, rotation,

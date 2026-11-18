@@ -202,6 +202,9 @@ sidecar carrying `backend`), so the READERS stay real: `get_model3d_info` and
      which the engine leaves pending without counting an attempt — that
      engine-side contract is case 14 of `smoke_improvements.py`, which drives
      the engine itself; proven here is that the type raises the right type.
+     A model whose bakes kept timing out is held by the retry budget
+     (`app.blender.retry_budget`, three retryable ends in a row): `apply`
+     raises `CandidateBusy` WITHOUT calling the bake.
 
  24. A bake invalidates the walk gate's cached lattices.  A room knows its
      location and drops only that one; a prop stands in many locations and
@@ -1073,6 +1076,20 @@ check_raises("a Blender slot that never came free is LOAD — CandidateBusy, so 
              f"room:{LOC_ID}/{TAPROOM}: no Blender slot")
 check("the candidate is untouched by either", FORGET_CALLS, [])
 BAKE_REASON["value"] = "ok"
+from app.blender import retry_budget  # noqa: E402
+from app.core.model_surface import budget_key  # noqa: E402
+for _ in range(retry_budget.HOLD_AFTER):
+    retry_budget.note(budget_key(ROOM_MODEL), "timeout")
+BAKE_CALLS.clear()
+check_raises("a bake the retry budget holds (three timeouts in a row) is "
+             "CandidateBusy too — the step stays pending, no Blender is spent",
+             CandidateBusy,
+             lambda: SURFACE_BAKE.apply(CAND_R, SURFACE_BAKE.validate(BAKE_ROOM),
+                                        "task-18b"),
+             f"room:{LOC_ID}/{TAPROOM}: bake left due after a timeout — waiting before "
+             "the next try")
+check("and the bake was not called", BAKE_CALLS, [])
+retry_budget.reset()
 
 # ── [15] surface_bake over prop variants ────────────────────────────────────
 print("[15] surface_bake prop_model")

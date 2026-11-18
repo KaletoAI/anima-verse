@@ -879,6 +879,9 @@ def request_lod(character_name: str, model_path: Path) -> bool:
         _publish_sidecar(model_path, meta)
         return False
     key = str(model_path)
+    from app.blender import outcome as oc, retry_budget
+    if not retry_budget.may_try(f"lod:character:{key}"):
+        return False  # left due after a timeout / interruption and not yet allowed again (or held until restart)
     with _lock:
         if key in _lod_building:
             return False
@@ -888,6 +891,8 @@ def request_lod(character_name: str, model_path: Path) -> bool:
         try:
             res = build_lod(character_name, model_path.stem,
                             ratio=_auto_lod_ratio(), path=model_path)
+            # Only the Blender run's own end counts (``outcome``); other answers carry none and change nothing.
+            retry_budget.note(f"lod:character:{key}", oc.OK if res.get("ok") else res.get("outcome"))
             if not res.get("ok"):
                 logger.debug("Model3D %s: LOD not built (%s)",
                              character_name, res.get("error"))
@@ -2976,6 +2981,7 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
         return {"ok": False, "error": "no_model"}
     if path.suffix.lower() != ".glb":
         return {"ok": False, "error": f"LOD handles GLB, not {path.suffix}"}
+    from app.blender import outcome as oc
     from app.blender import runner
     from app.blender.refine import unavailable_reason
     out_dir = tier_dir(character_name, LOW_TIER)
@@ -2993,7 +2999,8 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
         if not res.get("ok") or not res.get("outputs"):
             return {"ok": False,
                     "error": unavailable_reason() or res.get("error")
-                    or "no stage produced"}
+                    or "no stage produced",
+                    "outcome": res.get("outcome") if not res.get("ok") else oc.CRASHED}
         stage = (res["data"].get("stages") or [{}])[0]
         blob = Path(next(iter(res["outputs"].values()))).read_bytes()
         # Same bar as everywhere: the reduced mesh must still validate as what

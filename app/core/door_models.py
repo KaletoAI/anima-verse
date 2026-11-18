@@ -12,7 +12,7 @@ import tempfile
 import threading
 
 from app.blender import outcome as oc
-from app.blender import runner
+from app.blender import retry_budget, runner
 from app.core import paths, surface_textures
 from app.core.window_geometry import build_window
 from app.core.window_styles import load_window_styles, validate_window_style
@@ -37,16 +37,19 @@ _lock = threading.RLock()
 _queue = queue.Queue()
 _pending = set()
 _failed = set()
-#: key -> monotonic time before which a build left due (a retryable outcome: timeout, interrupted, no Blender) is
-#: not queued again — a scene compose asks for its doors on every poll, a failing Blender must not loop.
-_deferred = {}
-RETRY_AFTER_S = 300.0
+
+
+def _budget_key(key):
+    """The ``retry_budget`` key of a build: a scene compose asks for its doors on every poll, so a build left due
+    (timeout, interrupted, no Blender) comes back only on the budget's growing delays and is held after three."""
+    return f"door:{key[0]}:{key[1]}"
 
 
 def _held(key):
-    """Whether ``ensure`` must not queue ``key``: failed for good, or left due less than RETRY_AFTER_S ago."""
-    import time
-    return key in _failed or _deferred.get(key, 0.0) > time.monotonic()
+    """Whether ``ensure`` must not queue ``key``: failed for good, or left due and not yet allowed again."""
+    return key in _failed or not retry_budget.may_try(_budget_key(key))
+
+
 _worker = None
 _generation = 0
 
@@ -221,15 +224,13 @@ def _work():
         key, builder, style, dims, options = _queue.get()
         try:
             builder(style['id'],*dims,_style=style,_root_dir=key[0],**options)
+            retry_budget.note(_budget_key(key), oc.OK)
         except Exception as e:
-            if oc.is_retryable(oc.of_exception(e)):
-                # A timeout, an interrupted run or no Blender is no defect of the asset: ensure queues it again
-                # after RETRY_AFTER_S.
-                import time
-                with _lock:
-                    _deferred[key] = time.monotonic() + RETRY_AFTER_S
-                logger.warning('Model build for %s left due (%s), retried in %ds: %s', key[1],
-                               oc.of_exception(e), RETRY_AFTER_S, e)
+            ended = oc.of_exception(e) or oc.CRASHED
+            retry_budget.note(_budget_key(key), ended)
+            if oc.is_retryable(ended):
+                # A timeout, an interrupted run or no Blender is no defect of the asset: left due on the budget.
+                logger.warning('Model build for %s left due (%s): %s', key[1], ended, e)
                 continue
             with _lock:
                 _failed.add(key)

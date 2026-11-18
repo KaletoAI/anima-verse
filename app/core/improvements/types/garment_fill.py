@@ -280,6 +280,8 @@ class GarmentFill(ImprovementType):
             if _in_flight(name, item_id):
                 raise CandidateBusy(f"{name}: a garment run of {subjects.item_name(item_id)} is in flight")
             _require_routes(KIND_CLOTHING, name)
+            if not garments.may_run_automatically(name, item_id):
+                raise CandidateBusy(f"{name}: {garments.LEFT_DUE_HELD}")  # the retry budget, no hub job spent
             _judge(garments.run_garment(name, item_id))
             return
         names, _k, scope = _subjects(params)
