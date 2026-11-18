@@ -9,8 +9,9 @@ Usage:
     ./.venv/bin/python scripts/smoke_composite_version_remake.py
 
 Runs without a server, a hub or a GPU: a temp world (``paths.init`` first, STORAGE_DIR / INSTANCE_DIR temp
-dirs). The synthetic figures are those of ``scripts/smoke_bald_back_check.py`` (haired plain views, a haired
-dressed front, a haired dressed back as the draft — the view check passes on the head). Stubbed:
+dirs). The synthetic figures are those of ``scripts/smoke_bald_back_check.py``, shared through
+``scripts/_smoke_back_view.py`` (haired plain views, a haired dressed front, a haired dressed back as the
+draft — the view check passes on the head). Stubbed:
 ``base_body.render_view_edit`` (copies the draft, records the view), ``draft_prompt``, ``view_composite.compose``
 (copies the draft, an ok record of ``VERSION``; counted) and ``base_body_gates.noise_gate`` (ok). The view
 check, the framing gate, ``stored_draft``, ``composite_outdated`` and ``_dress_view`` are real; ``refs_dir`` is the
@@ -47,17 +48,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from smoke_bald_back_check import BLUE, SKIN, figure, heads, save  # noqa: E402
+import _smoke_back_view as _bv  # noqa: E402  (shared fixture)
+from _smoke_back_view import FAILS, BLUE, SKIN, heads, save  # noqa: E402,F401
+from _smoke_back_view import head_figure as figure  # noqa: E402
 
 BASELINE = "21ca534b"
-FAILS = []
 
 
 def check(label, got, want):
-    ok = got == want
-    print(("  OK   " if ok else "  FAIL ") + f"{label}: {got!r}"[:400] + ("" if ok else f" — expected {want!r}"[:400]))
-    if not ok:
-        FAILS.append(label)
+    _bv.check(label, got, want, limit=400)
 
 
 def main() -> int:

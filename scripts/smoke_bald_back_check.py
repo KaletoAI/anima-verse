@@ -79,61 +79,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-import numpy as np
-
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-FAILS: list = []
-SKIN = np.array([224.0, 172.0, 140.0])
-BLUE = np.array([40.0, 70.0, 200.0])
-HAIR = np.array([70.0, 45.0, 30.0])
-HAIR_LIGHT = np.array([120.0, 85.0, 55.0])
-
-
-def check(label, got, want):
-    ok = got == want
-    print(("  OK   " if ok else "  FAIL ") + f"{label}: {got!r}"[:300] + ("" if ok else f" — expected {want!r}"[:300]))
-    if not ok:
-        FAILS.append(label)
-
-
-def heads():
-    from PIL import Image
-    from skimage import data
-    yy, xx = np.mgrid[0:100, 0:100]
-    face = np.asarray(Image.fromarray(data.astronaut()[36:196, 143:303]).resize((100, 100), Image.BILINEAR), float)
-    hair = np.where((xx // 6) % 2 == 0, 1.0, 0.0)[..., None] * (HAIR_LIGHT - HAIR) + HAIR
-    bald = np.clip(SKIN * (1.05 - 0.25 * yy / 100)[..., None], 0, 255)
-
-    def over(base, mask):
-        out = base.copy()
-        out[mask] = hair[mask]
-        return out
-    return {"face": face, "bald": bald, "hair": hair,
-            "plain_front": over(face, (yy < 46) | (xx < 26) | (xx >= 74)),
-            "plain_left": over(bald, xx < 55), "plain_right": over(bald, xx >= 45)}
-
-
-def figure(head, torso):
-    yy, xx = np.mgrid[0:100, 0:100]
-    ellipse = ((yy - 49.5) / 50) ** 2 + ((xx - 49.5) / 42) ** 2 <= 1
-    a = np.zeros((800, 400, 4))
-    a[20:120, 150:250, :3] = head
-    a[20:120, 150:250, 3] = ellipse * 255
-    for (y0, y1, x0, x1), colour in [((120, 150, 185, 215), SKIN), ((150, 420, 120, 280), torso),
-                                     ((155, 420, 90, 120), SKIN), ((155, 420, 280, 310), SKIN),
-                                     ((420, 780, 130, 195), SKIN), ((420, 780, 205, 270), SKIN)]:
-        a[y0:y1, x0:x1, :3] = colour
-        a[y0:y1, x0:x1, 3] = 255
-    return a
-
-
-def save(arr, path: Path) -> Path:
-    from PIL import Image
-    path.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(np.clip(np.round(arr), 0, 255).astype(np.uint8), "RGBA").save(path)
-    return path
+from _smoke_back_view import FAILS, BLUE, SKIN, check, heads, save  # noqa: E402,F401  (shared fixture)
+from _smoke_back_view import head_figure as figure  # noqa: E402
 
 
 def main() -> int:

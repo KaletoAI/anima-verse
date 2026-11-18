@@ -116,8 +116,10 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from _smoke_back_view import FAILS, check, save  # noqa: E402  (shared fixture)
+from _smoke_back_view import box_figure as figure  # noqa: E402
+
 OLD = "ff011edf"
-FAILS: list = []
 SKIN = (224, 172, 140)
 SHADOW = (135, 92, 63)
 BROWN = (140, 95, 65)
@@ -128,28 +130,6 @@ ARMS_UP = [p for p in BODY if not (p[0] == 115 and p[2] in (80, 200))] + [(20, 1
 
 
 BSIG, SIG, TSIG = "base1234abcd", "aaaaaaaaaaaa", "tex111111111111"[:15]
-
-
-def check(label, got, want):
-    ok = got == want
-    print(("  OK   " if ok else "  FAIL ") + f"{label}: {got!r}"[:300] + ("" if ok else f" — expected {want!r}"[:300]))
-    if not ok:
-        FAILS.append(label)
-
-
-def figure(parts, rows=400, cols=300):
-    a = np.zeros((rows, cols, 4))
-    for y0, y1, x0, x1, *colour in parts:
-        a[y0:y1, x0:x1, :3] = colour[0] if colour else SKIN
-        a[y0:y1, x0:x1, 3] = 255
-    return a
-
-
-def save(arr, path: Path) -> Path:
-    from PIL import Image
-    path.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(np.clip(np.round(arr), 0, 255).astype(np.uint8), "RGBA").save(path)
-    return path
 
 
 def sha(path: Path) -> str:

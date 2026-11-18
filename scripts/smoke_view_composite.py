@@ -131,39 +131,14 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-FAILS: list = []
+from _smoke_back_view import FAILS, check, save  # noqa: E402  (shared fixture)
+from _smoke_back_view import box_figure as figure  # noqa: E402
+
 SKIN = (224, 172, 140)
 BLUE = (40, 70, 200)
 BODY = [(40, 100, 125, 175), (100, 110, 140, 160), (110, 230, 100, 200), (115, 230, 80, 100),
         (115, 230, 200, 220), (230, 360, 105, 145), (230, 360, 155, 195)]
 RECT = (130, 210, 110, 190)
-
-
-def check(label, got, want):
-    ok = got == want
-    print(("  OK   " if ok else "  FAIL ") + f"{label}: {got!r}"[:300] + ("" if ok else f" — expected {want!r}"[:300]))
-    if not ok:
-        FAILS.append(label)
-
-
-def figure(parts, rows=400, cols=300, scale=1.0, top=40):
-    """RGBA float array: each (y0, y1, x0, x1[, colour]) box mapped y -> top + scale (y - 40), x -> 150 + scale (x - 150)."""
-    a = np.zeros((rows, cols, 4))
-    for part in parts:
-        y0, y1, x0, x1 = part[:4]
-        colour = part[4] if len(part) > 4 else SKIN
-        Y0, Y1 = (int(round(top + (y - 40) * scale)) for y in (y0, y1))
-        X0, X1 = (int(round(150 + (x - 150) * scale)) for x in (x0, x1))
-        a[Y0:Y1, X0:X1, :3] = colour
-        a[Y0:Y1, X0:X1, 3] = 255
-    return a
-
-
-def save(arr, path: Path) -> Path:
-    from PIL import Image
-    path.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(np.clip(np.round(arr), 0, 255).astype(np.uint8), "RGBA").save(path)
-    return path
 
 
 def main() -> int:
