@@ -917,8 +917,14 @@ from app.core.embedding import SingleFlight  # noqa: E402
 _ALIAS_FLIGHTS = SingleFlight("pose-alias-embeddings")
 
 
-def _alias_embeddings(axis: str, embed_fn, *, wait: bool = True) -> Optional[Dict[str, list]]:
+def _alias_embeddings(axis: str, embed_fn, *, wait: bool = True,
+                      model_key: Optional[str] = None) -> Optional[Dict[str, list]]:
     """``{alias: vector}`` of one axis for ``embed_fn``'s model.
+
+    ``model_key`` is that model's id when the caller already read it (its
+    query vector was made under the same id); ``None`` reads it here. The
+    map is computed under exactly that id: a real ``embed`` whose model
+    changed meanwhile answers nothing rather than another model's vectors.
 
     Cached per ``(axis, model id)``; a cold map is computed by ONE thread
     (single-flight, batched through ``embedding.embed_map``) while every
@@ -933,7 +939,7 @@ def _alias_embeddings(axis: str, embed_fn, *, wait: bool = True) -> Optional[Dic
     with _lock:
         generation = _generation
     aliases = _alias_index(axis)
-    key = (axis, _embed_model_key(embed_fn))
+    key = (axis, model_key if model_key is not None else _embed_model_key(embed_fn))
     with _lock:
         cached = _embed_cache.get(key)
     if cached is not None:
@@ -949,7 +955,7 @@ def _alias_embeddings(axis: str, embed_fn, *, wait: bool = True) -> Optional[Dic
         # Embedded OUTSIDE _lock: with an external backend this is network
         # traffic, and _lock is the same lock every catalog reader takes.
         from app.core.embedding import embed_map
-        vecs = embed_map(list(aliases), embed_fn)
+        vecs = embed_map(list(aliases), embed_fn, model_id=key[1])
         if not vecs:
             # Nothing came back (no model, endpoint down): do NOT cache the
             # empty map — that would pin "no embeddings" until the next
@@ -1077,12 +1083,16 @@ def _record_catalog_outcome(point: str, dkey: str, axis: str, key: str, how: str
 def _resolve_by_embedding(cleaned: str, axis: str, index: Dict[str, str],
                           _embed=None) -> Tuple[str, str]:
     """The embedding match (unchanged behaviour since the pose catalog)."""
+    from app.core import embedding
     if _embed is None:
-        from app.core.embedding import embed as _embed
-    query = _embed(cleaned)
+        _embed = embedding.embed
+    # Query and alias map under ONE model id: a model that changes between
+    # the two must not have its vectors compared with the other one's.
+    model_key = _embed_model_key(_embed)
+    query = embedding.embedder_for(model_key, _embed)(cleaned)
     if query:
         best_alias, best_score = "", 0.0
-        for alias, vec in _alias_embeddings(axis, _embed).items():
+        for alias, vec in _alias_embeddings(axis, _embed, model_key=model_key).items():
             score = cosine_similarity(query, vec)
             if score > best_score:
                 best_alias, best_score = alias, score

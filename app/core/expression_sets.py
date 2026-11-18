@@ -398,14 +398,19 @@ _embedding_maps_lock = threading.Lock()
 _ALIAS_FLIGHTS = SingleFlight("expression-alias-embeddings")
 
 
-def alias_embeddings(catalog, spec, embed_fn, *, wait: bool = True):
+def alias_embeddings(catalog, spec, embed_fn, *, wait: bool = True,
+                     model_key=None):
     """One set's ``{alias: vector}``, cached under its captured catalog/model
     identity and computed by ONE thread at a time (batched through
-    ``embedding.embed_map``); other callers of the same key wait for it.
+    ``embedding.embed_map``, pinned to that model id); other callers of the
+    same key wait for it. ``model_key`` is the model id the caller already
+    read (``None`` reads it here).
 
     ``wait=False`` never waits: a cold map returns ``None`` and is computed in
     the background instead."""
-    cache_key = (catalog.revision, spec.id, pose_catalog._embed_model_key(embed_fn))
+    if model_key is None:
+        model_key = pose_catalog._embed_model_key(embed_fn)
+    cache_key = (catalog.revision, spec.id, model_key)
     cached = _embedding_maps.get(cache_key)
     if cached is not None:
         return cached
@@ -416,7 +421,7 @@ def alias_embeddings(catalog, spec, embed_fn, *, wait: bool = True):
             return cached
         aliases = {alias for key in spec.members
                    for alias in (key, *catalog.entries[key]["synonyms"])}
-        vectors = embedding.embed_map(sorted(aliases), embed_fn)
+        vectors = embedding.embed_map(sorted(aliases), embed_fn, model_id=model_key)
         if vectors:
             with _embedding_maps_lock:
                 if len(_embedding_maps) >= 64:
@@ -472,8 +477,10 @@ def resolve_text(text: str, *, set_id: str, embed_fn=None, wait: bool = True):
                 decision.mark_taken(point, dkey)
                 pose_catalog.record_candidate("expression", cleaned, "", None, set_id=set_id)
                 return spec.default, "decision_none"
-    query = fn(cleaned)
-    vectors = alias_embeddings(cat, spec, fn)
+    # Query and alias map under ONE model id (see pose_catalog._resolve_by_embedding).
+    model_key = pose_catalog._embed_model_key(fn)
+    query = embedding.embedder_for(model_key, fn)(cleaned)
+    vectors = alias_embeddings(cat, spec, fn, model_key=model_key)
     best_alias, score = "", 0.0
     if query:
         for alias, vector in vectors.items():

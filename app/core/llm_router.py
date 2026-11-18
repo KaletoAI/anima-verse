@@ -348,7 +348,8 @@ async def preload_models() -> None:
 
 
 def _resolve_character_override(task: str, agent_name: str, *, reserve: bool = True,
-                                uncensored_only: bool = False, exclude: frozenset = frozenset()) -> Optional[LLMInstance]:
+                                uncensored_only: bool = False, exclude: frozenset = frozenset(),
+                                consult_quota: bool = True) -> Optional[LLMInstance]:
     """Reads `llm_routing_overrides[task]` from character_config.
 
     Supported value formats:
@@ -382,7 +383,7 @@ def _resolve_character_override(task: str, agent_name: str, *, reserve: bool = T
         logger.info("Character-Override '%s' fuer task=%s (agent=%s): Provider unavailable — Fallback auf globales Routing",
                     raw, task, agent_name)
         return None
-    if instance._provider.quota.wait_seconds():
+    if consult_quota and instance._provider.quota.wait_seconds():
         if reserve:
             instance._provider.quota.log_full(logger, instance.provider_name)
         return None
@@ -448,7 +449,8 @@ def _candidates(task: str, routing: list) -> List[Tuple[int, dict]]:
     return out
 
 
-def _usable(entry: dict, task: str = "", *, quiet: bool = False) -> Optional[Provider]:
+def _usable(entry: dict, task: str = "", *, quiet: bool = False,
+            consult_quota: bool = True) -> Optional[Provider]:
     """The provider of a routing entry if the entry can serve a call right
     now, else None — the one availability rule of ``resolve_llm`` and
     ``overflow_target``.
@@ -456,7 +458,10 @@ def _usable(entry: dict, task: str = "", *, quiet: bool = False) -> Optional[Pro
     ``quiet`` drops the "not found / unavailable / cooldown" lines: the
     overflow check walks the whole chain on every pass of a waiting call
     (up to once per second per queued task), and repeating the resolver's
-    lines there would only flood the log with what it already said."""
+    lines there would only flood the log with what it already said.
+
+    ``consult_quota=False`` leaves the provider's request quota out of the
+    rule (see ``resolve_llm``)."""
     pm = get_provider_manager()
     off = disabled_providers()
     provider_name = (entry.get("provider") or "").strip()
@@ -481,7 +486,7 @@ def _usable(entry: dict, task: str = "", *, quiet: bool = False) -> Optional[Pro
                         task, provider_name, model)
         return None
 
-    if provider.quota.wait_seconds():
+    if consult_quota and provider.quota.wait_seconds():
         if not quiet:
             provider.quota.log_full(logger, provider.name)
         return None
@@ -608,7 +613,8 @@ def overflow_target(task: str, agent_name: str = "", *,
 
 def resolve_llm(task: str, agent_name: str = "", *, overflow: bool = False,
                 reserve: bool = True, uncensored_only: bool = False,
-                exclude: frozenset = frozenset()) -> Optional[LLMInstance]:
+                exclude: frozenset = frozenset(),
+                consult_quota: bool = True) -> Optional[LLMInstance]:
     """Determines the LLM for a task from the llm_routing config.
 
     Order:
@@ -626,8 +632,16 @@ def resolve_llm(task: str, agent_name: str = "", *, overflow: bool = False,
     when an accepting alternative has a free lane. Character overrides stay
     pinned, and callers without the flag keep the regular routing choice.
 
+    ``consult_quota=False`` picks the entry as if no provider quota were
+    full: the choice then does not change with momentary load. For callers
+    that need the SAME model whatever the load (embeddings — vectors of two
+    models are not comparable) and that wait for a slot themselves before
+    they send. Such a lookup books nothing, so it requires ``reserve=False``.
+
     The task disable (llm_task_state) is always the first check.
     """
+    if reserve and not consult_quota:
+        raise ValueError("resolve_llm: consult_quota=False cannot reserve a quota slot")
     # Task disabled? → no LLM (callers drop into their existing fallback paths)
     from app.core.llm_task_state import is_enabled
     if not is_enabled(task):
@@ -636,7 +650,8 @@ def resolve_llm(task: str, agent_name: str = "", *, overflow: bool = False,
 
     # 1. Character override
     if agent_name:
-        override_inst = _resolve_character_override(task, agent_name, reserve=reserve, uncensored_only=uncensored_only, exclude=exclude)
+        override_inst = _resolve_character_override(task, agent_name, reserve=reserve, uncensored_only=uncensored_only, exclude=exclude,
+                                                    consult_quota=consult_quota)
         if override_inst is not None:
             return override_inst
 
@@ -650,14 +665,15 @@ def resolve_llm(task: str, agent_name: str = "", *, overflow: bool = False,
         parent = fallback_parent(task)
         if parent:
             logger.debug("resolve_llm(%s): no routing, falling back to '%s'", task, parent)
-            return resolve_llm(parent, agent_name=agent_name, overflow=overflow, reserve=reserve, uncensored_only=uncensored_only, exclude=exclude)
+            return resolve_llm(parent, agent_name=agent_name, overflow=overflow, reserve=reserve, uncensored_only=uncensored_only, exclude=exclude,
+                               consult_quota=consult_quota)
         return None
 
     candidates.sort(key=lambda x: x[0])
     for order, entry in candidates:
         if not _refusal_candidate(entry.get("provider"), entry.get("model"), uncensored_only, exclude):
             continue
-        provider = _usable(entry, task, quiet=not reserve)
+        provider = _usable(entry, task, quiet=not reserve, consult_quota=consult_quota)
         if provider is None:
             continue
         instance = _instance_for(task, entry, provider)

@@ -13,6 +13,15 @@ Backend choice via ``config.embedding.backend``:
   - ``internal``: always the built-in fastembed/ONNX model (CPU).
   - ``external``: only the routed ``/v1/embeddings`` provider.
 
+The choice never follows momentary LOAD: a provider whose request quota is
+full, or that answers HTTP 429, stays the chosen model. The call waits for a
+slot within ``embedding.max_wait_seconds`` and otherwise returns ``None``; it
+never answers with the other model's vector, because vectors of two models
+are not comparable and every stored vector is stamped with
+``current_model_id()``. Callers that stamp pass that id back in
+(``embed(..., model_id=...)`` / :func:`embedder_for`), so a vector is only
+produced by the model its stamp names.
+
 The built-in model runs via ``fastembed`` (reuses the ``onnxruntime`` that is
 already present, no torch). It is downloaded into ``cache_dir`` on first use
 (~130 MB for bge-small). Catalog aliases are short English phrases, so a small
@@ -72,29 +81,39 @@ _MODEL_LOCK = threading.Lock()
 _FASTEMBED_MISSING_LOGGED = False
 _LANGUAGE_MISMATCH_CHECKED = False
 
+#: Default of ``embedding.max_wait_seconds``: how long one external request
+#: waits for a free slot of its provider's request quota (or a 429's
+#: Retry-After) before the call gives up with ``None``.
+DEFAULT_MAX_WAIT_SECONDS = 5.0
+
+# Monotonic stamp of the last "gave up under load" INFO line (one per minute).
+_LOAD_LOGGED_AT = 0.0
+
 #: Texts per ``/embeddings`` request of :func:`embed_many`. The catalog warm-up
 #: embeds a few hundred aliases; one request per alias cost ~19 minutes against
 #: a slow gateway (3 s per call), one request per chunk costs a handful.
 EXTERNAL_BATCH_SIZE = 64
 
 
-def embed(text: str) -> Optional[List[float]]:
+def embed(text: str, *, model_id: str = "") -> Optional[List[float]]:
     """Embedding of ``text`` via the configured backend.
 
     Returns ``None`` when no model is available/configured or the call
-    fails.
+    fails. A failed external call does NOT fall back to the internal model:
+    the caller has stamped this vector with ``current_model_id()``.
+    ``model_id`` (optional) is the stamp the caller will store or compare
+    the vector under; when the model in effect now is a different one the
+    answer is ``None`` instead of a vector of the wrong model.
     """
     text = (text or "").strip()
     if not text:
         return None
-    cfg = config.get("embedding", {}) or {}
-    backend = (cfg.get("backend") or "auto").strip().lower()
-    if effective_backend(cfg) == "external":
-        vec = _embed_external(text)
-        # auto falls back to the internal model when the external one is
-        # unreachable; an explicit "external" does not.
-        if vec is not None or backend == "external":
-            return vec
+    kind, route_id, inst, prov = _route()
+    if model_id and route_id != model_id:
+        logger.debug("embedding: model changed (%s -> %s), no vector", model_id, route_id)
+        return None
+    if kind == "external":
+        return _embed_external(text, inst, prov) if inst is not None else None
     return _embed_internal(text)
 
 
@@ -103,7 +122,20 @@ def embed(text: str) -> Optional[List[float]]:
 _REAL_EMBED = embed
 
 
-def embed_many(texts: Iterable[str]) -> List[Optional[List[float]]]:
+def embedder_for(model_id: str, embed_fn=None):
+    """The text -> vector function to use for vectors stamped ``model_id``.
+
+    ``embed_fn`` ``None`` means this module's ``embed`` (looked up at call
+    time, so a double patched over it is honoured). The genuine ``embed`` is
+    pinned to ``model_id``; any other function is returned unchanged — a
+    double is its own model."""
+    fn = globals()["embed"] if embed_fn is None else embed_fn
+    if fn is _REAL_EMBED:
+        return lambda text: _REAL_EMBED(text, model_id=model_id)
+    return fn
+
+
+def embed_many(texts: Iterable[str], *, model_id: str = "") -> List[Optional[List[float]]]:
     """Embeddings of ``texts`` via the configured backend, in BATCHES.
 
     Returns one entry per input text, in input order; an entry is ``None``
@@ -111,36 +143,41 @@ def embed_many(texts: Iterable[str]) -> List[Optional[List[float]]]:
 
     The external backend sends ``input`` as a list, ``EXTERNAL_BATCH_SIZE``
     texts per request (OpenAI-compatible ``/embeddings``); the internal model
-    embeds the whole list in one call. ``auto`` falls back to the internal
-    model only when the external route answered NOTHING — a partial answer is
-    kept as it is, because mixing two models' vectors in one map would make
-    them silently incomparable.
+    embeds the whole list in one call. Whatever the external route does not
+    answer stays ``None`` — never the internal model's vector, because mixing
+    two models' vectors in one map would make them silently incomparable.
+    ``model_id`` as in :func:`embed`: a different model in effect now means
+    all ``None``.
     """
     cleaned = [(t or "").strip() for t in texts]
     out: List[Optional[List[float]]] = [None] * len(cleaned)
     todo = [i for i, t in enumerate(cleaned) if t]
     if not todo:
         return out
-    cfg = config.get("embedding", {}) or {}
-    backend = (cfg.get("backend") or "auto").strip().lower()
-    if effective_backend(cfg) == "external":
-        vecs = _embed_external_many([cleaned[i] for i in todo])
+    kind, route_id, inst, prov = _route()
+    if model_id and route_id != model_id:
+        logger.debug("embedding: model changed (%s -> %s), no vectors", model_id, route_id)
+        return out
+    if kind == "external":
+        if inst is None:
+            return out
+        vecs = _embed_external_many([cleaned[i] for i in todo], inst, prov)
         for i, vec in zip(todo, vecs):
             out[i] = vec
-        if backend == "external" or any(v is not None for v in vecs):
-            return out
+        return out
     vecs = _embed_internal_many([cleaned[i] for i in todo])
     for i, vec in zip(todo, vecs):
         out[i] = vec
     return out
 
 
-def embed_map(texts: Iterable[str], embed_fn=None) -> Dict[str, List[float]]:
+def embed_map(texts: Iterable[str], embed_fn=None, *,
+              model_id: str = "") -> Dict[str, List[float]]:
     """``{text: vector}`` for every text that got a vector — the shape the
     catalog alias maps keep.
 
     ``embed_fn`` is ``None`` or :func:`embed` for the real backend (batched
-    through :func:`embed_many`). Any other function is a test double or a
+    through :func:`embed_many`, pinned to ``model_id`` when one is given). Any other function is a test double or a
     custom embedder: when it carries an ``embed_many`` attribute (a callable
     taking a list and answering a list of the same length) that is used,
     otherwise the texts are embedded one by one through ``embed_fn`` itself.
@@ -151,7 +188,7 @@ def embed_map(texts: Iterable[str], embed_fn=None) -> Dict[str, List[float]]:
     if not unique:
         return {}
     if embed_fn is None or embed_fn is _REAL_EMBED:
-        vecs = embed_many(unique)
+        vecs = embed_many(unique, model_id=model_id)
     else:
         many = getattr(embed_fn, "embed_many", None)
         if callable(many):
@@ -276,21 +313,36 @@ def current_model_id() -> str:
     mismatch means "re-embed". Shape: ``internal:<model>`` or
     ``external:<model>[:<extra_params digest>]``. Returns ``""`` when no
     model can be resolved at all — the caller then skips the feature, exactly
-    as it does for a ``None`` vector.
+    as it does for a ``None`` vector. A busy provider does not change it.
     """
-    cfg = config.get("embedding", {}) or {}
-    backend = (cfg.get("backend") or "auto").strip().lower()
-    internal_id = "internal:" + internal_model_id(cfg)
-    if backend == "internal":
-        return internal_id
-    inst, prov = _resolve_external()
-    external_id = f"external:{inst.model}" if (inst and prov) else ""
-    if external_id and inst.extra_params:
+    return _route()[1]
+
+
+def _external_model_id(inst) -> str:
+    external_id = f"external:{inst.model}"
+    if inst.extra_params:
         canonical = json.dumps(inst.extra_params, sort_keys=True, separators=(",", ":"))
         external_id += ":" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return external_id
+
+
+def _route():
+    """``(kind, model id, inst, provider)`` in effect right now — the ONE
+    resolution ``embed``/``embed_many`` and ``current_model_id`` share, so the
+    stamp and the vector always name the same model. ``kind`` is
+    ``internal`` or ``external``; an unroutable explicit ``external`` gives
+    ``("external", "", None, None)``."""
+    cfg = config.get("embedding", {}) or {}
+    backend = (cfg.get("backend") or "auto").strip().lower()
+    internal = ("internal", "internal:" + internal_model_id(cfg), None, None)
+    if backend == "internal":
+        return internal
+    inst, prov = _resolve_external()
+    if inst is not None and prov is not None:
+        return ("external", _external_model_id(inst), inst, prov)
     if backend == "external":
-        return external_id
-    return external_id or internal_id
+        return ("external", "", None, None)
+    return internal
 
 
 def cosine_similarity(a: List[float], b: List[float]) -> float:
@@ -451,13 +503,14 @@ def _embed_internal_many(texts: List[str]) -> List[Optional[List[float]]]:
 def _resolve_external():
     """(inst, provider) for the ``pose_embedding`` task, or (None, None).
 
-    Resolves WITHOUT a quota reservation: the vectors go out over a plain
-    ``httpx.post`` that never consumes one, and ``current_model_id`` /
-    ``effective_backend`` only look — a booked slot would sit in the
-    provider's window until it expires and starve real calls there."""
+    Resolves WITHOUT a quota reservation and WITHOUT consulting the quota
+    (``consult_quota=False``): ``current_model_id`` / ``effective_backend``
+    only look, and a full request window must not change which model
+    answers — that is load, and :func:`_post_external` waits for it.
+    Health, cooldown and the admin switch still count."""
     try:
         from app.core.llm_router import resolve_llm
-        inst = resolve_llm("pose_embedding", reserve=False)
+        inst = resolve_llm("pose_embedding", reserve=False, consult_quota=False)
         if inst is None:
             return None, None
         prov = inst._provider
@@ -478,25 +531,96 @@ def _external_configured() -> bool:
     return inst is not None and prov is not None
 
 
-def _embed_external(text: str) -> Optional[List[float]]:
-    inst, prov = _resolve_external()
+def _max_wait_seconds() -> float:
+    cfg = config.get("embedding", {}) or {}
+    raw = cfg.get("max_wait_seconds")
+    try:
+        return max(0.0, float(DEFAULT_MAX_WAIT_SECONDS if raw in (None, "") else raw))
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_WAIT_SECONDS
+
+
+def _on_event_loop() -> bool:
+    import asyncio
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+def _post_external(prov, body: dict, timeout: float):
+    """One ``/embeddings`` request that respects the provider's request quota.
+
+    The request looks at the quota but books nothing (embeddings never
+    counted as sends there). A full window or an HTTP 429 is LOAD: the
+    request waits for it as long as the waits add up to no more than
+    ``embedding.max_wait_seconds`` (never on an event loop) and then gives
+    up — returns ``None``, and the caller answers ``None`` instead of
+    switching model. A 429 gates the key for every caller, as anywhere
+    else. Any other failure raises as before."""
+    import httpx
+    from app.core.provider_quota import is_rate_limit_error
+    quota = getattr(prov, "quota", None)
+    budget = 0.0 if _on_event_loop() else _max_wait_seconds()
+    waited = 0.0
+    while True:
+        wait = quota.wait_seconds() if quota is not None else 0.0
+        if wait > 0:
+            if waited + wait > budget:
+                _log_gave_up(prov, waited)
+                return None
+            time.sleep(wait)
+            waited += wait
+            continue
+        try:
+            resp = httpx.post(
+                f"{prov.api_base.rstrip('/')}/embeddings",
+                json=body,
+                headers={"Authorization": f"Bearer {(prov.api_key or 'not-needed').strip()}"},
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            if not is_rate_limit_error(e):
+                raise
+            if quota is None:
+                _log_gave_up(prov, waited)
+                return None
+            quota.exhaust(e)
+            if not quota.wait_seconds():
+                # A 429 that gates nothing (Retry-After 0): no wait to honour.
+                _log_gave_up(prov, waited)
+                return None
+
+
+def _log_gave_up(prov, waited: float) -> None:
+    global _LOAD_LOGGED_AT
+    now = time.monotonic()
+    if now - _LOAD_LOGGED_AT >= 60:
+        _LOAD_LOGGED_AT = now
+        logger.info("Embedding provider %s is at its request limit; no vector after "
+                    "%.1f s (the model is never switched under load)",
+                    getattr(prov, "name", "?"), waited)
+    else:
+        logger.debug("embedding: provider %s busy, no vector after %.1f s",
+                     getattr(prov, "name", "?"), waited)
+
+
+def _embed_external(text: str, inst=None, prov=None) -> Optional[List[float]]:
+    if inst is None or prov is None:
+        inst, prov = _resolve_external()
     if inst is None or prov is None:
         return None
     try:
-        api_base = prov.api_base.rstrip("/")
-        api_key = (prov.api_key or "not-needed").strip()
         from app.models.world import get_world_setting
         prefix = get_world_setting("pose.embedding_input_prefix", "") or ""
-        import httpx
-        resp = httpx.post(
-            f"{api_base}/embeddings",
-            json=merge_extra_params(
-                {"model": inst.model, "input": prefix + text}, inst.extra_params),
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=float(prov.timeout or 30),
-        )
-        resp.raise_for_status()
-        payload = resp.json()
+        payload = _post_external(prov, merge_extra_params(
+            {"model": inst.model, "input": prefix + text}, inst.extra_params),
+            float(prov.timeout or 30))
+        if payload is None:
+            return None
         vec = (payload.get("data") or [{}])[0].get("embedding")
         if not vec:
             return None
@@ -507,25 +631,25 @@ def _embed_external(text: str) -> Optional[List[float]]:
         return None
 
 
-def _embed_external_many(texts: List[str]) -> List[Optional[List[float]]]:
+def _embed_external_many(texts: List[str], inst=None,
+                         prov=None) -> List[Optional[List[float]]]:
     """The routed ``/embeddings`` endpoint, ``EXTERNAL_BATCH_SIZE`` texts per
     request with ``input`` as a list. Results are mapped back by their
     ``index`` (the order of ``data`` is not guaranteed); an answer without
     indexes is taken in order. A failed chunk leaves its entries ``None``
-    and the next chunk is still tried. Never raises."""
+    and the next chunk is still tried; a chunk that gives up under load
+    (see :func:`_post_external`) ends the batch. Never raises."""
     out: List[Optional[List[float]]] = [None] * len(texts)
     if not texts:
         return out
-    inst, prov = _resolve_external()
+    if inst is None or prov is None:
+        inst, prov = _resolve_external()
     if inst is None or prov is None:
         return out
     try:
-        api_base = prov.api_base.rstrip("/")
-        api_key = (prov.api_key or "not-needed").strip()
         from app.models.world import get_world_setting
         prefix = get_world_setting("pose.embedding_input_prefix", "") or ""
         timeout = float(prov.timeout or 30)
-        import httpx
     except Exception as e:
         logger.debug("external batch embedding not possible (%s): %s",
                      type(e).__name__, e)
@@ -534,16 +658,12 @@ def _embed_external_many(texts: List[str]) -> List[Optional[List[float]]]:
     for start in range(0, len(texts), size):
         chunk = texts[start:start + size]
         try:
-            resp = httpx.post(
-                f"{api_base}/embeddings",
-                json=merge_extra_params(
-                    {"model": inst.model, "input": [prefix + t for t in chunk]},
-                    inst.extra_params),
-                headers={"Authorization": f"Bearer {api_key}"},
-                timeout=timeout,
-            )
-            resp.raise_for_status()
-            data = resp.json().get("data") or []
+            payload = _post_external(prov, merge_extra_params(
+                {"model": inst.model, "input": [prefix + t for t in chunk]},
+                inst.extra_params), timeout)
+            if payload is None:
+                break
+            data = payload.get("data") or []
             for pos, item in enumerate(data):
                 if not isinstance(item, dict):
                     continue

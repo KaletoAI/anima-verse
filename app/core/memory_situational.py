@@ -269,7 +269,9 @@ def situational_memories(character_name: str, message: str,
         message,
         load_candidates(character_name),
         DbVectorCache(),
-        embed=embed or embedding_mod.embed,
+        # Pinned to model_id: every vector compared or stored here is that
+        # model's, even if the model in effect changes during the turn.
+        embed=embed or embedding_mod.embedder_for(model_id),
         model_id=model_id,
         max_results=max_entries(),
         threshold=min_similarity())
@@ -335,7 +337,7 @@ def embed_memory(memory_id: int, content: str) -> None:
         model_id = embedding_mod.current_model_id()
         if not model_id:
             return
-        vec = embedding_mod.embed(content)
+        vec = embedding_mod.embedder_for(model_id)(content)
         if vec:
             DbVectorCache().put_many(model_id, {int(memory_id): vec})
     except Exception as e:

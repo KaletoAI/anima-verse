@@ -659,6 +659,18 @@ SECTIONS = {
                 "default": "./models/fastembed",
                 "description": "Where the built-in embedding model is downloaded/cached.",
             },
+            "max_wait_seconds": {
+                "type": "float",
+                "label": "Max Wait Under Load (s)",
+                "default": 5.0,
+                "min": 0,
+                "max": 120,
+                "description": "How long one external embedding request waits for a free request slot of its "
+                               "provider (rate limit full, or HTTP 429) before it gives up. Under load the "
+                               "embedding never switches to another model, not even with backend auto: a request "
+                               "that gives up returns no vector, so pose matching falls back to alias equality "
+                               "and the situational memory block is left out for that turn. 0 = never wait.",
+            },
         },
     },
     "decision": {

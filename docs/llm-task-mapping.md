@@ -250,7 +250,7 @@ has no UI today — it is kept for a later reuse.
 | `thought` | Thought (agent loop) | chat | — | `core/thoughts.py`, `core/agent_loop.py` | The autonomous turn of an idle character. |
 | `intent` | Intent / tool calls | tool | — | `core/chat_engine.py`, `core/thoughts.py`, `core/act_engine.py` | The Tool-LLM: it turns prose into skill calls for chat AND thought turns. Also the fallback parent for the tool-class tasks below. |
 | `spell_detect` | Spell Cast Detection | tool | — | `core/spell_engine.py` | Whether the avatar's message casts one of the spells in their inventory. |
-| `pose_embedding` | Pose Embedding | embedding | — | `core/embedding.py` | The similarity vector for the pose catalog match. Runs over `/v1/embeddings`, not the chat queue. Only reached when `embedding.backend` is `external`, or `auto` and this task is routed; `internal` uses the built-in fastembed model on CPU. |
+| `pose_embedding` | Pose Embedding | embedding | — | `core/embedding.py` | The similarity vector for the pose catalog match. Runs over `/v1/embeddings`, not the chat queue. Only reached when `embedding.backend` is `external`, or `auto` and this task is routed; `internal` uses the built-in fastembed model on CPU. Load never switches the model: the route ignores the provider's request quota (requests look at it but book no slot), and a full window or HTTP 429 waits up to `embedding.max_wait_seconds`, then the call returns no vector (alias equality / no memory block) instead of the built-in model's. |
 
 RP Influence does not add a routing task, per-rule model, or per-target call.
 `extraction_chat_state` evaluates all eligible sources and recipients in the
