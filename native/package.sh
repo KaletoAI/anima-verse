@@ -33,6 +33,8 @@ if "$publish" && [ ! -f "$signing_key" ]; then
 fi
 # appimagetool is host tooling, never a dependency stored in this repository.
 tool="${APPIMAGETOOL:-/home/dev/tools/appimagetool/appimagetool-x86_64.AppImage}"
+# SHA-256 of the official release 1.9.1 asset appimagetool-x86_64.AppImage.
+tool_sha256=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
 if [ -z "${APPIMAGETOOL:-}" ] && [ ! -x "$tool" ]; then
   mkdir -p "$(dirname "$tool")"
   download="$(mktemp "$(dirname "$tool")/.download-XXXXXX")"
@@ -41,11 +43,19 @@ if [ -z "${APPIMAGETOOL:-}" ] && [ ! -x "$tool" ]; then
   curl --fail --location --retry 3 --connect-timeout 15 \
     https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage \
     --output "$download"
+  # A release asset can be replaced upstream; only the pinned build may run here.
+  echo "$tool_sha256  $download" | sha256sum --check --quiet \
+    || { echo 'Downloaded appimagetool does not match the pinned SHA-256' >&2; exit 1; }
   chmod +x "$download"
   mv "$download" "$tool"
   trap - EXIT
 fi
 command -v "$tool" >/dev/null 2>&1 || { echo "appimagetool not found: $tool" >&2; exit 1; }
+# The default tool is checked on every run, not only after its download; an explicit $APPIMAGETOOL is the caller's choice.
+if [ -z "${APPIMAGETOOL:-}" ]; then
+  echo "$tool_sha256  $tool" | sha256sum --check --quiet \
+    || { echo "appimagetool at $tool does not match the pinned SHA-256" >&2; exit 1; }
+fi
 out="${out:-$here/export/appimage}"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
