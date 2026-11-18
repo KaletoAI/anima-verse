@@ -116,12 +116,19 @@ export function CollisionChannels({ character, collision, overrides, declaration
 
   const save = async (next: Record<string, ChannelOverride>, nextTeeth: TeethOptions) => {
     setSaving(true)
+    // Two stores: one that fails must not hide the other that went through — reload after either.
+    let saved = false
+    let failure: Error | null = null
+    const attempt = async (run: () => Promise<unknown>) => {
+      try { await run(); saved = true } catch (e) { failure = failure ?? (e as Error) }
+    }
     try {
       if (declarations.some(d => next[d.id] && !sameOverride(next[d.id], stored[d.id])))
-        await saveChannelOverrides(apiPost, character, overridesToSave(overrides, declarations, next))
-      if (!sameTeeth(nextTeeth, storedTeeth)) await saveTeeth(apiPost, character, nextTeeth)
-      toast(t('Saved — nothing recomputed yet'))
-      await onSaved()
+        await attempt(() => saveChannelOverrides(apiPost, character, overridesToSave(overrides, declarations, next)))
+      if (!sameTeeth(nextTeeth, storedTeeth)) await attempt(() => saveTeeth(apiPost, character, nextTeeth))
+      if (failure) toast(t('Error') + ': ' + (failure as Error).message, 'error')
+      else toast(t('Saved — nothing recomputed yet'))
+      if (saved) await onSaved()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     } finally { setSaving(false) }
@@ -144,6 +151,12 @@ export function CollisionChannels({ character, collision, overrides, declaration
   const record = (collision?.channels ?? []).find(c => c.id === current?.id)
   const openHeight = record?.open_height ?? 0
   const teethGap = record?.teeth_gap ?? 0
+  // How the last Build's teeth step went (Ruling A206): a failure or left-out back teeth are said where the gap stands.
+  const teethNote = record?.teeth?.status === 'failed'
+    ? t('No teeth built: {reason}').replace('{reason}', record.teeth.reason)
+    : (record?.teeth?.left_out ?? 0) > 0
+      ? t('{n} back teeth left out: the mouth is too short for them').replace('{n}', String(record?.teeth?.left_out))
+      : ''
   const setTeeth = (patch: Partial<TeethOptions>) => setTeethDraft(previous => ({ ...previous, ...patch }))
   const placed = (collision?.channels ?? []).length
   const defaults = Object.fromEntries(declarations.map(d => [d.id, overrideOf(null, d.id, d.cone_deg)]))
@@ -210,7 +223,13 @@ export function CollisionChannels({ character, collision, overrides, declaration
                 value={mouthOpen} min={0} max={1} step={0.01} disabled={false} onChange={onMouthOpen}
                 title={t('Opens the mouth in the viewer: 0 = closed, 100 % = the jaw fully open ({mm} mm between the lips). A preview only — nothing is saved; in the world a part entering the mouth opens it.')
                   .replace('{mm}', (openHeight * 1000).toFixed(0))} />
-              {teethGap > 0 ? (
+              {teethNote ? (
+                <div className="ga-hint" style={{ fontSize: 10, margin: 0, gridColumn: 'span 2', alignSelf: 'end',
+                  color: record?.teeth?.status === 'failed' ? 'var(--ga-warn, #e0a040)' : undefined }}
+                  title={t('From the last Build. A smaller size or a larger depth gives the teeth more room.')}>
+                  {teethNote}
+                </div>
+              ) : teethGap > 0 ? (
                 <div className="ga-hint" style={{ fontSize: 10, margin: 0, gridColumn: 'span 2', alignSelf: 'end' }}
                   title={t('The free height between the upper and lower front teeth with the mouth fully open: a part up to this thickness passes without touching them. Contact opens the mouth by it.')}>
                   {t('Between the teeth: {mm} mm at 100 %').replace('{mm}', (teethGap * 1000).toFixed(0))}

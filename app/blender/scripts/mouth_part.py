@@ -988,6 +988,8 @@ def build(group, output):
                         'radius': round(R, 4), 'half_width': round(widest, 4),
                         'open_height': round(float(np.linalg.norm(turned(O[None], hinge, theta)[0] - O)), 4),
                         **({'teeth_gap': teeth['teeth_gap']} if teeth.get('status') == 'applied' else {}),
+                        'teeth_status': teeth.get('status'), 'teeth_reason': teeth.get('reason', ''),
+                        'teeth_left_out': sum(a.get('left_out', 0) for a in (teeth.get('arches') or {}).values()),
                         'override': {'offset_mm': list(o['offset_mm']), 'radius_scale': o['radius_scale'],
                                      'depth_scale': o['depth_scale'], 'tilt_deg': o['tilt_deg']}},
             'lip_line': {'s0': round(s0, 4), 'coef': [round(c, 5) for c in coef], 'contrast': round(m['contrast'], 3),

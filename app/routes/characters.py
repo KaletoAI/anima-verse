@@ -4530,7 +4530,10 @@ async def set_character_mouth_teeth(character_name: str, request: Request,
     tongue, shade, size}}`` (missing keys = the defaults). Stores ``model3d_opts.mouth_teeth`` ONLY — Save never
     executes; the extension step reads "due" and the Build applies it (local, 0 jobs). ``{teeth: <complete>}``."""
     import asyncio
-    body = await request.json()
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(400, "The body is not JSON") from exc
     return await asyncio.to_thread(_set_character_mouth_teeth_sync, character_name, body)
 
 

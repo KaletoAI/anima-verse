@@ -88,6 +88,7 @@ LABELS: Dict[str, str] = {
     "building_part": "Building the part",
     "measuring": "Measuring the face",
     "cutting": "Cutting the skin",
+    "teeth": "Building the teeth",
     "filling": "Filling the hole",
     "takes": "Baking the takes",
     "skinning": "Skinning",

@@ -107,6 +107,8 @@ export interface ChannelRecord {
   open_height?: number
   /** The same mouth with teeth (Ruling A206): the free height between the incisal edges at `mouth_open` 1. */
   teeth_gap?: number
+  /** How the build's teeth step went (Ruling A206) — for the admin's mouth tab; renderers ignore it. */
+  teeth?: { status: 'applied' | 'off' | 'failed'; reason: string; left_out: number }
 }
 
 /** The `collision` payload (model meta / model3d info). */

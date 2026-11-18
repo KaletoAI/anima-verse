@@ -210,6 +210,9 @@ def _opening(state: Any, rig: str, *, own_status: bool = False) -> Tuple[Optiona
                  if key in opening}
         if isinstance(opening.get("override"), dict):
             built["override"] = dict(opening["override"])
+        if opening.get("teeth_status"):
+            built["teeth"] = {"status": str(opening["teeth_status"]), "reason": str(opening.get("teeth_reason") or ""),
+                              "left_out": int(opening.get("teeth_left_out") or 0)}
     except (TypeError, KeyError, ValueError):
         return None, f"Rig {rig} reports no opening (an older build, or no pocket left after levelling)"
     return {"centre": centre, "axis": axis, **built}, ""
@@ -412,6 +415,9 @@ def resolve_channels(rigged_glb: bytes, capsules: List[Dict[str, Any]], wanted: 
             # The free height between the incisal edges at the same opening (Ruling A206): what an entering part
             # must pass; the renderers' contact drive opens the mouth by it when the body has teeth.
             record["teeth_gap"] = round(float(entry["opening"]["teeth_gap"]), 4)
+        if entry.get("built") and "teeth" in entry["opening"]:
+            # How the teeth step went (applied / off / failed + reason, back teeth left out): shown on the mouth tab.
+            record["teeth"] = dict(entry["opening"]["teeth"])
         record.update({"suppress": suppress,
                        "frame": {key: [round(float(v), 6) for v in frame[key]] for key in ("side", "up", "front")},
                        "placement": placement, "applied": dict(override) if override else None})

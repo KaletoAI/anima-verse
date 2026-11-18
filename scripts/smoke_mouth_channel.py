@@ -30,7 +30,7 @@ up +y, front +z).
     ``applied`` = the override the build used with the stored cone 40 (so the panel's preview starts from what
     is built), cone_deg 40, suppress contains the head capsule; the build's ``open_height`` 0.0365 (the opening's
     height with the shape key ``mouth_open`` at 1, part 2) and ``teeth_gap`` 0.0251 (Ruling A206) are carried as
-    they are.
+    they are; the teeth step (status applied, 2 back teeth left out) becomes ``teeth`` {status, reason, left_out}.
     Without an opening (rig not built): no channel, skipped with "Rig mouth_channel is not built on this model".
 [4] The extension step runs the mouth in its own isolated run, after the parts and before the extension bones:
     groups [capture, mouth, inset, attached] -> calls attached_part, inset_part, mouth_part, extension_bones;
@@ -146,7 +146,8 @@ def main():
 
     print("[2] the declaration")
     opening = {"centre": [0, 1.55, 0.1], "axis": [0, -0.6, -0.8], "depth": 0.06, "radius": 0.03, "open_height": 0.0365,
-               "teeth_gap": 0.0251, "override": {"offset_mm": [1, 2, 3], "radius_scale": 1.5, "depth_scale": 0.75, "tilt_deg": 10}}
+               "teeth_gap": 0.0251, "teeth_status": "applied", "teeth_reason": "", "teeth_left_out": 2,
+               "override": {"offset_mm": [1, 2, 3], "radius_scale": 1.5, "depth_scale": 0.75, "tilt_deg": 10}}
     state = {"status": "applied", "groups": ["mouth_channel"],
              "metrics": {"mouth_channel": {"status": "applied", "opening": opening}}}
     path = tmp / "model.glb"
@@ -183,6 +184,8 @@ def main():
         rec.get("applied"))
     check("open_height carried for the renderers", rec.get("open_height") == 0.0365, rec.get("open_height"))
     check("teeth_gap carried for the renderers (A206)", rec.get("teeth_gap") == 0.0251, rec.get("teeth_gap"))
+    check("teeth step carried for the mouth tab (A206 review)", rec.get("teeth") == {
+        "status": "applied", "reason": "", "left_out": 2}, rec.get("teeth"))
     check("cone 40, head capsule suppressed", rec.get("cone_deg") == 40.0 and "head" in rec.get("suppress", []), rec)
     bare, _ = collision_channels.wanted_channels("demo", path, {"rig": "mixamo"}, profile={})
     channels, skipped = collision_channels.resolve_channels(body, fit["capsules"], bare, exposed=lambda e: True)
