@@ -786,7 +786,8 @@ def clear_of_body(obj, tree, *, thickness):
 
 
 def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collision, thickness, extra=(),
-          collider_faces=80000, collision_quality=4, crop_m=None, prebuilt=None, collider=None):
+          collider_faces=80000, collision_quality=4, crop_m=None, prebuilt=None, collider=None, mass=0.3,
+          air_damping=5.0):
     """Collider = decimated rest copy of the body (+ the ``extra`` lower garment layers). Returns CPU seconds and
     pin drift (mm). ``crop_m`` (Ruling A144): collider faces farther than this outside the cloth's box are dropped
     after the remesh (a jacket never reaches the shins; the collision tests scale with the faces)."""
@@ -832,7 +833,7 @@ def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collisio
     cl = obj.modifiers.new("cloth", "CLOTH")
     s = cl.settings
     s.quality = quality
-    s.mass = 0.3
+    s.mass = mass                          # A204: only the sheer fabric passes its own (0.08)
     s.tension_stiffness = s.compression_stiffness = 15
     s.shear_stiffness = 5
     s.bending_stiffness = bending
@@ -843,7 +844,7 @@ def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collisio
     cs.distance_min = thickness
     cs.use_self_collision = self_collision
     cs.collision_quality = collision_quality
-    s.air_damping = 5.0
+    s.air_damping = air_damping
     cs.self_distance_min = 0.003
     cl.point_cache.frame_start = 1
     cl.point_cache.frame_end = frames

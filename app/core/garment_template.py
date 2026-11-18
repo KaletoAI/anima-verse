@@ -96,7 +96,18 @@ FABRICS: Dict[str, Dict[str, float]] = {
     "stiff": {"bending": 2.0, "mass": 0.4, "quality": 6, "shrink": 0.0},
     "medium": {"bending": 0.3, "mass": 0.3, "quality": 6, "shrink": 0.0},
     "flowing": {"bending": 0.05, "mass": 0.2, "quality": 7, "shrink": 0.0},
+    # A204: chiffon / voile / organza — very light and see-through. Only this preset hands the cloth run its own
+    # ``cloth_mass`` / ``air_damping`` (the others keep the run's fixed 0.3 / 5.0, so their drapes stay identical):
+    # a quarter of the mass and a fifth of flowing's bending stiffness let it fall into finer folds and flutter more.
+    # The see-through part is the assembly's material (``material_overrides``), never the drape.
+    "sheer": {"bending": 0.01, "mass": 0.08, "quality": 7, "shrink": 0.0, "cloth_mass": 0.08, "air_damping": 2.0},
 }
+#: A204: the fabric drawn see-through. Its piece is grafted with alphaMode BLEND at ``opacity``, double-sided, and
+#: hides nothing: neither the body faces under it (``body_cover``, A133) nor an inner piece's faces (A192).
+SHEER = "sheer"
+#: The parameters that change only the material, never the drape: left out of ``tsig`` (an opacity change
+#: re-assembles on the CPU but never re-drapes).
+MATERIAL_ONLY = ("opacity",)
 #: ``{field: (type, choices | (min, max), default)}`` — the one parameter schema (LLM answer,
 #: the dialog and ``validate_params``).
 PARAM_SPEC: Dict[str, Tuple[str, Any, Any]] = {
@@ -115,16 +126,17 @@ PARAM_SPEC: Dict[str, Tuple[str, Any, Any]] = {
     "front": ("choice", FRONTS, "closed"),           # jacket: open front
     "collar": ("choice", COLLARS, "none"),           # jacket
     "fabric": ("choice", tuple(FABRICS), "medium"),
+    "opacity": ("number", (0.2, 1.0), 0.4),          # A204: sheer only — how much of the cloth's colour covers
 }
 #: The fields that mean something per kind (the dialog shows these; ``validate_params`` resets the others to their
 #: defaults so a stale field never changes the drape key).
 KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
-    "skirt": ("kind", "fabric", "length_m", "flare", "waist_height", "slit", "slit_m"),
-    "trousers": ("kind", "fabric", "length_m", "waist_height"),
-    "dress": ("kind", "fabric", "length_m", "flare", "waist_height", "slit", "slit_m", "shoulders", "sleeves",
+    "skirt": ("kind", "fabric", "opacity", "length_m", "flare", "waist_height", "slit", "slit_m"),
+    "trousers": ("kind", "fabric", "opacity", "length_m", "waist_height"),
+    "dress": ("kind", "fabric", "opacity", "length_m", "flare", "waist_height", "slit", "slit_m", "shoulders", "sleeves",
               "sleeve_fit", "fit", "neckline", "neck_depth_m"),
-    "top": ("kind", "fabric", "length_m", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m"),
-    "jacket": ("kind", "fabric", "length_m", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m", "front",
+    "top": ("kind", "fabric", "opacity", "length_m", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m"),
+    "jacket": ("kind", "fabric", "opacity", "length_m", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m", "front",
                "collar"),
 }
 
@@ -301,6 +313,8 @@ def validate_params(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
         params["sleeves"] = "none"
     if params["sleeves"] == "none":
         params["sleeve_fit"] = PARAM_SPEC["sleeve_fit"][2]
+    if params["fabric"] != SHEER:
+        params["opacity"] = PARAM_SPEC["opacity"][2]
     if params["slit"] == "none":
         params["slit_m"] = 0.0
     elif params["slit_m"] <= 0.0:
@@ -803,12 +817,41 @@ def panel_spec(params: Dict[str, Any], meas: Dict[str, float]) -> Dict[str, Any]
 
 # --- cache ----------------------------------------------------------------------
 
+def sheer_opacity(params: Optional[Dict[str, Any]]) -> Optional[float]:
+    """A204: the opacity of a sheer piece's cloth (``PARAM_SPEC`` range), None for every other fabric."""
+    if not params or params.get("fabric") != SHEER:
+        return None
+    lo, hi = PARAM_SPEC["opacity"][1]
+    value = _number(params.get("opacity"))
+    return round(min(hi, max(lo, PARAM_SPEC["opacity"][2] if value is None else value)), 3)
+
+
+def material_key(params: Optional[Dict[str, Any]]) -> str:
+    """The assembly identity of a template piece's fabric material: ``sheer:<opacity>`` or "" (opaque)."""
+    opacity = sheer_opacity(params)
+    return "" if opacity is None else f"{SHEER}:{opacity}"
+
+
+def material_overrides(params: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """A204: the ``glb_mesh.graft`` material keys of a sheer piece — alphaMode BLEND with the base colour's alpha =
+    the opacity (the baked picture keeps the item's colour as the tint), double-sided (the inside of a skirt is seen
+    through its front), ``extras.anima_sheer`` for the renderers (depth write off, drawn after the body). None for an
+    opaque fabric (the graft stays exactly as before)."""
+    opacity = sheer_opacity(params)
+    if opacity is None:
+        return None
+    return {"alphaMode": "BLEND", "doubleSided": True,
+            "pbrMetallicRoughness": {"baseColorFactor": [1.0, 1.0, 1.0, opacity]},
+            "extras": {"anima_sheer": True, "opacity": opacity}}
+
+
 def _md5(payload: Any) -> str:
     return hashlib.md5(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
 
 
 def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List[str]) -> str:
     """The cache key of one drape (module docstring)."""
+    params = {k: v for k, v in params.items() if k not in MATERIAL_ONLY}
     return _md5({"params": params, "version": TEMPLATE_VERSION, "base": base_sha, "texture": texture_sha,
                  "lower": sorted(lower)})
 
