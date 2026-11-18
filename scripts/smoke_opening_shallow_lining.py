@@ -4,7 +4,7 @@ Usage:
     ./.venv/bin/python scripts/smoke_opening_shallow_lining.py
 
 No server, no world DB, no hub. ``garment_fit.opening_lining`` on synthetic meshes, plus the dense depth image
-and the A51 due rule (``expected_fit_version``). Every number below is derived by hand.
+(the A51 due rule ``expected_fit_version`` is smoke_fit_version.py [F]). Every number below is derived by hand.
 
 FRAME (as smoke_fit_joint_frames [6]). Garment (metres, its own frame): x -0.20 .. 0.20, y 0 .. 0.60, grid step
 0.005. Masks 400 x 400: the garment rows 50 .. 349, cols 100 .. 299 -> ``_frame``: 0.60 / 300 = 0.002 m per px, the
@@ -55,14 +55,7 @@ rounds its four corners by 3 + 2 + 1 = 6 px each: the component is 7476 px.
     OPEN_DENSE_MAX 400 — so samples lie at most 1 px apart): all 7500 opening px
     see the back at -52.5 (within 0.01). With the two-triangle back panel [2] holds unchanged: 1525 vertices, 2880
     faces.
-[6] The due rule (``expected_fit_version``): FIT_VERSION clothing 18 (18 Ruling A114's seeds, 13 was Ruling A51's openings, 14 Ruling A72's
-    repaired donors — A51's exemption of a version 12 record without a deep opening went with it —, 15 Ruling
-    A76's kept sheet order, which changes every clothing fit, 16 Ruling A83's trunk laid onto the body, 17 Ruling
-    A84's armpit seam). Every clothing record below 15 expects 17 (stale) — version 12 with a kept deep component,
-    with a shallow one, with all left out, without an opening report; versions 11, 13 and 14 —; version 15 and 16
-    records without a sleeve share in their report 17 (they may have had sleeves, smoke_armpit_seam [4]); a version
-    15 record with sleeve share 0 and no trunk metrics 15 (Ruling A83's ``CLOTHING_TRUNK_UNCHANGED``), a version 16
-    record with sleeve share 0 16 (Ruling A84's ``CLOTHING_SEAM_UNCHANGED``); hair / footwear unchanged.
+[6] The due rule: moved to smoke_fit_version.py section [F].
 [8] The evidence itself (``garment_source.shown_body``): a base copy 120 x 200 px with alpha — the figure rows
     20 .. 179, cols 30 .. 89 in skin (200, 160, 130), the rest transparent; the worn view on the neutral grey (128,
     128, 128): the same figure, a dark piece (30, 30, 40) over rows 40 .. 119, cols 30 .. 89 except a V window rows
@@ -228,35 +221,6 @@ inside5[n_front:n_front + n_inside] = True
 lining5, rep5 = gf.opening_lining(P5, F5, op, gm, op.copy())
 check("[5] with the two-triangle back the inside still goes: 1525 vertices, 2880 faces",
       np.array_equal(lining5, inside5) and rep5["faces"] == 2880, f"{int(lining5.sum())} / {rep5['faces']}")
-
-# [6] the due rule
-kept = {"components": [{"pixels": 100, "recess_px": 5.0, "dropped": False}], "faces": 0}
-shallow = {"components": [{"pixels": 100, "recess_px": 3.0, "dropped": False}], "faces": 0}
-gone = {"components": [{"pixels": 100, "recess_px": 50.0, "dropped": True}], "faces": 12}
-cases = [
-    ({"kind": "clothing", "fit_version": 12, "report": {"opening": kept}}, gf.FIT_VERSION["clothing"]),
-    ({"kind": "clothing", "fit_version": 12, "report": {"opening": shallow}}, gf.FIT_VERSION["clothing"]),
-    ({"kind": "clothing", "fit_version": 12, "report": {"opening": gone}}, gf.FIT_VERSION["clothing"]),
-    ({"kind": "clothing", "fit_version": 12, "report": {"opening": None}}, gf.FIT_VERSION["clothing"]),
-    ({"kind": "clothing", "fit_version": 12}, gf.FIT_VERSION["clothing"]),
-    ({"kind": "clothing", "fit_version": 11, "report": {"opening": gone}}, gf.FIT_VERSION["clothing"]),
-    ({"kind": "clothing", "fit_version": 13, "report": {"opening": kept}}, gf.FIT_VERSION["clothing"]),
-    ({"kind": "clothing", "fit_version": 14, "report": {"opening": kept}}, gf.FIT_VERSION["clothing"]),
-    ({"kind": "clothing", "fit_version": 15, "report": {"opening": kept}}, gf.FIT_VERSION["clothing"]),
-    ({"kind": "clothing", "fit_version": 16, "report": {"opening": kept}}, gf.FIT_VERSION["clothing"]),
-    # sleeve_vertices 0: never walked (A199 ``walk_may_change``, 72ef9bc63), the older chain decides
-    ({"kind": "clothing", "fit_version": 15, "report": {"opening": kept, "transfer": {"sleeve_share": 0.0,
-                                                                                     "sleeve_vertices": 0}}}, 15),
-    ({"kind": "clothing", "fit_version": 16, "report": {"opening": kept, "transfer": {"sleeve_share": 0.0,
-                                                                                     "sleeve_vertices": 0}}}, 16),
-    ({"kind": "hair", "fit_version": 12}, gf.FIT_VERSION["hair"]),
-    ({"kind": "footwear", "fit_version": 12, "method": "shoe"}, gf.FIT_VERSION["footwear"]),
-]
-got = [gf.expected_fit_version(r) for r, _want in cases]
-check("[6] FIT_VERSION clothing 18, no A51 exemption left",
-      gf.FIT_VERSION["clothing"] >= 18 and not hasattr(gf, "CLOTHING_OPENING_UNCHANGED"), f"{gf.FIT_VERSION}")
-check("[6] expected versions: every clothing record -> 18 (15 / 16 kept without sleeves), other kinds as before",
-      got == [want for _r, want in cases], f"{got}")
 
 # [8] the evidence: worn minus base
 from PIL import Image  # noqa: E402

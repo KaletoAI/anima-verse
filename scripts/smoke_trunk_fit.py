@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Ruling A83 — the trunk of a clothing piece laid onto the body: the fit setting ``trunk`` (Auto / As generated /
-Fitted to the body), the Auto choice, the fitted move, its band from the narrowest waist up, the version rule that
-keeps an unchanged fit current (app/core/garment_fit.py: ``fit_trunk``, ``trunk_weights``, ``trunk_waist``,
-``auto_trunk``, ``trunk_reason_text``, ``trunk_choice``, ``place_trunk``, ``expected_fit_version``;
-app/core/garment_fit_settings.py) on synthetic geometry — no world, no hub, no GLB.
+Fitted to the body), the Auto choice, the fitted move, its band from the narrowest waist up
+(app/core/garment_fit.py: ``fit_trunk``, ``trunk_weights``, ``trunk_waist``, ``auto_trunk``,
+``trunk_reason_text``, ``trunk_choice``, ``place_trunk``; app/core/garment_fit_settings.py) on synthetic geometry — no
+world, no hub, no GLB. The version rule that keeps an unchanged fit current is smoke_fit_version.py [C].
 
 Usage:
     ./.venv/bin/python scripts/smoke_trunk_fit.py
@@ -48,13 +48,7 @@ bin edge of the 36 directions), x = r sin t, z = r cos t (the frame's angle 0 is
 [5] Fit settings: ``normalise`` gives ``trunk`` "auto" by default, keeps "fitted" / "generated", drops "wider";
     ``validate`` keeps trunk "fitted" and refuses "wider", True and 1; a record made before the trunk setting (no
     ``trunk`` key) under a profile without one is not due, under trunk "fitted" it is.
-[6] Versions: FIT_VERSION clothing 18 (Ruling A114; 17 by Ruling A84, smoke_armpit_seam [4]), CLOTHING_TRUNK_UNCHANGED 15. With
-    nothing on an arm (report ``transfer.sleeve_share`` 0, so Ruling A84 changed nothing either),
-    ``expected_fit_version`` of a clothing record of version 15 whose own metrics keep Auto as generated (Kira's
-    blazer's numbers torso_gap 0.0138 / front 0.0126) -> 15 (it stays current); the blouse's (0.0232 / 0.0381) -> 17
-    (due); room 0.031 / front 0.010 -> 17; no metrics -> 15 (nothing to lay on); version 14 -> 17; version 16 -> 16;
-    version 17 -> 17; the version 15 record with sleeves (sleeve share 0.3762) -> 17; a hair record -> FIT_VERSION
-    hair 16.
+[6] Versions: moved to smoke_fit_version.py section [C].
 [7] Fails on the old code: at commit ea25128b1 (Ruling A76, before A83) app/core/garment_fit.py has no
     ``place_trunk`` / ``TRUNK_CHOICES`` and FIT_VERSION clothing 15; garment_fit_settings.validate refuses the key
     ``trunk``.
@@ -225,31 +219,6 @@ def test_settings():
           fs.changed(old, {fs.SETTINGS_KEY: {"item_a": {"trunk": "fitted"}}}, "item_a"))
 
 
-def test_versions(gf):
-    print("[6] versions")
-    check("[6] FIT_VERSION clothing >= 18, CLOTHING_TRUNK_UNCHANGED 15",
-          gf.FIT_VERSION["clothing"] >= 18 and gf.CLOTHING_TRUNK_UNCHANGED == 15, gf.FIT_VERSION)
-    due = gf.FIT_VERSION["clothing"]
-
-    def rec(version, room=None, front=None, kind="clothing", share=0.0):
-        metrics = {} if room is None else {"torso_gap_p50_m": room, "trunk_front_gap_p50_m": front}
-        return {"kind": kind, "fit_version": version, "metrics": metrics,
-                # sleeve_vertices 0: never walked (A199 ``walk_may_change``), the older chain decides
-                "report": {"transfer": {"sleeve_share": share, "sleeve_vertices": 0}}}
-    cases = [("v15 blazer 13.8 / 12.6 mm stays current", rec(15, 0.0138, 0.0126), 15),
-             ("v15 blouse 23.2 / 38.1 mm is due", rec(15, 0.0232, 0.0381), due),
-             ("v15 room 31 mm is due", rec(15, 0.031, 0.010), due),
-             ("v15 without metrics stays current", rec(15), 15),
-             ("v14 is due", rec(14, 0.0138, 0.0126), due),
-             ("v16 is current", rec(16, 0.0232, 0.0381), 16),
-             ("v17 is current", rec(17, 0.0232, 0.0381), 17),
-             ("v15 with sleeves is due", rec(15, 0.0138, 0.0126, share=0.3762), due),
-             ("hair keeps its own", rec(15, kind="hair"), gf.FIT_VERSION["hair"])]
-    for label, record, want in cases:
-        got = gf.expected_fit_version(record)
-        check(f"[6] {label}", got == want, got)
-
-
 def test_old_code():
     print(f"[7] fails on the old code ({OLD})")
     try:
@@ -276,7 +245,6 @@ def main():
         test_auto(gf)
         test_identity(gf)
         test_settings()
-        test_versions(gf)
         test_old_code()
     print()
     if FAILED:

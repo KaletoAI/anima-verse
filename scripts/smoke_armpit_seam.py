@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Ruling A84 — the armpit seam: which garment vertices ride an arm and which the trunk, laid by a minimum cut over
 the edge growth the pose change brings (app/core/garment_fit.py: ``seam_cut``, ``armpit_seam``, its step 2b in
-``transfer_skinned``, ``seam_may_change`` / ``expected_fit_version``) on synthetic geometry — no world, no hub, no GLB.
+``transfer_skinned``, ``seam_may_change``; the version rule is smoke_fit_version.py [D]) on synthetic geometry — no world, no hub, no GLB.
 
 Usage:
     ./.venv/bin/python scripts/smoke_armpit_seam.py
@@ -40,13 +40,7 @@ Expected numbers, derived by hand:
       the report moves vertices to the arm and none to the trunk.
 [3] A piece with nothing on an arm — a skirt ring r 0.18 around the hips, y 0.90 .. 1.05 — is returned as it is:
     ``armpit_seam`` hands back the very weight array and an empty report (so a skirt's fit is the same bit for bit).
-[4] Versions: FIT_VERSION clothing 18 (17 stays current without a seeded opening, Ruling A114), CLOTHING_SEAM_UNCHANGED 16, CLOTHING_TRUNK_UNCHANGED 15.
-    ``expected_fit_version`` of a clothing record:
-      v16 with ``report.transfer.sleeve_share`` 0 -> 16 (current: nothing rode an arm);
-      v16 with sleeve_share 0.3762 (Kira's blazer) -> 17; v16 without a report -> 17 (may have sleeves);
-      v15, sleeve_share 0, trunk kept (torso_gap 0.0138 / front 0.0126) -> 15; v15, sleeve_share 0, the blouse's
-      trunk numbers (0.0232 / 0.0381) -> 17; v15, sleeve_share 0.2960, trunk kept -> 17; v14, sleeve_share 0 -> 17;
-      v17 -> 17; a hair record keeps FIT_VERSION hair.
+[4] Versions: moved to smoke_fit_version.py section [D].
 [5] Fails on the old code: at commit 5dce3120d (before Ruling A84) the same fixture as [2] leaves the inner wall on
     the trunk — its module, loaded from that commit, puts some vertex more than 3 cm off its design, and it has no
     ``seam_cut`` and FIT_VERSION clothing 16.
@@ -137,33 +131,6 @@ def test_identity(gf, C, unrig, rig):
           (out is Wg, rep, len(calls)))
 
 
-def test_versions(gf):
-    print("[4] versions")
-    check("[4] FIT_VERSION clothing 18 (Ruling A114), CLOTHING_SEAM_UNCHANGED 16, CLOTHING_TRUNK_UNCHANGED 15",
-          gf.FIT_VERSION["clothing"] >= 18 and gf.CLOTHING_SEAM_UNCHANGED == 16 and gf.CLOTHING_TRUNK_UNCHANGED == 15,
-          gf.FIT_VERSION)
-
-    def rec(version, share=None, room=None, front=None, kind="clothing"):
-        r = {"kind": kind, "fit_version": version,
-             "metrics": {} if room is None else {"torso_gap_p50_m": room, "trunk_front_gap_p50_m": front}}
-        if share is not None:
-            # sleeve_vertices 0: the record never walked (A199 ``walk_may_change``), so the older chain decides
-            r["report"] = {"transfer": {"sleeve_share": share, "sleeve_vertices": 0}}
-        return r
-    cases = [("v16 nothing on an arm stays current", rec(16, 0.0), 16),
-             ("v16 Kira's blazer (0.3762) is due", rec(16, 0.3762), gf.FIT_VERSION["clothing"]),
-             ("v16 without a report is due", rec(16), gf.FIT_VERSION["clothing"]),
-             ("v15 nothing on an arm, trunk kept stays current", rec(15, 0.0, 0.0138, 0.0126), 15),
-             ("v15 nothing on an arm, the blouse's trunk is due", rec(15, 0.0, 0.0232, 0.0381), gf.FIT_VERSION["clothing"]),
-             ("v15 with sleeves, trunk kept is due", rec(15, 0.2960, 0.0138, 0.0126), gf.FIT_VERSION["clothing"]),
-             ("v14 is due", rec(14, 0.0), gf.FIT_VERSION["clothing"]),
-             ("v17 is current", rec(17, 0.3762), 17),
-             ("hair keeps its own", rec(16, kind="hair"), gf.FIT_VERSION["hair"])]
-    for label, record, want in cases:
-        got = gf.expected_fit_version(record)
-        check(f"[4] {label}", got == want, got)
-
-
 def test_old_code(C, unrig, rig):
     print(f"[5] fails on the old code ({OLD})")
     try:
@@ -198,7 +165,6 @@ def main():
         test_cut(gf)
         test_sleeve(gf, C, unrig, rig)
         test_identity(gf, C, unrig, rig)
-        test_versions(gf)
         test_old_code(C, unrig, rig)
     print()
     if FAILED:

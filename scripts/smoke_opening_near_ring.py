@@ -3,8 +3,8 @@
 Usage:
     ./.venv/bin/python scripts/smoke_opening_near_ring.py
 
-No server, no world DB, no hub. ``garment_fit.opening_lining`` on synthetic meshes plus ``opening_may_change`` /
-``expected_fit_version``. Every number below is derived by hand.
+No server, no world DB, no hub. ``garment_fit.opening_lining`` on synthetic meshes (the due rule
+``opening_may_change`` / ``expected_fit_version`` is smoke_fit_version.py [E]). Every number below is derived by hand.
 
 FRAME (as smoke_opening_shallow_lining). Garment x -0.20 .. 0.20, y 0 .. 0.60, grid step 0.005; masks 400 x 400,
 the garment rows 50 .. 349, cols 100 .. 299 -> 0.002 m per px; the opening rows 150 .. 299, cols 175 .. 224
@@ -28,9 +28,7 @@ the garment rows 50 .. 349, cols 100 .. 299 -> 0.002 m per px; the opening rows 
     |x| = 0.05 the front panel's rim covers it), y 0.105 .. 0.395 (59 rows; y 0.40 is under the rim, y 0.10 outside
     the opening): 19 x 59 = 1121 vertices, 18 x 58 x 2 = 2088 faces; the rest of the panel lies under the front and
     is no front-most surface, so the growth stops there — old and new the same vertices.
-[3] Due rule: FIT_VERSION clothing 18; a version 17 record is current unless its opening report has a recess
-    component with a seed (or without a ``seeds`` number): {seeds 450} -> 18, {seeds 0} -> 17, a ``shown``
-    component -> 17, no opening report -> 17, version 16 with sleeves -> 18.
+[3] Due rule: moved to smoke_fit_version.py section [E].
 """
 import os
 import sys
@@ -123,26 +121,6 @@ check("[2] 1121 inside-panel vertices exactly", int(lin2.sum()) == 1121
 check("[2] 2088 faces left out", rep2["faces"] == 2088, rep2["faces"])
 lin2o, rep2o = old.opening_lining(P2, F2, op, gm, None)
 check("[2] old: the same vertices", bool((lin2o == lin2).all()), (int(lin2o.sum()), rep2o))
-
-# [3] due rule
-def rec(v, opening=None, share=0.3):
-    # sleeve_vertices 0: never walked (A199 ``walk_may_change``, 72ef9bc63), the older chain decides
-    r = {"kind": "clothing", "fit_version": v, "report": {"transfer": {"sleeve_share": share, "sleeve_vertices": 0}}}
-    if opening is not None:
-        r["report"]["opening"] = opening
-    return r
-
-
-seeded = {"components": [{"by": "recess", "dropped": True, "seeds": 450}], "faces": 1181}
-unseeded = {"components": [{"by": "recess", "dropped": True, "seeds": 0}], "faces": 0}
-shown = {"components": [{"by": "shown", "dropped": True}], "faces": 2880}
-nonum = {"components": [{"by": "recess", "dropped": True}], "faces": 12}
-FV = gf.FIT_VERSION["clothing"]  # 18 when written; A198's version 19 keeps a room-free 18 current
-cases = [(rec(17, seeded), FV), (rec(17, unseeded), 17), (rec(17, shown), 17), (rec(17), 17),
-         (rec(17, nonum), FV), (rec(16), FV), (rec(18, seeded), 18)]
-got = [gf.expected_fit_version(r) for r, _w in cases]
-check("[3] FIT_VERSION clothing >= 18", gf.FIT_VERSION["clothing"] >= 18, gf.FIT_VERSION)
-check("[3] due rule", got == [w for _r, w in cases], got)
 
 print()
 print("FAILED: %d — %s" % (len(FAILED), "; ".join(FAILED)) if FAILED else "all OK")
