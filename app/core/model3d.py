@@ -837,6 +837,20 @@ def _auto_lod_ratio() -> float:
     return lod_ratio("character")
 
 
+# Version of the distance tier's hand guard (``lod.py`` ``protect_hands``), recorded as ``hand_guard`` in every
+# low sidecar ``build_lod`` writes. A humanoid (Mixamo) low tier recorded below it is rebuilt lazily: the first
+# time a client asks for it, in the background, while the old one keeps being served. Raise it when the guard
+# changes what a low tier looks like.
+LOD_HAND_GUARD = 1
+_lod_hand_refresh: set = set()   # source models whose stale low tier was already sent for a rebuild
+
+
+def _low_tier_hands_stale(low_path: Path) -> bool:
+    """A Mixamo low tier built with an older (or no) hand guard — an animal or a prop never is."""
+    meta = _read_sidecar(low_path)
+    return meta.get("rig") == "mixamo" and int(meta.get("hand_guard") or 0) < LOD_HAND_GUARD
+
+
 def request_lod(character_name: str, model_path: Path) -> bool:
     """Builds the missing distance mesh in the BACKGROUND. True if started.
 
@@ -923,6 +937,13 @@ def find_model3d_serving_tier(character_name: str, tier: str = FULL_TIER) -> tup
     tier = (tier or FULL_TIER).strip().lower()
     variant = tier_variant(path, tier) if tier in MODEL_TIERS else None
     if variant:
+        if tier == LOW_TIER and _low_tier_hands_stale(variant):
+            # Built before the hand guard: served as it is now, rebuilt in the background once per process.
+            with _lock:
+                fresh = str(path) not in _lod_hand_refresh
+                _lod_hand_refresh.add(str(path))
+            if fresh:
+                request_lod(character_name, path)
         return variant, match, tier
     # Asked for a resolution that does not exist yet: serve the full mesh now
     # and build the missing one in the background, so the next request has it.
@@ -2993,8 +3014,10 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
         return {"ok": False, "error": "no_model"}
     import tempfile
     with tempfile.TemporaryDirectory(prefix="av-lod-") as tmp:
+        # protect_hands: the fingers stay out of the collapse (lod.py); a model without finger bones (an animal)
+        # decimates exactly as without it.
         res = runner.run("lod", inputs={"model": path},
-                         params={"ratios": [float(ratio)]}, out_dir=Path(tmp),
+                         params={"ratios": [float(ratio)], "protect_hands": True}, out_dir=Path(tmp),
                          timeout_s=600)
         if not res.get("ok") or not res.get("outputs"):
             return {"ok": False,
@@ -3054,6 +3077,8 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
         "lod_ratio": float(ratio),
         "tris": stage.get("tris"),
         "tris_before": stage.get("tris_before"),
+        "hand_guard": LOD_HAND_GUARD,
+        "hand_guard_tris": stage.get("hand_guard_tris"),
         "signature": path.stem,
         "character": character_name,
     }
