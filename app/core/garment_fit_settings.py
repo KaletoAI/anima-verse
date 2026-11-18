@@ -105,22 +105,38 @@ def current_shape(settings: Dict[str, Any], item_id: str) -> str:
 
 def changed(record: Optional[Dict[str, Any]], profile: Optional[Dict[str, Any]], item_id: str) -> bool:
     """Whether the fit ``record`` was made with other fit settings than the current ones — or made another mesh
-    shape than the item's mode makes now (``current_shape``). The shell offset (A166) counts for a shell only."""
-    from app.core import garment_shell
+    shape than the item's mode makes now (``current_shape``). Only settings that can shape this piece count, so a
+    change that would make the same mesh never makes the fit due: the shell keys (A166) for a shell only; the
+    sleeve / allowance / depth / trunk / shaft keys never for a shell (a shell is only grafted); the shaft keys
+    only for a piece on the feet and the legs (``garment_shaft.applies``); ``shaft_overlap`` with ``split`` only;
+    ``body_overlap`` with ``whole`` only (A182)."""
+    from app.core import garment_shaft, garment_shell
+    from app.models.inventory import get_item
     current = fit_settings(profile, item_id)
     made = recorded(record)
     now = dict(current)
-    if current_shape(current, item_id) != garment_shell.SHELL:
-        # A166: the shell offset shapes a shell only — a generated mesh's fit is not due for it.
-        for key in garment_shell.SHELL_SETTING_KEYS:
-            made.pop(key, None)
-            now.pop(key, None)
-    from app.core import garment_shaft
+    shape = current_shape(current, item_id)
+    drop = set()
+    if shape != garment_shell.SHELL:
+        drop |= set(garment_shell.SHELL_SETTING_KEYS)
+    else:
+        drop |= set(NOT_FOR_SHELL)
+    slots = ((get_item(item_id) or {}).get("outfit_piece") or {}).get("slots") or []
+    if not garment_shaft.applies(slots):
+        drop |= {"shaft", "shaft_overlap", "body_overlap"}
+    if current.get("shaft") != garment_shaft.SPLIT:
+        drop.add("shaft_overlap")
     if current.get("shaft") != garment_shaft.WHOLE:
-        # A182: the body overlap shapes a whole boot only
-        made.pop("body_overlap", None)
-        now.pop("body_overlap", None)
-    return made != now or made_shape(record) != current_shape(current, item_id)
+        drop.add("body_overlap")
+    for key in drop:
+        made.pop(key, None)
+        now.pop(key, None)
+    return made != now or made_shape(record) != shape
+
+
+#: Settings a shell-mode fit never reads (``garment_shell``: no placement, no push, no allowance, no shaft split).
+NOT_FOR_SHELL = ("sleeves_left", "sleeves_right", "allowance", "depth", "trunk", "shaft", "shaft_overlap",
+                 "body_overlap")
 
 
 def validate(changes: Dict[str, Any]) -> Dict[str, Any]:
