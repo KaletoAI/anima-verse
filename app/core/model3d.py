@@ -2569,23 +2569,27 @@ def _auto_normalize(character_name: str, path: Path,
         return
     done = list((meta.get("blender") or {}).get("steps") or [])
     if "normalize" in done:
-        if meta.get("rig") != "mixamo" or "limb_weights" in done:
+        if meta.get("rig") != "mixamo":
             return
-        try:
-            res = refine.limb_weights(path, validator=_validator_for("mixamo", character_name))
-            report = dict(res.get("data") or {})
-            success = (res.get("ok") and (res.get("applied") or res.get("error") in ("", "nothing to do"))
-                       and not report.get("error"))
-            if not success:
-                report["error"] = report.get("error") or res.get("error") or "Weight repair failed"
-        except Exception as exc:
-            report = {"error": str(exc)}
-            success = False
-        meta.setdefault("blender", {})["limb_weights"] = report
-        if success:
-            meta["blender"]["steps"] = done + ["limb_weights"]
-        else:
-            logger.warning("Model3D %s: weight repair failed (%s)", character_name, report["error"])
+        if "limb_weights" not in done:
+            try:
+                res = refine.limb_weights(path, validator=_validator_for("mixamo", character_name))
+                report = dict(res.get("data") or {})
+                success = (res.get("ok") and (res.get("applied") or res.get("error") in ("", "nothing to do"))
+                           and not report.get("error"))
+                if not success:
+                    report["error"] = report.get("error") or res.get("error") or "Weight repair failed"
+            except Exception as exc:
+                report = {"error": str(exc)}
+                success = False
+            meta.setdefault("blender", {})["limb_weights"] = report
+            if success:
+                meta["blender"]["steps"] = done + ["limb_weights"]
+            else:
+                logger.warning("Model3D %s: weight repair failed (%s)", character_name, report["error"])
+        # A model normalised before the finger reset existed catches up here, like the weight repair: on its
+        # next pass through this function (the extension rig re-reads its clean prerig source through it).
+        _auto_hands(character_name, path, meta)
         return
     target = _target_height_m(character_name)
     # The unrigged mesh the rigger was given is the ground truth of the
@@ -2626,9 +2630,71 @@ def _auto_normalize(character_name: str, path: Path,
     logger.info("Model3D %s: normalised to %.2f m (%s basis, scale %.4f)",
                 character_name, target, data.get("height_basis", "?"),
                 float(data.get("scale") or 0))
+    # The fingers the rigger bent go back to the mesher's hand — after the trunk posture (normalize), before
+    # the extension rig takes its clean prerig copy, so extension bones and the distance tier build on it.
+    if meta.get("rig") == "mixamo":
+        _auto_hands(character_name, path, meta)
     # An outfit body stands at its base body's posture (outfit_body_posture.py):
     # after normalize, before the extension rig and its clean prerig copy.
     _auto_posture_match(character_name, path, meta)
+
+
+# The finger reset's record version (``meta["blender"]["hands"]["version"]``): raise it when the method or its
+# gate changes what a hand ends up as. Nothing re-runs by itself on a raise — ``"hands"`` in the steps keeps a
+# decided model decided, exactly like ``limb_weights``.
+HANDS_VERSION = 1
+
+
+def _unrigged_source(path: Path) -> Optional[Path]:
+    """The unrigged mesh the rigger was given for the model at ``path`` — beside a stored model, or one level up
+    for its clean ``prerig/`` source and the extension rig's temporary preparation copy. A distance tier has
+    its own topology and never maps onto it: None there."""
+    if path.parent.name == LOW_TIER:
+        return None
+    for directory in (path.parent, path.parent.parent):
+        candidate = directory / "unrigged" / f"{path.stem}.glb"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _auto_hands(character_name: str, path: Path, meta: Dict[str, Any]) -> None:
+    """Put the fingers the rigger bent back where the mesher had them (``refine.hand_restore``, CPU only, no
+    hub job) and record the outcome in ``meta["blender"]["hands"]`` (the caller publishes the sidecar).
+
+    Per hand the script's own gate decides (better and nothing worse, else the rigger's hand stays); a hand
+    the rigger did not move stays byte-identical. ``"hands"`` joins the steps once the script has RUN — its
+    verdict, also a refusal or a rejected export, is final for this model; a crash or a missing Blender is not
+    a verdict and is tried again on the next pass. Without the unrigged source nothing happens (an upload, a
+    distance tier). Never raises: a post-step never costs the model."""
+    from app.blender import refine
+    block = meta.setdefault("blender", {})
+    done = list(block.get("steps") or [])
+    if meta.get("rig") != "mixamo" or "hands" in done or path.suffix.lower() != ".glb":
+        return
+    source = _unrigged_source(path)
+    if source is None:
+        return
+    ran = False
+    try:
+        res = refine.hand_restore(path, source, validator=_validator_for("mixamo", character_name))
+        report = dict(res.get("data") or {})
+        ran = bool(res.get("ok"))
+        if res.get("error") and res.get("error") != "nothing to do":
+            report["error"] = report.get("error") or res["error"]
+        report["applied"] = bool(res.get("applied"))
+    except Exception as exc:  # noqa: BLE001 — the reset never fails the model
+        report = {"error": str(exc) or type(exc).__name__, "applied": False}
+    report.update(version=HANDS_VERSION, at=utc_now_iso())
+    block["hands"] = report
+    if ran:
+        block["steps"] = done + ["hands"]
+    sides = {s: (report.get(s) or {}).get("status") for s in ("Left", "Right")}
+    if report.get("error"):
+        logger.warning("Model3D %s: finger reset of %s not applied (%s; %s)", character_name, path.name,
+                       report["error"], sides)
+    else:
+        logger.info("Model3D %s: finger reset of %s: %s", character_name, path.name, sides)
 
 
 def _auto_posture_match(character_name: str, path: Path, meta: Dict[str, Any], *,

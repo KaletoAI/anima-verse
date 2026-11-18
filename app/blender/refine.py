@@ -282,6 +282,22 @@ def limb_weights(path: Path,
                             "image_generation.blender_keep_original", True)))
 
 
+def hand_restore(path: Path, source: Path,
+                 validator: Optional[Callable[[bytes], Dict[str, Any]]] = None
+                 ) -> Dict[str, Any]:
+    """Puts the fingers of a rigged humanoid back where the mesher had them (``scripts/hand_restore.py``).
+
+    ``source`` is the UNRIGGED mesh the rigger was given. The script refuses a hand on its own gate (it must
+    get better and nothing worse) and declares no output when no hand changed, so the file stays as it was.
+    The gates of ``apply_script`` minus the size gate; NO frame allowance — only finger joint positions move,
+    every joint keeps its local rest rotation, so the plain joint-frame gate must hold."""
+    from app.core import config
+    return apply_script(path, "hand_restore", {}, validator=validator, require_smaller=False,
+                        keep_original=bool(config.get(
+                            "image_generation.blender_keep_original", True)),
+                        extra_inputs={"source": Path(source)})
+
+
 def posture_match(path: Path, forward_deg: float, side_deg: float,
                   validator: Optional[Callable[[bytes], Dict[str, Any]]] = None
                   ) -> Dict[str, Any]:

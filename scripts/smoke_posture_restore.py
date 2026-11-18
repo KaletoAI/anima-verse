@@ -79,6 +79,56 @@ moves the skin above the pivot to negative y. Positions after the lean:
 [6] THE ALLOWANCE SUMS. normalize_allowance({head_twist applied neck 3,
     posture applied spine2 -10, neck -9.8}) = {neck: 12.8, spine2: 10.0};
     nothing without ``corrected``, nothing for a joint outside the chain.
+
+THE FINGER RESET (``scripts/hand_restore.py`` + ``_hand_restore.py``, the
+step right after normalize; hand analysis 2026-11-18 § 1.3)
+==================================================================
+The rigger also bends FINGERS against the palm (fans, hooks the mesher never
+made); the unrigged mesh is the ground truth of the hand as of the trunk.
+
+Fixture, Blender world (Z up). A body box x,y +-0.1, z 0..1.70 (Hips; it
+only gives the figure its height H = 1.70, so the hand region is 0.16 H =
+0.272 m around the hand joint and the palm radius 0.08 H = 0.136 m). A palm:
+two 7x7 vertex grids x 0.51..0.60, y +-0.045, z 1.39 / 1.41 (98 vertices,
+all on ``mixamorig:LeftHand``, joint at (0.51, 0, 1.40)). Five fingers along
++X from x = 0.605, axes at y = (n-2) x 19 mm (Thumb -38 .. Pinky +38), each
+an octagonal prism r 7.5 mm, 80 mm long, 17 rings of 8 vertices; ring 0 is
+the blend band (0.5 on the finger's bone 1, 0.5 on the hand), rings 1-16
+belong to bone 1/2/3 by thirds, weight 1. Bone k of a finger runs from
+x = 0.605 + 0.08 (k-1)/3 along its axis. Every vertex has its own UV
+(1/256 apart), smooth-shaded, so the glTF round trip splits nothing and the
+UV correspondence is unique. SOURCE = the same mesh, no armature.
+
+FAN = the rig with each finger's bone 1 turned about +Z through its head —
+Thumb -20, Index -10, Middle 0, Ring +10, Pinky +20 deg (outwards, nothing
+touches) — and baked as rest: the rigger's deed.
+
+[7] THE RESET RESTORES THE FAN. A finger turned by t about its base moves a
+    vertex at distance d from the pivot by 2 d sin(t/2); the median vertex of
+    a chain sits ~40.3 mm from it (axial 40 mm, radial offset up to 7.5 mm),
+    so the rigger moved Thumb/Pinky by 2 x 40.3 x sin 10 = 14.0 mm and
+    Index/Ring by 7.0 mm (+-0.5): ``max_displacement_mm`` 14.0. The palm is
+    untouched, so the palm fit is the identity. ``before`` spread of the
+    long fingers = Index -10 vs Pinky +20 = 30 deg (+-1), ``after`` <= 1 deg;
+    ``displacement_left_mm`` <= 0.1; curl passes 5 -> 5 (separate prisms,
+    hard weights); stretch <= 1.01 (a rigid turn back). Status ``applied``.
+    Re-read from the output GLB: every vertex of rings 1-16 lies within
+    0.02 mm of its source position (glTF floats), and the Pinky2 joint is
+    back at the straight place x = 0.605 + 0.0267, y = +0.038 — in glTF
+    coordinates (0.6317, 1.40, -0.038), 0.2 mm — where the fan had it at
+    (0.605 + 0.0267 cos20, 0.038 + 0.0267 sin20) = (0.6301, 0.0471).
+[8] ONLY POSITIONS MOVED. ``rig_frames_preserved(fan, output)`` holds with NO
+    allowance (every local rest rotation kept), and the production path
+    ``refine.hand_restore(copy, source)`` applies through its gates.
+[9] AN UNMOVED HAND IS LEFT ALONE. The unbent rig with the same source:
+    ``max_displacement_mm`` 0.0 < 2, status ``untouched``, no output file.
+[10] A RESET THAT WOULD TEAR IS REFUSED. Source variant: the Middle finger
+    20 mm higher (+Z) than the rig's. No turn about its base carries the
+    finger there, so the blend ring (half finger, half hand) lands half-way
+    — ~10 mm short of its source place — while ring 1 (pure finger) lands on
+    it: the 5-mm edge between them becomes |(5, 0, 10)| = 11 mm, ~2.2 x
+    the longer of its rigged and mesher lengths > 1.3. Status ``refused``,
+    reason ``edge stretch``, no output file — the rigger's hand stays.
 """
 import json
 import math
@@ -179,7 +229,238 @@ export(out + "/leaning.glb")
 print("FIXTURES_OK")
 '''
 
+HAND_FIXTURE = r'''
+import bpy, math, sys
+from mathutils import Matrix, Vector
+out = sys.argv[sys.argv.index("--") + 1]
+FINGERS = ("Thumb", "Index", "Middle", "Ring", "Pinky")
+FAN = {"Thumb": -20, "Index": -10, "Middle": 0, "Ring": 10, "Pinky": 20}
+X0, Z0, R, L, RINGS, PITCH = 0.605, 1.40, 0.0075, 0.08, 16, 0.019
+
+def build(raise_middle=0.0):
+    verts, faces, owner = [], [], []
+    def add(vs, fs, groups):
+        base = len(verts)
+        verts.extend(vs); owner.extend(groups)
+        faces.extend(tuple(base + i for i in f) for f in fs)
+    box = [(x, y, z) for x in (-0.1, 0.1) for y in (-0.1, 0.1) for z in (0.0, 1.70)]
+    add(box, [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)],
+        [{"mixamorig:Hips": 1.0}] * 8)
+    for z in (1.39, 1.41):
+        vs = [(0.51 + 0.015 * i, -0.045 + 0.015 * j, z) for i in range(7) for j in range(7)]
+        fs = [(i * 7 + j, i * 7 + j + 1, (i + 1) * 7 + j + 1, (i + 1) * 7 + j) for i in range(6) for j in range(6)]
+        if z > 1.4:
+            fs = [tuple(reversed(f)) for f in fs]
+        add(vs, fs, [{"mixamorig:LeftHand": 1.0}] * 49)
+    for n, f in enumerate(FINGERS):
+        cy = (n - 2) * PITCH
+        dz = raise_middle if f == "Middle" else 0.0
+        vs, groups = [], []
+        for r in range(RINGS + 1):
+            for k in range(8):
+                vs.append((X0 + L * r / RINGS, cy + R * math.cos(math.pi * k / 4), Z0 + dz + R * math.sin(math.pi * k / 4)))
+                if r == 0:
+                    groups.append({f"mixamorig:LeftHand{f}1": 0.5, "mixamorig:LeftHand": 0.5})
+                else:
+                    groups.append({f"mixamorig:LeftHand{f}{min(3, 1 + 3 * (r - 1) // RINGS)}": 1.0})
+        fs = [(r * 8 + k, r * 8 + (k + 1) % 8, (r + 1) * 8 + (k + 1) % 8, (r + 1) * 8 + k)
+              for r in range(RINGS) for k in range(8)]
+        fs += [tuple(range(7, -1, -1)), tuple(RINGS * 8 + k for k in range(8))]
+        add(vs, fs, groups)
+    me = bpy.data.meshes.new("body")
+    me.from_pydata(verts, [], faces)
+    me.shade_smooth()
+    uv = me.uv_layers.new(name="UVMap")
+    for loop in me.loops:
+        i = loop.vertex_index
+        uv.data[loop.index].uv = ((i % 256 + 0.5) / 256, (i // 256 + 0.5) / 256)
+    obj = bpy.data.objects.new("body", me)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj, owner
+
+def rig(obj, owner):
+    arm = bpy.data.armatures.new("rig")
+    armo = bpy.data.objects.new("Armature", arm)
+    bpy.context.scene.collection.objects.link(armo)
+    bpy.context.view_layer.objects.active = armo
+    bpy.ops.object.mode_set(mode="EDIT")
+    hips = arm.edit_bones.new("mixamorig:Hips")
+    hips.head, hips.tail = (0, 0, 0.9), (0, 0, 1.1)
+    hand = arm.edit_bones.new("mixamorig:LeftHand")
+    hand.head, hand.tail, hand.parent = (0.51, 0, Z0), (X0, 0, Z0), hips
+    for n, f in enumerate(FINGERS):
+        parent, cy = hand, (n - 2) * PITCH
+        for k in (1, 2, 3):
+            b = arm.edit_bones.new(f"mixamorig:LeftHand{f}{k}")
+            b.head, b.tail = (X0 + L * (k - 1) / 3, cy, Z0), (X0 + L * k / 3, cy, Z0)
+            b.parent = parent
+            if k > 1:
+                b.use_connect = True
+            parent = b
+    bpy.ops.object.mode_set(mode="OBJECT")
+    for i, groups in enumerate(owner):
+        for name, w in groups.items():
+            vg = obj.vertex_groups.get(name) or obj.vertex_groups.new(name=name)
+            vg.add([i], w, "REPLACE")
+    obj.modifiers.new("Armature", "ARMATURE").object = armo
+    obj.parent = armo
+    return armo
+
+def export(path):
+    bpy.ops.object.select_all(action="SELECT")
+    bpy.ops.export_scene.gltf(filepath=path, export_format="GLB")
+
+def fresh():
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+
+fresh(); build(); export(out + "/hand_source.glb")
+fresh(); build(raise_middle=0.02); export(out + "/hand_source_raised.glb")
+fresh(); obj, owner = build(); rig(obj, owner); export(out + "/hand_straight.glb")
+fresh(); obj, owner = build(); armo = rig(obj, owner)
+bpy.context.view_layer.objects.active = armo
+bpy.ops.object.mode_set(mode="POSE")
+for f, deg in FAN.items():
+    p = armo.pose.bones[f"mixamorig:LeftHand{f}1"]
+    m = armo.matrix_world @ p.matrix
+    pivot = m.translation.copy()
+    rot = Matrix.Translation(pivot) @ Matrix.Rotation(math.radians(deg), 4, Vector((0, 0, 1))) @ Matrix.Translation(-pivot)
+    p.matrix = armo.matrix_world.inverted() @ rot @ m
+    bpy.context.view_layer.update()
+bpy.ops.object.mode_set(mode="OBJECT")
+bpy.context.view_layer.objects.active = obj
+bpy.ops.object.modifier_copy(modifier="Armature")
+bpy.ops.object.modifier_apply(modifier="Armature")
+bpy.context.view_layer.objects.active = armo
+bpy.ops.object.mode_set(mode="POSE")
+bpy.ops.pose.armature_apply(selected=False)
+bpy.ops.object.mode_set(mode="OBJECT")
+export(out + "/hand_fan.glb")
+print("HAND_FIXTURES_OK")
+'''
+
 failures = []
+
+
+def node_world_positions(path):
+    """{node name: world translation} of a GLB, composed from the node TRS (glTF coordinates, Y up)."""
+    import numpy as np
+    raw = Path(path).read_bytes()
+    length = struct.unpack_from("<I", raw, 12)[0]
+    doc = json.loads(raw[20:20 + length])
+
+    def local(node):
+        x, y, z, w = node.get("rotation", [0, 0, 0, 1])
+        rot = np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
+        m = np.eye(4)
+        m[:3, :3] = rot * np.array(node.get("scale", [1, 1, 1]))
+        m[:3, 3] = node.get("translation", [0, 0, 0])
+        return m
+    parent = {c: i for i, n in enumerate(doc["nodes"]) for c in n.get("children", [])}
+    out = {}
+    for i, node in enumerate(doc["nodes"]):
+        m, j = local(node), i
+        while j in parent:
+            j = parent[j]
+            m = local(doc["nodes"][j]) @ m
+        out[node.get("name", str(i))] = m[:3, 3]
+    return out
+
+
+def hand_checks(executable, root):
+    """[7]-[10] — the finger reset."""
+    import math
+    import shutil
+    script = root / "hand_fixture.py"
+    script.write_text(HAND_FIXTURE)
+    proc = subprocess.run([executable, "-b", "--factory-startup", "--python-exit-code", "1",
+                           "--python", str(script), "--", str(root)], capture_output=True, text=True, timeout=240)
+    assert "HAND_FIXTURES_OK" in proc.stdout, proc.stdout[-4000:] + proc.stderr[-2000:]
+    source = root / "hand_source.glb"
+
+    print("[7] the fanned hand")
+    res = runner.run("hand_restore", inputs={"model": root / "hand_fan.glb", "source": source},
+                     params={}, out_dir=root / "out_fan")
+    assert res["ok"], res
+    left = res["data"]["Left"]
+    print("   report:", json.dumps({k: left.get(k) for k in ("status", "reason", "displacement_mm",
+                                                           "displacement_left_mm", "stretch_max", "self_intersections")}))
+    disp = left.get("displacement_mm") or {}
+    check("[7] the rigger moved Thumb/Pinky ~14.0 mm, Index/Ring ~7.0, Middle 0",
+          all(abs(disp.get(f, -9) - v) <= 0.5 for f, v in
+              (("Thumb", 14.0), ("Index", 7.0), ("Middle", 0.0), ("Ring", 7.0), ("Pinky", 14.0))), str(disp))
+    check("[7] applied", left.get("status") == "applied", str(left.get("reason")))
+    before, after = left.get("before") or {}, left.get("after") or {}
+    check("[7] spread 30 deg before", abs(before.get("spread_deg", 0) - 30) <= 1.0, str(before.get("spread_deg")))
+    check("[7] spread <= 1 deg after", after.get("spread_deg", 99) <= 1.0, str(after.get("spread_deg")))
+    check("[7] displacement left <= 0.1 mm", left.get("displacement_left_mm", 99) <= 0.1,
+          str(left.get("displacement_left_mm")))
+    check("[7] curl passes 5 -> 5", before.get("curl_pass") == 5 and after.get("curl_pass") == 5,
+          f"{before.get('curl_pass')} -> {after.get('curl_pass')}")
+    check("[7] stretch <= 1.01", left.get("stretch_max", 99) <= 1.01, str(left.get("stretch_max")))
+    out_fan = Path(res["outputs"]["model"])
+    import numpy as np
+    src = np.array(positions(source))
+    fingers = src[src[:, 0] > 0.6075]          # rings 1-16 (ring 0 sits at x = 0.605, the palm ends at 0.60)
+
+    def worst_gap(points):
+        p = np.array(points)
+        return max(float(np.min(np.linalg.norm(p - q, axis=1))) for q in fingers)
+    check("[7] fixture: 5 x 16 x 8 finger vertices", len(fingers) == 640, str(len(fingers)))
+    worst = worst_gap(positions(out_fan))
+    check("[7] rings 1-16 back at their source places (0.02 mm)", worst <= 2e-5, f"worst {worst * 1000:.4f} mm")
+    # Counter-probe, vertex by vertex (each vertex has its own UV — the product's own correspondence): the
+    # farthest Pinky vertex sits sqrt(80^2 + 7.5^2) = 80.35 mm from its pivot, so the fan moved it
+    # 2 x 80.35 x sin 10 = 27.9 mm.
+    fan = np.array(positions(root / "hand_fan.glb"))
+
+    def uv_key(uv):
+        return tuple(int(round(c * 1024)) for c in uv)
+    by_uv = {uv_key(uv): i for i, uv in enumerate(positions(root / "hand_fan.glb", "TEXCOORD_0", 2))}
+    src_uv = positions(source, "TEXCOORD_0", 2)
+    pairs = [(i, by_uv.get(uv_key(src_uv[i]))) for i in np.flatnonzero(src[:, 0] > 0.6075)]
+    moved = max((float(np.linalg.norm(fan[j] - src[i])) for i, j in pairs if j is not None), default=0.0)
+    check("[7] counter-probe: the fan WAS off by 27.9 mm (+-0.2) at the Pinky tip",
+          abs(moved - 0.0279) <= 0.0002 and all(j is not None for _, j in pairs),
+          f"{moved * 1000:.2f} mm over {sum(j is not None for _, j in pairs)} UV-matched vertices")
+    joints = node_world_positions(out_fan)
+    pinky2 = next(v for k, v in joints.items() if k.endswith("LeftHandPinky2"))
+    want = (0.605 + 0.08 / 3, 1.40, -0.038)
+    check("[7] Pinky2 joint back at the straight place", math.dist(pinky2, want) <= 2e-4,
+          f"{[round(float(c), 4) for c in pinky2]} vs {want}")
+    pinky2_fan = next(v for k, v in node_world_positions(root / "hand_fan.glb").items()
+                      if k.endswith("LeftHandPinky2"))
+    check("[7] counter-probe: the fan had it at (0.6301, 1.40, -0.0471)",
+          math.dist(pinky2_fan, (0.6301, 1.40, -0.0471)) <= 2e-4, str([round(float(c), 4) for c in pinky2_fan]))
+
+    print("[8] only positions moved")
+    from app.core.model_validate import rig_frames_preserved
+    frames = rig_frames_preserved((root / "hand_fan.glb").read_bytes(), out_fan.read_bytes())
+    check("[8] rig frames preserved without an allowance", frames["ok"], "; ".join(frames["errors"])[:160])
+    prod = root / "hand_prod.glb"
+    shutil.copy2(root / "hand_fan.glb", prod)
+    res_prod = refine.hand_restore(prod, source)
+    check("[8] refine.hand_restore applies through the gates", bool(res_prod.get("applied")), str(res_prod.get("error")))
+
+    print("[9] the unmoved hand")
+    res = runner.run("hand_restore", inputs={"model": root / "hand_straight.glb", "source": source},
+                     params={}, out_dir=root / "out_straight_hand")
+    assert res["ok"], res
+    left = res["data"]["Left"]
+    check("[9] untouched, nothing moved", left.get("status") == "untouched"
+          and left.get("max_displacement_mm") == 0.0, f"{left.get('status')} {left.get('max_displacement_mm')}")
+    check("[9] no output", not res.get("outputs"), str(res.get("outputs")))
+
+    print("[10] the tearing reset")
+    res = runner.run("hand_restore", inputs={"model": root / "hand_fan.glb", "source": root / "hand_source_raised.glb"},
+                     params={}, out_dir=root / "out_raised")
+    assert res["ok"], res
+    left = res["data"]["Left"]
+    print("   report:", json.dumps({k: left.get(k) for k in ("status", "reason", "stretch_max")}))
+    check("[10] refused for the stretch", left.get("status") == "refused" and "edge stretch" in (left.get("reason") or "")
+          and left.get("stretch_max", 0) > 1.3, f"{left.get('status')}: {left.get('reason')}")
+    check("[10] no output — the rigger's hand stays", not res.get("outputs"), str(res.get("outputs")))
 
 
 def check(label, ok, detail=""):
@@ -188,7 +469,7 @@ def check(label, ok, detail=""):
         failures.append(label)
 
 
-def positions(path):
+def positions(path, attribute="POSITION", width=3):
     raw = Path(path).read_bytes()
     length = struct.unpack_from("<I", raw, 12)[0]
     doc = json.loads(raw[20:20 + length])
@@ -196,11 +477,11 @@ def positions(path):
     result = []
     for mesh in doc["meshes"]:
         for primitive in mesh["primitives"]:
-            a = doc["accessors"][primitive["attributes"]["POSITION"]]
+            a = doc["accessors"][primitive["attributes"][attribute]]
             v = doc["bufferViews"][a["bufferView"]]
             offset = start + v.get("byteOffset", 0) + a.get("byteOffset", 0)
-            stride = v.get("byteStride", 12)
-            result += [struct.unpack_from("<3f", raw, offset + i * stride) for i in range(a["count"])]
+            stride = v.get("byteStride", 4 * width)
+            result += [struct.unpack_from(f"<{width}f", raw, offset + i * stride) for i in range(a["count"])]
     return result
 
 
@@ -289,6 +570,8 @@ def main():
         shutil.copy2(root / "leaning.glb", prod)
         res = refine.normalize(prod, 1.70, posture_source=source)
         check("[5] refine.normalize applies through the gate", bool(res.get("applied")), str(res.get("error")))
+
+        hand_checks(st["executable"], root)
 
     if failures:
         print(f"\nFAILED: {len(failures)} check(s): {failures}")
