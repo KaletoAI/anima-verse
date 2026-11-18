@@ -445,6 +445,27 @@ def footwear(tmp: Path) -> None:
         check("B: the acceptance holds", (gs.read_record(fit_path[B].with_suffix(".json")).get("user_accepted")
                                           or {}).get("slot"), "derived")
 
+        # --- [8] A198 (review 07 #5) -----------------------------------------------------------------------------
+        print("[8] the new shoe never sits under the previous record")
+        seen = []
+        real_replace = os.replace
+
+        def watch_replace(src, dst):
+            if Path(dst) == fit_path[A]:
+                seen.append(fit_path[A].with_suffix(".json").is_file())
+            return real_replace(src, dst)
+        check("A: a record before the refit", fit_path[A].with_suffix(".json").is_file(), True)
+        os.replace = watch_replace
+        try:
+            check("A: refit accepted", run_fit(A, False, True, round_=8), None)
+        finally:
+            os.replace = real_replace
+        # pre-fix (e846d7d02): [True] — the old record stood while the new GLB took its place
+        check("A: no record while the GLB is replaced", seen, [False])
+        rec = gs.read_record(fit_path[A].with_suffix(".json"))
+        check("A: new bytes under the new record", (fit_path[A].read_bytes(), rec.get("accepted")),
+              (f"FRESH-{A}-8".encode(), True))
+
         de = json.loads((ROOT / "shared" / "languages" / "de.json").read_text())["translations"]
         for key in (*fit_attempts.FIT_METHOD_NOTES.values(), "the plain body's shoe"):
             check(f"de.json key {key[:40]!r}", key in de, True)

@@ -536,6 +536,9 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
             record["refitted"] = {"from_body_sha256": previous["body_sha256"], "at": now}
         # A distance tier of the previous fit must never pair with the new one.
         low.unlink(missing_ok=True)
+        # A198 (review 07 #5): the previous record goes BEFORE the new shoe takes its place — a reader between the
+        # two writes then finds no accepted fit (due for a moment), never the new GLB under the old lift / foot pose.
+        path.with_suffix(".json").unlink(missing_ok=True)
         os.replace(tmp, path)
         gs.write_record(path.with_suffix(".json"), record)
         logger.info("Footwear fit %s/%s (%s): accepted on %s%s, width x%.3f, lift %.1f mm, cut %d faces removed / "
