@@ -120,6 +120,8 @@ JSON-dumped WITHOUT its ``signature`` field, (2) ``signature`` itself and
 
     [N1] the location re-saved UNCHANGED      -> signature identical
     [N2] the prop sidecar rewritten byte-identical -> signature identical
+         (the fixture's variant carries a fixed ``uid``: a sidecar without one
+         is given a fresh one on read, see ``CRATE_VARIANT``)
     [N3] the terrain area re-saved with its own sanitized data
                                               -> signature identical
     [I1] terrain painted 300 m away, under the OTHER location: informational.
@@ -179,12 +181,21 @@ CRATE_DIR = STORAGE / "props" / CRATE
 CRATE_DIR.mkdir(parents=True, exist_ok=True)
 
 
+#: The crate's one model variant with a FIXED identity. Since 3ffb21a81 / bda82fded every variant carries a
+#: ``uid`` and a sidecar without one gets a fresh ``uuid4`` on its next read (``props`` variant normalisation);
+#: the room recipe ships that ``variant_uid`` and ``definition_revision`` (the sha256 of the whole normalised
+#: sidecar) per placement. A fixture rewritten WITHOUT the uid is therefore a new variant every time — a real
+#: input change, payload and signature both move — and neither [M2]'s "equal inputs" nor [N2]'s "byte-identical"
+#: would hold. With the uid in the file, the same bytes normalise to the same record.
+CRATE_VARIANT = {"stem": "model", "active": True, "uid": "00000000-0000-4000-8000-00000000c8a7"}
+
+
 def write_crate(tags) -> None:
     """The crate's sidecar with exactly ``tags`` — the prop's whole record."""
     (CRATE_DIR / prop_store.SIDECAR_NAME).write_text(json.dumps({
         "name": "Crate", "category": "furniture",
         "width_m": 0.8, "depth_m": 0.8, "height_m": 0.6,
-        "tags": list(tags)}), encoding="utf-8")
+        "tags": list(tags), "model_variants": [CRATE_VARIANT]}), encoding="utf-8")
     scene_recipe.invalidate_prop_lib_token()
 
 

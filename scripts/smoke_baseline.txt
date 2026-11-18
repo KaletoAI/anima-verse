@@ -47,7 +47,6 @@ smoke_reference_front	STALE: edit-block wording changed (bald + "natural matte l
 smoke_refit_bypass_queue	STALE: A191 (d778acb7d): cancelling the FIFO's run in flight no longer raises RunStarted, it stops the run — the smoke's flow after that needs re-deriving
 smoke_refit_selected_body	STALE: [4e] the fit settings dict gained keys (shell_*, sleeves_*, shaft ...) the expected piece settings lack
 smoke_run_queue_cancel	STALE: A191 (d778acb7d) deliberately made the FIFO's run in flight cancellable (answer gains "stopping"); the 409 for a running CPU re-fit in the FIFO predates it — the route answer (200, None) still needs re-deriving
-smoke_scene_signature_superset	STALE: the scene signature inputs changed (equal inputs no longer give the [M0] hash; a byte-identical sidecar rewrite changes it) — not root-caused, may be REAL
 smoke_sleeve_fit	STALE: [6] normalise of the sleeve settings changed; not re-derived
 smoke_stat_skill_costs	STALE: prepare fixed (Request double); play_scene_photo is now an async job (accept_photo, 202, user["id"]) — the photo cost expectation needs re-deriving
 smoke_texture_body_reuse	STALE: A175 turn step: 3 image jobs instead of 2
