@@ -241,10 +241,16 @@ def main():
                         if row['name'] == 'sample')
         from scripts.smoke_extension_rig_p0 import glb
         from app.core.rig_contract import BASE_JOINT_NAMES
-        mesh = model3d.get_model3d_dir('sample') / 'p3_example.glb'
+        # The served mesh is the PLAIN BODY model3d/<base signature>.glb: 'sample' is a humanoid (template
+        # human-default), so it is on the base-body pipeline, where (Ruling A119, 0601436ce) only the worn outfit's
+        # model built as the figure delivered now is served, else the newest plain body ("base") — never a stored
+        # model of some other combination, which the former fixture (p3_example.glb, served as "nearest") was.
+        from app.core import base_body, glb_delivery
+        glb_delivery.delivery_path = lambda path, source=None: path  # no meshopt (Blender) thread past teardown
+        mesh = model3d.get_model3d_dir('sample') / f"{base_body.base_signature('sample')}.glb"
         mesh.parent.mkdir(parents=True, exist_ok=True)
         mesh.write_bytes(glb(['mixamorig:' + name for name in BASE_JOINT_NAMES]))
-        mesh.with_suffix('.json').write_text(json.dumps({'pieces': profile['equipped_pieces'], 'items': []}))
+        mesh.with_suffix('.json').write_text(json.dumps({'rig': 'mixamo', 'base': True}))
         from app.core.motion_item_cache import invalidate
         invalidate()
         with patch.object(inventory, '_load_items', wraps=inventory._load_items) as reads:
@@ -254,6 +260,7 @@ def main():
             check(first_reads > 0 and reads.call_count == first_reads,
                   'worldmap second poll has zero new item reads')
         check(bool(old_row.get('model_sig')) and bool(old_row.get('model_rev')), 'real mesh fixture served')
+        check(model3d.find_model3d_serving('sample') == (mesh, 'base'), 'the plain body is the served mesh (A119)')
         old_info = model3d.get_model3d_info('sample')
         check(old_row['motion'] == old_info['motion'], 'worldmap and model metadata parity')
         declared = get_extension_motion()['groups']

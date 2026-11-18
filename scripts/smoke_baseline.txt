@@ -3,7 +3,6 @@
 # Reason tags: REAL = may show a product bug · STALE = pins an old expectation · ENV = machine/time/load · ? = unread.
 # Remove a line as soon as the smoke passes ("NOW GREEN" in the runner output). Sorted by name.
 smoke_artefact_gc	STALE: front_texture_signature of the fixture outfits is '' (texture keys now carry paint_region etc., A127 9df0b744a); the GC expectations need re-deriving
-smoke_extension_rig_p3	STALE: seeds a stored outfit model and expects the worldmap to serve it (model_sig); since b25bbbe39/A119 a humanoid is served only its current figure's model or the plain body — fixture needs a figure-exact model
 smoke_fbx_importer_parity	STALE: one-off parity proof vs the pinned pre-C++-importer scripts (a98f9ed5) compares WHOLE result dicts; later intentional output fields (turn_deg 339af01ee, shift_cm 6d1835805, and more) break it. Not deleted: its Blender per-take travel (+0.1/-0.2 m), sparse-take and multi-layer-rejection checks exist nowhere else
 smoke_footwear_refit	STALE: A107 (b1670f752) keys fits on geometry, not file bytes: the fixture's "body change" is a byte-only repack (new generator) and no longer makes the fit stale
 smoke_garment_chain	STALE: the own-mesh dress fixture is now refused by the fit gates (max_push_m 0.216 > 0.1, deep_push_share 0.50 > 0.12, new_edge_max_m 0.41 > 0.17) after the fit changes A174-A199; not re-derived
