@@ -535,6 +535,11 @@ export function strandCapsules(record: HairStrandRecord): CollisionCapsule[] {
 /** How many capsule lists' factor tables `StrandSim.factors` keeps (own only; partners + own). */
 const FACTOR_TABLES_KEPT = 2
 
+/** A capsule factor table, typed by inference: the two apps compile with different TypeScript versions, and only
+ *  the newer one knows the generic `Float32Array<ArrayBuffer>` (the older one rejects it). */
+const EMPTY_FACTORS = new Float32Array(0)
+type FactorTable = typeof EMPTY_FACTORS
+
 export class StrandSim {
   readonly binding: StrandBinding
   /** Rows (cards · 17). */
@@ -564,8 +569,8 @@ export class StrandSim {
   private flyKey = NaN
   private readonly g = new Float32Array(3)
   /** The bind-rule factor tables of the last `FACTOR_TABLES_KEPT` capsule lists, newest first (`factors`). */
-  private capTables: { key: readonly unknown[]; fac: Float32Array<ArrayBuffer> }[] = []
   private capFactors = new Float32Array(0)
+  private capTables: { key: readonly unknown[]; fac: FactorTable }[] = []
   private readonly frames = new Float64Array(R * 9)
   /** The targets of the previous step (carried with the rows). Ruling H-R10: the step is Verlet in the TARGET's
    *  frame — the damping works on a row's velocity relative to its target's (damped in world, a figure walking at
