@@ -293,13 +293,17 @@ def delete_texture(character_name: str, tsig: str) -> Dict[str, Any]:
     node (``artefact_graph.delete_texture``), only while no live outfit
     would be built on it. ``UnknownBody`` (404) when nothing of it is
     stored, ``LookupError`` ``PAINTED_NEEDED`` (409) when it is still
-    needed. Returns the collect report."""
+    needed, ``LookupError`` with the ``artefact_graph.RUNNING_UNKNOWN`` text
+    (409) when what runs cannot be read (the collect deleted nothing).
+    Returns the collect report."""
     from app.core import artefact_graph
     try:
         report = artefact_graph.delete_texture(character_name, tsig)
     except artefact_graph.TextureNeeded as e:
         logger.info("Painted body %s of %s not deleted: %s", tsig, character_name, e)
-        raise LookupError(PAINTED_NEEDED)
+        # An aborted collect (running work unreadable) is no "still needed" — name the true reason.
+        unknown = artefact_graph.running_state(character_name)[2]
+        raise LookupError(unknown or PAINTED_NEEDED)
     except LookupError:
         raise UnknownBody(NO_PAINTED_BODY)
     return report
