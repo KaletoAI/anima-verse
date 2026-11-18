@@ -27,7 +27,6 @@ smoke_outfit_body_mesh_items	STALE: A175 turn step: the build also renders the "
 smoke_outfit_body_mode_switch	STALE: the Build plan gained base_repair (A34 mesh repair) and a later step aborts (rc -6, a model sidecar missing); not re-derived
 smoke_outfit_rebuild_cost	STALE: "dressed front current" False: dressed views are edits of the base view with the outfit picture second since A125 (c510edc7c)
 smoke_painted_body_reachability	STALE: same as smoke_artefact_gc: the fixture's texture node T1 is not found (texture signature ''), not re-derived
-smoke_palm_axes	STALE: fbx_clip.run opens the rest FBX through the clip loader now, past the smoke's stubbed seams (_load_source, _rest_reference): "Cannot open file 't.fbx'"
 smoke_prop_action_review	STALE: unittest review cases: admission expects 'approaching' (gets 'active') and the planner test errors — prop-action engine changed since; not re-derived
 smoke_reference_front	STALE: edit-block wording changed (bald + "natural matte look"), and the routed backend in the fixture takes no reference image
 smoke_refit_selected_body	STALE: [4e] the fit settings dict gained keys (shell_*, sleeves_*, shaft ...) the expected piece settings lack

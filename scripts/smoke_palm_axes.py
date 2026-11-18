@@ -123,13 +123,16 @@ THE EXPECTATIONS, DERIVED BY HAND
     that brings its own knuckles keeps them untouched.
 
 [7] A PAIR MEASURES BOTH HALVES. `run` hands the SAME palm table to every
-    source — the rest file's, or None — and never rebinds it from what a source
-    returned. Half A of a pair is an animation export with no mesh, so it
-    answers {}, and {} is not None: passed on to half B it reads as "already
-    measured" and half B, a different body, never measures itself. Checked by
-    recording the argument `_load_source` is called with:
+    animation source — the rest file's, or None — and never rebinds it from what
+    an animation source returned. Half A of a pair is an animation export with
+    no mesh, so it answers {}, and {} is not None: passed on to half B it reads
+    as "already measured" and half B, a different body, never measures itself.
+    Since dd9f19750 every file is opened ONCE as a `_Source(path, family, palm)`,
+    the rest file first: it gets None (it measures its own skinned mesh, here
+    the rest table), and its `palm` is what the animation files get. Checked by
+    recording the `palm` each `_Source` is created with, in open order:
 
-        pair + rest file  ->  [rest table, rest table]
+        pair + rest file  ->  [None (t.fbx), rest table (a), rest table (b)]
         pair, no rest     ->  [None, None]
         solo, no rest     ->  [None]
 
@@ -288,27 +291,41 @@ REST_TABLE = {{"lhand": Vector((1.0, 0.0, 0.0))}}
 seen = []
 
 
-def fake_load(path, family, palm=None):
-    seen.append("REST" if palm is REST_TABLE else ("None" if palm is None else repr(palm)))
-    return 30.0, (1, 2), [{{}}], family, [{{}}], {{}}
+class FakeSource:
+    """One opened file: the rest file's mesh measures to REST_TABLE, an
+    animation export has no mesh and answers {{}}."""
+
+    def __init__(self, path, family, palm=None):
+        seen.append("REST" if palm is REST_TABLE else ("None" if palm is None else repr(palm)))
+        self.family = family
+        self.palm = REST_TABLE if path == "t.fbx" else {{}}
+
+    def select(self, *a, **k):
+        pass
+
+    def sample(self):
+        return 30.0, (1, 2), [{{}}], [{{}}]
 
 
-def probe_run(inputs):
+def probe_run(inputs, roles=()):
     del seen[:]
-    fbx_clip._load_source = fake_load
+    fbx_clip._Source = FakeSource
     fbx_clip._mixamo_rest = lambda rig: ({{}}, {{}})
     fbx_clip._rest_reference = lambda p, f, m: ({{}}, REST_TABLE)
     fbx_clip._build_take = lambda *a, **k: _Take()
-    cmu_clip.run_takes = lambda takes, args, fps, source: source
-    fbx_clip.run({{"inputs": inputs, "params": {{"bone_map": "meshy-biped"}},
-                  "out_dir": "."}})
+    cmu_clip.run_takes = lambda takes, args, fps, source, alt_takes=None: source
+    # Since 193f8aa71 a pair names its roles and the input slot of each.
+    params = {{"bone_map": "meshy-biped"}}
+    if roles:
+        params.update(roles=list(roles), sources=["src_" + r for r in roles])
+    fbx_clip.run({{"inputs": inputs, "params": params, "out_dir": "."}})
     return list(seen)
 
 
 out["unit"]["pair_rest"] = probe_run(
-    {{"rig": "r.fbx", "src_a": "a.fbx", "src_b": "b.fbx", "rest": "t.fbx"}})
+    {{"rig": "r.fbx", "src_a": "a.fbx", "src_b": "b.fbx", "rest": "t.fbx"}}, ("a", "b"))
 out["unit"]["pair_norest"] = probe_run(
-    {{"rig": "r.fbx", "src_a": "a.fbx", "src_b": "b.fbx"}})
+    {{"rig": "r.fbx", "src_a": "a.fbx", "src_b": "b.fbx"}}, ("a", "b"))
 out["unit"]["solo_norest"] = probe_run({{"rig": "r.fbx", "src": "a.fbx"}})
 
 print("SMOKE_JSON " + json.dumps(out))
@@ -426,7 +443,7 @@ def main() -> int:
 
     print("\n[7] every source of a pair is handed the SAME palm table")
     check("pair with a rest file: both halves get the rest table",
-          u["pair_rest"] == ["REST", "REST"], f"{u['pair_rest']}")
+          u["pair_rest"] == ["None", "REST", "REST"], f"{u['pair_rest']}")
     check("pair without one: both halves measure themselves",
           u["pair_norest"] == ["None", "None"], f"{u['pair_norest']}")
     check("solo without one: it measures itself",
