@@ -387,6 +387,21 @@ MIDLINE_STRIP_M = .01
 OUTER_SIDE_SLOPE = .35
 
 
+def outline_blur(a, sigma, step):
+    """Separable Gaussian blur of the grid ``a`` (spacing ``step``), zero
+    outside, output the shape of ``a``. ``np.convolve(..., 'same')`` returns
+    max(len(row), len(kernel)) values, so a grid narrower than the kernel
+    (``lateral_max`` below about .10 m) came back wider and failed the
+    broadcast (review 03, outline_locate); the centred slice of the full
+    convolution is the same values where the row is the longer one."""
+    reach = math.ceil(3*sigma/step)
+    kernel = np.exp(-.5*(np.arange(-reach,reach+1)*step/sigma)**2)
+    def conv(r):
+        return np.convolve(r,kernel,'full')[reach:reach+len(r)]
+    a = np.apply_along_axis(conv,0,a)
+    return np.apply_along_axis(conv,1,a)
+
+
 def outline_locate(p, front, mid, lo, hi):
     """Locate both half-rounds of a chest pair without a colour marker.
 
@@ -406,10 +421,7 @@ def outline_locate(p, front, mid, lo, hi):
     zs_m = np.concatenate((zs[0]-step*np.arange(margin,0,-1),zs,zs[-1]+step*np.arange(1,margin+1)))
     ds_m = np.concatenate((ds,ds[-1]+step*np.arange(1,margin+1)))
     def blur(a,sigma):
-        reach = math.ceil(3*sigma/step)
-        kernel = np.exp(-.5*(np.arange(-reach,reach+1)*step/sigma)**2)
-        a = np.apply_along_axis(lambda r:np.convolve(r,kernel,'same'),0,a)
-        return np.apply_along_axis(lambda r:np.convolve(r,kernel,'same'),1,a)
+        return outline_blur(a,sigma,step)
     bumps = []
     for sign in (1,-1):
         depth = np.full((len(zs_m),len(ds_m)),np.nan)
