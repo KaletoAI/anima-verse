@@ -956,13 +956,25 @@ def _file_sha(path: str) -> str:
         return ""
 
 
-def texture_sources(character_name: str, item_id: str) -> Dict[str, str]:
-    """``{front, back, source}``: the piece's newest cut-out (piece-only) views from the garment store
+def texture_sources(character_name: str, item_id: str, item: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    """``{front, back, source}`` (A205 first): the template piece's own piece-only views
+    (``garment_template_views``, ``source`` "piece_only"; a missing side takes the other side's view) — for a SHEER
+    piece ONLY these, both of them, never the item picture ({} until they exist). Else the piece's newest cut-out (piece-only) views from the garment store
     (``images/{item}_{fsig}_cutout_{front,back}.png``) whenever ANY exists — a missing side takes the other
     side's view (Ruling A141: the cut-outs are always preferred) —, else its item picture for both sides
     (``source`` "item_image"; ``run_drape`` masks it to the garment). {} without any picture."""
+    from app.core import garment_template_views as tv
     from app.core.garment_store import garments_dir
-    from app.models.inventory import get_item_image_path
+    from app.models.inventory import get_item, get_item_image_path
+    own = {v: tv.accepted(character_name, item_id, v) for v in tv.VIEWS}
+    item = item if item is not None else get_item(item_id)
+    if tv.is_sheer(item):
+        if own["front"] is None or own["back"] is None:
+            return {}
+        return {"front": str(own["front"]), "back": str(own["back"]), "source": "piece_only"}
+    if own["front"] is not None or own["back"] is not None:
+        return {"front": str(own["front"] or own["back"]), "back": str(own["back"] or own["front"]),
+                "source": "piece_only"}
     folder = garments_dir(character_name) / "images"
     best: Dict[str, Tuple[float, str]] = {}
     if folder.is_dir():
@@ -1063,8 +1075,11 @@ def key_for(character_name: str, item_id: str, *, base_sha: str, lower: List[str
         return None, KIND_NOT_BUILT.format(kind=params["kind"]), {}
     if not base_sha:
         return None, NO_BASE, {}
-    sources = texture_sources(character_name, item_id)
+    sources = texture_sources(character_name, item_id, item)
     if not sources:
+        from app.core import garment_template_views as tv
+        if tv.is_sheer(item):
+            return None, tv.SHEER_NEEDS_VIEWS, {}
         return None, NEEDS_PARAMS.replace("parameters", "picture"), {}
     tex = _md5([_file_sha(sources["front"]), _file_sha(sources["back"])])
     under = []
@@ -1223,7 +1238,9 @@ def piece_progress(character_name: str, item_id: str, *, profile: Optional[Dict[
                         lower=lower_layers(sets.own, item_id) if worn else [], item=item)
     record = drape["record"] or {}
     params = params_of(item)
-    sources = texture_sources(character_name, item_id)
+    sources = texture_sources(character_name, item_id, item)
+    from app.core import garment_template_views as tv
+    sheer_missing = tv.missing_views(character_name, item_id) if tv.is_sheer(item) else []
     # A176: only while the Build still has this piece's drape ahead of it (or runs it) — a Build that already
     # draped it and now waits on another piece (Dario, 2026-11-17: 11 min behind a shoe mesh) shows the outcome,
     # never "running" until the whole Build ends.
@@ -1236,8 +1253,10 @@ def piece_progress(character_name: str, item_id: str, *, profile: Optional[Dict[
          "detail": "" if params else NEEDS_PARAMS,
          "numbers": {"kind": params["kind"], "fabric": params["fabric"]} if params else {}},
         {"id": "picture", "label": "Picture", "status": "done" if sources else "due",
-         "detail": {"cutout": "the piece-only cut-out views", "item_image": "the item picture"}.get(
-             sources.get("source", ""), "") if sources else "No picture of the piece yet", "numbers": {}},
+         "detail": {"piece_only": "the piece-only views", "cutout": "the piece-only cut-out views",
+                    "item_image": "the item picture"}.get(sources.get("source", ""), "") if sources
+         else (tv.SHEER_NEEDS_VIEWS if sheer_missing else "No picture of the piece yet"),
+         "numbers": {"hub_jobs": len(sheer_missing)} if sheer_missing else {}},
         {"id": "drape", "label": "Drape (CPU)",
          "status": {"ready": "done", "failed": "failed", "blocked": "skipped"}.get(state, "due"),
          "detail": (live["label"] if live else WAITING_FOR_STEP) if state == "running" else drape["reason"] or "",
@@ -1436,7 +1455,7 @@ def _run_drape_once(body_glb: Path, params: Dict[str, Any], sources: Dict[str, s
     _live_stage(live, "views")
     views = {side: out_dir / f"view_{side}.png" for side in ("front", "back")}
     view_info = {side: prepare_view(sources[side], views[side],
-                                    garment_only=sources.get("source") != "cutout") for side in views}
+                                    garment_only=sources.get("source") not in ("cutout", "piece_only")) for side in views}
     data: Dict[str, Any] = {}
     res: Dict[str, Any] = {}
     first: Optional[Tuple[Dict[str, Any], Dict[str, Any]]] = None
