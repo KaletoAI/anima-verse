@@ -532,6 +532,9 @@ export function strandCapsules(record: HairStrandRecord): CollisionCapsule[] {
   return (record.capsules?.capsules ?? []).filter(c => HAIR_REGIONS.includes(c.region)).slice(0, COLLIDE_MAX)
 }
 
+/** How many capsule lists' factor tables `StrandSim.factors` keeps (own only; partners + own). */
+const FACTOR_TABLES_KEPT = 2
+
 export class StrandSim {
   readonly binding: StrandBinding
   /** Rows (cards · 17). */
@@ -560,7 +563,8 @@ export class StrandSim {
   private limKey = ''
   private flyKey = NaN
   private readonly g = new Float32Array(3)
-  private capKey: readonly unknown[] = []
+  /** The bind-rule factor tables of the last `FACTOR_TABLES_KEPT` capsule lists, newest first (`factors`). */
+  private capTables: { key: readonly unknown[]; fac: Float32Array }[] = []
   private capFactors = new Float32Array(0)
   private readonly frames = new Float64Array(R * 9)
   /** The targets of the previous step (carried with the rows). Ruling H-R10: the step is Verlet in the TARGET's
@@ -896,10 +900,17 @@ export class StrandSim {
   }
 
   /** Per row and capsule the bind-rule factor (`tipBindFactors`), recomputed when the capsules' bind ends
-   *  change. */
+   *  change. The last two lists are kept: the hair's list switches between the own capsules and partners + own
+   *  ones whenever a partner comes or goes (`hairSim.ts` PARTNERS), and a pair standing at the edge of the reach
+   *  must not rebuild the whole table (every row × capsule) on each such flip. */
   private factors(caps: readonly CollideCapsule[], local: readonly { r: number }[]): Float32Array {
     const key = caps.map(c => c.bind)
-    if (key.length === this.capKey.length && key.every((b, i) => b === this.capKey[i])) return this.capFactors
+    const hit = this.capTables.findIndex(t => t.key.length === key.length && key.every((b, i) => b === t.key[i]))
+    if (hit >= 0) {
+      const t = this.capTables[hit]
+      if (hit > 0) { this.capTables.splice(hit, 1); this.capTables.unshift(t) }
+      return (this.capFactors = t.fac)
+    }
     const nc = caps.length, C0 = this.binding.C0, out = new Float32Array(this.n * nc).fill(1)
     const bound = caps.map((c, i) => (c.bind ? { a: c.bind.a, b: c.bind.b, r: local[i].r } : null))
     const withBind = bound.filter((c): c is { a: Vec3; b: Vec3; r: number } => c !== null)
@@ -910,7 +921,8 @@ export class StrandSim {
         for (let j = 0; j < slot.length; j++) out[q * nc + slot[j]] = fq[j]
       }
     }
-    this.capKey = key
+    this.capTables.unshift({ key, fac: out })
+    this.capTables.length = Math.min(this.capTables.length, FACTOR_TABLES_KEPT)
     this.capFactors = out
     return out
   }

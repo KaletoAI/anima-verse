@@ -33,7 +33,8 @@
  * They hold for every step of the frame (a snapshot has no last-frame pose to interpolate from). The sim's capsule
  * list stays within `COLLIDE_MAX`, which `pushOutOfCapsules` would cut: at most `PARTNER_COLLIDE_MAX` and at most
  * `COLLIDE_MAX` − the own count, the farthest dropped. While partners are given the list keeps all those slots
- * (unused ones r 0, inert), so the sim's per-row bind factors are recomputed only when partners come or go.
+ * (unused ones r 0, inert), so the list has two shapes (own only; partners + own) and `StrandSim` keeps the per-row
+ * bind factors of both: partners coming and going swap tables, they never rebuild one.
  *
  * THE CLOCK (spec § 6.2.2, Ruling H-R11). The sim steps at a fixed 60 Hz whatever the frame rate: a frame of
  * `realDelta` seconds takes the 1/60 s steps that fit into it plus the remainder the last frame carried over (1–4 at

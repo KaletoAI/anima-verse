@@ -63,6 +63,9 @@
  *     2 s (the case is real); with it no row is inside deeper than its bind depth after 2 s (+1e-6), nor at the
  *     end of any step on the way deeper than the sagitta of one clamped segment (Ruling H-R10: the length clamp's
  *     last shortening may cut the capsule by a chord, 0.08 − √(0.08² − (0.03·1.05/2)²) = 1.57 mm).
+ * [7b] FACTOR TABLES (review 13-hair#3): flipping between [own] and [partner, own] returns the same two tables
+ *     (identity, no rebuild); the partner column is 1 (no bind), the own column equals the own-only table; a third
+ *     list evicts the oldest (own-only → rebuilt to equal values, a new table). The old cache kept one table.
  * [8] StrandMismatch: a `_STRAND_CARD` of 62 for a 61-card record, and a `_STRAND_U` one value short.
  * RULING H-R10 (each step with dt 0 starts from X = Xp: no velocity, no pull; iterations 0, bend 0, root_deg 0 —
  * only the part under test acts):
@@ -457,6 +460,23 @@ for (const kind of ['sway', 'walk']) {
   check('[7] with it, after 2 s no row is inside the torso capsule deeper than at bind (on the way: a chord, 1.57 mm)',
     end <= 1e-6 && worst <= 0.00157,
     `end ${(end * 1000).toFixed(4)} mm, worst over the 2 s ${(worst * 1000).toFixed(4)} mm`)
+  // [7b] review 13-hair#3: a partner flickering in and out of reach. The list alternates between the own capsule and
+  // [partner (no bind), own]; the factor tables of both are kept, so the third and fourth flip hand back the SAME
+  // tables (object identity) instead of rebuilding every row × capsule. The partner column is all 1 (no bind rule),
+  // the own column equals the own-only table. A third list (two partners) evicts the oldest, the own-only one.
+  const partner = { a: [0, 1.2, 0.3], b: [0, 1.4, 0.3], r: 0.05 }
+  const local = cs => cs.map(c => ({ r: c.r }))
+  const own = [caps[0]], both = [partner, caps[0]]
+  const tOwn = sim.factors(own, local(own)), tBoth = sim.factors(both, local(both))
+  const flips = [sim.factors(own, local(own)), sim.factors(both, local(both))]
+  const n = sim.n
+  check('[7b] flipping partner presence reuses both factor tables (no rebuild)', flips[0] === tOwn && flips[1] === tBoth)
+  check('[7b] the partner column is 1 for every row, the own column equals the own-only table',
+    Array.from({ length: n }, (_, q) => tBoth[2 * q] === 1 && tBoth[2 * q + 1] === tOwn[q]).every(Boolean))
+  const three = [partner, partner, caps[0]]
+  sim.factors(three, local(three))
+  check('[7b] a third list evicts the oldest (own-only): rebuilt, equal values, a new table',
+    (() => { const t = sim.factors(own, local(own)); return t !== tOwn && t.every((v, q) => v === tOwn[q]) })())
 }
 
 // [8] StrandMismatch
