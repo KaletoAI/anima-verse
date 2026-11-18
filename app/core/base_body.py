@@ -6447,9 +6447,14 @@ def base_refresh_plan(character_name: str, *, profile: Optional[Dict[str, Any]] 
       current views.
     * ``skin`` (review 08b#2) — the stored front's skin detail step ended on
       load (``skin_step.outcome`` busy) and the front is still the neutral
-      render (``_skin_step_due``): every view (the others edit the front),
-      then the model. Load is no failure, so the step stays due until it
-      lands; the improvement re-queues it at idle time.
+      render (``_skin_step_due``), while the front itself is current (its
+      prompts — and, with ``missing``, its reference; else the reasons above
+      re-render it with its step): ``skin`` True — the step ALONE on the
+      stored neutral front (``base_skin.apply_skin_step``, the front is not
+      rendered again) — then only the other views that are not current
+      (``base_view_states``; they edit the front, so after the step), then the
+      model. Load is no failure, so the step stays due until it lands; the
+      improvement re-queues it at idle time.
     * ``""`` — nothing to do, or (without ``missing``) no stored front (a
       missing base is not an older one)."""
     from app.core import model3d, model_overview
@@ -6461,12 +6466,12 @@ def base_refresh_plan(character_name: str, *, profile: Optional[Dict[str, Any]] 
         return {**plan, "views": list(BASE_VIEWS), "model": True, "reason": "missing"} if missing else plan
     if prompts["state"] == model_overview.STALE:
         return {**plan, "views": list(BASE_VIEWS), "model": True, "reason": "older_prompts"}
-    if _skin_step_due(character_name, bsig, profile):
-        return {**plan, "views": list(BASE_VIEWS), "model": True, "reason": "skin"}
     if missing and not front_reference_state(character_name, bsig, profile=profile)["current"]:
         return {**plan, "views": list(BASE_VIEWS), "model": True, "reason": "reference"}
     states = base_view_states(character_name, profile=profile)
     views = [v for v in BASE_VIEWS if v != "front" and states[v]["state"] != model_overview.CURRENT]
+    if _skin_step_due(character_name, bsig, profile):
+        return {**plan, "views": views, "skin": True, "model": True, "reason": "skin"}
     if views:
         return {**plan, "views": views, "model": True, "reason": "views"}
     path = model3d.find_model3d(character_name, bsig)
@@ -6500,15 +6505,19 @@ def _skin_step_due(character_name: str, bsig: str, profile: Dict[str, Any]) -> b
 
 def base_rebuild_steps(character_name: str, plan: Dict[str, Any]) -> List[Tuple[str, int]]:
     """``(step, hub jobs on the first attempt)`` of what ``plan``
-    (``base_refresh_plan``) runs, in run order: ``view <name>`` per view to
-    render — with the front, while the world switch is on and the front is
-    not made from the full-body reference (``base_skin.applies``, Ruling
-    A92), its ``skin front`` step right after it (one edit) — then, with the
-    model, the hub stages of a fresh base mesh run
-    (``model3d.mesh_hub_stages``: mesh, [upscale, face], rig; normalize and
-    the other Blender steps are CPU work)."""
+    (``base_refresh_plan``) runs, in run order: the ``skin front`` step alone
+    first when the plan carries ``skin`` (reason ``skin``: the step left due
+    by load, on the stored neutral front — the views after it edit the
+    front); ``view <name>`` per view to render — with the front, while the
+    world switch is on and the front is not made from the full-body reference
+    (``base_skin.applies``, Ruling A92), its ``skin front`` step right after
+    it (one edit) — then, with the model, the hub stages of a fresh base mesh
+    run (``model3d.mesh_hub_stages``: mesh, [upscale, face], rig; normalize
+    and the other Blender steps are CPU work)."""
     from app.core import base_skin, model3d
     steps: List[Tuple[str, int]] = []
+    if plan.get("skin"):
+        steps.append(("skin front", SKIN_STEP_JOBS))
     for v in plan.get("views") or ():
         steps.append((f"view {v}", BASE_VIEW_JOBS))
         if v == "front" and base_skin.applies(character_name):

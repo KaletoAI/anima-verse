@@ -54,7 +54,10 @@ front and ``skin_step`` says why. ``apply_skin_step`` re-runs the step from
 the stored neutral without re-rendering the front. Busy is load, not a
 failure (review 08b#2): a ``raise_load`` render gets the load back, and a
 front left neutral by it stays due (``base_body.base_refresh_plan`` reason
-``skin``) until the step lands.
+``skin``) until the step lands. That refresh re-runs the step ALONE on the
+stored neutral front (``apply_skin_step``), then only the other views that
+are not current, then the model — the front is not rendered again while it
+is current.
 
 The world switch ``base_body.skin_detail_step`` (default on) turns it off;
 it is part of ``base_body.prompt_fingerprint`` (``fingerprint_part``) only
@@ -579,15 +582,18 @@ def refused(character_name: str, bsig: Optional[str] = None, *,
     return NOT_USED_FULL_BODY if front_source(character_name, bsig, profile=profile) == SOURCE_FULL_BODY else ""
 
 
-def apply_skin_step(character_name: str) -> Dict[str, Any]:
+def apply_skin_step(character_name: str, *, raise_load: bool = False) -> Dict[str, Any]:
     """Re-run the step on the stored neutral front of the CURRENT base,
-    without re-rendering it (the Figure tab's "Run skin step"); a
-    front without a stored neutral (rendered with the switch off) is taken
-    as the neutral first. Blocking — call from a worker thread. Returns the
-    ``skin_step`` record; ``MissingInput`` without a front, ``NotUsed`` for a
-    front made from the full-body reference (Ruling A92). The front keeps
-    its ``created_at`` and ``prompt_fingerprint`` (the views stay current; the
-    base model turns stale by the front's bytes)."""
+    without re-rendering it (the Figure tab's "Run skin step"; the plain
+    body refresh of a step left due by load, ``base_body.base_refresh_plan``
+    ``skin``); a front without a stored neutral (rendered with the switch
+    off) is taken as the neutral first. Blocking — call from a worker
+    thread. Returns the ``skin_step`` record; ``MissingInput`` without a
+    front, ``NotUsed`` for a front made from the full-body reference (Ruling
+    A92). The front keeps its ``created_at`` and ``prompt_fingerprint`` (the
+    views stay current; the base model turns stale by the front's bytes).
+    ``raise_load``: load is recorded ``BUSY`` and raised (``run_step``) — the
+    step stays due, the caller does not go on to mesh the neutral front."""
     import shutil
     from app.core import base_body
     from app.core.model_refs import find_ref_image
@@ -609,7 +615,8 @@ def apply_skin_step(character_name: str) -> Dict[str, Any]:
                 shutil.copyfile(front.with_suffix(".json"), neutral.with_suffix(".json"))
         base_body.reserve_views(character_name, ("front",), step=base_body.SKIN_STEP)
         try:
-            record = run_step(character_name, front, neutral, profile=profile)
+            record = run_step(character_name, front, neutral, profile=profile,
+                              **({"raise_load": True} if raise_load else {}))
             record["rerun"] = True
             _set_front_record(front, record)
         finally:

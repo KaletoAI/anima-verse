@@ -1403,9 +1403,13 @@ def _wait_base_views(character_name: str, *, timeout_s: Optional[float] = None,
 
 def _run_plain_body(character_name: str, step: Step, explicit: bool = False) -> str:
     """The plain body's views (all four in one run when the front is among them — the
-    others edit the new front — else each view alone), then its model; forced."""
-    from app.core import base_body, view_facing
+    others edit the new front — else each view alone), then its model; forced. A skin step left due by load
+    (plan ``skin``, review 08b#2) runs first and alone on the stored neutral front — the current front is not
+    rendered again; load raises (the step's error, the step stays due, nothing is meshed from the neutral front)."""
+    from app.core import base_body, base_skin, view_facing
     refresh = base_body.base_refresh_plan(character_name, missing=True)
+    if refresh.get("skin"):
+        base_skin.apply_skin_step(character_name, raise_load=True)
     views = list(refresh.get("views") or ())
     if views:
         if "front" in views:

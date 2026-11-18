@@ -80,23 +80,59 @@ Expected numbers, by hand:
 [F] load is no finished step (review 08b#2). ``Demo`` (human, no profile
     image: the front from text, source "" — the step applies), the switch ON;
     every base render is a stub writing an 8 x 8 PNG + the sidecar the real
-    render writes (``sidecar_extra``); the skin edit (occasion
-    ``outfit_front``) raises ``BackendBusyError``.
+    render writes (``sidecar_extra`` + ``created_at``); the skin edit
+    (occasion ``outfit_front``) raises ``BackendBusyError`` while "busy",
+    else it lands (stubbed matte crop and transfer: the neutral front with
+    one pixel changed — other bytes than the neutral). The base model run
+    (``generate_base_model``) is a counting stub; no backend is called, so
+    the image service's cooldown is not reached either — what is checked is
+    that load leaves no failure record (the improvement's ``_blocker``).
     [F1] ``generate_base_images(raise_load=True)`` (the base_refresh
          improvement) RAISES ``BackendBusyError``: two calls (the front, the
          skin edit), no back/left/right render; the front's sidecar records
-         ``skin_step.outcome`` "busy"; ``base_status`` front neither failed
-         nor running (load is no failure record);
-         ``base_refresh_plan`` -> {views: all four, model: True, reason
-         "skin"} — on the old code the record was "busy" too but nothing read
-         it: the front's fingerprint is the current one, so the plan was
-         empty and the plastic front was meshed.
-    [F2] without ``raise_load`` (the Build, a click) nothing raises: front,
-         skin edit, back, left, right = 5 calls; the plan is still "skin".
+         ``skin_step.outcome`` "busy"; the front's bytes are the neutral
+         front's (nothing published as skinned); ``base_status`` front
+         neither failed nor running, ``_blocker`` ("", "") (load is no
+         failure record); ``base_refresh_plan`` -> {skin: True, views: back,
+         left, right (missing — they edit the front, so after the step),
+         model: True, reason "skin"}; ``base_rebuild_steps`` starts skin
+         front, view back, view left, view right — no "view front".
+    [F2] without ``raise_load`` (the Build's first run, a click) nothing
+         raises: front, skin edit, back, left, right = 5 calls; the three
+         views are newer than the front, so ``base_refresh_plan(missing)`` ->
+         {skin: True, views: [], model: True}; ``base_rebuild_cost`` = skin
+         front 1 + the mesh stages (``mesh_hub_stages``, each 1) — ZERO view
+         jobs (before the fix: front 1 + skin 1 + three views 3 + stages).
     [F3] the step then lands (the front's bytes differ from the kept neutral
          — a "Run skin step" that worked): no longer "skin"; a "failed"
          record on the neutral front is not "skin" either (a failure is not
          re-spent automatically); switch OFF -> not "skin".
+[G] the retry runs ONLY the outstanding skin step while the front is
+    current. Render calls counted by occasion:
+    [G1] (state of [F1]) the improvement's ``apply``, the edit still busy:
+         ``CandidateBusy``; calls = [outfit_front] (1 skin edit, 0 base_front,
+         0 base_view), 0 model runs; ``_require_routes`` asks outfit_front,
+         base_view, mesh_humanoid, rig_humanoid (no base_front); still "busy"
+         and "skin".
+    [G2] the same, the edit lands: calls = [outfit_front, base_view x 3] —
+         the skin edit first, then the three MISSING views (0 base_front);
+         1 model run; applied; the plan no longer carries ``skin``.
+    [G3] (state of [F2]: every view stored and current) the Build's plain
+         body step (``figure_build._run_plain_body``), the edit busy: the
+         load is raised (the Build step's error, nothing meshed from the
+         neutral front): calls = [outfit_front], 0 model runs; still due.
+    [G4] the same, the edit lands: calls = [outfit_front] — exactly 1 skin
+         edit, 0 view renders; 1 model run; the three stored views keep
+         their bytes and mtime; applied; back/left/right stay "current" (the
+         step keeps the front's ``created_at``).
+    [G5] the shortcut is no blanket skip: busy again ([F2]'s run: plan
+         ``skin``), then the front's recorded ``prompt_fingerprint`` set to
+         another value (its input signature is not today's) -> plan reason
+         "older_prompts", all four views, no ``skin``; the Build step renders
+         base_front, outfit_front, base_view x 3 = 5 calls and 1 model run.
+    Before the fix (commits dc433a57 + 5cbddd92 alone) the plan of [F1] /
+    [F2] listed all four views and every retry re-rendered front + skin +
+    three views (5 calls, [G3] even meshed the neutral front again).
 
 Fails on 136313bb: there is no app/core/base_skin.py, base_body has no "skin
 front" step, and ImageBackend.generate never writes ``final_prompt`` back.
@@ -399,8 +435,11 @@ def section_final_prompt():
 def section_load(config, paths, root):
     import shutil
     from PIL import Image
-    from app.core import base_body, db, expression_regen
+    from app.core import base_body, base_skin, db, expression_regen, figure_build, model3d
+    from app.core.improvements.base import Candidate, CandidateBusy
+    from app.core.improvements.types import base_refresh, subjects
     from app.core.model_refs import get_model_refs_dir
+    from app.core.timeutils import utc_now_iso
     from app.imagegen.base import BackendBusyError
     from app.models.character import save_character_profile
     from app.plugins.loader import discover_packages
@@ -419,42 +458,162 @@ def section_load(config, paths, root):
     check("[F] create Demo", save_character_profile("Demo", {"template": "human-default", "gender": "female",
                                                              "age": 30, "height": 168}, create_new=True))
     calls = []
+    skin = {"mode": "busy"}
+    models = []
+    asked = []
 
     def stub(character_name, *, output_stem, **kw):
         calls.append(kw.get("occasion"))
-        if kw.get("occasion") == "outfit_front":
+        if kw.get("occasion") == "outfit_front" and skin["mode"] == "busy":
             raise BackendBusyError("Fake is busy")
         path = output_stem.with_suffix(".png")
         Image.new("RGBA", (8, 8), (200, 100, 50, 255)).save(path)
-        path.with_suffix(".json").write_text(json.dumps(kw.get("sidecar_extra") or {}))
+        # The sidecar the real render writes: what the caller hands in + the creation stamp.
+        path.with_suffix(".json").write_text(json.dumps({**(kw.get("sidecar_extra") or {}),
+                                                         "created_at": utc_now_iso()}))
         return path
 
-    real = expression_regen.render_character_image
+    def landed_transfer(neutral_rgba, edit_rgba):
+        out = neutral_rgba.copy()
+        out.putpixel((0, 0), (1, 2, 3, 255))       # other bytes than the neutral front: the step landed
+        return out, {"kept_share": 1.0}
+
+    def fake_model(character_name, **kw):
+        models.append(kw)
+        return {"ok": True}
+
+    real = (expression_regen.render_character_image, base_skin.edit_to_frame, base_skin.transfer_detail,
+            base_body.generate_base_model, subjects.default_mesh_backend)
     expression_regen.render_character_image = stub
+    base_skin.edit_to_frame = lambda raw, pad, size: Image.new("RGBA", tuple(size), (0, 0, 0, 255))
+    base_skin.transfer_detail = landed_transfer
+    base_body.generate_base_model = fake_model
+    subjects.default_mesh_backend = lambda occasion, name: asked.append(occasion) or "fake"
+    improvement = base_refresh.BaseRefresh()
+    improvement._names = lambda params: ["Demo"]
+
+    def outcome():
+        record = json.loads(front.with_suffix(".json").read_text()).get("skin_step") or {}
+        return record.get("applied"), record.get("outcome")
+
+    def refresh(label, want_busy):
+        """The base_refresh improvement's apply (the automatic re-run)."""
+        calls.clear(), models.clear(), asked.clear()
+        plan = base_body.base_refresh_plan("Demo")
+        try:
+            improvement.apply(Candidate(f"base:Demo:{plan['signature']}:x", "Demo"), {}, "task")
+            got = "applied"
+        except CandidateBusy:
+            got = "CandidateBusy"
+        check(f"{label} improvement apply", got, "CandidateBusy" if want_busy else "applied")
+
+    def build(label, want_busy):
+        """The Build's / Run all's plain body step (the user's retry)."""
+        calls.clear(), models.clear()
+        try:
+            got = figure_build._run_plain_body("Demo", None, True) or "ok"
+        except BackendBusyError:
+            got = "BackendBusyError"
+        check(f"{label} Build plain body step", got, "BackendBusyError" if want_busy else "ok")
+
+    def view_stamps():
+        out = {}
+        for v in ("back", "left", "right"):
+            path = get_model_refs_dir("Demo") / f"tpose_{v}_{bsig}.png"
+            if path.is_file():
+                out[v] = (path.stat().st_mtime_ns, path.read_bytes())
+        return out
+
     try:
         bsig = base_body.base_signature("Demo")
         front = get_model_refs_dir("Demo") / f"tpose_{bsig}.png"
+        neutral = get_model_refs_dir("Demo") / f"tpose_neutral_{bsig}.png"
         try:
             base_body.generate_base_images("Demo", force=True, raise_load=True)
             check("[F1] raise_load: the load is raised", "nothing raised", "BackendBusyError")
         except BackendBusyError:
             check("[F1] raise_load: the load is raised", "BackendBusyError", "BackendBusyError")
         check("[F1] the front and the skin edit, no view after it", calls, ["base_front", "outfit_front"])
-        record = json.loads(front.with_suffix(".json").read_text()).get("skin_step") or {}
-        check("[F1] skin_step outcome", (record.get("applied"), record.get("outcome")), (False, "busy"))
+        check("[F1] skin_step outcome", outcome(), (False, "busy"))
+        check("[F1] the front is the neutral one (nothing published as skinned)",
+              front.read_bytes() == neutral.read_bytes())
         status = base_body.base_status("Demo")["front"]
         check("[F1] no failure record, not running", (status["failed"], status["running"]), (False, False))
+        check("[F1] the improvement is not blocked (load is no failure)", base_refresh._blocker("Demo"), ("", ""))
         plan = base_body.base_refresh_plan("Demo")
-        check("[F1] plan", (plan["views"], plan["model"], plan["reason"]), (list(base_body.BASE_VIEWS), True, "skin"))
+        check("[F1] plan: the step alone, then the missing views, then the model",
+              (plan.get("skin"), plan["views"], plan["model"], plan["reason"]),
+              (True, ["back", "left", "right"], True, "skin"))
+        steps = [step for step, _jobs in base_body.base_rebuild_steps("Demo", plan)]
+        check("[F1] steps: skin front first, no front render", (steps[:4], "view front" in steps),
+              (["skin front", "view back", "view left", "view right"], False))
+
+        print("[G] the retry runs the skin step alone")
+        refresh("[G1] busy:", want_busy=True)
+        check("[G1] busy: exactly the skin edit, no view render", calls, ["outfit_front"])
+        check("[G1] busy: no model run", len(models), 0)
+        check("[G1] busy: routes asked: the skin edit, the views, the model",
+              asked, ["outfit_front", "base_view", "mesh_humanoid", "rig_humanoid"])
+        check("[G1] busy: still due", (outcome(), base_body.base_refresh_plan("Demo")["reason"]),
+              ((False, "busy"), "skin"))
+        skin["mode"] = "land"
+        refresh("[G2] lands:", want_busy=False)
+        check("[G2] lands: the skin edit, then the three missing views (they edit the skinned front)", calls,
+              ["outfit_front", "base_view", "base_view", "base_view"])
+        check("[G2] lands: one model run", len(models), 1)
+        check("[G2] lands: applied, the front is no longer the neutral one",
+              (outcome(), front.read_bytes() != neutral.read_bytes()), ((True, "applied"), True))
+        check("[G2] lands: no longer skin", base_body.base_refresh_plan("Demo").get("skin"), None)
+
+        skin["mode"] = "busy"
         calls.clear()
         base_body.generate_base_images("Demo", force=True)
         check("[F2] no raise_load: five calls", calls,
               ["base_front", "outfit_front", "base_view", "base_view", "base_view"])
-        check("[F2] plan still skin", base_body.base_refresh_plan("Demo")["reason"], "skin")
+        plan = base_body.base_refresh_plan("Demo", missing=True)
+        check("[F2] plan: the step alone, every view current",
+              (plan.get("skin"), plan["views"], plan["model"], plan["reason"]), (True, [], True, "skin"))
+        cost = base_body.base_rebuild_cost("Demo", plan=plan)
+        stages = [(stage, 1) for stage in model3d.mesh_hub_stages("Demo", bsig)]
+        check("[F2] cost: skin 1 + the mesh stages, zero view jobs",
+              (cost["steps"], cost["hub_jobs"]), ([("skin front", 1)] + stages, 1 + len(stages)))
+        before = view_stamps()
+        check("[F2] three stored views", len(before), 3)
+        build("[G3] busy:", want_busy=True)
+        check("[G3] busy: exactly the skin edit, no view render", calls, ["outfit_front"])
+        check("[G3] busy: no model run (nothing meshed from the neutral front)", len(models), 0)
+        check("[G3] busy: still due", (outcome(), base_body.base_refresh_plan("Demo")["reason"]),
+              ((False, "busy"), "skin"))
+        skin["mode"] = "land"
+        build("[G4] lands:", want_busy=False)
+        check("[G4] lands: exactly the skin edit, no view render", calls, ["outfit_front"])
+        check("[G4] lands: one model run", len(models), 1)
+        check("[G4] lands: the stored views untouched", view_stamps() == before)
+        check("[G4] lands: applied", outcome(), (True, "applied"))
+        states = base_body.base_view_states("Demo")
+        check("[G4] lands: the other views stay current", [states[v]["state"] for v in ("back", "left", "right")],
+              ["current"] * 3)
+
+        skin["mode"] = "busy"
+        calls.clear()
+        base_body.generate_base_images("Demo", force=True)
+        check("[G5] busy again: plan skin", base_body.base_refresh_plan("Demo", missing=True).get("skin"), True)
         meta = json.loads(front.with_suffix(".json").read_text())
+        meta["prompt_fingerprint"] = "000000000000"    # the front's input signature is no longer today's
+        front.with_suffix(".json").write_text(json.dumps(meta))
+        plan = base_body.base_refresh_plan("Demo", missing=True)
+        check("[G5] stale front: every view again, no skin shortcut",
+              (plan.get("skin"), plan["views"], plan["reason"]), (None, list(base_body.BASE_VIEWS), "older_prompts"))
+        build("[G5] stale:", want_busy=False)
+        check("[G5] stale: the front, its skin edit, the three views", calls,
+              ["base_front", "outfit_front", "base_view", "base_view", "base_view"])
+        check("[G5] stale: one model run", len(models), 1)
+
+        meta = json.loads(front.with_suffix(".json").read_text())
+        check("[F3] busy front of [G5]: skin", base_body.base_refresh_plan("Demo")["reason"], "skin")
         Image.new("RGBA", (8, 8), (10, 20, 30, 255)).save(front)    # the step landed later
         check("[F3] landed: not skin", base_body.base_refresh_plan("Demo")["reason"] != "skin", True)
-        shutil.copyfile(get_model_refs_dir("Demo") / f"tpose_neutral_{bsig}.png", front)
+        shutil.copyfile(neutral, front)
         meta["skin_step"] = {**meta["skin_step"], "outcome": "failed"}
         front.with_suffix(".json").write_text(json.dumps(meta))
         check("[F3] failed: not skin", base_body.base_refresh_plan("Demo")["reason"] != "skin", True)
@@ -464,7 +623,8 @@ def section_load(config, paths, root):
         configure(False)
         check("[F3] switch off: not skin", base_body.base_refresh_plan("Demo")["reason"] != "skin", True)
     finally:
-        expression_regen.render_character_image = real
+        (expression_regen.render_character_image, base_skin.edit_to_frame, base_skin.transfer_detail,
+         base_body.generate_base_model, subjects.default_mesh_backend) = real
 
 
 def main():
