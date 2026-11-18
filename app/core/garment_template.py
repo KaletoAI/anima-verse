@@ -956,7 +956,7 @@ def _file_sha(path: str) -> str:
         return ""
 
 
-def texture_sources(character_name: str, item_id: str, item: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+def texture_sources(character_name: str, item_id: str) -> Dict[str, str]:
     """``{front, back, source}`` (A205 first): the template piece's own piece-only views
     (``garment_template_views``, ``source`` "piece_only"; a missing side takes the other side's view) — for a SHEER
     piece ONLY these, both of them, never the item picture ({} until they exist). Else the piece's newest cut-out (piece-only) views from the garment store
@@ -967,7 +967,7 @@ def texture_sources(character_name: str, item_id: str, item: Optional[Dict[str, 
     from app.core.garment_store import garments_dir
     from app.models.inventory import get_item, get_item_image_path
     own = {v: tv.accepted(character_name, item_id, v) for v in tv.VIEWS}
-    item = item if item is not None else get_item(item_id)
+    item = get_item(item_id)
     if tv.is_sheer(item):
         if own["front"] is None or own["back"] is None:
             return {}
@@ -1075,7 +1075,7 @@ def key_for(character_name: str, item_id: str, *, base_sha: str, lower: List[str
         return None, KIND_NOT_BUILT.format(kind=params["kind"]), {}
     if not base_sha:
         return None, NO_BASE, {}
-    sources = texture_sources(character_name, item_id, item)
+    sources = texture_sources(character_name, item_id)
     if not sources:
         from app.core import garment_template_views as tv
         if tv.is_sheer(item):
@@ -1238,7 +1238,7 @@ def piece_progress(character_name: str, item_id: str, *, profile: Optional[Dict[
                         lower=lower_layers(sets.own, item_id) if worn else [], item=item)
     record = drape["record"] or {}
     params = params_of(item)
-    sources = texture_sources(character_name, item_id, item)
+    sources = texture_sources(character_name, item_id)
     from app.core import garment_template_views as tv
     sheer_missing = tv.missing_views(character_name, item_id) if tv.is_sheer(item) else []
     # A176: only while the Build still has this piece's drape ahead of it (or runs it) — a Build that already
