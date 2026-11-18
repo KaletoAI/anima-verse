@@ -352,8 +352,9 @@ def _hair_step(character_name: str, profile: Dict[str, Any]) -> Optional[Step]:
     return _chain_step(character_name, "hair", str(item["id"]), label, profile)
 
 
-#: The label of a template drape step (Ruling A138) and its CPU estimate (measured A142: 40–50 s wall on Kira with the pose shapes).
-TEMPLATE_LABEL = "Template drape · {name} (CPU ~45 s, 0 hub jobs)"
+#: The label of a template drape step (Ruling A138) with its time: the piece's last judged drape on this character
+#: (``garment_template.estimate_s``), else ``CPU_ESTIMATE_S`` (measured A142: 40–50 s wall on Kira with the pose shapes).
+TEMPLATE_LABEL = "Template drape · {name} (CPU ~{s} s, 0 hub jobs)"
 
 
 def _template_step(character_name: str, item_id: str, delivered, profile: Dict[str, Any]) -> Optional[Step]:
@@ -366,7 +367,9 @@ def _template_step(character_name: str, item_id: str, delivered, profile: Dict[s
     sets = worn_sets(character_name, pieces=dict(delivered.pieces), profile=profile)
     state = garment_template.drape_state(character_name, item_id, base_sha=base[1] if base else "",
                                          lower=garment_template.lower_layers(sets.own, item_id))
-    label = TEMPLATE_LABEL.format(name=_item_name(item_id))
+    if state["state"] not in ("missing", "failed"):
+        return None
+    label = TEMPLATE_LABEL.format(name=_item_name(item_id), s=garment_template.estimate_s(character_name, item_id))
     if state["state"] == "missing":
         return Step("template", label, 0, item_id)
     if state["state"] == "failed":
@@ -2177,7 +2180,11 @@ def _template_row(character_name: str, item_id: str, item: Dict[str, Any], wante
     out = {"params": garment_template.params_of(item), "source": stored.get("source") or "",
            "updated_at": stored.get("updated_at") or "", "built": list(garment_template.BUILT_KINDS),
            "state": drape["state"], "reason": drape["reason"], "built_at": record.get("created_at") or "",
-           "metrics": {"wall_s": metrics.get("wall_total_s"), "cpu_s": (metrics.get("drape") or {}).get("cpu_s"),
+           "metrics": {"wall_s": garment_template.work_wall_s(metrics),
+                       # over the time budget: reported as "slow", never a refusal (2026-11-18)
+                       "slow": any(r.get("check") == "build_wall_s" and not r.get("ok")
+                                   for r in record.get("rows") or []),
+                       "cpu_s": (metrics.get("drape") or {}).get("cpu_s"),
                        "stretch_max": (metrics.get("drape") or {}).get("stretch_max"),
                        "coverage": (metrics.get("bake") or {}).get("coverage"),
                        "texture": (record.get("texture") or {}).get("source") or "",

@@ -32,8 +32,16 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
 [5] drape_state in a temp folder: no parameters → blocked with NEEDS_PARAMS; kind "trousers" → blocked with
     KIND_NOT_BUILT; parameters + picture → missing (NOT_DRAPED); a failure record of that key → failed with
     DRAPE_FAILED; a GLB + accepted record → ready.
-[6] judge_build: wall 60.0 passes (gate is <= 60 s, Ruling A138), 60.01 fails; drape CPU 126 s is reported and
-    NOT a gate; poke at rest is a gate, at sit not.
+    A record that failed ONLY on ``build_wall_s`` (written while the wall still gated; its stretch row passed) is no
+    refusal any more → missing (NOT_DRAPED, due again); one that failed ``build_wall_s`` AND ``stretch_max`` →
+    failed. ``estimate_s``: no judged record → CPU_ESTIMATE_S 45; the failure record of the user's case (wall_total_s
+    77.34, slot_wait_s 25.0, no renders, rows present) → round(77.34 - 25.0) = round(52.34) = 52.
+[6] judge_build: wall 60.0 is within the budget, 60.01 is over it — reported (ok False), NEVER a gate since
+    2026-11-18; drape CPU 126 s is reported and NOT a gate; poke at rest is a gate, at sit not. The user's case
+    (wall_total_s 77.34 of which slot_wait_s 25.0 was the wait for a free Blender slot, quality rows passing) →
+    build_wall_s 52.34, within the budget, and no gate row fails. ``run_drape`` with a stubbed runner whose two runs
+    (stretch 1.6 > RETRY_STRETCH 1.5 starts the retry; script_wall_s 10 ≤ 30 leaves room) waited 3.0 s and 4.5 s for
+    a slot → ``data["slot_wait_s"]`` 7.5; the second run's stretch 1.2 and rest poke 0 pass → ok True, outcome "ok".
 [7] prepare_view: a 40 x 40 picture, white background, a blue 20 x 20 block (rows 5-24, cols 10-29), under it a
     4 x 20 skin strip (rows 25-26 lit (224, 172, 140), rows 27-28 shaded (70, 40, 30)) and a blue 2 x 2 island at
     rows 35-36, cols 2-3: the white border is cut (alpha 0), blue kept; the skin strip is 80 / 484 = 16.5 % of the
@@ -232,6 +240,20 @@ try:
     garment_store.write_record(gt.failed_path("K", "i1", st["tsig"]), {"error": "stretch_max 2.1"})
     st2 = gt.drape_state("K", "i1", base_sha="s", lower=[], item=piece)
     check("[5] failed -> DRAPE_FAILED", st2["state"] == "failed" and "stretch_max 2.1" in st2["reason"])
+    check("[5] estimate without a judged record -> 45", gt.estimate_s("K", "i1") == gt.CPU_ESTIMATE_S == 45)
+    wall_row = {"check": "build_wall_s", "value": 77.34, "limit": 60.0, "ok": False, "gate": True}
+    stretch_ok = {"check": "stretch_max", "value": 1.1, "limit": 1.3, "ok": True, "gate": True}
+    garment_store.write_record(gt.failed_path("K", "i1", st["tsig"]), {
+        "error": "build_wall_s 77.34 (limit 60.0)", "outcome": "rejected", "rows": [wall_row, stretch_ok],
+        "metrics": {"wall_total_s": 77.34, "slot_wait_s": 25.0, "render_wall_s": 0.0}})
+    st3 = gt.drape_state("K", "i1", base_sha="s", lower=[], item=piece)
+    check("[5] failed only on the wall -> due again", st3["state"] == "missing" and st3["reason"] == gt.NOT_DRAPED,
+          st3["state"])
+    check("[5] estimate from the judged record -> 52", gt.estimate_s("K", "i1") == 52, gt.estimate_s("K", "i1"))
+    garment_store.write_record(gt.failed_path("K", "i1", st["tsig"]), {
+        "error": "x", "rows": [wall_row, {**stretch_ok, "value": 4.768, "ok": False}]})
+    check("[5] wall + stretch -> still failed",
+          gt.drape_state("K", "i1", base_sha="s", lower=[], item=piece)["state"] == "failed")
     glb = gt.drape_path("K", "i1", st["tsig"])
     glb.write_bytes(b"glb")
     garment_store.write_record(glb.with_suffix(".json"), {"accepted": True})
@@ -307,8 +329,45 @@ finally:
 rows = gt.judge_build({"wall_total_s": 60.0, "drape": {"cpu_s": 126.0}, "draped": {"rest": {"poke_share": 0.0},
                                                                                  "sit": {"poke_share": 0.02}}})
 by = {r["check"]: r for r in rows}
-check("[6] wall 60.0 passes", by["build_wall_s"]["ok"])
-check("[6] wall 60.01 fails", not {r["check"]: r for r in gt.judge_build({"wall_total_s": 60.01})}["build_wall_s"]["ok"])
+check("[6] wall 60.0 within the budget", by["build_wall_s"]["ok"])
+over = {r["check"]: r for r in gt.judge_build({"wall_total_s": 60.01})}["build_wall_s"]
+check("[6] wall 60.01 over it, reported, no gate", not over["ok"] and not over["gate"], over)
+user = gt.judge_build({"wall_total_s": 77.34, "slot_wait_s": 25.0, "render_wall_s": 0.0,
+                       "drape": {"cpu_s": 40.0, "pin_drift_mm": 1.0, "stretch_max": 1.2},
+                       "draped": {"rest": {"poke_share": 0.001}}})
+ub = {r["check"]: r for r in user}
+check("[6] user's case: 52.34 s of work, nothing gates", close(ub["build_wall_s"]["value"], 52.34)
+      and ub["build_wall_s"]["ok"] and not [r for r in user if r["gate"] and not r["ok"]], user)
+from app.blender import runner as _runner  # noqa: E402
+_runs = []
+
+
+def _fake_run(script, **kw):
+    _runs.append(kw["params"]["fabric"]["quality"])
+    first = len(_runs) == 1
+    return {"ok": True, "outcome": "ok", "error": "", "log_tail": "", "outputs": {"glb": "/x.glb"},
+            "slot_wait_s": 3.0 if first else 4.5,
+            "data": {"script_wall_s": 10.0, "render_wall_s": 0.0,
+                     "drape": {"cpu_s": 9.0, "pin_drift_mm": 0.5, "stretch_max": 1.6 if first else 1.2},
+                     "draped": {"rest": {"poke_share": 0.0}}}}
+
+
+_saved = (_runner.run, gt.measure_body, gt.panel_spec, gt.prepare_view)
+_runner.run = _fake_run
+gt.measure_body = lambda glb: {}
+gt.panel_spec = lambda params, meas: {"outline": {}, "row_y": [0.0], "measure": {}}
+gt.prepare_view = lambda src, dst, garment_only=True: {}
+_body = Path(tempfile.mkdtemp(prefix="smoke-template-run-"))
+try:
+    (_body / "b.glb").write_bytes(b"glb")
+    res = gt.run_drape(_body / "b.glb", gt.validate_params({"kind": "skirt"})[0], {"front": "f", "back": "b"},
+                       item_id="i1", out_dir=_body / "out")
+finally:
+    _runner.run, gt.measure_body, gt.panel_spec, gt.prepare_view = _saved
+    shutil.rmtree(_body, ignore_errors=True)
+check("[6] run_drape: two runs, their slot waits summed (7.5)", len(_runs) == 2
+      and close(res["data"]["slot_wait_s"], 7.5), (_runs, res["data"].get("slot_wait_s")))
+check("[6] run_drape: retry passes -> ok", res["ok"] and res["outcome"] == "ok", res["error"])
 check("[6] CPU reported, no gate", not by["drape_cpu_s"]["ok"] and not by["drape_cpu_s"]["gate"])
 check("[6] rest poke gates, sit not", by["poke_share[rest]"]["gate"] and not by["poke_share[sit]"]["gate"])
 

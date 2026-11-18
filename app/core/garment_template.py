@@ -148,8 +148,11 @@ THRESHOLDS = {
     "stretch_max": 1.3,           # longest edge / its pre-drape length, after the drape
     "bake_coverage": 0.85,        # template texels that received a view colour
 }
-#: P1 gates on WALL time (Ruling A138: a Build is waited for in wall seconds; the spike's CPU sum
-#: counts every Blender thread). Same 60 s budget, hand-derived in ``scripts/smoke_garment_template.py``.
+#: The wall-time budget of one drape (Ruling A138: a Build is waited for in wall seconds; the spike's CPU sum
+#: counts every Blender thread). Same 60 s, hand-derived in ``scripts/smoke_garment_template.py``. Since 2026-11-18
+#: (owner) it is a REPORTED row, never a gate: a drape that passes every quality row is accepted however long it
+#: took ("slow" in the Figure tab), and the time counted is the work alone — the wait for a free Blender slot is
+#: taken out (``work_wall_s``). It still bounds the stretch retry (``run_drape``: only when the first run left room).
 BUILD_WALL_S = 60.0
 #: A204: the wall budget's factor per fabric (a fabric not named keeps 1.0, so its rows stay as before). The sheer
 #: cloth runs a softer, lighter solve: measured on Gelina's skirt 59.3 / 64.5 s against flowing's 57.8 s.
@@ -175,7 +178,7 @@ ARM_SHAPE_POSES = ("arms_down", "arms_forward", "arms_up")
 #: arm pose is draped for it (measured A142: every extra pose drape costs 6–10 s wall).
 DRESS_ARM_SHAPE_POSES = ("arms_down",)
 UPPER_LEG_POSES = ("sit",)
-#: Ruling A142 wall budget (60 s per piece): a bodice drapes BODICE_FRAMES frames, an arm shape ARM_SHAPE_FRAMES (the
+#: Ruling A142 wall budget (60 s per piece, reported since 2026-11-18, no longer a gate): a bodice drapes BODICE_FRAMES frames, an arm shape ARM_SHAPE_FRAMES (the
 #: arm shapes settle from the skinned pose and move 14–29 mm at p90; measured A142 with 40 frames: 12–15 s wall each,
 #: a long-sleeved jacket was 66 s with 25 frames). Ruling A144: 30 / 12 / 16 frames and the arm poses collide with a
 #: skinned rest collider (no remesh per pose): the blazer 70.7 -> 44.6 s, its pose numbers unchanged (stretch p99
@@ -1007,11 +1010,22 @@ def key_for(character_name: str, item_id: str, *, base_sha: str, lower: List[str
     return tsig(params, base_sha=base_sha, texture_sha=tex, lower=lower + under), None, sources
 
 
+def refused_only_by_time(failed: Dict[str, Any]) -> bool:
+    """Whether a failure record's ONLY failed gate row is ``build_wall_s`` — written while the wall time still
+    gated (before 2026-11-18). Such a drape passed every quality row, so it is no refusal now: ``drape_state``
+    treats its key as not draped yet (its GLB was not kept), the next Build — automatic too — drapes it again, and
+    the record goes when that drape is accepted or is overwritten by a real verdict. No ``TEMPLATE_VERSION`` bump:
+    the same parameters drape the same, and a bump would re-drape every READY piece of every character as well."""
+    bad = [r for r in failed.get("rows") or [] if isinstance(r, dict) and r.get("gate") and not r.get("ok")]
+    return bool(bad) and all(r.get("check") == "build_wall_s" for r in bad)
+
+
 def drape_state(character_name: str, item_id: str, *, base_sha: str, lower: List[str],
                 item: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """``{state, reason, tsig, path, record}`` — ``ready`` (the drape GLB of the current key exists
     and its record passed), ``failed`` (the current key failed; reason = ``DRAPE_FAILED``),
-    ``missing`` (``NOT_DRAPED``) or ``blocked`` (no key: reason from ``key_for``). Read-only."""
+    ``missing`` (``NOT_DRAPED``; also a failure record ``refused_only_by_time``) or ``blocked`` (no key: reason
+    from ``key_for``). Read-only."""
     from app.core.garment_store import read_record
     sig, reason, _sources = key_for(character_name, item_id, base_sha=base_sha, lower=lower, item=item)
     if sig is None:
@@ -1021,7 +1035,7 @@ def drape_state(character_name: str, item_id: str, *, base_sha: str, lower: List
     if path.is_file() and record.get("accepted") is True:
         return {"state": "ready", "reason": "", "tsig": sig, "path": path, "record": record}
     failed = read_record(failed_path(character_name, item_id, sig))
-    if failed:
+    if failed and not refused_only_by_time(failed):
         return {"state": "failed", "reason": DRAPE_FAILED.format(error=failed.get("error") or "?"), "tsig": sig,
                 "path": None, "record": failed}
     return {"state": "missing", "reason": NOT_DRAPED, "tsig": sig, "path": None, "record": {}}
@@ -1156,7 +1170,7 @@ def piece_progress(character_name: str, item_id: str, *, profile: Optional[Dict[
         {"id": "drape", "label": "Drape (CPU)",
          "status": {"ready": "done", "failed": "failed", "blocked": "skipped"}.get(state, "due"),
          "detail": (live["label"] if live else WAITING_FOR_STEP) if state == "running" else drape["reason"] or "",
-         "numbers": {k: v for k, v in (("wall_s", metrics.get("wall_total_s")),
+         "numbers": {k: v for k, v in (("wall_s", work_wall_s(metrics)),
                                        ("stretch_max", (metrics.get("drape") or {}).get("stretch_max")),
                                        ("coverage", (metrics.get("bake") or {}).get("coverage"))) if v is not None}},
     ]
@@ -1192,20 +1206,31 @@ def build_args(params: Dict[str, Any], spec: Dict[str, Any], *, item_id: str, re
             "lower_shapes": list(lower_shapes or []), "lower_offsets": list(lower_offsets or [])}
 
 
+def work_wall_s(data: Dict[str, Any]) -> Optional[float]:
+    """The wall seconds a drape WORKED (``data`` of ``run_drape``): ``wall_total_s`` less the proof runs' sheet
+    renders (a Build never renders, Ruling A142) and less the waits for a free Blender slot (``slot_wait_s``, the
+    queue, not the work). None without ``wall_total_s``."""
+    if data.get("wall_total_s") is None:
+        return None
+    return round(float(data["wall_total_s"]) - float(data.get("render_wall_s") or 0.0)
+                 - float(data.get("slot_wait_s") or 0.0), 2)
+
+
 def judge_build(data: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Pass rows of one build result (``data`` of the script): wall time (the gate), pin drift,
-    stretch, rest poke and bake coverage — CPU is reported, never gated (Ruling A138)."""
+    """Pass rows of one build result (``data`` of the script): pin drift, stretch and rest poke gate; the work
+    time (``build_wall_s``, ``work_wall_s`` against ``BUILD_WALL_S`` — over it the Figure tab says "slow"), CPU
+    and bake coverage are reported, never gated (Ruling A138; the wall row since 2026-11-18)."""
     rows: List[Dict[str, Any]] = []
 
     def row(name, value, limit, ok, gate=True):
         rows.append({"check": name, "value": value, "limit": limit, "ok": bool(ok), "gate": gate})
 
     drape = data.get("drape") or {}
-    if "wall_total_s" in data:
-        # a Build never renders; the proof runs' sheet renders are taken out (Ruling A142)
-        wall = round(data["wall_total_s"] - float(data.get("render_wall_s") or 0.0), 2)
+    wall = work_wall_s(data)
+    if wall is not None:
+        # reported, never a gate (2026-11-18); the limit shown is the fabric's (A204 ``wall_limit``)
         limit = float(data.get("wall_limit_s") or BUILD_WALL_S)
-        row("build_wall_s", wall, limit, wall <= limit)
+        row("build_wall_s", wall, limit, wall <= limit, gate=False)
     if "cpu_s" in drape:
         row("drape_cpu_s", drape["cpu_s"], THRESHOLDS["drape_cpu_s"], drape["cpu_s"] < THRESHOLDS["drape_cpu_s"],
             gate=False)
@@ -1343,6 +1368,7 @@ def _run_drape_once(body_glb: Path, params: Dict[str, Any], sources: Dict[str, s
     data: Dict[str, Any] = {}
     res: Dict[str, Any] = {}
     first: Optional[Tuple[Dict[str, Any], Dict[str, Any]]] = None
+    slot_wait = 0.0       # the waits for a free Blender slot in ``wall_total_s`` (``work_wall_s`` takes them out)
     for scale in (1.0, 2.0):
         inputs = {"body": Path(body_glb), "front": views["front"], "back": views["back"]}
         for i, (path, _payload) in enumerate(lower or []):
@@ -1356,6 +1382,7 @@ def _run_drape_once(body_glb: Path, params: Dict[str, Any], sources: Dict[str, s
             _live_stage(live, "blender", file=str(progress_file), attempt=1 if scale == 1.0 else 2)
         res = runner.run(SCRIPT, inputs=inputs, params=args,
                          out_dir=Path(out_dir), timeout_s=timeout_s)
+        slot_wait += float(res.get("slot_wait_s") or 0.0)
         data = dict(res.get("data") or {})
         if not res.get("ok"):
             if first is not None:          # the retry failed (e.g. its timeout): the first drape is judged
@@ -1376,6 +1403,7 @@ def _run_drape_once(body_glb: Path, params: Dict[str, Any], sources: Dict[str, s
     if wall_limit(params) != BUILD_WALL_S:
         data["wall_limit_s"] = wall_limit(params)
     data["render_wall_s"] = float(data.get("render_wall_s") or 0.0)
+    data["slot_wait_s"] = round(slot_wait, 2)
     if not res.get("ok"):
         return {"ok": False, "error": str(res.get("error") or "blender failed"), "data": data, "glb": None,
                 "rows": [], "outcome": res.get("outcome") or oc.CRASHED, "log_tail": res.get("log_tail") or ""}
@@ -1524,6 +1552,30 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
     if left_due and state["state"] == "missing":
         state = {**state, "reason": left_due, "outcome": result["outcome"]}
     return state
+
+
+def estimate_s(character_name: str, item_id: str) -> int:
+    """The wall seconds a drape of ``item_id`` on ``character_name`` will likely work: the ``work_wall_s`` of its
+    newest JUDGED drape record (accepted or refused, any key — new parameters drape in about the same time; a run
+    that ended without a verdict has no rows and says nothing), else ``CPU_ESTIMATE_S``. One listing of the
+    character's template folder and the records read newest first until one has a time. Never raises."""
+    from app.core.garment_store import read_record
+    folder = templates_dir(character_name)
+    name = re.compile(re.escape(item_id) + r"_[0-9a-f]{12}\.json")
+    found = []
+    for directory in (folder, folder / "failed"):
+        try:
+            for path in directory.iterdir():
+                if name.fullmatch(path.name):
+                    found.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    for _stamp, path in sorted(found, reverse=True):
+        record = read_record(path)
+        wall = work_wall_s(record.get("metrics") or {}) if record.get("rows") else None
+        if wall:
+            return max(1, int(round(wall)))
+    return CPU_ESTIMATE_S
 
 
 def clear_failure(character_name: str, item_id: str) -> int:

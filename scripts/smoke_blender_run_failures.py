@@ -56,6 +56,11 @@ stubbed monotonic clock starting at t = 1000:
      → still held, still one warning. ``ok`` → cleared: may_try True at once, held() False.
 [17] ``rejected`` and ``crashed`` clear a deferred key; ``None`` and ``cancelled`` leave it deferred (until 1300
      for a ``timeout`` at 1000); one key's deferral does not touch another key.
+[18] ``slot_wait_s`` (2026-11-18: the template drape takes the queue out of its work time): a run that finds a free
+     slot reports a wait under one poll (SLOT_POLL_S 0.25 s); with both slots of the pinned limit 2 held by this
+     process and released by a timer after 1.0 s, the run waits until the first poll after the release → 1.0 ≤
+     slot_wait_s < 1.0 + 2 polls + 0.5 s of scheduling slack, and ``seconds`` (the whole call) ≥ slot_wait_s.
+     Before the field existed ``slot_wait_s`` was absent (read as -1 here) and both checks fail.
 """
 import json
 import logging
@@ -64,6 +69,7 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 import types
 from pathlib import Path
 from unittest.mock import patch
@@ -365,6 +371,20 @@ def main() -> int:
             check(bool(heads) and all(HEAD.match(h) and HEAD.match(h).group("pid") == str(os.getpid())
                                       and HEAD.match(h).group("script") == "meshopt" for h in heads),
                   f"[15] every header in the format ({heads[0] if heads else ''!r})")
+
+            # [18]
+            res = safe_run(inputs={"model": model}, timeout_s=30)
+            check(res.get("ok") is True and 0.0 <= res.get("slot_wait_s", -1) < runner.SLOT_POLL_S,
+                  f"[18] a free slot: slot_wait_s {res.get('slot_wait_s')!r} < {runner.SLOT_POLL_S}")
+            held = [runner._try_slots(tmp / "slots", 2) for _ in range(2)]
+            release = threading.Timer(1.0, lambda: [os.close(fd) for fd in held if fd is not None])
+            release.start()
+            res = safe_run(inputs={"model": model}, timeout_s=30)
+            release.join()
+            wait = res.get("slot_wait_s", -1)
+            check(None not in held and res.get("ok") is True and 1.0 <= wait < 1.0 + 2 * runner.SLOT_POLL_S + 0.5
+                  and res["seconds"] >= wait,
+                  f"[18] both slots held 1 s: slot_wait_s {wait!r}, seconds {res.get('seconds')!r}")
         budget_cases()
     finally:
         runner.logger.removeHandler(cap)

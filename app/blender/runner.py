@@ -715,10 +715,12 @@ _INTERRUPT_SIGNALS = frozenset({9, 15, 2, 1})  # SIGKILL, SIGTERM, SIGINT, SIGHU
 
 
 def _result(outcome_: str, error: str = "", *, data: Optional[Dict[str, Any]] = None,
-            outputs: Optional[Dict[str, str]] = None, seconds: float = 0.0, tail: str = "") -> Dict[str, Any]:
+            outputs: Optional[Dict[str, str]] = None, seconds: float = 0.0, tail: str = "",
+            slot_wait_s: float = 0.0) -> Dict[str, Any]:
     from app.blender import outcome as oc
     return {"ok": outcome_ == oc.OK, "outcome": outcome_, "error": error, "data": data or {},
-            "outputs": outputs or {}, "seconds": seconds, "log_tail": "" if outcome_ == oc.OK else tail}
+            "outputs": outputs or {}, "seconds": seconds, "slot_wait_s": slot_wait_s,
+            "log_tail": "" if outcome_ == oc.OK else tail}
 
 
 def run(script: str, *, inputs: Optional[Dict[str, Path]] = None,
@@ -734,7 +736,10 @@ def run(script: str, *, inputs: Optional[Dict[str, Path]] = None,
     the moved files. Without it a produced file would die with the job dir.
 
     Returns ``{"ok", "outcome", "error", "data", "outputs", "seconds",
-    "log_tail"}``. ``outcome`` is one of ``app.blender.outcome.ALL`` — what a
+    "slot_wait_s", "log_tail"}``. ``seconds`` is the whole call, the wait for a
+    free Blender slot included; ``slot_wait_s`` is that wait alone (0 when a
+    slot was free at once or the run ended before asking for one), so
+    ``seconds - slot_wait_s`` is the run's own time. ``outcome`` is one of ``app.blender.outcome.ALL`` — what a
     caller decides by (``ok`` is ``outcome == OK``): ``UNAVAILABLE`` (disabled,
     not found, not startable), ``TIMEOUT``, ``INTERRUPTED`` (killed by a stop
     signal), ``REJECTED`` (the script reported failure itself) or ``CRASHED``
@@ -759,7 +764,7 @@ def run(script: str, *, inputs: Optional[Dict[str, Path]] = None,
     _sweep_once_in_background()
     job = Path(tempfile.mkdtemp(prefix=JOB_DIR_PREFIX))
     started = time.time()
-    ran: Dict[str, Any] = {"output": "", "exit": None}
+    ran: Dict[str, Any] = {"output": "", "exit": None, "slot_wait_s": 0.0}
 
     def done(outcome_: str, error: str = "", **fields: Any) -> Dict[str, Any]:
         """The run's result, its block in the Blender log and its one main.log line."""
@@ -772,7 +777,8 @@ def run(script: str, *, inputs: Optional[Dict[str, Path]] = None,
         else:
             log = logger.error if outcome_ == oc.CRASHED else logger.warning
             log("Blender %s: %s — %s (output in %s)", script, outcome_, error, LOG_FILE)
-        return _result(outcome_, error, seconds=seconds, tail=log_tail(output), **fields)
+        return _result(outcome_, error, seconds=seconds, tail=log_tail(output),
+                       slot_wait_s=round(ran["slot_wait_s"], 2), **fields)
 
     try:
         try:
@@ -828,7 +834,9 @@ def run(script: str, *, inputs: Optional[Dict[str, Path]] = None,
         try:
             # The timeout covers Blender itself, not the wait for a slot.
             from app.core import cpu_progress
+            asked = time.monotonic()
             with blender_slot(script), cpu_progress.attach(f"blender:{script}", progress_file):
+                ran["slot_wait_s"] = time.monotonic() - asked   # the slot is held from here on
                 proc = _spawn(cmd, timeout, env)
         except subprocess.TimeoutExpired as exc:
             ran["output"] = _output(exc.stdout, exc.stderr)
