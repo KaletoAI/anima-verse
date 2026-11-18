@@ -37,11 +37,13 @@ the base model is model3d/BSIG.glb with bytes b"model-1".
     has no image step since the hair edit chain is gone):
       image, step worn, view front          -> garments/images/H_F_worn_front.png
       image, worn, back, attempt 2          -> garments/images/H_F_worn_back.try2.png
+      image, worn, left (A185 side view)    -> garments/images/H_F_worn_left.png
       raw / prepared / low                   -> garments/{raw,prepared,low}/H_F.glb
       fit                                    -> garments/H_F.glb
     "../x" as item id -> ValueError; "a/b" -> ValueError; fsig "xyz" ->
     ValueError; part "bogus" -> ValueError; image with step "mesh" (no image
-    step) or view "left" -> ValueError.
+    step) or view "top" (not in IMAGE_VIEWS = front, back, left, right — the
+    side views are image views since A185, 8359889e9) -> ValueError.
 [3] read_record/write_record: round trip of {"accepted": True, "n": 1}; no
     "*.tmp" left behind; read of a missing / broken file -> {}.
 [4] accepted_fit with SHA = sha256(b"model-2"), current fsig F, older fsigs
@@ -221,6 +223,8 @@ def main() -> int:
               gdir / "images" / f"{hid}_{fsig}_worn_front.png")
         check("attempt", gs.garment_path("Demo", hid, fsig, "image", step="worn", view="back", attempt=2),
               gdir / "images" / f"{hid}_{fsig}_worn_back.try2.png")
+        check("side view (A185)", gs.garment_path("Demo", hid, fsig, "image", step="worn", view="left"),
+              gdir / "images" / f"{hid}_{fsig}_worn_left.png")
         for part in ("raw", "prepared", "low"):
             check(part, gs.garment_path("Demo", hid, fsig, part), gdir / part / f"{hid}_{fsig}.glb")
         check("fit", gs.garment_path("Demo", hid, fsig, "fit"), gdir / f"{hid}_{fsig}.glb")
@@ -229,7 +233,7 @@ def main() -> int:
         raises("bad fsig", lambda: gs.garment_path("Demo", hid, "xyz", "fit"))
         raises("bad part", lambda: gs.garment_path("Demo", hid, fsig, "bogus"))
         raises("non-image step", lambda: gs.garment_path("Demo", hid, fsig, "image", step="mesh", view="front"))
-        raises("bad view", lambda: gs.garment_path("Demo", hid, fsig, "image", step="worn", view="left"))
+        raises("bad view", lambda: gs.garment_path("Demo", hid, fsig, "image", step="worn", view="top"))
 
         print("[3] records")
         rec = gdir / "probe.json"

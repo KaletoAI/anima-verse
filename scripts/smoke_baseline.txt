@@ -12,7 +12,6 @@ smoke_garment_layering	STALE: assembled coat entry ("over" key, sha) changed wit
 smoke_garment_outfit	STALE: reads Figure.in_body_own and the interim render step, both gone with A119 (0601436ce)
 smoke_garment_refit_source	STALE: same dress fixture as smoke_garment_chain, refused at fit
 smoke_garment_routes	STALE: hair payload and footwear gate limits changed since the smoke was written
-smoke_garment_store	STALE: "bad view" no longer raises: the view set grew (A185 garment_set GARMENT_VIEWS, 91f4908bf)
 smoke_garment_wardrobe_routes	STALE: clothing gate limits and the "no base model" status text changed
 smoke_hair_strands_graft	STALE: [4] the build's sidecar no longer carries the strand attributes record the smoke expects; not re-derived
 smoke_image_routing_migration	DECISION: since d4aa4edd8 _seed_default_mesh_backends appends quadruped-local to EVERY existing backend list on every load (its docstring says so), so C3 gets (True,2)/(True,2)/(True,12)/[quadruped-local] where it pins (False,1)/(False,1)/(True,11)/[] — question: may an admin who emptied the list or removed quadruped-local keep it that way (then: a one-time migration with a marker), or is quadruped-local mandatory?
