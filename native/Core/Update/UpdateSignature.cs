@@ -15,7 +15,7 @@ public static class UpdateSignature
     // ================= RELEASE SIGNING PUBLIC KEY =================
     // Base64 SubjectPublicKeyInfo (DER) of the ECDSA P-256 release key, exactly as printed by
     // native/tools/make_update_signing_key.py. Empty = this build verifies nothing and therefore never updates.
-    public const string PublicKeySpki = "";
+    public const string PublicKeySpki = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEY2Uh6If/xNJE0lJHCznWizUvHOd2vgqg54Wguc8pCf9Moqa9MK0ZYr+OOfPc5d0aU+ISO/2jRe/EY33ymyvYnw==";
     // ==============================================================
 
     /// <summary>Largest accepted signature file; a DER ECDSA P-256 signature is at most 72 bytes.</summary>
