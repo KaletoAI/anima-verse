@@ -21,8 +21,13 @@ the whole ``outfit_piece`` → change ONE key → ``update_item`` with the whole
 [1] final length_m == 0.8          [2] final piece_views == {"front": "worn"}
 [3] T2 finished after T1 (T2 waited for the item lock; with no lock T2 finishes inside T1's 0.5 s hold)
 
+Second race, same shape, with a whole-item writer: T1 = ``inventory.set_item_image_meta(item, {"backend": "x"})``
+held 0.5 s after its ``_load_items`` read (the pre-fix writer saved that WHOLE snapshot back), T2 =
+``set_params(item, length_m 0.9)``.
+[4] final length_m == 0.9          [5] final image_meta == {"backend": "x"}          [6] T2 finished after T1
+
 Fails on the pre-fix commit 104171a41 (no item lock: [1] reads 0.6 and [3] is False — T1 locked per character,
-set_params not at all).
+set_params not at all; [4] reads the stale value and [6] is False — set_item_image_meta took no lock).
 """
 import sys
 import tempfile
@@ -98,6 +103,47 @@ params = gt.params_of(inventory.get_item(iid)) or {}
 check("[1] template length kept at 0.8", params.get("length_m") == 0.8, str(params.get("length_m")))
 check("[2] piece_views stored", final.get("piece_views") == {"front": "worn"}, str(final.get("piece_views")))
 check("[3] T2 waited for T1", done.get("T2", 0) > done.get("T1", 1), str(done))
+
+# --- second race: set_item_image_meta vs set_params
+_real_load = inventory._load_items
+t1b_read = threading.Event()
+done.clear()
+
+
+def _slow_load(*a, **kw):
+    items = _real_load(*a, **kw)
+    if threading.current_thread().name == "T1b" and not t1b_read.is_set():
+        t1b_read.set()
+        time.sleep(0.5)
+    return items
+
+
+inventory._load_items = _slow_load
+
+
+def t1b():
+    inventory.set_item_image_meta(iid, {"backend": "x"})
+    done["T1"] = time.monotonic()
+
+
+def t2b():
+    gt.set_params(iid, {"kind": "top", "length_m": 0.9, "sleeves": "short"})
+    done["T2"] = time.monotonic()
+
+
+a = threading.Thread(target=t1b, name="T1b")
+a.start()
+t1b_read.wait(5)
+b = threading.Thread(target=t2b, name="T2b")
+b.start()
+a.join(10)
+b.join(10)
+inventory._load_items = _real_load
+item = inventory.get_item(iid)
+params = gt.params_of(item) or {}
+check("[4] template length kept at 0.9", params.get("length_m") == 0.9, str(params.get("length_m")))
+check("[5] image_meta stored", item.get("image_meta") == {"backend": "x"}, str(item.get("image_meta")))
+check("[6] T2 waited for T1", done.get("T2", 0) > done.get("T1", 1), str(done))
 
 print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
 sys.exit(1 if FAILS else 0)

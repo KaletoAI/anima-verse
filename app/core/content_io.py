@@ -345,9 +345,11 @@ def _persist_imported_item(
     item.setdefault("created_at", utc_now_iso())
 
     if target == "shared":
-        shared = _load_shared_items()
-        shared.append(item)
-        _save_shared_items(shared)
+        from app.models.inventory import item_write_lock
+        with item_write_lock():  # the library is one file, rewritten whole
+            shared = _load_shared_items()
+            shared.append(item)
+            _save_shared_items(shared)
     else:
         # Single-item UPSERT — _save_items iterates rows and upserts each.
         _save_items([item])

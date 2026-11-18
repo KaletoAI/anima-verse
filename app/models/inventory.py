@@ -11,6 +11,7 @@ Storage:
 - Inventories: world.db:inventory_items, equipped_pieces, equipped_items
 - Room items: world.db:rooms metadata through world functions
 """
+from contextlib import contextmanager
 import json
 import random
 import re as _re_module
@@ -767,8 +768,9 @@ def add_item(name: str,
     if category == "garment" and garment:
         item["garment"] = _clean_garment(garment)
 
-    items.append(item)
-    _save_items(items)
+    # Upsert of THIS item only (review 05#12 follow-up): rewriting every item
+    # from the snapshot read above would undo a concurrent edit of another one.
+    _save_items([item])
     logger.info("Item erstellt: %s '%s' (category=%s, rarity=%s)",
                 item["id"], name, category, rarity)
     return item
@@ -846,9 +848,20 @@ def outfit_piece_lock(item_id: str):
     is held (``update_item``'s follow-ups may request a wearer's Build). Never
     held across an LLM / HTTP / image / Blender call — a long job re-reads the
     item under it at the end and writes only the key it owns.
+    ``update_item`` takes it itself around its read+write only (its follow-ups
+    run after); the whole-item writers here take it via ``_item_locks``.
     ``scripts/smoke_outfit_piece_rmw_lock.py`` guards it."""
     from app.core.keyed_lock import keyed_lock
     return keyed_lock("outfit_piece", str(item_id))
+
+
+@contextmanager
+def _item_locks(item_id: str):
+    """``outfit_piece_lock(item_id)`` then ``item_write_lock()`` — the pair a
+    whole-item writer outside ``update_item`` holds around its fresh read and
+    its write (lock order of ``outfit_piece_lock``)."""
+    with outfit_piece_lock(item_id), item_write_lock():
+        yield
 
 
 def _clean_back_text(item: Dict[str, Any]) -> None:
@@ -997,7 +1010,10 @@ def update_item(item_id: str,
         return item
 
     found: Optional[Dict[str, Any]] = None
-    with item_write_lock():
+    # The item lock as well (review 05#12): a setter holding it outside keeps
+    # its read and this write one step (RLock). Only around the read+write —
+    # the follow-ups below run after both locks are released.
+    with _item_locks(item_id):
         # Write shared items to shared/items/items.json.
         if is_shared_item(item_id):
             shared = _load_shared_items()
@@ -1040,12 +1056,15 @@ def delete_item(item_id: str) -> bool:
     # to no particular world. Affected worlds retain phantom references,
     # which have no effect because get_item no longer finds the item.
     if is_shared_item(item_id):
-        shared = _load_shared_items()
-        new_shared = [s for s in shared if s.get("id") != item_id]
-        if len(new_shared) == len(shared):
-            return False
-        # Raises on a failed write — then no file is touched.
-        _save_shared_items(new_shared)
+        # The library is one file, rewritten whole: under the item locks, or a
+        # concurrent piece save of another shared item would be undone.
+        with _item_locks(item_id):
+            shared = _load_shared_items()
+            new_shared = [s for s in shared if s.get("id") != item_id]
+            if len(new_shared) == len(shared):
+                return False
+            # Raises on a failed write — then no file is touched.
+            _save_shared_items(new_shared)
         _remove_item_media(_get_shared_dir() / "items", item_id)
         logger.info("Shared item deleted: %s", item_id)
         return True
@@ -1088,6 +1107,12 @@ def move_item_to_shared(item_id: str) -> Dict[str, Any]:
 
     Return {"status": "ok"|"error", "reason"?}.
     """
+    with _item_locks(item_id):
+        return _move_item_to_shared_locked(item_id)
+
+
+def _move_item_to_shared_locked(item_id: str) -> Dict[str, Any]:
+    """``move_item_to_shared`` under ``_item_locks(item_id)``."""
     import shutil
     if is_shared_item(item_id):
         return {"status": "error", "reason": "already_shared"}
@@ -1128,13 +1153,18 @@ def move_item_to_shared(item_id: str) -> Dict[str, Any]:
             conn.execute("DELETE FROM items WHERE id=?", (item_id,))
     except Exception as e:
         logger.error("move_item_to_shared DB-DELETE Fehler fuer %s: %s", item_id, e)
-    _save_items([it for it in items if it.get("id") != item_id])
     logger.info("Item %s -> shared library verschoben", item_id)
     return {"status": "ok", "item_id": item_id}
 
 
 def move_item_to_world(item_id: str) -> Dict[str, Any]:
     """Move a shared item into the user world, including its image."""
+    with _item_locks(item_id):
+        return _move_item_to_world_locked(item_id)
+
+
+def _move_item_to_world_locked(item_id: str) -> Dict[str, Any]:
+    """``move_item_to_world`` under ``_item_locks(item_id)``."""
     import shutil
     shared_item = get_shared_item(item_id)
     if not shared_item:
@@ -1144,8 +1174,8 @@ def move_item_to_world(item_id: str) -> Dict[str, Any]:
         return {"status": "error", "reason": "already_in_world"}
 
     # 1) Add an exact copy to the world list without the _shared flag.
-    items.append({k: v for k, v in shared_item.items() if k != "_shared"})
-    _save_items(items)
+    # Upsert of THIS item only — never a rewrite of every item from a snapshot.
+    _save_items([{k: v for k, v in shared_item.items() if k != "_shared"}])
 
     # 2) Transfer the image directory.
     src = _get_shared_item_dir(item_id)
@@ -1168,18 +1198,26 @@ def move_item_to_world(item_id: str) -> Dict[str, Any]:
 
 
 def set_item_image(item_id: str, image_filename: str) -> bool:
-    """Set the image of a world or shared item."""
+    """Set the image of a world or shared item (fresh read + write under
+    ``_item_locks``)."""
+    with _item_locks(item_id):
+        return _set_item_field_locked(item_id, "image", image_filename)
+
+
+def _set_item_field_locked(item_id: str, key: str, value: Any) -> bool:
+    """Store ``key`` on ONE item; the caller holds ``_item_locks(item_id)``.
+    A world item is upserted alone, the shared library rewritten whole."""
     if is_shared_item(item_id):
         shared = _load_shared_items()
         for item in shared:
             if item.get("id") == item_id:
-                item["image"] = image_filename
+                item[key] = value
                 _save_shared_items(shared)
                 return True
         return False
     for item in _load_items():
         if item.get("id") == item_id:
-            item["image"] = image_filename
+            item[key] = value
             # Upsert of THIS item only — rewriting every item from a snapshot
             # would clobber a concurrent edit of another one.
             return _save_items([item])
@@ -1224,23 +1262,12 @@ def set_item_image_meta(item_id: str, meta: Dict[str, Any]) -> bool:
     """Store image generation metadata such as backend and model.
 
     Like set_gallery_image_meta, the Game Admin generation dialog displays
-    this metadata as a caption below the image.
+    this metadata as a caption below the image. Fresh read + write of this
+    item only, under ``_item_locks`` (review 05#12 follow-up: it used to
+    rewrite every item from a snapshot, undoing a concurrent piece save).
     """
-    if is_shared_item(item_id):
-        shared = _load_shared_items()
-        for item in shared:
-            if item.get("id") == item_id:
-                item["image_meta"] = dict(meta)
-                _save_shared_items(shared)
-                return True
-        return False
-    items = _load_items()
-    for item in items:
-        if item.get("id") == item_id:
-            item["image_meta"] = dict(meta)
-            _save_items(items)
-            return True
-    return False
+    with _item_locks(item_id):
+        return _set_item_field_locked(item_id, "image_meta", dict(meta))
 
 
 # ============================================================
