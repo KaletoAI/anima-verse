@@ -20,7 +20,9 @@ as an error: the provider has stopped answering. A prompt conflict (a JSON-contr
 same prompt is not JSON) is flagged and suspends only that tool's argument check. The
 aggregate tool threshold remains 85% with no invented tools, and requires at
 least one curated semantic case with evidence; otherwise it is not_tested.
-Helper threshold remains 70% and is explicitly format-only. Individual dimensions
+Helper threshold remains 70% and is explicitly format-only. The overall verdict names
+the first FAILED dimension ("no — <group>"); without one, the first group with no
+eligible case ("not tested — <group>"), else "yes". Individual dimensions
 and every repetition remain visible even when an aggregate says mixed. Historical
 records are archived unchanged before a future result replaces the latest view.
 
@@ -731,8 +733,9 @@ def iter_suitability_results(
         if any(c["group"] == "vision" for c in cases) and not any(r["group"] == "vision" for r in recommended_records):
             summary["vision"] = "not_supported"
             # Unsupported image input does not disqualify a text model.
-            if summary["verdict"] == "no — vision":
-                summary["verdict"] = "yes" if summary["speed_ok"] else "no — speed"
+            # (No dimension failed — so speed passed or was not measured.)
+            if summary["verdict"] == "not tested — vision":
+                summary["verdict"] = "yes" if summary["speed_ok"] else "not tested — speed"
         summary.update(concurrency=concurrency, live_play=live_play or bool(get_agent_loop().status()["running"] and not is_world_frozen()),
                        curated_only=bool(data.get("curated_only")))
         summary.update(settings=settings, scorer_version=SCORER_VERSION,
@@ -933,9 +936,12 @@ def _summarize(model_full: str, results: List[Dict[str, Any]], *, settings: Opti
     projected = sum(task_medians) if all(v is not None for v in task_medians) else None
     max_turn = config.get("model_test.max_turn_seconds", 20)
     speed_ok = projected is not None and projected <= max_turn
-    verdict = next(("no — " + name for name, ok in
-                    (("tools", tool_ok), ("helpers", helper_ok), ("vision", vision_ok), ("speed", speed_ok))
-                    if ok is not True), "yes")
+    # A real failure names the verdict; a group with no eligible case — and a speed with no timed
+    # thought/extraction case — is "not tested", never a "no".
+    dimensions = (("tools", tool_ok), ("helpers", helper_ok), ("vision", vision_ok),
+                  ("speed", speed_ok if projected is not None else "not_tested"))
+    verdict = next(("no — " + name for name, ok in dimensions if ok is False),
+                   next(("not tested — " + name for name, ok in dimensions if ok is not True), "yes"))
     infra = any(r.get("infra") for r in results)
     all_runs = [run for r in results for run in r.get("runs", [])]
     positive_tokens = [(run.get("usage") or {}).get("reasoning_tokens", 0) or 0 for run in all_runs]

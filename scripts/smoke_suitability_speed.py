@@ -6,7 +6,12 @@ Hand-derived: six one-second calls at three workers take two seconds (<3).
 A provider max_concurrent of 1 caps three requested workers to one; an
 unreviewed log candidate is never sent. Thought/state/facts
 medians 6+4+5 = 15 seconds: passes 20, fails 10. One passing vision case
-out of three is below 70%. Running and unfrozen means live play. A JPEG
+out of three is below 70%. A group with no eligible case is untested, not a
+failure (review 09b#5): tools+helpers passing at 15 s with no vision record
+-> "not tested — vision" (the old verdict said "no — vision"); a failing
+helper outranks tools without semantic evidence -> "no — helpers" (old: "no —
+tools"); tool records only -> no helper record and no extraction timing ->
+"not tested — helpers" (old: "no — helpers"). Running and unfrozen means live play. A JPEG
 case sends one image; a missing file sends zero requests; WEBP keeps its MIME.
 Image request errors mean unsupported vision; generic 503/429 remain outages.
 All storage is temporary and provider calls are fake.
@@ -105,6 +110,15 @@ def main():
                 slow = suit._summarize("fake::demo", records)
             assert slow["verdict"] == "no — vision" and slow["speed_ok"] is False, slow["verdict"]
             print("[4] Vision one out of three fails single-helper verdict OK")
+            text_only = [record("tools", "thought", 6), record("helpers", "extraction_chat_state", 4),
+                         record("helpers", "extraction", 5)]
+            unproven_tool = {**record("tools", "thought", 6), "run_checks": [{}]}
+            with patch("app.core.config.get", return_value=20):
+                verdicts = (suit._summarize("fake::demo", text_only)["verdict"],
+                            suit._summarize("fake::demo", [unproven_tool, record("helpers", "extraction", 5, False)])["verdict"],
+                            suit._summarize("fake::demo", [record("tools", "thought", 6)])["verdict"])
+            assert verdicts == ("not tested — vision", "no — helpers", "not tested — helpers"), verdicts
+            print("[4b] An untested group is reported as not tested, a real failure first OK")
             assert run([base])["live_play"] is True
             with patch("app.models.world.is_world_frozen", return_value=True):
                 assert run([base])["live_play"] is False
