@@ -24,7 +24,11 @@ class StudioError(Exception):
 
 
 def bootstrap() -> None:
-    """Repo root on sys.path + ``paths.init`` on a throwaway world; idempotent."""
+    """Repo root on sys.path + ``paths.init`` on a throwaway world + the
+    installation's instance config (``INSTANCE_DIR``, else ``<repo>/instance``),
+    so a studio Blender run counts against the server's
+    ``blender_max_concurrent`` slots and uses its binary and switches;
+    idempotent."""
     global _booted
     if _booted:
         return
@@ -34,4 +38,6 @@ def bootstrap() -> None:
     world = tempfile.mkdtemp(prefix="animstudio-world-")
     atexit.register(shutil.rmtree, world, True)
     paths.init(world)
+    from app.blender import runner
+    runner.use_instance_config(REPO / "instance")
     _booted = True

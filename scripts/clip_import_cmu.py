@@ -92,6 +92,7 @@ def main() -> int:
     ap.add_argument("--rig", default="",
                     help="skeleton to drive; default: shared/models/rig/reference.fbx")
     a = ap.parse_args()
+    runner.use_instance_config(Path(__file__).resolve().parents[1] / "instance")
 
     out_dir = Path(a.out) if a.out else paths.get_animation_clips_dir()
     try:

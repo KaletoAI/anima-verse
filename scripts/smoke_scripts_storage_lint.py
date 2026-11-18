@@ -110,7 +110,9 @@ A script reaches the real instance when it
   * writes ``os.environ["INSTANCE_DIR"]`` with a value that is not a temp path,
   * or reads ``get_instance_config_path()`` / ``get_instance_dir()`` without a
     temp redirect before it (module level: an earlier line; inside a function:
-    anywhere in the file).
+    anywhere in the file).  ``runner.use_instance_config(default)`` counts as
+    such a read: it binds ``INSTANCE_DIR`` first and only then the default the
+    tool names, so only a temp ``INSTANCE_DIR`` written before it redirects it.
 
 "Temp path" is computed, not guessed: an expression that contains a call to
 ``mkdtemp`` / ``TemporaryDirectory``, or a name every assignment of which is
@@ -187,6 +189,15 @@ INTENTIONAL_REAL_INSTANCE = {
         "this lint: part 4 calls init_instance() without an argument on purpose "
         "(INSTANCE_DIR popped) to prove it raises, and restores INSTANCE_DIR",
 }
+# The clip tools that run Blender outside the server: runner.use_instance_config
+# binds them to the server's instance (INSTANCE_DIR, default <repo>/instance) so
+# its blender_max_concurrent slots, binary and switches apply to them too.
+_BLENDER_LIMIT = ("Blender CLI: shares the server's blender_max_concurrent slots, binary "
+                  "and switches via runner.use_instance_config; INSTANCE_DIR, default <repo>/instance")
+for _name in ("backfill_clip_turn.py", "clip_import_cmu.py", "cmu_convert_all.py",
+              "make_reference_rig.py", "make_rig_rest.py", "repair_clip_loop.py",
+              "repair_clip_roll.py", "repair_clip_spikes.py"):
+    INTENTIONAL_REAL_INSTANCE[_name] = _BLENDER_LIMIT
 
 # scripts/legacy/ is out of scope wholesale: retired tools, kept only for
 # reference, never run as a check (CLAUDE.md: "only scripts/legacy/ stays out").
@@ -902,7 +913,7 @@ def server_importers_set_instance() -> None:
 
 # -------------------------------------- part 6: real-instance reaches
 
-INSTANCE_READERS = {"get_instance_config_path", "get_instance_dir"}
+INSTANCE_READERS = {"get_instance_config_path", "get_instance_dir", "use_instance_config"}
 
 
 def instance_verdict(source: str):
@@ -1017,6 +1028,19 @@ from app.core import paths
 d = tempfile.mkdtemp()
 d = sys.argv[1]
 paths.init_instance(d)
+"""),
+    ("13 use_instance_config(REPO / 'instance') - the Blender CLI shape", "real", """
+from pathlib import Path
+from app.blender import runner
+def main():
+    runner.use_instance_config(Path(__file__).resolve().parents[1] / "instance")
+"""),
+    ("14 INSTANCE_DIR = temp, then use_instance_config(REPO / 'instance')", "temp", """
+import os, tempfile
+from pathlib import Path
+from app.blender import runner
+os.environ["INSTANCE_DIR"] = tempfile.mkdtemp()
+runner.use_instance_config(Path(__file__).resolve().parents[1] / "instance")
 """),
 ]
 

@@ -206,6 +206,7 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=1800)
     ap.add_argument("--limit", type=int, default=0)
     args = ap.parse_args()
+    runner.use_instance_config(Path(__file__).resolve().parents[1] / "instance")
 
     shared = paths.get_shared_dir() / "models"
     catalog_path = Path(args.catalog) if args.catalog else shared / "cmu_catalog.json"

@@ -39,6 +39,7 @@ def main() -> int:
     ap.add_argument("--out", default="",
                     help=f"target file (default: {paths.get_rig_file()})")
     a = ap.parse_args()
+    runner.use_instance_config(Path(__file__).resolve().parents[1] / "instance")
 
     src = Path(a.source)
     out = Path(a.out) if a.out else paths.get_rig_file()

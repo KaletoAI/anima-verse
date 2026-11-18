@@ -54,6 +54,9 @@ FREE = Path(tempfile.mkdtemp(prefix="animstudio-free-"))
 os.environ.setdefault("STORAGE_DIR", tempfile.mkdtemp(prefix="animstudio-world-"))
 os.environ["ANIMATION_CLIPS_DIR"] = str(FREE)
 os.environ["ANIMATION_CLIPS_LICENSED_DIR"] = str(FREE) + "-licensed"
+# bootstrap() binds the instance (runner.use_instance_config): a missing temp one keeps
+# the real instance out; Blender is discovered as before.
+os.environ["INSTANCE_DIR"] = str(FREE) + "-no-instance"
 sys.path.insert(0, str(ROOT / "animation-studio"))
 
 import animstudio                                             # noqa: E402

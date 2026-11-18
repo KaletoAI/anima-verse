@@ -25,6 +25,7 @@ from app.blender import runner                               # noqa: E402
 
 
 def main() -> int:
+    runner.use_instance_config(ROOT / "instance")
     with tempfile.TemporaryDirectory(prefix="rig-rest-out-") as out:
         res = runner.run("rig_rest", inputs={"rig": paths.get_rig_file()},
                          out_dir=Path(out), timeout_s=300)

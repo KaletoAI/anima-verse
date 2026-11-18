@@ -379,6 +379,7 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=900)
     ap.add_argument("--file-pos-limit", type=float, default=FILE_POS_DEV_CM)
     a = ap.parse_args()
+    runner.use_instance_config(Path(__file__).resolve().parents[1] / "instance")
     a.target = parse_target(a.target)
 
     st = runner.status()

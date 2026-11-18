@@ -46,6 +46,7 @@ with tempfile.TemporaryDirectory(prefix='studio-bridge-') as td:
     os.environ['STORAGE_DIR'] = str(tmp / 'world')
     os.environ['ANIMATION_CLIPS_DIR'] = str(tmp / 'clips')
     os.environ['ANIMATION_CLIPS_LICENSED_DIR'] = str(tmp / 'licensed')
+    os.environ['INSTANCE_DIR'] = str(tmp / 'no-instance')  # bootstrap binds no real instance
     animstudio.bootstrap()
     animstudio.OUT = tmp / 'out'
     animstudio.ANIMS = tmp / 'anims'

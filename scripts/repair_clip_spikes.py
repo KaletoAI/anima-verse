@@ -85,6 +85,7 @@ def main() -> int:
     ap.add_argument("--max-deg", type=float, default=10.0)
     ap.add_argument("--timeout", type=int, default=900)
     a = ap.parse_args()
+    runner.use_instance_config(ROOT / "instance")
 
     if a.files:
         clips = [Path(f).resolve() for f in a.files]

@@ -40,6 +40,7 @@ def main() -> int:
         if config_history._server_running(config_history.PID_FILE):
             parser.error('the server is running; stop it before --write (./start.sh --stop)')
     os.environ.setdefault('ALSOFT_DRIVERS', 'null')
+    runner.use_instance_config(Path(__file__).resolve().parents[1] / "instance")
     changed = failed = measured = 0
     for library in (paths.get_animation_clips_dir(), paths.get_licensed_clips_dir()):
         print(f'LIBRARY {library}', flush=True)

@@ -54,6 +54,7 @@ def main() -> int:
     ap.add_argument("--blend-frames", type=int, default=8)
     ap.add_argument("--min-seam", type=float, default=2.0)
     a = ap.parse_args()
+    runner.use_instance_config(ROOT / "instance")
     clips = [Path(f).resolve() for f in a.files]
     rel = [str(c.relative_to(ROOT)) for c in clips]
     tracked = set(subprocess.run(["git", "-C", str(ROOT), "ls-files", "--", *rel],

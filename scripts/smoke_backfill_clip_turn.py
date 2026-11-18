@@ -28,6 +28,8 @@ ROOT = Path(__file__).resolve().parents[1]
 TMP = Path(tempfile.mkdtemp(prefix="backfill-turn-"))
 os.environ["ANIMATION_CLIPS_DIR"] = str(TMP / "clips")
 os.environ["ANIMATION_CLIPS_LICENSED_DIR"] = str(TMP / "licensed")
+# main() binds the instance (runner.use_instance_config): a missing temp one keeps it unbound.
+os.environ["INSTANCE_DIR"] = str(TMP / "instance")
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import backfill_clip_turn as bf  # noqa: E402

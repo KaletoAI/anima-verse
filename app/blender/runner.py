@@ -32,7 +32,11 @@ when the holder's descriptor closes, so a killed process frees its slot by
 itself — and on Linux its Blender child is killed with it (``_die_with_parent``),
 so a freed slot never hides a still-running orphan; a caller that finds every
 slot taken polls until one is free. Only the Blender subprocess holds the
-slot, not the input copies around it.
+slot, not the input copies around it. A process outside the server (the
+animation studio, the clip repair scripts) shares the server's slots, limit,
+binary and switches only after ``use_instance_config`` bound it to the same
+instance; without it, it runs on the shipped defaults and a private slot
+folder.
 """
 import contextlib
 import contextvars
@@ -253,6 +257,45 @@ def slot_dir() -> Path:
         pass
     uid = os.getuid() if hasattr(os, "getuid") else 0
     return Path(tempfile.gettempdir()) / f"anima-blender-slots-{uid}"
+
+
+def use_instance_config(default_dir: Path) -> Optional[Path]:
+    """Bind a process that runs Blender OUTSIDE the server (the animation
+    studio, the clip repair/backfill scripts) to the installation's instance,
+    so ``server.blender_max_concurrent`` with its slot folder
+    (``<instance>/.blender-slots``), ``blender_executable`` and
+    ``blender_enabled`` are the server's values — one limit across all
+    processes, one binary, one switch.
+
+    The directory: one already initialised in this process wins (nothing is
+    reloaded); else ``INSTANCE_DIR`` (what ``start.sh --instance`` sets); else
+    ``default_dir``, which the TOOL names (app code names no instance). A
+    directory that does not exist is not created: the process then stays
+    unbound (shipped defaults, private slot folder), logged.
+
+    The config is loaded like the server loads it (``config.load``, both
+    layers); the world layer is the initialised world's (the studio's
+    throwaway one), else an empty one. No world DB is opened and no world is
+    needed. Returns the instance directory, or None when unbound."""
+    from app.core import config, paths
+    if paths.instance_initialised():
+        return paths.get_instance_dir()
+    target = Path(os.environ.get("INSTANCE_DIR", "").strip() or default_dir).resolve()
+    if not target.is_dir():
+        logger.warning("Blender: instance %s not found — running on the shipped defaults "
+                       "with a private slot folder, outside the server's limit", target)
+        return None
+    paths.init_instance(target)
+    try:
+        world_config = paths.get_config_path()
+    except paths.StorageNotInitialised:
+        world_config = None
+    if world_config is not None:
+        config.load(world_config, paths.get_instance_config_path())
+    else:
+        with tempfile.TemporaryDirectory(prefix="anima-no-world-") as empty:
+            config.load(Path(empty) / "config.json", paths.get_instance_config_path())
+    return target
 
 
 def pin_slots(directory: Optional[str], limit: Optional[int]) -> None:
