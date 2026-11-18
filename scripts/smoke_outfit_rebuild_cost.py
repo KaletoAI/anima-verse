@@ -22,8 +22,9 @@ The outfit model ``model3d/<sig>.glb``: sidecar base_signature
 "base00000000" (an older base) unless a case says otherwise. Nothing is
 rendered — the function only reads.
 
-Derived by hand from the cost table (front 1, every other dressed view 1 =
-its draft — the composite onto the base view is CPU work since Task 11g;
+Derived by hand from the cost table (front 1, every other dressed view 2 =
+its turn of the dressed front + its draft since A175 (070594e79) — the cut-out
+and the composite onto the base view are CPU work since Task 11g;
 an outfit body 2 = img2mesh + rig; retexture repaint = CPU):
 
 [O1] retexture mode, older base, NO dressed view of the current base, side
@@ -31,15 +32,22 @@ an outfit body 2 = img2mesh + rig; retexture repaint = CPU):
      1 + 2·1 = 3 (A175 turn + draft), mesh 0, hub 3; body_needed False; note "older base: views 3
      (first attempts)".
 [O2] the world setting ``base_body.dressed_side_views`` on (dressed views
-     front, back, left, right) → image 1 + 1·3 = 4, hub 4.
+     front, back, left, right) → image 1 + 2·3 = 7 (each of back, left and
+     right a turn + a draft, A175), hub 7.
 [O3] side views off again; the Dress switched to mode in_body ("mesh"; back
      to painted = "retexture"): the wanted figure stands on a meshed shape
      that is not stored → body 2, plus the shape's own views (none stored)
      2; nothing is painted on the shape (the Dress is in it: texture "") so
      the outfit's views are copies, 0 → {image 2, mesh 2, hub 4}, note
      "older base: views 3 + body 2 (first attempts)".
-[O4] "mesh", the outfit's dressed front + back current (made on the plain
-     body meanwhile): the shape is still missing with its views → still
+[O4] "mesh", the outfit's dressed front + back written (made on the plain
+     body meanwhile, naming the Dress). They are NOT this figure's views
+     (``dressed_image`` None): since A119 (0601436ce) the figure delivered
+     while its shape is unbuilt stands on the plain body with the in-body
+     Dress LEFT OFF (left_out {item_dress: "Body shape not built"}), so its
+     views must leave the Dress out of their text (mesh_items_unpainted
+     [item_dress]) — these name it (none recorded); in retexture mode
+     ([O5]/[O6]) the same files are current. The shape is still missing with its views → still
      {image 2, mesh 2, hub 4}; ``figure.stored_shape`` patched to answer a
      body → no body, and the outfit's views on the shape are copies → hub 0,
      note "older base: body shape stored, CPU only" (Task 11h wording; was "outfit body stored").
@@ -203,7 +211,9 @@ def main() -> int:
         # --- [O4] -------------------------------------------------------------------
         print("[O4] mesh mode, views current")
         write_views()
-        check("dressed front current", base_body.dressed_image("Kira", "front", sig, bsig) is not None, True)
+        check("dressed front written, not this figure's (A119: the Dress left off until its shape is built)",
+              ((refs / f"tpose_{sig}.png").is_file(), base_body.dressed_image("Kira", "front", sig, bsig)),
+              (True, None))
         got, full = cost()
         check("no body stored: the shape and its views", (got, full["note"]),
               ({"image_jobs": 3, "mesh_jobs": 2, "hub_jobs": 5}, "older base: views 3 + body 2 (first attempts)"))
