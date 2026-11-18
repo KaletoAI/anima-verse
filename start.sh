@@ -87,6 +87,22 @@ rotate_log() {
     fi
 }
 
+# For a log that processes other than the server append to while it rotates (logs/blender.log: the animation
+# studio runs Blender too). Every writer appends a whole block with ONE write and opens the file by path per
+# block (app/blender/runner.py `_write_log`), so a rename loses nothing and tears nothing: a block in flight
+# lands whole in the archived file, the next one creates the log again. Copy-then-truncate (rotate_log) would
+# drop a block appended between the copy and the truncation and could archive one half-written.
+rotate_log_by_rename() {
+    local log_file="$1"
+    if [[ -f "$log_file" && -s "$log_file" ]]; then
+        local timestamp
+        timestamp=$(date +%Y%m%d_%H%M%S)
+        if mv -n "$log_file" "$ARCHIVE_DIR/$(basename "${log_file%.log}_${timestamp}.log")"; then
+            echo "[logs] Rotated $(basename "$log_file") -> archive/"
+        fi
+    fi
+}
+
 is_running() {
     local pid_file="$1"
     if [[ -f "$pid_file" ]]; then
@@ -240,6 +256,7 @@ start_main() {
     # Fully stop the old process before rotating its log.
     kill_port "$MAIN_PORT" "main" "$MAIN_PATTERN"
     rotate_log "$MAIN_LOG"
+    rotate_log_by_rename "$LOG_DIR/blender.log"
     echo "[main] Starting main app on port $MAIN_PORT..."
     cd "$SCRIPT_DIR"
     # Its own process group (setsid, where available — it does not fork here, so $! stays the server's PID):
