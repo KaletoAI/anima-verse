@@ -32,7 +32,6 @@ smoke_i18n_orphans	REAL: orphan de.json key "Dressed front edit of the outfit's 
 smoke_image_routing_migration	STALE: _seed_default_mesh_backends appends quadruped-local to every existing list (d4aa4edd8/62c7b7b51, its docstring) and seeds 12 entries; C3 pins (False,1) / (True,11) / an emptied list staying [] — owner to confirm "emptied stays empty" vs the quadruped addition
 smoke_improvement_base_refresh	STALE: estimate of an older-prompt base refresh is 8 hub jobs (was 7): the full-body reference step (A87 c24544018) adds one
 smoke_influence_sources	REAL: run_turn regressions: "SKIP private prose lost its published speech", "Published tool-only speech lost its extraction", two outgoing sources -> None — not root-caused
-smoke_intent_shared_travel_consent	REAL: after JoinParty on the shared-trip invitation the intent is done and both stand in the kitchen, but the companion is in no party (get_party_of None) — not root-caused (smoke from 2026-10-18)
 smoke_interact_answer	STALE: "provider registered": the open-questions provider is not registered by importing plugins.interact.register in a world without schema ("no such table: characters"); not re-derived
 smoke_migrate_instance_config	STALE: the seeded routing now carries the newer occasions (base_front, base_view, outfit_*, ...); the expected chain set predates them
 smoke_model3d_stale_base	STALE: A119/b25bbbe39 serving rule: a humanoid is never served another figure's stored model, so the "stale older base" fixture model is not served

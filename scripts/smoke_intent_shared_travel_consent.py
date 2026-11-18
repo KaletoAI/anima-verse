@@ -9,6 +9,10 @@ cancels the plan. Temporary NPCs get a direct response, not thought autonomy.
 A malformed/out-of-context proposal records no invitation or movement; a valid
 proposal records its actual spoken line, and never moves before consent.
 Failed membership insertion must leave an invitation pending, not accepted.
+Since d8cfa3fe8 consent is per proposal: a party that accepting the trip
+created ends on arrival, and a repeated yes on that closed invitation
+(trip_intents.respond: intent no longer active, invitee in no party ->
+not_found) neither re-forms it nor moves anyone.
 
 Usage: ./.venv/bin/python scripts/smoke_intent_shared_travel_consent.py
 """
@@ -90,9 +94,12 @@ hooks.emit("world_tick")
 JOIN.execute(json.dumps({"agent_name": b, "leader": a, "invite_id": old_invitation_id}))
 assert I.get_intent(it["id"])["status"] == "done"
 assert C.get_character_current_room(a) == C.get_character_current_room(b) == "kitchen"
-assert P.get_party_of(b)["leader"] == a
+# d8cfa3fe8: a party the trip's consent created ends on arrival (no activity agreed).
+assert P.get_party_of(b) is None and not P.get_party_of(a), "trip-created party survived arrival"
+# A repeated yes on the closed invitation neither re-forms the party nor moves anyone.
 JOIN.execute(json.dumps({"agent_name": b, "leader": a, "invite_id": old_invitation_id}))
-assert P.get_party_of(a)["members"] == [b]
+assert not P.get_party_of(a) and P.get_party_of(b) is None
+assert C.get_character_current_room(a) == C.get_character_current_room(b) == "kitchen"
 
 a, b = pair()
 it = trip(a, b)
