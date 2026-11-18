@@ -1857,6 +1857,23 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
     raise GateRefused(step, view, records)
 
 
+def _upscale_cutout(png: bytes, character_name: str, view: str) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    """``(result, upscale record)`` of the cut-out's routed upscale; ``(None, {status: "lanczos", reason})`` when
+    the upscale FAILED (Lanczos alone is the documented fallback). A198 (review 05 #5): load
+    (``BackendBusyError``) and the media switch off (``MediaGenerationDisabled``) are no failure — they propagate,
+    so the chain retries later instead of caching a Lanczos-only cut-out for good."""
+    from app.imagegen.base import BackendBusyError, MediaGenerationDisabled
+    try:
+        from app.imagegen.service import get_image_service
+        result = get_image_service().upscale_image(png, character_name=character_name)
+    except (BackendBusyError, MediaGenerationDisabled):
+        raise
+    except Exception as e:  # noqa: BLE001 — Lanczos alone is the documented fallback
+        logger.warning("Garment cut-out %s %s: upscale failed, Lanczos only: %s", character_name, view, e)
+        return None, {"status": "lanczos", "reason": str(e) or type(e).__name__}
+    return result, {k: v for k, v in result.items() if k != "bytes"}
+
+
 def cut_out(character_name: str, item_id: str, fsig: str, view: str, *, force: bool = False) -> Path:
     """The generator input of one view, ``images/{item}_{fsig}_cutout_{view}.png``
     (R6), from the accepted ghost image (garment-only).
@@ -1916,15 +1933,10 @@ def cut_out(character_name: str, item_id: str, fsig: str, view: str, *, force: b
         colours = rgb.crop(crop)
         buf = io.BytesIO()
         colours.save(buf, format="PNG")
-        try:
-            from app.imagegen.service import get_image_service
-            result = get_image_service().upscale_image(buf.getvalue(), character_name=character_name)
+        result, upscale = _upscale_cutout(buf.getvalue(), character_name, view)
+        if result is not None:
             with Image.open(io.BytesIO(result["bytes"])) as up:
                 colours = up.convert("RGB")
-            upscale = {k: v for k, v in result.items() if k != "bytes"}
-        except Exception as e:  # noqa: BLE001 — Lanczos alone is the documented fallback
-            logger.warning("Garment cut-out %s %s: upscale failed, Lanczos only: %s", character_name, view, e)
-            upscale = {"status": "lanczos", "reason": str(e) or type(e).__name__}
     final_side = max(colours.width, CUTOUT_MIN_SIDE) if side < CUTOUT_MIN_SIDE else side
     if colours.size != (final_side, final_side):
         colours = colours.resize((final_side, final_side), Image.Resampling.LANCZOS)
