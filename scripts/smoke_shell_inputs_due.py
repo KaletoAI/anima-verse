@@ -42,9 +42,20 @@ def sha(b):
     return hashlib.sha256(b).hexdigest()
 
 
+_stamp = [10**18]
+
+
+def put(path, data):
+    """Write the fixture view with an mtime of its own: ``base_body.file_sha256`` caches by (size, mtime_ns, inode),
+    and two same-size rewrites inside one mtime tick (a loaded machine) would otherwise read the old sha."""
+    path.write_bytes(data)
+    _stamp[0] += 1_000_000_000
+    os.utime(path, ns=(_stamp[0], _stamp[0]))
+
+
 def state(front, back, record_shas=True, version=garment_shell.SHELL_VERSION):
-    ghost["front"].write_bytes(front)
-    ghost["back"].write_bytes(back)
+    put(ghost["front"], front)
+    put(ghost["back"], back)
     inputs = {"mesh_shape": "shell", "shell_version": version}
     if record_shas:
         inputs.update(ghost_front_sha256=sha(b"F1"), ghost_back_sha256=sha(b"B1"))
