@@ -49,7 +49,8 @@ Expected, derived by hand from Ruling A119:
     warnings []. outfit_info ready, no assembly, Wardrobe jacket painted
     False / not in the body, mesh_items_missing [jacket].
 [2] Retexture mode (under + shoes painted), the jacket still refused: K
-    stale "figure"; build: 2 image jobs, 1 worker run, no mesh/rig job, on
+    stale "figure"; build: 3 image jobs (front, and since A175 (070594e79) the
+    back's turn of the dressed front, then the back draft), 1 worker run, no mesh/rig job, on
     the plain body with a texture; the jacket left off (unpainted [jacket]).
 [3] Mesh mode again: bK stored -> 0 image / mesh / rig jobs, 0 worker
     runs; K on bK, texture "".
@@ -62,7 +63,7 @@ Expected, derived by hand from Ruling A119:
 [5] vest in_body -> L: render step 0 (shape bOld unbuilt, pieces left off),
     ONE mesh + ONE rig job on bOld (its dress text has the vest), texture "".
     The vest -> painted (signature stays sigL): L stale "figure"; rebuilt on
-    bK (the shape of under + shoes, stored since [1]): 2 image jobs, 1 worker
+    bK (the shape of under + shoes, stored since [1]): 3 image jobs (A175), 1 worker
     run, no mesh/rig job, a texture of its own. Artefact GC (explicit): bOld
     an orphan, its files gone; bK stays.
 """
@@ -334,10 +335,11 @@ def main() -> int:
         BUILD_RENDERS = []
 
         def stems(names):
-            """The keys the build's image jobs were rendered for (``tpose[_<view>]_<key>``), in order, once each."""
+            """The keys the build's image jobs were rendered for (``tpose[_<view>]_<key>``, the back's turn
+            ``tpose_back_<key>_turn`` since A175), in order, once each."""
             out = []
             for name in names:
-                key = name.rsplit("_", 1)[-1]
+                key = name.removesuffix("_turn").rsplit("_", 1)[-1]
                 if key not in out:
                     out.append(key)
             return out
@@ -402,8 +404,8 @@ def main() -> int:
         check("retexture: K stale (figure)", base_body.outfit_info("Demo").get("stale_reason"), "figure")
         jobs, runs, hub, result = render_and_build()
         meta_r = meta_of(sig_k)
-        check("retexture: ok, 2 image jobs, 1 worker run, no mesh/rig job", (result.get("ok"), jobs, runs, hub),
-              (True, 2, 1, []))
+        check("retexture: ok, 3 image jobs (A175 turn), 1 worker run, no mesh/rig job",
+              (result.get("ok"), jobs, runs, hub), (True, 3, 1, []))
         check("retexture: on the plain body, a texture", (meta_r.get("body_id"),
                                                           base_body.is_texture_signature(
                                                               meta_r.get("texture_signature"))), (None, True))
@@ -488,9 +490,9 @@ def main() -> int:
         meta_l = meta_of(sig_l)
         t_l = meta_l.get("texture_signature")
         b_w = meta_l.get("body_id")
-        check("vest painted: L rebuilt on bK (the shape of under + shoes, stored since [1]): 2 image jobs (the "
-              "vest painted onto bK's views), 1 worker run, no mesh/rig job",
-              (result.get("ok"), jobs, runs, hub, b_w), (True, 2, 1, [], b_k))
+        check("vest painted: L rebuilt on bK (the shape of under + shoes, stored since [1]): 3 image jobs (the "
+              "vest painted onto bK's views: front, the back's turn (A175), back draft), 1 worker run, no mesh/rig job",
+              (result.get("ok"), jobs, runs, hub, b_w), (True, 3, 1, [], b_k))
         check("vest painted: a texture of its own", base_body.is_texture_signature(t_l), True)
         report = artefact_graph.collect("Demo", explicit=True, reason="smoke")
         orphans = {e.get("key") for e in report.get("orphans") or []}

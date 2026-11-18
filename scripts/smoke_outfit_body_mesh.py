@@ -94,8 +94,9 @@ Expected, derived by hand from the spec and the plan's Global Constraints:
     job, 0 worker runs; model dressed False, no body_id.
 [5] A rebuilt with force in mesh mode: no mesh/rig job (the body is current).
 [6] Items -> painted: A stale, stale_reason "figure" (was "body_mode"); build
-    -> 0 image jobs, 0 mesh/rig jobs, 1 worker run; the sidecar has no
-    outfit_body_mode / body_id key, names a texture signature (was tA — A's
+    -> 3 image jobs (the painted front, and since A175 (070594e79) the back as
+    the dressed front's turn plus the back draft), 0 mesh/rig jobs, 1 worker
+    run; the sidecar has no outfit_body_mode / body_id key, names a texture signature (was tA — A's
     meshed build painted nothing) and its figure stands on the plain body B1.
     Items -> in_body: A stale "figure" (was "body_mode"); build -> 0 mesh/rig
     jobs, 0 worker runs, body file bytes + mtime unchanged.
@@ -544,9 +545,10 @@ def main() -> int:
         jobs, runs, steps, result = render_and_build()
         meta_r = model_meta(sig_a)
         # A119: A's outfit views were copies of the plain body (in-body pieces left off), so the painted
-        # pieces need their 2 view renders now (was 0: the painted interim views already existed).
-        check("retexture: ok, 2 image jobs, 0 mesh/rig jobs, 1 worker run",
-              (result.get("ok"), jobs, jobs_of(steps), runs), (True, 2, [], 1))
+        # pieces need their view renders now (was 0: the painted interim views already existed): the front,
+        # the back's turn (A175) and the back draft.
+        check("retexture: ok, 3 image jobs, 0 mesh/rig jobs, 1 worker run",
+              (result.get("ok"), jobs, jobs_of(steps), runs), (True, 3, [], 1))
         check("retexture: painted on the plain body", ("outfit_body_mode" in meta_r, "body_id" in meta_r,
                                                       base_body.is_texture_signature(meta_r.get("texture_signature")),
                                                       (meta_r.get("figure") or {}).get("shape")),
