@@ -35,7 +35,8 @@ coordinates and is read in the frame of its ``insole.json`` (``footwear_insole``
    ``d_heel_m`` from the heel end, the ball on the insole at the chord distance from it; the Foot turns
    by that angle about its lateral axis (horizontal, ⟂ the foot axis) at the ankle, toe down. The ToeBase
    turns back so the toes lie on the forepart slope (the insole slope over ``FOREPART_SPAN_M`` in front of
-   the ball): its net pitch is the slope, its own turn ``-(extension + slope)``. (The spike turned it by
+   the ball): its net pitch is the slope, its own turn ``-(extension + slope)`` (an open shoe also turns off the
+   toes' own bind pitch, fit version 19 — "Open footwear", toes). (The spike turned it by
    ``-(extension - slope)``, i.e. the toes DOWN by an up-going slope — a sign slip; 1.6 / 0.2 deg on the
    Stilettos.) THE BALL IS THE SKINNED BALL (fit version 2): the plantar ball band skinned with Foot and
    ToeBase in the stand pose (mean xz, lowest y), not the bind contact carried rigidly by Foot — the
@@ -162,6 +163,25 @@ the shoe is made to fit the foot instead:
 - **Pose / placement / lift** (steps 3–5): unchanged — heel and ball contact on the insole, the heel's rise turns
   the foot (``foot_pose``), a heeled sandal lifts the root as a pump does. The midline is fitted over the whole foot
   (up to the toes), not only up to the ball.
+- **Toes** (fit version 19): the toes show, so they rest ON the sole. Step 3's counter-turn ``-(extension + slope)``
+  assumes the toes lie horizontal in the bind pose; the generated feet do not hold that — their toes' underside
+  (``FootMeasure.toe_pitch_deg``: every ``TOE_STEP_M`` the lowest foot vertex within ``TOE_WINDOW_M`` / 2, a
+  least-squares line from ``BALL_BAND_M`` in front of the ToeBase head to ``TOE_BAND_M`` behind the tip) points
+  −8.6 … +14.0° against the horizontal on 40 measured feet (20 delivered bodies of 18 characters, median +4.3°,
+  quartiles −0.2 / +6.4°: the mesher's foot is often a plank inclined from the raised heel to the toe tips, the toes'
+  lowest point up to 13.6 mm under the ball contact; on 11 characters ``unrigged`` → ``raw`` the rigger turns the
+  whole foot by 3–17° but moves the toes against the rear foot by 0.1–5 mm and their pitch by +0.1 … −4.9°, flatter,
+  ``raw`` → delivered by ≤ 0.3 mm — the toes are the mesher's, not the rigger's). An open shoe therefore turns the
+  toes by ``-(extension + slope + toe pitch)``: their underside parallel to the forepart slope. A closed shoe keeps
+  the round-1 turn (its toe box hides and slims the toes; its accepted fits stay byte-identical). Measured 2026-11-18 on copies, Dario ``base4b00ccc7`` (toe pitch
+  +8.9 / +7.2°) in the braided leather sandals (``fad88e213cec`` / ``c062722cd315``) and the older slide
+  ``3eeb8b0a40ea``: ``sole_sink_mm`` 13.14 / 12.12 / 10.41 → 4.68 / 3.05 / 2.45 (the toes had stood 10–16 mm deep in
+  the sole 41–91 mm in front of the ball), ``strap_push_max_mm`` 23.6 / 26.1 / 11.5 → 27.8 / 26.5 / 9.8, every gate
+  passing; Kai's closed sneakers, Rosi's, Tilda's and Ylva's boots: the same GLB bytes. Turning the toes by the
+  ball-to-lowest-toe-vertex angle instead (2.2° more on the left) pushed the front crossbar over the toes to 40.5 mm:
+  its roof stands 11–14 mm over the insole at 0.77–0.83 L (22–28 mm at the height cap), Dario's toes 37–41 mm; the
+  deepest strap vertex lay 22 mm inside, the push slid it forward along the little toes (``garment_fit.push_out``'s
+  spread over the whole upper) — the strap push is sensitive to the toes' turn on a foot this tall.
 - **Sole width**: after the ball rule, the one width factor grows in steps of ``OPEN_WIDEN_STEP`` (up to the width
   cap) until ``OPEN_SOLE_COVER`` of each foot's plantar vertices stand over the insole map.
 - **Upper height** (4b): per roofed station the foot's top above the insole plus ``STRAP_CLEAR_M`` against the
@@ -341,7 +361,11 @@ from app.core.footwear_gates import check_gates
 #:    the shoe rides the shape's foot joints, raised by its sole, the base fit's cut applied there) instead of fitted
 #:    fresh on the shape's own foot (Kai's ``obf6474c3b``: "Foot too high", 30 mm at the ball). A base fit refits to
 #:    the same geometry (a new fsig); every outfit body's fit is derived again from it. One CPU refit.
-FOOTWEAR_FIT_VERSION = 18
+#: 19 (2026-11-18, Dario's braided sandals): an OPEN shoe turns the toes from their bind pitch onto its sole
+#:    (``FootMeasure.toe_pitch_deg``, module docstring "Open footwear", toes) — the round-1 counter-turn took the bind
+#:    toes as horizontal and sank them up to 16 mm into the sole. A closed shoe's fit is the same geometry (a new
+#:    fsig); an open one's toes, strap push and sole numbers change. One CPU refit.
+FOOTWEAR_FIT_VERSION = 19
 #: Toe room: the insole arc is the longer foot plus this (metres).
 ALLOW_M = 0.005
 #: Ruling A82: the per-piece footwear allowances the Wardrobe offers (percent; ``garment_footwear.ALLOWANCE_KEY``).
@@ -539,6 +563,12 @@ HEEL_BAND_M = 0.045
 BALL_BAND_M = 0.012
 #: Toe height: the vertices within this of the toe tip (metres).
 TOE_BAND_M = 0.006
+#: The toes' underside (``FootMeasure.toe_pitch_deg``): every ``TOE_STEP_M`` along the foot axis the lowest foot
+#: vertex within ``TOE_WINDOW_M`` / 2 of it (metres). A sliding window, not fixed slabs: on the generated feet
+#: (vertex spacing a few mm) fixed 5-mm slabs read the same toes 1–4 deg apart as their phase moves by a millimetre,
+#: the 1-mm window steps within 0.5 deg (module docstring "Open footwear", toes).
+TOE_STEP_M = 0.001
+TOE_WINDOW_M = 0.005
 #: Fixed-point iterations of the scale against the cavity end.
 SCALE_ITERATIONS = 20
 #: The extension against the SKINNED ball (step 3): most turns of the fixed point, and the chord-minus-pitch
@@ -633,6 +663,9 @@ class FootMeasure:
     # vertex ids behind the two contacts: the down-facing heel band and ball band (``measure_feet``)
     heel_ids: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int64))
     ball_ids: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int64))
+    # the toes' underside against the horizontal in the bind pose, toes down = positive (``measure_feet``; module
+    # docstring "Open footwear", toes)
+    toe_pitch_deg: float = 0.0
 
 
 @dataclass
@@ -786,6 +819,14 @@ def measure_feet(body: glb_mesh.BodyMesh, joints: Dict[str, np.ndarray]) -> Dict
         tsel = idx[sc > smax - TOE_BAND_M]
         near_ball = idx[np.abs(sc - bs) < BALL_WIDTH_BAND_M]
         lw = (P[near_ball] - a) @ lat
+        # the toes' underside: every TOE_STEP_M from BALL_BAND_M in front of the ToeBase head to TOE_BAND_M behind
+        # the tip the lowest foot vertex within TOE_WINDOW_M / 2 along the axis, a least-squares line through those
+        # points; its slope against the horizontal, toes down = positive
+        lows = [(s, float(P[idx[np.abs(sc - s) <= 0.5 * TOE_WINDOW_M], 1].min()))
+                for s in np.arange(bs + BALL_BAND_M, smax - TOE_BAND_M + 1e-9, TOE_STEP_M)
+                if (np.abs(sc - s) <= 0.5 * TOE_WINDOW_M).any()]
+        toe_pitch = (-math.degrees(math.atan(float(np.polyfit([p[0] for p in lows], [p[1] for p in lows], 1)[0])))
+                     if len(lows) >= 2 else 0.0)
         out[side] = FootMeasure(
             side=side, heel_back=P[idx[int(np.argmin(sc))]].copy(), toe_tip=P[idx[int(np.argmax(sc))]].copy(),
             length_m=smax - smin, ball_width_m=float(lw.max() - lw.min()) if len(lw) else 0.0,
@@ -793,7 +834,8 @@ def measure_feet(body: glb_mesh.BodyMesh, joints: Dict[str, np.ndarray]) -> Dict
             rest_pitch_deg=math.degrees(math.atan2(H[1] - B[1], float((B - H) @ fwd))),
             ankle=a, ball_joint=b, plantar=plantar, vertex_ids=idx, heel_contact=H, ball_contact=B,
             forward=fwd, toe_height_m=float(np.ptp(P[tsel, 1])), foot_joint=body.joint_names[fi],
-            toe_joint=body.joint_names[ti], foot_index=fi, toe_index=ti, heel_ids=hsel, ball_ids=bsel)
+            toe_joint=body.joint_names[ti], foot_index=fi, toe_index=ti, heel_ids=hsel, ball_ids=bsel,
+            toe_pitch_deg=toe_pitch)
     return out
 
 
@@ -1214,7 +1256,8 @@ def _open_upper(Pw: np.ndarray, Q: np.ndarray, faces: np.ndarray, ins: "_Insole"
     above = (Q[:, 1] - ins.z(np.clip(Q[:, 0], ins.x0, ins.x1))) * k
     wu = _smoothstep((above - OPEN_UPPER_FROM_M) / OPEN_UPPER_BAND_M)
     rows = np.nonzero(wu > 0.0)[0]
-    rec: Dict[str, Any] = {"upper_vertices": int((wu >= 1.0).sum()), "strap_inside_share": 0.0,
+    rec: Dict[str, Any] = {"toe_pitch_deg": fm.toe_pitch_deg, "upper_vertices": int((wu >= 1.0).sum()),
+                           "strap_inside_share": 0.0,
                            "strap_inside_before": 0.0, "strap_push_max_mm": 0.0, "strap_push_p95_mm": 0.0,
                            "strap_gap_p50_mm": None}
     out = Pw
@@ -1323,10 +1366,13 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
         xb = ins.chord_to(xh, fm.heel_ball_m, k)
         chord = math.atan2(float(ins.z(xh) - ins.z(xb)) * k, (xb - xh) * k)
         theta = chord - math.radians(fm.rest_pitch_deg)
+        # an open shoe shows the toes: they turn from where they point in the bind pose onto the sole (module
+        # docstring "Open footwear", toes); a closed shoe's toe box hides them and keeps the round-1 counter-turn
+        toe_pitch = math.radians(fm.toe_pitch_deg) if open_kind else 0.0
         for _ in range(BALL_SOLVE_STEPS):
             x_fore = min(xb + FOREPART_SPAN_M / k, x_end)
             slope = (math.atan2(float(ins.z(x_fore) - ins.z(xb)) * k, (x_fore - xb) * k) if x_fore > xb else 0.0)
-            Bf, Bt, axis, toe_turn = _pose(fm, theta, slope)
+            Bf, Bt, axis, toe_turn = _pose(fm, theta, slope + toe_pitch)
             H1 = _apply(Bf, fm.heel_contact)
             mats = {fm.foot_index: Bf, fm.toe_index: Bt}
             Bs = _skin(P, body, fm.ball_ids, mats)

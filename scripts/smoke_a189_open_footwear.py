@@ -19,8 +19,8 @@ Expected, by hand:
      insole: insole_cover min 0.80, strap_share min 0.08, insole_step max 0.035 (= TOL_SHARE); the fit's OPEN_GATES:
      strap_inside_share max 0.02, strap_push_max_mm max 30, sole_cover min 0.90, sole_sink_mm max 8;
      OPEN_ALLOW_M 0.014, OPEN_EDGE_M 0.005, STRAP_CLEAR_M 0.002, OPEN_HEIGHT_CAP 2.0. INSOLE_VERSION 9 (since the
-     toe-spring flip rule, scripts/smoke_footwear_insole.py [I20]), FOOTWEAR_FIT_VERSION 18, CUT_VERSION 7: a closed
-     shoe's fit and cut are what they were.
+     toe-spring flip rule, scripts/smoke_footwear_insole.py [I20]), FOOTWEAR_FIT_VERSION 19 (an open shoe turns the
+     toes off their bind pitch, [O9]), CUT_VERSION 7: a closed shoe's fit and cut are what they were.
 [O1] the wedge pump (roof over [0.18, 0.26]) stays CLOSED: toe zone x >= 0.85 L = 0.221 (stations 204..239) all
      under the roof -> toe_cover 1.0; heel zone x <= 0.25 L = 0.065: walls 0.03 >= AIR 0.0065 at every station ->
      heel_wall 1.0; vamp_cover 74/91 = 0.813 >= 0.6. Its gates keep vamp_cover and opening_share and carry no
@@ -59,6 +59,20 @@ Expected, by hand:
      pass.
 [O8] the closed pump on the same feet (the control): its record has no shoe_kind, its gates no strap_* / sole_*
      keys, its cut no "open" key and apply_cut removes faces (> 0) — a closed shoe still hides the foot.
+[O9] toes pointing down in the bind pose (FOOTWEAR_FIT_VERSION 19). The flat fixture feet: every foot vertex of the
+     toes' underside lies at y = 0 -> toe_pitch_deg 0.0 on both feet, and [O6]'s toe counter stays 0 = -(0 + 0 + 0).
+     The drooped feet: the foot box in 2-mm columns (nx 125, so the 5-mm window sees a vertex every 2 mm) and every
+     ToeBase vertex (x > 0.13) turned DOWN by a = 15 deg about the ToeBase joint (0.13, 0.01): a sole point x = 0.13 +
+     d (y 0) goes to (0.13 + d cos a - 0.01 sin a, 0.01 - d sin a - 0.01 cos a) — one line of slope -tan a, so the
+     toes' underside points 15 deg down: toe_pitch_deg 15 (+- 0.5: the window's lowest vertex sits up to 2.5 mm off
+     the window's centre, constant along the line, and the last windows are clipped at the toe tip). On the flat
+     slide (extension 0, slope 0) the open fit turns the toes by -(0 + 0 + 15) = -15 deg — the record's toe counter =
+     -(extension + forepart slope + toe pitch) to 1e-5 — i.e. back about the same joint onto the plane they came
+     from: the sole lies on the insole again -> sole_sink_mm 0 (+- 1, the fold at the joint), the fit passes every
+     gate. The round-1 counter -(extension + slope) = 0 would have left the toe tip (d = 0.06) at 0.06 sin 15 +
+     0.01 (1 - cos 15) = 15.9 mm below the insole, the p95 well above the 8-mm gate (by hand; the old rule is not
+     run). The closed pump on the drooped feet keeps the round-1 counter -(extension + slope) to 1e-5: a closed
+     shoe's toes are what they were.
 """
 import sys
 from pathlib import Path
@@ -119,8 +133,37 @@ def slide(r=0.03):
     return np.asarray(P), np.asarray(F, np.int64)
 
 
-def fit_of(P, F, insole):
-    glb = fx.foot_body_glb()
+def drooped_body_glb(alpha_deg):
+    """The fixture feet (``fx.foot_body_glb``) with the foot box five times finer along x (2-mm columns) and every
+    ToeBase vertex (x > 0.13) turned DOWN by ``alpha_deg`` about the ToeBase joint (0.13, 0.01) in the x-y plane:
+    (dx, dy) -> (dx cos a + dy sin a, -dx sin a + dy cos a) — the toes of a generated foot pointing down in the bind
+    pose (module docstring [O9])."""
+    import math
+    grid0, body0 = fx._grid, fx.foot_body
+    a = math.radians(alpha_deg)
+
+    def fine_grid(P, F, J, origin, u, v, nu, nv, facing, joint_of):
+        if nu == 25:  # the foot box's x direction (``foot_body``: nx 25)
+            return grid0(P, F, J, origin, np.asarray(u, np.float64) / 5.0, v, nu * 5, nv, facing, joint_of)
+        return grid0(P, F, J, origin, u, v, nu, nv, facing, joint_of)
+
+    def drooped(*args, **kwargs):
+        P, F, J, W, names = body0(*args, **kwargs)
+        P = np.array(P, np.float64)
+        toe = np.isin(J[:, 0], [names.index("LeftToeBase"), names.index("RightToeBase")]) & (W[:, 0] == 1.0)
+        dx, dy = P[toe, 0] - 0.13, P[toe, 1] - 0.01
+        P[toe, 0] = 0.13 + dx * math.cos(a) + dy * math.sin(a)
+        P[toe, 1] = 0.01 - dx * math.sin(a) + dy * math.cos(a)
+        return P, F, J, W, names
+    fx._grid, fx.foot_body = fine_grid, drooped
+    try:
+        return fx.foot_body_glb()
+    finally:
+        fx._grid, fx.foot_body = grid0, body0
+
+
+def fit_of(P, F, insole, glb=None):
+    glb = glb or fx.foot_body_glb()
     body, joints = glb_mesh.body_arrays(glb), glb_mesh.joint_bind_matrices(glb)
     shoe = glb_mesh.GarmentMesh(positions=P, normals=None, uvs=np.zeros((len(P), 2)), indices=F,
                                 joints=np.zeros((len(P), 4), np.int64), weights=np.zeros((len(P), 4)), joint_names=[])
@@ -137,7 +180,7 @@ def main() -> int:
                                            "sole_cover": ("min", 0.90), "sole_sink_mm": ("max", 8.0)})
     check("open fit constants", (ff.OPEN_ALLOW_M, ff.OPEN_EDGE_M, ff.STRAP_CLEAR_M, ff.OPEN_HEIGHT_CAP),
           (0.014, 0.005, 0.002, 2.0))
-    check("versions", (fi.INSOLE_VERSION, ff.FOOTWEAR_FIT_VERSION, fc.CUT_VERSION), (9, 18, 7))
+    check("versions", (fi.INSOLE_VERSION, ff.FOOTWEAR_FIT_VERSION, fc.CUT_VERSION), (9, 19, 7))
 
     print("[O1] the pump stays closed")
     pump = fi.analyse_arrays(*fx.wedge())
@@ -239,6 +282,30 @@ def main() -> int:
         check("the closed cut removes foot faces", st8["removed_faces"] > 0, True)
     else:
         check("pump fit ok", res8.reasons, [])
+
+    print("[O9] toes pointing down in the bind pose")
+    glb_flat = fx.foot_body_glb()
+    feet_flat = ff.measure_feet(glb_mesh.body_arrays(glb_flat), glb_mesh.joint_bind_matrices(glb_flat))
+    check("flat toes: toe pitch 0", [round(f.toe_pitch_deg, 9) for f in feet_flat.values()], [0.0, 0.0])
+    check("[O6] toe counter = -(extension + slope)", [rec["sides"][s]["toe_counter"]["deg"] for s in ("left", "right")],
+          [0.0, 0.0])
+    glb15 = drooped_body_glb(15.0)
+    feet15 = ff.measure_feet(glb_mesh.body_arrays(glb15), glb_mesh.joint_bind_matrices(glb15))
+    for side, fm in feet15.items():
+        check(f"{side} toe pitch 15 deg", fm.toe_pitch_deg, 15.0, 0.5)
+    res9, _p9, _j9 = fit_of(Ps, Fs, ins, glb15)
+    r9 = res9.record
+    check("fit ok", (res9.ok, res9.reasons), (True, []))
+    for side in ("left", "right"):
+        s9 = r9["sides"][side]
+        check(f"{side} toe counter = -(extension + slope + toe pitch)", s9["toe_counter"]["deg"],
+              -(s9["extension"]["deg"] + s9["forepart_slope_deg"] + s9["open"]["toe_pitch_deg"]), 1e-5)
+        check(f"{side} sole_sink_mm (toes on the sole)", s9["open"]["sole_sink_mm"], 0.0, 1.0)
+    res9c, _p9c, _j9c = fit_of(Pp, Fp, pump, glb15)
+    for side in ("left", "right"):
+        s9c = res9c.record["sides"][side]
+        check(f"closed pump {side}: toe counter = -(extension + slope)", s9c["toe_counter"]["deg"],
+              -(s9c["extension"]["deg"] + s9c["forepart_slope_deg"]), 1e-5)
 
     print("FAILED: " + ", ".join(FAILED) if FAILED else "ALL OK")
     return 1 if FAILED else 0

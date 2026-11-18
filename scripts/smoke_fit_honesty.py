@@ -52,7 +52,7 @@ does.
      13 with Ruling A51's openings the worn view shows, 14 with Ruling A72's repaired UV-mismatched donors,
      15 with Ruling A76's kept sheet order and openings' inside, 16 with Ruling A83's trunk laid onto the body,
      17 with Ruling A84's armpit seam;
-     hair 14: user test T-U1/T-U2, 15: Ruling A80, the cap above the brow, 16: A80b, the natural hairline) / footwear 18 (= ``FOOTWEAR_FIT_VERSION``;
+     hair 14: user test T-U1/T-U2, 15: Ruling A80, the cap above the brow, 16: A80b, the natural hairline) / footwear 18 (= ``FOOTWEAR_FIT_VERSION`` then;
      18: an outfit body's shoe is derived from the plain body's fit, Ruling A35), ``garment_layers.LAYER_VERSION`` 2.
      Checked as AT LEAST these (>=, like smoke_armpit_seam): later intentional bumps (clothing 18..20, e.g. A199
      72ef9bc63) keep every rule above; the footwear entry stays = ``FOOTWEAR_FIT_VERSION``.
@@ -62,12 +62,12 @@ does.
      with ``cut.sides`` and ``foot_pose`` (graftable).
      (a) serving (build False): the current fsig has no fit, the source is ready, the body bytes match, no failure
          -> pending True, fit None (the assembly is not current, a build is asked; nothing to fall back to yet).
-     (b) the build (build True): the fit refuses -> a body failure for the current fsig (fit_version 18, no base
+     (b) the build (build True): the fit refuses -> a body failure for the current fsig (fit_version 19, no base
          fit: ``base_fit_sha`` ""), and the
          old fit is served: fit = the old GLB, fsig ``0123456789ab``, pending False, error the refusal's text.
      (c) the old record without ``cut.sides`` -> nothing graftable: fit None.
      (d) graftable again but made on other body bytes (``body_sha256`` "c" * 64) -> fit None (never another body's).
-     (e) the current fsig's fit accepted on the body (fit_version 18, "b" * 64), derived from the base fit of
+     (e) the current fsig's fit accepted on the body (fit_version 19, "b" * 64), derived from the base fit of
          that fsig (``base_fit_sha256`` = the sha256 of the stored base fit, Ruling A35) -> served itself, fsig
          ``fedcba987654``.
 """
@@ -281,7 +281,7 @@ def test_h5():
     a = served()
     check(a["pending"] is True and a["fit"] is None, f"[H5] (a) serving: pending, nothing grafted yet ({a})")
     b = served(build=True)
-    failure = gs.body_failure("Demo", item, cur_fsig, body, body_sha=sha, base_fit_sha="", fit_version=18)
+    failure = gs.body_failure("Demo", item, cur_fsig, body, body_sha=sha, base_fit_sha="", fit_version=19)
     check(failure is not None and "visible_poke" in str(failure.get("error")),
           f"[H5] (b) the refusal recorded on the body for the current fsig ({failure})")
     check(b["fit"] == old and b["fsig"] == old_fsig and b["pending"] is False and "visible_poke" in b["error"],
@@ -297,7 +297,7 @@ def test_h5():
     base_fit.parent.mkdir(parents=True, exist_ok=True)
     base_fit.write_bytes(b"BASE FIT")
     import hashlib
-    cur = put(cur_fsig, 18, sha, {**graftable, "base_fit_sha256": hashlib.sha256(b"BASE FIT").hexdigest()})
+    cur = put(cur_fsig, 19, sha, {**graftable, "base_fit_sha256": hashlib.sha256(b"BASE FIT").hexdigest()})
     e = served()
     check(e["fit"] == cur and e["fsig"] == cur_fsig, f"[H5] (e) the accepted current fit is served ({e})")
 
