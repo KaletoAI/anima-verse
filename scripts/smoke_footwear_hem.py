@@ -60,15 +60,28 @@ Expected, by hand:
      {mode tucked, lsig, fallback too_wide}.
 [H4] over, r 0.035: ``layer_over`` with the two shaft nodes as inners. Beside the column's +-z faces the shaft
      stands h = 0.0425 - 0.03 = 0.0125 above the body, so a trouser vertex there must stand 0.0125 + LAYER_CLEAR_M
-     0.0119 = 0.0244 above it: |z - zc| >= 0.0544 (the voxel EDT beyond the exact band reads up to 0.6 voxel
-     short, so up to ~2 mm further, never more than 0.5 mm less) for the vertices with |x| <= 0.015 (their feet
-     lie on the z faces) and y in [0.11, 0.15]; the image's tube stood 0.071136 - 0.03 = 0.0411 behind the column's
-     back face and 0.0217 in front of its front face; since fit version 11 (boots plan Task 9 fix 3) the shaft is
+     0.0119 = 0.0244 above it, for the vertices with |x| <= 0.015 (their feet lie on the z faces) and y in
+     [0.11, 0.15]. h (3.7 voxels) is read in the exact band (6 voxels), 0.0244 (7.2 voxels) beyond it, on the voxel
+     EDT, whose error on a flat axis face is fixed by the body's LATTICE (``body_field``, since c49be8506 every
+     crop snaps to it): L = floor((P.min - 2 vox) / vox) vox with P.min z = zc - ball_width / 2 = -0.1425 -> L_z =
+     floor(-43.93) x 0.0034 = -0.1496. A face f gets its surface voxel s = round((f - L) / vox), the dilation puts
+     the last inside cell one further out, the field there is (EDT - 0.5 + SDF_ZERO_OFFSET_VOX 1.3) vox, so it reads
+     err = (phi - 0.2) vox too far on a +z face and (-phi - 0.2) vox on a -z face, phi = (f - L) / vox - s. Inner
+     face z = -0.07: (0.0796 / 0.0034) = 23.412, phi 0.412, err +0.72 mm; outer face z = -0.13: 5.765, phi -0.235,
+     err +0.12 mm. The push stops where the FIELD reads 0.0244, so |z - zc| = 0.0544 - err: 0.05368 inner, 0.05428
+     outer (where the displacement smoothing leaves the least, at the shaft's top ring y 0.15; lower rings stand
+     further out) -> min 0.05368, read +- 0.2 mm (float32, interpolation) below and up to 2.5 mm above as before.
+     (On 85f9a398e, before the lattice, the crop's own grid read 0.0550.) The image's tube stood 0.071136 - 0.03 =
+     0.0411 behind the column's back face and 0.0217 in front of its front face; since fit version 11 (boots plan Task 9 fix 3) the shaft is
      centred on the calf's section, shifted (0.0411 - 0.0217) / 2 = 0.0097 forward, so both walls stand
      (0.0411 + 0.0217) / 2 = 0.0314 off the column -> x <= -(0.03 + 0.0314 + 0.0119) = -0.0733 behind for
-     |z - zc| <= 0.015, y in [0.11, 0.15], and x >= 0.0733 in front (measured 0.0550 / -0.07332 / 0.07325; on
-     0a6a2f2a, fit version 10, unshifted: -0.0830 / 0.0636). Above the shaft top the push's six smoothing passes
-     carry a displacement that halves per 1-cm ring and is under MOVED_EPS_M from 0.26 on -> rings y >= 0.30 unmoved
+     |z - zc| <= 0.015, y in [0.11, 0.15], and x >= 0.0733 in front — here d (12.7 voxels) and h (9.2) are both
+     read on the voxel EDT off the SAME face, so the lattice error cancels (on 0a6a2f2a, fit version 10, unshifted:
+     -0.0830 / 0.0636). All three bounds hold for vertices whose foot lies on the column's face: the leg column of
+     this fixture ends at y 0.10 (it floats over the 2-cm foot box), and a vertex the push carries below that end
+     (the y 0.11 ring in front slides 13 mm down while pushed 4 cm forward: the gradient turns round the bottom
+     edge) measures to the EDGE, not the face — the bounds are read on the vertices that end at y >= 0.10.
+     Above the shaft top the push's six smoothing passes carry a displacement that halves per 1-cm ring and is under MOVED_EPS_M from 0.26 on -> rings y >= 0.30 unmoved
      (pinned with margin); at y 0.25 the tail is 0.2 .. 0.5 mm (measured 0.30; 0.4 on 0a6a2f2a, where the back wall's
      larger push fed it). The foot part is NOT an inner piece (structural: the record's ``inner`` names the boot alone with
      ``shaft`` True, ``shaft_meshes`` returns the two shaft nodes with the record's 1372 faces each, never the
@@ -503,11 +516,14 @@ def main() -> int:
         P0 = np.asarray(tube_035.positions, float)
         check("over: 3776 vertices (nothing cut)", len(Po), 3776)
         lat = np.abs(Po[:, 2] - ZC)
-        beside_z = (np.abs(P0[:, 0]) <= 0.015) & (P0[:, 1] >= 0.11 - 1e-9) & (P0[:, 1] <= 0.15 + 1e-9)
-        within("beside the z faces: min |z - zc| (>= 0.0544 - 0.0005)", float(lat[beside_z].min()), 0.0544 - 0.0005, 0.0544 + 0.0025)
-        behind = (np.abs(P0[:, 2] - ZC) <= 0.015) & (P0[:, 0] < 0) & (P0[:, 1] >= 0.11 - 1e-9) & (P0[:, 1] <= 0.15 + 1e-9)
+        on_face = Po[:, 1] >= 0.10 - 1e-9          # the foot on the column's face, not round its bottom edge
+        band = on_face & (P0[:, 1] >= 0.11 - 1e-9) & (P0[:, 1] <= 0.15 + 1e-9)
+        beside_z = (np.abs(P0[:, 0]) <= 0.015) & band
+        within("beside the z faces: min |z - zc| (0.0544 - the lattice's 0.72 mm = 0.05368)", float(lat[beside_z].min()),
+               0.05368 - 0.0002, 0.05368 + 0.0025)
+        behind = (np.abs(P0[:, 2] - ZC) <= 0.015) & (P0[:, 0] < 0) & band
         within("behind the column: max x (<= -0.0733 + 0.0005)", float(Po[behind, 0].max()), -0.0733 - 0.0025, -0.0733 + 0.0005)
-        front = (np.abs(P0[:, 2] - ZC) <= 0.015) & (P0[:, 0] > 0) & (P0[:, 1] >= 0.11 - 1e-9) & (P0[:, 1] <= 0.15 + 1e-9)
+        front = (np.abs(P0[:, 2] - ZC) <= 0.015) & (P0[:, 0] > 0) & band
         within("in front of the column: min x (>= 0.0733 - 0.0005)", float(Po[front, 0].min()), 0.0733 - 0.0005, 0.0733 + 0.0025)
         from app.core.garment_fit import MOVED_EPS_M
         high = P0[:, 1] >= 0.30 - 1e-9
