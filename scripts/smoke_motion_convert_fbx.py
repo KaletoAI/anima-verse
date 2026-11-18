@@ -5,20 +5,23 @@ Usage: ./.venv/bin/python scripts/smoke_motion_convert_fbx.py
 Skips (exit 0) when no usable Blender is installed.
 
 Fixture: shared/models/clips/celebrating.fbx — a library clip on the reference
-rig (69 ``mixamorig:`` bones, one action over frames 2..181), the same shape a
-reference_rig backend (Kimodo) delivers. Expected by hand (plan v3 Task 4):
+rig (69 ``mixamorig:`` bones, one action over frames 2..742 since its seamless-
+loop re-import in b3d10cb71: the loop cut of its sidecar, ``cut_frames`` [2, 743)
+= 24.7 s at 30 fps; before that 2..181), the same shape a reference_rig backend
+(Kimodo) delivers. Expected by hand (plan v3 Task 4):
 1. glb_to_ref_fbx with inputs {src: celebrating.fbx, ref: reference.fbx} and
-   format "fbx" -> ok, frames 181 - 2 + 1 = 180, fps 30, scale 1.0 (no
+   format "fbx" -> ok, frames 742 - 2 + 1 = 741, fps 30, scale 1.0 (no
    rescale: the file already sits on the reference rig), bones 69, and both
    motion.fbx and rest.fbx are written.
 2. The reference rig itself (no action) as src -> not ok, "exactly one animation".
 3. An unknown format "obj" -> not ok, "unsupported format".
 4. The output of 1 goes on through the real chain: import_source -> a clip of
-   180 frames with a sidecar; clip_measure -> 69 bones; check_clip for the
+   741 frames with a sidecar; clip_measure -> 69 bones; check_clip for the
    place type "stand" finds no structural defect (bones, tracks, duration).
-5. The same clip re-saved at 24 fps WITHOUT retiming its keys (frames 2..181
-   now span 179 / 24 = 7.458 s): the converter resamples to 30 fps keeping
-   that duration -> fps 30, frames 179 * 30 / 24 + 1 = 224.75 -> 224 or 225.
+5. The same clip re-saved at 24 fps WITHOUT retiming its keys (frames 2..742
+   now span 740 / 24 = 30.833 s): the converter resamples to 30 fps keeping
+   that duration -> fps 30, frames 740 * 30 / 24 + 1 = 925 + 1 = 926 (exact,
+   no rounding: on the 2..181 clip it was 224.75 -> 224 or 225).
 """
 import os
 import subprocess
@@ -46,10 +49,10 @@ def main():
     with tempfile.TemporaryDirectory() as td:
         got = convert(FIXTURE, "fbx", Path(td) / "a")
         assert got["ok"], got["error"]
-        assert got["data"] == {"frames": 180, "fps": 30, "scale": 1.0, "bones": 69}, got["data"]
+        assert got["data"] == {"frames": 741, "fps": 30, "scale": 1.0, "bones": 69}, got["data"]
         for name in ("motion", "rest"):
             assert Path(got["outputs"][name]).stat().st_size > 0
-        print("PASS 1: reference-rig FBX converts without rescale (180 frames, 69 bones)")
+        print("PASS 1: reference-rig FBX converts without rescale (741 frames, 69 bones)")
         got = convert(REF, "fbx", Path(td) / "b")
         assert not got["ok"] and "exactly one animation" in got["error"], got
         print("PASS 2: an FBX without animation is refused")
@@ -68,7 +71,7 @@ def main():
                              Path(good["outputs"]["rest"]), out_dir=Path(td) / "d" / "clip",
                              loop_s=None, root_motion="strip",
                              source_extra={"generator": "kimodo", "generated_for_pose": "x"})
-        assert clip["meta"]["frames"] == 180 and Path(clip["sidecar"]).is_file(), clip["meta"]
+        assert clip["meta"]["frames"] == 741 and Path(clip["sidecar"]).is_file(), clip["meta"]
         measured = runner.run("clip_measure", inputs={"clip": clip["fbx"]}, out_dir=Path(td) / "m")
         assert measured["ok"] and len(measured["data"]["bones"]) == 69, measured.get("error")
         structural = [r for r in check_clip(clip["meta"], measured["data"], "stand", False)
@@ -91,7 +94,7 @@ def main():
                        check=True, capture_output=True, timeout=300)
         got = convert(slow, "fbx", Path(td) / "e")
         assert got["ok"], got["error"]
-        assert got["data"]["fps"] == 30 and got["data"]["frames"] in (224, 225), got["data"]
+        assert got["data"]["fps"] == 30 and got["data"]["frames"] == 926, got["data"]
         print("PASS 5: a 24 fps FBX is resampled to 30 fps over the same duration")
     print("All motion FBX conversion smokes passed")
 

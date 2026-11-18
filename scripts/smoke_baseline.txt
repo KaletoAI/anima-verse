@@ -28,7 +28,6 @@ smoke_interact_answer	STALE: "provider registered": the open-questions provider 
 smoke_migrate_instance_config	STALE: the seeded routing now carries the newer occasions (base_front, base_view, outfit_*, ...); the expected chain set predates them
 smoke_model3d_stale_base	STALE: A119/b25bbbe39 serving rule: a humanoid is never served another figure's stored model, so the "stale older base" fixture model is not served
 smoke_model_rerig	STALE: get_model3d_options gained keys (face_cleanup, face_source, face_controls, collision_*, mesh_repair); behind that the rerig flow expects a low/mixamo.glb the fixture never gets — more than one layer, not re-derived
-smoke_motion_convert_fbx	STALE: pins frame counts of live library clips that were re-baked (celebrating.fbx 180 -> 741 in b3d10cb71, a second fixture 926); the docstring derivation (181 - 2 + 1) no longer applies
 smoke_npc_skills	STALE: 36ebf80d5 deliberately replaced the temporary-NPC 19-id brief set by the 26-skill set (incl. act, setlocation, go_to_character, outfit_change, prop_action, read_item); the smoke's hand-derived set, in-repo set and closed-list rules need re-deriving by the owner
 smoke_outfit_body_full_views	STALE: A175 turn step: the back of an outfit body renders a "_turn" image first (an extra image job)
 smoke_outfit_body_mesh	STALE: A175 turn step: 3 image jobs instead of 2
