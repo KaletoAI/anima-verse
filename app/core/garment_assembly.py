@@ -574,6 +574,42 @@ def _material(garment: Dict[str, Any]) -> Tuple[str, Optional[Dict[str, Any]]]:
     return piece_material.state_key(item), piece_material.overrides(piece_material.resolve(item)[1])
 
 
+def _template_params(garment: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A204: the CURRENT parameters of a template piece (the item's, not the drape record's — the opacity is not part
+    of the drape key, so the record may hold an older one); None for any other piece."""
+    if not garment.get("template"):
+        return None
+    from app.core import garment_template
+    item = garment.get("item")
+    if item is None:
+        from app.models.inventory import get_item
+        item = get_item(garment["item_id"])
+    return garment_template.params_of(item) or (garment.get("record") or {}).get("params")
+
+
+def _sheer_key(garment: Dict[str, Any]) -> str:
+    from app.core import garment_template
+    return garment_template.material_key(_template_params(garment))
+
+
+def _is_sheer(garment: Dict[str, Any]) -> bool:
+    """A204: a see-through template piece hides nothing under it (body faces, inner pieces)."""
+    return bool(_sheer_key(garment))
+
+
+def _merge_overrides(base: Optional[Dict[str, Any]], extra: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """``base`` with ``extra`` laid over it (the merged material keys key by key)."""
+    if not extra:
+        return base
+    out = dict(base or {})
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = {**out[key], **value}
+        else:
+            out[key] = value
+    return out
+
+
 def _state(wanted: List[Dict[str, Any]], tier: str, *,
            alpha_cutoff: Optional[float] = None, character_name: str = "") -> Dict[str, Dict[str, Any]]:
     """The sidecar ``garments`` map an assembly of ``tier`` must carry — a
@@ -612,6 +648,9 @@ def _state(wanted: List[Dict[str, Any]], tier: str, *,
             entry["hem"] = {"mode": hem["mode"], "lsig": over["lsig"] if over else "", "fallback": hem.get("fallback")}
         if g["kind"] != HAIR:
             entry["material"] = _material(g)[0]
+            sheer = _sheer_key(g)
+            if sheer:
+                entry["material"] += "+" + sheer      # A204: a sheer template's opacity re-assembles on the CPU
         if g["kind"] == CLOTHING:
             # the body faces this piece covers are dropped from the delivered body (``body_cover``, Ruling A133)
             entry["cover"] = body_cover.VERSION
@@ -867,7 +906,7 @@ def _uppers(grafted: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
     clothing = [g["item_id"] for g in grafted if g["kind"] == CLOTHING]
     out: Dict[str, List[Dict[str, Any]]] = {}
     for g in grafted:
-        if not g.get("template"):
+        if not g.get("template") or _is_sheer(g):      # A204: an inner piece stays visible under a sheer one
             continue
         kind = str(((g.get("record") or {}).get("params") or {}).get("kind") or "")
         templates, own = garment_template.inner_pieces(g["item_id"], kind, clothing)
@@ -877,6 +916,8 @@ def _uppers(grafted: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
     for g in grafted:
         over = g.get("over") or {}
         if over.get("pending"):
+            continue
+        if _is_sheer(g):
             continue
         for inner in over.get("items") or []:
             if inner in by_id and g not in out.setdefault(inner, []):
@@ -1040,7 +1081,8 @@ def _build(character_name: str, directory: Path, bare: Path,
                      "source": {"item_id": garment["item_id"], "fsig": garment["fsig"], "glb_sha256": ""}}
     # A182: a whole boot's leg goes first, then what the clothing still covers
     blob, leg_cut = _cut_whole_boot_legs(blob, [g for g in grafted if g["kind"] == CLOTHING], tier)
-    blob, cover = _hide_covered_body(blob, [g for g in grafted if g["kind"] == CLOTHING], tier)
+    # A204: a sheer piece hides no body face (the legs show through a chiffon skirt)
+    blob, cover = _hide_covered_body(blob, [g for g in grafted if g["kind"] == CLOTHING and not _is_sheer(g)], tier)
     under = _uppers(grafted)
     scalp_tints: Dict[str, Any] = {}
     for garment in grafted:
@@ -1080,6 +1122,9 @@ def _build(character_name: str, directory: Path, bare: Path,
         overrides = material_overrides
         if garment["kind"] != HAIR and overrides is None:
             _roughness_map(character_name, garment, tier, mesh)
+        if garment.get("template"):
+            from app.core import garment_template
+            overrides = _merge_overrides(overrides, garment_template.material_overrides(_template_params(garment)))
         if garment["kind"] == HAIR:
             blob = _tint_scalp(blob, mesh, garment, tier, scalp_tints)
             # Alpha cards (spec § 6.1): MASK at the world cutoff; a tier source without its image takes the
