@@ -1,6 +1,6 @@
 """Opt-in, read-only source check; every output stays in a temporary directory.
 
-Usage: RUN_EXTENSION_RIG_REAL=1 .venv/bin/python scripts/smoke_extension_rig_real.py
+Usage: RUN_EXTENSION_RIG_REAL=1 .venv/bin/python scripts/tool_extension_rig_real.py
        --model SOURCE.glb --declaration MANIFEST.yaml --group GROUP_ID
        [--contact-follow-distance .025 --contact-follow-weight .6 --out-dir /tmp/follow]
        [--normalize --target-height-m METRES]

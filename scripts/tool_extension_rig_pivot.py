@@ -1,6 +1,6 @@
 """Offline chord-pivot check; source fixtures stay unchanged, outputs are temporary.
 
-Usage: .venv/bin/python scripts/smoke_extension_rig_pivot.py
+Usage: .venv/bin/python scripts/tool_extension_rig_pivot.py
        --model FIXTURE.glb --declaration MANIFEST.yaml --group GROUP
        [--target-height-m 1.86]
 

@@ -1,6 +1,6 @@
 """Offline full-planner check on a rigged GLB fixture; all outputs are temporary.
 
-Usage: .venv/bin/python scripts/smoke_extension_rig_robustness.py
+Usage: .venv/bin/python scripts/tool_extension_rig_robustness.py
        --model FIXTURE.glb --declaration MANIFEST.yaml --group GROUP
        [--target-height-m 1.86]
 
