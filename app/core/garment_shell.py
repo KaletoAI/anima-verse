@@ -136,7 +136,9 @@ ARMS_UP_IOU_MARGIN = 0.05
 #: instead of 1/2500 of the body height — ~13 samples per mask pixel became ~4, a third of the memory.
 #: 5 (A219): a see-through piece's views lose their backdrop share (``unmix_backdrop``) and a limb's misregistered
 #: edge strip is worn where both views show the ring worn (``ring_closed``).
-SHELL_VERSION = 5
+#: 6 (A220): side bridges match runs by overlap and continue the panel's pattern; the shell is lifted over the body's
+#: extension parts and never offset into the body from a wall seen from behind; an arm the piece covers stays in.
+SHELL_VERSION = 6
 #: A199: the spacing of the body's z-buffer samples (``samples``' ``px``: about 4 per spacing²) in mask pixels of
 #: the finest view. 4 random samples per pixel leave a pixel empty with p ≈ e⁻⁴ on a face-on surface; the 3×3
 #: maximum filter of the z-buffer closes such a pixel.
@@ -281,10 +283,23 @@ def pose_arms_up(P, joints, weights, joint_names: List[str], joint_positions: Di
 def outer_faces(P, F, px: float = 0.002, tol: float = 0.0025) -> np.ndarray:
     """Faces of the OUTER wall of a (possibly double-walled) mesh: a face is outer when one of its samples is
     front-most (within ``tol``) in an orthographic z-buffer from one of 26 directions."""
+    return outer_faces_oriented(P, F, px, tol)[0]
+
+
+def outer_faces_oriented(P, F, px: float = 0.002, tol: float = 0.0025) -> Tuple[np.ndarray, np.ndarray]:
+    """``(outer, back_seen)``: ``outer`` as ``outer_faces``; ``back_seen`` (A220) the outer faces that are never
+    front-most from a direction their outward normal (the winding, signed by the mesh's volume) faces — only their
+    back is seen. Such a face is a wall seen through an opening of the mesh: an inset extension part is its own
+    primitive, so the body's own surface there is the part's inner wall seen through the cut, wound inward. A shell
+    made on it must take the face reversed, or it is offset into the body."""
     P = np.asarray(P, np.float64)
     F = np.asarray(F, np.int64).reshape(-1, 3)
     X, _, tri, _ = samples(P, F, px * 0.7)
+    Nf = np.cross(P[F[:, 1]] - P[F[:, 0]], P[F[:, 2]] - P[F[:, 0]])
+    vol = np.einsum("ij,ij->i", P[F[:, 0]], np.cross(P[F[:, 1]], P[F[:, 2]])).sum()
+    Ns = (Nf * (1.0 if vol >= 0 else -1.0))[tri]
     vis = np.zeros(len(F), bool)
+    facing = np.zeros(len(F), bool)
     for d in [(i, j, k) for i in (-1, 0, 1) for j in (-1, 0, 1) for k in (-1, 0, 1) if (i, j, k) != (0, 0, 0)]:
         d = np.array(d, float) / np.linalg.norm(d)
         up = np.array([0, 1.0, 0]) if abs(d[1]) < 0.9 else np.array([1.0, 0, 0])
@@ -297,8 +312,10 @@ def outer_faces(P, F, px: float = 0.002, tol: float = 0.0025) -> np.ndarray:
         key = i * (j.max() + 1) + j
         zb = np.full(key.max() + 1, -np.inf)
         np.maximum.at(zb, key, z)
-        vis[tri[z >= zb[key] - tol]] = True
-    return vis
+        front = z >= zb[key] - tol
+        vis[tri[front]] = True
+        facing[tri[front & (Ns @ d > 0)]] = True
+    return vis, vis & ~facing
 
 
 def signed_distance(X, Pb, Fb, kq: int = 12) -> np.ndarray:
@@ -430,6 +447,56 @@ def _runs(flags) -> List[Tuple[int, int]]:
     return out
 
 
+def extend_run(run, wide) -> Tuple[int, int]:
+    """A220: the run ``(i0, i1)`` grown down from ``i0`` and up from ``i1`` over the consecutive bins ``wide``
+    (bool per bin) marks."""
+    i0, i1 = run
+    while i0 - 1 >= 0 and wide[i0 - 1]:
+        i0 -= 1
+    while i1 + 1 < len(wide) and wide[i1 + 1]:
+        i1 += 1
+    return int(i0), int(i1)
+
+
+def match_runs(front_runs, back_runs) -> List[Optional[int]]:
+    """A220: per front run ``(i0, i1)`` (height bins) the back run it is bridged to round the side, or None. A run
+    pair whose height ranges OVERLAP is matched (the larger overlap first, then the nearer centre): a bra's cup ends
+    tall at the side (14 cm) and the back band narrow (11 cm) with centres 3.9 cm apart — the centre rule alone
+    (≤ ``MATCH_M``) left the side open. Without an overlap the centres must lie within ``MATCH_M``."""
+    out: List[Optional[int]] = []
+    for i0, i1 in front_runs:
+        c = 0.5 * (i0 + i1)
+        best = None
+        for k, (j0, j1) in enumerate(back_runs):
+            ov = min(i1, j1) - max(i0, j0) + 1
+            d = abs(0.5 * (j0 + j1) - c) * BIN_M
+            if ov <= 0 and d > MATCH_M:
+                continue
+            key = (-max(ov, 0), d)
+            if best is None or key < best[0]:
+                best = (key, k)
+        out.append(None if best is None else best[1])
+    return out
+
+
+#: A220: how far (degrees round the trunk) a side bridge reads into its panel before the read turns back (a
+#: triangle wave: the panel's edge strip is mirrored, then repeated).
+PANEL_READ_DEG = 20.0
+
+
+def panel_source_angle(th, edge, front: bool, span: float = PANEL_READ_DEG):
+    """A220: the angle (``TorsoFrame`` theta, degrees, signed: + one side, - the other) a side-bridge point at
+    ``th`` reads its colour from: its mirror image across the panel's ``edge`` angle, back into the panel (the
+    front panel lies toward theta 0, the back toward ±180), folded into ``span`` degrees from the edge — 5° past
+    the edge reads 5° inside it, 25° past it (span 20) reads 15° inside."""
+    th = np.asarray(th, np.float64)
+    edge = np.asarray(edge, np.float64)
+    sgn = np.where(edge >= 0, 1.0, -1.0)
+    d = np.abs(th - edge)
+    d = span - np.abs(np.mod(d, 2.0 * span) - span)
+    return edge - sgn * d if front else edge + sgn * d
+
+
 class SideBridge:
     """Per body side: the bands reaching the front view's head-on edge matched to those reaching the back's by height
     (≤ ``MATCH_M``) and carried around the side (lerped in height); an unmatched band end extends ``EXT_M``. The
@@ -463,7 +530,7 @@ class SideBridge:
                 if ok.sum() > 2:
                     e[:] = np.interp(np.arange(nb), np.nonzero(ok)[0], ndimage.median_filter(e[ok], 9))
 
-            def build(ed, eb):
+            def reach(ed, eb):
                 ff = np.zeros(nb, bool)
                 bf = np.zeros(nb, bool)
                 for i in range(nb):
@@ -472,6 +539,10 @@ class SideBridge:
                         ff[i] = (sel & memb_f & (a >= fe[i] - ed)).any()
                     if np.isfinite(be[i]):
                         bf[i] = (sel & memb_b & (a <= be[i] + ed)).any()
+                return ff, bf
+
+            def build(ed, eb):
+                ff, bf = reach(ed, eb)
 
                 def end_angle(run, memb, front):
                     i0, i1 = run
@@ -481,20 +552,19 @@ class SideBridge:
                     vals = [a[sel & (bins == i)].max() if front else a[sel & (bins == i)].min()
                             for i in range(i0, i1 + 1) if (sel & (bins == i)).any()]
                     return float(np.median(vals))
-                fr = [(r, end_angle(r, memb_f, True)) for r in _runs(ff)]
-                brn = [(r, end_angle(r, memb_b, False)) for r in _runs(bf)]
+                # A220: a run reaches up / down as far as its panel still shows near the edge (the wide window) —
+                # the narrow window's run ended below the panel's corner, the bridge's top dipped under it and the
+                # panel's last head-on column stood up as a corner
+                ffw, bfw = reach(WINDOWS[-1][0], WINDOWS[-1][1])
+                fr = [(extend_run(r, ffw), end_angle(extend_run(r, ffw), memb_f, True)) for r in _runs(ff)]
+                brn = [(extend_run(r, bfw), end_angle(extend_run(r, bfw), memb_b, False)) for r in _runs(bf)]
                 pairs = []
                 usedb = set()
-                for (i0, i1), fa in fr:
-                    c = 0.5 * (i0 + i1)
-                    best = None
-                    for k, ((j0, j1), _ba) in enumerate(brn):
-                        d = abs(0.5 * (j0 + j1) - c) * BIN_M
-                        if d <= MATCH_M and (best is None or d < best[0]):
-                            best = (d, k)
-                    if best is not None:
-                        pairs.append(((i0, i1), brn[best[1]][0], fa, brn[best[1]][1]))
-                        usedb.add(best[1])
+                match = match_runs([r for r, _ in fr], [r for r, _ in brn])
+                for ((i0, i1), fa), k in zip(fr, match):
+                    if k is not None:
+                        pairs.append(((i0, i1), brn[k][0], fa, brn[k][1]))
+                        usedb.add(k)
                     else:
                         pairs.append(((i0, i1), None, fa, None))
                 for k, (run, ba) in enumerate(brn):
@@ -892,6 +962,32 @@ def side_view_ok(seen_s, facing_s, seen_f, facing_f, seen_b, facing_b) -> np.nda
 ARM_MAX = 0.3
 
 
+#: A220: an arm whose head-on (front / back) points the piece's views cover at least this share of is the piece's
+#: own (a glove, an arm warmer); below it the arm stays out of the shell (a top's views over a hanging arm).
+ARM_PIECE_SHARE = 0.2
+
+
+def arm_pieces(armw, x, head_seen, head_cov, share: float = ARM_PIECE_SHARE) -> Tuple[np.ndarray, Dict[str, float]]:
+    """A220: per arm (the arm points — ``armw`` ≥ ``ARM_MAX`` — on one side of x = the trunk's middle) whether the
+    piece covers it: the share of its head-on points ``head_seen`` that ``head_cov`` marks reaches ``share``.
+    Returns ``(keep: bool per point — an arm point of a covered arm, shares by side "+x" / "-x")``."""
+    armw = np.asarray(armw, np.float64)
+    x = np.asarray(x, np.float64)
+    arm = armw >= ARM_MAX
+    keep = np.zeros(len(armw), bool)
+    shares: Dict[str, float] = {}
+    if not arm.any():
+        return keep, shares
+    mid = float(np.median(x[~arm])) if (~arm).any() else 0.0
+    for name, side in (("+x", x > mid), ("-x", x <= mid)):
+        pts = arm & side & np.asarray(head_seen, bool)
+        sh = float((pts & np.asarray(head_cov, bool)).sum() / max(pts.sum(), 1))
+        shares[name] = round(sh, 3)
+        if pts.sum() and sh >= share:
+            keep |= arm & side
+    return keep, shares
+
+
 def occluding_samples(which: str, X, tri, faces, armw) -> np.ndarray:
     """The body samples ``X`` (on faces ``tri``) that may hide a point from view ``which`` (its z-buffer): all of them
     for the front / back ("f" / "b"); for a side view only the trunk's — A191: the arm hangs beside the trunk in the
@@ -918,6 +1014,75 @@ def _fill_glints(m, max_px: float = 0.0):
         sz[0] = 0
         m = m | np.isin(lab, np.nonzero((sz > 0) & (sz < max(0.001 * m.sum(), max_px)))[0])
     return m
+
+
+#: A220: a shell vertex is lifted over a surface the ray along its normal meets within this reach (m) and this
+#: lateral radius (m) of the surface's samples, when the surface faces the same way (cosine at least
+#: ``LIFT_FACING``); lifts under ``LIFT_MIN_M`` are noise of the surface's own curvature.
+PART_REACH_M = 0.04
+PART_RADIUS_M = 0.003
+LIFT_FACING = 0.5
+LIFT_MIN_M = 0.001
+
+
+def lift_over_surfaces(V, N, offset_m: float, surfaces, *, reach: float = PART_REACH_M,
+                       radius: float = PART_RADIUS_M) -> Tuple[np.ndarray, np.ndarray]:
+    """A220: the shell positions over the body point ``V`` along its unit normal ``N``: ``V + N × offset_m``, lifted
+    to ``V + N × (t + offset_m)`` where the ray meets one of ``surfaces`` further out — a sample within ``radius`` of
+    the ray at height ``t`` in (``LIFT_MIN_M``, ``reach``] whose face normal faces the ray's way (cosine ≥
+    ``LIFT_FACING``; a surface facing back toward the vertex — the other thigh, a breast's underside — is not over
+    it). ``surfaces``: ``[(P, F, oriented)]`` — ``oriented`` False takes the normal's sign as it comes (an extension
+    part's winding is its own). The lift then spreads 2 rings (4 mm, halved per ring, taking the max) so a lifted
+    patch's edge slopes instead of stepping. Returns ``(X, lift m per vertex)``."""
+    from scipy.spatial import cKDTree
+    V = np.asarray(V, np.float64)
+    N = np.asarray(N, np.float64)
+    if len(V) == 0:
+        return V.copy(), np.zeros(0)
+    # one ray per distinct position (a clipped shell repeats its seam vertices)
+    Vw, first, inv = np.unique(np.round(V, 7), axis=0, return_index=True, return_inverse=True)
+    inv = inv.reshape(-1)
+    Nw = N[first]
+    lw = np.zeros(len(Vw))
+    lo, hi = Vw.min(0) - reach, Vw.max(0) + reach
+    for P, F, oriented in surfaces:
+        P = np.asarray(P, np.float64)
+        F = np.asarray(F, np.int64)
+        if not len(F):
+            continue
+        C = P[F].mean(1)
+        F = F[((C >= lo) & (C <= hi)).all(1)]
+        if not len(F):
+            continue
+        S, _n, tri, _b = samples(P, F, radius * 0.5)
+        Nf = np.cross(P[F[:, 1]] - P[F[:, 0]], P[F[:, 2]] - P[F[:, 0]])
+        Nf = Nf / np.maximum(np.linalg.norm(Nf, axis=1, keepdims=True), 1e-12)
+        NS = Nf[tri]
+        tree = cKDTree(S)
+        near = np.nonzero(np.isfinite(tree.query(Vw, distance_upper_bound=reach)[0]))[0]
+        balls = tree.query_ball_point(Vw[near] + Nw[near] * reach * 0.5, reach * 0.5 + radius)
+        for i, idx in zip(near, balls):
+            if not idx:
+                continue
+            d = S[idx] - Vw[i]
+            t = d @ Nw[i]
+            if t.max() <= LIFT_MIN_M:
+                continue
+            lat = np.linalg.norm(d - t[:, None] * Nw[i], axis=1)
+            cos = NS[idx] @ Nw[i]
+            ok = (lat <= radius) & (t > LIFT_MIN_M) & (t <= reach) & ((cos if oriented else np.abs(cos)) >= LIFT_FACING)
+            if ok.any():
+                lw[i] = max(lw[i], float(t[ok].max()))
+    if (lw > 0).any():
+        pairs = cKDTree(Vw).query_pairs(0.004, output_type="ndarray")
+        for _ in range(2):
+            if len(pairs):
+                nxt = lw.copy()
+                np.maximum.at(nxt, pairs[:, 0], 0.5 * lw[pairs[:, 1]])
+                np.maximum.at(nxt, pairs[:, 1], 0.5 * lw[pairs[:, 0]])
+                lw = nxt
+    lift = lw[inv]
+    return V + N * (offset_m + lift)[:, None], lift
 
 
 def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]], *,
@@ -1088,8 +1253,21 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
         if which not in ("f", "b"):
             report[f"side_{which}_added_vertices"] = int((hit & ~cov).sum())
         cov |= hit
-    cov &= armw < 0.3
+    # A220: an arm the piece itself covers (a glove, a sleeve-only piece) keeps its arm vertices; the arm stays
+    # out for a trunk piece, whose views show it over the arm only where the arm hangs in front of the trunk
+    head_cov = np.zeros(len(Pu), bool)
+    head_seen = np.zeros(len(Pu), bool)
+    for which in ("f", "b"):
+        h = vs[which]["seen"] & (np.abs(vs[which]["facing"]) >= 0.3)
+        head_seen |= h
+        head_cov |= h & filled[which][vs[which]["i"], vs[which]["j"]]
+    arm_keep, arm_shares = arm_pieces(armw, Pu[:, 0], head_seen, head_cov)
+    report["arm_covered_share"] = arm_shares
+    arm_out = (armw >= 0.3) & ~arm_keep
+    cov &= ~arm_out
     Pw_u, Fw_u, inv_u = gf.weld(Pu, bu.faces)
+    arm_out_w = np.zeros(len(Pw_u), bool)
+    np.logical_or.at(arm_out_w, inv_u, arm_out)
     covw = np.zeros(len(Pw_u), bool)
     np.logical_or.at(covw, inv_u, cov)
     armw_w = np.zeros(len(Pw_u))
@@ -1100,7 +1278,7 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
         c = np.minimum(1, c + (A @ c > 0))
     for _ in range(4):
         c = c * ((A @ (1 - c)) == 0)
-    covw = (c > 0) & (armw_w < 0.3)
+    covw = (c > 0) & ~arm_out_w
     Fr_ = Fw_u[covw[Fw_u].all(1)]
     if len(Fr_) == 0:
         raise ShellRefused("The piece covers no part of the body in its views")
@@ -1120,10 +1298,10 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
             np.logical_or.at(seen_w, inv_u, side_ok(vs, which))
     for _ in range(8):
         c2 = np.minimum(1, c2 + ((A @ c2 > 0) & ~seen_w))
-    cand_u = ((c2 > 0) & (armw_w < 0.3))[inv_u]
+    cand_u = ((c2 > 0) & ~arm_out_w)[inv_u]
 
     # 2. onto the rigged body, outer wall only
-    outer_r = outer_faces(R, br.faces, px=0.002, tol=0.0025)
+    outer_r, back_seen = outer_faces_oriented(R, br.faces, px=0.002, tol=0.0025)
     _, near = cKDTree(bu.uvs).query(br.uvs)
     selr = cand_u[near][br.faces].all(1) & outer_r
     _, _, inv_all = gf.weld(R, br.faces)
@@ -1154,7 +1332,9 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     add = cand & fillc[np.maximum(lab_, 0)] & (lab_ >= 0)
     report["region_holes_closed_faces"] = int(add.sum())
     selr = selr | add
-    FR = br.faces[selr]
+    # A220: a face only seen from behind (``outer_faces_oriented``) is taken reversed, so its offset goes outward
+    FR = np.where(back_seen[selr][:, None], br.faces[selr][:, ::-1], br.faces[selr])
+    report["back_seen_faces_reversed"] = int((back_seen & selr).sum())
     Rw_, FRw, invr_ = gf.weld(R, FR)
     labels, share = gf.components(Rw_, FRw)
     FR = FR[share[labels[invr_[FR[:, 0]]]] >= 0.03]
@@ -1261,6 +1441,15 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     Nw_ = gf._unit(gf._smooth(gf._unit(gf.vertex_normals(Vcw, Fcw)) * np.sign(volb),
                               gf._adjacency(Fcw, len(Vcw)), 3))
     X = Vc + Nw_[cinv] * offset_m
+    # A220: the body's extension parts (an inset part's raised patch, an attached part) are their own primitives —
+    # the region is cut from the plain surface, so the shell ran under a part standing up to 2 cm out of it
+    # — and a region face can sit on a layer under the outer skin (an inset part's kept inner wall): the shell is
+    # lifted over every surface its normal ray meets facing the same way (``lift_over_surfaces``)
+    part_P, part_F = glb_mesh.part_arrays(rigged)
+    X, lift = lift_over_surfaces(Vc, Nw_[cinv], offset_m,
+                                 [(R, br.faces if volb > 0 else br.faces[:, ::-1], True), (part_P, part_F, False)])
+    report["lifted_vertices"] = int((lift > 0).sum())
+    report["lift_max_mm"] = round(float(lift.max()) * 1000.0, 1) if len(lift) else 0.0
 
     # 5. colour, baked in the body's UV atlas
     Xq_, _, tri, bary = samples(Vc, Fc, 0.0008)
@@ -1319,6 +1508,21 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
         tq = np.clip(np.where(ok, np.nan_to_num(t_q), np.where(dfq <= dbq, 0.0, 1.0)), 0, 1)
         cfq = np.median(col[jf], 1) if jf is not None else np.median(col[jb], 1)
         cbq = np.median(col[jb], 1) if jb is not None else cfq
+        # A220: a bridged side point takes the PATTERN of the panel it continues — its colour is read at its mirror
+        # image across the panel's edge (``panel_source_angle``), not the median at the edge (a flat streak)
+        if ok.any():
+            pf = panel_source_angle(th_q, fq, True)
+            pb = panel_source_angle(th_q, bq, False)
+            if len(rf):
+                jm, _ = nearest(rf, pf[ok], yfq[ok])
+                cfq[ok] = np.median(col[jm[:, :3]], 1)
+            if len(rb):
+                jm, _ = nearest(rb, pb[ok], ybq[ok])
+                cbq[ok] = np.median(col[jm[:, :3]], 1)
+            if not len(rf):
+                cfq[ok] = cbq[ok]
+            if not len(rb):
+                cbq[ok] = cfq[ok]
         col[side_q] = cfq * (1 - tq[:, None]) + cbq * tq[:, None]
         src_dist[side_q] = np.where(tq < 0.5, dfq, dbq)
     # A192: round a limb the side takes the PATTERN, not a median colour — the front picture is continued past its

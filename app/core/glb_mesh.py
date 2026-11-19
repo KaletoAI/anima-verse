@@ -362,6 +362,32 @@ def body_arrays(glb: bytes) -> BodyMesh:
                     joint_positions=_joint_heads(parsed))
 
 
+def part_arrays(glb: bytes) -> Tuple[np.ndarray, np.ndarray]:
+    """A220: the extension parts of a body GLB — the skinned primitives ``body_arrays`` leaves out (a material or a
+    node marked ``attached_part``: an inset part, an attached part, the mouth parts) — as ``(positions (n, 3),
+    faces (m, 3))`` in the same bind space, concatenated; empty arrays without any. Garment nodes stay out."""
+    from app.core.face_retexture import _body_primitives
+    parsed = _parse(glb, "Body")
+    gltf = parsed["gltf"]
+    body = {id(p) for p in _body_primitives(parsed)}
+    skinned = {node["mesh"] for node in gltf.get("nodes") or []
+               if "mesh" in node and "skin" in node and not _is_garment_node(node)}
+    P, F, base = [], [], 0
+    for i, mesh in enumerate(gltf.get("meshes") or []):
+        if i not in skinned:
+            continue
+        for prim in mesh.get("primitives") or []:
+            if id(prim) in body:
+                continue
+            pos = np.asarray(accessor_array(parsed, prim["attributes"]["POSITION"]), np.float64)
+            P.append(pos)
+            F.append(_triangles(parsed, prim, len(pos)) + base)
+            base += len(pos)
+    if not P:
+        return np.zeros((0, 3)), np.zeros((0, 3), np.int64)
+    return np.concatenate(P), np.concatenate(F)
+
+
 def _joint_heads(parsed: dict) -> Dict[str, np.ndarray]:
     """``BodyMesh.joint_positions`` of a parsed GLB: ``_bind_frames``' translations, {} when it has none."""
     try:
