@@ -47,6 +47,8 @@ UNDER_MAX_M = 0.06
 #: body" is part of the body's surface, a belt goes over it — except round the neck, where a hair shell can lie
 #: farther out (the innermost layer, as for the necklace).
 BODY_PICK = {"choker": "layer"}
+#: A worn garment counts as the layer under a piece when it lies round at least this share of its section.
+UNDER_MIN_SHARE = 0.5
 #: Rays that find no surface: up to this share is bridged around the section, more refuses the build.
 MAX_MISSING_SHARE = 0.25
 
@@ -214,12 +216,12 @@ def section(P: np.ndarray, F: np.ndarray, fr: Dict[str, Any], offsets: Sequence[
     return out, dirs
 
 
-def bridge(t: np.ndarray, what: str) -> np.ndarray:
+def bridge(t: np.ndarray, what: str, max_missing: float = MAX_MISSING_SHARE) -> np.ndarray:
     """``t`` (rows, n) with the NaN rays filled around the section (linear over the angle, closed); ``ValueError``
-    when more than ``MAX_MISSING_SHARE`` of the rays found nothing."""
+    when more than ``max_missing`` of the rays found nothing."""
     t = np.array(t, np.float64)
     miss = np.isnan(t)
-    if miss.mean() > MAX_MISSING_SHARE:
+    if miss.mean() > max_missing:
         raise ValueError(f"The {what} was not found on this body ({miss.mean():.0%} of the section is missing)")
     n = t.shape[1]
     idx = np.arange(n)
@@ -258,10 +260,16 @@ def surface_radius(body_P, body_F, under: List[Tuple[np.ndarray, np.ndarray]], f
     on_garment = np.zeros_like(t, bool)
     for P, F in under:
         g, _ = section(P, F, fr, offsets, reach=reach + UNDER_MAX_M, pick="outer")
-        farther = np.isfinite(g) & (g > t) & (g <= skin + UNDER_MAX_M)
+        g = np.where(np.isfinite(g) & (g <= skin + UNDER_MAX_M), g, np.nan)
+        if np.isfinite(g).mean() < UNDER_MIN_SHARE:
+            continue          # it only touches the section (a shoe's lower back edge): the piece is not over it
+        # over most of it: the piece goes round it, bridging where it ends lower (a shaft cut lower at the back)
+        g = bridge(g, "garment", 1.0 - UNDER_MIN_SHARE)
+        farther = g > t
         t = np.where(farther, g, t)
         on_garment |= farther
-    return {"t": t, "skin": skin, "dirs": dirs, "under_share": round(float(on_garment.mean()), 3)}
+    return {"t": t, "skin": skin, "dirs": dirs, "on_garment": on_garment,
+            "under_share": round(float(on_garment.mean()), 3)}
 
 
 def band_rows(fr: Dict[str, Any], width_m: float) -> np.ndarray:

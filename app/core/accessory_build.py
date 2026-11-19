@@ -903,7 +903,12 @@ def _poses(rigged: bytes, body, dense, Pw, Fw, first, V, J, W) -> Dict[str, Dict
     Jb = used[Jb]
     heads = {norm_bone_name(k): v for k, v in body.joint_positions.items()}
     return accessory_pendant.pose_check(Pw, Fw, Jb[first], Wb[first], V, J, W, list(body.joint_names),
-                                        glb_mesh.skin_joint_parents(rigged), heads)
+                                        glb_mesh.skin_joint_parents(rigged), heads, kq=POSE_KQ)
+
+
+#: A234: candidate faces per point in the test-pose check (12 picked a far face over Henrik's ankle: −6 mm "inside"
+#: where 48 and 200 both give the true +2.4 mm).
+POSE_KQ = 48
 
 
 def _joint_maxima(joint_names, J: np.ndarray, W: np.ndarray) -> Dict[str, float]:
@@ -931,7 +936,7 @@ def make_around(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, An
     width = float(spec["band"]["width_cm"]) / 100.0
     under = under or []
     Vs, Fs, curves, lengths, ratios, landmarks = [], [], [], {}, [], {}
-    gaps, under_share, inner_all = [], [], []
+    gaps, under_share = [], []
     for side in ab.sides_of(spec):
         allowed = ab.joints_for(spec, side)
         Fb = ab.dominant_faces(Fw, dense[first], body.joint_names, allowed)
@@ -945,24 +950,33 @@ def make_around(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, An
         t = ab.smooth_up(surf["t"])
         dirs = surf["dirs"]
         # The air is held to the whole skin near the piece (a bump of the back above a belt belongs to Spine2), a
-        # ring's to its own finger only (the fingers beside it touch it in the bind pose).
-        surfaces = [(Pw, Fb if spec["kind"] == "ring" else Fw)] + layers
+        # ring's to its own finger only (the fingers beside it touch it in the bind pose) — along the skin's normal.
+        # Over a garment the radius already lies on its outermost surface (the rays): a garment's thin walls and
+        # rims are no surface to push along.
+        skin_only = [(Pw, Fb if spec["kind"] == "ring" else Fw)]
         if band:
             inner = (fr["centre"][None, None] + offsets[:, None, None] * fr["axis"][None, None]
                      + (t + ab.GAP_M)[:, :, None] * dirs[None])
-            flat = ab.push_out(inner.reshape(-1, 3), np.tile(dirs, (len(offsets), 1)), surfaces, ab.GAP_M)
+            flat = ab.push_out(inner.reshape(-1, 3), np.tile(dirs, (len(offsets), 1)), skin_only, ab.GAP_M)
             inner = flat.reshape(inner.shape)
             radial = np.einsum("rnk,nk->rn", inner - fr["centre"][None, None], dirs)
             V, F, N = ab.band_mesh(fr, offsets, radial, dirs, thickness)
             # the outer wall and the edges clear the skin too (a chin over a choker, a hip over a belt's edge)
-            V = ab.push_out(V, np.repeat(dirs, 2 * len(offsets), 0), surfaces, ab.GAP_M)
+            V = ab.push_out(V, np.repeat(dirs, 2 * len(offsets), 0), skin_only, ab.GAP_M)
             curve = inner[len(offsets) // 2] + dirs * thickness / 2
-            inner_all.append((inner.reshape(-1, 3), np.tile(dirs, (len(offsets), 1)), surfaces))
+            X = inner.reshape(-1, 3)
+            over = surf["on_garment"].reshape(-1)
+            rad_gap = (radial - surf["t"]).reshape(-1)
         else:
             curve = ab.ring_curve(fr, t[0] + ab.GAP_M + radius, dirs)
-            curve = ab.push_out(curve, dirs, surfaces, ab.GAP_M + radius)
+            curve = ab.push_out(curve, dirs, skin_only, ab.GAP_M + radius)
             V, F, N = accessory_mesh.tube(curve, radius, outward=dirs)
-            inner_all.append((curve - dirs * radius, dirs, surfaces))
+            X = curve - dirs * radius
+            over = surf["on_garment"][0]
+            rad_gap = np.einsum("nk,nk->n", X - fr["centre"][None], dirs) - surf["t"][0]
+        # the air under it: to the skin along its normal; over a garment, along the ray to the garment's surface
+        gap_skin = ab.surface_gap(X, np.tile(dirs, (len(X) // len(dirs), 1)), skin_only)
+        gaps.append(np.where(over, np.minimum(gap_skin, rad_gap), gap_skin))
         seg = np.linalg.norm(np.diff(np.vstack([curve, curve[:1]]), axis=0), axis=1)
         lengths[side] = round(float(seg.sum()), 4)
         ratios.append(float(seg.max() / max(float(np.median(seg)), 1e-9)))
@@ -978,7 +992,7 @@ def make_around(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, An
     N = vertex_normals(V, F)
     J, W = accessory_mesh.skin_weights(V, np.asarray(body.positions, np.float64), dense)
     J, W = accessory_mesh.fold_to_base(J, W, list(body.joint_names), glb_mesh.skin_joint_parents(rigged))
-    gap = np.concatenate([ab.surface_gap(X, d, srf) for X, d, srf in inner_all]) * 1000.0
+    gap = np.concatenate(gaps) * 1000.0
     poses = _poses(rigged, body, dense, Pw, Fw, first, V, J, W)
     metrics = {"gap_mm": {"p05": round(float(np.percentile(gap, 5)), 2), "p50": round(float(np.median(gap)), 2),
                           "p95": round(float(np.percentile(gap, 95)), 2), "min": round(float(gap.min()), 2)},

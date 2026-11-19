@@ -479,16 +479,17 @@ def skin(X: np.ndarray, J: np.ndarray, W: np.ndarray, M: np.ndarray) -> np.ndarr
 
 def pose_check(Pb: np.ndarray, Fb: np.ndarray, Jb: np.ndarray, Wb: np.ndarray, V: np.ndarray, Jp: np.ndarray,
                Wp: np.ndarray, joint_names: List[str], parents: Dict[str, str],
-               heads: Dict[str, np.ndarray]) -> Dict[str, Dict[str, float]]:
+               heads: Dict[str, np.ndarray], kq: int = 12) -> Dict[str, Dict[str, float]]:
     """Per ``TEST_POSES`` pose: ``{gap_min_mm, gap_p50_mm, inside_share}`` of the pendant ``V`` (skinned ``Jp/Wp``)
-    against the body ``(Pb, Fb)`` (skinned ``Jb/Wb``, closed)."""
+    against the body ``(Pb, Fb)`` (skinned ``Jb/Wb``, closed). ``kq``: the candidate faces per point of
+    ``garment_shell.signed_distance`` (A234: the long thin faces round an ankle need more than 12)."""
     from app.core.garment_shell import signed_distance
     out: Dict[str, Dict[str, float]] = {}
     for name, pose in TEST_POSES.items():
         M = joint_transforms(joint_names, parents, heads, pose)
         Pp = skin(Pb, Jb, Wb, M)
         Vp = skin(V, Jp, Wp, M)
-        sd = signed_distance(Vp, Pp, Fb)
+        sd = signed_distance(Vp, Pp, Fb, kq=kq)
         out[name] = {"gap_min_mm": round(float(sd.min()) * 1000, 2), "gap_p50_mm": round(float(np.median(sd)) * 1000, 2),
                      "inside_share": round(float((sd < -INSIDE_M).mean()), 4)}
     return out

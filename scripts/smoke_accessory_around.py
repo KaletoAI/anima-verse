@@ -20,7 +20,10 @@ Expected values, derived by hand:
     ray hits a side between its corners — the distance lies in [0.1 · cos(π/64), 0.1] = [0.099880, 0.1].
 [4] ``surface_radius`` over that body with a garment cylinder of radius 0.12 under the band: every ray sits on it
     (0.12 ≤ 0.1 + ``UNDER_MAX_M`` 0.06) → t in [0.119855, 0.12], ``under_share`` 1.0; a garment at 0.2 is 0.1 beyond
-    the skin (> 0.06) → ignored: t stays in [0.099880, 0.1], share 0.0.
+    the skin (> 0.06) → ignored: t stays in [0.099880, 0.1], share 0.0. A garment round only part of the section
+    (``UNDER_MIN_SHARE`` 0.5): 60 % of the 0.12 cylinder's sides → the piece goes round it, the missing 40 % bridged
+    → every ray at least 0.119855 · cos(π/64)… ≥ 0.1197, share 1.0; 40 % of it → ignored, share 0.0.
+    Anklet, leg (0.1, 0.5, 0) → foot (0.1, 0.1, 0): axis (0, 1, 0), centre = foot + 0.035 · axis = (0.1, 0.135, 0).
 [5] ``band_mesh``, inner radius 0.102 everywhere, 3 mm deep, rows ±2 cm, 96 angles: a closed ring of volume
     π (0.105² − 0.102²) · 0.04 · (96 / 2π) sin(2π / 96) = 7.8037e-5 · 0.99929 = 7.7982e-5 m³ (± 0.1 %), positive
     (outward faces).
@@ -119,6 +122,14 @@ check("[4] on the garment", (bool(np.all(s["t"] >= 0.12 * np.cos(np.pi / 64) - 1
 Pf, Ff = cylinder(0.2)
 s = ab.surface_radius(P, F, [(Pf, Ff)], fr, [0.0], reach=0.3, what="belt")
 check("[4] far garment ignored", (bool(np.all(s["t"] <= 0.1 + 1e-9)), s["under_share"]), (True, 0.0))
+for share, want_share in ((0.6, 1.0), (0.4, 0.0)):
+    keep = [f for f in range(len(Fg)) if (f // 4) < int(64 * share) and f % 4 < 2]
+    s = ab.surface_radius(P, F, [(Pg, Fg[keep])], fr, [0.0], reach=0.3, what="belt")
+    low = 0.1197 if want_share else 0.0998
+    check(f"[4] garment round {share:.0%}", (bool(np.all(s["t"] >= low)), s["under_share"]), (True, want_share))
+fr_a = ab.frame(n({"kind": "anklet"}), {"mixamorig:LeftLeg": [0.1, 0.5, 0], "mixamorig:LeftFoot": [0.1, 0.1, 0]}, "left")
+check("[2] anklet axis / centre", (np.round(fr_a["axis"], 9).tolist(), np.round(fr_a["centre"], 9).tolist()),
+      ([0.0, 1.0, 0.0], [0.1, 0.135, 0.0]))
 
 # [5] band mesh volume
 offsets = np.array([-0.02, -0.01, 0.0, 0.01, 0.02])
