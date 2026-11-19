@@ -66,8 +66,10 @@ The server process must be allowed to open the render node (`/dev/dri/renderD*`,
   (both refused for the same reason and count) and the HairDeck fits of Rosi and Kira (both accepted, the same
   max push).
 
-**How many at once (`server.gpu_compute_parallel`, default 6).** The test was the HairDeck drape of Rosi, run
-in 1–8 processes at once, 3 rounds of 5 drapes each:
+**How many at once (`server.gpu_compute_parallel`, default 4).**
+
+- **HairDeck drape of Rosi**, launch-bound: 1–8 processes at once, 3 rounds of 5 drapes each, machine load 11–20
+  from other jobs.
 
 | at once | one drape (median) | drapes per minute (median of the rounds) | GPU busy |
 |---|---|---|---|
@@ -78,11 +80,28 @@ in 1–8 processes at once, 3 rounds of 5 drapes each:
 | 6 | 6.8 s | 47 | 84 % |
 | 8 | 8.9 s | 46 | 88 % |
 
-- **The throughput grows up to 6** and is flat beyond.
-- **At 8, one drape is slower than the same drape alone on the CPU.**
-- **The GPU never reached 100 %.** Each job drives its launches from one CPU core, and the launch barriers
-  serialise on the GPU queue. So the knee is the host side, at about 85 % GPU busy.
-- **The machine load was 11–20 throughout** (other jobs), which favours a smaller value on a busy host.
+- **HAAR strand drape of Glut**, compute-bound: 1 round of 4 drapes each.
+
+| at once | one drape (median) | drapes per minute | GPU busy |
+|---|---|---|---|
+| 1 | 2.1 s | 26 | 76 % |
+| 2 | 3.7 s | 30 | 85 % |
+| 4 | 7.2 s | 31 | 94 % |
+| 6 | 10.6 s | 33 | 98 % |
+| 8 | 14.1 s | 32 | 99 % |
+
+The two kinds behave differently:
+
+- **HairDeck: parallel pays while the GPU has headroom.**
+  - The throughput grows up to 6 and is flat at 8. There one drape is slower than alone on the CPU (8.3 s).
+  - The GPU never reached 100 %. Each job drives its launches from one CPU core, so the knee is the host side,
+    at about 85 % GPU busy.
+- **HAAR: one drape nearly fills the GPU.**
+  - From 2 on, the throughput stays flat, and each drape only waits longer.
+  - At 6, one drape takes longer than alone on the CPU (7.7 s).
+- **4 is the largest count where no single drape of either kind is slower than on the CPU.** 6 would be the
+  HairDeck-only answer: +50 % HairDeck throughput, but HAAR drapes 40 % slower than on the CPU.
+- **A finer rule would let a job take several slots** (HAAR 2, HairDeck 1). It is not built.
 - **Memory:** the drape buffers live in GTT (shared system memory), +0.2–0.5 GB per job.
 
 ## Threads on the CPU side

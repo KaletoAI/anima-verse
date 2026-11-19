@@ -93,12 +93,15 @@ SETTING_PARALLEL = "server.gpu_compute_parallel"
 #: ``server.gpu_compute_device`` values.
 AUTO, CPU = "auto", "cpu"
 #: The GPU slots across every process (``process_slots``): folder under the instance, the setting, its fallback
-#: (= the schema default). Why 6 (measured 2026-11-18, HairDeck drape of Rosi, Radeon 8060S iGPU, 1-8 processes,
-#: 3 rounds of 5 drapes each, docs/gpu-compute.md): the throughput rises up to 6 at once (8 -> 47 drapes/min) and
-#: is flat from 6 to 8 (46/min), while one drape then takes 8.9 s instead of 6.8 s — slower than the same drape alone
-#: on the CPU arch (8.3 s). The GPU never reached 100 % (88 % at 8): the knee is the host side, each process drives
-#: its launches from one CPU core and the launch barriers serialise on the GPU queue.
-SLOTS = process_slots.SlotPool(".gpu-compute-slots", SETTING_PARALLEL, 6)
+#: (= the schema default). Why 4 (measured 2026-11-18, Radeon 8060S iGPU, 1-8 processes, docs/gpu-compute.md): the
+#: largest count at which no single drape is slower than the same drape alone on the CPU arch, for BOTH kinds measured.
+#: - HairDeck (Rosi, launch-bound, 24 % GPU busy alone): the throughput rises up to 6 at once (8 -> 47 drapes/min, one
+#:   drape 6.8 s) and is flat at 8 (one drape 8.9 s > 8.3 s on the CPU). The GPU never reached 100 % (88 %): each
+#:   process drives its launches from one CPU core.
+#: - HAAR (Glut, compute-bound, 76 % alone): the throughput is flat from 2 on (26 -> 30-33/min) as the GPU nears
+#:   100 %, and one drape grows with the count: 7.2 s at 4, 10.6 s at 6 (> 7.7 s on the CPU).
+#: 4 keeps both below their CPU time; 6 would be the HairDeck-only answer (+50 % HairDeck throughput).
+SLOTS = process_slots.SlotPool(".gpu-compute-slots", SETTING_PARALLEL, 4)
 #: ICD manifests whose library is a software rasteriser (never a GPU): matched against the library file name.
 SOFTWARE_ICD = re.compile(r"lvp|lavapipe|llvmpipe|swiftshader|gfxstream", re.I)
 #: A Vulkan device name that is a software rasteriser (checked again after Taichi started).

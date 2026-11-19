@@ -350,20 +350,18 @@ SECTIONS = {
             "gpu_compute_parallel": {
                 "type": "int",
                 "label": "Max. concurrent GPU compute jobs",
-                "default": 6,
+                "default": 4,
                 "min": 1,
                 "max": 16,
                 "description": "How many local compute jobs may use the GPU at the same time, across the server and "
                                "its refit worker processes (each worker has its own GPU context). A job that finds "
                                "every slot taken waits for one (the live progress line says \"Waiting for the "
-                               "GPU\"); it never moves to the CPU on its own. Default 6, measured on one item "
-                               "(HairDeck drape, Radeon 8060S iGPU, 1-8 at once): the throughput rises up to 6 "
-                               "drapes at once (8 -> 47 per minute) and stays flat beyond; at 8 a single drape "
-                               "takes longer than the same drape alone on the CPU, although the GPU is still "
-                               "below 100 % — each job drives the GPU from one CPU core, and that, not the GPU, "
-                               "is the limit. A smaller value suits a GPU shared with other work. A change "
-                               "applies to the next job of the server; running refit worker processes keep the "
-                               "value they were started with.",
+                               "GPU\"); it never moves to the CPU on its own. Default 4, measured on a Radeon "
+                               "8060S iGPU: the largest count at which no single drape is slower than alone on the "
+                               "CPU. A HairDeck drape (launch-bound) gains up to 6 at once; a HAAR strand drape "
+                               "fills the GPU alone (76 %) and only gets slower beyond 2-4 at once. A smaller value "
+                               "suits a GPU shared with other work. A change applies to the next job of the "
+                               "server; running refit worker processes keep the value they were started with.",
             },
             "cors_origins": {
                 "type": "text",
