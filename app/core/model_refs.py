@@ -621,7 +621,7 @@ def mesh_items_token(character_name, pieces=None, profile=None) -> str:
 
     Cheap first pass: without an own-mesh piece (item definitions from the
     cached snapshot) no profile is read."""
-    from app.core.garment_set import OWN_MESH_PIECE_KINDS, garment_kind_of
+    from app.core.garment_set import ACCESSORY, OWN_MESH_PIECE_KINDS, garment_kind_of, mesh_mode_of
     from app.core.motion_item_cache import item_snapshot
     if pieces is None:
         if profile is None:
@@ -632,7 +632,10 @@ def mesh_items_token(character_name, pieces=None, profile=None) -> str:
     if not worn:
         return ""
     items = item_snapshot() or {}
-    flagged = sorted({iid for iid in worn.values() if garment_kind_of(items.get(iid)) in OWN_MESH_PIECE_KINDS})
+    # An accessory (Ruling A118) is left out of the texture like an own-mesh piece: same token, so switching a
+    # piece between own mesh and accessory keeps the outfit's signature (0 hub jobs).
+    flagged = sorted({iid for iid in worn.values() if garment_kind_of(items.get(iid)) in OWN_MESH_PIECE_KINDS
+                      or mesh_mode_of(items.get(iid)) == ACCESSORY})
     if not flagged:
         return ""
     from app.core.base_body import is_base_pipeline

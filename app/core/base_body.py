@@ -2722,10 +2722,11 @@ def mesh_record(character_name: str, fig) -> Dict[str, Any]:
     persisted failure (``garments.cached_failure``) or ``NO_MESH_FIT``."""
     from app.core import figure
     # Ruling A119: an in-body piece left off (its shape is not built) is no own-mesh piece — never grafted.
-    intended = sorted({*fig.own, *(i for i, why in fig.left_out.items() if why != figure.LEFT_OFF_SHAPE)})
+    intended = sorted({*fig.own, *fig.accessory,
+                       *(i for i, why in fig.left_out.items() if why != figure.LEFT_OFF_SHAPE)})
     if not intended:
         return {}
-    return {"intended": intended, "effective": list(fig.own), "unpainted": sorted({*fig.own, *fig.left_out}),
+    return {"intended": intended, "effective": sorted({*fig.own, *fig.accessory}), "unpainted": sorted({*fig.own, *fig.accessory, *fig.left_out}),
             "missing": dict(fig.left_out), "warnings": [], "figure": fig.as_dict()}
 
 
@@ -2886,7 +2887,7 @@ def dressed_image(character_name: str, view: str, signature: str, bsig: str, *, 
         fig = figure_mod.delivered_figure_cached(character_name, pieces=dict(manifest.get("pieces") or {}),
                                                  items=list(manifest.get("items") or []),
                                                  piece_state=dict(manifest.get("piece_state") or {}))
-    if fig.bsig != bsig or fig.shape != on or mesh_items_unpainted(meta) != sorted({*fig.own, *fig.left_out}):
+    if fig.bsig != bsig or fig.shape != on or mesh_items_unpainted(meta) != sorted({*fig.own, *fig.accessory, *fig.left_out}):
         return None  # made for another figure
     if is_outfit_body_signature(on) and (meta.get("dressed") is not False) != bool(getattr(fig, "texture", "")):
         # Ruling A50: on a meshed shape a figure paints something exactly when it has a texture — an edit made for a
@@ -4143,7 +4144,7 @@ def figure_texts(character_name: str, fig, items: Optional[list], *,
     only paints the rest on (the texture KEY names the painted pieces alone,
     ``figure.texture_key``)."""
     profile = _worn_profile(_profile_of(character_name, profile), fig.pieces, items)
-    left = sorted({*fig.own, *fig.left_out})
+    left = sorted({*fig.own, *fig.accessory, *fig.left_out})
     state = {i: "open" for i in fig.open}
     return {v: dress_text(character_name, v, pieces=dict(fig.pieces), items=list(items or []), profile=profile,
                           mesh_items=left, piece_state=state) for v in dressed_views()}
@@ -5339,7 +5340,7 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
                                       "paint_region": paint_region.paint_region(pieces, fig.painted)}
         else:
             inputs = texture_inputs(character_name, pieces=pieces, items=items, variant=wanted_variant,
-                                    mesh_effective=sorted({*fig.own, *fig.left_out}), bsig=bsig,
+                                    mesh_effective=sorted({*fig.own, *fig.accessory, *fig.left_out}), bsig=bsig,
                                     profile=mesh_profile)
         view_shas = texture_view_shas(character_name, signature, bsig, fig=fig)
         stored = None if force else stored_texture_body(character_name, tsig, base=source, view_shas=view_shas)

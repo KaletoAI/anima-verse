@@ -84,6 +84,9 @@ class WornSets:
     #: Sorted worn pieces in mode ``template`` (Ruling A138) — also in ``own`` (kind ``clothing``): a draped
     #: template is grafted like an own mesh; this names which of them are templates.
     template: Tuple[str, ...] = ()
+    #: Sorted worn pieces in mode ``accessory`` (Ruling A118): built on the CPU from the plain body and grafted;
+    #: never in ``own`` (no garment chain), never in the body shape, the texture or ``painted``.
+    accessory: Tuple[str, ...] = ()
 
 
 def _open_map(open_ids) -> Dict[str, str]:
@@ -134,9 +137,11 @@ def worn_sets(character_name: str, *, pieces: Optional[Dict[str, str]] = None,
     template = sorted(i for i in ids - set(own)
                       if pipeline and garment_set.mesh_mode_of(get_item(i)) == garment_set.TEMPLATE)
     own.update({item_id: garment_set.CLOTHING for item_id in template})
-    in_body = sorted(i for i in ids - set(own)
+    accessory = sorted(i for i in ids - set(own)
+                       if pipeline and garment_set.mesh_mode_of(get_item(i)) == garment_set.ACCESSORY)
+    in_body = sorted(i for i in ids - set(own) - set(accessory)
                      if pipeline and garment_set.mesh_mode_of(get_item(i)) == garment_set.IN_BODY)
-    painted = sorted(ids - set(own) - set(in_body))
+    painted = sorted(ids - set(own) - set(in_body) - set(accessory))
     mode = garment_hair.hair_mode(character_name, profile=profile)
     state = piece_states(profile, worn) if piece_state is None else (piece_state or {})
     opened = sorted(i for i in ids if state.get(i) == OPEN and garment_set.closable_of(get_item(i)))
@@ -148,7 +153,7 @@ def worn_sets(character_name: str, *, pieces: Optional[Dict[str, str]] = None,
                     pieces=dict(worn), open=tuple(opened),
                     hair_shape=garment_hair.shape_hair(character_name, profile) if hair_pipeline else "",
                     hair_style=garment_hair.hair_style_id(character_name, profile) if hair_pipeline else "",
-                    template=tuple(template))
+                    template=tuple(template), accessory=tuple(accessory))
 
 
 def _dress_texts(character_name: str, sets: WornSets, *, left_out, items: Optional[list],
@@ -189,7 +194,8 @@ def shape_inputs(character_name: str, sets: WornSets, *, bsig: str, variant: str
               "base_variant": variant,
               "hair_in_body": sets.hair_in_body,
               "side_views": base_body.side_views_dressed(),
-              "dress_text": _dress_texts(character_name, sets, left_out=(*sets.painted, *sets.own), items=[],
+              "dress_text": _dress_texts(character_name, sets, left_out=(*sets.painted, *sets.own, *sets.accessory),
+                                         items=[],
                                          profile=profile)}
     if sets.hair_shape:
         inputs["hair"] = sets.hair_shape
@@ -243,11 +249,12 @@ def texture_key(character_name: str, sets: WornSets, *, shape: str, bsig: str, v
     if is_plain(shape):
         plain = base_body.texture_inputs(
             character_name, pieces=dict(sets.pieces), items=list(items or []), variant=variant,
-            mesh_effective=sorted(sets.own), bsig=bsig, profile=profile)
+            mesh_effective=sorted({*sets.own, *sets.accessory}), bsig=bsig, profile=profile)
         if reference and any(plain["dress_text"].values()):
             plain["outfit_reference"] = reference
         return base_body.texture_signature(plain)
-    texts = _dress_texts(character_name, sets, left_out=(*sets.own, *sets.in_body), items=items, profile=profile)
+    texts = _dress_texts(character_name, sets, left_out=(*sets.own, *sets.in_body, *sets.accessory), items=items,
+                         profile=profile)
     if not any(texts.values()):
         return ""
     inputs = {"version": SHAPE_TEXTURE_VERSION, "shape": shape, "base_variant": variant, "dress_text": texts}
@@ -269,9 +276,9 @@ def predicted_variant(character_name: str, sets: WornSets, items: Optional[list]
     profile = _profile_of(character_name, profile)
     dressed = bool(base_body.dress_text(character_name, "front", pieces=dict(sets.pieces), items=list(items or []),
                                         profile=_dressed_profile(profile, sets, items),
-                                        mesh_items=sorted(sets.own)))
+                                        mesh_items=sorted({*sets.own, *sets.accessory})))
     return base_body.texture_variant(character_name, dict(sets.pieces), dressed=dressed,
-                                     mesh={"intended": sorted(sets.own)}, profile=profile)
+                                     mesh={"intended": sorted({*sets.own, *sets.accessory})}, profile=profile)
 
 
 def _state_in(sets: WornSets, item_id: str) -> str:
@@ -440,6 +447,9 @@ class Figure:
     #: Ruling A138: the pieces of ``own`` that are draped templates (``garment_template``), sorted. Recorded only
     #: when one is worn, so a figure without templates records what it recorded before.
     template: Tuple[str, ...] = ()
+    #: Ruling A118: the worn accessories — in a WANTED figure every worn one, in a DELIVERED figure the built ones
+    #: (an unbuilt one is in ``left_out``). Recorded only when one is worn.
+    accessory: Tuple[str, ...] = ()
 
     def as_dict(self) -> Dict[str, Any]:
         """The JSON form an outfit model sidecar records as ``figure`` —
@@ -461,6 +471,8 @@ class Figure:
             out["hair_style"] = self.hair_style
         if self.template:
             out["template"] = list(self.template)
+        if self.accessory:
+            out["accessory"] = list(self.accessory)
         return out
 
     @classmethod
@@ -477,7 +489,8 @@ class Figure:
                    in_body=ids("in_body"), painted=ids("painted"), own=ids("own"), left_out=texts("left_out"),
                    notes=texts("notes"), hair=str(data.get("hair") or HAIR_BODY),
                    pieces=texts("pieces"), open=ids("open"), shown_closed=ids("shown_closed"),
-                   hair_style=str(data.get("hair_style") or ""), template=ids("template"))
+                   hair_style=str(data.get("hair_style") or ""), template=ids("template"),
+                   accessory=ids("accessory"))
 
     def state_of(self, item_id: str) -> str:
         """Where a worn piece is in this figure: ``in_body`` / ``painted`` /
@@ -485,6 +498,8 @@ class Figure:
         from app.core import garment_set
         if item_id in self.template and item_id in self.own:
             return garment_set.TEMPLATE
+        if item_id in self.accessory:
+            return garment_set.ACCESSORY
         if item_id in self.in_body:
             return garment_set.IN_BODY
         if item_id in self.own:
@@ -565,7 +580,7 @@ def _wanted(character_name: str, *, profile: Dict[str, Any], pieces: Optional[Di
                     own=tuple(sorted(sets.own)), notes=notes if not is_plain(shape) else {},
                     hair=HAIR_BODY if sets.hair_in_body else HAIR_HAIRDECK if sets.hair_item else HAIR_BALD,
                     pieces=dict(sets.pieces), open=sets.open, hair_style=sets.hair_style,
-                    template=tuple(sets.template))
+                    template=tuple(sets.template), accessory=tuple(sets.accessory))
     return figure, sets, variant
 
 
@@ -784,6 +799,16 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
         own.append(item_id)
         if stand_in:
             closed.add(item_id)
+    # 2b. Accessories (Ruling A118): worn when their CPU build for this body is current, else left off with why.
+    accessory: List[str] = []
+    if sets.accessory:
+        from app.core import accessory_build
+        for item_id in sets.accessory:
+            state = accessory_build.accessory_state(character_name, item_id, profile=profile)
+            if state["state"] == "current":
+                accessory.append(item_id)
+            else:
+                left_out[item_id] = state["reason"]
     shown_closed = tuple(sorted(closed))
     notes.update({item_id: SHOWN_CLOSED for item_id in shown_closed})
     # 3. Hair.
@@ -809,7 +834,7 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
     if meshed and refusal:
         texture = ""
     else:
-        unpainted = set(own) | set(left_out)
+        unpainted = set(own) | set(left_out) | set(accessory)
         texture_sets = replace(sets, in_body=in_body, painted=tuple(wanted.painted),
                                own={item_id: sets.own.get(item_id, "") for item_id in unpainted})
         texture = texture_key(character_name, texture_sets, shape=shape, bsig=bsig, variant=shape_variant,
@@ -818,7 +843,8 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
                        in_body=tuple(sorted(in_body)), painted=tuple(sorted(wanted.painted)), own=tuple(own),
                        left_out=left_out, notes=notes, hair=hair, pieces=dict(sets.pieces), open=sets.open,
                        shown_closed=shown_closed, hair_style=hair_style, fit_refused=fit_refused,
-                       fit_refused_on=shape if fit_refused else "", template=tuple(sorted(draped)))
+                       fit_refused_on=shape if fit_refused else "", template=tuple(sorted(draped)),
+                       accessory=tuple(sorted(accessory)))
     return wanted, delivered
 
 

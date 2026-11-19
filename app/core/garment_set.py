@@ -59,7 +59,10 @@ TEMPLATE = "template"
 #: A mesh of its own made from the plain body's surface over the region the piece covers (``garment_shell``,
 #: Ruling A48d; its own mode since A168): the own-mesh chain without the cut-outs and the hub mesh job.
 SHELL = "shell"
-MESH_MODES: Tuple[str, ...] = (OWN_MESH, SHELL, PAINTED, IN_BODY, TEMPLATE)
+#: A thin accessory (jewellery, bands) built on the CPU from the plain body (``accessory_build``, Ruling A118 J1):
+#: never worn/ghost/fit, never in the body shape or the texture once chosen.
+ACCESSORY = "accessory"
+MESH_MODES: Tuple[str, ...] = (OWN_MESH, SHELL, PAINTED, IN_BODY, TEMPLATE, ACCESSORY)
 #: The modes whose piece is a fitted mesh of its own (the own-mesh chain, ``garment_kind_of``).
 OWN_MESH_MODES: Tuple[str, ...] = (OWN_MESH, SHELL)
 

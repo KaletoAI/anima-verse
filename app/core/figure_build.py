@@ -136,12 +136,13 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-STEP_ORDER = ("plain_body", "base_repair", "tip_smoothing", "shape", "pieces", "template", "hair", "texture", "fits",
+STEP_ORDER = ("plain_body", "base_repair", "tip_smoothing", "shape", "pieces", "template", "accessory", "hair",
+              "texture", "fits",
               "assemble",
               "collision")
 #: What a step needs: a failed (or skipped) step skips every step naming it here.
 DEPENDS = {"base_repair": {"plain_body"}, "tip_smoothing": {"plain_body"}, "shape": {"plain_body"}, "pieces": {"plain_body"},
-           "template": {"plain_body"}, "hair": {"plain_body"}, "texture": {"plain_body", "shape"}, "fits": {"plain_body"},
+           "template": {"plain_body"}, "accessory": {"plain_body"}, "hair": {"plain_body"}, "texture": {"plain_body", "shape"}, "fits": {"plain_body"},
            "assemble": {"plain_body", "fits"}}
 #: Steps that hold the character's 3D generation slot (model work).
 SLOT_STEPS = frozenset({"plain_body", "base_repair", "tip_smoothing", "shape", "texture", "assemble",
@@ -391,6 +392,24 @@ def _template_step(character_name: str, item_id: str, delivered, profile: Dict[s
     return None
 
 
+#: The label of an accessory build step (Ruling A118): CPU only.
+ACCESSORY_LABEL = "Accessory · {name} (CPU, 0 hub jobs)"
+
+
+def _accessory_step(character_name: str, item_id: str, profile: Dict[str, Any]) -> Optional[Step]:
+    """The CPU build of a worn accessory (``accessory_build.accessory_state``): None when it is current or blocked
+    (no kind, a kind of a later phase, no plain body — the Wardrobe says why); "failed — Retry" for a failed build
+    of the current settings on this body (a manual Build retries it)."""
+    from app.core import accessory_build
+    state = accessory_build.accessory_state(character_name, item_id, profile=profile)
+    label = ACCESSORY_LABEL.format(name=_item_name(item_id))
+    if state["state"] == "due":
+        return Step("accessory", label, 0, item_id)
+    if state["state"] == "failed":
+        return Step("accessory", label + FAILED_SUFFIX, 0, item_id, failed=state["reason"])
+    return None
+
+
 def _runnable(steps: List[Step], explicit: bool) -> List[Step]:
     """The steps that do work: a cached chain failure (ruling 7a) and the
     plain body (ruling 8a) only in a manual Build."""
@@ -491,6 +510,11 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
     for item_id in wanted.template:
         # Ruling A138: a template piece is draped on the CPU (0 hub jobs) when its drape of the current key is missing.
         step = _template_step(character_name, item_id, delivered, profile)
+        if step is not None:
+            steps.append(step)
+    for item_id in wanted.accessory:
+        # Ruling A118: an accessory is built on the CPU (0 hub jobs) when its build for this body is missing.
+        step = _accessory_step(character_name, item_id, profile)
         if step is not None:
             steps.append(step)
     for item_id in wanted.own:
@@ -1692,6 +1716,13 @@ def _run_template(character_name: str, step: Step, explicit: bool = False) -> st
     return "" if state["state"] == "ready" else StepError(str(state["reason"]), state.get("failure"))
 
 
+def _run_accessory(character_name: str, step: Step, explicit: bool = False) -> str:
+    """Build one accessory on the CPU (``accessory_build.build``; 0 hub jobs)."""
+    from app.core import accessory_build
+    state = accessory_build.build(character_name, step.item_id, profile=_read_profile(character_name))
+    return "" if state["state"] == "current" else str(state["reason"])
+
+
 #: The template step's error when the retry budget held an automatic Build's drape back (``_run_template``).
 DRAPE_HELD = ("The drape kept running out of time or being interrupted, so automatic builds skip it for now. "
               "Click Build to drape it now.")
@@ -2016,6 +2047,7 @@ ASSEMBLY_SLOW = "Pieces not put on yet — the garment assembly is still running
 _RUNNERS: Dict[str, Callable[[str, Step, bool], str]] = {
     "plain_body": _run_plain_body, "base_repair": _run_base_repair, "tip_smoothing": _run_tip_smoothing,
     "shape": _run_shape, "pieces": _run_pieces, "template": _run_template,
+    "accessory": _run_accessory,
     "hair": _run_hair, "texture": _run_texture, "fits": _run_fits, "assemble": _run_assemble,
     "collision": _run_collision}
 
@@ -2176,8 +2208,23 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
                      "regenerate_jobs": (_regenerate_jobs(character_name, item_id, profile)
                                          if state == "fit_refused" and words["piece"] else None),
                      "template": (_template_row(character_name, item_id, item, wanted, profile)
-                                  if mode == garment_set.TEMPLATE else None)})
+                                  if mode == garment_set.TEMPLATE else None),
+                     "accessory": (_accessory_row(character_name, item_id, item, profile)
+                                   if mode == garment_set.ACCESSORY else None)})
     return rows
+
+
+def _accessory_row(character_name: str, item_id: str, item: Dict[str, Any],
+                   profile: Dict[str, Any]) -> Dict[str, Any]:
+    """An accessory row's ``accessory`` (Ruling A118): ``{state, reason, kind, suggested, built_at, metrics,
+    cost}`` — the build's state in words, the kind stored (None: none chosen) and the one ``suggest_kind`` proposes."""
+    from app.core import accessory_build, accessory_spec
+    state = accessory_build.accessory_state(character_name, item_id, profile=profile, item=item)
+    spec = accessory_spec.of_item(item)
+    record = state.get("record") or {}
+    return {"state": state["state"], "reason": state["reason"], "kind": spec["kind"] if spec else None,
+            "suggested": accessory_spec.suggest_kind(item), "built_at": record.get("built_at") or "",
+            "metrics": record.get("metrics") or None, "cost": {"hub_jobs": 0}}
 
 
 def _template_row(character_name: str, item_id: str, item: Dict[str, Any], wanted,
@@ -3047,7 +3094,8 @@ def _left_due(entry: Dict[str, Any]) -> bool:
 PROBLEM_MESH, PROBLEM_FAILED = "mesh_mismatch", "failed"
 #: A failed step's label when the plan does not list it any more.
 STEP_LABELS = {"plain_body": "Plain body", "base_repair": MESH_REPAIR_LABEL, "tip_smoothing": TIP_SMOOTHING_LABEL,
-               "shape": "Body shape", "pieces": "Own mesh", "template": "Template drape", "hair": "Hair",
+               "shape": "Body shape", "pieces": "Own mesh", "template": "Template drape",
+               "accessory": "Accessory", "hair": "Hair",
                "texture": "Texture", "fits": "Fits on the CPU", "assemble": ASSEMBLE_LABEL,
                "collision": COLLISION_LABEL}
 _VIEW_IN_ERROR = re.compile(r"\b(front|back|left|right)(?: view\b|:)")

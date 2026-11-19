@@ -930,6 +930,9 @@ def update_item(item_id: str,
         # them, a dict replaces them, anything else clears them. Without this every save of the piece (the
         # parameter dialog's Save included) dropped them while reporting success.
         prev_template = prev_piece.get("template")
+        # Ruling A118: the accessory description (``accessory_spec``) — kept when the update does not name it, a
+        # dict is normalized (an unknown kind refuses the save), null clears it.
+        prev_jewellery = prev_piece.get("jewellery")
         prev_exposed_detail = _clean_exposed_detail((item.get("outfit_piece") or {}).get("exposed_detail"))
         # Same for ``lift``; an explicit null resets it to the slot default.
         prev_lift = (item.get("outfit_piece") or {}).get("lift")
@@ -985,6 +988,10 @@ def update_item(item_id: str,
             template = op.get("template") if "template" in op else prev_template
             if isinstance(template, dict) and template:
                 item["outfit_piece"]["template"] = template
+            jewellery = op.get("jewellery") if "jewellery" in op else prev_jewellery
+            if isinstance(jewellery, dict) and jewellery:
+                from app.core.accessory_spec import normalize as _normalize_jewellery
+                item["outfit_piece"]["jewellery"] = _normalize_jewellery(jewellery)
             lift = _lift(op.get("lift") if "lift" in op else prev_lift)
             if lift is not None:
                 item["outfit_piece"]["lift"] = lift

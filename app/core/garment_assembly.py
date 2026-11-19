@@ -308,7 +308,7 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
     if not hair and not clothing:
         return []
     from app.core import base_body, garment_store
-    from app.core.garment_set import CLOTHING, FOOTWEAR, FOOTWEAR_SLOT
+    from app.core.garment_set import ACCESSORY, CLOTHING, FOOTWEAR, FOOTWEAR_SLOT
     from app.models.inventory import get_item
     base = base_body.current_base(character_name, profile=profile)
     if not base or not base[1]:
@@ -320,13 +320,26 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
     # when the flag was switched off since (that state has a signature of its
     # own; this model needs its garment).
     kinds = {item_id: _piece_kind(items[item_id]) for item_id in clothing
-             if items[item_id].get("category") == "outfit_piece"}
+             if items[item_id].get("category") == "outfit_piece" and garment_set_mode(items[item_id]) != ACCESSORY}
     feet = sorted(item_id for item_id, kind in kinds.items() if kind == FOOTWEAR)
     worn_feet = str(((bare_meta or {}).get("pieces") or {}).get(FOOTWEAR_SLOT) or "")
     chosen_feet = worn_feet if worn_feet in feet else (feet[0] if feet else "")
     out: List[Dict[str, Any]] = []
     for item_id in sorted(hair | clothing):
         item = items[item_id]
+        if item_id in clothing and garment_set_mode(item) == ACCESSORY:
+            # Ruling A118: an accessory built on the CPU from the plain body (``accessory_build``) — grafted on the
+            # plain body and on an outfit body alike (it was built against the plain body; it hides nothing). Not
+            # current: left off.
+            from app.core import accessory_build
+            acc = accessory_build.accessory_state(character_name, item_id, profile=profile, item=item)
+            if acc["state"] == "current":
+                out.append({"item_id": item_id, "kind": ACCESSORY, "fsig": acc["asig"],
+                            "fit": accessory_build.npz_path(character_name, item_id, acc["record"]),
+                            "low": None, "record": acc["record"], "accessory": True})
+            elif left_off is not None:
+                left_off[item_id] = acc["reason"]
+            continue
         if item_id in clothing:
             kind = kinds.get(item_id)
             if kind is None:
@@ -459,7 +472,8 @@ def bare_meta_of(character_name: str, directory: Path, signature: str) -> Dict[s
     if fig.shape != signature or not sha:
         return meta
     return {**meta, "base_signature": signature, "base_model_sha256": sha, "pieces": dict(fig.pieces),
-            "mesh_items": {"intended": list(fig.own), "effective": list(fig.own)}}
+            "mesh_items": {"intended": sorted({*fig.own, *fig.accessory}),
+                           "effective": sorted({*fig.own, *fig.accessory})}}
 
 
 def _wanted_for(character_name: str, directory: Path, signature: str, *,
@@ -657,6 +671,12 @@ def _state(wanted: List[Dict[str, Any]], tier: str, *,
         if hem:
             # the boot hem (``outfit_options``): a toggle or a fallback changes the state, so ``_current`` rebuilds
             entry["hem"] = {"mode": hem["mode"], "lsig": over["lsig"] if over else "", "fallback": hem.get("fallback")}
+        if g.get("accessory"):
+            # Ruling A118: the metal is the accessory's material — a change re-assembles on the CPU
+            from app.core import accessory_build
+            entry["material"] = accessory_build.material_key(g.get("item"))
+            out[g["item_id"]] = entry
+            continue
         if g["kind"] != HAIR:
             entry["material"] = _material(g)[0]
             fabric = _fabric_key(g)
@@ -1098,6 +1118,15 @@ def _build(character_name: str, directory: Path, bare: Path,
     under = _uppers(grafted)
     scalp_tints: Dict[str, Any] = {}
     for garment in grafted:
+        if garment.get("accessory"):
+            # Ruling A118: the accessory's node from its CPU build, with the item's current metal.
+            from app.core import accessory_build, accessory_mesh
+            mesh = accessory_build.garment_mesh(character_name, garment["item_id"], garment["record"],
+                                                garment.get("item"))
+            blob = glb_mesh.graft(blob, mesh, name=accessory_mesh.node_name(garment["item_id"]),
+                                  extras={"kind": garment["kind"], "item_id": garment["item_id"],
+                                          "fsig": garment["fsig"]})
+            continue
         source = _source(garment, tier).read_bytes()
         extras = {"kind": garment["kind"], "item_id": garment["item_id"], "fsig": garment["fsig"]}
         material_overrides = _material(garment)[1] if garment["kind"] != HAIR else None

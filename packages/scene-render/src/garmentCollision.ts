@@ -859,10 +859,13 @@ export const CLOTH_EXCLUDED_REGIONS: readonly string[] = ['arm', ...HAIR_ONLY_RE
  *    `part: "shaft"`) is rigid on the Leg between the ankle band and the knee
  *    and gets none either (boots spec § 10: it never moves deeper into the
  *    shin capsule than in the bind pose, where the bind rule caps a push at 0);
+ *  - accessory: none (Ruling A118, spec 2026-11-16-accessories § 4: a chain
+ *    or band is skinned to the bones under it at 1.5 mm off the skin; a push
+ *    would lift it off the skin it follows);
  *  - every other kind: all regions except `CLOTH_EXCLUDED_REGIONS`.
  */
 export function garmentCapsules<T extends { capsule: { region: string } }>(kind: string | null, bound: readonly T[]): T[] {
-  if (kind === 'footwear') return []
+  if (kind === 'footwear' || kind === 'accessory') return []
   if (kind === 'hair') return bound.filter(entry => HAIR_REGIONS.includes(entry.capsule.region)).slice(0, COLLIDE_MAX)
   const cloth = bound.filter(entry => !CLOTH_EXCLUDED_REGIONS.includes(entry.capsule.region))
   return cloth.slice(0, COLLIDE_MAX)
