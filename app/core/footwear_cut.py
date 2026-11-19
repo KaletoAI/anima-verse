@@ -236,7 +236,8 @@ import numpy as np
 
 from app.core import glb_mesh
 from app.core.footwear_fit import (FOOT_WEIGHT_MIN, SEAM_FLEX_DEG, WALL_SIDE_M, _about, _apply, _frame_matrix, _r,
-                                   _smoothstep, _unit, foot_floor_m, upper_height_map, upper_scale)
+                                   _smoothstep, _unit, foot_floor_m, upper_height_map, upper_scale,
+                                   width_taper_at, width_taper_map)
 from app.core.footwear_gates import check_gates
 from app.core.footwear_insole import HEEL_SEAT_M
 from app.core.glb_mesh import Prim  # noqa: F401  (re-exported: the cut's primitive type)
@@ -416,7 +417,11 @@ def cut_description(fit: Any, insole: Dict[str, Any]) -> Dict[str, Any]:
             vamp_inner = np.stack([gx[inner_ok] * k, (prof_all[inner_ok] + cav[inner_ok]
                                                        * upper_scale(gx[inner_ok], height)) * k], axis=1)
 
-    outline = np.asarray(insole["footprint_outline"], np.float64).reshape(-1, 2) * np.array([k, k * wf])
+    # A219: a closed shoe's width factor tapers behind the ball (``footwear_fit.width_taper``)
+    taper = record["scale"].get("width_taper")
+    outline_raw = np.asarray(insole["footprint_outline"], np.float64).reshape(-1, 2)
+    outline = outline_raw * np.array([k, k * wf])
+    outline[:, 1] *= width_taper_at(outline_raw[:, 0], taper)
     if len(outline) < 3:
         raise ValueError("The insole has no footprint outline")
     prof = _floats(insole["profile"])
@@ -427,7 +432,8 @@ def cut_description(fit: Any, insole: Dict[str, Any]) -> Dict[str, Any]:
     # fit never moves it
     insole_line = np.stack([gx[~np.isnan(prof)] * k, prof[~np.isnan(prof)] * k], axis=1)
     ring = np.asarray((insole.get("overlay") or {}).get("topline") or np.zeros((0, 3)), np.float64).reshape(-1, 3)
-    topline = upper_height_map(_apply(FrameM, ring), insole, height)[0] * scale3 if len(ring) else np.zeros((0, 3))
+    topline = (width_taper_map(upper_height_map(_apply(FrameM, ring), insole, height)[0], taper)[0] * scale3
+               if len(ring) else np.zeros((0, 3)))
     x_min, x_max = (float(outline[:, 0].min()), float(outline[:, 0].max())) if len(outline) else (0.0, 0.0)
     diag = record.get("diagnostics") or {}
 

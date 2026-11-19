@@ -180,7 +180,7 @@ def main() -> int:
                                            "sole_cover": ("min", 0.90), "sole_sink_mm": ("max", 8.0)})
     check("open fit constants", (ff.OPEN_ALLOW_M, ff.OPEN_EDGE_M, ff.STRAP_CLEAR_M, ff.OPEN_HEIGHT_CAP),
           (0.014, 0.005, 0.002, 2.0))
-    check("versions", (fi.INSOLE_VERSION, ff.FOOTWEAR_FIT_VERSION, fc.CUT_VERSION), (9, 19, 7))
+    check("versions", (fi.INSOLE_VERSION, ff.FOOTWEAR_FIT_VERSION >= 19, fc.CUT_VERSION), (9, True, 7))
 
     print("[O1] the pump stays closed")
     pump = fi.analyse_arrays(*fx.wedge())

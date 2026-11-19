@@ -62,12 +62,12 @@ does.
      with ``cut.sides`` and ``foot_pose`` (graftable).
      (a) serving (build False): the current fsig has no fit, the source is ready, the body bytes match, no failure
          -> pending True, fit None (the assembly is not current, a build is asked; nothing to fall back to yet).
-     (b) the build (build True): the fit refuses -> a body failure for the current fsig (fit_version 19, no base
+     (b) the build (build True): the fit refuses -> a body failure for the current fsig (fit_version 20, no base
          fit: ``base_fit_sha`` ""), and the
          old fit is served: fit = the old GLB, fsig ``0123456789ab``, pending False, error the refusal's text.
      (c) the old record without ``cut.sides`` -> nothing graftable: fit None.
      (d) graftable again but made on other body bytes (``body_sha256`` "c" * 64) -> fit None (never another body's).
-     (e) the current fsig's fit accepted on the body (fit_version 19, "b" * 64), derived from the base fit of
+     (e) the current fsig's fit accepted on the body (fit_version 20, "b" * 64), derived from the base fit of
          that fsig (``base_fit_sha256`` = the sha256 of the stored base fit, Ruling A35) -> served itself, fsig
          ``fedcba987654``.
 """
@@ -281,7 +281,7 @@ def test_h5():
     a = served()
     check(a["pending"] is True and a["fit"] is None, f"[H5] (a) serving: pending, nothing grafted yet ({a})")
     b = served(build=True)
-    failure = gs.body_failure("Demo", item, cur_fsig, body, body_sha=sha, base_fit_sha="", fit_version=19)
+    failure = gs.body_failure("Demo", item, cur_fsig, body, body_sha=sha, base_fit_sha="", fit_version=20)
     check(failure is not None and "visible_poke" in str(failure.get("error")),
           f"[H5] (b) the refusal recorded on the body for the current fsig ({failure})")
     check(b["fit"] == old and b["fsig"] == old_fsig and b["pending"] is False and "visible_poke" in b["error"],
@@ -297,7 +297,7 @@ def test_h5():
     base_fit.parent.mkdir(parents=True, exist_ok=True)
     base_fit.write_bytes(b"BASE FIT")
     import hashlib
-    cur = put(cur_fsig, 19, sha, {**graftable, "base_fit_sha256": hashlib.sha256(b"BASE FIT").hexdigest()})
+    cur = put(cur_fsig, 20, sha, {**graftable, "base_fit_sha256": hashlib.sha256(b"BASE FIT").hexdigest()})
     e = served()
     check(e["fit"] == cur and e["fsig"] == cur_fsig, f"[H5] (e) the accepted current fit is served ({e})")
 
