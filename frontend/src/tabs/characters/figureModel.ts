@@ -314,6 +314,9 @@ export interface TemplateParams {
   back_coverage?: number
   side_width_m?: number
   waistband?: string
+  /** A232 briefs: 0 = a brief cut by `leg_cut`; > 0 = short legs this far down the thigh (trunks, boxer briefs,
+   *  boxer shorts with `fit`). */
+  leg_length_m?: number
   /** A223 bra: the cup shape and how much of the bust it covers, the lift, the band under it, the fabric between the
    *  cups, the closure and the straps (shared strap styles, `garment_template.STRAPS`). */
   cup_style?: string
@@ -429,7 +432,7 @@ export const TEMPLATE_FIELD_LABELS: Record<keyof TemplateParams, string> = {
   neckline: 'Neckline', neck_depth_m: 'Neckline depth (0 = usual)', front: 'Front', collar: 'Collar',
   opacity: 'Opacity (0.2 sheer … 1 opaque)',
   rise: 'Rise', leg_cut: 'Leg cut (0 boyshort … 1 high-cut)', back_coverage: 'Seat coverage (0 string … 1 full)',
-  side_width_m: 'Side height', waistband: 'Waistband',
+  side_width_m: 'Side height', waistband: 'Waistband', leg_length_m: 'Leg length (0 = brief cut)',
   cup_style: 'Cups', cup_coverage: 'Cup coverage (0.3 demi … 1 full)', push_up: 'Push-up (0 none … 1 strong)',
   underband_m: 'Underband (0 = the cup edge only)', center_gore: 'Between the cups', closure: 'Closure', straps: 'Straps',
   fingers: 'Fingers', length: 'Glove length', cuff: 'Cuff',
@@ -466,8 +469,12 @@ export function fittedSummary(p: TemplateParams, t: Tr = EN): string {
   const parts = [t(TEMPLATE_CHOICE_LABELS[p.kind] || p.kind)]
   if (p.kind === 'briefs') {
     parts.push(t('{rise} rise').replace('{rise}', t(TEMPLATE_CHOICE_LABELS[p.rise || 'mid'] || p.rise || '')))
-    parts.push(t('leg cut {n}').replace('{n}', Number(p.leg_cut ?? 0.5).toFixed(2)))
-    parts.push(t('seat {n}').replace('{n}', Number(p.back_coverage ?? 1).toFixed(2)))
+    if (Number(p.leg_length_m || 0) > 0) {
+      parts.push(t('legs {cm}').replace('{cm}', cm(Number(p.leg_length_m))))
+    } else {
+      parts.push(t('leg cut {n}').replace('{n}', Number(p.leg_cut ?? 0.5).toFixed(2)))
+      parts.push(t('seat {n}').replace('{n}', Number(p.back_coverage ?? 1).toFixed(2)))
+    }
   }
   if (p.kind === 'bra') {
     parts.push(t(TEMPLATE_CHOICE_LABELS[p.cup_style || 'molded'] || p.cup_style || ''))

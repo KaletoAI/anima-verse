@@ -30,6 +30,8 @@ Fields:
 - "collar" (jacket only): "none", "stand" (a standing collar) or "lapel" (a blazer's folded lapels; such a jacket is open at the neck).
 - "fabric": "stiff" (denim, wool, thick cotton that keeps its shape), "leather_glossy" (shiny, polished or patent leather, latex-like shine), "leather_rough" (suede, nubuck, matte leather), "medium" (ordinary cotton, linen), "flowing" (silk, satin, jersey, anything opaque that falls in soft folds), "sheer" (chiffon, voile, organza, tulle, mesh — very light and see-through).
 - "rise" (briefs only): "low" (well under the navel, on the hip bones), "mid" or "high" (up to the waist).
+- "leg_length_m" (briefs only): 0 for a brief, panty or thong; for underwear with short legs how far the legs reach down the thigh from the crotch in metres — "trunks" 0.03-0.06, "boxer briefs" 0.10-0.18, "boxer shorts" (loose boxers) 0.08-0.15. With legs, "leg_cut" and "back_coverage" are left out.
+- "fit" (briefs with "leg_length_m" over 0 only): 0.0-0.2 for snug trunks and boxer briefs, 0.6-0.9 for loose boxer shorts that hang from the waistband.
 - "leg_cut" (briefs only): how high the leg openings are cut at the sides, 0.0 (boyshort, straight across the thigh) .. 0.5 (classic) .. 1.0 (high-cut, French cut).
 - "back_coverage" (briefs only): how much of the seat the back covers, 0.0 (string / thong) .. 0.3 (Brazilian) .. 1.0 (full).
 - "side_width_m" (briefs only): the height of the side panel between the waistband and the leg opening in metres, 0.01 (string bikini) .. 0.10.
@@ -63,6 +65,8 @@ or
 {"kind": "top", "shoulders": "off_shoulder", "length_m": 0.55, "sleeves": "long", "sleeve_fit": 0.6, "fit": 0.35, "band_m": 0.025, "band_drop_m": 0.05, "lacing": "front", "lace_depth_m": 0.2, "fabric": "medium"}
 or
 {"kind": "briefs", "rise": "low", "leg_cut": 0.85, "back_coverage": 0.6, "side_width_m": 0.04, "waistband": "thin", "fabric": "stiff"}
+or
+{"kind": "briefs", "rise": "mid", "leg_length_m": 0.14, "fit": 0.1, "waistband": "wide", "fabric": "flowing"}
 or
 {"kind": "bra", "cup_style": "molded", "cup_coverage": 0.8, "push_up": 0.7, "underband_m": 0, "center_gore": "narrow", "closure": "back_hook", "straps": "thin", "fabric": "stiff"}
 or

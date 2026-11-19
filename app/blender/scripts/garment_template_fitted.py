@@ -12,6 +12,9 @@ caller then pins the returned vertices and runs the short cloth relax (``frames`
 * briefs: waistband plane at ``top_y``; the leg opening per face centroid: under the gusset (|x| < gusset half width)
   the crotch less 5 mm, rising to ``top - side_width`` at the hip's side over a curve shaped by ``leg_cut``; on the
   back the full-height part reaches ``back_coverage`` of the way to the side. Pinned: the waistband and the gusset.
+  A232 boxers (``leg_length_m`` > 0): the hips and both thighs from ``top_y`` to a straight hem ``leg_length_m`` under
+  the crotch (``boxer_region``, the tights' per-vertex way: no arm / hand); pinned the waistband and — ``hem_pinned``
+  (snug) — a band at each hem and the gusset; a loose boxer hangs from its waistband.
 * bra: the underband plane at ``under_y - band``; per side a cup from the underbust line to its top edge
   (``style`` / ``coverage``), the gore between them, the straps (``straps``) as strips within half their width of a
   path laid on the surface; push-up moves the cups up, in and out before the evening. Pinned: the band, the straps,
@@ -149,6 +152,34 @@ def briefs_region(f, co, w, cx, cy):
 
     return keep, planes, pins, {"cy": cy, "crotch_z": round(crotch, 4), "hip_half_m": round(hip_half, 4),
                                 "leg_side_z": round(l_side, 4), "back_width_m": round(w_back, 4)}
+
+
+def boxer_region(f, co, w, cx):
+    """A232 boxers: ``(keep_v(v, arm_v), planes, pins(v), info)`` — every collider vertex from the waistband down to
+    the hem ``leg_length_m`` under the crotch that is not an arm's / hand's (an A-pose hand hangs beside the thigh);
+    the hem is one horizontal plane (both legs at the same height in the rest pose)."""
+    top = _gltf_y(f["top_y"])
+    crotch = _crotch(co, w["Hips"], cx, top)
+    hem = crotch - float(f["leg_length_m"])
+    band = float(f["band_m"])
+    g = float(f["gusset_half_m"])
+    hem_pin = float(f["hem_pin_m"]) if f.get("hem_pinned") else 0.0
+
+    def keep_v(v, arm_v):
+        return (arm_v < 0.5) & (v[:, 2] <= top + 0.005) & (v[:, 2] >= hem - 0.005)
+
+    planes = [(np.array([0.0, 0.0, top]), np.array([0.0, 0.0, 1.0])),
+              (np.array([0.0, 0.0, hem]), np.array([0.0, 0.0, -1.0]))]
+
+    def pins(v):
+        m = v[:, 2] > top - band - 0.002
+        if hem_pin > 0:
+            m |= v[:, 2] < hem + hem_pin
+            m |= (np.abs(v[:, 0] - cx) < g) & (np.abs(v[:, 2] - crotch) < 0.03)
+        return m
+
+    return keep_v, planes, pins, {"crotch_z": round(crotch, 4), "hem_z": round(hem, 4),
+                                  "hem_pinned": bool(hem_pin > 0)}
 
 
 def _mid_y(co, cx, z, half=0.15):
@@ -540,7 +571,16 @@ def build_fitted(prm, spec, arm, body, ctree, col=None):
     cent = np.array([fa.calc_center_median() for fa in bm.faces])
     keep_layer = bm.faces.layers.int.new("keep")
     push = closure = cups = None
-    if kind == "briefs":
+    if kind == "briefs" and float(f.get("leg_length_m") or 0.0) > 0:
+        keep_v, planes, pins, extra = boxer_region(f, co, w, cx)
+        info.update(extra)
+        arm_w = sum(w[sd + b] for sd in ("Left", "Right") for b in GLOVE_BONES)
+        kd = _kd(co)
+        cco = np.array([v.co for v in bm.verts])
+        near = np.array([kd.find(Vector(p))[1] for p in cco])
+        vk = keep_v(cco, arm_w[near])
+        mask = np.array([all(vk[v.index] for v in fa.verts) for fa in bm.faces])
+    elif kind == "briefs":
         keep, planes, pins, extra = briefs_region(f, co, w, cx, cy)
         info.update(extra)
         mask = keep(cent)

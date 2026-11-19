@@ -6759,6 +6759,8 @@
     "{rise} rise": "Leibhöhe {rise}",
     "leg cut {n}": "Beinausschnitt {n}",
     "seat {n}": "Gesäß {n}",
+    "Leg length (0 = brief cut)": "Beinlänge (0 = Slip-Schnitt)",
+    "legs {cm}": "Beine {cm}",
     "A close-fitting piece is cut from the body itself and pinned at its bands — it has no length of its own.": "Ein eng anliegendes Stück wird aus dem Körper selbst geschnitten und an seinen Bündchen fixiert — es hat keine eigene Länge.",
     "Bra": "BH",
     "Molded cups": "Formschalen",

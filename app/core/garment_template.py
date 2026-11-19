@@ -224,6 +224,9 @@ PARAM_SPEC: Dict[str, Tuple[str, Any, Any]] = {
     "back_coverage": ("number", (0.0, 1.0), 1.0),    # 0 string .. 0.3 Brazilian .. 1 full seat
     "side_width_m": ("number", (0.01, 0.10), 0.05),  # the side panel between the waistband and the leg opening
     "waistband": ("choice", WAISTBANDS, "thin"),
+    # A232: 0 = a brief cut by ``leg_cut``; > 0 = short legs this far down the thigh from the crotch (trunks,
+    # boxer briefs, boxer shorts with ``fit``)
+    "leg_length_m": ("number", (0.0, 0.30), 0.0),
     # A223 bra
     "cup_style": ("choice", CUP_STYLES, "molded"),
     "cup_coverage": ("number", (0.3, 1.0), 0.7),     # 0.3 demi .. 1 full cup
@@ -251,7 +254,8 @@ KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
             *OFF_SHOULDER_FIELDS),
     "jacket": ("kind", "fabric", "opacity", "length_m", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m", "front",
                "collar"),
-    "briefs": ("kind", "fabric", "opacity", "rise", "leg_cut", "back_coverage", "side_width_m", "waistband"),
+    "briefs": ("kind", "fabric", "opacity", "rise", "leg_cut", "back_coverage", "side_width_m", "waistband",
+               "leg_length_m", "fit"),
     "bra": ("kind", "fabric", "opacity", "cup_style", "cup_coverage", "push_up", "underband_m", "center_gore", "closure",
             "straps"),
     "gloves": ("kind", "fabric", "opacity", "fingers", "length", "cuff", "fit"),
@@ -576,6 +580,13 @@ def validate_params(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
         params["sleeve_fit"] = PARAM_SPEC["sleeve_fit"][2]
     if params["fabric"] != SHEER:
         params["opacity"] = PARAM_SPEC["opacity"][2]
+    if kind == "briefs":
+        # A232: a brief's leg opening is ``leg_cut``, a boxer's the straight hem ``leg_length_m`` down the thigh (with
+        # the ease ``fit``) — the field the cut does not read keeps its default, so it never changes the drape key
+        if params["leg_length_m"] > 0:
+            params["leg_cut"] = PARAM_SPEC["leg_cut"][2]
+        else:
+            params["fit"] = PARAM_SPEC["fit"][2]
     if params["slit"] == "none":
         params["slit_m"] = 0.0
     elif params["slit_m"] <= 0.0:
@@ -1215,6 +1226,12 @@ KNEE_TOP_DROP_M = 0.05
 GARTER_TAB_HALF_M = 0.012
 GARTER_TAB_H_M = 0.04
 CUFF_M = 0.06
+#: A232 boxers (briefs with ``leg_length_m`` > 0): the cloth lies FITTED_OFFSET_M + this x ``fit`` over the skin; up to
+#: BOXER_SNUG_FIT the hems are pinned with the waistband (trunks, boxer briefs), looser ones hang from the waistband.
+BOXER_FIT_M = 0.02
+BOXER_SNUG_FIT = 0.3
+#: A232 boxers: the pinned band at each leg hem (snug fits).
+BOXER_HEM_PIN_M = 0.015
 
 
 def _bust_lines(meas: Dict[str, Any]) -> Tuple[float, float]:
@@ -1273,7 +1290,13 @@ def fitted_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
                     "waistband_m": WAISTBAND_M[params["waistband"]], "leg_cut": params["leg_cut"],
                     "back_coverage": params["back_coverage"], "side_width_m": params["side_width_m"],
                     "gusset_half_m": GUSSET_HALF_M, "boyshort_drop_m": BOYSHORT_DROP_M})
-        rows = [round(top, 4), round(meas["hip_y"] - 0.2, 4)]
+        leg = float(params.get("leg_length_m") or 0.0)
+        if leg > 0:
+            # A232: short legs to a straight hem ``leg`` under the crotch; leg_cut / back_coverage do not apply
+            fit.update({"leg_length_m": round(leg, 4), "fit": params["fit"],
+                        "offset_m": round(FITTED_OFFSET_M + BOXER_FIT_M * params["fit"], 4),
+                        "hem_pinned": params["fit"] <= BOXER_SNUG_FIT, "hem_pin_m": BOXER_HEM_PIN_M})
+        rows = [round(top, 4), round(meas["hip_y"] - 0.2 - leg, 4)]
     elif kind == "bra":
         under, bust = _bust_lines(meas)
         gore_half, gore_h = GORE[params["center_gore"]]
@@ -1372,6 +1395,8 @@ def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List
     params = {k: v for k, v in params.items() if k not in MATERIAL_ONLY}
     if params.get("shoulders") != "off_shoulder":      # A229: the off-shoulder fields key only an off-shoulder piece
         params = {k: v for k, v in params.items() if k not in OFF_SHOULDER_FIELDS}
+    if not params.get("leg_length_m"):                  # A232: a brief without legs keeps the key it had
+        params.pop("leg_length_m", None)
     if params.get("fabric") in DRAPE_FABRIC:          # A214: the leather finishes share one drape
         params["fabric"] = DRAPE_FABRIC[params["fabric"]]
     payload = {"params": params, "version": TEMPLATE_VERSION, "base": base_sha, "texture": texture_sha,

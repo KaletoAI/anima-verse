@@ -163,7 +163,7 @@ check("[1] defaults, no error", e == [] and p == {"kind": "skirt", "length_m": 0
                                                   "opacity": 0.4,
                                                   # A223: the fitted kinds' fields (at their defaults on a skirt)
                                                   "rise": "mid", "leg_cut": 0.5, "back_coverage": 1.0,
-                                                  "side_width_m": 0.05, "waistband": "thin", "cup_style": "molded",
+                                                  "side_width_m": 0.05, "waistband": "thin", "leg_length_m": 0.0, "cup_style": "molded",
                                                   "cup_coverage": 0.7, "push_up": 0.0, "underband_m": 0.02,
                                                   "center_gore": "narrow", "closure": "back_hook", "straps": "thin",
                                                   "fingers": "full", "length": "wrist", "cuff": "none",

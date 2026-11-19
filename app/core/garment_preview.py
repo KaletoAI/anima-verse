@@ -604,6 +604,9 @@ def _fitted(p, m, reg: Registration, cap_m: float, add, mark) -> None:
     x0 = reg.x0
     spec = gt.fitted_spec(p, m)["fitted"]
     kind = p["kind"]
+    if kind == "briefs" and spec.get("leg_length_m"):
+        _boxers(p, m, reg, spec, cap_m, add, mark)
+        return
     if kind == "briefs":
         top = spec["top_y"]
         crotch = _crotch_y(m)
@@ -722,6 +725,41 @@ def _tights(p, m, reg: Registration, spec: Dict[str, Any], cap_m: float, add, ma
             add("tab", "fill", [[guess - w, top], [guess + w, top], [guess + w, top + spec["tab_h_m"]],
                                 [guess - w, top + spec["tab_h_m"]]])
     mark(x0 + 0.2, leg_top, f"{style} · {spec['feet']}")
+
+
+def _boxers(p, m, reg: Registration, spec: Dict[str, Any], cap_m: float, add, mark) -> None:
+    """A232: briefs with legs — the seat from the waistband to the crotch, then each leg straight down to the hem
+    ``leg_length_m`` under the crotch (the leg's width in the picture plus the cloth's gap ``offset_m`` each side)."""
+    import numpy as np
+    j = m.get("joints") or {}
+    x0 = reg.x0
+    top = spec["top_y"]
+    crotch = _crotch_y(m)
+    hem = crotch - spec["leg_length_m"]
+    bl, br = reg.body_half(top, cap_m)
+    hl, hr = reg.body_half(m["hip_y"], cap_m)
+    add("body", "fill", [[x0 - bl, top], [x0 + br, top], [x0 + hr, m["hip_y"]], [x0 + hr, crotch],
+                         [x0 - hl, crotch], [x0 - hl, m["hip_y"]]])
+    for side, key in ((1, "leftupleg"), (-1, "rightupleg")):
+        guess = j[key][0] if key in j else x0 + side * 0.09
+        inner, outer = [], []
+        for y in np.linspace(crotch + 0.01, hem, 6):
+            run = reg.leg_run(float(y), guess)
+            a, b = run if run is not None else (guess - 0.08, guess + 0.08)
+            if side > 0:
+                a = max(a, x0)
+            else:
+                b = min(b, x0)
+            c, w = (a + b) / 2, (b - a) / 2 + spec["offset_m"]
+            inner.append([c - w if side > 0 else c + w, float(y)])
+            outer.append([c + w if side > 0 else c - w, float(y)])
+        add("leg", "fill", inner + outer[::-1])
+    if spec["waistband_m"] > 0:
+        add("waist", "dash", [[x0 - bl, top - spec["waistband_m"]], [x0 + br, top - spec["waistband_m"]]])
+    add("hem", "dash", [[x0 - hl * 1.1, hem], [x0 + hr * 1.1, hem]])
+    mark(x0 + br + 0.03, top, f"rise {p['rise']}")
+    mark(x0 + hr + 0.05, hem, f"legs {round(spec['leg_length_m'] * 100)} cm")
+    mark(x0, hem - 0.04, f"fit {p['fit']:.2f} · {p['fabric']}", "middle")
 
 
 def _trousers(p, m, reg: Registration, waist_y: float, cap_m: float, add, mark) -> None:
