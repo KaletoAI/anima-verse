@@ -186,6 +186,20 @@ def clothing_lift_slots():
     return dict(sorted(result.items()))
 
 
+def piece_lift(own, full, partial, lift_defaults):
+    """THE effective lift of one worn piece against ``lift_defaults`` ({clothing slot: default}): only the slots
+    that declare a default lift; the piece's own ``outfit_piece.lift`` replaces that default; a partial cover
+    counts half. ``full`` / ``partial``: the slots the piece covers fully / partly. None when no slot is hit.
+    Used by ``motion_payload`` (per group) and by the chest shaping (``bust_shaping.effective_lift``, A228)."""
+    hit, half = set(full) & set(lift_defaults), False
+    if not hit:
+        hit, half = set(partial) & set(lift_defaults), True
+    if not hit:
+        return None
+    value = own if own is not None else max(lift_defaults[slot] for slot in hit)
+    return value / 2 if half else value
+
+
 def motion_damping_slots():
     """Clothing slots that cover a body slot carrying a moving rig (one with
     chains) in any loaded package, sorted — where ``outfit_piece.motion_damping``
@@ -560,7 +574,8 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
     freq_hz/zeta stiffer by 1/sqrt(factor); the strongest covering piece's
     ``lift`` (absent = the group's ``clothing_lift_default`` for that slot,
     half for a partial cover) scales gravity and sag_max_deg by (1 - lift) and
-    adds lift * rest_max_deg to the rest angle before its clamp."""
+    adds lift * rest_max_deg to the rest angle before its clamp (not for a piece that
+    shapes the chest under it, A228 ``bust_shaping``: its lift is in the rest geometry)."""
     import math
     from app.core import config
     from app.core.body_slots import slots_for_character
@@ -598,6 +613,8 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
                            for key in ("motion_damping", "covers", "partially_covers")}
             # Absent = the group's ``clothing_lift_default`` for the slot.
             pieces[iid]["lift"] = op.get("lift")
+            from app.core import bust_shaping
+            pieces[iid]["shapes"] = bust_shaping.shapes_chest(item)
             pieces[iid]["occupied_slots"] = sorted(slot for slot, worn in equipment.items() if worn == iid)
     slots = slots_for_character(character_name, profile=profile)
     attributes = {rig.id: ((profile.get("body_slots") or {}).get(slot.id) or {})
@@ -658,7 +675,7 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
         factor = values["freetext_clothing_gain"] if apply_clothing and not pieces and free_text else 1.0
         targets = set(coverage.get(group["id"], []))
         lift_defaults = group.get("clothing_lift_default") or {}
-        lift = 0.0
+        lift = rest_lift = 0.0
         for piece in pieces.values():
             f = piece["motion_damping"]
             full = targets.intersection(set(piece["covers"]) | set(piece["occupied_slots"]))
@@ -667,16 +684,13 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
                 factor *= f
             elif partial:
                 factor *= 1 - (1 - f) / 2
-            # Lift: only the slots the group declares a default for lift it;
-            # a piece's own value replaces that default, a partial cover
-            # counts half, and the strongest piece wins.
-            hit, half = full & set(lift_defaults), False
-            if not hit:
-                hit, half = partial & set(lift_defaults), True
-            if hit:
-                own = piece["lift"]
-                value = own if own is not None else max(lift_defaults[slot] for slot in hit)
-                lift = max(lift, value / 2 if half else value)
+            # Lift (``piece_lift``): the strongest piece wins. A228: a piece that shapes the chest under it
+            # (``bust_shaping``) already lifts the rest geometry — it reduces the sag but raises no rest angle.
+            value = piece_lift(piece["lift"], full, partial, lift_defaults)
+            if value is not None:
+                lift = max(lift, value)
+                if not piece["shapes"]:
+                    rest_lift = max(rest_lift, value)
         # The clothing factor holds the whole motion like ``bounce`` does:
         # amplitude, swing limit, follow-through and outward spill shrink,
         # the spring gets stiffer and better damped by 1/sqrt(factor).
@@ -719,7 +733,7 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
             "op": group["op"],
             "bones": [link["bone"] for chain in group["chains"] for link in chain],
             **values, "scale_axis": group["scale_axis"], "rigid_tail": group["rigid_tail"],
-            "rest_deg": max(-values["rest_max_deg"], min((rest or 0) + lift * values["rest_max_deg"], values["rest_max_deg"])),
+            "rest_deg": max(-values["rest_max_deg"], min((rest or 0) + rest_lift * values["rest_max_deg"], values["rest_max_deg"])),
         }
     groups.update(hair)
     inputs = {"declarations": declarations, "world": world, "equipment": equipment,

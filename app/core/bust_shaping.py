@@ -11,48 +11,51 @@ body file is never changed — the shaping exists only in a drape's scratch copy
 The displacement is a pure function of a vertex's position (bind space, glTF Y-up, front = +Z) and the
 ``landmarks`` measured once on the plain body, so the full and the low tier (different vertices) shape alike.
 
-    p   = z - wall(x)                              (protrusion in front of the chest wall, ``wall_at``)
-    w_p = smoothstep(p; 0, PROTRUSION_FULL_M)
-    w_v = smoothstep(y; under_y - BELOW_M, under_y + RISE_M) * (1 - smoothstep(y; band_y, band_y + ABOVE_M))
-    w_x = 1 - smoothstep(|x - centre_x|; SIDE_M[0], SIDE_M[1])
-    w   = lift * min(1, depth_m / FULL_DEPTH_M) * w_p * w_v * w_x
-    y'  = y + LIFT_M * w
-    z'  = z - COMPRESS * w * max(p, 0)
+    p      = z - wall(x)                           (protrusion in front of the chest wall, ``wall_at``)
+    base   = strength * w_v * w_x,   strength = lift * min(1, depth_m / FULL_DEPTH_M)
+    w_v    = smoothstep(y; under_y - BELOW_M, under_y + RISE_M) * (1 - smoothstep(y; band_y, band_y + ABOVE_M))
+    w_x    = 1 - smoothstep(|x - centre_x|; SIDE_M[0], SIDE_M[1])
+    y'     = y + LIFT_M * base * smoothstep(p; 0, LIFT_RAMP_M)
+    z'     = z - COMPRESS * base * max(p, 0)
 
-The ramps are gentle enough that the map never folds: d y'/dy >= 1 - LIFT_M * 1.5 / ABOVE_M and
-d z'/dz >= 1 - COMPRESS * (1 + 8/9) (both > 0; ``scripts/smoke_bust_shaping.py`` derives them).
+The map never folds: its Jacobian determinant stays above 0.15 at strength 1 (``scripts/smoke_bust_shaping.py``
+samples it on a (y, p) grid and checks the smallest face-area ratio of a shaped sheet).
 """
 from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
 #: Bump when the field changes: it is part of every shaped drape's key.
-VERSION = 1
+VERSION = 2
 #: The lift of the chest tissue at lift 1 (metres, upward).
 LIFT_M = 0.05
 #: The share of the protrusion in front of the chest wall taken away at lift 1.
 COMPRESS = 0.5
 #: The chest depth (``landmarks`` ``depth_m``: the largest protrusion in front of the chest wall between the
 #: underbust line and the band) from which the shaping is full; a shallower chest takes the share it has.
-FULL_DEPTH_M = 0.10
-#: The protrusion at which a vertex takes the full shaping (metres).
-PROTRUSION_FULL_M = 0.02
+FULL_DEPTH_M = 0.08
+#: The protrusion over which the lift grows from 0 to full (metres). Review H1: one steep 2 cm ramp for the lift
+#: and the gathering made d y'/d z large enough to fold the surface just above the band (Jacobian det -0.116). The
+#: gathering needs no ramp: it scales the protrusion itself, which is 0 at the wall.
+LIFT_RAMP_M = 0.06
 #: The vertical ramps round the underbust line and above the chest band (metres).
 BELOW_M = 0.03
 RISE_M = 0.02
-ABOVE_M = 0.08
+ABOVE_M = 0.12
 #: The sideways fade from the body's middle (metres): full inside the first, none beyond the second.
-SIDE_M = (0.17, 0.21)
+SIDE_M = (0.16, 0.20)
 #: The kinds of template piece that shape the chest.
 SHAPING_KINDS = ("top", "dress")
 #: The chest-wall bins (``landmarks``): this wide, this many from the middle out.
 WALL_STEP_M = 0.02
 WALL_BINS = 11
 WALL_SLICE_M = 0.005
+#: How far the chest wall may fall back from one bin to the next outward (metres; slope 0.6).
+WALL_MAX_DROP_M = 0.012
 
 
 def _smoothstep(v, a: float, b: float):
@@ -108,6 +111,10 @@ def landmarks(positions, meas: Dict[str, Any]) -> Dict[str, float]:
     for k in range(WALL_BINS):
         if wall[k] is None:
             wall[k] = wall[known[0]] if k < known[0] else wall[known[-1]]
+    # the wall falls back at most WALL_MAX_DROP_M per bin outward (a measured step — the rib cage's side behind the
+    # outer chest — folded the shaped surface there: z' depends on z - wall(x), so a steep wall is a steep d z'/dx)
+    for k in range(1, WALL_BINS):
+        wall[k] = max(wall[k], wall[k - 1] - WALL_MAX_DROP_M)
     wall = [round(float(w), 4) for w in wall]
     lm = {"centre_x": centre_x, "wall_z": wall}
     region = (P[:, 1] > under_y) & (P[:, 1] < float(meas["band_y"])) & (np.abs(P[:, 0] - centre_x) < SIDE_M[0])
@@ -127,15 +134,21 @@ def wall_at(x, lm: Dict[str, float]) -> np.ndarray:
     return np.interp(np.abs(np.asarray(x, np.float64) - lm["centre_x"]), centres, np.asarray(wall, np.float64))
 
 
-def weights(positions, lm: Dict[str, float], lift: float) -> np.ndarray:
-    """``w`` of the module docstring per vertex."""
+def weights(positions, lm: Dict[str, float], lift: float) -> Tuple[np.ndarray, np.ndarray]:
+    """``(w_lift, w_gather)`` of the module docstring per vertex."""
     P = np.asarray(positions, np.float64)
     p = P[:, 2] - wall_at(P[:, 0], lm)
-    w_p = _smoothstep(p, 0.0, PROTRUSION_FULL_M)
     w_v = (_smoothstep(P[:, 1], lm["under_y"] - BELOW_M, lm["under_y"] + RISE_M)
            * (1.0 - _smoothstep(P[:, 1], lm["band_y"], lm["band_y"] + ABOVE_M)))
-    w_x = 1.0 - _smoothstep(np.abs(P[:, 0] - lm["centre_x"]), SIDE_M[0], SIDE_M[1])
-    return strength(lm, lift) * w_p * w_v * w_x
+    w_x = side_weight(P, lm)
+    base = strength(lm, lift) * w_v * w_x
+    return base * _smoothstep(p, 0.0, LIFT_RAMP_M), base
+
+
+def side_weight(positions, lm: Dict[str, float]) -> np.ndarray:
+    """``w_x``: full near the middle, none past ``SIDE_M[1]`` from it."""
+    P = np.asarray(positions, np.float64)
+    return 1.0 - _smoothstep(np.abs(P[:, 0] - lm["centre_x"]), SIDE_M[0], SIDE_M[1])
 
 
 def strength(lm: Dict[str, float], lift: float) -> float:
@@ -146,24 +159,16 @@ def strength(lm: Dict[str, float], lift: float) -> float:
 def displace(positions, lm: Dict[str, float], lift: float) -> np.ndarray:
     """The shaped positions (module docstring); vertices outside the chest region come back unchanged."""
     P = np.array(positions, np.float64, copy=True)
-    w = weights(P, lm, lift)
+    w_lift, w_gather = weights(P, lm, lift)
     p = np.maximum(P[:, 2] - wall_at(P[:, 0], lm), 0.0)
-    P[:, 1] += LIFT_M * w
-    P[:, 2] -= COMPRESS * w * p
+    P[:, 1] += LIFT_M * w_lift
+    P[:, 2] -= COMPRESS * w_gather * p
     return P
 
 
 def record(lm: Dict[str, float], lift: float) -> Dict[str, Any]:
     """What a drape record keeps (``shaping``) and the assembly re-applies."""
     return {"version": VERSION, "lift": round(float(lift), 4), "landmarks": dict(lm)}
-
-
-def signature(params: Optional[Dict[str, Any]], lift: float) -> Optional[str]:
-    """The drape-key token of the shaping (None when the piece does not shape): a changed lift re-drapes."""
-    if not applies(params, lift):
-        return None
-    raw = json.dumps({"v": VERSION, "lift": round(float(lift), 4)}, sort_keys=True)
-    return "shape:" + hashlib.md5(raw.encode("utf-8")).hexdigest()[:8]
 
 
 def shape_glb(blob: bytes, rec: Dict[str, Any]) -> bytes:
@@ -254,7 +259,7 @@ def shape_glb(blob: bytes, rec: Dict[str, Any]) -> bytes:
 
 
 def _normals(P, faces, old, moved_mask) -> np.ndarray:
-    """Area-weighted vertex normals of ``P``; only the vertices of faces touching a moved vertex take them."""
+    """Area-weighted vertex normals of ``P``; only the moved vertices take them."""
     F = np.asarray(faces, np.int64)
     fn = np.cross(P[F[:, 1]] - P[F[:, 0]], P[F[:, 2]] - P[F[:, 0]])
     acc = np.zeros_like(P)
@@ -262,8 +267,7 @@ def _normals(P, faces, old, moved_mask) -> np.ndarray:
         np.add.at(acc, F[:, k], fn)
     length = np.linalg.norm(acc, axis=1, keepdims=True)
     new = np.where(length > 1e-12, acc / np.maximum(length, 1e-12), old)
-    touched = np.zeros(len(P), bool)
-    touched[F[moved_mask[F].any(axis=1)].ravel()] = True
+    touched = np.asarray(moved_mask, bool)          # review L8: an unmoved vertex keeps its stored normal
     out = np.array(old, np.float64, copy=True)
     out[touched] = new[touched]
     return out
@@ -291,10 +295,23 @@ def _shape_joints(gltf: dict, data: bytearray, views: list, accessors: list, lm:
            .reshape(4, 4).T for k in range(len(joints))]
     bind = np.array([np.linalg.inv(m)[:3, 3] for m in ibm])
     target = displace(bind, lm, lift)
-    move = [k for k in range(len(joints)) if np.linalg.norm(target[k] - bind[k]) > 1e-7]
+    parent = {c: i for i, n in enumerate(nodes) for c in n.get("children") or []}
+    # a chain that ends in the shaped tissue moves as a unit: an unmoved joint whose ONLY child moved takes the
+    # child's displacement, up the chain (a chest chain's root sits behind the wall; left there, its segment to the
+    # moved end turned and its end reached out of the shaped surface — the drape's poke rays start on that segment)
+    slot = {j: k for k, j in enumerate(joints)}
+    moved_by = {k: target[k] - bind[k] for k in range(len(joints)) if np.linalg.norm(target[k] - bind[k]) > 1e-7}
+    for k in list(moved_by):
+        j, delta = joints[k], moved_by[k]
+        while j in parent and parent[j] in slot and len(nodes[parent[j]].get("children") or []) == 1:
+            j = parent[j]
+            if slot[j] in moved_by:
+                break
+            moved_by[slot[j]] = delta
+            target[slot[j]] = bind[slot[j]] + delta
+    move = sorted(moved_by)
     if not move:
         return 0
-    parent = {c: i for i, n in enumerate(nodes) for c in n.get("children") or []}
 
     def world(i: int, cache: dict) -> np.ndarray:
         if i not in cache:
@@ -325,36 +342,92 @@ def _shape_joints(gltf: dict, data: bytearray, views: list, accessors: list, lm:
     return len(move)
 
 
-# --- the two places that use it -----------------------------------------------------------------------------
+# --- the worn set ---------------------------------------------------------------------------------------------
 
-def key_tokens(params: Optional[Dict[str, Any]], item: Optional[Dict[str, Any]]) -> list:
-    """What ``garment_template.key_for`` folds into a drape's key: [] for a piece that does not shape (its key
-    stays what it was before A228), else the one ``signature`` token."""
-    sig = signature(params, lift_of(item))
-    return [sig] if sig else []
+#: The template kinds whose drape reaches the chest: they drape on the shaped body when the worn set shapes it.
+CHEST_KINDS = ("top", "dress", "jacket", "bra")
 
 
-def prepare(body_glb, params: Optional[Dict[str, Any]], item: Optional[Dict[str, Any]], scratch):
-    """``(body path, shaping record or None)`` for a drape: a shaping piece drapes on a shaped copy of the plain
-    body written into ``scratch``; every other piece on ``body_glb`` itself."""
+def _template_params(item: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    op = (item or {}).get("outfit_piece") or {}
+    if op.get("mesh_mode") != "template":
+        return None
+    params = (op.get("template") or {}).get("params")
+    return params if isinstance(params, dict) else None
+
+
+def effective_lift(item: Optional[Dict[str, Any]]) -> float:
+    """A piece's lift as the motion reads it (``extension_rig.piece_lift`` against the slot defaults the packages
+    declare, ``clothing_lift_slots``): its own ``outfit_piece.lift``, else the slot default; a partial cover half.
+    0 when no slot of it carries a lift (and so the item form offers none)."""
+    from app.core.extension_rig import clothing_lift_slots, piece_lift
+    op = (item or {}).get("outfit_piece") or {}
+    own = op.get("lift")
+    if own is not None:
+        own = lift_of(item)
+    full = set(op.get("slots") or []) | set(op.get("covers") or [])
+    value = piece_lift(own, full, set(op.get("partially_covers") or []), clothing_lift_slots())
+    return min(1.0, max(0.0, float(value))) if value is not None else 0.0
+
+
+def shapes_chest(item: Optional[Dict[str, Any]]) -> bool:
+    """Whether ``item`` is a template top / dress whose effective lift shapes the chest under it."""
+    params = _template_params(item)
+    return bool(params) and applies(params, effective_lift(item))
+
+
+def set_lift(item_ids, items: Optional[Dict[str, Dict[str, Any]]] = None) -> float:
+    """Review M2: the shaping is a property of the WORN SET — the strongest effective lift among its shaping
+    template pieces (``shapes_chest``); 0 when none shapes. ``items``: already loaded items by id."""
+    from app.models.inventory import get_item
+    best = 0.0
+    for iid in sorted(set(item_ids or ())):
+        item = (items or {}).get(iid) or get_item(iid)
+        if shapes_chest(item):
+            best = max(best, effective_lift(item))
+    return best
+
+
+def key_tokens(item_id: str, item: Optional[Dict[str, Any]], lower) -> list:
+    """What ``garment_template.key_for`` folds into the drape key of ``item_id`` worn with ``lower`` (the other
+    worn mesh pieces): [] when the set does not shape or the piece does not reach the chest (its key stays what it
+    was before A228), else the one ``signature`` token of the set's lift."""
+    params = _template_params(item)
+    if not params or params.get("kind") not in CHEST_KINDS:
+        return []
+    lift = set_lift(list(lower or []) + [item_id], {item_id: item} if item else None)
+    if lift <= 0:
+        return []
+    raw = json.dumps({"v": VERSION, "lift": round(float(lift), 4)}, sort_keys=True)
+    return ["shape:" + hashlib.md5(raw.encode("utf-8")).hexdigest()[:8]]
+
+
+def prepare(body_glb, item_id: str, item: Optional[Dict[str, Any]], lower, scratch):
+    """``(body path, shaping record or None, note)`` for a drape: a chest piece of a shaping set (``key_tokens``)
+    drapes on a shaped copy of the plain body written into ``scratch``; every other piece on ``body_glb`` itself.
+    A body whose chest cannot be measured (review L9) drapes unshaped with ``note`` saying so."""
     from pathlib import Path
     from app.core import glb_mesh
     from app.core.garment_template import measure_body
-    lift = lift_of(item)
-    if not applies(params, lift):
-        return Path(body_glb), None
+    if not key_tokens(item_id, item, lower):
+        return Path(body_glb), None, ""
+    lift = set_lift(list(lower or []) + [item_id], {item_id: item} if item else None)
     blob = Path(body_glb).read_bytes()
-    lm = landmarks(glb_mesh.body_arrays(blob).positions, measure_body(blob))
+    try:
+        lm = landmarks(glb_mesh.body_arrays(blob).positions, measure_body(blob))
+    except (ValueError, KeyError) as exc:
+        return Path(body_glb), None, f"chest not shaped: {exc}"
     rec = record(lm, lift)
     target = Path(scratch) / "shaped_body.glb"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(shape_glb(blob, rec))
-    return target, rec
+    return target, rec, ""
 
 
 def worn_record(garments) -> Optional[Dict[str, Any]]:
     """The shaping an assembly applies to the shown body: of the worn template drapes whose record carries one
-    (``garment_template`` writes ``shaping``), the one with the strongest lift — two shaping pieces never add up."""
+    (``garment_template`` writes ``shaping``), the one with the strongest lift — never two added up. A worn set
+    drapes all its chest pieces with the same record (``set_lift``), so they agree."""
     best = None
     for g in garments or []:
         rec = (g.get("record") or {}).get("shaping") if g.get("template") else None
@@ -362,3 +435,58 @@ def worn_record(garments) -> Optional[Dict[str, Any]]:
             if best is None or float(rec["lift"]) > float(best["lift"]):
                 best = rec
     return best
+
+
+def shape_collision(collision: Optional[Dict[str, Any]], rec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Review M3: the collision record of the shown body with its capsules shaped like the body — every bind-space
+    endpoint (``a_pos`` / ``b_pos``) displaced, the radius of a capsule whose endpoints move gathered by the field's
+    compression at its mid point (r x (1 - COMPRESS x base)). Other entries stay. None in, None out."""
+    if not isinstance(collision, dict):
+        return collision
+    import copy
+    out = copy.deepcopy(collision)
+    lm, lift = rec["landmarks"], float(rec["lift"])
+    for cap in out.get("capsules") or []:
+        ends = [k for k in ("a_pos", "b_pos") if isinstance(cap.get(k), list) and len(cap[k]) == 3]
+        if not ends:
+            continue
+        pts = np.array([cap[k] for k in ends], np.float64)
+        moved = displace(pts, lm, lift)
+        if not np.any(np.abs(moved - pts) > 1e-7):
+            continue
+        for k, v in zip(ends, moved):
+            cap[k] = [round(float(c), 4) for c in v]
+        if isinstance(cap.get("r"), (int, float)):
+            mid = pts.mean(axis=0, keepdims=True)
+            _wl, base = weights(mid, lm, lift)
+            cap["r"] = round(float(cap["r"]) * (1.0 - COMPRESS * float(base[0])), 4)
+    out["shaping"] = {"version": rec.get("version"), "lift": rec.get("lift")}
+    return out
+
+
+def previous_drape(character_name: str, item_id: str, item: Optional[Dict[str, Any]], *, base_sha: str,
+                   params: Dict[str, Any], lower) -> Optional[Dict[str, Any]]:
+    """Review M5: while the drape of a changed SHAPING key is not built yet, the newest accepted drape of the piece
+    on the same base, with the same parameters and the same other worn pieces, is served instead (its own record
+    carries its own shaping, so the assembly shows the body it was draped on) — the piece never drops off the
+    figure in between. Only a drape whose shaping differs from the set's now (its lift, or none) stands in — any
+    other change of the key leaves the piece off as before. ``{tsig, path, record}`` or None."""
+    from app.core.garment_store import read_record
+    from app.core.garment_template import templates_dir
+    folder = templates_dir(character_name)
+    if not folder.is_dir():
+        return None
+    lift_now = round(set_lift(list(lower or []) + [item_id], {item_id: item} if item else None), 4) \
+        if key_tokens(item_id, item, lower) else 0.0
+    best = None
+    for meta in folder.glob(f"{item_id}_*.json"):
+        rec = read_record(meta)
+        glb = meta.with_suffix(".glb")
+        if (rec.get("accepted") is not True or not glb.is_file() or rec.get("base_model_sha256") != base_sha
+                or rec.get("params") != params or sorted(rec.get("lower") or []) != sorted(lower or [])
+                or round(float((rec.get("shaping") or {}).get("lift") or 0.0), 4) == lift_now):
+            continue
+        stamp = str(rec.get("created_at") or "")
+        if best is None or stamp > best[0]:
+            best = (stamp, {"tsig": rec.get("tsig"), "path": glb, "record": rec})
+    return best[1] if best else None

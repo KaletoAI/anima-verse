@@ -1539,7 +1539,7 @@ def key_for(character_name: str, item_id: str, *, base_sha: str, lower: List[str
         under.append(f"{other}:fit:{file_sha256(fit) if fit is not None else '-'}")
     # A228: a piece that shapes the chest under it re-drapes when its lift changes (``bust_shaping``)
     from app.core import bust_shaping
-    under += bust_shaping.key_tokens(params, item)
+    under += bust_shaping.key_tokens(item_id, item, lower)
     return tsig(params, base_sha=base_sha, texture_sha=tex, lower=lower + under), None, sources
 
 
@@ -2049,7 +2049,7 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
     try:
         # A228: a shaping piece drapes on the plain body shaped under it (``bust_shaping``)
         from app.core import bust_shaping
-        body, shaping = bust_shaping.prepare(body, params, item, scratch / "shaping")
+        body, shaping, shaping_note = bust_shaping.prepare(body, item_id, item, lower, scratch / "shaping")
         result, inner = drape_with_fallback(
             lambda cols, offsets, sub: run_drape(body, params, sources, item_id=item_id, out_dir=scratch / sub,
                                                  lower=cols, live=key, lower_offsets=offsets),
@@ -2064,7 +2064,8 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
                   **({"inner_collider": inner} if own else {}),
                   "metrics": result["data"], "rows": result["rows"], "created_at": utc_now_iso(),
                   "pose_shapes": (result["data"] or {}).get("pose_shapes"),
-                  **({"shaping": shaping} if shaping else {})}
+                  **({"shaping": shaping} if shaping else {}),
+                  **({"shaping_note": shaping_note} if shaping_note else {})}
         if result["ok"]:
             target = drape_path(character_name, item_id, sig)
             shutil.move(str(result["glb"]), str(target))

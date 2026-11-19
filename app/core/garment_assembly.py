@@ -359,6 +359,15 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
             from app.core import garment_template
             drape = garment_template.drape_state(character_name, item_id, base_sha=base[1],
                                                  lower=garment_template.lower_layers(clothing, item_id), item=item)
+            if drape["state"] != "ready":
+                # A228 (review M5): a shaping change not draped yet serves the previous drape meanwhile
+                from app.core import bust_shaping
+                params = garment_template.params_of(item)
+                previous = bust_shaping.previous_drape(
+                    character_name, item_id, item, base_sha=base[1], params=params,
+                    lower=garment_template.lower_layers(clothing, item_id)) if params else None
+                if previous is not None:
+                    drape = {**previous, "state": "ready"}
             if drape["state"] == "ready":
                 out.append({"item_id": item_id, "kind": CLOTHING, "fsig": drape["tsig"], "fit": drape["path"],
                             "low": None, "record": drape["record"], "template": True})
@@ -1097,8 +1106,10 @@ def _build(character_name: str, directory: Path, bare: Path,
     # A228: a worn shaping piece shows the body it was draped on (``bust_shaping``) — before the cover cut
     from app.core import bust_shaping
     shaping = bust_shaping.worn_record(grafted)
+    shaped = data
     if shaping:
         blob = bust_shaping.shape_glb(blob, shaping)
+        shaped = bust_shaping.shape_glb(data, shaping)     # the body the upper layers' cover reads (review M2)
     foot_pose: Optional[Dict[str, Any]] = None
     shoe: Optional[Dict[str, Any]] = None
     for garment in grafted:
@@ -1162,7 +1173,7 @@ def _build(character_name: str, directory: Path, bare: Path,
                 mesh = taken[0]
                 cover.setdefault("under_shoe", {})[garment["item_id"]] = taken[1]
         if under.get(garment["item_id"]):
-            cover.setdefault("under", {})[garment["item_id"]] = _hide_under_upper(mesh, data, under[garment["item_id"]],
+            cover.setdefault("under", {})[garment["item_id"]] = _hide_under_upper(mesh, shaped, under[garment["item_id"]],
                                                                                    tier)
         overrides = material_overrides
         if garment["kind"] != HAIR and overrides is None:
@@ -1198,6 +1209,11 @@ def _build(character_name: str, directory: Path, bare: Path,
     side = {**meta, "garments": state,
             "bare_revision": revision, "hidden_parts": list(hidden or []),
             "assembled_at": utc_now_iso()}
+    if shaping:
+        # A228 (review M3): the sidecar says how the shown body is shaped, and its collision capsules follow it
+        side["shaping"] = shaping
+        if isinstance(meta.get("collision"), dict):
+            side["collision"] = bust_shaping.shape_collision(meta["collision"], shaping)
     if scalp_tints:
         side["scalp_tint"] = scalp_tints
     if cover:
