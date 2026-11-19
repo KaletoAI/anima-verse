@@ -620,6 +620,25 @@ def _fitted(p, m, reg: Registration, cap_m: float, add, mark) -> None:
             y = crotch + (side - crotch) * t ** power
             leg_r.append([x0 + g + (br - g) * t, y])
             leg_l.append([x0 - g - (bl - g) * t, y])
+        if spec.get("sides") == "string":
+            # A235: the front panel to its top corners, then only the hip bands ``string_width_m`` high to the sides
+            sw = spec["string_width_m"]
+            c_min, c_span = spec["string_corner"]
+            share = c_min + c_span * (1.0 - p["leg_cut"])
+            leg_r, leg_l = [], []
+            for t in [i / 8 for i in range(9)]:
+                y = crotch + (top - sw - crotch) * t ** power
+                leg_r.append([x0 + g + (br - g) * share * t, y])
+                leg_l.append([x0 - g - (bl - g) * share * t, y])
+            add("body", "fill", [[x0 - g - (bl - g) * share, top], [x0 + g + (br - g) * share, top]]
+                + leg_r[::-1] + leg_l)
+            add("band", "fill", [[x0 + g + (br - g) * share, top], [x0 + br, top], [x0 + br, top - sw],
+                                 [x0 + g + (br - g) * share, top - sw]])
+            add("band", "fill", [[x0 - g - (bl - g) * share, top], [x0 - bl, top], [x0 - bl, top - sw],
+                                 [x0 - g - (bl - g) * share, top - sw]])
+            mark(x0 + br + 0.03, top, f"rise {p['rise']} · string {round(sw * 1000)} mm")
+            mark(x0, crotch - 0.04, f"back {p['back_coverage']:.2f} · {p['fabric']}", "middle")
+            return
         add("body", "fill", [[x0 - bl, top], [x0 + br, top]] + leg_r[::-1] + leg_l)
         if spec["waistband_m"] > 0:
             add("waist", "dash", [[x0 - bl, top - spec["waistband_m"]], [x0 + br, top - spec["waistband_m"]]])

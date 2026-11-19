@@ -135,6 +135,9 @@ RISES = ("low", "mid", "high")
 RISE_SHARE = {"low": 0.3, "mid": 0.65, "high": 1.0}
 #: A waistband's height (metres; it is the pinned band) — none still pins the top 12 mm.
 WAISTBANDS = ("none", "thin", "wide")
+#: A235 briefs: "fabric" = side panels (``side_width_m``); "string" = only a front and a back panel, joined over the
+#: hips by thin bands ``string_width_m`` high along the waist line (string bikini, tanga, side-tie).
+BRIEF_SIDES = ("fabric", "string")
 WAISTBAND_M = {"none": 0.0, "thin": 0.012, "wide": 0.03}
 #: Bra cup shapes: molded (a rigid shell, pinned whole), triangle (a peak over the bust point), bandeau (a band
 #: round the chest, no separate cups), balconette (a straight top edge).
@@ -227,6 +230,9 @@ PARAM_SPEC: Dict[str, Tuple[str, Any, Any]] = {
     # A232: 0 = a brief cut by ``leg_cut``; > 0 = short legs this far down the thigh from the crotch (trunks,
     # boxer briefs, boxer shorts with ``fit``)
     "leg_length_m": ("number", (0.0, 0.30), 0.0),
+    # A235: the sides of a brief — side panels or thin hip bands (string / tanga / side-tie) of this height
+    "sides": ("choice", BRIEF_SIDES, "fabric"),
+    "string_width_m": ("number", (0.004, 0.02), 0.008),
     # A223 bra
     "cup_style": ("choice", CUP_STYLES, "molded"),
     "cup_coverage": ("number", (0.3, 1.0), 0.7),     # 0.3 demi .. 1 full cup
@@ -255,7 +261,7 @@ KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
     "jacket": ("kind", "fabric", "opacity", "length_m", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m", "front",
                "collar"),
     "briefs": ("kind", "fabric", "opacity", "rise", "leg_cut", "back_coverage", "side_width_m", "waistband",
-               "leg_length_m", "fit"),
+               "leg_length_m", "fit", "sides", "string_width_m"),
     "bra": ("kind", "fabric", "opacity", "cup_style", "cup_coverage", "push_up", "underband_m", "center_gore", "closure",
             "straps"),
     "gloves": ("kind", "fabric", "opacity", "fingers", "length", "cuff", "fit"),
@@ -583,6 +589,12 @@ def validate_params(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
     if kind == "briefs":
         # A232: a brief's leg opening is ``leg_cut``, a boxer's the straight hem ``leg_length_m`` down the thigh (with
         # the ease ``fit``) — the field the cut does not read keeps its default, so it never changes the drape key
+        # A235: a string brief has no legs and no side panel; a fabric one no string width
+        if params["sides"] == "string":
+            params["leg_length_m"] = 0.0
+            params["side_width_m"] = PARAM_SPEC["side_width_m"][2]
+        else:
+            params["string_width_m"] = PARAM_SPEC["string_width_m"][2]
         if params["leg_length_m"] > 0:
             params["leg_cut"] = PARAM_SPEC["leg_cut"][2]
         else:
@@ -1232,6 +1244,10 @@ BOXER_FIT_M = 0.02
 BOXER_SNUG_FIT = 0.3
 #: A232 boxers: the pinned band at each leg hem (snug fits).
 BOXER_HEM_PIN_M = 0.015
+#: A235 string briefs: the front panel's top corner lies the first share of the way from the gusset to the hip's side
+#: at ``leg_cut`` 1 and the second share further at ``leg_cut`` 0; the back panel's corner the first share past its
+#: width (``back_coverage``). Past the corners only the hip band runs.
+STRING_CORNER = (0.35, 0.35)
 
 
 def _bust_lines(meas: Dict[str, Any]) -> Tuple[float, float]:
@@ -1290,6 +1306,10 @@ def fitted_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
                     "waistband_m": WAISTBAND_M[params["waistband"]], "leg_cut": params["leg_cut"],
                     "back_coverage": params["back_coverage"], "side_width_m": params["side_width_m"],
                     "gusset_half_m": GUSSET_HALF_M, "boyshort_drop_m": BOYSHORT_DROP_M})
+        if params.get("sides") == "string":
+            # A235: front and back panel only, thin hip bands ``string_width_m`` high under the waist line
+            fit.update({"sides": "string", "string_width_m": round(float(params["string_width_m"]), 4),
+                        "string_corner": list(STRING_CORNER)})
         leg = float(params.get("leg_length_m") or 0.0)
         if leg > 0:
             # A232: short legs to a straight hem ``leg`` under the crotch; leg_cut / back_coverage do not apply
@@ -1397,6 +1417,9 @@ def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List
         params = {k: v for k, v in params.items() if k not in OFF_SHOULDER_FIELDS}
     if not params.get("leg_length_m"):                  # A232: a brief without legs keeps the key it had
         params.pop("leg_length_m", None)
+    if params.get("sides") != "string":                 # A235: a brief with side panels keeps the key it had
+        params.pop("sides", None)
+        params.pop("string_width_m", None)
     if params.get("fabric") in DRAPE_FABRIC:          # A214: the leather finishes share one drape
         params["fabric"] = DRAPE_FABRIC[params["fabric"]]
     payload = {"params": params, "version": TEMPLATE_VERSION, "base": base_sha, "texture": texture_sha,

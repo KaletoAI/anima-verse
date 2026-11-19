@@ -35,6 +35,8 @@ Fields:
 - "leg_cut" (briefs only): how high the leg openings are cut at the sides, 0.0 (boyshort, straight across the thigh) .. 0.5 (classic) .. 1.0 (high-cut, French cut).
 - "back_coverage" (briefs only): how much of the seat the back covers, 0.0 (string / thong) .. 0.3 (Brazilian) .. 1.0 (full).
 - "side_width_m" (briefs only): the height of the side panel between the waistband and the leg opening in metres, 0.01 (string bikini) .. 0.10.
+- "sides" (briefs only): "fabric" for side panels (the usual brief, panty, hipster), "string" when only a front and a back panel are joined by thin bands over the hips — a string, string bikini, tanga, side-tie bikini, G-string or thong with string sides. With "string", "side_width_m" and "leg_length_m" are left out; a thong also takes a low "back_coverage" (0.0-0.1).
+- "string_width_m" (briefs with "sides" "string" only): the height of the hip bands in metres, 0.004 (a cord) .. 0.008 (usual) .. 0.02 (a narrow tanga band).
 - "waistband" (briefs only): "none", "thin" or "wide".
 - "cup_style" (bra only): "molded" (firm shaped cups, push-up, armour plates), "triangle" (soft triangles), "bandeau" (one band round the chest, no separate cups) or "balconette" (cups with a straight top edge).
 - "cup_coverage" (bra only): 0.3 (demi, only the lower half) .. 0.6 (half cup) .. 1.0 (full cup).
@@ -67,6 +69,8 @@ or
 {"kind": "briefs", "rise": "low", "leg_cut": 0.85, "back_coverage": 0.6, "side_width_m": 0.04, "waistband": "thin", "fabric": "stiff"}
 or
 {"kind": "briefs", "rise": "mid", "leg_length_m": 0.14, "fit": 0.1, "waistband": "wide", "fabric": "flowing"}
+or
+{"kind": "briefs", "rise": "low", "sides": "string", "string_width_m": 0.006, "leg_cut": 0.8, "back_coverage": 0.05, "waistband": "none", "fabric": "flowing"}
 or
 {"kind": "bra", "cup_style": "molded", "cup_coverage": 0.8, "push_up": 0.7, "underband_m": 0, "center_gore": "narrow", "closure": "back_hook", "straps": "thin", "fabric": "stiff"}
 or

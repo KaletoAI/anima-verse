@@ -12,6 +12,8 @@ caller then pins the returned vertices and runs the short cloth relax (``frames`
 * briefs: waistband plane at ``top_y``; the leg opening per face centroid: under the gusset (|x| < gusset half width)
   the crotch less 5 mm, rising to ``top - side_width`` at the hip's side over a curve shaped by ``leg_cut``; on the
   back the full-height part reaches ``back_coverage`` of the way to the side. Pinned: the waistband and the gusset.
+  A235 ``sides`` "string": the leg line reaches the hip band (``string_width_m`` under ``top_y``) at the panels' top
+  corners (``string_corner``, ``garment_template.STRING_CORNER``) — past them only that band runs round the hips; the bands are pinned too.
   A232 boxers (``leg_length_m`` > 0): the hips and both thighs from ``top_y`` to a straight hem ``leg_length_m`` under
   the crotch (``boxer_region``, the tights' per-vertex way: no arm / hand); pinned the waistband and — ``hem_pinned``
   (snug) — a band at each hem and the gusset; a loose boxer hangs from its waistband.
@@ -127,10 +129,20 @@ def briefs_region(f, co, w, cx, cy):
     power = 1.6 - 1.2 * lc                       # a high cut rises soon past the gusset, a boyshort stays low
     bc = float(f["back_coverage"])
     w_back = g * 0.4 + bc * 0.9 * (hip_half - g * 0.4)
+    string = f.get("sides") == "string"
+    if string:
+        # A235: a string brief — the leg line climbs to the hip band (``string_width_m`` under the waist line) at the
+        # panels' top corners; past them only the band runs round the hips
+        sw = float(f["string_width_m"])
+        l_side = top - sw
+        c_min, c_span = (float(v) for v in f["string_corner"])
+        corner_f = g + (hip_half - g) * (c_min + c_span * (1.0 - lc))
+        corner_b = w_back + (hip_half - w_back) * c_min
 
     def leg_line(ax, back):
         wid = np.where(back, w_back, g)
-        t = np.clip((ax - wid) / np.maximum(hip_half - wid, 1e-3), 0.0, 1.0)
+        reach = np.where(back, corner_b, corner_f) if string else hip_half
+        t = np.clip((ax - wid) / np.maximum(reach - wid, 1e-3), 0.0, 1.0)
         rise = t ** power
         if bc < 0.999:
             # a string / Brazilian back: past its width the line climbs within 3 cm to the side's height
@@ -148,10 +160,17 @@ def briefs_region(f, co, w, cx, cy):
 
     def pins(v):
         ax = np.abs(v[:, 0] - cx)
-        return (v[:, 2] > top - band - 0.002) | ((ax < g) & (v[:, 2] < crotch + 0.03))
+        m = (v[:, 2] > top - band - 0.002) | ((ax < g) & (v[:, 2] < crotch + 0.03))
+        if string:
+            # A235: the hip bands are pinned whole (a band of a few mm has no cloth to relax)
+            m |= (v[:, 2] > top - sw - 0.002) & (ax > corner_f * 0.9)
+        return m
 
-    return keep, planes, pins, {"cy": cy, "crotch_z": round(crotch, 4), "hip_half_m": round(hip_half, 4),
-                                "leg_side_z": round(l_side, 4), "back_width_m": round(w_back, 4)}
+    info = {"cy": cy, "crotch_z": round(crotch, 4), "hip_half_m": round(hip_half, 4),
+            "leg_side_z": round(l_side, 4), "back_width_m": round(w_back, 4)}
+    if string:
+        info.update(sides="string", corner_front_m=round(corner_f, 4), corner_back_m=round(corner_b, 4))
+    return keep, planes, pins, info
 
 
 def boxer_region(f, co, w, cx):
@@ -583,6 +602,18 @@ def build_fitted(prm, spec, arm, body, ctree, col=None):
     elif kind == "briefs":
         keep, planes, pins, extra = briefs_region(f, co, w, cx, cy)
         info.update(extra)
+        if extra.get("sides") == "string":
+            # A235: a hip band a few mm high is narrower than the collider's faces — the collider is first cut along
+            # both of its edges, so a whole row of faces lies inside the band
+            top = _gltf_y(f["top_y"])
+            for z in (top, top - float(f["string_width_m"])):
+                geom = bm.verts[:] + bm.edges[:] + bm.faces[:]
+                bmesh.ops.bisect_plane(bm, geom=geom, plane_co=Vector((0.0, 0.0, z)), plane_no=Vector((0.0, 0.0, 1.0)),
+                                       clear_outer=False, clear_inner=False, dist=1e-5)
+            bm.verts.ensure_lookup_table()
+            bm.faces.ensure_lookup_table()
+            bm.normal_update()
+            cent = np.array([fa.calc_center_median() for fa in bm.faces])
         mask = keep(cent)
     elif kind == "bra":
         keep, planes, pins, push, closure, cups, extra = bra_region(f, co, stree, cx, cy)

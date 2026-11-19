@@ -37,6 +37,8 @@ check("brief fit reset", brief["fit"], 0.3)
 check("brief leg_cut kept", brief["leg_cut"], 0.8)
 old = dict(brief)
 old.pop("leg_length_m")
+old.pop("sides")            # A235: the string fields leave a fabric brief's key as well
+old.pop("string_width_m")
 check("brief key unchanged", gt.tsig(brief, base_sha="b", texture_sha="t", lower=[]),
       gt._md5({"params": {k: v for k, v in old.items() if k not in gt.MATERIAL_ONLY
                           and k not in gt.OFF_SHOULDER_FIELDS},
