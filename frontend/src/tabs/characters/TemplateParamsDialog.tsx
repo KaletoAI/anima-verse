@@ -24,7 +24,7 @@ import { thumbUrl, thumbWidth } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut, apiUpload } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { TEMPLATE_CHOICE_LABELS, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_LABELS, UPPER_KINDS, cm, lengthLabel, templateCost } from './figureModel'
+import { TEMPLATE_CHOICE_LABELS, TEMPLATE_DRAPE_FABRIC, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_LABELS, UPPER_KINDS, cm, lengthLabel, templateCost } from './figureModel'
 import { TEMPLATE_STATE_COLOR, TEMPLATE_STATE_LABELS, failureLines, templateLiveText } from './figureModel'
 import { FailureDetails } from './BuildProblem'
 import type { TemplateFieldSpec, TemplateInfo, TemplateParams, TemplateProgress } from './figureModel'
@@ -283,7 +283,9 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                           <span className="ga-form-hint" data-fabric-note={draft.fabric}>
                             {t(TEMPLATE_FABRIC_NOTES[draft.fabric])}
                             {data.params && data.params.fabric !== draft.fabric
-                              ? ` ${t('Switching the fabric re-drapes the piece on the CPU (0 hub jobs).')}` : ''}
+                              ? ` ${t(TEMPLATE_DRAPE_FABRIC[draft.fabric] && TEMPLATE_DRAPE_FABRIC[draft.fabric] === TEMPLATE_DRAPE_FABRIC[data.params.fabric]
+                                ? 'Switching between these finishes only re-assembles the model on the CPU (no new drape, 0 hub jobs).'
+                                : 'Switching the fabric re-drapes the piece on the CPU (0 hub jobs).')}` : ''}
                           </span>
                         ) : null}
                         {key === 'opacity' ? (

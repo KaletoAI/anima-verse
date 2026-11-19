@@ -332,6 +332,7 @@ export const TEMPLATE_CHOICE_LABELS: Record<string, string> = {
   closed: 'Closed', open: 'Open', stand: 'Stand collar', lapel: 'Lapels',
   stiff: 'Stiff (denim, wool)', medium: 'Medium (cotton, linen)', flowing: 'Flowing (silk, jersey)',
   sheer: 'Sheer (chiffon, voile)',
+  leather_glossy: 'Leather (glossy)', leather_rough: 'Leather (rough)',
 }
 
 /** The parameter dialog's field labels. */
@@ -349,7 +350,12 @@ export const TEMPLATE_FABRIC_NOTES: Record<string, string> = {
   medium: 'Ordinary cotton: the usual drape.',
   flowing: 'Soft folds that follow the body.',
   sheer: 'Very light, fine folds that flutter; see-through — the body and what is worn under it show.',
+  leather_glossy: 'Heavy and stiff: barely stretches, few wide folds; a shiny clear-coated surface.',
+  leather_rough: 'Heavy and stiff: barely stretches, few wide folds; a matte suede surface.',
 }
+
+/** A214: fabrics that share one drape — a switch between them only re-assembles (`garment_template.DRAPE_FABRIC`). */
+export const TEMPLATE_DRAPE_FABRIC: Record<string, string> = { leather_glossy: 'leather', leather_rough: 'leather' }
 
 /** The length field's label for a kind (Ruling A142: a top or jacket counts from the shoulder line). */
 export function lengthLabel(kind: string): string {
