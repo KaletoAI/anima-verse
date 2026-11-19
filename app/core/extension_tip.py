@@ -464,8 +464,11 @@ def group_tip_settings(panels: List[Dict[str, Any]], extension: Optional[Dict[st
 #: subdivision under a tip (``extension_bones.subdivide_where``) triangulates every face with more than 3 corners, so
 #: no quad with three corners on a line is left to export as a zero-area triangle (A199, review 03#8); 4 = the source
 #: levelling's flat subdivision counts the stub passes that cover its whole disc, not those that merely reach the
-#: source point (A202, review 03 ``level_sides``).
-TIP_SMOOTHING_VERSION = 4
+#: source point (A202, review 03 ``level_sides``); 5 = the tip stands on the skin's own peak near the source
+#: (``extension_bones.local_peak``), the levelling and the fill under a tip that is on only raise the skin, by at most
+#: 3 mm and not at all against a fit whose RMS exceeds 2 mm, and a tip whose ops still sink, over-raise or fold the skin
+#: is dropped with its reason while the model is published (A209: a 14.5 mm ring on Ylva).
+TIP_SMOOTHING_VERSION = 5
 
 
 def _source_smooth(values: Dict[str, Any]) -> Optional[Dict[str, Any]]:

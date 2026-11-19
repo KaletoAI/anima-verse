@@ -1204,6 +1204,8 @@ def tip_mesh(meshes, p, placement, sources):
             # The wide ring over a coarse or strongly curved breast does not fit,
             # the tip's own 8-15 mm ring does: level just the tip.
             coef,fill_outer,fill_blend,fill = existing['coef'],LOCAL_FILL_RADIUS_M,LOCAL_FILL_BLEND_M,'applied locally ('+reason+')'
+        # an exact fit levels both ways, any other only raises (A209, ``level_heights``)
+        exact = coef is not None and (existing['rms'] if fill!='applied' else rms) <= TIP_LEVEL_EXACT_RMS_M
         moved,kept = 0,0
         if coef is not None:
             for index,mesh in enumerate(meshes):
@@ -1219,10 +1221,21 @@ def tip_mesh(meshes, p, placement, sources):
                         kept += 1
                         continue
                     factor = smooth((fill_outer-r)/fill_blend)
-                    set_co(mesh,vertex,inverse@(tip+a*u+b*w+normal*(h*(1-factor)+fitted*factor)))
+                    # Outward only, by at most TIP_LEVEL_MAX_SHIFT_M (A209): the
+                    # stub stands on the skin's peak, and a fit around it that
+                    # sits below the peak would sink it — unless the fit is
+                    # exact (``level_heights``).
+                    lifted = h*(1-factor)+fitted*factor
+                    if not exact:
+                        lifted = min(max(lifted,h),h+TIP_LEVEL_MAX_SHIFT_M)
+                        if lifted <= h:
+                            continue
+                    set_co(mesh,vertex,inverse@(tip+a*u+b*w+normal*lifted))
                     moved += 1
                 mesh.data.update()
-        filled = tip+normal*float(coef[0]) if coef is not None else tip.copy()
+        # The skin under the tip moved as the fill moved it: outward only, capped.
+        filled = (tip+normal*(float(coef[0]) if exact else min(max(float(coef[0]),0.),TIP_LEVEL_MAX_SHIFT_M))
+                  if coef is not None else tip.copy())
         if coef is None and side.get('level'):
             # The levelling lowered the skin under the source apex by the bump's
             # height, and without a fill nothing brings the tip down with it:
@@ -1235,6 +1248,7 @@ def tip_mesh(meshes, p, placement, sources):
         axis = (normal-a*float(coef[1])-b*float(coef[2])).normalized() if coef is not None else normal
         rows.append({'tip':list(filled),'axis':list(axis),'radius':radius,'fill':fill if coef is not None else 'skipped: '+reason,
                      'fill_rms':rms,'fill_moved':moved,'fill_kept_by_tolerance':kept,
+                     'fill_exact_m':fill_outer if exact else 0.,
                      'tip_source':'stub','tip_length_m':p['tip_length'],'tip_radius_m':p['tip_diameter']/2,
                      'existing_tip_m':existing['protrusion'],'inner_wall_vertices':len(inner),
                      'source_smooth':smoothing,'source_level':side})
@@ -1281,7 +1295,7 @@ def _quadratic(u, w):
     return np.stack([np.ones_like(u),u,w,u*u,u*w,w*w],1)
 
 
-def level_surface(meshes, tip, normal, full, inner):
+def level_surface(meshes, tip, normal, full, inner, outward_cap=None):
     """Level the skin around ``tip`` onto the surface around it (module
     notes above): ``h' = Q + (1 - k) (h - Q)`` along ``normal`` with ``Q``
     the quadratic fitted on the ring, ``k`` = 1 within ``full`` metres and
@@ -1289,7 +1303,9 @@ def level_surface(meshes, tip, normal, full, inner):
     ``NEUTRAL_GAP_M`` x k below (``level_heights``). Returns
     ``{bump_before_mm, bump_after_mm, moved, max_shift_mm, fit_rms_mm,
     full_radius_mm, blend_mm}`` (bump = the highest outer-skin point within
-    ``full`` above the fitted surface)."""
+    ``full`` above the fitted surface). ``outward_cap`` (metres): the
+    levelling under a switched-on tip only raises the skin, by at most that
+    much (``level_heights``)."""
     a = normal.orthogonal().normalized()
     b = normal.cross(a)
     rows = []
@@ -1308,7 +1324,7 @@ def level_surface(meshes, tip, normal, full, inner):
     def quadratic(ring):
         coef = np.linalg.lstsq(_quadratic(R[ring,0],R[ring,1]),R[ring,2],rcond=None)[0]
         return _quadratic(R[:,0],R[:,1])@coef
-    shift,level = level_heights(R[:,2],r-full,inside,full,quadratic)
+    shift,level = level_heights(R[:,2],r-full,inside,full,quadratic,outward_cap=outward_cap)
     moved = 0
     for row,dh in zip(rows,shift):
         if abs(dh) > 1e-9:
@@ -1318,12 +1334,14 @@ def level_surface(meshes, tip, normal, full, inner):
             moved += 1
     for mesh in meshes:
         mesh.data.update()
-    return {'bump_before_mm':level['bump_before_mm'],'bump_after_mm':level['bump_after_mm'],'moved':moved,
+    return {**({'mode':level['mode']} if 'mode' in level else {}),
+            'bump_before_mm':level['bump_before_mm'],'bump_after_mm':level['bump_after_mm'],'moved':moved,
             'max_shift_mm':level['max_shift_mm'],'fit_rms_mm':level['fit_rms_mm'],
             'full_radius_mm':round(full*1000,2),'blend_mm':round(NEUTRAL_BLEND*full*1000,2)}
 
 
-def level_heights(h, outside, inner, full, fit, depth=NEUTRAL_DEPTH_M, inner_follows=False, ring=None):
+def level_heights(h, outside, inner, full, fit, depth=NEUTRAL_DEPTH_M, inner_follows=False, ring=None,
+                  outward_cap=None):
     """The levelling itself, for a region of any shape (``level_surface``
     around a tip, ``inset_part`` along its chart): per row its height ``h``
     along the direction it moves in (metres), ``outside`` its distance beyond
@@ -1335,7 +1353,17 @@ def level_heights(h, outside, inner, full, fit, depth=NEUTRAL_DEPTH_M, inner_fol
     ``ring`` replaces it where the surface is fitted on other rows — the inset
     part's fit over its region — and is what ``fit_rms_mm`` measures).
     ``inner_follows``: an inner row follows the levelled skin both ways
-    instead of only going down. Returns ``(shift per row, {bump_before_mm, bump_after_mm, bump_p95_mm:
+    instead of only going down. ``outward_cap`` (metres, A209): a row only
+    rises, by at most that much, and an inner row stays — the levelling under
+    a switched-on tip, whose stub stands on the skin's own peak: the quadratic
+    fitted around a curved source sits below the curve, and pulling the skin
+    down onto it dug a ring up to 14.5 mm deep (Ylva); a fit whose RMS exceeds
+    TIP_LEVEL_FIT_RMS_MAX_M moves nothing (raising toward it left a 3 mm step
+    ring, Ylva RMS 5-6 mm). Only a fit within TIP_LEVEL_EXACT_RMS_M is a
+    surface to level onto both ways (Ruling A53: the stub replaces a tip the
+    mesher modelled on a smooth skin) — no measured body comes near it (RMS
+    1.9-6.1 mm). ``mode`` records which of the three applied: replace, raise,
+    none. Returns ``(shift per row, {bump_before_mm, bump_after_mm, bump_p95_mm:
     [before, after], max_shift_mm, fit_rms_mm})`` — a row that is further
     than ``depth`` (below, above) from Q is another part of the body and
     stays; bump = the outer skin within the region above Q."""
@@ -1352,13 +1380,21 @@ def level_heights(h, outside, inner, full, fit, depth=NEUTRAL_DEPTH_M, inner_fol
     target = Q+(1-k)*off
     target = np.where(inner,(target if inner_follows else np.minimum(h,target))-NEUTRAL_GAP_M*k,target)
     shift = target-h
+    rms = float(np.sqrt(np.mean((h[ring]-Q[ring])**2)))
+    mode = 'replace'
+    if outward_cap is not None and rms > TIP_LEVEL_EXACT_RMS_M:
+        # A surface the quadratic does not fit (RMS above TIP_LEVEL_FIT_RMS_MAX_M)
+        # is no reference to raise the skin to: it stays as it is.
+        mode = 'raise' if rms <= TIP_LEVEL_FIT_RMS_MAX_M else 'none'
+        shift = np.where(inner,0.,np.clip(shift,0.,outward_cap if mode=='raise' else 0.))
+        target = h+shift
     within = ~inner&near&(outside <= 0)
     bump = lambda values: round(float(values[within].max())*1000,3) if within.any() else 0.
     p95 = lambda values: round(float(np.percentile(values[within],95))*1000,3) if within.any() else 0.
     return shift,{'bump_before_mm':bump(off),'bump_after_mm':bump(target-Q),
                   'bump_p95_mm':[p95(off),p95(target-Q)],
                   'max_shift_mm':round(float(np.abs(shift).max())*1000,3),
-                  'fit_rms_mm':round(float(np.sqrt(np.mean((h[ring]-Q[ring])**2)))*1000,3)}
+                  'fit_rms_mm':round(rms*1000,3),**({'mode':mode} if outward_cap is not None else {})}
 
 
 def level_full(p, radius):
@@ -1419,7 +1455,7 @@ def level_sides(meshes, p, radius, sources, placed=None):
     levels,errors = [],[]
     for o,(_,normal,_,_,_) in zip(origins,frames):
         try:
-            levels.append(level_surface(meshes,o,normal,full,inner))
+            levels.append(level_surface(meshes,o,normal,full,inner,TIP_LEVEL_MAX_SHIFT_M if placed else None))
             errors.append('')
         except ValueError as e:
             # A part that is on is still built on the unlevelled skin; one that
@@ -1632,27 +1668,171 @@ def surface_walk(nearest, start, side, up, out, step=TIP_WALK_STEP_M):
     return point,normal
 
 
+# The tip's anchor (A209): the outer skin's most protruding point along the
+# pair's forward axis (the source side's ``wall_normal``) within
+# TIP_PEAK_RADIUS_M of the source apex, read by rays from in front on a
+# TIP_PEAK_STEP_M grid; the points within TIP_PEAK_PLATEAU_M of the highest
+# are averaged, so a flat top gives its middle. The source apex (the outline's
+# centre) sat 16-17 mm above and inside the peak on Ylva, and the stub built
+# there stood on the flank. A colour marker is the painted tip and stays.
+TIP_PEAK_RADIUS_M = .03
+TIP_PEAK_STEP_M = .001
+TIP_PEAK_PLATEAU_M = .0005
+# Metres: the most the tip ops move the skin — outward only (A209).
+TIP_LEVEL_MAX_SHIFT_M = .003
+# Metres: the fit RMS up to which that levelling may raise the skin at all.
+TIP_LEVEL_FIT_RMS_MAX_M = .002
+# Metres: the fit RMS up to which the levelling and the fill level both ways
+# (``level_heights``; the synthetic fixtures 0.001-0.004 mm).
+TIP_LEVEL_EXACT_RMS_M = .0005
+
+
+def local_peak(tree, row):
+    """The skin's peak near a source side ``row`` (``{tip, wall_centre,
+    wall_normal}``; notes above), or None without a wall normal or a hit."""
+    if not row.get('wall_normal') or not row.get('wall_centre'):
+        return None
+    source,centre = Vector(row['tip']),Vector(row['wall_centre'])
+    n = Vector(row['wall_normal']).normalized()
+    a = n.orthogonal().normalized()
+    b = n.cross(a)
+    steps = int(TIP_PEAK_RADIUS_M/TIP_PEAK_STEP_M)
+    hits = []
+    for i in range(-steps,steps+1):
+        for j in range(-steps,steps+1):
+            if i*i+j*j > steps*steps:
+                continue
+            start = source+a*(i*TIP_PEAK_STEP_M)+b*(j*TIP_PEAK_STEP_M)
+            hit = tree.ray_cast(start+n*.1,-n,.2)[0]
+            if hit is not None:
+                hits.append(((hit-centre).dot(n),hit))
+    if not hits:
+        return None
+    top = max(h for h,_ in hits)
+    plateau = [p for h,p in hits if h >= top-TIP_PEAK_PLATEAU_M]
+    middle = sum(plateau,Vector())/len(plateau)
+    # back onto the skin: the plateau's mean lies on its chord
+    hit = tree.ray_cast(middle+n*.1,-n,.2)[0]
+    return hit.copy() if hit is not None else max(hits,key=lambda x:x[0])[1].copy()
+
+
+# The gate of the tip ops (A209): they must not sink, over-raise or fold the
+# skin around a tip. ``crater_census`` compares, within TIP_NORMAL_REGION_M of
+# the tips, every vertex after the ops with the skin before them (a BVH taken
+# before): the area (by vertex area, so a finer subdivision of the same shape
+# counts the same) sunk more than TIP_SINK_DEPTH_M below it, the deepest sink,
+# the highest raise, and the faces folded against their corners' smooth
+# normals; only skin facing the front counts (an inner wall faces back). A tip
+# whose ops sink more than TIP_GATE_SINK_AREA_MM2, raise any
+# vertex more than TIP_GATE_RAISE_M or add a folded face is dropped: the mesh
+# goes back to how it was, the reason is recorded, the model is published.
+# Measured on Ylva: the old 14.5 mm levelling sank the ring around the source
+# by up to 14.5 mm; the outward-only ops sink nothing. A neighbourhood-mean
+# concavity count is no gate here: the flat subdivision alone puts chord points
+# under a curved skin and raised it 0 -> 200 mm2 on Vallerie with nothing moved.
+TIP_SINK_DEPTH_M = .001
+# Square metres: a folded face smaller than this is a sliver nobody sees, not a
+# fold (measured: subdivision slivers 1e-5 - 1e-4 mm2, the capped raise's rim
+# on a noisy crater fixture 0.15 mm2).
+TIP_FOLD_MIN_AREA_M2 = 5e-7
+# Metres off the skin before the ops from which a vertex counts as moved.
+TIP_MOVED_M = 1e-5
+TIP_GATE_SINK_AREA_MM2 = 20.
+# the levelling and the fill may each raise a vertex by the cap
+TIP_GATE_RAISE_M = 2*TIP_LEVEL_MAX_SHIFT_M+.0005
+
+
+def crater_census(meshes, centres, before=None, exempt=()):
+    """``{sunk_area_mm2, max_sunk_mm, max_raised_mm, folded}`` around
+    ``centres`` (notes above); ``before``: the BVH of the skin before the ops
+    (``world_tree``) — without it the sink and raise numbers are zero;
+    ``exempt``: ``(centre, radius)`` discs an exact fit levelled both ways
+    (``level_heights``, Ruling A53 unchanged), whose sinking is the point —
+    neither a sink nor a fold counts there."""
+    sunk_area,sunk,raised,folded = 0.,0.,0.,0
+    for mesh in meshes:
+        world = mesh.matrix_world
+        nmat = world.to_3x3().inverted().transposed()
+        scale = abs(world.determinant())**(2/3)
+        points = {v.index:world@v.co for v in mesh.data.vertices}
+        near = {i for i,p in points.items() if any((p-c).length <= TIP_NORMAL_REGION_M for c in centres)}
+        if not near:
+            continue
+        area = dict.fromkeys(near,0.)
+        normals = {i:(nmat@mesh.data.vertices[i].normal).normalized() for i in near}
+        # with ``before``: only a fold with a corner the ops moved counts — the
+        # flat subdivision of a noisy skin folds faces nothing moved
+        moved = ({i for i in near if (before.find_nearest(points[i])[3] or 0.) > TIP_MOVED_M
+                  and not any((points[i]-c).length <= r for c,r in exempt)}
+                 if before is not None else near)
+        for face in mesh.data.polygons:
+            corners = [i for i in face.vertices if i in near]
+            for i in corners:
+                area[i] += face.area*scale/len(face.vertices)
+            if len(corners) == len(face.vertices) and any(i in moved for i in corners):
+                smooth_n = sum((normals[i] for i in corners),Vector())
+                if (nmat@face.normal).dot(smooth_n) < 0 and face.area*scale > TIP_FOLD_MIN_AREA_M2:
+                    folded += 1
+        if before is None:
+            continue
+        for i in near:
+            if normals[i].y >= 0:
+                continue   # an inner wall or the far side: the skin faces the front (-Y)
+            if any((points[i]-c).length <= r for c,r in exempt):
+                continue
+            location = before.find_nearest(points[i])[0]
+            if location is None:
+                continue
+            d = (points[i]-location).dot(normals[i])
+            raised = max(raised,d)
+            if -d > TIP_SINK_DEPTH_M:
+                sunk_area += area[i]
+                sunk = max(sunk,-d)
+    return {'sunk_area_mm2':round(sunk_area*1e6,2),'max_sunk_mm':round(sunk*1000,3),
+            'max_raised_mm':round(raised*1000,3),'folded':folded}
+
+
+def crater_gate(before, after):
+    """The reason a tip's ops are dropped, or '' (``crater_census`` notes):
+    ``before`` the census before the ops, ``after`` the one after."""
+    if after['sunk_area_mm2'] > TIP_GATE_SINK_AREA_MM2:
+        return 'tip ops sank the skin (%.0f mm2 more than %g mm, up to %.1f mm)' % (
+            after['sunk_area_mm2'],TIP_SINK_DEPTH_M*1000,after['max_sunk_mm'])
+    if after['max_raised_mm'] > TIP_GATE_RAISE_M*1000:
+        return 'tip ops raised the skin by %.1f mm' % after['max_raised_mm']
+    if after['folded'] > before['folded']:
+        return 'tip ops folded the skin (%d faces, %d before)' % (after['folded'],before['folded'])
+    return ''
+
+
 def tip_positions(meshes, source_rows, override):
     """The tip rows ``tip_mesh`` builds on, and what the metrics record.
 
     The suggestion is each source side's apex: its colour marker, or without
-    one its geometry crest (``tip_source``). A side with an offset moves its
-    tip along the surface (``surface_walk``); a side without one keeps the
-    source row as it is. Per side the metrics get the suggestion, its front
+    one its geometry crest (``tip_source``); an outline or crest apex moves
+    onto the skin's own peak near it (``local_peak``, A209), a colour marker
+    stays. A side with an offset moves its tip from
+    there along the surface (``surface_walk``). Per side the metrics get the suggestion, its front
     normal, the tangent frame there, the applied offset in mm and the placed
     position (before the fill)."""
     offsets = tip_offsets(override)
     nearest = surface_nearest(meshes)
+    tree = world_tree(meshes)
     rows,sides = [],[]
     for row,(up,out),side in zip(source_rows,offsets,(1,-1)):
-        suggested = Vector(row['tip'])
+        source = Vector(row['tip'])
+        # a colour marker is the painted tip itself: it stays where it is
+        peak = local_peak(tree,row) if row.get('apex_source')!='colour' else None
+        suggested = peak if peak is not None else source
         normal = nearest(suggested)[1]
         placed = dict(row)
+        placed['tip'] = list(suggested)
         if up or out:
             placed['tip'] = list(surface_walk(nearest,suggested,side,up,out)[0])
         rows.append(placed)
         e_up,e_out = surface_frame(normal,side)
-        sides.append({'suggested':list(suggested),'suggested_normal':list(normal),
+        sides.append({'suggested':list(suggested),'source':list(source),
+                      'peak_from_source_mm':round((suggested-source).length*1000,2),'suggested_normal':list(normal),
                       'tangent_up':list(e_up),'tangent_out':list(e_out),
                       'offset_mm':[round(up*1000,3),round(out*1000,3)],'placed':list(placed['tip'])})
     colour = all(row['apex_source']=='colour' for row in source_rows)
@@ -3386,7 +3566,22 @@ def extension_bones(args):
                     snapshot = position_snapshot(meshes)
                 centres = [Vector(row['tip']) for row in rows]
                 census[g['id']] = (centres,normal_census(meshes,centres))
+                craters,skin = crater_census(meshes,centres),world_tree(meshes)
                 prepared[g['id']] = tip_mesh(meshes,p,rows,pinned[g['depends_on']])
+                # A tip whose ops sink, over-raise or fold the skin is dropped
+                # (A209): the clean mesh is kept, the reason recorded.
+                exempt = [(Vector(row['tip']),p['tip_length']+row['fill_exact_m']) for row in prepared[g['id']][0]
+                          if row['fill_exact_m']]
+                exempt += [(Vector(src['tip']),(row['source_level']['level']['full_radius_mm']
+                                               +row['source_level']['level']['blend_mm'])/1000)
+                           for row,src in zip(prepared[g['id']][0],pinned[g['depends_on']])
+                           if (row['source_level'].get('level') or {}).get('mode')=='replace']
+                after = crater_census(meshes,centres,skin,exempt)
+                dropped = crater_gate(craters,after)
+                if dropped:
+                    raise ValueError(dropped)
+                tip_info[g['id']]['craters'] = {**{k:after[k] for k in ('sunk_area_mm2','max_sunk_mm','max_raised_mm')},
+                                                'folded':[craters['folded'],after['folded']]}
             except (ValueError,KeyError,TypeError,IndexError) as e:
                 for mesh,data in zip(meshes,saved):
                     changed = mesh.data
@@ -3451,6 +3646,7 @@ def extension_bones(args):
                 else:
                     info = tip_info[g['id']]
                     plan[2]['tip_source'] = info['tip_source']
+                    plan[2]['craters'] = info.get('craters')
                     for row,side in zip(plan[2]['placement'],info['sides']):
                         row.update(side)
                     if any(bone_key(name) in bones or any(name==other for _,_,previous in plans for other,_,_,_ in previous[0]) for name,_,_,_ in plan[0]):

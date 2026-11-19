@@ -35,7 +35,8 @@ above the fitted surface is recorded before (at least the 4 mm disc) and after
 Geometry (C, both markers rejected): the tip group is still built, at the
 pair's geometry crest (tip_source geometry). By the bump's symmetry the crest
 is its centre (+-.15,-.15,1.4) within one .0025 grid cell, the suggestion is
-the source apex exactly, and without a marker area the refinement radius is
+the skin's peak there (A209 ``local_peak``) — the source apex within the 1 mm
+ray grid — and without a marker area the refinement radius is
 the declared stub radius tip_diameter/2=.0045.
 Tall (Ruling A109, geometry as C): a cosine bump of 13 mm height and 6 mm
 radius along -Y at each crest — taller than the frame window normal_radius x
@@ -56,11 +57,13 @@ vertex (1e-9). Before A109 the whole build answered status "failed".
 Neutralfail (review 03#13): the same, but the tip is switched off (``neutralise``) and the levelling fails: the
 tip group alone is {status failed, mode neutralised, reason the error}, the pair group is built, the mesh is the
 one before, vertex for vertex. On 69aeeba75 the whole build answers status "failed".
-Floating (review 03): Modelled plus the fill-ring noise of Refusal: the bump is levelled (recorded > 1 mm before —
-the noise lowers the fitted surface's accuracy, so not Modelled's 3.9 —, < .3 mm after), the fill is skipped, and
-the stub's tip comes down along its axis by the bump's recorded height (the source apex was the bump's top),
-within .3 mm: ``tip_settled_mm`` < 0, |tip - apex| = |tip_settled_mm|. On 69aeeba75 it stays on the old top.
-Refusal (fill skipped by noise) is the mirror case since then: the 3-5 mm crater is levelled up, and the stub
+Floating (review 03, A209): Modelled plus the fill-ring noise of Refusal: the noise puts the levelling's fit at an
+RMS of 1-2 mm, above TIP_LEVEL_EXACT_RMS_M (.5 mm), so the levelling only raises the skin (mode raise) and the bump
+above the fit stays — recorded > 1 mm before and the same after —, the fill is skipped, and the stub stays on the
+bump's top: ``tip_settled_mm`` 0, tip == the source apex (colour marker, so no peak move). Before A209 (ffe2bc03c)
+the bump was levelled (< .3 mm after) and the stub came down by its height.
+Refusal (fill skipped by noise) is the mirror case since then: the 3-5 mm crater is levelled up (since A209 by at
+most TIP_LEVEL_MAX_SHIFT_M 3 mm: the noise puts the fit's RMS above .5 mm, mode raise), and the stub
 settles out of the crater floor onto the levelled skin along its axis, by the recorded ``tip_settled_mm`` (> 0),
 instead of staying on the crater floor inside the skin (on 69aeeba75: tip == the source apex).
 No expected value is recorded from a run.
@@ -222,7 +225,9 @@ elif kind=='C':
  assert len(obj.data.vertices)>before
  for side,(name,parent),row,source in zip((1,-1),(('TipLeft','ExampleLeft'),('TipRight','ExampleRight')),rows,placement):
   assert source['apex_source']=='geometry',source
-  assert (Vector(row['suggested'])-Vector(source['tip'])).length<1e-6,(row,source)
+  # A209: the suggestion is the skin's peak near the crest apex (local_peak); by the bump's symmetry the same
+  # point within the 1 mm ray grid
+  assert (Vector(row['suggested'])-Vector(source['tip'])).length<.001,(row,source)
   assert (Vector(row['suggested'])-Vector((side*.15,-.15,1.4))).length<.0025,row
   assert row['offset_mm']==[0.,0.] and abs(row['radius']-.0045)<1e-12,row
   assert arm.data.bones[name].parent.name==parent
@@ -231,17 +236,19 @@ elif kind=='C':
  raw=Path(outputs['model']).read_bytes(); size=struct.unpack_from('<I',raw,12)[0]; doc=json.loads(raw[20:20+size])
  assert sum(n.get('name') in ('TipLeft','TipRight') for n in doc['nodes'])==2
 elif job['params'].get('floating',False):
- # Review 03: the modelled bump is levelled, the fill is refused (noise) — the stub comes down from the bump's old
- # top onto the levelled skin along its axis, by the bump's recorded height (the apex was its top).
+ # A209: the noise puts the levelling's fit at RMS 1-2 mm (> TIP_LEVEL_EXACT_RMS_M .5 mm, <= .002) — mode
+ # raise: the skin only rises, so the modelled bump above the fit stays (recorded > 1 mm before AND after), the
+ # fill is refused (noise), and the stub stays on the bump's top: no settle, tip == the source apex.
  rows=result['metrics']['Tip']['placement']
  for side,(name,row) in zip((1,-1),zip(('TipLeft','TipRight'),rows)):
   t,axis=Vector(row['tip']),Vector(row['axis'])
   assert row['fill'].startswith('skipped:'),row
   level=row['source_level']; settled=level['tip_settled_mm']
-  assert level['bump_mm'][0]>1 and level['bump_mm'][1]<.3,level
-  assert settled<0 and abs(settled+level['bump_mm'][0])<.3,level
+  assert level['level']['mode']=='raise' and .5<level['level']['fit_rms_mm']<=2.,level
+  assert level['bump_mm'][0]>1 and abs(level['bump_mm'][1]-level['bump_mm'][0])<1e-9,level
+  assert abs(settled)<1e-6,level
   P=Vector(placement[0 if side==1 else 1]['tip'])
-  assert abs((t-P).length-abs(settled)/1000)<2e-6 and (P-t).normalized().dot(axis)>.999,(list(t),list(P))
+  assert (t-P).length<2e-6,(list(t),list(P))
   assert (arm.data.bones[name].head_local-t).length<1e-4
 elif job['params'].get('modelled',False):
  rows=result['metrics']['Tip']['placement']
