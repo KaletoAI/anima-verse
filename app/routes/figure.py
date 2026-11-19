@@ -44,6 +44,16 @@ body actions):
   piece's fit is not refused, 409 off the pipeline, while a Build of the
   character runs or a base step is in flight, 503 when the profile could not
   be read.
+* ``GET  /characters/{c}/figure/accessory/{item_id}`` — an accessory piece's section (Ruling A118, A216):
+  ``{item_id, name, mode, jewellery (None: no kind chosen), suggested (``accessory_spec.suggest_kind``), kinds,
+  built_kinds, drop_presets, metals, ranges, state, reason, metrics, built_at, cost {hub_jobs: 0}, glb_url (the
+  preview GLB, its query names the build)}``; 404 for an unknown character or item.
+* ``PUT  /characters/{c}/figure/accessory/{item_id} {jewellery}`` — store the description on the ITEM (every wearer,
+  ``accessory_spec.normalize``); 400 for an unknown kind. Spends nothing — the accessory step becomes due.
+* ``POST /characters/{c}/figure/accessory/{item_id}/curve {drop_cm, thickness_mm}`` — the chain's centre line for
+  those settings on the plain body (``accessory_build.preview_curve``), nothing stored; 400 without a plain body.
+* ``GET  /characters/{c}/figure/accessory/{item_id}/preview.glb`` — the plain body with the current build grafted (the
+  plain body alone while not built); 404 without a plain body.
 * ``GET  /characters/{c}/figure/template/{item_id}`` — a template piece's parameter dialog (Ruling A138,
   ``garment_template``): ``{item_id, name, params (None: none stored), source, updated_at, spec (the field
   schema: ``{field: {type, choices | min/max, default}}``), built (the kinds draped today), cost {llm_calls,
@@ -330,6 +340,76 @@ def _template_item(character_name: str, item_id: str) -> Dict[str, Any]:
     if not item or item.get("category") != "outfit_piece":
         raise HTTPException(status_code=404, detail="Outfit piece not found")
     return item
+
+
+class AccessoryRequest(BaseModel):
+    jewellery: Dict[str, Any]
+
+
+class AccessoryCurveRequest(BaseModel):
+    drop_cm: float
+    thickness_mm: float = 1.5
+
+
+@router.get("/{character_name}/figure/accessory/{item_id}")
+def get_accessory(character_name: str, item_id: str,
+                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from urllib.parse import quote
+    from app.core import accessory_build, accessory_spec, garment_set
+    item = _template_item(character_name, item_id)
+    state = accessory_build.accessory_state(character_name, item_id, item=item)
+    record = state.get("record") or {}
+    glb_url = (f"/characters/{quote(character_name, safe='')}/figure/accessory/{quote(item_id, safe='')}"
+               f"/preview.glb?v={state.get('asig') or ''}-{state['state']}-{record.get('built_at') or ''}")
+    return {"item_id": item_id, "name": str(item.get("name") or item_id), "mode": garment_set.mesh_mode_of(item),
+            "jewellery": accessory_spec.of_item(item), "suggested": accessory_spec.suggest_kind(item),
+            "kinds": list(accessory_spec.KINDS), "built_kinds": list(accessory_spec.BUILT_KINDS),
+            "drop_presets": dict(accessory_spec.DROP_PRESETS), "metals": list(accessory_spec.METALS),
+            "ranges": {k: list(v) for k, v in accessory_spec.RANGES.items()},
+            "state": state["state"], "reason": state["reason"], "metrics": record.get("metrics") or None,
+            "built_at": record.get("built_at") or "", "cost": {"hub_jobs": 0}, "glb_url": glb_url}
+
+
+@router.put("/{character_name}/figure/accessory/{item_id}")
+def put_accessory(character_name: str, item_id: str, body: AccessoryRequest,
+                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import accessory_spec
+    from app.models.inventory import update_item
+    item = _template_item(character_name, item_id)
+    try:
+        spec = accessory_spec.normalize(body.jewellery)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    piece = dict(item.get("outfit_piece") or {})
+    piece["jewellery"] = spec
+    if update_item(item_id, {"outfit_piece": piece}) is None:
+        raise HTTPException(status_code=500, detail="The item could not be saved")
+    return {"item_id": item_id, "jewellery": spec}
+
+
+@router.post("/{character_name}/figure/accessory/{item_id}/curve")
+def preview_accessory_curve(character_name: str, item_id: str, body: AccessoryCurveRequest,
+                            _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import accessory_build, accessory_spec
+    _template_item(character_name, item_id)
+    drop = min(max(float(body.drop_cm), accessory_spec.RANGES["drop_cm"][0]), accessory_spec.RANGES["drop_cm"][1])
+    thick = min(max(float(body.thickness_mm), accessory_spec.RANGES["thickness_mm"][0]),
+                accessory_spec.RANGES["thickness_mm"][1])
+    try:
+        return accessory_build.preview_curve(character_name, item_id, drop_cm=drop, thickness_mm=thick)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/{character_name}/figure/accessory/{item_id}/preview.glb")
+def accessory_preview_glb(character_name: str, item_id: str,
+                          _: Dict[str, Any] = Depends(require_admin)) -> Response:
+    from app.core import accessory_build
+    _template_item(character_name, item_id)
+    glb = accessory_build.preview_glb(character_name, item_id)
+    if glb is None:
+        raise HTTPException(status_code=404, detail=accessory_build.REASON_NO_BODY)
+    return Response(glb, media_type="model/gltf-binary", headers={"Cache-Control": "private, max-age=3600"})
 
 
 @router.get("/{character_name}/figure/template/{item_id}")

@@ -277,15 +277,18 @@ def npz_path(character_name: str, item_id: str, record: Dict[str, Any]) -> Path:
 
 
 def preview_glb(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None) -> Optional[bytes]:
-    """The plain rigged body with the current build grafted (the Wardrobe's 3D view), None without a current build."""
+    """The plain rigged body with the current build grafted (the Wardrobe's 3D view); the plain body alone while the
+    piece is not built (the live curve is drawn over it); None without a plain body."""
     from app.core import accessory_mesh, glb_mesh
     from app.models.character import get_character_dir
     profile = _profile_of(character_name, profile)
+    base = _current_base(character_name, profile)
+    if base is None:
+        return None
+    blob = (get_character_dir(character_name) / "model3d" / f"{base[0]}.glb").read_bytes()
     state = accessory_state(character_name, item_id, profile=profile)
     if state["state"] != "current":
-        return None
-    base = _current_base(character_name, profile)
-    blob = (get_character_dir(character_name) / "model3d" / f"{base[0]}.glb").read_bytes()
+        return blob
     mesh = garment_mesh(character_name, item_id, state["record"])
     return glb_mesh.graft(blob, mesh, name=accessory_mesh.node_name(item_id),
                           extras={"kind": "accessory", "item_id": item_id, "fsig": state["asig"]})
