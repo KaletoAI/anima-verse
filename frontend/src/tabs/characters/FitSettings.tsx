@@ -25,7 +25,7 @@ import { stampLabel } from './freshnessText'
 import {
   ALLOWANCE_CHOICES, ALLOWANCE_HINT, DEPTH_CHOICES, DEPTH_HINT, SLEEVE_CHOICES, SLEEVE_HINTS, SLEEVE_LABELS,
   SHAFT_LABELS, OVERLAP_HINT, overlapChoices, BODY_OVERLAP_HINT, bodyOverlapChoices, TRUNK_CHOICES, TRUNK_HINTS, TRUNK_LABELS, allowanceLabel, shaftHint, shaftReason, allowanceNumbers, allowanceReason, armLightColour,
-  armLightText, depthLabel, SHELL_FILL_HINT, SHELL_MARGIN_HINT, SHELL_SIDES_HINT, shellChoiceLabel, depthReason, sleeveReason, trunkReason, manualFitChanges, RESET_FIT, RESET_FIT_HINT,
+  armLightText, depthLabel, savedDueText, SHELL_FILL_HINT, SHELL_MARGIN_HINT, SHELL_SIDES_HINT, shellChoiceLabel, depthReason, sleeveReason, trunkReason, manualFitChanges, RESET_FIT, RESET_FIT_HINT,
 } from './fitSettingsModel'
 import type {
   AllowanceChoice, DepthChoice, FitSettingsInfo, FitSettingsValues, ShaftChoice, SleeveChoice, SleeveSideKey,
@@ -72,8 +72,7 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
         `/characters/${encodeURIComponent(character)}/garments/${encodeURIComponent(itemId)}/fit-settings`, change)
       // A185: side views turned on are new images (hub jobs) before the shell — the Fit row's button names their count
       toast(`${t('Saved')} · ${change.shell_sides === true ? t('Side views and the shell due — Rebuild shell makes the views first')
-        : d.fit_settings.due || d.fit_settings.mesh_shape?.due ? t('Fit due — refits on the CPU, 0 hub jobs')
-        : t('nothing becomes due')}`, 'success')
+        : savedDueText(d.fit_settings, t)}`, 'success')
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     } finally {
@@ -271,7 +270,7 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
       <span className="ga-hint" style={REASON} title={t(DEPTH_HINT)}>
         {info.recorded ? depthReason(info, t) : t('Auto never adds depth')}
       </span>
-      {info.transform ? (() => {
+      {info.transform && info.mesh_shape?.resolved !== 'shell' ? (() => {
         // A217: the placement correction is set beside the Mesh view (its sliders preview it live); shown here
         const now = transformOf(values)
         const made = info.recorded ? transformOf(info.recorded) : null

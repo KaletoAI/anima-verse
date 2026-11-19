@@ -190,7 +190,7 @@ export function rotationXyz(rxDeg: number, ryDeg: number, rzDeg: number): number
 
 /** The correction applied to points of the SHOWN MESH's frame: the fit turns the placed piece about the centre of
  *  its bounding box and shifts it in the body frame; the placement is a uniform scale `scale` plus an offset, so in
- *  the mesh frame the same turn goes about `pivot` (`garment_mesh_view.transform_pivot_mesh`) and the shift is
+ *  the mesh frame the same turn goes about `pivot` (`garment_mesh_view.placement`) and the shift is
  *  cm / 100 / (k · scale) (`k` metres per body unit). */
 export function transformInPlace(xyz: Float32Array | Float64Array | number[], tr: PieceTransform,
   pivot: [number, number, number], scale: number, k: number): void {

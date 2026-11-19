@@ -115,15 +115,14 @@ export interface ShellChoice { setting: number; made: number | null; choices: nu
 /** A166: the automatic fit (server `garment_fit_settings.defaults`, the mesh shape aside — it has its own control). */
 export const FIT_AUTOMATIC: Omit<FitSettingsValues, 'mesh_shape'> = {
   sleeves_left: 'auto', sleeves_right: 'auto', allowance: 'auto', depth: 0, trunk: 'auto', shaft: 'split',
-  shaft_overlap: 10, body_overlap: 20, rot_x: 0, rot_y: 0, rot_z: 0, off_x: 0, off_y: 0, off_z: 0 }
+  shaft_overlap: 10, body_overlap: 20 }
 /** A166: the settings that differ from the automatic fit (the mesh shape aside); {} when none. */
 export function manualFitChanges(v: FitSettingsValues): Partial<FitSettingsValues> {
   const out: Partial<FitSettingsValues> = {}
   for (const [k, auto] of Object.entries(FIT_AUTOMATIC) as [keyof typeof FIT_AUTOMATIC, unknown][]) {
     const now = k === 'shaft' ? (v.shaft ?? 'split') : k === 'shaft_overlap' ? (v.shaft_overlap ?? 10)
       : k === 'body_overlap' ? (v.body_overlap ?? 20)
-      : k === 'depth' ? (v.depth ?? 0)
-      : k.startsWith('rot_') || k.startsWith('off_') ? (v[k] ?? 0) : v[k]
+      : k === 'depth' ? (v.depth ?? 0) : v[k]
     if (now !== auto) (out as Record<string, unknown>)[k] = auto
   }
   return out
@@ -218,6 +217,9 @@ export interface FitSettingsInfo {
   shaft?: ShaftInfo | null
   /** A217: the placement correction's bounds (|degrees|, |cm|, step); a server before it sends none. */
   transform?: { rot_deg: number; off_cm: number; step: number }
+  /** A217 review: the current fingerprint's prepared mesh exists — a saved setting refits on the CPU (0 hub jobs);
+   *  false: the next Build may have to make the mesh first. A server before it sends none (= true). */
+  mesh_ready?: boolean
   numbers: {
     deep_push_share?: number | null; torso_tight_share?: number | null; sleeve_shards?: number | null
     sleeve_skin_left_cm2?: number | null; sleeve_skin_right_cm2?: number | null; scale?: number | null
@@ -484,4 +486,11 @@ export function trunkReason(info: FitSettingsInfo, t: T): string {
       .replace('{after}', (tr.after.p50_m * 1000).toFixed(1))}`
   }
   return head
+}
+
+/** A217 review: the save toast's "what becomes due" — never promises 0 hub jobs when the piece has no usable mesh. */
+export function savedDueText(d: { due?: boolean; mesh_ready?: boolean; mesh_shape?: { due?: boolean } | null },
+  t: (k: string) => string): string {
+  if (d.mesh_ready === false) return t('Saved for the next fit — the piece has no usable mesh yet; the next Build may make it again (hub jobs)')
+  return d.due || d.mesh_shape?.due ? t('Fit due — refits on the CPU, 0 hub jobs') : t('nothing becomes due')
 }

@@ -221,7 +221,7 @@ def main() -> int:
         body_P, body_F = box([-0.15, 0.0, -0.1], [0.15, 1.7, 0.1], 120)
         garment_P, garment_F = box([-1.0] * 3, [1.0] * 3, 8)
         body_mask, garment_mask = masks()
-        s, t = garment_mesh_view.placement(garment_P, garment_F, body_P, {"body": body_mask, "garment": garment_mask})
+        s, t, _pivot = garment_mesh_view.placement(garment_P, garment_F, body_P, {"body": body_mask, "garment": garment_mask})
         near("s", s, 0.2, 1e-6)
         near("t.x", float(t[0]), 0.0, 1e-6)
         near("t.y", float(t[1]), 1.0, 1e-6)

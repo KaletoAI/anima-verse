@@ -5654,7 +5654,14 @@ def fit_settings_info(character_name: str, item_id: str, fsig: str, base_model_s
         found = fit_attempts.attempt_of(character_name, item_id, "")
         if found and found[1].get("fsig") == fsig:
             record = found[1]
-    return fit_settings_view(record, current, accepted=accepted, item_id=item_id, character_name=character_name)
+    view = fit_settings_view(record, current, accepted=accepted, item_id=item_id, character_name=character_name)
+    # A217 review: whether the fit can run on the CPU now — the current fingerprint's prepared mesh exists. Without it
+    # a saved setting does not refit for free: the next Build may have to make the mesh (hub jobs) first.
+    try:
+        view["mesh_ready"] = bool(fsig) and gs.garment_path(character_name, item_id, fsig, "prepared").is_file()
+    except ValueError:
+        view["mesh_ready"] = False
+    return view
 
 
 def mesh_shape_view(record: Dict[str, Any], current: Dict[str, Any], item_id: str,
@@ -5752,6 +5759,9 @@ def fit_settings_view(record: Dict[str, Any], current: Dict[str, Any], *, accept
     shape = mesh_shape_view(record, current, item_id, character_name)
     from app.core import garment_shaft
     skip = set(garment_shell.SHELL_SETTING_KEYS) | ({"body_overlap"} if current.get("shaft") != garment_shaft.WHOLE else set())
+    if shape.get("resolved") == garment_shell.SHELL:
+        # A217 review: a shell is never placed — the settings it never reads make nothing due
+        skip |= set(garment_fit_settings.NOT_FOR_SHELL)
     return {
         "settings": current, "recorded": made_with,
         # the shell offset is compared in shape["due"] (a shell only, A166)

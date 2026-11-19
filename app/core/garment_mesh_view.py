@@ -239,11 +239,13 @@ def inside_faces(P, F, body_P, body_F, *, vox: float) -> Tuple[np.ndarray, float
     return mask, share, float(mask.mean())
 
 
-def placement(P, F, body_P, masks) -> Tuple[float, np.ndarray]:
-    """``(s, t)`` with ``Q = s·P + t``: the mesh ``(P, F)`` placed on the unrigged body ``body_P`` as the fit places
-    it before its push (``garment_fit.fit_clothing``: welded, crumbs dropped, ``place_by_framing`` with ``masks``
-    ``{"body", "garment"}``, ``align_band_depth``). Both steps are a uniform scale plus an offset, so ``(s, t)`` is
-    read off the placed vertices."""
+def placement(P, F, body_P, masks) -> Tuple[float, np.ndarray, list]:
+    """``(s, t, pivot)`` with ``Q = s·P + t``: the mesh ``(P, F)`` placed on the unrigged body ``body_P`` as the fit
+    places it before its push (``garment_fit.fit_clothing``: welded, crumbs dropped, ``place_by_framing`` with
+    ``masks`` ``{"body", "garment"}``, ``align_band_depth``). Both steps are a uniform scale plus an offset, so
+    ``(s, t)`` is read off the placed vertices. ``pivot`` (A217): the point the fit's placement correction turns
+    about, in the MESH frame — the bounding-box centre of the vertices the fit keeps (welded, crumbs dropped and,
+    with ``masks["opening"]``, the inside seen through an opening left out like ``garment_fit.opening_lining``)."""
     from app.core import garment_fit as gf
     body_P = np.asarray(body_P, np.float64)
     Pw, Fw, _inv = gf.weld(P, F)
@@ -258,18 +260,14 @@ def placement(P, F, body_P, masks) -> Tuple[float, np.ndarray]:
         raise ViewUnavailable("The mesh has no height to place")
     s = float(np.ptp(Q[:, 1]) / span)
     t = Q.mean(0) - s * Pk.mean(0)
-    return s, t
-
-
-def transform_pivot_mesh(P, F) -> list:
-    """A217: the point the fit's placement correction turns about (``garment_fit.transform_pivot`` of the placed
-    welded mesh without its crumbs), in the MESH's own frame — the placement is a uniform scale plus an offset, so it
-    is the bounding-box centre of that mesh here. The client turns the shown mesh about it (``fitWiden.ts``
-    ``transformInPlace``)."""
-    from app.core import garment_fit as gf
-    Pw, Fw, _inv = gf.weld(P, F)
-    Pk, _Fk, _keep = gf.drop_small(Pw, Fw)
-    return [float(v) for v in gf.transform_pivot(Pk if len(Pk) else np.asarray(P, np.float64))]
+    Pp = Pk
+    if masks.get("opening") is not None:
+        lining, _report = gf.opening_lining(Pk, _Fk, *masks["opening"])
+        if lining.any():
+            stay = gf._open_faces(_Fk, lining)
+            if stay.any():
+                Pp = Pk[np.unique(_Fk[stay])]
+    return s, t, [float(v) for v in gf.transform_pivot(Pp)]
 
 
 def preview_depth_choices() -> Tuple[int, ...]:
@@ -531,7 +529,9 @@ def _compute(character_name: str, item_id: str, inputs: Dict[str, Any]) -> Dict[
                                                                  base_front=inputs["front"])
     except garment_source.FrameRefused as e:
         raise ViewUnavailable(f"The piece cannot be placed on this body: {e}")
-    s, t = placement(P, F, body_u.positions, {"body": body_mask, "garment": ghost_mask})
+    s, t, pivot = placement(P, F, body_u.positions, {
+        "body": body_mask, "garment": ghost_mask,
+        "opening": garment_source.opening_masks(character_name, item_id, inputs["fsig"])})
     vox = garment_fit.VOX_M / k
     mask, share, face_share = inside_faces(P * s + t, F, body_u.positions, body_u.faces, vox=vox)
     # Ruling A48c: the allowance table; the red overlay holds the faces inside at ANY factor, ``mask`` names which.
@@ -549,7 +549,7 @@ def _compute(character_name: str, item_id: str, inputs: Dict[str, Any]) -> Dict[
     result = {"key": inputs["key"], "share": round(share, 4), "face_share": round(face_share, 4),
               "faces": int(len(F)), "inside_faces": int(mask.sum()), "bsig": inputs["bsig"],
               "placement": {"scale": s, "offset": [float(v) for v in t], "k": float(k),
-                            "pivot": transform_pivot_mesh(P, F)},
+                            "pivot": pivot},
               "allowance": allowance,
               "sources": inputs.get("sources") or {},
               "computed_at": utc_now_iso(), "seconds": round(time.monotonic() - started, 2)}

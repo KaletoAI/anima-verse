@@ -304,6 +304,9 @@ export interface ViewerCompanion {
 export interface ViewerDeform {
   key: string
   map: (xyz: Float32Array) => void
+  /** A217: the map turns the surface (not only stretches it) — the normals are recomputed from the mapped positions
+   *  (the loaded normals come back when the deform ends). */
+  normals?: boolean
   /** Ruling A82: skinned meshes (skipped by `map`) whose name (the mesh's or its node's) `owns` accepts — `map` gets
    *  that name, the flat xyz positions in the mesh's own bind space and its skeleton's bone inverse by bone name
    *  (row-major 16, null when the skeleton has no such bone). Every other skinned mesh stays as loaded. */
@@ -3135,6 +3138,16 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             }
             for (let i = 0; i < pos.count; i++) pos.setXYZ(i, work[3 * i], work[3 * i + 1], work[3 * i + 2])
             pos.needsUpdate = true
+            // A217: a turning map needs normals from the mapped surface; the loaded ones are kept to come back to.
+            const nrm = geo.getAttribute('normal')
+            const nd = geo.userData as { normalBase?: Float32Array }
+            if (nrm && map && deformRef.current?.normals) {
+              if (!nd.normalBase) nd.normalBase = Float32Array.from(nrm.array as ArrayLike<number>)
+              geo.computeVertexNormals()
+            } else if (nrm && nd.normalBase) {
+              (nrm.array as Float32Array).set(nd.normalBase)
+              nrm.needsUpdate = true
+            }
             geo.computeBoundingSphere()
             geo.computeBoundingBox()
           })

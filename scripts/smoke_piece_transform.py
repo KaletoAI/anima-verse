@@ -22,7 +22,7 @@ Six points on the unit axes, ±x, ±y, ±z -> bounding box centre (0, 0, 0), k =
 [2] The order (``rotation_xyz`` directly, beyond the setting's ±30): x 90 then z 90 — (1, 0, 0) -> Rx (1, 0, 0) ->
     Rz (0, 1, 0); (0, 0, 1) -> Rx (0, −1, 0) -> Rz (1, 0, 0); (0, 1, 0) -> Rx (0, 0, 1) -> Rz (0, 0, 1).
 [3] Settings: ``validate`` takes −30, 30, 0.5, −10, 10 and refuses 30.5, 10.5 cm, 0.3 (no multiple of 0.5), True,
-    "5", NaN with a ValueError; ``transform_values`` makes a missing / out-of-range / non-numeric value 0 and
+    "5", NaN and 10**400 (review: no OverflowError -> 500) with a ValueError; ``transform_values`` makes a missing / out-of-range / non-numeric value 0 and
     ``normalise({})`` carries the six keys at 0, so a fit recorded before A217 is NOT made due by them.
     All zeros: ``piece_transform`` returns the very array and no report (the fit as before, vertex for vertex).
 [4] The mesh frame (the view): with a placement Q = s·P + t (s 0.25, t (0.3, 1.0, −0.1)), k 1.7, the fit's
@@ -125,12 +125,13 @@ def main() -> int:
     for value in (-10, 10):
         check(f"off_z {value} accepted", gfs.validate({"off_z": value}) == {"off_z": float(value)})
     for key, value in (("rot_y", 30.5), ("off_x", 10.5), ("rot_z", 0.3), ("off_y", True), ("rot_x", "5"),
-                       ("off_z", float("nan"))):
+                       ("off_z", float("nan")), ("rot_x", 10 ** 400)):
         try:
             gfs.validate({key: value})
             check(f"{key} {value!r} refused", False, "accepted")
         except ValueError as e:
             check(f"{key} {value!r} refused", True, str(e))
+    check("transform_values: a huge int -> 0, no OverflowError", gf.transform_values({"off_x": 10 ** 400})["off_x"] == 0.0)
     v = gf.transform_values({"rot_x": 31, "off_y": "x", "rot_z": -2.5})
     check("transform_values: out of range / non-numeric -> 0", v == {"rot_x": 0.0, "rot_y": 0.0, "rot_z": -2.5,
                                                                     "off_x": 0.0, "off_y": 0.0, "off_z": 0.0}, str(v))

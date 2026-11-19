@@ -5458,6 +5458,7 @@
     "Decided at the first fit": "Wird bei der ersten Anpassung entschieden",
     "Each setting saves on its own and runs nothing.": "Jede Einstellung speichert für sich und startet nichts.",
     "Fit allowance": "Weitenzugabe",
+    "Saved for the next fit — the piece has no usable mesh yet; the next Build may make it again (hub jobs)": "Für die nächste Anpassung gespeichert — das Stück hat noch kein brauchbares Mesh; der nächste Build erzeugt es eventuell neu (Hub-Jobs)",
     "Set in the Mesh view (Body on): turn and shift, previewed live": "Im Mesh-Fenster einstellen (Körper an): drehen und verschieben, live in der Vorschau",
     "Tilt (X)": "Neigen (X)",
     "Turn (Y)": "Drehen (Y)",

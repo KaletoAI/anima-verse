@@ -214,8 +214,9 @@ def validate(changes: Dict[str, Any]) -> Dict[str, Any]:
             rot = key.startswith("rot_")
             limit = garment_fit.TRANSFORM_ROT_LIMIT_DEG if rot else garment_fit.TRANSFORM_OFF_LIMIT_CM
             unit = "degrees" if rot else "cm"
-            if (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
-                    or abs(value) > limit):
+            # the range first: a huge int has no float (``math.isfinite`` would raise OverflowError)
+            if (isinstance(value, bool) or not isinstance(value, (int, float)) or abs(value) > limit
+                    or not math.isfinite(value)):
                 raise ValueError(f"{key} must be a number of {unit} from {-limit:g} to {limit:g}")
             step = garment_fit.TRANSFORM_STEP
             if abs(value / step - round(value / step)) > 1e-6:

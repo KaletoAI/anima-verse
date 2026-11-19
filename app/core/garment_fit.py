@@ -3874,8 +3874,9 @@ def transform_values(settings: Optional[Dict[str, Any]]) -> Dict[str, float]:
     for key in TRANSFORM_KEYS:
         value = raw.get(key)
         limit = TRANSFORM_ROT_LIMIT_DEG if key in TRANSFORM_ROT_KEYS else TRANSFORM_OFF_LIMIT_CM
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) \
-                or abs(value) > limit:
+        # the range first: a huge int has no float (``math.isfinite`` would raise OverflowError)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or abs(value) > limit \
+                or not math.isfinite(value):
             out[key] = 0.0
         else:
             out[key] = float(round(value / TRANSFORM_STEP) * TRANSFORM_STEP) + 0.0
@@ -4426,8 +4427,7 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
     result.report["fit_settings"] = {"sleeves_left": choices["left"], "sleeves_right": choices["right"],
                                      "allowance": allowance, "depth": depth, "trunk": trunk}
     result.report["transform"] = transform_report
-    for key in TRANSFORM_KEYS:
-        result.report["fit_settings"][key] = transform_values(settings)[key]
+    result.report["fit_settings"].update({key: (transform_report or {}).get(key, 0.0) for key in TRANSFORM_KEYS})
     result.report["depth"] = {"setting": depth, "ease_mm": round(room_u[0][1] * k * 1000.0, 1),
                               "half_depth_mm": round(half_depth * k * 1000.0, 1),
                               "inherited": bool(torso_source and depth)}

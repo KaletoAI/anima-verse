@@ -35,7 +35,7 @@ import { useClockSettings } from '../../lib/clockFormat'
 import { useToast } from '../../lib/Toast'
 import { Model3DViewer } from './Model3DViewer'
 import type { ViewerCompanion, ViewerDeform } from './Model3DViewer'
-import { ALLOWANCE_CHOICES, ALLOWANCE_HINT, DEPTH_HINT, allowanceLabel } from './fitSettingsModel'
+import { ALLOWANCE_CHOICES, ALLOWANCE_HINT, DEPTH_HINT, allowanceLabel, savedDueText } from './fitSettingsModel'
 import type { AllowanceChoice, DepthChoice, FitSettingsInfo } from './fitSettingsModel'
 import {
   autoFactor, choiceFactor, decodeMask, depthEase, depthGapsAt, depthText, easeInPlace, factorChoice, factorText,
@@ -496,8 +496,7 @@ function TransformPanel({ allowance, draft, onDraft }: {
       const d = await apiPost<{ fit_settings: FitSettingsInfo }>(
         `/characters/${encodeURIComponent(allowance.character)}/garments/${encodeURIComponent(allowance.itemId)}/fit-settings`,
         change)
-      toast(`${t('Saved')} · ${d.fit_settings.due ? t('Fit due — refits on the CPU, 0 hub jobs') : t('nothing becomes due')}`,
-        'success')
+      toast(`${t('Saved')} · ${savedDueText(d.fit_settings, t)}`, 'success')
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     } finally {
@@ -635,6 +634,7 @@ export function GarmentMeshViewer({ sources, initial, pieceName, onClose, initia
   // A217: the fit turns / shifts the placed piece first, then widens it (`garment_fit.fit_clothing`).
   const deform = useMemo<ViewerDeform | null>(() => ((axis && (Math.abs(factor - 1) > 1e-9 || ease !== 0)) || turn ? {
     key: `${view?.key}:${factor}:${depth}:${transformKey}`,
+    normals: !!turn,
     map: (xyz: Float32Array) => {
       if (turn && pivot) transformInPlace(xyz, turn, pivot, scale, kM)
       if (axis) { widenInPlace(xyz, factor, axis); easeInPlace(xyz, ease, axis) }
@@ -746,7 +746,7 @@ export function GarmentMeshViewer({ sources, initial, pieceName, onClose, initia
               <AllowancePanel allowance={allowance} table={table} factor={factor} onFactor={setFactor}
                 choice={choice} onChoice={setChoice} depth={depth} onDepth={setDepth} shown={shown} />
             ) : null}
-            {allowance && view?.placement?.pivot ? (
+            {allowance && view?.placement?.pivot && allowance.info.mesh_shape?.resolved !== 'shell' ? (
               <TransformPanel allowance={allowance} draft={transform} onDraft={setTransform} />
             ) : null}
             <div className="ga-hint" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
