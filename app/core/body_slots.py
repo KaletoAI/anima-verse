@@ -859,7 +859,8 @@ def appearance_suffix(character_name: str, face_only: bool = False,
 #: English, translated by the clients (de.json).
 DEFAULT_PIECE_SLOT_LABELS: Dict[str, str] = {
     "head": "Head", "neck": "Neck", "outer": "Coat & jacket", "top": "Top", "underwear_top": "Underwear top",
-    "bottom": "Bottom", "underwear_bottom": "Underwear bottom", "legs": "Legs", "feet": "Feet"}
+    "bottom": "Bottom", "underwear_bottom": "Underwear bottom", "legs": "Legs", "feet": "Feet",
+    "hands": "Hands"}
 
 
 def piece_slot_labels(character_name: str) -> Dict[str, str]:

@@ -2985,7 +2985,7 @@ def play_news(user=Depends(get_current_user)):
 # A species package's `piece_slots` declaration replaces both (F2 —
 # plan-body-slots.md): topology, order and labels then come from the package.
 _SLOT_ORDER = ["head", "neck", "outer", "top", "underwear_top",
-               "bottom", "underwear_bottom", "legs", "feet"]
+               "bottom", "underwear_bottom", "legs", "feet", "hands"]
 _SLOT_LABELS = DEFAULT_PIECE_SLOT_LABELS
 
 

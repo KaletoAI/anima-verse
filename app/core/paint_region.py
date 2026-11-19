@@ -37,6 +37,7 @@ SLOT_REGIONS: Dict[str, Tuple[str, ...]] = {
     "outer": ("spine", "shoulder", "upper_arm", "forearm", "hips", "upper_leg"),
     "legs": ("hips", "upper_leg", "lower_leg", "foot", "toe"),
     "feet": ("lower_leg", "foot", "toe"),
+    "hands": ("forearm", "hand"),
 }
 #: A slot this table does not know (a species package's own slot): every region but the locked ones.
 UNKNOWN_SLOT_REGIONS: Tuple[str, ...] = tuple(r for r in BODY_REGIONS if r not in LOCKED_REGIONS)

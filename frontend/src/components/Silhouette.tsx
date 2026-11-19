@@ -54,6 +54,9 @@ const DEFAULT_SLOT_PATHS: SlotPathMap = {
   feet:
     'M 440 1090 L 400 1090 L 350 1200 L 440 1190 Z' +
     'M 460 1090 L 500 1090 L 550 1200 L 460 1190 Z',
+
+  // Hands — the two hands beside the hips (gloves).
+  hands: 'M 280 600 a 18 55 0 1 0 0.1 0 Z' + 'M 618 600 a 18 55 0 1 0 0.1 0 Z',
 }
 
 const SLOT_ORDER_PAINT = [
@@ -66,6 +69,7 @@ const SLOT_ORDER_PAINT = [
   'head',
   'neck',
   'feet',
+  'hands',
 ]
 
 function loadOverrides(): SlotPathMap {

@@ -20,6 +20,7 @@ silhouette:
     underwear_bottom: [66, 55]
     legs: [50, 73]
     feet: [50, 92]
+    hands: [10, 54]
 
 # Full human clothing topology (display order) — replaces the core default.
 # portrait: true = shown in a waist-up expression image (its outfit part).
@@ -33,6 +34,7 @@ piece_slots:
   - {id: underwear_bottom, label: "Underwear bottom"}
   - {id: legs, label: Legs}
   - {id: feet, label: Feet}
+  - {id: hands, label: Hands}
 
 # SFW human anatomy. Attribute options mirror today's template selects
 # (values migrate per world on demand — plan-body-slots.md). NSFW anatomy

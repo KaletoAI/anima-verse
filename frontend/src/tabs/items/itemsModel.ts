@@ -232,6 +232,7 @@ export const VALID_PIECE_SLOTS = [
   'underwear_bottom',
   'legs',
   'feet',
+  'hands',
 ]
 
 export const EMPTY_DRAFT: DraftItem = {

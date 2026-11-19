@@ -60,6 +60,7 @@ SLOT semantics (MANDATORY — place each garment in the correct slot):
 - legs: stockings, pantyhose, tights, knee-high socks, garters, leg-warmers.
 - feet: shoes, boots, sneakers, heels, sandals, flip-flops, loafers,
   slippers, house shoes — EVERY kind of footwear.
+- hands: gloves, gauntlets, mittens, fingerless gloves, arm warmers.
 
 CRITICAL: "Jacket" → slots: ["outer"]. "Leather Jacket" → slots: ["outer"].
 "Dress" → slots: ["top", "bottom"]. NEVER put outerwear in `bottom`.

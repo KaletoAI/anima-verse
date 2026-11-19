@@ -379,6 +379,7 @@ def _slot_order(slot_order: Optional[Sequence[str]]) -> List[str]:
 #: T-shirt on ``top`` although the item only names ``underwear_top`` as covered).
 LAYER_STACKS: Tuple[Tuple[str, ...], ...] = (
     ("underwear_top", "top", "outer"),
+    ("hands", "outer"),                     # A223: a glove is under the coat's sleeve
     ("underwear_bottom", "legs", "bottom", "outer"),
 )
 
