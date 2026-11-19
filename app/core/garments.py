@@ -3192,8 +3192,8 @@ def _use_attempt_locked(character_name: str, item_id: str, kind: Any, fsig: str,
         garment_use_undo.snapshot(character_name, item_id, fsig, step, view, attempt,
                                   passing=isinstance(gate, dict) and gate.get("ok") is True, extra=slot_files)
         if staged is not None:
+            committed = True   # before the move: a move that fails half-way is put back as well
             garment_images.commit_upload(staged)
-            committed = True
         result = garment_images.use_attempt(character_name, item_id, fsig, step, view, attempt)
     except BaseException:
         if committed:

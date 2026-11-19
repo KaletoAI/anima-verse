@@ -1590,6 +1590,10 @@ def stage_upload(character_name: str, item_id: str, fsig: str, step: str, view: 
     target = garment_path(character_name, item_id, fsig, "image", step=step, view=view, attempt=slot)
     target.parent.mkdir(parents=True, exist_ok=True)
     staged = target.with_name(f".upload_{target.name}")
+    # A leftover of an earlier upload of this view that died before its discard (a killed process) goes first.
+    stem = garment_path(character_name, item_id, fsig, "image", step=step, view=view).stem
+    for stale in target.parent.glob(f".upload_*{stem}.try*"):
+        stale.unlink(missing_ok=True)
     with Image.open(source) as im:
         size = im.size
     side, offset = square_frame(size)

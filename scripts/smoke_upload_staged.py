@@ -19,9 +19,15 @@ EXPECTED, from the rule (the slot is touched only by ``commit_upload``, which ru
 [U2] the gate raises -> the exception propagates, slot 2 unchanged, no ``.upload_*`` file left in the folder.
 [U3] ``_use_attempt_locked`` with the staged upload, ``use_attempt`` publishes -> slot 2 holds the upload, its
      sidecar the new gate; the committed Undo manifest names slot 2's image with sha256(``OLD``); ``undo`` puts
-     slot 2 back to ``OLD`` (image) and the old sidecar.
+     slot 2 back to ``OLD`` (image) and the old sidecar. The slot is kept under the manifest's ``attempt_files``,
+     not ``files``: ``state()["images"]`` lists only the view's final, ``[{step: ghost, view: front, before:
+     False}]`` (the final did not exist before) — no ``.try2`` entry.
 [U4] ``use_attempt`` raises after the upload moved in -> the error propagates, slot 2 is ``OLD`` again (image,
      raw, sidecar), no pending snapshot left, no ``.upload_*`` file left (``upload_view``'s discard).
+[U5] ``commit_upload`` fails half-way (the image move raises after the old sidecar went) -> slot 2 is ``OLD``
+     again with its old sidecar (the put-back covers a move that started).
+[U6] a stale ``.upload_<slot 3 name>`` of this view (a killed earlier upload) is gone after ``stage_upload``; a
+     ``.upload_`` file of ANOTHER view stays.
 """
 import hashlib
 import io
@@ -68,7 +74,7 @@ ITEM, FSIG, STEP, VIEW = "item_x", "0123456789ab", "ghost", "front"
 def garment_path(c, item, fsig, part, step=None, view=None, attempt=None):
     if part == "image":
         if attempt:
-            return G / "attempts" / f"{item}_{fsig}_{step}_{view}.try{attempt}.png"
+            return G / "images" / f"{item}_{fsig}_{step}_{view}.try{attempt}.png"   # beside the final, as the store
         return G / "images" / f"{item}_{fsig}_{step}_{view}.png"
     return G / part / f"{item}_{fsig}.bin"
 
@@ -202,7 +208,10 @@ finally:
 in_slot = slot.read_bytes() == upload_png and json.loads(slot_json.read_text()).get("gate", {}).get("reasons") == ["hem"]
 man = json.loads((gu.undo_dir("C", ITEM, FSIG) / gu.MANIFEST).read_text())
 rel = slot.relative_to(G).as_posix()
-named = man["files"].get(rel) == sha(b"OLD")
+named = man["attempt_files"].get(rel) == sha(b"OLD") and rel not in man["files"]
+imgs = gu.state("C", ITEM, FSIG)["images"]
+named = named and imgs == [{"step": STEP, "view": VIEW, "before": False}]
+print("   state images", imgs)
 gu.undo("C", ITEM, FSIG)
 check("U3", in_slot and named and slot_is_old(), f"in slot {in_slot} manifest {named} undone {slot_is_old()}")
 
@@ -227,6 +236,40 @@ except RuntimeError:
 pending = gu._pending(gu.undo_dir("C", ITEM, FSIG))
 check("U4", raised and slot_is_old() and not pending.exists() and leftovers() == [],
       f"raised {raised} old {slot_is_old()} pending {pending.exists()} leftovers {leftovers()}")
+
+# U5
+gi.use_attempt = use_ok
+reset_slot()
+st = gi.stage_upload("C", ITEM, FSIG, STEP, VIEW, DATA)
+real_commit = gi.commit_upload
+
+
+def half_commit(staged):
+    staged["target"].with_suffix(".json").unlink()
+    staged["target"].write_bytes(b"HALF")
+    raise OSError("move broke")
+
+
+gi.commit_upload = half_commit
+try:
+    try:
+        garments._use_attempt_locked("C", ITEM, "clothing", FSIG, STEP, VIEW, 2, staged=st)
+    finally:
+        gi.discard_upload(st)
+    raised = False
+except OSError:
+    raised = True
+gi.commit_upload = real_commit
+check("U5", raised and slot_is_old(), f"raised {raised} old {slot_is_old()}")
+
+# U6
+other = slot.parent / ".upload_item_x_0123456789ab_ghost_back.try1.png"
+stale = slot.parent / f".upload_{slot.name.replace('try2', 'try3')}"
+other.write_bytes(b"x")
+stale.write_bytes(b"x")
+st = gi.stage_upload("C", ITEM, FSIG, STEP, VIEW, DATA)
+gi.discard_upload(st)
+check("U6", not stale.exists() and other.exists(), f"stale {stale.exists()} other {other.exists()}")
 
 print("FAIL" if fails else "ALL PASS", fails)
 sys.exit(1 if fails else 0)

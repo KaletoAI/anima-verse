@@ -128,7 +128,8 @@ def snapshot(character_name: str, item_id: str, fsig: str, step: str, view: str,
     into the group's PENDING snapshot and write its manifest — ``commit`` makes it the group's snapshot once the
     click published, ``discard`` drops it when it did not. The caller holds the item's run lock and calls it
     BEFORE the click publishes anything. ``extra``: more files the click replaces (an upload's attempt slot, A207
-    review 05#6) — kept and put back like the others. Returns the pending folder."""
+    review 05#6) — kept under the manifest's ``attempt_files`` (not the view's ``files``) and put back by ``undo``
+    and ``restore_pending``. Returns the pending folder."""
     from app.core import garment_store as gs
     from app.core.base_body import file_sha256
     from app.core.timeutils import utc_now_iso
@@ -137,20 +138,23 @@ def snapshot(character_name: str, item_id: str, fsig: str, step: str, view: str,
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir(parents=True, exist_ok=True)
     files: Dict[str, Optional[str]] = {}
-    for path in [*_targets(character_name, item_id, fsig, step, view), *extra]:
-        rel = path.relative_to(root).as_posix()
-        if path.is_file():
-            _copy(path, folder / rel)
-            files[rel] = file_sha256(folder / rel)
-        else:
-            files[rel] = None
+    attempt_files: Dict[str, Optional[str]] = {}
+    for paths_, into in ((_targets(character_name, item_id, fsig, step, view), files), (extra, attempt_files)):
+        for path in paths_:
+            rel = path.relative_to(root).as_posix()
+            if path.is_file():
+                _copy(path, folder / rel)
+                into[rel] = file_sha256(folder / rel)
+            else:
+                into[rel] = None
     kept = []
     for path in _mesh_attempts(character_name, item_id, fsig):
         rel = path.relative_to(root).as_posix()
         _copy(path, folder / rel)
         kept.append(rel)
     manifest = {"version": VERSION, "at": utc_now_iso(), "step": step, "view": view, "attempt": int(attempt),
-                "passing": bool(passing), "published_sha256": None, "files": files, "mesh_attempts": kept}
+                "passing": bool(passing), "published_sha256": None, "files": files, "mesh_attempts": kept,
+                "attempt_files": attempt_files}
     (folder / MANIFEST).write_text(json.dumps(manifest, indent=1, sort_keys=True))
     return folder
 
@@ -179,7 +183,7 @@ def restore_pending(character_name: str, item_id: str, fsig: str, paths: Sequenc
     from app.core import garment_store as gs
     root = gs._root(character_name)
     pending = _pending(undo_dir(character_name, item_id, fsig))
-    files = (_read_manifest(pending) or {}).get("files") or {}
+    files = (_read_manifest(pending) or {}).get("attempt_files") or {}
     for path in paths:
         rel = path.relative_to(root).as_posix()
         if rel not in files:
@@ -249,7 +253,10 @@ def undo(character_name: str, item_id: str, fsig: str) -> Dict[str, Any]:
     root = gs._root(character_name)
     restored: List[str] = []
     removed: List[str] = []
-    entries = [(rel, sha) for rel, sha in (manifest.get("files") or {}).items()
+    # ``attempt_files``: an upload's attempt slot (A207) — put back like the view's files, but never listed as one
+    # of the view's images by ``state``.
+    kept_files = {**(manifest.get("files") or {}), **(manifest.get("attempt_files") or {})}
+    entries = [(rel, sha) for rel, sha in kept_files.items()
                if (root / rel).resolve().is_relative_to(root.resolve())]
     # A198 (review 05 #15): every kept copy is checked BEFORE anything is touched — a damaged one refuses the undo
     # with the group as it is, never half-restored
