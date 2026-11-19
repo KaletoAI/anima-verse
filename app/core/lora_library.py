@@ -341,7 +341,8 @@ class LoraNotAllowedError(ValueError):
         self.names = list(names)
         super().__init__(
             f"The LoRA library does not associate backend "
-            f"'{backend_name}' with: {', '.join(self.names)}")
+            f"'{backend_name}' with: {', '.join(self.names)} (or the backend "
+            f"has no LoRA input — its 'LoRA input' setting is off)")
 
 
 def _split_loras(backend: Any, loras: Any) -> tuple:
@@ -356,7 +357,8 @@ def _split_loras(backend: Any, loras: Any) -> tuple:
     Association = the entry appears in ``get_lora_options`` for this backend,
     which includes entries the sync flagged ``missing_on`` — they stay
     offered, marked "(missing)", the flag can be stale, and a wrong pick
-    fails visibly in the render result.
+    fails visibly in the render result. A backend without a LoRA input
+    (``supports_loras: false``) has no association at all.
     """
     entries = list(loras or [])
     if not entries:
@@ -436,7 +438,8 @@ def warn_dropped_loras(backend_name: str, dropped: List[str],
             "Stored LoRA %s is not associated with backend '%s'%s — rendering "
             "without it. Either associate it with that backend in "
             "/admin/settings (LoRA library) or remove it from the image "
-            "settings that still ask for it.",
+            "settings that still ask for it. (A backend whose 'LoRA input' "
+            "setting is off takes no LoRA at all.)",
             ", ".join(fresh), backend_name or "?",
             f" (render for {subject})" if subject else "")
     return fresh

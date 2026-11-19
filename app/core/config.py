@@ -1099,9 +1099,19 @@ def get_lora_options(backend_name: str, lora_filter: str = "") -> list:
     - ``lora_filter`` (e.g. "Qwen*"): case-insensitive glob applied to the
       name — mirrors the backend's ``lora_filter`` so "all backends" entries
       of foreign model families don't leak into the dropdowns.
+
+    A backend whose entry has ``supports_loras: false`` (no LoRA input) gets
+    ``[]`` whatever the library associates with it: the gate
+    (``lora_library._split_loras``) and every dropdown read this list, so
+    nothing is offered, a stored LoRA is filtered and an explicit pick is
+    refused.
     """
     import fnmatch
     from app.core import lora_library
+    for be in get("image_generation.backends", []) or []:
+        if (isinstance(be, dict) and be.get("name") == backend_name
+                and be.get("supports_loras", True) is False):
+            return []
     triggers = lora_library.entries()
     if not isinstance(triggers, list):
         return []

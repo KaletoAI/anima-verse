@@ -35,6 +35,10 @@ gate block of ``world_ops.generate_image_core``:
   the dialog, marked "(missing)", and the flag can be stale;
 * a manual entry with ``backends: []`` ("all backends") passes, unless the
   backend's ``lora_filter`` glob excludes its name;
+* a backend entry with ``supports_loras: false`` (an alias without a LoRA
+  input) gets no LoRA at all, however the library associates it: empty
+  dropdown, every explicit pick refused, every stored LoRA filtered (see
+  [1a] for the hand-derived values);
 * the three unguarded paths are covered: ``generate_from_input`` (image,
   hard for an explicit pick / filtering for a stored one), ``generate_video``
   (animate dialog — always an explicit pick), and the profile-image route
@@ -151,6 +155,48 @@ def main() -> int:
     check("the message names backend and LoRA",
           "flux-backend" in str(LoraNotAllowedError("flux-backend", ["x.safetensors"]))
           and "x.safetensors" in str(LoraNotAllowedError("flux-backend", ["x.safetensors"])))
+
+    print("\n[1a] a backend without a LoRA input (supports_loras: false)")
+    # The library associates qwen_style with BOTH qwen-backend and the
+    # input-less alias (what the discovery sync does when the gateway lists
+    # the host's LoRAs for every alias), and everywhere.safetensors is an
+    # "all backends" entry. With the entry's switch off the association
+    # counts for nothing: get_lora_options -> [], so the dropdown is empty,
+    # the explicit pick names BOTH LoRAs, the stored list keeps only the
+    # "None" placeholder. The sibling entry with the switch on (default)
+    # still gets both. On the old code (8fa2d763f) get_lora_options ignored
+    # the switch: the alias was offered both and nothing was rejected.
+    LIBRARY[1]["backends"] = ["qwen-backend", "no-lora-alias"]
+    saved_ig = cfg._CONFIG.get("image_generation")
+    cfg._CONFIG["image_generation"] = {"backends": [
+        {"name": "no-lora-alias", "api_type": "openai_diffusion",
+         "supports_loras": False},
+        {"name": "qwen-backend", "api_type": "openai_diffusion"}]}
+    try:
+        no_lora = FakeBackend("no-lora-alias")
+        qwen = FakeBackend("qwen-backend")
+        opts = cfg.get_lora_options("no-lora-alias")
+        check("the dropdown of the input-less alias is empty", opts == [], str(opts))
+        names = [o["name"] for o in cfg.get_lora_options("qwen-backend")]
+        check("the sibling with the switch on keeps its LoRAs",
+              names == ["everywhere.safetensors", "qwen_style.safetensors"], str(names))
+        pick = [{"name": "qwen_style.safetensors"}, {"name": "everywhere.safetensors"}]
+        named = rejects(lambda: assert_loras_allowed(no_lora, pick))
+        check("an explicit pick is refused, naming every LoRA",
+              named == ["qwen_style.safetensors", "everywhere.safetensors"], str(named))
+        stored_sel = [{"name": "None"}, {"name": "qwen_style.safetensors", "strength": 0.9}]
+        kept, dropped = filter_allowed_loras(no_lora, stored_sel)
+        check("a stored LoRA is filtered out (the 'None' slot is kept)",
+              kept == [{"name": "None"}] and dropped == ["qwen_style.safetensors"],
+              f"{kept} / {dropped}")
+        check("the same pick on the sibling passes",
+              unassociated_loras(qwen, pick) == [])
+    finally:
+        LIBRARY[1]["backends"] = ["qwen-backend"]
+        if saved_ig is None:
+            cfg._CONFIG.pop("image_generation", None)
+        else:
+            cfg._CONFIG["image_generation"] = saved_ig
 
     print("\n[1b] the soft half — stored LoRAs are filtered, not rejected")
     stored = [{"name": "flux_style.safetensors", "strength": 0.7},
