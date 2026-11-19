@@ -10,6 +10,12 @@
  * and a 1.70 m figure stands beside it. Save stores the item-wide settings
  * (no job; the accessory step becomes due), Build makes it on the CPU (0 hub
  * jobs). Reads GET /characters/{c}/figure/accessory/{item}.
+ *
+ * A225: the chain material includes cords (leather, string, fabric; thicker by
+ * default) and a pendant from the item image: on/off and its size in mm, a
+ * placeholder box at the chain's lowest point until it is built, its state
+ * and "Build pendant (1 hub job)" (POST …/pendant — the item's one hub job,
+ * shared by every wearer).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
@@ -20,9 +26,10 @@ import { useToast } from '../../lib/Toast'
 import { FigureBuildButton } from './FigureBuildButton'
 import { Model3DViewer } from './Model3DViewer'
 import {
-  ACCESSORY_KIND_LABELS, ACCESSORY_METAL_LABELS, ACCESSORY_STATE_COLOR, ACCESSORY_STATE_LABELS, dropPresetOf,
+  ACCESSORY_KIND_LABELS, ACCESSORY_METAL_LABELS, ACCESSORY_STATE_COLOR, ACCESSORY_STATE_LABELS, PENDANT_STATE_COLOR,
+  PENDANT_STATE_LABELS, dropPresetOf, pendantBoxPoints,
 } from './figureModel'
-import type { AccessoryInfo, Jewellery } from './figureModel'
+import type { AccessoryInfo, AccessoryPendant, Jewellery } from './figureModel'
 
 const CHIP: CSSProperties = { fontSize: '0.72em', padding: '1px 6px', borderRadius: 8 }
 const GRID: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px 12px' }
@@ -64,13 +71,19 @@ export function AccessoryPieceControls({ character, itemId, version = 0 }: {
         </span>
       ) : null}
       <button type="button" className="ga-btn ga-btn-sm" aria-haspopup="dialog" style={{ marginLeft: 'auto' }}
-        title={t('Kind, drop and metal of this accessory, with a 3D view; made on the CPU (0 hub jobs)')}
+        title={t('Kind, drop, material and pendant of this accessory, with a 3D view; the chain is made on the CPU (0 hub jobs), a pendant is 1 hub job per item')}
         onClick={() => setOpen(true)}>
         {t('Accessory settings…')}
       </button>
       {data && state !== 'current' && data.reason ? (
         <span className="ga-hint" style={{ flexBasis: '100%', fontSize: '0.72em',
           color: state === 'failed' ? 'var(--danger, #f85149)' : 'var(--warning, #d29922)' }}>{t(data.reason)}</span>
+      ) : null}
+      {data?.pendant && !data.pendant.on_figure && data.pendant.reason ? (
+        <span className="ga-hint" data-pendant-state={data.pendant.state} style={{ flexBasis: '100%', fontSize: '0.72em',
+          color: ['refused', 'failed'].includes(data.pendant.state) ? 'var(--danger, #f85149)' : 'var(--warning, #d29922)' }}>
+          {t(data.pendant.reason)}
+        </span>
       ) : null}
       {error ? <span className="ga-hint" style={{ flexBasis: '100%', fontSize: '0.72em' }}>{error}</span> : null}
       {open ? (
@@ -92,6 +105,8 @@ export function AccessoryDialog({ character, itemId, onClose }: {
   const { path, data, error, load } = useAccessory(character, itemId)
   const [draft, setDraft] = useState<Jewellery | null>(null)
   const [points, setPoints] = useState<Array<[number, number, number]>>([])
+  const [anchor, setAnchor] = useState<{ at: [number, number, number]; out: [number, number, number] } | null>(null)
+  const [pendantBusy, setPendantBusy] = useState(false)
   const [saving, setSaving] = useState(false)
   const seq = useRef(0)
   useEffect(() => { void load() }, [load])
@@ -106,16 +121,53 @@ export function AccessoryDialog({ character, itemId, onClose }: {
     if (!draft || draft.kind !== 'necklace') { setPoints([]); return }
     const mine = ++seq.current
     const id = window.setTimeout(() => {
-      apiPost<{ points: Array<[number, number, number]> }>(`${path}/curve`, { drop_cm: drop, thickness_mm: thick })
-        .then((r) => { if (mine === seq.current) setPoints(r.points) })
-        .catch(() => { if (mine === seq.current) setPoints([]) })
+      apiPost<{ points: Array<[number, number, number]>; anchor?: [number, number, number];
+        anchor_outward?: [number, number, number] }>(`${path}/curve`, { drop_cm: drop, thickness_mm: thick })
+        .then((r) => {
+          if (mine !== seq.current) return
+          setPoints(r.points)
+          setAnchor(r.anchor && r.anchor_outward ? { at: r.anchor, out: r.anchor_outward } : null)
+        })
+        .catch(() => { if (mine === seq.current) { setPoints([]); setAnchor(null) } })
     }, 120)
     return () => window.clearTimeout(id)
   }, [path, drop, thick, draft])
   const setChain = (key: 'drop_cm' | 'thickness_mm', v: number) =>
     setDraft((d) => (d ? { ...d, chain: { ...(d.chain || {}), [key]: v } } : d))
+  const pendantOn = !!draft?.pendant
+  const pendantSize = draft?.pendant?.size_mm ?? data?.pendant_defaults?.size_mm ?? 18
+  const setPendant = (on: boolean, size?: number) => setDraft((d) => (d ? {
+    ...d, pendant: on ? { from_image: true, size_mm: size ?? d.pendant?.size_mm ?? data?.pendant_defaults?.size_mm ?? 18 } : null,
+  } : d))
+  // A225: a cord is thicker — switching to one takes the cord default unless the thickness was moved off the chain's.
+  const setMaterial = (m: string) => setDraft((d) => {
+    if (!d || !data) return d
+    const cord = data.cords.includes(m)
+    const wasCord = data.cords.includes(d.metal || '')
+    const chain = cord !== wasCord
+      ? { ...(d.chain || {}), thickness_mm: cord ? data.cord_thickness_mm : 1.5 }
+      : d.chain
+    return { ...d, metal: m, chain }
+  })
+  // While unsaved, unbuilt or built without the pendant: a placeholder box at the chain's lowest point.
+  const pendantRow: AccessoryPendant | null = data?.pendant || null
+  const buildPendant = async () => {
+    setPendantBusy(true)
+    try {
+      const r = await apiPost<{ status: string }>(`${path}/pendant`, {})
+      toast(r.status === 'ready' ? t('The pendant is already built') : r.status === 'running'
+        ? t('The pendant is being built') : t('Pendant job started (1 hub job)'), 'info')
+      window.setTimeout(() => { void load() }, 2500)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setPendantBusy(false)
+    }
+  }
   const stored = JSON.stringify(data?.jewellery || null)
   const dirty = !!draft && JSON.stringify({ ...(data?.jewellery || {}), ...draft }) !== stored
+  const showBox = pendantOn && !!anchor && (dirty || !pendantRow?.on_figure)
+  const boxDots = showBox && anchor ? pendantBoxPoints(anchor.at, anchor.out, pendantSize) : []
   const save = async () => {
     if (!draft) return
     setSaving(true)
@@ -148,9 +200,13 @@ export function AccessoryDialog({ character, itemId, onClose }: {
                 <Model3DViewer key={data.glb_url} url={data.glb_url} format="glb" height={460} subject="figure"
                   builtAt={state === 'current' ? data.built_at : null}
                   figureHeight={1.7} scaleFigure
-                  surfacePoints={points.map((at) => ({ at, color: dirty || state !== 'current' ? '#ffb000' : '#d4af37' }))} />
+                  surfacePoints={[
+                    ...points.map((at) => ({ at, color: dirty || state !== 'current' ? '#ffb000' : '#d4af37' })),
+                    ...boxDots.map((at) => ({ at, color: '#58a6ff' })),
+                  ]} />
                 <div className="ga-hint" style={{ fontSize: '0.75em' }}>
                   {t('Drag rotates the body, Shift+drag moves it. The dots are the chain for the values beside it; the 1.70 m figure gives the scale.')}
+                  {boxDots.length ? ' ' + t('The blue box is where the pendant hangs, at its size, until it is built.') : ''}
                 </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: '1 1 300px', minWidth: 0 }}>
@@ -182,9 +238,9 @@ export function AccessoryDialog({ character, itemId, onClose }: {
                     ) : null}
                   </label>
                   <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    <span className="ga-form-hint">{t('Metal')}</span>
+                    <span className="ga-form-hint">{t('Material')}</span>
                     <select className="ga-input" value={draft.metal || 'gold'}
-                      onChange={(e) => setDraft({ ...draft, metal: e.target.value })}>
+                      onChange={(e) => setMaterial(e.target.value)}>
                       {data.metals.filter((m) => m !== 'custom').map((m) => (
                         <option key={m} value={m}>{t(ACCESSORY_METAL_LABELS[m] || m)}</option>
                       ))}
@@ -213,6 +269,50 @@ export function AccessoryDialog({ character, itemId, onClose }: {
                         min={ranges.thickness_mm?.[0] ?? 0.5} max={ranges.thickness_mm?.[1] ?? 6} step={0.1}
                         value={thick} onChange={(e) => setChain('thickness_mm', Number(e.target.value))} />
                     </label>
+                    <fieldset style={{ border: '1px solid var(--border, #30363d)', borderRadius: 6, padding: '6px 8px',
+                      display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <legend className="ga-form-hint">{t('Pendant')}</legend>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <input type="checkbox" checked={pendantOn} onChange={(e) => setPendant(e.target.checked)} />
+                        {t('Pendant from the item image')}
+                      </label>
+                      {pendantOn ? (
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          <span className="ga-form-hint">{t('Pendant size (longest side)')}: {pendantSize.toFixed(0)} mm</span>
+                          <input type="range" aria-label={t('Pendant size (longest side)')}
+                            min={ranges.size_mm?.[0] ?? 3} max={Math.min(ranges.size_mm?.[1] ?? 120, 80)} step={1}
+                            value={pendantSize} onChange={(e) => setPendant(true, Number(e.target.value))} />
+                        </label>
+                      ) : null}
+                      {pendantOn && pendantRow ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          <span data-pendant-state={pendantRow.state} title={t(pendantRow.reason)}
+                            style={{ ...CHIP, border: `1px solid ${PENDANT_STATE_COLOR[pendantRow.state] || '#888'}` }}>
+                            {t(PENDANT_STATE_LABELS[pendantRow.state] || pendantRow.state)}
+                          </span>
+                          {pendantRow.on_figure && pendantRow.metrics ? (
+                            <span className="ga-hint" style={{ fontSize: '0.75em' }}
+                              title={t('Smallest distance from the pendant to the body in the rest, walk, sit and run test poses')}>
+                              {pendantRow.metrics.size_mm} mm · {t('gap')} {pendantRow.metrics.gap_mm} mm
+                            </span>
+                          ) : <span className="ga-hint" style={{ fontSize: '0.75em' }}>{t(pendantRow.reason)}</span>}
+                        </div>
+                      ) : null}
+                      {pendantOn ? (
+                        <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <button type="button" className="ga-btn ga-btn-sm"
+                            disabled={pendantBusy || dirty || !pendantRow || ['ready', 'running', 'no_image'].includes(pendantRow.state)}
+                            title={dirty ? t('Save first') : t('Makes the pendant mesh from the item image; shared by everyone wearing this item')}
+                            onClick={() => { void buildPendant() }}>
+                            {pendantRow && ['refused', 'failed'].includes(pendantRow.state)
+                              ? t('Build pendant again (1 hub job)') : t('Build pendant (1 hub job)')}
+                          </button>
+                          <span className="ga-hint" style={{ fontSize: '0.72em' }}>
+                            {t('Size and placement are CPU only (0 hub jobs).')}
+                          </span>
+                        </span>
+                      ) : null}
+                    </fieldset>
                   </>
                 ) : null}
                 {!built ? (

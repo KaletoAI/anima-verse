@@ -50,7 +50,7 @@ export const MESH_MODE_HINTS: Record<MeshMode, string> = {
   painted: "Painted onto the body's texture.",
   in_body: 'Meshed as part of the body.',
   template: 'A sewing pattern sized to the body and draped as cloth on the CPU (0 hub jobs); 1 LLM call suggests its parameters from the item picture. Skirts and dresses today.',
-  accessory: 'A thin metal piece made on the CPU from the body (0 hub jobs): a chain along the neck today. Its kind, drop and metal are set in the Wardrobe.',
+  accessory: 'A thin piece made on the CPU from the body (0 hub jobs): a chain or cord along the neck, optionally with a pendant from the item image (1 hub job per item). Its kind, drop, material and pendant are set in the Wardrobe.',
 }
 
 export const HAIR_MODE_HINTS: Record<HairMode, string> = {
@@ -1469,7 +1469,20 @@ export interface Jewellery {
   kind: string
   chain?: { drop_cm?: number; thickness_mm?: number; style?: string }
   metal?: string
+  /** A225: the pendant from the item image, null: none. */
+  pendant?: { from_image?: boolean; size_mm?: number } | null
   [key: string]: unknown
+}
+
+/** A225: the pendant line of an accessory (`accessory_build.pendant_row`). */
+export interface AccessoryPendant {
+  state: 'ready' | 'running' | 'missing' | 'refused' | 'failed' | 'no_image' | string
+  reason: string
+  size_mm: number
+  on_figure: boolean
+  metrics: { size_mm?: number; gap_mm?: number; tilt_deg?: number;
+    poses?: Record<string, { gap_min_mm: number; inside_share: number }> } | null
+  cost: { hub_jobs: number }
 }
 
 /** GET /characters/{c}/figure/accessory/{item}. */
@@ -1483,6 +1496,10 @@ export interface AccessoryInfo {
   built_kinds: string[]
   drop_presets: Record<string, number>
   metals: string[]
+  cords: string[]
+  cord_thickness_mm: number
+  pendant_defaults: { from_image: boolean; size_mm: number }
+  pendant: AccessoryPendant | null
   ranges: Record<string, [number, number]>
   state: 'current' | 'due' | 'blocked' | 'failed' | string
   reason: string
@@ -1499,6 +1516,43 @@ export const ACCESSORY_KIND_LABELS: Record<string, string> = {
 
 export const ACCESSORY_METAL_LABELS: Record<string, string> = {
   gold: 'Gold', silver: 'Silver', rose_gold: 'Rose gold', black: 'Black metal', custom: 'Custom colour',
+  leather: 'Leather cord', string: 'String', fabric: 'Fabric cord',
+}
+
+export const PENDANT_STATE_LABELS: Record<string, string> = {
+  ready: 'Pendant built', running: 'Pendant building', missing: 'Pendant not built', refused: 'Pendant refused',
+  failed: 'Pendant failed', no_image: 'No item image',
+}
+
+export const PENDANT_STATE_COLOR: Record<string, string> = {
+  ready: '#3fb950', running: '#58a6ff', missing: '#d29922', refused: '#f85149', failed: '#f85149', no_image: '#8b949e',
+}
+
+/** A225: the dots of the placeholder box (`sizeMm` wide and tall, 4 mm deep) hung at `anchor`, its front toward the
+ *  horizontal part of `outward` — what the dialog shows until the pendant is built. */
+export function pendantBoxPoints(anchor: [number, number, number], outward: [number, number, number],
+  sizeMm: number): Array<[number, number, number]> {
+  const s = sizeMm / 1000
+  const d = 0.004
+  let fx = outward[0]
+  let fz = outward[2]
+  const len = Math.hypot(fx, fz) || 1
+  fx /= len; fz /= len
+  // right = up × front
+  const rx = fz
+  const rz = -fx
+  const out: Array<[number, number, number]> = []
+  const corner = (u: number, v: number, w: number): [number, number, number] =>
+    [anchor[0] + rx * u + fx * w, anchor[1] - v, anchor[2] + rz * u + fz * w]
+  const steps = 6
+  for (const w of [0, d]) {
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps
+      out.push(corner(-s / 2 + s * t, 0, w), corner(-s / 2 + s * t, s, w))
+      out.push(corner(-s / 2, s * t, w), corner(s / 2, s * t, w))
+    }
+  }
+  return out
 }
 
 export const ACCESSORY_STATE_LABELS: Record<string, string> = {
