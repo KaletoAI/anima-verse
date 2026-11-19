@@ -1571,7 +1571,9 @@ def _fit_shell(character_name: str, item_id: str, kind: str, fsig: str, bsig: st
         with _SHELL_BUILD_LOCK:
             result = refit_pool.run(garment_shell.build_shell, rigged, unrigged, views,
                                     offset_m=fit_settings["shell_offset"] / 1000.0,
-                                    margin_mm=fit_settings["shell_margin"], fill_cm2=fit_settings["shell_fill"])
+                                    margin_mm=fit_settings["shell_margin"], fill_cm2=fit_settings["shell_fill"],
+                                    see_through=garment_shell.see_through_text(
+                                        base_record["inputs"].get("noun"), base_record["inputs"].get("prompt_fragment")))
     except (garment_shell.ShellRefused, garment_source.FrameRefused) as e:
         error = f"shell refused — {e}"
         gates = {"ok": False, "reasons": [str(e)]}

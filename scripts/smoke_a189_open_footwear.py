@@ -19,7 +19,7 @@ Expected, by hand:
      insole: insole_cover min 0.80, strap_share min 0.08, insole_step max 0.035 (= TOL_SHARE); the fit's OPEN_GATES:
      strap_inside_share max 0.02, strap_push_max_mm max 30, sole_cover min 0.90, sole_sink_mm max 8;
      OPEN_ALLOW_M 0.014, OPEN_EDGE_M 0.005, STRAP_CLEAR_M 0.002, OPEN_HEIGHT_CAP 2.0. INSOLE_VERSION 9 (since the
-     toe-spring flip rule, scripts/smoke_footwear_insole.py [I20]), FOOTWEAR_FIT_VERSION 19 (an open shoe turns the
+     toe-spring flip rule, scripts/smoke_footwear_insole.py [I20]), FOOTWEAR_FIT_VERSION 20 (19: an open shoe turns the
      toes off their bind pitch, [O9]), CUT_VERSION 7: a closed shoe's fit and cut are what they were.
 [O1] the wedge pump (roof over [0.18, 0.26]) stays CLOSED: toe zone x >= 0.85 L = 0.221 (stations 204..239) all
      under the roof -> toe_cover 1.0; heel zone x <= 0.25 L = 0.065: walls 0.03 >= AIR 0.0065 at every station ->
@@ -180,7 +180,7 @@ def main() -> int:
                                            "sole_cover": ("min", 0.90), "sole_sink_mm": ("max", 8.0)})
     check("open fit constants", (ff.OPEN_ALLOW_M, ff.OPEN_EDGE_M, ff.STRAP_CLEAR_M, ff.OPEN_HEIGHT_CAP),
           (0.014, 0.005, 0.002, 2.0))
-    check("versions", (fi.INSOLE_VERSION, ff.FOOTWEAR_FIT_VERSION >= 19, fc.CUT_VERSION), (9, True, 7))
+    check("versions", (fi.INSOLE_VERSION, ff.FOOTWEAR_FIT_VERSION, fc.CUT_VERSION), (9, 20, 7))
 
     print("[O1] the pump stays closed")
     pump = fi.analyse_arrays(*fx.wedge())

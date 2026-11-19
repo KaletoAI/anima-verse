@@ -23,8 +23,9 @@ by ``garment_fit.fit_clothing``. ``shape_of`` is the one rule: the shape a fit o
    ``SHELL_OFFSET_CHOICES``); skin weights = the body's top 4.
 5. Texture baked at ``TEXTURE_PX`` in the body's UV atlas: a head-on sample takes the nearest pixel inside the
    eroded ghost mask (no background grey), a side sample the median of the 12 nearest head-on samples at the band's
-   matched height, blended front→back along the arc. A see-through piece's views (lace, net: A219,
-   ``unmix_backdrop``) lose the backdrop that shows through their openings first — black lace baked grey otherwise.
+   matched height, blended front→back along the arc. A see-through piece (its noun / prompt names lace, net, sheer
+   …: A219, ``see_through_text``) whose views look like a lace loses the backdrop that shows through its openings in
+   every view first (``unmix_backdrop``) — black lace baked grey otherwise.
 
 **Side views** (A185, the piece's fit setting "Side views for the shell", ``shell_sides``, off by default): the piece
 also has left / right piece-only views, and ``build_shell`` reads them as 3rd / 4th views — projected along the body's
@@ -133,8 +134,8 @@ ARMS_UP_IOU_MARGIN = 0.05
 #: Bumped when the shell's construction changes: a shell made by another version reads stale.
 #: 4 (A199, review 06#4): the body's z-buffer samples are spaced by the views' mask pixel (``ZBUF_SPACING_PX``)
 #: instead of 1/2500 of the body height — ~13 samples per mask pixel became ~4, a third of the memory.
-#: 5 (A219): a see-through piece's views lose their backdrop share (``unmix_backdrop``) and a limb ring both views
-#: show worn is closed round (``ring_closed``).
+#: 5 (A219): a see-through piece's views lose their backdrop share (``unmix_backdrop``) and a limb's misregistered
+#: edge strip is worn where both views show the ring worn (``ring_closed``).
 SHELL_VERSION = 5
 #: A199: the spacing of the body's z-buffer samples (``samples``' ``px``: about 4 per spacing²) in mask pixels of
 #: the finest view. 4 random samples per pixel leave a pixel empty with p ≈ e⁻⁴ on a face-on surface; the 3×3
@@ -617,14 +618,14 @@ def ring_worn(y, limb, head_f, memb_f, head_b, memb_b, front_facing):
     return out
 
 
-def ring_closed(y, limb, head_f, memb_f, head_b, memb_b):
-    """A219, the closed tube: a point of ``limb`` (bool) — head-on or not — whose ring (``RING_BIN_M`` of height
-    ``y``) is worn in the front view AND in the back view (``ring_worn``'s per-view rule: at least
-    ``RING_MIN_POINTS`` head-on points, ``RING_SHARE`` of them members, median-filtered over 5 rings). A piece the
-    front and the back both show round a limb at that height is a closed tube there: a strip of the limb its views
-    miss — a generated leg standing wider than the body's, so the body's inner calf falls outside the ghost — is
-    worn too. Below the lowest such ring (toward the foot) the tube continues while one view still shows the ring
-    worn. Returns bool; False outside the limb and in a ring neither rule closes."""
+def ring_closed(y, limb, head_f, memb_f, head_b, memb_b, near_f, near_b):
+    """A219, the misregistered tube: a HEAD-ON point of ``limb`` (bool) that a view misses only by misregistration
+    (``near_f`` / ``near_b``: head-on in that view and on its ``misregistered_strip``) is worn when
+    its ring (``RING_BIN_M`` of height ``y``) is worn in the front view AND in the back view (``ring_worn``'s per-view
+    rule, median-filtered over 5 rings), or — below the lowest such ring, toward the foot — in either view. A
+    generated leg standing wider than the body's leaves the body's inner calf a strip outside the ghost; a real
+    opening (a cut-out inside the silhouette, a slit, a diagonal or high-low hem, a toeless foot) is no such strip and
+    stays open. Returns bool; False outside the limb."""
     from scipy import ndimage
     y = np.asarray(y, np.float64)
     out = np.zeros(len(y), bool)
@@ -644,44 +645,106 @@ def ring_closed(y, limb, head_f, memb_f, head_b, memb_b):
             worn = known & (ndimage.median_filter(worn.astype(np.uint8), 5) > 0)
         both &= worn
         either |= worn
-    # toward the limb's END (its lowest ring: the foot) the tube runs on while one view still shows the ring worn —
-    # a generated back view that stops short at the ankle leaves the heel open above the shoe otherwise
+    rings = both.copy()
     if both.any():
         for i in range(int(np.nonzero(both)[0].min()) - 1, -1, -1):
             if not either[i]:
                 break
-            both[i] = True
-    out[limb] = both[b[limb]]
+            rings[i] = True
+    near = (np.asarray(head_f, bool) & np.asarray(near_f, bool)) | (np.asarray(head_b, bool) & np.asarray(near_b, bool))
+    out[limb] = rings[b[limb]] & near[limb]
     return out
 
 
-#: A219: a ghost (piece-only) view shows the piece SEE-THROUGH when at least this share of its inner pixels is a mix
-#: of the fabric's dark colour and the view's backdrop (``unmix_backdrop``) ...
+#: A219: the most a generated view's limb may stand off the body's (mm) and still count as misregistration
+#: (``misregistered_strip``): Kira's lace stockings' back view missed the inner calf by up to ~25 mm.
+MISREG_MM = 30.0
+#: A219: a misregistered limb stands OUT of the body's figure on its other side: ghost pixels at least
+#: ``MISREG_MM / 3`` outside the figure within this distance (mm) along the same image row.
+MISREG_SPAN_MM = 150.0
+
+
+def _row_distance(mask) -> np.ndarray:
+    """Per pixel the distance (px) to the nearest True pixel of ``mask`` in the SAME row (inf-like where the row has
+    none)."""
+    from scipy import ndimage
+    m = np.asarray(mask, bool)
+    if not m.any():
+        return np.full(m.shape, np.inf)
+    return ndimage.distance_transform_edt(~m, sampling=(1e4, 1.0))
+
+
+def misregistered_strip(ghost, body, mm_px: float) -> np.ndarray:
+    """A219: the pixels of a view where the body shows bare only because the generated piece-only view stands off
+    the body's figure: inside the body's figure and within ``MISREG_MM`` of its edge, outside the ghost's outline
+    with its holes filled (a cut-out stays open), within ``MISREG_MM`` of the ghost along the same row (a hem, a
+    toeless foot — no ghost in the row — stays open), and the ghost stands out of the figure (by ``MISREG_MM / 3``)
+    within ``MISREG_SPAN_MM`` along the row (a slit inside a piece that fits the figure stays open). Bool, the
+    view's shape."""
+    from scipy import ndimage
+    g = np.asarray(ghost, bool)
+    bm = np.asarray(body, bool)
+    px = MISREG_MM / float(mm_px)
+    hull = ndimage.binary_fill_holes(g)
+    depth = ndimage.distance_transform_edt(bm)
+    out = g & ~ndimage.binary_dilation(bm, iterations=max(1, int(np.ceil(px / 3.0))))
+    return (bm & ~hull & (depth <= px) & (_row_distance(g) <= px)
+            & (_row_distance(out) <= MISREG_SPAN_MM / float(mm_px)))
+
+#: A219: words that make a piece SEE-THROUGH (``see_through_text``) — only such a piece's views lose their backdrop
+#: (``unmix_backdrop``); an opaque melange, rib or glitter keeps its colours.
+SEE_THROUGH_WORDS = frozenset({"lace", "lacy", "net", "netted", "fishnet", "fishnets", "mesh", "sheer", "tulle",
+                               "chiffon", "organza", "voile", "transparent", "see-through", "seethrough", "spitze",
+                               "netz", "durchsichtig", "crochet", "openwork"})
+#: German compounds (``Spitzenstrümpfe``, ``Netzstrumpfhose``) start with these.
+SEE_THROUGH_PREFIXES = ("spitzen", "netz", "fishnet", "lace")
+#: The gate of a view (``unmix_backdrop``): at least this share of its inner pixels mixed with the backdrop ...
 SEE_THROUGH_MIN_SHARE = 0.15
-#: ... and at least this share of those mixed pixels has a pure-fabric pixel within ``SEE_THROUGH_NEAR_PX`` (a lace
-#: or a net: the openings sit between the threads; a smooth highlight on an opaque piece is a blob, not interleaved).
+#: ... at least this share pure fabric (the two clusters of a lace: threads and openings) ...
+SEE_THROUGH_MIN_PURE = 0.2
+#: ... and at least this share of the mixed pixels within ``SEE_THROUGH_NEAR_PX`` of pure fabric (interleaved).
 SEE_THROUGH_INTERLEAVE = 0.4
 SEE_THROUGH_NEAR_PX = 4
-#: A pixel is on the fabric→backdrop line when it lies at most this far (RGB) off it, and mixed from a backdrop share
-#: of ``SEE_THROUGH_T_MIN`` up; pure fabric below ``SEE_THROUGH_T_PURE``.
+#: A pixel is on the fabric→backdrop line when it lies at most this far (RGB) off it, with a backdrop share between
+#: ``-SEE_THROUGH_T_OVER`` and ``1 + SEE_THROUGH_T_OVER``; mixed from ``SEE_THROUGH_T_MIN`` up, pure below
+#: ``SEE_THROUGH_T_PURE``.
 SEE_THROUGH_RESIDUAL = 15.0
+SEE_THROUGH_T_OVER = 0.05
 SEE_THROUGH_T_MIN = 0.15
 SEE_THROUGH_T_PURE = 0.08
+#: The backdrop must be neutral: its channels at most this far apart (a tinted backdrop is no reference).
+SEE_THROUGH_BG_CHROMA = 12.0
 
 
-def unmix_backdrop(image, ghost_mask) -> Tuple[np.ndarray, Dict[str, Any]]:
-    """A219: the piece-only view of a see-through piece (lace, net, sheer) shows its openings as a mix of the fabric
-    and the view's BACKDROP — black lace on the grey / white backdrop bakes as a grey, mottled texture although the
-    piece is black. ``image`` (RGB, float or uint8) with the view's backdrop share taken out of every pixel on the
-    fabric→backdrop line: the fabric colour ``F`` = the median of the darkest 10 % of the mask's inner pixels, the
-    backdrop ``bg`` = the median outside the mask (dilated 6 px); a pixel ``c`` with ``c = F + t (bg - F) + r``,
-    ``|r| <= SEE_THROUGH_RESIDUAL`` becomes ``c - clip(t, 0, 1) (bg - F)``. Only when the view is see-through
-    (``SEE_THROUGH_MIN_SHARE`` mixed, ``SEE_THROUGH_INTERLEAVE`` of them next to pure fabric); otherwise the image
-    is returned unchanged. ``info``: ``see_through`` (bool), ``mixed_share``, ``interleave``."""
+def see_through_text(*texts: Any) -> bool:
+    """A219: whether the piece's name / noun / prompt fragment names a see-through fabric (``SEE_THROUGH_WORDS``,
+    whole words, hyphenated "see-through" included, or a compound starting with ``SEE_THROUGH_PREFIXES``)."""
+    import re
+    for text in texts:
+        for word in re.findall(r"[a-zäöüß]+(?:-[a-zäöüß]+)?", str(text or "").lower()):
+            if word in SEE_THROUGH_WORDS or any(part in SEE_THROUGH_WORDS for part in word.split("-")):
+                return True
+            if any(word.startswith(p) and len(word) > len(p) + 2 for p in SEE_THROUGH_PREFIXES):
+                return True
+    return False
+
+
+def unmix_backdrop(image, ghost_mask, apply: Optional[bool] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """A219: the piece-only view of a see-through piece shows its openings as a mix of the fabric and the view's
+    BACKDROP — black lace on the grey / white backdrop bakes as a grey, mottled texture although the piece is black.
+    The backdrop ``bg`` = the median outside the mask (dilated 6 px); the fabric ``F`` = the median of the darkest
+    10 % of the mask's inner pixels, refined once to the median of the pure cluster (backdrop share ``T`` below
+    ``SEE_THROUGH_T_PURE``). A pixel ``c = F + T (bg - F) + r`` with ``|r| <= SEE_THROUGH_RESIDUAL`` and ``T`` within
+    ``[-SEE_THROUGH_T_OVER, 1 + SEE_THROUGH_T_OVER]`` is on the line. ``info["gate"]``: the view looks like a lace —
+    a neutral backdrop (``SEE_THROUGH_BG_CHROMA``), ``SEE_THROUGH_MIN_SHARE`` mixed, ``SEE_THROUGH_MIN_PURE`` pure,
+    ``SEE_THROUGH_INTERLEAVE`` of the mixed next to pure fabric. ``apply``: True takes the backdrop share out of
+    every pixel on the line (``c - clip(T, 0, 1) (bg - F)``), False never, None when the gate holds (``build_shell``
+    decides once per piece). ``info``: ``gate``, ``see_through`` (applied), ``mixed_share``, ``pure_share``,
+    ``interleave``."""
     from scipy import ndimage
     img = np.asarray(image, np.float64)[..., :3]
     gm = np.asarray(ghost_mask, bool)
-    info: Dict[str, Any] = {"see_through": False}
+    info: Dict[str, Any] = {"gate": False, "see_through": False}
     outside = ~ndimage.binary_dilation(gm, iterations=6)
     inner = ndimage.binary_erosion(gm, iterations=3)
     if outside.sum() < 100 or inner.sum() < 100:
@@ -694,16 +757,31 @@ def unmix_backdrop(image, ghost_mask) -> Tuple[np.ndarray, Dict[str, Any]]:
     dd = float(d @ d)
     if dd < 40.0 ** 2:          # the fabric is the backdrop's colour: nothing to tell apart
         return img, info
-    T = ((img - F) @ d) / dd
-    res = np.linalg.norm(img - F - T[..., None] * d, axis=-1)
-    on_line = gm & (res <= SEE_THROUGH_RESIDUAL)
+
+    def line(F_):
+        d_ = bg - F_
+        T_ = ((img - F_) @ d_) / float(d_ @ d_)
+        res_ = np.linalg.norm(img - F_ - T_[..., None] * d_, axis=-1)
+        on_ = gm & (res_ <= SEE_THROUGH_RESIDUAL) & (T_ >= -SEE_THROUGH_T_OVER) & (T_ <= 1.0 + SEE_THROUGH_T_OVER)
+        return d_, T_, on_
+    d, T, on_line = line(F)
+    pure0 = on_line & inner & (T < SEE_THROUGH_T_PURE)
+    if pure0.sum() >= 10:
+        F = np.median(img[pure0], 0)
+        if float((bg - F) @ (bg - F)) < 40.0 ** 2:
+            return img, info
+        d, T, on_line = line(F)
     mixed = on_line & (T >= SEE_THROUGH_T_MIN) & inner
     pure = on_line & (T < SEE_THROUGH_T_PURE)
     near = ndimage.binary_dilation(pure, iterations=SEE_THROUGH_NEAR_PX)
     share = float(mixed.sum()) / float(inner.sum())
+    pure_share = float((pure & inner).sum()) / float(inner.sum())
     inter = float((mixed & near).sum()) / max(int(mixed.sum()), 1)
-    info.update(mixed_share=round(share, 3), interleave=round(inter, 3))
-    if share < SEE_THROUGH_MIN_SHARE or inter < SEE_THROUGH_INTERLEAVE:
+    neutral = float(bg.max() - bg.min()) <= SEE_THROUGH_BG_CHROMA
+    info.update(mixed_share=round(share, 3), pure_share=round(pure_share, 3), interleave=round(inter, 3),
+                gate=bool(neutral and share >= SEE_THROUGH_MIN_SHARE and pure_share >= SEE_THROUGH_MIN_PURE
+                          and inter >= SEE_THROUGH_INTERLEAVE))
+    if not (info["gate"] if apply is None else apply):
         return img, info
     info["see_through"] = True
     out = img.copy()
@@ -844,7 +922,7 @@ def _fill_glints(m, max_px: float = 0.0):
 
 def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]], *,
                 arm_tokens: Iterable[str] = ("Arm", "Hand"), offset_m: float = THICKNESS_M,
-                margin_mm: float = MARGIN_DEFAULT, fill_cm2: float = FILL_DEFAULT):
+                margin_mm: float = MARGIN_DEFAULT, fill_cm2: float = FILL_DEFAULT, see_through: bool = False):
     """The shell of a piece on the body (module docstring) -> ``garment_fit.FitResult`` (``garment`` in the rigged
     body's bind space, skinned; ``metrics``: ``shell_faces``, ``inside_share``, ``over_skin_p50_mm``,
     ``side_colour_within_{1,2,5}cm``, ``seconds``). ``views``: ``{"front": {...}, "back": {...}}``, each
@@ -852,7 +930,8 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     piece-only view, RGB uint8, same size as its masks); the back view is mirrored onto the body when that matches
     its silhouette better. ``margin_mm`` (A184, "Take from the body"): the membership border is moved this far
     outward around the piece's outline in its views; ``fill_cm2`` ("Fill holes up to"): enclosed gaps of the
-    piece's outline and of the body region up to this area are closed. ``ShellRefused`` when no region is found."""
+    piece's outline and of the body region up to this area are closed. ``see_through`` (A219, ``see_through_text``
+    of the piece): its views may lose their backdrop (``unmix_backdrop``). ``ShellRefused`` when no region is found."""
     from scipy import ndimage
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
@@ -879,9 +958,17 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
         bm, gm = gf._mask(v["body_mask"]), gf._mask(v["ghost_mask"])
         if not bm.any():
             raise ShellRefused(f"The {key} view has no body")
-        img, see = unmix_backdrop(v["image"], gm)
-        report[f"see_through_{key}"] = see
-        masks[w] = (bm, gm, img)
+        masks[w] = (bm, gm, np.asarray(v["image"], np.float64)[..., :3])
+    # A219: a see-through piece (its name says so) whose views look like a lace loses the backdrop in EVERY view —
+    # decided once for the piece; an opaque piece never
+    gate = {w: unmix_backdrop(masks[w][2], masks[w][1], apply=False)[1] for _key, w in shell_views if w in masks}
+    unmix = bool(see_through) and any(g_["gate"] for g_ in gate.values())
+    report["see_through"] = {"named": bool(see_through), "applied": unmix,
+                             **{key: gate[w] for key, w in shell_views if w in gate}}
+    if unmix:
+        for w in list(masks):
+            bm_, gm_, img_ = masks[w]
+            masks[w] = (bm_, gm_, unmix_backdrop(img_, gm_, apply=True)[0])
     if not (masks["f"][1].any() or masks["b"][1].any()):
         raise ShellRefused("The piece-only views show no piece")
     keys = list(masks)
@@ -956,12 +1043,15 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
         zbuf[which] = ndimage.maximum_filter(zb, size=3)
     del Xs, Xs_posed, tri_s, Xv, px, py, ok   # A198: the z-buffers are all they were for
     maskinfo = {}
+    misreg: Dict[str, np.ndarray] = {}
     for which, _mir, _t, _a in VIEWS:
         inner = ndimage.binary_erosion(colour_mask[which], iterations=1)
         _, ind = ndimage.distance_transform_edt(~inner, return_indices=True)
         gm = filled[which]
         sdf = ndimage.distance_transform_edt(gm) - ndimage.distance_transform_edt(~gm)
         maskinfo[which] = (ind, sdf)
+        # A219: where the body shows bare only by the generated view's misregistration
+        misreg[which] = misregistered_strip(masks[which][1], masks[which][0], mm_px[which])
 
     def view_state(Pq, Nq, Qq=None, NQq=None):
         """Per view what it shows of the points ``Pq`` (normals ``Nq``); an arms-up view reads their posed
@@ -975,7 +1065,8 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
             seen = toward * P_[:, axis] >= zbuf[which][i, j] - 0.015 / k
             sb = frames[which][0] * k * 1000
             out[which] = {"seen": seen, "facing": toward * N_[:, axis], "sd_mm": maskinfo[which][1][i, j] * sb,
-                          "i": i, "j": j, "in": filled[which][i, j]}
+                          "i": i, "j": j, "in": filled[which][i, j],
+                          "misreg": misreg[which][i, j]}
         return out
 
     side_keys = [w for _key, w in sides]
@@ -1119,9 +1210,10 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
         on_limb = limb_w[:, li] > 0.5
         worn = ring_worn(Pref[:, 1], on_limb, head_on["f"], memb_f, head_on["b"], memb_b, st["f"]["facing"] >= 0)
         add = worn & side & (s <= 0)
-        # A219: where the front and the back both show the limb worn, the ring is a closed tube — head-on points
-        # included (a strip of the limb the generated views miss)
-        closed = ring_closed(Pref[:, 1], on_limb, head_on["f"], memb_f, head_on["b"], memb_b) & (s <= 0) & ~add
+        # A219: where the front and the back both show the limb worn, a head-on strip at the limb's edge that a view
+        # misses by misregistration is worn too (``ring_closed``)
+        closed = ring_closed(Pref[:, 1], on_limb, head_on["f"], memb_f, head_on["b"], memb_b, st["f"]["misreg"],
+                             st["b"]["misreg"]) & (s <= 0) & ~add
         ring_closed_added += int(closed.sum())
         add = add | closed
         ring_added += int(add.sum())

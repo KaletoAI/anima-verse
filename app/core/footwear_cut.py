@@ -421,7 +421,8 @@ def cut_description(fit: Any, insole: Dict[str, Any]) -> Dict[str, Any]:
     taper = record["scale"].get("width_taper")
     outline_raw = np.asarray(insole["footprint_outline"], np.float64).reshape(-1, 2)
     outline = outline_raw * np.array([k, k * wf])
-    outline[:, 1] *= width_taper_at(outline_raw[:, 0], taper)
+    t_, m_, c_ = width_taper_at(outline_raw[:, 0], taper)
+    outline[:, 1] = (c_ + (outline_raw[:, 1] - m_) * t_) * k * wf
     if len(outline) < 3:
         raise ValueError("The insole has no footprint outline")
     prof = _floats(insole["profile"])
