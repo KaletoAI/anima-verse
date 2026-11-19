@@ -294,7 +294,8 @@ export interface TemplateParams {
   waist_height: string
   slit: string
   slit_m: number
-  /** Ruling A142: a dress's shoulders (strapless / straps / covered); a top or jacket is always covered. */
+  /** Ruling A142: a dress's shoulders (strapless / straps / covered); a top any of them (A221); a jacket always
+   *  covered. */
   shoulders: string
   sleeves: string
   sleeve_fit: number
@@ -310,6 +311,26 @@ export interface TemplateParams {
 
 /** Ruling A142: the kinds with a bodice over the shoulders (the length counts from the shoulder line). */
 export const UPPER_KINDS = ['top', 'jacket']
+
+/** A221: the top edges of a strapless top (`garment_template.STRAPLESS_NECKLINES`). */
+export const STRAPLESS_NECKLINES = ['straight', 'sweetheart']
+
+/** Whether the piece has a covered bodice (sleeves, neckline): a jacket, or a top / dress with covered shoulders. */
+export function hasBodice(p: Pick<TemplateParams, 'kind' | 'shoulders'>): boolean {
+  return p.kind === 'jacket' || ((p.kind === 'top' || p.kind === 'dress') && p.shoulders === 'covered')
+}
+
+/** A221: a top cut as a corset bodice — strapless or with straps (`garment_template.corset_top`). */
+export function corsetTop(p: Pick<TemplateParams, 'kind' | 'shoulders'>): boolean {
+  return p.kind === 'top' && (p.shoulders === 'strapless' || p.shoulders === 'straps')
+}
+
+/** Whether a choice is offered for the draft (A221: a corset top's neckline is straight or sweetheart, a covered
+ *  bodice's never). */
+export function choiceAllowed(key: keyof TemplateParams, choice: string, p: TemplateParams): boolean {
+  if (key === 'neckline') return corsetTop(p) === STRAPLESS_NECKLINES.includes(choice)
+  return true
+}
 
 /** A template row's drape state and parameters (`figure_build._template_row`). */
 export interface TemplateInfo {
@@ -341,7 +362,7 @@ export const TEMPLATE_CHOICE_LABELS: Record<string, string> = {
   none: 'None', left: 'Left', right: 'Right', front: 'Front', back: 'Back',
   short: 'Short', long: 'Long', cap: 'Cap', elbow: 'Elbow',
   strapless: 'Strapless', straps: 'Straps', covered: 'Covered (with a bodice)',
-  crew: 'Crew', v: 'V-neck', scoop: 'Scoop', boat: 'Boat',
+  crew: 'Crew', v: 'V-neck', scoop: 'Scoop', boat: 'Boat', straight: 'Straight', sweetheart: 'Sweetheart',
   closed: 'Closed', open: 'Open', stand: 'Stand collar', lapel: 'Lapels',
   stiff: 'Stiff (denim, wool)', medium: 'Medium (cotton, linen)', flowing: 'Flowing (silk, jersey)',
   sheer: 'Sheer (chiffon, voile)',
@@ -386,11 +407,14 @@ export function templateSummary(p: TemplateParams | null, t: Tr = EN): string {
   if (!p) return t('No parameters yet')
   const parts = [t(TEMPLATE_CHOICE_LABELS[p.kind] || p.kind), cm(p.length_m)]
   if (!UPPER_KINDS.includes(p.kind)) parts.push(t('flare {n}').replace('{n}', String(p.flare)))
-  if ((UPPER_KINDS.includes(p.kind) || p.shoulders === 'covered') && p.sleeves && p.sleeves !== 'none') {
+  if (hasBodice(p) && p.sleeves && p.sleeves !== 'none') {
     parts.push(t('{sleeves} sleeves').replace('{sleeves}', t(TEMPLATE_CHOICE_LABELS[p.sleeves] || p.sleeves)))
   }
-  if (p.kind === 'dress' && p.shoulders === 'straps') parts.push(t('Straps'))
-  if (UPPER_KINDS.includes(p.kind) || p.shoulders === 'covered') parts.push(t(TEMPLATE_CHOICE_LABELS[p.neckline] || p.neckline))
+  if ((p.kind === 'dress' || p.kind === 'top') && p.shoulders === 'straps') parts.push(t('Straps'))
+  if (p.kind === 'top' && p.shoulders === 'strapless') parts.push(t('Strapless'))
+  if (hasBodice(p) || corsetTop(p)) {
+    parts.push(t(TEMPLATE_CHOICE_LABELS[p.neckline] || p.neckline))
+  }
   if (p.kind === 'jacket' && p.front === 'open') parts.push(t('open front'))
   parts.push(t(TEMPLATE_CHOICE_LABELS[p.fabric] || p.fabric))
   if (p.fabric === 'sheer') parts.push(t('opacity {n}').replace('{n}', Number(p.opacity ?? 0.4).toFixed(2)))

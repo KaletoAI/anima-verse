@@ -61,6 +61,7 @@ SPIKE_SCRIPT = "garment_template_drape.py"
 #: the arm angles it names, a lower layer's collider is thickened inward, a dress with a bodice keeps its slit and
 #: the rim metrics read the open borders.
 #: 7: a hollow drape collider (a thick-shell body open to the outside) loses its inner wall (``_drop_inner_walls``).
+#: (A221 adds the strapless top — a new kind of piece; the existing drapes keep their keys, so no bump.)
 TEMPLATE_VERSION = 7
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
@@ -71,7 +72,8 @@ KINDS = ("skirt", "dress", "top", "jacket", "trousers")
 BUILT_KINDS = ("skirt", "dress", "top", "jacket")
 #: Kinds with a bodice over the shoulders (Ruling A142): built as a tube from the hem to the shoulder line, a yoke
 #: over the shoulders up to the neckline, armholes and sleeves (``bodice_spec``). A dress is one of them unless it is
-#: strapless.
+#: strapless. A221: a top may be strapless as well (bodice / bustier / corset: a tube pinned under the arms, built
+#: like a strapless dress's top); a jacket is always covered.
 UPPER_KINDS = ("top", "jacket")
 #: The layer rank of a kind: a piece drapes over the READY template drapes of a lower rank (Ruling A142: a jacket
 #: over a top or a dress; the lower drape is a collider of the cloth run).
@@ -83,10 +85,23 @@ SLEEVES = ("none", "cap", "short", "elbow", "long")
 #: joint, a short one reaches a third down the upper arm, elbow = the elbow joint (half the arm on the reference
 #: body: 0.249 m upper arm + 0.245 m forearm), long = to the wrist.
 SLEEVE_SHARE = {"none": 0.0, "cap": 0.12, "short": 0.3, "elbow": 0.52, "long": 0.97}
-NECKLINES = ("crew", "v", "scoop", "boat")
+NECKLINES = ("crew", "v", "scoop", "boat", "straight", "sweetheart")
+#: A221: the corset top edges of a top without a covered bodice — strapless or with straps (straight across the chest,
+#: or a sweetheart dip at the front centre); a covered bodice takes the others (``validate_params`` resets a mismatch).
+STRAPLESS_NECKLINES = ("straight", "sweetheart")
 #: The neckline's depth at the front centre below the jugular notch (``front_y`` = the shoulder-joint height, Ruling
 #: A144) when ``neck_depth_m`` is 0 (metres; a crew neck sits ~1 cm under the notch).
-NECK_DEPTH = {"crew": 0.01, "v": 0.12, "scoop": 0.08, "boat": 0.0}
+NECK_DEPTH = {"crew": 0.01, "v": 0.12, "scoop": 0.08, "boat": 0.0, "straight": 0.0, "sweetheart": 0.0}
+#: A221: a sweetheart top edge dips this far at the front centre (``neck_depth_m`` 0), at most SWEETHEART_MAX_M,
+#: over +-SWEETHEART_HALF_RAD round the front centre: drop = depth * (1 - |angle off centre| / half)^2 (0 outside).
+SWEETHEART_DIP_M = 0.05
+SWEETHEART_MAX_M = 0.10
+SWEETHEART_HALF_RAD = 0.5
+#: A221: a strapless top's top edge lies this far under the chest band: at the band the pinned top row met the
+#: underside of the T-posed arm on a real body (one edge stretched 1.5x, the strapless dress's same row).
+STRAPLESS_UNDERARM_M = 0.02
+#: A221: a strapless top reaches at least this far below its top edge (the chest band).
+STRAPLESS_MIN_M = 0.08
 SHOULDERS = ("strapless", "straps", "covered")
 FRONTS = ("closed", "open")
 COLLARS = ("none", "stand", "lapel")
@@ -135,7 +150,7 @@ PARAM_SPEC: Dict[str, Tuple[str, Any, Any]] = {
     "waist_height": ("choice", WAIST_HEIGHTS, "natural"),
     "slit": ("choice", SLIT_SIDES, "none"),
     "slit_m": ("number", (0.0, 0.6), 0.0),           # slit depth from the hem up
-    "shoulders": ("choice", SHOULDERS, "strapless"),  # dress only; a top / jacket is always covered
+    "shoulders": ("choice", SHOULDERS, "strapless"),  # dress and top (A221); a jacket is always covered
     "sleeves": ("choice", SLEEVES, "none"),
     "sleeve_fit": ("number", (0.0, 1.0), 0.3),       # 0 tight .. 1 loose
     "fit": ("number", (0.0, 1.0), 0.3),              # bodice ease: 0 tight .. 1 loose
@@ -153,7 +168,7 @@ KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
     "trousers": ("kind", "fabric", "opacity", "length_m", "waist_height"),
     "dress": ("kind", "fabric", "opacity", "length_m", "flare", "waist_height", "slit", "slit_m", "shoulders", "sleeves",
               "sleeve_fit", "fit", "neckline", "neck_depth_m"),
-    "top": ("kind", "fabric", "opacity", "length_m", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m"),
+    "top": ("kind", "fabric", "opacity", "length_m", "shoulders", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m"),
     "jacket": ("kind", "fabric", "opacity", "length_m", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m", "front",
                "collar"),
 }
@@ -231,8 +246,20 @@ ARM_GROUPS = [{"name": "arm_" + side[0].lower(), "side": side[0].lower(), "frame
 
 
 def has_bodice(params: Dict[str, Any]) -> bool:
-    """A top, a jacket, or a dress with straps or a covered bodice (Ruling A142)."""
-    return params["kind"] in UPPER_KINDS or (params["kind"] == "dress" and params["shoulders"] != "strapless")
+    """A jacket, a top that is not strapless (A221), or a dress with straps or a covered bodice (Ruling A142)."""
+    return params["kind"] in ("top", "jacket", "dress") and (params["kind"] == "jacket"
+                                                             or params["shoulders"] != "strapless")
+
+
+def strapless_top(params: Dict[str, Any]) -> bool:
+    """A221: a top with nothing over the shoulders (bodice, bustier, corset)."""
+    return params["kind"] == "top" and params["shoulders"] == "strapless"
+
+
+def corset_top(params: Dict[str, Any]) -> bool:
+    """A221: a top cut as a corset bodice — strapless or with straps; its top edge is the chest band (straight or
+    sweetheart), the straps (if any) run from it over the shoulders."""
+    return params["kind"] == "top" and params["shoulders"] in ("strapless", "straps")
 
 
 def has_sleeves(params: Dict[str, Any]) -> bool:
@@ -405,11 +432,25 @@ def validate_params(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
                 number = min(hi, max(lo, number))
             params[key] = round(number, 3)
     kind = params["kind"]
+    # A221: a top's shoulders default to covered (the schema default, strapless, is a dress's), so an answer or a
+    # stored top without the field keeps its bodice
+    if kind == "top" and raw.get("shoulders") in (None, ""):
+        params["shoulders"] = "covered"
     for key in PARAM_SPEC:
         if key not in KIND_FIELDS.get(kind, tuple(PARAM_SPEC)):
             params[key] = PARAM_SPEC[key][2]
-    if kind in UPPER_KINDS:
+    if kind == "jacket":
         params["shoulders"] = "covered"
+    if corset_top(params):
+        params["sleeves"] = "none"
+        if params["neckline"] not in STRAPLESS_NECKLINES:
+            params["neckline"] = "straight"
+        if params["neckline"] == "straight":
+            params["neck_depth_m"] = 0.0
+        else:
+            params["neck_depth_m"] = round(min(params["neck_depth_m"], SWEETHEART_MAX_M), 3)
+    elif params["neckline"] in STRAPLESS_NECKLINES:
+        params["neckline"] = "crew"
     if kind == "dress" and params["shoulders"] != "covered":
         params["sleeves"] = "none"
     if params["sleeves"] == "none":
@@ -431,7 +472,7 @@ KIND_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "skirt": {},
     "trousers": {"length_m": 1.0},
     "dress": {"length_m": 0.6, "shoulders": "straps"},
-    "top": {"length_m": 0.6, "sleeves": "short", "fit": 0.4},
+    "top": {"length_m": 0.6, "sleeves": "short", "fit": 0.4, "shoulders": "covered"},
     "jacket": {"length_m": 0.7, "sleeves": "long", "fit": 0.5, "collar": "lapel", "front": "open"},
 }
 _TROUSER_WORDS = re.compile(r"\b(trousers?|pants|jeans|shorts|leggings|slacks|chinos)\b", re.IGNORECASE)
@@ -688,6 +729,8 @@ def outline(params: Dict[str, Any], meas: Dict[str, float]) -> Dict[str, Any]:
     top_y = waist_y
     if has_bodice(params):
         return _bodice_outline(params, meas, waist_y, waist_c, hem_c)
+    if strapless_top(params):
+        return _strapless_top_outline(params, meas, waist_y)
     knots = _skirt_knots(meas, waist_y, length, hem_c, waist_c)
     if params["kind"] == "dress":
         bodice = max(0.08, meas["band_y"] - waist_y)
@@ -808,6 +851,42 @@ def _bodice_outline(params: Dict[str, Any], meas: Dict[str, Any], waist_y: float
     return {"knots": knots, "top_y": round(top_y, 4), "waist_y": round(waist_y, 4), "length": knots[-1][0]}
 
 
+def _strapless_top_outline(params: Dict[str, Any], meas: Dict[str, Any], waist_y: float) -> Dict[str, Any]:
+    """A221: the side profile of a strapless top — a tube from the hem up to ``STRAPLESS_UNDERARM_M`` under the
+    chest band (``band_y``, the top of a strapless dress), the body's own girth with the bodice ease (``BODICE_EASE``, so fit 0
+    is a snug corset) + ``EASE_M`` every 2 cm. ``length_m`` counts from the shoulder line (joints +
+    ``SHOULDER_TOP_M``) like every top; the hem stays at least ``STRAPLESS_MIN_M`` below the top edge and 0.2 m above
+    the floor."""
+    import numpy as np
+    top_y = float(meas["band_y"]) - STRAPLESS_UNDERARM_M
+    shoulder = meas["shoulder_y"] + SHOULDER_TOP_M if "shoulder_y" in meas else top_y + 0.12
+    hem_y = min(top_y - STRAPLESS_MIN_M, max(meas["floor_y"] + 0.2, shoulder - params["length_m"]))
+    ease = 1.0 + BODICE_EASE[0] + BODICE_EASE[1] * params["fit"]
+    knots = [(round(float(y) - hem_y, 4), round(_torso_girth(meas, float(y)) * ease + EASE_M, 4))
+             for y in np.arange(hem_y, top_y - 1e-6, 0.02)]
+    knots.append((round(top_y - hem_y, 4), round(_torso_girth(meas, top_y) * ease + EASE_M, 4)))
+    return {"knots": knots, "top_y": round(top_y, 4), "waist_y": round(waist_y, 4), "length": knots[-1][0]}
+
+
+def sweetheart_depth(params: Dict[str, Any]) -> float:
+    """A221: the sweetheart dip at the front centre in metres (``neck_depth_m`` 0 = ``SWEETHEART_DIP_M``)."""
+    return min(SWEETHEART_MAX_M, params["neck_depth_m"] or SWEETHEART_DIP_M)
+
+
+def top_drop(params: Dict[str, Any], cols: int) -> Optional[List[float]]:
+    """A221: how far each column of the FRONT panel's top edge of a strapless top lies under the band (metres; column
+    c at the angle pi + pi * c / (cols - 1), the front centre 1.5 pi) — a sweetheart dip, None for every other
+    piece (a top with straps carries its dip in ``bodice_spec``'s ``top_edge``)."""
+    if not strapless_top(params) or params["neckline"] != "sweetheart":
+        return None
+    depth = sweetheart_depth(params)
+    out = []
+    for c in range(cols):
+        off = abs(math.pi * c / (cols - 1) - math.pi / 2)
+        out.append(round(depth * (1.0 - off / SWEETHEART_HALF_RAD) ** 2, 5) if off < SWEETHEART_HALF_RAD else 0.0)
+    return out
+
+
 def bodice_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
     """What the Blender builder needs beyond the torso rows for a piece with a bodice (Ruling A142), glTF Y-up
     metres: armhole ``band_y`` (the chest band under the arms) to ``top_y``; the neck opening ``neck_r`` (radius
@@ -819,6 +898,13 @@ def bodice_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
     neck_r = meas["neck_c"] / (2 * math.pi) + NECK_CLEAR_M
     half_sh = meas["shoulder_w"] / 2.0
     neckline = params["neckline"]
+    top_edge = None
+    if neckline in STRAPLESS_NECKLINES:
+        # A221: a corset top with straps — the yoke is built as a crew neck's and cut away above the chest band
+        # (``top_edge``: the band, lowered by the sweetheart dip round the front centre); only the straps stay
+        top_edge = {"neckline": neckline, "dip_m": sweetheart_depth(params) if neckline == "sweetheart" else 0.0,
+                    "half_rad": SWEETHEART_HALF_RAD}
+        neckline = "crew"
     collar = params["collar"] if params["kind"] == "jacket" else "none"
     front_open = params["kind"] == "jacket" and (params["front"] == "open" or collar == "lapel")
     depth = params["neck_depth_m"] or NECK_DEPTH[neckline]
@@ -848,7 +934,7 @@ def bodice_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
             "neckline": neckline, "depth_m": round(float(depth), 4), "shoulders": params["shoulders"],
             "strap_x": round(0.5 * (neck_r + PIN_SHARE * half_sh), 4), "strap_w": STRAP_W_M,
             "pin_half_x": round(PIN_SHARE * half_sh, 4), "pin_band_m": PIN_BAND_M, "sleeve": sleeve,
-            "front_open": front_open, "collar": collar, "joints": meas.get("joints") or {}}
+            "front_open": front_open, "collar": collar, "joints": meas.get("joints") or {}, "top_edge": top_edge}
 
 
 def _sleeve_panel(sleeve: Dict[str, Any]):
@@ -909,6 +995,9 @@ def panel_spec(params: Dict[str, Any], meas: Dict[str, float]) -> Dict[str, Any]
     row_y = [round(shape["top_y"] - total * r / (rows - 1), 5) for r in range(rows)]
     out = {"rows": rows, "cols": COLS, "row_y": row_y, "panels": panels, "outline": shape, "measure": meas,
            "pygarment": {"version": "2.0.2", "panels": specs}}
+    drop = top_drop(params, COLS)
+    if drop:
+        out["top_drop"] = {"front": drop}
     if has_bodice(params):
         out["bodice"] = bodice_spec(params, meas)
         if out["bodice"]["sleeve"]:

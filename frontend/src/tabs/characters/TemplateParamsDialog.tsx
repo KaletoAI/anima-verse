@@ -24,7 +24,7 @@ import { thumbUrl, thumbWidth } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut, apiUpload } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { TEMPLATE_CHOICE_LABELS, TEMPLATE_DRAPE_FABRIC, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_LABELS, UPPER_KINDS, cm, lengthLabel, templateCost } from './figureModel'
+import { TEMPLATE_CHOICE_LABELS, TEMPLATE_DRAPE_FABRIC, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_LABELS, cm, choiceAllowed, corsetTop, hasBodice, lengthLabel, templateCost } from './figureModel'
 import { TEMPLATE_STATE_COLOR, TEMPLATE_STATE_LABELS, failureLines, templateLiveText } from './figureModel'
 import { FailureDetails } from './BuildProblem'
 import type { TemplateFieldSpec, TemplateInfo, TemplateParams, TemplateProgress } from './figureModel'
@@ -145,8 +145,13 @@ function shown(key: keyof TemplateParams, p: TemplateParams, fields: Record<stri
   if (!(fields[p.kind] || ORDER).includes(key)) return false
   if (key === 'slit_m' && p.slit === 'none') return false
   if (key === 'opacity' && p.fabric !== 'sheer') return false
-  const bodice = UPPER_KINDS.includes(p.kind) || p.shoulders === 'covered'
-  if ((key === 'sleeves' || key === 'neckline' || key === 'neck_depth_m') && !bodice) return false
+  const bodice = hasBodice(p)
+  // A221: a corset top (strapless or straps) keeps its neckline (straight / sweetheart) and, for a sweetheart, the
+  // dip's depth
+  const strapTop = corsetTop(p)
+  if (key === 'sleeves' && !bodice) return false
+  if (key === 'neckline' && !bodice && !strapTop) return false
+  if (key === 'neck_depth_m' && !bodice && !(strapTop && p.neckline === 'sweetheart')) return false
   if (key === 'fit' && p.kind === 'dress' && p.shoulders === 'strapless') return false
   if (key === 'sleeve_fit' && (!bodice || p.sleeves === 'none')) return false
   return true
@@ -204,7 +209,12 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
   const set = (key: keyof TemplateParams, value: string | number) => {
     if (!draft || !data) return
     // A172: a kind change starts from that kind's values (a top's length and sleeves are no skirt's); the fabric stays
-    setDraft(key === 'kind' ? { ...defaults(data, String(value)), fabric: draft.fabric, opacity: draft.opacity } : { ...draft, [key]: value })
+    const next = key === 'kind' ? { ...defaults(data, String(value)), fabric: draft.fabric, opacity: draft.opacity } : { ...draft, [key]: value }
+    // A221: a shoulders change can leave a neckline the piece cannot have (a strapless top: straight / sweetheart)
+    if (data.spec.neckline?.type === 'choice' && !choiceAllowed('neckline', next.neckline, next)) {
+      next.neckline = data.spec.neckline.choices.find((c) => choiceAllowed('neckline', c, next)) || next.neckline
+    }
+    setDraft(next)
     setSource('user')
     setSaved('')
   }
@@ -263,7 +273,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                         {f.type === 'choice' ? (
                           <select className="ga-input" value={String(draft[key])}
                             onChange={(e) => set(key, e.target.value)}>
-                            {f.choices.map((c) => (
+                            {f.choices.filter((c) => choiceAllowed(key, c, draft)).map((c) => (
                               <option key={c} value={c}>
                                 {t(TEMPLATE_CHOICE_LABELS[c] || c)}
                                 {key === 'kind' && !data.built.includes(c) ? ` (${t('not built yet')})` : ''}

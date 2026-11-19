@@ -43,22 +43,29 @@ ROW_CLEAR_M = 0.02
 
 
 def wrap(spec, btree, centre):
-    """Vertices / quads / UVs of the panels wrapped round the body axis."""
+    """Vertices / quads / UVs of the panels wrapped round the body axis, and the indices of the top row (the pin).
+    A221: ``spec["top_drop"]`` {panel: [metres per column]} lowers a panel's top edge per column (a sweetheart
+    dip); the rows of that column are pressed together linearly between the hem (unmoved) and the lowered top."""
     rows, cols = spec["rows"], spec["cols"]
     row_y = spec["row_y"]
+    drops = spec.get("top_drop") or {}
+    hem_z, top_z = row_y[-1], row_y[0]
     spans = {"front": (math.pi, 2 * math.pi), "back": (0.0, math.pi)}
-    verts, faces, uvs, angles = [], [], [], []
+    verts, faces, uvs, angles, top = [], [], [], [], []
     allg = np.array([p["grid_m"] for p in spec["panels"]])
     xmin, xmax = allg[..., 0].min(), allg[..., 0].max()
     ymax = allg[..., 1].max()
     for pi_, p in enumerate(spec["panels"]):
         g = np.array(p["grid_m"])
         a0, a1 = spans[p["name"]]
+        drop = drops.get(p["name"]) or [0.0] * cols
         for r in range(rows):
             row = g[r]
             circ = 2 * float(np.sum(np.linalg.norm(np.diff(row, axis=0), axis=1)))
-            z = row_y[r]
             for c in range(cols):
+                z = row_y[r] - float(drop[c]) * (row_y[r] - hem_z) / max(1e-6, top_z - hem_z)
+                if r == 0:
+                    top.append(len(verts))
                 ang = a0 + (a1 - a0) * c / (cols - 1)
                 body_r = gd.body_radius(btree, centre, ang, z)
                 if r == 0:
@@ -74,7 +81,7 @@ def wrap(spec, btree, centre):
             for c in range(cols - 1):
                 i = base + r * cols + c
                 faces.append((i, i + 1, i + cols + 1, i + cols))
-    return verts, faces, uvs, angles
+    return verts, faces, uvs, angles, top
 
 
 # --- Ruling A142: the bodice (top, jacket, dress with straps or sleeves) -------------------------------------
@@ -883,14 +890,35 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008):
     # straps: above the chest band only the strap strips stay
     V = np.array(verts)
     keep = []
+    edge = bod.get("top_edge") or {}
+    dip, half_rad = float(edge.get("dip_m") or 0.0), float(edge.get("half_rad") or 0.5)
     for f, uv in zip(faces, fuv):
         cen = V[list(f)].mean(0)
         x, z = cen[0] - ncx, cen[2]
         if straps and z > band_y + 0.005 and abs(abs(x) - bod["strap_x"]) > bod["strap_w"] / 2:
             continue
+        if straps and dip > 0 and cen[1] < centre[1]:
+            # A221: a sweetheart top edge — round the front centre (1.5 pi about the axis) the band is lowered by
+            # dip * (1 - |angle off centre| / half_rad)^2, the drop of the strapless top's ``top_drop``
+            off = abs((math.atan2(cen[1] - centre[1], cen[0] - centre[0]) % (2 * math.pi)) - 1.5 * math.pi)
+            if off < half_rad and z > band_y + 0.005 - dip * (1.0 - off / half_rad) ** 2:
+                continue
         keep.append((f, uv))
     faces = [f for f, _ in keep]
     fuv = [uv for _, uv in keep]
+    if straps and edge:
+        # A221: a corset top's straps are cut along the columns, which cross the strap's edge at a slant (a saw-tooth
+        # border): every vertex only of strap faces (centre above the band) is drawn in to the strap's straight edge |x - strap_x| <= w / 2
+        # (two vertices drawn onto one point leave a degenerate edge the caller dissolves)
+        hw = bod["strap_w"] / 2
+        V = np.array(verts)
+        up = [V[list(f)].mean(0)[2] > band_y + 0.005 for f in faces]
+        strap_v = {i for f, u in zip(faces, up) if u for i in f} - {i for f, u in zip(faces, up) if not u for i in f}
+        for i in strap_v:
+            x, y, z = verts[i]
+            d = x - ncx
+            sx = math.copysign(bod["strap_x"], d)
+            verts[i] = (ncx + sx + max(-hw, min(hw, d - sx)), y, z)
     used = {i for f in faces for i in f}
     cap_ids = sorted(cap_set & used)
     loops = {int(i) for rows_ids in sleeve_rows.values() for i in rows_ids[0]}
@@ -1552,7 +1580,7 @@ def run(a):
     else:
         binfo = {}
         col = None
-        verts, faces, uvs, angles = wrap(spec, btree, centre)
+        verts, faces, uvs, angles, top_ids = wrap(spec, btree, centre)
         me = bpy.data.meshes.new("template")
         me.from_pydata(verts, [], faces)
         uvl = me.uv_layers.new(name="UVMap")
@@ -1560,6 +1588,9 @@ def run(a):
             uvl.data[lp.index].uv = uvs[lp.vertex_index]
         obj = bpy.data.objects.new(prm["node"], me)
         bpy.context.scene.collection.objects.link(obj)
+        if spec.get("top_drop"):
+            # A221: a lowered top edge is no longer one height — its row is pinned by name (survives the seam merge)
+            obj.vertex_groups.new(name="pin_top").add(top_ids, 1.0, "REPLACE")
         bm = bmesh.new()
         bm.from_mesh(me)
         bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=0.004)   # the two side seams
@@ -1583,6 +1614,9 @@ def run(a):
     if bod:
         nj = bod["joints"].get("neck")
         pin = bodice_pins(obj, bod, nj[0] if nj else centre[0], -nj[2] if nj else centre[1])
+    elif "pin_top" in obj.vertex_groups:
+        gi = obj.vertex_groups["pin_top"].index
+        pin = np.array([v.index for v in me.vertices if any(g.group == gi for g in v.groups)], int)
     else:
         pin = np.where(co0[:, 2] > top_z - 0.004)[0]
     fab = prm["fabric"]

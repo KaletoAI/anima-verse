@@ -398,7 +398,7 @@ def shapes(params: Dict[str, Any], meas: Dict[str, Any], reg: Registration) -> D
     else:
         nr = spec["neck_r"]
         sy = m["shoulder_y"]
-        if p["shoulders"] == "straps" and kind == "dress":
+        if p["shoulders"] == "straps" and kind in ("dress", "top"):
             # the bodice ends at the chest band; above it only the straps
             band = spec["band_y"]
             r_cut = [q for q in right if q[1] <= band] + [_at(right, band)]
