@@ -39,6 +39,12 @@ The method (``composite_arrays``), on float RGBA arrays in 0..255:
    its mode); draft skin over base skin of the same lightness
    (``SKIN_SAME_DL``) is never garment — a skin-coloured garment over skin is
    (fix round 2); draft skin outside the base silhouette is limb drift.
+   A BROAD change over base skin in another material is garment (Ruling
+   A99b, ``_broad_change``): a cream blouse over pale skin is skin by the
+   base's chroma model and only ΔE ~9.5 from the skin under it, so no
+   per-pixel test sees it; a connected region above ``DE_UNSKIN`` of at
+   least ``BROAD_MIN`` of the figure whose hue turned by more than
+   ``BROAD_HUE_DEG`` is one (skin re-rendered lighter or darker keeps it).
    Opened, closed, specks dropped, small holes filled (``_garment_mask``).
 4. SEAM — colour matching at the seam only: inside a band along the mask's
    edge the draft is shifted toward the base by the local offset measured
@@ -86,12 +92,18 @@ The CHECKS (``ok`` / ``reasons``):
   view: see EMPTY below.
 
 * ``dropped <= DROP_MAX`` (0.03, Ruling A99) — the composite left out no garment: the largest connected
-  region the registered draft wears over the base's skin (not skin by the BASE's model, ΔE > ``DE_UNSKIN``)
-  outside the mask (``dropped_garment``). The put-on score cannot see it: its region needs ΔE > 20, and
+  region the registered draft wears over the base's skin (ΔE > ``DE_UNSKIN``; not skin by the base's model,
+  or since Ruling A99b a region whose hue turned) outside the mask (``dropped_garment``). The put-on score
+  cannot see it: its region needs ΔE > 20, and
   Rurik's oatmeal linen shirt differed from the bare back by ΔE 13.9 — the composite dropped it (mask 0.48,
   the shirt read as skin because it had become the draft's skin mode via ``_shared_skin``) and passed
   with coverage 0.96; ``dropped`` there 0.338, on the 14 other stored dressed backs of Anima Divide
-  0.0002 .. 0.025.
+  0.0002 .. 0.025. A99b (Tilda's dressed front and back, 2026-11-16): her cream blouse over pale skin was skin by
+  the base's model too (Mahalanobis 2.71 < ``SKIN_MAHA``), the composites left it out and measured 0.002 /
+  0.014 / 0.0001 (a blouse-only front passed as EMPTY: the check skipped ``dropped`` when the coverage said
+  "nothing" — it no longer does); with the hue-turned regions 0.144 / 0.207 / 0.263, on the 33 other distinct
+  stored or sampled draft/base pairs of Anima Divide (dressed backs, worn backs, outfit fronts) 0 .. 0.0166 where
+  they pass, every verdict and mask share unchanged.
 
 EMPTY (fix round 1 of Task 11g): a draft that lines up with the base
 (``iou >= IOU_MIN``) but wears nothing that shows in this view — a necklace
@@ -171,6 +183,16 @@ DE_UNSKIN = 8.0
 #: The largest connected garment region the composite may leave out, as a share of the base figure
 #: (``dropped_garment``; Ruling A99).
 DROP_MAX = 0.03
+#: A BROAD change (``_broad_change``, Ruling A99b): a connected region over base skin differing by more than
+#: ``DE_UNSKIN`` of at least this share of the base figure, in another material (``_hue_turned``), is garment,
+#: grown over the connected pixels differing by more than ``BROAD_LOW_DE``. The share is the drop limit: what
+#: the check would refuse as left out is put on instead.
+BROAD_MIN = DROP_MAX
+BROAD_LOW_DE = 6.0
+#: The hue turn (degrees, region medians) above which a broad change is another material than the skin under
+#: it, and the chroma both sides need for a hue (``_hue_turned``, Ruling A99b).
+BROAD_HUE_DEG = 10.0
+BROAD_MIN_CHROMA = 5.0
 #: The alignment IoU (registered draft figure / base figure, outside the garment — ``alignment_iou``) a
 #: composite needs.
 IOU_MIN = 0.93
@@ -501,9 +523,9 @@ def _shared_skin(lb: np.ndarray, la: np.ndarray, base_mask: np.ndarray, aligned:
 
 def _garment_mask(base: np.ndarray, dw: np.ndarray, base_mask: np.ndarray, dw_mask: np.ndarray,
                   skin_b: Skin, skin_d: Skin, *, opening: int = 1,
-                  min_component: int = 150) -> Tuple[np.ndarray, np.ndarray]:
-    """``(mask, ΔE map)`` of the garment in the registered draft ``dw``;
-    ``opening`` / ``min_component``: the ``RULES`` entry's."""
+                  min_component: int = 150) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``(mask, ΔE map, broad change)`` of the garment in the registered draft ``dw`` (the last:
+    ``_broad_change``'s part of it); ``opening`` / ``min_component``: the ``RULES`` entry's."""
     from scipy import ndimage as ndi
     lb, ld = _lab(base), _lab(dw)
     lbs, lds = _blur3(lb, 1.5), _blur3(ld, 1.5)
@@ -521,6 +543,9 @@ def _garment_mask(base: np.ndarray, dw: np.ndarray, base_mask: np.ndarray, dw_ma
     # A draft pixel over base skin that is skin by neither model is garment from a smaller ΔE on (Ruling A99:
     # a light linen shirt differs from the skin under it mostly in chroma, ΔE ~14).
     cand |= (dw_mask & base_mask & skin_b.like(lbs) & ~skin_draft & ~skin_b.like(lds) & (de > DE_UNSKIN))
+    # A BROAD change over base skin in another material is garment (Ruling A99b): a cream blouse over pale skin.
+    broad = _broad_change(de, lbs, lds, dw_mask & base_mask & skin_b.like(lbs), base_mask, cand)
+    cand |= broad
     m = ndi.binary_opening(cand, _disk(opening)) if opening else cand
     m = ndi.binary_closing(m, _disk(4))
     lab_, n = ndi.label(m)
@@ -537,23 +562,81 @@ def _garment_mask(base: np.ndarray, dw: np.ndarray, base_mask: np.ndarray, dw_ma
         small = np.zeros(hn + 1, bool)
         small[1:] = hs < 2500
         m |= small[hl]
-    return m & dw_mask, de
+    return m & dw_mask, de, broad
+
+
+def _hue_turned(lbs: np.ndarray, lds: np.ndarray, labels: np.ndarray, ids: np.ndarray) -> np.ndarray:
+    """Per region ``ids`` of ``labels``: whether the draft there is another MATERIAL than the base's skin under
+    it (Ruling A99b) — the hue of its median colour (``lds``, blurred Lab) turned by more than
+    ``BROAD_HUE_DEG`` from the base's (``lbs``) there. Shading and a re-rendered skin keep the hue (they move
+    lightness and chroma along it); a fabric turns it. Measured: Tilda's cream blouse over her pale skin
+    14° (back) / 21° (front); Gelina's slime body re-rendered darker under a bandeau's worn back 5°; the
+    bare skin a draft repeats 0..3°. Without ``BROAD_MIN_CHROMA`` on both sides the hue is no measurement:
+    False (an achromatic draft over skin is no skin by the base's model — A99's test)."""
+    from scipy import ndimage as ndi
+    ids = np.asarray(ids, dtype=int)
+    if not ids.size:
+        return np.zeros(0, bool)
+    ab_b = np.stack([np.asarray(ndi.median(lbs[..., i], labels, ids), dtype=np.float64) for i in (1, 2)], -1)
+    ab_d = np.stack([np.asarray(ndi.median(lds[..., i], labels, ids), dtype=np.float64) for i in (1, 2)], -1)
+    cb, cd = np.linalg.norm(ab_b, axis=-1), np.linalg.norm(ab_d, axis=-1)
+    cos = (ab_b * ab_d).sum(-1) / np.maximum(cb * cd, 1e-9)
+    turned = np.degrees(np.arccos(np.clip(cos, -1.0, 1.0)))
+    return (cb >= BROAD_MIN_CHROMA) & (cd >= BROAD_MIN_CHROMA) & (turned > BROAD_HUE_DEG)
+
+
+def _broad_change(de: np.ndarray, lbs: np.ndarray, lds: np.ndarray, over_skin: np.ndarray, base_mask: np.ndarray,
+                  taken: np.ndarray) -> np.ndarray:
+    """The BROAD changes over the base's skin that the per-pixel tests left out (Ruling A99b): the registered
+    draft's pixels ``over_skin`` (draft figure over base skin) below the head rows (``PUT_ON_HEAD_SHARE``),
+    outside ``taken`` (grown 3 px), that differ from the base by more than ``DE_UNSKIN`` (``de``: Lab ΔE76
+    after the 1.5 px blur), opened by 2 px — each connected region of at least ``BROAD_MIN`` of the base
+    figure where the draft is another material than the skin (``_hue_turned``), grown over the connected
+    pixels that differ by more than ``BROAD_LOW_DE``. Empty when there is none (a composite without one is
+    what it was)."""
+    from scipy import ndimage as ndi
+    t, b, _l, _r = _bbox(base_mask)
+    body = over_skin & ~ndi.binary_dilation(taken, _disk(3))
+    body[:t + int(round(PUT_ON_HEAD_SHARE * (b - t)))] = False
+    seeds = ndi.binary_opening(body & (de > DE_UNSKIN), _disk(2))
+    lab_, n = ndi.label(seeds)
+    if not n:
+        return np.zeros_like(base_mask)
+    big = np.zeros(n + 1, bool)
+    big[1:] = ndi.sum(seeds, lab_, range(1, n + 1)) >= BROAD_MIN * base_mask.sum()
+    if not big.any():
+        return np.zeros_like(base_mask)
+    candidates = np.nonzero(big)[0]
+    big[candidates] = _hue_turned(lbs, lds, lab_, candidates)
+    if not big.any():
+        return np.zeros_like(base_mask)
+    grown, _gn = ndi.label(body & (de > BROAD_LOW_DE))
+    ids = np.unique(grown[big[lab_]])
+    return np.isin(grown, ids[ids > 0])
 
 
 def dropped_garment(base: np.ndarray, dw: np.ndarray, base_mask: np.ndarray, dw_mask: np.ndarray,
                     mask: np.ndarray, skin_b: Skin, head_share: float = PUT_ON_HEAD_SHARE) -> float:
     """The largest connected region the draft wears over the base's skin that the composite left out, as a
     share of the base figure (Ruling A99): registered draft pixels below the head rows, over base skin, that
-    are not skin by the BASE's model (independent of the draft's re-centred skin, which is what failed),
-    differ by more than ``DE_UNSKIN`` and lie outside the mask (grown 3 px), opened by 2 px."""
+    differ by more than ``DE_UNSKIN`` and lie outside the mask (grown 3 px), opened by 2 px — the pixels that
+    are not skin by the BASE's model (A99), and every region where the draft is another material than the
+    skin under it (``_hue_turned``, Ruling A99b): a cream blouse over pale skin is skin by the base's model
+    (Mahalanobis 2.7 < ``SKIN_MAHA``) — with A99's test alone Tilda's composites that left it out measured
+    0.002 / 0.014."""
     from scipy import ndimage as ndi
     lbs, lds = _blur3(_lab(base), 1.5), _blur3(_lab(dw), 1.5)
     de = np.linalg.norm(lbs - lds, axis=-1)
-    left = (dw_mask & base_mask & skin_b.like(lbs) & ~skin_b.like(lds) & (de > DE_UNSKIN)
-            & ~ndi.binary_dilation(mask, _disk(3)))
+    outside = dw_mask & base_mask & skin_b.like(lbs) & ~ndi.binary_dilation(mask, _disk(3))
     t, b, _l, _r = _bbox(base_mask)
-    left[:t + int(round(head_share * (b - t)))] = False
-    left = ndi.binary_opening(left, _disk(2))
+    outside[:t + int(round(head_share * (b - t)))] = False
+    left = ndi.binary_opening(outside & ~skin_b.like(lds) & (de > DE_UNSKIN), _disk(2))
+    changed = ndi.binary_opening(outside & (de > DE_UNSKIN), _disk(2))
+    lab_, n = ndi.label(changed)
+    if n:
+        turned = np.zeros(n + 1, bool)
+        turned[1:] = _hue_turned(lbs, lds, lab_, np.arange(1, n + 1))
+        left |= turned[lab_]
     lab_, n = ndi.label(left)
     if not n:
         return 0.0
@@ -803,7 +886,7 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str, *, take_head: boo
     v, u = _shape_flow(flow_base, _largest(aligned_mask & ~flare_aligned))
     dw = _apply_flow(aligned, v, u)
     dwm = figure_mask(dw)
-    mask, _de = _garment_mask(base, dw, bm, dwm, skin_b, skin_d, opening=spec["opening"],
+    mask, _de, broad = _garment_mask(base, dw, bm, dwm, skin_b, skin_d, opening=spec["opening"],
                               min_component=spec["min_component"])
     if zone is not None:
         # Every base pixel of the zone (its hair's soft matte edge and loose strands too) and the draft's figure.
@@ -846,11 +929,13 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str, *, take_head: boo
         "composite_iou": round(iou(cm, bm), 4),
         "drift_px": round(contour_drift(cm, bm), 2),
         "dropped": round(dropped_garment(base, dw, bm, dwm, mask | flare, skin_b), 4),
+        "broad": round(float(broad.sum() / bm.sum()), 4),
     })
     reasons = check(record)
     support = ndi.binary_dilation(mask | flare, _disk(SUPPORT_GROW))
-    if coverage.get("nothing") and not reasons and zone is None:
-        # EMPTY: nothing of the draft shows in this view — the base unchanged.
+    if coverage.get("nothing") and not reasons and zone is None and not broad.any():
+        # EMPTY: nothing of the draft shows in this view — the base unchanged. Not with a broad change put on
+        # (Ruling A99b): the put-on region needs ΔE > 20, a cream blouse over pale skin differs by ~9.5.
         out, support = base.copy(), np.zeros_like(bm)
         record.update(empty=True, coverage={**coverage, "score": None}, mask_share=0.0, flare_px=0, seam_de=None,
                       composite_iou=1.0, drift_px=0.0)
@@ -861,15 +946,15 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str, *, take_head: boo
 def check(record: Dict[str, Any]) -> List[str]:
     """The refusal reasons of a composite record (none = it passes). Nothing
     to put on refuses only a draft that does not line up (module docstring,
-    EMPTY)."""
+    EMPTY); a garment left out refuses it either way (Ruling A99b: Tilda's
+    cream-blouse front passed as EMPTY, put-on region 0.0019)."""
     reasons = []
     coverage = record.get("coverage") or {}
     aligned = float(record.get("iou") or 0.0) >= IOU_MIN
     if coverage.get("nothing"):
-        if aligned:
-            return reasons
-        limit = RULES.get(str(record.get("rule") or "outfit"), RULES["outfit"])["put_on"]["region_min"]
-        reasons.append(f"{NOTHING_TO_PUT_ON} (garment region {float(coverage.get('region') or 0.0):.4f} < {limit})")
+        if not aligned:
+            limit = RULES.get(str(record.get("rule") or "outfit"), RULES["outfit"])["put_on"]["region_min"]
+            reasons.append(f"{NOTHING_TO_PUT_ON} (garment region {float(coverage.get('region') or 0.0):.4f} < {limit})")
     elif float(coverage.get("score") or 0.0) < COVERAGE_MIN:
         reasons.append(f"{NOT_COVERED} (coverage {float(coverage.get('score') or 0.0):.3f} < {COVERAGE_MIN})")
     dropped = record.get("dropped")
