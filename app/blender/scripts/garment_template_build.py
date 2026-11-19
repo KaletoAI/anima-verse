@@ -34,6 +34,7 @@ from mathutils import Vector
 sys.path.insert(0, str(Path(__file__).parent))
 from _common import main  # noqa: E402
 import garment_template_drape as gd  # noqa: E402
+import garment_template_fitted as gf  # noqa: E402
 sys.path.pop(0)
 
 #: Angle of each slit side (0 = +X = the character's left, front = -Y).
@@ -1537,7 +1538,13 @@ def run(a):
     top_z = spec["row_y"][0]
     sl = bco[np.abs(bco[:, 2] - top_z) < 0.01]
     centre = sl[:, :2].mean(0) if len(sl) else bco[:, :2].mean(0)
-    if bod:
+    fitted = spec.get("fitted")
+    if fitted:
+        # A223: a close-fitting piece cut from the body's surface (``garment_template_fitted``)
+        col, ctree = gd.rest_collider(body, extra=lower)
+        obj, fit_pin, binfo = gf.build_fitted(prm, spec, arm, body, ctree, col=col)
+        slit_edges = 0
+    elif bod:
         # the torso axis of a bodice is the spine (the slice at the shoulder line holds the arms' roots)
         # A179: its Y is the arm joints' (the armhole windows open either side of the axis: an axis 3 cm in front of
         # the arms put the back border of each window 5 cm out on the upper arm)
@@ -1603,7 +1610,7 @@ def run(a):
     # outward normals (Solidify and the projection side test read them)
     nrm = np.array([v.normal for v in me.vertices])
     radial = co0[:, :2] - centre
-    if float(np.mean(np.einsum("ij,ij->i", nrm[:, :2], radial))) < 0:
+    if not fitted and float(np.mean(np.einsum("ij,ij->i", nrm[:, :2], radial))) < 0:
         bm = bmesh.new()
         bm.from_mesh(me)
         bmesh.ops.reverse_faces(bm, faces=bm.faces)
@@ -1611,7 +1618,9 @@ def run(a):
         bm.free()
     edges = gd.edges_of(obj)
     rest_len = np.linalg.norm(co0[edges[:, 0]] - co0[edges[:, 1]], axis=1)
-    if bod:
+    if fitted:
+        pin = fit_pin
+    elif bod:
         nj = bod["joints"].get("neck")
         pin = bodice_pins(obj, bod, nj[0] if nj else centre[0], -nj[2] if nj else centre[1])
     elif "pin_top" in obj.vertex_groups:
@@ -1644,6 +1653,8 @@ def run(a):
                 "over_at": [[round(float(x), 2) for x in co0[e].mean(0)] for e in edges[np.argsort(-st)[:8]]], "rest_mm": round(float(rest_len[int(st.argmax())]) * 1000, 1),
                 "x": round(float(worst[0]), 3), "y": round(float(worst[1]), 3)}
     n_single = len(me.vertices)
+    if fitted and fitted["kind"] == "briefs":
+        binfo["cover"] = gf.part_cover(body, obj)
     neck = {}
     nlp = []
     if bod:
@@ -1662,6 +1673,8 @@ def run(a):
     weights = smooth_weights(obj, body) if prm.get("smooth_weights", True) else {}
     if lower and prm.get("smooth_weights", True):
         weights["layer"] = layer_weights(obj, lower)
+    if fitted:
+        weights["fitted"] = gf.even_weights(obj, weight_matrix, write_weights)
     names, W = weight_matrix(obj)
     rest_world = np.array([obj.matrix_world @ v.co for v in obj.data.vertices])
     groups = [dict(g) for g in (prm.get("shape_groups") or [])]

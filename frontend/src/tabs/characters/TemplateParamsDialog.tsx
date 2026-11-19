@@ -24,7 +24,7 @@ import { thumbUrl, thumbWidth } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut, apiUpload } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { TEMPLATE_CHOICE_LABELS, TEMPLATE_DRAPE_FABRIC, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_LABELS, cm, choiceAllowed, corsetTop, hasBodice, lengthLabel, templateCost } from './figureModel'
+import { FITTED_KINDS, TEMPLATE_CHOICE_LABELS, TEMPLATE_DRAPE_FABRIC, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_LABELS, cm, choiceAllowed, corsetTop, hasBodice, lengthLabel, templateCost } from './figureModel'
 import { TEMPLATE_STATE_COLOR, TEMPLATE_STATE_LABELS, failureLines, templateLiveText } from './figureModel'
 import { FailureDetails } from './BuildProblem'
 import type { TemplateFieldSpec, TemplateInfo, TemplateParams, TemplateProgress } from './figureModel'
@@ -136,9 +136,10 @@ function FrontPicture({ picture }: { picture?: TemplatePayload['front_picture'] 
 const GRID: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px 12px' }
 const WARN: CSSProperties = { color: 'var(--warning, #d29922)' }
 const ORDER: (keyof TemplateParams)[] = ['kind', 'fabric', 'opacity', 'length_m', 'flare', 'waist_height', 'slit', 'slit_m',
-  'shoulders', 'fit', 'neckline', 'neck_depth_m', 'sleeves', 'sleeve_fit', 'front', 'collar']
+  'shoulders', 'fit', 'neckline', 'neck_depth_m', 'sleeves', 'sleeve_fit', 'front', 'collar',
+  'rise', 'waistband', 'leg_cut', 'back_coverage', 'side_width_m']
 /** Fields shown as a 0…1 number rather than centimetres. */
-const SHARES = new Set<keyof TemplateParams>(['flare', 'fit', 'sleeve_fit', 'opacity'])
+const SHARES = new Set<keyof TemplateParams>(['flare', 'fit', 'sleeve_fit', 'opacity', 'leg_cut', 'back_coverage'])
 
 /** Whether a field is shown for the draft: the kind's fields, minus the ones another field switches off. */
 /** A227: a jacket with a lapel collar: its opening is the lapel's V whatever the neckline says. */
@@ -324,6 +325,9 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                   <div className="ga-hint" style={WARN}>
                     {t('This kind is not draped yet — the piece stays left off until it is supported.')}
                   </div>
+                ) : null}
+                {FITTED_KINDS.includes(draft.kind) ? (
+                  <div className="ga-hint">{t('A close-fitting piece is cut from the body itself and pinned at its bands — it has no length of its own.')}</div>
                 ) : null}
                 {draft.kind === 'jacket' ? (
                   <div className="ga-hint">{t('A jacket is draped over the tops and dresses worn with it (built first).')}</div>

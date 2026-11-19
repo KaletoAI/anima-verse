@@ -382,6 +382,9 @@ def shapes(params: Dict[str, Any], meas: Dict[str, Any], reg: Registration) -> D
     if kind == "trousers":
         _trousers(p, m, reg, waist_y, cap_m, add, mark)
         return {"shapes": out, "marks": marks}
+    if kind in gt.FITTED_KINDS:
+        _fitted(p, m, reg, cap_m, add, mark)
+        return {"shapes": out, "marks": marks}
 
     shape = gt.outline(p, m)
     knots = shape["knots"]
@@ -522,6 +525,94 @@ def _sleeves(p, m, reg: Registration, spec, add, mark) -> None:
         if side > 0:
             mark(end[0] + w1 / 2 + 0.015, end[1], f"{p['sleeves']} sleeve {round(length * 100)} cm · fit "
                                                    f"{p['sleeve_fit']:.2f}")
+
+
+def _crotch_y(m: Dict[str, Any]) -> float:
+    """A223: the crotch height for the drawing — 6 cm under the hip joints (the builder reads it off the mesh)."""
+    j = m.get("joints") or {}
+    if "leftupleg" in j:
+        return float(j["leftupleg"][1]) - 0.06
+    return float(m["hip_y"]) - 0.09
+
+
+def _fitted(p, m, reg: Registration, cap_m: float, add, mark) -> None:
+    """A223: the fitted kinds, drawn from the same numbers the builder cuts by (``garment_template.fitted_spec``):
+    briefs from the waistband over the leg openings (``leg_cut`` shapes the curve, ``side_width_m`` the side) to the
+    gusset; a bra's band, its two cups to their top edge and the straps; gloves along the arm to their reach."""
+    from app.core import garment_template as gt
+    x0 = reg.x0
+    spec = gt.fitted_spec(p, m)["fitted"]
+    kind = p["kind"]
+    if kind == "briefs":
+        top = spec["top_y"]
+        crotch = _crotch_y(m)
+        bl, br = reg.body_half(top, cap_m)
+        g = spec["gusset_half_m"]
+        low = crotch - spec["boyshort_drop_m"]
+        side = low + p["leg_cut"] * (top - p["side_width_m"] - low)
+        power = 1.6 - 1.2 * p["leg_cut"]
+        leg_r, leg_l = [], []
+        for t in [i / 8 for i in range(9)]:
+            y = crotch + (side - crotch) * t ** power
+            leg_r.append([x0 + g + (br - g) * t, y])
+            leg_l.append([x0 - g - (bl - g) * t, y])
+        add("body", "fill", [[x0 - bl, top], [x0 + br, top]] + leg_r[::-1] + leg_l)
+        if spec["waistband_m"] > 0:
+            add("waist", "dash", [[x0 - bl, top - spec["waistband_m"]], [x0 + br, top - spec["waistband_m"]]])
+        mark(x0 + br + 0.03, top, f"rise {p['rise']}")
+        mark(x0 + br + 0.03, side, f"leg cut {p['leg_cut']:.2f}")
+        mark(x0, crotch - 0.04, f"back {p['back_coverage']:.2f} · {p['fabric']}", "middle")
+        return
+    if kind == "bra":
+        under, bust = spec["under_y"], spec["bust_y"]
+        band = max(spec["band_m"], spec["back_strap_m"])
+        bl, br = reg.body_half(under, cap_m)
+        add("band", "fill", [[x0 - bl, under - band], [x0 + br, under - band], [x0 + br, under], [x0 - bl, under]])
+        h = max(0.03, bust - under)
+        zc = bust + (p["cup_coverage"] - 0.5) * 2.0 * h
+        gore = spec["gore_half_m"]
+        if p["cup_style"] == "bandeau":
+            add("cup", "fill", [[x0 - bl, under], [x0 + br, under], [x0 + br, zc], [x0 - bl, zc]])
+        else:
+            for sgn, half in ((1, br), (-1, bl)):
+                ax = x0 + sgn * 0.5 * (gore + half)
+                inner, outer = x0 + sgn * gore, x0 + sgn * half * 0.95
+                peak = zc + 0.8 * h if p["cup_style"] == "triangle" else zc
+                add("cup", "fill", [[inner, under], [outer, under], [outer, under + 0.01 if p["cup_style"] == "triangle"
+                                                                     else zc - 0.5 * h], [ax, peak],
+                                    [inner, under + 0.01 if p["cup_style"] == "triangle" else zc - 0.3 * h]])
+        st = spec.get("straps")
+        if st and "shoulder_y" in m:
+            for sgn in (1, -1):
+                sx = x0 + sgn * st["shoulder_x"]
+                w = st["width_m"] / 2
+                ax = x0 + sgn * 0.5 * (gore + (br if sgn > 0 else bl))
+                end_x = x0 + sgn * st["neck_r"] if st["style"] == "halter" else sx
+                end_y = st["neck_y"] if st["style"] == "halter" else m["shoulder_y"] + 0.04
+                add("strap", "fill", [[ax - w, zc], [ax + w, zc], [end_x + w, end_y], [end_x - w, end_y]])
+            mark(x0 + st["shoulder_x"] + 0.03, m["shoulder_y"], f"straps {st['style']}")
+        mark(x0 + br + 0.03, under, f"{p['cup_style']} · cover {p['cup_coverage']:.2f}")
+        if p["push_up"] > 0:
+            mark(x0 + br + 0.03, under - 0.04, f"push-up {p['push_up']:.2f}")
+        return
+    j = m.get("joints") or {}
+    for side, key, hand in ((1, "leftarm", "lefthand"), (-1, "rightarm", "righthand")):
+        if key not in j or hand not in j:
+            continue
+        axis = reg.joint_arm_axis(side) or reg.arm_axis(side, (j[key][0], m["shoulder_y"]))
+        ja, u = axis if axis else ((j[key][0], m["shoulder_y"]), (float(side), 0.0))
+        arm_len = m.get("arm_len") or math.dist(j[key][:2], j[hand][:2])
+        wrist = arm_len
+        start = wrist - spec["reach_m"]
+        tip = wrist + (0.18 if p["fingers"] == "full" else 0.09 if p["fingers"] == "fingerless" else 0.0)
+        w0 = (m.get("upper_arm_c") or 0.28) / math.pi
+        w1 = (m.get("wrist_c") or 0.16) / math.pi + 0.01
+        add("glove", "fill", _quad_along(ja, u, start, wrist, w0 if start < arm_len * 0.5 else w1 * 1.3, w1))
+        if tip > wrist:
+            add("glove", "fill", _quad_along(ja, u, wrist, tip, w1 * 1.4, w1 * 1.2))
+        if side > 0:
+            end = (ja[0] + u[0] * start, ja[1] + u[1] * start)
+            mark(end[0], end[1] + 0.05, f"{p['length']} · {p['fingers']}", "middle")
 
 
 def _trousers(p, m, reg: Registration, waist_y: float, cap_m: float, add, mark) -> None:

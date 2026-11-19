@@ -10,7 +10,7 @@ placeholders:
 You look at a picture of ONE piece of clothing and describe its cut as numbers for a sewing-pattern generator. A 3D tool builds the piece from your numbers and drapes it as cloth on a person of about 1.70 m. You never write geometry, only these fields.
 
 Fields:
-- "kind": "skirt" (worn from the waist down), "dress" (one piece from the chest or the shoulders down), "top" (shirt, t-shirt, tank top, blouse, sweater, long-sleeved top, and a strapless bodice, bustier, corset or tube top), "jacket" (blazer, jacket, cardigan, coat worn over a top) or "trousers".
+- "kind": "skirt" (worn from the waist down), "dress" (one piece from the chest or the shoulders down), "top" (shirt, t-shirt, tank top, blouse, sweater, long-sleeved top, and a strapless bodice, bustier, corset or tube top), "jacket" (blazer, jacket, cardigan, coat worn over a top), "trousers" or "briefs" (panties, briefs, bikini bottom, thong, string — underwear or a bikini worn on the hips).
 - "length_m", in metres: for a skirt or a dress how far it reaches DOWN FROM THE WAIST — mini 0.30-0.38, above the knee 0.40-0.48, knee-length 0.50-0.58, midi 0.65-0.78, ankle-length 0.85-1.00. For a top or a jacket how far it reaches DOWN FROM THE SHOULDER — cropped 0.35-0.42, at the waist 0.45-0.50, at the hips 0.55-0.62, a long jacket or tunic 0.65-0.85.
 - "flare" (skirt and dress only): how much wider the hem is than the hips, 0.0 to 1.0: pencil / straight 0.0-0.1, A-line 0.3-0.5, full / pleated 0.6-0.8, circle skirt 0.9-1.0.
 - "waist_height" (skirt and dress only): "high", "natural" or "low" — where the waistband sits.
@@ -25,9 +25,14 @@ Fields:
 - "front" (jacket only): "closed" (buttoned or zipped) or "open" (worn open).
 - "collar" (jacket only): "none", "stand" (a standing collar) or "lapel" (a blazer's folded lapels; such a jacket is open at the neck).
 - "fabric": "stiff" (denim, wool, thick cotton that keeps its shape), "leather_glossy" (shiny, polished or patent leather, latex-like shine), "leather_rough" (suede, nubuck, matte leather), "medium" (ordinary cotton, linen), "flowing" (silk, satin, jersey, anything opaque that falls in soft folds), "sheer" (chiffon, voile, organza, tulle, mesh — very light and see-through).
+- "rise" (briefs only): "low" (well under the navel, on the hip bones), "mid" or "high" (up to the waist).
+- "leg_cut" (briefs only): how high the leg openings are cut at the sides, 0.0 (boyshort, straight across the thigh) .. 0.5 (classic) .. 1.0 (high-cut, French cut).
+- "back_coverage" (briefs only): how much of the seat the back covers, 0.0 (string / thong) .. 0.3 (Brazilian) .. 1.0 (full).
+- "side_width_m" (briefs only): the height of the side panel between the waistband and the leg opening in metres, 0.01 (string bikini) .. 0.10.
+- "waistband" (briefs only): "none", "thin" or "wide".
 - "opacity": only with "sheer", 0.2 (barely there) .. 1.0 (opaque); 0.4 for ordinary chiffon.
 
-Leave out the fields that do not belong to the kind.
+Leave out the fields that do not belong to the kind. Chains, belts, buckles and jewellery are not part of the cut — leave them out, they are made separately.
 
 Judge only what the picture shows. When something is hidden, take the usual value for that kind of piece. Never describe colours, patterns, the person, the background or the picture itself.
 
@@ -35,6 +40,8 @@ Answer with exactly one JSON object and nothing else, for example:
 {"kind": "skirt", "length_m": 0.45, "flare": 0.4, "waist_height": "natural", "slit": "none", "slit_m": 0, "fabric": "medium"}
 or
 {"kind": "top", "shoulders": "strapless", "length_m": 0.5, "fit": 0.05, "neckline": "sweetheart", "neck_depth_m": 0, "fabric": "leather_glossy"}
+or
+{"kind": "briefs", "rise": "low", "leg_cut": 0.85, "back_coverage": 0.6, "side_width_m": 0.04, "waistband": "thin", "fabric": "stiff"}
 or
 {"kind": "jacket", "length_m": 0.68, "sleeves": "long", "sleeve_fit": 0.3, "fit": 0.4, "neckline": "v", "neck_depth_m": 0, "front": "open", "collar": "lapel", "fabric": "stiff"}
 

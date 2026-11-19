@@ -307,7 +307,18 @@ export interface TemplateParams {
   fabric: string
   /** A204: sheer only — how much of the cloth's colour covers (0.2 … 1). */
   opacity: number
+  /** A223 briefs: waistband height (low / mid / high), leg opening (0 boyshort … 1 high-cut), seat (0 string … 1
+   *  full), the side panel's height and the waistband. */
+  rise?: string
+  leg_cut?: number
+  back_coverage?: number
+  side_width_m?: number
+  waistband?: string
 }
+
+/** A223: the close-fitting kinds cut from the body's surface (`garment_template.FITTED_KINDS`): no length, flare or
+ *  bodice fields. */
+export const FITTED_KINDS = ['briefs', 'bra', 'gloves']
 
 /** Ruling A142: the kinds with a bodice over the shoulders (the length counts from the shoulder line). */
 export const UPPER_KINDS = ['top', 'jacket']
@@ -357,7 +368,8 @@ export type TemplateFieldSpec = { type: 'choice'; choices: string[]; default: st
 
 /** The words of the choice values (English; put through `t()`). */
 export const TEMPLATE_CHOICE_LABELS: Record<string, string> = {
-  skirt: 'Skirt', dress: 'Dress', top: 'Top', jacket: 'Jacket', trousers: 'Trousers',
+  skirt: 'Skirt', dress: 'Dress', top: 'Top', jacket: 'Jacket', trousers: 'Trousers', briefs: 'Briefs',
+  mid: 'Mid', thin: 'Thin', wide: 'Wide',
   high: 'High', natural: 'Natural', low: 'Low',
   none: 'None', left: 'Left', right: 'Right', front: 'Front', back: 'Back',
   short: 'Short', long: 'Long', cap: 'Cap', elbow: 'Elbow',
@@ -376,6 +388,8 @@ export const TEMPLATE_FIELD_LABELS: Record<keyof TemplateParams, string> = {
   shoulders: 'Shoulders', sleeve_fit: 'Sleeve fit (0 tight … 1 loose)', fit: 'Body fit (0 tight … 1 loose)',
   neckline: 'Neckline', neck_depth_m: 'Neckline depth (0 = usual)', front: 'Front', collar: 'Collar',
   opacity: 'Opacity (0.2 sheer … 1 opaque)',
+  rise: 'Rise', leg_cut: 'Leg cut (0 boyshort … 1 high-cut)', back_coverage: 'Seat coverage (0 string … 1 full)',
+  side_width_m: 'Side height', waistband: 'Waistband',
 }
 
 /** A204: one line per fabric under the select — what the cloth does and what a switch costs. */
@@ -401,10 +415,23 @@ export function cm(m: number): string {
   return `${Math.round(m * 100)} cm`
 }
 
+/** A223: a fitted piece's summary: "Briefs · Low rise · leg cut 0.85 · seat 0.60 · Stiff (denim, wool)". */
+export function fittedSummary(p: TemplateParams, t: Tr = EN): string {
+  const parts = [t(TEMPLATE_CHOICE_LABELS[p.kind] || p.kind)]
+  if (p.kind === 'briefs') {
+    parts.push(t('{rise} rise').replace('{rise}', t(TEMPLATE_CHOICE_LABELS[p.rise || 'mid'] || p.rise || '')))
+    parts.push(t('leg cut {n}').replace('{n}', Number(p.leg_cut ?? 0.5).toFixed(2)))
+    parts.push(t('seat {n}').replace('{n}', Number(p.back_coverage ?? 1).toFixed(2)))
+  }
+  parts.push(t(TEMPLATE_CHOICE_LABELS[p.fabric] || p.fabric))
+  return parts.join(' · ')
+}
+
 /** A template row's one-line summary: "Skirt · 45 cm · flare 0.4 · Medium (cotton, linen)" (+ slit), or "No
  *  parameters yet". */
 export function templateSummary(p: TemplateParams | null, t: Tr = EN): string {
   if (!p) return t('No parameters yet')
+  if (FITTED_KINDS.includes(p.kind)) return fittedSummary(p, t)
   const parts = [t(TEMPLATE_CHOICE_LABELS[p.kind] || p.kind), cm(p.length_m)]
   if (!UPPER_KINDS.includes(p.kind)) parts.push(t('flare {n}').replace('{n}', String(p.flare)))
   if (hasBodice(p) && p.sleeves && p.sleeves !== 'none') {
