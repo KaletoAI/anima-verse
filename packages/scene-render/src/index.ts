@@ -269,8 +269,11 @@ export { CONTACT_TARGETS, POINT_TARGETS, POINT_TARGET_OPS, TARGET_RADIUS_M, MOUT
   isPointTarget, targetFrame, targetFrames, orientAlong, targetLamp } from './contactTarget'
 export type { ContactTarget, PointTarget, TargetBones, TargetFrame } from './contactTarget'
 export { solvePairFix, CLIENT_PAIR_FIT, fixPoint, unfixPoint, fixSample, fixRoot, composeFix, turnMatrix, matrixTurn, fixAnglesDeg,
-  findContact, contactSampleOf, turnAxes, createPairFit, pairFitTotal, pairFitObserve, FIT_MIN_SAMPLES, FOLLOW, partnerTurnFix, partnerYawFix, fixPivot, ALIGN_FIT, RUNTIME_FIT, FIT_ANGLE_WEIGHT_M, NO_FIX,
-  pairInterpenetration, clearLamp, PART_REGIONS, CLEAR_GREEN_MM, CLEAR_YELLOW_MM, bendSample, BEND_STAY, supportDelta, bendFrameOf } from './pairFit'
+  findContact, contactSampleOf, turnAxes, createPairFit, pairFitTotal, pairFitObserve, FIT_MIN_SAMPLES, FOLLOW, partnerTurnFix, partnerYawFix, fixPivot, RUNTIME_FIT, FIT_ANGLE_WEIGHT_M, NO_FIX,
+  pairInterpenetration, clearLamp, PART_REGIONS, CLEAR_GREEN_MM, CLEAR_YELLOW_MM, bendSample, BEND_STAY, supportDelta, bendFrameOf, fitResiduals, solveLinear } from './pairFit'
+export { solveAlignAdjust, alignMovers, alignCap, pickPhases, phaseRow, relativeOf, joinDelta, ALIGN_RANGE_CM_DEFAULT, ALIGN_SIDE_CM,
+  ALIGN_ANGLE_DEG, ALIGN_PHASES, JOIN_WEIGHT, CAP_SLACK_CM, FREE_BOX } from './pairAlign'
+export type { AlignCap, AlignLamp, AlignProblem, AlignSolution, PhaseRow } from './pairAlign'
 export { POSTURE, SUPPORT_CAPSULES, POSTURE_ANGLE_CAP_DEG, postureAngleCapDeg, supportSample, supportHeight, postureExcess,
   postureReport } from './postureSupport'
 export type { SupportSample, PostureReport } from './postureSupport'

@@ -88,8 +88,6 @@ export interface FitOptions extends FitBounds {
 export const BEND_STAY = 0.05
 
 export const FIT_ANGLE_WEIGHT_M = 0.02
-/** Auto-align (the Library, stored): partner B's tilt and roll at most ±20°, the shift effectively free. */
-export const ALIGN_FIT: FitBounds = Object.freeze({ maxShiftM: 0.5, maxAngleDeg: 20 })
 /** The runtime fine fit of one pair on top of the stored clip: ±5 cm, ±10°. */
 export const RUNTIME_FIT: FitBounds = Object.freeze({ maxShiftM: 0.05, maxAngleDeg: 10 })
 export const FIT_MIN_SAMPLES = 8
@@ -214,7 +212,18 @@ function* residuals(samples: readonly FitSample[], fix: PairFix, lambda: number,
   return out
 }
 
-function solveLinear(A: number[][], b: number[]): number[] | null {
+/** The residual vector of `fix` over `samples` (module docstring THE SOLVE), run straight through — what the bounded
+ *  Auto-align (`pairAlign.ts`) adds up over several contact relations of one moving figure. */
+export function fitResiduals(samples: readonly FitSample[], fix: PairFix, opts: Pick<FitOptions, 'angleWeightM' | 'entryWeight' | 'bend' | 'posture'> = {}): number[] {
+  if (!samples.length) return []
+  const lambda = opts.angleWeightM ?? FIT_ANGLE_WEIGHT_M
+  const W = (opts.entryWeight ?? CONTACT_ENTRY_WEIGHT) * samples.length
+  const posture = opts.posture !== false && samples.some((x) => !!x.support)
+  const it = residuals(samples, fix, lambda, W, opts.bend ?? null, posture)
+  for (;;) { const r = it.next(); if (r.done) return r.value }
+}
+
+export function solveLinear(A: number[][], b: number[]): number[] | null {
   const n = b.length
   const M = A.map((row, i) => [...row, b[i]])
   for (let c = 0; c < n; c++) {
