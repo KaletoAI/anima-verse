@@ -599,9 +599,13 @@ front ray grid at `marker_grid_step`, mirrored about the midline and extended by
 second, so torso tilt and rib cage curvature drop out. Both sides are scored
 together (sum over mirrored cells); the tip is the mean of the 4-connected cells
 within 2·`apex_plateau_depth` of the best sum. The wall is measured from there;
-the tip then moves to the crest of distance in front of the wall, using only its
-sagittal (y-z) normal and staying within `marker_search_radius`, and the wall is
-measured once more. The tangent search rarely finds a real boundary on fabric,
+each side's tip then moves to the cell whose surface, blurred at
+`apex_smooth_radius`, stands furthest in front of that wall along its full
+normal, and follows that maximum while the blur shrinks by √2 per step down to
+two grid steps (each step climbs to the nearest maximum, inside the crest cells
+within `apex_plateau_depth` and within 2·`apex_smooth_radius`); the wall is then
+measured once more. With an outline the tip is refined the same way, and the
+outline sets only the wall's reach. The tangent search rarely finds a real boundary on fabric,
 so the outline becomes round with the median reach. The bone
 runs from `head_wall_depth` behind the wall (at the wall points' mean) to
 the tip. Weights combine a radial term — with a measured outline (always without
