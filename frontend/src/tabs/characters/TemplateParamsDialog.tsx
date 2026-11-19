@@ -31,6 +31,8 @@ import type { TemplateFieldSpec, TemplateInfo, TemplateParams, TemplateProgress 
 import { FigureBuildButton } from './FigureBuildButton'
 import { TemplateOverlay } from './TemplateOverlay'
 import { ModelSteps } from './ModelSteps'
+import { MaterialSelect } from './WardrobeGarment'
+import type { PieceMaterialInfo } from './useGarment'
 
 interface TemplatePayload {
   item_id: string
@@ -49,6 +51,8 @@ interface TemplatePayload {
   /** A172: the starting values per kind (a kind change starts from them). */
   kind_defaults?: Record<string, TemplateParams>
   /** A186: the dressed front shown beside the fields (`source` "" = none exists). */
+  /** A223: the piece's material preset (`piece_material.describe`). */
+  material?: PieceMaterialInfo
   front_picture?: { source: '' | 'worn' | 'outfit' | 'item'; url: string; label?: string; earlier?: boolean } | null
   /** A205: the piece-only views the bake reads (`garment_template_views.status`). */
   views?: TemplateViews
@@ -209,7 +213,8 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
   /** Re-read only the progress (after a save, a started Build, and every 3 s while a Build drapes it). */
   const reloadProgress = useCallback(() => {
     apiGet<TemplatePayload>(`${path}?picture=0`)
-      .then((p) => setData((d) => (d ? { ...d, progress: p.progress, params: p.params, updated_at: p.updated_at } : p)))
+      .then((p) => setData((d) => (d ? { ...d, progress: p.progress, params: p.params, updated_at: p.updated_at,
+        material: p.material } : p)))
       .catch(() => { /* the last known progress stays */ })
   }, [path])
   const running = data?.progress?.state === 'running'
@@ -308,6 +313,16 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                               ? ` ${t(TEMPLATE_DRAPE_FABRIC[draft.fabric] && TEMPLATE_DRAPE_FABRIC[draft.fabric] === TEMPLATE_DRAPE_FABRIC[data.params.fabric]
                                 ? 'Switching between these finishes only re-assembles the model on the CPU (no new drape, 0 hub jobs).'
                                 : 'Switching the fabric re-drapes the piece on the CPU (0 hub jobs).')}` : ''}
+                          </span>
+                        ) : null}
+                        {key === 'fabric' && data.material ? (
+                          <span data-material-select="" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            <MaterialSelect itemId={itemId} material={data.material} onChanged={reloadProgress} />
+                            {draft.fabric.startsWith('leather_') ? (
+                              <span className="ga-form-hint">
+                                {t('A leather finish sets its own surface: the material preset\'s metal and sheen do not apply.')}
+                              </span>
+                            ) : null}
                           </span>
                         ) : null}
                         {key === 'collar' && lapelNeck(draft) ? (

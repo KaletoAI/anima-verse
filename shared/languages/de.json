@@ -6815,6 +6815,7 @@
     "Folded over": "Umgeschlagen",
     "Fingers": "Finger",
     "Glove length": "Handschuhlänge",
-    "Cuff": "Stulpe"
+    "Cuff": "Stulpe",
+    "A leather finish sets its own surface: the material preset's metal and sheen do not apply.": "Ein Lederfinish bestimmt seine eigene Oberfläche: Metall und Glanz der Material-Vorgabe gelten dann nicht."
   }
 }

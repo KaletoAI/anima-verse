@@ -477,7 +477,7 @@ def accessory_preview_glb(character_name: str, item_id: str,
 @router.get("/{character_name}/figure/template/{item_id}")
 def get_template_params(character_name: str, item_id: str, picture: bool = True,
                         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    from app.core import garment_template as gt
+    from app.core import garment_template as gt, piece_material
     item = _template_item(character_name, item_id)
     stored = gt.template_of(item)
     progress = gt.piece_progress(character_name, item_id, item=item)
@@ -491,6 +491,9 @@ def get_template_params(character_name: str, item_id: str, picture: bool = True,
             # A172: with nothing stored the dialog starts from the kind the item most likely is (slots / name),
             # and a kind change starts from that kind's values
             "default_kind": gt.default_kind(item),
+            # A223: the piece's material preset (the Wardrobe's select, also shown in the dialog): a metal preset
+            # stays metal on every fabric but a leather finish, which sets its own surface
+            "material": piece_material.describe(item),
             "kind_defaults": {k: gt.kind_defaults(k) for k in gt.KINDS},
             "cost": {"llm_calls": 1, "hub_jobs": 0, "cpu_s": gt.CPU_ESTIMATE_S},
             # A168: this character's drape of the piece — state, reason and the step list (``piece_progress``)
