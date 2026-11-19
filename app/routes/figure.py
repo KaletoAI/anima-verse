@@ -46,14 +46,19 @@ body actions):
   be read.
 * ``GET  /characters/{c}/figure/accessory/{item_id}`` — an accessory piece's section (Ruling A118, A216):
   ``{item_id, name, mode, jewellery (None: no kind chosen), suggested (``accessory_spec.suggest_kind``), kinds,
-  built_kinds, drop_presets, metals, ranges, state, reason, metrics, built_at, cost {hub_jobs: 0}, glb_url (the
+  built_kinds, drop_presets, metals, cords + cord_thickness_mm + pendant_defaults + pendant (A225:
+  ``accessory_build.pendant_row``), ranges, state, reason, metrics, built_at, cost {hub_jobs: 0}, glb_url (the
   preview GLB, its query names the build)}``; 404 for an unknown character or item.
 * ``PUT  /characters/{c}/figure/accessory/{item_id} {jewellery}`` — store the description on the ITEM (every wearer,
   ``accessory_spec.normalize``); 400 for an unknown kind. Spends nothing — the accessory step becomes due.
 * ``POST /characters/{c}/figure/accessory/{item_id}/switch {mode, kind}`` — a too-thin piece's switch to Painted or
   to Accessory with a buildable kind (one locked write); 400 otherwise.
 * ``POST /characters/{c}/figure/accessory/{item_id}/curve {drop_cm, thickness_mm}`` — the chain's centre line for
-  those settings on the plain body (``accessory_build.preview_curve``), nothing stored; 400 without a plain body.
+  those settings on the plain body (``accessory_build.preview_curve``, with the pendant's ``anchor`` and the skin's
+  ``anchor_outward`` there — A225), nothing stored; 400 without a plain body.
+* ``POST /characters/{c}/figure/accessory/{item_id}/pendant`` — A225: the explicit pendant job (ONE routed
+  ``jewellery_mesh`` hub job per item, in the background): ``{status: started | running | ready}``; 400 without a
+  pendant switched on or without an item image.
 * ``GET  /characters/{c}/figure/accessory/{item_id}/preview.glb`` — the plain body with the current build grafted (the
   plain body alone while not built); 404 without a plain body.
 * ``GET  /characters/{c}/figure/template/{item_id}`` — a template piece's parameter dialog (Ruling A138,
@@ -368,6 +373,9 @@ def get_accessory(character_name: str, item_id: str,
             "jewellery": accessory_spec.of_item(item), "suggested": accessory_spec.suggest_kind(item),
             "kinds": list(accessory_spec.KINDS), "built_kinds": list(accessory_spec.BUILT_KINDS),
             "drop_presets": dict(accessory_spec.DROP_PRESETS), "metals": list(accessory_spec.METALS),
+            "cords": list(accessory_spec.CORDS), "cord_thickness_mm": accessory_spec.CORD_THICKNESS_MM,
+            "pendant_defaults": dict(accessory_spec.PENDANT_DEFAULTS),
+            "pendant": accessory_build.pendant_row(state, accessory_spec.of_item(item), record),
             "ranges": {k: list(v) for k, v in accessory_spec.RANGES.items()},
             "state": state["state"], "reason": state["reason"], "metrics": record.get("metrics") or None,
             "built_at": record.get("built_at") or "", "cost": {"hub_jobs": 0}, "glb_url": glb_url}
@@ -418,6 +426,27 @@ def switch_piece_mode(character_name: str, item_id: str, body: ModeSwitchRequest
         if update_item(item_id, {"outfit_piece": piece}) is None:
             raise HTTPException(status_code=500, detail="The item could not be saved")
     return {"item_id": item_id, "mode": body.mode, "jewellery": piece.get("jewellery")}
+
+
+@router.post("/{character_name}/figure/accessory/{item_id}/pendant")
+def build_pendant(character_name: str, item_id: str,
+                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """A225: the explicit "Build pendant (1 hub job)" — the item's ONE routed ``jewellery_mesh`` job in the background
+    (``accessory_pendant.start``). 400 when the stored description has no pendant switched on or the item no image;
+    ``{status: "ready"}`` (nothing spent) when the mesh exists, ``"running"`` when a job runs, else ``"started"``."""
+    from app.core import accessory_build, accessory_pendant, accessory_spec
+    item = _template_item(character_name, item_id)
+    spec = accessory_spec.of_item(item)
+    if not accessory_spec.pendant_on(spec):
+        raise HTTPException(status_code=400, detail="Switch the pendant on and save first")
+    pendant = accessory_build.pendant_info(item_id, spec) or {}
+    if pendant.get("state") == "no_image":
+        raise HTTPException(status_code=400, detail=accessory_pendant.REASON_NO_IMAGE)
+    if pendant.get("state") == "ready":
+        return {"status": "ready"}
+    if not accessory_pendant.start(item_id):
+        return {"status": "running"}
+    return {"status": "started"}
 
 
 @router.post("/{character_name}/figure/accessory/{item_id}/curve")

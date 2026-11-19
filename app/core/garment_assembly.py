@@ -1120,12 +1120,11 @@ def _build(character_name: str, directory: Path, bare: Path,
     for garment in grafted:
         if garment.get("accessory"):
             # Ruling A118: the accessory's node from its CPU build, with the item's current metal.
-            from app.core import accessory_build, accessory_mesh
-            mesh = accessory_build.garment_mesh(character_name, garment["item_id"], garment["record"],
-                                                garment.get("item"))
-            blob = glb_mesh.graft(blob, mesh, name=accessory_mesh.node_name(garment["item_id"]),
-                                  extras={"kind": garment["kind"], "item_id": garment["item_id"],
-                                          "fsig": garment["fsig"]})
+            # A225: with its pendant node when the build carries one.
+            from app.core import accessory_build
+            blob = accessory_build.graft_accessory(blob, character_name, garment["item_id"], garment["record"],
+                                                   garment["fsig"], garment.get("item"), kind=garment["kind"],
+                                                   low=tier == LOW)
             continue
         source = _source(garment, tier).read_bytes()
         extras = {"kind": garment["kind"], "item_id": garment["item_id"], "fsig": garment["fsig"]}

@@ -136,7 +136,7 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-STEP_ORDER = ("plain_body", "base_repair", "tip_smoothing", "shape", "pieces", "template", "accessory", "hair",
+STEP_ORDER = ("plain_body", "base_repair", "tip_smoothing", "shape", "pieces", "template", "pendant", "accessory", "hair",
               "texture", "fits",
               "assemble",
               "collision")
@@ -397,6 +397,24 @@ def _template_step(character_name: str, item_id: str, delivered, profile: Dict[s
 ACCESSORY_LABEL = "Accessory · {name} (CPU, 0 hub jobs)"
 
 
+#: A225: the pendant's ONE hub job (item-wide, every wearer shares it).
+PENDANT_LABEL = "Pendant · {name} (1 hub job)"
+#: Why the pendant step runs only in a manual Build.
+PENDANT_MANUAL = "The pendant is one paid hub job — a manual Build or Build pendant in the Wardrobe makes it"
+
+
+def _pendant_step(character_name: str, item_id: str, profile: Dict[str, Any]) -> Optional[Step]:
+    """A225: the pendant mesh of a worn necklace whose pendant is switched on and not built yet — a manual step (only
+    a manual Build spends its job). A refused or failed pendant is not listed (never re-meshed automatically; the
+    Wardrobe's "Build pendant again" retries), nor one that is running or ready."""
+    from app.core import accessory_build, accessory_spec
+    from app.models.inventory import get_item
+    pendant = accessory_build.pendant_info(item_id, accessory_spec.of_item(get_item(item_id) or {}))
+    if not pendant or pendant["state"] != "missing":
+        return None
+    return Step("pendant", PENDANT_LABEL.format(name=_item_name(item_id)), 1, item_id, manual=PENDANT_MANUAL)
+
+
 def _accessory_step(character_name: str, item_id: str, profile: Dict[str, Any]) -> Optional[Step]:
     """The CPU build of a worn accessory (``accessory_build.accessory_state``): None when it is current or blocked
     (no kind, a kind of a later phase, no plain body — the Wardrobe says why); "failed — Retry" for a failed build
@@ -514,8 +532,15 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
         if step is not None:
             steps.append(step)
     for item_id in wanted.accessory:
+        # A225: the pendant's hub job first (manual only); a chain that is current is then built again with it.
+        pendant = _pendant_step(character_name, item_id, profile)
+        if pendant is not None:
+            steps.append(pendant)
         # Ruling A118: an accessory is built on the CPU (0 hub jobs) when its build for this body is missing.
         step = _accessory_step(character_name, item_id, profile)
+        if step is None and pendant is not None:
+            step = Step("accessory", ACCESSORY_LABEL.format(name=_item_name(item_id)), 0, item_id,
+                        manual=PENDANT_MANUAL)
         if step is not None:
             steps.append(step)
     for item_id in wanted.own:
@@ -1717,6 +1742,13 @@ def _run_template(character_name: str, step: Step, explicit: bool = False) -> st
     return "" if state["state"] == "ready" else StepError(str(state["reason"]), state.get("failure"))
 
 
+def _run_pendant(character_name: str, step: Step, explicit: bool = False) -> str:
+    """A225: the pendant's ONE hub job (``accessory_pendant.run``); only ever planned as a manual step."""
+    from app.core import accessory_pendant
+    state = accessory_pendant.run(step.item_id)
+    return "" if state["state"] == "ready" else str(state["reason"])
+
+
 def _run_accessory(character_name: str, step: Step, explicit: bool = False) -> str:
     """Build one accessory on the CPU (``accessory_build.build``; 0 hub jobs)."""
     from app.core import accessory_build
@@ -2048,7 +2080,7 @@ ASSEMBLY_SLOW = "Pieces not put on yet — the garment assembly is still running
 _RUNNERS: Dict[str, Callable[[str, Step, bool], str]] = {
     "plain_body": _run_plain_body, "base_repair": _run_base_repair, "tip_smoothing": _run_tip_smoothing,
     "shape": _run_shape, "pieces": _run_pieces, "template": _run_template,
-    "accessory": _run_accessory,
+    "pendant": _run_pendant, "accessory": _run_accessory,
     "hair": _run_hair, "texture": _run_texture, "fits": _run_fits, "assemble": _run_assemble,
     "collision": _run_collision}
 
@@ -2236,7 +2268,8 @@ def _accessory_row(character_name: str, item_id: str, item: Dict[str, Any],
     record = state.get("record") or {}
     return {"state": state["state"], "reason": state["reason"], "kind": spec["kind"] if spec else None,
             "suggested": accessory_spec.suggest_kind(item), "built_at": record.get("built_at") or "",
-            "metrics": record.get("metrics") or None, "cost": {"hub_jobs": 0}}
+            "metrics": record.get("metrics") or None, "cost": {"hub_jobs": 0},
+            "pendant": accessory_build.pendant_row(state, spec, record)}
 
 
 def _template_row(character_name: str, item_id: str, item: Dict[str, Any], wanted,
@@ -3107,7 +3140,7 @@ PROBLEM_MESH, PROBLEM_FAILED = "mesh_mismatch", "failed"
 #: A failed step's label when the plan does not list it any more.
 STEP_LABELS = {"plain_body": "Plain body", "base_repair": MESH_REPAIR_LABEL, "tip_smoothing": TIP_SMOOTHING_LABEL,
                "shape": "Body shape", "pieces": "Own mesh", "template": "Template drape",
-               "accessory": "Accessory", "hair": "Hair",
+               "pendant": "Pendant", "accessory": "Accessory", "hair": "Hair",
                "texture": "Texture", "fits": "Fits on the CPU", "assemble": ASSEMBLE_LABEL,
                "collision": COLLISION_LABEL}
 _VIEW_IN_ERROR = re.compile(r"\b(front|back|left|right)(?: view\b|:)")

@@ -18,7 +18,10 @@ KINDS: Tuple[str, ...] = ("necklace", "choker", "earrings", "bracelet", "ring", 
 #: The kinds built so far (phase P1: the necklace chain). Any other kind is stored but not built yet.
 BUILT_KINDS: Tuple[str, ...] = ("necklace",)
 CHAIN_STYLES: Tuple[str, ...] = ("cable", "box", "rope", "none")
-METALS: Tuple[str, ...] = ("gold", "silver", "rose_gold", "black", "custom")
+#: The chain's material (A225): the metals, then the cords (a pendant on a leather cord, a string or a fabric band).
+#: The stored key stays ``metal`` (spec § 5).
+CORDS: Tuple[str, ...] = ("leather", "string", "fabric")
+METALS: Tuple[str, ...] = ("gold", "silver", "rose_gold", "black", "custom") + CORDS
 SIDES: Tuple[str, ...] = ("left", "right", "both")
 FINGERS: Tuple[str, ...] = ("index", "middle", "ring", "little")
 SWAY: Tuple[str, ...] = ("off", "light")
@@ -37,6 +40,8 @@ DEFAULTS: Dict[str, Any] = {
 }
 #: The pendant's defaults when one is switched on (spec § 5; built in phase P2).
 PENDANT_DEFAULTS: Dict[str, Any] = {"from_image": True, "size_mm": 18.0}
+#: A cord is thicker than a chain (A225): its thickness when none is stored.
+CORD_THICKNESS_MM = 2.5
 
 #: Clamp ranges ``(low, high)`` of the numeric fields.
 RANGES: Dict[str, Tuple[float, float]] = {
@@ -46,10 +51,12 @@ RANGES: Dict[str, Tuple[float, float]] = {
 #: Named drop lengths below the jugular notch (spec § 4).
 DROP_PRESETS: Dict[str, float] = {"collar": 4.0, "princess": 10.0, "matinee": 20.0}
 
-#: ``metal`` -> (base colour, roughness); metalness is always 1.0 (plan Global Constraints).
-METAL_PRESETS: Dict[str, Tuple[str, float]] = {
-    "gold": ("#d4af37", 0.25), "silver": ("#c0c0c0", 0.2), "rose_gold": ("#b76e79", 0.25),
-    "black": ("#1c1c1c", 0.35),
+#: ``metal`` -> (base colour, roughness, metalness): the metals at metalness 1.0 (plan Global Constraints), the
+#: cords (A225) at 0.0.
+METAL_PRESETS: Dict[str, Tuple[str, float, float]] = {
+    "gold": ("#d4af37", 0.25, 1.0), "silver": ("#c0c0c0", 0.2, 1.0), "rose_gold": ("#b76e79", 0.25, 1.0),
+    "black": ("#1c1c1c", 0.35, 1.0),
+    "leather": ("#5b3a24", 0.75, 0.0), "string": ("#d9cfb4", 0.9, 0.0), "fabric": ("#2e2a26", 0.85, 0.0),
 }
 #: The roughness of ``metal: custom``.
 CUSTOM_ROUGHNESS = 0.25
@@ -80,6 +87,8 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if kind not in KINDS:
         raise ValueError(f"unknown accessory kind {kind!r}")
     d = DEFAULTS
+    metal = _choice(raw.get("metal"), METALS, d["metal"])
+    thick_default = CORD_THICKNESS_MM if metal in CORDS else d["chain"]["thickness_mm"]
     band_raw = raw.get("band") if isinstance(raw.get("band"), dict) else {}
     chain_raw = raw.get("chain") if isinstance(raw.get("chain"), dict) else {}
     out: Dict[str, Any] = {
@@ -89,9 +98,9 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
                  "layer": _choice(band_raw.get("layer"), BAND_LAYERS, d["band"]["layer"]),
                  "material": _choice(band_raw.get("material"), BAND_MATERIALS, d["band"]["material"])},
         "chain": {"drop_cm": _num(chain_raw.get("drop_cm", d["chain"]["drop_cm"]), "drop_cm", 4.0),
-                  "thickness_mm": _num(chain_raw.get("thickness_mm", d["chain"]["thickness_mm"]), "thickness_mm", 1.5),
+                  "thickness_mm": _num(chain_raw.get("thickness_mm", thick_default), "thickness_mm", thick_default),
                   "style": _choice(chain_raw.get("style"), CHAIN_STYLES, d["chain"]["style"])},
-        "metal": _choice(raw.get("metal"), METALS, d["metal"]),
+        "metal": metal,
         "side": _choice(raw.get("side"), SIDES, d["side"]),
         "sway": _choice(raw.get("sway"), SWAY, d["sway"]),
     }
@@ -166,13 +175,20 @@ def suggest_kind(item: Optional[Dict[str, Any]]) -> Optional[str]:
     return None
 
 
-def metal_material(spec: Dict[str, Any]) -> Tuple[str, float]:
-    """``(base colour hex, roughness)`` of the metal of ``spec`` (``METAL_PRESETS``; ``custom`` = ``color``)."""
+def metal_material(spec: Dict[str, Any]) -> Tuple[str, float, float]:
+    """``(base colour hex, roughness, metalness)`` of the chain material of ``spec`` (``METAL_PRESETS``; ``custom``
+    = ``color`` as a metal)."""
     metal = spec.get("metal") if isinstance(spec, dict) else None
     if metal == "custom":
         color = spec.get("color") if isinstance(spec.get("color"), str) and _HEX.match(spec["color"]) else "#d4af37"
-        return color.lower(), CUSTOM_ROUGHNESS
+        return color.lower(), CUSTOM_ROUGHNESS, 1.0
     return METAL_PRESETS.get(str(metal), METAL_PRESETS["gold"])
+
+
+def pendant_on(spec: Optional[Dict[str, Any]]) -> bool:
+    """Whether ``spec`` (normalized) asks for a pendant made from the item image (A225)."""
+    return bool(spec) and spec.get("kind") == "necklace" and isinstance(spec.get("pendant"), dict) \
+        and bool(spec["pendant"].get("from_image", True))
 
 
 def srgb_to_linear(hex_color: str) -> Tuple[float, float, float]:

@@ -53,6 +53,8 @@ REASON_NO_KIND = "Choose the accessory kind in the Wardrobe"
 REASON_KIND_LATER = "{kind}: not built yet in this version — shown on the figure once its phase lands"
 REASON_NO_BODY = "No plain body yet"
 REASON_FAILED = "Build failed — {error}"
+REASON_PENDANT_LEFT_OFF = "Pendant left off — {error}"
+REASON_PENDANT = "Pendant ready — Build puts it on the chain on the CPU (0 hub jobs)"
 
 
 def _profile_of(character_name: str, profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -67,18 +69,54 @@ def store_dir(character_name: str) -> Path:
     return get_character_dir(character_name) / DIR_NAME
 
 
-def geometry_inputs(spec: Dict[str, Any]) -> Dict[str, Any]:
-    """What an accessory's GEOMETRY is made of (the metal is not)."""
+def geometry_inputs(spec: Dict[str, Any], pendant_psig: str = "") -> Dict[str, Any]:
+    """What an accessory's GEOMETRY is made of (the metal is not). A225: a READY pendant mesh (``pendant_psig``) and
+    its size are part of it — a pendant switched on but not built yet is not (the chain alone is built and shown)."""
     inputs: Dict[str, Any] = {"version": ACCESSORY_VERSION, "kind": spec["kind"]}
     if spec["kind"] == "necklace":
         inputs["chain"] = dict(spec["chain"])
+        if pendant_psig:
+            inputs["pendant"] = {"psig": pendant_psig, "size_mm": float(spec["pendant"]["size_mm"])}
     return inputs
 
 
-def asig(spec: Dict[str, Any]) -> str:
+def asig(spec: Dict[str, Any], pendant_psig: str = "") -> str:
     """md5[:12] of ``geometry_inputs`` (canonical JSON)."""
-    raw = json.dumps(geometry_inputs(spec), sort_keys=True, separators=(",", ":")).encode("utf-8")
+    raw = json.dumps(geometry_inputs(spec, pendant_psig), sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.md5(raw).hexdigest()[:12]
+
+
+def pendant_info(item_id: str, spec: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """A225: ``accessory_pendant.pendant_state`` of the item when ``spec`` switches a pendant on, else None."""
+    from app.core import accessory_pendant, accessory_spec
+    if not accessory_spec.pendant_on(spec):
+        return None
+    try:
+        return accessory_pendant.pendant_state(item_id)
+    except ValueError:
+        return None
+
+
+def pendant_row(state: Dict[str, Any], spec: Optional[Dict[str, Any]], record: Optional[Dict[str, Any]]
+                ) -> Optional[Dict[str, Any]]:
+    """A225: the pendant line of a Wardrobe / Figure row — ``{state, reason, size_mm, on_figure, metrics, cost}``, None
+    without a pendant switched on. ``state`` is the mesh's (``accessory_pendant.pendant_state``); ``on_figure`` whether
+    the CURRENT build carries it; ``reason`` says why the chain is shown without it."""
+    pendant = state.get("pendant")
+    if not pendant or not spec:
+        return None
+    record = record or {}
+    on = isinstance(record.get("pendant"), dict) and state.get("state") == "current"
+    reason = pendant["reason"]
+    if pendant["state"] == "ready" and not on:
+        reason = record.get("pendant_error") or (REASON_PENDANT if state.get("state") != "current" else "")
+    return {"state": pendant["state"], "reason": reason, "size_mm": float(spec["pendant"]["size_mm"]),
+            "on_figure": on, "metrics": (record.get("pendant") or {}).get("metrics") if on else None,
+            "cost": {"hub_jobs": 0 if pendant["state"] == "ready" else 1}}
+
+
+def _ready_psig(pendant: Optional[Dict[str, Any]]) -> str:
+    return str(pendant["psig"]) if pendant and pendant.get("state") == "ready" else ""
 
 
 def record_path(character_name: str, item_id: str, sig: str, suffix: str = ".json") -> Path:
@@ -116,8 +154,8 @@ def material_key(item: Optional[Dict[str, Any]]) -> str:
     spec = accessory_spec.of_item(item)
     if spec is None:
         return ""
-    color, rough = accessory_spec.metal_material(spec)
-    return f"accessory:{spec['metal']}:{color}:{rough}"
+    color, rough, metal = accessory_spec.metal_material(spec)
+    return f"accessory:{spec['metal']}:{color}:{rough}:{metal}"
 
 
 def _current_base(character_name: str, profile: Dict[str, Any]):
@@ -136,7 +174,8 @@ def base_sha(character_name: str, profile: Optional[Dict[str, Any]] = None) -> s
 
 def accessory_state(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None,
                     item: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """``{state, reason, asig, record}`` of a worn accessory (module docstring). Read-only."""
+    """``{state, reason, asig, record, pendant}`` of a worn accessory (module docstring; ``pendant`` =
+    ``pendant_info``). Read-only."""
     from app.core import accessory_spec, model_geometry
     profile = _profile_of(character_name, profile)
     if item is None:
@@ -151,20 +190,25 @@ def accessory_state(character_name: str, item_id: str, *, profile: Optional[Dict
     base = _current_base(character_name, profile)
     if base is None:
         return {"state": "blocked", "reason": REASON_NO_BODY, "asig": "", "record": None}
-    sig = asig(spec)
+    pendant = pendant_info(item_id, spec)
+    sig = asig(spec, _ready_psig(pendant))
     records = _records(character_name, item_id)
     rec = records.get(sig)
+    out = {"asig": sig, "pendant": pendant}
     if rec is not None and model_geometry.record_matches(rec, base[1]):
-        return {"state": "current", "reason": "", "asig": sig, "record": rec}
+        return {"state": "current", "reason": "", "record": rec, **out}
     failed = _read(record_path(character_name, item_id, sig, ".failed.json"))
     if failed and failed.get("base_model_sha256") == base[1]:
         return {"state": "failed", "reason": REASON_FAILED.format(error=failed.get("error") or "unknown"),
-                "asig": sig, "record": None}
+                "record": None, **out}
     if rec is not None:
-        return {"state": "due", "reason": REASON_BODY, "asig": sig, "record": None}
+        return {"state": "due", "reason": REASON_BODY, "record": None, **out}
     if records:
-        return {"state": "due", "reason": REASON_SETTINGS, "asig": sig, "record": None}
-    return {"state": "due", "reason": REASON_NOT_BUILT, "asig": sig, "record": None}
+        same_chain = any((r.get("inputs") or {}).get("chain") == spec["chain"] and "pendant" not in (r.get("inputs") or {})
+                         for r in records.values())
+        reason = REASON_PENDANT if _ready_psig(pendant) and same_chain else REASON_SETTINGS
+        return {"state": "due", "reason": reason, "record": None, **out}
+    return {"state": "due", "reason": REASON_NOT_BUILT, "record": None, **out}
 
 
 def _write_atomic(path: Path, data: bytes) -> None:
@@ -173,9 +217,10 @@ def _write_atomic(path: Path, data: bytes) -> None:
     tmp.replace(path)
 
 
-def make_necklace(rigged: bytes, spec: Dict[str, Any]) -> Dict[str, Any]:
+def make_necklace(rigged: bytes, spec: Dict[str, Any], pendant: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The necklace geometry on the rigged plain body ``rigged`` (GLB bytes): ``{V, F, N, J, W, joint_names, curve,
-    landmarks, metrics}``. Pure CPU, no I/O beyond the bytes given."""
+    landmarks, metrics}`` (+ ``pendant`` — ``attach_pendant`` — when ``pendant`` (``accessory_pendant.load_mesh``)
+    is given). Pure CPU, no I/O beyond the bytes given."""
     from app.core import accessory_curve, accessory_mesh, glb_mesh
     from app.core.garment_fit import dense_weights
     started = time.monotonic()
@@ -200,8 +245,83 @@ def make_necklace(rigged: bytes, spec: Dict[str, Any]) -> Dict[str, Any]:
                                for j in np.unique(J[W > PLAUSIBLE_WEIGHT])},
                     "cpu_s": round(time.monotonic() - started, 2)})
     plausible(metrics, float(spec["chain"]["drop_cm"]) / 100.0)
-    return {"V": V, "F": F, "N": N, "J": J, "W": W, "joint_names": list(body.joint_names), "curve": curve,
-            "landmarks": detail["landmarks"], "metrics": metrics}
+    out = {"V": V, "F": F, "N": N, "J": J, "W": W, "joint_names": list(body.joint_names), "curve": curve,
+           "landmarks": detail["landmarks"], "metrics": metrics}
+    if pendant is not None:
+        try:
+            out["pendant"] = attach_pendant(body, rigged, curve, np.asarray(detail["outward"]), J, W, radius,
+                                            pendant, float(spec["pendant"]["size_mm"]))
+        except ValueError as e:
+            # The chain stays; the pendant is left off with its reason (A225).
+            out["pendant_error"] = str(e)
+    return out
+
+
+#: A225 — the pendant's gates on the body: its longest side within ``SIZE_TOLERANCE`` of ``size_mm``, at most
+#: ``PENDANT_MAX_PUSH_MM`` off its cord and nothing inside the body in any ``accessory_pendant.TEST_POSES`` pose.
+SIZE_TOLERANCE = 0.05
+#: How far the pendant may be pushed off its cord to clear the body (a pendant too long for the drop meets the
+#: throat or the chest and would float in the air).
+PENDANT_MAX_PUSH_MM = 6.0
+PENDANT_OFF_CORD = ("it would stand {mm:.0f} mm off its cord to clear the body — a longer drop or a smaller size "
+                    "lets it hang")
+PENDANT_INSIDE = "it would sink into the body in the {poses} pose"
+
+
+def anchor_index(curve: np.ndarray) -> int:
+    """The chain's lowest point (where the pendant hangs): the curve point with the smallest y."""
+    return int(np.argmin(np.asarray(curve)[:, 1]))
+
+
+def attach_pendant(body, rigged: bytes, curve: np.ndarray, outward: np.ndarray, J: np.ndarray, W: np.ndarray,
+                   radius: float, pendant: Dict[str, Any], size_mm: float) -> Dict[str, Any]:
+    """The pendant hung at the chain's lowest point (``accessory_pendant.place``), rigid with the chain's skin there
+    (the first tube vertex of that ring — the tube's weights are already folded onto the base skeleton), checked
+    through the test poses. ``{V, F, N, UV, J, W, image, mime, material, metrics}``; ``ValueError`` naming why it is
+    left off."""
+    from app.core import accessory_curve, accessory_pendant, glb_mesh
+    from app.core.garment_fit import dense_weights
+    from app.core.garment_shell import top4_weights
+    from app.core.rig_contract import norm_bone_name
+    a = anchor_index(curve)
+    Vn = accessory_pendant.normalise(pendant["V"], size_mm)
+    Pw, Fw = accessory_curve.weld(np.asarray(body.positions, np.float64), np.asarray(body.faces, np.int64))
+    # The pendant hangs in FRONT of the cord (its bail around it): its back starts one cord radius out.
+    n = np.asarray(outward[a], np.float64)
+    hang = curve[a] + radius * n / max(float(np.linalg.norm(n)), 1e-12)
+    V, how = accessory_pendant.place(Vn, hang, outward[a], Pw, Fw)
+    R = how.pop("rotation")
+    if how["push_mm"] > PENDANT_MAX_PUSH_MM:
+        raise ValueError(PENDANT_OFF_CORD.format(mm=how["push_mm"]))
+    sides = len(J) // len(curve)
+    Jp = np.repeat(J[a * sides][None], len(V), 0)
+    Wp = np.repeat(W[a * sides][None], len(V), 0)
+    # The longest side in the pendant's own frame (its box turned back): the size the user set.
+    local = (V - hang) @ R
+    measured = float((local.max(0) - local.min(0)).max()) * 1000.0
+    if abs(measured - size_mm) > SIZE_TOLERANCE * size_mm:
+        raise ValueError(f"its size came out {measured:.1f} mm instead of {size_mm:.0f} mm")
+    # The body posed with its own skin: dense weights reduced to four per vertex.
+    Jb, Wb, used = top4_weights(dense_weights(body))
+    Jb = used[Jb]
+    parents = glb_mesh.skin_joint_parents(rigged)
+    heads = {norm_bone_name(k): v for k, v in body.joint_positions.items()}
+    # The welded body and the skin of each welded vertex (``weld`` keeps the first vertex of each position).
+    from scipy.spatial import cKDTree
+    _, first = cKDTree(np.asarray(body.positions, np.float64)).query(Pw)
+    poses = accessory_pendant.pose_check(Pw, Fw, Jb[first], Wb[first], V, Jp, Wp, list(body.joint_names), parents,
+                                         heads)
+    inside = [name for name, m in poses.items() if m["inside_share"] > 0.0]
+    if inside:
+        raise ValueError(PENDANT_INSIDE.format(poses=", ".join(inside)))
+    F = np.asarray(pendant["F"], np.int64)
+    N = accessory_curve.vertex_normals(V, F)
+    weights = {str(body.joint_names[j]): round(float(Wp[0][k]), 3) for k, j in enumerate(Jp[0]) if Wp[0][k] > 0}
+    metrics = {"size_mm": round(measured, 2), "anchor": [round(float(x), 5) for x in hang], **how,
+               "triangles": int(len(F)), "joints": weights, "poses": poses}
+    return {"V": V, "F": F, "N": N, "UV": np.asarray(pendant["UV"], np.float64), "J": Jp, "W": Wp,
+            "image": pendant.get("image") or b"", "mime": pendant.get("mime") or "",
+            "material": pendant.get("material") or {}, "metrics": metrics}
 
 
 #: The plausibility gate (A216 review H2) — a chain that misses one of these fails its build instead of being shown:
@@ -281,7 +401,7 @@ def gap_metrics(V: np.ndarray, rings: int, P: np.ndarray, F: np.ndarray,
 
 
 def drop_other_builds(folder: Path, item_id: str, sig: str) -> List[str]:
-    """Delete the files of ``item_id``'s builds other than ``sig`` in ``folder`` — names matching exactly
+    r"""Delete the files of ``item_id``'s builds other than ``sig`` in ``folder`` — names matching exactly
     ``^<item_id>_<12 hex>\.`` (A216 review L1: never another item whose id starts with this one); the deleted
     names."""
     own = re.compile(rf"^{re.escape(item_id)}_([0-9a-f]{{12}})\.")
@@ -317,10 +437,11 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
     state = accessory_state(character_name, item_id, profile=profile, item=item)
     if state["state"] == "blocked":
         return state
-    from app.core import accessory_spec
+    from app.core import accessory_pendant, accessory_spec
     spec = accessory_spec.of_item(item)
     bsig, sha = _current_base(character_name, profile)
-    sig = asig(spec)
+    psig = _ready_psig(state.get("pendant"))
+    sig = asig(spec, psig)
     folder = store_dir(character_name)
     with keyed_lock("accessory_build", f"{character_name}/{item_id}"):
         folder.mkdir(parents=True, exist_ok=True)
@@ -328,7 +449,8 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
         try:
             from app.models.character import get_character_dir
             blob = (get_character_dir(character_name) / "model3d" / f"{bsig}.glb").read_bytes()
-            made = make_necklace(blob, spec)
+            mesh = accessory_pendant.load_mesh(item_id, psig) if psig else None
+            made = make_necklace(blob, spec, mesh)
         except Exception as e:  # noqa: BLE001 — recorded as the step's failure, the figure leaves it off
             logger.exception("Accessory %s of %s failed", item_id, character_name)
             _write_atomic(failed_path, json.dumps({"error": failure_text(e)[:300], "base_model_sha256": sha,
@@ -337,15 +459,32 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
             return accessory_state(character_name, item_id, profile=profile, item=item)
         import io
         buf = io.BytesIO()
-        np.savez_compressed(buf, V=made["V"].astype(np.float32), F=made["F"].astype(np.int32),
-                            N=made["N"].astype(np.float32), J=made["J"].astype(np.int32),
-                            W=made["W"].astype(np.float32), curve=made["curve"].astype(np.float32))
+        arrays = {"V": made["V"].astype(np.float32), "F": made["F"].astype(np.int32),
+                  "N": made["N"].astype(np.float32), "J": made["J"].astype(np.int32),
+                  "W": made["W"].astype(np.float32), "curve": made["curve"].astype(np.float32)}
+        hung = made.get("pendant")
+        if hung is not None:
+            arrays.update({"PV": hung["V"].astype(np.float32), "PF": hung["F"].astype(np.int32),
+                           "PN": hung["N"].astype(np.float32), "PUV": hung["UV"].astype(np.float32),
+                           "PJ": hung["J"].astype(np.int32), "PW": hung["W"].astype(np.float32),
+                           "Pimage": np.frombuffer(hung["image"], np.uint8)})
+        np.savez_compressed(buf, **arrays)
         _write_atomic(record_path(character_name, item_id, sig, ".npz"), buf.getvalue())
         record = {"version": ACCESSORY_VERSION, "item_id": item_id, "asig": sig, "kind": spec["kind"],
                   "inputs": geometry_inputs(spec), "bsig": bsig, "base_model_sha256": sha,
                   **model_geometry.stamp_on(character_name, bsig, sha),
                   "joint_names": made["joint_names"], "landmarks": made["landmarks"], "metrics": made["metrics"],
                   "hub_jobs": 0, "built_at": utc_now_iso()}
+        if hung is not None:
+            pend_rec = accessory_pendant.pendant_state(item_id).get("record") or {}
+            record["pendant"] = {"psig": psig, "size_mm": float(spec["pendant"]["size_mm"]), "mime": hung["mime"],
+                                 "material": hung["material"], "metrics": hung["metrics"],
+                                 # route_meta of the job that made the mesh (the sidecar of this build)
+                                 "backend": pend_rec.get("backend", ""), "routing": pend_rec.get("routing") or {},
+                                 **({"fallback_from": pend_rec["fallback_from"]}
+                                    if pend_rec.get("fallback_from") else {})}
+        elif made.get("pendant_error"):
+            record["pendant_error"] = REASON_PENDANT_LEFT_OFF.format(error=made["pendant_error"])
         _write_atomic(record_path(character_name, item_id, sig), json.dumps(record, indent=1).encode("utf-8"))
         failed_path.unlink(missing_ok=True)
         # One build per item is kept: the other settings' builds go (a switch back rebuilds on the CPU).
@@ -364,10 +503,55 @@ def garment_mesh(character_name: str, item_id: str, record: Dict[str, Any],
         from app.models.inventory import get_item
         item = get_item(item_id) or {}
     spec = accessory_spec.of_item(item) or accessory_spec.normalize({"kind": record.get("kind") or "necklace"})
-    color, rough = accessory_spec.metal_material(spec)
+    color, rough, metal = accessory_spec.metal_material(spec)
     with np.load(record_path(character_name, item_id, str(record["asig"]), ".npz")) as z:
         return accessory_mesh.garment_mesh(z["V"], z["F"], z["N"], z["J"], z["W"], list(record["joint_names"]),
-                                           color=color, roughness=rough)
+                                           color=color, roughness=rough, metalness=metal)
+
+
+def pendant_mesh(character_name: str, item_id: str, record: Dict[str, Any]):
+    """A225: the stored pendant of ``record`` as a ``glb_mesh.GarmentMesh`` (its own texture and material from the
+    mesher), None when the build carries none."""
+    if not isinstance(record.get("pendant"), dict):
+        return None
+    from app.core.glb_mesh import GarmentMesh
+    meta = record["pendant"]
+    with np.load(record_path(character_name, item_id, str(record["asig"]), ".npz")) as z:
+        if "PV" not in z.files:
+            return None
+        image = z["Pimage"].tobytes()
+        material = dict(meta.get("material") or {})
+        material.setdefault("name", "pendant")
+        if not image:
+            material.setdefault("pbrMetallicRoughness", {"baseColorFactor": [0.8, 0.78, 0.7, 1.0],
+                                                         "metallicFactor": 0.0, "roughnessFactor": 0.6})
+        return GarmentMesh(positions=z["PV"].astype(np.float64), normals=z["PN"].astype(np.float64),
+                           uvs=z["PUV"].astype(np.float64), indices=z["PF"].astype(np.int64),
+                           joints=z["PJ"].astype(np.int64), weights=z["PW"].astype(np.float64),
+                           joint_names=list(record["joint_names"]), image=image,
+                           mime=str(meta.get("mime") or ("image/png" if image else "")), material=material)
+
+
+#: A225 LOD: the distance tier carries the pendant only up to this many triangles (a 2 cm pendant is a few pixels
+#: there; a heavier delivery is left off at distance, never decimated through Blender for it).
+PENDANT_LOW_MAX_TRIS = 3000
+
+
+def graft_accessory(blob: bytes, character_name: str, item_id: str, record: Dict[str, Any], fsig: str,
+                    item: Optional[Dict[str, Any]] = None, kind: str = "accessory", low: bool = False) -> bytes:
+    """``blob`` + the accessory's chain node and, when the build carries one, its pendant node (A225; on the distance
+    tier ``low`` only up to ``PENDANT_LOW_MAX_TRIS``)."""
+    from app.core import accessory_mesh, glb_mesh
+    extras = {"kind": kind, "item_id": item_id, "fsig": fsig}
+    blob = glb_mesh.graft(blob, garment_mesh(character_name, item_id, record, item),
+                          name=accessory_mesh.node_name(item_id), extras=extras)
+    pend = pendant_mesh(character_name, item_id, record)
+    if pend is not None and low and len(pend.indices) > PENDANT_LOW_MAX_TRIS:
+        pend = None
+    if pend is not None:
+        blob = glb_mesh.graft(blob, pend, name=accessory_mesh.node_name(item_id, "p"),
+                              extras={**extras, "part": "pendant"})
+    return blob
 
 
 def npz_path(character_name: str, item_id: str, record: Dict[str, Any]) -> Path:
@@ -377,7 +561,6 @@ def npz_path(character_name: str, item_id: str, record: Dict[str, Any]) -> Path:
 def preview_glb(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None) -> Optional[bytes]:
     """The plain rigged body with the current build grafted (the Wardrobe's 3D view); the plain body alone while the
     piece is not built (the live curve is drawn over it); None without a plain body."""
-    from app.core import accessory_mesh, glb_mesh
     from app.models.character import get_character_dir
     profile = _profile_of(character_name, profile)
     base = _current_base(character_name, profile)
@@ -387,9 +570,7 @@ def preview_glb(character_name: str, item_id: str, *, profile: Optional[Dict[str
     state = accessory_state(character_name, item_id, profile=profile)
     if state["state"] != "current":
         return blob
-    mesh = garment_mesh(character_name, item_id, state["record"])
-    return glb_mesh.graft(blob, mesh, name=accessory_mesh.node_name(item_id),
-                          extras={"kind": "accessory", "item_id": item_id, "fsig": state["asig"]})
+    return graft_accessory(blob, character_name, item_id, state["record"], state["asig"])
 
 
 def preview_curve(character_name: str, item_id: str, *, drop_cm: float, thickness_mm: float,
@@ -407,5 +588,9 @@ def preview_curve(character_name: str, item_id: str, *, drop_cm: float, thicknes
     detail = accessory_curve.neck_curve_detail(body.positions, body.faces, body.joint_positions,
                                                drop_m=float(drop_cm) / 100.0, offset_m=GAP_M + radius,
                                                n=48, settle=False)
-    return {"points": np.round(np.asarray(detail["curve"]), 5).tolist(), "landmarks": detail["landmarks"],
-            "radius_m": radius}
+    curve = np.asarray(detail["curve"])
+    a = anchor_index(curve)
+    return {"points": np.round(curve, 5).tolist(), "landmarks": detail["landmarks"], "radius_m": radius,
+            # A225: where a pendant hangs, and the skin's outward normal there (the dialog's placeholder box)
+            "anchor": np.round(curve[a], 5).tolist(),
+            "anchor_outward": np.round(np.asarray(detail["outward"])[a], 4).tolist()}

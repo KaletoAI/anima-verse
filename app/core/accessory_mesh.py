@@ -108,21 +108,21 @@ def fold_to_base(J: np.ndarray, W: np.ndarray, joint_names: List[str], parents: 
 
 
 def node_name(item_id: str, side: str = "c") -> str:
-    """The grafted node of an accessory: ``garment_accessory_<item>_<side>`` (``c`` = centred; ``l`` / ``r``
-    for paired pieces later). The ``garment_`` prefix is what every reader keys a garment node by
+    """The grafted node of an accessory: ``garment_accessory_<item>_<side>`` (``c`` = centred; ``p`` = the
+    necklace's pendant, A225; ``l`` / ``r`` for paired pieces later). The ``garment_`` prefix is what every reader keys a garment node by
     (``glb_mesh._is_garment_node``, scene-render ``isGarmentNode``) — never a body part."""
     return f"garment_accessory_{item_id}_{side}"
 
 
 def garment_mesh(V: np.ndarray, F: np.ndarray, N: np.ndarray, joints: np.ndarray, weights: np.ndarray,
-                 joint_names: List[str], *, color: str, roughness: float):
-    """The accessory as a ``glb_mesh.GarmentMesh``: metalness 1.0, the base colour ``color`` (sRGB hex) as a factor,
-    no texture, single-sided."""
+                 joint_names: List[str], *, color: str, roughness: float, metalness: float = 1.0):
+    """The accessory as a ``glb_mesh.GarmentMesh``: ``metalness`` (1.0 a metal chain, 0.0 a cord — A225), the base
+    colour ``color`` (sRGB hex) as a factor, no texture, single-sided."""
     from app.core.accessory_spec import srgb_to_linear
     from app.core.glb_mesh import GarmentMesh
     material: Dict[str, Any] = {"name": "accessory",
                                 "pbrMetallicRoughness": {"baseColorFactor": [*srgb_to_linear(color), 1.0],
-                                                         "metallicFactor": 1.0, "roughnessFactor": float(roughness)}}
+                                                         "metallicFactor": float(metalness), "roughnessFactor": float(roughness)}}
     return GarmentMesh(positions=np.asarray(V, np.float64), normals=np.asarray(N, np.float64),
                        uvs=np.zeros((len(V), 2)), indices=np.asarray(F, np.int64),
                        joints=np.asarray(joints, np.int64), weights=np.asarray(weights, np.float64),

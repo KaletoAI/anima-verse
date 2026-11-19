@@ -813,6 +813,11 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
             state = accessory_build.accessory_state(character_name, item_id, profile=profile)
             if state["state"] == "current":
                 accessory.append(item_id)
+                # A225: a pendant switched on but not on this build — the chain is shown alone, the row says why.
+                pend = state.get("pendant")
+                if pend and not isinstance((state.get("record") or {}).get("pendant"), dict):
+                    notes[item_id] = ((state.get("record") or {}).get("pendant_error") or pend["reason"]
+                                      or accessory_build.REASON_PENDANT)
             else:
                 accessory_painted.append(item_id)
                 notes[item_id] = f"{state['reason']} — shown painted"
