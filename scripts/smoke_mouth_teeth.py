@@ -36,12 +36,11 @@ No server, no world DB, no Blender (``mouth_teeth.py`` imports bpy: its defaults
     becomes due); {mouth_teeth {enabled True}} (= the default) -> no params.teeth, the same fingerprint.
 [7] OP_BUILDS["mouth_part"] is at least 5 now (6 since the default tilt of -20 degrees, 2026-11-19; 7 since A208); at the commit
     before A206 (7458a196e) it was 4 and the Blender op's jaw opened 26 degrees (DEFAULTS jaw.open_deg 26.), now 30.
-[8] The opening pass never BENDS the teeth, and since 2026-11-19 it moves them as rigid rows (owner finding: the part
-    passed through both rows): `bindChannelOpening` binds a `mouth_teeth` mesh with a `rigid` entry (`isRigidTeeth`
-    decides it, `rigidRows` groups it by the dominant joint, `rigidRowPush` moves each row) instead of skipping it.
-    At 8fa2d763f the traverse skipped it (`!isRigidTeeth(` in the filter line, no `rigidRowPush`); at 7458a196e the
+[8] Since A211 the opening pass moves the teeth with the same radial map as the skin, vertex by vertex: no rigid
+    rows any more (`rigidRowPush`, `isRigidTeeth` are gone), so they neither leave the face nor stay inside the part.
+    Before, at aca0d0d27, they moved as rigid rows; at 8fa2d763f the traverse skipped it (`!isRigidTeeth(` in the filter line, no `rigidRowPush`); at 7458a196e the
     filter had no teeth test at all (every skinned body mesh was bent like the skin). The numbers of the pass itself:
-    scripts/smoke_mouth_open.mjs [5]-[6].
+    scripts/smoke_mouth_open.mjs [5]-[6], scripts/smoke_mouth_teeth_cap.mjs.
 [10] Every re-export of a rigged body keeps COLOR_0 on the teeth only (_common.keep_mouth_teeth_colours, called after
     the export in mouth_part, extension_bones, hand_restore, limb_weights and posture_match). Synthetic GLB: mesh 0 =
     primitives skin (POSITION acc 0, COLOR_0 acc 1), mouth_teeth (POSITION 2, COLOR_0 3), mouth_tongue (POSITION 4,
@@ -161,7 +160,7 @@ check(f"{PRE_FIX}: build 4", '"mouth_part": 4}' in show(f"{PRE_FIX}:app/core/ext
 check(f"{PRE_FIX}: jaw 26 degrees, now 30", "'open_deg': 26.," in show(f"{PRE_FIX}:app/blender/scripts/mouth_part.py")
       and "'open_deg': 30.," in (ROOT / "app/blender/scripts/mouth_part.py").read_text())
 
-print("[8] the opening pass moves the teeth as rigid rows")
+print("[8] the opening pass moves the teeth like the skin")
 
 
 def bind_filter(text):
@@ -172,8 +171,10 @@ def bind_filter(text):
 
 now = (ROOT / "packages/scene-render/src/channelOpening.ts").read_text()
 check("now: the traverse no longer skips the teeth", "isRigidTeeth" not in bind_filter(now), bind_filter(now))
-check("now: a teeth mesh is a rigid entry moved by rigidRowPush",
-      "rigid: teeth ?" in now and "rigidRowPush(pts, dir" in now and "const teeth = isRigidTeeth(" in now)
+check("now: no rigid rows, the teeth are ordinary candidates",
+      "rigidRowPush" not in now and "isRigidTeeth" not in now and "e.rigid" not in now)
+rigid = show("aca0d0d27:packages/scene-render/src/channelOpening.ts")
+check("aca0d0d27: the teeth moved as rigid rows", "rigidRowPush(pts, dir" in rigid)
 skipped = show("8fa2d763f:packages/scene-render/src/channelOpening.ts")
 check("8fa2d763f: the traverse skipped the teeth (the part passed through them)",
       "!isRigidTeeth(" in bind_filter(skipped) and "rigidRowPush" not in skipped, bind_filter(skipped))

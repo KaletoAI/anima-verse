@@ -38,8 +38,7 @@
  * [5] THE TEETH (Ruling A206). mouthPassHeight: {open_height 0.04, teeth_gap 0.025} -> 0.025 (the teeth decide);
  *     {open_height 0.04} -> 0.04; {teeth_gap 0, open_height 0.04} -> 0.04; {} / null -> 0. FigureRuntime with the
  *     record of [3] plus teeth_gap 0.025: the occupant of [3] (radius 0.02 x w 0.5 = 0.01) -> (0.02 + 0.004) / 0.025
- *     = 0.96 (0.6 without teeth). isRigidTeeth: material 'mouth_teeth' and 'mouth_teeth.001' -> true, 'mouth_tongue',
- *     'Material_0', [teeth, skin] and none -> false. bindChannelOpening on a figure whose ONLY mesh lies on the
+ *     = 0.96 (0.6 without teeth). bindChannelOpening on a figure whose ONLY mesh lies on the
  *     channel axis inside the channel: 'mouth_tongue' -> bound with all 4 vertices as candidates (the tongue is pushed).
  * [6] THE TEETH MOVE WITH THE OPENING (owner finding 2026-11-19; before it, at 8fa2d763f, a 'mouth_teeth' mesh was
  *     never bound, so the part passed through both rows). Fixture: channel O origin, u +z, D 0.08, R 0.02, F 0.03;
@@ -49,22 +48,15 @@
  *       1.5 · max(0.012, 0.02)) = 0.03, b = 0.044, f(0.01) = 0.01 + 0.014 · (1 − 0.01/0.044)² = 0.01 + 0.014 ·
  *       0.7727273² = 0.0183595 → (0.01, 0, 0) moves to (0.0183595, 0, 0).
  *     - two tooth rows (material mouth_teeth): upper x ∈ {−0.01, 0, 0.01}, y +0.004, z 0.01, weighted 1.0 to Head;
- *       lower the same at y −0.004, weighted 1.0 to Jaw. rigidRows → 2 rows. Centroids (0, ±0.004, 0.01), mean
- *       (0, 0, 0.01) → dir (0, ±1, 0) (already perpendicular to the axis +z). For a vertex of the upper row moved by t
- *       the axis distance is sqrt(x² + (0.004 + t)²) ≥ 0.014: x = 0 needs t = 0.014 − 0.004 = 0.010, x = ±0.01 needs
- *       sqrt(0.014² − 0.01²) − 0.004 = 0.0057980 → the push wants the larger, 0.010.
- *       A211 caps it by the skin's own displacement along dir (`rigidRowCap`, b = T + B = 0.044): x = 0 at d 0.004
- *       moves 0.014 · (1 − 0.004/0.044)² = 0.0115702, all along +y; x = ±0.01 at d = sqrt(0.000116) = 0.0107703
- *       moves 0.014 · (1 − 0.0107703/0.044)² = 0.014 · 0.7552198² = 0.0079850, of it along +y 0.0079850 · 0.004 /
- *       0.0107703 = 0.0029656 → t = min(0.010, 0.0029656) = 0.0029656: every upper vertex to y = 0.0069656 (x, z
- *       kept), every lower one to y = −0.0069656. Normals unchanged. restore() → rest (float32).
- *     - the jaw opened (Jaw moved by (0, −0.005, 0) in the world): the lower row is at y −0.009 before the push,
- *       centroids (0, 0.004, 0.01) / (0, −0.009, 0.01), mean y −0.0025 → dirs ±y; the lower row needs 0.014 − 0.009 =
- *       0.005; its cap: x = ±0.01 at d = sqrt(0.000181) = 0.0134536 moves 0.014 · (1 − 0.0134536/0.044)² = 0.0067475,
- *       along −y 0.0067475 · 0.009 / 0.0134536 = 0.0045138 (x = 0: 0.014 · (1 − 0.009/0.044)² = 0.0088585) → t =
- *       0.0045138 → world y −0.0135138, its bind y −0.0085138 (it keeps following the jaw); the upper row as before.
- *     - rigidRowPush alone: the upper row's points and dir (0,1,0) → 0.010; with the segment's r 0.004 (T 0.006) the
- *       x = 0 vertex needs 0.002 and x = ±0.01 none (0.0108 ≥ 0.006) → 0.002.
+ *       lower the same at y −0.004, weighted 1.0 to Jaw. Since A211 they follow the same radial map as the lip
+ *       (b = 0.044): x = 0 at d 0.004 → f = 0.004 + 0.014 · (40/44)² = 0.0155702 → (0, ±0.0155702, 0.01); x = ±0.01
+ *       at d = sqrt(0.000116) = 0.0107703 → f = 0.0107703 + 0.014 · (1 − 0.0107703/0.044)² = 0.0187553, f/d =
+ *       1.7413908 → (±0.0174139, ±0.0069656, 0.01). Every tooth vertex ≥ T = 0.014 from the axis (none inside the
+ *       part). restore() → rest (float32).
+ *     - the jaw opened (Jaw moved by (0, −0.005, 0) in the world): the lower row is at world y −0.009: x = 0 at d 0.009
+ *       → f = 0.009 + 0.014 · (35/44)² = 0.0178585 → world y −0.0178585, bind y −0.0128585 (it keeps following the
+ *       jaw); x = ±0.01 at d = sqrt(0.000181) = 0.0134536 → f = 0.0134536 + 0.014 · (1 − 0.0134536/0.044)² =
+ *       0.0202011, f/d = 1.5015378 → world (±0.0150154, −0.0135138), bind y −0.0085138; the upper row as before.
  */
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -264,10 +256,6 @@ check('[5] neither', SR.mouthPassHeight({}) === 0 && SR.mouthPassHeight(null) ==
   rt5.applyChannelOpenings([{ channel: 'mouth', w: 0.5, segments: [seg(0.02), seg(0.016)] }], { left: 0 })
   check('[5] contact opens by the teeth gap: 0.96', near(g.mesh.morphTargetInfluences[1], 0.96, 1e-9), g.mesh.morphTargetInfluences[1])
 }
-const mat = (name) => ({ name })
-check('[5] isRigidTeeth', SR.isRigidTeeth({ material: mat('mouth_teeth') }) && SR.isRigidTeeth({ material: mat('mouth_teeth.001') })
-  && !SR.isRigidTeeth({ material: mat('mouth_tongue') }) && !SR.isRigidTeeth({ material: mat('Material_0') })
-  && !SR.isRigidTeeth({ material: [mat('mouth_teeth'), mat('Material_0')] }) && !SR.isRigidTeeth({ material: null }))
 const onAxisFigure = (material) => {
   const geo = new THREE.BufferGeometry()
   geo.setAttribute('position', new THREE.Float32BufferAttribute([0.02, 0, 0, 0.04, 0.001, 0, 0.06, 0, 0.001, 0.08, 0, 0], 3))
@@ -320,19 +308,17 @@ check('[5] tongue: bound, 4 candidates', tongue !== null && tongue.candidates ==
   }
   const xyz = (mesh, i) => [mesh.geometry.attributes.position.getX(i), mesh.geometry.attributes.position.getY(i),
     mesh.geometry.attributes.position.getZ(i)]
-  const rows = SR.rigidRows([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
-    new Array(24).fill(0).map((_, i) => (i % 4 === 0 ? 1 : 0)), 6)
-  check('[6] rigidRows: 2 rows by the dominant joint', rows.rows === 2 && [...rows.rowOf].join() === '0,0,0,1,1,1', JSON.stringify(rows))
   let F = teethFigure()
   const tb = SR.bindChannelOpening(THREE, F.root, ch6)
   check('[6] the teeth are bound (6 + the 3 lip vertices)', tb !== null && tb.candidates === 9, tb && tb.candidates)
   tb.apply(ch6, seg6)
   check('[6] lip (0.01, 0, 0) → (0.0183595, 0, 0)', vnear(xyz(F.lips, 0), [0.0183595, 0, 0], 1e-6), fmt(xyz(F.lips, 0)))
   const up = [0, 1, 2].map((i) => xyz(F.teeth, i)), lo = [3, 4, 5].map((i) => xyz(F.teeth, i))
-  check('[6] upper row to y 0.0069656 (capped by the skin), x and z kept', up.every((p, k) => vnear(p, [[-0.01, 0, 0.01][k], 0.0069656, 0.01], 1e-6)), JSON.stringify(up))
-  check('[6] lower row to y −0.0069656', lo.every((p, k) => vnear(p, [[-0.01, 0, 0.01][k], -0.0069656, 0.01], 1e-6)), JSON.stringify(lo))
-  const n0 = F.teeth.geometry.attributes.normal
-  check('[6] tooth normals unchanged', [0, 1, 2, 3, 4, 5].every((i) => n0.getX(i) === 0 && n0.getY(i) === 0 && n0.getZ(i) === 1))
+  const X = [-0.0174139, 0, 0.0174139], Y = [0.0069656, 0.0155702, 0.0069656]
+  check('[6] upper row on the radial map', up.every((p, k) => vnear(p, [X[k], Y[k], 0.01], 1e-6)), JSON.stringify(up))
+  check('[6] lower row mirrored', lo.every((p, k) => vnear(p, [X[k], -Y[k], 0.01], 1e-6)), JSON.stringify(lo))
+  const inside = [...up, ...lo].filter((p) => Math.hypot(p[0], p[1]) < 0.014 - 1e-6)
+  check('[6] no tooth vertex inside T = 0.014', inside.length === 0, JSON.stringify(inside))
   tb.restore()
   check('[6] restore: the teeth at rest', vnear(xyz(F.teeth, 1), [0, 0.004, 0.01], 1e-8) && vnear(xyz(F.teeth, 4), [0, -0.004, 0.01], 1e-8)
     && vnear(xyz(F.lips, 0), [0.01, 0, 0], 1e-8), fmt(xyz(F.teeth, 1)))
@@ -341,17 +327,11 @@ check('[5] tongue: bound, 4 candidates', tongue !== null && tongue.candidates ==
   F.jaw.position.set(0, -0.005, 0); F.root.updateMatrixWorld(true)
   const tj = SR.bindChannelOpening(THREE, F.root, ch6)
   tj.apply(ch6, seg6)
-  const lowBind = xyz(F.teeth, 4), upBind = xyz(F.teeth, 1)
-  check('[6] jaw opened: the lower row\'s bind y −0.0085138 (world −0.0135138), the upper 0.0069656', near(lowBind[1], -0.0085138, 1e-6)
-    && near(lowBind[1] - 0.005, -0.0135138, 1e-6) && near(upBind[1], 0.0069656, 1e-6), fmt(lowBind) + fmt(upBind))
+  const lowBind = xyz(F.teeth, 4), lowSide = xyz(F.teeth, 5), upBind = xyz(F.teeth, 1)
+  check('[6] jaw opened: the lower row\'s bind y −0.0128585 (world −0.0178585), the side (0.0150154, −0.0085138), the upper 0.0155702',
+    near(lowBind[1], -0.0128585, 1e-6) && vnear(lowSide, [0.0150154, -0.0085138, 0.01], 1e-6) && near(upBind[1], 0.0155702, 1e-6),
+    fmt(lowBind) + fmt(lowSide) + fmt(upBind))
   tj.dispose()
-  const upperPts = [-0.01, 0.004, 0.01, 0, 0.004, 0.01, 0.01, 0.004, 0.01]
-  check('[6] rigidRowPush 0.010', near(SR.rigidRowPush(upperPts, [0, 1, 0], ch6, seg6), 0.010, 1e-9),
-    SR.rigidRowPush(upperPts, [0, 1, 0], ch6, seg6))
-  check('[6] rigidRowPush with r 0.004: 0.002', near(SR.rigidRowPush(upperPts, [0, 1, 0], ch6, [{ ...seg6[0], r: 0.004 }]), 0.002, 1e-9),
-    SR.rigidRowPush(upperPts, [0, 1, 0], ch6, [{ ...seg6[0], r: 0.004 }]))
-  check('[6] rigidRowDirection: rows part ±y', vnear(SR.rigidRowDirection([0, 0.004, 0.01], [0, 0, 0.01], seg6), [0, 1, 0], 1e-12)
-    && vnear(SR.rigidRowDirection([0, -0.004, 0.01], [0, 0, 0.01], seg6), [0, -1, 0], 1e-12))
 }
 
 console.log(failed ? `FAILED (${failed})` : 'ALL OK')

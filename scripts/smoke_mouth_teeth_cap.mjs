@@ -1,26 +1,35 @@
 #!/usr/bin/env node
 /**
- * Ruling A211: under a contact opening the rigid tooth rows never move farther than the skin around them, so no tooth
- * ends up outside the face (owner finding 2026-11-19: white tooth pieces above the upper lip, under the nose, while a
- * thick part sat in the open mouth). Numbers by hand (§ B5a).
+ * Ruling A211: under a contact opening the teeth follow the skin's radial map vertex by vertex, so no tooth ends up
+ * outside the face (owner finding 2026-11-19: tooth pieces above the upper lip while a thick part sat in the open
+ * mouth) and no tooth vertex stays inside the part — straight, tilted or beside the axis. Numbers by hand (§ B5a).
  *
  * Usage: node scripts/smoke_mouth_teeth_cap.mjs   (no server, no world; bundles scene-render with esbuild)
  *
- * FIXTURE: channel O origin, u +z, D 0.08, R 0.02, F 0.03; occupant one segment (0, 0, −0.05) → (0, 0, 0.10), r 0.012
- * → T = r + 2 mm = 0.014, B = max(0.015, 1.5 · max(0.012, 0.02)) = 0.03, b = T + B = 0.044. Bones Head, Jaw at the origin.
- * ONE tooth row on Head (material mouth_teeth): an incisor tip (0, 0.004, 0.01) and its gum edge (0, 0.024, 0.01).
- * The skin above it (Material_0, Head): (0, 0.030, 0.01).
- * [1] rigidRowPush (dir +y, the row's centroid (0, 0.014, 0.01) radially from the axis): the tip needs 0.014 − 0.004
- *     = 0.010; the gum already keeps 0.024 ≥ 0.014 → 0.010.
- * [2] rigidRowCap: the radial map moves a point at d by 0.014 · (1 − d/0.044)², here all along +y:
- *     tip d 0.004 → 0.014 · (40/44)² = 0.0115702; gum d 0.024 → 0.014 · (20/44)² = 0.0028926 → cap 0.0028926.
- *     A point past D + falloff (s 0.2: axial weight 0) is not moved by the skin → cap 0. A point the map moves
- *     AGAINST dir ((0, −0.004, 0.01) with dir +y) → cap 0.
- * [3] the binding: the row moves min(0.010, 0.0028926) = 0.0028926 → tip y 0.0068926, gum y 0.0268926; the skin
- *     vertex moves 0.014 · (1 − 0.030/0.044)² = 0.0014174 → y 0.0314174. The gum stays BELOW the skin over it
- *     (0.0268926 < 0.0314174).
- * [4] pre-fix proof at 2a23beb00 (before A211): the row moved the full 0.010 → gum y 0.034, ABOVE the skin's
- *     0.0314174 — the tooth outside the face.
+ * FIXTURE: channel O origin, u +z, D 0.08, R 0.02, F 0.03; occupant r 0.012 → T = r + 2 mm = 0.014,
+ * B = max(0.015, 1.5 · max(0.012, 0.02)) = 0.03, b = T + B = 0.044; f(d) = d + 0.014 · (1 − d/0.044)² for d < b.
+ * Bones Head, Jaw at the origin; every vertex weighted 1.0 to Head; all at s = 0.01 (axial weight 1).
+ * Teeth (material mouth_teeth): tip (0, 0.004, 0.01), gum (0, 0.024, 0.01), across the axis (0, −0.002, 0.01).
+ * Skin (Material_0): (0, 0.030, 0.01).
+ * [1] STRAIGHT, segment (0, 0, −0.05) → (0, 0, 0.10): radially along ±y —
+ *     tip d 0.004 → f = 0.004 + 0.014 · (40/44)² = 0.0155702; gum d 0.024 → 0.024 + 0.014 · (20/44)² = 0.0268926;
+ *     across d 0.002 → 0.002 + 0.014 · (42/44)² = 0.0147562 → y −0.0147562; skin d 0.030 → 0.030 + 0.014 ·
+ *     (14/44)² = 0.0314174. Every tooth vertex ≥ T = 0.014 from the axis (none inside the part); the gum
+ *     0.0268926 < the skin 0.0314174 (behind the skin).
+ * [2] TILTED 30°, segment through the origin along w = (0, −sin 30°, cos 30°) = (0, −0.5, 0.8660254), ± 0.1 w:
+ *     tip: Q = (P · w) w, P · w = −0.002 + 0.0086603 = 0.0066603 → Q (0, −0.0033301, 0.0057679), P − Q
+ *     (0, 0.0073301, 0.0042321), d = 0.0084641 → f = 0.0084641 + 0.014 · (1 − 0.0084641/0.044)² = 0.0084641 +
+ *     0.014 · 0.8076341² = 0.0175959 → tip Q + (P − Q) · f/d (f/d = 2.0788855) = (0, 0.0119081, 0.0145659), at
+ *     0.0175959 ≥ 0.014 from the axis.
+ * [3] BESIDE THE AXIS by 15 mm, segment (0.015, 0, −0.05) → (0.015, 0, 0.10): tip P − Q = (−0.015, 0.004, 0),
+ *     d = 0.0155242 ≥ T already; f = 0.0155242 + 0.014 · (1 − 0.0155242/0.044)² = 0.0155242 + 0.014 · 0.6471773² =
+ *     0.0213880, f/d = 1.3777199 → tip (0.015 − 0.0206658, 0.0055109, 0.01) = (−0.0056658, 0.0055109, 0.01).
+ * [4] pre-fix proofs:
+ *     - at 2a23beb00 (one rigid translation per row, uncapped) the straight case: the row's dir is +y (its centroid
+ *       (0, 0.0086667, 0.01) radially from the axis); the tip needs t 0.010, the across vertex (0, −0.002 + t) needs
+ *       t 0.016 → t = 0.016: gum y 0.040, ABOVE the skin's 0.0314174 — outside the face;
+ *     - at 1afafe501 (that translation capped by the skin) the across vertex moves against dir → cap 0: the tip stays
+ *       at y 0.004, 0.004 < 0.014 from the axis — inside the part.
  */
 import { execFileSync } from 'node:child_process'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -28,7 +37,6 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..')
-const PRE_FIX = '2a23beb00'
 
 async function load(entry, tag) {
   const dir = await mkdtemp(join(ROOT, `scripts/.smoke-teeth-cap-${tag}-`))
@@ -55,11 +63,15 @@ const check = (label, ok, got = '') => {
   if (!ok) failed++
 }
 const near = (a, b, eps) => Math.abs(a - b) <= eps
+const vnear = (a, b, eps = 1e-6) => a.every((x, i) => near(x, b[i], eps))
+const fmt = (v) => `[${v.map((x) => x.toFixed(7)).join(', ')}]`
 
 const ch = { id: 'mouth', o: [0, 0, 0], u: [0, 0, 1], depth: 0.08, r: 0.02, coneDeg: 35, funnel: 0.03, accepts: [],
   minLength: 0, compressMin: 0.6, kinds: null, suppress: new Set() }
-const seg = [{ a: [0, 0, -0.05], b: [0, 0, 0.10], r: 0.012 }]
-const row = [0, 0.004, 0.01, 0, 0.024, 0.01]
+const straight = [{ a: [0, 0, -0.05], b: [0, 0, 0.10], r: 0.012 }]
+const w = [0, -0.5, 0.8660254]
+const tilted = [{ a: w.map((x) => -0.1 * x), b: w.map((x) => 0.1 * x), r: 0.012 }]
+const beside = [{ a: [0.015, 0, -0.05], b: [0.015, 0, 0.10], r: 0.012 }]
 
 const meshOf = (positions, material) => {
   const n = positions.length / 3
@@ -71,57 +83,66 @@ const meshOf = (positions, material) => {
   const mat = new THREE.MeshBasicMaterial(); mat.name = material
   return new THREE.SkinnedMesh(geo, mat)
 }
-const figure = () => {
+const run = (lib, segs) => {
   const root = new THREE.Group()
   const head = new THREE.Bone(); head.name = 'mixamorig:Head'
   const jaw = new THREE.Bone(); jaw.name = 'mixamorig:Jaw'
   root.add(head, jaw)
   const skin = meshOf([0, 0.030, 0.01], 'Material_0')
-  const teeth = meshOf(row, 'mouth_teeth')
+  const teeth = meshOf([0, 0.004, 0.01, 0, 0.024, 0.01, 0, -0.002, 0.01], 'mouth_teeth')
   root.add(skin, teeth)
   root.updateMatrixWorld(true)
   const skeleton = new THREE.Skeleton([head, jaw])
   skin.bind(skeleton); teeth.bind(skeleton)
-  return { root, skin, teeth }
-}
-const y = (mesh, i) => mesh.geometry.attributes.position.getY(i)
-const run = (lib) => {
-  const F = figure()
-  const b = lib.bindChannelOpening(THREE, F.root, ch)
-  b.apply(ch, seg)
-  const out = { tip: y(F.teeth, 0), gum: y(F.teeth, 1), skin: y(F.skin, 0) }
+  const b = lib.bindChannelOpening(THREE, root, ch)
+  b.apply(ch, segs)
+  const at = (m, i) => [0, 1, 2].map((c) => m.geometry.attributes.position.array[3 * i + c])
+  const out = { tip: at(teeth, 0), gum: at(teeth, 1), across: at(teeth, 2), skin: at(skin, 0) }
   b.dispose()
   return out
 }
+const axisDist = (p, seg) => {
+  const ab = seg.b.map((x, i) => x - seg.a[i]), l2 = ab.reduce((s, x) => s + x * x, 0)
+  const t = Math.max(0, Math.min(1, p.reduce((s, x, i) => s + (x - seg.a[i]) * ab[i], 0) / l2))
+  return Math.hypot(...p.map((x, i) => x - seg.a[i] - ab[i] * t))
+}
 
 // [1]
-check('[1] rigidRowPush 0.010', near(SR.rigidRowPush(row, [0, 1, 0], ch, seg), 0.010, 1e-9), SR.rigidRowPush(row, [0, 1, 0], ch, seg))
+const s1 = run(SR, straight)
+check('[1] tip y 0.0155702', vnear(s1.tip, [0, 0.0155702, 0.01]), fmt(s1.tip))
+check('[1] gum y 0.0268926', vnear(s1.gum, [0, 0.0268926, 0.01]), fmt(s1.gum))
+check('[1] across the axis y −0.0147562', vnear(s1.across, [0, -0.0147562, 0.01]), fmt(s1.across))
+check('[1] skin y 0.0314174', vnear(s1.skin, [0, 0.0314174, 0.01]), fmt(s1.skin))
+check('[1] no tooth vertex inside T 0.014; the gum behind the skin',
+  [s1.tip, s1.gum, s1.across].every((p) => axisDist(p, straight[0]) >= 0.014 - 1e-6) && s1.gum[1] < s1.skin[1])
 // [2]
-check('[2] rigidRowCap 0.0028926 (the gum bounds it)', near(SR.rigidRowCap(row, [0, 1, 0], ch, seg), 0.0028926, 1e-7),
-  SR.rigidRowCap(row, [0, 1, 0], ch, seg))
-check('[2] the tip alone: 0.0115702', near(SR.rigidRowCap([0, 0.004, 0.01], [0, 1, 0], ch, seg), 0.0115702, 1e-7),
-  SR.rigidRowCap([0, 0.004, 0.01], [0, 1, 0], ch, seg))
-check('[2] a point the skin does not move (s 0.2) → 0', SR.rigidRowCap([...row, 0, 0.004, 0.2], [0, 1, 0], ch, seg) === 0)
-check('[2] a point moved against dir → 0', SR.rigidRowCap([...row, 0, -0.004, 0.01], [0, 1, 0], ch, seg) === 0)
+const s2 = run(SR, tilted)
+check('[2] tilted 30°: tip (0, 0.0119081, 0.0145659)', vnear(s2.tip, [0, 0.0119081, 0.0145659]), fmt(s2.tip))
+check('[2] tilted: tip 0.0175959 from the axis, every tooth vertex ≥ 0.014',
+  near(axisDist(s2.tip, tilted[0]), 0.0175959, 1e-6) && [s2.tip, s2.gum, s2.across].every((p) => axisDist(p, tilted[0]) >= 0.014 - 1e-6),
+  axisDist(s2.tip, tilted[0]))
 // [3]
-const now = run(SR)
-check('[3] tip y 0.0068926, gum y 0.0268926', near(now.tip, 0.0068926, 1e-6) && near(now.gum, 0.0268926, 1e-6), JSON.stringify(now))
-check('[3] skin y 0.0314174', near(now.skin, 0.0314174, 1e-6), now.skin)
-check('[3] the gum stays below the skin over it', now.gum < now.skin, JSON.stringify(now))
+const s3 = run(SR, beside)
+check('[3] 15 mm beside: tip (−0.0056658, 0.0055109, 0.01)', vnear(s3.tip, [-0.0056658, 0.0055109, 0.01]), fmt(s3.tip))
+check('[3] beside: every tooth vertex ≥ 0.014 from the axis',
+  [s3.tip, s3.gum, s3.across].every((p) => axisDist(p, beside[0]) >= 0.014 - 1e-6))
 // [4]
-let pre = null
-const tmp = await mkdtemp(join(ROOT, 'scripts/.smoke-teeth-cap-src-'))
-try {
-  execFileSync('sh', ['-c', `git -C "${ROOT}" archive ${PRE_FIX} packages/scene-render/src | tar -x -C "${tmp}"`])
-  pre = run(await load(join(tmp, 'packages/scene-render/src/index.ts'), 'pre'))
-} catch (e) {
-  console.log(`SKIP [4] (pre-fix source ${PRE_FIX} not available: ${e.message.split('\n')[0]})`)
-} finally {
-  await rm(tmp, { recursive: true, force: true })
-}
-if (pre) {
-  check(`[4] at ${PRE_FIX} the gum went to y 0.034, above the skin's 0.0314174`, near(pre.gum, 0.034, 1e-6)
-    && near(pre.skin, 0.0314174, 1e-6) && pre.gum > pre.skin, JSON.stringify(pre))
+for (const [hash, label, test] of [
+  ['2a23beb00', 'uncapped rigid row: gum y 0.040, above the skin 0.0314174',
+    (p) => near(p.gum[1], 0.040, 1e-6) && p.gum[1] > p.skin[1]],
+  ['1afafe501', 'capped rigid row: cap 0, the tip stays at y 0.004 — inside T 0.014',
+    (p) => near(p.tip[1], 0.004, 1e-6) && axisDist(p.tip, straight[0]) < 0.014],
+]) {
+  const tmp = await mkdtemp(join(ROOT, 'scripts/.smoke-teeth-cap-src-'))
+  try {
+    execFileSync('sh', ['-c', `git -C "${ROOT}" archive ${hash} packages/scene-render/src | tar -x -C "${tmp}"`])
+    const p = run(await load(join(tmp, 'packages/scene-render/src/index.ts'), hash), straight)
+    check(`[4] at ${hash} ${label}`, test(p), JSON.stringify(p))
+  } catch (e) {
+    console.log(`SKIP [4] ${hash} (source not available: ${e.message.split('\n')[0]})`)
+  } finally {
+    await rm(tmp, { recursive: true, force: true })
+  }
 }
 
 console.log(failed ? `FAILED (${failed})` : 'ALL OK')
