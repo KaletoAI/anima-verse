@@ -84,6 +84,8 @@ export interface PlaceClip {
   role?: string; set?: string; url: string
   height_offsets_cm?: ClipHeightOffsetsCm
   orientation?: { shift_cm?: [number, number] | null; partner_turn_deg?: [number, number] | null; partner_yaw_deg?: number | null } | null
+  /** Ruling A212: the clip's alignment range (cm). */
+  align_range?: { cm: number } | null
 }
 /** A pose that plays this clip (read-only here, D2). */
 export interface PlacePose { key: string; yaw_offset?: number; group?: string }
@@ -157,7 +159,8 @@ const SEE_THROUGH_OPACITY = 0.25
 const CONTACT_COLOR = 0xff2d2d
 const OPENING_COLOR = 0x3fb950
 
-/** Ruling A129.3: the runtime fine fit of the pair shown — live, or stepped at 60 fps by `pairCheck`. */
+/** Ruling A129.3: the runtime fine fit of the pair shown — live, or stepped at 60 fps by `pairCheckOnce` (Auto-align's
+ *  in-game column). */
 export interface PairFitReadout {
   phase: 'collect' | 'fitted'; by: string; of: string
   shiftMm: [number, number, number]; turnDeg: [number, number]
@@ -283,6 +286,8 @@ export interface RelationAlign { by: string; of: string; channel: string; target
       postureBefore: PostureReport | null; posture: PostureReport | null; limitReason: 'posture' | null }
 /** Ruling A212: one moving role — its total offset around the base arrangement, and whether the cap stopped it. */
 export interface MoverAlign { role: string; letter: string; shiftCm: [number, number, number]; turnDeg: [number, number]
+  /** What THIS run moved (cm, degrees): the result minus the dials when it was clicked. */
+  adjustCm: [number, number, number]; adjustDeg: [number, number]
   rangeCm: number; lamp: AlignLamp; offCm: number; offDeg: number; capped: boolean }
 export type AutoAlignResult =
   | { ok: false; reason: string }
@@ -304,7 +309,10 @@ export type AutoAlignResult =
 export interface EndPose { kind: string; rel: Record<string, [number, number, number]> }
 /** Ruling A212: what an Auto-align run may be told — another clip's relations (end clips align with the base's), the
  *  clip's alignment range (cm) and the end pose to join. */
-export interface AutoAlignOptions { relations?: ContactRelation[]; rangeCm?: number | null; join?: EndPose | null }
+export interface AutoAlignOptions { relations?: ContactRelation[]; rangeCm?: number | null; join?: EndPose | null
+  /** The arrangement the cap is measured from (draft values: role shifts in metres, B's tilt/roll in degrees); absent =
+   *  the dials now. */
+  base?: { roleShiftM?: Record<string, [number, number, number]>; turnDeg?: [number, number] } | null }
 /** The Auto-align of the scene that runs now, tagged with what it shows (A129.6: "Align all" waits for its clip). */
 export type AutoAlignRun = ((opts?: AutoAlignOptions) => AutoAlignResult) & { kind?: string; set?: string; figures?: number
   endPose?: () => EndPose | null }
@@ -695,8 +703,6 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           head: Object3D | null; tips: Object3D[]; tipRest: Map<Object3D, InstanceType<typeof THREE.Vector3>>
           /** A129.9: the part-only twins of the body's skinned meshes (same attributes and skeleton). */
           partMeshes: Object3D[]
-          /** Ruling A212: the see-through state, each mesh's own material and its translucent clone (made once). */
-          seeThrough: boolean; seeMats: Map<Object3D, { own: unknown; clone: unknown }>
           collision: CollisionPayload | null
         }
         const figs: Fig[] = []
@@ -784,7 +790,15 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               const pg = new THREE.BufferGeometry()
               for (const [k, v] of Object.entries(g.attributes)) pg.setAttribute(k, v)
               pg.setIndex(tri)
-              const twin = new THREE.SkinnedMesh(pg, m.material)
+              // Ruling A212: its own material (owned by this mount), opaque but in the transparent pass so it draws
+              // after the see-through body.
+              const twinMat = (Array.isArray(m.material) ? m.material : [m.material]).map((x) => {
+                const c = x.clone(); c.transparent = true; c.opacity = 1; c.depthWrite = true
+                // keep the source's shader hooks (garment collision, skinned normals)
+                c.onBeforeCompile = x.onBeforeCompile; c.customProgramCacheKey = x.customProgramCacheKey
+                own.push(c); return c
+              })
+              const twin = new THREE.SkinnedMesh(pg, Array.isArray(m.material) ? twinMat : twinMat[0])
               twin.bind(m.skeleton, m.bindMatrix)
               twin.position.copy(m.position); twin.quaternion.copy(m.quaternion); twin.scale.copy(m.scale)
               twin.frustumCulled = false
@@ -795,7 +809,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               // not disposed: pg shares the template's attribute buffers, disposing it would drop them on the GPU
             }
           }
-          figs.push({ letter: p.letter, partMeshes, seeThrough: false, seeMats: new Map(), collision: answer?.model?.collision ?? null, character: a.character, role: a.role, place: p, root, inst, mixer, path: clip.path,
+          figs.push({ letter: p.letter, partMeshes, collision: answer?.model?.collision ?? null, character: a.character, role: a.role, place: p, root, inst, mixer, path: clip.path,
             duration: clip.raw.duration, hips, hipsBind: { x: hb.x, y: hb.y, z: hb.z }, bindInv, runtime, hasRecord,
             saved: { shiftCm: o?.shift_cm ?? null, heightOffsetsCm: clip.file.height_offsets_cm ?? null,
               partnerTurnDeg: o?.partner_turn_deg ?? null, partnerYawDeg: o?.partner_yaw_deg ?? 0 },
@@ -1069,30 +1083,34 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           return rec ? pairFitTotal(rec.st, time) : NO_FIX
         }
         const placedNow = new Map<Fig, { pivot: [number, number, number]; frame: number[] }>()
-        // ── Ruling A212: the see-through partner — EVERY mesh of the entering figure (body, hair, clothing, teeth, strand
-        // hair) swaps to a translucent clone of its material; the part twins keep the opaque original and draw after
-        // it. The clones are this mount's own and are disposed with it (the originals belong to the template). ──
-        const seeClones: Array<{ dispose(): void }> = []
-        disposers.push(() => seeClones.forEach((m) => m.dispose()))
-        const translucent = (mat: unknown): unknown => {
-          if (Array.isArray(mat)) return mat.map(translucent)
-          const c = (mat as InstanceType<typeof THREE.Material>).clone()
-          c.transparent = true; c.opacity = SEE_THROUGH_OPACITY; c.depthWrite = false
-          seeClones.push(c)
-          return c
+        // ── Ruling A212: the see-through partner — every mesh of the entering figure (body, hair, clothing, teeth, strand
+        // hair) draws translucent: the flags of the material it CURRENTLY carries are flipped (no clone, so the garment
+        // collision hooks on those materials stay) and restored when off; re-checked every frame, because strand hair
+        // swaps meshes and materials. The part twins carry their own opaque material in the transparent pass, drawn
+        // after the body (renderOrder 2). Restored on unmount: a template (the mannequin) outlives this mount. ──
+        type Flags = { transparent: boolean; opacity: number; depthWrite: boolean }
+        const flipped = new Map<InstanceType<typeof THREE.Material>, Flags>()
+        const restore = (mat: InstanceType<typeof THREE.Material>, f: Flags) => {
+          mat.transparent = f.transparent; mat.opacity = f.opacity; mat.depthWrite = f.depthWrite; mat.needsUpdate = true
         }
-        const setSeeThrough = (f: Fig, on: boolean) => {
-          if (f.seeThrough === on) return
-          f.seeThrough = on
-          const twins = new Set(f.partMeshes)
-          f.inst.traverse((o) => {
-            const m = o as InstanceType<typeof THREE.Mesh>
-            if (!m.isMesh || twins.has(m)) return
-            let rec = f.seeMats.get(m)
-            if (!rec) { rec = { own: m.material, clone: translucent(m.material) }; f.seeMats.set(m, rec) }
-            m.material = (on ? rec.clone : rec.own) as InstanceType<typeof THREE.Mesh>['material']
-          })
-          for (const t of f.partMeshes) t.visible = on
+        disposers.push(() => { for (const [m, f] of flipped) restore(m, f); flipped.clear() })
+        const seeThroughFrame = (on: readonly Fig[]) => {
+          if (!on.length && !flipped.size) return
+          const want = new Set<InstanceType<typeof THREE.Material>>()
+          for (const f of on) {
+            const twins = new Set(f.partMeshes)
+            f.inst.traverse((o) => {
+              const m = o as InstanceType<typeof THREE.Mesh>
+              if (!m.isMesh || twins.has(m)) return
+              for (const mat of (Array.isArray(m.material) ? m.material : [m.material])) if (mat) want.add(mat)
+            })
+          }
+          for (const [m, f] of flipped) if (!want.has(m)) { restore(m, f); flipped.delete(m) }
+          for (const m of want) {
+            if (flipped.has(m)) continue
+            flipped.set(m, { transparent: m.transparent, opacity: m.opacity, depthWrite: m.depthWrite })
+            m.transparent = true; m.opacity = SEE_THROUGH_OPACITY; m.depthWrite = false; m.needsUpdate = true
+          }
         }
         const draw = () => {
           controls.update()
@@ -1147,10 +1165,11 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           // Ruling A212: the entering figure(s) see-through, the attached part opaque.
           {
             const ents = live.recs.length ? live.recs.map((x) => figs[x.hit.e]) : figs.filter((x) => x.role === 'b')
-            for (const f of figs) setSeeThrough(f, showRef.current.seeThrough && ents.includes(f))
-            host.dataset.seeThrough = showRef.current.seeThrough
-              ? JSON.stringify(figs.map((f) => ({ letter: f.letter, on: f.seeThrough, meshes: f.seeMats.size, part: f.partMeshes.length,
-                clones: seeClones.length }))) : ''
+            const on = showRef.current.seeThrough ? figs.filter((f) => ents.includes(f)) : []
+            seeThroughFrame(on)
+            for (const f of figs) for (const tw of f.partMeshes) tw.visible = on.includes(f)
+            host.dataset.seeThrough = on.length
+              ? JSON.stringify({ figures: on.map((f) => f.letter), materials: flipped.size }) : ''
           }
           // The fixed readout row (Ruling A212) needs every pair frame's inspection.
           const wantInspect = showRef.current.collision || showRef.current.channels || fitOn
@@ -1304,7 +1323,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           if (!hits.length) return { ok: false, reason: t('No figure here has an attached part that one of the other figure’s channels accepts.') }
           const isPair = roles === 2
           const bendLim = bendLimitsNow()
-          const cap = alignCap(opts.rangeCm)
+          const cap = alignCap(opts.rangeCm ?? clips.find((c) => (c.set || '') === set.trim() && c.role === 'a')?.align_range?.cm
+            ?? clips.find((c) => c.role === 'a')?.align_range?.cm)
           const rangeCm = Math.round(cap.forwardM * 1000) / 10
           const rep = (smps: readonly FitSample[]) => contactReport(smps.map((x) => bentOf(x, bendLim).sample))
           const phaseRows = (smps: readonly PhasedSample[]) => pickPhases(smps).map((x) => (x ? phaseRow(bentOf(x, bendLim).sample, x.phase) : null))
@@ -1313,7 +1333,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           // Only the role that carries the attached part moves (one solve for all its relations); in a pair that is B.
           const movers = alignMovers(hits)
           if (isPair && [...movers.keys()].some((e) => figs[e].role !== 'b'))
-            return { ok: false, reason: t('In a pair Auto-align moves partner B, and here the attached part is on A. Swap the roles on the places.') }
+            return { ok: false, reason: rels.some((x) => x.target !== 'none' && x.part === 'a')
+              ? t('This clip’s contacts put the attached part on A, but in a pair Auto-align only moves partner B. Align it by hand with the A/B dials.')
+              : t('In a pair Auto-align moves partner B, and here the attached part is on A. Swap the roles on the places.') }
           let cur0 = base
           const rows: RelationAlign[] = []
           const moverRows: MoverAlign[] = []
@@ -1323,12 +1345,16 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             const anchor = figs[group[0].r]
             const b0 = cur0.roleShiftM[mr] ?? [0, 0, 0]
             const t0 = cur0.partnerTurnDeg ?? [0, 0]
+            // The BASE the cap is measured from (Ruling A212 review H1): the arrangement the user set, not the dials an
+            // earlier Auto-align already moved — a second click stays inside the same cap.
+            const bb = opts.base ? opts.base.roleShiftM?.[mr] ?? [0, 0, 0] : b0
+            const tb = opts.base ? opts.base.turnDeg ?? [0, 0] : t0
             const savedTurn = (savedRef.current.b ?? moving.saved).partnerTurnDeg ?? [0, 0]
             const turns = isPair
             const start = cur0
             const draftOf = (extra: [number, number, number], turn: [number, number]): AlignmentDraft => ({ ...start,
-              roleShiftM: { ...start.roleShiftM, [mr]: [b0[0] + extra[0], b0[1] + extra[1], b0[2] + extra[2]] },
-              partnerTurnDeg: turns ? [t0[0] + turn[0], t0[1] + turn[1]] : start.partnerTurnDeg })
+              roleShiftM: { ...start.roleShiftM, [mr]: [bb[0] + extra[0], bb[1] + extra[1], bb[2] + extra[2]] },
+              partnerTurnDeg: turns ? [tb[0] + turn[0], tb[1] + turn[1]] : start.partnerTurnDeg })
             // Ruling A150: the moving figure's own posture per frame index (its support capsules and height), from the
             // baseline pass; every later pass keeps the same capsules and measures against that height.
             const placeGroup = moving.place.marker.group
@@ -1375,12 +1401,15 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               runAt(0, draft, false)
               return { deltaM: joinDelta(placed.get(anchor)!.frame, rel, hipsStage(moving), hipsStage(anchor)) }
             }
-            const st0 = turns ? [-(savedTurn[0] + t0[0]), -(savedTurn[1] + t0[1])] as [number, number] : [0, 0] as [number, number]
-            baseline = pass([-b0[0], -b0[1], -b0[2]], st0).heights
-            const p0 = pass([0, 0, 0])
+            const st0 = turns ? [-(savedTurn[0] + tb[0]), -(savedTurn[1] + tb[1])] as [number, number] : [0, 0] as [number, number]
+            baseline = pass([-bb[0], -bb[1], -bb[2]], st0).heights
+            // the dials now, relative to the base
+            const x0: [number, number, number] = [b0[0] - bb[0], b0[1] - bb[1], b0[2] - bb[2]]
+            const a0: [number, number] = turns ? [t0[0] - tb[0], t0[1] - tb[1]] : [0, 0]
+            const p0 = pass(x0, a0)
             if (p0.per.some((x) => x.length < 4)) return { ok: false, reason: t('The contact could not be sampled over the clip.') }
-            let extra: [number, number, number] = [0, 0, 0]
-            let turn: [number, number] = [0, 0]
+            let extra: [number, number, number] = x0
+            let turn: [number, number] = a0
             let cur = p0
             let sol: ReturnType<typeof solveAlignAdjust> | null = null
             for (let it = 0; it < 3; it++) {
@@ -1404,8 +1433,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               const r = postureReport(smps.map((x) => ({ support: x.support })))
               return r.frames ? r : null
             }
-            const shiftCm: [number, number, number] = [cm(b0[0] + extra[0]), cm(b0[1] + extra[1]), cm(b0[2] + extra[2])]
-            const turnDeg: [number, number] = [deg(t0[0] + turn[0]), deg(t0[1] + turn[1])]
+            const shiftCm: [number, number, number] = [cm(bb[0] + extra[0]), cm(bb[1] + extra[1]), cm(bb[2] + extra[2])]
+            const turnDeg: [number, number] = turns ? [deg(tb[0] + turn[0]), deg(tb[1] + turn[1])] : [deg(t0[0]), deg(t0[1])]
+            const adjustCm: [number, number, number] = [cm(extra[0] - x0[0]), cm(extra[1] - x0[1]), cm(extra[2] - x0[2])]
+            const adjustDeg: [number, number] = [deg(turn[0] - a0[0]), deg(turn[1] - a0[1])]
             group.forEach((hit, gi) => {
               const before = rep(p0.per[gi]), after = rep(cur.per[gi])
               const pb = phaseRows(p0.per[gi]), pa = phaseRows(cur.per[gi])
@@ -1419,7 +1450,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
                 phases: ALIGN_PHASES.map((phase, k) => ({ phase, before: pb[k], after: pa[k] })), followed: null,
                 bend: bendReadout(cur.per[gi].map((x) => bentOf(x, bendLim).bend)) })
             })
-            moverRows.push({ role: mr, letter: moving.letter, shiftCm, turnDeg, rangeCm, lamp: sol?.lamp ?? 'green',
+            moverRows.push({ role: mr, letter: moving.letter, shiftCm, turnDeg, adjustCm, adjustDeg, rangeCm, lamp: sol?.lamp ?? 'green',
               offCm: sol?.offCm ?? 0, offDeg: sol?.offDeg ?? 0, capped: !!sol?.capped })
             cur0 = cur.draft
           }

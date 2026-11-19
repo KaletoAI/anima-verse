@@ -35,6 +35,11 @@
  *       (1, 0.1, 2.5) = (0, 0, 0.5).
  *   [12] THE RECEIVING FIGURE NEVER MOVES: hits {e 1, r 0}, {e 2, r 0}, {e 1, r 3} → alignMovers keys exactly {1, 2}
  *       (1 with two relations, solved together); 0 and 3 only receive and are no key.
+ *   [13] ACTIVE SET (best fit with one unknown on its bound): fixture [10] (β = 15°, up and tilt correlated — both move
+ *       the tips in y) with the tilt capped at 10°. The answer must be the least-squares optimum of (side, up, forward)
+ *       WITH tilt held at 10°: a brute-force grid of up × forward (step 0.1 mm over ±8 cm, side 0 by the fixture's
+ *       x-symmetry; refined to 0.01 mm around the best cell) gives that optimum's cost; the solver's cost must not
+ *       exceed it by more than 1e-9 and its up/forward lie within 0.02 mm of the grid's.
  */
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -112,4 +117,18 @@ const ok = (m) => { n++; console.log(`  PASS  ${m}`) }
 { const m = SR.alignMovers([{ e: 1, r: 0 }, { e: 2, r: 0 }, { e: 1, r: 3 }])
   assert.deepEqual([...m.keys()].sort(), [1, 2]); assert.equal(m.get(1).length, 2)
   ok('[12] only the figures with the attached part move; the receiving ones are no key') }
-console.log(`\n${n}/12 checks passed`)
+{ const b = 15 * Math.PI / 180, d = [0, Math.sin(b), Math.cos(b)], pv = d.map((v) => -0.3 * v)
+  const s = [0, 0.03].map((c) => { const tip = d.map((v) => c * v); return { tip, base: tip.map((v, i) => v - 0.1 * d[i]), o: O, u: U, pivot: pv } })
+  const r = SR.solveAlignAdjust({ relations: [{ samples: s }], basis: I, cap, axes: [[1, 0, 0]] })
+  const a10 = 10 * Math.PI / 180
+  const cost = (up, fw) => SR.fitResiduals(s, { shift: [0, up, fw], turn: [a10, 0, 0] }).reduce((a, v) => a + v * v, 0)
+  let best = [Infinity, 0, 0]
+  for (let i = -800; i <= 800; i++) for (let j = -800; j <= 800; j++) { const c = cost(i * 1e-4, j * 1e-4); if (c < best[0]) best = [c, i * 1e-4, j * 1e-4] }
+  const [, u0, f0] = best
+  for (let i = -10; i <= 10; i++) for (let j = -10; j <= 10; j++) { const c = cost(u0 + i * 1e-5, f0 + j * 1e-5); if (c < best[0]) best = [c, u0 + i * 1e-5, f0 + j * 1e-5] }
+  near(r.deg[0], 10, 1e-9, '[13] tilt on its bound')
+  const mine = cost(r.x[1], r.x[2])
+  assert.ok(mine <= best[0] + 1e-9, `[13] cost ${mine} vs brute ${best[0]}`)
+  near(r.x[1], best[1], 2e-5, '[13] up'); near(r.x[2], best[2], 2e-5, '[13] forward'); near(r.x[0], 0, 1e-9, '[13] side')
+  ok(`[13] active set = brute force (up ${(r.x[1] * 1000).toFixed(2)} mm, fwd ${(r.x[2] * 1000).toFixed(2)} mm)`) }
+console.log(`\n${n}/13 checks passed`)

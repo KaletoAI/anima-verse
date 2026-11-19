@@ -51,7 +51,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ConfirmDialog } from '@anima/player-ui'
 import { bendLimitsOf, clipHeightGroup, ALIGN_RANGE_CM_DEFAULT, type ClipHeightOffsetsCm } from '@anima/scene-render'
 import { BendLimitsEditor, ContactRelations, RootAngleEditor } from './ContactRelations'
-import { PlacePreview, type AutoAlignResult, type AutoAlignRun, type PlaceReadout } from './PlacePreview'
+import { PlacePreview, type AutoAlignOptions, type AutoAlignResult, type AutoAlignRun, type PlaceReadout } from './PlacePreview'
 import { AlignResultBlock } from './AlignResult'
 import type { AlignmentDraft, ContactRelation } from '@anima/scene-render'
 import { ClipPreview, ROLE_COLOR } from './ClipPreview'
@@ -350,7 +350,11 @@ export function ClipLibrary({
   const [autoAlign, setAutoAlign] = useState<AutoAlignResult | null>(null)
   /** Ruling A212: "Also align end clips" — one row per end clip: the Auto-align result and whether it was stored. */
   const [finaleRun, setFinaleRun] = useState<{ running: boolean; rows: { kind: string; result: AutoAlignResult; saved: boolean
-    error: string }[] } | null>(null)
+    error: string; note: string }[] } | null>(null)
+  /** Ruling A212 review H1: the arrangement Auto-align's cap is measured from — the dials as the user last set them
+   *  (clip load, save, a manual dial move), never the dials an Auto-align click wrote. */
+  const [alignBase, setAlignBase] = useState<AutoAlignOptions['base']>(null)
+  const autoWrite = useRef(false)
   /** Finale clips the server changed along with the last apply/save. */
   const [finalesTouched, setFinalesTouched] = useState<string[]>([])
   /** Whether the open clip holds unsaved edits — set below, read by `guardSwitch` from event handlers. */
@@ -619,6 +623,12 @@ export function ClipLibrary({
     bendLimits: bendLimitsOf(bendDraft),
     rootAngle: { pitchDeg: rootDraft.pitch_deg, yawDeg: rootDraft.yaw_deg },
   }), [bendDraft, rootDraft, contactDraft, clipShift, heightDraft, isGroupTarget, isPairTarget, partnerShift, partnerTurn, partnerYaw, roleShift, rollDeg, tiltDeg, yawDeg])
+  useEffect(() => {
+    if (autoWrite.current) { autoWrite.current = false; return }
+    setAlignBase(isPairTarget
+      ? { roleShiftM: { b: [partnerShift[0] / 100, partnerShift[1] / 100, partnerShift[2] / 100] }, turnDeg: partnerTurn }
+      : { roleShiftM: Object.fromEntries(Object.entries(roleShift).map(([r, v]) => [r, [v[0] / 100, v[1] / 100, v[2] / 100] as [number, number, number]])) })
+  }, [isPairTarget, partnerShift, partnerTurn, roleShift])
   const draftRef = useRef(alignmentDraft)
   draftRef.current = alignmentDraft
   /** The check to store with Apply/Save: only when every figure reads green (D3/D4). */
@@ -630,7 +640,7 @@ export function ClipLibrary({
   // The baked angles live in the sidecar, so a clip without one has nowhere to
   // put them — the block says so instead of earning a 400 after Apply.
   const heightLocked = orientBusy || heightBusy
-  const orientLocked = heightLocked || orientTarget?.has_sidecar === false
+  const orientLocked = heightLocked || orientTarget?.has_sidecar === false || !!finaleRun?.running
 
   // What a save would bake: angles and per-role offsets go through Blender; the whole-clip shift and the
   // surface heights are sidecar values (no Blender), the check is a sidecar mark.
@@ -650,13 +660,16 @@ export function ClipLibrary({
     if (!row || !orientTarget || !baseRun?.endPose) return
     const end = baseRun.endPose()
     if (!end) return
-    const baseKind = row.kind, baseSet = previewSet
+    const baseKind = row.kind, baseSet = previewSet, baseLib = libraryOf(orientTarget)
     const relations = contactDraft
     const rangeCm = alignRangeCm
-    const out: { kind: string; result: AutoAlignResult; saved: boolean; error: string }[] = []
+    const pair = (row.roles ?? 0) === 2
+    const out: { kind: string; result: AutoAlignResult; saved: boolean; error: string; note: string }[] = []
     setFinaleRun({ running: true, rows: [] })
     const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
     for (const kind of finaleKinds) {
+      // A pending "Align all" draft of this clip must not be filled into the dials (it would be baked twice).
+      delete pendingAlign.current[`${kind}|${baseSet}`]
       pick(kind, baseSet)
       let run: AutoAlignRun | null = null
       for (let k = 0; k < 240; k++) {
@@ -665,21 +678,42 @@ export function ClipLibrary({
         if (cur && cur.kind === kind && (cur.set ?? '') === baseSet && (cur.figures ?? 0) >= 2) { run = cur; break }
       }
       await wait(1500)
-      const result: AutoAlignResult = run ? run({ relations, rangeCm, join: end }) : { ok: false, reason: t('No pair was filled on a place of this clip.') }
-      let saved = false, error = ''
-      const file = clips.find((c) => c.kind === kind && (c.set || '') === baseSet && (c.role || '') === 'a')
+      // The scene may have been rebuilt meanwhile: only the SAME run that was found counts.
+      if (run && autoAlignRef.current !== run) run = null
+      const file = clips.find((c) => c.kind === kind && (c.set || '') === baseSet && (c.role || '') === 'a'
+        && libraryOf(c) === baseLib)
+      // What earlier end-clip runs baked already: the cap is measured from before the first run.
+      const applied = file?.align_applied ?? { role_shift_cm: {}, turn_deg: [0, 0] as [number, number] }
+      const base = { roleShiftM: Object.fromEntries(Object.entries(applied.role_shift_cm).map(([r, v]) =>
+        [r, [-v[0] / 100, -v[1] / 100, -v[2] / 100] as [number, number, number]])),
+        turnDeg: [-applied.turn_deg[0], -applied.turn_deg[1]] as [number, number] }
+      const result: AutoAlignResult = !file ? { ok: false, reason: t('No end clip file for this set.') }
+        : run ? run({ relations, rangeCm, join: end, base })
+          : { ok: false, reason: t('No pair was filled on a place of this clip.') }
+      let saved = false, error = '', note = ''
       if (result.ok && file) {
         try {
-          const pair = (row.roles ?? 0) === 2
           const moved = Object.fromEntries(Object.entries(result.roleShiftCm).filter(([, v]) => v.some((x) => x !== 0)))
-          await apiPost(`${clipPath(file)}/orient`, { yaw_deg: 0, tilt_deg: 0, roll_deg: 0,
-            ...(pair ? { partner_shift_cm: result.roleShiftCm.b ?? [0, 0, 0] } : { role_shift_cm: moved }),
-            ...(pair && result.turnDeg.some((v) => v !== 0) ? { partner_turn_deg: result.turnDeg } : {}) })
-          if (file.contact_target?.source !== 'clip' && relations.length) await apiPatch(clipPath(file), { contact_target: relations })
+          const turn = pair ? result.turnDeg : [0, 0] as [number, number]
+          const nothing = !Object.keys(moved).length && turn.every((v) => v === 0)
+          if (!nothing) {
+            await apiPost(`${clipPath(file)}/orient`, { yaw_deg: 0, tilt_deg: 0, roll_deg: 0,
+              ...(pair ? { partner_shift_cm: result.roleShiftCm.b ?? [0, 0, 0] } : { role_shift_cm: moved }),
+              ...(pair && turn.some((v) => v !== 0) ? { partner_turn_deg: turn } : {}) })
+            const total: Record<string, [number, number, number]> = { ...applied.role_shift_cm }
+            for (const [r, v] of Object.entries(moved)) {
+              const was = total[r] ?? [0, 0, 0]
+              total[r] = [+(was[0] + v[0]).toFixed(2), +(was[1] + v[1]).toFixed(2), +(was[2] + v[2]).toFixed(2)]
+            }
+            await apiPatch(clipPath(file), { align_applied: { role_shift_cm: total,
+              turn_deg: [+(applied.turn_deg[0] + turn[0]).toFixed(2), +(applied.turn_deg[1] + turn[1]).toFixed(2)] } })
+          } else note = t('already aligned')
+          // The base's relations only where the end clip has none in force.
+          if (!file.contact_target?.relations?.length && relations.length) await apiPatch(clipPath(file), { contact_target: relations })
           saved = true
         } catch (e) { error = (e as Error).message }
-      } else if (result.ok) error = t('No end clip file for this set.')
-      out.push({ kind, result, saved, error })
+      }
+      out.push({ kind, result, saved, error, note })
       setFinaleRun({ running: true, rows: [...out] })
     }
     invalidateAnimationPreviewClips()
@@ -1464,7 +1498,7 @@ export function ClipLibrary({
                           disabled={orientLocked} {...DIAL} />
                       ))}
                       <SliderInput label={dialLabel(t('B yaw'))} unit="°"
-                        title={t('Turns partner B about its own vertical axis through its hips, before the tilt/roll — renderer-only, saved beside the clip. Positive turns B’s forward towards its left. Auto-align and the pair check start from it and never change it.')}
+                        title={t('Turns partner B about its own vertical axis through its hips, before the tilt/roll — renderer-only, saved beside the clip. Positive turns B’s forward towards its left. Auto-align starts from it and never changes it.')}
                         min={-180} max={180} step={5} fineStep={1} value={wrapDeg(savedPartnerYaw + partnerYaw)}
                         onChange={(v) => setPartnerYaw(wrapDeg(v - savedPartnerYaw))}
                         disabled={orientLocked} {...DIAL} />
@@ -1499,8 +1533,9 @@ export function ClipLibrary({
                           : t('Adjusts the role with the attached part (a pair: partner B) around the arrangement you set — at most the alignment range forward/back and up/down, 3 cm sideways and 10° tilt/roll; the receiving role never moves. The stroke is fitted at its start, ¼, ½, ¾ and end together, all contacts of the role at once. Then it plays the result with the game’s fine fit on top. Writes the sliders above; Save stores them as usual.')}
                         onClick={() => {
                           const run = autoAlignRef.current
-                          const res: AutoAlignResult = run ? run({ rangeCm: alignRangeCm }) : { ok: false, reason: t('The place preview is still loading.') }
+                          const res: AutoAlignResult = run ? run({ rangeCm: alignRangeCm, base: alignBase }) : { ok: false, reason: t('The place preview is still loading.') }
                           setAutoAlign(res)
+                          if (res.ok) autoWrite.current = true
                           if (res.ok && isPairTarget) {
                             setPartnerShift(res.roleShiftCm.b ?? res.shiftCm)
                             setPartnerTurn([+res.turnDeg[0].toFixed(1), +res.turnDeg[1].toFixed(1)])
@@ -1540,7 +1575,7 @@ export function ClipLibrary({
                                   <td style={{ whiteSpace: 'nowrap' }}><LampDot lamp={x.result.lamp} title={t('Contact')} />
                                     <LampDot lamp={x.result.movers[0]?.lamp ?? 'green'} title={t('Within the alignment range')} /></td>
                                   <td style={{ padding: '0 4px' }}>{x.result.movers.map((m) => `${m.role.toUpperCase()} ${m.shiftCm.map((v) => v.toFixed(1)).join(' / ')} cm`).join(', ')}</td>
-                                  <td style={{ color: x.error ? 'var(--danger, #f85149)' : undefined }}>{x.error || (x.saved ? t('saved') : '')}</td>
+                                  <td style={{ color: x.error ? 'var(--danger, #f85149)' : undefined }}>{x.error || x.note || (x.saved ? t('saved') : '')}</td>
                                 </>
                               ) : <td colSpan={3} style={{ color: 'var(--danger, #f85149)' }}>{x.result.reason}</td>}
                             </tr>

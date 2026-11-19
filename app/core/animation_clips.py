@@ -1366,6 +1366,8 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         "root_angle": clip_root_angle(meta) if entry["role"] else None,
         # Ruling A212: how far Auto-align may move the part's role ({"cm", "source"}); None for a solo clip.
         "align_range": clip_align_range(meta) if entry["role"] else None,
+        # Ruling A212: what "Also align end clips" has baked into this clip so far (None = nothing).
+        "align_applied": clip_align_applied(meta) if entry["role"] else None,
         # Saved orientation and renderer calibration. Angles and partner B
         # offsets are baked; the whole-clip shift is applied at placement.
         "orientation": {k: geometry.get(k) for k in
@@ -2275,6 +2277,69 @@ def clip_align_range(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         except ClipLibraryError:
             pass
     return {"cm": ALIGN_RANGE_DEFAULT_CM, "source": "default"}
+
+
+def validate_align_applied(value: Any) -> Dict[str, Any]:
+    """Ruling A212: what "Also align end clips" has baked into an end clip so far — ``{"role_shift_cm": {role: [side,
+    up, forward]}, "turn_deg": [tilt, roll]}``, every number finite and within ±100 (cm / degrees)."""
+    import math
+    if not isinstance(value, dict) or set(value) - {"role_shift_cm", "turn_deg"}:
+        raise ClipLibraryError("align_applied must be an object with role_shift_cm and/or turn_deg")
+
+    def nums(v: Any, n: int, what: str) -> List[float]:
+        if not isinstance(v, list) or len(v) != n or any(
+                isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x) or abs(x) > 100
+                for x in v):
+            raise ClipLibraryError(f"align_applied {what} must be {n} numbers within ±100")
+        return [float(x) for x in v]
+    roles = value.get("role_shift_cm") or {}
+    if not isinstance(roles, dict) or any(r not in ("a", "b", "c", "d", "e") for r in roles):
+        raise ClipLibraryError("align_applied role_shift_cm must map roles a..e")
+    return {"role_shift_cm": {r: nums(v, 3, f"role_shift_cm.{r}") for r, v in roles.items()},
+            "turn_deg": nums(value.get("turn_deg", [0, 0]), 2, "turn_deg")}
+
+
+def clip_align_applied(meta: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Ruling A212: the stored ``align_applied`` of an end clip, None when absent or invalid."""
+    own = (meta or {}).get("align_applied") if isinstance(meta, dict) else None
+    if own is None:
+        return None
+    try:
+        return validate_align_applied(own)
+    except ClipLibraryError:
+        return None
+
+
+@_library_writer
+def set_clip_align_applied(library: str, rel: str, value: Any) -> List[Dict[str, Any]]:
+    """Writes (or with ``None`` clears) what end-clip alignment has baked into this clip (Ruling A212): a rerun caps
+    its total against the arrangement before the first run, not against the already moved one."""
+    path = resolve_clip(library, rel)
+    if not path.is_file():
+        raise ClipNotFound(f"{rel} does not exist in the {library} library")
+    kind, role = parse_clip_role(path.name)
+    if not role:
+        raise ClipLibraryError(f"'{kind}' is a solo clip — only a pair clip is aligned")
+    root = library_root(library).resolve()
+    cset = path.parent.name if path.parent.resolve() != root else ""
+    sidecar = path.parent / f"{kind}.json"
+    if not sidecar.is_file():
+        raise ClipLibraryError(f"'{kind}' has no sidecar {sidecar.name} — re-import the clip first")
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ClipLibraryError(f"{sidecar.name} is not readable: {e}")
+    if not isinstance(data, dict):
+        raise ClipLibraryError(f"{sidecar.name} is not an object")
+    if value is None:
+        data.pop("align_applied", None)
+    else:
+        data["align_applied"] = validate_align_applied(value)
+    _write_json_atomic(sidecar, data)
+    reload_clip_caches()
+    logger.info("clip alignment applied: %s%s (%s) -> %s", f"{cset}/" if cset else "", kind, library,
+                data.get("align_applied") or "none")
+    return [_view_of(p, cset, library) for p in _kind_files(path.parent, kind)]
 
 
 @_library_writer

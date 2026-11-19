@@ -86,7 +86,6 @@
     "B yaw": "B drehen",
     "B yaw 0°": "B Drehung 0°",
     "partner B yaw": "Partner B Drehung",
-    "Turns partner B about its own vertical axis through its hips, before the tilt/roll — renderer-only, saved beside the clip. Positive turns B’s forward towards its left. Auto-align and the pair check start from it and never change it.": "Dreht Partner B um seine eigene senkrechte Achse durch die Hüfte, vor Neigen/Rollen — nur im Renderer, neben dem Clip gespeichert. Positiv dreht Bs Vorwärts nach links. Auto-Ausrichten und Paarprüfung gehen davon aus und ändern sie nie.",
         "Show the reference as it is again": "Referenzbild wieder unverändert zeigen",
         "Shows the processed reference in its place — nothing is stored.": "Zeigt das bearbeitete Referenzbild an seiner Stelle — es wird nichts gespeichert.",
     "Alignment": "Ausrichtung",
@@ -6275,7 +6274,6 @@
     "The fine fit of this pair on top of the stored clip (at most 5 cm and 10°), and how far the attached part’s tip stays off the channel axis while inside, over the fitted frames.": "Die Feinanpassung dieses Paars zusätzlich zum gespeicherten Clip (höchstens 5 cm und 10°), und wie weit die Spitze des angesetzten Teils im Inneren neben der Kanalachse bleibt, über die angepassten Frames.",
     "Fine fit {by} → {of}: measuring one loop…": "Feinanpassung {by} → {of}: misst eine Schleife…",
     "Fine fit {by} → {of}: {x} / {y} / {z} mm, tilt {tilt}°, roll {roll}° · off the axis inside: max {max} mm, median {med} mm": "Feinanpassung {by} → {of}: {x} / {y} / {z} mm, Neigen {tilt}°, Rollen {roll}° · neben der Achse innen: max. {max} mm, Median {med} mm",
-    "Check this pair": "Dieses Paar prüfen",
     "{by} → {of}: fine fit {x} / {y} / {z} mm, tilt {tilt}°, roll {roll}°": "{by} → {of}: Feinanpassung {x} / {y} / {z} mm, Neigen {tilt}°, Rollen {roll}°",
     "fine fit": "Feinanpassung",
     "Nothing else interpenetrates: only the attached part enters the other body, through the channel (at most 5 mm elsewhere).": "Sonst durchdringt nichts: nur das angesetzte Teil dringt in den anderen Körper ein, durch den Kanal (anderswo höchstens 5 mm).",
@@ -6656,7 +6654,6 @@
     "Aligns each end clip ({kinds}) with this clip’s contact relations and joins its first frame to where this clip’s last frame leaves the figures, within the same range; then stores each end clip’s result (one Blender run each, no hub jobs).": "Richtet jeden Schluss-Clip ({kinds}) mit den Kontaktrelationen dieses Clips aus und schließt sein erstes Bild an die Lage an, in der das letzte Bild dieses Clips die Figuren lässt, im selben Spielraum; speichert dann das Ergebnis jedes Schluss-Clips (je ein Blender-Lauf, keine Hub-Jobs).",
     "Also align end clips ({n})": "Schluss-Clips mit ausrichten ({n})",
     "Always shown on a pair: each engaged channel’s depth and stretch now, and each mouth’s opening value with whether its opening was built.": "Bei einem Paar immer sichtbar: Tiefe und Dehnung jedes belegten Kanals jetzt sowie der Öffnungswert jedes Mundes und ob seine Öffnung gebaut ist.",
-    "End": "Ende",
     "Every mesh of the entering figure — body, hair, clothing, teeth — turns see-through; its attached part stays as it is. Preview only, nothing is stored.": "Jedes Mesh der eintretenden Figur — Körper, Haare, Kleidung, Zähne — wird durchscheinend; ihr angesetztes Teil bleibt, wie es ist. Nur Vorschau, nichts wird gespeichert.",
     "How deep the tip is along the axis (+ = inside).": "Wie tief die Spitze entlang der Achse liegt (+ = innen).",
     "How far Auto-align may move the role with the attached part forward/back and up/down around your arrangement (sideways at most 3 cm, tilt/roll at most 10°). Stored in this clip’s sidecar; default 8 cm.": "Wie weit Automatisch ausrichten die Rolle mit dem angesetzten Teil um deine Aufstellung vor/zurück und hoch/runter bewegen darf (seitlich höchstens 3 cm, Kippen/Rollen höchstens 10°). Gespeichert im Sidecar dieses Clips; Standard 8 cm.",
@@ -6681,6 +6678,12 @@
     "tilt {a}° roll {b}°": "Kippen {a}° Rollen {b}°",
     "tip off axis": "Spitze neben Achse",
     "{by} → {of} {channel}: in {cm} cm · stretch {mm} mm ({pct} %)": "{by} → {of} {channel}: drin {cm} cm · Dehnung {mm} mm ({pct} %)",
-    "{role} adjusted within ±{r} cm: {s} cm": "{role} nachjustiert innerhalb ±{r} cm: {s} cm"
+    "Turns partner B about its own vertical axis through its hips, before the tilt/roll — renderer-only, saved beside the clip. Positive turns B’s forward towards its left. Auto-align starts from it and never changes it.": "Dreht Partner B um seine eigene senkrechte Achse durch die Hüfte, vor Neigen/Rollen — nur im Renderer, neben dem Clip gespeichert. Positiv dreht Bs Vorwärts nach links. Auto-Ausrichten geht davon aus und ändert sie nie.",
+    "Stroke start": "Stoßanfang",
+    "Stroke end": "Stoßende",
+    "{role} moved by {a} cm (now {s} cm)": "{role} verschoben um {a} cm (jetzt {s} cm)",
+    "Auto-align moves {role} at most ±{r} cm forward/back and up/down, ±3 cm sideways and ±10° tilt/roll around the arrangement you set (the dials before the first click); what lies beyond is yours to set by hand.": "Automatisch ausrichten bewegt {role} höchstens ±{r} cm vor/zurück und hoch/runter, ±3 cm seitlich und ±10° Kippen/Rollen um die von dir gestellte Aufstellung (die Regler vor dem ersten Klick); was darüber hinausgeht, stellst du von Hand.",
+    "This clip’s contacts put the attached part on A, but in a pair Auto-align only moves partner B. Align it by hand with the A/B dials.": "Die Kontakte dieses Clips setzen das angesetzte Teil an A, bei einem Paar verschiebt Automatisch ausrichten aber nur Partner B. Richte ihn von Hand mit den A/B-Reglern aus.",
+    "already aligned": "bereits ausgerichtet"
   }
 }

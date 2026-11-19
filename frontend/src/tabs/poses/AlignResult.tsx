@@ -1,5 +1,5 @@
 /**
- * The ONE result block of Auto-align (Ruling A212 — the former Auto-align and "Check this pair" results merged): the
+ * The ONE result block of Auto-align (Ruling A212 — the former Auto-align and pair-check results merged): the
  * contact and clearance lamps, per moving role whether the alignment range stopped it ("move it closer by hand"), the
  * five phases of the stroke before → after, and a collapsible detail table — before, after, and with the game's fine
  * fit and follow on top.
@@ -47,7 +47,7 @@ export function PostureLine({ gapMm, sinkMm, limited, heightMm }: { gapMm: numbe
 /** The five phases of one contact: tip off the axis, depth along it, shaft angle — before → after. */
 function PhaseTable({ phases, inside }: { phases: PhaseAlign[]; inside: boolean }) {
   const { t } = useI18n()
-  const name = (p: number) => (p <= 0 ? t('Start') : p >= 1 ? t('End') : p === 0.25 ? '¼' : p === 0.5 ? '½' : '¾')
+  const name = (p: number) => (p <= 0 ? t('Stroke start') : p >= 1 ? t('Stroke end') : p === 0.25 ? '¼' : p === 0.5 ? '½' : '¾')
   const pair = (a: number | undefined, b: number | undefined, unit: string) =>
     `${a === undefined ? '–' : (Math.round(a) || 0).toFixed(0)} → ${b === undefined ? '–' : (Math.round(b) || 0).toFixed(0)} ${unit}`
   return (
@@ -89,24 +89,29 @@ export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
         <span>{t('{by} → {of}: {channel}').replace('{by}', r.by).replace('{of}', r.of)
           .replace('{channel}', r.target === 'channel' ? (r.channel.split(':').pop() || r.channel) : targetWordOf(t, r.target))}</span>
       </div>
-      {r.movers.map((m) => (
-        <div key={m.role} data-testid="align-cap" data-lamp={m.lamp} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <LampDot lamp={m.lamp} title={t('Within the alignment range')} />
-          {m.capped ? (
-            <span style={{ color: m.lamp === 'red' ? 'var(--danger, #f85149)' : 'var(--warning, #d29922)' }}>
-              {(m.offCm > 0.5
-                ? t('The base arrangement is {x} cm off — move it closer by hand.').replace('{x}', m.offCm.toFixed(1))
-                : t('The base arrangement is {x}° off in tilt/roll — turn it closer by hand.').replace('{x}', m.offDeg.toFixed(1)))}
-              {' '}({m.role.toUpperCase()} {m.shiftCm.map((v) => v.toFixed(1)).join(' / ')} cm)
-            </span>
-          ) : (
-            <span>{t('{role} adjusted within ±{r} cm: {s} cm').replace('{role}', m.role.toUpperCase())
-              .replace('{r}', m.rangeCm.toFixed(0)).replace('{s}', m.shiftCm.map((v) => v.toFixed(1)).join(' / '))}
-              {m.turnDeg[0] || m.turnDeg[1]
-                ? ` · ${t('tilt {a}° roll {b}°').replace('{a}', m.turnDeg[0].toFixed(1)).replace('{b}', m.turnDeg[1].toFixed(1))}` : ''}</span>
-          )}
-        </div>
-      ))}
+      {r.movers.map((m) => {
+        const v3 = (v: number[]) => v.map((x) => x.toFixed(1)).join(' / ')
+        const limit = t('Auto-align moves {role} at most ±{r} cm forward/back and up/down, ±3 cm sideways and ±10° tilt/roll around the arrangement you set (the dials before the first click); what lies beyond is yours to set by hand.')
+          .replace('{role}', m.role.toUpperCase()).replace('{r}', m.rangeCm.toFixed(0))
+        return (
+          <div key={m.role} data-testid="align-cap" data-lamp={m.lamp} title={limit}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <LampDot lamp={m.lamp} title={t('Within the alignment range')} />
+              <span>{t('{role} moved by {a} cm (now {s} cm)').replace('{role}', m.role.toUpperCase()).replace('{a}', v3(m.adjustCm)).replace('{s}', v3(m.shiftCm))}
+                {m.adjustDeg[0] || m.adjustDeg[1]
+                  ? ` · ${t('tilt {a}° roll {b}°').replace('{a}', m.adjustDeg[0].toFixed(1)).replace('{b}', m.adjustDeg[1].toFixed(1))}` : ''}</span>
+            </div>
+            {m.capped && m.offCm > 0.5 ? (
+              <div style={{ color: m.lamp === 'red' ? 'var(--danger, #f85149)' : 'var(--warning, #d29922)' }}>
+                {t('The base arrangement is {x} cm off — move it closer by hand.').replace('{x}', m.offCm.toFixed(1))}</div>
+            ) : null}
+            {m.capped && m.offDeg > 1 ? (
+              <div style={{ color: m.lamp === 'red' ? 'var(--danger, #f85149)' : 'var(--warning, #d29922)' }}>
+                {t('The base arrangement is {x}° off in tilt/roll — turn it closer by hand.').replace('{x}', m.offDeg.toFixed(1))}</div>
+            ) : null}
+          </div>
+        )
+      })}
       {r.relations.map((x, i) => (
         <div key={i} style={{ marginTop: 2 }}>
           {r.relations.length > 1 ? <div style={{ opacity: 0.8 }}>{x.by} → {x.of} {targetWordOf(t, x.target)}</div> : null}

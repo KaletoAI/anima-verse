@@ -49,6 +49,8 @@ export interface ApiClipRow {
   root_angle?: RootAngleWire | null
   /** Ruling A212: how far Auto-align may move the part's role (cm) and where it comes from (null for a solo clip). */
   align_range?: { cm: number; source: 'clip' | 'default' } | null
+  /** Ruling A212: what "Also align end clips" has baked into this end clip so far (null = nothing). */
+  align_applied?: { role_shift_cm: Record<string, [number, number, number]>; turn_deg: [number, number] } | null
   origin?: string
   has_sidecar?: boolean
   /** Per-surface corrections in centimetres of the 1.70 m reference figure. */

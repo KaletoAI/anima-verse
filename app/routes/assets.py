@@ -187,14 +187,15 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
     """Renames or moves a clip and/or edits its playback metadata.
 
     Body ``{kind?, set?, library?, loop?, loop_count?, role_gender?,
-    height_offsets_cm?, contact_target?, bend_limits?, root_angle?, align_range_cm?, overwrite?}``, at least one edit field.
+    height_offsets_cm?, contact_target?, bend_limits?, root_angle?, align_range_cm?, align_applied?, overwrite?}``, at least one edit field.
     ``bend_limits`` (Ruling A145) is how far the attached part may bend toward its
     target per state, ``{raised: {joint_deg, total_deg}, resting: {...}}`` (partial =
     completed from the inherited value), ``null`` = inherit.
     ``root_angle`` (Ruling A158) is the attached part's direct root angle ``{pitch_deg: −60..60,
     yaw_deg: −30..30}`` (pitch + = up toward the belly, yaw + = the figure's right); ``null`` / 0 = none.
     ``align_range_cm`` (Ruling A212) is how far Auto-align may move the part's role forward/back and
-    up/down around the base arrangement (1..40 cm), ``null`` = the default 8 cm.
+    up/down around the base arrangement (1..40 cm), ``null`` = the default 8 cm. ``align_applied`` (A212) is what
+    "Also align end clips" has baked so far ``{role_shift_cm: {role: [3]}, turn_deg: [2]}``, ``null`` = none.
     ``contact_target`` (Ruling A139) is the clip's contact relations
     ``[{part, at, target}]`` (target ``channel`` / ``mouth`` / ``hand_left`` /
     ``hand_right`` / ``none``; a bare word = B → A), ``null`` = inherit the package
@@ -234,11 +235,11 @@ def _patch_animation_clip_sync(library: str, rel: str, body: Any) -> Dict[str, A
         raise HTTPException(status_code=400, detail="object expected")
     if not any(k in body for k in
                ("kind", "set", "library", "loop", "loop_count", "role_gender",
-                "height_offsets_cm", "contact_target", "bend_limits", "root_angle", "align_range_cm")):
+                "height_offsets_cm", "contact_target", "bend_limits", "root_angle", "align_range_cm", "align_applied")):
         raise HTTPException(
             status_code=400,
             detail="one of kind, set, library, loop, loop_count, role_gender, "
-                   "height_offsets_cm, contact_target, bend_limits, root_angle, align_range_cm is required")
+                   "height_offsets_cm, contact_target, bend_limits, root_angle, align_range_cm, align_applied is required")
     if "role_gender" in body and not (body["role_gender"] is None
                                       or isinstance(body["role_gender"], dict)):
         raise HTTPException(status_code=400,
@@ -289,6 +290,9 @@ def _patch_animation_clip_sync(library: str, rel: str, body: Any) -> Dict[str, A
         if "bend_limits" in body:
             from app.core.animation_clips import set_clip_bend_limits
             clips = set_clip_bend_limits(library, rel, body["bend_limits"])
+        if "align_applied" in body:
+            from app.core.animation_clips import set_clip_align_applied
+            clips = set_clip_align_applied(library, rel, body["align_applied"])
         if "align_range_cm" in body:
             from app.core.animation_clips import set_clip_align_range
             clips = set_clip_align_range(library, rel, body["align_range_cm"])

@@ -20,6 +20,8 @@ Expected, by hand:
     "yaw_deg": -15} -> 20/-15.
 [9] A212 alignment range: 8 and 40 and 1 accepted as floats; refused 0.5, 41, a bool, "8", NaN;
     clip_align_range(None) -> 8 cm source default, of {"align_range_cm": 12} -> 12 source clip, of a junk 99 -> default.
+[10] A212 align_applied: {"role_shift_cm": {"b": [1, 2, 3]}} -> turn_deg [0, 0] filled in, floats; refused a role
+    "x", 2 numbers for a role, 101, a key "yaw"; clip_align_applied(None) -> None, of junk -> None.
 """
 import os
 import shutil
@@ -88,5 +90,14 @@ for bad in (0.5, 41, True, "8", float("nan")):
 assert ac.clip_align_range(None) == {"cm": 8.0, "source": "default"}
 assert ac.clip_align_range({"align_range_cm": 12}) == {"cm": 12.0, "source": "clip"}
 assert ac.clip_align_range({"align_range_cm": 99}) == {"cm": 8.0, "source": "default"}
+assert ac.validate_align_applied({"role_shift_cm": {"b": [1, 2, 3]}}) == {                # [10]
+    "role_shift_cm": {"b": [1.0, 2.0, 3.0]}, "turn_deg": [0.0, 0.0]}
+for bad in ({"role_shift_cm": {"x": [0, 0, 0]}}, {"role_shift_cm": {"b": [0, 0]}}, {"turn_deg": [101, 0]}, {"yaw": 1}):
+    try:
+        ac.validate_align_applied(bad)
+    except ac.ClipLibraryError:
+        continue
+    raise AssertionError(f"accepted {bad}")
+assert ac.clip_align_applied(None) is None and ac.clip_align_applied({"align_applied": 5}) is None
 shutil.rmtree(tmp, ignore_errors=True)
 print("smoke_clip_bend_limits OK")

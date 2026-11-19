@@ -15,7 +15,7 @@
  * THE SOLVE (`solveAlignAdjust`): the samples were measured with the trial `start` (x₀, α₀) already applied; the solve
  * finds the increment (y, β) minimising  Σ_relations |fitResiduals(samples_r, fix(y, β))|²  +  J·|B·y − j|²  with
  * (x₀ + y, α₀ + β) projected into the cap box after every Gauss–Newton step (forward-difference Jacobian, step 1e-6,
- * at most `iterations` steps). Several relations of one figure are ONE least-squares problem — the figure moves once
+ * at most `iterations` steps; an unknown held on its bound is frozen and the rest re-solved — an active set). Several relations of one figure are ONE least-squares problem — the figure moves once
  * for all its contacts, not relation after relation. j is the optional JOIN (end clips): the world shift that puts the
  * moving figure where the base clip's last frame left it, relative to the anchor role; J = `JOIN_WEIGHT` × the sample
  * count.
@@ -127,8 +127,25 @@ function solveBox(p: AlignProblem, half: number[]): number[] {
       return s + (i === j ? 1e-9 : 0)
     }))
     const g = Array.from({ length: n }, (_, i) => { let s = 0; for (let m = 0; m < r.length; m++) s -= J[i][m] * r[m]; return s })
-    const step = solveLinear(A, g)
-    if (!step) break
+    // Active set: an unknown on its bound whose descent direction points outward is frozen and the reduced system
+    // is solved again, so the free unknowns take their best fit WITH the bound one held (not a clamped full step).
+    const lo = (i: number) => -half[i] - start[i], hi = (i: number) => half[i] - start[i]
+    const atLo = (i: number) => z[i] <= lo(i) + 1e-12, atHi = (i: number) => z[i] >= hi(i) - 1e-12
+    const frozen = new Set<number>()
+    for (let i = 0; i < n; i++) if ((atLo(i) && g[i] < 0) || (atHi(i) && g[i] > 0)) frozen.add(i)
+    let step: number[] | null = null
+    for (let pass = 0; pass <= n; pass++) {
+      const free = Array.from({ length: n }, (_, i) => i).filter((i) => !frozen.has(i))
+      if (!free.length) { step = new Array(n).fill(0); break }
+      const sub = solveLinear(free.map((i) => free.map((j) => A[i][j])), free.map((i) => g[i]))
+      if (!sub) { step = null; break }
+      step = new Array(n).fill(0)
+      free.forEach((i, k) => { step![i] = sub[k] })
+      const out = free.filter((i) => (atLo(i) && step![i] < 0) || (atHi(i) && step![i] > 0))
+      if (!out.length) break
+      out.forEach((i) => frozen.add(i))
+    }
+    if (!step || step.every((v) => v === 0)) break
     let t = 1, accepted = false
     for (let ls = 0; ls < 10; ls++) {
       const zn = project(z.map((v, i) => v + t * step[i]))
