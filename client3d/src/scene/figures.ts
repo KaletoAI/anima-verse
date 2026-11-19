@@ -20,13 +20,14 @@ import {
   rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM, clipShiftM, figureBox,
   applyFootPose, footPoseLiftM, footPoseMatches, plantFootPose, transplantedRestPose, seatFootLift,
   STRAND_RECORD_VERSION, consumerPartnerCapsules, createFigureRuntime, bendLimitsOf, BEND_LIMITS_DEFAULT, rootAngleOf,
-  prepareSheerPieces,
+  prepareSheerPieces, prepareGlossyPieces,
 } from '@anima/scene-render';
 import type { RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, CollisionPayload,
   FootPose, HairStrandRecord, StrandHair, CapsuleNow, PartnerSnapshot, ChannelOccupant, ChannelReadout,
   ChannelOccupants, ContactRelation, FigureInspection, FigureRuntime, FrameFigure, BendLimits, RootAngle } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import { applyFigureTexture, zeroFigureMetalness } from './figureMaterials';
+import { getModelEnvironment } from './glbMaterials';
 import type { ApiModel } from '../api';
 import { clipIndexName, getAnimationClips, getCharacterModel } from '../api';
 import { bridgePace, steerCancelsBridge, clipTransition, poseClip, setClipTransitions,
@@ -1926,6 +1927,9 @@ export class FigureLibrary {
     // A204: a sheer piece (chiffon) shows the body through it — blended, no depth write, after the body.
     const sheer = prepareSheerPieces(template, THREE.DoubleSide);
     if (sheer) matLog.push(`${sheer} sheer piece mesh(es) blended`);
+    // A214: a glossy leather piece reflects the neutral environment (its clear coat reads as patent leather).
+    const glossy = prepareGlossyPieces(template, getModelEnvironment());
+    if (glossy) matLog.push(`${glossy} glossy piece material(s) with the environment`);
     if (matLog.length) console.info(`[figures] ${name}: ${matLog.join(' | ')}`);
 
     // The FIGURE's box (`figureBox`): garment meshes grafted onto the body

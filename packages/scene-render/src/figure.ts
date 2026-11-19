@@ -274,6 +274,37 @@ export function prepareSheerPieces(root: Object3D, doubleSide: number): number {
   return marked
 }
 
+/** A214: the fabric whose surface asks for an environment reflection (`garment_template.LEATHER_SURFACES`). */
+export const GLOSSY_FABRICS = ['leather_glossy']
+/** A214: how strongly a glossy piece reflects the environment (1.0 washed the leather colour out: median luminance 40 -> 97 on a brown skirt). */
+export const GLOSSY_ENV_INTENSITY = 0.5
+
+/**
+ * A214: a glossy leather piece (clear coat over a low base roughness, `app/core/garment_template
+ * .material_overrides`, `extras.anima_material` = the fabric). Under direct lights alone a clear coat is a few
+ * pixel-sized highlights; with an environment map the whole surface reflects, which is what reads as patent
+ * leather. `env` is the renderer's neutral environment (null: nothing changes). Only these pieces get it — the
+ * body and every other piece keep their look. Returns how many materials it set.
+ */
+export function prepareGlossyPieces(root: Object3D, env: unknown, intensity = GLOSSY_ENV_INTENSITY): number {
+  if (!env) return 0
+  let marked = 0
+  root.traverse((o: Object3D) => {
+    const mesh = o as Object3D & { isMesh?: boolean; material?: unknown }
+    if (!mesh.isMesh || !mesh.material) return
+    const mats = (Array.isArray(mesh.material) ? mesh.material : [mesh.material]) as Array<{
+      userData?: Record<string, unknown>; envMap?: unknown; envMapIntensity?: number; needsUpdate: boolean }>
+    for (const m of mats) {
+      if (!GLOSSY_FABRICS.includes(String(m.userData?.anima_material ?? ''))) continue
+      m.envMap = env
+      m.envMapIntensity = intensity
+      m.needsUpdate = true
+      marked += 1
+    }
+  })
+  return marked
+}
+
 /**
  * The FIGURE's box: `Box3.setFromObject(root)` over everything EXCEPT
  * garment subtrees. A garment is not the figure — hair standing 8 cm over

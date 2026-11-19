@@ -13,6 +13,10 @@ let modelEnv: THREE.Texture | null = null;
 export function setModelEnvironment(tex: THREE.Texture) {
   modelEnv = tex;
 }
+/** A214: the same environment for a figure's glossy pieces (`prepareGlossyPieces`); null before the engine set it. */
+export function getModelEnvironment(): THREE.Texture | null {
+  return modelEnv;
+}
 
 /** Generierte GLBs lassen metallicFactor oft unbelegt — der glTF-Default ist
  *  1.0 (voll metallisch), und ohne Environment-Map rendert das fast schwarz.

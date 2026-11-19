@@ -126,7 +126,7 @@ export {
 export { pickVariant, pickModelVariant } from './types'
 
 export { FIGURE_HEIGHT_M, anchorFigureBind, clipHipsDrop, figureBox, figureRootY, inGarment, isGarmentNode,
-  prepareSheerPieces, SHEER_RENDER_ORDER,
+  prepareSheerPieces, SHEER_RENDER_ORDER, prepareGlossyPieces, GLOSSY_FABRICS,
   hipsTrackMedian, rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM } from './figure'
 export { clipShiftM } from './figure'
 export type { ClipHeightOffsetsCm, ClipShiftCm } from './figure'
