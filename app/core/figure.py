@@ -803,8 +803,10 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
         own.append(item_id)
         if stand_in:
             closed.add(item_id)
-    # 2b. Accessories (Ruling A118): worn when their CPU build for this body is current, else left off with why.
+    # 2b. Accessories (Ruling A118): worn when their CPU build for this body is current; otherwise (not built, due,
+    # failed, refused by the gate) shown painted until its mesh exists (spec § 6), the reason as its note.
     accessory: List[str] = []
+    accessory_painted: List[str] = []
     if sets.accessory:
         from app.core import accessory_build
         for item_id in sets.accessory:
@@ -812,7 +814,8 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
             if state["state"] == "current":
                 accessory.append(item_id)
             else:
-                left_out[item_id] = state["reason"]
+                accessory_painted.append(item_id)
+                notes[item_id] = f"{state['reason']} — shown painted"
     shown_closed = tuple(sorted(closed))
     notes.update({item_id: SHOWN_CLOSED for item_id in shown_closed})
     # 3. Hair.
@@ -839,12 +842,14 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
         texture = ""
     else:
         unpainted = set(own) | set(left_out) | set(accessory)
-        texture_sets = replace(sets, in_body=in_body, painted=tuple(wanted.painted),
+        texture_sets = replace(sets, in_body=in_body, accessory=tuple(sorted(accessory)),
+                               painted=tuple(sorted({*wanted.painted, *accessory_painted})),
                                own={item_id: sets.own.get(item_id, "") for item_id in unpainted})
         texture = texture_key(character_name, texture_sets, shape=shape, bsig=bsig, variant=shape_variant,
                               items=items, profile=profile)
     delivered = Figure(signature=wanted.signature, bsig=bsig, shape=shape, texture=texture,
-                       in_body=tuple(sorted(in_body)), painted=tuple(sorted(wanted.painted)), own=tuple(own),
+                       in_body=tuple(sorted(in_body)), painted=tuple(sorted({*wanted.painted, *accessory_painted})),
+                       own=tuple(own),
                        left_out=left_out, notes=notes, hair=hair, pieces=dict(sets.pieces), open=sets.open,
                        shown_closed=shown_closed, hair_style=hair_style, fit_refused=fit_refused,
                        fit_refused_on=shape if fit_refused else "", template=tuple(sorted(draped)),

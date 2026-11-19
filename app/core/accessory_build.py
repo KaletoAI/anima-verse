@@ -222,7 +222,7 @@ PLAUSIBLE_JOINTS = frozenset({"neck", "spine", "spine1", "spine2", "leftshoulder
 #: riding ON the jaw is wrong.
 HEAD_WEIGHT_MAX = 0.5
 HEAD_JOINTS = frozenset({"head", "jaw"})
-IMPLAUSIBLE = "The chain does not fit this body ({why}) — it is left off"
+IMPLAUSIBLE = "The chain does not fit this body ({why})"
 
 
 def plausible(metrics: Dict[str, Any], drop_m: float) -> None:
