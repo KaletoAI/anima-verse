@@ -85,6 +85,11 @@ RIM_BAND_M = 0.02   # body vertices this close to a piece opening are not judged
 #: Ruling A142: a body vertex with other skin within this distance outward (arm on the flank, thigh on thigh) is a
 #: contact, not judged — no cloth fits between (two layers of 1.5 mm + the 4 mm collision distance each side).
 CONTACT_M = 0.012
+#: A233: a poke candidate whose ray from the bone meets the body surface more than this before the vertex (and before
+#: the cloth) is not judged: the ray left the body through another part of the skin first (``measure_pose``). The
+#: generated bodies are thick shells whose inner wall lies ~7 mm under the skin, so a hit within this distance of the
+#: vertex is its own skin's wall, never another part.
+OCCLUDED_M = 0.012
 ARMS_DOWN = [("LeftArm", "Y", 30), ("RightArm", "Y", -30), ("LeftForeArm", "X", -20), ("RightForeArm", "X", -20)]
 
 
@@ -352,7 +357,8 @@ def measure_pose(arm, body, piece, pose, rest_edges_len, edges, rim):
     trusted): every ray starts on the SKELETON and runs out through the point.
     * a body vertex POKES when the piece is met between its bone (the strongest weight, Ruling A144) and the vertex
       (piece under the skin) and COVERED when it is met within 8 cm beyond it;
-      skin within RIM_BAND_M of a piece opening is not judged;
+      skin within RIM_BAND_M of a piece opening is not judged, nor skin whose ray leaves the body before it
+      (``OCCLUDED_M``, A233: the crotch's crease — reported as ``occluded_verts``);
     * a piece vertex is INSIDE when the body surface is met beyond it on that ray."""
     set_pose(arm, pose)
     bco, _bn, _tri = world_coords(body)
@@ -387,7 +393,7 @@ def measure_pose(arm, body, piece, pose, rest_edges_len, edges, rim):
         return "Trunk"
     dom = dominant_segments(body, seg_names)
     ax = axis_points_on(bco[cand], segs, dom[cand]) if len(cand) else np.zeros((0, 3))
-    region = poke = contact = 0
+    region = poke = contact = occluded = 0
     poked = []
     for i, q in zip(cand, ax):
         v = Vector(bco[i])
@@ -408,10 +414,19 @@ def measure_pose(arm, body, piece, pose, rest_edges_len, edges, rim):
         if c[0] is not None and limb_of(tri_bone[c[2]]) != limb_of(vbone[i]):
             contact += 1
             continue
-        region += 1
         if h[3] < L - 0.0005:
+            # A233: the ray left the body before it met the cloth — well before the vertex (a crease: the crotch
+            # between the thighs, Hips-weighted inner thigh skin under the crotch seen from the pelvis): the cloth it
+            # met spans the gap OUTSIDE the skin, it is not under it. Such a vertex is not judged from its bone.
+            early = bb.ray_cast(o, d, min(h[3], L - OCCLUDED_M))
+            if early[0] is not None:
+                occluded += 1
+                continue
+            region += 1
             poke += 1
             poked.append(i)
+            continue
+        region += 1
 
     def inside(idx):
         if len(idx) == 0:
@@ -442,7 +457,7 @@ def measure_pose(arm, body, piece, pose, rest_edges_len, edges, rim):
             by_bone[seg_names[k]] = by_bone.get(seg_names[k], 0) + 1
     return {
         "poke_share": round(poke / max(region, 1), 5), "region_body_verts": int(region),
-        "contact_verts": int(contact),
+        "contact_verts": int(contact), "occluded_verts": int(occluded),
         "poke_bones": dict(sorted(by_bone.items(), key=lambda kv: -kv[1])[:4]),
         "rim_inside_share": round(rim_share, 4), "rim_inside_max_mm": round(rim_mm, 1),
         "piece_inside_share": round(all_share, 4), "piece_inside_max_mm": round(all_mm, 1),
