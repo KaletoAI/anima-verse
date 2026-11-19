@@ -17,9 +17,9 @@ What it owns
   'render' group"). The device name is read from Taichi's own init log and checked again against the software
   names. Verified on this machine only with the Radeon 8060S (RADV); an NVIDIA or Intel driver is picked up the
   same way because nothing here names a vendor.
-- **Taichi start** (``session``): the one ``ti.init`` — f32, ``fast_math`` off, the offline kernel cache in the temp
-  folder with one sub-folder per arch (a CPU and a Vulkan cache never collide), the version check off (no
-  network), ``cpu_max_num_threads`` = the job's CPU budget (``fit_kernels.threads()`` unless given). Taichi's arch
+- **Taichi start** (``session``): the one ``ti.init`` — f32, ``fast_math`` off, the offline kernel cache in
+  ``<instance>/.taichi-cache`` (else the user's cache folder, never the shared temp folder) with one sub-folder per
+  arch (a CPU and a Vulkan cache never collide), the version check off (no network), ``cpu_max_num_threads`` = the job's CPU budget (``fit_kernels.threads()`` unless given). Taichi's arch
   is per process; a refit worker (its own spawn process) resolves at its first job. The runtime is restarted
   (``ti.reset`` + ``ti.init``, ~0.1 s plus the warm kernel compile, 0.2-0.4 s) only when a job needs another arch
   (``cpu=True`` below) or, on the CPU arch, another thread count.
@@ -264,7 +264,18 @@ def status_line() -> str:
 # --- the Taichi runtime --------------------------------------------------------------------------------------------
 
 def _cache_dir(arch: str) -> str:
-    return os.path.join(tempfile.gettempdir(), "anima-taichi-cache", arch)
+    """The offline kernel cache of ``arch``: ``<instance>/.taichi-cache/<arch>`` once an instance is chosen, else
+    the user's cache folder (``$XDG_CACHE_HOME`` or ``~/.cache``) ``/anima-verse/taichi-cache/<arch>``. Never a fixed
+    folder in the shared temp directory: another user (or installation) could own or plant kernels there."""
+    from app.core import paths
+    if paths.instance_initialised():
+        root = paths.get_instance_dir() / ".taichi-cache"
+    else:
+        base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+        root = os.path.join(base, "anima-verse", "taichi-cache")
+    d = os.path.join(str(root), arch)
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    return d
 
 
 def _init(ti: Any, arch: str, threads: int) -> str:
