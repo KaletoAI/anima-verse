@@ -294,15 +294,17 @@ try:
     img[35:37, 2:4] = (20, 40, 200)
     src, dst = tmp / "v.png", tmp / "v_out.png"
     Image.fromarray(img).save(src)
-    info = gt.prepare_view(str(src), dst)
+    info = gt.prepare_view(str(src), dst, matte=None)
     a = np.asarray(Image.open(dst))[..., 3]
     check("[7] border cut, blue kept", a[0, 0] == 0 and a[15, 20] == 255)
-    check("[7] skin strip cut (16.5 %)", a[26, 20] == 0 and close(info["skin_dropped"], 80 / 484, 1e-3), info)
+    # A230: the 2 x 2 island (4 px < 5 % of the 480 px piece) goes with the stray components before the skin
+    # count: 80 skin px / 480 (was 80 / 484)
+    check("[7] skin strip cut (16.7 %)", a[26, 20] == 0 and close(info["skin_dropped"], 80 / 480, 1e-3), info)
     check("[7] yellow kept", a[6, 11] == 255)
     check("[7] shaded skin cut", a[28, 20] == 0)
     check("[7] stray island cut", a[35, 2] == 0)
     check("[7] rim eroded", a[5, 10] == 0 and a[6, 11] == 255)
-    info_cut = gt.prepare_view(str(src), dst, garment_only=False)
+    info_cut = gt.prepare_view(str(src), dst, garment_only=False, matte=None)
     a = np.asarray(Image.open(dst))[..., 3]
     check("[7] a cut-out keeps its pixels", a[26, 20] == 255 and a[28, 20] == 255 and info_cut["skin_dropped"] == 0.0)
 

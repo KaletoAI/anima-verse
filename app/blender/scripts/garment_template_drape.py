@@ -1301,6 +1301,36 @@ def run_panels(a):
             "bake": tex, "draped": m}, {"glb": str(out / "skirt_template.glb")}
 
 
+def push_pull(rgb, valid):
+    """A230: ``rgb`` (h x w x 3 float) with every texel outside ``valid`` filled from the valid ones — the push-pull
+    pyramid: averages of the valid texels down to 1 px, then each level's holes filled from the coarser level on the
+    way back up. Valid texels keep their colour exactly. numpy only (Blender's Python has no scipy)."""
+    rgb = np.asarray(rgb, np.float64)
+    w = np.asarray(valid, np.float64)
+    levels = []
+    c, m = rgb * w[..., None], w
+    while True:
+        levels.append((c, m))
+        if min(c.shape[:2]) <= 1:
+            break
+        h2, w2 = (c.shape[0] + 1) // 2, (c.shape[1] + 1) // 2
+        cp = np.zeros((h2 * 2, w2 * 2, 3))
+        mp = np.zeros((h2 * 2, w2 * 2))
+        cp[:c.shape[0], :c.shape[1]] = c
+        mp[:m.shape[0], :m.shape[1]] = m
+        c = cp.reshape(h2, 2, w2, 2, 3).sum((1, 3))
+        m = mp.reshape(h2, 2, w2, 2).sum((1, 3))
+    # normalise each level to a colour where it has weight
+    cols = [(cc / np.maximum(mm, 1e-12)[..., None], mm > 0) for cc, mm in levels]
+    up = cols[-1][0]
+    for col, has in reversed(cols[:-1]):
+        coarse = np.repeat(np.repeat(up, 2, 0), 2, 1)[:col.shape[0], :col.shape[1]]
+        up = np.where(has[..., None], col, coarse)
+    out = rgb.copy()
+    out[~np.asarray(valid, bool)] = up[~np.asarray(valid, bool)]
+    return out
+
+
 def project_bake(obj, a, out_png, size=1024, co=None, nr=None, polys=None):
     """Projection bake of the front/back cut-out views onto obj's UVs (orthographic,
     registered by bounding box: the piece's projected bbox = the view's alpha bbox). ``co`` / ``nr`` = world
@@ -1361,8 +1391,12 @@ def project_bake(obj, a, out_png, size=1024, co=None, nr=None, polys=None):
         img[ty[ok], tx[ok], :3] = vpx[iy[ok], ix[ok], :3]
         valid[ty[ok], tx[ok]] = True
     coverage = float((valid & mask).sum() / max(1, mask.sum()))
-    med = np.median(img[valid][:, :3], axis=0) if valid.any() else np.array([.5, .5, .5])
-    img[~valid, :3] = med
+    if valid.any():
+        # A230: every empty texel takes the colour of the painted texels nearest it (push-pull), so a seam, a
+        # mip level or a filtered lookup past an island's edge reads the piece — the median colour used to stand there
+        img[..., :3] = push_pull(img[..., :3], valid)
+    else:
+        img[..., :3] = 0.5
     img[..., 3] = 1
     bi = bpy.data.images.new("template_tex", size, size, alpha=True)
     bi.pixels[:] = img.ravel()

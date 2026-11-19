@@ -62,7 +62,9 @@ SPIKE_SCRIPT = "garment_template_drape.py"
 #: the rim metrics read the open borders.
 #: 7: a hollow drape collider (a thick-shell body open to the outside) loses its inner wall (``_drop_inner_walls``).
 #: (A221 adds the strapless top — a new kind of piece; the existing drapes keep their keys, so no bump.)
-TEMPLATE_VERSION = 7
+#: 8 (A230): the source pictures are cut by ``garment_matte`` (key + BiRefNet consensus, rim un-mixed and filled from
+#: inside) and the projection bake fills its empty texels by push-pull — CPU only, the stored views stay.
+TEMPLATE_VERSION = 8
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.
@@ -1806,12 +1808,14 @@ def skin_mask(rgb):
             & (y >= SKIN_MIN_Y))
 
 
-def prepare_view(src: str, dst: Path, *, tolerance: int = 24, garment_only: bool = True) -> Dict[str, Any]:
-    """Write ``src`` as RGBA to ``dst`` with the piece cut free: an image that already has a
-    transparent background (a cut-out view) keeps its alpha; an opaque one (an item picture on a
-    plain background) loses every border-connected pixel within ``tolerance`` (max channel difference)
-    of the median border colour. Returns ``{alpha: "kept" | "border", share, skin_dropped}`` (share =
-    opaque pixels). The projection registers by the alpha bounding box, so the background must go.
+def prepare_view(src: str, dst: Path, *, garment_only: bool = True, matte: Any = "birefnet") -> Dict[str, Any]:
+    """Write ``src`` as RGBA to ``dst`` with the piece cut free — A230: ``garment_matte.cut`` (backdrop colour from the
+    border or, for a picture that already has alpha, from its transparent ring; the backdrop-distance key with a
+    soft ramp and the BiRefNet-DIS matte in consensus; small holes filled, strays dropped; the rim un-mixed from the
+    backdrop and despilled, the outer px and the outside filled with the colour further in). Returns ``{alpha:
+    "kept" | "border", share, skin_dropped, mode, bg, ...}`` (share = opaque pixels). The projection registers by
+    the alpha bounding box, so the background must go; the footprint is hard alpha, its colours never backdrop.
+    ``matte``: ``"birefnet"`` (default), None (the key alone) or a callable (the smokes).
 
     ``garment_only`` (the item picture — a picture of the piece WORN shows legs): skin (``skin_mask``,
     grown by SKIN_GROW_PX) is cut when it is a minority of the opaque pixels (a skin-coloured piece keeps
@@ -1820,21 +1824,10 @@ def prepare_view(src: str, dst: Path, *, tolerance: int = 24, garment_only: bool
     import numpy as np
     from PIL import Image
     from scipy import ndimage
+    from app.core import garment_matte
     image = Image.open(src).convert("RGBA")
-    px = np.asarray(image).copy()
-    alpha = px[..., 3]
-    if (alpha < 128).mean() > 0.02:
-        mode = "kept"
-    else:
-        rgb = px[..., :3].astype(np.int32)
-        border = np.concatenate([rgb[0], rgb[-1], rgb[:, 0], rgb[:, -1]])
-        bg = np.median(border, axis=0)
-        near = np.abs(rgb - bg).max(axis=2) <= tolerance
-        labels, _n = ndimage.label(near)
-        edge = np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))
-        background = np.isin(labels, edge[edge > 0])
-        px[..., 3] = np.where(background, 0, 255).astype(np.uint8)
-        mode = "border"
+    fn = garment_matte.birefnet_matte if matte == "birefnet" else matte
+    px, info = garment_matte.cut(np.asarray(image), matte=fn)
     dropped = 0.0
     if garment_only:
         opaque = px[..., 3] >= 128
@@ -1849,10 +1842,10 @@ def prepare_view(src: str, dst: Path, *, tolerance: int = 24, garment_only: bool
                 sizes = ndimage.sum(opaque, labels, range(1, count + 1))
                 opaque = labels == (int(np.argmax(sizes)) + 1)
             opaque = ndimage.binary_erosion(opaque, iterations=1)
+            px[..., :3] = garment_matte.decontaminate(px[..., :3], opaque.astype(float), opaque, info["bg"])
             px[..., 3] = np.where(opaque, 255, 0).astype(np.uint8)
     Image.fromarray(px).save(dst)
-    return {"alpha": mode, "share": round(float((px[..., 3] >= 128).mean()), 4),
-            "skin_dropped": round(dropped, 4)}
+    return {**info, "share": round(float((px[..., 3] >= 128).mean()), 4), "skin_dropped": round(dropped, 4)}
 
 
 def wall_only_failure(result: Dict[str, Any]) -> bool:

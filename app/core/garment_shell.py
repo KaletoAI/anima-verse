@@ -904,8 +904,10 @@ SEE_THROUGH_RESIDUAL = 15.0
 SEE_THROUGH_T_OVER = 0.05
 SEE_THROUGH_T_MIN = 0.15
 SEE_THROUGH_T_PURE = 0.08
-#: The backdrop must be neutral: its channels at most this far apart (a tinted backdrop is no reference).
-SEE_THROUGH_BG_CHROMA = 12.0
+#: The backdrop must be FLAT: the largest channel's median absolute deviation of the pixels outside the piece at most
+#: this (A230: any colour — the green screen of the piece-only prompts as well as white / grey; a tinted backdrop was
+#: refused before, by a channel-spread test of 12).
+SEE_THROUGH_BG_SPREAD = 12.0
 
 
 def see_through_text(*texts: Any) -> bool:
@@ -928,7 +930,7 @@ def unmix_backdrop(image, ghost_mask, apply: Optional[bool] = None) -> Tuple[np.
     10 % of the mask's inner pixels, refined once to the median of the pure cluster (backdrop share ``T`` below
     ``SEE_THROUGH_T_PURE``). A pixel ``c = F + T (bg - F) + r`` with ``|r| <= SEE_THROUGH_RESIDUAL`` and ``T`` within
     ``[-SEE_THROUGH_T_OVER, 1 + SEE_THROUGH_T_OVER]`` is on the line. ``info["gate"]``: the view looks like a lace —
-    a neutral backdrop (``SEE_THROUGH_BG_CHROMA``), ``SEE_THROUGH_MIN_SHARE`` mixed, ``SEE_THROUGH_MIN_PURE`` pure,
+    a flat backdrop of any colour (``SEE_THROUGH_BG_SPREAD``, A230), ``SEE_THROUGH_MIN_SHARE`` mixed, ``SEE_THROUGH_MIN_PURE`` pure,
     ``SEE_THROUGH_INTERLEAVE`` of the mixed next to pure fabric. ``apply``: True takes the backdrop share out of
     every pixel on the line (``c - clip(T, 0, 1) (bg - F)``), False never, None when the gate holds (``build_shell``
     decides once per piece). ``info``: ``gate``, ``see_through`` (applied), ``mixed_share``, ``pure_share``,
@@ -969,7 +971,7 @@ def unmix_backdrop(image, ghost_mask, apply: Optional[bool] = None) -> Tuple[np.
     share = float(mixed.sum()) / float(inner.sum())
     pure_share = float((pure & inner).sum()) / float(inner.sum())
     inter = float((mixed & near).sum()) / max(int(mixed.sum()), 1)
-    neutral = float(bg.max() - bg.min()) <= SEE_THROUGH_BG_CHROMA
+    neutral = float(np.median(np.abs(img[outside] - bg), 0).max()) <= SEE_THROUGH_BG_SPREAD
     info.update(mixed_share=round(share, 3), pure_share=round(pure_share, 3), interleave=round(inter, 3),
                 gate=bool(neutral and share >= SEE_THROUGH_MIN_SHARE and pure_share >= SEE_THROUGH_MIN_PURE
                           and inter >= SEE_THROUGH_INTERLEAVE))

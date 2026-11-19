@@ -11,8 +11,8 @@ out, no body:
   SHEER piece (``fabric == "sheer"``) the fabric-only line ``SHEER_LINE``;
 * at most ``JOBS_PER_VIEW`` (= ``garment_images.GHOST_RUN_JOBS``, A190) image jobs per view and click; when every
   attempt is refused the view offers "Use this" on an attempt, Upload and Regenerate (A183's shape);
-* cut out on the CPU (``garment_template.prepare_view``: border-connected background, alpha kept for an upload
-  with one) and cropped square around the piece;
+* cut out on the CPU (``garment_template.prepare_view`` → ``garment_matte.cut``, A230: backdrop key + BiRefNet
+  consensus, rim un-mixed and filled from inside; an upload's own alpha bounds the piece) and cropped square around the piece;
 * a SHEER piece's view is refused when skin-coloured pixels lie inside the piece mask (``skin_check``: the
   YCrCb box ``garment_template.skin_mask``, narrowed to the character's own skin tone from the base front view when
   there is one) — the refusal counts as one of the view's attempts.
@@ -41,8 +41,12 @@ VIEWS = ("front", "back")
 #: A190's cap: the image jobs one piece-only view may spend per click (Generate / Regenerate).
 JOBS_PER_VIEW = 2
 #: A SHEER piece's piece-only view: the fabric alone, so the bake never paints a body onto it.
-SHEER_LINE = ("Show the fabric alone, flat-lit, on a plain light grey background, with nothing behind it and nothing "
+SHEER_LINE = ("Show the fabric alone, flat-lit, with nothing behind it but the backdrop and nothing "
               "showing through it: no legs, no body, no skin — a picture of the fabric only.")
+#: A230: every piece-only view asks for a green screen (the user's tested wording, hub job ec2f13b2) — the cut-out
+#: (``garment_matte.cut``) keys any flat backdrop, and green is the one no rim un-mix confuses with a light fabric.
+#: The text is no fingerprint input: stored views stay; a new one (Generate / Regenerate) gets it.
+GREEN_LINE = "Replace the entire background with a flat, uniform bright green screen (#00FF00)."
 #: The back view of a template piece is made from the item picture (a front): turned around.
 BACK_LINE = "Turn the garment around and show its back, seen from behind."
 #: The extra negative of a sheer piece.
@@ -123,7 +127,7 @@ def missing_views(character_name: str, item_id: str) -> List[str]:
 def prompt_for(item: Dict[str, Any], view: str) -> Tuple[str, str]:
     """``(prompt, negative)`` of one piece-only view: the ghost text of the piece's class (A183 —
     ``ghost_prompt`` of the ``outfit_piece``, the back's side line included), the turn-around line on the back, the
-    fabric-only line for a sheer piece."""
+    fabric-only line for a sheer piece, the green-screen line last (A230)."""
     from app.core.garment_clothing import GHOST_NEGATIVE, ghost_prompt
     parts = [ghost_prompt((item or {}).get("outfit_piece") or {}, view)]
     if view == "back":
@@ -132,6 +136,7 @@ def prompt_for(item: Dict[str, Any], view: str) -> Tuple[str, str]:
     if is_sheer(item):
         parts.append(SHEER_LINE)
         negative += [n for n in SHEER_NEGATIVE if n not in negative]
+    parts.append(GREEN_LINE)
     return " ".join(parts), ", ".join(negative)
 
 
@@ -153,7 +158,15 @@ def cut_out(src: Path, dst: Path) -> Dict[str, Any]:
     x0, y0, x1, y1 = box
     side = int(PAD * max(x1 - x0, y1 - y0))
     cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
-    out = rgba.crop((cx - side // 2, cy - side // 2, cx - side // 2 + side, cy - side // 2 + side))
+    # A230: the padding past the picture's edge repeats the edge colours (the cut filled every transparent pixel with
+    # the piece's nearest colour) — never black next to the piece
+    arr = np.asarray(rgba)
+    x0p, y0p = cx - side // 2, cy - side // 2
+    pad = max(0, -x0p, -y0p, x0p + side - arr.shape[1], y0p + side - arr.shape[0])
+    rgb = np.pad(arr[..., :3], ((pad, pad), (pad, pad), (0, 0)), mode="edge")
+    al = np.pad(arr[..., 3], pad)
+    sl = (slice(y0p + pad, y0p + pad + side), slice(x0p + pad, x0p + pad + side))
+    out = Image.fromarray(np.dstack([rgb[sl], al[sl]]).astype(np.uint8), "RGBA")
     out.save(dst, format="PNG")
     return {**info, "bbox": [x0, y0, x1, y1], "side": side}
 
