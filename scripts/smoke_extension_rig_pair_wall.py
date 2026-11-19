@@ -52,6 +52,24 @@ note 'colour pair rejected: ...') and the shape decides, as in E: the bumps are
 E's, the dimple (4 mm over r 1.2 cm, .06 beside the crest) moves the sigma-.05
 context by about .03 mm at the crest, so the crest, the reach and the depth .05
 are E's.
+G (no marker, a half-round facing outward): per side the plane
+y=-.1+.25*(|x|-.10) (going back toward the outer side, normal
+n=(+-.25,-1,0)/sqrt(1.0625)=(+-.242536,-.970143,0)) carries a cap of base
+radius .06 and height .04 around B=(+-.10,-.1,1.4): sphere radius
+(.06**2+.04**2)/.08=.065, centre c=B-.025*n=(+-.093937,-.075746,1.4). Its tip,
+the point furthest in front of the plane along n, is B+.04*n =
+(+-.109701,-.138806,1.4). The front-most point of the sphere is
+c-(0,.065,0)=(+-.093937,-.140746,1.4), on the cap (14 deg from its axis, the
+cap reaches 67 deg): 15.9 mm from the tip toward the midline. Every wall point
+lies on the plane (the steepest rise of each direction is at the cap's base
+circle, the lateral reach mirrors the medial .068 beyond the cap's outer edge
+at .158), so the wall is that plane. The old re-pick took the front-most point
+in front of the wall's sagittal normal (0,-1,0): 15.9 mm off. The tip now is the
+cell whose blurred surface stands furthest in front of the wall along its full
+normal; on a sphere the blur moves that maximum by 3*sigma**2*sin(t)/(2*R*cos(t)**2)
+(t = 14.04 deg), .17 mm at the last sigma .0053, and the 2.5 mm grid leaves
+at most 1.25 mm in x and z (1.77 mm, plus .25*1.25=.31 mm in y on the 14 deg
+slope), so the tip lies within 2.5 mm of B+.04*n; the old 15.9 mm fails that.
 Midline strip (Ruling A173): every weight is multiplied by
 smooth((d-side_margin)/.01) with d the distance from the midline; for x<=.0075 this
 is at most smooth((.0075-.005)/.01)=smooth(.25)=.15625 (+fp). Without the strip the
@@ -124,6 +142,10 @@ def fixture(kind):
     centre=Vector((sign*.15,-.1,1.4))-n*.056
     q=.106**2-(x-centre.x)**2-(z-centre.z)**2
     y=min(-.1+tilt*dz,centre.y-math.sqrt(q)) if q>=0 else -.1+tilt*dz
+   elif kind=='G':
+    nG=Vector((sign*.25,-1,0)).normalized(); cG=Vector((sign*.10,-.1,1.4))-nG*.025
+    q=.065**2-(x-cG.x)**2-(z-cG.z)**2
+    y=min(-.1+.25*(abs(x)-.10),cG.y-math.sqrt(q)) if q>=0 else -.1+.25*(abs(x)-.10)
    elif kind in ('E','F'):
     r2=((x-sign*.06)/.05)**2+(dz/.09)**2
     y=-.1-.05*max(0.,1-r2)**.5
@@ -148,7 +170,7 @@ def fixture(kind):
  mod=obj.modifiers.new('Skin','ARMATURE'); mod.object=arm
  vg=obj.vertex_groups.new(name='Base'); vg.add(list(range(len(vertices))),1.,'REPLACE')
  vg=obj.vertex_groups.new(name='Child'); vg.add([excluded],.3,'REPLACE')
- if kind not in ('A','E'):
+ if kind not in ('A','E','G'):
   uv=me.uv_layers.new()
   for loop in me.loops:
    v=me.vertices[loop.vertex_index].co
@@ -176,7 +198,11 @@ def fixture(kind):
  surface=scope['pair_surface']([obj]); bones={scope['bone_key'](b.name):b for b in data.bones}
  plan=scope['pair_plan'](group,p,co,bones,surface,[(obj,v.index) for v in me.vertices])
  sides=plan[2]['placement']
- assert all(s['apex_source']==('geometry' if kind in ('A','C','E','F','X') else 'colour') for s in sides), sides
+ assert all(s['apex_source']==('geometry' if kind in ('A','C','E','F','G','X') else 'colour') for s in sides), sides
+ if kind=='G':
+  for sign,s in zip((1,-1),sides):
+   apex=Vector((sign*.109701,-.138806,1.4))
+   assert (Vector(s['tip'])-apex).length<.0025, (s['tip'],apex)
  assert excluded not in plan[1]['ExampleLeft'], plan[1]['ExampleLeft'].get(excluded)
  if kind=='A':
   expected=Vector((.15,-.1,1.4))+n*.05
@@ -209,6 +235,7 @@ def fixture(kind):
  print('PASS fixture',kind)
 for kind in ('A','B','C','D','E'): fixture(kind)
 fixture('F')
+fixture('G')
 fixture('X')
 Path(job['result']).write_text(json.dumps({'ok':True,'data':{},'outputs':{}}))
 """

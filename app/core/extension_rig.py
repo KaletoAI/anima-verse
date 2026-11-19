@@ -285,13 +285,15 @@ PART_BUILDS = {"attached_part": 14, "inset_part": 9}
 # at the sternum, the depth gate follows the underside down to the crease (Ruling A173).
 # 5: a colour pair that does not stand out of its wall is no marker; the pair is placed
 # from its shape (outline, else crest) instead of failing the group.
+# 6: without a marker the tip is the surface point furthest in front of the wall along its full
+# normal, followed from the crest down the blur scales (outline and crest alike).
 # mouth_part 1: the skin cut along the measured lip line with a closed pouch behind it (Ruling A203).
 # 2: the shape key ``mouth_open`` (the jaw's turn by the computed share, the upper lip's lift, the dome).
 # 3: the bone Jaw owns the turn by computed weights, the shape key keeps the lift and the dome.
 # 4: the lips' cut edge is a fillet with the mouth open, faces that would stand between the open walls are removed,
 # the colour is read from the hit face's own material.
 # 5: teeth, gums and a tongue (step 7, Ruling A206; the character's ``mouth_teeth`` options), the jaw opens 30 deg.
-OP_BUILDS = {**PART_BUILDS, "pair_protrusion": 5, "pair_tip": 2, "mouth_part": 6}
+OP_BUILDS = {**PART_BUILDS, "pair_protrusion": 6, "pair_tip": 2, "mouth_part": 6}
 
 
 def extension_rig_fingerprint(groups, overrides=None):

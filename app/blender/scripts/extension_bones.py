@@ -580,7 +580,7 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
     zs = lo+step*np.arange(-margin,int(math.floor((hi-lo)/step+1e-9))+1+margin)
     ds = p['lateral_min']+step*np.arange(-margin,int(math.floor((p['lateral_max']-p['lateral_min'])/step+1e-9))+1+margin)
     def crest_search():
-        # Built only in geometry mode: about 60k front rays.
+        # Built only without a colour marker: about 60k front rays.
         def blur(a,sigma):
             reach = math.ceil(3*sigma/step)
             kernel = np.exp(-.5*(np.arange(-reach,reach+1)*step/sigma)**2)
@@ -603,8 +603,59 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
                   if margin <= j < len(zs)-margin and margin <= i < len(ds)-margin]
         if not paired:
             raise ValueError('no protrusion candidates on both sides')
-        def cell(j,i,sign):
-            return Vector((mid+sign*ds[i],grids[0 if sign==1 else 1][1][j,i],zs[j]))
+        def refine(start,fitted):
+            # The tip is the surface point standing furthest in front of its
+            # wall, along the wall's full normal: the lateral tilt is part of it,
+            # a half-round faces outward (dropping it took the front-most point,
+            # 11 mm further toward the midline on 20 colour-marked models). The
+            # blur that makes the crest robust also shifts it (9 mm toward the
+            # midline at 1.5 cm on the same models), so each side follows its
+            # maximum from apex_smooth_radius down the scales, sigma shrinking by
+            # sqrt(2) to two grid steps, each step climbing to the nearest
+            # maximum; it stays inside the candidate cells and within
+            # 2 x apex_smooth_radius of the start, as far as a blur of that
+            # radius can move a crest it resolves (measured at most 2.7 cm), so
+            # a fold, strap or collar beyond is never reached.
+            out = []
+            inside = np.zeros((len(zs),len(ds)),bool)
+            inside[margin:len(zs)-margin,margin:len(ds)-margin] = True
+            for (c,n,_),a,sign,(depth,_,_) in zip(fitted,start,(1,-1),grids):
+                known = ~np.isnan(depth)
+                x,z = np.meshgrid(mid+sign*ds,zs)
+                near = inside&(np.hypot(x-a.x,z-a.z) <= 2*p['apex_smooth_radius'])
+                sigma,j,i = p['apex_smooth_radius'],None,None
+                while sigma >= 2*step:
+                    height = (x-c.x)*n.x+(normalised(depth,known,sigma)-c.y)*n.y+(z-c.z)*n.z
+                    height = np.where(near&known,height,-np.inf)
+                    if j is None:
+                        j,i = np.unravel_index(int(np.argmax(height)),height.shape)
+                        # The finer scales refine inside this crest only (the
+                        # connected cells within apex_plateau_depth of its
+                        # top): a narrow ridge the coarse blur levels, a collar
+                        # or a seam, never leads out of it (on 2 of 12 clothed
+                        # models it took one side 1-2 cm onto such an edge).
+                        level,crest,stack = height[j,i]-p['apex_plateau_depth'],{(j,i)},[(j,i)]
+                        while stack:
+                            u,v = stack.pop()
+                            for q in ((u+1,v),(u-1,v),(u,v+1),(u,v-1)):
+                                if q not in crest and 0 <= q[0] < len(zs) and 0 <= q[1] < len(ds) and height[q] >= level:
+                                    crest.add(q)
+                                    stack.append(q)
+                        keep = np.zeros(height.shape,bool)
+                        keep[tuple(np.array(sorted(crest)).T)] = True
+                    height = np.where(keep,height,-np.inf)
+                    while True:
+                        best = max(((height[u,v],u,v) for u in range(max(j-1,0),min(j+2,len(zs)))
+                                    for v in range(max(i-1,0),min(i+2,len(ds)))),key=lambda t:t[0])
+                        if best[0] <= height[j,i]:
+                            break
+                        j,i = best[1:]
+                    sigma /= math.sqrt(2)
+                hit = front(float(x[j,i]),float(zs[j]))
+                if hit is None:
+                    raise ValueError('crest centre missed surface')
+                out.append(Vector((x[j,i],hit[0].y,zs[j])))
+            return out
         def pick(score):
             # Centre of the crest: a flat plateau has no single best cell, so the
             # connected cells within apex_plateau_depth per side are averaged.
@@ -627,7 +678,7 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
                     raise ValueError('crest centre missed surface')
                 out.append(Vector((mid+sign*d,hit[0].y,z)))
             return out
-        return cell,pick,pick(lambda c:grids[0][2][c]+grids[1][2][c])
+        return refine,pick(lambda c:grids[0][2][c]+grids[1][2][c])
     # The colour search still starts at each side's front-most vertex.
     frontmost = []
     for sign in (1,-1):
@@ -796,20 +847,15 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
             fitted.append((c,n,points))
         return reach,fitted
     def outline_plan():
-        # The apex is the middle of the half-round, the outline's centre on
-        # the surface, mirrored over both sides: the tip suggestion of a
-        # dependent tip group (pair_tip build 1). The front-most point is not
-        # used: on both measured models it sits 2.5-3 cm toward the midline
-        # of the middle, where the half-rounds lean in.
-        cd,cz = outline['centre']
-        apexes = []
-        for sign in (1,-1):
-            hit = front(float(mid+sign*cd),float(cz))
-            if hit is None:
-                raise ValueError('outline centre missed surface')
-            apexes.append(Vector((mid+sign*cd,hit[0].y,cz)))
-        outline['apex'] = [cd,cz]
-        reach,fitted = walls(apexes,[outline_reach(outline,cd,cz,directions)]*2)
+        # The apex is the refined crest, as without an outline: the tip
+        # suggestion of a dependent tip group (pair_tip build 1). Neither the
+        # front-most point (2.5-3 cm toward the midline, where the half-rounds
+        # lean in) nor the outline's centre (on 5 colour-marked models 15 mm
+        # toward the midline and 8 mm above the marker) is the tip. The
+        # outline still sets the wall's reach.
+        refine,start = crest_search()
+        apexes = refine(start,walls(start)[1])
+        reach,fitted = walls(apexes,[outline_reach(outline,sign*(a.x-mid),a.z,directions) for a,sign in zip(apexes,(1,-1))])
         return apexes,reach,fitted
     if colour and pinned is None:
         # A colour pair is a tip only where it stands out of its wall. On a
@@ -837,7 +883,7 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
     elif colour or pinned is not None:
         apexes = [v.copy() for v,_ in markers]
     else:
-        cell,pick,initial = crest_search()
+        refine,initial = crest_search()
         apexes = initial
     if colour and extent:
         reach,fitted = walls(apexes,extent['pinned'] if 'pinned' in extent else
@@ -848,11 +894,7 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
         reach,fitted = walls(apexes,outline['pinned'])
     if not colour and not outline:
         if pinned is None:
-            near = lambda c:all(math.hypot(mid+sign*ds[c[1]]-start.x,zs[c[0]]-start.z)<=p['marker_search_radius'] for sign,start in zip((1,-1),initial))
-            # Only the sagittal tilt of the wall moves the tip (a torso leaning back);
-            # its lateral tilt follows the rib cage and would drag the tip to the midline.
-            sagittal = [Vector((0,n.y,n.z)).normalized() for _,n,_ in fitted]
-            apexes = pick(lambda c:sum((cell(*c,sign)-w[0]).dot(s) for sign,w,s in zip((1,-1),fitted,sagittal)) if near(c) else -math.inf)
+            apexes = refine(initial,fitted)
             reach,fitted = walls(apexes)
         # Without a marked tip (clothing) the tangent search rarely finds a real
         # boundary; a round outline of the median reach avoids angular jumps.
