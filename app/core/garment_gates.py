@@ -655,6 +655,19 @@ def head_zone(base_mask) -> Optional[Dict[str, Any]]:
     return {"row": row, "rule": "neck", "t": _r((row - y0) / hb, 4)}
 
 
+#: Ruling A118 J6: a piece whose worn region is below this share of the base body in EVERY worn view is too thin
+#: for the own-mesh chain (a chain, a thin strap): the ghost edit has nothing to keep and invents a garment. Lirien's
+#: "Goldene Halskette" (2026-11-15): worn front 0.0086, back 0.0089 — then three refused ghost tries.
+THIN_PIECE_MAX = 0.03
+
+
+def thin_piece(shares: Dict[str, float]) -> bool:
+    """True iff ``shares`` (view -> the worn gate's ``garment_share``) is non-empty and every value is below
+    ``THIN_PIECE_MAX`` (the bound is exclusive: 0.03 is not thin)."""
+    values = [float(v) for v in (shares or {}).values() if v is not None]
+    return bool(values) and len(values) == len(shares) and all(v < THIN_PIECE_MAX for v in values)
+
+
 def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
               occupied: Iterable[str] = (), xor_max: float = OUTSIDE_XOR_MAX,
               drift_px: float = OUTSIDE_DRIFT_PX,

@@ -233,6 +233,11 @@ BASE_VIEW_CHANGED_ERROR = ("Base view changed meanwhile ({views}) — the base b
                            "chain ran; run the chain again")
 
 
+#: Ruling A118 J6: the refusal code and text of an own-mesh piece too thin for its chain (``_thin_piece_check``).
+THIN_PIECE = "THIN_PIECE"
+THIN_PIECE_TEXT = "Too thin for its own mesh — use Painted or Accessory"
+
+
 class _Refused(Exception):
     """A gate of the orchestration itself refused (bottoms, fit)."""
 
@@ -369,6 +374,25 @@ def _cutout_sha(character_name: str, item_id: str, fsig: str, step: str, view: s
         return None
     path = _image(character_name, item_id, fsig, step, view)
     return _sha(path) if path.is_file() else ""
+
+
+def _thin_piece_check(character_name: str, item: Dict[str, Any], kind: str, fsig: str,
+                      profile: Dict[str, Any]) -> None:
+    """Ruling A118 J6: before the ghost step of an own-mesh CLOTHING piece (its worn views accepted), refuse with
+    ``THIN_PIECE`` when every worn view's region share is below ``garment_gates.THIN_PIECE_MAX`` — before any ghost
+    job is paid. A shell (made from the body, no ghost edit) and footwear (its own chain) are exempt."""
+    from app.core import garment_gates, garment_set, garment_shell
+    if kind != garment_set.CLOTHING or garment_shell.shape_of(item) == garment_shell.SHELL:
+        return
+    item_id = item["id"]
+    shares: Dict[str, Any] = {}
+    for v in _step_views(character_name, item_id, "worn", profile):
+        path = _image(character_name, item_id, fsig, "worn", v)
+        gate = _accepted_gate(path) if _accepted(path) else None
+        shares[v] = (gate or {}).get("garment_share")
+    if garment_gates.thin_piece(shares):
+        raise _Refused("ghost", THIN_PIECE_TEXT, {"code": THIN_PIECE, "garment_share": shares,
+                                                 "limit": garment_gates.THIN_PIECE_MAX})
 
 
 def _image(character_name: str, item_id: str, fsig: str, step: str, view: str, attempt: int = 0) -> Path:
@@ -3502,6 +3526,8 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                        + [(s, v) for s, v, _why in _follow_ups(kind, first, view,
                                                                 _step_views(character_name, item_id, first, profile))])
             for step, v in targets:
+                if step == "ghost":
+                    _thin_piece_check(character_name, item, kind, fsig, profile)   # Ruling A118 J6
                 f = force and (step, v) == (first, view)
                 if not f and _view_done(character_name, item_id, fsig, step, v):
                     continue
@@ -3543,6 +3569,9 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
         run_steps = order[order.index(first):order.index(last) + 1]
         for step in run_steps:
             forced = force and step == first
+            if step == "ghost":
+                # Ruling A118 J6: a piece too thin for the own-mesh chain stops before any ghost job.
+                _thin_piece_check(character_name, item, kind, fsig, profile)
             gs.start(character_name, item_id, step)
             produced = False
             if step in gs.IMAGE_STEPS:
