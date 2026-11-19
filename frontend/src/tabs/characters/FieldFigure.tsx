@@ -61,6 +61,8 @@
  * model it has and the button reads "Build base body (N hub jobs)" with NO_BASE_BODY_NOTE under it. Polls GET
  * …/figure while a Build runs (useFigure); the tab re-reads on the push topic `generation`.
  */
+import { AccessoryPieceControls } from './WardrobeAccessory'
+import { ModeSwitchButton } from './WardrobeGarment'
 import { cpuProgressText } from '../../lib/cpuProgress'
 import { useCallback, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
@@ -89,7 +91,7 @@ import {
   FRONT_WAITS_FOR_BUILD, NO_BASE_BODY_NOTE, REFIT_LABEL, STEP_NAMES, autoBuildNote, baseBodyLine, bodyRows, buildButton,
   changeLine, frontBuildCovers, frontRegenerate, hairState, headerLine, noBaseBody, planRows, regenerateMeshLabel,
   retryLabel, servedLines, shortCost, stateMeshAction, stateToggleNote, statusLight, templateBuilt, templateCost,
-  templateSummary, wornState, isOwnMeshMode,
+  templateSummary, wornState, isOwnMeshMode, isThinPieceRefusal,
 } from './figureModel'
 import type { FigurePayload, FigureWornRow, GenerationPause, HairMode, PieceState, WaitingJob } from './figureModel'
 import type { Light } from './hairstylesModel'
@@ -585,6 +587,14 @@ function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairst
                   onClick={() => setParams(row.item_id)}>
                   {row.template?.params ? t('Edit parameters…') : t('Set parameters…')}
                 </button>
+              ) : null}
+              {row.mode === 'accessory' ? <AccessoryPieceControls character={character} itemId={row.item_id} /> : null}
+              {isThinPieceRefusal(row.failure) ? (
+                // Ruling A118 J6: a piece too thin for its own mesh — one click moves it to a mode that fits.
+                <>
+                  <ModeSwitchButton itemId={row.item_id} mode="painted" onChanged={onChanged} />
+                  <ModeSwitchButton itemId={row.item_id} mode="accessory" onChanged={onChanged} />
+                </>
               ) : null}
               {row.mode === 'template' && row.template?.state === 'failed' ? retry : null}
               {row.state === 'failed' ? retry : null}

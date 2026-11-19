@@ -18,6 +18,7 @@
  * Boot hem (BootHemControl): GET/POST /characters/{c}/outfit-options, shown
  * under the worn boot when own-mesh trousers are worn with it.
  */
+import { AccessoryPieceControls } from './WardrobeAccessory'
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiDelete, setOutfitOptions, type BootHemMode, type BootHemState } from '../../lib/api'
@@ -556,6 +557,11 @@ export function WardrobeTab({ character, onOpenFigure }: {
                   {garments.pipeline && garments.modes?.[it.item_id] === 'template' ? (
                     // A168: the template piece's drape state and its parameter dialog, here like in the Figure tab.
                     <TemplatePieceControls character={character} itemId={it.item_id}
+                      version={modeChanged[it.item_id] || 0} />
+                  ) : null}
+                  {garments.pipeline && garments.modes?.[it.item_id] === 'accessory' ? (
+                    // A216: the accessory's build state and its settings dialog (kind, drop, metal beside a 3D view).
+                    <AccessoryPieceControls character={character} itemId={it.item_id}
                       version={modeChanged[it.item_id] || 0} />
                   ) : null}
                   {it.equipped && garments.pipeline && garments.modes?.[it.item_id] === 'painted' ? (

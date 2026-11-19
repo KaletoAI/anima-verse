@@ -348,6 +348,34 @@ const MATERIAL_ORDER: PieceMaterial[] = ['auto', 'leather', 'denim', 'cotton', '
  *  first and only `material` changes). It runs nothing: no hub job, no new fit — a change of the preset it takes
  *  effect as re-assembles the wearers' figures on the CPU when they are next shown; the line under it says so
  *  before the change and names the wearers after it. */
+/** Ruling A118 J6: "Switch to Painted (0 jobs)" / "Switch to Accessory (0 jobs)" on a piece refused as too thin for
+ *  its own mesh — stores the item's mode (every wearer), spends nothing; the next Build makes the piece that way. */
+export function ModeSwitchButton({ itemId, mode, onChanged }: {
+  itemId: string
+  mode: 'painted' | 'accessory'
+  onChanged: () => void
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [busy, setBusy] = useState(false)
+  const url = `/inventory/items/${encodeURIComponent(itemId)}`
+  const label = mode === 'painted' ? t('Switch to Painted (0 jobs)') : t('Switch to Accessory (0 jobs)')
+  return (
+    <button type="button" className="ga-btn ga-btn-sm" disabled={busy}
+      title={t('Changes the piece’s mode for every wearer; spends nothing — the next Build makes it this way')}
+      onClick={() => {
+        setBusy(true)
+        apiGet<{ item: { outfit_piece?: Record<string, unknown> } }>(url)
+          .then(({ item }) => apiPut(url, { outfit_piece: { ...(item.outfit_piece || {}), mesh_mode: mode } }))
+          .then(() => onChanged())
+          .catch((e: Error) => toast(t('Error') + ': ' + e.message, 'error'))
+          .finally(() => setBusy(false))
+      }}>
+      {label}
+    </button>
+  )
+}
+
 export function MaterialSelect({ itemId, material, disabled, onChanged }: {
   itemId: string
   material: PieceMaterialInfo

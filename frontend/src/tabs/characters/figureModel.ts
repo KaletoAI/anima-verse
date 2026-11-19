@@ -19,13 +19,13 @@ import { filesLabel, sizeLabel } from './hairstylesModel'
 import type { Light } from './hairstylesModel'
 
 /** How an outfit piece reaches the figure (`garment_set.MESH_MODES`). */
-export type MeshMode = 'own_mesh' | 'shell' | 'painted' | 'in_body' | 'template'
+export type MeshMode = 'own_mesh' | 'shell' | 'painted' | 'in_body' | 'template' | 'accessory'
 /** How the hair reaches the figure: HairDeck cards from the profile picture, HAAR strands from the text (H3), or
  *  in the body. */
 export type HairMode = 'hairdeck' | 'haar' | 'body'
 
 /** The select's order. */
-export const MESH_MODES: MeshMode[] = ['own_mesh', 'shell', 'template', 'painted', 'in_body']
+export const MESH_MODES: MeshMode[] = ['own_mesh', 'shell', 'template', 'accessory', 'painted', 'in_body']
 export const HAIR_MODES: HairMode[] = ['hairdeck', 'haar', 'body']
 
 export const MESH_MODE_LABELS: Record<MeshMode, string> = {
@@ -34,6 +34,7 @@ export const MESH_MODE_LABELS: Record<MeshMode, string> = {
   painted: 'Painted',
   in_body: 'In the body',
   template: 'Template (fabric)',
+  accessory: 'Accessory',
 }
 
 export const HAIR_MODE_LABELS: Record<HairMode, string> = {
@@ -49,6 +50,7 @@ export const MESH_MODE_HINTS: Record<MeshMode, string> = {
   painted: "Painted onto the body's texture.",
   in_body: 'Meshed as part of the body.',
   template: 'A sewing pattern sized to the body and draped as cloth on the CPU (0 hub jobs); 1 LLM call suggests its parameters from the item picture. Skirts and dresses today.',
+  accessory: 'A thin metal piece made on the CPU from the body (0 hub jobs): a chain along the neck today. Its kind, drop and metal are set in the Wardrobe.',
 }
 
 export const HAIR_MODE_HINTS: Record<HairMode, string> = {
@@ -65,6 +67,15 @@ export function hairModeDisabled(m: HairMode, built: readonly string[] = HAIR_MO
 
 export function isMeshMode(v: unknown): v is MeshMode {
   return v === 'own_mesh' || v === 'shell' || v === 'painted' || v === 'in_body' || v === 'template'
+    || v === 'accessory'
+}
+
+/** Ruling A118 J6: the refusal text of an own-mesh piece too thin for its chain (`garments.THIN_PIECE_TEXT`). */
+export const THIN_PIECE_TEXT = 'Too thin for its own mesh — use Painted or Accessory'
+
+/** Whether a row's failure is the J6 thin-piece refusal (its rows offer "Switch to Painted" / "Switch to Accessory"). */
+export function isThinPieceRefusal(failure: string | null | undefined): boolean {
+  return !!failure && failure.includes(THIN_PIECE_TEXT)
 }
 
 /** The modes whose piece is a fitted mesh of its own and runs the own-mesh chain (`garment_set.OWN_MESH_MODES`):
@@ -1377,4 +1388,57 @@ export const TEMPLATE_STATE_LABELS: Record<TemplateProgress['state'], string> = 
 export const TEMPLATE_STATE_COLOR: Record<TemplateProgress['state'], string> = {
   ready: 'var(--success, #3fb950)', missing: 'var(--warning, #d29922)', failed: 'var(--danger, #f85149)',
   blocked: 'var(--warning, #d29922)', running: 'var(--accent, #6aa9ff)',
+}
+
+// --- Accessories (Ruling A118, A216) ---------------------------------------------------------------------------
+
+/** An accessory's item-wide description (`accessory_spec.normalize`); only the fields the dialog edits are typed. */
+export interface Jewellery {
+  kind: string
+  chain?: { drop_cm?: number; thickness_mm?: number; style?: string }
+  metal?: string
+  [key: string]: unknown
+}
+
+/** GET /characters/{c}/figure/accessory/{item}. */
+export interface AccessoryInfo {
+  item_id: string
+  name: string
+  mode: string
+  jewellery: Jewellery | null
+  suggested: string | null
+  kinds: string[]
+  built_kinds: string[]
+  drop_presets: Record<string, number>
+  metals: string[]
+  ranges: Record<string, [number, number]>
+  state: 'current' | 'due' | 'blocked' | 'failed' | string
+  reason: string
+  metrics: { gap_mm?: { min?: number; p50?: number; p95?: number }; inside_share?: number; triangles?: number } | null
+  built_at: string
+  cost: { hub_jobs: number }
+  glb_url: string
+}
+
+export const ACCESSORY_KIND_LABELS: Record<string, string> = {
+  necklace: 'Necklace', choker: 'Choker', earrings: 'Earrings', bracelet: 'Bracelet', ring: 'Ring',
+  anklet: 'Anklet', belt: 'Belt', strap: 'Strap',
+}
+
+export const ACCESSORY_METAL_LABELS: Record<string, string> = {
+  gold: 'Gold', silver: 'Silver', rose_gold: 'Rose gold', black: 'Black metal', custom: 'Custom colour',
+}
+
+export const ACCESSORY_STATE_LABELS: Record<string, string> = {
+  current: 'Built', due: 'Due', blocked: 'Cannot build yet', failed: 'Build failed',
+}
+
+export const ACCESSORY_STATE_COLOR: Record<string, string> = {
+  current: '#3fb950', due: '#d29922', blocked: '#8b949e', failed: '#f85149',
+}
+
+/** The named length a drop matches (`accessory_spec.DROP_PRESETS`, within 0.25 cm), '' when none. */
+export function dropPresetOf(dropCm: number, presets: Record<string, number>): string {
+  const hit = Object.entries(presets).find(([, cm]) => Math.abs(cm - dropCm) <= 0.25)
+  return hit ? hit[0] : ''
 }

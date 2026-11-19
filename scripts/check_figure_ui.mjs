@@ -13,8 +13,13 @@
  * ============================================================================
  * [1] Labels, verbatim from the plan:
  *       MESH_MODE_LABELS  own_mesh → "Own mesh", shell → "Shell from the body" (A168: its own mode), painted →
- *                         "Painted", in_body → "In the body", template → "Template (fabric)"; the select's order
- *                         own_mesh, shell, template, painted, in_body (the two own-mesh chains first, A168)
+ *                         "Painted", in_body → "In the body", template → "Template (fabric)", accessory →
+ *                         "Accessory" (A216); the select's order own_mesh, shell, template, accessory, painted, in_body
+ *                         (the two own-mesh chains first, A168; the CPU-made modes next)
+ *       A216: dropPresetOf(4, {collar: 4, princess: 10, matinee: 20}) → "collar" (|4 − 4| = 0 ≤ 0.25);
+ *             dropPresetOf(10.25, …) → "princess" (0.25 ≤ 0.25); dropPresetOf(10.5, …) → "" (0.5 > 0.25);
+ *             isThinPieceRefusal("Too thin for its own mesh — use Painted or Accessory") → true, ("x") → false,
+ *             (null) → false.
  *       HAIR_MODE_LABELS  hairdeck → "HairDeck", haar → "HAAR", body → "In the body"
  *     MESH_MODES / HAIR_MODES list them in that order (the select's order).
  * [2] hairModeDisabled(mode, built): data-driven since H3 — with the server's built list ['hairdeck', 'haar', 'body']
@@ -423,10 +428,18 @@ try {
 // [1]
 check('[1] MESH_MODE_LABELS', m.MESH_MODE_LABELS,
   { own_mesh: 'Own mesh', shell: 'Shell from the body', painted: 'Painted', in_body: 'In the body',
-    template: 'Template (fabric)' });
+    template: 'Template (fabric)', accessory: 'Accessory' });
+{
+  const presets = { collar: 4, princess: 10, matinee: 20 };
+  check('[1] dropPresetOf 4', m.dropPresetOf(4, presets), 'collar');
+  check('[1] dropPresetOf 10.25', m.dropPresetOf(10.25, presets), 'princess');
+  check('[1] dropPresetOf 10.5', m.dropPresetOf(10.5, presets), '');
+  check('[1] isThinPieceRefusal', [m.isThinPieceRefusal('Too thin for its own mesh — use Painted or Accessory'),
+    m.isThinPieceRefusal('x'), m.isThinPieceRefusal(null)], [true, false, false]);
+}
 check('[1] HAIR_MODE_LABELS', m.HAIR_MODE_LABELS,
   { hairdeck: 'HairDeck', haar: 'HAAR', body: 'In the body' });
-check('[1] MESH_MODES order', m.MESH_MODES, ['own_mesh', 'shell', 'template', 'painted', 'in_body']);
+check('[1] MESH_MODES order', m.MESH_MODES, ['own_mesh', 'shell', 'template', 'accessory', 'painted', 'in_body']);
 // Ruling A138: the template row's summary and cost line, and its due light.
 check('[1] templateSummary', m.templateSummary({ kind: 'skirt', length_m: 0.45, flare: 0.4, waist_height: 'natural',
   slit: 'left', slit_m: 0.2, sleeves: 'none', fabric: 'medium' }),
