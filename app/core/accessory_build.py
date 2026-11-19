@@ -1107,8 +1107,13 @@ def make_earrings(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, 
             major = size / 2 - wire
             # beside the skin it hangs past (the jaw under the lobe stands out farther than the lobe)
             x = ab.clear_lateral(Pw, p, side, size, major + wire) * sx + sx * (wire + ab.GAP_M)
-            centre = np.array([x, p[1] - (major - wire), p[2]])
-            V, F, _N = ab.torus(centre, n, major, wire)
+            # tilted out at the bottom (``HOOP_TILT_DEG``): the top stays at the lobe, the lowest point swings away
+            # from the jaw and neck below it
+            th = np.radians(HOOP_TILT_DEG)
+            axis = np.array([np.cos(th) * sx, np.sin(th), 0.0])
+            up = np.array([-np.sin(th) * sx, np.cos(th), 0.0])
+            top = np.array([x, p[1] + wire, p[2]])
+            V, F, _N = ab.torus(top - up * major, axis, major, wire)
         elif style == "drop" and part is not None:
             from app.core.accessory_spec import image_part_mm
             Vn = accessory_pendant.normalise(part["V"], float(image_part_mm(spec) or 18.0))
@@ -1126,7 +1131,7 @@ def make_earrings(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, 
             r = size / 2
             V, F = ab.icosphere(r)
             V = V + p + n * (r + ab.GAP_M)
-        V = _clear_of_head(V, n, Pw, Fw)
+        V = _clear_of_head(V, n, Pw, Fw, passes=12)
         if part_V and len(part_V) == len(anchors) + 1:
             part_V[-1] = _clear_of_head(part_V[-1], n, Pw, Fw)
         Fs.append(F + sum(len(v) for v in Vs))
@@ -1148,6 +1153,9 @@ def make_earrings(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, 
     if why or metrics["inside_share"] > 0:
         raise ValueError(AROUND_IMPLAUSIBLE.format(what="earring", why="part of it lies inside the head in the "
                                                    + ", ".join(why or ["rest"]) + " pose"))
+    if float(sd.min()) < EARRING_MIN_GAP_MM:
+        raise ValueError(AROUND_IMPLAUSIBLE.format(what="earring", why=f"it comes within {max(sd.min(), 0):.1f} mm "
+                                                   "of the jaw or neck (a smaller hoop or a stud fits)"))
     if float(sd.min()) > EARRING_MAX_GAP_MM:
         raise ValueError(AROUND_IMPLAUSIBLE.format(what="earring", why=f"it stands {sd.min():.0f} mm off the ear"))
     out = {"V": V, "F": F, "N": vertex_normals(V, F), "J": J, "W": W, "joint_names": list(body.joint_names),
@@ -1166,6 +1174,13 @@ def make_earrings(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, 
             out["pendant_error"] = str(e)
     metrics["cpu_s"] = round(time.monotonic() - started, 2)
     return out
+
+
+#: A234: a hoop hangs tilted this far out at the bottom (its plane turned about the front-back axis).
+HOOP_TILT_DEG = 15.0
+#: The least air an earring may keep to the head (the target is ``accessory_band.GAP_M``; a hoop that cannot get
+#: this clear of the jaw is refused).
+EARRING_MIN_GAP_MM = 1.9
 
 
 def _clear_of_head(V: np.ndarray, n: np.ndarray, Pw: np.ndarray, Fw: np.ndarray, passes: int = 6) -> np.ndarray:
