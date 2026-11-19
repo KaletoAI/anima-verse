@@ -166,6 +166,7 @@ Blocking — called from the garment run's worker thread, which holds
 (``garment_store.start/end``) belongs to that run as well.
 """
 import io
+import os
 import re
 import shutil
 import tempfile
@@ -1533,20 +1534,24 @@ def _upload_slot(character_name: str, item_id: str, fsig: str, step: str, view: 
     return min(stored)[1] if stored else ATTEMPTS
 
 
-def store_upload(character_name: str, item_id: str, fsig: str, step: str, view: str, data: bytes) -> int:
-    """A183, "Upload piece-only view…": store the image ``data`` as an attempt of ``view`` of the kind's
-    ``FROM_WORN_STEP`` (clothing: the ghost) and gate it like a render — the attempt slot ``_upload_slot``, the
-    returned number. The image is taken as rendered on the step's edit canvas: the source (the worn view) centred
-    on its square (``square_frame``), so a square upload of any size is scaled to that square and the source frame
-    cut back (``crop_back``, the render's own path) — an image of the source's own aspect is scaled to it. Then the
-    registration and the gate (``_gate_attempt``); the sidecar carries ``uploaded {at, size, sha256}``. Publishing
-    is the caller's (``use_attempt``: a refused upload is accepted by the user). ``AttemptUnusable`` when the step
-    takes no upload or its source is not accepted, ValueError for an image that cannot be read. The caller holds
-    the item's run lock."""
+def stage_upload(character_name: str, item_id: str, fsig: str, step: str, view: str, data: bytes) -> Dict[str, Any]:
+    """A183, "Upload piece-only view…": prepare the image ``data`` as an attempt of ``view`` of the kind's
+    ``FROM_WORN_STEP`` (clothing: the ghost) and gate it like a render — WITHOUT touching the attempt slot it is
+    meant for (``_upload_slot``): the image, its raw sibling and its sidecar are staged beside the slot and only
+    ``commit_upload`` moves them in (A207, review 05#6: an upload used to overwrite a stored attempt before it was
+    gated, so a refused request or an error lost that attempt, and the Undo snapshot saw the upload, not it). The
+    image is taken as rendered on the step's edit canvas: the source (the worn view) centred on its square
+    (``square_frame``), so a square upload of any size is scaled to that square and the source frame cut back
+    (``crop_back``, the render's own path) — an image of the source's own aspect is scaled to it. Then the
+    registration and the gate (``_gate_attempt``); the sidecar carries ``uploaded {at, size, sha256}``.
+    ``{slot, target, staged, sidecar, gate}``; ``discard_upload`` drops what was staged. Publishing is the
+    caller's (``use_attempt``: a refused upload is accepted by the user). ``AttemptUnusable`` when the step takes
+    no upload or its source is not accepted, ValueError for an image that cannot be read. The caller holds the
+    item's run lock."""
     import hashlib
     from PIL import Image
     from app.core import base_body
-    from app.core.garment_store import garment_path, write_record
+    from app.core.garment_store import garment_path
     from app.core.model_refs import find_ref_image, get_model_refs_dir
     from app.core.timeutils import utc_now_iso
     from app.models.character import get_character_profile
@@ -1574,15 +1579,23 @@ def store_upload(character_name: str, item_id: str, fsig: str, step: str, view: 
     slot = _upload_slot(character_name, item_id, fsig, step, view)
     target = garment_path(character_name, item_id, fsig, "image", step=step, view=view, attempt=slot)
     target.parent.mkdir(parents=True, exist_ok=True)
+    staged = target.with_name(f".upload_{target.name}")
     with Image.open(source) as im:
         size = im.size
     side, offset = square_frame(size)
-    tmp = target.with_name(f".upload_{target.name}")
-    uploaded.save(tmp, format="PNG")
-    raw_path(target).unlink(missing_ok=True)   # the slot's earlier rendering is not this image's
-    crop_back(tmp, target, side, offset, size)
-    base_size, gate_args, position = _gate_inputs(kind, step, base, source, refs_dir, item_id)
-    record = _gate_attempt(kind, step, view, target, base_size, gate_args, position, None)
+    tmp = target.with_name(f".upload_src_{target.name}")
+    out = {"slot": slot, "target": target, "staged": staged}
+    try:
+        uploaded.save(tmp, format="PNG")
+        raw_path(staged).unlink(missing_ok=True)
+        crop_back(tmp, staged, side, offset, size)
+        base_size, gate_args, position = _gate_inputs(kind, step, base, source, refs_dir, item_id)
+        record = _gate_attempt(kind, step, view, staged, base_size, gate_args, position, None)
+    except BaseException:
+        discard_upload(out)
+        raise
+    finally:
+        tmp.unlink(missing_ok=True)
     record["attempt"] = slot
     sidecar = {"created_at": utc_now_iso(),
                "uploaded": {"at": utc_now_iso(), "size": list(uploaded.size),
@@ -1590,10 +1603,42 @@ def store_upload(character_name: str, item_id: str, fsig: str, step: str, view: 
     source_sha = _source_sha(kind, step, source)
     if source_sha:
         sidecar["source_sha256"] = source_sha
-    write_record(target.with_suffix(".json"), _attempt_sidecar(sidecar, record))
-    logger.info("Garment %s %s %s of %s: image uploaded as attempt %d (%s %s)", character_name, step, view, item_id,
-                slot, "passing" if record.get("ok") else "refused", record.get("reasons") or "")
-    return slot
+    out["sidecar"] = _attempt_sidecar(sidecar, record)
+    out["gate"] = out["sidecar"].get("gate")
+    logger.info("Garment %s %s %s of %s: image uploaded for attempt %d (%s %s)", character_name, step, view,
+                item_id, slot, "passing" if record.get("ok") else "refused", record.get("reasons") or "")
+    return out
+
+
+def upload_slot_files(staged: Dict[str, Any]) -> List[Path]:
+    """The files of the attempt slot ``commit_upload`` replaces (image, raw sibling, sidecar) — what the Undo
+    snapshot keeps before the upload moves in."""
+    target = staged["target"]
+    return [target, raw_path(target), target.with_suffix(".json")]
+
+
+def commit_upload(staged: Dict[str, Any]) -> int:
+    """Move a ``stage_upload`` into its attempt slot: the slot's old sidecar goes first (a half-moved slot never
+    pairs the old gate record with the new image), then the raw sibling and the image are replaced, then the new
+    sidecar is written. Returns the slot."""
+    from app.core.garment_store import write_record
+    target, image = staged["target"], staged["staged"]
+    target.with_suffix(".json").unlink(missing_ok=True)
+    raw = raw_path(image)
+    if raw.is_file():
+        os.replace(raw, raw_path(target))
+    else:
+        raw_path(target).unlink(missing_ok=True)   # the slot's earlier rendering is not this image's
+    os.replace(image, target)
+    write_record(target.with_suffix(".json"), staged["sidecar"])
+    return int(staged["slot"])
+
+
+def discard_upload(staged: Dict[str, Any]) -> None:
+    """Drop what ``stage_upload`` left beside the slot (nothing after ``commit_upload``)."""
+    image = staged["staged"]
+    raw_path(image).unlink(missing_ok=True)
+    image.unlink(missing_ok=True)
 
 
 #: The gate numbers a registration corrects; after it they are the residual.

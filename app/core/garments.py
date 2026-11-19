@@ -3128,7 +3128,8 @@ def use_attempt(character_name: str, item_id: str, step: str, view: str, attempt
 def upload_view(character_name: str, item_id: str, step: str, view: str, data: bytes, *,
                 profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """A183, "Upload piece-only view…": the image ``data`` becomes the accepted piece-only view of ``view`` — stored
-    and gated as an attempt (``garment_images.store_upload``), then used like "Use this" on it
+    and gated as an attempt (``garment_images.stage_upload``: staged beside its slot, A207), then used like "Use
+    this" on it
     (``_use_attempt_locked``: a refused upload is accepted by the user, its gate reasons recorded; the mesh goes and
     a shell made from the old view reads due, A177; Undo takes it back) — both under the item's run lock, never
     waiting (``UseBusy``). No hub job. ``use_attempt``'s answer plus ``uploaded`` (the attempt slot) and ``gate``
@@ -3151,10 +3152,12 @@ def upload_view(character_name: str, item_id: str, step: str, view: str, data: b
     if not lock.acquire(blocking=False):
         raise UseBusy("A garment run of this piece is in progress — upload the view after it")
     try:
-        slot = garment_images.store_upload(character_name, item_id, fsig, step, view, data)
-        gate = gs.read_record(gs.garment_path(character_name, item_id, fsig, "image", step=step, view=view,
-                                              attempt=slot).with_suffix(".json")).get("gate")
-        result = _use_attempt_locked(character_name, item_id, kind, fsig, step, view, slot)
+        staged = garment_images.stage_upload(character_name, item_id, fsig, step, view, data)
+        slot, gate = int(staged["slot"]), staged.get("gate")
+        try:
+            result = _use_attempt_locked(character_name, item_id, kind, fsig, step, view, slot, staged=staged)
+        finally:
+            garment_images.discard_upload(staged)
     finally:
         lock.release()
     estimate = run_estimate(character_name, item_id, profile=profile)
@@ -3163,21 +3166,34 @@ def upload_view(character_name: str, item_id: str, step: str, view: str, data: b
 
 
 def _use_attempt_locked(character_name: str, item_id: str, kind: Any, fsig: str, step: str, view: str,
-                        attempt: int) -> Dict[str, Any]:
+                        attempt: int, *, staged: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The body of ``use_attempt`` under the item's run lock (held by the caller): ``garment_images.use_attempt``
-    with its Undo snapshot, then the mesh dropped and the answered failures cleared."""
+    with its Undo snapshot, then the mesh dropped and the answered failures cleared. ``staged`` (an upload,
+    ``garment_images.stage_upload``): the snapshot is taken FIRST, with the attempt slot the upload replaces, and
+    only then the upload moves into the slot (A207, review 05#6) — Undo puts the replaced attempt back, and a use
+    that fails puts it back at once."""
     from app.core import garment_images
     from app.core import garment_store as gs
     from app.core.garment_store import image_steps
     # Ruling A79: what the click replaces or drops is kept for its Undo (``garment_use_undo``).
     from app.core import garment_use_undo
+    slot_files = garment_images.upload_slot_files(staged) if staged is not None else []
+    committed = False
     try:
         target = gs.garment_path(character_name, item_id, fsig, "image", step=step, view=view, attempt=attempt)
-        gate = gs.read_record(target.with_suffix(".json")).get("gate") if target.is_file() else None
+        if staged is not None:
+            gate = staged.get("gate")
+        else:
+            gate = gs.read_record(target.with_suffix(".json")).get("gate") if target.is_file() else None
         garment_use_undo.snapshot(character_name, item_id, fsig, step, view, attempt,
-                                  passing=isinstance(gate, dict) and gate.get("ok") is True)
+                                  passing=isinstance(gate, dict) and gate.get("ok") is True, extra=slot_files)
+        if staged is not None:
+            garment_images.commit_upload(staged)
+            committed = True
         result = garment_images.use_attempt(character_name, item_id, fsig, step, view, attempt)
     except BaseException:
+        if committed:
+            garment_use_undo.restore_pending(character_name, item_id, fsig, slot_files)
         garment_use_undo.discard(character_name, item_id, fsig)
         raise
     if not result["changed"]:

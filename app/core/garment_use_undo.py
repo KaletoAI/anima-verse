@@ -35,7 +35,7 @@ import json
 import os
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from app.core.log import get_logger
 
@@ -123,11 +123,12 @@ def _pending(folder: Path) -> Path:
 
 
 def snapshot(character_name: str, item_id: str, fsig: str, step: str, view: str, attempt: int,
-             passing: bool) -> Path:
+             passing: bool, extra: Sequence[Path] = ()) -> Path:
     """Copy every file a "Use this" on ``attempt`` of ``view`` of ``step`` replaces or drops (module docstring)
     into the group's PENDING snapshot and write its manifest — ``commit`` makes it the group's snapshot once the
     click published, ``discard`` drops it when it did not. The caller holds the item's run lock and calls it
-    BEFORE the click publishes anything. Returns the pending folder."""
+    BEFORE the click publishes anything. ``extra``: more files the click replaces (an upload's attempt slot, A207
+    review 05#6) — kept and put back like the others. Returns the pending folder."""
     from app.core import garment_store as gs
     from app.core.base_body import file_sha256
     from app.core.timeutils import utc_now_iso
@@ -136,7 +137,7 @@ def snapshot(character_name: str, item_id: str, fsig: str, step: str, view: str,
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir(parents=True, exist_ok=True)
     files: Dict[str, Optional[str]] = {}
-    for path in _targets(character_name, item_id, fsig, step, view):
+    for path in [*_targets(character_name, item_id, fsig, step, view), *extra]:
         rel = path.relative_to(root).as_posix()
         if path.is_file():
             _copy(path, folder / rel)
@@ -169,6 +170,24 @@ def commit(character_name: str, item_id: str, fsig: str) -> None:
     (pending / MANIFEST).write_text(json.dumps(manifest, indent=1, sort_keys=True))
     shutil.rmtree(folder, ignore_errors=True)
     os.replace(pending, folder)
+
+
+def restore_pending(character_name: str, item_id: str, fsig: str, paths: Sequence[Path]) -> None:
+    """Put ``paths`` back as the PENDING snapshot kept them (a copy back, or removed when they were not there) —
+    a click that replaced them and then failed (A207, review 05#6: an upload committed into its attempt slot
+    before ``use_attempt`` raised). Paths the snapshot does not name are left alone."""
+    from app.core import garment_store as gs
+    root = gs._root(character_name)
+    pending = _pending(undo_dir(character_name, item_id, fsig))
+    files = (_read_manifest(pending) or {}).get("files") or {}
+    for path in paths:
+        rel = path.relative_to(root).as_posix()
+        if rel not in files:
+            continue
+        if files[rel] is None:
+            path.unlink(missing_ok=True)
+        elif (pending / rel).is_file():
+            _copy(pending / rel, path)
 
 
 def discard(character_name: str, item_id: str, fsig: str) -> None:
