@@ -12,7 +12,8 @@ view get in the way there, and this module makes the base view the worn views st
   worn side views ("Side views for the shell") are made on a side view with BOTH ARMS RAISED straight up (an edit of
   the base side view). The shell reads such a side view on the body posed the same way
   (``garment_shell.pose_arms_up``), and the edit is gated by that pose: its figure must match the posed body's
-  silhouette (``garment_shell.arms_up_check``, IoU ≥ ``ARMS_UP_IOU_MIN`` and better than the arms at rest).
+  silhouette (``garment_shell.arms_up_check``, IoU ≥ ``ARMS_UP_IOU_MIN`` and at least ``ARMS_UP_IOU_MARGIN`` better
+  than the arms at rest — 0.7 / 0.05 since A210).
 
 A variant is an image edit (occasion ``garment_view``, the garment edit's route; attempt N on chain entry N, A167),
 cut out on the CPU (``base_body.cut_out``), stored per base signature under ``model_refs/variants/<kind>_<bsig>.
@@ -23,7 +24,9 @@ A210: every attempt stays on disk as ``<kind>_<bsig>.<variant>.try<N>.png`` and 
 ``<kind>_<bsig>.<variant>.attempts.json`` (the base view's content and the prompt they were made from). When every
 attempt was refused, ``refusals`` lists them for the piece's dialog and ``use_attempt`` takes one by hand: it becomes
 the variant with ``accepted`` and ``user_accepted`` set — ``current`` holds it like a passing one until the base view's
-content or the prompt changes.
+content or the prompt changes. A pick is refused while a run of the character writes (``garment_store.char_lock``) and
+over a variant that passed its own gate. A worn / piece-only view records the variant's content it was made on
+(``base_variant_sha256``); a different pick makes it stale (``garment_images.variant_stale``).
 
 What a worn view was made on is recorded in its sidecar (``base_variant``); a worn view whose variant differs from
 the one its piece needs now is stale (``garment_images.stale_accepted``) and made again — the views after it with it.
@@ -197,7 +200,8 @@ def _gate(character_name: str, bsig: str, variant: str, path: Path, size: Tuple[
     check = garment_shell.arms_up_check(snapshot["rigged"], snapshot["unrigged"], alpha)
     reasons = [] if check["ok"] else [
         f"the arms do not match the raised pose (silhouette IoU {check['iou_posed']} posed vs {check['iou_rest']} at "
-        f"rest; needs ≥ {garment_shell.ARMS_UP_IOU_MIN} and better than at rest)"]
+        f"rest; needs ≥ {garment_shell.ARMS_UP_IOU_MIN} and at least {garment_shell.ARMS_UP_IOU_MARGIN} better than "
+        f"at rest)"]
     return {"ok": check["ok"], "reasons": reasons, "pose_check": check}
 
 
@@ -222,6 +226,7 @@ def ensure(character_name: str, view: str, bsig: str, variant: str, base: Path) 
     with Image.open(base) as im:
         size = im.size
     records = []
+    _clear_attempts(character_name, view, bsig, variant)   # A210 review L1: no attempt of an earlier run is listed
     for attempt in range(1, ATTEMPTS + 1):
         kept = attempt_path(character_name, view, bsig, variant, attempt)
         stem = kept.with_suffix("")
@@ -236,13 +241,15 @@ def ensure(character_name: str, view: str, bsig: str, variant: str, base: Path) 
                 sidecar_extra={"base_variant": {"view": view, "bsig": bsig, "variant": variant, "attempt": attempt}},
                 character_loras=False, postprocess=False, raise_load=True)
         if rendered is None:
-            records.append({"attempt": attempt, "ok": False, "reasons": ["render failed"]})
+            records.append({"attempt": attempt, "ok": False, "reasons": ["render failed"], "render_failed": True})
             continue
         # A210: the attempt keeps its own file (``stem.with_suffix`` would have cut ".tryN" and written every attempt
         # onto the variant's own path).
         cropped = crop_back(Path(rendered), kept, side, offset, source_size)
         cut = base_body.cut_out(cropped)
-        cut.save(cropped, format="PNG")
+        tmp_cut = cropped.with_name(f".{cropped.name}.tmp")
+        cut.save(tmp_cut, format="PNG")
+        tmp_cut.replace(cropped)   # A210 review M2: the listed attempt is never half written
         record = {**_gate(character_name, bsig, variant, cropped, size), "attempt": attempt}
         records.append(record)
         _write_attempts(character_name, view, bsig, variant, base, prompt, records)
@@ -257,6 +264,15 @@ def ensure(character_name: str, view: str, bsig: str, variant: str, base: Path) 
             return target
     _write_attempts(character_name, view, bsig, variant, base, prompt, records)
     raise VariantRefused(view, variant, records)
+
+
+def _clear_attempts(character_name: str, view: str, bsig: str, variant: str) -> None:
+    """The attempt files and gate records of the variant's last run (A210 review L1)."""
+    for n in range(1, ATTEMPTS + 1):
+        path = attempt_path(character_name, view, bsig, variant, n)
+        path.unlink(missing_ok=True)
+        path.with_suffix(".json").unlink(missing_ok=True)
+    attempts_record_path(character_name, view, bsig, variant).unlink(missing_ok=True)
 
 
 def _write_attempts(character_name: str, view: str, bsig: str, variant: str, base: Path, prompt: str,
@@ -274,6 +290,22 @@ def _write_attempts(character_name: str, view: str, bsig: str, variant: str, bas
 
 class AttemptUnusable(ValueError):
     """A stored variant attempt cannot be taken (missing, or made from another base view / prompt)."""
+
+
+class UseBusy(RuntimeError):
+    """A run of the character writes right now (``garment_store.char_lock`` is held)."""
+
+
+def current_sha(character_name: str, item_id: str, view: str, *,
+                profile: Optional[Dict[str, Any]] = None) -> str:
+    """A210 review M1: the content (sha256) of the variant the worn ``view`` of ``item_id`` is made on now; "" when
+    the view needs no variant or none is current."""
+    from app.core.base_body import file_sha256
+    for v, variant, bsig, base in _views_of(character_name, item_id, profile):
+        if v == view:
+            hit = current(character_name, view, bsig, variant, base)
+            return file_sha256(hit) if hit is not None else ""
+    return ""
 
 
 def _views_of(character_name: str, item_id: str, profile: Optional[Dict[str, Any]]):
@@ -316,7 +348,7 @@ def refusals(character_name: str, item_id: str, *, profile: Optional[Dict[str, A
             n = int(rec.get("attempt") or 0)
             if not n:
                 continue
-            exists = attempt_path(character_name, view, bsig, variant, n).is_file()
+            exists = attempt_path(character_name, view, bsig, variant, n).is_file() and not rec.get("render_failed")
             attempts.append({"attempt": n, "ok": bool(rec.get("ok")), "reasons": list(rec.get("reasons") or []),
                              "pose_check": rec.get("pose_check"), "usable": exists, "in_use": n == by_user})
         if attempts:
@@ -340,6 +372,18 @@ def use_attempt(character_name: str, item_id: str, view: str, attempt: int, *,
     refused one accepted by the user (``accepted`` + ``user_accepted``). Spends no job; held by ``current`` until the
     base view's content or the prompt changes. ``AttemptUnusable`` when the view has no variant, the attempt is not
     stored or was made from another base view / prompt."""
+    from app.core.garment_store import char_lock
+    lock = char_lock(character_name)
+    if not lock.acquire(blocking=False):
+        raise UseBusy("A run of this character is writing — try again when it is done")
+    try:
+        return _use_attempt_locked(character_name, item_id, view, attempt, profile=profile)
+    finally:
+        lock.release()
+
+
+def _use_attempt_locked(character_name: str, item_id: str, view: str, attempt: int, *,
+                        profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     from app.core.base_body import file_sha256
     from app.core.timeutils import utc_now_iso
     for v, variant, bsig, base in _views_of(character_name, item_id, profile):
@@ -352,17 +396,24 @@ def use_attempt(character_name: str, item_id: str, view: str, attempt: int, *,
             raise AttemptUnusable("The stored attempts were made from another base view — build again")
         gates = [r for r in stored.get("attempts") or [] if int(r.get("attempt") or 0) == int(attempt)]
         source = attempt_path(character_name, view, bsig, variant, attempt)
-        if not gates or not source.is_file():
+        if not gates or gates[0].get("render_failed") or not source.is_file():
             raise AttemptUnusable(f"Attempt {attempt} of the {view} base view is not stored")
         target = path_of(character_name, view, bsig, variant)
-        tmp = target.with_name(f".{target.name}.tmp")
-        shutil.copyfile(source, tmp)
-        tmp.replace(target)
-        target.with_suffix(".json").write_text(json.dumps({
+        if current(character_name, view, bsig, variant, base) is not None and not _record(target).get("user_accepted"):
+            raise AttemptUnusable(f"The {view} base view passed its own check — it is in use")
+        # A210 review L2: the record first, then the image, each via tmp + replace (a crash between them leaves a
+        # record whose image sha does not matter — ``current`` reads the record, the old image is replaced next).
+        record_path = target.with_suffix(".json")
+        tmp_rec = record_path.with_name(f".{record_path.name}.tmp")
+        tmp_rec.write_text(json.dumps({
             "view": view, "bsig": bsig, "variant": variant, "prompt": prompt, "negative": negative,
             "base_image": base.name, "base_image_sha256": base_sha, "accepted": True, "user_accepted": True,
             "attempt": int(attempt), "gates": stored.get("attempts") or [], "created_at": utc_now_iso()}, indent=2,
             default=str), encoding="utf-8")
+        tmp_rec.replace(record_path)
+        tmp = target.with_name(f".{target.name}.tmp")
+        shutil.copyfile(source, tmp)
+        tmp.replace(target)
         logger.info("Base view variant %s %s %s attempt %d: accepted by the user", character_name, view, variant,
                     attempt)
         return {"view": view, "variant": variant, "attempt": int(attempt), "user_accepted": True}

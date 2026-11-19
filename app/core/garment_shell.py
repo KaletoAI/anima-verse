@@ -124,8 +124,11 @@ ARMS_UP_TILT_DEG = 12.0
 #: A190: the joints that turn with an arm — a joint whose name ends with ``<side>`` + one of these (Mixamo names;
 #: the fingers hang under the hand: every name holding ``<side>Hand``).
 ARM_CHAIN = ("Arm", "ForeArm", "Hand")
-#: A190: an arms-up base side view passes when its figure matches the posed body's silhouette at least this well.
-ARMS_UP_IOU_MIN = 0.8
+#: A190: an arms-up base side view passes when its figure matches the posed body's silhouette at least this well
+#: (0.8 until A210: an edit at 0.74 posed vs 0.666 at rest was a good base, refused).
+ARMS_UP_IOU_MIN = 0.7
+#: A210: ... and better than the body at rest by at least this much (the arms really went up).
+ARMS_UP_IOU_MARGIN = 0.05
 #: Bumped when the shell's construction changes: a shell made by another version reads stale.
 #: 4 (A199, review 06#4): the body's z-buffer samples are spaced by the views' mask pixel (``ZBUF_SPACING_PX``)
 #: instead of 1/2500 of the body height — ~13 samples per mask pixel became ~4, a third of the memory.
@@ -1284,8 +1287,8 @@ def iou(a, b) -> float:
 def arms_up_check(rigged: bytes, unrigged: bytes, side_mask) -> Dict[str, Any]:
     """A190, the gate of an arms-up base side view: its figure mask ``side_mask`` against the silhouette of the base
     body posed with ``pose_arms_up`` (the camera side the better match names) — ``{iou_posed, iou_rest, mirror, ok}``:
-    ok when the posed body matches at least ``ARMS_UP_IOU_MIN`` and better than the body at rest (the arms really
-    went up)."""
+    ok when the posed body matches at least ``ARMS_UP_IOU_MIN`` and beats the body at rest by at least
+    ``ARMS_UP_IOU_MARGIN`` (the arms really went up; ``arms_up_ok``)."""
     from app.core import garment_fit as gf
     from app.core import glb_mesh
     bu, br = glb_mesh.body_arrays(unrigged), glb_mesh.body_arrays(rigged)
@@ -1302,7 +1305,13 @@ def arms_up_check(rigged: bytes, unrigged: bytes, side_mask) -> Dict[str, Any]:
             best = (posed, mirror)
     rest = iou(silhouette_mask(Pu, bu.faces, mask.shape, mask, haxis=2, mirror=best[1]), mask)
     return {"iou_posed": round(best[0], 3), "iou_rest": round(rest, 3), "mirror": best[1],
-            "ok": bool(best[0] >= ARMS_UP_IOU_MIN and best[0] > rest)}
+            "ok": arms_up_ok(round(best[0], 3), round(rest, 3))}
+
+
+def arms_up_ok(iou_posed: float, iou_rest: float) -> bool:
+    """A210: the arms-up decision on the (rounded, as reported) IoUs — posed ≥ ``ARMS_UP_IOU_MIN`` and posed − rest
+    ≥ ``ARMS_UP_IOU_MARGIN`` (a 1e-9 slack so a reported difference of exactly the margin passes)."""
+    return bool(iou_posed >= ARMS_UP_IOU_MIN - 1e-9 and iou_posed - iou_rest >= ARMS_UP_IOU_MARGIN - 1e-9)
 
 
 def shell_glb(garment) -> bytes:

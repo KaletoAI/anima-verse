@@ -927,6 +927,7 @@ def _render_edit_step(character_name: str, item_id: str, fsig: str, step: str, v
                                         **(prompt_hints or {}))
 
     base_size, gate_args, position = _gate_inputs(kind, step, base, source, refs_dir, item_id)
+    variant_sha = _variant_sha(base, base_variant)
 
     def gate_file(path: Path) -> Dict[str, Any]:
         return _gate_attempt(kind, step, view, path, base_size, gate_args, position, pair_check)
@@ -962,7 +963,7 @@ def _render_edit_step(character_name: str, item_id: str, fsig: str, step: str, v
 
         hit = _regate_stored(character_name, item_id, fsig, step, view, kind, final=final, regate=regate,
                              # A190: an attempt made on another base-view variant (hair, arms) is never reused
-                             keep=lambda sidecar: (str(sidecar.get("base_variant") or "") == base_variant
+                             keep=lambda sidecar: (_same_variant(sidecar, base_variant, variant_sha)
                                                    and _same_source(sidecar, source_sha)),
                              closeness=closeness if position is not None else None)
         if hit is not None:
@@ -995,7 +996,7 @@ def _render_edit_step(character_name: str, item_id: str, fsig: str, step: str, v
                 reference_image=reference,
                 sidecar_extra={"garment": {"item_id": item_id, "fsig": fsig, "step": step,
                                            "view": view, "attempt": attempt},
-                              "base_variant": base_variant,
+                              "base_variant": base_variant, "base_variant_sha256": variant_sha,
                               "edit_canvas": {"side": side, "offset": list(offset),
                                               "crop": list(source_size)}},
                 character_loras=False,
@@ -1196,7 +1197,13 @@ def variant_stale(character_name: str, item_id: str, fsig: str, step: str, view:
     if isinstance(record.get("user_accepted"), dict) or isinstance(record.get("copied_from"), dict):
         return False
     from app.core import shell_base_views
-    return str(record.get("base_variant") or "") != shell_base_views.variant_for(character_name, item_id, view)
+    if str(record.get("base_variant") or "") != shell_base_views.variant_for(character_name, item_id, view):
+        return True
+    # A210 review M1: the same variant, but its content changed (the user picked another attempt) — unknown on
+    # either side counts as the same.
+    made = record.get("base_variant_sha256")
+    now = shell_base_views.current_sha(character_name, item_id, view) if made else ""
+    return bool(made and now and made != now)
 
 
 def _final(character_name: str, item_id: str, fsig: str, step: str, view: str) -> Path:
@@ -1413,6 +1420,26 @@ def _source_sha(kind, step: str, source: Path) -> str:
     if spec.get("source") in (None, "base"):
         return ""
     return file_sha256(source)
+
+
+def _variant_sha(base: Path, base_variant: str) -> str:
+    """A210 review M1: the content of the base-view variant a view is made on ("" on the plain base view)."""
+    if not base_variant:
+        return ""
+    from app.core.base_body import file_sha256
+    try:
+        return file_sha256(base)
+    except OSError:
+        return ""
+
+
+def _same_variant(sidecar: Dict[str, Any], base_variant: str, variant_sha: str) -> bool:
+    """Whether an attempt was made on this very base-view variant: same name and — when both are known — the same
+    content (``base_variant_sha256``; a user pick of another variant attempt makes the old views stale)."""
+    if str(sidecar.get("base_variant") or "") != base_variant:
+        return False
+    made = sidecar.get("base_variant_sha256")
+    return not made or not variant_sha or made == variant_sha
 
 
 def _same_source(sidecar: Dict[str, Any], source_sha: str) -> bool:
@@ -1779,6 +1806,7 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
     if front_gate is None:
         raise base_body.MissingInput(f"The {step} front image is missing — the back is drafted from it")
     front_sha = file_sha256(front)
+    variant_sha = _variant_sha(base, base_variant)
     meta = {"item_id": item_id, "fsig": fsig, "step": step, "view": view}
     with neutral_view_reference(base, refs_dir) as flat_base:
         base_size = _image_size(flat_base)
@@ -1842,7 +1870,7 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
                              regate=lambda path, _old: regate_attempt(path),
                              keep=lambda sidecar: (sidecar.get("front_sha256") == front_sha and composite_ok(sidecar)
                                                    and made_with_current_prompt(sidecar.get("draft_prompt"))
-                                                   and str(sidecar.get("base_variant") or "") == base_variant),
+                                                   and _same_variant(sidecar, base_variant, variant_sha)),
                              follow_keys=DRAFT_FOLLOW_KEYS)
         if hit is not None:
             return hit
@@ -1892,7 +1920,7 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
         composite = view_composite.compose(base, draft, target, rule="piece", background=VIEW_REFERENCE_BACKGROUND,
                                            mask_target=support_path(target))
         follow = {"front_sha256": front_sha, "draft": draft.name, "draft_sha256": file_sha256(draft),
-                  "base_variant": base_variant,
+                  "base_variant": base_variant, "base_variant_sha256": variant_sha,
                   **({"draft_prompt": drafted_with} if drafted_with else {}),
                   **view_composite.sidecar_fields(composite)}
         if composite["ok"] and view_composite.is_empty(composite):

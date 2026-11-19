@@ -3388,6 +3388,15 @@ def _base_variant_refusals(character_name: str, item_id: str, profile: Dict[str,
         return []
 
 
+def _check_base_variant_args(view: str, attempt: int) -> None:
+    """400 for a view / attempt no base view variant has (A210, both routes)."""
+    from app.core import shell_base_views
+    if view not in ("front", "back") + shell_base_views.SIDE_VIEWS:
+        raise HTTPException(status_code=400, detail="view must be one of front, back, left, right")
+    if not 1 <= attempt <= shell_base_views.ATTEMPTS:
+        raise HTTPException(status_code=400, detail=f"attempt must be 1..{shell_base_views.ATTEMPTS}")
+
+
 @router.get("/{character_name}/garments/{item_id}/base-variants/{view}/attempts/{attempt}/image")
 def get_character_base_variant_attempt(character_name: str, item_id: str, view: str, attempt: int, request: Request,
                                        _: Dict[str, Any] = Depends(require_admin)):
@@ -3395,6 +3404,7 @@ def get_character_base_variant_attempt(character_name: str, item_id: str, view: 
     Admin-only. 404 when it is not stored."""
     from fastapi.responses import Response
     from app.core import shell_base_views
+    _check_base_variant_args(view, attempt)
     _require_character(character_name)
     path = shell_base_views.attempt_file(character_name, item_id, view, attempt)
     if path is None:
@@ -3410,14 +3420,11 @@ def use_character_base_variant_attempt(character_name: str, item_id: str, view: 
     view is made from it on the next run. Admin-only. 400 for a bad view / attempt, 409 when the attempt cannot be
     used."""
     from app.core import shell_base_views
-    if view not in ("front", "back") + shell_base_views.SIDE_VIEWS:
-        raise HTTPException(status_code=400, detail="view must be one of front, back, left, right")
-    if not 1 <= attempt <= shell_base_views.ATTEMPTS:
-        raise HTTPException(status_code=400, detail=f"attempt must be 1..{shell_base_views.ATTEMPTS}")
+    _check_base_variant_args(view, attempt)
     _require_character(character_name)
     try:
         return shell_base_views.use_attempt(character_name, item_id, view, attempt)
-    except shell_base_views.AttemptUnusable as e:
+    except (shell_base_views.AttemptUnusable, shell_base_views.UseBusy) as e:
         raise HTTPException(status_code=409, detail=str(e))
 
 
