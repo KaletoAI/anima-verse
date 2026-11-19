@@ -50,6 +50,8 @@ body actions):
   preview GLB, its query names the build)}``; 404 for an unknown character or item.
 * ``PUT  /characters/{c}/figure/accessory/{item_id} {jewellery}`` — store the description on the ITEM (every wearer,
   ``accessory_spec.normalize``); 400 for an unknown kind. Spends nothing — the accessory step becomes due.
+* ``POST /characters/{c}/figure/accessory/{item_id}/switch {mode, kind}`` — a too-thin piece's switch to Painted or
+  to Accessory with a buildable kind (one locked write); 400 otherwise.
 * ``POST /characters/{c}/figure/accessory/{item_id}/curve {drop_cm, thickness_mm}`` — the chain's centre line for
   those settings on the plain body (``accessory_build.preview_curve``), nothing stored; 400 without a plain body.
 * ``GET  /characters/{c}/figure/accessory/{item_id}/preview.glb`` — the plain body with the current build grafted (the
@@ -360,7 +362,8 @@ def get_accessory(character_name: str, item_id: str,
     state = accessory_build.accessory_state(character_name, item_id, item=item)
     record = state.get("record") or {}
     glb_url = (f"/characters/{quote(character_name, safe='')}/figure/accessory/{quote(item_id, safe='')}"
-               f"/preview.glb?v={state.get('asig') or ''}-{state['state']}-{record.get('built_at') or ''}")
+               f"/preview.glb?v={state.get('asig') or ''}-{state['state']}-{record.get('built_at') or ''}"
+               f"-{(record.get('base_model_sha256') or accessory_build.base_sha(character_name) or '')[:12]}")
     return {"item_id": item_id, "name": str(item.get("name") or item_id), "mode": garment_set.mesh_mode_of(item),
             "jewellery": accessory_spec.of_item(item), "suggested": accessory_spec.suggest_kind(item),
             "kinds": list(accessory_spec.KINDS), "built_kinds": list(accessory_spec.BUILT_KINDS),
@@ -374,17 +377,47 @@ def get_accessory(character_name: str, item_id: str,
 def put_accessory(character_name: str, item_id: str, body: AccessoryRequest,
                   _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     from app.core import accessory_spec
-    from app.models.inventory import update_item
-    item = _template_item(character_name, item_id)
+    from app.models.inventory import get_item, outfit_piece_lock, update_item
+    _template_item(character_name, item_id)
     try:
         spec = accessory_spec.normalize(body.jewellery)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    piece = dict(item.get("outfit_piece") or {})
-    piece["jewellery"] = spec
-    if update_item(item_id, {"outfit_piece": piece}) is None:
-        raise HTTPException(status_code=500, detail="The item could not be saved")
+    with outfit_piece_lock(item_id):   # A216 review L5: the read and the write of the shared piece together
+        piece = dict((get_item(item_id) or {}).get("outfit_piece") or {})
+        piece["jewellery"] = spec
+        if update_item(item_id, {"outfit_piece": piece}) is None:
+            raise HTTPException(status_code=500, detail="The item could not be saved")
     return {"item_id": item_id, "jewellery": spec}
+
+
+class ModeSwitchRequest(BaseModel):
+    mode: str
+    kind: str = ""
+
+
+@router.post("/{character_name}/figure/accessory/{item_id}/switch")
+def switch_piece_mode(character_name: str, item_id: str, body: ModeSwitchRequest,
+                      _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Ruling A118 J6 (A216 review M2/L5): a too-thin piece's one-click switch — ``mode`` ``painted``, or
+    ``accessory`` with the buildable ``kind`` it is stored with; one locked read-modify-write of the piece, spends
+    nothing. 400 for another mode or a kind this version does not build."""
+    from app.core import accessory_spec, garment_set
+    from app.models.inventory import get_item, outfit_piece_lock, update_item
+    _template_item(character_name, item_id)
+    if body.mode not in (garment_set.PAINTED, garment_set.ACCESSORY):
+        raise HTTPException(status_code=400, detail="Only Painted or Accessory")
+    if body.mode == garment_set.ACCESSORY and body.kind not in accessory_spec.BUILT_KINDS:
+        raise HTTPException(status_code=400, detail="This kind of accessory is not built yet")
+    with outfit_piece_lock(item_id):
+        piece = dict((get_item(item_id) or {}).get("outfit_piece") or {})
+        piece["mesh_mode"] = body.mode
+        if body.mode == garment_set.ACCESSORY:
+            raw = piece.get("jewellery") if isinstance(piece.get("jewellery"), dict) else {}
+            piece["jewellery"] = accessory_spec.normalize({**raw, "kind": body.kind})
+        if update_item(item_id, {"outfit_piece": piece}) is None:
+            raise HTTPException(status_code=500, detail="The item could not be saved")
+    return {"item_id": item_id, "mode": body.mode, "jewellery": piece.get("jewellery")}
 
 
 @router.post("/{character_name}/figure/accessory/{item_id}/curve")
@@ -397,8 +430,8 @@ def preview_accessory_curve(character_name: str, item_id: str, body: AccessoryCu
                 accessory_spec.RANGES["thickness_mm"][1])
     try:
         return accessory_build.preview_curve(character_name, item_id, drop_cm=drop, thickness_mm=thick)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except (KeyError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=accessory_build.failure_text(e))
 
 
 @router.get("/{character_name}/figure/accessory/{item_id}/preview.glb")

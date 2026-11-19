@@ -137,8 +137,12 @@ def worn_sets(character_name: str, *, pieces: Optional[Dict[str, str]] = None,
     template = sorted(i for i in ids - set(own)
                       if pipeline and garment_set.mesh_mode_of(get_item(i)) == garment_set.TEMPLATE)
     own.update({item_id: garment_set.CLOTHING for item_id in template})
+    # Spec § 6 (A216 review M2): an accessory that can never be built as it stands — no kind chosen, or a kind of a
+    # later phase — stays painted; one that is merely not built yet is left off until its Build (0 hub jobs).
+    from app.core import accessory_spec
     accessory = sorted(i for i in ids - set(own)
-                       if pipeline and garment_set.mesh_mode_of(get_item(i)) == garment_set.ACCESSORY)
+                       if pipeline and garment_set.mesh_mode_of(get_item(i)) == garment_set.ACCESSORY
+                       and accessory_spec.buildable(get_item(i)))
     in_body = sorted(i for i in ids - set(own) - set(accessory)
                      if pipeline and garment_set.mesh_mode_of(get_item(i)) == garment_set.IN_BODY)
     painted = sorted(ids - set(own) - set(in_body) - set(accessory))

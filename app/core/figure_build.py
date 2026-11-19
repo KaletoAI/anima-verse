@@ -2211,8 +2211,18 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
                      "template": (_template_row(character_name, item_id, item, wanted, profile)
                                   if mode == garment_set.TEMPLATE else None),
                      "accessory": (_accessory_row(character_name, item_id, item, profile)
-                                   if mode == garment_set.ACCESSORY else None)})
+                                   if mode == garment_set.ACCESSORY else None),
+                     # A216 review M2: the accessory kind this version can build for the piece (the "Switch to
+                     # Accessory" offer of a too-thin piece stores it), None when there is none
+                     "accessory_kind": _buildable_suggestion(item)})
     return rows
+
+
+def _buildable_suggestion(item: Dict[str, Any]) -> Optional[str]:
+    """``accessory_spec.suggest_kind`` when that kind is built in this version, else None."""
+    from app.core import accessory_spec
+    kind = accessory_spec.suggest_kind(item)
+    return kind if kind in accessory_spec.BUILT_KINDS else None
 
 
 def _accessory_row(character_name: str, item_id: str, item: Dict[str, Any],

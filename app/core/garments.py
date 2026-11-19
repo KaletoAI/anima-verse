@@ -380,11 +380,18 @@ def _thin_piece_check(character_name: str, item: Dict[str, Any], kind: str, fsig
                       profile: Dict[str, Any]) -> None:
     """Ruling A118 J6: before the ghost step of an own-mesh CLOTHING piece (its worn views accepted), refuse with
     ``THIN_PIECE`` when every worn view's region share is below ``garment_gates.THIN_PIECE_MAX`` — before any ghost
-    job is paid. A shell (made from the body, no ghost edit) and footwear (its own chain) are exempt."""
-    from app.core import garment_gates, garment_set, garment_shell
+    job is paid. Only a piece worn on the neck (spec J6); a shell (made from the body, no ghost edit), footwear (its
+    own chain) and a piece with a fit already (``_fit_state`` not ``missing``) are exempt."""
+    from app.core import base_body, garment_gates, garment_set, garment_shell
     if kind != garment_set.CLOTHING or garment_shell.shape_of(item) == garment_shell.SHELL:
         return
+    piece = item.get("outfit_piece") if isinstance(item.get("outfit_piece"), dict) else {}
+    if "neck" not in {str(x) for x in piece.get("slots") or []}:
+        return   # A216 review M3: the guard is for neck pieces (spec J6)
     item_id = item["id"]
+    base = base_body.current_base(character_name, profile=profile)
+    if base and base[1] and _fit_state(character_name, item_id, fsig, base[1], profile=profile) != "missing":
+        return   # A216 review M3: a piece that already has a fit made it through its chain once
     shares: Dict[str, Any] = {}
     for v in _step_views(character_name, item_id, "worn", profile):
         path = _image(character_name, item_id, fsig, "worn", v)

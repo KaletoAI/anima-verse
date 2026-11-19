@@ -130,6 +130,12 @@ def of_item(item: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         return None
 
 
+def buildable(item: Optional[Dict[str, Any]]) -> bool:
+    """Whether ``item`` describes an accessory this version builds: a stored kind in ``BUILT_KINDS``."""
+    spec = of_item(item)
+    return bool(spec) and spec["kind"] in BUILT_KINDS
+
+
 #: Word rules of ``suggest_kind``: (kind, regex over the item's name + prompt words), first match wins.
 _WORDS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
     ("choker", re.compile(r"\bchoker\b", re.I)),
