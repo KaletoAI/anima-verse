@@ -4,6 +4,7 @@
 # Remove a line as soon as the smoke passes ("NOW GREEN" in the runner output). Sorted by name.
 smoke_artefact_gc	STALE: the fixture's fronts stand for no texture (front_texture_signature '' for O1/O2/O3, so texture files named tpose_.png are written and reported unknown): its outfits have only in_body pieces, and since A119 (0601436ce) an unbuilt shape leaves them OFF instead of painting an interim texture — the fixture needs painted pieces (or stored shapes) to own a texture; not re-derived
 smoke_fbx_importer_parity	STALE: one-off parity proof vs the pinned pre-C++-importer scripts (a98f9ed5) compares WHOLE result dicts; later intentional output fields (turn_deg 339af01ee, shift_cm 6d1835805, and more) break it. Not deleted: its Blender per-take travel (+0.1/-0.2 m), sparse-take and multi-layer-rejection checks exist nowhere else
+smoke_figure_build_a61	ENV: copies Kira's base mesh base20d5701a out of the live world (worlds/Anima Divide), which a new base body replaced on 2026-11-18 — needs its own fixture or A61_KIRA_DIR
 smoke_footwear_refit	STALE: A107 (b1670f752) keys fits on geometry, not file bytes: the fixture's "body change" is a byte-only repack (new generator) and no longer makes the fit stale
 smoke_garment_chain	STALE: the own-mesh dress fixture is now refused by the fit gates (max_push_m 0.216 > 0.1, deep_push_share 0.50 > 0.12, new_edge_max_m 0.41 > 0.17) after the fit changes A174-A199; not re-derived
 smoke_garment_fit_per_body	STALE: assembly tiers 'none' and no fits on body A — figure/assembly rework (A119 and later); not re-derived
