@@ -6744,6 +6744,7 @@
     "Chain settings changed — Build makes it again on the CPU (0 hub jobs)": "Ketteneinstellungen geändert — Build macht es auf der CPU neu (0 Hub-Jobs)",
     "Choose the accessory kind in the Wardrobe": "Wähle die Art des Accessoires in der Garderobe",
     "No plain body yet": "Noch kein Grundkörper",
-    "Too thin for its own mesh — use Painted or Accessory": "Zu dünn für ein eigenes Mesh — nutze Aufgemalt oder Accessoire"
+    "Too thin for its own mesh — use Painted or Accessory": "Zu dünn für ein eigenes Mesh — nutze Aufgemalt oder Accessoire",
+    "Build failed": "Build fehlgeschlagen"
   }
 }

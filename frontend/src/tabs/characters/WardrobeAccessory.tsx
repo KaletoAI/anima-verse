@@ -120,8 +120,9 @@ export function AccessoryDialog({ character, itemId, onClose }: {
     if (!draft) return
     setSaving(true)
     try {
-      await apiPut(path, { jewellery: draft })
-      setDraft(null)
+      // A216 review M1: the draft starts from what the server stored (normalised), never from the old load.
+      const saved = await apiPut<{ jewellery: Jewellery }>(path, { jewellery: draft })
+      setDraft(saved.jewellery)
       await load()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')

@@ -250,6 +250,8 @@ export interface FigureWornRow {
   slot: string
   item_id: string
   name: string
+  /** A216 review M2: the accessory kind this version builds for the piece (its "Switch to Accessory"), null: none. */
+  accessory_kind?: string | null
   mode: MeshMode
   state: 'ready' | 'failed' | 'fit_refused' | 'building' | 'left_out' | 'pending'
   note: string

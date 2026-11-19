@@ -592,8 +592,11 @@ function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairst
               {isThinPieceRefusal(row.failure) ? (
                 // Ruling A118 J6: a piece too thin for its own mesh — one click moves it to a mode that fits.
                 <>
-                  <ModeSwitchButton itemId={row.item_id} mode="painted" onChanged={onChanged} />
-                  <ModeSwitchButton itemId={row.item_id} mode="accessory" onChanged={onChanged} />
+                  <ModeSwitchButton character={character} itemId={row.item_id} mode="painted" onChanged={onChanged} />
+                  {row.accessory_kind ? (
+                    <ModeSwitchButton character={character} itemId={row.item_id} mode="accessory"
+                      kind={row.accessory_kind} onChanged={onChanged} />
+                  ) : null}
                 </>
               ) : null}
               {row.mode === 'template' && row.template?.state === 'failed' ? retry : null}
