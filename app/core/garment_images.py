@@ -170,6 +170,7 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -719,9 +720,18 @@ def _publish(character_name: str, item_id: str, fsig: str, step: str, view: str,
     (every attempt's gate by ordinal); the later steps of the view go stale,
     and a new front of a drafted step drops the back it was drafted from."""
     from app.core.garment_store import read_record, write_record
-    shutil.copyfile(target, final)
     sidecar = read_record(target.with_suffix(".json"))
     sidecar.pop("gate", None)
+    # A207 (review 05#7): the bytes are copied beside the final first, the final's old record goes, and only then
+    # the new image takes its place and gets its record — a reader in between (or a crash) finds no accepted image
+    # (due), never a half-copied file or the new image under the old record.
+    tmp = final.with_name(f".{final.stem}.{os.getpid()}.{threading.get_ident()}.publish.png")
+    try:
+        shutil.copyfile(target, tmp)
+        final.with_suffix(".json").unlink(missing_ok=True)
+        os.replace(tmp, final)
+    finally:
+        tmp.unlink(missing_ok=True)
     write_record(final.with_suffix(".json"), {
         **sidecar, **(extra or {}), "accepted": True, "attempt": attempt,
         "gates": {_ORDINALS[n]: r for n, r in enumerate(records)}})

@@ -1659,6 +1659,10 @@ def _publish_fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: 
                               material_overrides=overrides)
         # A distance tier of the previous fit must never pair with the new one.
         low.unlink(missing_ok=True)
+        # A207 (review 05#7, like footwear 07#5): the previous record goes BEFORE the new fit takes its place — a
+        # reader between the two writes (or after a crash) finds no accepted fit, never the new GLB under the old
+        # record.
+        fit.with_suffix(".json").unlink(missing_ok=True)
         os.replace(tmp, fit)
     finally:
         tmp.unlink(missing_ok=True)

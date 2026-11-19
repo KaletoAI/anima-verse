@@ -558,6 +558,9 @@ def make_view(character_name: str, item_id: str, fsig: str, view: str, *, base: 
             logger.info("Garment %s ghost %s from the worn view refused: %s", character_name, view,
                         record.get("reasons"))
             raise garment_images.GateRefused(STEP, view, [{**record, "from_worn": numbers}])
+        # A207 (review 05#7): the old record goes before the new image takes its place — in between (or after a
+        # crash) the view reads as not accepted, never the new image under the old record.
+        final.with_suffix(".json").unlink(missing_ok=True)
         os.replace(tmp, final)
     finally:
         tmp.unlink(missing_ok=True)
