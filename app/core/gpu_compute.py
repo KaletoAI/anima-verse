@@ -142,10 +142,11 @@ def parallel() -> int:
     return SLOTS.limit()
 
 
-def spawn_spec() -> Tuple[str, int, str]:
-    """What ``pin`` needs in a spawned child (a refit worker has no config): ``(slot folder, limit, device)``."""
+def spawn_spec() -> Tuple[str, int, str, str]:
+    """What ``pin`` needs in a spawned child (a refit worker has no config and no instance):
+    ``(slot folder, limit, device, Taichi cache root)``."""
     folder, limit = SLOTS.spawn_spec()
-    return folder, limit, device_setting()
+    return folder, limit, device_setting(), _cache_root()
 
 
 def pin(spec: Optional[Tuple[str, int, str]]) -> None:
@@ -154,9 +155,11 @@ def pin(spec: Optional[Tuple[str, int, str]]) -> None:
     if not spec:
         SLOTS.pin(None, None)
         return
-    folder, limit, device = spec
+    folder, limit, device = spec[:3]
     SLOTS.pin(folder, limit)
     _PINNED["device"] = device
+    if len(spec) > 3 and spec[3]:
+        _PINNED["cache_root"] = str(spec[3])
 
 
 # --- the hardware --------------------------------------------------------------------------------------------------
@@ -263,19 +266,39 @@ def status_line() -> str:
 
 # --- the Taichi runtime --------------------------------------------------------------------------------------------
 
-def _cache_dir(arch: str) -> str:
-    """The offline kernel cache of ``arch``: ``<instance>/.taichi-cache/<arch>`` once an instance is chosen, else
-    the user's cache folder (``$XDG_CACHE_HOME`` or ``~/.cache``) ``/anima-verse/taichi-cache/<arch>``. Never a fixed
-    folder in the shared temp directory: another user (or installation) could own or plant kernels there."""
+_FALLBACK_CACHE: List[str] = []
+
+
+def _cache_root() -> str:
+    """The root of the offline kernel cache: the parent's root pinned into a spawned worker (``pin``), else
+    ``<instance>/.taichi-cache`` once an instance is chosen, else the user's cache folder (``$XDG_CACHE_HOME`` or
+    ``~/.cache``) ``/anima-verse/taichi-cache``. Never a fixed folder in the shared temp directory: another user
+    (or installation) could own or plant kernels there."""
+    if _PINNED.get("cache_root"):
+        return str(_PINNED["cache_root"])
     from app.core import paths
     if paths.instance_initialised():
-        root = paths.get_instance_dir() / ".taichi-cache"
-    else:
-        base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
-        root = os.path.join(base, "anima-verse", "taichi-cache")
-    d = os.path.join(str(root), arch)
-    os.makedirs(d, mode=0o700, exist_ok=True)
-    return d
+        return str(paths.get_instance_dir() / ".taichi-cache")
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "anima-verse", "taichi-cache")
+
+
+def _cache_dir(arch: str) -> str:
+    """``<_cache_root>/<arch>`` (mode 0700). When it cannot be made (read-only home, foreign owner), a private
+    ``mkdtemp`` folder of this process is used instead — a cache problem never fails the job."""
+    d = os.path.join(_cache_root(), arch)
+    try:
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        if not os.access(d, os.W_OK):
+            raise PermissionError(d)
+        return d
+    except OSError as e:
+        if not _FALLBACK_CACHE:
+            _FALLBACK_CACHE.append(tempfile.mkdtemp(prefix="anima-taichi-cache-"))   # 0700 by mkdtemp
+            logger.warning("Taichi kernel cache %s not usable (%s) — using %s", d, e, _FALLBACK_CACHE[0])
+        d = os.path.join(_FALLBACK_CACHE[0], arch)
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        return d
 
 
 def _init(ti: Any, arch: str, threads: int) -> str:
