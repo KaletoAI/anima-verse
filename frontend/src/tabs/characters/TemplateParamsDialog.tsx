@@ -141,6 +141,11 @@ const ORDER: (keyof TemplateParams)[] = ['kind', 'fabric', 'opacity', 'length_m'
 const SHARES = new Set<keyof TemplateParams>(['flare', 'fit', 'sleeve_fit', 'opacity'])
 
 /** Whether a field is shown for the draft: the kind's fields, minus the ones another field switches off. */
+/** A227: a jacket with a lapel collar: its opening is the lapel's V whatever the neckline says. */
+function lapelNeck(p: TemplateParams): boolean {
+  return p.kind === 'jacket' && p.collar === 'lapel'
+}
+
 function shown(key: keyof TemplateParams, p: TemplateParams, fields: Record<string, (keyof TemplateParams)[]>): boolean {
   if (!(fields[p.kind] || ORDER).includes(key)) return false
   if (key === 'slit_m' && p.slit === 'none') return false
@@ -151,6 +156,9 @@ function shown(key: keyof TemplateParams, p: TemplateParams, fields: Record<stri
   const strapTop = corsetTop(p)
   if (key === 'sleeves' && !bodice) return false
   if (key === 'neckline' && !bodice && !strapTop) return false
+  // A227: a lapel collar cuts the jacket's front as a V down to the chest (`bodice_spec`) — the neckline choice does
+  // not reach the cut, so it is not offered (the depth still deepens the V)
+  if (key === 'neckline' && lapelNeck(p)) return false
   if (key === 'neck_depth_m' && !bodice && !(strapTop && p.neckline === 'sweetheart')) return false
   if (key === 'fit' && p.kind === 'dress' && p.shoulders === 'strapless') return false
   if (key === 'sleeve_fit' && (!bodice || p.sleeves === 'none')) return false
@@ -296,6 +304,11 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                               ? ` ${t(TEMPLATE_DRAPE_FABRIC[draft.fabric] && TEMPLATE_DRAPE_FABRIC[draft.fabric] === TEMPLATE_DRAPE_FABRIC[data.params.fabric]
                                 ? 'Switching between these finishes only re-assembles the model on the CPU (no new drape, 0 hub jobs).'
                                 : 'Switching the fabric re-drapes the piece on the CPU (0 hub jobs).')}` : ''}
+                          </span>
+                        ) : null}
+                        {key === 'collar' && lapelNeck(draft) ? (
+                          <span className="ga-form-hint" data-lapel-note="">
+                            {t('A lapel opens the front in a V down to the chest; it replaces the neckline.')}
                           </span>
                         ) : null}
                         {key === 'opacity' ? (
