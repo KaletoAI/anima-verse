@@ -33,7 +33,18 @@
  *   shared vertex takes the displacement of the binding that applied last.
  *
  * - THE TEETH (Ruling A206) are rigid: a mesh whose material is `MOUTH_TEETH_MATERIAL` (teeth and gums of a built
- *   mouth) is never bound — a part pushes the lips and the tongue (its own material, `mouth_tongue`), never a tooth.
+ *   mouth) is never bent by the radial map — but it is no longer left where the part passes through it (owner finding
+ *   2026-11-19: the jaw opens by at most its `teeth_gap`, 17 mm on the stored mouth, while an entering part is 50–74
+ *   mm thick, so the part ran through both rows). It is bound as RIGID ROWS (`rigidRows`): its vertices grouped by
+ *   their dominant skin joint (the build weights the upper row and gum 1.0 to `Head`, the lower row and gum 1.0 to
+ *   `Jaw`), so the lower row keeps following whatever opens the jaw and the upper row the head. Per frame each row
+ *   moves as ONE translation t · dir (`rigidRowPush`), the smallest t ≥ 0 that leaves every vertex of the row at
+ *   least z · T from the axis of every occupant segment (T = r + m, the radius the opening holds the skin at; z the
+ *   axial weight at the vertex): no tooth vertex stays inside the entering part. dir (`rigidRowDirection`) = the
+ *   row's centroid minus the mean of all rows' centroids (one row: its centroid's radial direction from the
+ *   occupant's axis), made perpendicular to the axis of the occupant segment nearest the centroid — the rows part
+ *   up and down, away from the part. Written back like the skin (through each vertex's skin matrix); normals stay
+ *   (a translation). The tongue (`mouth_tongue`) is displaced like the skin.
  *
  * A push of at most 1 µm counts as none (float noise).
  *
@@ -219,6 +230,90 @@ export function displaceInto(px: number, py: number, pz: number, ch: ChannelNow,
   return push
 }
 
+/** The rows of a rigid mesh (THE TEETH): for each vertex `idx[k]` the row it belongs to — its dominant skin joint —
+ *  and the number of rows. A vertex without a weight joins the row of joint 0. */
+export function rigidRows(skinI: ArrayLike<number>, skinW: ArrayLike<number>, count: number): { rowOf: Int32Array; rows: number } {
+  const rowOf = new Int32Array(count)
+  const ids = new Map<number, number>()
+  for (let k = 0; k < count; k++) {
+    let joint = skinI[4 * k], best = skinW[4 * k]
+    for (let j = 1; j < 4; j++) if (skinW[4 * k + j] > best) { best = skinW[4 * k + j]; joint = skinI[4 * k + j] }
+    let row = ids.get(joint)
+    if (row === undefined) { row = ids.size; ids.set(joint, row) }
+    rowOf[k] = row
+  }
+  return { rowOf, rows: ids.size }
+}
+
+/** The occupant segment nearest `p` by its surface: its closest axis point and its unit direction (null for a point). */
+function nearestSegment(p: Vec3, segments: readonly OpeningSegment[]): { q: Vec3; dir: Vec3 | null } | null {
+  let best = Infinity, out: { q: Vec3; dir: Vec3 | null } | null = null
+  for (const seg of segments) {
+    const ab: Vec3 = [seg.b[0] - seg.a[0], seg.b[1] - seg.a[1], seg.b[2] - seg.a[2]]
+    const l2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2]
+    const t = l2 > 0 ? Math.max(0, Math.min(1, ((p[0] - seg.a[0]) * ab[0] + (p[1] - seg.a[1]) * ab[1]
+      + (p[2] - seg.a[2]) * ab[2]) / l2)) : 0
+    const q: Vec3 = [seg.a[0] + ab[0] * t, seg.a[1] + ab[1] * t, seg.a[2] + ab[2] * t]
+    const d = Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]) - seg.r
+    if (d < best) {
+      const l = Math.sqrt(l2)
+      best = d
+      out = { q, dir: l > 1e-12 ? [ab[0] / l, ab[1] / l, ab[2] / l] : null }
+    }
+  }
+  return out
+}
+
+/** THE TEETH: the direction a rigid row moves away from the occupant (module docstring) — `centroid` the row's,
+ *  `mean` the mean of all rows' centroids (null with one row). Null when no direction is defined. */
+export function rigidRowDirection(centroid: Vec3, mean: Vec3 | null, segments: readonly OpeningSegment[]): Vec3 | null {
+  const near = nearestSegment(centroid, segments)
+  if (!near) return null
+  const ax = near.dir
+  const perp = (v: Vec3): Vec3 | null => {
+    const k = ax ? v[0] * ax[0] + v[1] * ax[1] + v[2] * ax[2] : 0
+    const w: Vec3 = ax ? [v[0] - ax[0] * k, v[1] - ax[1] * k, v[2] - ax[2] * k] : v
+    const l = Math.hypot(w[0], w[1], w[2])
+    return l > 1e-9 ? [w[0] / l, w[1] / l, w[2] / l] : null
+  }
+  const apart = mean ? perp([centroid[0] - mean[0], centroid[1] - mean[1], centroid[2] - mean[2]]) : null
+  return apart ?? perp([centroid[0] - near.q[0], centroid[1] - near.q[1], centroid[2] - near.q[2]])
+}
+
+/** THE TEETH: the smallest t ≥ 0 such that every point of `points` (flat world [x, y, z, …]) moved by t · `dir` lies
+ *  at least z · (r + m) from the axis of every segment (z = `openingWeight` at the moved point). Exact in one pass for
+ *  a dir perpendicular to the segments; otherwise refined (at most 6 passes). */
+export function rigidRowPush(points: ArrayLike<number>, dir: Vec3, ch: ChannelNow, segments: readonly OpeningSegment[],
+  options: OpeningOptions = {}): number {
+  const margin = options.margin ?? OPENING_MARGIN_M, falloff = options.falloff ?? OPENING_FALLOFF_M
+  let t = 0
+  for (let pass = 0; pass < 6; pass++) {
+    let extra = 0
+    for (let i = 0, n = Math.floor(points.length / 3); i < n; i++) {
+      const px = points[3 * i] + dir[0] * t, py = points[3 * i + 1] + dir[1] * t, pz = points[3 * i + 2] + dir[2] * t
+      const s = (px - ch.o[0]) * ch.u[0] + (py - ch.o[1]) * ch.u[1] + (pz - ch.o[2]) * ch.u[2]
+      const z = openingWeight(s, ch, falloff)
+      if (!(z > 0)) continue
+      for (const seg of segments) {
+        const abx = seg.b[0] - seg.a[0], aby = seg.b[1] - seg.a[1], abz = seg.b[2] - seg.a[2]
+        const l2 = abx * abx + aby * aby + abz * abz
+        let u = l2 > 0 ? ((px - seg.a[0]) * abx + (py - seg.a[1]) * aby + (pz - seg.a[2]) * abz) / l2 : 0
+        u = u < 0 ? 0 : u > 1 ? 1 : u
+        const vx = px - (seg.a[0] + abx * u), vy = py - (seg.a[1] + aby * u), vz = pz - (seg.a[2] + abz * u)
+        const need = z * (seg.r + margin)
+        const d2 = vx * vx + vy * vy + vz * vz
+        if (d2 >= need * need) continue
+        const a = vx * dir[0] + vy * dir[1] + vz * dir[2]
+        const b2 = Math.max(0, d2 - a * a)
+        extra = Math.max(extra, Math.sqrt(Math.max(0, need * need - b2)) - a)
+      }
+    }
+    if (!(extra > OPENING_EPS_M)) break
+    t += extra
+  }
+  return t
+}
+
 /** The candidates' skin indices / weights as typed arrays, and the bones they use. */
 function skinOf(geometry: BufferGeometry, idx: readonly number[]): { skinI: Uint16Array; skinW: Float32Array; usedBones: number[] } {
   const si = geometry.attributes.skinIndex, sw = geometry.attributes.skinWeight
@@ -298,6 +393,9 @@ interface MeshEntry {
   m: Float64Array
   accN: Float64Array
   touched: Uint8Array
+  /** THE TEETH: a rigid mesh (every vertex a candidate, moved per row as one translation, normals kept): its rows
+   *  (`rigidRows`) and scratch space for the skinned positions. Null for a body mesh. */
+  rigid: { rowOf: Int32Array; rows: number; world: Float64Array } | null
 }
 
 /**
@@ -314,8 +412,7 @@ export function bindChannelOpening(three: Three, root: Object3D, ch: ChannelNow,
   const meshes: SkinnedMesh[] = []
   root.traverse(o => {
     const mesh = o as SkinnedMesh
-    if (mesh.isSkinnedMesh && mesh.skeleton && !inGarment(mesh) && !isRigidTeeth(mesh as unknown as Parameters<typeof isRigidTeeth>[0])
-      && mesh.geometry?.attributes?.position) meshes.push(mesh)
+    if (mesh.isSkinnedMesh && mesh.skeleton && !inGarment(mesh) && mesh.geometry?.attributes?.position) meshes.push(mesh)
   })
   const v = new three.Vector3()
   const entries: MeshEntry[] = []
@@ -332,8 +429,11 @@ export function bindChannelOpening(three: Three, root: Object3D, ch: ChannelNow,
       world[3 * i] = v.x; world[3 * i + 1] = v.y; world[3 * i + 2] = v.z
     }
     mesh.geometry = current
-    const idx = openingCandidates(world, ch, falloff, options.slack ?? OPENING_SLACK_M)
+    const teeth = isRigidTeeth(mesh as unknown as Parameters<typeof isRigidTeeth>[0])
+    let idx = openingCandidates(world, ch, falloff, options.slack ?? OPENING_SLACK_M)
     if (!idx.length) continue
+    // THE TEETH: a row moves whole, so every vertex of the mesh is a candidate (and no triangle is renormalled).
+    if (teeth) idx = Array.from({ length: pos.count }, (_, i) => i)
     shared.set(mesh, sh)
     sh.refs++
     const slot = new Int32Array(pos.count).fill(-1)
@@ -346,7 +446,7 @@ export function bindChannelOpening(three: Three, root: Object3D, ch: ChannelNow,
     const index = geometry.index
     const tri: number[] = []
     const triCount = Math.floor((index ? index.count : pos.count) / 3)
-    for (let f = 0; f < triCount; f++) {
+    for (let f = 0; f < (teeth ? 0 : triCount); f++) {
       const a = index ? index.getX(3 * f) : 3 * f, b = index ? index.getX(3 * f + 1) : 3 * f + 1
       const c = index ? index.getX(3 * f + 2) : 3 * f + 2
       if (slot[a] >= 0 || slot[b] >= 0 || slot[c] >= 0) tri.push(a, b, c)
@@ -364,9 +464,11 @@ export function bindChannelOpening(three: Three, root: Object3D, ch: ChannelNow,
     const nrm0 = geometry.attributes.normal
     const restNormal = nrm0 ? new Float32Array(idx.length * 3) : null
     if (nrm0 && restNormal) idx.forEach((i, k) => { restNormal[3 * k] = nrm0.getX(i); restNormal[3 * k + 1] = nrm0.getY(i); restNormal[3 * k + 2] = nrm0.getZ(i) })
+    const skin = skinOf(geometry, idx)
     entries.push({ mesh, shared: sh, idx, sBind, rhoBind, rest, restNormal, tris: new Uint32Array(tri), slot, group,
-      groups: groupOf.size, moved: new Uint8Array(idx.length), ...skinOf(geometry, idx), m: new Float64Array(16),
-      accN: new Float64Array(groupOf.size * 3), touched: new Uint8Array(groupOf.size) })
+      groups: groupOf.size, moved: new Uint8Array(idx.length), ...skin, m: new Float64Array(16),
+      accN: new Float64Array(groupOf.size * 3), touched: new Uint8Array(groupOf.size),
+      rigid: teeth ? { ...rigidRows(skin.skinI, skin.skinW, idx.length), world: new Float64Array(idx.length * 3) } : null })
   }
   /** This binding's mark in each mesh's `active` set. */
   const token = {}
@@ -497,6 +599,32 @@ export function bindChannelOpening(three: Three, root: Object3D, ch: ChannelNow,
       if (!segments.length) { if (active) putBack(); return { maxPush: 0, moved: 0, visited: 0 } }
       const reach = openingReach(segments, now, opts)
       let maxPush = 0, moved = 0, visited = 0
+      /** The blended skin matrix of candidate k of `e` into `e.m` (12 used elements). */
+      const skinMatrix = (e: MeshEntry, M: Float64Array, k: number) => {
+        const m = e.m
+        m.fill(0)
+        for (let j = 0; j < 4; j++) {
+          const w = e.skinW[4 * k + j]
+          if (!(w > 0)) continue
+          const o = 16 * e.skinI[4 * k + j]
+          for (let q = 0; q < 16; q++) m[q] += M[o + q] * w
+        }
+        return m
+      }
+      /** The world displacement `disp` of candidate k into its bind position, through the inverse of the linear part
+       *  of its skin matrix `m` (3×3, column-major); false when that is singular. */
+      const writeBack = (e: MeshEntry, pos: BufferAttribute, k: number, m: Float64Array) => {
+        const a = m[0], b = m[4], c = m[8], d = m[1], f = m[5], g = m[9], h = m[2], ii = m[6], jj = m[10]
+        const A = f * jj - g * ii, B = -(d * jj - g * h), C = d * ii - f * h
+        const det = a * A + b * B + c * C
+        if (!(Math.abs(det) > 1e-20)) return false
+        const x = disp[0], y = disp[1], z = disp[2]
+        const bx = (A * x + (c * ii - b * jj) * y + (b * g - c * f) * z) / det
+        const by = (B * x + (a * jj - c * h) * y + (c * d - a * g) * z) / det
+        const bz = (C * x + (b * h - a * ii) * y + (a * f - b * d) * z) / det
+        pos.setXYZ(e.idx[k], e.rest[3 * k] + bx, e.rest[3 * k + 1] + by, e.rest[3 * k + 2] + bz)
+        return true
+      }
       for (const e of entries) {
         const sh = e.shared
         if (!sh.clone) sh.clone = sh.original.clone()
@@ -507,6 +635,54 @@ export function bindChannelOpening(three: Three, root: Object3D, ch: ChannelNow,
         let any = false
         const M = frameBones(e)
         const m = e.m
+        if (e.rigid) {
+          // THE TEETH: every vertex back to rest and its skinned world position; then one translation per row.
+          const rg = e.rigid, W = rg.world
+          for (let k = 0; k < e.idx.length; k++) {
+            const rx = e.rest[3 * k], ry = e.rest[3 * k + 1], rz = e.rest[3 * k + 2]
+            if (e.moved[k] === 1) pos.setXYZ(e.idx[k], rx, ry, rz)
+            e.moved[k] = 0
+            skinMatrix(e, M, k)
+            W[3 * k] = m[0] * rx + m[4] * ry + m[8] * rz + m[12]
+            W[3 * k + 1] = m[1] * rx + m[5] * ry + m[9] * rz + m[13]
+            W[3 * k + 2] = m[2] * rx + m[6] * ry + m[10] * rz + m[14]
+          }
+          visited += e.idx.length
+          const sums = new Float64Array(rg.rows * 4)
+          for (let k = 0; k < e.idx.length; k++) {
+            const r = rg.rowOf[k]
+            sums[4 * r] += W[3 * k]; sums[4 * r + 1] += W[3 * k + 1]; sums[4 * r + 2] += W[3 * k + 2]; sums[4 * r + 3]++
+          }
+          const centroid = (r: number): Vec3 => [sums[4 * r] / sums[4 * r + 3], sums[4 * r + 1] / sums[4 * r + 3],
+            sums[4 * r + 2] / sums[4 * r + 3]]
+          let mean: Vec3 | null = null
+          if (rg.rows > 1) {
+            mean = [0, 0, 0]
+            for (let r = 0; r < rg.rows; r++) {
+              const c = centroid(r)
+              mean[0] += c[0] / rg.rows; mean[1] += c[1] / rg.rows; mean[2] += c[2] / rg.rows
+            }
+          }
+          for (let r = 0; r < rg.rows; r++) {
+            const dir = rigidRowDirection(centroid(r), mean, segments)
+            if (!dir) continue
+            const members: number[] = []
+            for (let k = 0; k < e.idx.length; k++) if (rg.rowOf[k] === r) members.push(k)
+            const pts = new Float64Array(members.length * 3)
+            members.forEach((k, n) => { pts[3 * n] = W[3 * k]; pts[3 * n + 1] = W[3 * k + 1]; pts[3 * n + 2] = W[3 * k + 2] })
+            const t = rigidRowPush(pts, dir, now, segments, opts)
+            if (!(t > OPENING_EPS_M)) continue
+            disp[0] = dir[0] * t; disp[1] = dir[1] * t; disp[2] = dir[2] * t
+            for (const k of members) {
+              if (!writeBack(e, pos, k, skinMatrix(e, M, k))) continue
+              e.moved[k] = 1
+              moved++
+            }
+            if (t > maxPush) maxPush = t
+          }
+          pos.needsUpdate = true
+          continue
+        }
         for (let k = 0; k < e.idx.length; k++) {
           const i = e.idx[k]
           const rx = e.rest[3 * k], ry = e.rest[3 * k + 1], rz = e.rest[3 * k + 2]
@@ -520,13 +696,7 @@ export function bindChannelOpening(three: Three, root: Object3D, ch: ChannelNow,
           if (e.sBind[k] < reach.sMin || e.sBind[k] > reach.sMax || e.rhoBind[k] > reach.rhoMax) continue
           visited++
           // The blended skin matrix (12 used elements), then the skinned world position.
-          m.fill(0)
-          for (let j = 0; j < 4; j++) {
-            const w = e.skinW[4 * k + j]
-            if (!(w > 0)) continue
-            const o = 16 * e.skinI[4 * k + j]
-            for (let q = 0; q < 16; q++) m[q] += M[o + q] * w
-          }
+          skinMatrix(e, M, k)
           const px = m[0] * rx + m[4] * ry + m[8] * rz + m[12]
           const py = m[1] * rx + m[5] * ry + m[9] * rz + m[13]
           const pz = m[2] * rx + m[6] * ry + m[10] * rz + m[14]
@@ -536,15 +706,7 @@ export function bindChannelOpening(three: Three, root: Object3D, ch: ChannelNow,
           e.moved[k] = 1
           if (push > maxPush) maxPush = push
           // World displacement → bind space through the inverse of the linear part (3×3, column-major).
-          const a = m[0], b = m[4], c = m[8], d = m[1], f = m[5], g = m[9], h = m[2], ii = m[6], jj = m[10]
-          const A = f * jj - g * ii, B = -(d * jj - g * h), C = d * ii - f * h
-          const det = a * A + b * B + c * C
-          if (!(Math.abs(det) > 1e-20)) continue
-          const x = disp[0], y = disp[1], z = disp[2]
-          const bx = (A * x + (c * ii - b * jj) * y + (b * g - c * f) * z) / det
-          const by = (B * x + (a * jj - c * h) * y + (c * d - a * g) * z) / det
-          const bz = (C * x + (b * h - a * ii) * y + (a * f - b * d) * z) / det
-          pos.setXYZ(i, rx + bx, ry + by, rz + bz)
+          if (!writeBack(e, pos, k, m)) continue
           any = true
         }
         pos.needsUpdate = true

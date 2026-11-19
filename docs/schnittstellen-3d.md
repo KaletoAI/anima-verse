@@ -12450,8 +12450,16 @@ teeth and tongue and sets the shade and size (Channels panel, tab `mouth`; Save 
   mouth fully open. CONTACT uses it instead of `open_height` when present: `(2 · radius + 4 mm) / teeth_gap`
   (`mouthPassHeight`). `teeth` {status `applied`/`off`/`failed`, reason, left_out} says how the step went (for the
   admin; renderers ignore it).
-- The opening pass (below) never displaces a mesh whose material is `mouth_teeth` (`isRigidTeeth`); the tongue is
-  displaced like the skin.
+- The opening pass (below) never BENDS a mesh whose material is `mouth_teeth` (`isRigidTeeth`), but it moves it as
+  RIGID ROWS (owner finding 2026-11-19: the jaw opens by at most `teeth_gap`, 17 mm on the stored mouth, an entering
+  part is 50–74 mm thick, and the part passed through both rows). The rows are the mesh's vertices grouped by their
+  dominant skin joint (`rigidRows`: the upper row and gum on `Head`, the lower on `Jaw`), so the lower row keeps
+  following the jaw and the upper the head. Per frame each row moves by ONE translation t · dir: dir = its centroid
+  minus the mean of the rows' centroids, perpendicular to the nearest occupant segment's axis (`rigidRowDirection`;
+  one row: its centroid's radial direction), t = the smallest value that leaves every vertex of the row at least
+  z · (r + 2 mm) from every segment's axis (`rigidRowPush`; r the radius the opening uses, z the axial weight), so
+  no tooth vertex stays inside the part. Written back through each vertex's skin matrix like the skin; normals stay.
+  The tongue is displaced like the skin. Numbers: `scripts/smoke_mouth_open.mjs` [6].
 - The reduced tier carries no teeth and no tongue (`lod.py` drops their faces before reducing).
 
 **The record** (`ChannelRecord` / `ChannelOverride` in `packages/scene-render/src/collision.ts`):

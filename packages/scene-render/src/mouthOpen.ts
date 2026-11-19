@@ -20,7 +20,8 @@
  *   build measured it (the channel record's `open_height`). A body with TEETH (Ruling A206) passes `teeth_gap`
  *   instead — the free height between the incisal edges at the same opening, which is smaller — so the mouth opens
  *   far enough that the part clears the teeth (`mouthPassHeight`). The surface pass still runs on top and shapes
- *   the lips around the part; it leaves the rigid teeth alone (`channelOpening.ts`).
+ *   the lips around the part; it moves the rigid teeth as whole rows out of the part's way, never bends them
+ *   (`channelOpening.ts`, THE TEETH).
  * - MANUAL: `setManual` (a preview slider, an expression) — the larger of the two applies.
  *
  * `bindMouthOpen` finds every skinned mesh of an instance that carries the target and the jaw bone of its skeleton;

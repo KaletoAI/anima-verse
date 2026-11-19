@@ -40,8 +40,26 @@
  *     record of [3] plus teeth_gap 0.025: the occupant of [3] (radius 0.02 x w 0.5 = 0.01) -> (0.02 + 0.004) / 0.025
  *     = 0.96 (0.6 without teeth). isRigidTeeth: material 'mouth_teeth' and 'mouth_teeth.001' -> true, 'mouth_tongue',
  *     'Material_0', [teeth, skin] and none -> false. bindChannelOpening on a figure whose ONLY mesh lies on the
- *     channel axis inside the channel: material 'mouth_teeth' -> null (nothing bound, the teeth stay rigid);
- *     'mouth_tongue' -> bound with all 4 vertices as candidates (the tongue is pushed).
+ *     channel axis inside the channel: 'mouth_tongue' -> bound with all 4 vertices as candidates (the tongue is pushed).
+ * [6] THE TEETH MOVE WITH THE OPENING (owner finding 2026-11-19; before it, at 8fa2d763f, a 'mouth_teeth' mesh was
+ *     never bound, so the part passed through both rows). Fixture: channel O origin, u +z, D 0.08, R 0.02, F 0.03;
+ *     bones Head (index 0) and Jaw (index 1) at the origin; occupant one segment (0,0,−0.05) → (0,0,0.10), r 0.012
+ *     → T = r + 2 mm = 0.014.
+ *     - a lip ring (material Material_0, Head): vertices at distance 0.01 from the axis on s = 0: B = max(0.015,
+ *       1.5 · max(0.012, 0.02)) = 0.03, b = 0.044, f(0.01) = 0.01 + 0.014 · (1 − 0.01/0.044)² = 0.01 + 0.014 ·
+ *       0.7727273² = 0.0183595 → (0.01, 0, 0) moves to (0.0183595, 0, 0).
+ *     - two tooth rows (material mouth_teeth): upper x ∈ {−0.01, 0, 0.01}, y +0.004, z 0.01, weighted 1.0 to Head;
+ *       lower the same at y −0.004, weighted 1.0 to Jaw. rigidRows → 2 rows. Centroids (0, ±0.004, 0.01), mean
+ *       (0, 0, 0.01) → dir (0, ±1, 0) (already perpendicular to the axis +z). For a vertex of the upper row moved by t
+ *       the axis distance is sqrt(x² + (0.004 + t)²) ≥ 0.014: x = 0 needs t = 0.014 − 0.004 = 0.010, x = ±0.01 needs
+ *       sqrt(0.014² − 0.01²) − 0.004 = 0.0097980 − 0.004 = 0.0057980 → the row moves by the larger, 0.010: every upper
+ *       vertex to y = 0.014 (x, z kept), every lower one to y = −0.014; afterwards the x = ±0.01 vertices are
+ *       sqrt(0.0001 + 0.000196) = 0.0172046 from the axis: none inside. Normals unchanged. restore() → rest (float32).
+ *     - the jaw opened (Jaw moved by (0, −0.005, 0) in the world): the lower row is at y −0.009 before the push,
+ *       centroids (0, 0.004, 0.01) / (0, −0.009, 0.01), mean y −0.0025 → dirs ±y; the lower row needs 0.014 − 0.009 =
+ *       0.005 → world y −0.014, its bind y −0.004 − 0.005 = −0.009 (it keeps following the jaw); the upper row as before.
+ *     - rigidRowPush alone: the upper row's points and dir (0,1,0) → 0.010; with the segment's r 0.004 (T 0.006) the
+ *       x = 0 vertex needs 0.002 and x = ±0.01 none (0.0108 ≥ 0.006) → 0.002.
  */
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -261,9 +279,78 @@ const onAxisFigure = (material) => {
 }
 const ch5 = { id: 'mouth', o: [0, 0, 0], u: [1, 0, 0], depth: 0.08, r: 0.02, coneDeg: 35, funnel: 0.03, accepts: [],
   minLength: 0, compressMin: 0.6, kinds: null, suppress: new Set() }
-check('[5] teeth: nothing bound', SR.bindChannelOpening(THREE, onAxisFigure('mouth_teeth'), ch5) === null)
 const tongue = SR.bindChannelOpening(THREE, onAxisFigure('mouth_tongue'), ch5)
 check('[5] tongue: bound, 4 candidates', tongue !== null && tongue.candidates === 4, tongue && tongue.candidates)
+
+// [6]
+{
+  const ch6 = { id: 'mouth', o: [0, 0, 0], u: [0, 0, 1], depth: 0.08, r: 0.02, coneDeg: 35, funnel: 0.03, accepts: [],
+    minLength: 0, compressMin: 0.6, kinds: null, suppress: new Set() }
+  const seg6 = [{ a: [0, 0, -0.05], b: [0, 0, 0.10], r: 0.012 }]
+  const meshOf = (positions, joints, material, bones) => {
+    const n = positions.length / 3
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(new Array(3 * n).fill(0).map((_, i) => (i % 3 === 2 ? 1 : 0)), 3))
+    geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(joints.flatMap((j) => [j, 0, 0, 0]), 4))
+    geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(joints.flatMap(() => [1, 0, 0, 0]), 4))
+    geo.setIndex(Array.from({ length: n - (n % 3) }, (_, i) => i))
+    const mat = new THREE.MeshBasicMaterial(); mat.name = material
+    const mesh = new THREE.SkinnedMesh(geo, mat)
+    return mesh
+  }
+  const teethFigure = () => {
+    const root = new THREE.Group()
+    const head = new THREE.Bone(); head.name = 'mixamorig:Head'
+    const jaw = new THREE.Bone(); jaw.name = 'mixamorig:Jaw'
+    root.add(head, jaw)
+    const lips = meshOf([0.01, 0, 0, -0.01, 0, 0, 0, 0.01, 0], [0, 0, 0], 'Material_0')
+    const teeth = meshOf([-0.01, 0.004, 0.01, 0, 0.004, 0.01, 0.01, 0.004, 0.01,
+      -0.01, -0.004, 0.01, 0, -0.004, 0.01, 0.01, -0.004, 0.01], [0, 0, 0, 1, 1, 1], 'mouth_teeth')
+    root.add(lips, teeth)
+    root.updateMatrixWorld(true)
+    const skeleton = new THREE.Skeleton([head, jaw])
+    lips.bind(skeleton); teeth.bind(skeleton)
+    return { root, jaw, lips, teeth }
+  }
+  const xyz = (mesh, i) => [mesh.geometry.attributes.position.getX(i), mesh.geometry.attributes.position.getY(i),
+    mesh.geometry.attributes.position.getZ(i)]
+  const rows = SR.rigidRows([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
+    new Array(24).fill(0).map((_, i) => (i % 4 === 0 ? 1 : 0)), 6)
+  check('[6] rigidRows: 2 rows by the dominant joint', rows.rows === 2 && [...rows.rowOf].join() === '0,0,0,1,1,1', JSON.stringify(rows))
+  let F = teethFigure()
+  const tb = SR.bindChannelOpening(THREE, F.root, ch6)
+  check('[6] the teeth are bound (6 + the 3 lip vertices)', tb !== null && tb.candidates === 9, tb && tb.candidates)
+  tb.apply(ch6, seg6)
+  check('[6] lip (0.01, 0, 0) → (0.0183595, 0, 0)', vnear(xyz(F.lips, 0), [0.0183595, 0, 0], 1e-6), fmt(xyz(F.lips, 0)))
+  const up = [0, 1, 2].map((i) => xyz(F.teeth, i)), lo = [3, 4, 5].map((i) => xyz(F.teeth, i))
+  check('[6] upper row to y 0.014, x and z kept', up.every((p, k) => vnear(p, [[-0.01, 0, 0.01][k], 0.014, 0.01], 1e-6)), JSON.stringify(up))
+  check('[6] lower row to y −0.014', lo.every((p, k) => vnear(p, [[-0.01, 0, 0.01][k], -0.014, 0.01], 1e-6)), JSON.stringify(lo))
+  const inside = [...up, ...lo].filter((p) => Math.hypot(p[0], p[1]) < 0.014 - 1e-6)
+  check('[6] no tooth vertex inside T = 0.014; the corners at 0.0172046', inside.length === 0
+    && near(Math.hypot(up[0][0], up[0][1]), 0.0172046, 1e-6), JSON.stringify(inside))
+  const n0 = F.teeth.geometry.attributes.normal
+  check('[6] tooth normals unchanged', [0, 1, 2, 3, 4, 5].every((i) => n0.getX(i) === 0 && n0.getY(i) === 0 && n0.getZ(i) === 1))
+  tb.restore()
+  check('[6] restore: the teeth at rest', vnear(xyz(F.teeth, 1), [0, 0.004, 0.01], 1e-8) && vnear(xyz(F.teeth, 4), [0, -0.004, 0.01], 1e-8)
+    && vnear(xyz(F.lips, 0), [0.01, 0, 0], 1e-8), fmt(xyz(F.teeth, 1)))
+  tb.dispose()
+  F = teethFigure()
+  F.jaw.position.set(0, -0.005, 0); F.root.updateMatrixWorld(true)
+  const tj = SR.bindChannelOpening(THREE, F.root, ch6)
+  tj.apply(ch6, seg6)
+  const lowBind = xyz(F.teeth, 4), upBind = xyz(F.teeth, 1)
+  check('[6] jaw opened: the lower row\'s bind y −0.009 (world −0.014), the upper 0.014', near(lowBind[1], -0.009, 1e-6)
+    && near(lowBind[1] - 0.005, -0.014, 1e-6) && near(upBind[1], 0.014, 1e-6), fmt(lowBind) + fmt(upBind))
+  tj.dispose()
+  const upperPts = [-0.01, 0.004, 0.01, 0, 0.004, 0.01, 0.01, 0.004, 0.01]
+  check('[6] rigidRowPush 0.010', near(SR.rigidRowPush(upperPts, [0, 1, 0], ch6, seg6), 0.010, 1e-9),
+    SR.rigidRowPush(upperPts, [0, 1, 0], ch6, seg6))
+  check('[6] rigidRowPush with r 0.004: 0.002', near(SR.rigidRowPush(upperPts, [0, 1, 0], ch6, [{ ...seg6[0], r: 0.004 }]), 0.002, 1e-9),
+    SR.rigidRowPush(upperPts, [0, 1, 0], ch6, [{ ...seg6[0], r: 0.004 }]))
+  check('[6] rigidRowDirection: rows part ±y', vnear(SR.rigidRowDirection([0, 0.004, 0.01], [0, 0, 0.01], seg6), [0, 1, 0], 1e-12)
+    && vnear(SR.rigidRowDirection([0, -0.004, 0.01], [0, 0, 0.01], seg6), [0, -1, 0], 1e-12))
+}
 
 console.log(failed ? `FAILED (${failed})` : 'ALL OK')
 process.exit(failed ? 1 : 0)
