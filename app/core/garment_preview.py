@@ -339,6 +339,21 @@ def neckline_curve(neckline: str, x0: float, half_w: float, top_y: float, bottom
     return out
 
 
+def top_edge_curve(x0: float, right: List[float], left: List[float], depth: float,
+                   half_rad: Optional[float] = None) -> List[List[float]]:
+    """A231: a corset top's sweetheart top edge seen from the front (metres), from the right rim ``right`` to the
+    left rim ``left`` (both at the band height). A point at angle a round from the front centre lies at
+    x = x0 +- half_w * sin(a) and ``garment_template.sweetheart_drop(depth, a)`` under the band."""
+    from app.core import garment_template as gt
+    half = gt.SWEETHEART_HALF_RAD if half_rad is None else half_rad
+    out = []
+    for i in range(CURVE_N + 1):
+        s = 1.0 - 2.0 * i / CURVE_N            # sin a: +1 (right rim) .. -1 (left rim)
+        rim = right if s >= 0 else left
+        out.append([x0 + (rim[0] - x0) * abs(s), rim[1] - gt.sweetheart_drop(depth, math.asin(min(1.0, abs(s))), half)])
+    return out
+
+
 def _quad_along(a: Tuple[float, float], u: Tuple[float, float], start: float, end: float, w0: float,
                 w1: float) -> List[List[float]]:
     """A band along the axis from ``a`` in direction ``u`` (unit), from ``start`` to ``end`` metres, ``w0`` / ``w1``
@@ -397,7 +412,15 @@ def shapes(params: Dict[str, Any], meas: Dict[str, Any], reg: Registration) -> D
     hem = _hem_curve(left[0], right[0], dip)
     # the outline: up the right side, across the top, down the left side, along the hem
     if spec is None:
-        add("body", "fill", right + left[::-1] + hem[::-1][1:-1])
+        if gt.strapless_top(p) and p["neckline"] == "sweetheart":
+            # A231: the strapless top edge dips at the front centre (the drape's ``top_drop``)
+            depth = gt.sweetheart_depth(p)
+            edge = top_edge_curve(x0, right[-1], left[-1], depth)
+            add("body", "fill", right[:-1] + edge + left[:-1][::-1] + hem[::-1][1:-1])
+            add("top_edge", "line", edge)
+            mark(x0 + 0.02, right[-1][1] - depth, f"sweetheart −{round(depth * 100)} cm")
+        else:
+            add("body", "fill", right + left[::-1] + hem[::-1][1:-1])
     else:
         nr = spec["neck_r"]
         sy = m["shoulder_y"]
@@ -406,7 +429,15 @@ def shapes(params: Dict[str, Any], meas: Dict[str, Any], reg: Registration) -> D
             band = spec["band_y"]
             r_cut = [q for q in right if q[1] <= band] + [_at(right, band)]
             l_cut = [q for q in left if q[1] <= band] + [_at(left, band)]
-            add("body", "fill", r_cut + l_cut[::-1] + hem[::-1][1:-1])
+            te = spec.get("top_edge") or {}
+            if te.get("dip_m"):
+                # A231: the band's sweetheart dip round the front centre (the builder's ``top_edge`` cut)
+                edge = top_edge_curve(x0, r_cut[-1], l_cut[-1], te["dip_m"], te["half_rad"])
+                add("body", "fill", r_cut[:-1] + edge + l_cut[:-1][::-1] + hem[::-1][1:-1])
+                add("top_edge", "line", edge)
+                mark(x0 + 0.02, band - te["dip_m"], f"sweetheart −{round(te['dip_m'] * 100)} cm")
+            else:
+                add("body", "fill", r_cut + l_cut[::-1] + hem[::-1][1:-1])
             for sgn in (1, -1):
                 sx = x0 + sgn * spec["strap_x"]
                 w = spec["strap_w"] / 2

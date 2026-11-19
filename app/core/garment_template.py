@@ -1025,11 +1025,14 @@ def top_drop(params: Dict[str, Any], cols: int) -> Optional[List[float]]:
     if not strapless_top(params) or params["neckline"] != "sweetheart":
         return None
     depth = sweetheart_depth(params)
-    out = []
-    for c in range(cols):
-        off = abs(math.pi * c / (cols - 1) - math.pi / 2)
-        out.append(round(depth * (1.0 - off / SWEETHEART_HALF_RAD) ** 2, 5) if off < SWEETHEART_HALF_RAD else 0.0)
-    return out
+    return [round(sweetheart_drop(depth, abs(math.pi * c / (cols - 1) - math.pi / 2)), 5) for c in range(cols)]
+
+
+def sweetheart_drop(depth: float, off: float, half_rad: float = SWEETHEART_HALF_RAD) -> float:
+    """A221: how far a sweetheart top edge lies under the band at ``off`` radians round from the front centre:
+    depth * (1 - off / half_rad)^2 inside +-half_rad, 0 outside (the drape's ``top_drop``, the straps builder's cut
+    and the dialog preview's top edge)."""
+    return depth * (1.0 - off / half_rad) ** 2 if off < half_rad else 0.0
 
 
 def bodice_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
