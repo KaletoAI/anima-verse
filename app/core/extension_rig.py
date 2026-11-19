@@ -296,7 +296,10 @@ PART_BUILDS = {"attached_part": 14, "inset_part": 9}
 # 6: the channel axis tilts -20 degrees by default (2026-11-19).
 # 7: the chin edge is the under-chin step, the cut skin keeps the surface's shading, the pouch stays behind the skin
 #    at rest, visible skin is never "standing", and extension bones keep the cut lips apart (Ruling A208).
-OP_BUILDS = {**PART_BUILDS, "pair_protrusion": 6, "pair_tip": 2, "mouth_part": 8}
+# 8: the nose tip is searched within ``nose_reach`` of the head joint's midplane (Ruling A213).
+# 9: the cut skin's corner normals come from the source triangle that holds each face, not from whichever
+#    triangle is nearest to the corner (a sawtooth band across the lips, Ruling A218).
+OP_BUILDS = {**PART_BUILDS, "pair_protrusion": 6, "pair_tip": 2, "mouth_part": 9}
 
 
 def extension_rig_fingerprint(groups, overrides=None):

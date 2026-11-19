@@ -234,6 +234,23 @@ def teeth_gap(upper_tip, lower_tip, hinge, theta, up):
     return float((np.asarray(upper_tip, float) - lower) @ np.asarray(up, float))
 
 
+def face_corner_normal(p, centre, V, tris, normals, nearest, probe=.02):
+    """The source surface's normal at a cut face's corner ``p`` (Ruling A218): taken in the source triangle that
+    holds THE FACE — ``nearest`` (point -> triangle index or None) is asked at ``probe`` of the way from ``p`` toward
+    the face's ``centre`` — barycentric over that triangle's corner ``normals`` (clipped to the triangle). A corner
+    on a source edge is as near to both triangles of the edge; asked at the corner itself, the pick flipped from
+    vertex to vertex along a row where the two triangles' corner normals differ. None without a triangle."""
+    p, centre = np.asarray(p, float), np.asarray(centre, float)
+    ti = nearest(p + (centre - p) * probe)
+    if ti is None:
+        return None
+    a, b, c = (np.asarray(V[k], float) for k in tris[ti])
+    w = np.clip(barycentric(p, a, b, c), 0., None)
+    w = w / max(float(w.sum()), 1e-12)
+    n = w @ np.asarray(normals[ti], float)
+    return n / max(float(np.linalg.norm(n)), 1e-12)
+
+
 def barycentric(p, a, b, c):
     """The barycentric weights (wa, wb, wc) of ``p`` projected onto the plane of the triangle a b c (sum 1; a
     degenerate triangle gives all weight to ``a``)."""

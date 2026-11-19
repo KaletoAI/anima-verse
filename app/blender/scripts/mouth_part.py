@@ -113,6 +113,7 @@ class NoMouth(ValueError):
     """The face shows no mouth to open (no lip line, no texture, ...): a finding about this body, not a failure."""
 
 INSIDE_MATERIAL = 'mouth_channel'
+NORMAL_PROBE = .02           # restore_shading asks this fraction of the way from a corner toward its face's centre
 SNAP_M = .00004               # a vertex closer to the line than this is moved off it before the cut
 
 
@@ -1060,7 +1061,9 @@ def source_normals(body):
 
 def restore_shading(body, faces, shading):
     """Give the corners of the cut skin ``faces`` the normal the uncut surface had at their position (barycentric
-    over the corner normals of its nearest triangle, ``source_normals``); every other corner keeps its own. The cut splits and subdivides
+    over the corner normals of the source triangle that holds the face, ``mouth_math.face_corner_normal``; Ruling
+    A218: picked at the corner itself, the triangle flipped along rows of subdivision vertices on source edges and
+    shaded a sawtooth band across the lips); every other corner keeps its own. The cut splits and subdivides
     these faces, and a new corner inherits the custom normal of a neighbouring one: near the mouth corners, where
     the surface folds, that turned normals up to 45 degrees away from the surface and shaded the corners as dark
     cracks with the mouth closed. Returns the number of corners set."""
@@ -1071,15 +1074,14 @@ def restore_shading(body, faces, shading):
     count = 0
     for fi in faces:
         poly = me.polygons[fi]
+        centre = M @ poly.center
         for li in poly.loop_indices:
             p = M @ me.vertices[me.loops[li].vertex_index].co
-            loc, _n, ti, _d = shading['bvh'].find_nearest(p)
-            if loc is None:
+            n = mouth_math.face_corner_normal(p, centre, shading['V'], shading['tris'], shading['normal'],
+                                              lambda q: shading['bvh'].find_nearest(Vector(q))[2], NORMAL_PROBE)
+            if n is None:
                 continue
-            A, B, C = (shading['V'][k] for k in shading['tris'][ti])
-            w = mouth_math.barycentric(np.array(loc), A, B, C)
-            n = w @ shading['normal'][ti]
-            n = Vector(n / max(np.linalg.norm(n), 1e-12))
+            n = Vector(n)
             normals[li] = tuple((to_local @ n).normalized())
             count += 1
     me.normals_split_custom_set(normals)
