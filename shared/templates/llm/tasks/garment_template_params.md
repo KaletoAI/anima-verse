@@ -24,7 +24,7 @@ Fields:
 - "neck_depth_m": how deep the neckline reaches below the shoulder line in metres, 0 for the usual depth of that neckline.
 - "front" (jacket only): "closed" (buttoned or zipped) or "open" (worn open).
 - "collar" (jacket only): "none", "stand" (a standing collar) or "lapel" (a blazer's folded lapels; such a jacket is open at the neck).
-- "fabric": "stiff" (denim, wool, leather, thick cotton that keeps its shape), "medium" (ordinary cotton, linen), "flowing" (silk, satin, jersey, anything opaque that falls in soft folds), "sheer" (chiffon, voile, organza, tulle, mesh — very light and see-through).
+- "fabric": "stiff" (denim, wool, thick cotton that keeps its shape), "leather_glossy" (shiny, polished or patent leather, latex-like shine), "leather_rough" (suede, nubuck, matte leather), "medium" (ordinary cotton, linen), "flowing" (silk, satin, jersey, anything opaque that falls in soft folds), "sheer" (chiffon, voile, organza, tulle, mesh — very light and see-through).
 - "opacity": only with "sheer", 0.2 (barely there) .. 1.0 (opaque); 0.4 for ordinary chiffon.
 
 Leave out the fields that do not belong to the kind.
