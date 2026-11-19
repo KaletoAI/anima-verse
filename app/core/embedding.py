@@ -35,6 +35,7 @@ played in, and an English-only model cannot rank that. That combination is
 reported by ``english_model_language_mismatch`` (admin validation) and logged
 once per process the first time the internal model is used.
 """
+import os
 import hashlib
 import json
 import threading
@@ -470,7 +471,10 @@ def _get_internal_model(model_id: str, cache_dir: str):
         try:
             logger.info("Loading internal embedding model %r (cache: %s) …",
                         model_id, cache_dir)
-            model = TextEmbedding(model_name=model_id, cache_dir=cache_dir or None)
+            # An explicit thread count: left to its default, onnxruntime pins one thread per CPU INDEX and
+            # aborts the process at exit when the container's CPU set has gaps (pthread_setaffinity_np fails).
+            model = TextEmbedding(model_name=model_id, cache_dir=cache_dir or None,
+                                  threads=max(1, min(8, len(os.sched_getaffinity(0)))))
             _MODEL_CACHE[model_id] = model
             return model
         except Exception as e:

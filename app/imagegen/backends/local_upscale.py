@@ -62,7 +62,11 @@ def get_session():
                     raise ValueError('Local upscale model checksum mismatch')
                 os.replace(temporary, MODEL_PATH)
             import onnxruntime as ort
-            _session = ort.InferenceSession(str(MODEL_PATH), providers=['CPUExecutionProvider'])
+            # An explicit thread count: the default pins one thread per CPU index and fails where the
+            # container's CPU set has gaps (see embedding._get_internal_model).
+            opts = ort.SessionOptions()
+            opts.intra_op_num_threads = max(1, min(8, len(os.sched_getaffinity(0))))
+            _session = ort.InferenceSession(str(MODEL_PATH), sess_options=opts, providers=['CPUExecutionProvider'])
             return _session
         except Exception:
             _retry_at = time.monotonic() + 600
