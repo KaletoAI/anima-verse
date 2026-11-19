@@ -90,10 +90,10 @@ def image(path: Path, *, legs: bool, bg: bool = False) -> Path:
 print("[A] prompt")
 front, neg = tv.prompt_for(ITEMS["sheer"], "front")
 check("sheer front = waistband ghost + stance + sheer line",
-      front == " ".join([gc.GHOST_WAISTBAND, gc.GHOST_STANCE, tv.SHEER_LINE]), front)
+      front == " ".join([gc.GHOST_WAISTBAND, gc.GHOST_STANCE, tv.SHEER_LINE, tv.GREEN_LINE]), front)
 back, _ = tv.prompt_for(ITEMS["sheer"], "back")
 check("sheer back adds side + turn-around before the sheer line",
-      back == " ".join([gc.GHOST_WAISTBAND, gc.GHOST_SIDE["back"], gc.GHOST_STANCE, tv.BACK_LINE, tv.SHEER_LINE]),
+      back == " ".join([gc.GHOST_WAISTBAND, gc.GHOST_SIDE["back"], gc.GHOST_STANCE, tv.BACK_LINE, tv.SHEER_LINE, tv.GREEN_LINE]),
       back)
 check("medium has no sheer line", tv.SHEER_LINE not in tv.prompt_for(ITEMS["plain"], "front")[0])
 check("sheer negative names legs and body", "legs" in neg.split(", ") and "body" in neg.split(", "), neg)
