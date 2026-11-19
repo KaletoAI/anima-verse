@@ -6,7 +6,7 @@ Expected values, derived by hand:
 
 [1] ``asig`` = md5[:12] of the geometry inputs {version, kind, chain}: the metal is not one of them, so gold →
     silver keeps the asig (a re-assembly, never a rebuild — ``material_key`` changes instead: "accessory:gold:
-    #d4af37:0.25" → "accessory:silver:#c0c0c0:0.2"); drop 4 → 10 changes it; thickness 1.5 → 2.0 changes it.
+    #d4af37:0.25" → "accessory:silver:#c0c0c0:0.2:1.0"); drop 4 → 10 changes it; thickness 1.5 → 2.0 changes it.
 [2] The state rule (``accessory_state``), base sha "B1":
     no jewellery → blocked "Choose the accessory kind in the Wardrobe"; kind ring → blocked "Ring: not built yet…";
     no plain body → blocked "No plain body yet"; nothing stored → due "Not built yet…"; a record of THIS asig on
@@ -64,8 +64,8 @@ check("[1] metal keeps asig", ab.asig(gold), ab.asig(normalize({"kind": "necklac
 check("[1] drop changes asig", ab.asig(gold) != ab.asig(normalize({"kind": "necklace", "chain": {"drop_cm": 10}})), True)
 check("[1] thickness changes asig",
       ab.asig(gold) != ab.asig(normalize({"kind": "necklace", "chain": {"thickness_mm": 2.0}})), True)
-check("[1] material gold", ab.material_key(item(kind="necklace")), "accessory:gold:#d4af37:0.25")
-check("[1] material silver", ab.material_key(item(kind="necklace", metal="silver")), "accessory:silver:#c0c0c0:0.2")
+check("[1] material gold", ab.material_key(item(kind="necklace")), "accessory:gold:#d4af37:0.25:1.0")
+check("[1] material silver", ab.material_key(item(kind="necklace", metal="silver")), "accessory:silver:#c0c0c0:0.2:1.0")
 
 store = Path(TMP) / "jewellery"
 store.mkdir()

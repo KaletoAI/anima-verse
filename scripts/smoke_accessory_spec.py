@@ -13,7 +13,7 @@ Expected values, derived by hand from spec § 5 and plan Task 3:
 [4] ``suggest_kind``: "Goldene Halskette" (slot neck) → necklace ("halskette"); "Copper Belt" (slot waist) → belt;
     "Silk Scarf" (slot neck) → None (no word); "Ring Scarf" on slot neck → None ("ring" matches the ring kind,
     which a neck-only piece is never proposed); "Leather choker" → choker (first rule).
-[5] ``metal_material``: silver → ("#c0c0c0", 0.2); custom with color "#112233" → ("#112233", 0.25);
+[5] ``metal_material``: silver → ("#c0c0c0", 0.2, 1.0); custom with color "#112233" → ("#112233", 0.25, 1.0);
     custom without a colour → ("#d4af37", 0.25).
 [6] ``srgb_to_linear("#d4af37")``: 212/255 = 0.83137 → ((0.83137 + 0.055)/1.055)^2.4 = 0.84017^2.4 = 0.6584;
     175/255 = 0.68627 → 0.70262^2.4 = 0.4287; 55/255 = 0.21569 → 0.25658^2.4 = 0.0382 (each ±0.001).
@@ -70,9 +70,9 @@ check("[4] Silk Scarf", s.suggest_kind(item("Silk Scarf", ["neck"])), None)
 check("[4] Ring Scarf on neck", s.suggest_kind(item("Ring Scarf", ["neck"])), None)
 check("[4] Leather choker", s.suggest_kind(item("Leather choker", ["neck"])), "choker")
 
-check("[5] silver", s.metal_material({"metal": "silver"}), ("#c0c0c0", 0.2))
-check("[5] custom", s.metal_material({"metal": "custom", "color": "#112233"}), ("#112233", 0.25))
-check("[5] custom no colour", s.metal_material({"metal": "custom"}), ("#d4af37", 0.25))
+check("[5] silver", s.metal_material({"metal": "silver"}), ("#c0c0c0", 0.2, 1.0))
+check("[5] custom", s.metal_material({"metal": "custom", "color": "#112233"}), ("#112233", 0.25, 1.0))
+check("[5] custom no colour", s.metal_material({"metal": "custom"}), ("#d4af37", 0.25, 1.0))
 
 lin = s.srgb_to_linear("#d4af37")
 check("[6] #d4af37", all(abs(a - b) <= 0.001 for a, b in zip(lin, (0.6584, 0.4287, 0.0382))), True)
