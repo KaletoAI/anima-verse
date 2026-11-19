@@ -54,16 +54,21 @@ then raises. The tip group alone is reported {status failed, reason the
 error}; the pair group is still built (its bones exist, its metrics carry a
 placement, no status); the mesh is the one before the tip op, vertex for
 vertex (1e-9). Before A109 the whole build answered status "failed".
+Gatedrop (A209): the tip op runs, then the skin within 15 mm of the first tip sinks 3 mm (pi x 15^2 = 707 mm2 >
+TIP_GATE_SINK_AREA_MM2 20): the tip group alone is {status failed, reason "tip ops sank the skin ..."} with its
+census (sunk > 20 mm2, deepest > 2.9 mm) and both sides' placement (suggested, for the tip editor); the pair group is
+built, the mesh is the one before, vertex for vertex. On ffe2bc03c there is no gate: the tip is built in the dent.
 Neutralfail (review 03#13): the same, but the tip is switched off (``neutralise``) and the levelling fails: the
 tip group alone is {status failed, mode neutralised, reason the error}, the pair group is built, the mesh is the
 one before, vertex for vertex. On 69aeeba75 the whole build answers status "failed".
-Floating (review 03, A209): Modelled plus the fill-ring noise of Refusal: the noise puts the levelling's fit at an
-RMS of 1-2 mm, above TIP_LEVEL_EXACT_RMS_M (.5 mm), so the levelling only raises the skin (mode raise) and the bump
-above the fit stays — recorded > 1 mm before and the same after —, the fill is skipped, and the stub stays on the
-bump's top: ``tip_settled_mm`` 0, tip == the source apex (colour marker, so no peak move). Before A209 (ffe2bc03c)
-the bump was levelled (< .3 mm after) and the stub came down by its height.
+Floating (review 03): Modelled plus the fill-ring noise of Refusal: the bump is levelled (recorded > 1 mm before —
+the noise lowers the fitted surface's accuracy, so not Modelled's 3.9 —, < .3 mm after), the fill is skipped, and
+the stub's tip comes down along its axis by the bump's recorded height (the source apex was the bump's top),
+within .3 mm: ``tip_settled_mm`` < 0, |tip - apex| = |tip_settled_mm|. On 69aeeba75 it stays on the old top. Since A209 the levelling lowers only inside the modelled
+bump's footprint (``existing_tip``: 2 x its half-height radius + 1 mm, here 2 x 3 + 1 = 7 mm >= the bump's 6 mm),
+by at most its measured height (~4 mm); the noise puts the fit's RMS at 1-2 mm, so outside it the skin only rises.
 Refusal (fill skipped by noise) is the mirror case since then: the 3-5 mm crater is levelled up (since A209 by at
-most TIP_LEVEL_MAX_SHIFT_M 3 mm: the noise puts the fit's RMS above .5 mm, mode raise), and the stub
+most TIP_LEVEL_MAX_SHIFT_M 3 mm, outward only), and the stub
 settles out of the crater floor onto the levelled skin along its axis, by the recorded ``tip_settled_mm`` (> 0),
 instead of staying on the crater floor inside the skin (on 69aeeba75: tip == the source apex).
 No expected value is recorded from a run.
@@ -172,6 +177,21 @@ if tipfail:
   scope['subdivide_around'](meshes[0],[Vector(rows[0]['tip'])],[.01])
   raise ValueError('forced tip failure')
  scope['tip_mesh']=failing_mesh
+gatedrop=job['params'].get('gatedrop',False)
+if gatedrop:
+ # A209: the tip op runs, then something sinks the skin around the first tip 3 mm deep over a 15 mm disc
+ # (pi x 15^2 = 707 mm2 > TIP_GATE_SINK_AREA_MM2 20): the gate drops the group, the mesh goes back.
+ original_mesh=scope['tip_mesh']
+ rest=[v.co.copy() for v in obj.data.vertices]
+ def sinking_mesh(meshes,p,rows,sources):
+  out=original_mesh(meshes,p,rows,sources)
+  t=Vector(rows[0]['tip'])
+  for mesh in meshes:
+   for v in mesh.data.vertices:
+    if (mesh.matrix_world@v.co-t).length<.015: v.co.y+=.003
+   mesh.data.update()
+  return out
+ scope['tip_mesh']=sinking_mesh
 neutralfail=job['params'].get('neutralfail',False)
 extra={}
 if neutralfail:
@@ -202,9 +222,22 @@ elif neutralfail:
  assert {'ExampleLeft','ExampleRight'}<=set(arm.data.bones.keys()) and not {'TipLeft','TipRight'}&set(arm.data.bones.keys())
  assert len(obj.data.vertices)==len(rest)
  assert all((v.co-c).length<1e-9 for v,c in zip(obj.data.vertices,rest))
+elif gatedrop:
+ scope['tip_mesh']=original_mesh
+ tip=result['metrics']['Tip']
+ assert tip['status']=='failed' and tip['reason'].startswith('tip ops sank the skin'),tip
+ assert tip['craters']['sunk_area_mm2']>scope['TIP_GATE_SINK_AREA_MM2'] and tip['craters']['max_sunk_mm']>2.9,tip
+ assert len(tip['placement'])==2 and all(row.get('suggested') for row in tip['placement']),tip
+ assert result['metrics']['Pair'].get('placement') and not result['metrics']['Pair'].get('status'),result['metrics']['Pair']
+ assert not {'TipLeft','TipRight'}&set(arm.data.bones.keys())
+ assert len(obj.data.vertices)==len(rest)
+ assert all((v.co-c).length<1e-9 for v,c in zip(obj.data.vertices,rest))
 elif tipfail:
  scope['tip_mesh']=original_mesh
- assert result['metrics']['Tip']=={'status':'failed','reason':'forced tip failure'},result['metrics']['Tip']
+ tip=result['metrics']['Tip']
+ assert {k:tip[k] for k in ('status','reason')}=={'status':'failed','reason':'forced tip failure'},tip
+ # A209: the dropped group keeps where its tip would stand, for the tip editor
+ assert len(tip['placement'])==2 and all(row.get('suggested') and row.get('source') for row in tip['placement']),tip
  assert result['metrics']['Pair'].get('placement') and not result['metrics']['Pair'].get('status'),result['metrics']['Pair']
  assert {'ExampleLeft','ExampleRight'}<=set(arm.data.bones.keys()) and not {'TipLeft','TipRight'}&set(arm.data.bones.keys())
  assert len(obj.data.vertices)==len(rest)
@@ -236,19 +269,17 @@ elif kind=='C':
  raw=Path(outputs['model']).read_bytes(); size=struct.unpack_from('<I',raw,12)[0]; doc=json.loads(raw[20:20+size])
  assert sum(n.get('name') in ('TipLeft','TipRight') for n in doc['nodes'])==2
 elif job['params'].get('floating',False):
- # A209: the noise puts the levelling's fit at RMS 1-2 mm (> TIP_LEVEL_EXACT_RMS_M .5 mm, <= .002) — mode
- # raise: the skin only rises, so the modelled bump above the fit stays (recorded > 1 mm before AND after), the
- # fill is refused (noise), and the stub stays on the bump's top: no settle, tip == the source apex.
+ # Review 03: the modelled bump is levelled, the fill is refused (noise) — the stub comes down from the bump's old
+ # top onto the levelled skin along its axis, by the bump's recorded height (the apex was its top).
  rows=result['metrics']['Tip']['placement']
  for side,(name,row) in zip((1,-1),zip(('TipLeft','TipRight'),rows)):
   t,axis=Vector(row['tip']),Vector(row['axis'])
   assert row['fill'].startswith('skipped:'),row
   level=row['source_level']; settled=level['tip_settled_mm']
-  assert level['level']['mode']=='raise' and .5<level['level']['fit_rms_mm']<=2.,level
-  assert level['bump_mm'][0]>1 and abs(level['bump_mm'][1]-level['bump_mm'][0])<1e-9,level
-  assert abs(settled)<1e-6,level
+  assert level['bump_mm'][0]>1 and level['bump_mm'][1]<.3,level
+  assert settled<0 and abs(settled+level['bump_mm'][0])<.3,level
   P=Vector(placement[0 if side==1 else 1]['tip'])
-  assert (t-P).length<2e-6,(list(t),list(P))
+  assert abs((t-P).length-abs(settled)/1000)<2e-6 and (P-t).normalized().dot(axis)>.999,(list(t),list(P))
   assert (arm.data.bones[name].head_local-t).length<1e-4
 elif job['params'].get('modelled',False):
  rows=result['metrics']['Tip']['placement']
@@ -374,7 +405,7 @@ Path(job['result']).write_text(json.dumps({'ok':True,'data':{},'outputs':{}}))
 def main():
     import argparse
     parser=argparse.ArgumentParser()
-    parser.add_argument('--case',choices=['crater','seam','geometry','refusal','descendant','modelled','tall','tipfail','neutralfail','floating'])
+    parser.add_argument('--case',choices=['crater','seam','geometry','refusal','descendant','modelled','tall','tipfail','neutralfail','floating','gatedrop'])
     selected=parser.parse_args().case
     from app.blender import runner
     if not runner.status()['executable']:
@@ -387,7 +418,7 @@ def main():
         (root/'probe.py').write_text(prefix+TIP_PROBE)
         source=runner.SCRIPTS_DIR/'extension_bones.py'
         with patch.object(runner,'SCRIPTS_DIR',root):
-            for label,options in [('crater',{}),('seam',{'seam':True}),('geometry',{'kind':'C'}),('refusal',{'noise':True}),('descendant',{'descendant':True}),('modelled',{'modelled':True}),('tall',{'kind':'C','tall':True}),('tipfail',{'tipfail':True}),('neutralfail',{'neutralfail':True}),('floating',{'modelled':True,'noise':True,'floating':True})]:
+            for label,options in [('crater',{}),('seam',{'seam':True}),('geometry',{'kind':'C'}),('refusal',{'noise':True}),('descendant',{'descendant':True}),('modelled',{'modelled':True}),('tall',{'kind':'C','tall':True}),('tipfail',{'tipfail':True}),('neutralfail',{'neutralfail':True}),('floating',{'modelled':True,'noise':True,'floating':True}),('gatedrop',{'gatedrop':True})]:
                 if selected and selected!=label: continue
                 result=runner.run('probe',params={'source':str(source),**options},out_dir=root/label,timeout_s=600)
                 assert result['ok'],(label,result)

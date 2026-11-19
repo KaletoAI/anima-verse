@@ -465,9 +465,10 @@ def group_tip_settings(panels: List[Dict[str, Any]], extension: Optional[Dict[st
 #: no quad with three corners on a line is left to export as a zero-area triangle (A199, review 03#8); 4 = the source
 #: levelling's flat subdivision counts the stub passes that cover its whole disc, not those that merely reach the
 #: source point (A202, review 03 ``level_sides``); 5 = the tip stands on the skin's own peak near the source
-#: (``extension_bones.local_peak``), the levelling and the fill under a tip that is on only raise the skin, by at most
-#: 3 mm and not at all against a fit whose RMS exceeds 2 mm, and a tip whose ops still sink, over-raise or fold the skin
-#: is dropped with its reason while the model is published (A209: a 14.5 mm ring on Ylva).
+#: (``extension_bones.local_peak``; a stored offset applies from there), the levelling and the fill under a tip that is
+#: on only raise the skin, by at most 3 mm and not at all against a fit whose RMS exceeds 2 mm, and lower it only
+#: inside a tip the mesher modelled, by at most its height; a tip whose ops still sink, over-raise or fold the skin is
+#: dropped with its reason (a warning) while the model is published (A209: a 14.5 mm ring on Ylva).
 TIP_SMOOTHING_VERSION = 5
 
 
@@ -500,6 +501,9 @@ def tip_smoothing_group(values: Dict[str, Any]) -> Dict[str, Any]:
     status = str(values.get("status") or ("applied" if rows else "not_found"))
     if status not in ("applied", ""):
         entry["reason"] = f"Tip part not built: {values.get('reason') or status}"
+        if status == "failed":
+            # A209: the tip was dropped (its ops would dent or fold the skin) or could not be built — a warning.
+            entry["failed"] = True
     elif smooth is None:
         entry["reason"] = "Not smoothed"
     else:
@@ -609,6 +613,9 @@ def tip_smoothing_summary(record: Optional[Dict[str, Any]], due: bool) -> Tuple[
             texts.append(text)
         light = "ok" if all(g.get("applied") for g in neutral) and (not groups or light == "ok") else "off"
         return light, "; ".join(texts)
+    failed = [g for g in groups if g.get("failed")]
+    if failed:
+        return "warn", "; ".join(sorted({str(g.get("reason") or "Tip part not built") for g in failed}))
     if not applied:
         reasons = sorted({str(g.get("reason") or "Not smoothed") for g in groups})
         return "off", "; ".join(reasons) or "Not smoothed"
