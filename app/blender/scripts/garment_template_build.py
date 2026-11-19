@@ -1470,6 +1470,11 @@ def load_lower(path, arm, payload):
     # A200: an own-mesh piece's fit GLB carries the rigged body too — its garment node is the collider
     named = [o for o in meshes if o.name.startswith("garment_")]
     garment = max(named or meshes, key=lambda o: len(o.data.vertices))
+    shoe = [o for o in named if o.name.startswith("garment_footwear_")]
+    if len(shoe) > 1:
+        # A237: a boot's fit is one node per side and part (foot, shaft) — the collider is all of them
+        with bpy.context.temp_override(active_object=garment, selected_editable_objects=shoe):
+            bpy.ops.object.join()
     mw = garment.matrix_world.copy()
     garment.parent = arm
     garment.matrix_world = mw
@@ -1586,7 +1591,14 @@ def run(a):
     if fitted:
         # A223: a close-fitting piece cut from the body's surface (``garment_template_fitted``)
         col, ctree = gd.rest_collider(body, extra=lower)
-        obj, fit_pin, binfo = gf.build_fitted(prm, spec, arm, body, ctree, col=col)
+        # A237: worn over lower layers, the piece is CUT from the body alone (the cut keeps collider faces by the
+        # body's bone weights and planes; a top merged into that collider gave the trousers its faces — stretch
+        # 3307) and only laid out over the lower layers (``ctree``, body + them); the drape still meets them
+        cut = gd.rest_collider(body)[0] if lower else None
+        obj, fit_pin, binfo = gf.build_fitted(prm, spec, arm, body, ctree, col=col, cut=cut)
+        if cut is not None:
+            binfo["cut_from"] = "body"
+            bpy.data.objects.remove(cut)
         slit_edges = 0
     elif bod:
         # the torso axis of a bodice is the spine (the slice at the shoulder line holds the arms' roots)

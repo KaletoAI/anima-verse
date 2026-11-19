@@ -1651,7 +1651,43 @@ def own_colliders(character_name: str, item_id: str, kind: str, lower: List[str]
     for other, _it in inner_pieces(item_id, kind, lower)[1]:
         fit = garment_store.accepted_fit(character_name, other, base_model_sha=base_sha) if base_sha else None
         out.append((other, Path(fit[0]) if fit else None))
+    boot = boot_collider(character_name, item_id, kind, lower, base_sha=base_sha)
+    if boot is not None:
+        out.append(boot)
     return out
+
+
+def boot_hem_mode(character_name: str, item_id: str, kind: str, lower: List[str], *,
+                  base_sha: str) -> Optional[Tuple[str, str, Path]]:
+    """A237: ``(mode, boot item, boot fit)`` when template trousers whose leg hangs over the shoe
+    (``tucked_into_shoes`` False) are worn with a boot (``outfit_options.is_boot_record``) — ``mode`` the profile's
+    boot hem (``outfit_options.boot_hem``): ``over`` = the leg hangs over the shaft (the boot is a collider of the
+    drape), ``tucked`` = the leg is taken into the boot at the assembly (``garment_assembly._into_shoe``). Else None."""
+    if kind != "trousers" or not base_sha:
+        return None
+    from app.core import garment_set, garment_store, outfit_options
+    from app.models.character import get_character_profile
+    from app.models.inventory import get_item
+    if tucked_into_shoes(params_of(get_item(item_id))):
+        return None
+    for other in sorted({str(i) for i in lower} - {item_id}):
+        if garment_set.garment_kind_of(get_item(other)) != garment_set.FOOTWEAR:
+            continue
+        try:
+            fit = garment_store.accepted_fit(character_name, other, base_model_sha=base_sha)
+        except ValueError:
+            fit = None
+        if fit and outfit_options.is_boot_record(fit[1]):
+            mode = outfit_options.boot_hem(get_character_profile(character_name) or {})
+            return mode, other, Path(fit[0])
+    return None
+
+
+def boot_collider(character_name: str, item_id: str, kind: str, lower: List[str], *,
+                  base_sha: str) -> Optional[Tuple[str, Optional[Path]]]:
+    """A237: the boot as a collider of template trousers worn OVER its shaft (``boot_hem_mode`` ``over``)."""
+    hem = boot_hem_mode(character_name, item_id, kind, lower, base_sha=base_sha)
+    return (hem[1], hem[2]) if hem and hem[0] == "over" else None
 
 
 def _lower_of(other: str, item_id: str, lower: List[str]) -> List[str]:
@@ -1689,6 +1725,9 @@ def key_for(character_name: str, item_id: str, *, base_sha: str, lower: List[str
     for other, fit in own_colliders(character_name, item_id, params["kind"], lower, base_sha=base_sha):
         from app.core.base_body import file_sha256
         under.append(f"{other}:fit:{file_sha256(fit) if fit is not None else '-'}")
+    if under and params["kind"] in FITTED_KINDS:
+        # A237: a fitted piece over lower layers is cut from the body alone — only these drapes are due again
+        under.append("cut:body")
     # A228: a piece that shapes the chest under it re-drapes when its lift changes (``bust_shaping``)
     from app.core import bust_shaping
     under += bust_shaping.key_tokens(item_id, item, lower)

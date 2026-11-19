@@ -687,9 +687,10 @@ def _umbrella(bm, passes, movable, boundary_only_along=True):
             bm.verts[i].co = c
 
 
-def build_fitted(prm, spec, arm, body, ctree, col=None):
+def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None):
     """The fitted piece as a new mesh object (``prm["node"]``) with planar UVs; returns ``(obj, pin indices,
-    info)``."""
+    info)``. ``cut`` (A237): the body-only rest collider the faces are cut from when ``col`` / ``ctree`` hold lower
+    layers too — the piece is cut from the body and laid out over the layers (``ctree``)."""
     f = spec["fitted"]
     kind = f["kind"]
     co, nrm, stree = _surface_tree(body)
@@ -701,9 +702,10 @@ def build_fitted(prm, spec, arm, body, ctree, col=None):
     # the piece is cut from the rest collider (``gd.rest_collider``: the body voxel-remeshed — closed, one outward
     # skin; the generated body itself is a thick shell with an inner wall, mixed windings and procedural parts whose
     # skin under them is missing, so a copy of its faces had holes and inward patches)
+    src = cut if cut is not None else col
     bm = bmesh.new()
-    bm.from_mesh(col.data)
-    bm.transform(col.matrix_world)
+    bm.from_mesh(src.data)
+    bm.transform(src.matrix_world)
     bm.verts.ensure_lookup_table()
     bm.faces.ensure_lookup_table()
     bm.normal_update()

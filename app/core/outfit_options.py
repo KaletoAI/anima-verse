@@ -308,6 +308,24 @@ def hem_eligible(boot_record: Optional[Dict[str, Any]],
     return True, ""
 
 
+def _template_trousers_record(item_id: str) -> Optional[Dict[str, Any]]:
+    """A237: template trousers whose leg hangs over the shoe (``garment_template.tucked_into_shoes`` False) take the
+    boot hem as well — ``tucked`` takes the leg into the boot at the assembly, ``over`` drapes it over the shaft. A
+    stand-in trousers record (``hem_eligible``), else None."""
+    if not item_id:
+        return None
+    from app.core import garment_template
+    from app.core.garment_set import TEMPLATE, mesh_mode_of
+    from app.models.inventory import get_item
+    item = get_item(item_id)
+    if mesh_mode_of(item) != TEMPLATE:
+        return None
+    params = garment_template.params_of(item)
+    if not params or params.get("kind") != "trousers" or garment_template.tucked_into_shoes(params):
+        return None
+    return {"template": True}
+
+
 def hem_applicable(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """What the Wardrobe shows: ``{applicable, boot_item, trousers_item, reason, mode}`` for the pieces the
     character wears NOW — the feet piece with a boot fit on the current base model and the own-mesh ``bottom``
@@ -339,7 +357,7 @@ def hem_applicable(character_name: str, *, profile: Optional[Dict[str, Any]] = N
             return None
         return fit[1] if fit else None
     boot_rec = own_mesh_fit(feet)
-    trousers_rec = own_mesh_fit(bottom)
+    trousers_rec = own_mesh_fit(bottom) or _template_trousers_record(bottom)
     ok, reason = hem_eligible(boot_rec, trousers_rec)
     out.update(applicable=ok, reason=reason, boot_item=feet if is_boot_record(boot_rec) else None,
                trousers_item=bottom if (ok and bottom) else None)

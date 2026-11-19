@@ -423,6 +423,7 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
                     "low": low if low.is_file() else None, "record": fit[1]})
     for g in out:
         g["item"] = items[g["item_id"]]     # its material (``_material``) is read from the same item
+    _stamp_boot_tucked(out, profile)
     layered = [g for g in out if g["kind"] == CLOTHING and g["fit"] is not None and not g.get("template")]
     # The boot hem (``outfit_options``, boots spec § 8): the worn ``bottom`` piece of the signature over the
     # chosen boot's shaft — the mode is read from the PROFILE (an assembly input, never a signature input).
@@ -695,7 +696,7 @@ def _state(wanted: List[Dict[str, Any]], tier: str, *,
         if g["kind"] == CLOTHING:
             # the body faces this piece covers are dropped from the delivered body (``body_cover``, Ruling A133)
             entry["cover"] = body_cover.VERSION
-            if g.get("template") and shod and under_footwear(g.get("item")):
+            if g.get("template") and shod and _under_shoe(g):
                 # A200: a draped piece under the shoe is taken into it (``_into_shoe``) since INTO_SHOE_VERSION 1
                 entry["into_shoe"] = INTO_SHOE_VERSION
         if g["kind"] == HAIR:
@@ -966,6 +967,30 @@ def _uppers(grafted: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
     return out
 
 
+def _stamp_boot_tucked(out: List[Dict[str, Any]], profile: Optional[Dict[str, Any]]) -> None:
+    """A237: template trousers whose leg hangs over the shoe, worn with a boot while the boot hem is ``tucked``
+    (``outfit_options.boot_hem``), are taken into the boot like hosiery (``_into_shoe``: the boot's body cut draws
+    the leg in at the shaft's top). ``over`` drapes the leg over the shaft (the boot is a drape collider,
+    ``garment_template.boot_collider``)."""
+    from app.core import garment_template, outfit_options
+    from app.core.garment_set import FOOTWEAR
+    boot = any(g["kind"] == FOOTWEAR and g.get("fit") is not None and outfit_options.is_boot_record(g.get("record"))
+               for g in out)
+    if not boot or outfit_options.boot_hem(profile) != "tucked":
+        return
+    for g in out:
+        params = garment_template.params_of(g.get("item")) if g.get("template") else None
+        if params and params.get("kind") == "trousers" and not garment_template.tucked_into_shoes(params):
+            g["boot_tucked"] = True
+
+
+def _under_shoe(g: Dict[str, Any]) -> bool:
+    """Whether the garment ``g`` is taken into the worn shoe: ``garment_set.under_footwear`` or (A237) template
+    trousers tucked into a boot (``_stamp_boot_tucked``)."""
+    from app.core.garment_set import under_footwear
+    return bool(g.get("boot_tucked")) or under_footwear(g.get("item"))
+
+
 def _into_shoe(mesh: Any, garment: Dict[str, Any], shoe: Dict[str, Any], body_blob: bytes) -> Optional[Tuple[Any, Dict[str, Any]]]:
     """A192: a piece worn under the shoe (``garment_set.under_footwear``: hosiery) is taken into the shoe the way
     the foot is — the shoe's fit record ``cut`` applied to the piece (``footwear_cut.apply_cut``: what stands
@@ -978,7 +1003,7 @@ def _into_shoe(mesh: Any, garment: Dict[str, Any], shoe: Dict[str, Any], body_bl
     from app.core import footwear_cut, garment_set, glb_mesh
     from app.core.garment_layers import _mesh_prim, _prim_mesh
     cut = (shoe.get("record") or {}).get("cut")
-    if (not garment_set.under_footwear(garment.get("item")) or mesh.extra_attributes
+    if (not _under_shoe(garment) or mesh.extra_attributes
             or not isinstance(cut, dict)):
         return None
     try:
