@@ -833,7 +833,7 @@ def _garment_dominant(g: Dict[str, Any], allowed) -> np.ndarray:
 #: A234 plausibility per section (``around_plausible``): the length of the piece's centre line (metres) and the joints
 #: that may move it (normalised; weight above ``PLAUSIBLE_WEIGHT``).
 AROUND_LENGTH_M: Dict[str, tuple] = {
-    "belt": (0.5, 1.7), "choker": (0.22, 0.55), "strap:thigh": (0.28, 1.0), "strap:upper_arm": (0.14, 0.55),
+    "belt": (0.5, 1.7), "choker": (0.22, 0.6), "strap:thigh": (0.28, 1.0), "strap:upper_arm": (0.14, 0.55),
     "strap:chest": (0.55, 1.5), "anklet": (0.13, 0.45), "bracelet": (0.10, 0.35), "ring": (0.025, 0.11),
 }
 AROUND_JOINTS: Dict[str, frozenset] = {
@@ -954,6 +954,8 @@ def make_around(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, An
             inner = flat.reshape(inner.shape)
             radial = np.einsum("rnk,nk->rn", inner - fr["centre"][None, None], dirs)
             V, F, N = ab.band_mesh(fr, offsets, radial, dirs, thickness)
+            # the outer wall and the edges clear the skin too (a chin over a choker, a hip over a belt's edge)
+            V = ab.push_out(V, np.repeat(dirs, 2 * len(offsets), 0), surfaces, ab.GAP_M)
             curve = inner[len(offsets) // 2] + dirs * thickness / 2
             inner_all.append((inner.reshape(-1, 3), np.tile(dirs, (len(offsets), 1)), surfaces))
         else:

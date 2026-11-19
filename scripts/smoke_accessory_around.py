@@ -14,6 +14,8 @@ Expected values, derived by hand:
     = 1.0; with a waistband top at 1.06 and the 4 cm width: 1.06 − 0.004 − 0.02 = 1.036; a top at 1.25 (above spine1)
     is no waistband → 1.0; height 3 cm → 1.03. Bracelet, forearm (0.4, 1.4, 0) → hand (0.65, 1.4, 0): axis (−1, 0, 0)
     (toward the trunk), centre = hand + 0.025 · axis = (0.625, 1.4, 0); height 1 cm → x 0.615.
+    Choker, neck (0, 1.45, 0.05) → head (0, 1.525, 0.08): axis (0, 0.075, 0.03) / 0.080777 = (0, 0.928477, 0.371391),
+    centre = neck + 0.45 · (0, 0.075, 0.03) = (0, 1.48375, 0.0635).
 [3] ``section`` of a closed 64-sided cylinder of radius 0.1 round the y axis (y 0.8..1.2), 96 rays at y 1.0: every
     ray hits a side between its corners — the distance lies in [0.1 · cos(π/64), 0.1] = [0.099880, 0.1].
 [4] ``surface_radius`` over that body with a garment cylinder of radius 0.12 under the band: every ray sits on it
@@ -85,6 +87,11 @@ check("[2] bracelet axis / centre", (np.round(fr["axis"], 9).tolist(), np.round(
       ([-1.0, 0.0, 0.0], [0.625, 1.4, 0.0]))
 near("[2] bracelet height 1", ab.frame(n({"kind": "bracelet", "band": {"height_cm": 1}}), BONES, "left")["centre"][0],
      0.615, 1e-9)
+
+NECK = {"mixamorig:Neck": [0, 1.45, 0.05], "mixamorig:Head": [0, 1.525, 0.08]}
+fr = ab.frame(n({"kind": "choker"}), NECK)
+check("[2] choker axis / centre", (np.round(fr["axis"], 6).tolist(), np.round(fr["centre"], 6).tolist()),
+      ([0.0, 0.928477, 0.371391], [0.0, 1.48375, 0.0635]))
 
 
 # [3] / [4] section on a cylinder

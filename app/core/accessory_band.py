@@ -304,39 +304,60 @@ def ring_curve(fr: Dict[str, Any], radius: np.ndarray, dirs: np.ndarray) -> np.n
     return fr["centre"][None] + radius[:, None] * dirs
 
 
-def surface_gap(X: np.ndarray, out_dirs: np.ndarray, surfaces: List[Tuple[np.ndarray, np.ndarray]]
-                ) -> np.ndarray:
-    """Per point of ``X`` the signed distance to the nearest of ``surfaces`` (each ``(P, F)``), positive on the side
-    of ``out_dirs`` (per point) — the air under a piece over the layer it sits on."""
+def _nearest(X: np.ndarray, out_dirs: np.ndarray, surfaces: List[Tuple[np.ndarray, np.ndarray]]):
+    """Per point of ``X`` the closest point on the nearest of ``surfaces`` and the signed distance to it: the first
+    surface is the body (outward wound: signed by its face normal), the others garments (signed by ``out_dirs``)."""
     from scipy.spatial import cKDTree
     from app.core.accessory_curve import _closest
     best = np.full(len(X), np.inf)
     sign = np.ones(len(X))
-    for P, F in surfaces:
+    near = np.array(X, np.float64)
+    for k, (P, F) in enumerate(surfaces):
         P = np.asarray(P, np.float64)
         Fc = _crop(P, np.asarray(F, np.int64), X.mean(0), float(np.ptp(X, 0).max()) / 2 + 0.05)
         if not len(Fc):
             continue
-        cp = _closest(X, P, Fc, cKDTree(P[Fc].mean(1)))
+        cp, which = _closest(X, P, Fc, cKDTree(P[Fc].mean(1)), faces=True)
         d = np.linalg.norm(X - cp, axis=1)
-        s = np.where(np.einsum("ij,ij->i", X - cp, out_dirs) < 0, -1.0, 1.0)
+        if k == 0:
+            # the body (outward wound): the side by the closest face's own normal — exact on a slope (a trapezius
+            # under a choker's edge), where the piece's outward direction is not the surface's
+            f = Fc[which]
+            n = np.cross(P[f[:, 1]] - P[f[:, 0]], P[f[:, 2]] - P[f[:, 0]])
+            s = np.where(np.einsum("ij,ij->i", X - cp, n) < 0, -1.0, 1.0)
+        else:
+            # a garment (its winding not known): the piece's outward direction
+            s = np.where(np.einsum("ij,ij->i", X - cp, out_dirs) < 0, -1.0, 1.0)
         closer = d < best
         best = np.where(closer, d, best)
         sign = np.where(closer, s, sign)
-    return best * sign
+        near = np.where(closer[:, None], cp, near)
+    return near, best * sign
+
+
+def surface_gap(X: np.ndarray, out_dirs: np.ndarray, surfaces: List[Tuple[np.ndarray, np.ndarray]]
+                ) -> np.ndarray:
+    """Per point of ``X`` the signed distance to the nearest of ``surfaces`` (each ``(P, F)``), positive on the side
+    of ``out_dirs`` (per point) — the air under a piece over the layer it sits on."""
+    return _nearest(np.asarray(X, np.float64), out_dirs, surfaces)[1]
 
 
 def push_out(X: np.ndarray, out_dirs: np.ndarray, surfaces: List[Tuple[np.ndarray, np.ndarray]],
-             clearance: float, passes: int = 3) -> np.ndarray:
-    """Every point of ``X`` closer than ``clearance`` to ``surfaces`` (or behind it) moved out along ``out_dirs``
-    until it is ``clearance`` off — a point already farther out stays."""
+             clearance: float, passes: int = 4) -> np.ndarray:
+    """Every point of ``X`` closer than ``clearance`` to ``surfaces`` (or behind them) put ``clearance`` off its
+    closest surface point, away from it (on the ``out_dirs`` side) — along the surface's normal, so a point over a
+    slope (a trapezius beside a choker) clears it too; a point already farther out stays."""
     X = np.array(X, np.float64)
     for _ in range(passes):
-        g = surface_gap(X, out_dirs, surfaces)
+        cp, g = _nearest(X, out_dirs, surfaces)
         short = g < clearance
         if not short.any():
             break
-        X[short] += (clearance - g[short])[:, None] * out_dirs[short]
+        away = X[short] - cp[short]
+        n = np.linalg.norm(away, axis=1, keepdims=True)
+        away = np.where(n > 1e-9, away / np.maximum(n, 1e-12), out_dirs[short])
+        away = np.where((g[short] < 0)[:, None], -away, away)
+        X[short] = cp[short] + away * clearance
     return X
 
 
