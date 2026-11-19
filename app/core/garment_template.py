@@ -69,7 +69,7 @@ TASK = "garment_template_params"
 MAX_TOKENS = 400
 
 KINDS = ("skirt", "dress", "top", "jacket", "trousers", "briefs", "bra", "gloves")
-BUILT_KINDS = ("skirt", "dress", "top", "jacket", "briefs", "bra")
+BUILT_KINDS = ("skirt", "dress", "top", "jacket", "briefs", "bra", "gloves")
 #: A223: the close-fitting kinds — cut from the body's own surface (``fitted_spec``: a region of the plain body, laid
 #: out of it and relaxed by a short pinned cloth run), not wrapped from panel rows: briefs (waistband + gusset
 #: pinned), a bra (underband + straps pinned; molded cups are pinned whole = rigid) and gloves (the cuff and the hand
@@ -1197,6 +1197,7 @@ def fitted_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
         upper = math.dist(j["leftarm"], j["leftforearm"])
         a, b = GLOVE_REACH[params["length"]]
         fit.update({"reach_m": round(a * fore + b * upper, 4), "fingers": params["fingers"], "cuff": params["cuff"],
+                    "fit": params["fit"],
                     "offset_m": round(FITTED_OFFSET_M + GLOVE_FIT_M * params["fit"], 4),
                     "finger_offset_m": FINGER_OFFSET_M, "cuff_m": CUFF_M, "cuff_flare_m": CUFF_FLARE_M,
                     "cuff_fold_m": CUFF_FOLD_M})

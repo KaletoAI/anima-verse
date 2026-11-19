@@ -138,7 +138,7 @@ const WARN: CSSProperties = { color: 'var(--warning, #d29922)' }
 const ORDER: (keyof TemplateParams)[] = ['kind', 'fabric', 'opacity', 'length_m', 'flare', 'waist_height', 'slit', 'slit_m',
   'shoulders', 'fit', 'neckline', 'neck_depth_m', 'sleeves', 'sleeve_fit', 'front', 'collar',
   'rise', 'waistband', 'leg_cut', 'back_coverage', 'side_width_m',
-  'cup_style', 'cup_coverage', 'push_up', 'underband_m', 'center_gore', 'closure', 'straps']
+  'cup_style', 'cup_coverage', 'push_up', 'underband_m', 'center_gore', 'closure', 'straps', 'fingers', 'length', 'cuff']
 /** Fields shown as a 0…1 number rather than centimetres. */
 const SHARES = new Set<keyof TemplateParams>(['flare', 'fit', 'sleeve_fit', 'opacity', 'leg_cut', 'back_coverage', 'cup_coverage', 'push_up'])
 

@@ -6804,6 +6804,17 @@
     "Pendant is being built (1 hub job)": "Anhänger wird gebaut (1 Hub-Job)",
     "Pendant ready — Build puts it on the chain on the CPU (0 hub jobs)": "Anhänger fertig — Build hängt ihn auf der CPU an die Kette (0 Hub-Jobs)",
     "Switch the pendant on and save first": "Schalte zuerst den Anhänger ein und speichere",
-    "Save first": "Zuerst speichern"
+    "Save first": "Zuerst speichern",
+    "Gloves": "Handschuhe",
+    "Full fingers": "Ganze Finger",
+    "Fingerless": "Fingerlos",
+    "To the wrist": "Bis zum Handgelenk",
+    "Mid forearm": "Halber Unterarm",
+    "Opera (above the elbow)": "Opera (über den Ellbogen)",
+    "Flared": "Ausgestellt",
+    "Folded over": "Umgeschlagen",
+    "Fingers": "Finger",
+    "Glove length": "Handschuhlänge",
+    "Cuff": "Stulpe"
   }
 }

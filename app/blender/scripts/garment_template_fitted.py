@@ -38,6 +38,8 @@ CLOSURE_HALF_M = 0.025
 #: A bra cup is pinned within this distance of the bust point (the cloth over a breast's tip was the one edge a
 #: triangle cup's drape stretched to 1.34).
 TIP_PIN_M = 0.03
+#: Gloves up to this fit are pinned whole (``build_fitted``).
+TIGHT_GLOVE_FIT = 0.3
 #: A strap path is sampled this densely.
 STRAP_STEP_M = 0.01
 
@@ -390,9 +392,9 @@ def gloves_region(f, co, w, arm):
         hand = w[side + "Hand"] + fing
         sides[s] = (sh, el, wr, member, fing, hand)
         p, u = point_up_arm(reach, sh, el, wr)
-        planes.append((p, u))
+        planes.append((p, u, s))
         if f["fingers"] == "none":
-            planes.append((wr, -(el - wr) / np.linalg.norm(el - wr)))
+            planes.append((wr, -(el - wr) / np.linalg.norm(el - wr), s))
 
     def side_of(c):
         return np.where(c[:, 0] > 0, 1, -1)
@@ -486,6 +488,9 @@ def build_fitted(prm, spec, arm, body, ctree, col=None):
         pick = {s: m[near] for s, m in member_v.items()}, {s: m[near] for s, m in fing_v.items()}, \
             {s: m[near] for s, m in hand_v.items()}
         vk = keep_v(cco, *pick)
+        if not vk.any():
+            raise RuntimeError(f"gloves: no region (member>0.5: {[int((m > 0.5).sum()) for m in pick[0].values()]}, "
+                               f"collider verts {len(cco)}, x range {cco[:, 0].min():.2f}..{cco[:, 0].max():.2f})")
         mask = np.array([all(vk[v.index] for v in fa.verts) for fa in bm.faces])
         fing_any = np.maximum(fing_v[1], fing_v[-1])
         hand_any = np.maximum(hand_v[1], hand_v[-1])
@@ -494,8 +499,14 @@ def build_fitted(prm, spec, arm, body, ctree, col=None):
     bmesh.ops.delete(bm, geom=[fa for fa in bm.faces if not fa[keep_layer]], context="FACES")
     bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
     # vertex attributes the planes / passes need, read before the cuts (new vertices take their edge's)
-    for p, n in planes:
-        geom = bm.verts[:] + bm.edges[:] + bm.faces[:]
+    for plane in planes:
+        p, n = plane[0], plane[1]
+        if len(plane) > 2:              # a plane of one arm cuts only that side's geometry
+            sd = plane[2]
+            geom = ([v for v in bm.verts if v.co.x * sd > 0] + [e for e in bm.edges if e.verts[0].co.x * sd > 0]
+                    + [fa for fa in bm.faces if fa.calc_center_median().x * sd > 0])
+        else:
+            geom = bm.verts[:] + bm.edges[:] + bm.faces[:]
         bmesh.ops.bisect_plane(bm, geom=geom, plane_co=Vector(p), plane_no=Vector(n), clear_outer=True, dist=1e-5)
     bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
     # keep the largest connected parts only (a stray triangle cut off by the planes is no cloth)
@@ -559,6 +570,10 @@ def build_fitted(prm, spec, arm, body, ctree, col=None):
                     else float(f["cuff_fold_m"]) * (near_edge > 0))
         movable = fg <= 0.5                          # the fingers stay as they lie (no evening, no drape)
         pin_mask = (fg > 0.5) | (hd > 0.5) | (d > float(f["reach_m"]) - 0.015)
+        if float(f.get("fit", 1.0)) <= TIGHT_GLOVE_FIT:
+            # a tight glove is a second skin: nothing hangs, it is pinned whole (left free, the forearm tube of a
+            # stiff elbow glove sagged in the T-pose and stretched to 1.38)
+            pin_mask[:] = True
         info["finger_verts"] = int((fg > 0.5).sum())
     if kind == "bra":
         cl = closure(V)

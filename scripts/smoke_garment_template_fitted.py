@@ -16,6 +16,9 @@ Hand-derived expectations (the synthetic measure ``M``: waist_y 1.05, hip_y 0.90
 [R2] strap shoulder point = (neck_c / 2pi + 0.012 + 0.75 x shoulder_w / 2) / 2 = 0.10726; cross -> back_x -0.10726;
      the bodice's strap_x is the same number (shared ``strap_shoulder_x``).
 [R3] the bra's spec numbers; [R4] its kind guess (a bustier stays a top, A221); [R5] its drawing's fills.
+[G1] glove reach on M (forearm 0.25, upper arm 0.25): wrist 0.18 x 0.25 = 0.045, forearm 0.55 x 0.25 = 0.1375,
+     elbow 0.25 + 0.12 x 0.25 = 0.28, opera 0.25 + 0.7 x 0.25 = 0.425.
+[G2] gap 0.004 + 0.012 x 0.1 = 0.0052, fingers 0.0015. [G3] kind guess. [G4] a body without arm joints is refused.
 [B6] the drawing: briefs give one cloth fill whose top edge lies at top_y (the registration's y of 0.945 m) and whose
      lowest point is the gusset (crotch = hip joints 0.86 - 0.06 = 0.80 m, the lowest y of the fill).
 """
@@ -147,6 +150,29 @@ n = len([s for s in gp.shapes(bra(), M, Reg())["shapes"] if s["kind"] == "fill"]
 check("[R5] molded bra: 5 fills", n == 5, n)
 n = len([s for s in gp.shapes(bra(cup_style="bandeau"), M, Reg())["shapes"] if s["kind"] == "fill"])
 check("[R5] bandeau: 4 fills", n == 4, n)
+
+
+
+# [G1] gloves on M: forearm = |leftforearm - lefthand| = 0.25, upper arm = 0.25; reach = a x 0.25 + b x 0.25
+def gloves(**kw):
+    return gt.validate_params({"kind": "gloves", **kw})[0]
+
+
+for ln, want in (("wrist", 0.045), ("forearm", 0.1375), ("elbow", 0.28), ("opera", 0.425)):
+    f = gt.fitted_spec(gloves(length=ln), M)["fitted"]
+    check(f"[G1] {ln} reach {want}", close(f["reach_m"], want), f["reach_m"])
+# [G2] the gap: FITTED_OFFSET_M 0.004 + GLOVE_FIT_M 0.012 x fit; the default fit 0.1 -> 0.0052; fingers 0.0015
+f = gt.fitted_spec(gt.kind_defaults("gloves"), M)["fitted"]
+check("[G2] default fit 0.1: offset 0.0052, fingers 0.0015", close(f["offset_m"], 0.0052) and
+      close(f["finger_offset_m"], 0.0015), f)
+check("[G2] gloves built", "gloves" in gt.BUILT_KINDS)
+for it, want in ((item("Stulpen", ["hands"]), "gloves"), (item("Leather gauntlets", ["outer"]), "gloves")):
+    check(f"[G3] default_kind {it['name']} -> {want}", gt.default_kind(it) == want, gt.default_kind(it))
+try:
+    gt.fitted_spec(gloves(), {**M, "joints": {}})
+    check("[G4] no arm joints -> ValueError", False)
+except ValueError:
+    check("[G4] no arm joints -> ValueError", True)
 
 print()
 print("all checks passed" if not FAILED else f"{len(FAILED)} FAILED: {FAILED}")

@@ -323,6 +323,10 @@ export interface TemplateParams {
   center_gore?: string
   closure?: string
   straps?: string
+  /** A223 gloves: fingers (full / fingerless / none), how far up the arm, the cuff. */
+  fingers?: string
+  length?: string
+  cuff?: string
 }
 
 /** A223: the close-fitting kinds cut from the body's surface (`garment_template.FITTED_KINDS`): no length, flare or
@@ -379,6 +383,8 @@ export type TemplateFieldSpec = { type: 'choice'; choices: string[]; default: st
 export const TEMPLATE_CHOICE_LABELS: Record<string, string> = {
   skirt: 'Skirt', dress: 'Dress', top: 'Top', jacket: 'Jacket', trousers: 'Trousers', briefs: 'Briefs', bra: 'Bra',
   molded: 'Molded cups', triangle: 'Triangle', bandeau: 'Bandeau', balconette: 'Balconette', narrow: 'Narrow',
+  gloves: 'Gloves', full: 'Full fingers', fingerless: 'Fingerless', wrist: 'To the wrist', forearm: 'Mid forearm',
+  opera: 'Opera (above the elbow)', flared: 'Flared', folded: 'Folded over',
   back_hook: 'Hooks at the back', halter: 'Halter (round the neck)', cross: 'Crossed on the back',
   mid: 'Mid', thin: 'Thin', wide: 'Wide',
   high: 'High', natural: 'Natural', low: 'Low',
@@ -403,6 +409,7 @@ export const TEMPLATE_FIELD_LABELS: Record<keyof TemplateParams, string> = {
   side_width_m: 'Side height', waistband: 'Waistband',
   cup_style: 'Cups', cup_coverage: 'Cup coverage (0.3 demi … 1 full)', push_up: 'Push-up (0 none … 1 strong)',
   underband_m: 'Underband (0 = the cup edge only)', center_gore: 'Between the cups', closure: 'Closure', straps: 'Straps',
+  fingers: 'Fingers', length: 'Glove length', cuff: 'Cuff',
 }
 
 /** A204: one line per fabric under the select — what the cloth does and what a switch costs. */
@@ -441,6 +448,11 @@ export function fittedSummary(p: TemplateParams, t: Tr = EN): string {
     parts.push(t('cover {n}').replace('{n}', Number(p.cup_coverage ?? 0.7).toFixed(2)))
     if (Number(p.push_up || 0) > 0) parts.push(t('push-up {n}').replace('{n}', Number(p.push_up).toFixed(2)))
     if (p.straps && p.straps !== 'none') parts.push(t(TEMPLATE_CHOICE_LABELS[p.straps] || p.straps))
+  }
+  if (p.kind === 'gloves') {
+    parts.push(t(TEMPLATE_CHOICE_LABELS[p.fingers || 'full'] || p.fingers || ''))
+    parts.push(t(TEMPLATE_CHOICE_LABELS[p.length || 'wrist'] || p.length || ''))
+    if (p.cuff && p.cuff !== 'none') parts.push(t(TEMPLATE_CHOICE_LABELS[p.cuff] || p.cuff))
   }
   parts.push(t(TEMPLATE_CHOICE_LABELS[p.fabric] || p.fabric))
   return parts.join(' · ')
