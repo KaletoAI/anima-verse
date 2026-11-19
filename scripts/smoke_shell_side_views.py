@@ -79,7 +79,7 @@ check("[S3] plain right", gc.ghost_prompt({"ghost_text": "plain"}, "right"),
       plain + " Seen from the side, facing right; the side view stays a side view.")
 check("[S3] waistband right", gc.ghost_prompt({"ghost_text": "waistband"}, "right"),
       gc.GHOST_WAISTBAND + " Seen from the side, facing right; the side view stays a side view. "
-      + "The legs stay apart at exactly the same angle as in the image.")
+      + "The empty garment keeps exactly the same spread and angle as in the image.")
 check("[S3] front has no side line", gc.ghost_prompt({"ghost_text": "plain"}, "front"), plain)
 try:
     gc.edit_prompt("Demo", "worn", "left", profile={})

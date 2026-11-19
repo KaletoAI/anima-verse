@@ -31,7 +31,7 @@ COLLAR = FIRST + (" Reconstruct the inside of the collar, sleeves, and hem natur
 WAIST = FIRST + (" Reconstruct the inside of the waistband and the leg openings naturally, and fill in the "
                  "background behind the removed body parts seamlessly.")
 SIDE = " Seen from behind; the back view stays a back view."
-STANCE = " The legs stay apart at exactly the same angle as in the image."
+STANCE = " The empty garment keeps exactly the same spread and angle as in the image."
 
 failures = []
 

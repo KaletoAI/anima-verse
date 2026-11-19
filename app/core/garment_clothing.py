@@ -108,7 +108,7 @@ GHOST_SIDE = {"back": "Seen from behind; the back view stays a back view.",
 #: The views a clothing edit knows (A185: the side views of a shell piece).
 EDIT_VIEWS = ("front", "back", "left", "right")
 #: After the user's text (and the side) on both views of a waistband piece.
-GHOST_STANCE = "The legs stay apart at exactly the same angle as in the image."
+GHOST_STANCE = "The empty garment keeps exactly the same spread and angle as in the image."
 #: The noun of a piece without a name (``garment_noun``).
 DEFAULT_NOUN = "garment"
 #: The ghost's extra negative terms (spike ``NEG_GHOST``); the use case

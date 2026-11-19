@@ -115,7 +115,7 @@ Geometry (the canvas of the former smoke_garment_ghost_pair.py), W 1024 x H 1200
       with "the collar, sleeves, and hem" -> "the waistband and the leg
       openings" ("… Reconstruct the inside of the waistband and the leg
       openings naturally, …"), then on the back the side sentence, then on
-      both " The legs stay apart at exactly the same angle as in the image."
+      both " The empty garment keeps exactly the same spread and angle as in the image."
     negatives: worn = DRESS_GARMENT_NEGATIVE minus "dress" -> "loose
       clothing, baggy, skirt, jacket, shoes, socks, hair"; ghost = that +
       ", person, skin, head, arms, hands, legs, feet, mannequin, hanger".
@@ -233,12 +233,12 @@ GHOST_BACK_PROMPT = GHOST_PROMPT + " Seen from behind; the back view stays a bac
 TROUSERS_GHOST_FRONT = ("Remove the person completely, leaving only the clothes in the exact same position, pose, "
                         "and shape as if worn by an invisible mannequin. Reconstruct the inside of the waistband "
                         "and the leg openings naturally, and fill in the background behind the removed body parts "
-                        "seamlessly. The legs stay apart at exactly the same angle as in the image.")
+                        "seamlessly. The empty garment keeps exactly the same spread and angle as in the image.")
 TROUSERS_GHOST_BACK = ("Remove the person completely, leaving only the clothes in the exact same position, pose, "
                        "and shape as if worn by an invisible mannequin. Reconstruct the inside of the waistband "
                        "and the leg openings naturally, and fill in the background behind the removed body parts "
-                       "seamlessly. Seen from behind; the back view stays a back view. The legs stay apart at "
-                       "exactly the same angle as in the image.")
+                       "seamlessly. Seen from behind; the back view stays a back view. The empty garment keeps "
+                       "exactly the same spread and angle as in the image.")
 
 
 _OLD_GHOST_PROMPT = ("The same green dress alone, as if worn by an invisible person (ghost mannequin): no head, no "
