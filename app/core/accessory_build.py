@@ -26,17 +26,18 @@ The garment assembly grafts a current build as the node ``accessory_mesh.node_na
 """
 import hashlib
 import json
+import re
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 #: Bumped when an accessory is built differently for the same inputs.
-ACCESSORY_VERSION = 1
+ACCESSORY_VERSION = 2
 #: The air between the skin and the chain's surface. The plan's 1.5 mm left one ring of Lirien's chain at 0.94 mm
 #: in the sit clip (A216 acceptance: rest 1.50–2.57 mm, sit min 0.94 mm); 1.7 mm keeps every ring inside the
 #: 1–3 mm band in rest, walk and sit (the skinning moves a ring by at most ~0.6 mm there).
@@ -127,6 +128,12 @@ def _current_base(character_name: str, profile: Dict[str, Any]):
     return base
 
 
+def base_sha(character_name: str, profile: Optional[Dict[str, Any]] = None) -> str:
+    """The content sha of the current plain body ('' without one) — the preview's cache key (A216 review L2)."""
+    base = _current_base(character_name, _profile_of(character_name, profile))
+    return str(base[1]) if base else ""
+
+
 def accessory_state(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None,
                     item: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """``{state, reason, asig, record}`` of a worn accessory (module docstring). Read-only."""
@@ -181,27 +188,120 @@ def make_necklace(rigged: bytes, spec: Dict[str, Any]) -> Dict[str, Any]:
     surface = np.asarray(detail["surface"])
     V, F, N = accessory_mesh.tube(curve, radius, outward=curve - surface)
     J, W = accessory_mesh.skin_weights(V, np.asarray(body.positions, np.float64), dense_weights(body))
-    metrics = gap_metrics(V, len(curve), body.positions, body.faces)
+    J, W = accessory_mesh.fold_to_base(J, W, list(body.joint_names), glb_mesh.skin_joint_parents(rigged))
+    Pw, skin = detail["welded"]
+    metrics = gap_metrics(V, len(curve), Pw, skin, outward=np.asarray(detail["outward"]))
+    seg = np.linalg.norm(np.diff(np.vstack([curve, curve[:1]]), axis=0), axis=1)
     metrics.update({"triangles": int(len(F)), "vertices": int(len(V)),
-                    "length_m": round(float(np.linalg.norm(np.diff(np.vstack([curve, curve[:1]]), axis=0),
-                                                           axis=1).sum()), 4),
+                    "length_m": round(float(seg.sum()), 4),
+                    "max_segment_ratio": round(float(seg.max() / max(float(np.median(seg)), 1e-9)), 2),
+                    "neck_ellipse_m": detail["landmarks"]["neck_ellipse_m"],
+                    "joints": {str(body.joint_names[j]): round(float(W[J == j].max()), 3)
+                               for j in np.unique(J[W > PLAUSIBLE_WEIGHT])},
                     "cpu_s": round(time.monotonic() - started, 2)})
+    plausible(metrics, float(spec["chain"]["drop_cm"]) / 100.0)
     return {"V": V, "F": F, "N": N, "J": J, "W": W, "joint_names": list(body.joint_names), "curve": curve,
             "landmarks": detail["landmarks"], "metrics": metrics}
 
 
-def gap_metrics(V: np.ndarray, rings: int, P: np.ndarray, F: np.ndarray) -> Dict[str, Any]:
+#: The plausibility gate (A216 review H2) — a chain that misses one of these fails its build instead of being shown:
+#: length at most ``LENGTH_PER_NECK`` × the neck ellipse (side points + notch + back, ``neck_ellipse_m``) +
+#: ``LENGTH_PER_DROP`` × the drop (a U hanging the drop below the notch adds about twice the drop) and at least the
+#: ellipse × ``LENGTH_MIN_PER_NECK``;
+#: no segment longer than ``MAX_SEGMENT_RATIO`` × the median (a jump to hair or a shoulder); weight above
+#: ``PLAUSIBLE_WEIGHT`` only on the neck, the spine and the shoulders (the head / jaw up to ``HEAD_WEIGHT_MAX``,
+#: never an arm); nothing inside. ``metrics["joints"]``: joint -> its largest weight on the chain.
+LENGTH_PER_NECK = 1.35
+LENGTH_PER_DROP = 2.6
+LENGTH_MIN_PER_NECK = 0.9
+MAX_SEGMENT_RATIO = 3.0
+PLAUSIBLE_WEIGHT = 0.2
+PLAUSIBLE_JOINTS = frozenset({"neck", "spine", "spine1", "spine2", "leftshoulder", "rightshoulder"})
+#: The head and the jaw may move a stretch of the chain by at most this weight: the skin just under the chin follows
+#: the head a little (moving that weight to the neck pressed Lirien's chain to 0.85 mm in the sit clip), a chain
+#: riding ON the jaw is wrong.
+HEAD_WEIGHT_MAX = 0.5
+HEAD_JOINTS = frozenset({"head", "jaw"})
+IMPLAUSIBLE = "The chain does not fit this body ({why}) — it is left off"
+
+
+def plausible(metrics: Dict[str, Any], drop_m: float) -> None:
+    """Raise ``ValueError`` (``IMPLAUSIBLE``) when ``metrics`` of a built necklace break the gate above."""
+    from app.core.rig_contract import norm_bone_name
+    why = []
+    neck = float(metrics["neck_ellipse_m"])
+    length = float(metrics["length_m"])
+    if length > LENGTH_PER_NECK * neck + LENGTH_PER_DROP * drop_m:
+        why.append(f"{length:.2f} m long for a {neck:.2f} m neck")
+    if length < LENGTH_MIN_PER_NECK * neck:
+        why.append(f"{length:.2f} m is shorter than the {neck:.2f} m neck")
+    if float(metrics["max_segment_ratio"]) > MAX_SEGMENT_RATIO:
+        why.append("it jumps between two points")
+    others = [j for j, w in metrics["joints"].items() if norm_bone_name(j) not in PLAUSIBLE_JOINTS
+              and not (norm_bone_name(j) in HEAD_JOINTS and w <= HEAD_WEIGHT_MAX)]
+    if others:
+        why.append("it would move with " + ", ".join(norm_bone_name(j) for j in others))
+    if float(metrics["inside_share"]) > 0.0:
+        why.append("part of it lies inside the body")
+    if why:
+        raise ValueError(IMPLAUSIBLE.format(why="; ".join(why)))
+
+
+def gap_metrics(V: np.ndarray, rings: int, P: np.ndarray, F: np.ndarray,
+                outward: Optional[np.ndarray] = None) -> Dict[str, Any]:
     """The tube's air to the skin: per ring (``rings`` rings of ``len(V) / rings`` vertices) the smallest signed
     distance of its vertices to the body ``(P, F)`` — p05 / p50 / p95 / min in mm — and the share of tube vertices
-    more than 0.5 mm inside the skin (``inside_share``)."""
-    from app.core.accessory_curve import weld
-    from app.core.garment_shell import signed_distance
-    Pw, Fw = weld(np.asarray(P, np.float64), np.asarray(F, np.int64))
-    sd = signed_distance(np.asarray(V, np.float64), Pw, Fw).reshape(rings, -1)
+    more than 0.5 mm inside the skin (``inside_share``). ``outward`` (per ring, the skin's normal under it): ``F`` is
+    the skin patch under the chain and the sign comes from that normal; else ``F`` is the whole closed body
+    (``garment_shell.signed_distance``)."""
+    if outward is None:
+        from app.core.accessory_curve import weld
+        from app.core.garment_shell import signed_distance
+        Pw, Fw = weld(np.asarray(P, np.float64), np.asarray(F, np.int64))
+        sd = signed_distance(np.asarray(V, np.float64), Pw, Fw)
+    else:
+        # The skin patch has no inside of its own: per ring its CENTRE's distance to the skin, signed by the ring's
+        # outward normal, minus the tube radius (exact for a flat skin; a vertex's own closest point can sit on an
+        # edge of a crease beside the chain, where a face's plane gives the wrong side).
+        from scipy.spatial import cKDTree
+        from app.core.accessory_curve import _closest
+        Pf = np.asarray(P, np.float64)
+        Fs = np.asarray(F, np.int64)
+        X = np.asarray(V, np.float64).reshape(rings, -1, 3)
+        centre = X.mean(1)
+        radius = np.linalg.norm(X - centre[:, None], axis=2).mean(1)
+        cp = _closest(centre, Pf, Fs, cKDTree(Pf[Fs].mean(1)))
+        side = np.einsum("ij,ij->i", centre - cp, np.asarray(outward))
+        sd = (np.linalg.norm(centre - cp, axis=1) * np.where(side < 0, -1.0, 1.0) - radius)[:, None]
+    sd = sd.reshape(rings, -1)
     gap = sd.min(1) * 1000.0
     return {"gap_mm": {"p05": round(float(np.percentile(gap, 5)), 2), "p50": round(float(np.median(gap)), 2),
                        "p95": round(float(np.percentile(gap, 95)), 2), "min": round(float(gap.min()), 2)},
             "inside_share": round(float((sd < -0.0005).mean()), 4)}
+
+
+def drop_other_builds(folder: Path, item_id: str, sig: str) -> List[str]:
+    """Delete the files of ``item_id``'s builds other than ``sig`` in ``folder`` — names matching exactly
+    ``^<item_id>_<12 hex>\.`` (A216 review L1: never another item whose id starts with this one); the deleted
+    names."""
+    own = re.compile(rf"^{re.escape(item_id)}_([0-9a-f]{{12}})\.")
+    gone = []
+    for other in sorted(folder.iterdir()):
+        m = own.match(other.name)
+        if m and m.group(1) != sig:
+            other.unlink(missing_ok=True)
+            gone.append(other.name)
+    return gone
+
+
+def failure_text(e: BaseException) -> str:
+    """The words a failed build shows (A216 review L3): a missing bone named, a ``ValueError`` as it is, anything
+    else with its type."""
+    if isinstance(e, KeyError):
+        return f"The plain body has no {str(e.args[0] if e.args else '').strip(chr(39))} bone"
+    if isinstance(e, ValueError):
+        return str(e)
+    return f"{type(e).__name__}: {e}"
 
 
 def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -231,7 +331,7 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
             made = make_necklace(blob, spec)
         except Exception as e:  # noqa: BLE001 — recorded as the step's failure, the figure leaves it off
             logger.exception("Accessory %s of %s failed", item_id, character_name)
-            _write_atomic(failed_path, json.dumps({"error": str(e)[:300], "base_model_sha256": sha,
+            _write_atomic(failed_path, json.dumps({"error": failure_text(e)[:300], "base_model_sha256": sha,
                                                    "asig": sig, "at": utc_now_iso()}).encode("utf-8"))
             figure.invalidate()
             return accessory_state(character_name, item_id, profile=profile, item=item)
@@ -249,9 +349,7 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
         _write_atomic(record_path(character_name, item_id, sig), json.dumps(record, indent=1).encode("utf-8"))
         failed_path.unlink(missing_ok=True)
         # One build per item is kept: the other settings' builds go (a switch back rebuilds on the CPU).
-        for other in folder.glob(f"{item_id}_*"):
-            if not other.name.startswith(f"{item_id}_{sig}"):
-                other.unlink(missing_ok=True)
+        drop_other_builds(folder, item_id, sig)
     figure.invalidate()
     out = accessory_state(character_name, item_id, profile=profile, item=item)
     out["metrics"] = made["metrics"]

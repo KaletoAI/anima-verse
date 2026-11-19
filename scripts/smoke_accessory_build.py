@@ -16,6 +16,16 @@ Expected values, derived by hand:
     0.00075, tube radius 0.00075 (1.5 mm chain), 48 rings × 8 sides: the innermost vertex of each ring lies at
     0.06 + 0.0017 from the axis → min gap = 1.7 mm minus the facet sag (≤ 0.0045 mm) → every ring 1.70 mm
     (rounded to 0.01 mm), inside_share 0.0.
+[4] A216 review H2 — the plausibility gate (``plausible``), neck ellipse 0.36 m, drop 0.04 m: the length bound is
+    1.35 · 0.36 + 2.6 · 0.04 = 0.59 m and the floor 0.9 · 0.36 = 0.324 m. Length 0.46, segment ratio 1.3, joints
+    Neck/Spine2/LeftShoulder, inside 0 → passes; length 0.62 → refused ("long"); 0.30 → refused ("shorter");
+    segment ratio 3.5 → refused ("jumps"); Head at 0.6 (> HEAD_WEIGHT_MAX 0.5) or LeftArm at 0.3 (> 0.2) → refused
+    ("move with"), Head at 0.4 → passes; inside 0.01 →
+    refused ("inside").
+[5] A216 review L1 — ``drop_other_builds(folder, "item_x", A)`` with the files item_x_<A>.json, item_x_<B>.npz,
+    item_x_<B>.failed.json, item_xy_<B>.json and item_x_notes.txt (A, B 12 hex digits) deletes exactly
+    item_x_<B>.failed.json and item_x_<B>.npz (another item "item_xy" and a non-build name stay).
+[6] A216 review L3 — ``failure_text``: KeyError('neck') → "The plain body has no neck bone"; ValueError("x") → "x".
 """
 import os
 import sys
@@ -107,6 +117,35 @@ m = ab.gap_metrics(V, 48, P, F)
 print(f"       {m}")
 check("[3] every ring 1.70 mm", (m["gap_mm"]["min"], m["gap_mm"]["p95"]), (1.7, 1.7))
 check("[3] inside share", m["inside_share"], 0.0)
+
+def gate(**kw):
+    m = {"neck_ellipse_m": 0.36, "length_m": 0.46, "max_segment_ratio": 1.3, "inside_share": 0.0,
+         "joints": {"mixamorig:Neck": 0.9, "mixamorig:Spine2": 0.7, "mixamorig:LeftShoulder": 0.3}, **kw}
+    try:
+        ab.plausible(m, 0.04)
+        return "ok"
+    except ValueError as e:
+        return str(e)
+
+check("[4] plausible", gate(), "ok")
+check("[4] too long", "long" in gate(length_m=0.62), True)
+check("[4] too short", "shorter" in gate(length_m=0.30), True)
+check("[4] jumps", "jumps" in gate(max_segment_ratio=3.5), True)
+check("[4] head 0.6", "move with head" in gate(joints={"mixamorig:Neck": 0.9, "mixamorig:Head": 0.6}), True)
+check("[4] head 0.4", gate(joints={"mixamorig:Neck": 0.9, "mixamorig:Head": 0.4}), "ok")
+check("[4] arm", "move with leftarm" in gate(joints={"mixamorig:LeftArm": 0.3}), True)
+check("[4] inside", "inside" in gate(inside_share=0.01), True)
+
+A, B = "a" * 12, "b" * 12
+d5 = Path(TMP) / "l1"
+d5.mkdir()
+for n in (f"item_x_{A}.json", f"item_x_{B}.npz", f"item_x_{B}.failed.json", f"item_xy_{B}.json", "item_x_notes.txt"):
+    (d5 / n).write_text("x")
+check("[5] deleted", ab.drop_other_builds(d5, "item_x", A), [f"item_x_{B}.failed.json", f"item_x_{B}.npz"])
+check("[5] kept", sorted(p.name for p in d5.iterdir()), sorted([f"item_x_{A}.json", f"item_xy_{B}.json",
+                                                               "item_x_notes.txt"]))
+check("[6] KeyError", ab.failure_text(KeyError("neck")), "The plain body has no neck bone")
+check("[6] ValueError", ab.failure_text(ValueError("x")), "x")
 
 if FAIL:
     print(f"\n{len(FAIL)} check(s) failed: {FAIL}")

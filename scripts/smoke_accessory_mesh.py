@@ -16,6 +16,11 @@ Expected values, derived by hand:
     X = (1,0,0) (coincident with vertex 1) → joint 2 with weight 1.0 (the coincident rule), the other three
     weights 0. X = (0.5, 0, 0) (k = 2 nearest: vertices 0 and 1, both at 0.5, inverse-square weights equal) →
     joints {0, 2} at 0.5 each.
+[6] A216 review H1 — ``fold_to_base``: the body fixture of ``smoke_glb_graft`` (base skeleton + an extension joint
+    ``breast_L`` under Spine2). Accessory weights {breast_L 0.6, Neck 0.4} → {Spine2 0.6, Neck 0.4} (breast_L's
+    parent); ``onto`` {head: neck} moves {Head 1.0} → {Neck 1.0}. A garment weighted on a joint the target skin lacks
+    and that has no parent (``mixamorig:LeftBreastTip``) → ``graft`` raises KeyError (the reported failure); the
+    same garment folded first grafts (its joint is the target's Spine2).
 [5] ``node_name("item_1")`` = "garment_accessory_item_1_c"; side "l" → "garment_accessory_item_1_l".
 """
 import os
@@ -64,6 +69,40 @@ check("[4] midpoint", got, {0: 0.5, 2: 0.5})
 
 check("[5] node name", am.node_name("item_1"), "garment_accessory_item_1_c")
 check("[5] node name l", am.node_name("item_1", "l"), "garment_accessory_item_1_l")
+
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+from smoke_glb_graft import body_fixture  # noqa: E402
+from app.core import glb_mesh  # noqa: E402
+from app.core.rig_contract import norm_bone_name  # noqa: E402
+glb, names = body_fixture()
+parents = glb_mesh.skin_joint_parents(glb)
+ix = {n: i for i, n in enumerate(names)}
+J = np.array([[ix["breast_L"], ix["mixamorig:Neck"], 0, 0]])
+W = np.array([[0.6, 0.4, 0, 0]])
+J2, W2 = am.fold_to_base(J, W, names, parents)
+check("[6] breast_L -> Spine2", {names[j]: round(float(w), 6) for j, w in zip(J2[0], W2[0]) if w > 0},
+      {"mixamorig:Spine2": 0.6, "mixamorig:Neck": 0.4})
+J3, W3 = am.fold_to_base(np.array([[ix["mixamorig:Head"], 0, 0, 0]]), np.array([[1.0, 0, 0, 0]]), names, parents,
+                         onto={"head": "neck"})
+check("[6] head onto neck", names[int(J3[0, 0])], "mixamorig:Neck")
+tip_names = names + ["mixamorig:LeftBreastTip"]
+Vt, Ft, Nt = am.tube(curve + [0, 1.4, 0], r, sides=8)
+Jt = np.zeros((len(Vt), 4), np.int64)
+Jt[:, 0] = len(names)
+Wt = np.zeros((len(Vt), 4))
+Wt[:, 0] = 1.0
+try:
+    glb_mesh.graft(glb, am.garment_mesh(Vt, Ft, Nt, Jt, Wt, tip_names, color="#d4af37", roughness=0.25),
+                   name="garment_accessory_x_c", extras={"kind": "accessory"})
+    check("[6] unfolded tip joint fails", "no error", "KeyError")
+except KeyError:
+    check("[6] unfolded tip joint fails", "KeyError", "KeyError")
+tip_parents = {**parents, "mixamorig:LeftBreastTip": "breast_L"}
+Jf, Wf = am.fold_to_base(Jt, Wt, tip_names, tip_parents)
+out = glb_mesh.graft(glb, am.garment_mesh(Vt, Ft, Nt, Jf, Wf, tip_names, color="#d4af37", roughness=0.25),
+                     name="garment_accessory_x_c", extras={"kind": "accessory"})
+check("[6] folded grafts", norm_bone_name(tip_names[int(Jf[0, 0])]), "spine2")
+check("[6] graft output is a GLB", out[:4], b"glTF")
 
 if FAIL:
     print(f"\n{len(FAIL)} check(s) failed: {FAIL}")

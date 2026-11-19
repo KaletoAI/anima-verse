@@ -20,6 +20,12 @@ Expected values, derived by hand:
 [5] ``settle_out`` with clearance 1.7 mm: a ring of 48 points at y = 0.1 and radius 0.05 (1 cm INSIDE) and a ring
     at radius 0.075 (13 mm off) both end at radius R + 0.0017 = 0.0617 (±0.02 mm): the push moves a point to
     exactly the clearance along (point − its closest surface point), out of the skin or back toward it.
+[6] A216 review H2 — a neck under hair: the neck cylinder (R 0.06, with an inner wall at 0.055, as the generated
+    bodies have) inside a hair shell, a closed cylinder of radius 0.09 from y = 0.05 to 0.2. A ray along +x from
+    (0, 0.1, 0): pick ``outer`` → 0.09 (the hair, the old rule); pick ``layer`` → ≈ 0.06 (the skin: first hit 0.055,
+    the last within LAYER_M 0.016 of it is 0.06; 0.09 is 0.035 farther). ``side_height`` from y 0.1 with the
+    shoulders 0.05 off the axis (bound 1.3 · 0.05 = 0.065 ≥ 0.06) → 0.1 (no lift); with the shoulders 0.04 off
+    (bound 0.052 < 0.06) no height qualifies → ``ValueError``.
 """
 import os
 import sys
@@ -84,6 +90,26 @@ for r0 in (0.05, 0.075):
     rad = np.linalg.norm(out[:, [0, 2]], axis=1)
     print(f"       start {r0}: radius {rad.min():.6f} … {rad.max():.6f}")
     check(f"[5] start radius {r0} → 0.0617", bool(np.all(np.abs(rad - 0.0617) <= 2e-5)), True)
+
+Pi, Fi = cylinder(0.055)
+Ph, Fh = cylinder(0.09, h=0.15)
+Ph = Ph + [0, 0.05, 0]
+Pn = np.concatenate([P, Pi, Ph])
+Fn = np.concatenate([F, Fi + len(P), Fh + len(P) + len(Pi)])
+o1, d1 = np.array([[0, 0.1, 0]], float), np.array([[1, 0, 0]], float)
+t_out, _ = ac.ray_hits(Pn, Fn, o1, d1)
+t_lay, _ = ac.ray_hits(Pn, Fn, o1, d1, pick="layer")
+check("[6] outer finds the hair", bool(abs(float(t_out[0]) - 0.09) < 1e-3), True)
+check("[6] layer finds the skin", bool(abs(float(t_lay[0]) - 0.06) < 1e-3), True)
+centre = np.array([0, 0.1, 0.0])
+check("[6] side height, bound 0.065", round(ac.side_height(Pn, Fn, centre, 0.1, 0.05, max_side=0.065), 6), 0.1)
+try:
+    ac.side_height(Pn, Fn, centre, 0.1, 0.05, max_side=1.3 * 0.04)
+    check("[6] bound 0.052 refuses", "no error", "ValueError")
+except ValueError:
+    check("[6] bound 0.052 refuses", "ValueError", "ValueError")
+check("[6] side_bound", round(ac.side_bound({"neck": np.zeros(3), "leftshoulder": np.array([0.05, 0, 0]),
+                                             "rightshoulder": np.array([-0.05, 0, 0])}), 6), 0.065)
 
 if FAIL:
     print(f"\n{len(FAIL)} check(s) failed: {FAIL}")

@@ -64,6 +64,49 @@ def skin_weights(X: np.ndarray, Pb: np.ndarray, Wb: np.ndarray,
     return used[J], W
 
 
+def fold_to_base(J: np.ndarray, W: np.ndarray, joint_names: List[str], parents: Dict[str, str],
+                 onto: Dict[str, str] = None) -> Tuple[np.ndarray, np.ndarray]:
+    """Every weight on a joint outside the base skeleton (``rig_contract.BASE_JOINT_KEYS``: an extension joint such
+    as a breast tip) moved to its nearest base-skeleton ancestor (``parents``: joint name -> parent name), so the
+    accessory grafts onto any skin of the same rig — an outfit body without the extension group included (A216
+    review H1). Weights on one joint are summed; the result is renormalised. A weighted joint with no base ancestor
+    raises ``ValueError``. ``onto`` (normalised base name -> normalised base name) then moves a base joint's weight
+    to another one (the accessory's head -> neck)."""
+    from app.core.rig_contract import BASE_JOINT_KEYS, norm_bone_name
+    index = {norm_bone_name(n): i for i, n in enumerate(joint_names)}
+
+    def base_of(i: int) -> int:
+        name, seen = str(joint_names[i]), set()
+        while norm_bone_name(name) not in BASE_JOINT_KEYS:
+            seen.add(name)
+            name = parents.get(name, "")
+            if not name or name in seen:
+                raise ValueError(f"joint {joint_names[i]} has no base-skeleton ancestor")
+        key = norm_bone_name(name)
+        key = (onto or {}).get(key, key)
+        at = index.get(key)
+        if at is None:
+            raise ValueError(f"the base joint {name} is not in the skin")
+        return at
+
+    J = np.asarray(J, np.int64)
+    W = np.asarray(W, np.float64)
+    mapped = {int(j): base_of(int(j)) for j in np.unique(J[W > 0])}
+    J2 = np.zeros_like(J)
+    W2 = np.zeros_like(W)
+    for v in range(len(J)):
+        acc: Dict[int, float] = {}
+        for j, w in zip(J[v], W[v]):
+            if w > 0:
+                t = mapped[int(j)]
+                acc[t] = acc.get(t, 0.0) + float(w)
+        items = sorted(acc.items(), key=lambda kv: -kv[1])[:4]
+        total = sum(w for _, w in items) or 1.0
+        for k, (j, w) in enumerate(items):
+            J2[v, k], W2[v, k] = j, w / total
+    return J2, W2
+
+
 def node_name(item_id: str, side: str = "c") -> str:
     """The grafted node of an accessory: ``garment_accessory_<item>_<side>`` (``c`` = centred; ``l`` / ``r``
     for paired pieces later). The ``garment_`` prefix is what every reader keys a garment node by

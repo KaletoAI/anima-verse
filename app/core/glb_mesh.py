@@ -234,6 +234,11 @@ def _joint_parents(gltf: dict, skin_index: int = 0) -> Dict[str, str]:
             for j in skins[skin_index].get("joints") or [] if j in parent}
 
 
+def skin_joint_parents(glb: bytes) -> Dict[str, str]:
+    """Joint name -> its parent node's name for the first skin of ``glb`` (``_joint_parents``); {} without a skin."""
+    return _joint_parents(_parse(glb, "Model")["gltf"], 0)
+
+
 def _skin_joint_names(gltf: dict, skin_index: int = 0) -> List[str]:
     skins, nodes = gltf.get("skins") or [], gltf.get("nodes") or []
     if not 0 <= skin_index < len(skins):
