@@ -95,6 +95,7 @@ Each clothing entry carries ``cover`` (``body_cover.VERSION``), the sidecar
 ``body_cover`` the stats.
 """
 import json
+import queue
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -117,6 +118,12 @@ _again: set = set()
 _failed: Dict[Tuple[str, str], str] = {}
 # (character, signature) -> the error of that failed build (A181: the Build reports it).
 _errors: Dict[Tuple[str, str], str] = {}
+# Builds run on a small fixed pool of daemon workers (06B#4): a burst of requests for many characters queues
+# here instead of starting one thread each. Nothing is dropped — a key stays in ``_building`` while it waits, so
+# ``wait_for`` / ``wait_idle`` still see it and a repeat request only marks it ``_again``.
+MAX_WORKERS = 2
+_queue: "queue.Queue[Tuple[str, str]]" = queue.Queue()
+_workers: List[threading.Thread] = []
 
 #: The ``garment_warnings`` entry of a second footwear piece in one outfit (spec § 11: a data error, left off).
 FOOTWEAR_SECOND = "{item}: a second shoe piece in one outfit — left off"
@@ -1294,12 +1301,33 @@ def schedule(character_name: str, signature: Optional[str] = None, *, retry: boo
                 _again.add(key)
                 return False
             _building.add(key)
-        threading.Thread(target=_run, args=(key,), daemon=True,
-                         name=f"garment-assembly-{character_name}").start()
+        _submit(key)
         return True
     except Exception:  # noqa: BLE001 — a schedule request never breaks its caller
         logger.exception("Garment assembly %s: schedule failed", character_name)
         return False
+
+
+def _submit(key: Tuple[str, str]) -> None:
+    """Queue ``key`` for the worker pool; start a worker while fewer than ``MAX_WORKERS`` run."""
+    _queue.put(key)
+    with _lock:
+        _workers[:] = [w for w in _workers if w.is_alive()]
+        if len(_workers) < MAX_WORKERS:
+            w = threading.Thread(target=_worker, daemon=True, name=f"garment-assembly-{len(_workers)}")
+            _workers.append(w)
+            w.start()
+
+
+def _worker() -> None:
+    while True:
+        key = _queue.get()
+        try:
+            _run(key)
+        except Exception:  # noqa: BLE001 — _run already left the in-flight set; the worker keeps serving
+            logger.exception("Garment assembly %s: worker error", key[0])
+        finally:
+            _queue.task_done()
 
 
 def _run(key: Tuple[str, str]) -> None:
