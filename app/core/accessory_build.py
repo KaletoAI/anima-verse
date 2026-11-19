@@ -1091,16 +1091,21 @@ def make_earrings(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, 
     for side in ab.sides_of(spec):
         anc = ab.ear_anchor(Pw, dense[first], body.joint_names, body.joint_positions, side)
         p, n = anc["point"], anc["outward"]
+        sx = float(n[0])
         if style == "hoop":
             major = size / 2 - wire
-            centre = p + n * (wire + ab.GAP_M) - np.array([0.0, major - wire, 0.0])
+            # beside the skin it hangs past (the jaw under the lobe stands out farther than the lobe)
+            x = ab.clear_lateral(Pw, p, side, size, major + wire) * sx + sx * (wire + ab.GAP_M)
+            centre = np.array([x, p[1] - (major - wire), p[2]])
             V, F, _N = ab.torus(centre, n, major, wire)
         elif style == "drop" and part is not None:
-            Vn = accessory_pendant.normalise(part["V"], float(spec["pendant"]["size_mm"] if spec.get("pendant")
-                                                               else size * 1000))
+            from app.core.accessory_spec import image_part_mm
+            Vn = accessory_pendant.normalise(part["V"], float(image_part_mm(spec) or 18.0))
             # front (+Z) turned to face out to the side; top centre just under the lobe
             R = accessory_pendant._rot_y(np.pi / 2 if side == "left" else -np.pi / 2)
-            V = Vn @ R.T + p + n * (ab.GAP_M + float(np.ptp(Vn[:, 2])) / 2) - np.array([0.0, 0.002, 0.0])
+            # its back (z 0 after ``normalise``) turned to face the head, beside the skin it hangs past
+            reach = ab.clear_lateral(Pw, p, side, float(np.ptp(Vn[:, 1])) + 0.002, float(np.ptp(Vn[:, 0])) / 2)
+            V = Vn @ R.T + np.array([sx * (reach + ab.GAP_M), p[1] - 0.002, p[2]])
             F = np.asarray(part["F"], np.int64)
             part_V.append(V)
             part_F.append(F + sum(len(v) for v in part_V[:-1]))
@@ -1110,6 +1115,9 @@ def make_earrings(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, 
             r = size / 2
             V, F = ab.icosphere(r)
             V = V + p + n * (r + ab.GAP_M)
+        V = _clear_of_head(V, n, Pw, Fw)
+        if part_V and len(part_V) == len(anchors) + 1:
+            part_V[-1] = _clear_of_head(part_V[-1], n, Pw, Fw)
         Fs.append(F + sum(len(v) for v in Vs))
         Vs.append(V)
         anchors[side] = {"lobe": np.round(p, 5).tolist(), "lobe_y": anc["lobe_y"]}
@@ -1141,10 +1149,26 @@ def make_earrings(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, 
             both = {"V": Vp, "F": Fp, "UV": np.vstack([np.asarray(part["UV"], np.float64)] * len(part_V)),
                     "image": part.get("image"), "mime": part.get("mime"), "material": part.get("material")}
             out["pendant"] = _rigid_part(Vp, both, J[0], W[0], rigged, body, dense, Pw, Fw, first, None, "drop")
+            # one drop's longest side (the pair measured together spans the head)
+            out["pendant"]["metrics"]["size_mm"] = round(float(np.ptp(part_V[0], 0).max()) * 1000.0, 2)
         except ValueError as e:
             out["pendant_error"] = str(e)
     metrics["cpu_s"] = round(time.monotonic() - started, 2)
     return out
+
+
+def _clear_of_head(V: np.ndarray, n: np.ndarray, Pw: np.ndarray, Fw: np.ndarray, passes: int = 6) -> np.ndarray:
+    """``V`` moved along ``n`` (the lobe's outward side) until it is at least ``accessory_band.GAP_M`` off the body
+    (the ear is a thin, slanted flap — a ball placed on its rim point can still touch it)."""
+    from app.core.accessory_band import GAP_M
+    from app.core.garment_shell import signed_distance
+    V = np.asarray(V, np.float64)
+    for _ in range(passes):
+        d = float(signed_distance(V, Pw, Fw, kq=POSE_KQ).min())
+        if d >= GAP_M - 1e-5:
+            break
+        V = V + n * (GAP_M - d + 1e-4)
+    return V
 
 
 #: A234: an earring stands at most this far off the lobe it hangs on (mm).

@@ -89,10 +89,13 @@ UNDER_SLOTS: Dict[str, Tuple[str, ...]] = {
 BAND_THICKNESS_M = {"leather": 0.003, "metal": 0.002, "fabric": 0.0015, "from_image": 0.003}
 #: The finger bone names (``accessory_spec.FINGERS`` -> the rig's).
 FINGER_BONES = {"index": "index", "middle": "middle", "ring": "ring", "little": "pinky"}
-#: Earrings: the lobe's height above the Head bone head as a share of the head (Head bone head -> crown).
-EAR_LOBE_SHARE = 0.15
-#: The ear region: head skin within this of the Head bone head's z.
-EAR_Z_M = 0.04
+#: Earrings (``ear_anchor``): the box the ear is looked for in, relative to the Head bone head — (y from, y to),
+#: (z from, z to) in metres (the ear stands above the head joint and behind the jaw).
+EAR_BOX = ((0.0, 0.08), (-0.05, 0.01))
+#: The ear's rim: head skin within this of the ear's farthest point to the side.
+EAR_RIM_M = 0.012
+#: The anchor sits this far above the rim's lowest point (inside the lobe, not under it).
+LOBE_UP_M = 0.004
 
 
 def _unit(v) -> np.ndarray:
@@ -373,22 +376,40 @@ def push_out(X: np.ndarray, out_dirs: np.ndarray, surfaces: List[Tuple[np.ndarra
 
 def ear_anchor(P: np.ndarray, dense: np.ndarray, joint_names: Sequence[str], bones: Dict[str, Any],
                side: str) -> Dict[str, Any]:
-    """The ear lobe of ``side`` (module docstring): the head skin's lateral extreme at ``EAR_LOBE_SHARE`` of the head
-    above the Head bone head, within ``EAR_Z_M`` of its z. ``{point, outward}``; ``ValueError`` without head skin
-    there."""
+    """The ear lobe of ``side`` (module docstring): the ear is the head skin that stands out farthest to that side in
+    the box ``EAR_BOX`` round the Head bone head (above it, at or behind its front); the lobe is the lowest point of
+    the ear's rim (head skin within ``EAR_RIM_M`` of that farthest x), raised ``LOBE_UP_M``. ``{point, outward,
+    lobe_y}``; ``ValueError`` without head skin there."""
     from app.core.rig_contract import norm_bone_name
     head = _bone(bones, "head")
     P = np.asarray(P, np.float64)
     names = np.array([norm_bone_name(str(n)) for n in joint_names])
     on_head = names[np.asarray(dense).argmax(1)] == "head"
-    top = float(P[on_head, 1].max()) if on_head.any() else head[1] + 0.2
-    y = head[1] + EAR_LOBE_SHARE * (top - head[1])
     sx = 1.0 if side == "left" else -1.0       # +X = the body's left
-    pick = on_head & (np.abs(P[:, 1] - y) < 0.006) & (np.abs(P[:, 2] - head[2]) < EAR_Z_M) & ((P[:, 0] - head[0]) * sx > 0)
-    if not pick.any():
+    (y0, y1), (z0, z1) = EAR_BOX
+    box = on_head & (P[:, 1] >= head[1] + y0) & (P[:, 1] <= head[1] + y1) \
+        & (P[:, 2] >= head[2] + z0) & (P[:, 2] <= head[2] + z1) & ((P[:, 0] - head[0]) * sx > 0)
+    if not box.any():
         raise ValueError(f"The {side} ear was not found on this body")
-    k = np.flatnonzero(pick)[int(np.argmax((P[pick, 0] - head[0]) * sx))]
-    return {"point": P[k].copy(), "outward": np.array([sx, 0.0, 0.0]), "lobe_y": round(float(y), 4)}
+    lateral = (P[:, 0] - head[0]) * sx
+    far = float(lateral[box].max())
+    rim = box & (lateral >= far - EAR_RIM_M)
+    k = np.flatnonzero(rim)[int(np.argmin(P[rim, 1]))]
+    point = P[k].copy()
+    point[1] += LOBE_UP_M
+    return {"point": point, "outward": np.array([sx, 0.0, 0.0]), "lobe_y": round(float(point[1]), 4)}
+
+
+def clear_lateral(P: np.ndarray, point: np.ndarray, side: str, below_m: float, half_width_m: float) -> float:
+    """How far to the ``side`` (+x left, −x right, unsigned) the skin reaches in the window under ``point`` — from
+    ``below_m`` under it to 2 mm above, ``half_width_m`` to the front and back — so a hoop or a drop hanging there
+    is put beside the jaw, not into it. At least the point's own lateral offset."""
+    sx = 1.0 if side == "left" else -1.0
+    P = np.asarray(P, np.float64)
+    win = (P[:, 1] <= point[1] + 0.002) & (P[:, 1] >= point[1] - below_m) & (np.abs(P[:, 2] - point[2]) <= half_width_m) \
+        & ((P[:, 0] - point[0]) * sx > -0.03)
+    reach = float((P[win, 0] * sx).max()) if win.any() else float(point[0] * sx)
+    return max(reach, float(point[0] * sx))
 
 
 def icosphere(radius: float, subdiv: int = 1) -> Tuple[np.ndarray, np.ndarray]:

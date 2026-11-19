@@ -34,6 +34,12 @@ Expected values, derived by hand:
 [8] ``icosphere(0.003)``: 42 vertices (1 subdivision: 12 + 30 edges), every one 3 mm from the centre; ``torus``
     major 0.01, minor 0.001 across +x: the x extent is 2 · 0.001 · cos(π/8)… ≤ 0.002, the y / z extents
     2 · (0.01 + 0.001) = 0.022 at most and at least 2 · 0.011 · cos(π/32) = 0.02189.
+[10] ``ear_anchor`` on a point set round a Head bone head at (0, 1.5, 0), every point the head's: head skin up to
+    x 0.06 (outside the 12 mm rim), an ear at x 0.08 (z −0.02) from y 1.52 to 1.56, a shoulder point at x 0.15, y 1.45 (below the box
+    ``EAR_BOX`` y 1.5..1.58) and a nose at x 0.02, z 0.1 (in front of it): the ear's farthest point is x 0.08, its rim
+    (within 12 mm) lowest point y 1.52 → anchor (0.08, 1.524, −0.02); right side: the mirrored ear → x −0.08.
+    ``clear_lateral`` under (0.08, 1.524, −0.02), 2 cm down, ±1 cm: a jaw point at x 0.085, y 1.51 → 0.085; without
+    it → the point's own 0.08.
 [9] J4: ``graft_accessory`` of a ring record on the distance tier returns the blob it was given (no ring node).
 """
 import os
@@ -175,6 +181,20 @@ Vt, Ft, _ = ab.torus(np.zeros(3), np.array([1.0, 0, 0]), 0.01, 0.001)
 ext = np.ptp(Vt, 0)
 check("[8] torus extents", (bool(ext[0] <= 0.002 + 1e-12), bool(0.022 * np.cos(np.pi / 32) - 1e-9 <= ext[1] <= 0.022 + 1e-9),
                             bool(0.022 * np.cos(np.pi / 32) - 1e-9 <= ext[2] <= 0.022 + 1e-9)), (True, True, True))
+
+# [10] ear anchor
+pts = [[x, y, 0.0] for x in (0.03, 0.05, 0.06) for y in (1.5, 1.53, 1.56)]
+pts += [[s_ * 0.08, y, -0.02] for s_ in (1, -1) for y in (1.52, 1.54, 1.56)]
+pts += [[0.15, 1.45, 0.0], [0.02, 1.53, 0.1], [-0.06, 1.53, 0.0]]
+pts = np.array(pts)
+dense = np.ones((len(pts), 1))
+HEAD = {"mixamorig:Head": [0, 1.5, 0]}
+a = ab.ear_anchor(pts, dense, ["mixamorig:Head"], HEAD, "left")
+check("[10] left lobe", np.round(a["point"], 6).tolist(), [0.08, 1.524, -0.02])
+check("[10] right lobe x", round(float(ab.ear_anchor(pts, dense, ["mixamorig:Head"], HEAD, "right")["point"][0]), 6), -0.08)
+jaw = np.vstack([pts, [[0.085, 1.51, -0.02]]])
+check("[10] clear beside the jaw", round(ab.clear_lateral(jaw, a["point"], "left", 0.02, 0.01), 6), 0.085)
+check("[10] clear, no jaw", round(ab.clear_lateral(pts, a["point"], "left", 0.02, 0.01), 6), 0.08)
 
 # [9] LOD
 check("[9] ring off the distance tier", build.graft_accessory(b"X", "c", "item", {"kind": "ring", "asig": "a"}, "a",
