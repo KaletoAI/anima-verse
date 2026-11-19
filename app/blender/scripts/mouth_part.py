@@ -5,12 +5,12 @@ World metres, front -Y, up +Z, side +X (the glTF importer's frame of a normalise
 The mesher delivers a face whose mouth is drawn, not open. This op (Ruling A203, part 1)
 
 1. MEASURES the lip line. A grid of rays from the front around the head joint gives the face's depth and its base
-   colour. The nose tip is the front-most point of the window above the head joint, the chin edge the first row
-   below it that lies ``chin_drop`` behind the tip. Between them the lip line is the row with the strongest LINE
-   CONTRAST (the mean luminance ``line.span`` above and below minus its own, over a band around the midline),
-   weighted by a wide prior around ``line.prior`` of the chin-to-nose span and by the rows' REDNESS (red minus
-   green against the window's median: a lip line lies between lips, a moustache edge or the shadow under the lower
-   lip does not). From there the line is tracked sideways
+   colour. The nose tip is the front-most point of the window above the head joint within ``nose_reach`` of its
+   midplane, the chin edge the first row below it that lies ``chin_drop`` behind the tip. Between them the lip line
+   is the row with the strongest LINE CONTRAST (the mean luminance ``line.span`` above and below minus its own, over
+   a band around the midline), weighted by a wide prior around ``line.prior`` of the chin-to-nose span and by the
+   rows' REDNESS (red minus green against the window's median: a lip line lies between lips, a moustache edge or
+   the shadow under the lower lip does not). From there the line is tracked sideways
    (the darkest of the rows next to the last one) until its contrast falls under ``line.corner`` of the central
    contrast: the mouth corners. A parabola through the tracked rows is the lip line v(s).
 2. CUTS the skin along it between the corners: the skin faces around the line are subdivided (seam copies alike, so
@@ -80,7 +80,10 @@ DEFAULTS = {
     'grid': {'half_width': .06, 'below': .13, 'above': .10, 'step_s': .001, 'step_v': .0005},
     # The chin's edge: ``chin_drop`` behind the nose tip and a step of ``chin_jump`` back within 2 mm of height,
     # searched within ``chin_reach`` below the first row past ``chin_drop`` (``mouth_math.chin_row``).
-    'nose_window': [-.05, .08], 'chin_drop': .05, 'chin_jump': .02, 'chin_reach': .03,
+    # The nose tip is searched ``nose_window`` around the head joint's height and within ``nose_reach`` of its
+    # midplane: a strand of hair in front of the cheek lies further out (Ruling A213: 40 mm out on one body, 16 mm in
+    # front of the nose; the tip on five bodies within 10 mm of the head joint).
+    'nose_window': [-.05, .08], 'nose_reach': .02, 'chin_drop': .05, 'chin_jump': .02, 'chin_reach': .03,
     'line': {'prior': .54, 'prior_sigma': .2, 'red_gain': 1., 'band': .008, 'span': .004, 'min_contrast': .03,
              'corner': .3, 'half_min': .015, 'half_max': .03},
     # The skin subdivided around the line: margin past the corners, height above and below, edge lengths.
@@ -132,7 +135,8 @@ def parameters(raw):
             raise ValueError('Expected finite number: ' + name)
         return value
     p = merge(DEFAULTS, raw or {}, 'params')
-    if min(p['depth'], p['radius'], p['chin_drop'], p['chin_jump'], p['chin_reach'], *p['grid'].values()) <= 0:
+    if min(p['depth'], p['radius'], p['nose_reach'], p['chin_drop'], p['chin_jump'], p['chin_reach'],
+           *p['grid'].values()) <= 0:
         raise ValueError('Expected positive lengths')
     if min(v for k, v in p['patch'].items()) <= 0 or min(p['rings'].values()) <= 0 or p['rings']['growth'] < 1:
         raise ValueError('Expected positive patch and ring lengths, ring growth at least 1')
@@ -240,11 +244,10 @@ def measure(body, arm, P):
     # Nose tip: the front-most point of the window, on the depth smoothed over 3 mm.
     blur = np.stack([_smooth(depth[:, j], max(1, int(round(.003 / g['step_v'])))) for j in range(len(S))], 1)
     blur = np.stack([_smooth(blur[i], max(1, int(round(.003 / g['step_s'])))) for i in range(len(Z))], 0)
-    window = (Z[:, None] >= head.z + P['nose_window'][0]) & (Z[:, None] <= head.z + P['nose_window'][1]) \
-        & (np.abs(S[None, :] - head.x) <= .045) & np.isfinite(blur)
-    if not window.any():
+    tip = mouth_math.nose_tip(blur, S, Z, head.x, head.z, P['nose_window'], P['nose_reach'])
+    if tip is None:
         raise NoMouth('No face in front of the head joint')
-    nose_i, nose_j = np.unravel_index(int(np.argmin(np.where(window, blur, np.inf))), blur.shape)
+    nose_i, nose_j = tip
     nose_y = float(blur[nose_i, nose_j])
     band = max(1, int(round(.003 / g['step_s'])))
     column = np.nanmin(depth[:, max(0, nose_j - band):nose_j + band + 1], axis=1)

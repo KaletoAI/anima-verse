@@ -274,3 +274,17 @@ def chin_row(column, nose_i, nose_y, drop, jump, rows_up, reach_rows):
         if not np.isfinite(above) or d - above >= jump:
             return i
     return first
+
+
+def nose_tip(depth, S, Z, head_x, head_z, window, reach):
+    """The nose tip: (row, column) of the front-most cell (smallest ``depth``, larger = further back, NaN = no face)
+    of the grid (rows at heights ``Z``, columns at sides ``S``) between ``window`` [below, above] around the head
+    joint's height ``head_z`` and within ``reach`` of its side position ``head_x``; None when that window shows no
+    face. The reach keeps a strand of hair in front of a cheek out (Ruling A213: one body's strand 40 mm to the side
+    stood 16 mm in front of the nose and was taken for it; the lip line landed between nose and eyes)."""
+    cells = (Z[:, None] >= head_z + window[0]) & (Z[:, None] <= head_z + window[1]) \
+        & (np.abs(S[None, :] - head_x) <= reach) & np.isfinite(depth)
+    if not cells.any():
+        return None
+    i, j = np.unravel_index(int(np.argmin(np.where(cells, depth, np.inf))), depth.shape)
+    return int(i), int(j)
