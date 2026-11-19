@@ -109,7 +109,22 @@ SWEETHEART_HALF_RAD = 0.5
 STRAPLESS_UNDERARM_M = 0.02
 #: A221: a strapless top reaches at least this far below its top edge (the chest band).
 STRAPLESS_MIN_M = 0.08
-SHOULDERS = ("strapless", "straps", "covered")
+SHOULDERS = ("strapless", "straps", "covered", "off_shoulder")
+# --- A229: the off-shoulder (Carmen / Bardot) blouse --------------------------------------------------------------
+#: An off-shoulder top or dress is built as a covered bodice with sleeves and cut below the shoulders along an elastic
+#: band: across the chest and the back at ``band_drop_m`` under the shoulder line, and round the top of each upper arm
+#: ``OFF_SHOULDER_ARM_M`` out from the shoulder joint (T-posed). The band (``band_m`` high) is pinned, so it stays
+#: below the shoulders and holds the sleeves; ``off_shoulder_spec``.
+OFF_SHOULDER_ARM_M = 0.07
+#: The sleeves an off-shoulder piece may have (a cap sleeve or none would be cut away whole with the shoulder).
+OFF_SHOULDER_SLEEVES = ("short", "elbow", "long")
+#: Front lacing: none, or a laced opening at the centre front from the band down ``lace_depth_m`` (the cord is the
+#: picture's, painted by the texture projection; the opening is ``LACE_GAP_M`` wide at the band, closing to 0).
+LACINGS = ("none", "front")
+LACE_GAP_M = 0.03
+#: The parameters only an off-shoulder piece reads — left out of ``tsig`` for every other piece, so adding them kept
+#: the existing drapes' keys.
+OFF_SHOULDER_FIELDS = ("band_m", "band_drop_m", "lacing", "lace_depth_m")
 FRONTS = ("closed", "open")
 # --- A223: the fitted kinds' choices -----------------------------------------------------------------------------
 #: Briefs: where the waistband sits (``fitted_spec``: low = 30 %, mid = 65 % of the way from the hip line to the
@@ -188,6 +203,11 @@ PARAM_SPEC: Dict[str, Tuple[str, Any, Any]] = {
     "slit_m": ("number", (0.0, 0.6), 0.0),           # slit depth from the hem up
     "shoulders": ("choice", SHOULDERS, "strapless"),  # dress and top (A221); a jacket is always covered
     "sleeves": ("choice", SLEEVES, "none"),
+    # A229 off-shoulder: the elastic band's height, how far it lies under the shoulder line, the front lacing
+    "band_m": ("number", (0.01, 0.05), 0.025),
+    "band_drop_m": ("number", (0.02, 0.08), 0.05),
+    "lacing": ("choice", LACINGS, "none"),
+    "lace_depth_m": ("number", (0.05, 0.35), 0.15),
     "sleeve_fit": ("number", (0.0, 1.0), 0.3),       # 0 tight .. 1 loose
     "fit": ("number", (0.0, 1.0), 0.3),              # bodice ease: 0 tight .. 1 loose
     "neckline": ("choice", NECKLINES, "crew"),
@@ -224,8 +244,9 @@ KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
     "skirt": ("kind", "fabric", "opacity", "length_m", "flare", "waist_height", "slit", "slit_m"),
     "trousers": ("kind", "fabric", "opacity", "length_m", "waist_height"),
     "dress": ("kind", "fabric", "opacity", "length_m", "flare", "waist_height", "slit", "slit_m", "shoulders", "sleeves",
-              "sleeve_fit", "fit", "neckline", "neck_depth_m"),
-    "top": ("kind", "fabric", "opacity", "length_m", "shoulders", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m"),
+              "sleeve_fit", "fit", "neckline", "neck_depth_m", *OFF_SHOULDER_FIELDS),
+    "top": ("kind", "fabric", "opacity", "length_m", "shoulders", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m",
+            *OFF_SHOULDER_FIELDS),
     "jacket": ("kind", "fabric", "opacity", "length_m", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m", "front",
                "collar"),
     "briefs": ("kind", "fabric", "opacity", "rise", "leg_cut", "back_coverage", "side_width_m", "waistband"),
@@ -325,7 +346,28 @@ def corset_top(params: Dict[str, Any]) -> bool:
 
 
 def has_sleeves(params: Dict[str, Any]) -> bool:
-    return has_bodice(params) and params["shoulders"] == "covered" and params["sleeves"] != "none"
+    return has_bodice(params) and params["shoulders"] in ("covered", "off_shoulder") and params["sleeves"] != "none"
+
+
+def off_shoulder(params: Dict[str, Any]) -> bool:
+    """A229: a top or dress cut off the shoulders (Carmen / Bardot)."""
+    return params["kind"] in ("top", "dress") and params.get("shoulders") == "off_shoulder"
+
+
+def _validate_off_shoulder(params: Dict[str, Any]) -> None:
+    """A229: an off-shoulder piece always has sleeves of at least ``short`` (``OFF_SHOULDER_SLEEVES``; none / cap
+    -> short), its neckline is the band (crew, depth 0 — the yoke is cut away whole); every other piece keeps the
+    off-shoulder fields at their defaults, and without lacing the lacing depth is the default too."""
+    if not off_shoulder(params):
+        for key in OFF_SHOULDER_FIELDS:
+            params[key] = PARAM_SPEC[key][2]
+        return
+    if params["sleeves"] not in OFF_SHOULDER_SLEEVES:
+        params["sleeves"] = "short"
+    params["neckline"] = "crew"
+    params["neck_depth_m"] = 0.0
+    if params["lacing"] == "none":
+        params["lace_depth_m"] = PARAM_SPEC["lace_depth_m"][2]
 
 
 def shape_groups(params: Dict[str, Any], long_top: bool = False) -> List[Dict[str, Any]]:
@@ -525,8 +567,9 @@ def validate_params(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
             params["neck_depth_m"] = round(min(params["neck_depth_m"], SWEETHEART_MAX_M), 3)
     elif params["neckline"] in STRAPLESS_NECKLINES:
         params["neckline"] = "crew"
-    if kind == "dress" and params["shoulders"] != "covered":
+    if kind == "dress" and params["shoulders"] not in ("covered", "off_shoulder"):
         params["sleeves"] = "none"
+    _validate_off_shoulder(params)
     if params["sleeves"] == "none":
         params["sleeve_fit"] = PARAM_SPEC["sleeve_fit"][2]
     if params["fabric"] != SHEER:
@@ -1036,7 +1079,22 @@ def bodice_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
             "neckline": neckline, "depth_m": round(float(depth), 4), "shoulders": params["shoulders"],
             "strap_x": round(strap_shoulder_x(meas, neck_r), 4), "strap_w": STRAP_W_M,
             "pin_half_x": round(PIN_SHARE * half_sh, 4), "pin_band_m": PIN_BAND_M, "sleeve": sleeve,
-            "front_open": front_open, "collar": collar, "joints": meas.get("joints") or {}, "top_edge": top_edge}
+            "front_open": front_open, "collar": collar, "joints": meas.get("joints") or {}, "top_edge": top_edge,
+            "off_shoulder": off_shoulder_spec(params, meas)}
+
+
+def off_shoulder_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A229 — the cut and the pins of an off-shoulder piece (glTF Y-up metres; None for every other piece):
+    ``line_y`` = the band's top edge on the chest and the back = shoulder joints + ``SHOULDER_TOP_M`` -
+    ``band_drop_m``; ``arm_out_m`` = where it crosses each upper arm, out from the shoulder joint
+    (``OFF_SHOULDER_ARM_M``); ``band_m`` = the pinned band's height under that edge; ``lace`` = the front opening
+    ``{depth_m, gap_m}`` from the band down (None without lacing)."""
+    if not off_shoulder(params) or "shoulder_y" not in meas:
+        return None
+    lace = ({"depth_m": round(params["lace_depth_m"], 4), "gap_m": LACE_GAP_M}
+            if params["lacing"] == "front" else None)
+    return {"line_y": round(meas["shoulder_y"] + SHOULDER_TOP_M - params["band_drop_m"], 4),
+            "arm_out_m": OFF_SHOULDER_ARM_M, "band_m": round(params["band_m"], 4), "lace": lace}
 
 
 def _sleeve_panel(sleeve: Dict[str, Any]):
@@ -1307,6 +1365,8 @@ def _md5(payload: Any) -> str:
 def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List[str]) -> str:
     """The cache key of one drape (module docstring)."""
     params = {k: v for k, v in params.items() if k not in MATERIAL_ONLY}
+    if params.get("shoulders") != "off_shoulder":      # A229: the off-shoulder fields key only an off-shoulder piece
+        params = {k: v for k, v in params.items() if k not in OFF_SHOULDER_FIELDS}
     if params.get("fabric") in DRAPE_FABRIC:          # A214: the leather finishes share one drape
         params["fabric"] = DRAPE_FABRIC[params["fabric"]]
     payload = {"params": params, "version": TEMPLATE_VERSION, "base": base_sha, "texture": texture_sha,

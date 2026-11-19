@@ -16,11 +16,15 @@ Fields:
 - "waist_height" (skirt and dress only): "high", "natural" or "low" — where the waistband sits.
 - "slit" (skirt and dress only): "none", "left", "right", "front" or "back" — "left"/"right" are the WEARER's sides.
 - "slit_m": the slit's height from the hem in metres (0 when there is none).
-- "shoulders" (dress and top): "strapless" (nothing over the shoulders), "straps" (thin or wide shoulder straps) or "covered" (a bodice over the shoulders, with or without sleeves). A top is "covered" unless it is a bodice, bustier, corset, tube top or camisole cut straight or sweetheart across the chest: "strapless" when nothing goes over the shoulders, "straps" when thin straps run from its top edge over the shoulders. Such a top starts under the arms; its "length_m" is still measured from the shoulder: to under the bust 0.22-0.28, to the waist 0.45-0.50, to the hips 0.55-0.62.
-- "sleeves" (top, jacket, dress with "covered" shoulders): "none" (tank top, sleeveless), "cap" (just over the shoulder), "short" (t-shirt), "elbow" or "long".
+- "shoulders" (dress and top): "strapless" (nothing over the shoulders), "straps" (thin or wide shoulder straps), "covered" (a bodice over the shoulders, with or without sleeves) or "off_shoulder" (an off-shoulder, Carmen or Bardot blouse or dress: the shoulders are bare, an elastic band runs across the chest, the back and the upper arms below the shoulders, and the sleeves hang from it). A top is "covered" unless it is a bodice, bustier, corset, tube top or camisole cut straight or sweetheart across the chest: "strapless" when nothing goes over the shoulders, "straps" when thin straps run from its top edge over the shoulders. Such a top starts under the arms; its "length_m" is still measured from the shoulder: to under the bust 0.22-0.28, to the waist 0.45-0.50, to the hips 0.55-0.62.
+- "sleeves" (top, jacket, dress with "covered" or "off_shoulder" shoulders): "none" (tank top, sleeveless), "cap" (just over the shoulder), "short" (t-shirt), "elbow" or "long". An "off_shoulder" piece always has "short" (also puff sleeves), "elbow" or "long" (also bell sleeves) sleeves.
+- "band_m" ("off_shoulder" only): the height of the elastic band at its top edge in metres, 0.01-0.05; ordinary 0.025.
+- "band_drop_m" ("off_shoulder" only): how far the band's top edge lies below the top of the shoulders in metres, 0.02 (just off the shoulders) to 0.08 (low on the upper arms); ordinary 0.05.
+- "lacing" ("off_shoulder" only): "front" when a lacing or tie runs down the centre front from the band, else "none".
+- "lace_depth_m" ("off_shoulder" with "lacing" "front" only): how far the laced opening reaches down from the band in metres, 0.05-0.35.
 - "sleeve_fit": 0.0 (tight sleeves) to 1.0 (wide, loose sleeves); ordinary 0.3.
 - "fit": how loosely the bodice falls, 0.0 (tight, fitted) to 1.0 (oversized); ordinary 0.3; a corset or bustier 0.0-0.1.
-- "neckline" (top, jacket, dress with "covered" shoulders): "crew" (round, close to the neck), "v", "scoop" (deep round) or "boat" (wide, shallow). A strapless top or a top with "straps" instead: "straight" (straight across the chest) or "sweetheart" (dips in the middle between two curves over the bust).
+- "neckline" (top, jacket, dress with "covered" shoulders; not for "off_shoulder", its neckline is the band): "crew" (round, close to the neck), "v", "scoop" (deep round) or "boat" (wide, shallow). A strapless top or a top with "straps" instead: "straight" (straight across the chest) or "sweetheart" (dips in the middle between two curves over the bust).
 - "neck_depth_m": how deep the neckline reaches below the shoulder line in metres, 0 for the usual depth of that neckline; for a "sweetheart" top the dip in the middle (0 = the usual 0.05, at most 0.10).
 - "front" (jacket only): "closed" (buttoned or zipped) or "open" (worn open).
 - "collar" (jacket only): "none", "stand" (a standing collar) or "lapel" (a blazer's folded lapels; such a jacket is open at the neck).
@@ -55,6 +59,8 @@ Answer with exactly one JSON object and nothing else, for example:
 {"kind": "skirt", "length_m": 0.45, "flare": 0.4, "waist_height": "natural", "slit": "none", "slit_m": 0, "fabric": "medium"}
 or
 {"kind": "top", "shoulders": "strapless", "length_m": 0.5, "fit": 0.05, "neckline": "sweetheart", "neck_depth_m": 0, "fabric": "leather_glossy"}
+or
+{"kind": "top", "shoulders": "off_shoulder", "length_m": 0.55, "sleeves": "long", "sleeve_fit": 0.6, "fit": 0.35, "band_m": 0.025, "band_drop_m": 0.05, "lacing": "front", "lace_depth_m": 0.2, "fabric": "medium"}
 or
 {"kind": "briefs", "rise": "low", "leg_cut": 0.85, "back_coverage": 0.6, "side_width_m": 0.04, "waistband": "thin", "fabric": "stiff"}
 or

@@ -24,7 +24,7 @@ import { thumbUrl, thumbWidth } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut, apiUpload } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { FITTED_KINDS, TEMPLATE_CHOICE_LABELS, TEMPLATE_DRAPE_FABRIC, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_LABELS, cm, choiceAllowed, corsetTop, hasBodice, lengthLabel, templateCost } from './figureModel'
+import { FITTED_KINDS, TEMPLATE_CHOICE_LABELS, TEMPLATE_DRAPE_FABRIC, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_LABELS, cm, choiceAllowed, corsetTop, hasBodice, offShoulder, lengthLabel, templateCost } from './figureModel'
 import { TEMPLATE_STATE_COLOR, TEMPLATE_STATE_LABELS, failureLines, templateLiveText } from './figureModel'
 import { FailureDetails } from './BuildProblem'
 import type { TemplateFieldSpec, TemplateInfo, TemplateParams, TemplateProgress } from './figureModel'
@@ -140,7 +140,8 @@ function FrontPicture({ picture }: { picture?: TemplatePayload['front_picture'] 
 const GRID: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px 12px' }
 const WARN: CSSProperties = { color: 'var(--warning, #d29922)' }
 const ORDER: (keyof TemplateParams)[] = ['kind', 'fabric', 'opacity', 'length_m', 'flare', 'waist_height', 'slit', 'slit_m',
-  'shoulders', 'fit', 'neckline', 'neck_depth_m', 'sleeves', 'sleeve_fit', 'front', 'collar',
+  'shoulders', 'band_m', 'band_drop_m', 'lacing', 'lace_depth_m', 'fit', 'neckline', 'neck_depth_m', 'sleeves',
+  'sleeve_fit', 'front', 'collar',
   'rise', 'waistband', 'leg_cut', 'back_coverage', 'side_width_m',
   'cup_style', 'cup_coverage', 'push_up', 'underband_m', 'center_gore', 'closure', 'straps', 'fingers', 'length', 'cuff',
   'tights_style', 'feet', 'garters']
@@ -166,6 +167,11 @@ function shown(key: keyof TemplateParams, p: TemplateParams, fields: Record<stri
   // A227: a lapel collar cuts the jacket's front as a V down to the chest (`bodice_spec`) — the neckline choice does
   // not reach the cut, so it is not offered (the depth still deepens the V)
   if (key === 'neckline' && lapelNeck(p)) return false
+  // A229: an off-shoulder piece's neckline is its band (no neckline / depth); the band and lacing fields are its own
+  const off = offShoulder(p)
+  if ((key === 'neckline' || key === 'neck_depth_m') && off) return false
+  if ((key === 'band_m' || key === 'band_drop_m' || key === 'lacing') && !off) return false
+  if (key === 'lace_depth_m' && (!off || p.lacing !== 'front')) return false
   if (key === 'neck_depth_m' && !bodice && !(strapTop && p.neckline === 'sweetheart')) return false
   if (key === 'fit' && p.kind === 'dress' && p.shoulders === 'strapless') return false
   if (key === 'sleeve_fit' && (!bodice || p.sleeves === 'none')) return false
@@ -235,6 +241,8 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
     if (data.spec.neckline?.type === 'choice' && !choiceAllowed('neckline', next.neckline, next)) {
       next.neckline = data.spec.neckline.choices.find((c) => choiceAllowed('neckline', c, next)) || next.neckline
     }
+    // A229: off the shoulders a piece keeps at least short sleeves
+    if (data.spec.sleeves?.type === 'choice' && !choiceAllowed('sleeves', next.sleeves, next)) next.sleeves = 'short'
     setDraft(next)
     setSource('user')
     setSaved('')

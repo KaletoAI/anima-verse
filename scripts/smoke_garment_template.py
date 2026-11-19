@@ -167,8 +167,10 @@ check("[1] defaults, no error", e == [] and p == {"kind": "skirt", "length_m": 0
                                                   "cup_coverage": 0.7, "push_up": 0.0, "underband_m": 0.02,
                                                   "center_gore": "narrow", "closure": "back_hook", "straps": "thin",
                                                   "fingers": "full", "length": "wrist", "cuff": "none",
-                                                  "tights_style": "tights", "feet": "closed", "garters": "none"},
-      str((p, e)))
+                                                  "tights_style": "tights", "feet": "closed", "garters": "none",
+                                                  # A229: the off-shoulder fields (at their defaults on a skirt)
+                                                  "band_m": 0.025, "band_drop_m": 0.05, "lacing": "none",
+                                                  "lace_depth_m": 0.15}, str((p, e)))
 p, e = gt.validate_params({"length_m": 2.0, "kind": "cape"})
 check("[1] length clamped to 1.2 and reported", p["length_m"] == 1.2 and any("length_m" in x for x in e))
 check("[1] unknown kind reported, default skirt", p["kind"] == "skirt" and any("kind" in x for x in e))

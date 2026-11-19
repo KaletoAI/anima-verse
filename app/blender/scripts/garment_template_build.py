@@ -893,9 +893,12 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008):
     keep = []
     edge = bod.get("top_edge") or {}
     dip, half_rad = float(edge.get("dip_m") or 0.0), float(edge.get("half_rad") or 0.5)
+    off_cut = off_shoulder_cutter(bod.get("off_shoulder"), arm, ncx, ncy)
     for f, uv in zip(faces, fuv):
         cen = V[list(f)].mean(0)
         x, z = cen[0] - ncx, cen[2]
+        if off_cut is not None and off_cut(cen):
+            continue
         if straps and z > band_y + 0.005 and abs(abs(x) - bod["strap_x"]) > bod["strap_w"] / 2:
             continue
         if straps and dip > 0 and cen[1] < centre[1]:
@@ -933,6 +936,47 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008):
             "cut_s": [round(x, 3) for x in cut_s], "sleeve_rings": {k: len(v) - 1 for k, v in sleeve_rows.items()}, "cap_rings": K,
             "collar_rings": nring - K, "columns": nc, "window_cols": wcols, "r_band": r_band, "arm_under_z": None if arm_under is None else round(arm_under, 4), "section_rows": sections, "neck_ring": ring_info}
     return verts, faces, fuv, info
+
+
+def _off_arm_lat(arm, ncx, off):
+    """A229: where the band crosses each upper arm, sideways from the neck joint (left, right; metres)."""
+    return tuple(abs(float(_bone_world(arm, n)[0]) - ncx) + float(off["arm_out_m"]) for n in ("LeftArm", "RightArm"))
+
+
+def off_shoulder_cutter(off, arm, ncx, ncy):
+    """A229 — the face test of an off-shoulder piece (None for every other piece): a face goes when its centre lies
+    above the band's top edge ``line_y`` (Blender Z) within the band's crossing of the upper arm (``_off_arm_lat``) —
+    the yoke, the shoulders and the top of each sleeve's cap; the sleeve beyond the crossing stays whole, and under
+    the line the armpit joins the sleeve to the body as built. With front lacing also the faces of the centre front
+    (``-Y`` of the neck joint) within ``gap_m`` / 2 of the centre, from the band down ``depth_m``."""
+    if not off:
+        return None
+    line = float(off["line_y"])
+    lat_l, lat_r = _off_arm_lat(arm, ncx, off)
+    lace = off.get("lace") or None
+
+    def cut(cen):
+        x = float(cen[0]) - ncx
+        z = float(cen[2])
+        if z > line and abs(x) < (lat_l if x >= 0 else lat_r):
+            return True
+        if lace and float(cen[1]) < ncy and abs(x) < float(lace["gap_m"]) / 2 and z > line - float(lace["depth_m"]):
+            return True
+        return False
+    return cut
+
+
+def off_shoulder_pins(obj, off, arm, ncx):
+    """A229 — the pins of an off-shoulder piece: the elastic band, every vertex within ``band_m`` under the top edge
+    ``line_y`` across the chest and the back and up to ``band_m`` beyond the band's crossing of each upper arm (the
+    band's strip round the top of the arm). The band holds the piece below the shoulders and carries the sleeves;
+    the rest (the body, the sleeves, the lacing's edges) hangs free."""
+    co = np.array([v.co for v in obj.data.vertices])
+    line, band = float(off["line_y"]), float(off["band_m"])
+    lat_l, lat_r = _off_arm_lat(arm, ncx, off)
+    x = co[:, 0] - ncx
+    lat = np.where(x >= 0, lat_l, lat_r)
+    return np.where((co[:, 2] >= line - band) & (np.abs(x) <= lat + band))[0]
 
 
 def inside_report(tree, verts, regions, thickness):
@@ -1622,7 +1666,10 @@ def run(a):
         pin = fit_pin
     elif bod:
         nj = bod["joints"].get("neck")
-        pin = bodice_pins(obj, bod, nj[0] if nj else centre[0], -nj[2] if nj else centre[1])
+        if bod.get("off_shoulder"):
+            pin = off_shoulder_pins(obj, bod["off_shoulder"], arm, nj[0] if nj else centre[0])
+        else:
+            pin = bodice_pins(obj, bod, nj[0] if nj else centre[0], -nj[2] if nj else centre[1])
     elif "pin_top" in obj.vertex_groups:
         gi = obj.vertex_groups["pin_top"].index
         pin = np.array([v.index for v in me.vertices if any(g.group == gi for g in v.groups)], int)

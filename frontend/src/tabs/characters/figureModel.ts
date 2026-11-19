@@ -331,6 +331,12 @@ export interface TemplateParams {
   tights_style?: string
   feet?: string
   garters?: string
+  /** A229 off-shoulder (top / dress): the elastic band's height, how far it lies under the shoulder line, the front
+   *  lacing and how deep it reaches. */
+  band_m?: number
+  band_drop_m?: number
+  lacing?: string
+  lace_depth_m?: number
 }
 
 /** A223: the close-fitting kinds cut from the body's surface (`garment_template.FITTED_KINDS`): no length, flare or
@@ -345,8 +351,17 @@ export const STRAPLESS_NECKLINES = ['straight', 'sweetheart']
 
 /** Whether the piece has a covered bodice (sleeves, neckline): a jacket, or a top / dress with covered shoulders. */
 export function hasBodice(p: Pick<TemplateParams, 'kind' | 'shoulders'>): boolean {
-  return p.kind === 'jacket' || ((p.kind === 'top' || p.kind === 'dress') && p.shoulders === 'covered')
+  return p.kind === 'jacket' || ((p.kind === 'top' || p.kind === 'dress')
+    && (p.shoulders === 'covered' || p.shoulders === 'off_shoulder'))
 }
+
+/** A229: a top or dress cut off the shoulders (`garment_template.off_shoulder`). */
+export function offShoulder(p: Pick<TemplateParams, 'kind' | 'shoulders'>): boolean {
+  return (p.kind === 'top' || p.kind === 'dress') && p.shoulders === 'off_shoulder'
+}
+
+/** A229: the sleeves an off-shoulder piece may have (`garment_template.OFF_SHOULDER_SLEEVES`). */
+export const OFF_SHOULDER_SLEEVES = ['short', 'elbow', 'long']
 
 /** A221: a top cut as a corset bodice — strapless or with straps (`garment_template.corset_top`). */
 export function corsetTop(p: Pick<TemplateParams, 'kind' | 'shoulders'>): boolean {
@@ -357,6 +372,7 @@ export function corsetTop(p: Pick<TemplateParams, 'kind' | 'shoulders'>): boolea
  *  bodice's never). */
 export function choiceAllowed(key: keyof TemplateParams, choice: string, p: TemplateParams): boolean {
   if (key === 'neckline') return corsetTop(p) === STRAPLESS_NECKLINES.includes(choice)
+  if (key === 'sleeves' && offShoulder(p)) return OFF_SHOULDER_SLEEVES.includes(choice)
   return true
 }
 
@@ -397,6 +413,7 @@ export const TEMPLATE_CHOICE_LABELS: Record<string, string> = {
   none: 'None', left: 'Left', right: 'Right', front: 'Front', back: 'Back',
   short: 'Short', long: 'Long', cap: 'Cap', elbow: 'Elbow',
   strapless: 'Strapless', straps: 'Straps', covered: 'Covered (with a bodice)',
+  off_shoulder: 'Off the shoulders (Carmen)',
   crew: 'Crew', v: 'V-neck', scoop: 'Scoop', boat: 'Boat', straight: 'Straight', sweetheart: 'Sweetheart',
   closed: 'Closed', open: 'Open', stand: 'Stand collar', lapel: 'Lapels',
   stiff: 'Stiff (denim, wool)', medium: 'Medium (cotton, linen)', flowing: 'Flowing (silk, jersey)',
@@ -417,6 +434,8 @@ export const TEMPLATE_FIELD_LABELS: Record<keyof TemplateParams, string> = {
   underband_m: 'Underband (0 = the cup edge only)', center_gore: 'Between the cups', closure: 'Closure', straps: 'Straps',
   fingers: 'Fingers', length: 'Glove length', cuff: 'Cuff',
   tights_style: 'Style', feet: 'Foot', garters: 'Garters',
+  band_m: 'Elastic band height', band_drop_m: 'Band below the shoulder line', lacing: 'Lacing',
+  lace_depth_m: 'Lacing depth',
 }
 
 /** A204: one line per fabric under the select — what the cloth does and what a switch costs. */
@@ -482,7 +501,10 @@ export function templateSummary(p: TemplateParams | null, t: Tr = EN): string {
   }
   if ((p.kind === 'dress' || p.kind === 'top') && p.shoulders === 'straps') parts.push(t('Straps'))
   if (p.kind === 'top' && p.shoulders === 'strapless') parts.push(t('Strapless'))
-  if (hasBodice(p) || corsetTop(p)) {
+  if (offShoulder(p)) {
+    parts.push(t('Off the shoulders'))
+    if (p.lacing === 'front') parts.push(t('front lacing {cm}').replace('{cm}', cm(Number(p.lace_depth_m ?? 0.15))))
+  } else if (hasBodice(p) || corsetTop(p)) {
     parts.push(t(TEMPLATE_CHOICE_LABELS[p.neckline] || p.neckline))
   }
   if (p.kind === 'jacket' && p.front === 'open') parts.push(t('open front'))

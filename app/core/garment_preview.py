@@ -412,6 +412,8 @@ def shapes(params: Dict[str, Any], meas: Dict[str, Any], reg: Registration) -> D
                 w = spec["strap_w"] / 2
                 add("strap", "fill", [[sx - w, band], [sx + w, band], [sx + w, top_y], [sx - w, top_y]])
             mark(x0 + spec["strap_x"] + 0.03, top_y - 0.03, "straps")
+        elif spec.get("off_shoulder"):
+            _off_shoulder(p, m, reg, spec, right, left, hem, add, mark)
         else:
             body_r = [q for q in right if q[1] < sy - 0.02]
             body_l = [q for q in left if q[1] < sy - 0.02]
@@ -525,6 +527,34 @@ def _sleeves(p, m, reg: Registration, spec, add, mark) -> None:
         if side > 0:
             mark(end[0] + w1 / 2 + 0.015, end[1], f"{p['sleeves']} sleeve {round(length * 100)} cm · fit "
                                                    f"{p['sleeve_fit']:.2f}")
+
+
+def _off_shoulder(p, m, reg: Registration, spec, right, left, hem, add, mark) -> None:
+    """A229: an off-shoulder piece — the body cut at the band's top edge (``line_y``), the sleeves as a covered
+    bodice's with the shoulder cap above the line taken away up to where the band crosses the arm, the band as a
+    dashed guide ``band_m`` under the edge, and the front lacing as an opening from the band down."""
+    off = spec["off_shoulder"]
+    x0 = reg.x0
+    line, band = off["line_y"], off["band_m"]
+    half_sh = m.get("shoulder_w", 0.38) / 2.0
+    r_cut = [q for q in right if q[1] <= line] + [_at(right, line)]
+    l_cut = [q for q in left if q[1] <= line] + [_at(left, line)]
+    add("body", "fill", r_cut + l_cut[::-1] + hem[::-1][1:-1])
+    if spec["sleeve"]:
+        _sleeves(p, m, reg, spec, add, mark)
+    reach = half_sh + off["arm_out_m"]
+    # the shoulders above the band stay bare (an opening over the sleeves' caps)
+    add("shoulders", "cut", [[x0 - reach, line], [x0 + reach, line], [x0 + reach, line + 0.12],
+                             [x0 - reach, line + 0.12]])
+    add("band_edge", "line", [[x0 - reach, line], [x0 + reach, line]])
+    add("band", "dash", [[x0 - reach, line - band], [x0 + reach, line - band]])
+    mark(x0 + reach + 0.02, line, f"off-shoulder band {round(band * 100, 1)} cm")
+    lace = off.get("lace")
+    if lace:
+        g = lace["gap_m"] / 2
+        bottom = line - lace["depth_m"]
+        add("lacing", "cut", [[x0 - g, line + 0.004], [x0 + g, line + 0.004], [x0 + g * 0.4, bottom], [x0 - g * 0.4, bottom]])
+        mark(x0 + g + 0.02, bottom, f"lacing −{round(lace['depth_m'] * 100)} cm")
 
 
 def _crotch_y(m: Dict[str, Any]) -> float:
