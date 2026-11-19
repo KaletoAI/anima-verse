@@ -293,7 +293,10 @@ PART_BUILDS = {"attached_part": 14, "inset_part": 9}
 # 4: the lips' cut edge is a fillet with the mouth open, faces that would stand between the open walls are removed,
 # the colour is read from the hit face's own material.
 # 5: teeth, gums and a tongue (step 7, Ruling A206; the character's ``mouth_teeth`` options), the jaw opens 30 deg.
-OP_BUILDS = {**PART_BUILDS, "pair_protrusion": 6, "pair_tip": 2, "mouth_part": 6}
+# 6: the channel axis tilts -20 degrees by default (2026-11-19).
+# 7: the chin edge is the under-chin step, the cut skin keeps the surface's shading, the pouch stays behind the skin
+#    at rest, visible skin is never "standing", and extension bones keep the cut lips apart (Ruling A208).
+OP_BUILDS = {**PART_BUILDS, "pair_protrusion": 6, "pair_tip": 2, "mouth_part": 7}
 
 
 def extension_rig_fingerprint(groups, overrides=None):

@@ -232,3 +232,40 @@ def teeth_gap(upper_tip, lower_tip, hinge, theta, up):
     about the side axis through ``hinge``: (upper - lower turned) along ``up`` (metres; negative = they overlap)."""
     lower = turned(np.asarray(lower_tip, float)[None], np.asarray(hinge, float), theta)[0]
     return float((np.asarray(upper_tip, float) - lower) @ np.asarray(up, float))
+
+
+def barycentric(p, a, b, c):
+    """The barycentric weights (wa, wb, wc) of ``p`` projected onto the plane of the triangle a b c (sum 1; a
+    degenerate triangle gives all weight to ``a``)."""
+    v0, v1, v2 = b - a, c - a, p - a
+    d00, d01, d11 = v0 @ v0, v0 @ v1, v1 @ v1
+    d20, d21 = v2 @ v0, v2 @ v1
+    den = d00 * d11 - d01 * d01
+    if abs(den) < 1e-24:
+        return np.array([1., 0., 0.])
+    wb = (d11 * d20 - d01 * d21) / den
+    wc = (d00 * d21 - d01 * d20) / den
+    return np.array([1. - wb - wc, wb, wc])
+
+
+def chin_row(column, nose_i, nose_y, drop, jump, rows_up):
+    """The chin's lower edge: the row index below the nose row ``nose_i`` (rows ascending in height, ``column`` the
+    face's depth per row, larger = further back, NaN = no face) where the face turns under. That is the first row
+    going down that lies ``drop`` behind the nose tip ``nose_y`` AND lies ``jump`` further back than the row
+    ``rows_up`` above it (the step from the chin's front to the throat), or has no face. A receding chin lies more
+    than ``drop`` behind the tip over its whole front (measured: 42-63 mm on one body): the first row past ``drop``
+    alone sat on the chin's front, 10 mm under the lips, and the lip line was searched above it (Ruling A208).
+    Without such a step the first row past ``drop`` (the rule before); None without either."""
+    first = None
+    for i in range(nose_i, -1, -1):
+        d = column[i]
+        if not np.isfinite(d):
+            return i
+        if d <= nose_y + drop:
+            continue
+        if first is None:
+            first = i
+        above = column[min(len(column) - 1, i + rows_up)]
+        if not np.isfinite(above) or d - above >= jump:
+            return i
+    return first

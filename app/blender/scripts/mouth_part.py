@@ -78,7 +78,8 @@ DEFAULTS = {
     'head_bone': 'Head', 'neck_bone': 'Neck',
     # The ray grid around the head joint: half width, reach below and above it, steps.
     'grid': {'half_width': .06, 'below': .13, 'above': .10, 'step_s': .001, 'step_v': .0005},
-    'nose_window': [-.05, .08], 'chin_drop': .05,
+    # The chin's edge: ``chin_drop`` behind the nose tip and a step of ``chin_jump`` back within 2 mm of height.
+    'nose_window': [-.05, .08], 'chin_drop': .05, 'chin_jump': .02,
     'line': {'prior': .54, 'prior_sigma': .2, 'red_gain': 1., 'band': .008, 'span': .004, 'min_contrast': .03,
              'corner': .3, 'half_min': .015, 'half_max': .03},
     # The skin subdivided around the line: margin past the corners, height above and below, edge lengths.
@@ -94,7 +95,8 @@ DEFAULTS = {
               'reach': .075, 'below': .09, 'behind': .09, 'tear': .5},
     'lift': {'height': .0025, 'band': .008, 'depth': .015},
     'dome': {'height': .008, 'blend': .012},
-    'clear': {'start': .004, 'margin': .002, 'above': .003, 'below': .003, 'behind': .006, 'inside': .001},
+    'clear': {'start': .004, 'margin': .002, 'above': .003, 'below': .003, 'behind': .006, 'inside': .001,
+              'surface': .001, 'pouch': .003},
     # The lip's rounded edge with the mouth open: the fillet's radius at the cut.
     'lip': {'radius': .0045},
     'inside': {'shade': .6},
@@ -129,7 +131,7 @@ def parameters(raw):
             raise ValueError('Expected finite number: ' + name)
         return value
     p = merge(DEFAULTS, raw or {}, 'params')
-    if min(p['depth'], p['radius'], p['chin_drop'], *p['grid'].values()) <= 0:
+    if min(p['depth'], p['radius'], p['chin_drop'], p['chin_jump'], *p['grid'].values()) <= 0:
         raise ValueError('Expected positive lengths')
     if min(v for k, v in p['patch'].items()) <= 0 or min(p['rings'].values()) <= 0 or p['rings']['growth'] < 1:
         raise ValueError('Expected positive patch and ring lengths, ring growth at least 1')
@@ -245,8 +247,8 @@ def measure(body, arm, P):
     nose_y = float(blur[nose_i, nose_j])
     band = max(1, int(round(.003 / g['step_s'])))
     column = np.nanmin(depth[:, max(0, nose_j - band):nose_j + band + 1], axis=1)
-    chin_i = next((i for i in range(nose_i, -1, -1)
-                   if not np.isfinite(column[i]) or column[i] > nose_y + P['chin_drop']), None)
+    chin_i = mouth_math.chin_row(column, nose_i, nose_y, P['chin_drop'], P['chin_jump'],
+                                 max(1, int(round(.002 / g['step_v']))))
     if chin_i is None:
         raise NoMouth('No chin edge below the nose')
     line = P['line']
@@ -361,8 +363,11 @@ def build(group, output):
     f_of = lambda p: p[2] - _line_z(coef, s0, p[0])
 
     _common.progress('cutting')
+    # The surface's own shading before the cut (``source_normals``): the cut skin gets it back after (Ruling A208).
+    shading = source_normals(body)
     bm = bmesh.new()
     bm.from_mesh(body.data)
+    first_new = len(bm.verts)
     bm.verts.ensure_lookup_table()
     bm.faces.ensure_lookup_table()
     uv_layer = bm.loops.layers.uv.active
@@ -578,6 +583,18 @@ def build(group, output):
             keep_cols.append(i)
     keep_cols.append(n - 1)
     rings_pos = [ring(k) for k in range(K)]
+    # The pouch stays behind the face's skin at rest: a pouch axis that runs down and back leaves the skin through
+    # a lower lip that curves back toward the corners (measured: the pouch was the first thing 56 front rays hit
+    # there, holes with the mouth closed — Ruling A208). Behind ring 0 (the rim, on the skin) a point less than
+    # ``clear.pouch`` behind what the rays from the front hit goes back to that distance (more than a vertex needs: the
+    # faces between the rim and ring 1 are chords of a convex lip).
+    pushed_back = 0
+    for k in range(1, K):
+        for i, q in enumerate(rings_pos[k]):
+            surface = _grid_at(depth, S, Z, q[0], q[2])
+            if np.isfinite(surface) and q[1] < surface + P['clear']['pouch']:
+                q[1] = surface + P['clear']['pouch']
+                pushed_back += 1
     pouch = []
 
     def face(tri, flip):
@@ -833,6 +850,13 @@ def build(group, output):
         where = in_pouch(p)
         if where is None or not where[2] or where[0] < cl['behind'] or where[0] > D - cl['margin']:
             continue
+        # Never the face's visible skin (within ``clear.surface`` of what the rays from the front hit at rest):
+        # toward the corners the lips curve back past ``clear.behind``, and a lower lip there, turning by less
+        # than the lower wall, read as standing in the channel — removing it opened holes into the channel with the
+        # mouth closed (Ruling A208, measured: 56 front rays on one body).
+        surface = _grid_at(depth, S, Z, p[0], p[2])
+        if np.isfinite(surface) and p[1] <= surface + cl['surface']:
+            continue
         drop = float(np.linalg.norm(turned(p[None], hinge, theta)[0] - p))
         low_, up_, lens_ = wall_shares(float((p - O) @ lateral), where[0], where[3])
         top = -up_ * drop + P['dome']['height'] * lens_ * math.sin(math.pi * where[0] / D) ** .5
@@ -911,10 +935,15 @@ def build(group, output):
     unmatched = sum(1 for kinds in open_edges.values() if kinds != [2, 2])
     pouch_tris = len(pouch)
     skin_tris = sum(1 for fc in bm.faces if fc[tag] == 1)
+    bm.faces.index_update()
+    # Every face the subdivision and the cut made or changed (skin and its seam copies alike): the ones with a new
+    # vertex. The pouch's faces are not skin.
+    cut_faces = [fc.index for fc in bm.faces if fc[tag] != 2 and any(v.index >= first_new for v in fc.verts)]
     bm.faces.layers.int.remove(tag)
     bm.to_mesh(body.data)
     bm.free()
     body.data.update()
+    reshaded = restore_shading(body, cut_faces, shading)
 
     # The jaw (part 3): with a declared bone the turn is the BONE's — the share becomes its weight, taken from the
     # vertex's other weights in proportion — and the shape key keeps what a bone cannot do (the upper lip's lift,
@@ -1005,8 +1034,51 @@ def build(group, output):
             'cleared_faces': cleared, 'standing_faces_removed': len(crossing), 'pouch_uv': [float(dark_uv[0]), float(dark_uv[1])],
             'inside': {'lip_line_rgb': [round(float(c), 3) for c in lip_rgb],
                        'base_color_linear': [round(float(c), 4) for c in inside_rgb]},
-            'pouch_tris': pouch_tris, 'skin_tris': skin_tris, 'rim_segments': len(open_edges),
+            'pouch_tris': pouch_tris, 'skin_tris': skin_tris, 'reshaded_corners': reshaded, 'pouch_pushed_back': pushed_back, 'rim_segments': len(open_edges),
             'unmatched_open_edges': unmatched, 'teeth': teeth}
+
+
+def source_normals(body):
+    """The body's shading before the cut: its triangles (world) with the custom normal of each of their corners
+    (world, unit)."""
+    me = body.data
+    M = body.matrix_world
+    R = M.to_3x3().inverted().transposed()
+    me.calc_loop_triangles()
+    V = np.array([tuple(M @ v.co) for v in me.vertices])
+    corner = np.array([tuple((R @ n.vector).normalized()) for n in me.corner_normals])
+    tris = np.array([tuple(t.vertices) for t in me.loop_triangles])
+    loops = np.array([tuple(t.loops) for t in me.loop_triangles])
+    bvh = BVHTree.FromPolygons([Vector(p) for p in V], [tuple(int(i) for i in t) for t in tris])
+    return {'V': V, 'tris': tris, 'normal': corner[loops], 'bvh': bvh}
+
+
+def restore_shading(body, faces, shading):
+    """Give the corners of the cut skin ``faces`` the normal the uncut surface had at their position (barycentric
+    over the corner normals of its nearest triangle, ``source_normals``); every other corner keeps its own. The cut splits and subdivides
+    these faces, and a new corner inherits the custom normal of a neighbouring one: near the mouth corners, where
+    the surface folds, that turned normals up to 45 degrees away from the surface and shaded the corners as dark
+    cracks with the mouth closed. Returns the number of corners set."""
+    me = body.data
+    M = body.matrix_world
+    to_local = M.to_3x3().transposed()
+    normals = [tuple(n.vector) for n in me.corner_normals]
+    count = 0
+    for fi in faces:
+        poly = me.polygons[fi]
+        for li in poly.loop_indices:
+            p = M @ me.vertices[me.loops[li].vertex_index].co
+            loc, _n, ti, _d = shading['bvh'].find_nearest(p)
+            if loc is None:
+                continue
+            A, B, C = (shading['V'][k] for k in shading['tris'][ti])
+            w = mouth_math.barycentric(np.array(loc), A, B, C)
+            n = w @ shading['normal'][ti]
+            n = Vector(n / max(np.linalg.norm(n), 1e-12))
+            normals[li] = tuple((to_local @ n).normalized())
+            count += 1
+    me.normals_split_custom_set(normals)
+    return count
 
 
 def _teeth_context(body, arm, group, P, inside_slot, lower_wall_idx, jaw_name, frame):

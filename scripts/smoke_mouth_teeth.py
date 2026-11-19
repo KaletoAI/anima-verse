@@ -34,7 +34,7 @@ No server, no world DB, no Blender (``mouth_teeth.py`` imports bpy: its defaults
     size 1.3, enabled "yes", an unknown key -> ValueError. The group: a profile without options has no params.teeth;
     {mouth_teeth {shade 2}} -> params.teeth {shade 2} (only what differs) and another extension fingerprint (the step
     becomes due); {mouth_teeth {enabled True}} (= the default) -> no params.teeth, the same fingerprint.
-[7] OP_BUILDS["mouth_part"] is at least 5 now (6 since the default tilt of -20 degrees, 2026-11-19); at the commit
+[7] OP_BUILDS["mouth_part"] is at least 5 now (6 since the default tilt of -20 degrees, 2026-11-19; 7 since A208); at the commit
     before A206 (7458a196e) it was 4 and the Blender op's jaw opened 26 degrees (DEFAULTS jaw.open_deg 26.), now 30.
 [8] The opening pass never BENDS the teeth, and since 2026-11-19 it moves them as rigid rows (owner finding: the part
     passed through both rows): `bindChannelOpening` binds a `mouth_teeth` mesh with a `rigid` entry (`isRigidTeeth`

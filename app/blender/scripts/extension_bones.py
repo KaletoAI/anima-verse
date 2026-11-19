@@ -2860,11 +2860,54 @@ def contact_follow_weights(p, co, edges, faces, plan):
     return follow, len(contacts)
 
 
+# Coincident copies whose joint weights differ by more than this when the run STARTS were split on purpose (the two
+# lips of a cut mouth, the two walls of its closed channel): ``unify_coincident_weights`` leaves them apart. Export
+# seam copies agree far closer than this.
+SPLIT_WEIGHT_MIN = .05
+# Every vertex's position and joint weights when the run starts (``weights_before``), by its index in ``co``.
+WEIGHTS_BEFORE = []
+
+
+def split_apart(weights):
+    """Whether coincident copies' joint weights (one dict per copy) differ by more than ``SPLIT_WEIGHT_MIN``."""
+    names = {name for w in weights for name in w}
+    return any(max(w.get(name, 0.) for w in weights) - min(w.get(name, 0.) for w in weights) > SPLIT_WEIGHT_MIN
+               for name in names)
+
+
+def weights_before(co, owners):
+    """``(position, weights)`` per vertex — read before any weight is written."""
+    out = []
+    for i, c in enumerate(co):
+        mesh, vi = owners[i]
+        out.append((Vector(c), {mesh.vertex_groups[ge.group].name: ge.weight
+                                for ge in mesh.data.vertices[vi].groups if ge.weight > 0}))
+    return out
+
+
+def split_before(group, co):
+    """Whether the copies ``group`` (indices into ``co``) were already split when the run started: their weights then
+    (``WEIGHTS_BEFORE``, the same index while the vertex is still at its position) are ``split_apart``. A vertex
+    not found there (the mesh changed) counts as not split."""
+    before = []
+    for i in group:
+        if i >= len(WEIGHTS_BEFORE) or (WEIGHTS_BEFORE[i][0] - Vector(co[i])).length > COINCIDENT_EPSILON_M:
+            return False
+        before.append(WEIGHTS_BEFORE[i][1])
+    return split_apart(before)
+
+
 def unify_coincident_weights(co, owners, joint_index, final_weights):
     """Unify differing exported copies after all transfer and influence limits.
 
     Positional connected components ignore normals. Agreeing groups receive no
     writes. Return the global changed-group count, including body-only groups.
+
+    Copies that were split when the run started (``split_before``) are
+    a deliberate split the body came with — the two lips of a cut mouth, the
+    two walls of its closed channel (Ruling A208: averaging them gave both lips
+    the jaw's half, so the open mouth stayed a stretched sheet) — and are left
+    as they are.
     """
     copies = KDTree(len(co))
     for i,c in enumerate(co):
@@ -2894,6 +2937,8 @@ def unify_coincident_weights(co, owners, joint_index, final_weights):
                             for ge in mesh.data.vertices[vi].groups
                             if mesh.vertex_groups[ge.group].name in joint_index and ge.weight > 0})
         if all(w == weights[0] for w in weights[1:]):
+            continue
+        if split_before(group, co):
             continue
         # Rank exactly rounded sums: dividing per copy, or summing in copy
         # order, lets rounding break ties that the lower joint index decides.
@@ -3198,6 +3243,7 @@ def extension_bones(args):
             if weight <= 1e-8:
                 return skip('Skinned vertices require nonzero deform weights',status='failed')
     co,edges,owners,normals,faces = mesh_arrays(meshes)
+    WEIGHTS_BEFORE[:] = weights_before(co,owners)
     if args['params'].get('metrics_only',False):
         plans=[]
         absent={}
