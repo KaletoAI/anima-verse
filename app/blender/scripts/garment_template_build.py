@@ -1344,7 +1344,8 @@ def pose_shape(arm, body, obj, pose, pin, names, W, rest_world, fab, thickness, 
                                 shrink=float(fab.get("shrink", 0.0)), self_collision=False, thickness=thickness,
                                 extra=lower, crop_m=CROP_M, collision_quality=SHAPE_COLLISION_QUALITY,
                                 prebuilt=collider,
-                                mass=float(fab.get("cloth_mass", 0.3)), air_damping=float(fab.get("air_damping", 5.0)))
+                                mass=float(fab.get("cloth_mass", 0.3)), air_damping=float(fab.get("air_damping", 5.0)),
+                                **gd.spring_kwargs(fab))
     draped = np.array([tmp.matrix_world @ v.co for v in tmp.data.vertices])
     for o in [tmp, *held]:
         bpy.data.objects.remove(o)
@@ -1594,7 +1595,8 @@ def run(a):
                                 quality=int(prm.get("drape_quality") or fab["quality"]),
                                 bending=float(fab["bending"]), shrink=float(fab.get("shrink", 0.0)),
                                 self_collision=False, thickness=thickness, extra=lower, crop_m=CROP_M, collider=col,
-                                mass=float(fab.get("cloth_mass", 0.3)), air_damping=float(fab.get("air_damping", 5.0)))
+                                mass=float(fab.get("cloth_mass", 0.3)), air_damping=float(fab.get("air_damping", 5.0)),
+                                **gd.spring_kwargs(fab))
     me = obj.data
     co1 = np.array([v.co for v in me.vertices])
     st = np.linalg.norm(co1[edges[:, 0]] - co1[edges[:, 1]], axis=1) / np.maximum(rest_len, 1e-6)

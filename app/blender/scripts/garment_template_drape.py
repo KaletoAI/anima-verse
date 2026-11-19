@@ -785,9 +785,18 @@ def clear_of_body(obj, tree, *, thickness):
             "wall_s": round(time.time() - t0, 2)}
 
 
+def spring_kwargs(fab):
+    """A214: the spring settings a fabric preset names (leather: tension / compression / shear / structural damping);
+    a preset without them keeps ``drape``'s defaults, so its run is unchanged."""
+    out = {k: float(fab[k]) for k in ("tension", "compression", "shear") if k in fab}
+    if "structural_damping" in fab:
+        out["structural_damping"] = float(fab["structural_damping"])
+    return out
+
+
 def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collision, thickness, extra=(),
           collider_faces=80000, collision_quality=4, crop_m=None, prebuilt=None, collider=None, mass=0.3,
-          air_damping=5.0):
+          air_damping=5.0, tension=15.0, compression=15.0, shear=5.0, structural_damping=None):
     """Collider = decimated rest copy of the body (+ the ``extra`` lower garment layers). Returns CPU seconds and
     pin drift (mm). ``crop_m`` (Ruling A144): collider faces farther than this outside the cloth's box are dropped
     after the remesh (a jacket never reaches the shins; the collision tests scale with the faces)."""
@@ -834,8 +843,11 @@ def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collisio
     s = cl.settings
     s.quality = quality
     s.mass = mass                          # A204: only the sheer fabric passes its own (0.08)
-    s.tension_stiffness = s.compression_stiffness = 15
-    s.shear_stiffness = 5
+    s.tension_stiffness = tension            # A214: only the leather fabric passes its own (80 / 80 / 80)
+    s.compression_stiffness = compression
+    s.shear_stiffness = shear
+    if structural_damping is not None:       # A214: leather 25; the others keep Blender's default
+        s.tension_damping = s.compression_damping = s.shear_damping = structural_damping
     s.bending_stiffness = bending
     s.vertex_group_mass = "pin"
     s.pin_stiffness = 1.0

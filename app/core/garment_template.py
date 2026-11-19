@@ -101,7 +101,25 @@ FABRICS: Dict[str, Dict[str, float]] = {
     # a quarter of the mass and a fifth of flowing's bending stiffness let it fall into finer folds and flutter more.
     # The see-through part is the assembly's material (``material_overrides``), never the drape.
     "sheer": {"bending": 0.01, "mass": 0.08, "quality": 7, "shrink": 0.0, "cloth_mass": 0.08, "air_damping": 2.0},
+    # A214: leather — Blender's shipped "Leather" cloth preset taken whole (quality 15, mass 0.4, tension /
+    # compression / shear 80, bending 150, structural damping 25, air 1): heavy, barely stretching, few wide folds.
+    # Both finishes drape identically (``DRAPE_FABRIC``); only the surface differs (``LEATHER_SURFACES``).
+    "leather_glossy": dict(_LEATHER_CLOTH := {"bending": 150.0, "mass": 0.4, "quality": 15, "shrink": 0.0,
+                                              "cloth_mass": 0.4, "air_damping": 1.0, "tension": 80.0,
+                                              "compression": 80.0, "shear": 80.0, "structural_damping": 25.0}),
+    "leather_rough": dict(_LEATHER_CLOTH),
 }
+#: A214: fabrics that share one drape — ``tsig`` keys them by the shared name, so a switch between them only
+#: re-assembles (the material changes, the cloth run does not).
+DRAPE_FABRIC = {"leather_glossy": "leather", "leather_rough": "leather"}
+#: A214: the surface of each leather finish (``material_overrides``). Glossy = low roughness under a full clear
+#: coat (KHR_materials_clearcoat); rough = matte suede / nubuck with a faint velvety sheen, no clear coat. Never metal.
+LEATHER_SURFACES: Dict[str, Dict[str, Any]] = {
+    "leather_glossy": {"roughness": 0.2, "clearcoat": (1.0, 0.08), "sheen": None},
+    "leather_rough": {"roughness": 0.85, "clearcoat": None, "sheen": (0.25, 0.7)},
+}
+#: Bumped when a ``LEATHER_SURFACES`` value changes (part of ``material_key``, so the assembly is redone).
+LEATHER_SURFACE_VERSION = 1
 #: A204: the fabric drawn see-through. Its piece is grafted with alphaMode BLEND at ``opacity``, double-sided, and
 #: hides nothing: neither the body faces under it (``body_cover``, A133) nor an inner piece's faces (A192).
 SHEER = "sheer"
@@ -156,7 +174,10 @@ THRESHOLDS = {
 BUILD_WALL_S = 60.0
 #: A204: the wall budget's factor per fabric (a fabric not named keeps 1.0, so its rows stay as before). The sheer
 #: cloth runs a softer, lighter solve: measured on Gelina's skirt 59.3 / 64.5 s against flowing's 57.8 s.
-WALL_FACTOR = {"sheer": 2.0}
+#: A214: leather solves at quality 15 with stiff springs: Gelina's 76 cm skirt took 64.8 s work wall against medium's
+#: 46.3 s on the same host (x1.40); 1.5 leaves the same headroom the other fabrics have.
+LEATHER_WALL = 1.5
+WALL_FACTOR = {"sheer": 2.0, "leather_glossy": LEATHER_WALL, "leather_rough": LEATHER_WALL}
 
 
 def wall_limit(params: Optional[Dict[str, Any]]) -> float:
@@ -907,7 +928,11 @@ def sheer_opacity(params: Optional[Dict[str, Any]]) -> Optional[float]:
 
 
 def material_key(params: Optional[Dict[str, Any]]) -> str:
-    """The assembly identity of a template piece's fabric material: ``sheer:<opacity>`` or "" (opaque)."""
+    """The assembly identity of a template piece's fabric material: ``sheer:<opacity>``,
+    ``leather_<finish>.v<LEATHER_SURFACE_VERSION>`` (A214) or "" (the plain fabrics)."""
+    fabric = (params or {}).get("fabric")
+    if fabric in LEATHER_SURFACES:
+        return f"{fabric}.v{LEATHER_SURFACE_VERSION}"
     opacity = sheer_opacity(params)
     return "" if opacity is None else f"{SHEER}:{opacity}"
 
@@ -916,7 +941,24 @@ def material_overrides(params: Optional[Dict[str, Any]]) -> Optional[Dict[str, A
     """A204: the ``glb_mesh.graft`` material keys of a sheer piece — alphaMode BLEND with the base colour's alpha =
     the opacity (the baked picture keeps the item's colour as the tint), double-sided (the inside of a skirt is seen
     through its front), ``extras.anima_sheer`` for the renderers (depth write off, drawn after the body). None for an
-    opaque fabric (the graft stays exactly as before)."""
+    opaque fabric (the graft stays exactly as before).
+
+    A214: a leather finish sets its fixed surface over whatever the piece's material preset gave — roughness, metal 0,
+    the generator's roughness map dropped, a clear coat (glossy) or a faint sheen (rough); the extension it does
+    not use is removed (``None``), so a cotton preset's sheen never lands on glossy leather."""
+    surface = LEATHER_SURFACES.get(str((params or {}).get("fabric") or ""))
+    if surface is not None:
+        ext: Dict[str, Any] = {"KHR_materials_clearcoat": None, "KHR_materials_sheen": None}
+        if surface["clearcoat"]:
+            factor, rough = surface["clearcoat"]
+            ext["KHR_materials_clearcoat"] = {"clearcoatFactor": factor, "clearcoatRoughnessFactor": rough}
+        if surface["sheen"]:
+            colour, rough = surface["sheen"]
+            ext["KHR_materials_sheen"] = {"sheenColorFactor": [colour] * 3, "sheenRoughnessFactor": rough}
+        return {"pbrMetallicRoughness": {"metallicRoughnessTexture": None, "roughnessFactor": surface["roughness"],
+                                         "metallicFactor": 0.0},
+                "extensions": ext,
+                "extras": {"anima_material": params["fabric"], "explicit_metallic": False}}
     opacity = sheer_opacity(params)
     if opacity is None:
         return None
@@ -932,6 +974,8 @@ def _md5(payload: Any) -> str:
 def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List[str]) -> str:
     """The cache key of one drape (module docstring)."""
     params = {k: v for k, v in params.items() if k not in MATERIAL_ONLY}
+    if params.get("fabric") in DRAPE_FABRIC:          # A214: the leather finishes share one drape
+        params["fabric"] = DRAPE_FABRIC[params["fabric"]]
     return _md5({"params": params, "version": TEMPLATE_VERSION, "base": base_sha, "texture": texture_sha,
                  "lower": sorted(lower)})
 

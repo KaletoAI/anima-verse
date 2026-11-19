@@ -596,14 +596,16 @@ def _template_params(garment: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return garment_template.params_of(item) or (garment.get("record") or {}).get("params")
 
 
-def _sheer_key(garment: Dict[str, Any]) -> str:
+def _fabric_key(garment: Dict[str, Any]) -> str:
+    """A204 / A214: the template fabric's material identity (sheer opacity, leather finish), "" for the plain ones."""
     from app.core import garment_template
     return garment_template.material_key(_template_params(garment))
 
 
 def _is_sheer(garment: Dict[str, Any]) -> bool:
     """A204: a see-through template piece hides nothing under it (body faces, inner pieces)."""
-    return bool(_sheer_key(garment))
+    from app.core import garment_template
+    return garment_template.sheer_opacity(_template_params(garment)) is not None
 
 
 def _merge_overrides(base: Optional[Dict[str, Any]], extra: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -657,9 +659,10 @@ def _state(wanted: List[Dict[str, Any]], tier: str, *,
             entry["hem"] = {"mode": hem["mode"], "lsig": over["lsig"] if over else "", "fallback": hem.get("fallback")}
         if g["kind"] != HAIR:
             entry["material"] = _material(g)[0]
-            sheer = _sheer_key(g)
-            if sheer:
-                entry["material"] += "+" + sheer      # A204: a sheer template's opacity re-assembles on the CPU
+            fabric = _fabric_key(g)
+            if fabric:
+                # A204 / A214: a sheer opacity or a leather finish re-assembles on the CPU
+                entry["material"] += "+" + fabric
         if g["kind"] == CLOTHING:
             # the body faces this piece covers are dropped from the delivered body (``body_cover``, Ruling A133)
             entry["cover"] = body_cover.VERSION
