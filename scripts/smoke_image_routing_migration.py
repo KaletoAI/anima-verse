@@ -319,8 +319,11 @@ def part_c():
                                                 len(c["image_generation"]["backends"])),
           (False, 1))
     c = {"image_generation": {}}
+    # 9 mesh tuples (incl. quadruped-local, mesh-rig-unirig) + mesh-shrink +
+    # 2 upscalers (Iris-3B-Upscale, Real-ESRGAN-CPU) = 12, counted in
+    # config._DEFAULT_MESH_BACKENDS / _default_mesh_backend_entries.
     check("C3 missing list seeded", (cfgmod._seed_default_mesh_backends(c),
-                                     len(c["image_generation"]["backends"])), (True, 11))
+                                     len(c["image_generation"]["backends"])), (True, 12))
     c = {"image_generation": {"backends": []}}
     check("C3 emptied list stays empty", (cfgmod._seed_default_mesh_backends(c),
                                           c["image_generation"]["backends"]), (False, []))

@@ -1300,19 +1300,13 @@ def _seed_default_mesh_backends(config: dict) -> bool:
     (``config_scope.shipped_default``): a layer file stores the list only when
     it differs from the seed, so a missing key means "the shipped list" and
     this brings it back. A list the admin edited — emptied to ``[]``
-    included — retains its gateway entries. The URL-free local quadruped
-    backend is the sole addition to an existing list.
+    included — stays exactly as configured: nothing is added to it, so a
+    removed seed entry (the local quadruped rigger too) stays removed.
 
     In-memory only — see `migrate_file()` for the disk side.
     """
     ig = config.setdefault("image_generation", {})
     if "backends" in ig:
-        entries = ig["backends"]
-        if isinstance(entries, list) and not any(
-                isinstance(b, dict) and b.get("name") == "quadruped-local" for b in entries):
-            entries.append(next(b for b in _default_mesh_backend_entries()
-                                if b["name"] == "quadruped-local"))
-            return True
         return False
     ig["backends"] = _default_mesh_backend_entries()
     logger.info("Default mesh backends seeded (%d)",
@@ -1930,11 +1924,18 @@ def _migrate_mesh_rig_split(config: dict) -> bool:
         if (routing or {}).get(occasion):
             if occasion == "rig_creature":
                 hint = repr(routing[occasion])
-                if hint not in _quadruped_chain_hints:
+                if hint not in _quadruped_chain_hints and any(
+                        isinstance(b, dict) and b.get("name") == "quadruped-local"
+                        for b in entries):
                     logger.info("Rig creature chain preserved; quadruped-local is available for local quadruped fitting")
                     _quadruped_chain_hints.add(hint)
             continue
         if occasion == "rig_creature":
+            if "rig_creature" in (routing or {}):
+                # A stored chain is the admin's, an emptied [] included
+                # (rigging creatures switched off) — only a MISSING chain is
+                # seeded.
+                continue
             if routing is None:
                 routing = ig["routing"] = {}
             routing[occasion] = ["quadruped-local"] + [

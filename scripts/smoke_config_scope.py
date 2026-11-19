@@ -20,10 +20,11 @@ behaviour, calendar). ``mixed`` marks only a node whose children differ.
 dotted config path; the recursive split of a config (next task) is built on
 ``scope_of`` and ``child_scopes_differ``.
 
-Compatibility updates: d4aa4edd seeds the local quadruped entry even for
-custom/empty lists; dea4cf1f adds two upscalers outside the mesh tuples.
+Compatibility updates: dea4cf1f adds two upscalers outside the mesh tuples.
 The catalog has nine mesh tuples + one shrink + two upscalers = twelve.
-Index-format secret placeholders include the added local backend.
+A stored backend list (custom or emptied) is the admin's and gets no seed
+entry added (owner 2026-11-19, "as configured"; d4aa4edd had appended the
+local quadruped entry to every stored list).
 
 PART 1 — what is checked, and where every expected value comes from
 -------------------------------------------------------------------
@@ -330,7 +331,7 @@ defaults (Part 2):
     has 12 entries (9 mesh tuples + 1 shrink alias + 2 upscalers). After
     ``migrate_file`` the instance file is still ``{}`` with the old mtime.
     Counter-check: an instance with ``image_generation.backends: []`` keeps
-    only the local quadruped backend (d4aa4edd); gateway entries stay empty.
+    ``[]`` — nothing is seeded into an emptied list.
 6.8 RELOAD. ``load(w, i)``, then ``reload()``:
     ``get("server.log_level") == "DEBUG"`` — the instance path is remembered.
 6.9 ADMIN PAYLOAD. The settled 6.1 pair; the effective config goes through
@@ -421,7 +422,7 @@ dropped with one warning naming the secrets.json. Expectations by hand:
     {"backends": {"a": {"api_key": "KA"}}}}``: a still gets "KA" (its name is
     unique and non-empty), and ONE warning names ``i/secrets.json`` and says
     the list has entries without a unique name. The next ``save`` writes the
-    list in the index format (``[{"api_key": "KA"}, {}, {}]``) — the key is kept.
+    list in the index format (``[{"api_key": "KA"}, {}]``) — the key is kept.
 8.10 MASK WITHOUT PARTNER. current ``[a, b(KB), c(KC)]``, payload
     ``[a, c("***"), b2("***")]`` (rename b -> b2 plus a reorder in one save):
     c gets "KC"; b2 has no partner (its index 2 holds c, which the payload
@@ -1145,8 +1146,8 @@ def part_3():
         check(_untouched(w), "6.7: the world stays untouched")
         _write(i, {"image_generation": {"backends": []}})
         cfg.load(w, i)
-        check([b["name"] for b in cfg.get("image_generation.backends")] == ["quadruped-local"],
-              "6.7: an emptied list gets only the mandatory local quadruped backend")
+        check(cfg.get("image_generation.backends") == [],
+              "6.7: an emptied list stays empty")
 
     # 6.10 fresh state
     with tempfile.TemporaryDirectory() as tmp:
@@ -1244,7 +1245,7 @@ def part_4():
         _write(isec, {"image_generation": {"backends": [{}, {"api_key": "KB"}, {"api_key": "KC"}]}})
         cfg.load(w, i)
         got = _keys_by_name(cfg.get("image_generation.backends"))
-        check(got == {"a": None, "b": "KB", "c": "KC", "quadruped-local": None}, f"8.1: index-format secrets are read ({got!r})")
+        check(got == {"a": None, "b": "KB", "c": "KC"}, f"8.1: index-format secrets are read ({got!r})")
         data = copy.deepcopy(cfg.get_all())
         data["image_generation"]["backends"].insert(1, {"name": "x"})
         cfg.save(data)
@@ -1254,13 +1255,13 @@ def part_4():
         check("KB" not in itext and "KC" not in itext, "8.1: no key in i/config.json")
         cfg.load(w, i)
         got = _keys_by_name(cfg.get("image_generation.backends"))
-        check(got == {"a": None, "x": None, "b": "KB", "c": "KC", "quadruped-local": None}, f"8.1: reload after insert ({got!r})")
+        check(got == {"a": None, "x": None, "b": "KB", "c": "KC"}, f"8.1: reload after insert ({got!r})")
         conf = _read(i)
         conf["image_generation"]["backends"].insert(0, {"name": "y"})
         _write(i, conf)
         cfg.load(w, i)
         got = _keys_by_name(cfg.get("image_generation.backends"))
-        check(got == {"y": None, "a": None, "x": None, "b": "KB", "c": "KC", "quadruped-local": None},
+        check(got == {"y": None, "a": None, "x": None, "b": "KB", "c": "KC"},
               f"8.1: a hand insert in config.json keeps every key on its entry ({got!r})")
 
         # 8.2 unknown name
@@ -1270,7 +1271,7 @@ def part_4():
                                                         "zz": {"api_key": "ZZ"}}}})
         cfg.load(w, i)
         bes = cfg.get("image_generation.backends")
-        check([b.get("name") for b in bes] == ["a", "x", "b", "c", "quadruped-local"] and "ZZ" not in repr(bes),
+        check([b.get("name") for b in bes] == ["a", "x", "b", "c"] and "ZZ" not in repr(bes),
               f"8.2: an unknown name is ignored ({bes!r})")
         check(_keys_by_name(bes).get("b") == "KB", "8.2: the known name still gets its key")
 
@@ -1374,7 +1375,7 @@ def part_4():
                   "8.9: no misleading 'no entry named a' warning")
             cfg.save(cfg.get_all())
             got = _read(isec) if isec.exists() else None
-            check(got == {"image_generation": {"backends": [{"api_key": "KA"}, {}, {}]}},
+            check(got == {"image_generation": {"backends": [{"api_key": "KA"}, {}]}},
                   f"8.9: the next save keeps the key (index format) ({got!r})")
     finally:
         cfg.logger.removeHandler(grab)

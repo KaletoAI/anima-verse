@@ -3,9 +3,14 @@
 
 Hand-derived expectations from plan-mesh-rig-trennung P1/P2: two character
 occasions accept any img2mesh; rig occasions accept any mesh2rig but require
-a configured chain. Migration seeds the humanoid chain in cost order and P3 seeds empty creature
-chains as quadruped-local then existing generic riggers, drops old
+a configured chain. Migration seeds the humanoid chain in cost order and P3 seeds a MISSING creature
+chain as quadruped-local then existing generic riggers, drops old
 declarations and preserves enabled flags; a second pass changes nothing.
+A stored backend list is the admin's: the 6 entries below stay 6 (no
+quadruped-local appended), and a stored creature chain stays as configured —
+an emptied [] included (owner 2026-11-19). Old code (8fa2d763f) appended the
+local quadruped entry to every list and re-seeded [] to ['quadruped-local'],
+so the "emptied" case returned True with 2 entries and a reseeded chain.
 A validated source and its served static GLB must be durable before rigging.
 A failed replacement retains the NEW source/static pair, never the old rig.
 Two busy rig runs produce failed task records, no fallback and no cooldown.
@@ -57,7 +62,7 @@ cfg = {'image_generation': {'backends': [
 ]}}
 assert _migrate_mesh_rig_split(cfg)
 entries = cfg['image_generation']['backends']
-assert len(entries) == 7 and entries[0]['enabled'] is False and entries[1]['enabled'] is True
+assert len(entries) == 6 and entries[0]['enabled'] is False and entries[1]['enabled'] is True
 assert all('mesh_rig' not in b for b in entries)
 assert cfg['image_generation']['routing'] == {'rig_humanoid': ['mia-low', 'mia-high'], 'rig_creature': ['quadruped-local', 'unirig', 'off']}
 assert not _migrate_mesh_rig_split(cfg)
@@ -78,16 +83,24 @@ for raw in (['old'], 'old', '', False):
 null_root = {'image_generation': {'routing': None, 'backends': [{'name': 'mia', 'api_type': 'openai_mesh', 'category': 'mesh2rig', 'mesh_rig': 'mixamo'}]}}
 assert _migrate_mesh_rig_split(null_root)
 assert null_root['image_generation']['routing'] == {'rig_humanoid': ['mia'], 'rig_creature': ['quadruped-local']}
-# P3 seeds absent/empty creature chains but retains a nonempty user chain.
-for initial in ({}, {'rig_creature': []}):
-    seeded = {'image_generation': {'backends': [], 'routing': initial}}
-    assert _migrate_mesh_rig_split(seeded)
-    assert seeded['image_generation']['routing']['rig_creature'] == ['quadruped-local']
-    assert not _migrate_mesh_rig_split(seeded)
-owned = {'image_generation': {'backends': [], 'routing': {'rig_creature': ['custom-animal']}}}
-assert _migrate_mesh_rig_split(owned)
-assert not _migrate_mesh_rig_split(owned)
-assert owned['image_generation']['routing']['rig_creature'] == ['custom-animal']
+# An emptied creature chain and a list without quadruped-local stay as configured.
+emptied = {'image_generation': {'routing': {'rig_creature': []}, 'backends': [
+    {'name': 'unirig', 'api_type': 'openai_mesh', 'category': 'mesh2rig'}]}}
+assert not _migrate_mesh_rig_split(emptied)
+assert emptied['image_generation']['routing'] == {'rig_creature': []}
+assert [b['name'] for b in emptied['image_generation']['backends']] == ['unirig']
+# P3 seeds an absent creature chain; a stored one ([] or a user chain) is kept,
+# and the emptied backend list stays empty.
+seeded = {'image_generation': {'backends': [], 'routing': {}}}
+assert _migrate_mesh_rig_split(seeded)
+assert seeded['image_generation']['routing']['rig_creature'] == ['quadruped-local']
+assert seeded['image_generation']['backends'] == []
+assert not _migrate_mesh_rig_split(seeded)
+for chain in ([], ['custom-animal']):
+    owned = {'image_generation': {'backends': [], 'routing': {'rig_creature': list(chain)}}}
+    assert not _migrate_mesh_rig_split(owned)
+    assert owned['image_generation']['routing']['rig_creature'] == chain
+    assert owned['image_generation']['backends'] == []
 from app.core.config import _default_mesh_backend_entries
 from app.core.config_schema import SECTIONS
 timeout_field = SECTIONS['image_generation']['sub_arrays']['backends']['fields']['timeout']
@@ -815,7 +828,7 @@ assert config.migrate_file(world_cfg, instance_path=inst/'config.json')
 public = json.loads((inst/'config.json').read_text())
 secret_text = (inst/'secrets.json').read_text()
 assert 'test-secret' not in (inst/'config.json').read_text()
-assert len(public['image_generation']['backends']) == 2
+assert len(public['image_generation']['backends']) == 1  # the admin's [rigger], nothing appended
 assert 'mesh_rig' not in public['image_generation']['backends'][0]
 assert public['image_generation']['routing']['rig_creature'] == ['quadruped-local', 'rigger']
 config.load(world_cfg, instance_path=inst/'config.json')

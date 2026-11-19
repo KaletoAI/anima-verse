@@ -12,6 +12,11 @@ C: only an explicit tpose source (including []) produces tpose_view.
 D: the shipped two-member chain prunes, a one-member override survives, and
 reset restores the two-member default in memory while removing it from disk.
 E: a loaded world-only config contains no instance deviations, so save works.
+F: owner 2026-11-19 "as configured": the 12-entry seed minus quadruped-local
+(11 entries) plus rig_creature [] loads as exactly those 11 names and [];
+both differ from the shipped defaults, so save stores both unchanged, and a
+reload still has no quadruped-local and []. Fails on 8fa2d763f: the loader
+appended quadruped-local (12 names) and re-seeded [] to the default chain.
 All storage is temporary; paths are initialized before any world-DB import.
 """
 import json
@@ -76,13 +81,28 @@ def main():
         assert config.get("image_generation.routing.rig_creature") == default
         print("PASS D: shipped default, override and reset")
 
+        # F: a deliberate removal survives load + save + reload.
+        mine = [b for b in config._default_mesh_backend_entries()
+                if b["name"] != "quadruped-local"]
+        load({"image_generation": {"backends": mine, "routing": {"rig_creature": []}}})
+        names = [b["name"] for b in config.get("image_generation.backends")]
+        assert "quadruped-local" not in names and len(names) == 11, names
+        assert config.get("image_generation.routing.rig_creature") == []
+        stored = save()["image_generation"]
+        assert [b["name"] for b in stored["backends"]] == [b["name"] for b in mine]
+        assert stored["routing"] == {"rig_creature": []}
+        config.load(world, instance)
+        assert "quadruped-local" not in [b["name"] for b in config.get("image_generation.backends")]
+        assert config.get("image_generation.routing.rig_creature") == []
+        print("PASS F: removed quadruped-local and an emptied creature chain stay as configured")
+
         # Match smoke_config_scope part_3: no initialized instance path.
         paths._instance_dir = None
         config.load(world)
         config.save(config.get_all())
         assert json.loads(world.read_text()) == {}
         print("PASS E: world-only save")
-    print("OK — routing seed cases A–E passed")
+    print("OK — routing seed cases A–F passed")
 
 
 if __name__ == "__main__":

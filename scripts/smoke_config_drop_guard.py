@@ -9,8 +9,9 @@ A The partial image toggle omits providers, llm_routing and server, and
   prepare_layer accepts the destructive candidate without raising.
 B A full view changes only enabled and retains every stored section.
 C Removing p2, b2 and the profile string chain leaves nonempty object lists,
-  so it saves p1 and custom b1, plus the loader-seeded quadruped-local
-  backend, and no profile without a refusal.
+  so it saves p1 and custom b1 — exactly the admin's list, the loader adds
+  no seed entry to it (owner 2026-11-19: "as configured") — and no profile
+  without a refusal.
 D Empty providers is one dropped path; explicit confirmation stores [],
   while a reset restores _DEFAULT_PROVIDERS.
 E Two custom world seasons -> [] is one dropped path; confirmation saves [].
@@ -126,7 +127,7 @@ with tempfile.TemporaryDirectory(prefix="config-drop-guard-") as root:
     adm.save_layer("instance", view)
     stored = json.loads((instance / "config.json").read_text())
     assert [p["name"] for p in stored["providers"]] == ["p1"]
-    assert [b["name"] for b in stored["image_generation"]["backends"]] == ["b1", "quadruped-local"]
+    assert [b["name"] for b in stored["image_generation"]["backends"]] == ["b1"]
     assert "profile" not in stored.get("image_generation", {}).get("routing", {})
     print("PASS C individual entries and occasion removable")
 

@@ -29,8 +29,10 @@ EXPECTATIONS, derived by hand from the scope rules and the migrations:
     outfit_imagegen_default lands in the chains of `expression` and `tpose`
     (both read expression_imagegen_default, then outfit_imagegen_default) —
     so expression and tpose both use ["flux*"]. Commit 861404c8 adds
-    tpose_view as a copy; d4aa4edd adds the local quadruped backend to
-    this custom list and seeds rig_creature = ["quadruped-local"].
+    tpose_view as a copy. The custom backend list stays ["flux-a"] — a
+    stored list is the admin's, nothing is appended to it (owner
+    2026-11-19); the MISSING rig_creature chain is seeded as
+    ["quadruped-local"] + the generic riggers of the list (none).
     The later copy seeds (``config._seed_routing_copies``: a missing target
     copies its source once, a missing source seeds nothing), in run order:
       97a97ad3d  garment_view <- tpose_view = ["flux*"];
@@ -291,7 +293,7 @@ def run_checks() -> None:
           json.dumps(inst.get("providers")))
     backends = (inst.get("image_generation") or {}).get("backends") or []
     check("instance has the image backend of src (key blanked)",
-          [b.get("name") for b in backends] == ["flux-a", "quadruped-local"] and backends[0]["api_key"] == "",
+          [b.get("name") for b in backends] == ["flux-a"] and backends[0]["api_key"] == "",
           json.dumps(backends))
     check("instance routing seeded from outfit_imagegen_default",
           (inst.get("image_generation") or {}).get("routing") == EXPECTED_ROUTING,
