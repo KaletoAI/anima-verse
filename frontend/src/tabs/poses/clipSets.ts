@@ -47,6 +47,8 @@ export interface ApiClipRow {
   bend_limits?: { limits: BendLimitsWire; source: 'clip' | 'package' | 'default' } | null
   /** Ruling A158: the attached part's direct root angle (null for a solo clip). */
   root_angle?: RootAngleWire | null
+  /** Ruling A212: how far Auto-align may move the part's role (cm) and where it comes from (null for a solo clip). */
+  align_range?: { cm: number; source: 'clip' | 'default' } | null
   origin?: string
   has_sidecar?: boolean
   /** Per-surface corrections in centimetres of the 1.70 m reference figure. */

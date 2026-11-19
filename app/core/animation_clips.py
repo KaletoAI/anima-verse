@@ -1364,6 +1364,8 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         "bend_limits": clip_bend_limits(meta, entry["kind"]) if entry["role"] else None,
         # Ruling A158: the attached part's direct root angle {pitch_deg, yaw_deg}; None for a solo clip.
         "root_angle": clip_root_angle(meta) if entry["role"] else None,
+        # Ruling A212: how far Auto-align may move the part's role ({"cm", "source"}); None for a solo clip.
+        "align_range": clip_align_range(meta) if entry["role"] else None,
         # Saved orientation and renderer calibration. Angles and partner B
         # offsets are baked; the whole-clip shift is applied at placement.
         "orientation": {k: geometry.get(k) for k in
@@ -2244,6 +2246,66 @@ def set_clip_root_angle(library: str, rel: str, angle: Any) -> List[Dict[str, An
     reload_clip_caches()
     logger.info("clip root angle: %s%s (%s) -> %s", f"{cset}/" if cset else "", kind, library,
                 data.get("root_angle") or "0/0")
+    return [_view_of(p, cset, library) for p in _kind_files(path.parent, kind)]
+
+
+#: Ruling A212: how far Auto-align may move the part's role around the user's base arrangement, forward/back and
+#: up/down (cm; sideways stays at most 3 cm, tilt/roll at most 10°). The clip's own value wins over the default.
+ALIGN_RANGE_DEFAULT_CM = 8.0
+ALIGN_RANGE_BOUNDS_CM = (1.0, 40.0)
+
+
+def validate_align_range(value: Any) -> float:
+    """Ruling A212: a finite number of cm within ``ALIGN_RANGE_BOUNDS_CM``."""
+    import math
+    lo, hi = ALIGN_RANGE_BOUNDS_CM
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) \
+            or not lo <= value <= hi:
+        raise ClipLibraryError(f"alignment range must be a number of cm from {lo:g} to {hi:g}")
+    return float(value)
+
+
+def clip_align_range(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Ruling A212: ``{"cm", "source"}`` — the ``<kind>.json``'s ``align_range_cm`` (source ``clip``) or the
+    default (source ``default``)."""
+    own = (meta or {}).get("align_range_cm") if isinstance(meta, dict) else None
+    if own is not None:
+        try:
+            return {"cm": validate_align_range(own), "source": "clip"}
+        except ClipLibraryError:
+            pass
+    return {"cm": ALIGN_RANGE_DEFAULT_CM, "source": "default"}
+
+
+@_library_writer
+def set_clip_align_range(library: str, rel: str, cm: Any) -> List[Dict[str, Any]]:
+    """Writes (or with ``None`` clears = default) a pair/group clip's alignment range in its shared
+    ``<kind>.json`` (Ruling A212). Refused for a solo clip, an invalid value and a kind without a sidecar."""
+    path = resolve_clip(library, rel)
+    if not path.is_file():
+        raise ClipNotFound(f"{rel} does not exist in the {library} library")
+    kind, role = parse_clip_role(path.name)
+    if not role:
+        raise ClipLibraryError(f"'{kind}' is a solo clip — only a pair clip has an alignment range")
+    root = library_root(library).resolve()
+    cset = path.parent.name if path.parent.resolve() != root else ""
+    sidecar = path.parent / f"{kind}.json"
+    if not sidecar.is_file():
+        raise ClipLibraryError(f"'{kind}' has no sidecar {sidecar.name} — re-import the clip first")
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ClipLibraryError(f"{sidecar.name} is not readable: {e}")
+    if not isinstance(data, dict):
+        raise ClipLibraryError(f"{sidecar.name} is not an object")
+    if cm is None:
+        data.pop("align_range_cm", None)
+    else:
+        data["align_range_cm"] = validate_align_range(cm)
+    _write_json_atomic(sidecar, data)
+    reload_clip_caches()
+    logger.info("clip alignment range: %s%s (%s) -> %s", f"{cset}/" if cset else "", kind, library,
+                data.get("align_range_cm") or "default")
     return [_view_of(p, cset, library) for p in _kind_files(path.parent, kind)]
 
 

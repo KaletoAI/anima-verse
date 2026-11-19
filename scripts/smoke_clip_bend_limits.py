@@ -18,6 +18,8 @@ Expected, by hand:
 [8] A158 root angle: {} -> 0/0; {"pitch_deg": -30} -> pitch -30, yaw 0; refused: pitch 61, pitch -61, yaw 31,
     a bool, a key "roll_deg"; clip_root_angle(None) and of a junk stored value -> 0/0, of {"pitch_deg": 20,
     "yaw_deg": -15} -> 20/-15.
+[9] A212 alignment range: 8 and 40 and 1 accepted as floats; refused 0.5, 41, a bool, "8", NaN;
+    clip_align_range(None) -> 8 cm source default, of {"align_range_cm": 12} -> 12 source clip, of a junk 99 -> default.
 """
 import os
 import shutil
@@ -76,5 +78,15 @@ for bad in ({"pitch_deg": 61}, {"pitch_deg": -61}, {"yaw_deg": 31}, {"pitch_deg"
 assert ac.clip_root_angle(None) == {"pitch_deg": 0.0, "yaw_deg": 0.0}
 assert ac.clip_root_angle({"root_angle": "junk"}) == {"pitch_deg": 0.0, "yaw_deg": 0.0}
 assert ac.clip_root_angle({"root_angle": {"pitch_deg": 20, "yaw_deg": -15}}) == {"pitch_deg": 20.0, "yaw_deg": -15.0}
+assert [ac.validate_align_range(v) for v in (8, 40, 1)] == [8.0, 40.0, 1.0]               # [9]
+for bad in (0.5, 41, True, "8", float("nan")):
+    try:
+        ac.validate_align_range(bad)
+    except ac.ClipLibraryError:
+        continue
+    raise AssertionError(f"accepted {bad}")
+assert ac.clip_align_range(None) == {"cm": 8.0, "source": "default"}
+assert ac.clip_align_range({"align_range_cm": 12}) == {"cm": 12.0, "source": "clip"}
+assert ac.clip_align_range({"align_range_cm": 99}) == {"cm": 8.0, "source": "default"}
 shutil.rmtree(tmp, ignore_errors=True)
 print("smoke_clip_bend_limits OK")

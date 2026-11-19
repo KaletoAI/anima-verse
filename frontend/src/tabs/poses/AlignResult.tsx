@@ -1,0 +1,175 @@
+/**
+ * The ONE result block of Auto-align (Ruling A212 — the former Auto-align and "Check this pair" results merged): the
+ * contact and clearance lamps, per moving role whether the alignment range stopped it ("move it closer by hand"), the
+ * five phases of the stroke before → after, and a collapsible detail table — before, after, and with the game's fine
+ * fit and follow on top.
+ */
+import { useI18n } from '../../i18n/I18nProvider'
+import { hasInside, targetWordOf } from './contactWords'
+import { LampDot } from './StatusLamp'
+import type { AutoAlignResult, PhaseAlign } from './PlacePreview'
+
+type Ok = Extract<AutoAlignResult, { ok: true }>
+const CELL = { textAlign: 'right' as const, padding: '0 4px', whiteSpace: 'nowrap' as const }
+
+/** Ruling A145: "Bend 28° of max 35°" with its lamp — yellow when the part was at its limit in some frame. */
+export function BendLine({ bend }: { bend: { maxDeg: number; limitDeg: number; atLimit: number; frames: number; lamp: 'green' | 'yellow' } }) {
+  const { t } = useI18n()
+  return (
+    <div data-testid="bend-readout" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+      <LampDot lamp={bend.lamp} title={bend.lamp === 'yellow'
+        ? t('The attached part is at its bend limit in {n} of {m} frames: the rest of the way is the partner’s shift or turn.')
+          .replace('{n}', String(bend.atLimit)).replace('{m}', String(bend.frames))
+        : t('The attached part bends within its limit in every frame.')} />
+      <span>{t('Bend {deg}° of max {max}°').replace('{deg}', bend.maxDeg.toFixed(0)).replace('{max}', bend.limitDeg.toFixed(0))}</span>
+    </div>
+  )
+}
+
+/** Ruling A150: "Support gap 4 mm" — how far the moving figure's support left the surface it rests on (+ float,
+ *  − sink against its own clip posture); yellow when the posture held the solve back. */
+export function PostureLine({ gapMm, sinkMm, limited, heightMm }: { gapMm: number; sinkMm: number; limited: boolean; heightMm?: number | null }) {
+  const { t } = useI18n()
+  return (
+    <div data-testid="posture-readout" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+      <LampDot lamp={limited ? 'yellow' : 'green'} title={limited
+        ? t('Posture limit: the partner would have to float or sink to reach the contact; it stays supported and the rest is left as the contact’s error.')
+        : t('The partner stays supported: it neither floats nor sinks against its own pose.')} />
+      <span>{t('Support gap {gap} mm, sunk {sink} mm').replace('{gap}', gapMm.toFixed(0)).replace('{sink}', sinkMm.toFixed(0))}</span>
+      {heightMm !== undefined && heightMm !== null ? (
+        <span style={{ opacity: 0.7 }} title={t('The lowest supporting capsule above the surface of its place (a shin capsule ends at the ankle).')}>
+          · {t('{mm} mm above the surface').replace('{mm}', heightMm.toFixed(0))}</span>
+      ) : null}
+    </div>
+  )
+}
+
+/** The five phases of one contact: tip off the axis, depth along it, shaft angle — before → after. */
+function PhaseTable({ phases, inside }: { phases: PhaseAlign[]; inside: boolean }) {
+  const { t } = useI18n()
+  const name = (p: number) => (p <= 0 ? t('Start') : p >= 1 ? t('End') : p === 0.25 ? '¼' : p === 0.5 ? '½' : '¾')
+  const pair = (a: number | undefined, b: number | undefined, unit: string) =>
+    `${a === undefined ? '–' : (Math.round(a) || 0).toFixed(0)} → ${b === undefined ? '–' : (Math.round(b) || 0).toFixed(0)} ${unit}`
+  return (
+    <table data-testid="align-phases" style={{ borderCollapse: 'collapse' }}>
+      <thead><tr><th style={{ textAlign: 'left' }}>{t('Phase')}</th>
+        <th style={CELL} title={t('How far the tip is off the target’s axis.')}>{t('tip off axis')}</th>
+        {inside ? <th style={CELL} title={t('How deep the tip is along the axis (+ = inside).')}>{t('depth')}</th> : null}
+        <th style={CELL} title={t('The shaft against the axis.')}>{t('angle')}</th></tr></thead>
+      <tbody>{phases.map((p) => (
+        <tr key={p.phase}><td>{name(p.phase)}</td>
+          <td style={CELL}>{pair(p.before?.tipMm, p.after?.tipMm, 'mm')}</td>
+          {inside ? <td style={CELL}>{pair(p.before?.depthMm, p.after?.depthMm, 'mm')}</td> : null}
+          <td style={CELL}>{pair(p.before?.axisDeg, p.after?.axisDeg, '°')}</td></tr>
+      ))}</tbody>
+    </table>
+  )
+}
+
+export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
+  const { t } = useI18n()
+  if (!result.ok) {
+    return <div data-testid="align-auto-result" data-result={JSON.stringify(result)} style={{ fontSize: 11 }}>
+      <span style={{ color: 'var(--danger, #f85149)' }}>{result.reason}</span></div>
+  }
+  const r: Ok = result
+  const inside = hasInside(r.target)
+  const f = r.followed
+  return (
+    <div data-testid="align-auto-result" data-result={JSON.stringify(r)} style={{ fontSize: 11, lineHeight: 1.35 }}>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <LampDot lamp={r.lamp} title={r.lamp === 'green'
+          ? t('On the opening at the outermost frame and inside the channel at the deepest.')
+          : r.lamp === 'yellow' ? t('Inside at the deepest frame, but off the axis or off the opening.')
+            : t('Not inside the channel at the deepest frame.')} />
+        <LampDot lamp={r.clearLamp} title={(r.clearLamp === 'green'
+          ? t('Nothing else interpenetrates: only the attached part enters the other body, through the channel (at most 5 mm elsewhere).')
+          : t('The bodies interpenetrate besides the channel by {mm} mm, deepest at {pair} (green at most 5 mm, yellow at most 20 mm).')
+            .replace('{mm}', r.overlapAfterMm.toFixed(0)).replace('{pair}', r.clearWorst || '–'))} />
+        <span>{t('{by} → {of}: {channel}').replace('{by}', r.by).replace('{of}', r.of)
+          .replace('{channel}', r.target === 'channel' ? (r.channel.split(':').pop() || r.channel) : targetWordOf(t, r.target))}</span>
+      </div>
+      {r.movers.map((m) => (
+        <div key={m.role} data-testid="align-cap" data-lamp={m.lamp} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <LampDot lamp={m.lamp} title={t('Within the alignment range')} />
+          {m.capped ? (
+            <span style={{ color: m.lamp === 'red' ? 'var(--danger, #f85149)' : 'var(--warning, #d29922)' }}>
+              {(m.offCm > 0.5
+                ? t('The base arrangement is {x} cm off — move it closer by hand.').replace('{x}', m.offCm.toFixed(1))
+                : t('The base arrangement is {x}° off in tilt/roll — turn it closer by hand.').replace('{x}', m.offDeg.toFixed(1)))}
+              {' '}({m.role.toUpperCase()} {m.shiftCm.map((v) => v.toFixed(1)).join(' / ')} cm)
+            </span>
+          ) : (
+            <span>{t('{role} adjusted within ±{r} cm: {s} cm').replace('{role}', m.role.toUpperCase())
+              .replace('{r}', m.rangeCm.toFixed(0)).replace('{s}', m.shiftCm.map((v) => v.toFixed(1)).join(' / '))}
+              {m.turnDeg[0] || m.turnDeg[1]
+                ? ` · ${t('tilt {a}° roll {b}°').replace('{a}', m.turnDeg[0].toFixed(1)).replace('{b}', m.turnDeg[1].toFixed(1))}` : ''}</span>
+          )}
+        </div>
+      ))}
+      {r.relations.map((x, i) => (
+        <div key={i} style={{ marginTop: 2 }}>
+          {r.relations.length > 1 ? <div style={{ opacity: 0.8 }}>{x.by} → {x.of} {targetWordOf(t, x.target)}</div> : null}
+          <PhaseTable phases={x.phases} inside={hasInside(x.target)} />
+        </div>
+      ))}
+      <details data-testid="align-details">
+        <summary>{t('Details')}</summary>
+        <table style={{ borderCollapse: 'collapse' }}>
+          <thead><tr><th /><th style={CELL}>{t('before')}</th><th style={CELL}>{t('after')}</th>
+            <th style={CELL} title={t('The aligned clip with the fine fit the game makes when the interaction starts (at most 5 cm and 10°) and the per-frame follow.')}>{t('in game')}</th></tr></thead>
+          <tbody>
+            {([
+              [inside ? t('Tip to opening at the outermost frame') : t('Tip to target at the outermost frame'), r.before.entryMm, r.after.entryMm, f?.entryMm, 'mm'],
+              ...(inside ? [[t('Depth at the deepest frame'), r.before.depthMm, r.after.depthMm, f?.depthMm, 'mm'] as const] : []),
+              [t('Off the axis, worst frame'), r.before.maxLateralMm, r.after.maxLateralMm, f?.maxLateralMm, 'mm'],
+              [t('Shaft against the axis at the outermost frame'), r.before.axisDeg, r.after.axisDeg, f?.axisDeg, '°'],
+              [t('Interpenetration besides the channel'), r.overlapBeforeMm, r.overlapAfterMm, r.check?.clearMm, 'mm'],
+            ] as const).map(([label, a, b, c, unit]) => (
+              <tr key={label}><td>{label}</td>
+                <td style={CELL}>{a.toFixed(0)} {unit}</td>
+                <td style={CELL}>{b.toFixed(0)} {unit}</td>
+                <td style={CELL}>{c === undefined || c === null || !Number.isFinite(c) ? '–' : `${c.toFixed(0)} ${unit}`}</td></tr>
+            ))}
+          </tbody>
+        </table>
+        {r.check?.fit ? (
+          <div>{t('{by} → {of}: fine fit {x} / {y} / {z} mm, tilt {tilt}°, roll {roll}°')
+            .replace('{by}', r.check.fit.by).replace('{of}', r.check.fit.of)
+            .replace('{x}', r.check.fit.shiftMm[0].toFixed(0)).replace('{y}', r.check.fit.shiftMm[1].toFixed(0))
+            .replace('{z}', r.check.fit.shiftMm[2].toFixed(0))
+            .replace('{tilt}', r.check.fit.turnDeg[0].toFixed(1)).replace('{roll}', r.check.fit.turnDeg[1].toFixed(1))}</div>
+        ) : null}
+        {r.bend ? <BendLine bend={r.bend} /> : null}
+        {r.posture ? <PostureLine gapMm={r.posture.gapMm} sinkMm={r.posture.sinkMm}
+          limited={r.posture.limited} heightMm={r.posture.heightMm} /> : null}
+        {r.limitReason === 'posture' ? (
+          <div data-testid="align-limit-reason" style={{ color: 'var(--warning, #d29922)' }}>
+            {t('Contact lamp {lamp}: posture limit — the partner stays supported instead of floating.')
+              .replace('{lamp}', r.lamp === 'red' ? t('red') : t('yellow'))}</div>
+        ) : null}
+        {r.check?.clearWorst ? (
+          <div className="ga-form-hint" style={{ margin: 0 }}>
+            {t('Deepest besides the channel: {pair}').replace('{pair}', r.check.clearWorst)}</div>
+        ) : null}
+        {r.relations.length > 1 ? (
+          <table data-testid="align-auto-relations" style={{ borderCollapse: 'collapse' }}>
+            <thead><tr><th style={{ textAlign: 'left' }}>{t('Contact')}</th><th /><th>{t('to target')}</th><th>{t('depth')}</th>
+              <th>{t('off axis')}</th><th>{t('shift')}</th></tr></thead>
+            <tbody>{r.relations.map((x, i) => (
+              <tr key={i}><td>{x.by} → {x.of} {targetWordOf(t, x.target)}</td>
+                <td><LampDot lamp={x.lamp} title={t('Contact')} /></td>
+                <td style={CELL}>{x.before.entryMm.toFixed(0)} → {x.after.entryMm.toFixed(0)} mm</td>
+                <td style={CELL}>{hasInside(x.target) ? `${x.after.depthMm.toFixed(0)} mm` : '–'}</td>
+                <td style={CELL}>{x.before.maxLateralMm.toFixed(0)} → {x.after.maxLateralMm.toFixed(0)} mm</td>
+                <td style={CELL}>{x.part.toUpperCase()} {x.shiftCm.map((v) => v.toFixed(1)).join(' / ')} cm</td></tr>
+            ))}</tbody>
+          </table>
+        ) : null}
+      </details>
+      <div className="ga-form-hint" style={{ margin: 0 }}>
+        {t('Measured on the pair shown; another pair may need its own run. Save stores the sliders.')}
+      </div>
+    </div>
+  )
+}

@@ -49,10 +49,10 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ConfirmDialog } from '@anima/player-ui'
-import { bendLimitsOf, POSTURE, clipHeightGroup, type ClipHeightOffsetsCm } from '@anima/scene-render'
+import { bendLimitsOf, clipHeightGroup, ALIGN_RANGE_CM_DEFAULT, type ClipHeightOffsetsCm } from '@anima/scene-render'
 import { BendLimitsEditor, ContactRelations, RootAngleEditor } from './ContactRelations'
-import { hasInside, targetWordOf } from './contactWords'
-import { PlacePreview, type AutoAlignResult, type AutoAlignRun, type PairCheckResult, type PlaceReadout } from './PlacePreview'
+import { PlacePreview, type AutoAlignResult, type AutoAlignRun, type PlaceReadout } from './PlacePreview'
+import { AlignResultBlock } from './AlignResult'
 import type { AlignmentDraft, ContactRelation } from '@anima/scene-render'
 import { ClipPreview, ROLE_COLOR } from './ClipPreview'
 import { invalidateAnimationPreviewClips } from '../characters/Model3DViewer'
@@ -348,9 +348,9 @@ export function ClipLibrary({
     roleShiftCm: Record<string, [number, number, number]> }>>({})
   const alignAllStop = useRef(false)
   const [autoAlign, setAutoAlign] = useState<AutoAlignResult | null>(null)
-  /** Ruling A129.3: the pair shown before and with the per-pair fine fit the game runs. */
-  const pairCheckRef = useRef<(() => PairCheckResult) | null>(null)
-  const [pairCheck, setPairCheck] = useState<PairCheckResult | null>(null)
+  /** Ruling A212: "Also align end clips" — one row per end clip: the Auto-align result and whether it was stored. */
+  const [finaleRun, setFinaleRun] = useState<{ running: boolean; rows: { kind: string; result: AutoAlignResult; saved: boolean
+    error: string }[] } | null>(null)
   /** Finale clips the server changed along with the last apply/save. */
   const [finalesTouched, setFinalesTouched] = useState<string[]>([])
   /** Whether the open clip holds unsaved edits — set below, read by `guardSwitch` from event handlers. */
@@ -592,8 +592,14 @@ export function ClipLibrary({
   const contactsDirty = JSON.stringify(contactDraft) !== savedContactsKey
   const bendDirty = !!savedBend && JSON.stringify(bendDraft) !== savedBendKey
   const rootDirty = rootDraft.pitch_deg !== (savedRoot?.pitch_deg ?? 0) || rootDraft.yaw_deg !== (savedRoot?.yaw_deg ?? 0)
+  // Ruling A212: the clip's alignment range (cm) — a draft over the saved (or default) value, reset when the clip changes.
+  const savedAlignRange = orientTarget?.align_range?.cm ?? ALIGN_RANGE_CM_DEFAULT
+  const [alignRangeDraft, setAlignRangeDraft] = useState<number | null>(null)
+  useEffect(() => { setAlignRangeDraft(null) }, [savedAlignRange, selected])
+  const alignRangeCm = alignRangeDraft ?? savedAlignRange
+  const alignRangeDirty = alignRangeDraft !== null && alignRangeDraft !== savedAlignRange
   /** Everything a clip switch, a view switch or a tab switch would throw away. */
-  const unsaved = orientDirty || heightDirty || contactsDirty || bendDirty || rootDirty
+  const unsaved = orientDirty || heightDirty || contactsDirty || bendDirty || rootDirty || alignRangeDirty
   unsavedRef.current = unsaved
   useEffect(() => { onUnsaved?.(unsaved) }, [onUnsaved, unsaved])
   useEffect(() => () => onUnsaved?.(false), [onUnsaved])
@@ -635,6 +641,53 @@ export function ClipLibrary({
     ? finaleKindsOf(poses, row.kind, { set: orientTarget.set, library: libraryOf(orientTarget) },
       clips.map((c) => ({ kind: c.kind, set: c.set, library: libraryOf(c) })))
     : []), [clips, orientTarget, poses, row])
+  /** Ruling A212: "Also align end clips" — after the base is saved, each end clip of the same set is opened in the
+   *  Places view and aligned with the base's contact relations, joined to the base's last frame (`endPose`), within
+   *  the same range; each result is stored on that end clip (orient: the B / role offsets and B's tilt/roll; the
+   *  relations too when the end clip has none of its own). Back to the base afterwards. */
+  const runAlignFinales = useCallback(async () => {
+    const baseRun = autoAlignRef.current
+    if (!row || !orientTarget || !baseRun?.endPose) return
+    const end = baseRun.endPose()
+    if (!end) return
+    const baseKind = row.kind, baseSet = previewSet
+    const relations = contactDraft
+    const rangeCm = alignRangeCm
+    const out: { kind: string; result: AutoAlignResult; saved: boolean; error: string }[] = []
+    setFinaleRun({ running: true, rows: [] })
+    const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+    for (const kind of finaleKinds) {
+      pick(kind, baseSet)
+      let run: AutoAlignRun | null = null
+      for (let k = 0; k < 240; k++) {
+        await wait(500)
+        const cur = autoAlignRef.current
+        if (cur && cur.kind === kind && (cur.set ?? '') === baseSet && (cur.figures ?? 0) >= 2) { run = cur; break }
+      }
+      await wait(1500)
+      const result: AutoAlignResult = run ? run({ relations, rangeCm, join: end }) : { ok: false, reason: t('No pair was filled on a place of this clip.') }
+      let saved = false, error = ''
+      const file = clips.find((c) => c.kind === kind && (c.set || '') === baseSet && (c.role || '') === 'a')
+      if (result.ok && file) {
+        try {
+          const pair = (row.roles ?? 0) === 2
+          const moved = Object.fromEntries(Object.entries(result.roleShiftCm).filter(([, v]) => v.some((x) => x !== 0)))
+          await apiPost(`${clipPath(file)}/orient`, { yaw_deg: 0, tilt_deg: 0, roll_deg: 0,
+            ...(pair ? { partner_shift_cm: result.roleShiftCm.b ?? [0, 0, 0] } : { role_shift_cm: moved }),
+            ...(pair && result.turnDeg.some((v) => v !== 0) ? { partner_turn_deg: result.turnDeg } : {}) })
+          if (file.contact_target?.source !== 'clip' && relations.length) await apiPatch(clipPath(file), { contact_target: relations })
+          saved = true
+        } catch (e) { error = (e as Error).message }
+      } else if (result.ok) error = t('No end clip file for this set.')
+      out.push({ kind, result, saved, error })
+      setFinaleRun({ running: true, rows: [...out] })
+    }
+    invalidateAnimationPreviewClips()
+    try { await onReload() } catch { /* the rows above already say what was stored */ }
+    setSeq((n) => n + 1)
+    setFinaleRun({ running: false, rows: out })
+    pick(baseKind, baseSet)
+  }, [alignRangeCm, clips, contactDraft, finaleKinds, onReload, orientTarget, pick, previewSet, row, t])
   // A green check that is already stored (same prop and places) is not offered again on its own.
   const checkStored = !!(placeCheck && savedCheck && savedCheck.prop === placeCheck.prop
     && savedCheck.place === placeCheck.place)
@@ -1265,7 +1318,7 @@ export function ClipLibrary({
                     draftRef={draftRef} draftSeq={alignmentDraft} bust={seq} height={previewH}
                     poses={poses.filter((p) => (p.animation || '').trim() === row.kind)}
                     onOpenPose={onOpenPose} onReadout={setPlaceReadout} autoAlignRef={autoAlignRef}
-                    pairCheckRef={pairCheckRef} />
+                    />
                 ) : null}
                 {innerTab === 'clip' && !row.missing ? (
                   <ClipPreview
@@ -1438,14 +1491,15 @@ export function ClipLibrary({
                         onSave={(next) => { void run(orientTarget, { root_angle: next }) }} />
                       </>) : null}
                       {shownAlignTab === 'check' ? (<>
+                      <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
                       <button type="button" className="ga-btn ga-btn-sm" data-testid="align-auto"
                         disabled={orientLocked || innerTab !== 'places'}
                         title={innerTab !== 'places'
                           ? t('Open the Places view: Auto-align measures the figures shown there.')
-                          : t('Plays the clip with the figures shown and, per contact, moves the place with the attached part (a pair: partner B) so that the tip sits at the target at the outermost frame and stays on the target’s axis; a pair’s B is then turned (tilt/roll, at most 20°). Writes the sliders above; Save stores them as usual.')}
+                          : t('Adjusts the role with the attached part (a pair: partner B) around the arrangement you set — at most the alignment range forward/back and up/down, 3 cm sideways and 10° tilt/roll; the receiving role never moves. The stroke is fitted at its start, ¼, ½, ¾ and end together, all contacts of the role at once. Then it plays the result with the game’s fine fit on top. Writes the sliders above; Save stores them as usual.')}
                         onClick={() => {
                           const run = autoAlignRef.current
-                          const res: AutoAlignResult = run ? run() : { ok: false, reason: t('The place preview is still loading.') }
+                          const res: AutoAlignResult = run ? run({ rangeCm: alignRangeCm }) : { ok: false, reason: t('The place preview is still loading.') }
                           setAutoAlign(res)
                           if (res.ok && isPairTarget) {
                             setPartnerShift(res.roleShiftCm.b ?? res.shiftCm)
@@ -1454,15 +1508,45 @@ export function ClipLibrary({
                         }}>
                         {t('Auto-align')}
                       </button>
-                      <button type="button" className="ga-btn ga-btn-sm" data-testid="pair-check"
-                        disabled={innerTab !== 'places'}
-                        title={t('Plays the pair shown over six loops: the first as stored with the dials above, then the fine fit the game makes for this pair when the interaction starts (at most 5 cm and 10°), with and without the per-frame follow; the last two loops are measured. Changes nothing, saves nothing.')}
-                        onClick={() => {
-                          const run = pairCheckRef.current
-                          setPairCheck(run ? run() : { ok: false, reason: t('The place preview is still loading.') })
-                        }}>
-                        {t('Check this pair')}
+                      <label style={{ display: 'flex', gap: 3, alignItems: 'center', fontSize: 11 }}
+                        title={t('How far Auto-align may move the role with the attached part forward/back and up/down around your arrangement (sideways at most 3 cm, tilt/roll at most 10°). Stored in this clip’s sidecar; default 8 cm.')}>
+                        {t('Alignment range')}
+                        <input type="number" min={1} max={40} step={1} value={alignRangeCm} data-testid="align-range"
+                          style={{ width: 48 }} disabled={orientLocked}
+                          onChange={(e) => setAlignRangeDraft(Math.max(1, Math.min(40, Number(e.target.value) || 8)))} /> cm
+                        {alignRangeDirty ? <span style={{ color: 'var(--warning, #d29922)' }}>{t('unsaved')}</span>
+                          : <span style={{ opacity: 0.7 }}>{orientTarget.align_range?.source === 'clip' ? t('saved') : t('default')}</span>}
+                        <button type="button" className="ga-btn ga-btn-sm" data-testid="align-range-save" disabled={!alignRangeDirty || busy}
+                          onClick={() => { void run(orientTarget, { align_range_cm: alignRangeCm }) }}>{t('Save')}</button>
+                      </label>
+                      </div>
+                      <button type="button" className="ga-btn ga-btn-sm" data-testid="align-finales"
+                        disabled={innerTab !== 'places' || !finaleKinds.length || unsaved || orientBusy || heightBusy || !!finaleRun?.running}
+                        title={!finaleKinds.length ? t('This clip has no end clip beside it.')
+                          : unsaved ? t('Save this clip first: the end clips are aligned to the saved base.')
+                            : t('Aligns each end clip ({kinds}) with this clip’s contact relations and joins its first frame to where this clip’s last frame leaves the figures, within the same range; then stores each end clip’s result (one Blender run each, no hub jobs).').replace('{kinds}', finaleKinds.join(', '))}
+                        onClick={() => guardSwitch(() => { void runAlignFinales() })}>
+                        {finaleRun?.running ? t('Aligning end clips… ({n} done)').replace('{n}', String(finaleRun.rows.length))
+                          : t('Also align end clips ({n})').replace('{n}', String(finaleKinds.length))}
                       </button>
+                      {finaleRun?.rows.length ? (
+                        <table data-testid="align-finales-result" data-result={JSON.stringify(finaleRun.rows)}
+                          style={{ borderCollapse: 'collapse', fontSize: 11 }}>
+                          <tbody>{finaleRun.rows.map((x) => (
+                            <tr key={x.kind}>
+                              <td style={{ paddingRight: 6 }}>{x.kind}</td>
+                              {x.result.ok ? (
+                                <>
+                                  <td style={{ whiteSpace: 'nowrap' }}><LampDot lamp={x.result.lamp} title={t('Contact')} />
+                                    <LampDot lamp={x.result.movers[0]?.lamp ?? 'green'} title={t('Within the alignment range')} /></td>
+                                  <td style={{ padding: '0 4px' }}>{x.result.movers.map((m) => `${m.role.toUpperCase()} ${m.shiftCm.map((v) => v.toFixed(1)).join(' / ')} cm`).join(', ')}</td>
+                                  <td style={{ color: x.error ? 'var(--danger, #f85149)' : undefined }}>{x.error || (x.saved ? t('saved') : '')}</td>
+                                </>
+                              ) : <td colSpan={3} style={{ color: 'var(--danger, #f85149)' }}>{x.result.reason}</td>}
+                            </tr>
+                          ))}</tbody>
+                        </table>
+                      ) : null}
                       <button type="button" className="ga-btn ga-btn-sm" data-testid="align-all"
                         disabled={innerTab !== 'places' || orientBusy || heightBusy}
                         title={t('Runs Auto-align on every pair clip in the list, one after the other, with the pair each clip’s Places view fills in (the persons you picked stay). Nothing is saved: open a clip from the table and Save it there.')}
@@ -1501,116 +1585,8 @@ export function ClipLibrary({
                         <div className="ga-form-hint" style={{ margin: 0 }}>
                           {t('mm; nothing is saved. Open a clip: its Partner B dials carry the result; Save stores it.')}</div>
                       ) : null}
-                      {pairCheck ? (
-                        <div data-testid="pair-check-result" data-result={JSON.stringify(pairCheck)} style={{ fontSize: 11, lineHeight: 1.35 }}>
-                          {pairCheck.ok ? (
-                            <>
-                              <div>{t('{by} → {of}: fine fit {x} / {y} / {z} mm, tilt {tilt}°, roll {roll}°')
-                                .replace('{by}', pairCheck.by).replace('{of}', pairCheck.of)
-                                .replace('{x}', pairCheck.fit.shiftMm[0].toFixed(0)).replace('{y}', pairCheck.fit.shiftMm[1].toFixed(0))
-                                .replace('{z}', pairCheck.fit.shiftMm[2].toFixed(0))
-                                .replace('{tilt}', pairCheck.fit.turnDeg[0].toFixed(1)).replace('{roll}', pairCheck.fit.turnDeg[1].toFixed(1))}</div>
-                              <table style={{ borderCollapse: 'collapse' }}>
-                                <thead><tr><th /><th style={{ padding: '0 4px' }}>{t('stored')}</th><th style={{ padding: '0 4px' }}>{t('fine fit')}</th>
-                                  <th style={{ padding: '0 4px' }}>{t('+ follow')}</th></tr></thead>
-                                <tbody>
-                                  {([
-                                    [t('Tip to opening at the outermost frame'), pairCheck.before.entryMm, pairCheck.after.entryMm, pairCheck.followed.entryMm, 'mm'],
-                                    [t('Depth at the deepest frame'), pairCheck.before.depthMm, pairCheck.after.depthMm, pairCheck.followed.depthMm, 'mm'],
-                                    [t('Off the axis inside, worst frame'), pairCheck.before.maxLateralMm, pairCheck.after.maxLateralMm, pairCheck.followed.maxLateralMm, 'mm'],
-                                    [t('Shaft against the axis at the outermost frame'), pairCheck.before.axisDeg, pairCheck.after.axisDeg, pairCheck.followed.axisDeg, '°'],
-                                    [t('Interpenetration besides the channel'), pairCheck.clearMm[0], pairCheck.clearMm[1], pairCheck.clearMm[2], 'mm'],
-                                  ] as const).map(([label, a, b, c, unit]) => (
-                                    <tr key={label}><td>{label}</td>
-                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{a.toFixed(0)} {unit}</td>
-                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{b.toFixed(0)} {unit}</td>
-                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{c.toFixed(0)} {unit}</td></tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                              {pairCheck.fit.bend ? (
-                                <BendLine bend={pairCheck.followFit.bend ?? pairCheck.fit.bend} />
-                              ) : null}
-                              {(pairCheck.followFit.support ?? pairCheck.fit.support) ? (() => {
-                                const sp = (pairCheck.followFit.support ?? pairCheck.fit.support)!
-                                return <PostureLine gapMm={sp.gapMm} sinkMm={sp.sinkMm} limited={sp.gapMm >= (POSTURE.floatM - POSTURE.edgeM) * 1000 || sp.sinkMm >= (POSTURE.sinkM - POSTURE.edgeM) * 1000} />
-                              })() : null}
-                              {pairCheck.clearWorst ? (
-                                <div className="ga-form-hint" style={{ margin: 0 }}>
-                                  {t('Deepest besides the channel: {pair}').replace('{pair}', pairCheck.clearWorst)}</div>
-                              ) : null}
-                            </>
-                          ) : <span style={{ color: 'var(--danger, #f85149)' }}>{pairCheck.reason}</span>}
-                        </div>
-                      ) : null}
                       {autoAlign ? (
-                        <div data-testid="align-auto-result" data-result={JSON.stringify(autoAlign)}
-                          style={{ fontSize: 11, lineHeight: 1.35 }}>
-                          {autoAlign.ok ? (
-                            <>
-                              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                                <LampDot lamp={autoAlign.lamp} title={autoAlign.lamp === 'green'
-                                  ? t('On the opening at the outermost frame and inside the channel at the deepest.')
-                                  : autoAlign.lamp === 'yellow' ? t('Inside at the deepest frame, but off the axis or off the opening.')
-                                    : t('Not inside the channel at the deepest frame.')} />
-                                <LampDot lamp={autoAlign.clearLamp} title={(autoAlign.clearLamp === 'green'
-                                  ? t('Nothing else interpenetrates: only the attached part enters the other body, through the channel (at most 5 mm elsewhere).')
-                                  : t('The bodies interpenetrate besides the channel by {mm} mm, deepest at {pair} (green at most 5 mm, yellow at most 20 mm).')
-                                    .replace('{mm}', autoAlign.overlapAfterMm.toFixed(0)).replace('{pair}', autoAlign.clearWorst || '–'))} />
-                                <span>{t('{by} → {of}: {channel}').replace('{by}', autoAlign.by).replace('{of}', autoAlign.of)
-                                  .replace('{channel}', autoAlign.target === 'channel' ? (autoAlign.channel.split(':').pop() || autoAlign.channel) : targetWordOf(t, autoAlign.target))}</span>
-                              </div>
-                              <table style={{ borderCollapse: 'collapse' }}>
-                                <thead><tr><th /><th style={{ padding: '0 4px' }}>{t('before')}</th><th style={{ padding: '0 4px' }}>{t('after')}</th></tr></thead>
-                                <tbody>
-                                  {([
-                                    [hasInside(autoAlign.target) ? t('Tip to opening at the outermost frame') : t('Tip to target at the outermost frame'), autoAlign.before.entryMm, autoAlign.after.entryMm],
-                                    ...(hasInside(autoAlign.target) ? [[t('Depth at the deepest frame'), autoAlign.before.depthMm, autoAlign.after.depthMm] as const] : []),
-                                    [t('Off the axis, worst frame'), autoAlign.before.maxLateralMm, autoAlign.after.maxLateralMm],
-                                    [t('Interpenetration besides the channel'), autoAlign.overlapBeforeMm, autoAlign.overlapAfterMm],
-                                  ] as const).map(([label, a, b]) => (
-                                    <tr key={label}><td>{label}</td>
-                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{a.toFixed(0)} mm</td>
-                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{b.toFixed(0)} mm</td></tr>
-                                  ))}
-                                  {hasInside(autoAlign.target) ? (<tr><td>{t('Depth gained by B’s tilt/roll')}</td>
-                                    <td style={{ textAlign: 'right', padding: '0 4px' }}>{autoAlign.afterShift.depthMm.toFixed(0)} mm</td>
-                                    <td style={{ textAlign: 'right', padding: '0 4px' }}>{autoAlign.after.depthMm.toFixed(0)} mm</td></tr>) : null}
-                                  <tr><td>{t('B tilt / roll')}</td><td />
-                                    <td style={{ textAlign: 'right', padding: '0 4px' }}>{autoAlign.turnDeg[0].toFixed(1)}° / {autoAlign.turnDeg[1].toFixed(1)}°</td></tr>
-                                  <tr><td>{t('Shaft against the axis at the outermost frame')}</td>
-                                    <td style={{ textAlign: 'right', padding: '0 4px' }}>{autoAlign.before.axisDeg.toFixed(0)}°</td>
-                                    <td style={{ textAlign: 'right', padding: '0 4px' }}>{autoAlign.after.axisDeg.toFixed(0)}°</td></tr>
-                                </tbody>
-                              </table>
-                              {autoAlign.bend ? <BendLine bend={autoAlign.bend} /> : null}
-                              {autoAlign.posture ? <PostureLine gapMm={autoAlign.posture.gapMm} sinkMm={autoAlign.posture.sinkMm}
-                                limited={autoAlign.posture.limited} heightMm={autoAlign.posture.heightMm} /> : null}
-                              {autoAlign.limitReason === 'posture' ? (
-                                <div data-testid="align-limit-reason" style={{ color: 'var(--warning, #d29922)' }}>
-                                  {t('Contact lamp {lamp}: posture limit — the partner stays supported instead of floating.')
-                                    .replace('{lamp}', autoAlign.lamp === 'red' ? t('red') : t('yellow'))}</div>
-                              ) : null}
-                              {autoAlign.relations.length > 1 ? (
-                                <table data-testid="align-auto-relations" style={{ borderCollapse: 'collapse' }}>
-                                  <thead><tr><th style={{ textAlign: 'left' }}>{t('Contact')}</th><th /><th>{t('to target')}</th><th>{t('depth')}</th>
-                                    <th>{t('off axis')}</th><th>{t('shift')}</th></tr></thead>
-                                  <tbody>{autoAlign.relations.map((x) => (
-                                    <tr key={x.part}><td>{x.by} → {x.of} {targetWordOf(t, x.target)}</td>
-                                      <td><LampDot lamp={x.lamp} title={t('Contact')} /></td>
-                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{x.before.entryMm.toFixed(0)} → {x.after.entryMm.toFixed(0)} mm</td>
-                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{hasInside(x.target) ? `${x.after.depthMm.toFixed(0)} mm` : '–'}</td>
-                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{x.before.maxLateralMm.toFixed(0)} → {x.after.maxLateralMm.toFixed(0)} mm</td>
-                                      <td style={{ textAlign: 'right', padding: '0 4px' }}>{x.part.toUpperCase()} {x.shiftCm.map((v) => v.toFixed(1)).join(' / ')} cm</td></tr>
-                                  ))}</tbody>
-                                </table>
-                              ) : null}
-                              <div className="ga-form-hint" style={{ margin: 0 }}>
-                                {t('Measured on the pair shown; another pair may need its own run. Save stores the sliders.')}
-                              </div>
-                            </>
-                          ) : <span style={{ color: 'var(--danger, #f85149)' }}>{autoAlign.reason}</span>}
-                        </div>
+                        <AlignResultBlock result={autoAlign} />
                       ) : null}
                       </>) : null}
                     </>
@@ -1711,36 +1687,4 @@ export function ClipLibrary({
 const BEND_WIRE_DEFAULT: BendLimitsWire = {
   raised: { joint_deg: 15, total_deg: 35 },
   resting: { joint_deg: 45, total_deg: 120 },
-}
-
-/** Ruling A145: "Bend 28° of max 35°" with its lamp — yellow when the part was at its limit in some frame. */
-function BendLine({ bend }: { bend: { maxDeg: number; limitDeg: number; atLimit: number; frames: number; lamp: 'green' | 'yellow' } }) {
-  const { t } = useI18n()
-  return (
-    <div data-testid="bend-readout" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-      <LampDot lamp={bend.lamp} title={bend.lamp === 'yellow'
-        ? t('The attached part is at its bend limit in {n} of {m} frames: the rest of the way is the partner’s shift or turn.')
-          .replace('{n}', String(bend.atLimit)).replace('{m}', String(bend.frames))
-        : t('The attached part bends within its limit in every frame.')} />
-      <span>{t('Bend {deg}° of max {max}°').replace('{deg}', bend.maxDeg.toFixed(0)).replace('{max}', bend.limitDeg.toFixed(0))}</span>
-    </div>
-  )
-}
-
-/** Ruling A150: "Support gap 4 mm" — how far the moving figure's support left the surface it rests on (+ float,
- *  − sink against its own clip posture); yellow when the posture held the solve back. */
-function PostureLine({ gapMm, sinkMm, limited, heightMm }: { gapMm: number; sinkMm: number; limited: boolean; heightMm?: number | null }) {
-  const { t } = useI18n()
-  return (
-    <div data-testid="posture-readout" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-      <LampDot lamp={limited ? 'yellow' : 'green'} title={limited
-        ? t('Posture limit: the partner would have to float or sink to reach the contact; it stays supported and the rest is left as the contact’s error.')
-        : t('The partner stays supported: it neither floats nor sinks against its own pose.')} />
-      <span>{t('Support gap {gap} mm, sunk {sink} mm').replace('{gap}', gapMm.toFixed(0)).replace('{sink}', sinkMm.toFixed(0))}</span>
-      {heightMm !== undefined && heightMm !== null ? (
-        <span style={{ opacity: 0.7 }} title={t('The lowest supporting capsule above the surface of its place (a shin capsule ends at the ankle).')}>
-          · {t('{mm} mm above the surface').replace('{mm}', heightMm.toFixed(0))}</span>
-      ) : null}
-    </div>
-  )
 }
