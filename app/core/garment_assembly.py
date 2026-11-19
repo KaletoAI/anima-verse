@@ -124,6 +124,8 @@ _errors: Dict[Tuple[str, str], str] = {}
 MAX_WORKERS = 2
 _queue: "queue.Queue[Tuple[str, str]]" = queue.Queue()
 _workers: List[threading.Thread] = []
+_queued: set = set()          # keys waiting in ``_queue`` (not yet taken by a worker)
+_worker_seq = [0]             # unique worker thread names
 
 #: The ``garment_warnings`` entry of a second footwear piece in one outfit (spec § 11: a data error, left off).
 FOOTWEAR_SECOND = "{item}: a second shoe piece in one outfit — left off"
@@ -1299,6 +1301,7 @@ def schedule(character_name: str, signature: Optional[str] = None, *, retry: boo
         with _lock:
             if key in _building:
                 _again.add(key)
+                _ensure_workers_locked()
                 return False
             _building.add(key)
         _submit(key)
@@ -1308,20 +1311,29 @@ def schedule(character_name: str, signature: Optional[str] = None, *, retry: boo
         return False
 
 
+def _ensure_workers_locked() -> None:
+    """Start workers while fewer than ``MAX_WORKERS`` are alive (a worker that died is replaced). Holds ``_lock``."""
+    _workers[:] = [w for w in _workers if w.is_alive()]
+    while len(_workers) < MAX_WORKERS:
+        _worker_seq[0] += 1
+        w = threading.Thread(target=_worker, daemon=True, name=f"garment-assembly-{_worker_seq[0]}")
+        _workers.append(w)
+        w.start()
+
+
 def _submit(key: Tuple[str, str]) -> None:
-    """Queue ``key`` for the worker pool; start a worker while fewer than ``MAX_WORKERS`` run."""
-    _queue.put(key)
+    """Queue ``key`` for the worker pool and make sure the pool runs."""
     with _lock:
-        _workers[:] = [w for w in _workers if w.is_alive()]
-        if len(_workers) < MAX_WORKERS:
-            w = threading.Thread(target=_worker, daemon=True, name=f"garment-assembly-{len(_workers)}")
-            _workers.append(w)
-            w.start()
+        _queued.add(key)
+        _queue.put(key)
+        _ensure_workers_locked()
 
 
 def _worker() -> None:
     while True:
         key = _queue.get()
+        with _lock:
+            _queued.discard(key)
         try:
             _run(key)
         except Exception:  # noqa: BLE001 — _run already left the in-flight set; the worker keeps serving
@@ -1362,7 +1374,9 @@ def _run(key: Tuple[str, str]) -> None:
 
 
 def wait_for(character_name: str, signature: str, timeout: float = 300.0) -> bool:
-    """Block until no background build of ``(character_name, signature)`` runs. True when it is done."""
+    """Block until no background build of ``(character_name, signature)`` runs. True when it is done. The
+    ``timeout`` counts from when a worker takes the build: time spent waiting in the pool's queue behind other
+    characters' builds does not use it up."""
     import time
     key = (character_name, signature)
     deadline = time.monotonic() + timeout
@@ -1370,6 +1384,8 @@ def wait_for(character_name: str, signature: str, timeout: float = 300.0) -> boo
         with _lock:
             if key not in _building:
                 return True
+            if key in _queued:
+                deadline = time.monotonic() + timeout
         time.sleep(0.05)
     return False
 
