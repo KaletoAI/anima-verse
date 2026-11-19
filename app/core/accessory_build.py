@@ -24,6 +24,7 @@ material and re-assembles on the CPU without a rebuild. A record holds for the b
 
 The garment assembly grafts a current build as the node ``accessory_mesh.node_name`` (``garment_assembly``).
 """
+import functools
 import hashlib
 import json
 import re
@@ -38,6 +39,8 @@ logger = logging.getLogger(__name__)
 
 #: Bumped when an accessory is built differently for the same inputs.
 ACCESSORY_VERSION = 2
+#: A234: the build version of the kinds around the body / on a bone (``make_around``, ``make_earrings``).
+AROUND_VERSION = 1
 #: The air between the skin and the chain's surface. The plan's 1.5 mm left one ring of Lirien's chain at 0.94 mm
 #: in the sit clip (A216 acceptance: rest 1.50–2.57 mm, sit min 0.94 mm); 1.7 mm keeps every ring inside the
 #: 1–3 mm band in rest, walk and sit (the skinning moves a ring by at most ~0.6 mm there).
@@ -49,6 +52,9 @@ DIR_NAME = "jewellery"
 REASON_NOT_BUILT = "Not built yet — Build makes it on the CPU (0 hub jobs)"
 REASON_BODY = "Body changed — Build makes it again on the CPU (0 hub jobs)"
 REASON_SETTINGS = "Chain settings changed — Build makes it again on the CPU (0 hub jobs)"
+REASON_SETTINGS_PIECE = "Settings changed — Build makes it again on the CPU (0 hub jobs)"
+#: A234: the layer under a band changed (another garment worn, refitted, or the chest shaping changed).
+REASON_UNDER = "The clothing under it changed — Build fits it again on the CPU (0 hub jobs)"
 REASON_NO_KIND = "Choose the accessory kind in the Wardrobe"
 REASON_KIND_LATER = "{kind}: not built yet in this version — shown on the figure once its phase lands"
 REASON_NO_BODY = "No plain body yet"
@@ -69,21 +75,125 @@ def store_dir(character_name: str) -> Path:
     return get_character_dir(character_name) / DIR_NAME
 
 
-def geometry_inputs(spec: Dict[str, Any], pendant_psig: str = "") -> Dict[str, Any]:
+def shape_inputs(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """A234: the shape fields of a kind other than the necklace (the metal / band colour is a material, not here)."""
+    kind = spec["kind"]
+    band = spec["band"]
+    if kind in ("belt", "choker", "strap"):
+        out: Dict[str, Any] = {"height_cm": band["height_cm"], "width_cm": band["width_cm"], "layer": band["layer"],
+                               "material": band["material"]}
+        if kind == "strap":
+            out["at"] = band["at"]
+            if band["at"] != "chest":
+                out["side"] = spec["side"]
+        return out
+    if kind in ("anklet", "bracelet", "ring"):
+        out = {"height_cm": band["height_cm"], "thickness_mm": spec["chain"]["thickness_mm"], "side": spec["side"],
+               "layer": band["layer"]}
+        if kind == "ring":
+            out["finger"] = spec.get("finger") or "ring"
+        return out
+    if kind == "earrings":
+        return {"earring": dict(spec["earring"]), "thickness_mm": spec["chain"]["thickness_mm"], "side": spec["side"]}
+    return {}
+
+
+def geometry_inputs(spec: Dict[str, Any], pendant_psig: str = "",
+                    context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """What an accessory's GEOMETRY is made of (the metal is not). A225: a READY pendant mesh (``pendant_psig``) and
-    its size are part of it — a pendant switched on but not built yet is not (the chain alone is built and shown)."""
+    its size are part of it — a pendant switched on but not built yet is not (the chain alone is built and shown).
+    A234: the other kinds' shape fields (``shape_inputs``), the READY item-image part (buckle / drop) the same way,
+    and the worn context (``worn_context``): the garments under a band (``[item, fsig]``) and the chest shaping."""
+    from app.core.accessory_spec import image_part_mm
     inputs: Dict[str, Any] = {"version": ACCESSORY_VERSION, "kind": spec["kind"]}
     if spec["kind"] == "necklace":
         inputs["chain"] = dict(spec["chain"])
-        if pendant_psig:
-            inputs["pendant"] = {"psig": pendant_psig, "size_mm": float(spec["pendant"]["size_mm"])}
+    else:
+        inputs["around"] = AROUND_VERSION
+        inputs["shape"] = shape_inputs(spec)
+    if pendant_psig and image_part_mm(spec) is not None:
+        inputs["pendant"] = {"psig": pendant_psig, "size_mm": float(image_part_mm(spec))}
+    context = context or {}
+    if context.get("under"):
+        inputs["under"] = [[str(u["item_id"]), str(u["fsig"])] for u in context["under"]]
+    if context.get("shaping"):
+        inputs["shaping"] = shaping_key(context["shaping"])
     return inputs
 
 
-def asig(spec: Dict[str, Any], pendant_psig: str = "") -> str:
+def shaping_key(rec: Dict[str, Any]) -> str:
+    """md5[:12] of a chest shaping record (``bust_shaping.record``)."""
+    return hashlib.md5(json.dumps(rec, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
+
+
+def asig(spec: Dict[str, Any], pendant_psig: str = "", context: Optional[Dict[str, Any]] = None) -> str:
     """md5[:12] of ``geometry_inputs`` (canonical JSON)."""
-    raw = json.dumps(geometry_inputs(spec, pendant_psig), sort_keys=True, separators=(",", ":")).encode("utf-8")
+    raw = json.dumps(geometry_inputs(spec, pendant_psig, context), sort_keys=True,
+                     separators=(",", ":")).encode("utf-8")
     return hashlib.md5(raw).hexdigest()[:12]
+
+
+#: A234: the kinds the chest shaping (A228, ``bust_shaping``) moves the skin under — they are fitted on the shaped
+#: body and keyed by the shaping (A228 L7).
+SHAPED_KINDS = ("necklace",)
+
+
+def _keyed_by_shaping(spec: Dict[str, Any]) -> bool:
+    return spec["kind"] in SHAPED_KINDS or (spec["kind"] == "strap" and spec["band"]["at"] == "chest")
+
+
+def _wants_under(spec: Dict[str, Any]) -> bool:
+    return spec["kind"] not in ("necklace", "earrings") and spec["band"]["layer"] == "auto"
+
+
+def worn_context(character_name: str, profile: Dict[str, Any], base_sha: str,
+                 spec: Dict[str, Any]) -> Dict[str, Any]:
+    """A234: what a piece is fitted over in the worn set of ``profile`` (``equipped_pieces``) on the plain body
+    ``base_sha``: ``under`` — per worn own-mesh / template piece on one of the region's slots
+    (``accessory_band.UNDER_SLOTS``) with a fit / drape on this body, ``{item_id, fsig, path, slots, footwear}`` (sorted
+    by item id; only for ``band.layer: auto``); ``shaping`` — the chest shaping of the worn template drapes
+    (``bust_shaping.worn_record``) for the kinds near the chest. Read-only; a piece whose fit cannot be read is
+    skipped (never a failure)."""
+    out: Dict[str, Any] = {"under": [], "shaping": None}
+    want_under, want_shaping = _wants_under(spec), _keyed_by_shaping(spec)
+    if not (want_under or want_shaping) or not base_sha:
+        return out
+    from app.core import accessory_band, garment_set, garment_store, garment_template
+    from app.models.inventory import get_item
+    pieces = profile.get("equipped_pieces") or {}
+    ids = sorted({str(i).strip() for i in pieces.values() if i and str(i).strip()})
+    items = {i: (get_item(i) or {}) for i in ids}
+    mesh_ids = [i for i in ids if garment_set.mesh_mode_of(items[i]) in (*garment_set.OWN_MESH_MODES,
+                                                                         garment_set.TEMPLATE)]
+    region = set(accessory_band.UNDER_SLOTS.get(accessory_band.region_key(spec), ()))
+    drapes = []
+    for item_id in mesh_ids:
+        item = items[item_id]
+        slots = [str(x) for x in ((item.get("outfit_piece") or {}).get("slots") or [])]
+        try:
+            if garment_set.mesh_mode_of(item) == garment_set.TEMPLATE:
+                drape = garment_template.drape_state(character_name, item_id, base_sha=base_sha,
+                                                     lower=garment_template.lower_layers(mesh_ids, item_id), item=item)
+                if drape.get("state") != "ready":
+                    continue
+                drapes.append({"template": True, "record": drape.get("record") or {}})
+                path, fsig = drape["path"], str(drape["tsig"])
+            else:
+                fit = garment_store.accepted_fit(character_name, item_id, base_model_sha=base_sha, profile=profile)
+                parsed = garment_store.parse_name(fit[0]) if fit else None
+                if not parsed:
+                    continue
+                path, fsig = fit[0], parsed[1]
+        except Exception:  # noqa: BLE001 — a piece not judged is not under the band
+            logger.debug("Accessory context: %s of %s unreadable", item_id, character_name, exc_info=True)
+            continue
+        if want_under and region & set(slots):
+            out["under"].append({"item_id": item_id, "fsig": fsig, "path": str(path), "slots": slots,
+                                 "footwear": garment_set.garment_kind_of(item) == garment_set.FOOTWEAR})
+    if want_shaping:
+        from app.core import bust_shaping
+        out["shaping"] = bust_shaping.worn_record(drapes)
+    return out
 
 
 def pendant_info(item_id: str, spec: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -110,9 +220,14 @@ def pendant_row(state: Dict[str, Any], spec: Optional[Dict[str, Any]], record: O
     reason = pendant["reason"]
     if pendant["state"] == "ready" and not on:
         reason = record.get("pendant_error") or (REASON_PENDANT if state.get("state") != "current" else "")
-    return {"state": pendant["state"], "reason": reason, "size_mm": float(spec["pendant"]["size_mm"]),
+    return {"state": pendant["state"], "reason": reason, "size_mm": float(accessory_spec_size(spec)),
             "on_figure": on, "metrics": (record.get("pendant") or {}).get("metrics") if on else None,
             "cost": {"hub_jobs": 0 if pendant["state"] == "ready" else 1}}
+
+
+def accessory_spec_size(spec: Dict[str, Any]) -> float:
+    from app.core.accessory_spec import image_part_mm
+    return float(image_part_mm(spec) or 0.0)
 
 
 def _ready_psig(pendant: Optional[Dict[str, Any]]) -> str:
@@ -154,8 +269,61 @@ def material_key(item: Optional[Dict[str, Any]]) -> str:
     spec = accessory_spec.of_item(item)
     if spec is None:
         return ""
-    color, rough, metal = accessory_spec.metal_material(spec)
-    return f"accessory:{spec['metal']}:{color}:{rough}:{metal}"
+    color, rough, metal = piece_material(spec, str((item or {}).get("id") or ""))
+    band = f"{spec['band']['material']}:" if spec["kind"] in BAND_KINDS else ""
+    return f"accessory:{spec['metal']}:{band}{color}:{rough}:{metal}"
+
+
+#: A234: the kinds whose material is the band's (``band.material``), not the chain's metal.
+BAND_KINDS = ("belt", "choker", "strap")
+#: The band colour ``from_image`` takes when the item has no usable image.
+BAND_FALLBACK = "leather"
+
+
+def piece_material(spec: Dict[str, Any], item_id: str = "") -> tuple:
+    """``(colour hex, roughness, metalness)`` of a built piece: the chain's metal (``accessory_spec.metal_material``),
+    or for a band (A234) its ``band.material`` — leather / fabric presets, ``metal`` the chosen metal,
+    ``from_image`` the item image's median colour with the leather finish (``image_colour``)."""
+    from app.core import accessory_spec
+    if spec.get("kind") not in BAND_KINDS:
+        return accessory_spec.metal_material(spec)
+    material = spec["band"]["material"]
+    if material == "metal":
+        return accessory_spec.metal_material(spec)
+    if material == "from_image":
+        _c, rough, metal = accessory_spec.METAL_PRESETS[BAND_FALLBACK]
+        colour = image_colour(item_id) if item_id else ""
+        return (colour or _c), rough, metal
+    return accessory_spec.METAL_PRESETS[material]
+
+
+def image_colour(item_id: str) -> str:
+    """The median colour (sRGB hex) of the item image's subject — the pixels neither transparent nor near-white /
+    near-black background — '' without an image or a subject."""
+    from app.core.accessory_pendant import _item_image
+    path = _item_image(item_id)
+    if path is None:
+        return ""
+    try:
+        st = path.stat()
+        return _image_colour_cached(str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return ""
+
+
+@functools.lru_cache(maxsize=64)
+def _image_colour_cached(path: str, _mtime: int, _size: int) -> str:
+    from PIL import Image
+    with Image.open(path) as im:
+        im = im.convert("RGBA")
+        im.thumbnail((128, 128))
+        px = np.asarray(im, np.float64).reshape(-1, 4)
+    rgb = px[:, :3]
+    keep = (px[:, 3] > 128) & (rgb.max(1) < 235) & (rgb.max(1) > 20)
+    if keep.sum() < 20:
+        return ""
+    m = np.median(rgb[keep], axis=0)
+    return "#" + "".join(f"{int(round(c)):02x}" for c in m)
 
 
 def _current_base(character_name: str, profile: Dict[str, Any]):
@@ -173,9 +341,10 @@ def base_sha(character_name: str, profile: Optional[Dict[str, Any]] = None) -> s
 
 
 def accessory_state(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None,
-                    item: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """``{state, reason, asig, record, pendant}`` of a worn accessory (module docstring; ``pendant`` =
-    ``pendant_info``). Read-only."""
+                    item: Optional[Dict[str, Any]] = None,
+                    context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """``{state, reason, asig, record, pendant, context}`` of a worn accessory (module docstring; ``pendant`` =
+    ``pendant_info``; ``context`` = ``worn_context``, read from the profile when not given). Read-only."""
     from app.core import accessory_spec, model_geometry
     profile = _profile_of(character_name, profile)
     if item is None:
@@ -191,10 +360,12 @@ def accessory_state(character_name: str, item_id: str, *, profile: Optional[Dict
     if base is None:
         return {"state": "blocked", "reason": REASON_NO_BODY, "asig": "", "record": None}
     pendant = pendant_info(item_id, spec)
-    sig = asig(spec, _ready_psig(pendant))
+    if context is None:
+        context = worn_context(character_name, profile, str(base[1]), spec)
+    sig = asig(spec, _ready_psig(pendant), context)
     records = _records(character_name, item_id)
     rec = records.get(sig)
-    out = {"asig": sig, "pendant": pendant}
+    out = {"asig": sig, "pendant": pendant, "context": context}
     if rec is not None and model_geometry.record_matches(rec, base[1]):
         return {"state": "current", "reason": "", "record": rec, **out}
     failed = _read(record_path(character_name, item_id, sig, ".failed.json"))
@@ -204,9 +375,16 @@ def accessory_state(character_name: str, item_id: str, *, profile: Optional[Dict
     if rec is not None:
         return {"state": "due", "reason": REASON_BODY, "record": None, **out}
     if records:
-        same_chain = any((r.get("inputs") or {}).get("chain") == spec["chain"] and "pendant" not in (r.get("inputs") or {})
-                         for r in records.values())
-        reason = REASON_PENDANT if _ready_psig(pendant) and same_chain else REASON_SETTINGS
+        want = geometry_inputs(spec, _ready_psig(pendant), context)
+        shape_keys = ("version", "kind", "chain", "around", "shape")
+        same_shape = [r for r in records.values()
+                      if all((r.get("inputs") or {}).get(k) == want.get(k) for k in shape_keys)]
+        if _ready_psig(pendant) and any("pendant" not in (r.get("inputs") or {}) for r in same_shape):
+            reason = REASON_PENDANT
+        elif same_shape:
+            reason = REASON_UNDER
+        else:
+            reason = REASON_SETTINGS if spec["kind"] == "necklace" else REASON_SETTINGS_PIECE
         return {"state": "due", "reason": reason, "record": None, **out}
     return {"state": "due", "reason": REASON_NOT_BUILT, "record": None, **out}
 
@@ -441,7 +619,8 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
     spec = accessory_spec.of_item(item)
     bsig, sha = _current_base(character_name, profile)
     psig = _ready_psig(state.get("pendant"))
-    sig = asig(spec, psig)
+    context = state.get("context") or {}
+    sig = asig(spec, psig, context)
     folder = store_dir(character_name)
     with keyed_lock("accessory_build", f"{character_name}/{item_id}"):
         folder.mkdir(parents=True, exist_ok=True)
@@ -450,7 +629,7 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
             from app.models.character import get_character_dir
             blob = (get_character_dir(character_name) / "model3d" / f"{bsig}.glb").read_bytes()
             mesh = accessory_pendant.load_mesh(item_id, psig) if psig else None
-            made = make_necklace(blob, spec, mesh)
+            made = make_any(blob, spec, mesh, context)
         except Exception as e:  # noqa: BLE001 — recorded as the step's failure, the figure leaves it off
             logger.exception("Accessory %s of %s failed", item_id, character_name)
             _write_atomic(failed_path, json.dumps({"error": failure_text(e)[:300], "base_model_sha256": sha,
@@ -471,13 +650,13 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
         np.savez_compressed(buf, **arrays)
         _write_atomic(record_path(character_name, item_id, sig, ".npz"), buf.getvalue())
         record = {"version": ACCESSORY_VERSION, "item_id": item_id, "asig": sig, "kind": spec["kind"],
-                  "inputs": geometry_inputs(spec), "bsig": bsig, "base_model_sha256": sha,
+                  "inputs": geometry_inputs(spec, psig, context), "bsig": bsig, "base_model_sha256": sha,
                   **model_geometry.stamp_on(character_name, bsig, sha),
                   "joint_names": made["joint_names"], "landmarks": made["landmarks"], "metrics": made["metrics"],
                   "hub_jobs": 0, "built_at": utc_now_iso()}
         if hung is not None:
             pend_rec = accessory_pendant.pendant_state(item_id).get("record") or {}
-            record["pendant"] = {"psig": psig, "size_mm": float(spec["pendant"]["size_mm"]), "mime": hung["mime"],
+            record["pendant"] = {"psig": psig, "size_mm": accessory_spec_size(spec), "mime": hung["mime"],
                                  "material": hung["material"], "metrics": hung["metrics"],
                                  # route_meta of the job that made the mesh (the sidecar of this build)
                                  "backend": pend_rec.get("backend", ""), "routing": pend_rec.get("routing") or {},
@@ -503,7 +682,7 @@ def garment_mesh(character_name: str, item_id: str, record: Dict[str, Any],
         from app.models.inventory import get_item
         item = get_item(item_id) or {}
     spec = accessory_spec.of_item(item) or accessory_spec.normalize({"kind": record.get("kind") or "necklace"})
-    color, rough, metal = accessory_spec.metal_material(spec)
+    color, rough, metal = piece_material(spec, item_id)
     with np.load(record_path(character_name, item_id, str(record["asig"]), ".npz")) as z:
         return accessory_mesh.garment_mesh(z["V"], z["F"], z["N"], z["J"], z["W"], list(record["joint_names"]),
                                            color=color, roughness=rough, metalness=metal)
@@ -542,6 +721,8 @@ def graft_accessory(blob: bytes, character_name: str, item_id: str, record: Dict
     """``blob`` + the accessory's chain node and, when the build carries one, its pendant node (A225; on the distance
     tier ``low`` only up to ``PENDANT_LOW_MAX_TRIS``)."""
     from app.core import accessory_mesh, glb_mesh
+    if low and record.get("kind") in LOW_TIER_DROPPED:
+        return blob      # A234 / J4: a ring is shown in close-up and admin views only
     extras = {"kind": kind, "item_id": item_id, "fsig": fsig}
     blob = glb_mesh.graft(blob, garment_mesh(character_name, item_id, record, item),
                           name=accessory_mesh.node_name(item_id), extras=extras)
@@ -594,3 +775,396 @@ def preview_curve(character_name: str, item_id: str, *, drop_cm: float, thicknes
             # A225: where a pendant hangs, and the skin's outward normal there (the dialog's placeholder box)
             "anchor": np.round(curve[a], 5).tolist(),
             "anchor_outward": np.round(np.asarray(detail["outward"])[a], 4).tolist()}
+
+
+# --- A234: the kinds around the body and on a bone -------------------------------------------------------------------
+
+def make_any(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, Any]] = None,
+             context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The geometry of any kind on the rigged plain body ``rigged``: the necklace (``make_necklace``), the earrings
+    (``make_earrings``) or a piece around a body part (``make_around``). A chest shaping in ``context`` (A228 L7)
+    shapes the body first, so a piece near the chest sits on the shaped skin the figure shows."""
+    context = context or {}
+    if context.get("shaping") and _keyed_by_shaping(spec):
+        from app.core import bust_shaping
+        rigged = bust_shaping.shape_glb(rigged, context["shaping"])
+    if spec["kind"] == "necklace":
+        return make_necklace(rigged, spec, part)
+    if spec["kind"] == "earrings":
+        return make_earrings(rigged, spec, part)
+    return make_around(rigged, spec, part, load_under(context.get("under") or []))
+
+
+def load_under(under: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The worn garments of ``worn_context`` as ``{item_id, P, F, J (n, 4), W, joint_names, slots, footwear}`` — every
+    garment node of the fit / drape GLB (a shoe has four), positions in the plain body's bind space."""
+    from app.core import glb_mesh
+    out = []
+    for u in under:
+        try:
+            blob = Path(u["path"]).read_bytes()
+            parsed = glb_mesh._parse(blob, "Garment")
+            names = [str(n.get("name") or "") for n in parsed["gltf"].get("nodes") or []
+                     if "mesh" in n and glb_mesh._is_garment_node(n)]
+            for name in names:
+                g = glb_mesh.garment_arrays(blob, node_prefix=name, exact=True)
+                out.append({"item_id": u["item_id"], "P": np.asarray(g.positions, np.float64),
+                            "F": np.asarray(g.indices, np.int64).reshape(-1, 3),
+                            "J": np.asarray(g.joints), "W": np.asarray(g.weights),
+                            "joint_names": list(g.joint_names), "slots": list(u.get("slots") or []),
+                            "footwear": bool(u.get("footwear"))})
+        except Exception:  # noqa: BLE001 — an unreadable garment is not under the band
+            logger.warning("Accessory: garment %s under the band unreadable", u.get("item_id"), exc_info=True)
+    return out
+
+
+def _garment_dominant(g: Dict[str, Any], allowed) -> np.ndarray:
+    """The faces of a worn garment whose vertices' strongest joint is one of ``allowed`` (``dominant_faces``)."""
+    from app.core.rig_contract import norm_bone_name
+    names = np.array([norm_bone_name(str(n)) for n in g["joint_names"]] or [""])
+    J, W = g["J"], g["W"]
+    if not len(J) or not len(g["joint_names"]):
+        return g["F"][:0]
+    top = names[np.clip(J[np.arange(len(J)), W.argmax(1)], 0, len(names) - 1)]
+    ok = np.isin(top, list(allowed))
+    return g["F"][ok[g["F"]].sum(1) >= 2]
+
+
+#: A234 plausibility per section (``around_plausible``): the length of the piece's centre line (metres) and the joints
+#: that may move it (normalised; weight above ``PLAUSIBLE_WEIGHT``).
+AROUND_LENGTH_M: Dict[str, tuple] = {
+    "belt": (0.5, 1.7), "choker": (0.22, 0.55), "strap:thigh": (0.28, 1.0), "strap:upper_arm": (0.14, 0.55),
+    "strap:chest": (0.55, 1.5), "anklet": (0.13, 0.45), "bracelet": (0.10, 0.35), "ring": (0.025, 0.11),
+}
+AROUND_JOINTS: Dict[str, frozenset] = {
+    "belt": frozenset({"hips", "spine", "spine1", "leftupleg", "rightupleg"}),
+    "choker": frozenset({"neck", "spine2", "head"}),
+    "strap:thigh": frozenset({"hips", "leftupleg", "rightupleg"}),
+    "strap:upper_arm": frozenset({"leftshoulder", "rightshoulder", "leftarm", "rightarm", "leftforearm",
+                                  "rightforearm", "spine2"}),
+    "strap:chest": frozenset({"spine", "spine1", "spine2", "leftshoulder", "rightshoulder"}),
+    "anklet": frozenset({"leftleg", "rightleg", "leftfoot", "rightfoot"}),
+    "bracelet": frozenset({"leftforearm", "rightforearm", "lefthand", "righthand"}),
+}
+AROUND_IMPLAUSIBLE = "The {what} does not fit this body ({why})"
+#: What a section is called in the words of a failure.
+AROUND_WHAT = {"belt": "belt", "choker": "choker", "strap:thigh": "thigh strap", "strap:upper_arm": "arm strap",
+               "strap:chest": "chest strap", "anklet": "anklet", "bracelet": "bracelet", "ring": "ring",
+               "earrings": "earring"}
+
+
+def around_plausible(key: str, metrics: Dict[str, Any]) -> None:
+    """``ValueError`` (``AROUND_IMPLAUSIBLE``) when a built piece misses its gate: centre-line length per side in
+    ``AROUND_LENGTH_M``, weight only on ``AROUND_JOINTS`` (a ring: the hand and that hand's fingers), nothing inside
+    in any test pose, a segment at most ``MAX_SEGMENT_RATIO`` × the median."""
+    from app.core.rig_contract import norm_bone_name
+    why = []
+    lo, hi = AROUND_LENGTH_M[key]
+    for side, length in (metrics.get("length_m") or {}).items():
+        if not lo <= float(length) <= hi:
+            why.append(f"{float(length) * 100:.0f} cm round{' (' + side + ')' if side else ''}, expected "
+                       f"{lo * 100:.0f}–{hi * 100:.0f} cm")
+    if float(metrics.get("max_segment_ratio") or 0) > MAX_SEGMENT_RATIO:
+        why.append("it jumps between two points")
+    if key == "ring":
+        others = [j for j in metrics["joints"] if not norm_bone_name(j).startswith(("lefthand", "righthand"))]
+    else:
+        others = [j for j in metrics["joints"] if norm_bone_name(j) not in AROUND_JOINTS[key]]
+    if others:
+        why.append("it would move with " + ", ".join(norm_bone_name(j) for j in others))
+    inside = [name for name, m in (metrics.get("poses") or {}).items() if m["inside_share"] > 0.0]
+    if float(metrics.get("inside_share") or 0) > 0.0:
+        inside.insert(0, "rest (on the layer under it)")
+    if inside:
+        why.append("part of it lies inside in the " + ", ".join(inside) + " pose")
+    if why:
+        raise ValueError(AROUND_IMPLAUSIBLE.format(what=AROUND_WHAT[key], why="; ".join(why)))
+
+
+def _body_context(rigged: bytes):
+    """``(body, dense, Pw, Fw, first)``: the body, its dense weights, the welded body and the source vertex of each
+    welded one."""
+    from scipy.spatial import cKDTree
+    from app.core import accessory_curve, glb_mesh
+    from app.core.garment_fit import dense_weights
+    body = glb_mesh.body_arrays(rigged)
+    dense = dense_weights(body)
+    Pw, Fw = accessory_curve.weld(np.asarray(body.positions, np.float64), np.asarray(body.faces, np.int64))
+    _, first = cKDTree(np.asarray(body.positions, np.float64)).query(Pw)
+    return body, dense, Pw, Fw, first
+
+
+def _poses(rigged: bytes, body, dense, Pw, Fw, first, V, J, W) -> Dict[str, Dict[str, float]]:
+    """``accessory_pendant.pose_check`` of the piece ``V`` (skin ``J/W``) against the body in the CPU test poses."""
+    from app.core import accessory_pendant, glb_mesh
+    from app.core.garment_shell import top4_weights
+    from app.core.rig_contract import norm_bone_name
+    Jb, Wb, used = top4_weights(dense)
+    Jb = used[Jb]
+    heads = {norm_bone_name(k): v for k, v in body.joint_positions.items()}
+    return accessory_pendant.pose_check(Pw, Fw, Jb[first], Wb[first], V, J, W, list(body.joint_names),
+                                        glb_mesh.skin_joint_parents(rigged), heads)
+
+
+def _joint_maxima(joint_names, J: np.ndarray, W: np.ndarray) -> Dict[str, float]:
+    return {str(joint_names[j]): round(float(W[J == j].max()), 3) for j in np.unique(J[W > PLAUSIBLE_WEIGHT])}
+
+
+def make_around(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, Any]] = None,
+                under: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """A belt / choker / strap (a flat band) or an anklet / bracelet / ring (a round tube) around its body part
+    (``accessory_band``), on the outermost layer under it (``under``: ``load_under``; the body alone for
+    ``band.layer: body``), skinned with the nearest body vertices' weights folded onto the base skeleton, gated by
+    ``around_plausible``. A belt's buckle (``part``: the item-image mesh) is hung at the front centre
+    (``attach_buckle``; left off with its reason when it does not fit). ``{V, F, N, J, W, joint_names, curve,
+    landmarks, metrics}`` (+ ``pendant`` / ``pendant_error``). Pure CPU."""
+    from app.core import accessory_band as ab, accessory_mesh, glb_mesh
+    from app.core.accessory_spec import BAND_KINDS
+    started = time.monotonic()
+    body, dense, Pw, Fw, first = _body_context(rigged)
+    key = ab.region_key(spec)
+    what = AROUND_WHAT[key]
+    band = spec["kind"] in BAND_KINDS
+    reach = ab.REACH_M[spec["kind"]]
+    radius = float(spec["chain"]["thickness_mm"]) / 2000.0
+    thickness = ab.BAND_THICKNESS_M[spec["band"]["material"]]
+    width = float(spec["band"]["width_cm"]) / 100.0
+    under = under or []
+    Vs, Fs, curves, lengths, ratios, landmarks = [], [], [], {}, [], {}
+    gaps, under_share, inner_all = [], [], []
+    for side in ab.sides_of(spec):
+        allowed = ab.joints_for(spec, side)
+        Fb = ab.dominant_faces(Fw, dense[first], body.joint_names, allowed)
+        layers = [(g["P"], _garment_dominant(g, allowed)) for g in under
+                  if spec["kind"] == "anklet" or not g["footwear"]]
+        layers = [(P, F) for P, F in layers if len(F)]
+        top = belt_top(under, body.joint_positions) if spec["kind"] == "belt" else None
+        fr = ab.frame(spec, body.joint_positions, side, belt_top_y=top)
+        offsets = ab.band_rows(fr, width) if band else np.array([0.0])
+        surf = ab.surface_radius(Pw, Fb, layers, fr, offsets, reach=reach, what=what)
+        t = ab.smooth_up(surf["t"])
+        dirs = surf["dirs"]
+        # The air is held to the whole skin near the piece (a bump of the back above a belt belongs to Spine2), a
+        # ring's to its own finger only (the fingers beside it touch it in the bind pose).
+        surfaces = [(Pw, Fb if spec["kind"] == "ring" else Fw)] + layers
+        if band:
+            inner = (fr["centre"][None, None] + offsets[:, None, None] * fr["axis"][None, None]
+                     + (t + ab.GAP_M)[:, :, None] * dirs[None])
+            flat = ab.push_out(inner.reshape(-1, 3), np.tile(dirs, (len(offsets), 1)), surfaces, ab.GAP_M)
+            inner = flat.reshape(inner.shape)
+            radial = np.einsum("rnk,nk->rn", inner - fr["centre"][None, None], dirs)
+            V, F, N = ab.band_mesh(fr, offsets, radial, dirs, thickness)
+            curve = inner[len(offsets) // 2] + dirs * thickness / 2
+            inner_all.append((inner.reshape(-1, 3), np.tile(dirs, (len(offsets), 1)), surfaces))
+        else:
+            curve = ab.ring_curve(fr, t[0] + ab.GAP_M + radius, dirs)
+            curve = ab.push_out(curve, dirs, surfaces, ab.GAP_M + radius)
+            V, F, N = accessory_mesh.tube(curve, radius, outward=dirs)
+            inner_all.append((curve - dirs * radius, dirs, surfaces))
+        seg = np.linalg.norm(np.diff(np.vstack([curve, curve[:1]]), axis=0), axis=1)
+        lengths[side] = round(float(seg.sum()), 4)
+        ratios.append(float(seg.max() / max(float(np.median(seg)), 1e-9)))
+        under_share.append(surf["under_share"])
+        Fs.append(F + sum(len(v) for v in Vs))
+        Vs.append(V)
+        curves.append(curve)
+        landmarks[side or "centre"] = {"centre": np.round(fr["centre"], 5).tolist(),
+                                       "axis": np.round(fr["axis"], 4).tolist(),
+                                       **({"belt_top_y": round(float(top), 4)} if top is not None else {})}
+    V, F = np.vstack(Vs), np.vstack(Fs)
+    from app.core.accessory_curve import vertex_normals
+    N = vertex_normals(V, F)
+    J, W = accessory_mesh.skin_weights(V, np.asarray(body.positions, np.float64), dense)
+    J, W = accessory_mesh.fold_to_base(J, W, list(body.joint_names), glb_mesh.skin_joint_parents(rigged))
+    gap = np.concatenate([ab.surface_gap(X, d, srf) for X, d, srf in inner_all]) * 1000.0
+    poses = _poses(rigged, body, dense, Pw, Fw, first, V, J, W)
+    metrics = {"gap_mm": {"p05": round(float(np.percentile(gap, 5)), 2), "p50": round(float(np.median(gap)), 2),
+                          "p95": round(float(np.percentile(gap, 95)), 2), "min": round(float(gap.min()), 2)},
+               "inside_share": round(float((gap < -0.5).mean()), 4),
+               "on_clothing_share": round(float(np.mean(under_share)), 3),
+               "triangles": int(len(F)), "vertices": int(len(V)), "length_m": lengths,
+               "max_segment_ratio": round(max(ratios), 2), "joints": _joint_maxima(body.joint_names, J, W),
+               "poses": poses, "cpu_s": 0.0}
+    around_plausible(key, metrics)
+    out = {"V": V, "F": F, "N": N, "J": J, "W": W, "joint_names": list(body.joint_names),
+           "curve": np.vstack(curves), "landmarks": landmarks, "metrics": metrics}
+    if part is not None and spec["kind"] == "belt":
+        try:
+            out["pendant"] = attach_buckle(rigged, body, dense, Pw, Fw, first, curves[0], V, J, W, part,
+                                           float(spec["buckle"]["size_mm"]), thickness)
+        except ValueError as e:
+            out["pendant_error"] = str(e)
+    metrics["cpu_s"] = round(time.monotonic() - started, 2)
+    return out
+
+
+def belt_top(under: List[Dict[str, Any]], bones: Dict[str, Any]) -> Optional[float]:
+    """The top edge of a worn bottom (a garment on ``bottom`` / ``legs`` / ``underwear_bottom``) at the front middle:
+    the highest garment vertex within 4 cm of the Hips bone head's x, in front of it; None without one."""
+    from app.core.accessory_band import _bone
+    hips = _bone(bones, "hips")
+    tops = []
+    for g in under:
+        if g["footwear"] or not set(g["slots"]) & {"bottom", "legs", "underwear_bottom"}:
+            continue
+        P = g["P"]
+        front = (np.abs(P[:, 0] - hips[0]) < 0.04) & (P[:, 2] > hips[2])
+        if front.any():
+            tops.append(float(P[front, 1].max()))
+    return max(tops) if tops else None
+
+
+def _rigid_part(Vn: np.ndarray, part: Dict[str, Any], J_at: np.ndarray, W_at: np.ndarray, rigged: bytes, body,
+                dense, Pw, Fw, first, size_mm: Optional[float], what: str) -> Dict[str, Any]:
+    """An item-image part already in place (``Vn``), rigid with the skin ``J_at / W_at``: the size and the test-pose
+    gates of the pendant (``SIZE_TOLERANCE`` unless ``size_mm`` is None — a pair of drops measures across both;
+    nothing inside in any pose). ``ValueError`` naming why it is left
+    off."""
+    from app.core import accessory_curve
+    lo, hi = Vn.min(0), Vn.max(0)
+    measured = float((hi - lo).max()) * 1000.0
+    if size_mm is not None and abs(measured - size_mm) > SIZE_TOLERANCE * size_mm:
+        raise ValueError(f"its size came out {measured:.1f} mm instead of {size_mm:.0f} mm")
+    Jp = np.repeat(np.asarray(J_at)[None], len(Vn), 0)
+    Wp = np.repeat(np.asarray(W_at)[None], len(Vn), 0)
+    poses = _poses(rigged, body, dense, Pw, Fw, first, Vn, Jp, Wp)
+    inside = [name for name, m in poses.items() if m["inside_share"] > 0.0]
+    if inside:
+        raise ValueError(f"the {what} would sink into the body in the {', '.join(inside)} pose")
+    F = np.asarray(part["F"], np.int64)
+    weights = {str(body.joint_names[j]): round(float(Wp[0][k]), 3) for k, j in enumerate(Jp[0]) if Wp[0][k] > 0}
+    return {"V": Vn, "F": F, "N": accessory_curve.vertex_normals(Vn, F), "UV": np.asarray(part["UV"], np.float64),
+            "J": Jp, "W": Wp, "image": part.get("image") or b"", "mime": part.get("mime") or "",
+            "material": part.get("material") or {},
+            "metrics": {"size_mm": round(measured, 2), "triangles": int(len(F)), "joints": weights, "poses": poses}}
+
+
+def attach_buckle(rigged: bytes, body, dense, Pw, Fw, first, curve: np.ndarray, V: np.ndarray, J: np.ndarray,
+                  W: np.ndarray, part: Dict[str, Any], size_mm: float, thickness: float) -> Dict[str, Any]:
+    """The belt's buckle (the item-image mesh, ``accessory_pendant.normalise``: front +Z, back at z 0) centred on the
+    band's front (the centre-line point at angle 0, half the band's depth farther out), rigid with the band's skin
+    there."""
+    from app.core import accessory_pendant
+    Vn = accessory_pendant.normalise(part["V"], size_mm)
+    Vn = Vn - np.array([0.0, (Vn[:, 1].min() + Vn[:, 1].max()) / 2, 0.0])     # centred in height too
+    at = np.asarray(curve[0], np.float64)
+    Vp = Vn + at + np.array([0.0, 0.0, thickness / 2 + 0.0005])
+    k = int(np.argmin(np.linalg.norm(V - at, axis=1)))
+    hung = _rigid_part(Vp, part, J[k], W[k], rigged, body, dense, Pw, Fw, first, size_mm, "buckle")
+    hung["metrics"]["anchor"] = [round(float(x), 5) for x in at]
+    return hung
+
+
+def make_earrings(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Earrings on the ear lobes (``accessory_band.ear_anchor``), rigid on the Head (spec § 4): ``stud`` a ball of
+    ``earring.size_mm``, ``hoop`` a torus of that diameter hanging beside the lobe (wire = ``chain.thickness_mm``),
+    ``drop`` the item-image mesh (``part``) hung under the lobe — without a ready mesh a stud stands in. Gated: nothing
+    inside the body in the test poses, at most ``EARRING_MAX_GAP_MM`` from the lobe."""
+    from app.core import accessory_band as ab, accessory_pendant
+    from app.core.accessory_curve import vertex_normals
+    from app.core.rig_contract import norm_bone_name
+    started = time.monotonic()
+    body, dense, Pw, Fw, first = _body_context(rigged)
+    head = [i for i, n in enumerate(body.joint_names) if norm_bone_name(str(n)) == "head"]
+    if not head:
+        raise KeyError("head")
+    style = spec["earring"]["style"]
+    size = float(spec["earring"]["size_mm"]) / 1000.0
+    wire = float(spec["chain"]["thickness_mm"]) / 2000.0
+    Vs, Fs, anchors, part_V, part_F = [], [], {}, [], []
+    for side in ab.sides_of(spec):
+        anc = ab.ear_anchor(Pw, dense[first], body.joint_names, body.joint_positions, side)
+        p, n = anc["point"], anc["outward"]
+        if style == "hoop":
+            major = size / 2 - wire
+            centre = p + n * (wire + ab.GAP_M) - np.array([0.0, major - wire, 0.0])
+            V, F, _N = ab.torus(centre, n, major, wire)
+        elif style == "drop" and part is not None:
+            Vn = accessory_pendant.normalise(part["V"], float(spec["pendant"]["size_mm"] if spec.get("pendant")
+                                                               else size * 1000))
+            # front (+Z) turned to face out to the side; top centre just under the lobe
+            R = accessory_pendant._rot_y(np.pi / 2 if side == "left" else -np.pi / 2)
+            V = Vn @ R.T + p + n * (ab.GAP_M + float(np.ptp(Vn[:, 2])) / 2) - np.array([0.0, 0.002, 0.0])
+            F = np.asarray(part["F"], np.int64)
+            part_V.append(V)
+            part_F.append(F + sum(len(v) for v in part_V[:-1]))
+            V, F = ab.icosphere(max(wire * 1.5, 0.0012))
+            V = V + p + n * (ab.GAP_M + max(wire * 1.5, 0.0012))
+        else:
+            r = size / 2
+            V, F = ab.icosphere(r)
+            V = V + p + n * (r + ab.GAP_M)
+        Fs.append(F + sum(len(v) for v in Vs))
+        Vs.append(V)
+        anchors[side] = {"lobe": np.round(p, 5).tolist(), "lobe_y": anc["lobe_y"]}
+    V, F = np.vstack(Vs), np.vstack(Fs)
+    J = np.zeros((len(V), 4), np.int64)
+    J[:, 0] = head[0]
+    W = np.zeros((len(V), 4))
+    W[:, 0] = 1.0
+    from app.core.garment_shell import signed_distance
+    sd = signed_distance(V, Pw, Fw) * 1000.0
+    poses = _poses(rigged, body, dense, Pw, Fw, first, V, J, W)
+    metrics = {"gap_mm": {"min": round(float(sd.min()), 2), "p50": round(float(np.median(sd)), 2)},
+               "inside_share": round(float((sd < -0.5).mean()), 4), "style": style,
+               "triangles": int(len(F)), "vertices": int(len(V)), "joints": {str(body.joint_names[head[0]]): 1.0},
+               "poses": poses, "cpu_s": 0.0}
+    why = [name for name, m in poses.items() if m["inside_share"] > 0.0]
+    if why or metrics["inside_share"] > 0:
+        raise ValueError(AROUND_IMPLAUSIBLE.format(what="earring", why="part of it lies inside the head in the "
+                                                   + ", ".join(why or ["rest"]) + " pose"))
+    if float(sd.min()) > EARRING_MAX_GAP_MM:
+        raise ValueError(AROUND_IMPLAUSIBLE.format(what="earring", why=f"it stands {sd.min():.0f} mm off the ear"))
+    out = {"V": V, "F": F, "N": vertex_normals(V, F), "J": J, "W": W, "joint_names": list(body.joint_names),
+           "curve": np.vstack([np.asarray(a["lobe"])[None] for a in anchors.values()]), "landmarks": anchors,
+           "metrics": metrics}
+    if part_V:
+        Vp = np.vstack(part_V)
+        Fp = np.vstack(part_F)
+        try:
+            both = {"V": Vp, "F": Fp, "UV": np.vstack([np.asarray(part["UV"], np.float64)] * len(part_V)),
+                    "image": part.get("image"), "mime": part.get("mime"), "material": part.get("material")}
+            out["pendant"] = _rigid_part(Vp, both, J[0], W[0], rigged, body, dense, Pw, Fw, first, None, "drop")
+        except ValueError as e:
+            out["pendant_error"] = str(e)
+    metrics["cpu_s"] = round(time.monotonic() - started, 2)
+    return out
+
+
+#: A234: an earring stands at most this far off the lobe it hangs on (mm).
+EARRING_MAX_GAP_MM = 8.0
+#: A234 LOD (decision J4): the kinds the distance tier leaves off (a ring is ~1 px there).
+LOW_TIER_DROPPED = ("ring",)
+
+
+def preview_rings(character_name: str, spec: Dict[str, Any], *,
+                  profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """A234: the centre lines of a band / tube kind for unsaved settings ``spec`` (normalized) on the current plain
+    body — the Wardrobe's live preview while a slider moves: ``{rings: [[[x, y, z]…]…], landmarks, radius_m}``; the
+    body's surface only (the clothing under it is taken by the Build). Earrings: the lobe points. CPU only; nothing
+    stored."""
+    from app.core import accessory_band as ab
+    from app.core.accessory_spec import BAND_KINDS as SPEC_BAND_KINDS
+    from app.models.character import get_character_dir
+    profile = _profile_of(character_name, profile)
+    base = _current_base(character_name, profile)
+    if base is None:
+        raise ValueError(REASON_NO_BODY)
+    rigged = (get_character_dir(character_name) / "model3d" / f"{base[0]}.glb").read_bytes()
+    body, dense, Pw, Fw, first = _body_context(rigged)
+    rings, marks = [], {}
+    if spec["kind"] == "earrings":
+        for side in ab.sides_of(spec):
+            p = ab.ear_anchor(Pw, dense[first], body.joint_names, body.joint_positions, side)["point"]
+            rings.append([np.round(p, 5).tolist()])
+        return {"rings": rings, "landmarks": marks, "radius_m": float(spec["earring"]["size_mm"]) / 2000.0}
+    for side in ab.sides_of(spec):
+        fr = ab.frame(spec, body.joint_positions, side)
+        Fb = ab.dominant_faces(Fw, dense[first], body.joint_names, ab.joints_for(spec, side))
+        surf = ab.surface_radius(Pw, Fb, [], fr, [0.0], reach=ab.REACH_M[spec["kind"]], what=AROUND_WHAT[fr["key"]])
+        t = ab.smooth_up(surf["t"])[0] + ab.GAP_M
+        rings.append(np.round(ab.ring_curve(fr, t, surf["dirs"]), 5).tolist())
+        marks[side or "centre"] = {"centre": np.round(fr["centre"], 5).tolist()}
+    radius = (float(spec["band"]["width_cm"]) / 200.0 if spec["kind"] in SPEC_BAND_KINDS
+              else float(spec["chain"]["thickness_mm"]) / 2000.0)
+    return {"rings": rings, "landmarks": marks, "radius_m": radius}

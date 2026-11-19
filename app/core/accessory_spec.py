@@ -3,7 +3,10 @@
 
 An outfit piece in mode ``accessory`` (``garment_set.ACCESSORY``) carries::
 
-    jewellery: {kind, band, buckle, chain, metal, color?, pendant, side, finger?, sway}
+    jewellery: {kind, band, buckle, chain, metal, color?, pendant, side, finger?, sway, earring}
+
+A234 adds ``band.at`` (where a strap goes round: thigh / upper_arm / chest) and ``earring: {style, size_mm}`` (stud /
+hoop built on the CPU, ``drop`` = the item-image mesh hung under the lobe — the necklace pendant's job).
 
 Every shape value is item-wide; only what is measured from a body (the neck curve) is per character
 (``accessory_build``). ``normalize`` fills the defaults and clamps; ``suggest_kind`` proposes a kind from the slots and
@@ -15,8 +18,8 @@ from typing import Any, Dict, Optional, Tuple
 
 #: The kinds of spec § 5 (generic accessory words).
 KINDS: Tuple[str, ...] = ("necklace", "choker", "earrings", "bracelet", "ring", "anklet", "belt", "strap")
-#: The kinds built so far (phase P1: the necklace chain). Any other kind is stored but not built yet.
-BUILT_KINDS: Tuple[str, ...] = ("necklace",)
+#: The kinds built (A216 the necklace, A234 every other kind).
+BUILT_KINDS: Tuple[str, ...] = ("necklace", "belt")
 CHAIN_STYLES: Tuple[str, ...] = ("cable", "box", "rope", "none")
 #: The chain's material (A225): the metals, then the cords (a pendant on a leather cord, a string or a fabric band).
 #: The stored key stays ``metal`` (spec § 5).
@@ -27,10 +30,19 @@ FINGERS: Tuple[str, ...] = ("index", "middle", "ring", "little")
 SWAY: Tuple[str, ...] = ("off", "light")
 BAND_LAYERS: Tuple[str, ...] = ("auto", "body")
 BAND_MATERIALS: Tuple[str, ...] = ("leather", "metal", "fabric", "from_image")
+#: Where a strap goes round (A234).
+STRAP_AT: Tuple[str, ...] = ("thigh", "upper_arm", "chest")
+#: Earring styles (A234): procedural stud / hoop, or ``drop`` from the item image (1 hub job per item).
+EARRING_STYLES: Tuple[str, ...] = ("stud", "hoop", "drop")
+#: The kinds whose ``band`` is a flat strip (the rest of ``band`` — ``height_cm`` — moves any ring-shaped kind).
+BAND_KINDS: Tuple[str, ...] = ("belt", "choker", "strap")
+#: The kinds that are a round tube around a limb.
+TUBE_KINDS: Tuple[str, ...] = ("anklet", "bracelet", "ring")
 
 #: Spec § 5 defaults (plan Task 3).
 DEFAULTS: Dict[str, Any] = {
-    "band": {"height_cm": 0.0, "width_cm": 4.0, "layer": "auto", "material": "from_image"},
+    "band": {"height_cm": 0.0, "width_cm": 4.0, "layer": "auto", "material": "from_image", "at": "thigh"},
+    "earring": {"style": "stud", "size_mm": 6.0},
     "buckle": {"from_image": True, "size_mm": 50.0},
     "chain": {"drop_cm": 4.0, "thickness_mm": 1.5, "style": "cable"},
     "metal": "gold",
@@ -46,8 +58,12 @@ CORD_THICKNESS_MM = 2.5
 #: Clamp ranges ``(low, high)`` of the numeric fields.
 RANGES: Dict[str, Tuple[float, float]] = {
     "drop_cm": (0.0, 30.0), "thickness_mm": (0.5, 6.0), "width_cm": (0.5, 12.0), "size_mm": (3.0, 120.0),
-    "height_cm": (-30.0, 30.0),
+    "height_cm": (-30.0, 30.0), "earring_mm": (2.0, 60.0),
 }
+#: A234: a choker / strap / belt's width when none is stored (a 4 cm belt is a 1.5 cm choker).
+KIND_WIDTH_CM: Dict[str, float] = {"belt": 4.0, "choker": 1.5, "strap": 2.5}
+#: A234: a bracelet / anklet / ring's thickness when none is stored.
+KIND_THICKNESS_MM: Dict[str, float] = {"bracelet": 2.5, "anklet": 1.5, "ring": 2.0}
 #: Named drop lengths below the jugular notch (spec § 4).
 DROP_PRESETS: Dict[str, float] = {"collar": 4.0, "princess": 10.0, "matinee": 20.0}
 
@@ -88,15 +104,17 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         raise ValueError(f"unknown accessory kind {kind!r}")
     d = DEFAULTS
     metal = _choice(raw.get("metal"), METALS, d["metal"])
-    thick_default = CORD_THICKNESS_MM if metal in CORDS else d["chain"]["thickness_mm"]
+    thick_default = CORD_THICKNESS_MM if metal in CORDS else KIND_THICKNESS_MM.get(kind, d["chain"]["thickness_mm"])
+    width_default = KIND_WIDTH_CM.get(kind, d["band"]["width_cm"])
     band_raw = raw.get("band") if isinstance(raw.get("band"), dict) else {}
     chain_raw = raw.get("chain") if isinstance(raw.get("chain"), dict) else {}
     out: Dict[str, Any] = {
         "kind": kind,
         "band": {"height_cm": _num(band_raw.get("height_cm", d["band"]["height_cm"]), "height_cm", 0.0),
-                 "width_cm": _num(band_raw.get("width_cm", d["band"]["width_cm"]), "width_cm", 4.0),
+                 "width_cm": _num(band_raw.get("width_cm", width_default), "width_cm", width_default),
                  "layer": _choice(band_raw.get("layer"), BAND_LAYERS, d["band"]["layer"]),
-                 "material": _choice(band_raw.get("material"), BAND_MATERIALS, d["band"]["material"])},
+                 "material": _choice(band_raw.get("material"), BAND_MATERIALS, d["band"]["material"]),
+                 "at": _choice(band_raw.get("at"), STRAP_AT, d["band"]["at"])},
         "chain": {"drop_cm": _num(chain_raw.get("drop_cm", d["chain"]["drop_cm"]), "drop_cm", 4.0),
                   "thickness_mm": _num(chain_raw.get("thickness_mm", thick_default), "thickness_mm", thick_default),
                   "style": _choice(chain_raw.get("style"), CHAIN_STYLES, d["chain"]["style"])},
@@ -104,6 +122,10 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "side": _choice(raw.get("side"), SIDES, d["side"]),
         "sway": _choice(raw.get("sway"), SWAY, d["sway"]),
     }
+    ear_raw = raw.get("earring") if isinstance(raw.get("earring"), dict) else {}
+    out["earring"] = {"style": _choice(ear_raw.get("style"), EARRING_STYLES, d["earring"]["style"]),
+                      "size_mm": _num(ear_raw.get("size_mm", d["earring"]["size_mm"]), "earring_mm",
+                                      d["earring"]["size_mm"])}
     buckle = raw.get("buckle", d["buckle"])
     if buckle is None:
         out["buckle"] = None
@@ -186,9 +208,37 @@ def metal_material(spec: Dict[str, Any]) -> Tuple[str, float, float]:
 
 
 def pendant_on(spec: Optional[Dict[str, Any]]) -> bool:
-    """Whether ``spec`` (normalized) asks for a pendant made from the item image (A225)."""
-    return bool(spec) and spec.get("kind") == "necklace" and isinstance(spec.get("pendant"), dict) \
-        and bool(spec["pendant"].get("from_image", True))
+    """Whether ``spec`` (normalized) asks for a part made from the item image (one ``jewellery_mesh`` job per item):
+    the necklace's pendant (A225), the belt's buckle and the earrings' drop (A234)."""
+    return image_part_mm(spec) is not None
+
+
+def image_part_mm(spec: Optional[Dict[str, Any]]) -> Optional[float]:
+    """The size (longest side, mm) of the item-image part ``spec`` asks for, None without one (``pendant_on``)."""
+    if not spec:
+        return None
+    kind = spec.get("kind")
+    if kind == "belt":
+        buckle = spec.get("buckle")
+        return float(buckle["size_mm"]) if isinstance(buckle, dict) and buckle.get("from_image", True) else None
+    if kind == "earrings":
+        if (spec.get("earring") or {}).get("style") != "drop":
+            return None
+        pendant = spec.get("pendant") if isinstance(spec.get("pendant"), dict) else PENDANT_DEFAULTS
+        return float(pendant["size_mm"])
+    if kind in ("necklace", "earrings") and isinstance(spec.get("pendant"), dict) \
+            and bool(spec["pendant"].get("from_image", True)):
+        return float(spec["pendant"]["size_mm"])
+    return None
+
+
+#: A234: what the item-image part of a kind is called (the dialog's and the Build plan's words).
+PART_NAMES: Dict[str, str] = {"necklace": "Pendant", "belt": "Buckle", "earrings": "Earring drop"}
+
+
+def part_name(spec: Optional[Dict[str, Any]]) -> str:
+    """The word for ``spec``'s item-image part (``PART_NAMES``; "Pendant" by default)."""
+    return PART_NAMES.get(str((spec or {}).get("kind") or ""), "Pendant")
 
 
 def srgb_to_linear(hex_color: str) -> Tuple[float, float, float]:

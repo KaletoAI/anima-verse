@@ -16,6 +16,14 @@
  * placeholder box at the chain's lowest point until it is built, its state
  * and "Build pendant (1 hub job)" (POST …/pendant — the item's one hub job,
  * shared by every wearer).
+ *
+ * A234: every other kind. Belt / choker / strap are a flat band (height, width,
+ * the layer it sits on, band material; a strap's place and side; a belt's
+ * buckle from the item image, 1 hub job per item); anklet / bracelet / ring
+ * a round tube (height, thickness, side, a ring's finger); earrings a stud or
+ * hoop (CPU) or a drop from the item image. The live dots are the piece's
+ * centre line(s) on the body (POST …/curve with the unsaved description); a
+ * small piece is framed close.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
@@ -26,8 +34,10 @@ import { useToast } from '../../lib/Toast'
 import { FigureBuildButton } from './FigureBuildButton'
 import { Model3DViewer } from './Model3DViewer'
 import {
-  ACCESSORY_KIND_LABELS, ACCESSORY_METAL_LABELS, ACCESSORY_STATE_COLOR, ACCESSORY_STATE_LABELS, PENDANT_STATE_COLOR,
-  PENDANT_STATE_LABELS, dropPresetOf, pendantBoxPoints,
+  ACCESSORY_BAND_MATERIAL_LABELS, ACCESSORY_EARRING_LABELS, ACCESSORY_FINGER_LABELS, ACCESSORY_FOCUS_M,
+  ACCESSORY_KIND_LABELS, ACCESSORY_METAL_LABELS, ACCESSORY_PART_NAMES, ACCESSORY_POSE_LABELS, ACCESSORY_SIDE_LABELS, ACCESSORY_STATE_COLOR,
+  ACCESSORY_STATE_LABELS, ACCESSORY_STRAP_AT_LABELS, BAND_KINDS, PENDANT_STATE_COLOR, PENDANT_STATE_LABELS,
+  TUBE_KINDS, dropPresetOf, pendantBoxPoints,
 } from './figureModel'
 import type { AccessoryInfo, AccessoryPendant, Jewellery } from './figureModel'
 
@@ -71,7 +81,7 @@ export function AccessoryPieceControls({ character, itemId, version = 0 }: {
         </span>
       ) : null}
       <button type="button" className="ga-btn ga-btn-sm" aria-haspopup="dialog" style={{ marginLeft: 'auto' }}
-        title={t('Kind, drop, material and pendant of this accessory, with a 3D view; the chain is made on the CPU (0 hub jobs), a pendant is 1 hub job per item')}
+        title={t('Kind, drop, material and pendant of this accessory, with a 3D view; the piece is made on the CPU (0 hub jobs), an item-image part is 1 hub job per item')}
         onClick={() => setOpen(true)}>
         {t('Accessory settings…')}
       </button>
@@ -116,9 +126,24 @@ export function AccessoryDialog({ character, itemId, onClose }: {
   }, [data, draft])
   const drop = draft?.chain?.drop_cm ?? 4
   const thick = draft?.chain?.thickness_mm ?? 1.5
+  // A234: the live rings of the other kinds (the shape fields only — the material does not move them).
+  const shapeKey = draft && draft.kind !== 'necklace'
+    ? JSON.stringify({ kind: draft.kind, band: draft.band, side: draft.side, finger: draft.finger,
+      earring: draft.earring, chain: draft.chain })
+    : ''
+  useEffect(() => {
+    if (!shapeKey) return
+    const mine = ++seq.current
+    const id = window.setTimeout(() => {
+      apiPost<{ rings: Array<Array<[number, number, number]>> }>(`${path}/curve`, { jewellery: JSON.parse(shapeKey) })
+        .then((r) => { if (mine === seq.current) { setPoints(r.rings.flat()); setAnchor(null) } })
+        .catch(() => { if (mine === seq.current) setPoints([]) })
+    }, 150)
+    return () => window.clearTimeout(id)
+  }, [path, shapeKey])
   // The live centre line: the newest request wins (a slider sends many).
   useEffect(() => {
-    if (!draft || draft.kind !== 'necklace') { setPoints([]); return }
+    if (!draft || draft.kind !== 'necklace') { if (!shapeKey) setPoints([]); return }
     const mine = ++seq.current
     const id = window.setTimeout(() => {
       apiPost<{ points: Array<[number, number, number]>; anchor?: [number, number, number];
@@ -131,7 +156,7 @@ export function AccessoryDialog({ character, itemId, onClose }: {
         .catch(() => { if (mine === seq.current) { setPoints([]); setAnchor(null) } })
     }, 120)
     return () => window.clearTimeout(id)
-  }, [path, drop, thick, draft])
+  }, [path, drop, thick, draft, shapeKey])
   const setChain = (key: 'drop_cm' | 'thickness_mm', v: number) =>
     setDraft((d) => (d ? { ...d, chain: { ...(d.chain || {}), [key]: v } } : d))
   const pendantOn = !!draft?.pendant
@@ -186,6 +211,22 @@ export function AccessoryDialog({ character, itemId, onClose }: {
   const ranges = data?.ranges || {}
   const preset = dropPresetOf(drop, data?.drop_presets || {})
   const built = !!draft && !!data && data.built_kinds.includes(draft.kind)
+  // A234: switching the kind takes that kind's width / thickness default.
+  const setKind = (kind: string) => setDraft((d) => {
+    if (!d || !data) return d
+    const width = data.kind_widths?.[kind]
+    const thickness = data.kind_thickness?.[kind]
+    return { ...d, kind,
+      band: width !== undefined ? { ...(d.band || {}), width_cm: width } : d.band,
+      chain: thickness !== undefined && !data.cords.includes(d.metal || '')
+        ? { ...(d.chain || {}), thickness_mm: thickness } : d.chain }
+  })
+  const isBand = !!draft && BAND_KINDS.includes(draft.kind)
+  const focusM = draft ? ACCESSORY_FOCUS_M[draft.kind] || 0 : 0
+  const focus = focusM && points.length ? {
+    center: [0, 1, 2].map((k) => points.reduce((a, p) => a + p[k], 0) / points.length) as [number, number, number],
+    radius: focusM,
+  } : null
   const state = data?.state
   return createPortal(
     <div className="ga-modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget && !saving) onClose() }}>
@@ -199,13 +240,16 @@ export function AccessoryDialog({ character, itemId, onClose }: {
               <div style={{ flex: '1 1 420px', minWidth: 0 }}>
                 <Model3DViewer key={data.glb_url} url={data.glb_url} format="glb" height={460} subject="figure"
                   builtAt={state === 'current' ? data.built_at : null}
-                  figureHeight={1.7} scaleFigure
+                  figureHeight={focus ? 0 : 1.7} scaleFigure={!focus} focus={focus}
                   surfacePoints={[
                     ...points.map((at) => ({ at, color: dirty || state !== 'current' ? '#ffb000' : '#d4af37' })),
                     ...boxDots.map((at) => ({ at, color: '#58a6ff' })),
                   ]} />
                 <div className="ga-hint" style={{ fontSize: '0.75em' }}>
-                  {t('Drag rotates the body, Shift+drag moves it. The dots are the chain for the values beside it; the 1.70 m figure gives the scale.')}
+                  {draft.kind === 'necklace'
+                    ? t('Drag rotates the body, Shift+drag moves it. The dots are the chain for the values beside it; the 1.70 m figure gives the scale.')
+                    : focus ? t('Drag rotates the body, Shift+drag moves it. The dots are the piece for the values beside it, on the body\'s surface; the view is framed close on it.')
+                      : t('Drag rotates the body, Shift+drag moves it. The dots are the piece for the values beside it, on the body\'s surface (the clothing under it is taken by Build); the 1.70 m figure gives the scale.')}
                   {boxDots.length ? ' ' + t('The blue box is where the pendant hangs, at its size, until it is built.') : ''}
                 </div>
               </div>
@@ -222,7 +266,7 @@ export function AccessoryDialog({ character, itemId, onClose }: {
                   <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                     <span className="ga-form-hint">{t('Kind')}</span>
                     <select className="ga-input" value={draft.kind}
-                      onChange={(e) => setDraft({ ...draft, kind: e.target.value })}>
+                      onChange={(e) => setKind(e.target.value)}>
                       {data.kinds.map((k) => (
                         <option key={k} value={k}>
                           {t(ACCESSORY_KIND_LABELS[k] || k)}
@@ -232,21 +276,41 @@ export function AccessoryDialog({ character, itemId, onClose }: {
                     </select>
                     {data.suggested && data.suggested !== draft.kind ? (
                       <button type="button" className="ga-btn ga-btn-sm"
-                        onClick={() => setDraft({ ...draft, kind: data.suggested || draft.kind })}>
+                        onClick={() => setKind(data.suggested || draft.kind)}>
                         {t('Use suggested: {kind}').replace('{kind}', t(ACCESSORY_KIND_LABELS[data.suggested] || data.suggested))}
                       </button>
                     ) : null}
                   </label>
-                  <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    <span className="ga-form-hint">{t('Material')}</span>
-                    <select className="ga-input" value={draft.metal || 'gold'}
-                      onChange={(e) => setMaterial(e.target.value)}>
-                      {data.metals.filter((m) => m !== 'custom').map((m) => (
-                        <option key={m} value={m}>{t(ACCESSORY_METAL_LABELS[m] || m)}</option>
-                      ))}
-                    </select>
-                  </label>
+                  {isBand ? (
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <span className="ga-form-hint">{t('Band material')}</span>
+                      <select className="ga-input" value={draft.band?.material || 'from_image'}
+                        onChange={(e) => setDraft({ ...draft, band: { ...(draft.band || {}), material: e.target.value } })}>
+                        {(data.band_materials || []).map((m) => (
+                          <option key={m} value={m}>{t(ACCESSORY_BAND_MATERIAL_LABELS[m] || m)}</option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+                  {!isBand || draft.band?.material === 'metal' ? (
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <span className="ga-form-hint">{t(isBand ? 'Metal' : 'Material')}</span>
+                      <select className="ga-input" value={draft.metal || 'gold'}
+                        onChange={(e) => setMaterial(e.target.value)}>
+                        {data.metals.filter((m) => m !== 'custom' && (!isBand || !data.cords.includes(m))).map((m) => (
+                          <option key={m} value={m}>{t(ACCESSORY_METAL_LABELS[m] || m)}</option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
                 </div>
+                {draft.kind !== 'necklace' ? (
+                  <AroundFields data={data} draft={draft} setDraft={setDraft} />
+                ) : null}
+                {draft.kind === 'belt' || (draft.kind === 'earrings' && draft.earring?.style === 'drop') ? (
+                  <ImagePartFields data={data} draft={draft} setDraft={setDraft} row={pendantRow} dirty={dirty}
+                    busy={pendantBusy} onBuild={() => { void buildPendant() }} />
+                ) : null}
                 {draft.kind === 'necklace' ? (
                   <>
                     <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -322,17 +386,26 @@ export function AccessoryDialog({ character, itemId, onClose }: {
                 ) : null}
                 {data.metrics ? (
                   <div className="ga-hint" style={{ fontSize: '0.75em' }}
-                    title={t('Distance from the chain to the skin along the whole chain, in the rest pose')}>
-                    {t('Gap to the skin')}: {data.metrics.gap_mm?.min ?? '–'}–{data.metrics.gap_mm?.p95 ?? '–'} mm
+                    title={draft.kind === 'necklace'
+                      ? t('Distance from the chain to the skin along the whole chain, in the rest pose')
+                      : t('Distance from the piece to the layer under it (skin or clothing) in the rest pose; the poses: the smallest distance to the body in the rest, walk, sit and run test poses')}>
+                    {t(draft.kind === 'necklace' ? 'Gap to the skin' : 'Gap to the layer under it')}: {data.metrics.gap_mm?.min ?? '–'}–{data.metrics.gap_mm?.p95 ?? '–'} mm
                     {' · '}{t('inside the body')}: {Math.round((data.metrics.inside_share || 0) * 100)} %
+                    {data.metrics.on_clothing_share !== undefined
+                      ? ` · ${t('on clothing')}: ${Math.round(data.metrics.on_clothing_share * 100)} %` : ''}
                     {' · '}{data.metrics.triangles} {t('triangles')}
+                    {data.metrics.poses && draft.kind !== 'necklace' ? (
+                      <div>{Object.entries(data.metrics.poses).map(([pose, m]) =>
+                        `${t(ACCESSORY_POSE_LABELS[pose] || pose)} ${m.gap_min_mm} mm`).join(' · ')}</div>
+                    ) : null}
                   </div>
                 ) : null}
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
                   <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={!dirty || saving}
                     onClick={() => { void save() }}>{t('Save')}</button>
                   <span className="ga-hint" style={{ fontSize: '0.75em' }}>
-                    {dirty ? t('Saving spends nothing; the chain is made again on the next Build (CPU, 0 hub jobs).')
+                    {dirty ? t(draft.kind === 'necklace' ? 'Saving spends nothing; the chain is made again on the next Build (CPU, 0 hub jobs).'
+                      : 'Saving spends nothing; the piece is made again on the next Build (CPU, 0 hub jobs).')
                       : t('Saved')}
                   </span>
                 </div>
@@ -347,5 +420,155 @@ export function AccessoryDialog({ character, itemId, onClose }: {
       </div>
     </div>,
     document.body,
+  )
+}
+
+type SetDraft = (f: (d: Jewellery | null) => Jewellery | null) => void
+
+function Slider({ label, value, unit, min, max, step, digits = 1, onChange, hint }: {
+  label: string; value: number; unit: string; min: number; max: number; step: number; digits?: number
+  onChange: (v: number) => void; hint?: string
+}) {
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }} title={hint}>
+      <span className="ga-form-hint">{label}: {value.toFixed(digits)} {unit}</span>
+      <input type="range" aria-label={label} min={min} max={max} step={step} value={value}
+        onChange={(e) => onChange(Number(e.target.value))} />
+    </label>
+  )
+}
+
+function Choice({ label, value, options, labels, onChange }: {
+  label: string; value: string; options: string[]; labels: Record<string, string>; onChange: (v: string) => void
+}) {
+  const { t } = useI18n()
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <span className="ga-form-hint">{label}</span>
+      <select className="ga-input" value={value} onChange={(e) => onChange(e.target.value)}>
+        {options.map((o) => <option key={o} value={o}>{t(labels[o] || o)}</option>)}
+      </select>
+    </label>
+  )
+}
+
+/** A234: the shape fields of a band / tube / earrings (every field saves with Save, no job). */
+function AroundFields({ data, draft, setDraft }: { data: AccessoryInfo; draft: Jewellery; setDraft: SetDraft }) {
+  const { t } = useI18n()
+  const ranges = data.ranges || {}
+  const kind = draft.kind
+  const band = draft.band || {}
+  const setBand = (key: string, v: number | string) => setDraft((d) => (d ? { ...d, band: { ...(d.band || {}), [key]: v } } : d))
+  const setField = (key: string, v: unknown) => setDraft((d) => (d ? { ...d, [key]: v } : d))
+  const isBand = BAND_KINDS.includes(kind)
+  const isTube = TUBE_KINDS.includes(kind)
+  const strapAt = band.at || 'thigh'
+  const paired = ['anklet', 'bracelet', 'ring', 'earrings'].includes(kind) || (kind === 'strap' && strapAt !== 'chest')
+  const height = band.height_cm ?? 0
+  const width = band.width_cm ?? data.kind_widths?.[kind] ?? 4
+  const thick = draft.chain?.thickness_mm ?? data.kind_thickness?.[kind] ?? 1.5
+  const ear = draft.earring || {}
+  const heightLabel = kind === 'belt' ? t('Height (from the waist, or just under the waistband of trousers worn under it)')
+    : isBand || isTube ? t('Height (along the body part; + toward the trunk / up)') : ''
+  const [hMin, hMax] = isTube ? [-5, 5] : kind === 'choker' ? [-3, 3] : [-15, 15]
+  return (
+    <div style={{ ...GRID }}>
+      {kind === 'strap' ? (
+        <Choice label={t('Where it goes round')} value={strapAt} options={data.strap_at || []}
+          labels={ACCESSORY_STRAP_AT_LABELS} onChange={(v) => setBand('at', v)} />
+      ) : null}
+      {paired ? (
+        <Choice label={t('Body side')} value={draft.side || 'both'} options={data.sides || []} labels={ACCESSORY_SIDE_LABELS}
+          onChange={(v) => setField('side', v)} />
+      ) : null}
+      {kind === 'ring' ? (
+        <Choice label={t('Finger')} value={draft.finger || 'ring'} options={data.fingers || []}
+          labels={ACCESSORY_FINGER_LABELS} onChange={(v) => setField('finger', v)} />
+      ) : null}
+      {kind === 'earrings' ? (
+        <Choice label={t('Style')} value={ear.style || 'stud'} options={data.earring_styles || []}
+          labels={ACCESSORY_EARRING_LABELS} onChange={(v) => setField('earring', { ...ear, style: v })} />
+      ) : null}
+      {heightLabel ? (
+        <Slider label={heightLabel} value={height} unit="cm" min={hMin} max={hMax} step={isTube ? 0.1 : 0.5}
+          onChange={(v) => setBand('height_cm', v)} />
+      ) : null}
+      {isBand ? (
+        <Slider label={t('Width')} value={width} unit="cm" min={ranges.width_cm?.[0] ?? 0.5}
+          max={ranges.width_cm?.[1] ?? 12} step={0.1} onChange={(v) => setBand('width_cm', v)} />
+      ) : null}
+      {isTube || (kind === 'earrings' && ear.style === 'hoop') ? (
+        <Slider label={t(kind === 'earrings' ? 'Wire thickness' : 'Thickness')} value={thick} unit="mm"
+          min={ranges.thickness_mm?.[0] ?? 0.5} max={ranges.thickness_mm?.[1] ?? 6} step={0.1}
+          onChange={(v) => setDraft((d) => (d ? { ...d, chain: { ...(d.chain || {}), thickness_mm: v } } : d))} />
+      ) : null}
+      {kind === 'earrings' && ear.style !== 'drop' ? (
+        <Slider label={t(ear.style === 'hoop' ? 'Hoop diameter' : 'Stud size')} value={ear.size_mm ?? 6} unit="mm" digits={0}
+          min={ranges.earring_mm?.[0] ?? 2} max={ranges.earring_mm?.[1] ?? 60} step={1}
+          onChange={(v) => setField('earring', { ...ear, size_mm: v })} />
+      ) : null}
+      {isBand || isTube ? (
+        <Choice label={t('Sits on')} value={band.layer || 'auto'} options={['auto', 'body']}
+          labels={{ auto: 'The outermost clothing under it', body: 'The body' }} onChange={(v) => setBand('layer', v)} />
+      ) : null}
+    </div>
+  )
+}
+
+/** A234: a belt's buckle / the earrings' drop from the item image — the item's ONE hub job (shared with the necklace
+ *  pendant's job, POST …/pendant), its size and its state. */
+function ImagePartFields({ data, draft, setDraft, row, dirty, busy, onBuild }: {
+  data: AccessoryInfo; draft: Jewellery; setDraft: SetDraft; row: AccessoryPendant | null; dirty: boolean
+  busy: boolean; onBuild: () => void
+}) {
+  const { t } = useI18n()
+  const part = ACCESSORY_PART_NAMES[draft.kind] || 'Pendant'
+  const key: 'buckle' | 'pendant' = draft.kind === 'belt' ? 'buckle' : 'pendant'
+  const value = draft[key] as { from_image?: boolean; size_mm?: number } | null | undefined
+  const fallback = key === 'buckle' ? 50 : data.pendant_defaults?.size_mm ?? 18
+  const on = key === 'pendant' ? true : !!value && value.from_image !== false
+  const size = value?.size_mm ?? fallback
+  const set = (next: boolean, s?: number) => setDraft((d) => (d ? {
+    ...d, [key]: next ? { from_image: true, size_mm: s ?? size } : null,
+  } : d))
+  const ranges = data.ranges || {}
+  return (
+    <fieldset style={{ border: '1px solid var(--border, #30363d)', borderRadius: 6, padding: '6px 8px',
+      display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <legend className="ga-form-hint">{t(part)}</legend>
+      {key === 'buckle' ? (
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input type="checkbox" checked={on} onChange={(e) => set(e.target.checked)} />
+          {t('Buckle from the item image')}
+        </label>
+      ) : null}
+      {on ? (
+        <Slider label={t('{part} size (longest side)').replace('{part}', t(part))} value={size} unit="mm" digits={0}
+          min={ranges.size_mm?.[0] ?? 3} max={Math.min(ranges.size_mm?.[1] ?? 120, 100)} step={1}
+          onChange={(v) => set(true, v)} />
+      ) : null}
+      {on && row ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <span data-pendant-state={row.state} title={t(row.reason)}
+            style={{ ...CHIP, border: `1px solid ${PENDANT_STATE_COLOR[row.state] || '#888'}` }}>
+            {t(PENDANT_STATE_LABELS[row.state] || row.state)}
+          </span>
+          <span className="ga-hint" style={{ fontSize: '0.75em' }}>
+            {row.on_figure && row.metrics ? `${row.metrics.size_mm} mm` : t(row.reason)}
+          </span>
+        </div>
+      ) : null}
+      {on ? (
+        <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button type="button" className="ga-btn ga-btn-sm"
+            disabled={busy || dirty || !row || ['ready', 'running', 'no_image'].includes(row.state)}
+            title={dirty ? t('Save first') : t('Makes the mesh from the item image; shared by everyone wearing this item')}
+            onClick={onBuild}>
+            {t('Build {part} (1 hub job)').replace('{part}', t(part).toLowerCase())}
+          </button>
+          <span className="ga-hint" style={{ fontSize: '0.72em' }}>{t('Size and placement are CPU only (0 hub jobs).')}</span>
+        </span>
+      ) : null}
+    </fieldset>
   )
 }

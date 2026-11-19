@@ -1530,6 +1530,14 @@ export interface Jewellery {
   metal?: string
   /** A225: the pendant from the item image, null: none. */
   pendant?: { from_image?: boolean; size_mm?: number } | null
+  /** A234: a band (belt / choker / strap) and the height of any ring-shaped kind. */
+  band?: { height_cm?: number; width_cm?: number; layer?: string; material?: string; at?: string }
+  /** A234: a belt's buckle from the item image, null: none. */
+  buckle?: { from_image?: boolean; size_mm?: number } | null
+  side?: string
+  finger?: string
+  /** A234: earrings — stud / hoop (CPU) or drop (from the item image). */
+  earring?: { style?: string; size_mm?: number }
   [key: string]: unknown
 }
 
@@ -1560,9 +1568,20 @@ export interface AccessoryInfo {
   pendant_defaults: { from_image: boolean; size_mm: number }
   pendant: AccessoryPendant | null
   ranges: Record<string, [number, number]>
+  /** A234 */
+  strap_at: string[]
+  earring_styles: string[]
+  band_materials: string[]
+  fingers: string[]
+  sides: string[]
+  kind_widths: Record<string, number>
+  kind_thickness: Record<string, number>
+  part_name: string
   state: 'current' | 'due' | 'blocked' | 'failed' | string
   reason: string
-  metrics: { gap_mm?: { min?: number; p50?: number; p95?: number }; inside_share?: number; triangles?: number } | null
+  metrics: { gap_mm?: { min?: number; p50?: number; p95?: number }; inside_share?: number; triangles?: number;
+    on_clothing_share?: number; length_m?: Record<string, number>;
+    poses?: Record<string, { gap_min_mm: number; inside_share: number }> } | null
   built_at: string
   cost: { hub_jobs: number }
   glb_url: string
@@ -1572,6 +1591,23 @@ export const ACCESSORY_KIND_LABELS: Record<string, string> = {
   necklace: 'Necklace', choker: 'Choker', earrings: 'Earrings', bracelet: 'Bracelet', ring: 'Ring',
   anklet: 'Anklet', belt: 'Belt', strap: 'Strap',
 }
+
+/** A234: the kinds that are a flat band, the ones that are a round tube round a limb. */
+export const BAND_KINDS = ['belt', 'choker', 'strap']
+export const TUBE_KINDS = ['anklet', 'bracelet', 'ring']
+/** A234: what the item-image part of a kind is called (`accessory_spec.PART_NAMES`). */
+export const ACCESSORY_PART_NAMES: Record<string, string> = { necklace: 'Pendant', belt: 'Buckle', earrings: 'Earring drop' }
+export const ACCESSORY_BAND_MATERIAL_LABELS: Record<string, string> = {
+  leather: 'Leather', metal: 'Metal', fabric: 'Fabric', from_image: 'Colour from the item image',
+}
+export const ACCESSORY_STRAP_AT_LABELS: Record<string, string> = { thigh: 'Thigh', upper_arm: 'Upper arm', chest: 'Under the chest' }
+export const ACCESSORY_EARRING_LABELS: Record<string, string> = { stud: 'Stud', hoop: 'Hoop', drop: 'Drop from the item image' }
+/** A234: the CPU test poses of the gates. */
+export const ACCESSORY_POSE_LABELS: Record<string, string> = { rest: 'Rest pose', walk: 'Walk pose', sit: 'Sit pose', run: 'Run pose' }
+export const ACCESSORY_SIDE_LABELS: Record<string, string> = { left: 'Left', right: 'Right', both: 'Both' }
+export const ACCESSORY_FINGER_LABELS: Record<string, string> = { index: 'Index finger', middle: 'Middle finger', ring: 'Ring finger', little: 'Little finger' }
+/** A234: how close the dialog's 3D view frames a small piece (metres round its preview points; 0: the whole body). */
+export const ACCESSORY_FOCUS_M: Record<string, number> = { ring: 0.07, earrings: 0.14, bracelet: 0.14, anklet: 0.2 }
 
 export const ACCESSORY_METAL_LABELS: Record<string, string> = {
   gold: 'Gold', silver: 'Silver', rose_gold: 'Rose gold', black: 'Black metal', custom: 'Custom colour',

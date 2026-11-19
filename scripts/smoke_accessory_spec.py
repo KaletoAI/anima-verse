@@ -39,7 +39,8 @@ n = s.normalize({"kind": "necklace"})
 check("[1] chain", n["chain"], {"drop_cm": 4.0, "thickness_mm": 1.5, "style": "cable"})
 check("[1] metal/side/sway/pendant", (n["metal"], n["side"], n["sway"], n["pendant"]), ("gold", "both", "off", None))
 check("[1] buckle", n["buckle"], {"from_image": True, "size_mm": 50.0})
-check("[1] band", n["band"], {"height_cm": 0.0, "width_cm": 4.0, "layer": "auto", "material": "from_image"})
+check("[1] band", n["band"], {"height_cm": 0.0, "width_cm": 4.0, "layer": "auto", "material": "from_image",
+                           "at": "thigh"})
 
 def chain(**c):
     return s.normalize({"kind": "necklace", "chain": c})["chain"]

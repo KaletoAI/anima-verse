@@ -398,7 +398,7 @@ ACCESSORY_LABEL = "Accessory · {name} (CPU, 0 hub jobs)"
 
 
 #: A225: the pendant's ONE hub job (item-wide, every wearer shares it).
-PENDANT_LABEL = "Pendant · {name} (1 hub job)"
+PENDANT_LABEL = "{part} · {name} (1 hub job)"
 #: Why the pendant step runs only in a manual Build.
 PENDANT_MANUAL = "The pendant is one paid hub job — a manual Build or Build pendant in the Wardrobe makes it"
 
@@ -409,10 +409,13 @@ def _pendant_step(character_name: str, item_id: str, profile: Dict[str, Any]) ->
     Wardrobe's "Build pendant again" retries), nor one that is running or ready."""
     from app.core import accessory_build, accessory_spec
     from app.models.inventory import get_item
-    pendant = accessory_build.pendant_info(item_id, accessory_spec.of_item(get_item(item_id) or {}))
+    spec = accessory_spec.of_item(get_item(item_id) or {})
+    pendant = accessory_build.pendant_info(item_id, spec)
     if not pendant or pendant["state"] != "missing":
         return None
-    return Step("pendant", PENDANT_LABEL.format(name=_item_name(item_id)), 1, item_id, manual=PENDANT_MANUAL)
+    # A234: the belt's buckle and the earrings' drop are the same item-image job
+    return Step("pendant", PENDANT_LABEL.format(part=accessory_spec.part_name(spec), name=_item_name(item_id)), 1,
+                item_id, manual=PENDANT_MANUAL)
 
 
 def _accessory_step(character_name: str, item_id: str, profile: Dict[str, Any]) -> Optional[Step]:

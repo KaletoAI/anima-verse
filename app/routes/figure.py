@@ -354,8 +354,10 @@ class AccessoryRequest(BaseModel):
 
 
 class AccessoryCurveRequest(BaseModel):
-    drop_cm: float
+    drop_cm: float = 4.0
     thickness_mm: float = 1.5
+    #: A234: the unsaved description of a kind other than the necklace (its rings are previewed instead).
+    jewellery: Optional[Dict[str, Any]] = None
 
 
 @router.get("/{character_name}/figure/accessory/{item_id}")
@@ -377,6 +379,11 @@ def get_accessory(character_name: str, item_id: str,
             "pendant_defaults": dict(accessory_spec.PENDANT_DEFAULTS),
             "pendant": accessory_build.pendant_row(state, accessory_spec.of_item(item), record),
             "ranges": {k: list(v) for k, v in accessory_spec.RANGES.items()},
+            "strap_at": list(accessory_spec.STRAP_AT), "earring_styles": list(accessory_spec.EARRING_STYLES),
+            "band_materials": list(accessory_spec.BAND_MATERIALS), "fingers": list(accessory_spec.FINGERS),
+            "sides": list(accessory_spec.SIDES), "kind_widths": dict(accessory_spec.KIND_WIDTH_CM),
+            "kind_thickness": dict(accessory_spec.KIND_THICKNESS_MM),
+            "part_name": accessory_spec.part_name(accessory_spec.of_item(item)),
             "state": state["state"], "reason": state["reason"], "metrics": record.get("metrics") or None,
             "built_at": record.get("built_at") or "", "cost": {"hub_jobs": 0}, "glb_url": glb_url}
 
@@ -454,6 +461,12 @@ def preview_accessory_curve(character_name: str, item_id: str, body: AccessoryCu
                             _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     from app.core import accessory_build, accessory_spec
     _template_item(character_name, item_id)
+    if body.jewellery and body.jewellery.get("kind") not in (None, "necklace"):
+        try:
+            spec = accessory_spec.normalize(body.jewellery)
+            return accessory_build.preview_rings(character_name, spec)
+        except (KeyError, ValueError) as e:
+            raise HTTPException(status_code=400, detail=accessory_build.failure_text(e))
     drop = min(max(float(body.drop_cm), accessory_spec.RANGES["drop_cm"][0]), accessory_spec.RANGES["drop_cm"][1])
     thick = min(max(float(body.thickness_mm), accessory_spec.RANGES["thickness_mm"][0]),
                 accessory_spec.RANGES["thickness_mm"][1])
