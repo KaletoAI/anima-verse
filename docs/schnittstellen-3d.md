@@ -12426,8 +12426,20 @@ computed) opens it and the morph target `mouth_open` adds the upper lip's lift. 
 (`channels_skipped` gives the reason) and keeps the measured `mouth` of version 9. The reduced tier carries the
 bone and its weights but no morph target.
 
+**The mouth's default tilt (owner decision 2026-11-19).** Every mouth channel is tilted by −20° unless the character
+stores another tilt: its axis turns 20° about the head's side axis away from the throat, toward the top of the head
+(the channels' tilt rule: u turned by −tilt about the side axis, + = toward the back). One number in three places,
+checked to agree by `scripts/smoke_mouth_channel.py` [1]: `app/core/mouth_channel.TILT_DEFAULT_DEG`, the Blender
+build's `DEFAULTS.override.tilt_deg` (`mouth_part.py`, build 6 — every humanoid's extension step is due once, local,
+0 hub jobs) and the renderers' `MOUTH.tiltDeg` (`contactTarget.ts`, for the measured mouth of version 9 and the
+head-bone formula of a model without the built one). For a head with up +Y and face +Z the axis (0, 0, −1) becomes
+(0, 0.342020, −0.939693) (`scripts/smoke_mouth_opening.mjs` [6]). `channel_declarations[].tilt_deg` carries −20 for
+the mouth (0 for a package's channel): the Channels panel's neutral value, a draft equal to it is not saved. A
+STORED override keeps its absolute tilt: tilt 0 stays 0 (20° below the new default), −20 equals the default and is
+dropped at the next save; an override saved before the tilt existed reads 0.
+
 **The teeth (Ruling A206).** The same build puts teeth, gums and a tongue into the pouch (Blender `mouth_teeth.py`,
-step 7 of `mouth_part`, build 5; the jaw's full angle is 30°). Per character `model3d_opts.mouth_teeth` switches
+step 7 of `mouth_part`, build 5 — 6 since the default tilt; the jaw's full angle is 30°). Per character `model3d_opts.mouth_teeth` switches
 teeth and tongue and sets the shade and size (Channels panel, tab `mouth`; Save stores, the Build applies).
 - Geometry: the upper row and gum weighted 1.0 to `Head`, the lower row and gum 1.0 to `Jaw` (rigid); the tongue
   copies the lower pouch wall's weights. Materials `mouth_teeth` (teeth and gums, colour in `COLOR_0`, present on
@@ -12525,7 +12537,8 @@ teeth and tongue and sets the shade and size (Channels panel, tab `mouth`; Save 
   - `GET /characters/{name}/model3d` carries `model.channel_declarations` (beside `model.collision`), and the overrides in
     `options.collision_channels`.
   - `channel_declarations` = `[{id, bone, offset, axis, depth, radius, cone_deg, funnel, accepts, min_length,
-    compress_min, exposed_only, from_rig, placement, reason}]`. `placement` is `declared` / `rig` from the stored
+    compress_min, exposed_only, from_rig, built, tilt_deg, placement, reason}]` (`tilt_deg` = the tilt without an
+    override: the mouth's −20, otherwise 0; not part of `channels_sig`). `placement` is `declared` / `rig` from the stored
     record, or null with the reason ("Not computed" before the record has channels). Without a base model, the
     reason of every entry is "No base model yet".
 
@@ -12639,6 +12652,45 @@ rule exists once, in `packages/scene-render/src/channelOpening.ts` (numbers: `sc
 - 3D client (and the admin's figure preview): after every figure's phase B, `runFigureFrame` collects each figure's
   `channelOccupants()` by partner and calls `applyChannelOpenings` on the receiving figure (`FigureRuntime`). No occupant → nothing to do; an empty
   channel restores; a model swap or dispose drops the openings.
+
+**Channel sizes (2026-11-19).** The declared pelvis channel of the private packs (`inset_channel`) is D = 0.20 m and
+R = 0.0303 m (cone 30°, funnel 0.05, compress_min 0.8, min_length 1.0):
+- D = 20 cm is the owner's length. The longest stored entering part (0.1264 m, core r_c 0.0356) fully in gives
+  k = 1 (D − r_c = 0.1644 ≥ 0.1264): nothing is compressed and nothing passes the bottom up to state length 1.30;
+  compress_min 0.8 holds it in front of the bottom up to a tip at 0.1644 / 0.8 = 0.2055 m.
+- R = r_mean + c. r_mean = 25.25 mm: the SURFACE radius (`r_surface`, the radius the opening widens to) of the
+  entering links of the seven stored entering parts, equal per link within a part and equal per part (25.2 to the
+  0.1 mm: 27.20, 27.16, 22.73, 18.12, 26.76, 30.20, 24.60 mm).
+- c = the tolerance at which an average part widens the channel by NOTHING, the largest of what each rule needs:
+  the readout's stretch is 0 for r ≤ R (c ≥ 0); the opening holds the wall at r + `OPENING_MARGIN_M`, so a rest
+  wall at R ≥ r + 2 mm is not moved by it (c ≥ 2 mm); the guidance grows the channel to r_c + `CHANNEL_PART_MARGIN_M`
+  whenever R − r_c < 5 mm (Ruling A161), and r_c ≤ r_surface, so R ≥ r + 5 mm never grows it (c ≥ 5 mm). The
+  hysteresis h acts on release only. c = 5 mm, R = 30.25 mm, rounded up to 30.3 mm.
+- With it the channel grows (A161) for a part whose thickest CORE link exceeds 25.3 mm (five of the seven stored
+  parts: 27.6–35.6 mm) and keeps R for the two thinner ones; the readout's stretch is r_surface − R wherever a link is
+  thicker (up to 6.7 mm for the thickest stored link).
+- The mouth keeps its head-relative size: the formula mouth D = 0.5 · L, R = 0.1 · L (10 cm / 2 cm for the usual
+  L = 0.2 m), the built mouth its build depth and radius (8 cm / 2 cm). It is meant to stretch: an average part
+  (25.25 mm) stretches it by 5.25 mm (26 %).
+
+**The channel readout** (`packages/scene-render/src/channelReadout.ts`, one pure function for both renderers). Per
+receiving figure, channel and entering figure and per frame, null when not engaged, raw (nothing smoothed). Inputs:
+the channel as bound this frame (O, u, D and the REST radius R — never the radius a part grew it to), the entering
+chain's links as world segments a → b with r = the link's surface radius × girth × w (the radius the opening uses),
+and the depth scale k its guidance applied. s(P) = (P − O)·u.
+- `insertionM` = max over the links of (max(s(a), s(b)) + r), at least 0 — how far the part's surface front is past
+  the opening plane; `insertionOfDepth` = insertionM / D (above 1 = past the bottom); `insertionOfLength` = the share
+  of the chain's current length (after compression) at s ≥ 0, per link linear in s; `compressK` = k.
+- `stretchM` = max over the links that reach s ≥ 0 of max(0, r − R); `stretchAtM` = max(0, the smaller s of the
+  first link with that maximum); `stretchOpeningM` = the same over the links crossing s = 0; `stretchDiameterM` =
+  2 · stretchM; `stretchRatio` = stretchM / R. The skin margin of the opening is not part of it.
+- Engagements of the frame: `FigureRuntime.channelReadouts()` (receiver '' — the owner names it) and
+  `inspect().readouts`; `inspectFrame` attaches each one to its engagement (`readout`, receiver filled in). The admin
+  Poses preview prints it under "Channels" with its maxima over the last whole clip loop. client3d collects them after
+  every phase B (`NpcManager.channelReadouts()`, raw) and publishes them on the HUD bus (`setChannelReadouts`,
+  `channelReadoutFor`): at most 10 Hz, only while something is engaged, a final null on release (`game/channelReadouts.ts`).
+  Nothing is sent to the server. Checks: `scripts/smoke_channel_grows.mjs` [6]–[7], `scripts/smoke_mouth_opening.mjs`
+  [7], `scripts/smoke_mouth_open.mjs` [3b].
 
 **Measured** (`scripts/check_partner_collision.mjs --channels`, read-only copies of two models, a pair clip and one
 SYNTHETIC channel on a one-link chain; no real model declares one yet):

@@ -291,7 +291,7 @@ PART_BUILDS = {"attached_part": 14, "inset_part": 9}
 # 4: the lips' cut edge is a fillet with the mouth open, faces that would stand between the open walls are removed,
 # the colour is read from the hit face's own material.
 # 5: teeth, gums and a tongue (step 7, Ruling A206; the character's ``mouth_teeth`` options), the jaw opens 30 deg.
-OP_BUILDS = {**PART_BUILDS, "pair_protrusion": 5, "pair_tip": 2, "mouth_part": 5}
+OP_BUILDS = {**PART_BUILDS, "pair_protrusion": 5, "pair_tip": 2, "mouth_part": 6}
 
 
 def extension_rig_fingerprint(groups, overrides=None):

@@ -226,7 +226,8 @@ export interface SecondaryMotion {
    *  (joint → tip, the link's SURFACE radius — `r_surface` × girth, Ruling A159; links without a capsule left out) as last rendered — what the
    *  receiving figure opens its surface around (`bindChannelOpening`). */
   channelOccupants(): { partner: string; channel: string; w: number; segments: { a: Vec3; b: Vec3; r: number }[];
-    /** The channel radius this chain sees (Ruling A161: grown to its thickest link + margin). */ channelR: number }[]
+    /** The channel radius this chain sees (Ruling A161: grown to its thickest link + margin). */ channelR: number
+    /** The depth scale the last update applied (blended by w; 1 = none) — the channel readout's `compressK`. */ k: number }[]
   /** Ruling A126: every chain with an op (no hair) as last rendered, engaged or not — its links as world segments
    *  (joint → tip, the link's capsule radius r_c, 0 without one), root first. What the auto contact samples. */
   opChains(): { op: string; segments: { a: Vec3; b: Vec3; r: number }[]; raised: number }[]
@@ -1616,7 +1617,8 @@ export function createSecondaryMotion(
             tip.copy(link.tipLocal).applyMatrix4(link.bind.bone.matrixWorld)
             segments.push({ a: [head.x, head.y, head.z], b: [tip.x, tip.y, tip.z], r })
           }
-          if (segments.length) rows.push({ partner: state.partner, channel: state.ch.id, w: state.w, segments, channelR: state.ch.r })
+          if (segments.length) rows.push({ partner: state.partner, channel: state.ch.id, w: state.w, segments, channelR: state.ch.r,
+            k: state.k })
         }
       }
       return rows

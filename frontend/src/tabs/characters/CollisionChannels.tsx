@@ -90,11 +90,11 @@ export function CollisionChannels({ character, collision, overrides, declaration
   const { toast } = useToast()
   // A poll brings new objects with the same values: the key, not the identity, decides whether the draft is replaced.
   const teethKey = JSON.stringify(teeth || {})
-  const storedKey = `${JSON.stringify(overrides || {})}|${declarations.map(d => `${d.id}:${d.cone_deg}`).join(',')}|${teethKey}`
+  const storedKey = `${JSON.stringify(overrides || {})}|${declarations.map(d => `${d.id}:${d.cone_deg}:${d.tilt_deg ?? 0}`).join(',')}|${teethKey}`
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const storedTeeth = useMemo(() => teethOf(teeth), [teethKey])
   const [teethDraft, setTeethDraft] = useState<TeethOptions>(storedTeeth)
-  const stored = useMemo(() => Object.fromEntries(declarations.map(d => [d.id, overrideOf(overrides, d.id, d.cone_deg)])),
+  const stored = useMemo(() => Object.fromEntries(declarations.map(d => [d.id, overrideOf(overrides, d.id, d.cone_deg, d.tilt_deg)])),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [storedKey])
   const [drafts, setDrafts] = useState<Record<string, ChannelOverride>>(stored)
@@ -159,7 +159,7 @@ export function CollisionChannels({ character, collision, overrides, declaration
       : ''
   const setTeeth = (patch: Partial<TeethOptions>) => setTeethDraft(previous => ({ ...previous, ...patch }))
   const placed = (collision?.channels ?? []).length
-  const defaults = Object.fromEntries(declarations.map(d => [d.id, overrideOf(null, d.id, d.cone_deg)]))
+  const defaults = Object.fromEntries(declarations.map(d => [d.id, overrideOf(null, d.id, d.cone_deg, d.tilt_deg)]))
   const atDefaults = declarations.every(d => sameOverride(stored[d.id], defaults[d.id])) && sameTeeth(storedTeeth, TEETH_DEFAULTS)
 
   return (
@@ -214,7 +214,9 @@ export function CollisionChannels({ character, collision, overrides, declaration
                 title={t('The half-angle of the entry funnel in front of the opening, in degrees')} />
               <Field label={t('Tilt')} shown={`${(draft.tilt_deg ?? 0).toFixed(0)}°`} value={draft.tilt_deg ?? 0}
                 min={-TILT_MAX} max={TILT_MAX} step={1} disabled={busy} onChange={(v) => set({ tilt_deg: v })}
-                title={t('Turns the channel’s direction toward the back (+) or the front (−), in degrees')} />
+                title={(current.tilt_deg ? t('Turns the channel’s direction toward the back (+) or the front (−), in degrees; without a change it stands at {d}°')
+                  .replace('{d}', current.tilt_deg.toFixed(0))
+                  : t('Turns the channel’s direction toward the back (+) or the front (−), in degrees'))} />
             </div>
           ) : null}
           {current?.built && onMouthOpen && openHeight > 0 ? (

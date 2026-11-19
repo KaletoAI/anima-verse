@@ -8,12 +8,14 @@
  *    capsules of two DIFFERENT figures whose surfaces overlap, depth = r_a + r_b − the
  *    closest distance of their axis segments (metres, > 0 = penetration), deepest first; per figure pair the
  *    closest one (its depth may be negative = the gap);
- *  - engagements: which figure's chain is engaged in which figure's channel, its weight w and the opening radius
- *    the receiving figure's last opening pass used for that channel (metres).
+ *  - engagements: which figure's chain is engaged in which figure's channel, its weight w, the opening radius
+ *    the receiving figure's last opening pass used for that channel (metres) and that pass's CHANNEL READOUT for
+ *    this chain (`channelReadout.ts`: depth in, stretch, k; `receiver` filled in with the receiving figure's name).
  *
  * Pure: no Three, no state.
  */
 import type { Vec3 } from './collision'
+import type { ChannelReadout } from './channelReadout'
 import type { FigureInspection } from './figureRuntime'
 import { partnerCapsules } from './partnerContact'
 
@@ -57,7 +59,9 @@ export interface FrameInspection {
   closest: CapsuleContact[]
   /** Per engaged chain: `by` engaged in `of`'s `channel`; `opening` = the receiving figure's opening radius for that
    *  channel after the last pass (null = not opened yet: the budget deferred its first bind). */
-  engagements: { by: string; of: string; channel: string; w: number; opening: number | null }[]
+  engagements: { by: string; of: string; channel: string; w: number; opening: number | null
+    /** The receiving figure's readout of this chain (null = its opening pass has not seen it yet). */
+    readout: ChannelReadout | null }[]
 }
 
 /** The readout over every figure of the frame (module docstring); a null inspection is skipped. */
@@ -85,8 +89,11 @@ export function inspectFrame(figures: readonly { name: string; inspection: Figur
   const engagements: FrameInspection['engagements'] = []
   for (const f of live) {
     for (const e of f.inspection.engaged) {
-      const opening = byName.get(e.partner)?.openings.find(o => o.channel === e.channel)
-      engagements.push({ by: f.name, of: e.partner, channel: e.channel, w: e.w, opening: opening ? opening.radius : null })
+      const receiver = byName.get(e.partner)
+      const opening = receiver?.openings.find(o => o.channel === e.channel)
+      const r = receiver?.readouts.find(x => x.channel === e.channel && x.entering === f.name)
+      engagements.push({ by: f.name, of: e.partner, channel: e.channel, w: e.w, opening: opening ? opening.radius : null,
+        readout: r ? { ...r, receiver: e.partner } : null })
     }
   }
   return { contacts, closest, engagements }

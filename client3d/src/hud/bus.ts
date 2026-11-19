@@ -28,6 +28,8 @@ import type { StairPrompt } from '../game/stairs';
 import type { InfoPanelData } from '../game/infoPanel';
 import type { MapCharacter, PlaceOffer, PropActionTarget } from '../types';
 import type { PropActionConsent } from '@anima/player-ui/propActions';
+import type { ChannelReadout } from '@anima/scene-render';
+import type { ChannelReadoutState } from '../game/channelReadouts';
 
 export type GameMode = 'overview' | 'embodied';
 
@@ -290,6 +292,31 @@ export function getMinimap(): MinimapState { return minimap; }
 export function subscribeMinimap(fn: () => void): () => void {
   minimapListeners.add(fn);
   return () => { minimapListeners.delete(fn); };
+}
+
+// --- Channel readouts (live values, no UI yet) ------------------------------
+//
+// A store of its own like the perf readout: it ticks up to ten times a second while a channel is engaged, and the
+// game state's listeners must not re-render for it. `NpcManager.tickSecondary` is the only writer (throttled by
+// `game/channelReadouts.ts`); game logic reads `getChannelReadouts` / `channelReadoutFor`.
+
+let channelReadouts: ChannelReadoutState | null = null;
+const channelReadoutListeners = new Set<() => void>();
+
+/** The scene publishes the engaged channels' readouts (null = none engaged; the final null after a release). */
+export function setChannelReadouts(next: ChannelReadoutState | null): void {
+  channelReadouts = next;
+  for (const fn of channelReadoutListeners) fn();
+}
+export function getChannelReadouts(): ChannelReadoutState | null { return channelReadouts; }
+export function subscribeChannelReadouts(fn: () => void): () => void {
+  channelReadoutListeners.add(fn);
+  return () => { channelReadoutListeners.delete(fn); };
+}
+/** The last published readout of `entering`'s part in `receiver`'s `channel`; null when it is not engaged. */
+export function channelReadoutFor(receiver: string, channel: string, entering: string): ChannelReadout | null {
+  return channelReadouts?.readouts.find((r) => r.receiver === receiver && r.channel === channel
+    && r.entering === entering) ?? null;
 }
 
 /** Boot has its own snapshot because progress and measurements change independently

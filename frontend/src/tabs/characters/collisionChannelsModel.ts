@@ -7,7 +7,8 @@
  *   `app/core/collision_channels.py` `validate_overrides`): an offset in mm along the body frame (side, up, front),
  *   a radius scale, a depth scale (0.5–2), the funnel half-angle and the axis tilt (±45°, + = toward the back,
  *   Ruling A193). The server needs the first four keys per entry (tilt absent = 0); an entry equal to the default
- *   (offset 0, scales 1, the declared cone, tilt 0) is left out of the saved map.
+ *   (offset 0, scales 1, the declared cone, the declared tilt — 0, the mouth's −20°) is left out of the saved map.
+ *   A stored tilt is ABSOLUTE: a stored mouth override with tilt 0 stays at 0, 20° below the mouth's default.
  * - SAVE STORES ONLY (ruling R4): `saveChannelOverrides` posts `…/model3d/collision/channels` — never
  *   `…/model3d/collision`, the step that applies it. The collision step then reads "due"
  *   (`model_overview.CHANNELS_CHANGED`) until the step, Run all or the Build applies it.
@@ -39,6 +40,9 @@ export interface ChannelDeclaration {
   /** The channel's geometry is built into the body (the mouth, Ruling A203): offset, radius, depth and tilt take
    *  effect with the next extension build, not with the collision step. */
   built?: boolean
+  /** The tilt the channel has without an override (degrees, + = toward the back): the mouth's −20
+   *  (`mouth_channel.TILT_DEFAULT_DEG`), 0 for a package's channel (absent = 0). The panel's neutral value. */
+  tilt_deg?: number
   /** `rig` (the opening the package op reported) / `declared` (joint + offset); null = not on this model. */
   placement: 'rig' | 'declared' | null
   /** Why the channel is not on this model ("" when it is). */
@@ -55,12 +59,14 @@ export const CONE_MIN = 1
 export const CONE_MAX = 60
 export const TILT_MAX = 45
 
-/** The override a channel starts from: the stored one, else the default (offset 0, scales 1, the declared cone). */
-export function overrideOf(stored: ChannelOverrides | null | undefined, id: string, coneDeg: number): ChannelOverride {
+/** The override a channel starts from: the stored one, else the default (offset 0, scales 1, the declared cone and
+ *  tilt). A stored entry keeps its own tilt (absent = 0, the server's rule) — never the declared default. */
+export function overrideOf(stored: ChannelOverrides | null | undefined, id: string, coneDeg: number,
+  tiltDeg = 0): ChannelOverride {
   const entry = stored?.[id]
   if (entry) return { offset_mm: [...entry.offset_mm] as [number, number, number], radius_scale: entry.radius_scale,
     depth_scale: entry.depth_scale, cone_deg: entry.cone_deg, tilt_deg: entry.tilt_deg ?? 0 }
-  return { offset_mm: [0, 0, 0], radius_scale: 1, depth_scale: 1, cone_deg: coneDeg, tilt_deg: 0 }
+  return { offset_mm: [0, 0, 0], radius_scale: 1, depth_scale: 1, cone_deg: coneDeg, tilt_deg: tiltDeg }
 }
 
 export function sameOverride(a: ChannelOverride, b: ChannelOverride): boolean {
@@ -77,8 +83,8 @@ export function overridesToSave(stored: ChannelOverrides | null | undefined, dec
   const out: ChannelOverrides = {}
   for (const [id, entry] of Object.entries(stored || {})) if (!declared.has(id)) out[id] = entry
   for (const d of declarations) {
-    const draft = drafts[d.id] ?? overrideOf(stored, d.id, d.cone_deg)
-    if (!sameOverride(draft, overrideOf(null, d.id, d.cone_deg))) out[d.id] = draft
+    const draft = drafts[d.id] ?? overrideOf(stored, d.id, d.cone_deg, d.tilt_deg)
+    if (!sameOverride(draft, overrideOf(null, d.id, d.cone_deg, d.tilt_deg))) out[d.id] = draft
   }
   return out
 }

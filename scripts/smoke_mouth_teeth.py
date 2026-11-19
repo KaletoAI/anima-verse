@@ -34,8 +34,8 @@ No server, no world DB, no Blender (``mouth_teeth.py`` imports bpy: its defaults
     size 1.3, enabled "yes", an unknown key -> ValueError. The group: a profile without options has no params.teeth;
     {mouth_teeth {shade 2}} -> params.teeth {shade 2} (only what differs) and another extension fingerprint (the step
     becomes due); {mouth_teeth {enabled True}} (= the default) -> no params.teeth, the same fingerprint.
-[7] OP_BUILDS["mouth_part"] is 5 now; at the commit before A206 (7458a196e) it was 4 and the Blender op's jaw opened
-    26 degrees (DEFAULTS jaw.open_deg 26.), now 30.
+[7] OP_BUILDS["mouth_part"] is at least 5 now (6 since the default tilt of -20 degrees, 2026-11-19); at the commit
+    before A206 (7458a196e) it was 4 and the Blender op's jaw opened 26 degrees (DEFAULTS jaw.open_deg 26.), now 30.
 [8] The opening pass leaves the teeth alone: channelOpening.ts filters a mesh by `isRigidTeeth` in
     `bindChannelOpening`'s traverse; at 7458a196e the filter had no such test (every skinned body mesh was bound).
     The numbers of the pass itself: scripts/smoke_mouth_open.mjs [5].
@@ -153,7 +153,7 @@ fp = extension_rig.extension_rig_fingerprint
 check("an option changes the fingerprint, the default does not", fp([shaded]) != fp([plain]) and fp([default]) == fp([plain]))
 
 print("[7] the build number and the jaw angle")
-check("mouth_part build 5", extension_rig.OP_BUILDS["mouth_part"] == 5, extension_rig.OP_BUILDS["mouth_part"])
+check("mouth_part build >= 5", extension_rig.OP_BUILDS["mouth_part"] >= 5, extension_rig.OP_BUILDS["mouth_part"])
 check(f"{PRE_FIX}: build 4", '"mouth_part": 4}' in show(f"{PRE_FIX}:app/core/extension_rig.py"))
 check(f"{PRE_FIX}: jaw 26 degrees, now 30", "'open_deg': 26.," in show(f"{PRE_FIX}:app/blender/scripts/mouth_part.py")
       and "'open_deg': 30.," in (ROOT / "app/blender/scripts/mouth_part.py").read_text())

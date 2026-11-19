@@ -23,7 +23,7 @@ import {
   prepareSheerPieces,
 } from '@anima/scene-render';
 import type { RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, CollisionPayload,
-  FootPose, HairStrandRecord, StrandHair, CapsuleNow, PartnerSnapshot, OpeningSegment,
+  FootPose, HairStrandRecord, StrandHair, CapsuleNow, PartnerSnapshot, ChannelOccupant, ChannelReadout,
   ChannelOccupants, ContactRelation, FigureInspection, FigureRuntime, FrameFigure, BendLimits, RootAngle } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import { applyFigureTexture, zeroFigureMetalness } from './figureMaterials';
@@ -3309,9 +3309,14 @@ export class Figure {
   }
 
   /** THE OPENING (Ruling A102/A102b) — `FigureRuntime.applyChannelOpenings`. */
-  applyChannelOpenings(occupants: readonly { channel: string; w: number; segments: readonly OpeningSegment[]; channelR?: number }[],
-    budget: { left: number } = { left: Infinity }): void {
+  applyChannelOpenings(occupants: readonly ChannelOccupant[], budget: { left: number } = { left: Infinity }): void {
     this.runtime.applyChannelOpenings(occupants, budget);
+  }
+
+  /** The readouts of THIS figure's channels after the last opening pass (`FigureRuntime.channelReadouts`;
+   *  `receiver` is '' — the caller names the figure). */
+  channelReadouts(): readonly ChannelReadout[] {
+    return this.runtime.channelReadouts();
   }
 
   /** The cross-person state after the last phase B — `FigureRuntime.inspect` (the Library preview reads the same). */

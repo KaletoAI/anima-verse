@@ -46,6 +46,13 @@ COMPRESS_MIN = 0.6
 #: channel's lower wall by computed weights. No motion group drives it (``extension_rig.motion_payload`` reads the
 #: packages' groups only); the renderers turn it (``mouthOpen.ts``), a clip may.
 JAW = {"bone": "mixamorig:Jaw", "parent": "Head"}
+#: The mouth's tilt without an override (degrees, + = toward the back; owner decision 2026-11-19): the axis is turned
+#: 20 degrees about the side axis away from the throat, toward the top of the head. The Blender build's
+#: ``DEFAULTS.override.tilt_deg`` and the renderers' ``contactTarget.ts`` ``MOUTH.tiltDeg`` (the measured and the
+#: formula mouth of a model without the built one) are the same number (``scripts/smoke_mouth_channel.py`` [1]). A
+#: STORED override keeps its absolute tilt (``validate_overrides`` writes it, 0 when absent): the build applies it
+#: instead of this default. The panel shows this value as the neutral one (``declarations_info`` ``tilt_deg``).
+TILT_DEFAULT_DEG = -20.0
 #: The override keys the build reads (``collision_channels`` override without ``cone_deg``).
 BUILD_OVERRIDE_KEYS = ("offset_mm", "radius_scale", "depth_scale", "tilt_deg")
 #: The teeth options (Ruling A206) and their defaults — the Blender build's ``mouth_teeth.DEFAULTS`` agree

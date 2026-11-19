@@ -456,7 +456,9 @@ def declarations_info(character_name: str, path: Optional[Path], meta: Dict[str,
     """What the Channels panel lists for the model ``path``: every wanted channel (``wanted_channels``) with
     ``placement`` ("rig" / "declared" from the stored record) or, without a channel on the model, the ``reason`` of
     ``channels_skipped`` ("Not computed" before the record has channels). ``path`` None (no base model yet): the
-    declarations alone, each with ``reason`` ``NO_MODEL`` and no placement. Never raises (empty list)."""
+    declarations alone, each with ``reason`` ``NO_MODEL`` and no placement; ``tilt_deg`` = the tilt without an
+    override. Never raises (empty list)."""
+    from app.core import mouth_channel
     try:
         wanted, _sig = wanted_channels(character_name, path, meta, profile=profile)
     except Exception:  # noqa: BLE001 — the poll never fails on the panel
@@ -472,6 +474,10 @@ def declarations_info(character_name: str, path: Optional[Path], meta: Dict[str,
         info = {key: entry[key] for key in ("id", "bone", "offset", "axis", "depth", "radius", "cone_deg", "funnel",
                                             "accepts", "min_length", "compress_min", "exposed_only", "from_rig")}
         info["built"] = bool(entry.get("built"))
+        # The tilt the channel has without an override (the panel's neutral value): the built mouth's default, 0 for
+        # a package's channel. Not part of the wanted entry, so ``channels_sig`` does not change with it.
+        info["tilt_deg"] = mouth_channel.TILT_DEFAULT_DEG if entry["id"] == mouth_channel.CHANNEL_ID \
+            and entry.get("built") else 0.0
         info["placement"] = channel.get("placement") if channel else None
         info["reason"] = (NO_MODEL if path is None else "" if channel
                           else reasons.get(entry["id"], "Not computed"))

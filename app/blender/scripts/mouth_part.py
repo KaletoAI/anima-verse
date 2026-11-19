@@ -48,7 +48,9 @@ The mesher delivers a face whose mouth is drawn, not open. This op (Ruling A203,
 The op reports its ``opening`` (centre, inward axis, depth, radius, half width; glTF axes, bind space) for the
 mouth channel of the collision record. The per-character override (``override``: offset_mm [side, up, front],
 radius_scale, depth_scale, tilt_deg) moves the measured line, scales the pouch and tilts its axis; the opening
-reports what was built.
+reports what was built. Without an override the axis is tilted by ``DEFAULTS.override.tilt_deg`` = -20 degrees
+(``app/core/mouth_channel.TILT_DEFAULT_DEG``, owner decision 2026-11-19): turned 20 degrees about the side axis away
+from the throat, toward the top of the head. A stored override's tilt is absolute (0 = the measured axis).
 """
 import copy
 import math
@@ -96,7 +98,7 @@ DEFAULTS = {
     # The lip's rounded edge with the mouth open: the fillet's radius at the cut.
     'lip': {'radius': .0045},
     'inside': {'shade': .6},
-    'override': {'offset_mm': [0., 0., 0.], 'radius_scale': 1., 'depth_scale': 1., 'tilt_deg': 0.},
+    'override': {'offset_mm': [0., 0., 0.], 'radius_scale': 1., 'depth_scale': 1., 'tilt_deg': -20.},
 }
 SHAPE_KEY = 'mouth_open'
 

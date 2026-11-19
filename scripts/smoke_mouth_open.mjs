@@ -15,6 +15,13 @@
  *     segment radius x w = 0.01 -> (0.02 + 0.004) / 0.04 = 0.6; an occupant of ANOTHER channel changes nothing;
  *     no occupant -> 0; setMouthOpen(0.25) -> 0.25 without contact, 0.6 with it (max); inspect().mouthOpen says the
  *     same. A payload without open_height -> contact opens nothing (0), the manual value still applies.
+ * [3b] THE CHANNEL READOUT through the runtime (`channelReadouts()`, `inspect().readouts`): the record of [3] gives
+ *     (with one head capsule, so the partner binding — made by the first partner snapshot, as in phase B — exists)
+ *     O = a_pos (0, 1.57, 0.11), u = (b_pos − a_pos) / 0.08 = (0, −0.6, −0.8), D = 0.08, R 0.02. One occupant from
+ *     'Q', w 1, k 0.9, one link O − 0.02u = (0, 1.582, 0.126) -> O + 0.05u = (0, 1.54, 0.07), r 0.025: insertion
+ *     0.05 + 0.025 = 0.075 (of D 0.9375), of length 0.05 / 0.07 = 0.7142857, stretch 0.005 (ratio 0.25), k 0.9,
+ *     receiver '' (the owner names it), entering 'Q'. At w 0.5 the link's radius is 0.0125: insertion 0.0625,
+ *     stretch 0. An occupant at w 0 gives no readout; no occupant -> [].
  * [4] THE JAW BONE (part 3). Head at (0, 1.6, 0), Jaw its child at local (0, -0.02, 0.02) = model (0, 1.58, 0.02),
  *     no bind rotation, `mouth_open_deg` 20 on the bone; a vertex at model (0, 1.5, 0.1) weighted 1 to the jaw.
  *     Value 0.5 -> the jaw turns 10 degrees about the model's +X: local quaternion (sin 5, 0, 0, cos 5) =
@@ -139,6 +146,36 @@ rt.applyChannelOpenings([{ channel: 'mouth', w: 1, segments: [seg(0.02)] }], { l
 check('[3] no open height: contact opens nothing', mesh.morphTargetInfluences[1] === 0, mesh.morphTargetInfluences[1])
 rt.setMouthOpen(0.4)
 check('[3] ... the manual value still applies', near(mesh.morphTargetInfluences[1], 0.4, 1e-12))
+
+// [3b]
+{
+  const g3 = make()
+  rt = SR.createFigureRuntime(THREE, { root: g3.root, motion: () => undefined,
+    collision: { version: SR.COLLISION_VERSION, channels: [built(0.04)],
+      capsules: [{ id: 'head', a: 'mixamorig:Head', b: 'mixamorig:Head', r: 0.075, region: 'head' }] },
+    tier: 'full', bindRadius: 2 })
+  // The partner binding (and its channels) is made by the first partner snapshot, as phase B does.
+  check('[3b] the partner binding is made', !!rt.partnerSnapshot(null, 'R'))
+  const link = { a: [0, 1.582, 0.126], b: [0, 1.54, 0.07], r: 0.025 }
+  rt.applyChannelOpenings([{ channel: 'mouth', w: 1, k: 0.9, from: 'Q', segments: [link] }], { left: 0 })
+  const r = rt.channelReadouts()
+  check('[3b] one readout: mouth, from Q, receiver \'\', w 1, k 0.9', r.length === 1 && r[0].channel === 'mouth'
+    && r[0].entering === 'Q' && r[0].receiver === '' && r[0].w === 1 && r[0].compressK === 0.9, JSON.stringify(r))
+  check('[3b] D 0.08, R 0.02, insertion 0.075 (0.9375), of length 0.7142857', r.length === 1 && near(r[0].depthM, 0.08, 1e-6)
+    && near(r[0].restRadiusM, 0.02, 1e-9) && near(r[0].insertionM, 0.075, 1e-6) && near(r[0].insertionOfDepth, 0.9375, 1e-5)
+    && near(r[0].insertionOfLength, 0.7142857, 1e-6), JSON.stringify(r))
+  check('[3b] stretch 0.005, ratio 0.25', r.length === 1 && near(r[0].stretchM, 0.005, 1e-9) && near(r[0].stretchRatio, 0.25, 1e-7),
+    JSON.stringify(r))
+  check('[3b] inspect() carries the same', JSON.stringify(rt.inspect()?.readouts) === JSON.stringify(r))
+  rt.applyChannelOpenings([{ channel: 'mouth', w: 0.5, from: 'Q', segments: [link] }], { left: 0 })
+  const h = rt.channelReadouts()
+  check('[3b] w 0.5: insertion 0.0625, stretch 0, k 1', h.length === 1 && near(h[0].insertionM, 0.0625, 1e-6) && h[0].stretchM === 0
+    && h[0].compressK === 1, JSON.stringify(h))
+  rt.applyChannelOpenings([{ channel: 'mouth', w: 0, from: 'Q', segments: [link] }], { left: 0 })
+  check('[3b] w 0: no readout', rt.channelReadouts().length === 0)
+  rt.applyChannelOpenings([], { left: 0 })
+  check('[3b] no occupant: none', rt.channelReadouts().length === 0)
+}
 
 // [4]
 const jawFixture = (headTurnY = 0, deg = 20) => {

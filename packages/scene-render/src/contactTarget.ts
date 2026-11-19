@@ -11,11 +11,16 @@
  *                  surface radius (`channelOpening.ts`), the channel readouts and lamp. Its frame, with H the head
  *                  bone, T the head-top end, L = |T − H| and the head's up h = (T − H)/L — without T, L = `MOUTH.lengthM`
  *                  × the head bone's world scale and h = its +Y (rigs without a head-top end) — and the face direction f (the eyes' midpoint − H, else the head bone's local +Z, made orthogonal to h):
- *                    O = the MEASURED opening on the lips, u = toward the throat (Ruling A193: the collision
+ *                    O = the MEASURED opening on the lips, u₀ = toward the throat (Ruling A193: the collision
  *                        record's `mouth`, `app/core/mouth_landmark.py`, bound to the head joint, so it follows
  *                        every head turn and tilt); a record without one keeps the formula
  *                    O = H + f · `MOUTH.forward` · L + h · `MOUTH.up` · L     (≈ 10 cm forward, 3 cm up for L = 0.2 m)
- *                    u = −f                                                  (into the head, along the face normal)
+ *                    u₀ = −f                                                 (into the head, along the face normal)
+ *                    u = u₀ turned by −`MOUTH.tiltDeg` about the head's side axis s = h × f (Rodrigues; the
+ *                        channels' tilt rule, `collision_channels.tilted` / `previewChannel`: + = toward the back).
+ *                        `MOUTH.tiltDeg` = −20 (owner decision 2026-11-19, `mouth_channel.TILT_DEFAULT_DEG`, the
+ *                        built mouth's default too): u turns 20° away from the throat, toward the top of the head —
+ *                        for h = +Y, f = +Z: s = +X, u = (0, sin 20°, −cos 20°) = (0, 0.342020, −0.939693).
  *                    D = `MOUTH.depth` · L,  R = `MOUTH.radius` · L,  F = `MOUTH.funnel` · L,  α = `MOUTH.coneDeg`
  *                  accepts the attached-part ops (`POINT_TARGET_OPS`), any running pair interaction, least state length
  *                  `MOUTH.minLength`, least depth scale `MOUTH.compressMin`; an engaged tip inside skips the head
@@ -53,9 +58,10 @@ export const POINT_TARGET_OPS: readonly string[] = ['attached_part', 'appendage_
 export const TARGET_RADIUS_M: Readonly<Record<PointTarget, number>> = Object.freeze({ hand_left: 0.025, hand_right: 0.025 })
 /** The mouth channel's id (in `FigureInspection.channels`, the partner snapshot, the opening state). */
 export const MOUTH_CHANNEL_ID = 'mouth'
-/** The mouth opening as fractions of the head length L (module docstring), and its gates. */
+/** The mouth opening as fractions of the head length L (module docstring), its default tilt (degrees, + = toward
+ *  the back) and its gates. */
 export const MOUTH = Object.freeze({ forward: 0.5, up: 0.15, lengthM: 0.2, depth: 0.5, radius: 0.1, funnel: 0.15,
-  coneDeg: 35, minLength: 0, compressMin: 0.6 })
+  coneDeg: 35, minLength: 0, compressMin: 0.6, tiltDeg: -20 })
 
 export function isContactTarget(v: unknown): v is ContactTarget {
   return typeof v === 'string' && (CONTACT_TARGETS as readonly string[]).includes(v)
@@ -91,6 +97,14 @@ const mul = (p: Vec3, k: number): Vec3 => [p[0] * k, p[1] * k, p[2] * k]
 const dot = (p: Vec3, q: Vec3) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2]
 const len = (p: Vec3) => Math.hypot(p[0], p[1], p[2])
 const unit = (p: Vec3): Vec3 | null => { const l = len(p); return l > 1e-9 ? mul(p, 1 / l) : null }
+const cross = (p: Vec3, q: Vec3): Vec3 => [p[1] * q[2] - p[2] * q[1], p[2] * q[0] - p[0] * q[2], p[0] * q[1] - p[1] * q[0]]
+/** `v` turned by `angle` (radians, right-handed) about the unit axis `k` (Rodrigues); `v` unchanged without an axis. */
+function tiltAbout(v: Vec3, k: Vec3, angle: number): Vec3 {
+  const ku = unit(k)
+  if (!ku || !angle) return v
+  const c = Math.cos(angle), s = Math.sin(angle)
+  return add(add(mul(v, c), mul(cross(ku, v), s)), mul(ku, dot(ku, v) * (1 - c)))
+}
 
 /** The target `id` from `bones` (module docstring), or null when its bones are missing. */
 export function targetFrame(id: PointTarget, bones: TargetBones): TargetFrame | null {
@@ -130,7 +144,7 @@ export function mouthChannel(bones: TargetBones, suppress: ReadonlySet<string> =
   return {
     id: MOUTH_CHANNEL_ID,
     o: measured ? bones.mouthO! : add(add(H, mul(f, MOUTH.forward * L)), mul(h, MOUTH.up * L)),
-    u: measured ?? mul(f, -1),
+    u: tiltAbout(measured ?? mul(f, -1), cross(h, f), -MOUTH.tiltDeg * Math.PI / 180),
     depth: MOUTH.depth * L, r: MOUTH.radius * L, coneDeg: MOUTH.coneDeg, funnel: MOUTH.funnel * L,
     accepts: POINT_TARGET_OPS, minLength: MOUTH.minLength, compressMin: MOUTH.compressMin, kinds: null, suppress,
   }

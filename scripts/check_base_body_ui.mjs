@@ -173,6 +173,9 @@
  *       r 0.015·1.5 = 0.0225; cone 30; applied = the draft.
  *       overridesToSave({old: X}, [demo:channel], {demo:channel: default}) → {old: X} (an undeclared id keeps its
  *       entry, a default is left out); with the draft above → {old: X, demo:channel: draft}.
+ *       The mouth's default tilt (−20°, declaration `tilt_deg`): overrideOf(null, mouth, 35, −20) → tilt −20; a draft
+ *       equal to it is left out of the map; a draft at tilt 0 is saved with tilt 0 (absolute); a stored entry
+ *       without a tilt reads 0, never the declared −20.
  *       saveChannelOverrides(poster, "demo", map) posts exactly ONE request:
  *       "/characters/demo/model3d/collision/channels" with {channels: map} — never "…/model3d/collision" (the step);
  *       recomputePath("demo x", "s 1") → "/characters/demo%20x/model3d/collision?signature=s%201".
@@ -685,6 +688,14 @@ check('[15] overridesToSave: defaults left out, undeclared kept',
   ch.overridesToSave({ old: X }, [DECL], { 'demo:channel': DEF }), { old: X });
 check('[15] overridesToSave: a draft saved', ch.overridesToSave({ old: X }, [DECL], { 'demo:channel': DRAFT }),
   { old: X, 'demo:channel': DRAFT });
+const MOUTH_DECL = { ...DECL, id: 'mouth', cone_deg: 35, built: true, tilt_deg: -20 };
+const MOUTH_DEF = ch.overrideOf(null, 'mouth', 35, -20);
+check('[15] the mouth default: tilt −20', MOUTH_DEF, { offset_mm: [0, 0, 0], radius_scale: 1, depth_scale: 1, cone_deg: 35,
+  tilt_deg: -20 });
+check('[15] the mouth at its default: left out', ch.overridesToSave(null, [MOUTH_DECL], { mouth: MOUTH_DEF }), {});
+check('[15] the mouth at tilt 0: saved with tilt 0', ch.overridesToSave(null, [MOUTH_DECL], { mouth: { ...MOUTH_DEF, tilt_deg: 0 } }),
+  { mouth: { ...MOUTH_DEF, tilt_deg: 0 } });
+check('[15] a stored entry without a tilt reads 0', ch.overrideOf({ mouth: X }, 'mouth', 35, -20).tilt_deg, 0);
 const posted = [];
 await ch.saveChannelOverrides(async (path, body) => { posted.push([path, body]); return {}; }, 'demo',
   { 'demo:channel': DRAFT });

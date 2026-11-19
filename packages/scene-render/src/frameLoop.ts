@@ -9,7 +9,9 @@
  *   3. `updateSecondary` for each figure (a no-op for one not posed);
  *   4. the channel openings (Ruling A102): every chain engaged in a partner's
  *      channel opens that partner's surface, at most `openingBudget` recomputes
- *      per frame, receivers visited from the rotating `state.openingTurn`;
+ *      per frame, receivers visited from the rotating `state.openingTurn`; each
+ *      occupant names the entering figure (`from`), so the receiver's channel
+ *      readouts (`channelReadout.ts`) know who is in which channel;
  *   5. the partners of every GPU hair-push reader re-read on their FINAL pose
  *      and handed to its hair push, which reads them at render time — no lag.
  */
@@ -17,6 +19,12 @@ import type { PartnerSnapshot } from './partnerContact'
 import { consumerPartnerCapsules } from './partnerContact'
 import type { CapsuleNow } from './collision'
 import type { OpeningSegment } from './channelOpening'
+
+/** What occupies one of a receiving figure's channels: the entering chain's links (world, its surface radius), its
+ *  weight w, the radius it grew the channel to (Ruling A161), the depth scale k its guidance applied and `from`, the
+ *  entering figure's name (the channel readout's `entering`). */
+export interface ChannelOccupant { channel: string; w: number; segments: readonly OpeningSegment[]; channelR?: number
+  k?: number; from?: string }
 import { planPartnerFrame } from './partnerFrame'
 import type { FrameFigure } from './partnerFrame'
 
@@ -25,9 +33,9 @@ export interface FramePhaseB {
   frameFigure(name: string, members: readonly string[]): FrameFigure | null
   partnerSnapshot(interaction: { id: string; kind: string } | null, name: string): PartnerSnapshot | null
   updateSecondary(partners: readonly PartnerSnapshot[], interaction: { id: string } | null): unknown
-  channelOccupants(): readonly { partner: string; channel: string; w: number; segments: readonly OpeningSegment[]; channelR?: number }[]
-  applyChannelOpenings(occupants: readonly { channel: string; w: number; segments: readonly OpeningSegment[]; channelR?: number }[],
-    budget: { left: number }): void
+  channelOccupants(): readonly { partner: string; channel: string; w: number; segments: readonly OpeningSegment[]; channelR?: number
+    k?: number }[]
+  applyChannelOpenings(occupants: readonly ChannelOccupant[], budget: { left: number }): void
   readonly hasHairPush: boolean
   setGpuPartners(capsules: readonly CapsuleNow[] | null): void
 }
@@ -80,11 +88,11 @@ export function runFigureFrame(entries: readonly FrameEntry[], state: FrameLoopS
   }
   // Each reader passes its OWN interaction: a partner's channel engages only within the same one.
   for (const e of entries) e.figure?.updateSecondary(partnersOf(e.name), interactionOf(e))
-  const occupied = new Map<string, { channel: string; w: number; segments: readonly OpeningSegment[]; channelR?: number }[]>()
+  const occupied = new Map<string, ChannelOccupant[]>()
   for (const e of entries) {
     for (const occ of e.figure?.channelOccupants() ?? []) {
       const list = occupied.get(occ.partner) ?? []
-      list.push(occ)
+      list.push({ ...occ, from: e.name })
       occupied.set(occ.partner, list)
     }
   }

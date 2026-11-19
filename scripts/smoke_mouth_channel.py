@@ -19,6 +19,11 @@ up +y, front +z).
     stored override mouth = {offset_mm [1, 2, 3], radius_scale 1.5, depth_scale 0.5, cone_deg 40, tilt_deg 10} its
     params are {"override": the same without cone_deg} (the cone has no geometry). The extension fingerprint
     differs between the two (a saved override makes the extension step due) and changes with the op's build.
+    THE DEFAULT TILT (owner decision 2026-11-19): ``mouth_channel.TILT_DEFAULT_DEG`` = -20.0 = the Blender build's
+    ``DEFAULTS.override.tilt_deg`` (read with ast) = the renderers' ``MOUTH`` ``tiltDeg: -20`` (contactTarget.ts, read
+    as text); ``OP_BUILDS["mouth_part"]`` >= 6 (the build with that default is a new build: every humanoid's extension
+    step becomes due once, local). A stored override keeps its absolute tilt: tilt 10 above reaches the build as 10;
+    an override saved before the tilt existed (no ``tilt_deg``) reads 0 — 20 degrees below the default.
 [2] wanted_channels on a humanoid model (rig "mixamo") lists the channel ``mouth`` first — bone Head, built True,
     from_rig mouth_channel, accepts attached_part + appendage_chain, depth 0.08, radius 0.02, cone 35, funnel
     0.03, min_length 0, compress_min 0.6, not exposed_only. Another rig, or no model path: not listed.
@@ -143,6 +148,20 @@ def main():
     with patch.dict(extension_rig.OP_BUILDS, {"mouth_part": extension_rig.OP_BUILDS["mouth_part"] + 1}):
         check("the build number changes the fingerprint", extension_rig.extension_rig_fingerprint([plain]) != a)
     check("no motion group", extension_rig.motion_payload("demo", profile={})["groups"] == {})
+    import ast
+    tree = ast.parse((ROOT / "app/blender/scripts/mouth_part.py").read_text())
+    blender_defaults = next(ast.literal_eval(node.value) for node in ast.walk(tree) if isinstance(node, ast.Assign)
+                            and any(getattr(t, "id", "") == "DEFAULTS" for t in node.targets))
+    check("default tilt -20 on the server and in the Blender build",
+          mouth_channel.TILT_DEFAULT_DEG == -20.0 == blender_defaults["override"]["tilt_deg"],
+          (mouth_channel.TILT_DEFAULT_DEG, blender_defaults["override"]))
+    check("... and in the renderers' MOUTH", "tiltDeg: -20 }" in (ROOT / "packages/scene-render/src/contactTarget.ts")
+          .read_text())
+    check("the build with the default tilt is build >= 6", extension_rig.OP_BUILDS["mouth_part"] >= 6,
+          extension_rig.OP_BUILDS["mouth_part"])
+    old = {"offset_mm": [1, 2, 3], "radius_scale": 1.5, "depth_scale": 0.5, "cone_deg": 40}
+    check("an override saved without a tilt reaches the build as tilt 0 (absolute)", mouth_channel.group(
+        {"model3d_opts": {"collision_channels": {"mouth": old}}})["params"]["override"]["tilt_deg"] == 0.0)
 
     print("[2] the declaration")
     opening = {"centre": [0, 1.55, 0.1], "axis": [0, -0.6, -0.8], "depth": 0.06, "radius": 0.03, "open_height": 0.0365,
@@ -194,6 +213,7 @@ def main():
     info = collision_channels.declarations_info("demo", path, {"rig": "mixamo", "extension_rig": state,
                                                                "collision": {"channels": [rec]}}, profile=profile)
     check("the panel's row: built, placed", info and info[0]["built"] is True and info[0]["placement"] == "rig", info)
+    check("the panel's row: the default tilt -20 as its neutral value", info and info[0]["tilt_deg"] == -20.0, info)
 
     print("[4] the extension step")
     from app.core.rig_contract import BASE_JOINT_NAMES

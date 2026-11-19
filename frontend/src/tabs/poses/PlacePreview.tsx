@@ -44,6 +44,7 @@ import {
   targetLamp, isPointTarget, TARGET_RADIUS_M, POINT_TARGET_OPS, type ContactTarget,
   bendSample, BEND_LIMITS_DEFAULT, type BendLimits, type BendResult,
   supportSample, supportHeight, postureReport, postureAngleCapDeg, type PostureReport,
+  channelReadoutKey, foldReadoutMax, type ChannelReadout, type ChannelReadoutMax,
 } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { targetWordOf } from './contactWords'
@@ -190,7 +191,11 @@ interface PartnerInfo {
   closest: { a: string; b: string; capA: string; capB: string; mm: number } | null
   contacts: number
   channels: number
-  engaged: { by: string; of: string; channel: string; w: number; openingMm: number | null }[]
+  engaged: { by: string; of: string; channel: string; w: number; openingMm: number | null
+    /** The receiving figure's channel readout of this chain this frame (`channelReadout.ts`; null = not yet). */
+    readout: ChannelReadout | null
+    /** Its maxima over the last whole clip loop (`full`), or over the loop so far until one has passed. */
+    max: ChannelReadoutMax | null; full: boolean }[]
 }
 
 /** The pose catalog's place types as the picker names them. */
@@ -843,8 +848,12 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         const nameToLetter = new Map(figs.map((f) => [`${f.letter}:${f.character}`, f.letter]))
         const letterOf = (name: string) => nameToLetter.get(name) ?? name
         let partnerInfo: PartnerInfo | null = null
-        const drawPartners = (res: ReturnType<typeof placePhaseB>) => {
+        // The channel readouts' maxima per clip loop (key = channelReadoutKey): this loop's so far, and the last whole one.
+        let loopMax = new Map<string, ChannelReadoutMax>()
+        let lastLoopMax: Map<string, ChannelReadoutMax> | null = null
+        const drawPartners = (res: ReturnType<typeof placePhaseB>, wrapped: boolean) => {
           const sh = showRef.current
+          if (wrapped) { lastLoopMax = loopMax; loopMax = new Map() }
           overlay.visible = !!res
           if (!res) { partnerInfo = null; return }
           const frame = res.frame
@@ -887,11 +896,17 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           for (const [k, l] of chLines) l.visible = usedCh.has(k)
           for (const [k, r] of rings) if (!usedCh.has(k)) r.visible = false
           const best = frame.closest.reduce<FrameInspection['closest'][number] | null>((w, c) => (!w || c.depth > w.depth ? c : w), null)
+          if (!pausedRef.current) foldReadoutMax(loopMax, frame.engagements.flatMap((g) => (g.readout ? [g.readout] : [])))
           partnerInfo = {
             closest: best ? { a: letterOf(best.a), b: letterOf(best.b), capA: best.capA, capB: best.capB, mm: best.depth * 1000 } : null,
             contacts: frame.contacts.length, channels,
-            engaged: frame.engagements.map((g) => ({ by: letterOf(g.by), of: letterOf(g.of), channel: g.channel, w: g.w,
-              openingMm: g.opening === null ? null : g.opening * 1000 })),
+            engaged: frame.engagements.map((g) => {
+              const key = g.readout ? channelReadoutKey(g.readout) : ''
+              const full = lastLoopMax?.get(key) ?? null
+              return { by: letterOf(g.by), of: letterOf(g.of), channel: g.channel, w: g.w,
+                openingMm: g.opening === null ? null : g.opening * 1000, readout: g.readout,
+                max: full ?? loopMax.get(key) ?? null, full: !!full }
+            }),
           }
         }
 
@@ -1230,7 +1245,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             if (w) focusNow = { o: w.o, u: w.u, tip: w.tip, base: w.base }
           }
           ms = ms * 0.9 + (performance.now() - t0) * 0.1
-          drawPartners(inspection)
+          drawPartners(inspection, wrapped)
           // readout: hips in stage space against the place
           for (const f of figs) {
             if (!f.hips) continue
@@ -1789,6 +1804,32 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
                         .replace('{by}', g.by).replace('{of}', g.of).replace('{channel}', g.channel)
                         .replace('{w}', g.w.toFixed(2))
                         .replace('{mm}', g.openingMm === null ? t('pending') : `${g.openingMm.toFixed(1)} mm`)}
+                      {g.readout ? (
+                        <div className="ga-hint" style={{ fontSize: 10, margin: '0 0 0 10px', fontVariantNumeric: 'tabular-nums' }}
+                          data-testid="place-channel-readout"
+                          title={t('Now: how far the part’s front is past the opening (in % of the channel’s depth and of the part’s own length inside), how much wider than its rest radius {r} mm the part holds the channel (radius, in % of it) and the depth scale k (1 = not compressed).')
+                            .replace('{r}', (g.readout.restRadiusM * 1000).toFixed(1))}>
+                          {t('In {cm} cm ({depth} % of the channel, {part} % of the part) · stretch {mm} mm ({pct} %) · k {k}')
+                            .replace('{cm}', (g.readout.insertionM * 100).toFixed(1))
+                            .replace('{depth}', (g.readout.insertionOfDepth * 100).toFixed(0))
+                            .replace('{part}', (g.readout.insertionOfLength * 100).toFixed(0))
+                            .replace('{mm}', (g.readout.stretchM * 1000).toFixed(1))
+                            .replace('{pct}', (g.readout.stretchRatio * 100).toFixed(0))
+                            .replace('{k}', g.readout.compressK.toFixed(2))}
+                          {g.max ? (
+                            <div title={g.full ? t('The largest values over the last whole loop of the clip (k: the smallest).')
+                              : t('The largest values since this loop began; after one whole loop the line shows that loop’s.')}>
+                              {(g.full ? t('Loop max: in {cm} cm ({depth} %) · stretch {mm} mm ({pct} %) · k {k}')
+                                : t('Max so far: in {cm} cm ({depth} %) · stretch {mm} mm ({pct} %) · k {k}'))
+                                .replace('{cm}', (g.max.insertionM * 100).toFixed(1))
+                                .replace('{depth}', (g.max.insertionOfDepth * 100).toFixed(0))
+                                .replace('{mm}', (g.max.stretchM * 1000).toFixed(1))
+                                .replace('{pct}', (g.max.stretchRatio * 100).toFixed(0))
+                                .replace('{k}', g.max.compressK.toFixed(2))}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                   )) : (info.partners.channels
                     ? t('Channels: {n}, none engaged.').replace('{n}', String(info.partners.channels))

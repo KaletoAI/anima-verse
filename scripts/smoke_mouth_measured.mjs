@@ -6,14 +6,24 @@
  *
  * Usage: node scripts/smoke_mouth_measured.mjs   (no server, no world; bundles scene-render with esbuild)
  *
+ * The mouth's default tilt (`MOUTH.tiltDeg` −20, owner decision 2026-11-19) turns every mouth axis by +20° about the
+ * head's side axis s = h × f (here +x): (0, y, z) → (0, y cos 20° − z sin 20°, y sin 20° + z cos 20°),
+ * cos 20° = 0.9396926, sin 20° = 0.3420201.
+ *
  * [1] mouthChannel with only a Head bone at (0,1.6,0) (L 0.2, f +z, h +y) and mouthO (0,1.57,0.11), mouthB
- *     (0,1.52,0.02): o = mouthO; u = unit(0, −0.05, −0.09) = (0, −0.485643, −0.874157) (|·| 0.102956); D, R stay the
- *     head-length ones: 0.1, 0.02. Without mouthB the formula holds: O (0, 1.63, 0.1), u (0,0,−1).
+ *     (0,1.52,0.02): o = mouthO; u₀ = unit(0, −0.05, −0.09) = (0, −0.485643, −0.874157) (|·| 0.102956), tilted:
+ *     y = −0.485643·0.9396926 + 0.874157·0.3420201 = −0.456355 + 0.298979 = −0.157376,
+ *     z = −0.485643·0.3420201 − 0.874157·0.9396926 = −0.166100 − 0.821439 = −0.987539 → u (0, −0.157376, −0.987539);
+ *     D, R stay the head-length ones: 0.1, 0.02. Without mouthB the formula holds: O (0, 1.63, 0.1), u₀ (0,0,−1) →
+ *     u (0, 0.342020, −0.939693).
  * [2] bindChannels on a skinned figure with a Head bone at (0,1.6,0) and the payload's mouth {a mixamorig:Head,
  *     a_pos (0,1.57,0.11), b_pos (0,1.52,0.02)}: at rest the mouth channel is [1]. Head turned +30° about x
  *     (y' = y cos − z sin, z' = y sin + z cos about the head joint): rel O (0, −0.03, 0.11) →
  *     (0, −0.025981 − 0.055, −0.015 + 0.095263) = (0, −0.080981, 0.080263) → O (0, 1.519019, 0.080263);
- *     u → (0, −0.420579 + 0.437079, −0.242822 − 0.757042) = (0, 0.016500, −0.999864): the channel turns with the head.
+ *     u₀ → (0, −0.420579 + 0.437079, −0.242822 − 0.757042) = (0, 0.016500, −0.999864): the channel turns with the head;
+ *     the head's side axis is still +x, so u = u₀ of [1] turned by 30° + 20° = 50° (cos 0.6427876, sin 0.7660444):
+ *     y = −0.485643·0.6427876 + 0.874157·0.7660444 = −0.312165 + 0.669643 = 0.357478,
+ *     z = −0.485643·0.7660444 − 0.874157·0.6427876 = −0.372025 − 0.561897 = −0.933922.
  * [3] previewChannel: record a_pos (0,1,0.05), b_pos (0,1.13,0.05), frame side (1,0,0), applied null; draft tilt +30
  *     → b_pos = a_pos + (0, 0.13·cos 30°, −0.13·sin 30°) = (0, 1.112583, −0.015). Tilt −30 → (0, 1.112583, 0.115).
  *     From applied tilt 30 to draft 30 → unchanged b_pos.
@@ -56,10 +66,10 @@ const fmt = (v) => `[${v.map((x) => x.toFixed(6)).join(', ')}]`
 const tb = { head: [0, 1.6, 0], headZ: [0, 0, 1], headY: [0, 1, 0], mouthO: [0, 1.57, 0.11], mouthB: [0, 1.52, 0.02] }
 const m = SR.mouthChannel(tb)
 check('[1] o = measured', vnear(m.o, [0, 1.57, 0.11]), fmt(m.o))
-check('[1] u toward the throat', vnear(m.u, [0, -0.485643, -0.874157]), fmt(m.u))
+check('[1] u toward the throat, tilted −20', vnear(m.u, [0, -0.157376, -0.987539]), fmt(m.u))
 check('[1] D, R from the head length', near(m.depth, 0.1, 1e-9) && near(m.r, 0.02, 1e-9), `${m.depth} ${m.r}`)
 const f = SR.mouthChannel({ head: [0, 1.6, 0], headZ: [0, 0, 1], headY: [0, 1, 0], mouthO: [0, 1.57, 0.11] })
-check('[1] without mouthB: the formula', vnear(f.o, [0, 1.63, 0.1]) && vnear(f.u, [0, 0, -1]), fmt(f.o))
+check('[1] without mouthB: the formula', vnear(f.o, [0, 1.63, 0.1]) && vnear(f.u, [0, 0.342020, -0.939693]), fmt(f.o) + fmt(f.u))
 
 // [2]
 const root = new THREE.Group()
@@ -77,11 +87,11 @@ const payload = { version: SR.COLLISION_VERSION, capsules: [],
 const bound = SR.bindChannels(THREE, root, payload)
 const rest = bound?.channels.at(-1)
 check('[2] rest: measured O', !!rest && vnear(rest.o, [0, 1.57, 0.11]), rest && fmt(rest.o))
-check('[2] rest: measured u', !!rest && vnear(rest.u, [0, -0.485643, -0.874157]), rest && fmt(rest.u))
+check('[2] rest: measured u, tilted', !!rest && vnear(rest.u, [0, -0.157376, -0.987539]), rest && fmt(rest.u))
 headBone.rotation.x = Math.PI / 6; root.updateMatrixWorld(true); bound.update()
 const tilt = bound.channels.at(-1)
 check('[2] head turned: O follows', vnear(tilt.o, [0, 1.519019, 0.080263]), fmt(tilt.o))
-check('[2] head turned: u follows', vnear(tilt.u, [0, 0.0165, -0.999864]), fmt(tilt.u))
+check('[2] head turned: u follows', vnear(tilt.u, [0, 0.357478, -0.933922]), fmt(tilt.u))
 
 // [3]
 const rec = { id: 'c', kind: 'channel', a: 'mixamorig:Hips', b: 'mixamorig:Hips', a_pos: [0, 1, 0.05], b_pos: [0, 1.13, 0.05],

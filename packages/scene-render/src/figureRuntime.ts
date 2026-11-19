@@ -18,7 +18,10 @@
  *    (`bindChannels`) as OTHER figures read them, bound lazily on the instance
  *    shown now (`frameFigure`, `partnerSnapshot`);
  *  - the channel openings around what occupies its channels
- *    (`bindChannelOpening`, `applyChannelOpenings`).
+ *    (`bindChannelOpening`, `applyChannelOpenings`), and per occupant the
+ *    CHANNEL READOUT of that frame — how far the entering part is in, how much
+ *    it stretches the channel (`channelReadout.ts`; `channelReadouts()`,
+ *    `inspect().readouts`).
  *
  * THE TWO-PHASE FRAME (cross-person collision spec Part 1, `partnerFrame.ts`,
  * `frameLoop.ts`): the owner poses the figure (phase A — mixer, placement, foot
@@ -52,6 +55,9 @@ import type { CapsuleNow, CollisionBinding, CollisionPayload } from './collision
 import { bindChannels } from './channels'
 import { bindChannelOpening, createOpeningGeometries } from './channelOpening'
 import type { ChannelOpeningBinding, OpeningSegment } from './channelOpening'
+import { channelReadout } from './channelReadout'
+import type { ChannelReadout } from './channelReadout'
+import type { ChannelOccupant } from './frameLoop'
 import { bodySphere, consumerPartnerCapsules, reachSphere, snapshotPartner } from './partnerContact'
 import type { PartnerSnapshot, Sphere } from './partnerContact'
 import type { FrameFigure } from './partnerFrame'
@@ -95,6 +101,9 @@ export interface FigureInspection {
   openings: OpeningInspection[]
   /** Ruling A203: how far the mouth is open now (0..1); null = this body carries no `mouth_open`. */
   mouthOpen: number | null
+  /** The channel readouts of THIS figure's channels after the last opening pass: one per entering chain
+   *  (`channelReadout.ts`). `receiver` is '' — the runtime does not know the name its owner gives it. */
+  readouts: ChannelReadout[]
   /** Ruling A139: the point contact targets this figure's bones resolve now (hands, the head stand-in), world. */
   targets: TargetFrame[]
 }
@@ -145,6 +154,8 @@ export class FigureRuntime {
   private openingsOn: Object3D | null = null
   /** What the last opening pass put on each of this figure's channels (`inspect`): per occupied channel. */
   private openingState = new Map<string, OpeningInspection>()
+  /** The channel readouts of the last opening pass (`channelReadouts`). */
+  private readouts: ChannelReadout[] = []
   /** Ruling A203: the open mouth of the instance shown now (null = its body carries none). */
   private mouth: { on: Object3D | null; open: MouthOpen | null } = { on: null, open: null }
   private mouthManual = 0
@@ -339,10 +350,10 @@ export class FigureRuntime {
   /** THE OPENING (Ruling A102/A102b), after every figure's phase B: the other figures' chains engaged in THIS
    *  figure's channels open its surface — each segment's radius × w. An unoccupied channel is restored; an
    *  occupied one is recomputed only when it `changed`, and only while `budget` lasts (one per recompute/bind). */
-  applyChannelOpenings(occupants: readonly { channel: string; w: number; segments: readonly OpeningSegment[]; channelR?: number }[],
-    budget: { left: number } = { left: Infinity }): void {
+  applyChannelOpenings(occupants: readonly ChannelOccupant[], budget: { left: number } = { left: Infinity }): void {
     const before = this.openingState
     this.openingState = new Map()
+    if (this.readouts.length) this.readouts = []
     this.driveMouth(occupants)
     if (!occupants.length && !this.openings.size) return
     const inst = this.instance
@@ -363,6 +374,13 @@ export class FigureRuntime {
       }
       let binding = this.openings.get(ch.id)
       if (!segments.length) { binding?.restore(); continue }
+      // The readout per entering chain, every frame (pure, a few links): the same weighted segments the opening uses,
+      // against the channel's REST radius.
+      for (const occ of occupants) {
+        if (occ.channel !== ch.id || !(occ.w > 0)) continue
+        const values = channelReadout(ch, occ.segments.map(seg => ({ a: seg.a, b: seg.b, r: seg.r * occ.w })), occ.k ?? 1)
+        if (values) this.readouts.push({ receiver: '', channel: ch.id, entering: occ.from ?? '', w: occ.w, ...values })
+      }
       const state: OpeningInspection = { channel: ch.id, radius: Math.max(...segments.map(seg => seg.r)), channelR,
         segments: segments.length, applied: false, maxPush: before.get(ch.id)?.maxPush ?? 0 }
       this.openingState.set(ch.id, state)
@@ -379,6 +397,12 @@ export class FigureRuntime {
       state.maxPush = binding.apply(grown, segments).maxPush
       state.applied = true
     }
+  }
+
+  /** The channel readouts of this figure's channels after the last opening pass (`channelReadout.ts`), one per
+   *  entering chain with w > 0; `receiver` is '' (the caller names this figure). Empty when nothing is engaged. */
+  channelReadouts(): readonly ChannelReadout[] {
+    return this.disposed ? [] : this.readouts
   }
 
   /** Read-only view of the cross-person state as the last frame left it (the Library preview's Collision/Channels
@@ -404,6 +428,7 @@ export class FigureRuntime {
         radius: o.segments.length ? Math.max(...o.segments.map(seg => seg.r)) : 0 })),
       openings: [...this.openingState.values()].map(o => ({ ...o })),
       mouthOpen: this.mouthOpenValue(),
+      readouts: this.readouts.map(r => ({ ...r })),
       targets: this.disposed ? [] : this.targetsNow(),
     }
   }

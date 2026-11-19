@@ -25,7 +25,9 @@ import { OPENING_BUDGET, runFigureFrame, strandCandidates, type FrameEntry, type
 import { WALK_CLEARANCE_M } from '../game/ground';
 import { GROUND_Y } from './ground';
 import { tagAnchorY, tagBadges, tagName, tagTravelling, tagVisible } from './nameTags';
-import type { ContactRelation, PlaceEntry } from '@anima/scene-render';
+import type { ChannelReadout, ContactRelation, PlaceEntry } from '@anima/scene-render';
+import { createReadoutPublisher } from '../game/channelReadouts';
+import { setChannelReadouts } from '../hud/bus';
 import { settleOffset, type StandSettle } from './standSettle';
 import { seededRandom } from './textures';
 import { adoptTarget, advanceAlongPaces, stepShown, rateAt, pushErr, catchUpStep, clampProgress, deadReckonRate, deadReckonStep, densifyPolyline, pointAtDistance, remainingPoints, trimBucket, type ErrWindow, type MetrePoint } from './travelPath';
@@ -345,6 +347,10 @@ export class NpcManager {
     /** Ruling A139: the interaction this record belongs to (the map key is `<id>|<relation>`). */
     interaction: string
     axes: [number, number, number][] }>();
+  /** The channel readouts of the last phase B, named by the receiving figure (`channelReadouts()`), and their
+   *  throttled publisher onto the HUD bus (`game/channelReadouts.ts`: ≤ 10 Hz, only while engaged, a final null). */
+  private readoutsNow: ChannelReadout[] = [];
+  private readonly publishReadouts = createReadoutPublisher(setChannelReadouts);
   /** A102b: the rotating start of the opening pass (`runFigureFrame`, from `tickSecondary`). */
   private readonly frameState: FrameLoopState = { openingTurn: 0 };
   onPropEntryError: ((message: string) => void) | null = null;
@@ -2361,7 +2367,9 @@ export class NpcManager {
    *   3. `updateSecondary` for each figure posed this frame;
    *   4. the partners of every GPU hair-push reader re-read on their FINAL
    *      pose (their own phase B included) and 5. handed to its hair push,
-   *      which reads them at render time — no lag. */
+   *      which reads them at render time — no lag;
+   *   6. the channel readouts of every receiving figure collected
+   *      (`channelReadouts()`) and published, throttled, on the HUD bus. */
   private tickSecondary() {
     const entries: FrameEntry[] = [];
     for (const npc of this.npcs.values()) {
@@ -2370,6 +2378,18 @@ export class NpcManager {
     }
     runFigureFrame(entries, this.frameState, OPENING_BUDGET);
     this.observePairFits();
+    if (this.readoutsNow.length) this.readoutsNow = [];
+    for (const npc of this.npcs.values()) {
+      for (const r of npc.figure?.channelReadouts() ?? []) this.readoutsNow.push({ ...r, receiver: npc.name });
+    }
+    this.publishReadouts(this.readoutsNow, performance.now());
+  }
+
+  /** The channel readouts of the last phase B, raw (unthrottled): how far each entering part is in which figure's
+   *  channel and how much it stretches it (`@anima/scene-render` `channelReadout.ts`). Empty when nothing is engaged.
+   *  Game logic that needs fewer updates reads the bus (`channelReadoutFor`). */
+  channelReadouts(): readonly ChannelReadout[] {
+    return this.readoutsNow;
   }
 
   /** Ruling A158: the clip's direct root angle for this figure — only in a pair/group interaction, and only on a part
