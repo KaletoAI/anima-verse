@@ -52,12 +52,17 @@
  *       lower the same at y −0.004, weighted 1.0 to Jaw. rigidRows → 2 rows. Centroids (0, ±0.004, 0.01), mean
  *       (0, 0, 0.01) → dir (0, ±1, 0) (already perpendicular to the axis +z). For a vertex of the upper row moved by t
  *       the axis distance is sqrt(x² + (0.004 + t)²) ≥ 0.014: x = 0 needs t = 0.014 − 0.004 = 0.010, x = ±0.01 needs
- *       sqrt(0.014² − 0.01²) − 0.004 = 0.0097980 − 0.004 = 0.0057980 → the row moves by the larger, 0.010: every upper
- *       vertex to y = 0.014 (x, z kept), every lower one to y = −0.014; afterwards the x = ±0.01 vertices are
- *       sqrt(0.0001 + 0.000196) = 0.0172046 from the axis: none inside. Normals unchanged. restore() → rest (float32).
+ *       sqrt(0.014² − 0.01²) − 0.004 = 0.0057980 → the push wants the larger, 0.010.
+ *       A211 caps it by the skin's own displacement along dir (`rigidRowCap`, b = T + B = 0.044): x = 0 at d 0.004
+ *       moves 0.014 · (1 − 0.004/0.044)² = 0.0115702, all along +y; x = ±0.01 at d = sqrt(0.000116) = 0.0107703
+ *       moves 0.014 · (1 − 0.0107703/0.044)² = 0.014 · 0.7552198² = 0.0079850, of it along +y 0.0079850 · 0.004 /
+ *       0.0107703 = 0.0029656 → t = min(0.010, 0.0029656) = 0.0029656: every upper vertex to y = 0.0069656 (x, z
+ *       kept), every lower one to y = −0.0069656. Normals unchanged. restore() → rest (float32).
  *     - the jaw opened (Jaw moved by (0, −0.005, 0) in the world): the lower row is at y −0.009 before the push,
  *       centroids (0, 0.004, 0.01) / (0, −0.009, 0.01), mean y −0.0025 → dirs ±y; the lower row needs 0.014 − 0.009 =
- *       0.005 → world y −0.014, its bind y −0.004 − 0.005 = −0.009 (it keeps following the jaw); the upper row as before.
+ *       0.005; its cap: x = ±0.01 at d = sqrt(0.000181) = 0.0134536 moves 0.014 · (1 − 0.0134536/0.044)² = 0.0067475,
+ *       along −y 0.0067475 · 0.009 / 0.0134536 = 0.0045138 (x = 0: 0.014 · (1 − 0.009/0.044)² = 0.0088585) → t =
+ *       0.0045138 → world y −0.0135138, its bind y −0.0085138 (it keeps following the jaw); the upper row as before.
  *     - rigidRowPush alone: the upper row's points and dir (0,1,0) → 0.010; with the segment's r 0.004 (T 0.006) the
  *       x = 0 vertex needs 0.002 and x = ±0.01 none (0.0108 ≥ 0.006) → 0.002.
  */
@@ -324,11 +329,8 @@ check('[5] tongue: bound, 4 candidates', tongue !== null && tongue.candidates ==
   tb.apply(ch6, seg6)
   check('[6] lip (0.01, 0, 0) → (0.0183595, 0, 0)', vnear(xyz(F.lips, 0), [0.0183595, 0, 0], 1e-6), fmt(xyz(F.lips, 0)))
   const up = [0, 1, 2].map((i) => xyz(F.teeth, i)), lo = [3, 4, 5].map((i) => xyz(F.teeth, i))
-  check('[6] upper row to y 0.014, x and z kept', up.every((p, k) => vnear(p, [[-0.01, 0, 0.01][k], 0.014, 0.01], 1e-6)), JSON.stringify(up))
-  check('[6] lower row to y −0.014', lo.every((p, k) => vnear(p, [[-0.01, 0, 0.01][k], -0.014, 0.01], 1e-6)), JSON.stringify(lo))
-  const inside = [...up, ...lo].filter((p) => Math.hypot(p[0], p[1]) < 0.014 - 1e-6)
-  check('[6] no tooth vertex inside T = 0.014; the corners at 0.0172046', inside.length === 0
-    && near(Math.hypot(up[0][0], up[0][1]), 0.0172046, 1e-6), JSON.stringify(inside))
+  check('[6] upper row to y 0.0069656 (capped by the skin), x and z kept', up.every((p, k) => vnear(p, [[-0.01, 0, 0.01][k], 0.0069656, 0.01], 1e-6)), JSON.stringify(up))
+  check('[6] lower row to y −0.0069656', lo.every((p, k) => vnear(p, [[-0.01, 0, 0.01][k], -0.0069656, 0.01], 1e-6)), JSON.stringify(lo))
   const n0 = F.teeth.geometry.attributes.normal
   check('[6] tooth normals unchanged', [0, 1, 2, 3, 4, 5].every((i) => n0.getX(i) === 0 && n0.getY(i) === 0 && n0.getZ(i) === 1))
   tb.restore()
@@ -340,8 +342,8 @@ check('[5] tongue: bound, 4 candidates', tongue !== null && tongue.candidates ==
   const tj = SR.bindChannelOpening(THREE, F.root, ch6)
   tj.apply(ch6, seg6)
   const lowBind = xyz(F.teeth, 4), upBind = xyz(F.teeth, 1)
-  check('[6] jaw opened: the lower row\'s bind y −0.009 (world −0.014), the upper 0.014', near(lowBind[1], -0.009, 1e-6)
-    && near(lowBind[1] - 0.005, -0.014, 1e-6) && near(upBind[1], 0.014, 1e-6), fmt(lowBind) + fmt(upBind))
+  check('[6] jaw opened: the lower row\'s bind y −0.0085138 (world −0.0135138), the upper 0.0069656', near(lowBind[1], -0.0085138, 1e-6)
+    && near(lowBind[1] - 0.005, -0.0135138, 1e-6) && near(upBind[1], 0.0069656, 1e-6), fmt(lowBind) + fmt(upBind))
   tj.dispose()
   const upperPts = [-0.01, 0.004, 0.01, 0, 0.004, 0.01, 0.01, 0.004, 0.01]
   check('[6] rigidRowPush 0.010', near(SR.rigidRowPush(upperPts, [0, 1, 0], ch6, seg6), 0.010, 1e-9),

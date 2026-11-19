@@ -43,8 +43,14 @@
  *   axial weight at the vertex): no tooth vertex stays inside the entering part. dir (`rigidRowDirection`) = the
  *   row's centroid minus the mean of all rows' centroids (one row: its centroid's radial direction from the
  *   occupant's axis), made perpendicular to the axis of the occupant segment nearest the centroid — the rows part
- *   up and down, away from the part. Written back like the skin (through each vertex's skin matrix); normals stay
- *   (a translation). The tongue (`mouth_tongue`) is displaced like the skin.
+ *   up and down, away from the part. A211 (owner finding 2026-11-19, teeth above the upper lip with a thick part):
+ *   that t is CAPPED by `rigidRowCap` — the smallest displacement the radial map gives any vertex of the row, measured
+ *   along dir. The map moves a point less the farther it is from the axis (f(d) − d = T(1 − d/b)² falls with d), so
+ *   an uncapped row moved its gum and crown edges past the skin over them (Kira, part r 0.03: 213 front rays saw a
+ *   tooth less than 5 mm in front of the face's skin; capped: 4). Capped, no vertex of the row moves farther along dir than the skin
+ *   there does; where the cap binds, the row stays partly inside the part (hidden by it) instead of outside the face.
+ *   Written back like the skin (through each vertex's skin matrix); normals stay (a translation). The tongue
+ *   (`mouth_tongue`) is displaced like the skin.
  *
  * A push of at most 1 µm counts as none (float noise).
  *
@@ -312,6 +318,21 @@ export function rigidRowPush(points: ArrayLike<number>, dir: Vec3, ch: ChannelNo
     t += extra
   }
   return t
+}
+
+/** THE TEETH, the skin's bound (A211): the largest translation along `dir` a rigid row may take and stay inside the
+ *  opened skin — the smallest displacement the radial map gives any of its `points` (flat world [x, y, z, …]),
+ *  measured along `dir` (a point the map does not move, or moves against `dir`, bounds it to 0). */
+export function rigidRowCap(points: ArrayLike<number>, dir: Vec3, ch: ChannelNow, segments: readonly OpeningSegment[],
+  options: OpeningOptions = {}): number {
+  const out = new Float64Array(3)
+  let cap = Infinity
+  for (let i = 0, n = Math.floor(points.length / 3); i < n && cap > 0; i++) {
+    const len = displaceInto(points[3 * i], points[3 * i + 1], points[3 * i + 2], ch, segments, options, out)
+    const along = len > 0 ? out[0] * dir[0] + out[1] * dir[1] + out[2] * dir[2] : 0
+    cap = Math.min(cap, Math.max(0, along))
+  }
+  return cap === Infinity ? 0 : cap
 }
 
 /** The candidates' skin indices / weights as typed arrays, and the bones they use. */
@@ -670,7 +691,8 @@ export function bindChannelOpening(three: Three, root: Object3D, ch: ChannelNow,
             for (let k = 0; k < e.idx.length; k++) if (rg.rowOf[k] === r) members.push(k)
             const pts = new Float64Array(members.length * 3)
             members.forEach((k, n) => { pts[3 * n] = W[3 * k]; pts[3 * n + 1] = W[3 * k + 1]; pts[3 * n + 2] = W[3 * k + 2] })
-            const t = rigidRowPush(pts, dir, now, segments, opts)
+            // A211: never further than the skin around it moves, so no tooth leaves the face.
+            const t = Math.min(rigidRowPush(pts, dir, now, segments, opts), rigidRowCap(pts, dir, now, segments, opts))
             if (!(t > OPENING_EPS_M)) continue
             disp[0] = dir[0] * t; disp[1] = dir[1] * t; disp[2] = dir[2] * t
             for (const k of members) {
