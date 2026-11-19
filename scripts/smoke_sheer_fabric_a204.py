@@ -90,7 +90,7 @@ for fabric in ("stiff", "medium", "flowing"):
     check(f"{fabric}: no cloth_mass / air_damping", "cloth_mass" not in f and "air_damping" not in f)
 drape_src = (ROOT / "app/blender/scripts/garment_template_drape.py").read_text()
 build_src = (ROOT / "app/blender/scripts/garment_template_build.py").read_text()
-check("drape(): defaults mass=0.3, air_damping=5.0", "mass=0.3," in drape_src and "air_damping=5.0):" in drape_src
+check("drape(): defaults mass=0.3, air_damping=5.0", "mass=0.3," in drape_src and "air_damping=5.0," in drape_src
       and "s.mass = mass" in drape_src and "s.air_damping = air_damping" in drape_src)
 check("both build calls pass the fabric's own values",
       build_src.count('mass=float(fab.get("cloth_mass", 0.3)), air_damping=float(fab.get("air_damping", 5.0))') == 2)
