@@ -19,7 +19,7 @@ from typing import Any, Dict, Optional, Tuple
 #: The kinds of spec § 5 (generic accessory words).
 KINDS: Tuple[str, ...] = ("necklace", "choker", "earrings", "bracelet", "ring", "anklet", "belt", "strap")
 #: The kinds built (A216 the necklace, A234 every other kind).
-BUILT_KINDS: Tuple[str, ...] = ("necklace", "belt", "choker", "anklet", "bracelet", "earrings")
+BUILT_KINDS: Tuple[str, ...] = ("necklace", "belt", "choker", "anklet", "bracelet", "earrings", "strap")
 CHAIN_STYLES: Tuple[str, ...] = ("cable", "box", "rope", "none")
 #: The chain's material (A225): the metals, then the cords (a pendant on a leather cord, a string or a fabric band).
 #: The stored key stays ``metal`` (spec § 5).

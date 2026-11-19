@@ -915,6 +915,11 @@ def _joint_maxima(joint_names, J: np.ndarray, W: np.ndarray) -> Dict[str, float]
     return {str(joint_names[j]): round(float(W[J == j].max()), 3) for j in np.unique(J[W > PLAUSIBLE_WEIGHT])}
 
 
+#: A234: the air of a piece that needs more than ``accessory_band.GAP_M``: under the bust the breast's skin swings
+#: onto a band skinned to the spine when the trunk bends (Vallerie, sit: −1 mm at 2 mm).
+AROUND_GAP_M = {"strap:chest": 0.0035}
+
+
 def make_around(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, Any]] = None,
                 under: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """A belt / choker / strap (a flat band) or an anklet / bracelet / ring (a round tube) around its body part
@@ -935,8 +940,9 @@ def make_around(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, An
     thickness = ab.BAND_THICKNESS_M[spec["band"]["material"]]
     width = float(spec["band"]["width_cm"]) / 100.0
     under = under or []
+    gap_m = AROUND_GAP_M.get(key, ab.GAP_M)
     Vs, Fs, curves, lengths, ratios, landmarks = [], [], [], {}, [], {}
-    gaps, under_share = [], []
+    gaps, under_share, skins = [], [], []
     for side in ab.sides_of(spec):
         allowed = ab.joints_for(spec, side)
         Fb = ab.dominant_faces(Fw, dense[first], body.joint_names, allowed)
@@ -956,20 +962,20 @@ def make_around(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, An
         skin_only = [(Pw, Fb if spec["kind"] == "ring" else Fw)]
         if band:
             inner = (fr["centre"][None, None] + offsets[:, None, None] * fr["axis"][None, None]
-                     + (t + ab.GAP_M)[:, :, None] * dirs[None])
-            flat = ab.push_out(inner.reshape(-1, 3), np.tile(dirs, (len(offsets), 1)), skin_only, ab.GAP_M)
+                     + (t + gap_m)[:, :, None] * dirs[None])
+            flat = ab.push_out(inner.reshape(-1, 3), np.tile(dirs, (len(offsets), 1)), skin_only, gap_m)
             inner = flat.reshape(inner.shape)
             radial = np.einsum("rnk,nk->rn", inner - fr["centre"][None, None], dirs)
             V, F, N = ab.band_mesh(fr, offsets, radial, dirs, thickness)
             # the outer wall and the edges clear the skin too (a chin over a choker, a hip over a belt's edge)
-            V = ab.push_out(V, np.repeat(dirs, 2 * len(offsets), 0), skin_only, ab.GAP_M)
+            V = ab.push_out(V, np.repeat(dirs, 2 * len(offsets), 0), skin_only, gap_m)
             curve = inner[len(offsets) // 2] + dirs * thickness / 2
             X = inner.reshape(-1, 3)
             over = surf["on_garment"].reshape(-1)
             rad_gap = (radial - surf["t"]).reshape(-1)
         else:
-            curve = ab.ring_curve(fr, t[0] + ab.GAP_M + radius, dirs)
-            curve = ab.push_out(curve, dirs, skin_only, ab.GAP_M + radius)
+            curve = ab.ring_curve(fr, t[0] + gap_m + radius, dirs)
+            curve = ab.push_out(curve, dirs, skin_only, gap_m + radius)
             V, F, N = accessory_mesh.tube(curve, radius, outward=dirs)
             X = curve - dirs * radius
             over = surf["on_garment"][0]
@@ -981,6 +987,11 @@ def make_around(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, An
         lengths[side] = round(float(seg.sum()), 4)
         ratios.append(float(seg.max() / max(float(np.median(seg)), 1e-9)))
         under_share.append(surf["under_share"])
+        # A piece on one limb takes its weights from that limb's skin only: thighs (fingers) touching in the bind pose
+        # would otherwise hand the inner side half to the other leg, which leaves through it when the legs move.
+        src = np.unique(first[np.unique(Fb)]) if side else np.arange(len(body.positions))
+        Jv, Wv = accessory_mesh.skin_weights(V, np.asarray(body.positions, np.float64)[src], dense[src])
+        skins.append((Jv, Wv))
         Fs.append(F + sum(len(v) for v in Vs))
         Vs.append(V)
         curves.append(curve)
@@ -990,7 +1001,7 @@ def make_around(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, An
     V, F = np.vstack(Vs), np.vstack(Fs)
     from app.core.accessory_curve import vertex_normals
     N = vertex_normals(V, F)
-    J, W = accessory_mesh.skin_weights(V, np.asarray(body.positions, np.float64), dense)
+    J, W = np.vstack([j for j, _ in skins]), np.vstack([w for _, w in skins])
     J, W = accessory_mesh.fold_to_base(J, W, list(body.joint_names), glb_mesh.skin_joint_parents(rigged))
     gap = np.concatenate(gaps) * 1000.0
     poses = _poses(rigged, body, dense, Pw, Fw, first, V, J, W)

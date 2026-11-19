@@ -55,9 +55,9 @@ MAX_MISSING_SHARE = 0.25
 #: The axes (module docstring).
 WAIST_SHARE = 0.5
 CHOKER_SHARE = 0.45
-STRAP_THIGH_SHARE = 0.3
-STRAP_ARM_SHARE = 0.4
-STRAP_CHEST_SHARE = 0.25
+STRAP_THIGH_SHARE = 0.5
+STRAP_ARM_SHARE = 0.55
+STRAP_CHEST_SHARE = 0.0
 ANKLET_ABOVE_M = 0.035
 WRIST_ABOVE_M = 0.025
 #: Below a worn bottom's top edge, the belt's centre sits this far + half its width (the band covers the waistband).

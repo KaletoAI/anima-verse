@@ -134,6 +134,10 @@ for share, want_share in ((0.6, 1.0), (0.4, 0.0)):
     low = 0.1197 if want_share else 0.0998
     check(f"[4] garment round {share:.0%}", (bool(np.all(s["t"] >= low)), s["under_share"]), (True, want_share))
 fr_a = ab.frame(n({"kind": "anklet"}), {"mixamorig:LeftLeg": [0.1, 0.5, 0], "mixamorig:LeftFoot": [0.1, 0.1, 0]}, "left")
+fr_t = ab.frame(n({"kind": "strap", "band": {"at": "thigh"}}),
+                {"mixamorig:LeftUpLeg": [0.1, 0.9, 0], "mixamorig:LeftLeg": [0.1, 0.5, 0]}, "left")
+# thigh strap: STRAP_THIGH_SHARE 0.5 of UpLeg (0.1, 0.9, 0) -> Leg (0.1, 0.5, 0) = (0.1, 0.7, 0)
+check("[2] thigh strap centre", np.round(fr_t["centre"], 9).tolist(), [0.1, 0.7, 0.0])
 check("[2] anklet axis / centre", (np.round(fr_a["axis"], 9).tolist(), np.round(fr_a["centre"], 9).tolist()),
       ([0.0, 1.0, 0.0], [0.1, 0.135, 0.0]))
 
