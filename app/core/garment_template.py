@@ -68,14 +68,14 @@ TASK = "garment_template_params"
 #: Completion cap for the JSON answer.
 MAX_TOKENS = 400
 
-KINDS = ("skirt", "dress", "top", "jacket", "trousers", "briefs", "bra", "gloves")
-BUILT_KINDS = ("skirt", "dress", "top", "jacket", "briefs", "bra", "gloves")
+KINDS = ("skirt", "dress", "top", "jacket", "trousers", "briefs", "bra", "gloves", "tights")
+BUILT_KINDS = ("skirt", "dress", "top", "jacket", "briefs", "bra", "gloves", "tights")
 #: A223: the close-fitting kinds — cut from the body's own surface (``fitted_spec``: a region of the plain body, laid
 #: out of it and relaxed by a short pinned cloth run), not wrapped from panel rows: briefs (waistband + gusset
 #: pinned), a bra (underband + straps pinned; molded cups are pinned whole = rigid) and gloves (the cuff and the hand
 #: pinned; the fingers are a tight overlay, never draped one by one). Chains, belts and jewellery are no part of the
 #: cut.
-FITTED_KINDS = ("briefs", "bra", "gloves")
+FITTED_KINDS = ("briefs", "bra", "gloves", "tights")
 #: Kinds with a bodice over the shoulders (Ruling A142): built as a tube from the hem to the shoulder line, a yoke
 #: over the shoulders up to the neckline, armholes and sleeves (``bodice_spec``). A dress is one of them unless it is
 #: strapless. A221: a top may be strapless as well (bodice / bustier / corset: a tube pinned under the arms, built
@@ -83,7 +83,8 @@ FITTED_KINDS = ("briefs", "bra", "gloves")
 UPPER_KINDS = ("top", "jacket")
 #: The layer rank of a kind: a piece drapes over the READY template drapes of a lower rank (Ruling A142: a jacket
 #: over a top or a dress; the lower drape is a collider of the cloth run).
-LAYER_RANK = {"skirt": 1, "trousers": 1, "dress": 1, "top": 1, "jacket": 2, "briefs": 0, "bra": 0, "gloves": 1}
+LAYER_RANK = {"skirt": 1, "trousers": 1, "dress": 1, "top": 1, "jacket": 2, "briefs": 0, "bra": 0, "gloves": 1,
+              "tights": 0}
 WAIST_HEIGHTS = ("high", "natural", "low")
 SLIT_SIDES = ("none", "left", "right", "front", "back")
 SLEEVES = ("none", "cap", "short", "elbow", "long")
@@ -134,6 +135,11 @@ STRAP_WIDTH_M = {"none": 0.0, "thin": 0.012, "wide": 0.022, "halter": 0.016, "cr
 FINGERS = ("full", "fingerless", "none")
 GLOVE_LENGTHS = ("wrist", "forearm", "elbow", "opera")
 CUFFS = ("none", "flared", "folded")
+#: A223 tights / stockings / socks: full tights to the waist, hold-up stockings (a grip band on the thigh), thigh-high
+#: stockings (garter tabs optional), knee-high socks; the foot closed, footless or a stirrup under the arch.
+TIGHTS_STYLES = ("tights", "hold_up", "thigh_high", "knee_high")
+TIGHTS_FEET = ("closed", "footless", "stirrup")
+GARTERS = ("none", "tabs")
 COLLARS = ("none", "stand", "lapel")
 #: Fabric presets of the cloth run (Blender cloth settings). Stiff = holds a
 #: shape (denim, wool), medium = cotton, flowing = silk / chiffon / jersey.
@@ -208,6 +214,9 @@ PARAM_SPEC: Dict[str, Tuple[str, Any, Any]] = {
     "fingers": ("choice", FINGERS, "full"),
     "length": ("choice", GLOVE_LENGTHS, "wrist"),
     "cuff": ("choice", CUFFS, "none"),
+    "tights_style": ("choice", TIGHTS_STYLES, "tights"),
+    "feet": ("choice", TIGHTS_FEET, "closed"),
+    "garters": ("choice", GARTERS, "none"),
 }
 #: The fields that mean something per kind (the dialog shows these; ``validate_params`` resets the others to their
 #: defaults so a stale field never changes the drape key).
@@ -223,6 +232,7 @@ KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
     "bra": ("kind", "fabric", "opacity", "cup_style", "cup_coverage", "push_up", "underband_m", "center_gore", "closure",
             "straps"),
     "gloves": ("kind", "fabric", "opacity", "fingers", "length", "cuff", "fit"),
+    "tights": ("kind", "fabric", "opacity", "tights_style", "feet", "waistband", "garters"),
 }
 
 #: Spec section 8 pass marks (hand-derived in ``scripts/smoke_garment_template_spike.py``).
@@ -343,7 +353,7 @@ def shape_groups(params: Dict[str, Any], long_top: bool = False) -> List[Dict[st
 #: A223: the poses a fitted piece is measured in (briefs: the leg poses; a bra: the arm poses that pull the chest;
 #: gloves: the arm poses).
 FITTED_POSES = {"briefs": MEASURED_POSES, "bra": ("rest", "walk", "arms_down", "arms_up"),
-                "gloves": ("rest", "arms_down", "arms_forward", "arms_up")}
+                "gloves": ("rest", "arms_down", "arms_forward", "arms_up"), "tights": MEASURED_POSES}
 
 
 def measured_poses(params: Dict[str, Any]) -> Tuple[str, ...]:
@@ -541,6 +551,7 @@ KIND_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "briefs": {},
     "bra": {},
     "gloves": {"fit": 0.1},
+    "tights": {"fabric": "sheer", "opacity": 0.5},
 }
 _TROUSER_WORDS = re.compile(r"\b(trousers?|pants|jeans|shorts|leggings|slacks|chinos)\b", re.IGNORECASE)
 _DRESS_WORDS = re.compile(r"\b(dress|gown|sundress|frock)\b", re.IGNORECASE)
@@ -551,6 +562,10 @@ _BRIEFS_WORDS = re.compile(r"(briefs?\b|panties|knickers|thong|g-string|\bstring
                            r"bikini[ -]?(bottom|hose)|tanga)", re.IGNORECASE)
 _GLOVE_WORDS = re.compile(r"(gloves?\b|gauntlets?\b|mittens?\b|arm ?warmers?\b|handschuhe?\b|stulpen\b|"
                           r"armstulpen)", re.IGNORECASE)
+
+
+_TIGHTS_WORDS = re.compile(r"(tights|pantyhose|stocking|hold-?ups?\b|\bsocks?\b|strumpf|strümpfe|struempfe|"
+                           r"strumpfhose|kniestr)", re.IGNORECASE)
 
 
 def default_kind(item: Optional[Dict[str, Any]]) -> str:
@@ -567,6 +582,8 @@ def default_kind(item: Optional[Dict[str, Any]]) -> str:
     name = str(item.get("name") or "")
     if "hands" in slots or _GLOVE_WORDS.search(name):
         return "gloves"
+    if _TIGHTS_WORDS.search(name) or (slots and slots <= {"legs", "feet"} and "legs" in slots):
+        return "tights"
     if not _DRESS_WORDS.search(text):
         if "underwear_top" in slots or _BRA_WORDS.search(name):
             return "bra"
@@ -1121,6 +1138,19 @@ GLOVE_REACH = {"wrist": (0.18, 0.0), "forearm": (0.55, 0.0), "elbow": (1.0, 0.12
 #: Gloves: a flared cuff stands this far out at its edge, over CUFF_M; a folded one is doubled (this much thicker).
 CUFF_FLARE_M = 0.015
 CUFF_FOLD_M = 0.004
+#: A223 tights: the hosiery lies this far over the skin (fit 0: a second skin, pinned whole).
+HOSIERY_OFFSET_M = 0.0035
+#: Tights: a grip band (hold-up) / a sock's cuff this high at the top, HOSIERY_BAND_EXTRA_M thicker; a waistband of
+#: full tights is ``WAISTBAND_M`` high and as much thicker.
+HOLDUP_BAND_M = 0.04
+SOCK_CUFF_M = 0.025
+HOSIERY_BAND_EXTRA_M = 0.0015
+#: Tights: a stocking's top lies this far under the crotch, a knee sock's this far under the knee joint.
+THIGH_TOP_DROP_M = 0.07
+KNEE_TOP_DROP_M = 0.05
+#: Tights: a garter tab — this half width at the front and the back of each thigh, this far up over the top.
+GARTER_TAB_HALF_M = 0.012
+GARTER_TAB_H_M = 0.04
 CUFF_M = 0.06
 
 
@@ -1191,6 +1221,17 @@ def fitted_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
                     "rigid_cups": params["cup_style"] == "molded",
                     "push_m": [PUSH_LIFT_M, PUSH_IN_M, PUSH_OUT_M], "straps": strap_spec(params, meas)})
         rows = [round(meas.get("shoulder_y", bust + 0.15), 4), round(under - max(band, BACK_STRAP_M), 4)]
+    elif kind == "tights":
+        style = params["tights_style"]
+        top = meas["waist_y"] if style == "tights" else None      # the others: per leg, read off the bones (builder)
+        fit.update({"style": style, "feet": params["feet"], "garters": params["garters"] if style == "thigh_high"
+                    else "none", "top_y": round(top, 4) if top is not None else None,
+                    "offset_m": HOSIERY_OFFSET_M,
+                    "waistband_m": WAISTBAND_M[params["waistband"]] if style == "tights" else 0.0,
+                    "band_m": HOLDUP_BAND_M if style == "hold_up" else (SOCK_CUFF_M if style == "knee_high" else 0.0),
+                    "band_extra_m": HOSIERY_BAND_EXTRA_M, "thigh_drop_m": THIGH_TOP_DROP_M,
+                    "knee_drop_m": KNEE_TOP_DROP_M, "tab_half_m": GARTER_TAB_HALF_M, "tab_h_m": GARTER_TAB_H_M})
+        rows = [round(meas["waist_y"], 4), round(meas.get("floor_y", 0.0), 4)]
     else:
         j = meas.get("joints") or {}
         if not all(k in j for k in ("leftarm", "leftforearm", "lefthand")):

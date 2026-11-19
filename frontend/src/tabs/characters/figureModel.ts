@@ -327,6 +327,10 @@ export interface TemplateParams {
   fingers?: string
   length?: string
   cuff?: string
+  /** A223 tights: full tights, hold-ups, thigh-highs (garter tabs optional), knee socks; the foot. */
+  tights_style?: string
+  feet?: string
+  garters?: string
 }
 
 /** A223: the close-fitting kinds cut from the body's surface (`garment_template.FITTED_KINDS`): no length, flare or
@@ -383,6 +387,8 @@ export type TemplateFieldSpec = { type: 'choice'; choices: string[]; default: st
 export const TEMPLATE_CHOICE_LABELS: Record<string, string> = {
   skirt: 'Skirt', dress: 'Dress', top: 'Top', jacket: 'Jacket', trousers: 'Trousers', briefs: 'Briefs', bra: 'Bra',
   molded: 'Molded cups', triangle: 'Triangle', bandeau: 'Bandeau', balconette: 'Balconette', narrow: 'Narrow',
+  tights: 'Tights (to the waist)', hold_up: 'Hold-up stockings', thigh_high: 'Thigh-high stockings',
+  knee_high: 'Knee-high socks', footless: 'Footless', stirrup: 'Stirrup (under the arch)', tabs: 'Garter tabs',
   gloves: 'Gloves', full: 'Full fingers', fingerless: 'Fingerless', wrist: 'To the wrist', forearm: 'Mid forearm',
   opera: 'Opera (above the elbow)', flared: 'Flared', folded: 'Folded over',
   back_hook: 'Hooks at the back', halter: 'Halter (round the neck)', cross: 'Crossed on the back',
@@ -410,6 +416,7 @@ export const TEMPLATE_FIELD_LABELS: Record<keyof TemplateParams, string> = {
   cup_style: 'Cups', cup_coverage: 'Cup coverage (0.3 demi … 1 full)', push_up: 'Push-up (0 none … 1 strong)',
   underband_m: 'Underband (0 = the cup edge only)', center_gore: 'Between the cups', closure: 'Closure', straps: 'Straps',
   fingers: 'Fingers', length: 'Glove length', cuff: 'Cuff',
+  tights_style: 'Style', feet: 'Foot', garters: 'Garters',
 }
 
 /** A204: one line per fabric under the select — what the cloth does and what a switch costs. */
@@ -448,6 +455,11 @@ export function fittedSummary(p: TemplateParams, t: Tr = EN): string {
     parts.push(t('cover {n}').replace('{n}', Number(p.cup_coverage ?? 0.7).toFixed(2)))
     if (Number(p.push_up || 0) > 0) parts.push(t('push-up {n}').replace('{n}', Number(p.push_up).toFixed(2)))
     if (p.straps && p.straps !== 'none') parts.push(t(TEMPLATE_CHOICE_LABELS[p.straps] || p.straps))
+  }
+  if (p.kind === 'tights') {
+    parts.push(t(TEMPLATE_CHOICE_LABELS[p.tights_style || 'tights'] || p.tights_style || ''))
+    if (p.feet && p.feet !== 'closed') parts.push(t(TEMPLATE_CHOICE_LABELS[p.feet] || p.feet))
+    if (p.tights_style === 'thigh_high' && p.garters === 'tabs') parts.push(t('Garter tabs'))
   }
   if (p.kind === 'gloves') {
     parts.push(t(TEMPLATE_CHOICE_LABELS[p.fingers || 'full'] || p.fingers || ''))

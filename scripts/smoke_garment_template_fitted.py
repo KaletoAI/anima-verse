@@ -19,6 +19,8 @@ Hand-derived expectations (the synthetic measure ``M``: waist_y 1.05, hip_y 0.90
 [G1] glove reach on M (forearm 0.25, upper arm 0.25): wrist 0.18 x 0.25 = 0.045, forearm 0.55 x 0.25 = 0.1375,
      elbow 0.25 + 0.12 x 0.25 = 0.28, opera 0.25 + 0.7 x 0.25 = 0.425.
 [G2] gap 0.004 + 0.012 x 0.1 = 0.0052, fingers 0.0015. [G3] kind guess. [G4] a body without arm joints is refused.
+[T1] tights: full top = waist 1.05, gap 0.0035, waistband thin 0.012; hold-up band 0.04; knee sock 0.025; tabs
+     only on thigh-highs. [T2] kind guess (legs / hosiery words). [T3] drawing fills, tab top = 0.80 - 0.07 + 0.04.
 [B6] the drawing: briefs give one cloth fill whose top edge lies at top_y (the registration's y of 0.945 m) and whose
      lowest point is the gusset (crotch = hip joints 0.86 - 0.06 = 0.80 m, the lowest y of the fill).
 """
@@ -173,6 +175,39 @@ try:
     check("[G4] no arm joints -> ValueError", False)
 except ValueError:
     check("[G4] no arm joints -> ValueError", True)
+
+
+
+# [T1] tights: full tights top at the waist 1.05; the gap HOSIERY_OFFSET_M 0.0035; bands per style
+def tights(**kw):
+    return gt.validate_params({"kind": "tights", **kw})[0]
+
+
+f = gt.fitted_spec(tights(), M)["fitted"]
+check("[T1] full tights: top 1.05, offset 0.0035, thin waistband 0.012",
+      (f["top_y"], f["offset_m"], f["waistband_m"], f["band_m"]) == (1.05, 0.0035, 0.012, 0.0), f)
+f = gt.fitted_spec(tights(tights_style="hold_up", waistband="wide"), M)["fitted"]
+check("[T1] hold-up: per-leg top, grip band 0.04, no waistband", (f["top_y"], f["band_m"], f["waistband_m"]) ==
+      (None, 0.04, 0.0), f)
+f = gt.fitted_spec(tights(tights_style="hold_up", garters="tabs"), M)["fitted"]
+check("[T1] garter tabs only on thigh-highs", f["garters"] == "none", f)
+f = gt.fitted_spec(tights(tights_style="thigh_high", garters="tabs"), M)["fitted"]
+check("[T1] thigh-high with tabs", f["garters"] == "tabs" and f["band_m"] == 0.0, f)
+check("[T1] knee sock cuff 0.025", gt.fitted_spec(tights(tights_style="knee_high"), M)["fitted"]["band_m"] == 0.025)
+check("[T1] tights defaults: sheer 0.5", (gt.kind_defaults("tights")["fabric"], gt.kind_defaults("tights")["opacity"])
+      == ("sheer", 0.5))
+for it, want in ((item("Black stockings", ["legs"]), "tights"), (item("Plain", ["legs", "feet"]), "tights"),
+                 (item("Strumpfhose", ["legs"]), "tights"), (item("Leggings", ["bottom"]), "trousers")):
+    check(f"[T2] default_kind {it['name']} {it['outfit_piece']['slots']} -> {want}", gt.default_kind(it) == want,
+          gt.default_kind(it))
+# [T3] drawing on M (no leg runs: legs +-0.06 round x 0.09): full tights = seat + 2 legs; thigh-high with tabs =
+# 2 legs + 2 tabs, the tab's top 0.04 over the leg top (crotch 0.80 - 0.07 = 0.73 -> 0.77)
+sh = [s for s in gp.shapes(tights(), M, Reg())["shapes"] if s["kind"] == "fill"]
+check("[T3] full tights: 3 fills", len(sh) == 3, len(sh))
+sh = [s for s in gp.shapes(tights(tights_style="thigh_high", garters="tabs"), M, Reg())["shapes"] if s["kind"] == "fill"]
+check("[T3] thigh-high with tabs: 4 fills", len(sh) == 4, len(sh))
+tab_top = max(2.0 - q[1] / 1000.0 for s in sh for q in s["points"])
+check("[T3] tab top 0.77", close(tab_top, 0.77), tab_top)
 
 print()
 print("all checks passed" if not FAILED else f"{len(FAILED)} FAILED: {FAILED}")

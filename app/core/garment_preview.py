@@ -595,6 +595,9 @@ def _fitted(p, m, reg: Registration, cap_m: float, add, mark) -> None:
         if p["push_up"] > 0:
             mark(x0 + br + 0.03, under - 0.04, f"push-up {p['push_up']:.2f}")
         return
+    if kind == "tights":
+        _tights(p, m, reg, spec, cap_m, add, mark)
+        return
     j = m.get("joints") or {}
     for side, key, hand in ((1, "leftarm", "lefthand"), (-1, "rightarm", "righthand")):
         if key not in j or hand not in j:
@@ -613,6 +616,51 @@ def _fitted(p, m, reg: Registration, cap_m: float, add, mark) -> None:
         if side > 0:
             end = (ja[0] + u[0] * start, ja[1] + u[1] * start)
             mark(end[0], end[1] + 0.05, f"{p['length']} · {p['fingers']}", "middle")
+
+
+#: A223 tights drawing: the ankle this high over the floor, the knee this share of the height (without the joints).
+TIGHTS_ANKLE_M = 0.08
+TIGHTS_KNEE_SHARE = 0.28
+
+
+def _tights(p, m, reg: Registration, spec: Dict[str, Any], cap_m: float, add, mark) -> None:
+    """A223: tights — the seat from the waist to the crotch (full tights), then each leg from its top (the waist,
+    ``THIGH_TOP_DROP_M`` under the crotch, ``KNEE_TOP_DROP_M`` under the knee) down to the floor, or to the ankle
+    without a foot; garter tabs as two short strips over a thigh-high's top."""
+    import numpy as np
+    from app.core import garment_template as gt
+    j = m.get("joints") or {}
+    x0 = reg.x0
+    crotch = _crotch_y(m)
+    floor = float(m.get("floor_y", 0.0))
+    knee = float(j["leftleg"][1]) if "leftleg" in j else floor + TIGHTS_KNEE_SHARE * float(m["height"])
+    style = spec["style"]
+    if style == "tights":
+        top = spec["top_y"]
+        bl, br = reg.body_half(top, cap_m)
+        hl, hr = reg.body_half(m["hip_y"], cap_m)
+        add("body", "fill", [[x0 - bl, top], [x0 + br, top], [x0 + hr, m["hip_y"]], [x0 + hr, crotch],
+                             [x0 - hl, crotch], [x0 - hl, m["hip_y"]]])
+        leg_top = crotch
+    elif style == "knee_high":
+        top = leg_top = knee - gt.KNEE_TOP_DROP_M
+    else:
+        top = leg_top = crotch - gt.THIGH_TOP_DROP_M
+    bottom = floor if spec["feet"] == "closed" else floor + TIGHTS_ANKLE_M
+    for side, key in ((1, "leftupleg"), (-1, "rightupleg")):
+        guess = j[key][0] if key in j else x0 + side * 0.09
+        inner, outer = [], []
+        for y in np.linspace(leg_top, bottom, 12):
+            run = reg.leg_run(float(y), guess) if hasattr(reg, "leg_run") else None
+            a, b = run if run is not None else (guess - 0.06, guess + 0.06)
+            inner.append([a if side > 0 else b, float(y)])
+            outer.append([b if side > 0 else a, float(y)])
+        add("leg", "fill", inner + outer[::-1])
+        if spec["garters"] == "tabs":
+            w = spec["tab_half_m"]
+            add("tab", "fill", [[guess - w, top], [guess + w, top], [guess + w, top + spec["tab_h_m"]],
+                                [guess - w, top + spec["tab_h_m"]]])
+    mark(x0 + 0.2, leg_top, f"{style} · {spec['feet']}")
 
 
 def _trousers(p, m, reg: Registration, waist_y: float, cap_m: float, add, mark) -> None:

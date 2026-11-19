@@ -30,7 +30,7 @@ from mathutils import Vector
 import garment_template_drape as gd
 
 #: Umbrella passes of the evening (fitted kinds), and the extra ones of a molded cup (it bridges the bust).
-SMOOTH_PASSES = {"briefs": 6, "bra": 6, "gloves": 2}
+SMOOTH_PASSES = {"briefs": 6, "bra": 6, "gloves": 2, "tights": 6}
 MOLDED_PASSES = 14
 #: The closure's extra thickness (a hook patch on the back band / a front clasp), metres, and its half width.
 CLOSURE_M = 0.0015
@@ -421,6 +421,79 @@ def gloves_region(f, co, w, arm):
     return sides, keep_v, planes, dist, {"reach_m": reach}
 
 
+LEG_BONES = ("UpLeg", "Leg", "Foot", "ToeBase")
+
+
+def _bone_head(arm, name):
+    return np.array(arm.matrix_world @ arm.data.bones[gd.P + name].head_local)
+
+
+def tights_region(f, co, w, arm, cx):
+    """A223 tights: ``(keep_v on collider vertices with their nearest body vertex's weights, planes, band(v), info)``.
+    Full tights take the hips and both legs up to ``top_y``; a stocking / sock is per leg up to its top (a horizontal
+    plane per side: under the crotch, under the knee). The foot: closed, footless (cut at the ankle joint) or a stirrup
+    (footless + a band round the middle of the foot)."""
+    style = f["style"]
+    crotch = _crotch(co, w["Hips"], cx, _gltf_y(f["top_y"]) if f.get("top_y") else 2.0)
+    sides = {}
+    for side, s in (("Left", 1), ("Right", -1)):
+        knee = _bone_head(arm, side + "Leg")
+        ankle = _bone_head(arm, side + "Foot")
+        toe = _bone_head(arm, side + "ToeBase")
+        if style == "tights":
+            top = _gltf_y(f["top_y"])
+        elif style == "knee_high":
+            top = float(knee[2]) - float(f["knee_drop_m"])
+        else:
+            top = crotch - float(f["thigh_drop_m"])
+        sides[s] = {"top": top, "ankle": ankle, "toe": toe, "knee": knee,
+                    "leg_x": float(_bone_head(arm, side + "UpLeg")[0])}
+    legs = sum(w[sd + b] for sd in ("Left", "Right") for b in LEG_BONES)
+    foot = sum(w[sd + b] for sd in ("Left", "Right") for b in ("Foot", "ToeBase"))
+
+    def side_of(v):
+        return np.where(v[:, 0] > cx, 1, -1)
+
+    def keep_v(v, legs_v, hips_v, foot_v):
+        sd = side_of(v)
+        top = np.where(sd > 0, sides[1]["top"], sides[-1]["top"])
+        member = legs_v + (hips_v if style == "tights" else 0.0)
+        k = (member > 0.5) & (v[:, 2] <= top + 0.005)
+        if f["garters"] == "tabs":
+            for s_, d in sides.items():
+                on = (sd == s_) & (np.abs(v[:, 0] - d["leg_x"]) < float(f["tab_half_m"])) \
+                    & (v[:, 2] > d["top"]) & (v[:, 2] <= d["top"] + float(f["tab_h_m"])) & (member > 0.5)
+                k |= on
+        if f["feet"] != "closed":
+            ank = np.where(sd > 0, sides[1]["ankle"][2], sides[-1]["ankle"][2])
+            open_foot = (foot_v > 0.5) & (v[:, 2] < ank - 0.01)
+            if f["feet"] == "stirrup":
+                mid = np.where(sd[:, None] > 0, (sides[1]["ankle"] + sides[1]["toe"]) / 2,
+                               (sides[-1]["ankle"] + sides[-1]["toe"]) / 2)
+                ring = np.abs(v[:, 1] - mid[:, 1]) < 0.025
+                open_foot &= ~ring
+            k &= ~open_foot
+        return k
+
+    planes = []
+    if style != "tights":
+        for s_, d in sides.items():
+            if f["garters"] != "tabs":
+                planes.append((np.array([0.0, 0.0, d["top"]]), np.array([0.0, 0.0, 1.0]), s_))
+    else:
+        planes.append((np.array([0.0, 0.0, sides[1]["top"]]), np.array([0.0, 0.0, 1.0])))
+
+    def band(v):
+        """The thicker band at the top: the waistband (full tights), the grip band (hold-up), the sock's cuff."""
+        sd = side_of(v)
+        top = np.where(sd > 0, sides[1]["top"], sides[-1]["top"])
+        h = float(f["waistband_m"]) if style == "tights" else float(f["band_m"])
+        return (h > 0) & (v[:, 2] > top - h)
+
+    info = {"crotch_z": round(crotch, 4), "tops": {str(s_): round(d["top"], 4) for s_, d in sides.items()}}
+    return keep_v, planes, band, legs, foot, info
+
+
 # --- the builder -----------------------------------------------------------------------------------------------
 
 def _umbrella(bm, passes, movable, boundary_only_along=True):
@@ -452,7 +525,7 @@ def build_fitted(prm, spec, arm, body, ctree, col=None):
     co, nrm, stree = _surface_tree(body)
     sp = np.array(arm.matrix_world @ arm.data.bones[gd.P + "Spine1"].head_local)
     cx, cy = float(sp[0]), float(sp[1])
-    names = ["Hips"] + [s + b for s in ("Left", "Right") for b in GLOVE_BONES]
+    names = ["Hips"] + [s + b for s in ("Left", "Right") for b in GLOVE_BONES + list(LEG_BONES)]
     w = _weights(body, names)
     info = {"kind": kind}
     # the piece is cut from the rest collider (``gd.rest_collider``: the body voxel-remeshed — closed, one outward
@@ -475,6 +548,14 @@ def build_fitted(prm, spec, arm, body, ctree, col=None):
         keep, planes, pins, push, closure, cups, extra = bra_region(f, co, stree, cx, cy)
         info.update(extra)
         mask = keep(cent)
+    elif kind == "tights":
+        keep_v, planes, tband, legs_w, foot_w, extra = tights_region(f, co, w, arm, cx)
+        info.update(extra)
+        kd = _kd(co)
+        cco = np.array([v.co for v in bm.verts])
+        near = np.array([kd.find(Vector(p))[1] for p in cco])
+        vk = keep_v(cco, legs_w[near], w["Hips"][near], foot_w[near])
+        mask = np.array([all(vk[v.index] for v in fa.verts) for fa in bm.faces])
     else:
         sides, keep_v, planes, dist, extra = gloves_region(f, co, w, arm)
         info.update(extra)
@@ -575,6 +656,9 @@ def build_fitted(prm, spec, arm, body, ctree, col=None):
             # stiff elbow glove sagged in the T-pose and stretched to 1.38)
             pin_mask[:] = True
         info["finger_verts"] = int((fg > 0.5).sum())
+    if kind == "tights":
+        off = off + float(f["band_extra_m"]) * tband(V)
+        pin_mask = np.ones(len(V), bool)                # hosiery is a second skin: pinned whole
     if kind == "bra":
         cl = closure(V)
         off = off + CLOSURE_M * cl

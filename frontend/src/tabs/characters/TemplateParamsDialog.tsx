@@ -142,7 +142,8 @@ const WARN: CSSProperties = { color: 'var(--warning, #d29922)' }
 const ORDER: (keyof TemplateParams)[] = ['kind', 'fabric', 'opacity', 'length_m', 'flare', 'waist_height', 'slit', 'slit_m',
   'shoulders', 'fit', 'neckline', 'neck_depth_m', 'sleeves', 'sleeve_fit', 'front', 'collar',
   'rise', 'waistband', 'leg_cut', 'back_coverage', 'side_width_m',
-  'cup_style', 'cup_coverage', 'push_up', 'underband_m', 'center_gore', 'closure', 'straps', 'fingers', 'length', 'cuff']
+  'cup_style', 'cup_coverage', 'push_up', 'underband_m', 'center_gore', 'closure', 'straps', 'fingers', 'length', 'cuff',
+  'tights_style', 'feet', 'garters']
 /** Fields shown as a 0…1 number rather than centimetres. */
 const SHARES = new Set<keyof TemplateParams>(['flare', 'fit', 'sleeve_fit', 'opacity', 'leg_cut', 'back_coverage', 'cup_coverage', 'push_up'])
 
@@ -170,6 +171,9 @@ function shown(key: keyof TemplateParams, p: TemplateParams, fields: Record<stri
   if (key === 'sleeve_fit' && (!bodice || p.sleeves === 'none')) return false
   // A223: a bandeau is one band round the chest — no gore, no push-up
   if ((key === 'center_gore' || key === 'push_up') && p.kind === 'bra' && p.cup_style === 'bandeau') return false
+  // A223: garter tabs only on thigh-high stockings, a waistband only on full tights
+  if (key === 'garters' && p.kind === 'tights' && p.tights_style !== 'thigh_high') return false
+  if (key === 'waistband' && p.kind === 'tights' && p.tights_style !== 'tights') return false
   return true
 }
 

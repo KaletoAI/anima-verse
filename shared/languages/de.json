@@ -6816,6 +6816,15 @@
     "Fingers": "Finger",
     "Glove length": "Handschuhlänge",
     "Cuff": "Stulpe",
-    "A leather finish sets its own surface: the material preset's metal and sheen do not apply.": "Ein Lederfinish bestimmt seine eigene Oberfläche: Metall und Glanz der Material-Vorgabe gelten dann nicht."
+    "A leather finish sets its own surface: the material preset's metal and sheen do not apply.": "Ein Lederfinish bestimmt seine eigene Oberfläche: Metall und Glanz der Material-Vorgabe gelten dann nicht.",
+    "Tights (to the waist)": "Strumpfhose (bis zur Taille)",
+    "Hold-up stockings": "Halterlose Strümpfe",
+    "Thigh-high stockings": "Overknee-Strümpfe",
+    "Knee-high socks": "Kniestrümpfe",
+    "Footless": "Ohne Fuß",
+    "Stirrup (under the arch)": "Steg (unter dem Fußgewölbe)",
+    "Garter tabs": "Strapshalter",
+    "Foot": "Fuß",
+    "Garters": "Strapse"
   }
 }
