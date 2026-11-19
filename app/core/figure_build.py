@@ -142,7 +142,8 @@ STEP_ORDER = ("plain_body", "base_repair", "tip_smoothing", "shape", "pieces", "
               "collision")
 #: What a step needs: a failed (or skipped) step skips every step naming it here.
 DEPENDS = {"base_repair": {"plain_body"}, "tip_smoothing": {"plain_body"}, "shape": {"plain_body"}, "pieces": {"plain_body"},
-           "template": {"plain_body"}, "accessory": {"plain_body"}, "hair": {"plain_body"}, "texture": {"plain_body", "shape"}, "fits": {"plain_body"},
+           "template": {"plain_body"}, "accessory": {"plain_body"}, "hair": {"plain_body"},
+           "texture": {"plain_body", "shape"}, "fits": {"plain_body"},
            "assemble": {"plain_body", "fits"}}
 #: Steps that hold the character's 3D generation slot (model work).
 SLOT_STEPS = frozenset({"plain_body", "base_repair", "tip_smoothing", "shape", "texture", "assemble",
@@ -2217,7 +2218,8 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
 def _accessory_row(character_name: str, item_id: str, item: Dict[str, Any],
                    profile: Dict[str, Any]) -> Dict[str, Any]:
     """An accessory row's ``accessory`` (Ruling A118): ``{state, reason, kind, suggested, built_at, metrics,
-    cost}`` — the build's state in words, the kind stored (None: none chosen) and the one ``suggest_kind`` proposes."""
+    cost}`` — the build's state in words, the kind stored (None: none chosen) and the one ``suggest_kind``
+    proposes."""
     from app.core import accessory_build, accessory_spec
     state = accessory_build.accessory_state(character_name, item_id, profile=profile, item=item)
     spec = accessory_spec.of_item(item)

@@ -2726,7 +2726,8 @@ def mesh_record(character_name: str, fig) -> Dict[str, Any]:
                        *(i for i, why in fig.left_out.items() if why != figure.LEFT_OFF_SHAPE)})
     if not intended:
         return {}
-    return {"intended": intended, "effective": sorted({*fig.own, *fig.accessory}), "unpainted": sorted({*fig.own, *fig.accessory, *fig.left_out}),
+    return {"intended": intended, "effective": sorted({*fig.own, *fig.accessory}),
+            "unpainted": sorted({*fig.own, *fig.accessory, *fig.left_out}),
             "missing": dict(fig.left_out), "warnings": [], "figure": fig.as_dict()}
 
 
@@ -2887,7 +2888,8 @@ def dressed_image(character_name: str, view: str, signature: str, bsig: str, *, 
         fig = figure_mod.delivered_figure_cached(character_name, pieces=dict(manifest.get("pieces") or {}),
                                                  items=list(manifest.get("items") or []),
                                                  piece_state=dict(manifest.get("piece_state") or {}))
-    if fig.bsig != bsig or fig.shape != on or mesh_items_unpainted(meta) != sorted({*fig.own, *fig.accessory, *fig.left_out}):
+    if fig.bsig != bsig or fig.shape != on \
+            or mesh_items_unpainted(meta) != sorted({*fig.own, *fig.accessory, *fig.left_out}):
         return None  # made for another figure
     if is_outfit_body_signature(on) and (meta.get("dressed") is not False) != bool(getattr(fig, "texture", "")):
         # Ruling A50: on a meshed shape a figure paints something exactly when it has a texture — an edit made for a
