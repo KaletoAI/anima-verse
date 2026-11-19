@@ -2096,6 +2096,14 @@ eine andere `body`-Frisur als die des Grundkörpers ist eine eigene Körperform.
   `collar_bind_m` = the collar's bind height) — four nodes. The served body is cut under the foot part, and the assembled
   sidecar carries the `foot_pose` record both renderers apply — see "Footwear
   (`foot_pose`, garment kind `footwear`)" after the collision capsules, Boots.
+- **Accessory (`kind` `accessory`, Ruling A118, A216):** a piece in mode `accessory` (a necklace chain today) is
+  grafted as ONE node `garment_accessory_<item_id>_c` (`c` = centred; `l` / `r` reserved for paired pieces): a closed
+  tube of 8 sides around the neck curve measured on the plain body (1.7 mm + the tube radius off the skin), skinned
+  with the blended weights of the nearest body vertices; material metallic 1.0, the item's metal as
+  `baseColorFactor` (linear), no texture. Built on the CPU (`accessory_build`, 0 hub jobs), stored per character
+  under `jewellery/<item>_<asig>.npz`; a metal change re-assembles only. It hides nothing (no cut of the body, no
+  painted region) and gets NO collision capsules (`garmentCapsules` returns `[]` for `kind` `accessory`) — it rides
+  on the skin through its skin weights. Beweis: `scripts/smoke_accessory_mesh.py`, `scripts/smoke_accessory_build.py`.
 - **Lieferung:** der Server baut die Auslieferung als abgeleitete Datei
   (`model3d/assembled/{sig}.glb` = nacktes Outfit-Modell + gepfropfte
   Garments); das gespeicherte `{sig}.glb` bleibt immer nackt. Ändert sich die
