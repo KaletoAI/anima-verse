@@ -3446,8 +3446,8 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                           if not _done(character_name, item_id, kind, fsig, s, base_sha, method, hsig)), None)
             if first is None:
                 return {"ok": True, "fsig": fsig, "ran": []}
-            if first in gs.IMAGE_STEPS or (first == "fit" and method == gs.EDIT_CHAIN
-                                           and garment_source_materialized(character_name, item_id, fsig)):
+            if refit_before_render(first, method == gs.EDIT_CHAIN,
+                                   garment_source_materialized(character_name, item_id, fsig)):
                 # Refit before re-render: the last accepted source onto the new base first (CPU) — or the copies a
                 # refused refit kept (Ruling A162) fitted again.
                 refit = _refit_from_source(character_name, item_id, kind, method, fsig, bsig, profile)
@@ -3695,6 +3695,19 @@ REFIT_OFFER = "refit_offer"
 #: Ruling A162: the error of that refusal — the piece dialog offers keep / accept anyway / a new mesh.
 REFIT_STOPPED = ("Refit failed ({reason}) — no new mesh was made: keep the old fit, accept the refit anyway or "
                  "make a new mesh (hub jobs)")
+
+
+def refit_before_render(first: str, edit_chain: bool, materialized: bool) -> bool:
+    """Whether a default run whose first step not done is ``first`` refits on the CPU (``_refit_from_source``)
+    before it renders anything. An image step refits only while the group holds no copies yet (``find_source``
+    copies a source made on another base in); a group that already holds copied images whose image step is
+    still not done (A215: a worn copy is stale for its base-view variant, A190) is rendered — refitting the
+    same copies again changes nothing and the step would stay due on every Build. ``fit`` refits the copies a
+    refused refit kept (Ruling A162)."""
+    from app.core import garment_store as gs
+    if first in gs.IMAGE_STEPS:
+        return not materialized
+    return first == "fit" and edit_chain and materialized
 
 
 def _refit_from_source(character_name: str, item_id: str, kind: str, method: str, fsig: str, bsig: str,
