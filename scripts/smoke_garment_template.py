@@ -209,9 +209,11 @@ o = gt.outline(gt.validate_params({"waist_height": "low"})[0], M)
 check("[3] low waist 0.845", close(o["knots"][1][1], 0.845), o["knots"][1][1])
 dress, _ = gt.validate_params({"kind": "dress", "length_m": 0.5})
 o = gt.outline(dress, M)
-check("[3] dress top knot (0.775, 0.92), top_y 1.275",
-      close(o["knots"][-1][0], 0.775) and close(o["knots"][-1][1], 0.92) and close(o["top_y"], 1.275), o)
-check("[3] dress rows 53", gt.panel_spec(dress, M)["rows"] == 53)
+# A223: a strapless dress's top edge is STRAPLESS_UNDERARM_M (0.02) under the band: 0.775 - 0.02 = 0.755, 1.255
+check("[3] dress top knot (0.755, 0.92), top_y 1.255",
+      close(o["knots"][-1][0], 0.755) and close(o["knots"][-1][1], 0.92) and close(o["top_y"], 1.255), o)
+_rows = gt.panel_spec(dress, M)["rows"]
+check("[3] dress rows 51 = round(0.755 / GRID_M 0.015 = 50.3) + 1 (was 0.775 -> 52 + 1 = 53)", _rows == 51, _rows)
 try:
     gt.panel_spec(gt.validate_params({"kind": "trousers"})[0], M)
     check("[3] trousers not built raises", False)
@@ -554,8 +556,8 @@ fp = spec14["pygarment"]["panels"]["front"]["panels"]["front"]
 check("[14] pygarment front panel: 12 edges", len(fp["edges"]) == 12, len(fp["edges"]))
 dr14, _ = gt.validate_params({"kind": "dress", "length_m": 0.5, "flare": 0.0})
 od = gt.outline(dr14, T)
-check("[14] strapless dress: the skirt knots + band (0.775, 0.92)",
-      knots_match(od["knots"], want + [(0.775, 0.92)]), od["knots"])
+check("[14] strapless dress: the skirt knots + band (0.755, 0.92) (A223: 2 cm under the band)",
+      knots_match(od["knots"], want + [(0.755, 0.92)]), od["knots"])
 TU = dict(T, shoulder_y=1.37, shoulder_w=0.39, neck_y=1.42, neck_c=0.33, arm_len=0.50,
           arm_c=[[0.05, 0.34], [0.25, 0.26], [0.5, 0.24], [0.97, 0.17]], joints={})
 dc14, _ = gt.validate_params({"kind": "dress", "length_m": 0.5, "flare": 0.0, "shoulders": "covered"})

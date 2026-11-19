@@ -816,7 +816,9 @@ def outline(params: Dict[str, Any], meas: Dict[str, float]) -> Dict[str, Any]:
         return _strapless_top_outline(params, meas, waist_y)
     knots = _skirt_knots(meas, waist_y, length, hem_c, waist_c)
     if params["kind"] == "dress":
-        bodice = max(0.08, meas["band_y"] - waist_y)
+        # A223: the top edge lies STRAPLESS_UNDERARM_M under the chest band, as a strapless top's (A221): at the band
+        # the pinned top row met the underside of the T-posed arm on Lirien's body and one edge stretched to 1.503
+        bodice = max(0.08, meas["band_y"] - STRAPLESS_UNDERARM_M - waist_y)
         knots.append((length + bodice, meas["band_c"] + EASE_M))
         top_y = waist_y + bodice
     return {"knots": knots, "top_y": round(top_y, 4), "waist_y": round(waist_y, 4),
@@ -1266,8 +1268,12 @@ def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List
     params = {k: v for k, v in params.items() if k not in MATERIAL_ONLY}
     if params.get("fabric") in DRAPE_FABRIC:          # A214: the leather finishes share one drape
         params["fabric"] = DRAPE_FABRIC[params["fabric"]]
-    return _md5({"params": params, "version": TEMPLATE_VERSION, "base": base_sha, "texture": texture_sha,
-                 "lower": sorted(lower)})
+    payload = {"params": params, "version": TEMPLATE_VERSION, "base": base_sha, "texture": texture_sha,
+               "lower": sorted(lower)}
+    if params.get("kind") == "dress" and not has_bodice(params):
+        # A223: a strapless dress's top edge moved under the chest band — only these drapes are due again
+        payload["strapless_top_m"] = STRAPLESS_UNDERARM_M
+    return _md5(payload)
 
 
 def templates_dir(character_name: str) -> Path:
