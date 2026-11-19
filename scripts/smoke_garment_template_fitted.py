@@ -12,6 +12,10 @@ Hand-derived expectations (the synthetic measure ``M``: waist_y 1.05, hip_y 0.90
 [B4] default_kind: slots [underwear_bottom] -> briefs; [bottom, underwear_bottom] named "Schuppenslip" -> briefs;
      "Bikini bottom" on [bottom] -> briefs; jeans on [bottom] -> trousers; a skirt on [bottom] -> skirt.
 [B5] measured poses of briefs = rest, walk, sit, kneel; no pose-shape groups.
+[R1] bust lines of M (torso girth 0.90 from 1.18 to 1.22, else 0.80): bust 1.18, underbust 1.04.
+[R2] strap shoulder point = (neck_c / 2pi + 0.012 + 0.75 x shoulder_w / 2) / 2 = 0.10726; cross -> back_x -0.10726;
+     the bodice's strap_x is the same number (shared ``strap_shoulder_x``).
+[R3] the bra's spec numbers; [R4] its kind guess (a bustier stays a top, A221); [R5] its drawing's fills.
 [B6] the drawing: briefs give one cloth fill whose top edge lies at top_y (the registration's y of 0.945 m) and whose
      lowest point is the gusset (crotch = hip joints 0.86 - 0.06 = 0.80 m, the lowest y of the fill).
 """
@@ -111,6 +115,38 @@ check("[B6] briefs: one cloth fill", len(fills) == 1, out["shapes"])
 ys = [2.0 - q[1] / 1000.0 for q in fills[0]["points"]] if fills else [0]
 check("[B6] briefs fill top at 0.945 m", close(max(ys), 0.945), max(ys))
 check("[B6] briefs fill bottom at the gusset 0.80 m", close(min(ys), 0.80), min(ys))
+
+# [R1] the bust lines of M: the widest torso slice between waist + 5 cm (1.10) and the band (1.275) is 0.90 from
+# 1.18 (the first of the equal ones), the narrowest 14..4 cm under it (1.04..1.14, all 0.80) the first, 1.04
+check("[R1] bust lines (1.04, 1.18)", gt._bust_lines(M) == (1.04, 1.18), gt._bust_lines(M))
+
+
+def bra(**kw):
+    return gt.validate_params({"kind": "bra", **kw})[0]
+
+
+# [R2] straps: neck_r = 0.33 / 2pi + 0.012 = 0.064521; shoulder_x = (0.064521 + 0.75 x 0.20) / 2 = 0.107261
+st = gt.strap_spec(bra(straps="cross"), M)
+check("[R2] strap shoulder_x 0.10726", close(st["shoulder_x"], 0.10726), st)
+check("[R2] cross: back_x on the other side", close(st["back_x"], -0.10726), st)
+check("[R2] cross width 0.014", close(st["width_m"], 0.014), st)
+check("[R2] straps none -> no strap record", gt.strap_spec(bra(straps="none"), M) is None)
+check("[R2] the dress / corset top straps use the same shoulder point",
+      close(gt.bodice_spec(gt.validate_params({"kind": "dress", "shoulders": "straps"})[0], M)["strap_x"], 0.10726))
+f = gt.fitted_spec(bra(underband_m=0.0, center_gore="wide", cup_style="molded"), M)["fitted"]
+check("[R3] bra spec: under 1.04, bust 1.18, gore (0.022, 0.05), molded rigid",
+      (f["under_y"], f["bust_y"], f["gore_half_m"], f["gore_h_m"], f["rigid_cups"]) == (1.04, 1.18, 0.022, 0.05, True), f)
+check("[R3] bra built", "bra" in gt.BUILT_KINDS)
+check("[R3] bra measured poses", gt.measured_poses(bra()) == ("rest", "walk", "arms_down", "arms_up"))
+for it, want in ((item("Schuppen-BH", ["top", "underwear_top"]), "bra"), (item("Bikini top", ["top"]), "bra"),
+                 (item("Silk blouse", ["top"]), "top"), (item("Leather bustier", ["top"]), "top"),
+                 (item("Lace", ["underwear_top"]), "bra")):
+    check(f"[R4] default_kind {it['name']} -> {want}", gt.default_kind(it) == want, gt.default_kind(it))
+# [R5] drawing: molded with thin straps = band + 2 cups + 2 straps; a bandeau = band + 1 band-cup + 2 straps
+n = len([s for s in gp.shapes(bra(), M, Reg())["shapes"] if s["kind"] == "fill"])
+check("[R5] molded bra: 5 fills", n == 5, n)
+n = len([s for s in gp.shapes(bra(cup_style="bandeau"), M, Reg())["shapes"] if s["kind"] == "fill"])
+check("[R5] bandeau: 4 fills", n == 4, n)
 
 print()
 print("all checks passed" if not FAILED else f"{len(FAILED)} FAILED: {FAILED}")

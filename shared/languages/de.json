@@ -6759,6 +6759,23 @@
     "{rise} rise": "Leibhöhe {rise}",
     "leg cut {n}": "Beinausschnitt {n}",
     "seat {n}": "Gesäß {n}",
-    "A close-fitting piece is cut from the body itself and pinned at its bands — it has no length of its own.": "Ein eng anliegendes Stück wird aus dem Körper selbst geschnitten und an seinen Bündchen fixiert — es hat keine eigene Länge."
+    "A close-fitting piece is cut from the body itself and pinned at its bands — it has no length of its own.": "Ein eng anliegendes Stück wird aus dem Körper selbst geschnitten und an seinen Bündchen fixiert — es hat keine eigene Länge.",
+    "Bra": "BH",
+    "Molded cups": "Formschalen",
+    "Triangle": "Triangel",
+    "Bandeau": "Bandeau",
+    "Balconette": "Balconette",
+    "Narrow": "Schmal",
+    "Hooks at the back": "Haken hinten",
+    "Halter (round the neck)": "Neckholder (um den Hals)",
+    "Crossed on the back": "Auf dem Rücken gekreuzt",
+    "Cups": "Körbchen",
+    "Cup coverage (0.3 demi … 1 full)": "Körbchen-Bedeckung (0,3 halb … 1 voll)",
+    "Push-up (0 none … 1 strong)": "Push-up (0 keins … 1 stark)",
+    "Underband (0 = the cup edge only)": "Unterbrustband (0 = nur die Körbchenkante)",
+    "Between the cups": "Zwischen den Körbchen",
+    "Closure": "Verschluss",
+    "cover {n}": "Bedeckung {n}",
+    "push-up {n}": "Push-up {n}"
   }
 }

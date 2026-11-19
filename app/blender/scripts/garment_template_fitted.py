@@ -35,6 +35,9 @@ MOLDED_PASSES = 14
 #: The closure's extra thickness (a hook patch on the back band / a front clasp), metres, and its half width.
 CLOSURE_M = 0.0015
 CLOSURE_HALF_M = 0.025
+#: A bra cup is pinned within this distance of the bust point (the cloth over a breast's tip was the one edge a
+#: triangle cup's drape stretched to 1.34).
+TIP_PIN_M = 0.03
 #: A strap path is sampled this densely.
 STRAP_STEP_M = 0.01
 
@@ -162,6 +165,34 @@ def _apex(co, cx, cy, s, bust, under):
     return co[i].copy()
 
 
+#: The fold under a breast is looked for this far under the apex, in steps of FOLD_STEP_M.
+FOLD_SCAN_M = 0.14
+FOLD_STEP_M = 0.004
+
+
+def _fold(tree, apex, cy):
+    """The height of the breast's fold under ``apex``: going down from the apex along the front surface (rays from
+    the front at the apex's x), the first height after the steepest recession where the surface recedes less than a
+    fifth as fast (the breast's underside ends on the ribs); None without a recession of 4 mm per step."""
+    ys = []
+    for k in range(int(FOLD_SCAN_M / FOLD_STEP_M)):
+        z = float(apex[2]) - FOLD_STEP_M * (k + 1)
+        h = _ray(tree, (float(apex[0]), cy - 0.6, z), (0, 1, 0))
+        ys.append((z, None if h is None else float(h[1])))
+    zs = [z for z, y in ys if y is not None]
+    yv = [y for z, y in ys if y is not None]
+    if len(yv) < 5:
+        return None
+    dy = np.diff(yv)                         # > 0: the surface recedes going down
+    k = int(np.argmax(dy))
+    if dy[k] < 0.004:                        # no breast to speak of
+        return None
+    for i in range(k + 1, len(dy)):
+        if dy[i] < 0.2 * dy[k]:
+            return float(zs[i])
+    return None
+
+
 def strap_path(tree, st, start, cx, cy, s, under):
     """A223 — one strap as a polyline on the body surface (``strap_spec``): from ``start`` (the cup top) up the
     front to the shoulder at ``shoulder_x`` (rays from the front), over the shoulder (rays from above), down the back
@@ -215,8 +246,14 @@ def bra_region(f, co, tree, cx, cy):
     style = f["style"]
     gore_half, gore_h = float(f["gore_half_m"]), float(f["gore_h_m"])
     apex = {s: _apex(co, cx, cy, s, bust, under) for s in (1, -1)}
+    # the underbust line is the breast's fold under each apex where the body shows one (the narrowest torso slice
+    # can lie on the ribs below it): the front surface furthest back between the apex and FOLD_SCAN_M under it
+    folds = [z for z in (_fold(tree, a, cy) for a in apex.values()) if z is not None]
+    info_fold = {"folds": [round(z, 4) for z in folds]}
+    if folds:
+        under = max(under, min(folds))
     info = {"apex": {("l" if s > 0 else "r"): [round(float(x), 4) for x in a] for s, a in apex.items()},
-            "under_z": round(under, 4)}
+            "under_z": round(under, 4), **info_fold}
     tops = {}
     for s, a in apex.items():
         H = max(0.03, float(a[2]) - under)
@@ -543,14 +580,23 @@ def build_fitted(prm, spec, arm, body, ctree, col=None):
     for _round in range(ROUNDS):
         _umbrella(bm, SMOOTH_PASSES[kind], movable)
         _lay_out(bm, ctree, off, movable)
-    if kind == "bra" and (f.get("rigid_cups") or float(f["push"]) > 0):
+    if kind == "bra":
+        # the cups bridge the breast's tip (cloth spans it; laid on it, the edges round the tip were 2.5 mm and the
+        # drape stretched them to 1.33); a molded cup is a shell and gets more
         cm = cups(np.array([v.co for v in bm.verts])) & movable
-        _umbrella(bm, MOLDED_PASSES if f.get("rigid_cups") else SMOOTH_PASSES["bra"], cm, boundary_only_along=True)
+        for _round in range(2):
+            _umbrella(bm, MOLDED_PASSES if f.get("rigid_cups") else SMOOTH_PASSES["bra"], cm, boundary_only_along=True)
+            _lay_out(bm, ctree, off, cm)
     V = np.array([v.co for v in bm.verts])
     if kind == "briefs":
         pin_mask = pins(V)
     elif kind == "bra":
-        pin_mask = pins(V)
+        # the cups' rim is pinned as well (it holds the cut's line: an unpinned triangle rim stretched to 1.36)
+        rim = np.array([v.is_boundary for v in bm.verts])
+        tip = np.zeros(len(V), bool)
+        for a in info["apex"].values():
+            tip |= np.linalg.norm(V - np.array(a), axis=1) < TIP_PIN_M
+        pin_mask = pins(V) | (rim & cups(V)) | (tip & cups(V))
     # planar UVs: front-facing faces on the left half, back-facing ones on the right (mirrored), x / z of the box
     lo, hi = V.min(0), V.max(0)
     uvl = bm.loops.layers.uv.new("UVMap")

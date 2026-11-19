@@ -69,7 +69,7 @@ TASK = "garment_template_params"
 MAX_TOKENS = 400
 
 KINDS = ("skirt", "dress", "top", "jacket", "trousers", "briefs", "bra", "gloves")
-BUILT_KINDS = ("skirt", "dress", "top", "jacket", "briefs")
+BUILT_KINDS = ("skirt", "dress", "top", "jacket", "briefs", "bra")
 #: A223: the close-fitting kinds — cut from the body's own surface (``fitted_spec``: a region of the plain body, laid
 #: out of it and relaxed by a short pinned cloth run), not wrapped from panel rows: briefs (waistband + gusset
 #: pinned), a bra (underband + straps pinned; molded cups are pinned whole = rigid) and gloves (the cuff and the hand
@@ -546,7 +546,7 @@ _TROUSER_WORDS = re.compile(r"\b(trousers?|pants|jeans|shorts|leggings|slacks|ch
 _DRESS_WORDS = re.compile(r"\b(dress|gown|sundress|frock)\b", re.IGNORECASE)
 _JACKET_WORDS = re.compile(r"\b(jacket|blazer|coat|cardigan|hoodie|parka)\b", re.IGNORECASE)
 #: A223: the words of the fitted kinds (English and German; a compound counts at its end: "Schuppen-BH", "Schuppenslip").
-_BRA_WORDS = re.compile(r"(\bbra|bralette|bikini[ -]?top|bustier|\w*\bbh\b|büstenhalter)", re.IGNORECASE)
+_BRA_WORDS = re.compile(r"(\bbra\b|bralette|bikini[ -]?top|\bbh\b|büstenhalter)", re.IGNORECASE)
 _BRIEFS_WORDS = re.compile(r"(briefs?\b|panties|knickers|thong|g-string|\bstring\b|slip\b|unterhose|höschen|"
                            r"bikini[ -]?(bottom|hose)|tanga)", re.IGNORECASE)
 _GLOVE_WORDS = re.compile(r"(gloves?\b|gauntlets?\b|mittens?\b|arm ?warmers?\b|handschuhe?\b|stulpen\b|"

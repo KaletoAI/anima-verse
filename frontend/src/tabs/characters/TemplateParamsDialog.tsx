@@ -137,9 +137,10 @@ const GRID: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(2, m
 const WARN: CSSProperties = { color: 'var(--warning, #d29922)' }
 const ORDER: (keyof TemplateParams)[] = ['kind', 'fabric', 'opacity', 'length_m', 'flare', 'waist_height', 'slit', 'slit_m',
   'shoulders', 'fit', 'neckline', 'neck_depth_m', 'sleeves', 'sleeve_fit', 'front', 'collar',
-  'rise', 'waistband', 'leg_cut', 'back_coverage', 'side_width_m']
+  'rise', 'waistband', 'leg_cut', 'back_coverage', 'side_width_m',
+  'cup_style', 'cup_coverage', 'push_up', 'underband_m', 'center_gore', 'closure', 'straps']
 /** Fields shown as a 0…1 number rather than centimetres. */
-const SHARES = new Set<keyof TemplateParams>(['flare', 'fit', 'sleeve_fit', 'opacity', 'leg_cut', 'back_coverage'])
+const SHARES = new Set<keyof TemplateParams>(['flare', 'fit', 'sleeve_fit', 'opacity', 'leg_cut', 'back_coverage', 'cup_coverage', 'push_up'])
 
 /** Whether a field is shown for the draft: the kind's fields, minus the ones another field switches off. */
 /** A227: a jacket with a lapel collar: its opening is the lapel's V whatever the neckline says. */
@@ -163,6 +164,8 @@ function shown(key: keyof TemplateParams, p: TemplateParams, fields: Record<stri
   if (key === 'neck_depth_m' && !bodice && !(strapTop && p.neckline === 'sweetheart')) return false
   if (key === 'fit' && p.kind === 'dress' && p.shoulders === 'strapless') return false
   if (key === 'sleeve_fit' && (!bodice || p.sleeves === 'none')) return false
+  // A223: a bandeau is one band round the chest — no gore, no push-up
+  if ((key === 'center_gore' || key === 'push_up') && p.kind === 'bra' && p.cup_style === 'bandeau') return false
   return true
 }
 
