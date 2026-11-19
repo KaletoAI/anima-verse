@@ -873,6 +873,17 @@ export interface GarmentItemInfo {
   use_runs?: AttemptUsePlans | null
   /** Ruling A79: what Undo of the last "Use this" takes back (`garments.use_undo_state`); null without one. */
   use_undo?: UseUndoState | null
+  /** A210: the refused attempts of a shell piece's base view variants (arms up / bald), "Use this one". */
+  base_variant_refusals?: BaseVariantRefusal[]
+}
+
+/** A210: one view whose base view variant had every attempt refused (or was taken by hand). */
+export interface BaseVariantRefusal {
+  view: string
+  variant: string
+  /** The attempt the user took by hand (in use), 0 for none. */
+  accepted_by_user: number
+  attempts: Array<{ attempt: number; ok: boolean; reasons: string[]; usable: boolean; in_use: boolean }>
 }
 
 /** A step runs or the item waits in the character's garment queue

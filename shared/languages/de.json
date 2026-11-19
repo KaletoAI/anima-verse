@@ -6649,6 +6649,18 @@
     "left due": "offen geblieben",
     "ran out of time": "Zeit abgelaufen",
     "interrupted": "unterbrochen",
-    "Blender not available": "Blender nicht verfügbar"
+    "Blender not available": "Blender nicht verfügbar",
+    "Refused base views": "Abgelehnte Grundansichten",
+    "arms up": "Arme oben",
+    "bald": "kahl",
+    "bald, arms up": "kahl, Arme oben",
+    "Every attempt of this base view was refused — the worn view waits": "Jeder Versuch dieser Grundansicht wurde abgelehnt — die Angezogen-Ansicht wartet",
+    "the base the piece is put on — use one by hand if it looks right to you": "die Grundlage, auf die das Stück gelegt wird — nimm einen von Hand, wenn er dir passt",
+    "Its check refused it: you accept it (\"Accepted by you\"). A new base view voids that.": "Die Prüfung hat ihn abgelehnt: du nimmst ihn an („Von dir angenommen“). Eine neue Grundansicht hebt das auf.",
+    "The worn view is made from it on the next run.": "Die Angezogen-Ansicht entsteht beim nächsten Lauf daraus.",
+    "Use this one": "Diesen nehmen",
+    "Not stored": "Nicht gespeichert",
+    "The arms do not match the raised pose": "Die Arme passen nicht zur erhobenen Pose",
+    "No figure in the image": "Keine Figur im Bild"
   }
 }

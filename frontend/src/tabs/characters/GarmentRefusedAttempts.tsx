@@ -20,7 +20,7 @@ import { useEnlarge } from '../../components/ZoomButton'
 import { useI18n } from '../../i18n/I18nProvider'
 import { clockSettings, formatDateTime } from '../../lib/clockFormat'
 import { StepLight } from './StepRows'
-import type { AttemptUsePlans, GarmentInfo, GarmentView } from './useGarment'
+import type { AttemptUsePlans, BaseVariantRefusal, GarmentInfo, GarmentView } from './useGarment'
 import {
   REFUSED_LIGHT, reasonWords, refusedViews, undoHeadline, undoLabel, undoLight, undoLines, attemptUseLabel,
   viewName,
@@ -138,6 +138,90 @@ export function GarmentRefusedAttempts({ garment, useRuns, useUndo, busy, onUse,
           ) : null}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+/** A210: a base view variant named the way the dialog names it. */
+const VARIANT_NAMES: Record<string, string> = {
+  arms_up: 'arms up', bald: 'bald', 'bald+arms_up': 'bald, arms up',
+}
+const VIEW_WORDS: Record<string, string> = { front: 'Front', back: 'Back', left: 'Left', right: 'Right' }
+
+/**
+ * BaseVariantRefusals — A210, "Refused base views": a shell piece's worn views are made on a variant of the base
+ * view (arms up in the side views, bald for a haired body). When every attempt of that variant was refused by its
+ * pose check, its attempts are shown here with their reasons and "Use this one" (0 hub jobs): the attempt becomes
+ * the variant, "Accepted by you" — voided when the base view changes. The worn view is made from it on the next run.
+ */
+export function BaseVariantRefusals({ characterName, itemId, refusals, busy, onUse }: {
+  characterName: string
+  itemId: string
+  refusals: BaseVariantRefusal[] | undefined
+  busy: boolean
+  onUse: (view: string, attempt: number) => void
+}) {
+  const { t } = useI18n()
+  const enlarge = useEnlarge()
+  if (!refusals?.length) return null
+  const enc = encodeURIComponent(characterName)
+  return (
+    <div style={BOX} role="region" aria-label={t('Refused base views')}>
+      <span style={{ fontWeight: 600 }}>{t('Refused base views')}</span>
+      {refusals.map((r) => {
+        const name = `${t(VIEW_WORDS[r.view] || r.view)} · ${t(VARIANT_NAMES[r.variant] || r.variant)}`
+        return (
+          <div key={r.view} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={HEAD}>
+              <StepLight light={r.accepted_by_user ? 'yellow' : REFUSED_LIGHT}
+                title={r.accepted_by_user ? t('Accepted by you') : t('Every attempt of this base view was refused — the worn view waits')} />
+              <span>{name}</span>
+              <span className="ga-hint">
+                · {r.accepted_by_user
+                  ? `${t('Accepted by you')}: ${t('Attempt')} ${r.accepted_by_user}`
+                  : t('the base the piece is put on — use one by hand if it looks right to you')}
+              </span>
+            </div>
+            <div style={GRID}>
+              {r.attempts.map((a) => {
+                const url = `/characters/${enc}/garments/${encodeURIComponent(itemId)}/base-variants/${r.view}/attempts/${a.attempt}/image`
+                const alt = `${name} · ${t('Attempt')} ${a.attempt}`
+                const zoom = enlarge({ src: url, alt })
+                return (
+                  <div key={a.attempt} style={TILE}>
+                    {a.usable ? (
+                      <img src={url} alt={alt} {...zoom} title={`${alt}\n${t('Click to enlarge')}`}
+                        style={{ ...zoom.style, ...THUMB }} />
+                    ) : null}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+                      <span className="ga-hint">{t('Attempt')} {a.attempt}</span>
+                      <ul style={LINES}>
+                        {(a.reasons.length ? a.reasons : [a.ok ? t('Passed') : t('Refused')]).map((reason) => {
+                          const w = reasonWords(reason, t)
+                          return <li key={reason} title={w.detail}>{w.text}</li>
+                        })}
+                      </ul>
+                      {a.in_use ? (
+                        <span className="ga-hint">{t('In use')}</span>
+                      ) : a.usable ? (
+                        <button type="button" className="ga-btn ga-btn-sm" disabled={busy}
+                          title={[t('0 hub jobs'),
+                            t('Its check refused it: you accept it ("Accepted by you"). A new base view voids that.'),
+                            t('The worn view is made from it on the next run.')].join('\n')}
+                          onClick={() => onUse(r.view, a.attempt)}>
+                          {t('Use this one')} · {t('0 hub jobs')}
+                        </button>
+                      ) : (
+                        <span className="ga-hint">{t('Not stored')}</span>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }

@@ -49,6 +49,8 @@ export const REASON_WORDS: Array<[string, string]> = [
   ['head changed', 'The head changed'],
   ['composite refused', 'The drafted back does not fit the body'],
   ['render failed', 'The render failed'],
+  ['the arms do not match the raised pose', 'The arms do not match the raised pose'],
+  ['no figure in the image', 'No figure in the image'],
 ]
 
 /** `{text, detail}` of one gate reason: the plain words of its first clause (an unknown reason: that clause as it

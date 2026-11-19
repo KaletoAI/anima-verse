@@ -2301,7 +2301,9 @@ def get_character_garment(character_name: str, item_id: str,
                # Ruling A37: "Use this" on each stored attempt — passing / by the user, why not, the cost after.
                "use_runs": garments.use_plans(character_name, item_id, profile=profile) if pipeline else None,
                # Ruling A79: what Undo of the last "Use this" takes back, and whether it still can.
-               "use_undo": garments.use_undo_state(character_name, item_id, profile=profile) if pipeline else None}
+               "use_undo": garments.use_undo_state(character_name, item_id, profile=profile) if pipeline else None,
+               # A210: the refused attempts of the shell piece's base view variants (arms up / bald), "Use this one".
+               "base_variant_refusals": _base_variant_refusals(character_name, item_id, profile) if pipeline else []}
     from app.core.model_overview import annotate_garment
     return annotate_garment(payload)
 
@@ -3375,6 +3377,48 @@ def use_character_garment_attempt(character_name: str, item_id: str, step: str, 
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+def _base_variant_refusals(character_name: str, item_id: str, profile: Dict[str, Any]):
+    from app.core import shell_base_views
+    try:
+        return shell_base_views.refusals(character_name, item_id, profile=profile)
+    except Exception as e:  # noqa: BLE001 — the dialog stays usable without the list
+        logger.warning("Base view variant refusals of %s/%s unreadable: %s", character_name, item_id, e)
+        return []
+
+
+@router.get("/{character_name}/garments/{item_id}/base-variants/{view}/attempts/{attempt}/image")
+def get_character_base_variant_attempt(character_name: str, item_id: str, view: str, attempt: int, request: Request,
+                                       _: Dict[str, Any] = Depends(require_admin)):
+    """A210: the stored attempt image of the base view variant ``view`` of the shell piece (the dialog's thumbnail).
+    Admin-only. 404 when it is not stored."""
+    from fastapi.responses import Response
+    from app.core import shell_base_views
+    _require_character(character_name)
+    path = shell_base_views.attempt_file(character_name, item_id, view, attempt)
+    if path is None:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    return etag_file_response(path, request, "image/png")
+
+
+@router.post("/{character_name}/garments/{item_id}/base-variants/{view}/attempts/{attempt}/use")
+def use_character_base_variant_attempt(character_name: str, item_id: str, view: str, attempt: int,
+                                       _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """A210, "Use this one": a stored attempt of the shell piece's base view variant (arms up / bald) becomes that
+    variant, refused by its check and accepted by the user (``shell_base_views.use_attempt``). Spends no job; the worn
+    view is made from it on the next run. Admin-only. 400 for a bad view / attempt, 409 when the attempt cannot be
+    used."""
+    from app.core import shell_base_views
+    if view not in ("front", "back") + shell_base_views.SIDE_VIEWS:
+        raise HTTPException(status_code=400, detail="view must be one of front, back, left, right")
+    if not 1 <= attempt <= shell_base_views.ATTEMPTS:
+        raise HTTPException(status_code=400, detail=f"attempt must be 1..{shell_base_views.ATTEMPTS}")
+    _require_character(character_name)
+    try:
+        return shell_base_views.use_attempt(character_name, item_id, view, attempt)
+    except shell_base_views.AttemptUnusable as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @router.post("/{character_name}/garments/{item_id}/images/{step}/{view}/upload")

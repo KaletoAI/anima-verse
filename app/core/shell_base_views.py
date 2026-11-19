@@ -19,12 +19,19 @@ cut out on the CPU (``base_body.cut_out``), stored per base signature under ``mo
 <variant>.png`` with a record naming the base view's content (``base_image_sha256``) and the prompt — a base view
 rendered again makes it due. One job per variant view on first attempts, up to ``ATTEMPTS``.
 
+A210: every attempt stays on disk as ``<kind>_<bsig>.<variant>.try<N>.png`` and the run's gate records are kept in
+``<kind>_<bsig>.<variant>.attempts.json`` (the base view's content and the prompt they were made from). When every
+attempt was refused, ``refusals`` lists them for the piece's dialog and ``use_attempt`` takes one by hand: it becomes
+the variant with ``accepted`` and ``user_accepted`` set — ``current`` holds it like a passing one until the base view's
+content or the prompt changes.
+
 What a worn view was made on is recorded in its sidecar (``base_variant``); a worn view whose variant differs from
 the one its piece needs now is stale (``garment_images.stale_accepted``) and made again — the views after it with it.
 """
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -108,6 +115,25 @@ def _record(path: Path) -> Dict[str, Any]:
         return json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+
+
+def attempt_path(character_name: str, view: str, bsig: str, variant: str, attempt: int) -> Path:
+    """Where attempt ``attempt`` of the variant is kept (A210)."""
+    target = path_of(character_name, view, bsig, variant)
+    return target.with_name(f"{target.stem}.try{int(attempt)}.png")
+
+
+def attempts_record_path(character_name: str, view: str, bsig: str, variant: str) -> Path:
+    target = path_of(character_name, view, bsig, variant)
+    return target.with_name(f"{target.stem}.attempts.json")
+
+
+def _attempts_record(character_name: str, view: str, bsig: str, variant: str) -> Dict[str, Any]:
+    try:
+        data = json.loads(attempts_record_path(character_name, view, bsig, variant).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def current(character_name: str, view: str, bsig: str, variant: str, base: Path) -> Optional[Path]:
@@ -197,7 +223,8 @@ def ensure(character_name: str, view: str, bsig: str, variant: str, base: Path) 
         size = im.size
     records = []
     for attempt in range(1, ATTEMPTS + 1):
-        stem = target.with_name(f"{target.stem}.try{attempt}")
+        kept = attempt_path(character_name, view, bsig, variant, attempt)
+        stem = kept.with_suffix("")
         with image_routing.retry_attempt(attempt), square_reference(base, refs_dir) as (reference, side, offset,
                                                                                          source_size):
             rendered = expression_regen.render_character_image(
@@ -211,21 +238,135 @@ def ensure(character_name: str, view: str, bsig: str, variant: str, base: Path) 
         if rendered is None:
             records.append({"attempt": attempt, "ok": False, "reasons": ["render failed"]})
             continue
-        cropped = crop_back(Path(rendered), stem.with_suffix(".png"), side, offset, source_size)
+        # A210: the attempt keeps its own file (``stem.with_suffix`` would have cut ".tryN" and written every attempt
+        # onto the variant's own path).
+        cropped = crop_back(Path(rendered), kept, side, offset, source_size)
         cut = base_body.cut_out(cropped)
         cut.save(cropped, format="PNG")
         record = {**_gate(character_name, bsig, variant, cropped, size), "attempt": attempt}
         records.append(record)
+        _write_attempts(character_name, view, bsig, variant, base, prompt, records)
         logger.info("Base view variant %s %s %s attempt %d: %s %s", character_name, view, variant, attempt,
                     "accepted" if record["ok"] else "refused", record.get("reasons") or "")
         if record["ok"]:
-            cropped.replace(target)
+            shutil.copyfile(cropped, target)
             target.with_suffix(".json").write_text(json.dumps({
                 "view": view, "bsig": bsig, "variant": variant, "prompt": prompt, "negative": negative,
                 "base_image": base.name, "base_image_sha256": file_sha256(base), "accepted": True,
                 "attempt": attempt, "gates": records, "created_at": utc_now_iso()}, indent=2), encoding="utf-8")
             return target
+    _write_attempts(character_name, view, bsig, variant, base, prompt, records)
     raise VariantRefused(view, variant, records)
+
+
+def _write_attempts(character_name: str, view: str, bsig: str, variant: str, base: Path, prompt: str,
+                    records) -> None:
+    """The run's gate records so far (A210), with what they were made from."""
+    from app.core.base_body import file_sha256
+    from app.core.timeutils import utc_now_iso
+    path = attempts_record_path(character_name, view, bsig, variant)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(json.dumps({"view": view, "bsig": bsig, "variant": variant, "prompt": prompt,
+                               "base_image_sha256": file_sha256(base), "attempts": list(records),
+                               "updated_at": utc_now_iso()}, indent=2, default=str), encoding="utf-8")
+    tmp.replace(path)
+
+
+class AttemptUnusable(ValueError):
+    """A stored variant attempt cannot be taken (missing, or made from another base view / prompt)."""
+
+
+def _views_of(character_name: str, item_id: str, profile: Optional[Dict[str, Any]]):
+    """``(view, variant, bsig, base)`` of each view of ``item_id`` that is made on a variant."""
+    from app.core import base_body
+    from app.core.model_refs import find_ref_image
+    try:
+        bsig = base_body.base_signature(character_name, profile=profile)
+    except Exception:  # noqa: BLE001 — no base body: nothing to list
+        return []
+    out = []
+    for view in ("front", "back") + SIDE_VIEWS:
+        variant = variant_for(character_name, item_id, view, profile=profile)
+        if not variant:
+            continue
+        base = find_ref_image(character_name, base_body._kind(view), bsig)
+        if base is not None:
+            out.append((view, variant, bsig, base))
+    return out
+
+
+def refusals(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None):
+    """A210: per view of the shell piece ``item_id`` whose variant base view has no passing image but stored attempts
+    of the base view as it is now — ``{view, variant, accepted_by_user, attempts: [{attempt, reasons, pose_check,
+    usable, in_use}]}``; a view whose variant the user took by hand is listed too (``accepted_by_user`` = that
+    attempt), so the dialog shows what is in use. Reads files only."""
+    from app.core.base_body import file_sha256
+    out = []
+    for view, variant, bsig, base in _views_of(character_name, item_id, profile):
+        hit = current(character_name, view, bsig, variant, base)
+        record = _record(path_of(character_name, view, bsig, variant)) if hit is not None else {}
+        by_user = int(record.get("attempt") or 0) if record.get("user_accepted") else 0
+        if hit is not None and not by_user:
+            continue
+        stored = _attempts_record(character_name, view, bsig, variant)
+        if (stored.get("base_image_sha256") != file_sha256(base) or stored.get("prompt") != edit_text(variant)[0]):
+            continue
+        attempts = []
+        for rec in stored.get("attempts") or []:
+            n = int(rec.get("attempt") or 0)
+            if not n:
+                continue
+            exists = attempt_path(character_name, view, bsig, variant, n).is_file()
+            attempts.append({"attempt": n, "ok": bool(rec.get("ok")), "reasons": list(rec.get("reasons") or []),
+                             "pose_check": rec.get("pose_check"), "usable": exists, "in_use": n == by_user})
+        if attempts:
+            out.append({"view": view, "variant": variant, "accepted_by_user": by_user, "attempts": attempts})
+    return out
+
+
+def attempt_file(character_name: str, item_id: str, view: str, attempt: int, *,
+                 profile: Optional[Dict[str, Any]] = None) -> Optional[Path]:
+    """The stored attempt image of the view's variant (for the dialog's thumbnail); None when there is none."""
+    for v, variant, bsig, _base in _views_of(character_name, item_id, profile):
+        if v == view:
+            path = attempt_path(character_name, view, bsig, variant, attempt)
+            return path if path.is_file() else None
+    return None
+
+
+def use_attempt(character_name: str, item_id: str, view: str, attempt: int, *,
+                profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """A210, "Use this one": stored attempt ``attempt`` of the variant base view of ``view`` becomes the variant — a
+    refused one accepted by the user (``accepted`` + ``user_accepted``). Spends no job; held by ``current`` until the
+    base view's content or the prompt changes. ``AttemptUnusable`` when the view has no variant, the attempt is not
+    stored or was made from another base view / prompt."""
+    from app.core.base_body import file_sha256
+    from app.core.timeutils import utc_now_iso
+    for v, variant, bsig, base in _views_of(character_name, item_id, profile):
+        if v != view:
+            continue
+        stored = _attempts_record(character_name, view, bsig, variant)
+        prompt, negative = edit_text(variant)
+        base_sha = file_sha256(base)
+        if stored.get("base_image_sha256") != base_sha or stored.get("prompt") != prompt:
+            raise AttemptUnusable("The stored attempts were made from another base view — build again")
+        gates = [r for r in stored.get("attempts") or [] if int(r.get("attempt") or 0) == int(attempt)]
+        source = attempt_path(character_name, view, bsig, variant, attempt)
+        if not gates or not source.is_file():
+            raise AttemptUnusable(f"Attempt {attempt} of the {view} base view is not stored")
+        target = path_of(character_name, view, bsig, variant)
+        tmp = target.with_name(f".{target.name}.tmp")
+        shutil.copyfile(source, tmp)
+        tmp.replace(target)
+        target.with_suffix(".json").write_text(json.dumps({
+            "view": view, "bsig": bsig, "variant": variant, "prompt": prompt, "negative": negative,
+            "base_image": base.name, "base_image_sha256": base_sha, "accepted": True, "user_accepted": True,
+            "attempt": int(attempt), "gates": stored.get("attempts") or [], "created_at": utc_now_iso()}, indent=2,
+            default=str), encoding="utf-8")
+        logger.info("Base view variant %s %s %s attempt %d: accepted by the user", character_name, view, variant,
+                    attempt)
+        return {"view": view, "variant": variant, "attempt": int(attempt), "user_accepted": True}
+    raise AttemptUnusable(f"The {view} view of this piece is not made on a base view variant")
 
 
 def base_for(character_name: str, item_id: str, view: str, bsig: str, base: Path, *,

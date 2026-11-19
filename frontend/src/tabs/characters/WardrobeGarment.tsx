@@ -71,7 +71,7 @@ import { useToast } from '../../lib/Toast'
 import { useClockSettings } from '../../lib/clockFormat'
 import { GarmentFailure, GateChips, RefitNotice, RunButton, RunStatusLine } from './GarmentSteps'
 import { GarmentStepGrid } from './GarmentStepGrid'
-import { GarmentRefusedAttempts } from './GarmentRefusedAttempts'
+import { BaseVariantRefusals, GarmentRefusedAttempts } from './GarmentRefusedAttempts'
 import type { ImageStepSpec } from './GarmentSteps'
 import { NEXT_NOTHING, NEXT_RUNS_IT, OLD_FIT_HIDDEN, OLD_FIT_LABEL, OLD_FIT_TOGGLE, nextStepLine, previewChoice } from './garmentStyle'
 import { useFigure } from './useFigure'
@@ -742,6 +742,20 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
     }
     startPoll(0)
   }
+  /** A210, "Use this one" on a refused base view variant attempt — 0 jobs; the worn view follows on the next run. */
+  const onUseBaseVariant = async (view: string, attempt: number) => {
+    if (using) return
+    setUsing(true)
+    try {
+      await apiPost(`/characters/${enc}/garments/${encodeURIComponent(itemId)}/base-variants/${view}/attempts/${attempt}/use`, {})
+      toast(`${t('Accepted by you')} · ${t('The worn view is made from it on the next run.')}`, 'success')
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setUsing(false)
+    }
+    startPoll(0)
+  }
   /** Ruling A79, Undo of the last "Use this": the images, the mesh and the refusal of before come back — 0 jobs;
    *  the toast names what is due now. */
   const onUndoUse = async () => {
@@ -1120,6 +1134,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             ) : null}
           </ConfirmDialog>
           {/* Ruling A79: the refused views with their attempts, "Use this attempt" and the Undo of the last one. */}
+          <BaseVariantRefusals characterName={character} itemId={itemId} refusals={info.base_variant_refusals}
+            busy={busy || using || running} onUse={(view, attempt) => { void onUseBaseVariant(view, attempt) }} />
           <GarmentRefusedAttempts garment={garment} useRuns={info.use_runs} useUndo={info.use_undo}
             busy={busy || using || running} onUse={(step, view, attempt) => { void onUse(step, view, attempt) }}
             onUndo={() => { void onUndoUse() }} />
