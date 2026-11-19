@@ -7,7 +7,7 @@ Usage:
 No server, no world DB. Derived by hand from ``garment_shell.samples`` (about 4 points per ``px``²: per face
 ``ceil(area / px² · 4)``, 1..600):
 
-  [1] SHELL_VERSION 5 (A199 made it 4, A219 5), ZBUF_SPACING_PX 1.0.
+  [1] SHELL_VERSION 7 (A199 made it 4, A219 5, A220 6, A226 7), ZBUF_SPACING_PX 1.0.
   [2] A flat 10 x 10 grid of unit squares, each split into two triangles of area 0.5, sampled at px = 1 (one mask
       pixel, ``ZBUF_SPACING_PX`` x the frame's units per pixel): ceil(0.5 · 4) = 2 per triangle -> 4 per pixel,
       400 in all. At the old spacing on a figure 1400 px high (px = 1400 / 2500 = 0.56 pixel):
@@ -36,7 +36,7 @@ def check(label, ok, detail=""):
         FAILED.append(label)
 
 
-check("[1] SHELL_VERSION 5 (A219)", gs.SHELL_VERSION == 5, gs.SHELL_VERSION)
+check("[1] SHELL_VERSION 7 (A226)", gs.SHELL_VERSION == 7, gs.SHELL_VERSION)
 check("[1] ZBUF_SPACING_PX 1.0", gs.ZBUF_SPACING_PX == 1.0, gs.ZBUF_SPACING_PX)
 
 n = 10

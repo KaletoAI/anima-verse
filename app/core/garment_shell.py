@@ -138,7 +138,9 @@ ARMS_UP_IOU_MARGIN = 0.05
 #: edge strip is worn where both views show the ring worn (``ring_closed``).
 #: 6 (A220): side bridges match runs by overlap and continue the panel's pattern; the shell is lifted over the body's
 #: extension parts and never offset into the body from a wall seen from behind; an arm the piece covers stays in.
-SHELL_VERSION = 6
+#: 7 (A226): a bottom piece's front and back panels are joined under the crotch (``crotch_run`` / ``crotch_bridge``),
+#: the bridge relaxed over the body's folds; ``lift_over_surfaces`` marches its rays (same test, ~20× faster).
+SHELL_VERSION = 7
 #: A199: the spacing of the body's z-buffer samples (``samples``' ``px``: about 4 per spacing²) in mask pixels of
 #: the finest view. 4 random samples per pixel leave a pixel empty with p ≈ e⁻⁴ on a face-on surface; the 3×3
 #: maximum filter of the z-buffer closes such a pixel.
@@ -638,6 +640,126 @@ class SideBridge:
         return margin, t_out, yf, yb, th, fe_out, be_out
 
 
+# --- crotch bridge (A226) -------------------------------------------------------------------------------------------
+
+#: A226: width of the crotch bridge's columns across the body (m).
+CROTCH_BIN_M = 0.004
+#: A226: a panel "reaches the crotch" when, within ``CROTCH_CENTRE_M`` of the body's middle, its lowest point lies at
+#: most ``CROTCH_REACH_M`` above the lowest point its view sees head-on there (where the view's sight ends under the
+#: body); a waist band ending higher is never bridged.
+CROTCH_CENTRE_M = 0.006
+CROTCH_REACH_M = 0.01
+#: A226: the columns of a panel's crotch end — its bottom edge no more than this above the edge's lowest point (the
+#: leg openings rise from there).
+CROTCH_RISE_M = 0.015
+#: A226: how far past a panel's edge (m, toward the other panel) a crotch point may lie and still be bridged at that
+#: panel's width (its head-on rim under the edge), and how far it may lie above the line joining the two edges.
+CROTCH_OVER_M = 0.02
+CROTCH_ABOVE_M = 0.01
+#: A226: ... and how far under the underside's middle line (``crotch_floor``): the inner thighs stay out.
+CROTCH_UNDER_M = 0.005
+#: A226: the Laplacian passes that relax the crotch bridge's shell over the body's folds.
+CROTCH_RELAX = 30
+#: A226: a crotch-bridge vertex whose normal points at least this much across (toward the other thigh) is never
+#: lifted over the extension part.
+CROTCH_SIDEWAYS = 0.5
+#: A226: how far (m along the surface) a bridged crotch point reads into its panel before the read turns back.
+CROTCH_READ_M = 0.02
+#: A226: a piece whose views cover the middle column down to this far under the crotch is a skirt: never bridged
+SKIRT_BELOW_M = 0.05
+#: ... read from this far under it (a brief's tip stood 2 cm past the crotch in Glut's generated back view).
+SKIRT_FROM_M = 0.03
+
+
+def crotch_run(x, y, z, memb, headon, xc: float):
+    """A226: the crotch end of ONE panel (front or back): ``(x0, x1, y_edge, z_edge)`` — the x range (m) of the
+    columns (``CROTCH_BIN_M``) round the body's middle ``xc`` whose lowest member point lies within
+    ``CROTCH_RISE_M`` of the panel's lowest point there, and that edge's median height / depth — or None when the
+    panel does not reach the crotch (``CROTCH_REACH_M``) or has no member point at the middle."""
+    x, y, z = (np.asarray(a, np.float64) for a in (x, y, z))
+    memb, headon = np.asarray(memb, bool), np.asarray(headon, bool)
+    mid = np.abs(x - xc) <= CROTCH_CENTRE_M
+    if not (mid & memb).any() or not (mid & headon).any():
+        return None
+    if y[mid & memb].min() - y[mid & headon].min() > CROTCH_REACH_M:
+        return None
+    n = int(np.ceil(0.12 / CROTCH_BIN_M))
+    edges = xc + (np.arange(-n, n + 1) - 0.5) * CROTCH_BIN_M
+    b = np.searchsorted(edges, x) - 1
+    low = np.full(2 * n, np.inf)
+    ok = memb & (b >= 0) & (b < 2 * n)
+    np.minimum.at(low, b[ok], y[ok])
+    c = n
+    floor = low[c - 1:c + 1].min()
+    i0 = i1 = c
+    while i0 - 1 >= 0 and low[i0 - 1] <= floor + CROTCH_RISE_M:
+        i0 -= 1
+    while i1 + 1 < 2 * n and low[i1 + 1] <= floor + CROTCH_RISE_M:
+        i1 += 1
+    sel = ok & (b >= i0) & (b <= i1)
+    sel &= y <= low[np.clip(b, 0, 2 * n - 1)] + 0.002     # each column's bottom edge
+    return float(edges[i0]), float(edges[i1 + 1]), float(np.median(y[sel])), float(np.median(z[sel]))
+
+
+def crotch_floor(P, xc: float, front, back):
+    """A226: the underside's height along the body's middle between the two edges — ``(z, y)`` per
+    ``CROTCH_BIN_M`` of depth: the lowest point of ``P`` within ``CROTCH_CENTRE_M`` of ``xc`` (gaps interpolated),
+    or None without such points. Nothing under it is bridged (the inner thighs run on down from there)."""
+    P = np.asarray(P, np.float64)
+    zb, zf = back[3], front[3]
+    mid = (np.abs(P[:, 0] - xc) <= CROTCH_CENTRE_M) & (P[:, 2] >= zb - CROTCH_OVER_M) & (P[:, 2] <= zf + CROTCH_OVER_M)
+    if mid.sum() < 2:
+        return None
+    zs = np.arange(zb - CROTCH_OVER_M, zf + CROTCH_OVER_M + CROTCH_BIN_M, CROTCH_BIN_M)
+    i = np.clip(((P[mid, 2] - zs[0]) / CROTCH_BIN_M).astype(int), 0, len(zs) - 1)
+    ys = np.full(len(zs), np.inf)
+    np.minimum.at(ys, i, P[mid, 1])
+    ok = np.isfinite(ys)
+    return zs, np.interp(zs, zs[ok], ys[ok])
+
+
+def crotch_bridge(P, front, back, floor=None):
+    """A226: per point ``P`` (m, the rigged body: x across, y up, z forward) of the region: ``(margin m, t)`` on the
+    bridge under the crotch between the ``front`` and the ``back`` panel's ``crotch_run`` — ``t`` 0 at the front
+    edge, 1 at the back edge (by depth z); the band's x range runs linearly from the front run's to the back run's
+    width; ``margin`` is the distance (m) to the nearer side of the band, -0.01 off the bridge (past an edge by
+    more than ``CROTCH_OVER_M``, above the line joining the edges by more than ``CROTCH_ABOVE_M``, under ``floor``
+    (``crotch_floor``) by more than ``CROTCH_UNDER_M``)."""
+    P = np.asarray(P, np.float64)
+    fx0, fx1, fy, fz = front
+    bx0, bx1, by, bz = back
+    span = fz - bz
+    margin = np.full(len(P), -0.01)
+    if span <= 1e-3:
+        return margin, np.full(len(P), np.nan)
+    t = (fz - P[:, 2]) / span
+    tc = np.clip(t, 0.0, 1.0)
+    lo = fx0 + (bx0 - fx0) * tc
+    hi = fx1 + (bx1 - fx1) * tc
+    m = np.minimum(P[:, 0] - lo, hi - P[:, 0])
+    over = CROTCH_OVER_M / span
+    top = fy + (by - fy) * tc + CROTCH_ABOVE_M
+    on = (t >= -over) & (t <= 1 + over) & (P[:, 1] <= top)
+    if floor is not None:
+        on &= P[:, 1] >= np.interp(P[:, 2], floor[0], floor[1]) - CROTCH_UNDER_M
+    margin = np.where(on, np.maximum(m, -0.01), margin)
+    return margin, t
+
+
+def crotch_source(P, t, front, back, read: float = CROTCH_READ_M):
+    """A226: where a bridged crotch point ``P`` (``t`` from ``crotch_bridge``) reads its colour: ``(front y, back
+    y)`` — the height in the front panel and in the back panel at the same x, mirrored across the panel's edge
+    (as far past the edge as the point lies, along the surface, back into the panel) and folded into ``read``
+    metres: 5 mm past the front edge reads 5 mm above it, 25 mm past it (read 20 mm) 15 mm above it."""
+    P = np.asarray(P, np.float64)
+    out = []
+    for _x0, _x1, ey, ez in (front, back):
+        d = np.hypot(P[:, 2] - ez, P[:, 1] - ey)
+        d = read - np.abs(np.mod(d, 2.0 * read) - read)
+        out.append(ey + d)
+    return out[0], out[1]
+
+
 # --- limb rings (A192) ----------------------------------------------------------------------------------------------
 
 #: A192: the limbs a shell is closed round. The torso's side bridge works in ONE frame round the trunk's axis; a leg
@@ -1025,6 +1147,14 @@ LIFT_FACING = 0.5
 LIFT_MIN_M = 0.001
 
 
+#: A226: shell vertices per vectorised chunk of ``lift_over_surfaces``.
+LIFT_CHUNK = 20000
+#: A226: the march's sphere radius in ``radius`` units (≥ √(1 + ¼) covers the cylinder between two steps) and the
+#: samples per sphere (spacing ``radius``/2: ~16 on one surface).
+LIFT_BALL = 1.2
+LIFT_K = 64
+
+
 def lift_over_surfaces(V, N, offset_m: float, surfaces, *, reach: float = PART_REACH_M,
                        radius: float = PART_RADIUS_M) -> Tuple[np.ndarray, np.ndarray]:
     """A220: the shell positions over the body point ``V`` along its unit normal ``N``: ``V + N × offset_m``, lifted
@@ -1060,19 +1190,28 @@ def lift_over_surfaces(V, N, offset_m: float, surfaces, *, reach: float = PART_R
         NS = Nf[tri]
         tree = cKDTree(S)
         near = np.nonzero(np.isfinite(tree.query(Vw, distance_upper_bound=reach)[0]))[0]
-        balls = tree.query_ball_point(Vw[near] + Nw[near] * reach * 0.5, reach * 0.5 + radius)
-        for i, idx in zip(near, balls):
-            if not idx:
-                continue
-            d = S[idx] - Vw[i]
-            t = d @ Nw[i]
-            if t.max() <= LIFT_MIN_M:
-                continue
-            lat = np.linalg.norm(d - t[:, None] * Nw[i], axis=1)
-            cos = NS[idx] @ Nw[i]
-            ok = (lat <= radius) & (t > LIFT_MIN_M) & (t <= reach) & ((cos if oriented else np.abs(cos)) >= LIFT_FACING)
-            if ok.any():
-                lw[i] = max(lw[i], float(t[ok].max()))
+        # A226: the ray is marched in steps of ``radius`` with a k-nearest query per step (spheres of radius
+        # ``LIFT_BALL`` × radius cover the ray's cylinder) — the one ball round the ray's middle held every sample
+        # within 2.3 cm, both thighs' at the crotch bridge, and the per-vertex loop over them took 95 s
+        rb = radius * LIFT_BALL
+        for c0 in range(0, len(near), LIFT_CHUNK):
+            nc = near[c0:c0 + LIFT_CHUNK]
+            for h in np.arange(LIFT_MIN_M, reach + radius, radius):
+                dd, idx = tree.query(Vw[nc] + Nw[nc] * h, k=LIFT_K, distance_upper_bound=rb)
+                hit = np.isfinite(dd)
+                if not hit.any():
+                    continue
+                own = np.broadcast_to(nc[:, None], idx.shape)[hit]
+                idx = idx[hit]
+                nrm = Nw[own]
+                d = S[idx] - Vw[own]
+                t = np.einsum("ij,ij->i", d, nrm)
+                lat = np.linalg.norm(d - t[:, None] * nrm, axis=1)
+                cos = np.einsum("ij,ij->i", NS[idx], nrm)
+                ok = (lat <= radius) & (t > LIFT_MIN_M) & (t <= reach) \
+                    & ((cos if oriented else np.abs(cos)) >= LIFT_FACING)
+                if ok.any():
+                    np.maximum.at(lw, own[ok], t[ok])
     if (lw > 0).any():
         pairs = cKDTree(Vw).query_pairs(0.004, output_type="ndarray")
         for _ in range(2):
@@ -1400,6 +1539,39 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
         s = np.where(add, 5.0 + M, s)
     report["limb_ring_added_vertices"] = ring_added
     report["limb_ring_closed_vertices"] = ring_closed_added
+    # A226: under the crotch no view sees the piece — the front panel's bottom edge is joined to the back panel's
+    # across the underside like a side bridge (``crotch_run`` / ``crotch_bridge``); never for a skirt
+    xc = 0.5 * float(R[:, 0].min() + R[:, 0].max())
+    cr_f = crotch_run(Vw[:, 0], Vw[:, 1], Vw[:, 2], memb_f, head_on["f"], xc)
+    cr_b = crotch_run(Vw[:, 0], Vw[:, 1], Vw[:, 2], memb_b, head_on["b"], xc)
+    crotch = None
+    report["crotch_bridge"] = {"front": cr_f and [round(v_, 4) for v_ in cr_f],
+                               "back": cr_b and [round(v_, 4) for v_ in cr_b]}
+    if cr_f is not None and cr_b is not None:
+        skirt = {}
+        # the crotch point: the lowest point the front sees head-on at the body's middle (the back's lowest one
+        # there sits higher, at the top of the cleft)
+        mid_h = (np.abs(Vw[:, 0] - xc) <= CROTCH_CENTRE_M) & head_on["f"]
+        ic = np.nonzero(mid_h)[0][np.argmin(Vw[mid_h, 1])]
+        for w, mir in (("f", False), ("b", mirror_b)):
+            # the stretch of the view's middle column from 3 to 5 cm under the crotch point: a skirt covers it (over
+            # the gap between the legs or over the closed legs), a brief ends above it
+            cx, cy = project(Puw[ic:ic + 1], w, mir)
+            gm_ = filled[w]
+            r0, r1 = (int(np.clip(cy[0] + d_ * 1000.0 / mm_px[w], 0, gm_.shape[0] - 1))
+                      for d_ in (SKIRT_FROM_M, SKIRT_BELOW_M))
+            seg_g = gm_[r0:r1 + 1, int(np.clip(cx[0], 0, gm_.shape[1] - 1))]
+            skirt[w] = bool(seg_g.mean() >= 0.5) if len(seg_g) else False
+        report["crotch_bridge"]["skirt"] = skirt
+        if not any(skirt.values()):
+            fl = crotch_floor(Vw, xc, cr_f, cr_b)
+            cm_, ct_ = crotch_bridge(Vw, cr_f, cr_b, fl)
+            on_c = (cm_ > -0.01) & (s <= 0)
+            val = _bridge_mm(cm_, M)
+            add = on_c & (val > s)
+            s = np.where(add, val, s)
+            report["crotch_bridge"]["added_vertices"] = int((add & (val > 0)).sum())
+            crotch = (cr_f, cr_b, fl)
     for w in ("f", "b"):
         bump = side & st[w]["seen"] & (st[w]["sd_mm"] > 10)
         s = np.where(bump, np.maximum(s, st[w]["sd_mm"] + M), s)
@@ -1446,8 +1618,39 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
     # — and a region face can sit on a layer under the outer skin (an inset part's kept inner wall): the shell is
     # lifted over every surface its normal ray meets facing the same way (``lift_over_surfaces``)
     part_P, part_F = glb_mesh.part_arrays(rigged)
-    X, lift = lift_over_surfaces(Vc, Nw_[cinv], offset_m,
-                                 [(R, br.faces if volb > 0 else br.faces[:, ::-1], True), (part_P, part_F, False)])
+    body_surf = (R, br.faces if volb > 0 else br.faces[:, ::-1], True)
+    X, lift = lift_over_surfaces(Vc, Nw_[cinv], offset_m, [body_surf, (part_P, part_F, False)])
+    # A226: across the crotch the piece spans the body's folds instead of following them into each one. The thighs
+    # nearly meet there: a crotch-bridge vertex's ray crossed into the other thigh (lifting it 4 cm), so it is
+    # never lifted over the body; one facing the other thigh (|normal x| ≥ ``CROTCH_SIDEWAYS``) is not lifted over
+    # the extension part either (its ray ran through the part's side), the others are. Then the bridge's vertices
+    # are relaxed (``CROTCH_RELAX`` Laplacian passes; the rest of the shell holds still), none ending under the
+    # offset over the surface it came from
+    if crotch is not None:
+        # the whole crotch stretch of the shell, the inner thigh's crease under the floor too (its rays cross as well)
+        cv = crotch_bridge(Vc, crotch[0], crotch[1])[0] > -0.01
+        on_w = np.zeros(len(Vcw), bool)
+        np.logical_or.at(on_w, cinv, cv)
+        sw_ = cv & (np.abs(Nw_[cinv][:, 0]) >= CROTCH_SIDEWAYS)
+        up_ = cv & ~sw_
+        if sw_.any():
+            X[sw_], lift[sw_] = Vc[sw_] + Nw_[cinv][sw_] * offset_m, 0.0
+        if up_.any():
+            X[up_], lift[up_] = lift_over_surfaces(Vc[up_], Nw_[cinv][up_], offset_m, [(part_P, part_F, False)])
+        if on_w.any():
+            Xw = np.zeros((len(Vcw), 3))
+            Xw[cinv] = X
+            Vcw_ = np.zeros((len(Vcw), 3))
+            Vcw_[cinv] = Vc
+            Ac_ = (gf._adjacency(Fcw, len(Vcw))[0] > 0).astype(np.float64)
+            deg_ = np.maximum(np.asarray(Ac_.sum(1)).ravel(), 1)[:, None]
+            for _ in range(CROTCH_RELAX):
+                Xw = np.where(on_w[:, None], 0.5 * Xw + 0.5 * (Ac_ @ Xw) / deg_, Xw)
+            dep = np.einsum("ij,ij->i", Xw - Vcw_, Nw_)
+            Xw = np.where((on_w & (dep < offset_m))[:, None], Xw + Nw_ * (offset_m - dep)[:, None], Xw)
+            X = Xw[cinv]
+            report["crotch_relaxed_vertices"] = int(on_w.sum())
+            report["crotch_sideways_vertices"] = int(sw_.sum())
     report["lifted_vertices"] = int((lift > 0).sum())
     report["lift_max_mm"] = round(float(lift.max()) * 1000.0, 1) if len(lift) else 0.0
 
@@ -1602,6 +1805,30 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
             col[todo[got]] = acc_c[got] / acc_w[got][:, None]
             tiled += int(got.sum())
     report["limb_side_samples_tiled"] = tiled
+    # A226: a crotch-bridge sample continues the two panels' pattern: its colour is read in the front panel and in
+    # the back panel at its mirror image across that panel's edge (``crotch_source``), blended front→back by t
+    crotch_coloured = 0
+    if crotch is not None and real.any():
+        cr_f, cr_b, fl = crotch
+        cm_q, ct_q = crotch_bridge(Xq_, cr_f, cr_b, fl)
+        todo = np.nonzero((cm_q > -0.01) & ~real)[0]
+        rf_ = np.nonzero(real & (wf >= wb) & (wf > 0))[0]
+        rb_ = np.nonzero(real & (wb > wf))[0]
+        if len(todo) and (len(rf_) or len(rb_)):
+            yfs, ybs = crotch_source(Xq_[todo], ct_q[todo], cr_f, cr_b)
+            got = []
+            for rows, ys in ((rf_, yfs), (rb_, ybs)):
+                if not len(rows):
+                    got.append(None)
+                    continue
+                _d, jj = cKDTree(Xq_[rows][:, :2]).query(np.c_[Xq_[todo, 0], ys], k=min(3, len(rows)))
+                jj = jj.reshape(len(todo), -1)
+                got.append(np.median(col[rows[jj]], 1))
+            cf_, cb_ = (got[0] if got[0] is not None else got[1]), (got[1] if got[1] is not None else got[0])
+            tq_ = np.clip(np.nan_to_num(ct_q[todo]), 0, 1)[:, None]
+            col[todo] = cf_ * (1 - tq_) + cb_ * tq_
+            crotch_coloured = int(len(todo))
+    report["crotch_samples_coloured"] = crotch_coloured
     side_s = np.abs(nz) < 0.3
     metrics: Dict[str, Any] = {}
     for ncm in (1, 2, 5):
