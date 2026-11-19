@@ -1094,6 +1094,11 @@ def _build(character_name: str, directory: Path, bare: Path,
         from app.core.fit_attempts import without_covered_parts
         blob = without_covered_parts(blob, list(hidden))
     grafted = [g for g in wanted if g["fit"] is not None]  # never a pending one (``_wanted`` with build_layers fits first)
+    # A228: a worn shaping piece shows the body it was draped on (``bust_shaping``) — before the cover cut
+    from app.core import bust_shaping
+    shaping = bust_shaping.worn_record(grafted)
+    if shaping:
+        blob = bust_shaping.shape_glb(blob, shaping)
     foot_pose: Optional[Dict[str, Any]] = None
     shoe: Optional[Dict[str, Any]] = None
     for garment in grafted:
