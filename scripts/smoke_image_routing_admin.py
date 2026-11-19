@@ -37,7 +37,7 @@ Expected, by hand:
     plan 2026-11-09 + outfit_side_draft, outfit_side from the dressed side
     views 2026-11-09 + hair_source_mesh from the subtract hair method
     2026-11-10 + hair_views_mesh from the hair-mesh routing split 2026-11-10
-    + mesh_footwear, footwear_empty from the footwear plan 2026-11-10 = 40;
+    + mesh_footwear, footwear_empty from the footwear plan 2026-11-10 = 40, + jewellery_mesh (Ruling A118 J3) = 41;
     - hair_source_mesh, hair_views_mesh with the subtract method and the hair
     edit chain, hair-from-body spec 2026-11-11 Task 2 = 38; - outfit_back,
     outfit_side: the model fit replaced by the CPU composite, Task 11g = 36;
@@ -165,7 +165,7 @@ check("V11 mesh kind", (k["media"], k.get("rig")), ("mesh", None))
 k = routing.describe_config_backend({"name": "V", "api_type": "openai_video"})
 check("V11 video kind", (k["media"], k["ref_slot_count"]), ("video", 1))
 
-check("R1 occasions", len(adm.settings_image_routing_occasions(user=None)["occasions"]), 40)
+check("R1 occasions", len(adm.settings_image_routing_occasions(user=None)["occasions"]), 41)
 SEEN = {}
 
 

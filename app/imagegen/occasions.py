@@ -262,6 +262,9 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
         "category": "motion2transition", "requires_chain": True,
         "covers": "Poses tab: generate transition", "rig": "",
         "needs_ref_slot": False, "style_use_cases": [], **_WORLD},
+    # Accessories (Ruling A118 J3): the pendant mesh of a jewellery piece (phase P2). Registered now so the chain
+    # can be set up; P1 starts no job on it. config._migrate_jewellery_routing seeds it from mesh_footwear once.
+    "jewellery_mesh": _mesh("3D mesh — jewellery", "Wardrobe: pendant of a jewellery piece (P2)", "none"),
 }
 
 #: Image occasions whose renders are mesh inputs: the mesh-input matte, the

@@ -1834,6 +1834,17 @@ def _migrate_footwear_routing(config: dict) -> bool:
     return _seed_routing_copies(config, _FOOTWEAR_ROUTING_SEEDS)
 
 
+#: (target, source) — the jewellery pendant mesh (Ruling A118 J3) starts on the footwear shoe chain: both mesh a
+#: small rigid object from an item image.
+_JEWELLERY_ROUTING_SEEDS = (("jewellery_mesh", "mesh_footwear"),)
+
+
+def _migrate_jewellery_routing(config: dict) -> bool:
+    """Seed ``jewellery_mesh`` from ``mesh_footwear`` once; an existing target owns its value, a missing source
+    seeds nothing. Runs after ``_migrate_footwear_routing``."""
+    return _seed_routing_copies(config, _JEWELLERY_ROUTING_SEEDS)
+
+
 #: (target, source) — the base-body pipeline steps start on the chains they
 #: rendered on before they had their own occasion (the front on tpose, every
 #: edit on tpose_view), so nothing changes until the admin edits them.
@@ -1991,6 +2002,8 @@ def _apply_file_migrations(config: dict) -> bool:
     if _migrate_garment_routing(config):
         changed = True
     if _migrate_footwear_routing(config):
+        changed = True
+    if _migrate_jewellery_routing(config):
         changed = True
     if _migrate_removed_hair_methods(config):
         changed = True

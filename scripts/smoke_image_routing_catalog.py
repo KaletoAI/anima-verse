@@ -9,7 +9,7 @@ scan callers by AST/text, and Part D checks the service with transport doubles.
 
 PART A — THE CATALOG, DERIVED BY HAND FROM THE SPEC
 ---------------------------------------------------
-A1. Exactly these 40 occasions (§ 1 table, minus `mesh_low` which the review
+A1. Exactly these 41 occasions (40 + `jewellery_mesh`, Ruling A118 J3, last) (§ 1 table, minus `mesh_low` which the review
     DROPS, plus `frame` which the review ADDS, plus `tpose_view` from
     plan-tier-animationen.md P1, plus `garment_view` and `mesh_garment` from
     the base-body phase-4 plan, R4, plus the five base-body steps of the
@@ -97,7 +97,7 @@ A9. mesh_occasion_for_rig: mixamo -> mesh_humanoid, generic -> mesh_creature,
     review carry-over: guessing mesh_humanoid for it would mesh with a
     skeleton nobody asked for). Fails on commit 4893221f, which answered
     "mesh_humanoid" for "bogus".
-A10. catalog_payload() has 40 rows in catalog order, each with the keys
+A10. catalog_payload() has 41 rows in catalog order, each with the keys
     id, label, media, category, rig, character_scoped, needs_ref_slot, covers,
     pose_check, hint, default_chain;
     every label is a non-empty English string.
@@ -208,8 +208,8 @@ def part_a():
                     "mesh_building", "mesh_garment", "mesh_footwear",
                     "footwear_empty", "hair_mesh", "hair_strands",
                     "pose_animation",
-                    "pose_transition"]
-    check("A1 the 40 occasions in catalog order", occ.occasion_ids(), expected_ids)
+                    "pose_transition", "jewellery_mesh"]
+    check("A1 the 41 occasions in catalog order", occ.occasion_ids(), expected_ids)
 
     try:
         occ.get_occasion("mesh_low")
@@ -220,8 +220,8 @@ def part_a():
     media = {i: occ.get_occasion(i)["media"] for i in expected_ids}
     check("A3 video media", media["video"], "video")
     check("A3 mesh media", sorted(i for i, m in media.items() if m == "mesh"),
-          ["face_retexture", "hair_mesh", "hair_strands", "mesh_building", "mesh_creature", "mesh_footwear", "mesh_garment", "mesh_humanoid",
-           "mesh_object", "rig_creature", "rig_humanoid"])
+          ["face_retexture", "hair_mesh", "hair_strands", "jewellery_mesh", "mesh_building", "mesh_creature", "mesh_footwear",
+           "mesh_garment", "mesh_humanoid", "mesh_object", "rig_creature", "rig_humanoid"])
     check("A3 image media count", sum(1 for m in media.values() if m == "image"), 26)
 
     check("A4 rigs", {i: occ.get_occasion(i).get("rig") for i in
