@@ -390,8 +390,14 @@ UNDER_FOOTWEAR_SLOTS: Tuple[str, ...] = ("legs",)
 
 
 def under_footwear(item: Optional[Dict[str, Any]]) -> bool:
-    """Whether the outfit piece ``item`` is worn under the shoe (a slot of ``UNDER_FOOTWEAR_SLOTS``)."""
-    return bool(_worn_slots(item or {}) & set(UNDER_FOOTWEAR_SLOTS))
+    """Whether the outfit piece ``item`` is worn under the shoe (a slot of ``UNDER_FOOTWEAR_SLOTS``; A233: or template
+    trousers whose skinny full-length leg goes into the shoe, ``garment_template.tucked_into_shoes``)."""
+    if _worn_slots(item or {}) & set(UNDER_FOOTWEAR_SLOTS):
+        return True
+    if mesh_mode_of(item) != TEMPLATE:
+        return False
+    from app.core import garment_template
+    return garment_template.tucked_into_shoes(garment_template.params_of(item))
 
 
 def _stacked_over(upper: set, lower: set) -> bool:

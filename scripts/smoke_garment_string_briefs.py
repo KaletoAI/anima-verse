@@ -36,7 +36,8 @@ def check(name, got, want):
 brief, _ = gt.validate_params({"kind": "briefs", "leg_cut": 0.8})
 check("sides default", brief["sides"], "fabric")
 check("string width default", brief["string_width_m"], 0.008)
-old = {k: v for k, v in brief.items() if k not in ("leg_length_m", "sides", "string_width_m")}
+old = {k: v for k, v in brief.items() if k not in ("leg_length_m", "sides", "string_width_m")
+       and k not in gt.TROUSER_FIELDS}  # A233: the trouser fields key only trousers
 check("fabric brief key unchanged", gt.tsig(brief, base_sha="b", texture_sha="t", lower=[]),
       gt._md5({"params": {k: v for k, v in old.items() if k not in gt.MATERIAL_ONLY
                           and k not in gt.OFF_SHOULDER_FIELDS},

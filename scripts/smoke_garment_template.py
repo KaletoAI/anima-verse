@@ -26,11 +26,11 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
       frac 0.5 → 0.95 + (0.70-0.95) * 0.5 + 0.02 = 0.845.
     * dress, length 0.5: bodice 1.275 - 1.00 = 0.275, top knot (0.775, 0.90 + 0.02 = 0.92), top_y 1.275,
       rows = round(0.775 / 0.015) + 1 = round(51.67) + 1 = 53.
-    * kind "trousers" raises ValueError (not built).
+    * kind "trousers" (A233: built) gives the fitted spec of trousers (``fitted.kind`` "trousers", no panels).
 [4] tsig: the same inputs give the same 12-hex key; each of params / base sha / texture sha / lower layers
     changes it; the order of the lower layers does not.
-[5] drape_state in a temp folder: no parameters → blocked with NEEDS_PARAMS; kind "trousers" → blocked with
-    KIND_NOT_BUILT; parameters + picture → missing (NOT_DRAPED); a failure record of that key → failed with
+[5] drape_state in a temp folder: no parameters → blocked with NEEDS_PARAMS; kind "trousers" (A233: built) →
+    missing (NOT_DRAPED), no longer KIND_NOT_BUILT; parameters + picture → missing (NOT_DRAPED); a failure record of that key → failed with
     DRAPE_FAILED; a GLB + accepted record → ready.
     A record that failed ONLY on ``build_wall_s`` (written while the wall still gated; its stretch row passed) is no
     refusal any more → missing (NOT_DRAPED, due again); one that failed ``build_wall_s`` AND ``stretch_max`` →
@@ -170,7 +170,11 @@ check("[1] defaults, no error", e == [] and p == {"kind": "skirt", "length_m": 0
                                                   "tights_style": "tights", "feet": "closed", "garters": "none",
                                                   # A229: the off-shoulder fields (at their defaults on a skirt)
                                                   "band_m": 0.025, "band_drop_m": 0.05, "lacing": "none",
-                                                  "lace_depth_m": 0.15}, str((p, e)))
+                                                  "lace_depth_m": 0.15,
+                                                  # A233: the trouser fields (at their defaults on a skirt)
+                                                  "trouser_length": "full", "leg_shape": "straight",
+                                                  "trouser_waist": "belt", "fly": "zip", "hem": "plain"},
+      str((p, e)))
 p, e = gt.validate_params({"length_m": 2.0, "kind": "cape"})
 check("[1] length clamped to 1.2 and reported", p["length_m"] == 1.2 and any("length_m" in x for x in e))
 check("[1] unknown kind reported, default skirt", p["kind"] == "skirt" and any("kind" in x for x in e))
@@ -218,11 +222,9 @@ check("[3] dress top knot (0.755, 0.92), top_y 1.255",
       close(o["knots"][-1][0], 0.755) and close(o["knots"][-1][1], 0.92) and close(o["top_y"], 1.255), o)
 _rows = gt.panel_spec(dress, M)["rows"]
 check("[3] dress rows 51 = round(0.755 / GRID_M 0.015 = 50.3) + 1 (was 0.775 -> 52 + 1 = 53)", _rows == 51, _rows)
-try:
-    gt.panel_spec(gt.validate_params({"kind": "trousers"})[0], M)
-    check("[3] trousers not built raises", False)
-except ValueError:
-    check("[3] trousers not built raises", True)
+_tspec = gt.panel_spec(gt.validate_params({"kind": "trousers"})[0], M)
+check("[3] trousers (A233) -> the fitted spec", _tspec["fitted"]["kind"] == "trousers" and _tspec["panels"] == [],
+      _tspec.get("fitted"))
 
 # [4]
 k = dict(base_sha="a" * 64, texture_sha="t1", lower=["b", "a"])
@@ -249,7 +251,7 @@ try:
     trousers = json.loads(json.dumps(piece))
     trousers["outfit_piece"]["template"] = {"params": {"kind": "trousers"}}
     st = gt.drape_state("K", "i1", base_sha="s", lower=[], item=trousers)
-    check("[5] trousers -> KIND_NOT_BUILT", st["state"] == "blocked" and "trousers" in st["reason"])
+    check("[5] trousers (A233: built) -> NOT_DRAPED", st["state"] == "missing" and st["reason"] == gt.NOT_DRAPED, st)
     piece["outfit_piece"]["template"] = {"params": {"kind": "skirt", "length_m": 0.45}}
     st = gt.drape_state("K", "i1", base_sha="s", lower=[], item=piece)
     check("[5] missing -> NOT_DRAPED", st["state"] == "missing" and st["reason"] == gt.NOT_DRAPED)

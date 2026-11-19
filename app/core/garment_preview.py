@@ -42,10 +42,6 @@ COLLAR_H_M = 0.045
 LAPEL_OUT_M = 0.07
 #: An open jacket front: the gap at the hem (the fronts hang apart).
 OPEN_GAP_M = 0.05
-#: A trouser leg's ease over the leg in the picture (front width share).
-TROUSER_EASE = 0.12
-#: The crotch below the hip line (metres) where a trouser leg begins.
-CROTCH_BELOW_HIP_M = 0.08
 
 _lock = threading.Lock()
 _frames: Dict[Tuple[str, int], Dict[str, Any]] = {}
@@ -106,8 +102,8 @@ def body_measure(glb: Path) -> Dict[str, Any]:
     data = Path(glb).read_bytes()
     meas = gt.measure_body(data)
     joints = glb_mesh.body_arrays(data).joint_positions
-    extra = {k: [round(float(x), 4) for x in joints[k]] for k in ("hips", "leftupleg", "rightupleg", "leftfoot",
-                                                                  "rightfoot", "head") if k in joints}
+    extra = {k: [round(float(x), 4) for x in joints[k]] for k in ("hips", "leftupleg", "rightupleg", "leftleg",
+                                                                  "rightleg", "leftfoot", "rightfoot", "head") if k in joints}
     meas = dict(meas, joints={**(meas.get("joints") or {}), **extra})
     with _lock:
         _measures.clear()
@@ -389,13 +385,13 @@ def shapes(params: Dict[str, Any], meas: Dict[str, Any], reg: Registration) -> D
 
     waist_y = gt._waist_line(p, m)
     # the waist line chosen (skirt / trousers / dress): a dashed guide across the body
-    if kind in ("skirt", "trousers", "dress"):
+    if kind in ("skirt", "dress"):
         bl, br = reg.body_half(waist_y, cap_m)
         add("waist", "dash", [[x0 - bl - 0.03, waist_y], [x0 + br + 0.03, waist_y]])
         mark(x0 + br + 0.04, waist_y, f"waist {p['waist_height']}")
 
     if kind == "trousers":
-        _trousers(p, m, reg, waist_y, cap_m, add, mark)
+        _trousers(p, m, reg, cap_m, add, mark)
         return {"shapes": out, "marks": marks}
     if kind in gt.FITTED_KINDS:
         _fitted(p, m, reg, cap_m, add, mark)
@@ -781,45 +777,84 @@ def _boxers(p, m, reg: Registration, spec: Dict[str, Any], cap_m: float, add, ma
     mark(x0, hem - 0.04, f"fit {p['fit']:.2f} · {p['fabric']}", "middle")
 
 
-def _trousers(p, m, reg: Registration, waist_y: float, cap_m: float, add, mark) -> None:
-    """Trousers (a kind the drape does not build yet; drawn so the length and the rise can be judged): the seat from
-    the waist line to the crotch, then each leg along the leg in the picture to ``waist - length``."""
-    import numpy as np
+def trouser_anchors(m: Dict[str, Any]) -> Dict[str, float]:
+    """A233: the hem anchors for the drawing (``garment_template.TROUSER_HEM``) — the crotch (``_crotch_y``), the knee
+    and ankle joints (without the joints: the reference body's shares of the height)."""
     j = m.get("joints") or {}
-    crotch = m["hip_y"] - CROTCH_BELOW_HIP_M
-    hem = max(m["floor_y"] + 0.01, waist_y - p["length_m"])
-    bl, br = reg.body_half(waist_y, cap_m)
+    floor = float(m.get("floor_y", 0.0))
+    knee = float(j["leftleg"][1]) if "leftleg" in j else floor + TIGHTS_KNEE_SHARE * float(m["height"])
+    ankle = float(j["leftfoot"][1]) if "leftfoot" in j else floor + TIGHTS_ANKLE_M
+    return {"crotch": _crotch_y(m), "knee": knee, "ankle": ankle}
+
+
+def _trousers(p, m, reg: Registration, cap_m: float, add, mark) -> None:
+    """A233: trousers, drawn from the numbers the builder cuts by (``garment_template.trouser_spec``): the seat from
+    the waistband (``rise``) to the crotch, then each leg along the leg in the picture down to the hem
+    (``trouser_hem``), as wide as the leg plus the cloth's gap and — not skinny — at least the leg shape's radius
+    (``LEG_SHAPE_R`` of the thigh's half width, straight in height from the crotch to the knee to the ankle); the
+    waist band, a cuff and the fly as guides."""
+    import numpy as np
+    from app.core import garment_template as gt
+    spec = gt.trouser_spec(p, m)
+    anchors = trouser_anchors(m)
+    j = m.get("joints") or {}
+    x0 = reg.x0
+    top = spec["top_y"]
+    crotch = anchors["crotch"]
+    hem = gt.trouser_hem(p["trouser_length"], anchors)
+    off = spec["offset_m"]
+    bl, br = reg.body_half(top, cap_m)
     hl, hr = reg.body_half(m["hip_y"], cap_m)
-    k = 1.0 + TROUSER_EASE * 0.5
-    add("body", "fill", [[reg.x0 - bl * k, waist_y], [reg.x0 + br * k, waist_y], [reg.x0 + hr * k, m["hip_y"]],
-                         [reg.x0 + hr * k, crotch], [reg.x0 - hl * k, crotch], [reg.x0 - hl * k, m["hip_y"]]])
+    seat_y = min(m["hip_y"], top)
+    add("body", "fill", [[x0 - bl - off, top], [x0 + br + off, top], [x0 + hr + off, seat_y],
+                         [x0 + hr + off, crotch], [x0 - hl - off, crotch], [x0 - hl - off, seat_y]])
+    if spec["band_m"] > gt.MIN_PIN_BAND_M:
+        add("waist", "dash", [[x0 - bl, top - spec["band_m"]], [x0 + br, top - spec["band_m"]]])
+    if p["fly"] != "none":
+        add("fly", "line", [[x0, top - spec["band_m"]], [x0, crotch + 0.03]])
     for side, key in ((1, "leftupleg"), (-1, "rightupleg")):
-        guess = j[key][0] if key in j else reg.x0 + side * 0.09
-        inner, outer = [], []
+        guess = j[key][0] if key in j else x0 + side * 0.09
+        rows = []
         for y in np.linspace(crotch, hem, 14):
             run = reg.leg_run(float(y), guess)
             if run is None:
                 continue
             a, b = run
-            # a run across the centre (the hips above the crotch) is cut at the centre; a run on the other side
-            # (the other leg) is never followed
             if side > 0:
-                a = max(a, reg.x0)
+                a = max(a, x0)
             else:
-                b = min(b, reg.x0)
+                b = min(b, x0)
             if b - a < 0.02:
                 continue
             guess = (a + b) / 2
-            w = (b - a) * (1 + TROUSER_EASE) / 2
-            lo, hi = guess - w, guess + w
-            (inner if side > 0 else outer).append([lo, float(y)])
-            (outer if side > 0 else inner).append([hi, float(y)])
-        if inner and outer:
-            add("leg", "fill", outer + inner[::-1])
-            add("leg", "fill", [outer[0], inner[0], [reg.x0, crotch + 0.04]])
-    mark(reg.x0 + hr + 0.05, (waist_y + hem) / 2, f"{round(p['length_m'] * 100)} cm")
-    mark(reg.x0, hem - 0.035, f"hem {hem:.2f} m", "middle")
-    add("dim", "line", [[reg.x0 + hr + 0.04, waist_y], [reg.x0 + hr + 0.04, hem]])
+            rows.append((float(y), guess, (b - a) / 2))
+        if not rows:
+            continue
+        r_t = rows[0][2] * (1.0 + spec["radial_ease"])
+        out_l, out_r = [], []
+        for y, c, half in rows:
+            w = half + off
+            if spec["shape_r"]:
+                k, h = spec["shape_r"]
+                target = float(np.interp(y, [anchors["ankle"], anchors["knee"], crotch], [h * r_t, k * r_t, r_t]))
+                ramp = min(1.0, max(0.0, (crotch - y) / spec["ramp_m"]))
+                w = max(w, w + ramp * (target - w))
+            lo, hi = c - w, c + w
+            if side > 0:
+                lo = max(lo, x0 + spec["centre_gap_m"])
+            else:
+                hi = min(hi, x0 - spec["centre_gap_m"])
+            out_l.append([lo, y])
+            out_r.append([hi, y])
+        add("leg", "fill", out_l + out_r[::-1])
+        add("leg", "fill", [out_l[0], out_r[0], [x0, crotch + 0.04]])
+        if p["hem"] == "cuffed":
+            yb = out_l[-1][1]
+            add("cuff", "dash", [[out_l[-1][0], yb + spec["cuff_m"]], [out_r[-1][0], yb + spec["cuff_m"]]])
+    mark(x0 + hr + 0.05, top, f"rise {p['rise']}")
+    mark(x0 + hr + 0.05, (crotch + hem) / 2, f"{p['leg_shape']} · fit {p['fit']:.2f}")
+    mark(x0, hem - 0.035, f"{p['trouser_length']} · hem {hem:.2f} m", "middle")
+    add("dim", "line", [[x0 + hr + 0.04, top], [x0 + hr + 0.04, hem]])
 
 
 # --- the route's helper ------------------------------------------------------------------------------------------

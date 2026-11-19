@@ -17,6 +17,11 @@ caller then pins the returned vertices and runs the short cloth relax (``frames`
   A232 boxers (``leg_length_m`` > 0): the hips and both thighs from ``top_y`` to a straight hem ``leg_length_m`` under
   the crotch (``boxer_region``, the tights' per-vertex way: no arm / hand); pinned the waistband and — ``hem_pinned``
   (snug) — a band at each hem and the gusset; a loose boxer hangs from its waistband.
+* trousers (A233): the hips and both legs from the waistband plane at ``top_y`` to a hem plane per length (``trouser_hem``
+  of the side's crotch / knee / ankle; a stirrup keeps a band under the arch instead), no arm / hand and no foot; laid
+  out at ``offset_m`` like every fitted piece, then each leg is widened round its bone axis (hip -> knee -> ankle
+  joint) to the leg shape's radius (``trouser_widen``) and evened once more. Pinned: the waist band and — skinny —
+  a band at each hem (a stirrup: whole, a second skin); a widened leg hangs from the waist band.
 * bra: the underband plane at ``under_y - band``; per side a cup from the underbust line to its top edge
   (``style`` / ``coverage``), the gore between them, the straps (``straps``) as strips within half their width of a
   path laid on the surface; push-up moves the cups up, in and out before the evening. Pinned: the band, the straps,
@@ -35,7 +40,7 @@ from mathutils import Vector
 import garment_template_drape as gd
 
 #: Umbrella passes of the evening (fitted kinds), and the extra ones of a molded cup (it bridges the bust).
-SMOOTH_PASSES = {"briefs": 6, "bra": 6, "gloves": 2, "tights": 6}
+SMOOTH_PASSES = {"briefs": 6, "bra": 6, "gloves": 2, "tights": 6, "trousers": 6}
 MOLDED_PASSES = 14
 #: The closure's extra thickness (a hook patch on the back band / a front clasp), metres, and its half width.
 CLOSURE_M = 0.0015
@@ -544,6 +549,121 @@ def tights_region(f, co, w, arm, cx):
     return keep_v, planes, band, legs, foot, info
 
 
+def trouser_hem(rule, anchors):
+    """A233: ``garment_template.trouser_hem`` — from + share x (to - from) + extra over the side's anchors."""
+    a, b, share, extra = rule
+    return float(anchors[a]) + float(share) * (float(anchors[b]) - float(anchors[a])) + float(extra)
+
+
+def trousers_region(f, co, w, arm, cx):
+    """A233 trousers: ``(keep_v(v, arm_v, foot_v), planes, pins(v), sides, info)`` — every collider vertex between the
+    waistband plane and the side's hem that is not an arm's / hand's (as the boxers) and not the foot's (below the
+    ankle joint less 1 cm; a stirrup keeps a 5 cm band under the middle of the foot). ``sides[s]`` = the side's
+    crotch / knee / ankle anchors, hem and leg axis (hip, knee, ankle joints)."""
+    top = _gltf_y(f["top_y"])
+    crotch = _crotch(co, w["Hips"], cx, top)
+    stirrup = f["hem"] == "stirrup"
+    sides = {}
+    for side, s in (("Left", 1), ("Right", -1)):
+        hip, knee, ankle, toe = (_bone_head(arm, side + b) for b in ("UpLeg", "Leg", "Foot", "ToeBase"))
+        anchors = {"crotch": crotch, "knee": float(knee[2]), "ankle": float(ankle[2])}
+        sides[s] = {"hem": trouser_hem(f["hem_rule"], anchors), "axis": [hip, knee, ankle], "ankle_p": ankle,
+                    "toe": toe, **anchors}
+
+    def side_of(v):
+        return np.where(v[:, 0] > cx, 1, -1)
+
+    def keep_v(v, arm_v, foot_v):
+        sd = side_of(v)
+        hem = np.where(sd > 0, sides[1]["hem"], sides[-1]["hem"])
+        ank = np.where(sd > 0, sides[1]["ankle"], sides[-1]["ankle"])
+        k = (arm_v < 0.5) & (v[:, 2] <= top + 0.005)
+        foot = (foot_v > 0.5) & (v[:, 2] < ank - 0.01)
+        if stirrup:
+            mid = np.where(sd[:, None] > 0, (sides[1]["ankle_p"] + sides[1]["toe"]) / 2,
+                           (sides[-1]["ankle_p"] + sides[-1]["toe"]) / 2)
+            foot &= ~(np.abs(v[:, 1] - mid[:, 1]) < 0.025)
+        else:
+            k &= v[:, 2] >= hem - 0.005
+        return k & ~foot
+
+    planes = [(np.array([0.0, 0.0, top]), np.array([0.0, 0.0, 1.0]))]
+    if not stirrup:
+        for s_, d in sides.items():
+            planes.append((np.array([0.0, 0.0, d["hem"]]), np.array([0.0, 0.0, -1.0]), s_))
+    band = float(f["band_m"])
+    hem_pin = float(f["hem_pin_m"]) if f.get("hem_pinned") else 0.0
+
+    def pins(v):
+        if stirrup:
+            # stirrup leggings are a second skin, pinned whole as hosiery (the leg's foot edge follows the foot
+            # weights, not a plane: left free above it, one edge at the Achilles tendon stretched to 1.34)
+            return np.ones(len(v), bool)
+        m = v[:, 2] > top - band - 0.002
+        if hem_pin > 0:
+            sd = side_of(v)
+            hem = np.where(sd > 0, sides[1]["hem"], sides[-1]["hem"])
+            m |= v[:, 2] < hem + hem_pin
+        return m
+
+    info = {"crotch_z": round(crotch, 4), "hems": {str(s_): round(d["hem"], 4) for s_, d in sides.items()}}
+    return keep_v, planes, pins, sides, info
+
+
+def _polyline_foot(p, pts):
+    """Per point of ``p`` (n, 3): its nearest point on the polyline ``pts``."""
+    best = np.zeros_like(p)
+    dist = np.full(len(p), 9.0)
+    for a, b in zip(pts[:-1], pts[1:]):
+        ab = b - a
+        t = np.clip(((p - a) @ ab) / max(1e-12, ab @ ab), 0.0, 1.0)
+        q = a + t[:, None] * ab
+        d = np.linalg.norm(p - q, axis=1)
+        m = d < dist
+        best[m], dist[m] = q[m], d[m]
+    return best
+
+
+def trouser_widen(V, f, sides, cx):
+    """A233: each leg widened round its bone axis (hip -> knee -> ankle joint) — a vertex below the crotch moves out
+    along its radial direction to max(its radius, R(z)), faded in over ``ramp_m`` under the crotch. R runs straight
+    (in z) from the thigh radius ``r_t`` at the crotch to ``shape_r[0] x r_t`` at the knee and ``shape_r[1] x r_t`` at
+    the ankle; ``r_t`` = the median radius of the side's vertices 2-4 cm under the crotch x (1 + ``radial_ease``). An
+    inner side stays ``centre_gap_m`` off the centre plane. A cuffed hem stands ``cuff_fold_m`` further out over
+    ``cuff_m``. Returns ``(V, info)``."""
+    V = V.copy()
+    info = {}
+    for s_, d in sides.items():
+        side = (V[:, 0] - cx) * s_ > 0
+        if not side.any():
+            continue
+        q = _polyline_foot(V[side], np.array(d["axis"]))
+        r = V[side] - q
+        rl = np.maximum(np.linalg.norm(r, axis=1), 1e-6)
+        z = V[side][:, 2]
+        new = rl.copy()
+        if f.get("shape_r"):
+            band = (z < d["crotch"] - 0.02) & (z > d["crotch"] - 0.04)
+            r_t = float(np.median(rl[band])) if band.sum() > 5 else 0.08
+            r_t *= 1.0 + float(f["radial_ease"])
+            k, h = f["shape_r"]
+            zs = [d["ankle"], d["knee"], d["crotch"]]
+            R = np.interp(z, zs, [h * r_t, k * r_t, r_t])
+            t = np.clip((d["crotch"] - z) / float(f["ramp_m"]), 0.0, 1.0)
+            new = np.maximum(rl, rl + t * (R - rl))
+            info[str(s_)] = {"r_t": round(r_t, 4), "r_knee": round(k * r_t, 4), "r_ankle": round(h * r_t, 4),
+                             "widened_p50_mm": round(float(np.median(new - rl)) * 1000, 1)}
+        if f["hem"] == "cuffed":
+            new = new + float(f["cuff_fold_m"]) * (z < d["hem"] + float(f["cuff_m"]))
+        P = q + r / rl[:, None] * new[:, None]
+        moved = new > rl + 1e-6
+        gap = float(f["centre_gap_m"])
+        inner = moved & ((P[:, 0] - cx) * s_ < gap)
+        P[inner, 0] = cx + s_ * gap
+        V[side] = P
+    return V, info
+
+
 # --- the builder -----------------------------------------------------------------------------------------------
 
 def _umbrella(bm, passes, movable, boundary_only_along=True):
@@ -590,7 +710,18 @@ def build_fitted(prm, spec, arm, body, ctree, col=None):
     cent = np.array([fa.calc_center_median() for fa in bm.faces])
     keep_layer = bm.faces.layers.int.new("keep")
     push = closure = cups = None
-    if kind == "briefs" and float(f.get("leg_length_m") or 0.0) > 0:
+    tsides = None
+    if kind == "trousers":
+        keep_v, planes, pins, tsides, extra = trousers_region(f, co, w, arm, cx)
+        info.update(extra)
+        arm_w = sum(w[sd + b] for sd in ("Left", "Right") for b in GLOVE_BONES)
+        foot_w = sum(w[sd + b] for sd in ("Left", "Right") for b in ("Foot", "ToeBase"))
+        kd = _kd(co)
+        cco = np.array([v.co for v in bm.verts])
+        near = np.array([kd.find(Vector(p))[1] for p in cco])
+        vk = keep_v(cco, arm_w[near], foot_w[near])
+        mask = np.array([all(vk[v.index] for v in fa.verts) for fa in bm.faces])
+    elif kind == "briefs" and float(f.get("leg_length_m") or 0.0) > 0:
         keep_v, planes, pins, extra = boxer_region(f, co, w, cx)
         info.update(extra)
         arm_w = sum(w[sd + b] for sd in ("Left", "Right") for b in GLOVE_BONES)
@@ -727,6 +858,8 @@ def build_fitted(prm, spec, arm, body, ctree, col=None):
             # stiff elbow glove sagged in the T-pose and stretched to 1.38)
             pin_mask[:] = True
         info["finger_verts"] = int((fg > 0.5).sum())
+    if kind == "trousers":
+        off = off + float(f["waist_extra_m"]) * (V[:, 2] > float(f["top_y"]) - float(f["band_m"]))
     if kind == "tights":
         off = off + float(f["band_extra_m"]) * tband(V)
         pin_mask = np.ones(len(V), bool)                # hosiery is a second skin: pinned whole
@@ -757,8 +890,19 @@ def build_fitted(prm, spec, arm, body, ctree, col=None):
         for _round in range(2):
             _umbrella(bm, MOLDED_PASSES if f.get("rigid_cups") else SMOOTH_PASSES["bra"], cm, boundary_only_along=True)
             _lay_out(bm, ctree, off, cm)
+    if kind == "trousers":
+        # the legs widened to the leg shape, then evened once more (the widening is a fan of radial moves: the
+        # evening rounds the knee's / the calf's rings into the tube) and laid out where the evening pulled one in
+        Vw, info["widen"] = trouser_widen(np.array([v.co for v in bm.verts]), f, tsides, cx)
+        for v, p in zip(bm.verts, Vw):
+            v.co = Vector(p)
+        if f.get("shape_r"):
+            _umbrella(bm, SMOOTH_PASSES["trousers"], movable)
+            _lay_out(bm, ctree, off, movable)
     V = np.array([v.co for v in bm.verts])
-    if kind == "briefs":
+    if kind == "trousers":
+        pin_mask = pins(V)
+    elif kind == "briefs":
         pin_mask = pins(V)
     elif kind == "bra":
         # the cups' rim is pinned as well (it holds the cut's line: an unpinned triangle rim stretched to 1.36)

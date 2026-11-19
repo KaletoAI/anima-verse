@@ -38,9 +38,8 @@ change then). A failed drape is recorded in ``templates/failed/`` and the piece
 is left off with its reason until Retry. 0 hub jobs; the only paid call is the
 one parameter suggestion.
 
-Kinds: ``skirt`` and ``dress`` are built in P1 (``BUILT_KINDS``); ``top``,
-``jacket`` and ``trousers`` are valid parameters already (the LLM may name
-them) and are left off with ``KIND_NOT_BUILT`` until their panels exist.
+Kinds: every kind of ``KINDS`` is built (``BUILT_KINDS``; A233 trousers last). A kind named but not built would
+be left off with ``KIND_NOT_BUILT``.
 """
 import hashlib
 import json
@@ -71,13 +70,15 @@ TASK = "garment_template_params"
 MAX_TOKENS = 400
 
 KINDS = ("skirt", "dress", "top", "jacket", "trousers", "briefs", "bra", "gloves", "tights")
-BUILT_KINDS = ("skirt", "dress", "top", "jacket", "briefs", "bra", "gloves", "tights")
+BUILT_KINDS = ("skirt", "dress", "top", "jacket", "trousers", "briefs", "bra", "gloves", "tights")
 #: A223: the close-fitting kinds — cut from the body's own surface (``fitted_spec``: a region of the plain body, laid
 #: out of it and relaxed by a short pinned cloth run), not wrapped from panel rows: briefs (waistband + gusset
 #: pinned), a bra (underband + straps pinned; molded cups are pinned whole = rigid) and gloves (the cuff and the hand
 #: pinned; the fingers are a tight overlay, never draped one by one). Chains, belts and jewellery are no part of the
 #: cut.
-FITTED_KINDS = ("briefs", "bra", "gloves", "tights")
+#: A233: trousers are cut the same way (the hips and both legs from the waistband to the hem), then widened round
+#: each leg's bone axis by the leg shape (``trouser_spec``).
+FITTED_KINDS = ("briefs", "bra", "gloves", "tights", "trousers")
 #: Kinds with a bodice over the shoulders (Ruling A142): built as a tube from the hem to the shoulder line, a yoke
 #: over the shoulders up to the neckline, armholes and sleeves (``bodice_spec``). A dress is one of them unless it is
 #: strapless. A221: a top may be strapless as well (bodice / bustier / corset: a tube pinned under the arms, built
@@ -161,6 +162,52 @@ TIGHTS_STYLES = ("tights", "hold_up", "thigh_high", "knee_high")
 TIGHTS_FEET = ("closed", "footless", "stirrup")
 GARTERS = ("none", "tabs")
 COLLARS = ("none", "stand", "lapel")
+# --- A233: trousers --------------------------------------------------------------------------------------------
+#: How far a trouser leg reaches: shorts (a third of the way from the crotch to the knee), knee, capri (mid-calf),
+#: ankle (above the ankle bone) or full (to the ankle joint, over the top of the shoe).
+TROUSER_LENGTHS = ("shorts", "knee", "capri", "ankle", "full")
+#: The hem height per length: ``(from, to, share, extra_m)`` = from + share x (to - from) + extra_m, the anchors read
+#: off the body per side (``crotch`` the lowest Hips-weighted point at the centre, ``knee`` / ``ankle`` the Leg /
+#: Foot joints). The builder computes the same sum (``garment_template_fitted.trouser_hem``).
+TROUSER_HEM = {"shorts": ("crotch", "knee", 0.3, 0.0), "knee": ("knee", "ankle", 0.06, 0.0),
+               "capri": ("knee", "ankle", 0.5, 0.0), "ankle": ("knee", "ankle", 0.85, 0.0),
+               "full": ("knee", "ankle", 1.0, -0.01)}
+#: Leg shapes. ``LEG_SHAPE_R`` = the leg's target radius round its bone axis at the knee and at the ankle, as shares
+#: of the thigh radius (read 3 cm under the crotch, with the ease): the cloth is widened to it where the leg is
+#: thinner (never pulled in), straight down from the crotch to the knee to the ankle. skinny = no widening (the leg
+#: plus the offset), flared = fitted to the knee (share 0: the leg itself) and wide at the hem.
+LEG_SHAPES = ("skinny", "straight", "wide", "flared", "cargo")
+LEG_SHAPE_R: Dict[str, Optional[Tuple[float, float]]] = {"skinny": None, "straight": (0.80, 0.75),
+                                                          "wide": (1.0, 1.15), "flared": (0.0, 1.10),
+                                                          "cargo": (0.95, 0.85)}
+#: The thigh radius's ease: x (1 + TROUSER_RADIAL_EASE x fit); the cloth's gap over the skin FITTED_OFFSET_M +
+#: TROUSER_FIT_M x fit (the seat and the hips too).
+TROUSER_RADIAL_EASE = 0.25
+TROUSER_FIT_M = 0.012
+#: The widening fades in over this far under the crotch (the seat keeps the body's shape).
+TROUSER_RAMP_M = 0.08
+#: A widened inner leg never crosses the body's centre plane closer than this (the two legs stay apart).
+TROUSER_CENTRE_GAP_M = 0.006
+#: The waist finish: an elastic band, a belt band (belt loops are the picture's) or none — its height (the pinned
+#: band, at least MIN_PIN_BAND_M) and how much thicker it lies.
+TROUSER_WAISTS = ("elastic", "belt", "none")
+TROUSER_WAIST_M = {"elastic": 0.03, "belt": 0.04, "none": 0.0}
+TROUSER_WAIST_EXTRA_M = {"elastic": 0.0015, "belt": 0.003, "none": 0.0}
+#: The fly is painted by the picture (no geometry): the field is for the dialog and the preview, never in the key.
+FLIES = ("none", "zip", "buttons")
+#: The hem: plain, cuffed (a turn-up TROUSER_CUFF_M high, TROUSER_CUFF_FOLD_M thicker) or a stirrup under the arch
+#: (skinny full-length only: leggings / ski pants).
+TROUSER_HEMS = ("plain", "cuffed", "stirrup")
+TROUSER_CUFF_M = 0.04
+TROUSER_CUFF_FOLD_M = 0.004
+#: A skinny leg is pinned at the hem as well, in a band this high (a stirrup: pinned whole, a second skin).
+TROUSER_HEM_PIN_M = 0.015
+#: The cloth frames of a trouser relax (a widened leg settles longer than a second skin).
+TROUSER_FRAMES = 20
+#: The fields only trousers read — out of every other piece's ``tsig`` (the existing keys stay).
+TROUSER_FIELDS = ("trouser_length", "leg_shape", "trouser_waist", "fly", "hem")
+#: The fields that change neither the drape nor the material (painted by the picture): never in ``tsig``.
+TEXTURE_ONLY = ("fly",)
 #: Fabric presets of the cloth run (Blender cloth settings). Stiff = holds a
 #: shape (denim, wool), medium = cotton, flowing = silk / chiffon / jersey.
 FABRICS: Dict[str, Dict[str, float]] = {
@@ -248,12 +295,19 @@ PARAM_SPEC: Dict[str, Tuple[str, Any, Any]] = {
     "tights_style": ("choice", TIGHTS_STYLES, "tights"),
     "feet": ("choice", TIGHTS_FEET, "closed"),
     "garters": ("choice", GARTERS, "none"),
+    # A233 trousers (with ``rise``, ``fit`` and ``fabric``)
+    "trouser_length": ("choice", TROUSER_LENGTHS, "full"),
+    "leg_shape": ("choice", LEG_SHAPES, "straight"),
+    "trouser_waist": ("choice", TROUSER_WAISTS, "belt"),
+    "fly": ("choice", FLIES, "zip"),
+    "hem": ("choice", TROUSER_HEMS, "plain"),
 }
 #: The fields that mean something per kind (the dialog shows these; ``validate_params`` resets the others to their
 #: defaults so a stale field never changes the drape key).
 KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
     "skirt": ("kind", "fabric", "opacity", "length_m", "flare", "waist_height", "slit", "slit_m"),
-    "trousers": ("kind", "fabric", "opacity", "length_m", "waist_height"),
+    "trousers": ("kind", "fabric", "opacity", "rise", "trouser_length", "leg_shape", "fit", "trouser_waist", "fly",
+                 "hem"),
     "dress": ("kind", "fabric", "opacity", "length_m", "flare", "waist_height", "slit", "slit_m", "shoulders", "sleeves",
               "sleeve_fit", "fit", "neckline", "neck_depth_m", *OFF_SHOULDER_FIELDS),
     "top": ("kind", "fabric", "opacity", "length_m", "shoulders", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m",
@@ -407,7 +461,8 @@ def shape_groups(params: Dict[str, Any], long_top: bool = False) -> List[Dict[st
 #: A223: the poses a fitted piece is measured in (briefs: the leg poses; a bra: the arm poses that pull the chest;
 #: gloves: the arm poses).
 FITTED_POSES = {"briefs": MEASURED_POSES, "bra": ("rest", "walk", "arms_down", "arms_up"),
-                "gloves": ("rest", "arms_down", "arms_forward", "arms_up"), "tights": MEASURED_POSES}
+                "gloves": ("rest", "arms_down", "arms_forward", "arms_up"), "tights": MEASURED_POSES,
+                "trousers": MEASURED_POSES}
 
 
 def measured_poses(params: Dict[str, Any]) -> Tuple[str, ...]:
@@ -436,7 +491,7 @@ PIN_BY_KIND = {"skirt": "waist", "trousers": "waist", "top": "shoulders", "jacke
 # --- reasons (Ruling A119: a piece not ready is left off, with its reason) -----------------------
 NEEDS_PARAMS = "Needs its template parameters — open Edit parameters (1 LLM call to suggest them)"
 NOT_DRAPED = "Not draped yet — Build drapes it (CPU, 0 hub jobs)"
-KIND_NOT_BUILT = "Template kind '{kind}' is not built yet (skirts, dresses, tops and jackets are) — choose another mode"
+KIND_NOT_BUILT = "Template kind '{kind}' is not built yet (every kind in the dialog is) — choose another mode"
 DRAPE_FAILED = "Drape failed: {error} — Retry in the Figure tab"
 NO_BASE = "No plain body model yet — build the plain body first"
 #: The reason of a drape whose Blender run ended retryable (``app.blender.outcome``): nothing judged the drape, so
@@ -599,6 +654,8 @@ def validate_params(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
             params["leg_cut"] = PARAM_SPEC["leg_cut"][2]
         else:
             params["fit"] = PARAM_SPEC["fit"][2]
+    if kind == "trousers":
+        _validate_trousers(params)
     if params["slit"] == "none":
         params["slit_m"] = 0.0
     elif params["slit_m"] <= 0.0:
@@ -607,12 +664,25 @@ def validate_params(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
     return params, errors
 
 
+def _validate_trousers(params: Dict[str, Any]) -> None:
+    """A233: a stirrup only under a skinny full-length leg (else the hem is plain)."""
+    if params["hem"] == "stirrup" and not (params["leg_shape"] == "skinny" and params["trouser_length"] == "full"):
+        params["hem"] = "plain"
+
+
+def tucked_into_shoes(params: Optional[Dict[str, Any]]) -> bool:
+    """A233: trousers whose leg goes into the shoe (``garment_set.under_footwear``: the shoe's body cut takes it in,
+    as hosiery) — a skinny full-length leg (leggings, skinny jeans, a stirrup). Every other leg hangs over the shoe."""
+    return bool(params) and params.get("kind") == "trousers" and params.get("leg_shape") == "skinny" \
+        and params.get("trouser_length") == "full"
+
+
 #: A172: the starting values of a kind that differ from ``PARAM_SPEC``'s (those are a skirt's) — what the dialog
 #: shows for a piece with no stored parameters and what a kind change resets to. Lengths are measured as in
 #: ``PARAM_SPEC`` (top / jacket from the shoulder line down: 0.6 m ends at the hip on the 1.70 m reference body).
 KIND_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "skirt": {},
-    "trousers": {"length_m": 1.0},
+    "trousers": {"fabric": "stiff"},
     "dress": {"length_m": 0.6, "shoulders": "straps"},
     "top": {"length_m": 0.6, "sleeves": "short", "fit": 0.4, "shoulders": "covered"},
     "jacket": {"length_m": 0.7, "sleeves": "long", "fit": 0.5, "collar": "lapel", "front": "open"},
@@ -1287,6 +1357,34 @@ def strap_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Optional[Dict[st
             "neck_y": round(meas["neck_y"] + NECK_SLICE_M, 4), "neck_r": round(neck_r, 4)}
 
 
+def trouser_hem(length: str, anchors: Dict[str, float]) -> float:
+    """A233: the hem height of a trouser leg (``TROUSER_HEM``) from its anchors ``{crotch, knee, ankle}`` (Y-up
+    metres): from + share x (to - from) + extra."""
+    a, b, share, extra = TROUSER_HEM[length]
+    return anchors[a] + share * (anchors[b] - anchors[a]) + extra
+
+
+def trouser_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
+    """A233 — the trouser part of ``fitted_spec``: ``top_y`` (the briefs' rise rule: the hip line + ``RISE_SHARE`` x
+    (waist - hip line)), the waist band (``TROUSER_WAIST_M``, pinned at least ``MIN_PIN_BAND_M``), the hem rule
+    (``TROUSER_HEM``: the builder reads the anchors off the body), the leg shape's radii (``LEG_SHAPE_R``) with the
+    ease, the cloth's gap (``FITTED_OFFSET_M`` + ``TROUSER_FIT_M`` x fit), the cuff / stirrup and the pins (the
+    waist band always; the hem too for a skinny leg or a stirrup)."""
+    top = meas["hip_y"] + RISE_SHARE[params["rise"]] * (meas["waist_y"] - meas["hip_y"])
+    waist = params["trouser_waist"]
+    skinny = params["leg_shape"] == "skinny"
+    return {"top_y": round(top, 4), "band_m": round(max(MIN_PIN_BAND_M, TROUSER_WAIST_M[waist]), 4),
+            "waist_extra_m": TROUSER_WAIST_EXTRA_M[waist], "length": params["trouser_length"],
+            "hem_rule": list(TROUSER_HEM[params["trouser_length"]]), "shape": params["leg_shape"],
+            "shape_r": list(LEG_SHAPE_R[params["leg_shape"]]) if LEG_SHAPE_R[params["leg_shape"]] else None,
+            "radial_ease": round(TROUSER_RADIAL_EASE * params["fit"], 4),
+            "offset_m": round(FITTED_OFFSET_M + TROUSER_FIT_M * params["fit"], 4),
+            "ramp_m": TROUSER_RAMP_M, "centre_gap_m": TROUSER_CENTRE_GAP_M, "hem": params["hem"],
+            "cuff_m": TROUSER_CUFF_M, "cuff_fold_m": TROUSER_CUFF_FOLD_M,
+            "hem_pinned": skinny or params["hem"] == "stirrup", "hem_pin_m": TROUSER_HEM_PIN_M,
+            "frames": TROUSER_FRAMES}
+
+
 def fitted_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
     """A223 — what the builder cuts a fitted piece from (``FITTED_KINDS``), glTF Y-up metres: ``{fitted: {kind, …},
     row_y: [top, bottom], outline, measure}``. The region is read off the plain body in Blender (its bones and
@@ -1296,6 +1394,7 @@ def fitted_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
       ``MIN_PIN_BAND_M``); ``leg_cut`` / ``back_coverage`` / ``side_width_m`` shape the leg openings (builder);
     * bra: ``under_y`` / ``bust_y`` (``_bust_lines``), the band ``band_m`` under the underbust line (``BACK_STRAP_M``
       round the back without one), the gore (``GORE``), ``push`` and the straps (``strap_spec``);
+    * trousers (A233): ``trouser_spec`` — the waistband, the hem rule, the leg shape's radii, the gap, the pins;
     * gloves: ``reach_m`` = how far the cuff reaches from the wrist up the arm (``GLOVE_REACH`` of the measured
       forearm / upper arm), the gap ``offset_m`` (``FITTED_OFFSET_M`` + ``GLOVE_FIT_M`` x fit), the cuff."""
     kind = params["kind"]
@@ -1317,6 +1416,9 @@ def fitted_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
                         "offset_m": round(FITTED_OFFSET_M + BOXER_FIT_M * params["fit"], 4),
                         "hem_pinned": params["fit"] <= BOXER_SNUG_FIT, "hem_pin_m": BOXER_HEM_PIN_M})
         rows = [round(top, 4), round(meas["hip_y"] - 0.2 - leg, 4)]
+    elif kind == "trousers":
+        fit.update(trouser_spec(params, meas))
+        rows = [fit["top_y"], round(meas.get("floor_y", 0.0), 4)]
     elif kind == "bra":
         under, bust = _bust_lines(meas)
         gore_half, gore_h = GORE[params["center_gore"]]
@@ -1412,7 +1514,9 @@ def _md5(payload: Any) -> str:
 
 def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List[str]) -> str:
     """The cache key of one drape (module docstring)."""
-    params = {k: v for k, v in params.items() if k not in MATERIAL_ONLY}
+    params = {k: v for k, v in params.items() if k not in MATERIAL_ONLY and k not in TEXTURE_ONLY}
+    if params.get("kind") != "trousers":                # A233: the trouser fields key only trousers
+        params = {k: v for k, v in params.items() if k not in TROUSER_FIELDS}
     if params.get("shoulders") != "off_shoulder":      # A229: the off-shoulder fields key only an off-shoulder piece
         params = {k: v for k, v in params.items() if k not in OFF_SHOULDER_FIELDS}
     if not params.get("leg_length_m"):                  # A232: a brief without legs keeps the key it had
