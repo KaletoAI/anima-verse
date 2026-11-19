@@ -78,8 +78,9 @@ DEFAULTS = {
     'head_bone': 'Head', 'neck_bone': 'Neck',
     # The ray grid around the head joint: half width, reach below and above it, steps.
     'grid': {'half_width': .06, 'below': .13, 'above': .10, 'step_s': .001, 'step_v': .0005},
-    # The chin's edge: ``chin_drop`` behind the nose tip and a step of ``chin_jump`` back within 2 mm of height.
-    'nose_window': [-.05, .08], 'chin_drop': .05, 'chin_jump': .02,
+    # The chin's edge: ``chin_drop`` behind the nose tip and a step of ``chin_jump`` back within 2 mm of height,
+    # searched within ``chin_reach`` below the first row past ``chin_drop`` (``mouth_math.chin_row``).
+    'nose_window': [-.05, .08], 'chin_drop': .05, 'chin_jump': .02, 'chin_reach': .03,
     'line': {'prior': .54, 'prior_sigma': .2, 'red_gain': 1., 'band': .008, 'span': .004, 'min_contrast': .03,
              'corner': .3, 'half_min': .015, 'half_max': .03},
     # The skin subdivided around the line: margin past the corners, height above and below, edge lengths.
@@ -131,7 +132,7 @@ def parameters(raw):
             raise ValueError('Expected finite number: ' + name)
         return value
     p = merge(DEFAULTS, raw or {}, 'params')
-    if min(p['depth'], p['radius'], p['chin_drop'], p['chin_jump'], *p['grid'].values()) <= 0:
+    if min(p['depth'], p['radius'], p['chin_drop'], p['chin_jump'], p['chin_reach'], *p['grid'].values()) <= 0:
         raise ValueError('Expected positive lengths')
     if min(v for k, v in p['patch'].items()) <= 0 or min(p['rings'].values()) <= 0 or p['rings']['growth'] < 1:
         raise ValueError('Expected positive patch and ring lengths, ring growth at least 1')
@@ -248,7 +249,8 @@ def measure(body, arm, P):
     band = max(1, int(round(.003 / g['step_s'])))
     column = np.nanmin(depth[:, max(0, nose_j - band):nose_j + band + 1], axis=1)
     chin_i = mouth_math.chin_row(column, nose_i, nose_y, P['chin_drop'], P['chin_jump'],
-                                 max(1, int(round(.002 / g['step_v']))))
+                                 max(1, int(round(.002 / g['step_v']))),
+                                 int(round(P['chin_reach'] / g['step_v'])))
     if chin_i is None:
         raise NoMouth('No chin edge below the nose')
     line = P['line']

@@ -248,16 +248,21 @@ def barycentric(p, a, b, c):
     return np.array([1. - wb - wc, wb, wc])
 
 
-def chin_row(column, nose_i, nose_y, drop, jump, rows_up):
+def chin_row(column, nose_i, nose_y, drop, jump, rows_up, reach_rows):
     """The chin's lower edge: the row index below the nose row ``nose_i`` (rows ascending in height, ``column`` the
-    face's depth per row, larger = further back, NaN = no face) where the face turns under. That is the first row
-    going down that lies ``drop`` behind the nose tip ``nose_y`` AND lies ``jump`` further back than the row
-    ``rows_up`` above it (the step from the chin's front to the throat), or has no face. A receding chin lies more
-    than ``drop`` behind the tip over its whole front (measured: 42-63 mm on one body): the first row past ``drop``
-    alone sat on the chin's front, 10 mm under the lips, and the lip line was searched above it (Ruling A208).
-    Without such a step the first row past ``drop`` (the rule before); None without either."""
+    face's depth per row, larger = further back, NaN = no face) where the face turns under.
+
+    Going down: ``first`` = the first row that lies ``drop`` behind the nose tip ``nose_y`` (the rule before). The
+    edge is the first row from there that lies ``jump`` further back than the row ``rows_up`` above it (the step from
+    the chin's front to the throat) or has no face — searched only within ``reach_rows`` below ``first``; without
+    one there, ``first``. A receding chin lies more than ``drop`` behind the tip over its whole front (measured:
+    42-63 mm on one body): ``first`` alone sat on the chin's front, 10 mm under the lips, and the lip line was
+    searched above it (Ruling A208). A face with no row past ``drop`` but a hole below the nose: that row; None
+    without either."""
     first = None
     for i in range(nose_i, -1, -1):
+        if first is not None and first - i > reach_rows:
+            return first
         d = column[i]
         if not np.isfinite(d):
             return i

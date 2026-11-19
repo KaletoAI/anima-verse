@@ -30,6 +30,8 @@ exported shares A=2/5, B=C=D=1/5 on all three copies. Thus the global
 changed-group count is FIVE, including the three groups with no chain weight.
 A separate already-agreeing crease retains its exported bytes. A variant
 with no contact and only agreeing copies must match pinned old export bytes.
+A cut mouth (a skin copy {Body1 1} and a copy on a face of material mouth_channel {Body2 1}, Ruling A208)
+is NOT unified: still five groups, both copies keep their weights; the same pair on another material is six.
 Checks also cover the 10 micrometre fixed epsilon, ring/axis eligibility,
 outside full-tube seeding, disabled following and deterministic input order.
 
@@ -171,7 +173,7 @@ def run(implementation,model,group,label,planner=None):
     assert data['status']=='applied', data
     return Path(outputs['model']),data['metrics'][group['id']],snapshot
 
-def analytic_fixture(noop=False):
+def analytic_fixture(noop=False,mouth=None):
     scope['_common'].reset_scene()
     data=bpy.data.armatures.new('AnchorRig'); arm=bpy.data.objects.new('AnchorRig',data)
     bpy.context.collection.objects.link(arm); bpy.context.view_layer.objects.active=arm
@@ -206,14 +208,24 @@ def analytic_fixture(noop=False):
                 {'Body1':.5,'Body4':.4375,'Body5':.0625})
         polygon([(.7,0,.04),(.7,-.002,.04),(.702,-.002,.04)],
                 {'Body3':.5,'Body4':.0625,'Body5':.4375})
+    pouch=None
+    if mouth:
+        # A cut mouth (Ruling A208): a lip copy on skin and the pouch's rim copy, split on purpose.
+        polygon([(.8,0,.04),(.802,0,.04),(.8,.002,.04)],{'Body1':1.})
+        polygon([(.8,0,.04),(.8,0,.042),(.802,0,.042)],{'Body2':1.})
+        pouch=len(faces)-1
     mesh_data=bpy.data.meshes.new('Surface'); mesh_data.from_pydata(points,[],faces); mesh_data.update()
+    if mouth:
+        mesh_data.materials.append(bpy.data.materials.new('skin'))
+        mesh_data.materials.append(bpy.data.materials.new(mouth))
+        mesh_data.polygons[pouch].material_index=1
     mesh=bpy.data.objects.new('Surface',mesh_data); bpy.context.collection.objects.link(mesh)
     mesh.modifiers.new('Skin','ARMATURE').object=arm
     for i,values in enumerate(initial):
         for name,value in values.items():
             vg=mesh.vertex_groups.get(name) or mesh.vertex_groups.new(name=name)
             vg.add([i],value,'REPLACE')
-    output=Path(job['out_dir'])/('noop.glb' if noop else 'crease.glb')
+    output=Path(job['out_dir'])/('noop.glb' if noop else (mouth+'.glb') if mouth else 'crease.glb')
     bpy.ops.export_scene.gltf(filepath=str(output),export_format='GLB',export_all_influences=False)
     return output
 
@@ -328,9 +340,20 @@ def analytic():
         old_noop,_,_=run(baseline,noop,group,'noop-old',planned)
         assert skin_bytes(current_noop)==skin_bytes(old_noop), 'no-op exported weights changed'
         assert noop_metrics['coincident_groups_unified']==0, noop_metrics
+        # The cut mouth stays split: the five groups above are unified, the lip/pouch pair at x=.8 keeps {Body1 1} and
+        # {Body2 1}. Control: the same pair on another material is an ordinary seam and is averaged (a sixth group).
+        mouthed=analytic_fixture(mouth='mouth_channel')
+        current_mouth,mouth_metrics,_=run(scope,mouthed,group,'mouth-current',planned)
+        _,control_metrics,_=run(scope,analytic_fixture(mouth='lining'),group,'mouth-control',planned)
+        assert mouth_metrics['coincident_groups_unified']==5, mouth_metrics
+        assert control_metrics['coincident_groups_unified']==6, control_metrics
+        scope['_common'].reset_scene(); scope['_common'].import_model(str(current_mouth))
+        _,_,mco,mweights=scene_data()
+        kept=sorted(tuple(sorted(mweights[i].items())) for i,v in enumerate(mco) if (v-Vector((.8,0,.04))).length<1e-7)
+        assert kept==[(('Body1',1.),),(('Body2',1.),)], ('mouth copies',kept)
         return {'analytic':True,'baseline_commit':job['params']['baseline_commit'],
                 'before':old_report,'after':report,'coincident_groups_unified':5,
-                'noop_bit_identical':True,'agreeing_group_unchanged':True}
+                'noop_bit_identical':True,'agreeing_group_unchanged':True,'mouth_split_kept':True}
     finally:
         scope['parameters']=saved; baseline['parameters']=old_saved
 
