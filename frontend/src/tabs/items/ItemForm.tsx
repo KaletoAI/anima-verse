@@ -114,7 +114,7 @@ function BodyUnderPieceFields({ draft, onUpdate }: {
           onCommit={value => onUpdate('motion_damping', value)} />
       </Field>}
       {liftDefault != null && <Field label={t('Lift')}
-        hint={t('How much this piece lifts the body under it in 3D: 0 none, 1 fully (no sag, rest angle raised to its limit). Empty uses the slot default shown; a partial cover counts half; the strongest worn piece wins. Takes effect without a model rebuild.')}>
+        hint={t('How much this piece lifts the body under it in 3D: 0 none, 1 fully (no sag, rest angle raised to its limit). Empty uses the slot default shown; a partial cover counts half; the strongest worn piece wins. Takes effect without a model rebuild. A garment-template top or dress with a lift above 0 also shapes the chest under it like a push-up or corset (lifted and gathered); changing the lift then re-drapes it with the next Build.')}>
         <LiftInput value={draft.lift} fallback={liftDefault} onCommit={value => onUpdate('lift', value)} />
       </Field>}
     </div>
