@@ -107,15 +107,16 @@ Geometry (the canvas of the former smoke_garment_ghost_pair.py), W 1024 x H 1200
       user's text, word for word (Ruling A57, no noun):
       "Remove the person completely, leaving only the clothes in the exact
       same position, pose, and shape as if worn by an invisible mannequin.
-      Reconstruct the inside of the collar, sleeves, and hem naturally, and
-      fill in the background behind the removed body parts seamlessly."
-    ghost back = that + " Seen from behind; the back view stays a back
-      view." (ruling 13e: a back names its side).
+      Reconstruct the inside of the collar, sleeves, and hem naturally."
+      + (A235) the green-screen line last: " Replace the entire background
+      with a flat, uniform bright green screen (#00FF00)."
+    ghost back = the text + " Seen from behind; the back view stays a back
+      view." (ruling 13e: a back names its side) + the green line.
     A waistband piece ("Grey Trousers", slots [bottom]): the user's text
       with "the collar, sleeves, and hem" -> "the waistband and the leg
       openings" ("… Reconstruct the inside of the waistband and the leg
       openings naturally, …"), then on the back the side sentence, then on
-      both " The empty garment keeps exactly the same spread and angle as in the image."
+      both " The empty garment keeps exactly the same spread and angle as in the image.", the green line last.
     negatives: worn = DRESS_GARMENT_NEGATIVE minus "dress" -> "loose
       clothing, baggy, skirt, jacket, shoes, socks, hair"; ghost = that +
       ", person, skin, head, arms, hands, legs, feet, mannequin, hanger".
@@ -226,19 +227,19 @@ W, H = 1024, 1200
 FRAGMENT = "a knee-length green linen dress with short sleeves."
 WORN_FRONT = ("Keep the image exactly as it is. Only change their clothing: they now wear only a knee-length "
               "green linen dress with short sleeves.")
+GREEN_SCREEN = " Replace the entire background with a flat, uniform bright green screen (#00FF00)."
 GHOST_PROMPT = ("Remove the person completely, leaving only the clothes in the exact same position, pose, and "
                 "shape as if worn by an invisible mannequin. Reconstruct the inside of the collar, sleeves, and "
-                "hem naturally, and fill in the background behind the removed body parts seamlessly.")
-GHOST_BACK_PROMPT = GHOST_PROMPT + " Seen from behind; the back view stays a back view."
+                "hem naturally." + GREEN_SCREEN)
+GHOST_BACK_PROMPT = GHOST_PROMPT[:-len(GREEN_SCREEN)] + " Seen from behind; the back view stays a back view." + GREEN_SCREEN
 TROUSERS_GHOST_FRONT = ("Remove the person completely, leaving only the clothes in the exact same position, pose, "
                         "and shape as if worn by an invisible mannequin. Reconstruct the inside of the waistband "
-                        "and the leg openings naturally, and fill in the background behind the removed body parts "
-                        "seamlessly. The empty garment keeps exactly the same spread and angle as in the image.")
+                        "and the leg openings naturally. The empty garment keeps exactly the same spread and angle "
+                        "as in the image." + GREEN_SCREEN)
 TROUSERS_GHOST_BACK = ("Remove the person completely, leaving only the clothes in the exact same position, pose, "
                        "and shape as if worn by an invisible mannequin. Reconstruct the inside of the waistband "
-                       "and the leg openings naturally, and fill in the background behind the removed body parts "
-                       "seamlessly. Seen from behind; the back view stays a back view. The empty garment keeps "
-                       "exactly the same spread and angle as in the image.")
+                       "and the leg openings naturally. Seen from behind; the back view stays a back view. The empty "
+                       "garment keeps exactly the same spread and angle as in the image." + GREEN_SCREEN)
 
 
 _OLD_GHOST_PROMPT = ("The same green dress alone, as if worn by an invisible person (ghost mannequin): no head, no "

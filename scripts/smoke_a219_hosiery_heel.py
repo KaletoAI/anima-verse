@@ -57,7 +57,7 @@ Expected values derived by hand:
      (commit baac1102c, the module read by ``git show`` and run on the same fixture: the pre-fix proof) left them at
      ±0.06; the gap a side 0.06 - 0.03 = 30 mm -> 10.9 mm. The fit is accepted, every cut gate 0 / ok, and the cut's
      footprint at the heel (cut-frame x <= 0.02 m) stands at ±0.040944 too — the cut and the walls agree.
-[S7] versions: ``garment_shell.SHELL_VERSION`` 7 (A219 set 5, A220 6, A226 7), ``footwear_fit.FOOTWEAR_FIT_VERSION`` 20.
+[S7] versions: ``garment_shell.SHELL_VERSION`` 8 (A219 set 5, A220 6, A226 7, A235 8), ``footwear_fit.FOOTWEAR_FIT_VERSION`` 20.
 """
 import subprocess
 import sys
@@ -242,7 +242,7 @@ _fit_old, half_old = heel_half(old)
 check("[S6] baac1102c: heel walls ±0.06 (the uniform factor)", half_old, 0.06, 2e-4)
 
 print("[S7] versions")
-check("[S7] SHELL_VERSION 7 (A226)", gs.SHELL_VERSION, 7)
+check("[S7] SHELL_VERSION 8 (A235)", gs.SHELL_VERSION, 8)
 check("[S7] FOOTWEAR_FIT_VERSION 20", ff.FOOTWEAR_FIT_VERSION, 20)
 
 print("ALL OK" if not fails else f"{len(fails)} FAILED: {fails}")
