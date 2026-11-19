@@ -7,7 +7,8 @@
  * +0 | +3 | +6 | +10 %" with the numbers it acts on and (Ruling A68) "Depth allowance: +0 | +3 | +6 | +10 %" — room
  * in front of and behind the trunk, no Auto. Each select SAVES on its own (POST
  * …/garments/{item}/fit-settings) and runs nothing; a fit made with other settings reads "Fit due — refits on the
- * CPU, 0 hub jobs" with its Re-fit beside it (the Figure tab: the next Build refits it).
+ * CPU, 0 hub jobs" with its Re-fit beside it (the Figure tab: the next Build refits it). A217: the placement
+ * correction (turn / shift) is shown as one line; it is set beside the Mesh view, where it previews live.
  */
 import { Fragment, useState } from 'react'
 import type { CSSProperties } from 'react'
@@ -16,6 +17,7 @@ import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { useClockSettings } from '../../lib/clockFormat'
 import { RunButton } from './GarmentSteps'
+import { TRANSFORM_KEYS, transformOf, transformText } from './fitWiden'
 import type { RunFeedback } from './useGarment'
 import type { GarmentRunBody } from './garmentStyle'
 import { StepLight } from './StepRows'
@@ -269,6 +271,22 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
       <span className="ga-hint" style={REASON} title={t(DEPTH_HINT)}>
         {info.recorded ? depthReason(info, t) : t('Auto never adds depth')}
       </span>
+      {info.transform ? (() => {
+        // A217: the placement correction is set beside the Mesh view (its sliders preview it live); shown here
+        const now = transformOf(values)
+        const made = info.recorded ? transformOf(info.recorded) : null
+        const differs = made && TRANSFORM_KEYS.some((k) => made[k] !== now[k])
+        return (
+          <>
+            <span>{t('Placement')}</span>
+            <span style={{ fontVariantNumeric: 'tabular-nums' }}>{transformText(now, t('none'))}</span>
+            <span className="ga-hint" style={REASON}>
+              {differs ? `${t('Shown fit')}: ${transformText(made, t('none'))} · ${t('Re-fit applies it (no hub job)')}`
+                : t('Set in the Mesh view (Body on): turn and shift, previewed live')}
+            </span>
+          </>
+        )
+      })() : null}
       {Object.keys(manual).length ? (
         <div style={SPAN}>
           <button type="button" className="ga-btn ga-btn-sm" disabled={busy || saving !== null}

@@ -5766,6 +5766,9 @@ def fit_settings_view(record: Dict[str, Any], current: Dict[str, Any], *, accept
         "arm_light": report.get("arm_light"),
         "numbers": numbers, "accepted": accepted,
         "shaft": shaft_view(record, current, item_id),
+        # A217: the placement correction's bounds (the values are in ``settings`` / ``recorded``)
+        "transform": {"rot_deg": garment_fit.TRANSFORM_ROT_LIMIT_DEG, "off_cm": garment_fit.TRANSFORM_OFF_LIMIT_CM,
+                      "step": garment_fit.TRANSFORM_STEP},
         "built_at": record.get("created_at") or ((record.get("attempt") or {}).get("at") if record else None),
         "choices": {"sleeves": list(garment_fit.SLEEVE_CHOICES), "allowance": list(garment_fit.ALLOWANCE_CHOICES),
                     "depth": list(garment_fit.DEPTH_CHOICES), "trunk": list(garment_fit.TRUNK_CHOICES)},

@@ -164,3 +164,68 @@ export function mmText(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return '–'
   return `${v < 0 ? '−' : ''}${Math.abs(v).toFixed(1)} mm`
 }
+
+/** A217 — the placement correction (`garment_fit.piece_transform`), in degrees about x / y / z and cm along x / y / z
+ *  of the body's frame (x to the right of the front view, y up, z forward). */
+export interface PieceTransform {
+  rot_x: number; rot_y: number; rot_z: number
+  off_x: number; off_y: number; off_z: number
+}
+export const TRANSFORM_KEYS = ['rot_x', 'rot_y', 'rot_z', 'off_x', 'off_y', 'off_z'] as const
+export type TransformKey = typeof TRANSFORM_KEYS[number]
+export const NO_TRANSFORM: PieceTransform = { rot_x: 0, rot_y: 0, rot_z: 0, off_x: 0, off_y: 0, off_z: 0 }
+
+/** `garment_fit.rotation_xyz`: Rz · Ry · Rx (the x turn first), right-hand rule, row-major 3 × 3. */
+export function rotationXyz(rxDeg: number, ryDeg: number, rzDeg: number): number[] {
+  const r = Math.PI / 180
+  const cx = Math.cos(rxDeg * r), sx = Math.sin(rxDeg * r)
+  const cy = Math.cos(ryDeg * r), sy = Math.sin(ryDeg * r)
+  const cz = Math.cos(rzDeg * r), sz = Math.sin(rzDeg * r)
+  return [
+    cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx,
+    sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx,
+    -sy, cy * sx, cy * cx,
+  ]
+}
+
+/** The correction applied to points of the SHOWN MESH's frame: the fit turns the placed piece about the centre of
+ *  its bounding box and shifts it in the body frame; the placement is a uniform scale `scale` plus an offset, so in
+ *  the mesh frame the same turn goes about `pivot` (`garment_mesh_view.transform_pivot_mesh`) and the shift is
+ *  cm / 100 / (k · scale) (`k` metres per body unit). */
+export function transformInPlace(xyz: Float32Array | Float64Array | number[], tr: PieceTransform,
+  pivot: [number, number, number], scale: number, k: number): void {
+  const R = rotationXyz(tr.rot_x, tr.rot_y, tr.rot_z)
+  const f = 1 / (100 * k * scale)
+  const sx = tr.off_x * f, sy = tr.off_y * f, sz = tr.off_z * f
+  for (let i = 0; i + 2 < xyz.length; i += 3) {
+    const x = xyz[i] - pivot[0], y = xyz[i + 1] - pivot[1], z = xyz[i + 2] - pivot[2]
+    xyz[i] = R[0] * x + R[1] * y + R[2] * z + pivot[0] + sx
+    xyz[i + 1] = R[3] * x + R[4] * y + R[5] * z + pivot[1] + sy
+    xyz[i + 2] = R[6] * x + R[7] * y + R[8] * z + pivot[2] + sz
+  }
+}
+
+/** Whether a correction changes anything. */
+export function transformActive(tr: PieceTransform | null | undefined): boolean {
+  return !!tr && TRANSFORM_KEYS.some((k) => tr[k] !== 0)
+}
+
+/** The correction of a settings object (`garment_fit.transform_values`; a missing value is 0). */
+export function transformOf(v: Partial<Record<TransformKey, number | undefined>> | null | undefined): PieceTransform {
+  const out = { ...NO_TRANSFORM }
+  for (const k of TRANSFORM_KEYS) {
+    const n = v?.[k]
+    out[k] = typeof n === 'number' && Number.isFinite(n) ? n : 0
+  }
+  return out
+}
+
+/** "x −7° · z +1° · y +2 cm" — the non-zero values, "none" without one. */
+export function transformText(tr: PieceTransform, none: string): string {
+  const parts: string[] = []
+  const sign = (v: number) => (v > 0 ? `+${v}` : `${v}`.replace('-', '−'))
+  for (const k of TRANSFORM_KEYS) {
+    if (tr[k] !== 0) parts.push(`${k.slice(-1)} ${sign(tr[k])}${k.startsWith('rot') ? '°' : ' cm'}`)
+  }
+  return parts.length ? parts.join(' · ') : none
+}

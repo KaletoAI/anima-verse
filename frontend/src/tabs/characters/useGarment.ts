@@ -164,7 +164,8 @@ export interface GarmentMeshBodyView {
   faces: number
   inside_faces: number
   bsig: string
-  placement: { scale: number; offset: [number, number, number]; k: number }
+  /** A217: `pivot` — the point the placement correction turns about, in the mesh frame (a view before it: none). */
+  placement: { scale: number; offset: [number, number, number]; k: number; pivot?: [number, number, number] }
   computed_at: string
   seconds: number
   ghost_url: string

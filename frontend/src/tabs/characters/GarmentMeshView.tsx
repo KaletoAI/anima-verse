@@ -21,6 +21,9 @@
  *   the share inside, the red faces and the gap to the body over the trunk follow it (the server's table per
  *   factor). Ruling A68: a second slider previews the depth allowance (`garment_fit.depth_shift`, ported as
  *   `easeInPlace`) with the gap front / back. Save stores the settable choices: the fit becomes due, nothing runs.
+ * - A217: the placement correction beside it (`TransformPanel`): turn the piece about x / y / z (±30°) and shift it
+ *   along x / y / z (±10 cm) in the body's frame; the shown mesh follows live (`transformInPlace`, the port of
+ *   `garment_fit.piece_transform`). Save / Discard / Reset; a save makes only the fit due (CPU, 0 hub jobs).
  * Nothing here spends a job.
  */
 import { useEffect, useMemo, useState } from 'react'
@@ -36,9 +39,10 @@ import { ALLOWANCE_CHOICES, ALLOWANCE_HINT, DEPTH_HINT, allowanceLabel } from '.
 import type { AllowanceChoice, DepthChoice, FitSettingsInfo } from './fitSettingsModel'
 import {
   autoFactor, choiceFactor, decodeMask, depthEase, depthGapsAt, depthText, easeInPlace, factorChoice, factorText,
-  maskBit, mmText, stepAt, widenInPlace,
+  maskBit, mmText, stepAt, widenInPlace, NO_TRANSFORM, TRANSFORM_KEYS, transformActive, transformInPlace, transformOf,
+  transformText,
 } from './fitWiden'
-import type { AllowanceView } from './fitWiden'
+import type { AllowanceView, PieceTransform, TransformKey } from './fitWiden'
 import { stampLabel } from './freshnessText'
 import { meshSnapshot } from './meshSnapshot'
 import { StepLight } from './StepRows'
@@ -453,6 +457,100 @@ function AllowancePanel({ allowance, table, factor, onFactor, choice, onChoice, 
   )
 }
 
+/** A217: what each placement slider moves, in the body's frame (x to the right of the front view, y up, z forward). */
+const TRANSFORM_ROWS: { key: TransformKey; label: string; hint: string }[] = [
+  { key: 'rot_x', label: 'Tilt (X)', hint: 'Turns the piece about the left–right axis: + leans its top forward, − back' },
+  { key: 'rot_y', label: 'Turn (Y)', hint: 'Turns the piece about the vertical axis: + turns its front to the right of the front view' },
+  { key: 'rot_z', label: 'Lean (Z)', hint: 'Turns the piece about the front–back axis: + raises its right side (right of the front view)' },
+  { key: 'off_x', label: 'Shift X', hint: 'Moves the piece to the right (+) or the left (−) of the front view' },
+  { key: 'off_y', label: 'Shift Y', hint: 'Moves the piece up (+) or down (−)' },
+  { key: 'off_z', label: 'Shift Z', hint: 'Moves the piece forward (+) or back (−)' },
+]
+const TRANSFORM_HINT = 'Corrects where the fit places this piece before it lays it onto the body: turns about its centre '
+  + 'and shifts in the body’s frame. Use it when the generated mesh sits skewed. A save makes only the fit due (CPU, 0 hub jobs).'
+
+/** A217: the placement correction beside the viewer — six sliders previewed live on the shown mesh, Save /
+ *  Discard / Reset, the saved values and whether the shown fit was made with them. */
+function TransformPanel({ allowance, draft, onDraft }: {
+  allowance: MeshAllowance
+  draft: PieceTransform
+  onDraft: (tr: PieceTransform) => void
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [saving, setSaving] = useState(false)
+  const info = allowance.info
+  const saved = transformOf(info.settings)
+  const made = info.recorded ? transformOf(info.recorded) : null
+  const rotLimit = info.transform?.rot_deg ?? 30
+  const offLimit = info.transform?.off_cm ?? 10
+  const step = info.transform?.step ?? 0.5
+  const change: Partial<PieceTransform> = {}
+  for (const k of TRANSFORM_KEYS) if (draft[k] !== saved[k]) change[k] = draft[k]
+  const changed = Object.keys(change).length > 0
+  const busy = saving || allowance.busy
+  const save = async () => {
+    if (!changed) return
+    setSaving(true)
+    try {
+      const d = await apiPost<{ fit_settings: FitSettingsInfo }>(
+        `/characters/${encodeURIComponent(allowance.character)}/garments/${encodeURIComponent(allowance.itemId)}/fit-settings`,
+        change)
+      toast(`${t('Saved')} · ${d.fit_settings.due ? t('Fit due — refits on the CPU, 0 hub jobs') : t('nothing becomes due')}`,
+        'success')
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setSaving(false)
+      allowance.onSaved()
+    }
+  }
+  const none = t('none')
+  return (
+    <div role="group" aria-label={t('Placement')} title={t(TRANSFORM_HINT)}
+      style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '6px 8px', borderRadius: 6,
+        border: '1px solid var(--border, #30363d)' }}>
+      <strong>{t('Placement')}</strong>
+      {TRANSFORM_ROWS.map(({ key, label, hint }) => {
+        const rot = key.startsWith('rot')
+        const limit = rot ? rotLimit : offLimit
+        const unit = rot ? '°' : ' cm'
+        return (
+          <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 6 }} title={t(hint)}>
+            <span className="ga-hint" style={{ width: 58 }}>{t(label)}</span>
+            <input type="range" min={-limit} max={limit} step={step} value={draft[key]} disabled={busy}
+              style={{ flex: '1 1 0', minWidth: 0 }} aria-label={t(label)} aria-valuetext={`${draft[key]}${unit}`}
+              data-transform-key={key}
+              onChange={(e) => onDraft({ ...draft, [key]: Number(e.target.value) })}
+              onDoubleClick={() => onDraft({ ...draft, [key]: 0 })} />
+            <span style={{ width: 50, textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+              fontWeight: draft[key] !== saved[key] ? 600 : undefined }}>
+              {`${draft[key] > 0 ? '+' : ''}${draft[key]}${unit}`}
+            </span>
+          </div>
+        )
+      })}
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        <button type="button" className={`ga-btn ga-btn-sm${changed ? ' ga-btn-primary' : ''}`} disabled={!changed || busy}
+          title={t('Saves the placement for this piece and runs nothing; the fit becomes due (0 hub jobs)')}
+          onClick={() => { void save() }}>{t('Save')}</button>
+        <button type="button" className="ga-btn ga-btn-sm" disabled={!changed || busy}
+          title={t('Back to the saved placement')} onClick={() => onDraft(saved)}>{t('Discard')}</button>
+        <button type="button" className="ga-btn ga-btn-sm" disabled={!transformActive(draft) || busy}
+          title={t('Sets every value to 0 (as generated); Save stores it')}
+          onClick={() => onDraft({ ...NO_TRANSFORM })}>↺ {t('Reset')}</button>
+      </div>
+      <span className="ga-hint" data-transform-saved="">{`${t('Saved')}: ${transformText(saved, none)}`}</span>
+      {made ? (
+        <span className="ga-hint">{`${t('Shown fit')}: ${transformText(made, none)}${
+          TRANSFORM_KEYS.some((k) => made[k] !== saved[k]) ? ` · ${t('Re-fit applies it (no hub job)')}` : ''}`}</span>
+      ) : null}
+      {changed ? <span className="ga-hint" style={{ color: 'var(--warning, #d29922)' }}>{t('Not saved yet')}</span> : null}
+      <span className="ga-hint">{t('The share inside and the red faces are measured without the placement; the fit measures it after.')}</span>
+    </div>
+  )
+}
+
 /** The viewer (a dialog over the piece dialog) with its switches beside it; "Larger view" grows the same viewer
  *  to about 90 % of the window (Esc or × back), so the toggles, the camera and the pose stay as they are. */
 export function GarmentMeshViewer({ sources, initial, pieceName, onClose, initialWhich = 'prepared',
@@ -487,6 +585,11 @@ export function GarmentMeshViewer({ sources, initial, pieceName, onClose, initia
     ? autoFactor(allowance?.info) ?? 1 : choiceFactor(savedChoice) ?? 1))
   // Ruling A68: the depth allowance previewed (a settable choice; Auto never adds depth).
   const [depth, setDepth] = useState<DepthChoice>(allowance?.info.settings.depth ?? 0)
+  // A217: the placement correction previewed (the draft; Save stores it). A changed saved value resets the draft.
+  const savedTransform = transformOf(allowance?.info.settings)
+  const savedTransformKey = TRANSFORM_KEYS.map((k) => savedTransform[k]).join(',')
+  const [transform, setTransform] = useState<PieceTransform>(savedTransform)
+  useEffect(() => { setTransform(transformOf(allowance?.info.settings)) }, [savedTransformKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -524,10 +627,19 @@ export function GarmentMeshViewer({ sources, initial, pieceName, onClose, initia
   const bit = table ? maskBit(table.factors, factor) : -1
   const axis = table?.axis
   const ease = depthEase(axis, depth)
-  const deform = useMemo<ViewerDeform | null>(() => (axis && (Math.abs(factor - 1) > 1e-9 || ease !== 0) ? {
-    key: `${view?.key}:${factor}:${depth}`,
-    map: (xyz: Float32Array) => { widenInPlace(xyz, factor, axis); easeInPlace(xyz, ease, axis) },
-  } : null), [axis, factor, depth, ease, view?.key])
+  const pivot = view?.placement?.pivot
+  const scale = view?.placement?.scale ?? 1
+  const kM = view?.placement?.k ?? 1
+  const turn = pivot && transformActive(transform) ? transform : null
+  const transformKey = TRANSFORM_KEYS.map((k) => transform[k]).join(',')
+  // A217: the fit turns / shifts the placed piece first, then widens it (`garment_fit.fit_clothing`).
+  const deform = useMemo<ViewerDeform | null>(() => ((axis && (Math.abs(factor - 1) > 1e-9 || ease !== 0)) || turn ? {
+    key: `${view?.key}:${factor}:${depth}:${transformKey}`,
+    map: (xyz: Float32Array) => {
+      if (turn && pivot) transformInPlace(xyz, turn, pivot, scale, kM)
+      if (axis) { widenInPlace(xyz, factor, axis); easeInPlace(xyz, ease, axis) }
+    },
+  } : null), [axis, factor, depth, ease, view?.key, transformKey]) // eslint-disable-line react-hooks/exhaustive-deps
   const step = stepAt(table, factor)
 
   const companions: ViewerCompanion[] = []
@@ -633,6 +745,9 @@ export function GarmentMeshViewer({ sources, initial, pieceName, onClose, initia
             {table && allowance ? (
               <AllowancePanel allowance={allowance} table={table} factor={factor} onFactor={setFactor}
                 choice={choice} onChoice={setChoice} depth={depth} onDepth={setDepth} shown={shown} />
+            ) : null}
+            {allowance && view?.placement?.pivot ? (
+              <TransformPanel allowance={allowance} draft={transform} onDraft={setTransform} />
             ) : null}
             <div className="ga-hint" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               <span>{`${t('Triangles')} ${file.tris?.toLocaleString() ?? '–'}`}</span>

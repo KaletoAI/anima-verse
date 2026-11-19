@@ -3849,6 +3849,70 @@ DEPTH_CHOICES: Tuple[int, ...] = (-10, -6, -3, 0, 3, 6, 10, 15, 20)
 DEPTH_RAMP = 0.03
 
 
+#: A217 — the manual placement correction of a clothing piece (``garment_fit_settings``: ``rot_x`` / ``rot_y`` /
+#: ``rot_z`` degrees, ``off_x`` / ``off_y`` / ``off_z`` cm). The placement trusts the mesher's axes: the framing maps x
+#: and y through the front view and the depth band sets z, but nothing in a front view shows a turn about x (a piece
+#: whose top leans forward or back) or about y — Lirien's leather top ``item_c7760b7c`` (UniForge3D multiview) lands
+#: with its trunk's centre line 7.3 deg off the body's (top forward), 1.2 deg about z, 0.5 deg about y. The
+#: correction turns the PLACED piece about the centre of its bounding box (body frame: x to the right of the front
+#: view, y up, z forward; right-hand rule, the x turn first, then y, then z) and shifts it, before the push-out — so
+#: the push, the allowance, the transfer and the gates all work on the corrected piece.
+TRANSFORM_ROT_KEYS: Tuple[str, ...] = ("rot_x", "rot_y", "rot_z")
+TRANSFORM_OFF_KEYS: Tuple[str, ...] = ("off_x", "off_y", "off_z")
+TRANSFORM_KEYS: Tuple[str, ...] = TRANSFORM_ROT_KEYS + TRANSFORM_OFF_KEYS
+#: |degrees| of a turn and |cm| of a shift; values are kept to ``TRANSFORM_STEP``.
+TRANSFORM_ROT_LIMIT_DEG = 30.0
+TRANSFORM_OFF_LIMIT_CM = 10.0
+TRANSFORM_STEP = 0.5
+
+
+def transform_values(settings: Optional[Dict[str, Any]]) -> Dict[str, float]:
+    """The six correction values of ``settings`` (A217): a missing, non-numeric or out-of-range value is 0, every
+    value rounded to ``TRANSFORM_STEP``."""
+    out: Dict[str, float] = {}
+    raw = settings if isinstance(settings, dict) else {}
+    for key in TRANSFORM_KEYS:
+        value = raw.get(key)
+        limit = TRANSFORM_ROT_LIMIT_DEG if key in TRANSFORM_ROT_KEYS else TRANSFORM_OFF_LIMIT_CM
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) \
+                or abs(value) > limit:
+            out[key] = 0.0
+        else:
+            out[key] = float(round(value / TRANSFORM_STEP) * TRANSFORM_STEP) + 0.0
+    return out
+
+
+def rotation_xyz(rx_deg: float, ry_deg: float, rz_deg: float) -> np.ndarray:
+    """``Rz @ Ry @ Rx`` (the x turn first), right-hand rule — the matrix ``fitWiden.ts`` ``transformInPlace`` ports."""
+    ax, ay, az = (math.radians(v) for v in (rx_deg, ry_deg, rz_deg))
+    cx, sx, cy, sy, cz, sz = math.cos(ax), math.sin(ax), math.cos(ay), math.sin(ay), math.cos(az), math.sin(az)
+    Rx = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]])
+    Ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]])
+    Rz = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]])
+    return Rz @ Ry @ Rx
+
+
+def transform_pivot(Q: np.ndarray) -> np.ndarray:
+    """The point the correction turns about: the centre of the placed piece's bounding box."""
+    Q = np.asarray(Q, np.float64)
+    return (Q.min(0) + Q.max(0)) / 2.0
+
+
+def piece_transform(Q: np.ndarray, settings: Optional[Dict[str, Any]], *, k: float
+                    ) -> Tuple[np.ndarray, Optional[Dict[str, Any]]]:
+    """A217: the placed piece ``Q`` (unrigged body units, ``k`` metres per unit) turned about ``transform_pivot`` and
+    shifted by the correction of ``settings`` -> ``(Q', report)``; ``(Q, None)`` unchanged when every value is 0."""
+    v = transform_values(settings)
+    if not any(v.values()):
+        return Q, None
+    Q = np.asarray(Q, np.float64)
+    pivot = transform_pivot(Q)
+    R = rotation_xyz(v["rot_x"], v["rot_y"], v["rot_z"])
+    shift = np.array([v["off_x"], v["off_y"], v["off_z"]]) / 100.0 / k
+    out = (Q - pivot) @ R.T + pivot + shift
+    return out, {**v, "pivot_m": [round(float(c) * k, 4) for c in pivot]}
+
+
 def depth_choice(settings: Optional[Dict[str, Any]]) -> int:
     """The depth allowance of a piece's fit settings (``depth``): a percent of ``DEPTH_CHOICES`` (a missing or
     unknown value is 0)."""
@@ -4208,6 +4272,8 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
 
     Q = place_by_framing(Pk, body_u.positions, body_mask, garment_mask)
     Q, dz = align_band_depth(Q, body_u.positions, height_u=height_u)
+    # A217: the manual placement correction (turn + shift in the body's frame) — before everything that measures it.
+    Q, transform_report = piece_transform(Q, settings, k=k)
     # A177: a boot past the knee — the push gates leave out its shoe part (and, cut, the dropped shaft):
     # ``garment_shaft.push_exempt``.
     from app.core import garment_shaft
@@ -4359,6 +4425,9 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
     result.report["arm_light"] = arm_light(skin)
     result.report["fit_settings"] = {"sleeves_left": choices["left"], "sleeves_right": choices["right"],
                                      "allowance": allowance, "depth": depth, "trunk": trunk}
+    result.report["transform"] = transform_report
+    for key in TRANSFORM_KEYS:
+        result.report["fit_settings"][key] = transform_values(settings)[key]
     result.report["depth"] = {"setting": depth, "ease_mm": round(room_u[0][1] * k * 1000.0, 1),
                               "half_depth_mm": round(half_depth * k * 1000.0, 1),
                               "inherited": bool(torso_source and depth)}

@@ -2125,6 +2125,14 @@ class GarmentFitSettingsRequest(BaseModel):
     shell_fill: Any = None
     # A185: the shell piece's left / right piece-only views are made and read (bool)
     shell_sides: Any = None
+    # A217: the placement correction — degrees turned about x / y / z, cm shifted along x / y / z (body frame;
+    # garment_fit.TRANSFORM_ROT_LIMIT_DEG / TRANSFORM_OFF_LIMIT_CM, steps of TRANSFORM_STEP)
+    rot_x: Any = None
+    rot_y: Any = None
+    rot_z: Any = None
+    off_x: Any = None
+    off_y: Any = None
+    off_z: Any = None
 
 
 class PieceViewSourceRequest(BaseModel):
@@ -3058,7 +3066,8 @@ def set_character_garment_fit_settings(character_name: str, item_id: str, body: 
     (auto / generated / wider / fitted), ``allowance`` (auto / 0 / 3 / 6 / 10, percent of width) and ``depth``
     (Ruling A68: 0 / 3 / 6 / 10, percent of the torso's half depth, added after the push-out) and ``trunk``
     (Ruling A83: auto / generated / fitted — the trunk laid onto the body) and ``shaft`` (Ruling A122: split / cut, a piece
-    on the feet and the legs), stored on the character
+    on the feet and the legs) and the placement correction (A217: ``rot_x`` / ``rot_y`` / ``rot_z`` degrees,
+    ``off_x`` / ``off_y`` / ``off_z`` cm in the body's frame), stored on the character
     (``garment_fit_settings.set_fit_settings``). Runs nothing: a fit made with other settings reads due and the next
     run refits it on the CPU (no hub job). ``{fit_settings}`` — ``garments.fit_settings_info`` now.
     Admin-only. 404 for an item that is no clothing garment of the character, 400 for a bad value."""

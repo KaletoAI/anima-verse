@@ -100,6 +100,14 @@ export interface FitSettingsValues {
   shell_fill?: number
   /** A185: "Side views for the shell" — left / right piece-only views made and read by the shell. */
   shell_sides?: boolean
+  /** A217: the placement correction — degrees about x / y / z, cm along x / y / z (body frame); a server before it
+   *  sends none (= 0). */
+  rot_x?: number
+  rot_y?: number
+  rot_z?: number
+  off_x?: number
+  off_y?: number
+  off_z?: number
 }
 /** A166/A184: one shell setting — the setting, the shown fit's (null: no shell fit), the choices. */
 export interface ShellChoice { setting: number; made: number | null; choices: number[]; default: number }
@@ -107,14 +115,15 @@ export interface ShellChoice { setting: number; made: number | null; choices: nu
 /** A166: the automatic fit (server `garment_fit_settings.defaults`, the mesh shape aside — it has its own control). */
 export const FIT_AUTOMATIC: Omit<FitSettingsValues, 'mesh_shape'> = {
   sleeves_left: 'auto', sleeves_right: 'auto', allowance: 'auto', depth: 0, trunk: 'auto', shaft: 'split',
-  shaft_overlap: 10, body_overlap: 20 }
+  shaft_overlap: 10, body_overlap: 20, rot_x: 0, rot_y: 0, rot_z: 0, off_x: 0, off_y: 0, off_z: 0 }
 /** A166: the settings that differ from the automatic fit (the mesh shape aside); {} when none. */
 export function manualFitChanges(v: FitSettingsValues): Partial<FitSettingsValues> {
   const out: Partial<FitSettingsValues> = {}
   for (const [k, auto] of Object.entries(FIT_AUTOMATIC) as [keyof typeof FIT_AUTOMATIC, unknown][]) {
     const now = k === 'shaft' ? (v.shaft ?? 'split') : k === 'shaft_overlap' ? (v.shaft_overlap ?? 10)
       : k === 'body_overlap' ? (v.body_overlap ?? 20)
-      : k === 'depth' ? (v.depth ?? 0) : v[k]
+      : k === 'depth' ? (v.depth ?? 0)
+      : k.startsWith('rot_') || k.startsWith('off_') ? (v[k] ?? 0) : v[k]
     if (now !== auto) (out as Record<string, unknown>)[k] = auto
   }
   return out
@@ -207,6 +216,8 @@ export interface FitSettingsInfo {
   mesh_shape?: MeshShapeInfo
   /** Ruling A122: null / absent for every piece that is not on the feet and the legs. */
   shaft?: ShaftInfo | null
+  /** A217: the placement correction's bounds (|degrees|, |cm|, step); a server before it sends none. */
+  transform?: { rot_deg: number; off_cm: number; step: number }
   numbers: {
     deep_push_share?: number | null; torso_tight_share?: number | null; sleeve_shards?: number | null
     sleeve_skin_left_cm2?: number | null; sleeve_skin_right_cm2?: number | null; scale?: number | null

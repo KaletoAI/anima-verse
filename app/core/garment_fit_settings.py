@@ -33,12 +33,17 @@ made shape is not the current one is due (``changed``).
   ``garment_shell.FILL_CHOICES`` — cm² of an enclosed gap that is closed (default 2). Shell-mode pieces only.
 - ``shell_sides`` (A185, "Side views for the shell"): bool, default off — the shell piece gets left / right piece-only
   views and the shell reads them too. Shell-mode pieces only.
+- ``rot_x`` / ``rot_y`` / ``rot_z`` (A217, "Placement"): degrees the placed piece is turned about its centre in the
+  body's frame (|value| <= ``garment_fit.TRANSFORM_ROT_LIMIT_DEG``), ``off_x`` / ``off_y`` / ``off_z``: cm it is
+  shifted (|value| <= ``garment_fit.TRANSFORM_OFF_LIMIT_CM``); steps of ``garment_fit.TRANSFORM_STEP``, default 0
+  (``garment_fit.piece_transform``, before the push-out). Not for a shell (it is never placed).
 
 Stored on the character profile (``SETTINGS_KEY``: ``{item_id: {key: value}}``, only the values that differ from
 the defaults). Not part of the fingerprint: a change keeps every image and the mesh and only makes the fit due — the
 fit records the settings it was made with (``inputs.fit_settings``) and a fit made with others is ``stale``
 (``garments._fit_state`` / ``garments.body_fit_state``); the next run refits on the CPU, no hub job.
 """
+import math
 from typing import Any, Dict, Optional
 
 #: Profile key of the per-piece fit settings: ``{item_id: {sleeves_left, sleeves_right, allowance, depth, trunk,
@@ -50,7 +55,8 @@ SIDES = ("left", "right")
 def defaults() -> Dict[str, Any]:
     from app.core.garment_shell import FILL_DEFAULT, MARGIN_DEFAULT, SHELL_OFFSET_DEFAULT
     return {"shell_sides": False, "shell_margin": MARGIN_DEFAULT, "shell_fill": FILL_DEFAULT, "sleeves_left": "auto", "sleeves_right": "auto", "allowance": "auto", "depth": 0, "trunk": "auto",
-            "shaft": "split", "shaft_overlap": 10, "body_overlap": 20, "shell_offset": SHELL_OFFSET_DEFAULT}
+            "shaft": "split", "shaft_overlap": 10, "body_overlap": 20, "shell_offset": SHELL_OFFSET_DEFAULT,
+            **{key: 0.0 for key in TRANSFORM_KEYS}}
 
 
 def normalise(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -74,6 +80,7 @@ def normalise(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     out["shell_margin"] = garment_shell.shell_margin_choice(raw)
     out["shell_fill"] = garment_shell.shell_fill_choice(raw)
     out["shell_sides"] = garment_shell.shell_sides_choice(raw)
+    out.update(garment_fit.transform_values(raw))
     return out
 
 
@@ -136,7 +143,9 @@ def changed(record: Optional[Dict[str, Any]], profile: Optional[Dict[str, Any]],
 
 #: Settings a shell-mode fit never reads (``garment_shell``: no placement, no push, no allowance, no shaft split).
 NOT_FOR_SHELL = ("sleeves_left", "sleeves_right", "allowance", "depth", "trunk", "shaft", "shaft_overlap",
-                 "body_overlap")
+                 "body_overlap", "rot_x", "rot_y", "rot_z", "off_x", "off_y", "off_z")
+#: A217: the placement correction keys (``garment_fit.TRANSFORM_KEYS``; kept here so the module imports nothing).
+TRANSFORM_KEYS = ("rot_x", "rot_y", "rot_z", "off_x", "off_y", "off_z")
 
 
 def validate(changes: Dict[str, Any]) -> Dict[str, Any]:
@@ -201,6 +210,17 @@ def validate(changes: Dict[str, Any]) -> Dict[str, Any]:
             if not isinstance(value, bool):
                 raise ValueError("shell_sides must be true or false")
             out[key] = value
+        elif key in TRANSFORM_KEYS:
+            rot = key.startswith("rot_")
+            limit = garment_fit.TRANSFORM_ROT_LIMIT_DEG if rot else garment_fit.TRANSFORM_OFF_LIMIT_CM
+            unit = "degrees" if rot else "cm"
+            if (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
+                    or abs(value) > limit):
+                raise ValueError(f"{key} must be a number of {unit} from {-limit:g} to {limit:g}")
+            step = garment_fit.TRANSFORM_STEP
+            if abs(value / step - round(value / step)) > 1e-6:
+                raise ValueError(f"{key} must be a multiple of {step:g} {unit}")
+            out[key] = float(round(value / step) * step) + 0.0
         elif key == "trunk":
             if not isinstance(value, str) or value not in garment_fit.TRUNK_CHOICES:
                 raise ValueError(f"trunk must be one of {', '.join(garment_fit.TRUNK_CHOICES)}")

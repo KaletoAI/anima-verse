@@ -79,8 +79,9 @@ WHICH: Tuple[str, ...] = ("prepared", "raw", "shell")
 OVERLAYS: Tuple[str, ...] = ("ghost", "inside")
 #: Stamped into the cache key: a change of the placement or the inside rule computes every view again
 #: (2: Ruling A48c, the allowance table and the union overlay; 3: Ruling A68, the depth frame and gaps; 4: Ruling A76,
-#: the choices up to +20 % — nine factors, two mask bytes per face).
-VIEW_VERSION = 4
+#: the choices up to +20 % — nine factors, two mask bytes per face; 5: A217, ``placement.pivot`` for the placement
+#: correction's preview).
+VIEW_VERSION = 5
 #: The ghost's colour (RGBA) and the inside faces' (the client draws them translucent / on top).
 GHOST_RGBA = [0.62, 0.70, 0.80, 1.0]
 INSIDE_RGBA = [0.97, 0.32, 0.29, 1.0]
@@ -258,6 +259,17 @@ def placement(P, F, body_P, masks) -> Tuple[float, np.ndarray]:
     s = float(np.ptp(Q[:, 1]) / span)
     t = Q.mean(0) - s * Pk.mean(0)
     return s, t
+
+
+def transform_pivot_mesh(P, F) -> list:
+    """A217: the point the fit's placement correction turns about (``garment_fit.transform_pivot`` of the placed
+    welded mesh without its crumbs), in the MESH's own frame — the placement is a uniform scale plus an offset, so it
+    is the bounding-box centre of that mesh here. The client turns the shown mesh about it (``fitWiden.ts``
+    ``transformInPlace``)."""
+    from app.core import garment_fit as gf
+    Pw, Fw, _inv = gf.weld(P, F)
+    Pk, _Fk, _keep = gf.drop_small(Pw, Fw)
+    return [float(v) for v in gf.transform_pivot(Pk if len(Pk) else np.asarray(P, np.float64))]
 
 
 def preview_depth_choices() -> Tuple[int, ...]:
@@ -536,7 +548,8 @@ def _compute(character_name: str, item_id: str, inputs: Dict[str, Any]) -> Dict[
                  "mask": base64.b64encode(bits.astype("<u2").tobytes()).decode("ascii")}
     result = {"key": inputs["key"], "share": round(share, 4), "face_share": round(face_share, 4),
               "faces": int(len(F)), "inside_faces": int(mask.sum()), "bsig": inputs["bsig"],
-              "placement": {"scale": s, "offset": [float(v) for v in t], "k": float(k)},
+              "placement": {"scale": s, "offset": [float(v) for v in t], "k": float(k),
+                            "pivot": transform_pivot_mesh(P, F)},
               "allowance": allowance,
               "sources": inputs.get("sources") or {},
               "computed_at": utc_now_iso(), "seconds": round(time.monotonic() - started, 2)}
