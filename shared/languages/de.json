@@ -6881,6 +6881,27 @@
     "Drag rotates the body, Shift+drag moves it. The dots are the piece for the values beside it, on the body's surface (the clothing under it is taken by Build); the 1.70 m figure gives the scale.": "Ziehen dreht den Körper, Shift+Ziehen verschiebt ihn. Die Punkte zeigen das Teil für die Werte daneben auf der Körperoberfläche (die Kleidung darunter berücksichtigt der Build); die 1,70-m-Figur gibt den Maßstab.",
     "Settings changed — Build makes it again on the CPU (0 hub jobs)": "Einstellungen geändert — Build macht es auf der CPU neu (0 Hub-Jobs)",
     "The clothing under it changed — Build fits it again on the CPU (0 hub jobs)": "Die Kleidung darunter hat sich geändert — Build passt es auf der CPU neu an (0 Hub-Jobs)",
-    "Kind, drop, material and pendant of this accessory, with a 3D view; the piece is made on the CPU (0 hub jobs), an item-image part is 1 hub job per item": "Art, Maße, Material und Bildteil dieses Accessoires, mit 3D-Ansicht; das Teil entsteht auf der CPU (0 Hub-Jobs), ein Teil aus dem Gegenstandsbild kostet 1 Hub-Job pro Gegenstand"
+    "Kind, drop, material and pendant of this accessory, with a 3D view; the piece is made on the CPU (0 hub jobs), an item-image part is 1 hub job per item": "Art, Maße, Material und Bildteil dieses Accessoires, mit 3D-Ansicht; das Teil entsteht auf der CPU (0 Hub-Jobs), ein Teil aus dem Gegenstandsbild kostet 1 Hub-Job pro Gegenstand",
+    "Shorts": "Shorts",
+    "To the knee": "Bis zum Knie",
+    "Capri (mid-calf)": "Capri (halbe Wade)",
+    "Ankle (cropped)": "Knöchellang (verkürzt)",
+    "Skinny": "Skinny",
+    "Cargo (loose)": "Cargo (weit)",
+    "Elastic band": "Gummibund",
+    "Belt band": "Bund mit Gürtelschlaufen",
+    "Zip": "Reißverschluss",
+    "Buttons": "Knöpfe",
+    "Plain": "Einfach",
+    "Cuffed (turn-up)": "Umgeschlagen (Aufschlag)",
+    "Straight leg": "Gerades Bein",
+    "Wide leg": "Weites Bein",
+    "Flared (bootcut)": "Ausgestellt (Bootcut)",
+    "Leg length": "Beinlänge",
+    "Leg shape": "Beinform",
+    "Fly (painted)": "Hosenschlitz (gemalt)",
+    "Hem": "Saum",
+    "Trousers are cut from the body from the waistband to the hem and widened round each leg by the leg shape. A skinny full-length leg goes into the shoe; every other leg hangs over it. The fly and belt loops come from the picture.": "Hosen werden vom Bund bis zum Saum aus dem Körper geschnitten und um jedes Bein nach der Beinform geweitet. Ein enges Bein in voller Länge steckt im Schuh, jedes andere fällt darüber. Hosenschlitz und Gürtelschlaufen kommen aus dem Bild.",
+    "Waist finish": "Bundabschluss"
   }
 }

@@ -24,7 +24,7 @@ import { thumbUrl, thumbWidth } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut, apiUpload } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { FITTED_KINDS, TEMPLATE_CHOICE_LABELS, TEMPLATE_DRAPE_FABRIC, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_LABELS, cm, choiceAllowed, corsetTop, hasBodice, offShoulder, lengthLabel, templateCost } from './figureModel'
+import { FITTED_KINDS, TEMPLATE_CHOICE_LABELS, choiceLabel, TEMPLATE_DRAPE_FABRIC, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_LABELS, cm, choiceAllowed, corsetTop, hasBodice, offShoulder, lengthLabel, templateCost } from './figureModel'
 import { TEMPLATE_STATE_COLOR, TEMPLATE_STATE_LABELS, failureLines, templateLiveText } from './figureModel'
 import { FailureDetails } from './BuildProblem'
 import type { TemplateFieldSpec, TemplateInfo, TemplateParams, TemplateProgress } from './figureModel'
@@ -144,7 +144,7 @@ const ORDER: (keyof TemplateParams)[] = ['kind', 'fabric', 'opacity', 'length_m'
   'sleeve_fit', 'front', 'collar',
   'rise', 'waistband', 'sides', 'string_width_m', 'leg_length_m', 'leg_cut', 'back_coverage', 'side_width_m',
   'cup_style', 'cup_coverage', 'push_up', 'underband_m', 'center_gore', 'closure', 'straps', 'fingers', 'length', 'cuff',
-  'tights_style', 'feet', 'garters']
+  'tights_style', 'feet', 'garters', 'trouser_length', 'leg_shape', 'trouser_waist', 'fly', 'hem']
 /** Fields shown as a 0…1 number rather than centimetres. */
 const SHARES = new Set<keyof TemplateParams>(['flare', 'fit', 'sleeve_fit', 'opacity', 'leg_cut', 'back_coverage', 'cup_coverage', 'push_up'])
 
@@ -313,7 +313,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                             onChange={(e) => set(key, e.target.value)}>
                             {f.choices.filter((c) => choiceAllowed(key, c, draft)).map((c) => (
                               <option key={c} value={c}>
-                                {t(TEMPLATE_CHOICE_LABELS[c] || c)}
+                                {t(choiceLabel(key, c))}
                                 {key === 'kind' && !data.built.includes(c) ? ` (${t('not built yet')})` : ''}
                               </option>
                             ))}
@@ -369,6 +369,9 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                 ) : null}
                 {FITTED_KINDS.includes(draft.kind) ? (
                   <div className="ga-hint">{t('A close-fitting piece is cut from the body itself and pinned at its bands — it has no length of its own.')}</div>
+                ) : null}
+                {draft.kind === 'trousers' ? (
+                  <div className="ga-hint">{t('Trousers are cut from the body from the waistband to the hem and widened round each leg by the leg shape. A skinny full-length leg goes into the shoe; every other leg hangs over it. The fly and belt loops come from the picture.')}</div>
                 ) : null}
                 {draft.kind === 'jacket' ? (
                   <div className="ga-hint">{t('A jacket is draped over the tops and dresses worn with it (built first).')}</div>

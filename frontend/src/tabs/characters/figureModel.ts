@@ -337,6 +337,13 @@ export interface TemplateParams {
   tights_style?: string
   feet?: string
   garters?: string
+  /** A233 trousers (with `rise`, `fit`, `fabric`): how far the leg reaches, the leg's shape, the waist finish, the
+   *  fly (painted by the picture) and the hem. */
+  trouser_length?: string
+  leg_shape?: string
+  trouser_waist?: string
+  fly?: string
+  hem?: string
   /** A229 off-shoulder (top / dress): the elastic band's height, how far it lies under the shoulder line, the front
    *  lacing and how deep it reaches. */
   band_m?: number
@@ -379,6 +386,8 @@ export function corsetTop(p: Pick<TemplateParams, 'kind' | 'shoulders'>): boolea
 export function choiceAllowed(key: keyof TemplateParams, choice: string, p: TemplateParams): boolean {
   if (key === 'neckline') return corsetTop(p) === STRAPLESS_NECKLINES.includes(choice)
   if (key === 'sleeves' && offShoulder(p)) return OFF_SHOULDER_SLEEVES.includes(choice)
+  // A233: a stirrup only under a skinny full-length leg (`garment_template._validate_trousers`)
+  if (key === 'hem' && choice === 'stirrup') return p.leg_shape === 'skinny' && p.trouser_length === 'full'
   return true
 }
 
@@ -426,6 +435,20 @@ export const TEMPLATE_CHOICE_LABELS: Record<string, string> = {
   sheer: 'Sheer (chiffon, voile)',
   leather_glossy: 'Leather (glossy)', leather_rough: 'Leather (rough)',
   fabric: 'Side panels', string: 'Thin bands (string, tanga)',
+  shorts: 'Shorts', knee: 'To the knee', capri: 'Capri (mid-calf)', ankle: 'Ankle (cropped)',
+  skinny: 'Skinny', cargo: 'Cargo (loose)', elastic: 'Elastic band', belt: 'Belt band', zip: 'Zip',
+  buttons: 'Buttons', plain: 'Plain', cuffed: 'Cuffed (turn-up)',
+}
+
+/** A233: a choice whose word differs by field (`full` is a glove's full fingers and a trouser's full length). */
+export const TEMPLATE_FIELD_CHOICE_LABELS: Partial<Record<keyof TemplateParams, Record<string, string>>> = {
+  trouser_length: { full: 'Full length' },
+  leg_shape: { straight: 'Straight leg', wide: 'Wide leg', flared: 'Flared (bootcut)' },
+}
+
+/** The word of a choice in a field. */
+export function choiceLabel(key: keyof TemplateParams, choice: string): string {
+  return TEMPLATE_FIELD_CHOICE_LABELS[key]?.[choice] || TEMPLATE_CHOICE_LABELS[choice] || choice
 }
 
 /** The parameter dialog's field labels. */
@@ -444,6 +467,7 @@ export const TEMPLATE_FIELD_LABELS: Record<keyof TemplateParams, string> = {
   tights_style: 'Style', feet: 'Foot', garters: 'Garters',
   band_m: 'Elastic band height', band_drop_m: 'Band below the shoulder line', lacing: 'Lacing',
   lace_depth_m: 'Lacing depth',
+  trouser_length: 'Leg length', leg_shape: 'Leg shape', trouser_waist: 'Waist finish', fly: 'Fly (painted)', hem: 'Hem',
 }
 
 /** A204: one line per fabric under the select — what the cloth does and what a switch costs. */
@@ -493,6 +517,12 @@ export function fittedSummary(p: TemplateParams, t: Tr = EN): string {
     if (p.feet && p.feet !== 'closed') parts.push(t(TEMPLATE_CHOICE_LABELS[p.feet] || p.feet))
     if (p.tights_style === 'thigh_high' && p.garters === 'tabs') parts.push(t('Garter tabs'))
   }
+  if (p.kind === 'trousers') {
+    parts.push(t(choiceLabel('trouser_length', p.trouser_length || 'full')))
+    parts.push(t(choiceLabel('leg_shape', p.leg_shape || 'straight')))
+    parts.push(t('{rise} rise').replace('{rise}', t(TEMPLATE_CHOICE_LABELS[p.rise || 'mid'] || p.rise || '')))
+    if (p.hem && p.hem !== 'plain') parts.push(t(choiceLabel('hem', p.hem)))
+  }
   if (p.kind === 'gloves') {
     parts.push(t(TEMPLATE_CHOICE_LABELS[p.fingers || 'full'] || p.fingers || ''))
     parts.push(t(TEMPLATE_CHOICE_LABELS[p.length || 'wrist'] || p.length || ''))
@@ -506,7 +536,7 @@ export function fittedSummary(p: TemplateParams, t: Tr = EN): string {
  *  parameters yet". */
 export function templateSummary(p: TemplateParams | null, t: Tr = EN): string {
   if (!p) return t('No parameters yet')
-  if (FITTED_KINDS.includes(p.kind)) return fittedSummary(p, t)
+  if (FITTED_KINDS.includes(p.kind) || p.kind === 'trousers') return fittedSummary(p, t)
   const parts = [t(TEMPLATE_CHOICE_LABELS[p.kind] || p.kind), cm(p.length_m)]
   if (!UPPER_KINDS.includes(p.kind)) parts.push(t('flare {n}').replace('{n}', String(p.flare)))
   if (hasBodice(p) && p.sleeves && p.sleeves !== 'none') {
