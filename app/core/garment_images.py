@@ -1999,7 +1999,14 @@ def cut_out(character_name: str, item_id: str, fsig: str, view: str, *, force: b
     data = ghost.read_bytes()
     with Image.open(io.BytesIO(data)) as im:
         rgb = im.convert("RGB")
-    alpha = _mask_image(data, rgb.size)
+    # A235: the ghost cut by ``garment_matte`` (backdrop key + the cached BiRefNet mask: enclosed backdrop gaps open,
+    # thin far-from-backdrop parts such as chains stay, rim un-mixed and despilled) — colours AND alpha
+    from app.core import garment_matte
+    soft = np.asarray(_mask_image(data, rgb.size), np.float64) / 255.0
+    rgba = np.dstack([np.asarray(rgb, np.uint8), np.full(soft.shape, 255, np.uint8)])
+    cut_px, matte_info = garment_matte.cut(rgba, matte=lambda _rgb: soft, keep_alpha=False)
+    rgb = Image.fromarray(np.ascontiguousarray(cut_px[..., :3]))
+    alpha = Image.fromarray(np.ascontiguousarray(cut_px[..., 3]))
     box = alpha.point(lambda v: 255 if v > CUTOUT_ALPHA_MIN else 0).getbbox()
     if box is None:
         raise ValueError(f"No {kind.SUBJECT} found in the ghost {view} image")
@@ -2044,11 +2051,18 @@ def cut_out(character_name: str, item_id: str, fsig: str, view: str, *, force: b
         "garment": {"item_id": item_id, "fsig": fsig, "step": "cutout", "view": view},
         "source": ghost.name, "source_sha256": file_sha256(ghost), **crop_record,
         "upscale": upscale, **({"colours": "reused"} if stored is not None else {}),
+        "matte_version": garment_matte.MATTE_VERSION, "matte": {k: matte_info.get(k) for k in ("mode", "bg",
+                                                                                               "holes_opened")},
         "opening": opening, "accepted": True, "created_at": utc_now_iso()})
     logger.info("Garment cut-out %s %s: side %d -> %d (%s%s), opening %s", character_name, view, side, final_side,
                 upscale.get("status"), ", colours reused" if stored is not None else "",
                 "cut" if opening.get("applied") else ("found, off" if opening.get("found") else "none"))
     return target
+
+
+def _matte_version() -> int:
+    from app.core.garment_matte import MATTE_VERSION
+    return MATTE_VERSION
 
 
 def _stored_colours(target: Path, ghost_bytes: bytes, bbox: List[int], side: int):
@@ -2063,7 +2077,8 @@ def _stored_colours(target: Path, ghost_bytes: bytes, bbox: List[int], side: int
     record = read_record(target.with_suffix(".json"))
     upscale = record.get("upscale") if isinstance(record.get("upscale"), dict) else {}
     if (record.get("source_sha256") != hashlib.sha256(ghost_bytes).hexdigest() or record.get("bbox") != bbox
-            or record.get("side") != side or upscale.get("status") not in ("applied", "not_needed")):
+            or record.get("side") != side or upscale.get("status") not in ("applied", "not_needed")
+            or record.get("matte_version") != _matte_version()):
         return None
     try:
         with Image.open(target) as im:

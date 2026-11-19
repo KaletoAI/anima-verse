@@ -43,10 +43,9 @@ JOBS_PER_VIEW = 2
 #: A SHEER piece's piece-only view: the fabric alone, so the bake never paints a body onto it.
 SHEER_LINE = ("Show the fabric alone, flat-lit, with nothing behind it but the backdrop and nothing "
               "showing through it: no legs, no body, no skin — a picture of the fabric only.")
-#: A230: every piece-only view asks for a green screen (the user's tested wording, hub job ec2f13b2) — the cut-out
-#: (``garment_matte.cut``) keys any flat backdrop, and green is the one no rim un-mix confuses with a light fabric.
-#: The text is no fingerprint input: stored views stay; a new one (Generate / Regenerate) gets it.
-GREEN_LINE = "Replace the entire background with a flat, uniform bright green screen (#00FF00)."
+#: A230: every piece-only view asks for a green screen — since A235 the line lives with the ghost texts
+#: (``garment_clothing.GREEN_LINE``) and ends every piece-only prompt, here after the sheer line.
+from app.core.garment_clothing import GREEN_LINE  # noqa: E402
 #: The back view of a template piece is made from the item picture (a front): turned around.
 BACK_LINE = "Turn the garment around and show its back, seen from behind."
 #: The extra negative of a sheer piece.
@@ -129,7 +128,7 @@ def prompt_for(item: Dict[str, Any], view: str) -> Tuple[str, str]:
     ``ghost_prompt`` of the ``outfit_piece``, the back's side line included), the turn-around line on the back, the
     fabric-only line for a sheer piece, the green-screen line last (A230)."""
     from app.core.garment_clothing import GHOST_NEGATIVE, ghost_prompt
-    parts = [ghost_prompt((item or {}).get("outfit_piece") or {}, view)]
+    parts = [ghost_prompt((item or {}).get("outfit_piece") or {}, view, green=False)]
     if view == "back":
         parts.append(BACK_LINE)
     negative = list(GHOST_NEGATIVE)

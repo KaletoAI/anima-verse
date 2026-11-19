@@ -26,10 +26,10 @@ from app.models.inventory import _clean_ghost_text  # noqa: E402
 
 FIRST = ("Remove the person completely, leaving only the clothes in the exact same position, pose, and shape "
          "as if worn by an invisible mannequin.")
-COLLAR = FIRST + (" Reconstruct the inside of the collar, sleeves, and hem naturally, and fill in the background "
-                  "behind the removed body parts seamlessly.")
-WAIST = FIRST + (" Reconstruct the inside of the waistband and the leg openings naturally, and fill in the "
-                 "background behind the removed body parts seamlessly.")
+# A235: "fill in the background ... seamlessly" gave way to the green-screen line, last on every view (GREEN below)
+COLLAR = FIRST + " Reconstruct the inside of the collar, sleeves, and hem naturally."
+WAIST = FIRST + " Reconstruct the inside of the waistband and the leg openings naturally."
+GREEN = " Replace the entire background with a flat, uniform bright green screen (#00FF00)."
 SIDE = " Seen from behind; the back view stays a back view."
 STANCE = " The empty garment keeps exactly the same spread and angle as in the image."
 
@@ -65,8 +65,9 @@ CASES = [
 ]
 for label, piece, cls, front, back in CASES:
     check(f"{label}: class", ghost_text_class(piece), cls)
-    check(f"{label}: front", ghost_prompt(piece, "front"), front)
-    check(f"{label}: back", ghost_prompt(piece, "back"), back)
+    check(f"{label}: front", ghost_prompt(piece, "front"), front + GREEN)
+    check(f"{label}: back", ghost_prompt(piece, "back"), back + GREEN)
+    check(f"{label}: front without green", ghost_prompt(piece, "front", green=False), front)
 
 check("clean: plain kept", _clean_ghost_text("plain"), "plain")
 check("clean: auto is no key", _clean_ghost_text("auto"), None)

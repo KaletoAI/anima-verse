@@ -44,7 +44,9 @@ from app.core.log import get_logger
 logger = get_logger("garment_matte")
 
 #: Bumped when the same picture cuts differently (part of ``garment_template.TEMPLATE_VERSION``'s reason, A230).
-MATTE_VERSION = 1
+#: 2 (A235): enclosed backdrop-coloured holes (the gap of a ring, between chain links) open instead of being filled;
+#: thin / near-edge parts are despilled, not only the rim.
+MATTE_VERSION = 2
 #: Width of the border band the backdrop colour is read from (px).
 BORDER_PX = 3
 #: Width of the transparent ring next to an already cut piece the backdrop colour is read from (px).
@@ -58,11 +60,19 @@ KEY_RAMP = 48.0
 #: A colour this far above the ramp's top is the piece whatever the matte says (a flat backdrop has no such colour).
 KEY_SURE = 40.0
 #: The matte alone decides when at least this share of its piece is key-background (piece = backdrop colour).
-LOW_CONTRAST = 0.25
+#: A235: 0.25 -> 0.03 — measured on stored ghost views: a grey cardigan on grey (0.20) and a wicker bandeau on grey
+#: (0.10) lost a third / a sixth of their fabric to the key under 0.25; the bra on green / white, a harness and a
+#: lace thong stay below 0.016 (``~/claude-out/a235/matte_measure.json``).
+LOW_CONTRAST = 0.03
 #: Holes inside the piece smaller than this share of it are filled (specks, a print of the backdrop's colour).
 HOLE_MAX = 0.002
 #: Components smaller than this share of the largest go (strays); a pair (gloves, shoes) keeps both.
 COMPONENT_MIN = 0.05
+#: A235: a hole inside the piece whose pixels are at least this share key-background (the backdrop's colour) is the
+#: backdrop seen through an opening — it opens whatever its size; the key-background pixels of a larger hole open too.
+HOLE_BACKDROP_SHARE = 0.5
+#: A235: the despill reaches this far (px) into the piece — thin parts (chains, straps, a dark rim) are all near an edge.
+DESPILL_PX = 6
 #: Inner rim band (px) whose colours are un-mixed from the backdrop.
 RIM_PX = 3
 #: The outermost px of the piece whose colours are replaced by the nearest colour further in.
@@ -75,6 +85,11 @@ UNMIX_MIN_CONTRAST = 30.0
 CHROMA_MIN = 40.0
 #: A pixel counts as backdrop-coloured (the metric ``backdrop_share``) within this distance of the backdrop.
 BACKDROP_NEAR = 40.0
+
+#: A235: the hue key of a chromatic backdrop: a pixel whose backdrop channel leads the other two by at least
+#: ``HUE_KEY_HI`` x the backdrop's own lead is backdrop, below ``HUE_KEY_LO`` x it the piece (a ramp between).
+HUE_KEY_HI = 0.6
+HUE_KEY_LO = 0.3
 
 MatteFn = Callable[[np.ndarray], Optional[np.ndarray]]
 
@@ -94,6 +109,20 @@ def birefnet_matte(rgb: np.ndarray) -> Optional[np.ndarray]:
     except Exception as e:  # noqa: BLE001 — the key alone then (documented fallback)
         logger.warning("Garment matte: BiRefNet failed, the backdrop key alone: %s", e)
         return None
+
+
+def _hue_key(rgb: np.ndarray, bg) -> Optional[np.ndarray]:
+    """A235: [0, 1] backdrop-ness by hue for a chromatic ``bg`` (``CHROMA_MIN``), None for a neutral one: the lead of
+    the backdrop's dominant channel over the other two, as a share of the backdrop's own lead, ramped from
+    ``HUE_KEY_LO`` to ``HUE_KEY_HI``."""
+    bg = np.asarray(bg, np.float64)
+    if float(bg.max() - bg.min()) < CHROMA_MIN:
+        return None
+    j = int(np.argmax(bg))
+    others = [i for i in range(3) if i != j]
+    lead_bg = float(bg[j] - bg[others].max())
+    lead = rgb[..., j] - rgb[..., others].max(-1)
+    return np.clip((lead / lead_bg - HUE_KEY_LO) / (HUE_KEY_HI - HUE_KEY_LO), 0.0, 1.0)
 
 
 def _border(rgb: np.ndarray, px: int = BORDER_PX) -> np.ndarray:
@@ -161,6 +190,13 @@ def cut(rgba: np.ndarray, *, matte: Optional[MatteFn] = birefnet_matte,
     dist = np.linalg.norm(rgb - bg, axis=-1)
     lo = max(KEY_LO, KEY_SPREAD * spread)
     k = np.clip((dist - lo) / KEY_RAMP, 0.0, 1.0)
+    k_dist = k
+    hue_bg = _hue_key(rgb, bg)
+    if hue_bg is not None:
+        # A235: a chromatic backdrop (the green screen) is keyed by its HUE too — its shadow in a ring's gap or
+        # between chain links is far from the lit backdrop by distance, yet as green as it
+        k = np.minimum(k, 1.0 - hue_bg)
+        dist = np.where(hue_bg >= 0.5, 0.0, dist)
     m = matte(np.clip(rgb, 0, 255).astype(np.uint8)) if matte is not None else None
     info: Dict[str, Any] = {"alpha": "kept" if kept else "border", "bg": [round(float(v), 1) for v in bg],
                             "spread": round(spread, 1), "matte_version": MATTE_VERSION}
@@ -169,7 +205,9 @@ def cut(rgba: np.ndarray, *, matte: Optional[MatteFn] = birefnet_matte,
     else:
         m = np.clip(np.asarray(m, np.float64), 0.0, 1.0)
         mat_fg = m >= 0.5
-        low = float((mat_fg & (k < 0.5)).sum() / max(1, mat_fg.sum()))
+        # the low-contrast share by DISTANCE: a hue-keyed gap (green between chain links) is no sign of a piece
+        # in the backdrop's colour
+        low = float((mat_fg & (k_dist < 0.5)).sum() / max(1, mat_fg.sum()))
         info["low_contrast"] = round(low, 3)
         if low >= LOW_CONTRAST:
             alpha, mode = m, "matte"
@@ -182,9 +220,20 @@ def cut(rgba: np.ndarray, *, matte: Optional[MatteFn] = birefnet_matte,
     info["mode"] = mode
     piece = alpha >= 0.5
     # holes: small ones filled (specks), large ones (an opening, the backdrop between straps) stay
+    # A235: enclosed backdrop (a ring's gap, between chain links): every key-background pixel enclosed by the piece
+    # that the matte or the soft key had called piece opens — the consensus's min / the sure-key override can enclose it
+    # (not when the matte alone decides: a white piece on white is all key-background)
+    enclosed_bg = ndimage.binary_fill_holes(piece) & (k < 0.5) if mode != "matte" else np.zeros_like(piece)
+    opened = int((enclosed_bg & piece).sum())
+    piece &= ~enclosed_bg
+    alpha = np.where(enclosed_bg, 0.0, alpha)
     holes = ndimage.binary_fill_holes(piece) & ~piece
     lab, n = ndimage.label(holes)
     filled = 0
+    if n and mode != "matte":
+        bgish = ndimage.mean((k < 0.5).astype(np.float64), lab, range(1, n + 1))
+        holes &= ~np.isin(lab, 1 + np.flatnonzero(np.asarray(bgish) >= HOLE_BACKDROP_SHARE))
+        lab, n = ndimage.label(holes)
     if n:
         sizes = ndimage.sum(holes, lab, range(1, n + 1))
         small = np.isin(lab, 1 + np.flatnonzero(sizes < HOLE_MAX * max(1, piece.sum())))
@@ -197,7 +246,7 @@ def cut(rgba: np.ndarray, *, matte: Optional[MatteFn] = birefnet_matte,
         keep = 1 + np.flatnonzero(sizes >= COMPONENT_MIN * sizes.max())
         piece = np.isin(lab, keep)
         n = len(keep)
-    info.update(holes_filled=filled, components=int(n))
+    info.update(holes_filled=filled, holes_opened=opened, components=int(n))
     if kept and piece.sum() < 0.7 * (a0 >= 128).sum():
         # the consensus lost too much of an already cut piece: its own alpha stands, only the colours are cleaned
         piece = a0 >= 128
@@ -222,10 +271,14 @@ def decontaminate(rgb: np.ndarray, alpha: np.ndarray, piece: np.ndarray, bg) -> 
     rim = piece & ~inner
     a = np.clip(alpha, 0.0, 1.0)
     soft = rim | (piece & (a < 0.999))
+    edge = soft
     if inner.any() and soft.any():
         # the rim's own coverage, measured against the nearest inner colour F: c = bg + t (F - bg); the colour
         # un-mixed is (c - (1 - t) bg) / t — the piece's colour without the backdrop share
-        _d, idx = ndimage.distance_transform_edt(~inner, return_indices=True)
+        dist_in, idx = ndimage.distance_transform_edt(~inner, return_indices=True)
+        # A235: only a rim next to its own inner part un-mixes — a thin part (a chain) far from any inner pixel
+        # would be un-mixed against another part's colour; it is despilled below instead
+        soft = soft & (dist_in <= 2 * RIM_PX)
         F = c[idx[0][soft], idx[1][soft]]
         d = F - bg
         dd = (d * d).sum(1)
@@ -242,15 +295,32 @@ def decontaminate(rgb: np.ndarray, alpha: np.ndarray, piece: np.ndarray, bg) -> 
         others = [i for i in range(3) if i != j]
         core = inner if inner.any() else piece
         med = np.median(c[core], 0)
-        if med[j] <= med[others].max():           # the piece is not of the backdrop's own colour: despill the rim
+        if med[j] <= med[others].max():           # the piece is not of the backdrop's own colour: despill
             lim = c[..., others].max(-1)
-            spill = soft & (c[..., j] > lim)
+            near_edge = piece & (ndimage.distance_transform_edt(piece) <= DESPILL_PX)
+            spill = (edge | near_edge) & (c[..., j] > lim)
             c[spill, j] = lim[spill]
     # the outer DROP_PX and the outside take the nearest colour further in
     core = ndimage.binary_erosion(piece, iterations=DROP_PX)
+    # A235: a thin part (a chain, a strap) has no core of its own — it keeps its own (un-mixed, despilled) colours
+    # instead of taking a far, thick part's
+    core |= piece & ~ndimage.binary_dilation(core, iterations=2 * DROP_PX)
     if not core.any():
         core = piece
     _d, idx = ndimage.distance_transform_edt(~core, return_indices=True)
     fill = ~core
     c[fill] = c[idx[0][fill], idx[1][fill]]
     return np.clip(np.rint(c), 0, 255).astype(np.uint8)
+
+
+def clean_colours(rgb, mask) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """A235: the colours of a piece-only view whose FOOTPRINT is set elsewhere (the shell's ghost mask — the geometry
+    stays as it is): ``cut`` with ``mask`` (bool / [0, 1], the view's stored BiRefNet mask) as the matte, so no
+    second BiRefNet run. Every pixel outside the cut's piece — the backdrop, a green fringe the mask took in, an
+    enclosed gap — takes the nearest piece colour; rim and thin parts are un-mixed and despilled. Returns the (h, w,
+    3) uint8 colours and the cut's ``info``."""
+    px = np.asarray(rgb)[..., :3]
+    m = np.clip(np.asarray(mask, np.float64), 0.0, 1.0)
+    rgba = np.dstack([np.clip(px, 0, 255).astype(np.uint8), np.full(px.shape[:2], 255, np.uint8)])
+    out, info = cut(rgba, matte=lambda _rgb: m, keep_alpha=False)
+    return out[..., :3], info

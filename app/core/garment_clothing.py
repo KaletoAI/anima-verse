@@ -89,8 +89,14 @@ WORN_CLOSED = ("worn closed, its fronts fastened together at the centre (buttone
 #: (bra back) and fb597ef6 (opera gloves back) used exactly it plus the side line.
 GHOST_PLAIN = ("Remove the person completely, leaving only the clothes in the exact same position, pose, and shape "
                "as if worn by an invisible mannequin.")
-GHOST = (GHOST_PLAIN + " Reconstruct the inside of the collar, sleeves, and hem "
-         "naturally, and fill in the background behind the removed body parts seamlessly.")
+#: A235: the user's "... and fill in the background behind the removed body parts seamlessly" gave way to the
+#: green-screen line (``GREEN_LINE``, last on EVERY piece-only view): a white backdrop left the anti-aliased rim and
+#: thin parts (chains) mixed with white and a green fringe where the edit model half-filled (hub job a2f585bf).
+GHOST = (GHOST_PLAIN + " Reconstruct the inside of the collar, sleeves, and hem naturally.")
+#: A230 / A235: the last line of every piece-only view (the user's tested wording, hub job ec2f13b2) — the cut-out
+#: (``garment_matte.cut``) keys any flat backdrop, and green is the one no rim un-mix confuses with a light fabric.
+#: The text is no fingerprint input: stored views stay; a new one (Generate / Regenerate) gets it.
+GREEN_LINE = "Replace the entire background with a flat, uniform bright green screen (#00FF00)."
 #: A waistband piece (``garment_gates.waistband_piece``, both views): its openings in place of the collar's.
 GHOST_WAISTBAND = GHOST.replace("the collar, sleeves, and hem", "the waistband and the leg openings")
 #: The ghost text classes (A183), ``ghost_text_class``: the stored choice ``outfit_piece.ghost_text`` when it names
@@ -356,19 +362,22 @@ def set_ghost_text(character_name: str, item_id: str, choice: str) -> Dict[str, 
     return ghost_text_info(saved if isinstance(saved, dict) else inventory.get_item(item_id) or {})
 
 
-def ghost_prompt(piece: Optional[Dict[str, Any]], view: str) -> str:
+def ghost_prompt(piece: Optional[Dict[str, Any]], view: str, *, green: bool = True) -> str:
     """The ghost prompt of an ``outfit_piece`` for ``view`` (Ruling A57, A183):
     the user's text of the piece's class (``ghost_text_class``: ``GHOST``,
     ``GHOST_WAISTBAND`` or ``GHOST_PLAIN``), then the side on a back
     (``GHOST_SIDE``), then the stance of a waistband piece
-    (``GHOST_STANCE``). The text is no fingerprint input: changing it ages
-    no stored view."""
+    (``GHOST_STANCE``), then (A235) the green screen (``GREEN_LINE``) unless
+    ``green`` is False (a caller that adds lines of its own puts it last). The
+    text is no fingerprint input: changing it ages no stored view."""
     cls = ghost_text_class(piece)
     parts = [GHOST_TEXTS[cls]]
     if view in GHOST_SIDE:
         parts.append(GHOST_SIDE[view])
     if cls == "waistband":
         parts.append(GHOST_STANCE)
+    if green:
+        parts.append(GREEN_LINE)
     return " ".join(parts)
 
 

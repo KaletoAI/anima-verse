@@ -140,7 +140,8 @@ ARMS_UP_IOU_MARGIN = 0.05
 #: extension parts and never offset into the body from a wall seen from behind; an arm the piece covers stays in.
 #: 7 (A226): a bottom piece's front and back panels are joined under the crotch (``crotch_run`` / ``crotch_bridge``),
 #: the bridge relaxed over the body's folds; ``lift_over_surfaces`` marches its rays (same test, ~20× faster).
-SHELL_VERSION = 7
+#: 8 (A235): the views' colours are cut free of the backdrop (``garment_matte.clean_colours``) — CPU only.
+SHELL_VERSION = 8
 #: A199: the spacing of the body's z-buffer samples (``samples``' ``px``: about 4 per spacing²) in mask pixels of
 #: the finest view. 4 random samples per pixel leave a pixel empty with p ≈ e⁻⁴ on a face-on surface; the 3×3
 #: maximum filter of the z-buffer closes such a pixel.
@@ -1275,6 +1276,17 @@ def build_shell(rigged: bytes, unrigged: bytes, views: Dict[str, Dict[str, Any]]
         for w in list(masks):
             bm_, gm_, img_ = masks[w]
             masks[w] = (bm_, gm_, unmix_backdrop(img_, gm_, apply=True)[0])
+    # A235: every view's colours cut free of its backdrop (``garment_matte.clean_colours``: key + the stored mask,
+    # rim un-mixed and despilled, gaps and fringe filled from the piece) — after the A219 un-mix, which reads the
+    # backdrop outside the mask; the masks (the geometry) stay
+    from app.core import garment_matte
+    report["matte"] = {}
+    for key, w in shell_views:
+        if w in masks and masks[w][1].any():
+            bm_, gm_, img_ = masks[w]
+            clean, minfo = garment_matte.clean_colours(img_, gm_)
+            masks[w] = (bm_, gm_, clean.astype(np.float64))
+            report["matte"][key] = {k_: minfo.get(k_) for k_ in ("mode", "bg", "holes_opened", "matte_version")}
     if not (masks["f"][1].any() or masks["b"][1].any()):
         raise ShellRefused("The piece-only views show no piece")
     keys = list(masks)

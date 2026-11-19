@@ -74,13 +74,14 @@ check("[S2] path", p.name, "item_x_0123456789ab_ghost_left.png")
 # [S3]
 plain = gc.GHOST_PLAIN
 check("[S3] plain left", gc.ghost_prompt({"ghost_text": "plain"}, "left"),
-      plain + " Seen from the side, facing left; the side view stays a side view.")
+      plain + " Seen from the side, facing left; the side view stays a side view." + " " + gc.GREEN_LINE)
 check("[S3] plain right", gc.ghost_prompt({"ghost_text": "plain"}, "right"),
-      plain + " Seen from the side, facing right; the side view stays a side view.")
+      plain + " Seen from the side, facing right; the side view stays a side view." + " " + gc.GREEN_LINE)
 check("[S3] waistband right", gc.ghost_prompt({"ghost_text": "waistband"}, "right"),
       gc.GHOST_WAISTBAND + " Seen from the side, facing right; the side view stays a side view. "
-      + "The empty garment keeps exactly the same spread and angle as in the image.")
-check("[S3] front has no side line", gc.ghost_prompt({"ghost_text": "plain"}, "front"), plain)
+      + "The empty garment keeps exactly the same spread and angle as in the image." + " " + gc.GREEN_LINE)
+check("[S3] front has no side line", gc.ghost_prompt({"ghost_text": "plain"}, "front"),
+      plain + " " + gc.GREEN_LINE)
 try:
     gc.edit_prompt("Demo", "worn", "left", profile={})
     check("[S3] worn left is drafted", "rendered", "ValueError")
