@@ -8,7 +8,8 @@ An outfit piece in mode ``accessory`` (``garment_set.ACCESSORY``) carries::
 A234 adds ``band.at`` (where a strap goes round: thigh / upper_arm / chest) and ``earring: {style, size_mm}`` (stud /
 hoop built on the CPU, ``drop`` = the item-image mesh hung under the lobe — the necklace pendant's job).
 A238 adds the ring: ``finger`` (thumb included), ``side`` left / right only, ``ring: {along}`` (where on the finger's
-proximal bone it sits, a share from the knuckle), the band's width ``band.width_cm`` in ``RING_WIDTH_CM`` and its depth
+proximal bone it sits, a share from the knuckle), the band's width ``band.width_cm`` in ``RANGES["ring_width_cm"]`` (a stored width
+outside it is another kind's band and becomes the ring's default, it is not clamped) and its depth
 ``chain.thickness_mm``. Its size is never stored: it is computed per body from the skeleton (``accessory_ring``).
 
 Every shape value is item-wide; only what is measured from a body (the neck curve) is per character
@@ -102,6 +103,16 @@ def _num(value: Any, key: str, default: float) -> float:
     return round(min(max(v, lo), hi), 3)
 
 
+def _in_range(value: Any, key: str) -> bool:
+    """``value`` is a finite number inside ``RANGES[key]``."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return False
+    lo, hi = RANGES[key]
+    return lo <= v <= hi
+
+
 def _choice(value: Any, allowed: Tuple[str, ...], default: str) -> str:
     return value if isinstance(value, str) and value in allowed else default
 
@@ -119,11 +130,16 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     width_default = KIND_WIDTH_CM.get(kind, d["band"]["width_cm"])
     width_key = "ring_width_cm" if kind == "ring" else "width_cm"
     band_raw = raw.get("band") if isinstance(raw.get("band"), dict) else {}
+    width_raw = band_raw.get("width_cm", width_default)
+    if kind == "ring" and not _in_range(width_raw, width_key):
+        # a ring's width outside its range is another kind's band (a ring stored before A238 carries the 4 cm
+        # default, a switch from a belt or a strap keeps theirs): the ring's own default, never that width clamped
+        width_raw = width_default
     chain_raw = raw.get("chain") if isinstance(raw.get("chain"), dict) else {}
     out: Dict[str, Any] = {
         "kind": kind,
         "band": {"height_cm": _num(band_raw.get("height_cm", d["band"]["height_cm"]), "height_cm", 0.0),
-                 "width_cm": _num(band_raw.get("width_cm", width_default), width_key, width_default),
+                 "width_cm": _num(width_raw, width_key, width_default),
                  "layer": _choice(band_raw.get("layer"), BAND_LAYERS, d["band"]["layer"]),
                  "material": _choice(band_raw.get("material"), BAND_MATERIALS, d["band"]["material"]),
                  "at": _choice(band_raw.get("at"), STRAP_AT, d["band"]["at"])},

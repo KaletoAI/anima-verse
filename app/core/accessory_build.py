@@ -1205,7 +1205,7 @@ def make_earrings(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, 
 def make_ring(rigged: bytes, spec: Dict[str, Any]) -> Dict[str, Any]:
     """A238: the ring (``accessory_ring``) on ``spec['finger']`` of the ``spec['side']`` hand: a band of
     ``band.width_cm`` × ``chain.thickness_mm`` whose inner radius is computed from the skeleton (hand width, proximal
-    bone length, body height — never the finger's skin, which the webbing fuses with its neighbours), centred on the
+    bone length) and the body height (the mesh's vertical extent, which scales the clamp range) — never the finger's skin, which the webbing fuses with its neighbours), centred on the
     proximal bone at ``ring.along``, rigid on that bone (weight 1.0). Gated only by ``accessory_ring.check`` (centre
     in the hand's skin box, radius in range). ``{V, F, N, J, W, joint_names, curve, landmarks, metrics}``. Pure
     CPU."""

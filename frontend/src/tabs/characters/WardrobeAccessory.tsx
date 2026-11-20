@@ -387,7 +387,10 @@ export function AccessoryDialog({ character, itemId, onClose }: {
                     {t('This kind is stored but not built yet in this version.')}
                   </div>
                 ) : null}
-                {data.metrics && draft.kind === 'ring' ? (
+                {/* A238 review: the numbers are the STORED build's — shown only while the draft keeps the stored
+                    kind (a ring's metrics and the others' share no field), the line picked by what they carry */}
+                {data.metrics && data.jewellery?.kind !== draft.kind ? null
+                  : data.metrics && data.metrics.inner_radius_mm !== undefined ? (
                   <div className="ga-hint" style={{ fontSize: '0.75em' }}
                     title={t('The ring\'s size comes from the skeleton: the hand\'s width across the knuckles and the length of the finger\'s first bone, within a range set by the body\'s height. It is not measured on the skin, so it can cut into a thick finger.')}>
                     {t('Inner radius')}: {data.metrics.inner_radius_mm ?? '–'} mm

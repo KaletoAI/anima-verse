@@ -1,4 +1,5 @@
-"""A238: the ring — a band round one finger, sized from the SKELETON alone (user ruling 2026-11-20).
+"""A238: the ring — a band round one finger, sized from the SKELETON (user ruling 2026-11-20); the mesh gives only
+the body's height, which scales the clamp range, and the hand's skin box of the gate.
 
 Why not from the mesh (A234, two rounds): in the bind pose the fingers are fused by webbing, so a section across a
 finger runs into its neighbours (11–37 cm round) and the sparse finger skin (~40 points per span) cannot say which
@@ -11,13 +12,14 @@ surface is the finger's own. The ring is therefore a FIXED size per body, comput
 The ratio is taken from a reference hand: the inner radius of the median adult ring per finger (ring-size tables:
 inner diameters thumb 20.5, index 18.0, middle 18.5, ring 17.5, little 15.5 mm -> ``RADIUS_REF_MM``) on the median
 rigged hand of this pipeline (14 plain bodies measured 2026-11-20: ``w`` median 59.65 mm -> ``HAND_WIDTH_REF_MM``
-60; ``L`` medians thumb 32.05, index 34.0, middle 34.6, ring 31.5, little 26.0 mm -> ``BONE_REF_MM``). A body's
+60; ``L`` medians thumb 32.05, index 34.0, middle 34.6, ring 31.5, little 26.0 mm, rounded to 0.5 mm ->
+``BONE_REF_MM`` thumb 32.0, middle 34.5 — under 0.2 % on a radius). A body's
 inner radius scales the reference by the geometric mean of its two ratios::
 
     r = RADIUS_REF_MM[finger] * sqrt((w / HAND_WIDTH_REF_MM) * (L / BONE_REF_MM[finger]))
 
-clamped to ``RADIUS_RANGE_MM`` (7–11 mm) times ``height / HEIGHT_REF_M`` (the body's height, so a small figure gets
-small rings and a tall one large). Worked example — a body exactly at the references (w 60, L of the ring finger
+clamped to ``RADIUS_RANGE_MM`` (7–11 mm) times ``height / HEIGHT_REF_M`` (the body's height — the vertical extent
+of the mesh, not a bone measure — so a small figure gets small rings and a tall one large). Worked example — a body exactly at the references (w 60, L of the ring finger
 31.5, height 1.70 m): r = 8.75 · sqrt(1 · 1) = 8.75 mm, inside 7–11 → 8.75 mm (inner diameter 17.5 mm).
 
 The ring is centred on the proximal bone at ``ring.along`` of the way from its head (the knuckle), its plane across

@@ -6,7 +6,9 @@ Expected values, derived by hand from the module docstring (reference hand: radi
 hand width of 60 mm and a ring-finger bone of 31.5 mm; thumb 10.25 mm at 32 mm; range 7–11 mm at 1.70 m):
 
 [1] ``normalize({"kind": "ring"})``: finger "ring", side "left" (a ring is on one hand; "both" is stored as left),
-    ring {along 0.5}, band width 0.3 cm, thickness 2.0 mm. Width 0.05 → 0.15 (the ring's minimum), 5 → 1.2; along
+    ring {along 0.5}, band width 0.3 cm, thickness 2.0 mm. A width outside the ring's 0.15–1.2 cm is another kind's
+    band and becomes the default 0.3, not clamped: 0.05 → 0.3, 5 → 0.3, and a ring stored before A238 with the old
+    band default {width_cm 4.0} → 0.3 (clamping would give 1.2); the range ends 0.15 and 1.2 are kept; along
     0.95 → 0.85, 0.0 → 0.15; finger "thumb" and side "right" are kept. ``BUILT_KINDS`` holds "ring".
     ``shape_inputs`` = {finger, side, along, width_cm, thickness_mm} (no layer, no height); ``_wants_under`` False.
 [2] ``size`` — LeftHandIndex1 (0, 0, 0), LeftHandPinky1 (0.06, 0, 0) → hand width 60 mm; LeftHandRing1 (0.03, 0, 0)
@@ -21,8 +23,9 @@ hand width of 60 mm and a ring-finger bone of 31.5 mm; thumb 10.25 mm at 32 mm; 
     every vertex lies 0.00875 or 0.01075 from the axis (±1e-12); the extent along the axis is 0.003; signed volume
     π (0.01075² − 0.00875²) · 0.003 · (48 / 2π) sin(2π / 48) = 3.6757e-7 · 0.99715 = 3.6652e-7 m³ (± 0.1 %), positive.
     ``centre_line``: 48 points 0.00875 + 0.001 = 0.00975 from the axis.
-[5] ``check`` with range [7, 11]: r 8.75 mm, centre inside the hand box → passes; the centre 1 cm past the box →
-    "its centre lies outside the hand"; r 12 mm → "inner radius 12.0 mm, expected 7.0–11.0 mm"; no hand skin →
+[5] ``check`` with range [7, 11] on the box (−0.01, −0.02, −0.02)–(0.07, 0.02, 0.05): r 8.75 mm, centre inside the
+    hand box → passes; the centre at z 0.0625, 1.25 cm past the box's z max 0.05 and 1.05 cm past the gated edge
+    0.05 + 0.002 (``BOX_MARGIN_M``) → "its centre lies outside the hand"; r 12 mm → "inner radius 12.0 mm, expected 7.0–11.0 mm"; no hand skin →
     "the hand has no skin".
 [6] ``make_ring`` on a synthetic body (``glb_mesh.body_arrays`` replaced): the skeleton of [2], a hand box of 8
     points skinned to LeftHand from (−0.01, −0.02, −0.02) to (0.07, 0.02, 0.05), a foot point at y 0 and a head
@@ -54,8 +57,13 @@ n = s.normalize({"kind": "ring"})
 check("[1] defaults", (n["finger"], n["side"], n["ring"], n["band"]["width_cm"], n["chain"]["thickness_mm"]),
       ("ring", "left", {"along": 0.5}, 0.3, 2.0))
 check("[1] both -> left", s.normalize({"kind": "ring", "side": "both"})["side"], "left")
-check("[1] width clamp", (s.normalize({"kind": "ring", "band": {"width_cm": 0.05}})["band"]["width_cm"],
-                          s.normalize({"kind": "ring", "band": {"width_cm": 5}})["band"]["width_cm"]), (0.15, 1.2))
+check("[1] width outside -> default", tuple(s.normalize({"kind": "ring", "band": {"width_cm": w}})["band"]["width_cm"]
+                                            for w in (0.05, 5, 4.0)), (0.3, 0.3, 0.3))
+check("[1] width range ends kept", tuple(s.normalize({"kind": "ring", "band": {"width_cm": w}})["band"]["width_cm"]
+                                         for w in (0.15, 1.2)), (0.15, 1.2))
+old_ring = {"kind": "ring", "band": {"height_cm": 0.0, "width_cm": 4.0, "layer": "auto", "material": "from_image",
+                                     "at": "thigh"}, "side": "both", "finger": "ring"}
+check("[1] pre-A238 ring", s.normalize(old_ring)["band"]["width_cm"], 0.3)
 check("[1] along clamp", (s.normalize({"kind": "ring", "ring": {"along": 0.95}})["ring"]["along"],
                           s.normalize({"kind": "ring", "ring": {"along": 0.0}})["ring"]["along"]), (0.85, 0.15))
 t = s.normalize({"kind": "ring", "finger": "thumb", "side": "right"})
