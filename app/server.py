@@ -809,6 +809,15 @@ async def lifespan(app: FastAPI):
     except Exception as _pme:
         logger.warning("Painted mode migration failed (retried at the next start): %s", _pme)
 
+    # Migration (bug round 2026-11-20): template trousers saved before A233 kept the skirt's length_m / waist_height,
+    # which no trouser reads — they get rise / trouser_length / leg_shape by an explicit mapping, once per world and
+    # once for the shared library. Item writes only (no Build, no hub job); the next Build re-drapes them.
+    try:
+        from app.core.trouser_params_migration import migrate_trouser_params_once
+        migrate_trouser_params_once()
+    except Exception as _tpm:
+        logger.warning("Trouser params migration failed (retried at the next start): %s", _tpm)
+
     # Migration (same plan, Task 13, D3): hairstyles are items — every humanoid
     # gets ONE hairstyle from today's hair (text, stored method, colour /
     # placement / motion keys), worn and the plain body's own; the legacy
