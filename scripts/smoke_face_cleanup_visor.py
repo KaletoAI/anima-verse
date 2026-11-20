@@ -191,7 +191,7 @@ def main():
     raw_spikes = [spikes(Pp, Fp, r) for r in regions]
     print(f"     spikes per eye without the visor: {raw_spikes}")
     out, record = fc.clean_face(glb)
-    check(record["version"] == 5, f"version {record['version']}")
+    check(record["version"] >= 5, f"version {record['version']} (>= 5: the settling rule)")
     eyes = record["eyes"].get("eyes") or []
     check(record["eyes"]["status"] == "applied" and all(e.get("status") == "applied" for e in eyes),
           f"the fold applied at both eyes ({[e.get('status') for e in eyes]})")

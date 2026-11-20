@@ -52,7 +52,7 @@ Hand-derived expectations (constants of face_cleanup):
   every vertex outside the eye and mouth regions keeps its exact POSITION and NORMAL bytes; vertex count, order (index
   buffer) and UVs are unchanged; normals are recomputed (unit length) only where a triangle moved; the result passes
   ``validate_source``; the mouth region (a smooth sphere) is skipped; a second run gives the same bytes; the
-  record says version 5.
+  record says version 5 or later (version 6 adds the mouth bumps, which a smooth sphere has none of).
 - OLD CODE: ``app/core/face_cleanup.py`` at b6476661 (the base of this change) leaves the pocket floor and the dent
   where they are — the proof that this smoke tests the new step.
 """
@@ -187,7 +187,7 @@ def main():
     old = old_module()
     out_old, record_old = old.clean_face(glb)
     smooth = record.get("smooth") or {}
-    check(record["version"] == 5 and smooth.get("status") == "applied", f"version 5, smoothing applied: {smooth.get('status')}")
+    check(record["version"] >= 5 and smooth.get("status") == "applied", f"version {record['version']} (>= 5), smoothing applied: {smooth.get('status')}")
     regions = {r["region"]: r for r in smooth.get("regions") or []}
     left, right, mouth = regions.get("eye_left") or {}, regions.get("eye_right") or {}, regions.get("mouth") or {}
     P1, F1, U1, _img1, *_ = static_arrays(out)

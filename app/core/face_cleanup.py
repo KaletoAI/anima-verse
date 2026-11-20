@@ -62,6 +62,16 @@ Two defects of the image-to-mesh step, both inherited from what the image model 
    corners: Euler characteristic 0 and -1) or a non-convex border has no overlap-free harmonic map. Holes deeper
    than the cap (Lirien, Kira 5c5f: openings through to an inner shell 33-38 mm deep) are counted
    (``beyond_cap_vertices``), not closed; the settled membrane does not reach over them.
+   Version 6 (2026-11-20, Lirien's UniForge roll, hub job 1c6fd645): two ~12 mm lumps stood ~10-11 mm proud at the
+   mouth corners, 29-38 mm beside the lip centre — outside the 30 mm mouth region, and neither pocket nor spike (their
+   edges reach ~70 degrees). The mouth region is now a rounded rectangle 42 x 16 mm (``MOUTH_REGION_POWER``) and holds a
+   BUMP rule, the mirror of the pocket rule (``_bumps``): a rise narrower than BUMP_OPEN_MM seeds a patch that grows by
+   its foot like the eye flaps (``FLAP_FOOT_MM``); a patch whose core stands more than BUMP_MM above the harmonic
+   membrane of its ring and spans at most BUMP_ACROSS_MM is lowered along the view normal onto the thin plate over it
+   (``_thin_plate_fill``), every shift within the cap. The lips are protected: their paint dilated by LIP_PROTECT_MM and
+   the paint's box widened by it; a bump that touches them stays. Measured on the mesher originals: Lirien's lumps
+   11.6 / 11.5 mm -> 0.7 / 0.6 mm above a surface fitted to the ring around them, the lips unchanged; Kira, Glut, Rosi
+   and Gelina find no bump (Kira's upper-lip tubercle is protected) and move at most 0.05 mm, from the wider region.
 
 Where in the chain: ``model3d._store_unrigged_model`` runs ``clean_face`` on the validated mesher result before
 it is published as ``unrigged/<signature>.glb`` — the file the face retexture is frozen from, the rig reads and
@@ -104,10 +114,11 @@ from app.core.timeutils import utc_now_iso
 
 # 1 pressed the flaps back, 2 folds them onto their root, 3 locates the eyes in the face's frame (haired heads), 4 closes
 # the eye/mouth pockets and smooths the spikes after the fold, 5 settles the flaps by a harmonic map instead of stacking
-# them on their anchors (and smooths over them). A source cleaned at an older version may be re-applied
+# them on their anchors (and smooths over them), 6 widens the mouth region to its corners and lowers the bumps there
+# onto the skin around them. A source cleaned at an older version may be re-applied
 # ("Re-apply face cleanup", or the improvement "Re-run face cleanup"); nothing re-runs on its own — a skipped cleanup
 # runs again with the next mesher result anyway (every base build cleans its fresh mesh).
-VERSION = 5
+VERSION = 6
 REFERENCE_HEIGHT_MM = 1700.0
 
 # Eyes.
@@ -194,9 +205,30 @@ MOVE_CAP_SEPARATION = 0.15      # the per-vertex displacement cap of step 3: thi
                                 # (~12 mm); a deeper visible floor is a hole into the head shell (Kira 5c5f: 33 mm)
 MOUTH_DROP_MM = 74.0            # the mouth's centre under the eye line when the lip paint does not locate it (measured:
                                 # Glut 72.7, Kai 70.9, Kira 72.7, Lirien 78.0 mm)
-MOUTH_HALF_WIDTH_MM = 30.0      # the mouth region: lips 18-70 mm wide (LIP_WIDTH_MM) ...
-MOUTH_HALF_HEIGHT_MM = 16.0     # ... the lips and the opening between them, not the nostrils (~25 mm above the centre)
-MOUTH_DEPTH_WINDOW_MM = 20.0
+MOUTH_HALF_WIDTH_MM = 42.0      # the mouth region: lips 18-70 mm wide (LIP_WIDTH_MM) plus the corners beside them —
+                                # version 6: 30 -> 42, the lip line's half width (Lirien 27.5 mm) and a 12 mm margin; her
+                                # two corner lumps (hub job 1c6fd645) stood at +-29..38 mm, outside the 30 mm region ...
+MOUTH_HALF_HEIGHT_MM = 16.0     # ... the lips and the opening between them, not the nostrils (~22 mm above the centre)
+MOUTH_REGION_POWER = 4.0        # version 6: a rounded rectangle |x/a|^4 + |y/b|^4 < 1, not an ellipse — at 38 mm beside
+                                # the centre an ellipse is only 6.8 mm tall, this one 12.1 mm (the lumps reach 9 mm below)
+MOUTH_DEPTH_WINDOW_MM = 32.0    # version 6: 20 -> 32 — the cheek at the region's corners lies 20-30 mm behind the lips,
+                                # and a lump's foot there must be inside the region to be lowered
+# Bumps (version 6, mouth region only): the mirror of the pockets. A lump the mesher builds onto the skin — Lirien's
+# two mouth-corner lumps, ~12 mm across and ~10-11 mm proud of the cheek around them with a sheer step — is no spike
+# (its edges reach ~70 degrees, SPIKE_DEG is 120) and no pocket. Like the eye fold's flaps (EYE_FREE_MM: proud of a
+# fitted surface -> settled onto it) it is lowered onto the surface its ring spans (``_bumps``).
+BUMP_OPEN_MM = 16.0             # the opening disc (radius 8 cells): a rise narrower than this is a bump candidate (lips
+                                # 10-16 mm tall are protected below)
+BUMP_MM = 3.0                   # a bump: its seed rises more than this over the opening, its core stands this far above
+                                # the membrane of its own ring
+BUMP_ACROSS_MM = 15.0           # ... and its core spans at most this in both directions (a ridge or a cheek is wider)
+BUMP_SKIRT_MM = 2.0             # the patch lowered starts as the seed and this much around it ...
+BUMP_GROW_ROUNDS = 4            # ... and grows by its foot (FLAP_FOOT_MM) one cell per round, at most this many
+LIP_PROTECT_MM = 6.0            # protected: every cell within this of a lip-painted vertex, and the lip box (the paint's
+                                # half width and half height) widened by this on every side; a bump touching it stays.
+                                # Kira's upper lip tubercle on the mid-line, 10 mm above the paint centre, reads 3.3 mm
+                                # above its ring's membrane — the band of +-6 mm alone let it go (2026-11-20)
+LIP_FALLBACK_HALF_MM = (30.0, 8.0)  # the lip box's half width / height when the paint did not locate the mouth
 
 # Mouth.
 LIP_SATURATION_FACTOR = 1.3     # a lip texel: saturation above this multiple of the skin's ...
@@ -982,11 +1014,12 @@ def _frame(centre: np.ndarray, head_centre: np.ndarray, front: int) -> Tuple[np.
 class _DepthMap:
     """The VISIBLE surface over one face region as a height field: on a SMOOTH_CELL_MM grid in the region's plane a
     ray from outside measures the height (along the normal) of the first triangle it meets — what the face projection
-    paints. ``ellipse`` marks the cells of the region itself; the grid reaches DEPRESSION_CLOSE_MM + 2 cells beyond
+    paints. ``ellipse`` marks the cells of the region itself (an ellipse, or for ``power`` 4 the mouth's rounded
+    rectangle); the grid reaches DEPRESSION_CLOSE_MM + 2 cells beyond
     it so the closing sees the ring around the region's edge."""
 
     def __init__(self, P: np.ndarray, F: np.ndarray, centre: np.ndarray, normal: np.ndarray, t1: np.ndarray,
-                 t2: np.ndarray, half_a: float, half_b: float, mm: float):
+                 t2: np.ndarray, half_a: float, half_b: float, mm: float, power: float = 2.0):
         self.origin, self.normal, self.t1, self.t2, self.mm = centre, normal, t1, t2, mm
         self.cell = SMOOTH_CELL_MM * mm
         margin = (DEPRESSION_CLOSE_MM + 2 * SMOOTH_CELL_MM) * mm
@@ -994,7 +1027,7 @@ class _DepthMap:
         na = int(np.ceil(2 * (half_a + margin) / self.cell)) + 1
         nb = int(np.ceil(2 * (half_b + margin) / self.cell)) + 1
         self.ga, self.gb = np.meshgrid(self.a0 + np.arange(na) * self.cell, self.b0 + np.arange(nb) * self.cell, indexing="ij")
-        self.ellipse = (self.ga / half_a) ** 2 + (self.gb / half_b) ** 2 < 1.0
+        self.ellipse = np.abs(self.ga / half_a) ** power + np.abs(self.gb / half_b) ** power < 1.0
         self.F = F
         self.half = (half_a + margin, half_b + margin)
 
@@ -1058,6 +1091,33 @@ def _harmonic_fill(field: np.ndarray, fill: np.ndarray) -> np.ndarray:
     return out
 
 
+def _thin_plate_fill(field: np.ndarray, fill: np.ndarray) -> np.ndarray:
+    """``field`` with the cells of ``fill`` replaced by the THIN PLATE over them (version 6, the bump target): the
+    discrete biharmonic surface (the 5-point Laplacian applied twice = 0 inside, two rings of cells outside ``fill``
+    fixed). Unlike the harmonic membrane it reproduces every quadratic surface exactly — a membrane spanned over a lump
+    on a curved cheek sags under the cheek by up to |Laplacian| r^2 / 4 (1.5 mm over a 7.7 mm patch on the bump smoke's
+    sphere), the plate continues the curvature (Lirien's lump sites against a quadratic fitted to the ring 9-12 mm around
+    them: membrane +1.0 / +1.1 mm at most, plate +0.7 / +0.6 mm). Every component of ``fill`` must keep two cells from the grid's edge."""
+    from scipy.sparse import diags, identity, kron
+    from scipy.sparse.linalg import spsolve
+    out = field.copy()
+    idx = np.flatnonzero(fill.ravel())
+    if not len(idx):
+        return out
+    na, nb = field.shape
+
+    def second(n):
+        return diags([np.ones(n - 1), -2 * np.ones(n), np.ones(n - 1)], [-1, 0, 1], format="csr")
+    lap = (kron(second(na), identity(nb)) + kron(identity(na), second(nb))).tocsr()
+    plate = (lap @ lap).tocsr()
+    known = np.ones(field.size, bool)
+    known[idx] = False
+    flat = field.ravel()
+    rhs = -(plate[idx][:, known] @ flat[known])
+    out.ravel()[idx] = spsolve(plate[idx][:, idx].tocsc(), rhs)
+    return out
+
+
 def _unseen(depth: np.ndarray) -> np.ndarray:
     """A height map for the visibility test: a cell no ray met hides every vertex (an endless height in front)."""
     return np.where(np.isfinite(depth), depth, 1e9)
@@ -1096,6 +1156,78 @@ def _pockets(depth_mm: np.ndarray, ellipse: np.ndarray) -> Tuple[np.ndarray, np.
         pocket &= ~np.isin(labels, open_[open_ > 0])
     target = np.maximum(_harmonic_fill(D, pocket), D)
     return pocket, membrane, target
+
+
+def _bumps(depth_mm: np.ndarray, region: np.ndarray, protected: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, Any]]:
+    """``(bump cores, patches, target, counts)`` of a height map in mm (NaN = nothing met) — version 6, the mirror of
+    ``_pockets`` for what stands OUT.
+
+    A SEED is a connected set of cells a grey opening with a disc of BUMP_OPEN_MM lowers by more than BUMP_MM, outside
+    the ``protected`` cells (the lips): a rise narrower than the disc. On a sloped face the opening reads only the top of
+    a lump (the disc rests on the higher skin beside it), so the seed only says WHERE: its PATCH starts as the seed and
+    BUMP_SKIRT_MM around it and GROWS by its foot like the eye fold's flaps (``FLAP_FOOT_MM``) — while a cell on the
+    patch's edge still stands more than FLAP_FOOT_MM above the MEMBRANE the ring around the patch spans
+    (``_harmonic_fill``), the patch takes in that cell's neighbours (at most BUMP_GROW_ROUNDS cells, never a protected
+    one). The CORE is what then stands more than BUMP_MM above the membrane. The patch is a BUMP when its core is not
+    empty and spans at most BUMP_ACROSS_MM in both directions, and the patch lies inside ``region`` and keeps a cell's
+    distance from ``protected``, from the grid's edge and from cells no ray met — anything else (a lip corner, the nose,
+    a cheek's fall-off at the region's edge) stays. The TARGET is the thin plate over the bump patches (``_thin_plate_fill``: the membrane
+    decides what is a bump, the plate where it goes — it follows the cheek's curvature where the membrane sags under
+    it), never above the surface itself, and the surface everywhere else."""
+    from scipy import ndimage
+    counts = {"candidates": 0, "kept": 0, "protected": 0, "too_wide": 0, "outside": 0, "low": 0}
+    empty = np.zeros(depth_mm.shape, bool)
+    finite = np.isfinite(depth_mm)
+    if not finite.any():
+        return empty, empty, depth_mm, counts
+    D = np.where(finite, depth_mm, np.nanmin(depth_mm))
+    opened = ndimage.grey_opening(D, footprint=_disc(int(round(BUMP_OPEN_MM / 2 / SMOOTH_CELL_MM))))
+    seeds = ((D - opened) > BUMP_MM) & ~protected
+    labels, count = ndimage.label(seeds, structure=np.ones((3, 3), bool))
+    skirt = _disc(int(round(BUMP_SKIRT_MM / SMOOTH_CELL_MM)))
+    ring8 = np.ones((3, 3), bool)
+    edge2 = np.ones(D.shape, bool)      # the thin plate needs two rings of cells around a patch
+    edge2[2:-2, 2:-2] = False
+    near_protected = ndimage.binary_dilation(protected, structure=ring8)
+    # A cell no ray met (past the silhouette, into the mouth opening) has no height to span a membrane with: a patch
+    # next to one cannot be judged and stays.
+    near_unseen = ndimage.binary_dilation(~finite, structure=ring8)
+    cores, patches, seen = empty.copy(), empty.copy(), empty.copy()
+    for k in range(1, count + 1):
+        seed = labels == k
+        if (seed & seen).any():
+            continue                    # a second seed on a lump already handled
+        counts["candidates"] += 1
+        patch = ndimage.binary_dilation(seed, structure=skirt) & ~protected
+        for _round in range(BUMP_GROW_ROUNDS):
+            membrane = _harmonic_fill(D, patch)
+            rim = patch & ~ndimage.binary_erosion(patch, structure=ring8, border_value=1)
+            foot = rim & ((D - membrane) > FLAP_FOOT_MM)
+            grown = (patch | ndimage.binary_dilation(foot, structure=ring8)) & ~protected
+            if not (grown & ~patch).any():
+                break
+            patch = grown
+        seen |= patch
+        membrane = _harmonic_fill(D, patch)
+        core = patch & ((D - membrane) > BUMP_MM)
+        if (patch & near_protected).any():
+            counts["protected"] += 1
+            continue
+        if not core.any():
+            counts["low"] += 1
+            continue
+        cells = np.argwhere(core)
+        if ((cells.max(0) - cells.min(0) + 1) * SMOOTH_CELL_MM).max() > BUMP_ACROSS_MM:
+            counts["too_wide"] += 1
+            continue
+        if not region[patch].all() or (patch & (edge2 | near_unseen)).any():
+            counts["outside"] += 1
+            continue
+        counts["kept"] += 1
+        cores |= core
+        patches |= patch
+    target = np.minimum(_thin_plate_fill(D, patches), D) if patches.any() else D
+    return cores, patches, target, counts
 
 
 def _node_graph(node: np.ndarray, F: np.ndarray, faces: np.ndarray):
@@ -1156,8 +1288,9 @@ def _spikes(Q: np.ndarray, node: np.ndarray, F: np.ndarray, faces: np.ndarray, g
 
 def _smooth_region(P_in: np.ndarray, F: np.ndarray, region: np.ndarray, node: np.ndarray, centre: np.ndarray,
                    normal: np.ndarray, t1: np.ndarray, t2: np.ndarray, half_a: float, half_b: float, cap: float,
-                   fixed: np.ndarray, protect: np.ndarray, mm: float) -> Tuple[np.ndarray, Dict[str, Any]]:
-    """Close the pockets and smooth the spikes of one region. ``P_in``: the positions so far (after the fold);
+                   fixed: np.ndarray, protect: np.ndarray, mm: float, power: float = 2.0,
+                   lips: Optional[Dict[str, Any]] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Close the pockets, lower the bumps (``lips`` given: the mouth) and smooth the spikes of one region. ``P_in``: the positions so far (after the fold);
     ``region``: the vertices this step may move; ``node``: welded nodes (of the mesher's positions); ``fixed``: per
     vertex, never smoothed here (version 5: the pinned eye opening and its ring; version 4 held the fold's own
     vertices; a pocket inside it is still lifted); ``protect``: never smoothed
@@ -1169,6 +1302,12 @@ def _smooth_region(P_in: np.ndarray, F: np.ndarray, region: np.ndarray, node: np
        as it is and counted). Visible = not behind the first surface the ray of its own cell meets (nearest cell:
        a bilinear read beside a deep cell would call the rim's occluded underside visible). Only what the front
        sees through the opening rises — an inner shell under the skin is never pulled onto it.
+    1b. BUMPS (version 6, only with ``lips`` = {"paint": per-vertex lip-paint mask, "half_width" / "half_height": the
+       paint's half axes}; ``_bumps`` on the same height map): every region vertex whose nearest cell lies in a bump patch and
+       that stands above the target is lowered along the normal onto it, by at most ``cap`` — visible or not, since
+       nothing belongs above the membrane of the skin around it, and what lies under it (an inner shell) is never
+       touched. Protected: the cells within LIP_PROTECT_MM of a visible lip-painted vertex and the paint's box widened
+       by LIP_PROTECT_MM on every side.
     2. SPIKES (``_spikes`` on the visible surface after step 1 — triangles whose three vertices the rays see; the
        settled flap's triangles count since version 5): the
        spike nodes alone are smoothed by Taubin's volume-preserving filter (TAUBIN_PASSES of lambda/mu steps of the
@@ -1180,7 +1319,7 @@ def _smooth_region(P_in: np.ndarray, F: np.ndarray, region: np.ndarray, node: np
     if len(idx) < EYE_MIN_VERTICES:
         record.update(status="skipped", reason="the region holds too few vertices")
         return out, record
-    depth = _DepthMap(P_in, F, centre, normal, t1, t2, half_a, half_b, mm)
+    depth = _DepthMap(P_in, F, centre, normal, t1, t2, half_a, half_b, mm, power)
     before = depth.measure(P_in)
     if int(np.isfinite(before[depth.ellipse]).sum()) < FIT_MIN_POINTS:
         record.update(status="skipped", reason="the rays meet too little surface over the region")
@@ -1196,6 +1335,8 @@ def _smooth_region(P_in: np.ndarray, F: np.ndarray, region: np.ndarray, node: np
     cell_area = SMOOTH_CELL_MM ** 2
     record["pockets"] = {"before": {"area_mm2": round(float(pocket.sum() * cell_area), 1), "vertices": int((seen & in_pocket).sum())},
                          "beyond_cap_vertices": int((want & ~within).sum()), "lifted_vertices": int(within.sum())}
+    if lips is not None:
+        record["bumps"] = _lower_bumps(out, P_in, idx, depth, before, lips, cap, mm)
     # Spikes on the visible surface after the lift.
     mid = depth.measure(out)
     a, b, h = depth.local(out[idx])
@@ -1256,10 +1397,55 @@ def _smooth_region(P_in: np.ndarray, F: np.ndarray, region: np.ndarray, node: np
     record["moved_vertices"] = int(moved.sum())
     record["displacement_mm"] = {"max": round(float(shift.max()), 2) if moved.any() else 0.0,
                                  "p95": round(float(np.percentile(shift[moved], 95)), 2) if moved.any() else 0.0}
+    if lips is not None:
+        bumps = record["bumps"]
+        if bumps.get("count"):
+            # Against the SAME membrane, over the bump cores: how far they still stand above it.
+            rest = (np.where(np.isfinite(after), after / mm, -np.inf) - bumps.pop("_target"))[bumps.pop("_cores")]
+            bumps["after"] = {"max_mm": round(float(max(rest.max(), 0.0)), 2)}
+        else:
+            bumps.pop("_target", None)
+            bumps.pop("_cores", None)
     record["status"] = "applied" if moved.any() else "skipped"
     if not moved.any():
-        record["reason"] = "no pocket and no spike in the region"
+        record["reason"] = "no pocket, no bump and no spike in the region" if lips is not None else "no pocket and no spike in the region"
     return out, record
+
+
+def _lower_bumps(out: np.ndarray, P_in: np.ndarray, idx: np.ndarray, depth: "_DepthMap", before: np.ndarray,
+                 lips: Dict[str, Any], cap: float, mm: float) -> Dict[str, Any]:
+    """Step 1b of ``_smooth_region`` (in place on ``out``): find the bumps on the height map ``before`` and lower the
+    region vertices ``idx`` above their target. Returns the record (with the private ``_target`` / ``_cores`` the
+    caller measures the result against)."""
+    from scipy import ndimage
+    protected = np.zeros(depth.ga.shape, bool)
+    paint = idx[lips["paint"][idx]]
+    if len(paint):
+        a, b, h = depth.local(P_in[paint])
+        seen = depth.sample(_unseen(before), a, b, order=0) - h < OUTER_TOLERANCE_MM * mm
+        ia = np.clip(np.round((a[seen] - depth.a0) / depth.cell).astype(int), 0, protected.shape[0] - 1)
+        ib = np.clip(np.round((b[seen] - depth.b0) / depth.cell).astype(int), 0, protected.shape[1] - 1)
+        protected[ia, ib] = True
+        protected = ndimage.binary_dilation(protected, structure=_disc(int(round(LIP_PROTECT_MM / SMOOTH_CELL_MM))))
+    protected |= ((np.abs(depth.ga) < lips["half_width"] + LIP_PROTECT_MM * mm)
+                  & (np.abs(depth.gb) < lips["half_height"] + LIP_PROTECT_MM * mm))
+    cores, patches, target, counts = _bumps(before / mm, depth.ellipse, protected)
+    record: Dict[str, Any] = {"count": counts["kept"], "left_alone": {k: v for k, v in counts.items() if k not in ("candidates", "kept") and v},
+                              "_target": target, "_cores": cores}
+    if not counts["kept"]:
+        return record
+    D = np.where(np.isfinite(before), before / mm, np.nanmin(before / mm))
+    record["before"] = {"max_mm": round(float((D - target)[cores].max()), 2),
+                        "area_mm2": round(float(cores.sum() * SMOOTH_CELL_MM ** 2), 1)}
+    a, b, h = depth.local(out[idx])
+    in_patch = depth.sample(patches.astype(np.float64), a, b, order=0) > 0.5
+    drop = h - depth.sample(target, a, b) * mm
+    want = in_patch & (drop > 0)
+    step = np.minimum(drop, cap)
+    out[idx[want]] -= np.outer(step[want], depth.normal)
+    record["lowered_vertices"] = int(want.sum())
+    record["beyond_cap_vertices"] = int((want & (drop > cap)).sum())
+    return record
 
 
 def _mouth_region(P: np.ndarray, eyes: List[Dict[str, Any]], frame: Dict[str, Any], mouth: Optional[Dict[str, Any]],
@@ -1267,7 +1453,8 @@ def _mouth_region(P: np.ndarray, eyes: List[Dict[str, Any]], frame: Dict[str, An
     """``(region mask, centre, half_a, half_b, located_by)`` of the mouth for the geometry step: centred on the lip
     paint when ``_locate_mouth`` found it, else MOUTH_DROP_MM under the eye line on the face's mid-plane (the lips sit
     71-78 mm under the eye line on the measured bases, 2026-11-12); in both cases the front-most surface there gives
-    the depth."""
+    the depth. The region is the rounded rectangle of MOUTH_REGION_POWER (version 6), so the corners beside the lips
+    are in it."""
     eye_y = (eyes[0]["centre"][1] + eyes[1]["centre"][1]) / 2
     mid_x = (eyes[0]["centre"][0] + eyes[1]["centre"][0]) / 2
     half_a, half_b = MOUTH_HALF_WIDTH_MM * mm, MOUTH_HALF_HEIGHT_MM * mm
@@ -1278,7 +1465,7 @@ def _mouth_region(P: np.ndarray, eyes: List[Dict[str, Any]], frame: Dict[str, An
     else:
         centre = np.array([mid_x, eye_y - MOUTH_DROP_MM * mm, 0.0])
         located = "window"
-    d2 = ((P[:, 0] - centre[0]) / half_a) ** 2 + ((P[:, 1] - centre[1]) / half_b) ** 2
+    d2 = np.abs((P[:, 0] - centre[0]) / half_a) ** MOUTH_REGION_POWER + np.abs((P[:, 1] - centre[1]) / half_b) ** MOUTH_REGION_POWER
     column = (d2 < 1.0) & head & (front * (P[:, 2] - frame["centre"][2]) > 0)
     # The depth always from the front-most surface: the paint's own centre may sit on the lip paint INSIDE the mouth
     # (Kai: 7.5 mm above GLBFaceRegions' lip landmarks, the rays then started behind the skin and met the inner shell).
@@ -1316,16 +1503,22 @@ def _smooth_face(P: np.ndarray, P_in: np.ndarray, F: np.ndarray, colours: np.nda
     region, centre, half_a, half_b, located = _mouth_region(P, eyes, frame, mouth, mm)
     inside |= region
     normal, t1, t2 = _frame(centre, frame["centre"], front)
+    # The lips are protected from the bump rule: their paint (none when the paint did not locate the mouth) and the
+    # lip box around it (LIP_FALLBACK_HALF_MM without paint).
+    lips = {"paint": _lip_like(colours, mouth["skin_sat"], mouth["skin_red"]) if mouth is not None else np.zeros(len(P), bool),
+            "half_width": mouth["half_width"] if mouth is not None else LIP_FALLBACK_HALF_MM[0] * mm,
+            "half_height": mouth["half_height"] if mouth is not None else LIP_FALLBACK_HALF_MM[1] * mm}
     out, rec = _smooth_region(out, F, region, node, centre, normal, t1, t2, half_a, half_b, cap, fixed,
-                              np.zeros(len(P), bool), mm)
+                              np.zeros(len(P), bool), mm, MOUTH_REGION_POWER, lips)
     regions.append({"region": "mouth", "located_by": located, **rec})
     applied = [r for r in regions if r.get("status") == "applied"]
     record: Dict[str, Any] = {"status": "applied" if applied else "skipped", "cap_mm": round(cap / mm, 1),
-                              "limits": {"pocket_mm": POCKET_MM, "spike_deg": SPIKE_DEG, "spike_ratio": SPIKE_RATIO},
+                              "limits": {"pocket_mm": POCKET_MM, "bump_mm": BUMP_MM, "spike_deg": SPIKE_DEG,
+                                         "spike_ratio": SPIKE_RATIO},
                               "regions": regions}
     record.update(_smooth_totals(regions))
     if not applied:
-        record["reason"] = "no pocket and no spike in the eye and mouth regions"
+        record["reason"] = "no pocket, no bump and no spike in the eye and mouth regions"
     return out, record, inside
 
 
@@ -1346,7 +1539,10 @@ def _smooth_totals(regions: List[Dict[str, Any]]) -> Dict[str, Any]:
             "pocket_area_before_mm2": round(total("pockets", "before", "area_mm2"), 1),
             "pocket_area_after_mm2": round(total("pockets", "after", "area_mm2"), 1),
             "pocket_vertices_before": int(total("pockets", "before", "vertices")),
-            "pocket_vertices_after": int(total("pockets", "after", "vertices"))}
+            "pocket_vertices_after": int(total("pockets", "after", "vertices")),
+            "bumps": int(total("bumps", "count")),
+            "bump_max_before_mm": max((float(((r.get("bumps") or {}).get("before") or {}).get("max_mm") or 0) for r in regions), default=0.0),
+            "bump_max_after_mm": max((float(((r.get("bumps") or {}).get("after") or {}).get("max_mm") or 0) for r in regions), default=0.0)}
 
 
 def _recompute_normals(N: np.ndarray, P: np.ndarray, P_new: np.ndarray, F: np.ndarray, node: np.ndarray,
@@ -1631,7 +1827,9 @@ def smooth_line(smooth: Dict[str, Any]) -> str:
                 f" mm, p95 {smooth.get('displacement_p95_mm', 0)} mm), spikes {smooth.get('spikes_before', 0)} → "
                 f"{smooth.get('spikes_after', 0)}, pockets {smooth.get('pocket_area_before_mm2', 0)} → "
                 f"{smooth.get('pocket_area_after_mm2', 0)} mm² ({smooth.get('pocket_vertices_before', 0)} → "
-                f"{smooth.get('pocket_vertices_after', 0)} vertices)")
+                f"{smooth.get('pocket_vertices_after', 0)} vertices)"
+                + (f", {smooth['bumps']} bump(s) {smooth.get('bump_max_before_mm', 0)} → {smooth.get('bump_max_after_mm', 0)} mm"
+                   if smooth.get("bumps") else ""))
     if smooth.get("status") == "skipped":
         return "smoothing: " + str(smooth.get("reason") or "skipped")
     return ""
