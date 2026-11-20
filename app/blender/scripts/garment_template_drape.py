@@ -398,7 +398,13 @@ def measure_pose(arm, body, piece, pose, rest_edges_len, edges, rim):
     shell = OUTER_BODY.get(body.name)
     if shell is not None and len(shell) != len(bco):
         shell = None
+    # A237: the ToeBase segment runs to its tail at (or past) the toe tips, so a toe vertex's nearest axis point can
+    # lie OUTSIDE the foot and its ray met the stocking's toe cap first (Kai: 284 LeftToeBase "pokes" in every pose);
+    # a toe vertex is measured from its toe joint (the ToeBase head, inside the foot)
+    toe_head = {k: Vector(segs[k][0]) for k, n in enumerate(seg_names) if "ToeBase" in n}
     for i, q in zip(cand, ax):
+        if dom[i] in toe_head:
+            q = toe_head[dom[i]]
         if shell is not None and shell[i]:
             continue                       # A236: hair / a beard lying on the body, no skin
         v = Vector(bco[i])
