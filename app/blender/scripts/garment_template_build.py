@@ -1577,48 +1577,33 @@ def _set_arm_angle(arm, deg):
 BAKE_ARM_DEG = (0, 20, 35, 50, 65, 80)
 
 
-#: Silhouette grid of the bake pose search (columns x rows over the alpha / outline box).
-SIL_W, SIL_H = 48, 64
+#: Bug round 2026-11-20: the arm angles tried for gloves — the T-pose and RAISED (negative): a picture of a pair of
+#: gloves shows them upright, fingers up (the piece-only view asks for that, ``garment_template_views.prompt_for``),
+#: i.e. the arms raised over the head. Lowered arms are left out on purpose: hanging, a glove's silhouette is the
+#: raised one upside down, and the IoU tells the two apart by a few hundredths only (Glut's gloves: 0.826 hanging,
+#: 0.817 raised), so the cuff of the picture would be painted onto the hand.
+GLOVE_ARM_DEG = (0, -35, -65, -90)
 
 
-def _silhouette(xs, zs):
-    """Boolean SIL_H x SIL_W grid of points normalised to their own box, closed by a 1-cell dilation."""
-    g = np.zeros((SIL_H, SIL_W), bool)
-    fx = (xs - xs.min()) / max(1e-9, xs.max() - xs.min())
-    fz = (zs - zs.min()) / max(1e-9, zs.max() - zs.min())
-    g[np.clip((fz * (SIL_H - 1)).astype(int), 0, SIL_H - 1), np.clip((fx * (SIL_W - 1)).astype(int), 0, SIL_W - 1)] = True
-    d = g.copy()
-    for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-        d |= np.roll(np.roll(g, dy, 0), dx, 1)
-    return d
-
-
-def bake_pose(arm, obj, views):
-    """Ruling A142 — the arm angle whose posed front silhouette matches the front view's alpha best (IoU on a
-    SIL_W x SIL_H grid, both normalised to their own box): an item picture shows a top with its sleeves hanging, a
-    T-posed drape would project its sleeve pixels onto the torso. Returns ``(deg, co, nr, info)`` (world positions /
-    normals in that pose)."""
-    im = bpy.data.images.load(views["view_front"])
-    w, h = im.size
-    px = np.array(im.pixels[:]).reshape(h, w, im.channels)
-    alpha = px[..., 3] if im.channels == 4 else np.ones((h, w))
-    ys, xs = np.where(alpha > 0.5)
-    want = np.zeros((SIL_H, SIL_W), bool)
-    fx = (xs - xs.min()) / max(1, xs.max() - xs.min())
-    fz = (ys - ys.min()) / max(1, ys.max() - ys.min())        # row 0 = bottom (Blender pixels)
-    want[np.clip((fz * (SIL_H - 1)).astype(int), 0, SIL_H - 1), np.clip((fx * (SIL_W - 1)).astype(int), 0, SIL_W - 1)] = True
+def bake_pose(arm, obj, views, degs=BAKE_ARM_DEG, polys=None, paired=False):
+    """Ruling A142 — the arm angle whose posed front silhouette matches the front view best: an item picture shows a
+    top with its sleeves hanging, a T-posed drape would project its sleeve pixels onto the torso. Bug round
+    2026-11-20: the score is the REGISTERED silhouette IoU (``gd.silhouette_iou``: scale + offset searched, per part
+    for a ``paired`` piece), no longer the IoU of both outlines stretched onto their own boxes; ``degs`` the angles
+    tried (gloves: ``GLOVE_ARM_DEG``). ``views`` = ``gd.bake_views``. Returns ``(deg, co, nr, info)`` (world
+    positions / normals in that pose)."""
+    tri_v, _tl = gd._tri_layout(obj, polys)
     best, scores = None, {}
-    for deg in BAKE_ARM_DEG:
+    for deg in degs:
         _set_arm_angle(arm, deg)
         co, nr, _t = gd.world_coords(obj)
-        front = nr[:, 1] <= 0
-        sil = _silhouette(co[front, 0], co[front, 2])
-        iou = float((sil & want).sum() / max(1, (sil | want).sum()))
+        iou = gd.silhouette_iou(np.asarray(co, np.float64), np.asarray(nr, np.float64), tri_v, views,
+                                paired=paired)
         scores[deg] = round(iou, 3)
         if best is None or iou > best[0]:
             best = (iou, deg, co, nr)
     gd.set_pose(arm, "rest")
-    return best[1], best[2], best[3], {"iou": scores}
+    return best[1], best[2], best[3], {"pose_iou": scores}
 
 
 def run(a):
@@ -1925,15 +1910,21 @@ def run(a):
     pose_shapes = {"version": 2, "targets": targets, "groups": out_groups} if targets else None
     gd.progress(stage="bake", pose=None, index=None, count=None, frame=None, frames=None)
     t_bake = time.time()
-    views = {"view_front": inp["front"], "view_back": inp["back"]}
+    views = {"view_front": inp["front"], "view_back": inp["back"],
+             "open_front": inp.get("front_open"), "open_back": inp.get("back_open")}
+    loaded = gd.bake_views(views)
     bake_info = {}
-    if bod:
-        deg, bco_, bnr_, sil = bake_pose(arm, obj, views)
+    gloves = bool(fitted) and fitted.get("kind") == "gloves"
+    if bod or gloves:
+        # bug round 2026-11-20: gloves search the arm pose too (a pair pictured upright), each glove on its own part
+        deg, bco_, bnr_, sil = bake_pose(arm, obj, loaded, degs=GLOVE_ARM_DEG if gloves else BAKE_ARM_DEG,
+                                         polys=n_faces_single, paired=gloves)
         bake_info = {"arm_deg": deg, **sil}
         tex = gd.project_bake(obj, views, out / "template_atlas.png", size=1024, co=bco_, nr=bnr_,
-                              polys=n_faces_single)
+                              polys=n_faces_single, paired=gloves, views=loaded)
     else:
-        tex = gd.project_bake(obj, views, out / "template_atlas.png", size=1024, polys=n_faces_single)
+        tex = gd.project_bake(obj, views, out / "template_atlas.png", size=1024, polys=n_faces_single,
+                              views=loaded)
     tex.update(bake_info)
     tex["wall_s"] = round(time.time() - t_bake, 2)
     edges2 = gd.edges_of(obj)

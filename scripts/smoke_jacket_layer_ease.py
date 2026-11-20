@@ -254,7 +254,7 @@ def spec_sent(**kw):
     saved_ = (_runner.run, gt.measure_body, gt.prepare_view)
     _runner.run = fake
     gt.measure_body = lambda glb: dict(K)
-    gt.prepare_view = lambda src, dst, garment_only=True: {}
+    gt.prepare_view = lambda src, dst, garment_only=True, open_mask=None: {}
     tmp = Path(tempfile.mkdtemp(prefix="smoke-jacket-run-"))
     try:
         (tmp / "b.glb").write_bytes(b"glb")

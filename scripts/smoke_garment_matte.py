@@ -164,9 +164,9 @@ try:
 except Exception as e:  # noqa: BLE001 — the helper is pure numpy: take its source alone
     import ast
     src_txt = (ROOT / "app/blender/scripts/garment_template_drape.py").read_text()
-    node = next(n for n in ast.parse(src_txt).body if isinstance(n, ast.FunctionDef) and n.name == "push_pull")
+    nodes = [n for n in ast.parse(src_txt).body if isinstance(n, ast.FunctionDef) and n.name in ("_up2", "push_pull")]
     ns = {"np": np}
-    exec(compile(ast.Module([node], []), "push_pull", "exec"), ns)
+    exec(compile(ast.Module(nodes, []), "push_pull", "exec"), ns)
     push_pull = ns["push_pull"]
 tex = np.zeros((16, 16, 3))
 valid = np.zeros((16, 16), bool)

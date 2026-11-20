@@ -40,6 +40,7 @@ from mathutils.bvhtree import BVHTree
 
 sys.path.insert(0, str(Path(__file__).parent))
 from _common import main  # noqa: E402
+import bake_register as br  # noqa: E402
 sys.path.pop(0)
 
 #: A172: the live progress side channel of a run — ``progress_file`` of the job params (the server reads it while the
@@ -1552,10 +1553,26 @@ def run_panels(a):
             "bake": tex, "draped": m}, {"glb": str(out / "skirt_template.glb")}
 
 
+def _up2(a, shape):
+    """``a`` (h, w, 3) doubled bilinearly (cell centres, edges clamped: each fine cell 3/4 its own coarse cell and 1/4
+    the next one per axis), cropped to ``shape`` — a convex mix of the coarse colours."""
+    def axis(x, ax):
+        n = x.shape[ax]
+        prev = np.take(x, np.r_[0, np.arange(n - 1)], axis=ax)
+        nxt = np.take(x, np.r_[np.arange(1, n), n - 1], axis=ax)
+        both = np.stack([0.75 * x + 0.25 * prev, 0.75 * x + 0.25 * nxt], axis=ax + 1)
+        size = list(x.shape)
+        size[ax] = 2 * n
+        return both.reshape(size)
+    return axis(axis(a, 0), 1)[:shape[0], :shape[1]]
+
+
 def push_pull(rgb, valid):
     """A230: ``rgb`` (h x w x 3 float) with every texel outside ``valid`` filled from the valid ones — the push-pull
     pyramid: averages of the valid texels down to 1 px, then each level's holes filled from the coarser level on the
-    way back up. Valid texels keep their colour exactly. numpy only (Blender's Python has no scipy)."""
+    way back up. Valid texels keep their colour exactly. numpy only (Blender's Python has no scipy). Bug round
+    2026-11-20: the coarser level comes up bilinearly (``_up2``), no longer by repeating each cell 2 x 2 — a filled
+    opening (Ylva's skirt slit) was a mosaic of blocks."""
     rgb = np.asarray(rgb, np.float64)
     w = np.asarray(valid, np.float64)
     levels = []
@@ -1575,44 +1592,127 @@ def push_pull(rgb, valid):
     cols = [(cc / np.maximum(mm, 1e-12)[..., None], mm > 0) for cc, mm in levels]
     up = cols[-1][0]
     for col, has in reversed(cols[:-1]):
-        coarse = np.repeat(np.repeat(up, 2, 0), 2, 1)[:col.shape[0], :col.shape[1]]
+        coarse = _up2(up, col.shape[:2])
         up = np.where(has[..., None], col, coarse)
     out = rgb.copy()
     out[~np.asarray(valid, bool)] = up[~np.asarray(valid, bool)]
     return out
 
 
-def project_bake(obj, a, out_png, size=1024, co=None, nr=None, polys=None):
-    """Projection bake of the front/back cut-out views onto obj's UVs (orthographic,
-    registered by bounding box: the piece's projected bbox = the view's alpha bbox). ``co`` / ``nr`` = world
-    positions / normals to project from instead of the rest mesh (Ruling A142: a top is projected in the arm pose
-    its picture shows). ``polys`` (A198): only the polygons below that index are projected — after a Solidify the
-    copy layer shares the UVs and faces the other way, so it would paint the outside from the opposite view."""
+def load_view(path, open_path=None):
+    """One cut-out view for the bake: ``{px (h, w, c) floats, alpha (bool), usable (bool), open_px}`` — row 0 =
+    bottom. ``open_path``: its opening mask (``garment_template.opening_mask``; white = opening), left out of
+    ``usable`` so push-pull fills it from the fabric round it; it stays in ``alpha`` (the silhouette)."""
+    im = bpy.data.images.load(str(path))
+    w, h = im.size
+    px = np.array(im.pixels[:]).reshape(h, w, im.channels)
+    alpha = (px[..., 3] if im.channels == 4 else np.ones((h, w))) > 0.5
+    opening = np.zeros((h, w), bool)
+    if open_path and Path(open_path).is_file():
+        om = bpy.data.images.load(str(open_path))
+        if tuple(om.size) == (w, h):
+            opening = np.array(om.pixels[:]).reshape(h, w, om.channels)[..., 0] > 0.5
+    return {"px": px, "alpha": alpha, "usable": alpha & ~opening, "open_px": int((opening & alpha).sum())}
+
+
+def bake_views(a):
+    """The two views of a bake args dict (``view_front`` / ``view_back`` + ``open_front`` / ``open_back``)."""
+    return {side: load_view(a[f"view_{side}"], a.get(f"open_{side}")) for side in ("front", "back")}
+
+
+def _tri_layout(obj, polys):
+    """``(tri_v (t, 3), tri_loops (t, 3))`` of obj's loop triangles below polygon ``polys`` (all without)."""
     me = obj.data
     me.calc_loop_triangles()
+    tv, tl = [], []
+    for t in me.loop_triangles:
+        if polys is not None and t.polygon_index >= polys:
+            continue
+        tv.append(tuple(t.vertices))
+        tl.append(tuple(t.loops))
+    return np.array(tv, np.int64).reshape(-1, 3), np.array(tl, np.int64).reshape(-1, 3)
+
+
+def register_views(co, nr, tri_v, views, paired=False):
+    """Bug round 2026-11-20: each view's map piece -> picture by silhouette (``bake_register.register``). Returns
+    ``(sides (t,) "front"/"back" per triangle, part (t,) int, maps {side: [map per part]}, info {side: {iou, box_iou,
+    parts}})``. Front = the triangles facing the -Y camera (image right = +X), back = the others (image right = -X).
+    ``paired`` (gloves): when the piece falls apart into two parts side by side (``islands``) and the view too
+    (``alpha_parts``), each part is registered onto its own part of the picture."""
+    fn = nr[tri_v].mean(1)
+    sides = np.where(fn[:, 1] <= 0, "front", "back")
+    part = np.zeros(len(tri_v), int)
+    split = br.islands(tri_v, co[:, [0, 2]]) if paired else None
+    maps, info = {}, {}
+    for side in ("front", "back"):
+        p2 = np.c_[co[:, 0] if side == "front" else -co[:, 0], co[:, 2]]
+        on = sides == side
+        alpha = views[side]["alpha"]
+        aparts = br.alpha_parts(alpha) if split is not None else None
+        if split is not None and aparts is not None:
+            # the parts in picture order: the mesh part with the smaller x' first
+            order = sorted(range(2), key=lambda k: p2[np.unique(tri_v[split[k]])][:, 0].mean())
+            maps[side], ious, boxes = [], [], []
+            for slot, k in enumerate(order):
+                sel = on & split[k]
+                part[sel] = slot
+                m, iou, box = br.register(p2, tri_v[sel] if sel.any() else tri_v[split[k]], aparts[slot])
+                maps[side].append(m)
+                ious.append(iou)
+                boxes.append(box)
+            info[side] = {"iou": round(float(np.mean(ious)), 4), "box_iou": round(float(np.mean(boxes)), 4),
+                          "parts": 2}
+        else:
+            m, iou, box = br.register(p2, tri_v[on] if on.any() else tri_v, alpha)
+            maps[side] = [m]
+            info[side] = {"iou": iou, "box_iou": box, "parts": 1}
+    return sides, part, maps, info
+
+
+def silhouette_iou(co, nr, tri_v, views, paired=False):
+    """The registered front-view IoU of a posed piece (the bake pose search's score)."""
+    fn = nr[tri_v].mean(1)
+    front = fn[:, 1] <= 0
+    p2 = co[:, [0, 2]]
+    alpha = views["front"]["alpha"]
+    if paired:
+        split = br.islands(tri_v, p2)
+        aparts = br.alpha_parts(alpha) if split is not None else None
+        if split is not None and aparts is not None:
+            order = sorted(range(2), key=lambda k: p2[np.unique(tri_v[split[k]])][:, 0].mean())
+            return float(np.mean([br.register(p2, tri_v[front & split[k]] if (front & split[k]).any()
+                                              else tri_v[split[k]], aparts[slot])[1]
+                                  for slot, k in enumerate(order)]))
+    return br.register(p2, tri_v[front] if front.any() else tri_v, alpha)[1]
+
+
+def project_bake(obj, a, out_png, size=1024, co=None, nr=None, polys=None, paired=False, views=None):
+    """Projection bake of the front/back cut-out views onto obj's UVs (orthographic). Bug round 2026-11-20: each view
+    is registered to the piece by silhouette (``register_views``: scale + offset per axis maximising the IoU, per part
+    for a ``paired`` piece), sampled bilinearly (``bake_register.sample_bilinear``), and the view's openings
+    (``open_<side>``) are left out like transparent pixels. ``co`` / ``nr`` = world positions / normals to project
+    from instead of the rest mesh (Ruling A142: a top is projected in the arm pose its picture shows). ``polys``
+    (A198): only the polygons below that index are projected — after a Solidify the copy layer shares the UVs and
+    faces the other way, so it would paint the outside from the opposite view. ``views``: ``bake_views(a)`` already
+    loaded."""
+    me = obj.data
     if co is None:
         co = np.array([obj.matrix_world @ v.co for v in me.vertices])
     if nr is None:
         nr = np.array([(obj.matrix_world.to_3x3() @ v.normal).normalized() for v in me.vertices])
-    views = {}
-    for side in ("front", "back"):
-        im = bpy.data.images.load(a[f"view_{side}"])
-        w, h = im.size
-        px = np.array(im.pixels[:]).reshape(h, w, im.channels)
-        alpha = px[..., 3] if im.channels == 4 else np.ones((h, w))
-        ys, xs = np.where(alpha > 0.5)
-        views[side] = (px, alpha, (xs.min(), xs.max(), ys.min(), ys.max()), w, h)
-    lo, hi = co.min(0), co.max(0)
+    co, nr = np.asarray(co, np.float64), np.asarray(nr, np.float64)
+    views = views or bake_views(a)
+    tri_v, tri_l = _tri_layout(obj, polys)
+    sides, part, maps, reg = register_views(co, nr, tri_v, views, paired=paired)
+    uv_all = np.empty(len(me.loops) * 2, np.float32)
+    me.uv_layers.active.data.foreach_get("uv", uv_all)
+    uv_all = uv_all.reshape(-1, 2)
     img = np.zeros((size, size, 4))
     valid = np.zeros((size, size), bool)
     mask = np.zeros((size, size), bool)
-    uv = me.uv_layers.active.data
-    for t in me.loop_triangles:
-        if polys is not None and t.polygon_index >= polys:
-            continue
-        p = np.array([uv[i].uv for i in t.loops]) * size
-        P3 = co[list(t.vertices)]
-        N3 = nr[list(t.vertices)].mean(0)
+    for t in range(len(tri_v)):
+        p = uv_all[tri_l[t]].astype(np.float64) * size
+        P3 = co[tri_v[t]]
         x0, y0 = np.maximum(np.floor(p.min(0)).astype(int), 0)
         x1, y1 = np.minimum(np.ceil(p.max(0)).astype(int), size - 1)
         if x1 < x0 or y1 < y0:
@@ -1629,17 +1729,15 @@ def project_bake(obj, a, out_png, size=1024, co=None, nr=None, polys=None):
         if not ins.any():
             continue
         pos = l1[ins, None] * P3[0] + l2[ins, None] * P3[1] + l3[ins, None] * P3[2]
-        side = "front" if N3[1] <= 0 else "back"
-        vpx, valpha, (bx0, bx1, by0, by1), w, h = views[side]
+        side = sides[t]
+        view = views[side]
+        sx, ox, sz, oz = maps[side][part[t]]
         # front (camera on -Y): image right = +X ; back: image right = -X ; row 0 = bottom
-        fx = (pos[:, 0] - lo[0]) / (hi[0] - lo[0]) if side == "front" else (hi[0] - pos[:, 0]) / (hi[0] - lo[0])
-        fz = (pos[:, 2] - lo[2]) / (hi[2] - lo[2])
-        ix = np.clip((bx0 + fx * (bx1 - bx0)).astype(int), 0, w - 1)
-        iy = np.clip((by0 + fz * (by1 - by0)).astype(int), 0, h - 1)
+        xp = pos[:, 0] if side == "front" else -pos[:, 0]
+        col, ok = br.sample_bilinear(view["px"], view["usable"], sx * xp + ox, sz * pos[:, 2] + oz)
         ty, tx = ys[ins].astype(int), xs[ins].astype(int)
         mask[ty, tx] = True
-        ok = valpha[iy, ix] > 0.5
-        img[ty[ok], tx[ok], :3] = vpx[iy[ok], ix[ok], :3]
+        img[ty[ok], tx[ok], :3] = col[ok]
         valid[ty[ok], tx[ok]] = True
     coverage = float((valid & mask).sum() / max(1, mask.sum()))
     if valid.any():
@@ -1661,7 +1759,24 @@ def project_bake(obj, a, out_png, size=1024, co=None, nr=None, polys=None):
     mat.node_tree.links.new(tn.outputs["Color"], mat.node_tree.nodes["Principled BSDF"].inputs["Base Color"])
     me.materials.clear()
     me.materials.append(mat)
-    return {"coverage": round(coverage, 4), "method": "orthographic projection, bbox-registered"}
+    # how evenly the registered views land on the surface: the triangles facing each camera (within 45 deg)
+    aniso = {}
+    fn = nr[tri_v].mean(1)
+    for side in ("front", "back"):
+        facing = (fn[:, 1] < -0.7) if side == "front" else (fn[:, 1] > 0.7)
+        if not facing.any():
+            continue
+        P = co[tri_v[facing]]
+        mp = np.array([maps[side][k] for k in part[facing]])
+        xp = P[..., 0] if side == "front" else -P[..., 0]
+        q = np.stack([mp[:, 0, None] * xp + mp[:, 1, None], mp[:, 2, None] * P[..., 2] + mp[:, 3, None]], -1)
+        val = br.anisotropy(P, q)
+        if val is not None:
+            aniso[side] = round(val, 3)
+    return {"coverage": round(coverage, 4), "method": "orthographic projection, silhouette-registered, bilinear",
+            "iou": round(min(r["iou"] for r in reg.values()), 4),
+            "registration": {side: {**r, "openings_px": views[side]["open_px"]} for side, r in reg.items()},
+            "anisotropy": aniso}
 
 
 def run_from_body(a):

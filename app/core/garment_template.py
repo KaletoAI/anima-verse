@@ -355,7 +355,13 @@ THRESHOLDS = {
     "pin_drift_mm": 5.0,          # largest displacement of a pinned vertex
     "stretch_max": 1.3,           # longest edge / its pre-drape length, after the drape
     "bake_coverage": 0.85,        # template texels that received a view colour
+    "bake_iou": 0.5,              # bug round 2026-11-20: the registered silhouette IoU of the views (the poorer one)
 }
+#: Bug round 2026-11-20: a baked texture this poor is WARNED about in the Figure row (``texture_warning``; never a
+#: refusal): under 60 % of the texels got a picture colour (the rest is push-pull fill from the colours round it), or
+#: the views' outline matches the template's by under half (the picture shows another cut: straps, chains, a pose).
+#: Glut's bra baked 0.43 coverage with the box fit (0.68 registered, IoU 0.20 on the back view), Kira's tights 0.49.
+TEXTURE_WARN = {"coverage": 0.6, "iou": 0.5}
 #: The wall-time budget of one drape (Ruling A138: a Build is waited for in wall seconds; the spike's CPU sum
 #: counts every Blender thread). Same 60 s, hand-derived in ``scripts/smoke_garment_template.py``. Since 2026-11-18
 #: (owner) it is a REPORTED row, never a gate: a drape that passes every quality row is accepted however long it
@@ -2222,8 +2228,9 @@ def work_wall_s(data: Dict[str, Any]) -> Optional[float]:
 
 def judge_build(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Pass rows of one build result (``data`` of the script): pin drift, stretch and rest poke gate; the work
-    time (``build_wall_s``, ``work_wall_s`` against ``BUILD_WALL_S`` — over it the Figure tab says "slow"), CPU
-    and bake coverage are reported, never gated (Ruling A138; the wall row since 2026-11-18)."""
+    time (``build_wall_s``, ``work_wall_s`` against ``BUILD_WALL_S`` — over it the Figure tab says "slow"), CPU,
+    bake coverage and the views' silhouette IoU (``bake_iou``, bug round 2026-11-20) are reported, never gated
+    (Ruling A138; the wall row since 2026-11-18)."""
     rows: List[Dict[str, Any]] = []
 
     def row(name, value, limit, ok, gate=True):
@@ -2251,7 +2258,22 @@ def judge_build(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     if "coverage" in bake:
         row("bake_coverage", bake["coverage"], THRESHOLDS["bake_coverage"],
             bake["coverage"] > THRESHOLDS["bake_coverage"], gate=False)
+    if "iou" in bake:
+        row("bake_iou", bake["iou"], THRESHOLDS["bake_iou"], bake["iou"] >= THRESHOLDS["bake_iou"], gate=False)
     return rows
+
+
+def texture_warning(bake: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The Figure row's texture warning of a drape's ``metrics.bake`` (``TEXTURE_WARN``): ``{coverage, iou,
+    low_coverage, low_iou}`` when either is under its mark, else None. A drape baked before the bug round
+    2026-11-20 has no ``iou`` — its coverage alone decides."""
+    bake = bake or {}
+    cov, iou = bake.get("coverage"), bake.get("iou")
+    low_cov = cov is not None and float(cov) < TEXTURE_WARN["coverage"]
+    low_iou = iou is not None and float(iou) < TEXTURE_WARN["iou"]
+    if not (low_cov or low_iou):
+        return None
+    return {"coverage": cov, "iou": iou, "low_coverage": low_cov, "low_iou": low_iou}
 
 
 #: Ruling A141 — skin in YCrCb (also shaded skin: a leg in the shadow of a slit); a garment pixel within
@@ -2273,14 +2295,85 @@ def skin_mask(rgb):
             & (y >= SKIN_MIN_Y))
 
 
-def prepare_view(src: str, dst: Path, *, garment_only: bool = True, matte: Any = "birefnet") -> Dict[str, Any]:
+#: Bug round 2026-11-20 (Ylva's skirt): a see-through opening of a view — a slit, the gap of a wrap, the inside of
+#: a leg opening — is opaque in the cut-out, and the projection painted it onto closed fabric. A pixel is "dark" when
+#: its luminance is under OPEN_REL x the piece's median AND at least OPEN_MIN_DROP (0..255) under it: the drop is
+#: RELATIVE to the piece, so black fabric (median 10-30) has no dark pixels at all.
+OPEN_REL = 0.35
+OPEN_MIN_DROP = 40.0
+#: A dark region is an opening when it is OPEN_MIN_SHARE .. OPEN_MAX_SHARE of the piece, reaches the hem or the
+#: top edge (the piece's outside lies within OPEN_EDGE_PX straight below / above it in at least OPEN_EDGE_COLS
+#: columns) and fabric surrounds most of it — at most OPEN_OUTSIDE_SHARE of its rim borders the outside (a slit
+#: touches the hem with its base only; a dark band along the top edge borders the outside with its whole length).
+OPEN_MIN_SHARE = 0.003
+OPEN_MAX_SHARE = 0.25
+OPEN_EDGE_PX = 3
+OPEN_EDGE_COLS = 2
+OPEN_OUTSIDE_SHARE = 0.35
+
+
+def opening_mask(rgba) -> Tuple[Any, Dict[str, Any]]:
+    """The see-through openings of a cut-out view (``OPEN_*``): an (h, w) bool mask (row 0 = top, as the file) and
+    ``{px, regions}``. The bake leaves these pixels out (``project_bake``), so push-pull fills them with the fabric
+    around them; they still count as the piece for the silhouette registration."""
+    import numpy as np
+    from scipy import ndimage
+    rgba = np.asarray(rgba)
+    opaque = rgba[..., 3] >= 128
+    out = np.zeros(opaque.shape, bool)
+    if opaque.sum() < 16:
+        return out, {"px": 0, "regions": 0}
+    rgb = rgba[..., :3].astype(np.float64)
+    lum = 0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
+    med = float(np.median(lum[opaque]))
+    dark = opaque & (lum < OPEN_REL * med) & (med - lum >= OPEN_MIN_DROP)
+    labels, count = ndimage.label(dark, structure=np.ones((3, 3), bool))
+    total = float(opaque.sum())
+    h = opaque.shape[0]
+    outside = ~opaque
+    found = 0
+    for k in range(1, count + 1):
+        reg = labels == k
+        n = float(reg.sum())
+        if not OPEN_MIN_SHARE <= n / total <= OPEN_MAX_SHARE:
+            continue
+        rows, cols = np.nonzero(reg)
+        touch = 0
+        for c in np.unique(cols):
+            rs = rows[cols == c]
+            lo_r, hi_r = int(rs.min()), int(rs.max())
+            below = outside[hi_r + 1:min(h, hi_r + 1 + OPEN_EDGE_PX), c]
+            above = outside[max(0, lo_r - OPEN_EDGE_PX):lo_r, c]
+            if below.any() or above.any() or hi_r == h - 1 or lo_r == 0:
+                touch += 1
+        if touch < OPEN_EDGE_COLS:
+            continue
+        rim = reg & ~ndimage.binary_erosion(reg)
+        rim_out = rim & ndimage.binary_dilation(outside)
+        if rim_out.sum() > OPEN_OUTSIDE_SHARE * max(1, rim.sum()):
+            continue
+        out |= reg
+        found += 1
+    return out, {"px": int(out.sum()), "regions": found}
+
+
+def open_mask_path(view: Path) -> Path:
+    """Where ``prepare_view`` writes a view's opening mask (``opening_mask``; L, 255 = opening)."""
+    view = Path(view)
+    return view.with_name(f"{view.stem}_open.png")
+
+
+def prepare_view(src: str, dst: Path, *, garment_only: bool = True, matte: Any = "birefnet",
+                 open_mask: Optional[Path] = None) -> Dict[str, Any]:
     """Write ``src`` as RGBA to ``dst`` with the piece cut free — A230: ``garment_matte.cut`` (backdrop colour from the
     border or, for a picture that already has alpha, from its transparent ring; the backdrop-distance key with a
     soft ramp and the BiRefNet-DIS matte in consensus; small holes filled, strays dropped; the rim un-mixed from the
     backdrop and despilled, the outer px and the outside filled with the colour further in). Returns ``{alpha:
     "kept" | "border", share, skin_dropped, mode, bg, ...}`` (share = opaque pixels). The projection registers by
-    the alpha bounding box, so the background must go; the footprint is hard alpha, its colours never backdrop.
-    ``matte``: ``"birefnet"`` (default), None (the key alone) or a callable (the smokes).
+    the alpha silhouette, so the background must go; the footprint is hard alpha, its colours never backdrop.
+    ``matte``: ``"birefnet"`` (default), None (the key alone) or a callable (the smokes). ``open_mask`` (the drape's
+    views): the see-through openings (``opening_mask``) are written there as L (255 = opening), and the result
+    carries ``openings``.
 
     ``garment_only`` (the item picture — a picture of the piece WORN shows legs): skin (``skin_mask``,
     grown by SKIN_GROW_PX) is cut when it is a minority of the opaque pixels (a skin-coloured piece keeps
@@ -2310,7 +2403,11 @@ def prepare_view(src: str, dst: Path, *, garment_only: bool = True, matte: Any =
             px[..., :3] = garment_matte.decontaminate(px[..., :3], opaque.astype(float), opaque, info["bg"])
             px[..., 3] = np.where(opaque, 255, 0).astype(np.uint8)
     Image.fromarray(px).save(dst)
-    return {**info, "share": round(float((px[..., 3] >= 128).mean()), 4), "skin_dropped": round(dropped, 4)}
+    out = {**info, "share": round(float((px[..., 3] >= 128).mean()), 4), "skin_dropped": round(dropped, 4)}
+    if open_mask is not None:
+        opening, out["openings"] = opening_mask(px)
+        Image.fromarray(np.where(opening, 255, 0).astype(np.uint8), "L").save(open_mask)
+    return out
 
 
 def wall_only_failure(result: Dict[str, Any]) -> bool:
@@ -2361,13 +2458,15 @@ def _run_drape_once(body_glb: Path, params: Dict[str, Any], sources: Dict[str, s
     _live_stage(live, "views")
     views = {side: out_dir / f"view_{side}.png" for side in ("front", "back")}
     view_info = {side: prepare_view(sources[side], views[side],
-                                    garment_only=sources.get("source") not in ("cutout", "piece_only")) for side in views}
+                                    garment_only=sources.get("source") not in ("cutout", "piece_only"),
+                                    open_mask=open_mask_path(views[side])) for side in views}
     data: Dict[str, Any] = {}
     res: Dict[str, Any] = {}
     first: Optional[Tuple[Dict[str, Any], Dict[str, Any]]] = None
     slot_wait = 0.0       # the waits for a free Blender slot in ``wall_total_s`` (``work_wall_s`` takes them out)
     for scale in (1.0, 2.0):
-        inputs = {"body": Path(body_glb), "front": views["front"], "back": views["back"]}
+        inputs = {"body": Path(body_glb), "front": views["front"], "back": views["back"],
+                  "front_open": open_mask_path(views["front"]), "back_open": open_mask_path(views["back"])}
         for i, (path, _payload) in enumerate(lower or []):
             inputs[f"lower_{i}"] = Path(path)
         args = build_args(params, spec, item_id=item_id, render=render, poses=poses, quality_scale=scale,

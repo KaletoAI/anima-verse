@@ -159,7 +159,7 @@ def drape_with(first, *, wall=10.0):
     _runner.run = fake
     gt.measure_body = lambda glb: {}
     gt.panel_spec = lambda params, meas, **_k: {"outline": {}, "row_y": [0.0], "measure": {}}
-    gt.prepare_view = lambda src, dst, garment_only=True: {}
+    gt.prepare_view = lambda src, dst, garment_only=True, open_mask=None: {}
     tmp = Path(tempfile.mkdtemp(prefix="smoke-stretch-run-"))
     try:
         (tmp / "b.glb").write_bytes(b"glb")

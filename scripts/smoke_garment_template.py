@@ -384,7 +384,7 @@ _saved = (_runner.run, gt.measure_body, gt.panel_spec, gt.prepare_view)
 _runner.run = _fake_run
 gt.measure_body = lambda glb: {}
 gt.panel_spec = lambda params, meas, **_k: {"outline": {}, "row_y": [0.0], "measure": {}}
-gt.prepare_view = lambda src, dst, garment_only=True: {}
+gt.prepare_view = lambda src, dst, garment_only=True, open_mask=None: {}
 _body = Path(tempfile.mkdtemp(prefix="smoke-template-run-"))
 try:
     (_body / "b.glb").write_bytes(b"glb")
