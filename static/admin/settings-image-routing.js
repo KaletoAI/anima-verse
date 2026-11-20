@@ -124,7 +124,9 @@ function irFits(occ, b) {
     }
     if (occ.category === 'upscale') return cat === 'upscale';
     if (cat === 'inpaint' || cat === 'upscale') return false;
-    if (occ.needs_ref_slot && (Number(b.ref_slot_count) || 0) < 1) return false;
+    // The occasion's reference-slot budget (occasions.backend_fits): garment_cut_texture needs 2.
+    const need = Number(occ.min_ref_slots) || (occ.needs_ref_slot ? 1 : 0);
+    if ((Number(b.ref_slot_count) || 0) < need) return false;
     return true;
 }
 

@@ -9,7 +9,9 @@ scan callers by AST/text, and Part D checks the service with transport doubles.
 
 PART A — THE CATALOG, DERIVED BY HAND FROM THE SPEC
 ---------------------------------------------------
-A1. Exactly these 40 occasions (40 + `jewellery_mesh`, Ruling A118 J3, last, − `outfit_reference`, A224) (§ 1 table, minus `mesh_low` which the review
+A1. Exactly these 41 occasions (40 + `jewellery_mesh`, Ruling A118 J3, last, − `outfit_reference`, A224, + `garment_cut_texture`
+    right after garment_view — plan 2026-11-20-template-cut-uv-texture Task 6: the template dialog's "texture from
+    cut", image/render, world-only, two reference slots, a configured chain required) (§ 1 table, minus `mesh_low` which the review
     DROPS, plus `frame` which the review ADDS, plus `tpose_view` from
     plan-tier-animationen.md P1, plus `garment_view` and `mesh_garment` from
     the base-body phase-4 plan, R4, plus the five base-body steps of the
@@ -35,7 +37,7 @@ A1. Exactly these 40 occasions (40 + `jewellery_mesh`, Ruling A118 J3, last, −
     `outfit_back_turn` (image, world-only: the turn step of a dressed back/side
     view, Ruling A175) right before outfit_back_draft):
       photo instagram profile expression tpose tpose_view garment_view
-      base_front base_view outfit_front outfit_back_turn outfit_back_draft
+      garment_cut_texture base_front base_view outfit_front outfit_back_turn outfit_back_draft
       outfit_side_draft scene_view
       location timevariant event prop surface_texture item regenerate frame video
       mesh_humanoid mesh_creature rig_humanoid rig_creature upscale face_retexture
@@ -48,7 +50,9 @@ P2 adds upscale (image/upscale), P1 adds face_retexture (mesh/face_retexture).
 A3. media: video -> "video"; the five mesh_*, both rigs, face_retexture,
     hair_mesh, hair_strands, mesh_footwear -> "mesh";
     pose_animation -> "animation"; 23 occasions "image" (24 + footwear_empty
-    - outfit_back - outfit_side, Task 11g; 26 since earlier additions + outfit_back_turn, A175).
+    - outfit_back - outfit_side, Task 11g; 26 since earlier additions + outfit_back_turn, A175; 25 after
+    outfit_reference left, A224; 26 with garment_cut_texture, cut-texture plan Task 6 — one more category
+    "render" occasion, the category set is unchanged).
 A4. P1/P2: all mesh_* occasions require img2mesh/none. rig_humanoid
     requires mesh2rig/mixamo; rig_creature mesh2rig/generic.
     pose_animation requires mesh2anim; image/video occasions use category render.
@@ -69,7 +73,8 @@ A5. character_scoped exactly: photo, instagram, profile, expression, tpose, tpos
 A7. needs_ref_slot only on timevariant (§ 1 "only backends with >= 1 ref slot"),
     garment_view (an edit of the stored base view, R4), footwear_empty
     (an edit of the inventory item image) and the full-body references
-    base_reference (Ruling A87: an edit of a reference picture; outfit_reference left with A224).
+    base_reference (Ruling A87: an edit of a reference picture; outfit_reference left with A224), and
+    garment_cut_texture (the island template + the item image, so min_ref_slots = 2).
 A8. backend_fits, one line each (kind = media/category/rig/ref_slot_count):
       photo    + image/img2img/ref 1          -> True
       photo    + image/inpaint                -> False  (render = all but inpaint)
@@ -89,6 +94,12 @@ A8. backend_fits, one line each (kind = media/category/rig/ref_slot_count):
       hair_strands + mesh/txt2hair            -> True
       hair_strands + mesh/img2hair            -> False
       hair_mesh + mesh/txt2hair               -> False
+      garment_cut_texture + image/img2img/ref 1 -> False (min_ref_slots 2: the template AND the item image)
+      garment_cut_texture + image/img2img/ref 2 -> True
+      garment_cut_texture + image/img2img/ref 0 -> False
+    requires_chain(garment_cut_texture) is True: an empty chain raises NoRouteError whose text points to
+    /admin/settings → Media Generation → Routing (never the cheapest, possibly paid backend); it is a no-fold
+    occasion (folds_negative False: its prompt says everything positively, nothing to fold).
 A9. mesh_occasion_for_rig: mixamo -> mesh_humanoid, generic -> mesh_creature,
     none -> mesh_object, none + building=True -> mesh_building.
     MESH_OCCASIONS_BY_RIG["none"] == ("mesh_object", "mesh_building").
@@ -97,9 +108,10 @@ A9. mesh_occasion_for_rig: mixamo -> mesh_humanoid, generic -> mesh_creature,
     review carry-over: guessing mesh_humanoid for it would mesh with a
     skeleton nobody asked for). Fails on commit 4893221f, which answered
     "mesh_humanoid" for "bogus".
-A10. catalog_payload() has 40 rows in catalog order, each with the keys
-    id, label, media, category, rig, character_scoped, needs_ref_slot, covers,
-    pose_check, hint, default_chain;
+A10. catalog_payload() has 41 rows in catalog order, each with the keys
+    id, label, media, category, rig, character_scoped, needs_ref_slot, min_ref_slots, covers,
+    pose_check, hint, default_chain; min_ref_slots is garment_cut_texture 2, every other needs_ref_slot occasion 1,
+    the rest 0 (the admin routing page's irFits mirrors backend_fits with it);
     every label is a non-empty English string.
 
 PART B — THE STRING-PATH CALLERS NAME THEIR OCCASION (AST, no import)
@@ -199,8 +211,8 @@ def part_a():
 
     # Ruling A87: base_reference — the full-body reference the A-pose front is an edit of (A224: no outfit one).
     expected_ids = ["photo", "instagram", "profile", "expression", "tpose", "tpose_view",
-                    "garment_view", "base_front", "base_reference", "base_view", "outfit_front",
-                    "outfit_back_turn", "outfit_back_draft",
+                    "garment_view", "garment_cut_texture", "base_front", "base_reference", "base_view",
+                    "outfit_front", "outfit_back_turn", "outfit_back_draft",
                     "outfit_side_draft", "scene_view", "location",
                     "timevariant", "event", "prop",
                     "surface_texture", "item", "regenerate", "frame", "video",
@@ -209,7 +221,7 @@ def part_a():
                     "footwear_empty", "hair_mesh", "hair_strands",
                     "pose_animation",
                     "pose_transition", "jewellery_mesh"]
-    check("A1 the 40 occasions in catalog order", occ.occasion_ids(), expected_ids)
+    check("A1 the 41 occasions in catalog order", occ.occasion_ids(), expected_ids)
 
     try:
         occ.get_occasion("mesh_low")
@@ -222,7 +234,7 @@ def part_a():
     check("A3 mesh media", sorted(i for i, m in media.items() if m == "mesh"),
           ["face_retexture", "hair_mesh", "hair_strands", "jewellery_mesh", "mesh_building", "mesh_creature", "mesh_footwear",
            "mesh_garment", "mesh_humanoid", "mesh_object", "rig_creature", "rig_humanoid"])
-    check("A3 image media count", sum(1 for m in media.values() if m == "image"), 25)  # A224: − outfit_reference
+    check("A3 image media count", sum(1 for m in media.values() if m == "image"), 26)  # A224: − outfit_reference; + garment_cut_texture
 
     check("A4 rigs", {i: occ.get_occasion(i).get("rig") for i in
                       ("mesh_humanoid", "mesh_creature", "mesh_object", "mesh_building",
@@ -251,7 +263,7 @@ def part_a():
 
     check("A7 needs_ref_slot",
           [i for i in expected_ids if occ.get_occasion(i).get("needs_ref_slot")],
-          ["garment_view", "base_reference", "timevariant", "footwear_empty"])
+          ["garment_view", "garment_cut_texture", "base_reference", "timevariant", "footwear_empty"])
 
     def k(media_, cat, ref=1):
         return {"media": media_, "category": cat, "ref_slot_count": ref}
@@ -274,12 +286,17 @@ def part_a():
     check("A8 hair_strands txt2hair", fits("hair_strands", k("mesh", "txt2hair")), True)
     check("A8 hair_strands img2hair", fits("hair_strands", k("mesh", "img2hair")), False)
     check("A8 hair_mesh txt2hair", fits("hair_mesh", k("mesh", "txt2hair")), False)
+    check("A8 garment_cut_texture ref 1", fits("garment_cut_texture", k("image", "img2img", ref=1)), False)
+    check("A8 garment_cut_texture ref 2", fits("garment_cut_texture", k("image", "img2img", ref=2)), True)
+    check("A8 garment_cut_texture ref 0", fits("garment_cut_texture", k("image", "img2img", ref=0)), False)
+    check("A8 garment_cut_texture never folds", occ.folds_negative("garment_cut_texture"), False)
 
     check("A8 animation fits", fits("pose_animation", k("animation", "mesh2anim")), True)
     check("A8 animation wrong category", fits("pose_animation", k("animation", "img2mesh")), False)
     check("A8 animation wrong media", fits("pose_animation", k("mesh", "mesh2anim")), False)
     for oid, expected in (("pose_animation", True), ("rig_humanoid", True),
-                          ("rig_creature", True), ("mesh_humanoid", False)):
+                          ("rig_creature", True), ("mesh_humanoid", False),
+                          ("garment_cut_texture", True)):
         check(f"A8 requires_chain {oid}", occ.requires_chain(oid), expected)
 
     from unittest.mock import patch
@@ -295,6 +312,15 @@ def part_a():
             check("A8 empty animation chain raises", False, True)
         except routing.NoRouteError as e:
             check("A8 empty animation chain message", "chain is empty" in str(e), True)
+    two_slot = SimpleNamespace(name="Edit2", MEDIA_TYPE="image", category="img2img", ref_slot_count=2,
+                               available=True, instance_enabled=True, effective_cost=0)
+    with patch.object(routing, "_rules", return_value={}):
+        try:
+            routing.resolve_image_route("garment_cut_texture", pool=BackendPool([two_slot]))
+            check("A8 empty cut-texture chain raises", "routed to Edit2", "NoRouteError")
+        except routing.NoRouteError as e:
+            check("A8 empty cut-texture chain points to the routing page",
+                  "/admin/settings → Media Generation → Routing" in str(e), True)
 
     check("A9 mixamo", occ.mesh_occasion_for_rig("mixamo"), "mesh_humanoid")
     check("A9 generic", occ.mesh_occasion_for_rig("generic"), "mesh_creature")
@@ -312,8 +338,10 @@ def part_a():
     check("A10 payload order", [r["id"] for r in rows], expected_ids)
     check("A10 payload keys", {tuple(sorted(r)) for r in rows},
           {tuple(sorted(["id", "label", "media", "category", "rig",
-                         "character_scoped", "needs_ref_slot", "covers", "pose_check",
+                         "character_scoped", "needs_ref_slot", "min_ref_slots", "covers", "pose_check",
                          "hint", "default_chain"]))})
+    check("A10 min_ref_slots", {r["id"]: r["min_ref_slots"] for r in rows if r["min_ref_slots"]},
+          {"garment_view": 1, "garment_cut_texture": 2, "base_reference": 1, "timevariant": 1, "footwear_empty": 1})
     check("A10 labels non-empty", all(isinstance(r["label"], str) and r["label"].strip()
                                       for r in rows), True)
 

@@ -30,6 +30,21 @@ hand below.
     (sleeve_l -2.0 -> "cap -2.0 cm"). Seam letters: a payload with two seams gives letters A and B, each on both of
     its sides. The footer reads "19.59 px/cm · atlas 2048²". The sheet is never the model template: it differs
     from ``render_template`` of the same payload.
+[4] Occasion + prompt file (plan Task 6): ``CUT_OCCASION`` / ``CUT_USE_CASE`` are "garment_cut_texture" and the
+    occasion is in the catalog. ``prompt_pieces`` of the T-shirt payload (island names back, band, front, sleeve_l,
+    sleeve_r) lists them in pattern order: front panel, back panel, left sleeve, right sleeve, neckband; a split part
+    keeps its number ("front_2" -> "front panel 2"). The prompt renders for piece "T-shirt" and those pieces: it
+    names "T-shirt", joins the pieces with ", ", carries "the first image" and "the second image" and no Jinja
+    leftovers ("{{", "{#"). After ``prompt_adapters.reference_wording`` with model "p-h3-image" it contains
+    "<Picture 1>" and "<Picture 2>" and no "first image"/"second image"; with "qwen-edit" it is byte-identical.
+    ``PROMPT_SHA`` is the md5 of the shipped file text (32 hex).
+[5] A missing variable raises (StrictUndefined): the template rendered with ``piece`` only raises
+    ``jinja2.exceptions.UndefinedError``.
+[6] ``prompt_compose.compose(use_case="garment_cut_texture", subject=<rendered>, backend=<model "P-H3-Image",
+    image_family "natural">)``: the use case has empty style / negative / instruction for both families, so the
+    prompt is the rendered text byte-identical, the negative is "" and there are no warnings (the prompt opens no
+    sentence or clause with "no"/"without" — the negation guard moves nothing — and has no mid-sentence "no").
+    Same for image_family "keywords".
 """
 import os
 import re
@@ -205,6 +220,62 @@ check("[3] each letter on both sides", all({m["island"] for m in marks if m["let
                                            for L in letters), marks)
 csheet = gct.render_pattern_sheet(cpl)
 check("[3] cylinder sheet renders", csheet.size[0] == 2048, csheet.size)
+
+# [4] occasion + prompt file
+import hashlib  # noqa: E402
+
+from app.core import prompt_adapters  # noqa: E402
+from app.imagegen import occasions as occ  # noqa: E402
+
+check("[4] occasion constant", gct.CUT_OCCASION == "garment_cut_texture" and gct.CUT_USE_CASE == "garment_cut_texture",
+      (getattr(gct, "CUT_OCCASION", None), getattr(gct, "CUT_USE_CASE", None)))
+check("[4] occasion in the catalog", gct.CUT_OCCASION in occ.occasion_ids())
+pieces = gct.prompt_pieces(pl2)
+check("[4] prompt pieces in pattern order", pieces == ["front panel", "back panel", "left sleeve", "right sleeve",
+                                                       "neckband"], pieces)
+check("[4] a split part keeps its number",
+      gct.prompt_pieces({"islands": [{"name": "front_2"}, {"name": "back"}, {"name": "front"}]})
+      == ["front panel", "front panel 2", "back panel"],
+      gct.prompt_pieces({"islands": [{"name": "front_2"}, {"name": "back"}, {"name": "front"}]}))
+want_pieces = ["front panel", "back panel", "left sleeve", "right sleeve", "neckband"]
+prompt = gct.render_prompt(piece="T-shirt", pieces=want_pieces)
+check("[4] prompt names the piece and its pieces", "T-shirt" in prompt and ", ".join(want_pieces) in prompt, prompt)
+check("[4] prompt has the ordinal wording", "the first image" in prompt and "the second image" in prompt, prompt)
+check("[4] no Jinja leftovers", "{{" not in prompt and "{#" not in prompt and prompt == prompt.strip())
+ph3 = prompt_adapters.reference_wording(prompt, "p-h3-image")
+check("[4] P-H3 wording", "<Picture 1>" in ph3 and "<Picture 2>" in ph3 and "first image" not in ph3
+      and "second image" not in ph3, ph3)
+check("[4] other backends keep the text", prompt_adapters.reference_wording(prompt, "qwen-edit") == prompt)
+shipped = (ROOT / "shared" / "templates" / "image" / "garment_cut_texture.md").read_text(encoding="utf-8")
+check("[4] PROMPT_SHA = md5 of the shipped file", gct.PROMPT_SHA == hashlib.md5(shipped.encode("utf-8")).hexdigest()
+      and re.fullmatch(r"[0-9a-f]{32}", gct.PROMPT_SHA) is not None, gct.PROMPT_SHA)
+
+# [5] StrictUndefined
+import jinja2  # noqa: E402
+
+try:
+    gct.prompt_template().render(piece="T-shirt")
+    check("[5] a missing variable raises", False, "rendered without 'pieces'")
+except jinja2.exceptions.UndefinedError as e:
+    check("[5] a missing variable raises", True, e)
+
+# [6] compose keeps the prompt byte-identical
+from types import SimpleNamespace  # noqa: E402
+
+from app.core import config as _cfg  # noqa: E402
+from app.core.prompt_compose import compose  # noqa: E402
+
+for fam in ("keywords", "natural"):
+    ucp = _cfg.get_use_case_prompts("garment_cut_texture", "qwen" if fam == "natural" else "z_image")
+    check(f"[6] use case empty ({fam})", ucp == {"prompt_style": "", "prompt_negative": "", "prompt_instruction": ""},
+          ucp)
+    check(f"[6] use case shipped ({fam})", _cfg._DEFAULT_IMAGE_USE_CASES.get("garment_cut_texture", {}).get(fam)
+          == {"prompt_style": "", "prompt_negative": "", "prompt_instruction": ""})
+    c = compose(use_case="garment_cut_texture", subject=prompt,
+                backend=SimpleNamespace(model="P-H3-Image", image_family=fam))
+    check(f"[6] compose byte-identical ({fam})", c.prompt == prompt, c.prompt)
+    check(f"[6] compose negative empty, no warnings ({fam})", c.negative == "" and c.warnings == [],
+          (c.negative, c.warnings))
 
 print(f"\n{len(FAILS)} FAILED: {FAILS}" if FAILS else "\nALL OK")
 sys.exit(1 if FAILS else 0)

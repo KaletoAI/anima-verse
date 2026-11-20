@@ -11,15 +11,34 @@ This part is the RENDER of a piece's islands, pure numpy + PIL on the drape's ``
 - ``render_pattern_sheet`` — the user's DEBUG view of the same islands (pastel fills, part names, sizes in cm, grain
   arrows, seam letters, the sleeve cap height, a px/cm footer). It is never sent to a model.
 
+The PROMPT (Task 6) is the shipped Jinja2 file ``shared/templates/image/garment_cut_texture.md`` — its own tiny
+``SandboxedEnvironment`` + ``StrictUndefined`` loader here, deliberately not world-overridable (``/admin/templates``
+stays LLM-only). ``PROMPT_SHA`` (md5 of the file text) enters the cut atlas key. The render runs on the occasion
+``CUT_OCCASION`` with the use case ``CUT_USE_CASE`` (empty style/negative/instruction: the prompt is the whole subject).
+
 Pixel frame: the payload stores image-frame pixels (x right, y down, row = (1 - v) * atlas_px), so nothing here
 re-derives the Blender UV flip.
 """
 from __future__ import annotations
 
 import colorsys
+import hashlib
+from pathlib import Path
 
 import numpy as np
+from jinja2 import StrictUndefined, Template
+from jinja2.sandbox import SandboxedEnvironment
 from PIL import Image, ImageDraw, ImageFont
+
+#: The image occasion and the style use case of a cut-texture render (``app/imagegen/occasions.py``,
+#: ``config._DEFAULT_IMAGE_USE_CASES``).
+CUT_OCCASION = "garment_cut_texture"
+CUT_USE_CASE = "garment_cut_texture"
+
+PROMPT_FILE = Path(__file__).resolve().parents[2] / "shared" / "templates" / "image" / "garment_cut_texture.md"
+PROMPT_TEXT = PROMPT_FILE.read_text(encoding="utf-8")
+#: md5 of the shipped prompt file text — part of the cut atlas key, so a reworded prompt makes an atlas stale.
+PROMPT_SHA = hashlib.md5(PROMPT_TEXT.encode("utf-8")).hexdigest()
 
 TEMPLATE_FILL = (190, 190, 190)
 TEMPLATE_LINE = (80, 80, 80)
@@ -122,6 +141,49 @@ def render_template(islands: dict, size: int | None = None) -> Image.Image:
     img[labels > 0] = TEMPLATE_LINE
     img[inner] = TEMPLATE_FILL
     return Image.fromarray(img, "RGB")
+
+
+# ---------------------------------------------------------------------------------------------------- prompt
+
+#: English panel name per part, in pattern order (the order the prompt lists the pieces in).
+PROMPT_PIECE_NAMES = {
+    "front": "front panel", "back": "back panel", "sleeve_l": "left sleeve", "sleeve_r": "right sleeve",
+    "band": "neckband", "collar": "collar", "placket": "placket", "cuff_l": "left cuff", "cuff_r": "right cuff",
+}
+
+_PROMPT_ENV = SandboxedEnvironment(autoescape=False, undefined=StrictUndefined, trim_blocks=True,
+                                   lstrip_blocks=True, keep_trailing_newline=False)
+
+
+def prompt_template() -> Template:
+    """The shipped prompt file as a StrictUndefined template (a missing variable raises)."""
+    return _PROMPT_ENV.from_string(PROMPT_TEXT)
+
+
+def render_prompt(*, piece: str, pieces: list[str]) -> str:
+    """The cut-texture prompt for ``piece`` (e.g. "T-shirt") with its pattern ``pieces`` (English panel names).
+    Ordinal wording ("the first image") — the central handoff rewrites it per backend."""
+    return prompt_template().render(piece=piece, pieces=list(pieces)).strip()
+
+
+def _split_name(name: str) -> tuple[str, int]:
+    base, _, n = str(name).rpartition("_")
+    if base and n.isdigit() and base in PROMPT_PIECE_NAMES:
+        return base, int(n)
+    return str(name), 1
+
+
+def prompt_pieces(islands: dict) -> list[str]:
+    """The English panel names of the payload's islands in pattern order; a split part keeps its number
+    (``front_2`` -> "front panel 2"); an unknown part name is spoken plainly after the known ones."""
+    order = list(PROMPT_PIECE_NAMES)
+    keyed = []
+    for isl in islands.get("islands", []):
+        base, n = _split_name(isl["name"])
+        rank = order.index(base) if base in PROMPT_PIECE_NAMES else len(order)
+        word = PROMPT_PIECE_NAMES.get(base, base.replace("_", " "))
+        keyed.append(((rank, base, n), word if n == 1 else f"{word} {n}"))
+    return [w for _, w in sorted(keyed)]
 
 
 # ---------------------------------------------------------------------------------------------------- debug sheet

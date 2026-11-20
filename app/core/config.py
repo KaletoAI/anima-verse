@@ -785,6 +785,15 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "",
         },
     },
+    # Texture from cut (occasion garment_cut_texture, plan
+    # 2026-11-20-template-cut-uv-texture): the prompt file
+    # shared/templates/image/garment_cut_texture.md is the whole subject, so no
+    # style, no negative (a no-fold occasion; the prompt says everything
+    # positively) and no LLM instruction.
+    "garment_cut_texture": {
+        "keywords": {"prompt_style": "", "prompt_negative": "", "prompt_instruction": ""},
+        "natural": {"prompt_style": "", "prompt_negative": "", "prompt_instruction": ""},
+    },
     # The empty-shoe edit of an inventory item image (occasion footwear_empty,
     # plan 2026-11-10-footwear-rigid-shoes): one shoe, no foot or wearer, on a
     # plain background so the mesh backend sees a clean product shot.

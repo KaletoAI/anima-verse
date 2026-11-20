@@ -33,6 +33,9 @@ Per occasion:
   char_spec_fallback  read when char_spec_field is empty ("" = none); a
                       tuple names several fields, tried in order.
   needs_ref_slot      True: only backends with ref_slot_count >= 1.
+  min_ref_slots       optional: the reference-slot budget a backend needs
+                      (default 1 with needs_ref_slot, else 0) — an occasion
+                      that hands over two pictures sets 2.
   style_use_cases     info only — the style use cases these renders use.
   covers              info only — the call sites (admin tooltip).
   pose_check          True: the occasion renders people, so the routing page
@@ -105,6 +108,17 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
         ["garment_edit"],
         {"character_scoped": True, "char_spec_field": "tpose_view_workflow",
          "char_spec_fallback": ""}, needs_ref_slot=True),
+    # Texture from cut (plan 2026-11-20-template-cut-uv-texture, Task 6): the
+    # piece's clean island template (first image) plus the full-res item image
+    # (second image) -> the filled pattern atlas. Two pictures, so a 1-slot
+    # backend never fits; world-scoped (the atlas belongs to the item's
+    # template, not to a character's backend pick); no routing seed — an empty
+    # chain is no route, never the cheapest (possibly paid) backend.
+    "garment_cut_texture": _image(
+        "Garment — texture from cut",
+        "Template dialog: fill the piece's pattern islands from the item image",
+        ["garment_cut_texture"], _WORLD, needs_ref_slot=True, min_ref_slots=2,
+        requires_chain=True),
     # Base-body pipeline (spec 2026-11-08-base-body-outfits-design.md § A/B):
     # every step its own chain, per character overridable like the T-pose.
     # The fallback fields keep a character's existing T-pose picks in force;
@@ -278,7 +292,8 @@ MESH_INPUT_OCCASIONS: Tuple[str, ...] = (
 #: model's text length bounds") and the fallback chain was dead. On these
 #: occasions the negative is dropped instead; everything that must hold is
 #: positive text at the front of the prompt.
-NO_FOLD_OCCASIONS: Tuple[str, ...] = MESH_INPUT_OCCASIONS + ("garment_view", "footwear_empty")
+NO_FOLD_OCCASIONS: Tuple[str, ...] = MESH_INPUT_OCCASIONS + ("garment_view", "footwear_empty",
+                                                               "garment_cut_texture")
 
 #: Ruling A93: the mesh-input occasions whose SLOT TEXTS are those of an ordinary image — the full-body
 #: references are appearance pictures (``app/core/full_body_reference.py``): no mesh-input line is added. Ruling
@@ -353,7 +368,8 @@ def backend_fits(occasion_id: str, kind: Dict[str, Any]) -> bool:
         return category == "upscale"
     if category in ("inpaint", "upscale"):
         return False
-    if occ.get("needs_ref_slot") and int(kind.get("ref_slot_count") or 0) < 1:
+    need = int(occ.get("min_ref_slots") or (1 if occ.get("needs_ref_slot") else 0))
+    if int(kind.get("ref_slot_count") or 0) < need:
         return False
     return True
 
@@ -377,6 +393,8 @@ def catalog_payload() -> List[Dict[str, Any]]:
              "category": o["category"], "rig": o.get("rig", ""),
              "character_scoped": bool(o["character_scoped"]),
              "needs_ref_slot": bool(o.get("needs_ref_slot")),
+             "min_ref_slots": int(o.get("min_ref_slots")
+                                  or (1 if o.get("needs_ref_slot") else 0)),
              "covers": o.get("covers", ""),
              "pose_check": bool(o.get("pose_check")),
              "hint": o.get("hint", ""),
