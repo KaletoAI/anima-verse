@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Ruling A150: the posture support of the pair solve (`packages/scene-render/src/postureSupport.ts`, `pairFit.ts` POSTURE,
- * solved by `pairAlign.ts` solveAlignAdjust with basis I and a cap of ±0.5 m / 20° that does not bind).
+ * Ruling A150: the posture support of the pair solve (`packages/scene-render/src/postureSupport.ts`, the posture band of
+ * `pairAlign.ts` THE RESIDUALS, solved by solveAlign with basis I and a cap of ±0.5 m / 20° that does not bind).
  * Every expected number is derived BY HAND below (§ B5a), never recorded from a run.
  *
  * Usage: node scripts/smoke_posture_support.mjs   (no server, no world; bundles scene-render with esbuild)
@@ -13,10 +13,11 @@
  *       right_shin], height 0.05. With ids [hips] given → only hips, height 0.8.
  *   [2] postureExcess: 0.02 → 0.02 − 0.015 = 0.005; −0.015 → −0.015 + 0.01 = −0.005; 0.01 → 0.
  *   [3] THE SOLVE: 6 frames, tip T = (0, 0, 0.3), base (0, 0, 0.2), O = (0, 0.05, 0.3), u = +Z, pivot (0, 0.9, 0), no
- *       axes, no bend. Rigid (no support): the lateral (0, −0.05) is taken by Δ = (0, 0.05, 0) (entry s = 0 already).
- *       With the support above (base = its own height): per frame the y residuals are (d − 0.05) and
- *       300·(d − 0.015) for d > 0.015; d/dd [(d − 0.05)² + 90000 (d − 0.015)²] = 0 → d = (0.05 + 1350)/90001
- *       = 0.01500038888. The band edge is a kink (zero slope inside), which Gauss–Newton approaches from inside by
+ *       axes, no bend, no channel inequalities. All frames are alike, so the deep and the shallow key frame are the same
+ *       one frame. Rigid (no support): root and tip are both off by (0, −0.05) → Δ = (0, 0.05, 0). With the support
+ *       above (base = its own height): the y residuals are (d − 0.05) for the root, (d − 0.05) for the tip and
+ *       300·(d − 0.015) for d > 0.015; d/dd [2(d − 0.05)² + 90000 (d − 0.015)²] = 0 → d = (0.2 + 2700)/180004
+ *       = 0.01500077776. The band edge is a kink (zero slope inside), which Gauss–Newton approaches from inside by
  *       line-search halvings: expect d − 0.5 mm ≤ Δy ≤ d + 1e-6 (never beyond the minimum, at most 0.5 mm short),
  *       Δx = Δz = 0 (±1e-9).
  *   [4] postureAngleCapDeg: stand 20 → 3, lie 20 → 5, seat 20 → 20, null 10 → 10.
@@ -68,12 +69,12 @@ assert.equal(SR.postureExcess(0.01), 0)
 const frame = (support) => ({ tip: [0, 0, 0.3], base: [0, 0, 0.2], o: [0, 0.05, 0.3], u: [0, 0, 1], pivot: [0, 0.9, 0],
   ...(support ? { support } : {}) })
 const I3 = [1, 0, 0, 0, 1, 0, 0, 0, 1], cap = { sideM: 0.5, upM: 0.5, forwardM: 0.5, angleDeg: 20 }
-const solve = (samples, extra = {}) => SR.solveAlignAdjust({ relations: [{ samples }], basis: I3, cap, ...extra })
+const solve = (samples, extra = {}) => SR.solveAlign({ relations: [{ samples }], basis: I3, cap, ...extra })
 const rigid = solve(Array.from({ length: 6 }, () => frame(null))).fix
 near(rigid.shift[1], 0.05, 1e-6, '[3] rigid Δy')
 const S = Array.from({ length: 6 }, () => frame(sup))
 const fix = solve(S).fix
-const d = (0.05 + 1350) / 90001
+const d = (0.2 + 2700) / 180004
 assert.ok(fix.shift[1] >= d - 0.0005 && fix.shift[1] <= d + 1e-6, `[3] posture Δy ${fix.shift[1]} vs ${d}`); near(fix.shift[0], 0, 1e-9, '[3] Δx'); near(fix.shift[2], 0, 1e-9, '[3] Δz')
 // [4]
 assert.equal(SR.postureAngleCapDeg('stand', 20), 3); assert.equal(SR.postureAngleCapDeg('lie', 20), 5)

@@ -61,7 +61,11 @@
  * frame. The figure faces +forward = side × up, side is its LEFT. Pitch +α is a turn of −α about side: a
  * forward-pointing part rises toward the belly, a hanging one swings forward. Yaw +β is a turn of −β about up: a
  * forward-pointing part swings to the figure's RIGHT. Fixed signs, so the slider means the same whatever the part's
- * direction.
+ * direction. AUTO-ALIGN WRITES IT (Ruling A212, the owner's procedure of 2026-11-20): `pairAlign.ts` solves the root
+ * angle together with the partner's shift and tilt/roll so that the rigid shaft — root joint and tip — lies on the
+ * target axis at the deepest and the shallowest frame, re-posing the sampled chain with `rootTurnQuat` about the body
+ * axes (`FigureRuntime.bodyFrame`), and writes the result into the Poses tab's root-angle dials (a draft; "Save root
+ * angle" stores it). With the shaft on the axis the bend below has nothing left to do there.
  *
  * THE LAMP (`bendLamp`): yellow when the solve wanted more than the (gated) limit — the projection cut the turn, the
  * rest of the error stays visible; green otherwise.
@@ -292,12 +296,18 @@ export function rootTurnOf(points: readonly Vec3[], frame: BendFrame, angle: Roo
   const n = points.length - 1
   if (!angle || n < 1) return null
   const clamp = (v: number, m: number) => (Number.isFinite(v) ? Math.max(-m, Math.min(m, v)) : 0)
-  const a = clamp(angle.pitchDeg, ROOT_PITCH_MAX_DEG) * DEG, b = clamp(angle.yawDeg, ROOT_YAW_MAX_DEG) * DEG
+  const a = clamp(angle.pitchDeg, ROOT_PITCH_MAX_DEG), b = clamp(angle.yawDeg, ROOT_YAW_MAX_DEG)
   if (Math.abs(a) + Math.abs(b) < 1e-12) return null
   const p0 = points[0]
-  // Pitch about the body's side axis, then the turn about its up axis (world axes, both at P_0).
-  const q = quatMul(quatOf(mul(frame.up, -b)), quatOf(mul(frame.side, -a)))
+  const q = rootTurnQuat(frame, { pitchDeg: a, yawDeg: b })
   return { q, points: points.map((p, k) => (k === 0 ? [p[0], p[1], p[2]] as Vec3 : add(p0, quatRotate(q, sub(p, p0))))) }
+}
+
+/** Ruling A158: the root turn of `angle` (degrees, not clamped) in the body frame `frame`: pitch about the body's side
+ *  axis, then the turn about its up axis (world axes, both at P_0) — module docstring THE ROOT ANGLE. Auto-align
+ *  (`pairAlign.ts`) re-poses a sampled chain with it. */
+export function rootTurnQuat(frame: BendFrame, angle: RootAngle): Quat {
+  return quatMul(quatOf(mul(frame.up, -angle.yawDeg * DEG)), quatOf(mul(frame.side, -angle.pitchDeg * DEG)))
 }
 
 /** Ruling A158: the BODY's own axes from its skeleton (world points): side = left hip joint − right hip joint (the

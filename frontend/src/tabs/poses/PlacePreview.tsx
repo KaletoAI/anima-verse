@@ -38,13 +38,14 @@ import {
   strandCandidates, transplantedRestPose, type FootPose,
   type AlignmentDraft, type ChannelNow, type FrameInspection, type AlignmentLamp, type ClipHeightOffsetsCm, type CollisionPayload, type FigureRuntime,
   type HairStrandRecord, type SceneMarker, type SceneModelSpec, type SecondaryMotionPayload,
-  contactLamp, contactReport, fixRoot, fixPivot, partnerTurnFix, turnAxes, findContact, contactSampleOf,
+  contactReport, fixRoot, fixPivot, partnerTurnFix, turnAxes, findContact, contactSampleOf,
   attachedPartIndex, partBoneNames, pairInterpenetration, clearLamp, PART_REGIONS, type ClearLamp,
   type ContactLamp, type ContactReport, type FitSample, type PairFix,
-  targetLamp, isPointTarget, TARGET_RADIUS_M, POINT_TARGET_OPS, MOUTH_CHANNEL_ID, type ContactTarget,
+  isPointTarget, POINT_TARGET_OPS, MOUTH_CHANNEL_ID, type ContactTarget,
   bendSample, BEND_LIMITS_DEFAULT, type BendLimits, type BendResult,
   supportSample, supportHeight, postureReport, postureAngleCapDeg, type PostureReport, type ContactRelation,
-  solveAlignAdjust, alignMovers, alignCap, pickPhases, phaseRow, relativeOf, joinDelta, ALIGN_PHASES, type AlignLamp, type PhaseRow,
+  alignByPasses, keyReport, keyLamp, alignMovers, alignCap, relativeOf, joinDelta, type AlignLamp, type AlignBound, type AlignSample,
+  type AlignPass, type KeyReport, type RootAngle,
   channelReadoutKey, foldReadoutMax, type ChannelReadout, type ChannelReadoutMax,
 } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -254,8 +255,9 @@ function savePeople(byIndex: typeof placeMemory.byIndex) {
   try { localStorage.setItem(PEOPLE_KEY, JSON.stringify({ byIndex })) } catch { /* private mode: not remembered */ }
 }
 
-/** Ruling A212: one phase of the stroke before and after Auto-align (the entering tip against the target axis). */
-export interface PhaseAlign { phase: number; before: PhaseRow | null; after: PhaseRow | null }
+/** Ruling A212 (procedure of 2026-11-20): the two key frames of the stroke (deepest, shallowest) before and after
+ *  Auto-align — the rigid shaft against the target axis, and the bend still needed there. */
+export interface KeyAlign { before: KeyReport | null; after: KeyReport | null }
 /** Ruling A126/A139: one solved contact relation (the moving place `part`, the target it aims at). */
 export interface RelationAlign { by: string; of: string; channel: string; target: ContactTarget; part: string
       shiftCm: [number, number, number]
@@ -263,8 +265,8 @@ export interface RelationAlign { by: string; of: string; channel: string; target
       clearWorst: string; clearLamp: ClearLamp
       before: ContactReport; after: ContactReport; overlapBeforeMm: number; overlapAfterMm: number
       lampBefore: ContactLamp; lamp: ContactLamp
-      /** Ruling A212: the five phases (start, ¼, ½, ¾, end) before and after. */
-      phases: PhaseAlign[]
+      /** Ruling A212: the deepest and the shallowest frame before and after. */
+      keys: KeyAlign
       /** Ruling A145: what the bend does on the aligned samples (Auto-align itself is rigid; null = no chain). */
       bend: BendReadout | null
       /** Ruling A150: the moving figure's support before/after against its own posture (null = none read), and why the
@@ -274,7 +276,13 @@ export interface RelationAlign { by: string; of: string; channel: string; target
 export interface MoverAlign { role: string; letter: string; shiftCm: [number, number, number]; turnDeg: [number, number]
   /** What THIS run moved (cm, degrees): the result minus the dials when it was clicked. */
   adjustCm: [number, number, number]; adjustDeg: [number, number]
-  rangeCm: number; lamp: AlignLamp; offCm: number; offDeg: number; capped: boolean }
+  rangeCm: number
+  /** red when an unknown hit its cap/slider range (`hits`), green otherwise. */
+  lamp: AlignLamp; hits: AlignBound[]
+  /** The root angle this run wrote (null = not solved for this role) and the one before (degrees). */
+  rootAngle: RootAngle | null; rootBefore: RootAngle | null
+  /** The measure → solve passes (increments) and whether they converged. */
+  passes: AlignPass[]; converged: boolean }
 export type AutoAlignResult =
   | { ok: false; reason: string }
   | { ok: true; relations: RelationAlign[]; roleShiftCm: Record<string, [number, number, number]>
@@ -285,8 +293,10 @@ export type AutoAlignResult =
       turnDeg: [number, number]
       clearWorst: string; clearLamp: ClearLamp
       before: ContactReport; after: ContactReport; overlapBeforeMm: number; overlapAfterMm: number
-      lampBefore: ContactLamp; lamp: ContactLamp; bend: BendReadout | null; phases: PhaseAlign[]
-      postureBefore: PostureReport | null; posture: PostureReport | null; limitReason: 'posture' | null }
+      lampBefore: ContactLamp; lamp: ContactLamp; bend: BendReadout | null; keys: KeyAlign
+      postureBefore: PostureReport | null; posture: PostureReport | null; limitReason: 'posture' | null
+      /** The clip's root angle Auto-align wrote (null = it did not solve it). */
+      rootAngle: RootAngle | null }
 
 /** Ruling A212: the base clip's last frame — each role's hips relative to each other role's, in that role's clip frame
  *  (`relativeOf`; key `<moving>|<anchor>`). End clips are joined to it. */
@@ -1002,13 +1012,19 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         // Ruling A150: the sample carries the moving figure's support (stage space, the surface under its place; `ids` =
         // the capsules a baseline pass chose).
         const sampleAt = (res: NonNullable<ReturnType<typeof placePhaseB>>, hit: Hit,
-          pl: { pivot: [number, number, number]; frame: number[] }, ids?: readonly string[] | null): FitSample | null => {
+          pl: { pivot: [number, number, number]; frame: number[] }, ids?: readonly string[] | null): AlignSample | null => {
           const ie = res.figures[hit.e].inspection, ir = res.figures[hit.r].inspection
           const w = ie && ir ? contactSampleOf(ie, ir, hit, pl.pivot) : null
           if (!w || !ie) return null
           const support = supportSample(ie.capsules, { ids, surface: figs[hit.e].place.marker.y_world, map: (p) => toStageP(p) })
+          // Ruling A212 (2026-11-20): the body axes the root angle turns about, the channel's depth and the tip's radius.
+          const body = entries[hit.e].figure.bodyFrame()
+          const depth = w.channel ? ir?.channels.find((x) => x.id === hit.channel)?.depth ?? 0 : 0
+          const segs = ie.chains[hit.chain]?.segments ?? []
           return { tip: toStageP(w.tip), base: toStageP(w.base), o: toStageP(w.o), u: toStageP(w.u, true), pivot: pl.pivot,
             chain: w.chain?.map((p) => toStageP(p)), raised: w.raised, channel: w.channel,
+            body: { side: toStageP(body.side, true), up: toStageP(body.up, true) },
+            ...(depth > 0 ? { depthM: depth, tipRadiusM: segs.length ? segs[segs.length - 1].r : 0 } : {}),
             ...(support ? { support } : {}) }
         }
         // ── Ruling A145: the attached part bends toward its target near the opening — at its root when raised, at every
@@ -1242,11 +1258,13 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           }
           draw()
         }
-        // ── Ruling A212: Auto-align ADJUSTS around the user's base arrangement (the dials when it is clicked). Plays the
-        // clip in fixed 60 fps steps (two loops, the second sampled) with the role that carries the attached part moved
-        // by `extra` (clip frame metres [side, up, forward] on top of the draft), takes the five phases of the stroke of
-        // every contact relation of that role, and solves them together within the cap (scene-render `pairAlign.ts`).
-        // The receiving role never moves; at the cap it stops and says how far the base is off. ──
+        // ── Ruling A212 (the owner's procedure of 2026-11-20): Auto-align ADJUSTS around the user's base arrangement
+        // (the dials when it is clicked). Plays the clip in fixed 60 fps steps (two loops, the second sampled) with the
+        // role that carries the attached part moved by `extra` (clip frame metres [side, up, forward] on top of the
+        // draft) and the clip's root angle in force, and solves the DEEPEST and the SHALLOWEST frame of every contact
+        // relation of that role together: the rigid shaft on the axis at both, the root outside and the tip inside at
+        // the deepest (scene-render `pairAlign.ts`). Measure → solve → measure again until the increment vanishes.
+        // The receiving role never moves; a cap or slider range that stops it is named. ──
         const step = 1 / 60
         const placed = new Map<Fig, { pivot: [number, number, number]; frame: number[] }>()
         const runAt = (time: number, draft: AlignmentDraft, inspect: boolean) => {
@@ -1262,7 +1280,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           f.hips.getWorldPosition(scratch).applyMatrix4(stageInv)
           return [scratch.x, scratch.y, scratch.z]
         }
-        type PhasedSample = FitSample & { phase: number }
+        type PassOut = { per: AlignSample[][]; overlap: number; worst: string; draft: AlignmentDraft
+          heights: Map<number, { ids: string[]; h: number }> }
         const autoAlign = (opts: AutoAlignOptions = {}): AutoAlignResult => {
           if (solo || figs.length < 2) return { ok: false, reason: t('Auto-align needs a pair clip on a place.') }
           const loop = Math.max(8, Math.ceil(duration / step))
@@ -1282,10 +1301,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           const cap = alignCap(opts.rangeCm ?? clips.find((c) => (c.set || '') === set.trim() && c.role === 'a')?.align_range?.cm
             ?? clips.find((c) => c.role === 'a')?.align_range?.cm)
           const rangeCm = Math.round(cap.forwardM * 1000) / 10
-          // Auto-align is RIGID: the contact report and the phase rows read the samples as solved (no bend); only the
-          // bend readout below says what the bend does on the aligned samples afterwards.
+          // Auto-align is RIGID: the contact report and the key rows read the samples as solved (no bend); the key rows
+          // and the bend readout say what the bend still does there afterwards.
           const rep = (smps: readonly FitSample[]) => contactReport(smps)
-          const phaseRows = (smps: readonly PhasedSample[]) => pickPhases(smps).map((x) => (x ? phaseRow(x, x.phase) : null))
           const cm = (v: number) => Math.round(v * 1000) / 10
           const deg = (v: number) => Math.round(v * 10) / 10
           // Only the role that carries the attached part moves (one solve for all its relations); in a pair that is B.
@@ -1294,6 +1312,11 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             return { ok: false, reason: rels.some((x) => x.target !== 'none' && x.part === 'a')
               ? t('This clip’s contacts put the attached part on A, but in a pair Auto-align only moves partner B. Align it by hand with the A/B dials.')
               : t('In a pair Auto-align moves partner B, and here the attached part is on A. Swap the roles on the places.') }
+          // Ruling A158: the clip has ONE root angle; it turns the attached part of every part place (`placeRoot`). The
+          // first mover solves it, the others keep it.
+          const partRoles = rels.filter((x) => x.target !== 'none').map((x) => x.part)
+          const rootTurns = (role: string) => !partRoles.length || partRoles.includes(role)
+          let rootSolved = false
           let cur0 = base
           const rows: RelationAlign[] = []
           const moverRows: MoverAlign[] = []
@@ -1310,17 +1333,22 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             const savedTurn = (savedRef.current.b ?? moving.saved).partnerTurnDeg ?? [0, 0]
             const turns = isPair
             const start = cur0
-            const draftOf = (extra: [number, number, number], turn: [number, number]): AlignmentDraft => ({ ...start,
+            const root0: RootAngle = { pitchDeg: start.rootAngle?.pitchDeg ?? 0, yawDeg: start.rootAngle?.yawDeg ?? 0 }
+            // The chain the root angle turns: the moving figure's first chain with a point-target op (`applyRootAngle`).
+            const rootChain = probe!.figures[e].inspection?.chains.findIndex((c) => c.segments.length > 0 && POINT_TARGET_OPS.includes(c.op)) ?? -1
+            const solveRoot = !rootSolved && rootTurns(mr) && group.some((h) => h.chain === rootChain)
+            const draftOf = (extra: [number, number, number], turn: [number, number], root: RootAngle | null): AlignmentDraft => ({ ...start,
               roleShiftM: { ...start.roleShiftM, [mr]: [bb[0] + extra[0], bb[1] + extra[1], bb[2] + extra[2]] },
-              partnerTurnDeg: turns ? [tb[0] + turn[0], tb[1] + turn[1]] : start.partnerTurnDeg })
+              partnerTurnDeg: turns ? [tb[0] + turn[0], tb[1] + turn[1]] : start.partnerTurnDeg,
+              ...(root ? { rootAngle: root } : {}) })
             // Ruling A150: the moving figure's own posture per frame index (its support capsules and height), from the
             // baseline pass; every later pass keeps the same capsules and measures against that height.
             const placeGroup = moving.place.marker.group
             let baseline: Map<number, { ids: string[]; h: number }> | null = null
             let axes: [number, number, number][] = []
-            const pass = (extra: [number, number, number], turn: [number, number] = [0, 0]) => {
-              const draft = draftOf(extra, turn)
-              const per: PhasedSample[][] = group.map(() => [])
+            const pass = (extra: [number, number, number], turn: [number, number] = [0, 0], root: RootAngle | null = null): PassOut => {
+              const draft = draftOf(extra, turn, root)
+              const per: AlignSample[][] = group.map(() => [])
               const heights = new Map<number, { ids: string[]; h: number }>()
               let overlap = 0, worst = ''   // mm while sampling (A129.5 honest check)
               for (let i = 0; i < 2 * loop; i++) {
@@ -1366,27 +1394,24 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             const a0: [number, number] = turns ? [t0[0] - tb[0], t0[1] - tb[1]] : [0, 0]
             const p0 = pass(x0, a0)
             if (p0.per.some((x) => x.length < 4)) return { ok: false, reason: t('The contact could not be sampled over the clip.') }
-            let extra: [number, number, number] = x0
-            let turn: [number, number] = a0
-            let cur = p0
-            let sol: ReturnType<typeof solveAlignAdjust> | null = null
-            for (let it = 0; it < 3; it++) {
-              const relations = cur.per.map((smps) => ({ samples: pickPhases(smps).filter((x): x is PhasedSample => !!x) }))
-              sol = solveAlignAdjust({ relations, basis: basisOf(cur.draft), start: extra, startDeg: turns ? turn : [],
-                axes: turns ? axes : [], cap, angleCapDeg: turns ? postureAngleCapDeg(placeGroup, cap.angleDeg) : undefined,
-                join: joinOf(cur.draft) })
-              const next: [number, number] = turns ? [sol.deg[0], sol.deg[1]] : [0, 0]
-              const moved = Math.abs(next[0] - turn[0]) + Math.abs(next[1] - turn[1])
-              extra = sol.x
-              turn = next
-              cur = pass(extra, turn)
-              if (Math.hypot(...sol.fix.shift) < 0.0005 && moved < 0.05) break
+            // Measure → solve → measure again (`alignByPasses`); the first measurement is p0.
+            let firstUsed = false
+            const measure = (s: { x: [number, number, number]; deg: number[]; root: RootAngle | null }) => {
+              const got = firstUsed ? pass(s.x, turns ? [s.deg[0] ?? 0, s.deg[1] ?? 0] : [0, 0], s.root) : p0
+              firstUsed = true
+              return { relations: got.per.map((samples, gi) => ({ samples, rooted: solveRoot && group[gi].chain === rootChain })),
+                basis: basisOf(got.draft), join: joinOf(got.draft), out: got }
             }
-            const lampOf = (hit: Hit, r: ContactReport): ContactLamp => {
-              if (isPointTarget(hit.target)) return targetLamp(r, TARGET_RADIUS_M[hit.target])
-              const ch = probe!.figures[hit.r].inspection!.channels.find((x) => x.id === hit.channel)!
-              return contactLamp(r, ch)
-            }
+            const run = alignByPasses(measure, { axes: turns ? axes : [], cap,
+              angleCapDeg: turns ? postureAngleCapDeg(placeGroup, cap.angleDeg) : undefined },
+            { x: x0, deg: turns ? a0 : [], root: solveRoot ? root0 : null })
+            if (solveRoot) rootSolved = true
+            const cur = run.last.out
+            const extra = run.state.x
+            const turn: [number, number] = turns ? [run.state.deg[0] ?? 0, run.state.deg[1] ?? 0] : [0, 0]
+            const hitsNow = run.sol?.hits ?? []
+            const lampOf = (hit: Hit, r: KeyReport | null, bounds: readonly AlignBound[]): ContactLamp =>
+              keyLamp(r, bounds, !isPointTarget(hit.target))
             const postureOf = (smps: readonly FitSample[]) => {
               const r = postureReport(smps.map((x) => ({ support: x.support })))
               return r.frames ? r : null
@@ -1395,27 +1420,31 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             const turnDeg: [number, number] = turns ? [deg(tb[0] + turn[0]), deg(tb[1] + turn[1])] : [deg(t0[0]), deg(t0[1])]
             const adjustCm: [number, number, number] = [cm(extra[0] - x0[0]), cm(extra[1] - x0[1]), cm(extra[2] - x0[2])]
             const adjustDeg: [number, number] = [deg(turn[0] - a0[0]), deg(turn[1] - a0[1])]
+            const rootAngle = solveRoot && run.state.root
+              ? { pitchDeg: deg(run.state.root.pitchDeg), yawDeg: deg(run.state.root.yawDeg) } : null
             group.forEach((hit, gi) => {
               const before = rep(p0.per[gi]), after = rep(cur.per[gi])
-              const pb = phaseRows(p0.per[gi]), pa = phaseRows(cur.per[gi])
+              const kb = keyReport(p0.per[gi], bendLim), ka = keyReport(cur.per[gi], bendLim)
               const posture = gi === 0 ? postureOf(cur.per[gi]) : null
-              const lamp = lampOf(hit, after)
+              const lamp = lampOf(hit, ka, hitsNow)
               rows.push({ by: moving.letter, of: figs[hit.r].letter, channel: hit.channel, target: hit.target, part: mr,
                 postureBefore: gi === 0 ? postureOf(p0.per[gi]) : null, posture,
                 limitReason: lamp !== 'green' && posture?.limited ? 'posture' : null, shiftCm, turnDeg,
                 before, after, overlapBeforeMm: p0.overlap * 1000, overlapAfterMm: cur.overlap * 1000,
-                clearWorst: cur.worst, clearLamp: clearLamp(cur.overlap * 1000), lampBefore: lampOf(hit, before), lamp,
-                phases: ALIGN_PHASES.map((phase, k) => ({ phase, before: pb[k], after: pa[k] })),
+                clearWorst: cur.worst, clearLamp: clearLamp(cur.overlap * 1000), lampBefore: lampOf(hit, kb, []), lamp,
+                keys: { before: kb, after: ka },
                 bend: bendReadout(cur.per[gi].map((x) => bendOf(x, bendLim))) })
             })
-            moverRows.push({ role: mr, letter: moving.letter, shiftCm, turnDeg, adjustCm, adjustDeg, rangeCm, lamp: sol?.lamp ?? 'green',
-              offCm: sol?.offCm ?? 0, offDeg: sol?.offDeg ?? 0, capped: !!sol?.capped })
+            moverRows.push({ role: mr, letter: moving.letter, shiftCm, turnDeg, adjustCm, adjustDeg, rangeCm,
+              lamp: hitsNow.length ? 'red' : 'green', hits: hitsNow, rootAngle, rootBefore: solveRoot ? root0 : null,
+              passes: run.trace, converged: run.converged })
             cur0 = cur.draft
           }
           runAt(timeRef.current, draftRef.current, false)
           const roleShiftCm: Record<string, [number, number, number]> = {}
           for (const [r, v] of Object.entries(cur0.roleShiftM)) roleShiftCm[r] = [cm(v[0]), cm(v[1]), cm(v[2])]
-          return { ok: true, ...rows[0], relations: rows, roleShiftCm, movers: moverRows }
+          return { ok: true, ...rows[0], relations: rows, roleShiftCm, movers: moverRows,
+            rootAngle: moverRows.find((m) => m.rootAngle)?.rootAngle ?? null }
         }
         // ── Ruling A212: the base clip's last frame, for the end clips' join. ──
         const endPose = (): EndPose | null => {

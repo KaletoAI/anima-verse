@@ -269,16 +269,18 @@ export { CONTACT_TARGETS, POINT_TARGETS, POINT_TARGET_OPS, TARGET_RADIUS_M, MOUT
   isPointTarget, targetFrame, targetFrames, orientAlong, targetLamp } from './contactTarget'
 export type { ContactTarget, PointTarget, TargetBones, TargetFrame } from './contactTarget'
 export { fixPoint, fixSample, fixRoot, turnMatrix, matrixTurn,
-  findContact, contactSampleOf, turnAxes, partnerTurnFix, partnerYawFix, fixPivot, FIT_ANGLE_WEIGHT_M,
-  pairInterpenetration, clearLamp, PART_REGIONS, CLEAR_GREEN_MM, CLEAR_YELLOW_MM, bendSample, supportDelta, bendFrameOf, fitResiduals, solveLinear } from './pairFit'
-export { solveAlignAdjust, alignMovers, alignCap, pickPhases, phaseRow, relativeOf, joinDelta, ALIGN_RANGE_CM_DEFAULT, ALIGN_SIDE_CM,
-  ALIGN_ANGLE_DEG, ALIGN_PHASES, JOIN_WEIGHT, CAP_SLACK_CM, FREE_BOX } from './pairAlign'
-export type { AlignCap, AlignLamp, AlignProblem, AlignSolution, PhaseRow } from './pairAlign'
+  findContact, contactSampleOf, turnAxes, partnerTurnFix, partnerYawFix, fixPivot,
+  pairInterpenetration, clearLamp, PART_REGIONS, CLEAR_GREEN_MM, CLEAR_YELLOW_MM, bendSample, supportDelta, bendFrameOf, solveLinear } from './pairFit'
+export { solveAlign, alignByPasses, keyFrames, keyRow, keyReport, keyLamp, moveSample, alignMovers, alignCap, relativeOf, joinDelta,
+  ALIGN_RANGE_CM_DEFAULT, ALIGN_SIDE_CM, ALIGN_ANGLE_DEG, JOIN_WEIGHT, ALIGN_LIMIT_WEIGHT, ALIGN_MARGIN_M, ALIGN_RIDGE, ALIGN_PASSES,
+  KEY_GREEN_MM, KEY_YELLOW_MM } from './pairAlign'
+export type { AlignCap, AlignLamp, AlignBound, AlignSample, AlignRelation, AlignProblem, AlignSolution, KeyRow, KeyReport, AlignState,
+  AlignMeasure, AlignPass } from './pairAlign'
 export { POSTURE, SUPPORT_CAPSULES, POSTURE_ANGLE_CAP_DEG, postureAngleCapDeg, supportSample, supportHeight, postureExcess,
   postureReport } from './postureSupport'
 export type { SupportSample, PostureReport } from './postureSupport'
 export { solveChainBend, bendLimitAt, bendLimitsOf, bendShares, bendGate, bendLamp, quatOf, quatMul, quatRotate, quatAngle,
-  rootTurnOf, rootAngleOf, bodyFrameOf, ROOT_PITCH_MAX_DEG, ROOT_YAW_MAX_DEG, BEND_LIMITS_DEFAULT, BEND_SWEEPS, BEND_NEAR_M, BEND_REACH_M } from './chainBend'
+  rootTurnOf, rootTurnQuat, rootAngleOf, bodyFrameOf, ROOT_PITCH_MAX_DEG, ROOT_YAW_MAX_DEG, BEND_LIMITS_DEFAULT, BEND_SWEEPS, BEND_NEAR_M, BEND_REACH_M } from './chainBend'
 export type { BendLimit, BendLimits, BendResult, BendFrame, RootAngle, Quat as BendQuat } from './chainBend'
-export type { FitSample, PairFix, FitOptions, ClearLamp } from './pairFit'
+export type { FitSample, PairFix, ClearLamp } from './pairFit'
 export { attachedPartIndex, partBoneNames, PART_WEIGHT_SHARE } from './attachedPart'

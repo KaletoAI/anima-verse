@@ -8,24 +8,17 @@
  * Partner B's stored tilt/roll/yaw (`partnerTurnFix`) is such a fix, applied about its bind hips (`fixPivot`,
  * `fixRoot`); a solve turns only about the caller's AXES (Tilt = the clip frame's side axis, Roll = its forward axis).
  *
- * THE RESIDUALS (`fitResiduals`): what a fix leaves over the sampled loop — the least-squares problem the bounded
- * Auto-align solves (`pairAlign.ts` THE SOLVE, summed over every contact relation of one moving figure):
- *   r = [ P_t(T'_t − O_t)                     lateral of the tip, every frame t
- *         λ · P_t(d'_t)                       the shaft direction d' = (T' − B')/|T' − B'| off the axis, every frame
- *         √W · u_e·(T'_e − O_e) ]             the tip on the opening at the entry frame e (smallest s)
- * with P_t = I − u_t u_tᵀ, λ = `FIT_ANGLE_WEIGHT_M` (1 rad of shaft tilt costs like λ metres of lateral error) and
- * W = `CONTACT_ENTRY_WEIGHT` × the frame count — the A126 terms plus the angle term.
+ * THE RESIDUALS of Auto-align live in `pairAlign.ts` (the two-key-frame solve, Ruling A212 procedure of 2026-11-20):
+ * this module gives it the fix (`fixPoint`), the support delta (`supportDelta`) and the bend it reports (`bendSample`).
  *
- * RIGID (Ruling A145 as of 2026-11-20): the residuals read the samples as measured — the attached part never bends
- * inside the fit. The bend (`chainBend.ts`) is a render step AFTER the fit: both renderers bend the part every frame
- * with the same `bendSample`, and Auto-align reports what that bend does on its aligned samples.
+ * RIGID (Ruling A145 as of 2026-11-20): Auto-align reads the samples as measured — the attached part never bends
+ * inside the solve. The bend (`chainBend.ts`) is a render step AFTER it: both renderers bend the part every frame
+ * with the same `bendSample`, and Auto-align reports what that bend still does at its key frames.
  *
- * POSTURE (Ruling A150, `postureSupport.ts`): a sample may carry the entering figure's SUPPORT; then every frame adds
- * the residual `POSTURE.weight` · (the support's change beyond the float/sink band), and the fix's turn costs
- * `POSTURE.turnCostM` · √N per radian — so the solve shifts along the surface first, turns only a little and only
- * about the support, and leaves what the posture cannot give as the residual. The caller caps the turn per place type
- * (`postureAngleCapDeg`). The clip's root angle (`chainBend.ts` THE ROOT ANGLE, Ruling A158) is already on the
- * rendered chain a sample is read from; the fit starts from it and never changes it.
+ * POSTURE (Ruling A150, `postureSupport.ts`): a sample may carry the entering figure's SUPPORT; `supportDelta` is how
+ * far a fix lifts or lowers it against its baseline — Auto-align's posture band (`pairAlign.ts` THE RESIDUALS). The
+ * clip's root angle (`chainBend.ts` THE ROOT ANGLE, Ruling A158) is on the rendered chain a sample is read from;
+ * Auto-align re-poses the sample for a new angle (`pairAlign.ts` `moveSample`) and writes the angle it solved.
  *
  * THE HONEST CHECK (`pairInterpenetration`): the deepest overlap of two different figures' capsules where ONLY the
  * pairs the channel allows are exempt — an attached-part capsule of the entering figure against one of the receiving
@@ -33,10 +26,10 @@
  * yellow ≤ `CLEAR_YELLOW_MM`.
  */
 import type { Vec3 } from './collision'
-import { CONTACT_ENTRY_WEIGHT, type ContactSample } from './channelContact'
+import type { ContactSample } from './channelContact'
 import { isPointTarget, MOUTH_CHANNEL_ID, orientAlong, POINT_TARGET_OPS, type ContactTarget } from './contactTarget'
 import { bendLimitAt, solveChainBend, type BendFrame, type BendLimits, type BendResult } from './chainBend'
-import { POSTURE, postureExcess, supportHeight, supportSample, type SupportSample } from './postureSupport'
+import { supportHeight, supportSample, type SupportSample } from './postureSupport'
 
 export interface FitSample extends ContactSample {
   pivot: Vec3
@@ -49,22 +42,13 @@ export interface FitSample extends ContactSample {
   support?: SupportSample | null
 }
 export interface PairFix { shift: Vec3; turn: Vec3 }
-export interface FitOptions {
-  angleWeightM?: number
-  entryWeight?: number
-  /** Ruling A150: the posture term for samples with a support (default on). */
-  posture?: boolean
-}
-export const FIT_ANGLE_WEIGHT_M = 0.02
 export const CLEAR_GREEN_MM = 5
 export const CLEAR_YELLOW_MM = 20
 
 const sub = (p: Vec3, q: Vec3): Vec3 => [p[0] - q[0], p[1] - q[1], p[2] - q[2]]
 const add = (p: Vec3, q: Vec3): Vec3 => [p[0] + q[0], p[1] + q[1], p[2] + q[2]]
 const scale = (p: Vec3, k: number): Vec3 => [p[0] * k, p[1] * k, p[2] * k]
-const dot = (p: Vec3, q: Vec3) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2]
 const len = (p: Vec3) => Math.hypot(p[0], p[1], p[2])
-const lateral = (v: Vec3, u: Vec3): Vec3 => sub(v, scale(u, dot(v, u)))
 
 /** Row-major 3×3 of the rotation vector θ (Rodrigues). */
 export function turnMatrix(w: Vec3): number[] {
@@ -129,42 +113,6 @@ export function fixRoot(fix: PairFix, pivot: Vec3, position: Vec3): { position: 
   const a = len(fix.turn)
   const h = a / 2, s = a > 1e-12 ? Math.sin(h) / a : 0.5
   return { position: fixPoint(fix, pivot, position), quaternion: [fix.turn[0] * s, fix.turn[1] * s, fix.turn[2] * s, Math.cos(h)] }
-}
-
-/** The residual vector of `fix` (module docstring THE RESIDUALS). */
-function residuals(samples: readonly FitSample[], fix: PairFix, lambda: number, W: number, posture = false): number[] {
-  const out: number[] = []
-  let e = -1, min = Infinity
-  const moved = samples.map((x) => fixSample(x, fix))
-  moved.forEach((x, i) => { const s = dot(sub(x.tip, x.o), x.u); if (s < min) { min = s; e = i } })
-  for (const x of moved) {
-    const lat = lateral(sub(x.tip, x.o), x.u)
-    out.push(lat[0], lat[1], lat[2])
-    const d = sub(x.tip, x.base), l = len(d)
-    const pd = l > 0 ? lateral(scale(d, 1 / l), x.u) : [0, 0, 0] as Vec3
-    out.push(lambda * pd[0], lambda * pd[1], lambda * pd[2])
-  }
-  if (e >= 0) out.push(Math.sqrt(W) * min)
-  if (posture) {
-    // A150: the support stays in its band; a turn pays for itself.
-    for (const x of samples) {
-      const d = supportDelta(x, fix)
-      if (d !== null) out.push(POSTURE.weight * postureExcess(d))
-    }
-    const k = POSTURE.turnCostM * Math.sqrt(samples.length)
-    out.push(k * fix.turn[0], k * fix.turn[1], k * fix.turn[2])
-  }
-  return out
-}
-
-/** The residual vector of `fix` over `samples` (module docstring THE RESIDUALS) — what the bounded Auto-align
- *  (`pairAlign.ts`) adds up over several contact relations of one moving figure. */
-export function fitResiduals(samples: readonly FitSample[], fix: PairFix, opts: FitOptions = {}): number[] {
-  if (!samples.length) return []
-  const lambda = opts.angleWeightM ?? FIT_ANGLE_WEIGHT_M
-  const W = (opts.entryWeight ?? CONTACT_ENTRY_WEIGHT) * samples.length
-  const posture = opts.posture !== false && samples.some((x) => !!x.support)
-  return residuals(samples, fix, lambda, W, posture)
 }
 
 export function solveLinear(A: number[][], b: number[]): number[] | null {

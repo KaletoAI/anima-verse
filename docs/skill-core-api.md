@@ -221,7 +221,7 @@ wins; nothing declared = the A126 auto-detection. Core:
 
 Ruling A145 (owner decision 2026-11-20). Every frame in both renderers the attached part bends
 toward its contact target once its tip is near the opening (none from 8 cm before it, the full
-limit from 3 cm); Auto-align never bends it. The limit is ONE value per state, the TOTAL turn of the
+limit from 3 cm); Auto-align never bends it (it lays the rigid shaft on the axis instead). The limit is ONE value per state, the TOTAL turn of the
 chain (`total_deg`, the sum of every joint's angle): `raised` (the chain's straightened state) and
 `resting`, blended by how far the chain is raised. WHERE it bends follows the state: a raised part
 bends only at its root, the shaft rigid; a resting one at every joint, shared evenly; in between
@@ -237,7 +237,10 @@ min(old joint, old total), resting total = old total). Core:
 Ruling A158: the part's ROOT is not a limit but a direct per-clip angle, `root_angle`
 `{pitch_deg: −60..60 (+ up toward the belly), yaw_deg: −30..30 (+ the figure's right)}` in the same
 `<kind>.json` (Poses tab sliders, PATCH `root_angle`); every renderer applies it before the bend,
-which turns on top of it (the two compose), and no solve changes it. A package has no say in it. Core: `clip_root_angle(meta)`, `validate_root_angle(value)`.
+which turns on top of it (the two compose). Auto-align (Ruling A212, procedure of 2026-11-20) WRITES it: at the
+deepest and the shallowest frame of the stroke it solves the root angle together with the partner's shift and
+tilt/roll so that the part's root joint and tip lie on the target axis (the root outside, the tip inside at the
+deepest), into the dials — "Save root angle" stores it (`scene-render` `pairAlign.ts`). A package has no say in it. Core: `clip_root_angle(meta)`, `validate_root_angle(value)`.
 
 ## Strict conditions and held snapshots — `app.core.activity_engine`
 

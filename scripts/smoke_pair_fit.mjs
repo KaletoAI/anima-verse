@@ -1,26 +1,28 @@
 #!/usr/bin/env node
 /**
- * Ruling A129: the pair geometry of `packages/scene-render/src/pairFit.ts` — its residuals solved for shift AND partner
- * B's tilt/roll (through the bounded Auto-align of `pairAlign.ts`, the one solve that uses them, with a cap wide enough
- * not to bind unless a check says so), partner B's stored turn and yaw, the pivot and the honest check. Every expected
+ * Ruling A129: the pair geometry of `packages/scene-render/src/pairFit.ts` — its fix solved for shift AND partner B's
+ * tilt/roll (through the two-key-frame Auto-align of `pairAlign.ts` solveAlign, with a cap wide enough not to bind
+ * unless a check says so; no root angle, no channel inequalities: the samples carry neither), partner B's stored turn
+ * and yaw, the pivot and the honest check. Every expected
  * number is derived BY HAND below (§ B5a), never recorded from a run.
  *
  * Usage: node scripts/smoke_pair_fit.mjs   (no server, no world; bundles scene-render with esbuild)
  *
  * FIXTURE A (metres). Channel O = (0, 0, 0), u = (0, 0, 1). The shaft runs along d = (0, sin 10°, cos 10°)
  *   = (0, 0.17364818, 0.98480775): tips T_c = c·d for c = 0 and 0.03, base = T − 0.1·d, pivot p = −0.3·d
- *   = (0, −0.05209445, −0.29544233) (on the shaft's line). Axes: tilt (1, 0, 0), roll (0, 1, 0). solveAlignAdjust with basis I, no start, cap
- *   ±0.5 m on every axis and 20°.
+ *   = (0, −0.05209445, −0.29544233) (on the shaft's line). Axes: tilt (1, 0, 0), roll (0, 1, 0). solveAlign with basis I,
+ *   no start, cap ±0.5 m on every axis and 20°. Its key frames: deep = c = 0.03, shallow = c = 0; residuals = the root
+ *   (the base) and the tip off the axis at both.
  *   [1] ROTATION about +X by α maps (0, sin β, cos β) to (0, sin(β − α), cos(β − α)); α = 10° lays d on u.
- *       Then R(T_c − p) + p = p + (0.3 + c)·u = (0, −0.05209445, 0.00455767 + c), so Δ = (0, 0.05209445,
- *       −0.00455767) puts every tip on the axis with the entry tip at s = 0: every residual 0 — the unique minimum.
- *       Expect tilt 10° (±0.01°), roll 0° (±0.01°), Δ as above (±1e-5 m).
- *   [2] fixSample of that fix: tips (0, 0, 0) and (0, 0, 0.03) (±1e-5), shaft against the axis 0° (contactReport
- *       axisDeg < 0.05°). Before the fix the angle is 10° (acos(d·u)).
- *   [3] BOUND: angle cap 5° → tilt exactly 5° (held on its bound), |Δ_i| ≤ 0.5.
- * FIXTURE B = A126's fixture 1 (smoke_channel_contact.mjs): no axes → the shift-only solve; its minimum is
- *   Δ = (−0.01, 0.02, 0.05) (the angle term is constant there: the shaft lies on the axis direction).
- *   [5] the solve without axes = (−0.01, 0.02, 0.05) ± 1e-6.
+ *       Then R(T_c − p) + p = p + (0.3 + c)·u = (0, −0.05209445, 0.00455767 + c), so Δ = (0, 0.05209445, Δz) puts root
+ *       and tip on the axis for ANY Δz — the depth is not pulled to a target, and the ridge keeps the null direction
+ *       where it is: Δz = 0. Expect tilt 10° (±0.01°), roll 0° (±0.01°), Δ = (0, 0.05209445, 0) (±1e-5 m).
+ *   [2] fixSample of that fix: tips (0, 0, 0.00455767) and (0, 0, 0.03455767) (±1e-5), shaft against the axis 0°
+ *       (contactReport axisDeg < 0.05°). Before the fix the angle is 10° (acos(d·u)).
+ *   [3] BOUND: angle cap 5° → tilt exactly 5° (held on its bound, named in hits), |Δ_i| ≤ 0.5.
+ * FIXTURE B = A126's fixture 1 (smoke_channel_contact.mjs): no axes → the shift-only solve; root and tip are off by
+ *   (0.01, −0.02) at every frame → Δ = (−0.01, 0.02, 0) ± 1e-6 (the forward is the null direction again).
+ *   [5] the solve without axes = (−0.01, 0.02, 0) ± 1e-6.
  * [6] partnerTurnFix(10, −5, identity frame) = turn (10°, 0, −5°) in radians: (0.17453293, 0, −0.08726646).
  * [6b] Ruling A165, partner B's yaw about its own vertical axis (identity frame, pivot p = (1, 0, 2)):
  *     yaw 90° first, then tilt 10° about +X. Point p + (0, 0, 1): Ry(90°) maps (0, 0, 1) to (1, 0, 0), Rx leaves +X
@@ -66,22 +68,22 @@ const AXES = [[1, 0, 0], [0, 1, 0]]
 
 const I3 = [1, 0, 0, 0, 1, 0, 0, 0, 1]
 const CAP = (angleDeg) => ({ sideM: 0.5, upM: 0.5, forwardM: 0.5, angleDeg })
-const solve = (samples, axes, angleDeg = 20) => SR.solveAlignAdjust({ relations: [{ samples }], basis: I3, axes, cap: CAP(angleDeg) })
+const solve = (samples, axes, angleDeg = 20) => SR.solveAlign({ relations: [{ samples }], basis: I3, axes, cap: CAP(angleDeg) })
 const sol = solve(A, AXES)                                                                    // [1]
 const fix = sol.fix
 const [tilt, roll] = sol.deg
 near(tilt, 10, 0.01, 'tilt'); near(roll, 0, 0.01, 'roll')
-near(fix.shift[0], 0, 1e-5, 'dx'); near(fix.shift[1], 0.05209445, 1e-5, 'dy'); near(fix.shift[2], -0.00455767, 1e-5, 'dz')
+near(fix.shift[0], 0, 1e-5, 'dx'); near(fix.shift[1], 0.05209445, 1e-5, 'dy'); near(fix.shift[2], 0, 1e-5, 'dz')
 const moved = A.map((x) => SR.fixSample(x, fix))                                             // [2]
-near(moved[0].tip[1], 0, 1e-5, 'tip0 y'); near(moved[0].tip[2], 0, 1e-5, 'tip0 z'); near(moved[1].tip[2], 0.03, 1e-5, 'tip1 z')
+near(moved[0].tip[1], 0, 1e-5, 'tip0 y'); near(moved[0].tip[2], 0.00455767, 1e-5, 'tip0 z'); near(moved[1].tip[2], 0.03455767, 1e-5, 'tip1 z')
 near(SR.contactReport(A).axisDeg, 10, 1e-6, 'angle before')
 assert.ok(SR.contactReport(moved).axisDeg < 0.05, 'angle after')
 const lim = solve(A, AXES, 5)                                                                 // [3]
-near(lim.deg[0], 5, 1e-9, 'bounded tilt')
+near(lim.deg[0], 5, 1e-9, 'bounded tilt'); assert.ok(lim.hits.includes('tilt'), 'tilt named')
 assert.ok(lim.fix.shift.every((v) => Math.abs(v) <= 0.5))
 const B = [-0.05, 0, 0.03].map((z) => ({ tip: [0.01, -0.02, z], base: [0.01, -0.02, z - 0.1], o: O, u: U, pivot: [0, 0, 0] }))
 const fb = solve(B, [])                                                                       // [5]
-;[-0.01, 0.02, 0.05].forEach((v, i) => near(fb.fix.shift[i], v, 1e-6, 'shift-only'))
+;[-0.01, 0.02, 0].forEach((v, i) => near(fb.fix.shift[i], v, 1e-6, 'shift-only'))
 const pt = SR.partnerTurnFix(10, -5, [1, 0, 0, 0, 1, 0, 0, 0, 1])                            // [6]
 near(pt.turn[0], 0.17453293, 1e-8, 'turn x'); near(pt.turn[1], 0, 1e-12, 'turn y'); near(pt.turn[2], -0.08726646, 1e-8, 'turn z')
 {                                                                                             // [6b]

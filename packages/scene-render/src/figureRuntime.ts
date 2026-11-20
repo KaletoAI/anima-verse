@@ -272,8 +272,9 @@ export class FigureRuntime {
   }
 
   private bodyBoneRefs: { on: Object3D | null; bones: Map<string, Object3D> } = { on: null, bones: new Map() }
-  /** Ruling A158: the body's side/up axes now (world). */
-  private bodyFrame(): BendFrame {
+  /** Ruling A158: the body's side/up axes now (world) — what the root angle turns about; Auto-align models a root-angle
+   *  change on its samples with them (`pairAlign.ts` `moveSample`). */
+  bodyFrame(): BendFrame {
     const inst = this.instance
     if (inst && this.bodyBoneRefs.on !== inst) {
       const bones = new Map<string, Object3D>()

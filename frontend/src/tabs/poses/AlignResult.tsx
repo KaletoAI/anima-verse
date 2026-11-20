@@ -1,12 +1,13 @@
 /**
- * The ONE result block of Auto-align (Ruling A212 — the former Auto-align and pair-check results merged): the
- * contact and clearance lamps, per moving role whether the alignment range stopped it ("move it closer by hand"), the
- * five phases of the stroke before → after, and a collapsible detail table — before and after.
+ * The ONE result block of Auto-align (Ruling A212, procedure of 2026-11-20): the key-frame and clearance lamps, per
+ * moving role what it wrote (partner shift, tilt/roll, the clip's root angle) and which cap or slider range stopped it,
+ * the deepest and the shallowest frame after the run, and a collapsible detail table — before and after.
  */
 import { useI18n } from '../../i18n/I18nProvider'
 import { hasInside, targetWordOf } from './contactWords'
 import { LampDot } from './StatusLamp'
-import type { AutoAlignResult, PhaseAlign } from './PlacePreview'
+import type { AlignBound } from '@anima/scene-render'
+import type { AutoAlignResult, KeyAlign } from './PlacePreview'
 
 type Ok = Extract<AutoAlignResult, { ok: true }>
 const CELL = { textAlign: 'right' as const, padding: '0 4px', whiteSpace: 'nowrap' as const }
@@ -44,26 +45,50 @@ export function PostureLine({ gapMm, sinkMm, limited, heightMm }: { gapMm: numbe
   )
 }
 
-/** The five phases of one contact: tip off the axis, depth along it, shaft angle — before → after. */
-function PhaseTable({ phases, inside }: { phases: PhaseAlign[]; inside: boolean }) {
+/** Ruling A212 (procedure of 2026-11-20): the two key frames of one contact after Auto-align — the tip's depth
+ *  (+ = inside), whether the root is outside, the tip and the root off the axis, the rigid shaft against the axis and
+ *  the bend the part still needs there (the state's limit; "limit" when it cuts). Before-values in the cell titles. */
+function KeyTable({ keys, inside }: { keys: KeyAlign; inside: boolean }) {
   const { t } = useI18n()
-  const name = (p: number) => (p <= 0 ? t('Stroke start') : p >= 1 ? t('Stroke end') : p === 0.25 ? '¼' : p === 0.5 ? '½' : '¾')
-  const pair = (a: number | undefined, b: number | undefined, unit: string) =>
-    `${a === undefined ? '–' : (Math.round(a) || 0).toFixed(0)} → ${b === undefined ? '–' : (Math.round(b) || 0).toFixed(0)} ${unit}`
+  const a = keys.after, b = keys.before
+  if (!a) return null
+  const mm = (v: number | undefined) => (v === undefined ? '–' : `${(Math.round(v) || 0).toFixed(0)} mm`)
+  const was = (v: number | undefined, unit: string) => (v === undefined ? '' : t('before: {v}').replace('{v}', `${v.toFixed(1)} ${unit}`))
+  const rows = [['deep', t('deepest'), a.deep, b?.deep], ['shallow', t('shallowest'), a.shallow, b?.shallow]] as const
   return (
-    <table data-testid="align-phases" style={{ borderCollapse: 'collapse' }}>
-      <thead><tr><th style={{ textAlign: 'left' }}>{t('Phase')}</th>
-        <th style={CELL} title={t('How far the tip is off the target’s axis.')}>{t('tip off axis')}</th>
+    <table data-testid="align-keys" style={{ borderCollapse: 'collapse' }}>
+      <thead><tr><th style={{ textAlign: 'left' }}>{t('Frame')}</th>
         {inside ? <th style={CELL} title={t('How deep the tip is along the axis (+ = inside).')}>{t('depth')}</th> : null}
-        <th style={CELL} title={t('The shaft against the axis.')}>{t('angle')}</th></tr></thead>
-      <tbody>{phases.map((p) => (
-        <tr key={p.phase}><td>{name(p.phase)}</td>
-          <td style={CELL}>{pair(p.before?.tipMm, p.after?.tipMm, 'mm')}</td>
-          {inside ? <td style={CELL}>{pair(p.before?.depthMm, p.after?.depthMm, 'mm')}</td> : null}
-          <td style={CELL}>{pair(p.before?.axisDeg, p.after?.axisDeg, '°')}</td></tr>
+        {inside ? <th style={CELL} title={t('Whether the root joint of the part lies in front of the opening.')}>{t('root outside')}</th> : null}
+        <th style={CELL} title={t('How far the tip is off the target’s axis.')}>{t('tip off axis')}</th>
+        <th style={CELL} title={t('How far the root joint of the part is off the target’s axis line.')}>{t('root off axis')}</th>
+        <th style={CELL} title={t('The rigid shaft (root joint to tip) against the axis.')}>{t('shaft')}</th>
+        <th style={CELL} title={t('What the render-time bend still turns the part by at this frame, within the state’s limit.')}>{t('bend needed')}</th></tr></thead>
+      <tbody>{rows.map(([key, label, r, rb]) => (
+        <tr key={key} data-key={key}><td>{label}</td>
+          {inside ? <td style={CELL} title={was(rb?.depthMm, 'mm')}>{mm(r.depthMm)}</td> : null}
+          {inside ? <td style={{ ...CELL, color: key === 'deep' && !r.rootOutside ? 'var(--danger, #f85149)' : undefined }}>
+            {r.rootOutside ? t('yes') : t('no')}</td> : null}
+          <td style={CELL} title={was(rb?.tipOffMm, 'mm')}>{mm(r.tipOffMm)}</td>
+          <td style={CELL} title={was(rb?.rootOffMm, 'mm')}>{mm(r.rootOffMm)}</td>
+          <td style={CELL} title={was(rb?.shaftDeg, '°')}>{r.shaftDeg.toFixed(1)}°</td>
+          <td style={CELL}>{r.bendDeg === null ? '–' : `${r.bendDeg.toFixed(1)}°${r.bendAtLimit ? ` (${t('limit')})` : ''}`}</td></tr>
       ))}</tbody>
     </table>
   )
+}
+
+/** The names of the unknowns that hit their cap or slider range. */
+function boundWord(t: (s: string) => string, b: AlignBound, rangeCm: number): string {
+  switch (b) {
+    case 'side': return t('side (±3 cm)')
+    case 'up': return t('up/down (±{r} cm)').replace('{r}', rangeCm.toFixed(0))
+    case 'forward': return t('forward/back (±{r} cm)').replace('{r}', rangeCm.toFixed(0))
+    case 'tilt': return t('tilt (±10°)')
+    case 'roll': return t('roll (±10°)')
+    case 'pitch': return t('root pitch (±60°)')
+    case 'yaw': return t('root yaw (±30°)')
+  }
 }
 
 export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
@@ -78,9 +103,9 @@ export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
     <div data-testid="align-auto-result" data-result={JSON.stringify(r)} style={{ fontSize: 11, lineHeight: 1.35 }}>
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
         <LampDot lamp={r.lamp} title={r.lamp === 'green'
-          ? t('On the opening at the outermost frame and inside the channel at the deepest.')
-          : r.lamp === 'yellow' ? t('Inside at the deepest frame, but off the axis or off the opening.')
-            : t('Not inside the channel at the deepest frame.')} />
+          ? t('At the deepest and the shallowest frame the root joint and the tip lie within 3 mm of the axis; at the deepest the root is outside and the tip inside.')
+          : r.lamp === 'yellow' ? t('At both key frames within 10 mm of the axis, the root outside and the tip inside at the deepest.')
+            : t('More than 10 mm off the axis, the root or the tip on the wrong side of the opening, or a cap or slider range was hit.')} />
         <LampDot lamp={r.clearLamp} title={(r.clearLamp === 'green'
           ? t('Nothing else interpenetrates: only the attached part enters the other body, through the channel (at most 5 mm elsewhere).')
           : t('The bodies interpenetrate besides the channel by {mm} mm, deepest at {pair} (green at most 5 mm, yellow at most 20 mm).')
@@ -90,7 +115,7 @@ export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
       </div>
       {r.movers.map((m) => {
         const v3 = (v: number[]) => v.map((x) => x.toFixed(1)).join(' / ')
-        const limit = t('Auto-align moves {role} at most ±{r} cm forward/back and up/down, ±3 cm sideways and ±10° tilt/roll around the arrangement you set (the dials before the first click); what lies beyond is yours to set by hand.')
+        const limit = t('Auto-align moves {role} at most ±{r} cm forward/back and up/down, ±3 cm sideways and ±10° tilt/roll around the arrangement you set (the dials before the first click), and sets the root angle within its sliders; what lies beyond is yours to set by hand.')
           .replace('{role}', m.role.toUpperCase()).replace('{r}', m.rangeCm.toFixed(0))
         return (
           <div key={m.role} data-testid="align-cap" data-lamp={m.lamp} title={limit}>
@@ -100,21 +125,24 @@ export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
                 {m.adjustDeg[0] || m.adjustDeg[1]
                   ? ` · ${t('tilt {a}° roll {b}°').replace('{a}', m.adjustDeg[0].toFixed(1)).replace('{b}', m.adjustDeg[1].toFixed(1))}` : ''}</span>
             </div>
-            {m.capped && m.offCm > 0.5 ? (
-              <div style={{ color: m.lamp === 'red' ? 'var(--danger, #f85149)' : 'var(--warning, #d29922)' }}>
-                {t('The base arrangement is {x} cm off — move it closer by hand.').replace('{x}', m.offCm.toFixed(1))}</div>
+            {m.rootAngle ? (
+              <div data-testid="align-root">{t('Root angle pitch {p}° yaw {y}° (was {p0}° / {y0}°) — written to the root-angle dials.')
+                .replace('{p}', m.rootAngle.pitchDeg.toFixed(1)).replace('{y}', m.rootAngle.yawDeg.toFixed(1))
+                .replace('{p0}', (m.rootBefore?.pitchDeg ?? 0).toFixed(1)).replace('{y0}', (m.rootBefore?.yawDeg ?? 0).toFixed(1))}</div>
             ) : null}
-            {m.capped && m.offDeg > 1 ? (
-              <div style={{ color: m.lamp === 'red' ? 'var(--danger, #f85149)' : 'var(--warning, #d29922)' }}>
-                {t('The base arrangement is {x}° off in tilt/roll — turn it closer by hand.').replace('{x}', m.offDeg.toFixed(1))}</div>
+            {m.hits.length ? (
+              <div style={{ color: 'var(--danger, #f85149)' }}>
+                {t('Stopped by: {names} — move it closer by hand.').replace('{names}', m.hits.map((b) => boundWord(t, b, m.rangeCm)).join(', '))}</div>
             ) : null}
+            <div style={{ opacity: 0.7 }}>{(m.converged ? t('Converged after {n} passes.') : t('Not converged after {n} passes.'))
+              .replace('{n}', String(m.passes.length))}</div>
           </div>
         )
       })}
       {r.relations.map((x, i) => (
         <div key={i} style={{ marginTop: 2 }}>
           {r.relations.length > 1 ? <div style={{ opacity: 0.8 }}>{x.by} → {x.of} {targetWordOf(t, x.target)}</div> : null}
-          <PhaseTable phases={x.phases} inside={hasInside(x.target)} />
+          <KeyTable keys={x.keys} inside={hasInside(x.target)} />
         </div>
       ))}
       <details data-testid="align-details">
@@ -163,7 +191,7 @@ export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
         ) : null}
       </details>
       <div className="ga-form-hint" style={{ margin: 0 }}>
-        {t('Measured on the pair shown; another pair may need its own run. Save stores the sliders.')}
+        {t('Measured on the pair shown; another pair may need its own run. Save stores the partner dials; the root angle is saved with “Save root angle”.')}
       </div>
     </div>
   )

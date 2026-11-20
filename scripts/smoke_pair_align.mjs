@@ -1,63 +1,57 @@
 #!/usr/bin/env node
 /**
- * Ruling A212: the bounded Auto-align of `packages/scene-render/src/pairAlign.ts`. Every expected number is derived BY
- * HAND below (§ B5a), never recorded from a run.
+ * Ruling A212, the owner's procedure of 2026-11-20: the TWO-KEY-FRAME Auto-align of
+ * `packages/scene-render/src/pairAlign.ts` (solveAlign, alignByPasses, keyReport, keyLamp). Every expected number is
+ * derived BY HAND below (§ B5a), never recorded from a run.
  *
  * Usage: node scripts/smoke_pair_align.mjs   (no server, no world; bundles scene-render with esbuild)
  *
- * FIXTURE (metres). Channel O = (0, 0, 0), u = (0, 0, 1); basis = identity, so x = (side, up, forward) = world x, y, z.
- *   A sample at phase φ has tip T = (lx(φ), ly, −0.02 + 0.05·φ), base T − 0.1·u (the shaft lies along u: the angle
- *   term is 0 for every shift), pivot (0, 0, −0.3). No bend, no posture, no axes unless named. Then the residual is
- *   separable per axis: side/up only see the tip's lateral (lx + y_side, ly + y_up), forward only sees the entry term
- *   √(10·N)·(s_min + y_fwd) with s_min = −0.02 (phase 0). Cap of the default range 8 cm: side 3 cm, up 8, forward 8.
- *   [1] lx = 0.01, ly = −0.02 at all five phases: the unique minimum y = (−0.01, 0.02, 0.02), inside the cap →
- *       x = (−0.01, 0.02, 0.02) (±1e-6), lamp green, offCm 0.
- *   [2] lx = 0.05: side free optimum −0.05, cap 0.03 → x_side = −0.03 exactly; excess 2 cm → offCm = 2 (±0.01), lamp
- *       yellow (≤ 8 cm); up/forward unchanged (0.02, 0.02).
- *   [3] lx = 0.15: excess 12 cm > 8 → red; x_side still −0.03.
- *   [4] TWO RELATIONS solved together: relation 1 lx = 0.02, relation 2 lx = 0 (same N = 5): Σ (0.02 + y)² + y² is
- *       least at y = −0.01. (One after the other the second would end at 0: the last relation wins.)
- *   [5] THE CAP IS THE TOTAL: start = (−0.02, 0, 0) already applied, the measured lx = 0.02 still wants −0.02 more
- *       (free total −0.04) → the total stops at −0.03, the increment (fix.shift x) is −0.01; offCm = 1.
- *   [6] range 4 cm: alignCap(4) = side 0.03, up 0.04, forward 0.04; ly = −0.06 → x_up = 0.04, offCm 2.
- *   [7] PHASES: samples at φ = k/10 (k = 0..9): pickPhases → 0, 0.2 (0.25 is a tie of 0.2/0.3: the first wins), 0.5,
- *       0.7 (tie 0.7/0.8), end = 0.9. phaseRow of T = (0.01, 0, 0.03), base T − 0.1u: tip 10 mm, depth 30 mm, axis 0°.
- *   [8] THE STROKE OVER ALL PHASES: lx = 0.01 at φ = 0, 0.5, 1 and 0.03 at 0.25, 0.75 → mean 0.018 → x_side = −0.018
- *       (an out/in pair φ = 0, 0.5 alone would give −0.01).
- *   [9] JOIN: lx = ly = 0, s_min = 0 (T_z = 0.05·φ), join Δ = (0, 0, 0.05), weight 1: forward cost 10N·y² + N(y − 0.05)²
- *       → 20y + 2(y − 0.05) = 0 → y = 0.1/22 = 0.0045454 (±1e-5).
- *   [10] TILT CAP: pairFit fixture A with the shaft tilted β = 15° (d = (0, sin β, cos β), tips c·d for c = 0, 0.03,
- *       base T − 0.1d, pivot −0.3d), axes tilt (1, 0, 0): the free optimum turns α = +15° (rotation about +X maps β to
- *       β − α) with shift up 0.3 sin 15° = 0.07765 (inside 8 cm) → deg = 10 (the cap), offDeg = 5 (±0.05), offCm 0,
- *       lamp yellow.
- *   [11] relativeOf / joinDelta: frame Ry(90°) row-major [0,0,1, 0,1,0, −1,0,0], anchor (1, 0, 2), hips (1, 0.1, 3):
+ * FIXTURE (metres, degrees). The moving figure's clip frame is turned 30° about +Y: basis B with the columns
+ *   side = (cos 30°, 0, −sin 30°), up = (0, 1, 0), forward = (sin 30°, 0, cos 30°); the body axes (root angle) are
+ *   side/up, the partner's tilt/roll axes side/forward. The channel: opening O = (0, 0.9, 0.4), axis
+ *   u = B·(0, −sin 15°, cos 15°), depth 0.15, the tip's radius 0.015 → the bottom condition s_tip ≤ 0.135.
+ *   The part: 4 links of 0.03 (L = 0.12), raised 1. Its RAW direction (root angle 0/0) is d₀ = q(A*)⁻¹·u for the
+ *   CORRECT root angle A* = (pitch 12°, yaw −5°), q = rootTurnQuat(body, ·) — so the part rendered with A* points along u.
+ *   8 frames φ = k/8: tip s(φ) = 0.03 + 0.035·(1 − cos 2πφ) (shallow φ = 0: s = 0.03, deep φ = ½: s = 0.10), the
+ *   root P_0 = O + (s − L)·u (deep: s_root = −0.02, outside), the chain P_k = P_0 + 0.03·k·q(A)·d₀, the pivot (hips)
+ *   P_0 + B·(0, 0.1, −0.1). A misplacement by a partner shift e is P ↦ P + B·e for every point and the pivot.
+ *   Cap: alignCap() = side 3 cm, up/forward 8 cm, tilt/roll 10°; root ranges ±60° / ±30°.
+ *   [1] RECOVERY: measured with the root angle A_m = (4°, 3°) (error −8° / +8°) and the partner shift
+ *       e = (2, 3 cos 15°, 3 sin 15°) cm = (2, 2.8978, 0.7765) cm (B·e ⊥ u: a misplacement ACROSS the axis — along u
+ *       no lateral residual can see it, and none should). The unique zero of the lateral residuals: x = −e (the root
+ *       joint back on the axis line at both key frames needs the shift; its across-axis part is 2-dimensional and so is
+ *       −B·e) and the root angle A* (the shaft along u), tilt/roll 0 (the null direction: the ridge keeps them).
+ *       Expect |x − (−e)| < 1 mm, |root − A*| < 0.2°, |tilt|, |roll| < 0.2°; the report after (moveSample with the
+ *       solution): root and tip off axis < 0.1 mm at both key frames, shaft 0° (< 0.05°), lamp green, no hits.
+ *       TWO RELATIONS on the same figure (a second, unrooted chain whose correct stroke lies on a second axis through
+ *       O₂ = O + B·(0.08, 0.05, 0), measured with the same e; it sees the shift only): the same answer.
+ *   [2] A CORRECT STROKE THAT NEVER FULLY LEAVES (s_min = +3 cm) is NOT moved: measured at A* and e = 0 every residual
+ *       is 0 and no inequality is violated (deep: s_tip 0.10 ∈ (0.002, 0.133), s_root −0.02 < −0.002) → |x| < 0.1 mm,
+ *       root moved < 0.01°, tilt/roll < 0.01°. (The old ENTRY term pushed such a stroke 2.9 cm along the axis.)
+ *   [3] ROOT INSIDE AT THE DEEP FRAME: the correct stroke moved 3 cm along +u (deep s_tip 0.13 ≤ 0.133, s_root +0.01 —
+ *       inside). Laterally nothing is wrong, so only the hinge max(0, s_root + 0.002) costs: the solve moves the figure
+ *       along −u by exactly 0.012 → x = −0.012·(0, −sin 15°, cos 15°) = (0, 0.31058, −1.15911) cm (±0.05 mm), deep
+ *       s_root −2 mm (rootOutside), s_tip 0.118; lamp green.
+ *   [4] CAPS: [1] with e = (5, 0, 0) cm: side needs −5 cm, the cap stops it at −3 cm → hits ∋ 'side', lamp red. (The
+ *       roll then takes what it can: about the forward axis through the hips it moves the root joint, 0.1 m below and
+ *       0.1 m in front of them, sideways by 0.1·ω — the missing 2 cm need ω = 0.2 rad = 11.5° > 10°, so 'roll' is hit
+ *       too.) A* = (12°, −35°) measured at (12°, 0°): the yaw needs −35°, beyond its range ±30° → hits ∋ 'yaw', red.
+ *   [5] CONVERGENCE OF THE PASSES (alignByPasses): the "measured" chain carries only g = 0.85 of the root angle applied
+ *       (a chain that follows its root turn only partly). The model turns the measured chain by q(new)·q(applied)⁻¹, so
+ *       per pass the realised angle r obeys r_{k+1} = g·T + (1 − g)·r_k (T = A*): the error shrinks by 0.15 per pass —
+ *       from 8° to 8·0.15⁴ ≈ 0.004° after four. Expect at most ALIGN_PASSES (5) passes, converged, the realised root
+ *       angle g·A within 0.02° of A*, the increments shrinking (each pass's root step ≤ 0.2 × the one before, up to the
+ *       ridge/Gauss–Newton tolerance), and the measured key frames green.
+ *   [6] JOIN (end clips): [2]'s correct stroke, no tilt/roll axes (a group clip), the join Δ = B·(0.01, 0, 0), weight 1.
+ *       Two key frames (N = 2). A side shift y (B·side ⊥ u: purely across the axis) moves root and tip alike; the root
+ *       yaw turns the tip back onto the axis at both frames for nothing (the shaft's direction is the same at both), so
+ *       only the root joint pays: 2 frames · y², plus the join N·(y − 0.01)² = 2(y − 0.01)² → least at y = 0.005 (±2e-5).
+ *   [7] relativeOf / joinDelta: frame Ry(90°) row-major [0,0,1, 0,1,0, −1,0,0], anchor (1, 0, 2), hips (1, 0.1, 3):
  *       d = (0, 0.1, 1), frameᵀd = (−1, 0.1, 0); joinDelta of that rel from the same hips = (0, 0, 0); from hips
  *       (1, 0.1, 2.5) = (0, 0, 0.5).
- *   [12] THE RECEIVING FIGURE NEVER MOVES: hits {e 1, r 0}, {e 2, r 0}, {e 1, r 3} → alignMovers keys exactly {1, 2}
- *       (1 with two relations, solved together); 0 and 3 only receive and are no key.
- *   [13] ACTIVE SET (best fit with one unknown on its bound): fixture [10] (β = 15°, up and tilt correlated — both move
- *       the tips in y) with the tilt capped at 10°. The answer must be the least-squares optimum of (side, up, forward)
- *       WITH tilt held at 10°: a brute-force grid of up × forward (step 0.1 mm over ±8 cm, side 0 by the fixture's
- *       x-symmetry; refined to 0.01 mm around the best cell) gives that optimum's cost; the solver's cost must not
- *       exceed it by more than 1e-9 and its up/forward lie within 0.02 mm of the grid's.
- *   [14] RIGID RECOVERY (Ruling A145 root-only, finding F2: Auto-align never bends). A clip frame turned 30° about +Y,
- *       basis B with columns side = (cos 30°, 0, −sin 30°), up = (0, 1, 0), forward = (sin 30°, 0, cos 30°); axes tilt =
- *       side, roll = forward. The CORRECT stroke: a 4-link chain of 0.03 m lying ON the axis u = B·(0, −sin 15°, cos 15°)
- *       (opening O1 = (0, 0.9, 0.4)) with the tip at s = 0, 0.05, 0.10, 0.05, 0 over the five phases, the pivot 0.25 m
- *       behind O1 on the axis (moving with the stroke), `raised` 1, a channel — every residual is 0. MISPLACED by a known
- *       rigid fix about the pivot: X' = R(X − p) + p + B·e, p' = p + B·e, R = exp(side·4° + forward·(−3°)), e = (2, −3,
- *       2.5) cm. The fix that undoes it about p' is R⁻¹ = exp(−(side·4° + forward·(−3°))) and the shift −B·e, i.e.
- *       x = (−2, +3, −2.5) cm and (tilt, roll) = (−4°, +3°): all residuals 0 again, and the minimum is unique (the five
- *       phases' lateral fix side/up and the shaft's two angles, the entry term the forward). Both within the cap → the
- *       solve returns them to < 0.1 mm / 0.2° (bound asked: 1 mm), the free optimum the same (it is unique), lamp green,
- *       and the rigid tip lies on the axis afterwards (< 0.1 mm). TWO RELATIONS: a second chain on the SAME figure
- *       (opening O2 = O1 + B·(0.08, 0.05, 0), the same pivot), misplaced by the same fix → the same answer. Before
- *       (with the bend inside the fit) this case left the rigid tip 15–20 mm off the axis.
- *   [15] THE LAMP WHEN THE CAP CANNOT REACH: the [14] stroke misplaced by e = (5, 0, 0) cm (side cap 3) and tilt 14°
- *       (cap 10°): the free optimum is the unique inverse (−5 cm, −14°), so offCm = 2, offDeg = 4 → yellow (never
- *       green); the capped solve holds x_side at −3 cm and the tilt inside ±10° (where exactly is the least squares with
- *       side on its bound — shift and tilt both move the tip sideways, so it is not simply −10°). e = (0, 0, 20) cm
- *       (forward cap 8): offCm = 12 → red.
+ *   [8] THE RECEIVING FIGURE NEVER MOVES: hits {e 1, r 0}, {e 2, r 0}, {e 1, r 3} → alignMovers keys exactly {1, 2}.
+ *   [9] keyFrames of tips s = 0.05, 0.02, 0.09, 0.02, 0.09 → deep 2 (first of the ties), shallow 1; alignCap(4) = side 3,
+ *       up/forward 4 cm.
  */
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -83,111 +77,134 @@ async function loadSR() {
 }
 const SR = await loadSR()
 const near = (a, b, eps, msg) => assert.ok(Math.abs(a - b) <= eps, `${msg}: ${a} vs ${b}`)
-const U = [0, 0, 1], O = [0, 0, 0], I = [1, 0, 0, 0, 1, 0, 0, 0, 1]
-const PH = [0, 0.25, 0.5, 0.75, 1]
-const smp = (lx, ly, ph, z0 = -0.02) => {
-  const tip = [lx, ly, z0 + 0.05 * ph]
-  return { tip, base: [tip[0], tip[1], tip[2] - 0.1], o: O, u: U, pivot: [0, 0, -0.3] }
-}
-const rel = (f) => ({ samples: PH.map((ph) => f(ph)) })
-const cap = SR.alignCap()
 let n = 0
 const ok = (m) => { n++; console.log(`  PASS  ${m}`) }
-
-{ const r = SR.solveAlignAdjust({ relations: [rel((ph) => smp(0.01, -0.02, ph))], basis: I, cap })
-  near(r.x[0], -0.01, 1e-6, '[1] side'); near(r.x[1], 0.02, 1e-6, '[1] up'); near(r.x[2], 0.02, 1e-6, '[1] fwd')
-  assert.equal(r.lamp, 'green'); near(r.offCm, 0, 1e-3, '[1] off'); ok('[1] inside the cap: the exact minimum, green') }
-{ const r = SR.solveAlignAdjust({ relations: [rel((ph) => smp(0.05, -0.02, ph))], basis: I, cap })
-  near(r.x[0], -0.03, 1e-9, '[2] side capped'); near(r.x[1], 0.02, 1e-6, '[2] up'); near(r.x[2], 0.02, 1e-6, '[2] fwd')
-  near(r.offCm, 2, 0.01, '[2] off'); assert.equal(r.lamp, 'yellow'); ok('[2] side capped at 3 cm, 2 cm off, yellow') }
-{ const r = SR.solveAlignAdjust({ relations: [rel((ph) => smp(0.15, 0, ph))], basis: I, cap })
-  near(r.x[0], -0.03, 1e-9, '[3] side'); assert.equal(r.lamp, 'red'); near(r.offCm, 12, 0.01, '[3] off'); ok('[3] 12 cm off → red') }
-{ const r = SR.solveAlignAdjust({ relations: [rel((ph) => smp(0.02, 0, ph)), rel((ph) => smp(0, 0, ph))], basis: I, cap })
-  near(r.x[0], -0.01, 1e-6, '[4] joint'); ok('[4] two relations solved together: −0.01') }
-{ const r = SR.solveAlignAdjust({ relations: [rel((ph) => smp(0.02, 0, ph))], basis: I, cap, start: [-0.02, 0, 0] })
-  near(r.x[0], -0.03, 1e-9, '[5] total'); near(r.fix.shift[0], -0.01, 1e-9, '[5] increment'); near(r.offCm, 1, 0.01, '[5] off')
-  ok('[5] the cap holds the TOTAL over iterations') }
-{ const c4 = SR.alignCap(4)
-  near(c4.sideM, 0.03, 1e-12, '[6] side'); near(c4.upM, 0.04, 1e-12, '[6] up'); near(c4.forwardM, 0.04, 1e-12, '[6] fwd')
-  const r = SR.solveAlignAdjust({ relations: [rel((ph) => smp(0, -0.06, ph))], basis: I, cap: c4 })
-  near(r.x[1], 0.04, 1e-9, '[6] up capped'); near(r.offCm, 2, 0.01, '[6] off'); ok('[6] a clip range of 4 cm') }
-{ const s = Array.from({ length: 10 }, (_, k) => ({ phase: k / 10 }))
-  assert.deepEqual(SR.pickPhases(s).map((x) => x.phase), [0, 0.2, 0.5, 0.7, 0.9])
-  const row = SR.phaseRow({ tip: [0.01, 0, 0.03], base: [0.01, 0, -0.07], o: O, u: U, pivot: O }, 0.5)
-  near(row.tipMm, 10, 1e-9, '[7] tip'); near(row.depthMm, 30, 1e-9, '[7] depth'); near(row.axisDeg, 0, 1e-6, '[7] axis')
-  ok('[7] the five phases and a phase row') }
-{ const lx = (ph) => (ph === 0.25 || ph === 0.75 ? 0.03 : 0.01)
-  const r = SR.solveAlignAdjust({ relations: [rel((ph) => smp(lx(ph), 0, ph))], basis: I, cap })
-  near(r.x[0], -0.018, 1e-6, '[8] stroke'); ok('[8] the stroke fitted over all five phases: −0.018') }
-{ const r = SR.solveAlignAdjust({ relations: [rel((ph) => smp(0, 0, ph, 0))], basis: I, cap, join: { deltaM: [0, 0, 0.05] } })
-  near(r.x[2], 0.1 / 22, 1e-5, '[9] join'); ok('[9] the join to the base end pose: 0.004545') }
-{ const b = 15 * Math.PI / 180, d = [0, Math.sin(b), Math.cos(b)], pv = d.map((v) => -0.3 * v)
-  const s = [0, 0.03].map((c) => { const tip = d.map((v) => c * v); return { tip, base: tip.map((v, i) => v - 0.1 * d[i]), o: O, u: U, pivot: pv } })
-  const r = SR.solveAlignAdjust({ relations: [{ samples: s }], basis: I, cap, axes: [[1, 0, 0]] })
-  near(r.deg[0], 10, 1e-6, '[10] tilt capped'); near(r.freeDeg[0], 15, 0.05, '[10] free'); near(r.offDeg, 5, 0.05, '[10] offDeg')
-  near(r.offCm, 0, 0.01, '[10] offCm'); assert.equal(r.lamp, 'yellow'); ok('[10] tilt capped at 10°, 5° off, yellow') }
-{ const F = [0, 0, 1, 0, 1, 0, -1, 0, 0]
-  const rv = SR.relativeOf(F, [1, 0.1, 3], [1, 0, 2])
-  ;[-1, 0.1, 0].forEach((v, i) => near(rv[i], v, 1e-12, '[11] rel'))
-  SR.joinDelta(F, rv, [1, 0.1, 3], [1, 0, 2]).forEach((v) => near(v, 0, 1e-12, '[11] join 0'))
-  const j = SR.joinDelta(F, rv, [1, 0.1, 2.5], [1, 0, 2]); [0, 0, 0.5].forEach((v, i) => near(j[i], v, 1e-12, '[11] join'))
-  ok('[11] relativeOf / joinDelta') }
-{ const m = SR.alignMovers([{ e: 1, r: 0 }, { e: 2, r: 0 }, { e: 1, r: 3 }])
-  assert.deepEqual([...m.keys()].sort(), [1, 2]); assert.equal(m.get(1).length, 2)
-  ok('[12] only the figures with the attached part move; the receiving ones are no key') }
-{ const b = 15 * Math.PI / 180, d = [0, Math.sin(b), Math.cos(b)], pv = d.map((v) => -0.3 * v)
-  const s = [0, 0.03].map((c) => { const tip = d.map((v) => c * v); return { tip, base: tip.map((v, i) => v - 0.1 * d[i]), o: O, u: U, pivot: pv } })
-  const r = SR.solveAlignAdjust({ relations: [{ samples: s }], basis: I, cap, axes: [[1, 0, 0]] })
-  const a10 = 10 * Math.PI / 180
-  const cost = (up, fw) => SR.fitResiduals(s, { shift: [0, up, fw], turn: [a10, 0, 0] }).reduce((a, v) => a + v * v, 0)
-  let best = [Infinity, 0, 0]
-  for (let i = -800; i <= 800; i++) for (let j = -800; j <= 800; j++) { const c = cost(i * 1e-4, j * 1e-4); if (c < best[0]) best = [c, i * 1e-4, j * 1e-4] }
-  const [, u0, f0] = best
-  for (let i = -10; i <= 10; i++) for (let j = -10; j <= 10; j++) { const c = cost(u0 + i * 1e-5, f0 + j * 1e-5); if (c < best[0]) best = [c, u0 + i * 1e-5, f0 + j * 1e-5] }
-  near(r.deg[0], 10, 1e-9, '[13] tilt on its bound')
-  const mine = cost(r.x[1], r.x[2])
-  assert.ok(mine <= best[0] + 1e-9, `[13] cost ${mine} vs brute ${best[0]}`)
-  near(r.x[1], best[1], 2e-5, '[13] up'); near(r.x[2], best[2], 2e-5, '[13] forward'); near(r.x[0], 0, 1e-9, '[13] side')
-  ok(`[13] active set = brute force (up ${(r.x[1] * 1000).toFixed(2)} mm, fwd ${(r.x[2] * 1000).toFixed(2)} mm)`) }
-{ // [14] / [15] rigid recovery
-  const D2R = Math.PI / 180
-  const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]], sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-  const mul = (a, k) => [a[0] * k, a[1] * k, a[2] * k]
-  const yaw = 30 * D2R
-  const B = [Math.cos(yaw), 0, Math.sin(yaw), 0, 1, 0, -Math.sin(yaw), 0, Math.cos(yaw)]
-  const col = (j) => [B[j], B[3 + j], B[6 + j]]
-  const side = col(0), up = col(1), fwd = col(2)
-  const Bv = (v) => add(add(mul(side, v[0]), mul(up, v[1])), mul(fwd, v[2]))
-  const u = Bv([0, -Math.sin(15 * D2R), Math.cos(15 * D2R)])
-  const stroke = (O, pivot0) => [0, 0.05, 0.10, 0.05, 0].map((s, i) => {
-    const tip = add(O, mul(u, s)), chain = Array.from({ length: 5 }, (_, k) => sub(tip, mul(u, 0.03 * (4 - k))))
-    return { tip, base: chain[0], o: O, u, pivot: add(pivot0, mul(u, s)), chain, raised: 1, channel: true, phase: i / 4 }
+const D2R = Math.PI / 180
+const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]], sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+const mul = (a, k) => [a[0] * k, a[1] * k, a[2] * k]
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+const yaw = 30 * D2R
+const B = [Math.cos(yaw), 0, Math.sin(yaw), 0, 1, 0, -Math.sin(yaw), 0, Math.cos(yaw)]
+const col = (j) => [B[j], B[3 + j], B[6 + j]]
+const side = col(0), up = col(1), fwd = col(2)
+const Bv = (v) => add(add(mul(side, v[0]), mul(up, v[1])), mul(fwd, v[2]))
+const s15 = Math.sin(15 * D2R), c15 = Math.cos(15 * D2R)
+const U = Bv([0, -s15, c15])
+const O1 = [0, 0.9, 0.4], O2 = add(O1, Bv([0.08, 0.05, 0]))
+const body = { side, up }
+const cap = SR.alignCap()
+const conj = (q) => [-q[0], -q[1], -q[2], q[3]]
+const L = 0.12
+const sOf = (ph) => 0.03 + 0.035 * (1 - Math.cos(2 * Math.PI * ph))
+/** The stroke: correct root angle aStar, rendered with aShown (realised share g), misplaced by e, moved along u. */
+const stroke = ({ O = O1, aStar = { pitchDeg: 12, yawDeg: -5 }, aShown = aStar, g = 1, e = [0, 0, 0], along = 0, rooted = true } = {}) => {
+  const d0 = rooted ? SR.quatRotate(conj(SR.rootTurnQuat(body, aStar)), U) : U
+  const shown = { pitchDeg: g * aShown.pitchDeg, yawDeg: g * aShown.yawDeg }
+  const d = rooted ? SR.quatRotate(SR.rootTurnQuat(body, shown), d0) : U
+  return Array.from({ length: 8 }, (_, k) => {
+    const ph = k / 8, s = sOf(ph) + along
+    const p0 = add(add(O, mul(U, s - L)), Bv(e))
+    const chain = Array.from({ length: 5 }, (_, j) => add(p0, mul(d, 0.03 * j)))
+    return { tip: chain[4], base: chain[0], chain, o: O, u: U, pivot: add(p0, Bv([0, 0.1, -0.1])), raised: 1, channel: true,
+      body, depthM: 0.15, tipRadiusM: 0.015, phase: ph }
   })
-  const misplace = (smps, e, tilt, roll) => {
-    const fix = { shift: Bv(e), turn: add(mul(side, tilt * D2R), mul(fwd, roll * D2R)) }
-    return smps.map((s) => ({ ...SR.fixSample(s, fix), pivot: add(s.pivot, fix.shift) }))
-  }
-  const tipOff = (s) => { const v = sub(s.tip, s.o), a = v[0] * s.u[0] + v[1] * s.u[1] + v[2] * s.u[2]; return Math.hypot(...sub(v, mul(s.u, a))) }
-  const O1 = [0, 0.9, 0.4], P1 = sub(O1, mul(u, 0.25))
-  const C1 = stroke(O1, P1)
-  const C2 = stroke(add(O1, Bv([0.08, 0.05, 0])), P1).map((s, i) => ({ ...s, pivot: C1[i].pivot }))
-  const solve = (rels) => SR.solveAlignAdjust({ relations: rels.map((samples) => ({ samples })), basis: B, axes: [side, fwd], cap })
-  const e = [0.02, -0.03, 0.025]
-  for (const [label, rels] of [['one relation', [misplace(C1, e, 4, -3)]], ['two relations', [misplace(C1, e, 4, -3), misplace(C2, e, 4, -3)]]]) {
-    const r = solve(rels)
-    ;[-0.02, 0.03, -0.025].forEach((v, i) => near(r.x[i], v, 1e-4, `[14] ${label} x[${i}]`))
-    near(r.deg[0], -4, 0.2, `[14] ${label} tilt`); near(r.deg[1], 3, 0.2, `[14] ${label} roll`)
-    ;[-0.02, 0.03, -0.025].forEach((v, i) => near(r.freeX[i], v, 1e-4, `[14] ${label} free x[${i}]`))
-    assert.equal(r.lamp, 'green')
-    for (const sm of rels) for (const s of sm) assert.ok(tipOff(SR.fixSample(s, r.fix)) < 1e-4, `[14] ${label} rigid tip after`)
-    ok(`[14] rigid recovery, ${label}: x ${r.x.map((v) => (v * 100).toFixed(3)).join('/')} cm, tilt ${r.deg[0].toFixed(3)}° roll ${r.deg[1].toFixed(3)}°`)
-  }
-  { const r = solve([misplace(C1, [0.05, 0, 0], 14, 0)])
-    near(r.x[0], -0.03, 1e-6, '[15] side capped'); assert.ok(Math.abs(r.deg[0]) <= 10 + 1e-9, `[15] tilt within the cap ${r.deg[0]}`)
-    near(r.freeX[0], -0.05, 1e-4, '[15] free side'); near(r.freeDeg[0], -14, 0.05, '[15] free tilt')
-    near(r.offCm, 2, 0.01, '[15] offCm'); near(r.offDeg, 4, 0.05, '[15] offDeg'); assert.equal(r.lamp, 'yellow')
-    const r2 = solve([misplace(C1, [0, 0, 0.20], 0, 0)])
-    near(r2.offCm, 12, 0.01, '[15] offCm red'); assert.equal(r2.lamp, 'red')
-    ok(`[15] the cap cannot reach: yellow (${r.offCm.toFixed(2)} cm, ${r.offDeg.toFixed(2)}° off), red (${r2.offCm.toFixed(2)} cm)`) }
 }
-console.log(`\n${n}/16 checks passed`)
+const problem = (relations, root, extra = {}) => ({ relations, basis: B, axes: [side, fwd], cap, root, ...extra })
+const after = (samples, sol, from) => samples.map((s) => SR.moveSample(s, sol.fix, from, sol.root))
+const e1 = [0.02, 0.03 * c15, 0.03 * s15]
+const AM = { pitchDeg: 4, yawDeg: 3 }
+
+{ // [1]
+  const meas = stroke({ aShown: AM, e: e1 })
+  const sol = SR.solveAlign(problem([{ samples: meas, rooted: true }], AM))
+  const dx = Math.hypot(...sub(sol.x, mul(e1, -1)))
+  assert.ok(dx < 1e-3, `[1] x off by ${dx}`)
+  near(sol.root.pitchDeg, 12, 0.2, '[1] pitch'); near(sol.root.yawDeg, -5, 0.2, '[1] yaw')
+  near(sol.deg[0], 0, 0.2, '[1] tilt'); near(sol.deg[1], 0, 0.2, '[1] roll')
+  assert.deepEqual(sol.hits, [])
+  const rep = SR.keyReport(after(meas, sol, AM))
+  for (const r of [rep.deep, rep.shallow]) {
+    assert.ok(r.rootOffMm < 0.1 && r.tipOffMm < 0.1, `[1] off axis ${r.rootOffMm} / ${r.tipOffMm}`)
+    assert.ok(r.shaftDeg < 0.05, `[1] shaft ${r.shaftDeg}`)
+  }
+  assert.equal(rep.deep.index, 4); assert.equal(rep.shallow.index, 0)
+  assert.equal(SR.keyLamp(rep, sol.hits, true), 'green')
+  ok(`[1] recovery: x error ${(dx * 1000).toFixed(4)} mm, root ${sol.root.pitchDeg.toFixed(4)}° / ${sol.root.yawDeg.toFixed(4)}°, tilt/roll ${sol.deg.map((v) => v.toFixed(4)).join(' / ')}°`)
+  const meas2 = stroke({ O: O2, e: e1, rooted: false })
+  const two = SR.solveAlign(problem([{ samples: meas, rooted: true }, { samples: meas2 }], AM))
+  const dx2 = Math.hypot(...sub(two.x, mul(e1, -1)))
+  assert.ok(dx2 < 1e-3, `[1] two relations x off by ${dx2}`)
+  near(two.root.pitchDeg, 12, 0.2, '[1] two pitch'); near(two.root.yawDeg, -5, 0.2, '[1] two yaw')
+  ok(`[1] two relations: x error ${(dx2 * 1000).toFixed(4)} mm, root ${two.root.pitchDeg.toFixed(4)}° / ${two.root.yawDeg.toFixed(4)}°`)
+}
+{ // [2]
+  const A = { pitchDeg: 12, yawDeg: -5 }
+  const sol = SR.solveAlign(problem([{ samples: stroke(), rooted: true }], A))
+  assert.ok(Math.hypot(...sol.x) < 1e-4, `[2] moved ${sol.x}`)
+  assert.ok(Math.abs(sol.root.pitchDeg - 12) < 0.01 && Math.abs(sol.root.yawDeg + 5) < 0.01, '[2] root')
+  assert.ok(sol.deg.every((v) => Math.abs(v) < 0.01), '[2] tilt/roll')
+  ok(`[2] a correct stroke (s_min +3 cm) stays: |x| = ${(Math.hypot(...sol.x) * 1000).toExponential(2)} mm`)
+}
+{ // [3]
+  const A = { pitchDeg: 12, yawDeg: -5 }
+  const meas = stroke({ along: 0.03 })
+  const before = SR.keyReport(meas)
+  assert.equal(before.deep.rootOutside, false)
+  const sol = SR.solveAlign(problem([{ samples: meas, rooted: true }], A))
+  ;[0, 0.012 * s15, -0.012 * c15].forEach((v, i) => near(sol.x[i], v, 5e-5, `[3] x[${i}]`))
+  const rep = SR.keyReport(after(meas, sol, A))
+  near(rep.deep.rootDepthMm, -2, 0.05, '[3] root depth'); near(rep.deep.depthMm, 118, 0.05, '[3] tip depth')
+  assert.equal(rep.deep.rootOutside, true)
+  assert.equal(SR.keyLamp(rep, sol.hits, true), 'green')
+  ok(`[3] root inside pushed out: x = ${sol.x.map((v) => (v * 100).toFixed(4)).join(' / ')} cm, root at ${rep.deep.rootDepthMm.toFixed(3)} mm`)
+}
+{ // [4]
+  const meas = stroke({ aShown: AM, e: [0.05, 0, 0] })
+  const sol = SR.solveAlign(problem([{ samples: meas, rooted: true }], AM))
+  assert.ok(sol.hits.includes('side') && sol.hits.includes('roll'), `[4] hits ${sol.hits}`); near(sol.x[0], -0.03, 1e-9, '[4] side on its cap')
+  assert.equal(SR.keyLamp(SR.keyReport(after(meas, sol, AM)), sol.hits, true), 'red')
+  const aStar = { pitchDeg: 12, yawDeg: -35 }, a0 = { pitchDeg: 12, yawDeg: 0 }
+  const m2 = stroke({ aStar, aShown: a0 })
+  const s2 = SR.solveAlign(problem([{ samples: m2, rooted: true }], a0))
+  assert.ok(s2.hits.includes('yaw'), `[4] hits ${s2.hits}`); near(s2.root.yawDeg, -30, 1e-9, '[4] yaw on its range')
+  assert.equal(SR.keyLamp(SR.keyReport(after(m2, s2, a0)), s2.hits, true), 'red')
+  ok(`[4] caps hit → red and named: [${sol.hits}] and [${s2.hits}]`)
+}
+{ // [5]
+  const g = 0.85, aStar = { pitchDeg: 12, yawDeg: -5 }
+  const measure = (st) => ({ relations: [{ samples: stroke({ aStar, aShown: st.root, g, e: mul(e1, 1).map((v, i) => v + st.x[i]) }), rooted: true }], basis: B })
+  const run = SR.alignByPasses(measure, { axes: [side, fwd], cap }, { x: [0, 0, 0], deg: [0, 0], root: AM })
+  assert.ok(run.converged, 'converged'); assert.ok(run.trace.length <= SR.ALIGN_PASSES, 'passes')
+  near(g * run.state.root.pitchDeg, 12, 0.02, '[5] realised pitch'); near(g * run.state.root.yawDeg, -5, 0.02, '[5] realised yaw')
+  for (let k = 2; k < run.trace.length; k++) assert.ok(run.trace[k].rootDeg <= 0.2 * run.trace[k - 1].rootDeg + 2e-3, `[5] shrink ${k}`)
+  const rep = SR.keyReport(run.last.relations[0].samples)
+  assert.equal(SR.keyLamp(rep, run.sol.hits, true), 'green')
+  ok(`[5] passes converge: root steps ${run.trace.map((t) => t.rootDeg.toFixed(4)).join(' → ')}°, shift steps ${run.trace.map((t) => t.shiftMm.toFixed(3)).join(' → ')} mm`)
+}
+{ // [6]
+  const A = { pitchDeg: 12, yawDeg: -5 }
+  const sol = SR.solveAlign(problem([{ samples: stroke(), rooted: true }], A, { axes: [], join: { deltaM: Bv([0.01, 0, 0]) } }))
+  near(sol.x[0], 0.005, 2e-5, '[6] join side')
+  ok(`[6] the join to the base end pose: side ${(sol.x[0] * 1000).toFixed(4)} mm`)
+}
+{ // [7]
+  const F = [0, 0, 1, 0, 1, 0, -1, 0, 0]
+  const rv = SR.relativeOf(F, [1, 0.1, 3], [1, 0, 2])
+  ;[-1, 0.1, 0].forEach((v, i) => near(rv[i], v, 1e-12, '[7] rel'))
+  SR.joinDelta(F, rv, [1, 0.1, 3], [1, 0, 2]).forEach((v) => near(v, 0, 1e-12, '[7] join 0'))
+  const j = SR.joinDelta(F, rv, [1, 0.1, 2.5], [1, 0, 2]); [0, 0, 0.5].forEach((v, i) => near(j[i], v, 1e-12, '[7] join'))
+  ok('[7] relativeOf / joinDelta')
+}
+{ // [8]
+  const m = SR.alignMovers([{ e: 1, r: 0 }, { e: 2, r: 0 }, { e: 1, r: 3 }])
+  assert.deepEqual([...m.keys()].sort(), [1, 2]); assert.equal(m.get(1).length, 2)
+  ok('[8] only the figures with the attached part move')
+}
+{ // [9]
+  const k = SR.keyFrames([0.05, 0.02, 0.09, 0.02, 0.09].map((s) => ({ tip: [0, 0, s], o: [0, 0, 0], u: [0, 0, 1] })))
+  assert.deepEqual(k, { deep: 2, shallow: 1 })
+  const c4 = SR.alignCap(4)
+  near(c4.sideM, 0.03, 1e-12, '[9] side'); near(c4.upM, 0.04, 1e-12, '[9] up'); near(c4.forwardM, 0.04, 1e-12, '[9] fwd')
+  ok('[9] key frames and the cap of a 4 cm range')
+}
+console.log(`\n${n}/10 checks passed`)

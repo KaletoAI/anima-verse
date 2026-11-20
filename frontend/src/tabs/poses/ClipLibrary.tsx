@@ -345,7 +345,7 @@ export function ClipLibrary({
   const [alignAll, setAlignAll] = useState<{ running: boolean; done: number; rows: { kind: string; set: string
     result: AutoAlignResult }[] } | null>(null)
   const pendingAlign = useRef<Record<string, { shiftCm: [number, number, number]; turnDeg: [number, number]
-    roleShiftCm: Record<string, [number, number, number]> }>>({})
+    roleShiftCm: Record<string, [number, number, number]>; rootAngle: { pitchDeg: number; yawDeg: number } | null }>>({})
   const alignAllStop = useRef(false)
   const [autoAlign, setAutoAlign] = useState<AutoAlignResult | null>(null)
   /** Ruling A212: "Also align end clips" — one row per end clip: the Auto-align result and whether it was stored. */
@@ -499,6 +499,7 @@ export function ClipLibrary({
         setAlignBase({ roleShiftM: {}, turnDeg: [0, 0] })
         setPartnerShift(shift); setPartnerTurn(waiting.turnDeg)
         setRoleShift(waiting.roleShiftCm)
+        if (waiting.rootAngle) rootFill.current = `${kind}|${nextSet}`
       }
       setAction(null)
       setError('')
@@ -530,7 +531,7 @@ export function ClipLibrary({
       await wait(1500)
       const result: AutoAlignResult = run ? run() : { ok: false, reason: t('No pair was filled on a place of this clip.') }
       if (result.ok) pendingAlign.current[`${r.kind}|${set}`] = { shiftCm: result.shiftCm, turnDeg: result.turnDeg,
-        roleShiftCm: result.roleShiftCm }
+        roleShiftCm: result.roleShiftCm, rootAngle: result.rootAngle }
       out.push({ kind: r.kind, set, result })
       setAlignAll({ running: true, done: out.length, rows: [...out] })
     }
@@ -584,7 +585,15 @@ export function ClipLibrary({
   const savedRoot = orientTarget?.root_angle ?? null
   const savedRootKey = JSON.stringify(savedRoot ?? { pitch_deg: 0, yaw_deg: 0 })
   const [rootDraft, setRootDraft] = useState<RootAngleWire>({ pitch_deg: 0, yaw_deg: 0 })
-  useEffect(() => { setRootDraft(JSON.parse(savedRootKey) as RootAngleWire) }, [savedRootKey, selected])
+  // Ruling A212 (2026-11-20): an "Align all" result for the clip just opened fills the root-angle dials too (a draft;
+  // "Save root angle" stores it) — once, when the clip opens.
+  const rootFill = useRef<string | null>(null)
+  useEffect(() => {
+    const key = `${selected}|${previewSet}`
+    const waiting = rootFill.current === key ? pendingAlign.current[key]?.rootAngle : null
+    rootFill.current = null
+    setRootDraft(waiting ? { pitch_deg: waiting.pitchDeg, yaw_deg: waiting.yawDeg } : JSON.parse(savedRootKey) as RootAngleWire)
+  }, [savedRootKey, selected, previewSet])
   // The dials act on the A half; how many roles it has decides pair or group.
   const isPairTarget = orientTarget?.role === 'a' && (row?.roles ?? 0) === 2
   const isGroupTarget = orientTarget?.role === 'a' && (row?.roles ?? 0) > 2
@@ -703,7 +712,12 @@ export function ClipLibrary({
         try {
           const moved = Object.fromEntries(Object.entries(result.roleShiftCm).filter(([, v]) => v.some((x) => x !== 0)))
           const turn = pair ? result.turnDeg : [0, 0] as [number, number]
+          // Ruling A212 (2026-11-20): the end clip's own root angle, when the run solved it and it changed.
+          const root = result.rootAngle
+          const rootChanged = !!root && (root.pitchDeg !== (file.root_angle?.pitch_deg ?? 0) || root.yawDeg !== (file.root_angle?.yaw_deg ?? 0))
+          if (root && rootChanged) await apiPatch(clipPath(file), { root_angle: { pitch_deg: root.pitchDeg, yaw_deg: root.yawDeg } })
           const nothing = !Object.keys(moved).length && turn.every((v) => v === 0)
+          if (nothing && rootChanged) note = t('root angle stored')
           if (!nothing) {
             await apiPost(`${clipPath(file)}/orient`, { yaw_deg: 0, tilt_deg: 0, roll_deg: 0,
               ...(pair ? { partner_shift_cm: result.roleShiftCm.b ?? [0, 0, 0] } : { role_shift_cm: moved }),
@@ -715,7 +729,7 @@ export function ClipLibrary({
             }
             await apiPatch(clipPath(file), { align_applied: { role_shift_cm: total,
               turn_deg: [+(applied.turn_deg[0] + turn[0]).toFixed(2), +(applied.turn_deg[1] + turn[1]).toFixed(2)] } })
-          } else note = t('already aligned')
+          } else if (!rootChanged) note = t('already aligned')
           // The base's relations only where the end clip has none in force.
           if (!file.contact_target?.relations?.length && relations.length) await apiPatch(clipPath(file), { contact_target: relations })
           saved = true
@@ -1538,11 +1552,13 @@ export function ClipLibrary({
                         disabled={orientLocked || innerTab !== 'places'}
                         title={innerTab !== 'places'
                           ? t('Open the Places view: Auto-align measures the figures shown there.')
-                          : t('Adjusts the role with the attached part (a pair: partner B) around the arrangement you set — at most the alignment range forward/back and up/down, 3 cm sideways and 10° tilt/roll; the receiving role never moves. The stroke is fitted at its start, ¼, ½, ¾ and end together, all contacts of the role at once. Writes the sliders above; Save stores them as usual.')}
+                          : t('At the deepest frame of the stroke the part must be inside with its root outside, and at the shallowest drawn straight out: Auto-align turns the part’s root angle and moves the role with the attached part (a pair: partner B; at most the alignment range forward/back and up/down, 3 cm sideways and 10° tilt/roll around the arrangement you set) so that the root joint and the tip lie on the axis at both frames. The receiving role never moves. Writes the partner and root-angle dials; Save and “Save root angle” store them.')}
                         onClick={() => {
                           const run = autoAlignRef.current
                           const res: AutoAlignResult = run ? run({ rangeCm: alignRangeCm, base: alignBase }) : { ok: false, reason: t('The place preview is still loading.') }
                           setAutoAlign(res)
+                          // Ruling A212 (2026-11-20): Auto-align writes the clip's root angle to its dials (a draft).
+                          if (res.ok && res.rootAngle) setRootDraft({ pitch_deg: res.rootAngle.pitchDeg, yaw_deg: res.rootAngle.yawDeg })
                           if (res.ok && isPairTarget) {
                             const shift = res.roleShiftCm.b ?? res.shiftCm
                             const turn: [number, number] = [+res.turnDeg[0].toFixed(1), +res.turnDeg[1].toFixed(1)]
@@ -1605,7 +1621,7 @@ export function ClipLibrary({
                       {alignAll?.rows.length ? (
                         <table data-testid="align-all-result" data-result={JSON.stringify(alignAll.rows)}
                           style={{ borderCollapse: 'collapse', fontSize: 11 }}>
-                          <thead><tr><th style={{ textAlign: 'left' }}>{t('Clip')}</th><th /><th>{t('tip')}</th><th>{t('depth')}</th>
+                          <thead><tr><th style={{ textAlign: 'left' }}>{t('Clip')}</th><th /><th>{t('depth')}</th>
                             <th>{t('off axis')}</th><th>{t('angle')}</th><th>{t('else')}</th><th /></tr></thead>
                           <tbody>
                             {alignAll.rows.map((x) => (
@@ -1615,13 +1631,13 @@ export function ClipLibrary({
                                   <>
                                     <td style={{ whiteSpace: 'nowrap' }}><LampDot lamp={x.result.lamp} title={t('Channel contact')} />
                                       <LampDot lamp={x.result.clearLamp} title={t('Nothing else interpenetrates (green at most 5 mm)')} /></td>
-                                    <td style={{ textAlign: 'right' }}>{x.result.after.entryMm.toFixed(0)}</td>
-                                    <td style={{ textAlign: 'right' }}>{x.result.after.depthMm.toFixed(0)}</td>
-                                    <td style={{ textAlign: 'right' }}>{x.result.after.maxLateralMm.toFixed(0)}</td>
-                                    <td style={{ textAlign: 'right' }}>{x.result.after.axisDeg.toFixed(0)}°</td>
+                                    <td style={{ textAlign: 'right' }}>{x.result.keys.after ? x.result.keys.after.deep.depthMm.toFixed(0) : '–'}</td>
+                                    <td style={{ textAlign: 'right' }}>{x.result.keys.after ? Math.max(x.result.keys.after.deep.tipOffMm, x.result.keys.after.deep.rootOffMm,
+                                      x.result.keys.after.shallow.tipOffMm, x.result.keys.after.shallow.rootOffMm).toFixed(0) : '–'}</td>
+                                    <td style={{ textAlign: 'right' }}>{x.result.keys.after ? x.result.keys.after.deep.shaftDeg.toFixed(0) : '–'}°</td>
                                     <td style={{ textAlign: 'right' }}>{x.result.overlapAfterMm.toFixed(0)}</td>
                                   </>
-                                ) : <td colSpan={6} style={{ color: 'var(--danger, #f85149)' }} title={x.result.reason}>{x.result.reason}</td>}
+                                ) : <td colSpan={5} style={{ color: 'var(--danger, #f85149)' }} title={x.result.reason}>{x.result.reason}</td>}
                                 <td><button type="button" className="ga-btn ga-btn-sm" onClick={() => guardSwitch(() => pick(x.kind, x.set))}
                                   disabled={alignAll.running}>{t('Open')}</button></td>
                               </tr>
@@ -1631,10 +1647,15 @@ export function ClipLibrary({
                       ) : null}
                       {alignAll && !alignAll.running && alignAll.rows.length ? (
                         <div className="ga-form-hint" style={{ margin: 0 }}>
-                          {t('mm; nothing is saved. Open a clip: its Partner B dials carry the result; Save stores it.')}</div>
+                          {t('mm at the deepest / shallowest frame; nothing is saved. Open a clip: its Partner B and root-angle dials carry the result; Save and “Save root angle” store it.')}</div>
                       ) : null}
                       {autoAlign ? (
                         <AlignResultBlock result={autoAlign} />
+                      ) : null}
+                      {autoAlign?.ok && autoAlign.rootAngle && rootDirty ? (
+                        <button type="button" className="ga-btn ga-btn-sm" data-testid="align-root-save" disabled={busy}
+                          title={t('Stores the root angle Auto-align wrote in this clip’s sidecar.')}
+                          onClick={() => { void run(orientTarget, { root_angle: rootDraft }) }}>{t('Save root angle')}</button>
                       ) : null}
                       </>) : null}
                     </>
