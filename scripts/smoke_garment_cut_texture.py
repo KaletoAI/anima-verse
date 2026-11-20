@@ -59,8 +59,9 @@ straight through); ``inventory.get_item_image_path`` serves fixture files; the i
     and the service's pool; the model is P-H3 without ``use_prompt_upsampler: false`` -> ``upsampler_on`` True;
     ``figure.invalidate`` ran once; the record keeps ``routing`` = route_meta (occasion garment_cut_texture,
     position 1).
-[8.2] A white answer: ``rejected``, reason "coverage 0.00 < 0.97"; the raw answer is kept, no atlas — the atlas of
-    [8.1] (same csig) is gone, so a record never sits next to an atlas it did not make.
+[8.2] A white answer (the [8.1] record removed first, so no passed answer is re-used — [12.12]): ``rejected``, reason
+    "coverage 0.00 < 0.97"; the raw answer is kept, no atlas — the atlas of [8.1] (same csig) is gone, so a record
+    never sits next to an atlas it did not make.
 [8.3] ``run_routed`` raises NoRouteError("garment_cut_texture", []) (its text points to /admin/settings -> Media
     Generation -> Routing): ``failed``, the reason contains "Routing"; no ``.raw.png`` / ``.atlas.png``, the record
     and the two input PNGs (template, item) exist. ``start`` with an empty ``chain_for`` raises NoRouteError before
@@ -142,7 +143,7 @@ rules.
     this csig -> 2 calls.
 [12.7] No back view: ``job_plan`` = {back_view 1, upscale 0, front 1, back 1, total 3, max 4}; ``generate`` renders the
     view once (VIEW_JOBS + ("mk1", "back")) and keys the cut with it (csig != the csig without a back view); after it
-    the plan totals 2; the tiny item adds +1 upscale; a refused view -> "failed" with "back view was refused", 0 image
+    the plan totals 0 (every answer passed; each Redo 1); the tiny item adds +1 upscale; a refused view -> "failed" with "back view was refused", 0 image
     calls.
 [12.8] ``piece_jobs``: a second claim returns the holder's reason; a view (core and route: 409), Use this and Remove
     (route: 409) while the cut runs; the cut (core and route: 409) while a view runs, and the dialog names the view's
@@ -156,6 +157,16 @@ rules.
 [12.11] ``cut_stand_in``: texture "cut" and a drape whose tsig differs only by ``texture_sha`` (tex0 vs tex1) ->
     "ready", ``stand_in`` True, the old tsig; "projection" -> missing; another lower layer -> missing; a record
     without ``texture_sha`` -> missing.
+[12.12] Review finding 2026-11-20: the reuse rule (``reused_jobs``) is ONE rule for ``generate`` and ``job_plan``. Back
+    rejected: Run all = 1 (front 0, back 1, reused ["front"]), Redo back 1, Redo front 2 (the back answer did not
+    pass, nothing to keep); Run all then makes exactly 1 image call (the back template) -> ready; all passed -> Run
+    all 0 ("current"), each Redo 1. Front rejected (the back "skipped"): Run all 2, Redo back 2, Redo front 2.
+[12.13] Review finding 2026-11-20: an old drape record without ``texture_sha`` that is ready by its exact key; the
+    flow renders the missing back view (a fake ``generate`` that publishes through the real ``_publish``): the
+    record gets ``texture_sha`` = md5(sha(item), sha(item)) (the item picture on both sides, the sources before the
+    view), and afterwards ``drape_state`` is "ready" with ``stand_in`` and the old tsig. Control: the same with the
+    stamp switched off -> "missing" (the piece would drop off). ``remove`` stamps too; a stamped record is not
+    written again.
 """
 import os
 import re
@@ -684,7 +695,9 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     check("[8.1] status: the current record", st.get("csig") == want_csig and st.get("running") is False
           and (st.get("record") or {}).get("state") == "ready", st)
 
-    # [8.2] white -> rejected, the old atlas of this csig gone
+    # [8.2] white -> rejected, the old atlas of this csig gone. The [8.1] record goes first: Run all re-uses a passed
+    # answer ([12.12]), so this run starts with no passed answer to keep (the atlas file stays until the flow runs)
+    Path(f"{stem}.json").unlink()
     backend.answer = answer_white
     rec2 = gct.generate(CHAR, "shirt")
     check("[8.2] rejected", rec2.get("state") == "rejected", rec2.get("state"))
@@ -1197,7 +1210,8 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     item_fixture("mk1", back=False, texture="cut")
     plan = gct.job_plan(CHAR, "mk1")
     check("[12.7] plan with the back view missing: 1 view + 0 upscale + front + back = 3 jobs, at most 4",
-          plan == {"back_view": 1, "upscale": 0, "front": 1, "back": 1, "total": 3, "max": 4}, plan)
+          {k: plan.get(k) for k in ("back_view", "upscale", "front", "back", "total", "max", "reused")}
+          == {"back_view": 1, "upscale": 0, "front": 1, "back": 1, "total": 3, "max": 4, "reused": []}, plan)
     v0 = len(VIEW_JOBS)
     rec_mk = gct.generate(CHAR, "mk1")
     want_mk = gct.csig(ISLANDS_SHA, hashlib.sha256(ITEM_FILES["mk1"].read_bytes()).hexdigest(),
@@ -1207,7 +1221,9 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
           and rec_mk.get("state") == "ready"
           and rec_mk.get("csig") != gct.csig(ISLANDS_SHA, hashlib.sha256(ITEM_FILES["mk1"].read_bytes()).hexdigest(), ""),
           (VIEW_JOBS[v0:], rec_mk.get("csig"), want_mk))
-    check("[12.7] plan afterwards: 2 jobs", gct.job_plan(CHAR, "mk1")["total"] == 2, gct.job_plan(CHAR, "mk1"))
+    pl_mk = gct.job_plan(CHAR, "mk1")
+    check("[12.7] plan afterwards: 0 (current); each Redo 1", pl_mk["total"] == 0
+          and pl_mk["redo"]["front"]["total"] == 1 and pl_mk["redo"]["back"]["total"] == 1, pl_mk)
     check("[12.7] tiny item picture: +1 upscale in the plan", gct.job_plan(CHAR, "tiny")["upscale"] == 1)
     item_fixture("mk2", back=False, texture="cut")
     VIEW_REFUSE["on"] = True
@@ -1351,6 +1367,112 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
           drape_with(p_cut, ("y:-",)).get("state") == "missing")
     (folder / f"stand_{t_old}.json").write_text(json.dumps({**old_rec, "texture_sha": None}), encoding="utf-8")
     check("[12.11] a record without texture_sha never stands in", drape_with(p_cut).get("state") == "missing")
+
+    # [12.12] Run all spends only on what did not pass; every Redo names its real count (review finding 2026-11-20)
+    def answer_front_white(params):
+        if params["reference_images"]["input_reference_image_1"].endswith(".template_front.png"):
+            return answer_white(params)
+        return answer_filled(params)
+
+    item_fixture("ra1", texture="cut")
+    backend.answer = answer_back_white
+    rec_ra = gct.generate(CHAR, "ra1")
+    pl_ra = gct.job_plan(CHAR, "ra1")
+    check("[12.12] back rejected: Run all = 1 image job (the back), the front answer kept",
+          rec_ra.get("state") == "rejected" and pl_ra.get("total") == 1 and pl_ra.get("front") == 0
+          and pl_ra.get("back") == 1 and pl_ra.get("reused") == ["front"], pl_ra)
+    check("[12.12] back rejected: Redo back = 1, Redo front = 2 (the back answer did not pass, nothing is kept)",
+          pl_ra["redo"]["back"]["total"] == 1 and pl_ra["redo"]["front"]["total"] == 2
+          and pl_ra["redo"]["front"]["reused"] == [], pl_ra["redo"])
+    check("[12.12] the dialog carries the same plan", gct.dialog_state(CHAR, "ra1").get("plan") == pl_ra)
+    backend.answer = answer_filled
+    n0 = len(backend.calls)
+    rec_ra2 = gct.generate(CHAR, "ra1")
+    check("[12.12] Run all after it: exactly 1 image call (the back job), ready",
+          len(backend.calls) == n0 + 1 and backend.calls[-1]["params"]["reference_images"]["input_reference_image_1"]
+          .endswith(".template_back.png") and rec_ra2.get("state") == "ready", (len(backend.calls) - n0,
+                                                                                rec_ra2.get("reason")))
+    pl_done = gct.job_plan(CHAR, "ra1")
+    check("[12.12] all passed: Run all = 0 (Everything is current), each Redo = 1",
+          pl_done["total"] == 0 and gct.dialog_state(CHAR, "ra1").get("current") is True
+          and pl_done["redo"]["front"]["total"] == 1 and pl_done["redo"]["back"]["total"] == 1, pl_done)
+    item_fixture("rf1", texture="cut")
+    backend.answer = answer_front_white
+    rec_rf = gct.generate(CHAR, "rf1")
+    pl_rf = gct.job_plan(CHAR, "rf1")
+    check("[12.12] front rejected (back skipped): Run all = 2, Redo back = 2, Redo front = 2",
+          rec_rf.get("state") == "rejected" and rec_rf["jobs"]["back"]["state"] == "skipped"
+          and pl_rf["total"] == 2 and pl_rf["redo"]["back"]["total"] == 2 and pl_rf["redo"]["front"]["total"] == 2,
+          (rec_rf["jobs"]["back"].get("state"), pl_rf))
+    backend.answer = answer_filled
+    check("[12.12] the tiny item: the upscale is counted only where the front job runs",
+          gct.job_plan(CHAR, "tiny")["upscale"] == 1)
+
+    # [12.13] an old drape (no texture_sha) keeps standing in after the FLOW makes the back view (review finding):
+    # ``garment_template_views._publish`` stamps the record's texture part BEFORE the view changes. Hand-derived: the
+    # sources before the view are the item picture on both sides -> tex0 = md5(sha(item), sha(item)), the record's
+    # tsig is tsig(p, bsha, tex0, ["x:-"]); after the view both sides read the view -> tex1 != tex0 -> a new current
+    # key; the record now carries texture_sha tex0, which rebuilds its own tsig -> ``cut_stand_in`` -> "ready".
+    from app.core import garment_template_views as tv  # noqa: E402
+
+    def key_stub(character_name, item_id, *, base_sha, lower, item=None):
+        src = gt.texture_sources(character_name, item_id)
+        return (gt.tsig(p_cut, base_sha=base_sha, texture_sha=gt.texture_sha_of(src), lower=["x:-"]), None, src,
+                p_cut, ["x:-"])
+
+    view_src = _back_picture(_backs / "flow_view_src.png", blue=152)
+
+    def real_publish_generate(character_name, item_id, view):
+        VIEW_JOBS.append((item_id, view))
+        return tv._publish(character_name, item_id, view, view_src, {"source": "render", "attempt": 1})
+
+    def old_drape(iid):
+        item_fixture(iid, back=False, texture="cut")
+        tsig_old = key_stub(CHAR, iid, base_sha="bsha", lower=[])[0]
+        (folder / f"{iid}_{tsig_old}.glb").write_bytes(b"glb")
+        (folder / f"{iid}_{tsig_old}.json").write_text(json.dumps(
+            {"item_id": iid, "tsig": tsig_old, "accepted": True, "created_at": "2026"}), encoding="utf-8")
+        return tsig_old
+
+    from contextlib import ExitStack  # noqa: E402
+    with ExitStack() as stack13:        # one block: the outer ``with`` already nests close to Python's limit
+        for ctx in (patch.object(gt, "_key", key_stub),
+                    patch("app.core.base_body.current_base", lambda c, **k: ("bsig", "bsha")),
+                    patch("app.core.figure.worn_sets", lambda c, **k: NS(pieces={}, own=[])),
+                    patch("app.models.character.get_character_profile", lambda c, **k: {}),
+                    patch("app.core.garment_template_views.generate", real_publish_generate),
+                    patch.object(gct, "back_view", lambda c, i: tv.accepted(c, i, "back"))):
+            stack13.enter_context(ctx)
+        t_o1 = old_drape("old1")
+        check("[12.13] before: the old drape is ready by its exact key, without texture_sha",
+              gt.drape_state(CHAR, "old1", base_sha="bsha", lower=[]).get("state") == "ready"
+              and "texture_sha" not in json.loads((folder / f"old1_{t_o1}.json").read_text(encoding="utf-8")))
+        rec_o1 = gct.generate(CHAR, "old1")
+        d_o1 = gt.drape_state(CHAR, "old1", base_sha="bsha", lower=[])
+        stamped = json.loads((folder / f"old1_{t_o1}.json").read_text(encoding="utf-8")).get("texture_sha")
+        src_item = str(ITEM_FILES["old1"])
+        check("[12.13] the flow made the back view and the cut is ready",
+              rec_o1.get("state") == "ready" and rec_o1.get("back_view", {}).get("made") is True, rec_o1.get("reason"))
+        check("[12.13] the record learned its texture part (item picture both sides) before the view changed",
+              stamped == gt.texture_sha_of({"front": src_item, "back": src_item}), stamped)
+        check("[12.13] after the flow the old drape still stands in (ready, stand_in, its own tsig)",
+              d_o1.get("state") == "ready" and d_o1.get("stand_in") is True and d_o1.get("tsig") == t_o1, d_o1)
+        # control: the same old drape when nothing stamps it (the code before this fix) -> "missing"
+        t_o2 = old_drape("old2")
+        no_stamp = patch.object(gt, "stamp_texture_sha", lambda c, i: False)
+        no_stamp.start()
+        try:
+            gct.generate(CHAR, "old2")
+        finally:
+            no_stamp.stop()
+        check("[12.13] control without the stamp: the piece would drop off (missing)",
+              gt.drape_state(CHAR, "old2", base_sha="bsha", lower=[]).get("state") == "missing")
+        # a manual view change (Remove) stamps too, and a record that has texture_sha is left as it is
+        t_o3 = old_drape("old3")
+        tv.remove(CHAR, "old3", "front")
+        rec3 = json.loads((folder / f"old3_{t_o3}.json").read_text(encoding="utf-8"))
+        check("[12.13] Remove stamps the current drape as well", bool(rec3.get("texture_sha")), rec3)
+        check("[12.13] a stamped record is not written again", gt.stamp_texture_sha(CHAR, "old3") is False)
 
 check("[8.5] no outbound connection attempt", OUTBOUND == [], OUTBOUND)
 

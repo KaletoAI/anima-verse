@@ -314,8 +314,16 @@ def _render(character_name: str, item_id: str, view: str, *, prompt: str, negati
         return gi.crop_back(Path(path), target, side, offset, size, native=True)
 
 
+def _keep_drape(character_name: str, item_id: str) -> None:
+    """Before a view changes: the current drape record learns its texture part (``garment_template.stamp_texture_sha``)
+    so a cut-textured piece keeps that drape after the change instead of dropping off the figure."""
+    from app.core import garment_template as gt
+    gt.stamp_texture_sha(character_name, item_id)
+
+
 def _publish(character_name: str, item_id: str, view: str, cut: Path, record: Dict[str, Any]) -> Path:
     from app.core.timeutils import utc_now_iso
+    _keep_drape(character_name, item_id)
     final = view_path(character_name, item_id, view)
     final.parent.mkdir(parents=True, exist_ok=True)
     tmp = final.with_name(f".{final.name}.pub")
@@ -395,6 +403,7 @@ def upload(character_name: str, item_id: str, view: str, data: bytes) -> Dict[st
 def remove(character_name: str, item_id: str, view: str) -> Dict[str, Any]:
     """Drop the accepted view (the bake falls back; a sheer piece reads due again)."""
     path = view_path(character_name, item_id, view)
+    _keep_drape(character_name, item_id)
     for p in (path, path.with_suffix(".json")):
         p.unlink(missing_ok=True)
     return status(character_name, item_id)

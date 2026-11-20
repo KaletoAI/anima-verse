@@ -47,7 +47,15 @@ interface CutRecord {
   back_view?: { made?: boolean }
 }
 
-export interface CutPlan { back_view: number; upscale: number; front: number; back: number; total: number; max: number }
+/** One click's cost (`garment_cut_texture.job_plan`, the same reuse rule the flow runs): a job whose answer passed is
+ *  kept (`reused`), so Run all after a rejected back job renders the back alone. */
+export interface CutJobPlan {
+  back_view: number; upscale: number; front: number; back: number; total: number; max: number; reused?: string[]
+}
+export interface CutPlan extends CutJobPlan {
+  /** The same per Redo button. */
+  redo?: { front?: CutJobPlan; back?: CutJobPlan }
+}
 
 /** `GET …/figure/template/{item}/cut` (`figure._template_cut_payload`). */
 export interface TemplateCutState {
@@ -161,7 +169,7 @@ const RUN_STEP: Record<string, string> = {
 }
 
 /** "3 image jobs (+1 for the back view, +1 upscale)" — the cost of one click of Run all. */
-function planCost(plan: CutPlan, t: (s: string) => string): string {
+function planCost(plan: CutJobPlan, t: (s: string) => string): string {
   const jobs = plan.front + plan.back
   const extra: string[] = []
   if (plan.back_view) extra.push(t('+1 for the back view, at most +2'))
@@ -263,8 +271,23 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
   const why = state.blocked_reason && state.blocked_reason !== state.drape_reason ? t(state.blocked_reason) : ''
   const offTip = state.blocked_reason ? t(state.blocked_reason) : ''
   const u = state.urls || {}
-  const canRedoFront = !!r.state && (!state.has_back || !!u.raw_back)
-  const canRedoBack = !!r.state && !!u.raw_front
+  // a Redo is offered once there is something to redo; its label carries the server's count (`plan.redo`), which is 2
+  // image jobs when the other job's answer did not pass (then nothing can be kept)
+  const redoFront = plan?.redo?.front
+  const redoBack = plan?.redo?.back
+  const canRedoFront = !!r.state && !!redoFront
+  const canRedoBack = !!r.state && !!redoBack
+  const redoTip = (job: 'front' | 'back', p: CutJobPlan | undefined): string => {
+    if (!p) return ''
+    const other = job === 'front' ? 'back' : 'front'
+    if (state.has_back && !(p.reused || []).includes(other)) {
+      return t(job === 'front'
+        ? 'Renders both jobs: the back job’s answer did not pass, so there is nothing to keep'
+        : 'Renders both jobs: the front job’s answer did not pass, so there is nothing to keep')
+    }
+    return t(job === 'front' ? 'Renders the front job again and keeps the back job’s answer'
+      : 'Renders the back job again and keeps the front job’s answer')
+  }
   const runLabel = state.current
     ? t('Everything is current')
     : `${t('Make texture from cut')} — ${plan ? planCost(plan, t) : ''}`
@@ -327,16 +350,16 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
               onClick={() => { void make('') }}>
               {running ? t(RUN_STEP[step] || 'Starting…') : runLabel}
             </button>
-            <button type="button" className="ga-btn ga-btn-sm" disabled={off || !canRedoFront}
-              title={offTip || (canRedoFront ? t('Renders the front job again and keeps the back job’s answer')
-                : t('Make the texture from cut first'))}
-              onClick={() => { void make('front') }}>{t('Redo front job — 1 image job')}</button>
+            <button type="button" className="ga-btn ga-btn-sm" disabled={off || !canRedoFront} data-cut-redo="front"
+              title={offTip || (canRedoFront ? redoTip('front', redoFront) : t('Make the texture from cut first'))}
+              onClick={() => { void make('front') }}>
+              {`${t('Redo front job')} — ${redoFront ? planCost(redoFront, t) : ''}`}
+            </button>
             {state.has_back ? (
-              <button type="button" className="ga-btn ga-btn-sm" disabled={off || !canRedoBack}
-                title={offTip || (canRedoBack ? t('Renders the back job again and keeps the front job’s answer')
-                  : t('Make the texture from cut first'))}
+              <button type="button" className="ga-btn ga-btn-sm" disabled={off || !canRedoBack} data-cut-redo="back"
+                title={offTip || (canRedoBack ? redoTip('back', redoBack) : t('Make the texture from cut first'))}
                 onClick={() => { void make('back') }}>
-                {t('Redo back job — 1 image job')}
+                {`${t('Redo back job')} — ${redoBack ? planCost(redoBack, t) : ''}`}
               </button>
             ) : null}
           </div>

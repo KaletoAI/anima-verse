@@ -792,23 +792,61 @@ def _ensure_back_view(character_name: str, item_id: str) -> dict:
     return {"made": True, "jobs": None}
 
 
-def job_plan(character_name: str, item_id: str, islands: dict | None = None) -> dict:
-    """What one click spends now — the button's count: ``{"back_view" (0 / 1, at most ``JOBS_PER_VIEW``),
-    "upscale" (0 / 1), "front" 1, "back" (0 / 1), "total", "max"}`` (``max``: a refused back-view attempt is made
-    once more)."""
+def reused_jobs(character_name: str, item_id: str, sig: str, parts, *, only: str | None = None) -> dict:
+    """The jobs whose stored answer of csig ``sig`` a flow re-uses instead of rendering it again: every job of
+    ``parts`` other than ``only`` whose record entry is "ready" and whose raw answer file exists (re-posted from that
+    file, 0 image jobs). Run all (``only`` None) therefore spends only on what did not pass — a rejected back job
+    re-renders the back alone (review finding 2026-11-20); Redo ``only`` always renders that job. The ONE rule both
+    ``generate`` and ``job_plan`` (the buttons' counts) use. ``{job: record entry}``."""
+    previous = read_record(character_name, item_id, sig)
+    stem = _stem(character_name, item_id, sig)
+    out = {}
+    for job in parts:
+        entry = (previous.get("jobs") or {}).get(job) or {}
+        if job != only and entry.get("state") == "ready" and _file(stem, f".raw_{job}.png").is_file():
+            out[job] = entry
+    return out
+
+
+def _plan_one(character_name: str, item_id: str, islands: dict, islands_sha: str, side: int,
+              only: str | None) -> dict:
     from app.core import garment_template_views as tv
-    if islands is None:
+    parts = [j for j in JOBS if j == "front" or has_back(islands)]
+    view = 1 if "back" in parts and back_view(character_name, item_id) is None else 0
+    reuse = {}
+    sig = None
+    if not view and islands_sha:
+        sig = csig_for(character_name, item_id, islands_sha, islands, has_back_panel="back" in parts)
+        if sig:
+            reuse = reused_jobs(character_name, item_id, sig, parts, only=only)
+    todo = [j for j in parts if j not in reuse]
+    item_png = _file(_stem(character_name, item_id, sig), ".item.png") if sig else None
+    upscale = 1 if 0 < side < MIN_ITEM_SIDE and ("front" in todo or item_png is None or not item_png.is_file()) \
+        else 0
+    front = 1 if "front" in todo else 0
+    back = 1 if "back" in todo else 0
+    total = view + upscale + front + back
+    return {"back_view": view, "upscale": upscale, "front": front, "back": back, "total": total,
+            "max": total + view * (tv.JOBS_PER_VIEW - 1), "reused": sorted(reuse)}
+
+
+def job_plan(character_name: str, item_id: str, islands: dict | None = None, islands_sha: str = "") -> dict:
+    """What one click spends now — the buttons' counts, by the same reuse rule ``generate`` runs (``reused_jobs``):
+    Run all ``{"back_view" (0 / 1, at most ``JOBS_PER_VIEW``), "upscale" (0 / 1), "front" (0 / 1), "back" (0 / 1),
+    "total", "max", "reused" (the jobs whose answer is kept)}`` (``max``: a refused back-view attempt is made once
+    more) and ``redo`` = the same per Redo button (``{"front": {...}, "back": {...}}``, "back" only with a back
+    panel)."""
+    if islands is None or not islands_sha:
         try:
-            islands = _islands_of(_ready_drape(character_name, item_id))
+            drape = _ready_drape(character_name, item_id)
+            islands, islands_sha = _islands_of(drape), drape["islands_sha"]
         except NotReady:
-            islands = {}
-    back = 1 if has_back(islands) else 0
-    view = 1 if back and back_view(character_name, item_id) is None else 0
+            islands, islands_sha = islands or {}, ""
     side = _item_side(item_id)
-    upscale = 1 if 0 < side < MIN_ITEM_SIDE else 0
-    total = view + upscale + 1 + back
-    return {"back_view": view, "upscale": upscale, "front": 1, "back": back, "total": total,
-            "max": total + view * (tv.JOBS_PER_VIEW - 1)}
+    out = _plan_one(character_name, item_id, islands, islands_sha, side, None)
+    out["redo"] = {job: _plan_one(character_name, item_id, islands, islands_sha, side, job)
+                   for job in JOBS if job == "front" or has_back(islands)}
+    return out
 
 
 def _post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: str, item_rgba: np.ndarray) -> dict:
@@ -878,9 +916,10 @@ def _summary_metrics(jobs: dict, seam: dict | None, cross: dict | None) -> dict:
 
 
 def generate(character_name: str, item_id: str, *, only: str | None = None) -> dict:
-    """ONE flow (module comment above): -> the record (``state`` "ready", "rejected" or "failed"). ``only`` "front" /
-    "back" redoes that job alone and re-uses the other job's answer of the same csig (re-posted from its raw file);
-    without that answer both run. Raises ``NotReady`` before anything is written when the piece has no ready drape
+    """ONE flow (module comment above): -> the record (``state`` "ready", "rejected" or "failed"). A job whose answer
+    of the same csig passed is re-used (re-posted from its raw file, ``reused_jobs``) — Run all renders only what did
+    not pass; ``only`` "front" / "back" always renders that job and keeps the other's passed answer (without one both
+    run). Raises ``NotReady`` before anything is written when the piece has no ready drape
     with islands or no picture; every later failure is recorded as "failed" and returned."""
     from app.imagegen.routing import route_meta
     key = (character_name, item_id)
@@ -909,15 +948,8 @@ def generate(character_name: str, item_id: str, *, only: str | None = None) -> d
         return record
     record["csig"] = sig
     stem = _stem(character_name, item_id, sig)
-    previous = read_record(character_name, item_id, sig) if only else {}
-    reuse = {}
-    if only in JOBS:
-        for job in parts:
-            if job != only and (previous.get("jobs") or {}).get(job, {}).get("state") == "ready" \
-                    and _file(stem, f".raw_{job}.png").is_file():
-                reuse[job] = previous["jobs"][job]
-        if len(reuse) != len(parts) - 1:
-            reuse = {}              # the other job's answer is missing: both run
+    previous = read_record(character_name, item_id, sig)
+    reuse = reused_jobs(character_name, item_id, sig, parts, only=only)
     todo = [j for j in parts if j not in reuse]
     stale = [_file(stem, ".atlas.png")] + [_file(stem, f".raw_{j}.png") for j in todo]
     for path in stale:
@@ -1182,7 +1214,8 @@ def dialog_state(character_name: str, item_id: str) -> dict:
                 "drape_reason": drape_reason, "draping": drape_reason == BLOCKED_DRAPING,
                 "draped_at": str((drape.get("record") or {}).get("created_at") or ""),
                 "current": record.get("state") == "ready",
-                "plan": job_plan(character_name, item_id, islands) if drape["state"] == "ready" else None,
+                "plan": job_plan(character_name, item_id, islands, str(drape.get("islands_sha") or ""))
+                if drape["state"] == "ready" else None,
                 "texture": params.get("texture") or "projection",
                 "applied": info.get("texture") == "cut",
                 "applied_state": info.get("cut_state") or "",

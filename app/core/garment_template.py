@@ -2081,6 +2081,45 @@ def cut_stand_in(character_name: str, item_id: str, *, base_sha: str, params: Di
     return best[1] if best else None
 
 
+def stamp_texture_sha(character_name: str, item_id: str) -> bool:
+    """Write ``texture_sha`` into the piece's CURRENT ready drape record when it has none (a drape from before the
+    cut-texture rework) — called by ``garment_template_views`` right BEFORE a piece-only view changes (made, used,
+    uploaded, removed; the cut flow's own back view too). Exact, not a guess: the record sits under the current key,
+    so its texture part IS ``texture_sha_of`` of the current sources at this moment. Without it the view change moves
+    the key and an old drape cannot stand in (``cut_stand_in``): the piece dropped off the figure until another Build
+    (review finding 2026-11-20). True when a record was written; never raises (the view change goes on)."""
+    try:
+        from app.core import base_body, figure
+        from app.core.garment_store import read_record, write_record
+        from app.models.character import get_character_profile
+        from app.models.inventory import get_item
+        profile = get_character_profile(character_name) or {}
+        item = get_item(item_id)
+        sets = figure.worn_sets(character_name, profile=profile)
+        worn = item_id in set(sets.pieces.values())
+        base = base_body.current_base(character_name, profile=profile)
+        if not base:
+            return False
+        sig, _reason, sources, _params, _lower = _key(
+            character_name, item_id, base_sha=base[1], lower=lower_layers(sets.own, item_id) if worn else [],
+            item=item)
+        if sig is None:
+            return False
+        path = drape_path(character_name, item_id, sig)
+        meta = path.with_suffix(".json")
+        record = read_record(meta)
+        if not path.is_file() or record.get("accepted") is not True or record.get("texture_sha"):
+            return False
+        tex = texture_sha_of(sources)
+        if not tex:
+            return False
+        write_record(meta, {**record, "texture_sha": tex})
+        return True
+    except Exception as e:  # noqa: BLE001 — the view change must not fail on it
+        logger.warning("Template %s %s: texture_sha not stamped: %s", character_name, item_id, e)
+        return False
+
+
 def refused_only_by_time(failed: Dict[str, Any]) -> bool:
     """Whether a failure record's ONLY failed gate row is ``build_wall_s`` — written while the wall time still
     gated (before 2026-11-18). Such a drape passed every quality row, so it is no refusal now: ``drape_state``
