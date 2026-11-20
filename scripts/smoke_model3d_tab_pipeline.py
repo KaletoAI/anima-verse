@@ -18,9 +18,12 @@ Fixture: ``Demo`` (human-roleplay, base-body pipeline), ``Plain``
 current outfit signature. The rigged base model is model3d/BSIG.glb with
 sidecar {rig: mixamo} (``base_model_info`` -> "ready"); its re-rig source is
 model3d/unrigged/BSIG.glb. A dressed view counts as current when its ref
-(model_refs/tpose[_back]_OSIG.png) has a sidecar with base_signature BSIG
-and base_image_sha256 = sha256 of the base view it edits
-(model_refs/tpose[_back]_BSIG.png) — ``base_body.dressed_image``; the
+(model_refs/tpose[_back]_OSIG.png) has a sidecar with base_signature BSIG,
+base_image_sha256 = sha256 of the base view it copies
+(model_refs/tpose[_back]_BSIG.png), ``dressed`` false and
+``mesh_items.unpainted`` [] (nothing grafted or left out) —
+``base_body.dressed_image``; since A224 an outfit's views are copies, an
+edit (``dressed`` true) never counts; the
 dressed views are front and back (side views off by default).
 
 Expected, derived by hand from the rules in the module docstring:
@@ -166,7 +169,7 @@ def main() -> int:
                 stem = f"tpose_{osig}" if view == "front" else f"tpose_{view}_{osig}"
                 (refs / f"{stem}.png").write_bytes(b"\x89PNG-dressed-" + view.encode())
                 (refs / f"{stem}.json").write_text(json.dumps({
-                    "base_signature": bsig, "dressed": True,
+                    "base_signature": bsig, "dressed": False, "mesh_items": {"unpainted": []},
                     "base_image_sha256": hashlib.sha256(base.read_bytes()).hexdigest()}))
 
         from fastapi import FastAPI
