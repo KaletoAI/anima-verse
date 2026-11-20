@@ -1506,6 +1506,30 @@ def _squeeze_under(lower, fitted, btree):
     return n
 
 
+def _boot_hulls(obj):
+    """A237 — a boot collider is the convex hull of each side (foot + shaft): the fit is an open shell (the collar,
+    a pull tab, laces), and a leg hanging over it caught on the back of the collar (Lirien straight leg: 25 edges at
+    0.15-0.17 m, stretch 25.95). The hull is closed and has no thin parts; the vertices it keeps keep their weights."""
+    mw = obj.matrix_world
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    bm.verts.ensure_lookup_table()
+    keep, hull_faces = set(), set()
+    for sd in (1, -1):
+        side = [v for v in bm.verts if (mw @ v.co).x * sd > 0]
+        if len(side) < 4:
+            continue
+        res = bmesh.ops.convex_hull(bm, input=side, use_existing_faces=False)
+        keep |= {v for v in res["geom"] if isinstance(v, bmesh.types.BMVert)}
+        hull_faces |= {f for f in res["geom"] if isinstance(f, bmesh.types.BMFace)}
+    bmesh.ops.delete(bm, geom=[f for f in bm.faces if f not in hull_faces], context="FACES_ONLY")
+    bmesh.ops.delete(bm, geom=[v for v in bm.verts if v not in keep], context="VERTS")
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    bm.to_mesh(obj.data)
+    bm.free()
+    obj.data.update()
+
+
 def load_lower(path, arm, payload):
     """Import a lower drape GLB (Ruling A142 layering) or an own-mesh piece's fit GLB (A200) and skin its garment to
     OUR armature (same bone names)."""
@@ -1523,6 +1547,8 @@ def load_lower(path, arm, payload):
         with bpy.context.temp_override(active_object=garment, selected_editable_objects=shoe):
             bpy.ops.object.join()
         new = [o for o in bpy.data.objects if o not in before]     # the joined nodes are gone
+    if shoe:
+        _boot_hulls(garment)
     mw = garment.matrix_world.copy()
     garment.parent = arm
     garment.matrix_world = mw

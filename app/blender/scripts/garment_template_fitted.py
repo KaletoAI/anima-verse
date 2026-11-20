@@ -907,6 +907,10 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
     V = np.array([v.co for v in bm.verts])
     if kind == "trousers":
         pin_mask = pins(V)
+        if boots:
+            # A237: the leg over the boot is pinned as laid out over it (``_over_boot``): the fit is posed with the
+            # boot's foot pose while the drape body stands in its rest pose, so a free leg caught on the collar
+            pin_mask = pin_mask | (V[:, 2] <= info["over_boot"]["top"] + OVER_BOOT_ABOVE_M)
     elif kind == "briefs":
         pin_mask = pins(V)
     elif kind == "bra":

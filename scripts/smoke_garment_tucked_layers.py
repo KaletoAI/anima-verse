@@ -22,7 +22,8 @@ piece whose fit record is a split boot with an ``ankle`` shaft, ``shoe`` a footw
      ``hem_eligible(boot record, it)`` is (True, ""); skinny full -> None; a template top -> None.
 [S1] the builder: a LOOSE lower layer (median gap to the skin below the piece's top edge > 12 mm: a top) is clipped
      2 cm above that edge, a close one (briefs under tights) stays; a boot is left out of the cut collider (``cut``)
-     and the leg is laid out over it (``ctree``); a boot fit's several footwear nodes are joined into one collider.
+     and the leg is laid out over it (``ctree``); a boot fit's several footwear nodes are joined into one collider, the convex hull of each side (the open collar and
+     a pull tab caught a straight leg).
 """
 import sys
 import tempfile
@@ -151,6 +152,8 @@ check("S1 a boot is left out of the cut collider",
 check("S1 a loose lower layer is clipped at the piece's top edge (+2 cm), a boot never",
       "CLIP_OVER_M = 0.02" in build and "CLIP_LOOSE_M = 0.012" in build and "float(np.median(gap)) > CLIP_LOOSE_M" in build)
 check("S1 a boot's nodes are joined", 'startswith("garment_footwear_")' in build and "bpy.ops.object.join()" in build)
+check("S1 a boot collider is the convex hull per side", "_boot_hulls(garment)" in build
+      and "bmesh.ops.convex_hull(bm, input=side" in build)
 
 print("FAILED: " + ", ".join(FAILED) if FAILED else "all checks passed")
 sys.exit(1 if FAILED else 0)
