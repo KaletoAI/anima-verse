@@ -466,6 +466,7 @@ def iter_suitability_results(
                "budget_hit": bool(getattr(resp, "budget_hit", False)),
                "budget_overrun": bool(getattr(resp, "budget_overrun", False)),
                "continuation_failed": bool(getattr(resp, "continuation_failed", False)),
+               "continuation_reason": getattr(resp, "continuation_reason", None),
                "continuation_error": getattr(resp, "continuation_error", None),
                "finish_reason": getattr(resp, "finish_reason", None),
                "usage": usage, "duration_s": dt}
@@ -511,7 +512,7 @@ def iter_suitability_results(
                 # REFUSED continuation additionally keeps the run unsaved.
                 evidence.update(ok=False, hallucinated=False, continuation_failed=True,
                                 detail="continuation_failed: " + (
-                                    raw.get("continuation_error")
+                                    raw.get("continuation_reason") or raw.get("continuation_error")
                                     or "the model wrote nothing after the capped thought"))
         except _QuotaWaitCancelled:
             return None

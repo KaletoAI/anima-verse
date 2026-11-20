@@ -123,10 +123,12 @@ class LLMResponse:
     budget_overrun: bool = False
     # Only from a client with isolated server state (the model test): the
     # continuation of the capped thought failed and NOTHING was sent in its
-    # place — no silent switch to a call without thinking. ``continuation_error``
-    # is the server's (shortened) answer to a refused continuation; it stays
-    # None when the continuation came back empty.
+    # place — no silent switch to a call without thinking. ``continuation_reason``
+    # says why in every case; ``continuation_error`` is the server's (shortened)
+    # answer to a REFUSED continuation and stays None when the continuation
+    # came back empty or was not sent (a thought that contains a marker).
     continuation_failed: bool = False
+    continuation_reason: Optional[str] = None
     continuation_error: Optional[str] = None
 
 
@@ -556,44 +558,69 @@ class LLMClient:
         thought_open, thought_close = (("<|channel>thought\n", "<channel|>")
                                       if _is_gemma_model(self.model) else (THINK_OPEN, THINK_CLOSE))
         close_marker = thought_close.strip()
+        open_marker = thought_open.strip()
         partial = first.content
         if not first.reasoning and partial.startswith(thought_open) and close_marker not in partial:
-            prefill = partial.rstrip() + thought_close
             first.reasoning = partial[len(thought_open):].strip()
             partial = ""
-        else:
-            prefill = thought_open + (first.reasoning or "").strip() + thought_close + partial
+        # The server puts the prefill through its chat template and continues
+        # only if it finds it verbatim in the rendered prompt. The Qwen3 /
+        # SenseNova template trims the thought and strips the line breaks in
+        # front of the answer, and a reasoning parser hands the begun answer
+        # over WITH them ("\n\n[INTENT…") — so the prefill carries the thought
+        # trimmed and the answer without leading white space; thought_close
+        # already holds the blank line (2026-11-20, vLLM 400 "the final
+        # message does not appear in the chat after applying the chat
+        # template"; scripts/smoke_llm_continuation_template.py).
+        reasoning = (first.reasoning or "").strip()
+        partial = partial.lstrip()
+        prefill = thought_open + reasoning + thought_close + partial
+        # A thought (or begun answer) that contains a thought marker itself
+        # cannot be prefilled: the template splits the message at the marker
+        # and renders something else. One bad thought, not a server that
+        # cannot continue — so nothing is remembered.
+        nested = any(marker in text for marker in (open_marker, close_marker)
+                     for text in (reasoning, partial))
         kwargs = self._build_kwargs()
         kwargs.setdefault("extra_body", {}).update(continue_final_message=True, add_generation_prompt=False)
         failure = "empty answer"
         error_text = None
-        try:
-            final = self._request(msgs + [{"role": "assistant", "content": prefill}], kwargs, warn_cutoff=False)
-            answer = final.content or final.reasoning or ""
-            if close_marker in answer:
-                answer = answer.rsplit(close_marker, 1)[1]
-            answer = answer.lstrip()
-            if not answer.strip():
-                final = None
-            elif partial and not answer.startswith(partial):
-                answer = partial + answer
-        except Exception as exc:
-            if getattr(exc, "status_code", None) not in (400, 422):
-                raise
-            final = None
-            unsupported = _rejects_continuation(exc)
-            error_text = _error_text(exc)
-            failure = f"HTTP {exc.status_code}: {error_text}"
+        unsupported = False
+        final = None
+        if nested:
+            failure = "the capped thought contains a thought marker, not sent"
         else:
-            unsupported = False
+            try:
+                final = self._request(msgs + [{"role": "assistant", "content": prefill}], kwargs, warn_cutoff=False)
+                answer = final.content or final.reasoning or ""
+                if close_marker in answer:
+                    answer = answer.rsplit(close_marker, 1)[1]
+                answer = answer.lstrip()
+                if not answer.strip():
+                    final = None
+                elif partial and not answer.startswith(partial):
+                    answer = partial + answer
+            except Exception as exc:
+                if getattr(exc, "status_code", None) not in (400, 422):
+                    raise
+                final = None
+                unsupported = _rejects_continuation(exc)
+                error_text = _error_text(exc)
+                failure = f"HTTP {exc.status_code}: {error_text}"
         if final is None and self._isolated:
             logger.warning("%s @ %s could not continue a capped thought (%s) — this call fails, "
                            "the next one is budgeted again (isolated test client)",
                            self.model, self.base_url, failure)
             return LLMResponse(content="", usage=first.usage, finish_reason=None,
                                reasoning=first.reasoning, budget_hit=True,
-                               continuation_failed=True, continuation_error=failure if error_text else None)
-        if final is None:
+                               continuation_failed=True, continuation_reason=failure,
+                               continuation_error=failure if error_text else None)
+        if final is None and nested:
+            logger.warning("%s @ %s could not continue a capped thought (%s) — this call is answered "
+                           "without thinking", self.model, self.base_url, failure)
+            final = plain()
+            answer = final.content
+        elif final is None:
             seconds = _continue_cooloff(key, unsupported)
             if seconds is not None:
                 logger.warning("%s @ %s could not continue a capped thought (%s) — thinking off for "
