@@ -15,7 +15,7 @@ Fixture (expected values derived by hand):
   Demo    human, pipeline on. Holds and wears ``dress`` (slots top+bottom,
           own mesh) and ``coat`` (slot outer, covers [top], own mesh); holds
           ``cape`` (outer, own mesh, not worn — the coat sits in outer) and
-          ``shirt`` (underwear_top, mode painted); owns the hair item ``hair_demo``.
+          ``shirt`` (underwear_top, mode in_body; was painted until A224); owns the hair item ``hair_demo``.
   Offline human whose profile never had the removed pipeline switch on
           (until Task 11h: off the pipeline), holds and wears ``dress``.
   Other   human, pipeline on, holds nothing of the above.
@@ -30,15 +30,15 @@ Fixture (expected values derived by hand):
     version 2; no per_height: clothing records are fractions of Hb);
     mesh.largest_component_share {ge 0.90}; fit.max_push_m {le 0.10},
     fit.rigged_inside_share {le 0.01}, fit.largest_component_share {ge 0.90}.
-    No base model is stored -> status {missing, step None, painted False,
-    in_body True, reason base_body.BASE_MODEL_MISSING} (ruling A11, task
-    11c-2 of plan 2026-11-12-unified-worn-pieces: a worn own-mesh piece
-    without its mesh is in the body shape meanwhile, never painted; was
-    painted True — the same for [3] and [5]). preview_url None ->
+    No base model is stored -> status {state missing, step None, missing
+    True, reason base_body.BASE_MODEL_MISSING, queue_position None}
+    (``piece_status``: ``missing`` = worn without an accepted fit — the
+    figure leaves it out, Ruling A119; A224 removed the ``painted`` key and
+    the stale ``in_body`` expectation — the same for [3] and [5]). preview_url None ->
     preview_freshness {missing, "No provenance recorded"}. ``steps`` (the
     ModelSteps rows) = the clothing chain in order, all "missing", the ghost
     row labelled "Piece-only views".
-    404: shirt (painted), an own-mesh piece Other does not hold
+    404: shirt (in the body), an own-mesh piece Other does not hold
     (Other/garments/dress), an unknown item; 404 for an unknown character.
 [3] A planted base model -> reason base_body.NO_MESH_FIT. A planted ACCEPTED
     worn/front final (record {"accepted": true}) with attempt 1 -> the tile
@@ -51,24 +51,26 @@ Fixture (expected values derived by hand):
     error as detail, the worn row stays "missing" (only the front is
     accepted).
 [5] GET /characters/Demo/garments: pipeline True, items = the own-mesh pieces
-    Demo holds [cape, coat, dress] (not shirt, not the hair); dress in the
-    body (painted False, in_body True) with reason "ghost — gate refused"; cape not worn -> painted False,
+    Demo holds [cape, coat, dress] (not shirt, not the hair); dress worn without a fit
+    (missing True) with reason "ghost — gate refused"; cape not worn -> missing False,
     reason None; overlaps: the coat covers top, the dress is worn on top —
     the coat is LAYERED over the dress (plan 2026-11-10 Task 2), only pieces
     over each other warn -> []; every row carries queue_position None and
     the root queue_running None, queue [] (nothing runs). Offline: pipeline True (every
-    humanoid since Task 11h, Ruling A13; was False), dress painted False,
+    humanoid since Task 11h, Ruling A13; was False), dress worn without a fit -> missing True,
     overlaps []. Other: items {}.
-[6] garment_set.piece_status, pure: running wins ({running, step "mesh"});
+[6] garment_set.piece_status, pure: running wins ({running, step "mesh"}; worn without a
+    fit -> missing True, reason NO_MESH_FIT);
     a waiting piece passes its garment_info queue_position through
     ({running, step "queued", queue_position 2});
-    an accepted fit of the current fsig -> {fitted, painted False, reason
+    an accepted fit of the current fsig -> {fitted, missing False, reason
     None}; an accepted mesh -> "mesh"; an accepted fit without fsig is not
     fitted.
 [7] Hair has no step limits here: GET /characters/Demo/garments/hair_demo ->
     kind hair, mesh_mode None (hair is no outfit piece), limits {} (the hair edit chain and its gates
     are gone, hair-from-body spec 2026-11-11 Task 2); worn hair without a fit
-    is NOT painted (hair is simply absent). (The hair payload's own limits,
+    -> status missing False (hair is no own-mesh outfit piece, it is simply
+    absent; was "NOT painted"). (The hair payload's own limits,
     hairdeck_fit, stay
     pinned by smoke_garment_routes.py [2]; its route probes the image
     backends, so it is not called here.)
@@ -131,7 +133,7 @@ def main() -> int:
                   True)
 
         def piece(item_id, slots, own_mesh, covers=()):
-            op = {"slots": slots, "outfit_types": ["casual"], "mesh_mode": "own_mesh" if own_mesh else "painted", "covers": list(covers)}
+            op = {"slots": slots, "outfit_types": ["casual"], "mesh_mode": "own_mesh" if own_mesh else "in_body", "covers": list(covers)}
             return inventory.add_item(name=item_id.title(), category="outfit_piece", item_id=item_id,
                                       prompt_fragment=f"a plain {item_id}", outfit_piece=op)["id"]
 
@@ -191,8 +193,8 @@ def main() -> int:
                    {"op": "range", "value": [0.8, 1.25]}, False, {"op": "ge", "value": 0.90},
                    {"op": "le", "value": 0.10}, {"op": "le", "value": 0.01}, {"op": "ge", "value": 0.90}))
             check("status, no base model", body.get("status"),
-                  {"state": "missing", "step": None, "painted": False, "reason": base_body.BASE_MODEL_MISSING,
-                   "queue_position": None, "in_body": True})
+                  {"state": "missing", "step": None, "missing": True, "reason": base_body.BASE_MODEL_MISSING,
+                   "queue_position": None})
             g = body.get("garment") or {}
             check("garment kind + fsig", (g.get("kind"), bool(g.get("fsig"))), ("clothing", True))
             check("preview freshness", g.get("preview_freshness"),
@@ -225,8 +227,8 @@ def main() -> int:
                                       for a in tile.get("attempts") or []]),
                   ("current", [(1, "current")]))
             check("status images", body.get("status"),
-                  {"state": "images", "step": None, "painted": False, "reason": base_body.NO_MESH_FIT,
-                   "queue_position": None, "in_body": True})
+                  {"state": "images", "step": None, "missing": True, "reason": base_body.NO_MESH_FIT,
+                   "queue_position": None})
 
             print("[4] persisted failure")
             gs.record_failure("Demo", dress, fsig, step="ghost", error="gate refused")
@@ -246,30 +248,31 @@ def main() -> int:
             check("overview", (r.status_code, body.get("pipeline"), sorted(items)),
                   (200, True, ["cape", "coat", "dress"]))
             check("dress row", items.get("dress"),
-                  {"state": "images", "step": None, "painted": False, "reason": "ghost — gate refused",
-                   "queue_position": None, "in_body": True})
+                  {"state": "images", "step": None, "missing": True, "reason": "ghost — gate refused",
+                   "queue_position": None, "live": None})
             check("cape row", items.get("cape"),
-                  {"state": "missing", "step": None, "painted": False, "reason": None, "queue_position": None})
+                  {"state": "missing", "step": None, "missing": False, "reason": None, "queue_position": None,
+                   "live": None})
             check("overlaps", body.get("overlaps"), [])
             check("idle queue", (body.get("queue_running"), body.get("queue")), (None, []))
             body = client.get("/characters/Offline/garments").json()
-            check("offline", (body.get("pipeline"), (body.get("items") or {}).get("dress", {}).get("painted"),
-                              body.get("overlaps")), (True, False, []))
+            check("offline", (body.get("pipeline"), (body.get("items") or {}).get("dress", {}).get("missing"),
+                              body.get("overlaps")), (True, True, []))
             check("other", client.get("/characters/Other/garments").json().get("items"), {})
             check("unknown character", client.get("/characters/Nobody/garments").status_code, 404)
 
             print("[6] piece_status")
             ps = garment_set.piece_status
             check("running", ps({"running_step": "mesh", "fsig": "f"}, worn=True, base_model_ready=True),
-                  {"state": "running", "step": "mesh", "painted": True, "reason": base_body.NO_MESH_FIT,
+                  {"state": "running", "step": "mesh", "missing": True, "reason": base_body.NO_MESH_FIT,
                    "queue_position": None})
             check("queued: position passed through",
                   ps({"running_step": "queued", "fsig": "f", "queue_position": 2}, worn=False,
                      base_model_ready=True),
-                  {"state": "running", "step": "queued", "painted": False, "reason": None, "queue_position": 2})
+                  {"state": "running", "step": "queued", "missing": False, "reason": None, "queue_position": 2})
             check("fitted", ps({"fsig": "f", "steps": {"fit": {"status": "accepted"}}}, worn=True,
                                base_model_ready=True),
-                  {"state": "fitted", "step": None, "painted": False, "reason": None, "queue_position": None})
+                  {"state": "fitted", "step": None, "missing": False, "reason": None, "queue_position": None})
             check("mesh", ps({"fsig": "f", "steps": {"mesh": {"status": "accepted"}, "fit": {"status": "missing"}}},
                              worn=False, base_model_ready=True)["state"], "mesh")
             check("fit without fsig", ps({"fsig": None, "steps": {"fit": {"status": "accepted"}}}, worn=True,
@@ -279,7 +282,7 @@ def main() -> int:
             body = client.get("/characters/Demo/garments/hair_demo").json()
             limits = body.get("limits") or {}
             check("hair item", (body.get("kind"), body.get("mesh_mode"), sorted(limits),
-                                limits.get("fit", {}).get("bib_cm2"), (body.get("status") or {}).get("painted")),
+                                limits.get("fit", {}).get("bib_cm2"), (body.get("status") or {}).get("missing")),
                   ("hair", None, [], None, False))
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")

@@ -23,8 +23,6 @@ run. ``expression_regen.render_character_image`` = a recorder writing an
 pieces/items, ``mesh_variant``, ``mesh_token`` when non-empty — both from
 the mesh-input profile — plus ``sidecar_extra``). ``run_rembg`` = the 8x8
 matte of smoke_base_body_outfit (2 px transparent border).
-``body_retexture.retexture`` = copies its input GLB to ``out`` (the
-unrigged base with the rigged base's colour) and returns ``{}``.
 ``model3d._auto_retexture`` / ``_attach_measurement`` / ``_auto_extension_rig``
 no-ops, ``request_lod`` recorder, no extension groups, identity delivery
 path, ``model_refs.trigger_now`` recorder, ``schedule_outfit_render`` no-op.
@@ -268,7 +266,7 @@ def main() -> int:
         discover_packages(plugins, force=True)
 
         import smoke_garment_chain as chain
-        from app.core import (base_body, body_retexture, expression_regen, extension_rig, garment_assembly,
+        from app.core import (base_body, expression_regen, extension_rig, garment_assembly,
                               garment_fit, garment_set, garments, glb_delivery, glb_mesh, model3d,
                               model_overview, model_refs, outfit_batch, outfit_cache_gc, sync_topics,
                               view_composite)
@@ -370,10 +368,6 @@ def main() -> int:
             target.with_suffix(".json").write_text(json.dumps(meta))
             return target
 
-        def retexture(glb_in, views, out_glb, *, proof, atlas, **kw):
-            Path(out_glb).write_bytes(Path(glb_in).read_bytes())
-            return {}
-
         def compose(base_view, draft, target, *, rule="outfit", background=None):
             """The composite stand-in (Task 11g): the opaque draft copied, an ok record."""
             Path(target).write_bytes(Path(draft).read_bytes())
@@ -383,7 +377,6 @@ def main() -> int:
         expression_regen.render_character_image = render
         view_composite.compose = compose
         charmod.run_rembg = rembg
-        body_retexture.retexture = retexture
         SHAPE_JOBS = []
         shape_unrigged, shape_rigged = chain.base_bodies((200, 160, 140))
 
