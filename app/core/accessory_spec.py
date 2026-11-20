@@ -12,6 +12,10 @@ proximal bone it sits, a share from the knuckle), the band's width ``band.width_
 outside it is another kind's band and becomes the ring's default, it is not clamped) and its depth
 ``chain.thickness_mm``. Its size is never stored: it is computed per body from the skeleton (``accessory_ring``).
 
+The glasses (bug round 2026-11-20) carry their own block ``glasses: {shape, size, rim_mm, frame, temple, lens: {tint,
+opacity, mirror, color?}}`` (``normalize_glasses``); the frame colour is the existing ``metal`` (a metal frame) or
+``color`` (an acetate frame). Their size is computed per body from the face (``accessory_glasses``).
+
 Every shape value is item-wide; only what is measured from a body (the neck curve) is per character
 (``accessory_build``). ``normalize`` fills the defaults and clamps; ``suggest_kind`` proposes a kind from the slots and
 the item's words — a suggestion the Wardrobe shows, never stored silently. Pure: no I/O.
@@ -21,9 +25,10 @@ import re
 from typing import Any, Dict, Optional, Tuple
 
 #: The kinds of spec § 5 (generic accessory words).
-KINDS: Tuple[str, ...] = ("necklace", "choker", "earrings", "bracelet", "ring", "anklet", "belt", "strap")
-#: The kinds built (A216 the necklace, A234 every other kind).
-BUILT_KINDS: Tuple[str, ...] = ("necklace", "belt", "choker", "anklet", "bracelet", "earrings", "strap", "ring")
+KINDS: Tuple[str, ...] = ("necklace", "choker", "earrings", "bracelet", "ring", "anklet", "belt", "strap", "glasses")
+#: The kinds built (A216 the necklace, A234 every other kind, the glasses in the bug round 2026-11-20).
+BUILT_KINDS: Tuple[str, ...] = ("necklace", "belt", "choker", "anklet", "bracelet", "earrings", "strap", "ring",
+                                "glasses")
 CHAIN_STYLES: Tuple[str, ...] = ("cable", "box", "rope", "none")
 #: The chain's material (A225): the metals, then the cords (a pendant on a leather cord, a string or a fabric band).
 #: The stored key stays ``metal`` (spec § 5).
@@ -45,6 +50,26 @@ EARRING_STYLES: Tuple[str, ...] = ("stud", "hoop", "drop")
 BAND_KINDS: Tuple[str, ...] = ("belt", "choker", "strap")
 #: The kinds that are a round tube around a limb (the ring is sized from the skeleton instead, ``accessory_ring``).
 TUBE_KINDS: Tuple[str, ...] = ("anklet", "bracelet")
+
+#: Glasses (``accessory_glasses``): the frame outline, its size step, the frame material, how the temples end and the
+#: lens tints. "Sunglasses" is a lens setting (a tint at ``SUN_OPACITY``), not a kind of its own.
+GLASSES_SHAPES: Tuple[str, ...] = ("round", "rectangular", "cat_eye", "aviator")
+GLASSES_SIZES: Tuple[str, ...] = ("narrow", "regular", "wide")
+GLASSES_FRAMES: Tuple[str, ...] = ("metal", "acetate")
+GLASSES_TEMPLES: Tuple[str, ...] = ("straight", "hook")
+LENS_TINTS: Tuple[str, ...] = ("clear", "grey", "brown", "green", "custom")
+#: The rim's thickness (mm) when none is stored, per frame material.
+GLASSES_RIM_MM: Dict[str, float] = {"metal": 2.0, "acetate": 3.5}
+#: A lens's opacity when none is stored: a clear lens shows a faint glint, a tinted one is a sunglass lens.
+CLEAR_OPACITY = 0.08
+SUN_OPACITY = 0.8
+#: ``lens.tint`` -> its sRGB colour (``custom``: ``lens.color``).
+LENS_COLORS: Dict[str, str] = {"clear": "#ffffff", "grey": "#2b2b2b", "brown": "#5a3a1e", "green": "#2e4a32"}
+#: An acetate frame's colour when none is stored, and its finish (roughness; metalness 0).
+ACETATE_COLOR = "#1c1c1c"
+ACETATE_ROUGHNESS = 0.35
+#: A mirrored lens's surface (metalness, roughness).
+MIRROR_SURFACE: Tuple[float, float] = (1.0, 0.1)
 
 #: Spec § 5 defaults (plan Task 3).
 DEFAULTS: Dict[str, Any] = {
@@ -69,6 +94,8 @@ RANGES: Dict[str, Tuple[float, float]] = {
     # A238: a ring band's width (cm, 1.5–12 mm) and where it sits along the finger's proximal bone (share from the
     # knuckle; the ends are the joints, where a ring cannot sit)
     "ring_width_cm": (0.15, 1.2), "ring_along": (0.15, 0.85),
+    # glasses: the rim's thickness (mm) and a lens's opacity (0 = invisible, 0.9 = nearly black)
+    "rim_mm": (0.8, 5.0), "lens_opacity": (0.0, 0.9),
 }
 #: A234: a choker / strap / belt's width when none is stored (a 4 cm belt is a 1.5 cm choker).
 KIND_WIDTH_CM: Dict[str, float] = {"belt": 4.0, "choker": 1.5, "strap": 2.5, "ring": 0.3}
@@ -179,7 +206,31 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         out["side"] = _choice(raw.get("side"), RING_SIDES, RING_DEFAULT_SIDE)
         ring_raw = raw.get("ring") if isinstance(raw.get("ring"), dict) else {}
         out["ring"] = {"along": _num(ring_raw.get("along", RING_ALONG), "ring_along", RING_ALONG)}
+    if kind == "glasses":
+        out["glasses"] = normalize_glasses(raw.get("glasses"))
     return out
+
+
+def normalize_glasses(raw: Any) -> Dict[str, Any]:
+    """The ``glasses`` block (kind ``glasses`` only): ``{shape, size, rim_mm, frame, temple, lens: {tint, opacity,
+    mirror, color?}}`` — defaults rectangular / regular / metal / hook, the rim ``GLASSES_RIM_MM`` of the frame, a clear
+    lens at ``CLEAR_OPACITY`` (a tinted one at ``SUN_OPACITY``) unless an opacity is stored. Its own block on purpose:
+    never the ``band`` / ``chain`` of another kind (A238: a ring took over a belt's width)."""
+    raw = raw if isinstance(raw, dict) else {}
+    frame = _choice(raw.get("frame"), GLASSES_FRAMES, "metal")
+    rim_default = GLASSES_RIM_MM[frame]
+    lens_raw = raw.get("lens") if isinstance(raw.get("lens"), dict) else {}
+    tint = _choice(lens_raw.get("tint"), LENS_TINTS, "clear")
+    opacity_default = CLEAR_OPACITY if tint == "clear" else SUN_OPACITY
+    lens: Dict[str, Any] = {"tint": tint,
+                            "opacity": _num(lens_raw.get("opacity", opacity_default), "lens_opacity", opacity_default),
+                            "mirror": bool(lens_raw.get("mirror", False))}
+    if isinstance(lens_raw.get("color"), str) and _HEX.match(lens_raw["color"]):
+        lens["color"] = lens_raw["color"].lower()
+    return {"shape": _choice(raw.get("shape"), GLASSES_SHAPES, "rectangular"),
+            "size": _choice(raw.get("size"), GLASSES_SIZES, "regular"),
+            "rim_mm": _num(raw.get("rim_mm", rim_default), "rim_mm", rim_default),
+            "frame": frame, "temple": _choice(raw.get("temple"), GLASSES_TEMPLES, "hook"), "lens": lens}
 
 
 def of_item(item: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -202,6 +253,7 @@ def buildable(item: Optional[Dict[str, Any]]) -> bool:
 
 #: Word rules of ``suggest_kind``: (kind, regex over the item's name + prompt words), first match wins.
 _WORDS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
+    ("glasses", re.compile(r"glasses|spectacles|eyewear|brille", re.I)),
     ("choker", re.compile(r"\bchoker\b", re.I)),
     ("necklace", re.compile(r"necklace|pendant|\bchain\b|halskette|kette|anh[äa]nger|collier|amulet", re.I)),
     ("earrings", re.compile(r"earring|ear ring|ohrring|ohrstecker|\bstud", re.I)),
@@ -238,6 +290,35 @@ def metal_material(spec: Dict[str, Any]) -> Tuple[str, float, float]:
         color = spec.get("color") if isinstance(spec.get("color"), str) and _HEX.match(spec["color"]) else "#d4af37"
         return color.lower(), CUSTOM_ROUGHNESS, 1.0
     return METAL_PRESETS.get(str(metal), METAL_PRESETS["gold"])
+
+
+def frame_material(spec: Dict[str, Any]) -> Tuple[str, float, float]:
+    """Glasses: ``(base colour hex, roughness, metalness)`` of the frame — a metal frame takes ``metal`` (as
+    ``metal_material``), an acetate frame ``color`` (default ``ACETATE_COLOR``) with the ``ACETATE_ROUGHNESS`` finish."""
+    if ((spec or {}).get("glasses") or {}).get("frame") == "acetate":
+        color = spec.get("color") if isinstance(spec.get("color"), str) and _HEX.match(spec["color"]) else ACETATE_COLOR
+        return color.lower(), ACETATE_ROUGHNESS, 0.0
+    return metal_material(spec)
+
+
+def lens_material(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Glasses: ``{color, opacity, metalness, roughness, mirror}`` of the lenses (``LENS_COLORS``; mirrored:
+    ``MIRROR_SURFACE``)."""
+    lens = ((spec or {}).get("glasses") or {}).get("lens") or {}
+    tint = lens.get("tint") if lens.get("tint") in LENS_TINTS else "clear"
+    color = lens.get("color") if tint == "custom" and isinstance(lens.get("color"), str) and _HEX.match(lens["color"]) \
+        else LENS_COLORS.get(tint, LENS_COLORS["grey"])
+    mirror = bool(lens.get("mirror"))
+    metal, rough = MIRROR_SURFACE if mirror else (0.0, 0.05)
+    opacity = float(lens.get("opacity", CLEAR_OPACITY if tint == "clear" else SUN_OPACITY))
+    return {"color": color.lower(), "opacity": opacity, "metalness": metal, "roughness": rough, "mirror": mirror}
+
+
+def lens_seen_far(spec: Dict[str, Any]) -> bool:
+    """Glasses: whether the lenses stay on the distance tier — a tinted or mirrored lens does, a clear one is left
+    off with the temples."""
+    lens = ((spec or {}).get("glasses") or {}).get("lens") or {}
+    return lens.get("tint", "clear") != "clear" or bool(lens.get("mirror"))
 
 
 def pendant_on(spec: Optional[Dict[str, Any]]) -> bool:

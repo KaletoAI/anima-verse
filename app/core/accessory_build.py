@@ -102,6 +102,10 @@ def shape_inputs(spec: Dict[str, Any]) -> Dict[str, Any]:
                 "width_cm": band["width_cm"], "thickness_mm": spec["chain"]["thickness_mm"]}
     if kind == "earrings":
         return {"earring": dict(spec["earring"]), "thickness_mm": spec["chain"]["thickness_mm"], "side": spec["side"]}
+    if kind == "glasses":
+        # the lenses' tint, opacity and mirror are a material (``material_key``), not the geometry
+        g = spec["glasses"]
+        return {k: g[k] for k in ("shape", "size", "rim_mm", "frame", "temple")}
     return {}
 
 
@@ -150,7 +154,7 @@ def _keyed_by_shaping(spec: Dict[str, Any]) -> bool:
 
 
 def _wants_under(spec: Dict[str, Any]) -> bool:
-    return spec["kind"] not in ("necklace", "earrings", "ring") and spec["band"]["layer"] == "auto"
+    return spec["kind"] not in ("necklace", "earrings", "ring", "glasses") and spec["band"]["layer"] == "auto"
 
 
 def worn_context(character_name: str, profile: Dict[str, Any], base_sha: str,
@@ -278,6 +282,11 @@ def material_key(item: Optional[Dict[str, Any]]) -> str:
         return ""
     color, rough, metal = piece_material(spec, str((item or {}).get("id") or ""))
     band = f"{spec['band']['material']}:" if spec["kind"] in BAND_KINDS else ""
+    if spec["kind"] == "glasses":
+        # the frame's material and the lenses' (tint, opacity, mirror) re-assemble, never rebuild
+        lens = accessory_spec.lens_material(spec)
+        band = (f"{spec['glasses']['frame']}:lens={lens['color']}/{lens['opacity']}/"
+                f"{int(lens['mirror'])}:")
     return f"accessory:{spec['metal']}:{band}{color}:{rough}:{metal}"
 
 
@@ -289,9 +298,11 @@ BAND_FALLBACK = "leather"
 
 def piece_material(spec: Dict[str, Any], item_id: str = "") -> tuple:
     """``(colour hex, roughness, metalness)`` of a built piece: the chain's metal (``accessory_spec.metal_material``),
-    or for a band (A234) its ``band.material`` — leather / fabric presets, ``metal`` the chosen metal,
+    the glasses' frame (``accessory_spec.frame_material``), or for a band (A234) its ``band.material`` — leather / fabric presets, ``metal`` the chosen metal,
     ``from_image`` the item image's median colour with the leather finish (``image_colour``)."""
     from app.core import accessory_spec
+    if spec.get("kind") == "glasses":
+        return accessory_spec.frame_material(spec)
     if spec.get("kind") not in BAND_KINDS:
         return accessory_spec.metal_material(spec)
     material = spec["band"]["material"]
@@ -675,6 +686,12 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
                            "PN": hung["N"].astype(np.float32), "PUV": hung["UV"].astype(np.float32),
                            "PJ": hung["J"].astype(np.int32), "PW": hung["W"].astype(np.float32),
                            "Pimage": np.frombuffer(hung["image"], np.uint8)})
+        lens = made.get("lens")
+        if lens is not None:
+            # the glasses: the lenses (their own node) and which frame faces are the temples (the distance tier)
+            arrays.update({"LV": lens["V"].astype(np.float32), "LF": lens["F"].astype(np.int32),
+                           "LN": lens["N"].astype(np.float32), "LJ": lens["J"].astype(np.int32),
+                           "LW": lens["W"].astype(np.float32), "FT": made["temple_faces"].astype(np.uint8)})
         np.savez_compressed(buf, **arrays)
         _write_atomic(record_path(character_name, item_id, sig, ".npz"), buf.getvalue())
         record = {"version": ACCESSORY_VERSION, "item_id": item_id, "asig": sig, "kind": spec["kind"],
@@ -703,8 +720,9 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
 
 
 def garment_mesh(character_name: str, item_id: str, record: Dict[str, Any],
-                 item: Optional[Dict[str, Any]] = None):
-    """The stored build of ``record`` as a ``glb_mesh.GarmentMesh`` with the item's CURRENT metal."""
+                 item: Optional[Dict[str, Any]] = None, without_temples: bool = False):
+    """The stored build of ``record`` as a ``glb_mesh.GarmentMesh`` with the item's CURRENT metal (glasses: the frame;
+    ``without_temples`` leaves the temples off — the distance tier)."""
     from app.core import accessory_mesh, accessory_spec
     if item is None:
         from app.models.inventory import get_item
@@ -712,8 +730,42 @@ def garment_mesh(character_name: str, item_id: str, record: Dict[str, Any],
     spec = accessory_spec.of_item(item) or accessory_spec.normalize({"kind": record.get("kind") or "necklace"})
     color, rough, metal = piece_material(spec, item_id)
     with np.load(record_path(character_name, item_id, str(record["asig"]), ".npz")) as z:
-        return accessory_mesh.garment_mesh(z["V"], z["F"], z["N"], z["J"], z["W"], list(record["joint_names"]),
+        V, F, N, J, W = z["V"], z["F"], z["N"], z["J"], z["W"]
+        if without_temples and "FT" in z.files:
+            V, F, N, J, W = _faces_subset(V, F[z["FT"] == 0], N, J, W)
+        return accessory_mesh.garment_mesh(V, F, N, J, W, list(record["joint_names"]),
                                            color=color, roughness=rough, metalness=metal)
+
+
+def _faces_subset(V, F, N, J, W):
+    """Only the vertices the faces ``F`` use, the faces renumbered."""
+    used = np.unique(np.asarray(F).reshape(-1))
+    remap = np.full(len(V), -1, np.int64)
+    remap[used] = np.arange(len(used))
+    return V[used], remap[np.asarray(F)], N[used], J[used], W[used]
+
+
+def lens_mesh(character_name: str, item_id: str, record: Dict[str, Any], item: Optional[Dict[str, Any]] = None):
+    """Glasses: the stored lenses of ``record`` as a ``glb_mesh.GarmentMesh`` and their ``glb_mesh.graft`` material
+    overrides (the sheer path of A204: alphaMode BLEND, both sides, base-colour alpha = the opacity,
+    ``extras.anima_sheer``); None when the build carries none."""
+    from app.core import accessory_mesh, accessory_spec
+    if item is None:
+        from app.models.inventory import get_item
+        item = get_item(item_id) or {}
+    spec = accessory_spec.of_item(item) or accessory_spec.normalize({"kind": "glasses"})
+    lens = accessory_spec.lens_material(spec)
+    with np.load(record_path(character_name, item_id, str(record["asig"]), ".npz")) as z:
+        if "LV" not in z.files:
+            return None
+        mesh = accessory_mesh.garment_mesh(z["LV"], z["LF"], z["LN"], z["LJ"], z["LW"], list(record["joint_names"]),
+                                           color=lens["color"], roughness=lens["roughness"],
+                                           metalness=lens["metalness"])
+    opacity = float(lens["opacity"])
+    overrides = {"alphaMode": "BLEND", "doubleSided": True,
+                 "pbrMetallicRoughness": {"baseColorFactor": [*accessory_spec.srgb_to_linear(lens["color"]), opacity]},
+                 "extras": {"anima_sheer": True, "opacity": opacity}}
+    return mesh, overrides
 
 
 def pendant_mesh(character_name: str, item_id: str, record: Dict[str, Any]):
@@ -747,13 +799,25 @@ PENDANT_LOW_MAX_TRIS = 3000
 def graft_accessory(blob: bytes, character_name: str, item_id: str, record: Dict[str, Any], fsig: str,
                     item: Optional[Dict[str, Any]] = None, kind: str = "accessory", low: bool = False) -> bytes:
     """``blob`` + the accessory's chain node and, when the build carries one, its pendant node (A225; on the distance
-    tier ``low`` only up to ``PENDANT_LOW_MAX_TRIS``)."""
-    from app.core import accessory_mesh, glb_mesh
+    tier ``low`` only up to ``PENDANT_LOW_MAX_TRIS``). Glasses: the frame node and the lens node (``lens_mesh``); the
+    distance tier leaves off the temples and a clear pair of lenses (``accessory_spec.lens_seen_far``)."""
+    from app.core import accessory_mesh, accessory_spec, glb_mesh
     if low and record.get("kind") in LOW_TIER_DROPPED:
         return blob      # A234 / J4: a ring is shown in close-up and admin views only
     extras = {"kind": kind, "item_id": item_id, "fsig": fsig}
-    blob = glb_mesh.graft(blob, garment_mesh(character_name, item_id, record, item),
+    glasses = record.get("kind") == "glasses"
+    blob = glb_mesh.graft(blob, garment_mesh(character_name, item_id, record, item, without_temples=low and glasses),
                           name=accessory_mesh.node_name(item_id), extras=extras)
+    if glasses:
+        # the lenses: their own node with the sheer material; on the distance tier only a tinted or mirrored pair
+        if item is None:
+            from app.models.inventory import get_item
+            item = get_item(item_id) or {}
+        lens = lens_mesh(character_name, item_id, record, item)
+        spec = accessory_spec.of_item(item)
+        if lens is not None and not (low and not accessory_spec.lens_seen_far(spec or {})):
+            blob = glb_mesh.graft(blob, lens[0], name=accessory_mesh.node_name(item_id, "g"),
+                                  extras={**extras, "part": "lenses"}, material_overrides=lens[1])
     pend = pendant_mesh(character_name, item_id, record)
     if pend is not None and low and len(pend.indices) > PENDANT_LOW_MAX_TRIS:
         pend = None
@@ -810,7 +874,7 @@ def preview_curve(character_name: str, item_id: str, *, drop_cm: float, thicknes
 def make_any(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, Any]] = None,
              context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The geometry of any kind on the rigged plain body ``rigged``: the necklace (``make_necklace``), the earrings
-    (``make_earrings``), the ring (``make_ring``) or a piece around a body part (``make_around``). A chest shaping in ``context`` (A228 L7)
+    (``make_earrings``), the ring (``make_ring``), the glasses (``make_glasses``) or a piece around a body part (``make_around``). A chest shaping in ``context`` (A228 L7)
     shapes the body first, so a piece near the chest sits on the shaped skin the figure shows."""
     context = context or {}
     if context.get("shaping") and _keyed_by_shaping(spec):
@@ -822,6 +886,8 @@ def make_any(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, Any]]
         return make_earrings(rigged, spec, part)
     if spec["kind"] == "ring":
         return make_ring(rigged, spec)
+    if spec["kind"] == "glasses":
+        return make_glasses(rigged, spec)
     return make_around(rigged, spec, part, load_under(context.get("under") or []))
 
 
@@ -875,12 +941,13 @@ AROUND_JOINTS: Dict[str, frozenset] = {
     "strap:chest": frozenset({"spine", "spine1", "spine2", "leftshoulder", "rightshoulder"}),
     "anklet": frozenset({"leftleg", "rightleg", "leftfoot", "rightfoot"}),
     "bracelet": frozenset({"leftforearm", "rightforearm", "lefthand", "righthand"}),
+    "glasses": frozenset({"head"}),
 }
 AROUND_IMPLAUSIBLE = "The {what} does not fit this body ({why})"
 #: What a section is called in the words of a failure.
 AROUND_WHAT = {"belt": "belt", "choker": "choker", "strap:thigh": "thigh strap", "strap:upper_arm": "arm strap",
                "strap:chest": "chest strap", "anklet": "anklet", "bracelet": "bracelet",
-               "earrings": "earring"}
+               "earrings": "earring", "glasses": "glasses"}
 
 
 def around_plausible(key: str, metrics: Dict[str, Any]) -> None:
@@ -1245,6 +1312,35 @@ def make_ring(rigged: bytes, spec: Dict[str, Any]) -> Dict[str, Any]:
             "landmarks": landmarks, "metrics": metrics}
 
 
+def make_glasses(rigged: bytes, spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Glasses (``accessory_glasses``): the frame (rims, bridge, nose pads, temples) and the lenses, sized and placed
+    from the face, gated against the body, every vertex rigid on the Head (weight 1.0). ``{V, F, N, J, W,
+    joint_names, curve, landmarks, metrics, lens: {V, F, N, J, W}, temple_faces}``. Pure CPU."""
+    from app.core import accessory_glasses as ag
+    from app.core.rig_contract import norm_bone_name
+    started = time.monotonic()
+    body, dense, Pw, Fw, first = _body_context(rigged)
+    head = [i for i, n in enumerate(body.joint_names) if norm_bone_name(str(n)) == "head"]
+    if not head:
+        raise KeyError("head")
+    made = ag.build(body, dense, Pw, Fw, first, spec)
+
+    def rigid(n: int):
+        J = np.zeros((n, 4), np.int64)
+        J[:, 0] = head[0]
+        W = np.zeros((n, 4))
+        W[:, 0] = 1.0
+        return J, W
+    J, W = rigid(len(made["V"]))
+    lens = dict(made["lens"])
+    lens["J"], lens["W"] = rigid(len(lens["V"]))
+    metrics = {**made["metrics"], "joints": {str(body.joint_names[head[0]]): 1.0},
+               "cpu_s": round(time.monotonic() - started, 2)}
+    return {"V": made["V"], "F": made["F"], "N": made["N"], "J": J, "W": W, "joint_names": list(body.joint_names),
+            "curve": made["curve"], "landmarks": made["landmarks"], "metrics": metrics, "lens": lens,
+            "temple_faces": made["temple_faces"]}
+
+
 #: A234: a hoop hangs tilted this far out at the bottom (its plane turned about the front-back axis).
 HOOP_TILT_DEG = 15.0
 #: The least air an earring may keep to the head (the target is ``accessory_band.GAP_M``; a hoop that cannot get
@@ -1277,7 +1373,8 @@ def preview_rings(character_name: str, spec: Dict[str, Any], *,
     """A234: the centre lines of a band / tube kind for unsaved settings ``spec`` (normalized) on the current plain
     body — the Wardrobe's live preview while a slider moves: ``{rings: [[[x, y, z]…]…], landmarks, radius_m}``; the
     body's surface only (the clothing under it is taken by the Build). Earrings: the lobe points. A238: the ring's
-    middle circle at the size the Build gives it (the skeleton only, ``accessory_ring``). CPU only; nothing stored."""
+    middle circle at the size the Build gives it (the skeleton only, ``accessory_ring``). Glasses: the lens outlines,
+    bridge and temples (``accessory_glasses.layout``) and their sizes. CPU only; nothing stored."""
     from app.core import accessory_band as ab
     from app.core.accessory_spec import BAND_KINDS as SPEC_BAND_KINDS
     from app.models.character import get_character_dir
@@ -1298,6 +1395,23 @@ def preview_rings(character_name: str, spec: Dict[str, Any], *,
                 "radius_m": thickness / 2, "inner_radius_mm": round(float(sized["radius_m"]) * 1000.0, 2)}
     body, dense, Pw, Fw, first = _body_context(rigged)
     rings, marks = [], {}
+    if spec["kind"] == "glasses":
+        # the lens outlines, the bridge and the temples where the Build lays them (before its gate's pushes)
+        from app.core import accessory_glasses as ag
+        P, F = np.asarray(body.positions, np.float64), np.asarray(body.faces, np.int64)
+        lm = ag.face_landmarks(P, F, body.joint_positions)
+        ears = {side: ag.ear_info(Pw, dense[first], body.joint_names, body.joint_positions, side, lm["eye_y"])
+                for side in ("left", "right")}
+        lay = ag.layout(lm, ag.head_samples(P, F, ag._bone(body.joint_positions, "head")), spec["glasses"], ears,
+                        float(np.ptp(P[:, 1])))
+        lines = [*lay["lenses"].values(), *lay["bridges"], *lay["temples"].values()]
+        return {"rings": [np.round(x, 5).tolist() for x in lines],
+                "landmarks": {"nose_tip": np.round(lm["nose_tip"], 5).tolist()},
+                "radius_m": ag.frame_section(spec["glasses"])[0],
+                "glasses": {"frame_mm": round(lay["W"] * 2000.0, 1),
+                            "lens_mm": [round(lay["w"] * 1000.0, 1), round(lay["h"] * 1000.0, 1)],
+                            "bridge_mm": round(lay["b"] * 2000.0, 1),
+                            "ear_used": {s: bool(e["used"]) for s, e in ears.items()}}}
     if spec["kind"] == "earrings":
         for side in ab.sides_of(spec):
             p = ab.ear_anchor(Pw, dense[first], body.joint_names, body.joint_positions, side)["point"]

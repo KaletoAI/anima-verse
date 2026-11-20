@@ -367,7 +367,8 @@ def ear_anchor(P: np.ndarray, dense: np.ndarray, joint_names: Sequence[str], bon
     """The ear lobe of ``side`` (module docstring): the ear is the head skin that stands out farthest to that side in
     the box ``EAR_BOX`` round the Head bone head (above it, at or behind its front); the lobe is the lowest point of
     the ear's rim (head skin within ``EAR_RIM_M`` of that farthest x), raised ``LOBE_UP_M``. ``{point, outward,
-    lobe_y}``; ``ValueError`` without head skin there."""
+    lobe_y, top_y, front_z, back_z}`` — the rim's highest point and its front-most / back-most z (where a glasses
+    temple goes over the ear); ``ValueError`` without head skin there."""
     from app.core.rig_contract import norm_bone_name
     head = _bone(bones, "head")
     P = np.asarray(P, np.float64)
@@ -385,7 +386,8 @@ def ear_anchor(P: np.ndarray, dense: np.ndarray, joint_names: Sequence[str], bon
     k = np.flatnonzero(rim)[int(np.argmin(P[rim, 1]))]
     point = P[k].copy()
     point[1] += LOBE_UP_M
-    return {"point": point, "outward": np.array([sx, 0.0, 0.0]), "lobe_y": round(float(point[1]), 4)}
+    return {"point": point, "outward": np.array([sx, 0.0, 0.0]), "lobe_y": round(float(point[1]), 4),
+            "top_y": float(P[rim, 1].max()), "front_z": float(P[rim, 2].max()), "back_z": float(P[rim, 2].min())}
 
 
 def clear_lateral(P: np.ndarray, point: np.ndarray, side: str, below_m: float, half_width_m: float) -> float:
