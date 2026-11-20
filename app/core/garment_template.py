@@ -1852,8 +1852,14 @@ def texture_sources(character_name: str, item_id: str) -> Dict[str, str]:
 
 def lower_layers(mesh_ids: Any, item_id: str) -> List[str]:
     """The other worn mesh pieces (own-mesh and template: ``figure.WornSets.own``, or the outfit
-    model's ``mesh_items.intended``) — the lower layers in the cache key (module docstring)."""
-    return sorted({str(i) for i in (mesh_ids or ())} - {item_id})
+    model's ``mesh_items.intended``) — the lower layers in the cache key (module docstring). An ACCESSORY piece is
+    never one: it is built on the plain body over everything and no drape lies on it — and ``mesh_items.intended``
+    lists it while ``WornSets.own`` does not, so the assembly's key differed from the Build's and a ready drape was
+    left off (2026-11-20, Lirien: naked figure, "Not the whole outfit")."""
+    from app.core import garment_set
+    from app.models.inventory import get_item
+    others = {str(i) for i in (mesh_ids or ())} - {item_id}
+    return sorted(i for i in others if garment_set.mesh_mode_of(get_item(i) or {}) != garment_set.ACCESSORY)
 
 
 def _template_kind(item: Optional[Dict[str, Any]]) -> Optional[str]:
