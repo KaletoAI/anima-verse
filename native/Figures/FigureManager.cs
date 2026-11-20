@@ -210,6 +210,8 @@ public partial class FigureManager : Node3D
         public IReadOnlyDictionary<string, bool> ClipLoops { get; init; } = new Dictionary<string, bool>();
         /// <summary>The answer's top-level <c>motion</c> (<c>extension_rig.motion_payload</c>); null = none.</summary>
         public MotionPayload? Motion { get; init; }
+        /// <summary><c>model.collision</c> (api.ts: <c>collision: m.collision ?? null</c>); null = none.</summary>
+        public CollisionPayload? Collision { get; init; }
     }
 
     /// <summary>
@@ -1175,6 +1177,7 @@ public partial class FigureManager : Node3D
                     if (!_motionState.TryGetValue(fig.CharacterName, out var known) || known is null)
                         _motionState[fig.CharacterName] = info.Motion;
                     fig.Motion = _motionState[fig.CharacterName];
+                    fig.Collision = info.Collision;
                     _infos[fig.CharacterName] = info;
                     fig.Api = Figure.ModelAnswer.Ready;
                     fig.LoadedRev = info.ModelRev;
@@ -1254,7 +1257,7 @@ public partial class FigureManager : Node3D
         return new ModelInfo(url, low.Length > 0 ? low : null, Json.Str(m, "format", "glb").ToLowerInvariant(), rig,
                              Json.Bool(m, "normalized"), rev.Length > 0 ? rev : null)
         {
-            ClipLoops = loops, Motion = MotionPayload.Of(root), TextureUrl = texture.Length > 0 ? texture : null,
+            ClipLoops = loops, Motion = MotionPayload.Of(root), Collision = CollisionPayload.Of(m), TextureUrl = texture.Length > 0 ? texture : null,
         };
     }
 

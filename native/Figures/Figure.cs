@@ -298,7 +298,7 @@ public partial class Figure : Node3D
         UpdateClip();
         // figures.ts Figure constructor: createSecondaryMotion(THREE, this.root, this.motion, model.template).
         _secondaryRev = Motion?.Rev;
-        if (isGlb && skeleton is not null) Secondary = SecondaryMotionModifier.TryCreate(body, skeleton, Motion);
+        if (isGlb && skeleton is not null) Secondary = SecondaryMotionModifier.TryCreate(body, skeleton, Motion, collision: Collision);
         InitFirstPersonBody();
     }
 
@@ -306,6 +306,9 @@ public partial class Figure : Node3D
 
     /// <summary>The character's motion payload (worldmap <c>motion</c>, else model3d <c>motion</c>); null = none yet.</summary>
     public MotionPayload? Motion { get; set; }
+    /// <summary>The model's <c>collision</c> payload (model3d <c>model.collision</c>, figureRuntime: per model, set before
+    /// the body is built); the hair chains keep their tips outside its capsules. Null = none.</summary>
+    public CollisionPayload? Collision { get; set; }
     /// <summary>The secondary motion of the body (null = no extension bone of the payload on this rig, or no rig).</summary>
     public SecondaryMotionModifier? Secondary { get; private set; }
     /// <summary>This frame's <c>frozen</c> (the world's <c>game_rate</c> 0; a pair at rate 0) for the secondary motion.</summary>
@@ -336,7 +339,7 @@ public partial class Figure : Node3D
         {
             _secondaryRev = rev;
             if (Secondary is { } s) s.Configure(Motion);
-            else if (IsGlb) Secondary = SecondaryMotionModifier.TryCreate(Body, Skeleton, Motion);
+            else if (IsGlb) Secondary = SecondaryMotionModifier.TryCreate(Body, Skeleton, Motion, collision: Collision);
         }
         if (Secondary is not { } motion) return;
         var position = IsInsideTree() ? GlobalPosition : Position;

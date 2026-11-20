@@ -107,7 +107,7 @@ The browser's open world round the places, every number on the E3 vectors (`terr
 The figures of the browser, every number on the E5 vectors (`figure_clips`, `retarget`, `clip_commit`,
 `clip_coverage`, `hips_tracks`, `npc_placement`, `figure_ground`, `room_spots`, `npc_walk`, `npc_ground`, `stairs`,
 `foot_lock`, `foot_lock_measure`, `leg_pin`, `stand_settle`, `bridge_*`, `pair_clip_*`, `pair_height`, `place_poll`,
-`figure_normalisation`, `secondary_*`, `animal_*`):
+`figure_normalisation`, `secondary_*`, `animal_*`, `collision_core`, `hair_chains`):
 
 - **every character plays its activity** from the server's WHOLE clip library along its set chain (`female`/`male`/
   `animal` + neutral), one-shots hold their last frame, distance tiers full/low at 25/35 m (Tasks 27/28);
@@ -116,7 +116,8 @@ The figures of the browser, every number on the E5 vectors (`figure_clips`, `ret
   wading with the underwater ghost (Task 30);
 - **getting up** through the transition clips with planted feet, travel and turn (Task 31); **pair clips** in
   lockstep at one anchor, the bodies' feet on the ground (bind anchoring, Task 32);
-- **hair and extension sway** (secondary motion with the exact skin normals, Task 33); **animals** with their own FBX
+- **hair and extension sway** (secondary motion with the exact skin normals, Task 33), **hair chains** that follow
+  today's skin and keep their tips out of the head and body (see "Hair chains" below); **animals** with their own FBX
   takes, else the procedural gait (Task 34);
 - **measured** (Task 35, see "Clip memory and figure cost"): clip memory per template, fit time per model, the frame
   cost of the figures (`--bench-matrix=no-figures`) and the figure keys of every bench result;
@@ -1128,6 +1129,35 @@ actually played at the same anchor and phase. Missing both halves retains ordina
 placement. `--check pairs` Q112 covers imported alternatives, missing-alt fallback,
 rig/root availability and alternative finales; the shared geometry vector runner
 consumes all 28 current cases, including the G6 name cases.
+
+### Hair chains (hair-chain port, stages 1 and 2)
+
+The browser's hair-chain runtime, own body only. **Ported:**
+
+- the collision core (`Core/Figures/Collision.cs`, Godot-free): the `collision` payload of the model answer
+  (`CollisionPayload`, read by `FigureManager.FetchInfo` from `model.collision`, handed to the figure as
+  `Figure.Collision`), `bindCollision` (`CollisionBinding`, the endpoint rule `jointNowFrom` / `capsuleNow`),
+  the push `pushOutOfCapsules` with the squeeze rule and the bind rule, `tipBindFactors`, `contactAngle` and the
+  point form of `keepHairTipOutside` (`HairTipTurn`);
+- the hair chains in `Core/Figures/SecondaryMotion.cs`: the group fields `hair` / `anchor_blend` / `anchor_from`
+  (`MotionGroup`), today's skin (`todayBlend` / `swingShare`, the hair pass after the solve, rows-only groups),
+  the tip contact against the `HAIR_REGIONS` capsules with the bind rule (the tip per link: next joint, else the
+  measured reach, else twice the centroid), `contactTips()`;
+- the wiring in `SecondaryMotionModifier.TryCreate`: body joints from the NON-garment skins (a `garment_` name or
+  a `garment` object in the glTF extras, ancestors included), the reach cached per template mesh beside the
+  centroids, `SetCollision` per body.
+
+Checked by `shared/test-vectors/collision_core.json` (129 cases, 1e-9) and `hair_chains.json` (11 end-to-end
+cases, 1e-8 m), generated from the TypeScript by `scripts/export_hair_vectors.mjs` and replayed by
+`tests/HairVectorTests.cs`, and by `--check secondary` H1–H3 (`Check/HairCheck.cs`, GLBs built in the check:
+a chain tip kept out of the head capsule, 16 mm → ≤ 1 mm; today's skin following the payload rows).
+
+**Not ported yet:** the garment push shader (cloth pushed out of the body capsules on the GPU), per-strand hair
+(the card/strand hair of the hair deck), partner contact (another figure's capsules, the `channels` of the
+payload), and the contact of the extension tips that are not hair (the browser keeps those outside too).
+**Accepted deviations:** the collision bind space is the skinned geometry space (Godot's bind poses; three's
+`bindMatrix` = identity, the mesh instance assumed to sit in the skeleton's frame); distances use `Math.Sqrt`
+where the TypeScript uses `Math.hypot` (last-bit differences, inside the tolerances).
 
 ### Clip memory and figure cost (Task 35, ruling P3-R11)
 

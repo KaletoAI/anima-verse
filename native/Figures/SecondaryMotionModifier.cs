@@ -32,6 +32,8 @@ public partial class SecondaryMotionModifier : SkeletonModifier3D
     private sealed record Surface(MeshInstance3D Mesh, int Index, Material? Previous, ShaderMaterial Material, SkinBinding Skin);
 
     private static readonly ConditionalWeakTable<Mesh, Dictionary<int, (V3 Centroid, double Mass)>> CentroidCache = new();
+    /// <summary>The links' reach (<see cref="SecondaryMotion.MeasureReach"/>) per template mesh, beside the centroids.</summary>
+    private static readonly ConditionalWeakTable<Mesh, Dictionary<int, V3>> ReachCache = new();
 
     private readonly MotionRig _rig;
     private readonly SecondaryMotion _motion;
@@ -117,7 +119,11 @@ public partial class SecondaryMotionModifier : SkeletonModifier3D
     /// asks again when the payload revision changes). The bind frame is the skeleton relative to the body's parent
     /// (three builds before the figure root is placed). Added as a child of the skeleton.
     /// </summary>
-    public static SecondaryMotionModifier? TryCreate(Node3D body, Skeleton3D skel, MotionPayload? payload, bool correctNormals = true)
+    /// <paramref name="collision"/>: the model's <c>collision</c> payload (the body capsules the hair chains' tips are kept
+    /// outside of; null = none) — bound to the joints of the BODY skins only (three's <c>bodyJoints</c>: a garment's
+    /// skin never names a joint).
+    public static SecondaryMotionModifier? TryCreate(Node3D body, Skeleton3D skel, MotionPayload? payload,
+                                                     bool correctNormals = true, CollisionPayload? collision = null)
     {
         if (skel.GetBoneCount() == 0) return null;
         var bindBase = ToAffine(body.Transform * body.GlobalTransformOf(skel));
@@ -133,8 +139,17 @@ public partial class SecondaryMotionModifier : SkeletonModifier3D
             centroids = SecondaryMotion.MeasureCentroids(skins);
             if (firstMesh is not null) CentroidCache.AddOrUpdate(firstMesh, centroids);
         }
+        Dictionary<int, V3> reach;
+        if (firstMesh is not null && ReachCache.TryGetValue(firstMesh, out var cachedReach)) reach = cachedReach;
+        else
+        {
+            reach = SecondaryMotion.MeasureReach(skins, centroids);
+            if (firstMesh is not null) ReachCache.AddOrUpdate(firstMesh, reach);
+        }
         var joints = probes.SelectMany(p => p.BindNodes).Where(n => n >= 0).ToList();
-        var motion = new SecondaryMotion(rig, joints, centroids, n => AnchorBlendOf(skel, n), payload);
+        var motion = new SecondaryMotion(rig, joints, centroids, n => AnchorBlendOf(skel, n), payload, reach);
+        motion.SetCollision(collision, probes.Where(p => !IsGarment(p.Owner as Node, body))
+                                             .SelectMany(p => p.BindNodes.Zip(p.BindPoses, (n, inv) => (n, inv))));
         var mod = new SecondaryMotionModifier(rig, motion, correctNormals, payload?.Rev);
         foreach (var mi in probes.Select(p => p.Owner).OfType<MeshInstance3D>().Distinct())
         {
@@ -156,10 +171,26 @@ public partial class SecondaryMotionModifier : SkeletonModifier3D
         return mod;
     }
 
+    /// <summary>
+    /// figure.ts <c>inGarment</c>: the node or an ancestor below the model root is a garment — a name starting with
+    /// <c>garment_</c>, or glTF extras with a <c>garment</c> object (Godot keeps a node's extras in its <c>extras</c> meta).
+    /// </summary>
+    private static bool IsGarment(Node? node, Node root)
+    {
+        for (var n = node; n is not null && n != root; n = n.GetParent())
+        {
+            if (n.Name.ToString().StartsWith("garment_", StringComparison.Ordinal)) return true;
+            if (n.HasMeta("extras") && n.GetMeta("extras").VariantType == Variant.Type.Dictionary
+                && n.GetMeta("extras").AsGodotDictionary().TryGetValue("garment", out var g)
+                && g.VariantType == Variant.Type.Dictionary) return true;
+        }
+        return false;
+    }
+
     /// <summary>Swap every carried surface to its correcting twin (per figure: the uniform is this skeleton's).</summary>
     private void InstallMaterials()
     {
-        if (!CorrectNormals || _motion.ParticleCount + _motion.RigidCount == 0) return;
+        if (!CorrectNormals || _motion.ParticleCount + _motion.RigidCount + _motion.HairCount == 0) return;
         foreach (var skin in _skins)
         {
             var mi = skin.Mesh;
@@ -209,7 +240,7 @@ public partial class SecondaryMotionModifier : SkeletonModifier3D
     {
         _motion.Configure(payload);
         Rev = payload?.Rev;
-        if (_motion.ParticleCount + _motion.RigidCount == 0) RemoveMaterials();
+        if (_motion.ParticleCount + _motion.RigidCount + _motion.HairCount == 0) RemoveMaterials();
         else if (_surfaces.Count == 0) InstallMaterials();
     }
 

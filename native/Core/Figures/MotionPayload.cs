@@ -42,6 +42,19 @@ public sealed record MotionGroup
     public double RestMaxDeg { get; init; } = double.NaN;
     public double? StraightenDeg { get; init; }
     public double? FreetextClothingGain { get; init; }
+    /// <summary>
+    /// A HairDeck spring chain (<c>app/core/hair_motion.py</c>): its tips collide with the hair capsules
+    /// (<see cref="Collision.HairChainCapsules"/>) and it swings on top of today's skin (HAIR CHAINS).
+    /// </summary>
+    public bool Hair { get; init; }
+    /// <summary>
+    /// Hair only: per chain joint (the group's bones and its carried, rigid ones) the body joints today's hair skin
+    /// rides there, with their shares, in JSON order; a share that is no number reads NaN (JS <c>Number(x)</c> of an
+    /// object) and is dropped by the reader. Null = absent.
+    /// </summary>
+    public IReadOnlyList<(string Bone, IReadOnlyList<(string Joint, double Share)>? Row)>? AnchorBlend { get; init; }
+    /// <summary>Hair only: the body bone the chain hangs from (Head); its share of a row is how much of the swing shows.</summary>
+    public string? AnchorFrom { get; init; }
 
     /// <summary>The fields <c>blendMotionParams</c> eases (secondaryMotion.ts <c>BLENDED_FIELDS</c>), in its order.</summary>
     public static readonly string[] BlendedFields =
@@ -89,7 +102,37 @@ public sealed record MotionGroup
             Gain = Num("gain"), MaxDeg = Num("max_deg") ?? double.NaN, Squash = squash, RestDeg = Num("rest_deg") ?? double.NaN,
             RestMaxDeg = Num("rest_max_deg") ?? double.NaN, StraightenDeg = Num("straighten_deg"),
             FreetextClothingGain = Num("freetext_clothing_gain"),
+            // JS truthiness of `group.hair`: a non-empty string or a non-zero number counts too.
+            Hair = g.TryGetProperty("hair", out var h) && (h.ValueKind == JsonValueKind.True
+                || (h.ValueKind == JsonValueKind.Number && h.GetDouble() != 0) || (h.ValueKind == JsonValueKind.String && h.GetString()!.Length > 0)),
+            AnchorBlend = ParseAnchorBlend(g),
+            AnchorFrom = g.TryGetProperty("anchor_from", out var af) && af.ValueKind == JsonValueKind.String ? af.GetString() : null,
         };
+    }
+
+    /// <summary>JS <c>Number(share)</c> for the JSON kinds a row can hold.</summary>
+    private static double JsNumber(JsonElement v) => v.ValueKind switch
+    {
+        JsonValueKind.Number => v.GetDouble(),
+        JsonValueKind.True => 1,
+        JsonValueKind.False or JsonValueKind.Null => 0,
+        JsonValueKind.String => v.GetString()!.Trim() is var s && s.Length == 0 ? 0
+            : double.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : double.NaN,
+        _ => double.NaN,
+    };
+
+    private static IReadOnlyList<(string, IReadOnlyList<(string, double)>?)>? ParseAnchorBlend(JsonElement g)
+    {
+        if (!g.TryGetProperty("anchor_blend", out var ab) || ab.ValueKind != JsonValueKind.Object) return null;
+        var rows = new List<(string, IReadOnlyList<(string, double)>?)>();
+        foreach (var row in ab.EnumerateObject())
+        {
+            // A row that is no object reads as no blend (`anchorEntries` returns undefined).
+            IReadOnlyList<(string, double)>? entries = row.Value.ValueKind == JsonValueKind.Object
+                ? row.Value.EnumerateObject().Select(e => (e.Name, JsNumber(e.Value))).ToList() : null;
+            rows.Add((row.Name, entries));
+        }
+        return rows;
     }
 
     /// <summary>The group as JSON (absent fields left out) — the vector adapters compare its keys.</summary>
@@ -108,6 +151,19 @@ public sealed record MotionGroup
         if (!double.IsNaN(Squash.Min)) o["squash"] = new JsonArray(Squash.Min, Squash.Max);
         if (AxisGain is { } a) o["axis_gain"] = new JsonArray(a.X, a.Y, a.Z);
         if (ScaleAxis is { } s) o["scale_axis"] = s;
+        if (Hair) o["hair"] = true;
+        if (AnchorFrom is { } from) o["anchor_from"] = from;
+        if (AnchorBlend is { } rows)
+        {
+            var ab = new JsonObject();
+            foreach (var (bone, row) in rows)
+            {
+                var r = new JsonObject();
+                foreach (var (joint, share) in row ?? Array.Empty<(string, double)>()) if (double.IsFinite(share)) r[joint] = share;
+                ab[bone] = r;
+            }
+            o["anchor_blend"] = ab;
+        }
         return o;
     }
 }
@@ -136,4 +192,12 @@ public sealed record MotionPayload(string Rev, IReadOnlyList<(string Name, Motio
 
     /// <summary>Every bone name of every group, normalised (<see cref="BoneNames.Norm"/>).</summary>
     public HashSet<string> BoneKeys() => Groups.SelectMany(g => g.Group.Bones.Select(BoneNames.Norm)).ToHashSet();
+
+    /// <summary>
+    /// The factory's <c>groupBones</c>: every group's bones AND the joints of its <c>anchor_blend</c> rows (a hair
+    /// group's carried joints count as its bones — a rows-only group activates the motion), normalised.
+    /// </summary>
+    public HashSet<string> MatchKeys()
+        => Groups.SelectMany(g => g.Group.Bones.Concat(g.Group.AnchorBlend?.Select(r => r.Bone) ?? Enumerable.Empty<string>()))
+                 .Select(BoneNames.Norm).ToHashSet();
 }

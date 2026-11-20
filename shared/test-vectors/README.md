@@ -13,7 +13,9 @@ implementations: when both pass the same file, they compute the same numbers.
 - **A vector is never edited to match an implementation.** When an implementation disagrees with
   a vector, the implementation is fixed. A vector changes only when the spec (and with it the
   hand derivation in the docstring) changes.
-- No code-generated values: every number in the file is written out.
+- No code-generated values: every number in the file is written out. **One exception:** the hair-chain files
+  of the native port (`collision_core.json`, `hair_chains.json`, see the last section) are generated from the
+  TypeScript by `scripts/export_hair_vectors.mjs`, which first asserts the source smokes' hand numbers.
 - No C# geometry code without a green vector from this directory.
 
 ## Format `anima-test-vectors/1`
@@ -762,3 +764,27 @@ The smoke also checks the synthetic manifest, worldmap/detail terrain consistenc
 camera/avatar terrain choice, URL mappings, file size cap and codec signatures in
 [`native/fixtures/audio/`](../../native/fixtures/audio/README.md).
 The fixture README derives decoded lengths, seams and terrain transitions.
+
+## Hair chains and the collision core (native hair-chain port)
+
+These two files are the exception to "no code-generated values": every expectation is the output of the
+TypeScript implementation (`packages/scene-render/src/collision.ts`, `garmentCollision.ts`,
+`secondaryMotion.ts`, bundled unchanged by esbuild), written by `node scripts/export_hair_vectors.mjs`.
+The hand derivations stay in the source smokes named per label prefix; the exporter asserts those hand
+numbers on the TypeScript before it writes anything, so drift away from the derivation stops the export.
+`node scripts/export_hair_vectors.mjs --check` replays the files through the TypeScript and fails when a file
+differs from what the TypeScript gives now. The native replay is `native/tests/HairVectorTests.cs`.
+
+| File | Cases | Functions | eps |
+|---|---:|---|---|
+| `collision_core.json` | 129 | `jointNowFrom`, `capsuleNow`, `linearScale`, `tipBindFactors`, `hairChainCapsules`, `pushOutOfCapsules`, `contactAngleTurn`, `bindCollision` | 1e-9 (default) |
+| `hair_chains.json` | 11 | `hairChain` (end to end: `createSecondaryMotion` + `setCollision` + `update` per frame) | 1e-8 |
+
+Label prefixes and their sources: `[g…]` `scripts/smoke_garment_collision.mjs` [1]–[6b]; `[sq…]` and the random
+sample `[r…]` (LCG seed 4242) `scripts/smoke_collision_squeeze.mjs`; `[e…]` the endpoint rule of
+`scripts/smoke_collision_endpoints.mjs`; `[h1]`/`[hc…]` `scripts/smoke_hair_chain_contact.mjs`; `[ts…]`
+`scripts/smoke_hair_today_skin.mjs`; `[x…]` the contact rig with a squeeze pair and a bind-capped capsule (no
+hand derivation beyond the bind factor). `contactAngle` is module-private in `secondaryMotion.ts`: the
+exporter appends one `export` line to that file's text inside the bundle, leaving the function itself as it is.
+The full adapter contract (matrices column-major, the rig description of `bindCollision` / `hairChain`, the
+recorded frames, `contactTips()`) is in the exporter's docstring and mirrored in the C# file's summary.

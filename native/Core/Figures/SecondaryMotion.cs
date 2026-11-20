@@ -197,6 +197,23 @@ public sealed class SecondaryMotion
         public required Quat LocalRotation;
         public required Affine BindWorldInverse;
         public List<(Bind Bind, double Share)>? AnchorBlend;
+        /// <summary>Bone-frame point of the bind vertex skinned > 50 % to the bone that reaches farthest along the
+        /// centroid lever (the contact tip of a chain's last link); zero when no vertex qualifies.</summary>
+        public V3 Reach;
+        /// <summary>Hair: today's skin row at this bone (<c>MotionGroup.anchor_blend</c>), normalised (HAIR CHAINS).</summary>
+        public List<(Bind Bind, double Share)>? TodayBlend;
+        /// <summary>Hair: the row's share of the bone the chain hangs from (<c>anchor_from</c>).</summary>
+        public double SwingShare;
+        /// <summary>Hair scratch of one frame (<see cref="HairToday.Frame"/> = the update it belongs to).</summary>
+        public HairToday? Today;
+    }
+
+    /// <summary>A hair bone's frame scratch: its rigid rest, its final world, its bind world.</summary>
+    private sealed class HairToday
+    {
+        public int Frame;
+        public Affine Rest, World;
+        public required Affine BindWorld;
     }
 
     private sealed class Sag
@@ -211,6 +228,10 @@ public sealed class SecondaryMotion
     {
         public required Bind Bind;
         public required List<Bind> Roots;
+        /// <summary>The link's tip in its bone frame: the next chain joint, else its most protruding own vertex.</summary>
+        public V3 TipLocal;
+        /// <summary>The capsules this tip is kept outside of, with the bind-rule radius factor; empty = no contact.</summary>
+        public List<(BoundCapsule Bound, double Factor)> Contacts = new();
         public List<Particle>? Chain;
         public double MotionShare;
         public Sag? Sag;
@@ -234,6 +255,15 @@ public sealed class SecondaryMotion
     private List<Particle> _particles = new();
     private List<Bind> _rigids = new();
     private readonly Dictionary<int, Particle> _driven = new();
+    /// <summary>Hair bones with today's skin row (HAIR CHAINS), parents first.</summary>
+    private List<Bind> _hair = new();
+    private int _hairFrame;
+    private CollisionPayload? _collisionPayload;
+    private Dictionary<string, BodyJoint> _bodyJoints = new();
+    private Dictionary<int, Affine> _boneInverses = new();
+    private CollisionBinding? _collision;
+    /// <summary>This update reads the capsules (a binding and not far).</summary>
+    private bool _colliding;
     private bool _far;
     private bool _disposed;
 
@@ -243,6 +273,10 @@ public sealed class SecondaryMotion
     private readonly Dictionary<int, Affine> _ownedLocal = new();
     public int ParticleCount => _particles.Count;
     public int RigidCount => _rigids.Count;
+    /// <summary>The hair bones that ride today's skin (HAIR CHAINS).</summary>
+    public int HairCount => _hair.Count;
+    /// <summary>The bound capsules (null = no collision payload, no hair contact, or another payload version).</summary>
+    public CollisionBinding? CollisionBinding => _collision;
     /// <summary>The driven nodes in solver order (for the check and the log).</summary>
     public IEnumerable<int> DrivenNodes => _particles.Select(p => p.Bind.Node);
 
@@ -278,13 +312,54 @@ public sealed class SecondaryMotion
     }
 
     /// <summary>
+    /// The second vertex pass of <c>createSecondaryMotion</c> (once the centroids are known): per bone with mass, the
+    /// bind vertex skinned > 0.5 to it (<c>REACH_WEIGHT</c>) that reaches farthest along its centroid lever, in the
+    /// bone's bind frame — the contact tip of a chain's last link. Ties keep the first vertex in skin order.
+    /// </summary>
+    public static Dictionary<int, V3> MeasureReach(IEnumerable<MotionSkin> skins, IReadOnlyDictionary<int, (V3 Centroid, double Mass)> centroids)
+    {
+        var best = new Dictionary<int, double>();
+        var reach = new Dictionary<int, V3>();
+        foreach (var s in skins)
+        {
+            int n = s.Positions.Length / 3;
+            if (n == 0) continue;
+            int stride = s.Joints.Length / n;
+            for (int i = 0; i < n; i++)
+            {
+                var raw = new V3(s.Positions[i * 3], s.Positions[i * 3 + 1], s.Positions[i * 3 + 2]);
+                for (int j = 0; j < stride; j++)
+                {
+                    if (s.Weights[i * stride + j] <= ReachWeight) continue;
+                    int index = s.Joints[i * stride + j];
+                    if (index < 0 || index >= s.JointNodes.Length) continue;
+                    int node = s.JointNodes[index];
+                    if (!centroids.TryGetValue(node, out var c) || c.Mass <= 0) continue;
+                    var vertex = s.ToBone[index].Apply(raw);
+                    double along = vertex.Dot(c.Centroid);
+                    if (along > (best.TryGetValue(node, out var b) ? b : double.NegativeInfinity))
+                    {
+                        best[node] = along;
+                        reach[node] = vertex;
+                    }
+                }
+            }
+        }
+        return reach;
+    }
+
+    /// <summary><c>REACH_WEIGHT</c>: a vertex counts for a bone's reach above this weight.</summary>
+    public const double ReachWeight = 0.5;
+
+    /// <summary>
     /// <c>createSecondaryMotion</c> with the rig in bind pose (<see cref="MotionRig.UpdateWorld"/> called on the bind
     /// locals). <paramref name="skinJoints"/>: the nodes of every skin's joints, in skin order (the bind set);
     /// <paramref name="centroids"/>: <see cref="MeasureCentroids"/> (node → centroid, mass); <paramref name="anchorBlend"/>:
     /// a node's glTF extras <c>anchor_blend</c> (bone name → share) or null.
     /// </summary>
     public SecondaryMotion(MotionRig rig, IEnumerable<int> skinJoints, IReadOnlyDictionary<int, (V3 Centroid, double Mass)> centroids,
-                           Func<int, IReadOnlyDictionary<string, double>?> anchorBlend, MotionPayload? payload)
+                           Func<int, IReadOnlyDictionary<string, double>?> anchorBlend, MotionPayload? payload,
+                           IReadOnlyDictionary<int, V3>? reach = null)
     {
         _rig = rig;
         foreach (int node in skinJoints)
@@ -304,6 +379,7 @@ public sealed class SecondaryMotion
                 b.Centroid = c.Centroid;
                 b.Mass = c.Mass;
             }
+            if (reach is not null && reach.TryGetValue(node, out var r)) b.Reach = r;
             _binds[node] = b;
             _bindOrder.Add(b);
         }
@@ -333,7 +409,7 @@ public sealed class SecondaryMotion
     public static bool Matches(MotionRig rig, MotionPayload? payload)
     {
         if (payload is null) return false;
-        var keys = payload.BoneKeys();
+        var keys = payload.MatchKeys();
         return keys.Count > 0 && rig.Names.Any(n => keys.Contains(BoneNames.Norm(n)));
     }
 
@@ -346,6 +422,8 @@ public sealed class SecondaryMotion
         var extensionNames = next?.BoneKeys() ?? new HashSet<string>();
         var nextParticles = new List<Particle>();
         var nextRigids = new List<Bind>();
+        var nextHair = new List<Bind>();
+        foreach (var b in _hair) b.TodayBlend = null;
         foreach (var (_, ps) in next?.Groups ?? Array.Empty<(string, MotionGroup)>())
         {
             var maybe = ps.Bones.Select(n => _byName.TryGetValue(BoneNames.Norm(n), out var b) ? b : null).ToList();
@@ -355,6 +433,22 @@ public sealed class SecondaryMotion
             var members = chain.Select(b => b.Node).ToHashSet();
             var roots = chain.Where(b => !members.Contains(_rig.Parent(b.Node))).ToList();
             Bind? ChildOf(Bind b) => chain.FirstOrDefault(c => _rig.Parent(c.Node) == b.Node);
+            // A hair chain's bones take today's skin rows from the payload (HAIR CHAINS). A carried joint of the chain
+            // (server-side rigid, outside `bones`) has a row too: it rides today's skin without a swing of its own.
+            if (ps.Hair && ps.AnchorBlend is { } rows)
+            {
+                var from = BoneNames.Norm(ps.AnchorFrom ?? "");
+                foreach (var (name, row) in rows)
+                {
+                    if (!_byName.TryGetValue(BoneNames.Norm(name), out var b) || nextHair.Contains(b)) continue;
+                    b.TodayBlend = AnchorEntries(b, row);
+                    if (b.TodayBlend is null) continue;
+                    b.SwingShare = b.TodayBlend.Where(e => BoneNames.Norm(_rig.Names[e.Bind.Node]) == from).Sum(e => e.Share);
+                    nextHair.Add(b);
+                }
+            }
+            // A hair chain whose every joint is carried sends no bone, only its rows.
+            if (chain.Count == 0) continue;
             foreach (var b in chain)
             {
                 var child = ChildOf(b);
@@ -498,6 +592,10 @@ public sealed class SecondaryMotion
                     particle.StraightenBlend = 0;
                 }
                 particle.Roots = roots;
+                // Contact geometry (immutable bind data): the tip.
+                var tipChild = ChildOf(bind);
+                particle.TipLocal = tipChild is not null ? tipChild.Local.Position()
+                    : bind.Reach.LengthSq() > 1e-12 ? bind.Reach : bind.Centroid * 2;
                 if (MotionGroup.BlendedFields.Any(f => particle.ParamsTo.Get(f) != ps.Get(f)))
                 {
                     particle.ParamsFrom = particle.Params;
@@ -539,13 +637,15 @@ public sealed class SecondaryMotion
                 if (chain.Count >= 2) st.Sag ??= new Sag();
             }
         }
-        foreach (var old in _particles.Select(p => p.Bind).Concat(_rigids))
+        foreach (var b in nextHair) selected.Add(b.Node);
+        foreach (var old in _particles.Select(p => p.Bind).Concat(_rigids).Concat(_hair))
             if (!selected.Contains(old.Node))
             {
                 _owned.Remove(old.Node);
                 _ownedLocal.Remove(old.Node);
             }
         _rigids = nextRigids.OrderBy(b => b.Depth).ToList();
+        _hair = nextHair.OrderBy(b => b.Depth).ToList();
         var drivenNodes = nextParticles.Select(st => st.Bind.Node).ToHashSet();
         int DrivenDepth(Particle st)
         {
@@ -554,9 +654,85 @@ public sealed class SecondaryMotion
             return depth;
         }
         _particles = nextParticles.OrderBy(DrivenDepth).ToList();
-        foreach (var b in _particles.Select(p => p.Bind).Concat(_rigids))
+        foreach (var b in _particles.Select(p => p.Bind).Concat(_rigids).Concat(_hair))
             if (_owned.Add(b.Node)) _ownedLocal[b.Node] = b.Local;   // matrixAutoUpdate = false: the bind local until driven
+        PrepareCollision();
     }
+
+    /// <summary><c>anchorEntries</c>: known bones other than <paramref name="b"/> with a finite share > 0, normalised;
+    /// null when none is left (or the row is no object).</summary>
+    private List<(Bind Bind, double Share)>? AnchorEntries(Bind b, IEnumerable<(string Joint, double Share)>? raw)
+    {
+        if (raw is null) return null;
+        var entries = raw.Select(e => (Bind: _byName.TryGetValue(BoneNames.Norm(e.Joint), out var x) ? x : null, e.Share))
+                         .Where(e => e.Bind is not null && e.Bind != b && double.IsFinite(e.Share) && e.Share > 0)
+                         .Select(e => (e.Bind!, e.Share)).ToList();
+        double total = entries.Sum(e => e.Share);
+        return total > 0 ? entries.Select(e => (e.Item1, e.Share / total)).ToList() : null;
+    }
+
+    // ---- collision (HAIR CHAINS; the extension-tip contact of the browser is not ported) -------------------------
+
+    /// <summary>
+    /// <c>setCollision(payload)</c>: the body's capsules the HAIR chains' tips are kept outside of (null = off).
+    /// <paramref name="bodyJoints"/>: every joint of every BODY skin (never a garment's) in skin order with its bone
+    /// inverse — the first entry of a name / node wins (<c>bodyJoints</c>, the bind rule's <c>boneInverses</c>).
+    /// The skinned geometry space is the bind space (three: <c>bindMatrix</c> = identity, the mesh on the root).
+    /// </summary>
+    public void SetCollision(CollisionPayload? payload, IEnumerable<(int Node, Affine BoneInverse)> bodyJoints)
+    {
+        if (_disposed) return;
+        _collisionPayload = payload;
+        _bodyJoints = new Dictionary<string, BodyJoint>();
+        _boneInverses = new Dictionary<int, Affine>();
+        foreach (var (node, inverse) in bodyJoints)
+        {
+            if (node < 0 || node >= _rig.Count) continue;
+            _bodyJoints.TryAdd(BoneNames.Norm(_rig.Names[node]), new BodyJoint(node, inverse));
+            _boneInverses.TryAdd(node, inverse);
+        }
+        _collision = null;
+        PrepareCollision();
+    }
+
+    /// <summary>
+    /// <c>prepareCollision</c> for the hair chains: bind the capsules (lazily — only with a driven link) and give each
+    /// hair link with a swing budget its contacts (<see cref="Collision.HairChainCapsules"/>) and the bind-rule factors
+    /// of its tip (<see cref="Collision.TipBindFactors"/>, the tip taken into the bind frame by the inverse bone inverse).
+    /// </summary>
+    private void PrepareCollision()
+    {
+        if (_collisionPayload is null || _particles.Count == 0)
+        {
+            _collision = null;
+            foreach (var st in _particles) st.Contacts = new();
+            return;
+        }
+        _collision ??= CollisionBinding.Bind(_collisionPayload, _bodyJoints, Affine.Identity);
+        foreach (var st in _particles)
+        {
+            st.Contacts = new();
+            double maxDeg = double.IsNaN(st.ParamsTo.MaxDeg) ? 0 : st.ParamsTo.MaxDeg;
+            double budget = Math.Max(maxDeg, st.ParamsTo.SagMaxDeg ?? 0);
+            if (_collision is null || !(budget > 0) || !st.ParamsTo.Hair) continue;
+            var bound = Collision.HairChainCapsules(_collision.Capsules, e => e.Capsule.Region);
+            var factors = Enumerable.Repeat(1.0, bound.Count).ToArray();
+            if (_boneInverses.TryGetValue(st.Bind.Node, out var inverse))
+                factors = Collision.TipBindFactors(inverse.Inverted().Apply(st.TipLocal), bound.Select(e => e.Bind).ToList());
+            st.Contacts = bound.Select((e, i) => (e, factors[i])).ToList();
+        }
+        if (!_particles.Any(st => st.Contacts.Count > 0)) _collision = null;
+    }
+
+    /// <summary>
+    /// <c>contactTips()</c> (own capsules only): every link with contacts — its bone, its tip in world space as last
+    /// rendered, its bone-frame tip, the ids of the capsules it is kept outside of.
+    /// </summary>
+    public IReadOnlyList<(string Bone, V3 Tip, V3 TipLocal, IReadOnlyList<string> Capsules)> ContactTips()
+        => _particles.Where(st => st.Contacts.Count > 0)
+                     .Select(st => (_rig.Names[st.Bind.Node], _rig.World[st.Bind.Node].Apply(st.TipLocal), st.TipLocal,
+                                    (IReadOnlyList<string>)st.Contacts.Select(c => c.Bound.Capsule.Id).ToList()))
+                     .ToList();
 
     /// <summary><c>reset()</c>: every particle starts over at its target, at rest.</summary>
     public void Reset()
@@ -575,6 +751,8 @@ public sealed class SecondaryMotion
     {
         _particles = new();
         _rigids = new();
+        _hair = new();
+        _collision = null;
         _owned.Clear();
         _ownedLocal.Clear();
         _disposed = true;
@@ -602,7 +780,7 @@ public sealed class SecondaryMotion
     /// </summary>
     public void Update(double realDelta, bool frozen = false, bool far = false)
     {
-        if (_disposed || _particles.Count == 0) return;
+        if (_disposed || (_particles.Count == 0 && _hair.Count == 0)) return;
         double dt = double.IsFinite(realDelta) ? Math.Max(0, realDelta) : 0;
         if (far != _far)
         {
@@ -611,7 +789,13 @@ public sealed class SecondaryMotion
         }
         foreach (var (n, local) in _ownedLocal) _rig.Local[n] = local;
         _rig.UpdateWorld();
+        // Capsules ride body joints no link drives: read them once, before the links (on Godot the skin's geometry
+        // space is the skeleton's bind space: mesh world · bindMatrixInverse = identity).
+        bool colliding = _colliding = _collision is not null && !_far;
+        if (colliding) _collision!.Update(n => _rig.World[n], Affine.Identity, Affine.Identity);
         _driven.Clear();
+        // A carried hair joint is at its rigid rest for the solve (HAIR CHAINS).
+        foreach (var b in _hair) _rig.Local[b.Node] = b.Local;
         foreach (var st in _particles)
         {
             st.ParamsBlend = Math.Min(1.5, st.ParamsBlend + dt);
@@ -641,8 +825,98 @@ public sealed class SecondaryMotion
             b.PureWorld = anchor;
             _rig.Local[b.Node] = _ownedLocal[b.Node] = parentWorld.Inverted().Times(anchor);
         }
+        if (!_far && _hair.Count > 0) HairPass(colliding);
         // Publish all non-driven descendants once after the chain is complete.
         _rig.UpdateWorld();
+    }
+
+    /// <summary>
+    /// Hair: today's skin under the swing (HAIR CHAINS), parents first. Per hair bone: its rigid rest (parent · bind
+    /// local — the parent's own rigid rest when that is a hair bone of this frame), its swing L = rest⁻¹ · rendered
+    /// (identity for a carried joint) scaled to the row's head share (rotation slerped toward identity, translation
+    /// scaled), and world = Σ share · (joint now · joint bind⁻¹) · bone bind · L; then the tip contact on that final
+    /// frame (<see cref="KeepHairTipOutside"/>).
+    /// </summary>
+    private void HairPass(bool colliding)
+    {
+        _hairFrame++;
+        foreach (var b in _hair)
+        {
+            _driven.TryGetValue(b.Node, out var st);
+            int parent = _rig.Parent(b.Node);
+            var hairParent = parent >= 0 && _binds.TryGetValue(parent, out var owner) && owner.Today is { } t && t.Frame == _hairFrame ? t : null;
+            // three: parent.updateWorldMatrix(false, false) — its world from its own parent's world and its local.
+            if (hairParent is null && parent >= 0) _rig.World[parent] = _rig.WorldOf(_rig.Parent(parent)).Times(_rig.Local[parent]);
+            var parentWorld = _rig.WorldOf(parent);
+            var today = b.Today ??= new HairToday { BindWorld = b.BindWorldInverse.Inverted() };
+            today.Frame = _hairFrame;
+            today.Rest = (hairParent?.Rest ?? parentWorld).Times(b.Local);
+            var deviation = st is not null ? today.Rest.Inverted().Times(_rig.World[b.Node]) : Affine.Identity;
+            // Only the share of the hair that rides the chain's hanging bone swings.
+            var (pos, q, scale) = RigMath.Decompose(deviation);
+            q = q.Slerp(Quat.Identity, 1 - b.SwingShare);
+            deviation = RigMath.Compose(pos * b.SwingShare, q, scale);
+            double xx = 0, xy = 0, xz = 0, yx = 0, yy = 0, yz = 0, zx = 0, zy = 0, zz = 0, ox = 0, oy = 0, oz = 0;
+            foreach (var (x, share) in b.TodayBlend!)
+            {
+                var d = _rig.World[x.Node].Times(x.BindWorldInverse);
+                xx += share * d.Xx; xy += share * d.Xy; xz += share * d.Xz;
+                yx += share * d.Yx; yy += share * d.Yy; yz += share * d.Yz;
+                zx += share * d.Zx; zy += share * d.Zy; zz += share * d.Zz;
+                ox += share * d.Ox; oy += share * d.Oy; oz += share * d.Oz;
+            }
+            var world = new Affine(xx, xy, xz, yx, yy, yz, zx, zy, zz, ox, oy, oz).Times(today.BindWorld).Times(deviation);
+            if (st is not null && colliding && st.Contacts.Count > 0)
+            {
+                double maxDeg = Math.Max(st.Params.MaxDeg, st.Params.SagMaxDeg ?? 0);
+                world = KeepHairTipOutside(st, world, maxDeg * st.MotionShare * Math.PI / 180);
+            }
+            today.World = world;
+            _rig.Local[b.Node] = _ownedLocal[b.Node] = (hairParent?.World ?? parentWorld).Inverted().Times(world);
+            _rig.World[b.Node] = world;
+        }
+    }
+
+    /// <summary>
+    /// <c>keepTipOutside</c>: the link's frame T · R(dynamic · rest) · S (anchor frame) evaluated at the tip; the
+    /// ordinary push (no squeeze) says how deep it is and which way out; the link turns about its joint (T's origin)
+    /// in the plane of its lever and that way out by <see cref="Collision.ContactAngle"/> — returned as the new
+    /// dynamic rotation (the turn premultiplied). The oscillator state is not touched.
+    /// </summary>
+    private static Quat KeepTipOutside(Particle st, Quat dynamic, Quat rest, Affine anchor, V3 shift, Affine scale, double limit)
+    {
+        if (!(limit > 0)) return dynamic;
+        var capsules = st.Contacts.Select(c => new CollideCapsule(c.Bound.Now.A, c.Bound.Now.B, c.Bound.Now.R * c.Factor)).ToList();
+        var contactLocal = MotionMath.TranslationOf(shift).Times(MotionMath.RotationOf(dynamic * rest)).Times(scale);
+        var tipAnchor = contactLocal.Apply(st.TipLocal);
+        var tipWorld = anchor.Apply(tipAnchor);
+        var pushed = Collision.PushOutOfCapsules(tipWorld, capsules);
+        double depth0 = Math.Sqrt((pushed - tipWorld).LengthSq());
+        if (depth0 < Collision.CollideSlack) return dynamic;
+        var lever = tipAnchor - shift;
+        var axis = lever.Cross(anchor.Inverted().Apply(pushed) - tipAnchor);
+        if (axis.LengthSq() < 1e-20 || lever.LengthSq() < 1e-12) return dynamic;
+        axis = axis.Normalized();
+        var angle = Collision.ContactAngle(a =>
+        {
+            var t = anchor.Apply(lever.ApplyAxisAngle(axis, a) + shift);
+            return Math.Sqrt((Collision.PushOutOfCapsules(t, capsules) - t).LengthSq());
+        }, depth0, limit);
+        return angle is { } turn ? Quat.FromAxisAngle(axis, turn) * dynamic : dynamic;
+    }
+
+    /// <summary>
+    /// <c>keepHairTipOutside</c>: a hair bone's final world turned about its own head by the smallest angle in
+    /// (0, limit] that puts its tip outside the contact capsules (radius × bind factor), with the hair's SQUEEZE push
+    /// (<see cref="Collision.HairTipTurn"/>): world' = T(head) · R · T(−head) · world.
+    /// </summary>
+    private static Affine KeepHairTipOutside(Particle st, Affine world, double limit)
+    {
+        var capsules = st.Contacts.Select(c => new CollideCapsule(c.Bound.Now.A, c.Bound.Now.B, c.Bound.Now.R * c.Factor)).ToList();
+        var head = world.Position();
+        if (Collision.HairTipTurn(head, world.Apply(st.TipLocal), capsules, limit) is not { } turn) return world;
+        return Affine.Translation(head.X, head.Y, head.Z).Times(Collision.RotationAxis(turn.Axis, turn.Angle))
+                     .Times(Affine.Translation(-head.X, -head.Y, -head.Z)).Times(world);
     }
 
     private void Drive(Particle st, double dt, bool frozen)
@@ -878,7 +1152,12 @@ public sealed class SecondaryMotion
             for (int col = 0; col < 3; col++)
                 e[row, col] = stateGirth * e[row, col] + (stateLength - stateGirth) * s * ax.Component(row) * ax.Component(col);
         var scale = MotionMath.Linear(e);
-        var translation = MotionMath.TranslationOf(inverseAnchor.Apply(head + headShift));
+        var shiftLocal = inverseAnchor.Apply(head + headShift);
+        var translation = MotionMath.TranslationOf(shiftLocal);
+        // The tip contact of a link without today's skin (a hair chain whose group sends no anchor_blend rows).
+        if (_colliding && st.Contacts.Count > 0 && b.TodayBlend is null)
+            dynamicQ = KeepTipOutside(st, dynamicQ, restQ, anchor, shiftLocal, scale,
+                                      Math.Max(prm.MaxDeg, prm.SagMaxDeg ?? 0) * st.MotionShare * Math.PI / 180);
         var dq = dynamicQ * restQ;
         var rotation = MotionMath.RotationOf(dq);
         var parentWorld = _rig.WorldOf(_rig.Parent(b.Node));
