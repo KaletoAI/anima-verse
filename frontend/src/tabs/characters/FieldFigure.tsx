@@ -84,8 +84,9 @@ import {
   FRONT_WAITS_FOR_BUILD, NO_BASE_BODY_NOTE, REFIT_LABEL, STEP_NAMES, autoBuildNote, baseBodyLine, bodyRows, buildButton,
   changeLine, frontBuildCovers, frontRegenerate, hairState, headerLine, noBaseBody, planRows, regenerateMeshLabel,
   retryLabel, servedLines, shortCost, stateMeshAction, stateToggleNote, statusLight, templateBuilt, templateCost,
-  templateSummary, templateTextureWarning, wornState, isOwnMeshMode, isThinPieceRefusal,
+  templateSummary, templateTextureWarning, templateCutLine, wornState, isOwnMeshMode, isThinPieceRefusal,
 } from './figureModel'
+import { PictureModal } from './TemplateCutTextureBox'
 import type { FigurePayload, FigureWornRow, GenerationPause, HairMode, PieceState, WaitingJob } from './figureModel'
 import type { Light } from './hairstylesModel'
 
@@ -470,6 +471,38 @@ function FigureNotices({ data, posting, onBuild, onDismiss, onRegenerateFront, o
   )
 }
 
+/** Plan 2026-11-20-template-cut-uv-texture: the row's "Texture: cut (IoU 0.94, ΔE 3.1)" line — with the atlas in use
+ *  a small thumbnail of it in front (click enlarges); a wanted cut the figure cannot use says why the projection
+ *  shows. */
+function CutTextureLine({ character, itemId, template }: {
+  character: string
+  itemId: string
+  template: FigureWornRow['template']
+}) {
+  const { t } = useI18n()
+  const [big, setBig] = useState(false)
+  const cut = template?.metrics?.cut
+  const line = templateCutLine(template, t)
+  const inUse = template?.metrics?.texture === 'cut' && cut?.state === 'ready' && !!cut.csig
+  const src = inUse ? `/characters/${encodeURIComponent(character)}/figure/template/${encodeURIComponent(itemId)}`
+    + `/cut/atlas.png?v=${cut!.csig}` : ''
+  const label = t('Texture from cut')
+  return (
+    <div className="ga-hint" data-cut-line={cut?.state || ''} style={{ display: 'flex', alignItems: 'center', gap: 6,
+      ...(cut && ['stale', 'rejected', 'failed'].includes(cut.state) ? { color: 'var(--ga-warn, #c77d0a)' } : {}) }}>
+      {src ? (
+        <button type="button" onClick={() => setBig(true)} title={`${label}\n${t('click to enlarge')}`}
+          style={{ width: 32, height: 32, padding: 0, cursor: 'zoom-in', background: '#fff', flex: '0 0 auto',
+            border: '1px solid var(--border, #30363d)', borderRadius: 3, overflow: 'hidden' }}>
+          <img src={src} alt={label} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+        </button>
+      ) : null}
+      <span>{line}</span>
+      {big && src ? <PictureModal src={src} label={label} onClose={() => setBig(false)} /> : null}
+    </div>
+  )
+}
+
 function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairstyles, onOpenPiece, onStateMesh,
   onChanged, onRefit, onRegenerateMesh }: {
   data: FigurePayload
@@ -600,6 +633,9 @@ function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairst
                 {row.template && templateBuilt(row.template, t) ? ` · ${templateBuilt(row.template, t)}` : ''}
                 {' · '}{templateCost(row.template?.cost, t)}
               </div>
+            ) : null}
+            {row.mode === 'template' && templateCutLine(row.template, t) ? (
+              <CutTextureLine character={character} itemId={row.item_id} template={row.template} />
             ) : null}
             {row.mode === 'template' && templateTextureWarning(row.template, t) ? (
               <div className="ga-hint" role="status" style={{ color: 'var(--ga-warn, #c77d0a)' }}>

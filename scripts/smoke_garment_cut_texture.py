@@ -97,6 +97,30 @@ dict whose ``islands.sha256`` is the [2] payload's sha.
 [9.5] ``garment_assembly._state`` of the template piece: ``texture`` "projection", then "cut:<csig>" once the item
     says "cut"; the two entries differ only in ``texture`` (the GLB sha256 is the same file's). ``_apply_cut_atlas``
     puts the atlas bytes (mime image/png) on the mesh with "cut" and leaves the GLB's image with "projection".
+Task 10 — the routes (``app/routes/figure.py``, called as functions with the same stubs) and the dialog's backend
+rules.
+[10.1] ``GET …/cut`` of "shirt9" (texture "cut", the ready record of [9.2]): ``csig`` = c9, ``record.state`` "ready",
+    ``can_generate`` True, ``blocked_reason`` "", ``upscale`` False (the item is 1200 x 1100 >= 1024), and the three
+    picture URLs ``…/cut/{template,raw,atlas}.png?v=<c9>``; ``pattern_url`` = ``…/pattern.png?v=<islands sha[:12]>``.
+    "tiny" (300 x 256) -> ``upscale`` True (the button says "+1 upscale").
+[10.2] Blocked reasons, in this order of precedence: a piece without a ready drape -> "Build the template first";
+    media off -> "Media generation is off"; an empty chain -> "Routing chain for 'Garment — texture from cut' is empty
+    — set it in /admin/settings → Media Generation → Routing" (``can_generate`` False each time).
+[10.3] ``POST …/cut/generate``: an empty chain -> HTTP 503 whose detail contains "Routing"; media off ->
+    ``MediaGenerationDisabled`` propagates (409 through the global handler); no ready drape -> HTTP 400; with all in
+    place it starts (the answer carries ``running`` True), a second POST while it runs -> HTTP 409.
+[10.4] ``GET …/cut/atlas.png`` of "shirt9" -> 200, the atlas file's bytes; ``raw`` and ``template`` too; an unknown
+    kind -> 404; "shirt4" (nothing made) -> 404.
+[10.5] ``GET …/pattern.png`` of "shirt9" -> 200, a PNG 2048 px wide (the atlas; its footer strip below) cached beside the islands file
+    as ``shirt9_<islands sha[:12]>.pattern.png``; a second GET does not render again (render count 1); a drape without
+    islands -> 404.
+[10.6] User finding 2026-11-20: the template dialog's source picture is the ITEM picture only (``source`` "item",
+    ``/inventory/items/<id>/image``) — even when a worn front view exists on disk; an item without a picture -> "".
+[10.7] User finding 2026-11-20: with texture "cut" the piece-only views are not due — ``garment_template_views.status``
+    of a SHEER top: texture "projection" -> required True, ``hub_jobs`` 2; texture "cut" -> ``optional`` True,
+    required False, ``hub_jobs`` 0, ``max_jobs`` 0. ``texture_sources`` of that sheer top without views: {} with
+    "projection" (blocked: SHEER_NEEDS_VIEWS from ``key_for``), the item picture ("item_image") with "cut";
+    ``piece_progress``'s picture step then carries no ``hub_jobs``.
 """
 import os
 import re
@@ -480,14 +504,20 @@ def files_of(item_id):
 
 SLEEVES = {"shirt": "short", "long": "long"}
 TEXTURES = {}       # Task 9: the item's stored ``texture`` param (absent = the default "projection")
+FABRICS = {}        # Task 10: the item's fabric (absent = the default)
 
 
 def fake_get_item(iid):
     params = {"kind": "top", "sleeves": SLEEVES.get(iid, "short")}
     if iid in TEXTURES:
         params["texture"] = TEXTURES[iid]
-    return {"id": iid, "category": "outfit_piece",
-            "outfit_piece": {"template": {"params": params, "source": "user"}}}
+    if iid in FABRICS:
+        params["fabric"] = FABRICS[iid]
+    out = {"id": iid, "category": "outfit_piece",
+           "outfit_piece": {"template": {"params": params, "source": "user"}}}
+    if ITEM_FILES.get(iid):
+        out["image"] = ITEM_FILES[iid].name
+    return out
 
 
 with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILES.get(iid, ""))), \
@@ -774,6 +804,154 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     mesh_p = NS(image=b"projection", mime="image/jpeg")
     ga._apply_cut_atlas(CHAR, {**g9, "item": fake_get_item("shirt9")}, mesh_p)
     check("[9.5] graft: projection keeps the GLB's image", mesh_p.image == b"projection" and mesh_p.mime == "image/jpeg")
+
+    # ------------------------------------------------------------------------------- Task 10: routes + dialog rules
+    from fastapi import HTTPException  # noqa: E402
+    from starlette.requests import Request  # noqa: E402
+
+    from app.core import garment_template_views as tv  # noqa: E402
+    from app.routes import figure as fr  # noqa: E402
+
+    def req():
+        return Request({"type": "http", "method": "GET", "headers": [], "query_string": b"", "path": "/"})
+
+    base9 = f"/characters/{CHAR}/figure/template/shirt9"
+    TEXTURES["shirt9"] = "cut"
+    g9p = fr.get_template_cut(CHAR, "shirt9", _={})
+    check("[10.1] GET cut: the ready record", g9p.get("csig") == c9 and (g9p.get("record") or {}).get("state") == "ready"
+          and g9p.get("can_generate") is True and g9p.get("blocked_reason") == "" and g9p.get("upscale") is False, g9p)
+    check("[10.1] picture URLs carry the csig", g9p.get("urls") == {
+        k: f"{base9}/cut/{k}.png?v={c9}" for k in ("template", "raw", "atlas")}, g9p.get("urls"))
+    check("[10.1] pattern URL carries the islands sha", g9p.get("pattern_url") == f"{base9}/pattern.png?v={ISLANDS_SHA[:12]}",
+          g9p.get("pattern_url"))
+    check("[10.1] a small item picture -> +1 upscale", fr.get_template_cut(CHAR, "tiny", _={}).get("upscale") is True)
+
+    DRAPES["shirt4"] = {"state": "missing", "reason": "Not draped yet", "tsig": None, "islands_path": None,
+                        "islands_sha": ""}
+    MEDIA["on"] = False
+    CHAIN["rows"] = []
+    b4 = fr.get_template_cut(CHAR, "shirt4", _={})
+    check("[10.2] no drape -> Build the template first", b4.get("can_generate") is False
+          and b4.get("blocked_reason") == "Build the template first", b4.get("blocked_reason"))
+    b9m = fr.get_template_cut(CHAR, "shirt9", _={})
+    check("[10.2] media off", b9m.get("can_generate") is False and b9m.get("blocked_reason") == "Media generation is off",
+          b9m.get("blocked_reason"))
+    MEDIA["on"] = True
+    b9r = fr.get_template_cut(CHAR, "shirt9", _={})
+    check("[10.2] empty chain", b9r.get("can_generate") is False and b9r.get("blocked_reason")
+          == "Routing chain for 'Garment — texture from cut' is empty — set it in /admin/settings → Media Generation"
+             " → Routing", b9r.get("blocked_reason"))
+
+    def post_status(item_id):
+        try:
+            fr.generate_template_cut(CHAR, item_id, _={})
+            return 200, ""
+        except HTTPException as e:
+            return e.status_code, str(e.detail)
+
+    code, detail = post_status("shirt9")
+    check("[10.3] POST, empty chain -> 503 Routing", code == 503 and "Routing" in detail, (code, detail))
+    CHAIN["rows"] = [("FakeCut*", "rule", 1)]
+    MEDIA["on"] = False
+    try:
+        fr.generate_template_cut(CHAR, "shirt9", _={})
+        check("[10.3] POST, media off -> MediaGenerationDisabled", False, "no exception")
+    except MediaGenerationDisabled:
+        check("[10.3] POST, media off -> MediaGenerationDisabled", True)
+    MEDIA["on"] = True
+    code, detail = post_status("shirt4")
+    check("[10.3] POST, no drape -> 400", code == 400, (code, detail))
+    gate10 = threading.Event()
+
+    def slow_filled(params):
+        gate10.wait(10)
+        return answer_filled(params)
+
+    backend.answer = slow_filled
+    started10 = fr.generate_template_cut(CHAR, "shirt5", _={})
+    code2, _d2 = post_status("shirt5")
+    check("[10.3] POST starts; a second POST while it runs -> 409", started10.get("running") is True and code2 == 409,
+          (started10.get("running"), code2))
+    gate10.set()
+    for _ in range(600):
+        if not gct.status(CHAR, "shirt5").get("running"):
+            break
+        time.sleep(0.05)
+    backend.answer = answer_filled
+
+    atlas_resp = fr.template_cut_image(CHAR, "shirt9", "atlas", req(), _={})
+    check("[10.4] atlas.png -> 200, the atlas file", getattr(atlas_resp, "status_code", 0) == 200
+          and Path(getattr(atlas_resp, "path", "")) == atlas9_file, getattr(atlas_resp, "path", None))
+    raw_resp = fr.template_cut_image(CHAR, "shirt9", "raw", req(), _={})
+    tpl_resp = fr.template_cut_image(CHAR, "shirt9", "template", req(), _={})
+    check("[10.4] raw.png / template.png -> 200", getattr(raw_resp, "status_code", 0) == 200
+          and getattr(tpl_resp, "status_code", 0) == 200)
+    for item_id, kind in (("shirt9", "item.json"), ("shirt4", "atlas")):
+        try:
+            fr.template_cut_image(CHAR, item_id, kind, req(), _={})
+            check(f"[10.4] {item_id} {kind} -> 404", False, "served")
+        except HTTPException as e:
+            check(f"[10.4] {item_id} {kind} -> 404", e.status_code == 404, e.status_code)
+
+    SHEETS = []
+    real_sheet = gct.render_pattern_sheet
+
+    def counting_sheet(*a, **k):
+        SHEETS.append(1)
+        return real_sheet(*a, **k)
+
+    with patch.object(gct, "render_pattern_sheet", counting_sheet):
+        p1 = fr.template_pattern_image(CHAR, "shirt9", req(), _={})
+        p2 = fr.template_pattern_image(CHAR, "shirt9", req(), _={})
+    sheet_file = _islands_file.with_name(f"shirt9_{ISLANDS_SHA[:12]}.pattern.png")
+    check("[10.5] pattern.png -> 200, cached beside the islands", getattr(p1, "status_code", 0) == 200
+          and Path(getattr(p1, "path", "")) == sheet_file and sheet_file.is_file(), getattr(p1, "path", None))
+    if sheet_file.is_file():
+        with Image.open(sheet_file) as sh:
+            check("[10.5] the sheet is atlas-wide (the footer strip below)", sh.size[0] == 2048 and sh.size[1] > 2048,
+                  sh.size)
+    check("[10.5] the second GET renders nothing", len(SHEETS) == 1 and getattr(p2, "status_code", 0) == 200,
+          len(SHEETS))
+    DRAPES["shirt4"] = {"state": "ready", "reason": "", "tsig": "t", "islands_path": None, "islands_sha": ""}
+    try:
+        fr.template_pattern_image(CHAR, "shirt4", req(), _={})
+        check("[10.5] no islands -> 404", False, "served")
+    except HTTPException as e:
+        check("[10.5] no islands -> 404", e.status_code == 404, e.status_code)
+
+    worn_file = Path(_tmp) / "worn_front.png"
+    worn_file.write_bytes(b"png")
+    with patch("app.core.garments.image_path", lambda *a, **k: worn_file):
+        fp = fr._front_picture(CHAR, "shirt9", fake_get_item("shirt9"))
+    check("[10.6] the dialog shows the item picture, never the worn view",
+          fp == {"source": "item", "url": "/inventory/items/shirt9/image"}, fp)
+    fpn = fr._front_picture(CHAR, "nopic", fake_get_item("nopic"))
+    check("[10.6] no item picture -> none", fpn.get("source") == "" and fpn.get("url") == "", fpn)
+
+    FABRICS["sheer9"] = "sheer"
+    ITEM_FILES["sheer9"] = ITEM_FILES["shirt9"]
+    TEXTURES["sheer9"] = "projection"
+    sv_p = tv.status(CHAR, "sheer9")
+    TEXTURES["sheer9"] = "cut"
+    sv_c = tv.status(CHAR, "sheer9")
+    check("[10.7] projection: the sheer views are required", sv_p.get("required") is True and sv_p.get("hub_jobs") == 2
+          and not sv_p.get("optional"), sv_p)
+    check("[10.7] cut: the views are optional, 0 jobs", sv_c.get("optional") is True and sv_c.get("required") is False
+          and sv_c.get("hub_jobs") == 0 and sv_c.get("max_jobs") == 0, sv_c)
+    TEXTURES["sheer9"] = "projection"
+    src_p = gt.texture_sources(CHAR, "sheer9")
+    TEXTURES["sheer9"] = "cut"
+    src_c = gt.texture_sources(CHAR, "sheer9")
+    check("[10.7] sheer sources: none with projection, the item picture with cut", src_p == {}
+          and src_c.get("source") == "item_image", (src_p, src_c))
+    with patch.object(gt, "drape_state", lambda *a, **k: {"state": "missing", "reason": "", "record": None}), \
+            patch("app.core.base_body.current_base", lambda *a, **k: ("bsig", "bsha")), \
+            patch("app.core.figure.worn_sets", lambda *a, **k: NS(pieces={}, own=[])), \
+            patch("app.core.figure_build.fits_piece", lambda *a, **k: False):
+        prog = gt.piece_progress(CHAR, "sheer9", item=fake_get_item("sheer9"), profile={})
+    pic = next((s for s in prog.get("steps") or [] if s.get("id") == "picture"), {})
+    check("[10.7] piece_progress: the picture step is done, no view jobs", pic.get("status") == "done"
+          and not (pic.get("numbers") or {}).get("hub_jobs"), pic)
 
 check("[8.5] no outbound connection attempt", OUTBOUND == [], OUTBOUND)
 

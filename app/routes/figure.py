@@ -81,6 +81,16 @@ body actions):
 * ``PUT  /characters/{c}/figure/template/{item_id} {params, source}`` — store the parameters on the ITEM
   (every wearer; ``garment_template.set_params``); spends nothing — the next Build re-drapes. 400 with the
   validation errors (nothing stored).
+* ``GET  /characters/{c}/figure/template/{item_id}/cut`` — the dialog's "Texture from cut" box
+  (``garment_cut_texture.dialog_state`` + picture URLs): ``{running, error, csig, record, can_generate,
+  blocked_reason, upscale, islands_sha, files, urls, pattern_url}``.
+* ``POST /characters/{c}/figure/template/{item_id}/cut/generate`` — ONE routed image job (occasion
+  ``garment_cut_texture``) in the background; 409 media off / already running, 503 empty chain (``NoRouteError``
+  text), 400 without a ready drape with islands or an item picture.
+* ``GET  /characters/{c}/figure/template/{item_id}/cut/{template|raw|atlas}.png[?v=<csig>]`` — the record's
+  pictures; 404 when missing.
+* ``GET  /characters/{c}/figure/template/{item_id}/pattern.png`` — the debug pattern sheet of the current drape's
+  islands (rendered on demand, cached by the islands sha); 404 while not built or without islands.
 * ``POST /characters/{c}/base-body/run-all`` — the Base body tab's "Run all"
   (``figure_build.start_base_run_all``, Task UI1 rule R1): the plain body's
   refresh — only the steps that are not current — else the face cleanup or the
@@ -544,28 +554,20 @@ def get_template_params(character_name: str, item_id: str, picture: bool = True,
             "progress": progress,
             # A205: the piece-only views the bake reads (``garment_template_views.status``)
             "views": _template_views(character_name, item_id),
-            # A186: the dressed front picture beside the fields (existing images only, nothing generated)
+            # the item picture beside the fields — the source of the texture (user finding 2026-11-20)
             # (``picture=0``: the dialog's progress poll, which keeps the picture it has)
             "front_picture": (_front_picture(character_name, item_id, item)
                               if picture else None)}
 
 
 def _front_picture(character_name: str, item_id: str, item: Dict[str, Any]) -> Dict[str, Any]:
-    """A186: the picture the template dialog shows beside its fields — the first that exists of: this piece's
-    worn front view (the clothing chain's ``worn`` step), the item's own picture. ``{source ("worn" / "item" /
-    ""), url}``; existing files only, nothing is generated. (A224: the outfit's dressed front never shows a
-    template piece — the views are copies of the body's.)"""
+    """The picture the template dialog shows beside its fields: the item's own picture — the source of the piece's
+    texture (the piece-only views and the texture from cut are both made from it; user finding 2026-11-20: a template
+    piece never gets the clothing chain's worn front, so that lookup is gone). ``{source ("item" / ""), url}``;
+    nothing is generated."""
     from urllib.parse import quote
-    enc, item_enc = quote(character_name, safe=""), quote(item_id, safe="")
-    try:
-        from app.core import garments
-        path = garments.image_path(character_name, item_id, "worn", "front")
-        if path is not None and path.is_file():
-            return {"source": "worn", "url": f"/characters/{enc}/garments/{item_enc}/images/worn/front"}
-    except Exception:   # no garment of this character / no worn step: the next source
-        pass
     if item.get("image"):
-        return {"source": "item", "url": f"/inventory/items/{item_enc}/image"}
+        return {"source": "item", "url": f"/inventory/items/{quote(item_id, safe='')}/image"}
     return {"source": "", "url": ""}
 
 
@@ -1000,3 +1002,79 @@ def template_view_image(character_name: str, item_id: str, view: str, attempt: i
     if not path.is_file():
         raise HTTPException(status_code=404, detail="No such view")
     return FileResponse(str(path), media_type="image/png", headers={"Cache-Control": "no-cache"})
+
+
+# --- texture from cut (plan 2026-11-20-template-cut-uv-texture, Task 10) -----------------------------------------
+
+def _template_cut_payload(character_name: str, item_id: str) -> Dict[str, Any]:
+    """``garment_cut_texture.dialog_state`` plus the picture URLs (``urls``: template / raw / atlas of the current
+    csig, "" for a missing file; the query names the csig, so a new attempt is a new URL) and ``pattern_url`` (the
+    debug sheet of the current islands, "" without islands)."""
+    from urllib.parse import quote
+    from app.core import garment_cut_texture as gct
+    state = gct.dialog_state(character_name, item_id)
+    base = f"/characters/{quote(character_name, safe='')}/figure/template/{quote(item_id, safe='')}"
+    sig = state.get("csig")
+    state["urls"] = {k: f"{base}/cut/{k}.png?v={sig}" if sig and state["files"].get(k) else ""
+                     for k in gct.CUT_FILES}
+    sha = state.get("islands_sha") or ""
+    state["pattern_url"] = f"{base}/pattern.png?v={sha[:12]}" if sha else ""
+    return state
+
+
+@router.get("/{character_name}/figure/template/{item_id}/cut")
+def get_template_cut(character_name: str, item_id: str,
+                     _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The template dialog's "Texture from cut" box: ``{running, error, csig, record, can_generate, blocked_reason,
+    upscale, islands_sha, files, urls, pattern_url}`` (``_template_cut_payload``)."""
+    _template_item(character_name, item_id)
+    return _template_cut_payload(character_name, item_id)
+
+
+@router.post("/{character_name}/figure/template/{item_id}/cut/generate")
+def generate_template_cut(character_name: str, item_id: str,
+                          _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """"Make texture from cut": ONE routed image job (occasion ``garment_cut_texture``; +1 routed upscale for an item
+    picture under 1024 px) in the background. Checked before the thread starts: media off -> 409 through the global
+    ``MediaGenerationDisabled`` handler, an empty chain -> 503 with the ``NoRouteError`` text, no ready drape with
+    islands or no item picture -> 400, already running -> 409. Answers the box's payload."""
+    from app.core import garment_cut_texture as gct
+    from app.imagegen.routing import NoRouteError
+    _template_item(character_name, item_id)
+    try:
+        started = gct.start(character_name, item_id)
+    except NoRouteError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except gct.NotReady as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not started:
+        raise HTTPException(status_code=409, detail="The texture from cut is being made already")
+    return _template_cut_payload(character_name, item_id)
+
+
+@router.get("/{character_name}/figure/template/{item_id}/cut/{kind}.png")
+def template_cut_image(character_name: str, item_id: str, kind: str, request: Request, v: Optional[str] = None,
+                       _: Dict[str, Any] = Depends(require_admin)):
+    """The cut record's model template, the model's answer or the accepted atlas (``kind`` template / raw / atlas)
+    of csig ``v`` (else the current one); 404 when it does not exist."""
+    from app.core import garment_cut_texture as gct
+    from app.core.http_files import etag_file_response
+    _template_item(character_name, item_id)
+    path = gct.cut_file(character_name, item_id, kind, v)
+    if path is None:
+        raise HTTPException(status_code=404, detail="No such picture")
+    return etag_file_response(path, request, "image/png")
+
+
+@router.get("/{character_name}/figure/template/{item_id}/pattern.png")
+def template_pattern_image(character_name: str, item_id: str, request: Request,
+                           _: Dict[str, Any] = Depends(require_admin)):
+    """The debug pattern sheet of the piece's current drape (``garment_cut_texture.pattern_sheet_file``: rendered on
+    demand, cached beside its islands by the islands sha); 404 while the piece is not built or has no islands."""
+    from app.core import garment_cut_texture as gct
+    from app.core.http_files import etag_file_response
+    _template_item(character_name, item_id)
+    path = gct.pattern_sheet_file(character_name, item_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail="The piece has no pattern islands yet — build it first")
+    return etag_file_response(path, request, "image/png")

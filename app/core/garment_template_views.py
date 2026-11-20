@@ -117,6 +117,14 @@ def is_sheer(item: Optional[Dict[str, Any]]) -> bool:
     return bool(params) and params.get("fabric") == "sheer"
 
 
+def projection_optional(item: Optional[Dict[str, Any]]) -> bool:
+    """Whether the piece's texture comes from the cut (param ``texture`` "cut"): its piece-only views then only feed
+    the projection fallback — never due, and a sheer piece is not blocked without them (user finding 2026-11-20)."""
+    from app.core.garment_template import params_of
+    params = params_of(item)
+    return bool(params) and params.get("texture") == "cut"
+
+
 def missing_views(character_name: str, item_id: str) -> List[str]:
     return [v for v in VIEWS if accepted(character_name, item_id, v) is None]
 
@@ -449,5 +457,9 @@ def status(character_name: str, item_id: str) -> Dict[str, Any]:
                     "max_jobs": JOBS_PER_VIEW})
     missing = [v["view"] for v in out if not v["accepted"]]
     sheer = is_sheer(item)
-    return {"views": out, "sheer": sheer, "required": sheer, "missing": missing, "hub_jobs": len(missing),
-            "max_jobs": JOBS_PER_VIEW * len(missing)}
+    # user finding 2026-11-20: with the texture from cut the views only feed the projection FALLBACK — optional, never
+    # due (no hub jobs counted), and a sheer piece is not blocked without them
+    optional = projection_optional(item)
+    due = [] if optional else missing
+    return {"views": out, "sheer": sheer, "required": sheer and not optional, "optional": optional,
+            "missing": missing, "hub_jobs": len(due), "max_jobs": JOBS_PER_VIEW * len(due)}

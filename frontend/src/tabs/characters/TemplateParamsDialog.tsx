@@ -14,8 +14,13 @@
  *
  * A188: the piece is drawn ON the character's plain base-body front, live while the fields change (TemplateOverlay —
  * the server registers the picture to the body's metres and returns the piece as pixel polygons); the 1.70 m
- * reference figure is gone (the person is the reference). The A186 dressed front stays as a small thumbnail under the
- * fields (click enlarges): its framing is not recorded, so nothing is drawn on it.
+ * reference figure is gone (the person is the reference). The item picture stays as a small thumbnail under the
+ * fields (click enlarges): it is the source of the texture (user finding 2026-11-20 — the piece-only views and the
+ * texture from cut are both made from it).
+ *
+ * Plan 2026-11-20-template-cut-uv-texture: a top has the field Texture (Projection / From cut) and the "Texture from
+ * cut" box (TemplateCutTextureBox); with "From cut" the piece-only views are only the projection fallback — their box
+ * is collapsed under "Projection fallback views (optional)" and they are never due.
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
@@ -30,6 +35,7 @@ import { FailureDetails } from './BuildProblem'
 import type { TemplateFieldSpec, TemplateInfo, TemplateParams, TemplateProgress } from './figureModel'
 import { FigureBuildButton } from './FigureBuildButton'
 import { TemplateOverlay } from './TemplateOverlay'
+import { TemplateCutTextureBox } from './TemplateCutTextureBox'
 import { ModelSteps } from './ModelSteps'
 import { MaterialSelect } from './WardrobeGarment'
 import type { PieceMaterialInfo } from './useGarment'
@@ -52,10 +58,10 @@ interface TemplatePayload {
   kind_defaults?: Record<string, TemplateParams>
   /** Bug round 2026-11-20: named presets per kind (`garment_template.LEGGINGS` for trousers). */
   presets?: Record<string, Record<string, Partial<TemplateParams>>>
-  /** A186: the dressed front shown beside the fields (`source` "" = none exists). */
   /** A223: the piece's material preset (`piece_material.describe`). */
   material?: PieceMaterialInfo
-  front_picture?: { source: '' | 'worn' | 'outfit' | 'item'; url: string; label?: string; earlier?: boolean } | null
+  /** The item picture shown beside the fields — the source of the texture (`source` "" = the item has none). */
+  front_picture?: { source: '' | 'item'; url: string } | null
   /** A205: the piece-only views the bake reads (`garment_template_views.status`). */
   views?: TemplateViews
 }
@@ -80,22 +86,15 @@ interface TemplateViews {
   missing: string[]
   hub_jobs: number
   max_jobs: number
+  /** The texture comes from the cut: the views only feed the projection fallback — never due. */
+  optional?: boolean
 }
 
-const PICTURE_CAPTIONS: Record<string, string> = {
-  worn: 'Worn front view', outfit: 'Outfit front', item: 'Item picture',
-}
-const PICTURE_HINTS: Record<string, string> = {
-  worn: 'This piece worn by the character, front view',
-  outfit: 'The outfit dressed, front view',
-  item: 'No dressed front yet — the item’s own picture',
-}
 const PICTURE_H = 120
-/** A full-body reference that came landscape is cut to a square around its centre (the person stands there); a
- *  T-pose view (worn front / outfit dressed front) is never cut — its arms carry the sleeves. */
+/** A picture that came landscape is shown square, a portrait one narrow. */
 const PICTURE_W = { portrait: 80, square: PICTURE_H }
 
-/** A186: the dressed front beside the fields — small, captioned with its source, click enlarges it. */
+/** The item picture beside the fields — small, captioned as the texture's source, click enlarges it. */
 function FrontPicture({ picture }: { picture?: TemplatePayload['front_picture'] }) {
   const { t } = useI18n()
   const [big, setBig] = useState(false)
@@ -105,27 +104,23 @@ function FrontPicture({ picture }: { picture?: TemplatePayload['front_picture'] 
     borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
     background: 'var(--bg-subtle, #161b22)' }
   const src = picture?.source && picture.url && !broken ? picture.url : ''
-  const caption = src ? t(picture!.earlier ? 'Outfit front (earlier outfit)' : PICTURE_CAPTIONS[picture!.source]) : ''
-  const hint = src ? [t(PICTURE_HINTS[picture!.source]), picture!.label || ''].filter(Boolean).join(' — ') : ''
+  const caption = t('Item picture — source of the texture')
   return (
     <figure style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: 4, flex: '0 0 auto' }}
       data-front-picture={src ? picture?.source : 'none'}>
       {src ? (
         <button type="button" style={{ ...box, padding: 0, cursor: 'zoom-in' }} onClick={() => setBig(true)}
-          title={`${hint}\n${t('click to enlarge')}`}>
+          title={`${caption}\n${t('click to enlarge')}`}>
           <img src={thumbUrl(src, thumbWidth(PICTURE_H))} alt={caption}
             onError={() => setBroken(true)}
             onLoad={(e) => setWide(e.currentTarget.naturalWidth >= 0.9 * e.currentTarget.naturalHeight)}
-            style={wide && picture!.url.includes('/reference-image/')
-              ? { width: '100%', height: '100%', objectFit: 'cover' }
-              : { maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+            style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
         </button>
       ) : (
-        <div style={box} className="ga-hint">{t('No dressed front yet')}</div>
+        <div style={box} className="ga-hint">{t('No item picture')}</div>
       )}
       <figcaption className="ga-form-hint" style={{ textAlign: 'center', maxWidth: wide ? PICTURE_W.square : PICTURE_W.portrait }}>
-        {src ? caption : t('Generated with the outfit’s dressed views (Figure tab)')}
-        {src && picture!.source === 'item' ? <><br />{t('No dressed front yet')}</> : null}
+        {caption}<br />{t('Edit it in the Items tab')}
       </figcaption>
       {big && src ? createPortal(
         <div className="ga-modal-backdrop" style={{ zIndex: 2000, cursor: 'zoom-out' }} onMouseDown={() => setBig(false)}
@@ -146,7 +141,7 @@ const ORDER: (keyof TemplateParams)[] = ['kind', 'fabric', 'opacity', 'length_m'
   'sleeve_fit', 'front', 'collar',
   'rise', 'waistband', 'sides', 'string_width_m', 'leg_length_m', 'leg_cut', 'back_coverage', 'side_width_m',
   'cup_style', 'cup_coverage', 'push_up', 'underband_m', 'center_gore', 'closure', 'straps', 'fingers', 'length', 'cuff',
-  'tights_style', 'feet', 'garters', 'trouser_length', 'leg_shape', 'seat', 'trouser_waist', 'fly', 'hem']
+  'tights_style', 'feet', 'garters', 'trouser_length', 'leg_shape', 'seat', 'trouser_waist', 'fly', 'hem', 'texture']
 /** Fields shown as a 0…1 number rather than centimetres. */
 const SHARES = new Set<keyof TemplateParams>(['flare', 'fit', 'sleeve_fit', 'opacity', 'leg_cut', 'back_coverage', 'cup_coverage', 'push_up'])
 
@@ -294,7 +289,11 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
     setError('')
     try {
       await apiPut(path, { params: draft, source })
-      setSaved(t('Saved — the next Build drapes it (CPU, 0 hub jobs)'))
+      // the texture source alone never re-drapes (TEXTURE_ONLY): only the figure is assembled again
+      const textureOnly = !!data?.params && (Object.keys(draft) as (keyof TemplateParams)[])
+        .every((k) => k === 'texture' || draft[k] === data.params?.[k])
+      setSaved(t(textureOnly ? 'Saved — the figure is assembled again with this texture (CPU, 0 hub jobs)'
+        : 'Saved — the next Build drapes it (CPU, 0 hub jobs)'))
       toast(t('Template parameters saved'), 'success')
       onSaved()
       reloadProgress()
@@ -380,6 +379,14 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                             {t('A lapel opens the front in a V down to the chest; it replaces the neckline.')}
                           </span>
                         ) : null}
+                        {key === 'texture' ? (
+                          <span className="ga-form-hint" data-texture-note={draft.texture || 'projection'}>
+                            {t(draft.texture === 'cut'
+                              ? 'The pattern pieces filled from the item picture (Texture from cut, below). Until it is made, the projection is shown.'
+                              : 'Projected from the piece-only views or the item picture during the drape.')}
+                            {' '}{t('A switch only re-assembles the figure (no new drape, 0 hub jobs).')}
+                          </span>
+                        ) : null}
                         {key === 'opacity' ? (
                           <span className="ga-form-hint">
                             {t('Only the material: a change re-assembles the figure, no new drape.')}
@@ -426,9 +433,21 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
               </div>
             </div>
           ) : null}
+          {data && draft && (data.kind_fields?.[draft.kind] || []).includes('texture') ? (
+            <TemplateCutTextureBox path={path} texture={data.params?.texture || 'projection'}
+              refreshKey={`${data.progress?.state || ''}:${data.progress?.built_at || ''}`} />
+          ) : null}
           {data?.views ? (
-            <TemplateViewsBox path={path} views={data.views}
-              onChange={(v) => { setData((d) => (d ? { ...d, views: v } : d)); reloadProgress() }} />
+            data.views.optional ? (
+              <details data-template-views="optional">
+                <summary className="ga-hint" style={{ cursor: 'pointer' }}>{t('Projection fallback views (optional)')}</summary>
+                <TemplateViewsBox path={path} views={data.views}
+                  onChange={(v) => { setData((d) => (d ? { ...d, views: v } : d)); reloadProgress() }} />
+              </details>
+            ) : (
+              <TemplateViewsBox path={path} views={data.views}
+                onChange={(v) => { setData((d) => (d ? { ...d, views: v } : d)); reloadProgress() }} />
+            )
           ) : null}
           {data?.progress ? (
             <TemplateProgressBox character={character} progress={data.progress} onStarted={reloadProgress} />
@@ -547,12 +566,15 @@ function TemplateViewsBox({ path, views, onChange }: {
       setBusy('')
     }
   }
-  const cost = views.hub_jobs
+  const cost = views.optional && views.missing.length
+    ? t('Optional — Generate spends 1 hub job (at most 2) per view')
+    : views.hub_jobs
     ? t('{n} hub jobs (at most {max} when an attempt is refused)').replace('{n}', String(views.hub_jobs))
       .replace('{max}', String(views.max_jobs))
     : t('Both views exist — Regenerate spends 1 hub job (at most 2) per view')
   return (
-    <div role="group" aria-label={t('Piece-only views')} data-template-views={views.missing.length ? 'due' : 'done'}
+    <div role="group" aria-label={t('Piece-only views')}
+      data-template-views={views.optional ? 'optional' : views.missing.length ? 'due' : 'done'}
       style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '6px 8px',
         border: '1px solid var(--border, #30363d)', borderRadius: 6 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -560,9 +582,11 @@ function TemplateViewsBox({ path, views, onChange }: {
         <span className="ga-hint">{cost}</span>
       </div>
       <div className="ga-hint" style={views.required && views.missing.length ? WARN : undefined}>
-        {t(views.sheer
-          ? 'Sheer fabric: the texture is baked only from these views — the fabric alone, nothing behind or through it. Required.'
-          : 'The texture is baked from these views when they exist, else from the item picture. A new view re-drapes the piece at the next Build (CPU).')}
+        {t(views.optional
+          ? 'The texture comes from the cut: these views only colour the projection the figure falls back to. Not needed.'
+          : views.sheer
+            ? 'Sheer fabric: the texture is baked only from these views — the fabric alone, nothing behind or through it. Required.'
+            : 'The texture is baked from these views when they exist, else from the item picture. A new view re-drapes the piece at the next Build (CPU).')}
       </div>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
         {views.views.map((c) => {

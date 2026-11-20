@@ -733,3 +733,86 @@ def status(character_name: str, item_id: str) -> dict:
     sig = current_csig(character_name, item_id)
     return {"running": state == "running", "error": state if state not in ("", "running", "done") else "",
             "csig": sig, "record": read_record(character_name, item_id, sig) if sig else {}}
+
+
+# --- the dialog (plan Task 10) ----------------------------------------------------------------------------------
+#
+# The template dialog's "Texture from cut" box reads ``dialog_state``: the job's status, whether the button may start
+# a job and, when not, the reason written under it (English; the React client puts it through ``t()``). The same
+# checks ``start`` makes synchronously, in the order the user has to fix them.
+
+#: The button's disabled reasons (``dialog_state``).
+BLOCKED_BUILD = "Build the template first"
+BLOCKED_MEDIA = "Media generation is off"
+BLOCKED_ROUTING = ("Routing chain for 'Garment — texture from cut' is empty — set it in /admin/settings → Media "
+                   "Generation → Routing")
+BLOCKED_PICTURE = "The item has no picture"
+#: The record files the dialog shows side by side (``cut_file``): the model template, the model's answer, the atlas.
+CUT_FILES = ("template", "raw", "atlas")
+
+
+def _item_side(item_id: str) -> int:
+    """The item picture's long side in px (header only), 0 without a picture."""
+    try:
+        with Image.open(_item_path(item_id)) as im:
+            return max(im.size)
+    except (NotReady, OSError):
+        return 0
+
+
+def dialog_state(character_name: str, item_id: str) -> dict:
+    """``status`` plus ``can_generate``, ``blocked_reason`` ("" when it can; else ``BLOCKED_BUILD`` (no ready drape
+    with islands), ``BLOCKED_PICTURE``, ``BLOCKED_MEDIA`` or ``BLOCKED_ROUTING``, in that order), ``upscale`` (the item
+    picture is under ``MIN_ITEM_SIDE``: the job spends one routed upscale first), ``islands_sha`` and ``files`` (which
+    of ``CUT_FILES`` exist for the current csig)."""
+    from app.imagegen import routing as _routing
+    from app.imagegen.base import media_generation_enabled
+    out = status(character_name, item_id)
+    drape = current_drape(character_name, item_id)
+    side = _item_side(item_id)
+    if drape["state"] != "ready" or drape.get("islands_path") is None or not drape.get("islands_sha"):
+        blocked = BLOCKED_BUILD
+    elif not side:
+        blocked = BLOCKED_PICTURE
+    elif not media_generation_enabled():
+        blocked = BLOCKED_MEDIA
+    elif not _routing.chain_for(CUT_OCCASION):
+        blocked = BLOCKED_ROUTING
+    else:
+        blocked = ""
+    sig = out.get("csig")
+    stem = _stem(character_name, item_id, sig) if sig else None
+    out.update({"can_generate": not blocked and not out["running"], "blocked_reason": blocked,
+                "upscale": 0 < side < MIN_ITEM_SIDE,
+                "islands_sha": str(drape.get("islands_sha") or "") if drape.get("islands_path") else "",
+                "files": {k: bool(stem and _file(stem, f".{k}.png").is_file()) for k in CUT_FILES}})
+    return out
+
+
+def cut_file(character_name: str, item_id: str, kind: str, sig: str | None = None) -> Path | None:
+    """One of ``CUT_FILES`` of (item, ``sig``) — ``sig`` the csig a URL names (a 12-hex key), else the piece's current
+    one; None when it does not exist (or ``kind`` / ``sig`` is not one)."""
+    if kind not in CUT_FILES:
+        return None
+    if sig is None or not _CSIG_RE.fullmatch(str(sig)):
+        sig = current_csig(character_name, item_id)
+    if not sig:
+        return None
+    path = _file(_stem(character_name, item_id, sig), f".{kind}.png")
+    return path if path.is_file() else None
+
+
+def pattern_sheet_file(character_name: str, item_id: str) -> Path | None:
+    """The DEBUG pattern sheet (``render_pattern_sheet``) of the piece's CURRENT ready drape, rendered on demand and
+    cached beside its ``islands.json`` as ``{item}_{islands sha[:12]}.pattern.png`` (a re-drape with new islands gets
+    a new file; the dialog's URL carries the same sha). None when the piece is not built or has no islands (a kind
+    still on the grid UV)."""
+    drape = current_drape(character_name, item_id)
+    path, sha = drape.get("islands_path"), str(drape.get("islands_sha") or "")
+    if drape["state"] != "ready" or path is None or not sha:
+        return None
+    sheet = Path(path).with_name(f"{item_id}_{sha[:12]}.pattern.png")
+    if not sheet.is_file():
+        islands = json.loads(Path(path).read_text(encoding="utf-8"))
+        _write_bytes(sheet, _png(render_pattern_sheet(islands)))
+    return sheet

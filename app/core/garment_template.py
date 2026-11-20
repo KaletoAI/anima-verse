@@ -1833,7 +1833,8 @@ def _file_sha(path: str) -> str:
 def texture_sources(character_name: str, item_id: str) -> Dict[str, str]:
     """``{front, back, source}`` (A205 first): the template piece's own piece-only views
     (``garment_template_views``, ``source`` "piece_only"; a missing side takes the other side's view) — for a SHEER
-    piece ONLY these, both of them, never the item picture ({} until they exist). Else the piece's newest cut-out (piece-only) views from the garment store
+    piece ONLY these, both of them, never the item picture ({} until they exist) — unless its texture comes from the
+    cut (``garment_template_views.projection_optional``: the projection is only the fallback). Else the piece's newest cut-out (piece-only) views from the garment store
     (``images/{item}_{fsig}_cutout_{front,back}.png``) whenever ANY exists — a missing side takes the other
     side's view (Ruling A141: the cut-outs are always preferred) —, else its item picture for both sides
     (``source`` "item_image"; ``run_drape`` masks it to the garment). {} without any picture."""
@@ -1842,7 +1843,8 @@ def texture_sources(character_name: str, item_id: str) -> Dict[str, str]:
     from app.models.inventory import get_item, get_item_image_path
     own = {v: tv.accepted(character_name, item_id, v) for v in tv.VIEWS}
     item = get_item(item_id)
-    if tv.is_sheer(item):
+    # with the texture from cut the projection is only the fallback: a sheer piece then takes what any piece takes
+    if tv.is_sheer(item) and not tv.projection_optional(item):
         if own["front"] is None or own["back"] is None:
             return {}
         return {"front": str(own["front"]), "back": str(own["back"]), "source": "piece_only"}
@@ -2003,7 +2005,7 @@ def key_for(character_name: str, item_id: str, *, base_sha: str, lower: List[str
     sources = texture_sources(character_name, item_id)
     if not sources:
         from app.core import garment_template_views as tv
-        if tv.is_sheer(item):
+        if tv.is_sheer(item) and not tv.projection_optional(item):
             return None, tv.SHEER_NEEDS_VIEWS, {}
         return None, NEEDS_PARAMS.replace("parameters", "picture"), {}
     tex = _md5([_file_sha(sources["front"]), _file_sha(sources["back"])])
@@ -2177,7 +2179,8 @@ def piece_progress(character_name: str, item_id: str, *, profile: Optional[Dict[
     params = params_of(item)
     sources = texture_sources(character_name, item_id)
     from app.core import garment_template_views as tv
-    sheer_missing = tv.missing_views(character_name, item_id) if tv.is_sheer(item) else []
+    sheer_missing = (tv.missing_views(character_name, item_id)
+                     if tv.is_sheer(item) and not tv.projection_optional(item) else [])
     # A176: only while the Build still has this piece's drape ahead of it (or runs it) — a Build that already
     # draped it and now waits on another piece (Dario, 2026-11-17: 11 min behind a shoe mesh) shows the outcome,
     # never "running" until the whole Build ends.

@@ -350,6 +350,9 @@ export interface TemplateParams {
   band_drop_m?: number
   lacing?: string
   lace_depth_m?: number
+  /** Plan 2026-11-20-template-cut-uv-texture (tops): where the texture comes from — the projection bake of the
+   *  piece-only views, or the "texture from cut" atlas. A switch only re-assembles (CPU, no drape). */
+  texture?: string
 }
 
 /** A223: the close-fitting kinds cut from the body's surface (`garment_template.FITTED_KINDS`): no length, flare or
@@ -413,7 +416,10 @@ export interface TemplateInfo {
     pose_shapes?: string[]; /** Ruling A142: how many lower template drapes it was draped over. */
     layered_over?: number; /** Over the time budget: shown as "slow" — never a refusal. */ slow?: boolean
     /** Bug round 2026-11-20: a poor texture (`garment_template.texture_warning`) — warned, never a refusal. */
-    texture_warning?: TextureWarning | null } | null
+    texture_warning?: TextureWarning | null
+    /** The "texture from cut" state of a ready drape (`garment_template.cut_info`); `texture` is "cut" while its
+     *  atlas is in use. */
+    cut?: TemplateCut | null } | null
   cost: { llm_calls: number; hub_jobs: number; cpu_s: number }
   /** The failed drape of the current key as data (`state` "failed"); null otherwise. */
   failure?: StepFailure | null
@@ -426,13 +432,42 @@ export interface TextureWarning {
   iou: number | null
   low_coverage: boolean
   low_iou: boolean
+  /** A wanted cut texture the figure cannot use (stale / rejected / failed) — said by `templateCutLine`. */
+  cut?: { state: string; reason: string; text: string }
+}
+
+/** The figure row's "texture from cut" state (`figure_build._template_row` → `metrics.cut`). */
+export interface TemplateCut {
+  state: 'ready' | 'off' | 'missing' | 'stale' | 'rejected' | 'failed'
+  reason: string
+  iou: number | null
+  de_after: number | null
+  px_per_cm: number | null
+  csig: string | null
+}
+
+/** "Texture: cut (IoU 0.94, ΔE 3.1)" / "Texture: projection — no cut texture yet" / "… — cut out of date" /
+ *  "… — cut rejected: <reason>" — the figure row's line of a piece whose texture is wanted from the cut; "" when the
+ *  piece does not want it (`off`). */
+export function templateCutLine(info: TemplateInfo | null | undefined, t: Tr = EN): string {
+  const c = info?.state === 'ready' ? info.metrics?.cut : null
+  if (!c || c.state === 'off') return ''
+  if (c.state === 'ready') {
+    return t('Texture: cut (IoU {iou}, ΔE {de})').replace('{iou}', (c.iou ?? 0).toFixed(2))
+      .replace('{de}', c.de_after == null ? '–' : c.de_after.toFixed(1))
+  }
+  if (c.state === 'missing') return t('Texture: projection — no cut texture yet')
+  if (c.state === 'stale') return t('Texture: projection — cut out of date')
+  return t(c.state === 'rejected' ? 'Texture: projection — cut rejected: {reason}' : 'Texture: projection — cut failed: {reason}')
+    .replace('{reason}', t(c.reason || 'no reason'))
 }
 
 /** "Texture: the picture covers only 43 % of the piece · its outline matches the template's by 20 % — …" — the
  *  Figure row's warning of a poor texture; "" when there is none. */
 export function templateTextureWarning(info: TemplateInfo | null | undefined, t: Tr = EN): string {
   const w = info?.state === 'ready' ? info.metrics?.texture_warning : null
-  if (!w) return ''
+  // a cut texture's state is the row's own line (`templateCutLine`): here only the projection bake's marks
+  if (!w || !(w.low_coverage || w.low_iou)) return ''
   const pct = (v: number | null) => String(Math.round((v ?? 0) * 100))
   const parts: string[] = []
   if (w.low_coverage) parts.push(t('the picture covers only {n} % of the piece').replace('{n}', pct(w.coverage)))
@@ -469,6 +504,7 @@ export const TEMPLATE_CHOICE_LABELS: Record<string, string> = {
   shorts: 'Shorts', knee: 'To the knee', capri: 'Capri (mid-calf)', ankle: 'Ankle (cropped)',
   skinny: 'Skinny', cargo: 'Cargo (loose)', elastic: 'Elastic band', belt: 'Belt band', zip: 'Zip',
   buttons: 'Buttons', plain: 'Plain', cuffed: 'Cuffed (turn-up)',
+  projection: 'Projection', cut: 'From cut',
 }
 
 /** A233: a choice whose word differs by field (`full` is a glove's full fingers and a trouser's full length). */
@@ -506,7 +542,7 @@ export const TEMPLATE_FIELD_LABELS: Record<keyof TemplateParams, string> = {
   band_m: 'Elastic band height', band_drop_m: 'Band below the shoulder line', lacing: 'Lacing',
   lace_depth_m: 'Lacing depth',
   trouser_length: 'Leg length', leg_shape: 'Leg shape', seat: 'Seat (above the crotch)', trouser_waist: 'Waist finish', fly: 'Fly (painted)',
-  hem: 'Hem',
+  hem: 'Hem', texture: 'Texture',
 }
 
 /** A204: one line per fabric under the select — what the cloth does and what a switch costs. */
@@ -621,7 +657,8 @@ export function templateBuilt(info: TemplateInfo, t: Tr = EN): string {
       .replace('{s}', String(Math.round(m.wall_s))))
   }
   if (m?.stretch_max != null) parts.push(t('stretch {n}').replace('{n}', m.stretch_max.toFixed(2)))
-  if (m?.texture) parts.push(m.texture === 'cutout' ? t('texture from the cut-out views')
+  // a texture from cut is said by its own line (`templateCutLine`)
+  if (m?.texture && m.texture !== 'cut') parts.push(m.texture === 'cutout' ? t('texture from the cut-out views')
     : t('texture from the item picture'))
   if (m?.pose_shapes?.length) parts.push(t('shaped for {poses}').replace('{poses}',
     m.pose_shapes.map(p => t(POSE_SHAPE_LABELS[p] || p)).join(', ')))
