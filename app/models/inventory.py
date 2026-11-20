@@ -41,7 +41,7 @@ VALID_OBTAIN_METHODS = ("found", "given", "crafted", "purchased", "quest_reward"
 # Outfit body slots, ordered as in prompt assembly.
 VALID_PIECE_SLOTS = (
     "underwear_top", "underwear_bottom", "legs",
-    "top", "bottom", "outer", "feet", "hands", "neck", "head")
+    "top", "bottom", "outer", "feet", "hands", "neck", "face", "head")
 
 
 # ============================================================

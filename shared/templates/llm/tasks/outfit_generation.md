@@ -42,13 +42,15 @@ Generate a COHERENT OUTFIT as a list of individual pieces. Rules:
 - Each piece has a `slots` array — list every slot the garment physically occupies. Allowed: {{ allowed_slots }}
 - Only generate required slots that are NOT already marked [EQUIPPED] above — an equipped piece in a slot satisfies that slot and should not be duplicated.
 - Add outer (jacket/coat) only when context (weather/activity) fits.
-- head/neck/legs/underwear_* only if the style demands them (e.g. sleepwear, sportswear) or required above.
+- head/face/neck/legs/underwear_* only if the style demands them (e.g. sleepwear, sportswear) or required above.
 - prompt_fragment is the concrete visual description used for image generation
   (e.g. "black leather moto jacket, silver zippers"). NO character names, NO poses.
 - name is short, 2-4 words (e.g. "Black Leather Jacket"). {{ language_hint }}
 
 SLOT semantics (MANDATORY — place each garment in the correct slot):
 - head: hats, caps, headbands, hairbands, fascinators, earrings.
+- face: glasses, sunglasses, spectacles, monocles — worn on the face, so a hat
+  can be worn with them.
 - neck: necklaces, chokers, scarves, ties, bowties. ONLY items worn around
   the neck — NEVER garments (no shirts, no aprons, no underwear).
 - outer: jackets, coats, blazers, cardigans, hoodies, vests, boleros.

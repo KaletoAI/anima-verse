@@ -361,6 +361,7 @@ class OutfitCreationSkill(BaseSkill):
                          "loafers", "pumps", "schuhe", "stiefel"],
                 "hands": ["gloves", "glove", "gauntlet", "mittens", "arm warmers",
                           "handschuh", "stulpen"],
+                "face": ["glasses", "spectacles", "eyewear", "monocle", "brille"],
                 "head": ["hat", "cap", "headband", "fascinator", "hut", "muetze"],
                 "neck": ["necklace", "choker", "scarf", "tie", "bowtie",
                          "halskette", "schal", "krawatte"],

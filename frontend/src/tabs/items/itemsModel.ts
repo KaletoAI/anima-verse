@@ -224,6 +224,7 @@ export const RARITIES: Rarity[] = ['common', 'rare', 'unique']
 
 export const VALID_PIECE_SLOTS = [
   'head',
+  'face',
   'neck',
   'outer',
   'top',

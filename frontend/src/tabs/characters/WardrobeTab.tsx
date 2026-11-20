@@ -38,7 +38,7 @@ import { thumbUrl, thumbWidth } from '@anima/player-ui'
 const SLOT_ANCHOR: Record<string, [number, number]> = {
   head: [50, 6], neck: [50, 19], outer: [33, 40], top: [50, 33],
   underwear_top: [66, 33], bottom: [50, 55], underwear_bottom: [66, 55],
-  legs: [50, 73], feet: [50, 92], hands: [10, 54],
+  legs: [50, 73], feet: [50, 92], hands: [10, 54], face: [50, 11],
 }
 
 function ItemIcon({ itemId, hasImage, emoji, size }: { itemId: string; hasImage: boolean; emoji: string; size: number }) {

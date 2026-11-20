@@ -26,6 +26,9 @@ const DEFAULT_SLOT_PATHS: SlotPathMap = {
   // Head — oval covering the cranium.
   head: 'M 448 20 a 70 90 0 1 0 0.1 0 Z',
 
+  // Face — a band across the eyes (glasses).
+  face: 'M 392 92 L 504 92 L 504 116 L 392 116 Z',
+
   // Neck — between jaw and collarbone.
   neck: 'M 420 180 L 480 180 L 520 220 L 380 220 Z',
 
@@ -67,6 +70,7 @@ const SLOT_ORDER_PAINT = [
   'underwear_top',
   'underwear_bottom',
   'head',
+  'face',
   'neck',
   'feet',
   'hands',
