@@ -420,6 +420,25 @@ def has_sleeves(params: Dict[str, Any]) -> bool:
     return has_bodice(params) and params["shoulders"] in ("covered", "off_shoulder") and params["sleeves"] != "none"
 
 
+def layer_ease(params: Dict[str, Any], over_sleeves: bool) -> float:
+    """Bug round 2026-11-20: the extra sleeve / armhole ease of a jacket with sleeves draped over a lower layer with
+    sleeves (``JACKET_SLEEVE_EASE``), else 0."""
+    return JACKET_SLEEVE_EASE if over_sleeves and params["kind"] == "jacket" and has_sleeves(params) else 0.0
+
+
+def over_sleeved_layer(item_id: str, kind: str, lower: List[str]) -> bool:
+    """Bug round 2026-11-20: whether a jacket drapes over a lower TEMPLATE layer with sleeves (``collider_pieces``,
+    ``has_sleeves``). Own-mesh pieces under it say nothing about their sleeves; they keep the A200 shrink / drop
+    fallback (``drape_with_fallback``)."""
+    if kind != "jacket":
+        return False
+    for _other, it in collider_pieces(item_id, kind, lower):
+        p = params_of(it)
+        if p is not None and has_sleeves(p):
+            return True
+    return False
+
+
 def off_shoulder(params: Dict[str, Any]) -> bool:
     """A229: a top or dress cut off the shoulders (Carmen / Bardot)."""
     return params["kind"] in ("top", "dress") and params.get("shoulders") == "off_shoulder"
@@ -1047,7 +1066,7 @@ GRID_M = 0.015
 COLS = 41
 
 
-def outline(params: Dict[str, Any], meas: Dict[str, float]) -> Dict[str, Any]:
+def outline(params: Dict[str, Any], meas: Dict[str, float], *, over_sleeves: bool = False) -> Dict[str, Any]:
     """The piece's side profile: ``knots`` = [(height above the hem in metres, full circumference)]
     ascending from the hem (0) to the top, the top height ``top_y`` (Y-up world) and the pinned top. A skirt
     runs waist → hem; a dress runs chest band → waist → hem.
@@ -1067,7 +1086,7 @@ def outline(params: Dict[str, Any], meas: Dict[str, float]) -> Dict[str, Any]:
     length = params["length_m"]
     top_y = waist_y
     if has_bodice(params):
-        return _bodice_outline(params, meas, waist_y, waist_c, hem_c)
+        return _bodice_outline(params, meas, waist_y, waist_c, hem_c, over_sleeves=over_sleeves)
     if strapless_top(params):
         return _strapless_top_outline(params, meas, waist_y)
     knots = _skirt_knots(meas, waist_y, length, hem_c, waist_c)
@@ -1090,6 +1109,17 @@ BODICE_EASE = (0.03, 0.17)
 JACKET_EASE = 0.05
 #: Sleeve ease: the arm girth times (1 + SLEEVE_EASE[0] + SLEEVE_EASE[1] * sleeve_fit) + EASE_M.
 SLEEVE_EASE = (0.05, 0.40)
+#: Bug round 2026-11-20: a jacket draped over a lower TEMPLATE layer with sleeves (``over_sleeved_layer``) adds this to
+#: its sleeve ease, and the same to its bodice ease from the chest band (the armhole's bottom) up, blended in over
+#: ``ARMHOLE_BLEND_M`` below it (the armhole room: the wider sleeve hangs lower from the arm's top, A179, and pulled
+#: the armhole's bottom — 1.38 at the armpit with the sleeve alone at +0.08). Without it the jacket sleeve had exactly
+#: the rest girth of the sleeve under it (both sleeve_fit 0.3: 0.371 m x 1.17 + 0.02 = 0.454 m at the shirt's hem)
+#: and one edge over that hem stretched to 1.329. The value is one cloth layer round the arm: the jacket stands its
+#: collision distance (4 mm) off the shirt sleeve's collider shell (4 mm), 2 x pi x 0.008 = 0.0503 m more girth, over
+#: Kai's mean arm girth along the shirt sleeve (shares 0..0.3, 0.4212 m) = 0.119 -> 0.12. Derivation and the girths:
+#: ``scripts/smoke_jacket_layer_ease.py``.
+JACKET_SLEEVE_EASE = 0.12
+ARMHOLE_BLEND_M = 0.06
 #: Neck opening: the neck girth's radius + NECK_CLEAR_M (crew); a boat neck opens to BOAT_SHARE of the half shoulder
 #: width.
 NECK_CLEAR_M = 0.012
@@ -1161,16 +1191,22 @@ def _skirt_knots(meas: Dict[str, Any], top_y: float, length: float, hem_c: float
 
 
 def _bodice_outline(params: Dict[str, Any], meas: Dict[str, Any], waist_y: float, waist_c: float,
-                    hem_c: float) -> Dict[str, Any]:
+                    hem_c: float, *, over_sleeves: bool = False) -> Dict[str, Any]:
     """The side profile of a piece with a bodice (Ruling A142): from the hem up the body's own girth with the ease
     (``BODICE_EASE``; a dress's skirt part follows the skirt profile ``_skirt_knots`` below its waist line, read at
     this 2 cm grid) to the shoulder line
-    ``top_y`` = shoulder joints + ``SHOULDER_TOP_M``."""
+    ``top_y`` = shoulder joints + ``SHOULDER_TOP_M``. A jacket ``over_sleeves`` has armhole room: + ``layer_ease``
+    from the chest band up, blended in over ``ARMHOLE_BLEND_M`` below it."""
     import numpy as np
     if "shoulder_y" not in meas:
         raise ValueError("the body has no arm / neck joints to fit a bodice to")
     top_y = _length_origin(meas, None)
     ease = 1.0 + BODICE_EASE[0] + BODICE_EASE[1] * params["fit"] + (JACKET_EASE if params["kind"] == "jacket" else 0)
+    room = layer_ease(params, over_sleeves)
+
+    def eased(y: float) -> float:
+        w = min(1.0, max(0.0, 1.0 - (meas["band_y"] - y) / ARMHOLE_BLEND_M)) if room else 0.0
+        return _torso_girth(meas, y) * (ease + room * w) + EASE_M
     skirt_h: List[float] = []
     skirt_c: List[float] = []
     if params["kind"] == "dress":
@@ -1187,9 +1223,9 @@ def _bodice_outline(params: Dict[str, Any], meas: Dict[str, Any], waist_y: float
         if params["kind"] == "dress" and y <= waist_y:
             c = float(np.interp(y - hem_y, skirt_h, skirt_c))
         else:
-            c = _torso_girth(meas, y) * ease + EASE_M
+            c = eased(y)
         knots.append((round(y - hem_y, 4), round(c, 4)))
-    knots.append((round(top_y - hem_y, 4), round(_torso_girth(meas, top_y) * ease + EASE_M, 4)))
+    knots.append((round(top_y - hem_y, 4), round(eased(top_y), 4)))
     return {"knots": knots, "top_y": round(top_y, 4), "waist_y": round(waist_y, 4), "length": knots[-1][0],
             **({"hem_moved": moved} if moved else {})}
 
@@ -1293,14 +1329,15 @@ def sweetheart_drop(depth: float, off: float, half_rad: float = SWEETHEART_HALF_
     return depth * (1.0 - off / half_rad) ** 2 if off < half_rad else 0.0
 
 
-def bodice_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
+def bodice_spec(params: Dict[str, Any], meas: Dict[str, Any], *, over_sleeves: bool = False) -> Dict[str, Any]:
     """What the Blender builder needs beyond the torso rows for a piece with a bodice (Ruling A142), glTF Y-up
     metres: armhole ``band_y`` (the chest band under the arms) to ``top_y``; the neck opening ``neck_r`` (radius
     round the neck joint), ``neckline`` and its front ``depth_m`` below the neck base; ``shoulders`` with the strap
     centre ``strap_x`` / ``strap_w``; ``pin_half_x`` / ``pin_band_m``; ``sleeve`` {len_m, rings: [[metres from the
-    shoulder joint along the arm, circumference]]} (None without sleeves); ``front_open``; ``collar``."""
+    shoulder joint along the arm, circumference]]} (None without sleeves); ``front_open``; ``collar``. A jacket
+    ``over_sleeves`` adds ``layer_ease`` to the sleeve ease."""
     import numpy as np
-    shape = outline(params, meas)
+    shape = outline(params, meas, over_sleeves=over_sleeves)
     neck_r = meas["neck_c"] / (2 * math.pi) + NECK_CLEAR_M
     half_sh = meas["shoulder_w"] / 2.0
     neckline = params["neckline"]
@@ -1322,7 +1359,7 @@ def bodice_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
     sleeve = None
     if has_sleeves(params):
         length = SLEEVE_SHARE[params["sleeves"]] * meas["arm_len"]
-        ease = 1.0 + SLEEVE_EASE[0] + SLEEVE_EASE[1] * params["sleeve_fit"]
+        ease = 1.0 + SLEEVE_EASE[0] + SLEEVE_EASE[1] * params["sleeve_fit"] + layer_ease(params, over_sleeves)
         shares = [a for a, _c in meas["arm_c"]]
         girths = [c for _a, c in meas["arm_c"]]
         rings = []
@@ -1371,11 +1408,12 @@ def _sleeve_panel(sleeve: Dict[str, Any]):
     return json.loads(json.dumps(panel.assembly().pattern, default=str))
 
 
-def panel_spec(params: Dict[str, Any], meas: Dict[str, float]) -> Dict[str, Any]:
+def panel_spec(params: Dict[str, Any], meas: Dict[str, float], *, over_sleeves: bool = False) -> Dict[str, Any]:
     """The pattern of a built kind as two pygarment panels (front, back; each half the
     circumference), sampled to quad grids: ``{rows, cols, row_y (Y-up world height per row, row 0 =
     the pinned top), panels: [{name, grid_m: rows x cols x 2}], pygarment: {front, back}}``.
-    ValueError for a kind not built yet."""
+    ``over_sleeves``: the piece drapes over a lower layer with sleeves (``over_sleeved_layer``; a jacket gets
+    ``layer_ease``). ValueError for a kind not built yet."""
     import numpy as np
     from app.third_party.pygarment.garmentcode.edge import Edge
     from app.third_party.pygarment.garmentcode.edge_factory import CurveEdgeFactory
@@ -1384,7 +1422,7 @@ def panel_spec(params: Dict[str, Any], meas: Dict[str, float]) -> Dict[str, Any]
         raise ValueError(KIND_NOT_BUILT.format(kind=params["kind"]))
     if params["kind"] in FITTED_KINDS:
         return fitted_spec(params, meas)
-    shape = outline(params, meas)
+    shape = outline(params, meas, over_sleeves=over_sleeves)
     knots = shape["knots"]
     total = knots[-1][0]
     rows = int(min(81, max(12, round(total / GRID_M) + 1)))
@@ -1422,7 +1460,9 @@ def panel_spec(params: Dict[str, Any], meas: Dict[str, float]) -> Dict[str, Any]
     if drop:
         out["top_drop"] = {"front": drop}
     if has_bodice(params):
-        out["bodice"] = bodice_spec(params, meas)
+        out["bodice"] = bodice_spec(params, meas, over_sleeves=over_sleeves)
+        if layer_ease(params, over_sleeves):
+            out["layer_ease"] = JACKET_SLEEVE_EASE
         if out["bodice"]["sleeve"]:
             specs["sleeve"] = _sleeve_panel(out["bodice"]["sleeve"])
     return out
@@ -1893,6 +1933,9 @@ def key_for(character_name: str, item_id: str, *, base_sha: str, lower: List[str
     for other, fit in own_colliders(character_name, item_id, params["kind"], lower, base_sha=base_sha):
         from app.core.base_body import file_sha256
         under.append(f"{other}:fit:{file_sha256(fit) if fit is not None else '-'}")
+    if layer_ease(params, over_sleeved_layer(item_id, params["kind"], lower)):
+        # bug round 2026-11-20: a jacket over a sleeved layer is cut wider (``layer_ease``) — only these re-drape
+        under.append("ease:over_sleeves")
     if under and params["kind"] in FITTED_KINDS:
         # A237: a fitted piece over lower layers (a loose one clipped, a boot left out of the cut) — only these re-drape
         under.append("cut:body")
@@ -2240,11 +2283,12 @@ def _run_drape_once(body_glb: Path, params: Dict[str, Any], sources: Dict[str, s
               timeout_s: int = 300, corrective: bool = True,
               lower: Optional[List[Tuple[Path, Any]]] = None,
               live: Optional[Tuple[str, str]] = None,
-              lower_offsets: Optional[List[float]] = None) -> Dict[str, Any]:
+              lower_offsets: Optional[List[float]] = None, over_sleeves: bool = False) -> Dict[str, Any]:
     """Measure, make the panels and drape on ``body_glb`` (one Blender run; one retry with doubled
     quality when the stretch is above ``RETRY_STRETCH`` or a narrow miss, ``retry_due``; the retry's result is
     judged and carries ``data.retry``). ``lower`` = [(drape GLB, its pose-shape payload)] of the
-    lower layers the piece drapes over (colliders, Ruling A142). Returns ``{ok, error, data, glb, rows, outcome,
+    lower layers the piece drapes over (colliders, Ruling A142); ``over_sleeves`` one of them has sleeves
+    (``panel_spec``). Returns ``{ok, error, data, glb, rows, outcome,
     log_tail}`` — ``ok`` False when Blender failed or a gate row failed (``error`` names it); ``outcome``
     (``app.blender.outcome``) is the Blender run's when it failed, ``REJECTED`` for a failed gate row, ``CRASHED``
     when no GLB came back."""
@@ -2254,7 +2298,7 @@ def _run_drape_once(body_glb: Path, params: Dict[str, Any], sources: Dict[str, s
     started = time.time()
     _live_stage(live, "measure_body")
     meas = measure_body(Path(body_glb).read_bytes())
-    spec = panel_spec(params, meas)
+    spec = panel_spec(params, meas, over_sleeves=over_sleeves)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     progress_file = out_dir / "progress.json"
@@ -2418,9 +2462,10 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
         # A228: a shaping piece drapes on the plain body shaped under it (``bust_shaping``)
         from app.core import bust_shaping
         body, shaping, shaping_note = bust_shaping.prepare(body, item_id, item, lower, scratch / "shaping")
+        over = over_sleeved_layer(item_id, params["kind"], lower)
         result, inner = drape_with_fallback(
             lambda cols, offsets, sub: run_drape(body, params, sources, item_id=item_id, out_dir=scratch / sub,
-                                                 lower=cols, live=key, lower_offsets=offsets),
+                                                 lower=cols, live=key, lower_offsets=offsets, over_sleeves=over),
             colliders, own)
         colliders = colliders + (own if inner["mode"] != "dropped" else [])
         folder = templates_dir(character_name)
@@ -2433,7 +2478,8 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
                   "metrics": result["data"], "rows": result["rows"], "created_at": utc_now_iso(),
                   "pose_shapes": (result["data"] or {}).get("pose_shapes"),
                   **({"shaping": shaping} if shaping else {}),
-                  **({"shaping_note": shaping_note} if shaping_note else {})}
+                  **({"shaping_note": shaping_note} if shaping_note else {}),
+                  **({"layer_ease": JACKET_SLEEVE_EASE} if layer_ease(params, over) else {})}
         if result["ok"]:
             target = drape_path(character_name, item_id, sig)
             shutil.move(str(result["glb"]), str(target))

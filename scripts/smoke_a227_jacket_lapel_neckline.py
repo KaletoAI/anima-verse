@@ -38,7 +38,7 @@ def spec(collar, neck):
     p, _e = gt.validate_params({"kind": "jacket", "collar": collar, "neckline": neck, "front": "closed",
                                 "sleeves": "none", "length_m": 0.6})
     orig = gt.outline
-    gt.outline = lambda _p, _m: {"top_y": 1.42}
+    gt.outline = lambda _p, _m, **_k: {"top_y": 1.42}
     try:
         return gt.bodice_spec(p, MEAS)
     finally:
