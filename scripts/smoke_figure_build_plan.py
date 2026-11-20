@@ -53,9 +53,12 @@ body makes every view and the stored shape count as missing):
     follow-up re-plans to [] and ends at once; every producer ran once per
     step (the sequence below; no chain runs before the pieces step — ruling
     A14), a fourth ``start`` answers "current".
-[6] ``pieces`` fails for the trousers → fits, assemble still run (the
-    stored views are the delivered figure's: no views step);
-    ``failed == {"pieces": {"error": "mesh refused", "item_id":
+[6] ``pieces`` fails for the trousers → the fits still run (the
+    stored views are the delivered figure's: no views step), the assembly
+    does NOT (bug round 2026-11-20: a piece this Build tried and could not
+    make is never silently left off a published figure — the next Build
+    retries it): calls shape, chain trousers, refit; ``skipped ==
+    ["assemble"]``; ``failed == {"pieces": {"error": "mesh refused", "item_id":
     "trousers"}}``. ``shape`` failing STOPS the Build (Ruling C4, fix round
     2 of Task 11g: a refused view / an unmeshed shape — nothing is built on
     what it left): the calls end with ``shape``, ``skipped == ["pieces",
@@ -452,11 +455,11 @@ def stub_sections():
     fb.start("Kira", reason="manual")
     check("[6] pieces run ended", wait_idle(fb), True)
     ran = [c for c in W.calls if c != "slot"]
-    check("[6] pieces: fits, assemble still ran", ran, [
-        "shape", "chain trousers", "refit",
-        "model no-prepare", "schedule"])
+    check("[6] pieces: fits ran, the assembly did not", ran, [
+        "shape", "chain trousers", "refit"])
     check("[6] pieces: failed", fb.state("Kira")["failed"],
           {"pieces": {"error": "mesh refused", "item_id": "trousers"}})
+    check("[6] pieces: assembly skipped", fb.state("Kira")["skipped"], ["assemble"])
     check("[6] pieces: GET status failed", fb.figure_info("Kira")["status"], "failed")
     row = [r for r in fb.figure_info("Kira")["worn"] if r["item_id"] == "trousers"][0]
     check("[6] pieces: worn row (left off, Ruling A119)", (row["state"], row["failure"], row["left_out"]),

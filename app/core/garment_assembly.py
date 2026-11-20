@@ -167,13 +167,16 @@ def bare_revision(path: Path) -> List[Optional[List[int]]]:
     return [_stat_record(path), _stat_record(path.with_suffix(".json"))]
 
 
-def carry_sidecar_key(bare: Path, before: List[Optional[List[int]]], key: str, value: Any) -> bool:
-    """A bare sidecar write that is no assembly input — ONE key the caller
-    just published into it (``collision``: the capsule set, measured on the
-    bare body) — carried into the assembly of that tier: an assembly that was
-    current against ``before`` (``bare_revision`` captured right before the
-    write) gets the key and the new revision, so it stays served instead of
-    being rebuilt for a key it merely copies. The caller holds
+def carry_sidecar_keys(bare: Path, before: List[Optional[List[int]]], values: Dict[str, Any]) -> bool:
+    """A bare sidecar write that is no assembly input — the keys ``values``
+    the caller just published into it (``collision``: the capsule set,
+    measured on the bare body; ``figure`` / ``mesh_items``: the bookkeeping of
+    the figure it is served as) — carried into the assembly of that tier: an
+    assembly that was current against ``before`` (``bare_revision`` captured
+    right before the write) gets the keys and the new revision, so it stays
+    served instead of being rebuilt for keys it merely copies. A key that IS an
+    input (``mesh_items.intended`` decides the garments) is still judged by
+    the assembly's own ``garments`` state. The caller holds
     ``model3d_publication`` of the model directory. True when re-stamped."""
     bare = Path(bare)
     if bare.parent.name == LOW:
@@ -186,7 +189,7 @@ def carry_sidecar_key(bare: Path, before: List[Optional[List[int]]], key: str, v
     meta = _read_json(assembled.with_suffix(".json"))
     if not meta or meta.get("bare_revision") != before:
         return False
-    meta[key] = value
+    meta.update(values)
     meta["bare_revision"] = bare_revision(bare)
     _model3d()._publish_sidecar(assembled, meta)
     return True

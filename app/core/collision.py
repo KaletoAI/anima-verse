@@ -921,10 +921,10 @@ def ensure_path(character_name: str, path: Optional[Path], *, scales: Optional[D
             return None
         current["collision"] = record
         # The set is no assembly input: a garment assembly current before this write stays current.
-        from app.core.garment_assembly import bare_revision, carry_sidecar_key
+        from app.core.garment_assembly import bare_revision, carry_sidecar_keys
         before_revision = bare_revision(path)
         _publish_sidecar(path, current)
-        carry_sidecar_key(path, before_revision, "collision", record)
+        carry_sidecar_keys(path, before_revision, {"collision": record})
     logger.info("Collision capsules %s (%s): %d capsules, %d skipped, %d channels, source %s", character_name,
                 path.name, len(record.get("capsules") or []), len(record.get("skipped") or []),
                 len(record.get("channels") or []), record["source"])

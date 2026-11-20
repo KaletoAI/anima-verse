@@ -28,6 +28,10 @@ order ``STEP_ORDER`` (a step with nothing to do is not in it):
 4. ``pieces`` — one step per own-mesh piece whose chain has something to
    run (``garments.run_estimate``), run through the character's garment
    FIFO (``garments.run_queued``).
+4b. ``template`` — one CPU drape per template piece whose drape of the current key is missing, AFTER the pieces:
+   an accepted fit of an own-mesh piece folds into a drape's key (a boot under trousers, A237), and after the
+   last pieces step the run re-checks the drapes (``_replan_templates``) so a key the fit moved is draped in the
+   same run.
 5. ``hair`` — the worn HairDeck hairstyle whose chain has something to run
    (``run_queued``). A humanoid that owns no hairstyle gets its first one
    (``garment_hair.ensure_hairstyle``) when the Build starts.
@@ -38,7 +42,11 @@ order ``STEP_ORDER`` (a step with nothing to do is not in it):
 7. ``fits`` — the CPU refits (``garment_refit.refit_character``, tracked).
 8. ``assemble`` — the outfit model of the figure delivered THEN, built from
    whatever is built (Ruling A119: pieces not ready are left off), then the garment assembly
-   (``garment_assembly.schedule``).
+   (``garment_assembly.schedule``). A model of that figure's shape and texture found cached gets the figure
+   recorded (``base_body.record_delivered_figure``), so the next plan does not ask for it again. Skipped when a
+   piece or drape this run tried for the first time failed (``ASSEMBLE_GATE_STEPS``): the figure is not
+   published with it silently left off — the next Build retries it, and a repeated failure (listed "failed —
+   Retry") no longer holds the assembly.
 9. ``collision`` — a stored model's collision record carries channels that no longer match the declarations,
    the per-character overrides or the opening (``collision.channels_due``: the Channels panel's Save stores only,
    ruling R4 of the cross-person collision plan): ``collision.recompute_character(apply_channels=True)`` — CPU,
@@ -490,6 +498,18 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
         steps.append(step if rebased else _refused(step, base_body.shape_view_refusals(character_name,
                                                                                          wanted.shape, bsig)))
 
+    # STEP_ORDER: the own-mesh pieces before the template drapes — a drape's key folds in the accepted fit of
+    # an own-mesh piece it hangs over (a boot under trousers, A237), so the fit lands first and the drape is made
+    # with it (``_replan_templates`` re-checks after the pieces).
+    for item_id in wanted.own:
+        if item_id in wanted.template:
+            continue
+        # The worn state's chain only (plan Task 11b: the other state is built by its own button, never both
+        # automatically); a piece worn open says so — its open mesh is another chain.
+        label = f"Own mesh · {_item_name(item_id)}" + (" (open)" if item_id in wanted.open else "")
+        step = _chain_step(character_name, "pieces", item_id, label, profile)
+        if step is not None:
+            steps.append(step)
     for item_id in wanted.template:
         # Ruling A138: a template piece is draped on the CPU (0 hub jobs) when its drape of the current key is missing.
         step = _template_step(character_name, item_id, delivered, profile)
@@ -505,15 +525,6 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
         if step is None and pendant is not None:
             step = Step("accessory", ACCESSORY_LABEL.format(name=_item_name(item_id)), 0, item_id,
                         manual=PENDANT_MANUAL)
-        if step is not None:
-            steps.append(step)
-    for item_id in wanted.own:
-        if item_id in wanted.template:
-            continue
-        # The worn state's chain only (plan Task 11b: the other state is built by its own button, never both
-        # automatically); a piece worn open says so — its open mesh is another chain.
-        label = f"Own mesh · {_item_name(item_id)}" + (" (open)" if item_id in wanted.open else "")
-        step = _chain_step(character_name, "pieces", item_id, label, profile)
         if step is not None:
             steps.append(step)
 
@@ -1205,6 +1216,7 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
     queue, task_id = _tracked(character_name, f"Build · {character_name} (0/{len(steps)})")
     failed: Dict[str, Dict[str, Any]] = {}
     skipped: List[str] = []
+    fresh_failures: List[str] = []   # pieces this run tried and failed (``ASSEMBLE_GATE_STEPS``)
     superseded: Optional[Dict[str, str]] = None
     paused: Optional[Dict[str, str]] = None
     from app.core import generation_pause
@@ -1230,6 +1242,14 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
                     skipped.append(step.name)
                 logger.info("Build %s: %s skipped — it needs %s", character_name, step.label,
                             sorted(DEPENDS[step.name] & (set(failed) | set(skipped))))
+                continue
+            if step.name == "assemble" and fresh_failures:
+                # A piece this run tried and could not make: assembling now would publish a figure that leaves it
+                # out without a word — the failure is reported, the next Build retries it and then assembles.
+                if step.name not in skipped:
+                    skipped.append(step.name)
+                logger.info("Build %s: %s skipped — failed in this Build: %s", character_name, step.label,
+                            ", ".join(_item_name(i) for i in fresh_failures))
                 continue
             changed = _base_changed(character_name, snapshot)
             if changed:
@@ -1280,6 +1300,8 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
                     changed = ["changed"]
             if error:
                 logger.warning("Build %s: %s failed: %s", character_name, step.label, error)
+                if step.name in ASSEMBLE_GATE_STEPS and not step.failed and not changed:
+                    fresh_failures.append(step.item_id)
                 failure, error = getattr(error, "failure", None), str(error)
                 entry = failed.get(step.name)
                 if entry is None:
@@ -1300,6 +1322,13 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
                     break
             else:
                 logger.info("Build %s: %s done", character_name, step.label)
+            if step.name == "pieces" and not (index < len(steps) and steps[index].name == "pieces"):
+                # The last own-mesh piece is done: a fit that landed may have moved a template drape's key.
+                added = _replan_templates(character_name, steps[index:], explicit)
+                if added:
+                    steps[index:index] = added
+                    with _lock:
+                        _current[character_name]["steps"] = [s.as_dict() for s in steps]
     finally:
         with _lock:
             _pins.pop(character_name, None)
@@ -1310,6 +1339,30 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
                 queue.track_finish(task_id, error="; ".join(f"{k}: {v['error']}" for k, v in failed.items()))
             except Exception:  # noqa: BLE001
                 logger.debug("Build track %s not finished", task_id, exc_info=True)
+
+
+#: The piece steps whose FIRST failure in a run (not a cached one the plan listed "failed — Retry") holds that run's
+#: assembly: the figure is not published with the piece silently left out; a repeated failure is listed and the
+#: figure is assembled without the piece.
+ASSEMBLE_GATE_STEPS = frozenset({"pieces", "template"})
+
+
+def _replan_templates(character_name: str, rest: List[Step], explicit: bool) -> List[Step]:
+    """The template drapes due NOW that ``rest`` (the run's steps still to come) does not hold — after the own-mesh
+    pieces, whose accepted fits fold into a drape's key (a boot under trousers, A237). An automatic run takes only
+    the runnable ones (``_runnable``). [] on any failure: the next plan lists what is left."""
+    try:
+        profile, wanted, delivered, _items = _now(character_name)
+        planned = {s.item_id for s in rest if s.name == "template"}
+        due = [step for item_id in wanted.template if item_id not in planned
+               for step in [_template_step(character_name, item_id, delivered, profile)] if step is not None]
+    except Exception:  # noqa: BLE001 — a re-check, never the run's failure
+        logger.debug("Build %s: template drapes not re-checked", character_name, exc_info=True)
+        return []
+    due = _runnable(due, explicit)
+    if due:
+        logger.info("Build %s: after the own-mesh pieces — %s", character_name, "; ".join(s.label for s in due))
+    return due
 
 
 def _paused_here(character_name: str, reason: str, step: Step, queue, task_id: str) -> Dict[str, str]:
@@ -1909,6 +1962,16 @@ def _run_assemble(character_name: str, step: Step, explicit: bool = False) -> st
         failed = garment_assembly.failure(character_name, wanted.signature)
         if failed:
             return ASSEMBLY_FAILED.format(error=failed)
+        # A model found cached (same shape and texture) records the figure it was built as: the pieces the assembly
+        # put on since are written into its record, or every next plan would ask to assemble again.
+        recorded = base_body.record_delivered_figure(character_name, wanted.signature, _now(character_name)[2])
+        if recorded["intended_changed"]:
+            garment_assembly.schedule(character_name, wanted.signature, retry=explicit)
+            if not garment_assembly.wait_for(character_name, wanted.signature, timeout=ASSEMBLY_WAIT_S):
+                return ASSEMBLY_SLOW
+            failed = garment_assembly.failure(character_name, wanted.signature)
+            if failed:
+                return ASSEMBLY_FAILED.format(error=failed)
     elif base_body.outfit_refusal(character_name, wanted.signature) == error:
         # Ruling A61: the same inputs would be refused again — recorded for the figure delivered NOW, the one the
         # next plan judges; an automatic Build waits for a person or a change of the inputs.

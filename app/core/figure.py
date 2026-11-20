@@ -941,10 +941,14 @@ def pending_changes(character_name: str, *, profile: Optional[Dict[str, Any]] = 
 
 def _open_mesh_missing(wanted: "Figure", delivered: "Figure") -> Dict[str, str]:
     """``{item: "closed" | "left_out"}`` of the worn-open own-mesh pieces whose open mesh is missing: shown
-    closed meanwhile (``shown_closed``), or left off (no mesh of either state, Ruling A119)."""
+    closed meanwhile (``shown_closed``), or left off (no mesh of either state, Ruling A119). A template piece
+    (also in ``own``) and an accessory have no open/closed meshes — open is a parameter of their one build — so
+    they are never counted: a template left out keeps its own change row with the reason (a failed drape)."""
     from app.core.outfit_options import CLOSED
     out: Dict[str, str] = {}
     for item_id in wanted.open:
+        if item_id in wanted.template or item_id in wanted.accessory:
+            continue
         if item_id in wanted.own and item_id in delivered.shown_closed:
             out[item_id] = CLOSED
         elif item_id in wanted.own and item_id in delivered.left_out:

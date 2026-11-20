@@ -2711,6 +2711,53 @@ def mesh_record(character_name: str, fig) -> Dict[str, Any]:
             "missing": dict(fig.left_out), "warnings": [], "figure": fig.as_dict()}
 
 
+def record_delivered_figure(character_name: str, signature: str, fig) -> Dict[str, bool]:
+    """Rewrite the stored outfit model's ``figure`` and ``mesh_items`` (``mesh_record``) to ``fig``, the figure
+    delivered now, when the model is current for it (``figure_stale`` "" — same shape, texture and outfit body)
+    but records another figure: a piece left out when it was built is on it now through the garment assembly (or
+    the reverse). The Build's assembly found such a model cached; without this its ``figure`` record stayed old and
+    every plan asked to assemble again. Under ``model3d_publication``, against the sidecar read before (a model or
+    sidecar written meanwhile is left alone); the assembly current before the write stays current
+    (``garment_assembly.carry_sidecar_keys``). ``{rewritten, intended_changed}`` — ``intended_changed``: the
+    pieces the assembly grafts (``mesh_items.intended``) changed, it has to run again. Never raises."""
+    out = {"rewritten": False, "intended_changed": False}
+    try:
+        from app.core import garment_assembly, model3d
+        from app.core.keyed_lock import keyed_lock
+        if fig is None or fig.signature != signature:
+            return out
+        path = model3d.find_model3d(character_name, signature)
+        if path is None:
+            return out
+        before = garment_assembly.bare_revision(path)
+        meta = model3d._read_sidecar(path)
+        if not meta.get("base_signature") or meta.get("figure") == fig.as_dict():
+            return out
+        if figure_stale(character_name, meta):
+            return out   # the model itself is not current: the next outfit model rebuild records its figure
+        mesh = mesh_record(character_name, fig)
+        with keyed_lock("model3d_publication", str(path.parent)):
+            if garment_assembly.bare_revision(path) != before:
+                return out   # written meanwhile (a rebuild, the capsules): the next assembly judges again
+            current = model3d._read_sidecar(path)
+            values: Dict[str, Any] = {"figure": fig.as_dict()}
+            if mesh or current.get("mesh_items") is not None:
+                values["mesh_items"] = mesh
+            intended_changed = (sorted(mesh_items_intended(current)) != sorted(mesh_items_intended(values)))
+            current.update(values)
+            if not mesh.get("warnings"):
+                current.pop("garment_warnings", None)
+            model3d._publish_sidecar(path, current)
+            garment_assembly.carry_sidecar_keys(path, before, values)
+        logger.info("Outfit model %s (%s): figure record refreshed to the figure delivered now (%s)",
+                    character_name, signature, "the assembly runs again" if intended_changed else "assembly kept")
+        return {"rewritten": True, "intended_changed": intended_changed}
+    except Exception:  # noqa: BLE001 — bookkeeping; the next Build asks again
+        logger.warning("Outfit model %s (%s): figure record not refreshed", character_name, signature,
+                       exc_info=True)
+        return out
+
+
 def resolve_figure(character_name: str, pieces: Optional[Dict[str, str]], *, items: Optional[list] = None,
                    profile: Optional[Dict[str, Any]] = None):
     """The figure an outfit of ``pieces`` / ``items`` is built as NOW:
