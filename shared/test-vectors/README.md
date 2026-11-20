@@ -792,3 +792,17 @@ recorded frames, `contactTips()`) is in the exporter's docstring and mirrored in
 `[rs…]` (`rigid_shaft.json`) runs on the fixture of `scripts/smoke_rigid_shaft.mjs`; the exporter asserts that
 smoke's hand numbers (droop split 4.5:2:.5 / 4.5:1:.25 / 4.5:0:0 of 1.18628°, inner joints still under the shake at
 r 1) and the own-capsule hold of the shaft tip at φ ≈ 0.4584° (derived in the exporter's docstring) before writing.
+
+### Per-strand hair (`strand_sim.json`, `strand_clock.json`)
+
+Generated from the TypeScript (`hairSimMath.ts`, `hairSim.ts`, `strandBudget.ts`, `collision.ts`, bundled unchanged by
+esbuild) by `node scripts/export_strand_vectors.mjs`; `--check` replays both files through the TypeScript and fails
+on any difference. The fixtures are recipes (the build spec in the exporter's docstring: the head sphere SDF, the
+curved fan, straight cards, the Spine2 follow, the torso capsule of `scripts/smoke_hair_sim.mjs`); `[fx]` pins a
+digest of the built inputs so both sides provably build the same. The exporter asserts the smoke's hand numbers
+(`[2]`, `[6]`, `[7]`, `[9]`, `[13c]`, `[13d]`, `[14]`) before writing. Float rows are written at 9 significant digits.
+
+| file | cases | functions | eps |
+|---|---|---|---|
+| `strand_sim.json` | 55 | `strandParams`, `limitSegmentAngle`, `lerpFrame`, `boxDepth`, `sdfAt`, `fixtureDigest`, `bind`, `run`, `rest1`, `haar6`, `follow7`, `clamp9`, `tether10`, `walk11`, `lastWord12`, `inertia13`, `carry13e`, `gravity14`, `gravityOff14`, `mismatch8`, `pick` | 1e-12 maths, 0 rest / hang, 1e-8 bind, 1e-7 m sim runs |
+| `strand_clock.json` | 2 | `strandClock` (`createStrandHair` + `update` per frame on a three rig) | 1e-7 m; 0 at rest |
