@@ -522,6 +522,12 @@ FAILURE_SENTENCES = {
                     "pattern is cut wider than the body, so the cloth has most likely caught on the body model or on "
                     "a piece under it rather than being too tight. Change the length, fit or waistband so it hangs "
                     "differently, then Build again."),
+    # A236: the stretch sits at the neck or on the shoulders of a top / jacket / dress — length, fit and waistband
+    # change nothing there (``stretch_line``)
+    "stretch_max_neck": ("The fabric is stretched to {value}× its cut length at the neck or on the shoulders (the "
+                         "limit is {limit}×). Length, fit and waistband do not change that part: try another "
+                         "neckline, shoulders or sleeves, then Build again. Hair or a beard lying on the shoulders is "
+                         "no longer in the way; if it stays, the body model itself has a ridge there."),
     "poke_share": ("The body shows through the fabric on {value} % of the skin it covers in the rest pose (the limit "
                    "is {limit} %): the cloth slipped under the body's surface there. Change the length, fit or "
                    "waistband so it hangs differently, then Build again."),
@@ -547,6 +553,27 @@ def _num(value: Any, scale: float = 1.0) -> str:
         return "?"
 
 
+#: A236: a stretch this close below the shoulder line (metres) or higher counts as "at the neck or on the shoulders".
+NECK_STRETCH_BELOW_M = 0.05
+
+
+def stretch_line(failed: Dict[str, Any]) -> str:
+    """A236 — which stretch sentence fits a failure record: ``stretch_max_neck`` when the worst edge
+    (``metrics.drape.stretch_at.z``, Blender Z = height) lies no lower than NECK_STRETCH_BELOW_M under the body's
+    shoulder line (``metrics.measure.shoulder_y``) on a piece with a bodice; else ``stretch_max``."""
+    metrics = failed.get("metrics") or failed.get("data") or {}
+    z = _number(((metrics.get("drape") or {}).get("stretch_at") or {}).get("z"))
+    sy = _number((metrics.get("measure") or {}).get("shoulder_y"))
+    params = failed.get("params") or {}
+    if z is None or sy is None or not isinstance(params, dict) or not params.get("kind"):
+        return "stretch_max"
+    try:
+        bodice = has_bodice(params)
+    except Exception:
+        bodice = False
+    return "stretch_max_neck" if bodice and z >= sy - NECK_STRETCH_BELOW_M else "stretch_max"
+
+
 def failure_info(failed: Dict[str, Any]) -> Dict[str, Any]:
     """A failed or left-due drape as data for the UI — ``{outcome, lines, rows, log_tail, error}``: ``lines`` the
     plain sentences ``[{text, values}]`` (``FAILURE_SENTENCES`` per failed gate row; else ``LEFT_DUE`` for a run
@@ -563,7 +590,8 @@ def failure_info(failed: Dict[str, Any]) -> Dict[str, Any]:
         base = str(r.get("check") or "").split("[")[0]
         if base in FAILURE_SENTENCES:
             scale = 100.0 if base == "poke_share" else 1.0
-            lines.append({"text": FAILURE_SENTENCES[base],
+            key = stretch_line(failed) if base == "stretch_max" else base
+            lines.append({"text": FAILURE_SENTENCES[key],
                           "values": {"value": _num(r.get("value"), scale), "limit": _num(r.get("limit"), scale)}})
     if not lines:
         text = (LEFT_DUE.get(outcome) if oc.is_retryable(outcome)
