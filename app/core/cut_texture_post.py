@@ -39,8 +39,9 @@ BLEED_CM = 1.0
 SPILL_CM = 1.0
 #: ``colour_match``: the largest mean shift (dE76).
 CLAMP_DE = 25.0
-#: Enters the cut atlas key (``csig``): bump when anything here changes the atlas.
-POST_VERSION = 1
+#: Enters the cut atlas key (``csig``): bump when anything here changes the atlas. 2 (2026-11-20): the post-processing
+#: runs per job (front / back) on its own islands and the two are composed (``garment_cut_texture.compose``).
+POST_VERSION = 2
 
 #: Registration (the constants of ``bake_register``; the grid is finer: the atlas is one big picture).
 GRID = 256

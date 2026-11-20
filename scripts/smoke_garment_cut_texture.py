@@ -101,15 +101,16 @@ Task 10 — the routes (``app/routes/figure.py``, called as functions with the s
 rules.
 [10.1] ``GET …/cut`` of "shirt9" (texture "cut", the ready record of [9.2]): ``csig`` = c9, ``record.state`` "ready",
     ``can_generate`` True, ``blocked_reason`` "", ``upscale`` False (the item is 1200 x 1100 >= 1024), and the three
-    picture URLs ``…/cut/{template,raw,atlas}.png?v=<c9>``; ``pattern_url`` = ``…/pattern.png?v=<islands sha[:12]>``.
+    picture URLs ``…/cut/<kind>.png?v=<c9>`` for every kind of ``CUT_FILES`` (both jobs' templates, references and
+    answers, and the atlas); ``pattern_url`` = ``…/pattern.png?v=<islands sha[:12]>``.
     "tiny" (300 x 256) -> ``upscale`` True (the button says "+1 upscale").
-[10.2] Blocked reasons, in this order of precedence: a piece without a ready drape -> "Build the template first";
+[10.2] Blocked reasons, in this order of precedence: a worn piece without a drape -> ``BLOCKED_BUILD`` (the Build drapes it);
     media off -> "Media generation is off"; an empty chain -> "Routing chain for 'Garment — texture from cut' is empty
     — set it in /admin/settings → Media Generation → Routing" (``can_generate`` False each time).
 [10.3] ``POST …/cut/generate``: an empty chain -> HTTP 503 whose detail contains "Routing"; media off ->
     ``MediaGenerationDisabled`` propagates (409 through the global handler); no ready drape -> HTTP 400; with all in
     place it starts (the answer carries ``running`` True), a second POST while it runs -> HTTP 409.
-[10.4] ``GET …/cut/atlas.png`` of "shirt9" -> 200, the atlas file's bytes; ``raw`` and ``template`` too; an unknown
+[10.4] ``GET …/cut/atlas.png`` of "shirt9" -> 200, the atlas file's bytes; every other kind of ``CUT_FILES`` too; an unknown
     kind -> 404; "shirt4" (nothing made) -> 404.
 [10.5] ``GET …/pattern.png`` of "shirt9" -> 200, a PNG 2048 px wide (the atlas; its footer strip below) cached beside the islands file
     as ``shirt9_<islands sha[:12]>.pattern.png``; a second GET does not render again (render count 1); a drape without
@@ -121,6 +122,40 @@ rules.
     required False, ``hub_jobs`` 0, ``max_jobs`` 0. ``texture_sources`` of that sheer top without views: {} with
     "projection" (blocked: SHEER_NEEDS_VIEWS from ``key_for``), the item picture ("item_image") with "cut";
     ``piece_progress``'s picture step then carries no ``hub_jobs``.
+
+[12] The rework after the user's Dario test (2026-11-20). Hand-derived on the [2] T-shirt (sorted names give the label
+    ids back=1, band=2, front=3, sleeve_l=4, sleeve_r=5):
+[12.1] ``split_islands``: back job = [back], front job = [band, front, sleeve_l, sleeve_r] (sleeves go with the front).
+    The back template's non-white pixels are exactly ``labels == 1``, the front template's exactly ``labels >= 2``;
+    disjoint, and their counts add up to ``labels > 0``. A pattern without "back" has the front job only; "back_2"
+    (a split back panel) goes with the back job.
+[12.2] Seams on {front, back, back_2, sleeve_l} with seams 0 front|back, 1 sleeve_l|front, 2 back|back_2: the front
+    job keeps [1], the back job [2]; ``cross_seams`` = [0].
+[12.3] ``generate`` -> two image calls; the front prompt names "front panel, left sleeve, right sleeve, neckband" and
+    not "back panel", the back prompt "pieces: back panel." and "from behind"; per-job coverage keys back {1}, front
+    {2..5}; Picture 2 of the back job is the back view (40, 40, 150) on white; the atlas centre of the back island is
+    (150, 40, 40) +-2 (colour-matched to the item); the summary IoU is the worse job's.
+[12.4] ``compose`` on 20 x 20: front island cols 2..7 grown 0..9 (red), back island cols 10..15 grown 8..17 (blue);
+    front first, back outside the front island, then each island -> row: 8 x r, 10 x b, 2 x w.
+[12.5] A white back answer: "rejected", reason "Back: coverage 0.00 < 0.97", both raw answers kept, no atlas.
+[12.6] ``only="back"`` -> 1 image call with the back references, ready; ``only="front"`` without a back answer of
+    this csig -> 2 calls.
+[12.7] No back view: ``job_plan`` = {back_view 1, upscale 0, front 1, back 1, total 3, max 4}; ``generate`` renders the
+    view once (VIEW_JOBS + ("mk1", "back")) and keys the cut with it (csig != the csig without a back view); after it
+    the plan totals 2; the tiny item adds +1 upscale; a refused view -> "failed" with "back view was refused", 0 image
+    calls.
+[12.8] ``piece_jobs``: a second claim returns the holder's reason; a view (core and route: 409), Use this and Remove
+    (route: 409) while the cut runs; the cut (core and route: 409) while a view runs, and the dialog names the view's
+    reason; four racing ``start`` calls -> exactly one True; the claim is released when the flow ends.
+[12.9] ``dialog_state.blocked_reason`` per drape state: ready "", missing + worn BLOCKED_BUILD, missing + not worn
+    BLOCKED_NOT_WORN, a Build draping it BLOCKED_DRAPING (never BLOCKED_BUILD), failed BLOCKED_FAILED, blocked its own
+    reason, ready without islands BLOCKED_NO_ISLANDS; ready -> plan total 2, ``has_back`` True.
+[12.10] ``start`` sets texture "cut" (``set_params``) and, on ready, invalidates the figure once and schedules one
+    assembly; the dialog then reads ``applied`` and ``current`` True; the views payload: ``hub_jobs`` 0, ``cut_uses``
+    ["back"].
+[12.11] ``cut_stand_in``: texture "cut" and a drape whose tsig differs only by ``texture_sha`` (tex0 vs tex1) ->
+    "ready", ``stand_in`` True, the old tsig; "projection" -> missing; another lower layer -> missing; a record
+    without ``texture_sha`` -> missing.
 """
 import os
 import re
@@ -336,8 +371,14 @@ check("[4] P-H3 wording", "<Picture 1>" in ph3 and "<Picture 2>" in ph3 and "fir
       and "second image" not in ph3, ph3)
 check("[4] other backends keep the text", prompt_adapters.reference_wording(prompt, "qwen-edit") == prompt)
 shipped = (ROOT / "shared" / "templates" / "image" / "garment_cut_texture.md").read_text(encoding="utf-8")
-check("[4] PROMPT_SHA = md5 of the shipped file", gct.PROMPT_SHA == hashlib.md5(shipped.encode("utf-8")).hexdigest()
+shipped_back = (ROOT / "shared" / "templates" / "image" / "garment_cut_texture_back.md").read_text(encoding="utf-8")
+check("[4] PROMPT_SHA = md5 of both shipped files", gct.PROMPT_SHA
+      == hashlib.md5((shipped + "\0" + shipped_back).encode("utf-8")).hexdigest()
       and re.fullmatch(r"[0-9a-f]{32}", gct.PROMPT_SHA) is not None, gct.PROMPT_SHA)
+back_prompt = gct.render_prompt(piece="T-shirt", pieces=["back panel"], side="back")
+check("[4] back prompt: the back panel only, read from behind", "back panel" in back_prompt
+      and "front panel" not in back_prompt and "from behind" in back_prompt and "the second image" in back_prompt
+      and "{{" not in back_prompt, back_prompt)
 
 # [5] StrictUndefined
 import jinja2  # noqa: E402
@@ -363,6 +404,10 @@ for fam in ("keywords", "natural"):
     c = compose(use_case="garment_cut_texture", subject=prompt,
                 backend=SimpleNamespace(model="P-H3-Image", image_family=fam))
     check(f"[6] compose byte-identical ({fam})", c.prompt == prompt, c.prompt)
+    cb = compose(use_case="garment_cut_texture", subject=back_prompt,
+                 backend=SimpleNamespace(model="P-H3-Image", image_family=fam))
+    check(f"[6] compose keeps the back prompt byte-identical ({fam})", cb.prompt == back_prompt
+          and cb.negative == "" and cb.warnings == [], (cb.prompt, cb.negative, cb.warnings))
     check(f"[6] compose negative empty, no warnings ({fam})", c.negative == "" and c.warnings == [],
           (c.negative, c.warnings))
 
@@ -413,16 +458,56 @@ for _iid, (_w, _h) in {"shirt": (1200, 1100), "shirt3": (1200, 1100), "shirt4": 
     ITEM_FILES[_iid] = _items / f"{_iid}.png"
     _item_picture(_w, _h).save(ITEM_FILES[_iid])
 
-_islands_file = Path(_tmp) / "drape.islands.json"
+from app.core.garment_template import templates_dir  # noqa: E402
+
+# the islands file lives where a drape's record names it (``cut_info`` reads ``has_back`` from it)
+_islands_file = templates_dir(CHAR) / "shirt9_tsig0.islands.json"
+_islands_file.parent.mkdir(parents=True, exist_ok=True)
 _islands_file.write_text(json.dumps(pl2), encoding="utf-8")
 ISLANDS_SHA = hashlib.sha256(_islands_file.read_bytes()).hexdigest()
+DRAPE_REC = {"islands": {"file": _islands_file.name, "sha256": ISLANDS_SHA, "px_per_cm": 19.59}, "tsig": "tsig0"}
 DRAPES = {iid: {"state": "ready", "reason": "", "tsig": "tsig0", "islands_path": _islands_file,
-                "islands_sha": ISLANDS_SHA} for iid in ITEM_FILES}
+                "islands_sha": ISLANDS_SHA, "record": DRAPE_REC, "worn": True} for iid in ITEM_FILES}
+
+# the piece's BACK view (``garment_template_views``): a (40, 40, 150) block on transparent — Picture 2 of the back job.
+# Every fixture item has one, except the ones a test makes the flow render it for.
+_backs = Path(_tmp) / "backs"
+_backs.mkdir()
+
+
+def _back_picture(path, blue=150):
+    im = Image.new("RGBA", (800, 800), (0, 0, 0, 0))
+    im.paste((40, 40, blue, 255), (100, 100, 700, 700))
+    im.save(path)
+    return path
+
+
+BACKS = {iid: _back_picture(_backs / f"{iid}_back.png") for iid in ITEM_FILES}
+VIEW_JOBS = []          # (item, view) of every piece-only view the flow had rendered
+VIEW_REFUSE = {"on": False}
+SCHEDULED = []          # ``garment_assembly.schedule`` calls
+SET_PARAMS = []         # ``garment_template.set_params`` calls (item, texture)
+BUILDING = {}           # ``figure_build.fits_piece``: a Build drapes the piece now
+
+
+def fake_view_generate(character_name, item_id, view):
+    from app.core import garment_template_views as _tv
+    VIEW_JOBS.append((item_id, view))
+    if VIEW_REFUSE["on"]:
+        raise _tv.ViewRefused(view, [{"reasons": ["no piece found"]}])
+    BACKS[item_id] = _back_picture(_backs / f"{item_id}_back.png", blue=151)    # a new picture: a new sha
+    return BACKS[item_id]
+
+
+def fake_set_params(item_id, params, *, source="user"):
+    SET_PARAMS.append((item_id, params.get("texture")))
+    TEXTURES[item_id] = params.get("texture")
+    return {"params": params, "source": source}
 
 
 def fake_current_drape(character_name, item_id):
     return DRAPES.get(item_id) or {"state": "missing", "reason": "Not draped yet", "tsig": None,
-                                   "islands_path": None, "islands_sha": ""}
+                                   "islands_path": None, "islands_sha": "", "record": {}, "worn": True}
 
 
 class CutBackend:
@@ -527,13 +612,20 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
         patch("app.imagegen.routing.chain_for", lambda occasion, *a, **k: list(CHAIN["rows"])), \
         patch("app.imagegen.base.media_generation_enabled", lambda: MEDIA["on"]), \
         patch("app.core.figure.invalidate", lambda: INVALIDATED.append(1)), \
+        patch("app.core.garment_assembly.schedule", lambda c, *a, **k: SCHEDULED.append(c) or True), \
+        patch("app.core.garment_template_views.generate", fake_view_generate), \
+        patch("app.core.garment_template.set_params", fake_set_params), \
+        patch("app.core.figure_build.fits_piece", lambda c, i: BUILDING.get(i, False)), \
+        patch.object(gct, "back_view", lambda c, i: BACKS.get(i)), \
         patch.object(gct, "current_drape", fake_current_drape), \
         patch.object(gct, "_item_matte", lambda: None):
 
     item_sha = hashlib.sha256(ITEM_FILES["shirt"].read_bytes()).hexdigest()
-    want_csig = hashlib.md5("|".join([ISLANDS_SHA, item_sha, gct.PROMPT_SHA,
+    back_sha_s = hashlib.sha256(BACKS["shirt"].read_bytes()).hexdigest()
+    want_csig = hashlib.md5("|".join([ISLANDS_SHA, item_sha, back_sha_s, gct.PROMPT_SHA,
                                       str(gct.cut_texture_post.POST_VERSION)]).encode()).hexdigest()[:12]
-    check("[8.1] csig formula", gct.csig(ISLANDS_SHA, item_sha) == want_csig, gct.csig(ISLANDS_SHA, item_sha))
+    check("[8.1] csig formula (islands, item, back view, prompts, post)",
+          gct.csig(ISLANDS_SHA, item_sha, back_sha_s) == want_csig, gct.csig(ISLANDS_SHA, item_sha, back_sha_s))
     check("[8.1] current_csig", gct.current_csig(CHAR, "shirt") == want_csig, gct.current_csig(CHAR, "shirt"))
 
     # [8.1] a filled template -> ready
@@ -562,24 +654,32 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     check("[8.1] metrics keys", set(rec.get("metrics") or {}) >= {"iou", "coverage", "island_coverage", "spill",
                                                                  "de_before", "de_after", "clamped", "seam_de"},
           sorted(rec.get("metrics") or {}))
-    check("[8.1] routing = route_meta", (rec.get("routing") or {}).get("routing")
-          == {"occasion": "garment_cut_texture", "position": 1, "spec": "FakeCut*"}, rec.get("routing"))
+    check("[8.1] each job keeps its routing = route_meta", all(
+        ((rec.get("jobs") or {}).get(j, {}).get("routing") or {}).get("routing")
+        == {"occasion": "garment_cut_texture", "position": 1, "spec": "FakeCut*"} for j in ("front", "back")),
+        rec.get("jobs"))
     check("[8.1] run_routed occasion / has_ref / pool", ROUTED[-1] == {"occasion": "garment_cut_texture",
                                                                        "has_ref": True, "pool_is_svc": True}, ROUTED)
-    refs = backend.calls[-1]["params"].get("reference_images") or {}
-    check("[8.1] references: template then item, as str paths",
+    check("[8.1] two image jobs: front, then back", len(backend.calls) == 2, len(backend.calls))
+    refs = backend.calls[-2]["params"].get("reference_images") or {}
+    check("[8.1] front job references: its template then the item, as str paths",
           list(refs) == ["input_reference_image_1", "input_reference_image_2"]
           and all(isinstance(v, str) for v in refs.values())
-          and refs.get("input_reference_image_1") == f"{stem}.template.png"
+          and refs.get("input_reference_image_1") == f"{stem}.template_front.png"
           and refs.get("input_reference_image_2") == f"{stem}.item.png", refs)
-    check("[8.1] no image_use_case in params", "image_use_case" not in backend.calls[-1]["params"])
+    refs_b = backend.calls[-1]["params"].get("reference_images") or {}
+    check("[8.1] back job references: its template then the back view",
+          refs_b == {"input_reference_image_1": f"{stem}.template_back.png",
+                     "input_reference_image_2": f"{stem}.back_ref.png"}, refs_b)
+    check("[8.1] no image_use_case in params", all("image_use_case" not in c["params"] for c in backend.calls))
     check("[8.1] the prompt is the rendered file, ordinal wording kept for the handoff",
-          "the first image" in backend.calls[-1]["prompt"] and backend.calls[-1]["negative"] == "",
-          backend.calls[-1]["prompt"][:80])
-    check("[8.1] piece name from kind + sleeves", backend.calls[-1]["prompt"].count("T-shirt") == 2
+          "the first image" in backend.calls[-2]["prompt"] and backend.calls[-2]["negative"] == "",
+          backend.calls[-2]["prompt"][:80])
+    check("[8.1] piece name from kind + sleeves", backend.calls[-2]["prompt"].count("T-shirt") == 2
           and gct.piece_name("long") == "long-sleeve shirt", gct.piece_name("long"))
     check("[8.1] upsampler_on noted", rec.get("upsampler_on") is True, rec.get("upsampler_on"))
-    check("[8.1] figure invalidated once", len(INVALIDATED) == 1, len(INVALIDATED))
+    check("[8.1] applied: figure invalidated once, the assembly scheduled once", len(INVALIDATED) == 1
+          and SCHEDULED == [CHAR], (len(INVALIDATED), SCHEDULED))
     st = gct.status(CHAR, "shirt")
     check("[8.1] status: the current record", st.get("csig") == want_csig and st.get("running") is False
           and (st.get("record") or {}).get("state") == "ready", st)
@@ -588,18 +688,22 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     backend.answer = answer_white
     rec2 = gct.generate(CHAR, "shirt")
     check("[8.2] rejected", rec2.get("state") == "rejected", rec2.get("state"))
-    check("[8.2] reason", rec2.get("reason") == "coverage 0.00 < 0.97", rec2.get("reason"))
-    check("[8.2] raw kept, no atlas", Path(f"{stem}.raw.png").is_file() and not atlas.is_file(), files_of("shirt"))
+    check("[8.2] reason names the job", rec2.get("reason") == "Front: coverage 0.00 < 0.97", rec2.get("reason"))
+    check("[8.2] the front answer kept; the back job not spent; no atlas", Path(f"{stem}.raw_front.png").is_file()
+          and not Path(f"{stem}.raw_back.png").is_file() and not atlas.is_file()
+          and (rec2.get("jobs") or {}).get("back", {}).get("state") == "skipped", files_of("shirt"))
     check("[8.2] no invalidate on a rejection", len(INVALIDATED) == 1, len(INVALIDATED))
 
     # [8.3] NoRouteError -> failed
     RAISE["exc"] = NoRouteError("garment_cut_texture", [])
     rec3 = gct.generate(CHAR, "shirt3")
-    c3 = gct.csig(ISLANDS_SHA, hashlib.sha256(ITEM_FILES["shirt3"].read_bytes()).hexdigest())
+    c3 = gct.csig(ISLANDS_SHA, hashlib.sha256(ITEM_FILES["shirt3"].read_bytes()).hexdigest(),
+                  hashlib.sha256(BACKS["shirt3"].read_bytes()).hexdigest())
     check("[8.3] failed, reason names Routing", rec3.get("state") == "failed" and "Routing" in rec3.get("reason", ""),
           (rec3.get("state"), rec3.get("reason")))
-    check("[8.3] record + inputs, no raw / atlas", files_of("shirt3") == sorted(
-        [f"shirt3_{c3}.json", f"shirt3_{c3}.item.png", f"shirt3_{c3}.template.png"]), files_of("shirt3"))
+    check("[8.3] record + inputs of the front job + the back reference, no raw / atlas", files_of("shirt3") == sorted(
+        [f"shirt3_{c3}.json", f"shirt3_{c3}.item.png", f"shirt3_{c3}.back_ref.png",
+         f"shirt3_{c3}.template_front.png"]), files_of("shirt3"))
 
     # [8.4] media off inside the job -> failed
     RAISE["exc"] = MediaGenerationDisabled("Media generation is disabled for this world")
@@ -626,13 +730,14 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
         check("[8.3] start with media off raises MediaGenerationDisabled", "Media generation is off" in str(e), e)
     MEDIA["on"] = True
     DRAPES["shirt4"] = {"state": "missing", "reason": "Not draped yet", "tsig": "t", "islands_path": None,
-                        "islands_sha": ""}
+                        "islands_sha": "", "record": {}, "worn": True}
     try:
         gct.start(CHAR, "shirt4")
         check("[8.3] start without a ready drape raises", False, "no exception")
     except gct.NotReady as e:
         check("[8.3] start without a ready drape raises NotReady", True, e)
-    DRAPES["shirt4"] = {"state": "ready", "reason": "", "tsig": "t", "islands_path": None, "islands_sha": ""}
+    DRAPES["shirt4"] = {"state": "ready", "reason": "", "tsig": "t", "islands_path": None, "islands_sha": "",
+                        "record": {}, "worn": True}
     try:
         gct.start(CHAR, "shirt4")
         check("[8.3] start with a drape without islands raises", False, "no exception")
@@ -718,8 +823,6 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     rec9 = gct.generate(CHAR, "shirt9")
     c9 = rec9.get("csig")
     atlas9_file = gct.cut_dir(CHAR) / f"shirt9_{c9}.atlas.png"
-    DRAPE_REC = {"islands": {"file": "shirt9_tsig0.islands.json", "sha256": ISLANDS_SHA, "px_per_cm": 19.59},
-                 "tsig": "tsig0"}
     TEXTURES["shirt9"] = "cut"
     a9, i9 = gt.atlas_for(CHAR, "shirt9", DRAPE_REC)
     check("[9.2] ready -> the atlas bytes", rec9.get("state") == "ready" and a9 is not None
@@ -743,7 +846,7 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
           and i9s.get("texture") == "projection", i9s)
     w9s = gt.texture_warning({"coverage": 0.9, "iou": 0.9}, i9s) or {}
     check("[9.3] the stale warning text", (w9s.get("cut") or {}).get("text")
-          == "Texture from cut is out of date — make it again (1 image job)", w9s)
+          == "Texture from cut is out of date — make it again in the piece dialog (Texture tab)", w9s)
     check("[9.3] stale: the bake flags stay false", w9s.get("low_coverage") is False and w9s.get("low_iou") is False,
           w9s)
     a9t, i9t = gt.atlas_for(CHAR, "shirt9", {**DRAPE_REC, "tsig": "tsig1"})
@@ -757,7 +860,7 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     TEXTURES["shirt"] = "cut"
     a1r, i1r = gt.atlas_for(CHAR, "shirt", DRAPE_REC)
     check("[9.4] rejected -> projection with the reason", a1r is None and i1r.get("cut_state") == "rejected"
-          and i1r.get("reason") == "coverage 0.00 < 0.97", i1r)
+          and i1r.get("reason") == "Front: coverage 0.00 < 0.97", i1r)
     w1r = gt.texture_warning({"coverage": 0.9, "iou": 0.9}, i1r) or {}
     check("[9.4] the warning carries the reason", (w1r.get("cut") or {}).get("state") == "rejected"
           and "coverage 0.00 < 0.97" in (w1r.get("cut") or {}).get("text", ""), w1r)
@@ -773,7 +876,7 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
         row9 = figure_build._template_row(CHAR, "shirt9", fake_get_item("shirt9"), NS(own=[]), {})
     m1r, m9 = row1.get("metrics") or {}, row9.get("metrics") or {}
     check("[9.4] figure row: cut rejected, projection source kept", (m1r.get("cut") or {}).get("state") == "rejected"
-          and (m1r.get("cut") or {}).get("reason") == "coverage 0.00 < 0.97" and m1r.get("texture") == "views"
+          and (m1r.get("cut") or {}).get("reason") == "Front: coverage 0.00 < 0.97" and m1r.get("texture") == "views"
           and ((m1r.get("texture_warning") or {}).get("cut") or {}).get("state") == "rejected", m1r)
     check("[9.4] figure row: cut in use", m9.get("texture") == "cut" and (m9.get("cut") or {}).get("state") == "ready"
           and (m9.get("cut") or {}).get("iou", 0) >= 0.98 and abs(((m9.get("cut") or {}).get("px_per_cm") or 0)
@@ -821,18 +924,18 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     check("[10.1] GET cut: the ready record", g9p.get("csig") == c9 and (g9p.get("record") or {}).get("state") == "ready"
           and g9p.get("can_generate") is True and g9p.get("blocked_reason") == "" and g9p.get("upscale") is False, g9p)
     check("[10.1] picture URLs carry the csig", g9p.get("urls") == {
-        k: f"{base9}/cut/{k}.png?v={c9}" for k in ("template", "raw", "atlas")}, g9p.get("urls"))
+        k: f"{base9}/cut/{k}.png?v={c9}" for k in gct.CUT_FILES}, g9p.get("urls"))
     check("[10.1] pattern URL carries the islands sha", g9p.get("pattern_url") == f"{base9}/pattern.png?v={ISLANDS_SHA[:12]}",
           g9p.get("pattern_url"))
     check("[10.1] a small item picture -> +1 upscale", fr.get_template_cut(CHAR, "tiny", _={}).get("upscale") is True)
 
     DRAPES["shirt4"] = {"state": "missing", "reason": "Not draped yet", "tsig": None, "islands_path": None,
-                        "islands_sha": ""}
+                        "islands_sha": "", "record": {}, "worn": True}
     MEDIA["on"] = False
     CHAIN["rows"] = []
     b4 = fr.get_template_cut(CHAR, "shirt4", _={})
-    check("[10.2] no drape -> Build the template first", b4.get("can_generate") is False
-          and b4.get("blocked_reason") == "Build the template first", b4.get("blocked_reason"))
+    check("[10.2] not draped -> the Build drapes it (and nothing else is said)", b4.get("can_generate") is False
+          and b4.get("blocked_reason") == gct.BLOCKED_BUILD, b4.get("blocked_reason"))
     b9m = fr.get_template_cut(CHAR, "shirt9", _={})
     check("[10.2] media off", b9m.get("can_generate") is False and b9m.get("blocked_reason") == "Media generation is off",
           b9m.get("blocked_reason"))
@@ -882,10 +985,10 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     atlas_resp = fr.template_cut_image(CHAR, "shirt9", "atlas", req(), _={})
     check("[10.4] atlas.png -> 200, the atlas file", getattr(atlas_resp, "status_code", 0) == 200
           and Path(getattr(atlas_resp, "path", "")) == atlas9_file, getattr(atlas_resp, "path", None))
-    raw_resp = fr.template_cut_image(CHAR, "shirt9", "raw", req(), _={})
-    tpl_resp = fr.template_cut_image(CHAR, "shirt9", "template", req(), _={})
-    check("[10.4] raw.png / template.png -> 200", getattr(raw_resp, "status_code", 0) == 200
-          and getattr(tpl_resp, "status_code", 0) == 200)
+    codes = {k: getattr(fr.template_cut_image(CHAR, "shirt9", k, req(), _={}), "status_code", 0)
+             for k in gct.CUT_FILES}
+    check("[10.4] every record picture -> 200 (both jobs' templates, references, answers)",
+          set(codes.values()) == {200}, codes)
     for item_id, kind in (("shirt9", "item.json"), ("shirt4", "atlas")):
         try:
             fr.template_cut_image(CHAR, item_id, kind, req(), _={})
@@ -912,7 +1015,8 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
                   sh.size)
     check("[10.5] the second GET renders nothing", len(SHEETS) == 1 and getattr(p2, "status_code", 0) == 200,
           len(SHEETS))
-    DRAPES["shirt4"] = {"state": "ready", "reason": "", "tsig": "t", "islands_path": None, "islands_sha": ""}
+    DRAPES["shirt4"] = {"state": "ready", "reason": "", "tsig": "t", "islands_path": None, "islands_sha": "",
+                        "record": {}, "worn": True}
     try:
         fr.template_pattern_image(CHAR, "shirt4", req(), _={})
         check("[10.5] no islands -> 404", False, "served")
@@ -952,6 +1056,301 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     pic = next((s for s in prog.get("steps") or [] if s.get("id") == "picture"), {})
     check("[10.7] piece_progress: the picture step is done, no view jobs", pic.get("status") == "done"
           and not (pic.get("numbers") or {}).get("hub_jobs"), pic)
+
+
+    # ------------------------------------------------------------------- [12] the rework of 2026-11-20 (user findings)
+    from app.core import piece_jobs  # noqa: E402
+
+    def item_fixture(iid, *, back=True, texture=None, drape=None):
+        ITEM_FILES[iid] = ITEM_FILES["shirt9"]
+        if back:
+            BACKS[iid] = _back_picture(_backs / f"{iid}_back.png")
+        else:
+            BACKS.pop(iid, None)
+        if texture is not None:
+            TEXTURES[iid] = texture
+        DRAPES[iid] = drape or {"state": "ready", "reason": "", "tsig": "tsig0", "islands_path": _islands_file,
+                                "islands_sha": ISLANDS_SHA, "record": DRAPE_REC, "worn": True}
+
+    def wait_done(iid):
+        for _ in range(1200):
+            if not gct.status(CHAR, iid).get("running"):
+                return gct.status(CHAR, iid)
+            time.sleep(0.05)
+        return gct.status(CHAR, iid)
+
+    # [12.1] the split: back panel alone vs everything else; templates with disjoint islands in the atlas frame
+    parts = gct.split_islands(pl2)
+    names = {k: sorted(i["name"] for i in v["islands"]) for k, v in parts.items()}
+    check("[12.1] split: back = [back]; front = band, front, sleeve_l, sleeve_r",
+          names == {"front": ["band", "front", "sleeve_l", "sleeve_r"], "back": ["back"]}, names)
+    lab = gct.rasterise_islands(pl2, 2048)
+    t_front = ~rgb_eq(np.asarray(gct.render_template(parts["front"], 2048)), gct.BACKGROUND)
+    t_back = ~rgb_eq(np.asarray(gct.render_template(parts["back"], 2048)), gct.BACKGROUND)
+    check("[12.1] the back template is exactly the back island (id 1 of the sorted names)",
+          np.array_equal(t_back, lab == 1), int(t_back.sum()))
+    check("[12.1] the front template is exactly the other four islands (ids 2..5)",
+          np.array_equal(t_front, lab >= 2), int(t_front.sum()))
+    check("[12.1] the two templates are disjoint and add up to the full template",
+          not (t_front & t_back).any() and int(t_front.sum()) + int(t_back.sum()) == int((lab > 0).sum()),
+          (int(t_front.sum()), int(t_back.sum()), int((lab > 0).sum())))
+    check("[12.1] both keep the atlas frame", parts["back"]["atlas_px"] == pl2["atlas_px"]
+          and parts["front"]["px_per_cm"] == pl2["px_per_cm"])
+    check("[12.1] a pattern without a back panel has the front job only",
+          list(gct.split_islands({"islands": [{"name": "front"}, {"name": "band"}]})) == ["front"])
+    check("[12.1] a split back part goes with the back job", gct.job_of("back_2") == "back"
+          and gct.job_of("sleeve_l") == "front" and gct.job_of("band") == "front")
+    sl = {"islands": [{"name": n} for n in ("front", "back", "back_2", "sleeve_l")],
+          "seams": [{"seam": 0, "a": "front", "b": "back"}, {"seam": 1, "a": "sleeve_l", "b": "front"},
+                    {"seam": 2, "a": "back", "b": "back_2"}]}
+    sp = gct.split_islands(sl)
+    check("[12.2] seams: each job keeps its inner seams, the front/back seams are the cross seams",
+          [p_["seam"] for p_ in sp["front"]["seams"]] == [1] and [p_["seam"] for p_ in sp["back"]["seams"]] == [2]
+          and [p_["seam"] for p_ in gct.cross_seams(sl)] == [0], (sp["front"]["seams"], sp["back"]["seams"]))
+
+    # [12.3] the two jobs end to end: per-job islands, prompts and Picture 2
+    item_fixture("two", texture="cut")
+    backend.answer = answer_filled
+    n0 = len(backend.calls)
+    rec_two = gct.generate(CHAR, "two")
+    front_call, back_call = backend.calls[n0], backend.calls[n0 + 1]
+    check("[12.3] two image jobs, both ready", len(backend.calls) == n0 + 2 and rec_two.get("state") == "ready"
+          and all(rec_two["jobs"][j]["state"] == "ready" for j in ("front", "back")), rec_two.get("jobs"))
+    check("[12.3] front prompt: the four front pieces, back prompt: the back panel only",
+          "front panel, left sleeve, right sleeve, neckband" in front_call["prompt"]
+          and "back panel" not in front_call["prompt"] and "pieces: back panel." in back_call["prompt"]
+          and "from behind" in back_call["prompt"], (front_call["prompt"][:60], back_call["prompt"][:60]))
+    check("[12.3] per-job coverage keys: back = {1}, front = {2, 3, 4, 5}",
+          set(rec_two["jobs"]["back"]["metrics"]["islands"]) == {"1"}
+          and set(rec_two["jobs"]["front"]["metrics"]["islands"]) == {"2", "3", "4", "5"},
+          {j: sorted(rec_two["jobs"][j]["metrics"]["islands"]) for j in ("front", "back")})
+    check("[12.3] the job references are named", rec_two["jobs"]["front"]["reference"] == "item"
+          and rec_two["jobs"]["back"]["reference"] == "back_view")
+    stem2 = gct.cut_dir(CHAR) / f"two_{rec_two['csig']}"
+    with Image.open(f"{stem2}.back_ref.png") as br:
+        bref = np.asarray(br.convert("RGB"))
+    check("[12.3] Picture 2 of the back job is the back view flattened on white",
+          tuple(bref[400, 400]) == (40, 40, 150) and tuple(bref[10, 10]) == (255, 255, 255),
+          (tuple(bref[400, 400]), tuple(bref[10, 10])))
+    with Image.open(f"{stem2}.atlas.png") as at2:
+        atl = np.asarray(at2.convert("RGB")).astype(int)
+    bk = next(i for i in pl2["islands"] if i["name"] == "back")
+    bx0, by0, bx1, by1 = bk["bbox_px"]
+    check("[12.3] the composed atlas carries the back island (150, 40, 40) +-2",
+          np.abs(atl[int((by0 + by1) / 2), int((bx0 + bx1) / 2)] - [150, 40, 40]).max() <= 2)
+    check("[12.3] summary metrics: worst IoU over both jobs, seam keys present",
+          rec_two["metrics"]["iou"] == min(rec_two["jobs"][j]["metrics"]["iou"] for j in ("front", "back"))
+          and "seam_cross_de" in rec_two["metrics"], rec_two["metrics"].get("iou"))
+
+    # [12.4] the composition rule on a 20 x 20 canvas: front island cols 2..7, back island cols 10..15 (all rows),
+    # each grown by 2 columns of bleed: front grown 0..9, back grown 8..17. Front is written first, then back outside
+    # the front island, then each island again: cols 0..7 red, 8..17 blue (cols 8, 9 are bleed of both: the back,
+    # written last, keeps them; neither island is touched), 18..19 white.
+    fm = np.zeros((20, 20), bool)
+    fm[:, 2:8] = True
+    bm = np.zeros((20, 20), bool)
+    bm[:, 10:16] = True
+    fg_ = np.zeros((20, 20), bool)
+    fg_[:, 0:10] = True
+    bg_ = np.zeros((20, 20), bool)
+    bg_[:, 8:18] = True
+    red = np.zeros((20, 20, 3), np.uint8)
+    red[:] = (200, 0, 0)
+    blue = np.zeros((20, 20, 3), np.uint8)
+    blue[:] = (0, 0, 200)
+    comp = gct.compose({"front": {"_image": red, "_grown": fg_, "_mask": fm},
+                        "back": {"_image": blue, "_grown": bg_, "_mask": bm}}, 20)
+    cols = ["r" if tuple(comp[5, j]) == (200, 0, 0) else "b" if tuple(comp[5, j]) == (0, 0, 200)
+            else "w" if tuple(comp[5, j]) == (255, 255, 255) else "?" for j in range(20)]
+    check("[12.4] compose: rrrrrrrr bbbbbbbbbb ww", "".join(cols) == "r" * 8 + "b" * 10 + "w" * 2, "".join(cols))
+
+    # [12.5] the back job rejected: the front answer kept, the atlas not written
+    def answer_back_white(params):
+        if params["reference_images"]["input_reference_image_1"].endswith(".template_back.png"):
+            return answer_white(params)
+        return answer_filled(params)
+
+    item_fixture("backbad", texture="cut")
+    backend.answer = answer_back_white
+    rec_bb = gct.generate(CHAR, "backbad")
+    stem_bb = gct.cut_dir(CHAR) / f"backbad_{rec_bb['csig']}"
+    check("[12.5] back rejected -> rejected, reason names the back job, both answers kept, no atlas",
+          rec_bb.get("state") == "rejected" and rec_bb.get("reason") == "Back: coverage 0.00 < 0.97"
+          and Path(f"{stem_bb}.raw_front.png").is_file() and Path(f"{stem_bb}.raw_back.png").is_file()
+          and not Path(f"{stem_bb}.atlas.png").is_file(), (rec_bb.get("state"), rec_bb.get("reason")))
+
+    # [12.6] redo one job: "back" re-uses the front answer (1 image job); "front" without a back answer runs both
+    backend.answer = answer_filled
+    n0 = len(backend.calls)
+    rec_ob = gct.generate(CHAR, "backbad", only="back")
+    check("[12.6] only back: 1 image job, the back job's references, ready",
+          len(backend.calls) == n0 + 1 and backend.calls[-1]["params"]["reference_images"]["input_reference_image_2"]
+          .endswith(".back_ref.png") and rec_ob.get("state") == "ready" and rec_ob.get("only") == "back",
+          (len(backend.calls) - n0, rec_ob.get("state"), rec_ob.get("reason")))
+    item_fixture("only2", texture="cut")
+    n0 = len(backend.calls)
+    rec_o2 = gct.generate(CHAR, "only2", only="front")
+    check("[12.6] only front without a back answer of this csig: both jobs run", len(backend.calls) == n0 + 2
+          and rec_o2.get("state") == "ready", len(backend.calls) - n0)
+
+    # [12.7] the back view missing: the flow makes it first and counts it on the button
+    item_fixture("mk1", back=False, texture="cut")
+    plan = gct.job_plan(CHAR, "mk1")
+    check("[12.7] plan with the back view missing: 1 view + 0 upscale + front + back = 3 jobs, at most 4",
+          plan == {"back_view": 1, "upscale": 0, "front": 1, "back": 1, "total": 3, "max": 4}, plan)
+    v0 = len(VIEW_JOBS)
+    rec_mk = gct.generate(CHAR, "mk1")
+    want_mk = gct.csig(ISLANDS_SHA, hashlib.sha256(ITEM_FILES["mk1"].read_bytes()).hexdigest(),
+                       hashlib.sha256(BACKS["mk1"].read_bytes()).hexdigest())
+    check("[12.7] the back view rendered once, then the cut keyed with it", VIEW_JOBS[v0:] == [("mk1", "back")]
+          and rec_mk.get("back_view", {}).get("made") is True and rec_mk.get("csig") == want_mk
+          and rec_mk.get("state") == "ready"
+          and rec_mk.get("csig") != gct.csig(ISLANDS_SHA, hashlib.sha256(ITEM_FILES["mk1"].read_bytes()).hexdigest(), ""),
+          (VIEW_JOBS[v0:], rec_mk.get("csig"), want_mk))
+    check("[12.7] plan afterwards: 2 jobs", gct.job_plan(CHAR, "mk1")["total"] == 2, gct.job_plan(CHAR, "mk1"))
+    check("[12.7] tiny item picture: +1 upscale in the plan", gct.job_plan(CHAR, "tiny")["upscale"] == 1)
+    item_fixture("mk2", back=False, texture="cut")
+    VIEW_REFUSE["on"] = True
+    n0 = len(backend.calls)
+    rec_mk2 = gct.generate(CHAR, "mk2")
+    VIEW_REFUSE["on"] = False
+    check("[12.7] a refused back view: failed with the plain reason, no image job spent",
+          rec_mk2.get("state") == "failed" and "back view was refused" in rec_mk2.get("reason", "")
+          and len(backend.calls) == n0, rec_mk2.get("reason"))
+
+    # [12.8] one hub-job flow per piece: the server refuses the second (409 with the holder's reason)
+    item_fixture("lock1", texture="cut")
+    check("[12.8] claim -> '' ; a second claim -> the cut's reason",
+          piece_jobs.claim(CHAR, "lock1", "cut") == "" and piece_jobs.claim(CHAR, "lock1", "view:back")
+          == piece_jobs.REASONS["cut"])
+    try:
+        tv.start(CHAR, "lock1", "front", run=lambda *a: None)
+        check("[12.8] a view while the cut runs -> Busy", False, "started")
+    except tv.Busy as e:
+        check("[12.8] a view while the cut runs -> Busy", str(e) == piece_jobs.REASONS["cut"], e)
+    try:
+        fr.generate_template_view(CHAR, "lock1", "back", _={})
+        check("[12.8] route: a view while the cut runs -> 409", False, "started")
+    except HTTPException as e:
+        check("[12.8] route: a view while the cut runs -> 409 with the reason",
+              e.status_code == 409 and e.detail == piece_jobs.REASONS["cut"], (e.status_code, e.detail))
+    check("[12.8] the views payload names why its buttons are off",
+          tv.status(CHAR, "lock1").get("busy") == piece_jobs.REASONS["cut"], tv.status(CHAR, "lock1").get("busy"))
+    for label, call in (("Use this", lambda: fr.use_template_view(CHAR, "lock1", "back", 1, _={})),
+                        ("Remove", lambda: fr.delete_template_view(CHAR, "lock1", "back", _={}))):
+        try:
+            call()
+            check(f"[12.8] route: {label} on a view while the cut runs -> 409", False, "ran")
+        except HTTPException as e:
+            check(f"[12.8] route: {label} on a view while the cut runs -> 409 with the reason",
+                  e.status_code == 409 and e.detail == piece_jobs.REASONS["cut"], (e.status_code, e.detail))
+    piece_jobs.release(CHAR, "lock1", "cut")
+    check("[12.8] released", piece_jobs.holder(CHAR, "lock1") == "")
+    piece_jobs.claim(CHAR, "lock1", "view:front")
+    try:
+        gct.start(CHAR, "lock1", run=lambda *a, **k: None)
+        check("[12.8] the cut while a view runs -> Busy", False, "started")
+    except gct.Busy as e:
+        check("[12.8] the cut while a view runs -> Busy", str(e) == piece_jobs.REASONS["view:front"], e)
+    try:
+        fr.generate_template_cut(CHAR, "lock1", _={})
+        check("[12.8] route: the cut while a view runs -> 409", False, "started")
+    except HTTPException as e:
+        check("[12.8] route: the cut while a view runs -> 409 with the reason",
+              e.status_code == 409 and e.detail == piece_jobs.REASONS["view:front"], (e.status_code, e.detail))
+    dl = gct.dialog_state(CHAR, "lock1")
+    check("[12.8] the dialog says the view runs, not the drape", dl.get("can_generate") is False
+          and dl.get("blocked_reason") == piece_jobs.REASONS["view:front"], dl.get("blocked_reason"))
+    piece_jobs.release(CHAR, "lock1", "view:front")
+    gate12 = threading.Event()
+    starts = []
+
+    def slow_run(c, i, **k):
+        gate12.wait(10)
+
+    racers = [threading.Thread(target=lambda: starts.append(gct.start(CHAR, "lock1", run=slow_run)))
+              for _ in range(4)]
+    for th in racers:
+        th.start()
+    for th in racers:
+        th.join()
+    check("[12.8] four racing starts -> exactly one starts", sorted(starts) == [False, False, False, True], starts)
+    dr = gct.dialog_state(CHAR, "lock1")
+    check("[12.8] while the cut runs: running, no blocked reason, the button off", dr.get("running") is True
+          and dr.get("blocked_reason") == "" and dr.get("can_generate") is False, dr.get("blocked_reason"))
+    gate12.set()
+    wait_done("lock1")
+    check("[12.8] the claim is released when the flow ends", piece_jobs.holder(CHAR, "lock1") == "")
+
+    # [12.9] the dialog's reason per drape state — each only where it is true
+    states = {
+        "dr_ready": ({}, False, ""),
+        "dr_build": ({"state": "missing", "worn": True}, False, gct.BLOCKED_BUILD),
+        "dr_notworn": ({"state": "missing", "worn": False}, False, gct.BLOCKED_NOT_WORN),
+        "dr_running": ({"state": "missing", "worn": True}, True, gct.BLOCKED_DRAPING),
+        "dr_failed": ({"state": "failed", "worn": True}, False, gct.BLOCKED_FAILED),
+        "dr_blocked": ({"state": "blocked", "worn": True, "reason": "Sheer fabric needs its piece-only views first"},
+                       False, "Sheer fabric needs its piece-only views first"),
+        "dr_noisl": ({"state": "ready", "worn": True, "islands_path": None, "islands_sha": ""}, False,
+                     gct.BLOCKED_NO_ISLANDS),
+    }
+    got = {}
+    for iid, (over, building, _want) in states.items():
+        base_d = {"state": "ready", "reason": "", "tsig": "tsig0", "islands_path": _islands_file,
+                  "islands_sha": ISLANDS_SHA, "record": DRAPE_REC, "worn": True}
+        if over.get("state") not in (None, "ready"):
+            base_d.update({"islands_path": None, "islands_sha": "", "record": {}, "tsig": None})
+        base_d.update(over)
+        item_fixture(iid, texture="cut", drape=base_d)
+        BUILDING[iid] = building
+        got[iid] = gct.dialog_state(CHAR, iid).get("blocked_reason")
+    check("[12.9] one true reason per state (ready none, missing -> Build, not worn, draping, failed, own, "
+          "no islands)", got == {k: v[2] for k, v in states.items()}, got)
+    check("[12.9] 'not draped' is never said while the Build drapes it", got["dr_running"] != gct.BLOCKED_BUILD)
+    dready = gct.dialog_state(CHAR, "dr_ready")
+    check("[12.9] ready: the plan says 2 jobs and the back panel", dready.get("plan", {}).get("total") == 2
+          and dready.get("has_back") is True and dready.get("can_generate") is True, dready.get("plan"))
+
+    # [12.10] one click applies itself: the texture selected at the start, the figure re-assembled at the end
+    item_fixture("auto1", texture="projection")
+    p0, s0, i0 = len(SET_PARAMS), len(SCHEDULED), len(INVALIDATED)
+    check("[12.10] start", gct.start(CHAR, "auto1") is True)
+    check("[12.10] starting selects texture 'cut' (the flow's only purpose)", SET_PARAMS[p0:] == [("auto1", "cut")],
+          SET_PARAMS[p0:])
+    st_a = wait_done("auto1")
+    check("[12.10] ready, the figure invalidated and re-assembled once (no second click)",
+          (st_a.get("record") or {}).get("state") == "ready" and len(SCHEDULED) == s0 + 1
+          and len(INVALIDATED) == i0 + 1, (st_a.get("record", {}).get("state"), len(SCHEDULED) - s0))
+    da = gct.dialog_state(CHAR, "auto1")
+    check("[12.10] the dialog reads it applied and current", da.get("applied") is True and da.get("current") is True
+          and da.get("texture") == "cut", (da.get("applied"), da.get("current"), da.get("texture")))
+    sv = tv.status(CHAR, "auto1")
+    check("[12.10] the views with texture cut: none due, the back one used by the cut", sv.get("hub_jobs") == 0
+          and sv.get("cut_uses") == ["back"], sv)
+
+    # [12.11] a cut-textured piece keeps its drape when only a projection view changed (no re-drape, no drop-off)
+    p_cut = gt.validate_params({"kind": "top", "texture": "cut"})[0]
+    t_old = gt.tsig(p_cut, base_sha="bsha", texture_sha="tex0", lower=["x:-"])
+    t_new = gt.tsig(p_cut, base_sha="bsha", texture_sha="tex1", lower=["x:-"])
+    folder = gt.templates_dir(CHAR)
+    (folder / f"stand_{t_old}.glb").write_bytes(b"glb")
+    old_rec = {"item_id": "stand", "tsig": t_old, "accepted": True, "texture_sha": "tex0", "created_at": "2026"}
+    (folder / f"stand_{t_old}.json").write_text(json.dumps(old_rec), encoding="utf-8")
+
+    def drape_with(params, lower_all=("x:-",)):
+        with patch.object(gt, "_key", lambda *a, **k: (t_new, None, {"front": "", "back": ""}, params,
+                                                       list(lower_all))):
+            return gt.drape_state(CHAR, "stand", base_sha="bsha", lower=[], item=None)
+    d_cut = drape_with(p_cut)
+    check("[12.11] texture cut, only the texture part differs -> the old drape stands in (ready)",
+          d_cut.get("state") == "ready" and d_cut.get("stand_in") is True and d_cut.get("tsig") == t_old, d_cut)
+    p_proj = gt.validate_params({"kind": "top", "texture": "projection"})[0]
+    check("[12.11] texture projection -> missing (the projection must be re-baked)",
+          drape_with(p_proj).get("state") == "missing")
+    check("[12.11] another lower layer -> missing (not only the texture differs)",
+          drape_with(p_cut, ("y:-",)).get("state") == "missing")
+    (folder / f"stand_{t_old}.json").write_text(json.dumps({**old_rec, "texture_sha": None}), encoding="utf-8")
+    check("[12.11] a record without texture_sha never stands in", drape_with(p_cut).get("state") == "missing")
 
 check("[8.5] no outbound connection attempt", OUTBOUND == [], OUTBOUND)
 

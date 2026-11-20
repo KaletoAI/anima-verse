@@ -402,14 +402,25 @@ def remove(character_name: str, item_id: str, view: str) -> Dict[str, Any]:
 
 # --- background start (the dialog's Generate / Regenerate) ---------------------------------
 
+class Busy(RuntimeError):
+    """Another hub-job flow of the same piece runs (``piece_jobs``): the route answers 409 with this text."""
+
+
 def start(character_name: str, item_id: str, view: str, *,
           run: Optional[Callable[[str, str, str], Path]] = None) -> bool:
-    """Start ``generate`` of one view in a thread; False when that view already runs."""
+    """Start ``generate`` of one view in a thread; False when that view already runs. Raises ``Busy`` while
+    ANOTHER hub-job flow of the piece holds it (``piece_jobs``: the texture from cut, the other view) — one flow per
+    piece at a time, so a second click, a second tab or a click during the cut never spends a job."""
+    from app.core import piece_jobs
     view_path(character_name, item_id, view)
     key = (character_name, item_id, view)
+    what = f"view:{view}"
     with _lock:
         if key in _running and _running[key] == "running":
             return False
+        held = piece_jobs.claim(character_name, item_id, what)
+        if held:
+            raise Busy(held)
         _running[key] = "running"
     fn = run or generate
 
@@ -424,6 +435,7 @@ def start(character_name: str, item_id: str, view: str, *,
             outcome = str(e) or type(e).__name__
         with _lock:
             _running[key] = outcome or "done"
+        piece_jobs.release(character_name, item_id, what)
 
     threading.Thread(target=work, name=f"template-view-{item_id}-{view}", daemon=True).start()
     return True
@@ -457,9 +469,23 @@ def status(character_name: str, item_id: str) -> Dict[str, Any]:
                     "max_jobs": JOBS_PER_VIEW})
     missing = [v["view"] for v in out if not v["accepted"]]
     sheer = is_sheer(item)
-    # user finding 2026-11-20: with the texture from cut the views only feed the projection FALLBACK — optional, never
-    # due (no hub jobs counted), and a sheer piece is not blocked without them
+    # user finding 2026-11-20: with the texture from cut the views only feed the projection FALLBACK — never due
+    # here (no hub jobs counted), and a sheer piece is not blocked without them. The BACK view is Picture 2 of the
+    # cut's back job (``garment_cut_texture``): the cut flow makes it when it is missing and counts it on its own
+    # button, so it is not due here either (``cut_uses``).
     optional = projection_optional(item)
     due = [] if optional else missing
+    from app.core import piece_jobs
+    holder = piece_jobs.holder(character_name, item_id)
+    if holder == "cut":
+        # the cut flow makes a missing back view itself (inside its own claim): show it as rendering
+        from app.core import garment_cut_texture as gct
+        if gct.progress_step(character_name, item_id) == "back_view":
+            for cell in out:
+                if cell["view"] == "back":
+                    cell["running"] = True
     return {"views": out, "sheer": sheer, "required": sheer and not optional, "optional": optional,
-            "missing": missing, "hub_jobs": len(due), "max_jobs": JOBS_PER_VIEW * len(due)}
+            "cut_uses": ["back"] if optional else [],
+            "missing": missing, "hub_jobs": len(due), "max_jobs": JOBS_PER_VIEW * len(due),
+            # the plain reason every job button of the piece is disabled for ("" = free): ``piece_jobs``
+            "busy": piece_jobs.reason(character_name, item_id)}

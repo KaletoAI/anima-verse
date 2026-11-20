@@ -95,31 +95,69 @@ the atlas into the grafted mesh). With `texture` = `"cut"` the piece-only views 
 Build does not count them as due and a sheer piece is not blocked without them
 (`garment_template_views.projection_optional`).
 
-### The job
+### The job — one click, two image jobs
 
-One click in the template dialog = one attempt (`garment_cut_texture.start` → `generate` in a thread; no retry, no
-automatic start from the Build):
+One click in the template dialog = one flow (`garment_cut_texture.start` → `generate` in a thread; no retry, no
+automatic start from the Build). Starting it sets the param `texture` to `"cut"` (`select_cut` — the result has no
+other use) and the flow ends by applying itself (`apply`: `figure.invalidate` + `garment_assembly.schedule`, CPU) —
+no second click (user finding 2026-11-20).
 
-1. The CLEAN model template is rendered from `islands.json` (`render_template`: neutral grey islands, a thin outline
-   inside the mask, white background, square, no text).
+The cut is made by TWO routed image jobs (`JOBS` = front, back; `split_islands`):
+
+| job | islands | Picture 2 | prompt |
+|---|---|---|---|
+| front | every island except the back panel: front panel, sleeves, neckband, collar, cuffs | the item picture | `shared/templates/image/garment_cut_texture.md` |
+| back | the back panel alone (`BACK_PARTS`) | the piece's back view (`garment_template_views`, occasion `garment_view`) | `shared/templates/image/garment_cut_texture_back.md` |
+
+**Sleeve rule:** sleeves (and band, collar, placket, cuffs) go with the front job — the item picture shows the front,
+and a sleeve seen from the front carries its fabric there; only the back panel needs the back view. A pattern without a
+back panel runs the front job only. Each job keeps the atlas frame (same size, same px/cm) with only its islands drawn.
+
+1. The back view is made first when it is missing (`_ensure_back_view` → `garment_template_views.generate`, 1 job, at
+   most 2); a refused view stops the flow with a plain reason before any cut job. The button counts it
+   (`job_plan`: `back_view` + `upscale` + front + back = `total`, `max` with the view's second attempt).
 2. The FULL-RES item picture, flattened on white. Below **`MIN_ITEM_SIDE` = 1024 px** (long side) it first goes
    through the routed `upscale` occasion (one extra job; Lanczos when that fails, and Lanczos tops up a result still
    below the minimum) — tiny item pictures gave a wrong logo.
-3. ONE routed img2img render with both pictures (template first, item second) on the occasion
-   `garment_cut_texture`: `routing.run_routed` → `run_on_backend` → `run_on_backend_channel`. The prompt is the
-   shipped Jinja2 file `shared/templates/image/garment_cut_texture.md` (English; it names the piece and its real
-   pattern pieces; not world-overridable, `/admin/templates` stays LLM-only). The use case `garment_cut_texture`
-   carries no style, negative or instruction — the prompt is the whole subject.
-4. Post-processing (`app/core/cut_texture_post.py`, pure numpy/PIL): resample the answer to the template frame and
-   register it raster-to-raster (one axis-aligned map for the whole atlas), gate it, cut it to the islands with bleed
-   padding, colour-match it to the item fabric, measure seam continuity.
-5. The record + files go to `templates/cut/` (`{item}_{csig}.json`, `.template.png`, `.item.png`, `.raw.png`, and
-   `.atlas.png` only for state `ready`). States: `ready`, `rejected` (the gate's first failing measure is the reason),
-   `failed` (the error, e.g. media off, no route, backend busy).
+3. Per job the CLEAN model template of its islands (`render_template`: neutral grey islands, a thin outline inside the
+   mask, white background, square, no text) and ONE routed img2img render (template first, reference second) on the
+   occasion `garment_cut_texture`: `routing.run_routed` → `run_on_backend` → `run_on_backend_channel`. The prompts
+   are shipped Jinja2 files (English; they name the piece and the job's real pattern pieces; not world-overridable,
+   `/admin/templates` stays LLM-only). The use case `garment_cut_texture` carries no style, negative or
+   instruction — the prompt is the whole subject.
+4. Post-processing per job (`app/core/cut_texture_post.py`, pure numpy/PIL): resample the answer to the template
+   frame and register it raster-to-raster, gate it against the job's islands, cut it with bleed padding,
+   colour-match it to the ITEM fabric (both jobs — one fabric, one colour). A rejected or failed job stops the flow:
+   the next job is marked `skipped` and not spent; the reason is prefixed `Front:` / `Back:`.
+5. `compose`: the front job's grown islands, then the back job's grown islands outside the front islands, then each
+   job's own islands — one atlas. Seam continuity is measured inside the jobs (`seam_de`) and across them
+   (`cross_seams` → `seam_cross_de`, the front/back side seams); both are metrics, not gates.
+6. The record + files go to `templates/cut/` (`{item}_{csig}.json`, `.template_front.png`, `.template_back.png`,
+   `.item.png`, `.back_ref.png`, `.raw_front.png`, `.raw_back.png`, and `.atlas.png` only for state `ready`). The
+   record keeps both answers under `jobs.front` / `jobs.back` (state, reason, metrics, backend, routing). States:
+   `ready`, `rejected` (the gate's first failing measure is the reason), `failed` (the error, e.g. media off, no
+   route, backend busy). "Redo front job" / "Redo back job" (`only`) re-run one job and re-use the other job's
+   answer of the same csig (1 image job).
 
 The job never holds `keyed_lock("character_profile", …)` and never submits from inside a GPU worker. Media off
 (`MediaGenerationDisabled`), an empty chain (`NoRouteError`) and a piece without a ready drape with islands are refused
 synchronously, before any thread or file exists.
+
+### One hub-job flow per piece
+
+`app/core/piece_jobs.py`: the cut flow (`"cut"`) and each piece-only view (`"view:front"` / `"view:back"`) claim the
+piece `(character, item)` before they start; a second claim is refused with the holder's plain reason (`Busy`, the
+routes answer 409). The dialog mirrors it: while one flow runs every job button of the piece is off and says why
+(`blocked_reason` of the cut payload, `busy` of the views payload). The Dario test spent two needless view jobs while
+the cut ran, and the new views changed the drape key so the shirt dropped off the figure.
+
+### A cut-textured piece keeps its drape
+
+With `texture` = `"cut"` the piece-only views only feed the projection fallback; a changed view changes `tsig` (the
+projection is baked into the drape) but nothing the figure shows. `garment_template.cut_stand_in` therefore lets the
+newest accepted drape whose `tsig` differs ONLY in its texture part (recomputed exactly from the record's
+`texture_sha`) stand in as `ready` (`drape_state` … `stand_in: true`) — no re-drape, no drop-off. A record without
+`texture_sha` (older drapes) never stands in; with `"projection"` the drape is due as before.
 
 ### The occasion `garment_cut_texture`
 
@@ -154,15 +192,17 @@ The upsampler rewrites the prompt; a P-H3 backend without that entry still runs,
   so mip-maps and bilinear lookups at a seam never read the background.
 - `CLAMP_DE` = 25.0 — the Lab mean/std transfer onto the item's fabric (BiRefNet matte, trimmed luminance range)
   moves the mean by at most this ΔE76; the record keeps `de_before` / `de_after` (the test jobs were too saturated).
-- `POST_VERSION` = 1 — bump it whenever the post-processing changes an atlas; it is part of `csig`.
+- `POST_VERSION` = 2 — bump it whenever the post-processing changes an atlas; it is part of `csig` (2: the
+  post-processing runs per job and the two answers are composed).
 - Seam continuity (`seam_continuity`, the median ΔE76 across the `seams` pairs) is a metric, not a gate.
 
 ### The key `csig`
 
-`csig` = md5 of (`islands_sha` of the drape's `islands.json`, `item_sha` of the item picture, `PROMPT_SHA` of the prompt file, `POST_VERSION`), 12 hex.
+`csig` = md5 of (`islands_sha` of the drape's `islands.json`, `item_sha` of the item picture, `back_sha` of the back view the back job reads ("" without a back panel), `PROMPT_SHA` of both prompt files, `POST_VERSION`), 12 hex.
 
 It deliberately does not contain the drape key `tsig`: `tsig` also carries the piece-only views, and a re-rendered
-view changes nothing the cut atlas depends on. A re-drape with new islands (new body, new params, a version bump), a
+FRONT view changes nothing the cut atlas depends on. The back view does: a new back view makes the cut stale (the
+Views tab says so next to it). A re-drape with new islands (new body, new params, a version bump), a
 new item picture, a changed prompt or post version gives a new `csig`; the figure then shows the projection and the
 row says "cut out of date" (`cut_info` state `stale`) — an old atlas is never painted onto new islands.
 
@@ -174,15 +214,20 @@ row says "cut out of date" (`cut_info` state `stale`) — an old atlas is never 
 
 | route | what |
 |---|---|
-| `GET /characters/{c}/figure/template/{item_id}/cut` | status, the current record, `can_generate`, `blocked_reason`, `upscale`, `islands_sha`, which files exist |
-| `POST /characters/{c}/figure/template/{item_id}/cut/generate` | start the job (409 media off, 400 not built / no islands / no picture, 503 no route — all before a thread starts) |
-| `GET /characters/{c}/figure/template/{item_id}/cut/{kind}.png` | `kind` = `template` / `raw` / `atlas` of the current (or the `v=`-named) csig |
+| `GET /characters/{c}/figure/template/{item_id}/cut` | status (`running`, `step`), the current record with both jobs, `can_generate`, `blocked_reason` (ONE true reason: the drape state, picture, media, routing or another flow of the piece), `drape_reason`, `plan` (job count), `current`, `texture`, `applied`, `has_back`, `upscale`, `islands_sha`, which files exist |
+| `POST /characters/{c}/figure/template/{item_id}/cut/generate` | start the flow, body `{"only": "" / "front" / "back"}` (409 media off or another flow of the piece runs, 400 not built / no islands / no picture, 503 no route — all before a thread starts) |
+| `GET /characters/{c}/figure/template/{item_id}/cut/{kind}.png` | `kind` = `template_front` / `item` / `raw_front` / `template_back` / `back_ref` / `raw_back` / `atlas` of the current (or the `v=`-named) csig |
 | `GET /characters/{c}/figure/template/{item_id}/pattern.png` | the DEBUG pattern sheet of the current drape's islands (pastel islands, names, cm sizes, grain arrows, seam letters, cap height, px/cm), rendered on demand and cached as `{item}_{islands sha[:12]}.pattern.png`; 404 when not built or a grid kind. Never sent to a model. |
 
 ### UI
 
-Game-Admin → Characters → Figure → the template parameter dialog: the param `texture` (Projection / From cut), the
-item picture as the source of the texture, the pattern sheet as soon as the piece is built, and the "Texture from cut"
-box (template / answer / atlas thumbnails, the metrics line, the button "Make texture from cut — 1 image job (+1
-upscale)", and the reason under a disabled button). The Figure row shows the texture in use (an atlas thumbnail
-while the cut atlas is in use) or why it is the projection.
+Game-Admin → Characters → Figure → the template parameter dialog, three sub-tabs with a traffic light each (it fits one
+1080p screen): **Cut** (the overlay, presets, the params incl. `texture`, the item picture, the drape status and its
+Build), **Texture** (the cut flow: one status line per step — Pattern, Back view, Front job, Back job, Atlas, On the
+figure — with a traffic light and the plain reason; "Make texture from cut — 2 image jobs (+1 for the back view, at
+most +2, +1 upscale)" or "Everything is current"; Redo front job / Redo back job, 1 image job each; the note that
+starting sets Texture to "From cut"; thumbnails of the pattern sheet, both templates, both pictures, both answers and
+the atlas, click enlarges) and **Views** (the piece-only views: which one the cut uses, which only feed the
+projection fallback, all buttons off with the reason while another flow of the piece runs). The tab polls while the
+flow runs and re-reads the dialog when it ends. The Figure row shows the texture in use (an atlas thumbnail while the
+cut atlas is in use) or why it is the projection.

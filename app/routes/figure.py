@@ -81,14 +81,15 @@ body actions):
 * ``PUT  /characters/{c}/figure/template/{item_id} {params, source}`` — store the parameters on the ITEM
   (every wearer; ``garment_template.set_params``); spends nothing — the next Build re-drapes. 400 with the
   validation errors (nothing stored).
-* ``GET  /characters/{c}/figure/template/{item_id}/cut`` — the dialog's "Texture from cut" box
-  (``garment_cut_texture.dialog_state`` + picture URLs): ``{running, error, csig, record, can_generate,
-  blocked_reason, upscale, islands_sha, files, urls, pattern_url}``.
-* ``POST /characters/{c}/figure/template/{item_id}/cut/generate`` — ONE routed image job (occasion
-  ``garment_cut_texture``) in the background; 409 media off / already running, 503 empty chain (``NoRouteError``
-  text), 400 without a ready drape with islands or an item picture.
-* ``GET  /characters/{c}/figure/template/{item_id}/cut/{template|raw|atlas}.png[?v=<csig>]`` — the record's
-  pictures; 404 when missing.
+* ``GET  /characters/{c}/figure/template/{item_id}/cut`` — the dialog's Texture tab
+  (``garment_cut_texture.dialog_state`` + picture URLs): ``{running, step, error, csig, record, can_generate,
+  blocked_reason, current, plan, texture, applied, upscale, has_back, islands_sha, files, urls, pattern_url}``.
+* ``POST /characters/{c}/figure/template/{item_id}/cut/generate {only?}`` — the cut flow in the background (the back
+  view when missing, the front job, the back job, the atlas applied; ``only`` "front" / "back" redoes one job) and
+  the texture set to "cut"; 409 media off / already running / another hub-job flow of the piece (``piece_jobs``),
+  503 empty chain (``NoRouteError`` text), 400 without a ready drape with islands or an item picture.
+* ``GET  /characters/{c}/figure/template/{item_id}/cut/<kind>.png[?v=<csig>]`` — the record's pictures (``kind``
+  one of ``garment_cut_texture.CUT_FILES``); 404 when missing.
 * ``GET  /characters/{c}/figure/template/{item_id}/pattern.png`` — the debug pattern sheet of the current drape's
   islands (rendered on demand, cached by the islands sha); 404 while not built or without islands.
 * ``POST /characters/{c}/base-body/run-all`` — the Base body tab's "Run all"
@@ -936,18 +937,33 @@ def generate_template_view(character_name: str, item_id: str, view: str,
     _template_view_name(view)
     if not media_generation_enabled():
         raise HTTPException(status_code=409, detail="Media generation is switched off")
-    if not tv.start(character_name, item_id, view):
+    try:
+        started = tv.start(character_name, item_id, view)
+    except tv.Busy as e:          # another hub-job flow of this piece runs (``piece_jobs``)
+        raise HTTPException(status_code=409, detail=str(e))
+    if not started:
         raise HTTPException(status_code=409, detail="This view is being made already")
     return _template_views(character_name, item_id)
+
+
+def _piece_free(character_name: str, item_id: str) -> None:
+    """409 while a hub-job flow of the piece runs (``piece_jobs``): a view changed under a running cut would key its
+    record with a back view the back job never read."""
+    from app.core import piece_jobs
+    held = piece_jobs.reason(character_name, item_id)
+    if held:
+        raise HTTPException(status_code=409, detail=held)
 
 
 @router.post("/{character_name}/figure/template/{item_id}/views/{view}/use/{attempt}")
 def use_template_view(character_name: str, item_id: str, view: str, attempt: int,
                       _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """A205, "Use this": a stored attempt becomes the view (a refused one accepted by the user). No job."""
+    """A205, "Use this": a stored attempt becomes the view (a refused one accepted by the user). No job. 409 while a
+    hub-job flow of the piece runs."""
     from app.core import garment_template_views as tv
     _template_item(character_name, item_id)
     _template_view_name(view)
+    _piece_free(character_name, item_id)
     try:
         tv.use_attempt(character_name, item_id, view, attempt)
     except ValueError as e:
@@ -960,12 +976,13 @@ async def upload_template_view(character_name: str, item_id: str, view: str, req
                                _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """A205, Upload: an image file (multipart ``file``) becomes the view — cut out and checked like a render; a
     refused upload is accepted by the user with its reasons recorded. No job. 413 / 415 for an oversized or
-    non-image body."""
+    non-image body; 409 while a hub-job flow of the piece runs."""
     from starlette.concurrency import run_in_threadpool
     from app.core import garment_template_views as tv
     from app.core.upload_limits import ensure_image, guard_content_length, read_upload_capped
     _template_item(character_name, item_id)
     _template_view_name(view)
+    _piece_free(character_name, item_id)
     guard_content_length(request, what="Piece-only view")
     form = await request.form()
     file = form.get("file")
@@ -982,9 +999,11 @@ async def upload_template_view(character_name: str, item_id: str, view: str, req
 @router.delete("/{character_name}/figure/template/{item_id}/views/{view}")
 def delete_template_view(character_name: str, item_id: str, view: str,
                          _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """A205: drop the accepted view (the bake falls back to the item picture; a sheer piece reads due)."""
+    """A205: drop the accepted view (the bake falls back to the item picture; a sheer piece reads due). 409 while a
+    hub-job flow of the piece runs."""
     from app.core import garment_template_views as tv
     _template_item(character_name, item_id)
+    _piece_free(character_name, item_id)
     return tv.remove(character_name, item_id, _template_view_name(view))
 
 
@@ -1031,22 +1050,32 @@ def get_template_cut(character_name: str, item_id: str,
     return _template_cut_payload(character_name, item_id)
 
 
+class TemplateCutRequest(BaseModel):
+    #: "" = the whole flow (Run all); "front" / "back" = redo that one image job (the other job's answer is re-used).
+    only: str = ""
+
+
 @router.post("/{character_name}/figure/template/{item_id}/cut/generate")
-def generate_template_cut(character_name: str, item_id: str,
+def generate_template_cut(character_name: str, item_id: str, body: Optional[TemplateCutRequest] = None,
                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """"Make texture from cut": ONE routed image job (occasion ``garment_cut_texture``; +1 routed upscale for an item
-    picture under 1024 px) in the background. Checked before the thread starts: media off -> 409 through the global
-    ``MediaGenerationDisabled`` handler, an empty chain -> 503 with the ``NoRouteError`` text, no ready drape with
-    islands or no item picture -> 400, already running -> 409. Answers the box's payload."""
+    """"Make texture from cut": the flow in the background (``garment_cut_texture`` module comment: the back view when
+    missing, a routed upscale of a small item picture, the front job, the back job, then the atlas applied to the
+    figure; ``only`` redoes one job). Selects the texture "cut" on the piece. Checked before the thread starts: media
+    off -> 409 through the global ``MediaGenerationDisabled`` handler, an empty chain -> 503 with the ``NoRouteError``
+    text, no ready drape with islands or no item picture -> 400, already running or another hub-job flow of this
+    piece running (``piece_jobs``) -> 409 with its reason. Answers the box's payload."""
     from app.core import garment_cut_texture as gct
     from app.imagegen.routing import NoRouteError
     _template_item(character_name, item_id)
+    only = (body.only if body else "") or None
     try:
-        started = gct.start(character_name, item_id)
+        started = gct.start(character_name, item_id, only=only)
     except NoRouteError as e:
         raise HTTPException(status_code=503, detail=str(e))
-    except gct.NotReady as e:
+    except (gct.NotReady, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except gct.Busy as e:
+        raise HTTPException(status_code=409, detail=str(e))
     if not started:
         raise HTTPException(status_code=409, detail="The texture from cut is being made already")
     return _template_cut_payload(character_name, item_id)
@@ -1055,8 +1084,8 @@ def generate_template_cut(character_name: str, item_id: str,
 @router.get("/{character_name}/figure/template/{item_id}/cut/{kind}.png")
 def template_cut_image(character_name: str, item_id: str, kind: str, request: Request, v: Optional[str] = None,
                        _: Dict[str, Any] = Depends(require_admin)):
-    """The cut record's model template, the model's answer or the accepted atlas (``kind`` template / raw / atlas)
-    of csig ``v`` (else the current one); 404 when it does not exist."""
+    """One picture of the cut record (``kind`` one of ``garment_cut_texture.CUT_FILES``: each job's template, its
+    Picture 2 and its answer, and the atlas) of csig ``v`` (else the current one); 404 when it does not exist."""
     from app.core import garment_cut_texture as gct
     from app.core.http_files import etag_file_response
     _template_item(character_name, item_id)

@@ -27,14 +27,15 @@ E) The occasion: ``garment_cut_texture`` with its admin label (the first string 
    all three.
 F) The gate: every key and value of ``CUT_GATE`` (``app/core/cut_texture_post.py``) is a row of the gate table,
    "| `<key>` | <meaning> | ≥/≤ <value with two decimals> |"; ``BLEED_CM``, ``SPILL_CM``, ``CLAMP_DE`` and ``POST_VERSION`` appear with their values.
-G) ``csig``: its four inputs as named in ``garment_cut_texture.csig`` (``islands_sha``, ``item_sha``,
-   ``PROMPT_SHA``, ``POST_VERSION``) all appear in the document, and the document does NOT say csig carries tsig
+G) ``csig``: its five inputs as named in ``garment_cut_texture.csig`` (``islands_sha``, ``item_sha``,
+   ``back_sha``, ``PROMPT_SHA``, ``POST_VERSION``) all appear in the document, and the document does NOT say csig carries tsig
    (the line naming csig's inputs must not list ``tsig``).
 H) ``MIN_ITEM_SIDE`` (``app/core/garment_cut_texture.py``) appears with its value.
 I) The routes: every ``@router`` path in ``app/routes/figure.py`` that contains "/cut" or "pattern.png" appears in
    the document, with ``{character_name}`` shortened to ``{c}``.
 J) The P-H3 backend entry: ``"use_prompt_upsampler": false`` appears (the string ``_upsampler_on`` tests for).
-K) The prompt file the document names exists, and is ``PROMPT_FILE`` of ``garment_cut_texture.py``.
+K) Both prompt files the document names exist: ``PROMPT_FILE`` and ``PROMPT_FILE_BACK`` of ``garment_cut_texture.py``;
+   the document states the sleeve rule and ``BACK_PARTS`` is ("back",) (only the back panel goes with the back job).
 L) The param ``texture``: its choices ``TEXTURE_SOURCES`` and that it is in ``TEXTURE_ONLY``
    (``garment_template.py``) — the document says "TEXTURE_ONLY".
 M) The file names: ``{item}_{tsig}.islands.json`` (``islands_path``) and ``templates/cut/`` (``cut_dir``).
@@ -140,10 +141,10 @@ def main() -> int:
     # G
     gct = GCT.read_text(encoding="utf-8")
     body = re.search(r"def csig\(.*?return", gct, re.S)
-    inputs = ["islands_sha", "item_sha", "PROMPT_SHA", "POST_VERSION"]
+    inputs = ["islands_sha", "item_sha", "back_sha", "PROMPT_SHA", "POST_VERSION"]
     check("G  csig inputs found in the code", body is not None and all(i in body.group(0) for i in inputs))
     line = next((ln for ln in doc.splitlines() if "`csig`" in ln and "PROMPT_SHA" in ln), "")
-    check("G  doc line naming csig's four inputs", all(i in line for i in inputs), line[:120])
+    check("G  doc line naming csig's five inputs", all(i in line for i in inputs), line[:120])
     check("G  that line does not put tsig into csig",
           bool(line) and re.search(r"csig[^.]*=\s*[^.]*`tsig`", line) is None)
 
@@ -168,6 +169,13 @@ def main() -> int:
     if pm:
         rel = f"shared/templates/image/{pm.group(1)}"
         check(f"K  doc names {rel} and it exists", rel in doc and (REPO / rel).is_file())
+    bm = re.search(r'PROMPT_FILE_BACK = PROMPT_FILE\.with_name\("([^"]+)"\)', gct)
+    check("K  PROMPT_FILE_BACK found", bm is not None)
+    if bm:
+        rel = f"shared/templates/image/{bm.group(1)}"
+        check(f"K  doc names {rel} and it exists", rel in doc and (REPO / rel).is_file())
+    check("K  doc states the sleeve rule and the back parts", "**Sleeve rule:**" in doc
+          and tuple(const(GCT, "BACK_PARTS")) == ("back",) and "`BACK_PARTS`" in doc)
 
     # L
     sources, only = const(GT, "TEXTURE_SOURCES"), const(GT, "TEXTURE_ONLY")

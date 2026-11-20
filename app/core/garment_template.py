@@ -45,6 +45,7 @@ one parameter suggestion.
 Kinds: every kind of ``KINDS`` is built (``BUILT_KINDS``; A233 trousers last). A kind named but not built would
 be left off with ``KIND_NOT_BUILT``.
 """
+import glob as _glob
 import hashlib
 import json
 import logging
@@ -1994,22 +1995,38 @@ def key_for(character_name: str, item_id: str, *, base_sha: str, lower: List[str
     reason when it cannot be draped (no parameters, a kind not built, no base, no picture). A piece worn over
     lower template layers (``collider_pieces``) folds their keys into its own: a changed top re-drapes the jacket.
     ``lower`` is the whole worn set; only the pieces of it under this one enter the key — a piece over it does not."""
+    return _key(character_name, item_id, base_sha=base_sha, lower=lower, item=item)[:3]
+
+
+def texture_sha_of(sources: Dict[str, str]) -> Optional[str]:
+    """The texture part of the drape key: md5 of the two source pictures' sha256 (``key_for``; stored on a drape's
+    record as ``texture_sha`` since the cut-texture rework, 2026-11-20). None without both sources (a grid kind):
+    such a record never stands in (``cut_stand_in``)."""
+    if not sources.get("front") or not sources.get("back"):
+        return None
+    return _md5([_file_sha(sources["front"]), _file_sha(sources["back"])])
+
+
+def _key(character_name: str, item_id: str, *, base_sha: str, lower: List[str],
+         item: Optional[Dict[str, Any]] = None) -> Tuple[Optional[str], Optional[str], Dict[str, str],
+                                                         Optional[Dict[str, Any]], List[str]]:
+    """``key_for`` plus what the key was made of besides the texture: ``(tsig, reason, sources, params, under)`` — so ``cut_stand_in`` can recompute the key of an older drape with ITS texture part."""
     from app.models.inventory import get_item
     item = item if item is not None else get_item(item_id)
     params = params_of(item)
     if params is None:
-        return None, NEEDS_PARAMS, {}
+        return None, NEEDS_PARAMS, {}, None, []
     if params["kind"] not in BUILT_KINDS:
-        return None, KIND_NOT_BUILT.format(kind=params["kind"]), {}
+        return None, KIND_NOT_BUILT.format(kind=params["kind"]), {}, None, []
     if not base_sha:
-        return None, NO_BASE, {}
+        return None, NO_BASE, {}, None, []
     sources = texture_sources(character_name, item_id)
     if not sources:
         from app.core import garment_template_views as tv
         if tv.is_sheer(item) and not tv.projection_optional(item):
-            return None, tv.SHEER_NEEDS_VIEWS, {}
-        return None, NEEDS_PARAMS.replace("parameters", "picture"), {}
-    tex = _md5([_file_sha(sources["front"]), _file_sha(sources["back"])])
+            return None, tv.SHEER_NEEDS_VIEWS, {}, None, []
+        return None, NEEDS_PARAMS.replace("parameters", "picture"), {}, None, []
+    tex = texture_sha_of(sources)
     under = []
     ready = []
     for other, it, sub in collider_states(character_name, item_id, params["kind"], lower, base_sha=base_sha):
@@ -2030,10 +2047,38 @@ def key_for(character_name: str, item_id: str, *, base_sha: str, lower: List[str
     # A228: a piece that shapes the chest under it re-drapes when its lift changes (``bust_shaping``)
     from app.core import bust_shaping
     under += bust_shaping.key_tokens(item_id, item, lower)
-    # Only what the drape is really cut against keys it: the pieces UNDER it (their drape keys / fit identities, the
+        # Only what the drape is really cut against keys it: the pieces UNDER it (their drape keys / fit identities, the
     # boot it hangs over), the jacket allowance, the chest shaping. A piece worn OVER it (or beside it) changes nothing
     # of this drape — keying by the whole worn set re-draped the shirt when the jacket over it came off (2026-11-20).
-    return tsig(params, base_sha=base_sha, texture_sha=tex, lower=under), None, sources
+    return tsig(params, base_sha=base_sha, texture_sha=tex, lower=under), None, sources, params, under
+
+
+def cut_stand_in(character_name: str, item_id: str, *, base_sha: str, params: Dict[str, Any],
+                 key_lower: List[str]) -> Optional[Dict[str, Any]]:
+    """Cut-texture rework (user finding 2026-11-20, Dario): a piece whose texture comes from the cut shows the cut
+    atlas, never the projection the drape baked — so a drape whose key differs from the current one ONLY in its
+    texture part (a piece-only view made, re-made, uploaded or removed after the drape) still stands for the piece:
+    no re-drape at the next Build, and the piece never drops off the figure. Exact, not a guess: the record's own
+    ``texture_sha`` put into the CURRENT key's other parts must give the record's ``tsig``. A drape from before the
+    record carried ``texture_sha`` never stands in (it re-drapes once, as before). The newest such drape wins.
+    ``{tsig, path, record}`` or None."""
+    from app.core.garment_store import read_record
+    folder = templates_dir(character_name)
+    if not folder.is_dir():
+        return None
+    best = None
+    for meta in folder.glob(f"{_glob.escape(item_id)}_*.json"):
+        rec = read_record(meta)
+        glb = meta.with_suffix(".glb")
+        tex = rec.get("texture_sha")
+        if rec.get("accepted") is not True or not tex or not glb.is_file() or rec.get("item_id") != item_id:
+            continue
+        if tsig(params, base_sha=base_sha, texture_sha=str(tex), lower=key_lower) != rec.get("tsig"):
+            continue
+        stamp = str(rec.get("created_at") or "")
+        if best is None or stamp > best[0]:
+            best = (stamp, {"tsig": rec.get("tsig"), "path": glb, "record": rec})
+    return best[1] if best else None
 
 
 def refused_only_by_time(failed: Dict[str, Any]) -> bool:
@@ -2054,13 +2099,19 @@ def drape_state(character_name: str, item_id: str, *, base_sha: str, lower: List
     ``missing`` (``NOT_DRAPED``; also a failure record ``refused_only_by_time``) or ``blocked`` (no key: reason
     from ``key_for``). Read-only."""
     from app.core.garment_store import read_record
-    sig, reason, _sources = key_for(character_name, item_id, base_sha=base_sha, lower=lower, item=item)
+    sig, reason, _sources, params, key_lower = _key(character_name, item_id, base_sha=base_sha, lower=lower,
+                                                    item=item)
     if sig is None:
         return {"state": "blocked", "reason": reason, "tsig": None, "path": None, "record": {}}
     path = drape_path(character_name, item_id, sig)
     record = read_record(path.with_suffix(".json"))
     if path.is_file() and record.get("accepted") is True:
         return {"state": "ready", "reason": "", "tsig": sig, "path": path, "record": record}
+    if params and params.get("texture") == "cut":
+        # the texture from cut replaces the projection: a drape that differs only in its texture part stands in
+        stand = cut_stand_in(character_name, item_id, base_sha=base_sha, params=params, key_lower=key_lower)
+        if stand is not None:
+            return {"state": "ready", "reason": "", **stand, "stand_in": True}
     failed = read_record(failed_path(character_name, item_id, sig))
     if failed and not refused_only_by_time(failed):
         return {"state": "failed", "reason": DRAPE_FAILED.format(error=failed.get("error") or "?"), "tsig": sig,
@@ -2305,7 +2356,7 @@ def _bake_iou(bake: Dict[str, Any]) -> Optional[float]:
 
 #: The Figure row's words for a wanted cut texture the figure cannot use (``texture_warning``; English, the React
 #: client puts them through ``t()``).
-CUT_STALE_TEXT = "Texture from cut is out of date — make it again (1 image job)"
+CUT_STALE_TEXT = "Texture from cut is out of date — make it again in the piece dialog (Texture tab)"
 CUT_REJECTED_TEXT = "Texture from cut was rejected: {reason}"
 CUT_FAILED_TEXT = "Texture from cut failed: {reason}"
 
@@ -2351,8 +2402,8 @@ def cut_info(character_name: str, item_id: str, record: Optional[Dict[str, Any]]
     - otherwise ``texture`` "projection" and ``cut_state``: "off" (the param is "projection", or the drape has no
       pattern islands — a kind still on the grid UV), "rejected" / "failed" (that csig's record, with its reason),
       "stale" (no record for this csig, but a ready one for an OLDER csig of the item: new islands, a new item
-      picture, a new prompt or post version — an old atlas is never painted onto new islands), "missing" (nothing
-      made yet, or the item has no picture).
+      picture, a new back view, a new prompt or post version — an old atlas is never painted onto new islands),
+      "missing" (nothing made yet, or the item has no picture).
 
     Keyed by the islands sha and never by ``tsig``: a re-drape that only re-rendered a piece-only view keeps the cut."""
     from app.core import garment_cut_texture as gct
@@ -2365,11 +2416,12 @@ def cut_info(character_name: str, item_id: str, record: Optional[Dict[str, Any]]
                            "metrics": None, "px_per_cm": islands.get("px_per_cm")}
     if not islands.get("sha256") or params.get("texture") != "cut":
         return out
-    item_sha = gct.item_sha(item_id)
-    if item_sha is None:
+    sig = gct.csig_for(character_name, item_id, str(islands["sha256"]),
+                       has_back_panel=gct.has_back_file(templates_dir(character_name) / str(islands.get("file") or ""),
+                                                        str(islands["sha256"])))
+    if sig is None:
         out.update(cut_state="missing", reason=f"The item {item_id!r} has no picture")
         return out
-    sig = gct.csig(str(islands["sha256"]), item_sha)
     out["csig"] = sig
     rec = gct.read_record(character_name, item_id, sig)
     if rec.get("csig") not in (None, sig):
@@ -2785,6 +2837,9 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
         record = {"item_id": item_id, "tsig": sig, "params": params, "version": TEMPLATE_VERSION,
                   "base_signature": base[0], "base_model_sha256": base_sha, "lower": lower,
                   "texture": {k: Path(v).name if k != "source" else v for k, v in sources.items()},
+                  # the key's texture part (``cut_stand_in``: a cut-textured piece keeps this drape when only
+                  # a projection view changes)
+                  "texture_sha": texture_sha_of(sources),
                   "colliders": [Path(c[0]).name for c in colliders],
                   **({"inner_collider": inner} if own else {}),
                   "metrics": result["data"], "rows": result["rows"], "created_at": utc_now_iso(),
