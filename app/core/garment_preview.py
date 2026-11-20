@@ -13,10 +13,11 @@ Two halves:
   The arms are NOT taken from the model: the picture stands in an A-pose while the model is T-posed, so an arm's
   axis is the shoulder joint's pixel (model x / height) to the hand tip found in the silhouette.
 * **Drawing** (``shapes``): the piece's heights and girths come from ``garment_template.outline`` / ``bodice_spec``
-  (what the drape uses); a girth becomes a front width through the body's own silhouette at that height (garment
-  girth / body girth x the body's half width in the picture) — so a fit of 0 hugs the body in the picture and the
-  flare widens the hem from the hip width. The neckline follows the builder's cut rule
-  (``garment_template_build``: crew / scoop / boat = cos^1.4 of the angle from the front, V = 1 - |sin|).
+  (what the drape uses, a jacket's layer allowance over a draped sleeved layer included: ``over_sleeves``); a
+  girth becomes a front width through the body's own silhouette at that height (garment girth / body girth x the
+  body's half width in the picture) — so a fit of 0 hugs the body in the picture and the flare widens the hem from
+  the hip width. The neckline follows the builder's cut rule (``garment_template_build``: crew / scoop / boat =
+  cos^1.4 of the angle from the front, V = 1 - |sin|).
 
 Nothing is generated or stored; the picture analysis and the body measurement are cached per file (path + mtime).
 """
@@ -361,11 +362,13 @@ def _quad_along(a: Tuple[float, float], u: Tuple[float, float], start: float, en
             [p1[0] - n[0] * w1 / 2, p1[1] - n[1] * w1 / 2], [p0[0] - n[0] * w0 / 2, p0[1] - n[1] * w0 / 2]]
 
 
-def shapes(params: Dict[str, Any], meas: Dict[str, Any], reg: Registration) -> Dict[str, Any]:
+def shapes(params: Dict[str, Any], meas: Dict[str, Any], reg: Registration, *,
+           over_sleeves: bool = False) -> Dict[str, Any]:
     """The piece on the picture: ``{shapes: [{role, kind (fill | cut | line | dash), points (px)}], marks: [{x, y,
     text, anchor}], landmarks}``. ``fill`` = cloth, ``cut`` = an opening in the cloth (neckline, open front, slit),
     ``line`` / ``dash`` = a guide (the waist line chosen, a dimension). Marks carry the numbers: hem height, length,
-    sleeve length, neckline depth, slit depth."""
+    sleeve length, neckline depth, slit depth. ``over_sleeves``: the drape cuts the piece over a draped sleeved layer
+    (``garment_template.layer_ease``, bug round 2026-11-20) — drawn the same way."""
     from app.core import garment_template as gt
     p = params
     m = meas
@@ -397,13 +400,13 @@ def shapes(params: Dict[str, Any], meas: Dict[str, Any], reg: Registration) -> D
         _fitted(p, m, reg, cap_m, add, mark)
         return {"shapes": out, "marks": marks}
 
-    shape = gt.outline(p, m)
+    shape = gt.outline(p, m, over_sleeves=over_sleeves)
     knots = shape["knots"]
     top_y = shape["top_y"]
     hem_y = top_y - knots[-1][0]
     left, right = _side_points(reg, m, knots, hem_y, cap_m)
     bodice = gt.has_bodice(p)
-    spec = gt.bodice_spec(p, m) if bodice and "shoulder_y" in m else None
+    spec = gt.bodice_spec(p, m, over_sleeves=over_sleeves) if bodice and "shoulder_y" in m else None
     dip = 0.012 + 0.05 * float(p.get("flare", 0)) if kind in ("skirt", "dress") else 0.008
     hem = _hem_curve(left[0], right[0], dip)
     # the outline: up the right side, across the top, down the left side, along the hem
@@ -893,6 +896,21 @@ NO_BASE_MODEL = "No plain body model yet — the overlay needs its measurements 
 NO_UPPER_JOINTS = "The plain body has no arm or neck joints to place the piece by"
 
 
+def drapes_over_sleeves(character_name: str, item_id: str, params: Dict[str, Any],
+                        base: Optional[Tuple[str, str]]) -> bool:
+    """Bug round 2026-11-20: whether the drape cuts this piece (with the dialog's ``params``) with the jacket's layer
+    allowance — the key's own test (``garment_template.collider_states`` + ``over_sleeved_layer``: a lower template
+    layer with sleeves whose drape is ready) on the character's worn set without this piece. False without a base."""
+    from app.core import figure
+    from app.core import garment_template as gt
+    if not base or not gt.layer_ease(params, True):
+        return False
+    lower = gt.lower_layers(figure.worn_sets(character_name).own, item_id)
+    ready = [it for _o, it, st in gt.collider_states(character_name, item_id, params["kind"], lower,
+                                                     base_sha=base[1]) if st["state"] == "ready"]
+    return gt.over_sleeved_layer(params["kind"], ready)
+
+
 def overlay(character_name: str, item_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
     """The dialog's picture with the piece on it: ``{ok, reason?, picture {url, w, h, dressed}, figure {state,
     reason?, error?}, px_per_m, landmarks, colour, shapes, marks, params}`` (``params`` validated). Nothing generated.
@@ -932,7 +950,7 @@ def overlay(character_name: str, item_id: str, params: Dict[str, Any]) -> Dict[s
         out["reason"] = NO_UPPER_JOINTS
         return out
     reg = register(frame, meas)
-    drawn = shapes(params, meas, reg)
+    drawn = shapes(params, meas, reg, over_sleeves=drapes_over_sleeves(character_name, item_id, params, base))
     out.update(ok=True, px_per_m=round(reg.scale, 3), landmarks=reg.landmarks(), colour=fabric_colour(item_id),
                **drawn)
     return out

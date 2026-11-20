@@ -426,13 +426,15 @@ def layer_ease(params: Dict[str, Any], over_sleeves: bool) -> float:
     return JACKET_SLEEVE_EASE if over_sleeves and params["kind"] == "jacket" and has_sleeves(params) else 0.0
 
 
-def over_sleeved_layer(item_id: str, kind: str, lower: List[str]) -> bool:
-    """Bug round 2026-11-20: whether a jacket drapes over a lower TEMPLATE layer with sleeves (``collider_pieces``,
-    ``has_sleeves``). Own-mesh pieces under it say nothing about their sleeves; they keep the A200 shrink / drop
-    fallback (``drape_with_fallback``)."""
+def over_sleeved_layer(kind: str, colliders: List[Dict[str, Any]]) -> bool:
+    """Bug round 2026-11-20: whether a jacket drapes over a TEMPLATE layer with sleeves (``has_sleeves``) among
+    ``colliders`` — the items of the lower template layers whose drape is READY, i.e. the colliders really handed to
+    the drape (``_build_drape``: a lower layer not draped is no collider, so it widens nothing; ``collider_states``
+    for the key and the preview). Own-mesh pieces under it say nothing about their sleeves; they keep the A200
+    shrink / drop fallback (``drape_with_fallback``)."""
     if kind != "jacket":
         return False
-    for _other, it in collider_pieces(item_id, kind, lower):
+    for it in colliders:
         p = params_of(it)
         if p is not None and has_sleeves(p):
             return True
@@ -1109,16 +1111,18 @@ BODICE_EASE = (0.03, 0.17)
 JACKET_EASE = 0.05
 #: Sleeve ease: the arm girth times (1 + SLEEVE_EASE[0] + SLEEVE_EASE[1] * sleeve_fit) + EASE_M.
 SLEEVE_EASE = (0.05, 0.40)
-#: Bug round 2026-11-20: a jacket draped over a lower TEMPLATE layer with sleeves (``over_sleeved_layer``) adds this to
-#: its sleeve ease, and the same to its bodice ease from the chest band (the armhole's bottom) up, blended in over
-#: ``ARMHOLE_BLEND_M`` below it (the armhole room: the wider sleeve hangs lower from the arm's top, A179, and pulled
-#: the armhole's bottom — 1.38 at the armpit with the sleeve alone at +0.08). Without it the jacket sleeve had exactly
-#: the rest girth of the sleeve under it (both sleeve_fit 0.3: 0.371 m x 1.17 + 0.02 = 0.454 m at the shirt's hem)
-#: and one edge over that hem stretched to 1.329. The value is one cloth layer round the arm: the jacket stands its
-#: collision distance (4 mm) off the shirt sleeve's collider shell (4 mm), 2 x pi x 0.008 = 0.0503 m more girth, over
-#: Kai's mean arm girth along the shirt sleeve (shares 0..0.3, 0.4212 m) = 0.119 -> 0.12. Derivation and the girths:
-#: ``scripts/smoke_jacket_layer_ease.py``.
-JACKET_SLEEVE_EASE = 0.12
+#: Bug round 2026-11-20: a jacket draped over a READY lower TEMPLATE layer with sleeves (``over_sleeved_layer``) adds
+#: this to its sleeve ease, and the same to its bodice ease from the chest band (the armhole's bottom) up, blended in
+#: over ``ARMHOLE_BLEND_M`` below it (armhole room). Without it the jacket sleeve had exactly the rest girth of the
+#: sleeve under it (both sleeve_fit 0.3: 0.371 m x 1.17 + 0.02 = 0.454 m at the shirt's hem) and one edge stretched
+#: to 1.329 (limit 1.3). The value is MEASURED, not derived: the top of the approved range 0.05 .. 0.10, on Kai's
+#: jacket over underwear + T-shirt + jeans (copies, first drape): 0.05 / 0.08 refused at the armpit (1.406 / 1.372),
+#: 0.10 passes with a long sleeve (1.181) and a short one (1.181; 0.12 refused the short one at 1.312). The response
+#: is not monotonic and 0.08 already fails, so 0.10 sits close to that edge; it was verified on one body and one fit
+#: pair only. One cloth layer round the arm (2 x pi x 8 mm = 0.050 m, ~0.12 of Kai's arm girth) is only the order of
+#: magnitude: the sleeve gap alone does not decide the drape (a jacket sleeve_fit 0 over the same shirt passes with
+#: a ring gap of 0). Series and girths: ``scripts/smoke_jacket_layer_ease.py``.
+JACKET_SLEEVE_EASE = 0.10
 ARMHOLE_BLEND_M = 0.06
 #: Neck opening: the neck girth's radius + NECK_CLEAR_M (crew); a boat neck opens to BOAT_SHARE of the half shoulder
 #: width.
@@ -1903,6 +1907,15 @@ def _lower_of(other: str, item_id: str, lower: List[str]) -> List[str]:
     return sorted((set(lower) | {item_id}) - {other})
 
 
+def collider_states(character_name: str, item_id: str, kind: str, lower: List[str], *,
+                    base_sha: str) -> List[Tuple[str, Dict[str, Any], Dict[str, Any]]]:
+    """``[(item id, item, drape_state)]`` of the lower template layers ``item_id`` drapes over (``collider_pieces``),
+    each judged within the same worn set (``_lower_of``). Read-only."""
+    return [(other, it, drape_state(character_name, other, base_sha=base_sha, lower=_lower_of(other, item_id, lower),
+                                    item=it))
+            for other, it in collider_pieces(item_id, kind, lower)]
+
+
 def key_for(character_name: str, item_id: str, *, base_sha: str, lower: List[str],
             item: Optional[Dict[str, Any]] = None) -> Tuple[Optional[str], Optional[str], Dict[str, str]]:
     """``(tsig, reason, texture sources)`` of a template piece: tsig None with the left-off
@@ -1925,17 +1938,19 @@ def key_for(character_name: str, item_id: str, *, base_sha: str, lower: List[str
         return None, NEEDS_PARAMS.replace("parameters", "picture"), {}
     tex = _md5([_file_sha(sources["front"]), _file_sha(sources["back"])])
     under = []
-    for other, it in collider_pieces(item_id, params["kind"], lower):
-        sub, _r, _s = key_for(character_name, other, base_sha=base_sha, lower=_lower_of(other, item_id, lower),
-                              item=it)
-        under.append(f"{other}:{sub or '-'}")
+    ready = []
+    for other, it, sub in collider_states(character_name, item_id, params["kind"], lower, base_sha=base_sha):
+        under.append(f"{other}:{sub['tsig'] or '-'}")
+        if sub["state"] == "ready":
+            ready.append(it)
     # A200: an own-mesh piece under it is a collider; its fit's identity re-drapes this piece when it changes
     for other, fit in own_colliders(character_name, item_id, params["kind"], lower, base_sha=base_sha):
         from app.core.base_body import file_sha256
         under.append(f"{other}:fit:{file_sha256(fit) if fit is not None else '-'}")
-    if layer_ease(params, over_sleeved_layer(item_id, params["kind"], lower)):
-        # bug round 2026-11-20: a jacket over a sleeved layer is cut wider (``layer_ease``) — only these re-drape
-        under.append("ease:over_sleeves")
+    if layer_ease(params, over_sleeved_layer(params["kind"], ready)):
+        # bug round 2026-11-20: a jacket over a draped sleeved layer is cut wider (``layer_ease``) — only these
+        # re-drape, and again when that layer's drape becomes ready or goes, or the allowance changes
+        under.append(f"ease:over_sleeves:{JACKET_SLEEVE_EASE}")
     if under and params["kind"] in FITTED_KINDS:
         # A237: a fitted piece over lower layers (a loose one clipped, a boot left out of the cut) — only these re-drape
         under.append("cut:body")
@@ -2447,10 +2462,18 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
     # Ruling A142: the lower template layers first (a jacket drapes over the top's drape); one not drapable is
     # simply not a collider
     colliders = []
+    ready = []
     for other, it in collider_pieces(item_id, params["kind"], lower):
         sub = build(character_name, other, profile=profile, lower=_lower_of(other, item_id, lower))
         if sub["state"] == "ready":
             colliders.append((sub["path"], sub["record"].get("pose_shapes")))
+            ready.append(it)
+    # bug round 2026-11-20: the allowance follows the colliders really handed to the drape (``over_sleeved_layer``);
+    # a lower layer that became ready (or failed) just now changes the key's ``ease:over_sleeves`` token, so the key
+    # of a piece that can carry it is read again here and the drape is stored under the key it was cut for
+    over = over_sleeved_layer(params["kind"], ready)
+    if layer_ease(params, True):
+        sig = key_for(character_name, item_id, base_sha=base_sha, lower=lower, item=item)[0] or sig
     # A200: the own-mesh pieces under it — their plain-body fit, skinned, no pose shapes
     own = [(fit, None) for _o, fit in own_colliders(character_name, item_id, params["kind"], lower,
                                                     base_sha=base_sha) if fit is not None]
@@ -2462,7 +2485,6 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
         # A228: a shaping piece drapes on the plain body shaped under it (``bust_shaping``)
         from app.core import bust_shaping
         body, shaping, shaping_note = bust_shaping.prepare(body, item_id, item, lower, scratch / "shaping")
-        over = over_sleeved_layer(item_id, params["kind"], lower)
         result, inner = drape_with_fallback(
             lambda cols, offsets, sub: run_drape(body, params, sources, item_id=item_id, out_dir=scratch / sub,
                                                  lower=cols, live=key, lower_offsets=offsets, over_sleeves=over),

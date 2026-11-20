@@ -289,7 +289,8 @@ garment_template.collider_pieces = lambda *a, **k: [("TT", ITEMS["TT"])]
 garment_template.build = lambda *a, **k: {"state": "ready", "path": Path("D.glb"), "record": {"pose_shapes": {}}}
 garment_template.own_colliders = lambda *a, **k: [("OT", Path("O.glb"))]
 garment_template.templates_dir = lambda c: Path(TMP) / "templates"
-garment_template.drape_state = lambda *a, **k: {"state": "ready"}
+garment_template.drape_state = lambda *a, **k: {"state": "ready", "tsig": "sig1"}
+garment_template.key_for = lambda *a, **k: ("sig1", None, {})
 import app.core.garment_store as gs  # noqa: E402
 gs.write_record = lambda path, rec: WROTE.__setitem__(Path(path).name, rec)
 import app.core.figure as fig  # noqa: E402
