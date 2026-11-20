@@ -6759,6 +6759,8 @@
     "nose pads": "Nasenpads",
     "moved forward to clear the brow": "nach vorn gerückt, um die Braue freizugeben",
     "Ear not used — the temple runs straight back": "Ohr nicht verwendet — der Bügel läuft gerade nach hinten",
+    "no ear found on that side": "auf dieser Seite kein Ohr gefunden",
+    "the ear's top lies {mm} mm from the eye line, expected {lo} to {hi} mm": "die Oberkante des Ohrs liegt {mm} mm von der Augenlinie, erwartet {lo} bis {hi} mm",
     "Frame shape": "Form der Fassung",
     "Temples": "Bügel",
     "Rim thickness": "Fassungsstärke",

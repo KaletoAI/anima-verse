@@ -15,7 +15,9 @@ Expected values, derived by hand from the module docstrings:
     ``suggest_kind``: "Sunglasses" → glasses, "Lesebrille" → glasses. ``lens_material``: clear → #ffffff at 0.08,
     metal 0, rough 0.05; green mirrored → #2e4a32 at 0.8, metal 1.0, rough 0.1. ``frame_material``: acetate without a
     colour → (#1c1c1c, 0.35, 0.0); metal silver → (#c0c0c0, 0.2, 1.0). ``lens_seen_far``: clear False, grey True,
-    clear + mirror True.
+    clear + mirror True. A metal frame is a metal (review 2026-11-20): ``metal`` leather or custom on glasses →
+    "gold" (DEFAULTS), silver stays; a necklace keeps its leather cord; so a leather glasses frame is the gold frame.
+    The accessory dialog's preview URL ends in a hash of ``material_key`` — a look-only save gives a new URL.
 [2] ``outline`` (w 0.04, h 0.024 → a 0.02, c 0.012, 64 points, t = 2πk/64; tolerance 1e-8 at k 16 because cos(π/2) is
     6e-17 in floats and u = a · (6e-17)^(2/4.5) ≈ 1.2e-9):
     round w 0.04: every point 0.02 from the centre (±1e-12). rectangular: the point t = 0 is (0.02, 0); t = π/2
@@ -38,10 +40,25 @@ Expected values, derived by hand from the module docstrings:
     |x| = max(W 0.063, the side 0.06 + 0.002 + 0.0007) = 0.063, at y 1.505. With an ear used (top 1.51, front z
     0.015 — 0.080 behind z0) and ``hook``: y_ear = max(1.505, 1.51 + 0.0007 + 0.002) = 1.5127; the temple runs to
     0.080 + 0.020 = 0.100 behind z0 (z −0.005) at y 1.5127 and drops 0.020 in 7 more points to y 1.4927, z −0.005 −
-    0.012 = −0.017, ending "hook". A depth-map cell inside the left outline at (0.034, 1.5) with z 0.0941003 asks for
-    z0 ≥ 0.0941003 − (−0.0020997) + 0.002 + 0.001 = 0.0992 → brow 4.2 mm, z0 0.0992.
-[5] The gate (``build`` with the face, samples, ears and distance stubbed: every point 5 mm off the skin): brow 4.2 mm
-    → built, forward_mm 4.2; the cell at z 0.1001003 (brow 10.2 mm > MAX_PUSH 8 mm) → "The brow stands 10 mm in
+    0.012 = −0.017, ending "hook". A depth-map cell inside the left outline, column 94 / row 20 (1 mm cells from x0
+    −0.06, y0 1.48), with z 0.0941003: the layout reads the cell at its centre x −0.06 + 0.0945 = 0.0345, y 1.48 +
+    0.0205 = 1.5005; there the wrap is −(0.0345 − 0.01) · tan 5° = −0.0245 · 0.0874887 = −0.0021435 and the tilt
+    +0.0005 · tan 8° = +0.0005 · 0.1405408 = +0.0000703, together −0.0020732; it asks for z0 ≥ 0.0941003 + 0.0020732
+    + 0.002 + 0.001 = 0.0991735 → brow 0.0991735 − 0.095 = 4.1735 mm.
+    The frame width is a head measure (review 2026-11-20): it is read FRAME_DEPTH 0.035 behind the face's lens plane
+    z_min 0.095 (z 0.060), never behind the brow-pushed one. Head samples Q2: x ±0.06 at z 0.050…0.060 and x ±0.055
+    at z 0.061…0.070 (1 mm steps, y 1.505). The side window is ±3 mm in z: at z 0.060 it holds z 0.058…0.062, the
+    widest 0.06 → W 0.063 as without the brow; read behind the pushed plane (0.0991735 − 0.035 = 0.0641735, window
+    0.0612…0.0672) it would hold only the 0.055 samples → W 0.058.
+    The implausible ear (E4, the module docstring; ``ear_info`` with ``accessory_band.ear_anchor`` stubbed, eye_y
+    1.5, range −5 … 30 mm): top 1.52 → 20 mm above, used; top 1.56 → 60 mm, found but not used, why "the ear's top
+    lies 60 mm from the eye line, expected -5 to 30 mm"; top 1.494 → −6 mm, not used; an anchor that raises → not
+    found, why its message. The boundary: top 1.5299 (29.9 mm) used, 1.5301 (30.1 mm) not. ``layout`` with the 60 mm
+    ear (front z 0.015) and ``hook``: not used → no hook, y stays 1.505, the temple runs to the ear's front 0.095 −
+    0.015 = 0.080 plus STRAIGHT_PAST_EAR 0.010 = 0.090 behind z0 → its last point z 0.095 − 0.090 = 0.005, ending
+    "no_ear".
+[5] The gate (``build`` with the face, samples, ears and distance stubbed: every point 5 mm off the skin): brow 4.1735
+    mm → built, forward_mm round(4.1735, 1) = 4.2; the cell at z 0.1001003 (brow 10.1735 mm > MAX_PUSH 8 mm) → "The brow stands 10 mm in
     front of the nose bridge — the lenses would float; choose a smaller or lower frame".
 [6] ``SkinDistance`` on the closed cube [−0.1, 0.1]³: (0, 0, 0.11) → +0.01, (0, 0, 0) → −0.1, the corner point
     (0.11, 0.11, 0.11) → +0.01·√3 = +0.0173205 (closest point the corner vertex, its pseudo-normal outward).
@@ -128,6 +145,13 @@ check("[1] acetate frame", s.frame_material(s.normalize({"kind": "glasses", "gla
       ("#1c1c1c", 0.35, 0.0))
 check("[1] silver frame", s.frame_material(s.normalize({"kind": "glasses", "metal": "silver"})),
       ("#c0c0c0", 0.2, 1.0))
+check("[1] a cord or custom metal on glasses is the default metal",
+      [s.normalize({"kind": "glasses", "metal": m, "color": "#ff0000"})["metal"] for m in ("leather", "custom", "silver")]
+      + [s.normalize({"kind": "necklace", "metal": "leather"})["metal"]], ["gold", "gold", "silver", "leather"])
+check("[1] frame from a cord metal", s.frame_material(s.normalize({"kind": "glasses", "metal": "leather"})),
+      s.frame_material(s.normalize({"kind": "glasses", "metal": "gold"})))
+check("[1] preview URL carries the material", "accessory_build.material_key(item)" in
+      (ROOT / "app/routes/figure.py").read_text() and "-{msig}" in (ROOT / "app/routes/figure.py").read_text(), True)
 check("[1] seen far", [s.lens_seen_far(x) for x in (spec, grey, s.normalize(
     {"kind": "glasses", "glasses": {"lens": {"mirror": True}}}))], [False, True, True])
 
@@ -176,11 +200,52 @@ near("[4] hook end", hook[-1], [0.063, 1.4927, -0.017], 1e-9)
 LMB = dict(LM, depth={"Z": LM["depth"]["Z"].copy(), "x0": -0.06, "y0": 1.48})
 # the cell holding (0.034, 1.5): column (0.034 + 0.06) / 0.001 = 94, row (1.5 − 1.48) / 0.001 = 20
 LMB["depth"]["Z"][20, 94] = 0.0941003
-cell_x, cell_y = -0.06 + 94.5 * 0.001, 1.48 + 20.5 * 0.001
-want_z0 = 0.0941003 - float(ag._plane_z(cell_x, cell_y, LMB, 0.010)) + 0.002 + 0.001
 lay_b = ag.layout(LMB, Q, spec["glasses"], NO_EAR, 1.70)
-near("[4] brow push z0 (cell centre)", lay_b["z0"], want_z0, 1e-9)
-near("[4] brow push ~4.2 mm", lay_b["brow_m"] * 1000.0, 4.2, 0.2)
+near("[4] brow push z0 (cell centre)", lay_b["z0"], 0.0991735, 1e-7)
+near("[4] brow push 4.1735 mm", lay_b["brow_m"] * 1000.0, 4.1735, 1e-4)
+
+Q2 = np.array([[sx * (0.06 if z < 0.0605 else 0.055), 1.505, z] for sx in (1.0, -1.0)
+               for z in np.arange(0.05, 0.0705, 0.001)])
+lay_q2 = ag.layout(LMB, Q2, spec["glasses"], NO_EAR, 1.70)
+near("[4] brow push keeps the head's width (W, z0)", [lay_q2["W"], lay_q2["z0"]], [0.063, 0.0991735], 1e-7)
+
+# [4] the implausible ear (E4)
+import app.core.accessory_band as _band  # noqa: E402
+
+
+def ear_at(top_y):
+    saved = _band.ear_anchor
+    _band.ear_anchor = lambda *a, **k: {"top_y": top_y, "front_z": 0.015, "back_z": 0.0}
+    try:
+        return ag.ear_info(None, None, [], {}, "left", 1.5)
+    finally:
+        _band.ear_anchor = saved
+
+
+check("[4] ear 20 mm above used", (ear_at(1.52)["used"], ear_at(1.52)["top_above_eye_mm"]), (True, 20.0))
+e60 = ear_at(1.56)
+check("[4] ear 60 mm above not used", (e60["found"], e60["used"], e60["top_above_eye_mm"], e60["why"]),
+      (True, False, 60.0, "the ear's top lies 60 mm from the eye line, expected -5 to 30 mm"))
+check("[4] ear 6 mm below not used", ear_at(1.494)["used"], False)
+check("[4] ear range boundary", (ear_at(1.5299)["used"], ear_at(1.5301)["used"]), (True, False))
+_saved = _band.ear_anchor
+
+
+def _no_anchor(*a, **k):
+    raise ValueError("no ear in the box")
+
+
+_band.ear_anchor = _no_anchor
+try:
+    check("[4] ear not found", ag.ear_info(None, None, [], {}, "left", 1.5),
+          {"found": False, "used": False, "why": "no ear in the box"})
+finally:
+    _band.ear_anchor = _saved
+odd = ag.layout(LM, Q, spec["glasses"], {"left": e60, "right": e60}, 1.70)
+check("[4] implausible ear ends", odd["temple_ends"], {"left": "no_ear", "right": "no_ear"})
+near("[4] implausible ear: straight to the ear's front + 10 mm", odd["temples"]["left"][-1][1:], [1.505, 0.005], 1e-9)
+near("[4] implausible ear: no rise", odd["temples"]["left"][1:, 1], np.full(len(odd["temples"]["left"]) - 1, 1.505),
+     1e-9)
 
 
 # [5] the gate with stubbed face / distance

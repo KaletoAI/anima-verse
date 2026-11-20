@@ -134,6 +134,10 @@ Geometry (the canvas of the former smoke_garment_ghost_pair.py), W 1024 x H 1200
     (slots [top, bottom]) on WORN_FACE -> refused "head changed", head_gated
     True; occupied_zones([neck]) = () (the neck is below the head zone),
     occupied_zones([head, neck]) = (head,).
+    Bug round 2026-11-20: the ``face`` slot (glasses moved off ``head``)
+    lies on the face, inside the head rows -> SLOT_ZONES[face] = (head,):
+    occupied_zones([face]) = (head,), occupied_zones([face, head]) =
+    (head,) (one zone, not two).
     Outline drift (2026-11-10, Black Stilettos: the outline XOR is an area
     share, a shoe leaves the whole figure's outline exposed). SHOE fixture
     on the same canvas: FIG = skin cols [452, 572) rows [100, 1100) (area
@@ -568,6 +572,8 @@ def main() -> int:
               (False, True, True))
         check("occupied zones", (gg.occupied_zones(["neck"]), gg.occupied_zones(["head", "neck"]),
                                  gg.occupied_zones(["top", "bottom"])), ((), ("head",), ()))
+        check("face slot frees the head zone", (gg.occupied_zones(["face"]), gg.occupied_zones(["face", "head"])),
+              (("head",), ("head",)))
 
         print("[5] run_edit_step worn front")
         renders, prompts = [], {}

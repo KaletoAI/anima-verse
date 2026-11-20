@@ -19,7 +19,8 @@ Layout (``layout``; bind space, +Y up, +Z front, +X the body's left):
 
 - bridge: half inner width ``b`` = nose half width + ``BRIDGE_ADD_M``;
 - frame half width ``W`` = the larger side of the head at ``y_e`` + ``TEMPLE_ABOVE_EYE_M`` and ``FRAME_DEPTH_M`` behind
-  the lens plane, + ``FRAME_ADD_M`` + the size step (``SIZE_ADD_M``: narrow −3, regular 0, wide +6 mm);
+  the face's lens plane (the minimum below, before any brow push — the width is a head measure, the same for every
+  shape), + ``FRAME_ADD_M`` + the size step (``SIZE_ADD_M``: narrow −3, regular 0, wide +6 mm);
 - lens width ``w`` = ``W − b − ENDPIECE_M`` (a round lens at most ``ROUND_MAX_M``), lens height ``w × SHAPE_RATIO``;
   lens centre ``y_e`` (aviator ``AVIATOR_DOWN_M`` lower), ``b + w / 2`` from the mid-plane;
 - the lens plane leans ``TILT_DEG`` (its bottom nearer the face) and wraps ``WRAP_DEG`` per side from the bridge;
@@ -74,7 +75,8 @@ NOSE_WIDTH_BACK_M = 0.004
 
 # --- layout ---------------------------------------------------------------------------------------------------------
 BRIDGE_ADD_M = 0.002
-#: The head's side that sets the frame width is read this far behind the lens plane (E2).
+#: The head's side that sets the frame width is read this far behind the face's lens plane (E2; before the
+#: brow push).
 FRAME_DEPTH_M = 0.035
 FRAME_ADD_M = 0.003
 SIZE_ADD_M = {"narrow": -0.003, "regular": 0.0, "wide": 0.006}
@@ -380,33 +382,33 @@ def layout(lm: Dict[str, Any], Q: np.ndarray, spec_g: Dict[str, Any], ears: Dict
     y_t = lm["eye_y"] + TEMPLE_ABOVE_EYE_M
     # the lens back: at least PAD_DIST in front of the ridge; the brow inside the outline may push it forward
     z_min = lm["ridge_z"] + PAD_DIST_M + rim_d
-    z0 = z_min
     dm = lm["depth"]
     xs, ys = _cells(dm)
     XX, YY = np.meshgrid(xs, ys)
-    for _ in range(2):
-        W = max(side_reach(Q, mid, sx, y_t, z0 - FRAME_DEPTH_M) for sx in (1.0, -1.0)) + FRAME_ADD_M \
-            + SIZE_ADD_M[spec_g["size"]]
-        w = W - b - ENDPIECE_M
-        if shape == "round":
-            w = min(w, ROUND_MAX_M)
-        if not LENS_W_RANGE_M[0] <= w <= LENS_W_RANGE_M[1]:
-            raise ValueError(IMPLAUSIBLE.format(why=f"a lens would be {w * 1000:.0f} mm wide"))
-        h = w * SHAPE_RATIO[shape]
-        uv = outline(shape, w, h)
-        cy = lm["eye_y"] - (AVIATOR_DOWN_M if shape == "aviator" else 0.0)
-        cu = b + w / 2
-        # the front-most skin inside either lens outline (grown by the rim), against the lens surface there
-        need = -np.inf
-        for sx in (1.0, -1.0):
-            grown = uv * (1 + (rim_a + GAP_M) / max(w / 2, 1e-6))
-            px = (XX - mid) * sx - cu
-            py = YY - cy
-            m = _inside_polygon(px.ravel(), py.ravel(), grown) & np.isfinite(dm["Z"].ravel())
-            if m.any():
-                gx, gy, gz = XX.ravel()[m], YY.ravel()[m], dm["Z"].ravel()[m]
-                need = max(need, float((gz - _plane_z(gx, gy, lm, b)).max()) + GAP_M + rim_d)
-        z0 = max(z_min, need)
+    # the head's width is read behind the face's own lens plane (z_min), not behind the brow-pushed one: a frame
+    # shape whose outline reaches the brow must not make the whole frame narrower on the same face
+    W = max(side_reach(Q, mid, sx, y_t, z_min - FRAME_DEPTH_M) for sx in (1.0, -1.0)) + FRAME_ADD_M \
+        + SIZE_ADD_M[spec_g["size"]]
+    w = W - b - ENDPIECE_M
+    if shape == "round":
+        w = min(w, ROUND_MAX_M)
+    if not LENS_W_RANGE_M[0] <= w <= LENS_W_RANGE_M[1]:
+        raise ValueError(IMPLAUSIBLE.format(why=f"a lens would be {w * 1000:.0f} mm wide"))
+    h = w * SHAPE_RATIO[shape]
+    uv = outline(shape, w, h)
+    cy = lm["eye_y"] - (AVIATOR_DOWN_M if shape == "aviator" else 0.0)
+    cu = b + w / 2
+    # the front-most skin inside either lens outline (grown by the rim), against the lens surface there
+    need = -np.inf
+    for sx in (1.0, -1.0):
+        grown = uv * (1 + (rim_a + GAP_M) / max(w / 2, 1e-6))
+        px = (XX - mid) * sx - cu
+        py = YY - cy
+        m = _inside_polygon(px.ravel(), py.ravel(), grown) & np.isfinite(dm["Z"].ravel())
+        if m.any():
+            gx, gy, gz = XX.ravel()[m], YY.ravel()[m], dm["Z"].ravel()[m]
+            need = max(need, float((gz - _plane_z(gx, gy, lm, b)).max()) + GAP_M + rim_d)
+    z0 = max(z_min, need)
     brow_m = z0 - z_min
     z0 += push_m
     lenses, centres = {}, {}
@@ -816,6 +818,10 @@ def build(body, dense, Pw: np.ndarray, Fw: np.ndarray, first: np.ndarray, spec: 
         "forward_mm": round((lay["brow_m"] + push) * 1000.0, 1),
         "ear_used": {s: bool(e["used"]) for s, e in ears.items()},
         "ear_note": {s: e.get("why", "") for s, e in ears.items() if not e["used"]},
+        # the same reason as numbers, for a translated line in the dialog: the ear's top above the eye line (None =
+        # no ear found on that side) and the accepted range
+        "ear_above_mm": {s: e.get("top_above_eye_mm") for s, e in ears.items() if not e["used"]},
+        "ear_range_mm": [round(EAR_TOP_RANGE_M[0] * 1000.0), round(EAR_TOP_RANGE_M[1] * 1000.0)],
         "temple_ends": dict(lay["temple_ends"]),
         "gap_mm": {"min": round(float(rest.min()) * 1000.0, 2), "p50": round(float(np.median(rest)) * 1000.0, 2)},
         "pad_gap_mm": round(float(pad_d.min()) * 1000.0, 2) if pad_n else None,

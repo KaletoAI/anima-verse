@@ -45,7 +45,7 @@ import {
   ACCESSORY_KIND_LABELS, ACCESSORY_METAL_LABELS, ACCESSORY_PART_NAMES, ACCESSORY_POSE_LABELS, ACCESSORY_SIDE_LABELS, ACCESSORY_STATE_COLOR,
   ACCESSORY_STATE_LABELS, ACCESSORY_STRAP_AT_LABELS, BAND_KINDS, PENDANT_STATE_COLOR, PENDANT_STATE_LABELS,
   TUBE_KINDS, dropPresetOf, pendantBoxPoints, GLASSES_FRAME_LABELS, GLASSES_SHAPE_LABELS, GLASSES_SIZE_LABELS,
-  GLASSES_TEMPLE_LABELS, LENS_TINT_LABELS, glassesLine,
+  GLASSES_TEMPLE_LABELS, LENS_TINT_LABELS, earReason, glassesLine,
 } from './figureModel'
 import type { AccessoryInfo, AccessoryPendant, GlassesNumbers, GlassesSpec, Jewellery } from './figureModel'
 
@@ -237,6 +237,8 @@ export function AccessoryDialog({ character, itemId, onClose }: {
       // A238: a ring is on one hand
       side: kind === 'ring' && !(data.ring_sides || []).includes(d.side || '') ? data.ring_sides?.[0] : d.side,
       glasses: kind === 'glasses' ? (d.glasses || {}) : d.glasses,
+      // a glasses frame is never a cord or a custom chain colour: the server stores the default metal then
+      metal: kind === 'glasses' && (data.cords.includes(d.metal || '') || d.metal === 'custom') ? 'gold' : d.metal,
       band: width !== undefined ? { ...(d.band || {}), width_cm: width } : d.band,
       chain: thickness !== undefined && !data.cords.includes(d.metal || '')
         ? { ...(d.chain || {}), thickness_mm: thickness } : d.chain }
@@ -430,8 +432,7 @@ export function AccessoryDialog({ character, itemId, onClose }: {
                     {data.metrics.pad_gap_mm != null ? ` · ${t('nose pads')} ${data.metrics.pad_gap_mm} mm` : ''}
                     {data.metrics.forward_mm ? ` · ${t('moved forward to clear the brow')} ${data.metrics.forward_mm} mm` : ''}
                     {Object.values(data.metrics.ear_used || {}).some((u) => !u) ? (
-                      <div>{t('Ear not used — the temple runs straight back')}{Object.values(data.metrics.ear_note || {})[0]
-                        ? ` (${t(Object.values(data.metrics.ear_note || {})[0])})` : ''}</div>
+                      <div>{t('Ear not used — the temple runs straight back')} ({earReason(data.metrics, t)})</div>
                     ) : null}
                   </div>
                 ) : data.metrics && data.metrics.inner_radius_mm !== undefined ? (

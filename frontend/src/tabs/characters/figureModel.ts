@@ -1577,6 +1577,8 @@ export interface GlassesNumbers {
   forward_mm?: number
   ear_used?: Record<string, boolean>
   ear_note?: Record<string, string>
+  ear_above_mm?: Record<string, number | null>
+  ear_range_mm?: [number, number]
   temple_ends?: Record<string, string>
   pad_gap_mm?: number | null
 }
@@ -1678,6 +1680,17 @@ export function glassesLine(m: GlassesNumbers, t: (s: string) => string): string
   const arms = Object.values(m.arms_mm || {})
   if (arms.length) parts.push(`${t('arms')} ${Math.round(Math.max(...arms))} mm`)
   return parts.join(' · ')
+}
+
+/** Why an ear was not used for a temple, translated: its top's distance from the eye line against the accepted
+ *  range, or "no ear found" when the side has none (`ear_above_mm` null). */
+export function earReason(m: GlassesNumbers, t: (s: string) => string): string {
+  const side = Object.keys(m.ear_above_mm || {})[0]
+  const above = side ? m.ear_above_mm?.[side] : null
+  if (above == null) return t('no ear found on that side')
+  const [lo, hi] = m.ear_range_mm || [-5, 30]
+  return t("the ear's top lies {mm} mm from the eye line, expected {lo} to {hi} mm")
+    .replace('{mm}', String(Math.round(above))).replace('{lo}', String(lo)).replace('{hi}', String(hi))
 }
 
 export const ACCESSORY_METAL_LABELS: Record<string, string> = {

@@ -208,6 +208,10 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         out["ring"] = {"along": _num(ring_raw.get("along", RING_ALONG), "ring_along", RING_ALONG)}
     if kind == "glasses":
         out["glasses"] = normalize_glasses(raw.get("glasses"))
+        if metal in CORDS or metal == "custom":
+            # a metal frame is a metal: a cord or a custom chain colour carried over from another kind (a necklace
+            # switched to glasses) is the default metal, the one the dialog shows — never a cord-coloured frame
+            out["metal"] = d["metal"]
     return out
 
 

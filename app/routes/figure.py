@@ -336,14 +336,18 @@ class AccessoryCurveRequest(BaseModel):
 @router.get("/{character_name}/figure/accessory/{item_id}")
 def get_accessory(character_name: str, item_id: str,
                   _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    import hashlib
     from urllib.parse import quote
     from app.core import accessory_build, accessory_spec, garment_set
     item = _template_item(character_name, item_id)
     state = accessory_build.accessory_state(character_name, item_id, item=item)
     record = state.get("record") or {}
+    # the material is not in the asig (a change re-assembles, never rebuilds) but the preview shows it: a look-only
+    # save (lens tint, frame colour, metal) must give a new URL, or the viewer keeps the cached model
+    msig = hashlib.sha1(accessory_build.material_key(item).encode("utf-8")).hexdigest()[:8]
     glb_url = (f"/characters/{quote(character_name, safe='')}/figure/accessory/{quote(item_id, safe='')}"
                f"/preview.glb?v={state.get('asig') or ''}-{state['state']}-{record.get('built_at') or ''}"
-               f"-{(record.get('base_model_sha256') or accessory_build.base_sha(character_name) or '')[:12]}")
+               f"-{(record.get('base_model_sha256') or accessory_build.base_sha(character_name) or '')[:12]}-{msig}")
     return {"item_id": item_id, "name": str(item.get("name") or item_id), "mode": garment_set.mesh_mode_of(item),
             "jewellery": accessory_spec.of_item(item), "suggested": accessory_spec.suggest_kind(item),
             "kinds": list(accessory_spec.KINDS), "built_kinds": list(accessory_spec.BUILT_KINDS),

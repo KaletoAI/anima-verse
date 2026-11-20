@@ -188,10 +188,11 @@ NECK_NARROW = 0.85          # a neck is at most this share of the head's widest 
 NECK_RISE = 1.25            # ... and the shoulder row at least this multiple of the neck
 #: The protected zones of the worn gate a piece may change because it is worn
 #: there: piece slot -> zones. ONE zone today, ``head`` (rows above the neck's
-#: narrowest row, ``head_zone``); only a ``head`` piece (hat, hood) frees it.
+#: narrowest row, ``head_zone``); a ``head`` piece (hat, hood) and a ``face``
+#: piece (glasses, mask — it lies on the face, inside the same rows) free it.
 #: ``neck`` is not in it: a scarf or collar lies below the neck's narrowest
 #: row and needs nothing freed.
-SLOT_ZONES: Dict[str, Tuple[str, ...]] = {"head": ("head",)}
+SLOT_ZONES: Dict[str, Tuple[str, ...]] = {"head": ("head",), "face": ("head",)}
 
 
 def occupied_zones(slots: Iterable[str]) -> Tuple[str, ...]:
