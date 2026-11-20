@@ -51,6 +51,9 @@ export interface ApiClipRow {
   align_range?: { cm: number; source: 'clip' | 'default' } | null
   /** Ruling A212: what "Also align end clips" has baked into this end clip so far (null = nothing). */
   align_applied?: { role_shift_cm: Record<string, [number, number, number]>; turn_deg: [number, number] } | null
+  /** Owner decision 2026-11-20 (§ A8a, scene-render `pairScale.ts`): the contact pivot [side, forward] cm in the clip
+   *  frame real figure heights scale about (null = the clip frame's origin; null for a solo clip). */
+  pair_pivot_cm?: [number, number] | null
   origin?: string
   has_sidecar?: boolean
   /** Per-surface corrections in centimetres of the 1.70 m reference figure. */

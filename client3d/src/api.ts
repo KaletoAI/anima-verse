@@ -611,6 +611,9 @@ export interface ApiClip {
   bend_limits?: { limits: { raised: { total_deg: number }; resting: { total_deg: number } }; source: string } | null;
   /** Ruling A158: the attached part's direct root angle (degrees; pitch + = up toward the belly, yaw + = right). */
   root_angle?: { pitch_deg: number; yaw_deg: number } | null;
+  /** Owner decision 2026-11-20 (§ A8a, scene-render `pairScale.ts`): a pair/group clip's contact pivot [side, forward]
+   *  cm in the clip frame — real figure heights scale about it; null/absent = the clip frame's origin. */
+  pair_pivot_cm?: [number, number] | null;
   /** How the import treated the root's travel (the sidecar's
    *  `geometry.root_motion`): `strip` plays in place, `keep`/`foot_lock`
    *  carry the figure along `travel_m` (clip frame: +Z forward, +X the

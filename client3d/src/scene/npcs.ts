@@ -18,7 +18,7 @@ import type { PhotoSubject } from '../game/photoView';
 import { bodyYawForView, eyeHeight } from './cameraFraming';
 import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
 import { pickStrandFigures, STRAND_LIMITS, eulerYXZ, fixPivot, fixRoot, partnerTurnFix, findContact, contactSampleOf,
-  type PairFix, type RootAngle, type BendLimits, bendSample } from '@anima/scene-render';
+  type PairFix, type RootAngle, type BendLimits, bendSample, pairFigureScale, scalePairRoot } from '@anima/scene-render';
 import { OPENING_BUDGET, runFigureFrame, strandCandidates, type FrameEntry, type FrameLoopState,
   type StrandFigureView } from '@anima/scene-render';
 import { WALK_CLEARANCE_M } from '../game/ground';
@@ -1481,7 +1481,7 @@ export class NpcManager {
     // An ALT half (G6) this rig lacks plays as the role's own half — the
     // same anchor and phase, only the motion differs.
     const usable = (name: string, t: number) =>
-      !!this.figures!.pairRootAt(name, t) && npc.figure!.hasClip(name);
+      !!this.figures!.pairRootAt(name, t, npc.name) && npc.figure!.hasClip(name);
     let clip = it.base && it.clip !== it.base && !usable(it.clip, loopPhase) ? it.base : it.clip;
     // This person's finale (§ A8c): its own half of the closing pair at the
     // same anchor, its `loop_count` cycles (repeating until the last one,
@@ -1503,8 +1503,12 @@ export class NpcManager {
         npc.finale = null;
       }
     }
-    const root = this.figures.pairRootAt(clip, phase);
-    if (!root) return false;
+    const unscaled = this.figures.pairRootAt(clip, phase, npc.name);
+    if (!unscaled) return false;
+    // Owner decision 2026-11-20 (scene-render `pairScale.ts`): the half's root path was measured for a 1.70 m figure;
+    // this figure's own scale a = height / 1.70 about the clip's contact pivot keeps every contact where it was
+    // (p' = C + a·(p − C)). a = 1 returns the root untouched.
+    const root = scalePairRoot(unscaled, unscaled.pivot, pairFigureScale(npc.figure.height));
     // `playPair` also ends a bridge that was still running (getting up out of
     // bed when the handshake came): its height, turn and travel let go with it.
     const seat = !ownAnchor && it.anchor.placeId
@@ -1536,7 +1540,9 @@ export class NpcManager {
 
   /** Ruling A129: partner B's stored turn (`orientation.partner_turn_deg`, renderer-only; A165: with its yaw about its
    *  own vertical axis, `partner_yaw_deg`) about its bind hips —
-   *  the same `partnerTurnFix` / `fixPivot` / `fixRoot` the Library's place preview applies. */
+   *  the same `partnerTurnFix` / `fixPivot` / `fixRoot` the Library's place preview applies. The root is already the
+   *  size-scaled one (`pairScale.ts`) and `pairHipsBind` is this figure's own bind hips, so the turn's pivot follows
+   *  the real body; the angles themselves are size-free. */
   private pairFixOf(npc: Npc, base: string, yaw: number): { fix: PairFix; pivot: [number, number, number] } | null {
     const fig = npc.figure;
     if (!fig) return null;

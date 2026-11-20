@@ -1368,6 +1368,9 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         "align_range": clip_align_range(meta) if entry["role"] else None,
         # Ruling A212: what "Also align end clips" has baked into this clip so far (None = nothing).
         "align_applied": clip_align_applied(meta) if entry["role"] else None,
+        # Owner decision 2026-11-20 (§ A8a): the contact pivot [side, forward] cm real figure heights scale about
+        # (None = the clip frame's origin; always None for a solo clip).
+        "pair_pivot_cm": clip_pair_pivot(meta) if entry["role"] else None,
         # Saved orientation and renderer calibration. Angles and partner B
         # offsets are baked; the whole-clip shift is applied at placement.
         "orientation": {k: geometry.get(k) for k in
@@ -2309,6 +2312,84 @@ def set_clip_root_angle(library: str, rel: str, angle: Any) -> List[Dict[str, An
     return [_view_of(p, cset, library) for p in _kind_files(path.parent, kind)]
 
 
+#: Owner decision 2026-11-20 (docs/schnittstellen-3d.md § A8a, scene-render `pairScale.ts`): a pair/group clip's
+#: CONTACT PIVOT `pair_pivot_cm: [side, forward]` in cm of the clip frame — the point every figure's horizontal root path
+#: is scaled about by its own height ratio to 1.70 m. Written by Auto-align's Save; absent = the clip frame's origin.
+PAIR_PIVOT_BOUND_CM = 300.0
+
+
+def validate_pair_pivot(value: Any) -> List[float]:
+    """A pair clip's contact pivot: two finite numbers ``[side, forward]`` cm, each within ±``PAIR_PIVOT_BOUND_CM``."""
+    import math
+    if not isinstance(value, (list, tuple)) or len(value) != 2 or any(
+            isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+            or abs(v) > PAIR_PIVOT_BOUND_CM for v in value):
+        raise ClipLibraryError(f"pair_pivot_cm must be [side, forward] numbers from {-PAIR_PIVOT_BOUND_CM:g} "
+                               f"to {PAIR_PIVOT_BOUND_CM:g}")
+    return [float(value[0]), float(value[1])]
+
+
+def clip_pair_pivot(meta: Optional[Dict[str, Any]]) -> Optional[List[float]]:
+    """The clip's stored contact pivot (``<kind>.json`` ``pair_pivot_cm``), None when absent or invalid (= the origin)."""
+    own = (meta or {}).get("pair_pivot_cm") if isinstance(meta, dict) else None
+    if own is None:
+        return None
+    try:
+        return validate_pair_pivot(own)
+    except ClipLibraryError:
+        return None
+
+
+def orient_pair_pivot(pivot: Any, yaw_deg: float, tilt_deg: float, roll_deg: float) -> Optional[List[float]]:
+    """A stored pivot after an orientation bake of its clip. The bake turns the clip frame's content by
+    R = Ry(yaw)·Rx(tilt)·Rz(roll) (``clipCalibration.ts`` ``bakedHips``), so a pure yaw turns the pivot with it —
+    x' = cos·x + sin·z, z' = −sin·x + cos·z, rounded to 0.1 cm — and a tilt or roll drops it (None): the pivot is
+    stored without its height, which a tilt/roll would mix into the horizontal. Shifts keep it: a pair's partner shift
+    moves the entering figure, not the receiving body that carries the contact target. An invalid pivot → None."""
+    import math
+    got = clip_pair_pivot({"pair_pivot_cm": pivot})
+    if got is None or abs(tilt_deg) > 1e-9 or abs(roll_deg) > 1e-9:
+        return None
+    if abs(yaw_deg) <= 1e-9:
+        return got
+    a = math.radians(yaw_deg)
+    c, s = math.cos(a), math.sin(a)
+    x, z = got
+    return [round(c * x + s * z, 1) + 0.0, round(-s * x + c * z, 1) + 0.0]
+
+
+@_library_writer
+def set_clip_pair_pivot(library: str, rel: str, value: Any) -> List[Dict[str, Any]]:
+    """Writes (or with ``None`` clears = the origin) a pair/group clip's contact pivot in its shared ``<kind>.json``.
+    Refused for a solo clip, an invalid value and a kind without a sidecar."""
+    path = resolve_clip(library, rel)
+    if not path.is_file():
+        raise ClipNotFound(f"{rel} does not exist in the {library} library")
+    kind, role = parse_clip_role(path.name)
+    if not role:
+        raise ClipLibraryError(f"'{kind}' is a solo clip — only a pair clip has a contact pivot")
+    root = library_root(library).resolve()
+    cset = path.parent.name if path.parent.resolve() != root else ""
+    sidecar = path.parent / f"{kind}.json"
+    if not sidecar.is_file():
+        raise ClipLibraryError(f"'{kind}' has no sidecar {sidecar.name} — re-import the clip first")
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ClipLibraryError(f"{sidecar.name} is not readable: {e}")
+    if not isinstance(data, dict):
+        raise ClipLibraryError(f"{sidecar.name} is not an object")
+    if value is None:
+        data.pop("pair_pivot_cm", None)
+    else:
+        data["pair_pivot_cm"] = validate_pair_pivot(value)
+    _write_json_atomic(sidecar, data)
+    reload_clip_caches()
+    logger.info("clip contact pivot: %s%s (%s) -> %s", f"{cset}/" if cset else "", kind, library,
+                data.get("pair_pivot_cm") or "origin")
+    return [_view_of(p, cset, library) for p in _kind_files(path.parent, kind)]
+
+
 #: Ruling A212: how far Auto-align may move the part's role around the user's base arrangement, forward/back and
 #: up/down (cm; sideways stays at most 3 cm, tilt/roll at most 10°). The clip's own value wins over the default.
 ALIGN_RANGE_DEFAULT_CM = 8.0
@@ -2819,6 +2900,13 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
                     if stage.exists():
                         stage.unlink(missing_ok=True)
         data = (res["data"] or {}).get("clips") or {}
+    if baked and siblings and "pair_pivot_cm" in meta:
+        # The contact pivot lives in the clip frame the bake turns (`orient_pair_pivot`).
+        turned = orient_pair_pivot(meta.get("pair_pivot_cm"), yaw, tilt, roll)
+        if turned is None:
+            meta.pop("pair_pivot_cm", None)
+        else:
+            meta["pair_pivot_cm"] = turned
     if baked:
         role_shift = dict(per_role)
         if shifted and any(abs(v) > 1e-9 for v in shift):

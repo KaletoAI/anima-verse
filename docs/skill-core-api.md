@@ -240,7 +240,7 @@ Ruling A158: the part's ROOT is not a limit but a direct per-clip angle, `root_a
 which turns on top of it (the two compose). Auto-align (Ruling A212, procedure of 2026-11-20) WRITES it: at the
 deepest and the shallowest frame of the stroke it solves the root angle together with the partner's shift and
 tilt/roll so that the part's root joint and tip lie on the target axis (the root outside, the tip inside at the
-deepest), into the dials — "Save root angle" stores it (`scene-render` `pairAlign.ts`). A package has no say in it. Core: `clip_root_angle(meta)`, `validate_root_angle(value)`.
+deepest), into the dials — Save stores it together with the partner dials and the contact pivot `pair_pivot_cm`, the point real figure heights are scaled about (`scene-render` `pairAlign.ts`, `pairScale.ts`). A package has no say in it. Core: `clip_root_angle(meta)`, `validate_root_angle(value)`.
 
 ## Strict conditions and held snapshots — `app.core.activity_engine`
 

@@ -286,4 +286,7 @@ export { solveChainBend, bendLimitAt, bendLimitsOf, bendShares, bendGate, bendLa
   rootTurnOf, rootTurnQuat, rootAngleOf, bodyFrameOf, ROOT_PITCH_MAX_DEG, ROOT_YAW_MAX_DEG, BEND_LIMITS_DEFAULT, BEND_SWEEPS, BEND_NEAR_M, BEND_REACH_M } from './chainBend'
 export type { BendLimit, BendLimits, BendResult, BendFrame, RootAngle, Quat as BendQuat } from './chainBend'
 export type { FitSample, PairFix, ClearLamp } from './pairFit'
+export { pairFigureScale, pairPivotOf, scalePairRoot, scalePairShift, clipFramePivot, pairPivotCm, PAIR_PIVOT_BOUND_CM,
+  PAIR_PIVOT_ORIGIN } from './pairScale'
+export type { PairXZ } from './pairScale'
 export { attachedPartIndex, partBoneNames, PART_WEIGHT_SHARE } from './attachedPart'

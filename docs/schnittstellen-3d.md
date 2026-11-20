@@ -2854,6 +2854,34 @@ mit mehr Figuren:
   vorhandene Figur spielt wie immer ihre eigene Hälfte am Anker. Paare
   (`participants` 2) und Solo bleiben genau.
 
+**Echte Körpergrößen (Owner-Entscheidung 2026-11-20).** Die Ausrichtung eines Paar-/Gruppen-Clips wird in der
+Pose-Bibliothek an zwei 1,70-m-Figuren gemessen; im Spiel hat jede Figur ihre echte Größe. Darum skaliert der Client
+den HORIZONTALEN Wurzelpfad jeder Hälfte mit dem eigenen Verhältnis `a = Größe / 1,70 m` um den KONTAKT-DREHPUNKT C
+des Clips: `p' = C + a·(p − C)` im Clip-Rahmen, danach `anchor + R(yaw)·p'` wie oben. Ein körperfester Kontaktpunkt
+`p + c` landet so bei `C + a·(p + c − C)` — liegt er im 1,70-m-Clip auf C, bleibt er dort, für jede Größe.
+- C = `pair_pivot_cm: [seitlich, vorwärts]` (cm, Clip-Rahmen, je ±300) aus dem `<kind>.json`, geliefert pro Hälfte
+  in der Listing-Zeile (`null` bei Solo-Clips). Geschrieben von Auto-align beim Speichern
+  (`PATCH /assets/animation-clips/{library}/{rel}` mit `{"pair_pivot_cm": [x, z] | null}`): der Punkt des Kontaktziels
+  (Kanalöffnung bzw. Punktziel) der empfangenden Figur am TIEFSTEN Schlüsselbild nach dem Lauf, über mehrere
+  Kontaktrelationen gemittelt. Ein Orient-Bake dreht ihn mit dem Yaw mit und verwirft ihn bei Tilt/Roll
+  (`animation_clips.orient_pair_pivot`); Verschiebungen lassen ihn stehen.
+- Ohne gespeicherten Drehpunkt gilt der Ursprung des Clip-Rahmens (0, 0) — nach der Rahmenregel oben der Schwerpunkt
+  der Rollenwurzeln am Ankerframe (beim Paar die Mitte der beiden Wurzeln). Jeder Paar-Clip wird also skaliert, nie
+  nur ein Teil.
+- Nur horizontal: Boden-/Platzhöhe und die pro Rig skalierte Hüfthöhe bleiben, wie sie sind. Der senkrechte Rest
+  `(a_B − a_A)·d` (d = Kontakthöhe im 1,70-m-Clip) ist durch Platzierung nicht zu beheben; bei 1,60 m / 1,85 m und
+  Kontakt auf Hüfthöhe (d ≈ 0,90 m) sind das 0,147 × 0,90 = 13,2 cm — Sache von Wurzelwinkel und Kettenbiegung.
+- Partner Bs Tilt/Roll/Yaw sind Winkel und bleiben; ihr Drehpunkt (`fixPivot`) ist Bs skalierte Wurzel plus seine
+  eigene Bind-Hüfte, folgt der Regel also von selbst. Die renderer-only `shift_cm` einer Paar-/Gruppenhälfte ist eine
+  Länge der 1,70-m-Anordnung und wird mit `a` multipliziert (bei Solo-Clips bleibt sie absolut, siehe
+  "Horizontal clip calibration").
+- `a = 1` (1,70 m oder keine Größe) reproduziert die bisherige Platzierung bitgenau. Die Vorschau der Pose-Bibliothek
+  normiert immer auf 1,70 m und skaliert nie.
+- Der Wurzelpfad gehört zur Datei, die die Set-Kette der Figur wählt (Cache pro Kind UND Set, wie der Clip-Index).
+- Rechnung: `packages/scene-render/src/pairScale.ts`; Handrechnungen in `scripts/smoke_pair_scale.mjs`,
+  `client3d/scripts/smoke_pair_root_sets.mjs` und `scripts/smoke_clip_pair_pivot.py`. Die Spielzustands-Position
+  des Servers (`interaction_engine._rotate`) bleibt unskaliert.
+
 **Alt-Hälften (G6, 2026-11-03).** Eine Rolle eines Paars oder einer Gruppe darf
 Ersatz-Hälften haben, die mit derselben Szene aufgenommen wurden (eine andere
 Bewegung derselben Rolle):
@@ -10431,7 +10459,8 @@ alone, it started 90° or 180° off.
 Both clients apply this exactly once to the visible body after placing its
 root: with placement yaw `a`, `s = side / 100`, `f = forward / 100`, the world
 correction is `(s cos(a) + f sin(a), 0, −s sin(a) + f cos(a))`. These are
-absolute metres, independent of figure height, tilt, roll, baked orientation
+absolute metres, independent of figure height (except on a pair/group half: there they are a length of the 1.70 m
+arrangement and are multiplied by the figure's `height / 1.70`, § A8a "Echte Körpergrößen"), tilt, roll, baked orientation
 angles, root-motion mode and surface group. Inverse root rotation converts
 this horizontal world correction into body-local coordinates; it must not
 become a vertical displacement on a leaned seat. The root/place anchor, pair

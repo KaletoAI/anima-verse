@@ -3,6 +3,9 @@
  * Hand derivations in shared/test-vectors/clip_shift.json. This exercises
  * actual set selection, derived clips, solo/pair playback, lean and movement;
  * losing metadata or applying a shift twice changes world body positions.
+ * A PAIR half's shift is a length of the 1.70 m arrangement (owner decision 2026-11-20, scene-render pairScale.ts):
+ * it is multiplied by the figure's a = height / 1.70 — 1 at 1.70 m, 0.5 at 0.85 m, 2.1 / 1.7 = 1.23529412 at
+ * 2.1 m; solo, moving and the entry/exit clips keep the absolute shift.
  */
 import assert from 'node:assert/strict'
 import { build } from 'rolldown'
@@ -61,7 +64,8 @@ try {
           for (let i = 0; i < 4; i++) {
             fig.update(0, {realDelta: 0})
             const p = inst.getWorldPosition(new THREE.Vector3())
-            near(p.x, 3 + v.world_m[0]); near(p.y, 2); near(p.z, 5 + v.world_m[1])
+            const k = mode === 'a' || mode === 'b' ? height / 1.7 : 1
+            near(p.x, 3 + k * v.world_m[0]); near(p.y, 2); near(p.z, 5 + k * v.world_m[1])
           }
         }
       }

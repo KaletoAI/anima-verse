@@ -44,7 +44,7 @@ import {
   isPointTarget, POINT_TARGET_OPS, MOUTH_CHANNEL_ID, type ContactTarget,
   bendSample, BEND_LIMITS_DEFAULT, type BendLimits, type BendResult,
   supportSample, supportHeight, postureReport, postureAngleCapDeg, type PostureReport, type ContactRelation,
-  alignByPasses, keyReport, keyLamp, alignMovers, alignCap, relativeOf, joinDelta, type AlignLamp, type AlignBound, type AlignSample,
+  alignByPasses, pairPivotCm, keyReport, keyLamp, alignMovers, alignCap, relativeOf, joinDelta, type AlignLamp, type AlignBound, type AlignSample,
   type AlignPass, type KeyReport, type RootAngle,
   channelReadoutKey, foldReadoutMax, type ChannelReadout, type ChannelReadoutMax,
 } from '@anima/scene-render'
@@ -296,7 +296,11 @@ export type AutoAlignResult =
       lampBefore: ContactLamp; lamp: ContactLamp; bend: BendReadout | null; keys: KeyAlign
       postureBefore: PostureReport | null; posture: PostureReport | null; limitReason: 'posture' | null
       /** The clip's root angle Auto-align wrote (null = it did not solve it). */
-      rootAngle: RootAngle | null }
+      rootAngle: RootAngle | null
+      /** Owner decision 2026-11-20 (scene-render `pairScale.ts`): the clip's contact pivot [side, forward] cm in the clip
+       *  frame — the contact target's point at the deepest key frame after the run, the mean over the relations; real
+       *  figure heights are scaled about it in the game (null = not measured). */
+      pivotCm: [number, number] | null }
 
 /** Ruling A212: the base clip's last frame — each role's hips relative to each other role's, in that role's clip frame
  *  (`relativeOf`; key `<moving>|<anchor>`). End clips are joined to it. */
@@ -1320,6 +1324,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           let cur0 = base
           const rows: RelationAlign[] = []
           const moverRows: MoverAlign[] = []
+          // The aligned samples of every relation, for the contact pivot (`pairPivotCm`).
+          const pivotRels: AlignSample[][] = []
           for (const [e, group] of movers) {
             const moving = figs[e]
             const mr = moving.role
@@ -1423,6 +1429,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             const rootAngle = solveRoot && run.state.root
               ? { pitchDeg: deg(run.state.root.pitchDeg), yawDeg: deg(run.state.root.yawDeg) } : null
             group.forEach((hit, gi) => {
+              pivotRels.push(cur.per[gi])
               const before = rep(p0.per[gi]), after = rep(cur.per[gi])
               const kb = keyReport(p0.per[gi], bendLim), ka = keyReport(cur.per[gi], bendLim)
               const posture = gi === 0 ? postureOf(cur.per[gi]) : null
@@ -1443,8 +1450,11 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           runAt(timeRef.current, draftRef.current, false)
           const roleShiftCm: Record<string, [number, number, number]> = {}
           for (const [r, v] of Object.entries(cur0.roleShiftM)) roleShiftCm[r] = [cm(v[0]), cm(v[1]), cm(v[2])]
+          // The pivot in the clip frame of the receiving figure's place anchor (every role of a clip shares it).
+          const recv = figs[[...movers.values()][0][0].r]
+          const pivotCm = pairPivotCm(pivotRels, recv.anchor, recv.placeYaw)
           return { ok: true, ...rows[0], relations: rows, roleShiftCm, movers: moverRows,
-            rootAngle: moverRows.find((m) => m.rootAngle)?.rootAngle ?? null }
+            rootAngle: moverRows.find((m) => m.rootAngle)?.rootAngle ?? null, pivotCm }
         }
         // ── Ruling A212: the base clip's last frame, for the end clips' join. ──
         const endPose = (): EndPose | null => {

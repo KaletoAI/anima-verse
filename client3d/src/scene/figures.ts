@@ -1,6 +1,6 @@
 import { facingYaw, easeNpcYaw } from '../game/npcWalk';
 import { createFocusQueue } from '../game/focusQueue';
-import { commitInListOrder } from '../game/clipCommit';
+import { commitInListOrder, pairRootFor, pairRootsOf } from '../game/clipCommit';
 import { clipLoopMode, validLoopCount } from '../game/clipLoop';
 import type { ClipResult } from '../game/clipCommit';
 import { withPhase, markPhase } from '../game/boot';
@@ -20,11 +20,12 @@ import {
   rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM, clipShiftM, figureBox,
   applyFootPose, footPoseLiftM, footPoseMatches, plantFootPose, transplantedRestPose, seatFootLift,
   STRAND_RECORD_VERSION, consumerPartnerCapsules, createFigureRuntime, bendLimitsOf, BEND_LIMITS_DEFAULT, rootAngleOf,
-  prepareSheerPieces, prepareGlossyPieces, prepareFigureTextures,
+  prepareSheerPieces, prepareGlossyPieces, prepareFigureTextures, pairFigureScale, pairPivotOf, scalePairShift,
 } from '@anima/scene-render';
 import type { RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, CollisionPayload,
   FootPose, HairStrandRecord, StrandHair, CapsuleNow, PartnerSnapshot, ChannelOccupant, ChannelReadout,
-  ChannelOccupants, ContactRelation, FigureInspection, FigureRuntime, FrameFigure, BendLimits, RootAngle } from '@anima/scene-render';
+  ChannelOccupants, ContactRelation, FigureInspection, FigureRuntime, FrameFigure, BendLimits, RootAngle,
+  PairXZ } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import { applyFigureTexture, zeroFigureMetalness } from './figureMaterials';
 import { getMaxAnisotropy, getModelEnvironment } from './glbMaterials';
@@ -97,6 +98,12 @@ const clipRootAngles = new WeakMap<THREE.AnimationClip, RootAngle>();
 export function setClipRootAngle(clip: THREE.AnimationClip, wire: unknown): void {
   const a = rootAngleOf(wire);
   if (a.pitchDeg || a.yawDeg) clipRootAngles.set(clip, a);
+}
+/** Owner decision 2026-11-20 (scene-render `pairScale.ts`): a pair/group clip's contact pivot (`pair_pivot_cm` of the
+ *  listing, metres of the clip frame; absent = the clip frame's origin). */
+const clipPairPivots = new WeakMap<THREE.AnimationClip, PairXZ>();
+export function setClipPairPivot(clip: THREE.AnimationClip, wire: unknown): void {
+  clipPairPivots.set(clip, pairPivotOf(Array.isArray(wire) ? wire : null));
 }
 /** The bend limits of a played clip (the core default when the listing names none). */
 export function clipBendLimitsOf(clip: THREE.AnimationClip | null | undefined): BendLimits {
@@ -909,6 +916,12 @@ export function extractRootPath(clip: THREE.AnimationClip): RootPath {
   return { times: Float32Array.from(track.times), xz };
 }
 
+/** A pair/group half's root as the library keeps it: its horizontal root path and the clip's contact pivot. */
+export interface PairRoot { path: RootPath; pivot: PairXZ }
+function pairRootOf(clip: THREE.AnimationClip): PairRoot {
+  return { path: extractRootPath(clip), pivot: clipPairPivots.get(clip) ?? pairPivotOf(null) };
+}
+
 type ClipKind = string;   // open vocabulary — the server decides the kinds
 
 const CLIP_SYNONYMS: Record<string, string[]> = {
@@ -1005,7 +1018,8 @@ export class FigureLibrary {
   /** Server clips: kind -> (set|'' -> Clip) */
   private clipIndex = new Map<string, Map<string, THREE.AnimationClip>>();
   /** Root path of every pair-clip half (`<kind>__<role>`), clip-frame metres */
-  private pairRoots = new Map<string, RootPath>();
+  /** Pair/group half roots keyed like `clipIndex` — kind, then set (`pairRootsOf`). */
+  private pairRoots = new Map<string, Map<string, PairRoot>>();
   /** Rest pose of the rig the library was authored on (`/assets/animation-rig`)
    *  — the donor side of the bind-relative transplant. Empty while the rig is
    *  not served; then the clips are copied 1:1 as before. */
@@ -1116,7 +1130,7 @@ export class FigureLibrary {
       const sources: Array<{ kind: string; set: string; url: string; loop?: boolean; loopCount?: number | null;
                              rootMotion?: boolean; rootMotionMode?: string; heightOffsets?: ClipHeightOffsetsCm; shift?: ClipShiftCm | null;
                              partnerTurn?: [number, number] | null; partnerYaw?: number | null; contacts?: ContactRelation[] | null;
-                             bend?: unknown; rootAngle?: unknown }> =
+                             bend?: unknown; rootAngle?: unknown; pivot?: unknown }> =
         serverClips.map((c) => ({
           kind: clipIndexName(c), set: c.set ?? '',
           url: c.url, loop: c.loop, loopCount: c.loop_count,
@@ -1129,6 +1143,7 @@ export class FigureLibrary {
           contacts: c.contact_target?.relations,
           bend: c.bend_limits?.limits,
           rootAngle: c.root_angle,
+          pivot: c.pair_pivot_cm,
         }));
       if (!sources.length) {
         // Dev/offline fallback: the local manifest clips (no sets)
@@ -1188,13 +1203,14 @@ export class FigureLibrary {
           setClipContactRelations(clip, source.contacts);
           setClipBendLimits(clip, source.bend);
           setClipRootAngle(clip, source.rootAngle);
+          setClipPairPivot(clip, source.pivot);
         },
         isPair: isPairClipName,
         pairRoot: extractRootPath,
       });
       this.clipListingAtLoad = new Map(this.clipListing.map(c => [`${clipIndexName(c)}\0${c.set ?? ''}`, JSON.stringify(c)]));
       this.clipIndex = committed.index;
-      this.pairRoots = committed.pairRoots as Map<string, RootPath>;
+      this.pairRoots = pairRootsOf(committed.index, isPairClipName, pairRootOf);
       if (opts.only) await this.ensureFallbackPool(opts);
     } catch (e) {
       console.warn('[figures] library failed', e);
@@ -1248,7 +1264,6 @@ export class FigureLibrary {
   private prepareReloadClips(): Promise<void> {
     return this.clipPreparation ??= (async () => {
       const index = new Map<string, Map<string, THREE.AnimationClip>>();
-      const roots = new Map<string, RootPath>();
       for (const source of this.clipListing) {
         const kind = clipIndexName(source);
         const set = source.set ?? '';
@@ -1269,16 +1284,16 @@ export class FigureLibrary {
               setClipContactRelations(clip, source.contact_target?.relations);
               setClipBendLimits(clip, source.bend_limits?.limits);
               setClipRootAngle(clip, source.root_angle);
+              setClipPairPivot(clip, source.pair_pivot_cm);
             }
           } catch (e) { console.warn('[figures] clip reload not loadable', source.url, e); }
         }
         if (!clip) continue;
         if (!index.has(kind)) index.set(kind, new Map());
         index.get(kind)!.set(set, clip);
-        if (isPairClipName(kind)) roots.set(kind, extractRootPath(clip));
       }
       this.clipIndex = index;
-      this.pairRoots = roots;
+      this.pairRoots = pairRootsOf(index, isPairClipName, pairRootOf);
       this.clipListingAtLoad = new Map(this.clipListing.map(c => [`${clipIndexName(c)}\0${c.set ?? ''}`, JSON.stringify(c)]));
     })();
   }
@@ -1440,11 +1455,13 @@ export class FigureLibrary {
 
   private loadFile!: (url: string, forceFbx?: boolean) => Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }>;
 
-  /** Root XZ of a pair-clip half at clip time `t`, in clip-frame metres —
-   *  null when no such clip is loaded. */
-  pairRootAt(clipName: string, t: number): { x: number; z: number } | null {
-    const path = this.pairRoots.get(clipName);
-    return path ? rootPathAt(path, t) : null;
+  /** Root XZ of a pair-clip half at clip time `t`, in clip-frame metres of the 1.70 m clip, and the clip's contact
+   *  pivot (`pairScale.ts`) — from the file `charName`'s set chain picks for that half (`clipsFor`'s order); null
+   *  when no set of the chain has it. Unscaled: the caller scales it by the figure's height. */
+  pairRootAt(clipName: string, t: number, charName?: string): { x: number; z: number; pivot: PairXZ } | null {
+    const chain = [...((charName && this.charSets.get(charName)) || []), ''];
+    const root = pairRootFor(this.pairRoots, clipName, chain);
+    return root ? { ...rootPathAt(root.path, t), pivot: root.pivot } : null;
   }
 
   /** Remember a character's set fallback chain (from /play/worldmap). */
@@ -2267,6 +2284,9 @@ export class Figure {
   private clipDrop = 0;
   private clipHeight = 0;
   private clipShift: ClipShiftCm | undefined;
+  /** What `clipShift` is multiplied by: the figure's scale a = height / 1.70 while a pair/group half plays (its shift is
+   *  a length of the 1.70 m arrangement, scene-render `pairScale.ts`), 1 otherwise (a solo shift is absolute). */
+  private clipShiftScale = 1;
   /** The model's foot pose (`LoadedModel.footPose`): its root lift rides the
    *  clip height term of the ground group (`setClipHeight`), so it fades with
    *  the group like the listing's offsets do; seat and lie get 0. */
@@ -2855,9 +2875,11 @@ export class Figure {
     const height = clipHeightOffsetM(clip && clipHeightOffsets.get(clip), group, this.height)
       + footPoseLiftM(this.footPose, group) * this.baseScale;
     const shift = clip && clipShifts.get(clip);
-    if (height === this.clipHeight && shift === this.clipShift) return;
+    const shiftScale = clip && isPairClipName(clip.name) ? pairFigureScale(this.height) : 1;
+    if (height === this.clipHeight && shift === this.clipShift && shiftScale === this.clipShiftScale) return;
     this.clipHeight = height;
     this.clipShift = shift;
+    this.clipShiftScale = shiftScale;
     this.applyHeight();
   }
 
@@ -2868,7 +2890,7 @@ export class Figure {
     if (!inst) return;
     inst.position.x -= this.heightCorrection.x;
     inst.position.z -= this.heightCorrection.z;
-    const horizontal = clipShiftM(this.clipShift, this.root.rotation.y);
+    const horizontal = scalePairShift(clipShiftM(this.clipShift, this.root.rotation.y), this.clipShiftScale);
     this.heightCorrection.set(horizontal.x, this.clipHeight, horizontal.z);
     if (this.clipHeight !== 0 || this.clipShift) {
       this.root.getWorldQuaternion(this.heightRotation).invert();
@@ -3137,6 +3159,7 @@ export class Figure {
     if (lift === null) return false;
     this.lift = lift;
     this.clipShift = clipShifts.get(action.getClip());
+    this.clipShiftScale = 1;
     this.applyHeight();
     this.propEntryUpdate.frozen = frozen;
     this.update(0, this.propEntryUpdate);

@@ -398,7 +398,10 @@ async function main() {
   // hips' XZ — exactly what `FigureLibrary` does (`pairRoots`). The stand-in
   // library below answers the one question `tickInteraction` asks of it.
   const pairPath = C.extractRootPath(raw[PAIR_CLIP]);
-  const pairLib = { pairRootAt: (clip, t) => (clip === PAIR_CLIP ? C.rootPathAt(pairPath, t) : null) };
+  // Like the library it also names the clip's contact pivot (the sidecar's `pair_pivot_cm`, absent = the origin).
+  const pv = side[PAIR_CLIP]?.pair_pivot_cm;
+  const pairPivot = Array.isArray(pv) ? { x: pv[0] / 100, z: pv[1] / 100 } : { x: 0, z: 0 };
+  const pairLib = { pairRootAt: (clip, t) => (clip === PAIR_CLIP ? { ...C.rootPathAt(pairPath, t), pivot: pairPivot } : null) };
   const refRig = fbx.parse(arrayBufferOf(await readFile(RIG_FILE)), '');
   const donorRest = C.restPoseOf(THREE, refRig);
   const donorHipsY = C.rigHipsHeight(THREE, refRig);

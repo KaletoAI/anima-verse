@@ -13,6 +13,8 @@ export interface ClipSource {
   bend?: unknown;
   /** Ruling A158: the clip's direct root angle as listed (`root_angle`). */
   rootAngle?: unknown;
+  /** Owner decision 2026-11-20 (scene-render `pairScale.ts`): the pair clip's contact pivot as listed (`pair_pivot_cm`). */
+  pivot?: unknown;
 }
 export interface ClipResult<C> { clip: C | null }
 export interface CommitOps<C> {
@@ -37,4 +39,32 @@ export function commitInListOrder<C>(sources: ClipSource[], results: ClipResult<
     if (!bySet.has(s.set)) bySet.set(s.set, clip);
   });
   return { index, pairRoots };
+}
+
+/** The root of every pair/group half the committed `index` holds, keyed EXACTLY like it — kind, then set — so the
+ *  root path always belongs to the very file a figure plays for its set (a per-kind map let the last set listed
+ *  supply the path of every set). `commitInListOrder`'s own per-kind `pairRoots` is not read by the client. */
+export function pairRootsOf<C, R>(index: ReadonlyMap<string, ReadonlyMap<string, C>>, isPair: (kind: string) => boolean,
+  pairRoot: (c: C) => R): Map<string, Map<string, R>> {
+  const out = new Map<string, Map<string, R>>();
+  for (const [kind, bySet] of index) {
+    if (!isPair(kind)) continue;
+    const roots = new Map<string, R>();
+    for (const [set, clip] of bySet) roots.set(set, pairRoot(clip));
+    out.set(kind, roots);
+  }
+  return out;
+}
+
+/** The root of half `kind` for a figure whose set chain is `chain` (the character's sets, then `''` — the order
+ *  `FigureLibrary.clipsFor` picks the file by), or undefined when no set of the chain has that half. */
+export function pairRootFor<R>(roots: ReadonlyMap<string, ReadonlyMap<string, R>>, kind: string,
+  chain: readonly string[]): R | undefined {
+  const bySet = roots.get(kind);
+  if (!bySet) return undefined;
+  for (const set of chain) {
+    const r = bySet.get(set);
+    if (r !== undefined) return r;
+  }
+  return undefined;
 }

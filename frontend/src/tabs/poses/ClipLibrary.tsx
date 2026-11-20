@@ -330,6 +330,10 @@ export function ClipLibrary({
   const [shiftRole, setShiftRole] = useState('a')
   const [clipShift, setClipShift] = useState<[number, number]>([0, 0])
   const [heightDraft, setHeightDraft] = useState<ClipHeightOffsetsCm>({})
+  // Owner decision 2026-11-20 (scene-render `pairScale.ts`): the contact pivot an Auto-align run measured ([side,
+  // forward] cm, null = none pending) — stored with Save; `pivotFill` carries an "Align all" result into the clip it opens.
+  const [pivotDraft, setPivotDraft] = useState<[number, number] | null>(null)
+  const pivotFill = useRef<[number, number] | null>(null)
   const [heightBusy, setHeightBusy] = useState(false)
   // Empty selects the ground height and draws only the grid.
   const [footprint, setFootprint] = useState('')
@@ -345,7 +349,8 @@ export function ClipLibrary({
   const [alignAll, setAlignAll] = useState<{ running: boolean; done: number; rows: { kind: string; set: string
     result: AutoAlignResult }[] } | null>(null)
   const pendingAlign = useRef<Record<string, { shiftCm: [number, number, number]; turnDeg: [number, number]
-    roleShiftCm: Record<string, [number, number, number]>; rootAngle: { pitchDeg: number; yawDeg: number } | null }>>({})
+    roleShiftCm: Record<string, [number, number, number]>; rootAngle: { pitchDeg: number; yawDeg: number } | null
+    pivotCm: [number, number] | null }>>({})
   const alignAllStop = useRef(false)
   const [autoAlign, setAutoAlign] = useState<AutoAlignResult | null>(null)
   /** Ruling A212: "Also align end clips" — one row per end clip: the Auto-align result and whether it was stored. */
@@ -493,6 +498,7 @@ export function ClipLibrary({
       // A129.6: an "Align all" result for this clip fills the Partner B dials as a draft (Save stores it).
       // The base stays the clip as loaded (the reset dials), not the filled-in result (Ruling A212 review H1).
       const waiting = pendingAlign.current[`${kind}|${nextSet}`]
+      pivotFill.current = waiting?.pivotCm ?? null
       if (waiting) {
         const shift = waiting.roleShiftCm.b ?? waiting.shiftCm
         autoWrite.current = dialKey(shift, waiting.turnDeg, waiting.roleShiftCm)
@@ -531,7 +537,7 @@ export function ClipLibrary({
       await wait(1500)
       const result: AutoAlignResult = run ? run() : { ok: false, reason: t('No pair was filled on a place of this clip.') }
       if (result.ok) pendingAlign.current[`${r.kind}|${set}`] = { shiftCm: result.shiftCm, turnDeg: result.turnDeg,
-        roleShiftCm: result.roleShiftCm, rootAngle: result.rootAngle }
+        roleShiftCm: result.roleShiftCm, rootAngle: result.rootAngle, pivotCm: result.pivotCm }
       out.push({ kind: r.kind, set, result })
       setAlignAll({ running: true, done: out.length, rows: [...out] })
     }
@@ -586,7 +592,7 @@ export function ClipLibrary({
   const savedRootKey = JSON.stringify(savedRoot ?? { pitch_deg: 0, yaw_deg: 0 })
   const [rootDraft, setRootDraft] = useState<RootAngleWire>({ pitch_deg: 0, yaw_deg: 0 })
   // Ruling A212 (2026-11-20): an "Align all" result for the clip just opened fills the root-angle dials too (a draft;
-  // "Save root angle" stores it) — once, when the clip opens.
+  // Save stores it) — once, when the clip opens.
   const rootFill = useRef<string | null>(null)
   useEffect(() => {
     const key = `${selected}|${previewSet}`
@@ -594,6 +600,14 @@ export function ClipLibrary({
     rootFill.current = null
     setRootDraft(waiting ? { pitch_deg: waiting.pitchDeg, yaw_deg: waiting.yawDeg } : JSON.parse(savedRootKey) as RootAngleWire)
   }, [savedRootKey, selected, previewSet])
+  // The contact pivot: an "Align all" result fills it once when its clip opens; any other clip or set starts without.
+  useEffect(() => {
+    setPivotDraft(pivotFill.current)
+    pivotFill.current = null
+  }, [selected, previewSet])
+  const savedPivot = orientTarget?.pair_pivot_cm ?? null
+  const pivotDirty = !!pivotDraft && !!orientTarget?.role
+    && (!savedPivot || pivotDraft[0] !== savedPivot[0] || pivotDraft[1] !== savedPivot[1])
   // The dials act on the A half; how many roles it has decides pair or group.
   const isPairTarget = orientTarget?.role === 'a' && (row?.roles ?? 0) === 2
   const isGroupTarget = orientTarget?.role === 'a' && (row?.roles ?? 0) > 2
@@ -619,7 +633,7 @@ export function ClipLibrary({
   const alignRangeCm = alignRangeDraft ?? savedAlignRange
   const alignRangeDirty = alignRangeDraft !== null && alignRangeDraft !== savedAlignRange
   /** Everything a clip switch, a view switch or a tab switch would throw away. */
-  const unsaved = orientDirty || heightDirty || contactsDirty || bendDirty || rootDirty || alignRangeDirty
+  const unsaved = orientDirty || heightDirty || contactsDirty || bendDirty || rootDirty || alignRangeDirty || pivotDirty
   unsavedRef.current = unsaved
   useEffect(() => { onUnsaved?.(unsaved) }, [onUnsaved, unsaved])
   useEffect(() => () => onUnsaved?.(false), [onUnsaved])
@@ -730,6 +744,12 @@ export function ClipLibrary({
             await apiPatch(clipPath(file), { align_applied: { role_shift_cm: total,
               turn_deg: [+(applied.turn_deg[0] + turn[0]).toFixed(2), +(applied.turn_deg[1] + turn[1]).toFixed(2)] } })
           } else if (!rootChanged) note = t('already aligned')
+          // Owner decision 2026-11-20: the end clip's own contact pivot (after its orient write, which turns or drops one).
+          const sp = file.pair_pivot_cm
+          if (result.pivotCm && (!sp || sp[0] !== result.pivotCm[0] || sp[1] !== result.pivotCm[1])) {
+            await apiPatch(clipPath(file), { pair_pivot_cm: result.pivotCm })
+            if (nothing && !rootChanged) note = t('contact pivot stored')
+          }
           // The base's relations only where the end clip has none in force.
           if (!file.contact_target?.relations?.length && relations.length) await apiPatch(clipPath(file), { contact_target: relations })
           saved = true
@@ -748,11 +768,12 @@ export function ClipLibrary({
   const checkStored = !!(placeCheck && savedCheck && savedCheck.prop === placeCheck.prop
     && savedCheck.place === placeCheck.place)
   const checkOnly = !orientDirty && !heightDirty && !!placeCheck && !checkStored
-  const canSave = !!orientTarget && (orientDirty || heightDirty || checkOnly) && !heightLocked
+  const canSave = !!orientTarget && (orientDirty || heightDirty || checkOnly || rootDirty || pivotDirty) && !heightLocked
     && !(orientDirty && orientLocked)
   /** The consequence of Save, shown BEFORE the click (checklist point 2). */
   const saveConsequence = useMemo(() => saveSteps({
-    bake: bakeDirty, shift: clipShiftDirty || turnDirty, heights: heightDirty, finales: finaleKinds.length,
+    bake: bakeDirty, shift: clipShiftDirty || turnDirty, heights: heightDirty, root: rootDirty, pivot: pivotDirty,
+    finales: finaleKinds.length,
     greenCheck: !!placeCheck && (orientDirty || heightDirty || !checkStored), savedCheck: !!savedCheck,
   }).map((step) => ({
     bake: t('turn/tilt/roll and role offsets are baked into the clip file (one Blender run, no hub jobs)'),
@@ -761,8 +782,12 @@ export function ClipLibrary({
     finales: t('the finale clips change the same way: {kinds}').replace('{kinds}', finaleKinds.join(', ')),
     check: t('the green place check is stored'),
     'clear-check': t('the stored place check is cleared'),
-  })[step]), [bakeDirty, checkStored, clipShiftDirty, finaleKinds, heightDirty, orientDirty, placeCheck, savedCheck, t, turnDirty])
-  /** THE one save path: bake/shift (orient), heights (PATCH) and the place check, in that order. */
+    root: t('the root angle goes to the sidecar'),
+    pivot: t('the contact pivot goes to the sidecar (figures of other heights are scaled about it in the game)'),
+  })[step]), [bakeDirty, checkStored, clipShiftDirty, finaleKinds, heightDirty, orientDirty, pivotDirty, placeCheck, rootDirty,
+    savedCheck, t, turnDirty])
+  /** THE one save path: bake/shift (orient), heights, root angle and contact pivot (PATCH) and the place check, in that
+   *  order — the pivot after the orient write, which turns or drops a stored one. */
   const save = useCallback(async () => {
     if (!orientTarget || !canSave) return
     setOrientBusy(true)
@@ -791,6 +816,8 @@ export function ClipLibrary({
         otherKinds(res.clips, orientTarget.kind).forEach((k) => touched.add(k))
       }])
     }
+    if (rootDirty) writes.push(['root', () => apiPatch(clipPath(orientTarget), { root_angle: rootDraft })])
+    if (pivotDirty) writes.push(['pivot', () => apiPatch(clipPath(orientTarget), { pair_pivot_cm: pivotDraft })])
     // Heights are not a bake, and a check with nothing dialled is stored on its own (D3).
     if (!orientDirty && placeCheck) {
       writes.push(['check', () => apiPost(`${clipPath(orientTarget)}/orient`, { checked: placeCheck })])
@@ -815,6 +842,7 @@ export function ClipLibrary({
           setClipShift([0, 0])
         }
         if (applied.includes('heights')) setHeightDraft({})
+        if (applied.includes('pivot')) setPivotDraft(null)
         // The file keeps its URL, so the preview has to be rebuilt AND the
         // clip re-fetched — `seq` does both (component key + cache buster).
         if (applied.includes('orient') || applied.includes('heights')) setSeq((n) => n + 1)
@@ -828,7 +856,8 @@ export function ClipLibrary({
       setHeightBusy(false)
     }
   }, [canSave, clipShift, clipShiftDirty, heightDirty, heightDraft, movedRoles, onReload, orientDirty, orientTarget,
-    partnerShift, partnerTurn, partnerYaw, placeCheck, roleShiftDirty, rollDeg, shiftDirty, tiltDeg, turnDirty, yawDeg])
+    partnerShift, partnerTurn, partnerYaw, pivotDirty, pivotDraft, placeCheck, roleShiftDirty, rollDeg, rootDirty, rootDraft,
+    shiftDirty, tiltDeg, turnDirty, yawDeg])
 
   /** Saved angles and calibration, including every earlier apply. */
   const savedNote = useMemo(() => {
@@ -1552,13 +1581,15 @@ export function ClipLibrary({
                         disabled={orientLocked || innerTab !== 'places'}
                         title={innerTab !== 'places'
                           ? t('Open the Places view: Auto-align measures the figures shown there.')
-                          : t('At the deepest frame of the stroke the part must be inside with its root outside, and at the shallowest drawn straight out: Auto-align turns the part’s root angle and moves the role with the attached part (a pair: partner B; at most the alignment range forward/back and up/down, 3 cm sideways and 10° tilt/roll around the arrangement you set) so that the root joint and the tip lie on the axis at both frames. The receiving role never moves. Writes the partner and root-angle dials; Save and “Save root angle” store them.')}
+                          : t('At the deepest frame of the stroke the part must be inside with its root outside, and at the shallowest drawn straight out: Auto-align turns the part’s root angle and moves the role with the attached part (a pair: partner B; at most the alignment range forward/back and up/down, 3 cm sideways and 10° tilt/roll around the arrangement you set) so that the root joint and the tip lie on the axis at both frames. The receiving role never moves. Writes the partner and root-angle dials and measures the contact pivot; Save stores them.')}
                         onClick={() => {
                           const run = autoAlignRef.current
                           const res: AutoAlignResult = run ? run({ rangeCm: alignRangeCm, base: alignBase }) : { ok: false, reason: t('The place preview is still loading.') }
                           setAutoAlign(res)
                           // Ruling A212 (2026-11-20): Auto-align writes the clip's root angle to its dials (a draft).
                           if (res.ok && res.rootAngle) setRootDraft({ pitch_deg: res.rootAngle.pitchDeg, yaw_deg: res.rootAngle.yawDeg })
+                          // Owner decision 2026-11-20: and the contact pivot it measured (Save stores it).
+                          if (res.ok) setPivotDraft(res.pivotCm)
                           if (res.ok && isPairTarget) {
                             const shift = res.roleShiftCm.b ?? res.shiftCm
                             const turn: [number, number] = [+res.turnDeg[0].toFixed(1), +res.turnDeg[1].toFixed(1)]
@@ -1647,15 +1678,10 @@ export function ClipLibrary({
                       ) : null}
                       {alignAll && !alignAll.running && alignAll.rows.length ? (
                         <div className="ga-form-hint" style={{ margin: 0 }}>
-                          {t('mm at the deepest / shallowest frame; nothing is saved. Open a clip: its Partner B and root-angle dials carry the result; Save and “Save root angle” store it.')}</div>
+                          {t('mm at the deepest / shallowest frame; nothing is saved. Open a clip: its Partner B and root-angle dials and its contact pivot carry the result; Save stores it.')}</div>
                       ) : null}
                       {autoAlign ? (
                         <AlignResultBlock result={autoAlign} />
-                      ) : null}
-                      {autoAlign?.ok && autoAlign.rootAngle && rootDirty ? (
-                        <button type="button" className="ga-btn ga-btn-sm" data-testid="align-root-save" disabled={busy}
-                          title={t('Stores the root angle Auto-align wrote in this clip’s sidecar.')}
-                          onClick={() => { void run(orientTarget, { root_angle: rootDraft }) }}>{t('Save root angle')}</button>
                       ) : null}
                       </>) : null}
                     </>

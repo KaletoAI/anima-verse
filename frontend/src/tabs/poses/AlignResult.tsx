@@ -145,6 +145,10 @@ export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
           <KeyTable keys={x.keys} inside={hasInside(x.target)} />
         </div>
       ))}
+      {r.pivotCm ? (
+        <div data-testid="align-pivot" title={t('Figures of other heights than 1.70 m are scaled about this point in the game, each by its own height ratio, so the contact stays where it is. Measured at the deepest frame; Save stores it.')}>
+          {t('Contact pivot: side {x} cm, forward {z} cm').replace('{x}', r.pivotCm[0].toFixed(1)).replace('{z}', r.pivotCm[1].toFixed(1))}</div>
+      ) : null}
       <details data-testid="align-details">
         <summary>{t('Details')}</summary>
         <table style={{ borderCollapse: 'collapse' }}>
@@ -191,7 +195,7 @@ export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
         ) : null}
       </details>
       <div className="ga-form-hint" style={{ margin: 0 }}>
-        {t('Measured on the pair shown; another pair may need its own run. Save stores the partner dials; the root angle is saved with “Save root angle”.')}
+        {t('Measured on two 1.70 m figures; in the game every figure is scaled about the contact pivot by its own height. Save stores the partner dials, the root angle and the contact pivot.')}
       </div>
     </div>
   )
