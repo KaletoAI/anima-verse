@@ -131,8 +131,7 @@ TEMPLATE_LINES: Dict[str, Dict[str, str]] = {
     "fingers": {"fingerless": "The gloves are fingerless: they end at the knuckles and the fingers come out bare.",
                 "none": "The gloves have no hand part: they end at the wrist and the whole hand is bare."},
     "straps": {"none": "The piece is strapless: nothing runs over the shoulders, and nothing hangs from it."},
-    "shoulders": {"strapless": "The piece is strapless: its top edge runs straight round the chest, with nothing "
-                               "over the shoulders."},
+    "shoulders": {"strapless": "The piece is strapless: nothing runs over the shoulders."},
     "sleeves": {"none": "The piece is sleeveless."},
     "slit": {"none": "The hem runs all the way round without a slit.",
              "left": "Its only slit is at the wearer's left side seam.",
@@ -142,6 +141,12 @@ TEMPLATE_LINES: Dict[str, Dict[str, str]] = {
     "feet": {"footless": "The legs end at the ankles; the feet are bare.",
              "stirrup": "The legs end in a strap under the arch; the heel and the toes are bare."},
 }
+#: A strapless top's top edge follows its template neckline (``garment_template.STRAPLESS_NECKLINES``; the drape's
+#: ``top_drop`` dips a sweetheart edge at the centre front) — said after the strapless line.
+STRAPLESS_EDGE_LINES: Dict[str, str] = {
+    "straight": "Its top edge runs straight round the chest.",
+    "sweetheart": "Its top edge dips at the centre front in a sweetheart curve.",
+}
 #: Gloves are pictured upright as a pair: the bake's pose search raises the arms to match (``garment_template_build.
 #: GLOVE_ARM_DEG``) — a pair lying flat or hanging down would be painted upside down.
 GLOVES_LINE = "Show the pair side by side and upright, the fingers pointing up and the cuffs at the bottom."
@@ -149,7 +154,8 @@ GLOVES_LINE = "Show the pair side by side and upright, the fingers pointing up a
 
 def template_lines(params: Optional[Dict[str, Any]]) -> List[str]:
     """The ``TEMPLATE_LINES`` of the fields the piece's kind has (``garment_template.KIND_FIELDS``), in field order;
-    the gloves' orientation line first. [] without template parameters."""
+    the gloves' orientation line first; a strapless top's edge line (``STRAPLESS_EDGE_LINES``) after its strapless
+    line. [] without template parameters."""
     if not params:
         return []
     from app.core.garment_template import KIND_FIELDS
@@ -159,6 +165,10 @@ def template_lines(params: Optional[Dict[str, Any]]) -> List[str]:
         line = TEMPLATE_LINES.get(field, {}).get(str(params.get(field)))
         if line and line not in lines:
             lines.append(line)
+        if field == "shoulders" and params.get(field) == "strapless":
+            edge = STRAPLESS_EDGE_LINES.get(str(params.get("neckline")))
+            if edge:
+                lines.append(edge)
     return lines
 
 

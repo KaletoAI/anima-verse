@@ -43,6 +43,11 @@ PART_GAP = 0.05
 #: share of the fullest column).
 PART_MIDDLE = 0.4
 PART_VALLEY = 0.15
+#: ``fingers_end`` (review of the bug round 2026-11-20): the share of a part's rows at each end looked at, and how
+#: much more often a row at the finger end must split into several runs (the gaps between the fingers) than one at
+#: the other end — a cuff or a fingerless end is one run per row.
+FINGER_BAND = 0.3
+FINGER_SPLIT = 0.25
 
 
 def mesh_mask(p2, tris, cell, origin, shape):
@@ -256,6 +261,30 @@ def alpha_parts(alpha):
     if min(left.sum(), right.sum()) < PART_MIN_SHARE * total:
         return None
     return [left, right]
+
+
+def fingers_end(alpha):
+    """Which way the fingers of a pictured pair of gloves point: ``"up"``, ``"down"`` or None (no finger end to read
+    — fingerless, mittens, a blur). Per part (``alpha_parts``, else the whole), the share of rows that hold two or more
+    opaque runs in the ``FINGER_BAND`` of its rows at the top and at the bottom; averaged over the parts, the end
+    whose share is at least ``FINGER_SPLIT`` above the other's holds the fingers. Row 0 = bottom (``"up"`` = the high
+    rows)."""
+    alpha = np.asarray(alpha, bool)
+    parts = alpha_parts(alpha) or [alpha]
+    diff = []
+    for part in parts:
+        rows = np.nonzero(part.any(1))[0]
+        if len(rows) < 4:
+            continue
+        sub = part[rows[0]:rows[-1] + 1].astype(np.int8)
+        starts = (np.diff(np.pad(sub, ((0, 0), (1, 0))), axis=1) == 1).sum(1)
+        multi = starts >= 2
+        q = max(1, int(len(multi) * FINGER_BAND))
+        diff.append(float(multi[-q:].mean() - multi[:q].mean()))
+    if not diff:
+        return None
+    d = float(np.mean(diff))
+    return "up" if d >= FINGER_SPLIT else "down" if d <= -FINGER_SPLIT else None
 
 
 def sample_bilinear(rgb, usable, u, v):

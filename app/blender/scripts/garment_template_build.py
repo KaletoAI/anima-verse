@@ -34,6 +34,7 @@ from mathutils import Vector
 sys.path.insert(0, str(Path(__file__).parent))
 from _common import main  # noqa: E402
 import garment_template_drape as gd  # noqa: E402
+import bake_register as br  # noqa: E402
 import garment_template_fitted as gf  # noqa: E402
 import stretch_gate as sg  # noqa: E402
 sys.path.pop(0)
@@ -1579,10 +1580,20 @@ BAKE_ARM_DEG = (0, 20, 35, 50, 65, 80)
 
 #: Bug round 2026-11-20: the arm angles tried for gloves — the T-pose and RAISED (negative): a picture of a pair of
 #: gloves shows them upright, fingers up (the piece-only view asks for that, ``garment_template_views.prompt_for``),
-#: i.e. the arms raised over the head. Lowered arms are left out on purpose: hanging, a glove's silhouette is the
-#: raised one upside down, and the IoU tells the two apart by a few hundredths only (Glut's gloves: 0.826 hanging,
-#: 0.817 raised), so the cuff of the picture would be painted onto the hand.
+#: i.e. the arms raised over the head. Raised and lowered are never searched together: hanging, a glove's silhouette
+#: is the raised one upside down, and the IoU tells the two apart by a few hundredths only (Glut's gloves: 0.826
+#: hanging, 0.817 raised), so the cuff of the picture would be painted onto the hand. The PICTURE decides instead
+#: (review of the round): ``bake_register.fingers_end`` reads which end holds the fingers; a pair pictured fingers
+#: down (an older or an uploaded view) searches GLOVE_ARM_DEG_DOWN, one it cannot read (fingerless) the upright set.
 GLOVE_ARM_DEG = (0, -35, -65, -90)
+GLOVE_ARM_DEG_DOWN = (0, 35, 65, 90)
+
+
+def glove_arm_degs(front_alpha):
+    """``(degs, fingers)``: the arm angles the gloves' pose search tries for this front view (row 0 = bottom) and the
+    finger end read from it (``"up"`` / ``"down"`` / ``"unknown"``)."""
+    fingers = br.fingers_end(front_alpha) or "unknown"
+    return (GLOVE_ARM_DEG_DOWN if fingers == "down" else GLOVE_ARM_DEG), fingers
 
 
 def bake_pose(arm, obj, views, degs=BAKE_ARM_DEG, polys=None, paired=False):
@@ -1915,16 +1926,20 @@ def run(a):
     loaded = gd.bake_views(views)
     bake_info = {}
     gloves = bool(fitted) and fitted.get("kind") == "gloves"
+    # every fitted piece may be a pair (gloves; tights of the hold-up / thigh-high / knee-high styles are two leg
+    # pieces): each part is registered on its own wherever both the mesh and the picture fall apart into two
+    # (``bake_register.islands`` / ``alpha_parts``); a piece that does not (full tights, trousers, a bra) keeps one map
+    paired = bool(fitted)
     if bod or gloves:
-        # bug round 2026-11-20: gloves search the arm pose too (a pair pictured upright), each glove on its own part
-        deg, bco_, bnr_, sil = bake_pose(arm, obj, loaded, degs=GLOVE_ARM_DEG if gloves else BAKE_ARM_DEG,
-                                         polys=n_faces_single, paired=gloves)
-        bake_info = {"arm_deg": deg, **sil}
+        # bug round 2026-11-20: gloves search the arm pose too (the way the picture shows them), each glove on its own
+        degs, fingers = glove_arm_degs(loaded["front"]["alpha"]) if gloves else (BAKE_ARM_DEG, None)
+        deg, bco_, bnr_, sil = bake_pose(arm, obj, loaded, degs=degs, polys=n_faces_single, paired=paired)
+        bake_info = {"arm_deg": deg, **sil, **({"fingers": fingers} if gloves else {})}
         tex = gd.project_bake(obj, views, out / "template_atlas.png", size=1024, co=bco_, nr=bnr_,
-                              polys=n_faces_single, paired=gloves, views=loaded)
+                              polys=n_faces_single, paired=paired, views=loaded)
     else:
         tex = gd.project_bake(obj, views, out / "template_atlas.png", size=1024, polys=n_faces_single,
-                              views=loaded)
+                              paired=paired, views=loaded)
     tex.update(bake_info)
     tex["wall_s"] = round(time.time() - t_bake, 2)
     edges2 = gd.edges_of(obj)

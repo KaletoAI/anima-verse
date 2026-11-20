@@ -30,21 +30,38 @@ AST, the rest is core code. Every expectation is derived by hand below.
     (each fine cell 3/4 its own coarse cell + 1/4 the next, edges clamped).
 [7] ``garment_template.opening_mask``: a 100 x 100 RGBA, the piece = cols 20..79, rows 10..89 (60 x 80 = 4800 px,
     row 0 = top as a file) of (150, 100, 60) (luminance 0.299 * 150 + 0.587 * 100 + 0.114 * 60 = 110.39).
-    a) a slit: (10, 10, 10) at cols 60..66, rows 50..89 (7 x 40 = 280 px = 0.058 of the piece) — it reaches the hem
-       (row 90 below it is outside); its rim = 2 x 40 + 2 x 7 - 4 = 90 px, the 7 of the bottom row border the outside
-       (7 / 90 = 0.08 <= 0.35) -> the mask = exactly those 280 px, 1 region.
+    a) a slit, a wedge widening to the hem: (10, 10, 10) in rows 50..89, row r = cols 60 .. 60 + (r - 50) // 4, i.e.
+       1 px wide in rows 50..53 up to 10 px in rows 86..89: 4 x (1 + ... + 10) = 220 px = 0.046 of the piece. It
+       reaches the hem in 10 columns (row 90 below them is outside); of its rim (the left column alone is 40 px) only
+       the 10 px of the bottom row border the outside (<= 0.35). Taper (``OPEN_TAPER_PART`` 0.25 of 40 rows = 10):
+       the 10 rows at the hem are 8, 8, 9 x 4, 10 x 4 wide = mean 9.2, the 10 far rows 1 x 4, 2 x 4, 3 x 2 = mean
+       1.8 <= 0.5 x 9.2 -> the mask = exactly those 220 px, 1 region.
     b) black fabric: the piece (20, 20, 20), the same slit (5, 5, 5): 5 < 0.35 x 20 but the drop 15 < 40 -> no mask.
     c) a dark band along the top edge, rows 10..14 (60 x 5 = 300 px): its rim = 2 x 60 + 2 x 5 - 4 = 126 px, of which
        the top row (60) and the end columns' other 4 rows each (8) border the outside: 68 / 126 = 0.54 > 0.35 -> kept
        as fabric. A dark spot inside (rows 40..45, cols 30..35) reaches no edge -> kept.
+    d) review of the bug round: a dark detail that only STARTS at an edge passes the edge tests but keeps its width.
+       A placket (10, 10, 10) cols 48..51, rows 10..89 (4 x 80 = 320 px, 0.067): it touches the top and the hem, its
+       rim 2 x 80 + 2 x 4 - 4 = 164 px borders the outside with the 4 + 4 px of its end rows only (0.05) — the old
+       mask took it whole; widths 4 at both ends: 4 > 0.5 x 4 -> fabric. A tie from the collar, cols 45..54,
+       rows 10..59 (500 px, 0.104): widths 10 at both ends -> fabric.
 [8] ``crop_back(native=True)``: a 2048 x 2048 answer to a 512 x 512 canvas, source 450 x 512 at offset (31, 0):
     ``crop_back_box`` -> scaled (512, 512), box (31, 0, 481, 512); native scale 2048 / 512 = 4 -> the output is
     (481 - 31) x 4 = 1800 x 2048 px; the default stays 450 x 512.
 [9] ``template_lines``: gloves fingerless -> [GLOVES_LINE, the fingerless line]; a bra with straps "none" -> the
     strapless line only; a skirt with slit "left" -> the wearer's-left line (a skirt has no "straps" field, so its
-    default "thin" says nothing).
+    default "thin" says nothing). A strapless top (its sleeves forced to "none" by ``validate_params``) with the
+    sweetheart neckline -> [strapless, the sweetheart edge, sleeveless]; with neckline "v" (normalised to "straight",
+    the only other strapless neckline) -> the straight edge instead — never a straight edge on a sweetheart top.
 [10] ``texture_warning`` (marks coverage 0.6, IoU 0.5): {coverage 0.43} -> low coverage (an old record without iou);
     {0.9, iou 0.2} -> low iou; {0.9, 0.9} -> None.
+[11] ``fingers_end`` (review of the round: the gloves' pose search follows the picture). A 60 x 100 picture (row 0 =
+    bottom) of two gloves, cols 10..29 and 60..79: cuff + palm rows 0..44 (20 px wide, one run per row), four
+    fingers rows 45..59 (cols 10..12, 15..17, 20..22, 25..27 and the same + 50: four runs per row). ``alpha_parts``
+    cuts in the empty middle -> two parts of 60 rows; ``FINGER_BAND`` 0.3 -> 18 rows per end: top rows 42..59 hold 15
+    split rows (15 / 18 = 0.833), bottom rows 0..17 none -> 0.833 >= ``FINGER_SPLIT`` 0.25 -> "up"; the picture
+    upside down -> "down"; without the fingers (45 rows, every row one run) -> None. The build's lowered set
+    ``GLOVE_ARM_DEG_DOWN`` (read from the script's AST) is the raised ``GLOVE_ARM_DEG`` mirrored: (0, 35, 65, 90).
 """
 import ast
 import sys
@@ -147,15 +164,22 @@ def piece(fabric, extra):
     return px
 
 
-mask, info = gt.opening_mask(piece((150, 100, 60), [((50, 90, 60, 67), (10, 10, 10))]))
 want = np.zeros((100, 100), bool)
-want[50:90, 60:67] = True
-check("[7a] the slit is the mask: 280 px, 1 region", np.array_equal(mask, want) and info == {"px": 280, "regions": 1},
+for r in range(50, 90):
+    want[r, 60:60 + (r - 50) // 4 + 1] = True
+wedge = piece((150, 100, 60), [])
+wedge[want, :3] = 10
+mask, info = gt.opening_mask(wedge)
+check("[7a] the slit is the mask: 220 px, 1 region", np.array_equal(mask, want) and info == {"px": 220, "regions": 1},
       info)
 mask, info = gt.opening_mask(piece((20, 20, 20), [((50, 90, 60, 67), (5, 5, 5))]))
 check("[7b] black fabric: no mask", info["px"] == 0, info)
 mask, info = gt.opening_mask(piece((150, 100, 60), [((10, 15, 20, 80), (10, 10, 10)), ((40, 46, 30, 36), (10, 10, 10))]))
 check("[7c] a dark top band and an inner spot stay fabric", info["px"] == 0, info)
+mask, info = gt.opening_mask(piece((150, 100, 60), [((10, 90, 48, 52), (10, 10, 10))]))
+check("[7d] a placket top to hem stays fabric", info["px"] == 0, info)
+mask, info = gt.opening_mask(piece((150, 100, 60), [((10, 60, 45, 55), (10, 10, 10))]))
+check("[7d] a tie from the collar stays fabric", info["px"] == 0, info)
 
 # [8]
 from PIL import Image  # noqa: E402
@@ -175,6 +199,11 @@ lines = tv.template_lines(gt.validate_params({"kind": "bra", "straps": "none"})[
 check("[9] strapless bra", lines == [tv.TEMPLATE_LINES["straps"]["none"]], lines)
 lines = tv.template_lines(gt.validate_params({"kind": "skirt", "slit": "left", "slit_m": 0.3})[0])
 check("[9] skirt slit left", lines == [tv.TEMPLATE_LINES["slit"]["left"]], lines)
+for neck, edge in (("sweetheart", "sweetheart"), ("v", "straight")):
+    lines = tv.template_lines(gt.validate_params({"kind": "top", "shoulders": "strapless", "neckline": neck})[0])
+    check(f"[9] strapless top, neckline {neck} -> the {edge} edge",
+          lines == [tv.TEMPLATE_LINES["shoulders"]["strapless"], tv.STRAPLESS_EDGE_LINES[edge],
+                    tv.TEMPLATE_LINES["sleeves"]["none"]], lines)
 
 # [10]
 w = gt.texture_warning({"coverage": 0.43})
@@ -182,6 +211,23 @@ check("[10] an old record: low coverage", w == {"coverage": 0.43, "iou": None, "
 w = gt.texture_warning({"coverage": 0.9, "iou": 0.2})
 check("[10] low iou", w is not None and w["low_iou"] and not w["low_coverage"], w)
 check("[10] a good bake: None", gt.texture_warning({"coverage": 0.9, "iou": 0.9}) is None)
+
+# [11]
+gloves = np.zeros((60, 100), bool)
+for c0 in (10, 60):
+    gloves[0:45, c0:c0 + 20] = True
+    for f in range(4):
+        gloves[45:60, c0 + 5 * f:c0 + 5 * f + 3] = True
+check("[11] fingers at the top -> up", br.fingers_end(gloves) == "up", br.fingers_end(gloves))
+check("[11] upside down -> down", br.fingers_end(gloves[::-1]) == "down", br.fingers_end(gloves[::-1]))
+fingerless = gloves.copy()
+fingerless[45:] = False
+check("[11] fingerless -> None", br.fingers_end(fingerless) is None, br.fingers_end(fingerless))
+build_src = (ROOT / "app" / "blender" / "scripts" / "garment_template_build.py").read_text()
+consts = {t.id: ast.literal_eval(n.value) for n in ast.parse(build_src).body if isinstance(n, ast.Assign)
+          for t in n.targets if isinstance(t, ast.Name) and t.id in ("GLOVE_ARM_DEG", "GLOVE_ARM_DEG_DOWN")}
+check("[11] the lowered set mirrors the raised one", consts.get("GLOVE_ARM_DEG_DOWN") == (0, 35, 65, 90)
+      and tuple(-d for d in consts.get("GLOVE_ARM_DEG", ())) == consts.get("GLOVE_ARM_DEG_DOWN"), consts)
 
 print(f"\n{len(FAILS)} FAILED: {FAILS}" if FAILS else "\nALL OK")
 sys.exit(1 if FAILS else 0)

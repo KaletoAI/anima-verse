@@ -2310,12 +2310,21 @@ OPEN_MAX_SHARE = 0.25
 OPEN_EDGE_PX = 3
 OPEN_EDGE_COLS = 2
 OPEN_OUTSIDE_SHARE = 0.35
+#: Review of the bug round 2026-11-20: an opening TAPERS away from the edge it opens at — a slit or the gap of a wrap
+#: is widest at the hem and runs out to a point (Ylva's slit: 36 px wide in the quarter of its rows at the hem, 3 px
+#: in the far quarter). A dark detail that merely starts at an edge (a placket, a stripe, a tie, a zip line) keeps its
+#: width. A region is an opening only when its mean width (pixels per row) over the OPEN_TAPER_PART of its rows
+#: farthest from the edge is at most OPEN_TAPER x that over the same share nearest to it.
+OPEN_TAPER = 0.5
+OPEN_TAPER_PART = 0.25
 
 
 def opening_mask(rgba) -> Tuple[Any, Dict[str, Any]]:
     """The see-through openings of a cut-out view (``OPEN_*``): an (h, w) bool mask (row 0 = top, as the file) and
     ``{px, regions}``. The bake leaves these pixels out (``project_bake``), so push-pull fills them with the fabric
-    around them; they still count as the piece for the silhouette registration."""
+    around them; they still count as the piece for the silhouette registration. The size filter runs on the label
+    sums before any per-region work, and each region is examined inside its own bounding box (a fine dark print
+    makes thousands of labels on a render-sized view)."""
     import numpy as np
     from scipy import ndimage
     rgba = np.asarray(rgba)
@@ -2328,31 +2337,45 @@ def opening_mask(rgba) -> Tuple[Any, Dict[str, Any]]:
     med = float(np.median(lum[opaque]))
     dark = opaque & (lum < OPEN_REL * med) & (med - lum >= OPEN_MIN_DROP)
     labels, count = ndimage.label(dark, structure=np.ones((3, 3), bool))
+    if not count:
+        return out, {"px": 0, "regions": 0}
     total = float(opaque.sum())
-    h = opaque.shape[0]
+    h, w = opaque.shape
     outside = ~opaque
+    sizes = np.asarray(ndimage.sum(dark, labels, range(1, count + 1)), np.float64)
+    keep = np.nonzero((sizes / total >= OPEN_MIN_SHARE) & (sizes / total <= OPEN_MAX_SHARE))[0]
+    boxes = ndimage.find_objects(labels)
     found = 0
-    for k in range(1, count + 1):
-        reg = labels == k
-        n = float(reg.sum())
-        if not OPEN_MIN_SHARE <= n / total <= OPEN_MAX_SHARE:
-            continue
+    pad = OPEN_EDGE_PX + 1
+    for i in keep:
+        sl = boxes[i]
+        r0, c0 = max(0, sl[0].start - pad), max(0, sl[1].start - pad)
+        r1, c1 = min(h, sl[0].stop + pad), min(w, sl[1].stop + pad)
+        reg = labels[r0:r1, c0:c1] == i + 1
+        out_l = outside[r0:r1, c0:c1]
         rows, cols = np.nonzero(reg)
-        touch = 0
+        top = bottom = 0
         for c in np.unique(cols):
             rs = rows[cols == c]
             lo_r, hi_r = int(rs.min()), int(rs.max())
-            below = outside[hi_r + 1:min(h, hi_r + 1 + OPEN_EDGE_PX), c]
-            above = outside[max(0, lo_r - OPEN_EDGE_PX):lo_r, c]
-            if below.any() or above.any() or hi_r == h - 1 or lo_r == 0:
-                touch += 1
-        if touch < OPEN_EDGE_COLS:
+            if out_l[hi_r + 1:hi_r + 1 + OPEN_EDGE_PX, c].any() or r0 + hi_r == h - 1:
+                bottom += 1
+            elif out_l[max(0, lo_r - OPEN_EDGE_PX):lo_r, c].any() or r0 + lo_r == 0:
+                top += 1
+        if top + bottom < OPEN_EDGE_COLS:
             continue
         rim = reg & ~ndimage.binary_erosion(reg)
-        rim_out = rim & ndimage.binary_dilation(outside)
+        rim_out = rim & ndimage.binary_dilation(out_l)
         if rim_out.sum() > OPEN_OUTSIDE_SHARE * max(1, rim.sum()):
             continue
-        out |= reg
+        width = reg.sum(1)
+        width = width[width > 0]
+        if bottom >= top:
+            width = width[::-1]                    # nearest the edge it opens at (the hem: the last rows) first
+        q = max(1, int(round(len(width) * OPEN_TAPER_PART)))
+        if width[-q:].mean() > OPEN_TAPER * width[:q].mean():
+            continue                               # keeps its width: a dark detail, not an opening
+        out[r0:r1, c0:c1] |= reg
         found += 1
     return out, {"px": int(out.sum()), "regions": found}
 

@@ -1637,8 +1637,9 @@ def register_views(co, nr, tri_v, views, paired=False):
     """Bug round 2026-11-20: each view's map piece -> picture by silhouette (``bake_register.register``). Returns
     ``(sides (t,) "front"/"back" per triangle, part (t,) int, maps {side: [map per part]}, info {side: {iou, box_iou,
     parts}})``. Front = the triangles facing the -Y camera (image right = +X), back = the others (image right = -X).
-    ``paired`` (gloves): when the piece falls apart into two parts side by side (``islands``) and the view too
-    (``alpha_parts``), each part is registered onto its own part of the picture."""
+    ``paired`` (every fitted piece: gloves, separate leg pieces): when the piece falls apart into two parts side by
+    side (``islands``) and the view too (``alpha_parts``), each part is registered onto its own part of the
+    picture."""
     fn = nr[tri_v].mean(1)
     sides = np.where(fn[:, 1] <= 0, "front", "back")
     part = np.zeros(len(tri_v), int)
