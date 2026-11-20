@@ -25,6 +25,12 @@
  * hoop (CPU) or a drop from the item image. The live dots are the piece's
  * centre line(s) on the body (POST …/curve with the unsaved description); a
  * small piece is framed close.
+ *
+ * Glasses (bug round 2026-11-20): the frame outline (four buttons), size step,
+ * rim thickness, frame material (a metal, or acetate with its colour), the
+ * temples' end, and the lenses — clear, or a sunglass tint with its opacity
+ * and a mirror. Their size comes from the face; the dots are the rims, the
+ * bridge and the temples where the Build lays them, with the live sizes.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
@@ -38,9 +44,10 @@ import {
   ACCESSORY_BAND_MATERIAL_LABELS, ACCESSORY_EARRING_LABELS, ACCESSORY_FINGER_LABELS, ACCESSORY_FOCUS_M,
   ACCESSORY_KIND_LABELS, ACCESSORY_METAL_LABELS, ACCESSORY_PART_NAMES, ACCESSORY_POSE_LABELS, ACCESSORY_SIDE_LABELS, ACCESSORY_STATE_COLOR,
   ACCESSORY_STATE_LABELS, ACCESSORY_STRAP_AT_LABELS, BAND_KINDS, PENDANT_STATE_COLOR, PENDANT_STATE_LABELS,
-  TUBE_KINDS, dropPresetOf, pendantBoxPoints,
+  TUBE_KINDS, dropPresetOf, pendantBoxPoints, GLASSES_FRAME_LABELS, GLASSES_SHAPE_LABELS, GLASSES_SIZE_LABELS,
+  GLASSES_TEMPLE_LABELS, LENS_TINT_LABELS, glassesLine,
 } from './figureModel'
-import type { AccessoryInfo, AccessoryPendant, Jewellery } from './figureModel'
+import type { AccessoryInfo, AccessoryPendant, GlassesNumbers, GlassesSpec, Jewellery } from './figureModel'
 
 const CHIP: CSSProperties = { fontSize: '0.72em', padding: '1px 6px', borderRadius: 8 }
 const GRID: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px 12px' }
@@ -117,6 +124,9 @@ export function AccessoryDialog({ character, itemId, onClose }: {
   const [draft, setDraft] = useState<Jewellery | null>(null)
   const [points, setPoints] = useState<Array<[number, number, number]>>([])
   const [anchor, setAnchor] = useState<{ at: [number, number, number]; out: [number, number, number] } | null>(null)
+  // Glasses: the live preview's sizes for the unsaved settings
+  const [liveGlasses, setLiveGlasses] = useState<GlassesNumbers | null>(null)
+  const [previewError, setPreviewError] = useState('')
   const [pendantBusy, setPendantBusy] = useState(false)
   const [saving, setSaving] = useState(false)
   const seq = useRef(0)
@@ -130,15 +140,21 @@ export function AccessoryDialog({ character, itemId, onClose }: {
   // A234: the live rings of the other kinds (the shape fields only — the material does not move them).
   const shapeKey = draft && draft.kind !== 'necklace'
     ? JSON.stringify({ kind: draft.kind, band: draft.band, side: draft.side, finger: draft.finger,
-      earring: draft.earring, chain: draft.chain, ring: draft.ring })
+      earring: draft.earring, chain: draft.chain, ring: draft.ring, glasses: draft.glasses })
     : ''
   useEffect(() => {
     if (!shapeKey) return
     const mine = ++seq.current
     const id = window.setTimeout(() => {
-      apiPost<{ rings: Array<Array<[number, number, number]>> }>(`${path}/curve`, { jewellery: JSON.parse(shapeKey) })
-        .then((r) => { if (mine === seq.current) { setPoints(r.rings.flat()); setAnchor(null) } })
-        .catch(() => { if (mine === seq.current) setPoints([]) })
+      apiPost<{ rings: Array<Array<[number, number, number]>>; glasses?: GlassesNumbers }>(`${path}/curve`,
+        { jewellery: JSON.parse(shapeKey) })
+        .then((r) => {
+          if (mine !== seq.current) return
+          setPoints(r.rings.flat()); setAnchor(null); setLiveGlasses(r.glasses || null); setPreviewError('')
+        })
+        .catch((e) => {
+          if (mine === seq.current) { setPoints([]); setLiveGlasses(null); setPreviewError((e as Error).message) }
+        })
     }, 150)
     return () => window.clearTimeout(id)
   }, [path, shapeKey])
@@ -220,11 +236,13 @@ export function AccessoryDialog({ character, itemId, onClose }: {
     return { ...d, kind,
       // A238: a ring is on one hand
       side: kind === 'ring' && !(data.ring_sides || []).includes(d.side || '') ? data.ring_sides?.[0] : d.side,
+      glasses: kind === 'glasses' ? (d.glasses || {}) : d.glasses,
       band: width !== undefined ? { ...(d.band || {}), width_cm: width } : d.band,
       chain: thickness !== undefined && !data.cords.includes(d.metal || '')
         ? { ...(d.chain || {}), thickness_mm: thickness } : d.chain }
   })
   const isBand = !!draft && BAND_KINDS.includes(draft.kind)
+  const isGlasses = draft?.kind === 'glasses'
   const focusM = draft ? ACCESSORY_FOCUS_M[draft.kind] || 0 : 0
   const focus = focusM && points.length ? {
     center: [0, 1, 2].map((k) => points.reduce((a, p) => a + p[k], 0) / points.length) as [number, number, number],
@@ -295,7 +313,7 @@ export function AccessoryDialog({ character, itemId, onClose }: {
                       </select>
                     </label>
                   ) : null}
-                  {!isBand || draft.band?.material === 'metal' ? (
+                  {!isGlasses && (!isBand || draft.band?.material === 'metal') ? (
                     <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                       <span className="ga-form-hint">{t(isBand ? 'Metal' : 'Material')}</span>
                       <select className="ga-input" value={draft.metal || 'gold'}
@@ -307,8 +325,21 @@ export function AccessoryDialog({ character, itemId, onClose }: {
                     </label>
                   ) : null}
                 </div>
-                {draft.kind !== 'necklace' ? (
+                {isGlasses ? (
+                  <GlassesFields data={data} draft={draft} setDraft={setDraft} />
+                ) : draft.kind !== 'necklace' ? (
                   <AroundFields data={data} draft={draft} setDraft={setDraft} />
+                ) : null}
+                {isGlasses && previewError ? (
+                  <div className="ga-hint" role="alert" style={{ fontSize: '0.75em', color: 'var(--danger, #f85149)' }}>
+                    {previewError}
+                  </div>
+                ) : null}
+                {isGlasses && liveGlasses && (dirty || state !== 'current') ? (
+                  <div className="ga-hint" style={{ fontSize: '0.75em' }}
+                    title={t('The sizes for the values beside it, from the face; the Build may still move the lenses forward to clear the brow')}>
+                    {t('Preview')}: {glassesLine(liveGlasses, t)}
+                  </div>
                 ) : null}
                 {draft.kind === 'belt' || (draft.kind === 'earrings' && draft.earring?.style === 'drop') ? (
                   <ImagePartFields data={data} draft={draft} setDraft={setDraft} row={pendantRow} dirty={dirty}
@@ -390,7 +421,20 @@ export function AccessoryDialog({ character, itemId, onClose }: {
                 {/* A238 review: the numbers are the STORED build's — shown only while the draft keeps the stored
                     kind (a ring's metrics and the others' share no field), the line picked by what they carry */}
                 {data.metrics && data.jewellery?.kind !== draft.kind ? null
-                  : data.metrics && data.metrics.inner_radius_mm !== undefined ? (
+                  : data.metrics && data.metrics.frame_mm !== undefined ? (
+                  <div className="ga-hint" style={{ fontSize: '0.75em' }}
+                    title={t('The glasses\' size comes from the face: the nose root and the nose\'s width set the bridge, the head\'s width the frame. Gap: the smallest distance from the frame to the face; the nose pads keep about 1 mm.')}>
+                    {glassesLine(data.metrics, t)}
+                    {' · '}{data.metrics.triangles} {t('triangles')}
+                    {' · '}{t('gap')} {data.metrics.gap_mm?.min ?? '–'} mm
+                    {data.metrics.pad_gap_mm != null ? ` · ${t('nose pads')} ${data.metrics.pad_gap_mm} mm` : ''}
+                    {data.metrics.forward_mm ? ` · ${t('moved forward to clear the brow')} ${data.metrics.forward_mm} mm` : ''}
+                    {Object.values(data.metrics.ear_used || {}).some((u) => !u) ? (
+                      <div>{t('Ear not used — the temple runs straight back')}{Object.values(data.metrics.ear_note || {})[0]
+                        ? ` (${t(Object.values(data.metrics.ear_note || {})[0])})` : ''}</div>
+                    ) : null}
+                  </div>
+                ) : data.metrics && data.metrics.inner_radius_mm !== undefined ? (
                   <div className="ga-hint" style={{ fontSize: '0.75em' }}
                     title={t('The ring\'s size comes from the skeleton: the hand\'s width across the knuckles and the length of the finger\'s first bone, within a range set by the body\'s height. It is not measured on the skin, so it can cut into a thick finger.')}>
                     {t('Inner radius')}: {data.metrics.inner_radius_mm ?? '–'} mm
@@ -539,6 +583,95 @@ function AroundFields({ data, draft, setDraft }: { data: AccessoryInfo; draft: J
           labels={{ auto: 'The outermost clothing under it', body: 'The body' }} onChange={(v) => setBand('layer', v)} />
       ) : null}
     </div>
+  )
+}
+
+/** Glasses: shape (four buttons), size, rim thickness, frame material and colour, temples, lenses (every field saves
+ *  with Save, no job; the lenses and the frame colour re-assemble without a rebuild). */
+function GlassesFields({ data, draft, setDraft }: { data: AccessoryInfo; draft: Jewellery; setDraft: SetDraft }) {
+  const { t } = useI18n()
+  const opts = data.glasses
+  if (!opts) return null
+  const ranges = data.ranges || {}
+  const g: GlassesSpec = draft.glasses || {}
+  const frame = g.frame || 'metal'
+  const lens = g.lens || {}
+  const tint = lens.tint || 'clear'
+  const sun = tint !== 'clear'
+  const set = (patch: Partial<GlassesSpec>) => setDraft((d) => (d ? { ...d, glasses: { ...(d.glasses || {}), ...patch } } : d))
+  const setLens = (patch: GlassesSpec['lens']) => set({ lens: { ...lens, ...patch } })
+  const rim = g.rim_mm ?? opts.rim_mm[frame] ?? 2
+  const opacity = lens.opacity ?? (sun ? opts.sun_opacity : opts.clear_opacity)
+  const BOX: CSSProperties = { border: '1px solid var(--border, #30363d)', borderRadius: 6, padding: '6px 8px',
+    display: 'flex', flexDirection: 'column', gap: 6 }
+  return (
+    <>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <span className="ga-form-hint">{t('Frame shape')}</span>
+        <span role="group" aria-label={t('Frame shape')} style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          {opts.shapes.map((s) => (
+            <button key={s} type="button" aria-pressed={(g.shape || 'rectangular') === s}
+              className={'ga-btn ga-btn-sm' + ((g.shape || 'rectangular') === s ? ' ga-btn-primary' : '')}
+              onClick={() => set({ shape: s })}>{t(GLASSES_SHAPE_LABELS[s] || s)}</button>
+          ))}
+        </span>
+      </div>
+      <div style={GRID}>
+        <Choice label={t('Size')} value={g.size || 'regular'} options={opts.sizes} labels={GLASSES_SIZE_LABELS}
+          onChange={(v) => set({ size: v })} />
+        <Choice label={t('Temples')} value={g.temple || 'hook'} options={opts.temples} labels={GLASSES_TEMPLE_LABELS}
+          onChange={(v) => set({ temple: v })} />
+        <Slider label={t('Rim thickness')} value={rim} unit="mm" min={ranges.rim_mm?.[0] ?? 0.8}
+          max={ranges.rim_mm?.[1] ?? 5} step={0.1} onChange={(v) => set({ rim_mm: v })} />
+        {/* switching the frame takes that frame's rim default */}
+        <Choice label={t('Frame material')} value={frame} options={opts.frames} labels={GLASSES_FRAME_LABELS}
+          onChange={(v) => set({ frame: v, rim_mm: opts.rim_mm[v] ?? rim })} />
+        {frame === 'metal' ? (
+          <Choice label={t('Metal')} value={draft.metal && !data.cords.includes(draft.metal) && draft.metal !== 'custom'
+            ? draft.metal : 'gold'}
+            options={data.metals.filter((m) => m !== 'custom' && !data.cords.includes(m))} labels={ACCESSORY_METAL_LABELS}
+            onChange={(v) => setDraft((d) => (d ? { ...d, metal: v } : d))} />
+        ) : (
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span className="ga-form-hint">{t('Frame colour')}</span>
+            <input type="color" aria-label={t('Frame colour')} value={draft.color || opts.acetate_color}
+              onChange={(e) => setDraft((d) => (d ? { ...d, color: e.target.value } : d))} />
+          </label>
+        )}
+      </div>
+      <fieldset style={BOX}>
+        <legend className="ga-form-hint">{t('Lenses')}</legend>
+        <span role="group" aria-label={t('Lenses')} style={{ display: 'flex', gap: 4 }}>
+          <button type="button" aria-pressed={!sun} className={'ga-btn ga-btn-sm' + (!sun ? ' ga-btn-primary' : '')}
+            onClick={() => setLens({ tint: 'clear', opacity: opts.clear_opacity, mirror: false })}>{t('Clear lenses')}</button>
+          <button type="button" aria-pressed={sun} className={'ga-btn ga-btn-sm' + (sun ? ' ga-btn-primary' : '')}
+            onClick={() => { if (!sun) setLens({ tint: 'grey', opacity: opts.sun_opacity }) }}>{t('Sunglasses')}</button>
+        </span>
+        {sun ? (
+          <div style={GRID}>
+            <Choice label={t('Tint')} value={tint} options={opts.tints.filter((x) => x !== 'clear')}
+              labels={LENS_TINT_LABELS} onChange={(v) => setLens({ tint: v })} />
+            {tint === 'custom' ? (
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span className="ga-form-hint">{t('Tint colour')}</span>
+                <input type="color" aria-label={t('Tint colour')} value={lens.color || '#2b2b2b'}
+                  onChange={(e) => setLens({ color: e.target.value })} />
+              </label>
+            ) : null}
+          </div>
+        ) : null}
+        <Slider label={t('Lens opacity')} value={Math.round(opacity * 100)} unit="%" digits={0}
+          min={Math.round((ranges.lens_opacity?.[0] ?? 0) * 100)} max={Math.round((ranges.lens_opacity?.[1] ?? 0.9) * 100)}
+          step={1} onChange={(v) => setLens({ opacity: v / 100 })} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input type="checkbox" checked={!!lens.mirror} onChange={(e) => setLens({ mirror: e.target.checked })} />
+          {t('Mirrored lenses')}
+        </label>
+        <span className="ga-hint" style={{ fontSize: '0.72em' }}>
+          {t('Lenses and frame colour change the look only — the figure is put together again, nothing is rebuilt. Far away, clear lenses and the temples are left off.')}
+        </span>
+      </fieldset>
+    </>
   )
 }
 

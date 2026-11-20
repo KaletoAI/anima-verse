@@ -1537,7 +1537,48 @@ export interface Jewellery {
   ring?: { along?: number }
   /** A234: earrings — stud / hoop (CPU) or drop (from the item image). */
   earring?: { style?: string; size_mm?: number }
+  /** An acetate glasses frame's colour (and `metal: custom`'s). */
+  color?: string
+  /** Glasses (`accessory_spec.normalize_glasses`). */
+  glasses?: GlassesSpec
   [key: string]: unknown
+}
+
+/** Glasses: the frame outline, size step, rim thickness, frame material, temple ends and the lenses. */
+export interface GlassesSpec {
+  shape?: string
+  size?: string
+  rim_mm?: number
+  frame?: string
+  temple?: string
+  lens?: { tint?: string; opacity?: number; mirror?: boolean; color?: string }
+}
+
+/** GET …/accessory: the glasses' choices and defaults (`accessory_spec`). */
+export interface GlassesOptions {
+  shapes: string[]
+  sizes: string[]
+  frames: string[]
+  temples: string[]
+  tints: string[]
+  rim_mm: Record<string, number>
+  clear_opacity: number
+  sun_opacity: number
+  tint_colors: Record<string, string>
+  acetate_color: string
+}
+
+/** The glasses' sizes from the face (the stored build's metrics, or the live preview's). */
+export interface GlassesNumbers {
+  frame_mm?: number
+  lens_mm?: [number, number]
+  bridge_mm?: number
+  arms_mm?: Record<string, number>
+  forward_mm?: number
+  ear_used?: Record<string, boolean>
+  ear_note?: Record<string, string>
+  temple_ends?: Record<string, string>
+  pad_gap_mm?: number | null
 }
 
 /** A225: the pendant line of an accessory (`accessory_build.pendant_row`). */
@@ -1577,6 +1618,7 @@ export interface AccessoryInfo {
   ring_sides: string[]
   kind_widths: Record<string, number>
   kind_thickness: Record<string, number>
+  glasses?: GlassesOptions
   part_name: string
   state: 'current' | 'due' | 'blocked' | 'failed' | string
   reason: string
@@ -1584,7 +1626,7 @@ export interface AccessoryInfo {
     on_clothing_share?: number; length_m?: Record<string, number>;
     poses?: Record<string, { gap_min_mm: number; inside_share: number }>;
     /** A238: the ring's size from the skeleton. */
-    inner_radius_mm?: number; hand_width_mm?: number; bone_length_mm?: number; clamped?: boolean } | null
+    inner_radius_mm?: number; hand_width_mm?: number; bone_length_mm?: number; clamped?: boolean } & GlassesNumbers | null
   built_at: string
   cost: { hub_jobs: number }
   glb_url: string
@@ -1592,7 +1634,7 @@ export interface AccessoryInfo {
 
 export const ACCESSORY_KIND_LABELS: Record<string, string> = {
   necklace: 'Necklace', choker: 'Choker', earrings: 'Earrings', bracelet: 'Bracelet', ring: 'Ring',
-  anklet: 'Anklet', belt: 'Belt', strap: 'Strap',
+  anklet: 'Anklet', belt: 'Belt', strap: 'Strap', glasses: 'Glasses',
 }
 
 /** A234: the kinds that are a flat band, the ones that are a round tube round a limb (A238: the ring is sized from
@@ -1613,7 +1655,30 @@ export const ACCESSORY_FINGER_LABELS: Record<string, string> = {
   thumb: 'Thumb', index: 'Index finger', middle: 'Middle finger', ring: 'Ring finger', little: 'Little finger',
 }
 /** A234: how close the dialog's 3D view frames a small piece (metres round its preview points; 0: the whole body). */
-export const ACCESSORY_FOCUS_M: Record<string, number> = { ring: 0.07, earrings: 0.14, bracelet: 0.14, anklet: 0.2 }
+export const ACCESSORY_FOCUS_M: Record<string, number> = {
+  ring: 0.07, earrings: 0.14, bracelet: 0.14, anklet: 0.2, glasses: 0.16,
+}
+export const GLASSES_SHAPE_LABELS: Record<string, string> = {
+  round: 'Round', rectangular: 'Rectangular', cat_eye: 'Cat-eye', aviator: 'Aviator',
+}
+export const GLASSES_SIZE_LABELS: Record<string, string> = { narrow: 'Narrow', regular: 'Regular', wide: 'Wide' }
+export const GLASSES_FRAME_LABELS: Record<string, string> = { metal: 'Metal', acetate: 'Acetate' }
+export const GLASSES_TEMPLE_LABELS: Record<string, string> = { straight: 'Straight', hook: 'Hooked behind the ear' }
+export const LENS_TINT_LABELS: Record<string, string> = {
+  clear: 'Clear lenses', grey: 'Grey', brown: 'Brown', green: 'Green', custom: 'Custom colour',
+}
+
+/** The glasses' metrics line: "Frame 144 mm · lenses 56×36 mm · bridge 22 mm · arms 140 mm" (`t` translates the
+ *  words). Arms: the longer of the two. */
+export function glassesLine(m: GlassesNumbers, t: (s: string) => string): string {
+  const parts: string[] = []
+  if (m.frame_mm !== undefined) parts.push(`${t('Frame')} ${Math.round(m.frame_mm)} mm`)
+  if (m.lens_mm) parts.push(`${t('lenses')} ${Math.round(m.lens_mm[0])}×${Math.round(m.lens_mm[1])} mm`)
+  if (m.bridge_mm !== undefined) parts.push(`${t('bridge')} ${Math.round(m.bridge_mm)} mm`)
+  const arms = Object.values(m.arms_mm || {})
+  if (arms.length) parts.push(`${t('arms')} ${Math.round(Math.max(...arms))} mm`)
+  return parts.join(' · ')
+}
 
 export const ACCESSORY_METAL_LABELS: Record<string, string> = {
   gold: 'Gold', silver: 'Silver', rose_gold: 'Rose gold', black: 'Black metal', custom: 'Custom colour',
