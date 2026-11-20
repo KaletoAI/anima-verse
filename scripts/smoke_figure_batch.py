@@ -15,18 +15,25 @@ World (base kinds still due · outfit due · hub jobs of the badges):
   D: []                 · outfit · 0 + 3
   E: []                 · outfit (its Build records failed texture "view refused") · 0 + 3
   F: [face_retexture]   · —      · Run all's extra kind, 2 hub jobs (the badges do not count it)
+  G: []                 · outfit (its Build ends SUPERSEDED: no failed step, the outfit stays planned) · 0 + 3
+  A failing or superseded Build leaves its outfit step open (as the real Build does), so E and G still show an
+  outfit badge afterwards.
 
-P) Preview: candidates [A, C, D, E, F] (B absent); hub jobs 7 + 7 + 3 + 3 + 2 = 22; F's base count 0 + 1 = 1.
-R) Run: 5 candidates, at most 3 at once, each runs >= DUR -> the first three start together: max concurrent == 3.
+P) Preview: candidates [A, C, D, E, F, G] (B absent); hub jobs 7 + 7 + 3 + 3 + 2 + 3 = 25; F's base count 0 + 1 = 1.
+R) Run: 6 candidates, at most 3 at once, each runs >= DUR -> the first three start together: max concurrent == 3.
    A: its base run is logged before its Build -> done.  C: plain body failed -> failed, reason names
-   "views refused", and NO Build of C was started.  D: done.  E: failed, reason "texture: view refused".
-   F: the face kind ran, the Build answered current -> done (no Build logged).
-   Counts: done 3 (A, D, F), failed 2 (C, E). Builds logged: A, D, E (3).
+   "views refused", and NO Build of C was started.  D: done.  E: failed, reason "texture: view refused" and
+   "Left open: 0 base / 1 outfit steps".  F: the face kind ran, the Build answered current -> done (no Build
+   logged).  G: its Build recorded no failure, yet a step stays open -> failed (the old verdict, which read only
+   state()['failed'], said done), reason "Left open: 0 base / 1 outfit steps" and the superseded note.
+   Counts: done 3 (A, D, F), failed 3 (C, E, G). Builds logged: A, D, E, G (4).
+   German (lang "de"): G's reason starts "Offen geblieben: 0 Grundkörper- / 1 Outfit-Schritte".
 S) A second start while running -> "running"; media switched off -> "media_off" (nothing starts).
 X) Cancel: with DUR long, cancel once three characters are in their base/outfit phase -> those three finish,
-   the other two are "skipped" (reason "Cancelled before it started"): skipped == 2.
+   the other three are "skipped" (reason "Cancelled before it started"): skipped == 3.
 E) Routes: anonymous GET /characters/build-all -> 401; player -> 403; admin -> 200; admin POST start while one
-   runs -> 409; "build-all" is a reserved route segment.
+   runs -> 409 with the German detail "Alle offenen bauen läuft bereits" for ?lang=de; "build-all" is a
+   reserved route segment.
 """
 import os
 import sys
@@ -66,7 +73,7 @@ def check(name, got, want):
 
 
 DUR = 0.25
-NAMES = ["A", "B", "C", "D", "E", "F"]
+NAMES = ["A", "B", "C", "D", "E", "F", "G"]
 sim_lock = threading.Lock()
 world, busy, last, log = {}, {}, {}, []
 active = {"now": 0, "max": 0}
@@ -82,6 +89,8 @@ def reset():
             "D": {"base": [], "outfit": True},
             "E": {"base": [], "outfit": True, "fail_build": {"texture": {"error": "view refused"}}},
             "F": {"base": ["face_retexture"], "outfit": False},
+            "G": {"base": [], "outfit": True, "supersede": {"step": "texture", "label": "Texture",
+                                                            "note": "the figure moved"}},
         })
         busy.clear()
         last.clear()
@@ -150,8 +159,11 @@ def start(name, *, reason, automatic=False):
 
     def done():
         with sim_lock:
-            world[name]["outfit"] = False
-            world[name]["failed"] = dict(world[name].get("fail_build") or {})
+            failed = dict(world[name].get("fail_build") or {})
+            sup = world[name].get("supersede")
+            world[name]["outfit"] = bool(failed or sup)   # a failed or superseded step stays planned
+            world[name]["failed"] = failed
+            world[name]["superseded"] = dict(sup) if sup else None
             busy.pop(name, None)
     _later(done)
     return {"status": "started"}
@@ -159,7 +171,7 @@ def start(name, *, reason, automatic=False):
 
 def state(name):
     with sim_lock:
-        return {"failed": dict(world[name].get("failed") or {})}
+        return {"failed": dict(world[name].get("failed") or {}), "superseded": world[name].get("superseded")}
 
 
 def open_steps(name):
@@ -213,8 +225,8 @@ def wait_done(timeout=30.0):
 # P) preview
 reset()
 p = figure_batch.candidates()
-check("P candidates", [r["name"] for r in p["characters"]], ["A", "C", "D", "E", "F"])
-check("P hub jobs", p["hub_jobs"], 22)
+check("P candidates", [r["name"] for r in p["characters"]], ["A", "C", "D", "E", "F", "G"])
+check("P hub jobs", p["hub_jobs"], 25)
 check("P F base count", next(r for r in p["characters"] if r["name"] == "F")["base"], 1)
 
 # R) + S)
@@ -225,7 +237,7 @@ wait_done()
 st = figure_batch.status()
 rows = {r["name"]: r for r in st["characters"]}
 check("R max concurrent", active["max"], 3)
-check("R order", [r["name"] for r in st["characters"]], ["A", "C", "D", "E", "F"])
+check("R order", [r["name"] for r in st["characters"]], ["A", "C", "D", "E", "F", "G"])
 check("R A phase", rows["A"]["phase"], "done")
 check("R A base before build", log.index(("A", "base", "plain_body")) < log.index(("A", "build", "build_all")), True)
 check("R C phase", rows["C"]["phase"], "failed")
@@ -234,10 +246,16 @@ check("R C no build", [e for e in log if e[0] == "C" and e[1] == "build"], [])
 check("R D phase", rows["D"]["phase"], "done")
 check("R E phase", rows["E"]["phase"], "failed")
 check("R E reason", "texture: view refused" in rows["E"]["reason"], True)
+check("R E left open", "Left open: 0 base / 1 outfit steps" in rows["E"]["reason"], True)
+check("R G phase (superseded, step still planned)", rows["G"]["phase"], "failed")
+check("R G left open", "Left open: 0 base / 1 outfit steps" in rows["G"]["reason"], True)
+check("R G superseded note", "Texture was superseded" in rows["G"]["reason"], True)
+de_g = next(r for r in figure_batch.status("de")["characters"] if r["name"] == "G")["reason"]
+check("R G German", de_g.startswith("Offen geblieben: 0 Grundkörper- / 1 Outfit-Schritte"), True)
 check("R F phase", rows["F"]["phase"], "done")
 check("R F face ran", ("F", "base", "face_retexture") in log, True)
-check("R counts", (st["counts"].get("done"), st["counts"].get("failed")), (3, 2))
-check("R builds", sorted(e[0] for e in log if e[1] == "build"), ["A", "D", "E"])
+check("R counts", (st["counts"].get("done"), st["counts"].get("failed")), (3, 3))
+check("R builds", sorted(e[0] for e in log if e[1] == "build"), ["A", "D", "E", "G"])
 check("R pushed", pushes["n"] > 0, True)
 media["on"] = False
 check("S media off", figure_batch.start()["status"], "media_off")
@@ -257,7 +275,7 @@ while time.monotonic() < end:
 check("X cancel", figure_batch.cancel(), True)
 wait_done()
 st = figure_batch.status()
-check("X skipped", st["counts"].get("skipped"), 2)
+check("X skipped", st["counts"].get("skipped"), 3)
 check("X skipped reason", {r["reason"] for r in st["characters"] if r["phase"] == "skipped"},
       {figure_batch.CANCELLED})
 check("X cancel when idle", figure_batch.cancel(), False)
@@ -277,9 +295,11 @@ check("E player start", pc.post("/characters/build-all/start", json={}).status_c
 ac = TestClient(app, follow_redirects=False)
 ac.cookies.set(sessions.SESSION_COOKIE_NAME, sessions.create_session(admin))
 check("E admin status", ac.get("/characters/build-all").status_code, 200)
-check("E admin preview", ac.get("/characters/build-all/preview").json().get("hub_jobs"), 22)
+check("E admin preview", ac.get("/characters/build-all/preview").json().get("hub_jobs"), 25)
 check("E admin start", ac.post("/characters/build-all/start", json={}).status_code, 202)
-check("E admin second start", ac.post("/characters/build-all/start", json={}).status_code, 409)
+second = ac.post("/characters/build-all/start?lang=de", json={})
+check("E admin second start", second.status_code, 409)
+check("E admin second start German", second.json().get("detail"), "Alle offenen bauen läuft bereits")
 check("E admin cancel", ac.post("/characters/build-all/cancel", json={}).status_code, 200)
 wait_done()
 

@@ -179,10 +179,11 @@ def get_open_steps(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]
 
 
 @router.get("/build-all")
-def get_build_all(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Build all open (``figure_batch.status``): the last or current run, per character its phase."""
+def get_build_all(lang: str = "en", _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Build all open (``figure_batch.status``): the last or current run, per character its phase and its
+    reason in ``lang``."""
     from app.core import figure_batch
-    return figure_batch.status()
+    return figure_batch.status(lang)
 
 
 @router.get("/build-all/preview")
@@ -195,22 +196,25 @@ def preview_build_all(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, A
 
 
 @router.post("/build-all/start", status_code=202)
-def start_build_all(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Start Build all open in the background; 409 while one runs or with media generation switched off."""
+def start_build_all(lang: str = "en", _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Start Build all open in the background; 409 while one runs or with media generation switched off (the
+    detail in ``lang``)."""
     from app.core import figure_batch
+    from app.core.i18n import t
     result = figure_batch.start()
     if result.get("status") != "started":
-        raise HTTPException(status_code=409, detail=str(result.get("reason") or result.get("status")))
-    return figure_batch.status()
+        raise HTTPException(status_code=409, detail=t(str(result.get("reason") or result.get("status")), lang))
+    return figure_batch.status(lang)
 
 
 @router.post("/build-all/cancel")
-def cancel_build_all(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+def cancel_build_all(lang: str = "en", _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Stop scheduling characters that have not begun; the running ones finish. 409 when none runs."""
     from app.core import figure_batch
+    from app.core.i18n import t
     if not figure_batch.cancel():
-        raise HTTPException(status_code=409, detail="Build all open is not running")
-    return figure_batch.status()
+        raise HTTPException(status_code=409, detail=t(figure_batch.NOT_RUNNING, lang))
+    return figure_batch.status(lang)
 
 
 @router.get("/{character_name}/figure")

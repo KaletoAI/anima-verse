@@ -13,7 +13,14 @@ the same time. It reuses exactly what the per-character buttons call, never this
   skipped. Any other base failure is recorded and the outfit is still built.
 * outfit phase — the Figure tab's Build (``figure_build.start``, a manual one: it also runs a base step a
   manual Build plans), waited for while it runs (``figure_build.running``); its recorded ``failed`` steps are
-  the phase's failure.
+  named in the reason.
+* verdict — what the list's badges show decides, not the Build's record (that may belong to an earlier or an
+  automatic run, and a superseded run is no failure yet leaves its steps planned): when the outfit phase ended
+  the character is re-read (``figure_build.open_steps`` + Run all's due kind). ``done`` only when nothing is
+  left open; otherwise ``failed`` with "left open: N base / M outfit steps" (plus the superseded note).
+
+Reasons are English source strings with ``{placeholders}`` kept apart from their values, so ``status(lang)``
+renders them through ``t(en, lang)`` (``app/core/i18n.py``) — the route hands them to the React client.
 
 Who is a candidate: the character list's own badges (``figure_build.open_steps``: a base or outfit step open, or
 a Build running) plus a character whose Run all has a kind due (face / extension work the badges do not count).
@@ -57,6 +64,31 @@ BASE_STILL_DUE = "Base body: {kind} is still due after it ran"
 BASE_NOT_SETTLED = "Base body: Run all did not settle"
 BASE_FAILED = "Base body failed: {error}"
 OUTFIT_SKIPPED = "Outfit skipped — the base body failed"
+LEFT_OPEN = "Left open: {base} base / {outfit} outfit steps"
+SUPERSEDED_NOTE = "{label} was superseded — the figure changed while it ran"
+NOT_RUNNING = "Build all open is not running"
+#: The values of these placeholders are English phrases of this module (translated with the template).
+_WHAT_BASE, _WHAT_OUTFIT = "the base body", "the outfit"
+
+Reason = Tuple[str, Dict[str, Any]]
+
+
+def _r(template: str, **values: Any) -> Reason:
+    """One reason: an English template and its values, rendered per language by ``render_reasons``."""
+    return template, values
+
+
+def render_reasons(reasons: List[Reason], lang: Optional[str] = None) -> str:
+    """The reasons as one line in ``lang`` — templates and string values through ``t``, joined by " · "."""
+    from app.core.i18n import t
+    out = []
+    for template, values in reasons or []:
+        vals = {k: t(v, lang) if isinstance(v, str) else v for k, v in (values or {}).items()}
+        try:
+            out.append(t(template, lang).format(**vals))
+        except (KeyError, IndexError, ValueError):   # a translation that lost a placeholder
+            out.append(template.format(**vals))
+    return " · ".join(out)
 
 _lock = threading.Lock()
 _state: Dict[str, Any] = {"running": False, "collecting": False, "cancel": False, "started_at": None,
@@ -77,10 +109,10 @@ def _media_on() -> bool:
     return bool(media_generation_enabled())
 
 
-def _set(name: str, phase: str, reason: str = "", **extra: Any) -> None:
+def _set(name: str, phase: str, reasons: Optional[List[Reason]] = None, **extra: Any) -> None:
     with _lock:
         row = _state["characters"].setdefault(name, {})
-        row.update({"phase": phase, "reason": reason, **extra})
+        row.update({"phase": phase, "reasons": list(reasons or []), **extra})
     _notify()
 
 
@@ -89,12 +121,17 @@ def _cancelled() -> bool:
         return bool(_state["cancel"])
 
 
-def status() -> Dict[str, Any]:
+def status(lang: Optional[str] = None) -> Dict[str, Any]:
     """``{running, collecting, cancel, started_at, finished_at, characters: [{name, phase, reason}], counts:
-    {phase: n}, total}`` — the last (or current) run, in roster order. Read-only."""
+    {phase: n}, total}`` — the last (or current) run, in roster order, each ``reason`` rendered in ``lang``.
+    Read-only."""
     with _lock:
-        rows = [{"name": n, **dict(_state["characters"].get(n) or {})} for n in _state["order"]]
+        raw = [(n, dict(_state["characters"].get(n) or {})) for n in _state["order"]]
         out = {k: _state[k] for k in ("running", "collecting", "cancel", "started_at", "finished_at")}
+    rows = []
+    for n, row in raw:
+        reasons = row.pop("reasons", [])
+        rows.append({"name": n, **row, "reason": render_reasons(reasons, lang)})
     counts: Dict[str, int] = {}
     for row in rows:
         counts[row.get("phase") or PHASE_WAITING] = counts.get(row.get("phase") or PHASE_WAITING, 0) + 1
@@ -147,105 +184,139 @@ def candidates() -> Dict[str, Any]:
 
 
 def _wait_idle(name: str, what: str) -> None:
-    """Wait while a base step or a Build of the character goes; ``TimeoutError`` past ``PHASE_MAX_S``."""
+    """Wait while a base step or a Build of the character goes; ``_Timeout`` past ``PHASE_MAX_S``."""
     from app.core import figure_build
     deadline = time.monotonic() + PHASE_MAX_S
     while figure_build.base_step_in_flight(name) or figure_build.running(name):
         if time.monotonic() > deadline:
-            raise TimeoutError(TIMED_OUT.format(what=what))
+            raise _Timeout(what)
         time.sleep(POLL_S)
 
 
-def _base_phase(name: str) -> Tuple[str, bool]:
-    """Run all until ``current``: ``(error, blocking)`` — ``("", False)`` when the base body is current."""
+class _Timeout(Exception):
+    """A phase waited longer than ``PHASE_MAX_S``; ``what`` is ``_WHAT_BASE`` / ``_WHAT_OUTFIT``."""
+
+    def __init__(self, what: str) -> None:
+        super().__init__(TIMED_OUT.format(what=what))
+        self.what = what
+
+
+def _base_phase(name: str) -> Tuple[Optional[Reason], bool]:
+    """Run all until ``current``: ``(reason, blocking)`` — ``(None, False)`` when the base body is current."""
     from app.core import figure_build
     deadline = time.monotonic() + PHASE_MAX_S
     last_kind = ""
     rounds = 0
     while rounds < MAX_BASE_ROUNDS:
-        _wait_idle(name, "the base body")
+        _wait_idle(name, _WHAT_BASE)
         due = str(figure_build.base_run_all(name).get("kind") or "")
         if not due:
-            return "", False
+            return None, False
         if due == last_kind:
-            return BASE_STILL_DUE.format(kind=due), due == figure_build.RUN_ALL_PLAIN
+            return _r(BASE_STILL_DUE, kind=due), due == figure_build.RUN_ALL_PLAIN
         try:
             result = figure_build.start_base_run_all(name)
         except (ValueError, LookupError) as e:   # a face redo its own guard refused
-            return BASE_FAILED.format(error=str(e)), False
+            return _r(BASE_FAILED, error=str(e)), False
         status_now = result.get("status")
         if status_now == "current":
-            return "", False
+            return None, False
         if status_now == "off":
-            return OFF_PIPELINE, True
+            return _r(OFF_PIPELINE), True
         if status_now == "failed":
-            return BASE_FAILED.format(error=result.get("reason") or "failed"), True
+            return _r(BASE_FAILED, error=result.get("reason") or "failed"), True
         if status_now in ("busy", "building"):
             # Something of the character slipped in between — wait for it and ask again (not a round).
             if time.monotonic() > deadline:
-                return TIMED_OUT.format(what="the base body"), True
+                return _r(TIMED_OUT, what=_WHAT_BASE), True
             time.sleep(POLL_S)
             continue
         kind = str(result.get("kind") or due)
         rounds += 1
         last_kind = kind
-        _set(name, PHASE_BASE, "", step=kind)
+        _set(name, PHASE_BASE, step=kind)
         time.sleep(POLL_S)   # a hand-off kind registers its run from its own start; never read it too early
-        _wait_idle(name, "the base body")
+        _wait_idle(name, _WHAT_BASE)
         if kind == figure_build.RUN_ALL_PLAIN:
             last = figure_build.base_run_all(name).get("last") or {}
             if last.get("error"):
-                return BASE_FAILED.format(error=last["error"]), True
-    return BASE_NOT_SETTLED, False
+                return _r(BASE_FAILED, error=last["error"]), True
+    return _r(BASE_NOT_SETTLED), False
 
 
-def _outfit_phase(name: str) -> str:
-    """The figure Build (a manual one) until it ended: "" or its failure."""
+def _outfit_phase(name: str) -> List[Reason]:
+    """The figure Build (a manual one) until it ended: its recorded failures (empty when none)."""
     from app.core import figure_build
     deadline = time.monotonic() + PHASE_MAX_S
     while True:
-        _wait_idle(name, "the outfit")
+        _wait_idle(name, _WHAT_OUTFIT)
         result = figure_build.start(name, reason="build_all")
         status_now = result.get("status")
         if status_now in ("current", "off"):
-            return ""
+            return []
         if status_now == "failed":
-            return str(result.get("reason") or "Build failed")
+            return [_r("{error}", error=str(result.get("reason") or "Build failed"))]
         if status_now == "base_busy":
             if time.monotonic() > deadline:
-                return TIMED_OUT.format(what="the outfit")
+                return [_r(TIMED_OUT, what=_WHAT_OUTFIT)]
             time.sleep(POLL_S)
             continue
         break   # started / queued (a Build ran — ours is its follow-up)
-    _wait_idle(name, "the outfit")
+    _wait_idle(name, _WHAT_OUTFIT)
     failed = figure_build.state(name).get("failed") or {}
-    return "; ".join(f"{step}: {(v or {}).get('error') or 'failed'}" for step, v in failed.items())
+    return [_r("{step}: {error}", step=step, error=(v or {}).get("error") or "failed") for step, v in failed.items()]
+
+
+def _left_open(name: str) -> List[Reason]:
+    """What the list's badges still show once the outfit phase ended (empty = nothing left open): the open base
+    and outfit steps (Run all's due kind counts as one base step when the badges count none) and, when the last
+    Build ended superseded, its note."""
+    from app.core import figure_build
+    info = figure_build.open_steps(name)
+    base = int(info["base"]["count"] or 0)
+    outfit = int(info["outfit"]["count"] or 0)
+    if not base and figure_build.base_run_all(name).get("kind"):
+        base = 1
+    if not (base or outfit):
+        return []
+    out = [_r(LEFT_OPEN, base=base, outfit=outfit)]
+    sup = figure_build.state(name).get("superseded") or {}
+    if sup:
+        out.append(_r(SUPERSEDED_NOTE, label=str(sup.get("label") or sup.get("step") or "")))
+    return out
 
 
 def _run_character(name: str) -> None:
     from app.core import figure_build
     try:
         if _cancelled():
-            _set(name, PHASE_SKIPPED, CANCELLED)
+            _set(name, PHASE_SKIPPED, [_r(CANCELLED)])
             return
         if not _media_on():
-            _set(name, PHASE_SKIPPED, MEDIA_OFF)
+            _set(name, PHASE_SKIPPED, [_r(MEDIA_OFF)])
             return
         if not figure_build.on_pipeline(name):
-            _set(name, PHASE_SKIPPED, OFF_PIPELINE)
+            _set(name, PHASE_SKIPPED, [_r(OFF_PIPELINE)])
             return
         _set(name, PHASE_BASE)
         base_error, blocking = _base_phase(name)
         if blocking:
-            _set(name, PHASE_FAILED, f"{base_error} — {OUTFIT_SKIPPED}")
+            _set(name, PHASE_FAILED, [base_error, _r(OUTFIT_SKIPPED)] if base_error else [_r(OUTFIT_SKIPPED)])
             return
-        _set(name, PHASE_OUTFIT, base_error)
-        outfit_error = _outfit_phase(name)
-        reasons = [r for r in (base_error, outfit_error) if r]
-        _set(name, PHASE_FAILED if reasons else PHASE_DONE, " · ".join(reasons))
+        base_reasons = [base_error] if base_error else []
+        _set(name, PHASE_OUTFIT, base_reasons)
+        outfit_reasons = _outfit_phase(name)
+        # The badges decide: done only when nothing is left open, whatever the Build recorded.
+        left = _left_open(name)
+        if left:
+            _set(name, PHASE_FAILED, base_reasons + outfit_reasons + left)
+        else:
+            _set(name, PHASE_DONE)
+    except _Timeout as e:
+        _set(name, PHASE_FAILED, [_r(TIMED_OUT, what=e.what)])
     except Exception as e:  # noqa: BLE001 — one character never stops the others
         logger.exception("Build all open: %s failed", name)
-        _set(name, PHASE_FAILED, str(e) or type(e).__name__)
+        _set(name, PHASE_FAILED, [_r("{error}", error=str(e) or type(e).__name__)])
 
 
 def _run() -> None:
@@ -254,7 +325,7 @@ def _run() -> None:
         names = [row["name"] for row in candidates()["characters"]]
         with _lock:
             _state["order"] = names
-            _state["characters"] = {n: {"phase": PHASE_WAITING, "reason": ""} for n in names}
+            _state["characters"] = {n: {"phase": PHASE_WAITING, "reasons": []} for n in names}
             _state["collecting"] = False
         _notify()
         logger.info("Build all open: %d characters (%s at once)", len(names), MAX_PARALLEL)

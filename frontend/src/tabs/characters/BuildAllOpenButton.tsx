@@ -4,7 +4,7 @@
  * once, on the SERVER (closing the browser does not stop it). Before it starts an in-app confirmation names
  * how many characters run and the estimated hub jobs (`GET /characters/build-all/preview`); while it runs a
  * progress line with Cancel (stops scheduling characters that have not begun); afterwards a summary whose
- * mouse-over lists what stayed open. `onRunning` tells the list to re-read its open-step badges while the
+ * mouse-over lists what stayed open (reasons and 409 details come translated: every call sends `?lang=`). `onRunning` tells the list to re-read its open-step badges while the
  * run goes and once more when it ended.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -31,14 +31,15 @@ interface Preview {
 const RUNNING_POLL_MS = 3000
 
 export function BuildAllOpenButton({ onRunning }: { onRunning: (running: boolean) => void }) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
+  const q = `?lang=${encodeURIComponent(lang)}`
   const [status, setStatus] = useState<BatchStatus | null>(null)
   const [preview, setPreview] = useState<Preview | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const load = useCallback(() => {
-    apiGet<BatchStatus>('/characters/build-all').then(setStatus).catch(() => { /* keep the last answer */ })
-  }, [])
+    apiGet<BatchStatus>(`/characters/build-all${q}`).then(setStatus).catch(() => { /* keep the last answer */ })
+  }, [q])
   useEffect(() => {
     load()
     return syncHub().onTopics(['generation'], load)
@@ -72,14 +73,14 @@ export function BuildAllOpenButton({ onRunning }: { onRunning: (running: boolean
   const startRun = async () => {
     setPreview(null)
     try {
-      setStatus(await apiPost<BatchStatus>('/characters/build-all/start', {}))
+      setStatus(await apiPost<BatchStatus>(`/characters/build-all/start${q}`, {}))
     } catch (e) {
       setError((e as Error).message)
     }
   }
   const cancelRun = async () => {
     try {
-      setStatus(await apiPost<BatchStatus>('/characters/build-all/cancel', {}))
+      setStatus(await apiPost<BatchStatus>(`/characters/build-all/cancel${q}`, {}))
     } catch (e) {
       setError((e as Error).message)
     }
