@@ -506,19 +506,28 @@ def crop_back_box(result: Tuple[int, int], side, offset: Tuple[int, int],
 
 
 def crop_back(path: Path, target: Path, side, offset: Tuple[int, int],
-              size: Tuple[int, int]) -> Path:
+              size: Tuple[int, int], *, native: bool = False) -> Path:
     """The edit render cut back to the source frame, as PNG at ``target``
     (``crop_back_box``: scaled by the render's aspect, then the source's
     ``size`` cropped; what lies past the render's edge is neutral grey).
     Shared by every square-canvas edit — the garment chain, the beard and
     the outfit's dressed views (``base_body``, ``expression_regen.
     render_character_image(crop_back_to=…)``). The renderer's sidecar moves
-    along."""
+    along. ``native`` (bug round 2026-11-20, a template piece's piece-only
+    views): the same frame at the RENDER's resolution — scaled size, box and
+    output times the render's own scale over the scaled one (never below 1),
+    so a 2048² answer to a 512² canvas keeps its 2048² detail instead of
+    shrinking to the item picture's 512 px."""
     from PIL import Image
     from app.core.model_refs import VIEW_REFERENCE_BACKGROUND
     with Image.open(path) as im:
         rgb = im.convert("RGB")
     scaled, box = crop_back_box(rgb.size, side, offset, size)
+    if native:
+        k = max(1.0, rgb.size[1] / float(scaled[1]))
+        scaled = (max(1, round(scaled[0] * k)), max(1, round(scaled[1] * k)))
+        box = tuple(int(round(v * k)) for v in box)
+        size = (box[2] - box[0], box[3] - box[1])
     if rgb.size != scaled:
         rgb = rgb.resize(scaled, Image.Resampling.LANCZOS)
     cropped = Image.new("RGB", (int(size[0]), int(size[1])), VIEW_REFERENCE_BACKGROUND)

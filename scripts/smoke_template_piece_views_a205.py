@@ -5,8 +5,9 @@ render is stubbed, a temp storage dir)
 
 Hand-derived expectations:
   [A] prompt: a sheer piece's front prompt = the ghost text of its class (a skirt slotted ``bottom`` -> waistband
-      class: GHOST_WAISTBAND + GHOST_STANCE) + SHEER_LINE; the back adds GHOST_SIDE["back"] and BACK_LINE before
-      SHEER_LINE; a medium piece has no SHEER_LINE. The negative of a sheer piece holds "legs" and "body".
+      class: GHOST_WAISTBAND + GHOST_STANCE) + the skirt's template line (bug round 2026-11-20: slit "none", the
+      default -> TEMPLATE_LINES["slit"]["none"]) + SHEER_LINE; the back adds GHOST_SIDE["back"] and BACK_LINE before
+      the template line; a medium piece has no SHEER_LINE. The negative of a sheer piece holds "legs" and "body".
   [B] skin check on a 100x100 fully opaque cut-out: piece core after a 2-px erosion = 96x96 = 9216 px.
       Lavender cloth (200,190,230): Cr = 128 + 100 - 79.55 - 18.70 = 129.75 < 133 -> no skin -> share 0, ok.
       A 20x20 block of (224,172,140): Y 183.9, Cr 156.6 in [133,180], Cb 103.2 in [77,127] -> skin; 400 px in the
@@ -89,12 +90,13 @@ def image(path: Path, *, legs: bool, bg: bool = False) -> Path:
 
 print("[A] prompt")
 front, neg = tv.prompt_for(ITEMS["sheer"], "front")
-check("sheer front = waistband ghost + stance + sheer line",
-      front == " ".join([gc.GHOST_WAISTBAND, gc.GHOST_STANCE, tv.SHEER_LINE, tv.GREEN_LINE]), front)
+NO_SLIT = tv.TEMPLATE_LINES["slit"]["none"]     # bug round 2026-11-20: the skirt's slit "none" (its default) is said
+check("sheer front = waistband ghost + stance + template line + sheer line",
+      front == " ".join([gc.GHOST_WAISTBAND, gc.GHOST_STANCE, NO_SLIT, tv.SHEER_LINE, tv.GREEN_LINE]), front)
 back, _ = tv.prompt_for(ITEMS["sheer"], "back")
-check("sheer back adds side + turn-around before the sheer line",
-      back == " ".join([gc.GHOST_WAISTBAND, gc.GHOST_SIDE["back"], gc.GHOST_STANCE, tv.BACK_LINE, tv.SHEER_LINE, tv.GREEN_LINE]),
-      back)
+check("sheer back adds side + turn-around before the template and sheer lines",
+      back == " ".join([gc.GHOST_WAISTBAND, gc.GHOST_SIDE["back"], gc.GHOST_STANCE, tv.BACK_LINE, NO_SLIT, tv.SHEER_LINE,
+                        tv.GREEN_LINE]), back)
 check("medium has no sheer line", tv.SHEER_LINE not in tv.prompt_for(ITEMS["plain"], "front")[0])
 check("sheer negative names legs and body", "legs" in neg.split(", ") and "body" in neg.split(", "), neg)
 

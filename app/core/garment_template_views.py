@@ -123,14 +123,56 @@ def missing_views(character_name: str, item_id: str) -> List[str]:
 
 # --- prompt --------------------------------------------------------------------------
 
+#: Bug round 2026-11-20: the template's own parameters, said in the view prompt — the bake projects the view onto the
+#: template's shape, so a strap, a chain or a finger the picture invents lands on cloth that is not there (Glut's
+#: strapless bra was pictured with straps and chains: coverage 0.43; her fingerless gloves with full fingers).
+#: ``{field: {value: line}}``, read per kind (``template_lines``); the lines describe what IS there.
+TEMPLATE_LINES: Dict[str, Dict[str, str]] = {
+    "fingers": {"fingerless": "The gloves are fingerless: they end at the knuckles and the fingers come out bare.",
+                "none": "The gloves have no hand part: they end at the wrist and the whole hand is bare."},
+    "straps": {"none": "The piece is strapless: nothing runs over the shoulders, and nothing hangs from it."},
+    "shoulders": {"strapless": "The piece is strapless: its top edge runs straight round the chest, with nothing "
+                               "over the shoulders."},
+    "sleeves": {"none": "The piece is sleeveless."},
+    "slit": {"none": "The hem runs all the way round without a slit.",
+             "left": "Its only slit is at the wearer's left side seam.",
+             "right": "Its only slit is at the wearer's right side seam.",
+             "front": "Its only slit is at the centre front.",
+             "back": "Its only slit is at the centre back."},
+    "feet": {"footless": "The legs end at the ankles; the feet are bare.",
+             "stirrup": "The legs end in a strap under the arch; the heel and the toes are bare."},
+}
+#: Gloves are pictured upright as a pair: the bake's pose search raises the arms to match (``garment_template_build.
+#: GLOVE_ARM_DEG``) — a pair lying flat or hanging down would be painted upside down.
+GLOVES_LINE = "Show the pair side by side and upright, the fingers pointing up and the cuffs at the bottom."
+
+
+def template_lines(params: Optional[Dict[str, Any]]) -> List[str]:
+    """The ``TEMPLATE_LINES`` of the fields the piece's kind has (``garment_template.KIND_FIELDS``), in field order;
+    the gloves' orientation line first. [] without template parameters."""
+    if not params:
+        return []
+    from app.core.garment_template import KIND_FIELDS
+    kind = params.get("kind") or ""
+    lines = [GLOVES_LINE] if kind == "gloves" else []
+    for field in KIND_FIELDS.get(kind, ()):
+        line = TEMPLATE_LINES.get(field, {}).get(str(params.get(field)))
+        if line and line not in lines:
+            lines.append(line)
+    return lines
+
+
 def prompt_for(item: Dict[str, Any], view: str) -> Tuple[str, str]:
     """``(prompt, negative)`` of one piece-only view: the ghost text of the piece's class (A183 —
     ``ghost_prompt`` of the ``outfit_piece``, the back's side line included), the turn-around line on the back, the
-    fabric-only line for a sheer piece, the green-screen line last (A230)."""
+    template's own parameters (``template_lines``, bug round 2026-11-20), the fabric-only line for a sheer piece,
+    the green-screen line last (A230)."""
     from app.core.garment_clothing import GHOST_NEGATIVE, ghost_prompt
+    from app.core.garment_template import params_of
     parts = [ghost_prompt((item or {}).get("outfit_piece") or {}, view, green=False)]
     if view == "back":
         parts.append(BACK_LINE)
+    parts += template_lines(params_of(item))
     negative = list(GHOST_NEGATIVE)
     if is_sheer(item):
         parts.append(SHEER_LINE)
@@ -232,7 +274,8 @@ def check_file(character_name: str, item: Dict[str, Any], src: Path, dst: Path) 
 def _render(character_name: str, item_id: str, view: str, *, prompt: str, negative: str, source: Path,
             target: Path, attempt: int) -> Optional[Path]:
     """ONE image job: the item picture edited into the piece-only view (occasion ``garment_view``). Stubbed in the
-    smokes. The rendered file cut back to the picture's frame at ``target``, or None when the render failed."""
+    smokes. The rendered file cut back to the picture's frame at ``target`` — at the render's resolution
+    (``crop_back(native=True)``) — or None when the render failed."""
     from app.core import expression_regen
     from app.core import garment_images as gi
     from app.core.model_refs import get_model_refs_dir
@@ -248,7 +291,9 @@ def _render(character_name: str, item_id: str, view: str, *, prompt: str, negati
             character_loras=False, postprocess=False, raise_load=True)
         if path is None:
             return None
-        return gi.crop_back(Path(path), target, side, offset, size)
+        # bug round 2026-11-20: at the render's own resolution — the bake's source pixels (P-H3 answers 2048²;
+        # cut back to the 512 px item frame a view was 121-447 px wide on a 1024 atlas)
+        return gi.crop_back(Path(path), target, side, offset, size, native=True)
 
 
 def _publish(character_name: str, item_id: str, view: str, cut: Path, record: Dict[str, Any]) -> Path:
