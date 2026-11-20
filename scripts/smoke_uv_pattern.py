@@ -91,6 +91,12 @@ No server, no world DB, no Blender: ``uv_pattern`` is numpy only and imported th
     2.60 cm (+-0.1), POSITIVE (a bell; the build's sleeves give their own sign).
 [14] ``garment_template_drape.island_mask`` names its ``polys`` parameter (Task 2's latent NameError: the body read
     ``polys`` without a parameter of that name).
+[15] ``shoulder_seam``: centre (0, 0.005). The left seam runs (0.20, 0.00) -> (0.15, -0.02) -> (0.10, -0.04) (shoulder
+    end x = 0.20, neck end x = 0.10), the right one mirrored in x. The neck ring's left side: (0.100, -0.07),
+    (0.100, -0.04), (0.100, -0.01), (0.095, 0.005) within 1 cm of the widest x 0.100, and (0.05, 0.04), (0, 0.04),
+    (0, -0.14) beyond it; the right side mirrored. Side point y = (-0.07 + 0.005) / 2 = -0.0325 -> shoulder_dy =
+    |0 - 0.005| = 0.50 cm, neck_dy = |-0.04 + 0.0325| = 0.75 cm, neck_fwd = 0.005 + 0.0325 = 3.75 cm, max_dy =
+    |-0.04 - 0.005| = 4.50 cm, both sides. Without a ring the neck fields are None.
 """
 import json
 import math
@@ -443,6 +449,26 @@ tree = ast.parse((ROOT / "app" / "blender" / "scripts" / "garment_template_drape
 im = next((n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "island_mask"), None)
 check("[14] island_mask names its polys parameter", im is not None and "polys" in [a.arg for a in im.args.args],
       [a.arg for a in im.args.args] if im else None)
+
+# [15] shoulder_seam
+sm = getattr(up, "shoulder_seam", None)
+if sm is None:
+    check("[15] uv_pattern.shoulder_seam exists", False)
+else:
+    half = [(0.20, 0.00), (0.15, -0.02), (0.10, -0.04)]
+    ring_l = [(0.100, -0.07), (0.100, -0.04), (0.100, -0.01), (0.095, 0.005), (0.05, 0.04)]
+    pts = [(x, y, 1.5) for x, y in half] + [(-x, y, 1.5) for x, y in half]
+    ring0 = len(pts)
+    pts += [(x, y, 1.55) for x, y in ring_l] + [(-x, y, 1.55) for x, y in ring_l] + [(0, 0.04, 1.55), (0, -0.14, 1.5)]
+    ss = sm(np.array(pts), list(range(6)), (0.0, 0.005), list(range(ring0, len(pts))) + [-1])
+    want = {"shoulder_dy_cm": 0.50, "neck_dy_cm": 0.75, "neck_fwd_cm": 3.75, "max_dy_cm": 4.50}
+    for side in ("l", "r"):
+        got = ss.get(side, {})
+        check(f"[15] {side}: shoulder 0.50, neck 0.75, forward 3.75, max 4.50 cm",
+              all(got.get(k) is not None and abs(got[k] - v) < 1e-6 for k, v in want.items()), got)
+    nr = sm(np.array(pts), list(range(6)), (0.0, 0.005), None)
+    check("[15] no ring: neck fields None", all(nr[s_]["neck_dy_cm"] is None and nr[s_]["neck_fwd_cm"] is None
+                                                and abs(nr[s_]["max_dy_cm"] - 4.5) < 1e-6 for s_ in ("l", "r")), nr)
 
 print(f"\n{len(FAILS)} FAILED: {FAILS}" if FAILS else "\nALL OK")
 sys.exit(1 if FAILS else 0)

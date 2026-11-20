@@ -1721,12 +1721,15 @@ def pattern_uv_of(obj, arm, centre, pattern, islands_json):
     strips = {5: [m(r_) for r_ in pattern["band_strip"]]} if pattern["band_strip"] else {}
     res = uvp.pattern_uv(polys, part, seams, co, axes=axes, strips=strips, caps=caps, size_px=PATTERN_ATLAS_PX,
                          margin_cm=PATTERN_MARGIN_CM)
-    # the shoulder seam lies on top of the shoulder: the yoke ("cap" group) vertices shared by front and back
+    # the shoulder seam: the yoke ("cap" group) vertices shared by front and back. It runs the yoke meridian of the
+    # side column from the top of the armhole to the neck ring's side point (the high point of the shoulder); a neck
+    # standing in front of the torso centre takes its neck end that far forward (``uv_pattern.shoulder_seam``)
     fr = {v for p_, f in zip(part, polys) if p_ == 1 for v in f}
     bk = {v for p_, f in zip(part, polys) if p_ == 2 for v in f}
     gi = obj.vertex_groups["cap"].index if "cap" in obj.vertex_groups else None
     yoke = {v.index for v in me.vertices if any(g.group == gi for g in v.groups)} if gi is not None else set()
     shared = sorted(fr & bk & yoke)
+    seam = uvp.shoulder_seam(co, shared, centre, m(pattern["band_strip"][0]) if pattern["band_strip"] else None)
     flat = np.zeros(len(me.loops) * 2)
     for p_ in me.polygons:
         for j, li in enumerate(p_.loop_indices):
@@ -1741,11 +1744,12 @@ def pattern_uv_of(obj, arm, centre, pattern, islands_json):
             "stretch_p95_max": res["stretch_p95_max"], "strip_stretch_p95": res["strip_stretch_p95"],
             "cap_height_cm": {n: res["cap_height_cm"].get(n) for n in ("sleeve_l", "sleeve_r")},
             "seam_edges": len(seams),
-            "shoulder_seam_dy_cm": round(float(np.abs(co[shared, 1] - centre[1]).max()) * 100, 2) if shared else None,
+            "shoulder_seam_dy_cm": max((v["max_dy_cm"] for v in seam.values()), default=None),
+            "shoulder_seam": seam,
             "uv_s": round(time.time() - t0, 2)}
     print(f"uv.islands {res['islands']} faces {res['faces_per_part']} px/cm {info['px_per_cm']} "
           f"area {info['area_ratio_min']}..{info['area_ratio_max']} p95 {info['stretch_p95_max']} "
-          f"caps {info['cap_height_cm']} shoulder seam dy {info['shoulder_seam_dy_cm']} cm {info['uv_s']} s", flush=True)
+          f"caps {info['cap_height_cm']} shoulder seam {seam} {info['uv_s']} s", flush=True)
     return info
 
 

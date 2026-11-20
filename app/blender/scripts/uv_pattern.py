@@ -626,6 +626,43 @@ def cap_height(island_uv_cm, loop_ids, shoulder_id, underarm_ids):
     return float(uv[int(shoulder_id), 1] - np.mean(uv[[int(v) for v in underarm_ids], 1]))
 
 
+def shoulder_seam(xyz, shared, centre_xy, neck_ids=None, side_band_m=0.01):
+    """Where the shoulder seams lie, per side ("l" = +X of ``centre_xy``, "r" = -X), in cm.
+
+    ``shared`` = the yoke vertices front and back share (the seam), ``neck_ids`` = the ring the seam ends on (the band's
+    outer row; ids < 0 are skipped). On a side: the seam's shoulder end is its vertex farthest from the centre in x,
+    its neck end the nearest. The side of a neck ring is nearly straight front to back (on a real top 8 cm within 1 cm
+    of its widest x), so its widest vertex is no defined point: the ring's SIDE POINT is the middle in y of the ring
+    vertices within ``side_band_m`` of the widest x on that side.
+
+    - ``shoulder_dy_cm`` = |y(shoulder end) - centre y| (the seam leaves the shoulder on top of it);
+    - ``neck_dy_cm`` = |y(neck end) - y(the ring's side point)| (it reaches the neck at the side, not in front of or
+      behind it; None without a ring);
+    - ``neck_fwd_cm`` = centre y - y(the ring's side point): how far the neck stands in front of the torso centre
+      (a seam from the shoulder point to the side of the neck runs that far forward; None without a ring);
+    - ``max_dy_cm`` = max |y - centre y| over the whole seam."""
+    P = np.asarray(xyz, float)
+    cx, cy = float(centre_xy[0]), float(centre_xy[1])
+    ring = [int(v) for v in (neck_ids or []) if int(v) >= 0]
+    out = {}
+    for side, sgn in (("l", 1.0), ("r", -1.0)):
+        ids = [int(v) for v in shared if (P[int(v), 0] - cx) * sgn > 0]
+        if not ids:
+            continue
+        dx = (P[ids, 0] - cx) * sgn
+        sh, ne = ids[int(np.argmax(dx))], ids[int(np.argmin(dx))]
+        rx = np.array([(P[v, 0] - cx) * sgn for v in ring])
+        side_y = None
+        if len(ring) and rx.max() > 0:
+            ys = P[[v for v, x in zip(ring, rx) if x >= rx.max() - side_band_m], 1]
+            side_y = 0.5 * float(ys.min() + ys.max())
+        out[side] = {"shoulder_dy_cm": round(float(abs(P[sh, 1] - cy)) * 100, 2),
+                     "neck_dy_cm": None if side_y is None else round(abs(float(P[ne, 1]) - side_y) * 100, 2),
+                     "neck_fwd_cm": None if side_y is None else round((cy - side_y) * 100, 2),
+                     "max_dy_cm": round(float(np.abs(P[ids, 1] - cy).max()) * 100, 2)}
+    return out
+
+
 def _r(x, nd=3):
     return [round(float(v), nd) for v in x]
 
