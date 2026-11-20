@@ -16,9 +16,22 @@ empty continuation, a 400 'unsupported continuation' and a 422 without the
 field names each switch thinking off until T0+600. At T0+599 the next call is
 one plain call; at T0+601 the entry is dropped and the call is budgeted again
 (cut thought + clean answer = 2 calls, content "fine", not unenforceable,
-nothing remembered). A 400/422 naming continue_final_message is the proof the
-server cannot continue: thinking stays off for good (None), so at T0+601 and
-at T0+100000 each call is still one plain call, and the warning is logged once.
+nothing remembered). A 400/422 naming continue_final_message never switches
+thinking off for good (2026-11-20: one such 400 held until the restart, across
+a weight swap behind the same name): the cool-off doubles per refusal in a row.
+First refusal at T0 -> off until T0+600 (plain call at T0+599). At T0+601 the
+call is budgeted again and refused again -> off until T0+601+1200 (plain at
+T0+1800). At T0+1802 the continuation works -> entry and strike count gone,
+so the next refusal starts at 600 again. Three refusals = three warnings, each
+quoting the server's body. Twenty strikes on record: 600*2^20 is capped at
+NO_CONTINUE_COOLOFF_MAX_S = 21600. A refusal whose exception text is only
+"Error code: 400" is still recognised through its response body.
+
+Isolated client (the model test): with the process memory saying "off" until
+T0+10^6 s, a cut thought + refused continuation costs exactly 2 calls (no plain
+third one) and returns continuation_failed with "HTTP 400: <body>"; the process
+memory is untouched, and the next call is budgeted again (max_tokens 40,
+content "fine"). An empty continuation: continuation_failed, error None.
 """
 import copy
 import sys
@@ -50,6 +63,7 @@ def client_for(responses, **kw):
 
 def main():
     llm._NO_CONTINUE.clear()
+    llm._NO_CONTINUE_STRIKES.clear()
     client, calls = client_for([response('answer')])
     assert client.invoke('ping').budget_hit is False and len(calls) == 1
     for first, second in [('', '{"a":1}'), ('', '\n\n{"a":1}'),
@@ -164,22 +178,72 @@ def cooloff_checks():
             result = client.invoke('ping')
             assert result.content == 'fine' and not result.budget_unenforceable and len(calls) == 6
             assert key not in llm._NO_CONTINUE
+        body = '{"error": {"message": "continue_final_message is not supported here"}}'
         for status in (400, 422):
             llm._NO_CONTINUE.clear()
+            llm._NO_CONTINUE_STRIKES.clear()
             clock[0] = t0
-            named = Rejected('Unrecognized request argument supplied: continue_final_message')
-            named.status_code = status
-            client, calls = client_for([response('', 'R', 'length'), named, response('ok'),
-                                        response('plain'), response('still plain')])
+            def named():
+                # Like the SDK: the body lives on the response, not in str().
+                error = Rejected('Error code: %d' % status)
+                error.status_code = status
+                error.response = NS(text=body)
+                return error
+            cut = lambda: response('', 'R', 'length')
+            client, calls = client_for([cut(), named(), response('ok'), response('plain'),
+                                        cut(), named(), response('ok2'), response('plain2'),
+                                        cut(), response('fine'),
+                                        cut(), named(), response('ok3'),
+                                        cut(), named(), response('ok4')])
             with patch.object(llm.logger, 'warning') as warning:
-                assert client.invoke('ping').content == 'ok' and len(calls) == 3
-                assert llm._NO_CONTINUE[key] is None
-                clock[0] = t0 + timedelta(seconds=601)
+                first = client.invoke('ping')
+                assert first.content == 'ok' and first.budget_unenforceable and len(calls) == 3
+                assert llm._NO_CONTINUE[key] == t0 + timedelta(seconds=600)
+                clock[0] = t0 + timedelta(seconds=599)
                 assert client.invoke('ping').content == 'plain' and len(calls) == 4
-                clock[0] = t0 + timedelta(seconds=100000)
-                assert client.invoke('ping').content == 'still plain' and len(calls) == 5
-                assert warning.call_count == 1
+                clock[0] = t0 + timedelta(seconds=601)
+                assert client.invoke('ping').content == 'ok2' and len(calls) == 7
+                assert llm._NO_CONTINUE[key] == t0 + timedelta(seconds=601 + 1200)
+                clock[0] = t0 + timedelta(seconds=1800)
+                assert client.invoke('ping').content == 'plain2' and len(calls) == 8
+                clock[0] = t0 + timedelta(seconds=1802)
+                result = client.invoke('ping')
+                assert result.content == 'fine' and not result.budget_unenforceable and len(calls) == 10
+                assert key not in llm._NO_CONTINUE and key not in llm._NO_CONTINUE_STRIKES
+                assert client.invoke('ping').content == 'ok3' and len(calls) == 13
+                assert llm._NO_CONTINUE[key] == t0 + timedelta(seconds=1802 + 600)
+                assert warning.call_count == 3
+                assert all(body in (call.args[0] % call.args[1:]) for call in warning.call_args_list)
+                llm._NO_CONTINUE.clear()
+                llm._NO_CONTINUE_STRIKES[key] = 20
+                assert client.invoke('ping').content == 'ok4' and len(calls) == 16
+                assert llm._NO_CONTINUE[key] == clock[0] + timedelta(seconds=21600)
+        # Isolated client: no process memory read or written, no mode change.
+        llm._NO_CONTINUE.clear()
+        llm._NO_CONTINUE_STRIKES.clear()
+        clock[0] = t0
+        poison = t0 + timedelta(seconds=10 ** 6)
+        llm._NO_CONTINUE[key] = poison
+        client, calls = client_for([response('', 'R', 'length'), named(),
+                                    response('', 'R', 'length'), response('fine'),
+                                    response('', 'R', 'length'), response('')])
+        own = set()
+        client.isolate_server_state(own)
+        with patch.object(llm.logger, 'warning') as warning:
+            failed = client.invoke('ping')
+            assert failed.continuation_failed and failed.content == '' and len(calls) == 2
+            assert failed.continuation_error == 'HTTP 422: ' + body, failed.continuation_error
+            assert failed.budget_hit and failed.reasoning == 'R' and not failed.budget_unenforceable
+            assert body in (warning.call_args.args[0] % warning.call_args.args[1:])
+        assert llm._NO_CONTINUE == {key: poison} and not llm._NO_CONTINUE_STRIKES
+        fine = client.invoke('ping')
+        assert fine.content == 'fine' and not fine.continuation_failed and len(calls) == 4
+        assert calls[2]['max_tokens'] == 40
+        empty = client.invoke('ping')
+        assert empty.continuation_failed and empty.continuation_error is None and len(calls) == 6
+        assert llm._NO_CONTINUE == {key: poison} and not own
     llm._NO_CONTINUE.clear()
+    llm._NO_CONTINUE_STRIKES.clear()
 
 if __name__ == '__main__':
     main()

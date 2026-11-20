@@ -3,8 +3,12 @@
 Hand expectations: X first passes at 600, Y passes off but fails on, Z always
 fails. Off and verified 600 each score 1/3, so off wins. X stages 0/300/600,
 Z 0/300/600/900; verification must call Y three more times at 600. Seven
-reasoning characters estimate two tokens. No reasoning stops after 300;
-an unenforceable budget also stops there. Three image request rejections
+reasoning characters estimate two tokens. No reasoning stops after 300.
+A refused continuation never changes the mode: with every budgeted request
+refused, X and Z still escalate 300/600/900 (max budget in the calls 900),
+9 off + 2 cases x 3 stages x 3 repeats = 27 requests, 18 of them refused,
+the group is not "stopped" and the run is marked invalid_reason
+"continuation_failed". Three image request rejections
 make vision unsupported, excluded from the score and verdict. A winning
 600-token candidate coexists with an excluded fixture without a crash. A model
 that thinks for X but not for Z stops only Z (stages 0/300, no group stop, since
@@ -43,7 +47,8 @@ with tempfile.TemporaryDirectory() as tmp:
             ok = name == 'X' and budget >= 600 or name in ('Y', 'Y2') and budget == 0
             return NS(content='answer' if ok else '', reasoning='1234567' if budget and mode != 'ineffective' and not (mode == 'partial_ineffective' and name == 'Z') else '',
                       usage={}, finish_reason='stop', budget_hit=bool(budget),
-                      budget_unenforceable=bool(budget and mode == 'unenforceable'))
+                      continuation_failed=bool(budget and mode == 'refused'),
+                      continuation_error='HTTP 400: no continue_final_message' if budget and mode == 'refused' else None)
         return NS(invoke=invoke)
     instance = NS(available=True, provider_name='fake', create_llm=factory)
     def run(selected):
@@ -85,10 +90,23 @@ with tempfile.TemporaryDirectory() as tmp:
     missing = dict(cases[2], id='missing', fixture_error='missing catalog')
     summary = run([cases[0], missing])
     assert summary['score'] == '1/1' and summary['checks'][1]['recommended_ok'] is None
-    for mode, reason in [('ineffective', 'thinking_ineffective'), ('unenforceable', 'budget_unenforceable')]:
-        summary = run(cases)
-        assert summary['thinking']['helpers']['stopped'] == reason
-        assert max(b for _, b in calls) == 300
+    mode = 'ineffective'
+    summary = run(cases)
+    assert summary['thinking']['helpers']['stopped'] == 'thinking_ineffective'
+    assert max(b for _, b in calls) == 300
+    assert summary['continuation_refused_runs'] == 0 and 'invalid_reason' not in summary
+    mode = 'refused'
+    summary = run(cases)
+    checks = {c['id']: c for c in summary['checks']}
+    assert summary['thinking']['helpers']['stopped'] is None
+    assert max(b for _, b in calls) == 900 and len(calls) == 27
+    assert [s['budget'] for s in checks['X']['stages']] == [0, 300, 600, 900]
+    assert [s['continuation_failures'] for s in checks['X']['stages']] == [0, 3, 3, 3]
+    assert checks['X']['ok'] is False and 'continuation_failed: HTTP 400' in checks['X']['detail']
+    assert summary['requests'] == 27 and summary['continuation_refused_runs'] == 18
+    assert summary['continuation_failures'] == 18 and summary['invalid_reason'] == 'continuation_failed'
+    assert summary['continuation_examples'] == ['HTTP 400: no continue_final_message']
+    assert summary['thinking']['helpers']['recommended'] == dict(thinking=False, thinking_budget=None)
     mode = 'partial_ineffective'
     summary = run([cases[0], cases[2]])
     assert summary['thinking']['helpers']['stopped'] is None

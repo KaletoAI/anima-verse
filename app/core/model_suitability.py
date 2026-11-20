@@ -26,7 +26,13 @@ eligible case ("not tested — <group>"), else "yes". Individual dimensions
 and every repetition remain visible even when an aggregate says mixed. Historical
 records are archived unchanged before a future result replaces the latest view.
 
-Thinking: each case starts off and can escalate in 300-token stages. A group
+Thinking: every run starts from the same state — the test's clients share one
+fresh server memory (LLMClient.isolate_server_state) and neither read nor write
+what the game or an earlier test learned about the model name. A continuation of
+a capped thought that fails fails ONLY that request ("continuation_failed", the
+server's answer in the check detail); the following requests are budgeted again.
+A run in which the server REFUSED a continuation (HTTP 400/422) is invalid and
+never saved as a score. Each case starts off and can escalate in 300-token stages. A group
 candidate is verified as one fixed setting; ties prefer off. Deciding-stage
 checks remain separate from recommended-setting scores and timing. Group stops
 and estimated reasoning counts remain visible in the stored evidence.
@@ -351,6 +357,11 @@ def iter_suitability_results(
         return
     clients = {}
     clients_lock = threading.Lock()
+    # Same conditions for every run: the test's clients share ONE fresh server
+    # memory and see nothing an earlier test or the game learned about this
+    # model name (a single refused continuation once kept thinking off for
+    # every following test until the restart, 2026-11-20).
+    server_state: set = set()
     # The test's own deadline per request, not the provider's (Evo-X2: 900 s):
     # one hung request used to hold the whole run for that long (2026-11-12).
     case_timeout = _case_timeout_seconds()
@@ -363,6 +374,10 @@ def iter_suitability_results(
                     temperature=settings["temperature"][group], thinking=bool(budget),
                     thinking_budget=budget or None, request_timeout=case_timeout,
                     **{k: v for k, v in settings.items() if k not in ("temperature", "thinking_max")})
+                # The Anthropic client keeps no such memory.
+                isolate = getattr(clients[key], "isolate_server_state", None)
+                if isolate is not None:
+                    isolate(server_state)
             return clients[key]
     try:
         for group in settings["temperature"]:
@@ -443,15 +458,15 @@ def iter_suitability_results(
         # budgeted call that ended inside its first request ran under the
         # thinking budget; a continued (budget_hit) or plain call under Max
         # tokens. The cut-off warning names this, not a setting.
-        first_only = (bool(budget) and not getattr(resp, "budget_hit", False)
-                      and not getattr(resp, "budget_unenforceable", False))
+        first_only = bool(budget) and not getattr(resp, "budget_hit", False)
         raw = {"content": getattr(resp, "content", "") or "",
                "max_tokens_sent": budget if first_only else (settings["max_tokens"] or None),
                "reasoning": reasoning,
                "reasoning_tokens_estimated": estimated,
-               "budget_unenforceable": bool(getattr(resp, "budget_unenforceable", False)),
                "budget_hit": bool(getattr(resp, "budget_hit", False)),
                "budget_overrun": bool(getattr(resp, "budget_overrun", False)),
+               "continuation_failed": bool(getattr(resp, "continuation_failed", False)),
+               "continuation_error": getattr(resp, "continuation_error", None),
                "finish_reason": getattr(resp, "finish_reason", None),
                "usage": usage, "duration_s": dt}
         return raw, dt, ctok
@@ -491,6 +506,13 @@ def iter_suitability_results(
                 raw, dt, ctok = ask(case, budget)
                 note_answer(False)
             evidence = score_case(case, raw["content"], finish_reason=raw.get("finish_reason"))
+            if raw.get("continuation_failed"):
+                # Only this run fails; the next one is budgeted again. A
+                # REFUSED continuation additionally keeps the run unsaved.
+                evidence.update(ok=False, hallucinated=False, continuation_failed=True,
+                                detail="continuation_failed: " + (
+                                    raw.get("continuation_error")
+                                    or "the model wrote nothing after the capped thought"))
         except _QuotaWaitCancelled:
             return None
         except Exception as exc:
@@ -556,6 +578,7 @@ def iter_suitability_results(
                "runs": outputs,
                "budget_hits": sum(bool(r.get("budget_hit")) for r in outputs),
                "budget_overruns": sum(bool(r.get("budget_overrun")) for r in outputs),
+               "continuation_failures": sum(bool(r.get("continuation_failed")) for r in outputs),
                "truncated_runs": sum(r.get("finish_reason") == "length" for r in outputs),
                "timed_out_runs": sum(bool(r.get("timed_out")) for r in outputs),
                "reasoning_tokens": [(r.get("usage") or {}).get("reasoning_tokens") for r in outputs],
@@ -568,11 +591,10 @@ def iter_suitability_results(
     def stage_info(rec, budget):
         return {"budget": budget, "ok": rec["ok"], "duration_s": rec["duration_s"],
                 "reasoning_tokens": rec["reasoning_tokens"], "budget_hits": rec["budget_hits"],
-                "budget_overruns": rec["budget_overruns"]}
+                "budget_overruns": rec["budget_overruns"],
+                "continuation_failures": rec["continuation_failures"]}
 
     def stop_reason(rec):
-        if any(run.get("budget_unenforceable") for run in rec["runs"]):
-            return "budget_unenforceable"
         if not any((run.get("reasoning") or "").strip() or
                    (run.get("usage") or {}).get("reasoning_tokens", 0) for run in rec["runs"]):
             return "thinking_ineffective"
@@ -643,8 +665,7 @@ def iter_suitability_results(
                 rec = off[case["id"]]
                 stages = [stage_info(rec, 0)]
                 passed_stage = 0 if rec["ok"] else None
-                if (not unsupported and rec["ok"] is False and not rec["infra"]
-                        and stopped != "budget_unenforceable"):
+                if not unsupported and rec["ok"] is False and not rec["infra"]:
                     for budget in range(300, settings["thinking_max"][group] + 1, 300):
                         yield {"type": "progress", "phase": f"{group}: {case['id']} with thinking up to {budget}"}
                         rec = run_stage(case, budget)
@@ -656,8 +677,6 @@ def iter_suitability_results(
                         reason = stop_reason(rec)
                         escalated += budget == 300
                         thought += budget == 300 and reason != "thinking_ineffective"
-                        if reason == "budget_unenforceable":
-                            stopped = reason
                         if rec["ok"]:
                             passed_stage = budget
                         if rec["ok"] or reason or rec["ok"] is None or rec["infra"]:
@@ -668,7 +687,7 @@ def iter_suitability_results(
                 stopped = "thinking_ineffective"
             candidate = max((r["stage"] for r in group_results if r["stage"] is not None), default=None)
             verified = {}
-            if candidate and stopped != "budget_unenforceable":
+            if candidate:
                 for case, rec in zip(group_cases, group_results):
                     if rec["stage"] == candidate:
                         verified[case["id"]] = rec
@@ -681,14 +700,10 @@ def iter_suitability_results(
                             return
                         rec["verification"] = stage_info(check, candidate)
                         verified[case["id"]] = check
-                        if stop_reason(check) == "budget_unenforceable":
-                            stopped = "budget_unenforceable"
-                        if stopped == "budget_unenforceable":
-                            break
             eligible = [r for r in group_results if off[r["id"]]["ok"] is not None]
             score_off = sum(bool(off[r["id"]]["ok"]) for r in eligible)
             score_budget = sum(bool(r["ok"]) for r in verified.values())
-            use_budget = bool(candidate and stopped != "budget_unenforceable" and score_budget > score_off)
+            use_budget = bool(candidate and score_budget > score_off)
             selected = []
             for rec in group_results:
                 chosen = (verified.get(rec["id"]) or stage_records.get((rec["id"], candidate))) if use_budget else off[rec["id"]]
@@ -707,7 +722,7 @@ def iter_suitability_results(
                          if run.get("duration_s", 0) > 0 and not run.get("error")]
             if group_cases and not unsupported:
                 thinking[group] = {"score_off": f"{score_off}/{len(eligible)}",
-                    "score_at_budget": f"{score_budget}/{len(eligible)}" if candidate and stopped != "budget_unenforceable" else None,
+                    "score_at_budget": f"{score_budget}/{len(eligible)}" if candidate else None,
                     "candidate_budget": candidate,
                     "recommended": {"thinking": use_budget, "thinking_budget": candidate if use_budget else None},
                     "stopped": stopped,
@@ -730,6 +745,14 @@ def iter_suitability_results(
         summary["infra_runs"] = len(infra_errors)
         summary["infra_examples"] = list(dict.fromkeys(infra_errors))[:3]
         summary["timed_out_runs"] = sum(bool(run.get("timed_out")) for run, _ in all_runs)
+        # A refused continuation (HTTP 400/422) means thinking could not be
+        # enforced: what the run measured is the server, not the model.
+        refused = [str(run["continuation_error"]) for run, _ in all_runs if run.get("continuation_error")]
+        summary["continuation_failures"] = sum(bool(run.get("continuation_failed")) for run, _ in all_runs)
+        summary["continuation_refused_runs"] = len(refused)
+        summary["continuation_examples"] = list(dict.fromkeys(refused))[:3]
+        if refused:
+            summary["invalid_reason"] = "continuation_failed"
         if any(c["group"] == "vision" for c in cases) and not any(r["group"] == "vision" for r in recommended_records):
             summary["vision"] = "not_supported"
             # Unsupported image input does not disqualify a text model.
@@ -992,8 +1015,9 @@ def _summarize(model_full: str, results: List[Dict[str, Any]], *, settings: Opti
 
 
 def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, Any]]) -> bool:
-    """Persist results only when no infrastructure errors occurred:
-    provider outages and timeouts do not say anything about model quality."""
+    """Persist results only when no infrastructure errors occurred and
+    thinking could be enforced: provider outages and a server that refuses to
+    continue a capped thought do not say anything about model quality."""
     from app.core.model_capabilities import save_raw_outputs, save_suitability, get_suitability_outputs
     # Stored checks: verdict, detail and timing only. The raw answer goes into
     # the local sidecar file — the test replays REAL logged prompts, so it
@@ -1001,7 +1025,7 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
     # committed results file.
     stored_checks = [{k: r.get(k) for k in
                       ("id", "label", "category", "group", "task", "ok", "hallucinated", "detail",
-                       "duration_s", "tok_s", "dimensions", "run_checks", "truncated_runs", "timed_out_runs", "reasoning_tokens", "budget_hits", "budget_overruns", "stage", "stages", "verification",
+                       "duration_s", "tok_s", "dimensions", "run_checks", "truncated_runs", "timed_out_runs", "reasoning_tokens", "budget_hits", "budget_overruns", "continuation_failures", "stage", "stages", "verification",
                        "recommended_budget", "recommended_ok")} for r in results]
     raw_outputs = {"scorer_version": summary.get("scorer_version"),
                    "fixture_version": summary.get("fixture_version"),
@@ -1014,6 +1038,18 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
     except Exception as exc:
         logger.error("Failed to persist local suitability diagnostics: %s", exc)
         summary["not_saved_reason"] = f"Could not write the diagnostics file: {exc}"
+        return False
+    if summary.get("continuation_refused_runs"):
+        # An invalid run never becomes a score (nor a history entry): the
+        # reason and the server's answer are reported instead.
+        count, total = summary["continuation_refused_runs"], summary.get("requests")
+        examples = "; ".join(summary.get("continuation_examples") or [])
+        summary["not_saved_reason"] = (
+            f"Invalid run (continuation_failed): the server refused to continue a capped thought in "
+            f"{count} of {total} requests" + (f" — {examples}" if examples else "")
+            + ". Thinking could not be enforced, so the score says nothing about the model;"
+              " the answers are kept in the diagnostics below.")
+        logger.warning("Suitability for %s not saved: %s", model_full, summary["not_saved_reason"])
         return False
     if summary.get("infra") or any(r.get("infra") for r in results):
         # The rule stays (an outage says nothing about the model); the reason
@@ -1049,7 +1085,7 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
             "speed": summary.get("speed"),
             **{key: summary.get(key) for key in ("settings", "concurrency", "live_play", "projected_turn_s", "speed_ok",
                                                       "max_turn_seconds", "vision", "curated_only", "total_runs", "truncated_runs",
-                                                      "truncated_limits", "truncated_cases", "failed_by_truncation", "thinking_runs", "thinking_leak_runs", "budget_hits", "budget_overruns", "reasoning_tokens_median", "reasoning_tokens_estimated", "thinking")},
+                                                      "truncated_limits", "truncated_cases", "failed_by_truncation", "thinking_runs", "thinking_leak_runs", "budget_hits", "budget_overruns", "continuation_failures", "reasoning_tokens_median", "reasoning_tokens_estimated", "thinking")},
             "checks": stored_checks,
         },
     }

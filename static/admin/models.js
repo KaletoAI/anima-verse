@@ -1036,6 +1036,7 @@ function suitRenderJob(job) {
             + (cut ? ' · cut off ' + cut + '/' + (check.run_checks || runs).length : '')
             + (check.budget_hits > 0 ? ' · budget hit ' + check.budget_hits + '/' + (check.run_checks || runs).length : '')
             + (check.budget_overruns > 0 ? ' · kept writing after the budget ' + check.budget_overruns + '/' + (check.run_checks || runs).length : '')
+            + (check.continuation_failures > 0 ? ' · continuation failed ' + check.continuation_failures + '/' + (check.run_checks || runs).length : '')
             + ' · ' + esc(check.group || '') + ' · ' + esc(check.task || check.label || check.id || '') + '</b>'
             + '<div>' + esc(check.detail || '') + '</div>'
             + (Array.isArray(check.stages) ? '<div>' + esc(check.stage === 0 ? 'passed without thinking' : check.stage != null ? 'passed at ' + check.stage : 'failed up to ' + Math.max(0, ...check.stages.map(stage => stage.budget))) + '</div>' : '')
@@ -1045,7 +1046,7 @@ function suitRenderJob(job) {
                 + esc(prompt.system || 'Prompt unavailable') + '</pre><h4>User</h4><pre>' + esc(prompt.user || '')
                 + '</pre></details><details open><summary>' + (hasRecommendation ? 'Deciding-stage answer(s)' : 'Model answer(s)') + '</summary>'
                 + (runs.length ? runs.map((run, index) => '<h4>Run ' + (index + 1) + '</h4><pre>'
-                    + esc(run.content || run.error || (run.finish_reason === 'length' ? '' : '(empty answer)'))
+                    + esc(run.content || run.error || (run.continuation_failed ? '(continuation of the capped thought failed' + (run.continuation_error ? ': ' + run.continuation_error : ': empty answer') + ')' : run.finish_reason === 'length' ? '' : '(empty answer)'))
                     + esc(run.finish_reason === 'length' ? (run.content ? '\n' : '') + '(cut off at the token limit'
                         + ((run.usage || {}).reasoning_tokens != null ? ' - ' + run.usage.reasoning_tokens + ' reasoning tokens' : '') + ')'
                         : (run.usage || {}).reasoning_tokens > 0 ? ' (' + run.usage.reasoning_tokens + ' reasoning tokens)' : '') + (run.budget_hit ? (run.budget_overrun ? ' (thinking capped at the budget; the answer then ran on to the token limit)' : ' (thinking capped at the budget, answer continued)') : '') + (run.reasoning_tokens_estimated ? ' (reasoning tokens estimated)' : '') + '</pre>').join('') : '<p>Raw answer unavailable.</p>')

@@ -121,6 +121,13 @@ class LLMResponse:
     budget_unenforceable: bool = False
     # A budgeted call whose continuation wrote on to the token limit.
     budget_overrun: bool = False
+    # Only from a client with isolated server state (the model test): the
+    # continuation of the capped thought failed and NOTHING was sent in its
+    # place — no silent switch to a call without thinking. ``continuation_error``
+    # is the server's (shortened) answer to a refused continuation; it stays
+    # None when the continuation came back empty.
+    continuation_failed: bool = False
+    continuation_error: Optional[str] = None
 
 
 @dataclass
@@ -209,18 +216,28 @@ THINK_OPEN = "<think>\n"
 THINK_CLOSE = "\n</think>\n\n"
 # (base_url, model) pairs that could not continue a capped thought (400/422
 # or an empty answer) -> until when budgeted calls run without thinking
-# (SYSTEM time, ``timeutils.utc_now``), None = for good. Only a 400/422 that
-# names the continuation fields (``_rejects_continuation``) proves the server
-# does not support it; an empty answer or any other 400/422 may be one bad
-# call (a model that stopped right after the close marker, a context briefly
-# over the limit), so it switches thinking off for NO_CONTINUE_COOLOFF_S only
-# and the next budgeted call after that tries the continuation again. A
+# (SYSTEM time, ``timeutils.utc_now``). The switch ALWAYS runs out: the name
+# is all we know of the server, and the weights behind a llama-swap name can
+# be exchanged without this process noticing (2026-11-20: one 400 kept
+# thinking off until the restart). An empty answer or a 400/422 that does not
+# name the continuation fields may be one bad call (a model that stopped
+# right after the close marker, a context briefly over the limit): thinking
+# is off for NO_CONTINUE_COOLOFF_S and the next budgeted call after that
+# tries the continuation again. A 400/422 that names the continuation fields
+# (``_rejects_continuation``) says the server does not support it: the
+# cool-off doubles with every such refusal in a row (``_NO_CONTINUE_STRIKES``,
+# 600 s, 1200 s, … capped at NO_CONTINUE_COOLOFF_MAX_S) and a continuation
+# that works resets it. A
 # continuation that writes on to the token limit is NOT such a failure:
 # measured on Gemma 4 (llama.cpp) and Qwen3.5 (vLLM), a model sometimes
 # answers and then keeps thinking aloud in the answer — that one call is cut
 # off (finish "length", ``budget_overrun``), the next may be fine.
 _NO_CONTINUE: Dict[Tuple[str, str], Any] = {}
+_NO_CONTINUE_STRIKES: Dict[Tuple[str, str], int] = {}
 NO_CONTINUE_COOLOFF_S = 600.0
+NO_CONTINUE_COOLOFF_MAX_S = 6 * 3600.0
+# How much of a server's error answer is kept in a log line or a test detail.
+_ERROR_TEXT_LIMIT = 500
 # (base_url, model) pairs whose server refused ``stream_options``. The OpenAI
 # SDK only sends the final usage chunk on request, and a strict or older
 # OpenAI-compatible server may answer that field with a 400 — such a server
@@ -238,26 +255,56 @@ def _rejects_stream_options(err: BaseException) -> bool:
 
 def _rejects_continuation(err: BaseException) -> bool:
     """True when a 400/422 names the continuation fields as the unaccepted
-    ones — the one proof that the server cannot continue a capped thought."""
+    ones — the server's own statement that it cannot continue a capped thought."""
     status = getattr(err, "status_code", None)
-    text = str(err).lower()
+    text = (str(err) + " " + _error_text(err)).lower()
     return status in (400, 422) and ("continue_final_message" in text
                                      or "add_generation_prompt" in text)
+
+
+def _error_text(err: BaseException) -> str:
+    """The server's answer to a refused request, on one line and shortened:
+    the response body when the SDK kept one, else the exception text."""
+    text = ""
+    try:
+        text = getattr(getattr(err, "response", None), "text", "") or ""
+    except Exception:
+        text = ""
+    if not isinstance(text, str) or not text.strip():
+        body = getattr(err, "body", None)
+        text = str(body) if body else str(err)
+    text = " ".join(text.split())
+    return text if len(text) <= _ERROR_TEXT_LIMIT else text[:_ERROR_TEXT_LIMIT] + "…"
 
 
 def _continue_off(key) -> bool:
     """Whether budgeted calls to ``key`` run without thinking right now; an
     expired cool-off is dropped here."""
-    if key not in _NO_CONTINUE:
-        return False
-    until = _NO_CONTINUE[key]
+    until = _NO_CONTINUE.get(key)
     if until is None:
-        return True
+        return False
     from app.core.timeutils import utc_now
     if utc_now() < until:
         return True
     _NO_CONTINUE.pop(key, None)
     return False
+
+
+def _continue_cooloff(key, refused: bool) -> Optional[float]:
+    """Switches thinking off for budgeted calls to ``key`` after a failed
+    continuation and returns the seconds, or None when a cool-off already
+    runs (parallel calls that failed in the same moment count once)."""
+    if _continue_off(key):
+        return None
+    seconds = NO_CONTINUE_COOLOFF_S
+    if refused:
+        strikes = _NO_CONTINUE_STRIKES.get(key, 0) + 1
+        _NO_CONTINUE_STRIKES[key] = strikes
+        seconds = min(NO_CONTINUE_COOLOFF_S * 2 ** (strikes - 1), NO_CONTINUE_COOLOFF_MAX_S)
+    from datetime import timedelta
+    from app.core.timeutils import utc_now
+    _NO_CONTINUE[key] = utc_now() + timedelta(seconds=seconds)
+    return seconds
 
 
 def _is_gemma_model(model_name: str) -> bool:
@@ -374,6 +421,24 @@ class LLMClient:
         }
         self._sync = openai.OpenAI(**client_kwargs)
         self._async = openai.AsyncOpenAI(**client_kwargs)
+        # What this client remembers about its server: the process-wide
+        # memory, unless isolate_server_state() gave it one of its own.
+        self._no_chat_template_kwargs: set = _NO_CHAT_TEMPLATE_KWARGS
+        self._isolated = False
+
+    def isolate_server_state(self, no_chat_template_kwargs: set) -> None:
+        """Cuts this client off from what the process learned about its server.
+
+        For a measurement (the model test), which must run under the same
+        conditions every time: the client neither reads nor writes the
+        continuation cool-off, and learns a refused ``chat_template_kwargs``
+        into the given set (one fresh set per test run, shared by its
+        clients) instead of the process-wide one. A continuation that fails
+        is reported on that one answer (``continuation_failed``) and the next
+        call is budgeted again — the mode never changes between calls.
+        """
+        self._no_chat_template_kwargs = no_chat_template_kwargs
+        self._isolated = True
 
     def _build_kwargs(self, thinking: Optional[bool] = None) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {
@@ -406,7 +471,7 @@ class LLMClient:
         # serializes the request; log metadata must use that same precedence.
         if self.extra_params:
             extra_body = merge_extra_params(extra_body, self.extra_params)
-        if (self.base_url, self.model) in _NO_CHAT_TEMPLATE_KWARGS:
+        if (self.base_url, self.model) in self._no_chat_template_kwargs:
             extra_body.pop("chat_template_kwargs", None)
         if extra_body:
             kwargs["extra_body"] = extra_body
@@ -420,10 +485,10 @@ class LLMClient:
                 or "chat_template_kwargs" not in body):
             return False
         key = (self.base_url, self.model)
-        if key not in _NO_CHAT_TEMPLATE_KWARGS:
+        if key not in self._no_chat_template_kwargs:
             logger.warning("%s @ %s refuses chat_template_kwargs — omitting it from now on",
                            self.model, self.base_url)
-            _NO_CHAT_TEMPLATE_KWARGS.add(key)
+            self._no_chat_template_kwargs.add(key)
         body.pop("chat_template_kwargs")
         return True
 
@@ -473,13 +538,13 @@ class LLMClient:
         def plain():
             kwargs = self._build_kwargs(thinking=False)
             # Fallback overrides explicit extra_params enabling thinking.
-            if key not in _NO_CHAT_TEMPLATE_KWARGS:
+            if key not in self._no_chat_template_kwargs:
                 kwargs.setdefault("extra_body", {}).setdefault("chat_template_kwargs", {})["enable_thinking"] = False
             response = self._request(msgs, kwargs)
             response.budget_unenforceable = True
             return response
 
-        if _continue_off(key):
+        if not self._isolated and _continue_off(key):
             return plain()
         kwargs = self._build_kwargs()
         kwargs["max_tokens"] = budget
@@ -500,6 +565,8 @@ class LLMClient:
             prefill = thought_open + (first.reasoning or "").strip() + thought_close + partial
         kwargs = self._build_kwargs()
         kwargs.setdefault("extra_body", {}).update(continue_final_message=True, add_generation_prompt=False)
+        failure = "empty answer"
+        error_text = None
         try:
             final = self._request(msgs + [{"role": "assistant", "content": prefill}], kwargs, warn_cutoff=False)
             answer = final.content or final.reasoning or ""
@@ -515,23 +582,26 @@ class LLMClient:
                 raise
             final = None
             unsupported = _rejects_continuation(exc)
+            error_text = _error_text(exc)
+            failure = f"HTTP {exc.status_code}: {error_text}"
         else:
             unsupported = False
+        if final is None and self._isolated:
+            logger.warning("%s @ %s could not continue a capped thought (%s) — this call fails, "
+                           "the next one is budgeted again (isolated test client)",
+                           self.model, self.base_url, failure)
+            return LLMResponse(content="", usage=first.usage, finish_reason=None,
+                               reasoning=first.reasoning, budget_hit=True,
+                               continuation_failed=True, continuation_error=failure if error_text else None)
         if final is None:
-            if unsupported:
-                if _NO_CONTINUE.get(key, 0) is not None:
-                    _NO_CONTINUE[key] = None
-                    logger.warning("%s @ %s rejects continuing a capped thought — disabling thinking "
-                                   "for budgeted calls", self.model, self.base_url)
-            elif key not in _NO_CONTINUE:
-                from datetime import timedelta
-                from app.core.timeutils import utc_now
-                _NO_CONTINUE[key] = utc_now() + timedelta(seconds=NO_CONTINUE_COOLOFF_S)
-                logger.warning("%s @ %s could not continue a capped thought — thinking off for "
-                               "budgeted calls for %d s", self.model, self.base_url,
-                               NO_CONTINUE_COOLOFF_S)
+            seconds = _continue_cooloff(key, unsupported)
+            if seconds is not None:
+                logger.warning("%s @ %s could not continue a capped thought (%s) — thinking off for "
+                               "budgeted calls for %d s", self.model, self.base_url, failure, seconds)
             final = plain()
             answer = final.content
+        else:
+            _NO_CONTINUE_STRIKES.pop(key, None)
         usage = None
         if first.usage is not None or final.usage is not None:
             usage = dict(first.usage or {})
