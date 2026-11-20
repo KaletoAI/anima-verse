@@ -1,6 +1,7 @@
 """The geometry of the accessories that go AROUND a part of the body or hang on a bone (A234; spec
 ``docs/superpowers/specs/2026-11-16-accessories-design.md`` § 4 / § 4b / § 11): belt, choker, strap (a flat band),
-anklet, bracelet, ring (a round tube) and earrings (rigid on the head).
+anklet, bracelet (a round tube) and earrings (rigid on the head). The ring (A238) is sized from the skeleton instead:
+``accessory_ring``.
 
 Every ring-shaped kind is made the same way: an AXIS through the body part (``frame``: a centre point, a direction
 and the joints whose skin counts), a fan of rays from the axis in the plane across it (``section``), and on every ray
@@ -10,7 +11,7 @@ piece is then laid ``GAP_M`` off that surface:
 
 - a band (belt / choker / strap): ``BAND_ROWS`` rows across its width, each row hugging the surface under it, the
   section a flat rectangle ``band_thickness`` deep (``band_mesh``);
-- a tube (anklet / bracelet / ring): one row through the centre, swept into ``accessory_mesh.tube`` with the chain's
+- a tube (anklet / bracelet): one row through the centre, swept into ``accessory_mesh.tube`` with the chain's
   thickness.
 
 The axis per kind (all in the body's bind space, +Y up, +Z the front, +X the body's left):
@@ -21,8 +22,7 @@ The axis per kind (all in the body's bind space, +Y up, +Z the front, +X the bod
 - strap: ``band.at`` thigh (UpLeg -> Leg, ``STRAP_THIGH_SHARE``), upper_arm (Arm -> ForeArm, ``STRAP_ARM_SHARE``) or
   chest (vertical, the underbust: ``STRAP_CHEST_SHARE`` of Spine1 -> Spine2), per side for thigh / upper arm;
 - anklet: along Leg -> Foot, ``ANKLET_ABOVE_M`` above the Foot bone head;
-- bracelet: along ForeArm -> Hand, ``WRIST_ABOVE_M`` above the Hand bone head;
-- ring: the chosen finger's proximal bone (``<Side>Hand<Finger>1 -> 2``), at its middle.
+- bracelet: along ForeArm -> Hand, ``WRIST_ABOVE_M`` above the Hand bone head.
 
 ``band.height_cm`` moves the ring along its axis (up the body / up the limb toward the trunk). Earrings sit on the
 ear (``ear_anchor``): stud = a small ball, hoop = a torus hanging beside the lobe, ``drop`` = the item-image mesh
@@ -39,7 +39,7 @@ SECTION_RAYS = 96
 #: Rows across a band's width.
 BAND_ROWS = 5
 #: How far from the axis a section looks for a surface (metres) — a waist is at most ~25 cm from its axis.
-REACH_M = {"belt": 0.32, "strap": 0.32, "choker": 0.12, "anklet": 0.12, "bracelet": 0.10, "ring": 0.03}
+REACH_M = {"belt": 0.32, "strap": 0.32, "choker": 0.12, "anklet": 0.12, "bracelet": 0.10}
 #: A garment surface counts for a ray only up to this far beyond the body's skin on that ray (a skirt's flare or a
 #: coat's hem farther out is not the layer the band sits on).
 UNDER_MAX_M = 0.06
@@ -72,7 +72,6 @@ REGION_JOINTS: Dict[str, Tuple[str, ...]] = {
     "strap:chest": ("spine1", "spine2", "leftbreast", "rightbreast", "leftbreasttip", "rightbreasttip"),
     "anklet": ("{side}leg", "{side}foot"),
     "bracelet": ("{side}forearm", "{side}hand"),
-    "ring": ("{side}hand{finger}1",),
 }
 #: The worn garment slots that may lie under a piece (``band.layer: auto``).
 UNDER_SLOTS: Dict[str, Tuple[str, ...]] = {
@@ -83,12 +82,9 @@ UNDER_SLOTS: Dict[str, Tuple[str, ...]] = {
     "strap:chest": ("top", "outer", "underwear_top"),
     "anklet": ("legs", "bottom", "feet"),
     "bracelet": ("top", "outer", "hands"),
-    "ring": ("hands",),
 }
 #: The band's depth by material (metres).
 BAND_THICKNESS_M = {"leather": 0.003, "metal": 0.002, "fabric": 0.0015, "from_image": 0.003}
-#: The finger bone names (``accessory_spec.FINGERS`` -> the rig's).
-FINGER_BONES = {"index": "index", "middle": "middle", "ring": "ring", "little": "pinky"}
 #: Earrings (``ear_anchor``): the box the ear is looked for in, relative to the Head bone head — (y from, y to),
 #: (z from, z to) in metres (the ear stands above the head joint and behind the jaw).
 EAR_BOX = ((0.0, 0.08), (-0.05, 0.01))
@@ -112,14 +108,14 @@ def _bone(bones: Dict[str, Any], key: str) -> np.ndarray:
 
 
 def region_key(spec: Dict[str, Any]) -> str:
-    """``belt`` / ``choker`` / ``strap:<at>`` / ``anklet`` / ``bracelet`` / ``ring`` / ``earrings``."""
+    """``belt`` / ``choker`` / ``strap:<at>`` / ``anklet`` / ``bracelet`` / ``earrings``."""
     kind = spec["kind"]
     return f"strap:{spec['band'].get('at') or 'thigh'}" if kind == "strap" else kind
 
 
 def sides_of(spec: Dict[str, Any]) -> List[str]:
     """The body sides a piece is built on: ``left`` / ``right`` (both for ``side: both``) for the paired kinds, a
-    strap on the thigh / upper arm and a ring; ``[""]`` (one centred piece) for belt, choker, chest strap."""
+    strap on the thigh / upper arm; ``[""]`` (one centred piece) for belt, choker, chest strap."""
     key = region_key(spec)
     if key in ("belt", "choker", "strap:chest"):
         return [""]
@@ -128,8 +124,7 @@ def sides_of(spec: Dict[str, Any]) -> List[str]:
 
 
 def joints_for(spec: Dict[str, Any], side: str) -> Tuple[str, ...]:
-    finger = FINGER_BONES.get(str(spec.get("finger") or "ring"), "ring")
-    return tuple(j.format(side=side, finger=finger) for j in REGION_JOINTS[region_key(spec)])
+    return tuple(j.format(side=side) for j in REGION_JOINTS[region_key(spec)])
 
 
 def frame(spec: Dict[str, Any], bones: Dict[str, Any], side: str = "",
@@ -167,12 +162,6 @@ def frame(spec: Dict[str, Any], bones: Dict[str, Any], side: str = "",
         fore, hand = _bone(bones, f"{side}forearm"), _bone(bones, f"{side}hand")
         axis = _unit(fore - hand)
         centre = hand + WRIST_ABOVE_M * axis
-    elif key == "ring":
-        finger = FINGER_BONES.get(str(spec.get("finger") or "ring"), "ring")
-        a, b = _bone(bones, f"{side}hand{finger}1"), _bone(bones, f"{side}hand{finger}2")
-        centre, axis = (a + b) / 2, _unit(a - b)
-        # across a finger: the back of the hand (+Y in the T-pose) is the section's angle 0
-        front = up
     else:
         raise ValueError(f"no section for {spec['kind']}")
     centre = centre + axis * float(spec["band"]["height_cm"]) / 100.0
@@ -184,8 +173,7 @@ def frame(spec: Dict[str, Any], bones: Dict[str, Any], side: str = "",
 
 def dominant_faces(F: np.ndarray, dense: np.ndarray, joint_names: Sequence[str], allowed: Sequence[str]) -> np.ndarray:
     """The faces of ``F`` whose three vertices' strongest joint (``dense`` ``(n, joints)``) is one of ``allowed``
-    (normalised names) — the body part a section belongs to (never the other leg, an arm beside the hip, a finger
-    beside the ring finger)."""
+    (normalised names) — the body part a section belongs to (never the other leg, an arm beside the hip)."""
     from app.core.rig_contract import norm_bone_name
     ok_joint = np.array([norm_bone_name(str(n)) in set(allowed) for n in joint_names])
     ok_vertex = ok_joint[np.asarray(dense).argmax(1)]

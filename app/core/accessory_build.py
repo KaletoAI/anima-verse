@@ -93,12 +93,13 @@ def shape_inputs(spec: Dict[str, Any]) -> Dict[str, Any]:
             if band["at"] != "chest":
                 out["side"] = spec["side"]
         return out
-    if kind in ("anklet", "bracelet", "ring"):
-        out = {"height_cm": band["height_cm"], "thickness_mm": spec["chain"]["thickness_mm"], "side": spec["side"],
-               "layer": band["layer"]}
-        if kind == "ring":
-            out["finger"] = spec.get("finger") or "ring"
-        return out
+    if kind in ("anklet", "bracelet"):
+        return {"height_cm": band["height_cm"], "thickness_mm": spec["chain"]["thickness_mm"], "side": spec["side"],
+                "layer": band["layer"]}
+    if kind == "ring":
+        # A238: sized from the skeleton — no layer under it, no height (``ring.along`` places it)
+        return {"finger": spec["finger"], "side": spec["side"], "along": spec["ring"]["along"],
+                "width_cm": band["width_cm"], "thickness_mm": spec["chain"]["thickness_mm"]}
     if kind == "earrings":
         return {"earring": dict(spec["earring"]), "thickness_mm": spec["chain"]["thickness_mm"], "side": spec["side"]}
     return {}
@@ -149,7 +150,7 @@ def _keyed_by_shaping(spec: Dict[str, Any]) -> bool:
 
 
 def _wants_under(spec: Dict[str, Any]) -> bool:
-    return spec["kind"] not in ("necklace", "earrings") and spec["band"]["layer"] == "auto"
+    return spec["kind"] not in ("necklace", "earrings", "ring") and spec["band"]["layer"] == "auto"
 
 
 def worn_context(character_name: str, profile: Dict[str, Any], base_sha: str,
@@ -809,7 +810,7 @@ def preview_curve(character_name: str, item_id: str, *, drop_cm: float, thicknes
 def make_any(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, Any]] = None,
              context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The geometry of any kind on the rigged plain body ``rigged``: the necklace (``make_necklace``), the earrings
-    (``make_earrings``) or a piece around a body part (``make_around``). A chest shaping in ``context`` (A228 L7)
+    (``make_earrings``), the ring (``make_ring``) or a piece around a body part (``make_around``). A chest shaping in ``context`` (A228 L7)
     shapes the body first, so a piece near the chest sits on the shaped skin the figure shows."""
     context = context or {}
     if context.get("shaping") and _keyed_by_shaping(spec):
@@ -819,6 +820,8 @@ def make_any(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, Any]]
         return make_necklace(rigged, spec, part)
     if spec["kind"] == "earrings":
         return make_earrings(rigged, spec, part)
+    if spec["kind"] == "ring":
+        return make_ring(rigged, spec)
     return make_around(rigged, spec, part, load_under(context.get("under") or []))
 
 
@@ -861,7 +864,7 @@ def _garment_dominant(g: Dict[str, Any], allowed) -> np.ndarray:
 #: that may move it (normalised; weight above ``PLAUSIBLE_WEIGHT``).
 AROUND_LENGTH_M: Dict[str, tuple] = {
     "belt": (0.5, 1.7), "choker": (0.22, 0.6), "strap:thigh": (0.28, 1.0), "strap:upper_arm": (0.14, 0.55),
-    "strap:chest": (0.55, 1.5), "anklet": (0.13, 0.45), "bracelet": (0.10, 0.35), "ring": (0.025, 0.11),
+    "strap:chest": (0.55, 1.5), "anklet": (0.13, 0.45), "bracelet": (0.10, 0.35),
 }
 AROUND_JOINTS: Dict[str, frozenset] = {
     "belt": frozenset({"hips", "spine", "spine1", "leftupleg", "rightupleg"}),
@@ -876,13 +879,13 @@ AROUND_JOINTS: Dict[str, frozenset] = {
 AROUND_IMPLAUSIBLE = "The {what} does not fit this body ({why})"
 #: What a section is called in the words of a failure.
 AROUND_WHAT = {"belt": "belt", "choker": "choker", "strap:thigh": "thigh strap", "strap:upper_arm": "arm strap",
-               "strap:chest": "chest strap", "anklet": "anklet", "bracelet": "bracelet", "ring": "ring",
+               "strap:chest": "chest strap", "anklet": "anklet", "bracelet": "bracelet",
                "earrings": "earring"}
 
 
 def around_plausible(key: str, metrics: Dict[str, Any]) -> None:
     """``ValueError`` (``AROUND_IMPLAUSIBLE``) when a built piece misses its gate: centre-line length per side in
-    ``AROUND_LENGTH_M``, weight only on ``AROUND_JOINTS`` (a ring: the hand and that hand's fingers), nothing inside
+    ``AROUND_LENGTH_M``, weight only on ``AROUND_JOINTS``, nothing inside
     in any test pose, a segment at most ``MAX_SEGMENT_RATIO`` × the median."""
     from app.core.rig_contract import norm_bone_name
     why = []
@@ -893,10 +896,7 @@ def around_plausible(key: str, metrics: Dict[str, Any]) -> None:
                        f"{lo * 100:.0f}–{hi * 100:.0f} cm")
     if float(metrics.get("max_segment_ratio") or 0) > MAX_SEGMENT_RATIO:
         why.append("it jumps between two points")
-    if key == "ring":
-        others = [j for j in metrics["joints"] if not norm_bone_name(j).startswith(("lefthand", "righthand"))]
-    else:
-        others = [j for j in metrics["joints"] if norm_bone_name(j) not in AROUND_JOINTS[key]]
+    others = [j for j in metrics["joints"] if norm_bone_name(j) not in AROUND_JOINTS[key]]
     if others:
         why.append("it would move with " + ", ".join(norm_bone_name(j) for j in others))
     inside = [name for name, m in (metrics.get("poses") or {}).items() if m["inside_share"] > 0.0]
@@ -949,7 +949,7 @@ AROUND_GAP_M = {"strap:chest": 0.0035}
 
 def make_around(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, Any]] = None,
                 under: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
-    """A belt / choker / strap (a flat band) or an anklet / bracelet / ring (a round tube) around its body part
+    """A belt / choker / strap (a flat band) or an anklet / bracelet (a round tube) around its body part
     (``accessory_band``), on the outermost layer under it (``under``: ``load_under``; the body alone for
     ``band.layer: body``), skinned with the nearest body vertices' weights folded onto the base skeleton, gated by
     ``around_plausible``. A belt's buckle (``part``: the item-image mesh) is hung at the front centre
@@ -982,11 +982,10 @@ def make_around(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, An
         surf = ab.surface_radius(Pw, Fb, layers, fr, offsets, reach=reach, what=what)
         t = ab.smooth_up(surf["t"])
         dirs = surf["dirs"]
-        # The air is held to the whole skin near the piece (a bump of the back above a belt belongs to Spine2), a
-        # ring's to its own finger only (the fingers beside it touch it in the bind pose) — along the skin's normal.
-        # Over a garment the radius already lies on its outermost surface (the rays): a garment's thin walls and
-        # rims are no surface to push along.
-        skin_only = [(Pw, Fb if spec["kind"] == "ring" else Fw)]
+        # The air is held to the whole skin near the piece (a bump of the back above a belt belongs to Spine2), along
+        # the skin's normal. Over a garment the radius already lies on its outermost surface (the rays): a garment's
+        # thin walls and rims are no surface to push along.
+        skin_only = [(Pw, Fw)]
         if band:
             inner = (fr["centre"][None, None] + offsets[:, None, None] * fr["axis"][None, None]
                      + (t + gap_m)[:, :, None] * dirs[None])
@@ -1014,7 +1013,7 @@ def make_around(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, An
         lengths[side] = round(float(seg.sum()), 4)
         ratios.append(float(seg.max() / max(float(np.median(seg)), 1e-9)))
         under_share.append(surf["under_share"])
-        # A piece on one limb takes its weights from that limb's skin only: thighs (fingers) touching in the bind pose
+        # A piece on one limb takes its weights from that limb's skin only: thighs touching in the bind pose
         # would otherwise hand the inner side half to the other leg, which leaves through it when the legs move.
         src = np.unique(first[np.unique(Fb)]) if side else np.arange(len(body.positions))
         Jv, Wv = accessory_mesh.skin_weights(V, np.asarray(body.positions, np.float64)[src], dense[src])
@@ -1203,6 +1202,49 @@ def make_earrings(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, 
     return out
 
 
+def make_ring(rigged: bytes, spec: Dict[str, Any]) -> Dict[str, Any]:
+    """A238: the ring (``accessory_ring``) on ``spec['finger']`` of the ``spec['side']`` hand: a band of
+    ``band.width_cm`` × ``chain.thickness_mm`` whose inner radius is computed from the skeleton (hand width, proximal
+    bone length, body height — never the finger's skin, which the webbing fuses with its neighbours), centred on the
+    proximal bone at ``ring.along``, rigid on that bone (weight 1.0). Gated only by ``accessory_ring.check`` (centre
+    in the hand's skin box, radius in range). ``{V, F, N, J, W, joint_names, curve, landmarks, metrics}``. Pure
+    CPU."""
+    from app.core import accessory_ring as ar, glb_mesh
+    from app.core.garment_fit import joint_index
+    from app.core.rig_contract import norm_bone_name
+    started = time.monotonic()
+    body = glb_mesh.body_arrays(rigged)
+    P = np.asarray(body.positions, np.float64)
+    side, finger = spec["side"], spec["finger"]
+    height = float(P[:, 1].max() - P[:, 1].min())
+    sized = ar.size(body.joint_positions, finger, side, height)
+    fr = ar.frame(body.joint_positions, finger, side, spec["ring"]["along"])
+    radius = float(sized["radius_m"])
+    width = float(spec["band"]["width_cm"]) / 100.0
+    thickness = float(spec["chain"]["thickness_mm"]) / 1000.0
+    names = np.array([norm_bone_name(str(n)) for n in body.joint_names] or [""])
+    top = names[np.clip(body.joints[np.arange(len(P)), body.weights.argmax(1)], 0, len(names) - 1)]
+    hand = np.char.startswith(top.astype(str), f"{side}hand")
+    ar.check(fr["centre"], P[hand], sized)
+    V, F, N = ar.band(fr, radius, width, thickness)
+    bone = joint_index(body, fr["bone"])
+    J = np.zeros((len(V), 4), np.int64)
+    J[:, 0] = bone
+    W = np.zeros((len(V), 4))
+    W[:, 0] = 1.0
+    curve = ar.centre_line(fr, radius, thickness)
+    metrics = {"inner_radius_mm": round(radius * 1000.0, 2), "estimate_mm": sized["estimate_mm"],
+               "range_mm": [round(x, 3) for x in sized["range_mm"]], "clamped": sized["clamped"],
+               "hand_width_mm": sized["hand_width_mm"], "bone_length_mm": sized["bone_length_mm"],
+               "height_m": round(height, 3), "length_m": {side: round(2 * np.pi * radius, 4)},
+               "triangles": int(len(F)), "vertices": int(len(V)),
+               "joints": {str(body.joint_names[bone]): 1.0}, "cpu_s": round(time.monotonic() - started, 2)}
+    landmarks = {side: {"centre": np.round(fr["centre"], 5).tolist(), "axis": np.round(fr["axis"], 4).tolist(),
+                        "bone": str(body.joint_names[bone])}}
+    return {"V": V, "F": F, "N": N, "J": J, "W": W, "joint_names": list(body.joint_names), "curve": curve,
+            "landmarks": landmarks, "metrics": metrics}
+
+
 #: A234: a hoop hangs tilted this far out at the bottom (its plane turned about the front-back axis).
 HOOP_TILT_DEG = 15.0
 #: The least air an earring may keep to the head (the target is ``accessory_band.GAP_M``; a hoop that cannot get
@@ -1234,8 +1276,8 @@ def preview_rings(character_name: str, spec: Dict[str, Any], *,
                   profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """A234: the centre lines of a band / tube kind for unsaved settings ``spec`` (normalized) on the current plain
     body — the Wardrobe's live preview while a slider moves: ``{rings: [[[x, y, z]…]…], landmarks, radius_m}``; the
-    body's surface only (the clothing under it is taken by the Build). Earrings: the lobe points. CPU only; nothing
-    stored."""
+    body's surface only (the clothing under it is taken by the Build). Earrings: the lobe points. A238: the ring's
+    middle circle at the size the Build gives it (the skeleton only, ``accessory_ring``). CPU only; nothing stored."""
     from app.core import accessory_band as ab
     from app.core.accessory_spec import BAND_KINDS as SPEC_BAND_KINDS
     from app.models.character import get_character_dir
@@ -1244,6 +1286,16 @@ def preview_rings(character_name: str, spec: Dict[str, Any], *,
     if base is None:
         raise ValueError(REASON_NO_BODY)
     rigged = (get_character_dir(character_name) / "model3d" / f"{base[0]}.glb").read_bytes()
+    if spec["kind"] == "ring":
+        from app.core import accessory_ring as ar, glb_mesh
+        body = glb_mesh.body_arrays(rigged)
+        P = np.asarray(body.positions, np.float64)
+        sized = ar.size(body.joint_positions, spec["finger"], spec["side"], float(np.ptp(P[:, 1])))
+        fr = ar.frame(body.joint_positions, spec["finger"], spec["side"], spec["ring"]["along"])
+        thickness = float(spec["chain"]["thickness_mm"]) / 1000.0
+        return {"rings": [np.round(ar.centre_line(fr, sized["radius_m"], thickness), 5).tolist()],
+                "landmarks": {spec["side"]: {"centre": np.round(fr["centre"], 5).tolist()}},
+                "radius_m": thickness / 2, "inner_radius_mm": round(float(sized["radius_m"]) * 1000.0, 2)}
     body, dense, Pw, Fw, first = _body_context(rigged)
     rings, marks = [], {}
     if spec["kind"] == "earrings":

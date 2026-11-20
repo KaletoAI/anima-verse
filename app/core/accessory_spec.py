@@ -3,10 +3,13 @@
 
 An outfit piece in mode ``accessory`` (``garment_set.ACCESSORY``) carries::
 
-    jewellery: {kind, band, buckle, chain, metal, color?, pendant, side, finger?, sway, earring}
+    jewellery: {kind, band, buckle, chain, metal, color?, pendant, side, finger?, sway, earring, ring}
 
 A234 adds ``band.at`` (where a strap goes round: thigh / upper_arm / chest) and ``earring: {style, size_mm}`` (stud /
 hoop built on the CPU, ``drop`` = the item-image mesh hung under the lobe — the necklace pendant's job).
+A238 adds the ring: ``finger`` (thumb included), ``side`` left / right only, ``ring: {along}`` (where on the finger's
+proximal bone it sits, a share from the knuckle), the band's width ``band.width_cm`` in ``RING_WIDTH_CM`` and its depth
+``chain.thickness_mm``. Its size is never stored: it is computed per body from the skeleton (``accessory_ring``).
 
 Every shape value is item-wide; only what is measured from a body (the neck curve) is per character
 (``accessory_build``). ``normalize`` fills the defaults and clamps; ``suggest_kind`` proposes a kind from the slots and
@@ -19,14 +22,17 @@ from typing import Any, Dict, Optional, Tuple
 #: The kinds of spec § 5 (generic accessory words).
 KINDS: Tuple[str, ...] = ("necklace", "choker", "earrings", "bracelet", "ring", "anklet", "belt", "strap")
 #: The kinds built (A216 the necklace, A234 every other kind).
-BUILT_KINDS: Tuple[str, ...] = ("necklace", "belt", "choker", "anklet", "bracelet", "earrings", "strap")
+BUILT_KINDS: Tuple[str, ...] = ("necklace", "belt", "choker", "anklet", "bracelet", "earrings", "strap", "ring")
 CHAIN_STYLES: Tuple[str, ...] = ("cable", "box", "rope", "none")
 #: The chain's material (A225): the metals, then the cords (a pendant on a leather cord, a string or a fabric band).
 #: The stored key stays ``metal`` (spec § 5).
 CORDS: Tuple[str, ...] = ("leather", "string", "fabric")
 METALS: Tuple[str, ...] = ("gold", "silver", "rose_gold", "black", "custom") + CORDS
 SIDES: Tuple[str, ...] = ("left", "right", "both")
-FINGERS: Tuple[str, ...] = ("index", "middle", "ring", "little")
+#: A238: a ring is on one hand (``side`` left / right; ``both`` is stored as ``RING_DEFAULT_SIDE``).
+RING_SIDES: Tuple[str, ...] = ("left", "right")
+RING_DEFAULT_SIDE = "left"
+FINGERS: Tuple[str, ...] = ("thumb", "index", "middle", "ring", "little")
 SWAY: Tuple[str, ...] = ("off", "light")
 BAND_LAYERS: Tuple[str, ...] = ("auto", "body")
 BAND_MATERIALS: Tuple[str, ...] = ("leather", "metal", "fabric", "from_image")
@@ -36,8 +42,8 @@ STRAP_AT: Tuple[str, ...] = ("thigh", "upper_arm", "chest")
 EARRING_STYLES: Tuple[str, ...] = ("stud", "hoop", "drop")
 #: The kinds whose ``band`` is a flat strip (the rest of ``band`` — ``height_cm`` — moves any ring-shaped kind).
 BAND_KINDS: Tuple[str, ...] = ("belt", "choker", "strap")
-#: The kinds that are a round tube around a limb.
-TUBE_KINDS: Tuple[str, ...] = ("anklet", "bracelet", "ring")
+#: The kinds that are a round tube around a limb (the ring is sized from the skeleton instead, ``accessory_ring``).
+TUBE_KINDS: Tuple[str, ...] = ("anklet", "bracelet")
 
 #: Spec § 5 defaults (plan Task 3).
 DEFAULTS: Dict[str, Any] = {
@@ -59,9 +65,14 @@ CORD_THICKNESS_MM = 2.5
 RANGES: Dict[str, Tuple[float, float]] = {
     "drop_cm": (0.0, 30.0), "thickness_mm": (0.5, 6.0), "width_cm": (0.5, 12.0), "size_mm": (3.0, 120.0),
     "height_cm": (-30.0, 30.0), "earring_mm": (2.0, 60.0),
+    # A238: a ring band's width (cm, 1.5–12 mm) and where it sits along the finger's proximal bone (share from the
+    # knuckle; the ends are the joints, where a ring cannot sit)
+    "ring_width_cm": (0.15, 1.2), "ring_along": (0.15, 0.85),
 }
 #: A234: a choker / strap / belt's width when none is stored (a 4 cm belt is a 1.5 cm choker).
-KIND_WIDTH_CM: Dict[str, float] = {"belt": 4.0, "choker": 1.5, "strap": 2.5}
+KIND_WIDTH_CM: Dict[str, float] = {"belt": 4.0, "choker": 1.5, "strap": 2.5, "ring": 0.3}
+#: A238: a ring's place along the proximal bone when none is stored (its middle).
+RING_ALONG = 0.5
 #: A234: a bracelet / anklet / ring's thickness when none is stored.
 KIND_THICKNESS_MM: Dict[str, float] = {"bracelet": 2.5, "anklet": 1.5, "ring": 2.0}
 #: Named drop lengths below the jugular notch (spec § 4).
@@ -106,12 +117,13 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     metal = _choice(raw.get("metal"), METALS, d["metal"])
     thick_default = CORD_THICKNESS_MM if metal in CORDS else KIND_THICKNESS_MM.get(kind, d["chain"]["thickness_mm"])
     width_default = KIND_WIDTH_CM.get(kind, d["band"]["width_cm"])
+    width_key = "ring_width_cm" if kind == "ring" else "width_cm"
     band_raw = raw.get("band") if isinstance(raw.get("band"), dict) else {}
     chain_raw = raw.get("chain") if isinstance(raw.get("chain"), dict) else {}
     out: Dict[str, Any] = {
         "kind": kind,
         "band": {"height_cm": _num(band_raw.get("height_cm", d["band"]["height_cm"]), "height_cm", 0.0),
-                 "width_cm": _num(band_raw.get("width_cm", width_default), "width_cm", width_default),
+                 "width_cm": _num(band_raw.get("width_cm", width_default), width_key, width_default),
                  "layer": _choice(band_raw.get("layer"), BAND_LAYERS, d["band"]["layer"]),
                  "material": _choice(band_raw.get("material"), BAND_MATERIALS, d["band"]["material"]),
                  "at": _choice(band_raw.get("at"), STRAP_AT, d["band"]["at"])},
@@ -146,6 +158,11 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         out["color"] = raw["color"].lower()
     if raw.get("finger") in FINGERS:
         out["finger"] = raw["finger"]
+    if kind == "ring":
+        out["finger"] = out.get("finger") or "ring"
+        out["side"] = _choice(raw.get("side"), RING_SIDES, RING_DEFAULT_SIDE)
+        ring_raw = raw.get("ring") if isinstance(raw.get("ring"), dict) else {}
+        out["ring"] = {"along": _num(ring_raw.get("along", RING_ALONG), "ring_along", RING_ALONG)}
     return out
 
 

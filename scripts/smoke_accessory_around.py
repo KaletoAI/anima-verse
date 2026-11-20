@@ -29,8 +29,9 @@ Expected values, derived by hand:
     (outward faces).
 [6] ``belt_top``: a bottom whose front-middle vertices reach y 1.07 → 1.07; a garment on slot "top" only → None.
 [7] ``around_plausible``: a belt 0.8 m round, joints Hips/Spine, every pose clear → passes; 0.4 m → "40 cm round,
-    expected 50–170 cm"; LeftArm 0.3 → "move with leftarm"; sit inside 0.01 → "inside in the sit pose"; a ring with
-    LeftHandRing1 + LeftHand → passes, with Spine2 → "move with spine2".
+    expected 50–170 cm"; LeftArm 0.3 → "move with leftarm"; sit inside 0.01 → "inside in the sit pose"; a bracelet
+    0.2 m round on LeftForeArm + LeftHand → passes, with LeftHandRing1 at 0.5 → "move with lefthandring1" (A238: the
+    ring has its own gate, ``smoke_accessory_ring``).
 [8] ``icosphere(0.003)``: 42 vertices (1 subdivision: 12 + 30 edges), every one 3 mm from the centre; ``torus``
     major 0.01, minor 0.001 across +x: the x extent is 2 · 0.001 · cos(π/8)… ≤ 0.002, the y / z extents
     2 · (0.01 + 0.001) = 0.022 at most and at least 2 · 0.011 · cos(π/32) = 0.02189.
@@ -173,10 +174,10 @@ check("[7] belt too short", "40 cm round, expected 50–170 cm" in gate("belt", 
 check("[7] belt on the arm", "move with leftarm" in gate("belt", joints={"mixamorig:LeftArm": 0.3}), True)
 check("[7] belt inside sitting", "inside in the sit pose" in gate("belt", poses={
     "rest": {"gap_min_mm": 2, "inside_share": 0.0}, "sit": {"gap_min_mm": -1, "inside_share": 0.01}}), True)
-check("[7] ring passes", gate("ring", length_m={"left": 0.055},
-                              joints={"mixamorig:LeftHandRing1": 0.9, "mixamorig:LeftHand": 0.3}), "passes")
-check("[7] ring on the spine", "move with spine2" in gate("ring", length_m={"left": 0.055},
-                                                         joints={"mixamorig:Spine2": 0.5}), True)
+check("[7] bracelet passes", gate("bracelet", length_m={"left": 0.2},
+                                  joints={"mixamorig:LeftForeArm": 0.9, "mixamorig:LeftHand": 0.3}), "passes")
+check("[7] bracelet on a finger", "move with lefthandring1" in gate("bracelet", length_m={"left": 0.2},
+                                                                    joints={"mixamorig:LeftHandRing1": 0.5}), True)
 
 # [8] primitives
 Vs, Fs = ab.icosphere(0.003)

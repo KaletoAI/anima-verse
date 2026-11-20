@@ -8,7 +8,8 @@ Expected values, derived by hand:
     silver keeps the asig (a re-assembly, never a rebuild — ``material_key`` changes instead: "accessory:gold:
     #d4af37:0.25" → "accessory:silver:#c0c0c0:0.2:1.0"); drop 4 → 10 changes it; thickness 1.5 → 2.0 changes it.
 [2] The state rule (``accessory_state``), base sha "B1":
-    no jewellery → blocked "Choose the accessory kind in the Wardrobe"; kind ring → blocked "Ring: not built yet…";
+    no jewellery → blocked "Choose the accessory kind in the Wardrobe"; a kind outside ``BUILT_KINDS`` (A238: every kind
+    is built, so the smoke takes ring out of it for the check) → blocked "Ring: not built yet…";
     no plain body → blocked "No plain body yet"; nothing stored → due "Not built yet…"; a record of THIS asig on
     B1 → current; the same record when the body is B2 → due "Body changed…"; only a record of another asig (the
     drop changed) → due "Chain settings changed…"; a failure record on B1 → failed "Build failed — boom".
@@ -83,8 +84,12 @@ def state(it):
 neck = item(kind="necklace")
 sig = ab.asig(gold)
 check("[2] no kind", state(item()), ("blocked", ab.REASON_NO_KIND))
-check("[2] ring", state(item(kind="ring"))[0], "blocked")
-check("[2] ring reason", state(item(kind="ring"))[1].startswith("Ring: not built yet"), True)
+from app.core import accessory_spec as _spec  # noqa: E402
+_built = _spec.BUILT_KINDS
+_spec.BUILT_KINDS = tuple(k for k in _built if k != "ring")
+check("[2] kind not built", state(item(kind="ring"))[0], "blocked")
+check("[2] kind not built reason", state(item(kind="ring"))[1].startswith("Ring: not built yet"), True)
+_spec.BUILT_KINDS = _built
 BASE["sha"] = ""
 check("[2] no body", state(neck), ("blocked", ab.REASON_NO_BODY))
 BASE["sha"] = "B1"
