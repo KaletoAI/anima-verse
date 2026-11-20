@@ -468,6 +468,13 @@ function TemplateProgressBox({ character, progress, onStarted }: {
             : 'Draped without the pieces under it: it failed a check over them — their parts under it are hidden')}
         </div>
       ) : null}
+      {p.hem_moved ? (
+        <div className="ga-hint" data-hem-moved="underbust">
+          {t('Hem moved below the underbust fold: draped {draped} m long instead of {asked} m')
+            .replace('{draped}', p.hem_moved.draped_length_m.toFixed(2))
+            .replace('{asked}', p.hem_moved.length_m.toFixed(2))}
+        </div>
+      ) : null}
       {!p.worn ? (
         <div className="ga-hint">{t('Not worn now — the Build drapes it once it is worn')}</div>
       ) : p.state === 'missing' || p.state === 'failed' ? (

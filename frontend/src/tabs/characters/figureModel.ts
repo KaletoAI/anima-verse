@@ -1474,6 +1474,9 @@ export interface TemplateProgress {
   inner_collider?: { mode: 'full' | 'shrunk' | 'dropped'; failed: { mode: string; error: string }[] } | null
   /** The failed drape as data (`state` "failed"); null otherwise. */
   failure?: StepFailure | null
+  /** Bug round 2026-11-20: the drape shown moved the hem off the underbust fold (`garment_template._clear_underbust`):
+   *  the length asked and the length draped, in metres; null when the hem stayed where it was asked. */
+  hem_moved?: { length_m: number; draped_length_m: number; under_y: number } | null
 }
 
 /** A172: the live step of a drape in flight. `label` is the stage (a translatable key); frame / pose / index are

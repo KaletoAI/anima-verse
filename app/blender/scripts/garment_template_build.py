@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from _common import main  # noqa: E402
 import garment_template_drape as gd  # noqa: E402
 import garment_template_fitted as gf  # noqa: E402
+import stretch_gate as sg  # noqa: E402
 sys.path.pop(0)
 
 #: Angle of each slit side (0 = +X = the character's left, front = -Y).
@@ -108,8 +109,9 @@ COLLAR_RINGS = 3
 NECK_BLEND_M = 0.08
 #: A178: the re-spaced vertices of a meridian stand at least this far apart (where the column is long enough).
 NECK_MIN_STEP_M = 0.010
-#: Edges built shorter than this are left out of the stretch ratio.
-MIN_EDGE_M = 0.001
+#: Edges built shorter than this are left out of the stretch ratio (``stretch_gate``, which also leaves edges under
+#: 3 mm or grown under 1 mm out of the gated maximum).
+MIN_EDGE_M = sg.MIN_EDGE_M
 #: The yoke reaches at least this far outward from the neck opening.
 CAP_MIN_M = 0.03
 COLLAR_STEP_M = 0.012
@@ -1786,14 +1788,15 @@ def run(a):
                                 **gd.spring_kwargs(fab))
     me = obj.data
     co1 = np.array([v.co for v in me.vertices])
-    st = np.linalg.norm(co1[edges[:, 0]] - co1[edges[:, 1]], axis=1) / np.maximum(rest_len, 1e-6)
-    # an edge built shorter than MIN_EDGE_M (where re-spaced columns meet an armhole corner) is no fabric: its ratio
-    # says nothing (0.1 mm -> 0.19 mm read as stretch 1.87, A144)
-    st = np.where(rest_len < MIN_EDGE_M, 1.0, st)
+    # ``stretch_gate``: the gated ratio ``st`` leaves out edges built under 3 mm and edges that grew under 1 mm (a
+    # 1.33 mm edge at a deep V's bottom drawn to 2.43 mm read as stretch 1.82, bug round 2026-11-20); ``st_all``
+    # only the degenerate ones under MIN_EDGE_M (A144) — the p99 and the raw maximum come from it
+    st, st_all = sg.stretch(rest_len, np.linalg.norm(co1[edges[:, 0]] - co1[edges[:, 1]], axis=1))
     worst = co0[edges[int(st.argmax())]].mean(0)
     worst_at = {"z": round(float(worst[2]), 3),
                 "deg": round(math.degrees(math.atan2(worst[1] - centre[1], worst[0] - centre[0])) % 360, 1),
                 "over_1_3": int((st > 1.3).sum()), "short_edges": int((rest_len < MIN_EDGE_M).sum()),
+                "over_1_3_all": int((st_all > 1.3).sum()), "min_rest_mm": round(float(rest_len.min()) * 1000, 2),
                 "over_at": [[round(float(x), 2) for x in co0[e].mean(0)] for e in edges[np.argsort(-st)[:8]]], "rest_mm": round(float(rest_len[int(st.argmax())]) * 1000, 1),
                 "x": round(float(worst[0]), 3), "y": round(float(worst[1]), 3)}
     n_single = len(me.vertices)
@@ -1990,7 +1993,9 @@ def run(a):
     data = {"verts": len(obj.data.vertices), "pins": int(len(pin)), "slit_edges": int(slit_edges),
             "bodice": binfo, "neck": neck, "lower_layers": len(lower),
             "drape": {"cpu_s": cpu, "wall_s": wall, "pin_drift_mm": drift,
-                      "stretch_max": round(float(st.max()), 3), "stretch_at": worst_at, "stretch_p99": round(float(np.percentile(st, 99)), 3),
+                      "stretch_max": round(float(st.max()), 3), "stretch_at": worst_at,
+                      "stretch_max_all": round(float(st_all.max()), 3),
+                      "stretch_p99": round(float(np.percentile(st_all, 99)), 3),
                       "quality": int(prm.get("drape_quality") or fab["quality"])},
             "weights": weights, "shapes": {"wall_s": shape_wall, **shape_info}, "collider_s": list(gd.COLLIDER_S),
             "collider_inner": list(gd.COLLIDER_INNER), "collider_outer": list(gd.COLLIDER_OUTER),

@@ -488,6 +488,24 @@ def shape_targets(payload: Optional[Dict[str, Any]]) -> List[str]:
     return out
 #: Stretch above which the drape is re-run once with doubled quality (spec section 6), then refused.
 RETRY_STRETCH = 1.5
+#: Bug round 2026-11-20: a NARROW miss — the gated stretch at or over its limit but no higher than RETRY_STRETCH, on
+#: at most this many edges over 1.3 (``stretch_at.over_1_3``) — is re-run once with doubled quality too (Kai's
+#: jacket: one edge at 1.329, p99 1.03, refused on its first run). Many edges over the limit are a real fault of
+#: the fit that more quality does not mend; they are refused at once as before.
+NARROW_MISS_EDGES = 4
+
+
+def retry_due(drape: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Why a first drape run (``data.drape`` of ``garment_template_build``) is re-run with doubled quality: "stretch"
+    above ``RETRY_STRETCH``, "narrow" for a narrow miss (``NARROW_MISS_EDGES``), None when it is not."""
+    drape = drape or {}
+    value = _number(drape.get("stretch_max"))
+    if value is None or value < THRESHOLDS["stretch_max"]:
+        return None
+    if value > RETRY_STRETCH:
+        return "stretch"
+    over = _number((drape.get("stretch_at") or {}).get("over_1_3"))
+    return "narrow" if over is not None and over <= NARROW_MISS_EDGES else None
 
 # Pin rings by piece kind (where the cloth hangs from).
 PIN_BY_KIND = {"skirt": "waist", "trousers": "waist", "top": "shoulders", "jacket": "shoulders",
@@ -533,6 +551,12 @@ FAILURE_SENTENCES = {
                          "limit is {limit}×). Length, fit and waistband do not change that part: try another "
                          "neckline, shoulders or sleeves, then Build again. Hair or a beard lying on the shoulders is "
                          "no longer in the way; if it stays, the body model itself has a ridge there."),
+    # bug round 2026-11-20: the stretch sits under the chest of a top / jacket whose hem ends between the underbust
+    # fold and the bust line (``stretch_line``) — only a LONGER piece helps there, never a shorter one
+    "stretch_max_underbust": ("The fabric is stretched to {value}× its cut length under the chest (the limit is "
+                              "{limit}×): the hem ends between the bust and the underbust fold, where the cloth "
+                              "spans the step down to the ribs. Make the piece longer — a length of at least "
+                              "{length} m puts the hem below the fold — then Build again."),
     "poke_share": ("The body shows through the fabric on {value} % of the skin it covers in the rest pose (the limit "
                    "is {limit} %): the cloth slipped under the body's surface there. Change the length, fit or "
                    "waistband so it hangs differently, then Build again."),
@@ -565,7 +589,9 @@ NECK_STRETCH_BELOW_M = 0.05
 def stretch_line(failed: Dict[str, Any]) -> str:
     """A236 — which stretch sentence fits a failure record: ``stretch_max_neck`` when the worst edge
     (``metrics.drape.stretch_at.z``, Blender Z = height) lies no lower than NECK_STRETCH_BELOW_M under the body's
-    shoulder line (``metrics.measure.shoulder_y``) on a piece with a bodice; else ``stretch_max``."""
+    shoulder line (``metrics.measure.shoulder_y``) on a piece with a bodice; ``stretch_max_underbust`` when a top's /
+    jacket's hem ends between the underbust fold and the bust line and the worst edge is no higher than
+    ``UNDERBUST_HEM_M`` over the bust line (``underbust_length``); else ``stretch_max``."""
     metrics = failed.get("metrics") or failed.get("data") or {}
     z = _number(((metrics.get("drape") or {}).get("stretch_at") or {}).get("z"))
     sy = _number((metrics.get("measure") or {}).get("shoulder_y"))
@@ -576,7 +602,35 @@ def stretch_line(failed: Dict[str, Any]) -> str:
         bodice = has_bodice(params)
     except Exception:
         bodice = False
-    return "stretch_max_neck" if bodice and z >= sy - NECK_STRETCH_BELOW_M else "stretch_max"
+    if bodice and z >= sy - NECK_STRETCH_BELOW_M:
+        return "stretch_max_neck"
+    return "stretch_max_underbust" if underbust_length(failed) is not None else "stretch_max"
+
+
+def underbust_length(failed: Dict[str, Any]) -> Optional[float]:
+    """Bug round 2026-11-20 — the length (metres, rounded up to the cm) that puts a failed top's / jacket's hem
+    ``UNDERBUST_HEM_M`` under the underbust fold, when its hem (``metrics.outline``: ``top_y`` - ``length``) ends
+    between the fold and the bust line (``_bust_lines`` of ``metrics.measure``) and the worst edge
+    (``stretch_at.z``) lies no higher than ``UNDERBUST_HEM_M`` over the bust line; else None. Never shorter than
+    the length asked."""
+    metrics = failed.get("metrics") or failed.get("data") or {}
+    params = failed.get("params") or {}
+    outline_ = metrics.get("outline") or {}
+    meas = metrics.get("measure") or {}
+    z = _number(((metrics.get("drape") or {}).get("stretch_at") or {}).get("z"))
+    top_y, length, asked = (_number(outline_.get("top_y")), _number(outline_.get("length")),
+                            _number(params.get("length_m") if isinstance(params, dict) else None))
+    if (not isinstance(params, dict) or params.get("kind") not in ("top", "jacket") or None in (z, top_y, length, asked)
+            or "band_y" not in meas or "waist_y" not in meas):
+        return None
+    try:
+        under_y, bust_y = _bust_lines(meas)
+    except (KeyError, TypeError, ValueError):
+        return None
+    hem_y = top_y - length
+    if not (under_y <= hem_y <= bust_y) or z > bust_y + UNDERBUST_HEM_M:
+        return None
+    return math.ceil((asked + hem_y - (under_y - UNDERBUST_HEM_M)) * 100.0 - 1e-6) / 100.0
 
 
 def failure_info(failed: Dict[str, Any]) -> Dict[str, Any]:
@@ -596,8 +650,10 @@ def failure_info(failed: Dict[str, Any]) -> Dict[str, Any]:
         if base in FAILURE_SENTENCES:
             scale = 100.0 if base == "poke_share" else 1.0
             key = stretch_line(failed) if base == "stretch_max" else base
-            lines.append({"text": FAILURE_SENTENCES[key],
-                          "values": {"value": _num(r.get("value"), scale), "limit": _num(r.get("limit"), scale)}})
+            values = {"value": _num(r.get("value"), scale), "limit": _num(r.get("limit"), scale)}
+            if key == "stretch_max_underbust":
+                values["length"] = _num(underbust_length(failed))
+            lines.append({"text": FAILURE_SENTENCES[key], "values": values})
     if not lines:
         text = (LEFT_DUE.get(outcome) if oc.is_retryable(outcome)
                 else NO_GLB_SENTENCE if rows and not bad
@@ -1112,6 +1168,7 @@ def _bodice_outline(params: Dict[str, Any], meas: Dict[str, Any], waist_y: float
         skirt_h, skirt_c = [h for h, _c in skirt], [c for _h, c in skirt]
     else:
         hem_y = max(meas["floor_y"] + 0.2, top_y - params["length_m"])
+    hem_y, moved = _clear_underbust(params, meas, hem_y, top_y)
     knots = []
     for y in np.arange(hem_y, top_y - 1e-6, 0.02):
         y = float(y)
@@ -1121,7 +1178,33 @@ def _bodice_outline(params: Dict[str, Any], meas: Dict[str, Any], waist_y: float
             c = _torso_girth(meas, y) * ease + EASE_M
         knots.append((round(y - hem_y, 4), round(c, 4)))
     knots.append((round(top_y - hem_y, 4), round(_torso_girth(meas, top_y) * ease + EASE_M, 4)))
-    return {"knots": knots, "top_y": round(top_y, 4), "waist_y": round(waist_y, 4), "length": knots[-1][0]}
+    return {"knots": knots, "top_y": round(top_y, 4), "waist_y": round(waist_y, 4), "length": knots[-1][0],
+            **({"hem_moved": moved} if moved else {})}
+
+
+#: Bug round 2026-11-20: a top's or jacket's hem closer than this to the measured underbust fold (``_bust_lines``,
+#: the same line as ``bust_shaping.landmarks`` ``under_y``) is moved this far BELOW the fold — never up, a piece is
+#: never made shorter. On the fold the hem's cloth spans the step from the chest to the rib cage and a few edges
+#: there take the drape's pull: Lirien's top at length 0.27 (hem 1.178 m, fold 1.168 m) failed at stretch 1.48 with
+#: p99 1.03; at 0.31 (hem 1.138 m, 3 cm under the fold) it drapes at 1.09.
+UNDERBUST_HEM_M = 0.03
+
+
+def _clear_underbust(params: Dict[str, Any], meas: Dict[str, Any], hem_y: float,
+                     length_from: float) -> Tuple[float, Optional[Dict[str, Any]]]:
+    """``(hem_y, moved)`` — the hem height of a top / jacket off the underbust fold (``UNDERBUST_HEM_M``): a hem
+    within that distance of the fold goes ``UNDERBUST_HEM_M`` under it, and ``moved`` records it for the drape
+    record and the UI (``{under_y, from_y, hem_y, length_m (asked), draped_length_m}``, lengths counted from
+    ``length_from``, the line ``length_m`` counts from); any other hem stays (``moved`` None)."""
+    if params.get("kind") not in ("top", "jacket"):
+        return hem_y, None
+    under_y, _bust_y = _bust_lines(meas)
+    if abs(hem_y - under_y) >= UNDERBUST_HEM_M:
+        return hem_y, None
+    new = under_y - UNDERBUST_HEM_M
+    return new, {"under_y": round(under_y, 4), "from_y": round(hem_y, 4), "hem_y": round(new, 4),
+                 "length_m": round(float(params["length_m"]), 4),
+                 "draped_length_m": round(length_from - new, 4)}
 
 
 def _strapless_top_outline(params: Dict[str, Any], meas: Dict[str, Any], waist_y: float) -> Dict[str, Any]:
@@ -1134,11 +1217,13 @@ def _strapless_top_outline(params: Dict[str, Any], meas: Dict[str, Any], waist_y
     top_y = float(meas["band_y"]) - STRAPLESS_UNDERARM_M
     shoulder = meas["shoulder_y"] + SHOULDER_TOP_M if "shoulder_y" in meas else top_y + 0.12
     hem_y = min(top_y - STRAPLESS_MIN_M, max(meas["floor_y"] + 0.2, shoulder - params["length_m"]))
+    hem_y, moved = _clear_underbust(params, meas, hem_y, shoulder)
     ease = 1.0 + BODICE_EASE[0] + BODICE_EASE[1] * params["fit"]
     knots = [(round(float(y) - hem_y, 4), round(_torso_girth(meas, float(y)) * ease + EASE_M, 4))
              for y in np.arange(hem_y, top_y - 1e-6, 0.02)]
     knots.append((round(top_y - hem_y, 4), round(_torso_girth(meas, top_y) * ease + EASE_M, 4)))
-    return {"knots": knots, "top_y": round(top_y, 4), "waist_y": round(waist_y, 4), "length": knots[-1][0]}
+    return {"knots": knots, "top_y": round(top_y, 4), "waist_y": round(waist_y, 4), "length": knots[-1][0],
+            **({"hem_moved": moved} if moved else {})}
 
 
 def sweetheart_depth(params: Dict[str, Any]) -> float:
@@ -1894,7 +1979,8 @@ def piece_progress(character_name: str, item_id: str, *, profile: Optional[Dict[
     """What the parameter dialog shows of ONE template piece on ``character_name`` (A168) — the same rule as the
     Figure tab's row (``drape_state`` on the current base model, with the other worn mesh pieces as lower layers):
     ``{state ("ready" / "missing" / "failed" / "blocked" / "running"), reason, built_at, error, worn, steps,
-    failure}`` (``failure``: ``failure_info`` of a failed drape, else None) —
+    failure, inner_collider, hem_moved}`` (``failure``: ``failure_info`` of a failed drape, else None;
+    ``hem_moved``: the outline's record of a hem moved off the underbust fold, ``_clear_underbust``, else None) —
     ``steps`` in the step-list shape of ``model_overview`` (``{id, label, status, detail, numbers}``: parameters
     stored, a picture to colour it from, the drape). ``running``: a Build of the character runs (it drapes the worn
     template pieces). Read-only."""
@@ -1941,7 +2027,10 @@ def piece_progress(character_name: str, item_id: str, *, profile: Optional[Dict[
             "error": str(record.get("error") or "") if drape["state"] == "failed" else "", "worn": worn, "steps": steps,
             "live": live if state == "running" else None,
             "failure": drape.get("failure") if drape["state"] == "failed" else None,
-            "inner_collider": record.get("inner_collider") if drape["state"] == "ready" else None}
+            "inner_collider": record.get("inner_collider") if drape["state"] == "ready" else None,
+            # bug round 2026-11-20: the hem moved off the underbust fold (``_clear_underbust``) in the drape shown
+            "hem_moved": (metrics.get("outline") or {}).get("hem_moved") if drape["state"] in ("ready", "failed")
+            else None}
 
 
 # --- the drape run ----------------------------------------------------------------
@@ -2103,7 +2192,8 @@ def _run_drape_once(body_glb: Path, params: Dict[str, Any], sources: Dict[str, s
               live: Optional[Tuple[str, str]] = None,
               lower_offsets: Optional[List[float]] = None) -> Dict[str, Any]:
     """Measure, make the panels and drape on ``body_glb`` (one Blender run; one retry with doubled
-    quality when the stretch is above ``RETRY_STRETCH``). ``lower`` = [(drape GLB, its pose-shape payload)] of the
+    quality when the stretch is above ``RETRY_STRETCH`` or a narrow miss, ``retry_due``; the retry's result is
+    judged and carries ``data.retry``). ``lower`` = [(drape GLB, its pose-shape payload)] of the
     lower layers the piece drapes over (colliders, Ruling A142). Returns ``{ok, error, data, glb, rows, outcome,
     log_tail}`` — ``ok`` False when Blender failed or a gate row failed (``error`` names it); ``outcome``
     (``app.blender.outcome``) is the Blender run's when it failed, ``REJECTED`` for a failed gate row, ``CRASHED``
@@ -2146,7 +2236,11 @@ def _run_drape_once(body_glb: Path, params: Dict[str, Any], sources: Dict[str, s
                 res, data = first
                 data["retry_error"] = str(res.get("error") or "") or "retry failed"
             break
-        if (data.get("drape") or {}).get("stretch_max", 0) <= RETRY_STRETCH:
+        if scale != 1.0:
+            data["retry"] = {"reason": why, "first_stretch_max": (first[1].get("drape") or {}).get("stretch_max")}
+            break
+        why = retry_due(data.get("drape"))
+        if why is None:
             break
         # Ruling A142: a retry doubles the cloth cost; it is only tried when the first run left room for it
         if float(data.get("script_wall_s") or 0.0) - float(data.get("render_wall_s") or 0.0) > wall_limit(params) / 2:
