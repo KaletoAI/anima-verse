@@ -219,6 +219,13 @@ SECTIONS = {
                                "in parallel, the provider has stopped answering and the test ends as "
                                "failed with that reason.",
             },
+            "warmup_timeout_seconds": {
+                "type": "int", "label": "Model load timeout (seconds)", "default": 900,
+                "min": 10,
+                "description": "Before its first case a test sends one unscored request so the server "
+                               "loads the model; that load time is in no speed figure. Without an "
+                               "answer in this time the test ends as failed.",
+            },
         },
     },
     "server": {

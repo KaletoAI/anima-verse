@@ -994,6 +994,8 @@ function suitRenderJob(job) {
             + (summary.saved === false || summary.infra ? '<div class="suit-outcome suit-outcome-warn">Not saved: '
                 + esc(summary.not_saved_reason || 'a request failed at the provider; inspect the diagnostics below.') + '</div>' : '')
             + suitWarning({...summary, settings}, settings) + suitThinkingSummary(summary)
+            + (summary.warmup_s != null ? '<div>Model load (warm-up request, not timed into speed): ' + esc(summary.warmup_s) + ' s'
+                + (summary.warmup_error ? ' — failed: ' + esc(summary.warmup_error) : '') + '</div>' : '')
             + '<div>Tools: ' + esc(summary.tool || 'not tested')
             + ' · Helpers: ' + esc(summary.helper || 'not tested')
             + ' · Vision: ' + esc(summary.vision === 'not_supported' ? 'no image input' : vision.verdict === 'not_tested' || vision.rate == null ? 'not tested' : (vision.rate * 100).toFixed(1) + '%') + '</div>'

@@ -55,8 +55,12 @@ def main():
              patch.object(suit, "_persist", return_value=True), \
              patch("app.core.agent_loop.get_agent_loop", return_value=SimpleNamespace(status=lambda: {"running": True})), \
              patch("app.models.world.is_world_frozen", return_value=False):
+            # The one unscored request that loads the model before the first case.
+            def is_warmup(messages):
+                return messages[0]["content"] == "Reply with: ok"
             def slow(messages):
-                time.sleep(1)
+                if not is_warmup(messages):
+                    time.sleep(1)
                 return SimpleNamespace(content=answer, usage={"completion_tokens": 12})
             with patch.object(client, "invoke", side_effect=slow):
                 start = time.monotonic()
@@ -66,23 +70,50 @@ def main():
             print("[1] Six one-second calls run in under three seconds OK")
             assert run([base], lanes=1)["concurrency"] == 1
             print("[2] Provider max_concurrent caps effective concurrency OK")
+            # A cold model: the first request the server sees takes 1.0 s (the
+            # load), every later one 0.05 s. The load lands in warmup_s (>= 1.0)
+            # and in no case: each of the 3 runs stays under 0.5 s.
+            seen = []
+            def cold(messages):
+                seen.append(messages)
+                time.sleep(1.0 if len(seen) == 1 else .05)
+                return SimpleNamespace(content=answer, finish_reason="stop", usage={"completion_tokens": 12})
+            with patch.object(client, "invoke", side_effect=cold):
+                loaded = run([{**base, "id": str(i)} for i in range(3)], concurrency=1)
+            assert is_warmup(seen[0]) and len(seen) == 4
+            assert loaded["warmup_s"] >= 1.0, loaded["warmup_s"]
+            durations = [r["duration_s"] for c in loaded["checks"] for r in c["runs"]]
+            assert len(durations) == 3 and all(0 < d < .5 for d in durations), durations
+            # A model that never answers the warm-up ends the run before any case.
+            def dead(messages):
+                seen.append(messages)
+                raise TimeoutError("read timed out")
+            seen.clear()
+            with patch.object(client, "invoke", side_effect=dead), \
+                 patch.object(suit, "load_cases", return_value={"cases": [base]}):
+                last = list(suit.iter_suitability_results("fake::demo", settings={}))[-1]
+            assert last["type"] == "error" and len(seen) == 1, last
+            assert last["message"].startswith(
+                "The model did not answer the warm-up request within 900 s"), last["message"]
+            print("[2a] Model load is in warmup_s and in no case duration; a dead warm-up ends the run OK")
             sent = []
             with patch.object(client, "invoke", side_effect=lambda m: sent.append(m) or SimpleNamespace(
                     content=answer, finish_reason="stop", usage={"completion_tokens": 12})):
                 done = run([base, {**base, "id": "log_x", "reviewed": False}])
-            assert len(sent) == 1 and [c["id"] for c in done["checks"]] == [base["id"]], done["checks"]
+            assert len([m for m in sent if not is_warmup(m)]) == 1 and len(sent) == 2 and [c["id"] for c in done["checks"]] == [base["id"]], done["checks"]
             print("[2b] Unreviewed log candidate is not sent OK")
             # Repetitions of a single case can occupy all three workers.
             barrier = threading.Barrier(3)
             def repeated(messages):
-                barrier.wait(timeout=2)
+                if not is_warmup(messages):
+                    barrier.wait(timeout=2)
                 return SimpleNamespace(content=answer)
             with patch.object(client, "invoke", side_effect=repeated):
                 assert run([{**base, "repeats": 3}])["score"] == "1/1"
             # A single invented tool invalidates the zero-invention requirement.
             answers = iter([answer, answer, '<tool name="Invented">{}</tool>'])
             with patch.object(client, "invoke", side_effect=lambda messages:
-                              SimpleNamespace(content=next(answers))):
+                              SimpleNamespace(content=answer if is_warmup(messages) else next(answers))):
                 invented = run([{**base, "repeats": 3}], lanes=1)
                 assert invented["hallucinations"] == 1 and invented["verdict"] == "no — tools"
             # Pure summary input fixes latencies without faking the runner clock.
@@ -135,7 +166,8 @@ def main():
                       "system": "system", "user": "describe", "image": str(image), "repeats": 1}
             sent = []
             def capture(messages):
-                sent.append(messages)
+                if not is_warmup(messages):
+                    sent.append(messages)
                 return SimpleNamespace(content="A person is here.")
             with patch.object(client, "invoke", side_effect=capture):
                 result = run([vision, {**vision, "id": "missing", "image": str(image) + ".missing"}])

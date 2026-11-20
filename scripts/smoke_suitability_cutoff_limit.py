@@ -157,7 +157,7 @@ def main():
     try:
         caps.invalidate_cache()
         summary, sent = run(suit, 0)
-        assert sent == [1200, 1200], sent
+        assert sent == [16, 1200, 1200], sent  # 16 = the unscored warm-up request
         cut = next(c for c in summary["checks"] if c["id"] == "cut")
         assert cut["runs"][0]["max_tokens_sent"] == 1200
         assert cut["ok"] is False and cut["detail"] == "truncated (finish_reason=length)"
@@ -167,7 +167,7 @@ def main():
         assert stored["truncated_limits"] == [1200]
         print("[A] max_tokens 1200 reaches the wire, is recorded, and a cut-off run is saved OK")
         summary, sent = run(suit, 300)
-        assert sent == [1200, 1200, 300, 1200], sent
+        assert sent == [16, 1200, 1200, 300, 1200], sent
         cut = next(c for c in summary["checks"] if c["id"] == "cut")
         staged = cut["stages"][-1]
         assert staged["budget"] == 300 and staged["budget_hits"] == 1, cut["stages"]

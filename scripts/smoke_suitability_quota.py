@@ -9,7 +9,8 @@ Hand expectations for the capability test against a provider with request
 limits (fake provider, no requests, temporary storage):
 - max_parallel_llm=1 caps a 3-parallel test to concurrency 1 (peak 1);
   max_parallel_llm=0 leaves it at 3.
-- A quota of 2 requests per 1 s window and 2 cases x 3 repeats = 6 sends:
+- A quota of 2 requests per 1 s window and 2 cases x 3 repeats = 6 sends,
+  plus the one unscored warm-up request that loads the model = 7:
   the test waits instead of failing, so every case is ok and none is infra;
   no 1 s span holds more than 2 sends, so the run takes >= 2.0 s
   (sends at ~0, ~1, ~2 s); each recorded duration stays the 0.05 s answer
@@ -109,14 +110,14 @@ def section_quota():
     summary, _, sends, elapsed = run(quota=ProviderQuota(2, 1))
     checks = summary['checks']
     assert len(checks) == 2 and all(c['ok'] is True and not c['infra'] for c in checks), checks
-    assert len(sends) == 6, sends
+    assert len(sends) == 7, sends
     for s in sends:
         assert sum(s <= t < s + 1.0 for t in sends) <= 2, sends
     assert elapsed >= 2.0, elapsed
     assert all(0 < c['duration_s'] < 0.5 for c in checks), [c['duration_s'] for c in checks]
 
     summary, _, sends, _ = run(quota=ProviderQuota(0, 60), fail_first_429=True)
-    assert len(sends) == 7, sends
+    assert len(sends) == 8, sends
     assert all(c['ok'] is True and not c['infra'] for c in summary['checks']), summary['checks']
 
     full = ProviderQuota(1, 60)

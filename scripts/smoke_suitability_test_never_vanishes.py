@@ -78,6 +78,8 @@ from app.core.llm_client import LLMClient  # noqa: E402
 
 release = threading.Event()
 requests_seen = []
+# The one unscored request that loads the model before the first case.
+WARMUP = "Reply with: ok"
 
 
 class Stub(BaseHTTPRequestHandler):
@@ -175,7 +177,7 @@ def main():
         caps.invalidate_cache()
         # [A]
         events, sent, elapsed = run(suit, ["FAST", "CUT", "HANG"], 6)
-        assert sent == ["FAST", "CUT", "HANG"], sent
+        assert sent == [WARMUP, "FAST", "CUT", "HANG"], sent
         summary = events[-1]["summary"]
         assert events[-1]["type"] == "done"
         checks = {c["id"]: c for c in summary["checks"]}
@@ -190,7 +192,7 @@ def main():
 
         # [B]
         events, sent, elapsed = run(suit, ["HANG1", "HANG2", "HANG3", "FAST"], 8)
-        assert sent == ["HANG1", "HANG2"], sent
+        assert sent == [WARMUP, "HANG1", "HANG2"], sent
         last = events[-1]
         assert last["type"] == "error", last
         assert last["message"].startswith(

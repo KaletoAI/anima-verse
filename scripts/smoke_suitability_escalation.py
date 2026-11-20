@@ -6,7 +6,8 @@ Z 0/300/600/900; verification must call Y three more times at 600. Seven
 reasoning characters estimate two tokens. No reasoning stops after 300.
 A refused continuation never changes the mode: with every budgeted request
 refused, X and Z still escalate 300/600/900 (max budget in the calls 900),
-9 off + 2 cases x 3 stages x 3 repeats = 27 requests, 18 of them refused,
+9 off + 2 cases x 3 stages x 3 repeats = 27 requests (28 calls with the one
+unscored warm-up request that loads the model), 18 of them refused,
 the group is not "stopped" and the run is marked invalid_reason
 "continuation_failed". Three image request rejections
 make vision unsupported, excluded from the score and verdict. A winning
@@ -99,7 +100,7 @@ with tempfile.TemporaryDirectory() as tmp:
     summary = run(cases)
     checks = {c['id']: c for c in summary['checks']}
     assert summary['thinking']['helpers']['stopped'] is None
-    assert max(b for _, b in calls) == 900 and len(calls) == 27
+    assert max(b for _, b in calls) == 900 and len(calls) == 28
     assert [s['budget'] for s in checks['X']['stages']] == [0, 300, 600, 900]
     assert [s['continuation_failures'] for s in checks['X']['stages']] == [0, 3, 3, 3]
     assert checks['X']['ok'] is False and 'continuation_failed: HTTP 400' in checks['X']['detail']

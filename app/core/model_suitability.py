@@ -26,6 +26,10 @@ eligible case ("not tested — <group>"), else "yes". Individual dimensions
 and every repetition remain visible even when an aggregate says mixed. Historical
 records are archived unchanged before a future result replaces the latest view.
 
+Speed: one unscored warm-up request loads the model before the first case, so
+no answer time contains a model load (summary "warmup_s"); a warm-up without an
+answer within model_test.warmup_timeout_seconds ends the run as an error.
+
 Thinking: every run starts from the same state — the test's clients share one
 fresh server memory (LLMClient.isolate_server_state) and neither read nor write
 what the game or an earlier test learned about the model name. A continuation of
@@ -601,6 +605,21 @@ def iter_suitability_results(
             return "thinking_ineffective"
         return None
 
+    # The model is loaded BEFORE the first timed request: on a swapping
+    # server (llama-swap) the first requests of a cold model used to carry the
+    # load time in their answer time — in tok/s, in the case durations, and
+    # as "no answer within N s" when loading outlasted the case timeout.
+    yield {"type": "progress", "phase": "loading the model (not timed)"}
+    warmup = _warm_up(inst, quota, cancel_event, server_state, settings)
+    if warmup is None:
+        return
+    if warmup.get("timed_out"):
+        yield {"type": "error", "checks": [], "message": (
+            f"The model did not answer the warm-up request within {warmup['timeout_s']:g} s "
+            "(still loading, or the provider has stopped answering). Nothing was tested or saved; "
+            "the limit is model_test.warmup_timeout_seconds.")}
+        return
+
     results = []
     off = {}
     stage_records = {}
@@ -746,6 +765,10 @@ def iter_suitability_results(
         summary["infra_runs"] = len(infra_errors)
         summary["infra_examples"] = list(dict.fromkeys(infra_errors))[:3]
         summary["timed_out_runs"] = sum(bool(run.get("timed_out")) for run, _ in all_runs)
+        # The unscored request that loaded the model; in no speed figure.
+        summary["warmup_s"] = warmup["duration_s"]
+        if warmup.get("error"):
+            summary["warmup_error"] = warmup["error"]
         # A refused continuation (HTTP 400/422) means thinking could not be
         # enforced: what the run measured is the server, not the model.
         refused = [str(run["continuation_error"]) for run, _ in all_runs if run.get("continuation_error")]
@@ -766,6 +789,69 @@ def iter_suitability_results(
                        fixture_version=data.get("fixture_version") or fixture_version(cases))
         summary["saved"] = _persist(model_full, summary, results)
         yield {"type": "done", "summary": summary}
+
+
+_DEFAULT_WARMUP_TIMEOUT_S = 900
+
+
+def _warmup_timeout_seconds() -> float:
+    """model_test.warmup_timeout_seconds: how long the model may take to load."""
+    from app.core import config
+    value = config.get("model_test.warmup_timeout_seconds", _DEFAULT_WARMUP_TIMEOUT_S)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not value > 0:
+        return float(_DEFAULT_WARMUP_TIMEOUT_S)
+    return float(value)
+
+
+def _warm_up(inst, quota, cancel_event, server_state: set, settings: dict) -> Optional[Dict[str, Any]]:
+    """One unscored request that makes the server load the model.
+
+    Returns its duration (never part of a speed figure), with ``timed_out``
+    when no answer came within the warm-up limit and ``error`` for any other
+    failure — that one does not end the run: the cases then show what the
+    provider answers. None = the run was cancelled while waiting.
+    """
+    timeout = _warmup_timeout_seconds()
+    t0 = time.monotonic()
+    try:
+        # The run's own request settings (chat template, extra parameters): a
+        # server must accept the warm-up exactly as it accepts the cases.
+        client = inst.create_llm(**{
+            **{k: v for k, v in settings.items() if k not in ("temperature", "thinking_max")},
+            "temperature": 0.0, "thinking": False, "thinking_budget": None,
+            "max_tokens": 16, "request_timeout": timeout})
+        isolate = getattr(client, "isolate_server_state", None)
+        if isolate is not None:
+            isolate(server_state)
+        remote_limits = 0
+        while True:
+            # A full quota or a remote 429 is waited out as for a case: a
+            # warm-up that gave up there would leave the model unloaded.
+            _wait_for_quota(quota, cancel_event)
+            try:
+                with provider_slot(inst, cancel_event):
+                    t0 = time.monotonic()
+                    client.invoke([{"role": "user", "content": "Reply with: ok"}])
+                break
+            except Exception as exc:
+                from app.core.provider_quota import QuotaUnavailable, rate_limit_error
+                cause = rate_limit_error(exc) if quota is not None else None
+                if cause is None:
+                    raise
+                if not isinstance(cause, QuotaUnavailable):
+                    remote_limits += 1
+                    if remote_limits > _MAX_REMOTE_RATE_LIMITS:
+                        raise
+        return {"duration_s": round(time.monotonic() - t0, 2)}
+    except _QuotaWaitCancelled:
+        return None
+    except Exception as exc:
+        duration = round(time.monotonic() - t0, 2)
+        if _answer_timeout(exc):
+            return {"duration_s": duration, "timed_out": True, "timeout_s": timeout}
+        logger.warning("Model test warm-up for %s failed (the cases run anyway): %s",
+                       getattr(inst, "model", "?"), exc)
+        return {"duration_s": duration, "error": str(exc)[:160]}
 
 
 _MAX_REMOTE_RATE_LIMITS = 5
@@ -1086,7 +1172,7 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
             "speed": summary.get("speed"),
             **{key: summary.get(key) for key in ("settings", "concurrency", "live_play", "projected_turn_s", "speed_ok",
                                                       "max_turn_seconds", "vision", "curated_only", "total_runs", "truncated_runs",
-                                                      "truncated_limits", "truncated_cases", "failed_by_truncation", "thinking_runs", "thinking_leak_runs", "budget_hits", "budget_overruns", "continuation_failures", "reasoning_tokens_median", "reasoning_tokens_estimated", "thinking")},
+                                                      "truncated_limits", "truncated_cases", "failed_by_truncation", "thinking_runs", "thinking_leak_runs", "budget_hits", "budget_overruns", "continuation_failures", "reasoning_tokens_median", "reasoning_tokens_estimated", "thinking", "warmup_s")},
             "checks": stored_checks,
         },
     }

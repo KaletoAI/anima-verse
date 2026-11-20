@@ -46,7 +46,7 @@ def main():
         with patch.object(caps, '_caps_path', return_value=caps_path), patch.object(caps, '_outputs_path', return_value=outs_path), patch.object(suit, 'load_cases', return_value=data), patch('app.core.llm_router.create_llm_instance', return_value=fake):
             with patch.object(fake_client, 'invoke', wraps=fake_client.invoke) as invoke:
                 events = list(suit.iter_suitability_results('fake::demo', settings={}))
-                assert invoke.call_count == 3
+                assert invoke.call_count == 4  # 3 repeats + the unscored warm-up request
             done = events[-1]['summary']
             assert done['saved'] and done['score'] == '1/1' and done['helper'] == '0/0'
             shared = json.loads(caps_path.read_text())

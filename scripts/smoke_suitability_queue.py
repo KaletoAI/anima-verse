@@ -82,6 +82,7 @@ def main():
             cancel = threading.Event()
             events = suit.iter_suitability_results('A::one', settings={}, cancel_event=cancel)
             assert next(events)['type'] == 'start'
+            assert next(events) == {'type': 'progress', 'phase': 'loading the model (not timed)'}
             # The off pass reports progress before the group's final check.
             assert next(events) == {'type': 'progress', 'done': 1, 'phase': 'without thinking'}
             assert next(events)['type'] == 'check'

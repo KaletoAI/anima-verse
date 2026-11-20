@@ -11,12 +11,13 @@ request with a thought cut at the budget, and the continuation per run:
 
 Run A (continuation refused with a 400 naming continue_final_message), started
 with the PROCESS memory already saying "thinking off" for this model:
-  requests = 1 off + 1 at 300 = 2; server calls = 1 + 2 (cut + refused) = 3 —
-  no third "plain" call, so the mode never changed. The check fails with
+  requests = 1 off + 1 at 300 = 2; server calls = 1 warm-up (thinking off,
+  unscored) + 1 + 2 (cut + refused) = 4 — no further "plain" call, so the
+  mode never changed. The check fails with
   "continuation_failed" and the server's body; the run is not saved: no
   capability file entry, saved False, reason names continuation_failed and
   the body. The body is in a WARNING. The process memory is untouched.
-Run B right after, same process, continuation answers: 3 server calls again,
+Run B right after, same process, continuation answers: 4 server calls again,
   the case passes at 300, thinking_runs 1, recommended thinking on / 300,
   saved as 1/1, no history entry (A never became a record).
 Run C = A again: B's record 1/1 stays, still no history entry.
@@ -106,7 +107,7 @@ with tempfile.TemporaryDirectory() as tmp:
     llm._NO_CHAT_TEMPLATE_KWARGS.discard(key)
 
     a = run(refuse=True)
-    assert server['calls'] == ['off', 'budget', 'continue'], server['calls']
+    assert server['calls'] == ['off', 'off', 'budget', 'continue'], server['calls']
     assert a['requests'] == 2 and a['continuation_refused_runs'] == 1
     assert a['invalid_reason'] == 'continuation_failed' and a['saved'] is False
     assert 'continuation_failed' in a['not_saved_reason'] and BODY in a['not_saved_reason']
@@ -118,8 +119,8 @@ with tempfile.TemporaryDirectory() as tmp:
     assert llm._NO_CONTINUE == {key: poison} and not llm._NO_CONTINUE_STRIKES
 
     b = run(refuse=False)
-    assert server['calls'] == ['off', 'budget', 'continue'], server['calls']
-    assert b['saved'] is True and b['score'] == '1/1' and 'invalid_reason' not in b
+    assert server['calls'] == ['off', 'off', 'budget', 'continue'], server['calls']
+    assert b['saved'] is True and b['warmup_s'] >= 0 and b['score'] == '1/1' and 'invalid_reason' not in b
     assert b['thinking_runs'] == 1 and b['budget_hits'] == 1 and b['continuation_failures'] == 0
     assert b['thinking']['helpers']['recommended'] == dict(thinking=True, thinking_budget=300)
     assert b['thinking']['helpers']['stopped'] is None

@@ -114,7 +114,12 @@ with tempfile.TemporaryDirectory() as directory:
         assert summary['speed']['vision']['reasoning_tokens_estimated'] is True
         assert all(run['budget_hit'] is False
                    for event in events if event['type'] == 'check' for run in event['runs'])
-        assert sorted(invoked) == [('helpers', .5), ('tools', .1), ('vision', .3)], invoked
+        # One unscored warm-up request (16 tokens, temperature 0) loads the model first.
+        assert sorted(invoked) == [('Reply with: ok', 0.0), ('helpers', .5), ('tools', .1), ('vision', .3)], invoked
+        assert invoked[0] == ('Reply with: ok', 0.0) and len(clients) == 4
+        warm = [c for c in clients if c['max_tokens'] == 16]
+        assert len(warm) == 1 and warm[0]['thinking'] is False and warm[0]['chat_template'] == 'template'
+        clients[:] = [c for c in clients if c['max_tokens'] != 16]
         assert len(clients) == 3 and all(c['temperature'] != .9 for c in clients)
         assert all(c['max_tokens'] == 900 and c['repetition_penalty'] == 1.03
                    and c['chat_template'] == 'template'
