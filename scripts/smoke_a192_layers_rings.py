@@ -7,7 +7,7 @@ Hand-derived:
 [1] ``garment_set.layer_order`` (slot stacks ``LAYER_STACKS``: underwear_top < top < outer, underwear_bottom < legs <
     bottom < outer). Items: jacket J (own mesh, slots outer, covers underwear_top), T-shirt T (template, slots top),
     jeans B (own mesh, bottom, covers underwear_bottom), briefs U (shell, underwear_bottom), stockings S (shell,
-    legs), pumps P (own mesh, feet = footwear, takes no part), painted scarf N (neck, painted: takes no part).
+    legs), pumps P (own mesh, feet = footwear, takes no part), scarf N (neck, accessory: takes no part).
     * J's covers do not name ``top``; the stack does -> J over T. J over B (outer over bottom). B over U (covers AND
       stack) and over S (stack: bottom over legs). S over U (legs over underwear_bottom). T over nothing.
     * under: J = {B, S, T, U} (through B), B = {S, U}, S = {U}; order: every piece after the pieces under it.
@@ -67,7 +67,7 @@ def piece(name, slots, mode, covers=()):
 ITEMS = {"J": piece("J", ["outer"], "own_mesh", ["underwear_top"]), "T": piece("T", ["top"], "template"),
          "B": piece("B", ["bottom"], "own_mesh", ["underwear_bottom"]), "U": piece("U", ["underwear_bottom"], "shell"),
          "S": piece("S", ["legs"], "shell"), "P": piece("P", ["feet"], "own_mesh"),
-         "N": piece("N", ["neck"], "painted")}
+         "N": piece("N", ["neck"], "accessory")}
 inventory.get_item = lambda item_id, *a, **k: ITEMS.get(str(item_id))
 body_slots.piece_slots_for_character = lambda *a, **k: list(inventory.VALID_PIECE_SLOTS)
 

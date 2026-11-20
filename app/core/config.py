@@ -1524,7 +1524,7 @@ DEAD_CONFIG_FIELDS: dict = {
 # Dead names that no section owns any more and that only survive at the TOP
 # LEVEL of older world files (worlds/hotopia predates the sectioning). Item
 # image size runs through ui.downscale_item_max_dim instead; "inventory" is no
-# schema section, so a section variant is not swept here. "body_retexture" is
+# schema section, so a section variant is not swept here. body_retexture is
 # the whole section of the painted-body worker, removed with the painted mode
 # (A224, plan docs/superpowers/plans/2026-11-19-remove-painted-mode.md).
 DEAD_TOPLEVEL_ONLY_FIELDS: tuple = ("item_image_width", "item_image_height", "body_retexture")

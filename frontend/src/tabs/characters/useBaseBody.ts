@@ -71,8 +71,6 @@ export interface BaseOutfitInfo {
    *  edit turned the figure around, own-mesh pieces left in the body texture
    *  of a model built before A224 (server English text). */
   warnings: string[]
-  /** The retexture worker's proof (None for an undressed base copy). */
-  proof: Record<string, unknown> | null
   url: string | null
 }
 

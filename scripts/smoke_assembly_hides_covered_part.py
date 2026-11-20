@@ -53,7 +53,7 @@ registry.packages = lambda: [SimpleNamespace(body_slots=[slot])]
 ITEMS = {
     "trousers": {"outfit_piece": {"slots": ["bottom"], "covers": [], "mesh_mode": "own_mesh"}},
     "shirt": {"outfit_piece": {"slots": ["top"], "covers": ["underwear_top"], "mesh_mode": "template"}},
-    "dress": {"outfit_piece": {"slots": ["top"], "covers": ["underwear_bottom"], "mesh_mode": "painted"}},
+    "dress": {"outfit_piece": {"slots": ["top"], "covers": ["underwear_bottom"], "mesh_mode": "in_body"}},
     "under": {"outfit_piece": {"slots": ["underwear_bottom"], "covers": [], "mesh_mode": "in_body"}},
 }
 outfit_renderer._get_item = lambda iid: ITEMS.get(iid)

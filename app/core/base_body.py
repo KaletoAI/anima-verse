@@ -2156,14 +2156,12 @@ DRESS_VIEW = {
               "frame; keep it a side profile view, do not turn the figure toward the camera."),
 }
 
-#: The views every outfit dresses and hands to the body-retexture worker.
+#: The views every outfit dresses.
 CORE_DRESSED_VIEWS = ("front", "back")
 #: The side views an outfit dresses too when the world setting
 #: ``base_body.dressed_side_views`` is on (``dressed_views``). Off by default:
-#: unmasked side views put cloth on the arm in profile (measured
-#: 2026-11-09); the worker now skips the arm in them (``--side-arm-margin``,
-#: plan-side-views-arm-mask.md in the worker repo), but the hips still land
-#: slightly below front+back alone. Off, the base body's left/right views
+#: dressed side views put cloth on the arm in profile (measured
+#: 2026-11-09). Off, the base body's left/right views
 #: stay mesh inputs of the base model only.
 SIDE_DRESSED_VIEWS = ("left", "right")
 #: Views made in two steps (a draft from the dressed front, then the CPU
@@ -4405,7 +4403,7 @@ class OutfitError(RuntimeError):
 _BASE_ONLY_META = ("base", "created_at", "signature", "source", "lod_error", "diagnosis", "measured",
                    "rig_error", "source_image", "source_image_sha256", "view_images",
                    "view_images_sha256", "job_id", "source_filename", "pieces", "items",
-                   "mesh_variant", "refined", "retexture_proof", "base_signature",
+                   "mesh_variant", "refined", "base_signature",
                    "base_model_sha256", "dressed", "covered_variant", "base_variant",
                    "mesh_token", "mesh_items", "garment_warnings", "texture_signature", "texture_reused")
 
@@ -4668,7 +4666,6 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
             raise OutfitError(DRESSED_IMAGES_MISSING)
         front_path = dressed_image(character_name, "front", signature, bsig, fig=fig)
         manifest = model3d._ref_manifest(front_path)
-        proof: Optional[Dict[str, Any]] = None
         guard: Dict[str, Any] = {}
         warnings: List[str] = []
         if stored is not None:
@@ -4703,7 +4700,7 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
                 "base_model_sha256": hashlib.sha256(source["rigged"]).hexdigest(),
                 "source_model_sha256": _source_sha(source, variant), "base_variant": variant,
                 "covered_missing": COVERED_MISSING in warnings, "dressed": False,
-                "views": view_shas, "used_views": [v for v in BASE_VIEWS if v in names], "retexture_proof": None,
+                "views": view_shas, "used_views": [v for v in BASE_VIEWS if v in names],
                 "view_guard": guard, "view_warnings": warnings,
                 "source_state": deepcopy(source_state), "source_blender": deepcopy(source_blender),
                 "body_sha256": hashlib.sha256(outfit).hexdigest()}
@@ -4723,7 +4720,7 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
                      "character": character_name, "format": "glb", "rig": "mixamo",
                      "base_signature": bsig,
                      "base_model_sha256": hashlib.sha256(base["rigged"]).hexdigest(),
-                     "retexture_proof": proof, "dressed": False,
+                     "dressed": False,
                      "source_image": names["front"],
                      "view_images": {v: n for v, n in names.items() if v != "front"},
                      "view_guard": guard, "view_warnings": warnings,
@@ -4765,7 +4762,7 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
         model3d.request_lod(character_name, path)
         _assemble_garments(character_name, signature, path, meta)
         logger.info("Outfit model %s (%s on %s, texture %s)", character_name, signature, on, tsig or "-")
-        return {"ok": True, "cached": False, "path": str(path), "filename": path.name, "proof": proof}
+        return {"ok": True, "cached": False, "path": str(path), "filename": path.name}
     except (OutfitError, ValueError) as e:
         error = str(e) or type(e).__name__
         logger.warning("Outfit model %s (%s) failed: %s", character_name, signature, error)
@@ -5380,7 +5377,7 @@ def _build_on_shape(character_name: str, signature: str, *, fig, base: Dict[str,
                  "base_variant": variant, "covered_missing": False, "character": character_name,
                  "format": "glb", "rig": "mixamo", "base_signature": bsig,
                  "base_model_sha256": hashlib.sha256(base["rigged"]).hexdigest(),
-                 "retexture_proof": None, "dressed": True, "source_image": names.get("front") or front.name,
+                 "dressed": True, "source_image": names.get("front") or front.name,
                  "view_images": {v: n for v, n in names.items() if v != "front"},
                  "view_guard": _dict_of(record.get("view_guard")),
                  "view_warnings": [w for w in record.get("view_warnings") or [] if isinstance(w, str)],
@@ -5409,7 +5406,7 @@ def _build_on_shape(character_name: str, signature: str, *, fig, base: Dict[str,
     model3d.request_lod(character_name, path)
     _assemble_garments(character_name, signature, path, meta)
     logger.info("Outfit model %s (%s on shape %s)", character_name, signature, fig.shape)
-    return {"ok": True, "cached": False, "path": str(path), "filename": path.name, "proof": None,
+    return {"ok": True, "cached": False, "path": str(path), "filename": path.name,
             "body_id": fig.shape}
 
 
@@ -5438,7 +5435,7 @@ def _mesh_warnings(character_name: str, meta: Dict[str, Any], base_sha: str) -> 
 
 def outfit_info(character_name: str, *, base_sig: Optional[str] = None,
                 signature: Optional[str] = None) -> Dict[str, Any]:
-    """``{signature, status, error, proof, url}`` of an outfit model on the
+    """``{signature, status, error, stale_reason, warnings, url}`` of an outfit model on the
     pipeline (default: the CURRENT outfit). ``status``: ``running`` (views,
     body or model in progress), ``failed`` (the last run's error),
     ``stale`` (the stored model was built on an older base body — or before
@@ -5450,8 +5447,7 @@ def outfit_info(character_name: str, *, base_sig: Optional[str] = None,
     ``missing``. ``warnings``: the stored model's view-guard warnings
     (dressed views left out because they turned around) and its own-mesh
     warnings (``_mesh_warnings``), then the dressed images' own
-    (``dressed_warnings``). ``proof``: the worker's proof of the stored
-    model (None for a copy)."""
+    (``dressed_warnings``)."""
     from app.core import model3d
     from app.core.model_refs import current_outfit_state
     if signature is None:
@@ -5484,7 +5480,6 @@ def outfit_info(character_name: str, *, base_sig: Optional[str] = None,
     return {"signature": signature, "status": status, "error": error, "stale_reason": reason,
             "warnings": (list(meta.get("view_warnings") or []) + _mesh_warnings(character_name, meta, current[1])
                          if path else []) + dressed_warnings(character_name, signature, base_sig),
-            "proof": meta.get("retexture_proof") if path else None,
             "url": model3d.signature_model_url(character_name, signature) if status == "ready" else None}
 
 

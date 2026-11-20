@@ -32,7 +32,9 @@ nothing signs a JWT), plus the seven of the instance-config cleanup
 files and ``rebuild_llm_system_template`` (schema field + env bridge, read by
 nobody), plus ``server.storage_dir`` (the world is chosen by ``paths.init`` /
 ``STORAGE_DIR`` BEFORE any config is read; the bridged value selected
-nothing). Written out by hand here, so the constant in app/core/config.py
+nothing), plus ``base_body.side_arm_margin`` (A224: the side-view arm mask
+of the painted-body worker, removed with the painted mode) — 21 in all.
+Written out by hand here, so the constant in app/core/config.py
 cannot quietly grow or shrink without this file disagreeing:
 
     image_generation : comfy_default_workflow, comfyui_workflows,
@@ -46,12 +48,15 @@ cannot quietly grow or shrink without this file disagreeing:
     chat             : auto_wake_stamina
     random_events    : event_image_denoise_strength
     server           : jwt_secret, storage_dir
+    base_body        : side_arm_margin
 
 The ``inventory`` entry (item_image_width/height) is gone from that table:
 ``inventory`` is no schema section at all, so from the instance layer on it
 is dropped as an unknown root. The two names stay known at the TOP LEVEL
 only (``DEAD_TOPLEVEL_ONLY_FIELDS``) — worlds/hotopia still carries them
-there — and test 5 is their hand case.
+there — and test 5 is their hand case. The third top-level-only name is
+``body_retexture``, the whole section of the painted-body worker (A224);
+no schema section owns it any more, so it is dead at the top level.
 
 Test 1b is the "no reader" half for every name of the table: no string
 literal ``"<name>"`` / ``"<dotted.path>.<name>"`` and no attribute access
@@ -74,7 +79,9 @@ writes the same 99 under ``thoughts`` and sees it arrive.
 Beside the flat table there is a NESTED strip: ``image_generation.use_cases``
 entries whose render occasion is gone — ``map`` and ``mapfit``, removed with
 the map-icon teardown, and ``outfit_fit``, the style of the base-body back/side
-model fit that became the CPU composite (01bcf0155, Task 11g). They sit one level deeper than the table above, so the
+model fit that became the CPU composite (01bcf0155, Task 11g), and
+``outfit_reference``, an outfit's full-body reference, removed with the
+painted mode it served (A224). They sit one level deeper than the table above, so the
 flat sweep walks past them; test 4c is their hand case, and the world fixture
 of tests 8/9 carries both so the end-to-end path proves it too.
 
@@ -176,14 +183,15 @@ EXPECTED_DEAD = {
     "chat": {"auto_wake_stamina"},
     "random_events": {"event_image_denoise_strength"},
     "server": {"jwt_secret", "storage_dir"},
+    "base_body": {"side_arm_margin"},
 }
 
 # Names that are dead at the TOP LEVEL only (no section owns them any more).
-EXPECTED_DEAD_TOPLEVEL_ONLY = {"item_image_width", "item_image_height"}
-EXPECTED_TOTAL = 20
+EXPECTED_DEAD_TOPLEVEL_ONLY = {"item_image_width", "item_image_height", "body_retexture"}
+EXPECTED_TOTAL = 21
 
 # The nested strip's table, by hand: use-case entries with no render occasion.
-EXPECTED_DEAD_USE_CASES = {"map", "mapfit", "outfit_fit"}
+EXPECTED_DEAD_USE_CASES = {"map", "mapfit", "outfit_fit", "outfit_reference"}
 
 # Living neighbours that must survive the strip untouched.
 LIVING = {
@@ -196,6 +204,7 @@ LIVING = {
     "random_events": {"enabled": True},
     "ui": {"downscale_item_max_dim": 768},                  # image_postprocess.py
     "server": {"log_level": "INFO"},
+    "base_body": {"skin_detail_step": True},                # base_skin.py
 }
 # image_analysis_prompt is the living sibling of the dead rebuild template.
 LIVING["image_generation"]["image_analysis_prompt"] = "describe it"
@@ -272,7 +281,7 @@ def readers_of(name, corpus):
 
 
 def build_fixture() -> dict:
-    """A world config carrying all 20 dead fields plus living neighbours."""
+    """A world config carrying all 21 dead fields plus living neighbours."""
     cfg = copy.deepcopy(LIVING)
     dead_values = {
         "comfy_default_workflow": "flux.json",
@@ -295,6 +304,7 @@ def build_fixture() -> dict:
         "tpose_view_left": False,
         "tpose_view_right": False,
         "rebuild_llm_system_template": "You are an image prompt enhancer.",
+        "side_arm_margin": 0.02,
     }
     for section, keys in EXPECTED_DEAD.items():
         for key in keys:
@@ -322,7 +332,7 @@ def main():
     check("inventory" not in cfgmod.DEAD_CONFIG_FIELDS,
           "no inventory entry (no schema section, dropped as unknown root)")
     check(set(cfgmod.DEAD_USE_CASES) == EXPECTED_DEAD_USE_CASES,
-          f"DEAD_USE_CASES == map + mapfit + outfit_fit (got {set(cfgmod.DEAD_USE_CASES)})")
+          f"DEAD_USE_CASES == map + mapfit + outfit_fit + outfit_reference (got {set(cfgmod.DEAD_USE_CASES)})")
     check(not (EXPECTED_DEAD_USE_CASES & set(cfgmod._DEFAULT_IMAGE_USE_CASES)),
           "neither dead use case is a built-in default any more")
 
@@ -392,18 +402,19 @@ def main():
 
         print("5) top-level strays (worlds older than the sectioning)")
         check(set(cfgmod.DEAD_TOPLEVEL_ONLY_FIELDS) == EXPECTED_DEAD_TOPLEVEL_ONLY,
-              "DEAD_TOPLEVEL_ONLY_FIELDS == the two item sizes")
+              "DEAD_TOPLEVEL_ONLY_FIELDS == the two item sizes + body_retexture")
         check(set(cfgmod.DEAD_TOPLEVEL_FIELDS)
               == ({k for keys in EXPECTED_DEAD.values() for k in keys}
                   | EXPECTED_DEAD_TOPLEVEL_ONLY),
               f"DEAD_TOPLEVEL_FIELDS == the {EXPECTED_TOTAL} names flat + the two "
-              f"item sizes")
+              f"item sizes + body_retexture")
         # worlds/hotopia looks exactly like this: the two item sizes sit at
         # the top level. llm_task_state is the one LIVING root key that is no
         # schema section (config_scope.EXTRA_ROOTS, read by llm_task_state.py).
         old = {
             "item_image_width": 256,
             "item_image_height": 256,
+            "body_retexture": {"enabled": True},
             "storage_dir": "./storage",
             "llm_task_state": {"disabled_tasks": ["x"]},
             "server": {"storage_dir": "./storage", "log_level": "DEBUG"},
@@ -414,6 +425,8 @@ def main():
               "returns True — the top-level strays count as a change")
         check("item_image_width" not in old and "item_image_height" not in old,
               "both top-level item sizes are gone")
+        check("body_retexture" not in old,
+              "the painted-body worker's top-level section is gone (A224)")
         check("storage_dir" not in old and "storage_dir" not in old["server"],
               "storage_dir falls at both depths")
         check("mapfit_backend" not in old["image_generation"],

@@ -2063,6 +2063,10 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
             state = "fit_refused"   # Ruling A23 b: "Fit refused — <reason>" with Re-fit / Regenerate mesh
         elif item_id in delivered.shown_closed:
             state = "building" if running else "pending"   # ruling F13 b: the closed mesh stands in
+        elif item_id in wanted.left_out:
+            # A224 review: a piece with no 3D form (``WornSets.unformed``) is left off BOTH figures — "Left out"
+            # with its reason, never "Ready" although wanted and delivered agree
+            state = "left_out"
         elif want == have:
             state = "ready"
         elif running:

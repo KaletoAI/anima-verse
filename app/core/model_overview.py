@@ -20,16 +20,15 @@ a 3D model or an image, decided here on the server.
      (sidecar ``source: "base_body"``) — base model used, base variant and
      the piece that decided it, the texture body (texture signature,
      reused or made, shared with N outfits), every dressed view with its gates,
-     its composite (Task 11g) and view guard, the body retexture proof, the restored face
-     texels, the extension rig (inherited from the base), the collision
+     its composite (Task 11g) and view guard, the extension rig (inherited from the base), the collision
      capsules (the base's set, ``collision.py``), the own-mesh
      pieces (own garment mesh / in the body texture of a model built before A224 / missing
      until their fit is accepted), the garments assembled
      onto it, measurement and distance mesh. A model of the old
      path gets no list: the 3D tab keeps its own overview for it. On an
      MESHED SHAPE (sidecar ``body_id``, no
-     ``texture_signature``) the texture-body, retexture-proof and
-     face-texel rows give way to one ``outfit_body`` row (body id).
+     ``texture_signature``) the texture-body row gives way to one
+     ``outfit_body`` row (body id).
    - ``outfit_body_steps``: an outfit body ``model3d/<body id>.glb`` (a
      meshed shape) — parent record (shape inputs, views meshed), mesh, face
      cleanup, face retexture, black-eye check, rig, head twist, normalize,
@@ -904,7 +903,7 @@ def outfit_body_steps(meta: Dict[str, Any], *,
 
 
 def _dressed_view_step(view: str, *, used: bool, record: Optional[Dict[str, Any]],
-                       guard: Dict[str, Any], delta_e: Optional[float]) -> Dict[str, Any]:
+                       guard: Dict[str, Any]) -> Dict[str, Any]:
     label = {"front": "Dressed front", "back": "Dressed back", "left": "Dressed left",
              "right": "Dressed right"}.get(view, "Dressed view")
     fit = _dict((record or {}).get("fit_gate"))
@@ -917,8 +916,7 @@ def _dressed_view_step(view: str, *, used: bool, record: Optional[Dict[str, Any]
     # An EMPTY composite (fix round 1): nothing of the outfit shows here — the base view unchanged.
     empty = (record or {}).get("fit") == "composite" and (record or {}).get("composite") == "empty"
     numbers = {"guard_score": score, "noise": _num(_dict(pick.get("noise")).get("score")),
-               "noise_limit": _num(fit.get("noise_limit")), "fit_attempts": len(attempts) or None,
-               "unchanged_delta_e": delta_e}
+               "noise_limit": _num(fit.get("noise_limit")), "fit_attempts": len(attempts) or None}
     if composite:
         numbers.update(composite_iou=_num(composite.get("iou")),
                        composite_coverage=_num(_dict(composite.get("coverage")).get("score")),
@@ -936,8 +934,6 @@ def _dressed_view_step(view: str, *, used: bool, record: Optional[Dict[str, Any]
             parts.append(f"IoU {numbers['composite_iou']:.3f} · coverage {numbers['composite_coverage']:.2f}")
     elif attempts:
         parts.append(f"fit attempt {chosen} of {len(attempts)}")
-    if delta_e is not None:
-        parts.append(f"ΔE {delta_e:.1f}")
     detail = " · ".join(parts)
     if not used:
         return step(f"dressed_{view}", label, WARNING, "turned around — left out of the model"
@@ -947,52 +943,6 @@ def _dressed_view_step(view: str, *, used: bool, record: Optional[Dict[str, Any]
     if guard and not guard.get("ok", True):
         return step(f"dressed_{view}", label, WARNING, detail, numbers)
     return step(f"dressed_{view}", label, DONE, detail, numbers)
-
-
-#: The ``unchanged_delta_e`` of a view in the retexture proof (Lab ΔE between
-#: the registered dressed view and its base view where the edit left it
-#: unchanged) above which the retexture row warns of a poor registration
-#: (finding 2026-11-09: front 2.9, back 5.9).
-POOR_REGISTRATION_DELTA_E = 4.0
-
-
-def _retexture_step(meta: Dict[str, Any], limit: float) -> Dict[str, Any]:
-    proof = meta.get("retexture_proof")
-    if not isinstance(proof, dict):
-        if meta.get("dressed") is False:
-            return step("retexture", "Body retexture", SKIPPED, "Undressed base copy")
-        return step("retexture", "Body retexture", NOT_RECORDED, "No proof recorded")
-    texels = _dict(proof.get("texels"))
-    deltas: Dict[str, Optional[float]] = {}
-    for view, record in _dict(proof.get("views")).items():
-        deltas[view] = _num(_dict(_dict(record).get("dressed_alignment")).get("unchanged_delta_e"))
-    numbers: Dict[str, Any] = {"coverage": _num(texels.get("garment_share_of_exposed")),
-                               "unseen_share": _num(texels.get("unseen_filled_share_of_exposed_garment")),
-                               "unobserved_share": _num(texels.get("unobserved_share_of_exposed"))}
-    for view, value in deltas.items():
-        numbers[f"delta_e_{view}"] = value
-    parts = [f"coverage {_pct(texels.get('garment_share_of_exposed'))}",
-             f"unseen {_pct(texels.get('unseen_filled_share_of_exposed_garment'))}"]
-    parts += [f"ΔE {view} {value:.1f}" for view, value in deltas.items() if value is not None]
-    high = [view for view, value in deltas.items() if value is not None and value > limit]
-    if high:
-        return step("retexture", "Body retexture", WARNING,
-                    " · ".join(parts) + f" · poor registration: {', '.join(high)}", numbers)
-    return step("retexture", "Body retexture", DONE, " · ".join(parts), numbers)
-
-
-def _face_texels_step(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    proof = meta.get("retexture_proof")
-    if not isinstance(proof, dict):
-        return None
-    if "face_texels_restored" not in proof:
-        return step("face_texels", "Face texels restored", NOT_RECORDED, "Not recorded (built before the step)")
-    restored = _num(proof.get("face_texels_restored"))
-    numbers = {"restored": restored, "mask": _num(proof.get("face_mask_texels"))}
-    if proof.get("face_texels_skipped"):
-        return step("face_texels", "Face texels restored", SKIPPED, str(proof["face_texels_skipped"]), numbers)
-    return step("face_texels", "Face texels restored", DONE,
-                f"{int(restored or 0):,} of {int(numbers['mask'] or 0):,} texels", numbers)
 
 
 def _mesh_items_step(meta: Dict[str, Any], names: Dict[str, str],
@@ -1088,7 +1038,7 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
                        deciders: List[str], shown: List[str], dressed_records: Dict[str, Optional[Dict[str, Any]]],
                        garments: List[Dict[str, Any]], tiers: List[str], low_tris: Any = None,
                        low_meta: Optional[Dict[str, Any]] = None,
-                       delta_limit: float = POOR_REGISTRATION_DELTA_E, covered_missing_text: str = "",
+                       covered_missing_text: str = "",
                        item_names: Optional[Dict[str, str]] = None,
                        texture_shared: Optional[int] = None,
                        body_meta: Optional[Dict[str, Any]] = None,
@@ -1114,7 +1064,6 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
     capsules = the collision step ``due``, as on the base model. A copy
     of a meshed shape shows the shape row instead of the texture-body rows."""
     on_body = bool(meta.get("body_id")) and not meta.get("texture_signature")
-    proof = _dict(meta.get("retexture_proof"))
     guards = _dict(meta.get("view_guard"))
     used = {"front"} | set(_dict(meta.get("view_images")))
     views = [v for v in ("front", "back", "left", "right") if v in used or v in guards]
@@ -1124,18 +1073,10 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
     body_row = _outfit_body_step(meta, body_meta) if on_body else _texture_body_step(meta, texture_shared)
     if body_row is not None:
         rows.append(body_row)
-    deltas = {v: _num(_dict(_dict(_dict(proof.get("views")).get(v)).get("dressed_alignment")).get("unchanged_delta_e"))
-              for v in views}
     if meta.get("dressed") is not False:
         for v in views:
             rows.append(_dressed_view_step(v, used=v in used, record=dressed_records.get(v),
-                                           guard=_dict(guards.get(v)), delta_e=deltas.get(v)))
-    if not on_body and meta.get("dressed") is not False:
-        # A model painted by the body retexture worker before A224 records its proof; a copy (since A224) has none.
-        rows.append(_retexture_step(meta, delta_limit))
-        face = _face_texels_step(meta)
-        if face is not None:
-            rows.append(face)
+                                           guard=_dict(guards.get(v))))
     rows.append(_rig_step(meta, inherited=True, source="the body shape" if on_body else "the base model"))
     state = _dict(meta.get("extension_rig"))
     base_state = _dict(((body_meta if on_body else base_meta) or {}).get("extension_rig"))

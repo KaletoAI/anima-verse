@@ -15,14 +15,14 @@ Fixture: ``Kira`` (human-roleplay, female, 168 cm, on the base-body pipeline)
 and ``Mira`` (human-roleplay, male, 190 cm, on the pipeline — another base
 signature). Items, inserted through ``app.models.inventory``:
 ``heels`` (slots [feet], mode own_mesh, item image = 64 fixed bytes),
-``dress`` (slots [top], own_mesh), ``boots`` (slots [feet], mode painted),
+``dress`` (slots [top], own_mesh), ``boots`` (slots [feet], mode in_body),
 ``tights`` (slots [feet, legs], own_mesh), ``cloak`` (slots [outer], mode
 in_body — worn only for the mesh mode of [K4]). Kira holds and wears heels +
 dress; Mira holds heels.
 
 [K1] Kind and steps.
      garment_kind_of: heels -> "footwear" (own_mesh, slots exactly [feet]);
-     dress -> "clothing" (own_mesh, no feet); boots -> None (painted);
+     dress -> "clothing" (own_mesh, no feet); boots -> None (in the body);
      tights -> "clothing" (own_mesh, feet among other slots — controller
      ruling 2026-11-10: footwear is a piece worn in feet ALONE).
      OWN_MESH_PIECE_KINDS == ("clothing", "footwear") == GRAFTED_PIECE_KINDS
@@ -213,7 +213,7 @@ def main() -> int:
 
         def piece(name, slots, own_mesh=None):
             op = {"slots": slots, "outfit_types": ["casual"]}
-            op["mesh_mode"] = "own_mesh" if own_mesh else "painted"
+            op["mesh_mode"] = "own_mesh" if own_mesh else "in_body"
             return inventory.add_item(name=name, category="outfit_piece", prompt_fragment=f"plain {name.lower()}",
                                       outfit_piece=op)["id"]
 

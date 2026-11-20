@@ -39,17 +39,18 @@
  *         rebuilds it — cost unknown."; {stale, 1} → "… — 1 hub job."
  *       dressed (outfit) right, followup {copy, 0} → disabled "This view is a copy of the body’s view — mirror the
  *         body’s view instead (Base body tab)." (the server refuses it: model_refs.MIRROR_COPY_REFUSED)
- *       dressed right, {repaint, 0} → "Then the outfit model is due: the Build repaints it on the CPU — no hub job."
  *       dressed right, {no_model, 0} → "No 3D model of this outfit yet — nothing else changes." (not the base text)
  *       dressed right, {model, 3} → "The outfit’s 3D model keeps the old view until it is made again — 3 hub jobs."
  *       mirrored by hand → first line "Mirrored by hand."
  * [3] Rendered ViewRenderTile (the Base body tab's row): with `beside` (the ViewMirrorButton of [2]'s first case)
  *     and `notice` (the wrong line of [1]) the markup holds the "⇋" button with aria-pressed="false" and its title
  *     inside the `ga-view-actions` box after "↻", and the notice text once; without either, no "⇋" and no notice.
- * [4] Rendered FieldModelRefs layout "steps" on the pipeline, left + right on, the right view wrong and mirrored by
- *     hand, the pair the same: two "⇋" buttons (left + right, none on the front view), one aria-pressed="true"
- *     (the right one), the red line "Wrong way" once and the same-pair line once (the left
- *     view); with dressed_source.source "shape" (copies) both buttons are disabled with the copy reason.
+ * [4] Rendered FieldModelRefs layout "steps" off the pipeline (no dressed_source; the follow-up {model, 3} —
+ *     since A224 a dressed view ON the pipeline is always a copy, so an enabled Mirror there no longer exists), left
+ *     + right on, the right view wrong and mirrored by hand, the pair the same: two "⇋" buttons (left + right, none
+ *     on the front view), one aria-pressed="true" (the right one), the red line "Wrong way" once and the same-pair
+ *     line once (the left view); on the pipeline with dressed_source.source "shape" (copies, follow-up {copy, 0})
+ *     both buttons are disabled with the copy reason.
  * [5] de.json carries every new English string of viewFacingModel.ts (FACING_*, MIRROR*, TURN_BACK_TITLE,
  *     FOLLOWUP_TEXT values, DRESSED_FOLLOW, "Turn back") — shared/languages/de.json `translations`.
  * [6] No native dialogs in the new files (window.confirm / alert / prompt).
@@ -163,11 +164,10 @@ check('[2] outfit copy', m.mirrorButton(tile('right', 'ok', 'right'), { kind: 'c
   'This view is a copy of the body’s view — mirror the body’s view instead (Base body tab).');
 const second = (kind, jobs) => m.mirrorButton(tile('right', 'ok', 'right'), { kind, jobs }, 'right', true)
   .title.split('\n')[1];
-check('[2] outfit repaint', second('repaint', 0), 'Then the outfit model is due: the Build repaints it on the CPU — no hub job.');
 check('[2] outfit no model', second('no_model', 0), 'No 3D model of this outfit yet — nothing else changes.');
 check('[2] outfit model', second('model', 3), 'The outfit’s 3D model keeps the old view until it is made again — 3 hub jobs.');
 check('[2] by hand', m.mirrorButton(tile('right', 'ok', 'right', { auto: false, reason: 'manual', at: 'x' }),
-  { kind: 'repaint', jobs: 0 }, 'right', true).title.split('\n')[0], 'Mirrored by hand.');
+  { kind: 'model', jobs: 3 }, 'right', true).title.split('\n')[0], 'Mirrored by hand.');
 
 // [3]
 const wrongTile = tile('right', 'wrong', 'left', null, { kind: 'stale', jobs: 4, dressed: true });
@@ -190,22 +190,23 @@ check('[3] plain: no ⇋, no notice', [plain.includes('⇋'), plain.includes('ga
 // [4]
 const refInfo = (facing) => ({ filename: 'f.png', created_at: '2026-11-15T10:00:00Z', freshness: 'current', facing });
 const refs = (source) => ({
-  signature: 'abc', pipeline: true, auto: { tpose: true }, build: { running: false },
+  signature: 'abc', pipeline: source !== null, auto: { tpose: true }, build: { running: false },
   tpose: { filename: 'front.png', created_at: '2026-11-15T10:00:00Z' },
   views: {
     left: { enabled: true, info: refInfo(tile('left', 'ok', 'left')) },
     right: { enabled: true, info: refInfo(tile('right', 'ok', 'right', { auto: false, reason: 'manual', at: 'x' })) },
   },
-  drafts: {}, dressed_source: { source, shape: 'base1234abcd', jobs: source === 'shape' ? 0 : 1 },
-  facing_pair: { same: true, facing: 'left' }, mirror_followup: { kind: source === 'shape' ? 'copy' : 'repaint', jobs: 0 },
+  drafts: {}, dressed_source: source === null ? null : { source, shape: 'base1234abcd', jobs: 0 },
+  facing_pair: { same: true, facing: 'left' },
+  mirror_followup: source === null ? { kind: 'model', jobs: 3 } : { kind: 'copy', jobs: 0 },
   status: {},
 });
 const html = m.render(m.h(m.FieldModelRefs, { character: 'demo', kinds: ['tpose'], layout: 'steps',
-  initialInfo: refs('edit') }));
+  initialInfo: refs(null) }));
 check('[4] two ⇋', count(html, '>⇋<'), 2);
 check('[4] one pressed', count(html, 'aria-pressed="true"'), 1);
 check('[4] same pair line', count(html, 'Same as other'), 2);
-const wrongRefs = refs('edit');
+const wrongRefs = refs(null);
 wrongRefs.views.right.info.facing = tile('right', 'wrong', 'left');
 wrongRefs.facing_pair = { same: true, facing: 'left' };
 const html2 = m.render(m.h(m.FieldModelRefs, { character: 'demo', kinds: ['tpose'], layout: 'steps',

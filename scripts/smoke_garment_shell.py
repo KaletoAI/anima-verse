@@ -7,7 +7,7 @@ Expected values, derived by hand:
 [1] The old Auto rule, now only the migration's (``close_fitting``): slots ⊆ {underwear_top, underwear_bottom,
     legs}, no ``covers``, not closable → True. underwear_top / underwear_bottom / legs → True; [underwear_top, top],
     outer, bottom, underwear_top covering underwear_bottom, underwear_top closable, no slots → False.
-    ``shape_of``: mode shell → shell; own_mesh, painted, in_body, template, no mode → as_generated.
+    ``shape_of``: mode shell → shell; own_mesh, in_body, template, accessory, no mode → as_generated.
 [2] Region → shell faces: a region of n body faces, two midpoint subdivisions → 16·n faces (each split makes 4);
     clipped with a scalar >= 0 everywhere it keeps all 16·n. Here n = 2 (a unit square of two triangles) → 32.
 [3] Clip by marching triangles: the triangle (0,0),(1,0),(0,1) with s = (1, -1, -1) keeps the corner triangle up
@@ -67,7 +67,7 @@ table = [
 for it, want in table:
     check(f"[1] close_fitting {it['outfit_piece']['slots']} {it['outfit_piece']['covers']} "
           f"closable={it['outfit_piece']['closable']} -> {want}", gsh.close_fitting(it) is want)
-for mode, want in (("shell", "shell"), ("own_mesh", "as_generated"), ("painted", "as_generated"),
+for mode, want in (("shell", "shell"), ("own_mesh", "as_generated"), ("accessory", "as_generated"),
                    ("in_body", "as_generated"), ("template", "as_generated"), (None, "as_generated")):
     check(f"[1] shape_of mode {mode} -> {want}", gsh.shape_of(item(["underwear_top"], mode=mode)) == want)
 

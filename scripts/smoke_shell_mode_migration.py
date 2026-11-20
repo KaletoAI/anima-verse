@@ -11,7 +11,7 @@ every slot in {underwear_top, underwear_bottom, legs}, no covers, not closable â
   briefs, own_mesh, one wearer stored as_generated -> None   (stays own mesh)
   jeans (bottom), own_mesh, a wearer stored shell -> shell
   jeans (bottom), own_mesh, no stored choice      -> None
-  briefs, mode painted                            -> None   (only own-mesh pieces are judged)
+  briefs, mode in_body                            -> None   (only own-mesh pieces are judged)
   briefs, mode shell already                      -> None
   a hair garment (category garment)               -> None
 """
@@ -42,7 +42,7 @@ cases = [
     ("briefs own_mesh, as_generated stored", piece(["underwear_bottom"], "own_mesh"), ["auto", "as_generated"], None),
     ("jeans own_mesh, shell stored", piece(["bottom"], "own_mesh", ["underwear_bottom"]), ["shell"], "shell"),
     ("jeans own_mesh, no choice", piece(["bottom"], "own_mesh", ["underwear_bottom"]), [], None),
-    ("briefs painted", piece(["underwear_bottom"], "painted"), ["shell"], None),
+    ("briefs in_body", piece(["underwear_bottom"], "in_body"), ["shell"], None),
     ("briefs already shell", piece(["underwear_bottom"], "shell"), [], None),
     ("hair garment", {"category": "garment", "garment": {"kind": "hair"}}, [], None),
 ]

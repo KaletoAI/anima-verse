@@ -253,7 +253,7 @@
  *        "Kept with a warning", "W"; stale V + warning W → mouse-over "V\nW"; stale without reason → "Made from older
  *        data". outfitRow — running → blue "Building now" (warnings hidden); failed boom → red "Failed"; stale →
  *        yellow "Outdated", staleText; missing → yellow "Not built yet", "The Build makes it"; ready → green "Ready",
- *        the proof line; ready + [w1, w2] → yellow "Ready — with warnings", "w1", "w1\nw2". renderAllLabel 0 / 2 /
+ *        no reason (A224: no worker proof any more); ready + [w1, w2] → yellow "Ready — with warnings", "w1", "w1\nw2". renderAllLabel 0 / 2 /
  *        -1 → 1 / 3 / 1 image jobs. viewAction (what a view's button does, server base_body.dressed_view_source):
  *        unknown (off the pipeline) → "Regenerate this view — 1 image job", 1 job, no note; shape → "Copy this view again
  *        from the body shape — no job", 0, SHAPE_COPY_NOTE; plain → "… from the plain body — no job", 0,
@@ -276,10 +276,10 @@
  *        plain copy (base1234abcd): the plain copy label 2, ↗ Base body 2 (the chip + the face view note);
  *        off the pipeline (main + the enabled left view, not rendered): Regenerate 2, "Render all views — 2 image
  *          jobs" 1, Auto 1, no "nothing painted";
- *      OutfitModelRows ready with texels 0.92 / 0.031: "Outfit model (base body)", "Ready", the reason "Garment
- *        coverage of the visible surface: 92.0 % · Garment filled in without a view: 3.1 %", one step → no "No
- *        model steps recorded"; FieldFigure (fixture payload) opened on `views`: the tab labels "Dressed views" and "Outfit
- *        model", the Build line, "Worn now (…)" tab once; opened on `model`: the outfit row with "92.0 %".
+ *      OutfitModelRows ready: "Outfit model (base body)", "Ready", no "Garment coverage" line (A224: the worker's
+ *        proof is gone), one step → no "No model steps recorded"; FieldFigure (fixture payload) opened on `views`: the
+ *        tab labels "Dressed views" and "Outfit model", the Build line, "Worn now (…)" tab once; opened on `model`: the
+ *        outfit row "Outfit model (base body)" once with "Ready".
  * [27] Ruling A75 — servedLines(served_state, t), the viewer's status of the figure it shows:
  *      null → []; green {state "Shows the outfit worn now", reason ""} → one head line, light green, text the state
  *      alone, title "";
@@ -938,12 +938,12 @@ check('[23] tabs render it', [/<BuildProblemNote\b/.test(src('frontend/src/tabs/
     check('[26] viewRow stale without a reason', vr(tile({ state: 'stale' }), null)[2], 'Made from older data');
     // outfitRow (folded from check_pose_ui [2])
     const o = (status, extra = {}) => ({ status, error: '', warnings: [], ...extra });
-    const or = (x) => { const r = dv.outfitRow(x, 'S', 'P'); return [r.light, r.state, r.reason, r.detail]; };
+    const or = (x) => { const r = dv.outfitRow(x, 'S'); return [r.light, r.state, r.reason, r.detail]; };
     check('[26] outfitRow running', or(o('running', { warnings: ['w'] })), ['blue', 'Building now', '', '']);
     check('[26] outfitRow failed', or(o('failed', { error: 'boom' })), ['red', 'Failed', 'boom', 'boom']);
     check('[26] outfitRow stale', or(o('stale')).slice(0, 3), ['yellow', 'Outdated', 'S']);
     check('[26] outfitRow missing', or(o('missing')).slice(0, 3), ['yellow', 'Not built yet', 'The Build makes it']);
-    check('[26] outfitRow ready', or(o('ready')), ['green', 'Ready', 'P', 'P']);
+    check('[26] outfitRow ready', or(o('ready')), ['green', 'Ready', '', '']);
     check('[26] outfitRow ready with warnings', or(o('ready', { warnings: ['w1', 'w2'] })),
       ['yellow', 'Ready — with warnings', 'w1', 'w1\nw2']);
     // renderAllLabel (folded from check_pose_ui [4]; off the pipeline, now the 3D tab's Pose render)
@@ -1044,13 +1044,11 @@ check('[23] tabs render it', [/<BuildProblemNote\b/.test(src('frontend/src/tabs/
       views: { left: { enabled: true, info: null } } }, false);
     check('[26] off the pipeline (3D tab): edits, Render all, Auto', [count(off, 'Regenerate this view — 1 image job'),
       count(off, 'Render all views — 2 image jobs'), count(off, '>Auto<'), count(off, 'nothing painted')], [2, 1, 1, 0]);
-    const outfit = r.render(r.h(r.OutfitModelRows, { outfit: { status: 'ready', error: '', warnings: [], stale_reason: null,
-      proof: { texels: { garment_share_of_exposed: 0.92, unseen_filled_share_of_exposed_garment: 0.031 } } },
+    const outfit = r.render(r.h(r.OutfitModelRows, { outfit: { status: 'ready', error: '', warnings: [], stale_reason: null },
     steps: [{ id: 'mesh', label: 'Mesh', status: 'done', detail: '', numbers: {} }] }));
-    check('[26] Outfit model: the step row with the proof numbers, the steps', [count(outfit, 'Outfit model (base body)'),
-      count(outfit, '>Ready<'),
-      count(outfit, '>Garment coverage of the visible surface: 92.0 % · Garment filled in without a view: 3.1 %<'),
-      count(outfit, 'No model steps recorded')], [1, 1, 1, 0]);
+    check('[26] Outfit model: the step row, no proof line, the steps', [count(outfit, 'Outfit model (base body)'),
+      count(outfit, '>Ready<'), count(outfit, 'Garment coverage'),
+      count(outfit, 'No model steps recorded')], [1, 1, 0, 0]);
     globalThis.__A70_FIGURE__ = { humanoid: true, pipeline: true, auto_build: false, status: 'current', outfit: 'Casual',
       build: { running: false, step: null, failed: {}, deferred: null, paused: null }, served_url: null,
       served_built_at: null, served_foot_pose: null, changes: [], cost: { hub_jobs: 0, steps: [] }, worn: [], hair: null,
@@ -1059,12 +1057,11 @@ check('[23] tabs render it', [/<BuildProblemNote\b/.test(src('frontend/src/tabs/
     check('[26] FieldFigure opens on Dressed views: its tab, the Build line, the hidden others', [
       count(views, '>Dressed views<'), count(views, '>Outfit model<'), count(views, 'The Build above renders these views'),
       count(views, '>Worn now (')], [1, 1, 1, 1]);
-    globalThis.__A70_BASE__ = { pipeline: true, outfit: { status: 'ready', error: '', warnings: [], stale_reason: null,
-      proof: { texels: { garment_share_of_exposed: 0.92 } } } };
+    globalThis.__A70_BASE__ = { pipeline: true, outfit: { status: 'ready', error: '', warnings: [], stale_reason: null } };
     globalThis.__A70_M3D__ = { model: { steps: [] } };
     const model = r.render(r.h(r.FieldFigure, { character: 'Kai', initialSub: 'model' }));
     check('[26] FieldFigure opens on Outfit model: its rows (the hooks answer the fixture)', [
-      count(model, 'Outfit model (base body)'), count(model, '>Garment coverage of the visible surface: 92.0 %<')], [1, 1]);
+      count(model, 'Outfit model (base body)'), count(model, '>Ready<')], [1, 1]);
   } catch (e) {
     failures.push(`[26] rendering failed: ${String(e.stack || e).slice(0, 600)}`);
   }

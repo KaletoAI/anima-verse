@@ -18,8 +18,10 @@ Interfaces block.
     ["feet"], ["outer"], ["top", "bottom"], ["top"], ["legs", "feet"],
     ["head"] -> "in_body" (was own_mesh / in_body / in_body / painted /
     painted / painted under the kind default). MESH_MODES == ("own_mesh", "shell",
-    "painted", "in_body", "template") — shell A168 d59a6352a, template A138 5ab4c2971. mesh_mode_of: None for a non-outfit-piece (a tool,
-    a hair garment, None).
+    "in_body", "template", "accessory") — shell A168 d59a6352a, template A138
+    5ab4c2971, accessory A216; "painted" removed with A224. The constants
+    (OWN_MESH, IN_BODY) == ("own_mesh", "in_body"); garment_set has no PAINTED.
+    mesh_mode_of: None for a non-outfit-piece (a tool, a hair garment, None).
 [2] add_item stores a mode only when the input names a valid one:
     Boots {"slots": ["feet"]} -> no "mesh_mode" key (mode in_body), no
     "own_mesh" key; garment_kind_of None (in the body is no own mesh).
@@ -28,7 +30,9 @@ Interfaces block.
     ["outer"]} -> no key, garment_kind_of None. Blouse {"slots": ["top"],
     "mesh_mode": "own_mesh"} -> "own_mesh", garment_kind_of "clothing". Tee
     {"slots": ["top"], "own_mesh": True} -> no "mesh_mode" key (the input
-    flag is ignored), no "own_mesh" key, garment_kind_of None.
+    flag is ignored), no "own_mesh" key, garment_kind_of None. Cape
+    {"slots": ["outer"], "mesh_mode": "painted"} -> no "mesh_mode" key (A224:
+    "painted" is no mode any more, so it is not valid), mode "in_body".
 [3] update_item:
     Blouse {"outfit_piece": {"slots": ["top"]}} -> keeps "own_mesh" (the
     update does not name the mode). {"slots": ["top"], "mesh_mode": "bogus"}
@@ -45,13 +49,13 @@ Interfaces block.
 [4] The wanted figure (Task 6 replaced the interim base_body.outfit_body_mode,
     which is gone): its shape is meshed iff a worn piece has mode "in_body";
     no profile key is read. meshed = (in_body, shape not plain); Demo is on
-    the base-body pipeline (off it every piece is painted).
+    the base-body pipeline.
     Demo's profile carries outfit_body_mode "mesh" and wears Shirt (top,
-    mesh_mode painted, chosen) + Trousers (bottom, painted, chosen) -> ([],
-    False) (was "retexture").
+    mesh_mode accessory, chosen, no kind) + Trousers (bottom, accessory, no
+    kind) — neither is in the body (each is left out, A224) -> ([], False).
     Equip the Coat (outer, in_body) -> ([coat], True) (was "mesh").
     pieces={"outer": coat} -> ([coat], True), pieces={"top": shirt} -> ([],
-    False), pieces={} -> ([], False). Coat updated to mesh_mode "painted" ->
+    False), pieces={} -> ([], False). Coat updated to mesh_mode "accessory" ->
     ([], False); back to "in_body" -> ([coat], True).
 [5] Code and template:
     no dict anywhere in shared/templates/character/base-character.json has
@@ -62,7 +66,7 @@ Interfaces block.
     ``app/core/figure_migration.py`` (Task 3): the lines of
     ``git grep --untracked -n own_mesh -- app`` that name it as a key —
     ``"own_mesh"`` / ``'own_mesh'`` in quotes or ``.own_mesh`` — other than
-    the mode constant ``OWN_MESH, PAINTED, IN_BODY = "own_mesh", …`` of
+    the mode constant ``OWN_MESH, IN_BODY = "own_mesh", "in_body"`` of
     garment_set.py, are all in app/core/figure_migration.py. (A bare
     ``git grep -c own_mesh`` cannot be the check: ``own_mesh`` is also the
     name of the mode value, so docstrings and identifiers about own-mesh
@@ -95,7 +99,7 @@ def check(label, got, want):
 
 
 _KEY_READ = re.compile(r"""["']own_mesh["']|\.own_mesh\b""")
-_MODE_CONSTANT = 'OWN_MESH, PAINTED, IN_BODY = "own_mesh", "painted", "in_body"'
+_MODE_CONSTANT = 'OWN_MESH, IN_BODY = "own_mesh", "in_body"'
 
 
 def flag_readers(rev=None):
@@ -152,9 +156,9 @@ def main() -> int:
         check("top", d(["top"]), "in_body")
         check("legs + feet", d(["legs", "feet"]), "in_body")
         check("head", d(["head"]), "in_body")
-        check("MESH_MODES", garment_set.MESH_MODES, ("own_mesh", "shell", "painted", "in_body", "template"))
-        check("constants", (garment_set.OWN_MESH, garment_set.PAINTED, garment_set.IN_BODY),
-              ("own_mesh", "painted", "in_body"))
+        check("MESH_MODES", garment_set.MESH_MODES, ("own_mesh", "shell", "in_body", "template", "accessory"))
+        check("constants", (garment_set.OWN_MESH, garment_set.IN_BODY), ("own_mesh", "in_body"))
+        check("no PAINTED constant (A224)", hasattr(garment_set, "PAINTED"), False)
         check("mode of a tool", garment_set.mesh_mode_of({"category": "tool"}), None)
         check("mode of a hair garment", garment_set.mesh_mode_of({"category": "garment", "garment": {"kind": "hair"}}),
               None)
@@ -195,6 +199,9 @@ def main() -> int:
         check("tee: input flag ignored -> no mode stored", "mesh_mode" in piece(tee), False)
         check("tee: no own_mesh key", "own_mesh" in piece(tee), False)
         check("tee kind", kind(tee), None)
+        cape = add("Cape", {"slots": ["outer"], "mesh_mode": "painted"})
+        check("cape: painted is no mode -> no mode stored", "mesh_mode" in piece(cape), False)
+        check("cape mode (default)", mode(cape), "in_body")
 
         print("[3] update_item")
         inventory.update_item(blouse, {"outfit_piece": {"slots": ["top"]}})
@@ -232,10 +239,10 @@ def main() -> int:
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
                  "outfit_body_mode": "mesh"}
         check("create Demo", save_character_profile("Demo", human, create_new=True), True)
-        shirt = add("Shirt", {"slots": ["top"], "mesh_mode": "painted"})
-        trousers = add("Trousers", {"slots": ["bottom"], "mesh_mode": "painted"})
-        check("shirt/trousers painted", (piece(shirt).get("mesh_mode"), piece(trousers).get("mesh_mode")),
-              ("painted", "painted"))
+        shirt = add("Shirt", {"slots": ["top"], "mesh_mode": "accessory"})
+        trousers = add("Trousers", {"slots": ["bottom"], "mesh_mode": "accessory"})
+        check("shirt/trousers accessory", (piece(shirt).get("mesh_mode"), piece(trousers).get("mesh_mode")),
+              ("accessory", "accessory"))
         for item in (shirt, trousers, coat):
             check(f"inventory {item}", inventory.add_to_inventory("Demo", item), True)
         for item in (shirt, trousers):
@@ -247,15 +254,15 @@ def main() -> int:
 
         check("the per-character mode is gone", hasattr(base_body, "outfit_body_mode"), False)
         check("profile key still says mesh", get_character_profile("Demo").get("outfit_body_mode"), "mesh")
-        check("painted only -> plain body", meshed(), ([], False))
+        check("accessories only -> plain body", meshed(), ([], False))
         check("equip coat", inventory.equip_piece("Demo", coat, source="smoke")["status"], "ok")
         check("coat worn -> a shape", meshed(), ([coat], True))
         check("coat worn (profile passed) -> a shape", meshed(profile=get_character_profile("Demo")), ([coat], True))
         check("pieces outer coat -> a shape", meshed(pieces={"outer": coat}), ([coat], True))
         check("pieces top shirt -> plain body", meshed(pieces={"top": shirt}), ([], False))
         check("pieces {} -> plain body", meshed(pieces={}), ([], False))
-        inventory.update_item(coat, {"outfit_piece": {"slots": ["outer"], "mesh_mode": "painted"}})
-        check("coat painted -> plain body", meshed(), ([], False))
+        inventory.update_item(coat, {"outfit_piece": {"slots": ["outer"], "mesh_mode": "accessory"}})
+        check("coat accessory -> plain body", meshed(), ([], False))
         inventory.update_item(coat, {"outfit_piece": {"slots": ["outer"], "mesh_mode": "in_body"}})
         check("coat in the body again -> a shape", meshed(), ([coat], True))
 

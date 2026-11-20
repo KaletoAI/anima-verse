@@ -7,14 +7,11 @@ CONVENTION. The ``left`` view shows the figure's LEFT flank, so the figure faces
   ``base_body.DRESS_VIEW``, the animal main render (``model_refs.ANIMAL_POSE_PROMPT_DEFAULT``: "facing the left
   edge of the frame, left flank facing the camera" — handed to a multi-view mesher as its ``left`` view,
   ``openai_mesh.mesh_slot_views``) and the animal ``right`` view ("facing the right edge");
-* the body-retexture worker that paints the dressed views onto the mesh (ComfyUI-GLB-Body-Retexture
-  ``body_core.VIEW_YAW_OFFSETS``: ``left`` = yaw +90°, "the camera of ``left`` looks at the character's own left
-  side", glTF +X; its orthographic projection puts the character's front, +Z, at the image's LEFT edge);
 * the stored views: 58 of the 59 side views of a live world copy (2026-11-15, hand-labelled) follow it — the
   one that does not is one character's right view (it faces left like her left view).
 
 A view that faces the wrong way hands the mesher two identical profiles (or a profile seen from behind the
-mirror) and the worker paints the near flank onto the far one.
+mirror).
 
 THE DETECTOR (``measure``) is pure CPU on the view's alpha matte (every mesh-input view is matted): the TOES. In
 the bottom ``FOOT_BAND`` of the figure every connected part (a foot, both feet overlapping, a paw pair) is split

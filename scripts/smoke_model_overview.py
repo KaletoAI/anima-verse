@@ -43,13 +43,10 @@ Expected values, derived by hand from the fixtures below:
       base             warning "base1 · older base body (now base2)"
       variant          warning "rigged · hidden by Long coat · shown through
                        Sheer top (exposed detail) · No covered variant"
-      dressed_front    done "view check front · ΔE 2.9"
+      dressed_front    done "view check front"
       dressed_back     warning = the fit gate's warning; noise 1.9 (attempt 2)
       dressed_left     warning "turned around — left out of the model · view
                        check front · re-rendered"
-      retexture        done "coverage 25.0 % · unseen 50.0 % · ΔE front 2.9 ·
-                       ΔE back 3.1" (both <= 4.0)
-      face_texels      done "120 of 4,000 texels"
       rig              done "mixamo · RG · from the base model"
       extension_rig    done "g1 · inherited from the base model" (same
                        fingerprint and attempted_at as the base's)
@@ -57,14 +54,14 @@ Expected values, derived by hand from the fixtures below:
       garment_hair1    warning "Bob · hairdeck · fsig f1 · older fit"
       garment_warnings warning "full: joint missing"
       measure          done; lod done "20,000 tris"
-    Without the old record and a back ΔE of 5.9: still no back_refit row.
-    A back ΔE of 5.0 in the proof -> retexture warning "… · poor
-    registration: back" (limit POOR_REGISTRATION_DELTA_E 4.0).
+    Without the old record: still no back_refit row. Since A224 there is no
+    body retexture worker: no "retexture" / "face_texels" row and no ΔE of a
+    worker proof in a dressed view row.
     A composited back (Task 11g, record fit "composite", fit_gate attempts
     [noise 2.4, noise 1.1] chosen 2, composite {iou 0.9917, coverage score
-    0.9919, mask_share 0.4399, seam_de 3.48}), guard back 0.95, ΔE 3.1 ->
+    0.9919, mask_share 0.4399, seam_de 3.48}), guard back 0.95 ->
     done "view check back · composite of draft 2 of 2 · IoU 0.992 ·
-    coverage 0.99 · ΔE 3.1"; numbers composite_iou 0.9917,
+    coverage 0.99"; numbers composite_iou 0.9917,
     composite_coverage 0.9919, composite_mask 0.4399, composite_seam_de
     3.48.
 [3] freshness rules (pure):
@@ -184,12 +181,6 @@ FIXTURE_B = {
                    "back": {"ok": True, "best": "back", "scores": {"back": 0.95}},
                    "left": {"ok": False, "best": "front", "scores": {"left": 0.6}, "rerendered": True}},
     "back_refit": {"limit": 4.0, "attempts": [{"unchanged_delta_e": 5.9}, {"unchanged_delta_e": 3.1}], "chosen": 2},
-    "retexture_proof": {"views": {"front": {"dressed_alignment": {"unchanged_delta_e": 2.9}},
-                                  "back": {"dressed_alignment": {"unchanged_delta_e": 3.1}}},
-                        "texels": {"garment_share_of_exposed": 0.25,
-                                   "unseen_filled_share_of_exposed_garment": 0.5,
-                                   "unobserved_share_of_exposed": 0.3},
-                        "face_texels_restored": 120, "face_mask_texels": 4000},
     "rig": "mixamo", "rig_backend": "RG",
     "extension_rig": {"status": "applied", "groups": ["g1"], "fingerprint": "X", "attempted_at": "t1"},
     "garment_warnings": ["full: joint missing"],
@@ -261,16 +252,14 @@ def main() -> int:
                                   base_meta={"extension_rig": {"fingerprint": "X", "attempted_at": "t1"}},
                                   wanted_variant="covered", deciders=["Long coat"], shown=["Sheer top"],
                                   dressed_records=records, garments=garments, tiers=["full", "low"],
-                                  low_tris=20000, delta_limit=4.0, covered_missing_text="No covered variant")
+                                  low_tris=20000, covered_missing_text="No covered variant")
     check("rows", rows_of(steps), [
         ("base", "warning", "base1 · older base body (now base2)"),
         ("variant", "warning",
          "rigged · hidden by Long coat · shown through Sheer top (exposed detail) · No covered variant"),
-        ("dressed_front", "done", "view check front · ΔE 2.9"),
+        ("dressed_front", "done", "view check front"),
         ("dressed_back", "warning", BACK_WARNING),
         ("dressed_left", "warning", "turned around — left out of the model · view check front · re-rendered"),
-        ("retexture", "done", "coverage 25.0 % · unseen 50.0 % · ΔE front 2.9 · ΔE back 3.1"),
-        ("face_texels", "done", "120 of 4,000 texels"),
         ("rig", "done", "mixamo · RG · from the base model"),
         ("extension_rig", "done", "g1 · inherited from the base model"),
         ("collision", "missing", "Not computed"),
@@ -281,10 +270,8 @@ def main() -> int:
     ])
     check("back numbers", {k: steps[3]["numbers"].get(k) for k in ("noise", "noise_limit", "fit_attempts")},
           {"noise": 1.9, "noise_limit": 1.75, "fit_attempts": 2})
-    check("hair label", steps[10]["label"], "Hair")
+    check("hair label", steps[8]["label"], "Hair")
     no_refit = {k: v for k, v in FIXTURE_B.items() if k != "back_refit"}
-    no_refit["retexture_proof"] = {**FIXTURE_B["retexture_proof"], "views": {
-        "back": {"dressed_alignment": {"unchanged_delta_e": 5.9}}}}
     check("no back_refit row any more", [s["id"] for s in mo.outfit_model_steps(
         no_refit, base=None, base_meta=None, wanted_variant=None, deciders=[], shown=[], dressed_records={},
         garments=[], tiers=[]) if s["id"] == "back_refit"], [])
@@ -297,18 +284,13 @@ def main() -> int:
                                             shown=[], dressed_records=composited, garments=[], tiers=[])
            if s["id"] == "dressed_back"][0]
     check("composited back", (row["status"], row["detail"]),
-          ("done", "view check back · composite of draft 2 of 2 · IoU 0.992 · coverage 0.99 · ΔE 3.1"))
+          ("done", "view check back · composite of draft 2 of 2 · IoU 0.992 · coverage 0.99"))
     check("composite numbers", {k: row["numbers"].get(k) for k in ("composite_iou", "composite_coverage",
                                                                      "composite_mask", "composite_seam_de")},
           {"composite_iou": 0.9917, "composite_coverage": 0.9919, "composite_mask": 0.4399,
            "composite_seam_de": 3.48})
-    poor = {**FIXTURE_B, "retexture_proof": {**FIXTURE_B["retexture_proof"], "views": {
-        "back": {"dressed_alignment": {"unchanged_delta_e": 5.0}}}}}
-    row = [s for s in mo.outfit_model_steps(poor, base=None, base_meta=None, wanted_variant=None, deciders=[],
-                                            shown=[], dressed_records={}, garments=[], tiers=[])
-           if s["id"] == "retexture"][0]
-    check("poor registration", (row["status"], row["detail"].endswith("poor registration: back")),
-          ("warning", True))
+    check("no retexture worker rows (A224)", [s["id"] for s in steps if s["id"] in ("retexture", "face_texels")], [])
+    check("no ΔE number in a dressed view row", "unchanged_delta_e" in row["numbers"], False)
 
     print("[3] freshness rules")
     C, S, M = "current", "stale", "missing"

@@ -47,6 +47,12 @@ body, own-mesh pieces — ``figure_migration.legacy_current``):
      is built, so Ruling A119 leaves the top off — the cached figure's
      ``left_out[top]`` is "Body shape not built" (``LEFT_OFF_SHAPE``; it was
      the accessory's reason before).
+[W1] The Figure tab's worn rows (``figure_build.figure_info``): each of the
+     six pieces has no 3D form, so it is in the wanted AND the delivered
+     ``left_out`` (want == have == "left_out") — the row is state
+     "left_out" with ``left_out`` = ``accessory_build.REASON_NO_KIND``
+     ("Choose the accessory kind in the Wardrobe"), never "ready" (A224
+     review: wanted == delivered is no "Ready" for a piece left off).
 [M3] Timing: one cold call (memo cleared) and the median warm call are
      printed; warm < 2 ms.
 """
@@ -209,6 +215,14 @@ def main() -> int:
               figure.LEFT_OFF_SHAPE)
         op["mesh_mode"] = "accessory"
         inventory.update_item(worn["top"], {"outfit_piece": op})
+
+        print("[W1] worn rows of pieces with no 3D form")
+        from app.core import accessory_build, figure_build
+        figure.invalidate()
+        rows = figure_build.figure_info("Kira")["worn"]
+        check("six rows, all left out with the kind reason",
+              sorted((r["slot"], r["state"], r["left_out"]) for r in rows),
+              sorted((slot, "left_out", accessory_build.REASON_NO_KIND) for slot in worn))
 
         print("[M3] timing")
         cold = []

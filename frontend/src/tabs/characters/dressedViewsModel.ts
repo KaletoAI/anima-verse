@@ -68,10 +68,10 @@ export interface OutfitStatus {
 /**
  * The outfit model as a step: running → blue "Building now"; failed → red "Failed", the error; stale → yellow
  * "Outdated", `staleText` (figureModel.staleModelText); missing → yellow "Not built yet", "The Build makes it";
- * ready → green "Ready", the proof's numbers (`proofLine`). Views the guard left out are warnings: the first is the
+ * ready → green "Ready". Views the guard left out are warnings: the first is the
  * reason of a ready model (yellow then), all of them on mouse-over.
  */
-export function outfitRow(o: OutfitStatus, staleText: string, proofLine: string, t: Tr = EN): ViewRow {
+export function outfitRow(o: OutfitStatus, staleText: string, t: Tr = EN): ViewRow {
   const warnings = o.status === 'running' ? [] : (o.warnings || [])
   const detail = warnings.join('\n')
   if (o.status === 'running') return { light: 'blue', state: t('Building now'), reason: '', detail: '' }
@@ -79,7 +79,7 @@ export function outfitRow(o: OutfitStatus, staleText: string, proofLine: string,
   if (o.status === 'stale') return { light: 'yellow', state: t('Outdated'), reason: staleText, detail }
   if (o.status === 'missing') return { light: 'yellow', state: t('Not built yet'), reason: t('The Build makes it'), detail }
   if (warnings.length) return { light: 'yellow', state: t('Ready — with warnings'), reason: warnings[0], detail }
-  return { light: 'green', state: t('Ready'), reason: proofLine, detail: proofLine }
+  return { light: 'green', state: t('Ready'), reason: '', detail: '' }
 }
 
 /** Off the pipeline: what "Render all views" costs — the main view and every switched-on extra view. */
