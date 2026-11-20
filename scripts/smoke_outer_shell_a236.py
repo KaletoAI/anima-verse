@@ -14,8 +14,8 @@ Rays start at the origin (inside the body) and run along +x — ``_air_gap(tree,
   [3] c = (.14, 0, 0) the hair's outer face          -> .02
   [4] c = (.20, 0, 0) floating beyond the hair       -> max(.02, .20 - .14) = .06
   [5] c = (.13, 0, 0) inside the hair slab           -> .02
-  [6] from (0, .3, 0) to (.125, .3, 0), a slab .005 off the skin -> .005, under OUTER_GAP_M .008 (fused, kept)
-  [7] OUTER_GAP_M is .008 (above the collider voxel .005, which fuses anything closer anyway)
+  [6] from (0, .3, 0) to (.125, .3, 0), a slab .005 off the skin -> .005, under OUTER_GAP_M .006 (fused, kept)
+  [7] OUTER_GAP_M is .006 (just above the collider voxel .005, which fuses anything closer anyway)
 A grazing re-entry: a ledge x .12 .. .40, y .015 .. .05 (z -.05 .. .05 shifted to z .3, like a third body there); the
 ray from (0, 0, .3) to (.40, .02, .3) has slope .02 / .40 = .05 in y, so it leaves the body at x .10 and enters the
 ledge's underside (normal -y) with cosine .05 / sqrt(1 + .0025) = .0499 < OUTER_ENTRY_COS .3:
@@ -125,7 +125,7 @@ def main():
     check('[5] inside the hair: gap .02', near(d['inside'], .02), d['inside'])
     check('[6] slab .005 off the skin: gap .005 < OUTER_GAP_M', near(d['fold'], .005) and d['fold'] < d['gap_m'],
           d['fold'])
-    check('[7] OUTER_GAP_M .008', d['gap_m'] == .008, d['gap_m'])
+    check("[7] OUTER_GAP_M .006", d["gap_m"] == .006, d['gap_m'])
     check('[7a] a grazing re-entry (cosine .05) is no air gap: gap 0', near(d['graze'], 0.0), d['graze'])
     check('[7b] OUTER_ENTRY_COS .3', d['entry_cos'] == .3, d['entry_cos'])
     check('[17] under the arm, LAYER_GAP_M: the arm itself, .03', near(d['under_body'], .03), d['under_body'])

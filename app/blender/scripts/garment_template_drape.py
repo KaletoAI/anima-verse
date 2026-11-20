@@ -667,8 +667,9 @@ def _remesh(col, faces, segs=()):
 
 #: A236: a collider face beyond an AIR GAP wider than this along the ray from the skeleton is an outer shell (hair
 #: lying on the shoulders and back, a beard on the chest) — no skin: the cloth goes under it. The 5 mm voxel fuses
-#: anything closer to the skin anyway.
-OUTER_GAP_M = 0.008
+#: anything closer to the skin anyway. At 8 mm hair 6-8 mm off the side of one neck stayed a ridge in the collider
+#: and a cardigan over a blouse read stretch 1.48 there; at 6 mm 1.23.
+OUTER_GAP_M = 0.006
 #: A236: an air gap counts only when the ray enters again through a surface facing it at least this much (cosine): a
 #: ray that skims the body over a dip (from the neck over the trapezius onto the top of a shoulder) re-enters at a
 #: grazing angle (cosines -0.08 .. 0.18 on a bald body), hair lying on the skin faces the ray.
