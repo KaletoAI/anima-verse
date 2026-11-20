@@ -18,6 +18,16 @@ export function getModelEnvironment(): THREE.Texture | null {
   return modelEnv;
 }
 
+/** The GPU's maximum anisotropic filtering (`renderer.capabilities.getMaxAnisotropy()`), set by the engine; a
+ *  figure's textures are filtered with it (`prepareFigureTextures`). 1 before the engine set it. */
+let maxAnisotropy = 1;
+export function setMaxAnisotropy(n: number) {
+  maxAnisotropy = n;
+}
+export function getMaxAnisotropy(): number {
+  return maxAnisotropy;
+}
+
 /** Generierte GLBs lassen metallicFactor oft unbelegt — der glTF-Default ist
  *  1.0 (voll metallisch), und ohne Environment-Map rendert das fast schwarz.
  *  Gemeint ist kein Metall: neutralisieren. Liefert das GLB dagegen eine

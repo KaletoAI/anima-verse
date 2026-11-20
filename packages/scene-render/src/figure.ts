@@ -305,6 +305,43 @@ export function prepareGlossyPieces(root: Object3D, env: unknown, intensity = GL
   return marked
 }
 
+/** The anisotropic filtering a figure's textures ask for (capped by the GPU's maximum). */
+export const FIGURE_ANISOTROPY = 16
+
+/**
+ * Every texture of a figure filtered anisotropically. GLTFLoader leaves three's default anisotropy 1, so a
+ * trilinear filter picks the mip level by the LONGER screen footprint axis and blurs the shorter one by the same
+ * factor. A fitted template piece is UV-mapped by its bounding box (``garment_template_fitted``: x and z of the box
+ * scaled independently), so its texel rate differs per direction — measured on a pair of gloves: 5197 texels/m
+ * across the arm, 291 along it (ratio ~20); a bra: 3718 vs 1165. At 300 screen px/m anisotropy 1 samples the
+ * gloves at mip 4.1 (291 / 17 = 17 texels per metre along the arm), 16x at mip 0.1 (~270). `maxAnisotropy` is the
+ * renderer's `capabilities.getMaxAnisotropy()`; the value set is min(FIGURE_ANISOTROPY, maxAnisotropy) and never
+ * lowers a texture's own. Returns how many textures it raised.
+ */
+export function prepareFigureTextures(root: Object3D, maxAnisotropy: number): number {
+  const want = Math.max(1, Math.min(FIGURE_ANISOTROPY, Math.floor(Number(maxAnisotropy) || 1)))
+  const seen = new Set<unknown>()
+  let raised = 0
+  root.traverse((o: Object3D) => {
+    const mesh = o as Object3D & { isMesh?: boolean; material?: unknown }
+    if (!mesh.isMesh || !mesh.material) return
+    const mats = (Array.isArray(mesh.material) ? mesh.material : [mesh.material]) as Array<Record<string, unknown>>
+    for (const m of mats) {
+      for (const value of Object.values(m)) {
+        const tex = value as { isTexture?: boolean; anisotropy?: number; image?: unknown; needsUpdate?: boolean } | null
+        if (!tex || typeof tex !== 'object' || tex.isTexture !== true || seen.has(tex)) continue
+        seen.add(tex)
+        if ((tex.anisotropy ?? 1) >= want) continue
+        tex.anisotropy = want
+        // three applies the filter at upload: a texture already on the GPU is uploaded again
+        if (tex.image) tex.needsUpdate = true
+        raised += 1
+      }
+    }
+  })
+  return raised
+}
+
 /**
  * The FIGURE's box: `Box3.setFromObject(root)` over everything EXCEPT
  * garment subtrees. A garment is not the figure — hair standing 8 cm over

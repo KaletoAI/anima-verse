@@ -25,7 +25,7 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   placeCapsuleWireframe, consumerPartnerCapsules, probeCapsules, probeSweepOffset, probeSweptPose, probeSnapshot,
   PROBE_COLOR, CAPSULE_REGION_COLORS, CHANNEL_GROW, bindChannels, bindMouthOpen, mouthOpenFor, mouthPassHeight, MOUTH_CHANNEL_ID, channelCoords, channelWireframe, guideRod, inZone,
   placeChannelWireframe, stepEngagement, bindChannelOpening, OPENING_MARGIN_M, OPENING_FALLOFF_M,
-  OPENING_BAND_M, OPENING_SLACK_M, bindPoseShapes, prepareSheerPieces } from '@anima/scene-render'
+  OPENING_BAND_M, OPENING_SLACK_M, bindPoseShapes, prepareFigureTextures, prepareSheerPieces } from '@anima/scene-render'
 import type { PoseShapes, SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm,
   CollisionOverlay, CollisionPayload, FootPose, GarmentCollision, HairStrandRecord, StrandHair, CapsuleNow,
   PartnerSnapshot, ProbeSourceCapsule, ChannelNow, Engagement, ChannelOpeningBinding,
@@ -1231,6 +1231,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           tex.needsUpdate = true
           applyViewerTexture(object, tex)
         }
+        // Anisotropic filtering on every texture (GLTFLoader leaves 1): a box-mapped template piece blurs without it
+        prepareFigureTextures(object, renderer.capabilities.getMaxAnisotropy())
 
         // A pivot carries the orientation fix: the clip animates the model's
         // OWN root bone, so rotating the model itself would fight the

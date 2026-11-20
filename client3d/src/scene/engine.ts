@@ -11,6 +11,7 @@ import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { setSurfaceSky, updateSurfaceMaterials } from '@anima/scene-render';
 import { setFogVeilSky } from './fogVeil';
+import { setMaxAnisotropy } from './glbMaterials';
 import {
   basePitchDeg, FirstPersonZoom, OVERVIEW_NEAR_PITCH_DEG, THIRD_PERSON_MIN_DIST,
 } from './cameraFraming';
@@ -331,6 +332,8 @@ export class Engine {
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.2, 800);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: opts.antialias ?? true });
+    // the figures' textures are filtered with the GPU's maximum (`prepareFigureTextures`)
+    setMaxAnisotropy(this.renderer.capabilities.getMaxAnisotropy());
     this.shadowsWanted = opts.shadows ?? true;
     // Set directly, not through `applyShadowState`: nothing is compiled yet,
     // so there is no material to mark.

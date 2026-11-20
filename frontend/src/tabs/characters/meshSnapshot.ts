@@ -34,7 +34,7 @@ async function render(url: string, width: number, height: number): Promise<strin
   const object = gltf.scene
   try {
     zeroViewerMetalness(object)
-    const { prepareSheerPieces } = await import('@anima/scene-render')
+    const { prepareFigureTextures, prepareSheerPieces } = await import('@anima/scene-render')
     prepareSheerPieces(object, THREE.DoubleSide)
     // The browser drops the OLDEST WebGL context once too many are live — often this long-kept one. A lost
     // context draws nothing, so it is replaced, and a picture made on one is refused (never cached blank).
@@ -48,6 +48,7 @@ async function render(url: string, width: number, height: number): Promise<strin
       renderer.toneMappingExposure = 1.2
     }
     renderer.setSize(width, height, false)
+    prepareFigureTextures(object, renderer.capabilities.getMaxAnisotropy())
     const scene = new THREE.Scene()
     scene.add(new THREE.AmbientLight(0xffffff, 2.0))
     scene.add(new THREE.HemisphereLight(0xffffff, 0x666666, 3.0))
