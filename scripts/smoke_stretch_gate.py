@@ -47,6 +47,15 @@ Expected values, by hand:
        counted from the shoulder line like ``length_m``: draped_length_m 0.3097. Length 0.24: hem min(1.20, 1.2077) =
        1.20, 0.032 over the fold -> stays (length 1.28 - 1.20 = 0.08).
     Never shorter: in every moved case the new hem is under the old one (a, d, e).
+    h  No fold, no move (review): ``UNDERBUST_STEP_M`` 0.10. Measure L's step: girth at the bust 0.98 - at the fold
+       0.66 = 0.32 >= 0.10 -> a fold. Probe F (L with torso [[1.0, .80], [1.05, .82], [1.10, .85], [1.15, .88],
+       [1.20, .92], [1.25, .96], [1.30, 1.0], [1.36, 1.02]], widening evenly): bust = widest in [1.05, 1.30] = 1.30
+       (1.0), under = narrowest in [1.16, 1.26] = 1.20 (.92); step 1.0 - 0.92 = 0.08 < 0.10 -> no fold: a jacket
+       0.27 (hem 1.1777, 2.23 cm under that line) stays at 0.27, no ``hem_moved``. Probe G (torso [[1.05, .82],
+       [1.10, .84], [1.15, .86], [1.20, .89], [1.25, .92], [1.30, .96], [1.36, 1.0]], shoulder_y 1.48, band_y 1.36):
+       bust 1.36 (1.0), under = narrowest in [1.22, 1.32] = 1.25 (.92), step 0.08 -> no fold: a top 0.28 (top_y
+       1.48 + 0.045 = 1.525, hem 1.245) stays at 0.28. L without a torso profile (``_bust_lines`` falls back to
+       band - 0.15 = 1.15, and 1.1777 is 2.77 cm over it): no measured fold -> top 0.27 stays at 0.27.
 [5] The failure sentence of a top whose hem ends between the fold and the bust: a record with params top 0.27,
     outline top_y 1.4477 / length 0.27 (hem 1.1777), measure L, worst edge z 1.203 -> ``stretch_max_underbust`` and
     ``underbust_length`` = ceil((0.27 + 1.1777 - 1.138) x 100) / 100 = ceil(30.97) / 100 = 0.31; ``failure_info``
@@ -54,9 +63,20 @@ Expected values, by hand:
     -> ``stretch_max_neck``; with z 1.40 on a skirt -> plain ``stretch_max``; with length 0.36 (hem 1.0877, under
     the fold) -> plain ``stretch_max``; worst z 1.33 (> bust 1.288 + 0.03 = 1.318) -> plain. No sentence says
     "shorter".
+    Strapless (review): params strapless top, length 0.15; its outline top_y 1.28, length 0.08 (hem = min(1.20,
+    1.4477 - 0.15 = 1.2977) = 1.20, the STRAPLESS_MIN_M floor), worst z 1.203. The hem 1.20 lies in [1.168, 1.288],
+    z <= 1.318 -> ``stretch_max_underbust``; the length is counted from the shoulder line 1.4477 that ``length_m``
+    counts from: ceil((1.4477 - 1.138) x 100) / 100 = ceil(30.97) / 100 = 0.31 (the old asked-based sum
+    0.15 + 1.20 - 1.138 = 0.212 -> 0.22 left the hem at min(1.20, 1.2277) = 1.20: the same failure again). Check:
+    the outline at 0.31 has hem min(1.20, 1.1377) = 1.1377, 3.03 cm under the fold -> not moved, length round(1.28 -
+    1.1377, 4) = 0.1423, hem <= 1.138. The flat probe F with a top 0.20 (hem 1.2477, between its lines 1.20 / 1.30,
+    worst z 1.203): no fold -> plain ``stretch_max``, ``underbust_length`` None.
 [6] Source: the Blender script reads ``stretch_gate.stretch`` for its gate and its p99 from the ``all`` ratios;
     ``piece_progress`` hands the outline's ``hem_moved`` to the dialog; the dialog shows it; de.json has both new
     strings.
+[7] The preview (``garment_preview.shapes``, a 100 px wide box mask 480 px tall, no camera): top 0.27 on L draws the
+    moved hem, so its dimension reads the length draped 0.3097 -> "31 cm (asked 27)" and the hem mark "hem 1.14 m ·
+    moved below the underbust fold" (1.138 -> 1.14); top 0.24 keeps "24 cm" / "hem 1.21 m" (1.2077).
 """
 import math
 import shutil
@@ -206,6 +226,24 @@ for n in (0.27, 0.3087, 0.2801, 0.32):
         if hm:
             check(f"[4] never shorter ({kind} {n})", hm["hem_y"] < hm["from_y"] and hm["draped_length_m"] > n, hm)
 
+F = {**L, "torso": [[1.0, .80], [1.05, .82], [1.10, .85], [1.15, .88], [1.20, .92], [1.25, .96], [1.30, 1.0],
+                   [1.36, 1.02]]}
+G = {**L, "shoulder_y": 1.48, "band_y": 1.36,
+     "torso": [[1.05, .82], [1.10, .84], [1.15, .86], [1.20, .89], [1.25, .92], [1.30, .96], [1.36, 1.0]]}
+NOPROF = {k: v for k, v in L.items() if k != "torso"}
+check("[4h] UNDERBUST_STEP_M 0.10, L has a fold", gt.UNDERBUST_STEP_M == 0.10 and gt._underbust_fold(L) == (1.168, 1.288))
+check("[4h] probe F: lines (1.20, 1.30), no fold", gt._bust_lines(F) == (1.2, 1.3) and gt._underbust_fold(F) is None,
+      (gt._bust_lines(F), gt._underbust_fold(F)))
+o = gt.outline(gt.validate_params({"kind": "jacket", "length_m": 0.27})[0], F)
+check("[4h] probe F jacket 0.27 stays", close(o["length"], 0.27) and "hem_moved" not in o, (o["length"], o.get("hem_moved")))
+check("[4h] probe G: lines (1.25, 1.36), no fold", gt._bust_lines(G) == (1.25, 1.36) and gt._underbust_fold(G) is None,
+      gt._bust_lines(G))
+o = gt.outline(gt.validate_params({"kind": "top", "length_m": 0.28})[0], G)
+check("[4h] probe G top 0.28 stays", close(o["length"], 0.28) and "hem_moved" not in o, (o["length"], o.get("hem_moved")))
+o = gt.outline(gt.validate_params({"kind": "top", "length_m": 0.27})[0], NOPROF)
+check("[4h] no torso profile: top 0.27 stays", gt._underbust_fold(NOPROF) is None and close(o["length"], 0.27)
+      and "hem_moved" not in o, (o["length"], o.get("hem_moved")))
+
 # [5] the sentence
 REC = {"params": gt.validate_params({"kind": "top", "length_m": 0.27})[0],
        "metrics": {"outline": {"top_y": 1.4477, "length": 0.27}, "measure": L,
@@ -230,6 +268,21 @@ check("[5] z 1.36 -> neck", gt.stretch_line(rec(z=1.36)) == "stretch_max_neck")
 check("[5] a skirt -> plain", gt.stretch_line(rec(z=1.40, kind="skirt")) == "stretch_max")
 check("[5] hem under the fold (0.36) -> plain", gt.stretch_line(rec(length=0.36)) == "stretch_max")
 check("[5] worst edge over the bust (1.33) -> plain", gt.stretch_line(rec(z=1.33)) == "stretch_max")
+SP = gt.validate_params({"kind": "top", "length_m": 0.15, "shoulders": "strapless"})[0]
+o = gt.outline(SP, L)
+check("[5] strapless 0.15: outline top 1.28, length 0.08 (hem 1.20)", close(o["top_y"], 1.28) and close(o["length"], 0.08),
+      (o["top_y"], o["length"]))
+srec = {**REC, "params": SP, "metrics": {**REC["metrics"], "outline": {"top_y": o["top_y"], "length": o["length"]},
+                                        "drape": {"stretch_at": {"z": 1.203}}}}
+check("[5] strapless 0.15 -> underbust sentence", gt.stretch_line(srec) == "stretch_max_underbust", gt.stretch_line(srec))
+check("[5] strapless 0.15 -> length 0.31 (from the shoulder line)", gt.underbust_length(srec) == 0.31,
+      gt.underbust_length(srec))
+o = gt.outline({**SP, "length_m": 0.31}, L)
+check("[5] strapless at 0.31: hem 1.1377 <= 1.138, not moved", close(o["top_y"] - o["length"], 1.1377)
+      and close(o["length"], 0.1423) and "hem_moved" not in o, (o["length"], o.get("hem_moved")))
+frec = {**rec(length=0.20), "metrics": {**rec(length=0.20)["metrics"], "measure": F}}
+check("[5] flat probe F, top 0.20 -> plain, no length", gt.stretch_line(frec) == "stretch_max"
+      and gt.underbust_length(frec) is None, gt.stretch_line(frec))
 check("[5] no sentence says shorter", not [k for k, v in gt.FAILURE_SENTENCES.items() if "shorter" in v.lower()])
 
 # [6] source
@@ -244,6 +297,17 @@ check("[6] dialog shows it", key in dialog and "p.hem_moved" in dialog)
 import json  # noqa: E402
 de = json.loads((ROOT / "shared/languages/de.json").read_text())["translations"]
 check("[6] de.json has both strings", key in de and gt.FAILURE_SENTENCES["stretch_max_underbust"] in de)
+
+# [7] the preview
+from app.core import garment_preview as gp  # noqa: E402
+mask = np.zeros((500, 400), dtype=bool)
+mask[10:490, 150:250] = True
+reg = gp.Registration(gp.frame_of_mask(mask), L)
+texts = [m["text"] for m in gp.shapes(gt.validate_params({"kind": "top", "length_m": 0.27})[0], L, reg)["marks"]]
+check("[7] preview of a moved hem: '31 cm (asked 27)', hem mark says it moved",
+      "31 cm (asked 27)" in texts and "hem 1.14 m · moved below the underbust fold" in texts, texts)
+texts = [m["text"] for m in gp.shapes(gt.validate_params({"kind": "top", "length_m": 0.24})[0], L, reg)["marks"]]
+check("[7] preview of a hem that stays: '24 cm', 'hem 1.21 m'", "24 cm" in texts and "hem 1.21 m" in texts, texts)
 
 shutil.rmtree(_SCRATCH, ignore_errors=True)
 print(f"\n{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILED'}")

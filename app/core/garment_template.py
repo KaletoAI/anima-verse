@@ -489,9 +489,13 @@ def shape_targets(payload: Optional[Dict[str, Any]]) -> List[str]:
 #: Stretch above which the drape is re-run once with doubled quality (spec section 6), then refused.
 RETRY_STRETCH = 1.5
 #: Bug round 2026-11-20: a NARROW miss — the gated stretch at or over its limit but no higher than RETRY_STRETCH, on
-#: at most this many edges over 1.3 (``stretch_at.over_1_3``) — is re-run once with doubled quality too (Kai's
-#: jacket: one edge at 1.329, p99 1.03, refused on its first run). Many edges over the limit are a real fault of
-#: the fit that more quality does not mend; they are refused at once as before.
+#: at most this many edges over 1.3 (``stretch_at.over_1_3``) — is re-run once with doubled quality too. Many edges
+#: over the limit are a real fault of the fit that more quality does not mend; they are refused at once as before.
+#: Like every retry it only runs when the first run left half the wall budget (Ruling A142): Lirien's top at 0.24
+#: (first run 1.307) is mended by it (1.221); Kai's leather jacket copy (one edge at 1.329, p99 1.03) is NOT — its
+#: first run worked 122 s, over the 45 s half of its leather wall limit, so it stays refused (a forced retry passes
+#: at 1.182 in 232 s). Its stretch sits under the upper sleeves, over the lower layer's sleeve: a matter of the
+#: sleeve's layer ease, not of this retry.
 NARROW_MISS_EDGES = 4
 
 
@@ -611,8 +615,11 @@ def underbust_length(failed: Dict[str, Any]) -> Optional[float]:
     """Bug round 2026-11-20 — the length (metres, rounded up to the cm) that puts a failed top's / jacket's hem
     ``UNDERBUST_HEM_M`` under the underbust fold, when its hem (``metrics.outline``: ``top_y`` - ``length``) ends
     between the fold and the bust line (``_bust_lines`` of ``metrics.measure``) and the worst edge
-    (``stretch_at.z``) lies no higher than ``UNDERBUST_HEM_M`` over the bust line; else None. Never shorter than
-    the length asked."""
+    (``stretch_at.z``) lies no higher than ``UNDERBUST_HEM_M`` over the bust line; else None (also on a body without
+    a fold, ``_underbust_fold``). The length is counted from the line ``length_m`` counts from (``_length_origin``),
+    not from the length asked: a strapless top's hem is held ``STRAPLESS_MIN_M`` under its top edge, so a short asked
+    length does not say where the hem is (review of the bug round: asked 0.15 read hem 1.20 and advised 0.22, which
+    changed nothing). Never shorter than the length asked."""
     metrics = failed.get("metrics") or failed.get("data") or {}
     params = failed.get("params") or {}
     outline_ = metrics.get("outline") or {}
@@ -624,13 +631,18 @@ def underbust_length(failed: Dict[str, Any]) -> Optional[float]:
             or "band_y" not in meas or "waist_y" not in meas):
         return None
     try:
-        under_y, bust_y = _bust_lines(meas)
+        fold = _underbust_fold(meas)
+        origin = _length_origin(meas, top_y if strapless_top(params) else None)
     except (KeyError, TypeError, ValueError):
         return None
+    if fold is None:
+        return None
+    under_y, bust_y = fold
     hem_y = top_y - length
     if not (under_y <= hem_y <= bust_y) or z > bust_y + UNDERBUST_HEM_M:
         return None
-    return math.ceil((asked + hem_y - (under_y - UNDERBUST_HEM_M)) * 100.0 - 1e-6) / 100.0
+    need = math.ceil((origin - (under_y - UNDERBUST_HEM_M)) * 100.0 - 1e-6) / 100.0
+    return max(need, math.ceil(asked * 100.0 - 1e-6) / 100.0)
 
 
 def failure_info(failed: Dict[str, Any]) -> Dict[str, Any]:
@@ -1157,7 +1169,7 @@ def _bodice_outline(params: Dict[str, Any], meas: Dict[str, Any], waist_y: float
     import numpy as np
     if "shoulder_y" not in meas:
         raise ValueError("the body has no arm / neck joints to fit a bodice to")
-    top_y = meas["shoulder_y"] + SHOULDER_TOP_M
+    top_y = _length_origin(meas, None)
     ease = 1.0 + BODICE_EASE[0] + BODICE_EASE[1] * params["fit"] + (JACKET_EASE if params["kind"] == "jacket" else 0)
     skirt_h: List[float] = []
     skirt_c: List[float] = []
@@ -1190,15 +1202,48 @@ def _bodice_outline(params: Dict[str, Any], meas: Dict[str, Any], waist_y: float
 UNDERBUST_HEM_M = 0.03
 
 
+#: Review of the bug round 2026-11-20: the fold is only a fold when the torso girth climbs at least this much (full
+#: circumference, metres) from the underbust line to the bust line. ``_bust_lines`` always names a line — on a torso
+#: that widens evenly (a flat chest) it is simply the lowest sample of its window — and a hem there spans no step:
+#: 8 cm more girth over 10 cm of height is 1.3 cm of radius, nothing the cloth has to bridge. The measured bodies of
+#: the bug round climb 0.24-0.34 m (Lirien 0.98 - 0.64), the even probe of the review 0.08 m.
+UNDERBUST_STEP_M = 0.10
+
+
+def _length_origin(meas: Dict[str, Any], strapless_top_y: Optional[float]) -> float:
+    """The line a top's / jacket's ``length_m`` counts down from (Y-up metres): the shoulder line (joints +
+    ``SHOULDER_TOP_M``); a strapless top on a body without arm / neck joints counts from 12 cm over its top edge
+    (``strapless_top_y``). A bodice without the joints is no piece (``_bodice_outline`` refuses it first)."""
+    if "shoulder_y" in meas:
+        return float(meas["shoulder_y"]) + SHOULDER_TOP_M
+    if strapless_top_y is None:
+        raise ValueError("the body has no arm / neck joints to fit a bodice to")
+    return strapless_top_y + 0.12
+
+
+def _underbust_fold(meas: Dict[str, Any]) -> Optional[Tuple[float, float]]:
+    """``(under_y, bust_y)`` of ``_bust_lines`` when the body has an underbust fold to clear: a measured torso profile
+    (not the band-less-15-cm stand-in) whose girth climbs at least ``UNDERBUST_STEP_M`` from the underbust line to the
+    bust line; else None (a flat or evenly widening chest — no hem is moved, no underbust sentence is given)."""
+    if len(_bust_profile(meas)) < 3:
+        return None
+    under_y, bust_y = _bust_lines(meas)
+    if _torso_girth(meas, bust_y) - _torso_girth(meas, under_y) < UNDERBUST_STEP_M:
+        return None
+    return under_y, bust_y
+
+
 def _clear_underbust(params: Dict[str, Any], meas: Dict[str, Any], hem_y: float,
                      length_from: float) -> Tuple[float, Optional[Dict[str, Any]]]:
     """``(hem_y, moved)`` — the hem height of a top / jacket off the underbust fold (``UNDERBUST_HEM_M``): a hem
     within that distance of the fold goes ``UNDERBUST_HEM_M`` under it, and ``moved`` records it for the drape
     record and the UI (``{under_y, from_y, hem_y, length_m (asked), draped_length_m}``, lengths counted from
-    ``length_from``, the line ``length_m`` counts from); any other hem stays (``moved`` None)."""
-    if params.get("kind") not in ("top", "jacket"):
+    ``length_from``, the line ``length_m`` counts from); any other hem stays (``moved`` None), and so does every hem
+    on a body without a fold (``_underbust_fold``)."""
+    fold = _underbust_fold(meas) if params.get("kind") in ("top", "jacket") else None
+    if fold is None:
         return hem_y, None
-    under_y, _bust_y = _bust_lines(meas)
+    under_y = fold[0]
     if abs(hem_y - under_y) >= UNDERBUST_HEM_M:
         return hem_y, None
     new = under_y - UNDERBUST_HEM_M
@@ -1215,7 +1260,7 @@ def _strapless_top_outline(params: Dict[str, Any], meas: Dict[str, Any], waist_y
     the floor."""
     import numpy as np
     top_y = float(meas["band_y"]) - STRAPLESS_UNDERARM_M
-    shoulder = meas["shoulder_y"] + SHOULDER_TOP_M if "shoulder_y" in meas else top_y + 0.12
+    shoulder = _length_origin(meas, top_y)
     hem_y = min(top_y - STRAPLESS_MIN_M, max(meas["floor_y"] + 0.2, shoulder - params["length_m"]))
     hem_y, moved = _clear_underbust(params, meas, hem_y, shoulder)
     ease = 1.0 + BODICE_EASE[0] + BODICE_EASE[1] * params["fit"]
@@ -1438,11 +1483,16 @@ BOXER_HEM_PIN_M = 0.015
 STRING_CORNER = (0.35, 0.35)
 
 
+def _bust_profile(meas: Dict[str, Any]) -> List[Any]:
+    """The torso samples ``_bust_lines`` looks for the bust line in: between the waist + 5 cm and the chest band."""
+    return [p for p in meas.get("torso") or [] if meas["waist_y"] + 0.05 <= p[0] <= meas["band_y"]]
+
+
 def _bust_lines(meas: Dict[str, Any]) -> Tuple[float, float]:
     """A223 — ``(underbust_y, bust_y)`` off the torso profile (glTF Y-up metres): the bust line is the widest torso
     slice between the waist + 5 cm and the chest band under the arms; the underbust line the narrowest between 14 and
     4 cm under it. Without a profile: the band less 7 / 15 cm (the reference body's proportions)."""
-    prof = [p for p in meas.get("torso") or [] if meas["waist_y"] + 0.05 <= p[0] <= meas["band_y"]]
+    prof = _bust_profile(meas)
     if len(prof) < 3:
         return round(meas["band_y"] - 0.15, 4), round(meas["band_y"] - 0.07, 4)
     bust_y = max(prof, key=lambda p: p[1])[0]

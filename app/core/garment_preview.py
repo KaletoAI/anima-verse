@@ -503,8 +503,16 @@ def shapes(params: Dict[str, Any], meas: Dict[str, Any], reg: Registration) -> D
     add("dim", "line", [[outer, dim_top], [outer, hem_y]])
     add("dim", "line", [[outer - 0.015, dim_top], [outer + 0.015, dim_top]])
     add("dim", "line", [[outer - 0.015, hem_y], [outer + 0.015, hem_y]])
-    mark(outer + 0.012, (dim_top + hem_y) / 2, f"{round(p['length_m'] * 100)} cm")
-    mark(x0, hem_y - dip - 0.035, f"hem {hem_y:.2f} m", "middle")
+    # bug round 2026-11-20 review: a hem moved off the underbust fold (``gt._clear_underbust``) is drawn where the drape
+    # puts it, so the label gives the length draped and the length asked, and the hem mark says why it moved
+    moved = shape.get("hem_moved")
+    if moved:
+        mark(outer + 0.012, (dim_top + hem_y) / 2,
+             f"{round(moved['draped_length_m'] * 100)} cm (asked {round(moved['length_m'] * 100)})")
+        mark(x0, hem_y - dip - 0.035, f"hem {hem_y:.2f} m · moved below the underbust fold", "middle")
+    else:
+        mark(outer + 0.012, (dim_top + hem_y) / 2, f"{round(p['length_m'] * 100)} cm")
+        mark(x0, hem_y - dip - 0.035, f"hem {hem_y:.2f} m", "middle")
     mark(x0, hem_y - dip - 0.075, _fit_text(p, kind), "middle")
     return {"shapes": out, "marks": marks}
 

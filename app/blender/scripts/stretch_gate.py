@@ -10,6 +10,12 @@ The stretch of an edge is its draped length over its built length. Two ratios co
   the cloth, so it counts as 1.0 here. Kira's blazer (V-neck 0.26 m) had a 1.33 mm edge at the V's bottom that the
   drape drew to 2.43 mm — ratio 1.82, a 1.1 mm change nobody can see — and it refused the whole piece. A real tear
   still fails: an edge of 4 mm drawn to 5.3 mm (1.325, +1.3 mm) is gated as before.
+
+  The two floors together are the rule, on purpose: an edge counts when it was built at least 3 mm long AND grew
+  by at least 1 mm. At the limit ratio 1.3 the 1 mm growth is reached only from 1 / 0.3 = 3.33 mm on, so an edge
+  built 3.0-3.33 mm long may reach a ratio up to 1.33 unseen (3.0 -> 3.95 mm: 1.317, +0.95 mm). That band is
+  accepted: what the gate is for is a change one can see on the cloth, and under 1 mm there is none; from
+  3.33 mm on the ratio alone decides, as before.
 """
 import numpy as np
 
