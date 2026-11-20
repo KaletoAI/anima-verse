@@ -64,14 +64,20 @@ Two defects of the image-to-mesh step, both inherited from what the image model 
    (``beyond_cap_vertices``), not closed; the settled membrane does not reach over them.
    Version 6 (2026-11-20, Lirien's UniForge roll, hub job 1c6fd645): two ~12 mm lumps stood ~10-11 mm proud at the
    mouth corners, 29-38 mm beside the lip centre — outside the 30 mm mouth region, and neither pocket nor spike (their
-   edges reach ~70 degrees). The mouth region is now a rounded rectangle 42 x 16 mm (``MOUTH_REGION_POWER``) and holds a
-   BUMP rule, the mirror of the pocket rule (``_bumps``): a rise narrower than BUMP_OPEN_MM seeds a patch that grows by
+   edges reach ~70 degrees). The mouth region is now a rounded rectangle (``MOUTH_REGION_POWER``) 16 mm tall and at
+   least 42 mm, or the lip paint's half width plus MOUTH_CORNER_MM, to each side, and holds a BUMP rule, the mirror of the pocket rule (``_bumps``): a rise narrower than BUMP_OPEN_MM seeds a patch that grows by
    its foot like the eye flaps (``FLAP_FOOT_MM``); a patch whose core stands more than BUMP_MM above the harmonic
    membrane of its ring and spans at most BUMP_ACROSS_MM is lowered along the view normal onto the thin plate over it
    (``_thin_plate_fill``), every shift within the cap. The lips are protected: their paint dilated by LIP_PROTECT_MM and
-   the paint's box widened by it; a bump that touches them stays. Measured on the mesher originals: Lirien's lumps
-   11.6 / 11.5 mm -> 0.7 / 0.6 mm above a surface fitted to the ring around them, the lips unchanged; Kira, Glut, Rosi
-   and Gelina find no bump (Kira's upper-lip tubercle is protected) and move at most 0.05 mm, from the wider region.
+   the paint's box widened by it; a bump that touches them stays. A region with a lowered bump gets BUMP_SMOOTH_ROUNDS
+   of spike smoothing, so the ring the lowered patch leaves settles in one run. Measured on the mesher originals (a
+   1 mm ray-cast height map, a quadratic fitted to the ring 9-12 mm around each lump site): Lirien's lumps 10.2 / 9.5 mm
+   -> 0.5 / 0.4 mm above it, the lip box unchanged, and a second run moves nothing in her mouth region. Kira, Glut,
+   Rosi, Tilda Haase, Vallerie (located by the window) and Ylva Nordwind find no bump (Kira's upper-lip tubercle is
+   protected); Rosi, Tilda, Vallerie and Ylva come out byte-identical to version 5, Kira and Glut move at most 0.08 mm
+   from the wider region. The bump candidates left alone as ``outside`` on those bodies lie wholly outside the region —
+   the nose's underside 17-23 mm above the lip centre and the jaw's fall-off 42-49 mm beside it. Gelina's cleanup
+   stops before the mouth (no lash paint on one side), so she says nothing about this rule.
 
 Where in the chain: ``model3d._store_unrigged_model`` runs ``clean_face`` on the validated mesher result before
 it is published as ``unrigged/<signature>.glb`` — the file the face retexture is frozen from, the rig reads and
@@ -200,14 +206,22 @@ TAUBIN_LAMBDA = 0.5             # Taubin's lambda/mu filter (pass band k = 1/lam
 TAUBIN_MU = -0.53               # keeps (1 - 0.5)(1 + 0.53) = 0.765 of its height per pass ...
 TAUBIN_PASSES = 10              # ... 0.765^10 = 0.07 after all passes, the volume of a smooth surface stays
 SMOOTH_ROUNDS = 3               # detect -> smooth rounds (a shard's neighbour may stand out only once the shard is gone)
+BUMP_SMOOTH_ROUNDS = 10         # ... in a region whose bumps were lowered (version 6): the lowered patch's edge leaves a
+                                # ring of spike nodes that settles over more rounds — Lirien's mouth 24 -> 27 -> 12 -> 11
+                                # after three (a second run then moved 26 vertices by up to 2.5 mm), 0 after eight
 MOVE_CAP_SEPARATION = 0.15      # the per-vertex displacement cap of step 3: this share of the eye separation (lash-paint
                                 # centres 71-100 mm -> 10.7-15.0 mm). An eye pocket is never deeper than half an eyeball
                                 # (~12 mm); a deeper visible floor is a hole into the head shell (Kira 5c5f: 33 mm)
 MOUTH_DROP_MM = 74.0            # the mouth's centre under the eye line when the lip paint does not locate it (measured:
                                 # Glut 72.7, Kai 70.9, Kira 72.7, Lirien 78.0 mm)
-MOUTH_HALF_WIDTH_MM = 42.0      # the mouth region: lips 18-70 mm wide (LIP_WIDTH_MM) plus the corners beside them —
-                                # version 6: 30 -> 42, the lip line's half width (Lirien 27.5 mm) and a 12 mm margin; her
-                                # two corner lumps (hub job 1c6fd645) stood at +-29..38 mm, outside the 30 mm region ...
+MOUTH_HALF_WIDTH_MM = 42.0      # the mouth region at least: lips 18-70 mm wide (LIP_WIDTH_MM) plus the corners beside
+                                # them — version 6: 30 -> 42. Lirien's two corner lumps (hub job 1c6fd645) stood at
+                                # +-26..40 mm, outside the 30 mm region, while her lip PAINT reads only 15.3 mm half
+                                # width (mouth_part's lip line: 27.5 mm) — the paint alone would not reach them ...
+MOUTH_CORNER_MM = 16.0          # ... and at least the paint's half width plus this: a lump whose centre lies up to 10 mm
+                                # beyond the paint's extent and that is 12 mm across reaches 10 + 12 / 2 = 16 mm past it
+                                # (a 70 mm mouth, paint half width ~30 mm: 46 mm; measured: Glut 33.1 -> 49.1, Ylva 29.4
+                                # -> 45.4 mm, every other body stays at 42) ...
 MOUTH_HALF_HEIGHT_MM = 16.0     # ... the lips and the opening between them, not the nostrils (~22 mm above the centre)
 MOUTH_REGION_POWER = 4.0        # version 6: a rounded rectangle |x/a|^4 + |y/b|^4 < 1, not an ellipse — at 38 mm beside
                                 # the centre an ellipse is only 6.8 mm tall, this one 12.1 mm (the lumps reach 9 mm below)
@@ -1361,7 +1375,8 @@ def _smooth_region(P_in: np.ndarray, F: np.ndarray, region: np.ndarray, node: np
     smoothed = np.zeros(n_nodes, bool)
     # SMOOTH_ROUNDS of detect -> smooth: a shard whose neighbour stood out only against the shard itself is found
     # in the next round; a node that no longer stands out is never touched again.
-    for _round in range(SMOOTH_ROUNDS):
+    rounds = BUMP_SMOOTH_ROUNDS if lips is not None and record["bumps"].get("count") else SMOOTH_ROUNDS
+    for _round in range(rounds):
         smooth = spike & movable
         if not smooth.any():
             break
@@ -1460,6 +1475,7 @@ def _mouth_region(P: np.ndarray, eyes: List[Dict[str, Any]], frame: Dict[str, An
     half_a, half_b = MOUTH_HALF_WIDTH_MM * mm, MOUTH_HALF_HEIGHT_MM * mm
     head, front = frame["head"], frame["front"]
     if mouth is not None:
+        half_a = max(half_a, mouth["half_width"] + MOUTH_CORNER_MM * mm)
         centre = np.array(mouth["centre"], np.float64)
         located = "paint"
     else:

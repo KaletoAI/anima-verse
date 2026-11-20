@@ -57,7 +57,11 @@ Hand-derived expectations (constants of face_cleanup; MM = 1 mm of the 1.70 m re
   high over 10 mm is no pocket and its dihedrals (atan(4 / 5) = 39 degrees at most) no spike.
 - NOTHING ELSE: every vertex that moved lies within 7.7 mm (+ 0.5 for its own nearest cell) of a lump centre; vertex
   count, index buffer and UVs are unchanged; normals are unit length; the result passes ``validate_source``; a second
-  run of the cleanup on the result finds no bump; the record says version 6.
+  run of the cleanup on the result finds no bump and moves no vertex of the mouth region (the spike rounds after a
+  lowering settle in the first run — Lirien's mesher roll needed eight); the record says version 6.
+- REGION WIDTH: ``_mouth_region`` reaches max(MOUTH_HALF_WIDTH_MM 42, paint half width + MOUTH_CORNER_MM 16) to each
+  side: this fixture's paint (~12 mm) -> 42 mm; a paint 35 mm half wide (a 70 mm mouth, LIP_WIDTH_MM's top) -> 51 mm;
+  without paint (the window) -> 42 mm.
 - OLD CODE: ``app/core/face_cleanup.py`` at 76aa5cb1 (the base of this change, version 5) leaves every dome vertex
   where it is — the proof that this smoke tests the new rule.
 """
@@ -226,6 +230,17 @@ def main():
     _again, record2 = fc.clean_face(out)
     m2 = {r["region"]: r for r in (record2.get("smooth") or {}).get("regions") or []}.get("mouth") or {}
     check((m2.get("bumps") or {}).get("count") == 0, f"a second run finds no bump: {m2.get('bumps')}")
+    check(m2.get("moved_vertices") == 0, f"a second run moves no mouth vertex: {m2.get('moved_vertices')} "
+          f"(max {(m2.get('displacement_mm') or {}).get('max')} mm, spikes {m2.get('spikes')})")
+
+    one = np.zeros((1, 3))
+    eyes = [{"centre": np.array([-30.0, 0.0, 0.0]) * MM}, {"centre": np.array([30.0, 0.0, 0.0]) * MM}]
+    frame = {"head": np.ones(1, bool), "front": 1, "centre": np.zeros(3), "nose": np.zeros(3)}
+    for paint_half, want in ((12.0, 42.0), (35.0, 51.0), (None, 42.0)):
+        mouth_info = None if paint_half is None else {"centre": np.array([0.0, -74.0, 0.0]) * MM, "half_width": paint_half * MM}
+        _region, _centre, half_a, half_b, _located = fc._mouth_region(one, eyes, frame, mouth_info, MM)
+        check(abs(half_a / MM - want) < 1e-6 and abs(half_b / MM - 16.0) < 1e-6,
+              f"mouth region for paint half width {paint_half}: {half_a / MM:.1f} x {half_b / MM:.1f} mm (expected {want} x 16)")
 
     old = old_module()
     out_old, _record_old = old.clean_face(glb)
