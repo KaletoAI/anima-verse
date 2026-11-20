@@ -16,10 +16,17 @@ never assigns or relabels a part. It only:
   rotate it so the grain (``up``) points to +v.
 * ``strip_uv`` — the construction-strip UV of a BAND island (u = arc length of the mid line, v = across).
 * ``distortion`` — area ratio and the 95th percentile stretch of a flattening.
+* ``pack`` — all islands at ONE px/cm into a square atlas, in rows (``ROW_ORDER``), in IMAGE-frame pixels.
+* ``seam_samples`` — matched point pairs along every duplicated border (the two sides of a seam), for the seam
+  continuity check and the seam letters of the debug pattern sheet.
+* ``cap_height`` — the signed sleeve cap height (shoulder point over the underarm seam ends).
+* ``islands_payload`` — the ``islands.json`` dict: loops and triangles in atlas pixels, no timing or run data, so
+  its sha is a pure function of the geometry.
 
 Units: metres in, metres out (the UV is in metres until packing). Faces may be quads or n-gons; they are
 fan-triangulated (``fan``) for the solves only, the UV stays per island vertex (= per face corner).
 """
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -29,6 +36,11 @@ PARTS = {1: "front", 2: "back", 3: "sleeve_l", 4: "sleeve_r", 5: "band", 6: "col
          9: "cuff_r"}
 #: Parts that get the construction-strip UV (``strip_uv``) instead of a flattening.
 STRIP_PARTS = frozenset({5, 6, 8, 9})
+
+#: Atlas rows of ``pack`` (island names). A name in no row goes to an extra last row, sorted.
+ROW_ORDER = (("front", "front_2", "back"), ("sleeve_l", "sleeve_r"), ("band", "collar", "placket", "cuff_l", "cuff_r"))
+#: The payload format of ``islands_payload``.
+PAYLOAD_VERSION = 1
 
 #: A cotangent weight is clamped to this magnitude (a needle triangle must not dominate the solve).
 COT_MAX = 1e4
@@ -398,3 +410,248 @@ def distortion(uv, xyz, tris):
     stretch = np.maximum(sv[:, 0], 1.0 / np.maximum(sv[:, 1], 1e-12))
     return {"area_ratio": float(np.sum(np.abs(uva2)) / np.sum(a2)),
             "stretch_p95": float(np.percentile(stretch, 95)) if len(stretch) else 1.0}
+
+
+def _floor2(x):
+    """Floor to 0.01 (a tiny epsilon keeps an exact quotient such as 17.50 from flooring to 17.49)."""
+    return math.floor(x * 100.0 + 1e-6) / 100.0
+
+
+def pack(islands_uv_m, size_px=2048, margin_cm=1.5):
+    """Pack islands (name -> (n, 2) UV in metres, v up) at ONE density into a ``size_px`` square atlas.
+
+    Rows follow ``ROW_ORDER`` (names in no row: one extra last row, sorted). A row is ``margin`` + (island width +
+    ``margin``) per island wide and as high as its tallest island; rows stack from the top margin with ``margin``
+    between them, each row centred horizontally within the widest row, islands TOP-aligned inside their row.
+    ``s`` = floor_0.01(size / max(W, H)) px/cm with W, H the layout extent in cm.
+
+    Returns ({name: (n, 2) IMAGE-frame pixels, x right, y down}, s). Blender UV of a pixel = (x / size,
+    1 - y / size)."""
+    ext = {}
+    for name, uv in islands_uv_m.items():
+        uv = np.asarray(uv, float)
+        lo, hi = uv.min(axis=0), uv.max(axis=0)
+        ext[name] = (lo, hi, (hi - lo) * 100.0)
+    known = [n for row in ROW_ORDER for n in row]
+    rows = [[n for n in row if n in ext] for row in ROW_ORDER]
+    rows.append(sorted(n for n in ext if n not in known))
+    rows = [r for r in rows if r]
+    row_w = [margin_cm + sum(ext[n][2][0] + margin_cm for n in r) for r in rows]
+    row_h = [max(ext[n][2][1] for n in r) for r in rows]
+    width = max(row_w) if rows else 0.0
+    height = margin_cm + sum(h + margin_cm for h in row_h)
+    s = _floor2(size_px / max(width, height, 1e-9))
+    out = {}
+    y_cm = margin_cm
+    for r, rw, rh in zip(rows, row_w, row_h):
+        x_cm = margin_cm + 0.5 * (width - rw)
+        for n in r:
+            lo, hi, size_cm = ext[n]
+            uv = np.asarray(islands_uv_m[n], float)
+            px = np.empty_like(uv)
+            px[:, 0] = (x_cm + (uv[:, 0] - lo[0]) * 100.0) * s
+            px[:, 1] = (y_cm + (hi[1] - uv[:, 1]) * 100.0) * s
+            out[n] = px
+            x_cm += size_cm[0] + margin_cm
+        y_cm += rh + margin_cm
+    return out, s
+
+
+def _boundary_halfedges(island):
+    """Boundary half-edges (local a, local b) of an island in face winding: a corner edge no other face of the
+    island uses."""
+    cnt = {}
+    for poly in island.corner_vid:
+        for c in range(len(poly)):
+            a, b = poly[c], poly[(c + 1) % len(poly)]
+            k = (min(a, b), max(a, b))
+            cnt[k] = cnt.get(k, 0) + 1
+    out = []
+    for poly in island.corner_vid:
+        for c in range(len(poly)):
+            a, b = poly[c], poly[(c + 1) % len(poly)]
+            if cnt[(min(a, b), max(a, b))] == 1:
+                out.append((int(a), int(b)))
+    return out
+
+
+def boundary_loops(island):
+    """The island's boundary as closed loops of local vertex ids (face winding), longest first; a loop starts at
+    its smallest id. A vertex where two loops touch is followed by the smallest unused successor."""
+    nxt = {}
+    for a, b in _boundary_halfedges(island):
+        nxt.setdefault(a, []).append(b)
+    for v in nxt:
+        nxt[v].sort()
+    loops = []
+    while any(nxt.values()):
+        start = min(v for v, l in nxt.items() if l)
+        loop, v = [start], start
+        while True:
+            w = nxt[v].pop(0)
+            if w == start:
+                break
+            loop.append(w)
+            v = w
+            if not nxt.get(v):
+                break
+        i = loop.index(min(loop))
+        loops.append(loop[i:] + loop[:i])
+    loops.sort(key=lambda lp: (-len(lp), lp[0]))
+    return loops
+
+
+def seam_samples(islands, px, xyz, step_cm=1.0):
+    """Matched point pairs along every duplicated border.
+
+    A seam edge is a mesh edge (global vertex ids) that is a boundary edge of exactly two island sides (two islands,
+    or twice the same island when a seam does not separate it). Seam edges are chained through global vertices that
+    touch exactly two seam edges and whose two sides continue in the same islands at the same local vertices; any
+    other vertex ends a chain. Every chain is sampled every ``step_cm`` of its 3D rest length (``xyz``, global ids),
+    from 0 up to and including the last whole step; a sample's pixel on each side is interpolated linearly on the
+    same edge at the same fraction.
+
+    ``islands`` = the ``split_islands`` list, ``px`` = {name: (n, 2) image-frame pixels} (``pack``). Returns
+    [{"seam", "a", "uv_a_px", "b", "uv_b_px"}] with ``seam`` = the chain index (chains ordered by their island
+    names, then their smallest global vertex id), ``a`` <= ``b`` by (name, local vertex) of the chain's first edge."""
+    xyz = np.asarray(xyz, float)
+    sides = {}  # global edge key -> [(island idx, local a, local b, global a, global b)]
+    for ii, isl in enumerate(islands):
+        for a, b in _boundary_halfedges(isl):
+            ga, gb = int(isl.vmap[a]), int(isl.vmap[b])
+            if ga == gb:
+                continue
+            sides.setdefault((min(ga, gb), max(ga, gb)), []).append((ii, a, b, ga, gb))
+    seam = {k: v for k, v in sides.items() if len(v) == 2}
+    at = {}
+    for k in seam:
+        for g in k:
+            at.setdefault(g, []).append(k)
+
+    def local_at(side, g):
+        ii, a, b, ga, gb = side
+        return (ii, a if ga == g else b)
+
+    def continues(k1, k2, g):
+        s1 = {local_at(s, g) for s in seam[k1]}
+        s2 = {local_at(s, g) for s in seam[k2]}
+        return len(s1) == 2 and s1 == s2
+
+    def joint_ok(g):
+        ks = at[g]
+        return len(ks) == 2 and continues(ks[0], ks[1], g)
+
+    used, chains = set(), []
+    for k0 in sorted(seam):
+        if k0 in used:
+            continue
+        # walk back to a chain end (or around a closed loop to its smallest edge)
+        k, g = k0, k0[0]
+        seen = {k0}
+        while joint_ok(g):
+            k2 = at[g][0] if at[g][1] == k else at[g][1]
+            if k2 in seen:
+                break
+            seen.add(k2)
+            g = k2[0] if k2[1] == g else k2[1]
+            k = k2
+        edges, verts = [], [g]
+        while True:
+            used.add(k)
+            edges.append(k)
+            g = k[0] if k[1] == g else k[1]
+            verts.append(g)
+            if not joint_ok(g):
+                break
+            k2 = at[g][0] if at[g][1] == k else at[g][1]
+            if k2 in used:
+                break
+            k = k2
+        chains.append((edges, verts))
+
+    built = []
+    for edges, verts in chains:
+        # side A of the first edge = the smaller (island name, local vertex at the chain start)
+        first = sorted(seam[edges[0]], key=lambda s: (islands[s[0]].name, local_at(s, verts[0])[1]))
+        cur = [local_at(first[0], verts[0]), local_at(first[1], verts[0])]
+        track = [cur]
+        for e, g0, g1 in zip(edges, verts, verts[1:]):
+            # ``continues`` guaranteed that both sides of e meet the current sides at g0
+            cur = [local_at(next(sd for sd in seam[e] if local_at(sd, g0) == key), g1) for key in cur]
+            track.append(cur)
+        names = tuple(islands[t[0]].name for t in track[0])
+        built.append((names, min(verts), verts, track))
+    built.sort(key=lambda b: (b[0], b[1]))
+
+    out = []
+    for si, (names, _, verts, track) in enumerate(built):
+        p3 = xyz[verts]
+        seg = np.linalg.norm(np.diff(p3, axis=0), axis=1) * 100.0
+        cum = np.concatenate([[0.0], np.cumsum(seg)])
+        total = float(cum[-1])
+        for k in range(int(math.floor(total / step_cm + 1e-6)) + 1):
+            t = min(k * step_cm, total)
+            j = int(min(np.searchsorted(cum, t, side="right") - 1, len(seg) - 1))
+            f = 0.0 if seg[j] <= 0 else (t - cum[j]) / seg[j]
+            pts = []
+            for side in (0, 1):
+                ii0, l0 = track[j][side]
+                _, l1 = track[j + 1][side]
+                q = px[islands[ii0].name]
+                pts.append([round(float(v), 3) for v in (1 - f) * q[l0] + f * q[l1]])
+            out.append({"seam": si, "a": names[0], "uv_a_px": pts[0], "b": names[1], "uv_b_px": pts[1]})
+    return out
+
+
+def cap_height(island_uv_cm, loop_ids, shoulder_id, underarm_ids):
+    """Signed sleeve cap height in cm: v(shoulder point of the armhole loop) - mean v(the underarm seam ends), with
+    ``island_uv_cm`` = the island's (n, 2) UV in cm, v up (negative = an inverted cap). All ids are local vertex ids
+    and must lie on ``loop_ids``."""
+    loop = {int(v) for v in loop_ids}
+    ids = [int(shoulder_id)] + [int(v) for v in underarm_ids]
+    if not underarm_ids or any(v not in loop for v in ids):
+        raise ValueError("cap_height: the shoulder point and the underarm ends must lie on the armhole loop")
+    uv = np.asarray(island_uv_cm, float)
+    return float(uv[int(shoulder_id), 1] - np.mean(uv[[int(v) for v in underarm_ids], 1]))
+
+
+def _r(x, nd=3):
+    return [round(float(v), nd) for v in x]
+
+
+def islands_payload(islands, islands_uv_m, xyz, size_px=2048, margin_cm=1.5, cap_heights=None, step_cm=1.0):
+    """The ``islands.json`` dict of a piece.
+
+    ``islands`` = the ``split_islands`` list, ``islands_uv_m`` = {name: (n, 2) oriented UV in metres},
+    ``xyz`` = the global rest coordinates, ``cap_heights`` = {name: signed cm} for the sleeves. Packs the islands
+    (``pack``) and returns {"version", "atlas_px", "px_per_cm", "margin_cm", "islands": [{"name", "part",
+    "bbox_px" [x0, y0, x1, y1], "loops_px" [[[x, y], ...], ...], "verts_px", "tris" (the fan triangles, local ids
+    into verts_px), "area_cm2" (UV area), "distortion", "cap_height_cm"?}], "seams": ``seam_samples``}. Pixels are
+    image-frame (row = (1 - v) * size), rounded to 1/1000 px; no timing or run data, so equal geometry gives a
+    byte-equal payload."""
+    xyz = np.asarray(xyz, float)
+    px, s = pack(islands_uv_m, size_px, margin_cm)
+    caps = cap_heights or {}
+    items = []
+    for isl in islands:
+        q = px[isl.name]
+        uv = np.asarray(islands_uv_m[isl.name], float)
+        tris = np.array([t for poly in isl.corner_vid for t in fan(poly)], dtype=np.int64).reshape(-1, 3)
+        lx = xyz[isl.vmap]
+        area = float(np.sum(np.abs(_signed_uv_area2(uv, tris))) * 0.5 * 1e4) if len(tris) else 0.0
+        dist = distortion(uv, lx, tris) if len(tris) else {"area_ratio": 0.0, "stretch_p95": 1.0}
+        item = {
+            "name": isl.name,
+            "part": int(isl.part),
+            "bbox_px": _r(np.concatenate([q.min(axis=0), q.max(axis=0)])),
+            "loops_px": [[_r(q[v]) for v in loop] for loop in boundary_loops(isl)],
+            "verts_px": [_r(p) for p in q],
+            "tris": [[int(v) for v in t] for t in tris],
+            "area_cm2": round(area, 4),
+            "distortion": {k: round(float(v), 6) for k, v in dist.items()},
+        }
+        if isl.name in caps:
+            item["cap_height_cm"] = round(float(caps[isl.name]), 3)
+        items.append(item)
+    return {"version": PAYLOAD_VERSION, "atlas_px": int(size_px), "px_per_cm": s, "margin_cm": float(margin_cm),
+            "islands": items, "seams": seam_samples(islands, px, xyz, step_cm)}

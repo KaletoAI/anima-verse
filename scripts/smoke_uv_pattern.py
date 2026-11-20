@@ -43,7 +43,28 @@ No server, no world DB, no Blender: ``uv_pattern`` is numpy only and imported th
     v = 0 on the outer edge, 0.095 - 0.080 = 0.015 on the inner edge (+-1e-6); u increases with the order of rows.
 [6] Performance: a 60 x 40 = 2400-vertex island (a 120 deg cylinder sector, r 0.2, h 0.5) through ``lscm`` +
     ``arap(iters=40)`` — printed, soft bound 8 s (a WARN, not a failure; the number goes to the ledger).
+[7] Packing (T-shirt boxes in cm, rectangles of 4 vertices in metres): front 50 x 47, back 50 x 45, sleeves 34 x 25
+    each, band 44 x 4, margin 1.5. Rows by ``ROW_ORDER``: A = front, back: 1.5 + 50 + 1.5 + 50 + 1.5 = 104.5;
+    B = sleeves: 1.5 + 34 + 1.5 + 34 + 1.5 = 72.5; C = band: 1.5 + 44 + 1.5 = 47. H = 1.5 + 47 + 1.5 + 25 + 1.5 + 4 +
+    1.5 = 82. max = 104.5 -> px_per_cm = floor_0.01(2048 / 104.5 = 19.598) = 19.59. Row A is the widest, so its
+    centring offset is 0: the front bbox left edge = 1.5 * 19.59 = 29.39 px (+-0.5), its top (row A starts at the top
+    margin, islands top-aligned) = 29.39 px. Every vertex lies inside the 2048 atlas.
+[8] Long sleeves (34 x 60): H = 1.5 + 47 + 1.5 + 60 + 1.5 + 4 + 1.5 = 117 > 104.5 -> 2048 / 117 = 17.504 -> 17.50
+    px/cm. The bbox of every island in px divided by its size in cm is 17.50 +- 0.01 (one density).
+[10] Seam samples: the two cylinder halves of [2], packed: 2 seams (the columns at angle 0 and pi), each 0.50 m long
+    in 3D -> 50 / 1 + 1 = 51 samples per seam, 102 pairs. Both halves have the same height and sit top-aligned in
+    row A, so the image-row coordinate of the two sides of a pair agrees within 1 px. The frustum of [3] has one
+    seam inside ONE island (the underarm); its slant length is sqrt(0.45^2 + 0.03^2) = 0.450999 m -> floor(45.0999) +
+    1 = 46 pairs, both sides ``sleeve_l``, the two sides mirror images about the top generatrix -> their rows agree
+    within 1 px.
+[11] Payload purity: two ``islands_payload`` calls on the same input give byte-identical
+    ``json.dumps(sort_keys=True)`` output; the payload carries version 1, atlas_px 2048, the island names, and per
+    island ``verts_px`` / ``tris`` / ``loops_px`` / ``bbox_px`` / ``area_cm2`` / ``distortion``. The plane of [1]
+    (0.30 x 0.20 m) packs alone: area_cm2 = 30 * 20 = 600 (+-0.5), one boundary loop of 2 * (6 + 4) = 20 vertices.
+[12] Cap height: v in cm of a hand island, shoulder v = 12, underarm ends v = 15 and 13 -> 12 - 14 = -2.0 (inverted);
+    a shoulder id outside the loop raises ValueError.
 """
+import json
 import math
 import sys
 import time
@@ -107,8 +128,10 @@ seams = {tuple(sorted((cv(k, j), cv(k, j + 1)))) for k in (0, S // 2) for j in r
 isl = up.split_islands(len(xyz), faces, np.ones(len(faces), int), seams, xyz=xyz)
 check("[2] two islands", len(isl) == 2, len(isl))
 want_w = 6 * math.sin(math.radians(4.5))
+cyl_xyz, cyl_isl, cyl_uv = xyz, isl, {}
 for i in isl:
     uv, lx, tris = flatten(i, xyz, (0, 0, 1), (0, 0, 0))
+    cyl_uv[i.name] = uv
     ext = uv.max(0) - uv.min(0)
     side = "-Y" if lx[:, 1].mean() < 0 else "+Y"
     check(f"[2] half {side}: width {want_w:.6f} x height 0.500",
@@ -217,6 +240,77 @@ print(f"     [6] 2400-vertex island lscm + arap(40) + orient: {dt:.2f} s  {d6}")
 if dt >= 8.0:
     print("WARN [6] slower than the 8 s soft bound")
 check("[6] the sector stays isometric", abs(d6["area_ratio"] - 1) < 0.005 and d6["stretch_p95"] <= 1.01, d6)
+
+# [7] packing, T-shirt boxes
+def rect(w_cm, h_cm):
+    return np.array([(0, 0), (w_cm / 100, 0), (w_cm / 100, h_cm / 100), (0, h_cm / 100)], float)
+
+
+boxes = {"front": (50, 47), "back": (50, 45), "sleeve_l": (34, 25), "sleeve_r": (34, 25), "band": (44, 4)}
+packed, s7 = up.pack({k: rect(*v) for k, v in boxes.items()}, 2048, 1.5)
+check("[7] px_per_cm 19.59", abs(s7 - 19.59) < 1e-9, s7)
+fx0, fy0 = packed["front"].min(0)
+check("[7] front bbox left/top 29.39 px", abs(fx0 - 29.39) <= 0.5 and abs(fy0 - 29.39) <= 0.5, (fx0, fy0))
+allp = np.concatenate(list(packed.values()))
+check("[7] every vertex inside the atlas", allp.min() >= 0 and allp.max() <= 2048, (allp.min(), allp.max()))
+check("[7] back right of front, sleeves below, band last",
+      packed["back"][:, 0].min() > packed["front"][:, 0].max()
+      and packed["sleeve_l"][:, 1].min() > packed["front"][:, 1].max()
+      and packed["band"][:, 1].min() > packed["sleeve_l"][:, 1].max())
+
+# [8] long sleeves: one density
+boxes8 = dict(boxes, sleeve_l=(34, 60), sleeve_r=(34, 60))
+packed8, s8 = up.pack({k: rect(*v) for k, v in boxes8.items()}, 2048, 1.5)
+check("[8] px_per_cm 17.50", abs(s8 - 17.50) < 1e-9, s8)
+ratios = {k: tuple((packed8[k].max(0) - packed8[k].min(0)) / np.array(v, float)) for k, v in boxes8.items()}
+check("[8] every island at 17.50 +- 0.01 px/cm",
+      all(abs(r - 17.50) <= 0.01 for rr in ratios.values() for r in rr), ratios)
+
+# [10] seam samples
+cpx, _ = up.pack(cyl_uv, 2048, 1.5)
+pairs = up.seam_samples(cyl_isl, cpx, cyl_xyz, step_cm=1.0)
+check("[10] cylinder: 102 pairs", len(pairs) == 102, len(pairs))
+check("[10] cylinder: 2 seams of 51", sorted({p["seam"] for p in pairs}) == [0, 1]
+      and all(sum(p["seam"] == s for p in pairs) == 51 for s in (0, 1)))
+check("[10] cylinder: the halves pair up", all({p["a"], p["b"]} == {"front", "front_2"} for p in pairs))
+dv = max(abs(p["uv_a_px"][1] - p["uv_b_px"][1]) for p in pairs) if pairs else None
+check("[10] cylinder: rows agree within 1 px", dv is not None and dv <= 1.0, dv)
+fisl = up.split_islands(len(fx), ff, np.full(len(ff), 3), fsm, xyz=fx)
+fpx, _ = up.pack({"sleeve_l": uv3}, 2048, 1.5)
+fpairs = up.seam_samples(fisl, fpx, fx, step_cm=1.0)
+check("[10] frustum: 46 pairs inside sleeve_l", len(fpairs) == 46 and all(p["a"] == p["b"] == "sleeve_l" for p in fpairs),
+      len(fpairs))
+fdv = max(abs(p["uv_a_px"][1] - p["uv_b_px"][1]) for p in fpairs) if fpairs else None
+check("[10] frustum: rows agree within 1 px", fdv is not None and fdv <= 1.0, fdv)
+fdu = min(abs(p["uv_a_px"][0] - p["uv_b_px"][0]) for p in fpairs) if fpairs else None
+check("[10] frustum: the two sides are apart in u", fdu is not None and fdu > 10, fdu)
+
+# [11] payload purity
+xyz, faces, vid = grid()
+isl = up.split_islands(len(xyz), faces, np.ones(len(faces), int), set(), xyz=xyz)
+uv11, _, _ = flatten(isl[0], xyz, (0, 0, 1), (0.15, 1.0, 0.0))
+pl1 = up.islands_payload(isl, {"front": uv11}, xyz)
+pl2 = up.islands_payload(isl, {"front": uv11}, xyz)
+check("[11] byte-identical payloads", json.dumps(pl1, sort_keys=True) == json.dumps(pl2, sort_keys=True))
+check("[11] header", pl1.get("version") == 1 and pl1.get("atlas_px") == 2048 and pl1.get("margin_cm") == 1.5
+      and [i["name"] for i in pl1.get("islands", [])] == ["front"], {k: pl1.get(k) for k in ("version", "atlas_px")})
+i11 = pl1["islands"][0] if pl1.get("islands") else {}
+check("[11] island keys", {"name", "part", "bbox_px", "loops_px", "verts_px", "tris", "area_cm2", "distortion"} <= set(i11),
+      sorted(i11))
+check("[11] area_cm2 600", abs(i11.get("area_cm2", 0) - 600) <= 0.5, i11.get("area_cm2"))
+check("[11] one boundary loop of 20 vertices", [len(lp) for lp in i11.get("loops_px", [])] == [20],
+      [len(lp) for lp in i11.get("loops_px", [])])
+check("[11] tris index verts_px", len(i11.get("tris", [])) == 48
+      and max(max(t) for t in i11["tris"]) < len(i11["verts_px"]))
+
+# [12] cap height
+cuv = np.array([(0, 12.0), (-5, 15.0), (5, 13.0), (0, 0.0)])
+check("[12] cap height -2.0", abs(up.cap_height(cuv, [0, 1, 2], 0, [1, 2]) + 2.0) < 1e-9)
+try:
+    up.cap_height(cuv, [1, 2], 0, [1, 2])
+    check("[12] shoulder outside the loop raises", False)
+except ValueError:
+    check("[12] shoulder outside the loop raises", True)
 
 print(f"\n{len(FAILS)} FAILED: {FAILS}" if FAILS else "\nALL OK")
 sys.exit(1 if FAILS else 0)
