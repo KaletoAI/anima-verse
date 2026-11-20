@@ -2212,7 +2212,8 @@ def _template_row(character_name: str, item_id: str, item: Dict[str, Any], wante
     """A template row's ``template`` (Ruling A138): ``{params (None: none stored), source ("llm" / "user"),
     updated_at, built (the kinds draped today), state ("ready" / "missing" / "failed" / "blocked"), reason,
     built_at, metrics {wall_s, cpu_s, stretch_max, coverage, texture, pose_shapes (Rulings A141 / A142: the poses with
-    a corrective shape, side suffixes folded), layered_over (Ruling A142: how many lower drapes it was draped over)},
+    a corrective shape, side suffixes folded), layered_over (Ruling A142: how many lower drapes it was draped over),
+    texture_warning (``garment_template.texture_warning``)},
     cost {llm_calls, hub_jobs, cpu_s}}``."""
     from app.core import base_body, garment_template
     stored = garment_template.template_of(item)
@@ -2233,7 +2234,9 @@ def _template_row(character_name: str, item_id: str, item: Dict[str, Any], wante
                        "coverage": (metrics.get("bake") or {}).get("coverage"),
                        "texture": (record.get("texture") or {}).get("source") or "",
                        "pose_shapes": garment_template.shape_targets(record.get("pose_shapes")),
-                       "layered_over": len(record.get("colliders") or [])}
+                       "layered_over": len(record.get("colliders") or []),
+                       # bug round 2026-11-20: a poor texture is said in the row (never a refusal)
+                       "texture_warning": garment_template.texture_warning(metrics.get("bake"))}
            if metrics else None,
            "cost": {"llm_calls": 1, "hub_jobs": 0, "cpu_s": garment_template.CPU_ESTIMATE_S}}
     return out

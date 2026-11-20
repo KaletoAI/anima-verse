@@ -411,10 +411,34 @@ export interface TemplateInfo {
   metrics: { wall_s: number | null; cpu_s: number | null; stretch_max: number | null; coverage: number | null;
     texture: string; /** Rulings A141 / A142: the poses draped again as corrective shapes ("sit", "arms_down", …). */
     pose_shapes?: string[]; /** Ruling A142: how many lower template drapes it was draped over. */
-    layered_over?: number; /** Over the time budget: shown as "slow" — never a refusal. */ slow?: boolean } | null
+    layered_over?: number; /** Over the time budget: shown as "slow" — never a refusal. */ slow?: boolean
+    /** Bug round 2026-11-20: a poor texture (`garment_template.texture_warning`) — warned, never a refusal. */
+    texture_warning?: TextureWarning | null } | null
   cost: { llm_calls: number; hub_jobs: number; cpu_s: number }
   /** The failed drape of the current key as data (`state` "failed"); null otherwise. */
   failure?: StepFailure | null
+}
+
+/** Bug round 2026-11-20: a drape whose texture is poor (`garment_template.texture_warning`, marks `TEXTURE_WARN`):
+ *  under 60 % of it got a picture colour, or the views' outline matches the template's by under half. */
+export interface TextureWarning {
+  coverage: number | null
+  iou: number | null
+  low_coverage: boolean
+  low_iou: boolean
+}
+
+/** "Texture: the picture covers only 43 % of the piece · its outline matches the template's by 20 % — …" — the
+ *  Figure row's warning of a poor texture; "" when there is none. */
+export function templateTextureWarning(info: TemplateInfo | null | undefined, t: Tr = EN): string {
+  const w = info?.state === 'ready' ? info.metrics?.texture_warning : null
+  if (!w) return ''
+  const pct = (v: number | null) => String(Math.round((v ?? 0) * 100))
+  const parts: string[] = []
+  if (w.low_coverage) parts.push(t('the picture covers only {n} % of the piece').replace('{n}', pct(w.coverage)))
+  if (w.low_iou) parts.push(t('its outline matches the template’s by {n} %').replace('{n}', pct(w.iou)))
+  const line = 'Texture: {what} — the rest is filled from the colours around it. New piece-only views or parameters that match the picture help.'
+  return t(line).replace('{what}', parts.join(' · '))
 }
 
 /** One field of the parameter dialog's schema (GET …/figure/template/{item}). */
@@ -1401,7 +1425,7 @@ export function failureLines(f: StepFailure, t: Tr = EN): string[] {
 export const CHECK_LABELS: Record<string, string> = {
   build_wall_s: 'Work time (s)', drape_cpu_s: 'Cloth CPU time (s)', pin_drift_mm: 'Top edge moved (mm)',
   stretch_max: 'Largest stretch (×)', poke_share: 'Body through the fabric (share)',
-  bake_coverage: 'Texture coverage (share)',
+  bake_coverage: 'Texture coverage (share)', bake_iou: 'Texture outline match (IoU)',
 }
 /** The pose a per-pose check was measured in (`MEASURED_POSES` / `MEASURED_UPPER_POSES`). */
 export const POSE_WORDS: Record<string, string> = {

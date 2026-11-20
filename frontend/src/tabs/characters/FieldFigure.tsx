@@ -84,7 +84,7 @@ import {
   FRONT_WAITS_FOR_BUILD, NO_BASE_BODY_NOTE, REFIT_LABEL, STEP_NAMES, autoBuildNote, baseBodyLine, bodyRows, buildButton,
   changeLine, frontBuildCovers, frontRegenerate, hairState, headerLine, noBaseBody, planRows, regenerateMeshLabel,
   retryLabel, servedLines, shortCost, stateMeshAction, stateToggleNote, statusLight, templateBuilt, templateCost,
-  templateSummary, wornState, isOwnMeshMode, isThinPieceRefusal,
+  templateSummary, templateTextureWarning, wornState, isOwnMeshMode, isThinPieceRefusal,
 } from './figureModel'
 import type { FigurePayload, FigureWornRow, GenerationPause, HairMode, PieceState, WaitingJob } from './figureModel'
 import type { Light } from './hairstylesModel'
@@ -599,6 +599,11 @@ function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairst
                 {templateSummary(row.template?.params || null, t)}
                 {row.template && templateBuilt(row.template, t) ? ` · ${templateBuilt(row.template, t)}` : ''}
                 {' · '}{templateCost(row.template?.cost, t)}
+              </div>
+            ) : null}
+            {row.mode === 'template' && templateTextureWarning(row.template, t) ? (
+              <div className="ga-hint" role="status" style={{ color: 'var(--ga-warn, #c77d0a)' }}>
+                {templateTextureWarning(row.template, t)}
               </div>
             ) : null}
             {row.piece_state ? (
