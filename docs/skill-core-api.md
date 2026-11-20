@@ -219,10 +219,12 @@ wins; nothing declared = the A126 auto-detection. Core:
 
 ## Clip bend limits — capability `clip_bend_limit_defaults` ✅
 
-Ruling A145. Before Auto-align moves a pair clip's partner (and every frame in both renderers), the
-attached part bends toward its contact target — at most `joint_deg` per joint and `total_deg`
-in all, per state: `raised` (the chain's straightened state) and `resting`, blended by how far
-the chain is raised. Core default raised 15°/35°, resting 45°/120°. A package defaults its kinds
+Ruling A145 (root-only since 2026-11-20). Every frame in both renderers the attached part turns
+at its ROOT toward its contact target once its tip is near the opening (none from 8 cm before
+it, the full limit from 3 cm); the part itself stays rigid, and Auto-align never bends it. The
+root limit is min(`joint_deg`, `total_deg`), per state: `raised` (the chain's straightened
+state) and `resting`, blended by how far the chain is raised. Core default raised 15°/35°,
+resting 45°/120° (root limit 15° raised, 45° resting); the stored shape is unchanged. A package defaults its kinds
 with `register_provider("clip_bend_limit_defaults", fn, owner="<package id>", multiple=True)`,
 `fn() -> {kind | "*": {"raised": {"joint_deg", "total_deg"}, "resting": {...}}}` (partial = completed
 from the core default; `"*"` = every kind without its own entry). The clip's own `bend_limits` in
@@ -230,8 +232,8 @@ its `<kind>.json` (Poses tab → Alignment → Contacts) wins. Core:
 `app.core.animation_clips.clip_bend_limits(meta, kind)`, `validate_bend_limits(value, base)`.
 Ruling A158: the part's ROOT is not a limit but a direct per-clip angle, `root_angle`
 `{pitch_deg: −60..60 (+ up toward the belly), yaw_deg: −30..30 (+ the figure's right)}` in the same
-`<kind>.json` (Poses tab sliders, PATCH `root_angle`); every renderer applies it before any bend and
-no solve changes it. A package has no say in it. Core: `clip_root_angle(meta)`, `validate_root_angle(value)`.
+`<kind>.json` (Poses tab sliders, PATCH `root_angle`); every renderer applies it before the root bend,
+which turns on top of it (the two compose), and no solve changes it. A package has no say in it. Core: `clip_root_angle(meta)`, `validate_root_angle(value)`.
 
 ## Strict conditions and held snapshots — `app.core.activity_engine`
 

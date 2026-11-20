@@ -16,18 +16,16 @@
  * with P_t = I − u_t u_tᵀ, λ = `FIT_ANGLE_WEIGHT_M` (1 rad of shaft tilt costs like λ metres of lateral error) and
  * W = `CONTACT_ENTRY_WEIGHT` × the frame count — the A126 terms plus the angle term.
  *
- * BEND FIRST (Ruling A145, `chainBend.ts`): with `bend` limits (and a sample carrying its `chain`) every residual is
- * taken AFTER the attached part has bent toward the target within its limits — a fix only solves what the bend cannot
- * reach; the angle term then reads the part's LAST link (tip joint → tip), not base → tip. A small STAY term (√N ·
- * `BEND_STAY` · the shift in metres, and the angles × λ) then prefers leaving the entering figure where it is whenever
- * the bend already reaches. Both renderers bend the bones every frame with the same `bendSample`.
+ * RIGID (Ruling A145 as of 2026-11-20): the residuals read the samples as measured — the attached part never bends
+ * inside the fit. The root bend (`chainBend.ts`) is a render step AFTER the fit: both renderers turn the part's root
+ * every frame with the same `bendSample`, and Auto-align reports what that turn does on its aligned samples.
  *
  * POSTURE (Ruling A150, `postureSupport.ts`): a sample may carry the entering figure's SUPPORT; then every frame adds
  * the residual `POSTURE.weight` · (the support's change beyond the float/sink band), and the fix's turn costs
  * `POSTURE.turnCostM` · √N per radian — so the solve shifts along the surface first, turns only a little and only
  * about the support, and leaves what the posture cannot give as the residual. The caller caps the turn per place type
  * (`postureAngleCapDeg`). The clip's root angle (`chainBend.ts` THE ROOT ANGLE, Ruling A158) is already on the
- * rendered chain a sample is read from; the bend starts from it and never changes it.
+ * rendered chain a sample is read from; the fit starts from it and never changes it.
  *
  * THE HONEST CHECK (`pairInterpenetration`): the deepest overlap of two different figures' capsules where ONLY the
  * pairs the channel allows are exempt — an attached-part capsule of the entering figure against one of the receiving
@@ -43,7 +41,7 @@ import { POSTURE, postureExcess, supportHeight, supportSample, type SupportSampl
 export interface FitSample extends ContactSample {
   pivot: Vec3
   /** Ruling A145: the attached-part chain's points (root joint … tip), its raised fraction and whether the target is a
-   *  channel (the inside joints follow its axis). Absent = the chain cannot bend (the A129 rigid solve). */
+   *  channel (the joints near/inside follow its axis) — what `bendSample` turns at the root. Absent = no bend. */
   chain?: Vec3[]
   raised?: number
   channel?: boolean
@@ -54,14 +52,9 @@ export interface PairFix { shift: Vec3; turn: Vec3 }
 export interface FitOptions {
   angleWeightM?: number
   entryWeight?: number
-  /** Ruling A145: bend the chain first (module docstring BEND FIRST). */
-  bend?: BendLimits | null
   /** Ruling A150: the posture term for samples with a support (default on). */
   posture?: boolean
 }
-/** Ruling A145: metres of residual per metre of shift (× √N) that keep the figure still when the bend reaches. */
-export const BEND_STAY = 0.05
-
 export const FIT_ANGLE_WEIGHT_M = 0.02
 export const CLEAR_GREEN_MM = 5
 export const CLEAR_YELLOW_MM = 20
@@ -103,8 +96,9 @@ export function supportDelta(s: FitSample, fix: PairFix): number | null {
   const base = s.support.base ?? supportHeight(s.support.pts, s.support.r)
   return supportHeight(s.support.pts.map((p) => fixPoint(fix, s.pivot, p)), s.support.r) - base
 }
-/** Ruling A145: the sample with its chain bent toward its target within `limits` at its raised fraction — tip and base
- *  from the bent chain — and the bend; the sample unchanged (bend null) without a chain. */
+/** Ruling A145: the sample with its chain turned at the root toward its target within `limits` at its raised fraction
+ *  (`chainBend.ts`) — tip and base from the turned chain — and the bend; the sample unchanged (bend null) without a
+ *  chain. What both renderers apply every frame; never part of the fit. */
 export function bendSample(s: FitSample, limits: BendLimits): { sample: FitSample; bend: BendResult | null } {
   if (!s.chain || s.chain.length < 2) return { sample: s, bend: null }
   const bend = solveChainBend(s.chain, s.o, s.u, bendLimitAt(limits, s.raised ?? 0), { channel: !!s.channel })
@@ -137,27 +131,19 @@ export function fixRoot(fix: PairFix, pivot: Vec3, position: Vec3): { position: 
 }
 
 /** The residual vector of `fix` (module docstring THE RESIDUALS). */
-function residuals(samples: readonly FitSample[], fix: PairFix, lambda: number, W: number,
-  bend: BendLimits | null = null, posture = false): number[] {
+function residuals(samples: readonly FitSample[], fix: PairFix, lambda: number, W: number, posture = false): number[] {
   const out: number[] = []
   let e = -1, min = Infinity
-  const moved = samples.map((x) => (bend ? bendSample(fixSample(x, fix), bend).sample : fixSample(x, fix)))
+  const moved = samples.map((x) => fixSample(x, fix))
   moved.forEach((x, i) => { const s = dot(sub(x.tip, x.o), x.u); if (s < min) { min = s; e = i } })
   for (const x of moved) {
     const lat = lateral(sub(x.tip, x.o), x.u)
     out.push(lat[0], lat[1], lat[2])
-    // A145: with the bend, the direction that must follow the axis is the part's LAST link (the bend shapes the rest).
-    const c = bend && x.chain && x.chain.length >= 2 ? x.chain : null
-    const d = c ? sub(c[c.length - 1], c[c.length - 2]) : sub(x.tip, x.base), l = len(d)
+    const d = sub(x.tip, x.base), l = len(d)
     const pd = l > 0 ? lateral(scale(d, 1 / l), x.u) : [0, 0, 0] as Vec3
     out.push(lambda * pd[0], lambda * pd[1], lambda * pd[2])
   }
   if (e >= 0) out.push(Math.sqrt(W) * min)
-  if (bend) {
-    const k = BEND_STAY * Math.sqrt(samples.length)
-    out.push(k * fix.shift[0], k * fix.shift[1], k * fix.shift[2], k * lambda * fix.turn[0], k * lambda * fix.turn[1],
-      k * lambda * fix.turn[2])
-  }
   if (posture) {
     // A150: the support stays in its band; a turn pays for itself.
     for (const x of samples) {
@@ -177,7 +163,7 @@ export function fitResiduals(samples: readonly FitSample[], fix: PairFix, opts: 
   const lambda = opts.angleWeightM ?? FIT_ANGLE_WEIGHT_M
   const W = (opts.entryWeight ?? CONTACT_ENTRY_WEIGHT) * samples.length
   const posture = opts.posture !== false && samples.some((x) => !!x.support)
-  return residuals(samples, fix, lambda, W, opts.bend ?? null, posture)
+  return residuals(samples, fix, lambda, W, posture)
 }
 
 export function solveLinear(A: number[][], b: number[]): number[] | null {
@@ -272,7 +258,7 @@ export function contactSampleOf(entering: InspectionLike, receiving: InspectionL
   const v = (p: readonly number[]): Vec3 => [p[0], p[1], p[2]]
   const u = v(ch.u), l = len(u) || 1
   const tip = v(chain.segments[chain.segments.length - 1].b), base = v(chain.segments[0].a)
-  // Ruling A145: the chain's points (joints, then the tip) so the fit can bend it.
+  // Ruling A145: the chain's points (joints, then the tip) so the renderers can turn it at the root.
   const pts = [...chain.segments.map((x) => v(x.a)), tip]
   const support = entering.capsules ? supportSample(entering.capsules) : null
   return { tip, base, o: v(ch.o), u: orientAlong(hit.channel, scale(u, 1 / l), tip, base), pivot, chain: pts,

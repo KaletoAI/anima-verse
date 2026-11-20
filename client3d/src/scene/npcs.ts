@@ -2396,8 +2396,9 @@ export class NpcManager {
   }
 
   /** Ruling A145: after phase B, every pair/group interaction finds its contact once per contact relation (the
-   *  attached part of one figure, the channel or point target of the other that accepts it) and from then on bends the
-   *  chain bones of the entering figure toward it every frame, within the clip's bend limits. A pair without such a
+   *  attached part of one figure, the channel or point target of the other that accepts it) and from then on turns the
+   *  entering figure's attached part at its ROOT toward it every frame (`chainBend.ts`: the part stays rigid, no turn
+   *  while the tip is 8 cm or more before the opening), within the clip's bend limits. A pair without such a
    *  contact is marked and not inspected again until its clip changes. */
   private observePairBends(): void {
     const groups = new Map<string, Npc[]>();
@@ -2462,7 +2463,7 @@ export class NpcManager {
     // Ruling A158: the clip's root angle is already on the chain the sample was read from.
     const sample = contactSampleOf(ie, ir, rec.hit, rec.pivot);
     if (!sample) return;
-    // Ruling A145: bend the chain bones of this frame.
+    // Ruling A145: turn the chain at its root on this frame's bones (on top of the root angle: they compose).
     const b = bendSample(sample, rec.bend).bend;
     if (b) e.figure!.bendChain(rec.hit.chain, b.turns);
   }

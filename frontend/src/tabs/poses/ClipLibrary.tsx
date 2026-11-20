@@ -352,9 +352,12 @@ export function ClipLibrary({
   const [finaleRun, setFinaleRun] = useState<{ running: boolean; rows: { kind: string; result: AutoAlignResult; saved: boolean
     error: string; note: string }[] } | null>(null)
   /** Ruling A212 review H1: the arrangement Auto-align's cap is measured from — the dials as the user last set them
-   *  (clip load, save, a manual dial move), never the dials an Auto-align click wrote. */
+   *  (clip load, save, a manual dial move), never the dials an Auto-align result wrote (an Auto-align click, or an
+   *  "Align all" result filled in when its clip is opened). */
   const [alignBase, setAlignBase] = useState<AutoAlignOptions['base']>(null)
-  const autoWrite = useRef(false)
+  /** The dial values an Auto-align result just wrote (`dialKey`): the base effect skips exactly those, so the base
+   *  stays the user's; any other dial value (a manual move) takes over again. */
+  const autoWrite = useRef<string | null>(null)
   /** Finale clips the server changed along with the last apply/save. */
   const [finalesTouched, setFinalesTouched] = useState<string[]>([])
   /** Whether the open clip holds unsaved edits — set below, read by `guardSwitch` from event handlers. */
@@ -488,9 +491,13 @@ export function ClipLibrary({
       const nextSet = set !== undefined ? set : orderSets(Array.from(new Set(own)))[0] || ''
       setPreviewSet(nextSet)
       // A129.6: an "Align all" result for this clip fills the Partner B dials as a draft (Save stores it).
+      // The base stays the clip as loaded (the reset dials), not the filled-in result (Ruling A212 review H1).
       const waiting = pendingAlign.current[`${kind}|${nextSet}`]
       if (waiting) {
-        setPartnerShift(waiting.roleShiftCm.b ?? waiting.shiftCm); setPartnerTurn(waiting.turnDeg)
+        const shift = waiting.roleShiftCm.b ?? waiting.shiftCm
+        autoWrite.current = dialKey(shift, waiting.turnDeg, waiting.roleShiftCm)
+        setAlignBase({ roleShiftM: {}, turnDeg: [0, 0] })
+        setPartnerShift(shift); setPartnerTurn(waiting.turnDeg)
         setRoleShift(waiting.roleShiftCm)
       }
       setAction(null)
@@ -624,7 +631,8 @@ export function ClipLibrary({
     rootAngle: { pitchDeg: rootDraft.pitch_deg, yawDeg: rootDraft.yaw_deg },
   }), [bendDraft, rootDraft, contactDraft, clipShift, heightDraft, isGroupTarget, isPairTarget, partnerShift, partnerTurn, partnerYaw, roleShift, rollDeg, tiltDeg, yawDeg])
   useEffect(() => {
-    if (autoWrite.current) { autoWrite.current = false; return }
+    if (autoWrite.current !== null && autoWrite.current === dialKey(partnerShift, partnerTurn, roleShift)) return
+    autoWrite.current = null
     setAlignBase(isPairTarget
       ? { roleShiftM: { b: [partnerShift[0] / 100, partnerShift[1] / 100, partnerShift[2] / 100] }, turnDeg: partnerTurn }
       : { roleShiftM: Object.fromEntries(Object.entries(roleShift).map(([r, v]) => [r, [v[0] / 100, v[1] / 100, v[2] / 100] as [number, number, number]])) })
@@ -1535,11 +1543,16 @@ export function ClipLibrary({
                           const run = autoAlignRef.current
                           const res: AutoAlignResult = run ? run({ rangeCm: alignRangeCm, base: alignBase }) : { ok: false, reason: t('The place preview is still loading.') }
                           setAutoAlign(res)
-                          if (res.ok) autoWrite.current = true
                           if (res.ok && isPairTarget) {
-                            setPartnerShift(res.roleShiftCm.b ?? res.shiftCm)
-                            setPartnerTurn([+res.turnDeg[0].toFixed(1), +res.turnDeg[1].toFixed(1)])
-                          } else if (res.ok) setRoleShift(res.roleShiftCm)
+                            const shift = res.roleShiftCm.b ?? res.shiftCm
+                            const turn: [number, number] = [+res.turnDeg[0].toFixed(1), +res.turnDeg[1].toFixed(1)]
+                            autoWrite.current = dialKey(shift, turn, roleShift)
+                            setPartnerShift(shift)
+                            setPartnerTurn(turn)
+                          } else if (res.ok) {
+                            autoWrite.current = dialKey(partnerShift, partnerTurn, res.roleShiftCm)
+                            setRoleShift(res.roleShiftCm)
+                          }
                         }}>
                         {t('Auto-align')}
                       </button>
@@ -1716,6 +1729,11 @@ export function ClipLibrary({
         onClose={() => setPendingSwitch(null)} />
     </div>
   )
+}
+
+/** Ruling A212 review H1: the identity of the dial values the alignment base is read from (`alignBase`). */
+function dialKey(shift: readonly number[], turn: readonly number[], roles: Record<string, readonly number[]>): string {
+  return JSON.stringify([shift, turn, Object.keys(roles).sort().map((k) => [k, roles[k]])])
 }
 
 /** Ruling A145: the core default of the bend limits (the server's `BEND_LIMITS_DEFAULT`), until the listing says. */

@@ -3,6 +3,11 @@
  * One geometry for the Library's place preview (and any other caller): `fitResiduals` (`pairFit.ts`), summed over
  * every contact relation of ONE moving figure.
  *
+ * RIGID (2026-11-20): Auto-align moves and turns the figure as one rigid body and NEVER bends the attached part —
+ * neither in the bounded solve nor in the lamp's free solve. The part's root bend (`chainBend.ts`) is a render step
+ * after it; a caller may report what that bend does on the aligned samples (`bendSample`), but every number of the
+ * solve and of `phaseRow` is the rigid one.
+ *
  * THE UNKNOWNS: the moving figure's offset x = (side, up, forward) in metres of its clip frame, relative to the base
  * arrangement (the dials when Auto-align was clicked), and — a pair only — its tilt/roll α_k in degrees about the
  * caller's axes, also relative to the base. World shift = B·x for the caller's row-major 3×3 `basis` (the clip frame
@@ -30,7 +35,6 @@
  * reports a sample's tip off the axis, its depth along the axis (+ = inside) and the shaft against the axis.
  */
 import type { Vec3 } from './collision'
-import type { BendLimits } from './chainBend'
 import { fitResiduals, solveLinear, type FitSample, type PairFix } from './pairFit'
 
 export const ALIGN_RANGE_CM_DEFAULT = 8
@@ -64,7 +68,6 @@ export interface AlignProblem {
   cap: AlignCap
   /** A tighter angle cap (the place type's posture cap), degrees. */
   angleCapDeg?: number
-  bend?: BendLimits | null
   posture?: boolean
   /** The world shift still missing to join the base clip's end (end clips), and its weight (× sample count). */
   join?: { deltaM: Vec3; weight?: number } | null
@@ -101,7 +104,7 @@ function solveBox(p: AlignProblem, half: number[]): number[] {
   const res = (z: number[]) => {
     const fix = toFix(z)
     const out: number[] = []
-    for (const r of p.relations) out.push(...fitResiduals(r.samples, fix, { bend: p.bend ?? null, posture: p.posture }))
+    for (const r of p.relations) out.push(...fitResiduals(r.samples, fix, { posture: p.posture }))
     if (p.join) {
       const s = fix.shift, d = p.join.deltaM
       out.push(jw * (s[0] - d[0]), jw * (s[1] - d[1]), jw * (s[2] - d[2]))

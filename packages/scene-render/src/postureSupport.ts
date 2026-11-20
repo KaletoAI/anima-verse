@@ -17,10 +17,10 @@
  * support, the least squares can still shift along the surface freely, and can only turn about a pivot ON the support
  * (a turn about the hips plus the vertical shift that brings the support back).
  *
- * THE ORDER of the levers (Ruling A150): root pitch (`chainBend.ts` THE ROOT) → chain bend → shift along the surface →
- * a small turn about the support → the residual. The bend comes first by construction (residuals after the bend); a
- * turn costs `POSTURE.turnCostM` per radian (× √N) against `BEND_STAY`'s 0.05 per metre of shift, so a turn is taken
- * only where it buys more than it costs. A standing or lying place type allows only a few degrees of turn at all
+ * THE ORDER of the levers (Ruling A150, the bend taken out 2026-11-20): the clip's root angle (`chainBend.ts` THE ROOT
+ * ANGLE, already on the samples) → shift along the surface → a small turn about the support → the residual. Auto-align
+ * is rigid: the root bend of `chainBend.ts` comes only after it, in the renderers. A shift costs nothing of its own; a
+ * turn costs `POSTURE.turnCostM` per radian (× √N), so a turn is taken only where it buys more than it costs. A standing or lying place type allows only a few degrees of turn at all
  * (`postureAngleCapDeg`).
  *
  * THE REPORT (`postureReport`): per frame Δ; `gapMm` = the largest float (Δ > 0), `sinkMm` = the largest sink (Δ < 0),

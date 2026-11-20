@@ -19,7 +19,7 @@
  *   read-only with a link to its entry (D2).
  *
  * * Icon toggles "Collision", "Channels" and "Partner see-through" (Ruling A212; off by default, remembered per browser
- *   user in localStorage) only change what is DRAWN — the sim always runs them, as in the game. The bend of the
+ *   user in localStorage) only change what is DRAWN — the sim always runs them, as in the game. The root bend of the
  *   attached part always runs, exactly as in the game. Collision and Channels draw each figure's capsules as other
  *   figures engage them (pairs of two figures that overlap drawn red, the deepest pair in mm), and each channel with
  *   its opening (a ring at the mouth while a partner chain occupies it; who engages whom, w, opening radius in mm).
@@ -158,7 +158,8 @@ const SEE_THROUGH_OPACITY = 0.25
 const CONTACT_COLOR = 0xff2d2d
 const OPENING_COLOR = 0x3fb950
 
-/** Ruling A145: how much the attached part bent — the largest over the frames, its limit there, and the lamp. */
+/** Ruling A145: how far the attached part turned at its root — the largest over the frames, the root limit there, and
+ *  the lamp (yellow when the limit cut the turn in some frame). */
 export interface BendReadout { maxDeg: number; limitDeg: number; atLimit: number; frames: number; lamp: 'green' | 'yellow' }
 /** The printed partner readout (names = place letters). */
 interface PartnerInfo {
@@ -264,7 +265,7 @@ export interface RelationAlign { by: string; of: string; channel: string; target
       lampBefore: ContactLamp; lamp: ContactLamp
       /** Ruling A212: the five phases (start, ¼, ½, ¾, end) before and after. */
       phases: PhaseAlign[]
-      /** Ruling A145: the bend after Auto-align (null = rigid). */
+      /** Ruling A145: what the root bend does on the aligned samples (Auto-align itself is rigid; null = no chain). */
       bend: BendReadout | null
       /** Ruling A150: the moving figure's support before/after against its own posture (null = none read), and why the
        *  contact lamp is not green when the posture held it back. */
@@ -1010,13 +1011,13 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             chain: w.chain?.map((p) => toStageP(p)), raised: w.raised, channel: w.channel,
             ...(support ? { support } : {}) }
         }
-        // ── Ruling A145: the attached part bends toward its target before anything moves (`chainBend.ts`). ──
+        // ── Ruling A145: the attached part turns at its ROOT toward its target near the opening (`chainBend.ts`) — a render
+        // step every frame; Auto-align is rigid and only reports it afterwards. ──
         /** The bend limits in force: the clip's draft (or the default) — the part always bends, as in the game (A212). */
         const bendLimitsNow = (): BendLimits | null => draftRef.current.bendLimits ?? BEND_LIMITS_DEFAULT
-        /** A stage sample as rendered with the bend (the sample itself when rigid). */
-        const bentOf = (smp: FitSample, lim: BendLimits | null): { sample: FitSample; bend: BendResult | null } =>
-          (lim ? bendSample(smp, lim) : { sample: smp, bend: null })
-        /** Bend the entering figure's chain bones of this frame (world; the same solve as `bentOf`), return the bend. */
+        /** The root bend a stage sample gets when rendered (null without limits or a chain). */
+        const bendOf = (smp: FitSample, lim: BendLimits | null): BendResult | null => (lim ? bendSample(smp, lim).bend : null)
+        /** Turn the entering figure's chain bones of this frame at the root (world; the same solve as `bendOf`). */
         const bendBones = (res: NonNullable<ReturnType<typeof placePhaseB>>, hit: Hit, lim: BendLimits | null): BendResult | null => {
           if (!lim) return null
           const ie = res.figures[hit.e].inspection, ir = res.figures[hit.r].inspection
@@ -1029,9 +1030,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         const bendReadout = (bends: readonly (BendResult | null)[]): BendReadout | null => {
           const got = bends.filter((x): x is BendResult => !!x)
           if (!got.length) return null
-          const top = got.reduce((a, x) => (x.totalDeg > a.totalDeg ? x : a), got[0])
+          const top = got.reduce((a, x) => (x.deg > a.deg ? x : a), got[0])
           const atLimit = got.filter((x) => x.atLimit).length
-          return { maxDeg: top.totalDeg, limitDeg: top.limit.totalDeg, atLimit, frames: got.length,
+          return { maxDeg: top.deg, limitDeg: top.maxDeg, atLimit, frames: got.length,
             lamp: atLimit > 0 ? 'yellow' : 'green' }
         }
         // Ruling A129.5: the honest check of one frame — only the entering figure's attached part against the
@@ -1281,8 +1282,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           const cap = alignCap(opts.rangeCm ?? clips.find((c) => (c.set || '') === set.trim() && c.role === 'a')?.align_range?.cm
             ?? clips.find((c) => c.role === 'a')?.align_range?.cm)
           const rangeCm = Math.round(cap.forwardM * 1000) / 10
-          const rep = (smps: readonly FitSample[]) => contactReport(smps.map((x) => bentOf(x, bendLim).sample))
-          const phaseRows = (smps: readonly PhasedSample[]) => pickPhases(smps).map((x) => (x ? phaseRow(bentOf(x, bendLim).sample, x.phase) : null))
+          // Auto-align is RIGID: the contact report and the phase rows read the samples as solved (no bend); only the
+          // bend readout below says what the root bend does on the aligned samples afterwards.
+          const rep = (smps: readonly FitSample[]) => contactReport(smps)
+          const phaseRows = (smps: readonly PhasedSample[]) => pickPhases(smps).map((x) => (x ? phaseRow(x, x.phase) : null))
           const cm = (v: number) => Math.round(v * 1000) / 10
           const deg = (v: number) => Math.round(v * 10) / 10
           // Only the role that carries the attached part moves (one solve for all its relations); in a pair that is B.
@@ -1371,7 +1374,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               const relations = cur.per.map((smps) => ({ samples: pickPhases(smps).filter((x): x is PhasedSample => !!x) }))
               sol = solveAlignAdjust({ relations, basis: basisOf(cur.draft), start: extra, startDeg: turns ? turn : [],
                 axes: turns ? axes : [], cap, angleCapDeg: turns ? postureAngleCapDeg(placeGroup, cap.angleDeg) : undefined,
-                bend: bendLim, join: joinOf(cur.draft) })
+                join: joinOf(cur.draft) })
               const next: [number, number] = turns ? [sol.deg[0], sol.deg[1]] : [0, 0]
               const moved = Math.abs(next[0] - turn[0]) + Math.abs(next[1] - turn[1])
               extra = sol.x
@@ -1403,7 +1406,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
                 before, after, overlapBeforeMm: p0.overlap * 1000, overlapAfterMm: cur.overlap * 1000,
                 clearWorst: cur.worst, clearLamp: clearLamp(cur.overlap * 1000), lampBefore: lampOf(hit, before), lamp,
                 phases: ALIGN_PHASES.map((phase, k) => ({ phase, before: pb[k], after: pa[k] })),
-                bend: bendReadout(cur.per[gi].map((x) => bentOf(x, bendLim).bend)) })
+                bend: bendReadout(cur.per[gi].map((x) => bendOf(x, bendLim))) })
             })
             moverRows.push({ role: mr, letter: moving.letter, shiftCm, turnDeg, adjustCm, adjustDeg, rangeCm, lamp: sol?.lamp ?? 'green',
               offCm: sol?.offCm ?? 0, offDeg: sol?.offDeg ?? 0, capped: !!sol?.capped })

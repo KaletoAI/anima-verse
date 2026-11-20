@@ -433,8 +433,9 @@ export class FigureRuntime {
     }
   }
 
-  /** Ruling A145: bend chain `index` of `inspect().chains` by a `solveChainBend` result (turns per joint, world) —
-   *  this frame's rendered bones only (`SecondaryMotion.bendChain`). */
+  /** Ruling A145: bend chain `index` of `inspect().chains` by a `solveChainBend` result (its root turn, world) —
+   *  this frame's rendered bones only (`SecondaryMotion.bendChain`, which turns the bones as they are NOW, so a turn
+   *  after the root angle composes with it: `chainBend.ts` THE ROOT ANGLE). */
   bendChain(index: number, turns: readonly { joint: number; q: readonly number[] }[]): void {
     if (this.disposed || !turns.length) return
     this.secondary.bendChain(index, turns)

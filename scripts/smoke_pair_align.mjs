@@ -40,6 +40,24 @@
  *       WITH tilt held at 10°: a brute-force grid of up × forward (step 0.1 mm over ±8 cm, side 0 by the fixture's
  *       x-symmetry; refined to 0.01 mm around the best cell) gives that optimum's cost; the solver's cost must not
  *       exceed it by more than 1e-9 and its up/forward lie within 0.02 mm of the grid's.
+ *   [14] RIGID RECOVERY (Ruling A145 root-only, finding F2: Auto-align never bends). A clip frame turned 30° about +Y,
+ *       basis B with columns side = (cos 30°, 0, −sin 30°), up = (0, 1, 0), forward = (sin 30°, 0, cos 30°); axes tilt =
+ *       side, roll = forward. The CORRECT stroke: a 4-link chain of 0.03 m lying ON the axis u = B·(0, −sin 15°, cos 15°)
+ *       (opening O1 = (0, 0.9, 0.4)) with the tip at s = 0, 0.05, 0.10, 0.05, 0 over the five phases, the pivot 0.25 m
+ *       behind O1 on the axis (moving with the stroke), `raised` 1, a channel — every residual is 0. MISPLACED by a known
+ *       rigid fix about the pivot: X' = R(X − p) + p + B·e, p' = p + B·e, R = exp(side·4° + forward·(−3°)), e = (2, −3,
+ *       2.5) cm. The fix that undoes it about p' is R⁻¹ = exp(−(side·4° + forward·(−3°))) and the shift −B·e, i.e.
+ *       x = (−2, +3, −2.5) cm and (tilt, roll) = (−4°, +3°): all residuals 0 again, and the minimum is unique (the five
+ *       phases' lateral fix side/up and the shaft's two angles, the entry term the forward). Both within the cap → the
+ *       solve returns them to < 0.1 mm / 0.2° (bound asked: 1 mm), the free optimum the same (it is unique), lamp green,
+ *       and the rigid tip lies on the axis afterwards (< 0.1 mm). TWO RELATIONS: a second chain on the SAME figure
+ *       (opening O2 = O1 + B·(0.08, 0.05, 0), the same pivot), misplaced by the same fix → the same answer. Before
+ *       (with the bend inside the fit) this case left the rigid tip 15–20 mm off the axis.
+ *   [15] THE LAMP WHEN THE CAP CANNOT REACH: the [14] stroke misplaced by e = (5, 0, 0) cm (side cap 3) and tilt 14°
+ *       (cap 10°): the free optimum is the unique inverse (−5 cm, −14°), so offCm = 2, offDeg = 4 → yellow (never
+ *       green); the capped solve holds x_side at −3 cm and the tilt inside ±10° (where exactly is the least squares with
+ *       side on its bound — shift and tilt both move the tip sideways, so it is not simply −10°). e = (0, 0, 20) cm
+ *       (forward cap 8): offCm = 12 → red.
  */
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -131,4 +149,45 @@ const ok = (m) => { n++; console.log(`  PASS  ${m}`) }
   assert.ok(mine <= best[0] + 1e-9, `[13] cost ${mine} vs brute ${best[0]}`)
   near(r.x[1], best[1], 2e-5, '[13] up'); near(r.x[2], best[2], 2e-5, '[13] forward'); near(r.x[0], 0, 1e-9, '[13] side')
   ok(`[13] active set = brute force (up ${(r.x[1] * 1000).toFixed(2)} mm, fwd ${(r.x[2] * 1000).toFixed(2)} mm)`) }
-console.log(`\n${n}/13 checks passed`)
+{ // [14] / [15] rigid recovery
+  const D2R = Math.PI / 180
+  const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]], sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+  const mul = (a, k) => [a[0] * k, a[1] * k, a[2] * k]
+  const yaw = 30 * D2R
+  const B = [Math.cos(yaw), 0, Math.sin(yaw), 0, 1, 0, -Math.sin(yaw), 0, Math.cos(yaw)]
+  const col = (j) => [B[j], B[3 + j], B[6 + j]]
+  const side = col(0), up = col(1), fwd = col(2)
+  const Bv = (v) => add(add(mul(side, v[0]), mul(up, v[1])), mul(fwd, v[2]))
+  const u = Bv([0, -Math.sin(15 * D2R), Math.cos(15 * D2R)])
+  const stroke = (O, pivot0) => [0, 0.05, 0.10, 0.05, 0].map((s, i) => {
+    const tip = add(O, mul(u, s)), chain = Array.from({ length: 5 }, (_, k) => sub(tip, mul(u, 0.03 * (4 - k))))
+    return { tip, base: chain[0], o: O, u, pivot: add(pivot0, mul(u, s)), chain, raised: 1, channel: true, phase: i / 4 }
+  })
+  const misplace = (smps, e, tilt, roll) => {
+    const fix = { shift: Bv(e), turn: add(mul(side, tilt * D2R), mul(fwd, roll * D2R)) }
+    return smps.map((s) => ({ ...SR.fixSample(s, fix), pivot: add(s.pivot, fix.shift) }))
+  }
+  const tipOff = (s) => { const v = sub(s.tip, s.o), a = v[0] * s.u[0] + v[1] * s.u[1] + v[2] * s.u[2]; return Math.hypot(...sub(v, mul(s.u, a))) }
+  const O1 = [0, 0.9, 0.4], P1 = sub(O1, mul(u, 0.25))
+  const C1 = stroke(O1, P1)
+  const C2 = stroke(add(O1, Bv([0.08, 0.05, 0])), P1).map((s, i) => ({ ...s, pivot: C1[i].pivot }))
+  const solve = (rels) => SR.solveAlignAdjust({ relations: rels.map((samples) => ({ samples })), basis: B, axes: [side, fwd], cap })
+  const e = [0.02, -0.03, 0.025]
+  for (const [label, rels] of [['one relation', [misplace(C1, e, 4, -3)]], ['two relations', [misplace(C1, e, 4, -3), misplace(C2, e, 4, -3)]]]) {
+    const r = solve(rels)
+    ;[-0.02, 0.03, -0.025].forEach((v, i) => near(r.x[i], v, 1e-4, `[14] ${label} x[${i}]`))
+    near(r.deg[0], -4, 0.2, `[14] ${label} tilt`); near(r.deg[1], 3, 0.2, `[14] ${label} roll`)
+    ;[-0.02, 0.03, -0.025].forEach((v, i) => near(r.freeX[i], v, 1e-4, `[14] ${label} free x[${i}]`))
+    assert.equal(r.lamp, 'green')
+    for (const sm of rels) for (const s of sm) assert.ok(tipOff(SR.fixSample(s, r.fix)) < 1e-4, `[14] ${label} rigid tip after`)
+    ok(`[14] rigid recovery, ${label}: x ${r.x.map((v) => (v * 100).toFixed(3)).join('/')} cm, tilt ${r.deg[0].toFixed(3)}° roll ${r.deg[1].toFixed(3)}°`)
+  }
+  { const r = solve([misplace(C1, [0.05, 0, 0], 14, 0)])
+    near(r.x[0], -0.03, 1e-6, '[15] side capped'); assert.ok(Math.abs(r.deg[0]) <= 10 + 1e-9, `[15] tilt within the cap ${r.deg[0]}`)
+    near(r.freeX[0], -0.05, 1e-4, '[15] free side'); near(r.freeDeg[0], -14, 0.05, '[15] free tilt')
+    near(r.offCm, 2, 0.01, '[15] offCm'); near(r.offDeg, 4, 0.05, '[15] offDeg'); assert.equal(r.lamp, 'yellow')
+    const r2 = solve([misplace(C1, [0, 0, 0.20], 0, 0)])
+    near(r2.offCm, 12, 0.01, '[15] offCm red'); assert.equal(r2.lamp, 'red')
+    ok(`[15] the cap cannot reach: yellow (${r.offCm.toFixed(2)} cm, ${r.offDeg.toFixed(2)}° off), red (${r2.offCm.toFixed(2)} cm)`) }
+}
+console.log(`\n${n}/16 checks passed`)
