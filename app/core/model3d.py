@@ -1986,7 +1986,8 @@ def _auto_covered_variant(character_name: str, path: Path, meta: Dict[str, Any],
 
 def _mesh_repair_target(meta: Dict[str, Any], path: Path) -> bool:
     """Whether the model of ``meta`` / ``path`` gets the base mesh repair: a humanoid base body GLB (the base and
-    its covered variant), never an outfit model (it is built from the repaired base)."""
+    its covered variant), never an outfit model (it is built from the repaired base; a rebuild from the clean prerig
+    repeats the repair in ``_repaired_base``)."""
     return bool(meta.get("base")) and meta.get("rig") == "mixamo" and path.suffix.lower() == ".glb"
 
 
@@ -2003,11 +2004,16 @@ def _mesh_repair_due(character_name: str, path: Path, meta: Dict[str, Any]) -> b
 
 def _repaired_base(character_name: str, data: bytes, meta: Dict[str, Any]) -> bytes:
     """``data`` (the clean prerig source of a base body) with its holes filled (``base_mesh_repair.repair_glb``,
-    Ruling A34) and the record in ``meta["mesh_repair"]``; any other model's bytes unchanged. The prerig itself
+    Ruling A34) and the record in ``meta["mesh_repair"]``; any other model's bytes unchanged. An OUTFIT model on
+    the plain body counts as its base when the body it was copied from carries a repair record: its clean prerig
+    is the base's, so a rebuild from it (the extension rig, when the outfit declares other groups than the base)
+    must end where the copy started — it used to publish the unrepaired prerig, holes open and hair modelled into
+    the body mirror-glossy again (Ruling A97), under the base's copied record. The prerig itself
     stays as the rigger left it, so another "largest hole" setting starts from the same source. A repair that
     raises keeps the bytes and records the failure (with the settings, so it is not retried on every rebuild —
     "Repair again" retries it)."""
-    if not meta.get("base") or meta.get("rig") != "mixamo":
+    on_repaired_base = meta.get("source") == "base_body" and isinstance(meta.get("mesh_repair"), dict)
+    if not (meta.get("base") or on_repaired_base) or meta.get("rig") != "mixamo":
         return data
     from app.core import base_mesh_repair
     settings = get_model3d_options(character_name).get("mesh_repair")

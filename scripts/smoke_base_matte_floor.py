@@ -35,6 +35,13 @@ by hand (``MATTE_MARGIN`` = 0.05):
     VERSION 1 is ``332a2bb4fd247881`` — the value every stored base record of the test world carries (read from
     their sidecars 2026-11-15) — while under VERSION 2 it differs: every stored base body is due, the Build's local
     "Base mesh repair" step applies the floor (``figure_build._mesh_repair_due``), no hub job.
+[8] An outfit model rebuilt from the clean prerig (``model3d._repaired_base``, called by the extension rig when the
+    outfit declares other groups than its base — Kai's outfit of 2026-11-20 came out with hair roughness 0.02 under
+    a copied record that read "applied"). Same fixture, so the numbers of [1]: an outfit meta (``source``
+    "base_body") WITH the base's copied ``mesh_repair`` record -> G = 140 x 7, 246, 216, 156 and a fresh record
+    whose matte status is "applied" (up to commit 761f9feb8 the bytes came back unchanged); the same meta WITHOUT
+    a record (the body it was copied from was never repaired) -> the same bytes object; a base meta -> repaired as
+    ever. A temp storage dir; the per-character repair settings are stubbed to the defaults.
 [7] Real data (RUN_A97_REAL=1): Rurik's base model, measured 2026-11-15 — anchor 0.549 (+-0.005), floor 0.499,
     lifted 0.11 (+-0.01); the vertices whose base colour luminance lies in [50, 90) (the hair and beard) had a
     median roughness of 0.33 and end at >= 0.60; those with luminance >= 90 (the skin) keep their median 0.55
@@ -202,6 +209,31 @@ def main() -> int:
     R.VERSION = kept
     check("v1 default fingerprint is the stored records' 332a2bb4fd247881", old == "332a2bb4fd247881", old)
     check("v2 fingerprint differs (every stored base due)", current != old, current)
+
+    print("[8] an outfit rebuilt from the clean prerig keeps the repair")
+    import tempfile
+    from app.core import paths
+    with tempfile.TemporaryDirectory() as storage:
+        paths.init(storage)
+        from app.core import model3d
+        kept_options, model3d.get_model3d_options = model3d.get_model3d_options, lambda _name: {}
+        try:
+            meta = {"rig": "mixamo", "source": "base_body", "mesh_repair": {"status": "applied"}}
+            out = model3d._repaired_base("demo", glb, meta)
+            _raw, arr = image_of(out, 1)
+            check("outfit on a repaired base: G = 140 x 7, 246, 216, 156",
+                  arr[0, :, 1].tolist() == [140] * 7 + [246, 216, 156], str(arr[0, :, 1]))
+            check("its record is rewritten, matte applied",
+                  (meta["mesh_repair"].get("matte") or {}).get("status") == "applied" and "at" in meta["mesh_repair"],
+                  str(meta["mesh_repair"]))
+            meta = {"rig": "mixamo", "source": "base_body"}
+            check("outfit on an unrepaired body: the same bytes", model3d._repaired_base("demo", glb, meta) is glb)
+            check("and no record", "mesh_repair" not in meta, str(meta))
+            meta = {"rig": "mixamo", "base": True}
+            _raw, arr = image_of(model3d._repaired_base("demo", glb, meta), 1)
+            check("a base body as ever", arr[0, :, 1].tolist() == [140] * 7 + [246, 216, 156], str(arr[0, :, 1]))
+        finally:
+            model3d.get_model3d_options = kept_options
 
     if os.environ.get("RUN_A97_REAL") == "1":
         print("[7] real data: Rurik's base")
