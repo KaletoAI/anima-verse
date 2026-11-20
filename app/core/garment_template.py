@@ -193,6 +193,29 @@ TROUSER_FIT_M = 0.012
 TROUSER_RAMP_M = 0.08
 #: A widened inner leg never crosses the body's centre plane closer than this (the two legs stay apart).
 TROUSER_CENTRE_GAP_M = 0.006
+#: Bug round 2026-11-20 — the seat: how a trouser sits ABOVE the crotch. ``fitted`` = a second skin over the hips, the
+#: seat and the crotch (leggings, skinny jeans: the A233 cut unchanged); ``regular`` / ``relaxed`` = woven trousers —
+#: every slice from the crotch to the top edge is bridged to its convex hull (the cloth spans the seat's cleft and the
+#: groin) and eased out by ``SEAT_EASE_M``; under the crotch the cloth hangs from the seat and the legs' inner sides
+#: meet at the centre down to the crotch dropped by ``CROTCH_DROP_M`` (``garment_template_fitted.trouser_seat``). The
+#: leg shape's widening starts from the dropped crotch.
+SEATS = ("fitted", "regular", "relaxed")
+SEAT_EASE_M = {"fitted": 0.0, "regular": 0.01, "relaxed": 0.025}
+CROTCH_DROP_M = {"fitted": 0.0, "regular": 0.02, "relaxed": 0.04}
+#: The bridge's slices (thickness) and the band each slice's hull is read over (half height).
+SEAT_SLICE_M = 0.005
+SEAT_HULL_M = 0.01
+#: The ease grows from 0 at the waistband's lower edge to full this far under it.
+SEAT_RAMP_M = 0.06
+#: The curtain: a slice's target hull takes in the slices up to this far above it (the cloth falls straight from the
+#: seat's fullest part). Under the crotch the legs hang from the lowest slice's curtain and fade back to the leg this
+#: far under the dropped crotch.
+SEAT_CURTAIN_M = 0.12
+SEAT_HANG_FADE_M = 0.08
+#: Rounds of evening along the slices + back onto the target (``trouser_seat``).
+SEAT_RELAX_PASSES = 8
+#: The leggings preset of the dialog: trousers that are a second skin from the waist to the ankle.
+LEGGINGS = {"kind": "trousers", "leg_shape": "skinny", "seat": "fitted", "fit": 0.0, "trouser_length": "full"}
 #: The waist finish: an elastic band, a belt band (belt loops are the picture's) or none — its height (the pinned
 #: band, at least MIN_PIN_BAND_M) and how much thicker it lies.
 TROUSER_WAISTS = ("elastic", "belt", "none")
@@ -210,7 +233,7 @@ TROUSER_HEM_PIN_M = 0.015
 #: The cloth frames of a trouser relax (a widened leg settles longer than a second skin).
 TROUSER_FRAMES = 20
 #: The fields only trousers read — out of every other piece's ``tsig`` (the existing keys stay).
-TROUSER_FIELDS = ("trouser_length", "leg_shape", "trouser_waist", "fly", "hem")
+TROUSER_FIELDS = ("trouser_length", "leg_shape", "seat", "trouser_waist", "fly", "hem")
 #: The fields that change neither the drape nor the material (painted by the picture): never in ``tsig``.
 TEXTURE_ONLY = ("fly",)
 #: Fabric presets of the cloth run (Blender cloth settings). Stiff = holds a
@@ -303,6 +326,7 @@ PARAM_SPEC: Dict[str, Tuple[str, Any, Any]] = {
     # A233 trousers (with ``rise``, ``fit`` and ``fabric``)
     "trouser_length": ("choice", TROUSER_LENGTHS, "full"),
     "leg_shape": ("choice", LEG_SHAPES, "straight"),
+    "seat": ("choice", SEATS, "regular"),
     "trouser_waist": ("choice", TROUSER_WAISTS, "belt"),
     "fly": ("choice", FLIES, "zip"),
     "hem": ("choice", TROUSER_HEMS, "plain"),
@@ -311,8 +335,8 @@ PARAM_SPEC: Dict[str, Tuple[str, Any, Any]] = {
 #: defaults so a stale field never changes the drape key).
 KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
     "skirt": ("kind", "fabric", "opacity", "length_m", "flare", "waist_height", "slit", "slit_m"),
-    "trousers": ("kind", "fabric", "opacity", "rise", "trouser_length", "leg_shape", "fit", "trouser_waist", "fly",
-                 "hem"),
+    "trousers": ("kind", "fabric", "opacity", "rise", "trouser_length", "leg_shape", "seat", "fit", "trouser_waist",
+                 "fly", "hem"),
     "dress": ("kind", "fabric", "opacity", "length_m", "flare", "waist_height", "slit", "slit_m", "shoulders", "sleeves",
               "sleeve_fit", "fit", "neckline", "neck_depth_m", *OFF_SHOULDER_FIELDS),
     "top": ("kind", "fabric", "opacity", "length_m", "shoulders", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m",
@@ -1580,8 +1604,8 @@ def trouser_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]
     """A233 — the trouser part of ``fitted_spec``: ``top_y`` (the briefs' rise rule: the hip line + ``RISE_SHARE`` x
     (waist - hip line)), the waist band (``TROUSER_WAIST_M``, pinned at least ``MIN_PIN_BAND_M``), the hem rule
     (``TROUSER_HEM``: the builder reads the anchors off the body), the leg shape's radii (``LEG_SHAPE_R``) with the
-    ease, the cloth's gap (``FITTED_OFFSET_M`` + ``TROUSER_FIT_M`` x fit), the cuff / stirrup and the pins (the
-    waist band always; the hem too for a skinny leg or a stirrup)."""
+    ease, the cloth's gap (``FITTED_OFFSET_M`` + ``TROUSER_FIT_M`` x fit), the cuff / stirrup, the pins (the
+    waist band always; the hem too for a skinny leg or a stirrup) and the seat (``seat_spec``)."""
     top = meas["hip_y"] + RISE_SHARE[params["rise"]] * (meas["waist_y"] - meas["hip_y"])
     waist = params["trouser_waist"]
     skinny = params["leg_shape"] == "skinny"
@@ -1594,7 +1618,15 @@ def trouser_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]
             "ramp_m": TROUSER_RAMP_M, "centre_gap_m": TROUSER_CENTRE_GAP_M, "hem": params["hem"],
             "cuff_m": TROUSER_CUFF_M, "cuff_fold_m": TROUSER_CUFF_FOLD_M,
             "hem_pinned": skinny or params["hem"] == "stirrup", "hem_pin_m": TROUSER_HEM_PIN_M,
-            "frames": TROUSER_FRAMES}
+            "seat": seat_spec(params["seat"]), "frames": TROUSER_FRAMES}
+
+
+def seat_spec(seat: str) -> Dict[str, Any]:
+    """Bug round 2026-11-20: the seat's part of ``trouser_spec`` (``SEATS``; the builder's
+    ``garment_template_fitted.trouser_seat``) — a fitted seat moves nothing."""
+    return {"name": seat, "ease_m": SEAT_EASE_M[seat], "drop_m": CROTCH_DROP_M[seat], "bridge": seat != "fitted",
+            "slice_m": SEAT_SLICE_M, "hull_m": SEAT_HULL_M, "ramp_m": SEAT_RAMP_M, "curtain_m": SEAT_CURTAIN_M,
+            "hang_fade_m": SEAT_HANG_FADE_M, "relax_passes": SEAT_RELAX_PASSES}
 
 
 def fitted_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:

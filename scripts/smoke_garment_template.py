@@ -172,7 +172,7 @@ check("[1] defaults, no error", e == [] and p == {"kind": "skirt", "length_m": 0
                                                   "band_m": 0.025, "band_drop_m": 0.05, "lacing": "none",
                                                   "lace_depth_m": 0.15,
                                                   # A233: the trouser fields (at their defaults on a skirt)
-                                                  "trouser_length": "full", "leg_shape": "straight",
+                                                  "trouser_length": "full", "leg_shape": "straight", "seat": "regular",
                                                   "trouser_waist": "belt", "fly": "zip", "hem": "plain"},
       str((p, e)))
 p, e = gt.validate_params({"length_m": 2.0, "kind": "cape"})

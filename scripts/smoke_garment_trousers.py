@@ -7,7 +7,7 @@ Hand-derived expectations (the synthetic measure ``M``: waist_y 1.05, hip_y 0.90
 0.08; the crotch of the drawing = the hip joints - 0.06 = 0.80):
 
 [K1] trousers are built and fitted; the starting values (``kind_defaults``): rise mid, full length, straight leg,
-     fit 0.3, belt band, zip, plain hem, fabric stiff. A trouser answer keeps only its fields (length_m 0.9 -> 0.5).
+     regular seat (bug round 2026-11-20), fit 0.3, belt band, zip, plain hem, fabric stiff. A trouser answer keeps only its fields (length_m 0.9 -> 0.5).
 [K2] a stirrup only under a skinny full-length leg: capri + skinny + stirrup -> plain; skinny full keeps it;
      straight full + stirrup -> plain. An unknown leg shape -> straight + error.
 [H1] ``trouser_hem`` over crotch 0.78 / knee 0.48 / ankle 0.08: shorts 0.78 + 0.3 x (0.48 - 0.78) = 0.69;
@@ -62,12 +62,13 @@ def tr(**kw):
 # [K1]
 check("[K1] trousers built + fitted", "trousers" in gt.BUILT_KINDS and "trousers" in gt.FITTED_KINDS)
 d = gt.kind_defaults("trousers")
-want = {"rise": "mid", "trouser_length": "full", "leg_shape": "straight", "fit": 0.3, "trouser_waist": "belt",
+want = {"rise": "mid", "trouser_length": "full", "leg_shape": "straight", "seat": "regular", "fit": 0.3, "trouser_waist": "belt",
         "fly": "zip", "hem": "plain", "fabric": "stiff"}
 check("[K1] starting values", all(d[k] == v for k, v in want.items()), {k: d[k] for k in want})
 check("[K1] length_m is no trouser field", tr(length_m=0.9)["length_m"] == 0.5)
 check("[K1] the dialog fields", gt.KIND_FIELDS["trousers"] == ("kind", "fabric", "opacity", "rise", "trouser_length",
-                                                                "leg_shape", "fit", "trouser_waist", "fly", "hem"))
+                                                                "leg_shape", "seat", "fit", "trouser_waist", "fly",
+                                                                "hem"))
 check("[K1] measured in rest / walk / sit / kneel, no shape groups",
       gt.measured_poses(tr()) == ("rest", "walk", "sit", "kneel") and gt.shape_groups(tr()) == [])
 

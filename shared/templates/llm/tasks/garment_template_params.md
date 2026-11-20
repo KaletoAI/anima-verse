@@ -10,7 +10,7 @@ placeholders:
 You look at a picture of ONE piece of clothing and describe its cut as numbers for a sewing-pattern generator. A 3D tool builds the piece from your numbers and drapes it as cloth on a person of about 1.70 m. You never write geometry, only these fields.
 
 Fields:
-- "kind": "skirt" (worn from the waist down), "dress" (one piece from the chest or the shoulders down), "top" (shirt, t-shirt, tank top, blouse, sweater, long-sleeved top, and a strapless bodice, bustier, corset or tube top), "jacket" (blazer, jacket, cardigan, coat worn over a top), "trousers" (jeans, pants, slacks, chinos, cargo pants, shorts, culottes — anything with two legs from the waist down; leggings are "tights" with "feet" "footless" unless they are skinny trousers of woven cloth), "briefs" (panties, briefs, bikini bottom, thong, string — underwear or a bikini worn on the hips) "bra" (bra, bralette, bikini top, also a bra-like armour top) "gloves" (gloves, gauntlets, arm warmers, mitts — worn on the hands and arms) or "tights" (tights, pantyhose, stockings, hold-ups, knee socks — hosiery on the legs).
+- "kind": "skirt" (worn from the waist down), "dress" (one piece from the chest or the shoulders down), "top" (shirt, t-shirt, tank top, blouse, sweater, long-sleeved top, and a strapless bodice, bustier, corset or tube top), "jacket" (blazer, jacket, cardigan, coat worn over a top), "trousers" (jeans, pants, slacks, chinos, cargo pants, shorts, culottes — anything with two legs from the waist down, also leggings: "leg_shape" "skinny", "seat" "fitted", "fit" 0), "briefs" (panties, briefs, bikini bottom, thong, string — underwear or a bikini worn on the hips) "bra" (bra, bralette, bikini top, also a bra-like armour top) "gloves" (gloves, gauntlets, arm warmers, mitts — worn on the hands and arms) or "tights" (tights, pantyhose, stockings, hold-ups, knee socks — hosiery on the legs).
 - "length_m", in metres: for a skirt or a dress how far it reaches DOWN FROM THE WAIST — mini 0.30-0.38, above the knee 0.40-0.48, knee-length 0.50-0.58, midi 0.65-0.78, ankle-length 0.85-1.00. For a top or a jacket how far it reaches DOWN FROM THE SHOULDER — cropped 0.35-0.42, at the waist 0.45-0.50, at the hips 0.55-0.62, a long jacket or tunic 0.65-0.85.
 - "flare" (skirt and dress only): how much wider the hem is than the hips, 0.0 to 1.0: pencil / straight 0.0-0.1, A-line 0.3-0.5, full / pleated 0.6-0.8, circle skirt 0.9-1.0.
 - "waist_height" (skirt and dress only): "high", "natural" or "low" — where the waistband sits.
@@ -41,6 +41,7 @@ Fields:
 - "rise" also applies to trousers: where the waistband sits — "low" (hip-huggers), "mid" or "high" (high-waisted, up to the waist).
 - "trouser_length" (trousers only): "shorts" (mid-thigh or shorter), "knee" (bermudas, to the knee), "capri" (mid-calf), "ankle" (cropped, ends above the ankle bone) or "full" (to the shoe).
 - "leg_shape" (trousers only): "skinny" (tight along the whole leg: skinny jeans, jeggings), "straight" (the usual: jeans, chinos, suit trousers), "wide" (wide-leg, palazzo, culottes), "flared" (tight to the knee, then wider: bootcut, bell-bottoms) or "cargo" (loose, baggy, cargo or combat trousers).
+- "seat" (trousers only): how the trousers sit above the crotch — "fitted" (skin-tight over the hips and the seat: leggings, jeggings, skin-tight leather or latex trousers), "regular" (the usual: jeans, chinos, suit trousers — they span the hollows and stand a little off the seat) or "relaxed" (a roomy seat and a lower crotch: cargo, baggy, harem or pleated trousers).
 - "fit" also applies to trousers: the ease over the body, 0.0 (tight) .. 1.0 (baggy); ordinary 0.3, skinny 0.0-0.1, cargo / baggy 0.6-0.9.
 - "trouser_waist" (trousers only): "belt" (a waistband with belt loops: jeans, chinos, suit trousers), "elastic" (an elastic or drawstring band: joggers, pyjama, yoga trousers) or "none".
 - "fly" (trousers only): "zip", "buttons" or "none" (pull-on trousers).
@@ -85,7 +86,7 @@ or
 or
 {"kind": "tights", "tights_style": "thigh_high", "feet": "closed", "garters": "tabs", "fabric": "sheer", "opacity": 0.4}
 or
-{"kind": "trousers", "rise": "mid", "trouser_length": "full", "leg_shape": "straight", "fit": 0.3, "trouser_waist": "belt", "fly": "zip", "hem": "plain", "fabric": "stiff"}
+{"kind": "trousers", "rise": "mid", "trouser_length": "full", "leg_shape": "straight", "seat": "regular", "fit": 0.3, "trouser_waist": "belt", "fly": "zip", "hem": "plain", "fabric": "stiff"}
 or
 {"kind": "jacket", "length_m": 0.68, "sleeves": "long", "sleeve_fit": 0.3, "fit": 0.4, "neckline": "v", "neck_depth_m": 0, "front": "open", "collar": "lapel", "fabric": "stiff"}
 

@@ -339,6 +339,8 @@ export interface TemplateParams {
    *  fly (painted by the picture) and the hem. */
   trouser_length?: string
   leg_shape?: string
+  /** Bug round 2026-11-20: how the trouser sits above the crotch — fitted (a second skin), regular, relaxed. */
+  seat?: string
   trouser_waist?: string
   fly?: string
   hem?: string
@@ -442,6 +444,13 @@ export const TEMPLATE_CHOICE_LABELS: Record<string, string> = {
 export const TEMPLATE_FIELD_CHOICE_LABELS: Partial<Record<keyof TemplateParams, Record<string, string>>> = {
   trouser_length: { full: 'Full length' },
   leg_shape: { straight: 'Straight leg', wide: 'Wide leg', flared: 'Flared (bootcut)' },
+  seat: { fitted: 'Fitted (second skin)', regular: 'Regular', relaxed: 'Relaxed (roomy seat)' },
+}
+
+/** Bug round 2026-11-20: the dialog's presets (`presets` of the GET) — their button words and hints. */
+export const TEMPLATE_PRESET_LABELS: Record<string, string> = { leggings: 'Leggings' }
+export const TEMPLATE_PRESET_HINTS: Record<string, string> = {
+  leggings: 'Skinny leg, fitted seat, tight fit, full length — a second skin from the waist to the ankle',
 }
 
 /** The word of a choice in a field. */
@@ -465,7 +474,8 @@ export const TEMPLATE_FIELD_LABELS: Record<keyof TemplateParams, string> = {
   tights_style: 'Style', feet: 'Foot', garters: 'Garters',
   band_m: 'Elastic band height', band_drop_m: 'Band below the shoulder line', lacing: 'Lacing',
   lace_depth_m: 'Lacing depth',
-  trouser_length: 'Leg length', leg_shape: 'Leg shape', trouser_waist: 'Waist finish', fly: 'Fly (painted)', hem: 'Hem',
+  trouser_length: 'Leg length', leg_shape: 'Leg shape', seat: 'Seat (above the crotch)', trouser_waist: 'Waist finish', fly: 'Fly (painted)',
+  hem: 'Hem',
 }
 
 /** A204: one line per fabric under the select — what the cloth does and what a switch costs. */
@@ -518,6 +528,7 @@ export function fittedSummary(p: TemplateParams, t: Tr = EN): string {
   if (p.kind === 'trousers') {
     parts.push(t(choiceLabel('trouser_length', p.trouser_length || 'full')))
     parts.push(t(choiceLabel('leg_shape', p.leg_shape || 'straight')))
+    if (p.seat && p.seat !== 'regular') parts.push(t(choiceLabel('seat', p.seat)))
     parts.push(t('{rise} rise').replace('{rise}', t(TEMPLATE_CHOICE_LABELS[p.rise || 'mid'] || p.rise || '')))
     if (p.hem && p.hem !== 'plain') parts.push(t(choiceLabel('hem', p.hem)))
   }

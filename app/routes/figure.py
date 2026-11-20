@@ -492,6 +492,8 @@ def get_template_params(character_name: str, item_id: str, picture: bool = True,
             # stays metal on every fabric but a leather finish, which sets its own surface
             "material": piece_material.describe(item),
             "kind_defaults": {k: gt.kind_defaults(k) for k in gt.KINDS},
+            # bug round 2026-11-20: named presets the dialog offers per kind (trousers: leggings)
+            "presets": {"trousers": {"leggings": dict(gt.LEGGINGS)}},
             "cost": {"llm_calls": 1, "hub_jobs": 0, "cpu_s": gt.CPU_ESTIMATE_S},
             # A168: this character's drape of the piece — state, reason and the step list (``piece_progress``)
             "progress": progress,

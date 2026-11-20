@@ -24,7 +24,7 @@ import { thumbUrl, thumbWidth } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut, apiUpload } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { FITTED_KINDS, TEMPLATE_CHOICE_LABELS, choiceLabel, TEMPLATE_DRAPE_FABRIC, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_LABELS, cm, choiceAllowed, corsetTop, hasBodice, offShoulder, lengthLabel, templateCost } from './figureModel'
+import { FITTED_KINDS, TEMPLATE_CHOICE_LABELS, TEMPLATE_PRESET_HINTS, TEMPLATE_PRESET_LABELS, choiceLabel, TEMPLATE_DRAPE_FABRIC, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_LABELS, cm, choiceAllowed, corsetTop, hasBodice, offShoulder, lengthLabel, templateCost } from './figureModel'
 import { TEMPLATE_STATE_COLOR, TEMPLATE_STATE_LABELS, failureLines, templateLiveText } from './figureModel'
 import { FailureDetails } from './BuildProblem'
 import type { TemplateFieldSpec, TemplateInfo, TemplateParams, TemplateProgress } from './figureModel'
@@ -50,6 +50,8 @@ interface TemplatePayload {
   default_kind?: string
   /** A172: the starting values per kind (a kind change starts from them). */
   kind_defaults?: Record<string, TemplateParams>
+  /** Bug round 2026-11-20: named presets per kind (`garment_template.LEGGINGS` for trousers). */
+  presets?: Record<string, Record<string, Partial<TemplateParams>>>
   /** A186: the dressed front shown beside the fields (`source` "" = none exists). */
   /** A223: the piece's material preset (`piece_material.describe`). */
   material?: PieceMaterialInfo
@@ -144,7 +146,7 @@ const ORDER: (keyof TemplateParams)[] = ['kind', 'fabric', 'opacity', 'length_m'
   'sleeve_fit', 'front', 'collar',
   'rise', 'waistband', 'sides', 'string_width_m', 'leg_length_m', 'leg_cut', 'back_coverage', 'side_width_m',
   'cup_style', 'cup_coverage', 'push_up', 'underband_m', 'center_gore', 'closure', 'straps', 'fingers', 'length', 'cuff',
-  'tights_style', 'feet', 'garters', 'trouser_length', 'leg_shape', 'trouser_waist', 'fly', 'hem']
+  'tights_style', 'feet', 'garters', 'trouser_length', 'leg_shape', 'seat', 'trouser_waist', 'fly', 'hem']
 /** Fields shown as a 0…1 number rather than centimetres. */
 const SHARES = new Set<keyof TemplateParams>(['flare', 'fit', 'sleeve_fit', 'opacity', 'leg_cut', 'back_coverage', 'cup_coverage', 'push_up'])
 
@@ -256,6 +258,16 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
     setSource('user')
     setSaved('')
   }
+  /** Bug round 2026-11-20: a preset sets its fields at once (leggings = skinny, fitted seat, fit 0, full length). */
+  const applyPreset = (values: Partial<TemplateParams>) => {
+    if (!draft) return
+    const next = { ...draft, ...values } as TemplateParams
+    if (!choiceAllowed('hem', next.hem || 'plain', next)) next.hem = 'plain'
+    setDraft(next)
+    setSource('user')
+    setSaved('')
+  }
+  const presets = draft && data?.presets ? Object.entries(data.presets[draft.kind] || {}) : []
   const suggest = async () => {
     setBusy('suggest')
     setError('')
@@ -300,6 +312,17 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
             <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
               <TemplateOverlay path={path} draft={draft} />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: '1 1 340px', minWidth: 0 }}>
+                {presets.length ? (
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }} data-template-presets="">
+                    <span className="ga-form-hint">{t('Preset')}</span>
+                    {presets.map(([name, values]) => (
+                      <button key={name} type="button" className="ga-btn" disabled={!!busy}
+                        title={t(TEMPLATE_PRESET_HINTS[name] || '')} onClick={() => applyPreset(values)}>
+                        {t(TEMPLATE_PRESET_LABELS[name] || name)}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
                 <div style={GRID}>
                   {ORDER.filter((key) => data.spec[key] && shown(key, draft, data.kind_fields || {})).map((key) => {
                     const f = data.spec[key]
@@ -371,7 +394,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                   <div className="ga-hint">{t('A close-fitting piece is cut from the body itself and pinned at its bands — it has no length of its own.')}</div>
                 ) : null}
                 {draft.kind === 'trousers' ? (
-                  <div className="ga-hint">{t('Trousers are cut from the body from the waistband to the hem and widened round each leg by the leg shape. A skinny full-length leg goes into the shoe; every other leg hangs over it. The fly and belt loops come from the picture.')}</div>
+                  <div className="ga-hint">{t('Trousers are cut from the body from the waistband to the hem and widened round each leg by the leg shape. Above the crotch the seat decides: fitted lies on the skin, regular and relaxed span the hollows, stand off the seat and drop the crotch. A skinny full-length leg goes into the shoe; every other leg hangs over it. The fly and belt loops come from the picture.')}</div>
                 ) : null}
                 {draft.kind === 'jacket' ? (
                   <div className="ga-hint">{t('A jacket is draped over the tops and dresses worn with it (built first).')}</div>
