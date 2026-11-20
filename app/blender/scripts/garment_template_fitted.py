@@ -907,6 +907,11 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
     V = np.array([v.co for v in bm.verts])
     if kind == "trousers":
         pin_mask = pins(V)
+        # A237: the centre seam over the crotch's front and back hollows (the mons, the seat's cleft) is held as laid:
+        # the cloth bridging them was drawn into them in the drape (Ylva: 4 edges on the centre line, stretch 2.09)
+        seam = (np.abs(V[:, 0] - cx) < SEAM_HALF_M) & (V[:, 2] > float(info["crotch_z"]))
+        pin_mask = pin_mask | seam
+        info["seam_pins"] = int(seam.sum())
         if boots:
             # A237: the leg over the boot is pinned as laid out over it (``_over_boot``): the fit is posed with the
             # boot's foot pose while the drape body stands in its rest pose, so a free leg caught on the collar
@@ -944,6 +949,8 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
     return obj, pin, info
 
 
+#: A237: half the width of the trousers' centre seam held as laid over the crotch (``build_fitted``).
+SEAM_HALF_M = 0.012
 #: A237: a trouser vertex this far above a boot's top is still pushed out of it (the hem bells over the collar).
 OVER_BOOT_ABOVE_M = 0.02
 #: A237: where the inward ray starts, from the leg's axis — inside the gap between the legs, so a ray toward the other
