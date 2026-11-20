@@ -19,8 +19,9 @@
  *
  * A234: every other kind. Belt / choker / strap are a flat band (height, width,
  * the layer it sits on, band material; a strap's place and side; a belt's
- * buckle from the item image, 1 hub job per item); anklet / bracelet / ring
- * a round tube (height, thickness, side, a ring's finger); earrings a stud or
+ * buckle from the item image, 1 hub job per item); anklet / bracelet a round
+ * tube (height, thickness, side); A238 a ring (hand, finger, place along the
+ * finger, band width and thickness — its size comes from the skeleton); earrings a stud or
  * hoop (CPU) or a drop from the item image. The live dots are the piece's
  * centre line(s) on the body (POST …/curve with the unsaved description); a
  * small piece is framed close.
@@ -129,7 +130,7 @@ export function AccessoryDialog({ character, itemId, onClose }: {
   // A234: the live rings of the other kinds (the shape fields only — the material does not move them).
   const shapeKey = draft && draft.kind !== 'necklace'
     ? JSON.stringify({ kind: draft.kind, band: draft.band, side: draft.side, finger: draft.finger,
-      earring: draft.earring, chain: draft.chain })
+      earring: draft.earring, chain: draft.chain, ring: draft.ring })
     : ''
   useEffect(() => {
     if (!shapeKey) return
@@ -217,6 +218,8 @@ export function AccessoryDialog({ character, itemId, onClose }: {
     const width = data.kind_widths?.[kind]
     const thickness = data.kind_thickness?.[kind]
     return { ...d, kind,
+      // A238: a ring is on one hand
+      side: kind === 'ring' && !(data.ring_sides || []).includes(d.side || '') ? data.ring_sides?.[0] : d.side,
       band: width !== undefined ? { ...(d.band || {}), width_cm: width } : d.band,
       chain: thickness !== undefined && !data.cords.includes(d.metal || '')
         ? { ...(d.chain || {}), thickness_mm: thickness } : d.chain }
@@ -384,7 +387,16 @@ export function AccessoryDialog({ character, itemId, onClose }: {
                     {t('This kind is stored but not built yet in this version.')}
                   </div>
                 ) : null}
-                {data.metrics ? (
+                {data.metrics && draft.kind === 'ring' ? (
+                  <div className="ga-hint" style={{ fontSize: '0.75em' }}
+                    title={t('The ring\'s size comes from the skeleton: the hand\'s width across the knuckles and the length of the finger\'s first bone, within a range set by the body\'s height. It is not measured on the skin, so it can cut into a thick finger.')}>
+                    {t('Inner radius')}: {data.metrics.inner_radius_mm ?? '–'} mm
+                    {' · '}{t('hand width')}: {data.metrics.hand_width_mm ?? '–'} mm
+                    {' · '}{t('finger bone')}: {data.metrics.bone_length_mm ?? '–'} mm
+                    {data.metrics.clamped ? ` · ${t('limited to the range for this height')}` : ''}
+                    {' · '}{data.metrics.triangles} {t('triangles')}
+                  </div>
+                ) : data.metrics ? (
                   <div className="ga-hint" style={{ fontSize: '0.75em' }}
                     title={draft.kind === 'necklace'
                       ? t('Distance from the chain to the skin along the whole chain, in the rest pose')
@@ -462,8 +474,10 @@ function AroundFields({ data, draft, setDraft }: { data: AccessoryInfo; draft: J
   const setField = (key: string, v: unknown) => setDraft((d) => (d ? { ...d, [key]: v } : d))
   const isBand = BAND_KINDS.includes(kind)
   const isTube = TUBE_KINDS.includes(kind)
+  const isRing = kind === 'ring'
   const strapAt = band.at || 'thigh'
   const paired = ['anklet', 'bracelet', 'ring', 'earrings'].includes(kind) || (kind === 'strap' && strapAt !== 'chest')
+  const along = draft.ring?.along ?? 0.5
   const height = band.height_cm ?? 0
   const width = band.width_cm ?? data.kind_widths?.[kind] ?? 4
   const thick = draft.chain?.thickness_mm ?? data.kind_thickness?.[kind] ?? 1.5
@@ -478,7 +492,8 @@ function AroundFields({ data, draft, setDraft }: { data: AccessoryInfo; draft: J
           labels={ACCESSORY_STRAP_AT_LABELS} onChange={(v) => setBand('at', v)} />
       ) : null}
       {paired ? (
-        <Choice label={t('Body side')} value={draft.side || 'both'} options={data.sides || []} labels={ACCESSORY_SIDE_LABELS}
+        <Choice label={t(isRing ? 'Hand' : 'Body side')} value={draft.side || (isRing ? 'left' : 'both')}
+          options={(isRing ? data.ring_sides : data.sides) || []} labels={ACCESSORY_SIDE_LABELS}
           onChange={(v) => setField('side', v)} />
       ) : null}
       {kind === 'ring' ? (
@@ -493,11 +508,20 @@ function AroundFields({ data, draft, setDraft }: { data: AccessoryInfo; draft: J
         <Slider label={heightLabel} value={height} unit="cm" min={hMin} max={hMax} step={isTube ? 0.1 : 0.5}
           onChange={(v) => setBand('height_cm', v)} />
       ) : null}
+      {isRing ? (
+        <Slider label={t('Place along the finger (from the knuckle)')} value={Math.round(along * 100)} unit="%" digits={0}
+          min={Math.round((ranges.ring_along?.[0] ?? 0.15) * 100)} max={Math.round((ranges.ring_along?.[1] ?? 0.85) * 100)}
+          step={1} onChange={(v) => setField('ring', { ...(draft.ring || {}), along: v / 100 })} />
+      ) : null}
       {isBand ? (
         <Slider label={t('Width')} value={width} unit="cm" min={ranges.width_cm?.[0] ?? 0.5}
           max={ranges.width_cm?.[1] ?? 12} step={0.1} onChange={(v) => setBand('width_cm', v)} />
       ) : null}
-      {isTube || (kind === 'earrings' && ear.style === 'hoop') ? (
+      {isRing ? (
+        <Slider label={t('Band width')} value={width * 10} unit="mm" min={(ranges.ring_width_cm?.[0] ?? 0.15) * 10}
+          max={(ranges.ring_width_cm?.[1] ?? 1.2) * 10} step={0.5} onChange={(v) => setBand('width_cm', v / 10)} />
+      ) : null}
+      {isTube || isRing || (kind === 'earrings' && ear.style === 'hoop') ? (
         <Slider label={t(kind === 'earrings' ? 'Wire thickness' : 'Thickness')} value={thick} unit="mm"
           min={ranges.thickness_mm?.[0] ?? 0.5} max={ranges.thickness_mm?.[1] ?? 6} step={0.1}
           onChange={(v) => setDraft((d) => (d ? { ...d, chain: { ...(d.chain || {}), thickness_mm: v } } : d))} />

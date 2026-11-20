@@ -1533,6 +1533,8 @@ export interface Jewellery {
   buckle?: { from_image?: boolean; size_mm?: number } | null
   side?: string
   finger?: string
+  /** A238: where on the finger's proximal bone the ring sits (share from the knuckle). */
+  ring?: { along?: number }
   /** A234: earrings — stud / hoop (CPU) or drop (from the item image). */
   earring?: { style?: string; size_mm?: number }
   [key: string]: unknown
@@ -1571,6 +1573,8 @@ export interface AccessoryInfo {
   band_materials: string[]
   fingers: string[]
   sides: string[]
+  /** A238: a ring is on one hand. */
+  ring_sides: string[]
   kind_widths: Record<string, number>
   kind_thickness: Record<string, number>
   part_name: string
@@ -1578,7 +1582,9 @@ export interface AccessoryInfo {
   reason: string
   metrics: { gap_mm?: { min?: number; p50?: number; p95?: number }; inside_share?: number; triangles?: number;
     on_clothing_share?: number; length_m?: Record<string, number>;
-    poses?: Record<string, { gap_min_mm: number; inside_share: number }> } | null
+    poses?: Record<string, { gap_min_mm: number; inside_share: number }>;
+    /** A238: the ring's size from the skeleton. */
+    inner_radius_mm?: number; hand_width_mm?: number; bone_length_mm?: number; clamped?: boolean } | null
   built_at: string
   cost: { hub_jobs: number }
   glb_url: string
@@ -1589,9 +1595,10 @@ export const ACCESSORY_KIND_LABELS: Record<string, string> = {
   anklet: 'Anklet', belt: 'Belt', strap: 'Strap',
 }
 
-/** A234: the kinds that are a flat band, the ones that are a round tube round a limb. */
+/** A234: the kinds that are a flat band, the ones that are a round tube round a limb (A238: the ring is sized from
+ *  the skeleton and has its own fields). */
 export const BAND_KINDS = ['belt', 'choker', 'strap']
-export const TUBE_KINDS = ['anklet', 'bracelet', 'ring']
+export const TUBE_KINDS = ['anklet', 'bracelet']
 /** A234: what the item-image part of a kind is called (`accessory_spec.PART_NAMES`). */
 export const ACCESSORY_PART_NAMES: Record<string, string> = { necklace: 'Pendant', belt: 'Buckle', earrings: 'Earring drop' }
 export const ACCESSORY_BAND_MATERIAL_LABELS: Record<string, string> = {
@@ -1602,7 +1609,9 @@ export const ACCESSORY_EARRING_LABELS: Record<string, string> = { stud: 'Stud', 
 /** A234: the CPU test poses of the gates. */
 export const ACCESSORY_POSE_LABELS: Record<string, string> = { rest: 'Rest pose', walk: 'Walk pose', sit: 'Sit pose', run: 'Run pose' }
 export const ACCESSORY_SIDE_LABELS: Record<string, string> = { left: 'Left', right: 'Right', both: 'Both' }
-export const ACCESSORY_FINGER_LABELS: Record<string, string> = { index: 'Index finger', middle: 'Middle finger', ring: 'Ring finger', little: 'Little finger' }
+export const ACCESSORY_FINGER_LABELS: Record<string, string> = {
+  thumb: 'Thumb', index: 'Index finger', middle: 'Middle finger', ring: 'Ring finger', little: 'Little finger',
+}
 /** A234: how close the dialog's 3D view frames a small piece (metres round its preview points; 0: the whole body). */
 export const ACCESSORY_FOCUS_M: Record<string, number> = { ring: 0.07, earrings: 0.14, bracelet: 0.14, anklet: 0.2 }
 
