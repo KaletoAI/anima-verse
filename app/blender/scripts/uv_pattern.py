@@ -22,6 +22,10 @@ never assigns or relabels a part. It only:
 * ``cap_height`` — the signed sleeve cap height (shoulder point over the underarm seam ends).
 * ``islands_payload`` — the ``islands.json`` dict: loops and triangles in atlas pixels, no timing or run data, so
   its sha is a pure function of the geometry.
+* ``strip_island_uv`` — a band island's strip UV per island vertex (the closed ring's start vertex has two copies,
+  a vertex merged away by ``dissolve_degenerate`` drops its column).
+* ``pattern_uv`` — the whole pipeline ``garment_template_build.run()`` calls: split, flatten / strip, orient, cap
+  heights, pack, payload, and the per-corner Blender UV of every input face.
 
 Units: metres in, metres out (the UV is in metres until packing). Faces may be quads or n-gons; they are
 fan-triangulated (``fan``) for the solves only, the UV stays per island vertex (= per face corner).
@@ -287,11 +291,18 @@ def arap(xyz, tris, uv0, iters=40, cg_tol=1e-9):
     keep = np.ones(n, bool)
     keep[pin] = False
 
+    # the cotangent Laplacian as COO triplets (each half-edge adds w to (i, i) and (j, j), -w to (i, j) and (j, i));
+    # the matvec is one ``bincount`` per column (``np.add.at`` per call made the CG 10x slower on a real top)
+    # (duplicate entries summed once)
+    l_key, l_inv = np.unique(np.concatenate([he_i * n + he_i, he_j * n + he_j, he_i * n + he_j, he_j * n + he_i]),
+                             return_inverse=True)
+    l_val = np.bincount(l_inv, np.concatenate([he_w, he_w, -he_w, -he_w]), minlength=len(l_key))
+    l_row, l_col = l_key // n, l_key % n
+    l_row2 = np.concatenate([l_row, l_row + n])
+
     def lap(x):  # (n, 2) -> (n, 2), the pinned row zeroed
-        d = he_w[:, None] * (x[he_i] - x[he_j])
-        out = np.zeros_like(x)
-        np.add.at(out, he_i, d)
-        np.add.at(out, he_j, -d)
+        out = np.bincount(l_row2, np.concatenate([l_val * x[l_col, 0], l_val * x[l_col, 1]]),
+                          minlength=2 * n).reshape(2, n).T.copy()
         out[~keep] = 0.0
         return out
 
@@ -655,3 +666,124 @@ def islands_payload(islands, islands_uv_m, xyz, size_px=2048, margin_cm=1.5, cap
         items.append(item)
     return {"version": PAYLOAD_VERSION, "atlas_px": int(size_px), "px_per_cm": s, "margin_cm": float(margin_cm),
             "islands": items, "seams": seam_samples(islands, px, xyz, step_cm)}
+
+
+def strip_island_uv(island, rows, xyz):
+    """``strip_uv`` of a band ``island``: (n, 2) UV in metres per local vertex.
+
+    ``rows`` = [outer ids, inner ids] (global vertex ids, u order, equal length; a CLOSED ring repeats its first column
+    at the end). A column whose outer or inner vertex is not in the island (merged away by ``dissolve_degenerate``)
+    is dropped from the strip; its surviving vertex is placed at the u interpolated by column index between the kept
+    columns, on its own edge (v 0 outer, the mean width inner). A vertex on no row (merged into the band from
+    elsewhere) takes the UV of the 3D-nearest placed island vertex. The start vertex of a closed ring has two local
+    copies (the cut): each takes the end (u 0 or the full length) nearer the mean u of its face neighbours."""
+    xyz = np.asarray(xyz, float)
+    outer, inner = [int(v) for v in rows[0]], [int(v) for v in rows[1]]
+    have = {int(g) for g in island.vmap}
+    kept = [k for k in range(len(outer)) if outer[k] in have and inner[k] in have]
+    if len(kept) < 2:
+        raise ValueError(f"strip_island_uv: {len(kept)} usable columns in {island.name}")
+    # ``strip_uv``'s rule per COLUMN (its dict is keyed by vertex id, and a closed ring's start vertex is both the
+    # first and the last column)
+    po, pi = xyz[[outer[k] for k in kept]], xyz[[inner[k] for k in kept]]
+    mid = 0.5 * (po + pi)
+    ku = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(mid, axis=0), axis=1))])
+    kw = np.linalg.norm(pi - po, axis=1)
+    width = float(np.mean(kw))
+    cols = {}  # global id -> [(u, v)]
+    for k in range(len(outer)):
+        for g, on_inner in ((outer[k], False), (inner[k], True)):
+            if g not in have:
+                continue
+            if k in kept:
+                j = kept.index(k)
+                uv = (float(ku[j]), float(kw[j]) if on_inner else 0.0)
+            else:
+                uv = (float(np.interp(k, kept, ku)), width if on_inner else 0.0)
+            if uv not in cols.setdefault(g, []):
+                cols[g].append(uv)
+    n = len(island.vmap)
+    uv = np.full((n, 2), np.nan)
+    multi = []
+    for l in range(n):
+        c = cols.get(int(island.vmap[l]))
+        if c and len(c) == 1:
+            uv[l] = c[0]
+        elif c:
+            multi.append((l, c))
+    nb = {}
+    for poly in island.corner_vid:
+        for a in poly:
+            nb.setdefault(a, set()).update(b for b in poly if b != a)
+    for l, c in multi:
+        us = [uv[b, 0] for b in nb.get(l, ()) if np.isfinite(uv[b, 0])]
+        m = float(np.mean(us)) if us else 0.0
+        uv[l] = min(c, key=lambda t: abs(t[0] - m))
+    placed = np.where(np.isfinite(uv[:, 0]))[0]
+    for l in np.where(~np.isfinite(uv[:, 0]))[0]:
+        d = np.linalg.norm(xyz[island.vmap[placed]] - xyz[island.vmap[l]], axis=1)
+        uv[l] = uv[placed[int(np.argmin(d))]]
+    return uv
+
+
+def pattern_uv(faces, part, seam_edges, xyz, axes=None, strips=None, caps=None, size_px=2048, margin_cm=1.5,
+               iters=40):
+    """The pattern UV of one garment mesh.
+
+    ``faces`` = vertex-id tuples (the mesh's polygons, in their loop order), ``part`` = their ``uv_part``,
+    ``seam_edges`` = marked cut edges (vertex-id pairs), ``xyz`` = the rest coordinates (metres).
+    ``axes`` = {part: (up, axis_p, axis_d)} for ``orient`` (a panel part missing there: +Z up round the vertical line
+    through its own centroid); ``strips`` = {part: rows} (``strip_island_uv``) for the parts in ``STRIP_PARTS``;
+    ``caps`` = {part: (armhole loop ids, shoulder id, underarm id)} — the underarm vertex lies on the seam, so the
+    island holds two copies of it, the cap is measured against both (``cap_height``); a cap whose vertices did not
+    survive is left out.
+
+    Returns {"payload": ``islands_payload``, "corner_uv": per input face the Blender UV of each corner (x / size,
+    1 - y / size of the payload's pixels), "islands": names, "faces_per_part": {name: faces}, "area_ratio_min",
+    "area_ratio_max", "stretch_p95_max" (panels), "strip_stretch_p95": {name: value} (bands: recorded, not gated),
+    "cap_height_cm": {name: cm}}."""
+    xyz = np.asarray(xyz, float)
+    part = np.asarray(part, dtype=np.int64)
+    axes, strips, caps = axes or {}, strips or {}, caps or {}
+    islands = split_islands(len(xyz), faces, part, seam_edges, xyz=xyz)
+    uv_m, cap_cm = {}, {}
+    for isl in islands:
+        lx = xyz[isl.vmap]
+        tris = np.array([t for poly in isl.corner_vid for t in fan(poly)], dtype=np.int64).reshape(-1, 3)
+        if isl.part in STRIP_PARTS and isl.part in strips:
+            uv = strip_island_uv(isl, strips[isl.part], xyz)
+            uv = uv - uv.min(axis=0)
+        elif len(tris) == 0 or len(isl.vmap) < 3:
+            uv = np.zeros((len(isl.vmap), 2))
+        else:
+            up_, ap, ad = axes.get(isl.part, ((0.0, 0.0, 1.0), lx.mean(axis=0), None))
+            uv = arap(lx, tris, lscm(lx, tris), iters=iters)
+            uv = orient(uv, lx, tris, np.asarray(up_, float), np.asarray(ap, float),
+                        None if ad is None else np.asarray(ad, float))
+        uv_m[isl.name] = uv
+        if isl.part in caps:
+            loop, sh, ua = caps[isl.part]
+            loop_g = {int(g) for g in loop}
+            loc_loop = [l for l in range(len(isl.vmap)) if int(isl.vmap[l]) in loop_g]
+            loc_sh = [l for l in range(len(isl.vmap)) if int(isl.vmap[l]) == int(sh)]
+            loc_ua = [l for l in range(len(isl.vmap)) if int(isl.vmap[l]) == int(ua)]
+            if loc_sh and loc_ua and int(sh) in loop_g and int(ua) in loop_g:
+                cap_cm[isl.name] = cap_height(uv * 100.0, loc_loop, loc_sh[0], loc_ua)
+    payload = islands_payload(islands, uv_m, xyz, size_px=size_px, margin_cm=margin_cm, cap_heights=cap_cm)
+    corner_uv = [None] * len(faces)
+    by_name = {i["name"]: i for i in payload["islands"]}
+    for isl in islands:
+        vp = by_name[isl.name]["verts_px"]
+        for fi, corner in zip(isl.faces, isl.corner_vid):
+            corner_uv[fi] = [(vp[l][0] / size_px, 1.0 - vp[l][1] / size_px) for l in corner]
+    panels = [i for i in payload["islands"] if i["part"] not in STRIP_PARTS]
+    fpp = {}
+    for isl in islands:
+        fpp[isl.name] = len(isl.faces)
+    return {"payload": payload, "corner_uv": corner_uv, "islands": [i.name for i in islands], "faces_per_part": fpp,
+            "area_ratio_min": min((i["distortion"]["area_ratio"] for i in panels), default=None),
+            "area_ratio_max": max((i["distortion"]["area_ratio"] for i in panels), default=None),
+            "stretch_p95_max": max((i["distortion"]["stretch_p95"] for i in panels), default=None),
+            "strip_stretch_p95": {i["name"]: i["distortion"]["stretch_p95"] for i in payload["islands"]
+                                  if i["part"] in STRIP_PARTS},
+            "cap_height_cm": {k: round(float(v), 3) for k, v in cap_cm.items()}}

@@ -34,7 +34,9 @@ Cache: ``templates/{item}_{tsig}.glb + .json`` under the character's garment
 store; ``tsig`` = md5[:12] over the parameters, ``TEMPLATE_VERSION``, the base
 model sha256, the texture source sha256 and the other worn mesh pieces (the
 lower layers — they become colliders in P3; recorded now so the key does not
-change then). A failed drape is recorded in ``templates/failed/`` and the piece
+change then). A top's drape also keeps its pattern islands beside it
+(``{item}_{tsig}.islands.json``, ``islands_path``; the record's ``islands`` = file, sha256, px_per_cm).
+A failed drape is recorded in ``templates/failed/`` and the piece
 is left off with its reason until Retry. 0 hub jobs; the only paid call is the
 one parameter suggestion.
 
@@ -67,7 +69,9 @@ SPIKE_SCRIPT = "garment_template_drape.py"
 #: per-column lowest hits of upward rays at the centre, so a column grazing an inner thigh does not decide), no
 #: longer the lowest Hips-weighted vertex several cm down the inner thighs — a brief's gusset, a boxer's or a
 #: stocking's hem and a trouser's crotch anchor move up on a body whose thighs stand apart.
-TEMPLATE_VERSION = 9
+#: 10: tops get pattern-piece UVs (front/back/sleeves/band at one px/cm) and an islands output
+#: (``{item}_{tsig}.islands.json`` beside the drape; plan 2026-11-20-template-cut-uv-texture).
+TEMPLATE_VERSION = 10
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.
@@ -1802,6 +1806,11 @@ def drape_path(character_name: str, item_id: str, sig: str) -> Path:
     return templates_dir(character_name) / f"{item_id}_{sig}.glb"
 
 
+def islands_path(character_name: str, item_id: str, sig: str) -> Path:
+    """The drape's pattern islands (``uv_pattern.islands_payload``) beside its GLB — written for a top only."""
+    return templates_dir(character_name) / f"{item_id}_{sig}.islands.json"
+
+
 def failed_path(character_name: str, item_id: str, sig: str) -> Path:
     return templates_dir(character_name) / "failed" / f"{item_id}_{sig}.json"
 
@@ -2219,7 +2228,9 @@ def build_args(params: Dict[str, Any], spec: Dict[str, Any], *, item_id: str, re
             "thickness": FITTED_THICKNESS_M if spec.get("fitted") else 0.004,
             "smooth_weights": bool(corrective), "shape_groups": groups,
             "shape_poses": [p for g in groups if g["name"] == "legs" for p in g["poses"]],
-            "lower_shapes": list(lower_shapes or []), "lower_offsets": list(lower_offsets or [])}
+            "lower_shapes": list(lower_shapes or []), "lower_offsets": list(lower_offsets or []),
+            # pattern-piece UV islands for a top; a jacket and a dress with a bodice keep the grid UV until step 3
+            "uv_mode": "pattern" if params["kind"] == "top" else "grid"}
 
 
 def work_wall_s(data: Dict[str, Any]) -> Optional[float]:
@@ -2682,6 +2693,13 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
         if result["ok"]:
             target = drape_path(character_name, item_id, sig)
             shutil.move(str(result["glb"]), str(target))
+            islands = (result.get("outputs") or {}).get("islands")
+            if islands and Path(islands).is_file():
+                ipath = islands_path(character_name, item_id, sig)
+                shutil.move(str(islands), str(ipath))
+                raw = ipath.read_bytes()
+                record["islands"] = {"file": ipath.name, "sha256": hashlib.sha256(raw).hexdigest(),
+                                     "px_per_cm": json.loads(raw).get("px_per_cm")}
             write_record(target.with_suffix(".json"), {**record, "accepted": True})
             failed = failed_path(character_name, item_id, sig)
             if failed.is_file():

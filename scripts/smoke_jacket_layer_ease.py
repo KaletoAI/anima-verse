@@ -54,7 +54,8 @@ girth 1.0 (no underbust fold: the girth never climbs) so the bodice knots read s
     ``ease:over_sleeves:0.1`` — its key differs from the same key with ``layer_ease`` forced to 0 (a jacket cut
     wider re-drapes); JT over a FAILED or MISSING TS (not a collider — review finding: the jacket used to be cut
     wider over a shirt whose drape was refused and then refused itself, 1.254 -> 1.468) has NO token: its key equals
-    the one without the allowance; JT over TN has the same key either way. TEMPLATE_VERSION is not bumped: still 9.
+    the one without the allowance; JT over TN has the same key either way. TEMPLATE_VERSION is 10 (the cut-uv plan's
+    one bump; this change made none).
 [5] Plumbing: ``run_drape(..., over_sleeves=True)`` hands the spec with ``layer_ease`` 0.10 to the Blender runner
     (stubbed: it records ``params["spec"]``); ``over_sleeves`` left out -> no ``layer_ease``. ``_build_drape``
     collects the lower layers whose sub-build is ready, derives ``over`` from them, re-reads the key (a layer that
@@ -235,7 +236,8 @@ for st in ("failed", "missing"):
           k_st == k_ts0, (k_st, k_ts0))
 STATE["TS"] = "ready"
 gt.drape_state = _real_drape_state
-check("[4] TEMPLATE_VERSION not bumped (9)", gt.TEMPLATE_VERSION == 9, gt.TEMPLATE_VERSION)
+check("[4] TEMPLATE_VERSION 10 (the cut-uv plan's one bump; this change made none)", gt.TEMPLATE_VERSION == 10,
+      gt.TEMPLATE_VERSION)
 
 # [5]
 from app.blender import runner as _runner  # noqa: E402

@@ -63,6 +63,34 @@ No server, no world DB, no Blender: ``uv_pattern`` is numpy only and imported th
     (0.30 x 0.20 m) packs alone: area_cm2 = 30 * 20 = 600 (+-0.5), one boundary loop of 2 * (6 + 4) = 20 vertices.
 [12] Cap height: v in cm of a hand island, shoulder v = 12, underarm ends v = 15 and 13 -> 12 - 14 = -2.0 (inverted);
     a shoulder id outside the loop raises ValueError.
+[13] ``pattern_uv`` — the whole pipeline ``garment_template_build.run()`` calls (split, flatten or strip, orient, cap,
+    pack, payload, per-corner Blender UV), on a hand-made top (plan Task 3):
+    (a) a torso cylinder r 0.15, 16 columns at the build's angles (column c at 1.5 pi + c * 2 pi / 16: c = 0 is the
+    front centre, -Y), 6 vertex rings z = 0.5 .. 0 (row 0 on top), parts by the construction rule (c < 4 or c >= 12
+    front, else back), plus a flat band ring on top (outer edge = the torso's row 0, inner edge r 0.12 at z 0.5,
+    part 5, cut at the back centre c = 8; strip rows c = 8 .. 24 mod 16). Islands front, back, band. The front is ONE
+    island across c = 0: 8 facets of chord 2 * 0.15 * sin(pi / 16) -> width 0.468217 m, height 0.5 (+-1e-3). The band
+    strip: 16 chords of the mid line r 0.135 -> 0.842790 m long, 0.03 m wide. Packing: row A = 1.5 + 46.8217 + 1.5 +
+    46.8217 + 1.5 = 98.1434 cm, H = 1.5 + 50 + 1.5 + 3 + 1.5 = 57.5 -> px_per_cm = floor_0.01(2048 / 98.1434 =
+    20.867) = 20.86; the front's bbox is 46.8217 * 20.86 = 976.70 px wide (+-2.1 px = the 1e-3 m tolerance), the
+    band's 84.2790 * 20.86 = 1758.06 px wide (+-2.1) and 3 * 20.86 = 62.58 px high (+-0.1). Every corner UV is
+    exactly (x / 2048, 1 - y / 2048) of its island vertex in the payload. The band's two copies of the back-centre
+    vertex sit at its left and right ends; the front-centre vertex (c = 0) at its u middle (8 of 16 chords: 0.5
+    +-1e-3). The front's u increases with +X (seen from -Y), the back's with -X (seen from +Y); image rows fall as z
+    rises (grain up).
+    (b) Robustness to a vertex ``dissolve_degenerate`` merged away: the band's inner vertex of column 4 merged into
+    column 5's (face 3 now uses column 5's inner vertex, face 4 is the triangle row0[4], row0[5], inner[5]). Column 4
+    of the strip rows is dropped; its surviving outer vertex is placed between columns 3 and 5 on the outer edge. Still
+    ONE band island, every band corner UV finite and inside [0, 1], no band triangle with zero UV area; the mid line
+    now runs 14 single chords plus ONE chord over two steps from column 3 to 5: 14 * 2 * 0.135 * sin(pi / 16) +
+    2 * 0.135 * sin(pi / 8) = 0.737440 + 0.103324 = 0.840765 m (+-1e-3; the end columns stay).
+    (c) ``caps``: the frustum of [3] as part 3 with caps = (its shoulder ring, the top generatrix vertex at x = 0, the
+    underarm vertex at x = 0). It develops into an annular sector of outer radius Ro = sqrt(1.2^2 + 0.08^2) =
+    1.202664 (apex at x = -1.2) and angle = the chord sum 24 * 2 * 0.08 * sin(pi / 24) = 0.501220 over Ro = 0.416759
+    rad; the shoulder point is the arc's middle, the two underarm copies its ends -> cap = Ro (1 - cos(0.208380)) =
+    2.60 cm (+-0.1), POSITIVE (a bell; the build's sleeves give their own sign).
+[14] ``garment_template_drape.island_mask`` names its ``polys`` parameter (Task 2's latent NameError: the body read
+    ``polys`` without a parameter of that name).
 """
 import json
 import math
@@ -311,6 +339,110 @@ try:
     check("[12] shoulder outside the loop raises", False)
 except ValueError:
     check("[12] shoulder outside the loop raises", True)
+
+# [13] pattern_uv on a hand-made top
+N13, R13 = 16, 0.15
+v13, tid13 = [], {}
+for r in range(6):
+    for c in range(N13):
+        a = 1.5 * math.pi + c * 2 * math.pi / N13
+        tid13[r, c] = len(v13)
+        v13.append((R13 * math.cos(a), R13 * math.sin(a), 0.5 - 0.1 * r))
+iid13 = {}
+for c in range(N13):
+    a = 1.5 * math.pi + c * 2 * math.pi / N13
+    iid13[c] = len(v13)
+    v13.append((0.12 * math.cos(a), 0.12 * math.sin(a), 0.5))
+v13 = np.array(v13)
+f13, p13 = [], []
+for r in range(5):
+    for c in range(N13):
+        f13.append((tid13[r, c], tid13[r, (c + 1) % N13], tid13[r + 1, (c + 1) % N13], tid13[r + 1, c]))
+        p13.append(1 if c < N13 // 4 or c >= 3 * N13 // 4 else 2)
+band_faces = {}
+for c in range(N13):
+    band_faces[c] = len(f13)
+    f13.append((tid13[0, c], tid13[0, (c + 1) % N13], iid13[(c + 1) % N13], iid13[c]))
+    p13.append(5)
+seam13 = {(tid13[0, 8], iid13[8])}
+rows13 = [[tid13[0, c % N13] for c in range(8, 8 + N13 + 1)], [iid13[c % N13] for c in range(8, 8 + N13 + 1)]]
+axes13 = {1: ((0, 0, 1), (0, 0, 0), None), 2: ((0, 0, 1), (0, 0, 0), None)}
+if not hasattr(up, "pattern_uv"):
+    check("[13] uv_pattern.pattern_uv exists", False)
+else:
+    res = up.pattern_uv(f13, p13, seam13, v13, axes=axes13, strips={5: rows13})
+    pl = res["payload"]
+    by13 = {i["name"]: i for i in pl["islands"]}
+    check("[13a] islands front, back, band", [i["name"] for i in pl["islands"]] == ["front", "back", "band"],
+          [i["name"] for i in pl["islands"]])
+    check("[13a] px_per_cm 20.86", abs(pl["px_per_cm"] - 20.86) < 1e-9, pl["px_per_cm"])
+    bw = lambda n: by13[n]["bbox_px"][2] - by13[n]["bbox_px"][0]  # noqa: E731
+    bh = lambda n: by13[n]["bbox_px"][3] - by13[n]["bbox_px"][1]  # noqa: E731
+    check("[13a] front 976.70 x 1043 px", abs(bw("front") - 976.70) <= 2.1 and abs(bh("front") - 50 * 20.86) <= 2.1,
+          (bw("front"), bh("front")))
+    check("[13a] band 1758.06 x 62.58 px", abs(bw("band") - 1758.06) <= 2.1 and abs(bh("band") - 62.58) <= 0.1,
+          (bw("band"), bh("band")))
+    # corner UVs = payload pixels / size, Blender frame
+    isl13 = up.split_islands(len(v13), f13, p13, seam13, xyz=v13)
+    worst = 0.0
+    for isl in isl13:
+        vp = np.array(by13[isl.name]["verts_px"])
+        for fi, corner in zip(isl.faces, isl.corner_vid):
+            want = [(vp[l][0] / 2048, 1 - vp[l][1] / 2048) for l in corner]
+            worst = max(worst, float(np.abs(np.array(res["corner_uv"][fi]) - np.array(want)).max()))
+    check("[13a] corner UV = (x / 2048, 1 - y / 2048) of the payload", worst < 1e-12, worst)
+    bisl = next(i for i in isl13 if i.name == "band")
+    bvp = np.array(by13["band"]["verts_px"])
+    x0, x1 = by13["band"]["bbox_px"][0], by13["band"]["bbox_px"][2]
+    starts = sorted(float(bvp[l][0]) for l in range(len(bisl.vmap)) if bisl.vmap[l] == tid13[0, 8])
+    check("[13a] the back-centre vertex: two copies at the band's ends", len(starts) == 2
+          and abs(starts[0] - x0) < 1e-6 and abs(starts[1] - x1) < 1e-6, (starts, x0, x1))
+    fc = [float(bvp[l][0]) for l in range(len(bisl.vmap)) if bisl.vmap[l] == tid13[0, 0]]
+    check("[13a] the front centre at the band's u middle", len(fc) == 1 and abs((fc[0] - x0) / (x1 - x0) - 0.5) < 1e-3,
+          fc)
+    for name, sign in (("front", 1), ("back", -1)):
+        isl = next(i for i in isl13 if i.name == name)
+        vp = np.array(by13[name]["verts_px"])
+        cx = np.corrcoef(vp[:, 0], v13[isl.vmap, 0])[0, 1]
+        cz = np.corrcoef(vp[:, 1], v13[isl.vmap, 2])[0, 1]
+        check(f"[13a] {name}: u with {'+X' if sign > 0 else '-X'}, image rows fall as z rises",
+              cx * sign > 0.9 and cz < -0.99, (cx, cz))
+
+    # (b) a vertex merged away
+    fb = list(f13)
+    fb[band_faces[3]] = (tid13[0, 3], tid13[0, 4], iid13[5], iid13[3])
+    fb[band_faces[4]] = (tid13[0, 4], tid13[0, 5], iid13[5])
+    rb = up.pattern_uv(fb, p13, seam13, v13, axes=axes13, strips={5: rows13})
+    plb = rb["payload"]
+    bb = [i for i in plb["islands"] if i["part"] == 5]
+    check("[13b] still ONE band island", len(bb) == 1, [i["name"] for i in bb])
+    band_uv = np.array([uv for fi, uv in enumerate(rb["corner_uv"]) if p13[fi] == 5 for uv in uv], float)
+    check("[13b] every band corner UV finite, inside [0, 1]", np.all(np.isfinite(band_uv))
+          and band_uv.min() >= 0 and band_uv.max() <= 1, (band_uv.min(), band_uv.max()))
+    if bb:
+        lb = (bb[0]["bbox_px"][2] - bb[0]["bbox_px"][0]) / plb["px_per_cm"] / 100
+        check("[13b] the band 0.840765 m long (one chord over columns 3..5)", abs(lb - 0.840765) < 1e-3, lb)
+        bv = np.array(bb[0]["verts_px"])
+        bt = np.array(bb[0]["tris"])
+        q = bv[bt]
+        a2 = np.abs((q[:, 1, 0] - q[:, 0, 0]) * (q[:, 2, 1] - q[:, 0, 1]) - (q[:, 1, 1] - q[:, 0, 1]) * (q[:, 2, 0] - q[:, 0, 0]))
+        check("[13b] no band triangle with zero UV area", a2.min() > 1e-3, a2.min())
+
+    # (c) caps
+    fx13, ff13, fsm13, fv13 = frustum()
+    rc = up.pattern_uv(ff13, np.full(len(ff13), 3), fsm13, fx13, axes={3: ((1, 0, 0), (0, 0, 0), (-1, 0, 0))},
+                       caps={3: ([fv13(k, 0) for k in range(S)], fv13(S // 2, 0), fv13(0, 0))})
+    cap = rc["cap_height_cm"].get("sleeve_l")
+    check("[13c] cap height +2.60 cm (a bell)", cap is not None and abs(cap - 2.60) <= 0.1, cap)
+    pc = {i["name"]: i for i in rc["payload"]["islands"]}
+    check("[13c] the payload carries it", abs(pc["sleeve_l"].get("cap_height_cm", 0) - (cap or 0)) < 1e-3)
+
+# [14] island_mask(obj, size, polys=None)
+import ast  # noqa: E402
+tree = ast.parse((ROOT / "app" / "blender" / "scripts" / "garment_template_drape.py").read_text())
+im = next((n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "island_mask"), None)
+check("[14] island_mask names its polys parameter", im is not None and "polys" in [a.arg for a in im.args.args],
+      [a.arg for a in im.args.args] if im else None)
 
 print(f"\n{len(FAILS)} FAILED: {FAILS}" if FAILS else "\nALL OK")
 sys.exit(1 if FAILS else 0)

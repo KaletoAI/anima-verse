@@ -120,6 +120,12 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
        legs: unchanged). Top knot max(0.77295, 0.8217 + 0.02) = 0.8417. y 0.82 (h 0.66): cone 1.94933 -
        1.17638 * 0.66 / 0.76 = 0.92774 < 0.9178 + 0.02 = 0.9378 -> 0.9378; y 0.80 (h 0.64): cone 1.94933 -
        0.99063 = 0.95870 > 0.9459 -> 0.9587. Knots: hem + the 13 samples 0.66 .. 0.90 + top = 15.
+[15] Pattern-piece UVs (plan 2026-11-20-template-cut-uv-texture, Task 3): ``build_args`` sends ``uv_mode`` "pattern"
+     for a top and "grid" for a jacket, a covered dress with sleeves and a skirt (they keep the grid UV until step
+     3). A stubbed ``_build_drape`` whose run hands back ``outputs.islands`` moves that file next to the GLB as
+     ``{item}_{tsig}.islands.json`` (``islands_path``), byte-equal, and the record carries ``islands`` = {file: that
+     name, sha256: the sha-256 of its bytes, px_per_cm: the payload's 19.59}; a run without an islands output (a
+     grid piece) writes no file and no ``islands`` key. ``TEMPLATE_VERSION`` is 10 (the one bump of that plan).
 """
 import json
 import shutil
@@ -608,6 +614,65 @@ check("[14] Gelina: 15 knots, all clear body + ease", len(gk) == 15 and clears(G
 sg = gt.panel_spec(gp, GEL)
 gg = sg["panels"][1]["grid_m"]
 check("[14] Gelina: panel top row = 0.8417 / 2", close(gg[0][-1][0] - gg[0][0][0], 0.42085), gg[0][-1][0] - gg[0][0][0])
+
+# [15] pattern-piece UVs: uv_mode, the islands file beside the drape
+_top15, _ = gt.validate_params({"kind": "top", "sleeves": "short"})
+check("[15] top -> uv_mode pattern", gt.build_args(_top15, gt.panel_spec(_top15, MU), item_id="x").get("uv_mode") == "pattern")
+for _kw in ({"kind": "jacket"}, {"kind": "dress", "shoulders": "covered", "sleeves": "short"}, {"kind": "skirt"}):
+    _p15, _ = gt.validate_params(_kw)
+    check(f"[15] {_kw['kind']} -> uv_mode grid",
+          gt.build_args(_p15, gt.panel_spec(_p15, MU), item_id="x").get("uv_mode") == "grid")
+check("[15] TEMPLATE_VERSION 10", gt.TEMPLATE_VERSION == 10, gt.TEMPLATE_VERSION)
+import hashlib  # noqa: E402
+_t15 = Path(tempfile.mkdtemp(prefix="smoke-template-islands-"))
+_saved15 = {k: getattr(gt, k) for k in ("templates_dir", "drape_with_fallback", "texture_sources")}
+from app.core import bust_shaping as _bs15  # noqa: E402
+_prep15 = _bs15.prepare
+try:
+    gt.templates_dir = lambda name: _t15 / "templates"
+    gt.texture_sources = lambda name, item_id: {"front": "f.png", "back": "b.png", "source": "item_image"}
+    _bs15.prepare = lambda body, item_id, item, lower, folder: (body, None, None)
+
+    def _fake15(with_islands):
+        def run(run_one, colliders, own):
+            out = _t15 / "run"
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "template.glb").write_bytes(b"glb")
+            outputs = {"glb": str(out / "template.glb")}
+            if with_islands:
+                (out / "islands.json").write_text(json.dumps({"version": 1, "atlas_px": 2048, "px_per_cm": 19.59,
+                                                              "islands": []}))
+                outputs["islands"] = str(out / "islands.json")
+            return ({"ok": True, "glb": outputs["glb"], "outputs": outputs, "data": {"drape": {}}, "rows": [],
+                     "outcome": "ok", "error": "", "log_tail": ""}, {"mode": "full", "failed": []})
+        return run
+
+    _item15 = {"category": "outfit_piece", "outfit_piece": {"slots": ["top"], "mesh_mode": "template",
+                                                           "template": {"params": dict(_top15)}}}
+    for _with, _sig in ((True, "aaaaaaaaaaaa"), (False, "bbbbbbbbbbbb")):
+        gt.drape_with_fallback = _fake15(_with)
+        _raw15 = (_t15 / "run" / "islands.json")
+        gt._build_drape("K", "i15", key=("K", "i15"), profile={}, base=("sig", "sha"), base_sha="sha", lower=[],
+                        item=_item15, sig=_sig, sources={"front": "f.png", "back": "b.png", "source": "item_image"},
+                        body=_t15 / "body.glb", params=dict(_top15))
+        _rec15 = json.loads(gt.drape_path("K", "i15", _sig).with_suffix(".json").read_text())
+        _isl15 = gt.islands_path("K", "i15", _sig) if hasattr(gt, "islands_path") else _t15 / "none"
+        if _with:
+            _bytes = _isl15.read_bytes() if _isl15.is_file() else b""
+            check("[15] islands.json moved beside the GLB", _isl15.name == f"i15_{_sig}.islands.json"
+                  and _isl15.parent == gt.drape_path("K", "i15", _sig).parent and b'"px_per_cm": 19.59' in _bytes,
+                  _isl15)
+            check("[15] the record lists the islands file", _rec15.get("islands") == {
+                "file": f"i15_{_sig}.islands.json", "sha256": hashlib.sha256(_bytes).hexdigest(), "px_per_cm": 19.59},
+                _rec15.get("islands"))
+        else:
+            check("[15] a grid run: no islands file, no islands key", not _isl15.is_file() and "islands" not in _rec15,
+                  _rec15.get("islands"))
+finally:
+    for _k, _v in _saved15.items():
+        setattr(gt, _k, _v)
+    _bs15.prepare = _prep15
+    shutil.rmtree(_t15, ignore_errors=True)
 
 print("\n" + ("all checks passed" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}"))
 sys.exit(1 if FAILS else 0)

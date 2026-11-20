@@ -1328,8 +1328,9 @@ def bake_from(src, dst, size, out_png):
     return img, round(coverage, 4), round(cpu, 2)
 
 
-def island_mask(obj, size):
-    """Texels covered by UV triangles (numpy raster)."""
+def island_mask(obj, size, polys=None):
+    """Texels covered by UV triangles (numpy raster); ``polys`` = only the first ``polys`` faces count (the single
+    layer before the Solidify), None = all."""
     me = obj.data
     uv = me.uv_layers.active.data
     mask = np.zeros((size, size), bool)
