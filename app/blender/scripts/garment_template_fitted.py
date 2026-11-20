@@ -687,10 +687,11 @@ def _umbrella(bm, passes, movable, boundary_only_along=True):
             bm.verts[i].co = c
 
 
-def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None):
+def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
     """The fitted piece as a new mesh object (``prm["node"]``) with planar UVs; returns ``(obj, pin indices,
     info)``. ``cut`` (A237): the body-only rest collider the faces are cut from when ``col`` / ``ctree`` hold lower
-    layers too — the piece is cut from the body and laid out over the layers (``ctree``)."""
+    layers too — the piece is cut from the body and laid out over the layers (``ctree``). ``boots`` (A237): footwear colliders a trouser leg hangs over
+    (``_over_boot``)."""
     f = spec["fitted"]
     kind = f["kind"]
     co, nrm, stree = _surface_tree(body)
@@ -901,6 +902,8 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None):
         if f.get("shape_r"):
             _umbrella(bm, SMOOTH_PASSES["trousers"], movable)
             _lay_out(bm, ctree, off, movable)
+        if boots:
+            info["over_boot"] = _over_boot(bm, boots, arm, off)
     V = np.array([v.co for v in bm.verts])
     if kind == "trousers":
         pin_mask = pins(V)
@@ -935,6 +938,65 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None):
     info["verts"] = len(mesh.vertices)
     info["pinned_share"] = round(len(pin) / max(1, len(mesh.vertices)), 3)
     return obj, pin, info
+
+
+#: A237: a trouser vertex this far above a boot's top is still pushed out of it (the hem bells over the collar).
+OVER_BOOT_ABOVE_M = 0.02
+#: A237: where the inward ray starts, from the leg's axis — inside the gap between the legs, so a ray toward the other
+#: leg never meets the other boot (from 0.3 m it did: 25 cm "boot" radii, nothing moved).
+OVER_BOOT_RAY_M = 0.14
+#: A237: the farthest a vertex is moved out over a boot (a ray past the boot's toe is left to the drape).
+OVER_BOOT_MAX_M = 0.08
+
+
+def _over_boot(bm, boots, arm, off):
+    """A237 — a trouser leg worn OVER a boot: every vertex up to the boot's top (+ ``OVER_BOOT_ABOVE_M``) goes out
+    to its ``off`` beyond the boot's OUTER surface along the horizontal ray from its leg's axis (knee -> ankle joint,
+    by height). The boot is a shell round the ankle: a leg cut from the body lies in the air between the shaft and the
+    skin, which is outside the collider, so laying out left it there and the drape caught it inside the shaft (Lirien
+    straight leg: stretch 25.9). The ray is cast from ``OVER_BOOT_RAY_M`` out inward — its first hit is the outer
+    surface. Returns the count moved and what was looked at."""
+    from mathutils.bvhtree import BVHTree
+    trees, top = [], -1e9
+    dg = bpy.context.evaluated_depsgraph_get()
+    for b in boots:
+        trees.append(BVHTree.FromObject(b, dg))
+        top = max(top, max((b.matrix_world @ v.co).z for v in b.data.vertices))
+    axes = {sd: (_bone_head(arm, f"{name}Leg"), _bone_head(arm, f"{name}Foot"))
+            for sd, name in ((1, "Left"), (-1, "Right"))}
+    sx = 1 if axes[1][0][0] > axes[-1][0][0] else -1     # which side of x the left leg is on
+    n = 0
+    stat = {"top": round(top, 3), "below": 0, "hit": 0, "inside": 0}
+    for v in bm.verts:
+        p = np.array(v.co)
+        if p[2] > top + OVER_BOOT_ABOVE_M:
+            continue
+        stat["below"] += 1
+        knee, ankle = axes[1] if (p[0] * sx > 0) else axes[-1]
+        t = np.clip((knee[2] - p[2]) / max(1e-6, knee[2] - ankle[2]), 0.0, 1.0)
+        a = knee + t * (ankle - knee)
+        d = np.array([p[0] - a[0], p[1] - a[1], 0.0])
+        r = float(np.linalg.norm(d))
+        if r < 1e-6:
+            continue
+        d /= r
+        best = None
+        for tr in trees:
+            hit = tr.ray_cast(Vector(a + d * OVER_BOOT_RAY_M + np.array([0.0, 0.0, p[2] - a[2]])), Vector(-d),
+                              OVER_BOOT_RAY_M)
+            if hit[0] is not None:
+                rb = OVER_BOOT_RAY_M - hit[3]
+                best = rb if best is None else max(best, rb)
+        if best is None:
+            continue
+        stat["hit"] += 1
+        want = best + float(off[v.index])
+        stat["inside"] += int(r < want)
+        if r < want and want - r <= OVER_BOOT_MAX_M:
+            q = a + d * want
+            v.co = Vector((q[0], q[1], p[2]))
+            n += 1
+    return {"moved": n, **stat}
 
 
 def _outer_faces(cent, fnorm, arm):

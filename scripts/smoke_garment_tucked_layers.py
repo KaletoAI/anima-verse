@@ -20,8 +20,9 @@ piece whose fit record is a split boot with an ``ankle`` shaft, ``shoe`` a footw
      not stamped but ``_under_shoe`` True (``under_footwear``, A233); a shoe without a shaft -> not stamped.
 [W1] ``outfit_options._template_trousers_record``: straight template trousers -> a stand-in record, so
      ``hem_eligible(boot record, it)`` is (True, ""); skinny full -> None; a template top -> None.
-[S1] the builder: a fitted piece over lower layers takes its faces from a body-only rest collider (``cut``) and
-     lays out over ``ctree`` (body + layers); a boot fit's several footwear nodes are joined into one collider.
+[S1] the builder: a LOOSE lower layer (median gap to the skin below the piece's top edge > 12 mm: a top) is clipped
+     2 cm above that edge, a close one (briefs under tights) stays; a boot is left out of the cut collider (``cut``)
+     and the leg is laid out over it (``ctree``); a boot fit's several footwear nodes are joined into one collider.
 """
 import sys
 import tempfile
@@ -145,8 +146,10 @@ fitted = (ROOT / "app/blender/scripts/garment_template_fitted.py").read_text()
 build = (ROOT / "app/blender/scripts/garment_template_build.py").read_text()
 check("S1 the fitted cut reads the cut collider", "src = cut if cut is not None else col" in fitted
       and "bm.from_mesh(src.data)" in fitted)
-check("S1 the builder makes a body-only cut collider over layers",
-      "cut = gd.rest_collider(body)[0] if lower else None" in build and "col=col, cut=cut)" in build)
+check("S1 a boot is left out of the cut collider",
+      'extra=[lo for lo in lower if not lo.get("footwear")])[0] if boots else None' in build and "cut=cut," in build)
+check("S1 a loose lower layer is clipped at the piece's top edge (+2 cm), a boot never",
+      "CLIP_OVER_M = 0.02" in build and "CLIP_LOOSE_M = 0.012" in build and "float(np.median(gap)) > CLIP_LOOSE_M" in build)
 check("S1 a boot's nodes are joined", 'startswith("garment_footwear_")' in build and "bpy.ops.object.join()" in build)
 
 print("FAILED: " + ", ".join(FAILED) if FAILED else "all checks passed")

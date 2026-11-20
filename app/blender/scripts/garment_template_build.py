@@ -1459,6 +1459,46 @@ def apply_shapes(obj, arm):
     bpy.context.view_layer.update()
 
 
+#: A237: a lower layer under a fitted piece is clipped this far above the piece's top edge.
+CLIP_OVER_M = 0.02
+#: A237: ... where it stands farther than this from the skin (a loose top); a close layer (briefs under tights) stays
+#: a collider the piece lies over.
+CLIP_LOOSE_M = 0.012
+
+
+def _squeeze_under(lower, fitted, btree):
+    """A237 — a layer under a fitted piece (a top tucked into trousers, briefs under tights) is CLIPPED at the
+    piece's top edge (+ ``CLIP_OVER_M``): its faces below are removed from the collider and the measured layer. A
+    loose layer is a shell round air — the piece's vertices between it and the skin counted as outside the collider
+    and stood inside the layer (Kai tucked: layer poke 35 %, stretch 6.5), and pressing the layer onto the skin made
+    the collider fold into itself (Kira: the cloth run exploded). What the piece covers of the layer is hidden at the
+    assembly anyway (``garment_assembly._hide_under_upper``); the layer's own drape keeps its shape. Returns the
+    count of removed vertices. Only a LOOSE layer is clipped (its median gap to the skin below the edge farther than
+    ``CLIP_LOOSE_M``, ``btree``): a close layer — briefs under tights — stays a collider the piece is laid out over."""
+    if not fitted or fitted.get("top_y") is None:
+        return 0
+    top = gf._gltf_y(fitted["top_y"]) + CLIP_OVER_M
+    n = 0
+    for lo in lower:
+        if lo.get("footwear"):                  # a boot is rigid: the leg goes over it or into it, never clips it
+            continue
+        mw = lo.matrix_world
+        bm = bmesh.new()
+        bm.from_mesh(lo.data)
+        below = [v for v in bm.verts if (mw @ v.co).z < top]
+        gap = [btree.find_nearest(mw @ v.co)[3] for v in below]
+        gap = [g for g in gap if g is not None]
+        # the whole part below goes when the layer stands loose there (median gap): a ragged clip of only the loose
+        # vertices left islands of the top in the collider (Kai: stretch 8.0 at the band)
+        gone = below if gap and float(np.median(gap)) > CLIP_LOOSE_M else []
+        n += len(gone)
+        bmesh.ops.delete(bm, geom=gone, context="VERTS")
+        bm.to_mesh(lo.data)
+        bm.free()
+        lo.data.update()
+    return n
+
+
 def load_lower(path, arm, payload):
     """Import a lower drape GLB (Ruling A142 layering) or an own-mesh piece's fit GLB (A200) and skin its garment to
     OUR armature (same bone names)."""
@@ -1475,6 +1515,7 @@ def load_lower(path, arm, payload):
         # A237: a boot's fit is one node per side and part (foot, shaft) — the collider is all of them
         with bpy.context.temp_override(active_object=garment, selected_editable_objects=shoe):
             bpy.ops.object.join()
+        new = [o for o in bpy.data.objects if o not in before]     # the joined nodes are gone
     mw = garment.matrix_world.copy()
     garment.parent = arm
     garment.matrix_world = mw
@@ -1487,6 +1528,7 @@ def load_lower(path, arm, payload):
     garment.name = "lower_" + Path(path).stem
     garment["pose_shapes_json"] = json.dumps(payload or {})
     garment.hide_render = True
+    garment["footwear"] = bool(shoe)
     return garment
 
 
@@ -1568,6 +1610,10 @@ def run(a):
                 lo.data.update()
             lower.append(lo)
     bco, _bn, btri = gd.world_coords(body)
+    squeezed = _squeeze_under(lower, spec.get("fitted"), gd.bvh_of(bco, [tuple(t) for t in btri])) if lower else 0
+    for lo in [lo for lo in lower if not len(lo.data.polygons)]:      # a layer clipped away whole is no collider
+        lower.remove(lo)
+        bpy.data.objects.remove(lo)
     # the radius tree is the torso + legs only: a T-posed arm beside the chest band would
     # otherwise be the "body" a ray from outside meets first (the band then spans the arms)
     half = float(prm.get("torso_half_m") or 0.24)
@@ -1591,13 +1637,19 @@ def run(a):
     if fitted:
         # A223: a close-fitting piece cut from the body's surface (``garment_template_fitted``)
         col, ctree = gd.rest_collider(body, extra=lower)
-        # A237: worn over lower layers, the piece is CUT from the body alone (the cut keeps collider faces by the
-        # body's bone weights and planes; a top merged into that collider gave the trousers its faces — stretch
-        # 3307) and only laid out over the lower layers (``ctree``, body + them); the drape still meets them
-        cut = gd.rest_collider(body)[0] if lower else None
-        obj, fit_pin, binfo = gf.build_fitted(prm, spec, arm, body, ctree, col=col, cut=cut)
+        # A237: the cut keeps collider faces by the body's bone weights and planes, so a layer in the collider gave
+        # the piece its faces (a top under trousers: stretch 3307). A loose layer is clipped at the piece's top edge
+        # (``_squeeze_under``); a boot is never cut into the leg — the piece is cut without it and only laid out over
+        # it (``ctree``, body + every layer); the drape still meets them all. A close layer (briefs under tights)
+        # stays in the cut: the piece is cut from its outside as before (cut from the body alone: stretch 1.42 vs 1.24)
+        boots = [lo for lo in lower if lo.get("footwear")]
+        cut = gd.rest_collider(body, extra=[lo for lo in lower if not lo.get("footwear")])[0] if boots else None
+        obj, fit_pin, binfo = gf.build_fitted(prm, spec, arm, body, ctree, col=col, cut=cut,
+                                               boots=boots)
+        if squeezed:
+            binfo["clipped_under_verts"] = squeezed
         if cut is not None:
-            binfo["cut_from"] = "body"
+            binfo["cut_from"] = "without footwear"
             bpy.data.objects.remove(cut)
         slit_edges = 0
     elif bod:

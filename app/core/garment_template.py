@@ -1726,7 +1726,7 @@ def key_for(character_name: str, item_id: str, *, base_sha: str, lower: List[str
         from app.core.base_body import file_sha256
         under.append(f"{other}:fit:{file_sha256(fit) if fit is not None else '-'}")
     if under and params["kind"] in FITTED_KINDS:
-        # A237: a fitted piece over lower layers is cut from the body alone — only these drapes are due again
+        # A237: a fitted piece over lower layers (a loose one clipped, a boot left out of the cut) — only these re-drape
         under.append("cut:body")
     # A228: a piece that shapes the chest under it re-drapes when its lift changes (``bust_shaping``)
     from app.core import bust_shaping
