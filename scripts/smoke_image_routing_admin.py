@@ -30,7 +30,7 @@ Expected, by hand:
  V11 describe_config_backend(openai_mesh without mesh_rig) -> media "mesh",
      no rig property; (openai_video) -> media "video", ref_slot_count 1
      (OpenAIVideoBackend.DEFAULT_REF_SLOT_COUNT)
- R1 settings_image_routing_occasions() -> 40 rows (22 earlier + face_retexture + upscale + tpose_view from tier-animationen P1
+ R1 settings_image_routing_occasions() -> 41 rows (22 earlier + face_retexture + upscale + tpose_view from tier-animationen P1
     + pose_transition + garment_view + mesh_garment from base-body phase 4
     + base_front, base_view, outfit_front, outfit_back_draft, outfit_back
     from the base-body routing split 2026-11-09 + hair_mesh from the HairDeck
@@ -43,7 +43,7 @@ Expected, by hand:
     outfit_side: the model fit replaced by the CPU composite, Task 11g = 36;
     + hair_strands from H3 5cc6f24db, + base_reference, outfit_reference from
     Ruling A87 c24544018, + outfit_back_turn from A175 26a3ea579 = 41; - outfit_reference with the painted
-    mode, A224 = 40)
+    mode, A224 = 40; + garment_cut_texture (cut-texture plan Task 6) = 41)
  R2 settings_image_routing_effective(character="x") hands the character to
     explain_image_routing (patched) and returns its result plus
     "media_generation_enabled" = base.media_generation_enabled() (patched to
@@ -166,7 +166,7 @@ check("V11 mesh kind", (k["media"], k.get("rig")), ("mesh", None))
 k = routing.describe_config_backend({"name": "V", "api_type": "openai_video"})
 check("V11 video kind", (k["media"], k["ref_slot_count"]), ("video", 1))
 
-check("R1 occasions", len(adm.settings_image_routing_occasions(user=None)["occasions"]), 40)
+check("R1 occasions", len(adm.settings_image_routing_occasions(user=None)["occasions"]), 41)
 SEEN = {}
 
 
