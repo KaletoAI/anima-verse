@@ -636,6 +636,30 @@ def _is_sheer(garment: Dict[str, Any]) -> bool:
     return garment_template.sheer_opacity(_template_params(garment)) is not None
 
 
+def _texture_key(character_name: str, garment: Dict[str, Any]) -> str:
+    """The state's ``texture`` of a template piece: "cut:<csig>" while its cut atlas is in use
+    (``garment_template.cut_info``), else "projection" — so a texture switch or a new cut atlas re-assembles on the
+    CPU (the drape GLB and the material key do not change). Without a character name nothing can be looked up."""
+    if not character_name:
+        return "projection"
+    from app.core import garment_template
+    info = garment_template.cut_info(character_name, garment["item_id"], garment.get("record"),
+                                     item=garment.get("item"))
+    return f"cut:{info['csig']}" if info["texture"] == "cut" else "projection"
+
+
+def _apply_cut_atlas(character_name: str, garment: Dict[str, Any], mesh: Any) -> Dict[str, Any]:
+    """Plan 2026-11-20-template-cut-uv-texture: a template piece whose texture is "cut" is grafted with its cut atlas
+    in place of the drape GLB's projection image (the projection stays in the GLB as the fallback). Returns the
+    ``cut_info``."""
+    from app.core import garment_template
+    atlas, info = garment_template.atlas_for(character_name, garment["item_id"], garment.get("record"),
+                                             item=garment.get("item"))
+    if atlas is not None:
+        mesh.image, mesh.mime = atlas, "image/png"
+    return info
+
+
 def _merge_overrides(base: Optional[Dict[str, Any]], extra: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """``base`` with ``extra`` laid over it (the merged material keys key by key)."""
     if not extra:
@@ -663,8 +687,9 @@ def _state(wanted: List[Dict[str, Any]], tier: str, *,
     collision scales of ``character_name`` when given; "" without one), the
     record whose per-vertex binding the build grafts (spec § 6.2.3). Every
     other piece adds ``material`` (``piece_material.state_key``, Ruling A36), a clothing piece also
-    ``cover`` (``body_cover.VERSION``, Ruling A133) and a template piece worn under a shoe ``into_shoe``
-    (``INTO_SHOE_VERSION``, A200)."""
+    ``cover`` (``body_cover.VERSION``, Ruling A133), a template piece worn under a shoe ``into_shoe``
+    (``INTO_SHOE_VERSION``, A200) and every template piece ``texture`` ("projection" / "cut:<csig>",
+    ``_texture_key``)."""
     from app.core import body_cover
     from app.core.garment_set import CLOTHING, FOOTWEAR, HAIR, under_footwear
     out: Dict[str, Dict[str, Any]] = {}
@@ -703,6 +728,9 @@ def _state(wanted: List[Dict[str, Any]], tier: str, *,
             if g.get("template") and shod and _under_shoe(g):
                 # A200: a draped piece under the shoe is taken into it (``_into_shoe``) since INTO_SHOE_VERSION 1
                 entry["into_shoe"] = INTO_SHOE_VERSION
+            if g.get("template"):
+                # the texture source (projection / the cut atlas of one csig): a switch re-assembles on the CPU
+                entry["texture"] = _texture_key(character_name, g)
         if g["kind"] == HAIR:
             if alpha_cutoff is None:
                 from app.core import hair_cards
@@ -1210,6 +1238,7 @@ def _build(character_name: str, directory: Path, bare: Path,
         if garment.get("template"):
             from app.core import garment_template
             overrides = _merge_overrides(overrides, garment_template.material_overrides(_template_params(garment)))
+            _apply_cut_atlas(character_name, garment, mesh)
         if garment["kind"] == HAIR:
             blob = _tint_scalp(blob, mesh, garment, tier, scalp_tints)
             # Alpha cards (spec § 6.1): MASK at the world cutoff; a tier source without its image takes the

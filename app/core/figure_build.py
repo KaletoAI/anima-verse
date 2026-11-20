@@ -2213,8 +2213,10 @@ def _template_row(character_name: str, item_id: str, item: Dict[str, Any], wante
     updated_at, built (the kinds draped today), state ("ready" / "missing" / "failed" / "blocked"), reason,
     built_at, metrics {wall_s, cpu_s, stretch_max, coverage, texture, pose_shapes (Rulings A141 / A142: the poses with
     a corrective shape, side suffixes folded), layered_over (Ruling A142: how many lower drapes it was draped over),
-    texture_warning (``garment_template.texture_warning``)},
-    cost {llm_calls, hub_jobs, cpu_s}}``."""
+    texture_warning (``garment_template.texture_warning``), cut (plan 2026-11-20-template-cut-uv-texture: the "texture
+    from cut" state ``{state, reason, iou, de_after, px_per_cm, csig}`` of a ready drape, ``garment_template.cut_info``;
+    ``texture`` is then the EFFECTIVE source: "cut" while the cut atlas is in use, else the projection's source)},
+    cost {llm_calls, hub_jobs, cpu_s}}`` — Build never spends the cut job (``hub_jobs`` 0)."""
     from app.core import base_body, garment_template
     stored = garment_template.template_of(item)
     base = base_body.current_base(character_name, profile=profile)
@@ -2222,6 +2224,8 @@ def _template_row(character_name: str, item_id: str, item: Dict[str, Any], wante
                                          lower=garment_template.lower_layers(wanted.own, item_id), item=item)
     record = drape["record"] or {}
     metrics = record.get("metrics") or {}
+    cut = garment_template.cut_info(character_name, item_id, record, item=item) if drape["state"] == "ready" else None
+    cut_metrics = (cut or {}).get("metrics") or {}
     out = {"params": garment_template.params_of(item), "source": stored.get("source") or "",
            "updated_at": stored.get("updated_at") or "", "built": list(garment_template.BUILT_KINDS),
            "state": drape["state"], "reason": drape["reason"], "built_at": record.get("created_at") or "",
@@ -2232,11 +2236,15 @@ def _template_row(character_name: str, item_id: str, item: Dict[str, Any], wante
                        "cpu_s": (metrics.get("drape") or {}).get("cpu_s"),
                        "stretch_max": (metrics.get("drape") or {}).get("stretch_max"),
                        "coverage": (metrics.get("bake") or {}).get("coverage"),
-                       "texture": (record.get("texture") or {}).get("source") or "",
+                       "texture": "cut" if (cut or {}).get("texture") == "cut"
+                       else (record.get("texture") or {}).get("source") or "",
+                       "cut": {"state": cut["cut_state"], "reason": cut["reason"], "iou": cut_metrics.get("iou"),
+                               "de_after": cut_metrics.get("de_after"), "px_per_cm": cut.get("px_per_cm"),
+                               "csig": cut.get("csig")} if cut else None,
                        "pose_shapes": garment_template.shape_targets(record.get("pose_shapes")),
                        "layered_over": len(record.get("colliders") or []),
                        # bug round 2026-11-20: a poor texture is said in the row (never a refusal)
-                       "texture_warning": garment_template.texture_warning(metrics.get("bake"))}
+                       "texture_warning": garment_template.texture_warning(metrics.get("bake"), cut)}
            if metrics else None,
            "cost": {"llm_calls": 1, "hub_jobs": 0, "cpu_s": garment_template.CPU_ESTIMATE_S}}
     return out

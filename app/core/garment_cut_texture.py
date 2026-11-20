@@ -29,9 +29,11 @@ re-derives the Blender UV flip.
 from __future__ import annotations
 
 import colorsys
+import glob
 import hashlib
 import io
 import json
+import re
 import threading
 from pathlib import Path
 
@@ -416,8 +418,53 @@ def _item_path(item_id: str) -> Path:
     return Path(path)
 
 
+#: sha256 of an item picture per (path, mtime_ns, size): ``item_sha`` is read by every assembly state check of a piece
+#: whose texture is "cut", so an unchanged picture is hashed once.
+_sha_cache: dict[tuple[str, int, int], str] = {}
+
+
 def _item_sha(item_id: str) -> str:
-    return hashlib.sha256(_item_path(item_id).read_bytes()).hexdigest()
+    path = _item_path(item_id)
+    st = path.stat()
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    sha = _sha_cache.get(key)
+    if sha is None:
+        sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        if len(_sha_cache) > 512:
+            _sha_cache.clear()
+        _sha_cache[key] = sha
+    return sha
+
+
+def item_sha(item_id: str) -> str | None:
+    """sha256 of the item picture, None when the item has none."""
+    try:
+        return _item_sha(item_id)
+    except (NotReady, OSError):
+        return None
+
+
+def atlas_path(character_name: str, item_id: str, sig: str) -> Path:
+    """The accepted atlas of (item, csig) — written only for a "ready" record."""
+    return _file(_stem(character_name, item_id, sig), ".atlas.png")
+
+
+_CSIG_RE = re.compile(r"[0-9a-f]{12}")
+
+
+def older_ready(character_name: str, item_id: str, sig: str) -> bool:
+    """Whether the item has a READY cut record for a csig other than ``sig`` (the cut texture went stale)."""
+    folder = cut_dir(character_name)
+    if not folder.is_dir():
+        return False
+    prefix = f"{item_id}_"
+    for path in folder.glob(f"{glob.escape(item_id)}_*.json"):
+        other = path.name[len(prefix):-len(".json")]
+        if other == sig or not _CSIG_RE.fullmatch(other):
+            continue
+        if read_record(character_name, item_id, other).get("state") == "ready":
+            return True
+    return False
 
 
 def current_csig(character_name: str, item_id: str) -> str | None:

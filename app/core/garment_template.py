@@ -36,6 +36,8 @@ model sha256, the texture source sha256 and the other worn mesh pieces (the
 lower layers — they become colliders in P3; recorded now so the key does not
 change then). A top's drape also keeps its pattern islands beside it
 (``{item}_{tsig}.islands.json``, ``islands_path``; the record's ``islands`` = file, sha256, px_per_cm).
+With the param ``texture`` "cut" the assembly swaps the drape's projection image for the "texture from cut" atlas
+(``atlas_for``; keyed by the islands sha, never by ``tsig`` — ``texture`` is ``TEXTURE_ONLY``).
 A failed drape is recorded in ``templates/failed/`` and the piece
 is left off with its reason until Retry. 0 hub jobs; the only paid call is the
 one parameter suggestion.
@@ -235,8 +237,12 @@ TROUSER_HEM_PIN_M = 0.015
 TROUSER_FRAMES = 20
 #: The fields only trousers read — out of every other piece's ``tsig`` (the existing keys stay).
 TROUSER_FIELDS = ("trouser_length", "leg_shape", "seat", "trouser_waist", "fly", "hem")
+#: Plan 2026-11-20-template-cut-uv-texture: where a top's texture comes from — the projection bake of the piece-only
+#: views (inside the drape GLB, always made) or the "texture from cut" atlas (``garment_cut_texture``), swapped in at
+#: assembly when a ready one matches the current islands and item picture (``atlas_for``).
+TEXTURE_SOURCES = ("projection", "cut")
 #: The fields that change neither the drape nor the material (painted by the picture): never in ``tsig``.
-TEXTURE_ONLY = ("fly",)
+TEXTURE_ONLY = ("fly", "texture")
 #: Fabric presets of the cloth run (Blender cloth settings). Stiff = holds a
 #: shape (denim, wool), medium = cotton, flowing = silk / chiffon / jersey.
 FABRICS: Dict[str, Dict[str, float]] = {
@@ -331,6 +337,8 @@ PARAM_SPEC: Dict[str, Tuple[str, Any, Any]] = {
     "trouser_waist": ("choice", TROUSER_WAISTS, "belt"),
     "fly": ("choice", FLIES, "zip"),
     "hem": ("choice", TROUSER_HEMS, "plain"),
+    # the texture source (``TEXTURE_SOURCES``): a CPU re-assemble, never a re-drape (``TEXTURE_ONLY``)
+    "texture": ("choice", TEXTURE_SOURCES, "projection"),
 }
 #: The fields that mean something per kind (the dialog shows these; ``validate_params`` resets the others to their
 #: defaults so a stale field never changes the drape key).
@@ -341,7 +349,7 @@ KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
     "dress": ("kind", "fabric", "opacity", "length_m", "flare", "waist_height", "slit", "slit_m", "shoulders", "sleeves",
               "sleeve_fit", "fit", "neckline", "neck_depth_m", *OFF_SHOULDER_FIELDS),
     "top": ("kind", "fabric", "opacity", "length_m", "shoulders", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m",
-            *OFF_SHOULDER_FIELDS),
+            *OFF_SHOULDER_FIELDS, "texture"),
     "jacket": ("kind", "fabric", "opacity", "length_m", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m", "front",
                "collar"),
     "briefs": ("kind", "fabric", "opacity", "rise", "leg_cut", "back_coverage", "side_width_m", "waistband",
@@ -2288,17 +2296,104 @@ def _bake_iou(bake: Dict[str, Any]) -> Optional[float]:
     return float(iou) if isinstance(iou, (int, float)) and not isinstance(iou, bool) else None
 
 
-def texture_warning(bake: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+#: The Figure row's words for a wanted cut texture the figure cannot use (``texture_warning``; English, the React
+#: client puts them through ``t()``).
+CUT_STALE_TEXT = "Texture from cut is out of date — make it again (1 image job)"
+CUT_REJECTED_TEXT = "Texture from cut was rejected: {reason}"
+CUT_FAILED_TEXT = "Texture from cut failed: {reason}"
+
+
+def texture_warning(bake: Optional[Dict[str, Any]],
+                    cut: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """The Figure row's texture warning of a drape's ``metrics.bake`` (``TEXTURE_WARN``): ``{coverage, iou,
     low_coverage, low_iou}`` when either is under its mark, else None. A drape baked before the bug round
-    2026-11-20 has no registered ``iou`` (absent, or the old ``{deg: score}`` map) — its coverage alone decides."""
+    2026-11-20 has no registered ``iou`` (absent, or the old ``{deg: score}`` map) — its coverage alone decides.
+
+    ``cut`` is the piece's ``cut_info``: while the cut atlas is in use the projection bake is not what the figure
+    shows, so its marks warn of nothing (None). A WANTED cut texture that is stale, rejected or failed adds
+    ``cut = {state, reason, text}`` (the projection is shown meanwhile); "missing" (nothing made yet) and "off" are
+    no warning — the row says those as a plain line."""
+    cut = cut or {}
+    if cut.get("texture") == "cut":
+        return None
     bake = bake or {}
     cov, iou = bake.get("coverage"), _bake_iou(bake)
     low_cov = cov is not None and float(cov) < TEXTURE_WARN["coverage"]
     low_iou = iou is not None and float(iou) < TEXTURE_WARN["iou"]
-    if not (low_cov or low_iou):
+    state = cut.get("cut_state")
+    texts = {"stale": CUT_STALE_TEXT, "rejected": CUT_REJECTED_TEXT, "failed": CUT_FAILED_TEXT}
+    cut_warning = None
+    if state in texts:
+        reason = str(cut.get("reason") or "")
+        cut_warning = {"state": state, "reason": reason, "text": texts[state].format(reason=reason or "no reason")}
+    if not (low_cov or low_iou or cut_warning):
         return None
-    return {"coverage": cov, "iou": iou, "low_coverage": low_cov, "low_iou": low_iou}
+    out: Dict[str, Any] = {"coverage": cov, "iou": iou, "low_coverage": low_cov, "low_iou": low_iou}
+    if cut_warning:
+        out["cut"] = cut_warning
+    return out
+
+
+def cut_info(character_name: str, item_id: str, record: Optional[Dict[str, Any]], *,
+             item: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Which texture a template piece's drape ``record`` is shown with (no image bytes read):
+    ``{texture ("cut" / "projection"), cut_state, reason, csig, metrics, px_per_cm}``.
+
+    - "ready" (``texture`` "cut"): the item's ``texture`` param is "cut" and a ready cut record exists for
+      ``garment_cut_texture.csig(record.islands.sha256, current item picture sha)`` with its atlas on disk;
+    - otherwise ``texture`` "projection" and ``cut_state``: "off" (the param is "projection", or the drape has no
+      pattern islands — a kind still on the grid UV), "rejected" / "failed" (that csig's record, with its reason),
+      "stale" (no record for this csig, but a ready one for an OLDER csig of the item: new islands, a new item
+      picture, a new prompt or post version — an old atlas is never painted onto new islands), "missing" (nothing
+      made yet, or the item has no picture).
+
+    Keyed by the islands sha and never by ``tsig``: a re-drape that only re-rendered a piece-only view keeps the cut."""
+    from app.core import garment_cut_texture as gct
+    if item is None:
+        from app.models.inventory import get_item
+        item = get_item(item_id)
+    params = params_of(item) or (record or {}).get("params") or {}
+    islands = (record or {}).get("islands") or {}
+    out: Dict[str, Any] = {"texture": "projection", "cut_state": "off", "reason": "", "csig": None,
+                           "metrics": None, "px_per_cm": islands.get("px_per_cm")}
+    if not islands.get("sha256") or params.get("texture") != "cut":
+        return out
+    item_sha = gct.item_sha(item_id)
+    if item_sha is None:
+        out.update(cut_state="missing", reason=f"The item {item_id!r} has no picture")
+        return out
+    sig = gct.csig(str(islands["sha256"]), item_sha)
+    out["csig"] = sig
+    rec = gct.read_record(character_name, item_id, sig)
+    if rec.get("csig") not in (None, sig):
+        rec = {}
+    if rec:
+        out["metrics"] = rec.get("metrics") or None
+        out["px_per_cm"] = rec.get("px_per_cm") or out["px_per_cm"]
+    state = rec.get("state")
+    if state == "ready" and gct.atlas_path(character_name, item_id, sig).is_file():
+        out.update(texture="cut", cut_state="ready")
+    elif state in ("rejected", "failed"):
+        out.update(cut_state=state, reason=str(rec.get("reason") or ""))
+    elif gct.older_ready(character_name, item_id, sig):
+        out.update(cut_state="stale", reason=CUT_STALE_TEXT)
+    else:
+        out["cut_state"] = "missing"
+    return out
+
+
+def atlas_for(character_name: str, item_id: str, record: Optional[Dict[str, Any]], *,
+              item: Optional[Dict[str, Any]] = None) -> Tuple[Optional[bytes], Dict[str, Any]]:
+    """``(atlas PNG bytes | None, cut_info)``: the cut atlas the assembly grafts in place of the drape GLB's
+    projection image, or None (the projection stays — it is always inside the GLB as the fallback)."""
+    info = cut_info(character_name, item_id, record, item=item)
+    if info["texture"] != "cut":
+        return None, info
+    from app.core import garment_cut_texture as gct
+    try:
+        return gct.atlas_path(character_name, item_id, info["csig"]).read_bytes(), info
+    except OSError:
+        return None, {**info, "texture": "projection", "cut_state": "missing"}
 
 
 #: Ruling A141 — skin in YCrCb (also shaded skin: a leg in the shadow of a slit); a garment pixel within

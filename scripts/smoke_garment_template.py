@@ -179,7 +179,9 @@ check("[1] defaults, no error", e == [] and p == {"kind": "skirt", "length_m": 0
                                                   "lace_depth_m": 0.15,
                                                   # A233: the trouser fields (at their defaults on a skirt)
                                                   "trouser_length": "full", "leg_shape": "straight", "seat": "regular",
-                                                  "trouser_waist": "belt", "fly": "zip", "hem": "plain"},
+                                                  "trouser_waist": "belt", "fly": "zip", "hem": "plain",
+                                                  # plan 2026-11-20-template-cut-uv-texture: the texture source
+                                                  "texture": "projection"},
       str((p, e)))
 p, e = gt.validate_params({"length_m": 2.0, "kind": "cape"})
 check("[1] length clamped to 1.2 and reported", p["length_m"] == 1.2 and any("length_m" in x for x in e))

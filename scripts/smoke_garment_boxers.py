@@ -43,7 +43,7 @@ for _k in gt.TROUSER_FIELDS:  # A233: the trouser fields key only trousers
     old.pop(_k)
 check("brief key unchanged", gt.tsig(brief, base_sha="b", texture_sha="t", lower=[]),
       gt._md5({"params": {k: v for k, v in old.items() if k not in gt.MATERIAL_ONLY
-                          and k not in gt.OFF_SHOULDER_FIELDS},
+                          and k not in gt.TEXTURE_ONLY and k not in gt.OFF_SHOULDER_FIELDS},
                "version": gt.TEMPLATE_VERSION, "base": "b", "texture": "t", "lower": []}))
 skirt, _ = gt.validate_params({"kind": "skirt"})
 check("skirt has no leg_length in key", "leg_length_m" in skirt and skirt["leg_length_m"] == 0.0, True)

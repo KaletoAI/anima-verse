@@ -73,6 +73,30 @@ straight through); ``inventory.get_item_image_path`` serves fixture files; the i
     ("lanczos"); BackendBusyError / MediaGenerationDisabled are re-raised.
 [8.7] ``start`` runs ``generate`` in a thread: with a white answer the status ends not running, the record is
     "rejected", and a second ``start`` while running answers False.
+
+Task 9 — the atlas assignment (``garment_template.texture`` / ``cut_info`` / ``atlas_for`` / ``texture_warning``,
+``garment_assembly._state`` / ``_apply_cut_atlas``, ``figure_build._template_row``), same stubs; the drape record is a
+dict whose ``islands.sha256`` is the [2] payload's sha.
+[9.1] ``PARAM_SPEC["texture"]`` = ("choice", ("projection", "cut"), "projection"), a ``top`` field (another kind is
+    reset to the default), an unknown value is an error; ``TEXTURE_ONLY`` = ("fly", "texture"), so a top's ``tsig``
+    is the same for texture "projection" and "cut".
+[9.2] ``generate`` with the filled answer -> ready; with the item's texture "cut", ``atlas_for`` returns the
+    ``.atlas.png`` bytes and ``{texture "cut", csig, cut_state "ready", metrics (IoU >= 0.98), px_per_cm 19.59}``;
+    texture "projection" -> (None, "off"); a drape record without ``islands`` (a grid kind) -> (None, "off"). While the
+    cut atlas is in use the projection bake's warning is not shown (``texture_warning({coverage 0.43}, info)`` None:
+    the projection is not what the figure shows).
+[9.3] The drape's islands sha changed -> no record for the new csig, a ready one for the old -> "stale", texture
+    "projection", the warning's ``cut.text`` "Texture from cut is out of date — make it again (1 image job)" (the bake
+    flags stay false on a good bake). Only the drape's ``tsig`` changed (a re-rendered piece-only view, same islands)
+    -> still "cut", same csig. An item with no cut record at all -> "missing", which is not a warning.
+[9.4] Item "shirt" (its current csig's record is the [8.2] rejection) -> "rejected" with reason "coverage 0.00 <
+    0.97"; the warning's ``cut`` names it. ``_template_row`` (drape_state / current_base stubbed): ``metrics.cut.state``
+    "rejected" with the reason, ``metrics.texture`` stays the projection's source ("views"); for "shirt9"
+    ``metrics.texture`` "cut", ``metrics.cut`` {state "ready", reason, iou >= 0.98, de_after, px_per_cm 19.59}, no
+    warning, ``cost.hub_jobs`` 0.
+[9.5] ``garment_assembly._state`` of the template piece: ``texture`` "projection", then "cut:<csig>" once the item
+    says "cut"; the two entries differ only in ``texture`` (the GLB sha256 is the same file's). ``_apply_cut_atlas``
+    puts the atlas bytes (mime image/png) on the mesh with "cut" and leaves the GLB's image with "projection".
 """
 import os
 import re
@@ -361,7 +385,7 @@ def _item_picture(w, h):
 
 ITEM_FILES = {}
 for _iid, (_w, _h) in {"shirt": (1200, 1100), "shirt3": (1200, 1100), "shirt4": (1200, 1100),
-                       "shirt5": (1200, 1100), "tiny": (300, 256)}.items():
+                       "shirt5": (1200, 1100), "tiny": (300, 256), "shirt9": (1200, 1100)}.items():
     ITEM_FILES[_iid] = _items / f"{_iid}.png"
     _item_picture(_w, _h).save(ITEM_FILES[_iid])
 
@@ -455,11 +479,15 @@ def files_of(item_id):
 
 
 SLEEVES = {"shirt": "short", "long": "long"}
+TEXTURES = {}       # Task 9: the item's stored ``texture`` param (absent = the default "projection")
 
 
 def fake_get_item(iid):
-    return {"id": iid, "outfit_piece": {"template": {"params": {"kind": "top",
-                                                                 "sleeves": SLEEVES.get(iid, "short")}}}}
+    params = {"kind": "top", "sleeves": SLEEVES.get(iid, "short")}
+    if iid in TEXTURES:
+        params["texture"] = TEXTURES[iid]
+    return {"id": iid, "category": "outfit_piece",
+            "outfit_piece": {"template": {"params": params, "source": "user"}}}
 
 
 with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILES.get(iid, ""))), \
@@ -632,6 +660,120 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
         except type(exc):
             check(f"[8.6] {type(exc).__name__} re-raised", True)
     svc.upscale_fail = None
+
+    # ------------------------------------------------------------------------------- Task 9: the atlas assignment
+    from types import SimpleNamespace as NS  # noqa: E402
+
+    from app.core import figure_build  # noqa: E402
+    from app.core import garment_assembly as ga  # noqa: E402
+    from app.core import garment_template as gt  # noqa: E402
+
+    # [9.1] the param, out of tsig
+    p_proj, e_proj = gt.validate_params({"kind": "top", "texture": "projection"})
+    p_cut, e_cut = gt.validate_params({"kind": "top", "texture": "cut"})
+    check("[9.1] texture: a top field, choices projection / cut, default projection",
+          gt.PARAM_SPEC.get("texture") == ("choice", ("projection", "cut"), "projection")
+          and "texture" in gt.KIND_FIELDS["top"] and p_cut.get("texture") == "cut" and not e_proj and not e_cut
+          and gt.validate_params({"kind": "top"})[0].get("texture") == "projection", gt.PARAM_SPEC.get("texture"))
+    check("[9.1] another kind keeps the default",
+          gt.validate_params({"kind": "skirt", "texture": "cut"})[0].get("texture") == "projection")
+    check("[9.1] an unknown value is an error", gt.validate_params({"kind": "top", "texture": "paint"})[1] != [])
+    check("[9.1] texture is TEXTURE_ONLY", gt.TEXTURE_ONLY == ("fly", "texture"), gt.TEXTURE_ONLY)
+    k_proj = gt.tsig(p_proj, base_sha="b", texture_sha="t", lower=[])
+    k_cut = gt.tsig(p_cut, base_sha="b", texture_sha="t", lower=[])
+    check("[9.1] switching texture leaves tsig unchanged", k_proj == k_cut, (k_proj, k_cut))
+
+    # [9.2] a ready cut atlas is used only with texture == "cut"
+    backend.answer = answer_filled
+    rec9 = gct.generate(CHAR, "shirt9")
+    c9 = rec9.get("csig")
+    atlas9_file = gct.cut_dir(CHAR) / f"shirt9_{c9}.atlas.png"
+    DRAPE_REC = {"islands": {"file": "shirt9_tsig0.islands.json", "sha256": ISLANDS_SHA, "px_per_cm": 19.59},
+                 "tsig": "tsig0"}
+    TEXTURES["shirt9"] = "cut"
+    a9, i9 = gt.atlas_for(CHAR, "shirt9", DRAPE_REC)
+    check("[9.2] ready -> the atlas bytes", rec9.get("state") == "ready" and a9 is not None
+          and a9 == atlas9_file.read_bytes(), (rec9.get("state"), None if a9 is None else len(a9)))
+    check("[9.2] info: cut, csig, metrics", i9.get("texture") == "cut" and i9.get("csig") == c9
+          and i9.get("cut_state") == "ready" and (i9.get("metrics") or {}).get("iou", 0) >= 0.98
+          and abs((i9.get("px_per_cm") or 0) - 19.59) < 1e-6, i9)
+    TEXTURES["shirt9"] = "projection"
+    a9p, i9p = gt.atlas_for(CHAR, "shirt9", DRAPE_REC)
+    check("[9.2] texture projection -> None, off", a9p is None and i9p.get("texture") == "projection"
+          and i9p.get("cut_state") == "off", i9p)
+    TEXTURES["shirt9"] = "cut"
+    a9g, i9g = gt.atlas_for(CHAR, "shirt9", {"tsig": "tsig0"})
+    check("[9.2] a drape without islands (grid kind) -> None, off", a9g is None and i9g.get("cut_state") == "off",
+          i9g)
+    check("[9.2] the cut atlas in use: no projection warning", gt.texture_warning({"coverage": 0.43}, i9) is None)
+
+    # [9.3] stale: new islands -> the projection and the warning; a new tsig alone keeps the cut
+    a9s, i9s = gt.atlas_for(CHAR, "shirt9", {**DRAPE_REC, "islands": {**DRAPE_REC["islands"], "sha256": "f" * 64}})
+    check("[9.3] new islands -> stale, projection", a9s is None and i9s.get("cut_state") == "stale"
+          and i9s.get("texture") == "projection", i9s)
+    w9s = gt.texture_warning({"coverage": 0.9, "iou": 0.9}, i9s) or {}
+    check("[9.3] the stale warning text", (w9s.get("cut") or {}).get("text")
+          == "Texture from cut is out of date — make it again (1 image job)", w9s)
+    check("[9.3] stale: the bake flags stay false", w9s.get("low_coverage") is False and w9s.get("low_iou") is False,
+          w9s)
+    a9t, i9t = gt.atlas_for(CHAR, "shirt9", {**DRAPE_REC, "tsig": "tsig1"})
+    check("[9.3] a new tsig alone (a re-rendered view) -> still cut", a9t is not None and i9t.get("csig") == c9, i9t)
+    TEXTURES["shirt4"] = "cut"
+    a4, i4 = gt.atlas_for(CHAR, "shirt4", DRAPE_REC)
+    check("[9.3] nothing made yet -> missing, no warning", a4 is None and i4.get("cut_state") == "missing"
+          and gt.texture_warning({"coverage": 0.9, "iou": 0.9}, i4) is None, i4)
+
+    # [9.4] rejected: the reason in the warning and in the figure row
+    TEXTURES["shirt"] = "cut"
+    a1r, i1r = gt.atlas_for(CHAR, "shirt", DRAPE_REC)
+    check("[9.4] rejected -> projection with the reason", a1r is None and i1r.get("cut_state") == "rejected"
+          and i1r.get("reason") == "coverage 0.00 < 0.97", i1r)
+    w1r = gt.texture_warning({"coverage": 0.9, "iou": 0.9}, i1r) or {}
+    check("[9.4] the warning carries the reason", (w1r.get("cut") or {}).get("state") == "rejected"
+          and "coverage 0.00 < 0.97" in (w1r.get("cut") or {}).get("text", ""), w1r)
+
+    def fake_drape_state(character_name, item_id, **_kw):
+        return {"state": "ready", "reason": "", "tsig": "tsig0", "path": None,
+                "record": {**DRAPE_REC, "created_at": "now", "texture": {"source": "views"},
+                           "metrics": {"bake": {"coverage": 0.9, "iou": 0.9}, "drape": {}}}}
+
+    with patch.object(gt, "drape_state", fake_drape_state), \
+            patch("app.core.base_body.current_base", lambda *a, **k: ("bsig", "bsha")):
+        row1 = figure_build._template_row(CHAR, "shirt", fake_get_item("shirt"), NS(own=[]), {})
+        row9 = figure_build._template_row(CHAR, "shirt9", fake_get_item("shirt9"), NS(own=[]), {})
+    m1r, m9 = row1.get("metrics") or {}, row9.get("metrics") or {}
+    check("[9.4] figure row: cut rejected, projection source kept", (m1r.get("cut") or {}).get("state") == "rejected"
+          and (m1r.get("cut") or {}).get("reason") == "coverage 0.00 < 0.97" and m1r.get("texture") == "views"
+          and ((m1r.get("texture_warning") or {}).get("cut") or {}).get("state") == "rejected", m1r)
+    check("[9.4] figure row: cut in use", m9.get("texture") == "cut" and (m9.get("cut") or {}).get("state") == "ready"
+          and (m9.get("cut") or {}).get("iou", 0) >= 0.98 and abs(((m9.get("cut") or {}).get("px_per_cm") or 0)
+                                                                   - 19.59) < 1e-6
+          and set(m9.get("cut") or {}) >= {"state", "reason", "iou", "de_after", "px_per_cm"}
+          and m9.get("texture_warning") is None and row9.get("cost", {}).get("hub_jobs") == 0, m9)
+
+    # [9.5] the assembly state and the graft swap
+    fit9 = Path(_tmp) / "shirt9.glb"
+    fit9.write_bytes(b"glb")
+    g9 = {"item_id": "shirt9", "kind": "clothing", "fsig": "tsig0", "fit": fit9, "low": None, "record": DRAPE_REC,
+          "template": True}
+    with patch.object(ga, "_material", lambda gm: ("m", None)):
+        TEXTURES["shirt9"] = "projection"
+        st_p = ga._state([{**g9, "item": fake_get_item("shirt9")}], "full", character_name=CHAR)["shirt9"]
+        TEXTURES["shirt9"] = "cut"
+        st_c = ga._state([{**g9, "item": fake_get_item("shirt9")}], "full", character_name=CHAR)["shirt9"]
+    check("[9.5] state: projection, then cut:<csig>", st_p.get("texture") == "projection"
+          and st_c.get("texture") == f"cut:{c9}", (st_p.get("texture"), st_c.get("texture")))
+    check("[9.5] the two states differ, the GLB sha does not", st_p != st_c and st_p.get("sha256") == st_c.get("sha256")
+          and {k: v for k, v in st_p.items() if k != "texture"} == {k: v for k, v in st_c.items() if k != "texture"},
+          (st_p, st_c))
+    mesh_c = NS(image=b"projection", mime="image/jpeg")
+    ga._apply_cut_atlas(CHAR, {**g9, "item": fake_get_item("shirt9")}, mesh_c)
+    check("[9.5] graft: the cut atlas replaces the image", mesh_c.image == atlas9_file.read_bytes()
+          and mesh_c.mime == "image/png", (len(mesh_c.image), mesh_c.mime))
+    TEXTURES["shirt9"] = "projection"
+    mesh_p = NS(image=b"projection", mime="image/jpeg")
+    ga._apply_cut_atlas(CHAR, {**g9, "item": fake_get_item("shirt9")}, mesh_p)
+    check("[9.5] graft: projection keeps the GLB's image", mesh_p.image == b"projection" and mesh_p.mime == "image/jpeg")
 
 check("[8.5] no outbound connection attempt", OUTBOUND == [], OUTBOUND)
 
