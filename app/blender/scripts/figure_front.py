@@ -1,17 +1,24 @@
 """A195 — renders a character figure GLB from the front, orthographic, on a transparent ground.
 
 Invoked through ``runner.run("figure_front", inputs={"model": glb}, params={"height_px": 1024,
-"margin_m": 0.04, "engine": "BLENDER_WORKBENCH"}, out_dir=...)``. The camera comes from
+"margin_m": 0.04, "engine": "BLENDER_EEVEE"}, out_dir=...)``. The camera comes from
 ``app.core.front_camera.camera_for`` over the model's evaluated (skinned, rest pose) box, so the server maps
 metres to pixels with the same numbers; the result's ``data.camera`` carries them, ``outputs.front`` the PNG.
 
 glTF -> Blender axes: (x, y, z) -> (x, -z, y). The figure faces glTF +z = Blender -y, so the camera stands on the
 -y side looking along +y (rotation x = 90°), image right = +x.
-Engine BLENDER_WORKBENCH (flat studio light, the textures' colours); CYCLES (CPU, few samples) is the fallback for a
-host without a GL context — the caller retries with it when the first run fails.
+THE LIGHT: a uniform white world of strength 1 and nothing else — no lamps, view transform Standard. A diffuse
+surface open to that world reflects radiance 1 x its albedo, so a texel comes out at its own sRGB value (~1x albedo;
+concave or self-shadowed parts a little darker), and the material's node tree is evaluated: vertex colours (the
+hair's COLOR_0 = the profile hair colour, the teeth) reach the picture through the importer's Mix node.
+Engine BLENDER_EEVEE (GPU, ``samples`` TAA samples, default 16); CYCLES (CPU, ``samples``, default 12) is the fallback
+for a host without a GL context — the caller retries with it when the first run fails. Both see the same world.
+Workbench is gone (finding 2026-11-20): with ``color_type TEXTURE`` it ignores the node tree, so the vertex colours
+were lost, and its studio light gave ~0.36x albedo.
 """
 import math
 import sys
+import time
 from pathlib import Path
 
 _SCRIPTS_DIR = str(Path(__file__).parent)
@@ -45,21 +52,16 @@ def _box():
     return min(xs), max(xs), min(ys), max(ys)
 
 
-def _lights(scene):
-    world = scene.world or bpy.data.worlds.new("w")
+def _uniform_world(scene):
+    """A white world of strength 1 as the ONLY light (no lamps are created; the factory scene has none)."""
+    world = bpy.data.worlds.new("uniform")
     scene.world = world
     world.use_nodes = True
     bg = world.node_tree.nodes.get("Background")
-    if bg is not None:
-        bg.inputs["Color"].default_value = (0.8, 0.8, 0.8, 1.0)
-        bg.inputs["Strength"].default_value = 0.9
-    for name, rot, energy in (("key", (math.radians(60), 0, math.radians(-25)), 3.0),
-                              ("fill", (math.radians(70), 0, math.radians(30)), 1.2)):
-        data = bpy.data.lights.new(name, "SUN")
-        data.energy = energy
-        obj = bpy.data.objects.new(name, data)
-        obj.rotation_euler = rot
-        scene.collection.objects.link(obj)
+    if bg is None:
+        raise RuntimeError("the world has no Background node")
+    bg.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)
+    bg.inputs["Strength"].default_value = 1.0
 
 
 def run(args):
@@ -85,26 +87,28 @@ def run(args):
     r.film_transparent = True
     r.image_settings.file_format = "PNG"
     r.image_settings.color_mode = "RGBA"
-    engine = str(params.get("engine") or "BLENDER_WORKBENCH")
+    engine = str(params.get("engine") or "BLENDER_EEVEE")
+    if engine not in ("BLENDER_EEVEE", "CYCLES"):
+        raise ValueError(f"unsupported engine {engine!r}")
     r.engine = engine
     if engine == "CYCLES":
         scene.cycles.device = "CPU"
         scene.cycles.samples = int(params.get("samples") or 12)
-        _lights(scene)
     else:
-        sh = scene.display.shading
-        sh.light = "STUDIO"
-        sh.color_type = "TEXTURE"
-    try:
-        scene.view_settings.view_transform = "Standard"
-    except TypeError:
-        pass
+        scene.eevee.taa_render_samples = int(params.get("samples") or 16)
+    _uniform_world(scene)
+    scene.view_settings.view_transform = "Standard"
+    scene.view_settings.look = "None"
+    scene.view_settings.exposure = 0.0
+    scene.view_settings.gamma = 1.0
     out = Path(args["out_dir"]) / "front.png"
     r.filepath = str(out)
+    t0 = time.monotonic()
     bpy.ops.render.render(write_still=True)
+    render_s = round(time.monotonic() - t0, 2)
     if not out.is_file():
         raise RuntimeError("render wrote no picture")
-    return {"camera": cam, "engine": engine}, {"front": str(out)}
+    return {"camera": cam, "engine": engine, "render_s": render_s}, {"front": str(out)}
 
 
 if __name__ == "__main__":

@@ -22,6 +22,28 @@ D  (Blender) a box x in [-0.2, 0.2], glTF y in [0, 1] (Blender z), rendered with
    framed 1.2 m high -> ppm 500; framed 0.6 m wide -> w 300; centre (0, 0.5). The box's columns:
    to_px(-0.2) = 150 - 100 = 50 .. to_px(0.2) = 250 (exclusive) -> pixels 50 .. 249; rows: y 1 -> 300 - 250 = 50,
    y 0 -> 550 (exclusive) -> 50 .. 549. Checked within 1 px (antialiased edge).
+E  (Blender) THE LIGHT (finding 2026-11-20): the picture is rendered under a uniform white world of strength 1 and
+   nothing else, view transform Standard, so a front face shows its albedo at ~1x — and the material's node tree,
+   vertex colours included, is honoured. Two boxes x in [-0.3, -0.1] and [0.1, 0.3], glTF y in [0, 1], height_px
+   600, margin 0.1: framed 1.2 m -> ppm 500; width 0.8 m -> w 400, centre (0, 0.5); to_px(x) = 200 + 500 x, so the
+   boxes cover columns 50 .. 149 and 250 .. 349, rows 50 .. 549; the medians are read inside (75..124 / 275..324,
+   rows 200..399), away from the edges.
+   Box 1: base colour linear 0.21586 (= sRGB 128), roughness 1, metallic 0. Box 2: base colour white x a COLOR_0
+   vertex colour of linear (0.5, 0.15, 0.05) — the path the hair's profile colour takes.
+   Expected per channel, a = linear albedo: the diffuse lobe of a face open to the whole world reflects radiance 1 x
+   a, less what the dielectric specular layer takes (Fresnel F0 = 0.04 -> at most 4 %); that layer gives back at
+   most F0 = 0.04 of the white world (roughness 1, normal incidence). So linear out in [0.96 a, a + 0.04]:
+     a 0.21586 -> sRGB [125.6, 138.4]   (128 = exactly 1x)
+     a 0.5     -> sRGB [184.1, 194.1]
+     a 0.15    -> sRGB [106.0, 120.6]
+     a 0.05    -> sRGB [ 61.9,  84.6]
+   (measured 2026-11-20, EEVEE: grey 130, vertex colour (188, 111, 70) — about a + 0.005.)
+   checked with 2 code values of slack for the 8-bit PNG and the render noise. The engines are tried in the order
+   of ``garment_preview_front.ENGINES`` (EEVEE, then Cycles), as the server does. Workbench, the engine before,
+   gave ~0.36x on box 1 and dropped the vertex colour entirely (box 2 white) — measured 2026-11-20 on Glut's figure,
+   see the commit; it is no longer runnable through this script.
+F  The cache key of the pictures carries ``RENDER_VERSION`` >= 2, so a dark Workbench picture (version 1) is never
+   served for the same inputs: ``source()`` hashes ``[RENDER_VERSION, ...]`` (checked on the source text).
 """
 import json
 import os
@@ -130,6 +152,78 @@ else:
         check("D box columns", (cols[0], cols[-1]), (50, 249), 1)
         check("D box rows", (rows[0], rows[-1]), (50, 549), 1)
         print(json.dumps(res["data"]))
+
+# E — the light: albedo ~1x and the vertex colour, when Blender is there
+if exe:
+    from app.core import garment_preview_front as gpf  # noqa: E402
+    work = Path(_tmp) / "e"
+    work.mkdir()
+    boxes = work / "boxes.glb"
+    make = work / "make.py"
+    make.write_text(
+        "import bpy\n"
+        "bpy.ops.wm.read_factory_settings(use_empty=True)\n"
+        "def box(x, mat):\n"
+        "    bpy.ops.mesh.primitive_cube_add(size=1.0)\n"
+        "    o = bpy.context.active_object\n"
+        "    o.scale = (0.2, 0.2, 1.0)\n"
+        "    o.location = (x, 0.0, 0.5)\n"
+        "    bpy.ops.object.transform_apply(location=True, scale=True)\n"
+        "    o.data.materials.append(mat)\n"
+        "    return o\n"
+        "def principled(name):\n"
+        "    m = bpy.data.materials.new(name)\n"
+        "    m.use_nodes = True\n"
+        "    p = m.node_tree.nodes['Principled BSDF']\n"
+        "    p.inputs['Roughness'].default_value = 1.0\n"
+        "    p.inputs['Metallic'].default_value = 0.0\n"
+        "    return m, p\n"
+        "grey, p = principled('grey')\n"
+        "p.inputs['Base Color'].default_value = (0.21586, 0.21586, 0.21586, 1.0)\n"
+        "box(-0.2, grey)\n"
+        "vc, p = principled('vc')\n"
+        "attr = vc.node_tree.nodes.new('ShaderNodeVertexColor')\n"
+        "attr.layer_name = 'Color'\n"
+        "vc.node_tree.links.new(attr.outputs['Color'], p.inputs['Base Color'])\n"
+        "o = box(0.2, vc)\n"
+        "ca = o.data.color_attributes.new('Color', 'FLOAT_COLOR', 'CORNER')\n"
+        "for d in ca.data:\n"
+        "    d.color = (0.5, 0.15, 0.05, 1.0)\n"
+        f"bpy.ops.export_scene.gltf(filepath={str(boxes)!r}, export_format='GLB')\n", encoding="utf-8")
+    subprocess.run([exe, "--background", "--factory-startup", "--python-exit-code", "1", "--python", str(make)],
+                   check=True, capture_output=True, timeout=120)
+    res = {}
+    for engine in gpf.ENGINES:
+        res = runner.run("figure_front", inputs={"model": boxes},
+                         params={"height_px": 600, "margin_m": 0.1, "engine": engine}, out_dir=work / engine,
+                         timeout_s=300)
+        if res.get("ok"):
+            break
+    if not res.get("ok"):
+        FAILS.append("E render: " + str(res.get("error")))
+        print("FAIL E render", res.get("error"))
+    else:
+        cam = res["data"]["camera"]
+        print("E engine", res["data"].get("engine"), "render_s", res["data"].get("render_s"))
+        check("E camera", (cam["ppm"], cam["w"], cam["h"], cam["cx"], cam["cy"]), (500, 400, 600, 0, 0.5), 1e-4)
+        from PIL import Image
+        with Image.open(res["outputs"]["front"]) as im:
+            px = np.asarray(im.convert("RGBA")).astype(float)
+        grey_med = np.median(px[200:400, 75:125, :3].reshape(-1, 3), axis=0)
+        vc_med = np.median(px[200:400, 275:325, :3].reshape(-1, 3), axis=0)
+        for name, got, lo, hi in (("E grey", grey_med, (125.6,) * 3, (138.4,) * 3),
+                                  ("E vertex colour", vc_med, (184.1, 106.0, 61.9), (194.1, 120.6, 84.6))):
+            ok = all(lo[i] - 2 <= got[i] <= hi[i] + 2 for i in range(3))
+            print(("ok  " if ok else "FAIL"), name, got.tolist(), "want", lo, "..", hi)
+            if not ok:
+                FAILS.append(name)
+
+# F — the cache key carries the render version
+src_text = (Path(__file__).resolve().parent.parent / "app/core/garment_preview_front.py").read_text(encoding="utf-8")
+from app.core import garment_preview_front as gpf  # noqa: E402
+check("F RENDER_VERSION >= 2", 1.0 if gpf.RENDER_VERSION >= 2 else 0.0, 1.0, 0)
+check("F key hashes the version", 1.0 if "json.dumps([RENDER_VERSION," in src_text else 0.0, 1.0, 0)
+check("F engines EEVEE then Cycles", 1.0 if tuple(gpf.ENGINES) == ("BLENDER_EEVEE", "CYCLES") else 0.0, 1.0, 0)
 
 print("FAILED:" if FAILS else "all ok", FAILS)
 sys.exit(1 if FAILS else 0)

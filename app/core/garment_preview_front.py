@@ -7,10 +7,10 @@ the front by Blender (``figure_front``: orthographic, transparent ground, the ca
 travels with the picture, so the overlay maps metres to pixels exactly (``garment_preview.Registration`` with
 ``frame["camera"]``).
 
-No image job, no hub, no LLM: a CPU Blender run of a few seconds. Rendered on demand in a background thread when the
-dialog asks (``state``) and cached per key — the served bare model's revision, the grafted garments' state, the
-hidden parts, the excluded item and ``RENDER_VERSION`` — under ``<character>/template_front/<key>.png`` (+ ``.json``
-with the camera). The newest ``KEEP`` pictures per character are kept.
+No image job, no hub, no LLM: a local Blender run of a few seconds (EEVEE, Cycles as the fallback). Rendered on
+demand in a background thread when the dialog asks (``state``) and cached per key — the served bare model's
+revision, the grafted garments' state, the hidden parts, the excluded item and ``RENDER_VERSION`` — under
+``<character>/template_front/<key>.png`` (+ ``.json`` with the camera). The newest ``KEEP`` pictures per character are kept.
 """
 from __future__ import annotations
 
@@ -26,8 +26,11 @@ from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-#: Bumped when the picture is rendered differently for the same inputs.
-RENDER_VERSION = 1
+#: Bumped when the picture is rendered differently for the same inputs. 2: EEVEE (Cycles fallback) under a uniform
+#: white world instead of Workbench studio light — ~1x albedo and the vertex colours (finding 2026-11-20).
+RENDER_VERSION = 2
+#: The engines tried in order: EEVEE needs a GL context, Cycles (CPU) renders the same light without one.
+ENGINES = ("BLENDER_EEVEE", "CYCLES")
 #: The cache folder under the character directory.
 DIR_NAME = "template_front"
 #: Pictures kept per character.
@@ -117,11 +120,13 @@ def _render(character_name: str, item_id: str, src: Dict[str, Any]) -> None:
         glb = work / "figure.glb"
         glb.write_bytes(blob)
         res: Dict[str, Any] = {}
-        for engine in ("BLENDER_WORKBENCH", "CYCLES"):
+        for engine in ENGINES:
             res = runner.run("figure_front", inputs={"model": glb}, params={"engine": engine}, out_dir=work / engine,
                              timeout_s=300)
             if res.get("ok"):
                 break
+            logger.warning("Template front of %s: %s failed (%s), trying the next engine", character_name, engine,
+                           res.get("error"))
         if not res.get("ok"):
             raise RuntimeError(res.get("error") or "render failed")
         d = cache_dir(character_name)
@@ -136,8 +141,8 @@ def _render(character_name: str, item_id: str, src: Dict[str, Any]) -> None:
         tmp_png.replace(d / f"{key}.png")
         tmp_json.replace(d / f"{key}.json")
         _prune(d)
-        logger.info("Template front of %s without %s rendered (%s, %d garment(s))", character_name, item_id, key,
-                    len(src["wanted"]))
+        logger.info("Template front of %s without %s rendered (%s, %d garment(s), engine %s, %ss)", character_name,
+                    item_id, key, len(src["wanted"]), res["data"].get("engine"), res["data"].get("render_s"))
     except Exception as e:  # noqa: BLE001 — the dialog keeps the plain front and names the failure
         logger.warning("Template front of %s without %s failed: %s", character_name, item_id, e)
         with _lock:
