@@ -261,6 +261,7 @@ public partial class Figure : Node3D
         Secondary?.Release();
         Secondary = null;
         _secondaryPlaced = false;
+        SetStrandSource(null);   // a new body: the old strand handle and its source belonged to the old one
         Ghost?.Dispose();
         Body?.QueueFree();
         Body = body;
@@ -284,6 +285,7 @@ public partial class Figure : Node3D
         Drop = 0;
         HeightCorrectionM = 0;
         HorizontalCorrection = default;
+        HorizontalScale = 1;
         ResetBridges();
         var bind = bindOffset ?? V3.Zero;
         _travelBase = new P2(bind.X, bind.Z);
@@ -334,12 +336,15 @@ public partial class Figure : Node3D
     private void TickSecondary()
     {
         if (Skeleton is null || Body is null) return;
-        var rev = Motion?.Rev;
+        TickStrand();
+        // A figure whose hair runs per strand solves no hair chain (figureRuntime.ts poseStep: withoutHairGroups).
+        var motionNow = EffectiveMotion;
+        var rev = motionNow?.Rev;
         if (rev != _secondaryRev)
         {
             _secondaryRev = rev;
-            if (Secondary is { } s) s.Configure(Motion);
-            else if (IsGlb) Secondary = SecondaryMotionModifier.TryCreate(Body, Skeleton, Motion, collision: Collision);
+            if (Secondary is { } s) s.Configure(motionNow);
+            else if (IsGlb) Secondary = SecondaryMotionModifier.TryCreate(Body, Skeleton, motionNow, collision: Collision);
         }
         if (Secondary is not { } motion) return;
         var position = IsInsideTree() ? GlobalPosition : Position;
@@ -413,6 +418,12 @@ public partial class Figure : Node3D
     public Func<string, ClipHeightOffsets>? HeightOffsetsOf { get; set; }
     public double HeightCorrectionM { get; private set; }
     public ClipShift HorizontalCorrection { get; private set; }
+    /// <summary>
+    /// What <see cref="HorizontalCorrection"/> is multiplied by (figures.ts <c>clipShiftScale</c>): the figure's scale
+    /// a = height / 1.70 while a pair/group half plays (its shift is a length of the 1.70 m arrangement, scene-render
+    /// pairScale.ts, <see cref="PairScale.ScaleShift"/>), 1 otherwise (a solo shift is absolute).
+    /// </summary>
+    public double HorizontalScale { get; private set; } = 1;
     /// <summary>
     /// The clock bridges are timed by, seconds (the browser's <c>performance.now()</c>): the manager's accumulated frame
     /// time, so a headless check runs the same rules on simulated frames. Default: the engine's monotonic clock.
@@ -946,9 +957,11 @@ public partial class Figure : Node3D
     {
         var calibration = clip.Length > 0 && HeightOffsetsOf is { } offsets ? offsets(clip) : default;
         double correction = calibration.Metres(surfaceGroup, BodyHeight);
-        if (HeightCorrectionM == correction && HorizontalCorrection == calibration.Shift) return;
+        double shiftScale = clip.Length > 0 && ClipLibraryRules.IsPairName(clip) ? PairScale.FigureScale(BodyHeight) : 1;
+        if (HeightCorrectionM == correction && HorizontalCorrection == calibration.Shift && HorizontalScale == shiftScale) return;
         HeightCorrectionM = correction;
         HorizontalCorrection = calibration.Shift;
+        HorizontalScale = shiftScale;
         ApplyBody();
     }
 
@@ -987,9 +1000,11 @@ public partial class Figure : Node3D
         if (_procedural is null)
         {
             var horizontal = HorizontalCorrection.Local(Rotation.X, Rotation.Z);
-            dx += horizontal.X;
-            dy += horizontal.Y;
-            dz += horizontal.Z;
+            // A pair/group half's shift scales with its figure (HorizontalScale); 1 leaves the vector untouched.
+            double s = HorizontalScale;
+            dx += s == 1 ? horizontal.X : s * horizontal.X;
+            dy += s == 1 ? horizontal.Y : s * horizontal.Y;
+            dz += s == 1 ? horizontal.Z : s * horizontal.Z;
         }
         b.Position = new Vector3((float)(_travelBase.X + o.X + dx), (float)(y + dy), (float)(_travelBase.Z + o.Z + dz));
         if (_procedural is { } q) b.Scale = Vector3.One * (float)q.Scale;

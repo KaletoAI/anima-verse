@@ -31,6 +31,16 @@
  *     2.85 + 0.05 over o z 2.80 at frame 0, the others shallower) with o = world of r = (0.20, 0.10) = (2.10, 0.9, 2.80)
  *     at frame 0 and o one metre off at the others (a wrong pick shows) → (20.0, 10.0). The mean: (16.0, 20.0).
  *     No relation with samples → null.
+ * [8] THE GAME PLACEMENT (the numbers of client3d/scripts/smoke_pair_root_sets.mjs [B], here as the pure composition
+ *     npcs.ts tickInteraction runs: scalePairRoot, then the anchor transform). Root p = (0.3, 0.1), pivot
+ *     C = (0.12, 0.30), anchor (10, 22), yaw 90° (x = ax + rx·cos + rz·sin = 10 + rz, z = az − rx·sin + rz·cos = 22 − rx):
+ *     no height and 1.70 m → p unchanged → (10.1, 21.7); 1.85 m, a = 37/34: p' = (0.12 + a·0.18, 0.30 − a·0.20) =
+ *     (0.31588235, 0.08235294) → (10.08235294, 21.68411765); 1.60 m, a = 16/17: p' = (0.28941176, 0.11176471) →
+ *     (10.11176471, 21.71058824) (±1e-8).
+ *
+ * VECTOR: shared/test-vectors/pair_scale.json carries [1] (the contact point p_i' + a_i·c_i at the frames t = 0, 1/4,
+ * 1/2, 3/4 — sin/cos exact there — for both height orders, = C ±1e-12), [2]–[5] and [8] for the native client; this
+ * smoke replays it after its own asserts. [6]/[7] (Auto-align, admin only) stay local.
  */
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -149,5 +159,27 @@ for (const [sa, sb] of [[aA, aB], [aB, aA]]) {
   assert.deepEqual(both, [16, 20])
   assert.equal(S.pairPivotCm([[]], { x: 0, z: 0 }, 0), null)
   ok('[7] pairPivotCm: (12, 30), (20, 10), mean (16, 20); none → null')
+}
+// the shared vector (native AnimaNative.Tests PairScaleVectorTests replays the same file)
+{
+  const { loadVectors, runVectors } = await import(join(ROOT, 'shared/test-vectors/vectors.mjs'))
+  const { passed, failed } = runVectors(loadVectors('pair_scale'), {
+    pairFigureScale: (h) => S.pairFigureScale(h),
+    pairPivotOf: (stored) => S.pairPivotOf(stored),
+    scalePairRoot: (root, pivot, a) => S.scalePairRoot(root, pivot, a),
+    scalePairShift: (shift, a) => S.scalePairShift(shift, a),
+    pairContactPoint: (p, pivotCm, h) => {
+      const C = S.pairPivotOf(pivotCm), a = S.pairFigureScale(h)
+      const q = S.scalePairRoot(p, C, a)
+      return { x: q.x + a * (C.x - p.x), z: q.z + a * (C.z - p.z) }
+    },
+    pairPlacedRoot: (root, pivot, h, anchor) => {
+      const r = S.scalePairRoot(root, pivot, S.pairFigureScale(h))
+      const c = Math.cos(anchor.yaw), s = Math.sin(anchor.yaw)
+      return { x: anchor.x + r.x * c + r.z * s, z: anchor.z - r.x * s + r.z * c }
+    },
+  })
+  assert.equal(failed, 0, `pair_scale.json: ${failed} failed`)
+  ok(`[vector] pair_scale.json: ${passed} cases`)
 }
 console.log(`smoke_pair_scale: ${n} ok`)

@@ -175,7 +175,7 @@ public partial class SecondaryMotionModifier : SkeletonModifier3D
     /// figure.ts <c>inGarment</c>: the node or an ancestor below the model root is a garment — a name starting with
     /// <c>garment_</c>, or glTF extras with a <c>garment</c> object (Godot keeps a node's extras in its <c>extras</c> meta).
     /// </summary>
-    private static bool IsGarment(Node? node, Node root)
+    internal static bool IsGarment(Node? node, Node root)
     {
         for (var n = node; n is not null && n != root; n = n.GetParent())
         {

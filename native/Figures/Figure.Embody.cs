@@ -55,6 +55,8 @@ public partial class Figure
     public void SetFirstPerson(bool on)
     {
         _firstPerson = on;
+        // The shrunk head hides the hair: the strands are blocked meanwhile (figures.ts setFirstPerson → setStrandBlocked).
+        if (on) SetStrandHair(false);
         if (FirstPersonBody is { } head && IsInstanceValid(head))
         {
             head.Enabled = on;

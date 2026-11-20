@@ -24,26 +24,25 @@ export interface CommitOps<C> {
   rename(c: C, kind: string): C;
 }
 
-/** Downloads may finish in any order; listing order owns precedence. */
+/** Downloads may finish in any order; listing order owns precedence. The pair-half roots come from the committed
+ *  index through `pairRootsOf`. */
 export function commitInListOrder<C>(sources: ClipSource[], results: ClipResult<C>[], ops: CommitOps<C>) {
   const index = new Map<string, Map<string, C>>();
-  const pairRoots = new Map<string, unknown>();
   sources.forEach((s, i) => {
     const r = results[i];
     if (!r || !r.clip) return;
     const clip = ops.rename(r.clip, s.kind);
     ops.setFlags(clip, s);
-    if (ops.isPair(s.kind)) pairRoots.set(s.kind, ops.pairRoot(clip));
     if (!index.has(s.kind)) index.set(s.kind, new Map());
     const bySet = index.get(s.kind)!;
     if (!bySet.has(s.set)) bySet.set(s.set, clip);
   });
-  return { index, pairRoots };
+  return { index };
 }
 
 /** The root of every pair/group half the committed `index` holds, keyed EXACTLY like it — kind, then set — so the
  *  root path always belongs to the very file a figure plays for its set (a per-kind map let the last set listed
- *  supply the path of every set). `commitInListOrder`'s own per-kind `pairRoots` is not read by the client. */
+ *  supply the path of every set). */
 export function pairRootsOf<C, R>(index: ReadonlyMap<string, ReadonlyMap<string, C>>, isPair: (kind: string) => boolean,
   pairRoot: (c: C) => R): Map<string, Map<string, R>> {
   const out = new Map<string, Map<string, R>>();

@@ -85,7 +85,9 @@ public class HipsTracksVectorTests
 /// shared/test-vectors/clip_commit.json against <see cref="ClipLibraryRules.CommitInListOrder"/> (derivations:
 /// client3d/scripts/smoke_clip_order.mjs). The ops are the smoke's: flags <c>{loop, rootMotion}</c>, pair = <c>__a/__b</c>,
 /// root = <c>"root:" + id</c>, rename = a copy carrying the kind as <c>name</c>; the third argument is the path read
-/// out of <c>{index, pairRoots}</c> (or <c>["hasKind", kind]</c>).
+/// out of <c>{index, pairRoots}</c> — pairRoots keyed kind, then set (<c>pairRootsOf</c>) — or <c>["hasKind", kind]</c> /
+/// <c>["hasPairRoot", kind]</c>. <c>pairRootForValue(sources, results, kind, chain)</c> is
+/// <see cref="ClipIndex{C}.PairRootFor"/> with the chain's sets before the neutral <c>""</c> (null for none).
 /// </summary>
 public class ClipCommitVectorTests
 {
@@ -118,7 +120,9 @@ public class ClipCommitVectorTests
     private static JsonNode? Read(ClipIndex<FakeClip> index, List<string> path)
     {
         if (path[0] == "hasKind") return index.HasKind(path[1]);
-        if (path[0] == "pairRoots") return index.PairRoots.TryGetValue(path[1], out var r) ? (string?)r : null;
+        if (path[0] == "hasPairRoot") return index.PairRoots.ContainsKey(path[1]);
+        if (path[0] == "pairRoots")
+            return index.PairRoots.TryGetValue(path[1], out var roots) && roots.TryGetValue(path[2], out var r) ? (string?)r : null;
         if (path[0] != "index" || !index.BySet.TryGetValue(path[1], out var bySet) || !bySet.TryGetValue(path[2], out var clip))
             return null;
         return path.Skip(3).ToList() switch
@@ -135,6 +139,10 @@ public class ClipCommitVectorTests
     {
         ["commitInListOrderValue"] = a => Read(ClipLibraryRules.CommitInListOrder(Sources(Arity(a, 3, 3)[0]), Results(a[1]), new Ops()),
                                                ((JsonArray)a[2]!).Select(Str).ToList()),
+        // The vector's chain ends in the neutral "" itself; PairRootFor appends it, so it is dropped here (a second
+        // lookup of "" would answer the same).
+        ["pairRootForValue"] = a => (string?)ClipLibraryRules.CommitInListOrder(Sources(Arity(a, 4, 4)[0]), Results(a[1]), new Ops())
+                                        .PairRootFor(Str(a[2]), ((JsonArray)a[3]!).Select(Str).Where(s => s.Length > 0).ToList()),
     };
 
     public static TheoryData<string> Cases => VectorFile.Labels("clip_commit");
@@ -147,7 +155,7 @@ public class ClipCommitVectorTests
     public void EveryFunctionIsDispatched() => Assert.Empty(File.Value.MissingFunctions(Dispatch));
 
     [Fact]
-    public void AllElevenCasesAreConsumed() => Assert.Equal(11, File.Value.Cases.Count);
+    public void AllEighteenCasesAreConsumed() => Assert.Equal(18, File.Value.Cases.Count);
 }
 
 /// <summary>

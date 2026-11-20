@@ -1,0 +1,708 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "scripts/smoke_pair_scale.mjs",
+  "fixtures": {
+    "C_CM": [
+      12,
+      30
+    ],
+    "C": {
+      "x": 0.12,
+      "z": 0.3
+    }
+  },
+  "cases": [
+    {
+      "label": "[2] a_A = 1.60 / 1.70 = 16/17",
+      "fn": "pairFigureScale",
+      "args": [
+        1.6
+      ],
+      "expect": 0.9411764705882353,
+      "eps": 1e-15
+    },
+    {
+      "label": "[2] a_B = 1.85 / 1.70 = 37/34",
+      "fn": "pairFigureScale",
+      "args": [
+        1.85
+      ],
+      "expect": 1.088235294117647,
+      "eps": 1e-15
+    },
+    {
+      "label": "[1] t = 0: A (1.6 m) contact point = C",
+      "fn": "pairContactPoint",
+      "args": [
+        {
+          "x": -0.05,
+          "z": -0.4
+        },
+        {
+          "$fixture": "C_CM"
+        },
+        1.6
+      ],
+      "expect": {
+        "x": 0.12,
+        "z": 0.3
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[1] t = 0: B (1.85 m) contact point = C",
+      "fn": "pairContactPoint",
+      "args": [
+        {
+          "x": 0.124,
+          "z": 0.75
+        },
+        {
+          "$fixture": "C_CM"
+        },
+        1.85
+      ],
+      "expect": {
+        "x": 0.12,
+        "z": 0.3
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[1] t = 1/4: A (1.6 m) contact point = C",
+      "fn": "pairContactPoint",
+      "args": [
+        {
+          "x": -0.04,
+          "z": -0.4
+        },
+        {
+          "$fixture": "C_CM"
+        },
+        1.6
+      ],
+      "expect": {
+        "x": 0.12,
+        "z": 0.3
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[1] t = 1/4: B (1.85 m) contact point = C",
+      "fn": "pairContactPoint",
+      "args": [
+        {
+          "x": 0.12,
+          "z": 0.7
+        },
+        {
+          "$fixture": "C_CM"
+        },
+        1.85
+      ],
+      "expect": {
+        "x": 0.12,
+        "z": 0.3
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[1] t = 1/2: A (1.6 m) contact point = C",
+      "fn": "pairContactPoint",
+      "args": [
+        {
+          "x": -0.05,
+          "z": -0.4
+        },
+        {
+          "$fixture": "C_CM"
+        },
+        1.6
+      ],
+      "expect": {
+        "x": 0.12,
+        "z": 0.3
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[1] t = 1/2: B (1.85 m) contact point = C",
+      "fn": "pairContactPoint",
+      "args": [
+        {
+          "x": 0.116,
+          "z": 0.65
+        },
+        {
+          "$fixture": "C_CM"
+        },
+        1.85
+      ],
+      "expect": {
+        "x": 0.12,
+        "z": 0.3
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[1] t = 3/4: A (1.6 m) contact point = C",
+      "fn": "pairContactPoint",
+      "args": [
+        {
+          "x": -0.06,
+          "z": -0.4
+        },
+        {
+          "$fixture": "C_CM"
+        },
+        1.6
+      ],
+      "expect": {
+        "x": 0.12,
+        "z": 0.3
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[1] t = 3/4: B (1.85 m) contact point = C",
+      "fn": "pairContactPoint",
+      "args": [
+        {
+          "x": 0.12,
+          "z": 0.7
+        },
+        {
+          "$fixture": "C_CM"
+        },
+        1.85
+      ],
+      "expect": {
+        "x": 0.12,
+        "z": 0.3
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[1] t = 0: A (1.85 m) contact point = C",
+      "fn": "pairContactPoint",
+      "args": [
+        {
+          "x": -0.05,
+          "z": -0.4
+        },
+        {
+          "$fixture": "C_CM"
+        },
+        1.85
+      ],
+      "expect": {
+        "x": 0.12,
+        "z": 0.3
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[1] t = 0: B (1.6 m) contact point = C",
+      "fn": "pairContactPoint",
+      "args": [
+        {
+          "x": 0.124,
+          "z": 0.75
+        },
+        {
+          "$fixture": "C_CM"
+        },
+        1.6
+      ],
+      "expect": {
+        "x": 0.12,
+        "z": 0.3
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[1] t = 1/4: A (1.85 m) contact point = C",
+      "fn": "pairContactPoint",
+      "args": [
+        {
+          "x": -0.04,
+          "z": -0.4
+        },
+        {
+          "$fixture": "C_CM"
+        },
+        1.85
+      ],
+      "expect": {
+        "x": 0.12,
+        "z": 0.3
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[1] t = 1/4: B (1.6 m) contact point = C",
+      "fn": "pairContactPoint",
+      "args": [
+        {
+          "x": 0.12,
+          "z": 0.7
+        },
+        {
+          "$fixture": "C_CM"
+        },
+        1.6
+      ],
+      "expect": {
+        "x": 0.12,
+        "z": 0.3
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[1] t = 1/2: A (1.85 m) contact point = C",
+      "fn": "pairContactPoint",
+      "args": [
+        {
+          "x": -0.05,
+          "z": -0.4
+        },
+        {
+          "$fixture": "C_CM"
+        },
+        1.85
+      ],
+      "expect": {
+        "x": 0.12,
+        "z": 0.3
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[1] t = 1/2: B (1.6 m) contact point = C",
+      "fn": "pairContactPoint",
+      "args": [
+        {
+          "x": 0.116,
+          "z": 0.65
+        },
+        {
+          "$fixture": "C_CM"
+        },
+        1.6
+      ],
+      "expect": {
+        "x": 0.12,
+        "z": 0.3
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[1] t = 3/4: A (1.85 m) contact point = C",
+      "fn": "pairContactPoint",
+      "args": [
+        {
+          "x": -0.06,
+          "z": -0.4
+        },
+        {
+          "$fixture": "C_CM"
+        },
+        1.85
+      ],
+      "expect": {
+        "x": 0.12,
+        "z": 0.3
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[1] t = 3/4: B (1.6 m) contact point = C",
+      "fn": "pairContactPoint",
+      "args": [
+        {
+          "x": 0.12,
+          "z": 0.7
+        },
+        {
+          "$fixture": "C_CM"
+        },
+        1.6
+      ],
+      "expect": {
+        "x": 0.12,
+        "z": 0.3
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[2] t = 0: p_A' at a_A",
+      "fn": "scalePairRoot",
+      "args": [
+        {
+          "x": -0.05,
+          "z": -0.4
+        },
+        {
+          "$fixture": "C"
+        },
+        0.9411764705882353
+      ],
+      "expect": {
+        "x": -0.04,
+        "z": -0.35882353
+      },
+      "eps": 1e-8
+    },
+    {
+      "label": "[2] t = 0: p_B' at a_B",
+      "fn": "scalePairRoot",
+      "args": [
+        {
+          "x": 0.124,
+          "z": 0.75
+        },
+        {
+          "$fixture": "C"
+        },
+        1.088235294117647
+      ],
+      "expect": {
+        "x": 0.12435294,
+        "z": 0.78970588
+      },
+      "eps": 1e-8
+    },
+    {
+      "label": "[3] pairFigureScale(1.70) = 1 exactly",
+      "fn": "pairFigureScale",
+      "args": [
+        1.7
+      ],
+      "expect": 1,
+      "eps": 0
+    },
+    {
+      "label": "[3] pairFigureScale(undefined) = 1",
+      "fn": "pairFigureScale",
+      "args": [
+        "$undefined"
+      ],
+      "expect": 1,
+      "eps": 0
+    },
+    {
+      "label": "[3] pairFigureScale(null) = 1",
+      "fn": "pairFigureScale",
+      "args": [
+        null
+      ],
+      "expect": 1,
+      "eps": 0
+    },
+    {
+      "label": "[3] pairFigureScale(0) = 1",
+      "fn": "pairFigureScale",
+      "args": [
+        0
+      ],
+      "expect": 1,
+      "eps": 0
+    },
+    {
+      "label": "[3] pairFigureScale(NaN) = 1",
+      "fn": "pairFigureScale",
+      "args": [
+        "$NaN"
+      ],
+      "expect": 1,
+      "eps": 0
+    },
+    {
+      "label": "[3] pairFigureScale(-1) = 1",
+      "fn": "pairFigureScale",
+      "args": [
+        -1
+      ],
+      "expect": 1,
+      "eps": 0
+    },
+    {
+      "label": "[3] scalePairRoot at a = 1 returns p_A(0) unchanged",
+      "fn": "scalePairRoot",
+      "args": [
+        {
+          "x": -0.05,
+          "z": -0.4
+        },
+        {
+          "$fixture": "C"
+        },
+        1
+      ],
+      "expect": {
+        "x": -0.05,
+        "z": -0.4
+      },
+      "eps": 0
+    },
+    {
+      "label": "[3] scalePairRoot at a = 1 returns p_B(0) unchanged",
+      "fn": "scalePairRoot",
+      "args": [
+        {
+          "x": 0.124,
+          "z": 0.75
+        },
+        {
+          "$fixture": "C"
+        },
+        1
+      ],
+      "expect": {
+        "x": 0.124,
+        "z": 0.75
+      },
+      "eps": 0
+    },
+    {
+      "label": "[3] scalePairShift at a = 1 returns the shift unchanged",
+      "fn": "scalePairShift",
+      "args": [
+        {
+          "x": 0.02,
+          "z": -0.01
+        },
+        1
+      ],
+      "expect": {
+        "x": 0.02,
+        "z": -0.01
+      },
+      "eps": 0
+    },
+    {
+      "label": "[4] pairPivotOf(null) = the origin",
+      "fn": "pairPivotOf",
+      "args": [
+        null
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0
+      },
+      "eps": 0
+    },
+    {
+      "label": "[4] pairPivotOf(undefined) = the origin",
+      "fn": "pairPivotOf",
+      "args": [
+        "$undefined"
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0
+      },
+      "eps": 0
+    },
+    {
+      "label": "[4] pairPivotOf([]) = the origin",
+      "fn": "pairPivotOf",
+      "args": [
+        []
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0
+      },
+      "eps": 0
+    },
+    {
+      "label": "[4] pairPivotOf([400, 0] (beyond ±300)) = the origin",
+      "fn": "pairPivotOf",
+      "args": [
+        [
+          400,
+          0
+        ]
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0
+      },
+      "eps": 0
+    },
+    {
+      "label": "[4] pairPivotOf(['1', 2]) = the origin",
+      "fn": "pairPivotOf",
+      "args": [
+        [
+          "1",
+          2
+        ]
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0
+      },
+      "eps": 0
+    },
+    {
+      "label": "[4] pairPivotOf([1, 2, 3]) = the origin",
+      "fn": "pairPivotOf",
+      "args": [
+        [
+          1,
+          2,
+          3
+        ]
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0
+      },
+      "eps": 0
+    },
+    {
+      "label": "[4] pairPivotOf([NaN, 0]) = the origin",
+      "fn": "pairPivotOf",
+      "args": [
+        [
+          "$NaN",
+          0
+        ]
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0
+      },
+      "eps": 0
+    },
+    {
+      "label": "[4] pairPivotOf([12, 30]) = (0.12, 0.30)",
+      "fn": "pairPivotOf",
+      "args": [
+        [
+          12,
+          30
+        ]
+      ],
+      "expect": {
+        "x": 0.12,
+        "z": 0.3
+      },
+      "eps": 1e-15
+    },
+    {
+      "label": "[5] scalePairShift((0.02, -0.01), 37/34)",
+      "fn": "scalePairShift",
+      "args": [
+        {
+          "x": 0.02,
+          "z": -0.01
+        },
+        1.088235294117647
+      ],
+      "expect": {
+        "x": 0.02176471,
+        "z": -0.01088235
+      },
+      "eps": 1e-8
+    },
+    {
+      "label": "[8] no figure height: (10.1, 21.7)",
+      "fn": "pairPlacedRoot",
+      "args": [
+        {
+          "x": 0.3,
+          "z": 0.1
+        },
+        {
+          "$fixture": "C"
+        },
+        "$undefined",
+        {
+          "x": 10,
+          "z": 22,
+          "yaw": 1.5707963267948966
+        }
+      ],
+      "expect": {
+        "x": 10.1,
+        "z": 21.7
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[8] 1.70 m: (10.1, 21.7)",
+      "fn": "pairPlacedRoot",
+      "args": [
+        {
+          "x": 0.3,
+          "z": 0.1
+        },
+        {
+          "$fixture": "C"
+        },
+        1.7,
+        {
+          "x": 10,
+          "z": 22,
+          "yaw": 1.5707963267948966
+        }
+      ],
+      "expect": {
+        "x": 10.1,
+        "z": 21.7
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[8] 1.85 m: (10.08235294, 21.68411765)",
+      "fn": "pairPlacedRoot",
+      "args": [
+        {
+          "x": 0.3,
+          "z": 0.1
+        },
+        {
+          "$fixture": "C"
+        },
+        1.85,
+        {
+          "x": 10,
+          "z": 22,
+          "yaw": 1.5707963267948966
+        }
+      ],
+      "expect": {
+        "x": 10.08235294,
+        "z": 21.68411765
+      },
+      "eps": 1e-8
+    },
+    {
+      "label": "[8] 1.60 m: (10.11176471, 21.71058824)",
+      "fn": "pairPlacedRoot",
+      "args": [
+        {
+          "x": 0.3,
+          "z": 0.1
+        },
+        {
+          "$fixture": "C"
+        },
+        1.6,
+        {
+          "x": 10,
+          "z": 22,
+          "yaw": 1.5707963267948966
+        }
+      ],
+      "expect": {
+        "x": 10.11176471,
+        "z": 21.71058824
+      },
+      "eps": 1e-8
+    }
+  ]
+}

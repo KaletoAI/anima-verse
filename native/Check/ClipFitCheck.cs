@@ -112,11 +112,14 @@ public static class ClipFitCheck
                     {
                         if (mode is "a" or "b") figure.PlayPair($"pair__{mode}", 0, false, true, "lie");
                         else figure.Play("idle", mode == "moving", 0, "seat");
+                        // A pair/group half's shift scales with its figure (scene-render pairScale.ts): this body is
+                        // 0.85 m, a = 0.85 / 1.70 = 0.5; a solo shift stays absolute.
+                        var want = mode is "a" or "b" ? expected * (float)PairScale.FigureScale(0.85) : expected;
                         for (int i = 0; i < 4; i++)
                         {
                             figure.ApplyRotation();
                             var delta = body.GlobalPosition - figure.GlobalPosition;
-                            Expect("C8 horizontal correction: " + mode, (delta - expected).Length() < 1e-5, $"{delta} != {expected}");
+                            Expect("C8 horizontal correction: " + mode, (delta - want).Length() < 1e-5, $"{delta} != {want}");
                         }
                     }
                 }

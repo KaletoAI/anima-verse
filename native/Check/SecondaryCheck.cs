@@ -159,7 +159,7 @@ public static class SecondaryCheck
             Expect("M9 the engine stepped the modifier", liveSteps >= 2, $"{liveSteps} steps");
             fig.QueueFree();
 
-            var hair = HairCheck.Run(world);
+            var hair = HairCheck.Run(world) + HairStrandCheck.Run(world);
             var demo = DemoFigure(world, fixtures);
             var report = $"secondary M1..M9 ok (C3 extents 2/1.5, rings 0.2 @ 0.75/2.25, normal fix {before:0.00}°; step trail {trail:0.0000}°, "
                          + $"jump reset, frozen kept, far still; anchor blend ok; engine-stepped {liveSteps}×); {hair}{demo}";

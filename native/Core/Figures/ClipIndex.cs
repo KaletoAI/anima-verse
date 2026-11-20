@@ -19,6 +19,8 @@ public sealed record ClipSourceEntry(string Kind, string Set, string Url, bool? 
     public ClipHeightOffsets HeightOffsets { get; init; }
     /// <summary>Keep clips retain their authored hips turn in the access frame.</summary>
     public bool KeepFacing { get; init; }
+    /// <summary>A pair/group half's contact pivot (<c>pair_pivot_cm</c>, <see cref="PairScale.PivotOf"/>); the origin when absent.</summary>
+    public PairXZ PairPivot { get; init; }
     /// <summary><c>clipLoops</c>: a missing flag loops (§ A8).</summary>
     public bool Loops => Loop ?? true;
 }
@@ -42,14 +44,31 @@ public readonly record struct ClipHeightOffsets(double Ground = 0, double Seat =
     }
 }
 
-/// <summary>The committed library: kind → (set → clip) in listing order of the kinds, plus the pair-half roots.</summary>
+/// <summary>
+/// The committed library: kind → (set → clip) in listing order of the kinds, plus the pair-half roots keyed EXACTLY like
+/// it — kind, then set (client3d clipCommit.ts <c>pairRootsOf</c>): the root always belongs to the very file a figure
+/// plays for its set.
+/// </summary>
 public sealed class ClipIndex<C>
 {
     /// <summary>Kinds in the order their first clip was committed (the JS Map's insertion order).</summary>
     public List<string> Kinds { get; } = new();
     public Dictionary<string, Dictionary<string, C>> BySet { get; } = new(StringComparer.Ordinal);
-    public Dictionary<string, object?> PairRoots { get; } = new(StringComparer.Ordinal);
+    public Dictionary<string, Dictionary<string, object?>> PairRoots { get; } = new(StringComparer.Ordinal);
     public bool HasKind(string kind) => BySet.ContainsKey(kind);
+
+    /// <summary>
+    /// <c>pairRootFor(roots, kind, chain)</c>: the root of half <paramref name="kind"/> along the set chain
+    /// <c>[...sets, '']</c> (the order <see cref="ClipLibraryRules.ClipsFor"/> picks the file by); null when no set of the
+    /// chain has that half.
+    /// </summary>
+    public object? PairRootFor(string kind, IReadOnlyList<string>? sets)
+    {
+        if (!PairRoots.TryGetValue(kind, out var bySet)) return null;
+        foreach (var set in (sets ?? Array.Empty<string>()).Append(""))
+            if (bySet.TryGetValue(set, out var r)) return r;
+        return null;
+    }
 }
 
 /// <summary>The per-clip operations of <c>commitInListOrder</c> (<c>CommitOps</c>).</summary>
@@ -100,6 +119,7 @@ public static class ClipLibraryRules
                               && !(rm.TryGetProperty("mode", out var mode) && mode.ValueKind == JsonValueKind.String && mode.GetString() == "strip");
             entries.Add(new ClipSourceEntry(IndexName(kind, role, Json.Str(c, "alt")), Json.Str(c, "set"), url, loop, rootMotion)
             {
+                PairPivot = c.TryGetProperty("pair_pivot_cm", out var pivot) ? PairScale.PivotOf(pivot) : PairScale.Origin,
                 KeepFacing = rootMotion && rm.TryGetProperty("mode", out var facingMode) && facingMode.ValueKind == JsonValueKind.String && facingMode.GetString() == "keep",
                 HeightOffsets = (c.TryGetProperty("height_offsets_cm", out var offsets) ? ClipHeightOffsets.Parse(offsets) : default) with
                 {
@@ -113,8 +133,9 @@ public static class ClipLibraryRules
 
     /// <summary>
     /// <c>commitInListOrder(sources, results, ops)</c>: downloads may finish in any order, the LISTING owns
-    /// precedence — the first clip per (kind, set) wins; a missing result (null or past the end) leaves a gap;
-    /// a pair half records its root (a later half of the same name replaces it).
+    /// precedence — the first clip per (kind, set) wins; a missing result (null or past the end) leaves a gap.
+    /// The pair-half roots are then taken from the committed index (<c>pairRootsOf</c>): per pair kind and set, the root
+    /// of the clip that won that slot.
     /// </summary>
     public static ClipIndex<C> CommitInListOrder<C>(IReadOnlyList<ClipSourceEntry> sources, IReadOnlyList<C?> results,
                                                     IClipCommitOps<C> ops) where C : class
@@ -126,13 +147,19 @@ public static class ClipLibraryRules
             if (i >= results.Count || results[i] is not { } r) continue;
             var clip = ops.Rename(r, s.Kind);
             ops.SetFlags(clip, s);
-            if (ops.IsPair(s.Kind)) index.PairRoots[s.Kind] = ops.PairRoot(clip);
             if (!index.BySet.TryGetValue(s.Kind, out var bySet))
             {
                 index.BySet[s.Kind] = bySet = new Dictionary<string, C>(StringComparer.Ordinal);
                 index.Kinds.Add(s.Kind);
             }
             bySet.TryAdd(s.Set, clip);
+        }
+        foreach (var kind in index.Kinds)
+        {
+            if (!ops.IsPair(kind)) continue;
+            var roots = new Dictionary<string, object?>(StringComparer.Ordinal);
+            foreach (var (set, clip) in index.BySet[kind]) roots[set] = ops.PairRoot(clip);
+            index.PairRoots[kind] = roots;
         }
         return index;
     }

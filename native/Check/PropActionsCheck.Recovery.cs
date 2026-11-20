@@ -286,7 +286,7 @@ public static partial class PropActionsCheck
             mgr.ApplyPolled(JsonSerializer.SerializeToElement(source.MapOverride)); source.StateOverride=RunState(raced);
             await offers.PropActions!.RefreshAsync(); Step(8); Is("early matching active pair survives delayed state plan",avatar.Pair?.Id=="valid-pair-before-state");
             // Task 96: same clip for action and finale must switch loop mode per figure, then restore it.
-            mgr.Clips.Index.PairRoots["pair-pose__b"]=new RootPath(new float[]{0},new float[]{.25f,.5f});
+            mgr.Clips.Index.PairRoots["pair-pose__b"]=new(){[""]=new PairRoot(new RootPath(new float[]{0},new float[]{.25f,.5f}),PairScale.Origin)};
             var ownPairRow=source.MapOverride["characters"]![0]!;
             ownPairRow["finale"]=JsonNode.Parse("""{"id":"own-pair-finale-96","kind":"pair-pose","role":"b","elapsed_s":0.9,"duration_s":1.033}""");
             mgr.ApplyPolled(JsonSerializer.SerializeToElement(source.MapOverride)); Step(0);
@@ -371,7 +371,7 @@ public static partial class PropActionsCheck
             // pair kind "pair-pose" (no rig binds it). The NPC plays its half pair-pose__b at the anchor — the held-pose
             // commit must not stay pending on the bare kind (fails on 781bd9c1: the figure kept its entry clip).
             observer.Player!.GetAnimationLibrary("").AddAnimation("pair-pose__b",new Animation { Length=1,LoopMode=Animation.LoopModeEnum.Linear });
-            mgr.Clips.Index.PairRoots["pair-pose__b"]=new RootPath(new float[]{0},new float[]{0,0});
+            mgr.Clips.Index.PairRoots["pair-pose__b"]=new(){[""]=new PairRoot(new RootPath(new float[]{0},new float[]{0,0}),PairScale.Origin)};
             var paired=Read("worldmap_entry.json"); var npcRow=paired["characters"]![1]!;
             paired["characters"]![0]!["prop_action_entry"]=null; npcRow["prop_action_entry"]=null; npcRow["activity_animation"]="pair-pose";
             npcRow["place"]=JsonNode.Parse("""{"id":"prop-bench-56-seat56","slot":1,"x":2,"z":0,"facing":180,"room_id":"r-props"}""");

@@ -448,6 +448,27 @@ public static class PairCheck
         roots[own] = baseRoot;
         Expect("Q112 fallback does not restart entry blend", cy.Pair.Blend == blend, "restarted");
 
+        // 2026-11-20 (scene-render pairScale.ts, clipCommit.ts pairRootsOf): pair roots are keyed by kind AND set and resolved
+        // along the figure's set chain; a 1.70 m figure is not scaled, whatever the clip's contact pivot.
+        const string deeHalf = "greeting-hug__b";
+        var deeSets = dee.Sets;
+        roots[deeHalf]["female"] = new PairRoot(new RootPath(new float[] { 0 }, new float[] { .5f, 0 }), PairScale.Origin);
+        mgr.Tick(0);
+        NearV("QS neutral chain keeps the neutral root", dee.Position, 64.211896, 4.096875, 131, PosTol);
+        dee.Sets = new[] { "female" }; mgr.Tick(0);
+        NearV("QS the set chain picks the female file's root (0.5, 0)", dee.Position, 64.5, 4.096875, 131, PosTol);
+        dee.Sets = new[] { "elf" }; mgr.Tick(0);
+        NearV("QS a set without the half falls back to the neutral root", dee.Position, 64.211896, 4.096875, 131, PosTol);
+        roots[deeHalf].Remove("female"); dee.Sets = deeSets;
+        var neutral = (PairRoot)roots[deeHalf][""]!;
+        mgr.Tick(0); var before = dee.Position;
+        roots[deeHalf][""] = neutral with { Pivot = new PairXZ(.12, .30) }; mgr.Tick(0);
+        NearD($"QS body {dee.BodyHeight:R} m: scale {PairScale.FigureScale(dee.BodyHeight):R}", PairScale.FigureScale(dee.BodyHeight), 1, 1e-12);
+        Expect("QS a 1.70 m figure ignores the pivot (bit-identical)", dee.Position == before || PairScale.FigureScale(dee.BodyHeight) != 1,
+            $"{dee.Position} != {before}");
+        NearV("QS a 1.70 m figure ignores the pivot", dee.Position, before.X, before.Y, before.Z, PosTol);
+        roots[deeHalf][""] = neutral; mgr.Tick(0);
+
         // Finales use the same alternative/base choice, start at zero and return to the uninterrupted action.
         for (int i = 0; i < 2; i++)
         {

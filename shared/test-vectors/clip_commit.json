@@ -140,6 +140,60 @@
           "id": "h3"
         }
       }
+    ],
+    "SET_SOURCES": [
+      {
+        "kind": "hug__a",
+        "set": "female",
+        "url": "f1"
+      },
+      {
+        "kind": "hug__a",
+        "set": "male",
+        "url": "m1"
+      },
+      {
+        "kind": "hug__a",
+        "set": "male",
+        "url": "m2"
+      },
+      {
+        "kind": "hug__b",
+        "set": "",
+        "url": "n1"
+      },
+      {
+        "kind": "walk",
+        "set": "",
+        "url": "w1"
+      }
+    ],
+    "SET_RESULTS": [
+      {
+        "clip": {
+          "id": "f1"
+        }
+      },
+      {
+        "clip": {
+          "id": "m1"
+        }
+      },
+      {
+        "clip": {
+          "id": "m2"
+        }
+      },
+      {
+        "clip": {
+          "id": "n1"
+        }
+      },
+      {
+        "clip": {
+          "id": "w1"
+        }
+      }
     ]
   },
   "cases": [
@@ -202,7 +256,7 @@
       "expect": "idle"
     },
     {
-      "label": "[1] RESULTS: pairRoots.handshake__a",
+      "label": "[1] RESULTS: pairRoots.handshake__a.(neutral)",
       "fn": "commitInListOrderValue",
       "args": [
         {
@@ -213,7 +267,8 @@
         },
         [
           "pairRoots",
-          "handshake__a"
+          "handshake__a",
+          ""
         ]
       ],
       "expect": "root:h1"
@@ -297,7 +352,7 @@
       "expect": "h1"
     },
     {
-      "label": "[1] EXTENDED_RESULTS: pairRoots.handshake__a",
+      "label": "[1] EXTENDED_RESULTS: pairRoots.handshake__a.(neutral) — the first file wins",
       "fn": "commitInListOrderValue",
       "args": [
         {
@@ -308,13 +363,14 @@
         },
         [
           "pairRoots",
-          "handshake__a"
+          "handshake__a",
+          ""
         ]
       ],
-      "expect": "root:h2"
+      "expect": "root:h1"
     },
     {
-      "label": "[1] EXTENDED_RESULTS: pairRoots.handshake__b",
+      "label": "[1] EXTENDED_RESULTS: pairRoots.handshake__b.(neutral)",
       "fn": "commitInListOrderValue",
       "args": [
         {
@@ -325,7 +381,8 @@
         },
         [
           "pairRoots",
-          "handshake__b"
+          "handshake__b",
+          ""
         ]
       ],
       "expect": "root:h3"
@@ -343,6 +400,131 @@
         [
           "hasKind",
           "missing"
+        ]
+      ],
+      "expect": false
+    },
+    {
+      "label": "[2] SET_RESULTS: pairRoots.hug__a.female",
+      "fn": "commitInListOrderValue",
+      "args": [
+        {
+          "$fixture": "SET_SOURCES"
+        },
+        {
+          "$fixture": "SET_RESULTS"
+        },
+        [
+          "pairRoots",
+          "hug__a",
+          "female"
+        ]
+      ],
+      "expect": "root:f1"
+    },
+    {
+      "label": "[2] SET_RESULTS: pairRoots.hug__a.male — the first male file",
+      "fn": "commitInListOrderValue",
+      "args": [
+        {
+          "$fixture": "SET_SOURCES"
+        },
+        {
+          "$fixture": "SET_RESULTS"
+        },
+        [
+          "pairRoots",
+          "hug__a",
+          "male"
+        ]
+      ],
+      "expect": "root:m1"
+    },
+    {
+      "label": "[2] pairRootFor hug__a along [male, neutral]",
+      "fn": "pairRootForValue",
+      "args": [
+        {
+          "$fixture": "SET_SOURCES"
+        },
+        {
+          "$fixture": "SET_RESULTS"
+        },
+        "hug__a",
+        [
+          "male",
+          ""
+        ]
+      ],
+      "expect": "root:m1"
+    },
+    {
+      "label": "[2] pairRootFor hug__a along [female, neutral]",
+      "fn": "pairRootForValue",
+      "args": [
+        {
+          "$fixture": "SET_SOURCES"
+        },
+        {
+          "$fixture": "SET_RESULTS"
+        },
+        "hug__a",
+        [
+          "female",
+          ""
+        ]
+      ],
+      "expect": "root:f1"
+    },
+    {
+      "label": "[2] pairRootFor hug__a along [elf, neutral]: no file",
+      "fn": "pairRootForValue",
+      "args": [
+        {
+          "$fixture": "SET_SOURCES"
+        },
+        {
+          "$fixture": "SET_RESULTS"
+        },
+        "hug__a",
+        [
+          "elf",
+          ""
+        ]
+      ],
+      "expect": null
+    },
+    {
+      "label": "[2] pairRootFor hug__b along [male, neutral]: the neutral file",
+      "fn": "pairRootForValue",
+      "args": [
+        {
+          "$fixture": "SET_SOURCES"
+        },
+        {
+          "$fixture": "SET_RESULTS"
+        },
+        "hug__b",
+        [
+          "male",
+          ""
+        ]
+      ],
+      "expect": "root:n1"
+    },
+    {
+      "label": "[3] SET_RESULTS: a solo kind has no pair root",
+      "fn": "commitInListOrderValue",
+      "args": [
+        {
+          "$fixture": "SET_SOURCES"
+        },
+        {
+          "$fixture": "SET_RESULTS"
+        },
+        [
+          "hasPairRoot",
+          "walk"
         ]
       ],
       "expect": false

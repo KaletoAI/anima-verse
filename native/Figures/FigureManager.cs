@@ -191,6 +191,8 @@ public partial class FigureManager : Node3D
         public IReadOnlyDictionary<Animation, long> AnimKeys => Lazy?.AnimKeys ?? (IReadOnlyDictionary<Animation, long>)EmptyKeys;
         /// <summary>The set chain the library was fitted along (for <see cref="ProbeClipMemory"/>).</summary>
         public IReadOnlyList<string> Sets { get; init; } = Array.Empty<string>();
+        /// <summary>The primitives of the GLB that carry strand attributes (<see cref="StrandGlb.Read"/>; empty for FBX).</summary>
+        public IReadOnlyList<StrandGlbPrimitive> Strands { get; set; } = Array.Empty<StrandGlbPrimitive>();
         /// <summary>Wall time of the build's own fit (plan + the clips fitted at build).</summary>
         public double FitMs { get; init; }
         /// <summary><c>fit.fits</c>: at least one library clip adapted to this rig (the random pool takes only those).</summary>
@@ -210,6 +212,9 @@ public partial class FigureManager : Node3D
         public IReadOnlyDictionary<string, bool> ClipLoops { get; init; } = new Dictionary<string, bool>();
         /// <summary>The answer's top-level <c>motion</c> (<c>extension_rig.motion_payload</c>); null = none.</summary>
         public MotionPayload? Motion { get; init; }
+        /// <summary><c>model.hair_strands</c> (api.ts: both <c>url</c> and <c>sha256</c>, else null): the strand record of
+        /// the full tier's hair.</summary>
+        public (string Url, string Sha256)? HairStrands { get; init; }
         /// <summary><c>model.collision</c> (api.ts: <c>collision: m.collision ?? null</c>); null = none.</summary>
         public CollisionPayload? Collision { get; init; }
     }
@@ -585,7 +590,7 @@ public partial class FigureManager : Node3D
     {
         if (fig.Finale is not { } finale) return null;
         string? clip = finale.ResolveClip(name => fig.HasClip(name)
-            && (finale.Role is null || Clips.PairRootAt(name, 0) is not null));
+            && (finale.Role is null || Clips.PairRootAt(name, 0, fig.Sets) is not null));
         if (clip is null)
         {
             // Initial model work can still supply the figure's action table.
@@ -846,7 +851,8 @@ public partial class FigureManager : Node3D
     /// <summary>
     /// npcs.ts <c>tickInteraction</c>: one frame of a pair interaction — the clock advances (<see cref="PairPlay.Advance"/>),
     /// the half plays at the phase (<see cref="Figure.PlayPair"/>, which also ends a running bridge; a travel nobody took
-    /// is dropped: the ANCHOR places the figure), the root stands at <c>anchor + R_y(yaw)·pairRootAt(phase)</c> at the
+    /// is dropped: the ANCHOR places the figure), the root stands at <c>anchor + R_y(yaw)·scaled(pairRootAt(phase))</c> (the half's
+    /// root scaled by the figure's size about the clip's contact pivot, <see cref="PairScale.ScaleRoot"/>) at the
     /// place's slot height, else the room's stand, else the ground (<see cref="PairPlay.Place"/>), turned to the anchor's
     /// yaw. False when the figure has no rig or the half is not loaded / bound: the ordinary placement and a solo clip.
     /// </summary>
@@ -855,7 +861,7 @@ public partial class FigureManager : Node3D
         var it = fig.Pair!;
         if (fig.Player is null || fig.Portrait is not null) return false;
         double phase = it.Advance(dt);
-        string? clip = it.ResolveClip(name => fig.HasClip(name) && Clips.PairRootAt(name, phase) is not null);
+        string? clip = it.ResolveClip(name => fig.HasClip(name) && Clips.PairRootAt(name, phase, fig.Sets) is not null);
         bool loop = it.Loop, restart = false;
         double? finaleFrame = null;
         if (fig.Finale is { Role: not null } && StepFinale(fig, dt, it.Rate <= 0) is { } finale)
@@ -863,7 +869,11 @@ public partial class FigureManager : Node3D
             clip = finale.Clip; phase = finale.T; loop = false; restart = finale.Start;
             finaleFrame = restart ? 0 : dt;
         }
-        if (clip is null || Clips.PairRootAt(clip, phase) is not { } root) return false;
+        if (clip is null || Clips.PairRootAt(clip, phase, fig.Sets) is not { } unscaled) return false;
+        // Owner decision 2026-11-20 (scene-render pairScale.ts): the half's root path was measured for a 1.70 m figure; this
+        // figure's own scale a = height / 1.70 about the clip's contact pivot keeps every contact where it was
+        // (p' = C + a·(p − C)). a = 1 returns the root untouched. The height is the model's (npcs.ts `npc.figure.height`).
+        var root = PairScale.ScaleRoot((unscaled.X, unscaled.Z), unscaled.Pivot, PairScale.FigureScale(fig.BodyHeight));
         if (fig.ClipPending(clip))
         {
             // Lazy (Task 35b): the half is being fitted — the figure holds where it stands, playing what it played.
@@ -1053,6 +1063,8 @@ public partial class FigureManager : Node3D
         using var hitch = AnimaNative.Ui.HitchLog.Time("FigureManager");
         if (!AutoTick) return;
         Tick(delta);
+        // npcs.ts tickStrandHair, every frame after the figures' update.
+        TickStrandHair(CameraPosition?.Invoke());
         _placeClock += delta;
         if (_placeClock >= PlaceTickS)
         {
@@ -1258,6 +1270,7 @@ public partial class FigureManager : Node3D
                              Json.Bool(m, "normalized"), rev.Length > 0 ? rev : null)
         {
             ClipLoops = loops, Motion = MotionPayload.Of(root), Collision = CollisionPayload.Of(m), TextureUrl = texture.Length > 0 ? texture : null,
+            HairStrands = StrandRefOf(m),
         };
     }
 
@@ -1300,6 +1313,7 @@ public partial class FigureManager : Node3D
         // The main-thread parts of the build, timed for the log (Task 35b): the import, the bind box, the rest correction, the plan.
         var importWatch = System.Diagnostics.Stopwatch.StartNew();
         Node3D root;
+        IReadOnlyList<StrandGlbPrimitive> strands = Array.Empty<StrandGlbPrimitive>();
         if (IsFbx(info.Format, url))
         {
             using ((_source as AnimaApi)?.Measurements.Time("character GLB", "parse"))
@@ -1311,11 +1325,22 @@ public partial class FigureManager : Node3D
         {
             // Decoded and PARSED off the main thread (Task 35b: the parse — buffers, meshes, images — was most of a model's
             // 35–40 ms main-thread import); only the scene (nodes) is generated here.
-            var (doc, state, _) = await Task.Run(() =>
+            var (doc, state, _, strandPrims) = await Task.Run(() =>
             {
                 using var parse = (_source as AnimaApi)?.Measurements.Time("character GLB", "parse");
-                return GlbLoader.Parse(GlbLoader.Prepare(bytes), url);
+                var plain = GlbLoader.Prepare(bytes);
+                // The strand attributes Godot's import drops, read from the same plain bytes (a broken one: no strands).
+                IReadOnlyList<StrandGlbPrimitive> found;
+                try { found = StrandGlb.Read(plain); }
+                catch (Exception e)
+                {
+                    _log($"model {url}: strand attributes unreadable ({e.Message}) — no per-strand hair");
+                    found = Array.Empty<StrandGlbPrimitive>();
+                }
+                var (d, s, c) = GlbLoader.Parse(plain, url);
+                return (d, s, c, found);
             });
+            strands = strandPrims;
             importWatch.Restart();
             using ((_source as AnimaApi)?.Measurements.Time("character GLB", "generate"))
             using (Ui.HitchLog.Time("figure generate"))
@@ -1368,7 +1393,7 @@ public partial class FigureManager : Node3D
             if (own.Count == 0)
             {
                 _log($"model {url}: {info.Format}/{info.Rig}, no takes, raw height {raw:0.###} m — procedural gait");
-                return new ModelTemplate { Root = root, RawHeight = raw, Url = url, Corrected = -1, BindBox = bind };
+                return new ModelTemplate { Root = root, RawHeight = raw, Url = url, Corrected = -1, BindBox = bind, Strands = strands };
             }
             var ownLib = new AnimationLibrary();
             var actionKinds = new List<string>();
@@ -1378,7 +1403,7 @@ public partial class FigureManager : Node3D
                 if (ownLib.AddAnimation(kind, byKind[clip]) == Error.Ok) actionKinds.Add(kind);
             _log($"model {url}: {info.Format}/{info.Rig}, raw height {raw:0.###} m, {own.Count} takes → {actionKinds.Count} actions "
                  + $"[{string.Join(", ", actionKinds.Select(k => ownLib.GetAnimation(k).LoopMode == Animation.LoopModeEnum.None ? k + " (once)" : k))}]");
-            return new ModelTemplate { Root = root, RawHeight = raw, Url = url, Corrected = -1, Library = ownLib, Kinds = actionKinds, BindBox = bind };
+            return new ModelTemplate { Root = root, RawHeight = raw, Url = url, Corrected = -1, Library = ownLib, Kinds = actionKinds, BindBox = bind, Strands = strands };
         }
 
         await Clips.WaitClipsAsync();
@@ -1432,7 +1457,7 @@ public partial class FigureManager : Node3D
         {
             Root = root, RawHeight = raw, Url = url, BindBox = bind, Library = lib, Kinds = kinds, ClipSets = lazy.ClipSets,
             BoundTracks = lazy.PlannedTracks, Unbound = missing.Count, Corrected = fixes?.Count ?? -1, Keys = lazy.PlannedKeys,
-            FitMs = fitMs, Sets = sets.ToArray(), LibraryFits = lazy.PlannedClips > 0, Lazy = lazy,
+            FitMs = fitMs, Sets = sets.ToArray(), LibraryFits = lazy.PlannedClips > 0, Lazy = lazy, Strands = strands,
         };
     }
 
@@ -1984,6 +2009,9 @@ public partial class FigureManager : Node3D
         GaitBox? box = t.BindBox is { } b2 ? new GaitBox(b2.Min * scale, b2.Max * scale) : null;
         fig.SetBody(body, true, ClipLibrary.Find<Skeleton3D>(inst), player, t.Library is null ? null : t.Kinds, bind,
                     box, t.RawHeight * scale, fitClip: fitClip, refreshClipKinds: () => t.Kinds);
+        // figures.ts makeFigure: the strand record of a full-tier model (hairStrands: tier === 'full' only).
+        fig.StrandLog = _log;
+        fig.SetStrandSource(StrandSourceFor(t, info, tier));
         LongestInstantiateMs = Math.Max(LongestInstantiateMs, dupWatch.Elapsed.TotalMilliseconds);
     }
 

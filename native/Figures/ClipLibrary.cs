@@ -30,6 +30,8 @@ public sealed record ClipSource
     public bool KeepFacing { get; init; }
     /// <summary>Saved reference-height corrections of this exact file and set.</summary>
     public ClipHeightOffsets HeightOffsets { get; init; }
+    /// <summary>The listing's contact pivot of this pair/group half (<c>pair_pivot_cm</c>, <see cref="PairScale"/>).</summary>
+    public PairXZ PairPivot { get; init; }
     public required Animation Anim { get; init; }
     public required string[] Bones { get; init; }
     /// <summary>The bone's node default — for a clip FBX that is the take's first frame (Godot stores it as the rest).</summary>
@@ -328,8 +330,8 @@ public sealed class ClipLibrary
         public ClipSource Rename(ClipSource clip, string kind) => clip.Kind == kind ? clip : clip with { Kind = kind };
         public void SetFlags(ClipSource clip, ClipSourceEntry source) { /* set at import from the same entry */ }
         public bool IsPair(string kind) => ClipLibraryRules.IsPairName(kind);
-        /// <summary>The pair half's root path (<c>extractRootPath</c>), see <see cref="PairRootOf"/>.</summary>
-        public object? PairRoot(ClipSource clip) => PairRootOf(clip);
+        /// <summary>figures.ts <c>pairRootOf</c>: the half's root path (<c>extractRootPath</c>, <see cref="PairRootOf"/>) and its contact pivot.</summary>
+        public object? PairRoot(ClipSource clip) => new PairRoot(PairRootOf(clip), clip.PairPivot);
     }
 
     /// <summary>
@@ -364,9 +366,18 @@ public sealed class ClipLibrary
         return PairClip.ExtractRootPath(tracks, 1);
     }
 
-    /// <summary><c>pairRootAt(clipName, t)</c>: a pair half's root XZ at clip time t (clip-frame metres); null when not loaded.</summary>
-    public (double X, double Z)? PairRootAt(string clipName, double t)
-        => Index.PairRoots.TryGetValue(clipName, out var p) && p is RootPath path ? BridgeTravel.RootPathAt(path, t) : null;
+    /// <summary>
+    /// <c>pairRootAt(clipName, t, charName)</c>: a pair half's root XZ at clip time t, in clip-frame metres of the 1.70 m
+    /// clip, and the clip's contact pivot — from the file the set chain <c>[...sets, '']</c> picks for that half (the
+    /// figure's <see cref="Figure.Sets"/>, <c>clipsFor</c>'s order); null when no set of the chain has it. Unscaled: the
+    /// caller scales it by the figure's height (<see cref="PairScale.ScaleRoot"/>).
+    /// </summary>
+    public (double X, double Z, PairXZ Pivot)? PairRootAt(string clipName, double t, IReadOnlyList<string>? sets = null)
+    {
+        if (Index.PairRootFor(clipName, sets) is not PairRoot root) return null;
+        var (x, z) = BridgeTravel.RootPathAt(root.Path, t);
+        return (x, z, root.Pivot);
+    }
 
     /// <summary><c>clipsFor(name)</c>: per kind the first file along <c>[...sets, '']</c>.</summary>
     public List<ClipSource> ClipsFor(IReadOnlyList<string>? sets)
@@ -504,7 +515,7 @@ public sealed class ClipLibrary
             return new ClipSource
             {
                 Kind = entry.Kind, Set = entry.Set, Url = entry.Url, Loop = entry.Loops, RootMotion = entry.RootMotion, KeepFacing = entry.KeepFacing,
-                HeightOffsets = entry.HeightOffsets,
+                HeightOffsets = entry.HeightOffsets, PairPivot = entry.PairPivot,
                 Anim = anim, Bones = bones, RestRotations = rots, RestPositions = poss,
                 RotationTracks = rot, PositionTracks = pos, HipsMedian = median, Length = anim.Length,
                 RotationKeys = rot.ToDictionary(kv => kv.Key, kv => KeysOf(anim, kv.Value, rotation: true)),

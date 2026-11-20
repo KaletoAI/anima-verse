@@ -1082,6 +1082,8 @@ to `Core/Figures/NpcWalk.cs` (vectors `npc_walk.json`, `npc_ground.json`), `Core
 
 ### Pair clips and bind anchoring (Task 32)
 
+**Real figure sizes** (owner decision 2026-11-20, scene-render `pairScale.ts`; core `Core/Figures/PairScale.cs`, vector `pair_scale.json`): a half's root path, measured on 1.70 m figures, is scaled by the figure's own `a = BodyHeight / 1.70` about the clip's contact pivot `C` (`pair_pivot_cm` of the clip row, absent/invalid = the clip frame's origin): `p' = C + a·(p − C)`, then the anchor transform. `a == 1` returns the root untouched (bit-identical to before). A pair/group half's renderer-only `shift_cm` scales with `a` (`Figure.HorizontalScale`); a solo shift and a furniture entry/exit stay absolute. Pair roots are keyed by kind AND set (`ClipIndex.PairRoots[kind][set]`, first file per (kind, set) wins, vector `clip_commit.json`) and resolved along the figure's set chain `[...Sets, '']`, the order `ClipsFor` picks the clip file by — before, the last set listed supplied the root of every set. `--check pairs` QS covers the set chain and the pivot-free 1.70 m case; non-1.70 m placement is covered by the vector only.
+
 A worldmap row's `interaction` (§ A8a) runs the browser's pair (npcs.ts `adoptInteraction` / `tickInteraction`,
 figures.ts `playPair`; core `Core/Figures/PairClip.cs`, vectors `pair_clip_phase.json`, `pair_clip_geometry.json`,
 `pair_height.json`, `pair_blend.json`):
@@ -1153,8 +1155,7 @@ cases, 1e-8 m), generated from the TypeScript by `scripts/export_hair_vectors.mj
 a chain tip kept out of the head capsule, 16 mm → ≤ 1 mm; today's skin following the payload rows).
 
 **Not ported yet:** the garment push shader (stage 3: cloth and card hair pushed out of the body capsules on the
-GPU — not started, no shader exists; skinned garments draw unpushed), the per-strand hair runtime (core ported, see
-"Per-strand hair" below), partner contact (another figure's capsules, the `channels` of the
+GPU — not started, no shader exists; skinned garments draw unpushed), partner contact (another figure's capsules, the `channels` of the
 payload), and the contact of the extension tips that are not hair (the browser keeps those outside too).
 **Accepted deviations:** the collision bind space is the skinned geometry space (Godot's bind poses; three's
 `bindMatrix` = identity, the mesh instance assumed to sit in the skeleton's frame); distances use `Math.Sqrt`
@@ -1181,7 +1182,7 @@ absent r bit for bit). **Not ported** (no native counterpart yet): the partner c
 and the depth scale parts of the rule. Own capsules only reach hair groups natively (the extension-tip contact is
 not ported, see Hair chains), so the own-capsule shaft contact runs for a hair group with rigid > 0.
 
-### Per-strand hair (stage 4: core only)
+### Per-strand hair (stage 4: core and runtime)
 
 The browser's per-strand hair (`packages/scene-render/src/hairSimMath.ts`, `hairSim.ts`, `strandBudget.ts`).
 **Ported, Godot-free** (`Core/Figures/StrandSim.cs`, `Core/Figures/StrandHairDriver.cs`):
@@ -1221,13 +1222,58 @@ simulation runs (measured: the C# lands within 5e-8 m after 4 s of walking; the 
 significant digits, so the bind rows sit at 1e-8). `Math.hypot` is ported exactly (`StrandMath.Hypot`, V8's
 Kahan sum); the capsule push inside the step is `Collision.PushOutOfCapsules` (`Math.Sqrt`, inside the tolerance).
 
-**Not ported / not wired (the feature is OFF — no Godot code uses these classes yet):** the runtime — downloading
-the record (`model.hair_strands {url, sha256}` and the ETag rule of `client3d/scripts/smoke_strand_record.mjs`),
-reading `_STRAND_CARD` / `_STRAND_U` from the GLB, the per-frame mesh upload with the cards skinned to Head,
-`withoutHairGroups` (dropping the hair chains of a strand figure), the budget's per-frame candidate list, the
-first-person exclusion and a headless cost bench. Reason: the core and its proof came first (the order of the
-assignment); the runtime was not reached. Also not ported: partners (other figures' capsules,
-`StrandHair.setPartners`) and the check-only metrics `scalpExposure` / the raster cameras.
+**The runtime (wired, ON wherever a full-tier model names `hair_strands`):**
+
+- the record: `ModelInfo.HairStrands` (api.ts: both `url` and `sha256` non-empty, else none),
+  `IWorldSource.GetHairStrandRecordAsync` (`Core/Api/StrandRecordApi.cs`, 401 announced like every call) and
+  `StrandRecordCache` (`Core/Figures/StrandRecordCache.cs`, one per manager, keyed by sha256): 404 = none for good,
+  any other failure, a network error or an `ETag` other than `"<sha256>"` = forgotten and asked again after 30 s
+  (`STRAND_RETRY_MS`), a record of another version = none;
+- the attributes: `StrandGlb.Read` (`Core/Figures/StrandGlb.cs`) reads every primitive carrying `_STRAND*` accessors
+  from the plain GLB bytes in the template's parse task, with Godot's kept-vertex order (`KeptVertices`: the
+  referenced vertices ascending, all of them for an unindexed primitive). The binding takes a skinned surface only
+  when its imported positions equal the primitive's kept positions BIT FOR BIT (`StrandGlb.Matches`; skinned
+  surfaces import uncompressed) — anything else refuses the strands and the hair keeps its chains;
+- the handle: `Figures/StrandHairModifier.cs` (a `SkeletonModifier3D` before the first-person one; `createStrandHair`):
+  head/follow binds by `BoneNames.Norm` over the hair skin, the record's capsules minus region `head` bound to
+  the BODY skins (`CollisionBinding`, `Collision.Version`), `StrandSim.Bind` on Godot's arrays with card/u in
+  Godot order. On: the MeshInstance wears an owned uncompressed `ArrayMesh` clone whose card vertices are skinned
+  to the Head bind alone (the scalp cap, card 0, keeps its skin); each frame that rebuilt, positions + octahedral
+  normals are encoded into the clone's own vertex-buffer bytes (`StrandUpload`, layout from
+  `RenderingServer.MeshSurfaceGetFormat*`) and sent with ONE `MeshSurfaceUpdateVertexRegion`. The upload runs in
+  the modifier pass, before the skeleton's skin upload of the same update, whose version bump makes renderer_rd
+  re-skin the instance from the new buffer. Off: the template mesh goes back;
+- the figure (`Figures/Figure.Strands.cs`): `PrepareStrandHair` (full tier only, refused once with a log line),
+  `SetStrandHair` (never in first person; `SetFirstPerson(true)` switches it off), and while it runs the secondary
+  motion gets `StrandRules.WithoutHairGroups` (revision `<rev>:strands`, no hair group);
+- the budget (`Figures/FigureManager.Strands.cs`, every `_Process` after the figures' tick): visible, not first
+  person, within 9 m and a ready handle → `StrandBudget.Candidates` → `Pick` (2 figures, 8 m / 9 m, 8 ms);
+  everyone else runs the chains. No camera: nobody.
+
+Checked by `tests/StrandRuntimeTests.cs` (the record cache through the cases [a]–[d] of
+`smoke_strand_record.mjs` plus version/network failure; the GLB reader with an unreferenced vertex and a strided
+POSITION; Godot's octahedral quantisation by hand values; the byte layout of the upload; `WithoutHairGroups`) and
+by `--check secondary` S1–S5 (`Check/HairStrandCheck.cs`, GLBs built in the check and imported by Godot):
+S1 the unreferenced vertex dropped and mapped around, card/u on the right Godot vertices, the head capsule left out,
+a record of other cards refused; S2 the clone, Head-only card skin, cap skin kept, the uploaded bytes equal to the
+vertex buffer Godot itself builds for the same arrays (byte for byte), off restores the template mesh; S3 90 frames
+at 60 Hz with horizontal cards falling and the head pitching: the positions decoded from the uploaded bytes equal a
+twin `StrandHairDriver` posed by hand from the rig within 9.3e-6 m (float bone matrices), normals within 6.6e-4
+(16-bit octahedral), the tips fell 79 mm; S4 five figures: the nearest two run strands with no hair chain, the
+third (`MaxFigures`), the one at 12 m and the first-person one keep their chains; S5 the bench line.
+**Cost (bench S5, headless, Debug build, this machine):** 400 cards / 13 610 vertices: sim + rebuild 11.7 ms, encode
++ upload call 0.6 ms per figure and frame (the GPU copy is the dummy renderer's no-op). With the 8 ms budget the
+first figure is always admitted, a second only while the sum fits, so a hair of that size runs on one figure at a
+time.
+
+**Unverified:** pixels — no display server here, so that the re-skin really picks up the new buffer in renderer_rd
+is read from the source, not seen. The clone's skinned AABB is the template's (Godot keeps per-bone AABBs from the
+surface data), so a long hair falling far outside the bind pose could be culled at a screen edge.
+**Not ported:** partners (other figures' capsules, `StrandHair.setPartners`), the check-only metrics
+`scalpExposure` / the raster cameras, and the push shader of the garment meshes (stage 3, above) — the strand hair
+mesh needs none (the browser excludes it from the push). **Deviation:** the record is fetched only when the
+template's GLB carries a strand primitive (the browser fetches it for every full-tier `hair_strands` model and
+refuses at binding).
 
 ### Clip memory and figure cost (Task 35, ruling P3-R11)
 

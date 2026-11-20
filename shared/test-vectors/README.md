@@ -225,7 +225,7 @@ remain local checks; they are not dropped or silently skipped.
 
 | File | Canonical source smoke | Functions |
 |---|---|---|
-| `clip_commit.json` | `client3d/scripts/smoke_clip_order.mjs` | `commitInListOrderValue` — `commitInListOrder` with plain clip records and the smoke's flag/rename/pair-root callbacks. The last argument selects a result path through objects/maps; `["hasKind", kind]` tests index membership. Missing results remain absent. |
+| `clip_commit.json` | `client3d/scripts/smoke_clip_order.mjs` | `commitInListOrderValue` — `commitInListOrder` with plain clip records and the smoke's flag/rename callbacks; the pair roots are `pairRootsOf` over the committed index (root = `"root:" + id`), keyed kind, then set (first file per (kind, set) wins). The last argument selects a result path through `{index, pairRoots}` (`["pairRoots", kind, set]`); `["hasKind", kind]` / `["hasPairRoot", kind]` test membership. `pairRootForValue(sources, results, kind, chain)` is `pairRootFor` along a set chain ending in `""`, null for none. Missing results remain absent. |
 | `clip_coverage.json` | `client3d/scripts/smoke_clip_coverage.mjs` | Missing kinds, alias/family matching, clip chains/resolution, procedural gait and animatable pool. Pose tables are explicit resolved tables. `animatablePool` returns names in the adapter; null for `animFamily` represents the original undefined argument. Local mutation, module-state and consumer-source probes remain in the smoke. |
 | `hips_tracks.json` | `client3d/scripts/smoke_rig_stand_ref.mjs` | `standingHipsRef`, `clipHipsDrop`, structural `hipsTrackMedian`, `mapHipsTrack`. Tracks are `{name, values}`; matrices are column-major. Mapper outputs typed arrays as ordinary arrays; `rootPath` is null when disabled. The non-finite input probe and real-rig checks stay local. |
 | `retarget.json` | `scripts/smoke_clip_retarget.mjs` | Hand cases [1]–[10] through the pose-data form of `restCorrections`, including heel/toe stance data, quaternion values, driven heads, deformation and counter-probes. The complete adapter contract is in the source smoke and `scripts/retargetVectorDispatch.mjs`; quaternions are `[x,y,z,w]`. Original scene-object/skinning/identity probes also remain. |
@@ -379,6 +379,12 @@ library stand-in answers the root only for that name. No production code
 was extracted or changed. The real-FBX/GLB integration checks in
 `smoke_clip_pair.mjs` remain, including track shape and the RED counter-probe;
 they still use real model files and sidecars, outside the standalone vectors.
+
+`pair_scale.json` (source `scripts/smoke_pair_scale.mjs`, 42 cases, replayed by that smoke and native
+`PairScaleVectorTests`): scene-render `pairScale.ts` — `pairFigureScale`, `pairPivotOf`, `scalePairRoot`,
+`scalePairShift`; `pairContactPoint(p, pivotCm, heightM)` = `scalePairRoot(p, C, a) + a·(C − p)` (the body-fixed contact
+after scaling, = C); `pairPlacedRoot(root, pivot, heightM, anchor)` = scale, then `x = ax + rx·cos + rz·sin`,
+`z = az − rx·sin + rz·cos` (npcs.ts `tickInteraction`'s order; the numbers of `smoke_pair_root_sets.mjs` [B]).
 
 Task 84 adds `pairBlend(from, target, elapsedS)` / native `PairBlend.Sample`:
 `u = clamp(elapsedS / .4, 0, 1)`, weight `u²(3−2u)`, position interpolated

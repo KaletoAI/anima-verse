@@ -51,7 +51,7 @@ public partial class Figure
         double yaw=PropActionMotion.Number(spec["access"]?["yaw"])*Math.PI/180;
         if(_turn is null) Yaw=TargetYaw=yaw;
         _lift=PropEntryLift=lift.Value;
-        HorizontalCorrection=HeightOffsetsOf?.Invoke(kind).Shift ?? default;
+        HorizontalCorrection=HeightOffsetsOf?.Invoke(kind).Shift ?? default; HorizontalScale=1;
         SecondaryFrozen=PropActionMotion.Number(spec["clock_rate"])<=0;
         UpdateFigure(0); return true;
     }
@@ -90,7 +90,7 @@ public partial class Figure
         } else if(Math.Abs(startLift)>1e-6) return false;
         _transition!.Time=time; player.SpeedScale=0; player.Seek(time,true);
         _lift=startLift*(1-fraction);
-        HorizontalCorrection=HeightOffsetsOf?.Invoke(kind).Shift ?? default;
+        HorizontalCorrection=HeightOffsetsOf?.Invoke(kind).Shift ?? default; HorizontalScale=1;
         SecondaryFrozen=false; UpdateFigure(0); return true;
     }
     /// <summary>Hand back the exit heading, discarding facing requests queued while the bridge owned the root.</summary>
