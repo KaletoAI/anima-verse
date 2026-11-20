@@ -16,6 +16,13 @@ The PROMPT (Task 6) is the shipped Jinja2 file ``shared/templates/image/garment_
 stays LLM-only). ``PROMPT_SHA`` (md5 of the file text) enters the cut atlas key. The render runs on the occasion
 ``CUT_OCCASION`` with the use case ``CUT_USE_CASE`` (empty style/negative/instruction: the prompt is the whole subject).
 
+The JOB (Task 8): ``start`` checks synchronously (media switch, a configured chain, a ready drape with islands, an
+item picture) and runs ``generate`` in a thread — ONE attempt per click, no retry, no auto-trigger from Build. A
+cut atlas is keyed by ``csig`` (the drape's islands sha, the item picture sha, ``PROMPT_SHA``,
+``cut_texture_post.POST_VERSION``), never by ``tsig``; its record lives under ``cut_dir`` (``templates/cut/``) with
+the state "ready" / "rejected" / "failed". Every render goes ``routing.run_routed`` -> ``run_on_backend`` ->
+``run_on_backend_channel``; the reference wording is the central handoff's job.
+
 Pixel frame: the payload stores image-frame pixels (x right, y down, row = (1 - v) * atlas_px), so nothing here
 re-derives the Blender UV flip.
 """
@@ -23,12 +30,20 @@ from __future__ import annotations
 
 import colorsys
 import hashlib
+import io
+import json
+import threading
 from pathlib import Path
 
 import numpy as np
 from jinja2 import StrictUndefined, Template
 from jinja2.sandbox import SandboxedEnvironment
 from PIL import Image, ImageDraw, ImageFont
+
+from app.core import cut_texture_post
+from app.core.log import get_logger
+
+logger = get_logger("garment_cut_texture")
 
 #: The image occasion and the style use case of a cut-texture render (``app/imagegen/occasions.py``,
 #: ``config._DEFAULT_IMAGE_USE_CASES``).
@@ -317,3 +332,357 @@ def render_pattern_sheet(islands: dict, size: int | None = None) -> Image.Image:
     draw.text((size / 2, size + footer_h / 2), pattern_sheet_footer(islands), fill=SHEET_TEXT,
               font=_font(int(footer_h * 0.6)), anchor="mm")
     return out
+
+
+# ---------------------------------------------------------------------------------------------------- the job (Task 8)
+#
+# One attempt per click (``start`` -> thread -> ``generate``), never retried, never started by Build. Files under
+# ``cut_dir`` per (item, csig): ``{item}_{csig}.json`` (the record), ``.template.png`` + ``.item.png`` (the two
+# references, written BEFORE the routed render: ``reference_images`` values are file paths), ``.raw.png`` (the model's
+# answer) and ``.atlas.png`` (the accepted atlas). The record is NOT a gallery image: the Improvements type
+# ``fallback_rerender`` lists only character/location gallery metas, so ``route_meta`` here is information only.
+
+#: The item image's long side below which it goes through the routed ``upscale`` occasion first (tiny 177-413 px item
+#: pictures gave the wrong logo in the user's test jobs).
+MIN_ITEM_SIDE = 1024
+#: The reason of a job the media master switch stopped.
+MEDIA_OFF = "Media generation is off — switch it on in /admin/settings → Media Generation"
+
+_running: dict[tuple[str, str], str] = {}
+_lock = threading.Lock()
+
+
+class NotReady(ValueError):
+    """The piece has no ready drape with pattern islands yet (a 400 for the route)."""
+
+
+def csig(islands_sha: str, item_sha: str) -> str:
+    """The cut atlas key: the drape's islands, the item image, the prompt file and the post-processing version —
+    NOT ``tsig`` (it carries the piece-only views' sha, which the cut atlas does not depend on)."""
+    raw = "|".join([str(islands_sha), str(item_sha), PROMPT_SHA, str(cut_texture_post.POST_VERSION)])
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def cut_dir(character_name: str) -> Path:
+    """``characters/<name>/garments/templates/cut`` (not created here)."""
+    from app.core.garment_store import garments_dir
+    return garments_dir(character_name) / "templates" / "cut"
+
+
+def _stem(character_name: str, item_id: str, sig: str) -> Path:
+    return cut_dir(character_name) / f"{item_id}_{sig}"
+
+
+def _file(stem: Path, suffix: str) -> Path:
+    return stem.with_name(stem.name + suffix)
+
+
+def current_drape(character_name: str, item_id: str) -> dict:
+    """The piece's drape on the character's current base model — the same rule as the parameter dialog
+    (``garment_template.piece_progress``): ``{state, reason, tsig, islands_path, islands_sha}``; ``islands_path``
+    None when the ready drape carries no pattern islands (a kind still on the grid UV)."""
+    from app.core import base_body, figure
+    from app.core import garment_template as gt
+    from app.models.character import get_character_profile
+    from app.models.inventory import get_item
+    profile = get_character_profile(character_name) or {}
+    item = get_item(item_id)
+    sets = figure.worn_sets(character_name, profile=profile)
+    worn = item_id in set(sets.pieces.values())
+    base = base_body.current_base(character_name, profile=profile)
+    drape = gt.drape_state(character_name, item_id, base_sha=base[1] if base else "",
+                           lower=gt.lower_layers(sets.own, item_id) if worn else [], item=item)
+    islands = (drape.get("record") or {}).get("islands") or {}
+    path = gt.templates_dir(character_name) / islands["file"] if islands.get("file") else None
+    return {"state": drape["state"], "reason": drape.get("reason") or "", "tsig": drape.get("tsig"),
+            "islands_path": path if path is not None and path.is_file() else None,
+            "islands_sha": str(islands.get("sha256") or "")}
+
+
+def _ready_drape(character_name: str, item_id: str) -> dict:
+    drape = current_drape(character_name, item_id)
+    if drape["state"] != "ready":
+        raise NotReady(drape.get("reason") or "The piece has no ready drape yet — build it first")
+    if drape.get("islands_path") is None or not drape.get("islands_sha"):
+        raise NotReady("The piece's drape has no pattern islands — re-drape it (tops only for now)")
+    return drape
+
+
+def _item_path(item_id: str) -> Path:
+    from app.models.inventory import get_item_image_path
+    path = get_item_image_path(item_id)
+    if not path or not Path(path).is_file():
+        raise NotReady(f"The item {item_id!r} has no picture")
+    return Path(path)
+
+
+def _item_sha(item_id: str) -> str:
+    return hashlib.sha256(_item_path(item_id).read_bytes()).hexdigest()
+
+
+def current_csig(character_name: str, item_id: str) -> str | None:
+    """The csig the piece would have now (ready drape with islands + item picture), else None."""
+    try:
+        drape = _ready_drape(character_name, item_id)
+        return csig(drape["islands_sha"], _item_sha(item_id))
+    except NotReady:
+        return None
+
+
+def _png(im: Image.Image) -> bytes:
+    buf = io.BytesIO()
+    im.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _flatten(im: Image.Image) -> Image.Image:
+    """RGB on white (item pictures are RGBA on a transparent background)."""
+    if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+        rgba = im.convert("RGBA")
+        out = Image.new("RGB", rgba.size, BACKGROUND)
+        out.paste(rgba.convert("RGB"), mask=rgba.getchannel("A"))
+        return out
+    return im.convert("RGB")
+
+
+def _lanczos_to(im: Image.Image, side: int) -> Image.Image:
+    scale = side / max(im.size)
+    return im.resize((max(1, round(im.width * scale)), max(1, round(im.height * scale))), Image.Resampling.LANCZOS)
+
+
+def item_source(item_id: str) -> tuple[bytes, dict]:
+    """The FULL-RES item picture flattened on white as PNG bytes, and ``{"item_px", "upscale"}``. Below
+    ``MIN_ITEM_SIDE`` it goes through the routed upscale first (as ``footwear_source._step_source``): load
+    (``BackendBusyError``) and the media switch are re-raised, any other failure falls back to Lanczos; a result still
+    below the minimum is topped up with Lanczos."""
+    from app.imagegen.base import BackendBusyError, MediaGenerationDisabled
+    path = _item_path(item_id)
+    with Image.open(path) as im:
+        im.load()
+        image = _flatten(im)
+    size = [image.width, image.height]
+    if max(image.size) >= MIN_ITEM_SIDE:
+        upscale: dict = {"status": "not_needed"}
+    else:
+        from app.imagegen.service import get_image_service
+        try:
+            result = get_image_service().upscale_image(_png(image), character_name="")
+        except (BackendBusyError, MediaGenerationDisabled):
+            raise
+        except Exception as e:  # noqa: BLE001 — Lanczos alone is the documented fallback
+            logger.warning("Cut texture %s: upscale failed, Lanczos only: %s", item_id, e)
+            upscale = {"status": "lanczos", "reason": str(e) or type(e).__name__}
+        else:
+            with Image.open(io.BytesIO(result["bytes"])) as up:
+                image = up.convert("RGB")
+            upscale = {k: v for k, v in result.items() if k not in ("bytes",)}
+        if max(image.size) < MIN_ITEM_SIDE:
+            image = _lanczos_to(image, MIN_ITEM_SIDE)
+            upscale["topped_up_to"] = [image.width, image.height]
+    return _png(image), {"item_px": size, "upscale": upscale}
+
+
+def piece_name(item_id: str) -> str:
+    """The English name of the piece the prompt speaks of, from the template kind and its sleeve length."""
+    from app.core import garment_template as gt
+    from app.models.inventory import get_item
+    params = gt.params_of(get_item(item_id)) or {}
+    kind = str(params.get("kind") or "garment")
+    if kind == "top":
+        return {"none": "sleeveless top", "cap": "T-shirt", "short": "T-shirt", "elbow": "elbow-sleeve shirt",
+                "long": "long-sleeve shirt"}.get(str(params.get("sleeves") or "short"), "top")
+    return kind.replace("_", " ")
+
+
+def _item_matte():
+    """The matte function the colour match cuts the item fabric with (BiRefNet; a smoke returns None = key only)."""
+    from app.core import garment_matte
+    return garment_matte.birefnet_matte
+
+
+def _upsampler_on(b) -> bool:
+    """A P-H3 backend whose entry does not switch the prompt upsampler off (a warning, not a block)."""
+    from app.core.prompt_adapters import uses_picture_references
+    if not uses_picture_references(str(getattr(b, "model", "") or "")):
+        return False
+    return (getattr(b, "extra_params", None) or {}).get("use_prompt_upsampler") is not False
+
+
+def _write_record(path: Path, record: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(json.dumps(record, indent=1), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _write_bytes(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_bytes(data)
+    tmp.replace(path)
+
+
+def read_record(character_name: str, item_id: str, sig: str) -> dict:
+    try:
+        data = json.loads(_file(_stem(character_name, item_id, sig), ".json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _failure_reason(e: BaseException) -> str:
+    from app.imagegen.base import BackendBusyError, MediaGenerationDisabled
+    from app.imagegen.routing import NoRouteError
+    if isinstance(e, MediaGenerationDisabled):
+        return MEDIA_OFF
+    if isinstance(e, NoRouteError):
+        return str(e)
+    if isinstance(e, BackendBusyError):
+        return f"The backend is busy — try again later ({e})"
+    return str(e) or type(e).__name__
+
+
+def _routed_render(item_id: str, prompt: str, template_png: Path, item_png: Path, seed: int):
+    """ONE routed img2img render of the template + item -> ``(answer bytes, backend, route)``."""
+    from app.core.prompt_compose import compose
+    from app.imagegen import routing as _routing
+    from app.imagegen.service import get_image_service
+    svc = get_image_service()
+
+    def _render(b):
+        composed = compose(use_case=CUT_USE_CASE, subject=prompt, backend=b)
+        for warning in composed.warnings:
+            logger.info("Prompt composer (%s): %s", CUT_USE_CASE, warning)
+        params = {"seed": seed,
+                  "reference_images": {"input_reference_image_1": str(template_png),
+                                       "input_reference_image_2": str(item_png)}}
+        log_meta = {"agent_name": f"Cut texture {item_id}", "original_prompt": prompt, "auto_enhance": False,
+                    "compose": composed.meta}
+
+        def _op(bb):
+            # through the backend's GPU channel: never two generations on one backend at once
+            return svc.run_on_backend_channel(
+                bb, lambda: bb.generate(composed.prompt, composed.negative, params, log_meta=log_meta),
+                task_type="garment_cut_texture", agent_name="system", label=f"Cut texture: {item_id}")
+        return svc.run_on_backend(b, op=_op)
+
+    (images, used), route = _routing.run_routed(CUT_OCCASION, _render, has_ref=True, pool=svc.pool)
+    if not isinstance(images, (list, tuple)) or not images or not isinstance(images[0], (bytes, bytearray)):
+        raise RuntimeError("the cut-texture render delivered no image")
+    return bytes(images[0]), used, route
+
+
+def generate(character_name: str, item_id: str) -> dict:
+    """ONE attempt: template + item picture -> routed render -> post-processing -> the record (``state`` "ready",
+    "rejected" or "failed"). Raises ``NotReady`` before anything is written when the piece has no ready drape with
+    islands or no picture; every later failure is recorded as "failed" and returned."""
+    from app.imagegen.routing import route_meta
+    drape = _ready_drape(character_name, item_id)
+    item_sha = _item_sha(item_id)
+    sig = csig(drape["islands_sha"], item_sha)
+    islands = json.loads(Path(drape["islands_path"]).read_text(encoding="utf-8"))
+    px_per_cm = float(islands.get("px_per_cm") or 0.0)
+    stem = _stem(character_name, item_id, sig)
+    raw_png, atlas_png = _file(stem, ".raw.png"), _file(stem, ".atlas.png")
+    for stale in (raw_png, atlas_png):
+        stale.unlink(missing_ok=True)       # this attempt's record never sits next to another attempt's files
+    record: dict = {"csig": sig, "islands_sha": drape["islands_sha"], "tsig": drape.get("tsig"), "state": "failed",
+                    "reason": "", "metrics": {}, "routing": {}, "px_per_cm": px_per_cm, "item_px": None,
+                    "upscale": None, "prompt_sha": PROMPT_SHA, "item_sha": item_sha}
+    try:
+        size = int(islands.get("atlas_px") or 2048)
+        template_png, item_png = _file(stem, ".template.png"), _file(stem, ".item.png")
+        _write_bytes(template_png, _png(render_template(islands, size)))
+        data, info = item_source(item_id)
+        record.update(info)
+        _write_bytes(item_png, data)
+        prompt = render_prompt(piece=piece_name(item_id), pieces=prompt_pieces(islands))
+        answer, used, route = _routed_render(item_id, prompt, template_png, item_png, int(sig[:8], 16) % 2 ** 31)
+        record.update({"backend": getattr(used, "name", ""), "routing": route_meta(route),
+                       "upsampler_on": _upsampler_on(used)})
+        _write_bytes(raw_png, answer)
+        record.update(_post(answer, islands, size, px_per_cm, item_id))
+    except Exception as e:  # noqa: BLE001 — a job's failure is the record, shown in the dialog
+        logger.warning("Cut texture %s %s failed: %s", character_name, item_id, e)
+        record.update({"state": "failed", "reason": _failure_reason(e)})
+        atlas = None
+    else:
+        atlas = record.pop("_atlas", None)
+    from app.core.timeutils import utc_now_iso
+    record["created_at"] = utc_now_iso()
+    if record["state"] == "ready" and atlas is not None:
+        _write_bytes(atlas_png, _png(Image.fromarray(atlas, "RGB")))
+    _write_record(_file(stem, ".json"), record)
+    if record["state"] == "ready":
+        from app.core import figure
+        figure.invalidate()
+    return record
+
+
+def _post(answer: bytes, islands: dict, size: int, px_per_cm: float, item_id: str) -> dict:
+    """Task 7 on the answer: register, gate, cut + bleed, colour match, seam continuity. ``{"state", "reason",
+    "metrics", "_atlas"}`` (``_atlas`` the uint8 image on ``ready``)."""
+    post = cut_texture_post
+    labels = rasterise_islands(islands, size)
+    mask = labels > 0
+    with Image.open(io.BytesIO(answer)) as im:
+        im.load()
+        reg, reg_info = post.resample_register(im, mask)
+    ok, met, reason = post.gate(reg, mask, labels, px_per_cm)
+    metrics = {"iou": met["iou"], "coverage": met["coverage"], "island_coverage": met["island_coverage"],
+               "spill": met["spill"], "registration": reg_info, "islands": met["islands"]}
+    if not ok:
+        metrics.update({"de_before": None, "de_after": None, "clamped": None, "seam_de": None})
+        return {"state": "rejected", "reason": reason, "metrics": metrics}
+    cut = post.cut_and_bleed(reg, mask, max(1, int(round(post.BLEED_CM * px_per_cm))))
+    with Image.open(_item_path(item_id)) as it:
+        item_rgba = np.asarray(it.convert("RGBA"))
+    grown = ~np.all(cut == 255, axis=-1) | mask
+    matched, cm = post.colour_match(cut, grown, item_rgba, matte=_item_matte())
+    seam = post.seam_continuity(matched, islands.get("seams") or [])
+    metrics.update({"de_before": cm.get("de_before"), "de_after": cm.get("de_after"),
+                    "clamped": cm.get("clamped"), "seam_de": seam.get("median"), "colour": cm, "seams": seam})
+    return {"state": "ready", "reason": "", "metrics": metrics, "_atlas": matched}
+
+
+def start(character_name: str, item_id: str, *, run=None) -> bool:
+    """Check SYNCHRONOUSLY (so the HTTP answer carries the reason) and start ``generate`` in a thread; False when
+    this piece's job already runs. Raises ``MediaGenerationDisabled`` (media off), ``NoRouteError`` (empty chain)
+    or ``NotReady`` (no ready drape with islands, no picture) before any thread or file exists."""
+    from app.imagegen import routing as _routing
+    from app.imagegen.base import MediaGenerationDisabled, media_generation_enabled
+    if not media_generation_enabled():
+        raise MediaGenerationDisabled(MEDIA_OFF)
+    if not _routing.chain_for(CUT_OCCASION):
+        raise _routing.NoRouteError(CUT_OCCASION, [])
+    _ready_drape(character_name, item_id)
+    _item_path(item_id)
+    key = (character_name, item_id)
+    with _lock:
+        if _running.get(key) == "running":
+            return False
+        _running[key] = "running"
+    fn = run or generate
+
+    def work() -> None:
+        outcome = "done"
+        try:
+            fn(character_name, item_id)
+        except Exception as e:  # noqa: BLE001 — shown in the dialog
+            logger.warning("Cut texture %s %s: %s", character_name, item_id, e)
+            outcome = str(e) or type(e).__name__
+        with _lock:
+            _running[key] = outcome
+
+    threading.Thread(target=work, name=f"cut-texture-{item_id}", daemon=True).start()
+    return True
+
+
+def status(character_name: str, item_id: str) -> dict:
+    """``{running, error, csig, record}``: ``csig`` the piece's current key (None without a ready drape with
+    islands), ``record`` that key's record ({} when none was made yet)."""
+    with _lock:
+        state = _running.get((character_name, item_id), "")
+    sig = current_csig(character_name, item_id)
+    return {"running": state == "running", "error": state if state not in ("", "running", "done") else "",
+            "csig": sig, "record": read_record(character_name, item_id, sig) if sig else {}}

@@ -45,6 +45,34 @@ hand below.
     prompt is the rendered text byte-identical, the negative is "" and there are no warnings (the prompt opens no
     sentence or clause with "no"/"without" — the negation guard moves nothing — and has no mid-sentence "no").
     Same for image_family "keywords".
+
+Task 8 — the job (``generate`` / ``start`` / ``status`` / ``item_source``), stubbed: ``current_drape`` returns a ready
+drape whose islands are the [2] payload; ``routing.run_routed`` calls ``render`` once with a fake two-slot P-H3 backend
+(or raises); ``get_image_service`` is a counter stub (upscale x4, ``run_on_backend`` / ``run_on_backend_channel`` call
+straight through); ``inventory.get_item_image_path`` serves fixture files; the item matte is key-only (no BiRefNet).
+[8.1] The fake backend answers the template it was given with every island pixel set to (150, 40, 40) (the item's
+    fabric colour, a 1200 x 1100 RGBA picture with a (150, 40, 40) block on transparent): ``state`` "ready", IoU >= 0.98
+    (the answer IS the mask, so the registration finds the identity map: IoU 1.0), ``.atlas.png`` exists at 2048 x
+    2048; colour match moves nothing (atlas mean = fabric mean -> dE 0, the centre of the front island stays
+    (150, 40, 40) +-2). ``csig`` = md5("|".join([islands sha, item sha, PROMPT_SHA, str(cut_texture_post.POST_VERSION)]))[:12]; the
+    two references are file PATHS (str) in the order template, item; ``run_routed`` got the occasion, has_ref=True
+    and the service's pool; the model is P-H3 without ``use_prompt_upsampler: false`` -> ``upsampler_on`` True;
+    ``figure.invalidate`` ran once; the record keeps ``routing`` = route_meta (occasion garment_cut_texture,
+    position 1).
+[8.2] A white answer: ``rejected``, reason "coverage 0.00 < 0.97"; the raw answer is kept, no atlas — the atlas of
+    [8.1] (same csig) is gone, so a record never sits next to an atlas it did not make.
+[8.3] ``run_routed`` raises NoRouteError("garment_cut_texture", []) (its text points to /admin/settings -> Media
+    Generation -> Routing): ``failed``, the reason contains "Routing"; no ``.raw.png`` / ``.atlas.png``, the record
+    and the two input PNGs (template, item) exist. ``start`` with an empty ``chain_for`` raises NoRouteError before
+    any thread or file (cut dir has no file of that item, no running entry); with media off it raises
+    MediaGenerationDisabled; without a ready drape (or one without islands) it raises ``NotReady``.
+[8.4] ``run_routed`` raises MediaGenerationDisabled: ``failed``, the reason contains "Media generation is off".
+[8.5] ``socket.create_connection`` is replaced for the whole smoke and counts every attempt: 0 at the end.
+[8.6] ``item_source``: a 300 x 256 item -> the (stubbed) upscaler runs once (status "applied", 1200 x 1024 out);
+    1200 x 1100 -> not called ("not_needed", size kept); an upscaler that fails -> Lanczos to a 1024 long side
+    ("lanczos"); BackendBusyError / MediaGenerationDisabled are re-raised.
+[8.7] ``start`` runs ``generate`` in a thread: with a white answer the status ends not running, the record is
+    "rejected", and a second ``start`` while running answers False.
 """
 import os
 import re
@@ -61,6 +89,19 @@ sys.path.insert(1, str(ROOT / "app" / "blender" / "scripts"))
 _tmp = tempfile.mkdtemp(prefix="smoke_cut_tex_")
 os.environ.setdefault("STORAGE_DIR", os.path.join(_tmp, "world"))
 os.environ.setdefault("INSTANCE_DIR", os.path.join(_tmp, "instance"))
+
+# [8.5] the outbound guard: any network connection attempt during the whole smoke fails (and is counted)
+import socket  # noqa: E402
+
+OUTBOUND = []
+
+
+def _no_outbound(*a, **k):
+    OUTBOUND.append(a[:1])
+    raise OSError("smoke_garment_cut_texture: outbound connection refused")
+
+
+socket.create_connection = _no_outbound
 
 import uv_pattern as up  # noqa: E402
 from app.core import garment_cut_texture as gct  # noqa: E402
@@ -276,6 +317,323 @@ for fam in ("keywords", "natural"):
     check(f"[6] compose byte-identical ({fam})", c.prompt == prompt, c.prompt)
     check(f"[6] compose negative empty, no warnings ({fam})", c.negative == "" and c.warnings == [],
           (c.negative, c.warnings))
+
+# ---------------------------------------------------------------------------------------------------- Task 8: the job
+import io  # noqa: E402
+import json  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+from unittest.mock import patch  # noqa: E402
+
+from PIL import Image  # noqa: E402
+
+from app.core import paths  # noqa: E402
+
+_world = Path(_tmp) / "world"
+_inst = Path(_tmp) / "instance"
+paths.init(_world)
+paths.init_instance(_inst)
+(_world / "config.json").write_text("{}", encoding="utf-8")
+(_inst / "config.json").write_text("{}", encoding="utf-8")
+_cfg.load(_world / "config.json", _inst / "config.json")
+
+from app.imagegen.base import BackendBusyError, MediaGenerationDisabled  # noqa: E402
+from app.imagegen.routing import NoRouteError, Route  # noqa: E402
+from app.models.character import get_character_dir  # noqa: E402
+
+CHAR = "demo"
+get_character_dir(CHAR, create=True)
+_items = Path(_tmp) / "items"
+_items.mkdir()
+
+
+def _png(im):
+    buf = io.BytesIO()
+    im.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _item_picture(w, h):
+    im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    im.paste((150, 40, 40, 255), (w // 6, h // 6, w - w // 6, h - h // 6))
+    return im
+
+
+ITEM_FILES = {}
+for _iid, (_w, _h) in {"shirt": (1200, 1100), "shirt3": (1200, 1100), "shirt4": (1200, 1100),
+                       "shirt5": (1200, 1100), "tiny": (300, 256)}.items():
+    ITEM_FILES[_iid] = _items / f"{_iid}.png"
+    _item_picture(_w, _h).save(ITEM_FILES[_iid])
+
+_islands_file = Path(_tmp) / "drape.islands.json"
+_islands_file.write_text(json.dumps(pl2), encoding="utf-8")
+ISLANDS_SHA = hashlib.sha256(_islands_file.read_bytes()).hexdigest()
+DRAPES = {iid: {"state": "ready", "reason": "", "tsig": "tsig0", "islands_path": _islands_file,
+                "islands_sha": ISLANDS_SHA} for iid in ITEM_FILES}
+
+
+def fake_current_drape(character_name, item_id):
+    return DRAPES.get(item_id) or {"state": "missing", "reason": "Not draped yet", "tsig": None,
+                                   "islands_path": None, "islands_sha": ""}
+
+
+class CutBackend:
+    name = "FakeCut"
+    api_type = "fake"
+    image_family = "natural"
+    model = "P-H3-Image"
+    ref_slot_count = 2
+    max_side = 2048
+    extra_params = {}
+
+    def __init__(self):
+        self.calls = []
+        self.answer = None
+
+    def generate(self, prompt, negative, params, log_meta=None):
+        self.calls.append({"prompt": prompt, "negative": negative, "params": params})
+        return [self.answer(params)]
+
+
+class Service:
+    def __init__(self):
+        self.pool = object()
+        self.upscales = 0
+        self.upscale_fail = None
+
+    def upscale_image(self, image_bytes, *, character_name="", **_kw):
+        self.upscales += 1
+        if self.upscale_fail is not None:
+            raise self.upscale_fail
+        with Image.open(io.BytesIO(image_bytes)) as im:
+            big = im.convert("RGB").resize((im.width * 4, im.height * 4), Image.NEAREST)
+        return {"bytes": _png(big), "backend": "FakeUp", "scale": 4, "status": "applied",
+                "in": [big.width // 4, big.height // 4], "out": [big.width, big.height],
+                "routing": {"occasion": "upscale", "position": 1, "spec": "FakeUp*"}}
+
+    def run_on_backend(self, backend, op, character_name=""):
+        return op(backend), backend
+
+    def run_on_backend_channel(self, backend, gen_fn, **_kw):
+        return gen_fn()
+
+
+def answer_filled(params):
+    with Image.open(params["reference_images"]["input_reference_image_1"]) as t:
+        arr = np.asarray(t.convert("RGB")).copy()
+    m = ~rgb_eq(arr, gct.BACKGROUND)
+    arr[:] = 255
+    arr[m] = (150, 40, 40)
+    return _png(Image.fromarray(arr, "RGB"))
+
+
+def answer_white(params):
+    return _png(Image.new("RGB", (2048, 2048), (255, 255, 255)))
+
+
+backend = CutBackend()
+svc = Service()
+ROUTED = []
+RAISE = {"exc": None}
+INVALIDATED = []
+CHAIN = {"rows": [("FakeCut*", "rule", 1)]}
+MEDIA = {"on": True}
+
+
+def fake_run_routed(occasion, render, *, character="", has_ref=False, pool=None, **_kw):
+    ROUTED.append({"occasion": occasion, "has_ref": has_ref, "pool_is_svc": pool is svc.pool})
+    if RAISE["exc"] is not None:
+        raise RAISE["exc"]
+    result = render(backend)
+    return result, Route(occasion=occasion, backend=backend, position=1, spec="FakeCut*",
+                         intended_spec="FakeCut*", first_position=1)
+
+
+def files_of(item_id):
+    d = gct.cut_dir(CHAR)
+    return sorted(p.name for p in d.glob(f"{item_id}_*")) if d.is_dir() else []
+
+
+SLEEVES = {"shirt": "short", "long": "long"}
+
+
+def fake_get_item(iid):
+    return {"id": iid, "outfit_piece": {"template": {"params": {"kind": "top",
+                                                                 "sleeves": SLEEVES.get(iid, "short")}}}}
+
+
+with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILES.get(iid, ""))), \
+        patch("app.models.inventory.get_item", fake_get_item), \
+        patch("app.imagegen.service.get_image_service", lambda: svc), \
+        patch("app.imagegen.routing.run_routed", fake_run_routed), \
+        patch("app.imagegen.routing.chain_for", lambda occasion, *a, **k: list(CHAIN["rows"])), \
+        patch("app.imagegen.base.media_generation_enabled", lambda: MEDIA["on"]), \
+        patch("app.core.figure.invalidate", lambda: INVALIDATED.append(1)), \
+        patch.object(gct, "current_drape", fake_current_drape), \
+        patch.object(gct, "_item_matte", lambda: None):
+
+    item_sha = hashlib.sha256(ITEM_FILES["shirt"].read_bytes()).hexdigest()
+    want_csig = hashlib.md5("|".join([ISLANDS_SHA, item_sha, gct.PROMPT_SHA,
+                                      str(gct.cut_texture_post.POST_VERSION)]).encode()).hexdigest()[:12]
+    check("[8.1] csig formula", gct.csig(ISLANDS_SHA, item_sha) == want_csig, gct.csig(ISLANDS_SHA, item_sha))
+    check("[8.1] current_csig", gct.current_csig(CHAR, "shirt") == want_csig, gct.current_csig(CHAR, "shirt"))
+
+    # [8.1] a filled template -> ready
+    backend.answer = answer_filled
+    t0 = time.time()
+    rec = gct.generate(CHAR, "shirt")
+    print(f"     (generate took {time.time() - t0:.1f} s)")
+    check("[8.1] ready", rec.get("state") == "ready", (rec.get("state"), rec.get("reason")))
+    check("[8.1] IoU >= 0.98", (rec.get("metrics") or {}).get("iou", 0) >= 0.98, rec.get("metrics"))
+    stem = gct.cut_dir(CHAR) / f"shirt_{want_csig}"
+    atlas = Path(f"{stem}.atlas.png")
+    check("[8.1] atlas exists", atlas.is_file(), files_of("shirt"))
+    if atlas.is_file():
+        with Image.open(atlas) as a_im:
+            a_arr = np.asarray(a_im.convert("RGB"))
+            check("[8.1] atlas 2048 x 2048", a_im.size == (2048, 2048), a_im.size)
+        front = next(i for i in pl2["islands"] if i["name"] == "front")
+        x0, y0, x1, y1 = front["bbox_px"]
+        cpx = a_arr[int((y0 + y1) / 2), int((x0 + x1) / 2)].astype(int)
+        check("[8.1] colour kept (150, 40, 40) +-2", np.abs(cpx - [150, 40, 40]).max() <= 2, cpx.tolist())
+    check("[8.1] record on disk", json.loads(Path(f"{stem}.json").read_text()).get("state") == "ready")
+    check("[8.1] record fields", rec.get("csig") == want_csig and rec.get("islands_sha") == ISLANDS_SHA
+          and rec.get("tsig") == "tsig0" and rec.get("prompt_sha") == gct.PROMPT_SHA
+          and rec.get("item_px") == [1200, 1100] and (rec.get("upscale") or {}).get("status") == "not_needed"
+          and abs(rec.get("px_per_cm", 0) - 19.59) < 1e-6, rec)
+    check("[8.1] metrics keys", set(rec.get("metrics") or {}) >= {"iou", "coverage", "island_coverage", "spill",
+                                                                 "de_before", "de_after", "clamped", "seam_de"},
+          sorted(rec.get("metrics") or {}))
+    check("[8.1] routing = route_meta", (rec.get("routing") or {}).get("routing")
+          == {"occasion": "garment_cut_texture", "position": 1, "spec": "FakeCut*"}, rec.get("routing"))
+    check("[8.1] run_routed occasion / has_ref / pool", ROUTED[-1] == {"occasion": "garment_cut_texture",
+                                                                       "has_ref": True, "pool_is_svc": True}, ROUTED)
+    refs = backend.calls[-1]["params"].get("reference_images") or {}
+    check("[8.1] references: template then item, as str paths",
+          list(refs) == ["input_reference_image_1", "input_reference_image_2"]
+          and all(isinstance(v, str) for v in refs.values())
+          and refs.get("input_reference_image_1") == f"{stem}.template.png"
+          and refs.get("input_reference_image_2") == f"{stem}.item.png", refs)
+    check("[8.1] no image_use_case in params", "image_use_case" not in backend.calls[-1]["params"])
+    check("[8.1] the prompt is the rendered file, ordinal wording kept for the handoff",
+          "the first image" in backend.calls[-1]["prompt"] and backend.calls[-1]["negative"] == "",
+          backend.calls[-1]["prompt"][:80])
+    check("[8.1] piece name from kind + sleeves", backend.calls[-1]["prompt"].count("T-shirt") == 2
+          and gct.piece_name("long") == "long-sleeve shirt", gct.piece_name("long"))
+    check("[8.1] upsampler_on noted", rec.get("upsampler_on") is True, rec.get("upsampler_on"))
+    check("[8.1] figure invalidated once", len(INVALIDATED) == 1, len(INVALIDATED))
+    st = gct.status(CHAR, "shirt")
+    check("[8.1] status: the current record", st.get("csig") == want_csig and st.get("running") is False
+          and (st.get("record") or {}).get("state") == "ready", st)
+
+    # [8.2] white -> rejected, the old atlas of this csig gone
+    backend.answer = answer_white
+    rec2 = gct.generate(CHAR, "shirt")
+    check("[8.2] rejected", rec2.get("state") == "rejected", rec2.get("state"))
+    check("[8.2] reason", rec2.get("reason") == "coverage 0.00 < 0.97", rec2.get("reason"))
+    check("[8.2] raw kept, no atlas", Path(f"{stem}.raw.png").is_file() and not atlas.is_file(), files_of("shirt"))
+    check("[8.2] no invalidate on a rejection", len(INVALIDATED) == 1, len(INVALIDATED))
+
+    # [8.3] NoRouteError -> failed
+    RAISE["exc"] = NoRouteError("garment_cut_texture", [])
+    rec3 = gct.generate(CHAR, "shirt3")
+    c3 = gct.csig(ISLANDS_SHA, hashlib.sha256(ITEM_FILES["shirt3"].read_bytes()).hexdigest())
+    check("[8.3] failed, reason names Routing", rec3.get("state") == "failed" and "Routing" in rec3.get("reason", ""),
+          (rec3.get("state"), rec3.get("reason")))
+    check("[8.3] record + inputs, no raw / atlas", files_of("shirt3") == sorted(
+        [f"shirt3_{c3}.json", f"shirt3_{c3}.item.png", f"shirt3_{c3}.template.png"]), files_of("shirt3"))
+
+    # [8.4] media off inside the job -> failed
+    RAISE["exc"] = MediaGenerationDisabled("Media generation is disabled for this world")
+    rec4 = gct.generate(CHAR, "shirt3")
+    check("[8.4] failed, media off", rec4.get("state") == "failed"
+          and "Media generation is off" in rec4.get("reason", ""), (rec4.get("state"), rec4.get("reason")))
+    RAISE["exc"] = None
+
+    # [8.3] start(): synchronous refusals, nothing started, nothing written
+    CHAIN["rows"] = []
+    try:
+        gct.start(CHAR, "shirt4")
+        check("[8.3] start with an empty chain raises", False, "no exception")
+    except NoRouteError as e:
+        check("[8.3] start with an empty chain raises NoRouteError (Routing)", "Routing" in str(e), e)
+    check("[8.3] nothing written, nothing running", files_of("shirt4") == []
+          and (CHAR, "shirt4") not in gct._running, (files_of("shirt4"), dict(gct._running)))
+    CHAIN["rows"] = [("FakeCut*", "rule", 1)]
+    MEDIA["on"] = False
+    try:
+        gct.start(CHAR, "shirt4")
+        check("[8.3] start with media off raises", False, "no exception")
+    except MediaGenerationDisabled as e:
+        check("[8.3] start with media off raises MediaGenerationDisabled", "Media generation is off" in str(e), e)
+    MEDIA["on"] = True
+    DRAPES["shirt4"] = {"state": "missing", "reason": "Not draped yet", "tsig": "t", "islands_path": None,
+                        "islands_sha": ""}
+    try:
+        gct.start(CHAR, "shirt4")
+        check("[8.3] start without a ready drape raises", False, "no exception")
+    except gct.NotReady as e:
+        check("[8.3] start without a ready drape raises NotReady", True, e)
+    DRAPES["shirt4"] = {"state": "ready", "reason": "", "tsig": "t", "islands_path": None, "islands_sha": ""}
+    try:
+        gct.start(CHAR, "shirt4")
+        check("[8.3] start with a drape without islands raises", False, "no exception")
+    except gct.NotReady as e:
+        check("[8.3] start with a drape without islands raises NotReady", True, e)
+    check("[8.3] still nothing written", files_of("shirt4") == [], files_of("shirt4"))
+
+    # [8.7] the thread
+    backend.answer = answer_white
+    gate_evt = threading.Event()
+    real_answer = backend.answer
+
+    def slow_white(params):
+        gate_evt.wait(10)
+        return real_answer(params)
+
+    backend.answer = slow_white
+    started = gct.start(CHAR, "shirt5")
+    again = gct.start(CHAR, "shirt5")
+    check("[8.7] start -> True, a second start while running -> False", started is True and again is False,
+          (started, again))
+    check("[8.7] status running", gct.status(CHAR, "shirt5").get("running") is True)
+    gate_evt.set()
+    for _ in range(600):
+        if not gct.status(CHAR, "shirt5").get("running"):
+            break
+        time.sleep(0.05)
+    st5 = gct.status(CHAR, "shirt5")
+    check("[8.7] thread done, record rejected", st5.get("running") is False
+          and (st5.get("record") or {}).get("state") == "rejected", st5)
+
+    # [8.6] item_source
+    n0 = svc.upscales
+    data, info = gct.item_source("tiny")
+    with Image.open(io.BytesIO(data)) as im:
+        size_t = im.size
+    check("[8.6] 300 x 256 -> upscaled once", svc.upscales == n0 + 1 and (info.get("upscale") or {}).get("status")
+          == "applied" and size_t == (1200, 1024), (svc.upscales - n0, info, size_t))
+    data, info = gct.item_source("shirt")
+    with Image.open(io.BytesIO(data)) as im:
+        size_s = im.size
+    check("[8.6] 1200 x 1100 -> not upscaled", svc.upscales == n0 + 1 and (info.get("upscale") or {}).get("status")
+          == "not_needed" and size_s == (1200, 1100), (svc.upscales - n0, info, size_s))
+    svc.upscale_fail = RuntimeError("upscaler broken")
+    data, info = gct.item_source("tiny")
+    with Image.open(io.BytesIO(data)) as im:
+        size_l = im.size
+    check("[8.6] failed upscale -> Lanczos to 1024", (info.get("upscale") or {}).get("status") == "lanczos"
+          and max(size_l) == 1024, (info, size_l))
+    for exc in (BackendBusyError("busy"), MediaGenerationDisabled("off")):
+        svc.upscale_fail = exc
+        try:
+            gct.item_source("tiny")
+            check(f"[8.6] {type(exc).__name__} re-raised", False, "swallowed")
+        except type(exc):
+            check(f"[8.6] {type(exc).__name__} re-raised", True)
+    svc.upscale_fail = None
+
+check("[8.5] no outbound connection attempt", OUTBOUND == [], OUTBOUND)
 
 print(f"\n{len(FAILS)} FAILED: {FAILS}" if FAILS else "\nALL OK")
 sys.exit(1 if FAILS else 0)
