@@ -67,7 +67,7 @@ Every other recognised garment group is stale; a file whose name the store
 does not recognise is never judged. When the keep set cannot be computed, no
 garment group is judged at all.
 
-**Painted bodies** (``base_body`` texture store, plan
+**Texture bodies** (``base_body`` texture store, plan
 2026-11-10-texture-body-reuse Task 1) live in ``model3d/texture/`` and
 ``model_refs/texture/[drafts/]`` under a texture signature (``"tex"`` + 12
 hex); the report names such a group ``texture:<tsig>``. **Outfit bodies**
@@ -392,7 +392,7 @@ def _texture_dirs(character_name: str) -> List[Path]:
 
 
 def _texture_files(character_name: str) -> Dict[str, List[Path]]:
-    """``texture:<tsig>`` → its files in the texture store (painted body +
+    """``texture:<tsig>`` → its files in the texture store (texture body +
     sidecar, dressed views, drafts); a name that is no texture signature is
     never judged."""
     from app.core.base_body import TEXTURE_SIG_RE

@@ -3,9 +3,10 @@
 ``docs/superpowers/plans/2026-11-12-unified-worn-pieces.md`` Task 4; spec
 ``docs/superpowers/specs/2026-11-12-unified-worn-pieces-design.md``,
 builder-check ruling 1): the worn sets per mode, the SHAPE key (the in-body
-set including in-body hair) and the TEXTURE key (the painted set). The
-mesh-input token ``model_refs.mesh_items_token`` stays mode-blind (Ruling
-4a): only own-mesh pieces change it, as at BASE.
+set including in-body hair) and the TEXTURE key (since A224 the plain body's
+skin key, "" on a shape: nothing is painted). The mesh-input token
+``model_refs.mesh_items_token`` changes only with own-mesh pieces (Ruling 4a),
+as at BASE.
 
 Usage:
     ./.venv/bin/python scripts/smoke_figure_keys.py
@@ -19,7 +20,7 @@ is on the pipeline); ``base_body.dress_text`` -> ``"wear:" + "+".join(sorted
 visible ids)`` where the visible ids are the worn piece ids minus
 ``mesh_items`` (``""`` when none is left); ``base_body.side_views_dressed``
 -> False; ``base_body.dressed_views`` -> ("front", "back"). The REAL
-``texture_inputs`` / ``texture_signature`` run on those stubs (they call
+``skin_texture_inputs`` / ``texture_signature`` run on those stubs (they call
 the module globals). The hair mode is the worn hairstyle's (plan Task 13):
 ``profile("body")`` wears the hairstyle "hair_body" (mode body, "short
 hair"), ``profile("hairdeck")`` the hairstyle "hair_demo" (no mode =
@@ -28,7 +29,7 @@ hairstyle shape is involved (``shape_inputs`` has no "hair" key).
 
 Fixture: character "Demo", bsig = "base0123abcd" (a base signature,
 ``base_body.BASE_SIG_RE``), variant "rigged". Items (category outfit_piece):
-coat [outer] mode in_body, blouse [top] mode painted, boots [feet] mode
+coat [outer] mode in_body, blouse [top] mode own_mesh (kind clothing), boots [feet] mode
 own_mesh (kind footwear: feet alone), trousers [bottom] mode own_mesh (kind
 clothing). Worn PIECES = {outer: coat, top: blouse, feet: boots, bottom:
 trousers}.
@@ -38,51 +39,36 @@ ensure_ascii=False); h8/h12 = the first 8/12 hex of its sha256.
 
 Expected, derived by hand from the brief:
 
-[1] worn_sets(PIECES): in_body ("coat",), painted ("blouse",), own {boots:
+[1] worn_sets(PIECES): in_body ("coat",), own {blouse: clothing, boots:
     footwear, trousers: clothing}, hair_in_body True (method body),
     hair_item "" (no hair item worn).
-[2] Shape key. Coat switched to painted (nothing in the body) -> shape_key ==
+[2] Shape key. Coat switched to own_mesh (nothing in the body) -> shape_key ==
     bsig == "base0123abcd" and is_plain True. With the coat in the body:
     "ob" + h8({"base_signature": "base0123abcd", "base_variant": "rigged",
     "dress_text": {"back": "wear:coat", "front": "wear:coat"}, "hair_in_body":
     True, "side_views": False, "version": 2}) = "ob82e8f156" (the dress text
-    leaves out painted + own = blouse, boots, trousers); is_plain False;
+    leaves out the own-mesh blouse, boots, trousers); is_plain False;
     it matches base_body.OUTFIT_BODY_RE.
 [3] Blouse in_body as well -> dress_text "wear:blouse+coat" -> "oba82e1f92"
-    (!= "ob82e8f156"). Blouse own_mesh instead of painted -> still
-    "ob82e8f156" (painted and own never enter the shape).
-[4] Texture key. Plain body (coat painted): == base_body.texture_signature(
-    base_body.texture_inputs("Demo", pieces=PIECES, items=[], variant="rigged",
-    mesh_effective=["boots", "trousers"], bsig=bsig)) — today's tsig — and,
-    by hand, "tex" + h12({"version": 1, "base_signature": "base0123abcd",
-    "base_variant": "rigged", "side_views": False, "dress_text": {"back":
-    "wear:blouse+coat", "front": "wear:blouse+coat"}, "paint_region": R(outer +
-    top)}) = "tex162ae74891b8", where R(slots) = {"version": 1, "margin_mm": 40,
-    "regions": <sorted union of paint_region.SLOT_REGIONS>} (Ruling A127): outer
-    = spine, shoulder, upper_arm, forearm, hips, upper_leg; top = spine,
-    shoulder, upper_arm, forearm -> ["forearm", "hips", "shoulder", "spine",
-    "upper_arm", "upper_leg"].
-    On the coat's shape "ob82e8f156": "tex" + h12({"version": 1, "shape":
-    "ob82e8f156", "base_variant": "rigged", "dress_text": {"back":
-    "wear:blouse", "front": "wear:blouse"}, "paint_region": R(top) = regions
-    ["forearm", "shoulder", "spine", "upper_arm"]}) = "tex78dbfeffc168" (covers the
-    blouse only); with the blouse own_mesh nothing is painted there -> "".
+    (!= "ob82e8f156"). Blouse own_mesh again -> "ob82e8f156" (own never enters the shape).
+[4] Texture key (A224). Plain body (coat own_mesh): == base_body.texture_signature(
+    base_body.skin_texture_inputs("Demo", bsig=bsig, variant="rigged")) and, by hand,
+    "tex" + h12({"base_signature": "base0123abcd", "base_variant": "rigged", "dress_text": {"back": "",
+    "front": ""}, "side_views": False, "version": 1}) = "tex45a9155bf2c5" — the same with the blouse in the body
+    or own (no worn piece enters it). On the coat's shape "ob82e8f156": "".
 [5] Hair: the same in-body set (coat) with hair_method "hairdeck" ->
     hair_in_body False -> "ob" + h8(<[2]'s dict with "hair_in_body": False>)
     = "ob386b6362" != "ob82e8f156". Wearing its own hair item "hair_demo"
     (garment kind hair, owner Demo) in equipped_mesh_pieces: hair_item
     "hair_demo" under hairdeck (own unchanged: hair is no outfit piece), ""
     while the body hairstyle hair_body is worn (the hair is in the body).
-[6] mesh_items_token stays mode-blind (Ruling 4a: the dressed views are the
-    same images whether a piece is painted or in the body, so the mesh-input
-    signature must not change with that mode). The current function equals
-    the BASE function (``git show aeadce9c:app/core/model_refs.py`` loaded as
-    a temp module, same stubs) for every case below, and by hand:
-    PIECES with the coat painted AND with the coat in the body ->
-    "|meshitems:boots,trousers|worn:bottom=trousers;feet=boots;outer=coat;
-    top=blouse" both times (no "|inbody:"); {outer: coat, top: blouse} worn
-    with the coat in the body (no own piece) -> ""; with the blouse own_mesh
-    as well -> "|meshitems:blouse|worn:outer=coat;top=blouse".
+[6] mesh_items_token changes only with own-mesh pieces (Ruling 4a: the dressed views are the same images
+    whatever else a piece is). The current function equals the BASE function (``git show
+    aeadce9c:app/core/model_refs.py`` loaded as a temp module, same stubs) for every case below, and by hand:
+    PIECES with the blouse in the body -> "|meshitems:boots,trousers|worn:bottom=trousers;feet=boots;
+    outer=coat;top=blouse" (no "|inbody:"); with the blouse own_mesh -> "|meshitems:blouse,boots,trousers|worn:
+    <the same>"; {outer: coat, top: blouse} worn with both in the body (no own piece) -> ""; with the blouse
+    own_mesh -> "|meshitems:blouse|worn:outer=coat;top=blouse".
     Fails-on-old-code proof: app/core/figure.py is absent at aeadce9c ([0]).
 """
 import copy
@@ -114,7 +100,7 @@ def _item(item_id, slots, mode):
 
 
 ITEMS = {"coat": _item("coat", ["outer"], "in_body"),
-         "blouse": _item("blouse", ["top"], "painted"),
+         "blouse": _item("blouse", ["top"], "own_mesh"),
          "boots": _item("boots", ["feet"], "own_mesh"),
          "trousers": _item("trousers", ["bottom"], "own_mesh")}
 ITEMS["hair_demo"] = {"id": "hair_demo", "name": "Hair", "category": "garment", "owner": "Demo",
@@ -186,12 +172,11 @@ def main() -> int:
         print("[1] worn_sets")
         sets = figure.worn_sets("Demo", profile=profile())
         check("in_body", sets.in_body, ("coat",))
-        check("painted", sets.painted, ("blouse",))
-        check("own", sets.own, {"boots": "footwear", "trousers": "clothing"})
+        check("own", sets.own, {"blouse": "clothing", "boots": "footwear", "trousers": "clothing"})
         check("hair_in_body", sets.hair_in_body, True)
         check("hair_item", sets.hair_item, "")
         check("pieces= overrides the profile", figure.worn_sets(
-            "Demo", pieces={"top": "blouse"}, profile=profile()).painted, ("blouse",))
+            "Demo", pieces={"top": "blouse"}, profile=profile()).own, {"blouse": "clothing"})
 
         def key(method="body", pieces=None):
             p = profile(method, pieces)
@@ -199,7 +184,7 @@ def main() -> int:
             return s, figure.shape_key("Demo", s, bsig=BSIG, variant="rigged", profile=p), p
 
         print("[2] shape key")
-        set_mode("coat", "painted")
+        set_mode("coat", "own_mesh")
         _, plain, _ = key()
         check("nothing in the body -> bsig", plain, BSIG)
         check("is_plain(bsig)", figure.is_plain(plain), True)
@@ -213,33 +198,31 @@ def main() -> int:
               {"version": 2, "base_signature": BSIG, "base_variant": "rigged", "hair_in_body": True,
                "side_views": False, "dress_text": {"front": "wear:coat", "back": "wear:coat"}})
 
-        print("[3] painted / own never enter the shape")
+        print("[3] own never enters the shape")
         set_mode("blouse", "in_body")
         check("blouse in the body", key()[1], "oba82e1f92")
         set_mode("blouse", "own_mesh")
         check("blouse own_mesh", key()[1], "ob82e8f156")
-        set_mode("blouse", "painted")
-        check("blouse painted", key()[1], "ob82e8f156")
 
         print("[4] texture key")
-        set_mode("coat", "painted")
+        set_mode("coat", "own_mesh")
         s, shape, p = key()
         tex = figure.texture_key("Demo", s, shape=shape, bsig=BSIG, variant="rigged", items=[], profile=p)
-        today = base_body.texture_signature(base_body.texture_inputs(
-            "Demo", pieces=PIECES, items=[], variant="rigged", mesh_effective=["boots", "trousers"], bsig=BSIG,
-            profile=p))
-        check("plain body == today's tsig", tex, today)
-        check("plain body by hand", tex, "tex162ae74891b8")
+        check("plain body == the skin key", tex, base_body.texture_signature(base_body.skin_texture_inputs(
+            "Demo", bsig=BSIG, variant="rigged", profile=p)))
+        check("plain body by hand", tex, "tex45a9155bf2c5")
         set_mode("coat", "in_body")
         s, shape, p = key()
         check("coat shape", shape, "ob82e8f156")
         check("on the coat's shape", figure.texture_key("Demo", s, shape=shape, bsig=BSIG, variant="rigged",
-                                                         items=[], profile=p), "tex78dbfeffc168")
-        set_mode("blouse", "own_mesh")
+                                                         items=[], profile=p), "")
+        set_mode("coat", "own_mesh")
+        set_mode("blouse", "in_body")
         s, shape, p = key()
-        check("blouse own_mesh: nothing painted", figure.texture_key(
-            "Demo", s, shape=shape, bsig=BSIG, variant="rigged", items=[], profile=p), "")
-        set_mode("blouse", "painted")
+        check("blouse in the body: still no worn piece in the key", figure.texture_key(
+            "Demo", s, shape=BSIG, bsig=BSIG, variant="rigged", items=[], profile=p), "tex45a9155bf2c5")
+        set_mode("coat", "in_body")
+        set_mode("blouse", "own_mesh")
 
         print("[5] hair in the body is part of the shape")
         s, shape, _ = key(method="hairdeck")
@@ -249,18 +232,18 @@ def main() -> int:
         haired = profile("hairdeck")
         check("hairdeck: the worn hair item", figure.worn_sets("Demo", profile=haired).hair_item, "hair_demo")
         check("hairdeck: the hair item is no piece", figure.worn_sets("Demo", profile=haired).own,
-              {"boots": "footwear", "trousers": "clothing"})
+              {"blouse": "clothing", "boots": "footwear", "trousers": "clothing"})
         check("body hairstyle worn: no hair item served", figure.worn_sets("Demo", profile=profile()).hair_item,
               "")
 
-        print("[6] mesh_items_token stays mode-blind (Ruling 4a)")
+        print("[6] mesh_items_token changes only with own-mesh pieces (Ruling 4a)")
         base_refs = load_base_model_refs()
         p = profile()
-        full = "|meshitems:boots,trousers|worn:bottom=trousers;feet=boots;outer=coat;top=blouse"
+        worn = "|worn:bottom=trousers;feet=boots;outer=coat;top=blouse"
         two = {"outer": "coat", "top": "blouse"}
-        cases = [("coat painted", "coat", "painted", PIECES, full),
-                 ("coat in the body", "coat", "in_body", PIECES, full),
-                 ("in-body coat, no own piece", "coat", "in_body", two, ""),
+        cases = [("blouse in the body", "blouse", "in_body", PIECES, "|meshitems:boots,trousers" + worn),
+                 ("blouse own_mesh", "blouse", "own_mesh", PIECES, "|meshitems:blouse,boots,trousers" + worn),
+                 ("in-body coat + in-body blouse, no own piece", "blouse", "in_body", two, ""),
                  ("in-body coat + own-mesh blouse", "blouse", "own_mesh", two,
                   "|meshitems:blouse|worn:outer=coat;top=blouse")]
         for label, item_id, mode, pieces, want in cases:
@@ -268,7 +251,7 @@ def main() -> int:
             now = model_refs.mesh_items_token("Demo", pieces, profile=p)
             check(f"{label}: by hand", now, want)
             check(f"{label}: == {BASE}", now, base_refs.mesh_items_token("Demo", pieces, profile=p))
-        set_mode("blouse", "painted")
+        set_mode("blouse", "own_mesh")
 
     if FAILS:
         print(f"\nFAILED ({len(FAILS)}): " + ", ".join(FAILS))

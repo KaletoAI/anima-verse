@@ -18,18 +18,18 @@ the test sets, default ok), ``garment_assembly.schedule`` and
 Fixture: ``Kira`` (human-roleplay, female, 168 cm, on the base-body pipeline,
 retexture mode by default). Items: ``heels`` (slots [feet], mode own_mesh,
 prompt "plain heels", item image = 64 fixed bytes), ``dress`` ([top], own_mesh,
-"plain dress"), ``skirt`` ([bottom], painted, "plain skirt"). Kira holds
-and wears all three. The outfit body mode follows the worn pieces: "mesh mode" below = the
-skirt switched to mode in_body, "retexture mode" = the skirt painted. Base model model3d/<bsig>.glb = b"model-2", SHA = its
+"plain dress"), ``skirt`` ([bottom], in_body, "plain skirt"). Kira holds
+all three and wears heels and dress. The outfit body mode follows the worn pieces: "mesh mode" below = the
+skirt worn in the body, "retexture mode" = the skirt not worn (it was the skirt painted until A224
+removed that mode). Base model model3d/<bsig>.glb = b"model-2", SHA = its
 sha256. Fits are written by hand: an accepted record of the item's CURRENT
 fsig on SHA (dress: kind clothing, fit_version FIT_VERSION["clothing"]; heels:
 kind footwear, method shoe, fit_version 9).
 Task 6 of plan 2026-11-12-unified-worn-pieces: ``resolve_figure`` replaced
 ``resolve_mesh_items`` (its record compared without ``figure``, which
-replaced ``mode``); "mesh mode" / "retexture mode" are the skirt's item mode
-in_body / painted, checked on the wanted figure; no shape is built here, so
-the delivered figure stays on the plain body with the skirt painted
-meanwhile. off(record) = what the figure delivered now leaves unpainted
+replaced ``mode``); "mesh mode" / "retexture mode" are the skirt worn in the body
+/ not worn, checked on the wanted figure; no shape is built here, so
+the delivered figure stays on the plain body. off(record) = what the figure delivered now leaves unpainted
 (own + left out) that the record painted — replaces ``mesh_items_off_rule``;
 ``mesh_items_mode`` is gone with the mode.
 R(x) = base_body.MESH_ITEM_NOT_READY.format(item=x's name, reason=...),
@@ -43,10 +43,9 @@ off too (LOS); ``resolve_figure`` runs no garment chain (ruling A14). The
 record carries no ``in_body`` and no warnings of its own.
 
 [D1] Retexture, footwear without a fit (no fits at all yet).
-     pieces {feet: heels, bottom: skirt}: resolve == {intended [heels],
+     pieces {feet: heels}: resolve == {intended [heels],
      effective [], warnings [], unpainted [heels], missing {heels: NMF}};
-     run_queued NOT asked. The delivered figure's dress text
-     (``figure_texts``) names the skirt, NOT the heels (left off).
+     run_queued NOT asked.
      Without a base model (model file removed): missing {heels:
      BASE_MODEL_MISSING}. A refused shoe chain (``garments.cached_failure``
      {step "fit", error "fit refused — x"}): missing {heels:
@@ -61,7 +60,7 @@ record carries no ``in_body`` and no warnings of its own.
      mesh_items_unpainted == [heels].
      mesh_items_unpainted of {unpainted: []} and of {} == [] (the three
      mesh_items_mode cases went with the mode).
-[D3] Pieces {top: dress, feet: heels, bottom: skirt}, no fits: resolve ==
+[D3] Pieces {top: dress, feet: heels} (+ bottom: skirt in mesh mode), no fits: resolve ==
      {intended [dress, heels], effective [], warnings [], unpainted [dress,
      heels], missing {dress: NMF, heels: NMF}}. Of that record: off == [];
      _mesh_warnings == [R(dress, NMF), R(heels, NMF)]; mesh_items_ready ==
@@ -71,15 +70,15 @@ record carries no ``in_body`` and no warnings of its own.
      body (the shape of {skirt} is not stored), resolve == {intended [dress,
      heels], effective [dress], warnings [], unpainted [dress, heels, skirt],
      missing {heels: NMF, skirt: LOS}}; mesh_items_missing of it == [(heels,
-     NMF), (skirt, LOS)] (sorted by id). The skirt painted again: the same
+     NMF), (skirt, LOS)] (sorted by id). The skirt taken off again: the same
      without the skirt (unpainted [dress, heels], missing {heels: NMF}); the
      [D3] record: mesh_items_ready == [] (it painted nothing) and off == []
      (it left the dress out too).
-[D5] Own mesh off (Review Focus 4): heels painted -> garment_kind_of None,
-     resolve({feet: heels, bottom: skirt}) == {} (not intended),
-     mesh_items_token == "" and dress_text names the heels ("plain heels" in:
-     an ordinary painted piece). Own mesh again afterwards.
-[D6] after_mesh_item_ready for footwear, the skirt painted. The current
+[D5] Own mesh off (Review Focus 4): heels in_body -> garment_kind_of None,
+     resolve({feet: heels}) intends nothing, mesh_items_token == "" and
+     dress_text names the heels ("plain heels" in: an ordinary in-body
+     piece). Own mesh again afterwards.
+[D6] after_mesh_item_ready for footwear, the skirt not worn. The current
      outfit model model3d/<sig>.glb (sig = current_outfit_state(Kira)[2])
      with a sidecar that left the heels out ({intended [dress, heels],
      effective [dress], unpainted [dress, heels], missing {heels: NMF}}) and
@@ -109,7 +108,7 @@ record carries no ``in_body`` and no warnings of its own.
      "an older version is never served"): the same fsig with fit_version 16
      and its cut (``cut.sides`` non-empty) and ``foot_pose`` -> served
      (``garment_store.footwear_servable``), "shoe" in newest_accepted_fits,
-     and resolve(full) makes the heels effective beside the dress (as D8's
+     and resolve(full_w()) makes the heels effective beside the dress (as D8's
      fitted record: effective [dress, heels], missing {}); a refusal recorded
      for the CURRENT fsig (the refit of version 20 refused) leaves it served.
      footwear_servable: ``cut.sides`` empty -> False; no ``foot_pose`` -> False. The dress's fallback is untouched: its current-fsig fit removed,
@@ -118,8 +117,8 @@ record carries no ``in_body`` and no warnings of its own.
      record only: the heels never effective — left off, missing {heels: NMF}
      (Ruling A119).
 [D8] Wardrobe status (piece_status via the route and garment_set.wardrobe).
-     Heels worn without a fit, the skirt painted: status {state "missing",
-     painted False, missing True, reason NMF} and no "in_body" key (Ruling
+     Heels worn without a fit, the skirt not worn: status {state "missing",
+     missing True, reason NMF} (no "painted" key since A224) and no "in_body" key (Ruling
      A119: left off until its mesh is ready); the skirt in the body: the
      same.
      piece_status of a footwear info with an accepted fit (hand-made: the
@@ -199,7 +198,7 @@ def main() -> int:
 
         def piece(name, slots, own_mesh=None):
             op = {"slots": slots, "outfit_types": ["casual"]}
-            op["mesh_mode"] = "own_mesh" if own_mesh else "painted"
+            op["mesh_mode"] = "own_mesh" if own_mesh else "in_body"
             return inventory.add_item(name=name, category="outfit_piece", prompt_fragment=f"plain {name.lower()}",
                                       outfit_piece=op)["id"]
 
@@ -213,14 +212,25 @@ def main() -> int:
             check(f"Kira holds {item}", inventory.add_to_inventory("Kira", item), True)
             check(f"Kira wears {item}", inventory.equip_piece("Kira", item, source="smoke")["status"], "ok")
 
+        SKIRT = {"on": True}
+
         def set_mode(mode):
-            """The skirt's item mode (Task 6 of plan 2026-11-12-unified-worn-pieces: the per-character outfit
-            body mode is gone — the old "mesh mode" is the skirt in the body, "retexture" the skirt painted);
-            checked on the wanted figure."""
-            op = dict(inventory.get_item(skirt)["outfit_piece"])
-            op["mesh_mode"] = mode
-            inventory.update_item(skirt, {"outfit_piece": op})
+            """The skirt's role (Task 6 of plan 2026-11-12-unified-worn-pieces: the per-character outfit body mode
+            is gone — the old "mesh mode" is the skirt worn in the body; "retexture" was the skirt painted, and
+            since A224 removed that mode it is the skirt NOT WORN: nothing but the own-mesh pieces is on the
+            figure); checked on the wanted figure."""
+            SKIRT["on"] = mode == MESH
+            if SKIRT["on"]:
+                check("skirt worn", inventory.equip_piece("Kira", skirt, source="smoke")["status"], "ok")
+            else:
+                inventory.unequip_piece("Kira", slot="bottom", source="smoke")
             check(f"skirt {mode}", list(figure.wanted_figure("Kira").in_body), [skirt] if mode == MESH else [])
+
+        def feet_w():
+            return {"feet": heels, **({"bottom": skirt} if SKIRT["on"] else {})}
+
+        def full_w():
+            return {"top": dress, "feet": heels, **({"bottom": skirt} if SKIRT["on"] else {})}
 
         def resolve(pieces):
             """``resolve_figure``'s record without its ``figure`` (Task 6 replaced the record's ``mode``)."""
@@ -235,7 +245,7 @@ def main() -> int:
         def flag(item_id, on):
             item = inventory.get_item(item_id)
             op = dict(item.get("outfit_piece") or {})
-            op["mesh_mode"] = "own_mesh" if on else "painted"
+            op["mesh_mode"] = "own_mesh" if on else "in_body"
             inventory.update_item(item_id, {"outfit_piece": op})
 
         bsig = base_body.base_signature("Kira")
@@ -272,7 +282,8 @@ def main() -> int:
 
         NMF = base_body.NO_MESH_FIT
         BMM = base_body.BASE_MODEL_MISSING
-        RET, MESH = "painted", "in_body"   # the skirt's item mode
+        RET, MESH = "off", "in_body"   # the skirt's role (RET: not worn — A224)
+        set_mode(RET)
 
         def R(name, reason):
             return base_body.MESH_ITEM_NOT_READY.format(item=name, reason=reason)
@@ -282,21 +293,18 @@ def main() -> int:
         print("[D1] retexture: footwear without a fit is left off (Ruling A119), never painted, no chain run")
         check("GRAFTED_PIECE_KINDS", garment_set.GRAFTED_PIECE_KINDS, ("clothing", "footwear"))
         check("no FOOTWEAR_PREVIEW_ONLY", hasattr(base_body, "FOOTWEAR_PREVIEW_ONLY"), False)
-        feet = {"feet": heels, "bottom": skirt}
         QUEUED.clear()
-        d1 = resolve(feet)
+        d1 = resolve(feet_w())
         check("D1 record", d1, {"intended": [heels], "effective": [], "warnings": [], "unpainted": [heels],
                                 "missing": {heels: NMF}})
         check("D1 run_queued not asked (ruling A14)", QUEUED, [])
-        text = base_body.figure_texts("Kira", figure.delivered_figure("Kira", pieces=feet, items=[]), [])["front"]
-        check("D1 dress text", ("plain skirt" in text, "plain heels" in text), (True, False))
         model.unlink()
-        check("D1 no base model", resolve(feet).get("missing"), {heels: BMM})
+        check("D1 no base model", resolve(feet_w()).get("missing"), {heels: BMM})
         model.write_bytes(b"model-2")
         real_failure = garments.cached_failure
         garments.cached_failure = lambda _c, item_id, **_kw: ({"step": "fit", "error": "fit refused — x"}
                                                               if item_id == heels else None)
-        failed = resolve(feet)
+        failed = resolve(feet_w())
         garments.cached_failure = real_failure
         check("D1 refused chain", (failed.get("missing"), failed.get("warnings")),
               ({heels: base_body.MESH_ITEM_CHAIN_FAILED.format(step="fit", error="fit refused — x")}, []))
@@ -305,9 +313,9 @@ def main() -> int:
         old = {"mesh_items": {"intended": [heels], "effective": [], "warnings": [f"Heels stays painted on: {NMF}"]},
                "base_signature": bsig}
         check("D2 old unpainted", base_body.mesh_items_unpainted(old), [])
-        check("D2 old off-rule: the heels (left off now)", off(old, feet), [heels])
+        check("D2 old off-rule: the heels (left off now)", off(old, feet_w()), [heels])
         new = {"mesh_items": d1, "base_signature": bsig}
-        check("D2 new off-rule", off(new, feet), [])
+        check("D2 new off-rule", off(new, feet_w()), [])
         check("D2 new missing", base_body.mesh_items_missing("Kira", new, base_sha=sha), [(heels, NMF)])
         check("D2 new warnings", base_body._mesh_warnings("Kira", new, sha), [R("Heels", NMF)])
         check("D2 new unpainted", base_body.mesh_items_unpainted(new), [heels])
@@ -315,43 +323,43 @@ def main() -> int:
         check("D2 unpainted: no record", base_body.mesh_items_unpainted({}), [])
 
         print("[D3] a clothing piece painted and the footwear missing in one retexture record")
-        full = {"top": dress, "feet": heels, "bottom": skirt}
-        d3 = resolve(full)
+        d3 = resolve(full_w())
         both_r = [R(n, NMF) for _i, n in sorted([(dress, "Dress"), (heels, "Heels")])]
         check("D3 record", d3, {"intended": sorted([dress, heels]), "effective": [], "warnings": [],
                                 "unpainted": sorted([dress, heels]), "missing": {dress: NMF, heels: NMF}})
         rec3 = {"mesh_items": d3, "base_signature": bsig}
-        check("D3 off-rule (skirt painted)", off(rec3, full), [])
+        check("D3 off-rule (skirt painted)", off(rec3, full_w()), [])
         check("D3 warnings", base_body._mesh_warnings("Kira", rec3, sha), both_r)
         check("D3 ready", base_body.mesh_items_ready("Kira", rec3, base_sha=sha), [])
         set_mode(MESH)
-        check("D3 off-rule (skirt in the body, no shape built: left off)", off(rec3, full), [skirt])
+        check("D3 off-rule (skirt in the body, no shape built: left off)", off(rec3, full_w()), [skirt])
         set_mode(RET)
 
         print("[D4] mesh mode unchanged; the dress fitted")
         write_fit(dress, "clothing")
         set_mode(MESH)
-        d4 = resolve(full)
+        d4 = resolve(full_w())
         check("D4 skirt-in-body record", d4,
               {"intended": sorted([dress, heels]), "effective": [dress], "warnings": [],
                "unpainted": sorted([dress, heels, skirt]), "missing": {heels: NMF, skirt: LOS}})
         check("D4 mesh missing", base_body.mesh_items_missing("Kira", {"mesh_items": d4, "base_signature": bsig},
                                                               base_sha=sha), sorted([(heels, NMF), (skirt, LOS)]))
         set_mode(RET)
-        d4r = resolve(full)
+        d4r = resolve(full_w())
         check("D4 skirt-painted record", d4r,
               {"intended": sorted([dress, heels]), "effective": [dress], "warnings": [],
                "unpainted": sorted([dress, heels]), "missing": {heels: NMF}})
         check("D4 D3 record ready now: it painted nothing", base_body.mesh_items_ready("Kira", rec3, base_sha=sha),
               [])
-        check("D4 D3 record off-rule: nothing (it left the dress out too)", off(rec3, full), [])
+        check("D4 D3 record off-rule: nothing (it left the dress out too)", off(rec3, full_w()), [])
 
-        print("[D5] flag off: an ordinary painted piece")
+        print("[D5] flag off: an ordinary in-body piece")
         flag(heels, False)
         check("D5 kind", garment_set.garment_kind_of(inventory.get_item(heels)), None)
-        check("D5 not intended", resolve(feet), {})
-        check("D5 token", model_refs.mesh_items_token("Kira", pieces=feet), "")
-        check("D5 painted", "plain heels" in base_body.dress_text("Kira", "front", pieces=feet, items=[]), True)
+        check("D5 not intended", resolve(feet_w()).get("intended", []), [])
+        check("D5 token", model_refs.mesh_items_token("Kira", pieces=feet_w()), "")
+        check("D5 in the dress text", "plain heels" in base_body.dress_text("Kira", "front", pieces=feet_w(),
+                                                                               items=[]), True)
         flag(heels, True)
         check("D5 flag back on", garment_set.garment_kind_of(inventory.get_item(heels)), "footwear")
 
@@ -421,7 +429,7 @@ def main() -> int:
         check("D7 FIT_VERSION footwear", garment_fit.FIT_VERSION["footwear"], 20)
         check("D7 version 3 not served", gs.accepted_fit("Kira", heels, base_model_sha=sha), None)
         check("D7 newest: no shoe", "shoe" in gs.newest_accepted_fits("Kira", heels, base_model_sha=sha), False)
-        d7 = resolve(full)
+        d7 = resolve(full_w())
         check("D7 heels left off", (d7.get("effective"), d7.get("missing")), ([dress], {heels: NMF}))
         write_fit(heels, "footwear", fsig=old_fsig, version=20)
         served = gs.accepted_fit("Kira", heels, base_model_sha=sha)
@@ -432,7 +440,7 @@ def main() -> int:
         served = gs.accepted_fit("Kira", heels, base_model_sha=sha)
         check("D7b version 16 served", served and gs.parse_name(served[0])[1], old_fsig)
         check("D7b newest: the shoe", "shoe" in gs.newest_accepted_fits("Kira", heels, base_model_sha=sha), True)
-        d7b = resolve(full)
+        d7b = resolve(full_w())
         check("D7b heels effective", (d7b.get("effective"), d7b.get("missing")), (sorted([dress, heels]), {}))
         gs.record_failure("Kira", heels, gs.garment_fsig("Kira", heels), step="fit",
                           error="fit refused — visible_poke 0.02 > 0.005", base_model_sha=sha)
@@ -456,13 +464,13 @@ def main() -> int:
         def status():
             body = get_character_garment("Kira", heels, {})
             st = body["status"]
-            return ({k: st.get(k) for k in ("state", "painted", "missing", "in_body", "reason")}, body["limits"])
+            return ({k: st.get(k) for k in ("state", "missing", "in_body", "reason")}, body["limits"])
         st, limits = status()
-        unfitted = {"state": "missing", "painted": False, "missing": True, "in_body": None, "reason": NMF}
+        unfitted = {"state": "missing", "missing": True, "in_body": None, "reason": NMF}
         check("D8 retexture unfitted", st, unfitted)
         check("D8 wardrobe unfitted", {k: garment_set.wardrobe("Kira")["items"][heels].get(k)
-                                       for k in ("painted", "missing", "in_body")},
-              {"painted": False, "missing": True, "in_body": None})
+                                       for k in ("missing", "in_body")},
+              {"missing": True, "in_body": None})
         set_mode(MESH)
         check("D8 mesh unfitted", status()[0], unfitted)
         set_mode(RET)
@@ -485,10 +493,10 @@ def main() -> int:
               ({"op": "le", "value": 0.005}, {"op": "le", "value": 0.025}, {"op": "le", "value": 0.005}))
         fitted = {k: v for k, v in garment_set.piece_status(
             {"kind": "footwear", "fsig": "f", "steps": {"fit": {"status": "accepted"}}}, worn=True,
-            base_model_ready=True).items() if k in ("state", "painted", "missing", "reason")}
-        check("D8 fitted", fitted, {"state": "fitted", "painted": False, "missing": False, "reason": None})
+            base_model_ready=True).items() if k in ("state", "missing", "reason")}
+        check("D8 fitted", fitted, {"state": "fitted", "missing": False, "reason": None})
         write_fit(heels, "footwear")
-        d8 = resolve(full)
+        d8 = resolve(full_w())
         check("D8 fitted record", (d8.get("effective"), d8.get("unpainted"), d8.get("missing")),
               (sorted([dress, heels]), sorted([dress, heels]), {}))
         drop_fit(heels)

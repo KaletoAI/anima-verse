@@ -222,7 +222,7 @@ def run(data: bytes, view: str, desc: Dict[str, Any], params: Optional[Dict[str,
 # --- The processed reference (A149) ---------------------------------------------------
 
 def processed_dir(character_name: str) -> Path:
-    from app.core.outfit_references import references_dir
+    from app.core.reference_images import references_dir
     return references_dir(character_name) / PROCESSED_DIR
 
 

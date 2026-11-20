@@ -69,10 +69,10 @@ check("6. refit offer (fitted)",
 info = {"fsig": "abc", "kind": "clothing", "steps": {"fit": {"status": "missing"}, "mesh": {"status": "accepted"}},
         "cpu_refit": True}
 check("7a. piece_status reason (CPU fit)",
-      garment_set.piece_status(info, worn=True, base_model_ready=True, left_out=True)["reason"], figure.LEFT_OFF_REFIT)
+      garment_set.piece_status(info, worn=True, base_model_ready=True)["reason"], figure.LEFT_OFF_REFIT)
 info["cpu_refit"] = False
 check("7b. piece_status reason (no CPU fit)",
-      garment_set.piece_status(info, worn=True, base_model_ready=True, left_out=True)["reason"], base_body.NO_MESH_FIT)
+      garment_set.piece_status(info, worn=True, base_model_ready=True)["reason"], base_body.NO_MESH_FIT)
 
 print("ALL OK" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}")
 sys.exit(1 if FAIL else 0)

@@ -153,7 +153,7 @@ _NEG_EXPRESSION = (_NEG_PHOTO + ", full body shot, full length, legs, knees, "
 # the chest or in front of the shoulders": long hair and braids kept falling
 # onto the chest, which bakes into the torso mesh.
 _NEG_TPOSE = ("illustration, anime, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, shadows on the face, one side of the face darker, shadow under the nose, shadowed eye sockets, directional key light, cropped, out of frame, cropped hands, hands cut off, cropped feet, feet cut off, T-pose, arms raised to shoulder height, arms touching the body, hands on hips, hands at hips, hands touching body, palms facing the camera, palms facing up, clenched fists, curled fingers, fingers pressed together, splayed fingers, fanned fingers, oversized hands, large hands, thick fingers, chunky fingers, swollen fingers, fused fingers, mitten hands, hands hidden, legs together, touching legs, touching ankles, crossed legs, narrow stance, hair over the chest, hair covering the chest, strands of hair on the chest, hair over the shoulders, hair in front of the shoulders, hair falling forward, braid over the shoulder, ponytail over the shoulder")
-# The full-body references (use cases base_reference / outfit_reference, Ruling A95): an appearance picture,
+# The full-body reference (use case base_reference, Ruling A95): an appearance picture,
 # not a mesh input — the framing first (models weigh the start), then the figure, then light and finish
 # (the user's validated prompt shape, 2026-11-15). Its negative keeps only picture quality and framing: no
 # pose terms (the A-pose belongs to the front edit), nothing that names the figure.
@@ -712,28 +712,14 @@ _DEFAULT_IMAGE_USE_CASES = {
         },
     },
     # The FULL-BODY REFERENCE (Ruling A87, app/core/full_body_reference.py):
-    # the picture the A-pose front is an edit of. The plain body's is an edit
-    # of the profile image (occasion base_reference), an outfit's an edit of
-    # the plain body's full-body reference — else the profile image — wearing
-    # the outfit (occasion outfit_reference). Since Ruling A95 (the user's
+    # the picture the A-pose front is an edit of: an edit of the profile
+    # image (occasion base_reference). Since Ruling A95 (the user's
     # validated prompt of 2026-11-15) the framing comes first, then the
     # character's attribute block (``{character}``, composed at run time from
     # the character's data), then light and finish — no edit prefix, no pose
-    # words. Negative: _NEG_REFERENCE (quality and framing only); the plain
-    # body's adds "nothing worn", a mesh-part slot its reference negative.
+    # words. Negative: _NEG_REFERENCE (quality and framing only) plus
+    # "nothing worn", a mesh-part slot its reference negative.
     "base_reference": {
-        "keywords": {
-            "prompt_style": _REFERENCE_STYLE,
-            "prompt_negative": _NEG_REFERENCE,
-            "prompt_instruction": "",
-        },
-        "natural": {
-            "prompt_style": _REFERENCE_STYLE,
-            "prompt_negative": _NEG_REFERENCE,
-            "prompt_instruction": "",
-        },
-    },
-    "outfit_reference": {
         "keywords": {
             "prompt_style": _REFERENCE_STYLE,
             "prompt_negative": _NEG_REFERENCE,
@@ -1531,13 +1517,17 @@ DEAD_CONFIG_FIELDS: dict = {
     # a JWT — the field was schema, validator warning and env bridge only.
     "server": ("jwt_secret", "storage_dir"),
     "random_events": ("event_image_denoise_strength",),
+    # The side-view arm mask of the painted-body worker, removed with the painted mode (A224).
+    "base_body": ("side_arm_margin",),
 }
 
 # Dead names that no section owns any more and that only survive at the TOP
 # LEVEL of older world files (worlds/hotopia predates the sectioning). Item
 # image size runs through ui.downscale_item_max_dim instead; "inventory" is no
-# schema section, so a section variant is not swept here.
-DEAD_TOPLEVEL_ONLY_FIELDS: tuple = ("item_image_width", "item_image_height")
+# schema section, so a section variant is not swept here. "body_retexture" is
+# the whole section of the painted-body worker, removed with the painted mode
+# (A224, plan docs/superpowers/plans/2026-11-19-remove-painted-mode.md).
+DEAD_TOPLEVEL_ONLY_FIELDS: tuple = ("item_image_width", "item_image_height", "body_retexture")
 
 # The section names again, this time at the TOP LEVEL of config.json, plus the
 # top-level-only names above. None of the dead names is a living top-level key
@@ -1587,7 +1577,9 @@ def _strip_dead_config_fields(config: dict) -> bool:
 #     config.json by hand.
 #   outfit_fit — the style of the base-body back/side model FIT, removed
 #     when that step became the CPU composite (Task 11g, view_composite).
-DEAD_USE_CASES: tuple = ("map", "mapfit", "outfit_fit")
+#   outfit_reference — an outfit's full-body reference, removed with the
+#     painted mode it served (A224).
+DEAD_USE_CASES: tuple = ("map", "mapfit", "outfit_fit", "outfit_reference")
 
 
 def _strip_dead_use_cases(config: dict) -> bool:
@@ -1861,15 +1853,13 @@ def _migrate_base_body_routing(config: dict) -> bool:
     return _seed_routing_copies(config, _BASE_BODY_ROUTING_SEEDS)
 
 
-#: (target, source) — the full-body references (Ruling A87) start on the
-#: chains of the fronts they feed: both are edits of a reference picture.
-_REFERENCE_ROUTING_SEEDS = (("base_reference", "base_front"),
-                            ("outfit_reference", "outfit_front"))
+#: (target, source) — the full-body reference (Ruling A87) starts on the
+#: chain of the front it feeds: both are edits of a reference picture.
+_REFERENCE_ROUTING_SEEDS = (("base_reference", "base_front"),)
 
 
 def _migrate_reference_routing(config: dict) -> bool:
-    """Seed the two full-body reference chains from base_front / outfit_front
-    once each; a key already in the routing is never overwritten, a missing
+    """Seed the full-body reference chain from base_front once; a key already in the routing is never overwritten, a missing
     source seeds nothing (the occasion then has no route — it requires a
     chain). Runs after ``_migrate_base_body_routing`` (which may seed the
     sources itself)."""
@@ -1892,10 +1882,13 @@ def _migrate_outfit_side_routing(config: dict) -> bool:
 #: of a dressed back/side view became the CPU composite (plan
 #: 2026-11-12-unified-worn-pieces Task 11g, Ruling C1; ``view_composite``).
 REMOVED_FIT_OCCASIONS: tuple = ("outfit_back", "outfit_side")
+#: The routing chain of an outfit's full-body reference, removed with the
+#: painted mode it served (A224).
+REMOVED_PAINTED_OCCASIONS: tuple = ("outfit_reference",)
 
 
 def _migrate_removed_fit_occasions(config: dict) -> bool:
-    """Drop the stored routing chains of ``REMOVED_FIT_OCCASIONS`` (instance)
+    """Drop the stored routing chains of ``REMOVED_FIT_OCCASIONS`` and ``REMOVED_PAINTED_OCCASIONS`` (instance)
     with one INFO line naming them — the save validator refuses an unknown
     occasion, so a chain left behind would block every settings save. A load
     migration like the routing seeds: ``load()`` applies it in memory,
@@ -1910,7 +1903,13 @@ def _migrate_removed_fit_occasions(config: dict) -> bool:
     if dropped:
         logger.info("Image routing: chains of the removed fit occasions dropped (the dressed back/side views "
                     "are composited on the CPU now): %s", ", ".join(dropped))
-    return bool(dropped)
+    painted = [occasion for occasion in REMOVED_PAINTED_OCCASIONS if occasion in routing]
+    for occasion in painted:
+        del routing[occasion]
+    if painted:
+        logger.info("Image routing: chains of the occasions removed with the painted mode dropped: %s",
+                    ", ".join(painted))
+    return bool(dropped or painted)
 
 
 _quadruped_chain_hints = set()

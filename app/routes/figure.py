@@ -51,7 +51,7 @@ body actions):
   preview GLB, its query names the build)}``; 404 for an unknown character or item.
 * ``PUT  /characters/{c}/figure/accessory/{item_id} {jewellery}`` — store the description on the ITEM (every wearer,
   ``accessory_spec.normalize``); 400 for an unknown kind. Spends nothing — the accessory step becomes due.
-* ``POST /characters/{c}/figure/accessory/{item_id}/switch {mode, kind}`` — a too-thin piece's switch to Painted or
+* ``POST /characters/{c}/figure/accessory/{item_id}/switch {mode, kind}`` — a too-thin piece's switch to In body or
   to Accessory with a buildable kind (one locked write); 400 otherwise.
 * ``POST /characters/{c}/figure/accessory/{item_id}/curve {drop_cm, thickness_mm}`` — the chain's centre line for
   those settings on the plain body (``accessory_build.preview_curve``, with the pendant's ``anchor`` and the skin's
@@ -75,10 +75,6 @@ body actions):
 * ``PUT  /characters/{c}/figure/template/{item_id} {params, source}`` — store the parameters on the ITEM
   (every wearer; ``garment_template.set_params``); spends nothing — the next Build re-drapes. 400 with the
   validation errors (nothing stored).
-* ``GET  /characters/{c}/figure/painted/{item_id}`` — the painted piece dialog (Ruling A148,
-  ``painted_piece.info``); ``…/region.png`` its region tile; ``POST …/preview.glb {hex, strength}`` the painted body
-  recoloured for the viewer (nothing stored); ``POST …/colour {hex, strength}`` stores the colour (runs nothing).
-* ``POST /characters/{c}/figure/paint`` — "Paint now": only the CPU steps (``figure_build.paint``), 409 otherwise.
 * ``POST /characters/{c}/base-body/run-all`` — the Base body tab's "Run all"
   (``figure_build.start_base_run_all``, Task UI1 rule R1): the plain body's
   refresh — only the steps that are not current — else the face cleanup or the
@@ -114,8 +110,8 @@ body actions):
 * ``POST /characters/{c}/figure/waiting/cancel {id}`` — Cancel ONE waiting
   entry of ``generation_pause.waiting`` through its queue's own cancel
   (``generation_pause.cancel``); 404 when it does not wait any more.
-* ``GET  /characters/{c}/figure/stored`` — the stored body shapes and painted
-  bodies (``figure.stored``): ``{"stored": [{key, kind, bytes, built_for,
+* ``GET  /characters/{c}/figure/stored`` — the stored body shapes and the
+  plain body's texture bodies (``figure.stored``): ``{"stored": [{key, kind, bytes, built_for,
   built_for_name, outfits, last_used, reason, unneeded, deletable, running,
   current}]}``.
 * ``GET /characters/{c}/figure/stored/{key}/preview`` — what that Delete
@@ -125,38 +121,15 @@ body actions):
 * ``DELETE /characters/{c}/figure/stored/{key}`` — delete ONE of them
   (``figure.delete_stored``, an explicit collect, Ruling 5a): 409 while an
   outfit would be built on it or the worn figure stands on it (a shape:
-  ``figure.SHAPE_NEEDED`` / ``figure.SHAPE_CURRENT``, a painted
-  body: ``outfit_bodies.PAINTED_NEEDED``), a run works on it or a Build of
+  ``figure.SHAPE_NEEDED`` / ``figure.SHAPE_CURRENT``, a texture
+  body: ``outfit_bodies.TEXTURE_NEEDED``), a run works on it or a Build of
   the character runs (``figure.BUILD_RUNNING``), 404 when nothing of it is
   stored, 400 for a key of neither shape.
-* ``GET  /characters/{c}/figure/outfit-reference`` — the Figure tab's "Reference
-  image" row of the outfit worn now (Ruling A74b, ``outfit_references.info``):
-  ``{key, label, record, url, gone, applies, note, source, jobs, others}``.
-* ``POST /characters/{c}/figure/outfit-reference {image}`` — pick a picture of
-  the character's gallery as the worn outfit's full-body reference
-  (``outfit_references.set_reference``): it SAVES ONLY — nothing renders; the
-  dressed front shows as due with its cost until a Build. 400 for a file not
-  in the gallery or not an image; 503 when the profile was not saved.
-* ``POST /characters/{c}/figure/outfit-reference/upload`` (multipart ``file``)
-  — the same with an uploaded picture: capped (``guard_content_length`` /
-  ``read_upload_capped``) and checked by its bytes (``ensure_image``), stored
-  in the gallery, then picked. 400/413/415 as the gallery upload.
-* ``DELETE /characters/{c}/figure/outfit-reference/{key}`` — clear one
-  outfit's reference (``outfit_references.clear_reference``); saves only.
-  404 when that outfit has none.
-  Ruling A87: these answers carry the tile's Generate part
-  (``full_body_reference.outfit_tile``); the record keeps its ``origin``.
-* ``POST /characters/{c}/figure/outfit-reference/generate`` — GENERATE the worn
-  outfit's full-body reference (Ruling A87, ``full_body_reference.start_outfit``:
-  one image job, an edit of the plain body's full-body reference, else of the
-  profile image; recorded under the outfit worn at the click). 202; 409 without
-  either picture or while a reference of the character is generated; 400 for a
-  non-humanoid.
 * ``GET /characters/{c}/base-body/full-body-reference`` — the Base body tab's
   "Full-body reference" tile (Ruling A87, ``full_body_reference.base_tile``).
 * ``POST …/base-body/full-body-reference {image}`` (pick from the gallery),
   ``POST …/base-body/full-body-reference/upload`` (multipart ``file``; capped
-  and checked as the outfit upload), ``DELETE …/base-body/full-body-reference``
+  by ``guard_content_length`` / ``read_upload_capped``, checked by its bytes), ``DELETE …/base-body/full-body-reference``
   (clear) — SAVE ONLY: the front then shows as outdated with its cost.
 * ``POST …/base-body/full-body-reference/generate`` — generate it from the
   profile image (``full_body_reference.start_base``, one image job). 202; 409
@@ -414,14 +387,14 @@ class ModeSwitchRequest(BaseModel):
 @router.post("/{character_name}/figure/accessory/{item_id}/switch")
 def switch_piece_mode(character_name: str, item_id: str, body: ModeSwitchRequest,
                       _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Ruling A118 J6 (A216 review M2/L5): a too-thin piece's one-click switch — ``mode`` ``painted``, or
+    """Ruling A118 J6 (A216 review M2/L5): a too-thin piece's one-click switch — ``mode`` ``in_body``, or
     ``accessory`` with the buildable ``kind`` it is stored with; one locked read-modify-write of the piece, spends
     nothing. 400 for another mode or a kind this version does not build."""
     from app.core import accessory_spec, garment_set
     from app.models.inventory import get_item, outfit_piece_lock, update_item
     _template_item(character_name, item_id)
-    if body.mode not in (garment_set.PAINTED, garment_set.ACCESSORY):
-        raise HTTPException(status_code=400, detail="Only Painted or Accessory")
+    if body.mode not in (garment_set.IN_BODY, garment_set.ACCESSORY):
+        raise HTTPException(status_code=400, detail="Only In body or Accessory")
     if body.mode == garment_set.ACCESSORY and body.kind not in accessory_spec.BUILT_KINDS:
         raise HTTPException(status_code=400, detail="This kind of accessory is not built yet")
     with outfit_piece_lock(item_id):
@@ -515,16 +488,15 @@ def get_template_params(character_name: str, item_id: str, picture: bool = True,
             "views": _template_views(character_name, item_id),
             # A186: the dressed front picture beside the fields (existing images only, nothing generated)
             # (``picture=0``: the dialog's progress poll, which keeps the picture it has)
-            "front_picture": (_front_picture(character_name, item_id, item, worn=bool(progress.get("worn")))
+            "front_picture": (_front_picture(character_name, item_id, item)
                               if picture else None)}
 
 
-def _front_picture(character_name: str, item_id: str, item: Dict[str, Any], *, worn: bool) -> Dict[str, Any]:
+def _front_picture(character_name: str, item_id: str, item: Dict[str, Any]) -> Dict[str, Any]:
     """A186: the picture the template dialog shows beside its fields — the first that exists of: this piece's
-    worn front view (the clothing chain's ``worn`` step), the dressed front of the outfit worn now (only while the
-    piece is worn and painted into it — its sidecar says so), the full-body reference of the outfit worn now or of the newest earlier
-    outfit with this piece (``earlier``), the item's own picture. ``{source ("worn" / "outfit" / "item" / ""),
-    url}``; existing files only, nothing is generated."""
+    worn front view (the clothing chain's ``worn`` step), the item's own picture. ``{source ("worn" / "item" /
+    ""), url}``; existing files only, nothing is generated. (A224: the outfit's dressed front never shows a
+    template piece — the views are copies of the body's.)"""
     from urllib.parse import quote
     enc, item_enc = quote(character_name, safe=""), quote(item_id, safe="")
     try:
@@ -533,33 +505,6 @@ def _front_picture(character_name: str, item_id: str, item: Dict[str, Any], *, w
         if path is not None and path.is_file():
             return {"source": "worn", "url": f"/characters/{enc}/garments/{item_enc}/images/worn/front"}
     except Exception:   # no garment of this character / no worn step: the next source
-        pass
-    if worn:
-        try:
-            import json
-            from app.core.model_refs import find_ref_image
-            path = find_ref_image(character_name, "tpose")
-            meta = json.loads(path.with_suffix(".json").read_text(encoding="utf-8")) if path is not None else None
-            # only a front that shows the piece: dressed, and the piece painted into it (a template / own-mesh piece
-            # is left out of the dressed front's text — that front shows the body without it)
-            if isinstance(meta, dict) and meta.get("dressed") is not False \
-                    and item_id not in ((meta.get("mesh_items") or {}).get("unpainted") or []):
-                return {"source": "outfit", "url": f"/characters/{enc}/model-refs/tpose"}
-        except Exception:
-            pass
-    # the full-body reference picture of an outfit with this piece: the outfit worn now first, then the newest
-    # earlier one — only one whose pieces name it (a record keeps the painted pieces' names, not the ids)
-    try:
-        from app.core import outfit_references
-        ref = outfit_references.info(character_name)
-        name = str(item.get("name") or "").strip()
-        candidates = [{"label": ref.get("label") or "", "url": ref.get("url") or ""}] + list(ref.get("others") or [])
-        for i, cand in enumerate(candidates):
-            parts = [x.strip() for x in str(cand.get("label") or "").split(",")]
-            if cand.get("url") and name and name in parts and (i > 0 or worn):
-                return {"source": "outfit", "url": str(cand["url"]), "label": str(cand.get("label") or ""),
-                        "earlier": i > 0}
-    except Exception:
         pass
     if item.get("image"):
         return {"source": "item", "url": f"/inventory/items/{item_enc}/image"}
@@ -655,78 +600,6 @@ def refit_figure_piece(character_name: str, body: RefitRequest,
         raise HTTPException(status_code=409, detail=str(result.get("reason") or figure_build.OFF_PIPELINE))
     if result.get("status") == "failed":
         raise HTTPException(status_code=503, detail=str(result.get("reason") or "Build failed"))
-    return result
-
-
-class PaintColourRequest(BaseModel):
-    hex: str = ""
-    strength: Optional[float] = None
-
-
-@router.get("/{character_name}/figure/painted/{item_id}")
-def get_painted_piece(character_name: str, item_id: str,
-                      _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Ruling A148: the painted piece dialog's payload (``painted_piece.info``)."""
-    from app.core import painted_piece
-    _require_character(character_name)
-    try:
-        return painted_piece.info(character_name, item_id)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
-
-@router.get("/{character_name}/figure/painted/{item_id}/region.png")
-def get_painted_region(character_name: str, item_id: str, _: Dict[str, Any] = Depends(require_admin)) -> Response:
-    """Ruling A148: the painted texture with this piece's body regions tinted (PNG; CPU)."""
-    from app.core import painted_piece
-    _require_character(character_name)
-    try:
-        return Response(painted_piece.region_png(character_name, item_id), media_type="image/png",
-                        headers={"Cache-Control": "no-store"})
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
-
-@router.post("/{character_name}/figure/painted/{item_id}/preview.glb")
-def preview_painted_colour(character_name: str, item_id: str, body: PaintColourRequest,
-                           _: Dict[str, Any] = Depends(require_admin)) -> Response:
-    """Ruling A148: the painted body with this piece in the posted colour — nothing stored, no job (CPU)."""
-    from app.core import painted_piece
-    _require_character(character_name)
-    try:
-        glb = painted_piece.preview_glb(character_name, item_id, body.hex, body.strength)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return Response(glb, media_type="model/gltf-binary", headers={"Cache-Control": "no-store"})
-
-
-@router.post("/{character_name}/figure/painted/{item_id}/colour")
-def set_painted_colour(character_name: str, item_id: str, body: PaintColourRequest,
-                       _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Ruling A148: store the piece's colour (``hex`` "" = the painted colours) — runs nothing; the paint and the
-    assembly become due (CPU, 0 hub jobs)."""
-    from app.core import paint_colour
-    _require_character(character_name)
-    try:
-        saved = paint_colour.set_colour(character_name, item_id, body.hex, body.strength)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    if not saved:
-        raise HTTPException(status_code=500, detail="The colour was not saved")
-    return {"ok": True}
-
-
-@router.post("/{character_name}/figure/paint", status_code=202)
-def paint_figure(character_name: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Ruling A148: "Paint now" — the CPU steps only (``figure_build.paint``); 409 while hub work is due, a Build
-    or a base step runs, or nothing is due."""
-    from app.core import figure_build
-    _require_character(character_name)
-    result = figure_build.paint(character_name)
-    if result.get("status") == "failed":
-        raise HTTPException(status_code=503, detail=str(result.get("reason") or "Paint failed"))
-    if result.get("status") != "started":
-        raise HTTPException(status_code=409, detail=str(result.get("reason") or "Nothing to paint"))
     return result
 
 
@@ -857,41 +730,8 @@ def build_current_outfit_model(character_name: str,
         raise HTTPException(status_code=400, detail=str(e))
 
 
-# --- Outfit reference images (Ruling A74b) ---------------------------------
-
-
-class OutfitReferenceRequest(BaseModel):
+class ReferenceRequest(BaseModel):
     image: str
-
-
-@router.get("/{character_name}/figure/outfit-reference")
-def get_outfit_reference(character_name: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    _require_character(character_name)
-    return _outfit_tile(character_name)
-
-
-def _outfit_tile(character_name: str) -> Dict[str, Any]:
-    from app.core import full_body_reference, outfit_references
-    return full_body_reference.outfit_tile(character_name, outfit_references.info(character_name))
-
-
-def _set_outfit_reference(character_name: str, image: str, origin: str) -> Dict[str, Any]:
-    from app.core import full_body_reference
-    try:
-        full_body_reference.set_outfit(character_name, image, origin=origin)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
-    return _outfit_tile(character_name)
-
-
-@router.post("/{character_name}/figure/outfit-reference")
-def set_outfit_reference(character_name: str, body: OutfitReferenceRequest,
-                         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    from app.core import full_body_reference
-    _require_character(character_name)
-    return _set_outfit_reference(character_name, body.image, full_body_reference.ORIGIN_GALLERY)
 
 
 async def _read_reference_upload(request: Request) -> tuple:
@@ -906,51 +746,6 @@ async def _read_reference_upload(request: Request) -> tuple:
     data = await read_upload_capped(file, what="Reference image")
     ensure_image(data, filename=file.filename, what="Reference image")
     return data, file.filename
-
-
-@router.post("/{character_name}/figure/outfit-reference/upload")
-async def upload_outfit_reference(character_name: str, request: Request,
-                                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    from pathlib import Path
-    from starlette.concurrency import run_in_threadpool
-    from app.core import full_body_reference, outfit_references
-    _require_character(character_name)
-    data, filename = await _read_reference_upload(request)
-    try:
-        name = await run_in_threadpool(outfit_references.store_reference, character_name, data,
-                                       Path(filename or "").suffix, "outfitref")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    return await run_in_threadpool(_set_outfit_reference, character_name, name, full_body_reference.ORIGIN_UPLOAD)
-
-
-@router.post("/{character_name}/figure/outfit-reference/generate", status_code=202)
-def generate_outfit_reference(character_name: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    from app.core import base_body, full_body_reference
-    _require_character(character_name)
-    try:
-        full_body_reference.start_outfit(character_name)
-    except base_body.MissingInput as e:
-        raise HTTPException(status_code=409, detail=str(e)) from e
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except RuntimeError as e:
-        raise HTTPException(status_code=409, detail=str(e)) from e
-    return _outfit_tile(character_name)
-
-
-@router.delete("/{character_name}/figure/outfit-reference/{key}")
-def clear_outfit_reference(character_name: str, key: str,
-                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    from app.core import outfit_references
-    _require_character(character_name)
-    try:
-        cleared = outfit_references.clear_reference(character_name, key)
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
-    if not cleared:
-        raise HTTPException(status_code=404, detail="This outfit has no reference image")
-    return _outfit_tile(character_name)
 
 
 # --- The plain body's full-body reference (Ruling A87) ---------------------------
@@ -975,7 +770,7 @@ def _set_base_reference(character_name: str, image: str, origin: str) -> Dict[st
 
 
 @router.post("/{character_name}/base-body/full-body-reference")
-def set_base_reference(character_name: str, body: OutfitReferenceRequest,
+def set_base_reference(character_name: str, body: ReferenceRequest,
                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     from app.core import full_body_reference
     _require_character(character_name)
@@ -989,7 +784,7 @@ def get_reference_image(character_name: str, name: str, request: Request,
     gallery pictures (user rule 2026-11-16). 404 for a name outside that folder or a file gone."""
     from pathlib import Path
     from app.core.http_files import etag_file_response
-    from app.core.outfit_references import references_dir
+    from app.core.reference_images import references_dir
     _require_character(character_name)
     media = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
     try:
@@ -1012,7 +807,7 @@ async def upload_base_reference(character_name: str, request: Request,
     _require_character(character_name)
     data, filename = await _read_reference_upload(request)
     try:
-        from app.core.outfit_references import store_reference
+        from app.core.reference_images import store_reference
         name = await run_in_threadpool(store_reference, character_name, data, Path(filename or "").suffix, "fullbody")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

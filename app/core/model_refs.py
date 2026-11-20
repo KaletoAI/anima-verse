@@ -937,8 +937,7 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
 
 
 #: ``outfit_mirror_followup`` kinds (Ruling A91): what a Mirror of a dressed side view makes due.
-MIRROR_REPAINT = "repaint"        # on the pipeline: the outfit model is repainted on the CPU at the next Build
-MIRROR_COPY = "copy"              # a copy of the body's view: nothing is painted from it — mirror that view
+MIRROR_COPY = "copy"              # on the pipeline: a copy of the body's view (A224) — mirror that view
 MIRROR_MODEL = "model"            # off the pipeline: the stored 3D model keeps the old view until made again
 MIRROR_NO_MODEL = "no_model"      # off the pipeline, no 3D model of this outfit yet
 MIRROR_COPY_REFUSED = "This view is a copy of the body's view — mirror the body's view instead"
@@ -948,14 +947,11 @@ MIRROR_BUSY = "This outfit's views or 3D model are being made right now — mirr
 def outfit_mirror_followup(character_name: str, signature: str, *, pipeline: bool,
                            source: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """``{kind, jobs}`` of a dressed side view's Mirror (one answer for both sides; the mirror itself costs
-    no image job). On the pipeline: ``copy`` while the views are copies of the body's views
-    (``base_body.dressed_view_source`` ``shape`` / ``plain``), else ``repaint`` (0 hub jobs — the Build
-    repaints the outfit model on the CPU). Off it: ``model`` with the hub jobs of making the outfit's 3D model
+    no image job). On the pipeline: ``copy`` — the views are copies of the body's views (A224,
+    ``base_body.dressed_view_source``). Off it: ``model`` with the hub jobs of making the outfit's 3D model
     again (``model3d.mesh_hub_stages``), ``no_model`` without one. Never raises."""
     if pipeline:
-        if isinstance(source, dict) and source.get("source") in ("shape", "plain"):
-            return {"kind": MIRROR_COPY, "jobs": 0}
-        return {"kind": MIRROR_REPAINT, "jobs": 0}
+        return {"kind": MIRROR_COPY, "jobs": 0}
     try:
         from app.core import model3d
         if not signature or model3d.find_model3d(character_name, signature) is None:

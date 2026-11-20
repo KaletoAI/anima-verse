@@ -41,8 +41,8 @@ EXPECTATIONS, derived by hand from the scope rules and the migrations:
                  footwear_empty <- garment_view = ["flux*"]
       a9854ea20  base_front <- tpose, base_view / outfit_front /
                  outfit_back_draft <- tpose_view: all ["flux*"]
-      c24544018  base_reference <- base_front, outfit_reference <-
-                 outfit_front: ["flux*"]
+      c24544018  base_reference <- base_front: ["flux*"] (its outfit_reference
+                 <- outfit_front left with the painted mode, A224)
       40c105681  outfit_side_draft <- outfit_back_draft: ["flux*"]
   * instance/secrets.json holds the three keys in the by-NAME format
     (config._split_secrets on a named list); instance/config.json has the
@@ -196,7 +196,7 @@ EXPECTED_ROUTING = {"expression": ["flux*"], "tpose": ["flux*"],
                     "garment_view": ["flux*"], "footwear_empty": ["flux*"],
                     "base_front": ["flux*"], "base_view": ["flux*"], "outfit_front": ["flux*"],
                     "outfit_back_draft": ["flux*"], "base_reference": ["flux*"],
-                    "outfit_reference": ["flux*"], "outfit_side_draft": ["flux*"]}
+                    "outfit_side_draft": ["flux*"]}
 EXPECTED_INSTANCE_SECRETS = {
     "providers": {"Local": {"api_key": "sk-local"}, "Cloud": {"api_key": "sk-cloud"}},
     "image_generation": {"backends": {"flux-a": {"api_key": "img-key"}}},

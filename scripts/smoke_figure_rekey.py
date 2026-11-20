@@ -16,11 +16,12 @@ outer, top, bottom, feet, minus ``mesh_items``, joined "wear:" + "+".join(ids) (
 every view. Dressed views: front, back (side views off, the default).
 
 FIXTURE (items stored RAW without a mode; the mode migration of Task 3 runs first, for real):
-  items coat {outer}, blouse {top}, shirt {top}.
+  items coat {outer}, blouse {top}, shirt {top} (the shirt with the raw ``own_mesh: true`` flag).
   Kai: pipeline on, stored ``outfit_body_mode: "mesh"``, wears O1 {outer: coat, top: blouse}, holds all three.
   Kira: pipeline on, ``"retexture"``, wears K1 {top: shirt}, holds shirt.
-  Migration (ruling 4): coat and blouse are worn only by Kai (mesh) -> in_body; shirt is worn by Kira (retexture)
-  -> painted.
+  Migration: coat and blouse are worn only by Kai (mesh) -> in_body (ruling 4); the shirt's flag -> own_mesh
+  (rule 2; before A224 it was a painted shirt worn by Kira — the mode is gone, an own-mesh piece keeps it out of
+  every body the same way).
   Kai's stored bodies, each with the OLD record {body_id, mode "mesh", version 1, texture_signature T, base_signature,
   base_variant, built_for, views, used_views [front, back], view_guard {}, view_warnings []}:
     OLD  = ob0000aaaa built for O1, T_A = tex + "a"*12, store texts "wear:coat+blouse" (both views); files: refs
@@ -31,7 +32,8 @@ FIXTURE (items stored RAW without a mode; the mode migration of Task 3 runs firs
     OLD3 = ob0000cccc built for O3 {outer: coat, top: shirt}, T_C, store texts "wear:coat+shirt"; only O3's MODEL
            sidecar carries its pieces (the manifest fallback), and it names body_id OLD3.
     OLD4 = ob0000dddd built for O1 on base "base0123abcd" (an older base), T_A.
-  Kira's painted body: the texture store + model3d/texture/<TK> of TK = what K1 paints now, her model names TK.
+  Kira's skin texture body: the texture store + model3d/texture/<TK> of TK = her plain body's skin key, her model
+  names TK.
 
 EXPECTED, BY HAND
   Shape key (figure.shape_key, spec ruling 1): "ob" + sha256(canonical JSON of {"version": 2, "base_signature":
@@ -39,14 +41,12 @@ EXPECTED, BY HAND
   "back": "wear:coat+blouse"}})[:8], canonical = sort_keys, separators (",", ":"), UTF-8; V1 = outfit_variant(Kai,
   O1) (the build's variant of a dressed combination), H = garment_hair.hair_in_body(Kai) — both read from the code
   as INPUTS of the fixture, not under test.
-  TK (plain body, figure.texture_key = today's tsig): "tex" + sha256(canonical {"version": 1, "base_signature":
-  bsigK, "base_variant": VK, "side_views": false, "dress_text": {"front": "wear:shirt", "back": "wear:shirt"},
-  "paint_region": {"version": 1, "regions": ["forearm", "shoulder", "spine", "upper_arm"], "margin_mm": 40}})[:12]
-  — the paint_region of the painted shirt's slot top (Ruling A127, 9df0b744a: paint_region.SLOT_REGIONS["top"]).
-[1] worn_sets(Kai, O1): in_body (blouse, coat), painted (). K = the hand key; figure.shape_key agrees.
+  TK (plain body, figure.texture_key = the skin key, A224): "tex" + sha256(canonical {"version": 1,
+  "base_signature": bsigK, "base_variant": VK, "side_views": false, "dress_text": {"front": "", "back": ""}})[:12].
+[1] worn_sets(Kai, O1): in_body (blouse, coat), own {}. K = the hand key; figure.shape_key agrees.
     rekey_bodies_once() = {Kai: {OLD: K, OLD2: "stale", OLD3: "stale", OLD4: "stale"}} (Kira has no body):
-    OLD matches (base, in_body, variant V1, text "wear:coat+blouse" both views); OLD2: shirt is painted, nothing in
-    the body; OLD3: in-body text "wear:coat" != "wear:coat+shirt" (the painted shirt is in its mesh); OLD4: older
+    OLD matches (base, in_body, variant V1, text "wear:coat+blouse" both views); OLD2: the shirt is its own mesh,
+    nothing in the body; OLD3: in-body text "wear:coat" != "wear:coat+shirt" (the shirt was in its mesh); OLD4: older
     base. Every file of body_chain(OLD) exists under the name with OLD -> K (same bytes for non-JSON), none under
     OLD, no path below the three roots names OLD; garments/bodies/K/ holds the fit + low + failed records, each
     naming body_id K; model3d/K.json: record body_id == shape_key == K, version 2, shape_inputs = the hand inputs,
@@ -121,12 +121,13 @@ def fake_dress_text(character_name, view, *, pieces, items, profile=None, mesh_i
     return "wear:" + "+".join(ids) if ids else ""
 
 
-def raw_piece(item_id: str, slots):
+def raw_piece(item_id: str, slots, own: bool = False):
     from app.core import db
+    piece = {"slots": list(slots), **({"own_mesh": True} if own else {})}
     with db.transaction() as conn:
         conn.execute("INSERT INTO items (id, name, category, prompt_fragment, pieces, slots, meta, created_at,"
                      " updated_at) VALUES (?, ?, 'outfit_piece', '', ?, '[]', '{}', 'x', 'x')",
-                     (item_id, item_id, json.dumps({"slots": list(slots)})))
+                     (item_id, item_id, json.dumps(piece)))
     from app.core.motion_item_cache import invalidate
     invalidate()
 
@@ -165,7 +166,7 @@ def main() -> int:
         check("fixture: dressed views", base_body.dressed_views(), ("front", "back"))
 
         for item_id, slots in (("coat", ["outer"]), ("blouse", ["top"]), ("shirt", ["top"])):
-            raw_piece(item_id, slots)
+            raw_piece(item_id, slots, own=item_id == "shirt")
 
         def make(char, mode, pieces, held):
             prof = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
@@ -186,7 +187,7 @@ def main() -> int:
         make("Kira", "retexture", O2, ["shirt"])
         migrated = fm.migrate_modes_once()
         check("fixture: modes migrated", (migrated or {}).get("items"),
-              {"blouse": "in_body", "coat": "in_body", "shirt": "painted"})
+              {"blouse": "in_body", "coat": "in_body", "shirt": "own_mesh"})
 
         cdir = get_character_dir("Kai")
         M, R, G = cdir / "model3d", cdir / "model_refs", cdir / "garments"
@@ -266,14 +267,12 @@ def main() -> int:
         bsigK = base_body.base_signature("Kira")
         VK = base_body.outfit_variant("Kira", O2)
         TK = "tex" + hashlib.sha256(canonical({"version": 1, "base_signature": bsigK, "base_variant": VK,
-                                               "side_views": False, "dress_text": {"front": "wear:shirt",
-                                                                                   "back": "wear:shirt"},
-                                               "paint_region": {"version": 1, "margin_mm": 40, "regions": [
-                                                   "forearm", "shoulder", "spine", "upper_arm"]}})).hexdigest()[:12]
+                                               "side_views": False,
+                                               "dress_text": {"front": "", "back": ""}})).hexdigest()[:12]
         sigK = sig_of("Kira", O2)
         front_refs(kdir, sigK, O2, "Kira")
-        store(kdir, TK, "wear:shirt", bsigK)
-        touch(kdir / "model3d" / "texture" / f"{TK}.glb", b"PAINTED-" + TK.encode())
+        store(kdir, TK, "", bsigK)
+        touch(kdir / "model3d" / "texture" / f"{TK}.glb", b"SKIN-" + TK.encode())
         touch(kdir / "model3d" / "texture" / f"{TK}.json", {"texture_signature": TK, "base_signature": bsigK})
         touch(kdir / "model3d" / f"{sigK}.glb", b"MODEL-K")
         touch(kdir / "model3d" / f"{sigK}.json", {"pieces": O2, "items": [], "base_signature": bsigK,
@@ -292,7 +291,7 @@ def main() -> int:
         print("[1] OLD -> its shape key; the others stale")
         H = garment_hair.hair_in_body("Kai", get_character_profile("Kai"))
         sets = figure.worn_sets("Kai", pieces=O1)
-        check("[1] worn sets of O1", (sets.in_body, sets.painted), (("blouse", "coat"), ()))
+        check("[1] worn sets of O1", (sets.in_body, sets.own), (("blouse", "coat"), {}))
         inputs = {"version": 2, "base_signature": bsig, "base_variant": V1, "hair_in_body": H, "side_views": False,
                   "dress_text": {"front": "wear:coat+blouse", "back": "wear:coat+blouse"}}
         K = "ob" + hashlib.sha256(canonical(inputs)).hexdigest()[:8]
@@ -384,7 +383,7 @@ def main() -> int:
         check("[5] OLD4", verdicts.get(OLD4), (False, "older base"))
         check("[5] Kira's keys", figure.predicted_keys("Kira", O2, [], bsig=bsigK), (bsigK, TK))
         tex = {n.key: (n.reachable, n.reason) for n in ag.analyse("Kira").nodes if n.kind == "texture"}
-        check("[5] Kira's painted body", tex.get(f"texture:{TK}"), (True, ag.CURRENT_TEXTURE))
+        check("[5] Kira's skin texture body", tex.get(f"texture:{TK}"), (True, ag.CURRENT_TEXTURE))
 
         # --- [6] all or nothing -------------------------------------------------------------------------------
         print("[6] a failure part-way leaves both names consistent")

@@ -61,11 +61,12 @@ is a table is named per section. Expected values, derived by hand from Ruling A5
     figure on shape OB with texture "", fit_refused {}, ``_snapshot_shape`` {unrigged: "u.glb"},
     ``_sync_texture_views`` no-op, ``_build_on_shape`` -> {ok True, on_shape True}; ``stored_texture_body`` REAL):
     the result is {ok True, on_shape True} — the shape itself, no ValueError "not a texture signature: ''".
-    ``dressed_image`` (tables: the view's sidecar on OB, its base sha matching): a view with dressed True is None
-    for a figure with texture "" and the path for texture "tex0123456789ab"; dressed False the other way round.
-[6] Fails on the old code (main before Ruling A50, ``BASELINE``): [5]'s build run on BASELINE's base_body.py
-    (loaded as a separate module, same tables) answers {ok False, error "not a texture signature: ''"};
-    BASELINE's garments.py has no ``refit_on_body`` and ``start_garment`` takes no ``body``; its route model has no
+    ``dressed_image`` (tables: the view's sidecar on OB, its base sha matching): a view with dressed True (an edit
+    made for a painted set) is None whatever the figure's texture; dressed False (a copy) is the path (A224: was
+    the path for a painted figure's edit).
+[6] Fails on the old code (main before Ruling A50, ``BASELINE``): (A224: [5]'s build on BASELINE's base_body.py
+    can no longer be loaded here — it imports the removed ``body_retexture``; it answered {ok False, error "not a
+    texture signature: ''"}) BASELINE's garments.py has no ``refit_on_body`` and ``start_garment`` takes no ``body``; its route model has no
     ``body`` field; its fit_attempts.py has no ``body_numbers``; its figure.py keys the texture on
     ``{item_id: sets.own[item_id] for item_id in own}`` (a piece left out for a refused fit counted as painted).
 """
@@ -313,7 +314,7 @@ def test_numbers(tmp: Path) -> None:
 class _Fig:
     def __init__(self, texture: str):
         self.signature, self.bsig, self.shape, self.texture = "sig000000001", "bsig", OB, texture
-        self.own, self.left_out, self.in_body, self.painted = ("item_jacket",), (), ("item_shirt",), ()
+        self.own, self.left_out, self.in_body, self.accessory = ("item_jacket",), (), ("item_shirt",), ()
         self.fit_refused, self.interim, self.notes = {}, {}, {}
 
     def as_dict(self):
@@ -340,9 +341,7 @@ def _build_tables(bb, tmp: Path) -> dict:
     put(bb, "dressed_image", lambda name, view, sig, bsig, **k: front if view == "front" else None)
     put(bb, "_ref_sidecar", lambda path: {"dressed": True, "base_signature": OB})
     put(bb, "_worn_profile", lambda profile, pieces, items: {})
-    put(bb, "figure_texts", lambda *a, **k: {})
     put(bb, "_snapshot_shape", lambda *a, **k: {"rigged": "r.glb", "unrigged": "u.glb"})
-    put(bb, "_sync_texture_views", lambda *a, **k: None)
     put(bb, "texture_view_shas", lambda *a, **k: {})
     put(bb, "_build_on_shape", lambda *a, **k: {"ok": True, "on_shape": True})
     put(model_refs, "find_ref_image", lambda *a, **k: front)
@@ -384,13 +383,13 @@ def test_assemble(tmp: Path) -> None:
     try:
         check("[5] dressed view, figure paints nothing -> None",
               bb.dressed_image("Demo", "front", "sig000000002", "bsig", fig=_Fig("")), None)
-        check("[5] dressed view, painted figure -> the view",
-              bb.dressed_image("Demo", "front", "sig000000002", "bsig", fig=_Fig("tex0123456789ab")), view)
-        meta["dressed"] = False
-        check("[5] undressed view, figure paints nothing -> the view",
-              bb.dressed_image("Demo", "front", "sig000000002", "bsig", fig=_Fig("")), view)
-        check("[5] undressed view, painted figure -> None",
+        check("[5] dressed view, a figure with a texture key -> None (A224)",
               bb.dressed_image("Demo", "front", "sig000000002", "bsig", fig=_Fig("tex0123456789ab")), None)
+        meta["dressed"] = False
+        check("[5] a copy, figure paints nothing -> the view",
+              bb.dressed_image("Demo", "front", "sig000000002", "bsig", fig=_Fig("")), view)
+        check("[5] a copy, a figure with a texture key -> the view (A224)",
+              bb.dressed_image("Demo", "front", "sig000000002", "bsig", fig=_Fig("tex0123456789ab")), view)
     finally:
         _undo(saved)
 
@@ -409,20 +408,6 @@ def _params(src: str, func: str) -> list:
 
 def test_old_code(tmp: Path) -> None:
     print(f"[6] fails on the old code ({BASELINE})")
-    src = _old("app/core/base_body.py")
-    check(f"[6] {BASELINE}: base_body.py readable", bool(src))
-    if src:
-        old = types.ModuleType("base_body_baseline")
-        old.__package__ = "app.core"
-        old.__file__ = str(ROOT / "app/core/base_body.py")
-        exec(compile(src, "base_body_baseline", "exec"), old.__dict__)
-        saved = _build_tables(old, tmp)
-        try:
-            out = old.build_outfit_model("Demo", "sig000000001")
-        finally:
-            _undo(saved)
-        check(f"[6] {BASELINE}: the same assembly raised the empty texture signature", out,
-              {"ok": False, "error": "not a texture signature: ''"})
     garments_src = _old("app/core/garments.py")
     check(f"[6] {BASELINE}: no refit_on_body", bool(garments_src) and "def refit_on_body" not in garments_src)
     check(f"[6] {BASELINE}: start_garment takes no body", "body" in _params(garments_src, "start_garment"), False)

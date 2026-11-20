@@ -42,7 +42,7 @@ front, a view = that view; face is no edit of the base body":
     left -> 409 SIDE_VIEW_NOT_DRESSED "On the base-body pipeline only the
     front and the back are dressed — the side views belong to the base body
     (Figure tab)", view right the same, no trigger; with a dressed front
-    of the current outfit (tpose_<osig>.png, sidecar base_signature BSIG,
+    of the current outfit (tpose_<osig>.png, sidecar base_signature BSIG, dressed False — a copy, A224,
     base_image_sha256 = sha256 of tpose_BSIG.png) view back -> 200, trigger
     (Demo, ("tpose",), "back"). Plain view left -> never the side-view 409
     (it is off the pipeline).
@@ -176,7 +176,7 @@ def main() -> int:
             osig = model_refs.current_outfit_state("Demo")[2]
             (refs / f"tpose_{osig}.png").write_bytes(b"\x89PNG-dressed")
             (refs / f"tpose_{osig}.json").write_text(json.dumps({
-                "base_signature": bsig, "dressed": True,
+                "base_signature": bsig, "dressed": False,
                 "base_image_sha256": hashlib.sha256((refs / f"tpose_{bsig}.png").read_bytes()).hexdigest()}))
             check("back with dressed front", post("Demo", {"kinds": ["tpose"], "view": "back"})[0], 200)
             check("back triggered", TRIGGERS, [("Demo", ("tpose",), "back")])

@@ -15,10 +15,10 @@ Expected values, derived from the rule (ruling 4), in this order: an item that
 already carries a valid ``mesh_mode`` -> untouched; ``own_mesh`` true ->
 ``own_mesh``; worn (``equipped_pieces``) by at least one character and EVERY
 wearer's stored profile ``outfit_body_mode`` is ``"mesh"`` -> ``in_body``;
-else -> ``painted``. The wearers' value is the STORED profile key, not the
-derived ``base_body.outfit_body_mode``. Fixtures are chosen so that the kind
-default (``garment_set.default_mesh_mode``) disagrees with the rule wherever
-it can:
+else -> ``in_body`` too (A224: the painted mode is gone; rule 4 was ``painted``). The wearers' value is the STORED profile key, not the
+derived ``base_body.outfit_body_mode``. The fixtures were chosen (before A224) so that the kind
+default (``garment_set.default_mesh_mode``) disagreed with the rule wherever
+it could:
 
 World 1 characters (all stored with template human-roleplay):
     R  outfit_body_mode "retexture"
@@ -28,24 +28,21 @@ World 1 characters (all stored with template human-roleplay):
 Items (``{slots}`` as stored, without a mode unless named):
     A  world,  top,   own_mesh true,  worn by R        -> own_mesh (rule 2)
     B  shared, top,                   worn by M1, M2   -> in_body (rule 3;
-       the kind default and the DERIVED mode of M1/M2 would say painted)
-    C  shared, outer,                 worn by M1, R    -> painted (R is no
-       mesh wearer; the kind default would say in_body)
-    D  world,  outer,                 unworn           -> painted (default
-       would say in_body)
-    G  world,  top,                   worn by M1, P    -> painted (pooled P
-       has no "mesh"; leaving P out would give in_body)
+       the DERIVED mode of M1/M2 would have said painted)
+    C  shared, outer,                 worn by M1, R    -> in_body (rule 4)
+    D  world,  outer,                 unworn           -> in_body (rule 4)
+    G  world,  top,                   worn by M1, P    -> in_body (rule 4)
     E  shared, top, mesh_mode in_body, own_mesh true, worn by R
                                                        -> in_body, untouched
        (rule 1 before rule 2: the flag would say own_mesh)
     T  world,  a tool (no outfit piece)                -> no outfit_piece
-[1] migrate_modes_once() returns items {A: own_mesh, B: in_body, C: painted,
-    D: painted, G: painted} (E not judged), the stored modes match, E keeps
+[1] migrate_modes_once() returns items {A: own_mesh, B: in_body, C: in_body,
+    D: in_body, G: in_body} (E not judged), the stored modes match, E keeps
     in_body, NO item (world or shared) has an ``own_mesh`` key, T has no
     outfit_piece. judge_item directly: ({own_mesh true}, []) -> own_mesh;
-    ({}, ["mesh","mesh"]) -> in_body; ({}, ["mesh", None]) -> painted;
-    ({}, []) -> painted; ({mesh_mode painted, own_mesh true}, ["mesh"]) ->
-    painted.
+    ({}, ["mesh","mesh"]) -> in_body; ({}, ["mesh", None]) -> in_body;
+    ({}, []) -> in_body; ({mesh_mode accessory, own_mesh true}, ["mesh"]) ->
+    accessory (a stored valid mode is kept).
 [2] profiles == [M1, M2, R] (sorted; P had no key); no stored profile_json
     and no get_character_profile has ``outfit_body_mode``; equipped_pieces
     unchanged.
@@ -55,7 +52,7 @@ Items (``{slots}`` as stored, without a mode unless named):
 [4] World 2 (new temp storage, SAME shared file, flag unset): M3 "mesh"
     wears B, C and a new world item F (top, no mode) alone; R3 "retexture"
     wears E. Result: items == {F: in_body}; B stays
-    in_body, C stays painted (M3 alone would make it in_body if re-judged),
+    in_body, C stays in_body,
     E stays in_body; profiles == [M3, R3].
 [5] update_item no longer carries a stored ``own_mesh`` through: a legacy
     item stored RAW as {slots [top], own_mesh true} (no mode) loses the key
@@ -188,15 +185,15 @@ def main() -> int:
         op = lambda p: {"category": "outfit_piece", "outfit_piece": p}  # noqa: E731
         check("judge own_mesh flag", j(op({"slots": ["top"], "own_mesh": True}), []), "own_mesh")
         check("judge all mesh", j(op({"slots": ["top"]}), ["mesh", "mesh"]), "in_body")
-        check("judge one non-mesh", j(op({"slots": ["top"]}), ["mesh", None]), "painted")
-        check("judge unworn", j(op({"slots": ["outer"]}), []), "painted")
-        check("judge mode kept", j(op({"slots": ["top"], "mesh_mode": "painted", "own_mesh": True}), ["mesh"]),
-              "painted")
+        check("judge one non-mesh", j(op({"slots": ["top"]}), ["mesh", None]), "in_body")
+        check("judge unworn", j(op({"slots": ["outer"]}), []), "in_body")
+        check("judge mode kept", j(op({"slots": ["top"], "mesh_mode": "accessory", "own_mesh": True}), ["mesh"]),
+              "accessory")
         result = fm.migrate_modes_once()
         check("result items", (result or {}).get("items"),
-              {"A": "own_mesh", "B": "in_body", "C": "painted", "D": "painted", "G": "painted"})
-        for item_id, want in (("A", "own_mesh"), ("B", "in_body"), ("C", "painted"), ("D", "painted"),
-                              ("G", "painted"), ("E", "in_body")):
+              {"A": "own_mesh", "B": "in_body", "C": "in_body", "D": "in_body", "G": "in_body"})
+        for item_id, want in (("A", "own_mesh"), ("B", "in_body"), ("C", "in_body"), ("D", "in_body"),
+                              ("G", "in_body"), ("E", "in_body")):
             check(f"stored mode {item_id}", piece_of(item_id).get("mesh_mode"), want)
             check(f"mesh_mode_of {item_id}", garment_set.mesh_mode_of(inventory.get_item(item_id)), want)
         world_pieces = [json.loads(r[0] or "{}") for r in
@@ -233,7 +230,7 @@ def main() -> int:
         result2 = fm.migrate_modes_once()
         check("world 2 items", (result2 or {}).get("items"), {"F": "in_body"})
         check("world 2 profiles", sorted((result2 or {}).get("profiles") or []), ["M3", "R3"])
-        for item_id, want in (("B", "in_body"), ("C", "painted"), ("E", "in_body"), ("F", "in_body")):
+        for item_id, want in (("B", "in_body"), ("C", "in_body"), ("E", "in_body"), ("F", "in_body")):
             check(f"world 2 mode {item_id}", piece_of(item_id).get("mesh_mode"), want)
 
         print("[5] update_item drops a stored own_mesh")

@@ -125,9 +125,6 @@ def setup(root: Path):
     base_body.prompts_current = lambda *_a, **_kw: True
     base_body.base_refresh_plan = lambda *_a, **_kw: {}
     base_body.dressed_image = lambda *_a, **_kw: root / "view.png"
-    base_body.dressed_view_estimate = lambda *_a, **_kw: 3
-    base_body.dressed_view_refusals = lambda *_a, **_kw: {}
-    base_body.mesh_view_mismatch = lambda *_a, **_kw: None
     gs.garment_fsig = lambda *_a, **_kw: CUR["fsig"]
     garments.cached_failure = lambda *_a, **_kw: None
     garments.run_estimate = lambda *_a, **_kw: (

@@ -22,7 +22,11 @@ material and re-assembles on the CPU without a rebuild. A record holds for the b
 - ``blocked`` — no kind chosen, a kind not built yet (a later phase), no plain body;
 - ``failed`` — the last build of this asig on this body raised (``<item>_<asig>.failed.json``).
 
-The garment assembly grafts a current build as the node ``accessory_mesh.node_name`` (``garment_assembly``).
+A ``due`` or ``failed`` state also names ``previous``: the newest stored build of another asig that holds for the
+current body (``previous_record``) — the mesh delivered before the change. The figure keeps showing it with the note
+``REASON_OUTDATED`` until the Build makes the current one (A224, ruling 4: a previously delivered piece mesh stays,
+never a stand-in of another kind). The garment assembly grafts a current build — or that previous one — as the node
+``accessory_mesh.node_name`` (``garment_assembly``).
 """
 import functools
 import hashlib
@@ -61,6 +65,8 @@ REASON_NO_BODY = "No plain body yet"
 REASON_FAILED = "Build failed — {error}"
 REASON_PENDANT_LEFT_OFF = "Pendant left off — {error}"
 REASON_PENDANT = "Pendant ready — Build puts it on the chain on the CPU (0 hub jobs)"
+#: A224: the figure's note of an accessory shown with its previously delivered build (``previous_record``).
+REASON_OUTDATED = "Outdated — Build makes it again (0 hub jobs)"
 
 
 def _profile_of(character_name: str, profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -371,7 +377,9 @@ def accessory_state(character_name: str, item_id: str, *, profile: Optional[Dict
     failed = _read(record_path(character_name, item_id, sig, ".failed.json"))
     if failed and failed.get("base_model_sha256") == base[1]:
         return {"state": "failed", "reason": REASON_FAILED.format(error=failed.get("error") or "unknown"),
-                "record": None, **out}
+                "record": None, "previous": previous_record(character_name, item_id, base_sha=base[1], skip=sig),
+                **out}
+    out["previous"] = previous_record(character_name, item_id, base_sha=base[1], skip=sig)
     if rec is not None:
         return {"state": "due", "reason": REASON_BODY, "record": None, **out}
     if records:
@@ -387,6 +395,25 @@ def accessory_state(character_name: str, item_id: str, *, profile: Optional[Dict
             reason = REASON_SETTINGS if spec["kind"] == "necklace" else REASON_SETTINGS_PIECE
         return {"state": "due", "reason": reason, "record": None, **out}
     return {"state": "due", "reason": REASON_NOT_BUILT, "record": None, **out}
+
+
+def previous_record(character_name: str, item_id: str, *, base_sha: str, skip: str = "") -> Optional[Dict[str, Any]]:
+    """The newest stored build of ``item_id`` (other than the asig ``skip``) that holds for the body of content
+    ``base_sha`` (``model_geometry.record_matches``): the mesh delivered before its settings changed. None without
+    one. Read-only."""
+    from app.core import model_geometry
+    best: Optional[Dict[str, Any]] = None
+    best_mtime = -1
+    for sig, rec in _records(character_name, item_id).items():
+        if sig == skip or not model_geometry.record_matches(rec, base_sha):
+            continue
+        try:
+            mtime = record_path(character_name, item_id, sig, ".npz").stat().st_mtime_ns
+        except OSError:
+            continue
+        if mtime > best_mtime:
+            best, best_mtime = rec, mtime
+    return best
 
 
 def _write_atomic(path: Path, data: bytes) -> None:

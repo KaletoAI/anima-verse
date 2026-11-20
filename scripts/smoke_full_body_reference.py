@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Ruling A87: the A-pose front is an edit of a dedicated FULL-BODY REFERENCE — generated from the profile image
-(or picked / uploaded), one for the plain body and one per outfit — and nothing turns due because this exists.
+(or picked / uploaded), one for the plain body — and nothing turns due because this exists. (A224 removed the
+per-outfit reference with the painted mode it served: no outfit_reference occasion, route or record.)
 
 Usage:
     ./.venv/bin/python scripts/smoke_full_body_reference.py
@@ -20,14 +21,14 @@ Expected, derived by hand from the brief and the user's validated chain (hub job
 reference, prompt since Ruling A95 "Full body shot from head to feet inside the frame, <attributes>, neutral studio lighting, …", negative = nothing worn;
 hub job c265fd78: that output → the A-pose front, A74b's edit prompt):
 
-[1] Routing. OCCASIONS base_reference / outfit_reference: needs_ref_slot True, requires_chain True, both in
+[1] Routing. No OCCASIONS outfit_reference (A224). base_reference: needs_ref_slot True, requires_chain True, in
     MESH_INPUT_OCCASIONS (so no negative fold, the tpose LoRAs). run_routed('base_reference', …):
       chain [no-ref (0 slots), with-ref] -> "with-ref"; the no-ref backend is a configuration skip (never tried);
       chain [no-ref] alone -> NoRouteError, nothing tried;
       empty chain -> NoRouteError (requires a chain — never the cheapest backend).
     The service gate (require_reference) refuses a 1-slot backend the reference does not condition
     (BackendNotApplicableError "…edit of one") — A74b's gate, the payload of [2] carries the flag.
-    Config migration: routing {base_front: [A], outfit_front: [B]} -> base_reference [A], outfit_reference [B];
+    Config migration: routing {base_front: [A], outfit_front: [B]} -> base_reference [A], no outfit_reference;
     a stored base_reference [C] stays [C].
 [2] Generate the plain body's reference (generate_base(Demo)): ONE render — occasion "base_reference", use case
     "base_reference", reference a frozen copy named Demo_1.png in model_refs/.editref_*, require_reference True,
@@ -57,23 +58,18 @@ hub job c265fd78: that output → the A-pose front, A74b's edit prompt):
     front_reference(Demo) has no "source" key — nothing turns due on deploy. On the old code (a620816cd, the commit
     before A87) front_reference built the same four keys: the line
     'return {"method": FRONT_FROM_REFERENCE, "image": image.name, "sha256": sha,' is in it.
-[6] Generate an outfit's reference: with the plain body's reference set its source is that picture (kind
-    "full_body"), cleared it is the profile image; occasion / use case "outfit_reference", require_reference,
-    style_character = outfit_block (the figure as dressed now: "average height, athletic build" (A143)
-    — nothing worn in the fixture, so no "wearing");
-    recorded under the outfit key of the worn combination with origin "generated".
-[7] Uploads (the routes on a test app, the cap patched to 1000 bytes): 2000 declared bytes -> 413 for both upload
-    routes; bytes that are no image -> 415; an 8x8 PNG -> 200, record origin "upload".
+[7] Uploads (the route on a test app, the cap patched to 1000 bytes): 2000 declared bytes -> 413 for the upload
+    route; bytes that are no image -> 415; an 8x8 PNG -> 200, record origin "upload".
 [8] Run all and the Build never generate one: no module but full_body_reference.py and routes/figure.py names
-    generate_base / generate_outfit / start_base / start_outfit; build_note(Demo) = {base, outfit, outfit_auto} booleans + outfit_failed (Ruling A104).
+    generate_base / start_base; build_note(Demo) = {base} (Ruling A104; the outfit keys left with A224).
 [11] Ruling A103 — per-backend reference texts. The fixture region's reference_prompt adds
     backends [{match "*fake*", values {alpha: "a textured {size} area"}}], its reference_negative is
     {default "region detail", backends [{match "*FAKE*", default "blurred region"}]} (globs case-insensitive,
     over the backend's name AND model). For DemoPart (alpha, large; surface wide):
       under the override: base_block = Demo's block + ", exposed wide surface, a textured large area"; type beta
         -> "a flat large surface" (a value the override does not name falls back to the base's); no type ->
-        nothing (neither declares a default); negatives: plain body BASE_NEG + ", blurred region", outfit
-        "blurred region"; without a choice everything as in [10];
+        nothing (neither declares a default); negative: plain body BASE_NEG + ", blurred region"; without a
+        choice everything as in [10];
       generate_base's payload backend_variants: keys [region/prompt ["*fake*"], region/negative ["*FAKE*"]],
         4 variants in product order (-1,-1), (-1,0), (0,-1), (0,0); variant (-1,-1) = the base block/negative,
         (0,0) = the override block / BASE_NEG + ", blurred region";
@@ -94,14 +90,13 @@ hub job c265fd78: that output → the A-pose front, A74b's edit prompt):
     underwear_top, exposed text "exposed {size} surface". ``DemoPart`` = Demo's profile + region {type alpha, size
     large, part on} + surface {size wide}, nothing worn, profile image, outfit_imagegen.tpose_loras [PoseFixture,
     RegionFixture]; ``DemoPartOff`` the same with part off.
-      occasions.mesh_input_text: base_reference / outfit_reference False; tpose / base_front / base_view True;
+      occasions.mesh_input_text: base_reference False; tpose / base_front / base_view True;
       base_block(DemoPart) = base_block(DemoPartOff) = Demo's block + ", exposed wide surface, a smooth plain
         large area" (the general fragments, then the exposed ones; the region slot's own texts stay out, switch
         on or off — A93b; its reference_prompt for type alpha "a smooth plain {size} area" comes last — A95; for
         type beta "a flat large surface", with no type and no default nothing — A101); reference
-        negatives: plain body "clothing, underwear, jewellery, region detail", outfit "region detail"; with the
+        negative: plain body "clothing, underwear, jewellery, region detail"; with the
         region covered neither its reference text nor its negative;
-      outfit_block of both = the same text (nothing worn: no "wearing");
       A93's ordinary description of DemoPartOff (person_description(mesh_input=False)) = Demo's block +
         ", exposed large alpha region, exposed wide surface" (manifest slot order) — what A93b takes out;
       the REAL render_character_image behind generate_base (stub service, generate_from_input records the payload
@@ -251,7 +246,8 @@ def routing_checks(profile_file: Path):
     from app.imagegen.base import BackendNotApplicableError, ImageBackend
     from app.imagegen.selection import BackendPool
     from app.core.prompt_builder import PromptBuilder
-    for occ in ("base_reference", "outfit_reference"):
+    check("no outfit reference occasion (A224)", "outfit_reference" in occasions.OCCASIONS, False)
+    for occ in ("base_reference",):
         o = occasions.OCCASIONS[occ]
         check(f"{occ}: ref slot, chain required, mesh input",
               (o["needs_ref_slot"], o.get("requires_chain"), occ in occasions.MESH_INPUT_OCCASIONS,
@@ -317,8 +313,8 @@ def routing_checks(profile_file: Path):
     from app.core import config as cfg
     seeded = {"image_generation": {"routing": {"base_front": ["A"], "outfit_front": ["B"]}}}
     cfg._migrate_reference_routing(seeded)
-    check("seeded from the fronts", (seeded["image_generation"]["routing"]["base_reference"],
-                                     seeded["image_generation"]["routing"]["outfit_reference"]), (["A"], ["B"]))
+    check("seeded from the front", (seeded["image_generation"]["routing"]["base_reference"],
+                                    "outfit_reference" in seeded["image_generation"]["routing"]), (["A"], False))
     owned = {"image_generation": {"routing": {"base_front": ["A"], "base_reference": ["C"]}}}
     cfg._migrate_reference_routing(owned)
     check("a stored chain owns its value", (owned["image_generation"]["routing"]["base_reference"],
@@ -337,8 +333,7 @@ def upload_checks(full_body_reference):
     app.dependency_overrides[require_admin] = lambda: {"role": "admin"}
     client = TestClient(app)
     with patch.object(upload_limits, "max_upload_bytes", return_value=1000):
-        for path in ("/characters/Demo/base-body/full-body-reference/upload",
-                     "/characters/Demo/figure/outfit-reference/upload"):
+        for path in ("/characters/Demo/base-body/full-body-reference/upload",):
             big = client.post(path, files={"file": ("big.png", b"\x89PNG" + b"0" * 2000, "image/png")})
             check(f"{path.split('/')[3]}: over the cap", big.status_code, 413)
             text = client.post(path, files={"file": ("note.png", b"just text, no picture", "image/png")})
@@ -358,9 +353,8 @@ def mesh_part_checks(human, *, want_block, ordinary_block):
     from app.imagegen import occasions
     from app.models.character import get_character_images_dir, get_character_profile, save_character_profile
     check("mesh-input text per occasion",
-          {o: occasions.mesh_input_text(o) for o in ("base_reference", "outfit_reference", "tpose", "base_front",
-                                                     "base_view")},
-          {"base_reference": False, "outfit_reference": False, "tpose": True, "base_front": True, "base_view": True})
+          {o: occasions.mesh_input_text(o) for o in ("base_reference", "tpose", "base_front", "base_view")},
+          {"base_reference": False, "tpose": True, "base_front": True, "base_view": True})
     # A95: the region's own texts stay out (A93b), its reference_prompt says what it shows instead (uncovered).
     want = want_block + ", exposed wide surface, a smooth plain large area"
     payloads = []
@@ -392,11 +386,8 @@ def mesh_part_checks(human, *, want_block, ordinary_block):
         print(f"  {name} A93b (the reference):        {fbr.compose('base_reference', fbr.base_block(name))!r}")
         check(f"{name}: plain body block names nothing of the region, the other exposed text stays",
               fbr.base_block(name), want)
-        check(f"{name}: outfit block (nothing worn)", fbr.outfit_block(name), want)
         check(f"{name}: plain body negative adds the region's reference negative",
-              fbr.reference_negative(name, fbr._undressed(stored), base=True), BASE_NEG + ", region detail")
-        check(f"{name}: outfit negative (uncovered): the region's only",
-              fbr.reference_negative(name, stored, base=False), "region detail")
+              fbr.reference_negative(name, fbr._undressed(stored)), BASE_NEG + ", region detail")
         from app.core import body_slots
         beta = json.loads(json.dumps(stored))
         beta["body_slots"]["region"]["type"] = "beta"
@@ -464,11 +455,10 @@ def backend_variant_checks(want_block, payloads_by_name):
         check("override: no type, no default anywhere -> nothing",
               body_slots.prompt_fragments(name, profile=beta, appearance_reference=True, neutral_state=True)["exposed"],
               ["exposed wide surface"])
-        check("override negatives", (fbr.reference_negative(name, fbr._undressed(stored), base=True),
-                                     fbr.reference_negative(name, stored, base=False)),
-              (BASE_NEG + ", blurred region", "blurred region"))
-    check("without a choice: the base", (fbr.base_block(name), fbr.reference_negative(name, stored, base=False)),
-          (base, "region detail"))
+        check("override negative", fbr.reference_negative(name, fbr._undressed(stored)),
+              BASE_NEG + ", blurred region")
+    check("without a choice: the base", (fbr.base_block(name), fbr.reference_negative(name, fbr._undressed(stored))),
+          (base, BASE_NEG + ", region detail"))
     sent = payloads_by_name.get(name) or {}
     variants = sent.get("backend_variants") or {}
     check("payload keys", variants.get("keys"),
@@ -569,7 +559,7 @@ def main() -> int:
         from app.plugins.loader import discover_packages
         discover_packages(plugins, force=True)
 
-        from app.core import base_body, expression_regen, full_body_reference as fbr, outfit_references
+        from app.core import base_body, expression_regen, full_body_reference as fbr
         from app.models.character import (get_character_dir, get_character_images_dir, get_character_profile,
                                           save_character_profile)
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
@@ -608,7 +598,7 @@ def main() -> int:
         # Demo is human-roleplay, so the fixture region applies (uncovered, no attributes: its reference text
         # needs {size} and drops, its negative names no attribute and stays).
         check("negative: nothing worn + the region's (A95)", one.get("extra_negative"), BASE_NEG + ", region detail")
-        from app.core.outfit_references import references_dir
+        from app.core.reference_images import references_dir
         gallery = references_dir("Demo") / record["image"]   # never the gallery (user rule 2026-11-16)
         check("record", (record["origin"], record["image"].startswith("Demo_") and
                          record["image"].endswith("_fullbody.png"), gallery.read_bytes() == RENDERED,
@@ -682,38 +672,15 @@ def main() -> int:
         check("old code built the same four keys",
               'return {"method": FRONT_FROM_REFERENCE, "image": image.name, "sha256": sha,' in old_body, True)
 
-        print("[6] generate an outfit's full-body reference")
-        fbr.set_base("Demo", record["image"], origin=fbr.ORIGIN_GENERATED)
-        check("source: the plain body's reference", fbr.outfit_source("Demo"), (gallery, "full_body"))
-        CALLS.clear()
-        got = fbr.generate_outfit("Demo")
-        out = CALLS[0] if len(CALLS) == 1 else {}
-        key = outfit_references.outfit_key({}, [])
-        want_outfit = "average height, athletic build"
-        check("outfit render",
-              (out.get("occasion"), out.get("image_use_case"), out.get("ref_name"), bool(out.get("require_reference")),
-               out.get("style_character"), composed("outfit_reference", out)),
-              ("outfit_reference", "outfit_reference", record["image"], True, want_outfit,
-               framed(want_outfit)))
-        check("recorded under the worn outfit", (got["key"], got["record"]["origin"],
-                                                 got["record"]["made_from"]["kind"],
-                                                 key in outfit_references.references_of("Demo")),
-              (key, "generated", "full_body", True))
-        fbr.clear_base("Demo")
-        check("source without it: the profile image", fbr.outfit_source("Demo"), (profile_file, "profile"))
-        tile = fbr.outfit_tile("Demo", outfit_references.info("Demo"))
-        check("outfit tile: generate part", (tile["generate"]["jobs"], tile["generate"]["ready"],
-                                             tile["generate"]["source"]), (1, True, "profile"))
-
         upload_checks(fbr)
 
         print("[8] Run all and the Build never generate one")
-        names = ("generate_base(", "generate_outfit(", "start_base(", "start_outfit(")
+        names = ("generate_base(", "start_base(")
         users = sorted({str(p.relative_to(ROOT)) for p in (ROOT / "app").rglob("*.py")
                         if any(n in p.read_text(encoding="utf-8") for n in names)})
         check("only the module and its routes", users, ["app/core/full_body_reference.py", "app/routes/figure.py"])
         note = fbr.build_note("Demo")
-        check("build note", sorted(note), ["base", "outfit", "outfit_auto", "outfit_failed"])
+        check("build note", sorted(note), ["base"])
 
     print("[9] outbound attempts")
     check("outbound", OUTBOUND, [])

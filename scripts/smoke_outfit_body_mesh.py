@@ -20,8 +20,9 @@ call order; bytes unchanged), ``_attach_measurement`` (no-op), ``build_lod``
 (recorder, with the auto distance tier on); as smoke_texture_body_reuse:
 ``garments._run_locked`` (an accepted fit per own-mesh piece on the current
 base model sha), ``expression_regen.render_character_image`` (one entry =
-ONE IMAGE JOB), ``run_rembg``, ``body_retexture.retexture`` (one entry = ONE
-WORKER RUN, copies its input), no extension groups, GLB delivery identity.
+ONE IMAGE JOB), ``run_rembg``, no extension groups, GLB delivery identity
+(A224 removed ``body_retexture``: there is no worker run to count — "0
+worker runs" below stays as the old cases' witness).
 The staged chain, hub-op records, view guard, texture store, signature rules,
 assembly, status and overview are REAL.
 
@@ -33,10 +34,10 @@ dress {[top], covers [bottom], own_mesh, "a long red dress"}, skirt {[bottom]
 "a blue pleated skirt"}. Outfits: A {under, shoes}; B = A + dress; C {dress};
 G = A + skirt. Since Task 6 of plan 2026-11-12-unified-worn-pieces there is
 no body mode: each worn piece's item mode decides. "mesh mode" below = under,
-shoes and skirt in mode in_body (meshed into the shape), "retexture mode" =
-all three painted (on the plain body). Nothing is painted next to the in-body
-pieces here, so a meshed outfit's texture is "" and its dressed views are the
-shape's own views (copies, no job). C wears no piece in the body: the plain
+shoes and skirt in mode in_body (meshed into the shape), "plain" = all three
+accessories without a kind (left off, the plain body — A224 removed the
+painted "retexture mode"). A meshed outfit's texture is "" and its dressed
+views are the shape's own views (copies, no job). C wears no piece in the body: the plain
 body (empty dress text). Replaced cases are named "(was …)" below.
 
 Expected, derived by hand from the spec and the plan's Global Constraints:
@@ -71,8 +72,7 @@ Expected, derived by hand from the spec and the plan's Global Constraints:
     stale); find_model3d_serving(Demo) = (sigA, "exact").
 [3] (Ruling A119 below: B IS published with a NOT_FITTED_ON_BODY garment
     warning naming the dress and served "exact"; A's/G's outfit renders are
-    0 image jobs — pieces left off on an unbuilt shape — and the painted
-    retexture build renders its 2 views.)
+    0 image jobs — pieces left off on an unbuilt shape.)
     B = A + dress (own mesh), the dress's chain run first (no outfit render
     runs a chain since task 11c-2 of plan 2026-11-12-unified-worn-pieces,
     ruling A14): the same shape bA -> 0 image jobs, 0 chain steps on a body
@@ -93,13 +93,13 @@ Expected, derived by hand from the spec and the plan's Global Constraints:
 [4] C {dress}: empty dress text -> the base body: 0 image jobs, no mesh/rig
     job, 0 worker runs; model dressed False, no body_id.
 [5] A rebuilt with force in mesh mode: no mesh/rig job (the body is current).
-[6] Items -> painted: A stale, stale_reason "figure" (was "body_mode"); build
-    -> 3 image jobs (the painted front, and since A175 (070594e79) the back as
-    the dressed front's turn plus the back draft), 0 mesh/rig jobs, 1 worker
-    run; the sidecar has no outfit_body_mode / body_id key, names a texture signature (was tA — A's
-    meshed build painted nothing) and its figure stands on the plain body B1.
-    Items -> in_body: A stale "figure" (was "body_mode"); build -> 0 mesh/rig
-    jobs, 0 worker runs, body file bytes + mtime unchanged.
+[6] (A224; was "items -> painted", the same signature repainted) Plain:
+    the pieces as accessories change the outfit signature (sigP != sigA, no
+    model yet); build -> 0 image jobs (copies), 0 mesh/rig jobs; the
+    sidecar has no outfit_body_mode / body_id key, its figure stands on the
+    plain body B1 with the plain body's skin texture key. Items -> in_body:
+    the worn signature is sigA again and A's model is current (not stale);
+    build -> 0 mesh/rig jobs, body file bytes + mtime unchanged, A on bA.
 [7] The body file rewritten (as a re-rig would): A stale "outfit_body";
     build -> 0 mesh/rig jobs; A's bytes = the new body bytes. A re-rig of the
     body (rerig_model(Demo, bA)): ok, ONE rig job on bA, the body sidecar
@@ -217,10 +217,6 @@ def main() -> int:
         from app.core import paths
         paths.init(root / "world")
         paths.init_instance(root / "instance")
-        # Ruling A104 (smoke_outfit_reference_auto.py): these checks pin the dressed views WITHOUT an outfit
-        # full-body reference — no automatic generation before the front.
-        from app.core import full_body_reference as _fbr
-        _fbr.auto_due = lambda *_a, **_k: False
         paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
@@ -232,7 +228,7 @@ def main() -> int:
         discover_packages(plugins, force=True)
 
         import smoke_garment_chain as chain
-        from app.core import (base_body, body_retexture, collision, expression_regen, extension_rig, garments,
+        from app.core import (base_body, collision, expression_regen, extension_rig, garments,
                               glb_delivery, glb_mesh, hub_ops, model3d, model_overview, model_refs,
                               outfit_cache_gc, sync_topics)
         from app.core import garment_store as gs
@@ -290,11 +286,6 @@ def main() -> int:
             target.with_suffix(".json").write_text(json.dumps(meta))
             return target
 
-        def retexture(glb_in, views, out_glb, *, proof, atlas, **kw):
-            WORKER.append(sorted(views))
-            Path(out_glb).write_bytes(Path(glb_in).read_bytes())
-            return {}
-
         def recorder(name, result=None):
             def run(character_name, path, *a, **k):
                 CHAIN.append((name, Path(path).stem))
@@ -318,7 +309,6 @@ def main() -> int:
 
         view_composite.compose = compose
         charmod.run_rembg = rembg
-        body_retexture.retexture = retexture
         service.get_image_service = lambda: FakeService()
         hub_ops.create = recording_create
         model3d._auto_retexture = recorder("retexture")
@@ -360,7 +350,7 @@ def main() -> int:
 
         def piece(item_id, slots, *, covers=(), own_mesh=False):
             op = {"slots": list(slots), "covers": list(covers), "outfit_types": ["casual"]}
-            op["mesh_mode"] = "own_mesh" if own_mesh else "painted"
+            op["mesh_mode"] = "own_mesh" if own_mesh else "in_body"
             return inventory.add_item(name=item_id.capitalize(), category="outfit_piece", item_id=item_id,
                                       prompt_fragment=FRAG[item_id], outfit_piece=op)["id"]
 
@@ -371,10 +361,11 @@ def main() -> int:
             inventory.add_to_inventory("Demo", item)
 
         def set_mode(mode):
-            """The fixture's painted pieces go in the body for "mesh", back to painted for "retexture"."""
+            """The fixture's pieces go in the body for "mesh"; for "plain" they become accessories without a kind —
+            left off, the figure stays the plain body (A224: was "retexture", the pieces painted)."""
             for item_id in ("under", "shoes", "skirt"):
                 op = dict(inventory.get_item(item_id)["outfit_piece"])
-                op["mesh_mode"] = "in_body" if mode == "mesh" else "painted"
+                op["mesh_mode"] = "in_body" if mode == "mesh" else "accessory"
                 inventory.update_item(item_id, {"outfit_piece": op})
 
         set_mode("mesh")
@@ -538,27 +529,27 @@ def main() -> int:
         check("A forced: ok, no mesh/rig job", (result.get("ok"), jobs_of(steps)), (True, []))
 
         # --- [6] mode back and forth ------------------------------------------------------------
-        print("[6] retexture mode unchanged; mode back -> the body is reused")
-        set_mode("retexture")
-        check("retexture: A stale (figure)", (model3d.find_model3d("Demo", sig_a), stale_reason()),
-              (None, "figure"))
+        print("[6] the pieces left off (plain); back in the body -> the body is reused")
+        set_mode("plain")
+        sig_p = model_refs.current_outfit_state("Demo")[2]
+        check("plain: another outfit signature, no model yet", (sig_p != sig_a, model3d.find_model3d("Demo", sig_p)),
+              (True, None))
         jobs, runs, steps, result = render_and_build()
-        meta_r = model_meta(sig_a)
-        # A119: A's outfit views were copies of the plain body (in-body pieces left off), so the painted
-        # pieces need their view renders now (was 0: the painted interim views already existed): the front,
-        # the back's turn (A175) and the back draft.
-        check("retexture: ok, 3 image jobs, 0 mesh/rig jobs, 1 worker run",
-              (result.get("ok"), jobs, jobs_of(steps), runs), (True, 3, [], 1))
-        check("retexture: painted on the plain body", ("outfit_body_mode" in meta_r, "body_id" in meta_r,
-                                                      base_body.is_texture_signature(meta_r.get("texture_signature")),
-                                                      (meta_r.get("figure") or {}).get("shape")),
-              (False, False, True, b1))
+        meta_p = model_meta(sig_p)
+        # A224: the plain body's views are copies (was 3 image jobs + 1 worker run for the painted pieces).
+        check("plain: ok, 0 image jobs, 0 mesh/rig jobs", (result.get("ok"), jobs, jobs_of(steps)), (True, 0, []))
+        check("plain: on the plain body with its skin texture", (
+            "outfit_body_mode" in meta_p, "body_id" in meta_p, (meta_p.get("figure") or {}).get("shape"),
+            (meta_p.get("figure") or {}).get("texture") == figure.texture_key(
+                "Demo", figure.worn_sets("Demo"), shape=b1, bsig=b1, variant=base_body.texture_variant(
+                    "Demo", None, dressed=False, mesh={}), items=[])), (False, False, b1, True))
         body_stat = (sha(body), body.stat().st_mtime_ns)
         set_mode("mesh")
-        check("mesh again: A stale (figure)", (model3d.find_model3d("Demo", sig_a), stale_reason()),
-              (None, "figure"))
+        check("mesh again: A's signature, its model current", (model_refs.current_outfit_state("Demo")[2] == sig_a,
+                                                               model3d.find_model3d("Demo", sig_a) is not None,
+                                                               stale_reason()), (True, True, None))
         jobs, runs, steps, result = render_and_build()
-        check("mesh again: ok, no mesh/rig job, 0 runs", (result.get("ok"), jobs_of(steps), runs), (True, [], 0))
+        check("mesh again: ok, no mesh/rig job", (result.get("ok"), jobs_of(steps)), (True, []))
         check("mesh again: body untouched", (sha(body), body.stat().st_mtime_ns), body_stat)
         check("mesh again: on body bA", model_meta(sig_a).get("body_id"), b_a)
 
@@ -580,7 +571,7 @@ def main() -> int:
               figure.stored_shape("Demo", b_a, view_shas=views_a) is not None, True)
 
         # --- [8] another tsig ------------------------------------------------------------------
-        print("[8] other painted pieces -> another body")
+        print("[8] other in-body pieces -> another body")
         sig_g = wear({**A, "bottom": "skirt"})
         jobs, runs, steps, result = render_and_build()
         t_g = model_meta(sig_g).get("texture_signature")

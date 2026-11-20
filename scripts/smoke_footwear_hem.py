@@ -31,7 +31,7 @@ Expected, by hand:
      equipped_options.boot_hem; POST /characters/Demo/outfit-options {boot_hem: "tucked"} -> 200 {boot_hem
      "tucked", applicable {...}}, "sideways" -> 400, null -> 200 boot_hem None; GET -> the stored value.
      ``hem_applicable``: False before the boot is fitted ("no boot"), False with the trousers' fit record saying
-     skirt, False for a painted (not own-mesh) bottom piece, True with the own-mesh tube fit (boot_item boots,
+     skirt, False for an in-body (not own-mesh) bottom piece, True with the own-mesh tube fit (boot_item boots,
      trousers_item trousers). TOO_WIDE_WARNING = the spec's "{trousers}: too wide to tuck into {boot} — worn over it".
 [H2] tucked, r 0.035 (inside the shaft everywhere: 0.035 < 0.0425 at the sides, < 0.051696 at the front, < 0.071136
      at the back): assemble -> the trousers' layered file (layers/trousers_<F>_<lsig>.glb) with record hem {mode
@@ -107,7 +107,7 @@ Expected, by hand:
      tucked, fallback too_wide; the model overview's footwear entry adds boot_class "ankle" (the insole class of
      the 0.16 shaft) and hem {mode tucked, fallback too_wide}, its row reads "… · ankle boot · trousers over (too
      wide to tuck) · …". With over (r 0.035) the fallback is None and the row reads "trousers over"; with the
-     painted bottom piece worn ``wardrobe`` says applicable False, fallback None. The saved set's preview
+     in-body bottom piece worn ``wardrobe`` says applicable False, fallback None. The saved set's preview
      (GET …/outfit-sets/{id}) carries boot_hem "tucked" ([H6]).
 [H8] (Task 14) a shaft too low to tuck into. After [H5] the boot is ``flat_boot(shaft=0.13, shaft_to=0.12)``:
      its collar at bind 0.13 k - lift = 0.133068 - 0.010236 = 0.122832 -> plane_m 0.092832; its split y_m 0.090236
@@ -400,7 +400,7 @@ def main() -> int:
         near("boot k", brec["scale"]["k_m_per_unit"], 1.023599, 2e-5)
         near("boot lift", brec["root_lift_m"], 0.010236, 1e-5)
         app_ = oo.hem_applicable("Demo", profile=get_character_profile("Demo"))
-        check("applicable without a trousers fit: False (painted)", (app_["applicable"], app_["boot_item"], "painted" in app_["reason"]),
+        check("applicable without a trousers fit: False (in the body)", (app_["applicable"], app_["boot_item"], "in the body" in app_["reason"]),
               (False, boots, True))
         write_trousers(0.035, skirt=True)
         app_ = oo.hem_applicable("Demo", profile=get_character_profile("Demo"))
@@ -414,7 +414,7 @@ def main() -> int:
         p2["equipped_pieces"] = {"feet": boots, "bottom": painted}
         save_character_profile("Demo", p2)
         app_ = oo.hem_applicable("Demo", profile=get_character_profile("Demo"))
-        check("applicable with a painted bottom piece: False", app_["applicable"], False)
+        check("applicable with an in-body bottom piece: False", app_["applicable"], False)
         p2["equipped_pieces"] = {"feet": boots, "bottom": trousers}
         save_character_profile("Demo", p2)
 
@@ -605,9 +605,9 @@ def main() -> int:
               ({"mode": "over", "fallback": None}, True))
         p7 = get_character_profile("Demo")
         p7["equipped_pieces"] = {"feet": boots, "bottom": painted}
-        check("[H7] wear the painted bottom", save_character_profile("Demo", p7), True)
+        check("[H7] wear the in-body bottom", save_character_profile("Demo", p7), True)
         hem_p = garment_set.wardrobe("Demo")["hem"]
-        check("[H7] painted: no control", (hem_p["applicable"], hem_p["fallback"]), (False, None))
+        check("[H7] in the body: no control", (hem_p["applicable"], hem_p["fallback"]), (False, None))
         p7 = get_character_profile("Demo")
         p7["equipped_pieces"] = {"feet": boots, "bottom": trousers}
         check("[H7] trousers again", save_character_profile("Demo", p7), True)

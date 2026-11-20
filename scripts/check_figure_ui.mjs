@@ -12,13 +12,14 @@
  * THE CASES, DERIVED BY HAND (plan "Global Constraints", Task 9 "Interfaces", spec rulings 3, 5, 6)
  * ============================================================================
  * [1] Labels, verbatim from the plan:
- *       MESH_MODE_LABELS  own_mesh → "Own mesh", shell → "Shell from the body" (A168: its own mode), painted →
- *                         "Painted", in_body → "In the body", template → "Template (fabric)", accessory →
- *                         "Accessory" (A216); the select's order own_mesh, shell, template, accessory, painted, in_body
+ *       MESH_MODE_LABELS  own_mesh → "Own mesh", shell → "Shell from the body" (A168: its own mode),
+ *                         in_body → "In the body", template → "Template (fabric)", accessory →
+ *                         "Accessory" (A216); no "painted" (A224); the select's order own_mesh, shell, template,
+ *                         accessory, in_body
  *                         (the two own-mesh chains first, A168; the CPU-made modes next)
  *       A216: dropPresetOf(4, {collar: 4, princess: 10, matinee: 20}) → "collar" (|4 − 4| = 0 ≤ 0.25);
  *             dropPresetOf(10.25, …) → "princess" (0.25 ≤ 0.25); dropPresetOf(10.5, …) → "" (0.5 > 0.25);
- *             isThinPieceRefusal("Too thin for its own mesh — use Painted or Accessory") → true, ("x") → false,
+ *             isThinPieceRefusal("Too thin for its own mesh — use Accessory or In body") → true, ("x") → false,
  *             (null) → false.
  *       HAIR_MODE_LABELS  hairdeck → "HairDeck", haar → "HAAR", body → "In the body"
  *     MESH_MODES / HAIR_MODES list them in that order (the select's order).
@@ -34,9 +35,9 @@
  *       default): in_body for every slot set, footwear included:
  *       ['feet'] → in_body · ['legs','feet'] → in_body · ['outer'] → in_body ·
  *       ['top','bottom'] → in_body · ['top'] → in_body · [] → in_body
- * [5] meshModeOf(stored, slots): a stored valid mode wins ('painted' on ['outer'] → painted, 'own_mesh' on
+ * [5] meshModeOf(stored, slots): a stored valid mode wins ('accessory' on ['outer'] → accessory, 'own_mesh' on
  *       ['feet'] → own_mesh); '' or an unknown word → the default (''/['feet'] → in_body, 'own'/['top'] →
- *       in_body).
+ *       in_body, and since A224 'painted'/['outer'] → in_body).
  * [6] figureBuildLine(changes, hubJobs) — the hair row's line after a mode change (the character's own
  *       Build, POST /characters/{c}/figure/build):
  *       (0, 0)    → text "No changes", button null, reason "Nothing to build"
@@ -90,11 +91,10 @@
  *       yet" → {grey, "Left out", "no fit yet"}; in_body pending → {yellow, "Waits for the Build", no line};
  *       fit_refused "sole sinks" on "T-shirt" with detail "d" → {red, "Refused on the body shape", "Fits the plain
  *       body — refused on the body shape (T-shirt): sole sinks", mouse-over FIT_REFUSED_NOTE + "\n" + "d"}.
- *       bodyRows(all ready, ['hair'], ['Black Blazer']) → plain {green, "Current"}, shape {green, "Current",
- *       "In the body: hair"}, texture {green, "Current", "Painted: Black Blazer"};
- *       (plain older_prompts, shape plain, texture missing, [], ['Blazer']) → plain {yellow, "Outdated"}, shape
- *       {grey, "Not needed", "Nothing is worn in the body"}, texture {yellow, "Due", "Painted: Blazer — the Build
- *       paints it"}; plain missing → {yellow, "None yet"}.
+ *       bodyRows(all ready, ['hair']) → plain {green, "Current"}, shape {green, "Current", "In the body: hair"}
+ *       (A224: no texture row);
+ *       (plain older_prompts, shape plain, []) → plain {yellow, "Outdated"}, shape {grey, "Not needed", "Nothing
+ *       is worn in the body"}; plain missing → {yellow, "None yet"}.
  * [12] Source greps: the Wardrobe's "Mesh steps" opens only on a row that is NOT worn on the pipeline (T9
  *      concern 2 — a worn piece's only entry is the Figure tab); the Base body tab (FieldBaseBody — was
  *      FigureBodyDetails inside the Figure tab until Task UI1) writes staleBaseNote on "Run skin step" (SkinStepLine, its mouse-over since Ruling A90); FieldFigure starts nothing but the Build (its POSTs, all through its one
@@ -206,16 +206,14 @@
  *      Source greps: FieldFigure draws its rows with StepRowView, its panel with SubTabs (Worn now · Build plan ·
  *      Body), the viewer with `builtAt`; neither it nor figureModel writes a ✓ or ⏳ glyph any more.
  * [23] Ruling A61 — a failed Build step says itself (checklist point 8), problemText(p):
- *      {kind mesh_mismatch, step_label "Assemble the figure", view back, body plain, jobs 3}
- *        → title "Assemble the figure failed — Back view", the reason names "its own back view" and says
- *          re-rendering does not help, action "Make the base mesh again — 3 hub jobs", note MESH_HELD_NOTE;
- *        body shape, jobs 1 → action "Make the body shape mesh again — 1 hub job";
- *      {kind failed, step_label "Texture", view "", detail "boom", jobs null, held true}
- *        → title "Texture failed", reason FAILED_PLAIN (the message "boom" only on mouse-over: it is the worker's
+ *      (the kind mesh_mismatch left with the painted texture, A224)
+ *      {kind failed, step_label "Body shape", view "", detail "boom", jobs null, held true}
+ *        → title "Body shape failed", reason FAILED_PLAIN (the message "boom" only on mouse-over: it is the worker's
  *          English), action "Retry this step — cost unknown", note HELD_NOTE; at the back view, held false, jobs 0
  *        → reason "The step stopped at the back view — the message is on mouse-over.", note "", action "Retry
  *          this step — no hub job".
- *      Source greps: the 3D tab renders BuildProblemNote, the Figure and Base body tabs BuildProblemView.
+ *      Source greps: the 3D tab renders BuildProblemNote, the Figure tab BuildProblemView, the Base body tab
+ *      not any more (it showed only the mismatch, A224).
  *
  * [24] Ruling A67 — the piece dialog's body switch offers the base body and the current body only (the server's list:
  *      scripts/smoke_dialog_two_bodies.py). Pure helpers: fitBodyName({role 'base'}) → "Base body", {role 'current'}
@@ -257,7 +255,7 @@
  *        yellow "Outdated", staleText; missing → yellow "Not built yet", "The Build makes it"; ready → green "Ready",
  *        the proof line; ready + [w1, w2] → yellow "Ready — with warnings", "w1", "w1\nw2". renderAllLabel 0 / 2 /
  *        -1 → 1 / 3 / 1 image jobs. viewAction (what a view's button does, server base_body.dressed_view_source):
- *        painted or unknown → "Regenerate this view — 1 image job", 1 job, no note; shape → "Copy this view again
+ *        unknown (off the pipeline) → "Regenerate this view — 1 image job", 1 job, no note; shape → "Copy this view again
  *        from the body shape — no job", 0, SHAPE_COPY_NOTE; plain → "… from the plain body — no job", 0,
  *        PLAIN_COPY_NOTE. VIEWS_BY_BUILD = "The Build above renders these views and builds the outfit model from them."
  *      No Pose tab: base-character.json has neither `tpose_tab` nor `model_refs`; CharactersTab has no model_refs slot
@@ -273,9 +271,8 @@
  *        (Ruling A90: the views are ONE row of tiles, where they come from ONE chip over the row with ONE link,
  *        each button's whole label on its mouse-over, a one-line note's whole text there too)
  *        shape copy (ob0a1b2c3d, 0 jobs): the tiles "Front view" 1 and "Back view" 1, the copy
- *          label 2 (the buttons' mouse-over), no "Regenerate this view", "Copy of the body shape’s view — nothing
- *          painted" 1, a ↗ Body button 1, the face view note 2 (its text + its mouse-over);
- *        painted: "Regenerate this view — 1 image job" 2, "Painted on the body shape’s view" 1, no "no job";
+ *          label 2 (the buttons' mouse-over), no "Regenerate this view", "Copy of the body shape’s view" 1, a ↗ Body
+ *          button 1, the face view note 2 (its text + its mouse-over); (A224: no painted source any more);
  *        plain copy (base1234abcd): the plain copy label 2, ↗ Base body 2 (the chip + the face view note);
  *        off the pipeline (main + the enabled left view, not rendered): Regenerate 2, "Render all views — 2 image
  *          jobs" 1, Auto 1, no "nothing painted";
@@ -427,19 +424,19 @@ try {
 
 // [1]
 check('[1] MESH_MODE_LABELS', m.MESH_MODE_LABELS,
-  { own_mesh: 'Own mesh', shell: 'Shell from the body', painted: 'Painted', in_body: 'In the body',
+  { own_mesh: 'Own mesh', shell: 'Shell from the body', in_body: 'In the body',
     template: 'Template (fabric)', accessory: 'Accessory' });
 {
   const presets = { collar: 4, princess: 10, matinee: 20 };
   check('[1] dropPresetOf 4', m.dropPresetOf(4, presets), 'collar');
   check('[1] dropPresetOf 10.25', m.dropPresetOf(10.25, presets), 'princess');
   check('[1] dropPresetOf 10.5', m.dropPresetOf(10.5, presets), '');
-  check('[1] isThinPieceRefusal', [m.isThinPieceRefusal('Too thin for its own mesh — use Painted or Accessory'),
+  check('[1] isThinPieceRefusal', [m.isThinPieceRefusal('Too thin for its own mesh — use Accessory or In body'),
     m.isThinPieceRefusal('x'), m.isThinPieceRefusal(null)], [true, false, false]);
 }
 check('[1] HAIR_MODE_LABELS', m.HAIR_MODE_LABELS,
   { hairdeck: 'HairDeck', haar: 'HAAR', body: 'In the body' });
-check('[1] MESH_MODES order', m.MESH_MODES, ['own_mesh', 'shell', 'template', 'accessory', 'painted', 'in_body']);
+check('[1] MESH_MODES order', m.MESH_MODES, ['own_mesh', 'shell', 'template', 'accessory', 'in_body']);
 // Ruling A138: the template row's summary and cost line, and its due light.
 check('[1] templateSummary', m.templateSummary({ kind: 'skirt', length_m: 0.45, flare: 0.4, waist_height: 'natural',
   slit: 'left', slit_m: 0.2, sleeves: 'none', fabric: 'medium' }),
@@ -488,7 +485,8 @@ check('[4] top', m.defaultMeshMode(['top']), 'in_body');
 check('[4] none', m.defaultMeshMode([]), 'in_body');
 
 // [5]
-check('[5] stored wins (painted)', m.meshModeOf('painted', ['outer']), 'painted');
+check('[5] stored wins (accessory)', m.meshModeOf('accessory', ['outer']), 'accessory');
+check('[5] painted is unknown since A224 -> default', m.meshModeOf('painted', ['outer']), 'in_body');
 check('[5] stored wins (own_mesh)', m.meshModeOf('own_mesh', ['feet']), 'own_mesh');
 check('[5] empty -> default', m.meshModeOf('', ['feet']), 'in_body');
 check('[5] unknown -> default', m.meshModeOf('own', ['top']), 'in_body');
@@ -569,7 +567,7 @@ check('[10] stale model texts', ['before_pipeline', 'outfit_body', 'figure', nul
   'Built on an older base body — rebuild it']);
 
 // [11]
-const row = (o) => ({ state: 'pending', mode: 'painted', jobs: 0, failure: '', left_out: '', note: '', ...o });
+const row = (o) => ({ state: 'pending', mode: 'accessory', jobs: 0, failure: '', left_out: '', note: '', ...o });
 const ws = (o) => { const w = m.wornState(row(o)); return [w.light, w.text, w.sub]; };
 check('[11] ready', ws({ state: 'ready' }), ['green', 'Ready', null]);
 check('[11] own mesh due', ws({ mode: 'own_mesh', jobs: 3 }), ['yellow', 'Due: own mesh · 3 hub jobs', null]);
@@ -584,15 +582,13 @@ check('[11] fit refused', [refusedRow.light, refusedRow.text, refusedRow.sub, re
   ['red', 'Refused on the body shape', 'Fits the plain body — refused on the body shape (T-shirt): sole sinks',
     `${m.FIT_REFUSED_NOTE}\nd`]);
 const part = (state) => ({ key: 'k', state });
-const br = (body, shape, tex) => m.bodyRows(body, shape, tex).map((r) => [r.key, r.light, r.state, r.reason]);
-check('[11] body rows ready', br({ plain: part('ready'), shape: part('ready'), texture: part('ready') }, ['hair'],
-  ['Black Blazer']), [['plain', 'green', 'Current', m.baseBodyLine('ready')], ['shape', 'green', 'Current', 'In the body: hair'],
-  ['texture', 'green', 'Current', 'Painted: Black Blazer']]);
-check('[11] body rows mixed', br({ plain: part('older_prompts'), shape: part('plain'), texture: part('missing') }, [],
-  ['Blazer']), [['plain', 'yellow', 'Outdated', m.baseBodyLine('older_prompts')],
-  ['shape', 'grey', 'Not needed', 'Nothing is worn in the body'],
-  ['texture', 'yellow', 'Due', 'Painted: Blazer — the Build paints it']]);
-check('[11] body rows: no plain body', br({ plain: part('missing'), shape: part('plain'), texture: part('none') }, [], [])[0]
+const br = (body, shape) => m.bodyRows(body, shape).map((r) => [r.key, r.light, r.state, r.reason]);
+check('[11] body rows ready', br({ plain: part('ready'), shape: part('ready') }, ['hair']),
+  [['plain', 'green', 'Current', m.baseBodyLine('ready')], ['shape', 'green', 'Current', 'In the body: hair']]);
+check('[11] body rows mixed', br({ plain: part('older_prompts'), shape: part('plain') }, []),
+  [['plain', 'yellow', 'Outdated', m.baseBodyLine('older_prompts')],
+  ['shape', 'grey', 'Not needed', 'Nothing is worn in the body']]);
+check('[11] body rows: no plain body', br({ plain: part('missing'), shape: part('plain') }, [])[0]
   .slice(1, 3), ['yellow', 'None yet']);
 
 // [12]
@@ -905,25 +901,17 @@ check('[21] Figure tab source', [/<StepRowView\b/.test(fieldFigure), /<SubTabs\b
       /change\.depth = depth/.test(meshView), /id="fit-depth"/.test(fitSettings)], [true, false, true, true]);
 }
 
-// [23] Ruling A61
-const prob = (o) => ({ kind: 'mesh_mismatch', step: 'assemble', step_label: 'Assemble the figure', view: 'back',
-  body: 'plain', detail: 'GLBBodyRetexture: back view: …', action: 'rebuild_mesh', jobs: 3, held: true, ...o });
-const pm = m.problemText(prob({}));
-check('[23] mesh mismatch, plain body', [pm.title, pm.reason.includes('its own back view'),
-  pm.reason.includes('Rendering the view again does not help'), pm.action, pm.note, pm.detail],
-  ['Assemble the figure failed — Back view', true, true, 'Make the base mesh again — 3 hub jobs', m.MESH_HELD_NOTE,
-    'GLBBodyRetexture: back view: …']);
-check('[23] mesh mismatch, body shape', m.problemText(prob({ body: 'shape', jobs: 1 })).action,
-  'Make the body shape mesh again — 1 hub job');
-const pf = m.problemText(prob({ kind: 'failed', step: 'texture', step_label: 'Texture', view: '', body: '',
-  detail: 'boom', action: 'retry', jobs: null }));
+// [23] Ruling A61's mesh-mismatch problem left with the painted texture (A224): a failed step only.
+const prob = (o) => ({ kind: 'failed', step: 'assemble', step_label: 'Assemble the figure', view: 'back',
+  body: 'plain', detail: 'boom', action: 'retry', jobs: 3, held: true, ...o });
+const pf = m.problemText(prob({ step: 'shape', step_label: 'Body shape', view: '', body: '', jobs: null }));
 check('[23] other failure', [pf.title, pf.reason, pf.action, pf.note, pf.detail],
-  ['Texture failed', m.FAILED_PLAIN, 'Retry this step — cost unknown', m.HELD_NOTE, 'boom']);
+  ['Body shape failed', m.FAILED_PLAIN, 'Retry this step — cost unknown', m.HELD_NOTE, 'boom']);
 const pn = m.problemText(prob({ kind: 'failed', held: false, jobs: 0 }));
 check('[23] at a view, not held, no job', [pn.reason, pn.note, pn.action],
   ['The step stopped at the back view — the message is on mouse-over.', '', 'Retry this step — no hub job']);
 check('[23] tabs render it', [/<BuildProblemNote\b/.test(src('frontend/src/tabs/characters/FieldModel3D.tsx')),
-  /<BuildProblemView\b/.test(fieldFigure), /<BuildProblemView\b/.test(details)], [true, true, true]);
+  /<BuildProblemView\b/.test(fieldFigure), /<BuildProblemView\b/.test(details)], [true, true, false]);
 
 // [26] Ruling A70: the Pose tab dissolved into the Figure tab's Dressed views and Outfit model sub-tabs.
 {
@@ -963,8 +951,6 @@ check('[23] tabs render it', [/<BuildProblemNote\b/.test(src('frontend/src/tabs/
       ['Render all views — 1 image job', 'Render all views — 3 image jobs', 'Render all views — 1 image job']);
     // viewAction: what a view's button does — an edit (1 image job) or a copy (no job)
     const va = (src) => { const a = dv.viewAction(src); return [a.label, a.jobs, a.note]; };
-    check('[26] viewAction edit', va({ source: 'painted', shape: 'ob0a1b2c3d', jobs: 1 }),
-      ['Regenerate this view — 1 image job', 1, '']);
     check('[26] viewAction unknown source = the edit', va(null), ['Regenerate this view — 1 image job', 1, '']);
     check('[26] viewAction shape copy', va({ source: 'shape', shape: 'ob0a1b2c3d', jobs: 0 }),
       ['Copy this view again from the body shape — no job', 0, dv.SHAPE_COPY_NOTE]);
@@ -1048,11 +1034,8 @@ check('[23] tabs render it', [/<BuildProblemNote\b/.test(src('frontend/src/tabs/
     check('[26] Dressed views, shape copy: two rows say it and cost no job, ↗ Body each', [
       count(shape, 'Front view</strong>'), count(shape, 'Back view</strong>'),
       count(shape, 'Copy this view again from the body shape — no job'), count(shape, 'Regenerate this view'),
-      count(shape, 'Copy of the body shape’s view — nothing painted'), count(shape, 'Body</button>'),
+      count(shape, 'Copy of the body shape’s view'), count(shape, 'Body</button>'),
       count(shape, 'Face view: it textures the plain body’s face')], [1, 1, 2, 0, 1, 1, 2]);
-    const painted = steps(refsInfo({ source: 'painted', shape: 'ob0a1b2c3d', jobs: 1 }));
-    check('[26] Dressed views, painted: 1 image job each', [count(painted, 'Regenerate this view — 1 image job'),
-      count(painted, 'Painted on the body shape’s view'), count(painted, 'no job')], [2, 1, 0]);
     const plain = steps(refsInfo({ source: 'plain', shape: 'base1234abcd', jobs: 0 }));
     check('[26] Dressed views, plain copy: ↗ Base body each (+ the face view note)', [
       count(plain, 'Copy this view again from the plain body — no job'), count(plain, 'Base body</button>')], [2, 2]);
@@ -1251,10 +1234,9 @@ check('[25] the Wardrobe chip\'s fit', m.acceptedWhat({ step: 'fit', on: '', rea
   ], [true, true, true, true, true, true]);
 }
 
-// [29] Ruling A87 — the full-body reference step, the same wording in the Base body and the Figure tab. Expected
-// values by hand: one Generate = 1 image job; the plain body's follow-up is the front's Regenerate from [28]'s counts
-// (2 image jobs + 7 hub jobs at the next Build while a base model is stored); an outfit's is the dressed views' image
-// jobs (2 with front + back) while something is painted, else nothing.
+// [29] Ruling A87 — the full-body reference step on the Base body tab (A224 removed the outfit's, which only served
+// painted pieces). Expected values by hand: one Generate = 1 image job; the plain body's follow-up is the front's
+// Regenerate from [28]'s counts (2 image jobs + 7 hub jobs at the next Build while a base model is stored).
 {
   const fb = await loadBundled(join(ROOT, 'frontend/src/tabs/characters/fullBodyReferenceModel.ts'));
   const J = { view: 1, front: 2, model: 4, after_front: 7, model_followup: { jobs: 4, stages: ['mesh', 'upscale', 'face', 'rig'] } };
@@ -1264,41 +1246,31 @@ check('[25] the Wardrobe chip\'s fit', m.acceptedWhat({ step: 'fit', on: '', rea
     ['Generate — 1 image job', 'Regenerate — 1 image job']);
   check('[29] base follow-up', fb.baseFollowup(J),
     'Then the front is due: Regenerate front from the full-body reference — 2 image jobs + 7 hub jobs at the next Build');
-  check('[29] outfit follow-up', [fb.outfitFollowup(true, 2), fb.outfitFollowup(false, 2)],
-    ['Then the dressed views are due with the next Build — 2 image jobs',
-      'Nothing becomes due now: nothing is painted on this figure, so the picture is not used']);
-  check('[29] Run all / Build notes', [fb.fullBodyBuildNote('base', false, 'reference'), fb.fullBodyBuildNote('base', false, 'text'),
-    fb.fullBodyBuildNote('base', true, 'reference'), fb.fullBodyBuildNote('outfit', false)],
+  check('[29] Run all / Build notes', [fb.fullBodyBuildNote(false, 'reference'), fb.fullBodyBuildNote(false, 'text'),
+    fb.fullBodyBuildNote(true, 'reference')],
   ['Full-body reference: none — the front uses the profile image',
-    'Full-body reference: none — no profile image, the front is made from text', '',
-    'Outfit full-body reference: none — the dressed front is an edit of the body’s front']);
+    'Full-body reference: none — no profile image, the front is made from text', '']);
   const rec = { image: 'a.png', sha256: 'x', set_at: '2026-11-15T10:00:00+00:00', origin: 'generated' };
   const run = { running: false, started_at: null, error: null, failed_at: null };
   const rows = [
-    fb.fullBodyRow('base', { record: null, gone: false, run }),
-    fb.fullBodyRow('base', { record: null, gone: false, run: { ...run, running: true }, generate: { jobs: 1, source: 'profile' } }),
-    fb.fullBodyRow('base', { record: rec, gone: false, run, front: { stored: true, current: false, source: 'full_body' } }),
-    fb.fullBodyRow('base', { record: rec, gone: false, run, front: { stored: true, current: true, source: 'full_body' } }),
-    fb.fullBodyRow('base', { record: rec, gone: true, run }),
-    fb.fullBodyRow('base', { record: rec, gone: false, run: { ...run, error: 'no backend' } }),
-    fb.fullBodyRow('outfit', { record: rec, gone: false, run, applies: false, note: 'n', label: 'Blue dress' }),
-    fb.fullBodyRow('outfit', { record: rec, gone: false, run, applies: true, jobs: 2, label: 'Blue dress' }),
-    fb.fullBodyRow('outfit', { record: rec, gone: false, run, applies: true, jobs: 0, label: 'Blue dress' }),
+    fb.fullBodyRow({ record: null, gone: false, run }),
+    fb.fullBodyRow({ record: null, gone: false, run: { ...run, running: true }, generate: { jobs: 1, source: 'profile' } }),
+    fb.fullBodyRow({ record: rec, gone: false, run, front: { stored: true, current: false, source: 'full_body' } }),
+    fb.fullBodyRow({ record: rec, gone: false, run, front: { stored: true, current: true, source: 'full_body' } }),
+    fb.fullBodyRow({ record: rec, gone: true, run }),
+    fb.fullBodyRow({ record: rec, gone: false, run: { ...run, error: 'no backend' } }),
   ].map((r) => [r.light, r.state]);
   check('[29] rows', rows, [['grey', 'Not set'], ['blue', 'Generating'], ['yellow', 'Due'], ['green', 'Used'],
-    ['red', 'Picture gone'], ['red', 'Failed'], ['grey', 'Not used now'], ['yellow', 'Due'], ['green', 'Used']]);
-  check('[29] the same name in both places', [fb.fullBodyRow('base', { record: null, gone: false }).name,
-    fb.fullBodyRow('outfit', { record: null, gone: false, label: 'Blue dress' }).name],
-  ['Full-body reference', 'Full-body reference · Blue dress']);
+    ['red', 'Picture gone'], ['red', 'Failed']]);
+  check('[29] the name', fb.fullBodyRow({ record: null, gone: false }).name, 'Full-body reference');
   const de = JSON.parse(src('shared/languages/de.json')).translations;
   const tde = (k) => de[k] ?? k;
-  check('[29] German', [fb.generateLabel(false, 1, tde), fb.fullBodyBuildNote('base', false, 'reference', tde)],
+  check('[29] German', [fb.generateLabel(false, 1, tde), fb.fullBodyBuildNote(false, 'reference', tde)],
     ['Generieren — 1 Bild-Job', 'Ganzkörper-Referenz: keine — die Vorderansicht verwendet das Profilbild']);
   const tile = src('frontend/src/tabs/characters/FullBodyReferenceTile.tsx');
-  check('[29] one tile in both places', [
+  check('[29] one tile, on the Base body', [
     /<FullBodyReferenceTile /.test(src('frontend/src/tabs/characters/FieldBaseBody.tsx')),
-    /<FullBodyReferenceTile /.test(src('frontend/src/tabs/characters/OutfitReferenceRow.tsx')),
-    /createPortal\(/.test(tile), !/window\.(confirm|alert|prompt)/.test(tile)], [true, true, true, true]);
+    /createPortal\(/.test(tile), !/window\.(confirm|alert|prompt)/.test(tile)], [true, true, true]);
 }
 
 if (failures.length) {

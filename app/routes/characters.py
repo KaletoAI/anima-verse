@@ -1571,9 +1571,8 @@ async def generate_character_model_refs(character_name: str,
     for the dressed views of a base-body character while its Build runs
     (ruling F16). One dressed view of a pipeline character answers what
     the click does (Ruling A70, ``base_body.dressed_view_source``):
-    ``{status: "generating", jobs: 1, source: "painted"}`` — an edit — or
-    ``{status: "copying", jobs: 0, source: "shape" | "plain"}`` — nothing
-    is painted on the figure, the view is its shape's view copied again."""
+    ``{status: "copying", jobs: 0, source: "shape" | "plain"}`` — the view
+    is its body's view copied again (A224: an outfit's views are copies)."""
     from app.core.model_refs import (
         REF_KINDS, tpose_views_for_character, current_outfit_state, find_ref_image,
         trigger_now,
@@ -1627,7 +1626,7 @@ async def generate_character_model_refs(character_name: str,
     source = _dressed_source(character_name, kinds, view)
     trigger_now(character_name, kinds=kinds, tpose_view=view, face_render=face_render)
     if source is not None and source["jobs"] == 0:
-        # Ruling A70: nothing is painted on this figure — the view is copied from its shape's view again, no job.
+        # Ruling A70 / A224: the view is copied from its body's view again, no job.
         return {"status": "copying", "jobs": 0, "source": source["source"]}
     return {"status": "generating", **({"jobs": 1, "source": source["source"]} if source else {})}
 
@@ -2235,7 +2234,7 @@ def _garment_limits(kind: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
 def get_character_garments(character_name: str,
                            _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """The Wardrobe's own-mesh overview (``garment_set.wardrobe``):
-    ``{pipeline, items: {item_id: {state, step, painted, reason,
+    ``{pipeline, items: {item_id: {state, step, missing, reason,
     queue_position, over, without}}, overlaps: [{items, slots}],
     queue_running, queue}`` — every own-mesh piece the character holds or
     wears (a worn piece over others names them), the worn pieces that are
@@ -2283,17 +2282,12 @@ def get_character_garment(character_name: str, item_id: str,
     # A worn own-mesh piece without its fit is left off the figure until it is ready (Ruling A119); hair is
     # simply absent (``piece_status``).
     worn_piece = bool(pipeline and worn and kind in garment_set.OWN_MESH_PIECE_KINDS)
-    left_out = False
-    if worn_piece:
-        from app.core import figure
-        left_out = item_id in figure.delivered_figure_cached(character_name, profile=profile).left_out
     payload = {"pipeline": pipeline, "item_id": item_id, "name": str(item.get("name") or item_id),
                "kind": kind, "mesh_mode": garment_set.mesh_mode_of(item), "worn": bool(worn),
                "status": garment_set.piece_status(
                    info, worn=worn_piece, base_model_ready=bool(base and base[1]),
                    layers=garment_set.worn_layers(character_name, profile=profile,
-                                                  base_model_sha=base[1] if base else "").get(item_id),
-                   left_out=left_out),
+                                                  base_model_sha=base[1] if base else "").get(item_id)),
                "garment": info, "limits": _garment_limits(kind),
                # A194: the live CPU line of the piece's step in flight ("Stage · i/n · 42 s"), None when idle.
                "live": garment_set.piece_live(character_name, item_id),
@@ -4181,7 +4175,7 @@ def _face_retexture_signature(character_name: str, signature: str) -> str:
     """Resolve a selected outfit key and reject path/glob input.
 
     On the base-body pipeline the face belongs to the base body: every
-    outfit model is painted onto it and has no unrigged source of its own,
+    outfit model stands on it and has no unrigged source of its own,
     so dialog, preview, start, revert and comparison act on the BASE
     signature whatever was selected. A re-rigged base changes its model
     bytes, which marks every outfit model stale (``base_model_sha256``) —

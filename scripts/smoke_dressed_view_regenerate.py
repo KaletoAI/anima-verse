@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Ruling A70: a dressed view's Regenerate says what it does — an edit (1 image job) or a copy of the body
-shape's view (no job).
+shape's view (no job). Since A224 (the painted mode removed) every dressed view is a copy.
 
 Usage:
     ./.venv/bin/python scripts/smoke_dressed_view_regenerate.py
@@ -17,24 +17,24 @@ again — the same bytes, no render. The route still answered ``{"status": "gene
 
 Fixture: ``Demo`` (human-roleplay, base-body pipeline). BSIG = base_signature(Demo), OB = "ob0a1b2c3d" (a meshed
 shape), OSIG = "smokeosig" (the outfit's signature). ``figure.delivered_figure`` / ``delivered_figure_cached`` are
-stubbed to return Figure(shape=SHAPE, texture=TEX, bsig=BSIG); ``base_body.figure_texts`` to {view: TEXT}.
+stubbed to return Figure(shape=SHAPE, texture=TEX, bsig=BSIG). TEXT is what was once painted (a dress text) — since
+A224 nothing reads it, so it must change nothing.
 The shape's views model_refs/tpose_<OB>.png and tpose_back_<OB>.png are 8x8 PNGs of grey 40 and 90.
 
-Expected, derived by hand from the rule "a meshed shape paints exactly when the figure has a texture (Ruling A50);
-the plain body paints when the front's dress text is not empty; what does not paint is a copy, no job":
+Expected, derived by hand from the rule "nothing is painted onto a body (A224): a dressed view is a copy of its
+shape's view (a meshed shape) or of the plain body's view, no job":
 [1] dressed_view_source(Demo):
-      SHAPE=OB, TEX=""          -> {source "shape",   shape OB,   jobs 0}
-      SHAPE=OB, TEX="texabc"    -> {source "painted", shape OB,   jobs 1}
-      SHAPE=BSIG, TEXT ""       -> {source "plain",   shape BSIG, jobs 0}
-      SHAPE=BSIG, TEXT "a dress" -> {source "painted", shape BSIG, jobs 1}
+      SHAPE=OB, TEX=""          -> {source "shape", shape OB,   jobs 0}
+      SHAPE=OB, TEX="texabc"    -> {source "shape", shape OB,   jobs 0}
+      SHAPE=BSIG, TEXT ""       -> {source "plain", shape BSIG, jobs 0}
+      SHAPE=BSIG, TEXT "a dress" -> {source "plain", shape BSIG, jobs 0}
 [2] generate_dressed_images(OSIG, view "back", force True) with SHAPE=OB, TEX="": 0 renders; the result names
     tpose_back; model_refs/tpose_back_<OSIG>.png has the bytes of tpose_back_<OB>.png; its sidecar dressed False,
     base_signature OB.
-[3] the same with TEX="texabc", TEXT "a red dress", view "main", force True: exactly 1 render, occasion "outfit_front", output stem
-    model_refs/tpose_<OSIG>.
+[3] the same with TEX="texabc", TEXT "a red dress", view "main", force True: still 0 renders (a copy).
 [4] POST /characters/Demo/model-refs/generate (trigger_now a recorder, the base-image guards passed):
       {kinds [tpose], view main}, TEX=""        -> 200 {status "copying", jobs 0, source "shape"}
-      {kinds [tpose], view main}, TEX="texabc"  -> 200 {status "generating", jobs 1, source "painted"}
+      {kinds [tpose], view main}, TEX="texabc"  -> 200 {status "copying", jobs 0, source "shape"}
       {kinds [tpose], view main}, SHAPE=BSIG, TEXT "" -> 200 {status "copying", jobs 0, source "plain"}
       {kinds [tpose]} (all views)               -> 200 {status "generating"} (no per-view claim)
       {kinds [pose]}                            -> 200 {status "generating"}
@@ -116,17 +116,16 @@ def main() -> int:
 
         def fig(*_a, **_kw):
             return figure.Figure(signature=osig, bsig=bsig, shape=state["shape"], texture=state["tex"],
-                                 in_body=("dress",) if state["shape"] == ob else (), painted=(), own=())
+                                 in_body=("dress",) if state["shape"] == ob else (), own=())
         figure.delivered_figure = fig
         figure.delivered_figure_cached = fig
-        base_body.figure_texts = lambda c, f, items, profile=None: {v: state["text"] for v in base_body.dressed_views()}
         model_refs.current_outfit_state = lambda c: ({}, [], osig)
 
         print("[1] dressed_view_source")
         for shape, tex, text, want in ((ob, "", "", {"source": "shape", "shape": ob, "jobs": 0}),
-                                       (ob, "texabc", "", {"source": "painted", "shape": ob, "jobs": 1}),
+                                       (ob, "texabc", "", {"source": "shape", "shape": ob, "jobs": 0}),
                                        (bsig, "", "", {"source": "plain", "shape": bsig, "jobs": 0}),
-                                       (bsig, "", "a dress", {"source": "painted", "shape": bsig, "jobs": 1})):
+                                       (bsig, "", "a dress", {"source": "plain", "shape": bsig, "jobs": 0})):
             state.update(shape=shape, tex=tex, text=text)
             check(f"{'OB' if shape == ob else 'BSIG'} tex={tex!r} text={text!r}",
                   base_body.dressed_view_source("Demo"), want)
@@ -151,11 +150,11 @@ def main() -> int:
         meta = json.loads(target.with_suffix(".json").read_text()) if target.with_suffix(".json").is_file() else {}
         check("sidecar dressed / base_signature", (meta.get("dressed"), meta.get("base_signature")), (False, ob))
 
-        print("[3] painted: exactly one render")
+        print("[3] a texture and a dress text: still no render")
         state.update(tex="texabc", text="a red dress")
         renders.clear()
         base_body.generate_dressed_images("Demo", pieces={}, items=[], signature=osig, force=True, view="front")
-        check("renders", renders, [("outfit_front", f"tpose_{osig}")])
+        check("renders", renders, [])
 
         print("[4] the route answers what the click does")
         from fastapi import FastAPI
@@ -176,8 +175,8 @@ def main() -> int:
             check("main, shape copy", post({"kinds": ["tpose"], "view": "main"}),
                   (200, {"status": "copying", "jobs": 0, "source": "shape"}))
             state.update(tex="texabc")
-            check("main, painted", post({"kinds": ["tpose"], "view": "main"}),
-                  (200, {"status": "generating", "jobs": 1, "source": "painted"}))
+            check("main, with a texture", post({"kinds": ["tpose"], "view": "main"}),
+                  (200, {"status": "copying", "jobs": 0, "source": "shape"}))
             state.update(shape=bsig, tex="", text="")
             check("main, plain copy", post({"kinds": ["tpose"], "view": "main"}),
                   (200, {"status": "copying", "jobs": 0, "source": "plain"}))

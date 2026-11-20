@@ -330,13 +330,14 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
         if item_id in clothing and garment_set_mode(item) == ACCESSORY:
             # Ruling A118: an accessory built on the CPU from the plain body (``accessory_build``) — grafted on the
             # plain body and on an outfit body alike (it was built against the plain body; it hides nothing). Not
-            # current: left off.
+            # current: its previously delivered build for this body (A224, ruling 4), else left off.
             from app.core import accessory_build
             acc = accessory_build.accessory_state(character_name, item_id, profile=profile, item=item)
-            if acc["state"] == "current":
-                out.append({"item_id": item_id, "kind": ACCESSORY, "fsig": acc["asig"],
-                            "fit": accessory_build.npz_path(character_name, item_id, acc["record"]),
-                            "low": None, "record": acc["record"], "accessory": True})
+            record = acc["record"] if acc["state"] == "current" else acc.get("previous")
+            if record:
+                out.append({"item_id": item_id, "kind": ACCESSORY, "fsig": str(record.get("asig") or ""),
+                            "fit": accessory_build.npz_path(character_name, item_id, record),
+                            "low": None, "record": record, "accessory": True})
             elif left_off is not None:
                 left_off[item_id] = acc["reason"]
             continue
@@ -725,7 +726,7 @@ def _current(assembled: Path, bare: Path, state: Dict[str, Any], hidden: Optiona
 def _hidden_parts(character_name: str, bare_meta: Optional[Dict[str, Any]]) -> List[str]:
     """The attached-part groups an assembly of ``bare_meta`` drops (``fit_attempts.covered_part_groups_of`` over its
     ``pieces``): the plain body served for a worn outfit (Ruling A119, ``bare_meta_of``) carries the part of every
-    slot with a separate mesh part (Ruling A49), and a covering piece — grafted, painted or in the body alike — must
+    slot with a separate mesh part (Ruling A49), and a covering piece — grafted or in the body alike — must
     hide it. A model without that part node is left as it is (``without_covered_parts``). [] on any failure."""
     pieces = (bare_meta or {}).get("pieces")
     if not isinstance(pieces, dict) or not pieces:

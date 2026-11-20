@@ -39,11 +39,13 @@ Expected, by hand from the brief:
     ``base_body.after_mesh_item_ready(Kira, blouse)`` (worn) →
     ``request(Kira, "piece_ready")``; for an item Kira does not wear → no
     request. With auto off both answer False and no run starts.
-[4] Review Focus 1: the blouse (painted) is worn by Kai and Kira; Kai's Build
-    is in flight. ``update_item(blouse, outfit_piece.mesh_mode="own_mesh")``
+[4] Review Focus 1: the blouse (in_body) is worn by Kai and Kira; Kai's Build
+    is in flight. Before: each wearer has a pending change ``blouse`` wanted
+    ``in_body`` (left off: no body shape yet — A224, it used to be painted and
+    delivered). ``update_item(blouse, outfit_piece.mesh_mode="own_mesh")``
     → no new run, no render invalidation, Kai still running with 0
-    follow-ups; each wearer has exactly one more pending change, keyed
-    ``blouse`` with wanted ``own_mesh``. ``GET …/wearers`` (admin) → both,
+    follow-ups; each wearer keeps the same change keys and the ``blouse``
+    change now wants ``own_mesh``. ``GET …/wearers`` (admin) → both,
     each ``changes >= 1``, mode ``own_mesh``, each row with its own
     ``hub_jobs`` and ``steps`` (labels) whose sum is the total (T9; None
     when one is unknown); ``POST …/build-wearers`` →
@@ -69,31 +71,31 @@ Expected, by hand from the brief:
     assemble; T8 concern 7 — not "… — failed — Retry"), and
     ``running_label(False)`` keeps the plan label (an automatic Build never
     runs it). The cached hair failure next to other work (the
-    blouse painted, no outfit model), automatic: texture views, the model and
-    the assembly run, the hair chain does NOT run, ``failed["hair"]`` is the
+    outfit's views missing, no outfit model), automatic: the views (copies),
+    the model and the assembly run, the hair chain does NOT run, ``failed["hair"]`` is the
     cached error. (Was: base older there, the plain body ran — ruling 8a.)
 [9] Ruling 8a — an automatic Build never spends base-body hub jobs (the
     stubbed world of ``smoke_figure_build_plan``; plain body 6 hub jobs =
     views 4 + mesh + rig):
-    (a) base older (``older_prompts``), the blouse painted, its views missing
+    (a) base older (``older_prompts``), the outfit's views missing
         (they read the stale base): the manual plan = plain_body (6, manual
-        "Base body outdated — Build to refresh"), texture (2: the dressed
-        front + the back's draft, base_body.dressed_view_jobs — the composite
-        is CPU work since Task 11g), assemble (0) → 8; the automatic plan
-        lists the same plain_body (the UI's pending change) then texture
-        (2), assemble (0); its runnable steps are
-        texture + assemble. ``request(Kira, "outfit_change")`` (auto on) →
+        "Base body outdated — Build to refresh"), views (0: copies, A224),
+        assemble (0) → 6; the automatic plan
+        lists the same plain_body (the UI's pending change) then views
+        (0), assemble (0); its runnable steps are
+        views + assemble. ``request(Kira, "outfit_change")`` (auto on) →
         True; the run calls dressed, model, schedule — NO base_images /
         base_model; failed {}, skipped []. GET: status "changes", cost
-        steps[0] = plain_body with that manual note and jobs 6, hub_jobs 8;
+        steps[0] = plain_body with that manual note and jobs 6, hub_jobs 6;
         the body change's note (``figure.BASE_OUTDATED``) is the same text.
-        A manual ``start`` then → base_images, base_model, dressed, model,
-        schedule.
-    (b) no base (``missing``), the blouse painted, no model: the automatic
+        A manual ``start`` then → base_images, base_model, model, schedule
+        (the copies the automatic run made count for the stub; the assembly
+        copies what is missing itself, ``ensure_figure_views``).
+    (b) no base (``missing``), the outfit's views missing, no model: the automatic
         plan = [plain_body (6, manual "No base body yet — Build to create")]
         alone (nothing to build on); ``start(automatic)`` → "current", no
-        producer called; the manual plan = plain_body, texture (2), assemble
-        → 8.
+        producer called; the manual plan = plain_body, views (0), assemble
+        → 6.
 [8] Fails on the old code: at 8076597d ``figure_build.py`` has no
     ``def request(`` / ``def wearers(``, ``routes/inventory.py`` no
     ``/wearers`` route, ``schedule_outfit_render`` no Build timer, and
@@ -207,7 +209,7 @@ def world_section():
     for name in ("Kira", "Kai"):
         check(f"create {name}", save_character_profile(name, dict(human), create_new=True), True)
 
-    def piece(name, slot, mode="painted"):
+    def piece(name, slot, mode="in_body"):
         return inventory.add_item(name=name, category="outfit_piece", prompt_fragment=f"a {name.lower()}",
                                   outfit_piece={"slots": [slot], "covers": [], "outfit_types": ["casual"],
                                                 "mesh_mode": mode})["id"]
@@ -293,7 +295,9 @@ def world_section():
     HOLD["Kai"] = (entered, release)
     check("[4] Kai's Build", fb.start("Kai", reason="manual")["status"], "started")
     check("[4] Kai in flight", entered.wait(5), True)
-    before = {n: [c["key"] for c in figure.pending_changes(n)] for n in ("Kai", "Kira")}
+    before = {n: {c["key"]: c["wanted"] for c in figure.pending_changes(n)} for n in ("Kai", "Kira")}
+    for n in ("Kai", "Kira"):
+        check(f"[4] {n}: the blouse pending, wanted in_body (no shape yet)", before[n].get(blouse), "in_body")
     invalidated = []
     saved_inv = inventory._invalidate_renders_for_item
     inventory._invalidate_renders_for_item = lambda iid: invalidated.append(iid)
@@ -309,11 +313,9 @@ def world_section():
     st = fb.state("Kai")
     check("[4] Kai untouched (running, no follow-up)", (st["running"], st["queued"]), (True, 0))
     for n in ("Kai", "Kira"):
-        after = figure.pending_changes(n)
-        check(f"[4] {n}: one more change", len(after) - len(before[n]), 1)
-        new = [c for c in after if c["key"] not in before[n]]
-        check(f"[4] {n}: the blouse, wanted own_mesh", [(c["key"], c["wanted"]) for c in new],
-              [(blouse, "own_mesh")])
+        after = {c["key"]: c["wanted"] for c in figure.pending_changes(n)}
+        check(f"[4] {n}: same keys", sorted(after), sorted(before[n]))
+        check(f"[4] {n}: the blouse now wanted own_mesh", after.get(blouse), "own_mesh")
 
     users = {"user": {"id": "u_user", "username": "demo", "role": "user", "allowed_characters": ["Kira", "Kai"]},
              "admin": {"id": "u_admin", "username": "demo", "role": "admin", "allowed_characters": []}}
@@ -429,7 +431,7 @@ def failure_section():
     print("[7] automatic run with a cached failure next to other work")
     cached["hair_kira"] = {"item_id": "hair_kira", "fsig": "f1", "step": "hairdeck", "error": "no hair found"}
     explicit_calls.clear()
-    fbp.W = fbp.World(painted=("blouse",), hair="hairdeck", hair_done=False, model=False)
+    fbp.W = fbp.World(views=(), hair="hairdeck", hair_done=False, model=False)
     check("[7] automatic start", fb.start("Kira", reason="body_change", automatic=True)["status"], "started")
     check("[7] automatic run ended", fbp.wait_idle(fb), True)
     ran = [c for c in fbp.W.calls if c != "slot"]
@@ -442,15 +444,15 @@ def failure_section():
     print("[9] ruling 8a: an automatic Build never spends base-body hub jobs")
     from app.core import figure
     cached.clear()
-    fbp.W = fbp.World(base="older", painted=("blouse",))
+    fbp.W = fbp.World(base="older", views=())
     manual = fb.plan("Kira", profile={}, explicit=True)
-    check("[9a] manual plan", fbp.names(manual), [("plain_body", 6), ("texture", 3), ("assemble", 0)])
+    check("[9a] manual plan", fbp.names(manual), [("plain_body", 6), ("views", 0), ("assemble", 0)])
     check("[9a] plain body marked", manual[0].manual, "Base body outdated — Build to refresh")
     auto = fb.plan("Kira", profile={}, explicit=False)
     check("[9a] automatic plan lists the plain body", fbp.names(auto),
-          [("plain_body", 6), ("texture", 3), ("assemble", 0)])
+          [("plain_body", 6), ("views", 0), ("assemble", 0)])
     check("[9a] automatic runnable: no base step", [st.name for st in fb._runnable(auto, False)],
-          ["texture", "assemble"])
+          ["views", "assemble"])
     check("[9a] a trigger (auto on)", fb.request("Kira", "outfit_change"), True)
     check("[9a] automatic run ended", fbp.wait_idle(fb), True)
     check("[9a] no base job: dressed, model, assembly only", [c for c in fbp.W.calls if c != "slot"],
@@ -460,23 +462,23 @@ def failure_section():
     first = (info["cost"]["steps"] or [{}])[0]
     check("[9a] GET: the pending base step with its cost",
           (info["status"], first.get("name"), first.get("manual"), first.get("jobs"), info["cost"]["hub_jobs"]),
-          ("changes", "plain_body", "Base body outdated — Build to refresh", 6, 9))
+          ("changes", "plain_body", "Base body outdated — Build to refresh", 6, 6))
     check("[9a] the body change's note (figure.pending_changes; smoke_figure_delivered [5])", figure.BASE_OUTDATED,
           manual[0].manual)
     fbp.W.calls.clear()
     check("[9a] manual start", fb.start("Kira", reason="manual")["status"], "started")
     check("[9a] manual run ended", fbp.wait_idle(fb), True)
     check("[9a] manual: the plain body first", [c for c in fbp.W.calls if c != "slot"],
-          ["base_images", "base_model", "dressed", "model no-prepare", "schedule"])
+          ["base_images", "base_model", "model no-prepare", "schedule"])
 
-    fbp.W = fbp.World(base="missing", painted=("blouse",), model=False)
+    fbp.W = fbp.World(base="missing", views=(), model=False)
     auto = fb.plan("Kira", profile={}, explicit=False)
     check("[9b] automatic plan: the plain body alone", fbp.names(auto), [("plain_body", 6)])
     check("[9b] marked", auto[0].manual, "No base body yet — Build to create")
     check("[9b] automatic start", fb.start("Kira", reason="body_change", automatic=True)["status"], "current")
     check("[9b] no producer called", fbp.W.calls, [])
     check("[9b] manual plan", fbp.names(fb.plan("Kira", profile={}, explicit=True)),
-          [("plain_body", 6), ("texture", 3), ("assemble", 0)])
+          [("plain_body", 6), ("views", 0), ("assemble", 0)])
 
 
 def baseline_section():

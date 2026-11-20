@@ -11,8 +11,8 @@ fall over the boot shaft; ``tucked`` is the explicit per-outfit choice: the trou
 
 **When the choice exists** (``hem_eligible`` / ``hem_applicable``): a worn boot — a footwear fit whose record is
 SPLIT (``split.is_boot``) with a shaft class other than ``none`` — and a worn own-mesh ``bottom`` piece with an
-accepted fit that is no skirt (the fit's ``report.skirt``, ``garment_fit.is_skirt``). Painted trousers are never
-"over" (§ 20.1): with them the boot is simply outside the painted shin and nothing is offered. A skirt or a dress
+accepted fit that is no skirt (the fit's ``report.skirt``, ``garment_fit.is_skirt``). Trousers in the body are never
+"over" (§ 20.1): with them the boot is simply outside the shin and nothing is offered. A skirt or a dress
 is layered over the shaft by the ordinary layer order and has no mode.
 
 **Saved outfits** (``outfits_sets``): the ``options`` key ``{boot_hem}`` rides in the row's ``meta``;
@@ -20,7 +20,7 @@ is layered over the shaft by the ordinary layer order and has no mode.
 ``apply_outfit_set`` restores it (an old row without ``options`` applies ``null``).
 
 The mode is an ASSEMBLY input, not an outfit-signature input (§ 8.2): it changes neither the bare outfit model nor
-the painted body — only the trousers' layered fit — so ``garment_assembly._wanted`` reads it from the profile and
+the body shape — only the trousers' layered fit — so ``garment_assembly._wanted`` reads it from the profile and
 ``_state`` carries it, and a toggle rebuilds the assembly in seconds.
 
 **Open / closed** (``piece_state``, plan 2026-11-12-unified-worn-pieces Task 11a, D-A1 / D-A2): an outfit piece
@@ -302,7 +302,7 @@ def hem_eligible(boot_record: Optional[Dict[str, Any]],
     if not is_boot_record(boot_record):
         return False, "no boot worn (a footwear fit split at the ankle with a shaft)"
     if not isinstance(trousers_record, dict):
-        return False, "no own-mesh trousers worn with an accepted fit (painted trousers stay inside the boot)"
+        return False, "no own-mesh trousers worn with an accepted fit (trousers in the body stay inside the boot)"
     if is_skirt_record(trousers_record):
         return False, "the bottom piece is a skirt or a dress — layered by the ordinary layer order"
     return True, ""

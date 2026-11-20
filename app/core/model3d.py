@@ -782,7 +782,7 @@ def _current_base(character_name: str) -> Optional[tuple]:
         return None
 
 
-def _on_older_base(path: Path, base: Optional[tuple], *, serving: bool = False) -> bool:
+def _on_older_base(path: Path, base: Optional[tuple]) -> bool:
     """Whether a stored outfit model is not built on the current base body
     (``base`` from ``_current_base``; None = off the pipeline, never stale):
     another base signature, another base model under the same signature,
@@ -805,10 +805,7 @@ def _on_older_base(path: Path, base: Optional[tuple], *, serving: bool = False) 
         return False
     if not variant_current(meta["character"], meta):
         return True
-    reason = figure_stale(meta["character"], meta)
-    # Ruling A148 (``serving``): a model painted with other colours of its painted pieces is still THIS figure — it is
-    # served until the repaint (CPU) replaces it; for the Build it is due.
-    return bool(reason) and not (serving and reason == "paint_colour")
+    return bool(figure_stale(meta["character"], meta))
 
 
 def _stored_manifest(character_name: str, signature: str) -> Optional[Dict[str, Any]]:
@@ -968,7 +965,7 @@ def find_model3d_serving(character_name: str) -> tuple:
     built as the figure delivered NOW on the current base body counts
     (``"exact"``); until it is built the newest plain body itself is served
     (``"base"``: the garment assembly puts the ready own-mesh pieces on it,
-    ``garment_assembly.bare_meta_of``; nothing painted). Never another outfit's model, never one
+    ``garment_assembly.bare_meta_of``). Never another outfit's model, never one
     built on an older body or as another figure.
 
     Management paths (delete, rig update, generation skip-check) keep
@@ -983,7 +980,7 @@ def find_model3d_serving(character_name: str) -> tuple:
     if base:
         for ext in MODEL_EXTS:
             p = d / f"{sig}{ext}"
-            if p.exists() and not _on_older_base(p, base, serving=True):
+            if p.exists() and not _on_older_base(p, base):
                 return p, "exact"
         plain = d / f"{base[0]}.glb"
         return (plain, "base") if base[1] and plain.is_file() else (None, "")
@@ -1442,7 +1439,7 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
     if path:
         # On the base-body pipeline the face is the base body's (the face
         # routes act on the base signature): status, revert and comparison
-        # come from the base model, not from the outfit painted onto it.
+        # come from the base model, not from the outfit model built on it.
         face_path = path
         if _current_base(character_name):
             from app.core.base_body import base_signature
@@ -1682,7 +1679,7 @@ def _extension_groups_for(meta: Dict[str, Any], groups):
     The base body is the unclothed body (Ruling A49): it carries every group
     its own mesh variant (``stored_mesh_variant``) resolves, the part
     operations (``PART_OPS``) included, so the Base body tab shows the part
-    the slot's switch asks for. An outfit model painted onto the base never
+    the slot's switch asks for. An outfit model built on the base never
     keeps it under clothing: its own mesh variant resolves the part off where
     the outfit covers the slot, and its extension rig then rebuilds it from
     the clean prerig without the part (``_extension_rig_once``,
@@ -1735,7 +1732,7 @@ def stored_mesh_variant(character_name: str, meta: Dict[str, Any]) -> str:
 def _stale_part_groups(previous: Dict[str, Any], declarations) -> List[str]:
     """The part groups (``PART_OPS``) the model's current bytes carry from ``previous`` (its extension rig
     record — on an outfit model the copy of its base's) that ``declarations`` no longer build as a part: an
-    outfit painted onto a base that shows the part, worn where the outfit covers the slot. Its rebuild must
+    outfit model built on a base that shows the part, worn where the outfit covers the slot. Its rebuild must
     publish the clean body even when nothing else is found."""
     if not previous.get("has_applied", previous.get("status") == "applied"):
         return []
@@ -2481,7 +2478,7 @@ def rebuild_extension_rig(character_name: str, signature: Optional[str] = None, 
     meta.setdefault("rig", required_rig(character_name))
     if tier == FULL_TIER and meta.get("source") == "base_body" and not meta.get("base"):
         # An outfit on the base body is never rebuilt from its own geometry
-        # (a painted outfit hides the colour markers; the bones would move):
+        # (its pieces may hide the colour markers; the bones would move):
         # a forced or outdated extension rig builds the outfit model anew.
         from app.core import base_body
         if base_body.is_base_pipeline(character_name) and (
@@ -4061,8 +4058,8 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
             if not base and outfit_body is None:
                 from app.core.base_body import build_outfit_model, is_base_pipeline
                 if is_base_pipeline(character_name):
-                    # Base-body pipeline: the outfit model is the rigged base
-                    # body with the outfit painted on (CPU worker) — no
+                    # Base-body pipeline: the outfit model is a copy of the
+                    # rigged base body or its meshed shape (CPU) — no
                     # img2mesh, no rig job, no hub record.
                     if not get_model3d_dir(character_name).is_dir():
                         return {"ok": False, "error": "character_gone"}
@@ -5369,8 +5366,7 @@ def _face_polish_stage(character_name: str, op, original_bytes: bytes) -> None:
     the dark-texel fill when the gate still fails after its retry, the seam
     measurement always. Rewrites the chosen bake's ``source/<sig>.glb``,
     widens ``bake/mask.npy`` and the bake's ``face_mask`` by the texels
-    written (``base_body.restore_face_texels`` copies only masked texels into
-    an outfit atlas, ``face_texture_preserved`` compares only them), records
+    written (``face_texture_preserved`` compares only them), records
     ``polish`` in the face meta (sidecar + ``bake`` result) and the stage.
     Never fails the correction: an error keeps the bake as it is."""
     from app.core import face_polish

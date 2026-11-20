@@ -3,7 +3,7 @@
 Until A168 the shell (``garment_shell``, Ruling A48d) was the per-character mesh shape of an own-mesh clothing piece
 (profile ``garment_fit_settings[item].mesh_shape``: ``auto`` / ``as_generated`` / ``shell``; Auto made a shell of a
 close-fitting piece, ``garment_shell.close_fitting``). Since A168 it is the item mode ``shell``
-(``garment_set.SHELL``) beside own mesh / template / painted / in the body, and the setting is gone.
+(``garment_set.SHELL``) beside own mesh / template / in the body / accessory, and the setting is gone.
 
 ``judge`` decides per stored outfit piece in mode ``own_mesh``: ``shell`` when a character of this world stored
 ``mesh_shape: "shell"`` for it, or when it is close-fitting and nobody stored ``"as_generated"`` for it — what its

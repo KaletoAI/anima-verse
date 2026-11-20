@@ -62,8 +62,8 @@ Expected, derived by hand from Ruling A26:
       the old base front's sha → ["front"]; recorded = current → [];
     - ``figure_build._dressed`` on a stale stored front, the back missing, the
       recorded failure ``DRESSED_FRONT_STALE`` → "Dressed front is stale — the base
-      front changed; Views missing: back — nothing is painted or assembled without
-      them" (the redundant reason dropped).
+      front changed; Views missing: back — nothing is assembled without them"
+      (the redundant reason dropped).
 """
 import contextlib
 import json
@@ -405,8 +405,8 @@ def section_texts() -> None:
         fig = _Fig()
         fig.signature = "obshape01"
         check("_dressed names the stale front", figure_build._dressed(NAME, fig),
-              "Dressed front is stale — the base front changed; Views missing: back — nothing is painted or "
-              "assembled without them")
+              "Dressed front is stale — the base front changed; Views missing: back — nothing is assembled "
+              "without them")
 
 
 def main() -> int:

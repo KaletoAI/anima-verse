@@ -143,7 +143,6 @@ KNOWN_VIEW_OWNERS = {
     ("app/core/garment_gates.py", "hems_reason"): "a refusal message",
     ("app/core/garment_gates.py", "worn_hems_reason"): "a refusal message",
     ("app/core/model_overview.py", "BASE_VIEW_CHANGED"): "a UI note",
-    ("app/core/model_overview.py", "MESH_VIEW_MISMATCH"): "a UI note (the mesh refused against one of its views)",
     ("app/core/model_overview.py", "_dressed_view_step"): "a UI note",
 }
 #: Module-level ``*_PROMPTS`` tables of app/core and what covers them.

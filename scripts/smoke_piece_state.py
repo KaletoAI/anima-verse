@@ -44,17 +44,19 @@ the option; was: "black jacket, worn closed" in 2D / chat text):
 [4] Signature (D-A1). _equipped_signature({outer: jacket, top: blouse}, []) closed == "outer=jacket" == the BASE
     function's output (its source from ``git show 1b60c54b:app/core/expression_regen.py`` run in a namespace);
     open == "outer=jacket|top=blouse|open:jacket"; outfit_signature = md5[:12] of those strings.
-[5] Keys (real dress_text). Jacket in_body, blouse painted, worn {outer: jacket, top: blouse}: closed shape_key ==
+[5] Keys (real dress_text). Jacket in_body, blouse own_mesh, worn {outer: jacket, top: blouse}: closed shape_key ==
     the shape_key with piece_state={} passed AND with the base_body.dress_text of BASE — i.e. shape_inputs
     dress_text front "they now wear black jacket" (nothing new); open -> "they now wear black jacket, worn open"
-    (the painted blouse is left out before covers resolve) and another key. Jacket painted: open and closed ->
-    the same shape_key (plain = bsig), different texture_key; closed texture_key ==
-    base_body.texture_signature(texture_inputs(...)) over the closed profile (Task 4's tsig).
+    (the own-mesh blouse is left out before covers resolve) and another key. Jacket own_mesh as well: open and
+    closed -> the same shape_key (plain = bsig) and the same texture_key, the plain body's skin key
+    (``texture_signature(skin_texture_inputs(...))`` — A224: no worn piece, and so no state, enters it; it was
+    a painted jacket with two texture keys before).
 [6] Saved sets. add_character_outfit(Demo, {pieces: [jacket, blouse], options: {boot_hem: tucked, piece_state:
     {jacket: open}}}) stores options {boot_hem: tucked, piece_state: {jacket: open}}; applying it -> profile
     piece_state {jacket: open}, boot_hem tucked. A set saved without options while the jacket is open stores
     piece_state {jacket: open}. A set whose options lack piece_state applies {} (all closed).
-[7] Figure. worn_sets(...).open == (jacket,) when open, () when closed. pending_changes with the jacket open and a
+[7] Figure (the jacket in_body again — it was painted before A224). worn_sets(...).open == (jacket,) when open,
+    () when closed. pending_changes with the jacket open and a
     served figure wearing the jacket with open == () names {key: "jacket:state", name: "Jacket", wanted: "open",
     delivered: "closed"}; closed -> no state entry.
 [8] GC. A manifest {pieces {outer: jacket, top: blouse}, items [], piece_state {jacket: open}} re-signs to the open
@@ -281,7 +283,7 @@ def main() -> int:
         BSIG = "base0123abcd"
         inventory.update_item(jacket, {"outfit_piece": {"slots": ["outer"], "covers": ["top"],
                                                         "mesh_mode": "in_body"}})
-        inventory.update_item(blouse, {"outfit_piece": {"slots": ["top"], "mesh_mode": "painted"}})
+        inventory.update_item(blouse, {"outfit_piece": {"slots": ["top"], "mesh_mode": "own_mesh"}})
         prof = get_character_profile("Demo")
 
         def keys(state):
@@ -302,19 +304,12 @@ def main() -> int:
         check("open shape text", texts_o, {"front": "they now wear black jacket, worn open"})
         check("open shape key differs", shape_o != shape_c, True)
         inventory.update_item(jacket, {"outfit_piece": {"slots": ["outer"], "covers": ["top"],
-                                                        "mesh_mode": "painted"}})
+                                                        "mesh_mode": "own_mesh"}})
         sc, shape_pc, _x, tex_c = keys({})
         so, shape_po, _x, tex_o = keys({jacket: "open"})
-        check("painted: same shape (plain)", (shape_pc, shape_po), (BSIG, BSIG))
-        check("painted: texture differs", tex_c != tex_o, True)
-        closed_prof = oo.with_piece_state(prof, {})
-        check("closed texture == Task 4 tsig", tex_c, base_body.texture_signature(base_body.texture_inputs(
-            "Demo", pieces=dict(worn), items=[], variant="rigged", mesh_effective=[], bsig=BSIG,
-            profile=closed_prof)))
-        check("painted open tsig text", base_body.texture_inputs(
-            "Demo", pieces=dict(worn), items=[], variant="rigged", bsig=BSIG,
-            profile=oo.with_piece_state(prof, {jacket: "open"}))["dress_text"],
-            {"front": "they now wear white blouse underneath black jacket, worn open"})
+        check("own mesh: same shape (plain)", (shape_pc, shape_po), (BSIG, BSIG))
+        check("own mesh: the same skin texture key", (tex_c, tex_o == tex_c), (base_body.texture_signature(
+            base_body.skin_texture_inputs("Demo", bsig=BSIG, variant="rigged", profile=prof)), True))
 
         # --- [6] saved sets ----------------------------------------------------------------------------------
         print("[6] saved sets")
@@ -339,12 +334,14 @@ def main() -> int:
 
         # --- [7] figure --------------------------------------------------------------------------------------
         print("[7] figure")
+        inventory.update_item(jacket, {"outfit_piece": {"slots": ["outer"], "covers": ["top"],
+                                                        "mesh_mode": "in_body"}})
         oo.set_piece_state("Demo", jacket, "open")
         check("worn_sets.open", figure.worn_sets("Demo").open, (jacket,))
         check("Figure.open", figure.wanted_figure("Demo").open, (jacket,))
         check("Figure.as_dict open", figure.wanted_figure("Demo").as_dict().get("open"), [jacket])
         built = figure.Figure(signature="x", bsig=BSIG, shape=BSIG, texture="tex000000000000", in_body=(),
-                              painted=tuple(sorted((jacket, blouse))), own=(), pieces=dict(worn))
+                              own=(), pieces=dict(worn))
         figure.served_figure = lambda name: built
         state_rows = lambda: [c for c in figure.pending_changes("Demo") if c["key"].endswith(":state")]  # noqa: E731
         check("pending state change", state_rows(),

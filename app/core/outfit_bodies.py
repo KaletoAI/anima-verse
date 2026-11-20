@@ -9,7 +9,7 @@ An outfit body is the meshed and rigged body of one shape: the dressed views
 of the pieces in the body → mesher → rig → normalize → extension rig →
 collision capsules (``base_body.prepare_shape``). Own-mesh garments and hair
 are fitted onto it (``garments.body_fit``, keyed ``(item, fsig, body id)``),
-and every outfit model that wears those painted pieces is a copy of it.
+and every outfit model that wears those in-body pieces is a copy of it.
 
 What is left here:
 
@@ -20,7 +20,7 @@ What is left here:
   turned body is rebuilt by the character's Build (``figure_build.request``);
 * ``outfit_label`` — the display name of an outfit combination;
 * ``delete`` / ``delete_texture`` — the explicit Delete of ONE stored body or
-  painted body (``figure.delete_stored``, the Figure tab's "Stored bodies and
+  texture body of the plain body (``figure.delete_stored``, the Figure tab's "Stored bodies and
   textures"; Ruling 5a: only an explicit Delete removes a body stored for a
   live outfit).
 """
@@ -35,8 +35,8 @@ logger = get_logger("outfit_bodies")
 
 NO_BODY = "No such outfit body"
 # Delete refused (409) / unknown (404).
-PAINTED_NEEDED = "Not deleted: an outfit would be built on this painted body now — see why it is kept."
-NO_PAINTED_BODY = "No such painted body"
+TEXTURE_NEEDED = "Not deleted: an outfit would be built on this texture body now — see why it is kept."
+NO_TEXTURE_BODY = "No such texture body"
 
 
 class UnknownBody(LookupError):
@@ -280,7 +280,7 @@ def match_stale_postures(character_name: str) -> List[str]:
 def delete(character_name: str, body_id: str) -> Dict[str, Any]:
     """Delete the body and its chain (``artefact_graph.delete_body``; work in
     progress on a node protects it there) — or, for a texture signature, the
-    painted body (``delete_texture``)."""
+    texture body (``delete_texture``)."""
     from app.core import artefact_graph, base_body
     if base_body.is_texture_signature(body_id):
         return delete_texture(character_name, body_id)
@@ -288,11 +288,11 @@ def delete(character_name: str, body_id: str) -> Dict[str, Any]:
 
 
 def delete_texture(character_name: str, tsig: str) -> Dict[str, Any]:
-    """Delete ONE painted body of the retexture mode — the Delete of the
-    painted-body list: the artefact graph's explicit collect of its texture
+    """Delete ONE texture body of the plain body — the Delete of the
+    texture-body list: the artefact graph's explicit collect of its texture
     node (``artefact_graph.delete_texture``), only while no live outfit
     would be built on it. ``UnknownBody`` (404) when nothing of it is
-    stored, ``LookupError`` ``PAINTED_NEEDED`` (409) when it is still
+    stored, ``LookupError`` ``TEXTURE_NEEDED`` (409) when it is still
     needed, ``LookupError`` with the ``artefact_graph.RUNNING_UNKNOWN`` text
     (409) when what runs cannot be read (the collect deleted nothing).
     Returns the collect report."""
@@ -300,10 +300,10 @@ def delete_texture(character_name: str, tsig: str) -> Dict[str, Any]:
     try:
         report = artefact_graph.delete_texture(character_name, tsig)
     except artefact_graph.TextureNeeded as e:
-        logger.info("Painted body %s of %s not deleted: %s", tsig, character_name, e)
+        logger.info("Texture body %s of %s not deleted: %s", tsig, character_name, e)
         # An aborted collect (running work unreadable) is no "still needed" — name the true reason.
         unknown = artefact_graph.running_state(character_name)[2]
-        raise LookupError(unknown or PAINTED_NEEDED)
+        raise LookupError(unknown or TEXTURE_NEEDED)
     except LookupError:
-        raise UnknownBody(NO_PAINTED_BODY)
+        raise UnknownBody(NO_TEXTURE_BODY)
     return report

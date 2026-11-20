@@ -48,7 +48,7 @@ Expected, derived by hand from the rulings:
 [b] The jacket worn open, only its CLOSED fit F_c (F13 b):
     ``accepted_fit`` (worn state) -> F_c, explicit ``state="open"`` -> None;
     delivered ``own`` ∋ jacket, ``shown_closed`` == (jacket,),
-    ``notes[jacket]`` "Shown closed until its open mesh is built", not painted,
+    ``notes[jacket]`` "Shown closed until its open mesh is built",
     not left off; ``pending_changes`` holds exactly ONE entry naming the jacket:
     ``{key "<jacket>:state", wanted open, delivered closed, note "worn open —
     open mesh missing"}``; the plan keeps Step("pieces", "Own mesh · Black
@@ -61,12 +61,8 @@ Expected, derived by hand from the rulings:
     then left off, Ruling A119; not pinned here).
 [c] Estimate (F13 c), front + back dressed: ``dressed_view_jobs()`` 2 (1 + 1:
     the back is one draft, its composite is CPU since Task 11g).
-    ``dressed_view_estimate`` of a figure with texture TSIG and both views
-    missing: no store -> 2; the store's front made from the current base
-    front -> 1 (front copied, back draft); + the store's back
-    following that front -> 0; the back's draft made from another front -> 1;
-    the outfit's front STORED with other content and only the back missing
-    -> 1 (a copy follows only the store's front); no texture -> 0. ``cost``
+    (``dressed_view_estimate``, the painted set's view count, left with A224:
+    an outfit's views are copies.) ``cost``
     of steps 3 + 6 -> note "9 hub jobs (estimate, retries extra)".
 [d] One step (F13 d): with nothing built, ``run_garment(jacket,
     steps="worn", only=True)`` runs ONLY worn (front, back) — the cut-out is
@@ -148,7 +144,7 @@ Expected, derived by hand from the rulings:
     step in flight). Without the Build: {"status": "generating"}, fired once
     with kinds ("tpose",); build {running False, step ""}. Plan vs Dressed views:
     wanted == delivered == built (no texture, no interim, no chains, no
-    refits, plain body current) — ``dressed_image`` None -> [Step("texture",
+    refits, plain body current) — ``dressed_image`` None -> [Step("views",
     "Views: copied from the body's views", 0), Step("assemble", …, 0)];
     ``dressed_image`` a path -> []. At 52f9c3aa the route answers 200 and
     fires while the Build runs, and the stale case plans [] (built ==
@@ -177,7 +173,6 @@ sys.path.insert(0, str(ROOT))
 
 BASE = "b6476661"
 BSIG = "base0123abcd"
-TSIG = "tex0123456789ab"
 FAILS = []
 
 
@@ -277,7 +272,7 @@ def main() -> int:
         # The plain body's views (front, back) — real files: find_ref_image / file_sha256 read them.
         base_front = image(refs / f"tpose_{BSIG}.png", colour=(120, 110, 100),
                            meta={"prompt": "a woman, long brown hair, standing"})
-        base_back = image(refs / f"tpose_back_{BSIG}.png", colour=(110, 100, 90), meta={})
+        image(refs / f"tpose_back_{BSIG}.png", colour=(110, 100, 90), meta={})
 
         # --- [a] interim hair --------------------------------------------------------------------------------
         print("[a] hair in the body on a bald plain body")
@@ -377,7 +372,7 @@ def main() -> int:
             check("own ∋ jacket", jacket in got.own, True)
             check("shown_closed", got.shown_closed, (jacket,))
             check("note", got.notes.get(jacket), "Shown closed until its open mesh is built")
-            check("not painted, not left off", (jacket in got.painted, jacket in got.left_out), (False, False))
+            check("not left off", jacket in got.left_out, False)
             mine = [c for c in figure.pending_changes("Demo", profile=prof()) if jacket in c["key"]]
             check("ONE change", mine, [{"key": f"{jacket}:state", "name": "Black Jacket", "wanted": "open",
                                         "delivered": "closed", "note": "worn open — open mesh missing"}])
@@ -401,34 +396,8 @@ def main() -> int:
         # --- [c] estimate ------------------------------------------------------------------------------------
         print("[c] estimate")
         check("one set", base_body.dressed_view_jobs(), 3)
-        fig = figure.Figure(signature="sig1", bsig=BSIG, shape=BSIG, texture=TSIG, in_body=(), painted=(), own=())
-        outfit_views = {}
-        sha = base_body.file_sha256
-        with patch.object(base_body, "dressed_image",
-                          lambda _c, v, *_a, **_k: outfit_views.get(v)):
-            check("no store: 3 (front 1 + back turn + draft, A175)", base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 3)
-            store = base_body.texture_refs_dir("Demo")
-            s_front = image(store / f"tpose_{TSIG}.png", colour=(1, 2, 3), meta={
-                "base_signature": BSIG, "base_image_sha256": sha(base_front), "dressed": True})
-            check("store front: 2", base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 2)
-            draft = image(store / base_body.DRAFT_DIR / f"tpose_back_{TSIG}.png", colour=(4, 5, 6),
-                          meta={"front_sha256": sha(s_front)})
-            image(store / f"tpose_back_{TSIG}.png", colour=(7, 8, 9), meta={
-                "base_signature": BSIG, "base_image_sha256": sha(base_back), "back_draft_sha256": sha(draft)})
-            check("store front + back: 0", base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 0)
-            draft.with_suffix(".json").write_text(json.dumps({"front_sha256": "other"}), encoding="utf-8")
-            check("back from another front: 2",
-                  base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 2)
-            draft.with_suffix(".json").write_text(json.dumps({"front_sha256": sha(s_front)}), encoding="utf-8")
-            outfit_views["front"] = image(refs / "tpose_sig1.png", colour=(9, 9, 9), meta={})
-            check("own other front stored, back missing: 2",
-                  base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 2)
-            outfit_views.clear()
-            from dataclasses import replace
-            check("no texture: 0",
-                  base_body.dressed_view_estimate("Demo", replace(fig, texture=""), "sig1", profile=prof()), 0)
         Step = figure_build.Step
-        check("cost note", figure_build.cost("Demo", [Step("texture", "x", 3), Step("pieces", "y", 6)])["note"],
+        check("cost note", figure_build.cost("Demo", [Step("shape", "x", 3), Step("pieces", "y", 6)])["note"],
               "9 hub jobs (estimate, retries extra)")
 
         # --- [d] one step ------------------------------------------------------------------------------------
@@ -782,7 +751,7 @@ def main() -> int:
             with patch.object(garment_refit, "work_count", lambda *a, **k: 0):
                 with patch.object(base_body, "dressed_image", lambda *a, **k: None):
                     check("stale view -> Views step", [(s.name, s.label, s.jobs) for s in figure_build.plan("Demo")],
-                          [("texture", "Views: copied from the body's views", 0),
+                          [("views", "Views: copied from the body's views", 0),
                            ("assemble", "Assemble the figure", 0)])
                 with patch.object(base_body, "dressed_image", lambda *a, **k: base_front):
                     check("current views -> nothing", figure_build.plan("Demo"), [])

@@ -113,7 +113,7 @@ def main() -> int:
         (d / "keep.bin").rename(d / f"{SIG}.glb")
 
         print("[6] the worn plain body carries the ready pieces")
-        fig = figure.Figure(signature=SIG, bsig=BSIG, shape=BSIG, texture="", in_body=(), painted=("pants",),
+        fig = figure.Figure(signature=SIG, bsig=BSIG, shape=BSIG, texture="", in_body=(),
                             own=("boots",), left_out={"belt": "chain failed", "necklace": "chain failed"},
                             pieces={"feet": "boots", "waist": "belt", "neck": "necklace", "legs": "pants"})
         figure.delivered_figure_cached = lambda *_a, **_k: fig
@@ -130,7 +130,7 @@ def main() -> int:
         check("SIG sidecar", garment_assembly.bare_meta_of("Demo", d, SIG), {"mesh_items": {"intended": ["x"]}})
 
         print("[9] mesh_record")
-        rec_fig = figure.Figure(signature=SIG, bsig=BSIG, shape=BSIG, texture="", in_body=(), painted=(),
+        rec_fig = figure.Figure(signature=SIG, bsig=BSIG, shape=BSIG, texture="", in_body=(),
                                 own=("boots",), left_out={"belt": "chain failed", "coat": figure.LEFT_OFF_SHAPE})
         rec = base_body.mesh_record("Demo", rec_fig)
         check("intended / effective / unpainted / warnings",

@@ -464,7 +464,7 @@ def main() -> int:
             return "deleted", ""
         from app.core import outfit_bodies
         check("[4] delete_stored live texture T2 -> 409", refused(fx["T2"]),
-              ("LookupError", outfit_bodies.PAINTED_NEEDED))
+              ("LookupError", outfit_bodies.TEXTURE_NEEDED))
         check("[4] delete_stored unknown shape -> 404", refused("obdeadbeef")[0], "UnknownBody")
         check("[4] delete_stored bad key -> 400", refused("../x"), ("ValueError", ""))
         same("[4] refused deletes changed nothing", "Demo4", fx, ALL)

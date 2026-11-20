@@ -118,14 +118,14 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
         hint="An edit of the profile picture (a backend that takes a reference "
              "image is required while there is one); an accurate (non-turbo) "
              "model is recommended."),
-    # The full-body references (Ruling A87, app/core/full_body_reference.py):
+    # The full-body reference (Ruling A87, app/core/full_body_reference.py):
     # the picture the A-pose front is an edit of. Each render is an EDIT of
     # a reference image (``require_reference``), so a backend without a
     # reference slot never serves it (``needs_ref_slot``) and an empty chain
     # is no route (``requires_chain``) — never the cheapest (possibly paid)
-    # backend. config._migrate_reference_routing seeds the chains from
-    # base_front / outfit_front once; a character's own glob is the one of
-    # the front it feeds (no field of its own).
+    # backend. config._migrate_reference_routing seeds the chain from
+    # base_front once; a character's own glob is the one of the front it
+    # feeds (no field of its own).
     "base_reference": {**_image(
         "Base body — full-body reference", "Base body tab: the full-body reference the A-pose front is an edit of "
                                            "(an edit of the profile picture)",
@@ -140,19 +140,10 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
         {"character_scoped": True, "char_spec_field": "base_view_workflow",
          "char_spec_fallback": "tpose_view_workflow"}),
     "outfit_front": _image(
-        "Outfit — front edit", "Figure tab, Dressed views: the dressed front — an edit of the base front, the "
-                               "outfit's full-body reference as a second picture (Ruling A125)",
+        "Outfit — front edit", "Figure tab, Dressed views: the front of a body shape — an edit of the base front",
         ["outfit_edit", "base_front_edit"],
         {"character_scoped": True, "char_spec_field": "outfit_front_workflow",
          "char_spec_fallback": "tpose_view_workflow"}),
-    "outfit_reference": {**_image(
-        "Outfit — full-body reference", "Figure tab, Dressed views: the outfit's full-body reference (an edit of "
-                                        "the plain body's full-body reference, else of the profile picture)",
-        ["outfit_reference"],
-        {"character_scoped": True, "char_spec_field": "outfit_front_workflow",
-         "char_spec_fallback": "tpose_view_workflow"}, needs_ref_slot=True,
-        hint="An edit of a reference picture: a backend that takes a reference image is required. Generated only "
-             "by a click on Generate (Figure → Dressed views)."), "requires_chain": True},
     # Ruling A175: step 1 of a dressed back/side view — the dressed front
     # TURNED to a rear/side view with a camera-angle LoRA (image_generation.
     # outfit_turn_lora); its cut-out is the second picture of the draft edit.
@@ -274,10 +265,10 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
 MESH_INPUT_OCCASIONS: Tuple[str, ...] = (
     "tpose", "tpose_view", "base_front", "base_view",
     "outfit_front", "outfit_back_draft", "outfit_side_draft",
-    # Ruling A87: the full-body references the A-pose fronts are edits of —
+    # Ruling A87: the full-body reference the A-pose front is an edit of —
     # the character's tpose LoRAs as on the front (the user's validated chain
-    # ran both steps with the same LoRA); their caller skips the matte.
-    "base_reference", "outfit_reference")
+    # ran both steps with the same LoRA); its caller skips the matte.
+    "base_reference")
 
 #: Image occasions whose negative is NEVER folded into the prompt on a backend
 #: without a negative input (review 2026-11-11): the mesh-input renders and the
@@ -294,7 +285,7 @@ NO_FOLD_OCCASIONS: Tuple[str, ...] = MESH_INPUT_OCCASIONS + ("garment_view", "fo
 #: A93b: a slot that declares a ``mesh_part`` names nothing there and its LoRAs are dropped, whether its switch is
 #: on or off (``body_slots.filter_appearance_reference_loras``). Everything else of ``MESH_INPUT_OCCASIONS`` (the
 #: tpose LoRAs, no negative fold) stays.
-APPEARANCE_REFERENCE_OCCASIONS: Tuple[str, ...] = ("base_reference", "outfit_reference")
+APPEARANCE_REFERENCE_OCCASIONS: Tuple[str, ...] = ("base_reference",)
 
 
 def mesh_input_text(occasion_id: str) -> bool:

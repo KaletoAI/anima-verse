@@ -2,7 +2,7 @@
 the roots, and the ONE collector that deletes what no root reaches (plan
 ``docs/superpowers/plans/2026-11-10-outfit-body-mesh-mode.md``, Task 3).
 
-WHY. A character's derived files form chains: base → painted texture / outfit
+WHY. A character's derived files form chains: base → texture body / outfit
 body → fits per body → assemblies. Every delete path used to remove its own
 link and leave the rest of the chain behind (an item delete purged the outfit
 models but none of its fits, a base change left every outfit body of the old
@@ -25,7 +25,7 @@ NODES (the report key in brackets; a file belongs to exactly one node):
   same layout; parent record ``outfit_body {body_id, shape_key,
   base_signature, built_for, …}`` in its sidecars.
 * texture ``texture:<tsig>`` — the texture store: dressed views
-  ``model_refs/texture/[drafts/]`` + the painted body ``model3d/texture/``;
+  ``model_refs/texture/[drafts/]`` + the texture body ``model3d/texture/``;
   parent ``base_signature`` in its sidecars.
 * garment ``garment:<item>_<fsig>`` — the shared garment files of one
   fingerprint (images, raw, prepared) and its fit on the BASE body (fit,
@@ -68,8 +68,8 @@ REACHABILITY (one function each, ``_judge``):
   now, ``figure.predicted_keys``) and no sidecar of it names another base
   than the current one. A tsig a live outfit's sidecars only NAME is
   outdated (``OUTDATED_TEXTURE``, parent ``built_on``): the piece text, a
-  piece's mode or a fit changed, so its next build paints another one, and
-  the served model never reads the store (it is a copy of the painted body;
+  piece's mode or a fit changed, so its next build makes another one, and
+  the served model never reads the store (it is a copy of the texture body;
   on a shape it stands on the outfit body, which its ``body_id`` keeps
   below).
 * body: its record names the CURRENT base AND either its key is the shape
@@ -110,14 +110,14 @@ RULINGS.
   (Ruling 5a, plan 2026-11-12-unified-worn-pieces; ruling 2026-11-10 and the
   spec's "Reuse, not rebuild"): an outfit body of the current base whose
   outfit (``built_for``) is still live is ``STORED_NOT_NEEDED``, and a
-  painted body only a live outfit names is ``OUTDATED_TEXTURE``. An
+  texture body only a live outfit names is ``OUTDATED_TEXTURE``. An
   AUTOMATIC collect (``collect_quietly``: the hooks and the daily sweep,
   ``automatic=True``) never deletes those, nor the fits on such a body
   (protected ``"stored"``); only a collect a person asked for does (the
   improvements cleanup, the admin route, the Figure tab's Delete). Bodies
   the boot re-key left stale under their old ids follow the same rule.
   ``figure.stored_unneeded`` lists them.
-  This does NOT cover a piece's own mesh: switched to painted / in the body, the item is no own-mesh kind,
+  This does NOT cover a piece's own mesh: switched to in the body / accessory, the item is no own-mesh kind,
   ``_garment_roots`` keeps nothing of it and its fingerprint groups, layered fits and body fits go at the
   next collect. Ruling A63 keeps that rule and warns instead: ``own_mesh_files`` counts, before the switch,
   what this judgement keeps now and what making it again costs (the Wardrobe's mode select asks first).
@@ -555,14 +555,14 @@ def _check_deadline(deadline: Optional[float], character_name: str) -> None:
 SHAPE_OF_LIVE_OUTFIT = "shape of a live outfit"
 #: Body reason (step 3, unreachable): of the current base, built for an
 #: outfit that is still live, but no live outfit predicts or names it now
-#: (e.g. its pieces were switched to painted). Kept by automatic collects.
+#: (e.g. its pieces were switched to another mode). Kept by automatic collects.
 STORED_NOT_NEEDED = "stored, not needed now"
-#: ``Node.protected`` of such a body, its fits and an outdated painted body
+#: ``Node.protected`` of such a body, its fits and an outdated texture body
 #: in an automatic collect (Ruling 5a).
 STORED = "stored"
 #: Texture reasons (``_judge`` step 4) — the Figure tab's stored list shows them (``figure.stored``).
 CURRENT_TEXTURE = "current texture of a live outfit"
-OUTDATED_TEXTURE = "outdated: a live outfit was built on it, none would paint it now"
+OUTDATED_TEXTURE = "outdated: a live outfit was built on it, none would use it now"
 
 
 def _outfit_manifest(root: Path, signature: str) -> Optional[Dict[str, Any]]:
@@ -578,7 +578,7 @@ def _outfit_manifest(root: Path, signature: str) -> Optional[Dict[str, Any]]:
 
 def _current_textures(character_name: str, live: Set[str], roots: Roots, named: Dict[str, Set[str]],
                       deadline: Optional[float] = None) -> Tuple[Dict[str, Set[str]], Set[str], Set[str]]:
-    """``({tsig: {outfit signature, ...}}, shapes, unsure)`` — the painted
+    """``({tsig: {outfit signature, ...}}, shapes, unsure)`` — the texture
     bodies and the shapes (outfit body keys) the live outfits would be built
     on NOW, and the live outfits whose keys could not be computed. Per live
     outfit (pose states and the worn combination by their neutral
@@ -588,7 +588,7 @@ def _current_textures(character_name: str, live: Set[str], roots: Roots, named: 
     modes). A tsig its sidecars only NAME (the stale model of an outfit whose
     piece text, mode or fit changed since) is not current: the served model
     is a copy of its body (``base_body.build_outfit_model``), never reads
-    the store again, and its rebuild paints the new key. What cannot be
+    the store again, and its rebuild makes the new key. What cannot be
     computed keeps what the outfit's sidecars name (the base unknown or
     none: all of ``named``; one outfit failing or without a manifest: its
     own, and it is unsure)."""
@@ -741,7 +741,7 @@ def _judge(character_name: str, nodes: List[Node], roots: Roots,
         bases.discard(None)
         bases.discard("")
         if roots.base is not None and any(b != roots.base for b in bases):
-            # Judged first: an older base's painted body goes even from an automatic collect (Ruling 5a
+            # Judged first: an older base's texture body goes even from an automatic collect (Ruling 5a
             # keeps only what is merely not predicted now).
             node.reachable, node.reason = False, "older base"
             continue
@@ -1155,7 +1155,7 @@ def delete_body_preview(character_name: str, body_id: str) -> Dict[str, Any]:
 
 
 def texture_files(character_name: str, tsig: str) -> Dict[str, Any]:
-    """The files of ONE painted body (its texture node), read-only: ``{files, bytes}`` like
+    """The files of ONE texture body (its texture node), read-only: ``{files, bytes}`` like
     ``delete_body_preview``; empty when nothing of it is stored. ValueError for a key not shaped like a tsig."""
     from app.core import base_body
     from app.core.outfit_cache_gc import TEXTURE_KEY_PREFIX
@@ -1187,7 +1187,7 @@ def delete_body(character_name: str, body_id: str, *, reason: str = "outfit body
     — the Figure tab's Delete (``figure.delete_stored``). Unlike ``collect`` the chain goes
     although a root may still reach it (the user asked for it): the outfit
     models on it are rebuilt on their next build, which meshes the body
-    again. The texture (dressed views + painted body) is the body's INPUT,
+    again. The texture (dressed views + texture body) is the body's INPUT,
     shared with the retexture mode, and stays. Only work in progress
     protects a node (``running_keys``, the body and body-fit locks inside
     ``_delete_node``). Returns ``{character, body_id, deleted: [{key, kind,
@@ -1220,7 +1220,7 @@ def delete_body(character_name: str, body_id: str, *, reason: str = "outfit body
 
 
 def texture_verdicts(character_name: str) -> Dict[str, Node]:
-    """``{tsig: judged texture node}`` of the painted bodies: the walk of
+    """``{tsig: judged texture node}`` of the texture bodies: the walk of
     ``collect`` (explicit) WITHOUT the reachable-set enumeration — an outfit
     entry without a manifest is kept ("producibility undetermined"), so a
     texture shown deletable here is deletable by ``collect`` too. Read-only,
@@ -1235,9 +1235,9 @@ def texture_verdicts(character_name: str) -> Dict[str, Node]:
     return {n.key[len(TEXTURE_KEY_PREFIX):]: n for n in analysis.nodes if n.kind == "texture"}
 
 
-def delete_texture(character_name: str, tsig: str, *, reason: str = "painted body deleted") -> Dict[str, Any]:
-    """Explicit delete of ONE painted body (its texture node: the dressed
-    views of the store + the painted GLB) through ``collect`` (explicit,
+def delete_texture(character_name: str, tsig: str, *, reason: str = "texture body deleted") -> Dict[str, Any]:
+    """Explicit delete of ONE texture body (its texture node: the dressed
+    views of the store + the texture GLB) through ``collect`` (explicit,
     ``keys``) — only while no root reaches it. Returns the collect report;
     ``LookupError`` when there is no such texture, ``TextureNeeded`` (a
     LookupError) when a live outfit would be built on it now (its reason and
@@ -1251,7 +1251,7 @@ def delete_texture(character_name: str, tsig: str, *, reason: str = "painted bod
     analysis = analyse(character_name, roots=roots, explicit=True)
     node = next((n for n in analysis.nodes if n.kind == "texture" and n.key == key), None)
     if node is None:
-        raise LookupError(f"no painted body {tsig}")
+        raise LookupError(f"no texture body {tsig}")
     if node.reachable:
         raise TextureNeeded(node)
     report = collect(character_name, explicit=True, keys=[key], reason=reason, roots=roots)
@@ -1344,7 +1344,7 @@ def _rebuild_estimate(character_name: str, item: Dict[str, Any], kind: str,
 
 
 def own_mesh_files(item_id: str) -> Dict[str, Any]:
-    """What switching an own-mesh outfit piece to ``painted`` / ``in_body`` hands to the cleanup (Ruling A63) —
+    """What switching an own-mesh outfit piece to ``in_body`` / ``accessory`` hands to the cleanup (Ruling A63) —
     read-only, deletes nothing.
 
     The cleanup itself is unchanged: off own mesh the item is no own-mesh kind (``garment_set.garment_kind_of`` →
@@ -1362,7 +1362,7 @@ def own_mesh_files(item_id: str) -> Dict[str, Any]:
     world: {files, bytes}}`` — ``hub_jobs`` what making it again costs (``_rebuild_estimate``): clothing the sum
     over the characters (each makes its own chain), footwear the largest one (the shoe source is made once per
     item, the fit is CPU work); None with ``note`` when one cannot be estimated. A piece that is not an own mesh
-    now has nothing kept as one: zeros (switching ``painted`` ↔ ``in_body`` drops no own-mesh file). LookupError
+    now has nothing kept as one: zeros (switching between two modes without an own mesh drops no own-mesh file). LookupError
     for an unknown item."""
     from app.core import footwear_source, garment_set
     from app.models.inventory import get_item

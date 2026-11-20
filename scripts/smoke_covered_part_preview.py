@@ -42,9 +42,8 @@ Items: ``jeans`` (slots [bottom]), ``jacket`` (slots [outer], closable, ``covers
       nodes, 3 meshes, BIN chunk byte-identical.
 [4] figure_build._served_state with stub readers (``garment_assembly.bare_meta_of`` → ``mesh_items.effective =
     [jeans, shoes]``):
-    a. match "base" (Ruling A119: the plain body served; the delivered figure paints "blouse"), garments {shoes}
-       carried → yellow SERVED_PLAIN, missing [blouse PIECE_NO_TEXTURE, jeans PIECE_NO_FIT] (painted first),
-       pieces "blouse, Jeans" (no item row for the blouse: its id is its name).
+    a. match "base" (Ruling A119: the plain body served), garments {shoes} carried → yellow SERVED_PLAIN, missing
+       [jeans PIECE_NO_FIT], pieces "Jeans" (A224: nothing is painted, so no texture row).
     b. exact, assembled sidecar garments {jeans, shoes} → green SERVED_COMPLETE.
     c. exact, assembled garments {shoes}; _wanted's left_off {jeans: "deep_push_share 0.225 > 0.12"} → red
        SERVED_WITHOUT, pieces "Jeans", missing [{jeans, PIECE_REFUSED, detail "deep_push_share 0.225 > 0.12",
@@ -181,7 +180,7 @@ garment_assembly.bare_meta_of = lambda c, d, sig: {"mesh_items": {"effective": S
 from app.core import figure  # noqa: E402
 from app.core.figure import Figure  # noqa: E402
 figure.delivered_figure_cached = lambda c, profile=None, **_: Figure(
-    signature="sig", bsig="base", shape="base", texture="", in_body=(), painted=("blouse",), own=("shoes",))
+    signature="sig", bsig="base", shape="base", texture="", in_body=(), own=("shoes",))
 garment_assembly.effective_mesh_items = lambda meta: list(meta["mesh_items"]["effective"])
 garment_assembly.served = lambda c, p, tier: BARE if STATE["served_bare"] else ASM
 garment_assembly.read_sidecar = lambda p: {"garments": {g: {} for g in STATE["garments"]}}
@@ -202,8 +201,7 @@ served = fb._served_state
 setup("base", ["jeans", "shoes"], ["shoes"])
 s = served("C", profile={})
 check("4a plain body served", (s["light"], s["state"], s["pieces"], [(m["item_id"], m["reason"]) for m in s["missing"]]),
-      ("yellow", fb.SERVED_PLAIN, "blouse, Jeans",
-       [("blouse", fb.PIECE_NO_TEXTURE), ("jeans", fb.PIECE_NO_FIT)]))
+      ("yellow", fb.SERVED_PLAIN, "Jeans", [("jeans", fb.PIECE_NO_FIT)]))
 setup("exact", ["jeans", "shoes"], ["jeans", "shoes"])
 s = served("C", profile={})
 check("4b complete", (s["light"], s["state"]), ("green", fb.SERVED_COMPLETE))

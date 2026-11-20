@@ -429,7 +429,7 @@ def main() -> int:
         set_state("open")
         got = figure.delivered_figure("Demo", profile=prof())
         check("own ∋ jacket (closed mesh)", (jacket in got.own, got.shown_closed), (True, (jacket,)))
-        check("not painted, not left off", (jacket in got.painted, jacket in got.left_out), (False, False))
+        check("not left off", jacket in got.left_out, False)
         steps = [s for s in figure_build.plan("Demo", profile=prof()) if s.name == "pieces"]
         check("pieces step", steps, [figure_build.Step("pieces", "Own mesh · Black Jacket (open)", 5, jacket)])
         f_o = build_chain(fsig_o, "open")

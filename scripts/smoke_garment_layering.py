@@ -35,7 +35,7 @@ Expected, derived by hand:
 [2] Layer order (garment_set.layer_order; slot order inventory.VALID_PIECE_SLOTS: underwear_top 0, top 3,
     bottom 4, outer 5, feet 6). Items: slip {underwear_top}, dress {top, covers [underwear_top]}, coat {outer,
     covers [top, underwear_top]}, shoes {feet}, blouse {top, partially_covers [bottom]}, skirt {bottom, covers
-    [top]}, all own_mesh; plain {top} painted. shoes is own-mesh in slot feet = kind footwear
+    [top]}, all own_mesh; plain {top} in_body. shoes is own-mesh in slot feet = kind footwear
     (plan 2026-11-10-footwear-rigid-shoes), which takes no part in layering.
     - {coat, dress, slip, shoes} in any input order: order [slip, dress, coat] (shoes left out); under slip [],
       dress [slip], coat [dress, slip]; cycles []. mesh_overlaps({underwear_top: slip, top: dress, outer:
@@ -78,8 +78,8 @@ Expected, derived by hand:
       contains them.
 [4] Wardrobe (Demo wears {underwear_top: slip, outer: coat}, both fits on B2): worn_layers -> {coat: {over
     [Slip], without []}}; wardrobe items coat over [Slip], slip without the keys (nothing under it); overlaps [].
-    Plain (painted) added to Demo's inventory: wardrobe ``modes`` = every outfit piece Demo holds or wears
-    {blouse, coat, skirt, slip: own_mesh; plain: painted} (plan 2026-11-12-unified-worn-pieces T9), ``items``
+    Plain (in_body) added to Demo's inventory: wardrobe ``modes`` = every outfit piece Demo holds or wears
+    {blouse, coat, skirt, slip: own_mesh; plain: in_body} (plan 2026-11-12-unified-worn-pieces T9), ``items``
     still the own-mesh four. Slip's fit file moved away
     -> coat {over [], without [Slip]} (the outfit paints the slip on; the coat is fitted against the body
     there). Demo wears {top: blouse, bottom: skirt}: overlaps == the [2] cycle.
@@ -304,7 +304,7 @@ def main() -> int:
             op = {"slots": list(slots), "covers": list(covers), "outfit_types": ["casual"]}
             if partially:
                 op["partially_covers"] = list(partially)
-            op["mesh_mode"] = "own_mesh" if own_mesh else "painted"
+            op["mesh_mode"] = "own_mesh" if own_mesh else "in_body"
             return inventory.add_item(name=item_id.capitalize(), category="outfit_piece", item_id=item_id,
                                       prompt_fragment=f"a {item_id}", outfit_piece=op)["id"]
         check("items", [piece("slip", ["underwear_top"]), piece("dress", ["top"], covers=["underwear_top"]),
@@ -537,7 +537,7 @@ def main() -> int:
         inventory.add_to_inventory("Demo", "plain")
         wr = garment_set.wardrobe("Demo")
         check("wardrobe modes: every held/worn outfit piece (T9)", wr["modes"],
-              {"blouse": "own_mesh", "coat": "own_mesh", "plain": "painted", "skirt": "own_mesh",
+              {"blouse": "own_mesh", "coat": "own_mesh", "plain": "in_body", "skirt": "own_mesh",
                "slip": "own_mesh"})
         check("wardrobe items: own-mesh pieces only", sorted(wr["items"]), ["blouse", "coat", "skirt", "slip"])
         moved = slip_fit.with_name("moved.glb")

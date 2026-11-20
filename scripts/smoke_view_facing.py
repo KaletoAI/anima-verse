@@ -65,8 +65,8 @@ x 100…119 (385…389) and 95…159 (390…399) → min 95, max 159.
 [6b] The worn outfit's side view (``model_refs.mirror_outfit_view``, off the pipeline, outfit state stubbed): the
     route mirrors a toes-left right view → facing right, ``ok``; again → turned back; ``tpose_back`` → 400; on
     the pipeline a view that is a copy of the body's view (``dressed_view_source`` ``plain``) → 400 with
-    ``MIRROR_COPY_REFUSED``. Follow-up (``outfit_mirror_followup``): pipeline painted → repaint/0, a copy →
-    copy/0; off it without a model → no_model/0, with one (stages mesh, upscale, face, rig) → model/4.
+    ``MIRROR_COPY_REFUSED``. Follow-up (``outfit_mirror_followup``): on the pipeline every view is a copy
+    (plain or shape, A224) → copy/0; off it without a model → no_model/0, with one (stages mesh, upscale, face, rig) → model/4.
 [7] The hooks are wired: the base side view render (``generate_base_images``) calls ``auto_correct`` for a side
     view, the off-pipeline extra views (``generate_model_ref_images``) too, the dressed view's two draft paths
     (``_dress_view``: the stored draft and a new one) call ``match_facing``.
@@ -374,8 +374,8 @@ def section6b():
     except HTTPException as e:
         check("a copy of the body's view → 400", (e.status_code, e.detail), (400, model_refs.MIRROR_COPY_REFUSED))
     follow = model_refs.outfit_mirror_followup
-    check("follow-up: pipeline painted", follow("Demo", sig, pipeline=True, source={"source": "painted"}),
-          {"kind": "repaint", "jobs": 0})
+    check("follow-up: pipeline copy of the plain body", follow("Demo", sig, pipeline=True, source={"source": "plain"}),
+          {"kind": "copy", "jobs": 0})
     check("follow-up: pipeline copy", follow("Demo", sig, pipeline=True, source={"source": "shape"}),
           {"kind": "copy", "jobs": 0})
     model3d.find_model3d = lambda *_a, **_kw: None

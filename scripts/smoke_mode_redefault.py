@@ -30,16 +30,17 @@ World 1 characters (template human-roleplay unless named):
     N  no model_pipeline                                 -> not one
     D  model_pipeline base_body, status dormant          -> test character
     A  template animal-default, model_pipeline base_body -> not one (no humanoid)
-World 1 items (stored mode in brackets; ``-`` = no mode key):
-    U  world,  outer, [painted],  unworn, unowned          -> cleared, mode in_body
-    C  world,  top,   [painted],  worn by N only           -> cleared
-    G  world,  top,   [painted],  owned by N only          -> cleared (N is no tester)
-    K  shared, top,   [painted],  worn by T and N          -> kept painted
+World 1 items (stored mode in brackets; ``-`` = no mode key; the stored non-default mode is ``accessory``
+— it was ``painted`` before A224 removed that mode):
+    U  world,  outer, [accessory],  unworn, unowned          -> cleared, mode in_body
+    C  world,  top,   [accessory],  worn by N only           -> cleared
+    G  world,  top,   [accessory],  owned by N only          -> cleared (N is no tester)
+    K  shared, top,   [accessory],  worn by T and N          -> kept accessory
     O  world,  feet,  [own_mesh], worn by T                -> kept own_mesh
     H  world,  top,   [own_mesh], OWNED by T, not worn     -> kept own_mesh
-    M  shared, top,   [painted],  owned by dormant D       -> kept painted
+    M  shared, top,   [accessory],  owned by dormant D       -> kept accessory
     Q  world,  top,   [in_body],  worn by dormant D        -> kept in_body
-    Z  world,  top,   [painted],  worn by animal A         -> cleared
+    Z  world,  top,   [accessory],  worn by animal A         -> cleared
     S  shared, outer, [own_mesh], unworn, unowned          -> cleared
     L  world,  top,   -,          unworn                   -> untouched, mode in_body
     X  a tool                                              -> untouched
@@ -47,18 +48,18 @@ The shared file starts with an extra top-level key ``note: "keep me"``.
 [1] A10 default: default_mesh_mode(["feet"]) == "in_body"; also ["outer"],
     ["top"], ["top","bottom"], ["legs","feet"], [] -> "in_body";
     mesh_mode_of({slots [feet]}) == "in_body"; mesh_mode_of({slots [top],
-    mesh_mode painted}) == "painted".
+    mesh_mode accessory}) == "accessory".
 [2] A10 store only choices: add_item {slots [feet]} stores NO mesh_mode key
-    (mesh_mode_of in_body); {slots [top], mesh_mode painted} stores painted;
-    {slots [top], mesh_mode "bogus"} stores no key. update_item of the painted
-    piece without naming the mode keeps painted; naming mesh_mode None clears
+    (mesh_mode_of in_body); {slots [top], mesh_mode accessory} stores accessory;
+    {slots [top], mesh_mode "bogus"} stores no key. update_item of the accessory
+    piece without naming the mode keeps accessory; naming mesh_mode None clears
     the key (mode in_body); a name-only update of the keyless piece writes no
     key.
 [3] The re-default waits: with the mode migration's flag unset it returns
     None, neither marker is set and nothing changes.
-[4] With the flag set: cleared == {U: painted, C: painted, G: painted, Z:
-    painted, S: own_mesh}, kept == {K: painted, O: own_mesh, H: own_mesh, M:
-    painted, Q: in_body}, world "done", shared "done"; stored modes match
+[4] With the flag set: cleared == {U: accessory, C: accessory, G: accessory, Z:
+    accessory, S: own_mesh}, kept == {K: accessory, O: own_mesh, H: own_mesh, M:
+    accessory, Q: in_body}, world "done", shared "done"; stored modes match
     (U, C, G, Z, S, L without a key -> mesh_mode_of in_body); X has no
     outfit_piece. is_test_character: T True, N False, D True, A False. The
     shared file carries the marker key AND still ``note: "keep me"``. No Build
@@ -68,13 +69,13 @@ The shared file starts with an extra top-level key ``note: "keep me"``.
     file bytes and the ``items`` rows are identical. A later ordinary shared
     save (update_item renames K) keeps the marker and the note.
 [6] A world WITHOUT test characters boots first (world 2, new shared file F2:
-    P1 shared top [painted] worn by N2; P2 shared top [own_mesh], used by
+    P1 shared top [accessory] worn by N2; P2 shared top [own_mesh], used by
     nobody in world 2 — another world's tester may wear it; W world top
-    [painted] unworn; N2 has no model_pipeline): result world "done", shared
-    "waits", cleared == {W: painted}; F2 bytes identical (P2 keeps own_mesh,
+    [accessory] unworn; N2 has no model_pipeline): result world "done", shared
+    "waits", cleared == {W: accessory}; F2 bytes identical (P2 keeps own_mesh,
     no marker). A second call: world "already", shared "waits", cleared {}.
     Then world 3 (tester T3 owns P2, flag of the mode migration set) boots
-    with F2: shared "done", cleared == {P1: painted}, kept == {P2: own_mesh};
+    with F2: shared "done", cleared == {P1: accessory}, kept == {P2: own_mesh};
     F2 has the marker. Back in world 2: None (both scopes done).
 [7] Old code and wiring: at 8e67362b (the task's BASE) garment_set's
     default_mesh_mode returns OWN_MESH for feet and figure_migration has no
@@ -197,8 +198,8 @@ def main() -> int:
             check(f"{slots}", d(slots), "in_body")
         op = lambda p: {"category": "outfit_piece", "outfit_piece": p}  # noqa: E731
         check("mesh_mode_of keyless boots", garment_set.mesh_mode_of(op({"slots": ["feet"]})), "in_body")
-        check("mesh_mode_of stored painted", garment_set.mesh_mode_of(op({"slots": ["top"], "mesh_mode": "painted"})),
-              "painted")
+        check("mesh_mode_of stored accessory", garment_set.mesh_mode_of(op({"slots": ["top"], "mesh_mode": "accessory"})),
+              "accessory")
 
         print("[2] only a choice is stored")
 
@@ -209,12 +210,12 @@ def main() -> int:
         boots = add("Boots", {"slots": ["feet"]})
         check("boots: no mode key", "mesh_mode" in piece_of(boots), False)
         check("boots: mode in_body", garment_set.mesh_mode_of(inventory.get_item(boots)), "in_body")
-        shirt = add("Shirt", {"slots": ["top"], "mesh_mode": "painted"})
-        check("shirt: painted stored", piece_of(shirt).get("mesh_mode"), "painted")
+        shirt = add("Shirt", {"slots": ["top"], "mesh_mode": "accessory"})
+        check("shirt: accessory stored", piece_of(shirt).get("mesh_mode"), "accessory")
         bogus = add("Bogus", {"slots": ["top"], "mesh_mode": "bogus"})
         check("bogus: no mode key", "mesh_mode" in piece_of(bogus), False)
         inventory.update_item(shirt, {"outfit_piece": {"slots": ["top"]}})
-        check("shirt: update without the mode keeps painted", piece_of(shirt).get("mesh_mode"), "painted")
+        check("shirt: update without the mode keeps accessory", piece_of(shirt).get("mesh_mode"), "accessory")
         inventory.update_item(shirt, {"outfit_piece": {"slots": ["top"], "mesh_mode": None}})
         check("shirt: mode None clears the key", "mesh_mode" in piece_of(shirt), False)
         check("shirt: back to the default", garment_set.mesh_mode_of(inventory.get_item(shirt)), "in_body")
@@ -227,16 +228,16 @@ def main() -> int:
         invalidate()
 
         # Fixture of [3]..[5].
-        shared(shared_file, [("K", {"slots": ["top"], "mesh_mode": "painted"}),
-                             ("M", {"slots": ["top"], "mesh_mode": "painted"}),
+        shared(shared_file, [("K", {"slots": ["top"], "mesh_mode": "accessory"}),
+                             ("M", {"slots": ["top"], "mesh_mode": "accessory"}),
                              ("S", {"slots": ["outer"], "mesh_mode": "own_mesh"})], note="keep me")
-        raw_piece("U", {"slots": ["outer"], "mesh_mode": "painted"})
-        raw_piece("C", {"slots": ["top"], "mesh_mode": "painted"})
-        raw_piece("G", {"slots": ["top"], "mesh_mode": "painted"})
+        raw_piece("U", {"slots": ["outer"], "mesh_mode": "accessory"})
+        raw_piece("C", {"slots": ["top"], "mesh_mode": "accessory"})
+        raw_piece("G", {"slots": ["top"], "mesh_mode": "accessory"})
         raw_piece("O", {"slots": ["feet"], "mesh_mode": "own_mesh"})
         raw_piece("H", {"slots": ["top"], "mesh_mode": "own_mesh"})
         raw_piece("Q", {"slots": ["top"], "mesh_mode": "in_body"})
-        raw_piece("Z", {"slots": ["top"], "mesh_mode": "painted"})
+        raw_piece("Z", {"slots": ["top"], "mesh_mode": "accessory"})
         raw_piece("L", {"slots": ["top"]})
         raw_piece("X", {}, category="tool")
         character("T", {"top": "K", "feet": "O"}, pipeline=True, owns=("H",))
@@ -272,14 +273,14 @@ def main() -> int:
         set_world_setting(fm.FLAG, "1")
         result = fm.redefault_modes_once() or {}
         check("cleared", result.get("cleared"),
-              {"U": "painted", "C": "painted", "G": "painted", "Z": "painted", "S": "own_mesh"})
+              {"U": "accessory", "C": "accessory", "G": "accessory", "Z": "accessory", "S": "own_mesh"})
         check("kept", result.get("kept"),
-              {"K": "painted", "O": "own_mesh", "H": "own_mesh", "M": "painted", "Q": "in_body"})
+              {"K": "accessory", "O": "own_mesh", "H": "own_mesh", "M": "accessory", "Q": "in_body"})
         check("scopes", (result.get("world"), result.get("shared")), ("done", "done"))
         for item_id in ("U", "C", "G", "Z", "S", "L"):
             check(f"{item_id}: no stored mode", "mesh_mode" in piece_of(item_id), False)
             check(f"{item_id}: mode in_body", garment_set.mesh_mode_of(inventory.get_item(item_id)), "in_body")
-        for item_id, want in (("K", "painted"), ("O", "own_mesh"), ("H", "own_mesh"), ("M", "painted"),
+        for item_id, want in (("K", "accessory"), ("O", "own_mesh"), ("H", "own_mesh"), ("M", "accessory"),
                               ("Q", "in_body")):
             check(f"{item_id}: stored mode kept", piece_of(item_id).get("mesh_mode"), want)
         check("U slots untouched", piece_of("U").get("slots"), ["outer"])
@@ -306,17 +307,17 @@ def main() -> int:
 
         print("[6] a world without test characters boots first")
         f2 = root / "shared2" / "items.json"
-        shared(f2, [("P1", {"slots": ["top"], "mesh_mode": "painted"}),
+        shared(f2, [("P1", {"slots": ["top"], "mesh_mode": "accessory"}),
                     ("P2", {"slots": ["top"], "mesh_mode": "own_mesh"})])
         os.environ["STORAGE_DIR"] = str(root / "world2")
         open_world(root / "world2", f2)
-        raw_piece("W", {"slots": ["top"], "mesh_mode": "painted"})
+        raw_piece("W", {"slots": ["top"], "mesh_mode": "accessory"})
         character("N2", {"top": "P1"}, pipeline=False)
         set_world_setting(fm.FLAG, "1")
         before2 = f2.read_bytes()
         r2 = fm.redefault_modes_once() or {}
         check("world 2: scopes", (r2.get("world"), r2.get("shared")), ("done", "waits"))
-        check("world 2: cleared", r2.get("cleared"), {"W": "painted"})
+        check("world 2: cleared", r2.get("cleared"), {"W": "accessory"})
         check("world 2: shared file untouched", f2.read_bytes(), before2)
         check("world 2: P2 keeps own_mesh", piece_of("P2").get("mesh_mode"), "own_mesh")
         r2b = fm.redefault_modes_once() or {}
@@ -330,7 +331,7 @@ def main() -> int:
         set_world_setting(fm.FLAG, "1")
         r3 = fm.redefault_modes_once() or {}
         check("world 3: scopes", (r3.get("world"), r3.get("shared")), ("done", "done"))
-        check("world 3: cleared", r3.get("cleared"), {"P1": "painted"})
+        check("world 3: cleared", r3.get("cleared"), {"P1": "accessory"})
         check("world 3: kept", r3.get("kept"), {"P2": "own_mesh"})
         check("world 3: F2 marker", bool(shared_meta(f2).get(fm.SHARED_REDEFAULT_KEY)), True)
 

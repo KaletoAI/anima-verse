@@ -237,7 +237,7 @@ def budget_cases() -> None:
 def figure_cases() -> None:
     """[19] — a drape left due as the Figure tab reads it (docstring); every world read stubbed."""
     from app.blender import retry_budget as rb
-    from app.core import base_body, figure_build as fb, garment_template as gt
+    from app.core import figure_build as fb, garment_template as gt
     due = gt.failure_info({"outcome": oc.TIMEOUT, "error": "Blender timed out", "log_tail": "TAIL"})
     # what ``_build_drape`` answers for a drape left due by a timeout
     left = {"state": "missing", "reason": gt.LEFT_DUE[oc.TIMEOUT], "outcome": oc.TIMEOUT, "failure": due}
@@ -250,11 +250,10 @@ def figure_cases() -> None:
     check(fb._left_due({"failure": due}) and not fb._left_due({"failure": {"outcome": oc.REJECTED}})
           and not fb._left_due({"error": "x"}), "[19] _left_due: timeout yes, rejected / no failure no")
     real = {"error": "stretch", "item_id": "i2", "failure": {"outcome": oc.REJECTED}}
-    with patch.object(base_body, "mesh_view_mismatch", lambda *a, **k: None):
-        only_due = fb._build_problem("K", [], {"template": {"error": str(err), "item_id": "i1", "failure": due}},
-                                     types.SimpleNamespace(shape=""))
-        both = fb._build_problem("K", [], {"template": {"error": str(err), "item_id": "i1", "failure": due},
-                                           "hair": real}, types.SimpleNamespace(shape=""))
+    only_due = fb._build_problem("K", [], {"template": {"error": str(err), "item_id": "i1", "failure": due}},
+                                 types.SimpleNamespace(shape=""))
+    both = fb._build_problem("K", [], {"template": {"error": str(err), "item_id": "i1", "failure": due},
+                                       "hair": real}, types.SimpleNamespace(shape=""))
     check((only_due or {}).get("step") == "template" and (only_due or {}).get("failure") is due,
           f"[19] _build_problem: the left-due step with its failure ({only_due})")
     check((both or {}).get("step") == "hair" and (both or {}).get("failure") == real["failure"],

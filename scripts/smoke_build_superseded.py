@@ -100,7 +100,7 @@ def section_pins() -> None:
     from app.core.figure import Figure
 
     def fig(shape, *, in_body=("tshirt",), own=("jacket", "jeans"), hair="body", signature="sigK"):
-        return Figure(signature=signature, bsig=BSIG, shape=shape, texture="", in_body=tuple(in_body), painted=(),
+        return Figure(signature=signature, bsig=BSIG, shape=shape, texture="", in_body=tuple(in_body),
                       own=tuple(own), hair=hair, pieces={"top": "tshirt", "outer": "jacket", "legs": "jeans"})
 
     state = {}

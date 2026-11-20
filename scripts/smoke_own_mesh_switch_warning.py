@@ -10,7 +10,7 @@ no hub, no GPU, no server. Stubs: ``garment_assembly.schedule`` (nothing is asse
 empty namespace — no backend is probed). Fingerprints (fsig / ssig) come from the real ``garment_store`` /
 ``footwear_source`` functions — the ones the cleanup calls.
 
-THE RULE (A63). The cleanup is unchanged: an own-mesh outfit piece switched to ``painted`` / ``in_body`` is no
+THE RULE (A63). The cleanup is unchanged: an own-mesh outfit piece switched to ``in_body`` / ``accessory`` is no
 own-mesh kind any more, ``outfit_cache_gc._garment_roots`` keeps nothing of it, and its nodes go at the next collect
 (footwear: its world shoe source too, at the next daily sweep). The count names exactly what the cleanup KEEPS now
 and drops then; what is unreachable already is not counted (it goes whatever the mode). The cost K is
@@ -35,8 +35,8 @@ FIXTURE (sizes in bytes; a record is JSON padded with spaces to its size; every 
     world KEPT: footwear/shoes/S/{record.json 1000, raw.glb 500000, prepared.glb 400000}         = 3 files, 901000
     world STALE: footwear/shoes/5a5a…/record.json 1000 (an ssig nobody names)
   tee:   outfit piece {slots [top], own_mesh}, held by Demo, NO files.
-  scarf: outfit piece {slots [neck], painted}, held by Demo, old own-mesh files scarf_0b0b….{glb 5000, json 1000}
-    left from before (unreachable already: a painted piece is no own-mesh kind).
+  scarf: outfit piece {slots [neck], in_body}, held by Demo, old own-mesh files scarf_0b0b….{glb 5000, json 1000}
+    left from before (unreachable already: an in-body piece is no own-mesh kind).
 
 EXPECTED, BY HAND
   HUB_JOBS clothing:edit_chain = worn 2 + ghost 2 + cutout 2 + mesh 1 + fit 0 = 7 per character;
@@ -45,12 +45,12 @@ EXPECTED, BY HAND
     Demo (5, 952000, 7), world 0 files; mode own_mesh, kind clothing.
 [2] shoes: files 2 + 3 = 5, bytes 101000 + 901000 = 1002000, hub_jobs max(2) = 2, characters Demo (2, 101000, 2),
     world 3 files 901000; kind footwear.
-[3] tee: files 0, characters [] (no confirmation). scarf (painted): files 0, hub_jobs 0, mode painted, kind "" —
-    painted ↔ in_body drops no own-mesh file (its old files are prunable already). Unknown item → LookupError; the
+[3] tee: files 0, characters [] (no confirmation). scarf (in_body): files 0, hub_jobs 0, mode in_body, kind "" —
+    a non-own-mesh piece drops no own-mesh file (its old files are prunable already). Unknown item → LookupError; the
     route answers 404.
 [4] The cleanup agrees. Before the switch, an explicit dry run per character lists none of the counted dress / shoes
     files and lists the 2 stale dress_OLD files (and the scarf's 2 old files); ``footwear_source.collect(dry_run)``
-    removes only the stale ssig folder. After ``update_item(dress / shoes, mesh_mode painted)``: Demo's dry-run
+    removes only the stale ssig folder. After ``update_item(dress / shoes, mesh_mode in_body)``: Demo's dry-run
     orphan files of dress = the 5 counted + the 2 stale, Bea's = her 2; Demo's orphans of shoes = its 2;
     ``own_mesh_files`` of both says 0 files. The footwear dry run alone still keeps ssig S — Demo's accepted shoe
     fit record names it until the character collect removes it; the daily sweep (``sweep_all``: characters first,
@@ -146,7 +146,7 @@ def main() -> int:
         piece("dress", ["top"], "own_mesh")
         piece("shoes", ["feet"], "own_mesh")
         piece("tee", ["top"], "own_mesh")
-        piece("scarf", ["neck"], "painted")
+        piece("scarf", ["neck"], "in_body")
         img_dir = root / "world" / "items" / "shoes"
         img_dir.mkdir(parents=True, exist_ok=True)
         Image.new("RGB", (1024, 1024), (90, 60, 30)).save(img_dir / "shoe.png")
@@ -213,8 +213,8 @@ def main() -> int:
         got = artefact_graph.own_mesh_files("tee")
         check("tee: no files", (got["files"], got["characters"]), (0, []))
         got = artefact_graph.own_mesh_files("scarf")
-        check("scarf (painted): nothing kept as an own mesh",
-              (got["files"], got["hub_jobs"], got["mode"], got["kind"]), (0, 0, "painted", ""))
+        check("scarf (in_body): nothing kept as an own mesh",
+              (got["files"], got["hub_jobs"], got["mode"], got["kind"]), (0, 0, "in_body", ""))
         try:
             artefact_graph.own_mesh_files("nope")
             check("unknown item raises", False, True)
@@ -246,7 +246,7 @@ def main() -> int:
               footwear_source.collect(dry_run=True)["removed"], [str(world_stale.parent)])
         for item_id in ("dress", "shoes"):
             item = inventory.get_item(item_id)
-            inventory.update_item(item_id, {"outfit_piece": {**item["outfit_piece"], "mesh_mode": "painted"}})
+            inventory.update_item(item_id, {"outfit_piece": {**item["outfit_piece"], "mesh_mode": "in_body"}})
         check("after: Demo's dress orphans = counted + stale", orphan_files("Demo", "dress"),
               paths(dress_demo + dress_stale))
         check("after: Bea's dress orphans = counted", orphan_files("Bea", "dress"), paths(dress_bea))

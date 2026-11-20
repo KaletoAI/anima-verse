@@ -18,8 +18,8 @@ phrase smoke_full_body_reference.py measures for the same height) and the rule:
       "female, 21 years old, ink-stained fingers, round glasses, slightly hunched posture, long auburn hair,
        green eyes, olive skin, average height, slender build"  (appearance text, then the slots in manifest order)
     with picture_reference=True: "average height, slender build" — no free text, no face slot.
-[2] full_body_reference.base_block / outfit_block (an edit of the profile picture or the plain body's reference —
-    always a picture): "average height, slender build" (the height phrase is already in the build fragment).
+[2] full_body_reference.base_block (an edit of the profile picture — always a picture; the outfit_block left with
+    the painted mode, A224): "average height, slender build" (the height phrase is already in the build fragment).
 [3] The T-pose extra view (render_character_image, occasion tpose_view, reference_image = the main render):
     the payload prompt contains none of the tokens "ink-stained", "glasses", "hunched", "auburn", "green eyes",
     "olive skin", "21 years old"; it contains "average height, slender build" and the hair slot's mesh-input line
@@ -135,9 +135,8 @@ def main() -> int:
         check("picture slotted: only what the render enforces",
               person_description("Pic", picture_reference=True, **kw), PICTURE)
 
-        print("[2] full-body references")
+        print("[2] full-body reference")
         check("base_block", fbr.base_block("Pic"), PICTURE)
-        check("outfit_block (nothing worn)", fbr.outfit_block("Pic"), PICTURE)
 
         print("[3] render_character_image, T-pose extra view")
         stub = StubService()

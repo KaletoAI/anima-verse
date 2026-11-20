@@ -441,7 +441,7 @@ def _normalize_outfit_types(raw) -> List[str]:
 
 def _clean_mesh_mode(raw) -> Optional[str]:
     """``outfit_piece.mesh_mode``: how the piece reaches a base-body
-    character's 3D model — ``own_mesh`` / ``painted`` / ``in_body``
+    character's 3D model — ``own_mesh`` / ``shell`` / ``template`` / ``in_body`` / ``accessory``
     (``app/core/garment_set.py``). A stored mode is a CHOICE (Ruling A10):
     a value outside those is None — the caller stores no key and the piece
     follows the default (``garment_set.default_mesh_mode``), never the

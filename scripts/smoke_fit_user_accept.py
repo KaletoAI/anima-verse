@@ -141,8 +141,6 @@ def main() -> int:
         base_body.prompts_current = lambda *_a, **_kw: True
         base_body.base_refresh_plan = lambda *_a, **_kw: {}
         base_body.dressed_image = lambda *_a, **_kw: root / "view.png"
-        base_body.dressed_view_estimate = lambda *_a, **_kw: 3
-        base_body.dressed_view_refusals = lambda *_a, **_kw: {}
         figure.stored_shape = lambda _c, key, **_kw: {"outfit_body": {"body_id": key}}
         FV = garment_fit.FIT_VERSION["clothing"]
 

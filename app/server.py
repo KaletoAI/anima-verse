@@ -252,7 +252,7 @@ async def lifespan(app: FastAPI):
     # Reference pictures a figure uses that were generated/uploaded into the gallery move to
     # model_refs/references (user rule 2026-11-16; idempotent, one log line per file).
     try:
-        from app.core.outfit_references import move_all_gallery_references
+        from app.core.reference_images import move_all_gallery_references
         move_all_gallery_references()
     except Exception as _rm:  # noqa: BLE001 — never blocks the boot
         logger.warning("Moving reference pictures out of the gallery failed: %s", _rm)
@@ -798,6 +798,16 @@ async def lifespan(app: FastAPI):
         migrate_shell_mode_once()
     except Exception as _sme:
         logger.warning("Shell mode migration failed (retried at the next start): %s", _sme)
+
+    # Migration (A224): the worn-piece mode "painted" is gone — every piece stored in it gets its mode of today by
+    # an explicit table (two pieces become accessories, every other one goes in the body), the removed per-piece
+    # colours leave the profiles. Item and profile writes only (no Build, no hub job); after the mode migrations
+    # above, before the refit sweep reads the modes.
+    try:
+        from app.core.painted_mode_migration import migrate_painted_mode_once
+        migrate_painted_mode_once()
+    except Exception as _pme:
+        logger.warning("Painted mode migration failed (retried at the next start): %s", _pme)
 
     # Migration (same plan, Task 13, D3): hairstyles are items — every humanoid
     # gets ONE hairstyle from today's hair (text, stored method, colour /

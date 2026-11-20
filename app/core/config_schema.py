@@ -160,23 +160,10 @@ SECTIONS = {
                 "type": "bool",
                 "label": "Dressed side views",
                 "default": False,
-                "description": "Dress the left and right views of every outfit too and hand them to the body "
-                               "retexture worker (default: front and back only). Each side costs one draft render "
-                               "(occasion outfit_side_draft), composited onto the base side view on the CPU. "
-                               "The worker paints only "
-                               "the torso seen clear of the arm from them; the flanks gain detail, the hips may "
-                               "come out slightly worse. Applies to outfits rendered or rebuilt after the change.",
-            },
-            "side_arm_margin": {
-                "type": "float",
-                "label": "Side view arm margin",
-                "default": 0.03,
-                "min": 0,
-                "max": 0.2,
-                "step": 0.005,
-                "description": "With dressed side views: the zone around the arm a side view does not paint, as "
-                               "a fraction of the body height. 0 uses the side views unmasked (cloth on the arms). "
-                               "Measured: 0.025 and above keep the flanks as good as front and back alone.",
+                "description": "Dress the left and right views of every body shape too (default: front and back "
+                               "only). Each side costs one draft render (occasion outfit_side_draft), composited "
+                               "onto the base side view on the CPU. Applies to body shapes rendered or rebuilt "
+                               "after the change.",
             },
             "skin_detail_step": {
                 "type": "bool",
@@ -231,22 +218,6 @@ SECTIONS = {
                                "provider's own timeout. When more requests in a row time out than run "
                                "in parallel, the provider has stopped answering and the test ends as "
                                "failed with that reason.",
-            },
-        },
-    },
-    "body_retexture": {
-        "label": "Body retexture", "scope": "instance",
-        "fields": {
-            "worker_dir": {
-                "type": "str", "label": "Worker directory", "default": "",
-                "description": "Path of the GLBBodyRetexture repo whose .venv runs the worker; empty = off. "
-                               "Runs locally as a CPU subprocess (python -m body_core) and paints outfits "
-                               "onto a character's base body. A leading ~ is expanded.",
-            },
-            "timeout_seconds": {
-                "type": "int", "label": "Timeout (seconds)", "default": 1800, "min": 1,
-                "description": "A run that takes longer is killed with everything it started and counts as failed. "
-                               "Four views take about 1–2 minutes of CPU at default settings.",
             },
         },
     },

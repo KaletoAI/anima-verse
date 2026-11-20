@@ -11,12 +11,15 @@ package copied in — no world, no hub, no GPU, no Blender, no server. The
 fixture is a slim cut of scripts/smoke_base_body_outfit.py (as
 scripts/smoke_outfit_rebuild_cost.py): Kira on the pipeline with a ready base
 and the four base views, wearing a plain Dress (slot top) → worn signature
-``sig``; she also holds a Scarf (slot neck). Both are ``mesh_mode: painted`` (painted on the plain body;
-since 9788164d the default mode is ``in_body``, which would mesh a shape). The producers are recorders:
+``sig``; she also holds a Scarf (slot neck). Both are ``mesh_mode: own_mesh`` without a fit — left off, so
+the figure stays the plain body (the default ``in_body`` would mesh a shape; the plain-body mode ``painted``
+was removed by A224). The producers are recorders:
 
 * ``model_refs.trigger_now`` records ``(kinds, blocking, force, signature)``
-  and writes the outfit's dressed front + back CURRENT for the base
-  (``base_signature`` bsig, ``base_image_sha256`` of the base view);
+  and writes the outfit's front + back CURRENT for the base: copies of the
+  base views (``base_signature`` bsig, ``base_image_sha256`` of the base view,
+  ``dressed`` false, ``mesh_items.unpainted`` = the pieces the figure leaves
+  out — what ``dressed_image`` accepts since A224);
 * ``model_refs.generate_model_ref_images`` (the non-worn path) records
   ``(kinds, force, pieces, signature)`` and writes the same views;
 * ``model3d.generate_for_current_outfit`` records ``(force, signature)`` and
@@ -32,16 +35,15 @@ since 9788164d the default mode is ``in_body``, which would mesh a shape). The p
 (an older base); every hand-written model records the figure its pieces are
 delivered as now (Task 6: a model without one is stale "figure" — the boot
 stamp of smoke_figure_stamp.py gives the pre-Task-6 ones theirs). Expectations derived by hand from § 6.4 and rebuild_cost's
-table (front 1 + 1 per other dressed view — its draft; the composite onto
-the base view is CPU work since Task 11g; retexture repaint = CPU):
+table (A224: an outfit's views are copies of its shape's views, 0 jobs; only an unstored shape costs — none
+here, the figure is the plain body — so every cost is 0, note "older base: CPU only"):
 
 [B1] the worn model stale, no dressed view → one candidate
      ``outfit:Kira:<sig>`` (the subject; the full key adds ``:<token>``, the
      token sha256 of "<bsig>:<base model sha>:older_base", first 12 hex — the
      outfit_rebuild module docstring), label "Kira · Dress · older base" (the outfit's
      piece name, no saved set matches; the reason text of "older_base"),
-     hub_jobs 3 (front 1 + back turn 1 + back draft 1, A175), note "older base: views 3 (first
-     attempts)".
+     hub_jobs 0, note "older base: CPU only".
 [B2] through the engine (``handle_step``) → {"ok": True}; the calls in order
      trigger_now(("tpose",), blocking True, force False, signature sig), then
      generate_for_current_outfit(force True, signature sig); rescan → no
@@ -63,7 +65,7 @@ the base view is CPU work since Task 11g; retexture repaint = CPU):
      ``outfit_batch._signature({"neck": scarf})``) with a stale model, and a
      set "Day" = [Dress, Scarf] without a model; the worn model current:
      scope worn → nothing; scope saved → exactly ``outfit:Kira:<sig2>``,
-     label "Kira · Evening · older base", hub 2; "Day" never. Its apply
+     label "Kira · Evening · older base", hub 0; "Day" never. Its apply
      renders through generate_model_ref_images (pieces {"neck": scarf}, the
      model's manifest, force False, signature sig2) — trigger_now not called —
      then the build for sig2.
@@ -72,36 +74,13 @@ the base view is CPU work since Task 11g; retexture repaint = CPU):
      one trigger_now; the build is never called (it would render the views
      again in mesh mode, or repaint from a partial set).
 
-[B9] (ruling 9a) load during the dressed views is busy, never a failure. The
-     REAL render path: ``model_refs.trigger_now`` (blocking) →
-     ``generate_model_ref_images`` → ``base_body.generate_dressed_images`` →
-     ``expression_regen.render_character_image`` → the service's string
-     facade ``generate_from_input`` (a real ``ImageService`` with no
-     instances, switched on by hand) → the routing, where a fake backend
-     records the occasion and raises ``BackendBusyError``. Views needed, the
-     model stale (cost 3), only the build recorder stays.
-     [B9a] through the engine → {"busy": …}, NOT "refused"; the step
-     pending, attempts 0, refused 0; ONE routed render, occasion
-     "outfit_front" (the front is the first view; the pass stops there); the
-     build never called; ``base_body._outfit_failed`` holds nothing for
-     (Kira, sig), outfit_info still "stale" (the candidate stays listed),
-     the images stage no longer running.
-     [B9b] the media switch off at the facade (``media_generation_enabled``
-     False) → apply raises CandidateBusy, no render reached the routing,
-     nothing recorded as a failure.
-     [B9c] the saved set "Evening" (sig2, B7) stale with its views dropped,
-     scope saved → the non-worn path (``generate_model_ref_images``) →
-     CandidateBusy, one routed render "outfit_front", no failure recorded.
-     [B9d] the worn front current, only the back missing (cost still 2:
-     ``rebuild_cost`` counts the whole view set, an upper bound) → the back's
-     draft (``_dress_view`` → ``render_draft``) meets the
-     busy backend → CandidateBusy, one routed render "outfit_back_draft", no
-     failure recorded, the build never called.
+[B9] (A224; was ruling 9a's busy render, which needed the painted set's
+     view edits) the REAL view path on the plain body: views dropped, the
+     model stale → cost 0; through the engine {"ok": …}; ``routing.run_routed``
+     never reached (it raises if it is); the build once; front and back
+     ``dressed_image`` now present — copies of the plain body's views.
 
 Fails on 505c3076: ModuleNotFoundError — app.core.improvements.types.outfit_rebuild.
-Fails on f4c5dc6d (before fix 9a): [B9a] the facade answers the busy backend
-with an "Error: …" string, the front edit becomes "Dressed front edit
-failed", ``_outfit_failed`` records it and the engine reports "refused".
 """
 import hashlib
 import json
@@ -200,8 +179,9 @@ def main() -> int:
             (refs / f"{stem}.json").write_text(json.dumps({"base_signature": bsig}))
             shas[v] = hashlib.sha256((refs / f"{stem}.png").read_bytes()).hexdigest()
 
-        # Painted on the plain body (since 9788164d the default mode is in_body — that would mesh a shape).
-        piece = {"covers": [], "outfit_types": ["casual"], "mesh_mode": "painted"}
+        # Own mesh without a fit: left off, the figure stays the plain body (the default mode in_body would mesh a
+        # shape; the plain-body mode "painted" is gone since A224).
+        piece = {"covers": [], "outfit_types": ["casual"], "mesh_mode": "own_mesh"}
         dress = inventory.add_item(name="Dress", category="outfit_piece", prompt_fragment="a green dress",
                                    outfit_piece={"slots": ["top"], **piece})["id"]
         scarf = inventory.add_item(name="Scarf", category="outfit_piece", prompt_fragment="a red scarf",
@@ -223,8 +203,11 @@ def main() -> int:
             for v in ("front", "back"):
                 stem = f"tpose_{s}" if v == "front" else f"tpose_{v}_{s}"
                 (refs / f"{stem}.png").write_bytes(png((99, 1 if v == "front" else 2, 3)))
+                # A224: a copy of the plain body's view naming the pieces the figure leaves out.
+                fig = figure.delivered_figure("Kira", pieces=dict(view_pieces), items=[])
                 (refs / f"{stem}.json").write_text(json.dumps({
-                    "base_signature": bsig, "base_image_sha256": shas[v], "dressed": True,
+                    "base_signature": bsig, "base_image_sha256": shas[v], "dressed": False,
+                    "mesh_items": {"unpainted": sorted({*fig.own, *fig.accessory, *fig.left_out})},
                     "equipped_pieces": dict(view_pieces), "equipped_items": [], "mesh_variant": ""}))
 
         def drop_views(s):
@@ -284,7 +267,7 @@ def main() -> int:
             write_model(sig, pieces)
             found = cands()
             check("one candidate", [(subject_of(c.key), c.label, c.hub_jobs, c.note) for c in found],
-                  [(key, "Kira · Dress · older base", 3, "older base: views 3 (first attempts)")])
+                  [(key, "Kira · Dress · older base", 0, "older base: CPU only")])
             bsig_now = base_body.base_signature("Kira")
             check("the full key: subject + the base and reason token", [c.key for c in found],
                   [f"{key}:" + hashlib.sha256(
@@ -298,7 +281,7 @@ def main() -> int:
             check("scan", engine.scan(entry), {"added": 1, "closed": 0})
             check("the step carries the cost", (store.list_steps(entry)[0]["hub_jobs"],
                                                 store.list_steps(entry)[0]["note"]),
-                  (3, "older base: views 3 (first attempts)"))
+                  (0, "older base: CPU only"))
             check("handle_step ok", run_step(entry, key), {"ok": True})
             check("calls in order", CALLS, [("trigger_now", ("tpose",), True, False, sig),
                                             ("generate_for_current_outfit", True, sig)])
@@ -383,7 +366,7 @@ def main() -> int:
             check("worn scope: nothing (the worn model is current)", cands(), [])
             found = cands(scope="saved")
             check("saved scope: Evening only", [(subject_of(c.key), c.label, c.hub_jobs) for c in found],
-                  [(f"outfit:Kira:{sig2}", "Kira · Evening · older base", 3)])
+                  [(f"outfit:Kira:{sig2}", "Kira · Evening · older base", 0)])
             typ.apply(found[0], typ.validate({"scope": "saved"}), "t")
             check("non-worn: rendered the batch way, then built", CALLS,
                   [("generate_model_ref_images", ("tpose",), False, {"neck": scarf}, sig2),
@@ -402,78 +385,28 @@ def main() -> int:
             RENDER["write"] = True
 
         # --- [B9] -------------------------------------------------------------------
-        print("[B9] load during the dressed views is busy, never a failure (ruling 9a)")
-        from app.imagegen import service
-        from app.imagegen.base import BackendBusyError
-        svc = service.ImageService({})
-        svc.enabled = True          # no instances configured: the routing below stands in for the backend
+        print("[B9] the real view path on the plain body copies, never renders (A224)")
         routed = []
 
-        def busy_backend(occasion, render, **kw):
+        def any_backend(occasion, render, **kw):
             routed.append(occasion)
-            raise BackendBusyError("gpu busy")
-
-        def failure(s):
-            with base_body._status_lock:
-                return (base_body._outfit_failed.get(("Kira", s)),
-                        base_body._outfit_running.get(("Kira", "images")))
+            raise AssertionError(f"routed render {occasion}")
 
         CALLS.clear()
         drop_views(sig)
         write_model(sig, pieces)
         with patch.object(model3d, "generate_for_current_outfit", build), \
              patch("app.imagegen.routing.explain_occasion", explain), \
-             patch("app.imagegen.service.get_image_service", lambda: svc), \
-             patch("app.imagegen.routing.run_routed", busy_backend):
-            check("views needed: cost 3", [(subject_of(c.key), c.hub_jobs) for c in cands()], [(key, 3)])
-            print("[B9a] a busy backend through the engine")
+             patch("app.imagegen.routing.run_routed", any_backend):
+            check("views needed: cost 0", [(subject_of(c.key), c.hub_jobs) for c in cands()], [(key, 0)])
             entry = store.create(typ.id, "Rebuild", typ.validate({}), "one_shot")["id"]
             check("scan", engine.scan(entry), {"added": 1, "closed": 0})
-            result = run_step(entry, key)
-            check("busy, not refused", list(result.keys()), ["busy"])
-            step = store.list_steps(entry)[0]
-            check("step pending, no attempt, not refused",
-                  (step["status"], step["attempts"], step["refused"]), ("pending", 0, 0))
-            check("one routed render, the dressed front", routed, ["outfit_front"])
-            check("the build never called", CALLS, [])
-            check("no failure recorded, the stage ended", failure(sig), (None, None))
-            check("still a candidate", [subject_of(c.key) for c in cands()], [key])
+            check("through the engine: ok", list(run_step(entry, key).keys()), ["ok"])
+            check("no routed render", routed, [])
+            check("the build once", CALLS, [("generate_for_current_outfit", True, sig)])
+            check("the views are copies", [base_body.dressed_image("Kira", v, sig, bsig) is not None
+                                           for v in ("front", "back")], [True, True])
             store.delete(entry)
-
-            print("[B9b] the media switch off")
-            del routed[:]
-            with patch("app.imagegen.service.media_generation_enabled", lambda: False):
-                raises("media off → CandidateBusy", lambda: typ.apply(cands()[0], typ.validate({}), "t"),
-                       CandidateBusy)
-            check("no render reached the routing", routed, [])
-            check("no failure recorded", failure(sig), (None, None))
-
-            print("[B9c] a saved set (the non-worn path)")
-            del routed[:]
-            write_views(sig, pieces)
-            write_model(sig, pieces, base_signature=bsig, base_model_sha256=base_sha)
-            drop_views(sig2)
-            write_model(sig2, {"neck": scarf})
-            found = cands(scope="saved")
-            check("saved scope: Evening, views needed", [(subject_of(c.key), c.hub_jobs) for c in found],
-                  [(f"outfit:Kira:{sig2}", 3)])
-            raises("busy → CandidateBusy", lambda: typ.apply(found[0], typ.validate({"scope": "saved"}), "t"),
-                   CandidateBusy)
-            check("one routed render, the dressed front", routed, ["outfit_front"])
-            check("no failure recorded", failure(sig2), (None, None))
-            check("the build never called", CALLS, [])
-
-            print("[B9d] the back's draft meets the busy backend")
-            del routed[:]
-            for p in refs.glob(f"tpose_back_{sig}.*"):
-                p.unlink()
-            write_model(sig, pieces)
-            found = cands()
-            check("worn: only the back missing, cost 3 (whole set)", [(subject_of(c.key), c.hub_jobs) for c in found], [(key, 3)])
-            raises("busy → CandidateBusy", lambda: typ.apply(found[0], typ.validate({}), "t"), CandidateBusy)
-            check("one routed render, the back's turn (A175: turn before draft)", routed, ["outfit_back_turn"])
-            check("no failure recorded", failure(sig), (None, None))
-            check("the build never called", CALLS, [])
 
     print(f"\n{len(FAILS)} failure(s)" + (": " + ", ".join(FAILS) if FAILS else ""))
     return 1 if FAILS else 0

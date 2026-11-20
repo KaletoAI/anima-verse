@@ -5,11 +5,11 @@ and the mode of every worn outfit piece (plan
 
 The mode is a property of the ITEM — ``outfit_piece.mesh_mode`` (``mesh_mode_of``),
 the same for every wearer: ``own_mesh`` (a finished mesh fitted on top),
-``painted`` (on the body's texture) or ``in_body`` (meshed as part of the
+``shell``, ``template``, ``accessory`` or ``in_body`` (meshed as part of the
 body). A mode is stored only when someone picks it (the Wardrobe's mode
 select, a route that names it); an item without a valid stored mode is in
 the body (``default_mesh_mode``, Ruling A10 — for every slot set, footwear
-included: own mesh and painted must be chosen).
+included: every other mode must be chosen).
 
 Two kinds of item become a fitted garment mesh on a base-body character:
 
@@ -28,9 +28,8 @@ Two kinds of item become a fitted garment mesh on a base-body character:
   fitted per wearer × body on the CPU (method ``shoe``,
   ``garment_footwear``). It takes no part in layering. A multi-slot piece
   that also covers ``feet`` (own-mesh tights ``[legs, feet]``) stays
-  clothing (controller ruling 2026-11-10). It is NEVER painted onto the
-  body, in either outfit body mode (spec § 9.1): without an accepted fit on
-  the current body it is missing (bare feet) until the fit is accepted.
+  clothing (controller ruling 2026-11-10). Without an accepted fit on the
+  current body it is missing (bare feet) until the fit is accepted.
 
 ``OWN_MESH_PIECE_KINDS`` answers "is this an own-mesh outfit piece" (the
 mode, the worn set, the mesh-items token); ``GRAFTED_PIECE_KINDS`` the kinds
@@ -53,7 +52,7 @@ GRAFTED_PIECE_KINDS: Tuple[str, ...] = (CLOTHING, FOOTWEAR)
 FOOTWEAR_SLOT = "feet"
 
 #: The modes of an outfit piece (``outfit_piece.mesh_mode``, module docstring).
-OWN_MESH, PAINTED, IN_BODY = "own_mesh", "painted", "in_body"
+OWN_MESH, IN_BODY = "own_mesh", "in_body"
 #: A sewing-pattern template draped onto the plain body on the CPU (``garment_template``, Ruling A138).
 TEMPLATE = "template"
 #: A mesh of its own made from the plain body's surface over the region the piece covers (``garment_shell``,
@@ -62,7 +61,7 @@ SHELL = "shell"
 #: A thin accessory (jewellery, bands) built on the CPU from the plain body (``accessory_build``, Ruling A118 J1):
 #: never worn/ghost/fit, never in the body shape or the texture once chosen.
 ACCESSORY = "accessory"
-MESH_MODES: Tuple[str, ...] = (OWN_MESH, SHELL, PAINTED, IN_BODY, TEMPLATE, ACCESSORY)
+MESH_MODES: Tuple[str, ...] = (OWN_MESH, SHELL, IN_BODY, TEMPLATE, ACCESSORY)
 #: The modes whose piece is a fitted mesh of its own (the own-mesh chain, ``garment_kind_of``).
 OWN_MESH_MODES: Tuple[str, ...] = (OWN_MESH, SHELL)
 
@@ -70,8 +69,8 @@ OWN_MESH_MODES: Tuple[str, ...] = (OWN_MESH, SHELL)
 def default_mesh_mode(slots: Iterable[str]) -> str:
     """The default mode of an outfit piece worn on ``slots`` — the mode of
     every piece without a stored one: ``in_body`` for every slot set,
-    footwear included (Ruling A10: "in the body" is the default, own mesh
-    and painted must be chosen). ``slots`` stays a parameter so a later
+    footwear included (Ruling A10: "in the body" is the default, every
+    other mode must be chosen). ``slots`` stays a parameter so a later
     per-slot rule needs no new call sites."""
     return IN_BODY
 
@@ -261,28 +260,23 @@ def piece_live(character_name: str, item_id: str) -> Optional[Dict[str, Any]]:
 
 
 def piece_status(info: Dict[str, Any], *, worn: bool, base_model_ready: bool,
-                 layers: Optional[Dict[str, List[str]]] = None, left_out: bool = False) -> Dict[str, Any]:
+                 layers: Optional[Dict[str, List[str]]] = None) -> Dict[str, Any]:
     """The Wardrobe row chip of an own-mesh piece from its
-    ``garments.garment_info``: ``{state, step, painted, reason, over,
-    without}`` (+ ``missing`` when it is left out).
+    ``garments.garment_info``: ``{state, step, reason, missing, over,
+    without}``.
 
     ``state`` — ``running`` (``step`` = the step in flight), else how far the
     chain of the CURRENT fingerprint got: ``fitted`` (accepted fit on the
     current base model), ``mesh`` (accepted mesh), ``images`` (at least one
     accepted image), ``missing``.
-    ``painted`` — the piece is worn (``worn``: on the
-    pipeline and in ``equipped_pieces``) without an accepted fit and neither
-    left out (kept for a caller without the figure).
+    ``missing`` — the piece is worn (``worn``: on the pipeline and in
+    ``equipped_pieces``) without an accepted fit: the delivered figure leaves
+    it out (Ruling A119: not ready, not worn) until its mesh is accepted
+    (``base_body.MESH_ITEM_NOT_READY``).
     ``reason`` says why, in the outfit
     warning's words: the persisted chain failure ``"<step> — <error>"``,
     else ``base_body.BASE_MODEL_MISSING`` without a base model, else
-    ``base_body.NO_MESH_FIT``; None when neither painted nor missing.
-    ``missing`` — the delivered figure LEAVES the piece out (``left_out``:
-    in ``figure.Figure.left_out`` — Ruling A119: not ready, not worn): the worn piece without an accepted fit is NOT painted — it is
-    missing from the outfit model until its mesh is accepted
-    (``base_body.MESH_ITEM_NOT_READY``); ``painted`` is then False and
-    ``reason`` says why it is not ready. A FOOTWEAR piece (``info["kind"]``)
-    is never painted (spec § 9.1): worn without a fit it is ``missing``.
+    ``base_body.NO_MESH_FIT``; None when nothing is missing.
     ``body`` — on a meshed shape only: ``{body_id, status, error}`` of the
     piece's fit on the outfit body worn now (``garment_info["body"]``).
     ``queue_position`` — the 1-based place of the piece's next waiting run
@@ -311,8 +305,6 @@ def piece_status(info: Dict[str, Any], *, worn: bool, base_model_ready: bool,
         state = STATE_MISSING
     fitted = bool(info.get("fsig") and fit.get("status") == "accepted")
     absent = bool(worn and not fitted)
-    footwear = str(info.get("kind") or "") == FOOTWEAR
-    painted = absent and not left_out and not footwear
     reason = None
     if absent:
         failed = info.get("failed") if isinstance(info.get("failed"), dict) else None
@@ -323,10 +315,8 @@ def piece_status(info: Dict[str, Any], *, worn: bool, base_model_ready: bool,
             # Ruling A134: the figure's rule (``figure._not_fitted_reason``) — a CPU fit alone is no "not ready".
             reason = (LEFT_OFF_REFIT if base_model_ready and info.get("cpu_refit")
                       else base_body.NO_MESH_FIT if base_model_ready else base_body.BASE_MODEL_MISSING)
-    out = {"state": state, "step": running, "painted": painted, "reason": reason,
+    out = {"state": state, "step": running, "missing": absent, "reason": reason,
            "queue_position": info.get("queue_position")}
-    if left_out or footwear:
-        out["missing"] = absent
     if isinstance(info.get("body"), dict):
         # A meshed shape: the piece's fit on the outfit body worn now (garments.body_fit_info).
         out["body"] = {k: info["body"].get(k) for k in ("body_id", "status", "error")}
@@ -516,7 +506,7 @@ def worn_layers(character_name: str, *, profile: Optional[Dict[str, Any]] = None
     worn ones, the character's slot order): ``{over: [names], without:
     [names]}`` — ``over`` the inner pieces with an accepted fit on
     ``base_model_sha`` (the outer piece is fitted over their meshes),
-    ``without`` those still painted on (no fit yet: the outer piece is fitted
+    ``without`` those without a fit yet (left off: the outer piece is fitted
     against the body there and refitted over them once their fit lands).
     {} off the pipeline / without a base model."""
     from app.core import base_body, body_slots, garment_store
@@ -535,7 +525,7 @@ def worn_layers(character_name: str, *, profile: Optional[Dict[str, Any]] = None
         entry: Dict[str, List[str]] = {"over": [], "without": []}
         for other in inner:
             if other not in fitted:
-                # a template piece under it is draped, never painted on: the outer piece goes over its drape
+                # a template piece under it is draped: the outer piece goes over its drape
                 fitted[other] = other in template or garment_store.accepted_fit(
                     character_name, other, base_model_sha=base_model_sha, profile=profile) is not None
             name = str((get_item(other) or {}).get("name") or other)
@@ -568,10 +558,6 @@ def wardrobe(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -
     profile = _profile_of(character_name, profile)
     pipeline = base_body.is_base_pipeline(character_name, profile=profile)
     base = base_body.current_base(character_name, profile=profile) if pipeline else None
-    left_out: Dict[str, str] = {}
-    if pipeline:
-        from app.core import figure
-        left_out = dict(figure.delivered_figure_cached(character_name, profile=profile).left_out)
     pieces = profile.get("equipped_pieces") if isinstance(profile.get("equipped_pieces"), dict) else {}
     worn = set(_ids(pieces))
     layers = worn_layers(character_name, profile=profile, base_model_sha=base[1] if base else "")
@@ -582,8 +568,7 @@ def wardrobe(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -
         except ValueError:
             continue
         items[item_id] = piece_status(info, worn=pipeline and item_id in worn,
-                                      base_model_ready=bool(base and base[1]), layers=layers.get(item_id),
-                                      left_out=item_id in left_out)
+                                      base_model_ready=bool(base and base[1]), layers=layers.get(item_id))
         items[item_id]["live"] = piece_live(character_name, item_id)  # A194
     overlaps = (mesh_overlaps(pieces, slot_order=body_slots.piece_slots_for_character(character_name))
                 if pipeline else [])

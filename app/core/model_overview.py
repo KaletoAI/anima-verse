@@ -18,17 +18,17 @@ a 3D model or an image, decided here on the server.
      re-encode, measurement.
    - ``outfit_model_steps``: an outfit model on the base-body pipeline
      (sidecar ``source: "base_body"``) — base model used, base variant and
-     the piece that decided it, the painted body (texture signature,
-     reused or painted, shared with N outfits), every dressed view with its gates,
+     the piece that decided it, the texture body (texture signature,
+     reused or made, shared with N outfits), every dressed view with its gates,
      its composite (Task 11g) and view guard, the body retexture proof, the restored face
      texels, the extension rig (inherited from the base), the collision
      capsules (the base's set, ``collision.py``), the own-mesh
-     pieces (own garment mesh / left painted on / in mesh mode missing
+     pieces (own garment mesh / in the body texture of a model built before A224 / missing
      until their fit is accepted), the garments assembled
      onto it, measurement and distance mesh. A model of the old
      path gets no list: the 3D tab keeps its own overview for it. On an
-     MESHED SHAPE with nothing painted on it (sidecar ``body_id``, no
-     ``texture_signature``) the painted-body, retexture-proof and
+     MESHED SHAPE (sidecar ``body_id``, no
+     ``texture_signature``) the texture-body, retexture-proof and
      face-texel rows give way to one ``outfit_body`` row (body id).
    - ``outfit_body_steps``: an outfit body ``model3d/<body id>.glb`` (a
      meshed shape) — parent record (shape inputs, views meshed), mesh, face
@@ -44,7 +44,7 @@ a 3D model or an image, decided here on the server.
    ones the pipeline already keeps: base signature and base view hashes, the
    dressed front a draft was made from (and a dressed back/side of an
    outfit body, ``outfit_body_view_freshness``, plus its dress text), the
-   base views a base model was built from, an own-mesh piece painted on that has its garment mesh now
+   base views a base model was built from, an own-mesh piece in the body texture that has its garment mesh now
    (``mesh_item_ready``), a view made for another figure than the one delivered now (``FIGURE_CHANGED``), the garment fsig and the hair stale reasons, the pose render
    behind an old-path model, the profile picture behind the face view.
 
@@ -96,19 +96,14 @@ DRESSED_VIEW_CHANGED = {"front": "Dressed front changed after this model",
                         "right": "Dressed right view changed after this model"}
 # Ruling UI3 c: the action that resolves a stale base model (the Base body tab's Run all re-plans it).
 RUN_ALL_REBUILDS = "Run all rebuilds it"
-#: A base model the body retexture worker refused against one of its own views (Ruling A61).
-MESH_VIEW_MISMATCH = {"front": "The mesh does not match its front view — the outfit cannot be painted onto it",
-                      "back": "The mesh does not match its back view — the outfit cannot be painted onto it",
-                      "left": "The mesh does not match its left view — the outfit cannot be painted onto it",
-                      "right": "The mesh does not match its right view — the outfit cannot be painted onto it"}
 POSE_RENDER_CHANGED = "Pose render changed since this model"
 STAND_IN = "Stand-in: model of another outfit"
 PROFILE_CHANGED = "The profile picture changed"
 OLDER_FIT = "An older fit is shown"
 NO_PROVENANCE = "No provenance recorded"
 # The same phrase as base_body.MESH_ITEM_READY: an own-mesh piece this image or
-# model left painted on has an accepted garment fit now.
-MESH_ITEM_READY = "An own-mesh piece painted on here has its garment mesh now"
+# model left in its body texture has an accepted garment fit now.
+MESH_ITEM_READY = "An own-mesh piece in this body's texture has its garment mesh now"
 # The same phrase as base_body.FIGURE_CHANGED: an image or model made for
 # another figure than the one delivered now.
 FIGURE_CHANGED = "Built for another figure"
@@ -133,9 +128,6 @@ CLOTHING_STALE_REASONS = {"description_changed": "Piece description changed",
                           "base_model_changed": "Base model changed"}
 FITTED_ON_OLDER_BASE = "Fitted on an older base model"
 #: Ruling A74b: a dressed view made for another outfit reference image than the one set now.
-OUTFIT_REFERENCE_SET = "Made before the outfit's full-body reference was set — the Build renders it from the picture"
-OUTFIT_REFERENCE_CHANGED = "Made from another full-body reference of the outfit — the Build renders it from the current one"
-OUTFIT_REFERENCE_CLEARED = "Made from a reference image that was cleared — the Build renders it without one"
 
 
 def freshness(state: str, reason: str = "") -> Dict[str, Any]:
@@ -809,19 +801,19 @@ def _variant_step(meta: Dict[str, Any], *, wanted: Optional[str], deciders: List
     return step("variant", "Base variant", DONE, detail)
 
 
-def _painted_body_step(meta: Dict[str, Any], shared: Optional[int]) -> Optional[Dict[str, Any]]:
-    """The painted body an outfit model is built on (sidecar
+def _texture_body_step(meta: Dict[str, Any], shared: Optional[int]) -> Optional[Dict[str, Any]]:
+    """The texture body an outfit model is built on (sidecar
     ``texture_signature``, plan 2026-11-10-texture-body-reuse Task 1):
-    its texture signature, whether this build painted it or reused it, and
+    its texture signature, whether this build made it or reused it, and
     how many stored outfit models use it (``shared``). None for a model
     built before texture bodies."""
     tsig = meta.get("texture_signature")
     if not isinstance(tsig, str) or not tsig:
         return None
-    parts = [tsig, "reused" if meta.get("texture_reused") else "painted for this outfit"]
+    parts = [tsig, "reused" if meta.get("texture_reused") else "made for this outfit"]
     if shared is not None and shared > 1:
         parts.append(f"shared with {shared} outfits")
-    return step("painted_body", "Painted body", DONE, " · ".join(parts),
+    return step("texture_body", "Texture body", DONE, " · ".join(parts),
                 {"texture_signature": tsig, "shared": shared})
 
 
@@ -1006,8 +998,8 @@ def _face_texels_step(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 def _mesh_items_step(meta: Dict[str, Any], names: Dict[str, str],
                      missing: Iterable[str] = ()) -> Optional[Dict[str, Any]]:
     """The own-mesh pieces of an outfit model (sidecar ``mesh_items``): which
-    are their own garment mesh, which stayed painted on (their reasons are in
-    the garment warnings) and — outfit body mode mesh, ruling 2026-11-10 —
+    are their own garment mesh, which stayed in the body texture (a model built before A224; their reasons are
+    in the garment warnings) and — outfit body mode mesh, ruling 2026-11-10 —
     which are missing from it because they have no accepted fit yet
     (``missing``: ``base_body.mesh_items_missing``, judged now; "missing
     own-mesh pieces: …" — Ruling A119: left off until ready). None for an
@@ -1020,16 +1012,16 @@ def _mesh_items_step(meta: Dict[str, Any], names: Dict[str, str],
     unpainted = set(mesh_items_unpainted(meta))
     absent = set(missing) & unpainted
     effective = [i for i in intended if i in unpainted and i not in absent]
-    painted = [i for i in intended if i not in unpainted]
+    in_texture = [i for i in intended if i not in unpainted]
     lacking = [i for i in intended if i in absent]
     parts = []
     if effective:
         parts.append("own mesh: " + ", ".join(names.get(i, i) for i in effective))
-    if painted:
-        parts.append("painted on: " + ", ".join(names.get(i, i) for i in painted))
+    if in_texture:
+        parts.append("in the body texture: " + ", ".join(names.get(i, i) for i in in_texture))
     if lacking:
         parts.append("missing own-mesh pieces: " + ", ".join(names.get(i, i) for i in lacking))
-    return step("mesh_items", "Own-mesh pieces", WARNING if painted or lacking else DONE,
+    return step("mesh_items", "Own-mesh pieces", WARNING if in_texture or lacking else DONE,
                 " · ".join(parts), {"intended": len(intended), "effective": len(effective),
                                     "missing": len(lacking) or None})
 
@@ -1113,15 +1105,14 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
     at (front, back, sides), None when the file is gone; ``garments``: see
     ``_garment_steps``; ``tiers`` / ``low_tris`` / ``low_meta``: the distance mesh (its sidecar for the finger guard);
     ``item_names``: item id -> name for the own-mesh pieces row;
-    ``texture_shared``: how many stored outfit models use its painted body;
+    ``texture_shared``: how many stored outfit models use its texture body;
     ``body_meta``: the sidecar of the meshed shape it names (None when gone
     or on the plain body); ``missing_items``: the own-mesh pieces it left out
     that have no accepted fit now (``base_body.mesh_items_missing``);
     ``collision_current`` / ``channels_current``: the stored capsule record's
     currency (``collision.record_state``) — channels not current with current
     capsules = the collision step ``due``, as on the base model. A copy
-    of a meshed shape (nothing painted on it) shows the shape row instead of
-    the painted-body rows."""
+    of a meshed shape shows the shape row instead of the texture-body rows."""
     on_body = bool(meta.get("body_id")) and not meta.get("texture_signature")
     proof = _dict(meta.get("retexture_proof"))
     guards = _dict(meta.get("view_guard"))
@@ -1130,16 +1121,17 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
     rows = [_base_used_step(meta, base),
             _variant_step(meta, wanted=wanted_variant, deciders=deciders, shown=shown,
                           covered_missing_text=covered_missing_text)]
-    painted = _outfit_body_step(meta, body_meta) if on_body else _painted_body_step(meta, texture_shared)
-    if painted is not None:
-        rows.append(painted)
+    body_row = _outfit_body_step(meta, body_meta) if on_body else _texture_body_step(meta, texture_shared)
+    if body_row is not None:
+        rows.append(body_row)
     deltas = {v: _num(_dict(_dict(_dict(proof.get("views")).get(v)).get("dressed_alignment")).get("unchanged_delta_e"))
               for v in views}
     if meta.get("dressed") is not False:
         for v in views:
             rows.append(_dressed_view_step(v, used=v in used, record=dressed_records.get(v),
                                            guard=_dict(guards.get(v)), delta_e=deltas.get(v)))
-    if not on_body:
+    if not on_body and meta.get("dressed") is not False:
+        # A model painted by the body retexture worker before A224 records its proof; a copy (since A224) has none.
         rows.append(_retexture_step(meta, delta_limit))
         face = _face_texels_step(meta)
         if face is not None:
@@ -1179,7 +1171,7 @@ def dressed_freshness(meta: Dict[str, Any], *, bsig: str, base_view_sha: str,
     """A dressed view on the pipeline: made from the current view of the
     shape it was edited from (``bsig`` = that shape — the plain body's
     signature or the meshed shape's id — and ``base_view_sha`` its view's
-    content)? ``mesh_ready``: an own-mesh piece it left painted on has its
+    content)? ``mesh_ready``: an own-mesh piece it left in its body texture has its
     garment mesh now (``base_body.mesh_items_ready``); ``off_rule``: the
     reason when it was made for another figure than the one delivered now
     (``FIGURE_CHANGED``, ``base_body.dressed_image``), "" when not."""
@@ -1398,11 +1390,6 @@ def base_model_overview(character_name: str, bsig: str) -> Optional[Dict[str, An
                              collision_current=state.get("current"),
                              channels_current=state.get("channels_current"))
     fresh = base_model_freshness(meta, _base_view_shas(character_name, bsig), _base_view_stamps(character_name, bsig))
-    mismatch = base_body.mesh_view_mismatch(character_name, bsig) if fresh["state"] == CURRENT else None
-    if mismatch is not None:
-        # Ruling A61: the body retexture worker refused this mesh against one of its own views.
-        fresh = freshness(STALE, MESH_VIEW_MISMATCH.get(mismatch["view"], MESH_VIEW_MISMATCH["back"]))
-        fresh.update(action=RUN_ALL_REBUILDS, mismatch_view=mismatch["view"], detail=mismatch["error"])
     return {"steps": steps, "freshness": fresh}
 
 
@@ -1650,15 +1637,6 @@ def annotate_model_refs_info(character_name: str, info: Dict[str, Any]) -> Dict[
             if path is not None and on and base_body.dressed_image(character_name, view, signature, bsig,
                                                                    fig=delivered()) is None:
                 off_rule = FIGURE_CHANGED
-                if record.get("dressed") is not False:
-                    # Ruling A74b: made for another outfit reference picture than the one set now (or none).
-                    from app.core import outfit_references
-                    fig = delivered()
-                    wanted_ref = outfit_references.wanted_sha(character_name, fig.pieces, fig.open,
-                                                                 painted=fig.painted)
-                    if str(record.get("outfit_reference_sha256") or "") != wanted_ref:
-                        off_rule = (OUTFIT_REFERENCE_SET if wanted_ref and not record.get("outfit_reference_sha256")
-                                    else OUTFIT_REFERENCE_CLEARED if not wanted_ref else OUTFIT_REFERENCE_CHANGED)
             tile["freshness"] = dressed_freshness(
                 record, bsig=on if meshed else bsig, base_view_sha=view_sha,
                 mesh_ready=bool(base_body.mesh_items_ready(character_name, record, bsig=bsig)), off_rule=off_rule)

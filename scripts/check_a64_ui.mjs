@@ -22,7 +22,7 @@
  *       due ["Nothing becomes due now: no outfit would be built on it.", "An outfit that needs this body shape again
  *            meshes it anew (hub jobs).", "Wearing one of those outfits again builds its model anew."].
  *     Texture {files 3, bytes 2.5e6, outfit_models [], running ["k"]} → removed ["3 files · 2.5 MB"]; due [nothing
- *     due, "An outfit that needs this painted body again paints it anew (hub jobs).", "A run works on 1 of its parts
+ *     due, "An outfit that needs this texture body again makes it anew (CPU, no hub job).", "A run works on 1 of its parts
  *     — those stay."]. megabytes(1234567) = "1.2 MB".
  *     storedState (checklist point 8, a light per row): running → blue "a run works on it"; current → green "in use
  *     now"; not deletable → green "needed by an outfit now"; deletable with history → grey "kept only by an outfit
@@ -104,7 +104,7 @@ eq('[2] shape', S.deleteLines({ kind: 'shape', files: files(10), bytes: 40960, o
 eq('[2] texture', S.deleteLines({ kind: 'texture', files: files(3), bytes: 2.5e6, outfit_models: [], running: ['k'] }), {
   removed: ['3 files · 2.5 MB'],
   due: ['Nothing becomes due now: no outfit would be built on it.',
-    'An outfit that needs this painted body again paints it anew (hub jobs).',
+    'An outfit that needs this texture body again makes it anew (CPU, no hub job).',
     'A run works on 1 of its parts — those stay.'],
 });
 eq('[2] megabytes', S.megabytes(1234567), '1.2 MB');
@@ -160,7 +160,7 @@ const keys = ['A run works on it now — delete it after the run.',
   'An outfit would be built on it now ({reason}).', '{n} files · {size}', 'The outfit models built on it: {names}',
   'Nothing becomes due now: no outfit would be built on it.',
   'An outfit that needs this body shape again meshes it anew (hub jobs).',
-  'An outfit that needs this painted body again paints it anew (hub jobs).',
+  'An outfit that needs this texture body again makes it anew (CPU, no hub job).',
   'Wearing one of those outfits again builds its model anew.', 'A run works on {n} of its parts — those stay.',
   'Delete…', 'a run works on it', 'needed by an outfit now', 'in use now',
   'kept only by an outfit model built on it', 'stored, not needed now'];

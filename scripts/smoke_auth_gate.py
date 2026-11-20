@@ -135,12 +135,10 @@ E) WORLD-LEVEL WRITES ARE ADMIN-ONLY (user decision 2026-09-21) — the table
    403, anonymous 401). Task 10: GET /characters/{c}/figure/stored and
    DELETE …/figure/stored/{key} the same way (their own require_admin). Task UI1:
    POST /characters/{c}/base-body/run-all the same way (player 403, anonymous 401).
-   Ruling A74b: GET / POST /characters/{c}/figure/outfit-reference, POST
-   …/outfit-reference/upload and DELETE …/outfit-reference/{key} the same way
-   (their own require_admin: player 403, anonymous 401). Ruling A87: POST
-   …/outfit-reference/generate and GET / POST / DELETE
-   /characters/{c}/base-body/full-body-reference, POST …/upload, POST …/generate
-   the same way ("base-body" and "figure" are no public character segment).
+   Ruling A87: GET / POST / DELETE /characters/{c}/base-body/full-body-reference,
+   POST …/upload, POST …/generate the same way (their own require_admin: player
+   403, anonymous 401; "base-body" is no public character segment). The outfit
+   reference routes went with the painted mode (A224).
 
    Prefix neighbours: ``_under`` is segment-wise, so /worldly, /rulesx,
    /eventsful, /intentsful and /inventory/itemsy are NOT under the rules above
@@ -695,18 +693,13 @@ for _m, _p in [("GET", "/inventory/items/apple/wearers"), ("POST", "/inventory/i
                ("POST", "/characters/Mara/figure/auto-build"),
                ("GET", "/characters/Mara/figure/stored"), ("DELETE", "/characters/Mara/figure/stored/obdeadbeef"),
                ("POST", "/characters/Mara/base-body/run-all"),
-               ("GET", "/characters/Mara/figure/outfit-reference"),
-               ("POST", "/characters/Mara/figure/outfit-reference"),
-               ("POST", "/characters/Mara/figure/outfit-reference/upload"),
-               ("DELETE", "/characters/Mara/figure/outfit-reference/ordeadbeef00"),
-               ("POST", "/characters/Mara/figure/outfit-reference/generate"),
                ("GET", "/characters/Mara/base-body/full-body-reference"),
                ("POST", "/characters/Mara/base-body/full-body-reference"),
                ("POST", "/characters/Mara/base-body/full-body-reference/upload"),
                ("POST", "/characters/Mara/base-body/full-body-reference/generate"),
                ("DELETE", "/characters/Mara/base-body/full-body-reference")]:
     _kw = ({"json": {"enabled": False}} if _p.endswith("auto-build")
-           else {"json": {"image": "x.png"}} if _p.endswith(("outfit-reference", "full-body-reference"))
+           else {"json": {"image": "x.png"}} if _p.endswith("full-body-reference")
            and _m == "POST" else {})
     check(f"user {_m} {_p} (real route)",
           figure_client.request(_m, _p, headers={"x-test-user": "user"}, **_kw).status_code, 403)

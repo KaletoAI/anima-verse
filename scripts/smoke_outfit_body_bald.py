@@ -17,24 +17,26 @@ view run, POST outfit-bodies/<B0>/views/front/regenerate, which called the same 
 
 Fixture (character Demo: humanoid, pipeline on, side views off = the default; appearance with hair, so
 ``garment_hair.ensure_hairstyle`` creates and WEARS its first hairstyle H, mode HairDeck). Items top / skirt, in mode in_body (both
-in the shape); "retexture mode" in [1] = both switched to painted (no shape wanted).
+in the shape); "own-mesh mode" in [1] = both switched to own_mesh without a fit (left off, no shape wanted —
+was the painted mode until A224).
 Base views front/back of bsig, base model. Outfit O1 {top, skirt} WORN with a dressed front + back made BEFORE the
-rule, texture T0 = its tsig, its body B0 = its shape key (figure.shape_key of {top, skirt} in the body — the dress
-text of its shape inputs is T0's, nothing painted next to them; plan 2026-11-12-unified-worn-pieces Task 5) with a
+rule (texture_signature "" — nothing painted on a shape), its body B0 = its shape key (figure.shape_key of {top,
+skirt} in the body; plan 2026-11-12-unified-worn-pieces Task 5) with a
 shape record (refs + rigged GLB) and the outfit model of O1 on B0, its ``figure`` the one delivered now (shape B0,
 nothing painted).
 
 Expected, by hand:
 [1] Rule: True (a shape wanted + worn own hair item); hair taken off (equipped_mesh_pieces {}) -> False; a hair
-    item owned by another character worn in the slot -> False; both pieces painted (no shape) -> False.
+    item owned by another character worn in the slot -> False; both pieces own_mesh (no shape) -> False.
 [2] Prompt: dress_prompt(front, bald=True) =
       "Keep the image exactly as it is: the same person, same body shape, same pose, same arm and hand position,
        same framing and background. Only change their clothing: <text>. Completely bald with a smooth bare scalp."
     (the base front's BALD_HEAD words, capitalised, one sentence), negative = the bald=False negative + ", " +
     HAIR_NEGATIVE. bald=False = the same text WITHOUT that last sentence. The back draft's prompt carries
     "completely bald" (base view prompt, unchanged).
-[3] Key unchanged: T0 = "tex" + sha256(canonical JSON of texture_inputs)[:12] with the own hair worn, and the
-    SAME with it taken off (the rule is not an input); texture_inputs has no "bald" key.
+[3] Key unchanged: B0 = figure.shape_key with the own hair worn, and the SAME with it taken off (the rule is not
+    an input); figure.shape_inputs has no "bald" key. (A224: was the texture key T0 of the removed
+    ``texture_inputs``.)
 [4] Nothing stale: outfit_body_of_outfit(O1) = B0, figure_stale(O1 model) "", outfit_info not stale. (After a
     re-render of its views B0 is no longer current for its views: the delivered figure stands on the plain body,
     so O1's model is stale "figure" and outfit_info "stale" — marked only, the view render builds nothing; was
@@ -43,7 +45,7 @@ Expected, by hand:
     stand on B0 (``dressed_image`` None — replaces "the old front counts", which judged it by the texture key).
 [5] A new front render: render_shape_views(wanted figure of O1, ["front"], force) -> ok, ONE image job (tpose_<B0>, the shape's own front,
     occasion outfit_front — was tpose_<O1>) whose bare prompt is [2]'s bald prompt and whose negative ends with
-    HAIR_NEGATIVE; its sidecar: texture_signature "" (nothing painted on a shape view; was T0), no "bald", the
+    HAIR_NEGATIVE; its sidecar: texture_signature "" (nothing painted on a shape view), no "bald", the
     dress text of the shape's inputs; outfit_body_of_outfit(O1) still B0; O1's model stale "figure" (above).
 [6] No own hair -> unchanged: hair taken off -> the next front render's prompt is [2]'s plain prompt, its
     negative the plain negative; the sidecar's texture_signature "", body B0.
@@ -148,7 +150,7 @@ def main() -> int:
         def set_mode(mode):
             for key in ("top", "skirt"):
                 op = dict(inventory.get_item(key)["outfit_piece"])
-                op["mesh_mode"] = "in_body" if mode == "mesh" else "painted"
+                op["mesh_mode"] = "in_body" if mode == "mesh" else "own_mesh"
                 inventory.update_item(key, {"outfit_piece": op})
             from app.core import figure as figure_mod
             check(f"mode {mode}", sorted(figure_mod.wanted_figure(char, profile=profile()).in_body),
@@ -192,8 +194,8 @@ def main() -> int:
         set_profile(equipped_mesh_pieces={"hair": foreign})
         check("[1] foreign hair item", bald(), False)
         set_profile(equipped_mesh_pieces={"hair": hair_id})
-        set_mode("retexture")
-        check("[1] retexture mode", bald(), False)
+        set_mode("own_mesh")
+        check("[1] own-mesh mode (no shape)", bald(), False)
         set_mode("mesh")
         check("[1] back on", bald(), True)
 
@@ -213,43 +215,33 @@ def main() -> int:
         # --- [3] ---------------------------------------------------------------------------------------------
         print("[3] the key is unchanged")
         variant = base_body.texture_variant(char, pieces, dressed=True, mesh={}, profile=profile())
-        plain_in = base_body.texture_inputs(char, pieces=pieces, items=[], variant=variant, bsig=bsig,
-                                            profile=profile())
-        check("[3] no bald key in the inputs", "bald" in plain_in, False)
-
-        def by_hand(inputs):
-            raw = json.dumps(inputs, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-            return "tex" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
-        T0 = base_body.texture_signature(plain_in)
-        check("[3] T0 by hand", T0, by_hand(plain_in))
-        set_profile(equipped_mesh_pieces={})
-        off_in = base_body.texture_inputs(char, pieces=pieces, items=[], variant=variant, bsig=bsig,
-                                          profile=profile())
-        check("[3] same key without own hair", base_body.texture_signature(off_in), T0)
-        set_profile(equipped_mesh_pieces={"hair": hair_id})
         from app.core import figure
         sets0 = figure.worn_sets(char, pieces=pieces, profile=profile())
         shape0 = figure.shape_inputs(char, sets0, bsig=bsig, variant=variant, profile=profile())
-        check("fixture: the shape's dress text is T0's", shape0["dress_text"], plain_in["dress_text"])
+        check("[3] no bald key in the shape inputs", "bald" in shape0, False)
         B0 = figure.shape_key(char, sets0, bsig=bsig, variant=variant, profile=profile())
+        set_profile(equipped_mesh_pieces={})
+        sets_off = figure.worn_sets(char, pieces=pieces, profile=profile())
+        check("[3] same shape key without own hair",
+              figure.shape_key(char, sets_off, bsig=bsig, variant=variant, profile=profile()), B0)
+        set_profile(equipped_mesh_pieces={"hair": hair_id})
 
         # --- fixture: O1 with views, body B0 and model from before the rule ------------------------------------
         variant_o, token = mesh_variant(char, pieces), mesh_items_token(char, pieces)
         O1 = mesh_signature(pieces, [], char, variant_o, token)
-        TEXTS = plain_in["dress_text"]
+        TEXTS = shape0["dress_text"]
         manifest = {"equipped_pieces": pieces, "equipped_items": [], "mesh_variant": variant_o,
                     "base_signature": bsig, "dressed": True}
         o1_front = png(R / f"tpose_{O1}.png", (100, 0, 0))
         write_json(o1_front.with_suffix(".json"), {**manifest, "base_image_sha256": sha(base_views["front"]),
-                                                   "texture_signature": T0, "dress_text": TEXTS["front"]})
+                                                   "texture_signature": "", "dress_text": TEXTS["front"]})
         o1_draft = png(R / "drafts" / f"tpose_back_{O1}.png", (0, 100, 0))
         write_json(o1_draft.with_suffix(".json"), {**manifest, "back_draft": True, "front_sha256": sha(o1_front),
-                                                   "texture_signature": T0})
+                                                   "texture_signature": ""})
         o1_back = png(R / f"tpose_back_{O1}.png", (0, 0, 100))
         write_json(o1_back.with_suffix(".json"), {**manifest, "base_image_sha256": sha(base_views["back"]),
                                                   "back_draft": o1_draft.name, "back_draft_sha256": sha(o1_draft),
-                                                  "texture_signature": T0, "dress_text": TEXTS.get("back", "")})
-        base_body._store_texture_views(char, O1, T0, ["front", "back"], TEXTS)
+                                                  "texture_signature": "", "dress_text": TEXTS.get("back", "")})
         rec0 = {"body_id": B0, "shape_key": B0, "version": figure.SHAPE_VERSION, "shape_inputs": shape0,
                 "base_signature": bsig, "built_for": O1, "used_views": ["front", "back"],
                 "views": {"front": sha(o1_front), "back": sha(o1_back)}}
@@ -261,7 +253,7 @@ def main() -> int:
         (M / f"{B0}.glb").write_bytes(b"BODY-0")
         write_json(M / f"{B0}.json", {"outfit_body": rec0, "rig": "mixamo", "created_at": "2026-11-10T10:00:00+00:00"})
         o1_model = {"pieces": pieces, "items": [], "base_signature": bsig, "base_model_sha256": sha(M / f"{bsig}.glb"),
-                    "texture_signature": T0, "body_id": B0,
+                    "texture_signature": "", "body_id": B0,
                     "body_sha256": sha(M / f"{B0}.glb"), "rig": "mixamo", "source": "base_body", "dressed": True,
                     "character": char}
         o1_model["figure"] = figure.delivered_figure(char, profile=profile(), pieces=pieces, items=[]).as_dict()

@@ -638,9 +638,8 @@ def bake_face_texture(source_glb: bytes, hub_glb: bytes, *, dilate_px: int = 4,
     import base64
     import zlib
     # The FACE-only mask is retained for later re-rigs (diffing against the
-    # old atlas would include every recoloured body texel) and for the
-    # outfit models painted onto a base body, which put these texels back
-    # (``base_body.restore_face_texels``) — so it is kept for every bake.
+    # old atlas would include every recoloured body texel) — so it is kept
+    # for every bake.
     recolor_meta = {'face_mask': base64.b64encode(zlib.compress(np.packbits(replaced).tobytes())).decode('ascii')}
     if body_recolored:
         recolor_meta.update(body_recolored=True, body_texels_recolored=body_texels_recolored)

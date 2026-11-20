@@ -17,10 +17,11 @@ Expected, by hand (character "Demo", gallery G = <tmp>/images, refs R = <tmp>/mo
     G/B.png; {B.png, origin generated} -> None (no fallback to the gallery); {"../x.png", gallery} -> None.
 [3] reference_url: R/references/<name> -> "/characters/Demo/figure/reference-image/<name>?v=<mtime_ns>"; G/B.png
     -> "/characters/Demo/images/B.png?v=…".
-[4] move: G = {A.png, A.json, B.png, C.png, E.png, U.png}; profile_image E.png; records full_body {A.png,
-    generated}, outfits {k1: B.png gallery, k2: C.png upload, k3: D.png generated (no file), k4: E.png
-    generated}. -> moved [A.png, C.png] (A with its A.json); G afterwards = {B.png, E.png, U.png}; R/references
-    gains A.png, A.json, C.png; image_path of A / C now resolves in R/references. A second run moves nothing.
+[4] move: G = {A.png, A.json, B.png, C.png, E.png, U.png}; profile_image E.png; record full_body {A.png,
+    generated}; a leftover outfit-reference map {k2: C.png upload} (the profile key A224 removed — no reader, so
+    C stays where it is). -> moved [A.png] (with its A.json); G afterwards = {B.png, C.png, E.png, U.png};
+    R/references gains A.png, A.json; image_path of A now resolves in R/references. A second run moves nothing.
+(A224: the module is ``reference_images`` — it was ``outfit_references`` with the outfits' records.)
 """
 import io
 import os
@@ -59,7 +60,7 @@ def main():
         os.environ["STORAGE_DIR"] = str(tmp / "world")
         from app.core import paths
         paths.init(str(tmp / "world"))
-        from app.core import model_refs, outfit_references as orf
+        from app.core import model_refs, reference_images as orf
         from app.models import character
         gallery, refs = tmp / "images", tmp / "model_refs"
         gallery.mkdir()
@@ -99,15 +100,14 @@ def main():
             (gallery / f).write_bytes(png())
         (gallery / "A.json").write_text("{}")
         profile.update({"profile_image": "E.png", "full_body_reference": rec("A.png", "generated"),
-                        "outfit_references": {"k1": rec("B.png", "gallery"), "k2": rec("C.png", "upload"),
-                                              "k3": rec("D.png", "generated"), "k4": rec("E.png", "generated")}})
+                        "outfit_references": {"k2": rec("C.png", "upload")}})
         moved = orf.move_gallery_references("Demo")
-        check("[4] moved A and C", sorted(moved) == ["A.png", "C.png"], moved)
-        check("[4] gallery keeps B, E, U", sorted(f.name for f in gallery.iterdir()) == ["B.png", "E.png", "U.png"],
+        check("[4] moved A", sorted(moved) == ["A.png"], moved)
+        check("[4] gallery keeps B, C, E, U",
+              sorted(f.name for f in gallery.iterdir()) == ["B.png", "C.png", "E.png", "U.png"],
               sorted(f.name for f in gallery.iterdir()))
-        check("[4] references gain A, A.json, C", all((R / f).is_file() for f in ("A.png", "A.json", "C.png")))
-        check("[4] records resolve", orf.image_path("Demo", rec("A.png", "generated")) == (R / "A.png").resolve()
-              and orf.image_path("Demo", rec("C.png", "upload")) == (R / "C.png").resolve())
+        check("[4] references gain A, A.json", all((R / f).is_file() for f in ("A.png", "A.json")))
+        check("[4] record resolves", orf.image_path("Demo", rec("A.png", "generated")) == (R / "A.png").resolve())
         check("[4] idempotent", orf.move_gallery_references("Demo") == [])
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
     return 1 if FAILS else 0

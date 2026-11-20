@@ -9,7 +9,7 @@ Expected values, derived by hand (THIN_PIECE_MAX = 0.03, exclusive):
     not < 0.03); {front 0.0299} → True; {} → False; {front None} → False (a view without an accepted gate never
     counts as thin).
 [2] ``_thin_piece_check`` with the worn gates {front 0.0086, back 0.0089}: a clothing piece in own_mesh → raises
-    ``_Refused`` at step "ghost", error "Too thin for its own mesh — use Painted or Accessory", gates code
+    ``_Refused`` at step "ghost", error "Too thin for its own mesh — use Accessory or In body", gates code
     "THIN_PIECE" with both shares and limit 0.03; the same piece in shell → no refusal; kind footwear → no refusal;
     a clothing piece with {front 0.2, back 0.18} (a shirt) → no refusal. A216 review M3: the same thin shares on a
     piece worn on slot ``wrist`` (not ``neck``) → no refusal; on ``neck`` with a fit already (``_fit_state``
@@ -73,7 +73,7 @@ e = run("own_mesh")
 check("[2] own_mesh refused", e is not None, True)
 if e is not None:
     check("[2] step", e.step, "ghost")
-    check("[2] text", e.error, "Too thin for its own mesh — use Painted or Accessory")
+    check("[2] text", e.error, "Too thin for its own mesh — use Accessory or In body")
     check("[2] gates", e.gates, {"code": "THIN_PIECE", "garment_share": {"front": 0.0086, "back": 0.0089},
                                  "limit": 0.03})
 check("[2] shell exempt", run("shell"), None)

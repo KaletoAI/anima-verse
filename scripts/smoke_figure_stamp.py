@@ -9,8 +9,10 @@ Runs against a THROWAWAY storage + instance directory with the ``human``
 package copied in — no world, no hub, no GPU, no Blender, no server. Fixture
 (the slim cut of scripts/smoke_outfit_rebuild_cost.py): Kira on the pipeline
 with a ready base (``model3d/<bsig>.glb`` + sidecar rig mixamo, sha
-``base_sha``) and the four base views, wearing six painted pieces (top,
-bottom, feet, neck, head, outer) and holding three items; the worn signature
+``base_sha``) and the four base views, wearing six pieces in mode accessory
+with no kind chosen (top, bottom, feet, neck, head, outer — none is in the
+body, none can be built: each is left off with its accessory reason; before
+A224 they were painted) and holding three items; the worn signature
 ``sig``. Outfit models are hand-written sidecars (``source "base_body"``,
 ``pieces`` / ``items`` of the worn outfit, ``dressed`` true) WITHOUT a
 recorded ``figure``:
@@ -43,8 +45,8 @@ body, own-mesh pieces — ``figure_migration.legacy_current``):
 [M2] A worn item's mode changed (``update_item``: the top in_body) → a new
      key without any invalidate (the item content is in the key): no shape
      is built, so Ruling A119 leaves the top off — the cached figure's
-     ``left_out`` is {top: "Body shape not built"} (``LEFT_OFF_SHAPE``; it
-     was {} before).
+     ``left_out[top]`` is "Body shape not built" (``LEFT_OFF_SHAPE``; it was
+     the accessory's reason before).
 [M3] Timing: one cold call (memo cleared) and the median warm call are
      printed; warm < 2 ms.
 """
@@ -129,7 +131,7 @@ def main() -> int:
                            ("head", "Hat"), ("outer", "Coat")):
             iid = inventory.add_item(name=name, category="outfit_piece", prompt_fragment=f"a {name.lower()}",
                                      outfit_piece={"slots": [slot], "covers": [], "outfit_types": ["casual"],
-                                                   "mesh_mode": "painted"})["id"]
+                                                   "mesh_mode": "accessory"})["id"]
             inventory.add_to_inventory("Kira", iid)
             check(f"wears {name}", inventory.equip_piece("Kira", iid, source="smoke")["status"], "ok")
             worn[slot] = iid
@@ -203,9 +205,9 @@ def main() -> int:
         op = dict(inventory.get_item(worn["top"])["outfit_piece"])
         op["mesh_mode"] = "in_body"
         inventory.update_item(worn["top"], {"outfit_piece": op})
-        check("left off now", figure.delivered_figure_cached("Kira").left_out,
-              {worn["top"]: figure.LEFT_OFF_SHAPE})
-        op["mesh_mode"] = "painted"
+        check("left off now", figure.delivered_figure_cached("Kira").left_out.get(worn["top"]),
+              figure.LEFT_OFF_SHAPE)
+        op["mesh_mode"] = "accessory"
         inventory.update_item(worn["top"], {"outfit_piece": op})
 
         print("[M3] timing")

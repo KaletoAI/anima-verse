@@ -75,8 +75,6 @@ LABELS: Dict[str, str] = {
     "cpu:derive_compute": "Footwear insole fit",
     "cpu:graft_file": "Assembling the figure",
     "cpu:_build": "Layered build",
-    # external workers
-    "worker:body_retexture": "Retexturing the body",
     # in-process stages
     "face_cleanup": "Face cleanup",
     "assemble": "Assembling the figure",

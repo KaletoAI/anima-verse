@@ -13,8 +13,8 @@ Runs against a THROWAWAY storage + instance directory — no world, no hub, no G
 ``inventory.get_item`` / ``motion_item_cache.item_snapshot`` serve ITEMS; ``base_body.is_base_pipeline`` True,
 ``base_signature`` BSIG, ``base_model_sha256`` "basesha", ``dress_text`` "wear:" + the visible ids,
 ``dressed_views`` (front, back), ``shape_view*`` none, ``stored_base_haired`` True, ``prompts_current`` True,
-``base_refresh_plan`` {}, ``dressed_image`` a view for every figure (nothing to render),
-``dressed_view_estimate`` 3; ``figure.stored_shape`` -> a sidecar for the keys in STORED;
+``base_refresh_plan`` {}, ``dressed_image`` a view for every figure (nothing to render);
+``figure.stored_shape`` -> a sidecar for the keys in STORED;
 ``garment_store.accepted_fit`` -> the jacket's closed base fit ``jacket_0123456789ab.glb`` (its mesh is ready:
 no chain, no interim for want of a mesh); ``garments.body_fit`` -> a fit for the (item, shape) pairs in
 BODY_FITS, else the error "refused — stub"; ``garments.cached_failure`` None; ``garments.run_estimate`` 0 jobs,
@@ -60,14 +60,10 @@ Expected, derived by hand from rulings A23 b/c and A119:
     left_out {jacket: "Fit refused — refused — stub"}, fit_refused {jacket: "refused — stub"} — the refused
     jacket never goes into an interim body (A23 c); the worn row
     "fit_refused".
-[5] Ruling FR-I3 — a dressed view refused for its inputs is a cached failure too: the model of W built as F
-    and served, the jacket's fit accepted, the back view of W missing (``dressed_image`` None for "back") and
-    ``dressed_view_refusals`` -> {"back": "Dressed back refused — stub"}. The AUTOMATIC plan runs no view step,
-    no fits and no assembly; the MANUAL plan has exactly one view step ("texture"), failed == "View refused —
-    back: Dressed back refused — stub", its label ending " — failed — Retry", jobs 3 (the estimate stub — the
-    estimate counts the refused view as one draft, ``smoke_figure_view_refused.py``). ``_retry_refused_views``
-    clears the records of W only for a manual Build of that failed step (explicit True), never for an
-    automatic one or a step that did not fail.
+[5] Ruling FR-I3 after A224: a dressed view is a COPY of its body's view and is never refused — only the shape's
+    views render (``VIEW_STEPS == {shape}``). The model of W built as F and served, the jacket's fit accepted, the
+    back view of W missing (``dressed_image`` None for "back"): the automatic plan has the step ("views", 0 jobs,
+    not failed).
 [4] Fails on the old code (explicit hash 21ca534b, the base of T15-F1): ``figure.py`` had no ``FIT_REFUSED``
     (the refused piece always joined an interim body) and ``DEPENDS["assemble"]`` was {"plain_body"}. FR-I2:
     at 5eab1741 (the base of the final-review fixes) ``refit`` started an automatic Build
@@ -163,7 +159,6 @@ def main() -> int:
         base_body.prompts_current = lambda *_a, **_kw: True
         base_body.base_refresh_plan = lambda *_a, **_kw: {}
         base_body.dressed_image = lambda *_a, **_kw: root / "view.png"
-        base_body.dressed_view_estimate = lambda *_a, **_kw: 3
         figure.stored_shape = lambda _c, key, **_kw: {"outfit_body": {"body_id": key}} if key in STORED else None
         base_fit = (root / "garments" / f"jacket_{FSIG}.glb", {"accepted": True})
         garment_store.accepted_fit = (lambda _c, item_id, *, state=None, **_kw:
@@ -342,32 +337,16 @@ def main() -> int:
         _w, built_now = delivered()
         MODEL.update(sig=wanted.signature, path=root / "model.glb", meta={"figure": built_now.as_dict()})
         SERVED["path"] = root / "model.glb"
-        real_image, real_refusals = base_body.dressed_image, base_body.dressed_view_refusals
-        real_clear = base_body.clear_view_refusals
-        cleared_views = []
+        real_image = base_body.dressed_image
         base_body.dressed_image = lambda _c, view, *_a, **_kw: None if view == "back" else root / "view.png"
-        base_body.dressed_view_refusals = lambda *_a, **_kw: {"back": "Dressed back refused — stub"}
-        base_body.clear_view_refusals = lambda c, sig, views=None: cleared_views.append((c, sig))
         try:
             delivered()
-            auto = [s.name for s in figure_build._runnable(
-                figure_build.plan("Demo", profile=profile(), explicit=False), False)]
-            check("automatic: no view step, no fits, no assembly",
-                  [n for n in auto if n in ("shape", "texture", "fits", "assemble")], [])
-            manual = [s for s in figure_build.plan("Demo", profile=profile(), explicit=True)
-                      if s.name in figure_build.VIEW_STEPS]
-            check("manual: one failed view step",
-                  [(s.name, s.failed, s.label.endswith(figure_build.FAILED_SUFFIX), s.jobs) for s in manual],
-                  [("texture", "View refused — back: Dressed back refused — stub", True, 3)])
-            step = manual[0] if manual else None
-            figure_build._retry_refused_views("Demo", step, False, wanted.signature)
-            figure_build._retry_refused_views("Demo", figure_build.Step("texture", "x", 3), True, wanted.signature)
-            check("no clear: automatic, or a step that did not fail", cleared_views, [])
-            figure_build._retry_refused_views("Demo", step, True, wanted.signature)
-            check("manual retry clears the records of W", cleared_views, [("Demo", wanted.signature)])
+            steps = [(s.name, s.jobs, s.failed) for s in figure_build.plan("Demo", profile=profile(), explicit=False)
+                     if s.name == "views"]
+            check("automatic: the missing back is a copy step, never refused", steps, [("views", 0, "")])
+            check("VIEW_STEPS: only the shape renders views", figure_build.VIEW_STEPS, frozenset({"shape"}))
         finally:
-            base_body.dressed_image, base_body.dressed_view_refusals = real_image, real_refusals
-            base_body.clear_view_refusals = real_clear
+            base_body.dressed_image = real_image
             BODY_FITS.discard(("jacket", sb))
 
         print(f"[4] fails on the old code ({BASELINE})")

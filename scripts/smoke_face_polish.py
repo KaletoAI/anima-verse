@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The dark-texel fill after the black-eye check (``app/core/face_polish.py``) and its wiring
-(``model3d._face_polish_stage``, ``model_overview._dark_fill_step``, ``base_body.restore_face_texels``), on the
+(``model3d._face_polish_stage``, ``model_overview._dark_fill_step``), on the
 synthetic head of ``smoke_face_cleanup.py``; expectations by hand.
 
 Usage: ./.venv/bin/python scripts/smoke_face_polish.py
@@ -30,9 +30,6 @@ Hand-derived expectations:
   + filled), the bake result's and the sidecar's ``baked.face_mask`` decode to that widened mask, ``mask_widened_by``
   >= filled, ``polish.dark_fill.filled`` == the direct run's; with face_gate {ok True} the stage records fill False,
   no dark_fill, and the source bytes stay.
-- ``restore_face_texels`` with the WIDENED mask copies the filled lash texels into an outfit atlas that carries the
-  projected face but still the dark lashes (the bake before the fill): face_texels_restored >= filled; with the
-  unwidened mask nothing differs inside it, so it restores 0 — the lashes lie outside it.
 - Overview rows (``model_overview``): ``_face_steps`` of a face record without ``polish`` has no dark_fill row (the
   fixture of smoke_model_overview.py stays as it is); with the stage's record: status done, detail "<n> texels
   filled · <before> → <after> near-black · seam ΔE <edge>"; fill False -> skipped "black-eye check passed · seam
@@ -40,7 +37,6 @@ Hand-derived expectations:
   ``_face_cleanup_step`` with a residue (after_mm.residual_max 2.7 > limit 2.0, unanchored 2) -> warning and
   "2 flap vertices left standing up to 2.7 mm" in the detail.
 """
-import io
 import json
 import sys
 import tempfile
@@ -109,7 +105,6 @@ class FakeOp:
 
 def main():
     from app.core import face_polish
-    from app.core.base_body import restore_face_texels
     from app.core.face_retexture import face_mask_array, _near_black
     from app.core.model_overview import _dark_fill_step, _face_cleanup_step, _face_steps, DONE, FAILED, SKIPPED, WARNING
 
@@ -251,19 +246,6 @@ def main():
                   and sidecar["baked"]["face_mask"] == new_baked["face_mask"],
                   f"{label}: sidecar carries polish and the widened mask (both baked copies)")
             check(polish.get("mask_widened_by", 0) >= fill.get("filled", 0), f"{label}: mask_widened_by {polish.get('mask_widened_by')} >= filled")
-            # The widened mask is what puts the filled lashes back into an outfit atlas.
-            from PIL import Image
-            atlas = io.BytesIO()
-            Image.fromarray(baked_tex).save(atlas, "PNG")
-            base_png = io.BytesIO()
-            Image.fromarray(out_tex).save(base_png, "PNG")
-            _b, _m, restored = restore_face_texels(atlas.getvalue(), "image/png", base_png.getvalue(),
-                                                   {"face_retexture": {"status": "applied", "baked": new_baked}})
-            _b, _m, narrow = restore_face_texels(atlas.getvalue(), "image/png", base_png.getvalue(),
-                                                 {"face_retexture": {"status": "applied", "baked": bake_meta}})
-            check(restored.get("face_texels_restored", 0) >= fill.get("filled", 0),
-                  f"restore_face_texels with the widened mask copies {restored.get('face_texels_restored')} texels (>= {fill.get('filled')} filled)")
-            check(narrow.get("face_texels_restored") == 0, f"with the unwidened mask it copies {narrow.get('face_texels_restored')} (the lashes lie outside it)")
             stage_record = polish
 
     # --- overview rows -----------------------------------------------------------------------------------------

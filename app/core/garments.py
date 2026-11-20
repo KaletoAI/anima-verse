@@ -235,7 +235,7 @@ BASE_VIEW_CHANGED_ERROR = ("Base view changed meanwhile ({views}) — the base b
 
 #: Ruling A118 J6: the refusal code and text of an own-mesh piece too thin for its chain (``_thin_piece_check``).
 THIN_PIECE = "THIN_PIECE"
-THIN_PIECE_TEXT = "Too thin for its own mesh — use Painted or Accessory"
+THIN_PIECE_TEXT = "Too thin for its own mesh — use Accessory or In body"
 
 
 class _Refused(Exception):

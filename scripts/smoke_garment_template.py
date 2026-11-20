@@ -341,12 +341,12 @@ try:
     inventory.get_item = lambda iid: the_items.get(iid)
     sets = figure.worn_sets("K", pieces={"bottom": "sk", "top": "tp"}, profile={}, piece_state={})
     check("[9] template in template + own", sets.template == ("sk",) and sets.own.get("sk") == "clothing")
-    check("[9] not in body/painted", "sk" not in sets.in_body and "sk" not in sets.painted and "tp" in sets.in_body)
-    fig = figure.Figure(signature="s", bsig="b", shape="b", texture="", in_body=(), painted=(), own=("sk",),
+    check("[9] not in body", "sk" not in sets.in_body and "tp" in sets.in_body)
+    fig = figure.Figure(signature="s", bsig="b", shape="b", texture="", in_body=(), own=("sk",),
                         template=("sk",))
     check("[9] state_of template", fig.state_of("sk") == garment_set.TEMPLATE)
     check("[9] as_dict roundtrip", figure.Figure.from_dict(fig.as_dict()).template == ("sk",))
-    plain = figure.Figure(signature="s", bsig="b", shape="b", texture="", in_body=(), painted=(), own=())
+    plain = figure.Figure(signature="s", bsig="b", shape="b", texture="", in_body=(), own=())
     check("[9] no template key without one", "template" not in plain.as_dict())
     check("[9] MESH_MODES has template", garment_set.TEMPLATE in garment_set.MESH_MODES)
 finally:

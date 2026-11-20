@@ -15,14 +15,15 @@ too, ``shared_modes_done``). The two halves run on their own markers: a world
 already migrated still runs the shared half while the shared marker is unset
 (a failed shared write retries on the next boot), a new world never re-judges
 the shared library: after the re-default has removed the modes nobody tests,
-rule 4 would paint them all again. The judgement, in this order:
+rule 4 would put them all into the body again. The judgement, in this order:
 
 1. an item that already carries a valid ``mesh_mode`` is untouched (a shared
    item judged in another world, an item created after Task 2);
 2. ``own_mesh`` true → ``own_mesh``;
 3. worn (``equipped_pieces``) by at least one character, and EVERY wearer's
    STORED profile ``outfit_body_mode`` is ``"mesh"`` → ``in_body``;
-4. else → ``painted``.
+4. else → ``in_body`` (A224: was ``painted`` until that mode was removed;
+   ``painted_mode_migration`` moved every piece it had stored).
 
 The wearers are every character row (dormant and pooled ones too); their
 ``outfit_body_mode`` is read from the stored profile key, never from the
@@ -94,7 +95,7 @@ outfit's dressed front, else its model sidecar's ``pieces``) has a piece in
 the body now, its base variant is the one a build would use now, and the
 in-body dress text (``figure.shape_inputs``) is exactly the text the body was
 meshed from (the texture store sidecars of its old ``texture_signature``,
-``base_body._store_texture_views``). Otherwise — a painted or own-mesh piece
+written before A224). Otherwise — a painted or own-mesh piece
 in its text, another base, no record, an open hub operation on it, a target
 name already taken — it stays under its old id, decided ``"stale"``: the
 artefact GC predicts no such key, so it goes unless a live outfit model
@@ -162,7 +163,7 @@ def judge_item(item: Dict[str, Any], wearers_modes: List[Optional[str]]) -> str:
         return garment_set.OWN_MESH
     if wearers_modes and all(m == PROFILE_MESH for m in wearers_modes):
         return garment_set.IN_BODY
-    return garment_set.PAINTED
+    return garment_set.IN_BODY
 
 
 def _wearers(names: Sequence[str]) -> Tuple[Dict[str, List[str]], Dict[str, Optional[str]]]:
@@ -622,14 +623,17 @@ def _built_for_pieces(character_name: str, root: Path, signature: str) -> Option
 
 def _meshed_texts(character_name: str, tsig: str) -> Optional[Dict[str, str]]:
     """``{view: dress text}`` the body of the texture ``tsig`` was meshed
-    from — the texture store sidecars (``base_body._store_texture_views``) of
+    from — the sidecars of the texture store's dressed views
+    (``model_refs/texture/tpose[_<view>]_<tsig>``, written before A224) of
     every dressed view; None when one is missing or names no text."""
     from app.core import base_body
+    from app.models.character import get_character_dir
     if not base_body.is_texture_signature(tsig):
         return None
+    store = get_character_dir(character_name) / "model_refs" / base_body.TEXTURE_DIR
     texts: Dict[str, str] = {}
     for view in base_body.dressed_views():
-        meta = base_body._ref_sidecar(base_body._texture_view(character_name, view, tsig))
+        meta = base_body._ref_sidecar(base_body._image_at(store / f"{base_body._kind(view)}_{tsig}"))
         if not isinstance(meta.get("dress_text"), str) or meta.get("texture_signature") != tsig:
             return None
         texts[view] = meta["dress_text"]

@@ -29,15 +29,8 @@ pure pieces.
     built from it (base_variant covered, no base) keeps the part, drops the
     exposed_only group; a rigged outfit keeps all three; an outfit body drops
     the part.
-[4] restore_face_texels, base colour 4x4 (100,50,25,255), atlas 4x4
-    (0,0,0,255) with (0,0) already (100,50,25,255); face mask texels 0,1,4
-    (row-major: (0,0),(1,0),(0,1)) -> packbits bytes C8 00:
-    restored 2 (texel 0 already equal), mask 3; atlas (1,0) and (0,1) now
-    (100,50,25), (2,0) stays black; mime image/png. A mask that matches
-    nothing changed -> 0 restored and the input bytes unchanged. No face
-    correction -> 0 + "no face mask"; an 8x8 atlas against the 4x4 base ->
-    0 + "face mask does not match the atlas size". face_mask_array of the
-    4x4 mask at 5x5 -> None.
+[4] face_mask_array of a 4x4 mask (packbits C8 00) at 5x5 -> None. (restore_face_texels went with the painted
+    mode, A224.)
 [5] Dark gate. Photo 20x20 white, subject square x/y 2..17 (180,140,120;
     luma 147.0), a black 3x3 block at 8..10. Subject eroded by 3 px (7x7
     MinFilter) = 5..14 -> 100 pixels, 9 near-black -> photo_dark_share 0.09.
@@ -137,7 +130,6 @@ def main() -> int:
     from app.plugins.registry import RigSpec
     from app.core.rig_contract import BASE_JOINT_NAMES
     from app.core import extension_rig, face_retexture, model3d
-    from app.core.base_body import restore_face_texels
 
     print("[1] RigSpec exposed_only")
     rig = {"id": "g", "op": "jiggle", "chains": [[{"bone": "ExtraOne", "parent": BASE_JOINT_NAMES[0]}]]}
@@ -183,25 +175,10 @@ def main() -> int:
     check("outfit on rigged", ids({"base_variant": "rigged"}), ["part", "d", "j"])
     check("outfit body", ids({"outfit_body": {"parent": "x"}}), ["d", "j"])
 
-    print("[4] restore_face_texels")
-    skin = (100, 50, 25, 255)
-    base_img = png((4, 4), skin)
-    atlas = png((4, 4), (0, 0, 0, 255), {(0, 0): skin})
+    print("[4] face_mask_array")
     packed = bytes([0xC8, 0x00])
     meta = {"face_retexture": {"status": "applied",
                                "baked": {"face_mask": base64.b64encode(zlib.compress(packed)).decode()}}}
-    out, mime, record = restore_face_texels(atlas, "image/png", base_img, meta)
-    check("record", record, {"face_texels_restored": 2, "face_mask_texels": 3})
-    check("restored texels", [px(out, xy) for xy in ((0, 0), (1, 0), (0, 1), (2, 0))],
-          [skin, skin, skin, (0, 0, 0, 255)])
-    check("mime", mime, "image/png")
-    same, _, record = restore_face_texels(base_img, "image/png", base_img, meta)
-    check("nothing to restore", (record["face_texels_restored"], same == base_img), (0, True))
-    _, _, record = restore_face_texels(atlas, "image/png", base_img, {})
-    check("no face correction", record, {"face_texels_restored": 0, "face_texels_skipped": "no face mask"})
-    _, _, record = restore_face_texels(png((8, 8), (0, 0, 0, 255)), "image/png", base_img, meta)
-    check("size mismatch", record, {"face_texels_restored": 0,
-                                    "face_texels_skipped": "face mask does not match the atlas size"})
     check("face_mask_array other size", face_retexture.face_mask_array(meta["face_retexture"]["baked"], 5, 5), None)
 
     print("[5] dark gate")

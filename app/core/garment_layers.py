@@ -18,7 +18,7 @@ Every own-mesh piece is fitted against the BODY alone by its garment chain (``ga
   hub job) instead of being served over the old inner one. The record names the inner fits
   (``inner: {item: {fsig, sha256}}``), the body fit it was made from (``base_fit_sha256``) and the base model
   (``base_model_sha256``); a layered fit is valid only while all three are current.
-- **Without** — an inner piece without an accepted fit is painted onto the body (the outfit build), so the outer
+- **Without** — an inner piece without an accepted fit is left off the figure (Ruling A119), so the outer
   piece is fitted against the body there: it is served with its body fit and listed ``without`` that piece
   (the Wardrobe chip). When the inner piece's fit lands the outfit model is rebuilt with it as a mesh
   (``base_body.after_mesh_item_ready``) and the outer piece gets its layered fit then.
@@ -238,7 +238,7 @@ def plan(character_name: str, item_ids: Iterable[str], *, base_sha: str,
 
     ``item_ids``: the pieces worn as meshes (with an accepted body fit on ``base_sha``; ``fits`` may hand those
     ``(fit GLB, record)`` in, else ``garment_store.accepted_fit``); ``intended``: every own-mesh piece the outfit
-    wears (a piece without a fit there is painted on). Per piece with a body fit, in layer order:
+    wears (a piece without a fit there is left off). Per piece with a body fit, in layer order:
     ``{fsig, fit, record, source, low, lsig, inner, pending, without}`` — ``source`` / ``low`` the full / distance
     tier GLB to take the garment from (the layered fit when it is stored and valid, else the body fit and its
     ``low/`` tier, ``low`` None without one), ``lsig`` "" for a piece over nothing, ``inner`` item -> sha256 of the

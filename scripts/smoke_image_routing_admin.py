@@ -42,7 +42,8 @@ Expected, by hand:
     edit chain, hair-from-body spec 2026-11-11 Task 2 = 38; - outfit_back,
     outfit_side: the model fit replaced by the CPU composite, Task 11g = 36;
     + hair_strands from H3 5cc6f24db, + base_reference, outfit_reference from
-    Ruling A87 c24544018, + outfit_back_turn from A175 26a3ea579 = 40)
+    Ruling A87 c24544018, + outfit_back_turn from A175 26a3ea579 = 41; - outfit_reference with the painted
+    mode, A224 = 40)
  R2 settings_image_routing_effective(character="x") hands the character to
     explain_image_routing (patched) and returns its result plus
     "media_generation_enabled" = base.media_generation_enabled() (patched to
@@ -165,7 +166,7 @@ check("V11 mesh kind", (k["media"], k.get("rig")), ("mesh", None))
 k = routing.describe_config_backend({"name": "V", "api_type": "openai_video"})
 check("V11 video kind", (k["media"], k["ref_slot_count"]), ("video", 1))
 
-check("R1 occasions", len(adm.settings_image_routing_occasions(user=None)["occasions"]), 41)
+check("R1 occasions", len(adm.settings_image_routing_occasions(user=None)["occasions"]), 40)
 SEEN = {}
 
 

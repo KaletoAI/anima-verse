@@ -1021,7 +1021,7 @@ def accepted_fit(character_name: str, item_id: str, *, base_model_sha: str,
     (``item_state``), and then the SERVED fit (fix round T12-F1, ruling F13
     b): a piece worn open whose open fit is missing is served its closed fit
     meanwhile (``figure``: "Shown closed until its open mesh is built") —
-    never nothing, never painted while a closed mesh exists."""
+    never nothing while a closed mesh exists."""
     if not base_model_sha:
         return None
     profile = _profile_of(character_name, profile)
@@ -1084,7 +1084,7 @@ def newest_accepted_fits(character_name: str, item_id: str, *, base_model_sha: s
 # --- Failed chains (on disk) ---------------------------------------------------
 #
 # A chain run that failed for an fsig is NOT re-run by automatic triggers
-# (outfit renders, a new base model): the piece stays painted on with the
+# (outfit renders, a new base model): the piece stays left off with the
 # reason until an explicit run (Regenerate, POST .../garments/{item}/run)
 # or a changed fsig (plan 2026-11-09-base-body-phase5-mesh-items, Task 4 fix
 # round 1). On disk, so a restart does not reset it. A refused FIT also

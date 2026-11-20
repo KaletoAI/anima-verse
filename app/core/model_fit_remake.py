@@ -18,8 +18,8 @@ re-makes them ONCE per world, at boot, in a background thread, on the CPU:
   (``base_body._composite_attempt``: the composite's checks + the view's
   gates) and published in place of the fit (``fit: "composite"``; the old
   sidecar's own keys — manifest, ``outfit_body`` — kept). A view copied
-  without paint (``dressed`` False: an outfit on a shape with nothing
-  painted) is no re-make of its own: it is removed and copied again by the
+  from its body (``dressed`` False — every outfit view since A224) is no
+  re-make of its own: it is removed and copied again by the
   next Build (0 jobs). Without a usable draft, with a composite that fails
   its checks, or with a base view gone, the stale file is REMOVED — the view
   is missing, never the old nude fit; the next Build drafts it anew (one hub
@@ -86,7 +86,7 @@ def remake_view(character_name: str, image: Path) -> str:
     kind = base_body._kind(view)
     if record.get("dressed") is False:
         _remove(image)
-        return "removed: a copy without paint — the next Build copies it again"
+        return "removed: a copy of its body's view — the next Build copies it again"
     name = str(record.get(f"{view}_draft") or "")
     draft = image.parent / base_body.DRAFT_DIR / name if name else None
     if draft is None or not draft.is_file() or base_body.file_sha256(draft) != record.get(f"{view}_draft_sha256"):
