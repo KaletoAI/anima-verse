@@ -111,7 +111,6 @@ export const FOLLOWUP_TEXT: Record<string, string> = {
   restores: 'The base model was built from that picture — it is current again, no rebuild.',
   stale: 'Then the base model is out of date: the next Build rebuilds it — {jobs}.',
   already_stale: 'The base model is out of date already: the next Build rebuilds it — {jobs}.',
-  repaint: 'Then the outfit model is due: the Build repaints it on the CPU — no hub job.',
   copy: 'This view is a copy of the body’s view — mirror the body’s view instead (Base body tab).',
   model: 'The outfit’s 3D model keeps the old view until it is made again — {jobs}.',
   outfit_no_model: 'No 3D model of this outfit yet — nothing else changes.',

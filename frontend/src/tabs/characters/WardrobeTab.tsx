@@ -29,7 +29,6 @@ import {
   ClosableCheckbox, GarmentPieceDialog, MaterialSelect, MeshModeSelect, PieceStateToggle, PieceStatusChip,
   TemplatePieceControls, WearersLine,
 } from './WardrobeGarment'
-import { PaintedPieceDialog } from './PaintedPieceDialog'
 import { closableDisabled, hairstyleLabel, isOwnMeshMode, meshModeOf } from './figureModel'
 import { useWardrobeGarments } from './useGarment'
 import { ConfirmDialog, PromptPreview } from '@anima/player-ui'
@@ -152,7 +151,7 @@ function OutfitHairstyleSelect({ character, outfitId, value, disabled, onSaved }
 /**
  * Boot hem — "Trousers: Over the boot (default) · Tucked in" (boots spec
  * § 8.3). Shown under the worn boot only when own-mesh trousers that are no
- * skirt are worn with it (`hem.applicable`); painted trousers always stay
+ * skirt are worn with it (`hem.applicable`); trousers in the body always stay
  * inside the boot. Saves on click; the served model re-assembles on the CPU.
  * A tucked pair whose leg is wider than the shaft is worn over it — the
  * warning chip says so.
@@ -322,8 +321,6 @@ export function WardrobeTab({ character, onOpenFigure }: {
 
   // Own-mesh pieces: row toggles + chips, one expanded chain panel.
   const { data: garments, reload: reloadGarments, setStatus: setGarmentStatus } = useWardrobeGarments(character)
-  /** The worn painted piece whose dialog is open (Ruling A148). */
-  const [openPainted, setOpenPainted] = useState<string | null>(null)
   // The worn outfit as the render keys see it: equipped pieces + the pieces worn open
   // (`garments.piece_state` is the effective map — a piece whose "Can be worn open" was
   // unticked drops out of it, so that change re-keys the preview back to closed too).
@@ -564,13 +561,6 @@ export function WardrobeTab({ character, onOpenFigure }: {
                     <AccessoryPieceControls character={character} itemId={it.item_id}
                       version={modeChanged[it.item_id] || 0} />
                   ) : null}
-                  {it.equipped && garments.pipeline && garments.modes?.[it.item_id] === 'painted' ? (
-                    // Ruling A148: a worn painted piece's steps (its outfit's views, region, texture, colour).
-                    <button style={{ ...btn(), marginLeft: 'auto' }} aria-haspopup="dialog"
-                      onClick={() => setOpenPainted(it.item_id)}>
-                      {t('Paint steps')}
-                    </button>
-                  ) : null}
                   {garmentStatus && !(it.equipped && garments.pipeline) ? (
                     <button style={{ ...btn(), marginLeft: 'auto' }} aria-haspopup="dialog"
                       onClick={() => setOpenGarment(it.item_id)}>
@@ -593,10 +583,6 @@ export function WardrobeTab({ character, onOpenFigure }: {
               {it.equipped && garments?.hem?.applicable && garments.hem.boot_item === it.item_id ? (
                 <BootHemControl character={character} hem={garments.hem} itemName={itemName}
                   onSaved={() => { void reloadGarments() }} />
-              ) : null}
-              {openPainted === it.item_id ? (
-                <PaintedPieceDialog character={character} itemId={it.item_id} name={it.name}
-                  onClose={() => { setOpenPainted(null); void reloadGarments() }} />
               ) : null}
               {open ? (
                 <GarmentPieceDialog character={character} itemId={it.item_id} name={it.name}

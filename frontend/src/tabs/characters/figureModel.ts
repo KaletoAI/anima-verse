@@ -19,19 +19,18 @@ import { filesLabel, sizeLabel } from './hairstylesModel'
 import type { Light } from './hairstylesModel'
 
 /** How an outfit piece reaches the figure (`garment_set.MESH_MODES`). */
-export type MeshMode = 'own_mesh' | 'shell' | 'painted' | 'in_body' | 'template' | 'accessory'
+export type MeshMode = 'own_mesh' | 'shell' | 'in_body' | 'template' | 'accessory'
 /** How the hair reaches the figure: HairDeck cards from the profile picture, HAAR strands from the text (H3), or
  *  in the body. */
 export type HairMode = 'hairdeck' | 'haar' | 'body'
 
 /** The select's order. */
-export const MESH_MODES: MeshMode[] = ['own_mesh', 'shell', 'template', 'accessory', 'painted', 'in_body']
+export const MESH_MODES: MeshMode[] = ['own_mesh', 'shell', 'template', 'accessory', 'in_body']
 export const HAIR_MODES: HairMode[] = ['hairdeck', 'haar', 'body']
 
 export const MESH_MODE_LABELS: Record<MeshMode, string> = {
   own_mesh: 'Own mesh',
   shell: 'Shell from the body',
-  painted: 'Painted',
   in_body: 'In the body',
   template: 'Template (fabric)',
   accessory: 'Accessory',
@@ -47,7 +46,6 @@ export const HAIR_MODE_LABELS: Record<HairMode, string> = {
 export const MESH_MODE_HINTS: Record<MeshMode, string> = {
   own_mesh: 'A finished mesh of its own, fitted on top of the body.',
   shell: 'Made from the body’s own surface where the piece-only views show the piece, 4 mm over the skin, coloured from those views — no generated mesh and no cut-outs (0 hub jobs after the views), fitted on the CPU. For close-fitting pieces: underwear, tights.',
-  painted: "Painted onto the body's texture.",
   in_body: 'Meshed as part of the body.',
   template: 'A sewing pattern sized to the body and draped as cloth on the CPU (0 hub jobs); 1 LLM call suggests its parameters from the item picture. Skirts and dresses today.',
   accessory: 'A thin piece made on the CPU from the body (0 hub jobs): a chain or cord along the neck, optionally with a pendant from the item image (1 hub job per item). Its kind, drop, material and pendant are set in the Wardrobe.',
@@ -66,14 +64,14 @@ export function hairModeDisabled(m: HairMode, built: readonly string[] = HAIR_MO
 }
 
 export function isMeshMode(v: unknown): v is MeshMode {
-  return v === 'own_mesh' || v === 'shell' || v === 'painted' || v === 'in_body' || v === 'template'
+  return v === 'own_mesh' || v === 'shell' || v === 'in_body' || v === 'template'
     || v === 'accessory'
 }
 
 /** Ruling A118 J6: the refusal text of an own-mesh piece too thin for its chain (`garments.THIN_PIECE_TEXT`). */
-export const THIN_PIECE_TEXT = 'Too thin for its own mesh — use Painted or Accessory'
+export const THIN_PIECE_TEXT = 'Too thin for its own mesh — use Accessory or In body'
 
-/** Whether a row's failure is the J6 thin-piece refusal (its rows offer "Switch to Painted" / "Switch to Accessory"). */
+/** Whether a row's failure is the J6 thin-piece refusal (its rows offer "Switch to Accessory" / "Switch to In body"). */
 export function isThinPieceRefusal(failure: string | null | undefined): boolean {
   return !!failure && failure.includes(THIN_PIECE_TEXT)
 }
@@ -85,7 +83,7 @@ export function isOwnMeshMode(m: string | null | undefined): boolean {
 }
 
 /** The default mode of a piece worn on `slots` (`garment_set.default_mesh_mode`): in the body for every slot
- *  set, footwear included (Ruling A10 — own mesh and painted must be chosen). `slots` is unused today. */
+ *  set, footwear included (Ruling A10 — every other mode must be chosen). `slots` is unused today. */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function defaultMeshMode(_slots: readonly string[]): MeshMode {
   return 'in_body'
@@ -194,8 +192,8 @@ export interface OwnMeshFiles {
 }
 
 /** The switch leaves Own mesh / Shell from the body for a mode without a mesh of its own — the only switch that can
- *  hand stored files to the cleanup (Own mesh ↔ Shell keeps the piece's views and fits; Painted ↔ In the body drops
- *  no own-mesh file: the server counts 0 for a piece that is no own mesh). */
+ *  hand stored files to the cleanup (Own mesh ↔ Shell keeps the piece's views and fits; a switch between two modes
+ *  without an own mesh drops no own-mesh file: the server counts 0 for a piece that is no own mesh). */
 export function leavesOwnMesh(current: MeshMode, next: MeshMode): boolean {
   return isOwnMeshMode(current) && !isOwnMeshMode(next)
 }
@@ -663,9 +661,9 @@ export interface FigurePayload {
   new_body?: boolean
   /** The saved outfit worn now, "" when none matches. */
   outfit: string
-  /** Ruling A87: whether the plain body / the worn outfit have a full-body reference (`full_body_reference.build_note`)
-   *  — information beside the Build, never a step; absent from an older server. */
-  full_body_reference?: { base: boolean; outfit: boolean; outfit_auto?: boolean; outfit_failed?: string } | null
+  /** Ruling A87: whether the plain body has a full-body reference (`full_body_reference.build_note`) — information
+   *  beside the Build, never a step; absent from an older server. */
+  full_body_reference?: { base: boolean } | null
   worn: FigureWornRow[]
   hair: FigureHairRow | null
   /** Ruling A61: what failed and what fixes it (`figure_build._build_problem`); null when nothing failed or while a
@@ -681,8 +679,6 @@ export interface FigurePayload {
     }
     /** `state`: ready · missing · plain (nothing in the body). */
     shape: FigureBodyPart
-    /** `state`: ready · missing · none (nothing painted). */
-    texture: FigureBodyPart
   } | null
 }
 
@@ -1126,24 +1122,23 @@ export function hairState(hair: FigureHairRow, t: Tr = EN): { light: Light; text
 
 /** Which body row a running Build's step builds (Ruling A55, the reverse check: a row never reads "Current" while
  *  the Build works on it). The other steps are the worn pieces' rows. */
-export const BUILD_STEP_BODY_ROW: Record<string, 'plain' | 'shape' | 'texture'> = {
-  plain_body: 'plain', base_repair: 'plain', tip_smoothing: 'plain', shape: 'shape', texture: 'texture',
+export const BUILD_STEP_BODY_ROW: Record<string, 'plain' | 'shape'> = {
+  plain_body: 'plain', base_repair: 'plain', tip_smoothing: 'plain', shape: 'shape',
 }
 
-/** The body the pieces are worn on as three steps (checklist 8): the plain body (its flow is the Base body tab),
- *  the body shape (what is in the body, meshed by the Build) and the texture (what is painted, painted by the
- *  Build). `buildStep` = the running Build's step name (`build.step.name`, null when none runs): the row it builds
+/** The body the pieces are worn on as two steps (checklist 8): the plain body (its flow is the Base body tab) and
+ *  the body shape (what is in the body, meshed by the Build). `buildStep` = the running Build's step name (`build.step.name`, null when none runs): the row it builds
  *  reads blue "Building now" (`BUILD_STEP_BODY_ROW`). */
-export function bodyRows(body: NonNullable<FigurePayload['body']>, shapeNames: string[], textureNames: string[],
-  t: Tr = EN, buildStep: string | null = null): Array<{ key: 'plain' | 'shape' | 'texture'; name: string; light: Light;
+export function bodyRows(body: NonNullable<FigurePayload['body']>, shapeNames: string[],
+  t: Tr = EN, buildStep: string | null = null): Array<{ key: 'plain' | 'shape'; name: string; light: Light;
     state: string; reason: string }> {
   const building = buildStep ? BUILD_STEP_BODY_ROW[buildStep] : undefined
-  return bodyRowsAtRest(body, shapeNames, textureNames, t)
+  return bodyRowsAtRest(body, shapeNames, t)
     .map((row) => row.key === building ? { ...row, light: 'blue' as Light, state: t('Building now') } : row)
 }
 
-function bodyRowsAtRest(body: NonNullable<FigurePayload['body']>, shapeNames: string[], textureNames: string[],
-  t: Tr): Array<{ key: 'plain' | 'shape' | 'texture'; name: string; light: Light; state: string; reason: string }> {
+function bodyRowsAtRest(body: NonNullable<FigurePayload['body']>, shapeNames: string[],
+  t: Tr): Array<{ key: 'plain' | 'shape'; name: string; light: Light; state: string; reason: string }> {
   const plain = body.plain.state
   const names = (list: string[]) => list.join(', ')
   return [
@@ -1161,15 +1156,6 @@ function bodyRowsAtRest(body: NonNullable<FigurePayload['body']>, shapeNames: st
         state: body.shape.state === 'ready' ? t('Current') : t('Due'),
         reason: (body.shape.state === 'ready' ? t('In the body: {names}') : t('In the body: {names} — the Build meshes it'))
           .replace('{names}', names(shapeNames) || '–'),
-      },
-    body.texture.state === 'none'
-      ? { key: 'texture', name: t('Texture'), light: 'grey', state: t('Not needed'), reason: t('Nothing is painted') }
-      : {
-        key: 'texture', name: t('Texture'),
-        light: body.texture.state === 'ready' ? 'green' : 'yellow',
-        state: body.texture.state === 'ready' ? t('Current') : t('Due'),
-        reason: (body.texture.state === 'ready' ? t('Painted: {names}') : t('Painted: {names} — the Build paints it'))
-          .replace('{names}', names(textureNames) || '–'),
       },
   ]
 }
@@ -1341,24 +1327,22 @@ export const HAIRSTYLE_SAVED_NOTE = 'Saved — nothing runs. Run all or Re-fit a
 
 /**
  * A failed step of the Build as the tabs that run it say it (Ruling A61, checklist point 8: the step, the reason in
- * plain words, the view, the action that fixes it with its cost). `kind` mesh_mismatch: the body the outfit is
- * painted on has a mesh that does not match its own `view` — a manual Build (`action` rebuild_mesh) makes it again
- * first, `jobs` that step's hub jobs; `kind` failed: any other failed step, `detail` its error, `action` retry (a
- * manual Build), `jobs` what the Build spends. `held`: automatic Builds do not repeat it until its inputs change.
+ * plain words, the view, the action that fixes it with its cost). `kind` failed: a failed step, `detail` its error,
+ * `action` retry (a manual Build), `jobs` what the Build spends. `held`: automatic Builds do not repeat it until its inputs change.
  */
 /** A166: a failed step's words when only its key is known (`figure_build.STEP_LABELS`). */
 export const STEP_NAMES: Record<string, string> = { plain_body: 'Plain body', shape: 'Body shape', pieces: 'Own mesh',
-  template: 'Template drape', hair: 'Hair', texture: 'Texture', fits: 'Fits on the CPU', assemble: 'Assemble the figure',
+  template: 'Template drape', hair: 'Hair', views: 'Views', fits: 'Fits on the CPU', assemble: 'Assemble the figure',
   collision: 'Collision capsules', build: 'Build' }
 
 export interface BuildProblem {
-  kind: 'mesh_mismatch' | 'failed'
+  kind: 'failed'
   step: string
   step_label: string
   view: string
   body: 'plain' | 'shape' | ''
   detail: string
-  action: 'rebuild_mesh' | 'retry'
+  action: 'retry'
   jobs: number | null
   held: boolean
   /** The structured failure of a step that has one (today the template drape, `garment_template.failure_info`);
@@ -1432,11 +1416,6 @@ const VIEW_WORDS: Record<string, string> = { front: 'Front view', back: 'Back vi
 /** The same inside a sentence. */
 const VIEW_PHRASES: Record<string, string> = { front: 'front view', back: 'back view', left: 'left view',
   right: 'right view' }
-export const MESH_MISMATCH_PLAIN = 'The base body’s 3D mesh does not match its own {view}: the mesh was made from '
-  + 'other images, so the outfit cannot be painted onto it. Rendering the view again does not help — the mesh has to '
-  + 'be made again from the current views.'
-export const MESH_MISMATCH_SHAPE = 'The body shape’s 3D mesh does not match its own {view}, so the outfit cannot be '
-  + 'painted onto it. Rendering the view again does not help — the mesh has to be made again from its views.'
 export const HELD_NOTE = 'Automatic Builds do not repeat this step until its inputs change — the button runs it once '
   + 'more.'
 /** The reason of any other failed step: the worker's own message stays on mouse-over (it is not translated). */
@@ -1446,7 +1425,6 @@ export const FAILED_PLAIN = 'The step stopped with an error — the message is o
 export const FAILED_ATTEMPTS = 'The step was refused on every attempt — each attempt’s reasons are below.'
 /** The title of a step whose run ended without a verdict (`isLeftDue`): a note, not a failure. */
 export const LEFT_DUE_TITLE = '{step} — left due'
-export const MESH_HELD_NOTE = 'Automatic Builds never make a mesh — only this button does.'
 
 /** The lines of a `BuildProblem`: `title` "<step> failed — <view>", `reason` in plain words, `action` the button
  *  with its cost, `note` why nothing repeats it by itself, `detail` the raw message (mouse-over). */
@@ -1458,17 +1436,6 @@ export function problemText(p: BuildProblem, t: Tr = EN): {
   const title = view ? t('{step} failed — {view}').replace('{step}', step).replace('{view}', view)
     : t('{step} failed').replace('{step}', step)
   const cost = p.jobs === 0 ? t('no hub job') : jobsTr(p.jobs, t)
-  if (p.kind === 'mesh_mismatch') {
-    const viewWord = VIEW_PHRASES[p.view] ? t(VIEW_PHRASES[p.view]) : t('views')
-    return {
-      title,
-      reason: t(p.body === 'shape' ? MESH_MISMATCH_SHAPE : MESH_MISMATCH_PLAIN).replace('{view}', viewWord),
-      action: t(p.body === 'shape' ? 'Make the body shape mesh again — {cost}' : 'Make the base mesh again — {cost}')
-        .replace('{cost}', cost),
-      note: t(MESH_HELD_NOTE),
-      detail: p.detail,
-    }
-  }
   const viewPhrase = VIEW_PHRASES[p.view] ? t(VIEW_PHRASES[p.view]) : ''
   if (p.failure && p.failure.lines.length) {
     // The structured failure says what is wrong in plain words; the raw message goes behind "Details".

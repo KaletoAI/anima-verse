@@ -2,7 +2,7 @@
  * ModelFaceActions — the face and rig steps of ONE model with a retained
  * unrigged source, in the tab where that model lives: the Figure tab's
  * plain-body details on the base-body pipeline (the base body owns the face; every outfit model is
- * painted onto it), the 3D tab off it (each outfit model has its own source).
+ * built on it), the 3D tab off it (each outfit model has its own source).
  *
  * The chain these act on (app/core/model3d.py): mesher → FACE CLEANUP
  * (app/core/face_cleanup.py, lashes + lips, on the source before it is

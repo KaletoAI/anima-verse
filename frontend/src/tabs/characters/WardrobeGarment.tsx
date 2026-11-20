@@ -4,8 +4,8 @@
  * docs/superpowers/plans/2026-11-12-unified-worn-pieces.md Task 9).
  *
  * Every outfit piece has ONE mode on its ITEM (`outfit_piece.mesh_mode`), the
- * same for every wearer: Own mesh (a finished mesh fitted on top), Painted (on
- * the body's texture) or In the body (meshed as part of the body). Per row:
+ * same for every wearer: Own mesh (a finished mesh fitted on top), Shell, Template,
+ * Accessory or In the body (meshed as part of the body). Per row:
  * the mode select (MeshModeSelect — saved at once, spends nothing; disabled
  * for a non-humanoid, the only character off the figure pipeline; leaving Own mesh while its mesh and fits are
  * stored asks first in an in-app confirmation — Ruling A63: the next cleanup removes them, and the confirmation
@@ -105,7 +105,7 @@ import { TemplateParamsDialog } from './TemplateParamsDialog'
 
 /** A piece worn in slot feet alone is footwear (`garment_set.garment_kind_of`): a shoe or a boot (boots spec
  *  2026-11-11 § 15). */
-const OWN_MESH_SHOE_HINT = 'Made once per item from the item image; fitted onto each wearer on the CPU. Shoes, ankle boots, knee-high boots, and open shoes such as sandals and slides (the bare foot stays visible); socks stay painted.'
+const OWN_MESH_SHOE_HINT = 'Made once per item from the item image; fitted onto each wearer on the CPU. Shoes, ankle boots, knee-high boots, and open shoes such as sandals and slides (the bare foot stays visible); socks stay in the body.'
 
 const STEP_LABELS: Record<string, string> = {
   queued: 'Queued',
@@ -234,12 +234,12 @@ export function PieceStatusChip({ status, name }: { status: PieceStatus; name: s
         + (status.live ? ` · ${cpuProgressText(status.live, t)}` : '')
     color = 'var(--accent, #6aa9ff)'
   } else if (status.missing) {
-    // Mesh mode: not painted into the outfit body, so not shown until the mesh is accepted.
+    // Not in the outfit body, so not shown until the mesh is accepted.
     text = meshNotReadyText(t, name, status.reason)
     color = status.reason === REFIT_REASON ? 'var(--accent, #6aa9ff)' : 'var(--warning, #d29922)'
   } else if (status.state === 'fitted') {
     color = 'var(--success, #3fb950)'
-    // Layered over the worn pieces under it (garment_layers); one without a fit is painted on.
+    // Layered over the worn pieces under it (garment_layers); one without a fit is left off.
     if (status.over?.length) text = t('Fitted over {items}').replace('{items}', status.over.join(', '))
     if (status.without?.length) text += ` · ${t('without {items}').replace('{items}', status.without.join(', '))}`
     // Ruling A69: a result its checks refused, accepted by the user — still green, marked.
@@ -253,7 +253,7 @@ export function PieceStatusChip({ status, name }: { status: PieceStatus; name: s
   )
 }
 
-/** The mode select of one outfit piece (ruling 3): Own mesh · Painted · In the
+/** The mode select of one outfit piece (ruling 3): Own mesh · Shell · Template · Accessory · In the
  *  body, saved at once on the ITEM (every wearer) and spending nothing — the
  *  PUT replaces the whole outfit_piece, so the stored one is read first and
  *  only `mesh_mode` changes. Leaving Own mesh with stored own-mesh files waits for the confirmation (Ruling A63,
@@ -348,14 +348,14 @@ const MATERIAL_ORDER: PieceMaterial[] = ['auto', 'leather', 'denim', 'cotton', '
  *  first and only `material` changes). It runs nothing: no hub job, no new fit — a change of the preset it takes
  *  effect as re-assembles the wearers' figures on the CPU when they are next shown; the line under it says so
  *  before the change and names the wearers after it. */
-/** Ruling A118 J6: "Switch to Painted (0 jobs)" / "Switch to Accessory (0 jobs)" on a piece refused as too thin for
+/** Ruling A118 J6: "Switch to Accessory (0 jobs)" / "Switch to In body (0 jobs)" on a piece refused as too thin for
  *  its own mesh — one locked write of the item's mode (every wearer; POST …/figure/accessory/{item}/switch), spends
  *  nothing; the next Build makes the piece that way. Accessory carries the buildable `kind` it is stored with
  *  (A216 review M2); the row offers it only when there is one. */
 export function ModeSwitchButton({ character, itemId, mode, kind = '', onChanged }: {
   character: string
   itemId: string
-  mode: 'painted' | 'accessory'
+  mode: 'in_body' | 'accessory'
   kind?: string
   onChanged: () => void
 }) {
@@ -363,7 +363,7 @@ export function ModeSwitchButton({ character, itemId, mode, kind = '', onChanged
   const { toast } = useToast()
   const [busy, setBusy] = useState(false)
   const url = `/characters/${encodeURIComponent(character)}/figure/accessory/${encodeURIComponent(itemId)}/switch`
-  const label = mode === 'painted' ? t('Switch to Painted (0 jobs)') : t('Switch to Accessory (0 jobs)')
+  const label = mode === 'in_body' ? t('Switch to In body (0 jobs)') : t('Switch to Accessory (0 jobs)')
   return (
     <button type="button" className="ga-btn ga-btn-sm" disabled={busy}
       title={t('Changes the piece’s mode for every wearer; spends nothing — the next Build makes it this way')}
@@ -439,7 +439,7 @@ export function MaterialSelect({ itemId, material, disabled, onChanged }: {
 
 /** Closed / Open of a WORN closable piece (spec Addendum A): one click saves it at once through the one
  *  piece-state route (like an equip: history, the automatic Build). An own-mesh piece shows its other state's
- *  mesh once that is built (until then painted, "its open mesh"). Under it "then Build runs automatically"
+ *  mesh once that is built (until then its closed mesh, "its open mesh"). Under it "then Build runs automatically"
  *  when Build automatically is on — else nothing: the Figure tab's "N changes" says it. */
 export function PieceStateToggle({ character, itemId, state, autoBuild, disabled, onChanged }: {
   character: string

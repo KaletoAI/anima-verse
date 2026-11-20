@@ -1,5 +1,5 @@
 /**
- * FigureStored — the stored body shapes and painted bodies of a character,
+ * FigureStored — the stored body shapes and texture bodies of a character,
  * collapsed under the Figure tab's "Body:" line (plan
  * 2026-11-12-unified-worn-pieces Task 10; spec "Reuse, not rebuild" and
  * Ruling 5a). Switching outfits back and forth costs nothing because these
@@ -105,7 +105,7 @@ export function FigureStored({ character, onDeleted }: {
           {entries.map((e) => (
             <tr key={`${e.kind}:${e.key}`} style={{ borderTop: '1px solid var(--border, #30363d)' }}>
               <td style={CELL}>
-                <div>{e.kind === 'shape' ? t('Body shape') : t('Painted body')}</div>
+                <div>{e.kind === 'shape' ? t('Body shape') : t('Texture body')}</div>
                 <div className="ga-hint" style={{ fontFamily: 'monospace' }}>{e.key}</div>
               </td>
               <td style={CELL}>
@@ -129,7 +129,7 @@ export function FigureStored({ character, onDeleted }: {
       </table>
       {confirm ? (
         <StoredDeleteDialog character={character} entryKey={confirm.key} kind={confirm.kind}
-          label={`${confirm.kind === 'shape' ? t('Body shape') : t('Painted body')}${confirm.built_for_name
+          label={`${confirm.kind === 'shape' ? t('Body shape') : t('Texture body')}${confirm.built_for_name
             ? ` (${confirm.built_for_name})` : ''}`}
           onClose={() => setConfirm(null)}
           onDeleted={() => { setConfirm(null); onDeleted?.(); void load() }} />

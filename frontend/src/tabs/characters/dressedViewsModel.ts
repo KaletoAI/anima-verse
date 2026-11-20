@@ -4,7 +4,6 @@
  * from them, and what a view's single button does — an edit (1 image job) or a copy of the body shape's view (no
  * job). No React, no fetch — the check script (scripts/check_figure_ui.mjs) bundles this file alone.
  */
-import type { FullBodyGenerate, FullBodyRecord, FullBodyRun } from './fullBodyReferenceModel'
 import type { Light } from './hairstylesModel'
 import type { Freshness } from './FreshnessBadge'
 import { singleAction } from './figureModel'
@@ -34,8 +33,8 @@ export const VIEWS_BY_BUILD = 'The Build above renders these views and builds th
 /** A back or side view is composited from its draft (the back row's mouse-over). */
 export const DRAFT_NOTE = 'A back or side view is a draft rendered from the dressed front, composited onto the base '
   + 'view on the CPU — no second render.'
-/** After a single view render: the follow-up, on the button's mouse-over (the texture is repainted on the CPU). */
-export const VIEW_FOLLOWUP = 'Then the outfit model is due: the Build repaints it on the CPU — no hub job'
+/** After a single view render: the follow-up, on the button's mouse-over (the model is made again on the CPU). */
+export const VIEW_FOLLOWUP = 'Then the outfit model is due: the Build makes it again on the CPU — no hub job'
 /** After the main view: the back view's draft is made from it. */
 export const MAIN_FOLLOWUP = 'The back view is then due too — its draft is made from this view (1 image job)'
 
@@ -92,22 +91,19 @@ export function renderAllLabel(views: number, t: Tr = EN): string {
 
 /** Where a dressed view comes from now (server `base_body.dressed_view_source`, `GET …/model-refs`
  *  `dressed_source`; Ruling A70). */
-export type ViewSource = 'painted' | 'shape' | 'plain'
+export type ViewSource = 'shape' | 'plain'
 export interface DressedSource {
   source: ViewSource
   /** The body shape the views are made on: the plain body (`base…`) or a meshed shape (`ob…`). */
   shape: string
-  /** Image jobs of one view's render: 1 for an edit, 0 for a copy. */
+  /** Image jobs of one view's render: 0, a copy (A224). */
   jobs: number
-  /** Painted: the outfit has its own reference image — its front is an edit of that picture (Ruling A74b). */
-  reference?: boolean
 }
 
-/** A copy of the body shape's view: nothing is painted on the figure. */
-export const SHAPE_COPY_NOTE = 'Copied from the body shape’s view — nothing is painted on this figure: its pieces are '
-  + 'in the body shape or have their own mesh.'
-/** A copy of the plain body's view: nothing worn is painted. */
-export const PLAIN_COPY_NOTE = 'Copied from the plain body’s view — nothing worn is painted on it.'
+/** A copy of the body shape's view: the pieces are in the body shape or are meshes of their own. */
+export const SHAPE_COPY_NOTE = 'Copied from the body shape’s view — its pieces are in the body shape or have their own mesh.'
+/** A copy of the plain body's view: nothing worn is in the body. */
+export const PLAIN_COPY_NOTE = 'Copied from the plain body’s view — nothing worn is in the body.'
 
 /**
  * What one dressed view's single button does (Ruling A70): an edit → "Regenerate this view — 1 image job"
@@ -123,29 +119,4 @@ export function viewAction(src: DressedSource | null | undefined, t: Tr = EN): {
     return { label: t('Copy this view again from the plain body — no job'), note: t(PLAIN_COPY_NOTE), jobs: 0 }
   }
   return { label: singleAction('view', 1, t), note: '', jobs: 1 }
-}
-
-/** GET …/figure/outfit-reference (Ruling A74b, `outfit_references.info`; Ruling A87 adds the Generate part,
- *  `full_body_reference.outfit_tile`): the full-body reference of the outfit worn now. Its step row is
- *  `fullBodyRow('outfit', …)` (fullBodyReferenceModel), the same as the plain body's. */
-export interface OutfitReferenceInfo {
-  kind?: 'outfit'
-  key: string
-  label: string
-  record: FullBodyRecord | null
-  url: string
-  /** The record names a picture that is not in the gallery any more. */
-  gone: boolean
-  /** Something is painted on the figure: the dressed front is an edit of the picture. */
-  applies: boolean
-  /** Why a set picture is not used now (nothing painted). */
-  note: string
-  source: string
-  /** Image jobs of the dressed views due now (null = unknown). */
-  jobs: number | null
-  others: { key: string; label: string; image: string; url: string; set_at: string }[]
-  run?: FullBodyRun
-  generate?: FullBodyGenerate
-  /** Image jobs of the dressed views a new reference makes due at the next Build (0: not used now). */
-  followup_jobs?: number
 }

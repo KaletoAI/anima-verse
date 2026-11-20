@@ -68,8 +68,8 @@ export interface BaseOutfitInfo {
   /** Why a stale model is stale; null unless status is stale. */
   stale_reason: ModelStaleReason | null
   /** Warnings of the stored model: dressed views left out because the
-   *  edit turned the figure around, own-mesh pieces left painted on
-   *  (server English text). */
+   *  edit turned the figure around, own-mesh pieces left in the body texture
+   *  of a model built before A224 (server English text). */
   warnings: string[]
   /** The retexture worker's proof (None for an undressed base copy). */
   proof: Record<string, unknown> | null

@@ -121,7 +121,6 @@ import type { ModelFollowup } from './figureModel'
 import { EXT_DUE_GROUPS_NOTE, RUN_ALL_STATUS, TIP_DUE_NOTE, TIP_REBUILD_LABEL, baseHead, baseModelRow, baseViewRow, faceDueLine,
   runAllButton, runAllPlanLine, runAllWhat, stateMotionUrl, statePicker, viewerStateMotion } from './baseBodyModel'
 import type { BaseLight, BaseRunAll, PickedStateMotion, TipDots } from './baseBodyModel'
-import { BuildProblemView } from './BuildProblem'
 import { FullBodyReferenceTile, ReferenceArrow, ReferenceSourceTile } from './FullBodyReferenceTile'
 import { baseFollowup, fullBodyBuildNote, fullBodyRow } from './fullBodyReferenceModel'
 import type { BaseFullBodyInfo } from './fullBodyReferenceModel'
@@ -371,7 +370,7 @@ function BaseFullBodyReference({ character, jobs, refreshKey, onChanged, onOpenG
       link={onOpenGallery ? { label: t('Gallery'), title: t('The profile image is chosen in the Gallery tab'),
         onClick: onOpenGallery } : undefined} />
     <ReferenceArrow />
-    <FullBodyReferenceTile character={character} row={fullBodyRow('base', info, t)} record={info.record} url={previewUrl || info.url}
+    <FullBodyReferenceTile character={character} row={fullBodyRow(info, t)} record={info.record} url={previewUrl || info.url}
       run={info.run} generate={info.generate} busy={busy} followup={baseFollowup(jobs, t)}
       clearNote={t('The picture stays in the gallery. Nothing renders now — the front is then made from the profile image again, and it shows as outdated until you regenerate it.')}
       onGenerate={() => void run(() => apiPost<BaseFullBodyInfo>(`${path}/generate`, {}), 'Generating')}
@@ -802,17 +801,10 @@ export function FieldBaseBody({ character, onOpenFigure, onOpenGallery }: {
     <div>
     <RunAllHeader runAll={info.run_all} lights={lights} busy={posting || viewsRunning(info) || modelBusy}
       buildRunning={!!figure?.build.running} activity={info.activity} onRun={() => { void runAll() }}
-      fullBody={info.front_reference ? fullBodyBuildNote('base', info.front_reference.source === 'full_body',
+      fullBody={info.front_reference ? fullBodyBuildNote(info.front_reference.source === 'full_body',
         info.front_reference.method, t) : ''}
       onOpenFigure={onOpenFigure} />
     {figure?.build.running && info.activity?.base ? <div className="ga-hint">{t(BUILD_RUNNING_NOTE)}</div> : null}
-    {/* Ruling A61: the base mesh does not match its own views — Run all makes it again (the plain body step). */}
-    {figure?.problem?.kind === 'mesh_mismatch' && figure.problem.body === 'plain' && !figure.build.running ? (
-      <div style={{ marginBottom: 8 }}>
-        <BuildProblemView problem={figure.problem} busy={posting || viewsRunning(info) || modelBusy}
-          onRun={() => { void runAll() }} />
-      </div>
-    ) : null}
     <div className="ga-split ga-split-views ga-split-figure">
       <div className="ga-split-col">
         {model?.url ? (

@@ -1204,9 +1204,7 @@ export function CharactersTab() {
                           onOpenHairstyles={subTabs.some((s) => s.id === 'hairstyles')
                             ? () => setSubTab('hairstyles') : undefined}
                           onOpenBaseBody={fieldTabs.some((g) => g.id === 'tab:base_body_tab')
-                            ? () => setSubTab('tab:base_body_tab') : undefined}
-                          onOpenGallery={subTabs.some((s) => s.id === 'gallery')
-                            ? () => setSubTab('gallery') : undefined} />
+                            ? () => setSubTab('tab:base_body_tab') : undefined} />
                       ),
                       // The Base body tab (Task UI1): the plain body's views, model, face and rig steps, its
                       // "Run all" and its settings.

@@ -1,20 +1,18 @@
 /**
- * FullBodyReferenceTile — the "Full-body reference" step (Ruling A87): the picture the A-pose front is an edit of. ONE
- * component with the same wording in both places: the Base body tab (Views, the first step — the plain body's
- * reference, made from the profile image) and the Figure tab (Dressed views — the reference of the outfit worn now,
- * made from the plain body's full-body reference, else the profile image).
+ * FullBodyReferenceTile — the "Full-body reference" step (Ruling A87): the picture the A-pose front is an edit of, in
+ * the Base body tab (Views, the first step — the plain body's reference, made from the profile image). (The outfit's
+ * full-body reference went with the painted mode, A224.)
  *
  * Ruling A90 (the user: less text, references side by side): the tile is compact — light, name and state; the
  * picture small (a click enlarges it); "Built <time>" (what it was made from on mouse-over); the buttons
  * "Generate · 1 image" / "↻ 1 image", "Gallery" (an in-app picker), "Upload", "Clear" (an in-app confirmation) — what
  * each does and makes due on its mouse-over, before the click; the prompt behind ⓘ. Only a yellow or red light keeps its
  * reason visible, in one line. `ReferenceSourceTile` is the read-only picture the reference is made from, shown before
- * it with an arrow (`ReferenceArrow`): the profile image, or the plain body's full-body reference for an outfit.
+ * it with an arrow (`ReferenceArrow`): the profile image.
  * Optional: Run all and the Build never generate it.
  *
  * Backend (app/routes/figure.py): the plain body under /characters/{c}/base-body/full-body-reference (GET, POST
- * {image}, POST /upload, POST /generate, DELETE), an outfit under /characters/{c}/figure/outfit-reference (GET, POST
- * {image}, POST /upload, POST /generate, DELETE /{key}).
+ * {image}, POST /upload, POST /generate, DELETE).
  */
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -108,12 +106,10 @@ export function ClearConfirm({ label, note, onConfirm, onClose }: {
 function madeFromWords(record: FullBodyRecord, t: (s: string) => string): string {
   if (record.origin === 'upload') return t('Uploaded')
   if (record.origin !== 'generated') return t('Picked from the gallery')
-  return record.made_from?.kind === 'full_body' ? t('Generated from the plain body’s full-body reference')
-    : t('Generated from the profile image')
+  return t('Generated from the profile image')
 }
 
-/** A read-only reference picture in the references row (Ruling A90): the profile image, or the plain body's full-body
- *  reference an outfit's is made from — the same size as the full-body reference tile beside it, a click enlarges it,
+/** A read-only reference picture in the references row (Ruling A90): the profile image — the same size as the full-body reference tile beside it, a click enlarges it,
  *  and a link to the tab that owns it. */
 export function ReferenceSourceTile({ title, url, empty, link }: {
   title: string

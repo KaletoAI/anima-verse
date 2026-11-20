@@ -1,5 +1,5 @@
 /**
- * The words of the stored-body Delete (Ruling A64): the refusal next to a stored body shape or painted body, and
+ * The words of the stored-body Delete (Ruling A64): the refusal next to a stored body shape or texture body, and
  * the confirmation's lines — what is removed (files, MB, the outfit models built on a shape) and what becomes due.
  * Server: GET /characters/{c}/figure/stored/{key}/preview (`figure.delete_preview`), the stored list's `refusal`.
  */
@@ -52,7 +52,7 @@ export function deleteLines(p: StoredDeletePreview, t: Tr = EN): { removed: stri
   const due = [t('Nothing becomes due now: no outfit would be built on it.')]
   due.push(p.kind === 'shape'
     ? t('An outfit that needs this body shape again meshes it anew (hub jobs).')
-    : t('An outfit that needs this painted body again paints it anew (hub jobs).'))
+    : t('An outfit that needs this texture body again makes it anew (CPU, no hub job).'))
   if (p.outfit_models.length) due.push(t('Wearing one of those outfits again builds its model anew.'))
   if (p.running.length) {
     due.push(t('A run works on {n} of its parts — those stay.').replace('{n}', String(p.running.length)))

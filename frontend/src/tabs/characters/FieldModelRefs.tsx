@@ -126,8 +126,6 @@ type RefKind = 'pose' | 'tpose'
 
 /** Thumbnail height of a view tile (small: a click enlarges). */
 const STEP_THUMB_H = 150
-/** Painted views whose front is an edit of the outfit's own full-body reference (Ruling A74b). */
-const main_ref = (s: DressedSource) => s.source === 'painted' && !!s.reference
 /** A server-reported state is shown only after persisting this long. */
 const HINT_AFTER_S = 20
 /** Poll cadence while something runs or is scheduled; slows after ~2 min. */
@@ -301,7 +299,7 @@ export function FieldModelRefs({
       setGenError('')
       const d = await apiPost<{ status?: string }>(`/characters/${enc}/model-refs/generate`,
         generateBody(view, kindList, { pipeline: info.pipeline, auto: info.auto }))
-      // Ruling A70: nothing is painted on the figure — the server copies the view from its shape again (no job).
+      // Ruling A70 / A224: the server copies the view from its body again (no job).
       toast(d?.status === 'copying' ? t('Copying the view from its body shape — no job') : t('Generating…'))
       // A beat for the worker thread to register as running before the first
       // status read — an idle read here would clear `busy` too early.
@@ -549,16 +547,11 @@ export function FieldModelRefs({
     const copy = action.jobs === 0
     const source = info.pipeline && info.dressed_source ? info.dressed_source : null
     const plainShape = !!source && source.shape.startsWith('base')
-    // Ruling A90: where the views come from is said ONCE, as a chip over the row (the explanation on mouse-over); the
-    // outfit-reference note belongs to the front only and rides in the same chip.
+    // Ruling A90: where the views come from is said ONCE, as a chip over the row (the explanation on mouse-over).
     const sourceChip = !source ? null : (
       <div className="ga-front-from">
-        <span className="ga-chip" title={[copy ? action.note : '', main_ref(source) ? t('the front is an edit of the outfit’s full-body reference') : '']
-          .filter(Boolean).join('\n') || undefined}>
-          {source.source === 'shape' ? t('Copy of the body shape’s view — nothing painted')
-            : source.source === 'plain' ? t('Copy of the plain body’s view — nothing painted')
-              : plainShape ? t('Painted on the plain body’s view') : t('Painted on the body shape’s view')}
-          {main_ref(source) ? ` · ${t('front from the full-body reference')}` : ''}
+        <span className="ga-chip" title={copy ? action.note : undefined}>
+          {source.source === 'shape' ? t('Copy of the body shape’s view') : t('Copy of the plain body’s view')}
         </span>
         {plainShape ? (onOpenBaseBody ? (
           <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBaseBody}

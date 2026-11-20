@@ -1,5 +1,5 @@
 /**
- * StoredDeleteDialog — the in-app confirmation of deleting ONE stored body shape or painted body (Ruling A64): it
+ * StoredDeleteDialog — the in-app confirmation of deleting ONE stored body shape or texture body (Ruling A64): it
  * loads what the Delete would do (GET …/figure/stored/{key}/preview) and lists it — the files with their size, the
  * outfit models built on a shape, what becomes due — or, when the entry cannot be deleted, why (the figure stands
  * on it, an outfit would be built on it, a run works on it) with no Delete button. Delete runs DELETE
@@ -50,7 +50,7 @@ export function StoredDeleteDialog({ character, entryKey, kind, label, onClose, 
       setPosting(false)
     }
   }
-  const title = kind === 'shape' ? t('Delete this body shape?') : t('Delete this painted body?')
+  const title = kind === 'shape' ? t('Delete this body shape?') : t('Delete this texture body?')
   const refusal = preview && !preview.deletable ? refusalText(preview.refusal, preview.reason, t) : ''
   const lines = preview && preview.deletable ? deleteLines(preview, t) : null
   return createPortal(

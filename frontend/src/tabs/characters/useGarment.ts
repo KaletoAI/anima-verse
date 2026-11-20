@@ -749,16 +749,16 @@ export interface PieceStatus {
   step: string | null
   /** A194: the live CPU line of the piece's step in flight (`garment_set.piece_live`), null when none reports. */
   live?: CpuProgress | null
-  /** Outfit body mode mesh only: worn without an accepted fit — never painted (meshed) into the outfit body,
+  /** Outfit body mode mesh only: worn without an accepted fit — never meshed into the outfit body,
    *  so it is missing from the outfit model until its mesh is accepted (ruling 2026-11-10). */
   missing?: boolean
-  /** Why it is missing (server text, the outfit warning's words). The server's `painted` flag is not read: a
-   *  worn own-mesh piece without its mesh is left off the figure (Ruling A119), never painted. */
+  /** Why it is missing (server text, the outfit warning's words): a worn own-mesh piece without its mesh is left off
+   *  the figure (Ruling A119). */
   reason: string | null
   /** Names of the worn own-mesh pieces under this one that have a fit: it is fitted over them
    *  (absent when nothing is worn under it). */
   over?: string[]
-  /** Names of the worn own-mesh pieces under this one without a fit (painted on): fitted without them. */
+  /** Names of the worn own-mesh pieces under this one without a fit (left off): fitted without them. */
   without?: string[]
   /** Ruling A69 (`fitted` only): what of the fitted piece its checks refused and the user accepted — the fit, the
    *  mesh or an image (`step`, `view` "" unless an image); null/absent when nothing. */

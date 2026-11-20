@@ -32,8 +32,7 @@
  *     cached chain failure, ruling 7a), Re-fit — no hub job (POST …/figure/refit {item_id}: that piece's CPU fit
  *     and the CPU assembly only, hub steps stay due for the Build — Ruling FR-I2; 409 while a Build runs),
  *     Regenerate mesh (POST …/garments/{item}/run {step: "mesh", force, chain}, only when the refusal points at
- *     the piece itself — Ruling A23), Paint steps (a painted piece's dialog, PaintedPieceDialog, Ruling A148 — its outfit's views, paint
- *     region, painted texture with its colour, assembly), Details (an own-mesh piece's chain dialog, GarmentPieceDialog — a WORN
+ *     the piece itself — Ruling A23), Details (an own-mesh piece's chain dialog, GarmentPieceDialog — a WORN
  *     piece's only entry, opened without its "Run all", Ruling 10a; "Details — use a refused image" when every
  *     attempt of an image view was refused, Ruling A79: the dialog's "Refused images" takes one by hand); a closable piece has Closed / Open
  *     (PieceStateToggle, saved at once — Task 11b) with what the switch starts and costs beside it, and an
@@ -41,17 +40,13 @@
  *     hub jobs", POST …/garments/{item}/run {state}; the Build only ever makes the worn state's);
  *   - "Build plan": what the Build runs, one row per step with its light and cost;
  *   - "Body": the plain body (its views, model, face and rig live in the Base body tab — one line and "Open Base
- *     body tab"), the body shape and the texture as step rows, and the stored bodies and textures (FigureStored,
+ *     body tab") and the body shape as step rows, and the stored bodies and textures (FigureStored,
  *     Delete behind an in-app confirmation);
- *   - "Dressed views" (Ruling A70, from the dissolved Pose tab): one line that the Build renders them, the worn
- *     outfit's "Full-body reference" step (Ruling A74b + A87, OutfitReferenceRow → FullBodyReferenceTile: Generate
- *     with its cost, pick from the gallery, upload, clear — saving only saves; while something is painted the dressed
- *     front is then an edit of that picture, due with its cost),
- *     then one step
+ *   - "Dressed views" (Ruling A70, from the dissolved Pose tab): one line that the Build makes them, then one step
  *     row per dressed view (FieldModelRefs `layout="steps"`): light, state, reason, small thumbnails that enlarge,
- *     where the view comes from — painted on the body's view, or a copy of the body shape's / plain body's view
- *     (↗ Body / ↗ Base body) — and its own button with its true cost: "Regenerate this view — 1 image job" for an
- *     edit, "Copy this view again from the body shape — no job" for a copy (`viewAction`); the face view's note
+ *     where the view comes from — a copy of the body shape's / plain body's view (A224)
+ *     (↗ Body / ↗ Base body) — and its own button with its true cost: "Copy this view again from the body shape —
+ *     no job" (`viewAction`); the face view's note
  *     with the link to the Base body tab. Kept mounted while hidden: it polls the views and counts them;
  *   - "Outfit model" (Ruling A70): the current outfit's model as a step row with the proof's numbers and its own
  *     steps (FigureOutfitModel).
@@ -71,12 +66,10 @@ import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Model3DViewer } from './Model3DViewer'
 import { GarmentPieceDialog, PieceStateToggle } from './WardrobeGarment'
-import { PaintedPieceDialog } from './PaintedPieceDialog'
 import { TemplateParamsDialog } from './TemplateParamsDialog'
 import { FigureStored } from './FigureStored'
 import { FieldModelRefs } from './FieldModelRefs'
 import { FigureOutfitModel } from './FigureOutfitModel'
-import { OutfitReferenceRow } from './OutfitReferenceRow'
 import { fullBodyBuildNote } from './fullBodyReferenceModel'
 import { VIEWS_BY_BUILD } from './dressedViewsModel'
 import { GenerationPausePanel, GenerationPauseSwitch } from './GenerationPausePanel'
@@ -110,7 +103,7 @@ type Sub = FigureSub
 /** The dressed views are the T-pose kind's (a literal kept stable for FieldModelRefs' poll). */
 const TPOSE: ('tpose')[] = ['tpose']
 
-export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpenBaseBody, onOpenGallery,
+export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpenBaseBody,
   initialSub = 'worn' }: {
   character: string
   /** The sub-tab it opens on (a link into the Dressed views or the Outfit model; the check renders each). */
@@ -121,8 +114,6 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
   onOpenHairstyles?: () => void
   /** Opens the Base body tab (the plain body's views, model, face and rig, and their settings). */
   onOpenBaseBody?: () => void
-  /** Opens the Gallery tab, where the profile image is chosen (Dressed views' references row). */
-  onOpenGallery?: () => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -167,8 +158,6 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
   const regenerateFront = useCallback(() => post('base-body/images', { view: 'front', force: true }, () => {
     toast(t('Started — the front renders; the Base body tab shows it'), 'success')
   }), [post, t, toast])
-  /** Bumped by a saved outfit reference (Ruling A74b): the dressed views read again and show as due. */
-  const [refVersion, setRefVersion] = useState(0)
 
   /** Ruling A42: pause (no jobs) / resume (the held jobs start — the button names how many) / cancel one. */
   const setPaused = useCallback((paused: boolean) => post('figure/generation-pause', { paused }, () => {
@@ -269,14 +258,9 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
           ) : null}
           {/* Kept mounted while hidden: it polls the views and counts them for the sub-tab's label. */}
           <div style={sub === 'views' ? { display: 'flex', flexDirection: 'column', gap: 6 } : { display: 'none' }}>
-            {/* Ruling A90: row 1 the references (source → the worn outfit's full-body reference, Ruling A74b/A87 — its
-                dressed front is an edit of that picture), row 2 the dressed views in one row. */}
-            <OutfitReferenceRow character={character} onChanged={() => { setRefVersion((n) => n + 1); reload() }}
-              onOpenBaseBody={onOpenBaseBody} onOpenGallery={onOpenGallery}
-              refreshKey={`${data.build.running ? 'running' : 'idle'}:${data.served_built_at || ''}:${data.outfit || ''}:${(data.worn || []).map((w) => w.item_id).join(',')}`} />
             <FieldModelRefs character={character} kinds={TPOSE} layout="steps" onOpenBaseBody={onOpenBaseBody}
               onOpenBody={openBody} onLights={onViewLights}
-              refreshKey={`${data.build.running ? 'running' : 'idle'}:${data.served_built_at || ''}:${refVersion}`} />
+              refreshKey={`${data.build.running ? 'running' : 'idle'}:${data.served_built_at || ''}`} />
           </div>
         </div>
       </div>
@@ -401,11 +385,7 @@ function FigureNotices({ data, posting, onBuild, onDismiss, onRegenerateFront, o
   // The step the problem line says in full is not repeated.
   const others = failed.filter(([name]) => name !== data.problem?.step)
   const frontChange = data.changes.find((c) => c.key === 'body' && c.front)
-  const fullBody = data.full_body_reference && (!data.full_body_reference.base || !data.full_body_reference.outfit)
-    ? [fullBodyBuildNote('base', data.full_body_reference.base, undefined, t),
-      fullBodyBuildNote('outfit', data.full_body_reference.outfit, undefined, t, !!data.full_body_reference.outfit_auto)]
-      .filter(Boolean).join(' · ') : ''
-  const fullBodyFailed = data.full_body_reference?.outfit_failed || ''
+  const fullBody = data.full_body_reference ? fullBodyBuildNote(data.full_body_reference.base, undefined, t) : ''
   const runningText = running
     ? (step ? `${t('Running')}: ${step.index && step.count ? `${step.index}/${step.count} ` : ''}${step.label}`
       + (step.live ? ` — ${cpuProgressText(step.live, t)}` : '') : t('Running')) : ''
@@ -474,10 +454,9 @@ function FigureNotices({ data, posting, onBuild, onDismiss, onRegenerateFront, o
   }
   // Ruling A87: no full-body reference is information, never a due step; the outfit's is generated automatically
   // before its dressed front (Ruling A104) — a failed attempt says so (the front was made from the base front).
-  if (fullBodyFailed && !running) line('fullbody-failed', 'yellow', fullBodyFailed)
   if (fullBody) {
     line('fullbody', 'grey', fullBody,
-      `${fullBody}\n${t('Optional — the plain body’s is never generated by the Build (Base body → Views); the worn outfit’s is generated automatically before its dressed front.')}`)
+      `${fullBody}\n${t('Optional — never generated by the Build (Base body → Views).')}`)
   }
   // The caller's lines (the pause, the served figure's lacks) render nothing when they have nothing to say.
   const extra = !!data.generation_pause?.paused || (!!data.served_state && data.served_state.light !== 'green'
@@ -511,8 +490,6 @@ function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairst
   const { t } = useI18n()
   /** The template piece whose parameter dialog is open (Ruling A138). */
   const [params, setParams] = useState<string | null>(null)
-  /** The painted piece whose dialog is open (Ruling A148). */
-  const [painted, setPainted] = useState<{ id: string; name: string } | null>(null)
   const wardrobe = onOpenWardrobe ? (
     <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenWardrobe}
       title={t('The mode is set in the Wardrobe')}>↗ {t('Wardrobe')}</button>
@@ -574,13 +551,6 @@ function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairst
                     : t('Details')}
                 </button>
               ) : null}
-              {row.mode === 'painted' ? (
-                <button type="button" className="ga-btn ga-btn-sm" aria-haspopup="dialog"
-                  title={t('The outfit’s dressed views, this piece’s paint region, the painted texture and its colour')}
-                  onClick={() => setPainted({ id: row.item_id, name: row.name })}>
-                  {t('Paint steps')}
-                </button>
-              ) : null}
               {row.mode === 'template' ? (
                 <button type="button" className="ga-btn ga-btn-sm" aria-haspopup="dialog"
                   title={t('The sewing-pattern parameters this piece is draped from; “Suggest from picture” asks the LLM once')}
@@ -592,11 +562,11 @@ function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairst
               {isThinPieceRefusal(row.failure) ? (
                 // Ruling A118 J6: a piece too thin for its own mesh — one click moves it to a mode that fits.
                 <>
-                  <ModeSwitchButton character={character} itemId={row.item_id} mode="painted" onChanged={onChanged} />
                   {row.accessory_kind ? (
                     <ModeSwitchButton character={character} itemId={row.item_id} mode="accessory"
                       kind={row.accessory_kind} onChanged={onChanged} />
                   ) : null}
+                  <ModeSwitchButton character={character} itemId={row.item_id} mode="in_body" onChanged={onChanged} />
                 </>
               ) : null}
               {row.mode === 'template' && row.template?.state === 'failed' ? retry : null}
@@ -656,10 +626,6 @@ function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairst
         )
       })}
       {!data.worn.length && !hair ? <div className="ga-hint">{t('Nothing worn')}</div> : null}
-      {painted ? (
-        <PaintedPieceDialog character={character} itemId={painted.id} name={painted.name}
-          onClose={() => { setPainted(null); onChanged() }} />
-      ) : null}
       {params ? (
         <TemplateParamsDialog character={character} itemId={params} onClose={() => setParams(null)}
           onSaved={onChanged} />
@@ -693,7 +659,7 @@ function BodySection({ data, character, onChanged, onOpenBaseBody }: {
   const names = (state: string) => data.worn.filter((r) => r.mode === state && r.state !== 'left_out').map((r) => r.name)
   const shapeNames = [...(data.hair?.mode === 'body' ? [t('hair')] : []), ...names('in_body')]
   const plainNote = data.changes.find((c) => c.key === 'body')?.note
-  const rows = bodyRows(data.body, shapeNames, names('painted'), t, data.build.running ? data.build.step?.name ?? null : null)
+  const rows = bodyRows(data.body, shapeNames, t, data.build.running ? data.build.step?.name ?? null : null)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {rows.map((r) => (

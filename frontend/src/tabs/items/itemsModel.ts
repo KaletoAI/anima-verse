@@ -19,7 +19,7 @@ export interface OutfitPieceMeta {
   covers?: string[]
   motion_damping?: number
   partially_covers?: string[]
-  // How the piece reaches the 3D figure: own_mesh / painted / in_body (absent = the default, in the body).
+  // How the piece reaches the 3D figure: own_mesh / shell / template / accessory / in_body (absent = the default, in the body).
   mesh_mode?: string
   // Can be worn open (spec 2026-11-12 Addendum A): its wearers get a Closed / Open toggle.
   closable?: boolean
