@@ -107,7 +107,7 @@ The browser's open world round the places, every number on the E3 vectors (`terr
 The figures of the browser, every number on the E5 vectors (`figure_clips`, `retarget`, `clip_commit`,
 `clip_coverage`, `hips_tracks`, `npc_placement`, `figure_ground`, `room_spots`, `npc_walk`, `npc_ground`, `stairs`,
 `foot_lock`, `foot_lock_measure`, `leg_pin`, `stand_settle`, `bridge_*`, `pair_clip_*`, `pair_height`, `place_poll`,
-`figure_normalisation`, `secondary_*`, `animal_*`, `collision_core`, `hair_chains`):
+`figure_normalisation`, `secondary_*`, `animal_*`, `collision_core`, `hair_chains`, `rigid_shaft`):
 
 - **every character plays its activity** from the server's WHOLE clip library along its set chain (`female`/`male`/
   `animal` + neutral), one-shots hold their last frame, distance tiers full/low at 25/35 m (Tasks 27/28);
@@ -1158,6 +1158,27 @@ payload), and the contact of the extension tips that are not hair (the browser k
 **Accepted deviations:** the collision bind space is the skinned geometry space (Godot's bind poses; three's
 `bindMatrix` = identity, the mesh instance assumed to sit in the skeleton's frame); distances use `Math.Sqrt`
 where the TypeScript uses `Math.hypot` (last-bit differences, inside the tolerances).
+
+### Rigid shaft (`MotionGroup.rigid`)
+
+The browser's RIGID SHAFT (`secondaryMotion.ts` module docstring, commit 7ed4aa305): an extension chain whose
+active state names a rigid pose moves only at its root link. **Ported** in `Core/Figures/SecondaryMotion.cs`
+(`MotionPayload.cs` reads the optional `rigid`, default 0, and blends it over 1.5 s like the other state fields):
+the root's blended r for a chain of ≥ 2 links (`RigidOf`); the swing share (`ShareOf`: root share + r(1 − share),
+inner share × (1 − r)) for the motion limit and the own-capsule contact limit (the hair pass keeps the plain share,
+as in the browser); an inner link's share of the static droop × (1 − r) before the normalisation; an inner link's
+gain, translate and spill × (1 − r) and its length ratio s → 1 + (s − 1)(1 − r); the root keeps lerp(own tip,
+shaft tip, r) outside its own capsules, the shaft tip being the chain's last tip in the root's bone frame as
+rendered at the end of the last update (bind before the first), with the bind-rule factors taken at that point and
+recomputed while r moves (`ShaftFactors`). r = 0 leaves every existing vector bit-identical.
+
+Checked by `shared/test-vectors/rigid_shaft.json` (11 end-to-end cases, 1e-8 per number), generated from the
+TypeScript by `scripts/export_hair_vectors.mjs` on the fixture of `scripts/smoke_rigid_shaft.mjs` (static droop at
+r 0 / .5 / 1, the lateral shake at r 0 / .5 / 1 and 0 → 1, own-capsule contact at the shaft's end, a bind-capped
+capsule while r blends) and replayed by `tests/HairVectorTests.cs` (`RigidShaftVectorTests`, plus r 0 against an
+absent r bit for bit). **Not ported** (no native counterpart yet): the partner contact, the channels' radial guidance
+and the depth scale parts of the rule. Own capsules only reach hair groups natively (the extension-tip contact is
+not ported, see Hair chains), so the own-capsule shaft contact runs for a hair group with rigid > 0.
 
 ### Clip memory and figure cost (Task 35, ruling P3-R11)
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Exporter of the hair-chain vectors for the native port: shared/test-vectors/collision_core.json and
- * shared/test-vectors/hair_chains.json. Every expectation is the OUTPUT OF THE TYPESCRIPT IMPLEMENTATION
+ * Exporter of the hair-chain vectors for the native port: shared/test-vectors/collision_core.json,
+ * shared/test-vectors/hair_chains.json and shared/test-vectors/rigid_shaft.json. Every expectation is the OUTPUT OF THE TYPESCRIPT IMPLEMENTATION
  * (packages/scene-render/src/collision.ts, garmentCollision.ts, secondaryMotion.ts, bundled by esbuild exactly as the
  * browser has them), never of the C# one — the C# tests (native/tests/HairVectorTests.cs) replay the files.
  * Unlike the hand-derived vector files these are generated: the hand derivations stay in the source smokes named
@@ -9,7 +9,7 @@
  * (a drift of the TypeScript away from its derivation stops the export).
  *
  * Usage:
- *   node scripts/export_hair_vectors.mjs           write both files
+ *   node scripts/export_hair_vectors.mjs           write the three files
  *   node scripts/export_hair_vectors.mjs --check   regenerate in memory, replay the files on disk through the
  *                                                  TypeScript (shared/test-vectors/vectors.mjs runVectors) and
  *                                                  fail when a file differs from what the TypeScript gives now
@@ -35,10 +35,12 @@
  *     mesh world, boneInverse = inverse bone world), then the pose, then binding.update().
  *   hairChain(rig) → {frames: [{frame, matrices: [bone world matrices]}], tips: [{bone, capsules, tip, tipLocal}]}.
  *     rig = {bones, positions, indices, weights (one skin over every bone in order, the mesh on an identity root),
- *     payload, collision|null, frames: [{dt, pose: [[index, qx, qy, qz, qw]]}], record: [frame numbers]}:
- *     createSecondaryMotion(THREE, root, payload), setCollision(collision) when given; per frame the pose's bones
- *     get their quaternion (position/scale stay the bind ones), then update(dt); the recorded frames' bone world
- *     matrices; contactTips() after the last frame.
+ *     payload, collision|null, frames: [{dt, pose: [[index, qx, qy, qz, qw]], move?: [[index, x, y, z]],
+ *     configure?: payload}], record: [frame numbers]}:
+ *     createSecondaryMotion(THREE, root, payload), setCollision(collision) when given; per frame first
+ *     configure(payload) when the frame names one, then the pose's bones get their quaternion and the move's bones
+ *     their position (anything not given keeps its last value, initially the bind one), then update(dt); the
+ *     recorded frames' bone world matrices; contactTips() after the last frame.
  *
  * CASES and their hand derivations:
  *   [g…]   scripts/smoke_garment_collision.mjs [1]–[6b] (the push, its weight, COLLIDE_MAX, the bind rule)
@@ -52,6 +54,17 @@
  *   [x…]   the [hc] rig with a second, bind-capped capsule set (a_pos/b_pos fixed to Head, a shoulder_hair sphere
  *          the tip sits 0.03 from at bind → factor 0.6) — exercises the squeeze push and the bind rule end to end;
  *          no hand derivation beyond the factor.
+ *   [rs…]  rigid_shaft.json — the RIGID SHAFT (secondaryMotion.ts module docstring) on the fixture of
+ *          scripts/smoke_rigid_shaft.mjs (Hips; ShaftA at (0, 1, 0), B and C 1 m along +X each; one vertex per link):
+ *          [rs1] its [1] static droop at r 0 / .5 / 1 (joint angles total · 4.5:2:.5, 4.5:1:.25, 4.5:0:0 of
+ *          total = atan(e / 1.5) = 1.18628°); [rs2] its [2] lateral shake (Hips z = .05 sin(2π · 1.5 t)) at r 0 / .5 / 1
+ *          and r 0 → 1 mid-shake (the 1.5 s blend); [rs3] OWN-capsule contact at the shaft's end (the browser smoke's [3]
+ *          uses a partner capsule, which the native port has no counterpart for): a hair group (no anchor_blend, so the
+ *          plain tip contact) with the [1] droop and a capsule along Z through (2.5, .93) r .05 on Hips — clear of the
+ *          bind tip (.07 > .05, factor 1); at r 1 the root holds the shaft tip at the surface, the smallest droop φ with
+ *          (2.5 cos φ − 2.5)² + (.07 − 2.5 sin φ)² = .05² (bisection: φ ≈ 0.4584°), B and C straight; r 0 / .5 recorded;
+ *          [rs4] the capsule through (2.5, .97) — the bind tip .03 inside, so its bind factor caps the radius to .6 —
+ *          with r 0 → 1 after the first frame (the root's factors follow the lerped contact point while r moves).
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
@@ -160,7 +173,9 @@ function hairChainValue(data) {
     const record = new Set(data.record)
     const frames = []
     data.frames.forEach((f, k) => {
+      if (f.configure) motion.configure(f.configure)
       for (const [i, ...q] of f.pose ?? []) bones[i].quaternion.fromArray(q)
+      for (const [i, ...p] of f.move ?? []) bones[i].position.fromArray(p)
       group.updateMatrixWorld(true)
       motion.update(f.dt)
       if (record.has(k + 1)) frames.push({ frame: k + 1, matrices: bones.map(b => arr(b.matrixWorld)) })
@@ -184,7 +199,7 @@ export const dispatch = {
 
 // ---- the cases --------------------------------------------------------------------------------------------------
 
-const cases = { collision: [], hair: [] }
+const cases = { collision: [], hair: [], rigid: [] }
 const add = (file, label, fn, args, eps) => {
   const expect = dispatch[fn](...structuredClone(args))
   cases[file].push({ label, fn, args, expect: JSON.parse(JSON.stringify(expect)), ...(eps !== undefined ? { eps } : {}) })
@@ -419,11 +434,105 @@ const HC = 1e-8
     frames: pitch(2, 40), record: every(5) }], HC)
 }
 
+// [rs] the RIGID SHAFT on the fixture of scripts/smoke_rigid_shaft.mjs (docstring above)
+{
+  const shaftRig = {
+    bones: [{ name: 'mixamorig:Hips', parent: null, matrix: T(0, 0, 0) }, { name: 'mixamorig:ShaftA', parent: 0, matrix: T(0, 1, 0) },
+      { name: 'mixamorig:ShaftB', parent: 1, matrix: T(1, 0, 0) }, { name: 'mixamorig:ShaftC', parent: 2, matrix: T(1, 0, 0) }],
+    positions: [0.5, 1, 0, 1.5, 1, 0, 2.5, 1, 0], indices: [1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0], weights: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
+  }
+  const base = { freq_hz: 2, zeta: 0.3, gravity: 0, gravity_scale: 1, gain: 1, max_deg: 25, sag_max_deg: 30, spill_max_deg: 0,
+    head_sag: 1, axis_gain: [1, 1, 1], flatten: 0, stretch: 0, spread: 0.5, flatten_floor: 1, spill: 0, translate: 0,
+    squash: [0.8, 1.2], length: 1, girth: 1, rest_deg: 0, rest_max_deg: 90, straighten_deg: 0, freetext_clothing_gain: 1 }
+  const payloadOf = over => ({ rev: 'fixture', groups: { tail_chain: { ...base, bones: ['ShaftA', 'ShaftB', 'ShaftC'], ...over } } })
+  const DEG = 180 / Math.PI
+  const RS = 1e-8
+  /** Joint angles (degrees) A/B/C of one recorded frame: the angle of each bone's world rotation against its parent's. */
+  const joints = matrices => [1, 2, 3].map(i => {
+    const q = new THREE.Quaternion(), qp = new THREE.Quaternion(), v = new THREE.Vector3()
+    mat(matrices[i]).decompose(v, q, v.clone()); mat(matrices[i - 1]).decompose(v, qp, v.clone())
+    const rel = qp.invert().multiply(q)
+    return Math.sign(rel.z * rel.w || 1) * rel.angleTo(new THREE.Quaternion()) * DEG
+  })
+  const heads = matrices => [1, 2, 3].map(i => new THREE.Vector3().setFromMatrixPosition(mat(matrices[i])))
+  const linkLengths = matrices => {
+    const [a, b, c] = heads(matrices)
+    const cAxis = new THREE.Vector3(1, 0, 0).applyMatrix4(mat(matrices[3])).sub(c).length()
+    return [a.distanceTo(b), b.distanceTo(c), cAxis]
+  }
+  const allOf = n => Array.from({ length: n }, (_, k) => k + 1)
+  // [rs1] static droop, one update
+  const total = Math.atan(9.81 * 0.5 / (2 * Math.PI * 2) ** 2 / 1.5) * DEG
+  assert.ok(Math.abs(total - 1.18628) < 1e-5, 'total ' + total)
+  for (const [r, w] of [[0, [4.5, 2, 0.5]], [0.5, [4.5, 1, 0.25]], [1, [4.5, 0, 0]]]) {
+    const got = add('rigid', '[rs1] static droop, rigid ' + r + ': joint angles total × ' + w.join(':'), 'hairChain',
+      [{ ...shaftRig, payload: payloadOf({ gravity: 0.5, gravity_scale: 2, rigid: r }), collision: null, frames: [{ dt }], record: [1] }], RS)
+    const sum = w[0] + w[1] + w[2]
+    const angles = joints(got.frames[0].matrices)
+    assert.ok(angles.every((x, i) => Math.abs(x + total * w[i] / sum) < 1e-6), 'rs1 ' + r + ': ' + angles)
+    assert.ok(linkLengths(got.frames[0].matrices).every(l => Math.abs(l - 1) < 1e-9), 'rs1 lengths ' + r)
+  }
+  // [rs2] lateral shake: Hips z = .05 sin(2π · 1.5 t), frame k at t = (k − 1) / 60
+  const shake = (n, extra = () => ({})) => Array.from({ length: n }, (_, i) =>
+    ({ dt, move: [[0, 0, 0, 0.05 * Math.sin(2 * Math.PI * 1.5 * i / 60)]], ...extra(i) }))
+  const swing = r => {
+    const full = hairChainValue({ ...shaftRig, payload: payloadOf({ rigid: r }), collision: null, frames: shake(90), record: allOf(90) })
+    const max = [0, 0, 0]
+    let len = 0
+    for (const f of full.frames) {
+      joints(f.matrices).forEach((x, i) => { max[i] = Math.max(max[i], Math.abs(x)) })
+      const ls = linkLengths(f.matrices)
+      len = Math.max(len, Math.abs(ls[1] - 1), Math.abs(ls[2] - 1))
+    }
+    return { max, len }
+  }
+  const free = swing(0), stiff = swing(1)
+  assert.ok(free.max[1] > 0.05 && free.max[2] > 0.05, 'rs2 free ' + free.max)
+  assert.ok(stiff.max[0] > 0.05 && stiff.max[1] < 1e-5 && stiff.max[2] < 1e-5 && stiff.len < 1e-9, 'rs2 rigid ' + stiff.max + ' ' + stiff.len)
+  for (const r of [0, 0.5, 1])
+    add('rigid', '[rs2] lateral shake, rigid ' + r + (r === 1 ? ': only the root turns, B and C straight at length 1' : ''), 'hairChain',
+      [{ ...shaftRig, payload: payloadOf({ rigid: r }), collision: null, frames: shake(90), record: every(5) }], RS)
+  add('rigid', '[rs2] lateral shake, rigid 0 → 1 at frame 31 (blended over 1.5 s)', 'hairChain',
+    [{ ...shaftRig, payload: payloadOf({ rigid: 0 }), collision: null,
+      frames: shake(150, i => (i === 30 ? { configure: payloadOf({ rigid: 1 }) } : {})), record: Array.from({ length: 30 }, (_, k) => (k + 1) * 5) }], RS)
+  // [rs3] own-capsule contact at the shaft's end
+  const capsuleAt = y => ({ version: C.COLLISION_VERSION, capsules: [{ id: 'end', a: 'mixamorig:Hips', b: 'mixamorig:Hips', r: 0.05,
+    region: 'head', a_pos: [2.5, y, -1], b_pos: [2.5, y, 1] }] })
+  const droop = { gravity: 0.5, gravity_scale: 2, hair: true }
+  const g = t => (2.5 * Math.cos(t) - 2.5) ** 2 + (0.07 - 2.5 * Math.sin(t)) ** 2 - 0.0025
+  let lo = 0, hi = 0.05
+  for (let i = 0; i < 200; i++) { const m = (lo + hi) / 2; if (g(m) > 0) lo = m; else hi = m }
+  const phi = lo * DEG
+  assert.ok(Math.abs(phi - 0.4584) < 1e-3, 'rs3 phi ' + phi)
+  for (const r of [1, 0.5, 0]) {
+    const got = add('rigid', '[rs3] own capsule at the shaft end, rigid ' + r, 'hairChain',
+      [{ ...shaftRig, payload: payloadOf({ ...droop, rigid: r }), collision: capsuleAt(0.93), frames: Array.from({ length: 20 }, () => ({ dt })),
+        record: [1, 10, 20] }], RS)
+    for (const f of got.frames) {
+      const m = f.matrices
+      const tip = new THREE.Vector3(0.5, 0, 0).applyMatrix4(mat(m[3]))
+      // r 1: the root keeps the shaft tip out. At r 0 C alone turns within its budget (30° / 14 ≈ 2.14°, short of
+      // the ≈ 2.6° the droop asks for) and at r .5 neither link alone gets it out: recorded, not asserted.
+      if (r === 1) assert.ok(0.05 - Math.hypot(tip.x - 2.5, tip.y - 0.93) <= 1e-3, 'rs3 depth r ' + r + ' frame ' + f.frame)
+      if (r === 1) {
+        const a = joints(m)
+        assert.ok(Math.abs(a[0] + phi) < 0.01 && Math.abs(a[1]) < 1e-5 && Math.abs(a[2]) < 1e-5, 'rs3 r 1 ' + a)
+      }
+    }
+  }
+  // [rs4] bind-capped capsule, rigid 0 → 1 after the first frame
+  add('rigid', '[rs4] bind-capped capsule at the shaft end, rigid 0 → 1 (the factors follow r)', 'hairChain',
+    [{ ...shaftRig, payload: payloadOf({ ...droop, rigid: 0 }), collision: capsuleAt(0.97),
+      frames: Array.from({ length: 120 }, (_, i) => ({ dt, ...(i === 1 ? { configure: payloadOf({ ...droop, rigid: 1 }) } : {}) })),
+      record: [1, 2, 3, 10, 30, 60, 90, 120] }], RS)
+}
+
 // ---- write / check -------------------------------------------------------------------------------------------------
 
 const files = {
   collision_core: { format: 'anima-test-vectors/1', source: 'scripts/export_hair_vectors.mjs', fixtures: {}, cases: cases.collision },
   hair_chains: { format: 'anima-test-vectors/1', source: 'scripts/export_hair_vectors.mjs', fixtures: {}, cases: cases.hair },
+  rigid_shaft: { format: 'anima-test-vectors/1', source: 'scripts/export_hair_vectors.mjs', fixtures: {}, cases: cases.rigid },
 }
 /** JSON with one key per line, but every array of plain numbers / strings on one line (the files stay readable). */
 function format(v, pad = '') {

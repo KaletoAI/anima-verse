@@ -43,6 +43,11 @@ public sealed record MotionGroup
     public double? StraightenDeg { get; init; }
     public double? FreetextClothingGain { get; init; }
     /// <summary>
+    /// 0 … 1 (absent = 0): the active state's pose makes the chain a RIGID SHAFT that moves only at its root link
+    /// (<see cref="SecondaryMotion"/> RIGID SHAFT); blended like the other state fields.
+    /// </summary>
+    public double? Rigid { get; init; }
+    /// <summary>
     /// A HairDeck spring chain (<c>app/core/hair_motion.py</c>): its tips collide with the hair capsules
     /// (<see cref="Collision.HairChainCapsules"/>) and it swings on top of today's skin (HAIR CHAINS).
     /// </summary>
@@ -58,13 +63,13 @@ public sealed record MotionGroup
 
     /// <summary>The fields <c>blendMotionParams</c> eases (secondaryMotion.ts <c>BLENDED_FIELDS</c>), in its order.</summary>
     public static readonly string[] BlendedFields =
-        { "gravity", "freq_hz", "zeta", "gain", "flatten", "stretch", "spread", "flatten_floor", "spill", "translate", "head_sag", "length", "girth" };
+        { "gravity", "freq_hz", "zeta", "gain", "flatten", "stretch", "spread", "flatten_floor", "spill", "translate", "head_sag", "length", "girth", "rigid" };
 
     public double? Get(string field) => field switch
     {
         "gravity" => Gravity, "freq_hz" => FreqHz, "zeta" => Zeta, "gain" => Gain, "flatten" => Flatten, "stretch" => Stretch,
         "spread" => Spread, "flatten_floor" => FlattenFloor, "spill" => Spill, "translate" => Translate, "head_sag" => HeadSag,
-        "length" => Length, "girth" => Girth,
+        "length" => Length, "girth" => Girth, "rigid" => Rigid,
         _ => throw new ArgumentException($"not a blended motion field: {field}"),
     };
 
@@ -74,7 +79,7 @@ public sealed record MotionGroup
         "gain" => this with { Gain = v }, "flatten" => this with { Flatten = v }, "stretch" => this with { Stretch = v },
         "spread" => this with { Spread = v }, "flatten_floor" => this with { FlattenFloor = v }, "spill" => this with { Spill = v },
         "translate" => this with { Translate = v }, "head_sag" => this with { HeadSag = v }, "length" => this with { Length = v },
-        "girth" => this with { Girth = v },
+        "girth" => this with { Girth = v }, "rigid" => this with { Rigid = v },
         _ => throw new ArgumentException($"not a blended motion field: {field}"),
     };
 
@@ -101,7 +106,7 @@ public sealed record MotionGroup
             SpillMaxDeg = Num("spill_max_deg"), HeadSag = Num("head_sag"), Gravity = Num("gravity"), AxisGain = axis,
             Gain = Num("gain"), MaxDeg = Num("max_deg") ?? double.NaN, Squash = squash, RestDeg = Num("rest_deg") ?? double.NaN,
             RestMaxDeg = Num("rest_max_deg") ?? double.NaN, StraightenDeg = Num("straighten_deg"),
-            FreetextClothingGain = Num("freetext_clothing_gain"),
+            FreetextClothingGain = Num("freetext_clothing_gain"), Rigid = Num("rigid"),
             // JS truthiness of `group.hair`: a non-empty string or a non-zero number counts too.
             Hair = g.TryGetProperty("hair", out var h) && (h.ValueKind == JsonValueKind.True
                 || (h.ValueKind == JsonValueKind.Number && h.GetDouble() != 0) || (h.ValueKind == JsonValueKind.String && h.GetString()!.Length > 0)),
@@ -145,6 +150,7 @@ public sealed record MotionGroup
         Put("girth", Girth); Put("rigid_tail", RigidTail); Put("gravity_scale", GravityScale); Put("sag_max_deg", SagMaxDeg);
         Put("spill_max_deg", SpillMaxDeg); Put("head_sag", HeadSag); Put("gravity", Gravity); Put("gain", Gain);
         Put("straighten_deg", StraightenDeg); Put("freetext_clothing_gain", FreetextClothingGain);
+        Put("rigid", Rigid);
         if (!double.IsNaN(MaxDeg)) o["max_deg"] = MaxDeg;
         if (!double.IsNaN(RestDeg)) o["rest_deg"] = RestDeg;
         if (!double.IsNaN(RestMaxDeg)) o["rest_max_deg"] = RestMaxDeg;

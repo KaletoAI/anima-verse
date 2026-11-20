@@ -85,6 +85,16 @@ public sealed record MotionSkin(int[] JointNodes, Affine[] ToBone, float[] Posit
 /// <see cref="MotionRig.Local"/> / <see cref="MotionRig.World"/> of the nodes in <see cref="Owned"/> (driven and
 /// rigid-tail links — the solver keeps their local matrices across frames, as three keeps <c>matrixAutoUpdate = false</c>
 /// bones) and of their descendants. Units: metres, real seconds, world gravity (0, −9.81, 0).
+///
+/// RIGID SHAFT (<c>MotionGroup.rigid</c> = r ∈ [0, 1], blended over 1.5 s like the other state fields; the browser's
+/// module docstring of the same name): a chain of ≥ 2 links moves only at its ROOT link. With own = 1 − r for a link
+/// past the root and 1 for the root: an inner link's share of the static droop × own before the normalisation; the
+/// swing budget (motion limit and the contact limit) of an inner link × own, the root's + r × (1 − its share); an inner
+/// link's gain, translate and lying spill × own and its length ratio s → 1 + (s − 1) × own; the root keeps
+/// lerp(its own tip, the SHAFT TIP, r) outside its own capsules (the shaft tip = the chain's last tip in the root's bone
+/// frame as rendered at the end of the last update, the bind one before the first), with the bind-rule factors taken
+/// at that point. r = 0 is the free chain bit for bit. Not ported (no native counterpart yet): the partner contact,
+/// the channels / radial guidance and the depth scale the browser's rule also covers.
 /// </summary>
 public sealed class SecondaryMotion
 {
@@ -245,6 +255,14 @@ public sealed class SecondaryMotion
         public double Rest, RestFrom, RestTo, Blend;
         public double Straighten, StraightenFrom, StraightenRestFrom, StraightenBlend, StraightenThreshold;
         public Quat? AnchorRotation;
+        /// <summary>RIGID SHAFT, root of a chain of ≥ 2 links only: the chain's last tip in the root's bone frame — at
+        /// bind (null = no shaft) and as rendered at the end of the last update.</summary>
+        public V3? ShaftBind, ShaftTip;
+        /// <summary>RIGID SHAFT, own capsules: the root's own tip and the shaft tip in the capsules' bind frame (null = no
+        /// contacts or no shaft), the contacts' bind-rule factors for the own tip, the rigid fraction they carry now.</summary>
+        public (V3 Own, V3 Shaft)? ShaftBindTips;
+        public double[] OwnFactors = Array.Empty<double>();
+        public double FactorRigid;
     }
 
     private readonly MotionRig _rig;
@@ -637,6 +655,22 @@ public sealed class SecondaryMotion
                 if (chain.Count >= 2) st.Sag ??= new Sag();
             }
         }
+        // RIGID SHAFT: a chain root's shaft tip at bind — the last link's tip carried through the bind locals up to the
+        // root. The rendered one (ShaftTip) is kept across a reconfigure of the same chain.
+        foreach (var st in nextParticles)
+        {
+            if (st.Chain is not { Count: >= 2 } shaft || shaft[0] != st)
+            {
+                st.ShaftBind = null;
+                st.ShaftTip = null;
+                continue;
+            }
+            var last = shaft[^1];
+            var carry = Affine.Identity;
+            for (int n = last.Bind.Node; n >= 0 && n != st.Bind.Node; n = _rig.Parent(n))
+                if (_binds.TryGetValue(n, out var link)) carry = link.Local.Times(carry);
+            st.ShaftBind = carry.Apply(last.TipLocal);
+        }
         foreach (var b in nextHair) selected.Add(b.Node);
         foreach (var old in _particles.Select(p => p.Bind).Concat(_rigids).Concat(_hair))
             if (!selected.Contains(old.Node))
@@ -717,9 +751,16 @@ public sealed class SecondaryMotion
             if (_collision is null || !(budget > 0) || !st.ParamsTo.Hair) continue;
             var bound = Collision.HairChainCapsules(_collision.Capsules, e => e.Capsule.Region);
             var factors = Enumerable.Repeat(1.0, bound.Count).ToArray();
-            if (_boneInverses.TryGetValue(st.Bind.Node, out var inverse))
-                factors = Collision.TipBindFactors(inverse.Inverted().Apply(st.TipLocal), bound.Select(e => e.Bind).ToList());
+            bool hasInverse = _boneInverses.TryGetValue(st.Bind.Node, out var inverse);
+            var toBind = hasInverse ? inverse.Inverted() : Affine.Identity;
+            var bindTip = toBind.Apply(st.TipLocal);
+            if (hasInverse) factors = Collision.TipBindFactors(bindTip, bound.Select(e => e.Bind).ToList());
             st.Contacts = bound.Select((e, i) => (e, factors[i])).ToList();
+            st.OwnFactors = factors.ToArray();
+            st.FactorRigid = 0;
+            st.ShaftBindTips = null;
+            if (hasInverse && st.ShaftBind is { } shaftBind && st.Contacts.Count > 0)
+                st.ShaftBindTips = (bindTip, toBind.Apply(shaftBind));
         }
         if (!_particles.Any(st => st.Contacts.Count > 0)) _collision = null;
     }
@@ -883,12 +924,12 @@ public sealed class SecondaryMotion
     /// in the plane of its lever and that way out by <see cref="Collision.ContactAngle"/> — returned as the new
     /// dynamic rotation (the turn premultiplied). The oscillator state is not touched.
     /// </summary>
-    private static Quat KeepTipOutside(Particle st, Quat dynamic, Quat rest, Affine anchor, V3 shift, Affine scale, double limit)
+    private static Quat KeepTipOutside(Particle st, V3 tip, Quat dynamic, Quat rest, Affine anchor, V3 shift, Affine scale, double limit)
     {
         if (!(limit > 0)) return dynamic;
         var capsules = st.Contacts.Select(c => new CollideCapsule(c.Bound.Now.A, c.Bound.Now.B, c.Bound.Now.R * c.Factor)).ToList();
         var contactLocal = MotionMath.TranslationOf(shift).Times(MotionMath.RotationOf(dynamic * rest)).Times(scale);
-        var tipAnchor = contactLocal.Apply(st.TipLocal);
+        var tipAnchor = contactLocal.Apply(tip);
         var tipWorld = anchor.Apply(tipAnchor);
         var pushed = Collision.PushOutOfCapsules(tipWorld, capsules);
         double depth0 = Math.Sqrt((pushed - tipWorld).LengthSq());
@@ -923,7 +964,10 @@ public sealed class SecondaryMotion
     {
         var b = st.Bind;
         var prm = st.Params;
-        double motionLimit = prm.MaxDeg * st.MotionShare * Math.PI / 180;
+        // RIGID SHAFT: a link past its chain's root keeps (1 − r) of its own motion; the root takes the rest.
+        double swingShare = ShareOf(st);
+        double own = st.Chain is { Count: >= 2 } ownChain && ownChain[0] != st ? 1 - RigidOf(st) : 1;
+        double motionLimit = prm.MaxDeg * swingShare * Math.PI / 180;
         var anchor = b.Local;
         var anchorFull = b.Local;
         // A driven ancestor contributes its frame WITHOUT its own extension scale, while the position follows the
@@ -1031,7 +1075,7 @@ public sealed class SecondaryMotion
         staticVector += bodyVertical * (((prm.HeadSag ?? 1) - 1) * staticVector.Dot(bodyVertical));
         staticVector += originalLever;
         // Direct paired outward target in radians, independent of force/frequency.
-        double spillAngle = (prm.Spill ?? 0) * (prm.SpillMaxDeg ?? prm.SagMaxDeg ?? prm.MaxDeg) * Math.PI / 180 * inward;
+        double spillAngle = (prm.Spill ?? 0) * (prm.SpillMaxDeg ?? prm.SagMaxDeg ?? prm.MaxDeg) * Math.PI / 180 * inward * own;
         if (lateral.LengthSq() > 1e-12) staticVector = staticVector.ApplyAxisAngle(u.Cross(lateral).Normalized(), spillAngle);
         staticVector *= restLength > 1e-12 ? staticLength / restLength : 1;
         target = head + staticVector;
@@ -1106,11 +1150,11 @@ public sealed class SecondaryMotion
         // Only longitudinal dynamics change length; transverse displacement supplies direction.
         double renderedLength = Math.Max(1e-12, baseV.Length() + gains.Z * longitudinal);
         rendered = dynamicQ.Rotate(baseV) * (renderedLength / baseV.Length());
-        double gain = _far ? 0 : prm.Gain ?? double.NaN;
+        double gain = _far ? 0 : (prm.Gain ?? double.NaN) * own;
         rendered = (rendered - baseV) * gain + baseV;
         rendered = rendered.Normalized() * Math.Max(1e-12, baseV.Length() + gain * gains.Z * longitudinal);
         // Split bounded transverse static and dynamic offsets; axial length is unchanged.
-        double translate = prm.Translate ?? 0;
+        double translate = (prm.Translate ?? 0) * own;
         var leverDir = originalLever.Normalized();
         var headShift = baseV - originalLever;
         headShift -= leverDir * headShift.Dot(leverDir);
@@ -1126,7 +1170,9 @@ public sealed class SecondaryMotion
         dynamicQ = MotionMath.FromUnitVectors(restVector.Normalized(), localRendered.Normalized());
         // head_sag acts after force/length limits. Preserve that static target even when it is shorter than squash_min.
         double staticRatio = inverseAnchor.Apply(target).Length() / restVector.Length();
-        double s = Clamp(localRendered.Length() / restVector.Length(), Math.Min(prm.Squash.Min, staticRatio), prm.Squash.Max);
+        double free = Clamp(localRendered.Length() / restVector.Length(), Math.Min(prm.Squash.Min, staticRatio), prm.Squash.Max);
+        // RIGID SHAFT: an inner link's length ratio moves toward 1 (no squash/stretch of its own at r = 1).
+        double s = own < 1 ? 1 + (free - 1) * own : free;
         double spread = prm.Spread ?? 0.5;
         double perpendicular = s < 1 ? Math.Min(SpreadCap, 1 + spread * (1 / Math.Sqrt(s) - 1)) : 1 / Math.Sqrt(s);
         var ax = b.ScaleAxis;
@@ -1154,10 +1200,11 @@ public sealed class SecondaryMotion
         var scale = MotionMath.Linear(e);
         var shiftLocal = inverseAnchor.Apply(head + headShift);
         var translation = MotionMath.TranslationOf(shiftLocal);
+        if (st.ShaftBindTips is not null) ShaftFactors(st);
         // The tip contact of a link without today's skin (a hair chain whose group sends no anchor_blend rows).
         if (_colliding && st.Contacts.Count > 0 && b.TodayBlend is null)
-            dynamicQ = KeepTipOutside(st, dynamicQ, restQ, anchor, shiftLocal, scale,
-                                      Math.Max(prm.MaxDeg, prm.SagMaxDeg ?? 0) * st.MotionShare * Math.PI / 180);
+            dynamicQ = KeepTipOutside(st, ContactTip(st), dynamicQ, restQ, anchor, shiftLocal, scale,
+                                      Math.Max(prm.MaxDeg, prm.SagMaxDeg ?? 0) * swingShare * Math.PI / 180);
         var dq = dynamicQ * restQ;
         var rotation = MotionMath.RotationOf(dq);
         var parentWorld = _rig.WorldOf(_rig.Parent(b.Node));
@@ -1170,6 +1217,52 @@ public sealed class SecondaryMotion
         // Keep the local matrix consistent with that world matrix: matrix = local · anchorFull⁻¹ · world.
         if (drivenAncestor) local = b.Local.Times(anchorFull.Inverted()).Times(world);
         _rig.Local[b.Node] = _ownedLocal[b.Node] = local;
+        // RIGID SHAFT: the chain's last tip in its root's bone frame as rendered now, the point the root's contact
+        // reads in the next update.
+        if (st.Chain is { Count: >= 2 } shaftChain && shaftChain[0] is var shaftRoot && shaftRoot != st
+            && shaftRoot.ShaftBind is not null && st == shaftChain[^1])
+            shaftRoot.ShaftTip = _rig.World[shaftRoot.Bind.Node].Inverted().Apply(world.Apply(st.TipLocal));
+    }
+
+    // ---- RIGID SHAFT (class summary) -------------------------------------------------------------------------------
+
+    /// <summary>The chain's rigid fraction r (its root's blended rigid, 0 … 1); 0 for a link outside a chain of ≥ 2 links.</summary>
+    private static double RigidOf(Particle st)
+        => st.Chain is { Count: >= 2 } chain ? Clamp(chain[0].Params.Rigid ?? 0, 0, 1) : 0;
+
+    /// <summary>The link's share of the chain's swing budget: the root takes r of every inner link's share, which keeps (1 − r).</summary>
+    private static double ShareOf(Particle st)
+    {
+        double r = RigidOf(st);
+        if (!(r > 0)) return st.MotionShare;
+        return st.Chain![0] == st ? st.MotionShare + r * (1 - st.MotionShare) : st.MotionShare * (1 - r);
+    }
+
+    /// <summary>The point a link's contact turn keeps outside: its own tip, for a chain root lerp(own tip, shaft tip, r)
+    /// (the rendered shaft tip of the last update, else the bind one).</summary>
+    private static V3 ContactTip(Particle st)
+    {
+        double r = st.ShaftBind is not null ? RigidOf(st) : 0;
+        if (!(r > 0)) return st.TipLocal;
+        return ((st.ShaftTip ?? st.ShaftBind!.Value) - st.TipLocal) * r + st.TipLocal;
+    }
+
+    /// <summary>The bind-rule factors of a chain root's own capsules for the point <see cref="ContactTip"/> uses
+    /// (recomputed while r moves).</summary>
+    private static void ShaftFactors(Particle st)
+    {
+        if (st.ShaftBindTips is not { } tips) return;
+        double r = RigidOf(st);
+        if (r == st.FactorRigid) return;
+        st.FactorRigid = r;
+        if (r > 0)
+        {
+            var (o, s) = tips;
+            var point = new V3(o.X + (s.X - o.X) * r, o.Y + (s.Y - o.Y) * r, o.Z + (s.Z - o.Z) * r);
+            var factors = Collision.TipBindFactors(point, st.Contacts.Select(c => c.Bound.Bind).ToList());
+            for (int i = 0; i < st.Contacts.Count; i++) st.Contacts[i] = (st.Contacts[i].Bound, factors[i]);
+        }
+        else for (int i = 0; i < st.Contacts.Count; i++) st.Contacts[i] = (st.Contacts[i].Bound, st.OwnFactors[i]);
     }
 
     /// <summary>The multi-link sag: torques on the unsagged chain, the bounded total angle split by torque·span.</summary>
@@ -1215,6 +1308,7 @@ public sealed class SecondaryMotion
         double total = Math.Min(originalLever.AngleTo(originalLever + equilibrium),
                                 (st.Params.SagMaxDeg ?? st.Params.MaxDeg) * Math.PI / 180);
         double sum = 0;
+        double rigid = RigidOf(st);
         // Torques on the unsagged configuration (small-angle approximation): total droop independent of link count,
         // the largest bend at the root.
         for (int j = 0; j < chain.Count; j++)
@@ -1229,6 +1323,8 @@ public sealed class SecondaryMotion
             data.Torque = torque;
             double span = j + 1 < chain.Count ? data.Head.DistanceTo(chain[j + 1].Sag!.Head) : 2 * data.Centre.DistanceTo(data.Head);
             data.Weight = torque.Length() * span;
+            // RIGID SHAFT: an inner link's sag share × (1 − r); normalised below, so the root carries the rest.
+            if (j > 0 && rigid > 0) data.Weight *= 1 - rigid;
             sum += data.Weight;
         }
         foreach (var link in chain)

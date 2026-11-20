@@ -779,6 +779,7 @@ differs from what the TypeScript gives now. The native replay is `native/tests/H
 |---|---:|---|---|
 | `collision_core.json` | 129 | `jointNowFrom`, `capsuleNow`, `linearScale`, `tipBindFactors`, `hairChainCapsules`, `pushOutOfCapsules`, `contactAngleTurn`, `bindCollision` | 1e-9 (default) |
 | `hair_chains.json` | 11 | `hairChain` (end to end: `createSecondaryMotion` + `setCollision` + `update` per frame) | 1e-8 |
+| `rigid_shaft.json` | 11 | `hairChain` (the RIGID SHAFT end to end; frames may also `move` bones and `configure` a payload) | 1e-8 |
 
 Label prefixes and their sources: `[g…]` `scripts/smoke_garment_collision.mjs` [1]–[6b]; `[sq…]` and the random
 sample `[r…]` (LCG seed 4242) `scripts/smoke_collision_squeeze.mjs`; `[e…]` the endpoint rule of
@@ -788,3 +789,6 @@ hand derivation beyond the bind factor). `contactAngle` is module-private in `se
 exporter appends one `export` line to that file's text inside the bundle, leaving the function itself as it is.
 The full adapter contract (matrices column-major, the rig description of `bindCollision` / `hairChain`, the
 recorded frames, `contactTips()`) is in the exporter's docstring and mirrored in the C# file's summary.
+`[rs…]` (`rigid_shaft.json`) runs on the fixture of `scripts/smoke_rigid_shaft.mjs`; the exporter asserts that
+smoke's hand numbers (droop split 4.5:2:.5 / 4.5:1:.25 / 4.5:0:0 of 1.18628°, inner joints still under the shake at
+r 1) and the own-capsule hold of the shaft tip at φ ≈ 0.4584° (derived in the exporter's docstring) before writing.
