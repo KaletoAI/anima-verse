@@ -19,8 +19,13 @@
  * texture from cut are both made from it).
  *
  * Plan 2026-11-20-template-cut-uv-texture: a top has the field Texture (Projection / From cut) and the "Texture from
- * cut" box (TemplateCutTextureBox); with "From cut" the piece-only views are only the projection fallback — their box
- * is collapsed under "Projection fallback views (optional)" and they are never due.
+ * cut" flow (TemplateCutTextureBox); with "From cut" the front piece-only view is only the projection fallback and the
+ * back view is Picture 2 of the cut's back job.
+ *
+ * Rework after the user's Dario test (2026-11-20): the dialog fits one 1080p screen as three sub-tabs with a traffic
+ * light each — Cut (overlay, presets, fields, item picture, drape status + Build), Texture (the cut flow, kept mounted
+ * so its tab light stays live) and Views (the piece-only views). While a hub-job flow of the piece runs every other
+ * job button of it is off with the reason (`piece_jobs` on the server refuses it with 409 as well).
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
@@ -35,7 +40,7 @@ import { FailureDetails } from './BuildProblem'
 import type { TemplateFieldSpec, TemplateInfo, TemplateParams, TemplateProgress } from './figureModel'
 import { FigureBuildButton } from './FigureBuildButton'
 import { TemplateOverlay } from './TemplateOverlay'
-import { TemplateCutTextureBox } from './TemplateCutTextureBox'
+import { StepLine, TemplateCutTextureBox, Thumb } from './TemplateCutTextureBox'
 import { ModelSteps } from './ModelSteps'
 import { MaterialSelect } from './WardrobeGarment'
 import type { PieceMaterialInfo } from './useGarment'
@@ -88,6 +93,10 @@ interface TemplateViews {
   max_jobs: number
   /** The texture comes from the cut: the views only feed the projection fallback — never due. */
   optional?: boolean
+  /** With the texture from cut: the views the cut reads (["back"]: Picture 2 of its back job). */
+  cut_uses?: string[]
+  /** Why every job button of the piece is off now ("" = free): another hub-job flow of the piece runs. */
+  busy?: string
 }
 
 const PICTURE_H = 120
@@ -134,7 +143,7 @@ function FrontPicture({ picture }: { picture?: TemplatePayload['front_picture'] 
   )
 }
 
-const GRID: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px 12px' }
+const GRID: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '6px 12px' }
 const WARN: CSSProperties = { color: 'var(--warning, #d29922)' }
 const ORDER: (keyof TemplateParams)[] = ['kind', 'fabric', 'opacity', 'length_m', 'flare', 'waist_height', 'slit', 'slit_m',
   'shoulders', 'band_m', 'band_drop_m', 'lacing', 'lace_depth_m', 'fit', 'neckline', 'neck_depth_m', 'sleeves',
@@ -214,6 +223,9 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
   const [warnings, setWarnings] = useState<string[]>([])
   const [busy, setBusy] = useState<'' | 'suggest' | 'save'>('')
   const [saved, setSaved] = useState('')
+  const [tab, setTab] = useState<'cut' | 'texture' | 'views'>('cut')
+  const [cutTab, setCutTab] = useState<{ light: string; tip: string }>({ light: 'grey', tip: '' })
+  const onCutLight = useCallback((light: string, tip: string) => setCutTab({ light, tip }), [])
   useEffect(() => {
     let gone = false
     apiGet<TemplatePayload>(path)
@@ -226,11 +238,16 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
       .catch((e) => { if (!gone) setError((e as Error).message) })
     return () => { gone = true }
   }, [path])
-  /** Re-read only the progress (after a save, a started Build, and every 3 s while a Build drapes it). */
+  /** Re-read only the progress (after a save, a started Build, and every 3 s while a Build drapes it) — and the
+   *  views and the saved parameters: the cut flow sets Texture to "From cut" and may render the back view. */
   const reloadProgress = useCallback(() => {
     apiGet<TemplatePayload>(`${path}?picture=0`)
-      .then((p) => setData((d) => (d ? { ...d, progress: p.progress, params: p.params, updated_at: p.updated_at,
-        material: p.material } : p)))
+      .then((p) => {
+        setData((d) => (d ? { ...d, progress: p.progress, params: p.params, updated_at: p.updated_at,
+          material: p.material, views: p.views } : p))
+        // a texture the server switched (the cut flow selects "From cut") reaches an unchanged draft too
+        setDraft((dr) => (dr && p.params && dr.texture !== p.params.texture ? { ...dr, texture: p.params.texture } : dr))
+      })
       .catch(() => { /* the last known progress stays */ })
   }, [path])
   const running = data?.progress?.state === 'running'
@@ -305,16 +322,48 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
   }
   const title = t('Template parameters — {name}').replace('{name}', data?.name || itemId)
   const kindBuilt = !draft || !data || data.built.includes(draft.kind)
+  const hasTexture = !!(data && draft && (data.kind_fields?.[draft.kind] || []).includes('texture'))
+  const textureNote = t(draft?.texture === 'cut'
+    ? 'The pattern pieces filled from pictures (Texture tab). Until it is made, the projection is shown.'
+    : 'Projected from the piece-only views or the item picture during the drape.')
+  // one traffic light per tab: the drape, the texture from cut, the piece-only views
+  const prog = data?.progress
+  const views = data?.views
+  const tabs: { id: 'cut' | 'texture' | 'views'; label: string; light: string; tip: string }[] = [
+    { id: 'cut', label: t('Cut'), tip: prog ? t(TEMPLATE_STATE_LABELS[prog.state]) : '',
+      light: !prog ? 'grey' : prog.state === 'ready' ? 'green' : prog.state === 'running' ? 'blue'
+        : prog.state === 'failed' ? 'red' : 'yellow' },
+    ...(hasTexture ? [{ id: 'texture' as const, label: t('Texture'), tip: cutTab.tip, light: cutTab.light }] : []),
+    { id: 'views', label: t('Views'), tip: views?.busy ? t(views.busy) : '',
+      light: views?.views.some((v) => v.running) ? 'blue' : views && views.hub_jobs > 0 ? 'yellow'
+        : views && views.missing.length && !views.optional ? 'yellow' : 'green' },
+  ]
   return createPortal(
     <div className="ga-modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose() }}>
-      <div className="ga-modal" role="dialog" aria-modal="true" aria-label={title} style={{ maxWidth: 1200 }}>
-        <div className="ga-modal-header"><h3>{title}</h3></div>
-        <div className="ga-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13 }}>
-          {!data && !error ? <div className="ga-hint">{t('Loading…')}</div> : null}
+      <div className="ga-modal" role="dialog" aria-modal="true" aria-label={title}
+        style={{ maxWidth: 1480, width: '96vw', minHeight: 'min(70vh, 760px)', maxHeight: '92vh' }}>
+        <div className="ga-modal-header" style={{ gap: 12, flexWrap: 'wrap' }}>
+          <h3 style={{ margin: 0 }}>{title}</h3>
           {data && draft ? (
-            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <nav className="ga-subtabs" aria-label={t('Template sections')} style={{ display: 'flex', gap: 4 }}>
+              {tabs.map((tb) => (
+                <button key={tb.id} type="button" aria-pressed={tab === tb.id} data-template-tab={tb.id}
+                  className={`ga-btn ga-btn-sm${tab === tb.id ? ' ga-btn-primary' : ''}`} title={tb.tip}
+                  onClick={() => setTab(tb.id)} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span className={`ga-model3d-status-dot ga-model3d-status-${tb.light}`}
+                    style={{ width: 8, height: 8, flex: '0 0 8px', boxShadow: '0 0 0 1px rgba(255,255,255,0.55)', ...(tb.light === 'blue' ? { background: 'var(--accent, #6aa9ff)' } : {}) }} />
+                  {tb.label}
+                </button>
+              ))}
+            </nav>
+          ) : null}
+        </div>
+        <div className="ga-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13, flex: 1, minHeight: 0 }}>
+          {!data && !error ? <div className="ga-hint">{t('Loading…')}</div> : null}
+          {data && draft && tab === 'cut' ? (
+            <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }} data-template-panel="cut">
               <TemplateOverlay path={path} draft={draft} />
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: '1 1 340px', minWidth: 0 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: '1 1 0', minWidth: 0 }}>
                 {presets.length ? (
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }} data-template-presets="">
                     <span className="ga-form-hint">{t('Preset')}</span>
@@ -330,7 +379,8 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                   {ORDER.filter((key) => data.spec[key] && shown(key, draft, data.kind_fields || {})).map((key) => {
                     const f = data.spec[key]
                     return (
-                      <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}
+                        title={key === 'texture' ? textureNote : undefined}>
                         <span className="ga-form-hint">
                           {t(key === 'length_m' ? lengthLabel(draft.kind) : TEMPLATE_FIELD_LABELS[key])}
                         </span>
@@ -346,7 +396,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                           </select>
                         ) : (
                           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <input type="range" min={f.min} max={f.max} step={f.max - f.min < 0.05 ? 0.001 : 0.01} style={{ flex: 1 }}
+                            <input type="range" min={f.min} max={f.max} step={f.max - f.min < 0.05 ? 0.001 : 0.01} style={{ flex: 1, minWidth: 0 }}
                               value={Number(draft[key])} onChange={(e) => set(key, Number(e.target.value))} />
                             <span style={{ width: 52, textAlign: 'right' }}>
                               {SHARES.has(key) ? Number(draft[key]).toFixed(2)
@@ -381,10 +431,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                         ) : null}
                         {key === 'texture' ? (
                           <span className="ga-form-hint" data-texture-note={draft.texture || 'projection'}>
-                            {t(draft.texture === 'cut'
-                              ? 'The pattern pieces filled from the item picture (Texture from cut, below). Until it is made, the projection is shown.'
-                              : 'Projected from the piece-only views or the item picture during the drape.')}
-                            {' '}{t('A switch only re-assembles the figure (no new drape, 0 hub jobs).')}
+                            {t('A switch only re-assembles the figure (no new drape, 0 hub jobs).')}
                           </span>
                         ) : null}
                         {key === 'opacity' ? (
@@ -426,31 +473,31 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                 <div className="ga-hint">
                   {source === 'llm' ? t('Values from the picture suggestion') : t('Values set by hand')}
                   {data.updated_at ? ` · ${t('saved {at}').replace('{at}', data.updated_at.replace('T', ' ').slice(0, 16))}` : ''}
+                  {' · '}{templateCost(data.cost, t)}
                 </div>
-                <div className="ga-hint">{templateCost(data.cost, t)}</div>
                 {saved ? <div className="ga-hint" style={{ color: 'var(--success, #3fb950)' }}>{saved}</div> : null}
-                <FrontPicture picture={data.front_picture} />
+                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                  <FrontPicture picture={data.front_picture} />
+                  {data.progress ? (
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <TemplateProgressBox character={character} progress={data.progress} onStarted={reloadProgress} />
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </div>
           ) : null}
-          {data && draft && (data.kind_fields?.[draft.kind] || []).includes('texture') ? (
-            <TemplateCutTextureBox path={path} texture={data.params?.texture || 'projection'}
-              refreshKey={`${data.progress?.state || ''}:${data.progress?.built_at || ''}`} />
+          {data && draft && hasTexture ? (
+            <div data-template-panel="texture" style={{ display: tab === 'texture' ? 'block' : 'none' }}>
+              <TemplateCutTextureBox path={path} onChanged={reloadProgress} onLight={onCutLight}
+                refreshKey={`${data.progress?.state || ''}:${data.progress?.built_at || ''}:${data.params?.texture || ''}`} />
+            </div>
           ) : null}
-          {data?.views ? (
-            data.views.optional ? (
-              <details data-template-views="optional">
-                <summary className="ga-hint" style={{ cursor: 'pointer' }}>{t('Projection fallback views (optional)')}</summary>
-                <TemplateViewsBox path={path} views={data.views}
-                  onChange={(v) => { setData((d) => (d ? { ...d, views: v } : d)); reloadProgress() }} />
-              </details>
-            ) : (
+          {data && draft && tab === 'views' && data.views ? (
+            <div data-template-panel="views">
               <TemplateViewsBox path={path} views={data.views}
                 onChange={(v) => { setData((d) => (d ? { ...d, views: v } : d)); reloadProgress() }} />
-            )
-          ) : null}
-          {data?.progress ? (
-            <TemplateProgressBox character={character} progress={data.progress} onStarted={reloadProgress} />
+            </div>
           ) : null}
           {error ? <div className="ga-hint" style={WARN}>{error}</div> : null}
         </div>
@@ -534,10 +581,14 @@ function TemplateProgressBox({ character, progress, onStarted }: {
 }
 
 const VIEW_LABEL: Record<string, string> = { front: 'Front view', back: 'Back view' }
+const VIEW_SIDE = 180
+const ATTEMPT_SIDE = 64
 
-/** A205: the piece-only views (front + back, the piece alone, cut out) the drape's texture is baked from — one cell
- *  per view: the accepted view, its attempts (Use this), Generate / Regenerate (at most 2 hub jobs per view) and
- *  Upload. A sheer piece needs both; any other piece uses them when present, else the item picture. */
+/** A205: the piece-only views (front + back, the piece alone, cut out) — one cell per view: the accepted view, its
+ *  attempts (Use this), Generate / Regenerate (at most 2 hub jobs per view) and Upload. With texture "projection"
+ *  the drape bakes its texture from them (a sheer piece needs both); with "From cut" the front view only feeds the
+ *  projection fallback and the back view is Picture 2 of the cut's back job. While another hub-job flow of the
+ *  piece runs every job button is off with its reason (`busy`, the server refuses it too). */
 function TemplateViewsBox({ path, views, onChange }: {
   path: string
   views: TemplateViews
@@ -547,14 +598,14 @@ function TemplateViewsBox({ path, views, onChange }: {
   const { toast } = useToast()
   const [busy, setBusy] = useState('')
   const running = views.views.some((v) => v.running)
+  const held = views.busy ? t(views.busy) : ''
   const reload = useCallback(() => {
     apiGet<TemplateViews>(`${path}/views`).then(onChange).catch(() => { /* the last state stays */ })
   }, [path, onChange])
   useEffect(() => {
-    if (!running) return
-    const id = window.setInterval(reload, 2000)
+    const id = window.setInterval(reload, running || held ? 2000 : 8000)
     return () => window.clearInterval(id)
-  }, [running, reload])
+  }, [running, held, reload])
   const act = async (key: string, fn: () => Promise<TemplateViews>, done: string) => {
     setBusy(key)
     try {
@@ -566,84 +617,86 @@ function TemplateViewsBox({ path, views, onChange }: {
       setBusy('')
     }
   }
-  const cost = views.optional && views.missing.length
-    ? t('Optional — Generate spends 1 hub job (at most 2) per view')
-    : views.hub_jobs
-    ? t('{n} hub jobs (at most {max} when an attempt is refused)').replace('{n}', String(views.hub_jobs))
-      .replace('{max}', String(views.max_jobs))
-    : t('Both views exist — Regenerate spends 1 hub job (at most 2) per view')
+  const uses = views.cut_uses || []
+  const role = (view: string) => views.optional
+    ? (uses.includes(view)
+      ? t('Used by the texture from cut — Picture 2 of its back job. A new one makes the texture from cut out of date.')
+      : t('Only for the projection fallback — not needed with the texture from cut.'))
+    : views.sheer
+      ? t('Required: the sheer fabric is baked only from these views.')
+      : t('The drape bakes the texture from it (else from the item picture); a new one re-drapes at the next Build (CPU).')
   return (
     <div role="group" aria-label={t('Piece-only views')}
       data-template-views={views.optional ? 'optional' : views.missing.length ? 'due' : 'done'}
-      style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '6px 8px',
-        border: '1px solid var(--border, #30363d)', borderRadius: 6 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <strong>{t('Piece-only views')}</strong>
-        <span className="ga-hint">{cost}</span>
+      style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div className="ga-hint">
+        {t('The piece alone, cut out, rendered from the item picture (occasion “Garment view”). At most 2 hub jobs per view and click; a refused attempt stays offered.')}
       </div>
-      <div className="ga-hint" style={views.required && views.missing.length ? WARN : undefined}>
-        {t(views.optional
-          ? 'The texture comes from the cut: these views only colour the projection the figure falls back to. Not needed.'
-          : views.sheer
-            ? 'Sheer fabric: the texture is baked only from these views — the fabric alone, nothing behind or through it. Required.'
-            : 'The texture is baked from these views when they exist, else from the item picture. A new view re-drapes the piece at the next Build (CPU).')}
-      </div>
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+      {held ? <div className="ga-hint" style={{ color: 'var(--accent, #6aa9ff)' }} data-views-busy="">{held}</div> : null}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 16 }}>
         {views.views.map((c) => {
           const enc = `${path}/views/${c.view}`
+          const due = !c.accepted && !views.optional
+          const off = !!busy || c.running || !!held
           return (
-            <div key={c.view} data-view-cell={c.view} data-view-state={c.accepted ? 'done' : 'due'}
-              style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 220 }}>
-              <span className="ga-form-hint">{t(VIEW_LABEL[c.view])} · {c.accepted
-                ? t(c.source === 'upload' ? 'uploaded' : 'made') : t('due')}</span>
-              <div style={{ width: 220, height: 220, border: '1px solid var(--border, #30363d)', borderRadius: 4,
+            <div key={c.view} data-view-cell={c.view} data-view-state={c.accepted ? 'done' : due ? 'due' : 'none'}
+              style={{ display: 'grid', gridTemplateColumns: `${VIEW_SIDE}px minmax(0, 1fr)`, gap: 10, alignItems: 'start' }}>
+              <div style={{ width: VIEW_SIDE, height: VIEW_SIDE, border: '1px solid var(--border, #30363d)', borderRadius: 4,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 background: 'repeating-conic-gradient(#2a2f36 0% 25%, #1c2026 0% 50%) 50% / 16px 16px' }}>
                 {c.accepted
-                  ? <img src={`${enc}.png?v=${c.stamp}`} alt={t(VIEW_LABEL[c.view])} style={{ maxWidth: '100%', maxHeight: '100%' }} />
+                  ? <Thumb src={`${enc}.png?v=${c.stamp}`} label="" size={VIEW_SIDE - 2} tip={t(VIEW_LABEL[c.view])} />
                   : <span className="ga-hint">{c.running ? t('Rendering…') : t('No view yet')}</span>}
               </div>
-              {c.accepted_by_user ? (
-                <span className="ga-hint" style={WARN}>{t('Accepted by you despite the check')}</span>
-              ) : null}
-              {c.error ? <span className="ga-hint" style={{ color: 'var(--danger, #f85149)' }}>{c.error}</span> : null}
-              {c.attempts.length && !c.running ? (
-                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                  {c.attempts.map((a) => (
-                    <figure key={a.n} style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: 2, width: 100 }}
-                      title={a.reasons.join('\n') || t('Passed')}>
-                      <img src={`${enc}.png?attempt=${a.n}&v=${a.stamp}`} alt={`${t('Attempt')} ${a.n}`}
-                        style={{ width: 100, height: 100, objectFit: 'contain',
-                          border: `1px solid ${a.ok ? 'var(--success, #3fb950)' : 'var(--danger, #f85149)'}` }} />
-                      <button type="button" className="ga-btn ga-btn-sm" disabled={!!busy}
-                        onClick={() => { void act(`use-${c.view}-${a.n}`, () => apiPost<TemplateViews>(`${enc}/use/${a.n}`, {}), 'View used') }}>
-                        {t('Use this')}
-                      </button>
-                    </figure>
-                  ))}
-                </div>
-              ) : null}
-              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                <button type="button" className="ga-btn ga-btn-sm" disabled={!!busy || c.running}
-                  title={t('At most {n} hub jobs for this piece-only view per click — after that it is offered: Use this, Upload or Regenerate.').replace('{n}', String(c.max_jobs))}
-                  onClick={() => { void act(`gen-${c.view}`, () => apiPost<TemplateViews>(`${enc}/generate`, {}), '') }}>
-                  {c.running ? t('Rendering…') : t(c.accepted || c.attempts.length ? 'Regenerate (1–2 hub jobs)' : 'Generate (1–2 hub jobs)')}
-                </button>
-                <label className="ga-btn ga-btn-sm" style={{ cursor: busy ? 'default' : 'pointer' }}>
-                  {t('Upload…')}
-                  <input type="file" accept="image/*" hidden disabled={!!busy}
-                    onChange={(e) => {
-                      const f = e.target.files?.[0]
-                      e.target.value = ''
-                      if (f) void act(`up-${c.view}`, () => apiUpload<TemplateViews>(`${enc}/upload`, f), 'View uploaded')
-                    }} />
-                </label>
-                {c.accepted ? (
-                  <button type="button" className="ga-btn ga-btn-sm" disabled={!!busy}
-                    onClick={() => { void act(`del-${c.view}`, () => apiDelete<TemplateViews>(enc), 'View removed') }}>
-                    {t('Remove')}
-                  </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+                <StepLine label={t(VIEW_LABEL[c.view])}
+                  light={c.running ? 'blue' : c.accepted ? (c.accepted_by_user ? 'yellow' : 'green') : due ? 'yellow' : 'grey'}
+                  text={c.running ? t('Rendering…') : c.accepted
+                    ? (c.accepted_by_user ? t('Accepted by you despite the check')
+                      : t(c.source === 'upload' ? 'uploaded' : 'made'))
+                    : due ? t('due') : t('not made')} />
+                <span className="ga-hint" style={{ fontSize: 11 }}>{role(c.view)}</span>
+                {c.error ? <span className="ga-hint" style={{ color: 'var(--danger, #f85149)' }}>{c.error}</span> : null}
+                {c.attempts.length && !c.running ? (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {c.attempts.map((a) => (
+                      <figure key={a.n} style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: 2, width: ATTEMPT_SIDE }}
+                        title={a.reasons.join('\n') || t('Passed')}>
+                        <div style={{ border: `1px solid ${a.ok ? 'var(--success, #3fb950)' : 'var(--danger, #f85149)'}`, borderRadius: 4 }}>
+                          <Thumb src={`${enc}.png?attempt=${a.n}&v=${a.stamp}`} label="" size={ATTEMPT_SIDE - 2}
+                            tip={`${t('Attempt')} ${a.n}: ${a.reasons.join('; ') || t('Passed')}`} />
+                        </div>
+                        <button type="button" className="ga-btn ga-btn-sm" disabled={off} title={held || undefined}
+                          onClick={() => { void act(`use-${c.view}-${a.n}`, () => apiPost<TemplateViews>(`${enc}/use/${a.n}`, {}), 'View used') }}>
+                          {t('Use this')}
+                        </button>
+                      </figure>
+                    ))}
+                  </div>
                 ) : null}
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  <button type="button" className="ga-btn ga-btn-sm" disabled={off}
+                    title={held || t('At most {n} hub jobs for this piece-only view per click — after that it is offered: Use this, Upload or Regenerate.').replace('{n}', String(c.max_jobs))}
+                    onClick={() => { void act(`gen-${c.view}`, () => apiPost<TemplateViews>(`${enc}/generate`, {}), '') }}>
+                    {c.running ? t('Rendering…') : t(c.accepted || c.attempts.length ? 'Regenerate (1–2 hub jobs)' : 'Generate (1–2 hub jobs)')}
+                  </button>
+                  <label className="ga-btn ga-btn-sm" aria-disabled={off}
+                    style={{ cursor: off ? 'default' : 'pointer', opacity: off ? 0.5 : 1 }} title={held || t('No hub job')}>
+                    {t('Upload…')}
+                    <input type="file" accept="image/*" hidden disabled={off}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0]
+                        e.target.value = ''
+                        if (f) void act(`up-${c.view}`, () => apiUpload<TemplateViews>(`${enc}/upload`, f), 'View uploaded')
+                      }} />
+                  </label>
+                  {c.accepted ? (
+                    <button type="button" className="ga-btn ga-btn-sm" disabled={off} title={held || undefined}
+                      onClick={() => { void act(`del-${c.view}`, () => apiDelete<TemplateViews>(enc), 'View removed') }}>
+                      {t('Remove')}
+                    </button>
+                  ) : null}
+                </div>
               </div>
             </div>
           )

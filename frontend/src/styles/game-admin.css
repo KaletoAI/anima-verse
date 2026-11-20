@@ -3636,3 +3636,11 @@ a.ga-btn {
 .ga-align-col .ga-btn-sm { padding: 1px 6px; font-size: 11px; }
 .ga-align-col input[type='range'] { height: 14px; margin: 0; }
 .ga-align-col table td, .ga-align-col table th { padding-top: 0; padding-bottom: 0; }
+
+/* The template dialog's tabs (Cut / Texture / Views): a job button that cannot start reads disabled; its reason
+   stands beside it or on its status line. */
+[data-template-panel] .ga-btn:disabled,
+[data-template-panel] .ga-btn[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
