@@ -24,7 +24,8 @@ namespace AnimaNative.Check;
 ///   L2 the hemisphere: ambient + the ± pair reproduce three's <c>I · mix(G, S, ½ + ½·n.y) / π</c> at n.y = 1, 0, −1;
 ///   L3 the room ambience on the clock base (daylight 0.5: energies halved, the water's sky bytes);
 ///   L4 the shadow fit: max distance from the camera distance, Godot's texel size against the browser's 6.84 cm;
-///   L5 the material policy: Lambert + no received shadow on every imported GLB material, the scatter shader likewise,
+///   L5 the material policy: Lambert + no received shadow on every imported GLB material, a primitive's COLOR_0
+///      multiplied into its albedo (alpha included, the mask kept), the scatter shader likewise,
 ///      the terrain casts no shadow; the MSAA option;
 ///   L6 the hemisphere pair as the terrain's shader term (Task 26b, <see cref="HemiUniforms"/>): the term is the pair
 ///      light as Godot decodes it × its energy (noon = the L2 difference n.y 1 − n.y 0), ambient + term·n.y equals the
@@ -120,6 +121,21 @@ public static class LightCheck
             var mats = state.GetMaterials().OfType<BaseMaterial3D>().ToArray();
             Expect("L5 GLB materials Lambert, no received shadow", mats.Length > 0 && touched == mats.Length
                    && mats.All(m => m.DiffuseMode == BaseMaterial3D.DiffuseModeEnum.Lambert && m.DisableReceiveShadows), $"{touched}/{mats.Length}");
+            // Vertex colours (three's GLTFLoader: a primitive with COLOR_0 gets vertexColors; § A3a: card hair is a
+            // near-white atlas × COLOR_0, its alpha included). Godot 4.7.2 decides the flag BEFORE it reads the
+            // primitive's COLOR_0, so a single-primitive mesh never gets it — GlbLoader.VertexColours sets it.
+            var (_, vc, _) = GlbLoader.Parse(VertexColourGlb(), "vertex_colour.glb");
+            var vcMats = vc.GetMaterials().OfType<BaseMaterial3D>().ToDictionary(m => m.ResourceName);
+            Expect("L5 a primitive with COLOR_0 multiplies it into the albedo, as linear values",
+                   vcMats["hair"].VertexColorUseAsAlbedo && !vcMats["hair"].VertexColorIsSrgb, "");
+            Expect("L5 the card material stays a two-sided alpha mask at the file's cutoff",
+                   vcMats["hair"].Transparency == BaseMaterial3D.TransparencyEnum.AlphaScissor
+                   && Math.Abs(vcMats["hair"].AlphaScissorThreshold - 0.15f) < 1e-6
+                   && vcMats["hair"].CullMode == BaseMaterial3D.CullModeEnum.Disabled, $"{vcMats["hair"].Transparency} {vcMats["hair"].AlphaScissorThreshold}");
+            Expect("L5 a primitive without COLOR_0 keeps its material untouched", !vcMats["plain"].VertexColorUseAsAlbedo, "");
+            var vcCols = vc.GetMeshes()[0].Mesh.GetSurfaceArrays(0)[(int)Mesh.ArrayType.Color].AsColorArray();
+            Expect("L5 the COLOR_0 alpha survives the import (255, 128, 0 of 255)", vcCols.Length == 3 && vcCols[0].A == 1f
+                   && Math.Abs(vcCols[1].A - 128f / 255f) < 1e-6 && vcCols[2].A == 0f, string.Join(" ", vcCols.Select(c => c.A)));
             var scatter = Scatter.ScatterShaders.Code(0.2, true, false, true, false);
             Expect("L5 scatter Lambert, no received shadow", scatter.Contains("diffuse_lambert") && scatter.Contains("shadows_disabled")
                    && !scatter.Contains("diffuse_burley"), "");
@@ -251,6 +267,36 @@ public static class LightCheck
 
     /// <summary>The direction TOWARDS a directional light (its +Z; it shines along −Z).</summary>
     private static Vector3 Dir(DirectionalLight3D l) => l.GlobalTransform.Basis.Z.Normalized();
+
+    /// <summary>
+    /// A GLB of two single-primitive meshes on one triangle: "hair" with COLOR_0 (VEC4, normalised bytes — red a 255,
+    /// green a 128, blue a 0) on a two-sided MASK material at cutoff 0.15, "plain" without colours on a default material.
+    /// </summary>
+    private static byte[] VertexColourGlb()
+    {
+        var bin = new byte[48];
+        Buffer.BlockCopy(new float[] { 0, 0, 0, 1, 0, 0, 0, 1, 0 }, 0, bin, 0, 36);
+        new byte[] { 255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0 }.CopyTo(bin, 36);
+        const string json = "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[0,1]}],"
+            + "\"nodes\":[{\"name\":\"hair\",\"mesh\":0},{\"name\":\"plain\",\"mesh\":1}],"
+            + "\"meshes\":[{\"name\":\"hair\",\"primitives\":[{\"attributes\":{\"POSITION\":0,\"COLOR_0\":1},\"material\":0}]},"
+            + "{\"name\":\"plain\",\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":1}]}],"
+            + "\"materials\":[{\"name\":\"hair\",\"doubleSided\":true,\"alphaMode\":\"MASK\",\"alphaCutoff\":0.15},{\"name\":\"plain\"}],"
+            + "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[1,1,0]},"
+            + "{\"bufferView\":1,\"componentType\":5121,\"normalized\":true,\"count\":3,\"type\":\"VEC4\"}],"
+            + "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}],"
+            + "\"buffers\":[{\"byteLength\":48}]}";
+        var text = System.Text.Encoding.UTF8.GetBytes(json);
+        int padded = (text.Length + 3) & ~3;
+        using var ms = new MemoryStream();
+        using var w = new BinaryWriter(ms);
+        w.Write(0x46546C67u); w.Write(2u); w.Write((uint)(12 + 8 + padded + 8 + bin.Length));
+        w.Write((uint)padded); w.Write(0x4E4F534Au); w.Write(text);
+        for (int i = text.Length; i < padded; i++) w.Write((byte)0x20);
+        w.Write((uint)bin.Length); w.Write(0x004E4942u); w.Write(bin);
+        w.Flush();
+        return ms.ToArray();
+    }
 
     private static void Energy(string what, float got, double want)
         => Expect(what, Math.Abs(got - want) < 1e-6, $"got {got}, expected {want}");

@@ -38,6 +38,7 @@ public static class GlbLoader
         if (err != Error.Ok) throw new InvalidOperationException($"GLTF import of {label} failed: {err}");
         var counts = Count(state);
         BrowserLook(state);
+        VertexColours(state);
         return (doc, state, counts);
     }
 
@@ -66,6 +67,33 @@ public static class GlbLoader
             b.DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert;
             b.DisableReceiveShadows = true;
             n++;
+        }
+        return n;
+    }
+
+    /// <summary>
+    /// three's GLTFLoader rule: a primitive that carries <c>COLOR_0</c> multiplies it into its material's base colour,
+    /// the alpha included (<c>vertexColors</c>; docs/schnittstellen-3d.md § A3a: card hair is a near-white strand atlas
+    /// × COLOR_0, and the COLOR_0 alpha fades each card's root before the cutoff). Godot 4.7.2 means the same
+    /// (<c>gltf_document.cpp</c> <c>_parse_meshes</c>) but decides the flag while reading the primitive's MATERIAL —
+    /// before it has read that primitive's COLOR_0 — so only the later primitives of a mesh get it and a
+    /// single-primitive mesh never does: the hair rendered in the plain atlas, white. glTF colours are linear, so
+    /// <c>VertexColorIsSrgb</c> stays off. Returns the materials switched on.
+    /// </summary>
+    public static int VertexColours(GltfState state)
+    {
+        int n = 0;
+        foreach (var gm in state.GetMeshes())
+        {
+            var mesh = gm.Mesh;
+            if (mesh is null) continue;
+            for (int s = 0; s < mesh.GetSurfaceCount(); s++)
+            {
+                if (mesh.GetSurfaceMaterial(s) is not BaseMaterial3D b || b.VertexColorUseAsAlbedo) continue;
+                if (mesh.GetSurfaceArrays(s)[(int)Mesh.ArrayType.Color].VariantType == Variant.Type.Nil) continue;
+                b.VertexColorUseAsAlbedo = true;
+                n++;
+            }
         }
         return n;
     }

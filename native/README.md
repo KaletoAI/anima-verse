@@ -943,6 +943,9 @@ computes every value of it:
   the same (`Scatter/ScatterShaders.cs`, their nodes on layer 20, n = the shading normal after Godot's back-face flip).
   Models, recipe pieces and figures (StandardMaterial3D) keep the lights. No sky reflection (`ReflectedLightSource.Disabled`), sun/fill `light_specular` 1 (Godot's 0.5 halves the
   directional GGX; omni lights already double theirs), linear tone map (three's NoToneMapping).
+- **Vertex colours**: a primitive with `COLOR_0` multiplies it into its albedo, alpha included, like three's
+  `vertexColors` (`GlbLoader.VertexColours` — Godot 4.7.2 sets the flag only from a mesh's second primitive on); this is
+  what colours the card hair of § A3a (a near-white atlas × `COLOR_0`) and the teeth.
 - **Materials**: Lambert diffuse like three's MeshStandardMaterial on every imported GLB (`GlbLoader.BrowserLook`), the
   scatter, the recipe fallback and the placeholders; GLB meshes and the scatter receive no shadow (three's
   `receiveShadow = false` there — only ground, plates and placeholders receive); the terrain casts none.
