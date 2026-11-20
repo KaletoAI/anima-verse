@@ -2463,7 +2463,8 @@ export class NpcManager {
     // Ruling A158: the clip's root angle is already on the chain the sample was read from.
     const sample = contactSampleOf(ie, ir, rec.hit, rec.pivot);
     if (!sample) return;
-    // Ruling A145: turn the chain at its root on this frame's bones (on top of the root angle: they compose).
+    // Ruling A145: bend the chain on this frame's bones — at its root when raised, at every joint when resting (on top of
+    // the root angle: they compose).
     const b = bendSample(sample, rec.bend).bend;
     if (b) e.figure!.bendChain(rec.hit.chain, b.turns);
   }

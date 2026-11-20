@@ -142,12 +142,12 @@ export function setLabel(set: string, t: (en: string) => string): string {
   return set
 }
 
-/** Ruling A145: bend limits as the server stores them (degrees per joint / in all, per state). */
+/** Ruling A145: bend limits as the server stores them (one total per state, degrees). */
 export interface BendLimitsWire {
   raised: BendStateWire
   resting: BendStateWire
 }
-export interface BendStateWire { joint_deg: number; total_deg: number }
+export interface BendStateWire { total_deg: number }
 /** Ruling A158: the attached part's direct root angle as the server stores it (degrees; pitch + = up toward the
  *  belly, yaw + = the figure's right). */
 export interface RootAngleWire { pitch_deg: number; yaw_deg: number }

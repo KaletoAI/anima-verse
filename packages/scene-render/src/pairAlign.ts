@@ -4,7 +4,7 @@
  * every contact relation of ONE moving figure.
  *
  * RIGID (2026-11-20): Auto-align moves and turns the figure as one rigid body and NEVER bends the attached part —
- * neither in the bounded solve nor in the lamp's free solve. The part's root bend (`chainBend.ts`) is a render step
+ * neither in the bounded solve nor in the lamp's free solve. The part's bend (`chainBend.ts`) is a render step
  * after it; a caller may report what that bend does on the aligned samples (`bendSample`), but every number of the
  * solve and of `phaseRow` is the rigid one.
  *

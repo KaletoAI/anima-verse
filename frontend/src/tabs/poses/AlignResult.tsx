@@ -11,17 +11,17 @@ import type { AutoAlignResult, PhaseAlign } from './PlacePreview'
 type Ok = Extract<AutoAlignResult, { ok: true }>
 const CELL = { textAlign: 'right' as const, padding: '0 4px', whiteSpace: 'nowrap' as const }
 
-/** Ruling A145: "Root bend 8° of max 15°" — what the root bend does on the aligned samples (Auto-align itself is rigid),
+/** Ruling A145: "Bend 8° of max 15°" — what the bend does in all on the aligned samples (Auto-align itself is rigid),
  *  with its lamp: yellow when the limit cut the turn in some frame. */
 export function BendLine({ bend }: { bend: { maxDeg: number; limitDeg: number; atLimit: number; frames: number; lamp: 'green' | 'yellow' } }) {
   const { t } = useI18n()
   return (
     <div data-testid="bend-readout" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
       <LampDot lamp={bend.lamp} title={bend.lamp === 'yellow'
-        ? t('After Auto-align the attached part reaches its root bend limit in {n} of {m} frames: the rest stays as the contact’s error.')
+        ? t('After Auto-align the attached part reaches its bend limit in {n} of {m} frames: the rest stays as the contact’s error.')
           .replace('{n}', String(bend.atLimit)).replace('{m}', String(bend.frames))
-        : t('After Auto-align the attached part turns at its root within its limit in every frame.')} />
-      <span>{t('Root bend {deg}° of max {max}°').replace('{deg}', bend.maxDeg.toFixed(0)).replace('{max}', bend.limitDeg.toFixed(0))}</span>
+        : t('After Auto-align the attached part bends within its limit in every frame.')} />
+      <span>{t('Bend {deg}° of max {max}°').replace('{deg}', bend.maxDeg.toFixed(0)).replace('{max}', bend.limitDeg.toFixed(0))}</span>
     </div>
   )
 }

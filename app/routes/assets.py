@@ -189,7 +189,7 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
     Body ``{kind?, set?, library?, loop?, loop_count?, role_gender?,
     height_offsets_cm?, contact_target?, bend_limits?, root_angle?, align_range_cm?, align_applied?, overwrite?}``, at least one edit field.
     ``bend_limits`` (Ruling A145) is how far the attached part may bend toward its
-    target per state, ``{raised: {joint_deg, total_deg}, resting: {...}}`` (partial =
+    target per state, ``{raised: {total_deg}, resting: {total_deg}}`` (partial =
     completed from the inherited value), ``null`` = inherit.
     ``root_angle`` (Ruling A158) is the attached part's direct root angle ``{pitch_deg: −60..60,
     yaw_deg: −30..30}`` (pitch + = up toward the belly, yaw + = the figure's right); ``null`` / 0 = none.

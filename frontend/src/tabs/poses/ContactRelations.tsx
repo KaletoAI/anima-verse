@@ -70,9 +70,9 @@ export function ContactRelations({ roles, saved, draft, onDraft, onSave, busy }:
   )
 }
 
-/** Ruling A145: the clip's BEND LIMITS in the Contacts panel — how far the attached part may turn at its ROOT toward
- *  its target once its tip is near the opening (`chainBend.ts`; root limit = min(per joint, in all)), per state
- *  (raised: stiff; resting: loose; blended by how far the part is raised). Auto-align never bends. The draft acts on the preview at once; "Save bend limits" stores them in the clip's
+/** Ruling A145: the clip's BEND LIMITS in the Contacts panel — how far the attached part may bend in all toward its
+ *  target once its tip is near the opening (`chainBend.ts`), ONE total per state: raised (stiff) bends only at the
+ *  root, resting (loose) at every joint; blended by how far the part is raised. Auto-align never bends. The draft acts on the preview at once; "Save bend limits" stores them in the clip's
  *  `<kind>.json` (PATCH `bend_limits`), "Use inherited" drops them (package default or the core default). Runs nothing. */
 export interface BendSetting { limits: BendLimitsWire; source: 'clip' | 'package' | 'default' }
 
@@ -100,18 +100,16 @@ export function BendLimitsEditor({ saved, draft, onDraft, onSave, busy }: {
   )
   return (
     <div data-testid="bend-limits" style={{ fontSize: 12, display: 'grid', gap: 3 }}>
-      <div title={t('How far the attached part may turn at its root toward its target once its tip is near the opening; the part itself stays straight and Auto-align never bends it. The root limit is the smaller of the per-joint and the in-all value. Raised is the stiff state, resting the loose one; in between the limit is blended by how far the part is raised.')}>
+      <div title={t('How far the attached part may bend in all toward its target once its tip is near the opening; Auto-align never bends it. Raised is the stiff state: it bends only at its root, the part itself straight. Resting is the loose one: it bends at every joint, shared evenly. In between both the limit and where it bends are blended by how far the part is raised.')}>
         <strong>{t('Bend limits')}</strong> <span style={{ opacity: 0.7 }}>· {sourceText}</span>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'auto auto auto', gap: '2px 8px', alignItems: 'center' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto auto', gap: '2px 8px', alignItems: 'center' }}>
         <span>{t('Raised')}</span>
-        {num('raised', 'joint_deg', 90, t('Most a single joint bends when raised'))}
-        {num('raised', 'total_deg', 360, t('Most the whole part bends when raised'))}
+        {num('raised', 'total_deg', 360, t('Most the whole part bends when raised (at its root only)'))}
         <span>{t('Resting')}</span>
-        {num('resting', 'joint_deg', 90, t('Most a single joint bends when resting'))}
-        {num('resting', 'total_deg', 360, t('Most the whole part bends when resting'))}
+        {num('resting', 'total_deg', 360, t('Most the whole part bends when resting (at every joint)'))}
       </div>
-      <div className="ga-form-hint" style={{ margin: 0 }}>{t('Per joint · in all')}</div>
+      <div className="ga-form-hint" style={{ margin: 0 }}>{t('In all')}</div>
       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
         <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" data-testid="bend-save" disabled={busy || !dirty}
           title={t('Stores the bend limits with the clip (all its sets and halves). Runs nothing; the preview uses them at once.')}
@@ -128,7 +126,7 @@ export function BendLimitsEditor({ saved, draft, onDraft, onSave, busy }: {
 /** Ruling A158: the attached part's DIRECT root angle — two sliders, the preview turns the part at once (no Auto-align,
  *  partner near or far). Pitch: down ← → up toward the belly, about the body's side axis; turn: the figure's left ← →
  *  right, about its up axis. "Save root angle" stores it in the clip's `<kind>.json` (PATCH `root_angle`); every
- *  renderer applies it before the root bend (which turns on top of it), and Auto-align starts from it without changing it. */
+ *  renderer applies it before the bend (which turns on top of it), and Auto-align starts from it without changing it. */
 export function RootAngleEditor({ saved, draft, onDraft, onSave, busy }: {
   saved: RootAngleWire | null | undefined
   draft: RootAngleWire
@@ -159,7 +157,7 @@ export function RootAngleEditor({ saved, draft, onDraft, onSave, busy }: {
   )
   return (
     <div data-testid="root-angle" style={{ fontSize: 12, display: 'grid', gap: 4 }}>
-      <div title={t('Sets the angle of the attached part at its root directly. The preview shows it at once; the root bend near the opening turns on top of this angle, and neither it nor Auto-align changes it.')}>
+      <div title={t('Sets the angle of the attached part at its root directly. The preview shows it at once; the bend near the opening adds to this angle, and neither it nor Auto-align changes it.')}>
         <strong>{t('Root angle')}</strong>
       </div>
       {row('pitch_deg', 60, t('Root pitch'), t('down'), t('up toward the belly'),

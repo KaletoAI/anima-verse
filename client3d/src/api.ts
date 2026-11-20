@@ -608,7 +608,7 @@ export interface ApiClip {
   /** Ruling A139: the contact relations of a pair/group clip (`[]` = automatic channel detection). */
   contact_target?: { relations: { part: string; at: string; target: 'channel' | 'mouth' | 'hand_left' | 'hand_right' | 'none' }[]; source: string } | null;
   /** Ruling A145: how far the attached part may bend toward its target, per state (degrees). */
-  bend_limits?: { limits: { raised: { joint_deg: number; total_deg: number }; resting: { joint_deg: number; total_deg: number } }; source: string } | null;
+  bend_limits?: { limits: { raised: { total_deg: number }; resting: { total_deg: number } }; source: string } | null;
   /** Ruling A158: the attached part's direct root angle (degrees; pitch + = up toward the belly, yaw + = right). */
   root_angle?: { pitch_deg: number; yaw_deg: number } | null;
   /** How the import treated the root's travel (the sidecar's

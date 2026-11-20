@@ -127,6 +127,15 @@ try:
 except Exception as _cte:
     logger.warning("contact target migration failed: %s", _cte)
 
+# Boot migration (2026-11-20, Ruling A145): a clip's bend limits are one total per state (no per-joint value).
+try:
+    from app.core.animation_clips import migrate_bend_limits_total
+    _bl = migrate_bend_limits_total()
+    if _bl:
+        logger.info("Clip bend limits: per-joint values folded into one total per state in %d clip sidecar(s)", _bl)
+except Exception as _ble:
+    logger.warning("bend limits migration failed: %s", _ble)
+
 # Boot migration (2026-11-02): pose field solo -> participants in the world layer.
 from app.core.pose_catalog import migrate_participants_once
 _pm = migrate_participants_once()

@@ -1,14 +1,16 @@
 /**
- * CHAIN BEND (Ruling A145, root-only since 2026-11-20) — the attached part turns at its ROOT toward the contact target,
- * within a limit, once its tip is near the opening; the part itself stays rigid ("the attached part can only bend at
- * its root, nowhere else"). It is a RENDER step, not a lever of Auto-align: Auto-align (`pairAlign.ts`) is rigid and
+ * CHAIN BEND (Ruling A145; owner decision 2026-11-20) — the attached part bends toward the contact target, within ONE
+ * limit per state (the TOTAL turn), once its tip is near the opening. WHERE it bends depends on the state: a stiff
+ * (raised) part bends only at its ROOT, the shaft rigid; a part that is not stiff (resting) may bend at every joint;
+ * in between it blends continuously by the chain's raised fraction r. It is a RENDER step, not a lever of Auto-align: Auto-align (`pairAlign.ts`) is rigid and
  * only reports what this bend does afterwards. One geometry for both renderers: the place preview's per-frame bend and
  * client3d's per-frame bend call `bendSample` (`pairFit.ts`) → `solveChainBend` on the same `FigureRuntime.inspect()`
  * chain, and `FigureRuntime.bendChain` applies the result to the bones the same way in both.
  *
  * THE CHAIN (world metres): the attached-part chain's points P_0 … P_n — P_i the joint of link i (`opChains` segment
- * a), P_n the last link's tip. The ONLY bend joint is the root P_0: one turn D about P_0 moves P_1 … P_n rigidly
- * (the shaft keeps its shape; no joint past the root ever bends).
+ * a; one per SIMULATED link: a group's `rigid_tail` links are no particles, so they have no point and no joint of
+ * their own and ride on the last link), P_n the last link's tip. The bend joints are P_0 … P_{n−1}; joint j turns the
+ * points past it about P_j (applied root-most first, each after its parents moved — `SecondaryMotion.bendChain`).
  *
  * THE TARGET (a channel or a point target, opening/point O, unit axis u, s(E) = (E − O)·u the axial coordinate):
  * every effector point E is pulled onto the axis LINE at its own axial coordinate, G(E) = O + u · s(E) — the turn
@@ -18,17 +20,30 @@
  * and inside. On a rigid shaft that lays the part ALONG the axis the deeper it is in (not only its tip on the line),
  * and since every weight is continuous in the geometry there is no follow switch that could jump.
  *
- * THE SOLVE (`solveChainBend`): a fixed point at P_0, `BEND_SWEEPS` steps: each effector k asks for the smallest turn
- * r_k (axis (E_k − P_0) × (G_k − P_0), the angle between them); the step is the weighted mean Σ w_k r_k / Σ w_k,
- * composed onto D. Then the LIMIT: the turn D's rotation vector is scaled down to the limit about its own axis when it
- * is longer (a projection, continuous in the input).
+ * THE DISTRIBUTION (by state, `bendShares`): the chain's turn is ONE rotation vector ω (the TOTAL turn |ω|), handed to
+ * the joints in fixed shares c_j that sum to 1 — joint j turns by c_j·ω, so the per-joint angles add up to |ω|:
+ *   inner joints (1 ≤ j ≤ n−1): c_j = (1 − r) / n each;   the root: c_0 = 1 − (n − 1)(1 − r) / n.
+ * r = 1 (raised): c_0 = 1, the root alone — the rigid shaft, solved by exactly the root-only code of before (bit for
+ * bit). r = 0 (resting): every joint 1/n — a uniform arc, the root included, no inner joint taking more than another.
+ * In between linear in r, without a jump. The joints past the root together use (n − 1)(1 − r)/n · |ω| ≤ (1 − r)·L;
+ * the root the rest, |ω| minus what they use.
  *
- * THE LIMIT: one root angle L. The stored limits keep their shape ({raised, resting} × {jointDeg, totalDeg}, sidecar
- * keys `joint_deg` / `total_deg`, no migration); at the chain's raised fraction (`bendLimitAt`: `raised` ∈ [0, 1] is
- * the chain's straightening fraction, `SecondaryMotion.opChains().raised`, linear blend resting → raised) the root
- * limit is min(jointDeg, totalDeg) — the root is the one joint AND the whole bend (`rootBendLimitDeg`). Defaults
- * `BEND_LIMITS_DEFAULT`: raised 15° / 35°, resting 45° / 120° → root 15° raised, 45° resting; a package defaults its
- * clip kinds (capability `clip_bend_limit_defaults`), a clip overrides in the Poses tab.
+ * THE SOLVE (`solveChainBend`): a fixed point on ω, `BEND_SWEEPS` steps: each effector k asks for the smallest turn
+ * r_k about P_0 (axis (E_k − P_0) × (G_k − P_0), the angle between them); the step is the weighted mean
+ * Σ w_k r_k / Σ w_k, composed onto ω. With the root alone (r = 1) a turn of ω IS that rigid turn; with shares the
+ * effector moves less per unit of ω (an arc's chord turns slower than its links), so the step is divided by the
+ * weighted chord GAIN ḡ = Σ w_k g_k / Σ w_k, g_k = Σ_{j<k} c_j |P_k − P_j| / |P_k − P_0| on the chain as handed in (1
+ * for the root alone; exact for small turns of a straight chain). Then the LIMIT: ω is scaled down to the limit about
+ * its own axis when it is longer (a projection). Weights, gains, step and projection are continuous in the input and
+ * in r, so the bend is too.
+ *
+ * THE LIMIT: one TOTAL per state (`BendLimits` {raised, resting} × {totalDeg}, sidecar key `total_deg`). At the
+ * chain's raised fraction (`bendLimitAt`: `raised` ∈ [0, 1] is the chain's straightening fraction,
+ * `SecondaryMotion.opChains().raised`, linear blend resting → raised) it is L(r), the most the whole chain turns — Σ of
+ * every joint's angle. Defaults `BEND_LIMITS_DEFAULT`: raised 15°, resting 120°; a package defaults its clip kinds
+ * (capability `clip_bend_limit_defaults`), a clip overrides in the Poses tab. (Before 2026-11-20 each state also had
+ * a per-joint value; the stored sidecars were migrated once: raised total = min(old joint, old total) — what the
+ * root-only bend used — and resting total = the old total, `animation_clips.migrate_bend_limits_total`.)
  *
  * THE DISTANCE GATE: the limit is scaled by gate(s_tip) = clamp((s_tip + `BEND_REACH_M`) / (`BEND_REACH_M` −
  * `BEND_NEAR_M`), 0, 1) on the chain as handed in — no turn at all while the tip is `BEND_REACH_M` (8 cm) or more in
@@ -50,27 +65,33 @@
  *
  * THE LAMP (`bendLamp`): yellow when the solve wanted more than the (gated) limit — the projection cut the turn, the
  * rest of the error stays visible; green otherwise.
+ *
+ * THE HAND CASE (`scripts/smoke_chain_bend.mjs` [12]): a straight chain of 4 links of 3 cm along +x, a point target
+ * whose axis line runs parallel at 1 cm (tip on the opening), r = 0: every joint turns by φ about +z, link k points at
+ * (k+1)φ, and the tip lands on the line when 0.03·Σ_{k=1..4} sin kφ = 0.01 — φ ≈ 1.910° (small angle: 0.3φ = 0.01), a
+ * total of 4φ ≈ 7.64° against the root alone's asin(1/12) = 4.78°.
  */
 import type { Vec3 } from './collision'
 
-export interface BendLimit { jointDeg: number; totalDeg: number }
+/** One state's limit: the most the whole chain turns, Σ of every joint's angle (degrees). */
+export interface BendLimit { totalDeg: number }
 /** Ruling A158: a clip's direct root angle (degrees): pitch + up toward the belly, yaw + the figure's right. */
 export interface RootAngle { pitchDeg: number; yawDeg: number }
 export interface BendLimits { raised: BendLimit; resting: BendLimit }
 export type Quat = [number, number, number, number]
 
 export const BEND_LIMITS_DEFAULT: BendLimits = Object.freeze({
-  raised: Object.freeze({ jointDeg: 15, totalDeg: 35 }),
-  resting: Object.freeze({ jointDeg: 45, totalDeg: 120 }),
+  raised: Object.freeze({ totalDeg: 15 }),
+  resting: Object.freeze({ totalDeg: 120 }),
 }) as BendLimits
 /** Ruling A158: the slider ranges of the root angle (degrees, either way). */
 export const ROOT_PITCH_MAX_DEG = 60
 export const ROOT_YAW_MAX_DEG = 30
-/** Steps of the root's fixed point (module docstring THE SOLVE). */
+/** Steps of the fixed point (module docstring THE SOLVE). */
 export const BEND_SWEEPS = 24
 /** The full limit applies from this far before the opening on (metres; also the channel joints' weight ramp). */
 export const BEND_NEAR_M = 0.03
-/** No root bend while the tip is this far or farther before the opening (metres; module docstring THE DISTANCE GATE). */
+/** No bend while the tip is this far or farther before the opening (metres; module docstring THE DISTANCE GATE). */
 export const BEND_REACH_M = 0.08
 
 const sub = (p: Vec3, q: Vec3): Vec3 => [p[0] - q[0], p[1] - q[1], p[2] - q[2]]
@@ -104,16 +125,21 @@ export function quatAngle(q: Quat): number {
   return 2 * Math.acos(Math.min(1, Math.abs(q[3])))
 }
 
-/** The limit at the chain's raised fraction (module docstring THE LIMITS). */
-export function bendLimitAt(limits: BendLimits, raised: number): BendLimit {
-  const r = Math.max(0, Math.min(1, Number.isFinite(raised) ? raised : 0))
-  const mix = (k: keyof BendLimit) => (limits.resting[k] ?? 0) + ((limits.raised[k] ?? 0) - (limits.resting[k] ?? 0)) * r
-  return { jointDeg: mix('jointDeg'), totalDeg: mix('totalDeg') }
+const clamp01 = (v: number) => Math.max(0, Math.min(1, Number.isFinite(v) ? v : 0))
+
+/** The total limit (degrees, ≥ 0) at the chain's raised fraction (module docstring THE LIMIT). */
+export function bendLimitAt(limits: BendLimits, raised: number): number {
+  const r = clamp01(raised)
+  const lo = limits.resting.totalDeg ?? 0, hi = limits.raised.totalDeg ?? 0
+  return Math.max(0, lo + (hi - lo) * r)
 }
 
-/** The root limit (degrees) of a limit at the raised blend: min(jointDeg, totalDeg) (module docstring THE LIMIT). */
-export function rootBendLimitDeg(limit: BendLimit): number {
-  return Math.max(0, Math.min(limit.jointDeg, limit.totalDeg))
+/** The shares c_0 … c_{n−1} of the total turn per joint for a chain of n links at raised fraction r (module docstring
+ *  THE DISTRIBUTION): inner joints (1 − r)/n each, the root the rest; they sum to 1. */
+export function bendShares(n: number, raised: number): number[] {
+  if (n < 1) return []
+  const inner = (1 - clamp01(raised)) / n
+  return [1 - (n - 1) * inner, ...Array.from({ length: n - 1 }, () => inner)]
 }
 /** The distance gate at the tip's axial coordinate s_tip (metres, − = before the opening): 0 … 1 (module docstring). */
 export function bendGate(sTip: number): number {
@@ -124,34 +150,48 @@ export function bendGate(sTip: number): number {
 export interface BendResult {
   /** The bent points P'_0 … P'_n (P'_0 = P_0). */
   points: Vec3[]
-  /** The one root turn {joint: 0, q} (world axes, about P_0) — empty when nothing turns. */
+  /** Every joint that turns, root first: {joint j, q} — its turn relative to its parent link, world axes, applied about
+   *  P_j after its parents moved. Only the root at r = 1; empty when nothing turns. */
   turns: { joint: number; q: Quat }[]
-  /** The root turn applied, the turn the solve wanted, the gated limit and the full (ungated) root limit (degrees). */
+  /** The total turn applied (Σ of every joint's angle), the turn the solve wanted, the gated total limit and the full
+   *  (ungated) total limit (degrees). */
   deg: number
   wantDeg: number
   limitDeg: number
   maxDeg: number
   /** The distance gate 0 … 1 the limit was scaled by. */
   gate: number
+  /** Of `deg`: the root's own turn and what the joints past it use together (degrees). */
+  rootDeg: number
+  innerDeg: number
   /** The projection cut the turn (the solve wanted more than the gated limit). */
   atLimit: boolean
 }
 /** The entering figure's body axes (world unit vectors) the root angle turns about. */
 export interface BendFrame { side: Vec3; up: Vec3 }
 
-/** Turn `points` at P_0 toward the axis line through `o` along unit `u` (module docstring THE SOLVE). `channel` adds the
- *  joints as weighted effectors. A limit of 0, or a tip at or beyond `BEND_REACH_M` before the opening, returns the
- *  chain unbent. */
-export function solveChainBend(points: readonly Vec3[], o: Vec3, u: Vec3, limit: BendLimit,
-  opts: { channel?: boolean; sweeps?: number } = {}): BendResult {
+/** The rotation vector (axis · angle, angle ≤ π) of a unit quaternion. */
+function rotVecOf(q: Quat): Vec3 {
+  const sh = Math.sqrt(Math.max(0, 1 - q[3] * q[3]))
+  if (sh < 1e-12) return [0, 0, 0]
+  return mul([q[0], q[1], q[2]], ((q[3] < 0 ? -1 : 1) * quatAngle(q)) / sh)
+}
+
+/** Bend `points` toward the axis line through `o` along unit `u` (module docstring THE DISTRIBUTION, THE SOLVE) within
+ *  the total limit `limitDeg` (degrees, before the gate). `channel` adds the joints as weighted effectors; `raised`
+ *  (0 … 1, default 1 = the root alone) is the chain's raised fraction r. A limit of 0, or a tip at or beyond
+ *  `BEND_REACH_M` before the opening, returns the chain unbent. */
+export function solveChainBend(points: readonly Vec3[], o: Vec3, u: Vec3, limitDeg: number,
+  opts: { channel?: boolean; raised?: number; sweeps?: number } = {}): BendResult {
   const P = points.map((p) => [p[0], p[1], p[2]] as Vec3)
   const n = P.length - 1
-  const maxDeg = rootBendLimitDeg(limit)
+  const maxDeg = Math.max(0, Number.isFinite(limitDeg) ? limitDeg : 0)
   const s = (e: Vec3) => dot(sub(e, o), u)
   const gate = n >= 1 ? bendGate(s(P[n])) : 0
-  const limitDeg = maxDeg * gate
-  const none: BendResult = { points: P, turns: [], deg: 0, wantDeg: 0, limitDeg, maxDeg, gate, atLimit: false }
-  if (n < 1 || !(limitDeg > 0)) return none
+  const limDeg = maxDeg * gate
+  const none: BendResult = { points: P, turns: [], deg: 0, wantDeg: 0, limitDeg: limDeg, maxDeg, gate, atLimit: false,
+    rootDeg: 0, innerDeg: 0 }
+  if (n < 1 || !(limDeg > 0)) return none
   const p0 = P[0]
   // The effectors and their weights, fixed on the chain as handed in.
   const eff: { k: number; w: number }[] = [{ k: n, w: 1 }]
@@ -163,10 +203,8 @@ export function solveChainBend(points: readonly Vec3[], o: Vec3, u: Vec3, limit:
   }
   const wsum = eff.reduce((a, e) => a + e.w, 0)
   const onAxis = (e: Vec3): Vec3 => add(o, mul(u, s(e)))
-  const turned = (q: Quat) => P.map((p, k) => (k === 0 ? p : add(p0, quatRotate(q, sub(p, p0)))))
-  let D: Quat = [0, 0, 0, 1]
-  let Q = P
-  for (let it = 0; it < (opts.sweeps ?? BEND_SWEEPS); it++) {
+  /** The weighted mean of the effectors' smallest turns about P_0 on the posed chain Q (module docstring THE SOLVE). */
+  const stepOf = (Q: readonly Vec3[]): Vec3 => {
     let w: Vec3 = [0, 0, 0]
     for (const { k, w: wk } of eff) {
       const a = sub(Q[k], p0), b = sub(onAxis(Q[k]), p0)
@@ -177,23 +215,73 @@ export function solveChainBend(points: readonly Vec3[], o: Vec3, u: Vec3, limit:
       const ang = Math.atan2(lc, dot(a, b))
       w = add(w, mul(c, (ang / lc) * (wk / wsum)))
     }
-    if (len(w) < 1e-12) break
-    D = quatMul(quatOf(w), D)
-    Q = turned(D)
+    return w
   }
-  // The limit: the rotation vector of D scaled down to the gated limit about its own axis.
-  const want = quatAngle(D)
-  const lim = limitDeg * DEG
+  const sweeps = opts.sweeps ?? BEND_SWEEPS
+  const lim = limDeg * DEG
+  const r = opts.raised === undefined ? 1 : clamp01(opts.raised)
+  if (r >= 1 || n < 2) {
+    // THE ROOT ALONE (r = 1, or a single link): one rigid turn D about P_0.
+    const turned = (q: Quat) => P.map((p, k) => (k === 0 ? p : add(p0, quatRotate(q, sub(p, p0)))))
+    let D: Quat = [0, 0, 0, 1]
+    let Q = P
+    for (let it = 0; it < sweeps; it++) {
+      const w = stepOf(Q)
+      if (len(w) < 1e-12) break
+      D = quatMul(quatOf(w), D)
+      Q = turned(D)
+    }
+    // The limit: the rotation vector of D scaled down to the gated limit about its own axis.
+    const want = quatAngle(D)
+    if (!(want > 1e-12)) return { ...none, wantDeg: 0 }
+    if (want > lim) {
+      const sh = Math.sqrt(Math.max(0, 1 - D[3] * D[3]))
+      const axis: Vec3 = sh > 1e-12 ? mul([D[0], D[1], D[2]], (D[3] < 0 ? -1 : 1) / sh) : [0, 0, 0]
+      D = quatOf(mul(axis, lim))
+      Q = turned(D)
+    }
+    const deg = quatAngle(D) / DEG
+    return { points: Q, turns: [{ joint: 0, q: D }], deg, wantDeg: want / DEG, limitDeg: limDeg, maxDeg, gate,
+      atLimit: want > lim + 1e-9, rootDeg: deg, innerDeg: 0 }
+  }
+  // SHARES (r < 1): joint j turns by c_j·ω, root-most first, each about its joint as its parents left it.
+  const c = bendShares(n, r)
+  const pose = (om: Vec3): Vec3[] => {
+    const Q = P.map((p) => [p[0], p[1], p[2]] as Vec3)
+    for (let j = 0; j < n; j++) {
+      const q = quatOf(mul(om, c[j]))
+      for (let k = j + 1; k <= n; k++) Q[k] = add(Q[j], quatRotate(q, sub(Q[k], Q[j])))
+    }
+    return Q
+  }
+  // The weighted chord gain (module docstring THE SOLVE), on the chain as handed in.
+  let gain = 0
+  for (const { k, w } of eff) {
+    const rk = len(sub(P[k], p0))
+    if (rk < 1e-9) continue
+    let g = 0
+    for (let j = 0; j < k; j++) g += c[j] * len(sub(P[k], P[j]))
+    gain += (w / wsum) * (g / rk)
+  }
+  if (!(gain > 1e-6)) gain = 1
+  let om: Vec3 = [0, 0, 0]
+  let Q = P
+  for (let it = 0; it < sweeps; it++) {
+    const w = stepOf(Q)
+    if (len(w) < 1e-12) break
+    om = rotVecOf(quatMul(quatOf(mul(w, 1 / gain)), quatOf(om)))
+    Q = pose(om)
+  }
+  const want = len(om)
   if (!(want > 1e-12)) return { ...none, wantDeg: 0 }
   if (want > lim) {
-    const sh = Math.sqrt(Math.max(0, 1 - D[3] * D[3]))
-    const axis: Vec3 = sh > 1e-12 ? mul([D[0], D[1], D[2]], (D[3] < 0 ? -1 : 1) / sh) : [0, 0, 0]
-    D = quatOf(mul(axis, lim))
-    Q = turned(D)
+    om = mul(om, lim / want)
+    Q = pose(om)
   }
-  const deg = quatAngle(D) / DEG
-  return { points: Q, turns: [{ joint: 0, q: D }], deg, wantDeg: want / DEG, limitDeg, maxDeg, gate,
-    atLimit: want > lim + 1e-9 }
+  const total = len(om)
+  const turns = c.map((cj, joint) => ({ joint, q: quatOf(mul(om, cj)) })).filter((_, j) => c[j] > 0)
+  return { points: Q, turns, deg: total / DEG, wantDeg: want / DEG, limitDeg: limDeg, maxDeg, gate,
+    atLimit: want > lim + 1e-9, rootDeg: (c[0] * total) / DEG, innerDeg: ((1 - c[0]) * total) / DEG }
 }
 
 /** Ruling A158 (module docstring THE ROOT ANGLE): the root turn of `angle` for the chain `points` (P_0 … P_n, world)
@@ -237,12 +325,12 @@ export function bendLamp(r: { atLimit: boolean }): 'green' | 'yellow' {
   return r.atLimit ? 'yellow' : 'green'
 }
 
-/** Read a stored/declared limits object ({raised: {joint_deg, total_deg}, resting: …}, degrees) over the defaults. */
+/** Read a stored/declared limits object ({raised: {total_deg}, resting: {total_deg}}, degrees) over the defaults. */
 export function bendLimitsOf(v: unknown, fallback: BendLimits = BEND_LIMITS_DEFAULT): BendLimits {
   const one = (x: unknown, d: BendLimit): BendLimit => {
     const o = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>
-    const num = (k: string, dv: number) => (typeof o[k] === 'number' && Number.isFinite(o[k] as number) ? o[k] as number : dv)
-    return { jointDeg: num('joint_deg', d.jointDeg), totalDeg: num('total_deg', d.totalDeg) }
+    const t = o.total_deg
+    return { totalDeg: typeof t === 'number' && Number.isFinite(t) ? t : d.totalDeg }
   }
   const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>
   return { raised: one(o.raised, fallback.raised), resting: one(o.resting, fallback.resting) }

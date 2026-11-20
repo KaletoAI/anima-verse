@@ -17,8 +17,8 @@
  * W = `CONTACT_ENTRY_WEIGHT` × the frame count — the A126 terms plus the angle term.
  *
  * RIGID (Ruling A145 as of 2026-11-20): the residuals read the samples as measured — the attached part never bends
- * inside the fit. The root bend (`chainBend.ts`) is a render step AFTER the fit: both renderers turn the part's root
- * every frame with the same `bendSample`, and Auto-align reports what that turn does on its aligned samples.
+ * inside the fit. The bend (`chainBend.ts`) is a render step AFTER the fit: both renderers bend the part every frame
+ * with the same `bendSample`, and Auto-align reports what that bend does on its aligned samples.
  *
  * POSTURE (Ruling A150, `postureSupport.ts`): a sample may carry the entering figure's SUPPORT; then every frame adds
  * the residual `POSTURE.weight` · (the support's change beyond the float/sink band), and the fix's turn costs
@@ -41,7 +41,7 @@ import { POSTURE, postureExcess, supportHeight, supportSample, type SupportSampl
 export interface FitSample extends ContactSample {
   pivot: Vec3
   /** Ruling A145: the attached-part chain's points (root joint … tip), its raised fraction and whether the target is a
-   *  channel (the joints near/inside follow its axis) — what `bendSample` turns at the root. Absent = no bend. */
+   *  channel (the joints near/inside follow its axis) — what `bendSample` bends. Absent = no bend. */
   chain?: Vec3[]
   raised?: number
   channel?: boolean
@@ -96,12 +96,13 @@ export function supportDelta(s: FitSample, fix: PairFix): number | null {
   const base = s.support.base ?? supportHeight(s.support.pts, s.support.r)
   return supportHeight(s.support.pts.map((p) => fixPoint(fix, s.pivot, p)), s.support.r) - base
 }
-/** Ruling A145: the sample with its chain turned at the root toward its target within `limits` at its raised fraction
- *  (`chainBend.ts`) — tip and base from the turned chain — and the bend; the sample unchanged (bend null) without a
+/** Ruling A145: the sample with its chain bent toward its target within `limits` at its raised fraction — at the root
+ *  when raised, at every joint when resting (`chainBend.ts`) — tip and base from the bent chain — and the bend; the sample unchanged (bend null) without a
  *  chain. What both renderers apply every frame; never part of the fit. */
 export function bendSample(s: FitSample, limits: BendLimits): { sample: FitSample; bend: BendResult | null } {
   if (!s.chain || s.chain.length < 2) return { sample: s, bend: null }
-  const bend = solveChainBend(s.chain, s.o, s.u, bendLimitAt(limits, s.raised ?? 0), { channel: !!s.channel })
+  const raised = s.raised ?? 0
+  const bend = solveChainBend(s.chain, s.o, s.u, bendLimitAt(limits, raised), { channel: !!s.channel, raised })
   const pts = bend.points
   return { sample: { ...s, chain: pts, tip: pts[pts.length - 1], base: pts[0] }, bend }
 }

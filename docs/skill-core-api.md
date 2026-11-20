@@ -219,20 +219,24 @@ wins; nothing declared = the A126 auto-detection. Core:
 
 ## Clip bend limits — capability `clip_bend_limit_defaults` ✅
 
-Ruling A145 (root-only since 2026-11-20). Every frame in both renderers the attached part turns
-at its ROOT toward its contact target once its tip is near the opening (none from 8 cm before
-it, the full limit from 3 cm); the part itself stays rigid, and Auto-align never bends it. The
-root limit is min(`joint_deg`, `total_deg`), per state: `raised` (the chain's straightened
-state) and `resting`, blended by how far the chain is raised. Core default raised 15°/35°,
-resting 45°/120° (root limit 15° raised, 45° resting); the stored shape is unchanged. A package defaults its kinds
+Ruling A145 (owner decision 2026-11-20). Every frame in both renderers the attached part bends
+toward its contact target once its tip is near the opening (none from 8 cm before it, the full
+limit from 3 cm); Auto-align never bends it. The limit is ONE value per state, the TOTAL turn of the
+chain (`total_deg`, the sum of every joint's angle): `raised` (the chain's straightened state) and
+`resting`, blended by how far the chain is raised. WHERE it bends follows the state: a raised part
+bends only at its root, the shaft rigid; a resting one at every joint, shared evenly; in between
+the joints past the root use at most (1 − raised) of the total (`chainBend.ts` THE DISTRIBUTION).
+Core default raised 15°, resting 120°. A package defaults its kinds
 with `register_provider("clip_bend_limit_defaults", fn, owner="<package id>", multiple=True)`,
-`fn() -> {kind | "*": {"raised": {"joint_deg", "total_deg"}, "resting": {...}}}` (partial = completed
-from the core default; `"*"` = every kind without its own entry). The clip's own `bend_limits` in
-its `<kind>.json` (Poses tab → Alignment → Contacts) wins. Core:
+`fn() -> {kind | "*": {"raised": {"total_deg"}, "resting": {"total_deg"}}}` (partial = completed
+from the core default; `"*"` = every kind without its own entry; any other key, the old `joint_deg`
+included, is refused). The clip's own `bend_limits` in its `<kind>.json` (Poses tab → Alignment →
+Contacts) wins; sidecars that still carried `joint_deg` were rewritten once at boot (raised total =
+min(old joint, old total), resting total = old total). Core:
 `app.core.animation_clips.clip_bend_limits(meta, kind)`, `validate_bend_limits(value, base)`.
 Ruling A158: the part's ROOT is not a limit but a direct per-clip angle, `root_angle`
 `{pitch_deg: −60..60 (+ up toward the belly), yaw_deg: −30..30 (+ the figure's right)}` in the same
-`<kind>.json` (Poses tab sliders, PATCH `root_angle`); every renderer applies it before the root bend,
+`<kind>.json` (Poses tab sliders, PATCH `root_angle`); every renderer applies it before the bend,
 which turns on top of it (the two compose), and no solve changes it. A package has no say in it. Core: `clip_root_angle(meta)`, `validate_root_angle(value)`.
 
 ## Strict conditions and held snapshots — `app.core.activity_engine`

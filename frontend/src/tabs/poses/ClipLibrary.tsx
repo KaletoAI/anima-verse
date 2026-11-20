@@ -1738,6 +1738,6 @@ function dialKey(shift: readonly number[], turn: readonly number[], roles: Recor
 
 /** Ruling A145: the core default of the bend limits (the server's `BEND_LIMITS_DEFAULT`), until the listing says. */
 const BEND_WIRE_DEFAULT: BendLimitsWire = {
-  raised: { joint_deg: 15, total_deg: 35 },
-  resting: { joint_deg: 45, total_deg: 120 },
+  raised: { total_deg: 15 },
+  resting: { total_deg: 120 },
 }

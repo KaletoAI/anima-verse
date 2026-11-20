@@ -2064,12 +2064,13 @@ def set_clip_contact_target(library: str, rel: str, relations: Any) -> List[Dict
     return [_view_of(p, cset, library) for p in _kind_files(path.parent, kind)]
 
 
-#: Ruling A145: the core default of how far an attached part may bend toward its contact target before the
-#: pair fit moves the partner, per state (degrees per joint / in all); a raised state is much stiffer.
-BEND_LIMITS_DEFAULT = {"raised": {"joint_deg": 15.0, "total_deg": 35.0},
-                       "resting": {"joint_deg": 45.0, "total_deg": 120.0}}
+#: Ruling A145 (owner decision 2026-11-20): the core default of how far an attached part may bend toward its contact
+#: target, ONE value per state — the TOTAL turn of the chain (degrees, the sum of every joint's angle). Where it bends
+#: follows the state: raised (stiff) only at the root, resting (loose) at every joint (``chainBend.ts``).
+BEND_LIMITS_DEFAULT = {"raised": {"total_deg": 15.0},
+                       "resting": {"total_deg": 120.0}}
 #: Each limit key and its upper bound (degrees).
-BEND_LIMIT_KEYS = (("joint_deg", 90.0), ("total_deg", 360.0))
+BEND_LIMIT_KEYS = (("total_deg", 360.0),)
 BEND_STATES = ("raised", "resting")
 #: Hook capability a package registers to default the bend limits of its clip kinds
 #: (``fn() -> {kind: limits}``, ``multiple=True``; ``"*"`` = every kind without its own entry);
@@ -2078,10 +2079,10 @@ BEND_LIMIT_DEFAULTS_CAPABILITY = "clip_bend_limit_defaults"
 
 
 def validate_bend_limits(value: Any, base: Optional[Dict[str, Dict[str, float]]] = None) -> Dict[str, Dict[str, float]]:
-    """Ruling A145: a clip's BEND LIMITS — ``{"raised": {"joint_deg", "total_deg"}, "resting": {...}}``.
+    """Ruling A145: a clip's BEND LIMITS — ``{"raised": {"total_deg"}, "resting": {"total_deg"}}``.
 
     Partial input is completed from ``base`` (default: :data:`BEND_LIMITS_DEFAULT`). Every value is a
-    finite number, ``joint_deg`` 0–90, ``total_deg`` 0–360 (0 = the part stays rigid in that state).
+    finite number, ``total_deg`` 0–360 (0 = the part stays rigid in that state); any other key is refused.
     """
     import math
     base = base or BEND_LIMITS_DEFAULT
@@ -2185,6 +2186,63 @@ def set_clip_bend_limits(library: str, rel: str, limits: Any) -> List[Dict[str, 
     logger.info("clip bend limits: %s%s (%s) -> %s", f"{cset}/" if cset else "", kind, library,
                 data.get("bend_limits") or "inherited")
     return [_view_of(p, cset, library) for p in _kind_files(path.parent, kind)]
+
+
+def _bend_limits_total(value: Any) -> Any:
+    """One stored ``bend_limits`` value in the one-total-per-state shape (owner decision 2026-11-20), or the value
+    itself when it holds no per-joint key. Per state: raised ``total_deg`` = min(old ``joint_deg``, old
+    ``total_deg``) — what the root-only bend actually used — or the one of them that is there; resting
+    ``total_deg`` = the old ``total_deg`` (a resting row with only a ``joint_deg`` is dropped: it inherits, as its
+    total did). Every other key of a row (the dead A150 ``root_*_deg``) goes with it; an emptied row or value is
+    dropped (``None`` = inherit)."""
+    if not isinstance(value, dict) or not any(
+            isinstance(row, dict) and "joint_deg" in row for row in value.values()):
+        return value
+    out: Dict[str, Any] = {}
+    for state, row in value.items():
+        if not isinstance(row, dict):
+            out[state] = row
+            continue
+        nums = {k: row[k] for k in ("joint_deg", "total_deg")
+                if isinstance(row.get(k), (int, float)) and not isinstance(row.get(k), bool)}
+        if state == "raised" and nums:
+            out[state] = {"total_deg": float(min(nums.values()))}
+        elif "total_deg" in nums:
+            out[state] = {"total_deg": float(nums["total_deg"])}
+    return out or None
+
+
+def migrate_bend_limits_total() -> int:
+    """Boot migration (2026-11-20, Ruling A145): every ``<kind>.json`` of both libraries whose ``bend_limits`` still
+    carry a per-joint value is rewritten to one total per state (:func:`_bend_limits_total`). Idempotent; returns how
+    many files changed."""
+    changed = 0
+    for library in LIBRARIES:
+        try:
+            root = library_root(library)
+        except Exception:  # noqa: BLE001 — a library that is not configured has nothing to migrate
+            continue
+        if not root.is_dir():
+            continue
+        for sidecar in sorted(root.rglob("*.json")):
+            try:
+                data = json.loads(sidecar.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(data, dict) or "bend_limits" not in data:
+                continue
+            new = _bend_limits_total(data["bend_limits"])
+            if new is data["bend_limits"]:
+                continue
+            if new is None:
+                data.pop("bend_limits", None)
+            else:
+                data["bend_limits"] = new
+            _write_json_atomic(sidecar, data)
+            changed += 1
+    if changed:
+        reload_clip_caches()
+    return changed
 
 
 #: Ruling A158: the attached part's DIRECT root angle per pair clip (degrees): pitch about the body's side axis

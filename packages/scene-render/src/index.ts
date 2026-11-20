@@ -277,7 +277,7 @@ export type { AlignCap, AlignLamp, AlignProblem, AlignSolution, PhaseRow } from 
 export { POSTURE, SUPPORT_CAPSULES, POSTURE_ANGLE_CAP_DEG, postureAngleCapDeg, supportSample, supportHeight, postureExcess,
   postureReport } from './postureSupport'
 export type { SupportSample, PostureReport } from './postureSupport'
-export { solveChainBend, bendLimitAt, bendLimitsOf, rootBendLimitDeg, bendGate, bendLamp, quatOf, quatMul, quatRotate, quatAngle,
+export { solveChainBend, bendLimitAt, bendLimitsOf, bendShares, bendGate, bendLamp, quatOf, quatMul, quatRotate, quatAngle,
   rootTurnOf, rootAngleOf, bodyFrameOf, ROOT_PITCH_MAX_DEG, ROOT_YAW_MAX_DEG, BEND_LIMITS_DEFAULT, BEND_SWEEPS, BEND_NEAR_M, BEND_REACH_M } from './chainBend'
 export type { BendLimit, BendLimits, BendResult, BendFrame, RootAngle, Quat as BendQuat } from './chainBend'
 export type { FitSample, PairFix, FitOptions, ClearLamp } from './pairFit'

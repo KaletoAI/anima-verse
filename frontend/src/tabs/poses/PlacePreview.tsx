@@ -19,7 +19,7 @@
  *   read-only with a link to its entry (D2).
  *
  * * Icon toggles "Collision", "Channels" and "Partner see-through" (Ruling A212; off by default, remembered per browser
- *   user in localStorage) only change what is DRAWN — the sim always runs them, as in the game. The root bend of the
+ *   user in localStorage) only change what is DRAWN — the sim always runs them, as in the game. The bend of the
  *   attached part always runs, exactly as in the game. Collision and Channels draw each figure's capsules as other
  *   figures engage them (pairs of two figures that overlap drawn red, the deepest pair in mm), and each channel with
  *   its opening (a ring at the mouth while a partner chain occupies it; who engages whom, w, opening radius in mm).
@@ -265,7 +265,7 @@ export interface RelationAlign { by: string; of: string; channel: string; target
       lampBefore: ContactLamp; lamp: ContactLamp
       /** Ruling A212: the five phases (start, ¼, ½, ¾, end) before and after. */
       phases: PhaseAlign[]
-      /** Ruling A145: what the root bend does on the aligned samples (Auto-align itself is rigid; null = no chain). */
+      /** Ruling A145: what the bend does on the aligned samples (Auto-align itself is rigid; null = no chain). */
       bend: BendReadout | null
       /** Ruling A150: the moving figure's support before/after against its own posture (null = none read), and why the
        *  contact lamp is not green when the posture held it back. */
@@ -1011,13 +1011,13 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             chain: w.chain?.map((p) => toStageP(p)), raised: w.raised, channel: w.channel,
             ...(support ? { support } : {}) }
         }
-        // ── Ruling A145: the attached part turns at its ROOT toward its target near the opening (`chainBend.ts`) — a render
-        // step every frame; Auto-align is rigid and only reports it afterwards. ──
+        // ── Ruling A145: the attached part bends toward its target near the opening — at its root when raised, at every
+        // joint when resting (`chainBend.ts`) — a render step every frame; Auto-align is rigid and only reports it afterwards. ──
         /** The bend limits in force: the clip's draft (or the default) — the part always bends, as in the game (A212). */
         const bendLimitsNow = (): BendLimits | null => draftRef.current.bendLimits ?? BEND_LIMITS_DEFAULT
-        /** The root bend a stage sample gets when rendered (null without limits or a chain). */
+        /** The bend a stage sample gets when rendered (null without limits or a chain). */
         const bendOf = (smp: FitSample, lim: BendLimits | null): BendResult | null => (lim ? bendSample(smp, lim).bend : null)
-        /** Turn the entering figure's chain bones of this frame at the root (world; the same solve as `bendOf`). */
+        /** Bend the entering figure's chain bones of this frame (world; the same solve as `bendOf`). */
         const bendBones = (res: NonNullable<ReturnType<typeof placePhaseB>>, hit: Hit, lim: BendLimits | null): BendResult | null => {
           if (!lim) return null
           const ie = res.figures[hit.e].inspection, ir = res.figures[hit.r].inspection
@@ -1283,7 +1283,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             ?? clips.find((c) => c.role === 'a')?.align_range?.cm)
           const rangeCm = Math.round(cap.forwardM * 1000) / 10
           // Auto-align is RIGID: the contact report and the phase rows read the samples as solved (no bend); only the
-          // bend readout below says what the root bend does on the aligned samples afterwards.
+          // bend readout below says what the bend does on the aligned samples afterwards.
           const rep = (smps: readonly FitSample[]) => contactReport(smps)
           const phaseRows = (smps: readonly PhasedSample[]) => pickPhases(smps).map((x) => (x ? phaseRow(x, x.phase) : null))
           const cm = (v: number) => Math.round(v * 1000) / 10
