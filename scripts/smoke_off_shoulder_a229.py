@@ -22,8 +22,10 @@ LACE_GAP_M 0.03, the PARAM_SPEC defaults band_m 0.025, band_drop_m 0.05, lace_de
 [4] tsig: a covered top keys the same with and without the off-shoulder fields in its params (the A229 fields
     never re-key an existing drape); two off-shoulder tops differing only in band_m key differently.
 [5] the preview (garment_preview.shapes) on the A188 synthetic picture (200 px/m, feet row 380, centre column 100,
-    x0 = 0): the body fill's top row = 380 - 1.395 x 200 = 101.0; the band edge runs from column
-    100 - (0.18 + 0.07) x 200 = 50 to 150 on row 101; the dashed band 0.025 lower = row 106; with lacing 0.2 the
+    x0 = 0): the body fill's top row = 380 - 1.395 x 200 = 101.0; the band crosses each upper arm ``arm_out_m`` out
+    from its shoulder joint (the builder's ``_off_arm_lat``) — without arm joints the joint stands at shoulder_w / 2 -
+    0.04 = 0.14 (``shoulder_w`` = the joints' distance + 8 cm) — so the band edge runs from column
+    100 - (0.14 + 0.07) x 200 = 58 to 142 on row 101; the dashed band 0.025 lower = row 106; with lacing 0.2 the
     lacing cut's bottom row = 380 - 1.195 x 200 = 141, its top half width 0.015 x 200 = 3 px (columns 97 / 103).
 [6] the LLM template names "off_shoulder", "Carmen", "Bardot", "lacing"; de.json and figureModel.ts carry the labels.
 """
@@ -110,7 +112,7 @@ for s in out["shapes"]:
 body_top = min(q[1] for q in by["body"][0]["points"])
 check("[5] body top row 101", close(body_top, 101.0, 0.11), str(body_top))
 edge = by["band_edge"][0]["points"]
-check("[5] band edge 50..150 row 101", close(edge[0][0], 50, 0.11) and close(edge[1][0], 150, 0.11)
+check("[5] band edge 58..142 row 101", close(edge[0][0], 58, 0.11) and close(edge[1][0], 142, 0.11)
       and close(edge[0][1], 101, 0.11), str(edge))
 check("[5] band dash row 106", close(by["band"][0]["points"][0][1], 106, 0.11), str(by["band"][0]["points"]))
 lace = by["lacing"][0]["points"]

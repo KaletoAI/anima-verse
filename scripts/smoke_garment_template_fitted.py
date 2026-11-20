@@ -147,9 +147,10 @@ for it, want in ((item("Schuppen-BH", ["top", "underwear_top"]), "bra"), (item("
                  (item("Silk blouse", ["top"]), "top"), (item("Leather bustier", ["top"]), "top"),
                  (item("Lace", ["underwear_top"]), "bra")):
     check(f"[R4] default_kind {it['name']} -> {want}", gt.default_kind(it) == want, gt.default_kind(it))
-# [R5] drawing: molded with thin straps = band + 2 cups + 2 straps; a bandeau = band + 1 band-cup + 2 straps
+# [R5] drawing: molded with thin straps and the default narrow gore = band + 2 cups + gore + 2 straps; a bandeau (no
+# gore) = band + 1 band-cup + 2 straps
 n = len([s for s in gp.shapes(bra(), M, Reg())["shapes"] if s["kind"] == "fill"])
-check("[R5] molded bra: 5 fills", n == 5, n)
+check("[R5] molded bra: 6 fills", n == 6, n)
 n = len([s for s in gp.shapes(bra(cup_style="bandeau"), M, Reg())["shapes"] if s["kind"] == "fill"])
 check("[R5] bandeau: 4 fills", n == 4, n)
 
