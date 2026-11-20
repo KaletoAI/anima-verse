@@ -2101,8 +2101,7 @@ eine andere `body`-Frisur als die des Grundkörpers ist eine eigene Körperform.
   tube of 8 sides around the neck curve measured on the plain body (1.7 mm + the tube radius off the skin), skinned
   with the blended weights of the nearest body vertices; material metallic 1.0, the item's metal as
   `baseColorFactor` (linear), no texture. Built on the CPU (`accessory_build`, 0 hub jobs), stored per character
-  under `jewellery/<item>_<asig>.npz`; a metal change re-assembles only. It hides nothing (no cut of the body, no
-  painted region) and gets NO collision capsules (`garmentCapsules` returns `[]` for `kind` `accessory`) — it rides
+  under `jewellery/<item>_<asig>.npz`; a metal change re-assembles only. It hides nothing (no cut of the body) and gets NO collision capsules (`garmentCapsules` returns `[]` for `kind` `accessory`) — it rides
   on the skin through its skin weights. Beweis: `scripts/smoke_accessory_mesh.py`, `scripts/smoke_accessory_build.py`.
 - **Lieferung:** der Server baut die Auslieferung als abgeleitete Datei
   (`model3d/assembled/{sig}.glb` = nacktes Outfit-Modell + gepfropfte
@@ -12881,7 +12880,7 @@ both renderers apply the one record through `@anima/scene-render` and add nothin
 
 **Kind.** An `outfit_piece` in mode `own_mesh` (`outfit_piece.mesh_mode`) whose slots are exactly `feet` is garment kind `footwear`,
 method `shoe` (`garment_set.garment_kind_of`); every other own-mesh piece stays `clothing`, a multi-slot piece
-(tights) included. The clothing edit chain never runs for it. Footwear is NEVER painted onto the body, whatever
+(tights) included. The clothing edit chain never runs for it. Footwear is never part of the body texture, whatever
 its mode: without an accepted fit on the current body it is missing (bare foot) with the warning
 `MESH_ITEM_NOT_READY` (`base_body.py`) until its fit is accepted.
 
@@ -12935,7 +12934,7 @@ ankle (`y_split` = the Foot joint's height in the shod stand; per fit, never per
   (`garment_layers`, the shaft as the inner piece), `tucked` cuts the trouser leg 3 cm under the collar (the lower
   side's `collar_bind_m`)
   (`footwear_cut.plane_cut`) and falls back to `over` when the leg is too wide (`hem.fallback "too_wide"` in the
-  layer record and the assembled sidecar's `garments`). Painted trousers are always inside the boot. The mode
+  layer record and the assembled sidecar's `garments`). Trousers in the body are always inside the boot. The mode
   changes only which trousers mesh is grafted — a new assembly and so a new `model_rev`.
 - **Payload unchanged.** No new key in `foot_pose`, `/model/meta` or the worldmap; a boot is visible to a client
   only as the two extra nodes.

@@ -362,8 +362,8 @@ stops acting autonomously).
   character's **Build** (Characters → Figure) or the Improvements type below.
 - **Figure tab:** Characters → Figure shows the one figure a character's worn pieces make — the plain
   base body (views, base model, face and tip details), the pieces worn in or on it, and what is
-  stored (body shapes, painted bodies) with Delete. Each worn piece has one mode in the Wardrobe
-  (*own mesh* · *painted* · *in the body*, `outfit_piece.mesh_mode`); **Build** makes everything the
+  stored (body shapes) with Delete. Each worn piece has one mode in the Wardrobe
+  (*own mesh* · *shell* · *template* · *accessory* · *in the body*, `outfit_piece.mesh_mode`); **Build** makes everything the
   figure still needs and is the only action that spends jobs.
 - **Local quadruped rig:** five base takes with a per-animal tail mode.
 - **Location and prop models** are generated from gallery images, with front/back/left/right views

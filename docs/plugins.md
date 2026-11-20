@@ -305,7 +305,7 @@ body_slots:
 | `face` | Fragment gehört auch in Portrait-/Ausdrucks-Prompts (`prompt_fragments(face_only=True)`) |
 | `mesh_input_prompt` | `{attribute: <name>, values: {<option>: <text>}}` — nur für Mesh-Eingaben (T-Pose-Renders der Bild→3D-Kette, `prompt_fragments(mesh_input=True)`): der Text zum gespeicherten Wert des Attributs (Groß-/Kleinschreibung egal) kommt als zusätzliches `exposed`-Fragment dazu; ein Wert ohne Eintrag ergibt nichts. Nur solange der Slot unbedeckt ist. Die Rückansicht nimmt die optionale Tabelle `back_values` (ohne sie: nichts), damit Vorder- und Rückansicht dasselbe beschreiben — unabhängig von `back`. Beispiel: das `hair`-Slot des human-Packs legt langes Haar hinter die Schultern (vorn) bzw. den Rücken hinab (hinten), kurzes bleibt unberührt. Ungültige Deklaration verwirft das Paket |
 | `back` | Die Anatomie ist auch von HINTEN zu sehen. Rückansicht-Renders — die T-Pose-Back-Referenz der Bild→3D-Kette — behalten nur `exposed`-Fragmente solcher Slots und deren LoRAs; alles andere beschreibt die Vorderseite und zöge die Figur zur Kamera herum. `always`/`covered` sind nicht betroffen: sie beschreiben die ganze Person, nicht eine Seite. Default `false` |
-| `base_body` | The slot belongs to the base body (`app/core/base_body.py`): the unclothed A-pose figure of a humanoid character on the `base_body` model pipeline, onto which the outfits are painted — rendered with the character's hair under the hair method `body` (the default, `base_body.hair_text`), bald under `hairdeck`. Only the `always` fragment of such a slot enters the base-body description (`prompt_fragments(base_body=True)`, neutral state, no `covered`/`exposed`); a slot without the flag stays out — hair (which enters the base views through `base_body.hair_text` instead), and every anatomy pack slot unless it opts in. The human pack flags `eyes`, `skin` and `build`. Default `false` |
+| `base_body` | The slot belongs to the base body (`app/core/base_body.py`): the unclothed A-pose figure of a humanoid character on the `base_body` model pipeline, which the outfits are built on — rendered with the character's hair under the hair method `body` (the default, `base_body.hair_text`), bald under `hairdeck`. Only the `always` fragment of such a slot enters the base-body description (`prompt_fragments(base_body=True)`, neutral state, no `covered`/`exposed`); a slot without the flag stays out — hair (which enters the base views through `base_body.hair_text` instead), and every anatomy pack slot unless it opts in. The human pack flags `eyes`, `skin` and `build`. Default `false` |
 | `mesh_item` | Mesh-only item slot: the garment kind (a string, e.g. `hair`) whose own mesh this slot describes on the base-body pipeline. `body_slots.mesh_item_slots` returns `{kind: slot}` for the slots that apply to a character; the item (category `garment`, field `garment = {kind, slot, body_slot}`) is worn through the state key `equipped_mesh_pieces`, never `equipped_pieces`, so no 2D prompt, outfit signature, outfit preset or LLM outfit skill sees it. Its text is derived from the slot (`body_slots.slot_fragment`); the human pack declares `mesh_item: hair` on `hair` (`app/core/garment_hair.py`) — used by the hair method `hairdeck` only; under `body` the hair is part of the body mesh and no hair item is made. A non-string value is logged and dropped. Default `""` |
 | `base_body_negative` | Text appended to the base-body negative (`base_body.base_negative`) for every character the slot APPLIES to (`applies_to`, species) — independent of `base_body`. A package uses it to keep what its slot describes out of the base views, which the core's generic negative cannot name; e.g. a hypothetical `tail` slot declares `base_body_negative: "tail"`. The text is part of the base signature, so changing it renders a new base body. Default `""` |
 | `base_body_prompt` | Text appended to the base-body DESCRIPTION (`base_body.base_appearance`, after the `always` fragments of the `base_body` slots) for every character the slot APPLIES to — independent of `base_body`, like `base_body_negative`. A template with `{attr}` placeholders rendered from the character's slot values like the other fragments (`body_slots.base_body_fragments`, neutral state): a placeholder without a value drops the whole text. A package uses it to bring a body-shape attribute into the base render without putting its other fragments there; e.g. a hypothetical `tail` slot with a `length` attribute declares `base_body_prompt: "{length} tail"`. Part of the base signature (through the view prompts), so a changed text or value renders a new base body. Default `""` |
@@ -390,7 +390,7 @@ exists only while its slot is uncovered. A base body (every humanoid has one
 on the base-body pipeline) then also gets a **covered variant** `model3d/covered/<bsig>.glb`,
 built from the same clean prerig source with every other group identical
 (same colour markers, same placement) and without the `exposed_only` groups.
-An outfit model is painted onto the covered variant when ANY worn piece covers
+An outfit model is built on the covered variant when ANY worn piece covers
 a slot of the group's `covered_by` (its slots, `covers` or `partially_covers`)
 and does not set `outfit_piece.exposed_detail: true` (the item editor's "Shows
 detail through (sheer)", offered only for pieces touching such a slot —
@@ -1993,7 +1993,7 @@ options to finite numbers (booleans are rejected). Unmapped attribute values
 leave the operation default in place. `tpose_prompt` is optional; when given
 it is a non-empty string with the usual fragment placeholders, and without it
 the mesh input names nothing for the active part (Ruling A74a). The full-body
-references (occasions `base_reference` / `outfit_reference`) never name the slot's
+reference (occasion `base_reference`) never names the slot's
 own texts, switch on or off (Ruling A93b); `reference_prompt` (optional, non-empty,
 the usual placeholders — a missing value drops it) says what the region shows there
 instead while the slot is uncovered — or a mapping `{by: <attribute>, values: {<option>: text}, default: text}`
@@ -2040,7 +2040,7 @@ way). A base body is rendered unclothed, so its record carries the token of its
 front image, never the worn outfit's; an older base record without one takes the
 token from that front's sidecar while the front is still the image the model was
 built from, and otherwise none (Ruling A49). The base body builds the part; an
-outfit model painted onto it that covers the slot is rebuilt from the clean
+outfit model built on it that covers the slot is rebuilt from the clean
 source without it, and inherits no collision capsule of a group it does not
 carry. Otherwise the switch reads `"off"` for every rig condition: no part op
 and no group conditioned on `attributes.<switch>: ["on"]` is built over
