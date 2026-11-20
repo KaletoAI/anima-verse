@@ -2,7 +2,7 @@
  * meshSnapshot — a still picture of a GLB for a small tile (Ruling A48a: the Mesh row's tiles), so a row of
  * tiles costs no live WebGL context each. ONE offscreen renderer is shared and kept; snapshots are made one after
  * the other and cached per URL (a versioned URL never changes its bytes). The model is shown straight on from the
- * front, framed on its box, lit like the viewer (`Model3DViewer`), metalness off; the loaded scene is disposed at
+ * front, framed on its box, lit like the viewer and the game (`createDaylightRig`), metalness off; the loaded scene is disposed at
  * once.
  */
 import type { Material, Mesh, Object3D, Texture, WebGLRenderer } from 'three'
@@ -10,6 +10,8 @@ import type { Material, Mesh, Object3D, Texture, WebGLRenderer } from 'three'
 const cache = new Map<string, Promise<string>>()
 let queue: Promise<unknown> = Promise.resolve()
 let renderer: WebGLRenderer | null = null
+/** The neutral environment of glossy pieces, made on (and replaced with) the kept renderer. */
+let modelEnv: Texture | null = null
 
 /** Release every GPU resource of a loaded scene (geometry, materials and their textures). */
 function disposeScene(root: Object3D): void {
@@ -34,7 +36,8 @@ async function render(url: string, width: number, height: number): Promise<strin
   const object = gltf.scene
   try {
     zeroViewerMetalness(object)
-    const { prepareFigureTextures, prepareSheerPieces } = await import('@anima/scene-render')
+    const { prepareSheerPieces, prepareGlossyPieces, createDaylightRig, createModelEnvironment, prepareFigureTextures } =
+      await import('@anima/scene-render')
     prepareSheerPieces(object, THREE.DoubleSide)
     // The browser drops the OLDEST WebGL context once too many are live — often this long-kept one. A lost
     // context draws nothing, so it is replaced, and a picture made on one is refused (never cached blank).
@@ -45,19 +48,17 @@ async function render(url: string, width: number, height: number): Promise<strin
     if (!renderer) {
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true })
       renderer.setPixelRatio(2)
-      renderer.toneMappingExposure = 1.2
+      modelEnv?.dispose()
+      const { RoomEnvironment } = await import('three/examples/jsm/environments/RoomEnvironment.js')
+      modelEnv = createModelEnvironment(THREE, renderer, new RoomEnvironment())
     }
     renderer.setSize(width, height, false)
+    // The game's light (`@anima/scene-render/modelLight`), the same as the viewer's.
+    prepareGlossyPieces(object, modelEnv)
     prepareFigureTextures(object, renderer.capabilities.getMaxAnisotropy())
     const scene = new THREE.Scene()
-    scene.add(new THREE.AmbientLight(0xffffff, 2.0))
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x666666, 3.0))
-    const key = new THREE.DirectionalLight(0xffffff, 3.0)
-    key.position.set(1, 2, 3)
-    scene.add(key)
-    const fill = new THREE.DirectionalLight(0xffffff, 1.5)
-    fill.position.set(-2, 1, 2)
-    scene.add(fill)
+    const rig = createDaylightRig(THREE)
+    scene.add(rig.hemi, rig.sun, rig.fill)
     scene.add(object)
     const box = new THREE.Box3().setFromObject(object)
     const size = box.getSize(new THREE.Vector3())

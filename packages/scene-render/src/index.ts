@@ -129,6 +129,9 @@ export { FIGURE_HEIGHT_M, anchorFigureBind, clipHipsDrop, figureBox, figureRootY
   prepareSheerPieces, SHEER_RENDER_ORDER, prepareGlossyPieces, GLOSSY_FABRICS, prepareFigureTextures, FIGURE_ANISOTROPY,
   hipsTrackMedian, rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM } from './figure'
 export { clipShiftM } from './figure'
+export { DAYLIGHT_HEMI_SKY, DAYLIGHT_HEMI_GROUND, DAYLIGHT_SUN_NOON, DAYLIGHT_FILL, DAYLIGHT_FILL_POSITION,
+  NOON_SUN_ANGLE, MODEL_ENV_SIGMA, daylightIntensities, sunOffset, createDaylightRig, createModelEnvironment } from './modelLight'
+export type { DaylightRig } from './modelLight'
 export type { ClipHeightOffsetsCm, ClipShiftCm } from './figure'
 
 export { markerSlots, pairYaw, rotateXZ, pairPoints } from './placeGeometry'

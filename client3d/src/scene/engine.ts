@@ -9,7 +9,7 @@ import { FOG_NEAR_M, FOG_FAR_M } from './fogConstants';
 import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { setSurfaceSky, updateSurfaceMaterials } from '@anima/scene-render';
+import { setSurfaceSky, updateSurfaceMaterials, createDaylightRig, createModelEnvironment, sunOffset } from '@anima/scene-render';
 import { setFogVeilSky } from './fogVeil';
 import { setMaxAnisotropy } from './glbMaterials';
 import {
@@ -58,6 +58,7 @@ const SCRATCH = {
   off: new THREE.Vector3(),
   look: new THREE.Vector3(),
   sunOff: new THREE.Vector3(),
+  sunOffXyz: [0, 0, 0] as [number, number, number],
   surfaceSky: new THREE.Color(),
   /** `orbitOffset` writes its tuple here before it is copied into `off`. */
   offTuple: [0, 0, 0] as Vec3,
@@ -351,17 +352,21 @@ export class Engine {
     this.labelRenderer.domElement.className = 'label-layer';
     container.appendChild(this.labelRenderer.domElement);
 
-    this.modelEnv = new THREE.PMREMGenerator(this.renderer)
-      .fromScene(new RoomEnvironment(), 0.04).texture;
+    // The figure lighting (environment + daylight rig) is the shared one of
+    // `@anima/scene-render/modelLight` — the Game-Admin model views build the
+    // very same, so a figure looks alike in both (finding 2026-11-20).
+    this.modelEnv = createModelEnvironment(THREE, this.renderer, new RoomEnvironment());
 
     this.scene.background = new THREE.Color(0x9fc7e8);
     this.scene.fog = new THREE.Fog(0x9fc7e8, FOG_NEAR_M, FOG_FAR_M);
 
-    this.hemi = new THREE.HemisphereLight(0xdfeeff, 0x8a9a78, 1.5);
+    // Hemisphere, sun and the back fill that lifts the shadow sides; the
+    // clock (`setGameHour`) drives intensities, colours and the sun's angle.
+    const rig = createDaylightRig(THREE);
+    this.hemi = rig.hemi;
     this.scene.add(this.hemi);
-    this.sun = new THREE.DirectionalLight(0xfff2d8, 2.0);
-    this.fill = new THREE.DirectionalLight(0xdde8ff, 0.5);   // back light, lifts the shadow sides
-    this.fill.position.set(-30, 20, -25);
+    this.sun = rig.sun;
+    this.fill = rig.fill;
     this.scene.add(this.fill);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(SHADOW_MAP_PX, SHADOW_MAP_PX);
@@ -808,8 +813,8 @@ export class Engine {
     // follows it in WHOLE SHADOW TEXELS (`scene/shadowSnap.ts`). A frustum that
     // slid continuously with the target resampled the whole world on every
     // pan, and every shadow edge in the picture crawled along its own outline.
-    const sx = Math.cos(this.sunAngle), sy = Math.max(0.08, Math.sin(this.sunAngle));
-    const sunOff = SCRATCH.sunOff.set(sx * 60, sy * 80, 25);
+    const so = sunOffset(this.sunAngle, SCRATCH.sunOffXyz);
+    const sunOff = SCRATCH.sunOff.set(so[0], so[1], so[2]);
     const centre = snapShadowCentre({
       target: [this.target.x, this.target.y, this.target.z],
       offset: [sunOff.x, sunOff.y, sunOff.z],

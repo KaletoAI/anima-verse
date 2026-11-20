@@ -25,7 +25,8 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   placeCapsuleWireframe, consumerPartnerCapsules, probeCapsules, probeSweepOffset, probeSweptPose, probeSnapshot,
   PROBE_COLOR, CAPSULE_REGION_COLORS, CHANNEL_GROW, bindChannels, bindMouthOpen, mouthOpenFor, mouthPassHeight, MOUTH_CHANNEL_ID, channelCoords, channelWireframe, guideRod, inZone,
   placeChannelWireframe, stepEngagement, bindChannelOpening, OPENING_MARGIN_M, OPENING_FALLOFF_M,
-  OPENING_BAND_M, OPENING_SLACK_M, bindPoseShapes, prepareFigureTextures, prepareSheerPieces } from '@anima/scene-render'
+  OPENING_BAND_M, OPENING_SLACK_M, bindPoseShapes, prepareSheerPieces, prepareGlossyPieces, createDaylightRig,
+  createModelEnvironment, prepareFigureTextures } from '@anima/scene-render'
 import type { PoseShapes, SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm,
   CollisionOverlay, CollisionPayload, FootPose, GarmentCollision, HairStrandRecord, StrandHair, CapsuleNow,
   PartnerSnapshot, ProbeSourceCapsule, ChannelNow, Engagement, ChannelOpeningBinding,
@@ -1044,21 +1045,17 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           }
         })
 
-        // Bright, flat, even lighting — the mesh is inspected, not staged.
-        // three.js uses physical light units, so a single dim key light leaves
-        // the model near-black: ambient + hemisphere + a 3-point rig.
-        scene.add(new THREE.AmbientLight(0xffffff, 2.0))
-        scene.add(new THREE.HemisphereLight(0xffffff, 0x666666, 3.0))
-        const key = new THREE.DirectionalLight(0xffffff, 3.0)
-        key.position.set(1, 2, 3)
-        scene.add(key)
-        const fill = new THREE.DirectionalLight(0xffffff, 1.5)
-        fill.position.set(-2, 1, 2)
-        scene.add(fill)
-        const back = new THREE.DirectionalLight(0xffffff, 1.5)
-        back.position.set(0, 1, -3)
-        scene.add(back)
-        renderer.toneMappingExposure = 1.2
+        // The game's light (`@anima/scene-render/modelLight`): the 3D client's
+        // noon daylight rig and its neutral environment for glossy pieces, so
+        // a figure looks here as it does in the game. The old private rig
+        // (ambient + hemisphere + 3 directionals) lit a front face at ~2.3x
+        // its albedo — skin glared orange (finding 2026-11-20).
+        const { RoomEnvironment } = await import('three/examples/jsm/environments/RoomEnvironment.js')
+        if (disposed) return
+        const rig = createDaylightRig(THREE)
+        scene.add(rig.hemi, rig.sun, rig.fill)
+        const modelEnv = createModelEnvironment(THREE, renderer, new RoomEnvironment())
+        disposers.push(() => modelEnv.dispose())
 
         const controls = new OrbitControls(camera, renderer.domElement)
         controls.enableDamping = true
@@ -1220,6 +1217,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         zeroViewerMetalness(object)
         // A204: a sheer piece shows the body through it (blended, no depth write, drawn after the body)
         prepareSheerPieces(object, THREE.DoubleSide)
+        // A214: a glossy leather piece reflects the neutral environment, as in the game.
+        prepareGlossyPieces(object, modelEnv)
 
         if (textureUrl) {
           const tex = await new THREE.TextureLoader().loadAsync(textureUrl)
@@ -3044,6 +3043,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
                 return
               }
               styleCompanion(gltf.scene, c.style)
+              prepareFigureTextures(gltf.scene, renderer.capabilities.getMaxAnisotropy())
               fresh.obj = gltf.scene
               gltf.scene.visible = !!(companionsRef.current || []).find((x) => x.key === c.key)?.visible
               pivot.add(gltf.scene)
