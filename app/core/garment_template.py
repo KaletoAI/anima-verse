@@ -63,7 +63,10 @@ SPIKE_SCRIPT = "garment_template_drape.py"
 #: (A221 adds the strapless top — a new kind of piece; the existing drapes keep their keys, so no bump.)
 #: 8 (A230): the source pictures are cut by ``garment_matte`` (key + BiRefNet consensus, rim un-mixed and filled from
 #: inside) and the projection bake fills its empty texels by push-pull — CPU only, the stored views stay.
-TEMPLATE_VERSION = 8
+#: 9 (A239): the fitted kinds' crotch is where the body closes over the centre line (``_crotch``), no longer the
+#: lowest Hips-weighted vertex several cm down the inner thighs — a brief's gusset, a boxer's or a stocking's hem and
+#: a trouser's crotch anchor move up on a body whose thighs stand apart.
+TEMPLATE_VERSION = 9
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.

@@ -111,17 +111,42 @@ def _path_dist(p, path):
 
 # --- regions ---------------------------------------------------------------------------------------------------
 
-def _crotch(co, w_hips, cx, top):
+#: A239: the crotch is looked for on the centre plane and up to this far either side of it (Spine1's x lies a few mm
+#: off the middle of the gap between the thighs on a generated body), in steps of CROTCH_STEP_M ...
+CROTCH_SLIT_M = 0.005
+CROTCH_STEP_M = 0.001
+#: ... and from this far under the Hips-weight rule's height, from the front to the back of that rule's vertices.
+CROTCH_BELOW_M = 0.03
+
+
+def _crotch(co, w_hips, cx, top, tree):
     """The crotch height: the lowest vertex within 3 cm of the centre line with Hips weight > 0.3 below the
-    waistband (``garment_fit.crotch_height``'s rule; a procedural part rigged to the hips counts — it is covered)."""
+    waistband (``garment_fit.crotch_height``'s rule; a procedural part rigged to the hips counts — it is covered),
+    raised to where the body closes over the centre line (A239). The Hips weight reaches several cm down the inner
+    thighs where they stand apart (Kira 0.742 vs 0.819, Glut 0.737 vs 0.810), so a gusset cut from that height was a
+    tongue of thigh skin between the legs. The closing point is the lowest hit of rays cast straight up at
+    ``cx`` +- ``CROTCH_SLIT_M``; touching thighs or a part hanging lower than the rule (a male bulge) keep the rule's
+    height — the result is never lower than it."""
     m = (np.abs(co[:, 0] - cx) < 0.03) & (w_hips > 0.3) & (co[:, 2] < top)
-    return float(co[m, 2].min()) if m.any() else top - 0.2
+    if not m.any():
+        return top - 0.2
+    rule = float(co[m, 2].min())
+    start = rule - CROTCH_BELOW_M
+    y0, y1 = float(co[m, 1].min()), float(co[m, 1].max())
+    hits = []
+    n_x = int(round(2 * CROTCH_SLIT_M / CROTCH_STEP_M)) + 1
+    for x in np.linspace(cx - CROTCH_SLIT_M, cx + CROTCH_SLIT_M, n_x):
+        for y in np.arange(y0, y1 + 1e-9, 0.005):
+            h = _ray(tree, (float(x), float(y), start), (0, 0, 1), top - start)
+            if h is not None:
+                hits.append(float(h[2]))
+    return max(rule, min(hits)) if hits else rule
 
 
-def briefs_region(f, co, w, cx, cy):
+def briefs_region(f, co, w, cx, cy, tree):
     """``(face keep predicate on centroids, planes, info)`` of briefs."""
     top = _gltf_y(f["top_y"])
-    crotch = _crotch(co, w["Hips"], cx, top)
+    crotch = _crotch(co, w["Hips"], cx, top, tree)
     cy = _mid_y(co, cx, (crotch + top) / 2)
     near = (co[:, 2] < top) & (co[:, 2] > crotch - 0.05)
     hip_half = float(np.percentile(np.abs(co[near, 0] - cx), 99)) if near.any() else 0.17
@@ -178,12 +203,12 @@ def briefs_region(f, co, w, cx, cy):
     return keep, planes, pins, info
 
 
-def boxer_region(f, co, w, cx):
+def boxer_region(f, co, w, cx, tree):
     """A232 boxers: ``(keep_v(v, arm_v), planes, pins(v), info)`` — every collider vertex from the waistband down to
     the hem ``leg_length_m`` under the crotch that is not an arm's / hand's (an A-pose hand hangs beside the thigh);
     the hem is one horizontal plane (both legs at the same height in the rest pose)."""
     top = _gltf_y(f["top_y"])
-    crotch = _crotch(co, w["Hips"], cx, top)
+    crotch = _crotch(co, w["Hips"], cx, top, tree)
     hem = crotch - float(f["leg_length_m"])
     band = float(f["band_m"])
     g = float(f["gusset_half_m"])
@@ -483,13 +508,13 @@ def _bone_head(arm, name):
     return np.array(arm.matrix_world @ arm.data.bones[gd.P + name].head_local)
 
 
-def tights_region(f, co, w, arm, cx):
+def tights_region(f, co, w, arm, cx, tree):
     """A223 tights: ``(keep_v on collider vertices with their nearest body vertex's weights, planes, band(v), info)``.
     Full tights take the hips and both legs up to ``top_y``; a stocking / sock is per leg up to its top (a horizontal
     plane per side: under the crotch, under the knee). The foot: closed, footless (cut at the ankle joint) or a stirrup
     (footless + a band round the middle of the foot)."""
     style = f["style"]
-    crotch = _crotch(co, w["Hips"], cx, _gltf_y(f["top_y"]) if f.get("top_y") else 2.0)
+    crotch = _crotch(co, w["Hips"], cx, _gltf_y(f["top_y"]) if f.get("top_y") else 2.0, tree)
     sides = {}
     for side, s in (("Left", 1), ("Right", -1)):
         knee = _bone_head(arm, side + "Leg")
@@ -555,13 +580,13 @@ def trouser_hem(rule, anchors):
     return float(anchors[a]) + float(share) * (float(anchors[b]) - float(anchors[a])) + float(extra)
 
 
-def trousers_region(f, co, w, arm, cx):
+def trousers_region(f, co, w, arm, cx, tree):
     """A233 trousers: ``(keep_v(v, arm_v, foot_v), planes, pins(v), sides, info)`` — every collider vertex between the
     waistband plane and the side's hem that is not an arm's / hand's (as the boxers) and not the foot's (below the
     ankle joint less 1 cm; a stirrup keeps a 5 cm band under the middle of the foot). ``sides[s]`` = the side's
     crotch / knee / ankle anchors, hem and leg axis (hip, knee, ankle joints)."""
     top = _gltf_y(f["top_y"])
-    crotch = _crotch(co, w["Hips"], cx, top)
+    crotch = _crotch(co, w["Hips"], cx, top, tree)
     stirrup = f["hem"] == "stirrup"
     sides = {}
     for side, s in (("Left", 1), ("Right", -1)):
@@ -715,7 +740,7 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
     push = closure = cups = None
     tsides = None
     if kind == "trousers":
-        keep_v, planes, pins, tsides, extra = trousers_region(f, co, w, arm, cx)
+        keep_v, planes, pins, tsides, extra = trousers_region(f, co, w, arm, cx, stree)
         info.update(extra)
         arm_w = sum(w[sd + b] for sd in ("Left", "Right") for b in GLOVE_BONES)
         foot_w = sum(w[sd + b] for sd in ("Left", "Right") for b in ("Foot", "ToeBase"))
@@ -725,7 +750,7 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
         vk = keep_v(cco, arm_w[near], foot_w[near])
         mask = np.array([all(vk[v.index] for v in fa.verts) for fa in bm.faces])
     elif kind == "briefs" and float(f.get("leg_length_m") or 0.0) > 0:
-        keep_v, planes, pins, extra = boxer_region(f, co, w, cx)
+        keep_v, planes, pins, extra = boxer_region(f, co, w, cx, stree)
         info.update(extra)
         arm_w = sum(w[sd + b] for sd in ("Left", "Right") for b in GLOVE_BONES)
         kd = _kd(co)
@@ -734,7 +759,7 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
         vk = keep_v(cco, arm_w[near])
         mask = np.array([all(vk[v.index] for v in fa.verts) for fa in bm.faces])
     elif kind == "briefs":
-        keep, planes, pins, extra = briefs_region(f, co, w, cx, cy)
+        keep, planes, pins, extra = briefs_region(f, co, w, cx, cy, stree)
         info.update(extra)
         if extra.get("sides") == "string":
             # A235: a hip band a few mm high is narrower than the collider's faces — the collider is first cut along
@@ -754,7 +779,7 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
         info.update(extra)
         mask = keep(cent)
     elif kind == "tights":
-        keep_v, planes, tband, legs_w, foot_w, extra = tights_region(f, co, w, arm, cx)
+        keep_v, planes, tband, legs_w, foot_w, extra = tights_region(f, co, w, arm, cx, stree)
         info.update(extra)
         kd = _kd(co)
         cco = np.array([v.co for v in bm.verts])
