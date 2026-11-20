@@ -20,14 +20,27 @@ Expected, by hand:
     is in the work → "Fits on the CPU") and assemble (work is planned) → names
     ``["pieces", "template", "fits", "assemble"]``. Before the fix the template loop ran first:
     ``["template", "pieces", "fits", "assemble"]`` (the trousers draped without the boot's fit, A237).
-[2] ``_run_planned`` (manual) over stubbed runners that record their calls:
+[2] ``_run_planned`` (manual unless said) over stubbed runners that record their calls. A failure is "recorded"
+    when the re-judged step (``_chain_step`` / ``_template_step``, stubbed from the set ``recorded``) is "failed —
+    Retry"; the runner's failure puts the piece into ``recorded`` unless the case says it records nothing:
     (a) steps pieces(boots), template(trousers), assemble; the boots' chain FAILS on its first try (``Step.failed``
-        "") → calls ``["pieces", "template"]``, ``skipped == ["assemble"]``, ``failed`` has ``pieces``.
+        "") and records it → calls ``["pieces", "template"]``, ``skipped == ["assemble"]``, ``failed`` has
+        ``pieces``.
     (b) the same, but the plan listed the boots' chain as a cached failure (``failed`` "mesh refused", a manual
         Build retries it) and it fails again → the figure is assembled without it: calls
         ``["pieces", "template", "assemble"]``, ``skipped == []``.
-    (c) the trousers' drape fails on its first try → calls ``["pieces", "template"]``, ``skipped ==
+    (c) the trousers' drape fails on its first try (recorded) → calls ``["pieces", "template"]``, ``skipped ==
         ["assemble"]``.
+    (e) review fix: a failure that records NOTHING — a drape left due (timeout / interrupted / no Blender), a drape
+        held by the retry budget, a chain deferred by load or the media switch — never holds the assembly (it would
+        hold every Build): the trousers' drape fails unrecorded → ``["pieces", "template", "assemble"]``,
+        ``skipped == []``, ``failed`` ``["template"]``; the boots' chain deferred unrecorded → the same calls,
+        ``failed`` ``["pieces"]``. Before the fix (9ae6530d8) both gave ``["pieces", "template"]`` with
+        ``skipped == ["assemble"]``, on every Build.
+    (f) review fix: an AUTOMATIC run never holds the assembly — nothing re-runs a recorded failure automatically
+        (ruling 7a), so it assembles without the piece (Ruling A119): the trousers' drape fails on its first try
+        and records it → ``["pieces", "template", "assemble"]``, ``skipped == []``. Before the fix (9ae6530d8):
+        ``["pieces", "template"]``, ``skipped == ["assemble"]``.
     (d) steps pieces(boots), assemble; after the pieces the trousers' drape key moved (``_template_step`` now
         returns a step) → the run drapes it right after the pieces: calls ``["pieces", "template", "assemble"]``,
         the template call for ``trousers``. With nothing due (``_template_step`` None) → ``["pieces",
@@ -45,6 +58,10 @@ Expected, by hand:
     effective = unpainted = [boots, trousers], missing {}; the assembly sidecar carries the same ``figure`` and the
     NEW ``bare_revision`` (still current, no rebuild). A second call → ``rewritten`` False (already recorded).
     ``figure_stale`` "figure" → False and the sidecar unchanged. A figure of another signature → False.
+    The bare sidecar's ``garment_warnings`` (``["Not fitted on this outfit body, served without: boots (fit
+    refused)"]`` — a fact of the model and body, not of the record) are kept by the rewrite; before the review fix
+    (9ae6530d8) they were removed while the assembly sidecar kept them, so the overview showed them as the
+    assembly's own.
 """
 import json
 import os
@@ -108,7 +125,10 @@ def main() -> int:
         def runner(name):
             def run(_c, step, _explicit=False):
                 calls.append((name, step.item_id))
-                return outcome.get((name, step.item_id), "")
+                error = outcome.get((name, step.item_id), "")
+                if error and record_failure["on"]:
+                    recorded.add(step.item_id)
+                return error
             return run
 
         fb._RUNNERS.update({n: runner(n) for n in ("pieces", "template", "assemble", "fits")})
@@ -123,10 +143,26 @@ def main() -> int:
         fb.plan = lambda *_a, **_kw: list(planned)
         due_after = {"step": None}
         fb._now = lambda _c: ({}, wanted, delivered, [])
-        fb._template_step = lambda c, i, d, p: due_after["step"]
+        recorded = set()
+        record_failure = {"on": True}
 
-        def run(steps_, fail=None, automatic=False):
+        def template_step(c, i, d, p):
+            if i in recorded:
+                return fb.Step("template", f"Template drape · {i}" + fb.FAILED_SUFFIX, 0, i, failed="stretch")
+            return due_after["step"]
+
+        def chain_step(c, n, i, label, p):
+            if i in recorded:
+                return fb.Step(n, label + fb.FAILED_SUFFIX, 0, i, failed="mesh refused")
+            return fb.Step(n, label, 0, i)
+
+        fb._template_step = template_step
+        fb._chain_step = chain_step
+
+        def run(steps_, fail=None, automatic=False, records=True):
             calls.clear()
+            recorded.clear()
+            record_failure["on"] = records
             outcome.clear()
             outcome.update(fail or {})
             planned[:] = steps_
@@ -145,6 +181,15 @@ def main() -> int:
               (["pieces", "template", "assemble"], [], ["pieces"]))
         check("[2c] fresh drape failure", run([p_boots, t_trousers, assemble], {("template", "trousers"): "stretch"}),
               (["pieces", "template"], ["assemble"], ["template"]))
+        check("[2e] drape left due (nothing recorded)",
+              run([p_boots, t_trousers, assemble], {("template", "trousers"): "timeout"}, records=False),
+              (["pieces", "template", "assemble"], [], ["template"]))
+        check("[2e] chain deferred (nothing recorded)",
+              run([p_boots, t_trousers, assemble], {("pieces", "boots"): "hub busy"}, records=False),
+              (["pieces", "template", "assemble"], [], ["pieces"]))
+        check("[2f] automatic: a first recorded drape failure",
+              run([p_boots, t_trousers, assemble], {("template", "trousers"): "stretch"}, automatic=True),
+              (["pieces", "template", "assemble"], [], ["template"]))
         due_after["step"] = fb.Step("template", "Template drape · trousers", 0, "trousers")
         check("[2d] drape key moved after the pieces", run([p_boots, assemble]),
               (["pieces", "template", "assemble"], [], []))
@@ -176,7 +221,8 @@ def main() -> int:
             "base_signature": "base1", "figure": old_fig.as_dict(),
             "mesh_items": {"intended": ["boots", "trousers"], "effective": ["boots"],
                            "unpainted": ["boots", "trousers"], "missing": {"trousers": "Not draped yet"},
-                           "warnings": []}}))
+                           "warnings": []},
+            "garment_warnings": ["Not fitted on this outfit body, served without: boots (fit refused)"]}))
         assembled = garment_assembly.assembled_path(directory, "sig1", garment_assembly.FULL)
         assembled.write_bytes(b"glb-assembled")
         assembled.with_suffix(".json").write_text(json.dumps({
@@ -195,6 +241,8 @@ def main() -> int:
               {"intended": ["boots", "trousers"], "effective": ["boots", "trousers"],
                "unpainted": ["boots", "trousers"], "missing": {}})
         side = json.loads(assembled.with_suffix(".json").read_text())
+        check("[4] garment warnings kept", meta.get("garment_warnings"),
+              ["Not fitted on this outfit body, served without: boots (fit refused)"])
         check("[4] assembly carries the figure", side["figure"], now_fig.as_dict())
         check("[4] assembly still current", side["bare_revision"], garment_assembly.bare_revision(bare))
         check("[4] second call", base_body.record_delivered_figure("Demo", "sig1", now_fig)["rewritten"], False)

@@ -55,9 +55,11 @@ body makes every view and the stored shape count as missing):
     A14), a fourth ``start`` answers "current".
 [6] ``pieces`` fails for the trousers → the fits still run (the
     stored views are the delivered figure's: no views step), the assembly
-    does NOT (bug round 2026-11-20: a piece this Build tried and could not
-    make is never silently left off a published figure — the next Build
-    retries it): calls shape, chain trousers, refit; ``skipped ==
+    does NOT (bug round 2026-11-20: a piece this MANUAL Build tried and
+    could not make, its failure recorded — the stub's ``cached_failure``
+    answers it after the chain failed — is never silently left off a
+    published figure; the next Build retries it): calls shape, chain
+    trousers, refit; ``skipped ==
     ["assemble"]``; ``failed == {"pieces": {"error": "mesh refused", "item_id":
     "trousers"}}``. ``shape`` failing STOPS the Build (Ruling C4, fix round
     2 of Task 11g: a refused view / an unmeshed shape — nothing is built on
@@ -140,6 +142,7 @@ class World:
         self.hair_done = hair_done
         self.estimate = dict(estimate or {})  # item -> hub jobs (None = unknown) while not meshed
         self.fail = {}                        # producer -> error
+        self.chain_failed = {}                # item -> the recorded chain failure (``garments.cached_failure``)
         self.calls = []
         self.block = None                     # (producer, entered Event, release Event)
         self.views = set()
@@ -239,7 +242,8 @@ def install_stubs():
             return {"steps": [], "hub_jobs": None, "note": "no item image"}
         return {"steps": ["worn", "ghost", "mesh", "fit"], "hub_jobs": jobs, "note": "worn 3 + ghost 2 + mesh 1"}
     garments.run_estimate = run_estimate
-    garments.cached_failure = lambda c, item_id, profile=None: None
+    # A chain that failed records it (``garments._note_outcome``) — the next plan lists it "failed — Retry".
+    garments.cached_failure = lambda c, item_id, profile=None: W.chain_failed.get(item_id)
     # The worn hairstyle (plan Task 13): "hair_kira", its mode the world's wanted hair.
     garment_hair.worn_hairstyle = lambda c, profile=None: {"id": "hair_kira", "name": "Hair",
                                                            "garment": {"kind": "hair", "mesh_mode": W.hair}}
@@ -286,6 +290,7 @@ def install_stubs():
         for i in ids:
             err = W.record("chain", i)
             if err:
+                W.chain_failed[i] = {"error": err}
                 out[i] = {"ok": False, "error": err}
             else:
                 if i == "hair_kira":

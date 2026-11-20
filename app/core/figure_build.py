@@ -43,10 +43,11 @@ order ``STEP_ORDER`` (a step with nothing to do is not in it):
 8. ``assemble`` — the outfit model of the figure delivered THEN, built from
    whatever is built (Ruling A119: pieces not ready are left off), then the garment assembly
    (``garment_assembly.schedule``). A model of that figure's shape and texture found cached gets the figure
-   recorded (``base_body.record_delivered_figure``), so the next plan does not ask for it again. Skipped when a
-   piece or drape this run tried for the first time failed (``ASSEMBLE_GATE_STEPS``): the figure is not
-   published with it silently left off — the next Build retries it, and a repeated failure (listed "failed —
-   Retry") no longer holds the assembly.
+   recorded (``base_body.record_delivered_figure``), so the next plan does not ask for it again. Skipped in a
+   MANUAL Build when a piece or drape it tried for the first time failed and the failure is recorded
+   (``ASSEMBLE_GATE_STEPS``): the figure is not published with it silently left off — the next Build retries it,
+   and a repeated failure (listed "failed — Retry") no longer holds the assembly. An automatic Build assembles
+   without the piece (nothing would retry it).
 9. ``collision`` — a stored model's collision record carries channels that no longer match the declarations,
    the per-character overrides or the opening (``collision.channels_due``: the Channels panel's Save stores only,
    ruling R4 of the cross-person collision plan): ``collision.recompute_character(apply_channels=True)`` — CPU,
@@ -1300,7 +1301,8 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
                     changed = ["changed"]
             if error:
                 logger.warning("Build %s: %s failed: %s", character_name, step.label, error)
-                if step.name in ASSEMBLE_GATE_STEPS and not step.failed and not changed:
+                if (explicit and step.name in ASSEMBLE_GATE_STEPS and not step.failed and not changed
+                        and _failure_recorded(character_name, step)):
                     fresh_failures.append(step.item_id)
                 failure, error = getattr(error, "failure", None), str(error)
                 entry = failed.get(step.name)
@@ -1341,10 +1343,29 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
                 logger.debug("Build track %s not finished", task_id, exc_info=True)
 
 
-#: The piece steps whose FIRST failure in a run (not a cached one the plan listed "failed — Retry") holds that run's
-#: assembly: the figure is not published with the piece silently left out; a repeated failure is listed and the
-#: figure is assembled without the piece.
+#: The piece steps whose FIRST failure in a MANUAL run (not a cached one the plan listed "failed — Retry") holds that
+#: run's assembly: the figure is not published with the piece silently left out; a repeated failure is listed and
+#: the figure is assembled without the piece. Only a failure that is now RECORDED (``_failure_recorded``) holds it —
+#: a drape left due (timeout, interrupted, no Blender), a drape held by the retry budget or a chain deferred by load
+#: or the media switch records nothing and would hold every Build. An automatic run never holds it: nothing re-runs
+#: a recorded failure automatically (ruling 7a), so it assembles without the piece (Ruling A119).
 ASSEMBLE_GATE_STEPS = frozenset({"pieces", "template"})
+
+
+def _failure_recorded(character_name: str, step: Step) -> bool:
+    """Whether the failure of ``step`` (a ``pieces`` / ``template`` step that just failed) is now recorded — the
+    next plan lists it "failed — Retry" (``_chain_step`` / ``_template_step`` judged again). False on any error:
+    the assembly then runs without the piece (Ruling A119)."""
+    try:
+        profile, _wanted, delivered, _items = _now(character_name)
+        if step.name == "template":
+            again = _template_step(character_name, step.item_id, delivered, profile)
+        else:
+            again = _chain_step(character_name, step.name, step.item_id, step.label, profile)
+        return bool(again is not None and again.failed)
+    except Exception:  # noqa: BLE001 — a re-check, never the run's failure
+        logger.debug("Build %s: failure of %s not re-checked", character_name, step.label, exc_info=True)
+        return False
 
 
 def _replan_templates(character_name: str, rest: List[Step], explicit: bool) -> List[Step]:

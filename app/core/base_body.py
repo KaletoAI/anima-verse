@@ -2744,9 +2744,7 @@ def record_delivered_figure(character_name: str, signature: str, fig) -> Dict[st
             if mesh or current.get("mesh_items") is not None:
                 values["mesh_items"] = mesh
             intended_changed = (sorted(mesh_items_intended(current)) != sorted(mesh_items_intended(values)))
-            current.update(values)
-            if not mesh.get("warnings"):
-                current.pop("garment_warnings", None)
+            current.update(values)   # ``garment_warnings`` stay: they describe the model and body, not the record
             model3d._publish_sidecar(path, current)
             garment_assembly.carry_sidecar_keys(path, before, values)
         logger.info("Outfit model %s (%s): figure record refreshed to the figure delivered now (%s)",
