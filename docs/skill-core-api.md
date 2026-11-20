@@ -219,7 +219,7 @@ wins; nothing declared = the A126 auto-detection. Core:
 
 ## Clip bend limits — capability `clip_bend_limit_defaults` ✅
 
-Ruling A145. Before Auto-align, the fine fit or the follow move a pair clip's partner, the
+Ruling A145. Before Auto-align moves a pair clip's partner (and every frame in both renderers), the
 attached part bends toward its contact target — at most `joint_deg` per joint and `total_deg`
 in all, per state: `raised` (the chain's straightened state) and `resting`, blended by how far
 the chain is raised. Core default raised 15°/35°, resting 45°/120°. A package defaults its kinds

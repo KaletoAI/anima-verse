@@ -1,8 +1,8 @@
 /**
- * CHAIN BEND (Ruling A145) — before a pair fit moves or turns the entering figure, its attached part BENDS toward the
- * contact target, within limits; only what the bend cannot reach is left to the shift/turn (`pairFit.ts`). One
- * geometry for both renderers: Auto-align, the pair check, the place preview's live fit and client3d's runtime fit call
- * the same functions on the same `FigureRuntime.inspect()` chain, and `FigureRuntime.bendChain` applies the result to
+ * CHAIN BEND (Ruling A145) — before Auto-align moves or turns the entering figure, its attached part BENDS toward the
+ * contact target, within limits; only what the bend cannot reach is left to the shift/turn (`pairFit.ts`,
+ * `pairAlign.ts`). One geometry for both renderers: Auto-align, the place preview's per-frame bend and client3d's
+ * per-frame bend call the same functions on the same `FigureRuntime.inspect()` chain, and `FigureRuntime.bendChain` applies the result to
  * the bones the same way in both.
  *
  * THE CHAIN (world metres): the attached-part chain's points P_0 … P_n — P_i the joint of link i (`opChains` segment

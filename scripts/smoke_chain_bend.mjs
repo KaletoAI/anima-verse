@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Ruling A145: the attached part bends toward its contact target before the pair fit moves the partner
- * (`packages/scene-render/src/chainBend.ts`, `pairFit.ts` bendSample / solvePairFix with `bend`). Every expected number
+ * (`packages/scene-render/src/chainBend.ts`, `pairFit.ts` bendSample / fitResiduals with `bend`, solved by
+ * `pairAlign.ts` solveAlignAdjust). Every expected number
  * is derived BY HAND below (§ B5a).
  *
  * Usage: node scripts/smoke_chain_bend.mjs   (no server, no world; bundles scene-render with esbuild)
@@ -22,7 +23,8 @@
  *     y = −(z − 0.15) tan 20°: 0.1 sin α = (0.1 cos α − 0.05) tan 20° → α = 10.1534° (joint 1), 20° − α = 9.8466°
  *     (joint 2). P_2, P_3 lateral ≈ 0.
  * [7] Rigid (A129) vs bend first: 6 frames, chain P_k = (0, 0.01, 0.1k + 0.01i), k 0…3, frame i 0…5, axis u +z
- *     through o (0,0,0.3) — a parallel offset of 1 cm, the tip at or past the opening (s 0 … 0.05). Rigid shift-only solve: the lateral rows
+ *     through o (0,0,0.3) — a parallel offset of 1 cm, the tip at or past the opening (s 0 … 0.05). Shift-only Auto-align
+ *     (basis I, cap ±0.5 m, 20°). Rigid: the lateral rows
  *     want Δy = −0.01 exactly (the entry row only touches z, the base→tip direction is along u whatever the shift).
  *     Bend first (resting limits): with the tip at/inside the opening the tip link's joint is an effector too, the
  *     joints lay P_2, P_3 on the axis (a few degrees ≪ the limit), the last link
@@ -109,9 +111,10 @@ const frames = Array.from({ length: 6 }, (_, i) => {
   const chain = straight(3, 0.01).map((p) => [p[0], p[1], p[2] + dz])
   return { tip: chain[3], base: chain[0], o: o7, u: u7, pivot: [0, 0, 0], chain, raised: 0, channel: true }
 })
-const rigid = SR.solvePairFix(frames, { maxShiftM: 0.5, maxAngleDeg: 20, axes: [] })
+const I3 = [1, 0, 0, 0, 1, 0, 0, 0, 1], cap7 = { sideM: 0.5, upM: 0.5, forwardM: 0.5, angleDeg: 20 }
+const rigid = SR.solveAlignAdjust({ relations: [{ samples: frames }], basis: I3, cap: cap7 }).fix
 near(rigid.shift[1], -0.01, 1e-5, '[7] rigid Δy')
-const bent = SR.solvePairFix(frames, { maxShiftM: 0.5, maxAngleDeg: 20, axes: [], bend: D })
+const bent = SR.solveAlignAdjust({ relations: [{ samples: frames }], basis: I3, cap: cap7, bend: D }).fix
 assert.ok(Math.abs(bent.shift[1]) < 0.3 * 0.01, `[7] bend first Δy ${bent.shift[1]}`)
 for (const f of frames) {
   const b = SR.bendSample(SR.fixSample(f, bent), D)

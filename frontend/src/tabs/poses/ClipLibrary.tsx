@@ -1530,7 +1530,7 @@ export function ClipLibrary({
                         disabled={orientLocked || innerTab !== 'places'}
                         title={innerTab !== 'places'
                           ? t('Open the Places view: Auto-align measures the figures shown there.')
-                          : t('Adjusts the role with the attached part (a pair: partner B) around the arrangement you set — at most the alignment range forward/back and up/down, 3 cm sideways and 10° tilt/roll; the receiving role never moves. The stroke is fitted at its start, ¼, ½, ¾ and end together, all contacts of the role at once. Then it plays the result with the game’s fine fit on top. Writes the sliders above; Save stores them as usual.')}
+                          : t('Adjusts the role with the attached part (a pair: partner B) around the arrangement you set — at most the alignment range forward/back and up/down, 3 cm sideways and 10° tilt/roll; the receiving role never moves. The stroke is fitted at its start, ¼, ½, ¾ and end together, all contacts of the role at once. Writes the sliders above; Save stores them as usual.')}
                         onClick={() => {
                           const run = autoAlignRef.current
                           const res: AutoAlignResult = run ? run({ rangeCm: alignRangeCm, base: alignBase }) : { ok: false, reason: t('The place preview is still loading.') }

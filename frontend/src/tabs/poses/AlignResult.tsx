@@ -1,8 +1,7 @@
 /**
  * The ONE result block of Auto-align (Ruling A212 — the former Auto-align and pair-check results merged): the
  * contact and clearance lamps, per moving role whether the alignment range stopped it ("move it closer by hand"), the
- * five phases of the stroke before → after, and a collapsible detail table — before, after, and with the game's fine
- * fit and follow on top.
+ * five phases of the stroke before → after, and a collapsible detail table — before and after.
  */
 import { useI18n } from '../../i18n/I18nProvider'
 import { hasInside, targetWordOf } from './contactWords'
@@ -74,7 +73,6 @@ export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
   }
   const r: Ok = result
   const inside = hasInside(r.target)
-  const f = r.followed
   return (
     <div data-testid="align-auto-result" data-result={JSON.stringify(r)} style={{ fontSize: 11, lineHeight: 1.35 }}>
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -121,30 +119,21 @@ export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
       <details data-testid="align-details">
         <summary>{t('Details')}</summary>
         <table style={{ borderCollapse: 'collapse' }}>
-          <thead><tr><th /><th style={CELL}>{t('before')}</th><th style={CELL}>{t('after')}</th>
-            <th style={CELL} title={t('The aligned clip with the fine fit the game makes when the interaction starts (at most 5 cm and 10°) and the per-frame follow.')}>{t('in game')}</th></tr></thead>
+          <thead><tr><th /><th style={CELL}>{t('before')}</th><th style={CELL}>{t('after')}</th></tr></thead>
           <tbody>
             {([
-              [inside ? t('Tip to opening at the outermost frame') : t('Tip to target at the outermost frame'), r.before.entryMm, r.after.entryMm, f?.entryMm, 'mm'],
-              ...(inside ? [[t('Depth at the deepest frame'), r.before.depthMm, r.after.depthMm, f?.depthMm, 'mm'] as const] : []),
-              [t('Off the axis, worst frame'), r.before.maxLateralMm, r.after.maxLateralMm, f?.maxLateralMm, 'mm'],
-              [t('Shaft against the axis at the outermost frame'), r.before.axisDeg, r.after.axisDeg, f?.axisDeg, '°'],
-              [t('Interpenetration besides the channel'), r.overlapBeforeMm, r.overlapAfterMm, r.check?.clearMm, 'mm'],
-            ] as const).map(([label, a, b, c, unit]) => (
+              [inside ? t('Tip to opening at the outermost frame') : t('Tip to target at the outermost frame'), r.before.entryMm, r.after.entryMm, 'mm'],
+              ...(inside ? [[t('Depth at the deepest frame'), r.before.depthMm, r.after.depthMm, 'mm'] as const] : []),
+              [t('Off the axis, worst frame'), r.before.maxLateralMm, r.after.maxLateralMm, 'mm'],
+              [t('Shaft against the axis at the outermost frame'), r.before.axisDeg, r.after.axisDeg, '°'],
+              [t('Interpenetration besides the channel'), r.overlapBeforeMm, r.overlapAfterMm, 'mm'],
+            ] as const).map(([label, a, b, unit]) => (
               <tr key={label}><td>{label}</td>
                 <td style={CELL}>{a.toFixed(0)} {unit}</td>
-                <td style={CELL}>{b.toFixed(0)} {unit}</td>
-                <td style={CELL}>{c === undefined || c === null || !Number.isFinite(c) ? '–' : `${c.toFixed(0)} ${unit}`}</td></tr>
+                <td style={CELL}>{b.toFixed(0)} {unit}</td></tr>
             ))}
           </tbody>
         </table>
-        {r.check?.fit ? (
-          <div>{t('{by} → {of}: fine fit {x} / {y} / {z} mm, tilt {tilt}°, roll {roll}°')
-            .replace('{by}', r.check.fit.by).replace('{of}', r.check.fit.of)
-            .replace('{x}', r.check.fit.shiftMm[0].toFixed(0)).replace('{y}', r.check.fit.shiftMm[1].toFixed(0))
-            .replace('{z}', r.check.fit.shiftMm[2].toFixed(0))
-            .replace('{tilt}', r.check.fit.turnDeg[0].toFixed(1)).replace('{roll}', r.check.fit.turnDeg[1].toFixed(1))}</div>
-        ) : null}
         {r.bend ? <BendLine bend={r.bend} /> : null}
         {r.posture ? <PostureLine gapMm={r.posture.gapMm} sinkMm={r.posture.sinkMm}
           limited={r.posture.limited} heightMm={r.posture.heightMm} /> : null}
@@ -153,9 +142,9 @@ export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
             {t('Contact lamp {lamp}: posture limit — the partner stays supported instead of floating.')
               .replace('{lamp}', r.lamp === 'red' ? t('red') : t('yellow'))}</div>
         ) : null}
-        {r.check?.clearWorst ? (
+        {r.clearWorst ? (
           <div className="ga-form-hint" style={{ margin: 0 }}>
-            {t('Deepest besides the channel: {pair}').replace('{pair}', r.check.clearWorst)}</div>
+            {t('Deepest besides the channel: {pair}').replace('{pair}', r.clearWorst)}</div>
         ) : null}
         {r.relations.length > 1 ? (
           <table data-testid="align-auto-relations" style={{ borderCollapse: 'collapse' }}>

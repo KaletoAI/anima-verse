@@ -1,53 +1,33 @@
 /**
- * PAIR FIT (Ruling A129) — the follow-ups to Auto-align (A126, `channelContact.ts`). One geometry for both renderers:
- * the Library's place preview and client3d's pair interaction call the same functions on the same
+ * PAIR FIT (Ruling A129) — the geometry Auto-align (`pairAlign.ts`, Ruling A212) and both renderers share for a pair
+ * clip: the library's place preview and client3d's pair interaction call the same functions on the same
  * `FigureRuntime.inspect()` numbers.
  *
  * A FIX moves the ENTERING figure rigidly about a PIVOT p (the caller's convention, the same at solve and at apply):
  *   X ↦ R(X − p) + p + Δ,  R = exp([θ]×) for the rotation vector θ (Rodrigues), Δ the shift (world metres).
- * Only rotations about the caller's AXES are solved (Tilt = the clip frame's side axis, Roll = its forward axis):
- * θ = Σ_k α_k a_k, every |α_k| ≤ the angle bound, |Δ_i| ≤ the shift bound.
+ * Partner B's stored tilt/roll/yaw (`partnerTurnFix`) is such a fix, applied about its bind hips (`fixPivot`,
+ * `fixRoot`); a solve turns only about the caller's AXES (Tilt = the clip frame's side axis, Roll = its forward axis).
  *
- * THE SOLVE (`solvePairFix`): least squares over the sampled loop, Gauss–Newton with a forward-difference Jacobian
- * (step 1e-6) and the bounds projected after every step (at most `iterations` steps, stop below 1e-7):
+ * THE RESIDUALS (`fitResiduals`): what a fix leaves over the sampled loop — the least-squares problem the bounded
+ * Auto-align solves (`pairAlign.ts` THE SOLVE, summed over every contact relation of one moving figure):
  *   r = [ P_t(T'_t − O_t)                     lateral of the tip, every frame t
  *         λ · P_t(d'_t)                       the shaft direction d' = (T' − B')/|T' − B'| off the axis, every frame
- *         √W · u_e·(T'_e − O_e) ]             the tip on the opening at the entry frame e (smallest s, re-chosen each step)
+ *         √W · u_e·(T'_e − O_e) ]             the tip on the opening at the entry frame e (smallest s)
  * with P_t = I − u_t u_tᵀ, λ = `FIT_ANGLE_WEIGHT_M` (1 rad of shaft tilt costs like λ metres of lateral error) and
- * W = `CONTACT_ENTRY_WEIGHT` × the frame count — the A126 solve plus the angle term and the rotation unknowns. Without
- * axes it is the A126 shift solve (same minimum, different method).
+ * W = `CONTACT_ENTRY_WEIGHT` × the frame count — the A126 terms plus the angle term.
  *
- * THE RUNTIME FIT (`PairFitState`): a pair interaction samples its own first loop (the tip measured with the current
- * fix applied, unapplied again before it is stored, so the samples are the raw clip), solves ONCE with the runtime
- * bounds (`RUNTIME_FIT`: ±5 cm, ±10°) — one whole loop, from the first wrap of the clip phase to the next, at least
- * `FIT_MIN_SAMPLES` samples — and keeps
- * that fix for the interaction. The stored clip offset stays the coarse one; every pair gets its own fine one.
- * THE SLICED SOLVE (`createPairFit(…, CLIENT_PAIR_FIT)`, the 3D client): the solve then runs over at most
- * `maxSamples` samples spread over the loop and does at most `sliceMs` of work per observed frame (`solvePairFixSteps`
- * yields after every sample's bend), so no frame stalls; the fix lands some frames after the wrap, the same fix the
- * unsliced solve gives on those samples. Until then the total stays the zero fix and nothing is sampled.
- *
- * THE FOLLOW (`pairFitObserve`): per frame a small extra shift of the entering figure (its pelvis, the whole body
- * rigidly) that keeps the tip on the channel axis through the stroke. The clip LOOPS, so the correction is learnt per
- * PHASE: the loop is cut into `FOLLOW.bins` bins, the frame rendered in bin b with the shift f_b shows the lateral
- * r = P(T − O), and  f_b ← clamp(f_b − g · r, `FOLLOW.maxM`)  while the tip is near (s ≥ −`FOLLOW.nearM`), else
- * f_b ← f_b · `FOLLOW.decay` — repetitive control: the error of a bin shrinks by (1 − g) per loop, without the lag a
- * per-frame integral has on a stroke. Only once fitted (the follow never enters the fit's samples).
- *
- * BEND FIRST (Ruling A145, `chainBend.ts`): with `FitOptions.bend` (and a sample carrying its `chain`) every residual
- * is taken AFTER the attached part has bent toward the target within its limits — the fix only solves what the bend
- * cannot reach; the angle term then reads the part's LAST link (tip joint → tip), not base → tip. A small STAY term (√N · `BEND_STAY` · the shift in metres, and the angles × λ) then prefers leaving
- * the entering figure where it is whenever the bend already reaches. The runtime fit does the same (`createPairFit`
- * with limits), and its follow learns from the BENT tip — what is rendered (the caller bends the bones with the same
- * `bendSample`).
+ * BEND FIRST (Ruling A145, `chainBend.ts`): with `bend` limits (and a sample carrying its `chain`) every residual is
+ * taken AFTER the attached part has bent toward the target within its limits — a fix only solves what the bend cannot
+ * reach; the angle term then reads the part's LAST link (tip joint → tip), not base → tip. A small STAY term (√N ·
+ * `BEND_STAY` · the shift in metres, and the angles × λ) then prefers leaving the entering figure where it is whenever
+ * the bend already reaches. Both renderers bend the bones every frame with the same `bendSample`.
  *
  * POSTURE (Ruling A150, `postureSupport.ts`): a sample may carry the entering figure's SUPPORT; then every frame adds
- * the residual `POSTURE.weight` · (the support's change beyond the float/sink band), and the fix's
- * turn costs `POSTURE.turnCostM` · √N per radian — so the solve shifts along the surface first, turns only a little and
- * only about the support, and leaves what the posture cannot give as the residual. A standing or lying place type caps
- * the turn at a few degrees (`FitOptions.group`, `postureAngleCapDeg`). The runtime follow keeps the support in the
- * band too (its vertical share is clamped). The clip's root angle (`chainBend.ts` THE ROOT ANGLE, Ruling A158) is
- * already on the rendered chain a sample is read from; the bend starts from it and never changes it.
+ * the residual `POSTURE.weight` · (the support's change beyond the float/sink band), and the fix's turn costs
+ * `POSTURE.turnCostM` · √N per radian — so the solve shifts along the surface first, turns only a little and only
+ * about the support, and leaves what the posture cannot give as the residual. The caller caps the turn per place type
+ * (`postureAngleCapDeg`). The clip's root angle (`chainBend.ts` THE ROOT ANGLE, Ruling A158) is already on the
+ * rendered chain a sample is read from; the bend starts from it and never changes it.
  *
  * THE HONEST CHECK (`pairInterpenetration`): the deepest overlap of two different figures' capsules where ONLY the
  * pairs the channel allows are exempt — an attached-part capsule of the entering figure against one of the receiving
@@ -58,7 +38,7 @@ import type { Vec3 } from './collision'
 import { CONTACT_ENTRY_WEIGHT, type ContactSample } from './channelContact'
 import { isPointTarget, MOUTH_CHANNEL_ID, orientAlong, POINT_TARGET_OPS, type ContactTarget } from './contactTarget'
 import { bendLimitAt, solveChainBend, type BendFrame, type BendLimits, type BendResult } from './chainBend'
-import { POSTURE, postureAngleCapDeg, postureExcess, supportHeight, supportSample, type SupportSample } from './postureSupport'
+import { POSTURE, postureExcess, supportHeight, supportSample, type SupportSample } from './postureSupport'
 
 export interface FitSample extends ContactSample {
   pivot: Vec3
@@ -71,30 +51,20 @@ export interface FitSample extends ContactSample {
   support?: SupportSample | null
 }
 export interface PairFix { shift: Vec3; turn: Vec3 }
-export interface FitBounds { maxShiftM: number; maxAngleDeg: number }
-export interface FitOptions extends FitBounds {
-  /** Unit rotation axes (world) the fix may turn about; [] = shift only. */
-  axes: readonly Vec3[]
+export interface FitOptions {
   angleWeightM?: number
   entryWeight?: number
-  iterations?: number
   /** Ruling A145: bend the chain first (module docstring BEND FIRST). */
   bend?: BendLimits | null
-  /** Ruling A150: the posture term for samples with a support (default on) and the place type (turn cap). */
+  /** Ruling A150: the posture term for samples with a support (default on). */
   posture?: boolean
-  group?: string | null
 }
 /** Ruling A145: metres of residual per metre of shift (× √N) that keep the figure still when the bend reaches. */
 export const BEND_STAY = 0.05
 
 export const FIT_ANGLE_WEIGHT_M = 0.02
-/** The runtime fine fit of one pair on top of the stored clip: ±5 cm, ±10°. */
-export const RUNTIME_FIT: FitBounds = Object.freeze({ maxShiftM: 0.05, maxAngleDeg: 10 })
-export const FIT_MIN_SAMPLES = 8
-export const FOLLOW = Object.freeze({ maxM: 0.02, gain: 0.8, nearM: 0.03, decay: 0.9, bins: 24 })
 export const CLEAR_GREEN_MM = 5
 export const CLEAR_YELLOW_MM = 20
-export const NO_FIX: PairFix = Object.freeze({ shift: [0, 0, 0] as Vec3, turn: [0, 0, 0] as Vec3 }) as PairFix
 
 const sub = (p: Vec3, q: Vec3): Vec3 => [p[0] - q[0], p[1] - q[1], p[2] - q[2]]
 const add = (p: Vec3, q: Vec3): Vec3 => [p[0] + q[0], p[1] + q[1], p[2] + q[2]]
@@ -102,7 +72,6 @@ const scale = (p: Vec3, k: number): Vec3 => [p[0] * k, p[1] * k, p[2] * k]
 const dot = (p: Vec3, q: Vec3) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2]
 const len = (p: Vec3) => Math.hypot(p[0], p[1], p[2])
 const lateral = (v: Vec3, u: Vec3): Vec3 => sub(v, scale(u, dot(v, u)))
-const clamp = (v: number, m: number) => Math.max(-m, Math.min(m, v))
 
 /** Row-major 3×3 of the rotation vector θ (Rodrigues). */
 export function turnMatrix(w: Vec3): number[] {
@@ -116,16 +85,10 @@ export function turnMatrix(w: Vec3): number[] {
 }
 const mul = (m: number[], v: Vec3): Vec3 =>
   [m[0] * v[0] + m[1] * v[1] + m[2] * v[2], m[3] * v[0] + m[4] * v[1] + m[5] * v[2], m[6] * v[0] + m[7] * v[1] + m[8] * v[2]]
-const mulT = (m: number[], v: Vec3): Vec3 =>
-  [m[0] * v[0] + m[3] * v[1] + m[6] * v[2], m[1] * v[0] + m[4] * v[1] + m[7] * v[2], m[2] * v[0] + m[5] * v[1] + m[8] * v[2]]
 
 /** X ↦ R(X − p) + p + Δ. */
 export function fixPoint(fix: PairFix, pivot: Vec3, x: Vec3): Vec3 {
   return add(add(mul(turnMatrix(fix.turn), sub(x, pivot)), pivot), fix.shift)
-}
-/** The inverse: X ↦ Rᵀ(X − p − Δ) + p. */
-export function unfixPoint(fix: PairFix, pivot: Vec3, x: Vec3): Vec3 {
-  return add(mulT(turnMatrix(fix.turn), sub(sub(x, pivot), fix.shift)), pivot)
 }
 /** A sample with the entering figure's points (tip, base) moved by `fix`. */
 export function fixSample(s: FitSample, fix: PairFix): FitSample {
@@ -149,7 +112,7 @@ export function bendSample(s: FitSample, limits: BendLimits): { sample: FitSampl
   return { sample: { ...s, chain: pts, tip: pts[pts.length - 1], base: pts[0] }, bend }
 }
 /** Two fixes about the same pivot: first `a`, then `b`. */
-export function composeFix(a: PairFix, b: PairFix): PairFix {
+function composeFix(a: PairFix, b: PairFix): PairFix {
   // b∘a: X ↦ Rb(Ra(X−p) + Δa) + p + Δb  →  turn ≈ combined rotation, shift = Rb Δa + Δb (exact for the shift).
   const Ra = turnMatrix(a.turn), Rb = turnMatrix(b.turn)
   const R = [0, 0, 0, 0, 0, 0, 0, 0, 0]
@@ -173,17 +136,12 @@ export function fixRoot(fix: PairFix, pivot: Vec3, position: Vec3): { position: 
   return { position: fixPoint(fix, pivot, position), quaternion: [fix.turn[0] * s, fix.turn[1] * s, fix.turn[2] * s, Math.cos(h)] }
 }
 
-/** The residual vector of `fix` (module docstring THE SOLVE). A generator that yields after every sample's bend — the
- *  expensive part — so a sliced solve (THE RUNTIME FIT) can stop between samples; `solvePairFix` runs it through. */
-function* residuals(samples: readonly FitSample[], fix: PairFix, lambda: number, W: number,
-  bend: BendLimits | null = null, posture = false): Generator<void, number[], void> {
+/** The residual vector of `fix` (module docstring THE RESIDUALS). */
+function residuals(samples: readonly FitSample[], fix: PairFix, lambda: number, W: number,
+  bend: BendLimits | null = null, posture = false): number[] {
   const out: number[] = []
   let e = -1, min = Infinity
-  const moved: FitSample[] = []
-  for (const x of samples) {
-    moved.push(bend ? bendSample(fixSample(x, fix), bend).sample : fixSample(x, fix))
-    yield
-  }
+  const moved = samples.map((x) => (bend ? bendSample(fixSample(x, fix), bend).sample : fixSample(x, fix)))
   moved.forEach((x, i) => { const s = dot(sub(x.tip, x.o), x.u); if (s < min) { min = s; e = i } })
   for (const x of moved) {
     const lat = lateral(sub(x.tip, x.o), x.u)
@@ -212,15 +170,14 @@ function* residuals(samples: readonly FitSample[], fix: PairFix, lambda: number,
   return out
 }
 
-/** The residual vector of `fix` over `samples` (module docstring THE SOLVE), run straight through — what the bounded
- *  Auto-align (`pairAlign.ts`) adds up over several contact relations of one moving figure. */
-export function fitResiduals(samples: readonly FitSample[], fix: PairFix, opts: Pick<FitOptions, 'angleWeightM' | 'entryWeight' | 'bend' | 'posture'> = {}): number[] {
+/** The residual vector of `fix` over `samples` (module docstring THE RESIDUALS) — what the bounded Auto-align
+ *  (`pairAlign.ts`) adds up over several contact relations of one moving figure. */
+export function fitResiduals(samples: readonly FitSample[], fix: PairFix, opts: FitOptions = {}): number[] {
   if (!samples.length) return []
   const lambda = opts.angleWeightM ?? FIT_ANGLE_WEIGHT_M
   const W = (opts.entryWeight ?? CONTACT_ENTRY_WEIGHT) * samples.length
   const posture = opts.posture !== false && samples.some((x) => !!x.support)
-  const it = residuals(samples, fix, lambda, W, opts.bend ?? null, posture)
-  for (;;) { const r = it.next(); if (r.done) return r.value }
+  return residuals(samples, fix, lambda, W, opts.bend ?? null, posture)
 }
 
 export function solveLinear(A: number[][], b: number[]): number[] | null {
@@ -240,68 +197,6 @@ export function solveLinear(A: number[][], b: number[]): number[] | null {
   return M.map((row, i) => row[n] / row[i])
 }
 
-/** The fix for the entering figure (module docstring THE SOLVE); NO_FIX without samples. */
-export function solvePairFix(samples: readonly FitSample[], opts: FitOptions): PairFix {
-  const steps = solvePairFixSteps(samples, opts)
-  for (;;) { const r = steps.next(); if (r.done) return r.value }
-}
-
-/** `solvePairFix` as a resumable computation: every `next()` does at most one sample's residual work, the last one
- *  returns the fix — the same numbers in the same order, so the result is identical however it is sliced. */
-export function* solvePairFixSteps(samples: readonly FitSample[], opts: FitOptions): Generator<void, PairFix, void> {
-  if (!samples.length) return NO_FIX
-  const lambda = opts.angleWeightM ?? FIT_ANGLE_WEIGHT_M
-  const W = (opts.entryWeight ?? CONTACT_ENTRY_WEIGHT) * samples.length
-  const axes = opts.axes
-  const n = 3 + axes.length
-  const posture = opts.posture !== false && samples.some((x) => !!x.support)
-  const maxA = (posture ? postureAngleCapDeg(opts.group, opts.maxAngleDeg) : opts.maxAngleDeg) * Math.PI / 180
-  const toFix = (x: number[]): PairFix => {
-    const turn: Vec3 = [0, 0, 0]
-    axes.forEach((a, k) => { turn[0] += a[0] * x[3 + k]; turn[1] += a[1] * x[3 + k]; turn[2] += a[2] * x[3 + k] })
-    return { shift: [x[0], x[1], x[2]], turn }
-  }
-  const project = (x: number[]) => x.map((v, i) => clamp(v, i < 3 ? opts.maxShiftM : maxA))
-  let x = new Array(n).fill(0)
-  const cost = (r: number[]) => r.reduce((a, v) => a + v * v, 0)
-  const bend = opts.bend ?? null
-  let r = yield* residuals(samples, toFix(x), lambda, W, bend, posture)
-  let c = cost(r)
-  const iterations = opts.iterations ?? 20
-  for (let it = 0; it < iterations; it++) {
-    const J: number[][] = []
-    for (let k = 0; k < n; k++) {
-      const xp = x.slice(); xp[k] += 1e-6
-      const rp = yield* residuals(samples, toFix(xp), lambda, W, bend, posture)
-      J.push(rp.map((v, i) => (v - r[i]) / 1e-6))
-    }
-    const A = Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_, j) => {
-      let s = 0
-      for (let m = 0; m < r.length; m++) s += J[i][m] * J[j][m]
-      return s + (i === j ? 1e-9 : 0)
-    }))
-    const g = Array.from({ length: n }, (_, i) => { let s = 0; for (let m = 0; m < r.length; m++) s -= J[i][m] * r[m]; return s })
-    const step = solveLinear(A, g)
-    if (!step) break
-    let t = 1, accepted = false
-    for (let ls = 0; ls < 8; ls++) {
-      const xn = project(x.map((v, i) => v + t * step[i]))
-      const rn = yield* residuals(samples, toFix(xn), lambda, W, bend, posture)
-      const cn = cost(rn)
-      if (cn < c) { const moved = Math.max(...xn.map((v, i) => Math.abs(v - x[i]))); x = xn; r = rn; c = cn; accepted = moved > 1e-7; break }
-      t /= 2
-    }
-    if (!accepted) break
-  }
-  return toFix(x)
-}
-
-/** The fix's angles about `axes` (degrees, in axis order) — the inverse of `solvePairFix`'s θ = Σ α_k a_k for
- *  orthogonal axes. */
-export function fixAnglesDeg(fix: PairFix, axes: readonly Vec3[]): number[] {
-  return axes.map((a) => dot(fix.turn, a) * 180 / Math.PI)
-}
-
 /** The clip frame's tilt and roll axes (world) of a figure whose root frame is the row-major `frame`
  *  (`ClipCalibration.frame`): its side axis (+X) and its forward axis (+Z). */
 export function turnAxes(frame: readonly number[]): [Vec3, Vec3] {
@@ -313,15 +208,12 @@ export function bendFrameOf(frame: readonly number[]): BendFrame {
 }
 /** Partner B's stored/drafted turn (Ruling A129) as a fix: tilt about the side axis, roll about the forward axis.
  *  Ruling A165: `yawDeg` turns B about its OWN vertical axis — the root frame's up through the fix pivot (B's bind
- *  hips) — FIRST; the tilt/roll (plus `extra`, a solve's trial or fitted fix, added to it as before) follows. Yaw 0
- *  is the A129 fix unchanged. */
-export function partnerTurnFix(tiltDeg: number, rollDeg: number, frame: readonly number[], yawDeg = 0,
-  extra: PairFix = NO_FIX): PairFix {
+ *  hips) — FIRST; the tilt/roll follows. Yaw 0 is the A129 fix unchanged. */
+export function partnerTurnFix(tiltDeg: number, rollDeg: number, frame: readonly number[], yawDeg = 0): PairFix {
   const [side, fwd] = turnAxes(frame)
   const a = tiltDeg * Math.PI / 180, b = rollDeg * Math.PI / 180
-  const tr: PairFix = { shift: [extra.shift[0], extra.shift[1], extra.shift[2]],
-    turn: [side[0] * a + fwd[0] * b + extra.turn[0], side[1] * a + fwd[1] * b + extra.turn[1],
-      side[2] * a + fwd[2] * b + extra.turn[2]] }
+  const tr: PairFix = { shift: [0, 0, 0],
+    turn: [side[0] * a + fwd[0] * b, side[1] * a + fwd[1] * b, side[2] * a + fwd[2] * b] }
   return yawDeg ? composeFix(partnerYawFix(yawDeg, frame), tr) : tr
 }
 /** Ruling A165: partner B's yaw about its own vertical axis (the root frame's up, +Y) as a fix — a positive yaw turns
@@ -336,168 +228,6 @@ export function fixPivot(rootPosition: Vec3, frame: readonly number[], hipsBind:
   return [rootPosition[0] + frame[0] * hipsBind[0] + frame[1] * hipsBind[1] + frame[2] * hipsBind[2],
     rootPosition[1] + frame[3] * hipsBind[0] + frame[4] * hipsBind[1] + frame[5] * hipsBind[2],
     rootPosition[2] + frame[6] * hipsBind[0] + frame[7] * hipsBind[1] + frame[8] * hipsBind[2]]
-}
-
-// ── the runtime fit + the follow ──
-
-export interface PairFitState {
-  phase: 'collect' | 'fitted'
-  samples: FitSample[]
-  fix: PairFix
-  /** The follow shift applied in the last observed frame (readout). */
-  follow: Vec3
-  /** THE FOLLOW's table: one shift per phase bin of the loop (`FOLLOW.bins`), learnt loop over loop. */
-  followTable: Vec3[]
-  /** The loop length (s) as seen: the largest clip phase before a wrap. */
-  period: number
-  lastPhase: number
-  /** The first wrap of the clip was seen: from here one WHOLE loop is sampled. */
-  armed: boolean
-  /** Lateral of the tip (mm) at each frame the tip was in or at the channel since the fit (the follow's evidence). */
-  lateralMm: number[]
-  /** Ruling A145: the bend limits (null = rigid, the A129 fit) and, since the fit, the bend used per frame (degrees),
-   *  its limit (the total at the frame's raised fraction) and how many frames were at the limit. */
-  bend: BendLimits | null
-  bendDeg: number[]
-  bendLimitDeg: number
-  bendAtLimit: number
-  /** Ruling A150: the place type (turn cap) and, since the fit, the support change per frame (mm, + = float). */
-  group: string | null
-  supportMm: number[]
-  /** THE SLICED SOLVE (`PairFitRuntime`): the solve work allowed per observed frame (ms; 0 = the whole solve in the
-   *  wrap frame). A caller may lower it frame by frame to share one frame budget between several fits. */
-  sliceMs: number
-  /** At most this many samples of the loop enter the solve, evenly spaced (0 = all). */
-  maxSamples: number
-  /** Whether `lateralMm` / `bendDeg` / `supportMm` are recorded (the preview's readout). */
-  evidence: boolean
-  /** The solve in progress while sliced (the phase stays 'collect' until it returns). */
-  solver: Generator<void, PairFix, void> | null
-}
-
-/** How a fit runs (module docstring THE RUNTIME FIT). The defaults are the Library preview's: the solve over every
- *  sample in the wrap frame and the evidence recorded for its readout. */
-export interface PairFitRuntime { sliceMs?: number; maxSamples?: number; evidence?: boolean }
-
-/** THE SLICED SOLVE — the 3D client's settings. A whole-loop solve in the wrap frame costs about 8 ms per sample
- *  (Gauss–Newton: up to 20 iterations × (6 Jacobian + ≤ 8 line-search) residual passes, each bending every sample's
- *  chain — 1 s at 120 samples, 4 s at 600), so the client:
- *  - solves over at most 32 samples evenly spaced over the loop: more than the follow's `FOLLOW.bins` (24) phase bins,
- *    so the stroke keeps at least the resolution the follow corrects with (a 2 s loop at 60 fps is 120 frames of a
- *    smooth stroke; the entry frame moves by at most half a step, ≤ 1/64 of the loop);
- *  - spends at most `sliceMs` = 3 ms of solve work per frame (the solve yields after every sample's bend, ≈ 0.1 ms,
- *    so a frame's overrun is one sample's work), the fit landing ≈ 300 ms / 3 ms ≈ 100 frames after the wrap;
- *  - records no evidence (nothing in the client reads it; it grew by up to three numbers per frame without bound). */
-export const CLIENT_PAIR_FIT: Readonly<Required<PairFitRuntime>> = Object.freeze({ sliceMs: 3, maxSamples: 32, evidence: false })
-
-export function createPairFit(bend: BendLimits | null = null, group: string | null = null,
-  runtime: PairFitRuntime = {}): PairFitState {
-  return { phase: 'collect', samples: [], fix: NO_FIX, follow: [0, 0, 0],
-    followTable: Array.from({ length: FOLLOW.bins }, () => [0, 0, 0] as Vec3), period: 0, lastPhase: -1, armed: false,
-    lateralMm: [], bend, bendDeg: [], bendLimitDeg: 0, bendAtLimit: 0, group, supportMm: [],
-    sliceMs: runtime.sliceMs ?? 0, maxSamples: runtime.maxSamples ?? 0, evidence: runtime.evidence ?? true, solver: null }
-}
-
-/** `m` samples evenly spaced over the loop (the first kept); all of them when `m` is 0 or not smaller. */
-function spread<T>(xs: readonly T[], m: number): T[] {
-  if (!(m > 0) || xs.length <= m) return [...xs]
-  return Array.from({ length: m }, (_, i) => xs[Math.floor(i * xs.length / m)])
-}
-
-/** Advance the sliced solve by at most `st.sliceMs` of work; true when the fix is in. */
-function stepSolve(st: PairFitState): boolean {
-  if (!st.solver) return true
-  const end = performance.now() + st.sliceMs
-  for (;;) {
-    const r = st.solver.next()
-    if (r.done) { st.fix = r.value; st.solver = null; return true }
-    if (performance.now() >= end) return false
-  }
-}
-
-const binOf = (st: PairFitState, phase: number) =>
-  Math.max(0, Math.min(FOLLOW.bins - 1, Math.floor(phase / (st.period || 1) * FOLLOW.bins)))
-
-/** The fix the entering figure carries this frame: the solved one, plus — once fitted and given the clip `phase` —
- *  the follow shift learnt for that phase. */
-export function pairFitTotal(st: PairFitState, phase?: number): PairFix {
-  const f = st.phase === 'fitted' && phase !== undefined && st.period > 0 ? st.followTable[binOf(st, phase)] : [0, 0, 0] as Vec3
-  return { shift: add(st.fix.shift, f), turn: st.fix.turn }
-}
-
-/** One rendered frame of the pair (module docstring THE RUNTIME FIT / THE FOLLOW). `measured` = the sample as
- *  rendered, i.e. WITH `pairFitTotal(st, phase)` applied about `measured.pivot`; `phase` = the clip time (s). `axes` =
- *  the tilt/roll axes (world) of this frame. `follow` false switches the follow off (the fit still runs). */
-export function pairFitObserve(st: PairFitState, measured: FitSample, phase: number, axes: readonly Vec3[],
-  bounds: FitBounds = RUNTIME_FIT, follow = true): void {
-  const wrapped = st.lastPhase >= 0 && phase < st.lastPhase
-  if (wrapped) st.period = Math.max(st.period, st.lastPhase)
-  if (st.phase === 'collect') {
-    if (st.solver) {
-      // THE SLICED SOLVE in progress: no sampling, only its share of work; the frame that ends it was rendered
-      // before the fit, like the wrap frame of the unsliced solve.
-      st.lastPhase = phase
-      if (stepSolve(st)) st.phase = 'fitted'
-      return
-    }
-    // Nothing of the follow is applied while collecting: the total is the (zero) fix.
-    const total = pairFitTotal(st)
-    const raw: FitSample = { ...measured, tip: unfixPoint(total, measured.pivot, measured.tip),
-      base: unfixPoint(total, measured.pivot, measured.base),
-      ...(measured.chain ? { chain: measured.chain.map((p) => unfixPoint(total, measured.pivot, p)) } : {}),
-      ...(measured.support ? { support: { ...measured.support, pts: measured.support.pts.map((p) => unfixPoint(total, measured.pivot, p)) } } : {}) }
-    if (wrapped && st.armed && st.samples.length >= FIT_MIN_SAMPLES) {
-      st.samples = spread(st.samples, st.maxSamples)
-      st.lastPhase = phase
-      const opts: FitOptions = { ...bounds, axes, bend: st.bend, group: st.group }
-      if (st.sliceMs > 0) {
-        st.solver = solvePairFixSteps(st.samples, opts)
-        if (stepSolve(st)) st.phase = 'fitted'
-        return
-      }
-      st.fix = solvePairFix(st.samples, opts)
-      st.phase = 'fitted'
-      return   // this frame was rendered before the fit: it teaches the follow nothing
-    }
-    if (wrapped) st.armed = true
-    if (st.armed) st.samples.push(raw)
-  }
-  st.lastPhase = phase
-  if (st.phase !== 'fitted') return
-  // A150: the support as rendered against the clip's own (the total unapplied) — the follow keeps it in the band.
-  let supportNow: number | null = null
-  if (measured.support) {
-    const s0 = measured.support
-    const total = pairFitTotal(st, phase)
-    const base = s0.base ?? supportHeight(s0.pts.map((p) => unfixPoint(total, measured.pivot, p)), s0.r)
-    supportNow = supportHeight(s0.pts, s0.r) - base
-    if (st.evidence) st.supportMm.push(supportNow * 1000)
-  }
-  // What was rendered: the evidence (lateral through the stroke, once fitted) — the BENT tip (A145).
-  if (st.bend && measured.chain) {
-    const b = bendSample(measured, st.bend)
-    measured = b.sample
-    if (b.bend) {
-      if (st.evidence) st.bendDeg.push(b.bend.totalDeg)
-      st.bendLimitDeg = b.bend.limit.totalDeg
-      if (b.bend.atLimit) st.bendAtLimit++
-    }
-  }
-  const rel = sub(measured.tip, measured.o)
-  const s = dot(rel, measured.u)
-  const lat = lateral(rel, measured.u)
-  if (s >= 0 && st.evidence) st.lateralMm.push(len(lat) * 1000)
-  const b = binOf(st, phase)
-  const cell = st.followTable[b]
-  if (!follow) { st.followTable[b] = [0, 0, 0]; st.follow = [0, 0, 0]; return }
-  // The frame was rendered with this bin's shift, so its lateral is that shift's error: learn it for the next loop.
-  const next: Vec3 = s >= -FOLLOW.nearM
-    ? [0, 1, 2].map((i) => clamp(cell[i] - FOLLOW.gain * lat[i], FOLLOW.maxM)) as Vec3
-    : scale(cell, FOLLOW.decay)
-  // A150: world up is +Y; the support then changes by next_y − cell_y on top of supportNow — keep it in the band.
-  if (supportNow !== null) next[1] = Math.max(cell[1] - supportNow - POSTURE.sinkM, Math.min(cell[1] - supportNow + POSTURE.floatM, next[1]))
-  st.followTable[b] = next
-  st.follow = st.followTable[b]
 }
 
 // ── finding the contact in two inspections ──

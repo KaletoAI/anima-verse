@@ -1,7 +1,8 @@
 /**
  * CONTACT TARGETS (Ruling A139, A159): what the attached part's tip of a pair clip aims at. Auto-align
- * (`channelContact.ts`) and the runtime fit/follow (`pairFit.ts`) solve against ONE target point O with ONE unit axis
- * u. A pair clip names its target (the clip's `<kind>.json` `contact_relations`, or a package default for its kind):
+ * (`channelContact.ts`, `pairAlign.ts`) and the chain bend (`chainBend.ts`) solve against ONE target point O with
+ * ONE unit axis u. A pair clip names its target (the clip's `<kind>.json` `contact_relations`, or a package default
+ * for its kind):
  *
  * - `channel`    — the receiving figure's DECLARED channel that accepts the part (A126): O = opening, u = into the body.
  *                  The mouth never counts here.
@@ -29,7 +30,7 @@
  *     O = ½ (hand + middle-finger root)      (the middle of the palm along its length)
  *     u = (pinky root − index root) / |…|    (the grip axis across the palm; a gripped shaft runs along it),
  *   oriented by the caller along the shaft (`orientAlong`), since a grip has no "inside".
- * - `none`       — no contact: no fit, no follow, Auto-align refuses.
+ * - `none`       — no contact: no bend, Auto-align refuses.
  *
  * A point target (a hand) is aimed at by the first chain whose op is in `POINT_TARGET_OPS`; a channel and the mouth
  * pick by their `accepts`.

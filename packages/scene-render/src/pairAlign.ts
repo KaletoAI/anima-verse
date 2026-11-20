@@ -1,7 +1,7 @@
 /**
  * BOUNDED AUTO-ALIGN (Ruling A212) — Auto-align only ADJUSTS a pair/group clip around the arrangement the user set.
- * One geometry for the Library's place preview (and any other caller): the same `fitResiduals` (`pairFit.ts`) the
- * runtime fit uses, summed over every contact relation of ONE moving figure.
+ * One geometry for the Library's place preview (and any other caller): `fitResiduals` (`pairFit.ts`), summed over
+ * every contact relation of ONE moving figure.
  *
  * THE UNKNOWNS: the moving figure's offset x = (side, up, forward) in metres of its clip frame, relative to the base
  * arrangement (the dials when Auto-align was clicked), and — a pair only — its tilt/roll α_k in degrees about the

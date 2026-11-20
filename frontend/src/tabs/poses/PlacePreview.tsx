@@ -19,8 +19,8 @@
  *   read-only with a link to its entry (D2).
  *
  * * Icon toggles "Collision", "Channels" and "Partner see-through" (Ruling A212; off by default, remembered per browser
- *   user in localStorage) only change what is DRAWN — the sim always runs them, as in the game. The per-pair fine fit,
- *   the follow and the bend of the attached part always run, exactly as in the game. Collision and Channels draw each figure's capsules as other
+ *   user in localStorage) only change what is DRAWN — the sim always runs them, as in the game. The bend of the
+ *   attached part always runs, exactly as in the game. Collision and Channels draw each figure's capsules as other
  *   figures engage them (pairs of two figures that overlap drawn red, the deepest pair in mm), and each channel with
  *   its opening (a ring at the mouth while a partner chain occupies it; who engages whom, w, opening radius in mm).
  *   The numbers come from `FigureRuntime.inspect` / `inspectFrame` (`placeFigures.ts`); client3d computes them on
@@ -38,9 +38,8 @@ import {
   strandCandidates, transplantedRestPose, type FootPose,
   type AlignmentDraft, type ChannelNow, type FrameInspection, type AlignmentLamp, type ClipHeightOffsetsCm, type CollisionPayload, type FigureRuntime,
   type HairStrandRecord, type SceneMarker, type SceneModelSpec, type SecondaryMotionPayload,
-  contactLamp, contactReport, fixRoot, fixPivot, partnerTurnFix, turnAxes,
-  fixAnglesDeg, NO_FIX, RUNTIME_FIT, createPairFit, pairFitObserve, pairFitTotal, findContact, contactSampleOf,
-  attachedPartIndex, partBoneNames, type PairFitState, pairInterpenetration, clearLamp, PART_REGIONS, type ClearLamp,
+  contactLamp, contactReport, fixRoot, fixPivot, partnerTurnFix, turnAxes, findContact, contactSampleOf,
+  attachedPartIndex, partBoneNames, pairInterpenetration, clearLamp, PART_REGIONS, type ClearLamp,
   type ContactLamp, type ContactReport, type FitSample, type PairFix,
   targetLamp, isPointTarget, TARGET_RADIUS_M, POINT_TARGET_OPS, MOUTH_CHANNEL_ID, type ContactTarget,
   bendSample, BEND_LIMITS_DEFAULT, type BendLimits, type BendResult,
@@ -141,8 +140,8 @@ export interface FigureReadout {
 export interface PlaceReadout { prop: string; places: string; figures: FigureReadout[]; allGreen: boolean
   worstYaw: number; worstPos: number }
 
-/** The partner overlays (phase 3): what is drawn, never what runs. The fine fit, the follow and the bend always run
- *  (Ruling A212: as in the game). */
+/** The partner overlays (phase 3): what is drawn, never what runs. The bend always runs (Ruling A212: as in the
+ *  game). */
 export interface PartnerShow { collision: boolean; channels: boolean
   /** Ruling A212: every mesh of the entering figure turns see-through; its attached part stays opaque. Preview only. */
   seeThrough: boolean }
@@ -159,18 +158,6 @@ const SEE_THROUGH_OPACITY = 0.25
 const CONTACT_COLOR = 0xff2d2d
 const OPENING_COLOR = 0x3fb950
 
-/** Ruling A129.3: the runtime fine fit of the pair shown — live, or stepped at 60 fps by `pairCheckOnce` (Auto-align's
- *  in-game column). */
-export interface PairFitReadout {
-  phase: 'collect' | 'fitted'; by: string; of: string
-  shiftMm: [number, number, number]; turnDeg: [number, number]
-  /** Lateral of the tip from the channel axis while inside (s ≥ 0), over the fitted frames (mm). */
-  lateralMaxMm: number; lateralMedMm: number; frames: number
-  /** Ruling A145: the bend used since the fit (largest, degrees), its limit and the frames at the limit (null = rigid). */
-  bend: BendReadout | null
-  /** Ruling A150: the support's change since the fit (mm; largest float / sink; null = no support read). */
-  support: { gapMm: number; sinkMm: number } | null
-}
 /** Ruling A145: how much the attached part bent — the largest over the frames, its limit there, and the lamp. */
 export interface BendReadout { maxDeg: number; limitDeg: number; atLimit: number; frames: number; lamp: 'green' | 'yellow' }
 /** The printed partner readout (names = place letters). */
@@ -277,8 +264,6 @@ export interface RelationAlign { by: string; of: string; channel: string; target
       lampBefore: ContactLamp; lamp: ContactLamp
       /** Ruling A212: the five phases (start, ¼, ½, ¾, end) before and after. */
       phases: PhaseAlign[]
-      /** Ruling A212 (the former pair check): the same after the game's fine fit and follow on top (null = not run). */
-      followed: ContactReport | null
       /** Ruling A145: the bend after Auto-align (null = rigid). */
       bend: BendReadout | null
       /** Ruling A150: the moving figure's support before/after against its own posture (null = none read), and why the
@@ -293,15 +278,13 @@ export type AutoAlignResult =
   | { ok: false; reason: string }
   | { ok: true; relations: RelationAlign[]; roleShiftCm: Record<string, [number, number, number]>
       movers: MoverAlign[]
-      /** Ruling A212: the game's fine fit on top of the aligned clip (first relation) and the honest check after it. */
-      check: { fit: PairFitReadout | null; clearMm: number; clearWorst: string } | null
       target: ContactTarget; part: string
       by: string; of: string; channel: string; shiftCm: [number, number, number]
       /** Partner B's tilt/roll draft (degrees, base + solved, within ±10° of the base). */
       turnDeg: [number, number]
       clearWorst: string; clearLamp: ClearLamp
       before: ContactReport; after: ContactReport; overlapBeforeMm: number; overlapAfterMm: number
-      lampBefore: ContactLamp; lamp: ContactLamp; bend: BendReadout | null; phases: PhaseAlign[]; followed: ContactReport | null
+      lampBefore: ContactLamp; lamp: ContactLamp; bend: BendReadout | null; phases: PhaseAlign[]
       postureBefore: PostureReport | null; posture: PostureReport | null; limitReason: 'posture' | null }
 
 /** Ruling A212: the base clip's last frame — each role's hips relative to each other role's, in that role's clip frame
@@ -357,7 +340,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   const [paused, setPaused] = useState(false)
   const [speed, setSpeed] = useState(1)
   const [info, setInfo] = useState<{ ms: number; swingMm: number; strands: number; chains: number; figures: FigureReadout[]
-    partners: PartnerInfo | null; fit: PairFitReadout | null } | null>(null)
+    partners: PartnerInfo | null } | null>(null)
   const [show, setShow] = useState<PartnerShow>(loadShow)
   const showRef = useRef(show); showRef.current = show
   const toggleShow = (k: keyof PartnerShow) => setShow((cur) => {
@@ -934,9 +917,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         }
 
         // ── Ruling A129: the root of a figure — the calibration (draft over saved), then partner B's turn (saved +
-        // draft, renderer-only) and `extra` (a solve's trial fix) about the bind hips (`fixPivot`, stage space). ──
+        // draft, renderer-only) about the bind hips (`fixPivot`, stage space). ──
         const fixQ = new THREE.Quaternion()
-        const placeRoot = (f: Fig, time: number, draft: AlignmentDraft, extra: PairFix = NO_FIX) => {
+        const placeRoot = (f: Fig, time: number, draft: AlignmentDraft) => {
           const cal = clipCalibration(draft, savedRef.current[f.role] ?? f.saved, f.placeYaw, f.place.marker.group)
           const at = calibratedRoot(cal, { anchor: f.anchor, role: f.role, hips: rootAt(f.path, time), inPlace: solo,
             hipsBind: f.hipsBind, standRefM })
@@ -946,10 +929,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           if (!solo) {
             const saved = f.role === 'b' ? (savedRef.current[f.role] ?? f.saved).partnerTurnDeg ?? [0, 0] : [0, 0]
             const turn = f.role === 'b' ? draft.partnerTurnDeg ?? [0, 0] : [0, 0]
-            // Ruling A165: B's yaw about its own vertical axis (saved + draft) goes first; Auto-align and the pair
-            // check start from it and never change it (their trial fix rides on the tilt/roll in `extra`).
+            // Ruling A165: B's yaw about its own vertical axis (saved + draft) goes first; Auto-align starts from it
+            // and never changes it (its trial rides on the draft's tilt/roll).
             const yaw = f.role === 'b' ? ((savedRef.current[f.role] ?? f.saved).partnerYawDeg ?? 0) + (draft.partnerYawDeg ?? 0) : 0
-            const fix: PairFix = partnerTurnFix(saved[0] + turn[0], saved[1] + turn[1], cal.frame, yaw, extra)
+            const fix: PairFix = partnerTurnFix(saved[0] + turn[0], saved[1] + turn[1], cal.frame, yaw)
             if (fix.turn.some((v) => v) || fix.shift.some((v) => v)) {
               const r = fixRoot(fix, pivot, [at.x, at.y, at.z])
               f.root.position.set(r.position[0], r.position[1], r.position[2])
@@ -963,7 +946,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           f.runtime.setRootAngle(!solo && (!parts.length || parts.includes(f.role)) ? draft.rootAngle ?? null : null)
           return { pivot, frame: cal.frame }
         }
-        // ── Ruling A129.3: the per-pair fine fit — the contact of the pair shown, its samples in stage space. ──
+        // ── Ruling A126/A139: the contact of the pair shown, its samples in stage space. ──
         type Hit = { e: number; r: number; chain: number; channel: string; target: ContactTarget }
         const stageRot = new THREE.Matrix3()
         const sv = new THREE.Vector3()
@@ -1062,27 +1045,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           const w = got.worst
           return { mm: got.depth * 1000, worst: w ? `${letterOf(w.a)} ${w.capA} ↔ ${letterOf(w.b)} ${w.capB}` : '' }
         }
-        const fitReadout = (st: PairFitState, hit: Hit, axes: [number, number, number][]): PairFitReadout => {
-          const tot = pairFitTotal(st)
-          const lat = [...st.lateralMm].sort((a, b) => a - b)
-          const [tl, rl] = axes.length ? fixAnglesDeg(tot, axes) : [0, 0]
-          return { phase: st.phase, by: figs[hit.e].letter, of: figs[hit.r].letter,
-            shiftMm: [tot.shift[0] * 1000, tot.shift[1] * 1000, tot.shift[2] * 1000], turnDeg: [tl, rl],
-            lateralMaxMm: lat.length ? lat[lat.length - 1] : NaN, lateralMedMm: lat.length ? lat[lat.length >> 1] : NaN,
-            frames: lat.length,
-            bend: st.bend && st.bendDeg.length ? { maxDeg: Math.max(...st.bendDeg), limitDeg: st.bendLimitDeg,
-              atLimit: st.bendAtLimit, frames: st.bendDeg.length, lamp: st.bendAtLimit > 0 ? 'yellow' : 'green' } : null,
-            support: st.supportMm.length ? { gapMm: Math.max(0, ...st.supportMm), sinkMm: Math.max(0, ...st.supportMm.map((v) => -v)) } : null }
-        }
-        // Ruling A139: one fine fit per contact relation.
-        type LiveRec = { hit: Hit; st: PairFitState; axes: [number, number, number][] }
+        // Ruling A139/A145: one live bend record per contact relation (the hit and the bend limits in force).
+        type LiveRec = { hit: Hit; bend: BendLimits | null }
         const live: { recs: LiveRec[]; found: boolean; none: boolean } = { recs: [], found: false, none: false }
         const resetLive = () => { live.recs = []; live.found = false; live.none = false }
-        const liveExtra = (f: Fig, time: number): PairFix => {
-          const rec = live.recs.find((x) => figs[x.hit.e] === f)
-          return rec ? pairFitTotal(rec.st, time) : NO_FIX
-        }
-        const placedNow = new Map<Fig, { pivot: [number, number, number]; frame: number[] }>()
         // ── Ruling A212: the see-through partner — every mesh of the entering figure (body, hair, clothing, teeth, strand
         // hair) draws translucent: the flags of the material it CURRENTLY carries are flipped (no clone, so the garment
         // collision hooks on those materials stay) and restored when off; re-checked every frame, because strand hair
@@ -1146,8 +1112,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           const time = timeRef.current
           const wrapped = time < lastTime
           lastTime = time
-          // Ruling A212: the fine fit, the follow and the bend always run on a pair, as in the game.
-          const fitOn = !solo && figs.length > 1
+          // Ruling A212: the bend always runs on a pair, as in the game.
+          const pairOn = !solo && figs.length > 1
           if (seenSeq !== draftSeqRef.current) {
             resetLive()
             seenSeq = draftSeqRef.current
@@ -1158,8 +1124,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           for (const f of figs) {
             // phase A: the pose, then the root by the calibration (draft over saved, the bake's order)
             f.mixer.setTime(time)
-            const extra = fitOn ? liveExtra(f, time) : NO_FIX
-            placedNow.set(f, placeRoot(f, time, draft, extra))
+            placeRoot(f, time, draft)
             f.runtime.poseStep({ realDelta: dt })
           }
           // Ruling A212: the entering figure(s) see-through, the attached part opaque.
@@ -1172,9 +1137,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               ? JSON.stringify({ figures: on.map((f) => f.letter), materials: flipped.size }) : ''
           }
           // The fixed readout row (Ruling A212) needs every pair frame's inspection.
-          const wantInspect = showRef.current.collision || showRef.current.channels || fitOn
-          const fitInspect = fitOn && !live.none
-          const phaseB = placePhaseB(entries, frameState, wantInspect || fitInspect || needsSeq !== draftSeqRef.current)
+          const wantInspect = showRef.current.collision || showRef.current.channels || pairOn
+          const bendInspect = pairOn && !live.none
+          const phaseB = placePhaseB(entries, frameState, wantInspect || bendInspect || needsSeq !== draftSeqRef.current)
           if (phaseB && needsSeq !== draftSeqRef.current && !solo && figs.length > 1) {
             needsSeq = draftSeqRef.current
             const needs = roleNeeds(phaseB)
@@ -1197,20 +1162,14 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               }
             }
           }
-          if (fitInspect && phaseB && !pausedRef.current) {
+          if (bendInspect && phaseB && !pausedRef.current) {
             if (!live.found) {
-              live.recs = findHits(phaseB).map((hit) => ({ hit, st: createPairFit(bendLimitsNow(), figs[hit.e].place.marker.group), axes: [] }))
+              live.recs = findHits(phaseB).map((hit) => ({ hit, bend: bendLimitsNow() }))
               live.found = true
               live.none = !live.recs.length
             }
-            for (const rec of live.recs) {
-              const pl = placedNow.get(figs[rec.hit.e])
-              const smp = pl ? sampleAt(phaseB, rec.hit, pl) : null
-              if (!pl || !smp) continue
-              bendBones(phaseB, rec.hit, rec.st.bend)
-              rec.axes = turnAxes(pl.frame)
-              pairFitObserve(rec.st, smp, time, rec.axes, RUNTIME_FIT, true)
-            }
+            // Ruling A145: the entering figure's chain bones bend toward the target every frame.
+            for (const rec of live.recs) bendBones(phaseB, rec.hit, rec.bend)
           }
           const inspection = wantInspect ? phaseB : null
           ms = ms * 0.9 + (performance.now() - t0) * 0.1
@@ -1257,13 +1216,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               return { letter: f.letter, character: f.character, role: f.role, dyaw: f.dyaw, dpos: f.dpos, medYaw, medPos,
                 lamp: Number.isFinite(f.medYaw) ? alignmentLamp(medYaw, medPos) : null }
             })
-            const fits = fitOn ? live.recs.map((x) => fitReadout(x.st, x.hit, x.axes)) : []
-            const fit = fits[0] ?? null
-            host.dataset.pairfit = fit ? JSON.stringify(fit) : ''
-            host.dataset.pairfits = JSON.stringify(fits)
             setInfo({ ms, swingMm, strands: figs.filter((f) => f.runtime.strandRunning).length,
               chains: figs.filter((f) => !f.runtime.strandRunning && f.chains > 0).length, figures: rows,
-              partners: partnerInfo, fit })
+              partners: partnerInfo })
             host.dataset.partners = partnerInfo ? JSON.stringify(partnerInfo) : ''
             host.dataset.figures = JSON.stringify(figs.map((f) => {
               f.hips?.getWorldPosition(scratch).applyMatrix4(stageInv)
@@ -1447,27 +1402,17 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
                 limitReason: lamp !== 'green' && posture?.limited ? 'posture' : null, shiftCm, turnDeg,
                 before, after, overlapBeforeMm: p0.overlap * 1000, overlapAfterMm: cur.overlap * 1000,
                 clearWorst: cur.worst, clearLamp: clearLamp(cur.overlap * 1000), lampBefore: lampOf(hit, before), lamp,
-                phases: ALIGN_PHASES.map((phase, k) => ({ phase, before: pb[k], after: pa[k] })), followed: null,
+                phases: ALIGN_PHASES.map((phase, k) => ({ phase, before: pb[k], after: pa[k] })),
                 bend: bendReadout(cur.per[gi].map((x) => bentOf(x, bendLim).bend)) })
             })
             moverRows.push({ role: mr, letter: moving.letter, shiftCm, turnDeg, adjustCm, adjustDeg, rangeCm, lamp: sol?.lamp ?? 'green',
               offCm: sol?.offCm ?? 0, offDeg: sol?.offDeg ?? 0, capped: !!sol?.capped })
             cur0 = cur.draft
           }
-          // The former pair check: the game's fine fit and follow on top of the aligned clip, measured the same way.
-          const check = pairCheckOnce(true, cur0, rels)
-          let checkOut: Extract<AutoAlignResult, { ok: true }>['check'] = null
-          if (check.ok) {
-            for (const r of rows) {
-              const run = check.runs.find((x) => figs[x.hit.e].letter === r.by && figs[x.hit.r].letter === r.of && x.hit.target === r.target)
-              if (run) r.followed = run.after
-            }
-            checkOut = { fit: check.runs[0]?.fit ?? null, clearMm: check.clearMm[1], clearWorst: check.clearWorst }
-          }
           runAt(timeRef.current, draftRef.current, false)
           const roleShiftCm: Record<string, [number, number, number]> = {}
           for (const [r, v] of Object.entries(cur0.roleShiftM)) roleShiftCm[r] = [cm(v[0]), cm(v[1]), cm(v[2])]
-          return { ok: true, ...rows[0], relations: rows, roleShiftCm, movers: moverRows, check: checkOut }
+          return { ok: true, ...rows[0], relations: rows, roleShiftCm, movers: moverRows }
         }
         // ── Ruling A212: the base clip's last frame, for the end clips' join. ──
         const endPose = (): EndPose | null => {
@@ -1480,57 +1425,6 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           }
           runAt(timeRef.current, draftRef.current, false)
           return { kind, rel }
-        }
-        // ── Ruling A129.3: the pair over whole loops at 60 fps — loop 1 as stored + draft (the "before"), loop 2 is
-        // sampled for the fine fit (as client3d does when the interaction starts), loops 3–4 settle the chain and teach
-        // the follow (A129.4), loops 5–6 are measured. ──
-        type CheckRun = { hit: Hit; fit: PairFitReadout; before: ContactReport; after: ContactReport }
-        const pairCheckOnce = (follow: boolean, draft: AlignmentDraft, rels: readonly ContactRelation[]): { ok: false; reason: string }
-          | { ok: true; runs: CheckRun[]; clearMm: [number, number]; clearWorst: string } => {
-          if (solo || figs.length < 2) return { ok: false, reason: t('Auto-align needs a pair clip on a place.') }
-          const loop = Math.max(8, Math.ceil(duration / step))
-          const lim = bendLimitsNow()
-          let recs: { hit: Hit; st: PairFitState; axes: [number, number, number][]; before: FitSample[]; after: FitSample[] }[] | null = null
-          let clearBefore = 0, clearAfter = 0, clearWorst = ''
-          for (let i = 0; i < 6 * loop; i++) {
-            const time = (i % loop) * step % duration
-            for (const f of figs) {
-              f.mixer.setTime(time)
-              const rec = recs?.find((x) => figs[x.hit.e] === f)
-              placedNow.set(f, placeRoot(f, time, draft, rec ? pairFitTotal(rec.st, time) : NO_FIX))
-              f.runtime.poseStep({ realDelta: step })
-            }
-            const res = placePhaseB(entries, frameState, true)
-            if (!res) continue
-            if (!recs) recs = findHits(res, rels).map((hit) => ({ hit, st: createPairFit(lim, figs[hit.e].place.marker.group), axes: [], before: [], after: [] }))
-            for (const rec of recs) {
-              const pl = placedNow.get(figs[rec.hit.e])!
-              const pre = sampleAt(res, rec.hit, pl)
-              if (!pre) continue
-              // A145: the bones bend as the game bends them; the reports read the bent tip, the fit the unbent chain.
-              bendBones(res, rec.hit, lim)
-              const smp = bentOf(pre, lim).sample
-              rec.axes = turnAxes(pl.frame)
-              // Loop 3 settles the chain after the fit's jump; its rows do not count.
-              if (i === 4 * loop) rec.st.lateralMm = []
-              const h = honestAt(res, rec.hit)
-              if (i < loop) { rec.before.push(smp); clearBefore = Math.max(clearBefore, h.mm) }
-              else if (rec.st.phase === 'fitted' && i >= 4 * loop) {
-                rec.after.push(smp)
-                if (h.mm > clearAfter) { clearAfter = h.mm; clearWorst = h.worst }
-              }
-              pairFitObserve(rec.st, pre, time, rec.axes, RUNTIME_FIT, follow)
-            }
-          }
-          for (const f of figs) {
-            f.mixer.setTime(timeRef.current)
-            placeRoot(f, timeRef.current, draftRef.current)
-          }
-          resetLive()
-          if (!recs?.length) return { ok: false, reason: t('No figure here has an attached part that one of the other figure’s channels accepts.') }
-          if (recs.some((x) => x.before.length < 4 || x.after.length < 4)) return { ok: false, reason: t('The contact could not be sampled over the clip.') }
-          return { ok: true, runs: recs.map((x) => ({ hit: x.hit, fit: fitReadout(x.st, x.hit, x.axes),
-            before: contactReport(x.before), after: contactReport(x.after) })), clearMm: [clearBefore, clearAfter], clearWorst }
         }
         if (autoAlignOut.current) autoAlignOut.current.current = Object.assign(autoAlign, { kind, set, figures: figs.length, endPose })
         disposers.push(() => { if (autoAlignOut.current?.current === autoAlign) autoAlignOut.current.current = null })
@@ -1839,20 +1733,6 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
                     : t('No figure carries a channel.'))}
                 </div>
               ) : null}
-            </div>
-          ) : null}
-          {info?.fit ? (
-            <div style={{ marginTop: 6, borderTop: '1px solid var(--border, #30363d)', paddingTop: 4 }} data-testid="place-fit-readout"
-              title={t('The fine fit of this pair on top of the stored clip (at most 5 cm and 10°), and how far the attached part’s tip stays off the channel axis while inside, over the fitted frames.')}>
-              {info.fit.phase === 'collect'
-                ? t('Fine fit {by} → {of}: measuring one loop…').replace('{by}', info.fit.by).replace('{of}', info.fit.of)
-                : t('Fine fit {by} → {of}: {x} / {y} / {z} mm, tilt {tilt}°, roll {roll}° · off the axis inside: max {max} mm, median {med} mm')
-                  .replace('{by}', info.fit.by).replace('{of}', info.fit.of)
-                  .replace('{x}', info.fit.shiftMm[0].toFixed(0)).replace('{y}', info.fit.shiftMm[1].toFixed(0))
-                  .replace('{z}', info.fit.shiftMm[2].toFixed(0))
-                  .replace('{tilt}', info.fit.turnDeg[0].toFixed(1)).replace('{roll}', info.fit.turnDeg[1].toFixed(1))
-                  .replace('{max}', Number.isFinite(info.fit.lateralMaxMm) ? info.fit.lateralMaxMm.toFixed(0) : '–')
-                  .replace('{med}', Number.isFinite(info.fit.lateralMedMm) ? info.fit.lateralMedMm.toFixed(0) : '–')}
             </div>
           ) : null}
         </div>

@@ -268,8 +268,8 @@ export type { ContactSample, ContactReport, ContactLamp } from './channelContact
 export { CONTACT_TARGETS, POINT_TARGETS, POINT_TARGET_OPS, TARGET_RADIUS_M, MOUTH, MOUTH_CHANNEL_ID, mouthChannel, TARGET_BONE_NAMES, isContactTarget,
   isPointTarget, targetFrame, targetFrames, orientAlong, targetLamp } from './contactTarget'
 export type { ContactTarget, PointTarget, TargetBones, TargetFrame } from './contactTarget'
-export { solvePairFix, CLIENT_PAIR_FIT, fixPoint, unfixPoint, fixSample, fixRoot, composeFix, turnMatrix, matrixTurn, fixAnglesDeg,
-  findContact, contactSampleOf, turnAxes, createPairFit, pairFitTotal, pairFitObserve, FIT_MIN_SAMPLES, FOLLOW, partnerTurnFix, partnerYawFix, fixPivot, RUNTIME_FIT, FIT_ANGLE_WEIGHT_M, NO_FIX,
+export { fixPoint, fixSample, fixRoot, turnMatrix, matrixTurn,
+  findContact, contactSampleOf, turnAxes, partnerTurnFix, partnerYawFix, fixPivot, FIT_ANGLE_WEIGHT_M,
   pairInterpenetration, clearLamp, PART_REGIONS, CLEAR_GREEN_MM, CLEAR_YELLOW_MM, bendSample, BEND_STAY, supportDelta, bendFrameOf, fitResiduals, solveLinear } from './pairFit'
 export { solveAlignAdjust, alignMovers, alignCap, pickPhases, phaseRow, relativeOf, joinDelta, ALIGN_RANGE_CM_DEFAULT, ALIGN_SIDE_CM,
   ALIGN_ANGLE_DEG, ALIGN_PHASES, JOIN_WEIGHT, CAP_SLACK_CM, FREE_BOX } from './pairAlign'
@@ -280,5 +280,5 @@ export type { SupportSample, PostureReport } from './postureSupport'
 export { solveChainBend, bendLimitAt, bendLimitsOf, bendJoints, bendLamp, quatOf, quatMul, quatRotate, quatAngle,
   rootTurnOf, rootAngleOf, bodyFrameOf, ROOT_PITCH_MAX_DEG, ROOT_YAW_MAX_DEG, BEND_LIMITS_DEFAULT, BEND_JOINTS, BEND_SWEEPS, BEND_BISECT, BEND_AT_LIMIT, BEND_NEAR_M } from './chainBend'
 export type { BendLimit, BendLimits, BendResult, BendFrame, RootAngle, Quat as BendQuat } from './chainBend'
-export type { FitSample, PairFix, FitBounds, FitOptions, PairFitState, ClearLamp } from './pairFit'
+export type { FitSample, PairFix, FitOptions, ClearLamp } from './pairFit'
 export { attachedPartIndex, partBoneNames, PART_WEIGHT_SHARE } from './attachedPart'

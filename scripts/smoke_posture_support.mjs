@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Ruling A150: the posture support of a pair fit (`packages/scene-render/src/postureSupport.ts`, `pairFit.ts` POSTURE).
+ * Ruling A150: the posture support of the pair solve (`packages/scene-render/src/postureSupport.ts`, `pairFit.ts` POSTURE,
+ * solved by `pairAlign.ts` solveAlignAdjust with basis I and a cap of ±0.5 m / 20° that does not bind).
  * Every expected number is derived BY HAND below (§ B5a), never recorded from a run.
  *
  * Usage: node scripts/smoke_posture_support.mjs   (no server, no world; bundles scene-render with esbuild)
@@ -21,7 +22,8 @@
  *   [4] postureAngleCapDeg: stand 20 → 3, lie 20 → 5, seat 20 → 20, null 10 → 10.
  *   [5] postureReport of the frames moved by [3]: gapMm = Δy·1000 (±1e-6), sinkMm 0, heightMm = (0.05 + Δy)·1000 with
  *       surface 0, limited (Δy ≥ 14.5 mm ≥ 15 − 2).
- *   [6] Fixture [3] with tilt/roll axes X, Z and group 'lie': every turn ≤ 5° (+1e-9).
+ *   [6] Fixture [3] with tilt/roll axes X, Z and the place type 'lie' (angle cap postureAngleCapDeg('lie', 20) = 5):
+ *       every turn ≤ 5° (+1e-9).
  */
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -65,10 +67,12 @@ assert.equal(SR.postureExcess(0.01), 0)
 // [3]
 const frame = (support) => ({ tip: [0, 0, 0.3], base: [0, 0, 0.2], o: [0, 0.05, 0.3], u: [0, 0, 1], pivot: [0, 0.9, 0],
   ...(support ? { support } : {}) })
-const rigid = SR.solvePairFix(Array.from({ length: 6 }, () => frame(null)), { axes: [], maxShiftM: 0.5, maxAngleDeg: 20 })
+const I3 = [1, 0, 0, 0, 1, 0, 0, 0, 1], cap = { sideM: 0.5, upM: 0.5, forwardM: 0.5, angleDeg: 20 }
+const solve = (samples, extra = {}) => SR.solveAlignAdjust({ relations: [{ samples }], basis: I3, cap, ...extra })
+const rigid = solve(Array.from({ length: 6 }, () => frame(null))).fix
 near(rigid.shift[1], 0.05, 1e-6, '[3] rigid Δy')
 const S = Array.from({ length: 6 }, () => frame(sup))
-const fix = SR.solvePairFix(S, { axes: [], maxShiftM: 0.5, maxAngleDeg: 20 })
+const fix = solve(S).fix
 const d = (0.05 + 1350) / 90001
 assert.ok(fix.shift[1] >= d - 0.0005 && fix.shift[1] <= d + 1e-6, `[3] posture Δy ${fix.shift[1]} vs ${d}`); near(fix.shift[0], 0, 1e-9, '[3] Δx'); near(fix.shift[2], 0, 1e-9, '[3] Δz')
 // [4]
@@ -80,6 +84,6 @@ near(rep.gapMm, fix.shift[1] * 1000, 1e-6, '[5] gap'); assert.equal(rep.sinkMm, 
 near(rep.heightMm, (0.05 + fix.shift[1]) * 1000, 1e-6, '[5] height'); assert.equal(rep.limited, true)
 // [6]
 const ax = [[1, 0, 0], [0, 0, 1]]
-const tf = SR.solvePairFix(S, { axes: ax, maxShiftM: 0.5, maxAngleDeg: 20, group: 'lie' })
-for (const a of SR.fixAnglesDeg(tf, ax)) assert.ok(Math.abs(a) <= 5 + 1e-9, `[6] turn ${a}`)
+const tf = solve(S, { axes: ax, angleCapDeg: SR.postureAngleCapDeg('lie', cap.angleDeg) })
+for (const a of tf.deg) assert.ok(Math.abs(a) <= 5 + 1e-9, `[6] turn ${a}`)
 console.log('smoke_posture_support OK')

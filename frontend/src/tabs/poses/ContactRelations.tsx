@@ -1,7 +1,7 @@
 /**
  * Ruling A139: the CONTACT RELATIONS of a pair/group clip in the Alignment panel — which place's attached part aims at
  * which target (channel, a hand, the head front point) of which other place. The list is a draft the place preview
- * reads live (Auto-align, the fine fit, the role check); "Save contacts" stores it in the clip's `<kind>.json`
+ * reads live (Auto-align, the bend, the role check); "Save contacts" stores it in the clip's `<kind>.json`
  * (PATCH `contact_target`), "Use inherited" drops the clip's own list so the package default (or the automatic
  * channel detection) applies again. Saving runs nothing.
  */
@@ -32,7 +32,7 @@ export function ContactRelations({ roles, saved, draft, onDraft, onSave, busy }:
   const sel = { className: 'ga-input', style: { fontSize: 12, padding: '0 2px', width: 'auto', minWidth: 0, flex: '0 0 auto' } }
   return (
     <div data-testid="contact-relations" style={{ fontSize: 12, display: 'grid', gap: 3 }}>
-      <div title={t('Which place’s attached part aims at which target of which other place. Auto-align, the fine fit and the follow solve every row; the place preview checks that each person has what the row needs.')}>
+      <div title={t('Which place’s attached part aims at which target of which other place. Auto-align solves every row and the attached part bends toward its target; the place preview checks that each person has what the row needs.')}>
         <strong>{t('Contacts')}</strong> <span style={{ opacity: 0.7 }}>· {sourceText}</span>
       </div>
       {draft.length === 0 ? <div className="ga-form-hint" style={{ margin: 0 }}>{t('No rows: the channel the attached part fits is found automatically.')}</div> : null}
@@ -71,7 +71,7 @@ export function ContactRelations({ roles, saved, draft, onDraft, onSave, busy }:
 }
 
 /** Ruling A145: the clip's BEND LIMITS in the Contacts panel — how far the attached part may bend toward its target
- *  before Auto-align, the fine fit and the follow move the partner, per state (raised: stiff; resting: loose; blended
+ *  before Auto-align moves the partner, per state (raised: stiff; resting: loose; blended
  *  by how far the part is raised). The draft acts on the preview at once; "Save bend limits" stores them in the clip's
  *  `<kind>.json` (PATCH `bend_limits`), "Use inherited" drops them (package default or the core default). Runs nothing. */
 export interface BendSetting { limits: BendLimitsWire; source: 'clip' | 'package' | 'default' }

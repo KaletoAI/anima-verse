@@ -1,9 +1,9 @@
 /**
- * POSTURE SUPPORT (Ruling A150) — a pair fit (`pairFit.ts`) may move and turn the entering figure only as far as the
- * figure stays plausibly SUPPORTED: what carries it (feet standing, knees/shins kneeling, hips/side/thighs lying) stays
- * on the surface — it neither floats nor sinks — and a turn happens about the support, not about the hips in the air.
- * One geometry for both renderers: Auto-align, the pair check, the place preview's live fit and client3d's runtime fit
- * read the same `FigureInspection.capsules` (world) and hand the same `SupportSample` in.
+ * POSTURE SUPPORT (Ruling A150) — Auto-align (`pairAlign.ts` over the residuals of `pairFit.ts`) may move and turn
+ * the entering figure only as far as the figure stays plausibly SUPPORTED: what carries it (feet standing, knees/shins
+ * kneeling, hips/side/thighs lying) stays on the surface — it neither floats nor sinks — and a turn happens about the
+ * support, not about the hips in the air. The samples carry a `SupportSample` read from `FigureInspection.capsules`
+ * (world).
  *
  * THE SUPPORT of one frame: among the figure's body capsules of `SUPPORT_CAPSULES` (legs, trunk, upper arms) the
  * capsule's lowest point is min(a_y, b_y) − r (world up = +Y). The SUPPORTING capsules are those whose lowest point lies
